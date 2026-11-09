@@ -76,3 +76,60 @@ fn an_option_of_a_type_without_eq_cannot_be_compared() {
         &[("E0265", "a == b")],
     );
 }
+
+// ---- Methods on generic parameters and bounds at call sites -----------------
+
+#[test]
+fn a_generic_body_can_call_a_method_of_its_bound() {
+    assert_ok("fn show<T: Display>(x: T) -> String { x.to_string() }");
+}
+
+#[test]
+fn a_method_its_bounds_do_not_provide_is_an_error() {
+    assert_errors(
+        "fn show<T: Eq>(x: T) -> String { x.to_string() }",
+        &[("E0260", "to_string")],
+    );
+}
+
+#[test]
+fn the_fix_for_a_method_missing_from_the_bounds_adds_the_trait_that_has_it() {
+    assert_fix(
+        "fn show<T>(x: T) -> String { x.to_string() }",
+        "E0260",
+        "fn show<T: Display>(x: T) -> String { x.to_string() }",
+    );
+}
+
+#[test]
+fn a_method_of_a_bound_is_typed_by_the_trait() {
+    assert_errors(
+        "fn show<T: Display>(x: T) -> Int { x.to_string() }",
+        &[("E0220", "x.to_string()")],
+    );
+}
+
+#[test]
+fn a_trait_default_method_can_call_the_trait_s_other_methods() {
+    assert_ok(
+        "trait Greet {\n    fn name(self) -> String\n    fn greet(self) -> String {\n        let n = self.name()\n        \"hi {n}\"\n    }\n}",
+    );
+}
+
+#[test]
+fn a_call_must_satisfy_the_callee_s_bounds() {
+    assert_errors(
+        "struct Point { x: Int }\n\
+         fn same<T: Eq>(a: T, b: T) -> Bool { a == b }\n\
+         fn f(p: Point) -> Bool { same(p, p) }",
+        &[("E0265", "same(p, p)")],
+    );
+}
+
+#[test]
+fn a_call_that_satisfies_the_callee_s_bounds_is_fine() {
+    assert_ok(
+        "fn same<T: Eq>(a: T, b: T) -> Bool { a == b }\n\
+         fn f(p: Int) -> Bool { same(p, 1) }",
+    );
+}

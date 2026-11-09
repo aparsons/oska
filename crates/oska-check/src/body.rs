@@ -156,6 +156,10 @@ struct Callable {
     params: Vec<(Option<String>, Ty)>,
     ret: Ty,
     labels: Labels,
+    /// The callee's bounds, instantiated: each type must implement its
+    /// bound's trait. (The bound's `param` names the generic it came
+    /// from.)
+    obligations: Vec<(Ty, Bound)>,
 }
 
 /// The state of checking one body.
@@ -593,6 +597,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                         params: params.into_iter().map(|p| (None, p)).collect(),
                         ret: *ret,
                         labels: Labels::Optional,
+                        obligations: Vec::new(),
                     }),
                     Ty::Error => None,
                     other => {
@@ -718,6 +723,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 Shape::Named => Labels::Required,
                 Shape::Positional | Shape::Unit => Labels::None,
             },
+            obligations: Vec::new(),
         }
     }
 
@@ -743,6 +749,18 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 .collect(),
             ret: sig.ret.substitute(&subst),
             labels: Labels::Optional,
+            obligations: sig
+                .bounds
+                .iter()
+                .map(|b| {
+                    let ty = Ty::Param(b.param.clone()).substitute(&subst);
+                    let bound = Bound {
+                        args: b.args.iter().map(|a| a.substitute(&subst)).collect(),
+                        ..b.clone()
+                    };
+                    (ty, bound)
+                })
+                .collect(),
         }
     }
 
@@ -757,32 +775,27 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     ) -> Ty {
         let receiver = self.infer(base);
         let receiver = self.infer.resolve(&receiver);
-        let type_name = match &receiver {
-            Ty::Named(type_name, _) => type_name.clone(),
+        let found = match &receiver {
+            Ty::Named(type_name, _) => self.type_method(&receiver, type_name, name),
+            Ty::Unit | Ty::Fn { .. } => self.type_method(&receiver, &receiver.to_string(), name),
+            Ty::Param(p) => self.bound_method(p, name),
             Ty::Var(_) => {
                 self.error(
                     codes::CANNOT_INFER,
                     format!("the type must be known before `.{}`", name.name),
                     name.span,
                 );
-                self.infer_args(args);
-                return Ty::Error;
+                None
             }
-            // Methods on generic parameters come from their bounds, which
-            // arrive with generics and traits.
-            Ty::Error | Ty::Param(_) | Ty::Never => {
-                self.infer_args(args);
-                return Ty::Error;
-            }
-            Ty::Unit | Ty::Fn { .. } => receiver.to_string(),
+            Ty::Error | Ty::Never => None,
         };
-        let Some(sig) = self.items.method(&type_name, &name.name).cloned() else {
-            let candidates = self.items.method_names(&type_name);
-            let message = format!("`{receiver}` has no method `{}`", name.name);
-            self.report_with_suggestion(codes::NO_MEMBER, message, name, &candidates);
+        let Some(sig) = found else {
             self.infer_args(args);
             return Ty::Error;
         };
+        let type_name = receiver
+            .head()
+            .map_or_else(|| receiver.to_string(), str::to_string);
         let Some(mutating) = sig.receiver else {
             self.error(
                 codes::NO_MEMBER,
@@ -804,6 +817,77 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
         let callable = self.instantiate(&sig, Some(&receiver));
         self.apply(callable, args, expected, span)
+    }
+
+    /// The method `name` of a receiver of type `receiver`, named
+    /// `type_name`: its own `impl` first, then its traits. Reports an
+    /// unknown method (`E0228`).
+    fn type_method(&mut self, receiver: &Ty, type_name: &str, name: &Ident) -> Option<FnSig> {
+        if let Some(sig) = self.items.inherent_method(type_name, &name.name) {
+            return Some(sig.clone());
+        }
+        let found = self.items.trait_methods_named(type_name, &name.name);
+        if let [sig] = found.as_slice() {
+            return Some((*sig).clone());
+        }
+        let candidates = self.items.method_names(type_name);
+        let message = format!("`{receiver}` has no method `{}`", name.name);
+        self.report_with_suggestion(codes::NO_MEMBER, message, name, &candidates);
+        None
+    }
+
+    /// The method `name` of a value of the generic parameter `param`,
+    /// which only its bounds provide. When they don't (`E0260`) and one
+    /// trait has the method, the fix adds that trait as a bound.
+    fn bound_method(&mut self, param: &str, name: &Ident) -> Option<FnSig> {
+        let self_ty = Ty::Param(param.to_string());
+        let mut found: Vec<FnSig> = Vec::new();
+        for bound in self.lower.bounds.iter().filter(|b| b.param == param) {
+            let Some(info) = self.items.traits.get(&bound.trait_name) else {
+                continue;
+            };
+            for (sig, _) in info.methods.iter().filter(|(s, _)| s.name == name.name) {
+                if !found.iter().any(|f| f.trait_name == sig.trait_name) {
+                    found.push(info.method_for(sig, &self_ty, &bound.args, &[], &[]));
+                }
+            }
+        }
+        if let [sig] = found.as_slice() {
+            return Some(sig.clone());
+        }
+        let mut diagnostic = Diagnostic::new(
+            codes::NOT_IN_BOUNDS,
+            format!(
+                "no bound of `{param}` provides a method `{}`",
+                name.name
+            ),
+            name.span,
+        );
+        let mut providers: Vec<&String> = self
+            .items
+            .traits
+            .iter()
+            .filter(|(_, info)| {
+                info.generics.is_empty()
+                    && info.methods.iter().any(|(s, _)| s.name == name.name)
+            })
+            .map(|(trait_name, _)| trait_name)
+            .collect();
+        providers.sort();
+        let site = self.lower.sites.iter().rev().find(|s| s.name == param);
+        if let ([trait_name], Some(site)) = (providers.as_slice(), site) {
+            let text = if site.has_bounds {
+                format!(" + {trait_name}")
+            } else {
+                format!(": {trait_name}")
+            };
+            diagnostic = diagnostic.with_fix(
+                format!("add the bound `{param}: {trait_name}`"),
+                vec![Edit::insert(site.end, text)],
+            );
+        }
+        self.diagnostics.push(diagnostic);
+        None
     }
 
     /// Check `args` against `callable`'s parameters and return its result.
@@ -838,6 +922,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     self.infer(&arg.value);
                 }
             }
+        }
+        let what = format!("calling {}", callable.description);
+        for (ty, bound) in &callable.obligations {
+            self.require_trait(ty, &bound.trait_name, &bound.args, span, &what);
         }
         callable.ret
     }
