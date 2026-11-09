@@ -9,7 +9,7 @@ use oska_syntax::ast::{Field, Fields, FnDecl, GenericParam, ItemKind, Module, Ty
 use crate::authority;
 use crate::collect::{DeclKind, Decls};
 use crate::prelude;
-use crate::ty::Ty;
+use crate::ty::{self, Ty};
 
 /// A function or method signature. Generic parameters appear in the
 /// types as [`Ty::Param`]; instantiate them before use.
@@ -124,7 +124,7 @@ impl TraitInfo {
         outer: &[String],
         outer_bounds: &[Bound],
     ) -> FnSig {
-        let mut subst: Vec<(String, Ty)> = vec![("Self".to_string(), self_ty.clone())];
+        let mut subst: Vec<(String, Ty)> = vec![(ty::SELF.to_string(), self_ty.clone())];
         subst.extend(self.generics.iter().cloned().zip(args.iter().cloned()));
         let bounds = outer_bounds
             .iter()
@@ -271,7 +271,7 @@ impl Items {
                     }
                 }
                 ItemKind::Trait(t) => {
-                    let self_ty = Ty::Param("Self".to_string());
+                    let self_ty = Ty::Param(ty::SELF.to_string());
                     let lower = Lower::new(decls)
                         .with_generics(&t.generics)
                         .with_self(self_ty.clone());
@@ -523,7 +523,7 @@ impl<'d, 'a> Lower<'d, 'a> {
                 if self.generics.iter().any(|g| g == name) {
                     return Ty::Param(name.to_string());
                 }
-                if name == "Self" {
+                if name == ty::SELF {
                     return self.self_ty.clone().unwrap_or(Ty::Error);
                 }
                 match self.decls.get(name) {

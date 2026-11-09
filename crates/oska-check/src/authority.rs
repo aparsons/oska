@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use oska_syntax::ast::{FnDecl, GenericParam, ItemKind, Module, Type, TypeKind};
 
 use crate::collect::{DeclKind, Decls};
+use crate::ty;
 use crate::{FunctionAuthority, Via};
 
 /// What a type can reach.
@@ -44,7 +45,7 @@ pub fn report(module: &Module, decls: &Decls) -> Vec<FunctionAuthority> {
                 // is capability-bearing only once instantiated.
                 let mut env = generics_env(&imp.generics);
                 let target = reach(&imp.target, &env, decls, &mut Vec::new());
-                env.insert("Self".to_string(), target);
+                env.insert(ty::SELF.to_string(), target);
                 let type_name = type_name(&imp.target);
                 for method in &imp.methods {
                     if let ItemKind::Fn(f) = &method.kind {
@@ -64,7 +65,7 @@ fn function(name: String, f: &FnDecl, outer: &Env, decls: &Decls) -> FunctionAut
     env.extend(generics_env(&f.generics));
     let mut sources: Vec<(String, Reach)> = Vec::new();
     if f.receiver.is_some() {
-        let receiver = env.get("Self").cloned().unwrap_or_default();
+        let receiver = env.get(ty::SELF).cloned().unwrap_or_default();
         sources.push(("self".to_string(), receiver));
     }
     for param in &f.params {

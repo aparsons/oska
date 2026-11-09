@@ -9,6 +9,7 @@ use oska_syntax::ast::{Block, Expr, ExprKind, FnDecl, Item, ItemKind, Module, St
 use oska_syntax::Diagnostic;
 
 use crate::codes;
+use crate::prelude;
 
 /// Report every `dbg(...)` and `todo()` call in `module`.
 pub fn module(module: &Module, diagnostics: &mut Vec<Diagnostic>) {
@@ -85,14 +86,14 @@ impl Walk<'_> {
             ExprKind::Field { base, .. } => self.expr(base),
             ExprKind::Call { callee, args } => {
                 match &callee.kind {
-                    ExprKind::Name(name) if name.name == "dbg" => {
+                    ExprKind::Name(name) if name.name == prelude::DBG => {
                         self.diagnostics.push(Diagnostic::new(
                             codes::DBG_IN_RELEASE,
                             "`dbg(...)` is not allowed in a release build",
                             expr.span,
                         ));
                     }
-                    ExprKind::Name(name) if name.name == "todo" => {
+                    ExprKind::Name(name) if name.name == prelude::TODO => {
                         self.diagnostics.push(Diagnostic::new(
                             codes::TODO_IN_RELEASE,
                             "`todo()` is not allowed in a release build; finish this code first",

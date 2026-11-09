@@ -49,9 +49,6 @@ use crate::ty::{self, Ty};
 
 mod patterns;
 
-/// The prelude type of `t`, the stand-in capabilities in a `test` body.
-const TEST_CONTEXT: &str = "TestContext";
-
 /// Check every function, method, constant, and test body in `module`. A
 /// test body sees `t`, and nothing else beyond pure code.
 pub fn module(
@@ -78,9 +75,9 @@ pub fn module(
                 // Inside its own trait, `Self` implements the trait.
                 let lower = Lower::new(decls)
                     .with_generics(&t.generics)
-                    .with_self(Ty::Param("Self".to_string()))
+                    .with_self(Ty::Param(ty::SELF.to_string()))
                     .with_bound(Bound {
-                        param: "Self".to_string(),
+                        param: ty::SELF.to_string(),
                         trait_name: t.name.name.clone(),
                         args: t
                             .generics
@@ -102,7 +99,7 @@ pub fn module(
             }
             ItemKind::Test(test) => {
                 let mut body = Body::new(src, items, Lower::new(decls), Ty::Unit, diagnostics);
-                body.bind("t", Ty::named(TEST_CONTEXT), Binding::Param);
+                body.bind("t", Ty::named(ty::TEST_CONTEXT), Binding::Param);
                 // A test produces no value: its last expression is a
                 // statement like the others.
                 body.block(&test.body, None, false);
@@ -456,19 +453,18 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     );
                     return Ty::Error;
                 }
-                Ty::Named("Range".to_string(), vec![ty])
+                Ty::range(ty)
             }
             ExprKind::List(elements) => {
-                let element = match expected.map(|e| self.infer.shallow(e)) {
-                    Some(Ty::Named(name, args)) if name == "List" && args.len() == 1 => {
-                        args[0].clone()
-                    }
+                let expected = expected.map(|e| self.infer.shallow(e));
+                let element = match expected.as_ref().and_then(|e| e.args_of(ty::LIST, 1)) {
+                    Some([element]) => element.clone(),
                     _ => self.infer.fresh(),
                 };
                 for e in elements {
                     self.check(e, &element);
                 }
-                Ty::Named("List".to_string(), vec![element])
+                Ty::list(element)
             }
             ExprKind::Closure { params, body } => self.closure(params, body, expected, expr.span),
             ExprKind::If {
@@ -837,7 +833,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         callable.obligations.push((
             self_ty,
             Bound {
-                param: "Self".to_string(),
+                param: ty::SELF.to_string(),
                 trait_name: trait_name.to_string(),
                 args,
             },
@@ -1328,7 +1324,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             }
             BinaryOp::Eq | BinaryOp::Ne => {
                 let ty = self.operands(lhs, rhs, None);
-                self.require_trait(&ty, "Eq", &[], expr.span, &format!("`{}`", op.text()));
+                self.require_trait(&ty, ty::EQ, &[], expr.span, &format!("`{}`", op.text()));
                 Ty::bool()
             }
             BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
@@ -1430,7 +1426,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
         match infer.resolve(ty) {
             Ty::Error | Ty::Never | Ty::Var(_) => true,
-            Ty::Unit => trait_name == "Eq",
+            Ty::Unit => trait_name == ty::EQ,
             Ty::Fn { .. } => false,
             Ty::Param(p) => self.lower.bounds.iter().any(|b| {
                 b.param == p
@@ -1600,8 +1596,8 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         let ty = self.infer(operand);
         let (kind, args) = match self.infer.resolve(&ty) {
             Ty::Named(name, args)
-                if (name == "Result" && args.len() == 2)
-                    || (name == "Option" && args.len() == 1) =>
+                if (name == ty::RESULT && args.len() == 2)
+                    || (name == ty::OPTION && args.len() == 1) =>
             {
                 (name, args)
             }
@@ -1622,7 +1618,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             // A closure whose return type is not known yet returns the
             // same kind, with its own success type.
             Ty::Var(_) => {
-                let failure = if kind == "Result" {
+                let failure = if kind == ty::RESULT {
                     Ty::Named(kind.clone(), vec![self.infer.fresh(), args[1].clone()])
                 } else {
                     Ty::Named(kind.clone(), vec![self.infer.fresh()])
@@ -1630,16 +1626,16 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 self.infer.unify(&failure, &ret);
             }
             Ty::Named(name, ret_args) if name == kind => {
-                if kind == "Result" && ret_args.len() == 2 {
+                if kind == ty::RESULT && ret_args.len() == 2 {
                     self.propagate_error(&args[1], &ret_args[1], expr.span);
                 }
             }
             other => {
                 let advice = match (kind.as_str(), other.head()) {
-                    ("Option", Some("Result")) => {
+                    (ty::OPTION, Some(ty::RESULT)) => {
                         "; convert it explicitly, for example with `.ok_or(err)?`"
                     }
-                    ("Result", Some("Option")) => {
+                    (ty::RESULT, Some(ty::OPTION)) => {
                         "; convert it explicitly, for example with a `match`"
                     }
                     _ => "",
@@ -1687,7 +1683,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     /// Whether `?` can convert an error of type `from` into `to`: `to`
     /// implements `From<from>`, through an explicit `impl` or a bound.
     fn converts_from(&self, from: &Ty, to: &Ty) -> bool {
-        self.implements(to, "From", std::slice::from_ref(from))
+        self.implements(to, ty::FROM, std::slice::from_ref(from))
     }
 
     // ---- Blocks and statements --------------------------------------------
@@ -1800,7 +1796,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 let ty = self.infer(iter);
                 let element = match self.infer.resolve(&ty) {
                     Ty::Named(name, args)
-                        if (name == "List" || name == "Range") && args.len() == 1 =>
+                        if (name == ty::LIST || name == ty::RANGE) && args.len() == 1 =>
                     {
                         args[0].clone()
                     }
@@ -1839,7 +1835,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     pub fn expr_stmt(&mut self, expr: &Expr) {
         let ty = self.infer(expr);
         if let Ty::Named(name, _) = self.infer.resolve(&ty) {
-            if name == "Result" {
+            if name == ty::RESULT {
                 self.error(
                     codes::IGNORED_RESULT,
                     "this `Result` is ignored; handle it, propagate it with `?`, \

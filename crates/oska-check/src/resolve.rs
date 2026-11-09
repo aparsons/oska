@@ -8,6 +8,7 @@ use crate::codes;
 use crate::collect::{DeclKind, Decls};
 use crate::prelude;
 use crate::suggest;
+use crate::ty;
 
 /// Report every unresolved or misused type and trait name in `module`.
 pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
@@ -192,7 +193,7 @@ impl Resolver<'_, '_> {
     }
 
     fn is_type_variable(&self, name: &str) -> bool {
-        self.generics.iter().any(|g| g == name) || (self.self_in_scope && name == "Self")
+        self.generics.iter().any(|g| g == name) || (self.self_in_scope && name == ty::SELF)
     }
 
     fn unknown(&mut self, ident: &Ident, expect: Expect) {
@@ -205,7 +206,7 @@ impl Resolver<'_, '_> {
         if expect == Expect::Type {
             candidates.extend(self.generics.iter().map(String::as_str));
             if self.self_in_scope {
-                candidates.push("Self");
+                candidates.push(ty::SELF);
             }
         }
         let name = &ident.name;

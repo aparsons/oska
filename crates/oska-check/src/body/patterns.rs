@@ -15,7 +15,7 @@ use oska_syntax::{Diagnostic, Edit, Span};
 use super::{Binding, Body, Callable, Labels};
 use crate::codes;
 use crate::suggest;
-use crate::ty::Ty;
+use crate::ty::{self, Ty};
 use crate::usefulness::{self, CtorInfo, Pat};
 
 /// What a constructor pattern's path names.
@@ -161,7 +161,7 @@ impl Body<'_, '_, '_> {
             Ty::Named(name, args) => (name, args),
             _ => return None,
         };
-        if name == "Bool" {
+        if name == ty::BOOL {
             return Some(vec![ctor("true", Vec::new()), ctor("false", Vec::new())]);
         }
         if let Some(info) = self.items.enums.get(&name) {

@@ -11,7 +11,7 @@ use crate::authority;
 use crate::codes;
 use crate::collect::{field_types, DeclKind, Decls};
 use crate::prelude;
-use crate::ty::SCOPE;
+use crate::ty::{self, SCOPE};
 
 /// Report every declaration-level error in `module`.
 pub fn module(src: &str, module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
@@ -206,7 +206,7 @@ fn main(src: &str, module: &Module, f: &FnDecl, decls: &Decls, diagnostics: &mut
         // An unknown name is already reported by name resolution.
         let allowed = match single_name(&param.ty) {
             Some(name) => match decls.get(name) {
-                Some(decl) => name == "Args" || decl.kind == DeclKind::Capability,
+                Some(decl) => name == ty::ARGS || decl.kind == DeclKind::Capability,
                 None => true,
             },
             None => false,
@@ -229,7 +229,7 @@ fn main(src: &str, module: &Module, f: &FnDecl, decls: &Decls, diagnostics: &mut
         return;
     }
     let error = match &ret.kind {
-        TypeKind::Path { segments, args } if is_named(segments, "Result") => {
+        TypeKind::Path { segments, args } if is_named(segments, ty::RESULT) => {
             match args.as_slice() {
                 [ok, error] if matches!(ok.kind, TypeKind::Unit) => Some(error),
                 _ => None,
@@ -271,7 +271,7 @@ fn implements_display(module: &Module, name: &str) -> bool {
         ItemKind::Impl(imp) => {
             imp.trait_ref
                 .as_ref()
-                .is_some_and(|t| single_name(t) == Some("Display"))
+                .is_some_and(|t| single_name(t) == Some(ty::DISPLAY))
                 && single_name(&imp.target) == Some(name)
         }
         _ => false,

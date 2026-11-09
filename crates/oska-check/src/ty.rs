@@ -32,13 +32,34 @@ pub enum Ty {
     Error,
 }
 
-/// Prelude types the checker gives special treatment, by name.
+// Prelude types and traits the checker gives special treatment, by name.
+// Every comparison with one of these names goes through a constant here.
+
+pub const BOOL: &str = "Bool";
+pub const INT: &str = "Int";
+pub const STRING: &str = "String";
+pub const OPTION: &str = "Option";
+pub const RESULT: &str = "Result";
+pub const LIST: &str = "List";
+pub const RANGE: &str = "Range";
+/// The only non-capability type `main` may take.
+pub const ARGS: &str = "Args";
 /// The handle `scope |s| { ... }` binds, which cannot outlive its block.
 pub const SCOPE: &str = "Scope";
+/// The type of `t` in a test body.
+pub const TEST_CONTEXT: &str = "TestContext";
+/// `==` and `!=` need it.
+pub const EQ: &str = "Eq";
+/// `?` converts errors with it.
+pub const FROM: &str = "From";
+/// `main`'s error type needs it.
+pub const DISPLAY: &str = "Display";
+/// The name of `Self`, inside a trait or `impl`.
+pub const SELF: &str = "Self";
 
 /// The integer types and their ranges.
 const INTEGERS: &[(&str, i128, i128)] = &[
-    ("Int", i64::MIN as i128, i64::MAX as i128),
+    (INT, i64::MIN as i128, i64::MAX as i128),
     ("I8", i8::MIN as i128, i8::MAX as i128),
     ("I16", i16::MIN as i128, i16::MAX as i128),
     ("I32", i32::MIN as i128, i32::MAX as i128),
@@ -56,15 +77,34 @@ impl Ty {
     }
 
     pub fn int() -> Ty {
-        Ty::named("Int")
+        Ty::named(INT)
     }
 
     pub fn bool() -> Ty {
-        Ty::named("Bool")
+        Ty::named(BOOL)
     }
 
     pub fn string() -> Ty {
-        Ty::named("String")
+        Ty::named(STRING)
+    }
+
+    /// `List<element>`.
+    pub fn list(element: Ty) -> Ty {
+        Ty::Named(LIST.to_string(), vec![element])
+    }
+
+    /// `Range<element>`.
+    pub fn range(element: Ty) -> Ty {
+        Ty::Named(RANGE.to_string(), vec![element])
+    }
+
+    /// The arguments of this type when it is the named type `name` with
+    /// `arity` arguments, such as `[T, E]` for `Result<T, E>`.
+    pub fn args_of(&self, name: &str, arity: usize) -> Option<&[Ty]> {
+        match self {
+            Ty::Named(n, args) if n == name && args.len() == arity => Some(args),
+            _ => None,
+        }
     }
 
     /// The name of a named type, such as `List` for `List<Int>`.

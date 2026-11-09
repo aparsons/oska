@@ -17,6 +17,10 @@ pub const PRIMITIVES: &[&str] = &[
 /// every `use` is an error for now.
 pub const STD_MODULES: &[&str] = &[];
 
+/// Prelude functions that `--release` rejects.
+pub const DBG: &str = "dbg";
+pub const TODO: &str = "todo";
+
 /// The parsed prelude.
 pub fn module() -> &'static Module {
     static MODULE: OnceLock<Module> = OnceLock::new();

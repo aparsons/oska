@@ -198,7 +198,7 @@ mod tests {
         let mut infer = Infer::default();
         assert_eq!(infer.flow(&plain, &capped), Ok(()));
         assert_eq!(infer.flow(&capped, &plain), Err(Mismatch::CapLost));
-        let list = |t: &Ty| Ty::Named("List".to_string(), vec![t.clone()]);
+        let list = |t: &Ty| Ty::list(t.clone());
         assert_eq!(
             infer.flow(&list(&capped), &list(&plain)),
             Err(Mismatch::CapLost)
