@@ -19,9 +19,12 @@
 //! - **Patterns and `match`:** in `body/patterns.rs`. Patterns are checked
 //!   against the scrutinee's type, then lowered for the usefulness check
 //!   (`usefulness.rs`) that finds missing and unreachable arms.
-//! - **`?`:** [`Body::try_expr`]. Error conversion through `impl From`
-//!   goes in [`Body::converts_from`].
-//! - **Method lookup:** [`Body::method_call`] and [`Items::method`].
+//! - **`?`:** [`Body::try_expr`]. Errors convert when the function's
+//!   error type implements `From<E>` ([`Body::converts_from`]).
+//! - **Traits:** [`Body::implements`] answers whether a type implements a
+//!   trait, through a generic parameter's bounds or an `impl`. Method
+//!   calls ([`Body::method_call`]) try the type's own `impl`, then its
+//!   traits; on a generic parameter, only its bounds' traits.
 //! - **Closures:** [`Body::closure`]. Locals are a stack, so a closure's
 //!   captures are the names it resolves below the stack height at which
 //!   the closure's parameters were pushed (plus `self`). Each closure
@@ -38,7 +41,7 @@ use oska_syntax::{Diagnostic, Edit, Span};
 use crate::codes;
 use crate::decls::{DeclKind, Decls};
 use crate::infer::Infer;
-use crate::items::{FieldsInfo, FnSig, Items, Lower, Shape};
+use crate::items::{Bound, FieldsInfo, FnSig, Items, Lower, Shape};
 use crate::resolve::closest;
 use crate::ty::Ty;
 
@@ -70,9 +73,19 @@ pub fn module(
                 }
             }
             ItemKind::Trait(t) => {
+                // Inside its own trait, `Self` implements the trait.
                 let lower = Lower::new(decls)
                     .with_generics(&t.generics)
-                    .with_self(Ty::Param("Self".to_string()));
+                    .with_self(Ty::Param("Self".to_string()))
+                    .with_bound(Bound {
+                        param: "Self".to_string(),
+                        trait_name: t.name.name.clone(),
+                        args: t
+                            .generics
+                            .iter()
+                            .map(|g| Ty::Param(g.name.name.clone()))
+                            .collect(),
+                    });
                 for method in &t.methods {
                     if let ItemKind::Fn(f) = &method.kind {
                         function(src, f, lower.clone(), items, diagnostics);
@@ -179,6 +192,10 @@ struct Callable {
     params: Vec<(Option<String>, Ty)>,
     ret: Ty,
     labels: Labels,
+    /// The callee's bounds, instantiated: each type must implement its
+    /// bound's trait. (The bound's `param` names the generic it came
+    /// from.)
+    obligations: Vec<(Ty, Bound)>,
     /// A pure function: no parameter, the receiver included, is
     /// capability-bearing. Constructors are pure; a closure is pure
     /// unless it is a `cap fn`.
@@ -710,6 +727,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                         params: params.into_iter().map(|p| (None, p)).collect(),
                         ret: *ret,
                         labels: Labels::Optional,
+                        obligations: Vec::new(),
                         pure: !cap,
                     }),
                     Ty::Error => None,
@@ -782,6 +800,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 return Some(callable);
             }
         }
+        if matches!(self.decls().get(type_name), Some(d) if d.kind == DeclKind::Trait) {
+            return self.qualified_call(type_name, name);
+        }
         if let Some(sig) = self.items.method(type_name, &name.name).cloned() {
             let mut callable = self.instantiate(&sig, None);
             if sig.receiver.is_some() {
@@ -790,10 +811,6 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             }
             return Some(callable);
         }
-        if matches!(self.decls().get(type_name), Some(d) if d.kind == DeclKind::Trait) {
-            // Qualified trait calls arrive with generics and traits.
-            return None;
-        }
         let mut candidates = self.items.method_names(type_name);
         if let Some(info) = self.items.enums.get(type_name) {
             candidates.extend(info.variants.iter().map(|(v, _)| v.as_str()));
@@ -801,6 +818,59 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         let message = format!("`{type_name}` has no variant or function `{}`", name.name);
         self.report_with_suggestion(codes::NO_MEMBER, message, name, &candidates);
         None
+    }
+
+    /// `Trait.method`: the trait's method called qualified, as in
+    /// `Display.to_string(x)`. The receiver is the first argument, and
+    /// its type must implement the trait.
+    fn qualified_call(&mut self, trait_name: &str, name: &Ident) -> Option<Callable> {
+        let info = self.items.traits.get(trait_name)?.clone();
+        let Some((sig, _)) = info.methods.iter().find(|(s, _)| s.name == name.name) else {
+            let candidates: Vec<&str> = info.methods.iter().map(|(s, _)| s.name.as_str()).collect();
+            let message = format!("the trait `{trait_name}` has no method `{}`", name.name);
+            self.report_with_suggestion(codes::NO_MEMBER, message, name, &candidates);
+            return None;
+        };
+        let self_ty = self.infer.fresh();
+        let args: Vec<Ty> = info.generics.iter().map(|_| self.infer.fresh()).collect();
+        let sig = info.method_for(sig, &self_ty, &args, &[], &[]);
+        let mut callable = self.instantiate(&sig, None);
+        callable.description = format!("`{trait_name}.{}`", name.name);
+        if sig.receiver.is_some() {
+            callable.params.insert(0, (None, self_ty.clone()));
+        }
+        callable.obligations.push((
+            self_ty,
+            Bound {
+                param: "Self".to_string(),
+                trait_name: trait_name.to_string(),
+                args,
+            },
+        ));
+        Some(callable)
+    }
+
+    /// Report `name` as provided by more than one of `traits` (`E0264`).
+    fn ambiguous_method(&mut self, name: &Ident, traits: &[&FnSig]) {
+        let mut names: Vec<&str> = traits
+            .iter()
+            .filter_map(|s| s.trait_name.as_deref())
+            .collect();
+        names.sort();
+        let listed = names
+            .iter()
+            .map(|t| format!("`{t}`"))
+            .collect::<Vec<_>>()
+            .join(" and ");
+        let example = names.first().copied().unwrap_or("Trait");
+        self.error(
+            codes::AMBIGUOUS_METHOD,
+            format!(
+                "`{}` is provided by {listed}; call it qualified, as in `{example}.{}(x)`",
+                name.name, name.name
+            ),
+            name.span,
+        );
     }
 
     /// The constructor of `variant` of `enum_name`, instantiated.
@@ -852,6 +922,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 Shape::Named => Labels::Required,
                 Shape::Positional | Shape::Unit => Labels::None,
             },
+            obligations: Vec::new(),
             pure: true,
         }
     }
@@ -878,6 +949,18 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 .collect(),
             ret: sig.ret.substitute(&subst),
             labels: Labels::Optional,
+            obligations: sig
+                .bounds
+                .iter()
+                .map(|b| {
+                    let ty = Ty::Param(b.param.clone()).substitute(&subst);
+                    let bound = Bound {
+                        args: b.args.iter().map(|a| a.substitute(&subst)).collect(),
+                        ..b.clone()
+                    };
+                    (ty, bound)
+                })
+                .collect(),
             pure: sig.pure,
         }
     }
@@ -893,32 +976,27 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     ) -> Ty {
         let receiver = self.infer(base);
         let receiver = self.infer.resolve(&receiver);
-        let type_name = match &receiver {
-            Ty::Named(type_name, _) => type_name.clone(),
+        let found = match &receiver {
+            Ty::Named(type_name, _) => self.type_method(&receiver, type_name, name),
+            Ty::Unit | Ty::Fn { .. } => self.type_method(&receiver, &receiver.to_string(), name),
+            Ty::Param(p) => self.bound_method(p, name),
             Ty::Var(_) => {
                 self.error(
                     codes::CANNOT_INFER,
                     format!("the type must be known before `.{}`", name.name),
                     name.span,
                 );
-                self.infer_args(args);
-                return Ty::Error;
+                None
             }
-            // Methods on generic parameters come from their bounds, which
-            // arrive with generics and traits.
-            Ty::Error | Ty::Param(_) | Ty::Never => {
-                self.infer_args(args);
-                return Ty::Error;
-            }
-            Ty::Unit | Ty::Fn { .. } => receiver.to_string(),
+            Ty::Error | Ty::Never => None,
         };
-        let Some(sig) = self.items.method(&type_name, &name.name).cloned() else {
-            let candidates = self.items.method_names(&type_name);
-            let message = format!("`{receiver}` has no method `{}`", name.name);
-            self.report_with_suggestion(codes::NO_MEMBER, message, name, &candidates);
+        let Some(sig) = found else {
             self.infer_args(args);
             return Ty::Error;
         };
+        let type_name = receiver
+            .head()
+            .map_or_else(|| receiver.to_string(), str::to_string);
         let Some(mutating) = sig.receiver else {
             self.error(
                 codes::NO_MEMBER,
@@ -940,6 +1018,84 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
         let callable = self.instantiate(&sig, Some(&receiver));
         self.apply(callable, args, expected, span)
+    }
+
+    /// The method `name` of a receiver of type `receiver`, named
+    /// `type_name`: its own `impl` first, then its traits. Reports an
+    /// unknown method (`E0228`).
+    fn type_method(&mut self, receiver: &Ty, type_name: &str, name: &Ident) -> Option<FnSig> {
+        if let Some(sig) = self.items.inherent_method(type_name, &name.name) {
+            return Some(sig.clone());
+        }
+        let found = self.items.trait_methods_named(type_name, &name.name);
+        match found.as_slice() {
+            [] => {}
+            [sig] => return Some((*sig).clone()),
+            _ => {
+                self.ambiguous_method(name, &found);
+                return None;
+            }
+        }
+        let candidates = self.items.method_names(type_name);
+        let message = format!("`{receiver}` has no method `{}`", name.name);
+        self.report_with_suggestion(codes::NO_MEMBER, message, name, &candidates);
+        None
+    }
+
+    /// The method `name` of a value of the generic parameter `param`,
+    /// which only its bounds provide. When they don't (`E0260`) and one
+    /// trait has the method, the fix adds that trait as a bound.
+    fn bound_method(&mut self, param: &str, name: &Ident) -> Option<FnSig> {
+        let self_ty = Ty::Param(param.to_string());
+        let mut found: Vec<FnSig> = Vec::new();
+        for bound in self.lower.bounds.iter().filter(|b| b.param == param) {
+            let Some(info) = self.items.traits.get(&bound.trait_name) else {
+                continue;
+            };
+            for (sig, _) in info.methods.iter().filter(|(s, _)| s.name == name.name) {
+                if !found.iter().any(|f| f.trait_name == sig.trait_name) {
+                    found.push(info.method_for(sig, &self_ty, &bound.args, &[], &[]));
+                }
+            }
+        }
+        match found.as_slice() {
+            [] => {}
+            [sig] => return Some(sig.clone()),
+            _ => {
+                let found: Vec<&FnSig> = found.iter().collect();
+                self.ambiguous_method(name, &found);
+                return None;
+            }
+        }
+        let mut diagnostic = Diagnostic::new(
+            codes::NOT_IN_BOUNDS,
+            format!("no bound of `{param}` provides a method `{}`", name.name),
+            name.span,
+        );
+        let mut providers: Vec<&String> = self
+            .items
+            .traits
+            .iter()
+            .filter(|(_, info)| {
+                info.generics.is_empty() && info.methods.iter().any(|(s, _)| s.name == name.name)
+            })
+            .map(|(trait_name, _)| trait_name)
+            .collect();
+        providers.sort();
+        let site = self.lower.sites.iter().rev().find(|s| s.name == param);
+        if let ([trait_name], Some(site)) = (providers.as_slice(), site) {
+            let text = if site.has_bounds {
+                format!(" + {trait_name}")
+            } else {
+                format!(": {trait_name}")
+            };
+            diagnostic = diagnostic.with_fix(
+                format!("add the bound `{param}: {trait_name}`"),
+                vec![Edit::insert(site.end, text)],
+            );
+        }
+        self.diagnostics.push(diagnostic);
+        None
     }
 
     /// Check `args` against `callable`'s parameters and return its result.
@@ -984,6 +1140,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     self.infer(&arg.value);
                 }
             }
+        }
+        let what = format!("calling {}", callable.description);
+        for (ty, bound) in &callable.obligations {
+            self.require_trait(ty, &bound.trait_name, &bound.args, span, &what);
         }
         callable.ret
     }
@@ -1151,7 +1311,8 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 Ty::bool()
             }
             BinaryOp::Eq | BinaryOp::Ne => {
-                self.operands(lhs, rhs, None);
+                let ty = self.operands(lhs, rhs, None);
+                self.require_trait(&ty, "Eq", &[], expr.span, &format!("`{}`", op.text()));
                 Ty::bool()
             }
             BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
@@ -1226,6 +1387,97 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             span,
         );
         false
+    }
+
+    // ---- Traits -----------------------------------------------------------
+
+    /// Whether `ty` implements `trait_name<args>`: a generic parameter
+    /// through its bounds, any other type through an `impl` (whose own
+    /// bounds must hold in turn). A type not yet known, or an error,
+    /// counts as implementing everything, so nothing is reported twice.
+    fn implements(&self, ty: &Ty, trait_name: &str, args: &[Ty]) -> bool {
+        let mut trial = self.infer.clone();
+        self.implements_in(&mut trial, ty, trait_name, args, 0)
+    }
+
+    fn implements_in(
+        &self,
+        infer: &mut Infer,
+        ty: &Ty,
+        trait_name: &str,
+        args: &[Ty],
+        depth: usize,
+    ) -> bool {
+        // Bounds on a generic impl can recurse; give up generously.
+        if depth > 16 {
+            return true;
+        }
+        match infer.resolve(ty) {
+            Ty::Error | Ty::Never | Ty::Var(_) => true,
+            Ty::Unit => trait_name == "Eq",
+            Ty::Fn { .. } => false,
+            Ty::Param(p) => self.lower.bounds.iter().any(|b| {
+                b.param == p
+                    && b.trait_name == trait_name
+                    && b.args.len() == args.len()
+                    && b.args.iter().zip(args).all(|(x, y)| infer.unify(x, y))
+            }),
+            ty @ Ty::Named(..) => self.items.impls.iter().any(|imp| {
+                if imp.trait_name != trait_name || imp.trait_args.len() != args.len() {
+                    return false;
+                }
+                let mut attempt = infer.clone();
+                let subst: Vec<(String, Ty)> = imp
+                    .generics
+                    .iter()
+                    .map(|g| (g.clone(), attempt.fresh()))
+                    .collect();
+                let matches = attempt.unify(&imp.target.substitute(&subst), &ty)
+                    && imp
+                        .trait_args
+                        .iter()
+                        .zip(args)
+                        .all(|(x, y)| attempt.unify(&x.substitute(&subst), y));
+                let holds = matches
+                    && imp.bounds.iter().all(|b| {
+                        let param = Ty::Param(b.param.clone()).substitute(&subst);
+                        let args: Vec<Ty> = b.args.iter().map(|a| a.substitute(&subst)).collect();
+                        self.implements_in(&mut attempt, &param, &b.trait_name, &args, depth + 1)
+                    });
+                if holds {
+                    *infer = attempt;
+                }
+                holds
+            }),
+        }
+    }
+
+    /// Report `E0265` at `span` when `ty` does not implement
+    /// `trait_name<args>`, which `what` needs. On a generic parameter of
+    /// this function, the fix adds the bound.
+    fn require_trait(&mut self, ty: &Ty, trait_name: &str, args: &[Ty], span: Span, what: &str) {
+        if self.implements(ty, trait_name, args) {
+            return;
+        }
+        let ty = self.infer.resolve(ty);
+        let bound = Ty::Named(trait_name.to_string(), args.to_vec()).to_string();
+        let message =
+            format!("{what} needs `{ty}: {bound}`, but `{ty}` does not implement `{bound}`");
+        let mut diagnostic = Diagnostic::new(codes::NOT_IMPLEMENTED, message, span);
+        if let Ty::Param(p) = &ty {
+            if let Some(site) = self.lower.sites.iter().rev().find(|s| &s.name == p) {
+                let text = if site.has_bounds {
+                    format!(" + {bound}")
+                } else {
+                    format!(": {bound}")
+                };
+                diagnostic = diagnostic.with_fix(
+                    format!("add the bound `{p}: {bound}`"),
+                    vec![Edit::insert(site.end, text)],
+                );
+            }
+        }
+        self.diagnostics.push(diagnostic);
     }
 
     // ---- Closures and `?` ---------------------------------------
@@ -1409,26 +1661,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         );
     }
 
-    /// Whether `?` can convert an error of type `from` into `to`.
-    ///
-    /// Extension point for `impl From` conversion (#39), which should look
-    /// up `impl From<from> for to` through the trait machinery. Until then,
-    /// this accepts a trait-impl method `from(value: from)` on `to`, so
-    /// that `examples/capabilities.osk` keeps checking.
+    /// Whether `?` can convert an error of type `from` into `to`: `to`
+    /// implements `From<from>`, through an explicit `impl` or a bound.
     fn converts_from(&self, from: &Ty, to: &Ty) -> bool {
-        let Some(type_name) = to.head() else {
-            return false;
-        };
-        self.items
-            .trait_impls
-            .get(type_name)
-            .into_iter()
-            .flatten()
-            .any(|sig| {
-                sig.name == "from"
-                    && sig.receiver.is_none()
-                    && matches!(sig.params.as_slice(), [(_, param)] if param == from)
-            })
+        self.implements(to, "From", std::slice::from_ref(from))
     }
 
     // ---- Blocks and statements --------------------------------------------

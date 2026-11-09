@@ -55,6 +55,12 @@
 //! | `E0252` | A named field matched without its label or with the wrong one, or a label on a positional field. The fix corrects the label. |
 //! | `E0253` | A `match` that is not exhaustive. Guards do not count. The message lists the missing patterns; the fix adds an arm for each, with `todo()` as its body. |
 //! | `E0254` | An unreachable arm: earlier unguarded arms already match every value it does. |
+//! | `E0260` | A method on a generic parameter that its bounds do not provide. The fix adds the bound when one trait has the method. |
+//! | `E0261` | An `impl Trait for Type` missing a required method. |
+//! | `E0262` | An `impl` method whose signature differs from the trait's. |
+//! | `E0263` | An `impl Trait` method the trait does not declare. |
+//! | `E0264` | A method name provided by more than one trait of the receiver; call it qualified, as in `Display.to_string(x)`. |
+//! | `E0265` | A type that does not implement a required trait: `==` needs `Eq`, calls need their bounds, `Trait.method(x)` needs `x: Trait`. On a generic parameter, the fix adds the bound. |
 //! | `E0270` | A `cap fn` used where a plain `fn` is expected, such as a closure that captures a capability-bearing value. |
 //! | `E0271` | Construction of a prelude struct with private fields, such as a built-in capability: capabilities cannot be forged. |
 //! | `E0272` | Reading a private field of a prelude type. |
@@ -73,6 +79,7 @@ mod prelude;
 mod recursion;
 mod release;
 mod resolve;
+mod traits;
 mod ty;
 mod usefulness;
 
@@ -113,6 +120,12 @@ pub(crate) mod codes {
     pub const PATTERN_LABEL: &str = "E0252";
     pub const NOT_EXHAUSTIVE: &str = "E0253";
     pub const UNREACHABLE_ARM: &str = "E0254";
+    pub const NOT_IN_BOUNDS: &str = "E0260";
+    pub const MISSING_METHOD: &str = "E0261";
+    pub const IMPL_SIGNATURE: &str = "E0262";
+    pub const NOT_IN_TRAIT: &str = "E0263";
+    pub const AMBIGUOUS_METHOD: &str = "E0264";
+    pub const NOT_IMPLEMENTED: &str = "E0265";
     pub const CAPTURING_CLOSURE: &str = "E0270";
     pub const FORGED: &str = "E0271";
     pub const PRIVATE_FIELD: &str = "E0272";
@@ -242,6 +255,7 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
         release::module(&module, &mut diagnostics);
     }
     let items = items::Items::collect(&module, &decls);
+    traits::module(&module, &decls, &items, &mut diagnostics);
     body::module(src, &module, &decls, &items, &mut diagnostics);
     let functions = authority::report(&module, &decls);
     diagnostics.sort_by_key(|d| d.span.start);

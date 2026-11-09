@@ -6,7 +6,7 @@
 
 use crate::ty::Ty;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Infer {
     /// The solution of each variable, by index.
     solutions: Vec<Option<Ty>>,
