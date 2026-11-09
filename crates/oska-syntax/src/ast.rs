@@ -140,8 +140,9 @@ pub struct Arg {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StrPart {
-    /// Literal text with escapes resolved.
-    Text(String),
+    /// Literal text with escapes resolved. The span covers the raw source
+    /// text, escapes included.
+    Text { value: String, span: Span },
     /// An interpolation hole: a name or field path, such as `{user.name}`.
     Hole { path: Vec<Ident>, span: Span },
 }
@@ -217,4 +218,45 @@ pub enum TypeKind {
         params: Vec<Type>,
         ret: Option<Box<Type>>,
     },
+}
+
+/// A whole source file: its items in source order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Module {
+    pub items: Vec<Item>,
+    pub span: Span,
+}
+
+/// A top-level declaration. Modules contain only items: there is no
+/// module-level code that runs on load.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Item {
+    /// Declared `pub`.
+    pub public: bool,
+    pub kind: ItemKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ItemKind {
+    Fn(FnDecl),
+}
+
+/// `fn name(params) -> ret { body }`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FnDecl {
+    pub name: Ident,
+    pub params: Vec<Param>,
+    /// A missing return type means `()`.
+    pub ret: Option<Type>,
+    pub body: Block,
+}
+
+/// A function parameter, `name: Type`. Capabilities are ordinary
+/// parameters, so a function's authority can be read from these.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Param {
+    pub name: Ident,
+    pub ty: Type,
+    pub span: Span,
 }

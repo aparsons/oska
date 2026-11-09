@@ -8,9 +8,11 @@
 use std::fmt;
 
 pub mod ast;
+mod export;
 mod parser;
 
-pub use parser::{parse_expr, parse_stmts, parse_type};
+pub use export::module_to_json;
+pub use parser::{parse_expr, parse_module, parse_stmts, parse_type};
 
 /// A half-open byte range `start..end` in the source text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,7 +283,7 @@ impl fmt::Display for Diagnostic {
 
 impl std::error::Error for Diagnostic {}
 
-fn json_escape(s: &str) -> String {
+pub(crate) fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
