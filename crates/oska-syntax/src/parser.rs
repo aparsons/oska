@@ -26,10 +26,12 @@
 //! - `E0105`: chained comparison such as `a < b < c`
 //! - `E0106`: invalid assignment target
 //! - `E0107`: a statement at module level, where only items are allowed
+//! - `E0120`: a missing comma between declared fields or enum variants
 
 use crate::ast::{
-    Arg, BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, Item, ItemKind, Module,
-    Param, Stmt, StmtKind, StrPart, Type, TypeKind, UnaryOp,
+    Arg, BinaryOp, Block, ClosureParam, EnumDecl, Expr, ExprKind, Field, Fields, FnDecl, Ident,
+    Item, ItemKind, Module, Param, Stmt, StmtKind, StrPart, StructDecl, Type, TypeKind, UnaryOp,
+    Variant,
 };
 use crate::{lex, resolve_escape, Diagnostic, Keyword, Punct, Span, Token, TokenKind};
 
@@ -271,6 +273,20 @@ impl<'a> Parser<'a> {
         }
         let kind = match self.peek() {
             Some(TokenKind::Keyword(Keyword::Fn)) => ItemKind::Fn(self.fn_decl()?),
+            Some(TokenKind::Keyword(Keyword::Struct)) => ItemKind::Struct(self.struct_decl(false)?),
+            Some(TokenKind::Keyword(Keyword::Enum)) => ItemKind::Enum(self.enum_decl(false)?),
+            Some(TokenKind::Keyword(Keyword::Cap)) => {
+                self.bump();
+                match self.peek() {
+                    Some(TokenKind::Keyword(Keyword::Struct)) => {
+                        ItemKind::Struct(self.struct_decl(true)?)
+                    }
+                    Some(TokenKind::Keyword(Keyword::Enum)) => {
+                        ItemKind::Enum(self.enum_decl(true)?)
+                    }
+                    _ => return Err(self.expected("`struct` or `enum` after `cap`")),
+                }
+            }
             _ => return Err(self.not_an_item()),
         };
         Ok(Item {
@@ -327,6 +343,129 @@ impl<'a> Parser<'a> {
             ret,
             body,
         })
+    }
+
+    /// `struct Name { fields }` or `struct Name(fields)`, after any `cap`.
+    fn struct_decl(&mut self, cap: bool) -> Result<StructDecl, Diagnostic> {
+        self.expect_kw(Keyword::Struct)?;
+        let name = self.expect_ident("a struct name")?;
+        let fields = if self.at_punct(Punct::LParen) {
+            Fields::Positional(self.positional_fields(true)?)
+        } else if self.at_punct(Punct::LBrace) {
+            Fields::Named(self.named_fields(true)?)
+        } else {
+            return Err(self.expected("`{` or `(` after the struct name"));
+        };
+        Ok(StructDecl { cap, name, fields })
+    }
+
+    /// `enum Name { variants }`, after any `cap`.
+    fn enum_decl(&mut self, cap: bool) -> Result<EnumDecl, Diagnostic> {
+        self.expect_kw(Keyword::Enum)?;
+        let name = self.expect_ident("an enum name")?;
+        if !self.at_punct(Punct::LBrace) {
+            return Err(self.expected("`{` after the enum name"));
+        }
+        self.bump();
+        let variants = self.comma_list(Punct::RBrace, |p| {
+            let name = p.expect_ident("a variant name")?;
+            let fields = if p.at_punct(Punct::LParen) {
+                Fields::Positional(p.positional_fields(false)?)
+            } else if p.at_punct(Punct::LBrace) {
+                Fields::Named(p.named_fields(false)?)
+            } else {
+                Fields::Unit
+            };
+            Ok(Variant {
+                span: p.span_from(name.span),
+                name,
+                fields,
+            })
+        })?;
+        Ok(EnumDecl {
+            cap,
+            name,
+            variants,
+        })
+    }
+
+    /// The error for two declared entries with no comma between them. The
+    /// span is empty, at `end`, where the comma belongs.
+    fn missing_comma(&self, end: usize, close: Punct) -> Diagnostic {
+        error(
+            "E0120",
+            format!(
+                "expected `,` or `{}`, found {}; add a comma after this entry, \
+                 because fields and variants are separated by commas, even on \
+                 separate lines",
+                close.text(),
+                describe(self.peek()),
+            ),
+            Span { start: end, end },
+        )
+    }
+
+    /// `{ a: T, pub b: U }`. `allow_pub` is false inside enum variants.
+    fn named_fields(&mut self, allow_pub: bool) -> Result<Vec<Field>, Diagnostic> {
+        self.expect_punct(Punct::LBrace)?;
+        self.comma_list(Punct::RBrace, |p| {
+            let start = p.peek_span();
+            let public = allow_pub && p.at_kw(Keyword::Pub);
+            if public {
+                p.bump();
+            }
+            let name = p.expect_ident("a field name")?;
+            p.expect_punct(Punct::Colon)?;
+            let ty = p.ty()?;
+            Ok(Field {
+                public,
+                name: Some(name),
+                ty,
+                span: p.span_from(start),
+            })
+        })
+    }
+
+    /// `(T, pub U)`. `allow_pub` is false inside enum variants.
+    fn positional_fields(&mut self, allow_pub: bool) -> Result<Vec<Field>, Diagnostic> {
+        self.expect_punct(Punct::LParen)?;
+        self.comma_list(Punct::RParen, |p| {
+            let start = p.peek_span();
+            let public = allow_pub && p.at_kw(Keyword::Pub);
+            if public {
+                p.bump();
+            }
+            let ty = p.ty()?;
+            Ok(Field {
+                public,
+                name: None,
+                ty,
+                span: p.span_from(start),
+            })
+        })
+    }
+
+    /// Declared fields or variants up to `close`, which this consumes.
+    /// Entries must be separated by commas, even across lines; a trailing
+    /// comma is allowed.
+    fn comma_list<T>(
+        &mut self,
+        close: Punct,
+        mut entry: impl FnMut(&mut Self) -> Result<T, Diagnostic>,
+    ) -> Result<Vec<T>, Diagnostic> {
+        let mut entries = Vec::new();
+        loop {
+            self.skip_newlines();
+            if self.eat_punct(close) {
+                return Ok(entries);
+            }
+            entries.push(entry(self)?);
+            let end = self.prev_end;
+            self.skip_newlines();
+            if !self.eat_punct(Punct::Comma) && !self.at_punct(close) {
+                return Err(self.missing_comma(end, close));
+            }
+        }
     }
 
     // ----- statements -----
