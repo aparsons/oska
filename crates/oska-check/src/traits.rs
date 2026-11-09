@@ -214,11 +214,13 @@ fn fits(a: &Ty, b: &Ty, trusting: Trusting) -> bool {
                 cap: c1,
                 params: p1,
                 ret: r1,
+                ..
             },
             Ty::Fn {
                 cap: c2,
                 params: p2,
                 ret: r2,
+                ..
             },
         ) => {
             c1 == c2
