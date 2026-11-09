@@ -42,6 +42,10 @@ impl Stdout {
 #[capability]
 pub struct Stderr { handle: Int }
 
+impl Stderr {
+    pub fn println(self, line: Untrusted<String>) -> Result<(), IoError>
+}
+
 #[capability]
 pub struct Fs { handle: Int }
 
@@ -61,6 +65,13 @@ impl FsRead {
 
 #[capability]
 pub struct FsWrite { handle: Int }
+
+impl FsWrite {
+    pub fn restrict_to(self, dir: String) -> FsWrite
+    // Create the file at `path`, or replace what it holds, with
+    // `contents`.
+    pub fn write(self, path: Path, contents: Untrusted<String>) -> Result<(), IoError>
+}
 
 #[capability]
 pub struct Net { handle: Int }
@@ -124,8 +135,18 @@ impl Secret<String> {
 #[capability]
 pub struct Clock { handle: Int }
 
+impl Clock {
+    // Milliseconds since the Unix epoch.
+    pub fn now_millis(self) -> Int
+}
+
 #[capability]
 pub struct Random { handle: Int }
+
+impl Random {
+    // A pseudo-random integer from 0 up to, but excluding, 2^63.
+    pub fn next_int(self) -> Int
+}
 
 #[capability]
 pub struct Sched { handle: Int }
@@ -164,11 +185,19 @@ pub enum Option<T> {
 impl<T> Option<T> {
     pub fn ok_or<E>(self, err: E) -> Result<T, E>
     pub fn is_some(self) -> Bool
+    // The value, or `default` when there is none.
+    pub fn unwrap_or(self, default: T) -> T
 }
 
 pub enum Result<T, E> {
     Ok(T),
     Err(E),
+}
+
+impl<T, E> Result<T, E> {
+    pub fn is_ok(self) -> Bool
+    // The `Ok` value, or `default` for an `Err`.
+    pub fn unwrap_or(self, default: T) -> T
 }
 
 // A growable list. Its representation is built in.

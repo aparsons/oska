@@ -54,6 +54,16 @@ pub fn module(module: &Module, items: &Items, resolutions: &Resolutions) -> Prog
                 let name = f.name.name.clone();
                 lowering.function(&mut program, name, f, items.fns.get(&f.name.name));
             }
+            ItemKind::Use(u) => {
+                if let (Some(first), Some(last)) = (u.path.first(), u.path.last()) {
+                    let path: Vec<&str> = u.path.iter().map(|s| s.name.as_str()).collect();
+                    let span = Span {
+                        start: first.span.start,
+                        end: last.span.end,
+                    };
+                    program.imports.push((path.join("."), span));
+                }
+            }
             ItemKind::Impl(imp) if imp.trait_ref.is_none() => {
                 let TypeKind::Path { segments, .. } = &imp.target.kind else {
                     continue;
