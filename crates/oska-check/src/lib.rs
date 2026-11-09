@@ -27,20 +27,20 @@
 //! | `E0211` | A `main` parameter that is not a built-in capability or `Args`. |
 //! | `E0212` | `main` returns something other than `()` or `Result<(), E>`, or `E` does not implement `Display`. |
 //! | `E0213` | A type, variant, trait, or type parameter name that does not start uppercase. |
-//! | `E0214` | A function, field, parameter, or local variable name that starts uppercase. |
+//! | `E0214` | A function, method, field, parameter, or local variable (`let`, `var`, `for`) name that starts uppercase. A leading `_` is allowed. |
 //! | `E0215` | A recursive struct or enum with no base case. |
 //! | `E0216` | `dbg(...)` under `--release`. |
 //! | `E0220` | Type mismatch: an expression's type differs from the type expected there. There are no implicit conversions. |
-//! | `E0221` | Unknown value name, or `self` outside a method with a receiver. |
+//! | `E0221` | Unknown value name, or `self` outside a method with a receiver. The fix replaces the name with the single closest local, function, or prelude variant, when there is one. |
 //! | `E0222` | Integer literal out of range for its type, such as `300` as a `U8`. |
 //! | `E0223` | Operator not defined for its operand's type: arithmetic and ordering need numbers (`+` is not for strings), unary `-` needs a signed number, `..` needs integers. |
 //! | `E0224` | Wrong number of arguments in a call or construction. |
-//! | `E0225` | Argument label that does not match its parameter or field, or a label on a positional field. |
-//! | `E0226` | Named field constructed without its label. |
-//! | `E0227` | Unknown field, or a method used without calling it. |
-//! | `E0228` | Unknown method, variant, or associated function, or an associated function called on a value. |
-//! | `E0229` | Assignment to something that is not a `var` binding: a `let` binding, a parameter, or a field of `self` in a method without `var self`. |
-//! | `E0230` | Mutating method (`var self`) called on something that is not a `var` binding. |
+//! | `E0225` | Argument label that does not match its parameter or field, or a label on a positional field. The fix replaces the label with the parameter's name, or removes it. |
+//! | `E0226` | Named field constructed without its label. The fix inserts the label. |
+//! | `E0227` | Unknown field, or a method used without calling it. The fix replaces the field with the single closest field, when there is one. |
+//! | `E0228` | Unknown method, variant, or associated function, or an associated function called on a value. The fix replaces the name with the single closest member, when there is one. |
+//! | `E0229` | Assignment to something that is not a `var` binding: a `let` binding, a parameter, or a field of `self` in a method without `var self`. The fix changes `let` to `var`, or `self` to `var self`; there is none for a parameter. |
+//! | `E0230` | Mutating method (`var self`) called on something that is not a `var` binding. The fix changes `let` to `var`, or `self` to `var self`. |
 //! | `E0231` | Call of a value that is not a function. |
 //! | `E0232` | `break` or `continue` outside a loop. |
 //! | `E0233` | A type that inference cannot work out, such as `let xs = List.new()` with no later use. |
