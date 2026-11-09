@@ -293,6 +293,33 @@ pub enum ItemKind {
     Test(TestDecl),
     Struct(StructDecl),
     Enum(EnumDecl),
+    Impl(ImplDecl),
+    Trait(TraitDecl),
+}
+
+/// `trait Name<generics> { methods }`. A method either ends after its
+/// signature or has a default body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraitDecl {
+    pub name: Ident,
+    pub generics: Vec<GenericParam>,
+    /// The methods, in source order. Each is an [`ItemKind::Fn`] item.
+    pub methods: Vec<Item>,
+}
+
+/// `impl<generics> Type { methods }`, or `impl<generics> Trait for Type
+/// { methods }` for a trait implementation. An `impl` block is never `pub`;
+/// each method carries its own visibility.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImplDecl {
+    pub generics: Vec<GenericParam>,
+    /// The implemented trait, for `impl Trait for Type`.
+    pub trait_: Option<Type>,
+    /// The type the methods belong to.
+    pub target: Type,
+    /// The methods, in source order. Each is an [`ItemKind::Fn`] item, so it
+    /// carries its own `pub` and attributes.
+    pub methods: Vec<Item>,
 }
 
 /// `test "a descriptive name" { body }`.
@@ -345,7 +372,8 @@ pub struct FnDecl {
     pub requires: Vec<Requires>,
     /// `ensures |r| ...` clauses, in source order.
     pub ensures: Vec<Ensures>,
-    pub body: Block,
+    /// Absent only for a trait method without a default body.
+    pub body: Option<Block>,
 }
 
 /// A method's receiver: `self`, or `var self` for a mutating method.
@@ -396,6 +424,8 @@ pub struct StructDecl {
     /// Declared `cap struct`: the type may hold capabilities.
     pub cap: bool,
     pub name: Ident,
+    /// Empty when the type is not generic.
+    pub generics: Vec<GenericParam>,
     pub fields: Fields,
 }
 
@@ -428,6 +458,8 @@ pub struct EnumDecl {
     /// Declared `cap enum`: the type may hold capabilities.
     pub cap: bool,
     pub name: Ident,
+    /// Empty when the type is not generic.
+    pub generics: Vec<GenericParam>,
     pub variants: Vec<Variant>,
 }
 
