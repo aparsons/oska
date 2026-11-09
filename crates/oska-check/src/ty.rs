@@ -43,6 +43,11 @@ pub enum Trust {
     #[default]
     Trusted,
     Untrusted,
+    /// A **trust variable**, solved within one body (see `infer.rs`). It
+    /// stands for the join of the trust of everything that flows into it:
+    /// untrusted as soon as any untrusted text does. Inference variables
+    /// and trust-polymorphic prelude operations introduce them.
+    Var(u32),
 }
 
 // Prelude types and traits the checker gives special treatment, by name.
@@ -55,6 +60,11 @@ pub const STRING: &str = "String";
 pub const UNTRUSTED: &str = "Untrusted";
 /// The types that carry a trust flag.
 const TEXT: &[&str] = &[STRING];
+
+/// Whether the type named `name` carries a trust flag.
+pub fn is_text_name(name: &str) -> bool {
+    TEXT.contains(&name)
+}
 pub const OPTION: &str = "Option";
 pub const RESULT: &str = "Result";
 pub const LIST: &str = "List";
@@ -125,6 +135,28 @@ impl Ty {
                 Ty::Named(name, args, trust)
             }
             other => other,
+        }
+    }
+
+    /// This type with every trusted text flag in it, at any depth,
+    /// replaced by `trust`.
+    pub fn trusted_as(&self, trust: Trust) -> Ty {
+        match self {
+            Ty::Named(name, args, t) => Ty::Named(
+                name.clone(),
+                args.iter().map(|a| a.trusted_as(trust)).collect(),
+                if self.is_text() && *t == Trust::Trusted {
+                    trust
+                } else {
+                    *t
+                },
+            ),
+            Ty::Fn { cap, params, ret } => Ty::Fn {
+                cap: *cap,
+                params: params.iter().map(|p| p.trusted_as(trust)).collect(),
+                ret: Box::new(ret.trusted_as(trust)),
+            },
+            other => other.clone(),
         }
     }
 

@@ -107,7 +107,10 @@ impl Body<'_, '_, '_> {
         let second_ty = self.expr(second, expected);
         let second_secret = self.is_secret(&second_ty);
         if !first_secret && !second_secret {
-            let ty = self.expect(&second_ty, &first_ty, second.span);
+            // Comparing inspects text without passing it on, so the
+            // operands may differ in trust.
+            let loosened = self.infer.loosen(&first_ty);
+            let ty = self.expect(&second_ty, &loosened, second.span);
             return (!ty.is_error()).then_some(first_ty);
         }
         let (secret, other, other_secret) = if first_secret {

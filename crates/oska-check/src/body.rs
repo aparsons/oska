@@ -41,7 +41,7 @@
 
 use oska_syntax::ast::{
     BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, ItemKind, Module, StmtKind,
-    StrPart, UnaryOp,
+    StrPart, Type, UnaryOp,
 };
 use oska_syntax::{Diagnostic, Edit, Span};
 
@@ -52,8 +52,9 @@ use crate::decl_rules;
 use crate::infer::{Infer, Mismatch};
 use crate::items::{Bound, Items, Lower};
 use crate::prelude::{self, StdModule};
+use crate::resolve;
 use crate::suggest;
-use crate::ty::{self, Ty};
+use crate::ty::{self, Trust, Ty};
 use crate::AuditSite;
 
 mod audit;
@@ -225,6 +226,9 @@ struct Callable {
     pure: bool,
     /// For a method: the type of its receiver, instantiated.
     receiver: Option<Ty>,
+    /// For a `#[follows_trust]` operation: the trust variable its
+    /// receiver and text arguments join into.
+    joined: Option<Trust>,
 }
 
 /// The state of checking one body.
@@ -287,6 +291,18 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             closures: Vec::new(),
             in_contract: false,
         }
+    }
+
+    /// Report misuse of `Untrusted<...>` in a type written in the body
+    /// (`E0320`). Signatures are checked with name resolution.
+    fn check_written(&mut self, written: &Type) {
+        let lower = &self.lower;
+        let known = |name: &str| {
+            lower.generics.iter().any(|g| g == name)
+                || name == ty::SELF
+                || lower.decls().get(name).is_some()
+        };
+        resolve::untrusted_not_text_within(written, &known, self.diagnostics);
     }
 
     fn decls(&self) -> &'d Decls<'a> {
@@ -432,7 +448,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
     /// Unify `actual` with `expected`, reporting `E0220` at `span` when
     /// they differ.
-    fn expect(&mut self, actual: &Ty, expected: &Ty, span: Span) -> Ty {
+    pub(super) fn expect(&mut self, actual: &Ty, expected: &Ty, span: Span) -> Ty {
         match self.infer.flow(actual, expected) {
             Ok(()) => actual.clone(),
             Err(mismatch) => {
@@ -446,7 +462,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     /// the `cap` rule stops it, `E0300` when only the trust rule does,
     /// `E0341` for text where a sink literal is required, `E0220`
     /// otherwise.
-    fn mismatch(&mut self, mismatch: Mismatch, actual: &Ty, expected: &Ty, span: Span) {
+    pub(super) fn mismatch(&mut self, mismatch: Mismatch, actual: &Ty, expected: &Ty, span: Span) {
         let expected = self.infer.resolve(expected);
         let actual = self.infer.resolve(actual);
         let literal = expected.head().and_then(prelude::sink_literal_typed);
@@ -500,13 +516,16 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 ty
             }
             ExprKind::Str(parts) => {
+                // The string is untrusted when any text in a hole is.
+                let trust = self.infer.fresh_trust();
                 for part in parts {
                     if let StrPart::Hole { path, span } = part {
                         let ty = self.hole(path);
                         self.secret_hole(&ty, *span);
+                        self.infer.join_into(&ty, trust);
                     }
                 }
-                Ty::string()
+                Ty::string().with_trust(trust)
             }
             ExprKind::SinkStr { tag, .. } => self.sink_literal(tag, expr.span),
             ExprKind::Bool(_) => Ty::bool(),
@@ -576,7 +595,11 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 match expected {
                     Some(expected) => self.check(else_branch, expected),
                     None if self.infer.shallow(&then) == Ty::Never => self.infer(else_branch),
-                    None => self.check(else_branch, &then),
+                    None => {
+                        let joined = self.join(&then);
+                        self.check(else_branch, &joined);
+                        joined
+                    }
                 }
             }
             ExprKind::Block(block) => self.block(block, expected, true),
@@ -603,6 +626,15 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 self.match_expr(expr.span, scrutinee, arms, expected)
             }
         }
+    }
+
+    /// A fresh variable that `ty` flows into, as the type of an `if` or
+    /// `match` whose branches are checked against it in turn. Text in it
+    /// is the join of the branches': untrusted if any branch's is.
+    pub(super) fn join(&mut self, ty: &Ty) -> Ty {
+        let joined = self.infer.fresh();
+        self.infer.unify(ty, &joined);
+        joined
     }
 
     /// The type an integer literal takes: the expected integer type, or
@@ -1021,7 +1053,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     .iter()
                     .map(|g| (g.clone(), attempt.fresh()))
                     .collect();
-                let matches = attempt.unify(&ty, &imp.target.substitute(&subst))
+                // An impl for a text type covers text of either trust.
+                let target = attempt.loosen(&imp.target.substitute(&subst));
+                let matches = attempt.unify(&ty, &target)
                     && imp
                         .trait_args
                         .iter()
@@ -1094,6 +1128,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             let hint = expected.as_ref().map(|(ps, _)| ps[i].clone());
             let ty = match (&param.ty, hint) {
                 (Some(written), hint) => {
+                    self.check_written(written);
                     let ty = self.lower.ty(written);
                     match hint {
                         // The caller passes a value of the expected
@@ -1210,6 +1245,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 self.require_lowercase(name);
                 let ty = match ty {
                     Some(written) => {
+                        self.check_written(written);
                         let ty = self.lower.ty(written);
                         self.check(value, &ty);
                         ty

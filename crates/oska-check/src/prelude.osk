@@ -14,6 +14,13 @@
 // **structural position**. `Untrusted<String>` is untrusted text: sources
 // return it, and a **data position** declares it, which also accepts
 // trusted text.
+//
+// A text operation marked `#[follows_trust]` is trust-polymorphic: its
+// receiver and every `String` in its parameters accept text of either
+// trust, and every `String` in its result is untrusted when any of them
+// is untrusted. Results that are not text, such as `Int` or `Bool`, are
+// trusted. Without the attribute, `String` means trusted everywhere, the
+// receiver included.
 
 // ---- Built-in capabilities -------------------------------------------
 
@@ -177,9 +184,21 @@ impl<T> List<T> {
 pub struct Range<T> { pub start: T, pub end: T }
 
 impl String {
+    #[follows_trust]
     pub fn lines(self) -> List<String>
+    #[follows_trust]
     pub fn len(self) -> Int
-    pub fn contains(self, needle: Untrusted<String>) -> Bool
+    // Without leading and trailing whitespace.
+    #[follows_trust]
+    pub fn trim(self) -> String
+    // The pieces between occurrences of `separator`.
+    #[follows_trust]
+    pub fn split(self, separator: String) -> List<String>
+    #[follows_trust]
+    pub fn contains(self, needle: String) -> Bool
+    // The decimal integer the whole text spells, if it is one.
+    #[follows_trust]
+    pub fn parse_int(self) -> Option<Int>
 }
 
 impl Untrusted<String> {
@@ -242,6 +261,7 @@ pub fn todo<T>() -> T
 // ---- Core traits -------------------------------------------------------
 
 pub trait Eq {
+    #[follows_trust]
     fn eq(self, other: Self) -> Bool
 }
 
@@ -264,10 +284,12 @@ impl<T: Eq, E: Eq> Eq for Result<T, E> { fn eq(self, other: Result<T, E>) -> Boo
 impl<T: Eq> Eq for List<T> { fn eq(self, other: List<T>) -> Bool }
 
 pub trait Hash {
+    #[follows_trust]
     fn hash(self) -> Int
 }
 
 pub trait Display {
+    #[follows_trust]
     fn to_string(self) -> String
 }
 

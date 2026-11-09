@@ -10,6 +10,63 @@ use crate::prelude;
 use crate::suggest;
 use crate::ty;
 
+/// `E0320` for `ty` when it is `Untrusted<T>` and `T` is a type that is
+/// not text. Trust is a flag on text only (ADR 0006), so such a type
+/// means nothing; text inside a container is written
+/// `List<Untrusted<String>>`. `known` says whether a name is a type in
+/// scope: an unknown argument is reported as unknown instead.
+pub fn untrusted_not_text(ty: &Type, known: &dyn Fn(&str) -> bool) -> Option<Diagnostic> {
+    let TypeKind::Path { segments, args } = &ty.kind else {
+        return None;
+    };
+    let ([ident], [arg]) = (segments.as_slice(), args.as_slice()) else {
+        return None;
+    };
+    if ident.name != ty::UNTRUSTED {
+        return None;
+    }
+    if let TypeKind::Path { segments, .. } = &arg.kind {
+        match segments.as_slice() {
+            [name] if ty::is_text_name(&name.name) || name.name == ty::UNTRUSTED => return None,
+            [name] if !known(&name.name) => return None,
+            _ => {}
+        }
+    }
+    Some(Diagnostic::new(
+        codes::UNTRUSTED_NOT_TEXT,
+        "`Untrusted<...>` marks text only, such as `Untrusted<String>`: trust is a flag \
+         on text, and other types are always trusted; for text inside a container, \
+         write it inside, as in `List<Untrusted<String>>`",
+        ty.span,
+    ))
+}
+
+/// Every `E0320` in the written type `ty`, at any depth.
+pub fn untrusted_not_text_within(
+    ty: &Type,
+    known: &dyn Fn(&str) -> bool,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    diagnostics.extend(untrusted_not_text(ty, known));
+    match &ty.kind {
+        TypeKind::Unit => {}
+        TypeKind::Path { args, .. } => {
+            for arg in args {
+                untrusted_not_text_within(arg, known, diagnostics);
+            }
+        }
+        TypeKind::Fn {
+            params,
+            return_type,
+            ..
+        } => {
+            for t in params.iter().chain(return_type.as_deref()) {
+                untrusted_not_text_within(t, known, diagnostics);
+            }
+        }
+    }
+}
+
 /// Report every unresolved or misused type and trait name in the user
 /// module `module`.
 pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
@@ -148,6 +205,11 @@ impl Resolver<'_, '_> {
             }
             TypeKind::Path { segments, args } => {
                 self.path(segments, Expect::Type);
+                let known =
+                    |name: &str| self.is_type_variable(name) || self.decls.get(name).is_some();
+                if let Some(diagnostic) = untrusted_not_text(ty, &known) {
+                    self.diagnostics.push(diagnostic);
+                }
                 for arg in args {
                     self.ty(arg);
                 }
