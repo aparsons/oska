@@ -253,12 +253,12 @@ impl Items {
         for item in items {
             match &item.kind {
                 ItemKind::Fn(f) => {
-                    let mut sig = Lower::new(decls).signature(f, &[], None);
+                    let mut sig = Lower::in_scope(decls, in_prelude).signature(f, &[], None);
                     sig.follows_trust = follows_trust(item);
                     self.fns.entry(sig.name.clone()).or_insert(sig);
                 }
                 ItemKind::Struct(s) => {
-                    let lower = Lower::new(decls).with_generics(&s.generics);
+                    let lower = Lower::in_scope(decls, in_prelude).with_generics(&s.generics);
                     let private: Vec<&Field> = match &s.fields {
                         Fields::Named(list) | Fields::Positional(list) => {
                             list.iter().filter(|f| !f.public).collect()
@@ -281,7 +281,7 @@ impl Items {
                     self.structs.entry(s.name.name.clone()).or_insert(info);
                 }
                 ItemKind::Enum(e) => {
-                    let lower = Lower::new(decls).with_generics(&e.generics);
+                    let lower = Lower::in_scope(decls, in_prelude).with_generics(&e.generics);
                     let variants = e
                         .variants
                         .iter()
@@ -300,7 +300,7 @@ impl Items {
                     self.enums.entry(e.name.name.clone()).or_insert(info);
                 }
                 ItemKind::Impl(imp) => {
-                    let lower = Lower::new(decls).with_generics(&imp.generics);
+                    let lower = Lower::in_scope(decls, in_prelude).with_generics(&imp.generics);
                     let target = lower.ty(&imp.target);
                     let receiver_bearing = capability_bearing(&target, decls);
                     match &imp.trait_ref {
@@ -339,7 +339,7 @@ impl Items {
                 }
                 ItemKind::Trait(t) => {
                     let self_ty = Ty::Param(ty::SELF.to_string());
-                    let lower = Lower::new(decls)
+                    let lower = Lower::in_scope(decls, in_prelude)
                         .with_generics(&t.generics)
                         .with_self(self_ty.clone());
                     let methods = t
@@ -445,16 +445,29 @@ pub struct Lower<'d, 'a> {
     /// bound.
     pub sites: Vec<GenericSite>,
     pub self_ty: Option<Ty>,
+    /// Lowering the prelude or a `std` module: every declared name is in
+    /// scope unqualified.
+    see_all: bool,
 }
 
 impl<'d, 'a> Lower<'d, 'a> {
+    /// Lowers types written in the user module, which sees an imported
+    /// module's names only as that module's exports (see
+    /// [`Decls::path_name`]).
     pub fn new(decls: &'d Decls<'a>) -> Self {
+        Self::in_scope(decls, false)
+    }
+
+    /// Lowers types written in the user module, or, when `in_prelude`, in
+    /// the prelude or a `std` module, which see every declared name.
+    pub fn in_scope(decls: &'d Decls<'a>, in_prelude: bool) -> Self {
         Lower {
             decls,
             generics: Vec::new(),
             bounds: Vec::new(),
             sites: Vec::new(),
             self_ty: None,
+            see_all: in_prelude,
         }
     }
 
@@ -510,16 +523,14 @@ impl<'d, 'a> Lower<'d, 'a> {
         let TypeKind::Path { segments, args } = &ty.kind else {
             return None;
         };
-        let [ident] = segments.as_slice() else {
-            return None;
-        };
-        let decl = self.decls.get(&ident.name)?;
+        let name = self.decls.path_name(segments, self.see_all)?;
+        let decl = self.decls.get(name)?;
         if decl.kind != DeclKind::Trait {
             return None;
         }
         let mut lowered: Vec<Ty> = args.iter().map(|a| self.ty(a)).collect();
         lowered.resize(decl.generics.len(), Ty::Error);
-        Some((ident.name.clone(), lowered))
+        Some((name.to_string(), lowered))
     }
 
     /// The signature of `f`, declared inside an impl with `outer`
@@ -589,17 +600,19 @@ impl<'d, 'a> Lower<'d, 'a> {
                 ret: Box::new(return_type.as_ref().map_or(Ty::Unit, |r| self.ty(r))),
             },
             TypeKind::Path { segments, args } => {
-                let [ident] = segments.as_slice() else {
+                if let [ident] = segments.as_slice() {
+                    let name = ident.name.as_str();
+                    if self.generics.iter().any(|g| g == name) {
+                        return Ty::Param(name.to_string());
+                    }
+                    if name == ty::SELF {
+                        return self.self_ty.clone().unwrap_or(Ty::Error);
+                    }
+                }
+                let Some(name) = self.decls.path_name(segments, self.see_all) else {
                     return Ty::Error;
                 };
-                let name = ident.name.as_str();
-                if self.generics.iter().any(|g| g == name) {
-                    return Ty::Param(name.to_string());
-                }
-                if name == ty::SELF {
-                    return self.self_ty.clone().unwrap_or(Ty::Error);
-                }
-                if name == ty::UNTRUSTED {
+                if segments.len() == 1 && name == ty::UNTRUSTED {
                     // Trust is a flag on text, not a type (ADR 0006).
                     return match args.as_slice() {
                         [arg] => match self.ty(arg) {

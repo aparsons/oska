@@ -73,6 +73,23 @@ impl Net {
 #[capability]
 pub struct NetConnect { handle: Int }
 
+impl NetConnect {
+    // Connect to `host`. The host decides where the program connects, so
+    // it is structural: untrusted text can't redirect it (SSRF).
+    pub fn connect(self, host: String, port: Int) -> Result<Connection, IoError>
+}
+
+// An open connection to one host. It carries the authority to talk to
+// that host, so it is capability-bearing, and it can't be forged.
+pub cap struct Connection { net: NetConnect }
+
+impl Connection {
+    // A request body is data: it may be untrusted.
+    pub fn send(self, body: Untrusted<String>) -> Result<(), IoError>
+    // What the host sent back: text from outside the program.
+    pub fn receive(self) -> Result<Untrusted<String>, IoError>
+}
+
 #[capability]
 pub struct NetListen { handle: Int }
 
@@ -82,6 +99,23 @@ pub struct Env { handle: Int }
 impl Env {
     // The environment variable `name`, or `None` when it is not set.
     pub fn get(self, name: String) -> Option<Untrusted<String>>
+    // The secret `name`, such as an API token.
+    pub fn secret(self, name: String) -> Secret<String>
+}
+
+// A secret value. It has no `Display` and no `Eq`, and cannot be
+// interpolated: compare it with `constant_time_eq`, and read it with
+// `expose`, which is an audit site.
+pub struct Secret<T> { value: T }
+
+impl<T> Secret<T> {
+    // The secret's value. Every call is an audit site.
+    pub fn expose(self) -> T
+}
+
+impl Secret<String> {
+    // Compare without leaking timing information.
+    pub fn constant_time_eq(self, other: Untrusted<String>) -> Bool
 }
 
 #[capability]
@@ -165,6 +199,12 @@ impl String {
     // The decimal integer the whole text spells, if it is one.
     #[follows_trust]
     pub fn parse_int(self) -> Option<Int>
+}
+
+impl Untrusted<String> {
+    // A trust assertion: a validator vouches for text it has checked.
+    // Every call is an audit site.
+    pub fn assume_trusted(self) -> String
 }
 
 pub struct Path { raw: String }

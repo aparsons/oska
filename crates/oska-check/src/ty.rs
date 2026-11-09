@@ -81,6 +81,8 @@ pub const EQ: &str = "Eq";
 pub const FROM: &str = "From";
 /// `main`'s error type needs it.
 pub const DISPLAY: &str = "Display";
+/// A secret value: no `Display`, no `Eq`, no interpolation.
+pub const SECRET: &str = "Secret";
 /// The name of `Self`, inside a trait or `impl`.
 pub const SELF: &str = "Self";
 

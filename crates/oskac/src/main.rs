@@ -82,7 +82,8 @@ fn parse_file(path: &str, json: bool) -> ExitCode {
 }
 
 /// `oskac check`: print every diagnostic and each function's authority,
-/// as `{"diagnostics": [...], "functions": [...]}` with `--format=json`.
+/// as `{"diagnostics": [...], "functions": [...], "audit": [...]}` with
+/// `--format=json`, which also lists the audit sites.
 /// The exit code is non-zero when there are diagnostics.
 fn check_file(path: &str, json: bool, release: bool) -> ExitCode {
     let Some(src) = read_source(path) else {

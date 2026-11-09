@@ -18,6 +18,10 @@
 //!   `Callable`, applied by [`Body::apply`]. Method calls
 //!   ([`Body::method_call`]) try the type's own `impl`, then its traits;
 //!   on a generic parameter, only its bounds' traits.
+//! - **Audit sites:** in `body/audit.rs`. Each method call is checked
+//!   against the table of audited prelude methods (`.assume_trusted()`,
+//!   `.expose()`),
+//!   and a match is recorded at the call.
 //! - **`?` and the `Result` discipline:** in `body/results.rs`.
 //!   [`Body::try_expr`] converts errors when the function's error type
 //!   implements `From<E>` ([`Body::converts_from`]), and
@@ -47,13 +51,17 @@ use crate::collect::Decls;
 use crate::decl_rules;
 use crate::infer::{Infer, Mismatch};
 use crate::items::{Bound, Items, Lower};
+use crate::prelude::{self, StdModule};
 use crate::resolve;
 use crate::suggest;
 use crate::ty::{self, Trust, Ty};
+use crate::AuditSite;
 
+mod audit;
 mod calls;
 mod patterns;
 mod results;
+mod secrets;
 mod sinks;
 
 /// Check every function, method, constant, and test body in `module`. A
@@ -64,17 +72,18 @@ pub fn module(
     decls: &Decls,
     items: &Items,
     diagnostics: &mut Vec<Diagnostic>,
+    audit: &mut Vec<AuditSite>,
 ) {
     for item in &module.items {
         match &item.kind {
-            ItemKind::Fn(f) => function(src, f, Lower::new(decls), items, diagnostics),
+            ItemKind::Fn(f) => function(src, f, Lower::new(decls), items, diagnostics, audit),
             ItemKind::Impl(imp) => {
                 let lower = Lower::new(decls).with_generics(&imp.generics);
                 let target = lower.ty(&imp.target);
                 let lower = lower.with_self(target);
                 for method in &imp.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        function(src, f, lower.clone(), items, diagnostics);
+                        function(src, f, lower.clone(), items, diagnostics, audit);
                     }
                 }
             }
@@ -94,18 +103,19 @@ pub fn module(
                     });
                 for method in &t.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        function(src, f, lower.clone(), items, diagnostics);
+                        function(src, f, lower.clone(), items, diagnostics, audit);
                     }
                 }
             }
             ItemKind::Const(c) => {
                 let lower = Lower::new(decls);
                 let ty = lower.ty(&c.ty);
-                let mut body = Body::new(src, items, lower, Ty::Unit, diagnostics);
+                let mut body = Body::new(src, items, lower, Ty::Unit, diagnostics, audit);
                 body.check(&c.value, &ty);
             }
             ItemKind::Test(test) => {
-                let mut body = Body::new(src, items, Lower::new(decls), Ty::Unit, diagnostics);
+                let mut body =
+                    Body::new(src, items, Lower::new(decls), Ty::Unit, diagnostics, audit);
                 body.bind("t", Ty::named(ty::TEST_CONTEXT), Binding::Param);
                 // A test produces no value: its last expression is a
                 // statement like the others.
@@ -119,13 +129,20 @@ pub fn module(
 
 /// Check one function body against its signature. `lower` has the
 /// enclosing impl's or trait's generics and `Self` in scope.
-fn function(src: &str, f: &FnDecl, lower: Lower, items: &Items, diagnostics: &mut Vec<Diagnostic>) {
+fn function(
+    src: &str,
+    f: &FnDecl,
+    lower: Lower,
+    items: &Items,
+    diagnostics: &mut Vec<Diagnostic>,
+    audit: &mut Vec<AuditSite>,
+) {
     if f.body.is_none() && f.requires.is_empty() && f.ensures.is_empty() {
         return;
     }
     let lower = lower.with_generics(&f.generics);
     let sig = lower.signature(f, &[], lower.self_ty.clone());
-    let mut body = Body::new(src, items, lower, sig.ret.clone(), diagnostics);
+    let mut body = Body::new(src, items, lower, sig.ret.clone(), diagnostics, audit);
     if let Some(receiver) = &f.receiver {
         body.receiver = Some(SelfBinding {
             ty: sig.self_ty.clone().unwrap_or(Ty::Error),
@@ -222,6 +239,8 @@ pub struct Body<'c, 'd, 'a> {
     lower: Lower<'d, 'a>,
     infer: Infer,
     diagnostics: &'c mut Vec<Diagnostic>,
+    /// The audit sites found so far (`body/audit.rs`).
+    audit: &'c mut Vec<AuditSite>,
     /// Locals in scope, innermost last. Shadowing pushes a new one.
     locals: Vec<Local>,
     receiver: Option<SelfBinding>,
@@ -255,6 +274,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         lower: Lower<'d, 'a>,
         ret: Ty,
         diagnostics: &'c mut Vec<Diagnostic>,
+        audit: &'c mut Vec<AuditSite>,
     ) -> Self {
         Body {
             src,
@@ -262,6 +282,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             lower,
             infer: Infer::default(),
             diagnostics,
+            audit,
             locals: Vec::new(),
             receiver: None,
             ret,
@@ -358,16 +379,57 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         self.locals.iter().rev().find(|l| l.name == name)
     }
 
-    /// `name` is a type in value position, such as `Shape` in
-    /// `Shape.Circle`, and not shadowed by a local.
+    /// `expr` is a type in value position, such as `Shape` in
+    /// `Shape.Circle` or `sql.Db` in `sql.Db.connect`, and not shadowed by
+    /// a local.
     fn type_name(&self, expr: &Expr) -> Option<String> {
+        match &expr.kind {
+            ExprKind::Name(ident) if self.local(&ident.name).is_none() => self
+                .decls()
+                .visible(&ident.name)
+                .map(|_| ident.name.clone()),
+            ExprKind::Field { base, name } => {
+                let module = self.module_name(base)?;
+                let exported = module.exports().contains(&name.name.as_str());
+                (exported && self.decls().get(&name.name).is_some()).then(|| name.name.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// `expr` is a module name that a plain `use` binds, such as `sql`
+    /// after `use std.sql`, and not shadowed by a local.
+    fn module_name(&self, expr: &Expr) -> Option<&'static StdModule> {
         let ExprKind::Name(ident) = &expr.kind else {
             return None;
         };
         if self.local(&ident.name).is_some() {
             return None;
         }
-        self.decls().get(&ident.name).map(|_| ident.name.clone())
+        self.decls().bound_module(&ident.name)
+    }
+
+    /// `name` is declared by an imported module that the user module
+    /// reaches only qualified: report it, with a fix that qualifies it.
+    fn require_unqualified(&mut self, ident: &Ident) -> bool {
+        match self.decls().qualified_only(&ident.name) {
+            Some(module) => {
+                let diagnostic = suggest::qualify(module, ident.span, &ident.name);
+                self.diagnostics.push(diagnostic);
+                false
+            }
+            None => true,
+        }
+    }
+
+    /// `module.name` where `module` does not export `name`: report it.
+    fn require_export(&mut self, module: &StdModule, name: &Ident) -> bool {
+        if module.exports().contains(&name.name.as_str()) {
+            return true;
+        }
+        let diagnostic = suggest::not_exported(module, &name.name, name.span);
+        self.diagnostics.push(diagnostic);
+        false
     }
 
     // ---- Expressions ----------------------------------------------------
@@ -398,10 +460,25 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
     /// Report that `actual` cannot flow into `expected`: `E0270` when only
     /// the `cap` rule stops it, `E0300` when only the trust rule does,
-    /// `E0220` otherwise.
+    /// `E0341` for text where a sink literal is required, `E0220`
+    /// otherwise.
     pub(super) fn mismatch(&mut self, mismatch: Mismatch, actual: &Ty, expected: &Ty, span: Span) {
         let expected = self.infer.resolve(expected);
         let actual = self.infer.resolve(actual);
+        let literal = expected.head().and_then(prelude::sink_literal_typed);
+        if let (Some(literal), true) = (literal, actual.is_text()) {
+            let tag = literal.tag;
+            self.error(
+                codes::TEXT_AS_SINK_LITERAL,
+                format!(
+                    "expected `{expected}`, found `{actual}`: it can only be written as a \
+                     `{tag}\"...\"` literal, so it can't be built from text; pass values \
+                     separately, as parameters"
+                ),
+                span,
+            );
+            return;
+        }
         match mismatch {
             Mismatch::CapLost => self.error(
                 codes::CAPTURING_CLOSURE,
@@ -442,8 +519,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 // The string is untrusted when any text in a hole is.
                 let trust = self.infer.fresh_trust();
                 for part in parts {
-                    if let StrPart::Hole { path, .. } = part {
+                    if let StrPart::Hole { path, span } = part {
                         let ty = self.hole(path);
+                        self.secret_hole(&ty, *span);
                         self.infer.join_into(&ty, trust);
                     }
                 }
@@ -612,6 +690,16 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             }
             return ty;
         }
+        if !self.require_unqualified(ident) {
+            return Ty::Error;
+        }
+        self.item_value(ident)
+    }
+
+    /// A function, prelude variant, or type named in value position,
+    /// either unqualified or as a module's export.
+    fn item_value(&mut self, ident: &Ident) -> Ty {
+        let name = ident.name.as_str();
         if let Some(sig) = self.items.fns.get(name).cloned() {
             let callable = self.instantiate(&sig, None);
             return callable.into_fn_type();
@@ -633,7 +721,13 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
     fn unknown_value(&mut self, ident: &Ident) {
         let mut candidates: Vec<&str> = self.locals.iter().map(|l| l.name.as_str()).collect();
-        candidates.extend(self.items.fns.keys().map(String::as_str));
+        candidates.extend(
+            self.items
+                .fns
+                .keys()
+                .map(String::as_str)
+                .filter(|f| self.decls().qualified_only(f).is_none()),
+        );
         candidates.extend(self.items.bare_variants.keys().map(String::as_str));
         let name = &ident.name;
         let diagnostic = suggest::unknown(
@@ -646,8 +740,15 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         self.diagnostics.push(diagnostic);
     }
 
-    /// `base.name` outside a call: a field, or a member of a type.
+    /// `base.name` outside a call: a field, a member of a type, or a
+    /// module's export.
     fn field_expr(&mut self, base: &Expr, name: &Ident) -> Ty {
+        if let Some(module) = self.module_name(base) {
+            if !self.require_export(module, name) {
+                return Ty::Error;
+            }
+            return self.item_value(name);
+        }
         if let Some(type_name) = self.type_name(base) {
             return match self.type_member(&type_name, name) {
                 Some(callable) if callable.labels != Labels::Optional => {
@@ -844,8 +945,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 Ty::bool()
             }
             BinaryOp::Eq | BinaryOp::Ne => {
-                let ty = self.operands(lhs, rhs, None);
-                self.require_trait(&ty, ty::EQ, &[], expr.span, &format!("`{}`", op.text()));
+                if let Some(ty) = self.compared_operands(expr, op, lhs, rhs) {
+                    self.require_trait(&ty, ty::EQ, &[], expr.span, &format!("`{}`", op.text()));
+                }
                 Ty::bool()
             }
             BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
@@ -856,23 +958,6 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 self.numeric_operands(expr, op, lhs, rhs, expected)
             }
         }
-    }
-
-    /// Check two operands that must have the same type, and return it. A
-    /// literal operand takes the other operand's type, so `1 + x` works
-    /// for any integer `x`.
-    fn operands(&mut self, lhs: &Expr, rhs: &Expr, expected: Option<&Ty>) -> Ty {
-        let (first, second) = literal_last(lhs, rhs);
-        let ty = self.expr(first, expected);
-        let ty = self.infer.resolve(&ty);
-        if ty.is_error() {
-            self.infer(second);
-            return Ty::Error;
-        }
-        // Comparing inspects text without passing it on, so the operands
-        // may differ in trust.
-        let ty = self.infer.loosen(&ty);
-        self.check(second, &ty)
     }
 
     /// The operands of an arithmetic or comparison operator: numbers of
@@ -994,7 +1079,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     /// `trait_name<args>`, which `what` needs. On a generic parameter of
     /// this function, the fix adds the bound.
     fn require_trait(&mut self, ty: &Ty, trait_name: &str, args: &[Ty], span: Span, what: &str) {
-        if self.implements(ty, trait_name, args) {
+        if self.implements(ty, trait_name, args) || self.secret_bound(ty, trait_name, span) {
             return;
         }
         let ty = self.infer.resolve(ty);
@@ -1259,7 +1344,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
 /// The operands in checking order: an integer literal goes second, so
 /// it takes the other operand's type.
-fn literal_last<'e>(lhs: &'e Expr, rhs: &'e Expr) -> (&'e Expr, &'e Expr) {
+pub(super) fn literal_last<'e>(lhs: &'e Expr, rhs: &'e Expr) -> (&'e Expr, &'e Expr) {
     if is_int_literal(lhs) && !is_int_literal(rhs) {
         (rhs, lhs)
     } else {
