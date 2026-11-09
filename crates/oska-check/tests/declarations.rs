@@ -5,6 +5,7 @@
 mod common;
 
 use common::{assert_errors, assert_fix, assert_ok};
+use oska_check::{check_module_with, CheckOptions};
 
 // ---- `cap` -------------------------------------------------------------
 
@@ -197,6 +198,47 @@ fn recursion_through_a_generic_struct_has_no_base_case() {
     assert_errors(
         "struct Wrap<T> { inner: T }\nstruct Loop { me: Wrap<Loop> }",
         &[("E0215", "Loop")],
+    );
+}
+
+// ---- `dbg` under `--release` --------------------------------------------
+
+/// `(code, spanned text)` for each diagnostic of `src` checked with
+/// `--release`.
+fn release_errors(src: &str) -> Vec<(&'static str, &str)> {
+    check_module_with(src, CheckOptions { release: true })
+        .diagnostics
+        .iter()
+        .map(|d| (d.code, &src[d.span.start..d.span.end]))
+        .collect()
+}
+
+const DBG: &str = "fn twice(n: Int) -> Int {\n    let m = dbg(n * 2)\n    if m > 4 {\n        dbg(m)\n    }\n    m\n}\n\
+                   struct Point { x: Int }\n\
+                   impl Point {\n    fn show(self) -> Int { dbg(self.x) }\n}";
+
+#[test]
+fn dbg_is_allowed_outside_release() {
+    assert_ok(DBG);
+}
+
+#[test]
+fn dbg_is_an_error_under_release() {
+    assert_eq!(
+        release_errors(DBG),
+        [
+            ("E0216", "dbg(n * 2)"),
+            ("E0216", "dbg(m)"),
+            ("E0216", "dbg(self.x)"),
+        ]
+    );
+}
+
+#[test]
+fn dbg_in_tests_is_an_error_under_release() {
+    assert_eq!(
+        release_errors("test \"debugging\" {\n    dbg(1)\n}"),
+        [("E0216", "dbg(1)")]
     );
 }
 

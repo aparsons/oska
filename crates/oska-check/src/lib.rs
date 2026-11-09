@@ -27,6 +27,7 @@ mod declarations;
 mod decls;
 mod prelude;
 mod recursion;
+mod release;
 mod resolve;
 
 /// The diagnostic codes this crate reports.
@@ -40,6 +41,7 @@ pub(crate) mod codes {
     pub const NOT_UPPERCASE: &str = "E0213";
     pub const NOT_LOWERCASE: &str = "E0214";
     pub const NO_BASE_CASE: &str = "E0215";
+    pub const DBG_IN_RELEASE: &str = "E0216";
 }
 
 /// Options that change what is checked.
@@ -145,7 +147,7 @@ pub fn check_module(src: &str) -> CheckReport {
 
 /// Check `src` as a module. A parse error is reported as the only
 /// diagnostic, with no functions.
-pub fn check_module_with(src: &str, _options: CheckOptions) -> CheckReport {
+pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
     let module = match oska_syntax::parse_module(src) {
         Ok(module) => module,
         Err(err) => {
@@ -160,6 +162,9 @@ pub fn check_module_with(src: &str, _options: CheckOptions) -> CheckReport {
     resolve::module(&module, &decls, &mut diagnostics);
     declarations::module(src, &module, &decls, &mut diagnostics);
     recursion::module(&module, &mut diagnostics);
+    if options.release {
+        release::module(&module, &mut diagnostics);
+    }
     let functions = authority::report(&module, &decls);
     diagnostics.sort_by_key(|d| d.span.start);
     CheckReport {
