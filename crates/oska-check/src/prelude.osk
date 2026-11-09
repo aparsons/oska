@@ -145,6 +145,11 @@ impl Display for IoError {
 // Print `value` for debugging and return it. An error under `--release`.
 pub fn dbg<T>(value: T) -> T
 
+// A placeholder for code not yet written: it fits any type, and fails
+// when reached. The fix for a non-exhaustive `match` uses it as the body
+// of each arm it adds.
+pub fn todo<T>() -> T
+
 // ---- Core traits -------------------------------------------------------
 
 pub trait Eq {

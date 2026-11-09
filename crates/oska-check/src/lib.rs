@@ -26,7 +26,7 @@
 //! | `E0211` | A `main` parameter that is not a built-in capability or `Args`. |
 //! | `E0212` | `main` returns something other than `()` or `Result<(), E>`, or `E` does not implement `Display`. |
 //! | `E0213` | A type, variant, trait, or type parameter name that does not start uppercase. |
-//! | `E0214` | A function, field, or parameter name that starts uppercase. |
+//! | `E0214` | A function, field, parameter, or local variable name that starts uppercase. |
 //! | `E0215` | A recursive struct or enum with no base case. |
 //! | `E0216` | `dbg(...)` under `--release`. |
 //! | `E0220` | Type mismatch: an expression's type differs from the type expected there. There are no implicit conversions. |
@@ -45,6 +45,11 @@
 //! | `E0233` | A type that inference cannot work out, such as `let xs = List.new()` with no later use. |
 //! | `E0234` | A type name used as a value, or a type that cannot be constructed. |
 //! | `E0235` | `for` over a value that is not a `List` or a range. |
+//! | `E0250` | A pattern names no variant or struct: a misspelled variant, an uppercase name that is not a prelude variant (ADR 0005: an uppercase name in a pattern is always a variant), or a path that is not `Enum.Variant`. The fix replaces it with the single closest variant. |
+//! | `E0251` | A constructor pattern with the wrong number of fields. |
+//! | `E0252` | A named field matched without its label or with the wrong one, or a label on a positional field. The fix corrects the label. |
+//! | `E0253` | A `match` that is not exhaustive. Guards do not count. The message lists the missing patterns; the fix adds an arm for each, with `todo()` as its body. |
+//! | `E0254` | An unreachable arm: earlier unguarded arms already match every value it does. |
 
 use oska_syntax::Diagnostic;
 
@@ -59,6 +64,7 @@ mod recursion;
 mod release;
 mod resolve;
 mod ty;
+mod usefulness;
 
 /// The diagnostic codes this crate reports.
 pub(crate) mod codes {
@@ -88,6 +94,11 @@ pub(crate) mod codes {
     pub const CANNOT_INFER: &str = "E0233";
     pub const NOT_A_VALUE: &str = "E0234";
     pub const NOT_ITERABLE: &str = "E0235";
+    pub const UNKNOWN_VARIANT: &str = "E0250";
+    pub const PATTERN_FIELD_COUNT: &str = "E0251";
+    pub const PATTERN_LABEL: &str = "E0252";
+    pub const NOT_EXHAUSTIVE: &str = "E0253";
+    pub const UNREACHABLE_ARM: &str = "E0254";
 }
 
 /// Options that change what is checked.
@@ -212,7 +223,7 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
         release::module(&module, &mut diagnostics);
     }
     let items = items::Items::collect(&module, &decls);
-    body::module(&module, &decls, &items, &mut diagnostics);
+    body::module(src, &module, &decls, &items, &mut diagnostics);
     let functions = authority::report(&module, &decls);
     diagnostics.sort_by_key(|d| d.span.start);
     CheckReport {
