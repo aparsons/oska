@@ -1,4 +1,5 @@
-//! Recursive-descent parser for Oska expressions, statements, and types.
+//! Recursive-descent parser for Oska modules, expressions, statements, and
+//! types.
 //!
 //! Operator precedence, loosest first:
 //!
@@ -24,12 +25,27 @@
 //! - `E0104`: `let` or `var` without an initializer
 //! - `E0105`: chained comparison such as `a < b < c`
 //! - `E0106`: invalid assignment target
+//! - `E0107`: a statement at module level, where only items are allowed
 
 use crate::ast::{
-    Arg, BinaryOp, Block, ClosureParam, Expr, ExprKind, Ident, Stmt, StmtKind, StrPart, Type,
-    TypeKind, UnaryOp,
+    Arg, BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, Item, ItemKind, Module,
+    Param, Stmt, StmtKind, StrPart, Type, TypeKind, UnaryOp,
 };
 use crate::{lex, resolve_escape, Diagnostic, Keyword, Punct, Span, Token, TokenKind};
+
+/// Parse a whole source file: a sequence of items separated by line
+/// breaks. Stops at the first error.
+pub fn parse_module(src: &str) -> Result<Module, Diagnostic> {
+    let mut parser = Parser::new(src)?;
+    let items = parser.items()?;
+    Ok(Module {
+        items,
+        span: Span {
+            start: 0,
+            end: src.len(),
+        },
+    })
+}
 
 /// Parse a single expression that spans the whole input.
 pub fn parse_expr(src: &str) -> Result<Expr, Diagnostic> {
@@ -221,6 +237,96 @@ impl<'a> Parser<'a> {
             start: start.start,
             end: self.prev_end,
         }
+    }
+
+    // ----- items -----
+
+    fn skip_newlines(&mut self) {
+        while self.peek() == Some(&TokenKind::Newline) {
+            self.bump();
+        }
+    }
+
+    /// Items separated by line breaks, up to end of input.
+    fn items(&mut self) -> Result<Vec<Item>, Diagnostic> {
+        let mut items = Vec::new();
+        loop {
+            self.skip_newlines();
+            if self.peek().is_none() {
+                return Ok(items);
+            }
+            items.push(self.item()?);
+            match self.peek() {
+                None | Some(TokenKind::Newline) => {}
+                Some(_) => return Err(self.expected("a line break after the item")),
+            }
+        }
+    }
+
+    fn item(&mut self) -> Result<Item, Diagnostic> {
+        let start = self.peek_span();
+        let public = self.at_kw(Keyword::Pub);
+        if public {
+            self.bump();
+        }
+        let kind = match self.peek() {
+            Some(TokenKind::Keyword(Keyword::Fn)) => ItemKind::Fn(self.fn_decl()?),
+            _ => return Err(self.not_an_item()),
+        };
+        Ok(Item {
+            public,
+            kind,
+            span: self.span_from(start),
+        })
+    }
+
+    /// The error for something at module level that is not an item. If it
+    /// parses as a statement, the error covers that whole statement.
+    fn not_an_item(&mut self) -> Diagnostic {
+        let expected = self.expected("an item such as `fn`");
+        match self.stmt() {
+            Ok(stmt) => error(
+                "E0107",
+                "statements are not allowed at module level, because no code runs \
+                 when a module loads; move this into a function such as `main`, \
+                 or declare a constant with `const`",
+                stmt.span,
+            ),
+            Err(_) => expected,
+        }
+    }
+
+    fn fn_decl(&mut self) -> Result<FnDecl, Diagnostic> {
+        self.expect_kw(Keyword::Fn)?;
+        let name = self.expect_ident("a function name")?;
+        self.expect_punct(Punct::LParen)?;
+        let mut params = Vec::new();
+        while !self.at_punct(Punct::RParen) {
+            let name = self.expect_ident("a parameter name")?;
+            self.expect_punct(Punct::Colon)?;
+            let ty = self.ty()?;
+            params.push(Param {
+                span: join(name.span, ty.span),
+                name,
+                ty,
+            });
+            if !self.eat_punct(Punct::Comma) {
+                break;
+            }
+        }
+        self.expect_punct(Punct::RParen)?;
+        let ret = if self.eat_punct(Punct::Arrow) {
+            Some(self.ty()?)
+        } else {
+            None
+        };
+        let body = self.block()?;
+        Ok(FnDecl {
+            name,
+            params,
+            ret,
+            body,
+        })
     }
 
     // ----- statements -----
@@ -687,6 +793,8 @@ impl<'a> Parser<'a> {
         let raw = &self.src[base..span.end - 1];
         let mut parts = Vec::new();
         let mut text = String::new();
+        // Source offset where the pending `text` starts.
+        let mut text_start = base;
         let mut chars = raw.char_indices();
         while let Some((i, c)) = chars.next() {
             match c {
@@ -724,8 +832,15 @@ impl<'a> Parser<'a> {
                         )
                     })?;
                     if !text.is_empty() {
-                        parts.push(StrPart::Text(std::mem::take(&mut text)));
+                        parts.push(StrPart::Text {
+                            value: std::mem::take(&mut text),
+                            span: Span {
+                                start: text_start,
+                                end: hole_start,
+                            },
+                        });
                     }
+                    text_start = hole_span.end;
                     parts.push(StrPart::Hole {
                         path,
                         span: hole_span,
@@ -749,7 +864,13 @@ impl<'a> Parser<'a> {
             }
         }
         if !text.is_empty() || parts.is_empty() {
-            parts.push(StrPart::Text(text));
+            parts.push(StrPart::Text {
+                value: text,
+                span: Span {
+                    start: text_start,
+                    end: span.end - 1,
+                },
+            });
         }
         Ok(parts)
     }
@@ -858,7 +979,7 @@ mod tests {
                 let inner: Vec<String> = parts
                     .iter()
                     .map(|p| match p {
-                        StrPart::Text(t) => format!("{t:?}"),
+                        StrPart::Text { value, .. } => format!("{value:?}"),
                         StrPart::Hole { path, .. } => format!(
                             "{{{}}}",
                             path.iter()

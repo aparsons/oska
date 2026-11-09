@@ -7,6 +7,7 @@ oskac - the Oska compiler
 
 USAGE:
     oskac lex <file.osk> [--format=json]   Print the tokens in a source file
+    oskac parse <file.osk> [--format=json] Print the syntax tree of a source file
     oskac --version                        Print the version
     oskac --help                           Print this help
 ";
@@ -30,6 +31,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         ["lex", path] => lex_file(path, json),
+        ["parse", path] => parse_file(path, json),
         _ => {
             eprint!("{USAGE}");
             ExitCode::from(2)
@@ -37,13 +39,46 @@ fn main() -> ExitCode {
     }
 }
 
-fn lex_file(path: &str, json: bool) -> ExitCode {
-    let src = match std::fs::read_to_string(path) {
-        Ok(src) => src,
+fn read_source(path: &str) -> Option<String> {
+    match std::fs::read_to_string(path) {
+        Ok(src) => Some(src),
         Err(err) => {
             eprintln!("error: cannot read {path}: {err}");
-            return ExitCode::FAILURE;
+            None
         }
+    }
+}
+
+/// `oskac parse`: print the module's syntax tree, as JSON with
+/// `--format=json`. A parse error is printed as diagnostic JSON on stdout
+/// (`--format=json`) or as text on stderr, with a non-zero exit code.
+fn parse_file(path: &str, json: bool) -> ExitCode {
+    let Some(src) = read_source(path) else {
+        return ExitCode::FAILURE;
+    };
+    match oska_syntax::parse_module(&src) {
+        Ok(module) if json => {
+            print!("{}", oska_syntax::module_to_json(&module, path));
+            ExitCode::SUCCESS
+        }
+        Ok(module) => {
+            print!("{}", oska_syntax::module_to_tree(&module));
+            ExitCode::SUCCESS
+        }
+        Err(err) if json => {
+            println!("{}", err.to_json());
+            ExitCode::FAILURE
+        }
+        Err(err) => {
+            eprintln!("{path}: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn lex_file(path: &str, json: bool) -> ExitCode {
+    let Some(src) = read_source(path) else {
+        return ExitCode::FAILURE;
     };
     match oska_syntax::lex(&src) {
         Ok(tokens) => {
