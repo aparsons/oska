@@ -31,15 +31,20 @@
 //! - `E0112`: `var` on a parameter other than the `self` receiver
 //! - `E0113`: a `where` clause; bounds are written inline
 //! - `E0120`: a missing comma between declared fields or enum variants
+//! - `E0130`: a glob import such as `use a.*`
+//! - `E0131`: a renaming import such as `use a.b as c`
+//! - `E0132`: an attribute name outside the fixed set (only `integration`)
+//! - `E0133`: `unsafe`, which v0 does not have
 //! - `E0140`: an or-pattern such as `A | B`, which v0 does not support
 //! - `E0141`: a range pattern such as `1..5`, which v0 does not support
 //! - `E0142`: an `@` binding such as `v @ Some(_)`, which v0 does not support
 //! - `E0143`: a comma between `match` arms
 
 use crate::ast::{
-    Arg, BinaryOp, Block, ClosureParam, Ensures, EnumDecl, Expr, ExprKind, Field, Fields, FnDecl,
-    GenericParam, Ident, Item, ItemKind, MatchArm, Module, Param, Pattern, PatternArg, PatternKind,
-    Requires, SelfParam, Stmt, StmtKind, StrPart, StructDecl, Type, TypeKind, UnaryOp, Variant,
+    Arg, Attribute, BinaryOp, Block, ClosureParam, ConstDecl, Ensures, EnumDecl, Expr, ExprKind,
+    Field, Fields, FnDecl, GenericParam, Ident, Item, ItemKind, MatchArm, Module, Param, Pattern,
+    PatternArg, PatternKind, Requires, SelfParam, Stmt, StmtKind, StrPart, StructDecl, TestDecl,
+    Type, TypeKind, UnaryOp, UseDecl, Variant,
 };
 use crate::{lex, resolve_escape, Diagnostic, Keyword, Punct, Span, Token, TokenKind};
 
@@ -79,6 +84,10 @@ pub fn parse_type(src: &str) -> Result<Type, Diagnostic> {
     Ok(ty)
 }
 
+/// The closed set of attribute names. There are no user macros
+/// (ADR 0003), so any other name is a typo or unsupported.
+const ATTRIBUTES: &[&str] = &["integration"];
+
 struct Parser<'a> {
     src: &'a str,
     tokens: Vec<Token>,
@@ -117,6 +126,12 @@ fn describe(kind: Option<&TokenKind>) -> String {
     }
 }
 
+/// `a.b.c` for a path of identifiers.
+fn dotted(path: &[Ident]) -> String {
+    let names: Vec<&str> = path.iter().map(|i| i.name.as_str()).collect();
+    names.join(".")
+}
+
 fn join(start: Span, end: Span) -> Span {
     Span {
         start: start.start,
@@ -141,9 +156,24 @@ fn comparison_op(kind: Option<&TokenKind>) -> Option<BinaryOp> {
 
 impl<'a> Parser<'a> {
     fn new(src: &'a str) -> Result<Self, Diagnostic> {
+        let tokens = lex(src)?;
+        // `unsafe` is reserved but has no meaning in v0, wherever it is
+        // written, so reject it before parsing.
+        if let Some(token) = tokens
+            .iter()
+            .find(|t| t.kind == TokenKind::Keyword(Keyword::Unsafe))
+        {
+            return Err(error(
+                "E0133",
+                "v0 has no `unsafe`: the safety baseline cannot be suspended; \
+                 remove `unsafe` and write the code with safe operations and \
+                 capabilities passed as parameters",
+                token.span,
+            ));
+        }
         Ok(Self {
             src,
-            tokens: lex(src)?,
+            tokens,
             pos: 0,
             prev_end: 0,
         })
@@ -275,12 +305,21 @@ impl<'a> Parser<'a> {
 
     fn item(&mut self) -> Result<Item, Diagnostic> {
         let start = self.peek_span();
+        let mut attrs = Vec::new();
+        while self.at_punct(Punct::Hash) {
+            attrs.push(self.attribute()?);
+            // An attribute may sit on its own line above the item.
+            self.skip_newlines();
+        }
         let public = self.at_kw(Keyword::Pub);
         if public {
             self.bump();
         }
         let kind = match self.peek() {
             Some(TokenKind::Keyword(Keyword::Fn)) => ItemKind::Fn(self.fn_decl()?),
+            Some(TokenKind::Keyword(Keyword::Use)) => ItemKind::Use(self.use_decl()?),
+            Some(TokenKind::Keyword(Keyword::Const)) => ItemKind::Const(self.const_decl()?),
+            Some(TokenKind::Keyword(Keyword::Test)) => ItemKind::Test(self.test_decl()?),
             Some(TokenKind::Keyword(Keyword::Struct)) => ItemKind::Struct(self.struct_decl(false)?),
             Some(TokenKind::Keyword(Keyword::Enum)) => ItemKind::Enum(self.enum_decl(false)?),
             Some(TokenKind::Keyword(Keyword::Cap)) => {
@@ -299,7 +338,39 @@ impl<'a> Parser<'a> {
         };
         Ok(Item {
             public,
+            attrs,
             kind,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `#[name]` or `#[name(args)]`.
+    fn attribute(&mut self) -> Result<Attribute, Diagnostic> {
+        let start = self.expect_punct(Punct::Hash)?;
+        self.expect_punct(Punct::LBracket)?;
+        let name = self.expect_ident("an attribute name")?;
+        if !ATTRIBUTES.contains(&name.name.as_str()) {
+            let known: Vec<String> = ATTRIBUTES.iter().map(|a| format!("`#[{a}]`")).collect();
+            return Err(error(
+                "E0132",
+                format!(
+                    "unknown attribute `{}`; attribute names come from a fixed set, \
+                     currently only {}",
+                    name.name,
+                    known.join(", ")
+                ),
+                name.span,
+            ));
+        }
+        let args = if self.at_punct(Punct::LParen) {
+            self.args()?
+        } else {
+            Vec::new()
+        };
+        self.expect_punct(Punct::RBracket)?;
+        Ok(Attribute {
+            name,
+            args,
             span: self.span_from(start),
         })
     }
@@ -318,6 +389,106 @@ impl<'a> Parser<'a> {
             ),
             Err(_) => expected,
         }
+    }
+
+    /// `use a.b` or `use a.b.{X, y}`.
+    fn use_decl(&mut self) -> Result<UseDecl, Diagnostic> {
+        self.expect_kw(Keyword::Use)?;
+        let mut path = vec![self.use_segment(&[], "a module path")?];
+        let mut names = None;
+        while self.eat_punct(Punct::Dot) {
+            if self.eat_punct(Punct::LBrace) {
+                // Line breaks inside the group are not terminators.
+                let mut group = Vec::new();
+                self.skip_newlines();
+                while !self.at_punct(Punct::RBrace) {
+                    group.push(self.use_segment(&path, "a name to import")?);
+                    self.skip_newlines();
+                    if !self.eat_punct(Punct::Comma) {
+                        break;
+                    }
+                    self.skip_newlines();
+                }
+                self.expect_punct(Punct::RBrace)?;
+                names = Some(group);
+                break;
+            }
+            let segment = self.use_segment(&path, "a module path segment or `{`")?;
+            path.push(segment);
+        }
+        Ok(UseDecl { path, names })
+    }
+
+    /// A name in a `use` path or brace group, rejecting a glob `*` and a
+    /// renaming `as`. `path` is the path before this name.
+    fn use_segment(&mut self, path: &[Ident], what: &str) -> Result<Ident, Diagnostic> {
+        if self.at_punct(Punct::Star) {
+            let example = match path {
+                [] => "`use module.{Name, other}`".to_string(),
+                _ => format!("`use {}.{{Name, other}}`", dotted(path)),
+            };
+            return Err(error(
+                "E0130",
+                format!(
+                    "glob imports are not allowed, because every imported name must be \
+                     written out; list the names you need, as in {example}"
+                ),
+                self.peek_span(),
+            ));
+        }
+        let name = self.expect_ident(what)?;
+        if matches!(self.peek(), Some(TokenKind::Ident(word)) if word == "as") {
+            let start = self.peek_span();
+            self.bump();
+            if matches!(self.peek(), Some(TokenKind::Ident(_))) {
+                self.bump();
+            }
+            let fix = match path.last() {
+                None => format!("import it with `use {0}` and write `{0}`", name.name),
+                Some(module) => format!(
+                    "import the module with `use {}` and write `{}.{}`",
+                    dotted(path),
+                    module.name,
+                    name.name
+                ),
+            };
+            return Err(error(
+                "E0131",
+                format!(
+                    "renaming imports are not allowed, so every name stays traceable to \
+                     its source; {fix}"
+                ),
+                self.span_from(start),
+            ));
+        }
+        Ok(name)
+    }
+
+    /// `const NAME: T = expr`.
+    fn const_decl(&mut self) -> Result<ConstDecl, Diagnostic> {
+        self.expect_kw(Keyword::Const)?;
+        let name = self.expect_ident("a constant name")?;
+        self.expect_punct(Punct::Colon)?;
+        let ty = self.ty()?;
+        self.expect_punct(Punct::Eq)?;
+        let value = self.expr()?;
+        Ok(ConstDecl { name, ty, value })
+    }
+
+    /// `test "name" { body }`.
+    fn test_decl(&mut self) -> Result<TestDecl, Diagnostic> {
+        self.expect_kw(Keyword::Test)?;
+        let span = self.peek_span();
+        if !matches!(self.peek(), Some(TokenKind::Str(_))) {
+            return Err(self.expected("a test name as a string, as in `test \"adds\" { ... }`"));
+        }
+        self.bump();
+        let name = Expr {
+            kind: ExprKind::Str(self.str_parts(span)?),
+            span,
+        };
+        let body = self.block()?;
+        Ok(TestDecl { name, body })
     }
 
     fn fn_decl(&mut self) -> Result<FnDecl, Diagnostic> {

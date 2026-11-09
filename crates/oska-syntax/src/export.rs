@@ -9,9 +9,10 @@
 //! are first built as a small [`Json`] value, then printed.
 
 use crate::ast::{
-    Arg, Block, ClosureParam, Ensures, EnumDecl, Expr, ExprKind, Field, Fields, FnDecl,
-    GenericParam, Ident, Item, ItemKind, MatchArm, Module, Param, Pattern, PatternArg, PatternKind,
-    Requires, SelfParam, Stmt, StmtKind, StrPart, StructDecl, Type, TypeKind, UnaryOp, Variant,
+    Arg, Attribute, Block, ClosureParam, ConstDecl, Ensures, EnumDecl, Expr, ExprKind, Field,
+    Fields, FnDecl, GenericParam, Ident, Item, ItemKind, MatchArm, Module, Param, Pattern,
+    PatternArg, PatternKind, Requires, SelfParam, Stmt, StmtKind, StrPart, StructDecl, TestDecl,
+    Type, TypeKind, UnaryOp, UseDecl, Variant,
 };
 use crate::{json_escape, Span};
 
@@ -234,14 +235,16 @@ fn list<T>(items: &[T], f: impl Fn(&T) -> Json) -> Json {
 fn item(item: &Item) -> Json {
     match &item.kind {
         ItemKind::Fn(decl) => fn_item(item, decl),
+        ItemKind::Use(decl) => use_item(item, decl),
+        ItemKind::Const(decl) => const_item(item, decl),
+        ItemKind::Test(decl) => test_item(item, decl),
         ItemKind::Struct(decl) => struct_item(item, decl),
         ItemKind::Enum(decl) => enum_item(item, decl),
     }
 }
 
 fn enum_item(item: &Item, decl: &EnumDecl) -> Json {
-    Node::new("EnumItem", item.span)
-        .field("public", Json::Bool(item.public))
+    item_node("EnumItem", item)
         .field("cap", Json::Bool(decl.cap))
         .field("name", ident(&decl.name))
         .field("variants", list(&decl.variants, variant))
@@ -259,8 +262,7 @@ fn variant(variant: &Variant) -> Json {
 
 fn struct_item(item: &Item, decl: &StructDecl) -> Json {
     let (form, fields) = fields_json(&decl.fields);
-    Node::new("StructItem", item.span)
-        .field("public", Json::Bool(item.public))
+    item_node("StructItem", item)
         .field("cap", Json::Bool(decl.cap))
         .field("name", ident(&decl.name))
         .field("form", str_json(form))
@@ -285,9 +287,22 @@ fn field(field: &Field) -> Json {
         .done()
 }
 
-fn fn_item(item: &Item, decl: &FnDecl) -> Json {
-    Node::new("FnItem", item.span)
+/// A node for `item` with the fields every item carries.
+fn item_node(kind: &'static str, item: &Item) -> Node {
+    Node::new(kind, item.span)
         .field("public", Json::Bool(item.public))
+        .field("attributes", list(&item.attrs, attribute))
+}
+
+fn attribute(attr: &Attribute) -> Json {
+    Node::new("Attribute", attr.span)
+        .field("name", ident(&attr.name))
+        .field("args", list(&attr.args, arg))
+        .done()
+}
+
+fn fn_item(item: &Item, decl: &FnDecl) -> Json {
+    item_node("FnItem", item)
         .field("name", ident(&decl.name))
         .field("generics", list(&decl.generics, generic_param))
         .opt("receiver", decl.receiver.as_ref().map(self_param))
@@ -295,6 +310,28 @@ fn fn_item(item: &Item, decl: &FnDecl) -> Json {
         .opt("return_type", decl.ret.as_ref().map(ty))
         .field("requires", list(&decl.requires, requires))
         .field("ensures", list(&decl.ensures, ensures))
+        .field("body", block(&decl.body))
+        .done()
+}
+
+fn use_item(item: &Item, decl: &UseDecl) -> Json {
+    item_node("UseItem", item)
+        .field("path", list(&decl.path, ident))
+        .opt("names", decl.names.as_ref().map(|names| list(names, ident)))
+        .done()
+}
+
+fn const_item(item: &Item, decl: &ConstDecl) -> Json {
+    item_node("ConstItem", item)
+        .field("name", ident(&decl.name))
+        .field("type", ty(&decl.ty))
+        .field("value", expr(&decl.value))
+        .done()
+}
+
+fn test_item(item: &Item, decl: &TestDecl) -> Json {
+    item_node("TestItem", item)
+        .field("name", expr(&decl.name))
         .field("body", block(&decl.body))
         .done()
 }

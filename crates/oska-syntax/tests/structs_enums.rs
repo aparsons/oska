@@ -31,6 +31,7 @@ fn named_field_struct_with_per_field_pub() {
             r#"[{{
                 "kind": "StructItem", "span": {{"start": 0, "end": 35}},
                 "public": false,
+                "attributes": [],
                 "cap": false,
                 "name": {name},
                 "form": "named",
@@ -58,6 +59,7 @@ fn positional_struct_with_trailing_comma() {
             r#"[{{
                 "kind": "StructItem", "span": {{"start": 0, "end": 30}},
                 "public": false,
+                "attributes": [],
                 "cap": false,
                 "name": {name},
                 "form": "positional",
@@ -85,6 +87,7 @@ fn public_cap_struct_over_several_lines() {
             r#"[{{
                 "kind": "StructItem", "span": {{"start": 0, "end": 42}},
                 "public": true,
+                "attributes": [],
                 "cap": true,
                 "name": {name},
                 "form": "named",
@@ -109,6 +112,7 @@ fn enum_with_each_variant_form() {
             r#"[{{
                 "kind": "EnumItem", "span": {{"start": 0, "end": 73}},
                 "public": false,
+                "attributes": [],
                 "cap": false,
                 "name": {shape},
                 "variants": [
@@ -150,6 +154,7 @@ fn public_cap_enum() {
             r#"[{{
                 "kind": "EnumItem", "span": {{"start": 0, "end": 36}},
                 "public": true,
+                "attributes": [],
                 "cap": true,
                 "name": {handle},
                 "variants": [

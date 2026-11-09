@@ -14,6 +14,7 @@ fn empty_function() {
         r#"[{
             "kind": "FnItem", "span": {"start": 0, "end": 12},
             "public": false,
+            "attributes": [],
             "name": {"kind": "Ident", "span": {"start": 3, "end": 7}, "name": "main"},
             "generics": [],
             "params": [],
@@ -31,6 +32,7 @@ fn parameters_and_return_type() {
         r#"[{
             "kind": "FnItem", "span": {"start": 0, "end": 65},
             "public": false,
+            "attributes": [],
             "name": {"kind": "Ident", "span": {"start": 3, "end": 4}, "name": "f"},
             "generics": [],
             "params": [
@@ -75,6 +77,7 @@ fn public_functions_on_separate_lines() {
         r#"[
             {"kind": "FnItem", "span": {"start": 20, "end": 33},
              "public": true,
+             "attributes": [],
              "name": {"kind": "Ident", "span": {"start": 27, "end": 28}, "name": "a"},
              "generics": [],
              "params": [],
@@ -82,6 +85,7 @@ fn public_functions_on_separate_lines() {
              "body": {"kind": "Block", "span": {"start": 31, "end": 33}, "stmts": []}},
             {"kind": "FnItem", "span": {"start": 35, "end": 55},
              "public": false,
+             "attributes": [],
              "name": {"kind": "Ident", "span": {"start": 38, "end": 39}, "name": "b"},
              "generics": [],
              "params": [
@@ -106,6 +110,12 @@ fn examples_parse() {
             .iter()
             .map(|item| match &item.kind {
                 ItemKind::Fn(decl) => decl.name.name.clone(),
+                ItemKind::Use(decl) => {
+                    let path: Vec<_> = decl.path.iter().map(|s| s.name.as_str()).collect();
+                    path.join(".")
+                }
+                ItemKind::Const(decl) => decl.name.name.clone(),
+                ItemKind::Test(_) => "test".to_string(),
                 ItemKind::Struct(decl) => decl.name.name.clone(),
                 ItemKind::Enum(decl) => decl.name.name.clone(),
             })

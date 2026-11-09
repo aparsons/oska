@@ -6,6 +6,7 @@
       "kind": "FnItem",
       "span": {"start": 153, "end": 429},
       "public": false,
+      "attributes": [],
       "name": {
         "kind": "Ident",
         "span": {"start": 156, "end": 167},
@@ -193,6 +194,7 @@
       "kind": "FnItem",
       "span": {"start": 431, "end": 838},
       "public": false,
+      "attributes": [],
       "name": {"kind": "Ident", "span": {"start": 434, "end": 438}, "name": "main"},
       "generics": [],
       "params": [

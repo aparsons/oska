@@ -44,6 +44,7 @@ fn generic_parameters_with_bounds() {
         r#"[{
             "kind": "FnItem", "span": {"start": 0, "end": 26},
             "public": false,
+            "attributes": [],
             "name": {"kind": "Ident", "span": {"start": 3, "end": 4}, "name": "f"},
             "generics": [
                 {"kind": "GenericParam", "span": {"start": 5, "end": 17},
@@ -76,6 +77,7 @@ fn self_receiver() {
         r#"[{
             "kind": "FnItem", "span": {"start": 0, "end": 21},
             "public": false,
+            "attributes": [],
             "name": {"kind": "Ident", "span": {"start": 3, "end": 4}, "name": "f"},
             "generics": [],
             "receiver": {"kind": "SelfParam", "span": {"start": 5, "end": 9}, "mutable": false},
@@ -100,6 +102,7 @@ fn var_self_receiver_marks_a_mutating_method() {
         r#"[{
             "kind": "FnItem", "span": {"start": 0, "end": 17},
             "public": false,
+            "attributes": [],
             "name": {"kind": "Ident", "span": {"start": 3, "end": 4}, "name": "g"},
             "generics": [],
             "receiver": {"kind": "SelfParam", "span": {"start": 5, "end": 13}, "mutable": true},
@@ -119,6 +122,7 @@ fn requires_clause_on_its_own_line() {
         r#"[{
             "kind": "FnItem", "span": {"start": 0, "end": 34},
             "public": false,
+            "attributes": [],
             "name": {"kind": "Ident", "span": {"start": 3, "end": 4}, "name": "f"},
             "generics": [],
             "params": [
@@ -147,6 +151,7 @@ fn ensures_clause_binds_the_return_value() {
         r#"[{
             "kind": "FnItem", "span": {"start": 0, "end": 34},
             "public": false,
+            "attributes": [],
             "name": {"kind": "Ident", "span": {"start": 3, "end": 4}, "name": "f"},
             "generics": [],
             "params": [],

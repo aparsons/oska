@@ -9,6 +9,7 @@ fn prints_an_indented_tree() {
     assert_eq!(
         module_to_tree(&module),
         r#"FnItem 0..46 public=true
+  attributes: []
   name: Ident 7..11 name="main"
   generics: []
   params:

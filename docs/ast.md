@@ -37,13 +37,21 @@ Conventions:
 
 ### Items
 
+Every item node starts with the same two fields, before its own fields:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `public` | bool | declared `pub` |
+| `attributes` | array of `Attribute` | in source order; empty when there are none |
+
+An item's span starts at its first attribute, if it has one, and otherwise at `pub` or its keyword. The tables below list only each item's own fields.
+
 #### `FnItem`
 
 A function declaration: `fn name<generics>(params) -> T requires ... ensures |r| ... { body }`. The contract clauses sit between the return type and the body, and may each start a new line.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `public` | bool | declared `pub` |
 | `name` | `Ident` |  |
 | `generics` | array of `GenericParam` | in source order |
 | `receiver` | `SelfParam` | optional; present for methods taking `self` or `var self` |
@@ -53,13 +61,40 @@ A function declaration: `fn name<generics>(params) -> T requires ... ensures |r|
 | `ensures` | array of `EnsuresClause` | in source order |
 | `body` | `Block` |  |
 
+#### `UseItem`
+
+An import: `use a.b` or `use a.b.{X, y}`. Glob imports (`use a.*`, error `E0130`) and renaming imports (`use a.b as c`, error `E0131`) are rejected, so every imported name is written out.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `path` | array of `Ident` | the dotted path, without the brace group |
+| `names` | array of `Ident` | optional; the names in the brace group, absent without one |
+
+#### `ConstItem`
+
+A module-level constant: `const NAME: T = expr`.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `name` | `Ident` |  |
+| `type` | type node |  |
+| `value` | expression node |  |
+
+#### `TestItem`
+
+A test: `test "a descriptive name" { body }`. Tests that need real capabilities carry `#[integration]`.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `name` | `StrExpr` | the name as written |
+| `body` | `Block` |  |
+
 #### `StructItem`
 
 A struct declaration: `struct Point { x: Int, y: Int }` (named fields) or `struct Meters(Int)` (positional fields). Fields are separated by commas, and a trailing comma is allowed.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `public` | bool | declared `pub` |
 | `cap` | bool | declared `cap struct`: a **capability-bearing type** |
 | `name` | `Ident` |  |
 | `form` | string | `"named"` or `"positional"` |
@@ -71,7 +106,6 @@ An enum (sum type) declaration: `enum Shape { Circle { radius: Int }, Rect(Int, 
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `public` | bool | declared `pub` |
 | `cap` | bool | declared `cap enum`: a **capability-bearing type** |
 | `name` | `Ident` |  |
 | `variants` | array of `Variant` | in source order |
@@ -165,6 +199,15 @@ A call argument, optionally labelled: `copy(src: a)`. The span covers the label 
 | --- | --- | --- |
 | `label` | `Ident` | optional |
 | `value` | expression node |  |
+
+#### `Attribute`
+
+An attribute on an item: `#[name]` or `#[name(args)]`. Names come from a fixed set, currently only `integration`; any other name is error `E0132`.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `name` | `Ident` |  |
+| `args` | array of `Arg` | empty when there are no parentheses |
 
 #### `ClosureParam`
 
