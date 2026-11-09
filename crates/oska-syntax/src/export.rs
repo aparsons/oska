@@ -31,6 +31,66 @@ pub fn module_to_json(module: &Module, file: &str) -> String {
     out
 }
 
+/// Render `module` as an indented, human-readable tree: one node per line
+/// as `Kind start..end`, followed by its scalar fields as `key=value`.
+/// Child nodes are indented under the field that holds them.
+pub fn module_to_tree(module: &Module) -> String {
+    let mut out = String::new();
+    for node in module.items.iter().map(item) {
+        tree_node(&node, 0, &mut out);
+    }
+    out
+}
+
+/// Print `node`'s header line (without leading padding) and its children.
+fn tree_node(node: &Json, indent: usize, out: &mut String) {
+    let Json::Obj(fields) = node else {
+        node.compact(out);
+        out.push('\n');
+        return;
+    };
+    let mut children = Vec::new();
+    for (key, value) in fields {
+        match (*key, value) {
+            ("kind", Json::Str(kind)) => out.push_str(kind),
+            ("span", Json::Obj(span)) => {
+                for (i, (_, n)) in span.iter().enumerate() {
+                    out.push_str(if i == 0 { " " } else { ".." });
+                    n.compact(out);
+                }
+            }
+            (_, Json::Obj(_) | Json::Arr(_)) => children.push((*key, value)),
+            (key, scalar) => {
+                out.push(' ');
+                out.push_str(key);
+                out.push('=');
+                scalar.compact(out);
+            }
+        }
+    }
+    out.push('\n');
+    let pad = " ".repeat(indent + 2);
+    for (key, value) in children {
+        out.push_str(&pad);
+        out.push_str(key);
+        match value {
+            Json::Arr(elements) if elements.is_empty() => out.push_str(": []\n"),
+            Json::Arr(elements) => {
+                out.push_str(":\n");
+                for element in elements {
+                    out.push_str(&pad);
+                    out.push_str("  ");
+                    tree_node(element, indent + 4, out);
+                }
+            }
+            node => {
+                out.push_str(": ");
+                tree_node(node, indent + 2, out);
+            }
+        }
+    }
+}
+
 /// A JSON value. Object fields keep their insertion order.
 #[derive(Debug, Clone)]
 pub(crate) enum Json {
@@ -313,8 +373,12 @@ fn expr(e: &Expr) -> Json {
 
 fn str_part(part: &StrPart) -> Json {
     match part {
-        StrPart::Text { value, span } => Node::new("StrText", *span).field("value", str_json(value)),
-        StrPart::Hole { path, span } => Node::new("StrHole", *span).field("path", list(path, ident)),
+        StrPart::Text { value, span } => {
+            Node::new("StrText", *span).field("value", str_json(value))
+        }
+        StrPart::Hole { path, span } => {
+            Node::new("StrHole", *span).field("path", list(path, ident))
+        }
     }
     .done()
 }
