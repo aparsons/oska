@@ -108,6 +108,8 @@ fn examples_parse() {
                 }
                 ItemKind::Const(decl) => decl.name.name.clone(),
                 ItemKind::Test(_) => "test".to_string(),
+                ItemKind::Struct(decl) => decl.name.name.clone(),
+                ItemKind::Enum(decl) => decl.name.name.clone(),
             })
             .collect()
     };

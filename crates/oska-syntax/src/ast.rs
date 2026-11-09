@@ -246,6 +246,8 @@ pub enum ItemKind {
     Use(UseDecl),
     Const(ConstDecl),
     Test(TestDecl),
+    Struct(StructDecl),
+    Enum(EnumDecl),
 }
 
 /// `test "a descriptive name" { body }`.
@@ -299,5 +301,55 @@ pub struct FnDecl {
 pub struct Param {
     pub name: Ident,
     pub ty: Type,
+    pub span: Span,
+}
+
+/// `struct Name { fields }` or `struct Name(fields)`, optionally `cap`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructDecl {
+    /// Declared `cap struct`: the type may hold capabilities.
+    pub cap: bool,
+    pub name: Ident,
+    pub fields: Fields,
+}
+
+/// The fields of a struct or enum variant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fields {
+    /// `{ a: T, b: U }`. Every field has a name.
+    Named(Vec<Field>),
+    /// `(T, U)`. No field has a name.
+    Positional(Vec<Field>),
+    /// No fields at all, as in the variant `None`. Only enum variants
+    /// take this form.
+    Unit,
+}
+
+/// A declared field: `pub name: Type`, or just `Type` when positional.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Field {
+    /// Declared `pub`. Fields are private by default.
+    pub public: bool,
+    /// Present for named fields, absent for positional ones.
+    pub name: Option<Ident>,
+    pub ty: Type,
+    pub span: Span,
+}
+
+/// `enum Name { variants }`, optionally `cap`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumDecl {
+    /// Declared `cap enum`: the type may hold capabilities.
+    pub cap: bool,
+    pub name: Ident,
+    pub variants: Vec<Variant>,
+}
+
+/// An enum variant: `Some(T)`, `Circle { radius: Int }`, or `None`. Its
+/// fields never carry `pub`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Variant {
+    pub name: Ident,
+    pub fields: Fields,
     pub span: Span,
 }

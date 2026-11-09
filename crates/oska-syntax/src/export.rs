@@ -9,8 +9,9 @@
 //! are first built as a small [`Json`] value, then printed.
 
 use crate::ast::{
-    Arg, Attribute, Block, ClosureParam, ConstDecl, Expr, ExprKind, FnDecl, Ident, Item, ItemKind,
-    Module, Param, Stmt, StmtKind, StrPart, TestDecl, Type, TypeKind, UnaryOp, UseDecl,
+    Arg, Attribute, Block, ClosureParam, ConstDecl, EnumDecl, Expr, ExprKind, Field, Fields,
+    FnDecl, Ident, Item, ItemKind, Module, Param, Stmt, StmtKind, StrPart, StructDecl, TestDecl,
+    Type, TypeKind, UnaryOp, UseDecl, Variant,
 };
 use crate::{json_escape, Span};
 
@@ -236,7 +237,53 @@ fn item(item: &Item) -> Json {
         ItemKind::Use(decl) => use_item(item, decl),
         ItemKind::Const(decl) => const_item(item, decl),
         ItemKind::Test(decl) => test_item(item, decl),
+        ItemKind::Struct(decl) => struct_item(item, decl),
+        ItemKind::Enum(decl) => enum_item(item, decl),
     }
+}
+
+fn enum_item(item: &Item, decl: &EnumDecl) -> Json {
+    item_node("EnumItem", item)
+        .field("cap", Json::Bool(decl.cap))
+        .field("name", ident(&decl.name))
+        .field("variants", list(&decl.variants, variant))
+        .done()
+}
+
+fn variant(variant: &Variant) -> Json {
+    let (form, fields) = fields_json(&variant.fields);
+    Node::new("Variant", variant.span)
+        .field("name", ident(&variant.name))
+        .field("form", str_json(form))
+        .field("fields", fields)
+        .done()
+}
+
+fn struct_item(item: &Item, decl: &StructDecl) -> Json {
+    let (form, fields) = fields_json(&decl.fields);
+    item_node("StructItem", item)
+        .field("cap", Json::Bool(decl.cap))
+        .field("name", ident(&decl.name))
+        .field("form", str_json(form))
+        .field("fields", fields)
+        .done()
+}
+
+/// The `form` string and `fields` array for a struct or variant.
+fn fields_json(fields: &Fields) -> (&'static str, Json) {
+    match fields {
+        Fields::Named(fields) => ("named", list(fields, field)),
+        Fields::Positional(fields) => ("positional", list(fields, field)),
+        Fields::Unit => ("unit", Json::Arr(Vec::new())),
+    }
+}
+
+fn field(field: &Field) -> Json {
+    Node::new("Field", field.span)
+        .field("public", Json::Bool(field.public))
+        .opt("name", field.name.as_ref().map(ident))
+        .field("type", ty(&field.ty))
+        .done()
 }
 
 /// A node for `item` with the fields every item carries.
