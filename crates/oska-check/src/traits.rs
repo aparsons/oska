@@ -8,7 +8,7 @@ use oska_syntax::Diagnostic;
 
 use crate::codes;
 use crate::collect::Decls;
-use crate::items::{FnSig, Items, Lower};
+use crate::items::{FnSig, Items, Lower, Receiver};
 use crate::ty::Ty;
 
 pub fn module(module: &Module, decls: &Decls, items: &Items, diagnostics: &mut Vec<Diagnostic>) {
@@ -139,9 +139,9 @@ fn same_type(a: &Ty, b: &Ty) -> bool {
 fn render(sig: &FnSig) -> String {
     let mut params = Vec::new();
     match sig.receiver {
-        Some(true) => params.push("var self".to_string()),
-        Some(false) => params.push("self".to_string()),
-        None => {}
+        Receiver::VarSelf => params.push("var self".to_string()),
+        Receiver::Self_ => params.push("self".to_string()),
+        Receiver::None => {}
     }
     params.extend(sig.params.iter().map(|(n, t)| format!("{n}: {t}")));
     let ret = if sig.ret == Ty::Unit {

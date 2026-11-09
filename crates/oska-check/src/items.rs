@@ -20,9 +20,8 @@ pub struct FnSig {
     pub generics: Vec<String>,
     /// The bounds on `generics`.
     pub bounds: Vec<Bound>,
-    /// For a method: whether its receiver is `var self`. `None` for a
-    /// free or associated function.
-    pub receiver: Option<bool>,
+    /// How the function takes `self`, if at all.
+    pub receiver: Receiver,
     /// For a method or associated function: the type of `Self`.
     pub self_ty: Option<Ty>,
     pub params: Vec<(String, Ty)>,
@@ -32,6 +31,34 @@ pub struct FnSig {
     /// A **pure function**: no parameter, the receiver included, is
     /// capability-bearing.
     pub pure: bool,
+}
+
+/// How a function takes `self`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Receiver {
+    /// A free function, or an associated function such as `List.new`.
+    None,
+    /// A method that takes `self`.
+    Self_,
+    /// A **mutating method**: it takes `var self`, so it can only be
+    /// called on a `var` binding.
+    VarSelf,
+}
+
+impl Receiver {
+    /// A method, as opposed to a free or associated function.
+    pub fn is_method(self) -> bool {
+        self != Receiver::None
+    }
+
+    /// The receiver of a written function.
+    pub fn of(f: &FnDecl) -> Receiver {
+        match &f.receiver {
+            None => Receiver::None,
+            Some(r) if r.mutable => Receiver::VarSelf,
+            Some(_) => Receiver::Self_,
+        }
+    }
 }
 
 /// A bound on a generic parameter, `T: Trait<Args>`, or the implicit
@@ -344,7 +371,7 @@ impl Items {
                     &imp.generics,
                     &imp.bounds,
                 );
-                if method.receiver.is_some() && imp.receiver_bearing {
+                if method.receiver.is_method() && imp.receiver_bearing {
                     method.pure = false;
                 }
                 table.push(method);
@@ -502,7 +529,7 @@ impl<'d, 'a> Lower<'d, 'a> {
             name: f.name.name.clone(),
             generics,
             bounds,
-            receiver: f.receiver.as_ref().map(|r| r.mutable),
+            receiver: Receiver::of(f),
             self_ty,
             params: f
                 .params

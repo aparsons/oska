@@ -44,7 +44,7 @@ use crate::codes;
 use crate::collect::{DeclKind, Decls};
 use crate::decl_rules;
 use crate::infer::{Infer, Mismatch};
-use crate::items::{Bound, FieldsInfo, FnSig, Items, Lower, Shape};
+use crate::items::{Bound, FieldsInfo, FnSig, Items, Lower, Receiver, Shape};
 use crate::suggest;
 use crate::ty::{self, Ty};
 
@@ -121,7 +121,7 @@ fn function(src: &str, f: &FnDecl, lower: Lower, items: &Items, diagnostics: &mu
     let sig = lower.signature(f, &[], lower.self_ty.clone());
     let mut body = Body::new(src, items, lower, sig.ret.clone(), diagnostics);
     if let Some(receiver) = &f.receiver {
-        body.receiver = Some(Receiver {
+        body.receiver = Some(SelfBinding {
             ty: sig.self_ty.clone().unwrap_or(Ty::Error),
             mutable: receiver.mutable,
             span: receiver.span,
@@ -168,7 +168,7 @@ struct Local {
 
 /// The method's receiver, `self` or `var self`.
 #[derive(Debug)]
-struct Receiver {
+struct SelfBinding {
     ty: Ty,
     mutable: bool,
     span: Span,
@@ -215,7 +215,7 @@ pub struct Body<'c, 'd, 'a> {
     diagnostics: &'c mut Vec<Diagnostic>,
     /// Locals in scope, innermost last. Shadowing pushes a new one.
     locals: Vec<Local>,
-    receiver: Option<Receiver>,
+    receiver: Option<SelfBinding>,
     /// The type `return` must produce: the function's or the innermost
     /// closure's.
     ret: Ty,
@@ -786,7 +786,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
         if let Some(sig) = self.items.method(type_name, &name.name).cloned() {
             let mut callable = self.instantiate(&sig, None);
-            if sig.receiver.is_some() {
+            if sig.receiver.is_method() {
                 let self_ty = sig.self_ty.clone().unwrap_or(Ty::Error);
                 callable.params.insert(0, (None, self_ty));
             }
@@ -817,7 +817,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         let sig = info.method_for(sig, &self_ty, &args, &[], &[]);
         let mut callable = self.instantiate(&sig, None);
         callable.description = format!("`{trait_name}.{}`", name.name);
-        if sig.receiver.is_some() {
+        if sig.receiver.is_method() {
             callable.params.insert(0, (None, self_ty.clone()));
         }
         callable.obligations.push((
@@ -940,10 +940,11 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 })
                 .collect(),
             pure: sig.pure,
-            receiver: match (&sig.receiver, &sig.self_ty) {
-                (Some(_), Some(declared)) => Some(declared.substitute(&subst)),
-                _ => None,
-            },
+            receiver: sig
+                .self_ty
+                .as_ref()
+                .filter(|_| sig.receiver.is_method())
+                .map(|declared| declared.substitute(&subst)),
         }
     }
 
@@ -979,24 +980,25 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         let type_name = receiver
             .head()
             .map_or_else(|| receiver.to_string(), str::to_string);
-        let Some(mutating) = sig.receiver else {
-            self.error(
-                codes::NO_MEMBER,
-                format!(
-                    "`{}` is an associated function; call it as `{type_name}.{}(...)`",
-                    name.name, name.name
-                ),
-                name.span,
-            );
-            self.infer_args(args);
-            return Ty::Error;
-        };
-        if mutating {
-            self.require_mutable(
+        match sig.receiver {
+            Receiver::None => {
+                self.error(
+                    codes::NO_MEMBER,
+                    format!(
+                        "`{}` is an associated function; call it as `{type_name}.{}(...)`",
+                        name.name, name.name
+                    ),
+                    name.span,
+                );
+                self.infer_args(args);
+                return Ty::Error;
+            }
+            Receiver::VarSelf => self.require_mutable(
                 base,
                 codes::MUTATING_CALL_ON_LET,
                 &format!("call the mutating method `{}` on", name.name),
-            );
+            ),
+            Receiver::Self_ => {}
         }
         let callable = self.instantiate(&sig, Some(&receiver));
         self.apply(callable, args, expected, span)
