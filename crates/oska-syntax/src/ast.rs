@@ -83,6 +83,51 @@ pub enum ExprKind {
         handle: Ident,
         body: Block,
     },
+    /// `match scrutinee { arms }`, with one arm per line.
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
+}
+
+/// One `match` arm: `pattern if guard => body`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub guard: Option<Expr>,
+    pub body: Expr,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pattern {
+    pub kind: PatternKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PatternKind {
+    /// `_`.
+    Wildcard,
+    /// An integer (optionally negated), string, boolean, or `()` literal.
+    Literal(Expr),
+    /// A bare name, which binds the matched value.
+    Binding(Ident),
+    /// `Some(x)`, `Shape.Circle(radius: r)`, or a path alone such as
+    /// `Shape.Empty`. Mirrors call-style construction (ADR 0004).
+    Constructor {
+        path: Vec<Ident>,
+        args: Vec<PatternArg>,
+    },
+}
+
+/// A constructor pattern argument with an optional field label:
+/// `radius: r`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PatternArg {
+    pub label: Option<Ident>,
+    pub pattern: Pattern,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
