@@ -27,10 +27,7 @@ fn contracts_sample_parses() {
     let [item] = module.items.as_slice() else {
         panic!("expected one item, got {:?}", module.items);
     };
-    // Other item kinds are added alongside this one.
-    #[allow(irrefutable_let_patterns)]
-    let ItemKind::Fn(decl) = &item.kind
-    else {
+    let ItemKind::Fn(decl) = &item.kind else {
         panic!("expected a function, got {item:?}");
     };
     assert_eq!(decl.name.name, "withdraw");

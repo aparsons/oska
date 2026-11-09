@@ -53,6 +53,29 @@ A function declaration: `fn name<generics>(params) -> T requires ... ensures |r|
 | `ensures` | array of `EnsuresClause` | in source order |
 | `body` | `Block` |  |
 
+#### `StructItem`
+
+A struct declaration: `struct Point { x: Int, y: Int }` (named fields) or `struct Meters(Int)` (positional fields). Fields are separated by commas, and a trailing comma is allowed.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `public` | bool | declared `pub` |
+| `cap` | bool | declared `cap struct`: a **capability-bearing type** |
+| `name` | `Ident` |  |
+| `form` | string | `"named"` or `"positional"` |
+| `fields` | array of `Field` | in source order |
+
+#### `EnumItem`
+
+An enum (sum type) declaration: `enum Shape { Circle { radius: Int }, Rect(Int, Int), Empty }`. Variants are separated by commas, and a trailing comma is allowed.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `public` | bool | declared `pub` |
+| `cap` | bool | declared `cap enum`: a **capability-bearing type** |
+| `name` | `Ident` |  |
+| `variants` | array of `Variant` | in source order |
+
 ### Shared nodes
 
 #### `Ident`
@@ -105,6 +128,26 @@ A postcondition, `ensures |r| cond`, where `r` names the return value. The span 
 | --- | --- | --- |
 | `binding` | `Ident` | the name bound to the return value |
 | `cond` | expression node |  |
+
+#### `Field`
+
+A declared field of a struct or enum variant: `pub name: Type` when named, or `pub Type` when positional. The span starts at `pub` when present.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `public` | bool | declared `pub`; fields are private by default. Always `false` in enum variants, which do not accept `pub` |
+| `name` | `Ident` | optional; absent for positional fields |
+| `type` | type node |  |
+
+#### `Variant`
+
+An enum variant: `Some(T)` (positional), `Circle { radius: Int }` (named), or `None` (unit).
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `name` | `Ident` |  |
+| `form` | string | `"named"`, `"positional"`, or `"unit"` |
+| `fields` | array of `Field` | in source order; empty when `form` is `"unit"` |
 
 #### `Block`
 
