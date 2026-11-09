@@ -653,6 +653,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 return Some(callable);
             }
         }
+        if matches!(self.decls().get(type_name), Some(d) if d.kind == DeclKind::Trait) {
+            return self.qualified_call(type_name, name);
+        }
         if let Some(sig) = self.items.method(type_name, &name.name).cloned() {
             let mut callable = self.instantiate(&sig, None);
             if sig.receiver.is_some() {
@@ -661,10 +664,6 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             }
             return Some(callable);
         }
-        if matches!(self.decls().get(type_name), Some(d) if d.kind == DeclKind::Trait) {
-            // Qualified trait calls arrive with generics and traits.
-            return None;
-        }
         let mut candidates = self.items.method_names(type_name);
         if let Some(info) = self.items.enums.get(type_name) {
             candidates.extend(info.variants.iter().map(|(v, _)| v.as_str()));
@@ -672,6 +671,56 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         let message = format!("`{type_name}` has no variant or function `{}`", name.name);
         self.report_with_suggestion(codes::NO_MEMBER, message, name, &candidates);
         None
+    }
+
+    /// `Trait.method`: the trait's method called qualified, as in
+    /// `Display.to_string(x)`. The receiver is the first argument, and
+    /// its type must implement the trait.
+    fn qualified_call(&mut self, trait_name: &str, name: &Ident) -> Option<Callable> {
+        let info = self.items.traits.get(trait_name)?.clone();
+        let Some((sig, _)) = info.methods.iter().find(|(s, _)| s.name == name.name) else {
+            let candidates: Vec<&str> = info.methods.iter().map(|(s, _)| s.name.as_str()).collect();
+            let message = format!("the trait `{trait_name}` has no method `{}`", name.name);
+            self.report_with_suggestion(codes::NO_MEMBER, message, name, &candidates);
+            return None;
+        };
+        let self_ty = self.infer.fresh();
+        let args: Vec<Ty> = info.generics.iter().map(|_| self.infer.fresh()).collect();
+        let sig = info.method_for(sig, &self_ty, &args, &[], &[]);
+        let mut callable = self.instantiate(&sig, None);
+        callable.description = format!("`{trait_name}.{}`", name.name);
+        if sig.receiver.is_some() {
+            callable.params.insert(0, (None, self_ty.clone()));
+        }
+        callable.obligations.push((
+            self_ty,
+            Bound {
+                param: "Self".to_string(),
+                trait_name: trait_name.to_string(),
+                args,
+            },
+        ));
+        Some(callable)
+    }
+
+    /// Report `name` as provided by more than one of `traits` (`E0264`).
+    fn ambiguous_method(&mut self, name: &Ident, traits: &[&FnSig]) {
+        let mut names: Vec<&str> = traits.iter().filter_map(|s| s.trait_name.as_deref()).collect();
+        names.sort();
+        let listed = names
+            .iter()
+            .map(|t| format!("`{t}`"))
+            .collect::<Vec<_>>()
+            .join(" and ");
+        let example = names.first().copied().unwrap_or("Trait");
+        self.error(
+            codes::AMBIGUOUS_METHOD,
+            format!(
+                "`{}` is provided by {listed}; call it qualified, as in `{example}.{}(x)`",
+                name.name, name.name
+            ),
+            name.span,
+        );
     }
 
     /// The constructor of `variant` of `enum_name`, instantiated.
@@ -827,8 +876,13 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             return Some(sig.clone());
         }
         let found = self.items.trait_methods_named(type_name, &name.name);
-        if let [sig] = found.as_slice() {
-            return Some((*sig).clone());
+        match found.as_slice() {
+            [] => {}
+            [sig] => return Some((*sig).clone()),
+            _ => {
+                self.ambiguous_method(name, &found);
+                return None;
+            }
         }
         let candidates = self.items.method_names(type_name);
         let message = format!("`{receiver}` has no method `{}`", name.name);
@@ -852,8 +906,14 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 }
             }
         }
-        if let [sig] = found.as_slice() {
-            return Some(sig.clone());
+        match found.as_slice() {
+            [] => {}
+            [sig] => return Some(sig.clone()),
+            _ => {
+                let found: Vec<&FnSig> = found.iter().collect();
+                self.ambiguous_method(name, &found);
+                return None;
+            }
         }
         let mut diagnostic = Diagnostic::new(
             codes::NOT_IN_BOUNDS,

@@ -97,6 +97,7 @@ pub(crate) mod codes {
     pub const TRY_ERROR_TYPE: &str = "E0242";
     pub const TRY_KIND: &str = "E0243";
     pub const NOT_IN_BOUNDS: &str = "E0260";
+    pub const AMBIGUOUS_METHOD: &str = "E0264";
     pub const NOT_IMPLEMENTED: &str = "E0265";
 }
 

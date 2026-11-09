@@ -126,6 +126,76 @@ fn a_call_must_satisfy_the_callee_s_bounds() {
     );
 }
 
+// ---- Method lookup -------------------------------------------------------------
+
+/// Two traits that both provide `describe`, and a type with both.
+const TWO_TRAITS: &str = "trait Short {\n    fn describe(self) -> String\n}\n\
+trait Long {\n    fn describe(self) -> String\n}\n\
+struct Cat { name: String }\n\
+impl Short for Cat {\n    fn describe(self) -> String { \"cat\" }\n}\n\
+impl Long for Cat {\n    fn describe(self) -> String { \"a cat\" }\n}\n";
+
+fn with_two_traits(src: &str) -> String {
+    format!("{TWO_TRAITS}{src}")
+}
+
+#[test]
+fn a_trait_method_is_found_on_an_implementing_type() {
+    assert_ok(
+        "struct Cat { name: String }\n\
+         impl Display for Cat {\n    fn to_string(self) -> String { self.name }\n}\n\
+         fn f(c: Cat) -> String { c.to_string() }",
+    );
+}
+
+#[test]
+fn a_type_s_own_method_wins_over_its_traits() {
+    assert_ok(&with_two_traits(
+        "impl Cat {\n    fn describe(self) -> Int { 1 }\n}\n\
+         fn f(c: Cat) -> Int { c.describe() }",
+    ));
+}
+
+#[test]
+fn a_method_name_shared_by_two_traits_is_ambiguous() {
+    assert_errors(
+        &with_two_traits("fn f(c: Cat) -> String { c.describe() }"),
+        &[("E0264", "describe")],
+    );
+}
+
+#[test]
+fn an_ambiguous_method_on_a_generic_parameter_is_an_error() {
+    assert_errors(
+        &with_two_traits("fn f<T: Short + Long>(c: T) -> String { c.describe() }"),
+        &[("E0264", "describe")],
+    );
+}
+
+#[test]
+fn a_qualified_call_picks_the_trait() {
+    assert_ok(&with_two_traits(
+        "fn f(c: Cat) -> String { Long.describe(c) }\n\
+         fn g<T: Short + Long>(c: T) -> String { Short.describe(c) }",
+    ));
+}
+
+#[test]
+fn a_qualified_call_needs_the_type_to_implement_the_trait() {
+    assert_errors(
+        &with_two_traits("struct Dog { name: String }\nfn f(d: Dog) -> String { Long.describe(d) }"),
+        &[("E0265", "Long.describe(d)")],
+    );
+}
+
+#[test]
+fn a_qualified_call_of_a_method_the_trait_lacks_is_an_error() {
+    assert_errors(
+        &with_two_traits("fn f(c: Cat) -> String { Long.purr(c) }"),
+        &[("E0228", "purr")],
+    );
+}
+
 #[test]
 fn a_call_that_satisfies_the_callee_s_bounds_is_fine() {
     assert_ok(
