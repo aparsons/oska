@@ -12,6 +12,13 @@
 }
 ```
 
+## Prelude mode
+
+The **prelude** is Oska source embedded in the checker. It is parsed in prelude mode (`parse_prelude` in `oska-syntax`), which accepts two things user code cannot write. Both appear in the export like any other node.
+
+- **Body-less functions.** Any `FnItem`, whether a module-level function or a method in an `impl`, may end after its signature, because its behavior is built in. Its `body` is absent. In user code a missing body is error `E0101`, an expected `{`.
+- **`#[capability]`.** It marks a `StructItem` as a built-in capability: an opaque struct with private fields. On any other item or method it is error `E0170`. In user code it is an unknown attribute, error `E0132`.
+
 ## Stability
 
 - Within a major `ast_version`, changes are **additive only**. New node kinds and new fields can appear. Existing fields are never renamed, removed, or given a new meaning.
@@ -93,7 +100,7 @@ A `self` or `var self` receiver is allowed only on a method in an `impl` or `tra
 | `return_type` | type node | optional; absent means `()` |
 | `requires` | array of `RequiresClause` | in source order |
 | `ensures` | array of `EnsuresClause` | in source order |
-| `body` | `Block` | optional; absent only for a trait method without a default body |
+| `body` | `Block` | optional; absent only for a trait method without a default body, or for a function or method in the prelude (see [Prelude mode](#prelude-mode)) |
 
 #### `UseItem`
 
@@ -158,7 +165,7 @@ A trait declaration: `trait Name<generics> { methods }`. Methods are separated b
 
 #### `ImplItem`
 
-Methods for a type: `impl<generics> Type { methods }` for inherent methods and associated functions, or `impl<generics> Trait for Type { methods }` for a trait implementation. Methods are separated by line breaks, and each needs a body. An `impl` block is never `pub` (error `E0151`), so `public` is always `false`; each method carries its own `public`.
+Methods for a type: `impl<generics> Type { methods }` for inherent methods and associated functions, or `impl<generics> Trait for Type { methods }` for a trait implementation. Methods are separated by line breaks, and each needs a body, except in the prelude. An `impl` block is never `pub` (error `E0151`), so `public` is always `false`; each method carries its own `public`.
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -259,7 +266,7 @@ A call argument, optionally labelled: `copy(src: a)`. The span covers the label 
 
 #### `Attribute`
 
-An attribute on an item: `#[name]` or `#[name(args)]`. Names come from a fixed set, currently only `integration`; any other name is error `E0132`. `#[integration]` is allowed only on a `TestItem`; on any other item or method it is error `E0165`.
+An attribute on an item: `#[name]` or `#[name(args)]`. Names come from a fixed set, currently only `integration`; any other name is error `E0132`. `#[integration]` is allowed only on a `TestItem`; on any other item or method it is error `E0165`. The prelude may also use `capability` (see [Prelude mode](#prelude-mode)).
 
 | Field | Type | Notes |
 | --- | --- | --- |
