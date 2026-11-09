@@ -25,6 +25,36 @@ Every node is a JSON object with:
 - `"kind"`: the node type, as a string, for example `"FnItem"` or `"CallExpr"`.
 - `"span"`: `{"start": <byte>, "end": <byte>}`, a half-open byte range into the source file. These are the same spans that diagnostics use.
 
+## Diagnostics
+
+When parsing fails, `--format=json` prints one diagnostic object instead of the envelope:
+
+```json
+{
+  "code": "E0151",
+  "message": "an `impl` block cannot be `pub`; ...",
+  "span": {"start": 0, "end": 3},
+  "fix": {
+    "message": "remove `pub`",
+    "edits": [{"span": {"start": 0, "end": 4}, "replacement": ""}]
+  }
+}
+```
+
+- `code` is stable: tools should match on it, not on `message`. Lexer codes are `E00xx` and parser codes are `E01xx`; the full list is in the module docs of `crates/oska-syntax/src/parser.rs`.
+- `span` uses the same byte ranges as nodes.
+- `fix` is optional and omitted when absent. It is present only when the edit is unambiguous, so a tool can apply it without asking. Each edit replaces the source text at its `span` with `replacement`: an empty span inserts, and an empty `replacement` deletes. Edit spans refer to the original source and never overlap. Applying every edit fixes that diagnostic, though later errors in the file may remain.
+
+Diagnostics that carry a fix:
+
+| Code | Fix |
+| --- | --- |
+| `E0005` | remove a `;` at the end of a line |
+| `E0112` | remove `var` from an ordinary parameter |
+| `E0120` | insert the missing `,` |
+| `E0143` | remove the `,` after a match arm, when the next arm is already on its own line |
+| `E0151`, `E0162`, `E0163`, `E0164` | remove `pub` |
+
 ## Node schema
 
 Conventions:
@@ -46,6 +76,8 @@ Every item node starts with the same two fields, before its own fields:
 
 An item's span starts at its first attribute, if it has one, and otherwise at `pub` or its keyword. The tables below list only each item's own fields.
 
+`public` is always `false` for `UseItem` (`pub use` is error `E0164`, because re-exports are not defined in v0), `TestItem` (`pub test` is error `E0163`), `ImplItem` (error `E0151`), and the methods of a `TraitItem` (error `E0162`).
+
 #### `FnItem`
 
 A function declaration: `fn name<generics>(params) -> T requires ... ensures |r| ... { body }`. The contract clauses sit between the return type and the body, and may each start a new line. The same node is used for the methods of `ImplItem` and `TraitItem`.
@@ -65,7 +97,7 @@ A `self` or `var self` receiver is allowed only on a method in an `impl` or `tra
 
 #### `UseItem`
 
-An import: `use a.b` or `use a.b.{X, y}`. Glob imports (`use a.*`, error `E0130`) and renaming imports (`use a.b as c`, error `E0131`) are rejected, so every imported name is written out.
+An import: `use a.b` or `use a.b.{X, y}`. Glob imports (`use a.*`, error `E0130`) and renaming imports (`use a.b as c`, error `E0131`) are rejected, so every imported name is written out. An import is never `pub` (error `E0164`): re-exports are not defined in v0.
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -84,11 +116,11 @@ A module-level constant: `const NAME: T = expr`.
 
 #### `TestItem`
 
-A test: `test "a descriptive name" { body }`. Tests that need real capabilities carry `#[integration]`.
+A test: `test "a descriptive name" { body }`. Tests that need real capabilities carry `#[integration]`. A test is never `pub` (error `E0163`).
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `name` | `StrExpr` | the name as written |
+| `name` | `StrExpr` | the name as written; its `parts` are a single `StrText`, because a name with an interpolation hole is error `E0161` |
 | `body` | `Block` |  |
 
 #### `StructItem`
@@ -116,7 +148,7 @@ An enum (sum type) declaration: `enum Shape { Circle { radius: Int }, Rect(Int, 
 
 #### `TraitItem`
 
-A trait declaration: `trait Name<generics> { methods }`. Methods are separated by line breaks. A method either ends after its signature (its `FnItem` has no `body`) or has a default body. Trait objects (`dyn`), associated types, and `where` clauses are not part of v0.
+A trait declaration: `trait Name<generics> { methods }`. Methods are separated by line breaks. A method either ends after its signature (its `FnItem` has no `body`) or has a default body. A trait method takes its visibility from the trait, so it is never `pub` (error `E0162`) and its `public` is always `false`. Trait objects (`dyn`), associated types, and `where` clauses are not part of v0.
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -227,7 +259,7 @@ A call argument, optionally labelled: `copy(src: a)`. The span covers the label 
 
 #### `Attribute`
 
-An attribute on an item: `#[name]` or `#[name(args)]`. Names come from a fixed set, currently only `integration`; any other name is error `E0132`.
+An attribute on an item: `#[name]` or `#[name(args)]`. Names come from a fixed set, currently only `integration`; any other name is error `E0132`. `#[integration]` is allowed only on a `TestItem`; on any other item or method it is error `E0165`.
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -514,7 +546,7 @@ A literal to compare against: an integer, a negated integer such as `-1`, a stri
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `value` | expression node | an `IntExpr`, a `UnaryExpr` with op `-` around an `IntExpr`, a `StrExpr`, a `BoolExpr`, or a `UnitExpr` |
+| `value` | expression node | an `IntExpr`, a `UnaryExpr` with op `-` around an `IntExpr`, a `StrExpr`, a `BoolExpr`, or a `UnitExpr`. A `StrExpr` here is a plain literal: a string pattern with an interpolation hole is error `E0160` |
 
 #### `BindingPattern`
 
