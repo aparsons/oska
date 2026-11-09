@@ -1,18 +1,120 @@
 //! Declaration-level rules: `cap` on types whose own fields name a
-//! capability.
+//! capability, and `main` as the root of authority.
 
-use oska_syntax::ast::{Item, ItemKind, Module};
+use oska_syntax::ast::{FnDecl, Item, ItemKind, Module, Type, TypeKind};
 use oska_syntax::{Diagnostic, Edit, Span};
 
 use crate::authority;
 use crate::codes;
-use crate::decls::{field_types, Decls};
+use crate::decls::{field_types, DeclKind, Decls};
+use crate::prelude;
 
 /// Report every declaration-level error in `module`.
 pub fn module(src: &str, module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
     for item in &module.items {
         cap_required(src, item, decls, diagnostics);
+        if let ItemKind::Fn(f) = &item.kind {
+            if f.name.name == "main" {
+                main(src, module, f, decls, diagnostics);
+            }
+        }
     }
+}
+
+/// `main` is the root of authority: it takes only built-in capabilities
+/// and `Args`, and returns `()` or `Result<(), E>` with `E: Display`.
+fn main(src: &str, module: &Module, f: &FnDecl, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
+    for param in &f.params {
+        // An unknown name is already reported by name resolution.
+        let allowed = match single_name(&param.ty) {
+            Some(name) => match decls.get(name) {
+                Some(decl) => name == "Args" || decl.kind == DeclKind::Capability,
+                None => true,
+            },
+            None => false,
+        };
+        if !allowed {
+            diagnostics.push(Diagnostic::new(
+                codes::MAIN_PARAM,
+                format!(
+                    "`main` can only take built-in capabilities and `Args`, not `{}`",
+                    text(src, &param.ty)
+                ),
+                param.ty.span,
+            ));
+        }
+    }
+    let Some(ret) = &f.return_type else {
+        return;
+    };
+    if let TypeKind::Unit = ret.kind {
+        return;
+    }
+    let error = match &ret.kind {
+        TypeKind::Path { segments, args } if is_named(segments, "Result") => match args.as_slice() {
+            [ok, error] if matches!(ok.kind, TypeKind::Unit) => Some(error),
+            _ => None,
+        },
+        _ => None,
+    };
+    let Some(error) = error else {
+        diagnostics.push(Diagnostic::new(
+            codes::MAIN_RETURN,
+            format!(
+                "`main` must return `()` or `Result<(), E>`, not `{}`",
+                text(src, ret)
+            ),
+            ret.span,
+        ));
+        return;
+    };
+    let display = single_name(error).is_some_and(|name| {
+        implements_display(prelude::module(), name) || implements_display(module, name)
+    });
+    // An unknown name is already reported by name resolution.
+    let known = single_name(error).is_some_and(|name| decls.get(name).is_some());
+    if known && !display {
+        diagnostics.push(Diagnostic::new(
+            codes::MAIN_RETURN,
+            format!(
+                "`main` can return `Result<(), {0}>` only if `{0}` implements `Display`",
+                text(src, error)
+            ),
+            error.span,
+        ));
+    }
+}
+
+/// Whether `module` has an `impl Display for name`.
+fn implements_display(module: &Module, name: &str) -> bool {
+    module.items.iter().any(|item| match &item.kind {
+        ItemKind::Impl(imp) => {
+            imp.trait_ref
+                .as_ref()
+                .is_some_and(|t| single_name(t) == Some("Display"))
+                && single_name(&imp.target) == Some(name)
+        }
+        _ => false,
+    })
+}
+
+/// The name of a one-segment path type with no type arguments.
+fn single_name(ty: &Type) -> Option<&str> {
+    match &ty.kind {
+        TypeKind::Path { segments, args } if args.is_empty() => match segments.as_slice() {
+            [ident] => Some(ident.name.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn is_named(segments: &[oska_syntax::ast::Ident], name: &str) -> bool {
+    matches!(segments, [ident] if ident.name == name)
+}
+
+fn text<'s>(src: &'s str, ty: &Type) -> &'s str {
+    &src[ty.span.start..ty.span.end]
 }
 
 /// A struct or enum whose own fields name a capability must be `cap`.
@@ -31,7 +133,7 @@ fn cap_required(src: &str, item: &Item, decls: &Decls, diagnostics: &mut Vec<Dia
     else {
         return;
     };
-    let field_text = &src[field.span.start..field.span.end];
+    let field_text = text(src, field);
     let mut diagnostic = Diagnostic::new(
         codes::CAP_REQUIRED,
         format!(

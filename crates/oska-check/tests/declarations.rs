@@ -64,3 +64,61 @@ fn generic_containers_and_plain_data_need_no_cap() {
     assert_ok("struct Box<T> { value: T }\nfn f(b: Box<Stdout>) { }");
     assert_ok("struct Scores { all: List<Int>, best: Option<Int>, hook: fn(Int) -> Int }");
 }
+
+// ---- `main` ------------------------------------------------------------
+
+#[test]
+fn main_may_take_built_in_capabilities_and_args() {
+    assert_ok("fn main(io: Stdout, fs: FsRead, net: Net, args: Args) { }");
+    assert_ok("fn main() -> () { }");
+}
+
+#[test]
+fn main_parameters_must_be_capabilities_or_args() {
+    assert_errors(
+        "cap struct Logger { out: Stdout }\nfn main(log: Logger, n: Int, outs: List<Stdout>) { }",
+        &[
+            ("E0211", "Logger"),
+            ("E0211", "Int"),
+            ("E0211", "List<Stdout>"),
+        ],
+    );
+}
+
+#[test]
+fn a_misspelled_main_parameter_is_reported_once() {
+    assert_errors("fn main(io: Stdot) { }", &[("E0200", "Stdot")]);
+}
+
+#[test]
+fn main_may_return_a_result_whose_error_is_display() {
+    assert_ok("fn main(io: Stdout) -> Result<(), IoError> { }");
+    assert_ok("fn main() -> Result<(), String> { }");
+    assert_ok(
+        "struct AppError { message: String }\n\
+         impl Display for AppError {\n    fn to_string(self) -> String { self.message }\n}\n\
+         fn main() -> Result<(), AppError> { }",
+    );
+}
+
+#[test]
+fn main_must_return_unit_or_a_result_of_unit() {
+    assert_errors("fn main() -> Int { 0 }", &[("E0212", "Int")]);
+    assert_errors(
+        "fn main() -> Result<Int, String> { }",
+        &[("E0212", "Result<Int, String>")],
+    );
+}
+
+#[test]
+fn mains_error_type_must_be_display() {
+    assert_errors(
+        "struct AppError { message: String }\nfn main() -> Result<(), AppError> { }",
+        &[("E0212", "AppError")],
+    );
+}
+
+#[test]
+fn only_the_free_function_main_is_a_root_of_authority() {
+    assert_ok("struct App { n: Int }\nimpl App {\n    fn main(self, n: Int) -> Int { n }\n}");
+}

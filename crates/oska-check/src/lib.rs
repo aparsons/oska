@@ -34,6 +34,8 @@ pub(crate) mod codes {
     pub const WRONG_NAMESPACE: &str = "E0201";
     pub const DUPLICATE_NAME: &str = "E0202";
     pub const CAP_REQUIRED: &str = "E0210";
+    pub const MAIN_PARAM: &str = "E0211";
+    pub const MAIN_RETURN: &str = "E0212";
 }
 
 /// Options that change what is checked.
