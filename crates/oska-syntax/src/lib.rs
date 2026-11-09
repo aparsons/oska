@@ -1,10 +1,16 @@
-//! Lexer for the Oska programming language.
+//! Lexer, parser, and syntax tree for the Oska programming language.
 //!
-//! The parser and AST will live in this crate too. Diagnostics carry a
-//! stable error code and a byte span so tools (and AI agents) can act on
-//! them without scraping human-readable text.
+//! Diagnostics carry a stable error code and a byte span so tools (and AI
+//! agents) can act on them without scraping human-readable text.
+//!
+//! Lexer codes are `E00xx`; parser codes are `E01xx`.
 
 use std::fmt;
+
+pub mod ast;
+mod parser;
+
+pub use parser::{parse_expr, parse_stmts, parse_type};
 
 /// A half-open byte range `start..end` in the source text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,7 +83,42 @@ pub enum Keyword {
 }
 
 impl Keyword {
-    fn lookup(word: &str) -> Option<Self> {
+    /// The keyword as written in source.
+    pub fn text(self) -> &'static str {
+        match self {
+            Self::Fn => "fn",
+            Self::Let => "let",
+            Self::Var => "var",
+            Self::If => "if",
+            Self::Else => "else",
+            Self::Match => "match",
+            Self::Return => "return",
+            Self::True => "true",
+            Self::False => "false",
+            Self::Unsafe => "unsafe",
+            Self::Cap => "cap",
+            Self::Requires => "requires",
+            Self::Ensures => "ensures",
+            Self::Implies => "implies",
+            Self::Scope => "scope",
+            Self::Struct => "struct",
+            Self::Enum => "enum",
+            Self::Trait => "trait",
+            Self::Impl => "impl",
+            Self::Pub => "pub",
+            Self::Use => "use",
+            Self::Test => "test",
+            Self::SelfValue => "self",
+            Self::For => "for",
+            Self::In => "in",
+            Self::While => "while",
+            Self::Break => "break",
+            Self::Continue => "continue",
+            Self::Const => "const",
+        }
+    }
+
+    pub(crate) fn lookup(word: &str) -> Option<Self> {
         let kw = match word {
             "fn" => Self::Fn,
             "let" => Self::Let,
@@ -151,15 +192,71 @@ pub enum Punct {
     Hash,
 }
 
-/// A lexing error with a stable code, e.g. `E0001`.
+impl Punct {
+    /// The punctuation as written in source.
+    pub fn text(self) -> &'static str {
+        match self {
+            Self::LParen => "(",
+            Self::RParen => ")",
+            Self::LBrace => "{",
+            Self::RBrace => "}",
+            Self::LBracket => "[",
+            Self::RBracket => "]",
+            Self::Comma => ",",
+            Self::Dot => ".",
+            Self::Colon => ":",
+            Self::DotDot => "..",
+            Self::Question => "?",
+            Self::Arrow => "->",
+            Self::FatArrow => "=>",
+            Self::Plus => "+",
+            Self::Minus => "-",
+            Self::Star => "*",
+            Self::Slash => "/",
+            Self::Percent => "%",
+            Self::Eq => "=",
+            Self::EqEq => "==",
+            Self::Bang => "!",
+            Self::BangEq => "!=",
+            Self::Lt => "<",
+            Self::Le => "<=",
+            Self::Gt => ">",
+            Self::Ge => ">=",
+            Self::AndAnd => "&&",
+            Self::OrOr => "||",
+            Self::Pipe => "|",
+            Self::Hash => "#",
+        }
+    }
+}
+
+/// An error with a stable code, e.g. `E0001`, and the byte span it covers.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LexError {
+pub struct Diagnostic {
     pub code: &'static str,
     pub message: String,
     pub span: Span,
 }
 
-impl LexError {
+/// The character a backslash escape stands for, e.g. `n` for `\n`.
+pub(crate) fn resolve_escape(c: char) -> Option<char> {
+    Some(match c {
+        'n' => '\n',
+        't' => '\t',
+        'r' => '\r',
+        '0' => '\0',
+        '\\' => '\\',
+        '"' => '"',
+        '{' => '{',
+        '}' => '}',
+        _ => return None,
+    })
+}
+
+/// Errors produced by [`lex`].
+pub type LexError = Diagnostic;
+
+impl Diagnostic {
     /// Render as a single-line JSON object for machine consumers.
     pub fn to_json(&self) -> String {
         format!(
@@ -172,7 +269,7 @@ impl LexError {
     }
 }
 
-impl fmt::Display for LexError {
+impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -182,7 +279,7 @@ impl fmt::Display for LexError {
     }
 }
 
-impl std::error::Error for LexError {}
+impl std::error::Error for Diagnostic {}
 
 fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -406,16 +503,11 @@ impl Lexer<'_> {
                 Some('"') => break,
                 Some('\\') => {
                     let escape_start = self.pos - 1;
-                    let resolved = match self.bump() {
-                        Some('n') => '\n',
-                        Some('t') => '\t',
-                        Some('r') => '\r',
-                        Some('0') => '\0',
-                        Some('\\') => '\\',
-                        Some('"') => '"',
-                        Some('{') => '{',
-                        Some('}') => '}',
-                        other => {
+                    let next = self.bump();
+                    let resolved = match next.and_then(resolve_escape) {
+                        Some(c) => c,
+                        None => {
+                            let other = next;
                             let shown =
                                 other.map_or_else(|| "end of input".into(), |c| format!("{c:?}"));
                             return Err(self.error(
