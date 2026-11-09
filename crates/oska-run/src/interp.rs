@@ -14,6 +14,8 @@
 use oska_check::program::{
     Arm, Callee, Expr, ExprKind, Function, Part, Pattern, Place, Program, Stmt,
 };
+use std::rc::Rc;
+
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::Span;
 
@@ -130,6 +132,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                     }
                 }
             }
+            ExprKind::List(items) => Ok(Value::List(Rc::new(self.eval_all(items, frame)?))),
             ExprKind::Construct { ctor, fields } => {
                 let fields = self.eval_all(fields, frame)?;
                 Ok(Value::construct(ctor, fields))
@@ -282,14 +285,19 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 }
             }
             Stmt::For { binds, iter, body } => {
-                let (start, end) = match self.eval(iter, frame)? {
-                    Value::Range { start, end } => (start, end),
-                    other => unreachable!("the checker allows `for` over a range, found {other:?}"),
+                // Iterating a list holds a reference to it, so the body
+                // writing the `var` it came from changes a copy.
+                let items: Box<dyn Iterator<Item = Value>> = match self.eval(iter, frame)? {
+                    Value::Range { start, end } => Box::new((start..end).map(Value::Int)),
+                    Value::List(items) => Box::new(ListIter { items, next: 0 }),
+                    other => unreachable!(
+                        "the checker allows `for` over a range or a list, found {other:?}"
+                    ),
                 };
                 let height = frame.slots.len();
-                for n in start..end {
+                for item in items {
                     if *binds {
-                        frame.slots.push(Value::Int(n));
+                        frame.slots.push(item);
                     }
                     let go_on = self.loop_body(body, frame);
                     frame.slots.truncate(height);
@@ -351,5 +359,21 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             }
         }
         Ok(Value::str(&text))
+    }
+}
+
+/// The items of a list, one at a time.
+struct ListIter {
+    items: Rc<Vec<Value>>,
+    next: usize,
+}
+
+impl Iterator for ListIter {
+    type Item = Value;
+
+    fn next(&mut self) -> Option<Value> {
+        let item = self.items.get(self.next)?.clone();
+        self.next += 1;
+        Some(item)
     }
 }

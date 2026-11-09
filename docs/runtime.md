@@ -34,5 +34,6 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | Code | Panic |
 | --- | --- |
 | `P0001` | Integer overflow: the result of `+`, `-`, `*`, `/`, or unary `-` does not fit its type, as with a `U8` `0 - 1` or an `I8` `-128 / -1`. Spans the operation. |
+| `P0002` | Index out of bounds: `List.at` was given an index below 0 or not below the list's length. Spans the call. |
 | `P0003` | `todo()` reached. Spans the call. |
 | `P0004` | Division by zero: the right operand of `/` or `%` is zero. Spans the operation. |

@@ -109,6 +109,8 @@ pub enum ExprKind {
     Local(usize),
     /// `self`, the receiver of the method being run.
     SelfValue,
+    /// A list literal, `[a, b, c]`.
+    List(Vec<Expr>),
     /// A struct or enum variant built from its fields, in declaration
     /// order. A fieldless variant has none.
     Construct {
@@ -180,8 +182,9 @@ pub enum Stmt {
         cond: Expr,
         body: Expr,
     },
-    /// `for binding in iter { body }`: each element is pushed as the next
-    /// slot when `binds`, for the body to see.
+    /// `for binding in iter { body }`, over a range or a `List`: each
+    /// element is pushed as the next slot when `binds`, for the body to
+    /// see.
     For {
         binds: bool,
         iter: Expr,

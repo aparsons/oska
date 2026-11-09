@@ -207,6 +207,9 @@ impl Lowering<'_> {
                 },
             },
             ast::ExprKind::Binary { op, lhs, rhs } => self.binary(expr.span, *op, lhs, rhs),
+            ast::ExprKind::List(items) => {
+                ExprKind::List(items.iter().map(|item| self.expr(item)).collect())
+            }
             ast::ExprKind::Range { start, end } => ExprKind::Range {
                 start: self.boxed(start),
                 end: self.boxed(end),

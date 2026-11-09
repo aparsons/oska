@@ -8,6 +8,7 @@ use oska_syntax::Span;
 
 use crate::host::Host;
 use crate::panics::{codes, Panic};
+use crate::data;
 use crate::value::Value;
 
 /// An intrinsic: the host, the arguments (the receiver first), and the
@@ -24,7 +25,11 @@ pub const INTRINSICS: &[(&str, Intrinsic)] = &[
 
 /// The intrinsic named `name`.
 pub fn lookup(name: &str) -> Option<Intrinsic> {
-    INTRINSICS.iter().find(|(n, _)| *n == name).map(|(_, f)| *f)
+    INTRINSICS
+        .iter()
+        .chain(data::INTRINSICS)
+        .find(|(n, _)| *n == name)
+        .map(|(_, f)| *f)
 }
 
 /// The text of the string argument at `index`.

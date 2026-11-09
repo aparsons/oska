@@ -180,6 +180,9 @@ impl<T> List<T> {
     pub fn len(self) -> Int
     pub fn count(self) -> Int
     pub fn get(self, index: Int) -> Option<T>
+    // The item at `index`. An index out of bounds is a bug: it panics
+    // (`P0002`). Use `get` when the index may be out of bounds.
+    pub fn at(self, index: Int) -> T
     pub fn map<U>(self, f: fn(T) -> U) -> List<U>
 }
 

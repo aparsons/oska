@@ -122,3 +122,54 @@ fn on_axis(p: Point) -> Bool {
         "axes ok\nzero, minus one, other 7, 2, 2, unit\n",
     );
 }
+
+// ---- Lists -----------------------------------------------------------------
+
+#[test]
+fn a_list_literal_has_a_length_and_items_by_index() {
+    assert_runs(
+        &program(
+            "fn show(o: Option<Int>) -> String {
+    match o {
+        Some(n) => \"{n}\"
+        None => \"none\"
+    }
+}",
+            "    let xs = [10, 20, 30]
+    let n = xs.len()
+    let first = show(xs.get(0))
+    let past = show(xs.get(3))
+    let below = show(xs.get(-1))
+    var total = 0
+    for x in xs {
+        total = total + x
+    }
+    io.println(\"{n} {first} {past} {below} {total}\")",
+        ),
+        &[],
+        "3 10 none none 60\n",
+    );
+}
+
+#[test]
+fn indexing_a_list_reads_the_item_at_that_index() {
+    assert_runs(
+        &main_with("    let xs = [\"a\", \"b\"]\n    let b = xs.at(1)\n    io.println(b)"),
+        &[],
+        "b\n",
+    );
+}
+
+#[test]
+fn indexing_past_the_end_of_a_list_panics_with_p0002() {
+    assert_panics(
+        &main_with("    let xs = [1, 2]\n    let n = xs.at(2)\n    io.println(\"{n}\")"),
+        "P0002",
+        "xs.at(2)",
+    );
+    assert_panics(
+        &main_with("    let xs = [1, 2]\n    let n = xs.at(-1)\n    io.println(\"{n}\")"),
+        "P0002",
+        "xs.at(-1)",
+    );
+}

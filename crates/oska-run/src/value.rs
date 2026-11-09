@@ -34,6 +34,8 @@ pub enum Value {
         start: i128,
         end: i128,
     },
+    /// A `List`'s items.
+    List(Rc<Vec<Value>>),
     /// An instance of a struct, by type name, with its fields in
     /// declaration order.
     Struct {
@@ -128,6 +130,14 @@ impl Value {
         match self {
             Value::Int(n) => *n,
             other => unreachable!("the checker guarantees an integer, found {other:?}"),
+        }
+    }
+
+    /// The items of the `List` the checker guarantees this is.
+    pub fn as_list(&self) -> &Rc<Vec<Value>> {
+        match self {
+            Value::List(items) => items,
+            other => unreachable!("the checker guarantees a list, found {other:?}"),
         }
     }
 
