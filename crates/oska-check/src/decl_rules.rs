@@ -249,8 +249,13 @@ fn main(src: &str, module: &Module, f: &FnDecl, decls: &Decls, diagnostics: &mut
         return;
     };
     let display = single_name(error).is_some_and(|name| {
-        decls.prelude_items().any(|item| implements_display(item, name))
-            || module.items.iter().any(|item| implements_display(item, name))
+        decls
+            .prelude_items()
+            .any(|item| implements_display(item, name))
+            || module
+                .items
+                .iter()
+                .any(|item| implements_display(item, name))
     });
     // An unknown name is already reported by name resolution.
     let known = single_name(error).is_some_and(|name| decls.get(name).is_some());

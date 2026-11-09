@@ -2,7 +2,7 @@
 
 use std::sync::OnceLock;
 
-use oska_syntax::ast::Module;
+use oska_syntax::ast::{ItemKind, Module};
 
 /// The prelude's source text. Read `prelude.osk` for what is in scope.
 pub const SOURCE: &str = include_str!("prelude.osk");
@@ -74,6 +74,23 @@ impl StdModule {
             .expect("every std module is in STD_MODULES");
         &modules[index]
     }
+
+    /// The names of the module's `pub` functions, types, and traits: what
+    /// a `use` brace group may name.
+    pub fn exports(&self) -> Vec<&'static str> {
+        self.module()
+            .items
+            .iter()
+            .filter(|item| item.public)
+            .filter_map(|item| match &item.kind {
+                ItemKind::Fn(f) => Some(f.name.name.as_str()),
+                ItemKind::Struct(s) => Some(s.name.name.as_str()),
+                ItemKind::Enum(e) => Some(e.name.name.as_str()),
+                ItemKind::Trait(t) => Some(t.name.name.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 /// Prelude functions that `--release` rejects.
@@ -104,5 +121,35 @@ mod tests {
             .map(|d| format!("{d}: {:?}", &super::SOURCE[d.span.start..d.span.end]))
             .collect();
         assert!(found.is_empty(), "prelude.osk: {found:#?}");
+    }
+
+    #[test]
+    fn every_name_in_each_std_module_resolves_once_imported() {
+        for std in super::STD_MODULES {
+            let importer =
+                oska_syntax::parse_module(&format!("use {}", std.path)).expect("a use parses");
+            let mut diagnostics = Vec::new();
+            let decls = Decls::collect(&importer, &mut diagnostics);
+            resolve::module(std.module(), &decls, &mut diagnostics);
+            let found: Vec<String> = diagnostics
+                .iter()
+                .map(|d| format!("{d}: {:?}", &std.source[d.span.start..d.span.end]))
+                .collect();
+            assert!(found.is_empty(), "{}: {found:#?}", std.path);
+        }
+    }
+
+    #[test]
+    fn each_sink_literal_type_is_exported_by_its_module() {
+        for std in super::STD_MODULES {
+            if let Some(literal) = &std.sink_literal {
+                assert!(
+                    std.exports().contains(&literal.ty),
+                    "{} does not export `{}`",
+                    std.path,
+                    literal.ty
+                );
+            }
+        }
     }
 }

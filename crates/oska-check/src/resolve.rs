@@ -53,7 +53,7 @@ pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>)
                 resolver.methods(&imp.methods);
                 resolver.exit(&imp.generics);
             }
-            ItemKind::Use(u) => resolver.use_decl(&u.path),
+            ItemKind::Use(u) => resolver.use_decl(&u.path, u.names.as_deref()),
             ItemKind::Test(_) => {}
         }
     }
@@ -220,10 +220,11 @@ impl Resolver<'_, '_> {
         ));
     }
 
-    /// `use std.module`: only the standard library can be imported, and
-    /// only modules that exist. The brace group is not checked: its names
-    /// are only known once the module is.
-    fn use_decl(&mut self, path: &[Ident]) {
+    /// `use std.module` or `use std.module.{names}`: only the standard
+    /// library can be imported, only modules that exist, and only names
+    /// the module exports. The brace group is checked only once the module
+    /// is known.
+    fn use_decl(&mut self, path: &[Ident], names: Option<&[Ident]>) {
         let (Some(first), Some(last)) = (path.first(), path.last()) else {
             return;
         };
@@ -244,7 +245,7 @@ impl Resolver<'_, '_> {
             ));
             return;
         }
-        if prelude::std_module(&written).is_none() {
+        let Some(module) = prelude::std_module(&written) else {
             let paths: Vec<&str> = prelude::STD_MODULES.iter().map(|m| m.path).collect();
             self.diagnostics.push(suggest::unknown(
                 codes::UNKNOWN_MODULE,
@@ -253,6 +254,19 @@ impl Resolver<'_, '_> {
                 span,
                 &paths,
             ));
+            return;
+        };
+        let exports = module.exports();
+        for name in names.unwrap_or_default() {
+            if !exports.contains(&name.name.as_str()) {
+                self.diagnostics.push(suggest::unknown(
+                    codes::NOT_EXPORTED,
+                    format!("`{written}` has no `{}`", name.name),
+                    &name.name,
+                    name.span,
+                    &exports,
+                ));
+            }
         }
     }
 }

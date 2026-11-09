@@ -4,7 +4,7 @@
 
 The exit code is non-zero when there are diagnostics. Without `--format=json`, diagnostics go to stderr and the authority report to stdout, one function per line, such as `fn main: Stdout (io), FsRead (fs)` or `fn add: pure`.
 
-Type and trait names in signatures and declarations are resolved, declarations are checked (`cap`, `main`, capitalization, recursive types, and where a `Scope` may appear), functions, methods, and impls are checked for duplicates, and under `--release` every body is scanned for `dbg(...)` and `todo()`. A `use` must name a `std.*` module; no `std.*` modules exist yet, so every `use` is an error for now (`E0294` or `E0295`). Function, method, constant, and test bodies are type-checked with local, bidirectional inference: `let` types come from initializers, the expected type flows into literals, generic constructors, and closures, and an expression that fails gets an error type so it causes only one diagnostic.
+Type and trait names in signatures and declarations are resolved, declarations are checked (`cap`, `main`, capitalization, recursive types, and where a `Scope` may appear), functions, methods, and impls are checked for duplicates, and under `--release` every body is scanned for `dbg(...)` and `todo()`. A `use` must name a `std.*` module that exists (`E0294`, `E0295`); see [`std` modules](#std-modules) for which do. Function, method, constant, and test bodies are type-checked with local, bidirectional inference: `let` types come from initializers, the expected type flows into literals, generic constructors, and closures, and an expression that fails gets an error type so it causes only one diagnostic.
 
 Contract clauses are type-checked but not evaluated: `requires` and `ensures` conditions must be `Bool`, they see the parameters (and `self`), `ensures |r|` binds `r` to the return type, and a contract may call only pure functions (`E0280`). A trait method's contract is checked even without a body.
 
@@ -35,6 +35,16 @@ A `test` body sees one built-in value, `t`, of the prelude type `TestContext`. I
 ## The prelude
 
 The prelude is Oska source, `crates/oska-check/src/prelude.osk`, parsed with `parse_prelude`. It declares the built-in capabilities as `#[capability]` structs with private fields, the core types (`Option`, `Result`, `List`, `Range`, `Path`, `Args`, `IoError`) with the few methods the examples and tests use, structured concurrency (`Scope`, whose `spawn(task: cap fn() -> T)` returns a `Task<T>`, whose `join()` returns `T`; `scope |s| { ... }` binds `s: Scope`), the `dbg` and `todo` functions, `TestContext` (the type of `t` in tests), and the core traits (`Eq`, `Hash`, `Display`, `From`). The primitive types (`Int`, `I8` to `I64`, `U8` to `U64`, `Bool`, `String`) and `()` are built into the checker. The prelude implements `Display` for `String`, `Int`, and `IoError`. User code cannot redeclare any of these names.
+
+### `std` modules
+
+A `std.*` module is also prelude-mode Oska source, `crates/oska-check/src/std/<name>.osk`, registered in `STD_MODULES` in `src/prelude.rs`. Its declarations are in scope only in a module that imports it: `use std.sql` and `use std.sql.{SqlLiteral}` both bring all of `std.sql` in, and a brace group may only name what the module exports (`E0312`). Without the `use`, its names are unknown (`E0200`). The modules that exist are:
+
+| Module | Exports | Sink literal |
+| --- | --- | --- |
+| `std.sql` | `SqlLiteral` | `sql"..."` has type `SqlLiteral` |
+
+A sink literal's tag names the module that provides it. The literal has the type that module declares for it, and the module must be imported (`E0310`). A tag no module provides is `E0311`. The sink modules are signature-only; their runtime implementations come with the interpreter.
 
 ## Diagnostic codes
 
@@ -91,4 +101,7 @@ The prelude is Oska source, `crates/oska-check/src/prelude.osk`, parsed with `pa
 | `E0292` | A `Scope` handle that could outlive its `scope` block: `Scope` in a function's or method's return type, in a struct or enum field's type, or in the type of a `scope` block's value, including inside wrappers such as `Option<Scope>` or `List<Scope>`. `Scope` stays allowed as a parameter type. Spans the type, or the `scope` expression. | None. |
 | `E0293` | A call to `todo()` when checking with `--release`. Spans the call. | None. |
 | `E0294` | A `use` whose path does not start with `std.`: only the standard library can be imported. Spans the path. | None. |
-| `E0295` | A `use std.*` of a module that does not exist. No `std.*` modules exist yet, so for now every `use std.*` reports this. Spans the module path. | Replace the path with the single closest module, when one is close enough. |
+| `E0295` | A `use std.*` of a module that does not exist. Spans the module path. | Replace the path with the single closest module, when one is close enough. |
+| `E0310` | A sink literal, such as `sql"..."`, whose module is not imported. Spans the tag. | Insert `use std.<module>` at the start of the file. |
+| `E0311` | A sink literal whose tag no `std.*` module provides, such as `sqll"..."`. Spans the tag. | Replace the tag with the single closest known tag, when one is close enough. |
+| `E0312` | A name in a `use` brace group that the module does not export, such as `use std.sql.{Query}`. Spans the name. | Replace the name with the single closest export, when one is close enough. |

@@ -64,7 +64,7 @@ fn every_example_checks_with_zero_diagnostics() {
 
 // ---- Documented codes ---------------------------------------------------------
 
-/// The `E02xx` codes defined in the `codes` module of `src/lib.rs`.
+/// The codes defined in the `codes` module of `src/lib.rs`.
 fn defined_codes() -> BTreeSet<String> {
     let lib = read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"));
     let module = lib
@@ -89,19 +89,18 @@ fn defined_codes() -> BTreeSet<String> {
     codes
 }
 
-/// The rows of a Markdown table that document an `E02xx` code, as the code
-/// and its cells after the code column.
+/// The rows of a Markdown table that document a checker code (`E02xx` or
+/// `E03xx`), as the code and its cells after the code column.
 fn documented_rows<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<(String, Vec<String>)> {
     lines
         .filter_map(|line| {
             let cells: Vec<&str> = line.trim().trim_matches('|').split('|').collect();
-            let code = cells
-                .first()?
-                .trim()
-                .strip_prefix("`E02")?
-                .strip_suffix('`')?;
+            let code = cells.first()?.trim().strip_prefix('`')?.strip_suffix('`')?;
+            if !(code.starts_with("E02") || code.starts_with("E03")) {
+                return None;
+            }
             let rest = cells[1..].iter().map(|c| c.trim().to_string()).collect();
-            Some((format!("E02{code}"), rest))
+            Some((code.to_string(), rest))
         })
         .collect()
 }

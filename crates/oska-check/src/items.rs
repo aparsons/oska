@@ -238,7 +238,12 @@ impl Items {
         items
     }
 
-    fn add<'i>(&mut self, items: impl IntoIterator<Item = &'i Item>, decls: &Decls, in_prelude: bool) {
+    fn add<'i>(
+        &mut self,
+        items: impl IntoIterator<Item = &'i Item>,
+        decls: &Decls,
+        in_prelude: bool,
+    ) {
         for item in items {
             match &item.kind {
                 ItemKind::Fn(f) => {
