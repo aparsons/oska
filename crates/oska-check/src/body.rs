@@ -25,8 +25,8 @@
 //!   the closure's parameters were pushed.
 
 use oska_syntax::ast::{
-    Arg, BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, ItemKind, MatchArm,
-    Module, Pattern, PatternKind, StmtKind, StrPart, UnaryOp,
+    Arg, BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, ItemKind, MatchArm, Module,
+    Pattern, PatternKind, StmtKind, StrPart, UnaryOp,
 };
 use oska_syntax::{Diagnostic, Edit, Span};
 
@@ -235,9 +235,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         if self.local(&ident.name).is_some() {
             return None;
         }
-        self.decls()
-            .get(&ident.name)
-            .map(|_| ident.name.clone())
+        self.decls().get(&ident.name).map(|_| ident.name.clone())
     }
 
     // ---- Expressions ----------------------------------------------------
@@ -575,9 +573,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 Some(type_name) => self.type_member(&type_name, name),
                 None => return self.method_call(base, name, args, expected, expr.span),
             },
-            ExprKind::Name(ident) if self.local(&ident.name).is_none() => {
-                self.named_callee(ident)
-            }
+            ExprKind::Name(ident) if self.local(&ident.name).is_none() => self.named_callee(ident),
             _ => {
                 let ty = self.infer(callee);
                 match self.infer.resolve(&ty) {
@@ -896,8 +892,13 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     /// Report `place` when its root binding is not mutable. `action`
     /// completes "cannot ... `name`".
     fn require_mutable(&mut self, place: &Expr, code: &'static str, action: &str) {
+        self.require_mutable_root(place, place.span, code, action);
+    }
+
+    /// Find `place`'s root binding, reporting at `span`, the whole place.
+    fn require_mutable_root(&mut self, place: &Expr, span: Span, code: &'static str, action: &str) {
         match &place.kind {
-            ExprKind::Field { base, .. } => self.require_mutable(base, code, action),
+            ExprKind::Field { base, .. } => self.require_mutable_root(base, span, code, action),
             ExprKind::Name(ident) => {
                 let Some(local) = self.local(&ident.name) else {
                     return;
@@ -908,7 +909,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     Binding::Let(keyword) => Diagnostic::new(
                         code,
                         format!("cannot {action} `{name}`, which is declared with `let`"),
-                        place.span,
+                        span,
                     )
                     .with_fix(
                         format!("declare `{name}` with `var`"),
@@ -920,7 +921,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     Binding::Param | Binding::Loop | Binding::Pattern => Diagnostic::new(
                         code,
                         format!("cannot {action} `{name}`, which is not a `var` binding"),
-                        place.span,
+                        span,
                     ),
                 };
                 self.diagnostics.push(diagnostic);
@@ -937,7 +938,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     Diagnostic::new(
                         code,
                         format!("cannot {action} `self` in a method that takes `self`"),
-                        place.span,
+                        span,
                     )
                     .with_fix(
                         "make this a mutating method with `var self`",
@@ -997,17 +998,11 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 Ty::bool()
             }
             BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
-                let ty = self.operands(lhs, rhs, None);
-                self.require_number(op, &ty, expr.span);
+                self.numeric_operands(expr, op, lhs, rhs, None);
                 Ty::bool()
             }
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
-                let ty = self.operands(lhs, rhs, expected);
-                if self.require_number(op, &ty, expr.span) {
-                    ty
-                } else {
-                    Ty::Error
-                }
+                self.numeric_operands(expr, op, lhs, rhs, expected)
             }
         }
     }
@@ -1016,19 +1011,37 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     /// literal operand takes the other operand's type, so `1 + x` works
     /// for any integer `x`.
     fn operands(&mut self, lhs: &Expr, rhs: &Expr, expected: Option<&Ty>) -> Ty {
-        if is_int_literal(lhs) && !is_int_literal(rhs) {
-            let ty = self.expr(rhs, expected);
-            self.check(lhs, &ty);
-            ty
-        } else {
-            let ty = self.expr(lhs, expected);
-            let rhs_ty = self.check(rhs, &ty);
-            if ty.is_error() {
-                rhs_ty
-            } else {
-                ty
-            }
+        let (first, second) = literal_last(lhs, rhs);
+        let ty = self.expr(first, expected);
+        let ty = self.infer.resolve(&ty);
+        if ty.is_error() {
+            self.infer(second);
+            return Ty::Error;
         }
+        self.check(second, &ty)
+    }
+
+    /// The operands of an arithmetic or comparison operator: numbers of
+    /// one type. Returns that type, or [`Ty::Error`].
+    fn numeric_operands(
+        &mut self,
+        expr: &Expr,
+        op: BinaryOp,
+        lhs: &Expr,
+        rhs: &Expr,
+        expected: Option<&Ty>,
+    ) -> Ty {
+        let expected = expected.filter(|e| self.infer.shallow(e).is_integer());
+        let (first, second) = literal_last(lhs, rhs);
+        // Report a non-number before comparing the operands, so that
+        // `s + 1` is one error about `+`.
+        let ty = self.expr(first, expected);
+        if !self.require_number(op, &ty, expr.span) {
+            self.infer(second);
+            return Ty::Error;
+        }
+        self.check(second, &ty);
+        ty
     }
 
     /// Report `op` on a non-number. Returns whether `ty` is acceptable.
@@ -1272,7 +1285,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             } => {
                 let ty = self.infer(iter);
                 let element = match self.infer.resolve(&ty) {
-                    Ty::Named(name, args) if (name == "List" || name == "Range") && args.len() == 1 => {
+                    Ty::Named(name, args)
+                        if (name == "List" || name == "Range") && args.len() == 1 =>
+                    {
                         args[0].clone()
                     }
                     Ty::Error => Ty::Error,
@@ -1318,6 +1333,16 @@ impl Callable {
             params: self.params.into_iter().map(|(_, t)| t).collect(),
             ret: Box::new(self.ret),
         }
+    }
+}
+
+/// The operands in checking order: an integer literal goes second, so
+/// it takes the other operand's type.
+fn literal_last<'e>(lhs: &'e Expr, rhs: &'e Expr) -> (&'e Expr, &'e Expr) {
+    if is_int_literal(lhs) && !is_int_literal(rhs) {
+        (rhs, lhs)
+    } else {
+        (lhs, rhs)
     }
 }
 

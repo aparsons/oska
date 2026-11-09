@@ -6,8 +6,9 @@
 //! produced even when there are errors. [`CheckReport::to_json`] is what
 //! `oskac check --format=json` prints; `docs/checker.md` describes it.
 //!
-//! The pipeline runs in order: collect declarations, resolve names, then
-//! compute authority. Function bodies are not checked yet.
+//! The pipeline runs in order: collect declarations, resolve names, check
+//! function bodies (`body.rs`, with local bidirectional inference), then
+//! compute authority.
 //!
 //! # Diagnostic codes
 //!
@@ -19,6 +20,22 @@
 //! | `E0200` | Unknown type or trait name. The fix replaces it with the single closest name, when there is one. |
 //! | `E0201` | A trait used where a type is expected, or a type used where a trait is expected. |
 //! | `E0202` | A type or trait name declared twice, or one that redeclares a prelude name. |
+//! | `E0220` | Type mismatch: an expression's type differs from the type expected there. There are no implicit conversions. |
+//! | `E0221` | Unknown value name, or `self` outside a method with a receiver. |
+//! | `E0222` | Integer literal out of range for its type, such as `300` as a `U8`. |
+//! | `E0223` | Operator not defined for its operand's type: arithmetic and ordering need numbers (`+` is not for strings), unary `-` needs a signed number, `..` needs integers. |
+//! | `E0224` | Wrong number of arguments in a call or construction. |
+//! | `E0225` | Argument label that does not match its parameter or field, or a label on a positional field. |
+//! | `E0226` | Named field constructed without its label. |
+//! | `E0227` | Unknown field, or a method used without calling it. |
+//! | `E0228` | Unknown method, variant, or associated function, or an associated function called on a value. |
+//! | `E0229` | Assignment to something that is not a `var` binding: a `let` binding, a parameter, or a field of `self` in a method without `var self`. |
+//! | `E0230` | Mutating method (`var self`) called on something that is not a `var` binding. |
+//! | `E0231` | Call of a value that is not a function. |
+//! | `E0232` | `break` or `continue` outside a loop. |
+//! | `E0233` | A type that inference cannot work out, such as `let xs = List.new()` with no later use. |
+//! | `E0234` | A type name used as a value, or a type that cannot be constructed. |
+//! | `E0235` | `for` over a value that is not a `List` or a range. |
 
 use oska_syntax::Diagnostic;
 

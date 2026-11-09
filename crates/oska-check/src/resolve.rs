@@ -1,5 +1,5 @@
 //! Name resolution for the type and trait names in signatures and
-//! declarations. Function bodies are not resolved yet.
+//! declarations. Names in function bodies are resolved by `body.rs`.
 
 use oska_syntax::ast::{FnDecl, GenericParam, Ident, ItemKind, Module, Type, TypeKind};
 use oska_syntax::{Diagnostic, Edit, Span};

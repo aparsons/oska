@@ -641,7 +641,7 @@
     },
     {
       "kind": "FnItem",
-      "span": {"start": 1113, "end": 1520},
+      "span": {"start": 1113, "end": 1532},
       "public": false,
       "attributes": [],
       "name": {"kind": "Ident", "span": {"start": 1116, "end": 1120}, "name": "main"},
@@ -733,7 +733,7 @@
       "ensures": [],
       "body": {
         "kind": "Block",
-        "span": {"start": 1181, "end": 1520},
+        "span": {"start": 1181, "end": 1532},
         "stmts": [
           {
             "kind": "LetStmt",
@@ -942,50 +942,74 @@
           },
           {
             "kind": "ExprStmt",
-            "span": {"start": 1494, "end": 1518},
+            "span": {"start": 1494, "end": 1519},
+            "expr": {
+              "kind": "TryExpr",
+              "span": {"start": 1494, "end": 1519},
+              "operand": {
+                "kind": "CallExpr",
+                "span": {"start": 1494, "end": 1518},
+                "callee": {
+                  "kind": "FieldExpr",
+                  "span": {"start": 1494, "end": 1504},
+                  "base": {
+                    "kind": "NameExpr",
+                    "span": {"start": 1494, "end": 1496},
+                    "name": "io"
+                  },
+                  "name": {
+                    "kind": "Ident",
+                    "span": {"start": 1497, "end": 1504},
+                    "name": "println"
+                  }
+                },
+                "args": [
+                  {
+                    "kind": "Arg",
+                    "span": {"start": 1505, "end": 1517},
+                    "value": {
+                      "kind": "StrExpr",
+                      "span": {"start": 1505, "end": 1517},
+                      "parts": [
+                        {
+                          "kind": "StrText",
+                          "span": {"start": 1506, "end": 1513},
+                          "value": "lines: "
+                        },
+                        {
+                          "kind": "StrHole",
+                          "span": {"start": 1513, "end": 1516},
+                          "path": [
+                            {
+                              "kind": "Ident",
+                              "span": {"start": 1514, "end": 1515},
+                              "name": "n"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "kind": "ExprStmt",
+            "span": {"start": 1524, "end": 1530},
             "expr": {
               "kind": "CallExpr",
-              "span": {"start": 1494, "end": 1518},
+              "span": {"start": 1524, "end": 1530},
               "callee": {
-                "kind": "FieldExpr",
-                "span": {"start": 1494, "end": 1504},
-                "base": {
-                  "kind": "NameExpr",
-                  "span": {"start": 1494, "end": 1496},
-                  "name": "io"
-                },
-                "name": {
-                  "kind": "Ident",
-                  "span": {"start": 1497, "end": 1504},
-                  "name": "println"
-                }
+                "kind": "NameExpr",
+                "span": {"start": 1524, "end": 1526},
+                "name": "Ok"
               },
               "args": [
                 {
                   "kind": "Arg",
-                  "span": {"start": 1505, "end": 1517},
-                  "value": {
-                    "kind": "StrExpr",
-                    "span": {"start": 1505, "end": 1517},
-                    "parts": [
-                      {
-                        "kind": "StrText",
-                        "span": {"start": 1506, "end": 1513},
-                        "value": "lines: "
-                      },
-                      {
-                        "kind": "StrHole",
-                        "span": {"start": 1513, "end": 1516},
-                        "path": [
-                          {
-                            "kind": "Ident",
-                            "span": {"start": 1514, "end": 1515},
-                            "name": "n"
-                          }
-                        ]
-                      }
-                    ]
-                  }
+                  "span": {"start": 1527, "end": 1529},
+                  "value": {"kind": "UnitExpr", "span": {"start": 1527, "end": 1529}}
                 }
               ]
             }
