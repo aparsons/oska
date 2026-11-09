@@ -249,11 +249,7 @@ impl Lexer<'_> {
         loop {
             match self.bump() {
                 None => {
-                    return Err(self.error(
-                        "E0002",
-                        "unterminated string literal".into(),
-                        start,
-                    ));
+                    return Err(self.error("E0002", "unterminated string literal".into(), start));
                 }
                 Some('"') => break,
                 Some('\\') => {
