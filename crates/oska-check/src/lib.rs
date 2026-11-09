@@ -7,8 +7,10 @@
 //! `oskac check --format=json` prints; `docs/checker.md` describes it.
 //!
 //! The pipeline runs in order: collect declarations, resolve names, check
+//! declarations (`cap`, `main`, capitalization, recursive types), check
 //! function bodies (`body.rs`, with local bidirectional inference), then
-//! compute authority.
+//! compute authority. Under `--release`, bodies are also scanned for
+//! `dbg(...)`.
 //!
 //! # Diagnostic codes
 //!
@@ -20,6 +22,13 @@
 //! | `E0200` | Unknown type or trait name. The fix replaces it with the single closest name, when there is one. |
 //! | `E0201` | A trait used where a type is expected, or a type used where a trait is expected. |
 //! | `E0202` | A type or trait name declared twice, or one that redeclares a prelude name. |
+//! | `E0210` | A struct or enum whose own fields name a capability-bearing type is not declared `cap`. The fix inserts `cap`. |
+//! | `E0211` | A `main` parameter that is not a built-in capability or `Args`. |
+//! | `E0212` | `main` returns something other than `()` or `Result<(), E>`, or `E` does not implement `Display`. |
+//! | `E0213` | A type, variant, trait, or type parameter name that does not start uppercase. |
+//! | `E0214` | A function, field, or parameter name that starts uppercase. |
+//! | `E0215` | A recursive struct or enum with no base case. |
+//! | `E0216` | `dbg(...)` under `--release`. |
 //! | `E0220` | Type mismatch: an expression's type differs from the type expected there. There are no implicit conversions. |
 //! | `E0221` | Unknown value name, or `self` outside a method with a receiver. |
 //! | `E0222` | Integer literal out of range for its type, such as `300` as a `U8`. |
@@ -41,10 +50,13 @@ use oska_syntax::Diagnostic;
 
 mod authority;
 mod body;
+mod declarations;
 mod decls;
 mod infer;
 mod items;
 mod prelude;
+mod recursion;
+mod release;
 mod resolve;
 mod ty;
 
@@ -53,6 +65,13 @@ pub(crate) mod codes {
     pub const UNKNOWN_NAME: &str = "E0200";
     pub const WRONG_NAMESPACE: &str = "E0201";
     pub const DUPLICATE_NAME: &str = "E0202";
+    pub const CAP_REQUIRED: &str = "E0210";
+    pub const MAIN_PARAM: &str = "E0211";
+    pub const MAIN_RETURN: &str = "E0212";
+    pub const NOT_UPPERCASE: &str = "E0213";
+    pub const NOT_LOWERCASE: &str = "E0214";
+    pub const NO_BASE_CASE: &str = "E0215";
+    pub const DBG_IN_RELEASE: &str = "E0216";
     pub const MISMATCH: &str = "E0220";
     pub const UNKNOWN_VALUE: &str = "E0221";
     pub const LITERAL_OUT_OF_RANGE: &str = "E0222";
@@ -174,7 +193,7 @@ pub fn check_module(src: &str) -> CheckReport {
 
 /// Check `src` as a module. A parse error is reported as the only
 /// diagnostic, with no functions.
-pub fn check_module_with(src: &str, _options: CheckOptions) -> CheckReport {
+pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
     let module = match oska_syntax::parse_module(src) {
         Ok(module) => module,
         Err(err) => {
@@ -187,6 +206,11 @@ pub fn check_module_with(src: &str, _options: CheckOptions) -> CheckReport {
     let mut diagnostics = Vec::new();
     let decls = decls::Decls::collect(&module, &mut diagnostics);
     resolve::module(&module, &decls, &mut diagnostics);
+    declarations::module(src, &module, &decls, &mut diagnostics);
+    recursion::module(&module, &mut diagnostics);
+    if options.release {
+        release::module(&module, &mut diagnostics);
+    }
     let items = items::Items::collect(&module, &decls);
     body::module(&module, &decls, &items, &mut diagnostics);
     let functions = authority::report(&module, &decls);

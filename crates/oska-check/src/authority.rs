@@ -98,6 +98,12 @@ fn generics_env(generics: &[GenericParam]) -> Env {
         .collect()
 }
 
+/// Whether `ty`, as written outside any generic scope, is
+/// capability-bearing. Type variables are not.
+pub fn bearing(ty: &Type, generics: &[GenericParam], decls: &Decls) -> bool {
+    reach(ty, &generics_env(generics), decls, &mut Vec::new()).bearing
+}
+
 /// The last segment of a type's path, such as `Logger` for
 /// `Logger<T>`.
 fn type_name(ty: &Type) -> String {

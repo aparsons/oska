@@ -1,0 +1,263 @@
+//! Declaration-level rules: `cap` on types whose own fields name a
+//! capability, `main` as the root of authority, and capitalization
+//! (ADR 0005).
+
+use oska_syntax::ast::{
+    Fields, FnDecl, GenericParam, Ident, Item, ItemKind, Module, Type, TypeKind,
+};
+use oska_syntax::{Diagnostic, Edit, Span};
+
+use crate::authority;
+use crate::codes;
+use crate::decls::{field_types, DeclKind, Decls};
+use crate::prelude;
+
+/// Report every declaration-level error in `module`.
+pub fn module(src: &str, module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
+    for item in &module.items {
+        cap_required(src, item, decls, diagnostics);
+        capitalization(item, diagnostics);
+        if let ItemKind::Fn(f) = &item.kind {
+            if f.name.name == "main" {
+                main(src, module, f, decls, diagnostics);
+            }
+        }
+    }
+}
+
+/// Types, variants, traits, and type parameters start uppercase.
+/// Functions, fields, and parameters start lowercase.
+fn capitalization(item: &Item, diagnostics: &mut Vec<Diagnostic>) {
+    let mut names = Names::default();
+    match &item.kind {
+        ItemKind::Fn(f) => names.function(f),
+        ItemKind::Struct(s) => {
+            names.upper(&s.name, "type");
+            names.generics(&s.generics);
+            names.fields(&s.fields);
+        }
+        ItemKind::Enum(e) => {
+            names.upper(&e.name, "type");
+            names.generics(&e.generics);
+            for variant in &e.variants {
+                names.upper(&variant.name, "variant");
+                names.fields(&variant.fields);
+            }
+        }
+        ItemKind::Trait(t) => {
+            names.upper(&t.name, "trait");
+            names.generics(&t.generics);
+            names.methods(&t.methods);
+        }
+        ItemKind::Impl(imp) => {
+            names.generics(&imp.generics);
+            names.methods(&imp.methods);
+        }
+        ItemKind::Use(_) | ItemKind::Const(_) | ItemKind::Test(_) => {}
+    }
+    diagnostics.extend(names.diagnostics);
+}
+
+/// Collects capitalization errors for the names one item declares.
+#[derive(Default)]
+struct Names {
+    diagnostics: Vec<Diagnostic>,
+}
+
+impl Names {
+    fn upper(&mut self, ident: &Ident, noun: &str) {
+        if !ident.name.starts_with(|c: char| c.is_ascii_uppercase()) {
+            self.diagnostics.push(Diagnostic::new(
+                codes::NOT_UPPERCASE,
+                format!(
+                    "{noun} name `{}` must start with an uppercase letter",
+                    ident.name
+                ),
+                ident.span,
+            ));
+        }
+    }
+
+    /// A leading `_` counts as lowercase.
+    fn lower(&mut self, ident: &Ident, noun: &str) {
+        if ident.name.starts_with(|c: char| c.is_ascii_uppercase()) {
+            self.diagnostics.push(Diagnostic::new(
+                codes::NOT_LOWERCASE,
+                format!(
+                    "{noun} name `{}` must start with a lowercase letter",
+                    ident.name
+                ),
+                ident.span,
+            ));
+        }
+    }
+
+    fn generics(&mut self, generics: &[GenericParam]) {
+        for g in generics {
+            self.upper(&g.name, "type parameter");
+        }
+    }
+
+    fn fields(&mut self, fields: &Fields) {
+        if let Fields::Named(fields) = fields {
+            for field in fields {
+                if let Some(name) = &field.name {
+                    self.lower(name, "field");
+                }
+            }
+        }
+    }
+
+    fn methods(&mut self, methods: &[Item]) {
+        for method in methods {
+            if let ItemKind::Fn(f) = &method.kind {
+                self.function(f);
+            }
+        }
+    }
+
+    fn function(&mut self, f: &FnDecl) {
+        self.lower(&f.name, "function");
+        self.generics(&f.generics);
+        for param in &f.params {
+            self.lower(&param.name, "parameter");
+        }
+    }
+}
+
+/// `main` is the root of authority: it takes only built-in capabilities
+/// and `Args`, and returns `()` or `Result<(), E>` with `E: Display`.
+fn main(src: &str, module: &Module, f: &FnDecl, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
+    for param in &f.params {
+        // An unknown name is already reported by name resolution.
+        let allowed = match single_name(&param.ty) {
+            Some(name) => match decls.get(name) {
+                Some(decl) => name == "Args" || decl.kind == DeclKind::Capability,
+                None => true,
+            },
+            None => false,
+        };
+        if !allowed {
+            diagnostics.push(Diagnostic::new(
+                codes::MAIN_PARAM,
+                format!(
+                    "`main` can only take built-in capabilities and `Args`, not `{}`",
+                    text(src, &param.ty)
+                ),
+                param.ty.span,
+            ));
+        }
+    }
+    let Some(ret) = &f.return_type else {
+        return;
+    };
+    if let TypeKind::Unit = ret.kind {
+        return;
+    }
+    let error = match &ret.kind {
+        TypeKind::Path { segments, args } if is_named(segments, "Result") => {
+            match args.as_slice() {
+                [ok, error] if matches!(ok.kind, TypeKind::Unit) => Some(error),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let Some(error) = error else {
+        diagnostics.push(Diagnostic::new(
+            codes::MAIN_RETURN,
+            format!(
+                "`main` must return `()` or `Result<(), E>`, not `{}`",
+                text(src, ret)
+            ),
+            ret.span,
+        ));
+        return;
+    };
+    let display = single_name(error).is_some_and(|name| {
+        implements_display(prelude::module(), name) || implements_display(module, name)
+    });
+    // An unknown name is already reported by name resolution.
+    let known = single_name(error).is_some_and(|name| decls.get(name).is_some());
+    if known && !display {
+        diagnostics.push(Diagnostic::new(
+            codes::MAIN_RETURN,
+            format!(
+                "`main` can return `Result<(), {0}>` only if `{0}` implements `Display`",
+                text(src, error)
+            ),
+            error.span,
+        ));
+    }
+}
+
+/// Whether `module` has an `impl Display for name`.
+fn implements_display(module: &Module, name: &str) -> bool {
+    module.items.iter().any(|item| match &item.kind {
+        ItemKind::Impl(imp) => {
+            imp.trait_ref
+                .as_ref()
+                .is_some_and(|t| single_name(t) == Some("Display"))
+                && single_name(&imp.target) == Some(name)
+        }
+        _ => false,
+    })
+}
+
+/// The name of a one-segment path type with no type arguments.
+fn single_name(ty: &Type) -> Option<&str> {
+    match &ty.kind {
+        TypeKind::Path { segments, args } if args.is_empty() => match segments.as_slice() {
+            [ident] => Some(ident.name.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn is_named(segments: &[oska_syntax::ast::Ident], name: &str) -> bool {
+    matches!(segments, [ident] if ident.name == name)
+}
+
+fn text<'s>(src: &'s str, ty: &Type) -> &'s str {
+    &src[ty.span.start..ty.span.end]
+}
+
+/// A struct or enum whose own fields name a capability must be `cap`.
+fn cap_required(src: &str, item: &Item, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
+    let (keyword, name, generics, fields) = match &item.kind {
+        ItemKind::Struct(s) if !s.cap => ("struct", &s.name, &s.generics, field_types(&s.fields)),
+        ItemKind::Enum(e) if !e.cap => {
+            let fields = e.variants.iter().flat_map(|v| field_types(&v.fields));
+            ("enum", &e.name, &e.generics, fields.collect())
+        }
+        _ => return,
+    };
+    let Some(field) = fields
+        .into_iter()
+        .find(|ty| authority::bearing(ty, generics, decls))
+    else {
+        return;
+    };
+    let field_text = text(src, field);
+    let mut diagnostic = Diagnostic::new(
+        codes::CAP_REQUIRED,
+        format!(
+            "`{}` holds the capability-bearing type `{field_text}`, so it must be declared `cap {keyword}`",
+            name.name
+        ),
+        name.span,
+    );
+    // Between the item's start and its name, the keyword is the last word.
+    if let Some(offset) = src[item.span.start..name.span.start].rfind(keyword) {
+        let at = item.span.start + offset;
+        diagnostic = diagnostic.with_fix(
+            format!("declare it `cap {keyword}`"),
+            vec![Edit {
+                span: Span { start: at, end: at },
+                replacement: "cap ".to_string(),
+            }],
+        );
+    }
+    diagnostics.push(diagnostic);
+}
