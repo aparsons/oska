@@ -127,6 +127,16 @@ pub enum ExprKind {
         callee: Callee,
         args: Vec<Expr>,
     },
+    /// A call of a **mutating method** (`var self`) on a place, such as
+    /// `xs.push(x)` or `self.items.push(x)`. The arguments are evaluated
+    /// first; then the receiver is taken out of `receiver`, so that a
+    /// value nothing else shares is changed in place, and the method's
+    /// final `self` is written back to it.
+    MutatingCall {
+        callee: Callee,
+        receiver: Place,
+        args: Vec<Expr>,
+    },
     /// A block: its statements in order, then its value.
     Block {
         stmts: Vec<Stmt>,
@@ -219,11 +229,17 @@ pub enum Pattern {
     },
 }
 
-/// Something that can be assigned to.
+/// Something that can be assigned to, or that a mutating method
+/// changes. Writing inside a value that is shared copies it first, so
+/// changing a copy never changes the original (ADR 0001).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Place {
     /// A local, by slot.
     Local(usize),
+    /// `self`, in a mutating method.
+    SelfValue,
+    /// Field `index` of the struct at `base`.
+    Field { base: Box<Place>, index: usize },
 }
 
 /// A part of an interpolated string.

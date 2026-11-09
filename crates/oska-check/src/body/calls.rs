@@ -419,7 +419,11 @@ impl Body<'_, '_, '_> {
             } else {
                 Callee::Function(qualified)
             };
-            self.record(span, Resolution::Method(callee));
+            let resolution = match sig.receiver {
+                Receiver::VarSelf => Resolution::MutatingMethod(callee),
+                _ => Resolution::Method(callee),
+            };
+            self.record(span, resolution);
         }
         let mut callable = self.instantiate(&sig, None);
         if let Some(declared) = &callable.receiver {

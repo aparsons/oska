@@ -15,6 +15,10 @@ use crate::value::Value;
 /// call's span, for panics.
 pub type Intrinsic = fn(&mut dyn Host, Vec<Value>, Span) -> Result<Value, Panic>;
 
+/// A mutating intrinsic, such as `List.push`: it changes its receiver in
+/// place, given the call's other arguments and its span.
+pub type MutatingIntrinsic = fn(&mut Value, Vec<Value>, Span) -> Result<Value, Panic>;
+
 /// Every intrinsic, by qualified name.
 pub const INTRINSICS: &[(&str, Intrinsic)] = &[
     ("Int.to_string", int_to_string),
@@ -30,6 +34,19 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         .chain(data::INTRINSICS)
         .find(|(n, _)| *n == name)
         .map(|(_, f)| *f)
+}
+
+/// The mutating intrinsic named `name`.
+pub fn lookup_mutating(name: &str) -> Option<MutatingIntrinsic> {
+    data::MUTATING
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, f)| *f)
+}
+
+/// Whether the intrinsic named `name` has a runtime implementation.
+pub fn implemented(name: &str) -> bool {
+    lookup(name).is_some() || lookup_mutating(name).is_some()
 }
 
 /// The text of the string argument at `index`.

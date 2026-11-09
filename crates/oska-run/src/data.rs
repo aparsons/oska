@@ -4,10 +4,12 @@
 //! `intrinsics.rs`, which looks in both tables. A list is a
 //! reference-counted vector (ADR 0001): reading one shares it.
 
+use std::rc::Rc;
+
 use oska_syntax::Span;
 
 use crate::host::Host;
-use crate::intrinsics::Intrinsic;
+use crate::intrinsics::{Intrinsic, MutatingIntrinsic};
 use crate::panics::{codes, Panic};
 use crate::value::Value;
 
@@ -17,7 +19,26 @@ pub const INTRINSICS: &[(&str, Intrinsic)] = &[
     ("List.count", list_len),
     ("List.get", list_get),
     ("List.len", list_len),
+    ("List.new", list_new),
 ];
+
+/// Every mutating data intrinsic, by qualified name.
+pub const MUTATING: &[(&str, MutatingIntrinsic)] = &[("List.push", list_push)];
+
+/// `List.new()`: an empty list.
+fn list_new(_: &mut dyn Host, _: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    Ok(Value::List(Rc::new(Vec::new())))
+}
+
+/// `List.push(var self, item)`: `item` added at the end. A list that is
+/// shared is copied first.
+fn list_push(list: &mut Value, mut args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    let Value::List(items) = list else {
+        unreachable!("the checker guarantees a list, found {list:?}");
+    };
+    Rc::make_mut(items).push(args.swap_remove(0));
+    Ok(Value::Unit)
+}
 
 /// `List.len(self)` and `List.count(self)`: the number of items.
 fn list_len(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {

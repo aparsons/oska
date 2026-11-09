@@ -28,6 +28,10 @@ pub enum Resolution {
     /// A method call, `receiver.name(args)`, reaching this inherent
     /// method: the receiver is its first argument. Recorded at the call.
     Method(Callee),
+    /// A method call reaching this inherent **mutating method**
+    /// (`var self`), which writes its receiver back. Recorded at the
+    /// call.
+    MutatingMethod(Callee),
     /// A call of a function, or of a method named by its type, as in
     /// `Type.method(receiver, args)`: the arguments as written. Recorded
     /// at the call.
@@ -176,6 +180,14 @@ impl Lowering<'_> {
                 Some(Resolution::Local(slot)) => Some(Place::Local(*slot)),
                 _ => None,
             },
+            ast::ExprKind::SelfValue => Some(Place::SelfValue),
+            ast::ExprKind::Field { base, name } => match self.resolutions.get(&name.span) {
+                Some(Resolution::Field(index)) => Some(Place::Field {
+                    base: Box::new(self.place(base)?),
+                    index: *index,
+                }),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -232,6 +244,22 @@ impl Lowering<'_> {
                             args: std::iter::once(self.expr(base)).chain(args).collect(),
                         }
                     }
+                    (
+                        ast::ExprKind::Field { base, .. },
+                        Some(Resolution::MutatingMethod(callee)),
+                    ) => match self.place(base) {
+                        Some(receiver) => ExprKind::MutatingCall {
+                            callee: callee.clone(),
+                            receiver,
+                            args: args.collect(),
+                        },
+                        // A temporary, such as a call's result: the
+                        // change is not kept.
+                        None => ExprKind::Call {
+                            callee: callee.clone(),
+                            args: std::iter::once(self.expr(base)).chain(args).collect(),
+                        },
+                    },
                     (_, Some(Resolution::Call(callee))) => ExprKind::Call {
                         callee: callee.clone(),
                         args: args.collect(),

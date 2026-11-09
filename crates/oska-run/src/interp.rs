@@ -67,6 +67,19 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     pub fn call(&mut self, function: &Function, args: Vec<Value>) -> Result<Value, Panic> {
         let mut args = args.into_iter();
         let receiver = if function.receiver { args.next() } else { None };
+        let (value, _) = self.call_with(function, receiver, args.collect())?;
+        Ok(value)
+    }
+
+    /// Call `function` with `receiver`, for a method, and `args`, one per
+    /// parameter. Returns its result and its receiver as it was when the
+    /// call ended: a mutating method may have changed it.
+    fn call_with(
+        &mut self,
+        function: &Function,
+        receiver: Option<Value>,
+        args: Vec<Value>,
+    ) -> Result<(Value, Option<Value>), Panic> {
         let slots = function
             .params
             .iter()
@@ -76,7 +89,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             .collect();
         let mut frame = Frame { slots, receiver };
         match self.eval(&function.body, &mut frame) {
-            Ok(value) | Err(Unwind::Return(value)) => Ok(value),
+            Ok(value) | Err(Unwind::Return(value)) => Ok((value, frame.receiver)),
             Err(Unwind::Panic(panic)) => Err(panic),
             Err(Unwind::Break | Unwind::Continue) => {
                 unreachable!("the checker keeps `break` and `continue` inside loops")
@@ -141,6 +154,20 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             ExprKind::Call { callee, args } => {
                 let values = self.eval_all(args, frame)?;
                 self.call_callee(callee, values, expr.span)
+            }
+            ExprKind::MutatingCall {
+                callee,
+                receiver,
+                args,
+            } => {
+                let args = self.eval_all(args, frame)?;
+                // Taking the receiver out of its place leaves the method
+                // holding it, so a value nothing else shares has one
+                // reference and is changed in place.
+                let mut taken = std::mem::replace(place_mut(receiver, frame), Value::Unit);
+                let value = self.call_mutating(callee, &mut taken, args, expr.span);
+                *place_mut(receiver, frame) = taken;
+                value
             }
             ExprKind::Block { stmts, value } => {
                 let height = frame.slots.len();
@@ -262,11 +289,9 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             }
             Stmt::Assign { place, value } => {
                 let value = self.eval(value, frame)?;
-                match place {
-                    // The old value is dropped: a copy elsewhere keeps its
-                    // own reference to it.
-                    Place::Local(slot) => frame.slots[*slot] = value,
-                }
+                // The old value is dropped: a copy elsewhere keeps its own
+                // reference to it.
+                *place_mut(place, frame) = value;
             }
             Stmt::Return(value) => {
                 let value = match value {
@@ -335,10 +360,43 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                     .expect("`crate::run` refuses a call to a function the program lacks");
                 Ok(self.call(function, args)?)
             }
+            Callee::Intrinsic(name) => match intrinsics::lookup(name) {
+                Some(intrinsic) => Ok(intrinsic(self.host, args, span)?),
+                // A mutating method called on a temporary: the change is
+                // dropped with it.
+                None => {
+                    let mut args = args.into_iter();
+                    let mut receiver = args.next().expect("a method's receiver");
+                    self.call_mutating(callee, &mut receiver, args.collect(), span)
+                }
+            },
+        }
+    }
+
+    /// Call the mutating method `callee` on `receiver`, which it changes.
+    fn call_mutating(
+        &mut self,
+        callee: &Callee,
+        receiver: &mut Value,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, Unwind> {
+        match callee {
+            Callee::Function(name) => {
+                let program = self.program;
+                let function = program
+                    .functions
+                    .get(name)
+                    .expect("`crate::run` refuses a call to a function the program lacks");
+                let taken = std::mem::replace(receiver, Value::Unit);
+                let (value, after) = self.call_with(function, Some(taken), args)?;
+                *receiver = after.expect("a method keeps its receiver");
+                Ok(value)
+            }
             Callee::Intrinsic(name) => {
-                let intrinsic = intrinsics::lookup(name)
+                let intrinsic = intrinsics::lookup_mutating(name)
                     .expect("`crate::run` refuses a call to a missing intrinsic");
-                Ok(intrinsic(self.host, args, span)?)
+                Ok(intrinsic(receiver, args, span)?)
             }
         }
     }
@@ -359,6 +417,23 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             }
         }
         Ok(Value::str(&text))
+    }
+}
+
+/// The value at `place`, to write. Each struct on the way is made
+/// unshared first ([`Rc::make_mut`]): one that is shared is copied, so a
+/// copy elsewhere keeps the old value.
+fn place_mut<'f>(place: &Place, frame: &'f mut Frame) -> &'f mut Value {
+    match place {
+        Place::Local(slot) => &mut frame.slots[*slot],
+        Place::SelfValue => frame
+            .receiver
+            .as_mut()
+            .expect("the checker allows `self` only in a method"),
+        Place::Field { base, index } => match place_mut(base, frame) {
+            Value::Struct { fields, .. } => &mut Rc::make_mut(fields)[*index],
+            other => unreachable!("the checker guarantees a struct, found {other:?}"),
+        },
     }
 }
 

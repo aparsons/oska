@@ -173,3 +173,119 @@ fn indexing_past_the_end_of_a_list_panics_with_p0002() {
         "xs.at(-1)",
     );
 }
+
+// ---- Mutating methods and value semantics -----------------------------------
+
+#[test]
+fn push_updates_the_var_it_is_called_on() {
+    assert_runs(
+        &main_with(
+            "    var xs: List<Int> = List.new()
+    for i in 0..3 {
+        xs.push(i * 10)
+    }
+    let n = xs.len()
+    let last = xs.at(2)
+    io.println(\"{n} {last}\")",
+        ),
+        &[],
+        "3 20\n",
+    );
+}
+
+#[test]
+fn pushing_onto_a_copy_never_changes_the_original() {
+    assert_runs(
+        &main_with(
+            "    var xs = [1]
+    let before = xs
+    xs.push(2)
+    var after = xs
+    after.push(3)
+    let a = before.len()
+    let b = xs.len()
+    let c = after.len()
+    io.println(\"{a} {b} {c}\")",
+        ),
+        &[],
+        "1 2 3\n",
+    );
+}
+
+const ACCOUNT: &str = "struct Account { balance: Int, history: List<Int> }
+
+impl Account {
+    fn open() -> Account {
+        Account(balance: 0, history: List.new())
+    }
+
+    fn deposit(var self, amount: Int) -> Int {
+        self.balance = self.balance + amount
+        self.history.push(amount)
+        self.balance
+    }
+
+    fn balance(self) -> Int {
+        self.balance
+    }
+}
+
+struct Bank { main: Account, spare: Account }";
+
+#[test]
+fn a_mutating_method_writes_its_receiver_back_to_the_var() {
+    assert_runs(
+        &program(
+            ACCOUNT,
+            "    var a = Account.open()
+    let first = a.deposit(5)
+    let second = a.deposit(7)
+    let total = a.balance()
+    let n = a.history.len()
+    io.println(\"{first} {second} {total} {n}\")",
+        ),
+        &[],
+        "5 12 12 2\n",
+    );
+}
+
+#[test]
+fn a_mutating_method_on_a_field_writes_back_through_the_struct() {
+    assert_runs(
+        &program(
+            ACCOUNT,
+            "    var bank = Bank(main: Account.open(), spare: Account.open())
+    let _ = bank.main.deposit(3)
+    bank.spare.balance = 40
+    let m = bank.main.balance()
+    let s = bank.spare.balance()
+    io.println(\"{m} {s}\")",
+        ),
+        &[],
+        "3 40\n",
+    );
+}
+
+#[test]
+fn mutating_a_copy_of_a_struct_never_changes_the_original() {
+    assert_runs(
+        &program(
+            ACCOUNT,
+            "    var a = Account.open()
+    let _ = a.deposit(1)
+    let saved = a
+    var bank = Bank(main: a, spare: a)
+    let _ = a.deposit(10)
+    let _ = bank.main.deposit(100)
+    bank.spare.balance = 1000
+    let s = saved.balance()
+    let n = saved.history.len()
+    let x = a.balance()
+    let m = bank.main.balance()
+    let p = bank.spare.balance()
+    io.println(\"{s} {n} {x} {m} {p}\")",
+        ),
+        &[],
+        "1 1 11 101 1000\n",
+    );
+}

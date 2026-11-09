@@ -70,6 +70,11 @@ fn first_in(program: &Program, expr: &Expr) -> Option<(Span, String)> {
         ExprKind::Call {
             callee: target,
             args,
+        }
+        | ExprKind::MutatingCall {
+            callee: target,
+            args,
+            ..
         } => callee(program, target, expr.span).or_else(|| first_of(program, args)),
         ExprKind::Match { scrutinee, arms } => first_in(program, scrutinee).or_else(|| {
             arms.iter().find_map(|arm| {
@@ -120,7 +125,7 @@ fn callee(program: &Program, target: &Callee, span: Span) -> Option<(Span, Strin
         Callee::Function(name) if !program.functions.contains_key(name) => {
             Some((span, format!("a call of `{name}`")))
         }
-        Callee::Intrinsic(name) if intrinsics::lookup(name).is_none() => {
+        Callee::Intrinsic(name) if !intrinsics::implemented(name) => {
             Some((span, format!("`{name}`")))
         }
         _ => None,
