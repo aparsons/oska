@@ -8,6 +8,7 @@ use oska_syntax::{Diagnostic, Span};
 
 use crate::codes;
 use crate::prelude;
+use crate::ty;
 
 /// What a type-level name refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +58,17 @@ impl<'a> Decls<'a> {
                 },
             );
         }
+        // `Untrusted<String>` is written like a generic type but is the
+        // trust flag on text (ADR 0006); lowering turns it into the flag.
+        decls.names.insert(
+            ty::UNTRUSTED,
+            Decl {
+                kind: DeclKind::Primitive,
+                generics: vec!["T"],
+                field_types: Vec::new(),
+                in_prelude: true,
+            },
+        );
         for item in &prelude::module().items {
             if let Some((name, _, decl)) = declaration(item, true) {
                 decls.names.insert(name, decl);

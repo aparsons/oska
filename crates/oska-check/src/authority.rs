@@ -52,7 +52,7 @@ fn reach(ty: &Ty, decls: &Decls, expanding: &mut Vec<String>) -> Reach {
             capabilities: Vec::new(),
             bearing: *cap,
         },
-        Ty::Named(name, args) => {
+        Ty::Named(name, args, _) => {
             let Some(decl) = decls.get(name) else {
                 return Reach::default();
             };

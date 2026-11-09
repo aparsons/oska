@@ -73,7 +73,7 @@ pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>)
                         codes::CONFLICTING_IMPL,
                         format!(
                             "conflicting implementations of `{}` for `{}`: {place} one",
-                            Ty::Named(new.trait_name.clone(), new.trait_args.clone()),
+                            Ty::generic(&new.trait_name, new.trait_args.clone()),
                             new.target
                         ),
                         trait_ref,

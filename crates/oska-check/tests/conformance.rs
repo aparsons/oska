@@ -64,7 +64,7 @@ fn every_example_checks_with_zero_diagnostics() {
 
 // ---- Documented codes ---------------------------------------------------------
 
-/// The `E02xx` codes defined in the `codes` module of `src/lib.rs`.
+/// The checker codes defined in the `codes` module of `src/lib.rs`.
 fn defined_codes() -> BTreeSet<String> {
     let lib = read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"));
     let module = lib
@@ -89,19 +89,25 @@ fn defined_codes() -> BTreeSet<String> {
     codes
 }
 
-/// The rows of a Markdown table that document an `E02xx` code, as the code
+/// A checker code: `E02xx` or above. `E01xx` are parser codes.
+fn is_checker_code(code: &str) -> bool {
+    let Some(digits) = code.strip_prefix("E0") else {
+        return false;
+    };
+    digits.len() == 3
+        && digits.chars().all(|c| c.is_ascii_digit())
+        && !digits.starts_with(['0', '1'])
+}
+
+/// The rows of a Markdown table that document a checker code, as the code
 /// and its cells after the code column.
 fn documented_rows<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<(String, Vec<String>)> {
     lines
         .filter_map(|line| {
             let cells: Vec<&str> = line.trim().trim_matches('|').split('|').collect();
-            let code = cells
-                .first()?
-                .trim()
-                .strip_prefix("`E02")?
-                .strip_suffix('`')?;
+            let code = cells.first()?.trim().strip_prefix('`')?.strip_suffix('`')?;
             let rest = cells[1..].iter().map(|c| c.trim().to_string()).collect();
-            Some((format!("E02{code}"), rest))
+            is_checker_code(code).then(|| (code.to_string(), rest))
         })
         .collect()
 }

@@ -18,7 +18,7 @@
 //!
 //! # Diagnostic codes
 //!
-//! Checker codes are `E02xx`, defined in the `codes` module below. The
+//! Checker codes are `E02xx` and `E03xx`, defined in the `codes` module below. The
 //! canonical table of what each means, what it spans, and which carry a
 //! machine-applicable fix is in `docs/checker.md`; a conformance test
 //! keeps it in step with `codes`.
@@ -95,6 +95,7 @@ pub(crate) mod codes {
     pub const TODO_IN_RELEASE: &str = "E0293";
     pub const USE_OUTSIDE_STD: &str = "E0294";
     pub const UNKNOWN_MODULE: &str = "E0295";
+    pub const UNTRUSTED_TEXT: &str = "E0300";
 }
 
 /// Options that change what is checked.
