@@ -39,14 +39,18 @@ Conventions:
 
 #### `FnItem`
 
-A function declaration: `fn name(params) -> T { body }`.
+A function declaration: `fn name<generics>(params) -> T requires ... ensures |r| ... { body }`. The contract clauses sit between the return type and the body, and may each start a new line.
 
 | Field | Type | Notes |
 | --- | --- | --- |
 | `public` | bool | declared `pub` |
 | `name` | `Ident` |  |
-| `params` | array of `Param` | in source order |
+| `generics` | array of `GenericParam` | in source order |
+| `receiver` | `SelfParam` | optional; present for methods taking `self` or `var self` |
+| `params` | array of `Param` | in source order, excluding the receiver |
 | `return_type` | type node | optional; absent means `()` |
+| `requires` | array of `RequiresClause` | in source order |
+| `ensures` | array of `EnsuresClause` | in source order |
 | `body` | `Block` |  |
 
 #### `StructItem`
@@ -90,6 +94,40 @@ A function parameter, `name: Type`. Capability parameters such as `fs: FsRead` a
 | --- | --- | --- |
 | `name` | `Ident` |  |
 | `type` | type node |  |
+
+#### `SelfParam`
+
+A method's receiver: `self`, or `var self` for a **mutating method**. It can only be the first parameter. The span covers `var` when present.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `mutable` | bool | `true` for `var self` |
+
+#### `GenericParam`
+
+A generic parameter with its inline bounds: `T: Eq + Hash`. There are no `where` clauses.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `name` | `Ident` |  |
+| `bounds` | array of type nodes | the `+`-separated bounds; empty when unbounded |
+
+#### `RequiresClause`
+
+A precondition, `requires cond`. The span covers the keyword and the condition.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `cond` | expression node |  |
+
+#### `EnsuresClause`
+
+A postcondition, `ensures |r| cond`, where `r` names the return value. The span covers the keyword and the condition.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `binding` | `Ident` | the name bound to the return value |
+| `cond` | expression node |  |
 
 #### `Field`
 

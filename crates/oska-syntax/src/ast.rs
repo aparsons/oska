@@ -289,14 +289,55 @@ pub enum ItemKind {
     Enum(EnumDecl),
 }
 
-/// `fn name(params) -> ret { body }`.
+/// `fn name<generics>(params) -> ret requires ... ensures |r| ... { body }`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FnDecl {
     pub name: Ident,
+    pub generics: Vec<GenericParam>,
+    /// The `self` or `var self` receiver, which can only come first.
+    pub receiver: Option<SelfParam>,
+    /// The parameters after the receiver.
     pub params: Vec<Param>,
     /// A missing return type means `()`.
     pub ret: Option<Type>,
+    /// `requires` clauses, in source order.
+    pub requires: Vec<Requires>,
+    /// `ensures |r| ...` clauses, in source order.
+    pub ensures: Vec<Ensures>,
     pub body: Block,
+}
+
+/// A method's receiver: `self`, or `var self` for a mutating method.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelfParam {
+    /// `true` for `var self`.
+    pub mutable: bool,
+    pub span: Span,
+}
+
+/// A generic parameter with its inline bounds: `T: Eq + Hash`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenericParam {
+    pub name: Ident,
+    /// Empty when the parameter is unbounded.
+    pub bounds: Vec<Type>,
+    pub span: Span,
+}
+
+/// A `requires cond` clause. The span covers the keyword and condition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Requires {
+    pub cond: Expr,
+    pub span: Span,
+}
+
+/// An `ensures |binding| cond` clause, where `binding` names the return
+/// value. The span covers the keyword and condition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ensures {
+    pub binding: Ident,
+    pub cond: Expr,
+    pub span: Span,
 }
 
 /// A function parameter, `name: Type`. Capabilities are ordinary
