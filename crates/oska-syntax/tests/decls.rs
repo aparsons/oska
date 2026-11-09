@@ -129,3 +129,68 @@ fn test_item() {
         }]"#,
     );
 }
+
+#[test]
+fn integration_attribute_on_a_test() {
+    // The item's span starts at its first attribute.
+    assert_items(
+        "#[integration]\ntest \"reads\" {}",
+        r#"[{
+            "kind": "TestItem", "span": {"start": 0, "end": 30},
+            "public": false,
+            "attributes": [
+                {"kind": "Attribute", "span": {"start": 0, "end": 14},
+                 "name": {"kind": "Ident", "span": {"start": 2, "end": 13}, "name": "integration"},
+                 "args": []}
+            ],
+            "name": {"kind": "StrExpr", "span": {"start": 20, "end": 27},
+                     "parts": [{"kind": "StrText", "span": {"start": 21, "end": 26}, "value": "reads"}]},
+            "body": {"kind": "Block", "span": {"start": 28, "end": 30}, "stmts": []}
+        }]"#,
+    );
+}
+
+#[test]
+fn attribute_with_arguments_before_pub() {
+    // Arguments are parsed like call arguments. Attributes come before `pub`.
+    assert_items(
+        "#[integration(slow: true)] pub fn f() {}",
+        r#"[{
+            "kind": "FnItem", "span": {"start": 0, "end": 40},
+            "public": true,
+            "attributes": [
+                {"kind": "Attribute", "span": {"start": 0, "end": 26},
+                 "name": {"kind": "Ident", "span": {"start": 2, "end": 13}, "name": "integration"},
+                 "args": [
+                    {"kind": "Arg", "span": {"start": 14, "end": 24},
+                     "label": {"kind": "Ident", "span": {"start": 14, "end": 18}, "name": "slow"},
+                     "value": {"kind": "BoolExpr", "span": {"start": 20, "end": 24}, "value": true}}
+                 ]}
+            ],
+            "name": {"kind": "Ident", "span": {"start": 34, "end": 35}, "name": "f"},
+            "params": [],
+            "body": {"kind": "Block", "span": {"start": 38, "end": 40}, "stmts": []}
+        }]"#,
+    );
+}
+
+#[test]
+fn rejects_unknown_attribute() {
+    // The error covers the misspelled name.
+    let err = module_err("#[integation]\ntest \"t\" {}");
+    assert_eq!(err.code, "E0132");
+    assert_eq!(err.span, Span { start: 2, end: 12 });
+    assert!(err.message.contains("`#[integration]`"), "{}", err.message);
+}
+
+#[test]
+fn rejects_unsafe() {
+    // v0 has no `unsafe` anywhere: not on items, not as a block.
+    let err = module_err("unsafe fn f() {}");
+    assert_eq!(err.code, "E0133");
+    assert_eq!(err.span, Span { start: 0, end: 6 });
+
+    let err = module_err("fn f() {\n    unsafe { g() }\n}");
+    assert_eq!(err.code, "E0133");
+    assert_eq!(err.span, Span { start: 13, end: 19 });
+}

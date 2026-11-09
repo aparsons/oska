@@ -37,16 +37,52 @@ Conventions:
 
 ### Items
 
+Every item node starts with the same two fields, before its own fields:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `public` | bool | declared `pub` |
+| `attributes` | array of `Attribute` | in source order; empty when there are none |
+
+An item's span starts at its first attribute, if it has one, and otherwise at `pub` or its keyword. The tables below list only each item's own fields.
+
 #### `FnItem`
 
 A function declaration: `fn name(params) -> T { body }`.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `public` | bool | declared `pub` |
 | `name` | `Ident` |  |
 | `params` | array of `Param` | in source order |
 | `return_type` | type node | optional; absent means `()` |
+| `body` | `Block` |  |
+
+#### `UseItem`
+
+An import: `use a.b` or `use a.b.{X, y}`. Glob imports (`use a.*`, error `E0130`) and renaming imports (`use a.b as c`, error `E0131`) are rejected, so every imported name is written out.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `path` | array of `Ident` | the dotted path, without the brace group |
+| `names` | array of `Ident` | optional; the names in the brace group, absent without one |
+
+#### `ConstItem`
+
+A module-level constant: `const NAME: T = expr`.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `name` | `Ident` |  |
+| `type` | type node |  |
+| `value` | expression node |  |
+
+#### `TestItem`
+
+A test: `test "a descriptive name" { body }`. Tests that need real capabilities carry `#[integration]`.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `name` | `StrExpr` | the name as written |
 | `body` | `Block` |  |
 
 ### Shared nodes
@@ -84,6 +120,15 @@ A call argument, optionally labelled: `copy(src: a)`. The span covers the label 
 | --- | --- | --- |
 | `label` | `Ident` | optional |
 | `value` | expression node |  |
+
+#### `Attribute`
+
+An attribute on an item: `#[name]` or `#[name(args)]`. Names come from a fixed set, currently only `integration`; any other name is error `E0132`.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `name` | `Ident` |  |
+| `args` | array of `Arg` | empty when there are no parentheses |
 
 #### `ClosureParam`
 

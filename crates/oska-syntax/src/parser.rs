@@ -28,10 +28,12 @@
 //! - `E0107`: a statement at module level, where only items are allowed
 //! - `E0130`: a glob import such as `use a.*`
 //! - `E0131`: a renaming import such as `use a.b as c`
+//! - `E0132`: an attribute name outside the fixed set (only `integration`)
+//! - `E0133`: `unsafe`, which v0 does not have
 
 use crate::ast::{
-    Arg, BinaryOp, Block, ClosureParam, ConstDecl, Expr, ExprKind, FnDecl, Ident, Item, ItemKind,
-    Module, Param, Stmt, StmtKind, StrPart, TestDecl, Type, TypeKind, UnaryOp, UseDecl,
+    Arg, Attribute, BinaryOp, Block, ClosureParam, ConstDecl, Expr, ExprKind, FnDecl, Ident, Item,
+    ItemKind, Module, Param, Stmt, StmtKind, StrPart, TestDecl, Type, TypeKind, UnaryOp, UseDecl,
 };
 use crate::{lex, resolve_escape, Diagnostic, Keyword, Punct, Span, Token, TokenKind};
 
@@ -70,6 +72,10 @@ pub fn parse_type(src: &str) -> Result<Type, Diagnostic> {
     parser.expect_end()?;
     Ok(ty)
 }
+
+/// The closed set of attribute names. There are no user macros
+/// (ADR 0003), so any other name is a typo or unsupported.
+const ATTRIBUTES: &[&str] = &["integration"];
 
 struct Parser<'a> {
     src: &'a str,
@@ -139,9 +145,24 @@ fn comparison_op(kind: Option<&TokenKind>) -> Option<BinaryOp> {
 
 impl<'a> Parser<'a> {
     fn new(src: &'a str) -> Result<Self, Diagnostic> {
+        let tokens = lex(src)?;
+        // `unsafe` is reserved but has no meaning in v0, wherever it is
+        // written, so reject it before parsing.
+        if let Some(token) = tokens
+            .iter()
+            .find(|t| t.kind == TokenKind::Keyword(Keyword::Unsafe))
+        {
+            return Err(error(
+                "E0133",
+                "v0 has no `unsafe`: the safety baseline cannot be suspended; \
+                 remove `unsafe` and write the code with safe operations and \
+                 capabilities passed as parameters",
+                token.span,
+            ));
+        }
         Ok(Self {
             src,
-            tokens: lex(src)?,
+            tokens,
             pos: 0,
             prev_end: 0,
         })
@@ -273,6 +294,12 @@ impl<'a> Parser<'a> {
 
     fn item(&mut self) -> Result<Item, Diagnostic> {
         let start = self.peek_span();
+        let mut attrs = Vec::new();
+        while self.at_punct(Punct::Hash) {
+            attrs.push(self.attribute()?);
+            // An attribute may sit on its own line above the item.
+            self.skip_newlines();
+        }
         let public = self.at_kw(Keyword::Pub);
         if public {
             self.bump();
@@ -286,8 +313,39 @@ impl<'a> Parser<'a> {
         };
         Ok(Item {
             public,
-            attrs: Vec::new(),
+            attrs,
             kind,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `#[name]` or `#[name(args)]`.
+    fn attribute(&mut self) -> Result<Attribute, Diagnostic> {
+        let start = self.expect_punct(Punct::Hash)?;
+        self.expect_punct(Punct::LBracket)?;
+        let name = self.expect_ident("an attribute name")?;
+        if !ATTRIBUTES.contains(&name.name.as_str()) {
+            let known: Vec<String> = ATTRIBUTES.iter().map(|a| format!("`#[{a}]`")).collect();
+            return Err(error(
+                "E0132",
+                format!(
+                    "unknown attribute `{}`; attribute names come from a fixed set, \
+                     currently only {}",
+                    name.name,
+                    known.join(", ")
+                ),
+                name.span,
+            ));
+        }
+        let args = if self.at_punct(Punct::LParen) {
+            self.args()?
+        } else {
+            Vec::new()
+        };
+        self.expect_punct(Punct::RBracket)?;
+        Ok(Attribute {
+            name,
+            args,
             span: self.span_from(start),
         })
     }
