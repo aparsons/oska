@@ -49,7 +49,7 @@ use crate::ast::{
     Pattern, PatternArg, PatternKind, Requires, SelfParam, Stmt, StmtKind, StrPart, StructDecl,
     TestDecl, TraitDecl, Type, TypeKind, UnaryOp, UseDecl, Variant,
 };
-use crate::{join, lex, resolve_escape, Diagnostic, Keyword, Punct, Span, Token, TokenKind};
+use crate::{join, lex, resolve_escape, Diagnostic, Edit, Keyword, Punct, Span, Token, TokenKind};
 
 /// Parse a whole source file: a sequence of items separated by line
 /// breaks. Stops at the first error.
@@ -112,11 +112,7 @@ struct Parser<'a> {
 }
 
 fn error(code: &'static str, message: impl Into<String>, span: Span) -> Diagnostic {
-    Diagnostic {
-        code,
-        message: message.into(),
-        span,
-    }
+    Diagnostic::new(code, message, span)
 }
 
 fn bare_block(span: Span) -> Diagnostic {
@@ -280,6 +276,21 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Attach a fix to `err` that deletes the keyword `word` at `err.span`,
+    /// with the whitespace up to the next token.
+    fn remove_word(&self, err: Diagnostic, word: &str) -> Diagnostic {
+        let end = self
+            .tokens
+            .iter()
+            .find(|t| t.span.start >= err.span.end)
+            .map_or(err.span.end, |t| t.span.start);
+        let span = Span {
+            start: err.span.start,
+            end,
+        };
+        err.with_fix(format!("remove `{word}`"), vec![Edit::delete(span)])
+    }
+
     fn span_from(&self, start: Span) -> Span {
         Span {
             start: start.start,
@@ -325,11 +336,14 @@ impl<'a> Parser<'a> {
             self.bump();
         }
         if public && self.at_kw(Keyword::Impl) {
-            return Err(error(
-                "E0151",
-                "an `impl` block cannot be `pub`; remove `pub` here and mark each \
-                 method that should be public as `pub fn`",
-                pub_span,
+            return Err(self.remove_word(
+                error(
+                    "E0151",
+                    "an `impl` block cannot be `pub`; remove `pub` here and mark each \
+                     method that should be public as `pub fn`",
+                    pub_span,
+                ),
+                "pub",
             ));
         }
         let kind = match self.peek() {
@@ -601,11 +615,14 @@ impl<'a> Parser<'a> {
                 ));
             }
             if self.at_kw(Keyword::Var) {
-                return Err(error(
-                    "E0112",
-                    "only the `self` receiver can be `var`; remove `var`, \
-                     and bind a mutable copy in the body with `var name = name`",
-                    self.peek_span(),
+                return Err(self.remove_word(
+                    error(
+                        "E0112",
+                        "only the `self` receiver can be `var`; remove `var`, \
+                         and bind a mutable copy in the body with `var name = name`",
+                        self.peek_span(),
+                    ),
+                    "var",
                 ));
             }
             let name = self.expect_ident("a parameter name")?;
@@ -820,6 +837,7 @@ impl<'a> Parser<'a> {
             ),
             Span { start: end, end },
         )
+        .with_fix("insert `,`", vec![Edit::insert(end, ",")])
     }
 
     /// `{ a: T, pub b: U }`. `allow_pub` is false inside enum variants.
@@ -1356,12 +1374,30 @@ impl<'a> Parser<'a> {
             match self.peek() {
                 Some(TokenKind::Newline | TokenKind::Punct(Punct::RBrace)) => {}
                 Some(TokenKind::Punct(Punct::Comma)) => {
-                    return Err(error(
+                    let comma = self.peek_span();
+                    let err = error(
                         "E0143",
                         "match arms are separated by line breaks, not commas; \
                          remove the `,` and put each arm on its own line",
-                        self.peek_span(),
-                    ))
+                        comma,
+                    );
+                    // Deleting the comma is enough only when the next arm
+                    // already starts on its own line.
+                    let next = self.tokens.get(self.pos + 1);
+                    let gap_end = next.map_or(self.src.len(), |t| t.span.start);
+                    let own_line = self.src[comma.end..gap_end].contains('\n')
+                        || matches!(
+                            next,
+                            None | Some(Token {
+                                kind: TokenKind::Punct(Punct::RBrace),
+                                ..
+                            })
+                        );
+                    return Err(if own_line {
+                        err.with_fix("remove `,`", vec![Edit::delete(comma)])
+                    } else {
+                        err
+                    });
                 }
                 _ => return Err(self.expected("a line break or `}` after the match arm")),
             }
