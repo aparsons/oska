@@ -8,6 +8,7 @@ use oska_syntax::Span;
 
 use crate::host::Host;
 use crate::interp::Unwind;
+use crate::panics::{codes, Panic};
 use crate::value::Value;
 
 /// An intrinsic: the host, the arguments (the receiver first), and the
@@ -15,7 +16,7 @@ use crate::value::Value;
 pub type Intrinsic = fn(&mut dyn Host, Vec<Value>, Span) -> Result<Value, Unwind>;
 
 /// Every intrinsic, by qualified name.
-pub const INTRINSICS: &[(&str, Intrinsic)] = &[("Stdout.println", stdout_println)];
+pub const INTRINSICS: &[(&str, Intrinsic)] = &[("Stdout.println", stdout_println), ("todo", todo)];
 
 /// The intrinsic named `name`.
 pub fn lookup(name: &str) -> Option<Intrinsic> {
@@ -37,4 +38,15 @@ fn stdout_println(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Valu
         Ok(()) => Value::ok(Value::Unit),
         Err(err) => Value::err(Value::io_error(&err.to_string())),
     })
+}
+
+/// `todo()`: a placeholder for code not yet written, which panics when
+/// reached.
+fn todo(_: &mut dyn Host, _: Vec<Value>, span: Span) -> Result<Value, Unwind> {
+    Err(Panic::new(
+        codes::TODO,
+        "reached `todo()`: this code is not written yet",
+        span,
+    )
+    .into())
 }

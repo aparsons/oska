@@ -58,6 +58,7 @@ use crate::infer::{Infer, Mismatch};
 use crate::items::{Bound, Items, Lower};
 use crate::prelude::{self, StdModule};
 use crate::program::lower::{Resolution, Resolutions};
+use crate::program::Callee;
 use crate::resolve;
 use crate::suggest;
 use crate::ty::{self, Trust, Ty};
@@ -239,6 +240,10 @@ struct Callable {
     /// text can come back out as a fixed `String` only through `T`'s
     /// operations, such as `Display.to_string` or interpolation.
     type_args: Vec<Ty>,
+    /// What a call reaches, for the checked program: the function or
+    /// intrinsic when the callable is one, `None` for a constructor or a
+    /// closure.
+    target: Option<Callee>,
 }
 
 /// What `base.name` names when `base` is not a value.

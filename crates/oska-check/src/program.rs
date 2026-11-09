@@ -91,6 +91,9 @@ pub enum ExprKind {
 pub enum Stmt {
     /// An expression evaluated for its effect.
     Expr(Expr),
+    /// `let` or `var`: evaluate `value` and, when `binds`, push it as the
+    /// next slot. A binding named `_` takes no slot.
+    Let { binds: bool, value: Expr },
 }
 
 /// What a call reaches.

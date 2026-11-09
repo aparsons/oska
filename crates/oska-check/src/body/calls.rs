@@ -46,6 +46,7 @@ impl Body<'_, '_, '_> {
                         receiver: None,
                         joined: None,
                         type_args: Vec::new(),
+                        target: None,
                     }),
                     Ty::Error => None,
                     other => {
@@ -60,7 +61,12 @@ impl Body<'_, '_, '_> {
             }
         };
         match callable {
-            Some(callable) => self.apply(callable, args, expected, expr.span),
+            Some(callable) => {
+                if let Some(target) = &callable.target {
+                    self.record(expr.span, Resolution::Call(target.clone()));
+                }
+                self.apply(callable, args, expected, expr.span)
+            }
             None => {
                 self.infer_args(args);
                 Ty::Error
@@ -82,7 +88,9 @@ impl Body<'_, '_, '_> {
     fn item_callee(&mut self, key: &str, ident: &Ident) -> Option<Callable> {
         let name = key;
         if let Some(sig) = self.items.fns.get(name).cloned() {
-            return Some(self.instantiate(&sig, None));
+            let mut callable = self.instantiate(&sig, None);
+            callable.target = Some(target(&sig, name.to_string()));
+            return Some(callable);
         }
         if let Some(info) = self.items.structs.get(name).cloned() {
             if info.sealed {
@@ -132,6 +140,9 @@ impl Body<'_, '_, '_> {
         }
         if let Some(sig) = self.items.method(type_name, &name.name).cloned() {
             let mut callable = self.instantiate(&sig, None);
+            if sig.trait_name.is_none() {
+                callable.target = Some(target(&sig, format!("{type_name}.{}", name.name)));
+            }
             if sig.receiver.is_method() {
                 let self_ty = sig.self_ty.clone().unwrap_or(Ty::Error);
                 callable.params.insert(0, (None, self_ty));
@@ -249,6 +260,7 @@ impl Body<'_, '_, '_> {
             receiver: None,
             joined: None,
             type_args: Vec::new(),
+            target: None,
         }
     }
 
@@ -314,6 +326,7 @@ impl Body<'_, '_, '_> {
                 .map(lower),
             joined,
             type_args: subst.into_iter().map(|(_, t)| t).collect(),
+            target: None,
         }
     }
 
@@ -634,6 +647,16 @@ impl Body<'_, '_, '_> {
         for arg in args {
             self.infer(&arg.value);
         }
+    }
+}
+
+/// What a call to `sig`, qualified as `name`, reaches: an intrinsic for a
+/// body-less prelude function, otherwise the function itself.
+fn target(sig: &FnSig, name: String) -> Callee {
+    if sig.intrinsic {
+        Callee::Intrinsic(name)
+    } else {
+        Callee::Function(name)
     }
 }
 

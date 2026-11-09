@@ -37,6 +37,9 @@ pub struct FnSig {
     /// text arguments, and every text type in its result has that trust
     /// (ADR 0006; see `infer.rs`).
     pub follows_trust: bool,
+    /// A body-less prelude or `std` function, which each backend
+    /// implements as an intrinsic.
+    pub intrinsic: bool,
 }
 
 /// How a function takes `self`.
@@ -209,6 +212,7 @@ impl TraitInfo {
             trait_name: sig.trait_name.clone(),
             pure: sig.pure,
             follows_trust: sig.follows_trust,
+            intrinsic: sig.intrinsic,
         }
     }
 }
@@ -577,6 +581,7 @@ impl<'d, 'a> Lower<'d, 'a> {
             ret: f.return_type.as_ref().map_or(Ty::Unit, |t| lower.ty(t)),
             trait_name: None,
             follows_trust: false,
+            intrinsic: self.see_all && f.body.is_none(),
             pure: !f
                 .params
                 .iter()

@@ -24,9 +24,11 @@ use oska_syntax::Diagnostic;
 mod host;
 mod interp;
 mod intrinsics;
+mod panics;
 mod value;
 
 pub use host::{FakeHost, Host, Output, RealHost};
+pub use panics::codes;
 
 use interp::{Interpreter, Unwind};
 use value::{Capability, Value};
@@ -64,6 +66,9 @@ impl RunOutcome {
     }
 }
 
+/// The exit code of a program that panicked.
+pub const PANIC_EXIT_CODE: i32 = 101;
+
 /// Check and run `src` on `host`. `args` are the program's arguments,
 /// the program path first.
 pub fn run(src: &str, host: &mut dyn Host, args: &[String]) -> RunOutcome {
@@ -83,6 +88,11 @@ pub fn run(src: &str, host: &mut dyn Host, args: &[String]) -> RunOutcome {
             );
             let mut outcome = RunOutcome::new(2, host);
             outcome.stderr.push_str(&message);
+            return outcome;
+        }
+        Err(Unwind::Panic(panic)) => {
+            let mut outcome = RunOutcome::new(PANIC_EXIT_CODE, host);
+            outcome.panic = Some(panic.into_diagnostic());
             return outcome;
         }
     };

@@ -9,6 +9,7 @@ use oska_syntax::Span;
 
 use crate::host::Host;
 use crate::intrinsics;
+use crate::panics::Panic;
 use crate::value::Value;
 
 /// Why evaluation stopped before producing a value.
@@ -16,6 +17,14 @@ use crate::value::Value;
 pub enum Unwind {
     /// A node the interpreter cannot run yet.
     Unsupported(Span),
+    /// A bug: unwinds all the way to [`crate::run`].
+    Panic(Panic),
+}
+
+impl From<Panic> for Unwind {
+    fn from(panic: Panic) -> Self {
+        Unwind::Panic(panic)
+    }
 }
 
 pub struct Interpreter<'p, 'h> {
@@ -70,6 +79,12 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                     match stmt {
                         Stmt::Expr(e) => {
                             self.eval(e, frame)?;
+                        }
+                        Stmt::Let { binds, value } => {
+                            let value = self.eval(value, frame)?;
+                            if *binds {
+                                frame.push(value);
+                            }
                         }
                     }
                 }

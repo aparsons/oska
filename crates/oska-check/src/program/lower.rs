@@ -20,9 +20,13 @@ pub enum Resolution {
     /// A name that is a local: its index in the body's locals stack,
     /// which is its slot. Recorded at the name.
     Local(usize),
-    /// A method call reaching this inherent method. Recorded at the
-    /// call.
+    /// A method call, `receiver.name(args)`, reaching this inherent
+    /// method: the receiver is its first argument. Recorded at the call.
     Method(Callee),
+    /// A call of a function, or of a method named by its type, as in
+    /// `Type.method(receiver, args)`: the arguments as written. Recorded
+    /// at the call.
+    Call(Callee),
 }
 
 /// Every resolution in a module, keyed by the span it was recorded at.
@@ -77,6 +81,10 @@ impl Lowering<'_> {
             match &stmt.kind {
                 StmtKind::Expr(e) if last => value = Some(Box::new(self.expr(e))),
                 StmtKind::Expr(e) => stmts.push(Stmt::Expr(self.expr(e))),
+                StmtKind::Let { name, value, .. } => stmts.push(Stmt::Let {
+                    binds: name.name != "_",
+                    value: self.expr(value),
+                }),
                 _ => stmts.push(Stmt::Expr(Expr {
                     kind: ExprKind::Unsupported,
                     span: stmt.span,
@@ -112,6 +120,10 @@ impl Lowering<'_> {
                             args: lowered,
                         }
                     }
+                    (_, Some(Resolution::Call(callee))) => ExprKind::Call {
+                        callee: callee.clone(),
+                        args: args.iter().map(|a| self.expr(&a.value)).collect(),
+                    },
                     _ => ExprKind::Unsupported,
                 }
             }
