@@ -23,7 +23,7 @@ use crate::host::Host;
 use crate::intrinsics;
 use crate::ops;
 use crate::panics::Panic;
-use crate::value::Value;
+use crate::value::{ClosureValue, Value};
 
 /// Why evaluation stopped before producing a value.
 #[derive(Debug)]
@@ -151,6 +151,16 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 Ok(Value::construct(ctor, fields))
             }
             ExprKind::Field { base, index } => Ok(self.eval(base, frame)?.field(*index)),
+            ExprKind::Closure(code) => Ok(Value::Closure(Rc::new(ClosureValue {
+                code: Rc::clone(code),
+                slots: frame.slots.clone(),
+                receiver: frame.receiver.clone(),
+            }))),
+            ExprKind::CallValue { callee, args } => {
+                let callee = self.eval(callee, frame)?;
+                let args = self.eval_all(args, frame)?;
+                Ok(self.call_value(&callee, args)?)
+            }
             ExprKind::Call { callee, args } => {
                 let values = self.eval_all(args, frame)?;
                 self.call_callee(callee, values, expr.span)
@@ -235,7 +245,9 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                     Value::Variant {
                         variant, fields, ..
                     } => (Some(&**variant), fields),
-                    other => unreachable!("the checker guarantees a struct or enum, found {other:?}"),
+                    other => {
+                        unreachable!("the checker guarantees a struct or enum, found {other:?}")
+                    }
                 };
                 if variant != ctor.variant.as_deref() {
                     return Ok(false);
@@ -360,16 +372,47 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                     .expect("`crate::run` refuses a call to a function the program lacks");
                 Ok(self.call(function, args)?)
             }
-            Callee::Intrinsic(name) => match intrinsics::lookup(name) {
-                Some(intrinsic) => Ok(intrinsic(self.host, args, span)?),
+            Callee::Intrinsic(name) => {
+                if let Some(intrinsic) = intrinsics::lookup(name) {
+                    return Ok(intrinsic(self.host, args, span)?);
+                }
+                if let Some(intrinsic) = intrinsics::lookup_higher_order(name) {
+                    return Ok(intrinsic(self, args, span)?);
+                }
                 // A mutating method called on a temporary: the change is
                 // dropped with it.
-                None => {
-                    let mut args = args.into_iter();
-                    let mut receiver = args.next().expect("a method's receiver");
-                    self.call_mutating(callee, &mut receiver, args.collect(), span)
-                }
-            },
+                let mut args = args.into_iter();
+                let mut receiver = args.next().expect("a method's receiver");
+                self.call_mutating(callee, &mut receiver, args.collect(), span)
+            }
+        }
+    }
+
+    /// Call the function value `callee`, a closure, with `args`.
+    pub fn call_value(&mut self, callee: &Value, args: Vec<Value>) -> Result<Value, Panic> {
+        let Value::Closure(closure) = callee else {
+            unreachable!("the checker calls only functions, found {callee:?}");
+        };
+        let mut slots = closure.slots.clone();
+        slots.extend(
+            closure
+                .code
+                .params
+                .iter()
+                .zip(args)
+                .filter(|(binds, _)| **binds)
+                .map(|(_, arg)| arg),
+        );
+        let mut frame = Frame {
+            slots,
+            receiver: closure.receiver.clone(),
+        };
+        match self.eval(&closure.code.body, &mut frame) {
+            Ok(value) | Err(Unwind::Return(value)) => Ok(value),
+            Err(Unwind::Panic(panic)) => Err(panic),
+            Err(Unwind::Break | Unwind::Continue) => {
+                unreachable!("the checker keeps `break` and `continue` inside loops")
+            }
         }
     }
 

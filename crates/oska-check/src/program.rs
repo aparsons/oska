@@ -28,6 +28,7 @@
 //!    an `Unsupported` node or a call it cannot make.
 
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::Span;
@@ -122,6 +123,14 @@ pub enum ExprKind {
         base: Box<Expr>,
         index: usize,
     },
+    /// A closure, `|params| body`. Evaluating it captures the frame's
+    /// slots and receiver as they are, by value.
+    Closure(Rc<Closure>),
+    /// A call of a function value, such as a closure held in a local.
+    CallValue {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
+    },
     /// A call. A method's receiver is its first argument.
     Call {
         callee: Callee,
@@ -200,6 +209,18 @@ pub enum Stmt {
         iter: Expr,
         body: Expr,
     },
+}
+
+/// A closure's code.
+///
+/// Its body sees the slots in scope where the closure was written, by
+/// the same numbers, then its parameters: so a closure value carries the
+/// slots it captured, and a call pushes each argument after them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Closure {
+    /// Whether each parameter takes a slot: one named `_` takes none.
+    pub params: Vec<bool>,
+    pub body: Expr,
 }
 
 /// A `match` arm. The pattern's bindings are pushed as slots, in

@@ -36,19 +36,22 @@ impl Body<'_, '_, '_> {
                 match self.infer.resolve(&ty) {
                     Ty::Fn {
                         cap, params, ret, ..
-                    } => Some(Callable {
-                        description: "this function".to_string(),
-                        params: params.into_iter().map(|p| (None, p)).collect(),
-                        ret: *ret,
-                        labels: Labels::Optional,
-                        obligations: Vec::new(),
-                        pure: !cap,
-                        receiver: None,
-                        joined: None,
-                        type_args: Vec::new(),
-                        target: None,
-                        construct: None,
-                    }),
+                    } => {
+                        self.record(expr.span, Resolution::CallValue);
+                        Some(Callable {
+                            description: "this function".to_string(),
+                            params: params.into_iter().map(|p| (None, p)).collect(),
+                            ret: *ret,
+                            labels: Labels::Optional,
+                            obligations: Vec::new(),
+                            pure: !cap,
+                            receiver: None,
+                            joined: None,
+                            type_args: Vec::new(),
+                            target: None,
+                            construct: None,
+                        })
+                    }
                     Ty::Error => None,
                     other => {
                         self.error(

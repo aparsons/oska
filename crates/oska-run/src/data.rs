@@ -9,7 +9,8 @@ use std::rc::Rc;
 use oska_syntax::Span;
 
 use crate::host::Host;
-use crate::intrinsics::{Intrinsic, MutatingIntrinsic};
+use crate::interp::Interpreter;
+use crate::intrinsics::{HigherOrder, Intrinsic, MutatingIntrinsic};
 use crate::panics::{codes, Panic};
 use crate::value::Value;
 
@@ -21,6 +22,9 @@ pub const INTRINSICS: &[(&str, Intrinsic)] = &[
     ("List.len", list_len),
     ("List.new", list_new),
 ];
+
+/// Every higher-order data intrinsic, by qualified name.
+pub const HIGHER_ORDER: &[(&str, HigherOrder)] = &[("List.map", list_map)];
 
 /// Every mutating data intrinsic, by qualified name.
 pub const MUTATING: &[(&str, MutatingIntrinsic)] = &[("List.push", list_push)];
@@ -76,4 +80,14 @@ fn list_at(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Pani
                 span,
             )
         })
+}
+
+/// `List.map(self, f)`: `f` called on each item, in order.
+fn list_map(interp: &mut Interpreter<'_, '_>, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    let mapped = args[0]
+        .as_list()
+        .iter()
+        .map(|item| interp.call_value(&args[1], vec![item.clone()]))
+        .collect::<Result<Vec<Value>, Panic>>()?;
+    Ok(Value::List(Rc::new(mapped)))
 }

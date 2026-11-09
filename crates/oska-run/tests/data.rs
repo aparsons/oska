@@ -289,3 +289,57 @@ fn mutating_a_copy_of_a_struct_never_changes_the_original() {
         "1 1 11 101 1000\n",
     );
 }
+
+// ---- Closures --------------------------------------------------------------
+
+#[test]
+fn a_closure_captures_values_when_it_is_made_and_can_be_called() {
+    assert_runs(
+        &program(
+            "fn twice(f: fn(Int) -> Int, x: Int) -> Int {
+    f(f(x))
+}",
+            "    var step = 3
+    let add = |x: Int| x + step
+    step = 100
+    let a = add(1)
+    let b = twice(add, 10)
+    let c = twice(|x| x * 2, 5)
+    io.println(\"{a} {b} {c}\")",
+        ),
+        &[],
+        "4 16 20\n",
+    );
+}
+
+#[test]
+fn a_captured_list_keeps_its_value_when_the_var_is_mutated_later() {
+    assert_runs(
+        &main_with(
+            "    var xs = [1]
+    let count = || xs.len()
+    xs.push(2)
+    let captured = count()
+    let now = xs.len()
+    io.println(\"{captured} {now}\")",
+        ),
+        &[],
+        "1 2\n",
+    );
+}
+
+#[test]
+fn list_map_calls_the_closure_on_each_item() {
+    assert_runs(
+        &main_with(
+            "    let offset = 100
+    let ys = [1, 2, 3].map(|x| x + offset)
+    let a = ys.at(0)
+    let c = ys.at(2)
+    let n = ys.len()
+    io.println(\"{a} {c} {n}\")",
+        ),
+        &[],
+        "101 103 3\n",
+    );
+}

@@ -18,7 +18,7 @@
 
 use std::rc::Rc;
 
-use oska_check::program::Construct;
+use oska_check::program::{Closure, Construct};
 
 /// A runtime value.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +34,8 @@ pub enum Value {
         start: i128,
         end: i128,
     },
+    /// A closure, with what it captured.
+    Closure(Rc<ClosureValue>),
     /// A `List`'s items.
     List(Rc<Vec<Value>>),
     /// An instance of a struct, by type name, with its fields in
@@ -50,6 +52,15 @@ pub enum Value {
     },
     /// A built-in capability, carrying its attenuation state.
     Capability(Capability),
+}
+
+/// A closure value: its code, and the slots and receiver in scope where
+/// it was made, captured by value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClosureValue {
+    pub code: Rc<Closure>,
+    pub slots: Vec<Value>,
+    pub receiver: Option<Value>,
 }
 
 /// A built-in capability.

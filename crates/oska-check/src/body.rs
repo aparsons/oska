@@ -924,7 +924,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 if let Some(info) = self.items.structs.get(type_name) {
                     if let Some(field_ty) = info.fields.field(&name.name) {
                         if let Some(index) = info.fields.index(&name.name) {
-                            self.out.resolutions.insert(name.span, Resolution::Field(index));
+                            self.out
+                                .resolutions
+                                .insert(name.span, Resolution::Field(index));
                         }
                         if info.hidden_fields.contains(&name.name) {
                             self.error(

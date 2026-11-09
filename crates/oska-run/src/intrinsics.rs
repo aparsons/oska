@@ -6,9 +6,10 @@
 
 use oska_syntax::Span;
 
-use crate::host::Host;
-use crate::panics::{codes, Panic};
 use crate::data;
+use crate::host::Host;
+use crate::interp::Interpreter;
+use crate::panics::{codes, Panic};
 use crate::value::Value;
 
 /// An intrinsic: the host, the arguments (the receiver first), and the
@@ -18,6 +19,10 @@ pub type Intrinsic = fn(&mut dyn Host, Vec<Value>, Span) -> Result<Value, Panic>
 /// A mutating intrinsic, such as `List.push`: it changes its receiver in
 /// place, given the call's other arguments and its span.
 pub type MutatingIntrinsic = fn(&mut Value, Vec<Value>, Span) -> Result<Value, Panic>;
+
+/// An intrinsic that calls back into the program, such as `List.map`,
+/// which calls its closure: it gets the interpreter instead of the host.
+pub type HigherOrder = fn(&mut Interpreter<'_, '_>, Vec<Value>, Span) -> Result<Value, Panic>;
 
 /// Every intrinsic, by qualified name.
 pub const INTRINSICS: &[(&str, Intrinsic)] = &[
@@ -44,9 +49,17 @@ pub fn lookup_mutating(name: &str) -> Option<MutatingIntrinsic> {
         .map(|(_, f)| *f)
 }
 
+/// The higher-order intrinsic named `name`.
+pub fn lookup_higher_order(name: &str) -> Option<HigherOrder> {
+    data::HIGHER_ORDER
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, f)| *f)
+}
+
 /// Whether the intrinsic named `name` has a runtime implementation.
 pub fn implemented(name: &str) -> bool {
-    lookup(name).is_some() || lookup_mutating(name).is_some()
+    lookup(name).is_some() || lookup_mutating(name).is_some() || lookup_higher_order(name).is_some()
 }
 
 /// The text of the string argument at `index`.

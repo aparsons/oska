@@ -56,6 +56,10 @@ fn first_in(program: &Program, expr: &Expr) -> Option<(Span, String)> {
         ExprKind::Construct { fields: items, .. } | ExprKind::List(items) => {
             first_of(program, items)
         }
+        ExprKind::Closure(closure) => first_in(program, &closure.body),
+        ExprKind::CallValue { callee, args } => {
+            first_in(program, callee).or_else(|| first_of(program, args))
+        }
         ExprKind::If {
             cond,
             then_branch,

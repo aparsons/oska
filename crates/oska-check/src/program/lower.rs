@@ -7,6 +7,7 @@
 //! [`ExprKind::Unsupported`].
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use oska_syntax::ast::{
     self, BinaryOp, FnDecl, ItemKind, Module, PatternKind, StmtKind, StrPart, TypeKind, UnaryOp,
@@ -14,8 +15,8 @@ use oska_syntax::ast::{
 use oska_syntax::Span;
 
 use super::{
-    Arm, Callee, Construct, Expr, ExprKind, Function, IntType, Param, Part, Pattern, Place,
-    Program, Stmt,
+    Arm, Callee, Closure, Construct, Expr, ExprKind, Function, IntType, Param, Part, Pattern,
+    Place, Program, Stmt,
 };
 use crate::items::{FnSig, Items};
 
@@ -48,6 +49,9 @@ pub enum Resolution {
     /// A constructor call, or a fieldless variant named as a value.
     /// Recorded at the call, or at the variant's name.
     Construct(Construct),
+    /// A call of a function value, such as a closure. Recorded at the
+    /// call.
+    CallValue,
     /// A struct's field, by its position in declaration order. Recorded
     /// at the field's name.
     Field(usize),
@@ -219,6 +223,10 @@ impl Lowering<'_> {
                 },
             },
             ast::ExprKind::Binary { op, lhs, rhs } => self.binary(expr.span, *op, lhs, rhs),
+            ast::ExprKind::Closure { params, body } => ExprKind::Closure(Rc::new(Closure {
+                params: params.iter().map(|p| p.name.name != "_").collect(),
+                body: self.expr(body),
+            })),
             ast::ExprKind::List(items) => {
                 ExprKind::List(items.iter().map(|item| self.expr(item)).collect())
             }
@@ -264,6 +272,10 @@ impl Lowering<'_> {
                         callee: callee.clone(),
                         args: args.collect(),
                     },
+                    (_, Some(Resolution::CallValue)) => ExprKind::CallValue {
+                        callee: self.boxed(callee),
+                        args: args.collect(),
+                    },
                     (_, Some(Resolution::Construct(ctor))) => ExprKind::Construct {
                         ctor: ctor.clone(),
                         fields: args.collect(),
@@ -306,7 +318,9 @@ impl Lowering<'_> {
         Some(match &pattern.kind {
             PatternKind::Wildcard => Pattern::Wildcard,
             // An uppercase name is a fieldless variant (ADR 0005).
-            PatternKind::Binding(ident) if ident.name.starts_with(|c: char| c.is_ascii_uppercase()) => {
+            PatternKind::Binding(ident)
+                if ident.name.starts_with(|c: char| c.is_ascii_uppercase()) =>
+            {
                 Pattern::Construct {
                     ctor: constructor()?,
                     fields: Vec::new(),
