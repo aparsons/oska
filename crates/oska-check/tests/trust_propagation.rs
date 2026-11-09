@@ -86,6 +86,14 @@ fn a_method_that_is_not_trust_polymorphic_rejects_an_untrusted_receiver() {
     );
 }
 
+#[test]
+fn user_code_cannot_declare_a_trust_polymorphic_function() {
+    assert_errors(
+        "#[follows_trust]\nfn f(s: String) -> String {\n    s\n}",
+        &[("E0132", "follows_trust")],
+    );
+}
+
 // ---- `Untrusted<...>` is only for text ---------------------------------
 
 #[test]
