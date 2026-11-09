@@ -7,7 +7,7 @@
 //! has no runtime implementation. A program that has one is refused with
 //! `E0380`, so it never fails halfway through for that reason.
 
-use oska_check::program::{Callee, Expr, ExprKind, Part, Program, Stmt};
+use oska_check::program::{Callee, Expr, ExprKind, Part, Pattern, Program, Stmt};
 use oska_syntax::{Diagnostic, Span};
 
 use crate::intrinsics;
@@ -50,7 +50,16 @@ fn first_in(program: &Program, expr: &Expr) -> Option<(Span, String)> {
             start: lhs,
             end: rhs,
         } => first_of(program, [lhs, rhs].map(|e| &**e)),
-        ExprKind::Neg { operand, .. } | ExprKind::Not(operand) => first_in(program, operand),
+        ExprKind::Neg { operand, .. }
+        | ExprKind::Not(operand)
+        | ExprKind::Field { base: operand, .. } => first_in(program, operand),
+        ExprKind::Construct { fields: items, .. } | ExprKind::List(items) => {
+            first_of(program, items)
+        }
+        ExprKind::Closure(closure) => first_in(program, &closure.body),
+        ExprKind::CallValue { callee, args } => {
+            first_in(program, callee).or_else(|| first_of(program, args))
+        }
         ExprKind::If {
             cond,
             then_branch,
@@ -65,11 +74,33 @@ fn first_in(program: &Program, expr: &Expr) -> Option<(Span, String)> {
         ExprKind::Call {
             callee: target,
             args,
+        }
+        | ExprKind::MutatingCall {
+            callee: target,
+            args,
+            ..
         } => callee(program, target, expr.span).or_else(|| first_of(program, args)),
+        ExprKind::Match { scrutinee, arms } => first_in(program, scrutinee).or_else(|| {
+            arms.iter().find_map(|arm| {
+                first_in_pattern(program, &arm.pattern)
+                    .or_else(|| arm.guard.as_ref().and_then(|g| first_in(program, g)))
+                    .or_else(|| first_in(program, &arm.body))
+            })
+        }),
         ExprKind::Block { stmts, value } => stmts
             .iter()
             .find_map(|stmt| first_in_stmt(program, stmt))
             .or_else(|| value.as_deref().and_then(|v| first_in(program, v))),
+    }
+}
+
+fn first_in_pattern(program: &Program, pattern: &Pattern) -> Option<(Span, String)> {
+    match pattern {
+        Pattern::Wildcard | Pattern::Bind => None,
+        Pattern::Literal(literal) => first_in(program, literal),
+        Pattern::Construct { fields, .. } => {
+            fields.iter().find_map(|f| first_in_pattern(program, f))
+        }
     }
 }
 
@@ -98,7 +129,7 @@ fn callee(program: &Program, target: &Callee, span: Span) -> Option<(Span, Strin
         Callee::Function(name) if !program.functions.contains_key(name) => {
             Some((span, format!("a call of `{name}`")))
         }
-        Callee::Intrinsic(name) if intrinsics::lookup(name).is_none() => {
+        Callee::Intrinsic(name) if !intrinsics::implemented(name) => {
             Some((span, format!("`{name}`")))
         }
         _ => None,

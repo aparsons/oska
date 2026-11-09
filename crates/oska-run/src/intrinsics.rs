@@ -11,13 +11,23 @@ use std::rc::Rc;
 use oska_syntax::Span;
 
 use crate::confine::{self, Intent};
+use crate::data;
 use crate::host::Host;
+use crate::interp::Interpreter;
 use crate::panics::{codes, Panic};
 use crate::value::{Access, Capability, FsCap, Root, Value, SECRET};
 
 /// An intrinsic: the host, the arguments (the receiver first), and the
 /// call's span, for panics.
 pub type Intrinsic = fn(&mut dyn Host, Vec<Value>, Span) -> Result<Value, Panic>;
+
+/// A mutating intrinsic, such as `List.push`: it changes its receiver in
+/// place, given the call's other arguments and its span.
+pub type MutatingIntrinsic = fn(&mut Value, Vec<Value>, Span) -> Result<Value, Panic>;
+
+/// An intrinsic that calls back into the program, such as `List.map`,
+/// which calls its closure: it gets the interpreter instead of the host.
+pub type HigherOrder = fn(&mut Interpreter<'_, '_>, Vec<Value>, Span) -> Result<Value, Panic>;
 
 /// Every intrinsic, by qualified name.
 pub const INTRINSICS: &[(&str, Intrinsic)] = &[
@@ -56,7 +66,32 @@ pub const INTRINSICS: &[(&str, Intrinsic)] = &[
 
 /// The intrinsic named `name`.
 pub fn lookup(name: &str) -> Option<Intrinsic> {
-    INTRINSICS.iter().find(|(n, _)| *n == name).map(|(_, f)| *f)
+    INTRINSICS
+        .iter()
+        .chain(data::INTRINSICS)
+        .find(|(n, _)| *n == name)
+        .map(|(_, f)| *f)
+}
+
+/// The mutating intrinsic named `name`.
+pub fn lookup_mutating(name: &str) -> Option<MutatingIntrinsic> {
+    data::MUTATING
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, f)| *f)
+}
+
+/// The higher-order intrinsic named `name`.
+pub fn lookup_higher_order(name: &str) -> Option<HigherOrder> {
+    data::HIGHER_ORDER
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, f)| *f)
+}
+
+/// Whether the intrinsic named `name` has a runtime implementation.
+pub fn implemented(name: &str) -> bool {
+    lookup(name).is_some() || lookup_mutating(name).is_some() || lookup_higher_order(name).is_some()
 }
 
 /// The text of the string argument at `index`.
@@ -142,6 +177,17 @@ fn debug(value: &Value, out: &mut String) {
                 tuple(out, fields);
             }
         }
+        Value::List(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                debug(item, out);
+            }
+            out.push(']');
+        }
+        Value::Closure(_) => out.push_str("<closure>"),
         Value::Capability(cap) => out.push_str(&format!("<{cap:?}>")),
         Value::Args(args) => out.push_str(&format!("Args{:?}", &**args)),
     }

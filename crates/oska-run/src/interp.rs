@@ -7,11 +7,21 @@
 //! `return`, a `break` or `continue`, or a panic, is an [`Unwind`], passed
 //! up with `?` until the construct that handles it.
 //!
+//! A closure captures by value: it keeps a copy of the frame's slots and
+//! receiver where it was made (a reference-count increment each), and a
+//! call of it pushes its arguments after them. A mutating call takes its
+//! receiver out of its place, so a value nothing else shares is changed
+//! in place, and writes the method's final `self` back.
+//!
 //! To evaluate a new node kind, add its arm to [`Interpreter::eval`] (or
 //! [`Interpreter::stmt`]), and keep the frame's slots in step with the
 //! checker's locals: push exactly where the checker binds.
 
-use oska_check::program::{Callee, Expr, ExprKind, Function, Part, Place, Program, Stmt};
+use std::rc::Rc;
+
+use oska_check::program::{
+    Arm, Callee, Expr, ExprKind, Function, Part, Pattern, Place, Program, Stmt,
+};
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::Span;
 
@@ -19,7 +29,7 @@ use crate::host::Host;
 use crate::intrinsics;
 use crate::ops;
 use crate::panics::Panic;
-use crate::value::Value;
+use crate::value::{ClosureValue, Value};
 
 /// Why evaluation stopped before producing a value.
 #[derive(Debug)]
@@ -63,6 +73,19 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     pub fn call(&mut self, function: &Function, args: Vec<Value>) -> Result<Value, Panic> {
         let mut args = args.into_iter();
         let receiver = if function.receiver { args.next() } else { None };
+        let (value, _) = self.call_with(function, receiver, args.collect())?;
+        Ok(value)
+    }
+
+    /// Call `function` with `receiver`, for a method, and `args`, one per
+    /// parameter. Returns its result and its receiver as it was when the
+    /// call ended: a mutating method may have changed it.
+    fn call_with(
+        &mut self,
+        function: &Function,
+        receiver: Option<Value>,
+        args: Vec<Value>,
+    ) -> Result<(Value, Option<Value>), Panic> {
         let slots = function
             .params
             .iter()
@@ -72,7 +95,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             .collect();
         let mut frame = Frame { slots, receiver };
         match self.eval(&function.body, &mut frame) {
-            Ok(value) | Err(Unwind::Return(value)) => Ok(value),
+            Ok(value) | Err(Unwind::Return(value)) => Ok((value, frame.receiver)),
             Err(Unwind::Panic(panic)) => Err(panic),
             Err(Unwind::Break | Unwind::Continue) => {
                 unreachable!("the checker keeps `break` and `continue` inside loops")
@@ -128,12 +151,39 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                     }
                 }
             }
+            ExprKind::List(items) => Ok(Value::List(Rc::new(self.eval_all(items, frame)?))),
+            ExprKind::Construct { ctor, fields } => {
+                let fields = self.eval_all(fields, frame)?;
+                Ok(Value::construct(ctor, fields))
+            }
+            ExprKind::Field { base, index } => Ok(self.eval(base, frame)?.field(*index)),
+            ExprKind::Closure(code) => Ok(Value::Closure(Rc::new(ClosureValue {
+                code: Rc::clone(code),
+                slots: frame.slots.clone(),
+                receiver: frame.receiver.clone(),
+            }))),
+            ExprKind::CallValue { callee, args } => {
+                let callee = self.eval(callee, frame)?;
+                let args = self.eval_all(args, frame)?;
+                Ok(self.call_value(&callee, args)?)
+            }
             ExprKind::Call { callee, args } => {
-                let mut values = Vec::with_capacity(args.len());
-                for arg in args {
-                    values.push(self.eval(arg, frame)?);
-                }
+                let values = self.eval_all(args, frame)?;
                 self.call_callee(callee, values, expr.span)
+            }
+            ExprKind::MutatingCall {
+                callee,
+                receiver,
+                args,
+            } => {
+                let args = self.eval_all(args, frame)?;
+                // Taking the receiver out of its place leaves the method
+                // holding it, so a value nothing else shares has one
+                // reference and is changed in place.
+                let mut taken = std::mem::replace(place_mut(receiver, frame), Value::Unit);
+                let value = self.call_mutating(callee, &mut taken, args, expr.span);
+                *place_mut(receiver, frame) = taken;
+                value
             }
             ExprKind::Block { stmts, value } => {
                 let height = frame.slots.len();
@@ -141,10 +191,90 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 frame.slots.truncate(height);
                 result
             }
+            ExprKind::Match { scrutinee, arms } => {
+                let scrutinee = self.eval(scrutinee, frame)?;
+                self.match_arms(&scrutinee, arms, frame)
+            }
             ExprKind::Unsupported => {
                 unreachable!("`crate::run` refuses a program with an unsupported node")
             }
         }
+    }
+
+    /// The value of the first arm that matches `scrutinee`. Each arm's
+    /// bindings are popped once it is done with, matched or not.
+    fn match_arms(
+        &mut self,
+        scrutinee: &Value,
+        arms: &[Arm],
+        frame: &mut Frame,
+    ) -> Result<Value, Unwind> {
+        let height = frame.slots.len();
+        for arm in arms {
+            let mut chosen = self.matches(&arm.pattern, scrutinee, frame)?;
+            if chosen {
+                if let Some(guard) = &arm.guard {
+                    chosen = self.eval(guard, frame)?.as_bool();
+                }
+            }
+            let result = if chosen {
+                Some(self.eval(&arm.body, frame))
+            } else {
+                None
+            };
+            frame.slots.truncate(height);
+            if let Some(result) = result {
+                return result;
+            }
+        }
+        unreachable!("the checker guarantees an exhaustive `match`")
+    }
+
+    /// Whether `value` matches `pattern`, pushing its bindings as it
+    /// goes. On a mismatch, the caller pops them.
+    fn matches(
+        &mut self,
+        pattern: &Pattern,
+        value: &Value,
+        frame: &mut Frame,
+    ) -> Result<bool, Unwind> {
+        Ok(match pattern {
+            Pattern::Wildcard => true,
+            Pattern::Bind => {
+                frame.slots.push(value.clone());
+                true
+            }
+            Pattern::Literal(literal) => self.eval(literal, frame)? == *value,
+            Pattern::Construct { ctor, fields } => {
+                let (variant, values) = match value {
+                    Value::Struct { fields, .. } => (None, fields),
+                    Value::Variant {
+                        variant, fields, ..
+                    } => (Some(&**variant), fields),
+                    other => {
+                        unreachable!("the checker guarantees a struct or enum, found {other:?}")
+                    }
+                };
+                if variant != ctor.variant.as_deref() {
+                    return Ok(false);
+                }
+                for (field, value) in fields.iter().zip(values.iter()) {
+                    if !self.matches(field, value, frame)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+        })
+    }
+
+    /// Each of `exprs`, in order.
+    fn eval_all(&mut self, exprs: &[Expr], frame: &mut Frame) -> Result<Vec<Value>, Unwind> {
+        let mut values = Vec::with_capacity(exprs.len());
+        for expr in exprs {
+            values.push(self.eval(expr, frame)?);
+        }
+        Ok(values)
     }
 
     /// The statements of a block, then its value. The caller pops the
@@ -177,11 +307,9 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             }
             Stmt::Assign { place, value } => {
                 let value = self.eval(value, frame)?;
-                match place {
-                    // The old value is dropped: a copy elsewhere keeps its
-                    // own reference to it.
-                    Place::Local(slot) => frame.slots[*slot] = value,
-                }
+                // The old value is dropped: a copy elsewhere keeps its own
+                // reference to it.
+                *place_mut(place, frame) = value;
             }
             Stmt::Return(value) => {
                 let value = match value {
@@ -200,14 +328,19 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 }
             }
             Stmt::For { binds, iter, body } => {
-                let (start, end) = match self.eval(iter, frame)? {
-                    Value::Range { start, end } => (start, end),
-                    other => unreachable!("the checker allows `for` over a range, found {other:?}"),
+                // Iterating a list holds a reference to it, so the body
+                // writing the `var` it came from changes a copy.
+                let items: Box<dyn Iterator<Item = Value>> = match self.eval(iter, frame)? {
+                    Value::Range { start, end } => Box::new((start..end).map(Value::Int)),
+                    Value::List(items) => Box::new(ListIter { items, next: 0 }),
+                    other => unreachable!(
+                        "the checker allows `for` over a range or a list, found {other:?}"
+                    ),
                 };
                 let height = frame.slots.len();
-                for n in start..end {
+                for item in items {
                     if *binds {
-                        frame.slots.push(Value::Int(n));
+                        frame.slots.push(item);
                     }
                     let go_on = self.loop_body(body, frame);
                     frame.slots.truncate(height);
@@ -246,9 +379,73 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 Ok(self.call(function, args)?)
             }
             Callee::Intrinsic(name) => {
-                let intrinsic = intrinsics::lookup(name)
+                if let Some(intrinsic) = intrinsics::lookup(name) {
+                    return Ok(intrinsic(self.host, args, span)?);
+                }
+                if let Some(intrinsic) = intrinsics::lookup_higher_order(name) {
+                    return Ok(intrinsic(self, args, span)?);
+                }
+                // A mutating method called on a temporary: the change is
+                // dropped with it.
+                let mut args = args.into_iter();
+                let mut receiver = args.next().expect("a method's receiver");
+                self.call_mutating(callee, &mut receiver, args.collect(), span)
+            }
+        }
+    }
+
+    /// Call the function value `callee`, a closure, with `args`.
+    pub fn call_value(&mut self, callee: &Value, args: Vec<Value>) -> Result<Value, Panic> {
+        let Value::Closure(closure) = callee else {
+            unreachable!("the checker calls only functions, found {callee:?}");
+        };
+        let mut slots = closure.slots.clone();
+        slots.extend(
+            closure
+                .code
+                .params
+                .iter()
+                .zip(args)
+                .filter(|(binds, _)| **binds)
+                .map(|(_, arg)| arg),
+        );
+        let mut frame = Frame {
+            slots,
+            receiver: closure.receiver.clone(),
+        };
+        match self.eval(&closure.code.body, &mut frame) {
+            Ok(value) | Err(Unwind::Return(value)) => Ok(value),
+            Err(Unwind::Panic(panic)) => Err(panic),
+            Err(Unwind::Break | Unwind::Continue) => {
+                unreachable!("the checker keeps `break` and `continue` inside loops")
+            }
+        }
+    }
+
+    /// Call the mutating method `callee` on `receiver`, which it changes.
+    fn call_mutating(
+        &mut self,
+        callee: &Callee,
+        receiver: &mut Value,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, Unwind> {
+        match callee {
+            Callee::Function(name) => {
+                let program = self.program;
+                let function = program
+                    .functions
+                    .get(name)
+                    .expect("`crate::run` refuses a call to a function the program lacks");
+                let taken = std::mem::replace(receiver, Value::Unit);
+                let (value, after) = self.call_with(function, Some(taken), args)?;
+                *receiver = after.expect("a method keeps its receiver");
+                Ok(value)
+            }
+            Callee::Intrinsic(name) => {
+                let intrinsic = intrinsics::lookup_mutating(name)
                     .expect("`crate::run` refuses a call to a missing intrinsic");
-                Ok(intrinsic(self.host, args, span)?)
+                Ok(intrinsic(receiver, args, span)?)
             }
         }
     }
@@ -269,5 +466,38 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             }
         }
         Ok(Value::str(&text))
+    }
+}
+
+/// The value at `place`, to write. Each struct on the way is made
+/// unshared first ([`Rc::make_mut`]): one that is shared is copied, so a
+/// copy elsewhere keeps the old value.
+fn place_mut<'f>(place: &Place, frame: &'f mut Frame) -> &'f mut Value {
+    match place {
+        Place::Local(slot) => &mut frame.slots[*slot],
+        Place::SelfValue => frame
+            .receiver
+            .as_mut()
+            .expect("the checker allows `self` only in a method"),
+        Place::Field { base, index } => match place_mut(base, frame) {
+            Value::Struct { fields, .. } => &mut Rc::make_mut(fields)[*index],
+            other => unreachable!("the checker guarantees a struct, found {other:?}"),
+        },
+    }
+}
+
+/// The items of a list, one at a time.
+struct ListIter {
+    items: Rc<Vec<Value>>,
+    next: usize,
+}
+
+impl Iterator for ListIter {
+    type Item = Value;
+
+    fn next(&mut self) -> Option<Value> {
+        let item = self.items.get(self.next)?.clone();
+        self.next += 1;
+        Some(item)
     }
 }

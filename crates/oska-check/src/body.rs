@@ -58,7 +58,7 @@ use crate::infer::{Infer, Mismatch};
 use crate::items::{Bound, Items, Lower};
 use crate::prelude::{self, StdModule};
 use crate::program::lower::{Resolution, Resolutions};
-use crate::program::{Callee, IntType};
+use crate::program::{self, Callee, Construct, IntType};
 use crate::resolve;
 use crate::suggest;
 use crate::ty::{self, Trust, Ty};
@@ -244,6 +244,8 @@ struct Callable {
     /// intrinsic when the callable is one, `None` for a constructor or a
     /// closure.
     target: Option<Callee>,
+    /// What a constructor builds, for the checked program.
+    construct: Option<Construct>,
 }
 
 /// What `base.name` names when `base` is not a value.
@@ -384,12 +386,19 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                         || matches!(ty.head(), Some(ty::BOOL | ty::STRING));
                     builtin.then_some(Resolution::Equality)
                 }
-                Deferred::Display => ty
-                    .head()
-                    .filter(|head| matches!(*head, ty::INT | ty::STRING))
-                    .map(|head| {
-                        Resolution::Display(Callee::Intrinsic(format!("{head}.to_string")))
-                    }),
+                Deferred::Display => match ty.head() {
+                    Some(head @ (ty::INT | ty::STRING)) => Some(Resolution::Display(
+                        Callee::Intrinsic(format!("{head}.to_string")),
+                    )),
+                    // The checker has required `Display` of the hole, so a
+                    // type the module declares has an impl of it there.
+                    Some(head) if self.decls().get(head).is_some_and(|d| !d.in_prelude) => {
+                        Some(Resolution::Display(Callee::Function(
+                            program::trait_method(head, ty::DISPLAY, "to_string"),
+                        )))
+                    }
+                    _ => None,
+                },
             };
             if let Some(resolution) = resolution {
                 self.record(span, resolution);
@@ -646,7 +655,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     Ty::Error
                 }
             },
-            ExprKind::Field { base, name } => self.field_expr(base, name),
+            ExprKind::Field { base, name } => self.field_expr(expr.span, base, name),
             ExprKind::Call { callee, args } => self.call(expr, callee, args, expected),
             ExprKind::Unary { op, operand } => self.unary(expr, *op, operand, expected),
             ExprKind::Binary { op, lhs, rhs } => self.binary(expr, *op, lhs, rhs, expected),
@@ -829,7 +838,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             return callable.into_fn_type();
         }
         if let Some(enum_name) = self.items.bare_variants.get(name).cloned() {
-            return self.variant_value(&enum_name, name);
+            return self.variant_value(&enum_name, name, ident.span);
         }
         if self.decls().get(name).is_some() {
             self.error(
@@ -880,12 +889,15 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
     /// `base.name` outside a call: a field, a member of a type, or a
     /// module's export.
-    fn field_expr(&mut self, base: &Expr, name: &Ident) -> Ty {
+    fn field_expr(&mut self, span: Span, base: &Expr, name: &Ident) -> Ty {
         match self.qualified_path(base, name) {
             Some(QualifiedPath::Export(key)) => self.item_value(&key, name),
             Some(QualifiedPath::Member(type_name)) => match self.type_member(&type_name, name) {
                 Some(callable) if callable.labels != Labels::Optional => {
                     if callable.params.is_empty() {
+                        if let Some(construct) = callable.construct {
+                            self.record(span, Resolution::Construct(construct));
+                        }
                         callable.ret
                     } else {
                         callable.into_fn_type()
@@ -918,6 +930,11 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             Ty::Named(type_name, args, _) => {
                 if let Some(info) = self.items.structs.get(type_name) {
                     if let Some(field_ty) = info.fields.field(&name.name) {
+                        if let Some(index) = info.fields.index(&name.name) {
+                            self.out
+                                .resolutions
+                                .insert(name.span, Resolution::Field(index));
+                        }
                         if info.hidden_fields.contains(&name.name) {
                             self.error(
                                 codes::PRIVATE_FIELD,

@@ -36,6 +36,7 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | Code | Panic |
 | --- | --- |
 | `P0001` | Integer overflow: the result of `+`, `-`, `*`, `/`, or unary `-` does not fit its type, as with a `U8` `0 - 1` or an `I8` `-128 / -1`. Spans the operation. |
+| `P0002` | Index out of bounds: `List.at` was given an index below 0 or not below the list's length. Spans the call. |
 | `P0003` | `todo()` reached. Spans the call. |
 | `P0004` | Division by zero: the right operand of `/` or `%` is zero. Spans the operation. |
 | `P0020` | `Env.secret` asked for a variable the environment does not set. Its signature has no room for a missing secret, and running on with a stand-in such as an empty one could let an empty password through. Spans the call. |

@@ -11,7 +11,7 @@ use crate::codes;
 use crate::collect::DeclKind;
 use crate::items::{Bound, FieldsInfo, FnSig, Receiver, Shape};
 use crate::program::lower::Resolution;
-use crate::program::Callee;
+use crate::program::{Callee, Construct};
 
 use crate::ty::{self, Ty};
 
@@ -36,18 +36,22 @@ impl Body<'_, '_, '_> {
                 match self.infer.resolve(&ty) {
                     Ty::Fn {
                         cap, params, ret, ..
-                    } => Some(Callable {
-                        description: "this function".to_string(),
-                        params: params.into_iter().map(|p| (None, p)).collect(),
-                        ret: *ret,
-                        labels: Labels::Optional,
-                        obligations: Vec::new(),
-                        pure: !cap,
-                        receiver: None,
-                        joined: None,
-                        type_args: Vec::new(),
-                        target: None,
-                    }),
+                    } => {
+                        self.record(expr.span, Resolution::CallValue);
+                        Some(Callable {
+                            description: "this function".to_string(),
+                            params: params.into_iter().map(|p| (None, p)).collect(),
+                            ret: *ret,
+                            labels: Labels::Optional,
+                            obligations: Vec::new(),
+                            pure: !cap,
+                            receiver: None,
+                            joined: None,
+                            type_args: Vec::new(),
+                            target: None,
+                            construct: None,
+                        })
+                    }
                     Ty::Error => None,
                     other => {
                         self.error(
@@ -64,6 +68,9 @@ impl Body<'_, '_, '_> {
             Some(callable) => {
                 if let Some(target) = &callable.target {
                     self.record(expr.span, Resolution::Call(target.clone()));
+                }
+                if let Some(construct) = &callable.construct {
+                    self.record(expr.span, Resolution::Construct(construct.clone()));
                 }
                 self.apply(callable, args, expected, expr.span)
             }
@@ -109,7 +116,13 @@ impl Body<'_, '_, '_> {
                 self.error(codes::FORGED, message, ident.span);
                 return None;
             }
-            return Some(self.constructor(name, &info.generics, &info.fields, name.to_string()));
+            return Some(self.constructor(
+                name,
+                None,
+                &info.generics,
+                &info.fields,
+                name.to_string(),
+            ));
         }
         if let Some(enum_name) = self.items.bare_variants.get(name).cloned() {
             return self.variant(&enum_name, name);
@@ -219,6 +232,7 @@ impl Body<'_, '_, '_> {
         let (_, fields) = info.variants.iter().find(|(v, _)| v == variant)?;
         Some(self.constructor(
             enum_name,
+            Some(variant.to_string()),
             &info.generics,
             fields,
             format!("{enum_name}.{variant}"),
@@ -227,17 +241,26 @@ impl Body<'_, '_, '_> {
 
     /// A variant named without a call: a value when it is fieldless, and
     /// its constructor function otherwise.
-    pub(super) fn variant_value(&mut self, enum_name: &str, variant: &str) -> Ty {
+    /// `span` is where it is named, for the checked program.
+    pub(super) fn variant_value(&mut self, enum_name: &str, variant: &str, span: Span) -> Ty {
         match self.variant(enum_name, variant) {
-            Some(callable) if callable.params.is_empty() => callable.ret,
+            Some(callable) if callable.params.is_empty() => {
+                if let Some(construct) = callable.construct {
+                    self.record(span, Resolution::Construct(construct));
+                }
+                callable.ret
+            }
             Some(callable) => callable.into_fn_type(),
             None => Ty::Error,
         }
     }
 
+    /// The constructor of the struct `type_name`, or of its `variant`
+    /// when it is an enum.
     pub(super) fn constructor(
         &mut self,
         type_name: &str,
+        variant: Option<String>,
         generics: &[String],
         fields: &FieldsInfo,
         description: String,
@@ -247,6 +270,10 @@ impl Body<'_, '_, '_> {
             .map(|g| (g.clone(), self.infer.fresh()))
             .collect();
         let ret = Ty::generic(type_name, subst.iter().map(|(_, t)| t.clone()).collect());
+        let construct = Construct {
+            ty: type_name.to_string(),
+            variant,
+        };
         Callable {
             description,
             params: fields.instantiate(&subst),
@@ -261,6 +288,7 @@ impl Body<'_, '_, '_> {
             joined: None,
             type_args: Vec::new(),
             target: None,
+            construct: Some(construct),
         }
     }
 
@@ -327,6 +355,7 @@ impl Body<'_, '_, '_> {
             joined,
             type_args: subst.into_iter().map(|(_, t)| t).collect(),
             target: None,
+            construct: None,
         }
     }
 
@@ -393,7 +422,11 @@ impl Body<'_, '_, '_> {
             } else {
                 Callee::Function(qualified)
             };
-            self.record(span, Resolution::Method(callee));
+            let resolution = match sig.receiver {
+                Receiver::VarSelf => Resolution::MutatingMethod(callee),
+                _ => Resolution::Method(callee),
+            };
+            self.record(span, resolution);
         }
         let mut callable = self.instantiate(&sig, None);
         if let Some(declared) = &callable.receiver {

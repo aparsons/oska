@@ -19,6 +19,8 @@
 use std::path::Path;
 use std::rc::Rc;
 
+use oska_check::program::{Closure, Construct};
+
 /// A runtime value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
@@ -33,6 +35,10 @@ pub enum Value {
         start: i128,
         end: i128,
     },
+    /// A closure, with what it captured.
+    Closure(Rc<ClosureValue>),
+    /// A `List`'s items.
+    List(Rc<Vec<Value>>),
     /// An instance of a struct, by type name, with its fields in
     /// declaration order.
     Struct {
@@ -50,6 +56,15 @@ pub enum Value {
     /// The program's command-line arguments, the program path first: a
     /// program input `main` receives, not a capability.
     Args(Rc<[Rc<str>]>),
+}
+
+/// A closure value: its code, and the slots and receiver in scope where
+/// it was made, captured by value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClosureValue {
+    pub code: Rc<Closure>,
+    pub slots: Vec<Value>,
+    pub receiver: Option<Value>,
 }
 
 /// A built-in capability. Its type in the program (`Fs`, `FsRead`, ...)
@@ -158,6 +173,25 @@ impl Value {
         }
     }
 
+    /// What `ctor` builds from `fields`.
+    pub fn construct(ctor: &Construct, fields: Vec<Value>) -> Value {
+        match &ctor.variant {
+            Some(variant) => Value::variant(&ctor.ty, variant, fields),
+            None => Value::Struct {
+                ty: Rc::from(ctor.ty.as_str()),
+                fields: Rc::new(fields),
+            },
+        }
+    }
+
+    /// Field `index` of the struct the checker guarantees this is.
+    pub fn field(&self, index: usize) -> Value {
+        match self {
+            Value::Struct { fields, .. } => fields[index].clone(),
+            other => unreachable!("the checker guarantees a struct, found {other:?}"),
+        }
+    }
+
     pub fn some(value: Value) -> Value {
         Value::variant("Option", "Some", vec![value])
     }
@@ -230,6 +264,14 @@ impl Value {
         match self {
             Value::Int(n) => *n,
             other => unreachable!("the checker guarantees an integer, found {other:?}"),
+        }
+    }
+
+    /// The items of the `List` the checker guarantees this is.
+    pub fn as_list(&self) -> &Rc<Vec<Value>> {
+        match self {
+            Value::List(items) => items,
+            other => unreachable!("the checker guarantees a list, found {other:?}"),
         }
     }
 

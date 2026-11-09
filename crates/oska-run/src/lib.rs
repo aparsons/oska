@@ -14,7 +14,8 @@
 //! - `prng.rs` is the generator behind `Random`.
 //! - `interp.rs` evaluates the checked program.
 //! - `ops.rs` implements operators, with checked integer arithmetic.
-//! - `intrinsics.rs` implements body-less prelude functions.
+//! - `intrinsics.rs` implements body-less prelude functions, and
+//!   `data.rs` those of `List` and `String`.
 //! - `panics.rs` defines panics and every runtime code.
 //! - `value.rs` defines runtime values.
 //! - `host.rs` defines the hosts.
@@ -33,6 +34,7 @@ use oska_check::program::Program;
 use oska_syntax::Diagnostic;
 
 mod confine;
+mod data;
 mod host;
 mod interp;
 mod intrinsics;

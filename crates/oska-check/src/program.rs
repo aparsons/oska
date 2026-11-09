@@ -28,6 +28,7 @@
 //!    an `Unsupported` node or a call it cannot make.
 
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::Span;
@@ -39,11 +40,18 @@ pub(crate) mod lower;
 pub struct Program {
     /// Every function with a body, keyed by qualified name: `name` for a
     /// free function, `Type.method` for a method or associated function
-    /// of an inherent impl. (Trait impl methods are not lowered yet.)
+    /// of an inherent impl, and `<Type as Trait>.method` for a method of
+    /// a trait impl (see [`trait_method`]).
     pub functions: BTreeMap<String, Function>,
     /// The module each `use` imports, such as `std.sql`, with the span of
     /// its path, in source order.
     pub imports: Vec<(String, Span)>,
+}
+
+/// The qualified name of `method` in the impl of `trait_name` for
+/// `type_name`, such as `<Point as Display>.to_string`.
+pub fn trait_method(type_name: &str, trait_name: &str, method: &str) -> String {
+    format!("<{type_name} as {trait_name}>.{method}")
 }
 
 /// A function with a body.
@@ -112,9 +120,40 @@ pub enum ExprKind {
     Local(usize),
     /// `self`, the receiver of the method being run.
     SelfValue,
+    /// A list literal, `[a, b, c]`.
+    List(Vec<Expr>),
+    /// A struct or enum variant built from its fields, in declaration
+    /// order. A fieldless variant has none.
+    Construct {
+        ctor: Construct,
+        fields: Vec<Expr>,
+    },
+    /// Field `index` of a struct, counted in declaration order.
+    Field {
+        base: Box<Expr>,
+        index: usize,
+    },
+    /// A closure, `|params| body`. Evaluating it captures the frame's
+    /// slots and receiver as they are, by value.
+    Closure(Rc<Closure>),
+    /// A call of a function value, such as a closure held in a local.
+    CallValue {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
+    },
     /// A call. A method's receiver is its first argument.
     Call {
         callee: Callee,
+        args: Vec<Expr>,
+    },
+    /// A call of a **mutating method** (`var self`) on a place, such as
+    /// `xs.push(x)` or `self.items.push(x)`. The arguments are evaluated
+    /// first; then the receiver is taken out of `receiver`, so that a
+    /// value nothing else shares is changed in place, and the method's
+    /// final `self` is written back to it.
+    MutatingCall {
+        callee: Callee,
+        receiver: Place,
         args: Vec<Expr>,
     },
     /// A block: its statements in order, then its value.
@@ -134,6 +173,13 @@ pub enum ExprKind {
         cond: Box<Expr>,
         then_branch: Box<Expr>,
         else_branch: Option<Box<Expr>>,
+    },
+    /// `match`: the first arm whose pattern matches the scrutinee, and
+    /// whose guard then holds, gives the value. The checker guarantees
+    /// one does.
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<Arm>,
     },
     /// Something the checked program cannot express yet. A backend
     /// reports it when it is reached.
@@ -165,8 +211,9 @@ pub enum Stmt {
         cond: Expr,
         body: Expr,
     },
-    /// `for binding in iter { body }`: each element is pushed as the next
-    /// slot when `binds`, for the body to see.
+    /// `for binding in iter { body }`, over a range or a `List`: each
+    /// element is pushed as the next slot when `binds`, for the body to
+    /// see.
     For {
         binds: bool,
         iter: Expr,
@@ -174,11 +221,56 @@ pub enum Stmt {
     },
 }
 
-/// Something that can be assigned to.
+/// A closure's code.
+///
+/// Its body sees the slots in scope where the closure was written, by
+/// the same numbers, then its parameters: so a closure value carries the
+/// slots it captured, and a call pushes each argument after them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Closure {
+    /// Whether each parameter takes a slot: one named `_` takes none.
+    pub params: Vec<bool>,
+    pub body: Expr,
+}
+
+/// A `match` arm. The pattern's bindings are pushed as slots, in
+/// source order, for the guard and the body to see.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Arm {
+    pub pattern: Pattern,
+    pub guard: Option<Expr>,
+    pub body: Expr,
+}
+
+/// A pattern.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pattern {
+    /// `_`: matches anything, and binds nothing.
+    Wildcard,
+    /// A name: matches anything, and pushes it as the next slot.
+    Bind,
+    /// A literal (an integer, string, `Bool`, or `()`): matches an equal
+    /// value.
+    Literal(Expr),
+    /// A struct, which always matches its type, or an enum variant: then
+    /// each field, in declaration order, matches its pattern.
+    Construct {
+        ctor: Construct,
+        fields: Vec<Pattern>,
+    },
+}
+
+/// Something that can be assigned to, or that a mutating method
+/// changes. Writing inside a value that is shared copies it first, so
+/// changing a copy never changes the original (ADR 0001).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Place {
     /// A local, by slot.
     Local(usize),
+    /// `self`, in a mutating method.
+    SelfValue,
+    /// Field `index` of the struct at `base`.
+    Field { base: Box<Place>, index: usize },
 }
 
 /// A part of an interpolated string.
@@ -186,11 +278,21 @@ pub enum Place {
 pub enum Part {
     Text(String),
     /// A hole: its value, turned to text by `display`, the `Display`
-    /// implementation the checker chose (`Int.to_string`).
+    /// implementation the checker chose: `Int.to_string`, or a user
+    /// type's `<Point as Display>.to_string`.
     Hole {
         value: Expr,
         display: Callee,
     },
+}
+
+/// What a constructor builds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Construct {
+    /// The struct or enum's name, such as `Point` or `Option`.
+    pub ty: String,
+    /// The variant, for an enum, such as `Some`.
+    pub variant: Option<String>,
 }
 
 /// An integer type, with its inclusive range.

@@ -7,13 +7,17 @@
 //! [`ExprKind::Unsupported`].
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use oska_syntax::ast::{
-    self, BinaryOp, FnDecl, ItemKind, Module, StmtKind, StrPart, TypeKind, UnaryOp,
+    self, BinaryOp, FnDecl, ItemKind, Module, PatternKind, StmtKind, StrPart, TypeKind, UnaryOp,
 };
 use oska_syntax::Span;
 
-use super::{Callee, Expr, ExprKind, Function, IntType, Param, Part, Place, Program, Stmt};
+use super::{
+    Arm, Callee, Closure, Construct, Expr, ExprKind, Function, IntType, Param, Part, Pattern,
+    Place, Program, Stmt,
+};
 use crate::items::{FnSig, Items};
 
 /// What a node resolved to while its body was checked.
@@ -25,6 +29,10 @@ pub enum Resolution {
     /// A method call, `receiver.name(args)`, reaching this inherent
     /// method: the receiver is its first argument. Recorded at the call.
     Method(Callee),
+    /// A method call reaching this inherent **mutating method**
+    /// (`var self`), which writes its receiver back. Recorded at the
+    /// call.
+    MutatingMethod(Callee),
     /// A call of a function, or of a method named by its type, as in
     /// `Type.method(receiver, args)`: the arguments as written. Recorded
     /// at the call.
@@ -38,13 +46,23 @@ pub enum Resolution {
     /// An interpolation hole whose type displays through this
     /// implementation. Recorded at the hole.
     Display(Callee),
+    /// A constructor call, or a fieldless variant named as a value.
+    /// Recorded at the call, or at the variant's name.
+    Construct(Construct),
+    /// A call of a function value, such as a closure. Recorded at the
+    /// call.
+    CallValue,
+    /// A struct's field, by its position in declaration order. Recorded
+    /// at the field's name.
+    Field(usize),
 }
 
 /// Every resolution in a module, keyed by the span it was recorded at.
 pub type Resolutions = HashMap<Span, Resolution>;
 
-/// Lower every free function of `module`, and every method of its
-/// inherent impls, as `Type.method`. (Trait impls are not lowered yet.)
+/// Lower every free function of `module`, every method of its inherent
+/// impls, as `Type.method`, and every method of its trait impls, as
+/// `<Type as Trait>.method`.
 pub fn module(module: &Module, items: &Items, resolutions: &Resolutions) -> Program {
     let lowering = Lowering { resolutions };
     let mut program = Program::default();
@@ -64,19 +82,36 @@ pub fn module(module: &Module, items: &Items, resolutions: &Resolutions) -> Prog
                     program.imports.push((path.join("."), span));
                 }
             }
-            ItemKind::Impl(imp) if imp.trait_ref.is_none() => {
-                let TypeKind::Path { segments, .. } = &imp.target.kind else {
+            ItemKind::Impl(imp) => {
+                let Some(type_name) = path_name(&imp.target) else {
                     continue;
                 };
-                let Some(type_name) = segments.last().map(|s| s.name.as_str()) else {
-                    continue;
+                let trait_name = match &imp.trait_ref {
+                    Some(trait_ref) => match path_name(trait_ref) {
+                        Some(name) => Some(name),
+                        None => continue,
+                    },
+                    None => None,
                 };
                 for method in &imp.methods {
-                    if let ItemKind::Fn(f) = &method.kind {
-                        let name = format!("{type_name}.{}", f.name.name);
-                        let sig = items.inherent_method(type_name, &f.name.name);
-                        lowering.function(&mut program, name, f, sig);
-                    }
+                    let ItemKind::Fn(f) = &method.kind else {
+                        continue;
+                    };
+                    let method = &f.name.name;
+                    let (name, sig) = match trait_name {
+                        Some(trait_name) => (
+                            super::trait_method(type_name, trait_name, method),
+                            items
+                                .trait_methods_named(type_name, method)
+                                .into_iter()
+                                .find(|s| s.trait_name.as_deref() == Some(trait_name)),
+                        ),
+                        None => (
+                            format!("{type_name}.{method}"),
+                            items.inherent_method(type_name, method),
+                        ),
+                    };
+                    lowering.function(&mut program, name, f, sig);
                 }
             }
             _ => {}
@@ -177,6 +212,14 @@ impl Lowering<'_> {
                 Some(Resolution::Local(slot)) => Some(Place::Local(*slot)),
                 _ => None,
             },
+            ast::ExprKind::SelfValue => Some(Place::SelfValue),
+            ast::ExprKind::Field { base, name } => match self.resolutions.get(&name.span) {
+                Some(Resolution::Field(index)) => Some(Place::Field {
+                    base: Box::new(self.place(base)?),
+                    index: *index,
+                }),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -192,6 +235,7 @@ impl Lowering<'_> {
             ast::ExprKind::Int(text) => int_literal(text, false),
             ast::ExprKind::Str(parts) => self.string(parts),
             ast::ExprKind::Name(ident) => self.local(ident),
+            ast::ExprKind::Field { base, name } => self.field(expr.span, base, name),
             ast::ExprKind::SelfValue => ExprKind::SelfValue,
             ast::ExprKind::Block(block) => return self.block(block),
             ast::ExprKind::Unary { op, operand } => match (op, &operand.kind) {
@@ -207,6 +251,13 @@ impl Lowering<'_> {
                 },
             },
             ast::ExprKind::Binary { op, lhs, rhs } => self.binary(expr.span, *op, lhs, rhs),
+            ast::ExprKind::Closure { params, body } => ExprKind::Closure(Rc::new(Closure {
+                params: params.iter().map(|p| p.name.name != "_").collect(),
+                body: self.expr(body),
+            })),
+            ast::ExprKind::List(items) => {
+                ExprKind::List(items.iter().map(|item| self.expr(item)).collect())
+            }
             ast::ExprKind::Range { start, end } => ExprKind::Range {
                 start: self.boxed(start),
                 end: self.boxed(end),
@@ -229,11 +280,45 @@ impl Lowering<'_> {
                             args: std::iter::once(self.expr(base)).chain(args).collect(),
                         }
                     }
+                    (
+                        ast::ExprKind::Field { base, .. },
+                        Some(Resolution::MutatingMethod(callee)),
+                    ) => match self.place(base) {
+                        Some(receiver) => ExprKind::MutatingCall {
+                            callee: callee.clone(),
+                            receiver,
+                            args: args.collect(),
+                        },
+                        // A temporary, such as a call's result: the
+                        // change is not kept.
+                        None => ExprKind::Call {
+                            callee: callee.clone(),
+                            args: std::iter::once(self.expr(base)).chain(args).collect(),
+                        },
+                    },
                     (_, Some(Resolution::Call(callee))) => ExprKind::Call {
                         callee: callee.clone(),
                         args: args.collect(),
                     },
+                    (_, Some(Resolution::CallValue)) => ExprKind::CallValue {
+                        callee: self.boxed(callee),
+                        args: args.collect(),
+                    },
+                    (_, Some(Resolution::Construct(ctor))) => ExprKind::Construct {
+                        ctor: ctor.clone(),
+                        fields: args.collect(),
+                    },
                     _ => ExprKind::Unsupported,
+                }
+            }
+            ast::ExprKind::Match { scrutinee, arms } => {
+                let arms: Option<Vec<Arm>> = arms.iter().map(|arm| self.arm(arm)).collect();
+                match arms {
+                    Some(arms) => ExprKind::Match {
+                        scrutinee: self.boxed(scrutinee),
+                        arms,
+                    },
+                    None => ExprKind::Unsupported,
                 }
             }
             _ => ExprKind::Unsupported,
@@ -244,10 +329,72 @@ impl Lowering<'_> {
         }
     }
 
-    /// A name in value position: a local, by the slot it resolved to.
+    /// A `match` arm, or `None` when its pattern cannot be lowered yet.
+    fn arm(&self, arm: &ast::MatchArm) -> Option<Arm> {
+        Some(Arm {
+            pattern: self.pattern(&arm.pattern)?,
+            guard: arm.guard.as_ref().map(|g| self.expr(g)),
+            body: self.expr(&arm.body),
+        })
+    }
+
+    fn pattern(&self, pattern: &ast::Pattern) -> Option<Pattern> {
+        let constructor = || match self.resolutions.get(&pattern.span) {
+            Some(Resolution::Construct(ctor)) => Some(ctor.clone()),
+            _ => None,
+        };
+        Some(match &pattern.kind {
+            PatternKind::Wildcard => Pattern::Wildcard,
+            // An uppercase name is a fieldless variant (ADR 0005).
+            PatternKind::Binding(ident)
+                if ident.name.starts_with(|c: char| c.is_ascii_uppercase()) =>
+            {
+                Pattern::Construct {
+                    ctor: constructor()?,
+                    fields: Vec::new(),
+                }
+            }
+            PatternKind::Binding(ident) if ident.name == "_" => Pattern::Wildcard,
+            PatternKind::Binding(_) => Pattern::Bind,
+            PatternKind::Literal(literal) => Pattern::Literal(self.expr(literal)),
+            PatternKind::Constructor { args, .. } => Pattern::Construct {
+                ctor: constructor()?,
+                fields: args
+                    .iter()
+                    .map(|arg| self.pattern(&arg.pattern))
+                    .collect::<Option<_>>()?,
+            },
+        })
+    }
+
+    /// A name in value position: a local, by the slot it resolved to, or
+    /// a fieldless variant.
     fn local(&self, ident: &ast::Ident) -> ExprKind {
         match self.resolutions.get(&ident.span) {
             Some(Resolution::Local(slot)) => ExprKind::Local(*slot),
+            Some(Resolution::Construct(ctor)) => ExprKind::Construct {
+                ctor: ctor.clone(),
+                fields: Vec::new(),
+            },
+            _ => ExprKind::Unsupported,
+        }
+    }
+
+    /// `base.name` outside a call: a struct's field, or a fieldless
+    /// variant such as `Shape.Empty`.
+    fn field(&self, span: Span, base: &ast::Expr, name: &ast::Ident) -> ExprKind {
+        match (
+            self.resolutions.get(&name.span),
+            self.resolutions.get(&span),
+        ) {
+            (Some(Resolution::Field(index)), _) => ExprKind::Field {
+                base: self.boxed(base),
+                index: *index,
+            },
+            (_, Some(Resolution::Construct(ctor))) => ExprKind::Construct {
+                ctor: ctor.clone(),
+                fields: Vec::new(),
+            },
             _ => ExprKind::Unsupported,
         }
     }
@@ -286,22 +433,53 @@ impl Lowering<'_> {
             match part {
                 StrPart::Text { value, .. } => lowered.push(Part::Text(value.clone())),
                 StrPart::Hole { path, span } => {
-                    let (Some(Resolution::Display(display)), [name]) =
-                        (self.resolutions.get(span), path.as_slice())
+                    let (Some(Resolution::Display(display)), Some(value)) =
+                        (self.resolutions.get(span), self.hole(path))
                     else {
                         return ExprKind::Unsupported;
                     };
                     lowered.push(Part::Hole {
-                        value: Expr {
-                            kind: self.local(name),
-                            span: name.span,
-                        },
+                        value,
                         display: display.clone(),
                     });
                 }
             }
         }
         ExprKind::Interpolated(lowered)
+    }
+
+    /// A hole's path, `name` or `name.field...`, as the expression that
+    /// reads it.
+    fn hole(&self, path: &[ast::Ident]) -> Option<Expr> {
+        let (first, fields) = path.split_first()?;
+        let mut value = Expr {
+            kind: self.local(first),
+            span: first.span,
+        };
+        for name in fields {
+            let Some(Resolution::Field(index)) = self.resolutions.get(&name.span) else {
+                return None;
+            };
+            value = Expr {
+                kind: ExprKind::Field {
+                    base: Box::new(value),
+                    index: *index,
+                },
+                span: Span {
+                    start: first.span.start,
+                    end: name.span.end,
+                },
+            };
+        }
+        Some(value)
+    }
+}
+
+/// The last segment of a path type, such as `Point` or `Display`.
+fn path_name(ty: &ast::Type) -> Option<&str> {
+    match &ty.kind {
+        TypeKind::Path { segments, .. } => segments.last().map(|s| s.name.as_str()),
+        _ => None,
     }
 }
 

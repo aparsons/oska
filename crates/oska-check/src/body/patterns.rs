@@ -14,6 +14,7 @@ use oska_syntax::{Diagnostic, Edit, Span};
 
 use super::{Binding, Body, Callable, Labels};
 use crate::codes;
+use crate::program::lower::Resolution;
 use crate::suggest;
 use crate::ty::{self, Ty};
 use crate::usefulness::{self, CtorInfo, Pat};
@@ -262,7 +263,7 @@ impl Body<'_, '_, '_> {
                 Target::Struct(name) => {
                     let info = self.items.structs.get(name)?.clone();
                     let callable =
-                        self.constructor(name, &info.generics, &info.fields, name.clone());
+                        self.constructor(name, None, &info.generics, &info.fields, name.clone());
                     (callable, name.clone())
                 }
             };
@@ -292,6 +293,9 @@ impl Body<'_, '_, '_> {
             }
             return None;
         };
+        if let Some(construct) = &callable.construct {
+            self.record(span, Resolution::Construct(construct.clone()));
+        }
         self.check_args(&callable, args, key)
     }
 

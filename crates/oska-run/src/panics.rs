@@ -26,6 +26,8 @@ pub mod codes {
 
     /// Integer arithmetic overflowed its type.
     pub const OVERFLOW: &str = "P0001";
+    /// An index was out of bounds.
+    pub const INDEX_OUT_OF_BOUNDS: &str = "P0002";
     /// `todo()` was reached.
     pub const TODO: &str = "P0003";
     /// An integer was divided by zero, or its remainder taken.
@@ -39,6 +41,7 @@ pub mod codes {
         UNIMPLEMENTED_MODULE,
         UNSUPPORTED,
         OVERFLOW,
+        INDEX_OUT_OF_BOUNDS,
         TODO,
         DIVISION_BY_ZERO,
         MISSING_SECRET,
