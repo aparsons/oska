@@ -6,5 +6,6 @@
     {"name":"AppError.from","authority":[],"via":[],"pure":true},
     {"name":"AppError.to_string","authority":[],"via":[],"pure":true},
     {"name":"main","authority":["Stdout","FsRead"],"via":[{"param":"io","capabilities":["Stdout"]},{"param":"fs","capabilities":["FsRead"]}],"pure":false}
-  ]
+  ],
+  "audit": []
 }

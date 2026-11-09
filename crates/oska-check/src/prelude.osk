@@ -145,6 +145,13 @@ pub struct Range<T> { pub start: T, pub end: T }
 impl String {
     pub fn lines(self) -> List<String>
     pub fn len(self) -> Int
+    pub fn contains(self, needle: Untrusted<String>) -> Bool
+}
+
+impl Untrusted<String> {
+    // A trust assertion: a validator vouches for text it has checked.
+    // Every call is an audit site.
+    pub fn assume_trusted(self) -> String
 }
 
 pub struct Path { raw: String }

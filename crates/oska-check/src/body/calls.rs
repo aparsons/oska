@@ -325,6 +325,7 @@ impl Body<'_, '_, '_> {
             ),
             Receiver::Self_ => {}
         }
+        self.audit_call(&type_name, &name.name, span);
         let callable = self.instantiate(&sig, Some(&receiver));
         self.apply(callable, args, expected, span)
     }

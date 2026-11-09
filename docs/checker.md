@@ -6,7 +6,7 @@ The exit code is non-zero when there are diagnostics. Without `--format=json`, d
 
 Type and trait names in signatures and declarations are resolved, declarations are checked (`cap`, `main`, capitalization, recursive types, and where a `Scope` may appear), functions, methods, and impls are checked for duplicates, and under `--release` every body is scanned for `dbg(...)` and `todo()`. A `use` must name a `std.*` module that exists (`E0294`, `E0295`); see [`std` modules](#std-modules) for which do. Function, method, constant, and test bodies are type-checked with local, bidirectional inference: `let` types come from initializers, the expected type flows into literals, generic constructors, and closures, and an expression that fails gets an error type so it causes only one diagnostic.
 
-Text carries a trust flag (ADR 0006). `Untrusted<String>` is untrusted text; plain `String` is trusted. Text from outside the program is untrusted: `FsRead.read_to_string`, `Stdin.read_line`, `Env.get`, and `Args.get` return it. Trusted text may be used wherever untrusted text is accepted, so a data position such as `Stdout.println` or `Path.from` takes both; untrusted text is never accepted where trusted `String` is required (`E0300`).
+Text carries a trust flag (ADR 0006). `Untrusted<String>` is untrusted text; plain `String` is trusted. Text from outside the program is untrusted: `FsRead.read_to_string`, `Stdin.read_line`, `Env.get`, and `Args.get` return it. Trusted text may be used wherever untrusted text is accepted, so a data position such as `Stdout.println` or `Path.from` takes both; untrusted text is never accepted where trusted `String` is required (`E0300`). A validator vouches for text it has checked with `.assume_trusted()`, which returns trusted `String`; each call is a trust assertion, listed in the report's `audit` array.
 
 Contract clauses are type-checked but not evaluated: `requires` and `ensures` conditions must be `Bool`, they see the parameters (and `self`), `ensures |r|` binds `r` to the return type, and a contract may call only pure functions (`E0280`). A trait method's contract is checked even without a body.
 
@@ -23,16 +23,22 @@ A `test` body sees one built-in value, `t`, of the prelude type `TestContext`. I
     {"name":"count_lines","authority":["FsRead"],"via":[{"param":"fs","capabilities":["FsRead"]}],"pure":false},
     {"name":"Logger.log","authority":["Stdout"],"via":[{"param":"self","capabilities":["Stdout"]}],"pure":false},
     {"name":"add","authority":[],"via":[],"pure":true}
+  ],
+  "audit": [
+    {"kind":"assume_trusted","span":{"start":412,"end":430}}
   ]
 }
 ```
 
-- **`diagnostics`**, in source order. Each uses the same object as parser diagnostics (see [`ast.md`](ast.md)): `code`, `message`, `span` (byte offsets), and `fix` when the repair is unambiguous. A parse error is reported alone, with an empty `functions`.
+- **`diagnostics`**, in source order. Each uses the same object as parser diagnostics (see [`ast.md`](ast.md)): `code`, `message`, `span` (byte offsets), and `fix` when the repair is unambiguous. A parse error is reported alone, with empty `functions` and `audit`.
 - **`functions`**: one entry per function and `impl` method, in source order. The report is produced even when there are diagnostics.
   - `name`: the function's name, or `Type.method` for a method.
   - `authority`: the built-in capabilities the function can reach, in order of first appearance, without repeats. `cap` types are expanded through their fields, and type arguments are expanded, so `List<Stdout>` reaches `Stdout`. Attenuated capabilities keep their names, such as `FsRead`.
   - `via`: each capability-bearing parameter and the capabilities it supplies, in parameter order. A method's receiver appears as `self`. A `cap fn` parameter is listed with no capabilities, because a closure's capabilities are not written in its type; it still makes the function impure.
   - `pure`: `true` when no parameter, the receiver included, is capability-bearing.
+- **`audit`**: every **audit site**, in source order. It is always present, and is `[]` when there are none.
+  - `kind`: what the call does. `assume_trusted` is a **trust assertion**: `.assume_trusted()` turns untrusted text into trusted text, as a validator does.
+  - `span`: the whole call expression, such as `s.assume_trusted()`.
 
 ## The prelude
 

@@ -125,3 +125,20 @@ pub fn assert_report_json(src: &str, expected: &str) {
         "JSON report of {src:?}"
     );
 }
+
+/// Assert that the audit sites of `src` are exactly `expected`, in source
+/// order: each entry is a site's kind and the source text its span covers.
+pub fn assert_audit(src: &str, expected: &[(&str, &str)]) {
+    let report = check(src);
+    let actual: Vec<(&str, &str)> = report
+        .audit
+        .iter()
+        .map(|site| (site.kind, &src[site.span.start..site.span.end]))
+        .collect();
+    assert_eq!(
+        actual,
+        expected.to_vec(),
+        "audit sites of {src:?}, with diagnostics {:#?}",
+        report.diagnostics
+    );
+}
