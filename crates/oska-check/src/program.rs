@@ -109,6 +109,17 @@ pub enum ExprKind {
     Local(usize),
     /// `self`, the receiver of the method being run.
     SelfValue,
+    /// A struct or enum variant built from its fields, in declaration
+    /// order. A fieldless variant has none.
+    Construct {
+        ctor: Construct,
+        fields: Vec<Expr>,
+    },
+    /// Field `index` of a struct, counted in declaration order.
+    Field {
+        base: Box<Expr>,
+        index: usize,
+    },
     /// A call. A method's receiver is its first argument.
     Call {
         callee: Callee,
@@ -131,6 +142,13 @@ pub enum ExprKind {
         cond: Box<Expr>,
         then_branch: Box<Expr>,
         else_branch: Option<Box<Expr>>,
+    },
+    /// `match`: the first arm whose pattern matches the scrutinee, and
+    /// whose guard then holds, gives the value. The checker guarantees
+    /// one does.
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<Arm>,
     },
     /// Something the checked program cannot express yet. A backend
     /// reports it when it is reached.
@@ -171,6 +189,33 @@ pub enum Stmt {
     },
 }
 
+/// A `match` arm. The pattern's bindings are pushed as slots, in
+/// source order, for the guard and the body to see.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Arm {
+    pub pattern: Pattern,
+    pub guard: Option<Expr>,
+    pub body: Expr,
+}
+
+/// A pattern.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pattern {
+    /// `_`: matches anything, and binds nothing.
+    Wildcard,
+    /// A name: matches anything, and pushes it as the next slot.
+    Bind,
+    /// A literal (an integer, string, `Bool`, or `()`): matches an equal
+    /// value.
+    Literal(Expr),
+    /// A struct, which always matches its type, or an enum variant: then
+    /// each field, in declaration order, matches its pattern.
+    Construct {
+        ctor: Construct,
+        fields: Vec<Pattern>,
+    },
+}
+
 /// Something that can be assigned to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Place {
@@ -188,6 +233,15 @@ pub enum Part {
         value: Expr,
         display: Callee,
     },
+}
+
+/// What a constructor builds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Construct {
+    /// The struct or enum's name, such as `Point` or `Option`.
+    pub ty: String,
+    /// The variant, for an enum, such as `Some`.
+    pub variant: Option<String>,
 }
 
 /// An integer type, with its inclusive range.

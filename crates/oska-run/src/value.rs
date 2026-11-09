@@ -18,6 +18,8 @@
 
 use std::rc::Rc;
 
+use oska_check::program::Construct;
+
 /// A runtime value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
@@ -75,6 +77,25 @@ impl Value {
             ty: Rc::from(ty),
             variant: Rc::from(variant),
             fields: Rc::new(fields),
+        }
+    }
+
+    /// What `ctor` builds from `fields`.
+    pub fn construct(ctor: &Construct, fields: Vec<Value>) -> Value {
+        match &ctor.variant {
+            Some(variant) => Value::variant(&ctor.ty, variant, fields),
+            None => Value::Struct {
+                ty: Rc::from(ctor.ty.as_str()),
+                fields: Rc::new(fields),
+            },
+        }
+    }
+
+    /// Field `index` of the struct the checker guarantees this is.
+    pub fn field(&self, index: usize) -> Value {
+        match self {
+            Value::Struct { fields, .. } => fields[index].clone(),
+            other => unreachable!("the checker guarantees a struct, found {other:?}"),
         }
     }
 

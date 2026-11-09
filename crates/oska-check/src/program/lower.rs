@@ -9,11 +9,14 @@
 use std::collections::HashMap;
 
 use oska_syntax::ast::{
-    self, BinaryOp, FnDecl, ItemKind, Module, StmtKind, StrPart, TypeKind, UnaryOp,
+    self, BinaryOp, FnDecl, ItemKind, Module, PatternKind, StmtKind, StrPart, TypeKind, UnaryOp,
 };
 use oska_syntax::Span;
 
-use super::{Callee, Expr, ExprKind, Function, IntType, Param, Part, Place, Program, Stmt};
+use super::{
+    Arm, Callee, Construct, Expr, ExprKind, Function, IntType, Param, Part, Pattern, Place,
+    Program, Stmt,
+};
 use crate::items::{FnSig, Items};
 
 /// What a node resolved to while its body was checked.
@@ -38,6 +41,12 @@ pub enum Resolution {
     /// An interpolation hole whose type displays through this
     /// implementation. Recorded at the hole.
     Display(Callee),
+    /// A constructor call, or a fieldless variant named as a value.
+    /// Recorded at the call, or at the variant's name.
+    Construct(Construct),
+    /// A struct's field, by its position in declaration order. Recorded
+    /// at the field's name.
+    Field(usize),
 }
 
 /// Every resolution in a module, keyed by the span it was recorded at.
@@ -182,6 +191,7 @@ impl Lowering<'_> {
             ast::ExprKind::Int(text) => int_literal(text, false),
             ast::ExprKind::Str(parts) => self.string(parts),
             ast::ExprKind::Name(ident) => self.local(ident),
+            ast::ExprKind::Field { base, name } => self.field(expr.span, base, name),
             ast::ExprKind::SelfValue => ExprKind::SelfValue,
             ast::ExprKind::Block(block) => return self.block(block),
             ast::ExprKind::Unary { op, operand } => match (op, &operand.kind) {
@@ -223,7 +233,21 @@ impl Lowering<'_> {
                         callee: callee.clone(),
                         args: args.collect(),
                     },
+                    (_, Some(Resolution::Construct(ctor))) => ExprKind::Construct {
+                        ctor: ctor.clone(),
+                        fields: args.collect(),
+                    },
                     _ => ExprKind::Unsupported,
+                }
+            }
+            ast::ExprKind::Match { scrutinee, arms } => {
+                let arms: Option<Vec<Arm>> = arms.iter().map(|arm| self.arm(arm)).collect();
+                match arms {
+                    Some(arms) => ExprKind::Match {
+                        scrutinee: self.boxed(scrutinee),
+                        arms,
+                    },
+                    None => ExprKind::Unsupported,
                 }
             }
             _ => ExprKind::Unsupported,
@@ -234,10 +258,70 @@ impl Lowering<'_> {
         }
     }
 
-    /// A name in value position: a local, by the slot it resolved to.
+    /// A `match` arm, or `None` when its pattern cannot be lowered yet.
+    fn arm(&self, arm: &ast::MatchArm) -> Option<Arm> {
+        Some(Arm {
+            pattern: self.pattern(&arm.pattern)?,
+            guard: arm.guard.as_ref().map(|g| self.expr(g)),
+            body: self.expr(&arm.body),
+        })
+    }
+
+    fn pattern(&self, pattern: &ast::Pattern) -> Option<Pattern> {
+        let constructor = || match self.resolutions.get(&pattern.span) {
+            Some(Resolution::Construct(ctor)) => Some(ctor.clone()),
+            _ => None,
+        };
+        Some(match &pattern.kind {
+            PatternKind::Wildcard => Pattern::Wildcard,
+            // An uppercase name is a fieldless variant (ADR 0005).
+            PatternKind::Binding(ident) if ident.name.starts_with(|c: char| c.is_ascii_uppercase()) => {
+                Pattern::Construct {
+                    ctor: constructor()?,
+                    fields: Vec::new(),
+                }
+            }
+            PatternKind::Binding(ident) if ident.name == "_" => Pattern::Wildcard,
+            PatternKind::Binding(_) => Pattern::Bind,
+            PatternKind::Literal(literal) => Pattern::Literal(self.expr(literal)),
+            PatternKind::Constructor { args, .. } => Pattern::Construct {
+                ctor: constructor()?,
+                fields: args
+                    .iter()
+                    .map(|arg| self.pattern(&arg.pattern))
+                    .collect::<Option<_>>()?,
+            },
+        })
+    }
+
+    /// A name in value position: a local, by the slot it resolved to, or
+    /// a fieldless variant.
     fn local(&self, ident: &ast::Ident) -> ExprKind {
         match self.resolutions.get(&ident.span) {
             Some(Resolution::Local(slot)) => ExprKind::Local(*slot),
+            Some(Resolution::Construct(ctor)) => ExprKind::Construct {
+                ctor: ctor.clone(),
+                fields: Vec::new(),
+            },
+            _ => ExprKind::Unsupported,
+        }
+    }
+
+    /// `base.name` outside a call: a struct's field, or a fieldless
+    /// variant such as `Shape.Empty`.
+    fn field(&self, span: Span, base: &ast::Expr, name: &ast::Ident) -> ExprKind {
+        match (
+            self.resolutions.get(&name.span),
+            self.resolutions.get(&span),
+        ) {
+            (Some(Resolution::Field(index)), _) => ExprKind::Field {
+                base: self.boxed(base),
+                index: *index,
+            },
+            (_, Some(Resolution::Construct(ctor))) => ExprKind::Construct {
+                ctor: ctor.clone(),
+                fields: Vec::new(),
+            },
             _ => ExprKind::Unsupported,
         }
     }
@@ -276,22 +360,45 @@ impl Lowering<'_> {
             match part {
                 StrPart::Text { value, .. } => lowered.push(Part::Text(value.clone())),
                 StrPart::Hole { path, span } => {
-                    let (Some(Resolution::Display(display)), [name]) =
-                        (self.resolutions.get(span), path.as_slice())
+                    let (Some(Resolution::Display(display)), Some(value)) =
+                        (self.resolutions.get(span), self.hole(path))
                     else {
                         return ExprKind::Unsupported;
                     };
                     lowered.push(Part::Hole {
-                        value: Expr {
-                            kind: self.local(name),
-                            span: name.span,
-                        },
+                        value,
                         display: display.clone(),
                     });
                 }
             }
         }
         ExprKind::Interpolated(lowered)
+    }
+
+    /// A hole's path, `name` or `name.field...`, as the expression that
+    /// reads it.
+    fn hole(&self, path: &[ast::Ident]) -> Option<Expr> {
+        let (first, fields) = path.split_first()?;
+        let mut value = Expr {
+            kind: self.local(first),
+            span: first.span,
+        };
+        for name in fields {
+            let Some(Resolution::Field(index)) = self.resolutions.get(&name.span) else {
+                return None;
+            };
+            value = Expr {
+                kind: ExprKind::Field {
+                    base: Box::new(value),
+                    index: *index,
+                },
+                span: Span {
+                    start: first.span.start,
+                    end: name.span.end,
+                },
+            };
+        }
+        Some(value)
     }
 }
 

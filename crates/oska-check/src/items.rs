@@ -117,6 +117,13 @@ impl FieldsInfo {
             .map(|(_, ty)| ty)
     }
 
+    /// The position of the named field `name`, in declaration order.
+    pub fn index(&self, name: &str) -> Option<usize> {
+        self.fields
+            .iter()
+            .position(|(n, _)| n.as_deref() == Some(name))
+    }
+
     /// The names of the named fields, in order.
     pub fn names(&self) -> Vec<&str> {
         self.fields

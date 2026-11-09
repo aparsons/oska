@@ -11,7 +11,9 @@
 //! [`Interpreter::stmt`]), and keep the frame's slots in step with the
 //! checker's locals: push exactly where the checker binds.
 
-use oska_check::program::{Callee, Expr, ExprKind, Function, Part, Place, Program, Stmt};
+use oska_check::program::{
+    Arm, Callee, Expr, ExprKind, Function, Part, Pattern, Place, Program, Stmt,
+};
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::Span;
 
@@ -128,11 +130,13 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                     }
                 }
             }
+            ExprKind::Construct { ctor, fields } => {
+                let fields = self.eval_all(fields, frame)?;
+                Ok(Value::construct(ctor, fields))
+            }
+            ExprKind::Field { base, index } => Ok(self.eval(base, frame)?.field(*index)),
             ExprKind::Call { callee, args } => {
-                let mut values = Vec::with_capacity(args.len());
-                for arg in args {
-                    values.push(self.eval(arg, frame)?);
-                }
+                let values = self.eval_all(args, frame)?;
                 self.call_callee(callee, values, expr.span)
             }
             ExprKind::Block { stmts, value } => {
@@ -141,10 +145,88 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 frame.slots.truncate(height);
                 result
             }
+            ExprKind::Match { scrutinee, arms } => {
+                let scrutinee = self.eval(scrutinee, frame)?;
+                self.match_arms(&scrutinee, arms, frame)
+            }
             ExprKind::Unsupported => {
                 unreachable!("`crate::run` refuses a program with an unsupported node")
             }
         }
+    }
+
+    /// The value of the first arm that matches `scrutinee`. Each arm's
+    /// bindings are popped once it is done with, matched or not.
+    fn match_arms(
+        &mut self,
+        scrutinee: &Value,
+        arms: &[Arm],
+        frame: &mut Frame,
+    ) -> Result<Value, Unwind> {
+        let height = frame.slots.len();
+        for arm in arms {
+            let mut chosen = self.matches(&arm.pattern, scrutinee, frame)?;
+            if chosen {
+                if let Some(guard) = &arm.guard {
+                    chosen = self.eval(guard, frame)?.as_bool();
+                }
+            }
+            let result = if chosen {
+                Some(self.eval(&arm.body, frame))
+            } else {
+                None
+            };
+            frame.slots.truncate(height);
+            if let Some(result) = result {
+                return result;
+            }
+        }
+        unreachable!("the checker guarantees an exhaustive `match`")
+    }
+
+    /// Whether `value` matches `pattern`, pushing its bindings as it
+    /// goes. On a mismatch, the caller pops them.
+    fn matches(
+        &mut self,
+        pattern: &Pattern,
+        value: &Value,
+        frame: &mut Frame,
+    ) -> Result<bool, Unwind> {
+        Ok(match pattern {
+            Pattern::Wildcard => true,
+            Pattern::Bind => {
+                frame.slots.push(value.clone());
+                true
+            }
+            Pattern::Literal(literal) => self.eval(literal, frame)? == *value,
+            Pattern::Construct { ctor, fields } => {
+                let (variant, values) = match value {
+                    Value::Struct { fields, .. } => (None, fields),
+                    Value::Variant {
+                        variant, fields, ..
+                    } => (Some(&**variant), fields),
+                    other => unreachable!("the checker guarantees a struct or enum, found {other:?}"),
+                };
+                if variant != ctor.variant.as_deref() {
+                    return Ok(false);
+                }
+                for (field, value) in fields.iter().zip(values.iter()) {
+                    if !self.matches(field, value, frame)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+        })
+    }
+
+    /// Each of `exprs`, in order.
+    fn eval_all(&mut self, exprs: &[Expr], frame: &mut Frame) -> Result<Vec<Value>, Unwind> {
+        let mut values = Vec::with_capacity(exprs.len());
+        for expr in exprs {
+            values.push(self.eval(expr, frame)?);
+        }
+        Ok(values)
     }
 
     /// The statements of a block, then its value. The caller pops the
