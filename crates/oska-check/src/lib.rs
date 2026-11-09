@@ -22,7 +22,7 @@
 //! | --- | --- |
 //! | `E0200` | Unknown type or trait name. The fix replaces it with the single closest name, when there is one. |
 //! | `E0201` | A trait used where a type is expected, or a type used where a trait is expected. |
-//! | `E0202` | A type or trait name declared twice, or one that redeclares a prelude name. |
+//! | `E0202` | A type, trait, or free function declared twice or redeclaring a prelude name, or a method declared twice for one type. |
 //! | `E0210` | A struct or enum whose own fields name a capability-bearing type is not declared `cap`. The fix inserts `cap`. |
 //! | `E0211` | A `main` parameter that is not a built-in capability or `Args`. |
 //! | `E0212` | `main` returns something other than `()` or `Result<(), E>`, or `E` does not implement `Display`. |
@@ -66,11 +66,14 @@
 //! | `E0272` | Reading a private field of a prelude type. |
 //! | `E0280` | A contract clause calls a function that is not pure (a capability-bearing parameter or receiver, or a `cap fn` value). |
 //! | `E0281` | A `requires` or `ensures` condition that is not `Bool`. |
+//! | `E0290` | Two overlapping `impl Trait for Type`, or one that overlaps a prelude impl. |
+//! | `E0291` | An inherent `impl` for a prelude type. |
 
 use oska_syntax::Diagnostic;
 
 mod authority;
 mod body;
+mod coherence;
 mod collect;
 mod decl_rules;
 mod infer;
@@ -131,6 +134,8 @@ pub(crate) mod codes {
     pub const PRIVATE_FIELD: &str = "E0272";
     pub const IMPURE_IN_CONTRACT: &str = "E0280";
     pub const CONTRACT_NOT_BOOL: &str = "E0281";
+    pub const CONFLICTING_IMPL: &str = "E0290";
+    pub const FOREIGN_INHERENT_IMPL: &str = "E0291";
 }
 
 /// Options that change what is checked.
@@ -250,6 +255,7 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
     let decls = collect::Decls::collect(&module, &mut diagnostics);
     resolve::module(&module, &decls, &mut diagnostics);
     decl_rules::module(src, &module, &decls, &mut diagnostics);
+    coherence::module(&module, &decls, &mut diagnostics);
     recursion::module(&module, &mut diagnostics);
     if options.release {
         release::module(&module, &mut diagnostics);

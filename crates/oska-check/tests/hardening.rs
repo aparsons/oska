@@ -5,6 +5,16 @@ mod common;
 
 use common::{assert_errors, assert_ok};
 
+/// Each diagnostic's code and start offset, for snippets where the
+/// spanned text alone is ambiguous.
+fn codes_at(src: &str) -> Vec<(&'static str, usize)> {
+    common::check(src)
+        .diagnostics
+        .iter()
+        .map(|d| (d.code, d.span.start))
+        .collect()
+}
+
 const RUN: &str = "fn run(f: fn()) {\n    f()\n}\n";
 
 // ---- `cap fn` never flows into a plain `fn` ---------------------------------------
@@ -107,4 +117,79 @@ fn a_generic_call_on_pure_values_is_allowed_in_a_contract() {
         "fn id<T>(x: T) -> T {\n    x\n}\n\
          fn f(n: Int) -> Int\n    requires id(n) == n\n{\n    n\n}",
     );
+}
+
+// ---- Duplicates -------------------------------------------------------------------
+
+#[test]
+fn a_function_declared_twice_is_reported_at_the_second() {
+    let src = "fn f() -> Int {\n    1\n}\nfn f() -> String {\n    \"a\"\n}";
+    assert_eq!(
+        codes_at(src),
+        vec![("E0202", src.rfind("f()").expect("second"))]
+    );
+}
+
+#[test]
+fn a_function_cannot_redeclare_a_prelude_function() {
+    let src = "fn todo() -> Int {\n    1\n}";
+    assert_errors(src, &[("E0202", "todo")]);
+}
+
+#[test]
+fn an_inherent_method_declared_twice_across_impls_is_reported_at_the_second() {
+    let src = "struct Foo { x: Int }\n\
+               impl Foo {\n    fn a(self) -> Int {\n        1\n    }\n}\n\
+               impl Foo {\n    fn a(self) -> String {\n        \"s\"\n    }\n}";
+    let second = src.rfind("fn a").expect("second method") + "fn ".len();
+    assert_eq!(codes_at(src), vec![("E0202", second)]);
+}
+
+#[test]
+fn an_impl_of_a_trait_for_a_type_twice_is_reported_at_the_second() {
+    let src = "struct Foo { x: Int }\n\
+               impl Display for Foo {\n    fn to_string(self) -> String {\n        \"a\"\n    }\n}\n\
+               impl Display for Foo {\n    fn to_string(self) -> String {\n        \"b\"\n    }\n}";
+    let second = src.rfind("impl Display").expect("second impl") + "impl ".len();
+    assert_eq!(codes_at(src), vec![("E0290", second)]);
+}
+
+#[test]
+fn an_impl_that_overlaps_a_prelude_impl_conflicts() {
+    assert_errors(
+        "impl Eq for Int {\n    fn eq(self, other: Int) -> Bool {\n        true\n    }\n}",
+        &[("E0290", "Eq")],
+    );
+}
+
+#[test]
+fn impls_of_one_trait_for_different_types_do_not_conflict() {
+    assert_ok(
+        "struct A { x: Int }\nstruct B { x: Int }\n\
+         impl Display for A {\n    fn to_string(self) -> String {\n        \"a\"\n    }\n}\n\
+         impl Display for B {\n    fn to_string(self) -> String {\n        \"b\"\n    }\n}",
+    );
+}
+
+#[test]
+fn a_generic_impl_conflicts_with_an_impl_for_one_of_its_instances() {
+    let src = "struct Box<T> { value: T }\n\
+               impl<T> Display for Box<T> {\n    fn to_string(self) -> String {\n        \"a\"\n    }\n}\n\
+               impl Display for Box<Int> {\n    fn to_string(self) -> String {\n        \"b\"\n    }\n}";
+    let second = src.rfind("impl Display").expect("second impl") + "impl ".len();
+    assert_eq!(codes_at(src), vec![("E0290", second)]);
+}
+
+// ---- Orphan rule for inherent methods ---------------------------------------------
+
+#[test]
+fn user_code_cannot_add_inherent_methods_to_a_prelude_type() {
+    let src = "impl FsRead {\n    fn size(self) -> Int {\n        1\n    }\n}";
+    assert_errors(src, &[("E0291", "FsRead")]);
+}
+
+#[test]
+fn user_code_cannot_add_inherent_methods_to_a_generic_prelude_type() {
+    let src = "impl<T> Option<T> {\n    fn size(self) -> Int {\n        1\n    }\n}";
+    assert_errors(src, &[("E0291", "Option<T>")]);
 }
