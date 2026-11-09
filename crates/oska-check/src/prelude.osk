@@ -106,6 +106,10 @@ impl Args {
 
 pub struct IoError { message: String }
 
+impl Display for IoError {
+    fn to_string(self) -> String
+}
+
 // ---- Core traits -------------------------------------------------------
 
 pub trait Eq {
@@ -117,6 +121,14 @@ pub trait Hash {
 }
 
 pub trait Display {
+    fn to_string(self) -> String
+}
+
+impl Display for String {
+    fn to_string(self) -> String
+}
+
+impl Display for Int {
     fn to_string(self) -> String
 }
 

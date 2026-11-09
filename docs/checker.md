@@ -4,7 +4,7 @@
 
 The exit code is non-zero when there are diagnostics. Without `--format=json`, diagnostics go to stderr and the authority report to stdout, one function per line, such as `fn main: Stdout (io), FsRead (fs)` or `fn add: pure`.
 
-Function bodies are not checked yet; only type and trait names in signatures and declarations are resolved.
+Function bodies are not type-checked yet. Type and trait names in signatures and declarations are resolved, declarations are checked (`cap`, `main`, capitalization, recursive types), and under `--release` every body is scanned for `dbg(...)`.
 
 ## Report
 
@@ -30,7 +30,7 @@ Function bodies are not checked yet; only type and trait names in signatures and
 
 ## The prelude
 
-The prelude is Oska source, `crates/oska-check/src/prelude.osk`, parsed with `parse_prelude`. It declares the built-in capabilities as `#[capability]` structs with private fields, the core types (`Option`, `Result`, `List`, `Path`, `Args`, `IoError`) and the core traits (`Eq`, `Hash`, `Display`, `From`). The primitive types (`Int`, `I8` to `I64`, `U8` to `U64`, `Bool`, `String`) and `()` are built into the checker. User code cannot redeclare any of these names.
+The prelude is Oska source, `crates/oska-check/src/prelude.osk`, parsed with `parse_prelude`. It declares the built-in capabilities as `#[capability]` structs with private fields, the core types (`Option`, `Result`, `List`, `Path`, `Args`, `IoError`) and the core traits (`Eq`, `Hash`, `Display`, `From`). The primitive types (`Int`, `I8` to `I64`, `U8` to `U64`, `Bool`, `String`) and `()` are built into the checker. The prelude implements `Display` for `String`, `Int`, and `IoError`. User code cannot redeclare any of these names.
 
 ## Diagnostic codes
 
@@ -39,3 +39,10 @@ The prelude is Oska source, `crates/oska-check/src/prelude.osk`, parsed with `pa
 | `E0200` | Unknown type or trait name. A qualified path such as `sql.Query` is unknown until `std.*` modules exist. | Replace the name with the single closest declared name, when one is close enough. |
 | `E0201` | A trait where a type is expected (`x: Display`), or a type where a trait is expected (`T: Int`). | None. |
 | `E0202` | A type or trait name declared twice in the module, or one that redeclares a prelude name. | None. |
+| `E0210` | A struct or enum whose own fields name a capability-bearing type (a built-in capability, a `cap` type, or a `cap fn`, including inside written type arguments such as `List<Stdout>`) is not declared `cap`. A field typed by a type parameter, as in `struct Box<T> { value: T }`, does not count. Spans the type's name. | Insert `cap` before `struct` or `enum`. |
+| `E0211` | A `main` parameter whose type is not a built-in capability or `Args`. Spans the parameter's type. | None. |
+| `E0212` | `main` returns something other than `()` or `Result<(), E>` (spans the return type), or `E` has no `impl Display` (spans `E`). | None. |
+| `E0213` | A type, enum variant, trait, or type parameter name that does not start with an uppercase letter (ADR 0005). | None. |
+| `E0214` | A function, method, field, or parameter name that starts with an uppercase letter (ADR 0005). A leading `_` is allowed. | None. |
+| `E0215` | A struct or enum with no base case: every way to build it contains itself, as in `struct Loop { me: Loop }`. Recursion through `Option`, `List`, or an enum variant without the type needs no indirection. Each type in a cycle is reported. | None. |
+| `E0216` | A call to `dbg(...)` when checking with `--release`. Spans the call. | None. |
