@@ -8,6 +8,36 @@ fn count_lines(fs: FsRead, path: Path) -> Result<Int, IoError> {
     Ok(text.lines().count())
 }
 
+// The program's own error type. `?` converts an IoError into it through
+// the explicit `From` implementation.
+enum AppError {
+    Usage(String),
+    Io(IoError),
+}
+
+impl AppError {
+    fn usage(message: String) -> AppError {
+        AppError.Usage(message)
+    }
+}
+
+impl From<IoError> for AppError {
+    fn from(err: IoError) -> AppError {
+        AppError.Io(err)
+    }
+}
+
+// `main` may return `Result<(), E>` only when `E: Display`, so the runtime
+// can report the failure.
+impl Display for AppError {
+    fn to_string(self) -> String {
+        match self {
+            AppError.Usage(message) => message
+            AppError.Io(_) => "cannot read the file"
+        }
+    }
+}
+
 fn main(io: Stdout, fs: FsRead, args: Args) -> Result<(), AppError> {
     // `args` is a program input (plain data), not a capability.
     // Attenuate: hand out a capability restricted to the current directory.

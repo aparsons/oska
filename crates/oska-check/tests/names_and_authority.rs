@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{assert_authority, assert_errors, assert_fix, assert_ok};
+use common::{assert_authority, assert_errors, assert_fix, assert_ok, assert_report_json};
 
 #[test]
 fn a_capability_parameter_is_the_functions_authority() {
@@ -335,4 +335,64 @@ fn a_parse_error_is_reported_with_no_functions() {
     assert_eq!(report.diagnostics.len(), 1);
     assert!(report.diagnostics[0].code.starts_with("E01"));
     assert!(report.functions.is_empty());
+}
+
+// ---- The JSON report: {"diagnostics": [...], "functions": [...]} -------------
+
+#[test]
+fn a_clean_module_reports_only_authority() {
+    assert_report_json(
+        "cap struct Logger { out: Stdout }\n\
+         impl Logger {\n    fn log(self, line: String) { }\n}\n\
+         fn run(log: Logger, fs: FsRead, n: Int) { }\n\
+         fn add(a: Int, b: Int) -> Int { a + b }",
+        r#"{
+            "diagnostics": [],
+            "functions": [
+                {"name": "Logger.log", "authority": ["Stdout"],
+                 "via": [{"param": "self", "capabilities": ["Stdout"]}],
+                 "pure": false},
+                {"name": "run", "authority": ["Stdout", "FsRead"],
+                 "via": [{"param": "log", "capabilities": ["Stdout"]},
+                         {"param": "fs", "capabilities": ["FsRead"]}],
+                 "pure": false},
+                {"name": "add", "authority": [], "via": [], "pure": true}
+            ]
+        }"#,
+    );
+}
+
+#[test]
+fn diagnostics_use_the_shared_envelope_with_their_fix() {
+    assert_report_json(
+        "fn f(x: Strng) { }",
+        r#"{
+            "diagnostics": [
+                {"code": "E0200",
+                 "message": "unknown type `Strng`; did you mean `String`?",
+                 "span": {"start": 8, "end": 13},
+                 "fix": {"message": "replace with `String`",
+                         "edits": [{"span": {"start": 8, "end": 13},
+                                    "replacement": "String"}]}}
+            ],
+            "functions": [
+                {"name": "f", "authority": [], "via": [], "pure": true}
+            ]
+        }"#,
+    );
+}
+
+#[test]
+fn a_cap_fn_parameter_is_listed_in_via_without_capabilities() {
+    assert_report_json(
+        "fn each(f: cap fn(Int)) { }",
+        r#"{
+            "diagnostics": [],
+            "functions": [
+                {"name": "each", "authority": [],
+                 "via": [{"param": "f", "capabilities": []}],
+                 "pure": false}
+            ]
+        }"#,
+    );
 }

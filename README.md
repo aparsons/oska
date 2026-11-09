@@ -30,6 +30,7 @@ fn main(io: Stdout) -> Result<(), IoError> {
 |---|---|
 | `crates/oskac` | The `oskac` compiler CLI |
 | `crates/oska-syntax` | Lexer (and, soon, parser and AST) |
+| `crates/oska-check` | Type checker and authority report (`oskac check`) |
 | `examples/` | Example `.osk` programs |
 | `docs/design.md` | Language design notes |
 | `docs/adr/` | Architecture decision records |

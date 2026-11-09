@@ -17,5 +17,6 @@ version = "0.0.1"
 name = "oskac"
 version = "0.0.1"
 dependencies = [
+ "oska-check",
  "oska-syntax",
 ]
