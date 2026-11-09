@@ -8,7 +8,7 @@ use oska_syntax::ast::{Item, ItemKind, Module, Type, TypeKind};
 use oska_syntax::Diagnostic;
 
 use crate::codes;
-use crate::decls::field_types;
+use crate::collect::field_types;
 use crate::prelude;
 
 /// How deeply type arguments may nest before a type is assumed to have a

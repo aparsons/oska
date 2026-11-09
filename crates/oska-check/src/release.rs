@@ -1,14 +1,17 @@
-//! Release-only rules: `dbg(...)` is an error under `--release`.
+//! Release-only rules: `dbg(...)` and `todo()` are errors under
+//! `--release`.
 //!
 //! This is a syntactic walk over every body, separate from body
-//! checking: any call whose callee is the bare name `dbg` is reported.
+//! checking: any call whose callee is the bare name `dbg` or `todo` is
+//! reported.
 
 use oska_syntax::ast::{Block, Expr, ExprKind, FnDecl, Item, ItemKind, Module, StmtKind};
-use oska_syntax::Diagnostic;
+use oska_syntax::{Diagnostic, Edit, Span};
 
 use crate::codes;
+use crate::prelude;
 
-/// Report every `dbg(...)` call in `module`.
+/// Report every `dbg(...)` and `todo()` call in `module`.
 pub fn module(module: &Module, diagnostics: &mut Vec<Diagnostic>) {
     let mut walk = Walk { diagnostics };
     for item in &module.items {
@@ -82,12 +85,39 @@ impl Walk<'_> {
             | ExprKind::SelfValue => {}
             ExprKind::Field { base, .. } => self.expr(base),
             ExprKind::Call { callee, args } => {
-                if matches!(&callee.kind, ExprKind::Name(name) if name.name == "dbg") {
-                    self.diagnostics.push(Diagnostic::new(
-                        codes::DBG_IN_RELEASE,
-                        "`dbg(...)` is not allowed in a release build",
-                        expr.span,
-                    ));
+                match &callee.kind {
+                    ExprKind::Name(name) if name.name == prelude::DBG => {
+                        let mut diagnostic = Diagnostic::new(
+                            codes::DBG_IN_RELEASE,
+                            "`dbg(...)` is not allowed in a release build",
+                            expr.span,
+                        );
+                        // `dbg(x)` returns `x`, so the call can become `x`.
+                        if let [arg] = args.as_slice() {
+                            diagnostic = diagnostic.with_fix(
+                                "remove `dbg`, keeping its argument",
+                                vec![
+                                    Edit::delete(Span {
+                                        start: expr.span.start,
+                                        end: arg.value.span.start,
+                                    }),
+                                    Edit::delete(Span {
+                                        start: arg.value.span.end,
+                                        end: expr.span.end,
+                                    }),
+                                ],
+                            );
+                        }
+                        self.diagnostics.push(diagnostic);
+                    }
+                    ExprKind::Name(name) if name.name == prelude::TODO => {
+                        self.diagnostics.push(Diagnostic::new(
+                            codes::TODO_IN_RELEASE,
+                            "`todo()` is not allowed in a release build; finish this code first",
+                            expr.span,
+                        ));
+                    }
+                    _ => {}
                 }
                 self.expr(callee);
                 for arg in args {

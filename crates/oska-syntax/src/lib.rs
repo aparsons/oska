@@ -376,7 +376,8 @@ impl fmt::Display for Diagnostic {
 
 impl std::error::Error for Diagnostic {}
 
-pub(crate) fn json_escape(s: &str) -> String {
+/// Escape `s` for use inside a JSON string literal (without the quotes).
+pub fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {

@@ -61,6 +61,7 @@ Diagnostics that carry a fix:
 | `E0120` | insert the missing `,` |
 | `E0143` | remove the `,` after a match arm, when the next arm is already on its own line |
 | `E0151`, `E0162`, `E0163`, `E0164` | remove `pub` |
+| `E0170` | remove the `#[capability]` attribute (prelude mode only) |
 
 ## Node schema
 

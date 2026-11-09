@@ -14,8 +14,8 @@ use oska_syntax::{Diagnostic, Edit, Span};
 
 use super::{Binding, Body, Callable, Labels};
 use crate::codes;
-use crate::resolve::closest;
-use crate::ty::Ty;
+use crate::suggest;
+use crate::ty::{self, Ty};
 use crate::usefulness::{self, CtorInfo, Pat};
 
 /// What a constructor pattern's path names.
@@ -161,7 +161,7 @@ impl Body<'_, '_, '_> {
             Ty::Named(name, args) => (name, args),
             _ => return None,
         };
-        if name == "Bool" {
+        if name == ty::BOOL {
             return Some(vec![ctor("true", Vec::new()), ctor("false", Vec::new())]);
         }
         if let Some(info) = self.items.enums.get(&name) {
@@ -170,12 +170,10 @@ impl Body<'_, '_, '_> {
                 info.variants
                     .iter()
                     .map(|(variant, fields)| {
-                        let fields = fields
-                            .fields
-                            .iter()
-                            .map(|(l, t)| (l.clone(), t.substitute(&subst)))
-                            .collect();
-                        ctor(&self.variant_key(&name, variant), fields)
+                        ctor(
+                            &self.variant_key(&name, variant),
+                            fields.instantiate(&subst),
+                        )
                     })
                     .collect(),
             );
@@ -184,13 +182,7 @@ impl Body<'_, '_, '_> {
         match self.items.structs.get(&name) {
             Some(info) if user_struct => {
                 let subst: Vec<(String, Ty)> = info.generics.iter().cloned().zip(args).collect();
-                let fields = info
-                    .fields
-                    .fields
-                    .iter()
-                    .map(|(l, t)| (l.clone(), t.substitute(&subst)))
-                    .collect();
-                Some(vec![ctor(&name, fields)])
+                Some(vec![ctor(&name, info.fields.instantiate(&subst))])
             }
             _ => None,
         }
@@ -421,29 +413,21 @@ impl Body<'_, '_, '_> {
                 }
             }
         }
-        let names: Vec<&str> = candidates.iter().map(|(n, _)| n.as_str()).collect();
-        let suggestion = closest(&name.name, &names)
-            .and_then(|n| candidates.iter().find(|(c, _)| c == n))
-            .map(|(_, written)| written.clone());
+        let pairs: Vec<(&str, &str)> = candidates
+            .iter()
+            .map(|(n, written)| (n.as_str(), written.as_str()))
+            .collect();
         let message = format!(
             "unknown variant `{}`; an uppercase name in a pattern must be a variant",
             name.name
         );
-        let diagnostic = match suggestion {
-            Some(suggestion) => Diagnostic::new(
-                codes::UNKNOWN_VARIANT,
-                format!("{message}; did you mean `{suggestion}`?"),
-                name.span,
-            )
-            .with_fix(
-                format!("replace with `{suggestion}`"),
-                vec![Edit {
-                    span: name.span,
-                    replacement: suggestion,
-                }],
-            ),
-            None => Diagnostic::new(codes::UNKNOWN_VARIANT, message, name.span),
-        };
+        let diagnostic = suggest::unknown_written(
+            codes::UNKNOWN_VARIANT,
+            message,
+            &name.name,
+            name.span,
+            &pairs,
+        );
         self.diagnostics.push(diagnostic);
     }
 

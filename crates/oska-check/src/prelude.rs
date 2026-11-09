@@ -13,6 +13,14 @@ pub const PRIMITIVES: &[&str] = &[
     "Int", "I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64", "Bool", "String",
 ];
 
+/// The `std.*` modules that `use` can import. There are none yet, so
+/// every `use` is an error for now.
+pub const STD_MODULES: &[&str] = &[];
+
+/// Prelude functions that `--release` rejects.
+pub const DBG: &str = "dbg";
+pub const TODO: &str = "todo";
+
 /// The parsed prelude.
 pub fn module() -> &'static Module {
     static MODULE: OnceLock<Module> = OnceLock::new();
@@ -24,7 +32,7 @@ pub fn module() -> &'static Module {
 
 #[cfg(test)]
 mod tests {
-    use crate::{decls::Decls, resolve};
+    use crate::{collect::Decls, resolve};
 
     #[test]
     fn every_name_in_the_prelude_resolves() {

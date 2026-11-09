@@ -6,10 +6,10 @@ use std::collections::HashMap;
 
 use oska_syntax::ast::{Field, Fields, FnDecl, GenericParam, ItemKind, Module, Type, TypeKind};
 
-use crate::authority;
-use crate::decls::{DeclKind, Decls};
+use crate::authority::capability_bearing;
+use crate::collect::{DeclKind, Decls};
 use crate::prelude;
-use crate::ty::Ty;
+use crate::ty::{self, Ty};
 
 /// A function or method signature. Generic parameters appear in the
 /// types as [`Ty::Param`]; instantiate them before use.
@@ -20,9 +20,8 @@ pub struct FnSig {
     pub generics: Vec<String>,
     /// The bounds on `generics`.
     pub bounds: Vec<Bound>,
-    /// For a method: whether its receiver is `var self`. `None` for a
-    /// free or associated function.
-    pub receiver: Option<bool>,
+    /// How the function takes `self`, if at all.
+    pub receiver: Receiver,
     /// For a method or associated function: the type of `Self`.
     pub self_ty: Option<Ty>,
     pub params: Vec<(String, Ty)>,
@@ -32,6 +31,34 @@ pub struct FnSig {
     /// A **pure function**: no parameter, the receiver included, is
     /// capability-bearing.
     pub pure: bool,
+}
+
+/// How a function takes `self`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Receiver {
+    /// A free function, or an associated function such as `List.new`.
+    None,
+    /// A method that takes `self`.
+    Self_,
+    /// A **mutating method**: it takes `var self`, so it can only be
+    /// called on a `var` binding.
+    VarSelf,
+}
+
+impl Receiver {
+    /// A method, as opposed to a free or associated function.
+    pub fn is_method(self) -> bool {
+        self != Receiver::None
+    }
+
+    /// The receiver of a written function.
+    pub fn of(f: &FnDecl) -> Receiver {
+        match &f.receiver {
+            None => Receiver::None,
+            Some(r) if r.mutable => Receiver::VarSelf,
+            Some(_) => Receiver::Self_,
+        }
+    }
 }
 
 /// A bound on a generic parameter, `T: Trait<Args>`, or the implicit
@@ -70,6 +97,32 @@ pub struct FieldsInfo {
     pub shape: Shape,
     /// Each field's name (absent when positional) and type.
     pub fields: Vec<(Option<String>, Ty)>,
+}
+
+impl FieldsInfo {
+    /// The type of the named field `name`.
+    pub fn field(&self, name: &str) -> Option<&Ty> {
+        self.fields
+            .iter()
+            .find(|(n, _)| n.as_deref() == Some(name))
+            .map(|(_, ty)| ty)
+    }
+
+    /// The names of the named fields, in order.
+    pub fn names(&self) -> Vec<&str> {
+        self.fields
+            .iter()
+            .filter_map(|(n, _)| n.as_deref())
+            .collect()
+    }
+
+    /// Each field's name and type, with generics replaced by `subst`.
+    pub fn instantiate(&self, subst: &[(String, Ty)]) -> Vec<(Option<String>, Ty)> {
+        self.fields
+            .iter()
+            .map(|(n, t)| (n.clone(), t.substitute(subst)))
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -124,7 +177,7 @@ impl TraitInfo {
         outer: &[String],
         outer_bounds: &[Bound],
     ) -> FnSig {
-        let mut subst: Vec<(String, Ty)> = vec![("Self".to_string(), self_ty.clone())];
+        let mut subst: Vec<(String, Ty)> = vec![(ty::SELF.to_string(), self_ty.clone())];
         subst.extend(self.generics.iter().cloned().zip(args.iter().cloned()));
         let bounds = outer_bounds
             .iter()
@@ -236,7 +289,7 @@ impl Items {
                 ItemKind::Impl(imp) => {
                     let lower = Lower::new(decls).with_generics(&imp.generics);
                     let target = lower.ty(&imp.target);
-                    let receiver_bearing = authority::bearing(&imp.target, &imp.generics, decls);
+                    let receiver_bearing = capability_bearing(&target, decls);
                     match &imp.trait_ref {
                         Some(trait_ref) => {
                             if let Some((trait_name, trait_args)) = lower.bound(trait_ref) {
@@ -271,7 +324,7 @@ impl Items {
                     }
                 }
                 ItemKind::Trait(t) => {
-                    let self_ty = Ty::Param("Self".to_string());
+                    let self_ty = Ty::Param(ty::SELF.to_string());
                     let lower = Lower::new(decls)
                         .with_generics(&t.generics)
                         .with_self(self_ty.clone());
@@ -318,7 +371,7 @@ impl Items {
                     &imp.generics,
                     &imp.bounds,
                 );
-                if method.receiver.is_some() && imp.receiver_bearing {
+                if method.receiver.is_method() && imp.receiver_bearing {
                     method.pure = false;
                 }
                 table.push(method);
@@ -413,6 +466,13 @@ impl<'d, 'a> Lower<'d, 'a> {
         self
     }
 
+    /// Bring generic parameters into scope by name only, without bounds,
+    /// as for a declaration's field types.
+    pub fn with_generic_names(mut self, names: &[&str]) -> Self {
+        self.generics.extend(names.iter().map(|n| n.to_string()));
+        self
+    }
+
     pub fn with_self(mut self, self_ty: Ty) -> Self {
         self.self_ty = Some(self_ty);
         self
@@ -469,7 +529,7 @@ impl<'d, 'a> Lower<'d, 'a> {
             name: f.name.name.clone(),
             generics,
             bounds,
-            receiver: f.receiver.as_ref().map(|r| r.mutable),
+            receiver: Receiver::of(f),
             self_ty,
             params: f
                 .params
@@ -478,13 +538,10 @@ impl<'d, 'a> Lower<'d, 'a> {
                 .collect(),
             ret: f.return_type.as_ref().map_or(Ty::Unit, |t| lower.ty(t)),
             trait_name: None,
-            pure: {
-                let generics: Vec<GenericParam> =
-                    outer.iter().chain(&f.generics).cloned().collect();
-                !f.params
-                    .iter()
-                    .any(|p| authority::bearing(&p.ty, &generics, self.decls))
-            },
+            pure: !f
+                .params
+                .iter()
+                .any(|p| capability_bearing(&lower.ty(&p.ty), self.decls)),
         }
     }
 
@@ -523,7 +580,7 @@ impl<'d, 'a> Lower<'d, 'a> {
                 if self.generics.iter().any(|g| g == name) {
                     return Ty::Param(name.to_string());
                 }
-                if name == "Self" {
+                if name == ty::SELF {
                     return self.self_ty.clone().unwrap_or(Ty::Error);
                 }
                 match self.decls.get(name) {

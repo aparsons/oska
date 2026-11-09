@@ -113,3 +113,22 @@ fn semicolon_between_statements_has_no_fix() {
     assert_eq!(err.span, Span { start: 9, end: 10 });
     assert!(err.fix.is_none());
 }
+
+#[test]
+fn capability_attribute_off_a_struct_fix_removes_it() {
+    let src = "#[capability]\nfn args() -> Args";
+    let err = oska_syntax::parse_prelude(src).expect_err("should fail");
+    assert_eq!(err.code, "E0170");
+    assert_eq!(apply_fix(src, &err), "fn args() -> Args");
+}
+
+#[test]
+fn capability_attribute_on_a_method_fix_removes_it() {
+    let src = "impl Stdout {\n    #[capability]\n    fn print(self, s: String)\n}";
+    let err = oska_syntax::parse_prelude(src).expect_err("should fail");
+    assert_eq!(err.code, "E0170");
+    assert_eq!(
+        apply_fix(src, &err),
+        "impl Stdout {\n    fn print(self, s: String)\n}"
+    );
+}

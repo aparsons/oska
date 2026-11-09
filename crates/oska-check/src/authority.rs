@@ -1,11 +1,16 @@
-//! The authority report: which built-in capabilities each function can
-//! reach through its receiver and parameters.
+//! Authority: which built-in capabilities a type can reach, whether it is
+//! **capability-bearing**, and the report of what each function can reach
+//! through its receiver and parameters.
+//!
+//! [`capability_bearing`] is the one definition of capability-bearing:
+//! the `cap` rule on declarations, function purity, closure capture, and
+//! contract purity all use it.
 
-use std::collections::HashMap;
+use oska_syntax::ast::{FnDecl, ItemKind, Module, Type, TypeKind};
 
-use oska_syntax::ast::{FnDecl, GenericParam, ItemKind, Module, Type, TypeKind};
-
-use crate::decls::{DeclKind, Decls};
+use crate::collect::{DeclKind, Decls};
+use crate::items::Lower;
+use crate::ty::Ty;
 use crate::{FunctionAuthority, Via};
 
 /// What a type can reach.
@@ -29,8 +34,61 @@ impl Reach {
     }
 }
 
-/// Type variables in scope, mapped to what they reach.
-type Env = HashMap<String, Reach>;
+/// Whether `ty` is **capability-bearing**: it contains a built-in
+/// capability or a `cap fn`, through type arguments and the fields of
+/// structs and enums. A generic parameter is not: a generic type is
+/// capability-bearing only once instantiated. Resolve inference variables
+/// first; an unsolved one is not capability-bearing.
+pub fn capability_bearing(ty: &Ty, decls: &Decls) -> bool {
+    reach(ty, decls, &mut Vec::new()).bearing
+}
+
+/// What `ty` reaches. Type arguments are expanded, and so are the fields
+/// of structs and enums, with their generics bound to the arguments.
+/// `expanding` holds the types being expanded, so recursive types end.
+fn reach(ty: &Ty, decls: &Decls, expanding: &mut Vec<String>) -> Reach {
+    match ty {
+        Ty::Fn { cap, .. } => Reach {
+            capabilities: Vec::new(),
+            bearing: *cap,
+        },
+        Ty::Named(name, args) => {
+            let Some(decl) = decls.get(name) else {
+                return Reach::default();
+            };
+            match decl.kind {
+                DeclKind::Capability => Reach {
+                    capabilities: vec![name.clone()],
+                    bearing: true,
+                },
+                DeclKind::Primitive | DeclKind::Trait => Reach::default(),
+                DeclKind::Data => {
+                    let mut total = Reach::default();
+                    if !expanding.contains(name) {
+                        expanding.push(name.clone());
+                        let lower = Lower::new(decls).with_generic_names(&decl.generics);
+                        let subst: Vec<(String, Ty)> = decl
+                            .generics
+                            .iter()
+                            .map(|g| g.to_string())
+                            .zip(args.iter().cloned())
+                            .collect();
+                        for field in &decl.field_types {
+                            let field = lower.ty(field).substitute(&subst);
+                            total.add(reach(&field, decls, expanding));
+                        }
+                        expanding.pop();
+                    }
+                    for arg in args {
+                        total.add(reach(arg, decls, expanding));
+                    }
+                    total
+                }
+            }
+        }
+        Ty::Unit | Ty::Param(_) | Ty::Var(_) | Ty::Never | Ty::Error => Reach::default(),
+    }
+}
 
 /// One entry per function and `impl` method, in source order. A method
 /// is named `Type.method`.
@@ -38,18 +96,18 @@ pub fn report(module: &Module, decls: &Decls) -> Vec<FunctionAuthority> {
     let mut functions = Vec::new();
     for item in &module.items {
         match &item.kind {
-            ItemKind::Fn(f) => functions.push(function(f.name.name.clone(), f, &Env::new(), decls)),
+            ItemKind::Fn(f) => {
+                functions.push(function(f.name.name.clone(), f, Lower::new(decls)));
+            }
             ItemKind::Impl(imp) => {
-                // Impl generics reach nothing on their own: a generic type
-                // is capability-bearing only once instantiated.
-                let mut env = generics_env(&imp.generics);
-                let target = reach(&imp.target, &env, decls, &mut Vec::new());
-                env.insert("Self".to_string(), target);
+                let lower = Lower::new(decls).with_generics(&imp.generics);
+                let target = lower.ty(&imp.target);
+                let lower = lower.with_self(target);
                 let type_name = type_name(&imp.target);
                 for method in &imp.methods {
                     if let ItemKind::Fn(f) = &method.kind {
                         let name = format!("{type_name}.{}", f.name.name);
-                        functions.push(function(name, f, &env, decls));
+                        functions.push(function(name, f, lower.clone()));
                     }
                 }
             }
@@ -59,16 +117,21 @@ pub fn report(module: &Module, decls: &Decls) -> Vec<FunctionAuthority> {
     functions
 }
 
-fn function(name: String, f: &FnDecl, outer: &Env, decls: &Decls) -> FunctionAuthority {
-    let mut env = outer.clone();
-    env.extend(generics_env(&f.generics));
+/// `lower` has the enclosing impl's generics and `Self` in scope.
+fn function(name: String, f: &FnDecl, lower: Lower) -> FunctionAuthority {
+    let decls = lower.decls();
+    let lower = lower.with_generics(&f.generics);
     let mut sources: Vec<(String, Reach)> = Vec::new();
     if f.receiver.is_some() {
-        let receiver = env.get("Self").cloned().unwrap_or_default();
+        let receiver = lower
+            .self_ty
+            .as_ref()
+            .map(|ty| reach(ty, decls, &mut Vec::new()))
+            .unwrap_or_default();
         sources.push(("self".to_string(), receiver));
     }
     for param in &f.params {
-        let r = reach(&param.ty, &env, decls, &mut Vec::new());
+        let r = reach(&lower.ty(&param.ty), decls, &mut Vec::new());
         sources.push((param.name.name.clone(), r));
     }
 
@@ -91,19 +154,6 @@ fn function(name: String, f: &FnDecl, outer: &Env, decls: &Decls) -> FunctionAut
     }
 }
 
-fn generics_env(generics: &[GenericParam]) -> Env {
-    generics
-        .iter()
-        .map(|g| (g.name.name.clone(), Reach::default()))
-        .collect()
-}
-
-/// Whether `ty`, as written outside any generic scope, is
-/// capability-bearing. Type variables are not.
-pub fn bearing(ty: &Type, generics: &[GenericParam], decls: &Decls) -> bool {
-    reach(ty, &generics_env(generics), decls, &mut Vec::new()).bearing
-}
-
 /// The last segment of a type's path, such as `Logger` for
 /// `Logger<T>`.
 fn type_name(ty: &Type) -> String {
@@ -113,61 +163,5 @@ fn type_name(ty: &Type) -> String {
         }
         TypeKind::Unit => "()".to_string(),
         TypeKind::Fn { .. } => "fn".to_string(),
-    }
-}
-
-/// What `ty` reaches. Type arguments are expanded, and so are the fields
-/// of structs and enums, with their generics bound to the arguments.
-/// `expanding` holds the types being expanded, so recursive types end.
-fn reach(ty: &Type, env: &Env, decls: &Decls, expanding: &mut Vec<String>) -> Reach {
-    match &ty.kind {
-        TypeKind::Unit => Reach::default(),
-        TypeKind::Fn { cap, .. } => Reach {
-            capabilities: Vec::new(),
-            bearing: *cap,
-        },
-        TypeKind::Path { segments, args } => {
-            let [segment] = segments.as_slice() else {
-                return Reach::default();
-            };
-            let name = segment.name.as_str();
-            if let Some(bound) = env.get(name) {
-                return bound.clone();
-            }
-            let Some(decl) = decls.get(name) else {
-                return Reach::default();
-            };
-            match decl.kind {
-                DeclKind::Capability => Reach {
-                    capabilities: vec![name.to_string()],
-                    bearing: true,
-                },
-                DeclKind::Primitive | DeclKind::Trait => Reach::default(),
-                DeclKind::Data => {
-                    let args: Vec<Reach> = args
-                        .iter()
-                        .map(|arg| reach(arg, env, decls, expanding))
-                        .collect();
-                    let mut total = Reach::default();
-                    if !expanding.iter().any(|e| e == name) {
-                        expanding.push(name.to_string());
-                        let inner: Env = decl
-                            .generics
-                            .iter()
-                            .enumerate()
-                            .map(|(i, g)| (g.to_string(), args.get(i).cloned().unwrap_or_default()))
-                            .collect();
-                        for field in &decl.field_types {
-                            total.add(reach(field, &inner, decls, expanding));
-                        }
-                        expanding.pop();
-                    }
-                    for arg in args {
-                        total.add(arg);
-                    }
-                    total
-                }
-            }
-        }
     }
 }

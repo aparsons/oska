@@ -53,8 +53,9 @@
 //! - `E0170`: `#[capability]` on an item other than `struct`, in the
 //!   prelude ([`parse_prelude`]); in user code the attribute is `E0132`
 //!
-//! Diagnostics `E0005`, `E0112`, `E0120`, `E0143`, `E0151`, and
-//! `E0162`–`E0164` can carry a machine-applicable [`Fix`](crate::Fix).
+//! Diagnostics `E0005`, `E0112`, `E0120`, `E0143`, `E0151`,
+//! `E0162`–`E0164`, and `E0170` can carry a machine-applicable
+//! [`Fix`](crate::Fix).
 
 use crate::ast::{
     Arg, Attribute, BinaryOp, Block, ClosureParam, ConstDecl, Ensures, EnumDecl, Expr, ExprKind,
@@ -524,12 +525,26 @@ impl<'a> Parser<'a> {
     fn check_attributes(&self, attributes: &[Attribute]) -> Result<(), Diagnostic> {
         if !self.at_kw(Keyword::Struct) {
             if let Some(attribute) = attributes.iter().find(|a| a.name.name == CAPABILITY) {
-                return Err(error(
+                // The fix deletes the attribute and the line break and
+                // indentation after it, up to the next real token.
+                let end = self
+                    .tokens
+                    .iter()
+                    .find(|t| t.span.start >= attribute.span.end && t.kind != TokenKind::Newline)
+                    .map_or(attribute.span.end, |t| t.span.start);
+                let err = error(
                     "E0170",
                     "`#[capability]` declares a built-in capability, which is an \
                      opaque `struct`, so it can only be written on a `struct` item; \
                      remove it here",
                     attribute.span,
+                );
+                return Err(err.with_fix(
+                    "remove `#[capability]`",
+                    vec![Edit::delete(Span {
+                        start: attribute.span.start,
+                        end,
+                    })],
                 ));
             }
         }
