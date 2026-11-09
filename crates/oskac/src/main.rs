@@ -134,8 +134,10 @@ fn print_diagnostics(path: &str, diagnostics: &[oska_syntax::Diagnostic]) {
 
 /// `oskac run`: check the program and, if the check reports no
 /// diagnostic, run it on the real OS with `args` after the program path.
-/// A refused program's diagnostics go to stderr, one JSON object per line
-/// with `--format=json`. The exit code is the program's.
+/// A refused program's diagnostics, or the panic that stopped it, go to
+/// stderr as `oskac check` prints diagnostics, or one JSON object per
+/// line with `--format=json`. The exit code is the program's: 101 after
+/// a panic (see `docs/runtime.md`).
 fn run_file(path: &str, json: bool, args: &[String]) -> ExitCode {
     let Some(src) = read_source(path) else {
         return ExitCode::FAILURE;
@@ -143,14 +145,18 @@ fn run_file(path: &str, json: bool, args: &[String]) -> ExitCode {
     let mut argv = vec![path.to_string()];
     argv.extend_from_slice(args);
     let outcome = oska_run::run(&src, &mut oska_run::RealHost::new(), &argv);
+    eprint!("{}", outcome.stderr);
+    // A panic is printed in the shape of a diagnostic, after the output
+    // the program wrote before it.
+    let mut reported = outcome.diagnostics;
+    reported.extend(outcome.panic);
     if json {
-        for diagnostic in &outcome.diagnostics {
+        for diagnostic in &reported {
             eprintln!("{}", diagnostic.to_json());
         }
     } else {
-        print_diagnostics(path, &outcome.diagnostics);
+        print_diagnostics(path, &reported);
     }
-    eprint!("{}", outcome.stderr);
     ExitCode::from(u8::try_from(outcome.exit_code).unwrap_or(u8::MAX))
 }
 

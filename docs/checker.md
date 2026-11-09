@@ -1,6 +1,6 @@
 # Oska checker report
 
-`oskac check <file.osk> [--format=json] [--release]` type-checks one file against the embedded prelude. The rules it enforces are in the "Type checking" section of [`design.md`](design.md). This page describes what it prints.
+`oskac check <file.osk> [--format=json] [--release]` type-checks one file against the embedded prelude. The rules it enforces are in the "Type checking" section of [`design.md`](design.md). This page describes what it prints. The codes `oskac run` reports, its refusals and panics (`P`-codes), are in [`runtime.md`](runtime.md).
 
 The exit code is non-zero when there are diagnostics. Without `--format=json`, diagnostics go to stderr and the authority report to stdout, one function per line, such as `fn main: Stdout (io), FsRead (fs)` or `fn add: pure`, followed by one line per audit site, such as `audit: assume_trusted (bytes 52..73)`.
 
