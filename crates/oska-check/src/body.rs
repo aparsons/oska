@@ -18,6 +18,10 @@
 //!   `Callable`, applied by [`Body::apply`]. Method calls
 //!   ([`Body::method_call`]) try the type's own `impl`, then its traits;
 //!   on a generic parameter, only its bounds' traits.
+//! - **Audit sites:** in `body/audit.rs`. Each method call is checked
+//!   against the table of audited prelude methods (`.assume_trusted()`,
+//!   `.expose()`),
+//!   and a match is recorded at the call.
 //! - **`?` and the `Result` discipline:** in `body/results.rs`.
 //!   [`Body::try_expr`] converts errors when the function's error type
 //!   implements `From<E>` ([`Body::converts_from`]), and
@@ -37,7 +41,7 @@
 
 use oska_syntax::ast::{
     BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, ItemKind, Module, StmtKind,
-    StrPart, UnaryOp,
+    StrPart, Type, UnaryOp,
 };
 use oska_syntax::{Diagnostic, Edit, Span};
 
@@ -47,32 +51,40 @@ use crate::collect::Decls;
 use crate::decl_rules;
 use crate::infer::{Infer, Mismatch};
 use crate::items::{Bound, Items, Lower};
+use crate::prelude::{self, StdModule};
+use crate::resolve;
 use crate::suggest;
-use crate::ty::{self, Ty};
+use crate::ty::{self, Trust, Ty};
+use crate::AuditSite;
 
+mod audit;
 mod calls;
 mod patterns;
 mod results;
+mod secrets;
+mod sinks;
+
+/// What checking bodies finds: diagnostics, and the audit sites a
+/// reviewer must see (`body/audit.rs`).
+#[derive(Debug, Default)]
+pub struct Findings {
+    pub diagnostics: Vec<Diagnostic>,
+    pub audit: Vec<AuditSite>,
+}
 
 /// Check every function, method, constant, and test body in `module`. A
 /// test body sees `t`, and nothing else beyond pure code.
-pub fn module(
-    src: &str,
-    module: &Module,
-    decls: &Decls,
-    items: &Items,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mut Findings) {
     for item in &module.items {
         match &item.kind {
-            ItemKind::Fn(f) => function(src, f, Lower::new(decls), items, diagnostics),
+            ItemKind::Fn(f) => function(src, f, Lower::new(decls), items, out),
             ItemKind::Impl(imp) => {
                 let lower = Lower::new(decls).with_generics(&imp.generics);
                 let target = lower.ty(&imp.target);
                 let lower = lower.with_self(target);
                 for method in &imp.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        function(src, f, lower.clone(), items, diagnostics);
+                        function(src, f, lower.clone(), items, out);
                     }
                 }
             }
@@ -92,18 +104,18 @@ pub fn module(
                     });
                 for method in &t.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        function(src, f, lower.clone(), items, diagnostics);
+                        function(src, f, lower.clone(), items, out);
                     }
                 }
             }
             ItemKind::Const(c) => {
                 let lower = Lower::new(decls);
                 let ty = lower.ty(&c.ty);
-                let mut body = Body::new(src, items, lower, Ty::Unit, diagnostics);
+                let mut body = Body::new(src, items, lower, Ty::Unit, out);
                 body.check(&c.value, &ty);
             }
             ItemKind::Test(test) => {
-                let mut body = Body::new(src, items, Lower::new(decls), Ty::Unit, diagnostics);
+                let mut body = Body::new(src, items, Lower::new(decls), Ty::Unit, out);
                 body.bind("t", Ty::named(ty::TEST_CONTEXT), Binding::Param);
                 // A test produces no value: its last expression is a
                 // statement like the others.
@@ -117,13 +129,13 @@ pub fn module(
 
 /// Check one function body against its signature. `lower` has the
 /// enclosing impl's or trait's generics and `Self` in scope.
-fn function(src: &str, f: &FnDecl, lower: Lower, items: &Items, diagnostics: &mut Vec<Diagnostic>) {
+fn function(src: &str, f: &FnDecl, lower: Lower, items: &Items, out: &mut Findings) {
     if f.body.is_none() && f.requires.is_empty() && f.ensures.is_empty() {
         return;
     }
     let lower = lower.with_generics(&f.generics);
     let sig = lower.signature(f, &[], lower.self_ty.clone());
-    let mut body = Body::new(src, items, lower, sig.ret.clone(), diagnostics);
+    let mut body = Body::new(src, items, lower, sig.ret.clone(), out);
     if let Some(receiver) = &f.receiver {
         body.receiver = Some(SelfBinding {
             ty: sig.self_ty.clone().unwrap_or(Ty::Error),
@@ -207,6 +219,29 @@ struct Callable {
     pure: bool,
     /// For a method: the type of its receiver, instantiated.
     receiver: Option<Ty>,
+    /// For a `#[follows_trust]` operation or a generic callee: the trust
+    /// variable that every text type in its result has. The receiver and
+    /// text arguments of a `#[follows_trust]` operation join into it, and
+    /// so do the `type_args` of a generic one.
+    joined: Option<Trust>,
+    /// For a generic callee: what its generics (and, for a trait method
+    /// called qualified, its `Self`) are instantiated with. Once the
+    /// arguments are checked, the trust of every text type in them joins
+    /// into `joined`, so a generic never launders untrusted text: `T`'s
+    /// text can come back out as a fixed `String` only through `T`'s
+    /// operations, such as `Display.to_string` or interpolation.
+    type_args: Vec<Ty>,
+}
+
+/// What `base.name` names when `base` is not a value.
+enum QualifiedPath {
+    /// A module's export, by its key (see [`Decls::prelude_key`]).
+    Export(String),
+    /// A member of the type with this key: a variant, an associated
+    /// function, or a method.
+    Member(String),
+    /// Nothing, already reported.
+    Reported,
 }
 
 /// The state of checking one body.
@@ -216,7 +251,8 @@ pub struct Body<'c, 'd, 'a> {
     items: &'c Items,
     lower: Lower<'d, 'a>,
     infer: Infer,
-    diagnostics: &'c mut Vec<Diagnostic>,
+    /// What checking the bodies has found so far.
+    out: &'c mut Findings,
     /// Locals in scope, innermost last. Shadowing pushes a new one.
     locals: Vec<Local>,
     receiver: Option<SelfBinding>,
@@ -249,14 +285,14 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         items: &'c Items,
         lower: Lower<'d, 'a>,
         ret: Ty,
-        diagnostics: &'c mut Vec<Diagnostic>,
+        out: &'c mut Findings,
     ) -> Self {
         Body {
             src,
             items,
             lower,
             infer: Infer::default(),
-            diagnostics,
+            out,
             locals: Vec::new(),
             receiver: None,
             ret,
@@ -267,12 +303,26 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
     }
 
+    /// Report misuse of `Untrusted<...>` in a type written in the body
+    /// (`E0320`). Signatures are checked with name resolution.
+    fn check_written(&mut self, written: &Type) {
+        let lower = &self.lower;
+        let known = |name: &str| {
+            lower.generics.iter().any(|g| g == name)
+                || name == ty::SELF
+                || lower.decls().get(name).is_some()
+        };
+        resolve::untrusted_not_text_within(written, &known, &mut self.out.diagnostics);
+    }
+
     fn decls(&self) -> &'d Decls<'a> {
         self.lower.decls()
     }
 
     fn error(&mut self, code: &'static str, message: impl Into<String>, span: Span) {
-        self.diagnostics.push(Diagnostic::new(code, message, span));
+        self.out
+            .diagnostics
+            .push(Diagnostic::new(code, message, span));
     }
 
     /// Report bindings whose types inference could not work out.
@@ -341,16 +391,58 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         self.locals.iter().rev().find(|l| l.name == name)
     }
 
-    /// `name` is a type in value position, such as `Shape` in
-    /// `Shape.Circle`, and not shadowed by a local.
+    /// `expr` is a type in value position, such as `Shape` in
+    /// `Shape.Circle` or `sql.Db` in `sql.Db.connect`, and not shadowed by
+    /// a local.
     fn type_name(&self, expr: &Expr) -> Option<String> {
+        match &expr.kind {
+            ExprKind::Name(ident) if self.local(&ident.name).is_none() => self
+                .decls()
+                .visible(&ident.name)
+                .map(|_| ident.name.clone()),
+            ExprKind::Field { base, name } => {
+                let module = self.module_name(base)?;
+                let key = self.decls().prelude_key(&name.name);
+                (module.exports_name(&name.name) && self.decls().get(key).is_some())
+                    .then(|| key.to_string())
+            }
+            _ => None,
+        }
+    }
+
+    /// `expr` is a module name that a plain `use` binds, such as `sql`
+    /// after `use std.sql`, and not shadowed by a local.
+    fn module_name(&self, expr: &Expr) -> Option<&'static StdModule> {
         let ExprKind::Name(ident) = &expr.kind else {
             return None;
         };
         if self.local(&ident.name).is_some() {
             return None;
         }
-        self.decls().get(&ident.name).map(|_| ident.name.clone())
+        self.decls().bound_module(&ident.name)
+    }
+
+    /// `name` is declared by an imported module that the user module
+    /// reaches only qualified: report it, with a fix that qualifies it.
+    fn require_unqualified(&mut self, ident: &Ident) -> bool {
+        match self.decls().qualified_only(&ident.name) {
+            Some(module) => {
+                let diagnostic = suggest::qualify(module, ident.span, &ident.name);
+                self.out.diagnostics.push(diagnostic);
+                false
+            }
+            None => true,
+        }
+    }
+
+    /// `module.name` where `module` does not export `name`: report it.
+    fn require_export(&mut self, module: &StdModule, name: &Ident) -> bool {
+        if module.exports_name(&name.name) {
+            return true;
+        }
+        let diagnostic = suggest::not_exported(module, &name.name, name.span);
+        self.out.diagnostics.push(diagnostic);
+        false
     }
 
     // ---- Expressions ----------------------------------------------------
@@ -369,7 +461,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
     /// Unify `actual` with `expected`, reporting `E0220` at `span` when
     /// they differ.
-    fn expect(&mut self, actual: &Ty, expected: &Ty, span: Span) -> Ty {
+    pub(super) fn expect(&mut self, actual: &Ty, expected: &Ty, span: Span) -> Ty {
         match self.infer.flow(actual, expected) {
             Ok(()) => actual.clone(),
             Err(mismatch) => {
@@ -380,16 +472,41 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     }
 
     /// Report that `actual` cannot flow into `expected`: `E0270` when only
-    /// the `cap` rule stops it, `E0220` otherwise.
-    fn mismatch(&mut self, mismatch: Mismatch, actual: &Ty, expected: &Ty, span: Span) {
+    /// the `cap` rule stops it, `E0300` when only the trust rule does,
+    /// `E0341` for text where a sink literal is required, `E0220`
+    /// otherwise.
+    pub(super) fn mismatch(&mut self, mismatch: Mismatch, actual: &Ty, expected: &Ty, span: Span) {
         let expected = self.infer.resolve(expected);
         let actual = self.infer.resolve(actual);
+        let literal = expected.head().and_then(prelude::sink_literal_typed);
+        if let (Some(literal), true) = (literal, actual.is_text()) {
+            let tag = literal.tag;
+            self.error(
+                codes::TEXT_AS_SINK_LITERAL,
+                format!(
+                    "expected `{expected}`, found `{actual}`: it can only be written as a \
+                     `{tag}\"...\"` literal, so it can't be built from text; pass values \
+                     separately, as parameters"
+                ),
+                span,
+            );
+            return;
+        }
         match mismatch {
             Mismatch::CapLost => self.error(
                 codes::CAPTURING_CLOSURE,
                 format!(
                     "expected `{expected}`, found `{actual}`: a `cap fn` can carry authority, \
                      so it cannot be used as a plain `fn`"
+                ),
+                span,
+            ),
+            Mismatch::TrustLost => self.error(
+                codes::UNTRUSTED_TEXT,
+                format!(
+                    "expected `{expected}`, found `{actual}`: untrusted text cannot be used \
+                     where trusted text is required; check it with a validator, or vouch for \
+                     it with `.assume_trusted()`"
                 ),
                 span,
             ),
@@ -412,15 +529,18 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 ty
             }
             ExprKind::Str(parts) => {
+                // The string is untrusted when any text in a hole is.
+                let trust = self.infer.fresh_trust();
                 for part in parts {
-                    if let StrPart::Hole { path, .. } = part {
-                        self.hole(path);
+                    if let StrPart::Hole { path, span } = part {
+                        let ty = self.hole(path);
+                        self.interpolated_hole(&ty, *span);
+                        self.infer.join_into(&ty, trust);
                     }
                 }
-                Ty::string()
+                Ty::string().with_trust(trust)
             }
-            // Sink literals get their types with untrusted values (#8).
-            ExprKind::SinkStr { .. } => Ty::Error,
+            ExprKind::SinkStr { tag, .. } => self.sink_literal(tag, expr.span),
             ExprKind::Bool(_) => Ty::bool(),
             ExprKind::Unit => Ty::Unit,
             ExprKind::Name(ident) => self.name(ident),
@@ -488,7 +608,11 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 match expected {
                     Some(expected) => self.check(else_branch, expected),
                     None if self.infer.shallow(&then) == Ty::Never => self.infer(else_branch),
-                    None => self.check(else_branch, &then),
+                    None => {
+                        let joined = self.join(&then);
+                        self.check(else_branch, &joined);
+                        joined
+                    }
                 }
             }
             ExprKind::Block(block) => self.block(block, expected, true),
@@ -503,7 +627,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 let ty = self.block(body, expected, true);
                 self.locals.pop();
                 if self.infer.resolve(&ty).holds(ty::SCOPE) {
-                    self.diagnostics.push(decl_rules::scope_escapes(
+                    self.out.diagnostics.push(decl_rules::scope_escapes(
                         expr.span,
                         "be the value of its `scope` block",
                     ));
@@ -515,6 +639,15 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 self.match_expr(expr.span, scrutinee, arms, expected)
             }
         }
+    }
+
+    /// A fresh variable that `ty` flows into, as the type of an `if` or
+    /// `match` whose branches are checked against it in turn. Text in it
+    /// is the join of the branches': untrusted if any branch's is.
+    pub(super) fn join(&mut self, ty: &Ty) -> Ty {
+        let joined = self.infer.fresh();
+        self.infer.unify(ty, &joined);
+        joined
     }
 
     /// The type an integer literal takes: the expected integer type, or
@@ -546,15 +679,16 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
     }
 
-    /// An interpolation hole, `{name}` or `{name.field}`.
-    fn hole(&mut self, path: &[Ident]) {
+    /// An interpolation hole, `{name}` or `{name.field}`, and its type.
+    fn hole(&mut self, path: &[Ident]) -> Ty {
         let Some((first, rest)) = path.split_first() else {
-            return;
+            return Ty::Error;
         };
         let mut ty = self.name(first);
         for field in rest {
             ty = self.field_of(ty, field);
         }
+        ty
     }
 
     /// A name in value position.
@@ -569,6 +703,17 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             }
             return ty;
         }
+        if !self.require_unqualified(ident) {
+            return Ty::Error;
+        }
+        self.item_value(&ident.name, ident)
+    }
+
+    /// A function, prelude variant, or type named in value position,
+    /// either unqualified or as a module's export: `ident` as written,
+    /// declared under `key` (see [`Decls::prelude_key`]).
+    fn item_value(&mut self, key: &str, ident: &Ident) -> Ty {
+        let name = key;
         if let Some(sig) = self.items.fns.get(name).cloned() {
             let callable = self.instantiate(&sig, None);
             return callable.into_fn_type();
@@ -590,7 +735,13 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
     fn unknown_value(&mut self, ident: &Ident) {
         let mut candidates: Vec<&str> = self.locals.iter().map(|l| l.name.as_str()).collect();
-        candidates.extend(self.items.fns.keys().map(String::as_str));
+        candidates.extend(
+            self.items
+                .fns
+                .keys()
+                .map(String::as_str)
+                .filter(|f| self.decls().qualified_only(f).is_none()),
+        );
         candidates.extend(self.items.bare_variants.keys().map(String::as_str));
         let name = &ident.name;
         let diagnostic = suggest::unknown(
@@ -600,13 +751,29 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             ident.span,
             &candidates,
         );
-        self.diagnostics.push(diagnostic);
+        self.out.diagnostics.push(diagnostic);
     }
 
-    /// `base.name` outside a call: a field, or a member of a type.
+    /// What `base.name` names when `base` is a module or a type rather
+    /// than a value, reporting a name the module does not export. `None`
+    /// when `base` is a value.
+    fn qualified_path(&mut self, base: &Expr, name: &Ident) -> Option<QualifiedPath> {
+        if let Some(module) = self.module_name(base) {
+            if !self.require_export(module, name) {
+                return Some(QualifiedPath::Reported);
+            }
+            let key = self.decls().prelude_key(&name.name).to_string();
+            return Some(QualifiedPath::Export(key));
+        }
+        self.type_name(base).map(QualifiedPath::Member)
+    }
+
+    /// `base.name` outside a call: a field, a member of a type, or a
+    /// module's export.
     fn field_expr(&mut self, base: &Expr, name: &Ident) -> Ty {
-        if let Some(type_name) = self.type_name(base) {
-            return match self.type_member(&type_name, name) {
+        match self.qualified_path(base, name) {
+            Some(QualifiedPath::Export(key)) => self.item_value(&key, name),
+            Some(QualifiedPath::Member(type_name)) => match self.type_member(&type_name, name) {
                 Some(callable) if callable.labels != Labels::Optional => {
                     if callable.params.is_empty() {
                         callable.ret
@@ -616,10 +783,13 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 }
                 Some(callable) => callable.into_fn_type(),
                 None => Ty::Error,
-            };
+            },
+            Some(QualifiedPath::Reported) => Ty::Error,
+            None => {
+                let ty = self.infer(base);
+                self.field_of(ty, name)
+            }
         }
-        let ty = self.infer(base);
-        self.field_of(ty, name)
     }
 
     /// The type of field `name` of a value of type `ty`.
@@ -635,7 +805,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 );
                 return Ty::Error;
             }
-            Ty::Named(type_name, args) => {
+            Ty::Named(type_name, args, _) => {
                 if let Some(info) = self.items.structs.get(type_name) {
                     if let Some(field_ty) = info.fields.field(&name.name) {
                         if info.hidden_fields.contains(&name.name) {
@@ -685,7 +855,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         ident: &Ident,
         candidates: &[&str],
     ) {
-        self.diagnostics.push(suggest::unknown(
+        self.out.diagnostics.push(suggest::unknown(
             code,
             message,
             &ident.name,
@@ -731,7 +901,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                         span,
                     ),
                 };
-                self.diagnostics.push(diagnostic);
+                self.out.diagnostics.push(diagnostic);
             }
             ExprKind::SelfValue => {
                 let Some(receiver) = &self.receiver else {
@@ -741,7 +911,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     return;
                 }
                 let at = receiver.span.start;
-                self.diagnostics.push(
+                self.out.diagnostics.push(
                     Diagnostic::new(
                         code,
                         format!("cannot {action} `self` in a method that takes `self`"),
@@ -801,8 +971,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 Ty::bool()
             }
             BinaryOp::Eq | BinaryOp::Ne => {
-                let ty = self.operands(lhs, rhs, None);
-                self.require_trait(&ty, ty::EQ, &[], expr.span, &format!("`{}`", op.text()));
+                if let Some(ty) = self.compared_operands(expr, op, lhs, rhs) {
+                    self.require_trait(&ty, ty::EQ, &[], expr.span, &format!("`{}`", op.text()));
+                }
                 Ty::bool()
             }
             BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
@@ -813,20 +984,6 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 self.numeric_operands(expr, op, lhs, rhs, expected)
             }
         }
-    }
-
-    /// Check two operands that must have the same type, and return it. A
-    /// literal operand takes the other operand's type, so `1 + x` works
-    /// for any integer `x`.
-    fn operands(&mut self, lhs: &Expr, rhs: &Expr, expected: Option<&Ty>) -> Ty {
-        let (first, second) = literal_last(lhs, rhs);
-        let ty = self.expr(first, expected);
-        let ty = self.infer.resolve(&ty);
-        if ty.is_error() {
-            self.infer(second);
-            return Ty::Error;
-        }
-        self.check(second, &ty)
     }
 
     /// The operands of an arithmetic or comparison operator: numbers of
@@ -879,6 +1036,43 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         false
     }
 
+    /// The operands of `expr`, `lhs op rhs` where `op` is `==` or `!=`,
+    /// which must have the same type: that type, or `None` when they
+    /// don't have one or one is a secret (`E0351`, see `body/secrets.rs`).
+    /// A literal operand takes the other operand's type, so `x == 1` works
+    /// for any integer `x`.
+    fn compared_operands(
+        &mut self,
+        expr: &Expr,
+        op: BinaryOp,
+        lhs: &Expr,
+        rhs: &Expr,
+    ) -> Option<Ty> {
+        let (first, second) = literal_last(lhs, rhs);
+        let first_ty = self.infer(first);
+        let first_ty = self.infer.resolve(&first_ty);
+        if first_ty.is_error() {
+            self.infer(second);
+            return None;
+        }
+        let first_secret = self.is_secret(&first_ty);
+        let expected = (!first_secret).then_some(&first_ty);
+        let second_ty = self.expr(second, expected);
+        let second_secret = self.is_secret(&second_ty);
+        match (first_secret, second_secret) {
+            (true, _) => self.secret_compared(expr, op, first, second, second_secret),
+            (false, true) => self.secret_compared(expr, op, second, first, false),
+            (false, false) => {
+                // Comparing inspects text without passing it on, so the
+                // operands may differ in trust.
+                let loosened = self.infer.loosen(&first_ty);
+                let ty = self.expect(&second_ty, &loosened, second.span);
+                return (!ty.is_error()).then_some(first_ty);
+            }
+        }
+        None
+    }
+
     // ---- Traits -----------------------------------------------------------
 
     /// Whether `ty` implements `trait_name<args>`: a generic parameter
@@ -922,7 +1116,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     .iter()
                     .map(|g| (g.clone(), attempt.fresh()))
                     .collect();
-                let matches = attempt.unify(&ty, &imp.target.substitute(&subst))
+                // An impl for a text type covers text of either trust.
+                let target = attempt.loosen(&imp.target.substitute(&subst));
+                let matches = attempt.unify(&ty, &target)
                     && imp
                         .trait_args
                         .iter()
@@ -946,11 +1142,11 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     /// `trait_name<args>`, which `what` needs. On a generic parameter of
     /// this function, the fix adds the bound.
     fn require_trait(&mut self, ty: &Ty, trait_name: &str, args: &[Ty], span: Span, what: &str) {
-        if self.implements(ty, trait_name, args) {
+        if self.implements(ty, trait_name, args) || self.secret_bound(ty, trait_name, span) {
             return;
         }
         let ty = self.infer.resolve(ty);
-        let bound = Ty::Named(trait_name.to_string(), args.to_vec()).to_string();
+        let bound = Ty::generic(trait_name, args.to_vec()).to_string();
         let message =
             format!("{what} needs `{ty}: {bound}`, but `{ty}` does not implement `{bound}`");
         let mut diagnostic = Diagnostic::new(codes::NOT_IMPLEMENTED, message, span);
@@ -967,7 +1163,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 );
             }
         }
-        self.diagnostics.push(diagnostic);
+        self.out.diagnostics.push(diagnostic);
     }
 
     // ---- Closures -------------------------------------------------------
@@ -995,6 +1191,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             let hint = expected.as_ref().map(|(ps, _)| ps[i].clone());
             let ty = match (&param.ty, hint) {
                 (Some(written), hint) => {
+                    self.check_written(written);
                     let ty = self.lower.ty(written);
                     match hint {
                         // The caller passes a value of the expected
@@ -1111,6 +1308,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 self.require_lowercase(name);
                 let ty = match ty {
                     Some(written) => {
+                        self.check_written(written);
                         let ty = self.lower.ty(written);
                         self.check(value, &ty);
                         ty
@@ -1171,7 +1369,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             } => {
                 let ty = self.infer(iter);
                 let element = match self.infer.resolve(&ty) {
-                    Ty::Named(name, args)
+                    Ty::Named(name, args, _)
                         if (name == ty::LIST || name == ty::RANGE) && args.len() == 1 =>
                     {
                         args[0].clone()

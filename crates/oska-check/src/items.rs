@@ -4,12 +4,13 @@
 
 use std::collections::HashMap;
 
-use oska_syntax::ast::{Field, Fields, FnDecl, GenericParam, ItemKind, Module, Type, TypeKind};
+use oska_syntax::ast::{
+    Field, Fields, FnDecl, GenericParam, Item, ItemKind, Module, Type, TypeKind,
+};
 
 use crate::authority::capability_bearing;
 use crate::collect::{DeclKind, Decls};
-use crate::prelude;
-use crate::ty::{self, Ty};
+use crate::ty::{self, Trust, Ty};
 
 /// A function or method signature. Generic parameters appear in the
 /// types as [`Ty::Param`]; instantiate them before use.
@@ -31,6 +32,11 @@ pub struct FnSig {
     /// A **pure function**: no parameter, the receiver included, is
     /// capability-bearing.
     pub pure: bool,
+    /// A trust-polymorphic prelude text operation, marked
+    /// `#[follows_trust]`: each call joins the trust of its receiver and
+    /// text arguments, and every text type in its result has that trust
+    /// (ADR 0006; see `infer.rs`).
+    pub follows_trust: bool,
 }
 
 /// How a function takes `self`.
@@ -202,7 +208,17 @@ impl TraitInfo {
             ret: sig.ret.substitute(&subst),
             trait_name: sig.trait_name.clone(),
             pure: sig.pure,
+            follows_trust: sig.follows_trust,
         }
+    }
+}
+
+/// The key `name` is declared under: renamed for a `std.*` module's
+/// declaration that the user module shadows (see [`Decls::prelude_key`]).
+fn key_of(decls: &Decls, name: &str, in_prelude: bool) -> String {
+    match in_prelude {
+        true => decls.prelude_key(name).to_string(),
+        false => name.to_string(),
     }
 }
 
@@ -231,21 +247,28 @@ impl Items {
     /// declarations with one name wins; `Decls` reports the duplicate.
     pub fn collect(module: &Module, decls: &Decls) -> Items {
         let mut items = Items::default();
-        items.add(prelude::module(), decls, true);
-        items.add(module, decls, false);
+        items.add(decls.prelude_items(), decls, true);
+        items.add(&module.items, decls, false);
         items.trait_methods();
         items
     }
 
-    fn add(&mut self, module: &Module, decls: &Decls, in_prelude: bool) {
-        for item in &module.items {
+    fn add<'i>(
+        &mut self,
+        items: impl IntoIterator<Item = &'i Item>,
+        decls: &Decls,
+        in_prelude: bool,
+    ) {
+        for item in items {
             match &item.kind {
                 ItemKind::Fn(f) => {
-                    let sig = Lower::new(decls).signature(f, &[], None);
-                    self.fns.entry(sig.name.clone()).or_insert(sig);
+                    let mut sig = Lower::in_scope(decls, in_prelude).signature(f, &[], None);
+                    sig.follows_trust = follows_trust(item);
+                    let key = key_of(decls, &sig.name, in_prelude);
+                    self.fns.entry(key).or_insert(sig);
                 }
                 ItemKind::Struct(s) => {
-                    let lower = Lower::new(decls).with_generics(&s.generics);
+                    let lower = Lower::in_scope(decls, in_prelude).with_generics(&s.generics);
                     let private: Vec<&Field> = match &s.fields {
                         Fields::Named(list) | Fields::Positional(list) => {
                             list.iter().filter(|f| !f.public).collect()
@@ -265,29 +288,30 @@ impl Items {
                             Vec::new()
                         },
                     };
-                    self.structs.entry(s.name.name.clone()).or_insert(info);
+                    let key = key_of(decls, &s.name.name, in_prelude);
+                    self.structs.entry(key).or_insert(info);
                 }
                 ItemKind::Enum(e) => {
-                    let lower = Lower::new(decls).with_generics(&e.generics);
+                    let lower = Lower::in_scope(decls, in_prelude).with_generics(&e.generics);
                     let variants = e
                         .variants
                         .iter()
                         .map(|v| (v.name.name.clone(), lower.fields(&v.fields)))
                         .collect::<Vec<_>>();
+                    let key = key_of(decls, &e.name.name, in_prelude);
                     if in_prelude {
                         for (variant, _) in &variants {
-                            self.bare_variants
-                                .insert(variant.clone(), e.name.name.clone());
+                            self.bare_variants.insert(variant.clone(), key.clone());
                         }
                     }
                     let info = EnumInfo {
                         generics: lower.generics.clone(),
                         variants,
                     };
-                    self.enums.entry(e.name.name.clone()).or_insert(info);
+                    self.enums.entry(key).or_insert(info);
                 }
                 ItemKind::Impl(imp) => {
-                    let lower = Lower::new(decls).with_generics(&imp.generics);
+                    let lower = Lower::in_scope(decls, in_prelude).with_generics(&imp.generics);
                     let target = lower.ty(&imp.target);
                     let receiver_bearing = capability_bearing(&target, decls);
                     match &imp.trait_ref {
@@ -314,6 +338,7 @@ impl Items {
                                     if f.receiver.is_some() && receiver_bearing {
                                         sig.pure = false;
                                     }
+                                    sig.follows_trust = follows_trust(method);
                                     self.inherent
                                         .entry(type_name.clone())
                                         .or_default()
@@ -325,7 +350,7 @@ impl Items {
                 }
                 ItemKind::Trait(t) => {
                     let self_ty = Ty::Param(ty::SELF.to_string());
-                    let lower = Lower::new(decls)
+                    let lower = Lower::in_scope(decls, in_prelude)
                         .with_generics(&t.generics)
                         .with_self(self_ty.clone());
                     let methods = t
@@ -337,7 +362,8 @@ impl Items {
                                 // signature's: they are replaced, not
                                 // instantiated, when the method is used.
                                 let mut sig = lower.signature(f, &[], Some(self_ty.clone()));
-                                sig.trait_name = Some(t.name.name.clone());
+                                sig.trait_name = Some(key_of(decls, &t.name.name, in_prelude));
+                                sig.follows_trust = follows_trust(m);
                                 Some((sig, f.body.is_some()))
                             }
                             _ => None,
@@ -347,7 +373,8 @@ impl Items {
                         generics: lower.generics.clone(),
                         methods,
                     };
-                    self.traits.entry(t.name.name.clone()).or_insert(info);
+                    let key = key_of(decls, &t.name.name, in_prelude);
+                    self.traits.entry(key).or_insert(info);
                 }
                 ItemKind::Use(_) | ItemKind::Const(_) | ItemKind::Test(_) => {}
             }
@@ -430,16 +457,29 @@ pub struct Lower<'d, 'a> {
     /// bound.
     pub sites: Vec<GenericSite>,
     pub self_ty: Option<Ty>,
+    /// Lowering the prelude or a `std` module: every declared name is in
+    /// scope unqualified.
+    see_all: bool,
 }
 
 impl<'d, 'a> Lower<'d, 'a> {
+    /// Lowers types written in the user module, which sees an imported
+    /// module's names only as that module's exports (see
+    /// [`Decls::path_name`]).
     pub fn new(decls: &'d Decls<'a>) -> Self {
+        Self::in_scope(decls, false)
+    }
+
+    /// Lowers types written in the user module, or, when `in_prelude`, in
+    /// the prelude or a `std` module, which see every declared name.
+    pub fn in_scope(decls: &'d Decls<'a>, in_prelude: bool) -> Self {
         Lower {
             decls,
             generics: Vec::new(),
             bounds: Vec::new(),
             sites: Vec::new(),
             self_ty: None,
+            see_all: in_prelude,
         }
     }
 
@@ -495,16 +535,14 @@ impl<'d, 'a> Lower<'d, 'a> {
         let TypeKind::Path { segments, args } = &ty.kind else {
             return None;
         };
-        let [ident] = segments.as_slice() else {
-            return None;
-        };
-        let decl = self.decls.get(&ident.name)?;
+        let name = self.decls.path_name(segments, self.see_all)?;
+        let decl = self.decls.get(name)?;
         if decl.kind != DeclKind::Trait {
             return None;
         }
         let mut lowered: Vec<Ty> = args.iter().map(|a| self.ty(a)).collect();
         lowered.resize(decl.generics.len(), Ty::Error);
-        Some((ident.name.clone(), lowered))
+        Some((name.to_string(), lowered))
     }
 
     /// The signature of `f`, declared inside an impl with `outer`
@@ -538,6 +576,7 @@ impl<'d, 'a> Lower<'d, 'a> {
                 .collect(),
             ret: f.return_type.as_ref().map_or(Ty::Unit, |t| lower.ty(t)),
             trait_name: None,
+            follows_trust: false,
             pure: !f
                 .params
                 .iter()
@@ -573,15 +612,27 @@ impl<'d, 'a> Lower<'d, 'a> {
                 ret: Box::new(return_type.as_ref().map_or(Ty::Unit, |r| self.ty(r))),
             },
             TypeKind::Path { segments, args } => {
-                let [ident] = segments.as_slice() else {
+                if let [ident] = segments.as_slice() {
+                    let name = ident.name.as_str();
+                    if self.generics.iter().any(|g| g == name) {
+                        return Ty::Param(name.to_string());
+                    }
+                    if name == ty::SELF {
+                        return self.self_ty.clone().unwrap_or(Ty::Error);
+                    }
+                }
+                let Some(name) = self.decls.path_name(segments, self.see_all) else {
                     return Ty::Error;
                 };
-                let name = ident.name.as_str();
-                if self.generics.iter().any(|g| g == name) {
-                    return Ty::Param(name.to_string());
-                }
-                if name == ty::SELF {
-                    return self.self_ty.clone().unwrap_or(Ty::Error);
+                if segments.len() == 1 && name == ty::UNTRUSTED {
+                    // Trust is a flag on text, not a type (ADR 0006).
+                    return match args.as_slice() {
+                        [arg] => match self.ty(arg) {
+                            text if text.is_text() => text.with_trust(Trust::Untrusted),
+                            _ => Ty::Error,
+                        },
+                        _ => Ty::Error,
+                    };
                 }
                 match self.decls.get(name) {
                     Some(decl) if decl.kind != DeclKind::Trait => {
@@ -590,7 +641,7 @@ impl<'d, 'a> Lower<'d, 'a> {
                         // dropped, so checking can go on.
                         let mut lowered: Vec<Ty> = args.iter().map(|a| self.ty(a)).collect();
                         lowered.resize(decl.generics.len(), Ty::Error);
-                        Ty::Named(name.to_string(), lowered)
+                        Ty::generic(name, lowered)
                     }
                     _ => Ty::Error,
                 }
@@ -598,3 +649,12 @@ impl<'d, 'a> Lower<'d, 'a> {
         }
     }
 }
+
+/// Whether a function item is marked `#[follows_trust]`. Only the prelude
+/// can write the attribute: the parser rejects it in user code.
+fn follows_trust(item: &Item) -> bool {
+    item.attributes.iter().any(|a| a.name.name == FOLLOWS_TRUST)
+}
+
+/// The attribute that makes a prelude function trust-polymorphic.
+const FOLLOWS_TRUST: &str = "follows_trust";

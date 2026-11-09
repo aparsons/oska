@@ -279,7 +279,7 @@ fn inherent_methods_are_checked() {
 fn prelude_methods_are_available() {
     assert_ok(
         "fn f(text: String, args: Args) -> Int {\n    \
-         let first: Option<String> = args.get(1)\n    \
+         let first: Option<Untrusted<String>> = args.get(1)\n    \
          text.lines().count() + text.len()\n}",
     );
 }

@@ -3,6 +3,9 @@
 
 use oska_syntax::{Diagnostic, Edit, Span};
 
+use crate::codes;
+use crate::prelude::StdModule;
+
 /// A diagnostic `code` about the unknown `name` at `span`. When exactly
 /// one of `candidates` is close enough, the message asks whether it was
 /// meant and the fix replaces `name` with it.
@@ -47,6 +50,51 @@ pub fn unknown_written(
         ),
         None => Diagnostic::new(code, message, span),
     }
+}
+
+/// `name` at `span` written unqualified, though it is declared by
+/// `module`, which a plain `use` imports only as a module. The fix
+/// qualifies it, as `sql.Db`. A name the module does not export is
+/// private to it (`E0360`), with no fix.
+pub fn qualify(module: &StdModule, span: Span, name: &str) -> Diagnostic {
+    let (path, prefix) = (module.path, module.name());
+    if !module.exports_name(name) {
+        return Diagnostic::new(
+            codes::PRIVATE_TO_MODULE,
+            format!("`{name}` is private to `{path}`"),
+            span,
+        );
+    }
+    Diagnostic::new(
+        codes::QUALIFIED_ONLY,
+        format!(
+            "`{name}` is in `{path}`, which `use {path}` imports as a module; \
+             write `{prefix}.{name}`, or import it with `use {path}.{{{name}}}`"
+        ),
+        span,
+    )
+    .with_fix(
+        format!("write `{prefix}.{name}`"),
+        vec![Edit {
+            span: Span {
+                start: span.start,
+                end: span.start,
+            },
+            replacement: format!("{prefix}."),
+        }],
+    )
+}
+
+/// `module.name`, where `module` does not export `name`, at `span`. The
+/// fix uses the closest export.
+pub fn not_exported(module: &StdModule, name: &str, span: Span) -> Diagnostic {
+    unknown(
+        codes::NOT_EXPORTED,
+        format!("`{}` has no `{name}`", module.path),
+        name,
+        span,
+        &module.exports(),
+    )
 }
 
 /// The single candidate closest to `name`, if one is close enough: at
@@ -101,4 +149,26 @@ fn distance(a: &str, b: &str) -> usize {
         }
     }
     d[a.len()][b.len()]
+}
+
+#[cfg(test)]
+mod tests {
+    use oska_syntax::Span;
+
+    use crate::codes;
+    use crate::prelude;
+
+    /// No `std` module declares a private item yet, so the private case is
+    /// tested here rather than through a module.
+    #[test]
+    fn a_private_name_has_its_own_code_and_no_fix() {
+        let sql = prelude::std_module("std.sql").expect("std.sql exists");
+        let span = Span { start: 0, end: 4 };
+        let private = super::qualify(sql, span, "Conn");
+        assert_eq!(private.code, codes::PRIVATE_TO_MODULE);
+        assert!(private.fix.is_none());
+        let export = super::qualify(sql, span, "Db");
+        assert_eq!(export.code, codes::QUALIFIED_ONLY);
+        assert!(export.fix.is_some());
+    }
 }

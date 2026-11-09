@@ -18,7 +18,7 @@ impl Body<'_, '_, '_> {
     pub(super) fn try_expr(&mut self, expr: &Expr, operand: &Expr) -> Ty {
         let ty = self.infer(operand);
         let (kind, args) = match self.infer.resolve(&ty) {
-            Ty::Named(name, args)
+            Ty::Named(name, args, _)
                 if (name == ty::RESULT && args.len() == 2)
                     || (name == ty::OPTION && args.len() == 1) =>
             {
@@ -42,13 +42,13 @@ impl Body<'_, '_, '_> {
             // same kind, with its own success type.
             Ty::Var(_) => {
                 let failure = if kind == ty::RESULT {
-                    Ty::Named(kind.clone(), vec![self.infer.fresh(), args[1].clone()])
+                    Ty::generic(&kind, vec![self.infer.fresh(), args[1].clone()])
                 } else {
-                    Ty::Named(kind.clone(), vec![self.infer.fresh()])
+                    Ty::generic(&kind, vec![self.infer.fresh()])
                 };
                 self.infer.unify(&failure, &ret);
             }
-            Ty::Named(name, ret_args) if name == kind => {
+            Ty::Named(name, ret_args, _) if name == kind => {
                 if kind == ty::RESULT && ret_args.len() == 2 {
                     self.propagate_error(&args[1], &ret_args[1], expr.span);
                 }
@@ -82,8 +82,8 @@ impl Body<'_, '_, '_> {
     pub(super) fn propagate_error(&mut self, from: &Ty, to: &Ty, span: Span) {
         match self.infer.flow(from, to) {
             Ok(()) => return,
-            Err(Mismatch::CapLost) => {
-                self.mismatch(Mismatch::CapLost, from, to, span);
+            Err(lost @ (Mismatch::CapLost | Mismatch::TrustLost)) => {
+                self.mismatch(lost, from, to, span);
                 return;
             }
             Err(Mismatch::Types) => {}
@@ -113,7 +113,7 @@ impl Body<'_, '_, '_> {
     /// error; `let _ = f()` discards one deliberately.
     pub(super) fn expr_stmt(&mut self, expr: &Expr) {
         let ty = self.infer(expr);
-        if let Ty::Named(name, _) = self.infer.resolve(&ty) {
+        if let Ty::Named(name, _, _) = self.infer.resolve(&ty) {
             if name == ty::RESULT {
                 self.error(
                     codes::IGNORED_RESULT,

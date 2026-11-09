@@ -11,7 +11,6 @@ use crate::authority::capability_bearing;
 use crate::codes;
 use crate::collect::{field_types, DeclKind, Decls};
 use crate::items::Lower;
-use crate::prelude;
 use crate::ty::{self, SCOPE};
 
 /// Report every declaration-level error in `module`.
@@ -250,7 +249,13 @@ fn main(src: &str, module: &Module, f: &FnDecl, decls: &Decls, diagnostics: &mut
         return;
     };
     let display = single_name(error).is_some_and(|name| {
-        implements_display(prelude::module(), name) || implements_display(module, name)
+        decls
+            .prelude_items()
+            .any(|item| implements_display(item, name))
+            || module
+                .items
+                .iter()
+                .any(|item| implements_display(item, name))
     });
     // An unknown name is already reported by name resolution.
     let known = single_name(error).is_some_and(|name| decls.get(name).is_some());
@@ -266,9 +271,9 @@ fn main(src: &str, module: &Module, f: &FnDecl, decls: &Decls, diagnostics: &mut
     }
 }
 
-/// Whether `module` has an `impl Display for name`.
-fn implements_display(module: &Module, name: &str) -> bool {
-    module.items.iter().any(|item| match &item.kind {
+/// Whether `item` is an `impl Display for name`.
+fn implements_display(item: &Item, name: &str) -> bool {
+    match &item.kind {
         ItemKind::Impl(imp) => {
             imp.trait_ref
                 .as_ref()
@@ -276,7 +281,7 @@ fn implements_display(module: &Module, name: &str) -> bool {
                 && single_name(&imp.target) == Some(name)
         }
         _ => false,
-    })
+    }
 }
 
 /// The name of a one-segment path type with no type arguments.

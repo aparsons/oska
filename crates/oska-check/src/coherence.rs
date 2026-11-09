@@ -19,23 +19,20 @@ use crate::codes;
 use crate::collect::Decls;
 use crate::infer::Infer;
 use crate::items::Lower;
-use crate::prelude;
 use crate::ty::Ty;
 
 pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
-    let mut functions: HashSet<&str> = prelude::module()
-        .items
-        .iter()
+    let mut functions: HashSet<&str> = decls
+        .prelude_items()
         .filter_map(|item| match &item.kind {
-            ItemKind::Fn(f) => Some(f.name.name.as_str()),
+            ItemKind::Fn(f) => Some(decls.prelude_key(&f.name.name)),
             _ => None,
         })
         .collect();
     let prelude_functions = functions.clone();
     let mut methods: HashSet<(String, &str)> = HashSet::new();
-    let mut impls: Vec<TraitImpl> = prelude::module()
-        .items
-        .iter()
+    let mut impls: Vec<TraitImpl> = decls
+        .prelude_items()
         .filter_map(|item| trait_impl(item, decls, true))
         .collect();
     for item in &module.items {
@@ -73,7 +70,7 @@ pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>)
                         codes::CONFLICTING_IMPL,
                         format!(
                             "conflicting implementations of `{}` for `{}`: {place} one",
-                            Ty::Named(new.trait_name.clone(), new.trait_args.clone()),
+                            Ty::generic(&new.trait_name, new.trait_args.clone()),
                             new.target
                         ),
                         trait_ref,
@@ -143,7 +140,7 @@ fn trait_impl(item: &Item, decls: &Decls, in_prelude: bool) -> Option<TraitImpl>
     let ItemKind::Impl(imp) = &item.kind else {
         return None;
     };
-    let lower = Lower::new(decls).with_generics(&imp.generics);
+    let lower = Lower::in_scope(decls, in_prelude).with_generics(&imp.generics);
     let (trait_name, trait_args) = lower.bound(imp.trait_ref.as_ref()?)?;
     let target = lower.ty(&imp.target);
     if target.is_error() {

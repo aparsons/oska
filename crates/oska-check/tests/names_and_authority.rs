@@ -242,7 +242,7 @@ fn a_generic_parameter_is_scoped_to_its_declaration() {
 
 #[test]
 fn a_qualified_type_path_is_unknown() {
-    // `use` of `std.*` modules comes later; until then no path resolves.
+    // A `use` brings a module's items in unqualified; no path resolves.
     assert_errors("fn f(q: sql.Query) { }", &[("E0200", "sql.Query")]);
 }
 
@@ -337,7 +337,7 @@ fn a_parse_error_is_reported_with_no_functions() {
     assert!(report.functions.is_empty());
 }
 
-// ---- The JSON report: {"diagnostics": [...], "functions": [...]} -------------
+// ---- The JSON report: {"diagnostics", "functions", "audit"} ------------------
 
 #[test]
 fn a_clean_module_reports_only_authority() {
@@ -357,7 +357,8 @@ fn a_clean_module_reports_only_authority() {
                          {"param": "fs", "capabilities": ["FsRead"]}],
                  "pure": false},
                 {"name": "add", "authority": [], "via": [], "pure": true}
-            ]
+            ],
+            "audit": []
         }"#,
     );
 }
@@ -377,7 +378,8 @@ fn diagnostics_use_the_shared_envelope_with_their_fix() {
             ],
             "functions": [
                 {"name": "f", "authority": [], "via": [], "pure": true}
-            ]
+            ],
+            "audit": []
         }"#,
     );
 }
@@ -392,7 +394,8 @@ fn a_cap_fn_parameter_is_listed_in_via_without_capabilities() {
                 {"name": "each", "authority": [],
                  "via": [{"param": "f", "capabilities": []}],
                  "pure": false}
-            ]
+            ],
+            "audit": []
         }"#,
     );
 }

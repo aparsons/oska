@@ -51,7 +51,7 @@ impl Body<'_, '_, '_> {
                 None => {
                     let ty = self.infer(&arm.body);
                     if self.infer.shallow(&ty) != Ty::Never {
-                        result = Some(ty);
+                        result = Some(self.join(&ty));
                     }
                 }
             }
@@ -109,7 +109,7 @@ impl Body<'_, '_, '_> {
         if let Some(edit) = self.missing_arms(span, scrutinee, arms, &missing) {
             diagnostic = diagnostic.with_fix("add arms for the missing patterns", vec![edit]);
         }
-        self.diagnostics.push(diagnostic);
+        self.out.diagnostics.push(diagnostic);
     }
 
     /// An edit adding an arm for each missing pattern, after the last arm
@@ -158,7 +158,7 @@ impl Body<'_, '_, '_> {
         };
         let (name, args) = match self.infer.resolve(ty) {
             Ty::Unit => return Some(vec![ctor("()", Vec::new())]),
-            Ty::Named(name, args) => (name, args),
+            Ty::Named(name, args, _) => (name, args),
             _ => return None,
         };
         if name == ty::BOOL {
@@ -266,7 +266,10 @@ impl Body<'_, '_, '_> {
                     (callable, name.clone())
                 }
             };
-            if self.expect(&callable.ret, expected, span).is_error() {
+            // The matched value flows into the pattern, and on into its
+            // bindings, so untrusted text binds untrusted.
+            if let Err(mismatch) = self.infer.flow(expected, &callable.ret) {
+                self.mismatch(mismatch, &callable.ret, expected, span);
                 return None;
             }
             if callable.params.len() != args.len() {
@@ -340,7 +343,7 @@ impl Body<'_, '_, '_> {
             _ => return,
         };
         let span = arg.label.as_ref().map_or(arg.span, |l| l.span);
-        self.diagnostics.push(
+        self.out.diagnostics.push(
             Diagnostic::new(codes::PATTERN_LABEL, message, span)
                 .with_fix("use the field's label", vec![edit]),
         );
@@ -428,7 +431,7 @@ impl Body<'_, '_, '_> {
             name.span,
             &pairs,
         );
-        self.diagnostics.push(diagnostic);
+        self.out.diagnostics.push(diagnostic);
     }
 
     /// Bind the names in a pattern that could not be checked, with the

@@ -2,9 +2,13 @@
 //!
 //! [`check_module`] checks one source file against the embedded
 //! **prelude** (`src/prelude.osk`) and returns a [`CheckReport`]: every
-//! diagnostic, plus the **authority** of every function. The report is
+//! diagnostic, the **authority** of every function, and every **audit
+//! site** (a call a reviewer must see, such as `.assume_trusted()`:
+//! `body/audit.rs`). The report is
 //! produced even when there are errors. [`CheckReport::to_json`] is what
 //! `oskac check --format=json` prints; `docs/checker.md` describes it.
+//! A `use std.*` adds that module's declarations (`src/std/*.osk`) to
+//! the prelude the file sees.
 //!
 //! The pipeline runs in order: collect declarations, resolve names, check
 //! declarations (`cap`, `main`, capitalization, recursive types, where
@@ -18,12 +22,12 @@
 //!
 //! # Diagnostic codes
 //!
-//! Checker codes are `E02xx`, defined in the `codes` module below. The
-//! canonical table of what each means, what it spans, and which carry a
-//! machine-applicable fix is in `docs/checker.md`; a conformance test
-//! keeps it in step with `codes`.
+//! Checker codes are `E02xx` and `E03xx`, defined in the `codes` module
+//! below. The canonical table of what each means, what it spans, and
+//! which carry a machine-applicable fix is in `docs/checker.md`; a
+//! conformance test keeps it in step with `codes`.
 
-use oska_syntax::{json_escape, Diagnostic};
+use oska_syntax::{json_escape, Diagnostic, Span};
 
 mod authority;
 mod body;
@@ -95,6 +99,17 @@ pub(crate) mod codes {
     pub const TODO_IN_RELEASE: &str = "E0293";
     pub const USE_OUTSIDE_STD: &str = "E0294";
     pub const UNKNOWN_MODULE: &str = "E0295";
+    pub const UNTRUSTED_TEXT: &str = "E0300";
+    pub const SINK_NOT_IMPORTED: &str = "E0310";
+    pub const UNKNOWN_SINK_TAG: &str = "E0311";
+    pub const NOT_EXPORTED: &str = "E0312";
+    pub const UNTRUSTED_NOT_TEXT: &str = "E0320";
+    pub const QUALIFIED_ONLY: &str = "E0340";
+    pub const TEXT_AS_SINK_LITERAL: &str = "E0341";
+    pub const SECRET_INTERPOLATED: &str = "E0350";
+    pub const SECRET_COMPARED: &str = "E0351";
+    pub const SECRET_DISPLAYED: &str = "E0352";
+    pub const PRIVATE_TO_MODULE: &str = "E0360";
 }
 
 /// Options that change what is checked.
@@ -111,6 +126,64 @@ pub struct CheckReport {
     pub diagnostics: Vec<Diagnostic>,
     /// One entry per function and `impl` method, in source order.
     pub functions: Vec<FunctionAuthority>,
+    /// Every audit site, in source order.
+    pub audit: Vec<AuditSite>,
+}
+
+/// A call a reviewer must see: one that vouches for untrusted text, or
+/// exposes a secret. `body/audit.rs` decides which calls these are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuditSite {
+    /// What the call does.
+    pub kind: AuditKind,
+    /// The whole call expression.
+    pub span: Span,
+}
+
+/// What an audit site does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditKind {
+    /// Vouches for untrusted text: `.assume_trusted()`.
+    TrustAssertion,
+    /// Reads a secret's value: `.expose()`.
+    SecretExposure,
+}
+
+impl AuditKind {
+    /// The kind as the report names it: the method's name, such as
+    /// `assume_trusted`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AuditKind::TrustAssertion => "assume_trusted",
+            AuditKind::SecretExposure => "expose",
+        }
+    }
+}
+
+/// Renders as `audit: assume_trusted (bytes 52..73)`, as the
+/// human-readable report lists it.
+impl std::fmt::Display for AuditSite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "audit: {} (bytes {}..{})",
+            self.kind.as_str(),
+            self.span.start,
+            self.span.end
+        )
+    }
+}
+
+impl AuditSite {
+    /// Render as a single-line JSON object.
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"kind\":\"{}\",\"span\":{{\"start\":{},\"end\":{}}}}}",
+            self.kind.as_str(),
+            self.span.start,
+            self.span.end
+        )
+    }
 }
 
 /// One function's entry in the authority report.
@@ -138,8 +211,9 @@ pub struct Via {
 }
 
 impl CheckReport {
-    /// Render as `{"diagnostics": [...], "functions": [...]}`, with one
-    /// diagnostic or function per line.
+    /// Render as `{"diagnostics": [...], "functions": [...], "audit":
+    /// [...]}`, with one diagnostic, function, or audit site per line.
+    /// Every array is present, even when empty.
     pub fn to_json(&self) -> String {
         let diagnostics: Vec<String> = self.diagnostics.iter().map(Diagnostic::to_json).collect();
         let functions: Vec<String> = self
@@ -147,10 +221,12 @@ impl CheckReport {
             .iter()
             .map(FunctionAuthority::to_json)
             .collect();
+        let audit: Vec<String> = self.audit.iter().map(AuditSite::to_json).collect();
         format!(
-            "{{\n  \"diagnostics\": {},\n  \"functions\": {}\n}}\n",
+            "{{\n  \"diagnostics\": {},\n  \"functions\": {},\n  \"audit\": {}\n}}\n",
             json_lines(&diagnostics),
-            json_lines(&functions)
+            json_lines(&functions),
+            json_lines(&audit)
         )
     }
 }
@@ -208,7 +284,7 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
         Err(err) => {
             return CheckReport {
                 diagnostics: vec![err],
-                functions: Vec::new(),
+                ..CheckReport::default()
             }
         }
     };
@@ -217,17 +293,27 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
     resolve::module(&module, &decls, &mut diagnostics);
     decl_rules::module(src, &module, &decls, &mut diagnostics);
     coherence::module(&module, &decls, &mut diagnostics);
-    recursion::module(&module, &mut diagnostics);
+    recursion::module(&module, &decls, &mut diagnostics);
     if options.release {
         release::module(&module, &mut diagnostics);
     }
     let items = items::Items::collect(&module, &decls);
     traits::module(src, &module, &decls, &items, &mut diagnostics);
-    body::module(src, &module, &decls, &items, &mut diagnostics);
+    let mut findings = body::Findings {
+        diagnostics,
+        audit: Vec::new(),
+    };
+    body::module(src, &module, &decls, &items, &mut findings);
+    let body::Findings {
+        mut diagnostics,
+        mut audit,
+    } = findings;
     let functions = authority::report(&module, &decls);
     diagnostics.sort_by_key(|d| d.span.start);
+    audit.sort_by_key(|site| site.span.start);
     CheckReport {
         diagnostics,
         functions,
+        audit,
     }
 }

@@ -76,13 +76,13 @@ fn try_converts_an_error_through_an_explicit_from_impl() {
 
 #[test]
 fn try_on_an_option_in_a_function_returning_option() {
-    assert_ok("fn first(args: Args) -> Option<String> {\n    let s = args.get(0)?\n    Some(s)\n}");
+    assert_ok("fn first(args: Args) -> Option<Untrusted<String>> {\n    let s = args.get(0)?\n    Some(s)\n}");
 }
 
 #[test]
 fn try_on_an_option_in_a_function_returning_result_is_an_error() {
     let src =
-        "fn first(args: Args) -> Result<String, IoError> {\n    let s = args.get(0)?\n    Ok(s)\n}";
+        "fn first(args: Args) -> Result<Untrusted<String>, IoError> {\n    let s = args.get(0)?\n    Ok(s)\n}";
     assert_errors(src, &[("E0243", "args.get(0)?")]);
     let report = common::check(src);
     assert!(
@@ -95,7 +95,7 @@ fn try_on_an_option_in_a_function_returning_result_is_an_error() {
 #[test]
 fn ok_or_converts_an_option_for_try_in_a_result_function() {
     assert_ok(
-        "fn first(args: Args) -> Result<String, IoError> {\n    \
+        "fn first(args: Args) -> Result<Untrusted<String>, IoError> {\n    \
          let s = args.get(0).ok_or(IoError(message: \"missing\"))?\n    Ok(s)\n}",
     );
 }
@@ -125,11 +125,11 @@ fn try_on_a_value_that_is_neither_result_nor_option_is_an_error() {
 #[test]
 fn try_inside_a_closure_propagates_out_of_the_closure() {
     assert_ok(
-        "fn f(xs: List<Args>) -> List<Option<String>> {\n    \
+        "fn f(xs: List<Args>) -> List<Option<Untrusted<String>>> {\n    \
          xs.map(|a| Some(a.get(0)?))\n}",
     );
     assert_errors(
-        "fn f(xs: List<Args>) -> List<Result<String, IoError>> {\n    \
+        "fn f(xs: List<Args>) -> List<Result<Untrusted<String>, IoError>> {\n    \
          xs.map(|a| Ok(a.get(0)?))\n}",
         &[("E0243", "a.get(0)?")],
     );

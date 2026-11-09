@@ -1,6 +1,8 @@
-//! Conformance (#42): the example programs check cleanly, and the table of
-//! `E02xx` codes in `docs/checker.md`, the canonical one, matches the codes
-//! the checker defines.
+//! Conformance (#42, #56): the example programs check cleanly, a mutation
+//! that passes untrusted text to a trusted `String` parameter is rejected,
+//! and the table of checker codes (`E02xx` and `E03xx`) in
+//! `docs/checker.md`, the canonical one, matches the codes the checker
+//! defines.
 //!
 //! Design-notes samples are left out on purpose: they are fragments that use
 //! types they never declare.
@@ -10,7 +12,7 @@ mod common;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use common::check;
+use common::{assert_errors, check};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -62,9 +64,38 @@ fn every_example_checks_with_zero_diagnostics() {
     );
 }
 
+/// The capabilities example with `text`, the untrusted contents of a file,
+/// passed to a user function whose `String` parameter means trusted text.
+#[test]
+fn the_capabilities_example_rejects_untrusted_text_in_a_trusted_parameter() {
+    let src = read(&repo_root().join("examples/capabilities.osk"));
+    let counted = "Ok(text.lines().count())";
+    assert!(
+        src.contains(counted),
+        "examples/capabilities.osk should count lines with {counted:?}"
+    );
+    let mutated = src.replace(counted, "Ok(word_count(text))")
+        + "\nfn word_count(text: String) -> Int {\n    text.split(\" \").count()\n}\n";
+    assert_errors(&mutated, &[("E0300", "text")]);
+}
+
+// ---- Laundering ---------------------------------------------------------------
+
+/// A generic `T: Display` calling `x.to_string()` returned trusted text
+/// even when `T` was untrusted text (#52 notes). Text from a type
+/// parameter is now untrusted inside a generic body, so the body is the
+/// error; the call also follows the trust of its type arguments.
+#[test]
+fn generic_display_launders_trust() {
+    assert_errors(
+        "fn launder<T: Display>(x: T) -> String {\n    x.to_string()\n}\nfn f(env: Env) -> Option<String> {\n    let home = env.get(\"HOME\")?\n    Some(launder(home))\n}",
+        &[("E0300", "x.to_string()"), ("E0300", "launder(home)")],
+    );
+}
+
 // ---- Documented codes ---------------------------------------------------------
 
-/// The `E02xx` codes defined in the `codes` module of `src/lib.rs`.
+/// The checker codes defined in the `codes` module of `src/lib.rs`.
 fn defined_codes() -> BTreeSet<String> {
     let lib = read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"));
     let module = lib
@@ -83,25 +114,31 @@ fn defined_codes() -> BTreeSet<String> {
         })
         .collect();
     assert!(
-        codes.contains("E0200") && codes.contains("E0281"),
+        codes.contains("E0200") && codes.contains("E0281") && codes.contains("E0300"),
         "the `codes` module should be found and parsed, got {codes:?}"
     );
     codes
 }
 
-/// The rows of a Markdown table that document an `E02xx` code, as the code
+/// A checker code: `E02xx` or above. `E01xx` are parser codes.
+fn is_checker_code(code: &str) -> bool {
+    let Some(digits) = code.strip_prefix("E0") else {
+        return false;
+    };
+    digits.len() == 3
+        && digits.chars().all(|c| c.is_ascii_digit())
+        && !digits.starts_with(['0', '1'])
+}
+
+/// The rows of a Markdown table that document a checker code, as the code
 /// and its cells after the code column.
 fn documented_rows<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<(String, Vec<String>)> {
     lines
         .filter_map(|line| {
             let cells: Vec<&str> = line.trim().trim_matches('|').split('|').collect();
-            let code = cells
-                .first()?
-                .trim()
-                .strip_prefix("`E02")?
-                .strip_suffix('`')?;
+            let code = cells.first()?.trim().strip_prefix('`')?.strip_suffix('`')?;
             let rest = cells[1..].iter().map(|c| c.trim().to_string()).collect();
-            Some((format!("E02{code}"), rest))
+            is_checker_code(code).then(|| (code.to_string(), rest))
         })
         .collect()
 }
