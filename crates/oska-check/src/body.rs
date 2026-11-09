@@ -530,7 +530,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 for part in parts {
                     if let StrPart::Hole { path, span } = part {
                         let ty = self.hole(path);
-                        self.secret_hole(&ty, *span);
+                        self.interpolated_hole(&ty, *span);
                         self.infer.join_into(&ty, trust);
                     }
                 }

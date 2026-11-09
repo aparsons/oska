@@ -38,17 +38,56 @@ impl Body<'_, '_, '_> {
         self.infer.resolve(ty).head() == Some(ty::SECRET)
     }
 
-    /// Report the interpolation hole at `span`, of type `ty`, if it is a
-    /// secret.
-    pub(super) fn secret_hole(&mut self, ty: &Ty, span: Span) {
-        if self.is_secret(ty) {
+    /// Whether a value of type `ty` holds a `Secret` anywhere inside: in a
+    /// type argument, or in a field of a struct or a variant of an enum.
+    fn holds_secret(&self, ty: &Ty) -> bool {
+        self.holds_secret_in(&self.infer.resolve(ty), &mut Vec::new())
+    }
+
+    /// [`Body::holds_secret`], skipping the types in `seen` so that a
+    /// recursive type terminates.
+    fn holds_secret_in(&self, ty: &Ty, seen: &mut Vec<Ty>) -> bool {
+        let Ty::Named(name, args, _) = ty else {
+            return false;
+        };
+        if name == ty::SECRET {
+            return true;
+        }
+        if seen.contains(ty) {
+            return false;
+        }
+        seen.push(ty.clone());
+        if args.iter().any(|a| self.holds_secret_in(a, seen)) {
+            return true;
+        }
+        let (generics, shapes) = match (self.items.structs.get(name), self.items.enums.get(name)) {
+            (Some(info), _) => (&info.generics, vec![&info.fields]),
+            (None, Some(info)) => (
+                &info.generics,
+                info.variants.iter().map(|(_, f)| f).collect(),
+            ),
+            (None, None) => return false,
+        };
+        let subst: Vec<(String, Ty)> = generics.iter().cloned().zip(args.iter().cloned()).collect();
+        shapes
+            .into_iter()
+            .flat_map(|fields| fields.instantiate(&subst))
+            .any(|(_, field)| self.holds_secret_in(&field, seen))
+    }
+
+    /// Check the interpolation hole at `span`, of type `ty`: it must not
+    /// hold a secret anywhere (`E0350`), and it must be `Display`.
+    pub(super) fn interpolated_hole(&mut self, ty: &Ty, span: Span) {
+        if self.holds_secret(ty) {
             self.error(
                 codes::SECRET_INTERPOLATED,
-                "a `Secret` cannot be interpolated; read its value with `.expose()` \
-                 if it must appear in text",
+                "a `Secret` cannot be interpolated, nor a value that holds one; read its \
+                 value with `.expose()` if it must appear in text",
                 span,
             );
+            return;
         }
+        self.require_trait(ty, ty::DISPLAY, &[], span, "interpolation");
     }
 
     /// Report the bound `trait_name` that a secret of type `ty` fails at

@@ -185,3 +185,45 @@ fn interpolating_an_exposed_secret_is_allowed() {
          }",
     );
 }
+
+#[test]
+fn interpolating_a_list_of_secrets_is_an_error() {
+    assert_errors(
+        "fn f(env: Env) -> String {\n    let l = [env.secret(\"K\")]\n    \"{l}\"\n}",
+        &[("E0350", "{l}")],
+    );
+}
+
+#[test]
+fn interpolating_an_optional_secret_is_an_error() {
+    assert_errors(
+        "fn f(env: Env) -> String {\n    let x = Some(env.secret(\"K\"))\n    \"{x}\"\n}",
+        &[("E0350", "{x}")],
+    );
+}
+
+#[test]
+fn interpolating_a_struct_holding_a_secret_is_an_error() {
+    assert_errors(
+        "struct Q { s: Secret<String> }\n\
+         fn f(env: Env) -> String {\n    let q = Q(s: env.secret(\"K\"))\n    \"{q}\"\n}",
+        &[("E0350", "{q}")],
+    );
+}
+
+#[test]
+fn an_interpolation_hole_must_be_display() {
+    assert_errors(
+        "struct P { a: Int }\nfn f(p: P, l: List<Int>) -> String {\n    \"{p} {l}\"\n}",
+        &[("E0265", "{p}"), ("E0265", "{l}")],
+    );
+}
+
+#[test]
+fn a_display_hole_interpolates() {
+    assert_ok(
+        "struct P { a: Int }\n\
+         impl Display for P {\n    fn to_string(self) -> String {\n        \"p\"\n    }\n}\n\
+         fn f<T: Display>(p: P, n: Int, s: String, t: T) -> String {\n    \"{p} {n} {s} {t}\"\n}",
+    );
+}
