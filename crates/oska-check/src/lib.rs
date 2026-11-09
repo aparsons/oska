@@ -23,7 +23,7 @@
 //! machine-applicable fix is in `docs/checker.md`; a conformance test
 //! keeps it in step with `codes`.
 
-use oska_syntax::Diagnostic;
+use oska_syntax::{json_escape, Diagnostic};
 
 mod authority;
 mod body;
@@ -156,8 +156,7 @@ impl CheckReport {
 }
 
 impl FunctionAuthority {
-    /// Render as a single-line JSON object. Names are identifiers, so they
-    /// need no escaping.
+    /// Render as a single-line JSON object.
     pub fn to_json(&self) -> String {
         let via: Vec<String> = self
             .via
@@ -165,14 +164,14 @@ impl FunctionAuthority {
             .map(|v| {
                 format!(
                     "{{\"param\":\"{}\",\"capabilities\":{}}}",
-                    v.param,
+                    json_escape(&v.param),
                     json_strings(&v.capabilities)
                 )
             })
             .collect();
         format!(
             "{{\"name\":\"{}\",\"authority\":{},\"via\":[{}],\"pure\":{}}}",
-            self.name,
+            json_escape(&self.name),
             json_strings(&self.authority),
             via.join(","),
             self.pure
@@ -181,7 +180,10 @@ impl FunctionAuthority {
 }
 
 fn json_strings(items: &[String]) -> String {
-    let quoted: Vec<String> = items.iter().map(|s| format!("\"{s}\"")).collect();
+    let quoted: Vec<String> = items
+        .iter()
+        .map(|s| format!("\"{}\"", json_escape(s)))
+        .collect();
     format!("[{}]", quoted.join(","))
 }
 

@@ -4,7 +4,7 @@
 mod common;
 
 use common::{assert_errors, assert_ok};
-use oska_check::{check_module_with, CheckOptions};
+use oska_check::{check_module_with, CheckOptions, FunctionAuthority, Via};
 
 /// Each diagnostic's code and start offset, for snippets where the
 /// spanned text alone is ambiguous.
@@ -284,4 +284,23 @@ fn a_use_of_a_std_module_that_does_not_exist_is_an_error() {
 #[test]
 fn a_use_with_a_brace_group_names_its_module() {
     assert_errors("use std.sql.{Query}", &[("E0295", "std.sql")]);
+}
+
+// ---- JSON ---------------------------------------------------------------------------
+
+#[test]
+fn the_authority_report_escapes_its_strings() {
+    let function = FunctionAuthority {
+        name: "a\"b\\c".to_string(),
+        authority: vec!["Std\"out".to_string()],
+        via: vec![Via {
+            param: "o\nut".to_string(),
+            capabilities: vec!["Std\"out".to_string()],
+        }],
+        pure: false,
+    };
+    assert_eq!(
+        function.to_json(),
+        r#"{"name":"a\"b\\c","authority":["Std\"out"],"via":[{"param":"o\nut","capabilities":["Std\"out"]}],"pure":false}"#
+    );
 }
