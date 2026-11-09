@@ -51,6 +51,6 @@ impl Body<'_, '_, '_> {
             );
             return Ty::Error;
         }
-        Ty::named(literal.ty)
+        Ty::named(self.decls().prelude_key(literal.ty))
     }
 }

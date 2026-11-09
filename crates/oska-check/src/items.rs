@@ -213,6 +213,15 @@ impl TraitInfo {
     }
 }
 
+/// The key `name` is declared under: renamed for a `std.*` module's
+/// declaration that the user module shadows (see [`Decls::prelude_key`]).
+fn key_of(decls: &Decls, name: &str, in_prelude: bool) -> String {
+    match in_prelude {
+        true => decls.prelude_key(name).to_string(),
+        false => name.to_string(),
+    }
+}
+
 /// Everything a body can refer to besides its own locals.
 #[derive(Debug, Default)]
 pub struct Items {
@@ -255,7 +264,8 @@ impl Items {
                 ItemKind::Fn(f) => {
                     let mut sig = Lower::in_scope(decls, in_prelude).signature(f, &[], None);
                     sig.follows_trust = follows_trust(item);
-                    self.fns.entry(sig.name.clone()).or_insert(sig);
+                    let key = key_of(decls, &sig.name, in_prelude);
+                    self.fns.entry(key).or_insert(sig);
                 }
                 ItemKind::Struct(s) => {
                     let lower = Lower::in_scope(decls, in_prelude).with_generics(&s.generics);
@@ -278,7 +288,8 @@ impl Items {
                             Vec::new()
                         },
                     };
-                    self.structs.entry(s.name.name.clone()).or_insert(info);
+                    let key = key_of(decls, &s.name.name, in_prelude);
+                    self.structs.entry(key).or_insert(info);
                 }
                 ItemKind::Enum(e) => {
                     let lower = Lower::in_scope(decls, in_prelude).with_generics(&e.generics);
@@ -287,17 +298,17 @@ impl Items {
                         .iter()
                         .map(|v| (v.name.name.clone(), lower.fields(&v.fields)))
                         .collect::<Vec<_>>();
+                    let key = key_of(decls, &e.name.name, in_prelude);
                     if in_prelude {
                         for (variant, _) in &variants {
-                            self.bare_variants
-                                .insert(variant.clone(), e.name.name.clone());
+                            self.bare_variants.insert(variant.clone(), key.clone());
                         }
                     }
                     let info = EnumInfo {
                         generics: lower.generics.clone(),
                         variants,
                     };
-                    self.enums.entry(e.name.name.clone()).or_insert(info);
+                    self.enums.entry(key).or_insert(info);
                 }
                 ItemKind::Impl(imp) => {
                     let lower = Lower::in_scope(decls, in_prelude).with_generics(&imp.generics);
@@ -351,7 +362,7 @@ impl Items {
                                 // signature's: they are replaced, not
                                 // instantiated, when the method is used.
                                 let mut sig = lower.signature(f, &[], Some(self_ty.clone()));
-                                sig.trait_name = Some(t.name.name.clone());
+                                sig.trait_name = Some(key_of(decls, &t.name.name, in_prelude));
                                 sig.follows_trust = follows_trust(m);
                                 Some((sig, f.body.is_some()))
                             }
@@ -362,7 +373,8 @@ impl Items {
                         generics: lower.generics.clone(),
                         methods,
                     };
-                    self.traits.entry(t.name.name.clone()).or_insert(info);
+                    let key = key_of(decls, &t.name.name, in_prelude);
+                    self.traits.entry(key).or_insert(info);
                 }
                 ItemKind::Use(_) | ItemKind::Const(_) | ItemKind::Test(_) => {}
             }

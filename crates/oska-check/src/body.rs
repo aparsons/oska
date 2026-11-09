@@ -240,6 +240,17 @@ struct Callable {
     type_args: Vec<Ty>,
 }
 
+/// What `base.name` names when `base` is not a value.
+enum QualifiedPath {
+    /// A module's export, by its key (see [`Decls::prelude_key`]).
+    Export(String),
+    /// A member of the type with this key: a variant, an associated
+    /// function, or a method.
+    Member(String),
+    /// Nothing, already reported.
+    Reported,
+}
+
 /// The state of checking one body.
 pub struct Body<'c, 'd, 'a> {
     /// The module's source, for fixes that match its layout.
@@ -399,8 +410,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 .map(|_| ident.name.clone()),
             ExprKind::Field { base, name } => {
                 let module = self.module_name(base)?;
-                let exported = module.exports().contains(&name.name.as_str());
-                (exported && self.decls().get(&name.name).is_some()).then(|| name.name.clone())
+                let key = self.decls().prelude_key(&name.name);
+                (module.exports_name(&name.name) && self.decls().get(key).is_some())
+                    .then(|| key.to_string())
             }
             _ => None,
         }
@@ -433,7 +445,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
     /// `module.name` where `module` does not export `name`: report it.
     fn require_export(&mut self, module: &StdModule, name: &Ident) -> bool {
-        if module.exports().contains(&name.name.as_str()) {
+        if module.exports_name(&name.name) {
             return true;
         }
         let diagnostic = suggest::not_exported(module, &name.name, name.span);
@@ -702,13 +714,14 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         if !self.require_unqualified(ident) {
             return Ty::Error;
         }
-        self.item_value(ident)
+        self.item_value(&ident.name, ident)
     }
 
     /// A function, prelude variant, or type named in value position,
-    /// either unqualified or as a module's export.
-    fn item_value(&mut self, ident: &Ident) -> Ty {
-        let name = ident.name.as_str();
+    /// either unqualified or as a module's export: `ident` as written,
+    /// declared under `key` (see [`Decls::prelude_key`]).
+    fn item_value(&mut self, key: &str, ident: &Ident) -> Ty {
+        let name = key;
         if let Some(sig) = self.items.fns.get(name).cloned() {
             let callable = self.instantiate(&sig, None);
             return callable.into_fn_type();
@@ -749,17 +762,26 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         self.diagnostics.push(diagnostic);
     }
 
+    /// What `base.name` names when `base` is a module or a type rather
+    /// than a value, reporting a name the module does not export. `None`
+    /// when `base` is a value.
+    fn qualified_path(&mut self, base: &Expr, name: &Ident) -> Option<QualifiedPath> {
+        if let Some(module) = self.module_name(base) {
+            if !self.require_export(module, name) {
+                return Some(QualifiedPath::Reported);
+            }
+            let key = self.decls().prelude_key(&name.name).to_string();
+            return Some(QualifiedPath::Export(key));
+        }
+        self.type_name(base).map(QualifiedPath::Member)
+    }
+
     /// `base.name` outside a call: a field, a member of a type, or a
     /// module's export.
     fn field_expr(&mut self, base: &Expr, name: &Ident) -> Ty {
-        if let Some(module) = self.module_name(base) {
-            if !self.require_export(module, name) {
-                return Ty::Error;
-            }
-            return self.item_value(name);
-        }
-        if let Some(type_name) = self.type_name(base) {
-            return match self.type_member(&type_name, name) {
+        match self.qualified_path(base, name) {
+            Some(QualifiedPath::Export(key)) => self.item_value(&key, name),
+            Some(QualifiedPath::Member(type_name)) => match self.type_member(&type_name, name) {
                 Some(callable) if callable.labels != Labels::Optional => {
                     if callable.params.is_empty() {
                         callable.ret
@@ -769,10 +791,13 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 }
                 Some(callable) => callable.into_fn_type(),
                 None => Ty::Error,
-            };
+            },
+            Some(QualifiedPath::Reported) => Ty::Error,
+            None => {
+                let ty = self.infer(base);
+                self.field_of(ty, name)
+            }
         }
-        let ty = self.infer(base);
-        self.field_of(ty, name)
     }
 
     /// The type of field `name` of a value of type `ty`.

@@ -96,6 +96,39 @@ fn a_qualified_function_the_module_does_not_export_suggests_the_closest_one() {
 }
 
 #[test]
+fn a_user_type_may_share_a_name_with_a_module_export() {
+    assert_ok(
+        "use std.sql\nstruct Row { a: Int }\nstruct Db { a: Int }\n\
+         fn f(r: Row, d: sql.Row, db: Db) -> Int {\n    r.a + db.a\n}\n\
+         fn g() -> Row {\n    Row(a: 1)\n}",
+    );
+}
+
+#[test]
+fn a_user_type_and_a_module_export_of_one_name_are_different_types() {
+    assert_errors(
+        "use std.sql\nstruct Row { a: Int }\nfn f(r: sql.Row) -> Row {\n    r\n}",
+        &[("E0220", "r")],
+    );
+}
+
+#[test]
+fn a_module_function_may_share_a_name_with_a_user_function() {
+    assert_ok(
+        "use std.html\nfn text(n: Int) -> Int {\n    n\n}\n\
+         fn f(name: Untrusted<String>) -> html.Html {\n    let n = text(1)\n    html.text(name)\n}",
+    );
+}
+
+#[test]
+fn a_name_imported_unqualified_still_clashes_with_a_user_type() {
+    assert_errors(
+        "use std.sql.{Row}\nstruct Row { a: Int }",
+        &[("E0202", "Row")],
+    );
+}
+
+#[test]
 fn a_local_shadows_a_module_name() {
     assert_ok("use std.html\nfn f(html: String) -> Int {\n    html.len()\n}");
 }

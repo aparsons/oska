@@ -37,7 +37,9 @@ pub struct Decl<'a> {
 /// Every type and trait name in scope. Types and traits share one
 /// namespace.
 pub struct Decls<'a> {
-    names: HashMap<&'a str, Decl<'a>>,
+    /// Each declaration, by its key: its name, or for a renamed module
+    /// declaration (see `renamed`) its qualified name.
+    names: HashMap<String, Decl<'a>>,
     /// The `std.*` modules the user module imports, in `use` order.
     imported: Vec<&'static StdModule>,
     /// The modules a plain `use std.x` binds to the name `x`.
@@ -45,6 +47,11 @@ pub struct Decls<'a> {
     /// Names declared by an imported module that no brace group imports:
     /// the user module reaches them only qualified, as in `sql.Db`.
     qualified_only: HashMap<&'static str, &'static StdModule>,
+    /// Names declared both by an imported module, reached only qualified,
+    /// and by the user module, which owns the unqualified name. The
+    /// module's declaration is keyed by its qualified name instead, as
+    /// `sql.Row`, so the two never clash.
+    renamed: HashMap<&'static str, String>,
 }
 
 impl<'a> Decls<'a> {
@@ -71,7 +78,7 @@ impl<'a> Decls<'a> {
                         names
                             .iter()
                             .map(|n| n.name.as_str())
-                            .filter(|n| std.exports().contains(n)),
+                            .filter(|n| std.exports_name(n)),
                     ),
                     None => {
                         if !bound.iter().any(|m| m.path == std.path) {
@@ -81,10 +88,17 @@ impl<'a> Decls<'a> {
                 }
             }
         }
+        let own: Vec<&str> = module.items.iter().filter_map(prelude::item_name).collect();
         let mut qualified_only = HashMap::new();
+        let mut renamed = HashMap::new();
         for std in &imported {
             for name in std.declared() {
-                if !unqualified.contains(&name) {
+                if unqualified.contains(&name) {
+                    continue;
+                }
+                if own.contains(&name) {
+                    renamed.insert(name, format!("{}.{name}", std.name()));
+                } else {
                     qualified_only.insert(name, *std);
                 }
             }
@@ -94,10 +108,11 @@ impl<'a> Decls<'a> {
             imported,
             bound,
             qualified_only,
+            renamed,
         };
         for name in prelude::PRIMITIVES {
             decls.names.insert(
-                name,
+                name.to_string(),
                 Decl {
                     kind: DeclKind::Primitive,
                     generics: Vec::new(),
@@ -109,7 +124,7 @@ impl<'a> Decls<'a> {
         // `Untrusted<String>` is written like a generic type but is the
         // trust flag on text (ADR 0006); lowering turns it into the flag.
         decls.names.insert(
-            ty::UNTRUSTED,
+            ty::UNTRUSTED.to_string(),
             Decl {
                 kind: DeclKind::Primitive,
                 generics: vec!["T"],
@@ -120,7 +135,8 @@ impl<'a> Decls<'a> {
         let prelude_items = decls.prelude_items().collect::<Vec<_>>();
         for item in prelude_items {
             if let Some((name, _, decl)) = declaration(item, true) {
-                decls.names.insert(name, decl);
+                let key = decls.prelude_key(name).to_string();
+                decls.names.insert(key, decl);
             }
         }
         for item in &module.items {
@@ -141,7 +157,7 @@ impl<'a> Decls<'a> {
                     ));
                 }
                 None => {
-                    decls.names.insert(name, decl);
+                    decls.names.insert(name.to_string(), decl);
                 }
             }
         }
@@ -168,6 +184,13 @@ impl<'a> Decls<'a> {
         self.qualified_only.get(name).copied()
     }
 
+    /// The key of `name` as the prelude or a `std.*` module declares it:
+    /// its qualified name when the user module declares the same name
+    /// (see `renamed`), and `name` itself otherwise.
+    pub fn prelude_key<'s>(&'s self, name: &'s str) -> &'s str {
+        self.renamed.get(name).map_or(name, String::as_str)
+    }
+
     /// The module a plain `use` binds to `name`, as `sql` for `use std.sql`.
     pub fn bound_module(&self, name: &str) -> Option<&'static StdModule> {
         self.bound.iter().copied().find(|m| m.name() == name)
@@ -178,16 +201,14 @@ impl<'a> Decls<'a> {
     /// `use std.sql.{Db}`), or a module's export reached through the
     /// module's name (`sql.Db`). With `see_all`, as inside the prelude and
     /// the `std` modules themselves, every declared name is in scope.
-    pub fn path_name<'s>(&self, segments: &'s [Ident], see_all: bool) -> Option<&'s str> {
+    pub fn path_name<'s>(&'s self, segments: &'s [Ident], see_all: bool) -> Option<&'s str> {
         match segments {
-            [ident] if see_all || self.qualified_only(&ident.name).is_none() => {
-                Some(ident.name.as_str())
-            }
+            [ident] if see_all => Some(self.prelude_key(&ident.name)),
+            [ident] if self.qualified_only(&ident.name).is_none() => Some(ident.name.as_str()),
             [module, ident] => self
                 .bound_module(&module.name)?
-                .exports()
-                .contains(&ident.name.as_str())
-                .then_some(ident.name.as_str()),
+                .exports_name(&ident.name)
+                .then(|| self.prelude_key(&ident.name)),
             _ => None,
         }
     }
@@ -209,11 +230,13 @@ impl<'a> Decls<'a> {
 
     /// All names the user module can write unqualified, for "did you
     /// mean" suggestions.
-    pub fn names(&self) -> impl Iterator<Item = (&'a str, &Decl<'a>)> + '_ {
+    pub fn names(&self) -> impl Iterator<Item = (&str, &Decl<'a>)> + '_ {
         self.names
             .iter()
-            .filter(|(name, _)| self.qualified_only(name).is_none())
-            .map(|(name, decl)| (*name, decl))
+            .filter(|(name, _)| {
+                self.qualified_only(name).is_none() && !self.renamed.values().any(|k| k == *name)
+            })
+            .map(|(name, decl)| (name.as_str(), decl))
     }
 }
 

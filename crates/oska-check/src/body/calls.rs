@@ -6,7 +6,7 @@
 use oska_syntax::ast::{Arg, Expr, ExprKind, Ident};
 use oska_syntax::{Diagnostic, Edit, Span};
 
-use super::{Body, Callable, Labels};
+use super::{Body, Callable, Labels, QualifiedPath};
 use crate::codes;
 use crate::collect::DeclKind;
 use crate::items::{Bound, FieldsInfo, FnSig, Receiver, Shape};
@@ -22,16 +22,12 @@ impl Body<'_, '_, '_> {
         expected: Option<&Ty>,
     ) -> Ty {
         let callable = match &callee.kind {
-            ExprKind::Field { base, name } => {
-                match (self.module_name(base), self.type_name(base)) {
-                    (Some(module), _) => match self.require_export(module, name) {
-                        true => self.item_callee(name),
-                        false => None,
-                    },
-                    (None, Some(type_name)) => self.type_member(&type_name, name),
-                    (None, None) => return self.method_call(base, name, args, expected, expr.span),
-                }
-            }
+            ExprKind::Field { base, name } => match self.qualified_path(base, name) {
+                Some(QualifiedPath::Export(key)) => self.item_callee(&key, name),
+                Some(QualifiedPath::Member(type_name)) => self.type_member(&type_name, name),
+                Some(QualifiedPath::Reported) => None,
+                None => return self.method_call(base, name, args, expected, expr.span),
+            },
             ExprKind::Name(ident) if self.local(&ident.name).is_none() => self.named_callee(ident),
             _ => {
                 let ty = self.infer(callee);
@@ -73,13 +69,14 @@ impl Body<'_, '_, '_> {
         if !self.require_unqualified(ident) {
             return None;
         }
-        self.item_callee(ident)
+        self.item_callee(&ident.name, ident)
     }
 
     /// A function, struct, or prelude variant called, named either
-    /// unqualified or as a module's export.
-    fn item_callee(&mut self, ident: &Ident) -> Option<Callable> {
-        let name = ident.name.as_str();
+    /// unqualified or as a module's export: `ident` as written, declared
+    /// under `key` (see [`crate::collect::Decls::prelude_key`]).
+    fn item_callee(&mut self, key: &str, ident: &Ident) -> Option<Callable> {
+        let name = key;
         if let Some(sig) = self.items.fns.get(name).cloned() {
             return Some(self.instantiate(&sig, None));
         }

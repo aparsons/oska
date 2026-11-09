@@ -57,7 +57,7 @@ pub fn unknown_written(
 /// qualifies it, as `sql.Db`.
 pub fn qualify(module: &StdModule, span: Span, name: &str) -> Diagnostic {
     let (path, prefix) = (module.path, module.name());
-    if !module.exports().contains(&name) {
+    if !module.exports_name(name) {
         return Diagnostic::new(
             codes::QUALIFIED_ONLY,
             format!("`{name}` is private to `{path}`"),

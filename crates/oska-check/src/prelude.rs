@@ -107,6 +107,11 @@ impl StdModule {
             .collect()
     }
 
+    /// Whether the module exports `name`.
+    pub fn exports_name(&self, name: &str) -> bool {
+        self.exports().contains(&name)
+    }
+
     /// Every function, type, and trait name the module declares, `pub` or
     /// not.
     pub fn declared(&self) -> Vec<&'static str> {
@@ -121,7 +126,7 @@ impl StdModule {
 }
 
 /// The function, type, or trait name `item` declares.
-fn item_name(item: &'static Item) -> Option<&'static str> {
+pub fn item_name(item: &Item) -> Option<&str> {
     match &item.kind {
         ItemKind::Fn(f) => Some(f.name.name.as_str()),
         ItemKind::Struct(s) => Some(s.name.name.as_str()),
@@ -182,7 +187,7 @@ mod tests {
         for std in super::STD_MODULES {
             if let Some(literal) = &std.sink_literal {
                 assert!(
-                    std.exports().contains(&literal.ty),
+                    std.exports_name(literal.ty),
                     "{} does not export `{}`",
                     std.path,
                     literal.ty

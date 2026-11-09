@@ -25,7 +25,7 @@ pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>)
     let mut functions: HashSet<&str> = decls
         .prelude_items()
         .filter_map(|item| match &item.kind {
-            ItemKind::Fn(f) => Some(f.name.name.as_str()),
+            ItemKind::Fn(f) => Some(decls.prelude_key(&f.name.name)),
             _ => None,
         })
         .collect();
