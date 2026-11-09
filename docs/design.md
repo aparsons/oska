@@ -246,28 +246,64 @@ There are two deliberate exceptions to the rules above:
 
 ## Untrusted data and sinks
 
-- **Sources.** Text and bytes read through a capability (files, network, stdin, environment) or from program inputs are untrusted.
-- **Propagation.** Text operations keep a value untrusted. `.lines()` produces untrusted lines, and interpolating an untrusted value makes the whole string untrusted.
-- **Validation.** Converting to a non-text or validated type makes a value trusted. Examples: `.count() -> Int`, `Email.parse(s) -> Result<Email, _>`.
-- **Sinks.** A **data position** accepts untrusted values. A **structural position** rejects them.
+Trust is a flag that the checker tracks on text types ([ADR 0006](adr/0006-trust-is-a-flag-on-text.md)). `Untrusted<String>` is how a signature spells "this text may be untrusted". It is not a wrapper type.
+
+- **Sources.** Text read through a capability (files, network, stdin, and the environment through `Env.get`) is untrusted. So is text from program inputs (`Args.get`).
+- **Flow.**
+  - Trusted text may flow into any slot that accepts untrusted text. Untrusted text may never flow into a trusted slot.
+  - The checker enforces this one-way rule with the same mechanism that stops a `cap fn` from flowing into a `fn`.
+- **Propagation.**
+  - Prelude text operations follow their inputs. If any text input is untrusted, every text type in the result is untrusted. For example, `.lines()` returns `List<Untrusted<String>>`.
+  - Interpolating an untrusted value makes the whole string untrusted.
+  - Results that are not text are trusted. For example, `.count()` returns a trusted `Int`.
+- **User code.**
+  - In user code, a `String` parameter, field, or return type means **trusted**.
+  - Code that accepts raw input declares `Untrusted<String>`.
+  - User functions are explicit about trust. They cannot be generic over it.
+- **Validation.**
+  - Checks that produce non-text results need nothing special. That includes `len`, `contains`, `starts_with`, `parse_int`, and matching against string literals.
+  - A **validator** turns untrusted text into trusted text with `.assume_trusted()`. That call is a **trust assertion**.
+
+```oska
+pub fn parse(s: Untrusted<String>) -> Result<Email, ParseError> {
+    if !s.contains("@") { return Err(ParseError.Invalid) }
+    Ok(Email(raw: s.assume_trusted()))
+}
+```
+
+- **Sinks.** A **data position** accepts untrusted values. A **structural position** rejects them. A structural position is any parameter declared `String`.
 
 | Sink | Data position (untrusted OK) | Structural position (trusted only) | Not provided |
 | --- | --- | --- | --- |
-| SQL | Parameters: `db.query(sql"SELECT * FROM users WHERE id = ?", id)` | Query text, which must be an `sql"..."` literal | Concatenation or interpolation |
-| Process | Arguments: `proc.run("git", ["log", branch])` | The program name | A shell string. Running a shell is a separate, explicitly named capability. |
-| HTML | Template text, escaped for its context | `TrustedHtml` | Writing untyped strings into markup |
-| Paths | File names joined under a restricted `Fs` | The directory passed to `restrict_to` | `..` traversal outside a restricted capability |
+| SQL (`std.sql`) | Parameters: `db.query(sql"SELECT * FROM users WHERE id = ?", [id])` | Query text, which must be an `sql"..."` literal | Concatenation or interpolation |
+| Process (`std.proc`) | Arguments: `run("git", ["log", branch])` | The program name | A shell string. Running a shell is a separate, explicitly named capability. |
+| HTML (`std.html`) | Text, which is escaped for its context | `TrustedHtml` | Writing untyped strings into markup |
+| Paths | `Path.from` (see below) | The directory passed to `restrict_to` | `..` traversal outside a restricted capability |
 | Network | Request bodies | The host passed to `NetConnect` | |
-| Logging | Structured field values | | Interpolating raw strings into log lines |
+| Output | `Stdout.println` and `Stderr` | | |
 
-- Sink literals (`sql"..."` and similar) cannot contain `{}` interpolation.
-- Building a query string by hand is a compile error with a stable diagnostic code, not a lint.
-- **Secrets:**
-  - `env.secret("API_KEY")` returns `Secret<String>`.
-  - A `Secret` displays and debug-prints as `<redacted>` and cannot be interpolated.
-  - The only way to read the value is `.expose()`, which `oskac audit` lists.
-  - `env.get` returns `Untrusted<String>`.
-- The standard library ships these sinks from the start: `sql`, `html`, `proc`, an HTTP client and server, `json`, and structured `log`. The safe path should be the one that is already there.
+- **Sink modules.**
+  - The sink modules are part of the prelude, and each needs a `use` (for example, `use std.sql`). A file's imports therefore show which sinks it talks to.
+  - A sink literal's tag must name an imported sink, so `sql"..."` requires `use std.sql`. An unknown tag is an error with a "did you mean" fix.
+  - Sink literals cannot contain `{}` interpolation.
+  - Building a query string by hand is a compile error with a stable diagnostic code. It is not a lint.
+- **Paths.**
+  - `Path.from` accepts untrusted text, because the protection for paths comes from **attenuation**, not from trust tracking.
+  - Attenuate a filesystem capability with `restrict_to` before reading paths a user chose. The runtime rejects any path that escapes the restricted directory.
+  - A restricted and an unrestricted `FsRead` are the same type, so the checker cannot tell them apart.
+- **Secrets.**
+  - `env.secret("API_KEY")` returns `Secret<String>`. In contrast, `env.get` returns `Untrusted<String>`.
+  - A `Secret` displays and debug-prints as `<redacted>`.
+  - A `Secret` cannot be interpolated.
+  - A `Secret` cannot be compared with `==`, because that would leak timing information. Use `a.constant_time_eq(b)` instead. A fix rewrites `==` to it.
+  - The only way to read a secret's value is `.expose()`, and the exposed value is trusted.
+- **Audit.**
+  - Every trust assertion (`.assume_trusted()`) and every secret exposure (`.expose()`) is an **audit site**.
+  - `oskac check --format=json` lists all audit sites, with their spans, in an `"audit"` array.
+- **Scope.**
+  - For now, trust is tracked on text only. `Bytes` will be added when the first binary API needs it.
+  - The diagnostic codes are `E03xx`.
+- **Runtime implementations.** The sink modules start as signature-only prelude declarations. Their runtime implementations arrive with the interpreter.
 
 ## Concurrency
 
