@@ -1,5 +1,6 @@
-//! Conformance (#42): the example programs check cleanly, and the documented
-//! list of `E02xx` codes matches the codes the checker defines.
+//! Conformance (#42): the example programs check cleanly, and the table of
+//! `E02xx` codes in `docs/checker.md`, the canonical one, matches the codes
+//! the checker defines.
 //!
 //! Design-notes samples are left out on purpose: they are fragments that use
 //! types they never declare.
@@ -111,12 +112,6 @@ fn checker_md_rows() -> Vec<(String, Vec<String>)> {
     documented_rows(doc.lines())
 }
 
-/// The crate docs in `src/lib.rs`: code and meaning, which describes the fix.
-fn lib_doc_rows() -> Vec<(String, Vec<String>)> {
-    let lib = read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"));
-    documented_rows(lib.lines().filter_map(|line| line.strip_prefix("//!")))
-}
-
 fn assert_documents_exactly(
     place: &str,
     rows: &[(String, Vec<String>)],
@@ -142,42 +137,4 @@ fn assert_documents_exactly(
 #[test]
 fn checker_md_documents_exactly_the_defined_codes() {
     assert_documents_exactly("docs/checker.md", &checker_md_rows(), &defined_codes());
-}
-
-#[test]
-fn lib_docs_document_exactly_the_defined_codes() {
-    assert_documents_exactly(
-        "the crate docs in src/lib.rs",
-        &lib_doc_rows(),
-        &defined_codes(),
-    );
-}
-
-#[test]
-fn lib_docs_mention_a_fix_exactly_where_checker_md_has_one() {
-    let lib: Vec<(String, bool)> = lib_doc_rows()
-        .into_iter()
-        .map(|(code, cells)| (code, cells.join(" ").contains("fix")))
-        .collect();
-    let md: Vec<(String, bool)> = checker_md_rows()
-        .into_iter()
-        .map(|(code, cells)| (code, cells.last().is_some_and(|fix| fix != "None.")))
-        .collect();
-    let disagree: Vec<String> = md
-        .iter()
-        .zip(&lib)
-        .filter(|(m, l)| m != l)
-        .map(|((code, has_fix), _)| {
-            let side = if *has_fix {
-                "only checker.md"
-            } else {
-                "only the crate docs"
-            };
-            format!("{code} ({side} describes a fix)")
-        })
-        .collect();
-    assert!(
-        disagree.is_empty(),
-        "fix descriptions disagree: {disagree:?}"
-    );
 }

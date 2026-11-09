@@ -7,67 +7,21 @@
 //! `oskac check --format=json` prints; `docs/checker.md` describes it.
 //!
 //! The pipeline runs in order: collect declarations, resolve names, check
-//! declarations (`cap`, `main`, capitalization, recursive types), check
-//! function, test, and contract bodies (`body.rs`, with local
-//! bidirectional inference), then compute authority. A test body sees
-//! `t: TestContext` from the prelude. Under `--release`, bodies are also scanned for
-//! `dbg(...)`.
+//! declarations (`cap`, `main`, capitalization, recursive types, where
+//! `Scope` may appear: `decl_rules.rs`), check that functions, methods,
+//! and impls are unique and that inherent impls are for the module's own
+//! types (`coherence.rs`), check trait impls, check function, test, and
+//! contract bodies (`body.rs`, with local bidirectional inference), then
+//! compute authority. A test body sees `t: TestContext` from the prelude.
+//! Under `--release`, bodies are also scanned for `dbg(...)` and
+//! `todo()`.
 //!
 //! # Diagnostic codes
 //!
-//! Checker codes are `E02xx`. Each is listed here and in
-//! `docs/checker.md`.
-//!
-//! | Code | Meaning |
-//! | --- | --- |
-//! | `E0200` | Unknown type or trait name. The fix replaces it with the single closest name, when there is one. |
-//! | `E0201` | A trait used where a type is expected, or a type used where a trait is expected. |
-//! | `E0202` | A type, trait, or free function declared twice or redeclaring a prelude name, or a method declared twice for one type. |
-//! | `E0210` | A struct or enum whose own fields name a capability-bearing type is not declared `cap`. The fix inserts `cap`. |
-//! | `E0211` | A `main` parameter that is not a built-in capability or `Args`. |
-//! | `E0212` | `main` returns something other than `()` or `Result<(), E>`, or `E` does not implement `Display`. |
-//! | `E0213` | A type, variant, trait, or type parameter name that does not start uppercase. |
-//! | `E0214` | A function, method, field, parameter, or local variable (`let`, `var`, `for`) name that starts uppercase. A leading `_` is allowed. |
-//! | `E0215` | A recursive struct or enum with no base case. |
-//! | `E0216` | `dbg(...)` under `--release`. |
-//! | `E0220` | Type mismatch: an expression's type differs from the type expected there. There are no implicit conversions. |
-//! | `E0221` | Unknown value name, or `self` outside a method with a receiver. The fix replaces the name with the single closest local, function, or prelude variant, when there is one. |
-//! | `E0222` | Integer literal out of range for its type, such as `300` as a `U8`. |
-//! | `E0223` | Operator not defined for its operand's type: arithmetic and ordering need numbers (`+` is not for strings), unary `-` needs a signed number, `..` needs integers. |
-//! | `E0224` | Wrong number of arguments in a call or construction. |
-//! | `E0225` | Argument label that does not match its parameter or field, or a label on a positional field. The fix replaces the label with the parameter's name, or removes it. |
-//! | `E0226` | Named field constructed without its label. The fix inserts the label. |
-//! | `E0227` | Unknown field, or a method used without calling it. The fix replaces the field with the single closest field, when there is one. |
-//! | `E0228` | Unknown method, variant, or associated function, or an associated function called on a value. The fix replaces the name with the single closest member, when there is one. |
-//! | `E0229` | Assignment to something that is not a `var` binding: a `let` binding, a parameter, or a field of `self` in a method without `var self`. The fix changes `let` to `var`, or `self` to `var self`; there is none for a parameter. |
-//! | `E0230` | Mutating method (`var self`) called on something that is not a `var` binding. The fix changes `let` to `var`, or `self` to `var self`. |
-//! | `E0231` | Call of a value that is not a function. |
-//! | `E0232` | `break` or `continue` outside a loop. |
-//! | `E0233` | A type that inference cannot work out, such as `let xs = List.new()` with no later use. |
-//! | `E0234` | A type name used as a value, or a type that cannot be constructed. |
-//! | `E0235` | `for` over a value that is not a `List` or a range. |
-//! | `E0240` | A `Result` dropped by an expression statement. `let _ = f()` discards one deliberately. |
-//! | `E0241` | `?` on a value that is neither a `Result` nor an `Option`. |
-//! | `E0242` | `?` on a `Result` whose error type differs from the function's, with no `impl From` conversion. |
-//! | `E0243` | `?` in a function that does not return the same kind (`Option` vs `Result`), or returns neither. |
-//! | `E0250` | A pattern names no variant or struct: a misspelled variant, an uppercase name that is not a prelude variant (ADR 0005: an uppercase name in a pattern is always a variant), or a path that is not `Enum.Variant`. The fix replaces it with the single closest variant. |
-//! | `E0251` | A constructor pattern with the wrong number of fields. |
-//! | `E0252` | A named field matched without its label or with the wrong one, or a label on a positional field. The fix corrects the label. |
-//! | `E0253` | A `match` that is not exhaustive. Guards do not count. The message lists the missing patterns; the fix adds an arm for each, with `todo()` as its body. |
-//! | `E0254` | An unreachable arm: earlier unguarded arms already match every value it does. |
-//! | `E0260` | A method on a generic parameter that its bounds do not provide. The fix adds the bound when one trait has the method. |
-//! | `E0261` | An `impl Trait for Type` missing a required method. |
-//! | `E0262` | An `impl` method whose signature differs from the trait's. |
-//! | `E0263` | An `impl Trait` method the trait does not declare. |
-//! | `E0264` | A method name provided by more than one trait of the receiver; call it qualified, as in `Display.to_string(x)`. |
-//! | `E0265` | A type that does not implement a required trait: `==` needs `Eq`, calls need their bounds, `Trait.method(x)` needs `x: Trait`. On a generic parameter, the fix adds the bound. |
-//! | `E0270` | A `cap fn` used where a plain `fn` is expected, such as a closure that captures a capability-bearing value. |
-//! | `E0271` | Construction of a prelude struct with private fields, such as a built-in capability: capabilities cannot be forged. |
-//! | `E0272` | Reading a private field of a prelude type. |
-//! | `E0280` | A contract clause calls a function that is not pure (a capability-bearing parameter or receiver, or a `cap fn` value). |
-//! | `E0281` | A `requires` or `ensures` condition that is not `Bool`. |
-//! | `E0290` | Two overlapping `impl Trait for Type`, or one that overlaps a prelude impl. |
-//! | `E0291` | An inherent `impl` for a prelude type. |
+//! Checker codes are `E02xx`, defined in the `codes` module below. The
+//! canonical table of what each means, what it spans, and which carry a
+//! machine-applicable fix is in `docs/checker.md`; a conformance test
+//! keeps it in step with `codes`.
 
 use oska_syntax::Diagnostic;
 
