@@ -8,8 +8,9 @@
 //!
 //! The pipeline runs in order: collect declarations, resolve names, check
 //! declarations (`cap`, `main`, capitalization, recursive types), check
-//! function bodies (`body.rs`, with local bidirectional inference), then
-//! compute authority. Under `--release`, bodies are also scanned for
+//! function, test, and contract bodies (`body.rs`, with local
+//! bidirectional inference), then compute authority. A test body sees
+//! `t: TestContext` from the prelude. Under `--release`, bodies are also scanned for
 //! `dbg(...)`.
 //!
 //! # Diagnostic codes
@@ -52,6 +53,8 @@
 //! | `E0270` | A `cap fn` used where a plain `fn` is expected, such as a closure that captures a capability-bearing value. |
 //! | `E0271` | Construction of a prelude struct with private fields, such as a built-in capability: capabilities cannot be forged. |
 //! | `E0272` | Reading a private field of a prelude type. |
+//! | `E0280` | A contract clause calls a function that is not pure (a capability-bearing parameter or receiver, or a `cap fn` value). |
+//! | `E0281` | A `requires` or `ensures` condition that is not `Bool`. |
 
 use oska_syntax::Diagnostic;
 
@@ -102,6 +105,8 @@ pub(crate) mod codes {
     pub const CAPTURING_CLOSURE: &str = "E0270";
     pub const FORGED: &str = "E0271";
     pub const PRIVATE_FIELD: &str = "E0272";
+    pub const IMPURE_IN_CONTRACT: &str = "E0280";
+    pub const CONTRACT_NOT_BOOL: &str = "E0281";
 }
 
 /// Options that change what is checked.
