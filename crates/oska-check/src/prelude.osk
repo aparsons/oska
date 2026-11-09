@@ -75,6 +75,27 @@ pub struct Sched { handle: Int }
 #[capability]
 pub struct Spawn { handle: Int }
 
+// ---- Tests ---------------------------------------------------------------
+
+// The type of `t`, the built-in value in every `test` body. Its fields are
+// stand-in capabilities: an in-memory `fs`, a fixed `clock`, a seeded
+// `random`, and a recording `stdout`. An `#[integration]` test gets the
+// same `t`; the runtime decides which capabilities are real. A failed
+// assertion fails the test.
+pub cap struct TestContext {
+    pub fs: Fs,
+    pub clock: Clock,
+    pub random: Random,
+    pub stdout: Stdout,
+}
+
+impl TestContext {
+    pub fn assert(self, cond: Bool)
+    pub fn assert_eq<T>(self, actual: T, expected: T)
+    pub fn assert_ne<T>(self, actual: T, other: T)
+    pub fn fail(self, message: String)
+}
+
 // ---- Core types --------------------------------------------------------
 
 pub enum Option<T> {
@@ -83,8 +104,8 @@ pub enum Option<T> {
 }
 
 impl<T> Option<T> {
-    pub fn is_some(self) -> Bool
     pub fn ok_or<E>(self, err: E) -> Result<T, E>
+    pub fn is_some(self) -> Bool
 }
 
 pub enum Result<T, E> {
@@ -95,20 +116,12 @@ pub enum Result<T, E> {
 // A growable list. Its representation is built in.
 pub struct List<T> { handle: Int }
 
-// A line ending in a generic type's `>` continues onto the next, so a
-// body-less method returning one must be the last in its `impl` block.
 impl<T> List<T> {
+    pub fn new() -> List<T>
     pub fn push(var self, item: T)
     pub fn len(self) -> Int
     pub fn count(self) -> Int
-    pub fn new() -> List<T>
-}
-
-impl<T> List<T> {
     pub fn get(self, index: Int) -> Option<T>
-}
-
-impl<T> List<T> {
     pub fn map<U>(self, f: fn(T) -> U) -> List<U>
 }
 
@@ -116,8 +129,8 @@ impl<T> List<T> {
 pub struct Range<T> { pub start: T, pub end: T }
 
 impl String {
-    pub fn len(self) -> Int
     pub fn lines(self) -> List<String>
+    pub fn len(self) -> Int
 }
 
 pub struct Path { raw: String }
@@ -134,10 +147,31 @@ impl Args {
     pub fn get(self, index: Int) -> Option<String>
 }
 
-pub struct IoError { message: String }
+// Plain data: code may construct one to report its own failures.
+pub struct IoError { pub message: String }
 
 impl Display for IoError {
     fn to_string(self) -> String
+}
+
+// ---- Structured concurrency ---------------------------------------------
+
+// The handle `scope |s| { ... }` binds. A scope does not exit until all of
+// its tasks have finished. Deterministic parallelism needs no capability,
+// so a scope is plain data.
+pub struct Scope { handle: Int }
+
+// A spawned task may perform effects, so it is a `cap fn`; a pure closure
+// fits too.
+impl Scope {
+    pub fn spawn<T>(self, task: cap fn() -> T) -> Task<T>
+}
+
+// A running task. `join` waits for it and returns its result.
+pub struct Task<T> { handle: Int }
+
+impl<T> Task<T> {
+    pub fn join(self) -> T
 }
 
 // ---- Core functions ----------------------------------------------------

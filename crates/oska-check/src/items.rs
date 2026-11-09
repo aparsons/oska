@@ -4,8 +4,9 @@
 
 use std::collections::HashMap;
 
-use oska_syntax::ast::{Fields, FnDecl, GenericParam, ItemKind, Module, Type, TypeKind};
+use oska_syntax::ast::{Field, Fields, FnDecl, GenericParam, ItemKind, Module, Type, TypeKind};
 
+use crate::authority;
 use crate::decls::{DeclKind, Decls};
 use crate::prelude;
 use crate::ty::Ty;
@@ -24,6 +25,9 @@ pub struct FnSig {
     pub self_ty: Option<Ty>,
     pub params: Vec<(String, Ty)>,
     pub ret: Ty,
+    /// A **pure function**: no parameter, the receiver included, is
+    /// capability-bearing.
+    pub pure: bool,
 }
 
 /// How a struct's or variant's fields are declared, which decides how it
@@ -49,6 +53,12 @@ pub struct FieldsInfo {
 pub struct StructInfo {
     pub generics: Vec<String>,
     pub fields: FieldsInfo,
+    /// Declared in the prelude with at least one private field, so the
+    /// module cannot construct it. Built-in capabilities are all sealed.
+    pub sealed: bool,
+    /// The names of the private fields of a prelude struct, which the
+    /// module cannot read.
+    pub hidden_fields: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -92,9 +102,24 @@ impl Items {
                 }
                 ItemKind::Struct(s) => {
                     let lower = Lower::new(decls).with_generics(&s.generics);
+                    let private: Vec<&Field> = match &s.fields {
+                        Fields::Named(list) | Fields::Positional(list) => {
+                            list.iter().filter(|f| !f.public).collect()
+                        }
+                        Fields::Unit => Vec::new(),
+                    };
                     let info = StructInfo {
                         generics: lower.generics.clone(),
                         fields: lower.fields(&s.fields),
+                        sealed: in_prelude && !private.is_empty(),
+                        hidden_fields: if in_prelude {
+                            private
+                                .iter()
+                                .filter_map(|f| f.name.as_ref().map(|n| n.name.clone()))
+                                .collect()
+                        } else {
+                            Vec::new()
+                        },
                     };
                     self.structs.entry(s.name.name.clone()).or_insert(info);
                 }
@@ -128,9 +153,13 @@ impl Items {
                     } else {
                         &mut self.inherent
                     };
+                    let receiver_bearing = authority::bearing(&imp.target, &imp.generics, decls);
                     for method in &imp.methods {
                         if let ItemKind::Fn(f) = &method.kind {
-                            let sig = lower.signature(f, &imp.generics, Some(target.clone()));
+                            let mut sig = lower.signature(f, &imp.generics, Some(target.clone()));
+                            if f.receiver.is_some() && receiver_bearing {
+                                sig.pure = false;
+                            }
                             table.entry(type_name.clone()).or_default().push(sig);
                         }
                     }
@@ -219,6 +248,13 @@ impl<'d, 'a> Lower<'d, 'a> {
                 .map(|p| (p.name.name.clone(), lower.ty(&p.ty)))
                 .collect(),
             ret: f.return_type.as_ref().map_or(Ty::Unit, |t| lower.ty(t)),
+            pure: {
+                let generics: Vec<GenericParam> =
+                    outer.iter().chain(&f.generics).cloned().collect();
+                !f.params
+                    .iter()
+                    .any(|p| authority::bearing(&p.ty, &generics, self.decls))
+            },
         }
     }
 
