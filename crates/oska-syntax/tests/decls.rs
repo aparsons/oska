@@ -168,7 +168,10 @@ fn attribute_with_arguments_before_pub() {
                  ]}
             ],
             "name": {"kind": "Ident", "span": {"start": 34, "end": 35}, "name": "f"},
+            "generics": [],
             "params": [],
+            "requires": [],
+            "ensures": [],
             "body": {"kind": "Block", "span": {"start": 38, "end": 40}, "stmts": []}
         }]"#,
     );

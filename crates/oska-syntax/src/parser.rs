@@ -26,6 +26,10 @@
 //! - `E0105`: chained comparison such as `a < b < c`
 //! - `E0106`: invalid assignment target
 //! - `E0107`: a statement at module level, where only items are allowed
+//! - `E0110`: `ensures` without a `|r|` binding for the return value
+//! - `E0111`: a `self` or `var self` receiver that is not the first parameter
+//! - `E0112`: `var` on a parameter other than the `self` receiver
+//! - `E0113`: a `where` clause; bounds are written inline
 //! - `E0120`: a missing comma between declared fields or enum variants
 //! - `E0130`: a glob import such as `use a.*`
 //! - `E0131`: a renaming import such as `use a.b as c`
@@ -37,10 +41,10 @@
 //! - `E0143`: a comma between `match` arms
 
 use crate::ast::{
-    Arg, Attribute, BinaryOp, Block, ClosureParam, ConstDecl, EnumDecl, Expr, ExprKind, Field,
-    Fields, FnDecl, Ident, Item, ItemKind, MatchArm, Module, Param, Pattern, PatternArg,
-    PatternKind, Stmt, StmtKind, StrPart, StructDecl, TestDecl, Type, TypeKind, UnaryOp, UseDecl,
-    Variant,
+    Arg, Attribute, BinaryOp, Block, ClosureParam, ConstDecl, Ensures, EnumDecl, Expr, ExprKind,
+    Field, Fields, FnDecl, GenericParam, Ident, Item, ItemKind, MatchArm, Module, Param, Pattern,
+    PatternArg, PatternKind, Requires, SelfParam, Stmt, StmtKind, StrPart, StructDecl, TestDecl,
+    Type, TypeKind, UnaryOp, UseDecl, Variant,
 };
 use crate::{lex, resolve_escape, Diagnostic, Keyword, Punct, Span, Token, TokenKind};
 
@@ -490,9 +494,30 @@ impl<'a> Parser<'a> {
     fn fn_decl(&mut self) -> Result<FnDecl, Diagnostic> {
         self.expect_kw(Keyword::Fn)?;
         let name = self.expect_ident("a function name")?;
+        let generics = self.generics()?;
         self.expect_punct(Punct::LParen)?;
+        let receiver = self.receiver()?;
+        if receiver.is_some() && !self.at_punct(Punct::RParen) {
+            self.expect_punct(Punct::Comma)?;
+        }
         let mut params = Vec::new();
         while !self.at_punct(Punct::RParen) {
+            if let Some(late) = self.receiver()? {
+                return Err(error(
+                    "E0111",
+                    "the receiver must be the first parameter; \
+                     move it to the start of the parameter list",
+                    late.span,
+                ));
+            }
+            if self.at_kw(Keyword::Var) {
+                return Err(error(
+                    "E0112",
+                    "only the `self` receiver can be `var`; remove `var`, \
+                     and bind a mutable copy in the body with `var name = name`",
+                    self.peek_span(),
+                ));
+            }
             let name = self.expect_ident("a parameter name")?;
             self.expect_punct(Punct::Colon)?;
             let ty = self.ty()?;
@@ -511,13 +536,116 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        let mut requires = Vec::new();
+        let mut ensures = Vec::new();
+        loop {
+            let start = self.peek_span();
+            if self.at_kw(Keyword::Requires) {
+                self.bump();
+                let cond = self.expr()?;
+                requires.push(Requires {
+                    cond,
+                    span: self.span_from(start),
+                });
+            } else if self.at_kw(Keyword::Ensures) {
+                self.bump();
+                if !self.eat_punct(Punct::Pipe) {
+                    return Err(error(
+                        "E0110",
+                        "`ensures` must name the return value; \
+                         write `ensures |r| cond`, using `r` for the result",
+                        start,
+                    ));
+                }
+                let binding = self.expect_ident("a name for the return value")?;
+                self.expect_punct(Punct::Pipe)?;
+                let cond = self.expr()?;
+                ensures.push(Ensures {
+                    binding,
+                    cond,
+                    span: self.span_from(start),
+                });
+            } else {
+                break;
+            }
+        }
+        if matches!(self.peek(), Some(TokenKind::Ident(word)) if word == "where") {
+            return Err(self.where_clause());
+        }
         let body = self.block()?;
         Ok(FnDecl {
             name,
+            generics,
+            receiver,
             params,
             ret,
+            requires,
+            ensures,
             body,
         })
+    }
+
+    /// The error for a `where` clause, covering it up to the body's `{`.
+    fn where_clause(&mut self) -> Diagnostic {
+        let start = self.peek_span();
+        while !matches!(
+            self.peek(),
+            None | Some(TokenKind::Newline | TokenKind::Punct(Punct::LBrace))
+        ) {
+            self.bump();
+        }
+        error(
+            "E0113",
+            "`where` clauses are not supported; write bounds inline on the \
+             generic parameter, as in `fn f<T: Eq + Hash>(x: T)`",
+            self.span_from(start),
+        )
+    }
+
+    /// An optional `self` or `var self` receiver.
+    fn receiver(&mut self) -> Result<Option<SelfParam>, Diagnostic> {
+        let start = self.peek_span();
+        let mutable = self.at_kw(Keyword::Var)
+            && self.peek_at(1) == Some(&TokenKind::Keyword(Keyword::SelfValue));
+        if mutable {
+            self.bump();
+        }
+        if !self.at_kw(Keyword::SelfValue) {
+            return Ok(None);
+        }
+        self.bump();
+        Ok(Some(SelfParam {
+            mutable,
+            span: self.span_from(start),
+        }))
+    }
+
+    /// Optional generic parameters with inline bounds: `<T: Eq + Hash, U>`.
+    fn generics(&mut self) -> Result<Vec<GenericParam>, Diagnostic> {
+        let mut generics = Vec::new();
+        if !self.eat_punct(Punct::Lt) {
+            return Ok(generics);
+        }
+        while !self.at_punct(Punct::Gt) {
+            let name = self.expect_ident("a generic parameter name")?;
+            let mut bounds = Vec::new();
+            if self.eat_punct(Punct::Colon) {
+                bounds.push(self.ty()?);
+                while self.eat_punct(Punct::Plus) {
+                    bounds.push(self.ty()?);
+                }
+            }
+            generics.push(GenericParam {
+                span: self.span_from(name.span),
+                name,
+                bounds,
+            });
+            if !self.eat_punct(Punct::Comma) {
+                break;
+            }
+        }
+        self.expect_punct(Punct::Gt)?;
+        Ok(generics)
     }
 
     /// `struct Name { fields }` or `struct Name(fields)`, after any `cap`.

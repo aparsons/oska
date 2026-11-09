@@ -16,7 +16,9 @@ fn empty_function() {
             "public": false,
             "attributes": [],
             "name": {"kind": "Ident", "span": {"start": 3, "end": 7}, "name": "main"},
+            "generics": [],
             "params": [],
+            "requires": [], "ensures": [],
             "body": {"kind": "Block", "span": {"start": 10, "end": 12}, "stmts": []}
         }]"#,
     );
@@ -32,6 +34,7 @@ fn parameters_and_return_type() {
             "public": false,
             "attributes": [],
             "name": {"kind": "Ident", "span": {"start": 3, "end": 4}, "name": "f"},
+            "generics": [],
             "params": [
                 {"kind": "Param", "span": {"start": 5, "end": 15},
                  "name": {"kind": "Ident", "span": {"start": 5, "end": 7}, "name": "fs"},
@@ -61,6 +64,7 @@ fn parameters_and_return_type() {
                      "args": []}
                 ]
             },
+            "requires": [], "ensures": [],
             "body": {"kind": "Block", "span": {"start": 63, "end": 65}, "stmts": []}
         }]"#,
     );
@@ -75,12 +79,15 @@ fn public_functions_on_separate_lines() {
              "public": true,
              "attributes": [],
              "name": {"kind": "Ident", "span": {"start": 27, "end": 28}, "name": "a"},
+             "generics": [],
              "params": [],
+             "requires": [], "ensures": [],
              "body": {"kind": "Block", "span": {"start": 31, "end": 33}, "stmts": []}},
             {"kind": "FnItem", "span": {"start": 35, "end": 55},
              "public": false,
              "attributes": [],
              "name": {"kind": "Ident", "span": {"start": 38, "end": 39}, "name": "b"},
+             "generics": [],
              "params": [
                  {"kind": "Param", "span": {"start": 45, "end": 49},
                   "name": {"kind": "Ident", "span": {"start": 45, "end": 46}, "name": "x"},
@@ -88,6 +95,7 @@ fn public_functions_on_separate_lines() {
                            "segments": [{"kind": "Ident", "span": {"start": 48, "end": 49}, "name": "T"}],
                            "args": []}}
              ],
+             "requires": [], "ensures": [],
              "body": {"kind": "Block", "span": {"start": 53, "end": 55}, "stmts": []}}
         ]"#,
     );
