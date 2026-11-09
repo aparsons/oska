@@ -16,8 +16,9 @@
 //!
 //! - **Statements:** [`Body::expr_stmt`] sees every expression whose value
 //!   is discarded.
-//! - **Patterns:** [`Body::bind_pattern`] binds a pattern's names; for now
-//!   every binding has the error type.
+//! - **Patterns and `match`:** in `body/patterns.rs`. Patterns are checked
+//!   against the scrutinee's type, then lowered for the usefulness check
+//!   (`usefulness.rs`) that finds missing and unreachable arms.
 //! - **`?`:** [`Body::try_expr`]. Error conversion through `impl From`
 //!   goes in [`Body::converts_from`].
 //! - **Method lookup:** [`Body::method_call`] and [`Items::method`].
@@ -29,8 +30,8 @@
 //!   so [`Body::expect`] reports a `cap fn` used as a plain `fn`.
 
 use oska_syntax::ast::{
-    Arg, BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, ItemKind, MatchArm, Module,
-    Pattern, PatternKind, StmtKind, StrPart, UnaryOp,
+    Arg, BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, ItemKind, Module, StmtKind,
+    StrPart, UnaryOp,
 };
 use oska_syntax::{Diagnostic, Edit, Span};
 
@@ -41,22 +42,30 @@ use crate::items::{FieldsInfo, FnSig, Items, Lower, Shape};
 use crate::resolve::closest;
 use crate::ty::Ty;
 
+mod patterns;
+
 /// The prelude type of `t`, the stand-in capabilities in a `test` body.
 const TEST_CONTEXT: &str = "TestContext";
 
 /// Check every function, method, constant, and test body in `module`. A
 /// test body sees `t`, and nothing else beyond pure code.
-pub fn module(module: &Module, decls: &Decls, items: &Items, diagnostics: &mut Vec<Diagnostic>) {
+pub fn module(
+    src: &str,
+    module: &Module,
+    decls: &Decls,
+    items: &Items,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     for item in &module.items {
         match &item.kind {
-            ItemKind::Fn(f) => function(f, Lower::new(decls), items, diagnostics),
+            ItemKind::Fn(f) => function(src, f, Lower::new(decls), items, diagnostics),
             ItemKind::Impl(imp) => {
                 let lower = Lower::new(decls).with_generics(&imp.generics);
                 let target = lower.ty(&imp.target);
                 let lower = lower.with_self(target);
                 for method in &imp.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        function(f, lower.clone(), items, diagnostics);
+                        function(src, f, lower.clone(), items, diagnostics);
                     }
                 }
             }
@@ -66,18 +75,18 @@ pub fn module(module: &Module, decls: &Decls, items: &Items, diagnostics: &mut V
                     .with_self(Ty::Param("Self".to_string()));
                 for method in &t.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        function(f, lower.clone(), items, diagnostics);
+                        function(src, f, lower.clone(), items, diagnostics);
                     }
                 }
             }
             ItemKind::Const(c) => {
                 let lower = Lower::new(decls);
                 let ty = lower.ty(&c.ty);
-                let mut body = Body::new(items, lower, Ty::Unit, diagnostics);
+                let mut body = Body::new(src, items, lower, Ty::Unit, diagnostics);
                 body.check(&c.value, &ty);
             }
             ItemKind::Test(test) => {
-                let mut body = Body::new(items, Lower::new(decls), Ty::Unit, diagnostics);
+                let mut body = Body::new(src, items, Lower::new(decls), Ty::Unit, diagnostics);
                 body.bind("t", Ty::named(TEST_CONTEXT), Binding::Param);
                 // A test produces no value: its last expression is a
                 // statement like the others.
@@ -91,13 +100,13 @@ pub fn module(module: &Module, decls: &Decls, items: &Items, diagnostics: &mut V
 
 /// Check one function body against its signature. `lower` has the
 /// enclosing impl's or trait's generics and `Self` in scope.
-fn function(f: &FnDecl, lower: Lower, items: &Items, diagnostics: &mut Vec<Diagnostic>) {
+fn function(src: &str, f: &FnDecl, lower: Lower, items: &Items, diagnostics: &mut Vec<Diagnostic>) {
     if f.body.is_none() && f.requires.is_empty() && f.ensures.is_empty() {
         return;
     }
     let lower = lower.with_generics(&f.generics);
     let sig = lower.signature(f, &[], lower.self_ty.clone());
-    let mut body = Body::new(items, lower, sig.ret.clone(), diagnostics);
+    let mut body = Body::new(src, items, lower, sig.ret.clone(), diagnostics);
     if let Some(receiver) = &f.receiver {
         body.receiver = Some(Receiver {
             ty: sig.self_ty.clone().unwrap_or(Ty::Error),
@@ -178,6 +187,8 @@ struct Callable {
 
 /// The state of checking one body.
 pub struct Body<'c, 'd, 'a> {
+    /// The module's source, for fixes that match its layout.
+    src: &'c str,
     items: &'c Items,
     lower: Lower<'d, 'a>,
     infer: Infer,
@@ -210,12 +221,14 @@ struct ClosureFrame {
 
 impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     fn new(
+        src: &'c str,
         items: &'c Items,
         lower: Lower<'d, 'a>,
         ret: Ty,
         diagnostics: &'c mut Vec<Diagnostic>,
     ) -> Self {
         Body {
+            src,
             items,
             lower,
             infer: Infer::default(),
@@ -282,6 +295,21 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 ty,
                 binding,
             });
+        }
+    }
+
+    /// A local's name must start lowercase (ADR 0005). A pattern's
+    /// uppercase names are variants, so this is for `let`, `var`, and `for`.
+    fn require_lowercase(&mut self, name: &Ident) {
+        if name.name.starts_with(|c: char| c.is_ascii_uppercase()) {
+            self.error(
+                codes::NOT_LOWERCASE,
+                format!(
+                    "variable name `{}` must start with a lowercase letter",
+                    name.name
+                ),
+                name.span,
+            );
         }
     }
 
@@ -450,7 +478,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 self.locals.pop();
                 ty
             }
-            ExprKind::Match { scrutinee, arms } => self.match_expr(scrutinee, arms, expected),
+            ExprKind::Match { scrutinee, arms } => {
+                self.match_expr(expr.span, scrutinee, arms, expected)
+            }
         }
     }
 
@@ -1198,7 +1228,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         false
     }
 
-    // ---- Closures, `?`, and `match` ---------------------------------------
+    // ---- Closures and `?` ---------------------------------------
 
     /// `|params| body`. Parameter types come from annotations or the
     /// expected function type.
@@ -1401,50 +1431,6 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             })
     }
 
-    /// `match`. Arm bodies must agree; patterns are only bound, not yet
-    /// checked against the scrutinee.
-    fn match_expr(&mut self, scrutinee: &Expr, arms: &[MatchArm], expected: Option<&Ty>) -> Ty {
-        self.infer(scrutinee);
-        let mut result: Option<Ty> = expected.cloned();
-        for arm in arms {
-            let height = self.locals.len();
-            self.bind_pattern(&arm.pattern);
-            if let Some(guard) = &arm.guard {
-                self.check(guard, &Ty::bool());
-            }
-            match &result {
-                Some(ty) => {
-                    let ty = ty.clone();
-                    self.check(&arm.body, &ty);
-                }
-                None => {
-                    let ty = self.infer(&arm.body);
-                    if self.infer.shallow(&ty) != Ty::Never {
-                        result = Some(ty);
-                    }
-                }
-            }
-            self.locals.truncate(height);
-        }
-        result.unwrap_or(Ty::Never)
-    }
-
-    /// Bind the names a pattern introduces. Each has the error type until
-    /// patterns are checked against the scrutinee.
-    pub fn bind_pattern(&mut self, pattern: &Pattern) {
-        match &pattern.kind {
-            PatternKind::Binding(ident) => {
-                self.bind(&ident.name, Ty::Error, Binding::Pattern);
-            }
-            PatternKind::Constructor { args, .. } => {
-                for arg in args {
-                    self.bind_pattern(&arg.pattern);
-                }
-            }
-            PatternKind::Wildcard | PatternKind::Literal(_) => {}
-        }
-    }
-
     // ---- Blocks and statements --------------------------------------------
 
     /// A block's type is its final expression's, `()` without one, or
@@ -1491,6 +1477,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 ty,
                 value,
             } => {
+                self.require_lowercase(name);
                 let ty = match ty {
                     Some(written) => {
                         let ty = self.lower.ty(written);
@@ -1568,6 +1555,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                         Ty::Error
                     }
                 };
+                self.require_lowercase(binding);
                 let height = self.locals.len();
                 self.bind(&binding.name, element, Binding::Loop);
                 self.loop_body(body);
