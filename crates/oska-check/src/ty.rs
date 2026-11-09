@@ -32,6 +32,10 @@ pub enum Ty {
     Error,
 }
 
+/// Prelude types the checker gives special treatment, by name.
+/// The handle `scope |s| { ... }` binds, which cannot outlive its block.
+pub const SCOPE: &str = "Scope";
+
 /// The integer types and their ranges.
 const INTEGERS: &[(&str, i128, i128)] = &[
     ("Int", i64::MIN as i128, i64::MAX as i128),
@@ -92,6 +96,17 @@ impl Ty {
     /// Absorbs errors: no diagnostic should be reported about it.
     pub fn is_error(&self) -> bool {
         matches!(self, Ty::Error)
+    }
+
+    /// A value of this type can hold a value of the named type `name`:
+    /// it is that type, or names it in a type argument or a function
+    /// type's result. A function type's parameters do not count.
+    pub fn holds(&self, name: &str) -> bool {
+        match self {
+            Ty::Named(n, args) => n == name || args.iter().any(|a| a.holds(name)),
+            Ty::Fn { ret, .. } => ret.holds(name),
+            Ty::Unit | Ty::Param(_) | Ty::Var(_) | Ty::Never | Ty::Error => false,
+        }
     }
 
     /// Contains an unsolved inference variable.

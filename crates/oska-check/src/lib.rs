@@ -36,6 +36,7 @@ mod prelude;
 mod recursion;
 mod release;
 mod resolve;
+mod suggest;
 mod traits;
 mod ty;
 mod usefulness;
@@ -90,6 +91,10 @@ pub(crate) mod codes {
     pub const CONTRACT_NOT_BOOL: &str = "E0281";
     pub const CONFLICTING_IMPL: &str = "E0290";
     pub const FOREIGN_INHERENT_IMPL: &str = "E0291";
+    pub const SCOPE_ESCAPES: &str = "E0292";
+    pub const TODO_IN_RELEASE: &str = "E0293";
+    pub const USE_OUTSIDE_STD: &str = "E0294";
+    pub const UNKNOWN_MODULE: &str = "E0295";
 }
 
 /// Options that change what is checked.

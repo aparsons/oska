@@ -41,10 +41,11 @@ use oska_syntax::{Diagnostic, Edit, Span};
 
 use crate::codes;
 use crate::collect::{DeclKind, Decls};
+use crate::decl_rules;
 use crate::infer::{Infer, Mismatch};
 use crate::items::{Bound, FieldsInfo, FnSig, Items, Lower, Shape};
-use crate::resolve::closest;
-use crate::ty::Ty;
+use crate::suggest;
+use crate::ty::{self, Ty};
 
 mod patterns;
 
@@ -495,11 +496,18 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 // task's `join` are ordinary prelude methods.
                 self.locals.push(Local {
                     name: handle.name.clone(),
-                    ty: Ty::named("Scope"),
+                    ty: Ty::named(ty::SCOPE),
                     binding: Binding::Pattern,
                 });
                 let ty = self.block(body, expected, true);
                 self.locals.pop();
+                if self.infer.resolve(&ty).holds(ty::SCOPE) {
+                    self.diagnostics.push(decl_rules::scope_escapes(
+                        expr.span,
+                        "be the value of its `scope` block",
+                    ));
+                    return Ty::Error;
+                }
                 ty
             }
             ExprKind::Match { scrutinee, arms } => {
@@ -584,25 +592,13 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         candidates.extend(self.items.fns.keys().map(String::as_str));
         candidates.extend(self.items.bare_variants.keys().map(String::as_str));
         let name = &ident.name;
-        let diagnostic = match closest(name, &candidates) {
-            Some(suggestion) => Diagnostic::new(
-                codes::UNKNOWN_VALUE,
-                format!("unknown name `{name}`; did you mean `{suggestion}`?"),
-                ident.span,
-            )
-            .with_fix(
-                format!("replace with `{suggestion}`"),
-                vec![Edit {
-                    span: ident.span,
-                    replacement: suggestion.to_string(),
-                }],
-            ),
-            None => Diagnostic::new(
-                codes::UNKNOWN_VALUE,
-                format!("unknown name `{name}`"),
-                ident.span,
-            ),
-        };
+        let diagnostic = suggest::unknown(
+            codes::UNKNOWN_VALUE,
+            format!("unknown name `{name}`"),
+            name,
+            ident.span,
+            &candidates,
+        );
         self.diagnostics.push(diagnostic);
     }
 
@@ -699,22 +695,13 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         ident: &Ident,
         candidates: &[&str],
     ) {
-        let diagnostic = match closest(&ident.name, candidates) {
-            Some(suggestion) => Diagnostic::new(
-                code,
-                format!("{message}; did you mean `{suggestion}`?"),
-                ident.span,
-            )
-            .with_fix(
-                format!("replace with `{suggestion}`"),
-                vec![Edit {
-                    span: ident.span,
-                    replacement: suggestion.to_string(),
-                }],
-            ),
-            None => Diagnostic::new(code, message, ident.span),
-        };
-        self.diagnostics.push(diagnostic);
+        self.diagnostics.push(suggest::unknown(
+            code,
+            message,
+            &ident.name,
+            ident.span,
+            candidates,
+        ));
     }
 
     // ---- Calls and construction -------------------------------------------

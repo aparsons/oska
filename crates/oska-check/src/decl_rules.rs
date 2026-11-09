@@ -11,16 +11,90 @@ use crate::authority;
 use crate::codes;
 use crate::collect::{field_types, DeclKind, Decls};
 use crate::prelude;
+use crate::ty::SCOPE;
 
 /// Report every declaration-level error in `module`.
 pub fn module(src: &str, module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
     for item in &module.items {
         cap_required(src, item, decls, diagnostics);
         capitalization(item, diagnostics);
+        scope_confined(item, diagnostics);
         if let ItemKind::Fn(f) = &item.kind {
             if f.name.name == "main" {
                 main(src, module, f, decls, diagnostics);
             }
+        }
+    }
+}
+
+/// The `scope` handle lives only as long as its block, so `Scope` cannot
+/// appear in a return type or a field type, even inside a wrapper such as
+/// `Option<Scope>`. It stays allowed as a parameter type, including a
+/// function type's parameter.
+fn scope_confined(item: &Item, diagnostics: &mut Vec<Diagnostic>) {
+    const RETURNED: &str = "be returned from a function";
+    const STORED: &str = "be stored in a field";
+    let positions: Vec<(&Type, &str)> = match &item.kind {
+        ItemKind::Fn(f) => f.return_type.iter().map(|t| (t, RETURNED)).collect(),
+        ItemKind::Impl(imp) => returns(&imp.methods)
+            .into_iter()
+            .map(|t| (t, RETURNED))
+            .collect(),
+        ItemKind::Trait(t) => returns(&t.methods)
+            .into_iter()
+            .map(|t| (t, RETURNED))
+            .collect(),
+        ItemKind::Struct(s) => field_types(&s.fields)
+            .into_iter()
+            .map(|t| (t, STORED))
+            .collect(),
+        ItemKind::Enum(e) => e
+            .variants
+            .iter()
+            .flat_map(|v| field_types(&v.fields))
+            .map(|t| (t, STORED))
+            .collect(),
+        ItemKind::Use(_) | ItemKind::Const(_) | ItemKind::Test(_) => Vec::new(),
+    };
+    for (ty, place) in positions {
+        if holds_scope(ty) {
+            diagnostics.push(scope_escapes(ty.span, place));
+        }
+    }
+}
+
+/// The written return types of `methods`.
+fn returns(methods: &[Item]) -> Vec<&Type> {
+    methods
+        .iter()
+        .filter_map(|m| match &m.kind {
+            ItemKind::Fn(f) => f.return_type.as_ref(),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `E0292`: a `Scope` that would outlive its block.
+pub fn scope_escapes(span: Span, place: &str) -> Diagnostic {
+    Diagnostic::new(
+        codes::SCOPE_ESCAPES,
+        format!(
+            "a `Scope` handle cannot outlive its `scope` block, so it cannot {place}; \
+             pass it as a parameter instead"
+        ),
+        span,
+    )
+}
+
+/// `ty` names the prelude's `Scope` anywhere outside a function type's
+/// parameters.
+fn holds_scope(ty: &Type) -> bool {
+    match &ty.kind {
+        TypeKind::Unit => false,
+        TypeKind::Fn { return_type, .. } => return_type.as_deref().is_some_and(holds_scope),
+        TypeKind::Path { segments, args } => {
+            matches!(segments.as_slice(), [only] if only.name == SCOPE)
+                || args.iter().any(holds_scope)
         }
     }
 }

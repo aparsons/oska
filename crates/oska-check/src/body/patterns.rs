@@ -14,7 +14,7 @@ use oska_syntax::{Diagnostic, Edit, Span};
 
 use super::{Binding, Body, Callable, Labels};
 use crate::codes;
-use crate::resolve::closest;
+use crate::suggest;
 use crate::ty::Ty;
 use crate::usefulness::{self, CtorInfo, Pat};
 
@@ -421,29 +421,21 @@ impl Body<'_, '_, '_> {
                 }
             }
         }
-        let names: Vec<&str> = candidates.iter().map(|(n, _)| n.as_str()).collect();
-        let suggestion = closest(&name.name, &names)
-            .and_then(|n| candidates.iter().find(|(c, _)| c == n))
-            .map(|(_, written)| written.clone());
+        let pairs: Vec<(&str, &str)> = candidates
+            .iter()
+            .map(|(n, written)| (n.as_str(), written.as_str()))
+            .collect();
         let message = format!(
             "unknown variant `{}`; an uppercase name in a pattern must be a variant",
             name.name
         );
-        let diagnostic = match suggestion {
-            Some(suggestion) => Diagnostic::new(
-                codes::UNKNOWN_VARIANT,
-                format!("{message}; did you mean `{suggestion}`?"),
-                name.span,
-            )
-            .with_fix(
-                format!("replace with `{suggestion}`"),
-                vec![Edit {
-                    span: name.span,
-                    replacement: suggestion,
-                }],
-            ),
-            None => Diagnostic::new(codes::UNKNOWN_VARIANT, message, name.span),
-        };
+        let diagnostic = suggest::unknown_written(
+            codes::UNKNOWN_VARIANT,
+            message,
+            &name.name,
+            name.span,
+            &pairs,
+        );
         self.diagnostics.push(diagnostic);
     }
 

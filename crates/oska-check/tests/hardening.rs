@@ -4,6 +4,7 @@
 mod common;
 
 use common::{assert_errors, assert_ok};
+use oska_check::{check_module_with, CheckOptions};
 
 /// Each diagnostic's code and start offset, for snippets where the
 /// spanned text alone is ambiguous.
@@ -192,4 +193,95 @@ fn user_code_cannot_add_inherent_methods_to_a_prelude_type() {
 fn user_code_cannot_add_inherent_methods_to_a_generic_prelude_type() {
     let src = "impl<T> Option<T> {\n    fn size(self) -> Int {\n        1\n    }\n}";
     assert_errors(src, &[("E0291", "Option<T>")]);
+}
+
+// ---- The `scope` handle cannot escape ----------------------------------------------
+
+#[test]
+fn a_function_cannot_return_a_scope() {
+    let src = "fn leak() -> Scope {\n    scope |s| { s }\n}";
+    assert_errors(src, &[("E0292", "Scope"), ("E0292", "scope |s| { s }")]);
+}
+
+#[test]
+fn a_function_cannot_return_a_scope_inside_a_wrapper() {
+    assert_errors(
+        "fn leak(s: Scope) -> Option<Scope> {\n    Some(s)\n}",
+        &[("E0292", "Option<Scope>")],
+    );
+}
+
+#[test]
+fn a_struct_or_enum_field_cannot_hold_a_scope() {
+    assert_errors(
+        "struct Keep { s: Scope }\nenum Held { One(List<Scope>), Zero }",
+        &[("E0292", "Scope"), ("E0292", "List<Scope>")],
+    );
+}
+
+#[test]
+fn a_scope_block_cannot_produce_its_handle() {
+    assert_errors(
+        "fn leak() -> Int {\n    let s = scope |s| { s }\n    1\n}",
+        &[("E0292", "scope |s| { s }")],
+    );
+}
+
+#[test]
+fn a_scope_block_cannot_produce_its_handle_inside_a_wrapper() {
+    assert_errors(
+        "fn leak() -> Int {\n    let s = scope |s| { [s] }\n    1\n}",
+        &[("E0292", "scope |s| { [s] }")],
+    );
+}
+
+#[test]
+fn a_scope_can_be_passed_as_a_parameter() {
+    assert_ok(
+        "fn work(s: Scope) -> Int {\n    s.spawn(|| 1).join()\n}\n\
+         fn main() {\n    let _ = scope |s| { work(s) }\n}",
+    );
+}
+
+// ---- `todo()` under `--release` ---------------------------------------------------
+
+/// `(code, spanned text)` for each diagnostic of `src` checked with
+/// `--release`.
+fn release_errors(src: &str) -> Vec<(&'static str, &str)> {
+    check_module_with(src, CheckOptions { release: true })
+        .diagnostics
+        .iter()
+        .map(|d| (d.code, &src[d.span.start..d.span.end]))
+        .collect()
+}
+
+#[test]
+fn todo_is_allowed_outside_release() {
+    assert_ok("fn ship() -> Int {\n    todo()\n}");
+}
+
+#[test]
+fn todo_is_an_error_under_release() {
+    assert_eq!(
+        release_errors("fn ship() -> Int {\n    todo()\n}"),
+        [("E0293", "todo()")]
+    );
+}
+
+// ---- `use` ------------------------------------------------------------------------
+
+#[test]
+fn a_use_outside_std_is_an_error() {
+    assert_errors("use foo.bar", &[("E0294", "foo.bar")]);
+}
+
+#[test]
+fn a_use_of_a_std_module_that_does_not_exist_is_an_error() {
+    // No `std.*` module exists yet, so every `use` of one is unknown.
+    assert_errors("use std.sql", &[("E0295", "std.sql")]);
+}
+
+#[test]
+fn a_use_with_a_brace_group_names_its_module() {
+    assert_errors("use std.sql.{Query}", &[("E0295", "std.sql")]);
 }
