@@ -543,6 +543,14 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                         .iter()
                         .find(|(n, _)| n.as_deref() == Some(name.name.as_str()));
                     if let Some((_, field_ty)) = field {
+                        if info.hidden_fields.contains(&name.name) {
+                            self.error(
+                                codes::PRIVATE_FIELD,
+                                format!("the field `{}` of `{type_name}` is private", name.name),
+                                name.span,
+                            );
+                            return Ty::Error;
+                        }
                         let subst: Vec<(String, Ty)> =
                             info.generics.iter().cloned().zip(args.clone()).collect();
                         return field_ty.substitute(&subst);
@@ -652,6 +660,20 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             return Some(self.instantiate(&sig, None));
         }
         if let Some(info) = self.items.structs.get(name).cloned() {
+            if info.sealed {
+                let capability =
+                    matches!(self.decls().get(name), Some(d) if d.kind == DeclKind::Capability);
+                let message = if capability {
+                    format!(
+                        "`{name}` is a built-in capability and cannot be constructed; \
+                         take it as a parameter, ultimately from `main`"
+                    )
+                } else {
+                    format!("`{name}` has private fields and cannot be constructed outside the prelude")
+                };
+                self.error(codes::FORGED, message, ident.span);
+                return None;
+            }
             return Some(self.constructor(name, &info.generics, &info.fields, name.to_string()));
         }
         if let Some(enum_name) = self.items.bare_variants.get(name).cloned() {

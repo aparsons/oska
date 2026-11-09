@@ -89,6 +89,8 @@ pub(crate) mod codes {
     pub const NOT_A_VALUE: &str = "E0234";
     pub const NOT_ITERABLE: &str = "E0235";
     pub const CAPTURING_CLOSURE: &str = "E0270";
+    pub const FORGED: &str = "E0271";
+    pub const PRIVATE_FIELD: &str = "E0272";
 }
 
 /// Options that change what is checked.

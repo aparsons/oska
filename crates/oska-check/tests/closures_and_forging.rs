@@ -111,3 +111,39 @@ fn a_nested_capture_is_a_capture_of_the_outer_closure_too() {
         )],
     );
 }
+
+// ---- Forging -----------------------------------------------------------------
+
+#[test]
+fn a_built_in_capability_cannot_be_constructed() {
+    assert_errors(
+        "fn f() -> Stdout {\n    Stdout(handle: 1)\n}",
+        &[("E0271", "Stdout")],
+    );
+}
+
+#[test]
+fn a_prelude_type_with_private_fields_cannot_be_constructed() {
+    assert_errors(
+        "fn f() -> Args {\n    Args(handle: 1)\n}",
+        &[("E0271", "Args")],
+    );
+}
+
+#[test]
+fn a_prelude_type_with_public_fields_can_be_constructed() {
+    assert_ok("fn f() -> Range<Int> {\n    Range(start: 0, end: 1)\n}");
+}
+
+#[test]
+fn a_private_field_of_a_prelude_type_cannot_be_read() {
+    assert_errors(
+        "fn f(out: Stdout) -> Int {\n    out.handle\n}",
+        &[("E0272", "handle")],
+    );
+}
+
+#[test]
+fn a_modules_own_private_fields_are_visible_in_it() {
+    assert_ok("struct Point { x: Int }\nfn f() -> Int {\n    let p = Point(x: 1)\n    p.x\n}");
+}
