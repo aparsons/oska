@@ -38,6 +38,11 @@
 //!   capability-bearing value is a `cap fn`. Unification itself enforces
 //!   that a `cap fn` never flows into a plain `fn` (`infer.rs`), so every
 //!   route a value takes is covered; [`Body::mismatch`] reports it.
+//!   A closure that captures a `Scope` handle, or a value holding one, is
+//!   **scoped** the same way: unification keeps it out of unscoped `fn`
+//!   slots (returns, fields, user function parameters), and a `scope`
+//!   block rejects a value, or an outer `var`, that ends up holding one
+//!   (`E0292`).
 
 use oska_syntax::ast::{
     BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, ItemKind, Module, StmtKind,
@@ -501,6 +506,16 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 ),
                 span,
             ),
+            Mismatch::ScopeLost => self.error(
+                codes::SCOPE_ESCAPES,
+                format!(
+                    "expected `{expected}`, found a closure that captures a `Scope` handle, \
+                     which cannot outlive its `scope` block: it cannot be returned, stored in \
+                     a field, or passed to a function of yours; pass the `Scope` as a \
+                     parameter instead"
+                ),
+                span,
+            ),
             Mismatch::TrustLost => self.error(
                 codes::UNTRUSTED_TEXT,
                 format!(
@@ -619,6 +634,19 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             ExprKind::Scope { handle, body } => {
                 // The handle is the prelude's `Scope`; its `spawn` and the
                 // task's `join` are ordinary prelude methods.
+                //
+                // A `var` from outside the block that cannot hold a handle
+                // yet must not be able to after it: the block would have
+                // stored its handle, or a closure capturing it, there.
+                // This is conservative: it also rejects storing a closure
+                // that captures an enclosing block's handle.
+                let outer_vars: Vec<usize> = (0..self.locals.len())
+                    .filter(|&i| {
+                        let local = &self.locals[i];
+                        matches!(local.binding, Binding::Var)
+                            && !self.infer.resolve(&local.ty).holds_scope()
+                    })
+                    .collect();
                 self.locals.push(Local {
                     name: handle.name.clone(),
                     ty: Ty::named(ty::SCOPE),
@@ -626,7 +654,18 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 });
                 let ty = self.block(body, expected, true);
                 self.locals.pop();
-                if self.infer.resolve(&ty).holds(ty::SCOPE) {
+                let kept = outer_vars
+                    .into_iter()
+                    .map(|i| &self.locals[i])
+                    .find(|local| self.infer.resolve(&local.ty).holds_scope())
+                    .map(|local| local.name.clone());
+                if let Some(name) = kept {
+                    self.out.diagnostics.push(decl_rules::scope_escapes(
+                        expr.span,
+                        &format!("be kept in `{name}`, which outlives the block"),
+                    ));
+                }
+                if self.infer.resolve(&ty).holds_scope() {
                     self.out.diagnostics.push(decl_rules::scope_escapes(
                         expr.span,
                         "be the value of its `scope` block",
@@ -1224,6 +1263,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         self.loop_depth = outer_loops;
         self.locals.truncate(height);
         let frame = self.closures.pop().expect("the closure's own frame");
+        let scoped = frame
+            .captures
+            .iter()
+            .any(|(_, ty)| self.infer.resolve(ty).holds_scope());
         let captured = frame
             .captures
             .into_iter()
@@ -1231,6 +1274,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             .map(|(name, _)| name);
         let ty = Ty::Fn {
             cap: captured.is_some(),
+            scoped,
             params: param_tys,
             ret: Box::new(ret),
         };

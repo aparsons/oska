@@ -82,7 +82,7 @@ impl Body<'_, '_, '_> {
     pub(super) fn propagate_error(&mut self, from: &Ty, to: &Ty, span: Span) {
         match self.infer.flow(from, to) {
             Ok(()) => return,
-            Err(lost @ (Mismatch::CapLost | Mismatch::TrustLost)) => {
+            Err(lost @ (Mismatch::CapLost | Mismatch::ScopeLost | Mismatch::TrustLost)) => {
                 self.mismatch(lost, from, to, span);
                 return;
             }
