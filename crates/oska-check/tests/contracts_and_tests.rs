@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::{assert_errors, assert_ok};
+use common::{assert_errors, assert_fix, assert_ok};
 
 // ---- Contract conditions -----------------------------------------------------
 
@@ -109,6 +109,71 @@ fn a_contract_on_a_body_less_trait_method_is_checked() {
     assert_errors(
         "trait Sized {\n    fn size(self) -> Int\n        ensures |r| r\n}",
         &[("E0281", "r")],
+    );
+}
+
+// ---- Test bodies ---------------------------------------------------------------
+
+#[test]
+fn a_test_body_is_type_checked() {
+    assert_errors(
+        "test \"adds\" {\n    let x: Int = \"one\"\n}",
+        &[("E0220", "\"one\"")],
+    );
+}
+
+#[test]
+fn the_design_notes_test_checks() {
+    assert_ok(
+        "struct Account { pub id: Int, balance: Int }\nimpl Account {\n    pub fn deposit(var self, amount: Int)\n        requires amount > 0\n    {\n        self.balance = self.balance + amount\n    }\n}\ntest \"deposit adds to the balance\" {\n    var a = Account(id: 1, balance: 0)\n    a.deposit(amount: 5)\n    t.assert_eq(a.balance, 5)\n}",
+    );
+}
+
+#[test]
+fn assertions_check_their_arguments() {
+    assert_ok("test \"asserts\" {\n    t.assert(1 < 2)\n    t.assert_ne(\"a\", \"b\")\n    t.fail(\"unreachable\")\n}");
+    assert_errors(
+        "test \"asserts\" {\n    t.assert_eq(1, \"one\")\n}",
+        &[("E0220", "\"one\"")],
+    );
+    assert_errors("test \"asserts\" {\n    t.assert(1)\n}", &[("E0220", "1")]);
+}
+
+#[test]
+fn t_holds_the_stand_in_capabilities() {
+    assert_ok(
+        "fn greet(io: Stdout) -> Result<(), IoError> {\n    io.println(\"hi\")\n}\nfn tick(clock: Clock, random: Random, fs: FsRead) {}\ntest \"greets\" {\n    let _ = greet(t.stdout)\n    tick(t.clock, t.random, t.fs.read_only())\n}",
+    );
+}
+
+#[test]
+fn t_has_no_other_members() {
+    assert_fix(
+        "test \"net\" {\n    let n = t.fz\n}",
+        "E0227",
+        "test \"net\" {\n    let n = t.fs\n}",
+    );
+    assert_errors(
+        "test \"net\" {\n    t.assert_equal(1, 1)\n}",
+        &[("E0228", "assert_equal")],
+    );
+}
+
+#[test]
+fn an_integration_test_uses_the_same_t() {
+    assert_ok("#[integration]\ntest \"prints\" {\n    let _ = t.stdout.println(\"hi\")\n}");
+}
+
+#[test]
+fn t_exists_only_in_tests() {
+    assert_errors("fn f() {\n    t.assert(true)\n}", &[("E0221", "t")]);
+}
+
+#[test]
+fn a_test_has_no_capabilities_besides_t() {
+    assert_errors(
+        "test \"forges\" {\n    let _ = io.println(\"hi\")\n}",
+        &[("E0221", "io")],
     );
 }
 

@@ -8,8 +8,9 @@
 //!
 //! The pipeline runs in order: collect declarations, resolve names, check
 //! declarations (`cap`, `main`, capitalization, recursive types), check
-//! function bodies (`body.rs`, with local bidirectional inference), then
-//! compute authority. Under `--release`, bodies are also scanned for
+//! function, test, and contract bodies (`body.rs`, with local
+//! bidirectional inference), then compute authority. A test body sees
+//! `t: TestContext` from the prelude. Under `--release`, bodies are also scanned for
 //! `dbg(...)`.
 //!
 //! # Diagnostic codes
@@ -45,6 +46,8 @@
 //! | `E0233` | A type that inference cannot work out, such as `let xs = List.new()` with no later use. |
 //! | `E0234` | A type name used as a value, or a type that cannot be constructed. |
 //! | `E0235` | `for` over a value that is not a `List` or a range. |
+//! | `E0280` | A contract clause calls a function that is not pure (a capability-bearing parameter or receiver, or a `cap fn` value). |
+//! | `E0281` | A `requires` or `ensures` condition that is not `Bool`. |
 
 use oska_syntax::Diagnostic;
 

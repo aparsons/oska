@@ -37,7 +37,11 @@ use crate::items::{FieldsInfo, FnSig, Items, Lower, Shape};
 use crate::resolve::closest;
 use crate::ty::Ty;
 
-/// Check every function, method, and constant body in `module`.
+/// The prelude type of `t`, the stand-in capabilities in a `test` body.
+const TEST_CONTEXT: &str = "TestContext";
+
+/// Check every function, method, constant, and test body in `module`. A
+/// test body sees `t`, and nothing else beyond pure code.
 pub fn module(module: &Module, decls: &Decls, items: &Items, diagnostics: &mut Vec<Diagnostic>) {
     for item in &module.items {
         match &item.kind {
@@ -68,9 +72,15 @@ pub fn module(module: &Module, decls: &Decls, items: &Items, diagnostics: &mut V
                 let mut body = Body::new(items, lower, Ty::Unit, diagnostics);
                 body.check(&c.value, &ty);
             }
-            // Test bodies use the test runner's `t`, which is not
-            // declared yet.
-            ItemKind::Struct(_) | ItemKind::Enum(_) | ItemKind::Use(_) | ItemKind::Test(_) => {}
+            ItemKind::Test(test) => {
+                let mut body = Body::new(items, Lower::new(decls), Ty::Unit, diagnostics);
+                body.bind("t", Ty::named(TEST_CONTEXT), Binding::Param);
+                // A test produces no value: its last expression is a
+                // statement like the others.
+                body.block(&test.body, None, false);
+                body.finish();
+            }
+            ItemKind::Struct(_) | ItemKind::Enum(_) | ItemKind::Use(_) => {}
         }
     }
 }
