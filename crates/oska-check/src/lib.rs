@@ -5,6 +5,8 @@
 //! diagnostic, plus the **authority** of every function. The report is
 //! produced even when there are errors. [`CheckReport::to_json`] is what
 //! `oskac check --format=json` prints; `docs/checker.md` describes it.
+//! A `use std.*` adds that module's declarations (`src/std/*.osk`) to
+//! the prelude the file sees.
 //!
 //! The pipeline runs in order: collect declarations, resolve names, check
 //! declarations (`cap`, `main`, capitalization, recursive types, where
@@ -18,10 +20,10 @@
 //!
 //! # Diagnostic codes
 //!
-//! Checker codes are `E02xx` and `E03xx`, defined in the `codes` module below. The
-//! canonical table of what each means, what it spans, and which carry a
-//! machine-applicable fix is in `docs/checker.md`; a conformance test
-//! keeps it in step with `codes`.
+//! Checker codes are `E02xx` and `E03xx`, defined in the `codes` module
+//! below. The canonical table of what each means, what it spans, and
+//! which carry a machine-applicable fix is in `docs/checker.md`; a
+//! conformance test keeps it in step with `codes`.
 
 use oska_syntax::{json_escape, Diagnostic};
 
@@ -96,6 +98,9 @@ pub(crate) mod codes {
     pub const USE_OUTSIDE_STD: &str = "E0294";
     pub const UNKNOWN_MODULE: &str = "E0295";
     pub const UNTRUSTED_TEXT: &str = "E0300";
+    pub const SINK_NOT_IMPORTED: &str = "E0310";
+    pub const UNKNOWN_SINK_TAG: &str = "E0311";
+    pub const NOT_EXPORTED: &str = "E0312";
 }
 
 /// Options that change what is checked.
@@ -218,7 +223,7 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
     resolve::module(&module, &decls, &mut diagnostics);
     decl_rules::module(src, &module, &decls, &mut diagnostics);
     coherence::module(&module, &decls, &mut diagnostics);
-    recursion::module(&module, &mut diagnostics);
+    recursion::module(&module, &decls, &mut diagnostics);
     if options.release {
         release::module(&module, &mut diagnostics);
     }

@@ -4,11 +4,12 @@
 
 use std::collections::HashMap;
 
-use oska_syntax::ast::{Field, Fields, FnDecl, GenericParam, ItemKind, Module, Type, TypeKind};
+use oska_syntax::ast::{
+    Field, Fields, FnDecl, GenericParam, Item, ItemKind, Module, Type, TypeKind,
+};
 
 use crate::authority::capability_bearing;
 use crate::collect::{DeclKind, Decls};
-use crate::prelude;
 use crate::ty::{self, Trust, Ty};
 
 /// A function or method signature. Generic parameters appear in the
@@ -231,14 +232,19 @@ impl Items {
     /// declarations with one name wins; `Decls` reports the duplicate.
     pub fn collect(module: &Module, decls: &Decls) -> Items {
         let mut items = Items::default();
-        items.add(prelude::module(), decls, true);
-        items.add(module, decls, false);
+        items.add(decls.prelude_items(), decls, true);
+        items.add(&module.items, decls, false);
         items.trait_methods();
         items
     }
 
-    fn add(&mut self, module: &Module, decls: &Decls, in_prelude: bool) {
-        for item in &module.items {
+    fn add<'i>(
+        &mut self,
+        items: impl IntoIterator<Item = &'i Item>,
+        decls: &Decls,
+        in_prelude: bool,
+    ) {
+        for item in items {
             match &item.kind {
                 ItemKind::Fn(f) => {
                     let sig = Lower::new(decls).signature(f, &[], None);

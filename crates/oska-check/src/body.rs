@@ -53,6 +53,7 @@ use crate::ty::{self, Ty};
 mod calls;
 mod patterns;
 mod results;
+mod sinks;
 
 /// Check every function, method, constant, and test body in `module`. A
 /// test body sees `t`, and nothing else beyond pure code.
@@ -429,8 +430,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 }
                 Ty::string()
             }
-            // Sink literals get their types with untrusted values (#8).
-            ExprKind::SinkStr { .. } => Ty::Error,
+            ExprKind::SinkStr { tag, .. } => self.sink_literal(tag, expr.span),
             ExprKind::Bool(_) => Ty::bool(),
             ExprKind::Unit => Ty::Unit,
             ExprKind::Name(ident) => self.name(ident),

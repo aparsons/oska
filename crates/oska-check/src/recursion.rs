@@ -8,8 +8,7 @@ use oska_syntax::ast::{Item, ItemKind, Module, Type, TypeKind};
 use oska_syntax::Diagnostic;
 
 use crate::codes;
-use crate::collect::field_types;
-use crate::prelude;
+use crate::collect::{field_types, Decls};
 
 /// How deeply type arguments may nest before a type is assumed to have a
 /// base case. Only polymorphic recursion, such as `S<T>` holding
@@ -17,9 +16,12 @@ use crate::prelude;
 const MAX_DEPTH: usize = 64;
 
 /// Report every struct and enum in `module` that has no base case.
-pub fn module(module: &Module, diagnostics: &mut Vec<Diagnostic>) {
+pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
     let mut shapes = Shapes::default();
-    for item in prelude::module().items.iter().chain(&module.items) {
+    for item in decls.prelude_items() {
+        shapes.add(item);
+    }
+    for item in &module.items {
         shapes.add(item);
     }
     for item in &module.items {
