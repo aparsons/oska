@@ -40,6 +40,14 @@ _Avoid_: inout, mut ref
 The built-in declarations, written in Oska, that every program can use without importing them, such as `Int`, `Option`, `Result`, and the built-in capabilities.
 _Avoid_: stdlib (for this subset), builtins
 
+**Checked program**:
+A program the checker has accepted, with every name, method call, and conversion already resolved. The interpreter runs only checked programs.
+_Avoid_: IR, compiled program
+
+**Panic**:
+A runtime failure that stops the current task and cannot be caught, such as integer overflow or an out-of-bounds index. A panic means the program has a bug; an `Err` returned from `main` does not.
+_Avoid_: exception, crash
+
 ## Untrusted data
 
 **Untrusted value**:
