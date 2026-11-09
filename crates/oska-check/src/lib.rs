@@ -23,6 +23,7 @@
 use oska_syntax::Diagnostic;
 
 mod authority;
+mod declarations;
 mod decls;
 mod prelude;
 mod resolve;
@@ -32,6 +33,7 @@ pub(crate) mod codes {
     pub const UNKNOWN_NAME: &str = "E0200";
     pub const WRONG_NAMESPACE: &str = "E0201";
     pub const DUPLICATE_NAME: &str = "E0202";
+    pub const CAP_REQUIRED: &str = "E0210";
 }
 
 /// Options that change what is checked.
@@ -150,6 +152,7 @@ pub fn check_module_with(src: &str, _options: CheckOptions) -> CheckReport {
     let mut diagnostics = Vec::new();
     let decls = decls::Decls::collect(&module, &mut diagnostics);
     resolve::module(&module, &decls, &mut diagnostics);
+    declarations::module(src, &module, &decls, &mut diagnostics);
     let functions = authority::report(&module, &decls);
     diagnostics.sort_by_key(|d| d.span.start);
     CheckReport {
