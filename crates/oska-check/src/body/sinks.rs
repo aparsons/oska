@@ -24,7 +24,7 @@ impl Body<'_, '_, '_> {
                 .iter()
                 .filter_map(|m| m.sink_literal.as_ref().map(|s| s.tag))
                 .collect();
-            self.diagnostics.push(suggest::unknown(
+            self.out.diagnostics.push(suggest::unknown(
                 codes::UNKNOWN_SINK_TAG,
                 format!("unknown sink literal tag `{tag}`"),
                 tag,
@@ -35,7 +35,7 @@ impl Body<'_, '_, '_> {
         };
         if !self.decls().imports(module) {
             let path = module.path;
-            self.diagnostics.push(
+            self.out.diagnostics.push(
                 Diagnostic::new(
                     codes::SINK_NOT_IMPORTED,
                     format!("a `{tag}` literal needs `use {path}`"),

@@ -109,7 +109,7 @@ impl Body<'_, '_, '_> {
         if let Some(edit) = self.missing_arms(span, scrutinee, arms, &missing) {
             diagnostic = diagnostic.with_fix("add arms for the missing patterns", vec![edit]);
         }
-        self.diagnostics.push(diagnostic);
+        self.out.diagnostics.push(diagnostic);
     }
 
     /// An edit adding an arm for each missing pattern, after the last arm
@@ -343,7 +343,7 @@ impl Body<'_, '_, '_> {
             _ => return,
         };
         let span = arg.label.as_ref().map_or(arg.span, |l| l.span);
-        self.diagnostics.push(
+        self.out.diagnostics.push(
             Diagnostic::new(codes::PATTERN_LABEL, message, span)
                 .with_fix("use the field's label", vec![edit]),
         );
@@ -431,7 +431,7 @@ impl Body<'_, '_, '_> {
             name.span,
             &pairs,
         );
-        self.diagnostics.push(diagnostic);
+        self.out.diagnostics.push(diagnostic);
     }
 
     /// Bind the names in a pattern that could not be checked, with the

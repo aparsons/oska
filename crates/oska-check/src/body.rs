@@ -64,26 +64,27 @@ mod results;
 mod secrets;
 mod sinks;
 
+/// What checking bodies finds: diagnostics, and the audit sites a
+/// reviewer must see (`body/audit.rs`).
+#[derive(Debug, Default)]
+pub struct Findings {
+    pub diagnostics: Vec<Diagnostic>,
+    pub audit: Vec<AuditSite>,
+}
+
 /// Check every function, method, constant, and test body in `module`. A
 /// test body sees `t`, and nothing else beyond pure code.
-pub fn module(
-    src: &str,
-    module: &Module,
-    decls: &Decls,
-    items: &Items,
-    diagnostics: &mut Vec<Diagnostic>,
-    audit: &mut Vec<AuditSite>,
-) {
+pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mut Findings) {
     for item in &module.items {
         match &item.kind {
-            ItemKind::Fn(f) => function(src, f, Lower::new(decls), items, diagnostics, audit),
+            ItemKind::Fn(f) => function(src, f, Lower::new(decls), items, out),
             ItemKind::Impl(imp) => {
                 let lower = Lower::new(decls).with_generics(&imp.generics);
                 let target = lower.ty(&imp.target);
                 let lower = lower.with_self(target);
                 for method in &imp.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        function(src, f, lower.clone(), items, diagnostics, audit);
+                        function(src, f, lower.clone(), items, out);
                     }
                 }
             }
@@ -103,19 +104,18 @@ pub fn module(
                     });
                 for method in &t.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        function(src, f, lower.clone(), items, diagnostics, audit);
+                        function(src, f, lower.clone(), items, out);
                     }
                 }
             }
             ItemKind::Const(c) => {
                 let lower = Lower::new(decls);
                 let ty = lower.ty(&c.ty);
-                let mut body = Body::new(src, items, lower, Ty::Unit, diagnostics, audit);
+                let mut body = Body::new(src, items, lower, Ty::Unit, out);
                 body.check(&c.value, &ty);
             }
             ItemKind::Test(test) => {
-                let mut body =
-                    Body::new(src, items, Lower::new(decls), Ty::Unit, diagnostics, audit);
+                let mut body = Body::new(src, items, Lower::new(decls), Ty::Unit, out);
                 body.bind("t", Ty::named(ty::TEST_CONTEXT), Binding::Param);
                 // A test produces no value: its last expression is a
                 // statement like the others.
@@ -129,20 +129,13 @@ pub fn module(
 
 /// Check one function body against its signature. `lower` has the
 /// enclosing impl's or trait's generics and `Self` in scope.
-fn function(
-    src: &str,
-    f: &FnDecl,
-    lower: Lower,
-    items: &Items,
-    diagnostics: &mut Vec<Diagnostic>,
-    audit: &mut Vec<AuditSite>,
-) {
+fn function(src: &str, f: &FnDecl, lower: Lower, items: &Items, out: &mut Findings) {
     if f.body.is_none() && f.requires.is_empty() && f.ensures.is_empty() {
         return;
     }
     let lower = lower.with_generics(&f.generics);
     let sig = lower.signature(f, &[], lower.self_ty.clone());
-    let mut body = Body::new(src, items, lower, sig.ret.clone(), diagnostics, audit);
+    let mut body = Body::new(src, items, lower, sig.ret.clone(), out);
     if let Some(receiver) = &f.receiver {
         body.receiver = Some(SelfBinding {
             ty: sig.self_ty.clone().unwrap_or(Ty::Error),
@@ -258,9 +251,8 @@ pub struct Body<'c, 'd, 'a> {
     items: &'c Items,
     lower: Lower<'d, 'a>,
     infer: Infer,
-    diagnostics: &'c mut Vec<Diagnostic>,
-    /// The audit sites found so far (`body/audit.rs`).
-    audit: &'c mut Vec<AuditSite>,
+    /// What checking the bodies has found so far.
+    out: &'c mut Findings,
     /// Locals in scope, innermost last. Shadowing pushes a new one.
     locals: Vec<Local>,
     receiver: Option<SelfBinding>,
@@ -293,16 +285,14 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         items: &'c Items,
         lower: Lower<'d, 'a>,
         ret: Ty,
-        diagnostics: &'c mut Vec<Diagnostic>,
-        audit: &'c mut Vec<AuditSite>,
+        out: &'c mut Findings,
     ) -> Self {
         Body {
             src,
             items,
             lower,
             infer: Infer::default(),
-            diagnostics,
-            audit,
+            out,
             locals: Vec::new(),
             receiver: None,
             ret,
@@ -322,7 +312,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 || name == ty::SELF
                 || lower.decls().get(name).is_some()
         };
-        resolve::untrusted_not_text_within(written, &known, self.diagnostics);
+        resolve::untrusted_not_text_within(written, &known, &mut self.out.diagnostics);
     }
 
     fn decls(&self) -> &'d Decls<'a> {
@@ -330,7 +320,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     }
 
     fn error(&mut self, code: &'static str, message: impl Into<String>, span: Span) {
-        self.diagnostics.push(Diagnostic::new(code, message, span));
+        self.out
+            .diagnostics
+            .push(Diagnostic::new(code, message, span));
     }
 
     /// Report bindings whose types inference could not work out.
@@ -436,7 +428,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         match self.decls().qualified_only(&ident.name) {
             Some(module) => {
                 let diagnostic = suggest::qualify(module, ident.span, &ident.name);
-                self.diagnostics.push(diagnostic);
+                self.out.diagnostics.push(diagnostic);
                 false
             }
             None => true,
@@ -449,7 +441,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             return true;
         }
         let diagnostic = suggest::not_exported(module, &name.name, name.span);
-        self.diagnostics.push(diagnostic);
+        self.out.diagnostics.push(diagnostic);
         false
     }
 
@@ -635,7 +627,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 let ty = self.block(body, expected, true);
                 self.locals.pop();
                 if self.infer.resolve(&ty).holds(ty::SCOPE) {
-                    self.diagnostics.push(decl_rules::scope_escapes(
+                    self.out.diagnostics.push(decl_rules::scope_escapes(
                         expr.span,
                         "be the value of its `scope` block",
                     ));
@@ -759,7 +751,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             ident.span,
             &candidates,
         );
-        self.diagnostics.push(diagnostic);
+        self.out.diagnostics.push(diagnostic);
     }
 
     /// What `base.name` names when `base` is a module or a type rather
@@ -863,7 +855,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         ident: &Ident,
         candidates: &[&str],
     ) {
-        self.diagnostics.push(suggest::unknown(
+        self.out.diagnostics.push(suggest::unknown(
             code,
             message,
             &ident.name,
@@ -909,7 +901,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                         span,
                     ),
                 };
-                self.diagnostics.push(diagnostic);
+                self.out.diagnostics.push(diagnostic);
             }
             ExprKind::SelfValue => {
                 let Some(receiver) = &self.receiver else {
@@ -919,7 +911,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     return;
                 }
                 let at = receiver.span.start;
-                self.diagnostics.push(
+                self.out.diagnostics.push(
                     Diagnostic::new(
                         code,
                         format!("cannot {action} `self` in a method that takes `self`"),
@@ -1171,7 +1163,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 );
             }
         }
-        self.diagnostics.push(diagnostic);
+        self.out.diagnostics.push(diagnostic);
     }
 
     // ---- Closures -------------------------------------------------------

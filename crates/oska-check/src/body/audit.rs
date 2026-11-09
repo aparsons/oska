@@ -40,7 +40,7 @@ impl Body<'_, '_, '_> {
             .iter()
             .find(|a| a.type_name == type_name && a.method == method)
         {
-            self.audit.push(AuditSite {
+            self.out.audit.push(AuditSite {
                 kind: audited.kind,
                 span,
             });

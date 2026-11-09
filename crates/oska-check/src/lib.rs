@@ -299,8 +299,15 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
     }
     let items = items::Items::collect(&module, &decls);
     traits::module(src, &module, &decls, &items, &mut diagnostics);
-    let mut audit = Vec::new();
-    body::module(src, &module, &decls, &items, &mut diagnostics, &mut audit);
+    let mut findings = body::Findings {
+        diagnostics,
+        audit: Vec::new(),
+    };
+    body::module(src, &module, &decls, &items, &mut findings);
+    let body::Findings {
+        mut diagnostics,
+        mut audit,
+    } = findings;
     let functions = authority::report(&module, &decls);
     diagnostics.sort_by_key(|d| d.span.start);
     audit.sort_by_key(|site| site.span.start);

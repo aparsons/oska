@@ -462,7 +462,7 @@ impl Body<'_, '_, '_> {
                 vec![Edit::insert(site.end, text)],
             );
         }
-        self.diagnostics.push(diagnostic);
+        self.out.diagnostics.push(diagnostic);
         None
     }
 
@@ -557,7 +557,7 @@ impl Body<'_, '_, '_> {
     pub(super) fn label(&mut self, arg: &Arg, param: Option<&str>, labels: Labels) {
         match (&arg.label, param, labels) {
             (Some(label), Some(param), _) if label.name != param => {
-                self.diagnostics.push(
+                self.out.diagnostics.push(
                     Diagnostic::new(
                         codes::BAD_LABEL,
                         format!("expected the label `{param}`, found `{}`", label.name),
@@ -577,7 +577,7 @@ impl Body<'_, '_, '_> {
                     start: label.span.start,
                     end: arg.value.span.start,
                 };
-                self.diagnostics.push(
+                self.out.diagnostics.push(
                     Diagnostic::new(
                         codes::BAD_LABEL,
                         format!("positional arguments take no label, found `{}`", label.name),
@@ -587,7 +587,7 @@ impl Body<'_, '_, '_> {
                 );
             }
             (None, Some(param), Labels::Required) => {
-                self.diagnostics.push(
+                self.out.diagnostics.push(
                     Diagnostic::new(
                         codes::MISSING_LABEL,
                         format!("named fields are constructed by name: write `{param}: ...`"),

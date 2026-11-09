@@ -144,7 +144,7 @@ impl Body<'_, '_, '_> {
         other_secret: bool,
     ) {
         let fix = self.constant_time_eq(op, secret, other, other_secret);
-        self.diagnostics.push(
+        self.out.diagnostics.push(
             Diagnostic::new(codes::SECRET_COMPARED, COMPARED, expr.span).with_fix(
                 "compare in constant time",
                 vec![Edit {
