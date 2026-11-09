@@ -18,6 +18,9 @@
 //!   `Callable`, applied by [`Body::apply`]. Method calls
 //!   ([`Body::method_call`]) try the type's own `impl`, then its traits;
 //!   on a generic parameter, only its bounds' traits.
+//! - **Audit sites:** in `body/audit.rs`. Each method call is checked
+//!   against the table of audited prelude methods (`.assume_trusted()`),
+//!   and a match is recorded at the call.
 //! - **`?` and the `Result` discipline:** in `body/results.rs`.
 //!   [`Body::try_expr`] converts errors when the function's error type
 //!   implements `From<E>` ([`Body::converts_from`]), and
@@ -50,7 +53,9 @@ use crate::items::{Bound, Items, Lower};
 use crate::prelude::{self, StdModule};
 use crate::suggest;
 use crate::ty::{self, Ty};
+use crate::AuditSite;
 
+mod audit;
 mod calls;
 mod patterns;
 mod results;
@@ -64,17 +69,18 @@ pub fn module(
     decls: &Decls,
     items: &Items,
     diagnostics: &mut Vec<Diagnostic>,
+    audit: &mut Vec<AuditSite>,
 ) {
     for item in &module.items {
         match &item.kind {
-            ItemKind::Fn(f) => function(src, f, Lower::new(decls), items, diagnostics),
+            ItemKind::Fn(f) => function(src, f, Lower::new(decls), items, diagnostics, audit),
             ItemKind::Impl(imp) => {
                 let lower = Lower::new(decls).with_generics(&imp.generics);
                 let target = lower.ty(&imp.target);
                 let lower = lower.with_self(target);
                 for method in &imp.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        function(src, f, lower.clone(), items, diagnostics);
+                        function(src, f, lower.clone(), items, diagnostics, audit);
                     }
                 }
             }
@@ -94,18 +100,19 @@ pub fn module(
                     });
                 for method in &t.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        function(src, f, lower.clone(), items, diagnostics);
+                        function(src, f, lower.clone(), items, diagnostics, audit);
                     }
                 }
             }
             ItemKind::Const(c) => {
                 let lower = Lower::new(decls);
                 let ty = lower.ty(&c.ty);
-                let mut body = Body::new(src, items, lower, Ty::Unit, diagnostics);
+                let mut body = Body::new(src, items, lower, Ty::Unit, diagnostics, audit);
                 body.check(&c.value, &ty);
             }
             ItemKind::Test(test) => {
-                let mut body = Body::new(src, items, Lower::new(decls), Ty::Unit, diagnostics);
+                let mut body =
+                    Body::new(src, items, Lower::new(decls), Ty::Unit, diagnostics, audit);
                 body.bind("t", Ty::named(ty::TEST_CONTEXT), Binding::Param);
                 // A test produces no value: its last expression is a
                 // statement like the others.
@@ -119,13 +126,20 @@ pub fn module(
 
 /// Check one function body against its signature. `lower` has the
 /// enclosing impl's or trait's generics and `Self` in scope.
-fn function(src: &str, f: &FnDecl, lower: Lower, items: &Items, diagnostics: &mut Vec<Diagnostic>) {
+fn function(
+    src: &str,
+    f: &FnDecl,
+    lower: Lower,
+    items: &Items,
+    diagnostics: &mut Vec<Diagnostic>,
+    audit: &mut Vec<AuditSite>,
+) {
     if f.body.is_none() && f.requires.is_empty() && f.ensures.is_empty() {
         return;
     }
     let lower = lower.with_generics(&f.generics);
     let sig = lower.signature(f, &[], lower.self_ty.clone());
-    let mut body = Body::new(src, items, lower, sig.ret.clone(), diagnostics);
+    let mut body = Body::new(src, items, lower, sig.ret.clone(), diagnostics, audit);
     if let Some(receiver) = &f.receiver {
         body.receiver = Some(SelfBinding {
             ty: sig.self_ty.clone().unwrap_or(Ty::Error),
@@ -219,6 +233,8 @@ pub struct Body<'c, 'd, 'a> {
     lower: Lower<'d, 'a>,
     infer: Infer,
     diagnostics: &'c mut Vec<Diagnostic>,
+    /// The audit sites found so far (`body/audit.rs`).
+    audit: &'c mut Vec<AuditSite>,
     /// Locals in scope, innermost last. Shadowing pushes a new one.
     locals: Vec<Local>,
     receiver: Option<SelfBinding>,
@@ -252,6 +268,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         lower: Lower<'d, 'a>,
         ret: Ty,
         diagnostics: &'c mut Vec<Diagnostic>,
+        audit: &'c mut Vec<AuditSite>,
     ) -> Self {
         Body {
             src,
@@ -259,6 +276,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             lower,
             infer: Infer::default(),
             diagnostics,
+            audit,
             locals: Vec::new(),
             receiver: None,
             ret,
