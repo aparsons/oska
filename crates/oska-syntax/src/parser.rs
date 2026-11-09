@@ -42,6 +42,17 @@
 //! - `E0150`: a `self` or `var self` receiver on a function outside an
 //!   `impl` or `trait` block
 //! - `E0151`: `pub` on an `impl` block; mark methods `pub` instead
+//! - `E0160`: a string pattern with an interpolation hole; patterns are
+//!   plain literals
+//! - `E0161`: a test name with an interpolation hole
+//! - `E0162`: `pub` on a trait method, which takes its visibility from the
+//!   trait
+//! - `E0163`: `pub test`; tests are never exported
+//! - `E0164`: `pub use`; re-exports are not defined in v0
+//! - `E0165`: `#[integration]` on an item other than `test`
+//!
+//! Diagnostics `E0005`, `E0112`, `E0120`, `E0143`, `E0151`, and
+//! `E0162`–`E0164` can carry a machine-applicable [`Fix`](crate::Fix).
 
 use crate::ast::{
     Arg, Attribute, BinaryOp, Block, ClosureParam, ConstDecl, Ensures, EnumDecl, Expr, ExprKind,
@@ -385,17 +396,29 @@ impl<'a> Parser<'a> {
 
     fn item(&mut self) -> Result<Item, Diagnostic> {
         let prefix = self.item_prefix()?;
+        self.check_attributes(&prefix.attributes)?;
         if let Some(pub_span) = prefix.pub_span {
-            if self.at_kw(Keyword::Impl) {
-                return Err(self.remove_word(
-                    error(
-                        "E0151",
-                        "an `impl` block cannot be `pub`; remove `pub` here and mark each \
-                         method that should be public as `pub fn`",
-                        pub_span,
-                    ),
-                    "pub",
-                ));
+            let rejected = match self.peek() {
+                Some(TokenKind::Keyword(Keyword::Impl)) => Some((
+                    "E0151",
+                    "an `impl` block cannot be `pub`; remove `pub` here and mark each \
+                     method that should be public as `pub fn`",
+                )),
+                Some(TokenKind::Keyword(Keyword::Test)) => Some((
+                    "E0163",
+                    "a `test` cannot be `pub`, because tests are run by the test \
+                     runner, never referenced by name; remove `pub`",
+                )),
+                Some(TokenKind::Keyword(Keyword::Use)) => Some((
+                    "E0164",
+                    "a `use` cannot be `pub`: re-exports are not defined in v0, so \
+                     an import is visible only in its own module; remove `pub`, \
+                     and import the name from its defining module where it is needed",
+                )),
+                _ => None,
+            };
+            if let Some((code, message)) = rejected {
+                return Err(self.remove_word(error(code, message, pub_span), "pub"));
             }
         }
         let kind = match self.peek() {
@@ -431,6 +454,22 @@ impl<'a> Parser<'a> {
             kind,
             span: self.span_from(prefix.start),
         })
+    }
+
+    /// Reject `#[integration]` unless the next token starts a `test`.
+    fn check_attributes(&self, attributes: &[Attribute]) -> Result<(), Diagnostic> {
+        if self.at_kw(Keyword::Test) {
+            return Ok(());
+        }
+        match attributes.iter().find(|a| a.name.name == "integration") {
+            Some(attribute) => Err(error(
+                "E0165",
+                "`#[integration]` marks an integration test, so it can only be \
+                 written on a `test` item; remove it here",
+                attribute.span,
+            )),
+            None => Ok(()),
+        }
     }
 
     /// `#[name]` or `#[name(args)]`.
@@ -572,8 +611,21 @@ impl<'a> Parser<'a> {
             return Err(self.expected("a test name as a string, as in `test \"adds\" { ... }`"));
         }
         self.bump();
+        let parts = self.str_parts(span)?;
+        if let Some(hole) = parts.iter().find_map(|part| match part {
+            StrPart::Hole { span, .. } => Some(*span),
+            StrPart::Text { .. } => None,
+        }) {
+            return Err(error(
+                "E0161",
+                "a test name cannot interpolate, because it must be known without \
+                 running the test; write the name as plain text, or write `\\{` \
+                 for a literal brace",
+                hole,
+            ));
+        }
         let name = Expr {
-            kind: ExprKind::Str(self.str_parts(span)?),
+            kind: ExprKind::Str(parts),
             span,
         };
         let body = self.block()?;
@@ -625,8 +677,21 @@ impl<'a> Parser<'a> {
                 return Ok(methods);
             }
             let prefix = self.item_prefix()?;
+            self.check_attributes(&prefix.attributes)?;
             if !self.at_kw(Keyword::Fn) {
                 return Err(self.expected("a method declared with `fn`"));
+            }
+            if let (FnContext::Trait, Some(pub_span)) = (context, prefix.pub_span) {
+                return Err(self.remove_word(
+                    error(
+                        "E0162",
+                        "a trait method cannot be `pub`: trait methods take their \
+                         visibility from the trait; remove `pub`, and mark the \
+                         trait `pub` to export its methods",
+                        pub_span,
+                    ),
+                    "pub",
+                ));
             }
             let decl = self.fn_decl(context)?;
             methods.push(Item {
@@ -1514,7 +1579,22 @@ impl<'a> Parser<'a> {
                 TokenKind::Int(_)
                 | TokenKind::Str(_)
                 | TokenKind::Keyword(Keyword::True | Keyword::False),
-            ) => PatternKind::Literal(self.primary()?),
+            ) => {
+                let literal = self.primary()?;
+                if let ExprKind::Str(parts) = &literal.kind {
+                    if parts.iter().any(|p| matches!(p, StrPart::Hole { .. })) {
+                        return Err(error(
+                            "E0160",
+                            "a string pattern must be a plain literal, without \
+                             interpolation; match a fixed string, or bind the \
+                             value and compare it in a guard, as in \
+                             `s if s == greeting => ...`",
+                            literal.span,
+                        ));
+                    }
+                }
+                PatternKind::Literal(literal)
+            }
             Some(TokenKind::Punct(Punct::Minus))
                 if matches!(self.peek_at(1), Some(TokenKind::Int(_))) =>
             {

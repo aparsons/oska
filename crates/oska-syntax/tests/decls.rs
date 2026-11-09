@@ -27,18 +27,18 @@ fn use_a_module() {
 fn use_names_from_a_module() {
     // A trailing comma is allowed, and the group may span lines.
     assert_items(
-        "pub use std.sql.{Db,\n query,}",
+        "use std.sql.{Db,\n query,}",
         r#"[{
-            "kind": "UseItem", "span": {"start": 0, "end": 29},
-            "public": true,
+            "kind": "UseItem", "span": {"start": 0, "end": 25},
+            "public": false,
             "attributes": [],
             "path": [
-                {"kind": "Ident", "span": {"start": 8, "end": 11}, "name": "std"},
-                {"kind": "Ident", "span": {"start": 12, "end": 15}, "name": "sql"}
+                {"kind": "Ident", "span": {"start": 4, "end": 7}, "name": "std"},
+                {"kind": "Ident", "span": {"start": 8, "end": 11}, "name": "sql"}
             ],
             "names": [
-                {"kind": "Ident", "span": {"start": 17, "end": 19}, "name": "Db"},
-                {"kind": "Ident", "span": {"start": 22, "end": 27}, "name": "query"}
+                {"kind": "Ident", "span": {"start": 13, "end": 15}, "name": "Db"},
+                {"kind": "Ident", "span": {"start": 18, "end": 23}, "name": "query"}
             ]
         }]"#,
     );
@@ -151,13 +151,13 @@ fn integration_attribute_on_a_test() {
 }
 
 #[test]
-fn attribute_with_arguments_before_pub() {
-    // Arguments are parsed like call arguments. Attributes come before `pub`.
+fn attribute_with_arguments() {
+    // Arguments are parsed like call arguments.
     assert_items(
-        "#[integration(slow: true)] pub fn f() {}",
+        "#[integration(slow: true)] test \"t\" {}",
         r#"[{
-            "kind": "FnItem", "span": {"start": 0, "end": 40},
-            "public": true,
+            "kind": "TestItem", "span": {"start": 0, "end": 38},
+            "public": false,
             "attributes": [
                 {"kind": "Attribute", "span": {"start": 0, "end": 26},
                  "name": {"kind": "Ident", "span": {"start": 2, "end": 13}, "name": "integration"},
@@ -167,12 +167,11 @@ fn attribute_with_arguments_before_pub() {
                      "value": {"kind": "BoolExpr", "span": {"start": 20, "end": 24}, "value": true}}
                  ]}
             ],
-            "name": {"kind": "Ident", "span": {"start": 34, "end": 35}, "name": "f"},
-            "generics": [],
-            "params": [],
-            "requires": [],
-            "ensures": [],
-            "body": {"kind": "Block", "span": {"start": 38, "end": 40}, "stmts": []}
+            "name": {
+                "kind": "StrExpr", "span": {"start": 32, "end": 35},
+                "parts": [{"kind": "StrText", "span": {"start": 33, "end": 34}, "value": "t"}]
+            },
+            "body": {"kind": "Block", "span": {"start": 36, "end": 38}, "stmts": []}
         }]"#,
     );
 }
