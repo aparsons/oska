@@ -125,39 +125,47 @@ impl Ty {
 
     /// A type that carries a trust flag.
     pub fn is_text(&self) -> bool {
-        matches!(self, Ty::Named(name, _, _) if TEXT.contains(&name.as_str()))
+        matches!(self, Ty::Named(name, _, _) if is_text_name(name))
     }
 
     /// This text type with trust `trust`; any other type unchanged.
     pub fn with_trust(self, trust: Trust) -> Ty {
         match self {
-            Ty::Named(name, args, _) if TEXT.contains(&name.as_str()) => {
-                Ty::Named(name, args, trust)
-            }
+            Ty::Named(name, args, _) if is_text_name(&name) => Ty::Named(name, args, trust),
             other => other,
+        }
+    }
+
+    /// This type with the trust flag of every text type in it, at any
+    /// depth, replaced by `map` of it. The one walk over trust flags:
+    /// type arguments are mapped before the type that holds them.
+    pub fn map_trust(&self, map: &mut impl FnMut(Trust) -> Trust) -> Ty {
+        match self {
+            Ty::Named(name, args, trust) => {
+                let args = args.iter().map(|a| a.map_trust(map)).collect();
+                let trust = if is_text_name(name) {
+                    map(*trust)
+                } else {
+                    *trust
+                };
+                Ty::Named(name.clone(), args, trust)
+            }
+            Ty::Fn { cap, params, ret } => Ty::Fn {
+                cap: *cap,
+                params: params.iter().map(|p| p.map_trust(map)).collect(),
+                ret: Box::new(ret.map_trust(map)),
+            },
+            other => other.clone(),
         }
     }
 
     /// This type with every trusted text flag in it, at any depth,
     /// replaced by `trust`.
     pub fn trusted_as(&self, trust: Trust) -> Ty {
-        match self {
-            Ty::Named(name, args, t) => Ty::Named(
-                name.clone(),
-                args.iter().map(|a| a.trusted_as(trust)).collect(),
-                if self.is_text() && *t == Trust::Trusted {
-                    trust
-                } else {
-                    *t
-                },
-            ),
-            Ty::Fn { cap, params, ret } => Ty::Fn {
-                cap: *cap,
-                params: params.iter().map(|p| p.trusted_as(trust)).collect(),
-                ret: Box::new(ret.trusted_as(trust)),
-            },
-            other => other.clone(),
-        }
+        self.map_trust(&mut |t| match t {
+            Trust::Trusted => trust,
+            other => other,
+        })
     }
 
     /// Holds a text type that is fixed trusted, at any depth.

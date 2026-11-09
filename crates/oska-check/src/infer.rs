@@ -135,29 +135,10 @@ impl Infer {
     }
 
     fn refresh(&mut self, ty: &Ty, variables_too: bool) -> Ty {
-        match ty {
-            Ty::Named(name, args, trust) => {
-                let args = args
-                    .iter()
-                    .map(|a| self.refresh(a, variables_too))
-                    .collect();
-                let trust = match trust {
-                    Trust::Var(_) if !variables_too => *trust,
-                    _ if ty.is_text() => self.fresh_trust(),
-                    _ => *trust,
-                };
-                Ty::Named(name.clone(), args, trust)
-            }
-            Ty::Fn { cap, params, ret } => Ty::Fn {
-                cap: *cap,
-                params: params
-                    .iter()
-                    .map(|p| self.refresh(p, variables_too))
-                    .collect(),
-                ret: Box::new(self.refresh(ret, variables_too)),
-            },
-            other => other.clone(),
-        }
+        ty.map_trust(&mut |trust| match trust {
+            Trust::Var(_) if !variables_too => trust,
+            _ => self.fresh_trust(),
+        })
     }
 
     /// Let the trust of every text type in a value of type `ty` flow into
@@ -190,7 +171,7 @@ impl Infer {
         match (a, b) {
             (Trust::Trusted, _) | (_, Trust::Untrusted) => true,
             (Trust::Untrusted, Trust::Trusted) => false,
-            (Trust::Untrusted, Trust::Var(v)) => self.taint(v),
+            (Trust::Untrusted, Trust::Var(v)) => self.mark_untrusted(v),
             (Trust::Var(v), Trust::Trusted) => self.pin(v),
             (Trust::Var(x), Trust::Var(y)) => {
                 if x == y {
@@ -198,14 +179,14 @@ impl Infer {
                 }
                 self.trust[x as usize].into.push(y);
                 self.trust[y as usize].from.push(x);
-                (!self.trust[x as usize].untrusted || self.taint(y))
+                (!self.trust[x as usize].untrusted || self.mark_untrusted(y))
                     && (!self.trust[y as usize].pinned || self.pin(x))
             }
         }
     }
 
     /// Untrusted text reaches `v`, and everything `v` flows into.
-    fn taint(&mut self, v: u32) -> bool {
+    fn mark_untrusted(&mut self, v: u32) -> bool {
         let var = &mut self.trust[v as usize];
         if var.untrusted {
             return true;
@@ -215,7 +196,7 @@ impl Infer {
         }
         var.untrusted = true;
         let into = var.into.clone();
-        into.into_iter().all(|w| self.taint(w))
+        into.into_iter().all(|w| self.mark_untrusted(w))
     }
 
     /// `v`, and everything that flows into it, flows into a trusted slot.
