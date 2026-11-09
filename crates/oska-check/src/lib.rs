@@ -2,7 +2,9 @@
 //!
 //! [`check_module`] checks one source file against the embedded
 //! **prelude** (`src/prelude.osk`) and returns a [`CheckReport`]: every
-//! diagnostic, plus the **authority** of every function. The report is
+//! diagnostic, the **authority** of every function, and every **audit
+//! site** (a call a reviewer must see, such as `.assume_trusted()`:
+//! `body/audit.rs`). The report is
 //! produced even when there are errors. [`CheckReport::to_json`] is what
 //! `oskac check --format=json` prints; `docs/checker.md` describes it.
 //!
@@ -23,7 +25,7 @@
 //! machine-applicable fix is in `docs/checker.md`; a conformance test
 //! keeps it in step with `codes`.
 
-use oska_syntax::{json_escape, Diagnostic};
+use oska_syntax::{json_escape, Diagnostic, Span};
 
 mod authority;
 mod body;
@@ -112,6 +114,29 @@ pub struct CheckReport {
     pub diagnostics: Vec<Diagnostic>,
     /// One entry per function and `impl` method, in source order.
     pub functions: Vec<FunctionAuthority>,
+    /// Every audit site, in source order.
+    pub audit: Vec<AuditSite>,
+}
+
+/// A call a reviewer must see: one that vouches for untrusted text, or
+/// (later) exposes a secret. `body/audit.rs` decides which calls these are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuditSite {
+    /// What the call does, named after its method, such as
+    /// `assume_trusted`.
+    pub kind: &'static str,
+    /// The whole call expression.
+    pub span: Span,
+}
+
+impl AuditSite {
+    /// Render as a single-line JSON object.
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"kind\":\"{}\",\"span\":{{\"start\":{},\"end\":{}}}}}",
+            self.kind, self.span.start, self.span.end
+        )
+    }
 }
 
 /// One function's entry in the authority report.
@@ -139,8 +164,9 @@ pub struct Via {
 }
 
 impl CheckReport {
-    /// Render as `{"diagnostics": [...], "functions": [...]}`, with one
-    /// diagnostic or function per line.
+    /// Render as `{"diagnostics": [...], "functions": [...], "audit":
+    /// [...]}`, with one diagnostic, function, or audit site per line.
+    /// Every array is present, even when empty.
     pub fn to_json(&self) -> String {
         let diagnostics: Vec<String> = self.diagnostics.iter().map(Diagnostic::to_json).collect();
         let functions: Vec<String> = self
@@ -148,10 +174,12 @@ impl CheckReport {
             .iter()
             .map(FunctionAuthority::to_json)
             .collect();
+        let audit: Vec<String> = self.audit.iter().map(AuditSite::to_json).collect();
         format!(
-            "{{\n  \"diagnostics\": {},\n  \"functions\": {}\n}}\n",
+            "{{\n  \"diagnostics\": {},\n  \"functions\": {},\n  \"audit\": {}\n}}\n",
             json_lines(&diagnostics),
-            json_lines(&functions)
+            json_lines(&functions),
+            json_lines(&audit)
         )
     }
 }
@@ -209,7 +237,7 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
         Err(err) => {
             return CheckReport {
                 diagnostics: vec![err],
-                functions: Vec::new(),
+                ..CheckReport::default()
             }
         }
     };
@@ -224,11 +252,14 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
     }
     let items = items::Items::collect(&module, &decls);
     traits::module(src, &module, &decls, &items, &mut diagnostics);
-    body::module(src, &module, &decls, &items, &mut diagnostics);
+    let mut audit = Vec::new();
+    body::module(src, &module, &decls, &items, &mut diagnostics, &mut audit);
     let functions = authority::report(&module, &decls);
     diagnostics.sort_by_key(|d| d.span.start);
+    audit.sort_by_key(|site| site.span.start);
     CheckReport {
         diagnostics,
         functions,
+        audit,
     }
 }
