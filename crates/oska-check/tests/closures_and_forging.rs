@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{assert_errors, assert_ok};
+use common::{assert_authority, assert_errors, assert_ok, assert_report_json};
 
 const RUN: &str = "fn run(f: fn() -> Int) -> Int {\n    f()\n}\n";
 
@@ -93,7 +93,10 @@ fn a_closure_capturing_a_capability_bearing_self_is_a_cap_fn() {
     );
     assert_errors(
         &src,
-        &[("E0270", "|| {\n            let _ = self\n            1\n        }")],
+        &[(
+            "E0270",
+            "|| {\n            let _ = self\n            1\n        }",
+        )],
     );
 }
 
@@ -110,6 +113,58 @@ fn a_nested_capture_is_a_capture_of_the_outer_closure_too() {
             "|| {\n        let inner = wrap(|| {\n            let _ = out\n            1\n        })\n        inner()\n    }",
         )],
     );
+}
+
+// ---- Structured concurrency --------------------------------------------------
+
+#[test]
+fn a_spawned_task_joins_with_its_result() {
+    assert_ok(
+        "fn f(n: Int) -> Int {\n    scope |s| {\n        let task = s.spawn(|| n + 1)\n        task.join()\n    }\n}",
+    );
+    assert_errors(
+        "fn f(n: Int) -> String {\n    scope |s| {\n        let task = s.spawn(|| n + 1)\n        task.join()\n    }\n}",
+        &[("E0220", "task.join()")],
+    );
+}
+
+#[test]
+fn a_spawned_task_may_capture_a_capability() {
+    assert_ok(
+        "fn f(out: Stdout) -> Result<(), IoError> {\n    scope |s| {\n        let task = s.spawn(|| out.println(\"hi\"))\n        task.join()\n    }\n}",
+    );
+}
+
+#[test]
+fn spawn_takes_a_closure() {
+    assert_errors(
+        "fn f() {\n    scope |s| {\n        let _ = s.spawn(1)\n    }\n}",
+        &[("E0220", "1")],
+    );
+}
+
+#[test]
+fn a_scope_handle_reaches_no_capability() {
+    let src = "fn work(s: Scope) -> Int {\n    s.spawn(|| 1).join()\n}";
+    assert_ok(src);
+    assert_authority(src, "work", &[], true);
+}
+
+// ---- Authority of `cap fn` parameters ----------------------------------------
+
+#[test]
+fn a_cap_fn_parameter_makes_its_function_impure() {
+    let src = "fn run(f: cap fn() -> Int) -> Int {\n    f()\n}";
+    assert_authority(src, "run", &[], false);
+    assert_report_json(
+        src,
+        r#"{"diagnostics":[],"functions":[{"name":"run","authority":[],"via":[{"param":"f","capabilities":[]}],"pure":false}]}"#,
+    );
+}
+
+#[test]
+fn a_plain_fn_parameter_keeps_its_function_pure() {
+    assert_authority(RUN, "run", &[], true);
 }
 
 // ---- Forging -----------------------------------------------------------------

@@ -45,6 +45,9 @@
 //! | `E0233` | A type that inference cannot work out, such as `let xs = List.new()` with no later use. |
 //! | `E0234` | A type name used as a value, or a type that cannot be constructed. |
 //! | `E0235` | `for` over a value that is not a `List` or a range. |
+//! | `E0270` | A `cap fn` used where a plain `fn` is expected, such as a closure that captures a capability-bearing value. |
+//! | `E0271` | Construction of a prelude struct with private fields, such as a built-in capability: capabilities cannot be forged. |
+//! | `E0272` | Reading a private field of a prelude type. |
 
 use oska_syntax::Diagnostic;
 

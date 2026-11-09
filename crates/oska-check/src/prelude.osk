@@ -140,6 +140,26 @@ impl Display for IoError {
     fn to_string(self) -> String
 }
 
+// ---- Structured concurrency ---------------------------------------------
+
+// The handle `scope |s| { ... }` binds. A scope does not exit until all of
+// its tasks have finished. Deterministic parallelism needs no capability,
+// so a scope is plain data.
+pub struct Scope { handle: Int }
+
+// A spawned task may perform effects, so it is a `cap fn`; a pure closure
+// fits too.
+impl Scope {
+    pub fn spawn<T>(self, task: cap fn() -> T) -> Task<T>
+}
+
+// A running task. `join` waits for it and returns its result.
+pub struct Task<T> { handle: Int }
+
+impl<T> Task<T> {
+    pub fn join(self) -> T
+}
+
 // ---- Core functions ----------------------------------------------------
 
 // Print `value` for debugging and return it. An error under `--release`.

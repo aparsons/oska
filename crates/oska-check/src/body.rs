@@ -22,7 +22,10 @@
 //! - **Method lookup:** [`Body::method_call`] and [`Items::method`].
 //! - **Closures:** [`Body::closure`]. Locals are a stack, so a closure's
 //!   captures are the names it resolves below the stack height at which
-//!   the closure's parameters were pushed.
+//!   the closure's parameters were pushed (plus `self`). Each closure
+//!   being checked has a frame recording them; a closure that captures a
+//!   capability-bearing value is a `cap fn`. Unification ignores `cap`,
+//!   so [`Body::expect`] reports a `cap fn` used as a plain `fn`.
 
 use oska_syntax::ast::{
     Arg, BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, ItemKind, MatchArm, Module,
@@ -366,9 +369,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 }
                 Ty::Named("List".to_string(), vec![element])
             }
-            ExprKind::Closure { params, body } => {
-                self.closure(params, body, expected, expr.span)
-            }
+            ExprKind::Closure { params, body } => self.closure(params, body, expected, expr.span),
             ExprKind::If {
                 cond,
                 then_block,
@@ -390,11 +391,11 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             }
             ExprKind::Block(block) => self.block(block, expected, true),
             ExprKind::Scope { handle, body } => {
-                // `scope` gets real types with concurrency; until then the
-                // handle has the error type.
+                // The handle is the prelude's `Scope`; its `spawn` and the
+                // task's `join` are ordinary prelude methods.
                 self.locals.push(Local {
                     name: handle.name.clone(),
-                    ty: Ty::Error,
+                    ty: Ty::named("Scope"),
                     binding: Binding::Pattern,
                 });
                 let ty = self.block(body, expected, true);
@@ -669,7 +670,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                          take it as a parameter, ultimately from `main`"
                     )
                 } else {
-                    format!("`{name}` has private fields and cannot be constructed outside the prelude")
+                    format!(
+                        "`{name}` has private fields and cannot be constructed outside the prelude"
+                    )
                 };
                 self.error(codes::FORGED, message, ident.span);
                 return None;
@@ -1517,7 +1520,10 @@ fn bearing(ty: &Ty, items: &Items, decls: &Decls, expanding: &mut Vec<String>) -
             expanding.push(name.clone());
             let (generics, fields): (&[String], Vec<&Ty>) =
                 if let Some(info) = items.structs.get(name) {
-                    (&info.generics, info.fields.fields.iter().map(|(_, t)| t).collect())
+                    (
+                        &info.generics,
+                        info.fields.fields.iter().map(|(_, t)| t).collect(),
+                    )
                 } else if let Some(info) = items.enums.get(name) {
                     let fields = info
                         .variants
