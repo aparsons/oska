@@ -157,7 +157,7 @@ fn syntax_sample_impl_block_parses() {
             _ => None,
         })
         .expect("the sample should have an impl block");
-    assert!(imp.trait_.is_none());
+    assert!(imp.trait_ref.is_none());
     let [method] = imp.methods.as_slice() else {
         panic!("expected one method, got {:?}", imp.methods);
     };

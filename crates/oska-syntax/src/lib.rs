@@ -21,6 +21,14 @@ pub struct Span {
     pub end: usize,
 }
 
+/// The span from the start of `start` to the end of `end`.
+pub(crate) fn join(start: Span, end: Span) -> Span {
+    Span {
+        start: start.start,
+        end: end.end,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token {
     pub kind: TokenKind,

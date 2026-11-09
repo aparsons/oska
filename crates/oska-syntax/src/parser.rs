@@ -49,7 +49,7 @@ use crate::ast::{
     Pattern, PatternArg, PatternKind, Requires, SelfParam, Stmt, StmtKind, StrPart, StructDecl,
     TestDecl, TraitDecl, Type, TypeKind, UnaryOp, UseDecl, Variant,
 };
-use crate::{lex, resolve_escape, Diagnostic, Keyword, Punct, Span, Token, TokenKind};
+use crate::{join, lex, resolve_escape, Diagnostic, Keyword, Punct, Span, Token, TokenKind};
 
 /// Parse a whole source file: a sequence of items separated by line
 /// breaks. Stops at the first error.
@@ -145,13 +145,6 @@ fn describe(kind: Option<&TokenKind>) -> String {
 fn dotted(path: &[Ident]) -> String {
     let names: Vec<&str> = path.iter().map(|i| i.name.as_str()).collect();
     names.join(".")
-}
-
-fn join(start: Span, end: Span) -> Span {
-    Span {
-        start: start.start,
-        end: end.end,
-    }
 }
 
 fn comparison_op(kind: Option<&TokenKind>) -> Option<BinaryOp> {
@@ -320,9 +313,9 @@ impl<'a> Parser<'a> {
 
     fn item(&mut self) -> Result<Item, Diagnostic> {
         let start = self.peek_span();
-        let mut attrs = Vec::new();
+        let mut attributes = Vec::new();
         while self.at_punct(Punct::Hash) {
-            attrs.push(self.attribute()?);
+            attributes.push(self.attribute()?);
             // An attribute may sit on its own line above the item.
             self.skip_newlines();
         }
@@ -364,7 +357,7 @@ impl<'a> Parser<'a> {
         };
         Ok(Item {
             public,
-            attrs,
+            attributes,
             kind,
             span: self.span_from(start),
         })
@@ -523,7 +516,7 @@ impl<'a> Parser<'a> {
         self.expect_kw(Keyword::Impl)?;
         let generics = self.generics()?;
         let first = self.ty()?;
-        let (trait_, target) = if self.at_kw(Keyword::For) {
+        let (trait_ref, target) = if self.at_kw(Keyword::For) {
             self.bump();
             (Some(first), self.ty()?)
         } else {
@@ -532,7 +525,7 @@ impl<'a> Parser<'a> {
         let methods = self.methods(FnContext::Impl)?;
         Ok(ImplDecl {
             generics,
-            trait_,
+            trait_ref,
             target,
             methods,
         })
@@ -562,9 +555,9 @@ impl<'a> Parser<'a> {
                 return Ok(methods);
             }
             let start = self.peek_span();
-            let mut attrs = Vec::new();
+            let mut attributes = Vec::new();
             while self.at_punct(Punct::Hash) {
-                attrs.push(self.attribute()?);
+                attributes.push(self.attribute()?);
                 self.skip_newlines();
             }
             let public = self.at_kw(Keyword::Pub);
@@ -577,7 +570,7 @@ impl<'a> Parser<'a> {
             let decl = self.fn_decl(context)?;
             methods.push(Item {
                 public,
-                attrs,
+                attributes,
                 kind: ItemKind::Fn(decl),
                 span: self.span_from(start),
             });
@@ -628,7 +621,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect_punct(Punct::RParen)?;
-        let ret = if self.eat_punct(Punct::Arrow) {
+        let return_type = if self.eat_punct(Punct::Arrow) {
             Some(self.ty()?)
         } else {
             None
@@ -684,7 +677,7 @@ impl<'a> Parser<'a> {
             generics,
             receiver,
             params,
-            ret,
+            return_type,
             requires,
             ensures,
             body,
@@ -1638,12 +1631,16 @@ impl<'a> Parser<'a> {
                     }
                 }
                 self.expect_punct(Punct::RParen)?;
-                let ret = if self.eat_punct(Punct::Arrow) {
+                let return_type = if self.eat_punct(Punct::Arrow) {
                     Some(Box::new(self.ty()?))
                 } else {
                     None
                 };
-                TypeKind::Fn { cap, params, ret }
+                TypeKind::Fn {
+                    cap,
+                    params,
+                    return_type,
+                }
             }
             Some(TokenKind::Ident(_)) => {
                 let mut segments = vec![self.expect_ident("a type name")?];
@@ -1876,9 +1873,13 @@ mod tests {
                     format!("{name}<{}>", args.join(","))
                 }
             }
-            TypeKind::Fn { cap, params, ret } => {
+            TypeKind::Fn {
+                cap,
+                params,
+                return_type,
+            } => {
                 let params: Vec<String> = params.iter().map(ty_str).collect();
-                let ret = ret
+                let ret = return_type
                     .as_ref()
                     .map(|r| format!("->{}", ty_str(r)))
                     .unwrap_or_default();
