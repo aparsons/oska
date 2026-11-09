@@ -4,14 +4,20 @@
 //! does not declare (`E0263`).
 
 use oska_syntax::ast::{ItemKind, Module};
-use oska_syntax::Diagnostic;
+use oska_syntax::{Diagnostic, Edit, Span};
 
 use crate::codes;
 use crate::collect::Decls;
 use crate::items::{FnSig, Items, Lower, Receiver};
 use crate::ty::Ty;
 
-pub fn module(module: &Module, decls: &Decls, items: &Items, diagnostics: &mut Vec<Diagnostic>) {
+pub fn module(
+    src: &str,
+    module: &Module,
+    decls: &Decls,
+    items: &Items,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     for item in &module.items {
         let ItemKind::Impl(imp) = &item.kind else {
             continue;
@@ -63,25 +69,71 @@ pub fn module(module: &Module, decls: &Decls, items: &Items, diagnostics: &mut V
                 ));
             }
         }
-        let missing: Vec<&str> = info
+        let missing: Vec<&FnSig> = info
             .methods
             .iter()
             .filter(|(sig, has_default)| !has_default && !provided.contains(&sig.name.as_str()))
-            .map(|(sig, _)| sig.name.as_str())
+            .map(|(sig, _)| sig)
             .collect();
         if !missing.is_empty() {
             let listed = missing
                 .iter()
-                .map(|m| format!("`{m}`"))
+                .map(|m| format!("`{}`", m.name))
                 .collect::<Vec<_>>()
                 .join(", ");
-            diagnostics.push(Diagnostic::new(
+            let mut diagnostic = Diagnostic::new(
                 codes::MISSING_METHOD,
                 format!("this `impl {trait_name}` is missing the required method(s) {listed}"),
                 trait_ref.span,
-            ));
+            );
+            // A stub can be written out unless a method has generics of
+            // its own, whose bounds the signature does not carry.
+            if missing.iter().all(|sig| sig.generics.is_empty()) {
+                let stubs: Vec<FnSig> = missing
+                    .iter()
+                    .map(|sig| info.method_for(sig, &target, &args, &[], &[]))
+                    .collect();
+                if let Some(edit) = insert_stubs(src, item.span, &stubs) {
+                    diagnostic = diagnostic.with_fix(
+                        "add the missing method(s), with `todo()` bodies",
+                        vec![edit],
+                    );
+                }
+            }
+            diagnostics.push(diagnostic);
         }
     }
+}
+
+/// An edit that adds a `todo()` stub for each of `sigs` before the
+/// closing brace of the `impl` at `span`, indented one level inside it.
+fn insert_stubs(src: &str, span: Span, sigs: &[FnSig]) -> Option<Edit> {
+    let close = span.end.checked_sub(1)?;
+    if src.as_bytes().get(close) != Some(&b'}') {
+        return None;
+    }
+    let line_start = src[..close].rfind('\n').map_or(0, |i| i + 1);
+    let impl_line = src[..span.start].rfind('\n').map_or(0, |i| i + 1);
+    let base: String = src[impl_line..]
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .collect();
+    let indent = format!("{base}    ");
+    let stubs: String = sigs
+        .iter()
+        .map(|sig| {
+            format!(
+                "{indent}{} {{\n{indent}    todo()\n{indent}}}\n",
+                render(sig)
+            )
+        })
+        .collect();
+    let brace_on_own_line = src[line_start..close].trim().is_empty();
+    Some(if brace_on_own_line {
+        Edit::insert(line_start, stubs)
+    } else {
+        Edit::insert(close, format!("\n{stubs}{base}"))
+    })
 }
 
 /// Whether an impl's method matches the trait's, with the method's own

@@ -222,7 +222,7 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
         release::module(&module, &mut diagnostics);
     }
     let items = items::Items::collect(&module, &decls);
-    traits::module(&module, &decls, &items, &mut diagnostics);
+    traits::module(src, &module, &decls, &items, &mut diagnostics);
     body::module(src, &module, &decls, &items, &mut diagnostics);
     let functions = authority::report(&module, &decls);
     diagnostics.sort_by_key(|d| d.span.start);

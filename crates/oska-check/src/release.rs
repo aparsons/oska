@@ -6,7 +6,7 @@
 //! reported.
 
 use oska_syntax::ast::{Block, Expr, ExprKind, FnDecl, Item, ItemKind, Module, StmtKind};
-use oska_syntax::Diagnostic;
+use oska_syntax::{Diagnostic, Edit, Span};
 
 use crate::codes;
 use crate::prelude;
@@ -87,11 +87,28 @@ impl Walk<'_> {
             ExprKind::Call { callee, args } => {
                 match &callee.kind {
                     ExprKind::Name(name) if name.name == prelude::DBG => {
-                        self.diagnostics.push(Diagnostic::new(
+                        let mut diagnostic = Diagnostic::new(
                             codes::DBG_IN_RELEASE,
                             "`dbg(...)` is not allowed in a release build",
                             expr.span,
-                        ));
+                        );
+                        // `dbg(x)` returns `x`, so the call can become `x`.
+                        if let [arg] = args.as_slice() {
+                            diagnostic = diagnostic.with_fix(
+                                "remove `dbg`, keeping its argument",
+                                vec![
+                                    Edit::delete(Span {
+                                        start: expr.span.start,
+                                        end: arg.value.span.start,
+                                    }),
+                                    Edit::delete(Span {
+                                        start: arg.value.span.end,
+                                        end: expr.span.end,
+                                    }),
+                                ],
+                            );
+                        }
+                        self.diagnostics.push(diagnostic);
                     }
                     ExprKind::Name(name) if name.name == prelude::TODO => {
                         self.diagnostics.push(Diagnostic::new(

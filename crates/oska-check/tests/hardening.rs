@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{assert_errors, assert_ok};
+use common::{assert_errors, assert_fix, assert_ok};
 use oska_check::{check_module_with, CheckOptions, FunctionAuthority, Via};
 
 /// Each diagnostic's code and start offset, for snippets where the
@@ -303,4 +303,57 @@ fn the_authority_report_escapes_its_strings() {
         function.to_json(),
         r#"{"name":"a\"b\\c","authority":["Std\"out"],"via":[{"param":"o\nut","capabilities":["Std\"out"]}],"pure":false}"#
     );
+}
+
+// ---- Fixes --------------------------------------------------------------------------
+
+#[test]
+fn a_missing_trait_method_fix_inserts_a_todo_stub() {
+    assert_fix(
+        "struct Foo { x: Int }\nimpl Display for Foo {\n}",
+        "E0261",
+        "struct Foo { x: Int }\nimpl Display for Foo {\n    fn to_string(self) -> String {\n        todo()\n    }\n}",
+    );
+}
+
+#[test]
+fn a_missing_trait_method_fix_works_on_a_one_line_impl() {
+    assert_fix(
+        "struct Foo { x: Int }\nimpl Display for Foo {}",
+        "E0261",
+        "struct Foo { x: Int }\nimpl Display for Foo {\n    fn to_string(self) -> String {\n        todo()\n    }\n}",
+    );
+}
+
+#[test]
+fn a_missing_trait_method_fix_goes_after_the_existing_methods() {
+    assert_fix(
+        "trait Shape {\n    fn area(self) -> Int\n    fn name(self, short: Bool) -> String\n}\n\
+         struct Sq { side: Int }\n\
+         impl Shape for Sq {\n    fn area(self) -> Int {\n        self.side * self.side\n    }\n}",
+        "E0261",
+        "trait Shape {\n    fn area(self) -> Int\n    fn name(self, short: Bool) -> String\n}\n\
+         struct Sq { side: Int }\n\
+         impl Shape for Sq {\n    fn area(self) -> Int {\n        self.side * self.side\n    }\n    \
+         fn name(self, short: Bool) -> String {\n        todo()\n    }\n}",
+    );
+}
+
+#[test]
+fn a_dbg_in_release_fix_keeps_only_its_argument() {
+    let src = "fn twice(n: Int) -> Int {\n    dbg(n * 2)\n}";
+    let report = check_module_with(src, CheckOptions { release: true });
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "E0216")
+        .expect("E0216");
+    let fix = diagnostic.fix.as_ref().expect("E0216 should carry a fix");
+    let mut edits = fix.edits.clone();
+    edits.sort_by_key(|e| std::cmp::Reverse(e.span.start));
+    let mut fixed = src.to_string();
+    for edit in edits {
+        fixed.replace_range(edit.span.start..edit.span.end, &edit.replacement);
+    }
+    assert_eq!(fixed, "fn twice(n: Int) -> Int {\n    n * 2\n}");
 }
