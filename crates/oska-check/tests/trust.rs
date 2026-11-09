@@ -81,3 +81,25 @@ fn println_and_path_from_accept_untrusted_text() {
          Ok(())\n}",
     );
 }
+
+#[test]
+fn an_error_message_is_untrusted() {
+    assert_errors(
+        "use std.sql\nuse std.proc\n\
+         fn f(a: IoError, b: sql.SqlError, c: proc.ProcError) -> List<String> {\n    \
+         [a.message, b.message, c.message]\n}",
+        &[
+            ("E0300", "a.message"),
+            ("E0300", "b.message"),
+            ("E0300", "c.message"),
+        ],
+    );
+}
+
+#[test]
+fn an_error_is_built_from_trusted_or_untrusted_text() {
+    assert_ok(
+        "fn f(args: Args) -> Option<List<IoError>> {\n    \
+         Some([IoError(message: \"x\"), IoError(message: args.get(1)?)])\n}",
+    );
+}

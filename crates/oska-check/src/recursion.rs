@@ -18,10 +18,13 @@ const MAX_DEPTH: usize = 64;
 /// Report every struct and enum in `module` that has no base case.
 pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
     let mut shapes = Shapes::default();
-    for item in decls.prelude_items() {
+    // The module's own declarations first: a user type wins over a
+    // `std.*` module's declaration of the same name, which the module
+    // reaches only qualified.
+    for item in &module.items {
         shapes.add(item);
     }
-    for item in &module.items {
+    for item in decls.prelude_items() {
         shapes.add(item);
     }
     for item in &module.items {

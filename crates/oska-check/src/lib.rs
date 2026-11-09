@@ -109,6 +109,7 @@ pub(crate) mod codes {
     pub const SECRET_INTERPOLATED: &str = "E0350";
     pub const SECRET_COMPARED: &str = "E0351";
     pub const SECRET_DISPLAYED: &str = "E0352";
+    pub const PRIVATE_TO_MODULE: &str = "E0360";
 }
 
 /// Options that change what is checked.
@@ -133,11 +134,44 @@ pub struct CheckReport {
 /// exposes a secret. `body/audit.rs` decides which calls these are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AuditSite {
-    /// What the call does, named after its method, such as
-    /// `assume_trusted`.
-    pub kind: &'static str,
+    /// What the call does.
+    pub kind: AuditKind,
     /// The whole call expression.
     pub span: Span,
+}
+
+/// What an audit site does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditKind {
+    /// Vouches for untrusted text: `.assume_trusted()`.
+    TrustAssertion,
+    /// Reads a secret's value: `.expose()`.
+    SecretExposure,
+}
+
+impl AuditKind {
+    /// The kind as the report names it: the method's name, such as
+    /// `assume_trusted`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AuditKind::TrustAssertion => "assume_trusted",
+            AuditKind::SecretExposure => "expose",
+        }
+    }
+}
+
+/// Renders as `audit: assume_trusted (bytes 52..73)`, as the
+/// human-readable report lists it.
+impl std::fmt::Display for AuditSite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "audit: {} (bytes {}..{})",
+            self.kind.as_str(),
+            self.span.start,
+            self.span.end
+        )
+    }
 }
 
 impl AuditSite {
@@ -145,7 +179,9 @@ impl AuditSite {
     pub fn to_json(&self) -> String {
         format!(
             "{{\"kind\":\"{}\",\"span\":{{\"start\":{},\"end\":{}}}}}",
-            self.kind, self.span.start, self.span.end
+            self.kind.as_str(),
+            self.span.start,
+            self.span.end
         )
     }
 }
@@ -263,8 +299,15 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
     }
     let items = items::Items::collect(&module, &decls);
     traits::module(src, &module, &decls, &items, &mut diagnostics);
-    let mut audit = Vec::new();
-    body::module(src, &module, &decls, &items, &mut diagnostics, &mut audit);
+    let mut findings = body::Findings {
+        diagnostics,
+        audit: Vec::new(),
+    };
+    body::module(src, &module, &decls, &items, &mut findings);
+    let body::Findings {
+        mut diagnostics,
+        mut audit,
+    } = findings;
     let functions = authority::report(&module, &decls);
     diagnostics.sort_by_key(|d| d.span.start);
     audit.sort_by_key(|site| site.span.start);

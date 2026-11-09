@@ -99,13 +99,12 @@ fn the_fix_makes_the_secret_the_receiver() {
 }
 
 #[test]
-fn the_fix_compares_two_secrets_by_exposing_the_second() {
-    let src = "fn same(a: Secret<String>, b: Secret<String>) -> Bool {\n    a == b\n}";
-    assert_fix(
-        src,
-        "E0351",
-        "fn same(a: Secret<String>, b: Secret<String>) -> Bool {\n    a.constant_time_eq(b.expose())\n}",
-    );
+fn the_fix_compares_two_secrets_without_exposing_either() {
+    let src = "fn same(a: Secret<String>, b: Secret<String>) -> Bool {\n    a != b\n}";
+    let fixed =
+        "fn same(a: Secret<String>, b: Secret<String>) -> Bool {\n    !a.constant_time_eq_secret(b)\n}";
+    assert_fix(src, "E0351", fixed);
+    assert_audit(fixed, &[]);
 }
 
 #[test]
@@ -124,7 +123,7 @@ fn the_fix_parenthesizes_a_compound_secret_operand() {
 #[test]
 fn the_fixed_comparisons_check() {
     assert_ok(&compare("key.constant_time_eq(token)"));
-    assert_ok("fn same(a: Secret<String>, b: Secret<String>) -> Bool {\n    a.constant_time_eq(b.expose())\n}");
+    assert_ok("fn same(a: Secret<String>, b: Secret<String>) -> Bool {\n    a.constant_time_eq_secret(b)\n}");
 }
 
 #[test]
@@ -154,8 +153,8 @@ fn code_cannot_make_a_secret() {
 #[test]
 fn a_secret_is_not_display() {
     assert_errors(
-        "fn show<T: Display>(value: T) -> String {\n    value.to_string()\n}\n\
-         fn leak(env: Env) -> String {\n    show(env.secret(\"API_KEY\"))\n}",
+        "fn show<T: Display>(value: T) -> Untrusted<String> {\n    value.to_string()\n}\n\
+         fn leak(env: Env) -> Untrusted<String> {\n    show(env.secret(\"API_KEY\"))\n}",
         &[("E0352", "show(env.secret(\"API_KEY\"))")],
     );
 }
@@ -171,8 +170,8 @@ fn a_secret_has_no_to_string() {
 #[test]
 fn an_exposed_secret_is_display() {
     assert_ok(
-        "fn show<T: Display>(value: T) -> String {\n    value.to_string()\n}\n\
-         fn reveal(env: Env) -> String {\n    show(env.secret(\"API_KEY\").expose())\n}",
+        "fn show<T: Display>(value: T) -> Untrusted<String> {\n    value.to_string()\n}\n\
+         fn reveal(env: Env) -> Untrusted<String> {\n    show(env.secret(\"API_KEY\").expose())\n}",
     );
 }
 
@@ -183,5 +182,47 @@ fn interpolating_an_exposed_secret_is_allowed() {
          \x20   let key = env.secret(\"API_KEY\").expose()\n\
          \x20   \"Bearer {key}\"\n\
          }",
+    );
+}
+
+#[test]
+fn interpolating_a_list_of_secrets_is_an_error() {
+    assert_errors(
+        "fn f(env: Env) -> String {\n    let l = [env.secret(\"K\")]\n    \"{l}\"\n}",
+        &[("E0350", "{l}")],
+    );
+}
+
+#[test]
+fn interpolating_an_optional_secret_is_an_error() {
+    assert_errors(
+        "fn f(env: Env) -> String {\n    let x = Some(env.secret(\"K\"))\n    \"{x}\"\n}",
+        &[("E0350", "{x}")],
+    );
+}
+
+#[test]
+fn interpolating_a_struct_holding_a_secret_is_an_error() {
+    assert_errors(
+        "struct Q { s: Secret<String> }\n\
+         fn f(env: Env) -> String {\n    let q = Q(s: env.secret(\"K\"))\n    \"{q}\"\n}",
+        &[("E0350", "{q}")],
+    );
+}
+
+#[test]
+fn an_interpolation_hole_must_be_display() {
+    assert_errors(
+        "struct P { a: Int }\nfn f(p: P, l: List<Int>) -> String {\n    \"{p} {l}\"\n}",
+        &[("E0265", "{p}"), ("E0265", "{l}")],
+    );
+}
+
+#[test]
+fn a_display_hole_interpolates() {
+    assert_ok(
+        "struct P { a: Int }\n\
+         impl Display for P {\n    fn to_string(self) -> String {\n        \"p\"\n    }\n}\n\
+         fn f<T: Display>(p: P, n: Int, s: String, t: T) -> Untrusted<String> {\n    \"{p} {n} {s} {t}\"\n}",
     );
 }

@@ -6,7 +6,7 @@
 use oska_syntax::ast::{Arg, Expr, ExprKind, Ident};
 use oska_syntax::{Diagnostic, Edit, Span};
 
-use super::{Body, Callable, Labels};
+use super::{Body, Callable, Labels, QualifiedPath};
 use crate::codes;
 use crate::collect::DeclKind;
 use crate::items::{Bound, FieldsInfo, FnSig, Receiver, Shape};
@@ -22,16 +22,12 @@ impl Body<'_, '_, '_> {
         expected: Option<&Ty>,
     ) -> Ty {
         let callable = match &callee.kind {
-            ExprKind::Field { base, name } => {
-                match (self.module_name(base), self.type_name(base)) {
-                    (Some(module), _) => match self.require_export(module, name) {
-                        true => self.item_callee(name),
-                        false => None,
-                    },
-                    (None, Some(type_name)) => self.type_member(&type_name, name),
-                    (None, None) => return self.method_call(base, name, args, expected, expr.span),
-                }
-            }
+            ExprKind::Field { base, name } => match self.qualified_path(base, name) {
+                Some(QualifiedPath::Export(key)) => self.item_callee(&key, name),
+                Some(QualifiedPath::Member(type_name)) => self.type_member(&type_name, name),
+                Some(QualifiedPath::Reported) => None,
+                None => return self.method_call(base, name, args, expected, expr.span),
+            },
             ExprKind::Name(ident) if self.local(&ident.name).is_none() => self.named_callee(ident),
             _ => {
                 let ty = self.infer(callee);
@@ -45,6 +41,7 @@ impl Body<'_, '_, '_> {
                         pure: !cap,
                         receiver: None,
                         joined: None,
+                        type_args: Vec::new(),
                     }),
                     Ty::Error => None,
                     other => {
@@ -72,13 +69,14 @@ impl Body<'_, '_, '_> {
         if !self.require_unqualified(ident) {
             return None;
         }
-        self.item_callee(ident)
+        self.item_callee(&ident.name, ident)
     }
 
     /// A function, struct, or prelude variant called, named either
-    /// unqualified or as a module's export.
-    fn item_callee(&mut self, ident: &Ident) -> Option<Callable> {
-        let name = ident.name.as_str();
+    /// unqualified or as a module's export: `ident` as written, declared
+    /// under `key` (see [`crate::collect::Decls::prelude_key`]).
+    fn item_callee(&mut self, key: &str, ident: &Ident) -> Option<Callable> {
+        let name = key;
         if let Some(sig) = self.items.fns.get(name).cloned() {
             return Some(self.instantiate(&sig, None));
         }
@@ -161,6 +159,8 @@ impl Body<'_, '_, '_> {
         let sig = info.method_for(sig, &self_ty, &args, &[], &[]);
         let mut callable = self.instantiate(&sig, None);
         callable.description = format!("`{trait_name}.{}`", name.name);
+        // `Self` is a type argument here, so the result follows its trust.
+        self.follow_type_arg(&mut callable, self_ty.clone());
         if sig.receiver.is_method() {
             callable.params.insert(0, (None, self_ty.clone()));
         }
@@ -244,6 +244,7 @@ impl Body<'_, '_, '_> {
             pure: true,
             receiver: None,
             joined: None,
+            type_args: Vec::new(),
         }
     }
 
@@ -255,20 +256,28 @@ impl Body<'_, '_, '_> {
     /// in place of every trusted text flag in its signature: the receiver
     /// and text arguments flow into it, so every text type in the result
     /// is untrusted when any of them is (ADR 0006).
+    ///
+    /// A generic callee **follows the trust of its type arguments**: when
+    /// what any generic is instantiated with holds untrusted text, every
+    /// text type in the result is untrusted (see [`Body::apply`]). So
+    /// `fn launder<T: Display>(x: T) -> String` returns untrusted text for
+    /// an untrusted `x`, however its body turned `x` into text.
     pub(super) fn instantiate(&mut self, sig: &FnSig, self_ty: Option<&Ty>) -> Callable {
         let subst: Vec<(String, Ty)> = sig
             .generics
             .iter()
             .map(|g| (g.clone(), self.infer.fresh()))
             .collect();
-        let joined = sig.follows_trust.then(|| self.infer.fresh_trust());
-        let lower = |t: &Ty| {
+        let follows_type_args = !subst.is_empty() && sig.ret.has_trusted_text();
+        let joined = (sig.follows_trust || follows_type_args).then(|| self.infer.fresh_trust());
+        let lower_with = |t: &Ty, whole: bool| {
             let t = t.substitute(&subst);
             match joined {
-                Some(trust) => t.trusted_as(trust),
-                None => t,
+                Some(trust) if whole || sig.follows_trust => t.trusted_as(trust),
+                _ => t,
             }
         };
+        let lower = |t: &Ty| lower_with(t, false);
         if let (Some(actual), Some(declared)) = (self_ty, &sig.self_ty) {
             self.infer.unify(actual, &lower(declared));
         }
@@ -279,7 +288,7 @@ impl Body<'_, '_, '_> {
                 .iter()
                 .map(|(n, t)| (Some(n.clone()), lower(t)))
                 .collect(),
-            ret: lower(&sig.ret),
+            ret: lower_with(&sig.ret, true),
             labels: Labels::Optional,
             obligations: sig
                 .bounds
@@ -300,6 +309,7 @@ impl Body<'_, '_, '_> {
                 .filter(|_| sig.receiver.is_method())
                 .map(lower),
             joined,
+            type_args: subst.into_iter().map(|(_, t)| t).collect(),
         }
     }
 
@@ -356,13 +366,29 @@ impl Body<'_, '_, '_> {
             Receiver::Self_ => {}
         }
         self.audit_call(&type_name, &name.name, span);
-        let callable = self.instantiate(&sig, None);
+        let mut callable = self.instantiate(&sig, None);
         if let Some(declared) = &callable.receiver {
             // The receiver flows into `self` like an argument, so untrusted
             // text is no receiver of a method that wants trusted text.
             self.expect(&receiver, declared, base.span);
         }
+        if let Ty::Param(_) = receiver {
+            // A bound's method on a generic parameter: the parameter may
+            // stand for untrusted text, so text in the result is untrusted.
+            self.follow_type_arg(&mut callable, receiver);
+        }
         self.apply(callable, args, expected, span)
+    }
+
+    /// Let `callable`'s result follow the trust of `type_arg` as well, as
+    /// a generic's instantiation does (see [`Body::instantiate`]).
+    fn follow_type_arg(&mut self, callable: &mut Callable, type_arg: Ty) {
+        if callable.joined.is_none() && callable.ret.has_trusted_text() {
+            let joined = self.infer.fresh_trust();
+            callable.ret = callable.ret.trusted_as(joined);
+            callable.joined = Some(joined);
+        }
+        callable.type_args.push(type_arg);
     }
 
     /// The method `name` of a receiver of type `receiver`, named
@@ -447,7 +473,7 @@ impl Body<'_, '_, '_> {
                 vec![Edit::insert(site.end, text)],
             );
         }
-        self.diagnostics.push(diagnostic);
+        self.out.diagnostics.push(diagnostic);
         None
     }
 
@@ -510,6 +536,11 @@ impl Body<'_, '_, '_> {
                 span,
             );
         }
+        if let Some(joined) = callable.joined {
+            for ty in &callable.type_args {
+                self.infer.join_into(ty, joined);
+            }
+        }
         let what = format!("calling {}", callable.description);
         for (ty, bound) in &callable.obligations {
             self.require_trait(ty, &bound.trait_name, &bound.args, span, &what);
@@ -537,7 +568,7 @@ impl Body<'_, '_, '_> {
     pub(super) fn label(&mut self, arg: &Arg, param: Option<&str>, labels: Labels) {
         match (&arg.label, param, labels) {
             (Some(label), Some(param), _) if label.name != param => {
-                self.diagnostics.push(
+                self.out.diagnostics.push(
                     Diagnostic::new(
                         codes::BAD_LABEL,
                         format!("expected the label `{param}`, found `{}`", label.name),
@@ -557,7 +588,7 @@ impl Body<'_, '_, '_> {
                     start: label.span.start,
                     end: arg.value.span.start,
                 };
-                self.diagnostics.push(
+                self.out.diagnostics.push(
                     Diagnostic::new(
                         codes::BAD_LABEL,
                         format!("positional arguments take no label, found `{}`", label.name),
@@ -567,7 +598,7 @@ impl Body<'_, '_, '_> {
                 );
             }
             (None, Some(param), Labels::Required) => {
-                self.diagnostics.push(
+                self.out.diagnostics.push(
                     Diagnostic::new(
                         codes::MISSING_LABEL,
                         format!("named fields are constructed by name: write `{param}: ...`"),

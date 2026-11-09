@@ -133,7 +133,7 @@ pub fn assert_audit(src: &str, expected: &[(&str, &str)]) {
     let actual: Vec<(&str, &str)> = report
         .audit
         .iter()
-        .map(|site| (site.kind, &src[site.span.start..site.span.end]))
+        .map(|site| (site.kind.as_str(), &src[site.span.start..site.span.end]))
         .collect();
     assert_eq!(
         actual,

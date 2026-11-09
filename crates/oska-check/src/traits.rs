@@ -9,7 +9,7 @@ use oska_syntax::{Diagnostic, Edit, Span};
 use crate::codes;
 use crate::collect::Decls;
 use crate::items::{FnSig, Items, Lower, Receiver};
-use crate::ty::Ty;
+use crate::ty::{Trust, Ty};
 
 pub fn module(
     src: &str,
@@ -156,18 +156,58 @@ fn same_signature(actual: &FnSig, expected: &FnSig) -> bool {
         .params
         .iter()
         .zip(&expected.params)
-        .all(|((_, a), (_, e))| same_type(a, &e.substitute(&rename)))
-        && same_type(&actual.ret, &expected.ret.substitute(&rename))
+        .all(|((_, a), (_, e))| fits(a, &e.substitute(&rename), Trusting::Exact))
+        && fits(
+            &actual.ret,
+            &expected.ret.substitute(&rename),
+            Trusting::Returned,
+        )
 }
 
-fn same_type(a: &Ty, b: &Ty) -> bool {
+/// How an impl's type may differ in trust from its trait's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Trusting {
+    /// Not at all.
+    Exact,
+    /// The impl's type flows out where the trait's is promised: its text
+    /// may be trusted where the trait's is untrusted, since trusted text
+    /// may flow into untrusted (ADR 0006).
+    Returned,
+    /// The trait's type flows in where the impl's is required, inside a
+    /// function type's parameters: the reverse.
+    Accepted,
+}
+
+impl Trusting {
+    fn flip(self) -> Trusting {
+        match self {
+            Trusting::Exact => Trusting::Exact,
+            Trusting::Returned => Trusting::Accepted,
+            Trusting::Accepted => Trusting::Returned,
+        }
+    }
+
+    fn allows(self, impl_trust: Trust, trait_trust: Trust) -> bool {
+        let widened = |from: Trust, to: Trust| from == Trust::Trusted && to == Trust::Untrusted;
+        impl_trust == trait_trust
+            || match self {
+                Trusting::Exact => false,
+                Trusting::Returned => widened(impl_trust, trait_trust),
+                Trusting::Accepted => widened(trait_trust, impl_trust),
+            }
+    }
+}
+
+/// Whether the impl's type `a` stands for the trait's type `b`: the same
+/// type, differing in trust only as `trusting` allows.
+fn fits(a: &Ty, b: &Ty, trusting: Trusting) -> bool {
     match (a, b) {
         (Ty::Error, _) | (_, Ty::Error) => true,
         (Ty::Named(n1, a1, t1), Ty::Named(n2, a2, t2)) => {
             n1 == n2
-                && t1 == t2
+                && trusting.allows(*t1, *t2)
                 && a1.len() == a2.len()
-                && a1.iter().zip(a2).all(|(x, y)| same_type(x, y))
+                && a1.iter().zip(a2).all(|(x, y)| fits(x, y, trusting))
         }
         (
             Ty::Fn {
@@ -183,8 +223,8 @@ fn same_type(a: &Ty, b: &Ty) -> bool {
         ) => {
             c1 == c2
                 && p1.len() == p2.len()
-                && p1.iter().zip(p2).all(|(x, y)| same_type(x, y))
-                && same_type(r1, r2)
+                && p1.iter().zip(p2).all(|(x, y)| fits(x, y, trusting.flip()))
+                && fits(r1, r2, trusting)
         }
         _ => a == b,
     }

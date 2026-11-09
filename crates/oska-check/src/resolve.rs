@@ -357,9 +357,8 @@ impl Resolver<'_, '_> {
             ));
             return;
         };
-        let exports = module.exports();
         for name in names.unwrap_or_default() {
-            if !exports.contains(&name.name.as_str()) {
+            if !module.exports_name(&name.name) {
                 self.diagnostics
                     .push(suggest::not_exported(module, &name.name, name.span));
             }

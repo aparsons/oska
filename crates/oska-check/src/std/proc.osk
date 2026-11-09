@@ -20,7 +20,7 @@ impl Output {
     pub fn stdout(self) -> Untrusted<String>
 }
 
-pub struct ProcError { pub message: String }
+pub struct ProcError { pub message: Untrusted<String> }
 
 impl Display for ProcError {
     fn to_string(self) -> String

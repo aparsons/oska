@@ -116,6 +116,9 @@ impl<T> Secret<T> {
 impl Secret<String> {
     // Compare without leaking timing information.
     pub fn constant_time_eq(self, other: Untrusted<String>) -> Bool
+    // Compare with another secret without leaking timing information,
+    // and without exposing either.
+    pub fn constant_time_eq_secret(self, other: Secret<String>) -> Bool
 }
 
 #[capability]
@@ -222,7 +225,7 @@ impl Args {
 }
 
 // Plain data: code may construct one to report its own failures.
-pub struct IoError { pub message: String }
+pub struct IoError { pub message: Untrusted<String> }
 
 impl Display for IoError {
     fn to_string(self) -> String
