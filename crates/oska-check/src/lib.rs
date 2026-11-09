@@ -6,8 +6,10 @@
 //! produced even when there are errors. [`CheckReport::to_json`] is what
 //! `oskac check --format=json` prints; `docs/checker.md` describes it.
 //!
-//! The pipeline runs in order: collect declarations, resolve names, then
-//! compute authority. Function bodies are not checked yet.
+//! The pipeline runs in order: collect declarations, resolve names, check
+//! declarations (`cap`, `main`, capitalization, recursive types), then
+//! compute authority. Under `--release`, bodies are also scanned for
+//! `dbg(...)`. Function bodies are not type-checked yet.
 //!
 //! # Diagnostic codes
 //!
@@ -19,6 +21,13 @@
 //! | `E0200` | Unknown type or trait name. The fix replaces it with the single closest name, when there is one. |
 //! | `E0201` | A trait used where a type is expected, or a type used where a trait is expected. |
 //! | `E0202` | A type or trait name declared twice, or one that redeclares a prelude name. |
+//! | `E0210` | A struct or enum whose own fields name a capability-bearing type is not declared `cap`. The fix inserts `cap`. |
+//! | `E0211` | A `main` parameter that is not a built-in capability or `Args`. |
+//! | `E0212` | `main` returns something other than `()` or `Result<(), E>`, or `E` does not implement `Display`. |
+//! | `E0213` | A type, variant, trait, or type parameter name that does not start uppercase. |
+//! | `E0214` | A function, field, or parameter name that starts uppercase. |
+//! | `E0215` | A recursive struct or enum with no base case. |
+//! | `E0216` | `dbg(...)` under `--release`. |
 
 use oska_syntax::Diagnostic;
 

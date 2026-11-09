@@ -11,10 +11,7 @@ use oska_check::{check_module_with, CheckOptions};
 
 #[test]
 fn a_struct_holding_a_capability_must_be_declared_cap() {
-    assert_errors(
-        "struct Logger { out: Stdout }",
-        &[("E0210", "Logger")],
-    );
+    assert_errors("struct Logger { out: Stdout }", &[("E0210", "Logger")]);
 }
 
 #[test]

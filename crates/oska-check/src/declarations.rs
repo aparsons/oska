@@ -69,7 +69,10 @@ impl Names {
         if !ident.name.starts_with(|c: char| c.is_ascii_uppercase()) {
             self.diagnostics.push(Diagnostic::new(
                 codes::NOT_UPPERCASE,
-                format!("{noun} name `{}` must start with an uppercase letter", ident.name),
+                format!(
+                    "{noun} name `{}` must start with an uppercase letter",
+                    ident.name
+                ),
                 ident.span,
             ));
         }
@@ -80,7 +83,10 @@ impl Names {
         if ident.name.starts_with(|c: char| c.is_ascii_uppercase()) {
             self.diagnostics.push(Diagnostic::new(
                 codes::NOT_LOWERCASE,
-                format!("{noun} name `{}` must start with a lowercase letter", ident.name),
+                format!(
+                    "{noun} name `{}` must start with a lowercase letter",
+                    ident.name
+                ),
                 ident.span,
             ));
         }
@@ -149,10 +155,12 @@ fn main(src: &str, module: &Module, f: &FnDecl, decls: &Decls, diagnostics: &mut
         return;
     }
     let error = match &ret.kind {
-        TypeKind::Path { segments, args } if is_named(segments, "Result") => match args.as_slice() {
-            [ok, error] if matches!(ok.kind, TypeKind::Unit) => Some(error),
-            _ => None,
-        },
+        TypeKind::Path { segments, args } if is_named(segments, "Result") => {
+            match args.as_slice() {
+                [ok, error] if matches!(ok.kind, TypeKind::Unit) => Some(error),
+                _ => None,
+            }
+        }
         _ => None,
     };
     let Some(error) = error else {
