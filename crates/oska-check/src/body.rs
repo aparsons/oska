@@ -1044,6 +1044,43 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         false
     }
 
+    /// The operands of `expr`, `lhs op rhs` where `op` is `==` or `!=`,
+    /// which must have the same type: that type, or `None` when they
+    /// don't have one or one is a secret (`E0351`, see `body/secrets.rs`).
+    /// A literal operand takes the other operand's type, so `x == 1` works
+    /// for any integer `x`.
+    fn compared_operands(
+        &mut self,
+        expr: &Expr,
+        op: BinaryOp,
+        lhs: &Expr,
+        rhs: &Expr,
+    ) -> Option<Ty> {
+        let (first, second) = literal_last(lhs, rhs);
+        let first_ty = self.infer(first);
+        let first_ty = self.infer.resolve(&first_ty);
+        if first_ty.is_error() {
+            self.infer(second);
+            return None;
+        }
+        let first_secret = self.is_secret(&first_ty);
+        let expected = (!first_secret).then_some(&first_ty);
+        let second_ty = self.expr(second, expected);
+        let second_secret = self.is_secret(&second_ty);
+        match (first_secret, second_secret) {
+            (true, _) => self.secret_compared(expr, op, first, second, second_secret),
+            (false, true) => self.secret_compared(expr, op, second, first, false),
+            (false, false) => {
+                // Comparing inspects text without passing it on, so the
+                // operands may differ in trust.
+                let loosened = self.infer.loosen(&first_ty);
+                let ty = self.expect(&second_ty, &loosened, second.span);
+                return (!ty.is_error()).then_some(first_ty);
+            }
+        }
+        None
+    }
+
     // ---- Traits -----------------------------------------------------------
 
     /// Whether `ty` implements `trait_name<args>`: a generic parameter
@@ -1378,7 +1415,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
 /// The operands in checking order: an integer literal goes second, so
 /// it takes the other operand's type.
-pub(super) fn literal_last<'e>(lhs: &'e Expr, rhs: &'e Expr) -> (&'e Expr, &'e Expr) {
+fn literal_last<'e>(lhs: &'e Expr, rhs: &'e Expr) -> (&'e Expr, &'e Expr) {
     if is_int_literal(lhs) && !is_int_literal(rhs) {
         (rhs, lhs)
     } else {
