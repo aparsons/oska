@@ -143,6 +143,23 @@ pub trait Eq {
     fn eq(self, other: Self) -> Bool
 }
 
+// `==` and `!=` need `Eq`. `()` is `Eq` without an impl.
+impl Eq for Int { fn eq(self, other: Int) -> Bool }
+impl Eq for I8 { fn eq(self, other: I8) -> Bool }
+impl Eq for I16 { fn eq(self, other: I16) -> Bool }
+impl Eq for I32 { fn eq(self, other: I32) -> Bool }
+impl Eq for I64 { fn eq(self, other: I64) -> Bool }
+impl Eq for U8 { fn eq(self, other: U8) -> Bool }
+impl Eq for U16 { fn eq(self, other: U16) -> Bool }
+impl Eq for U32 { fn eq(self, other: U32) -> Bool }
+impl Eq for U64 { fn eq(self, other: U64) -> Bool }
+impl Eq for Bool { fn eq(self, other: Bool) -> Bool }
+impl Eq for String { fn eq(self, other: String) -> Bool }
+impl Eq for Path { fn eq(self, other: Path) -> Bool }
+impl<T: Eq> Eq for Option<T> { fn eq(self, other: Option<T>) -> Bool }
+impl<T: Eq, E: Eq> Eq for Result<T, E> { fn eq(self, other: Result<T, E>) -> Bool }
+impl<T: Eq> Eq for List<T> { fn eq(self, other: List<T>) -> Bool }
+
 pub trait Hash {
     fn hash(self) -> Int
 }

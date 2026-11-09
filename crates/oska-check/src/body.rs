@@ -34,7 +34,7 @@ use oska_syntax::{Diagnostic, Edit, Span};
 use crate::codes;
 use crate::decls::{DeclKind, Decls};
 use crate::infer::Infer;
-use crate::items::{FieldsInfo, FnSig, Items, Lower, Shape};
+use crate::items::{Bound, FieldsInfo, FnSig, Items, Lower, Shape};
 use crate::resolve::closest;
 use crate::ty::Ty;
 
@@ -54,9 +54,19 @@ pub fn module(module: &Module, decls: &Decls, items: &Items, diagnostics: &mut V
                 }
             }
             ItemKind::Trait(t) => {
+                // Inside its own trait, `Self` implements the trait.
                 let lower = Lower::new(decls)
                     .with_generics(&t.generics)
-                    .with_self(Ty::Param("Self".to_string()));
+                    .with_self(Ty::Param("Self".to_string()))
+                    .with_bound(Bound {
+                        param: "Self".to_string(),
+                        trait_name: t.name.name.clone(),
+                        args: t
+                            .generics
+                            .iter()
+                            .map(|g| Ty::Param(g.name.name.clone()))
+                            .collect(),
+                    });
                 for method in &t.methods {
                     if let ItemKind::Fn(f) = &method.kind {
                         function(f, lower.clone(), items, diagnostics);
@@ -995,7 +1005,8 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 Ty::bool()
             }
             BinaryOp::Eq | BinaryOp::Ne => {
-                self.operands(lhs, rhs, None);
+                let ty = self.operands(lhs, rhs, None);
+                self.require_trait(&ty, "Eq", &[], expr.span, &format!("`{}`", op.text()));
                 Ty::bool()
             }
             BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
@@ -1070,6 +1081,96 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             span,
         );
         false
+    }
+
+    // ---- Traits -----------------------------------------------------------
+
+    /// Whether `ty` implements `trait_name<args>`: a generic parameter
+    /// through its bounds, any other type through an `impl` (whose own
+    /// bounds must hold in turn). A type not yet known, or an error,
+    /// counts as implementing everything, so nothing is reported twice.
+    fn implements(&self, ty: &Ty, trait_name: &str, args: &[Ty]) -> bool {
+        let mut trial = self.infer.clone();
+        self.implements_in(&mut trial, ty, trait_name, args, 0)
+    }
+
+    fn implements_in(
+        &self,
+        infer: &mut Infer,
+        ty: &Ty,
+        trait_name: &str,
+        args: &[Ty],
+        depth: usize,
+    ) -> bool {
+        // Bounds on a generic impl can recurse; give up generously.
+        if depth > 16 {
+            return true;
+        }
+        match infer.resolve(ty) {
+            Ty::Error | Ty::Never | Ty::Var(_) => true,
+            Ty::Unit => trait_name == "Eq",
+            Ty::Fn { .. } => false,
+            Ty::Param(p) => self.lower.bounds.iter().any(|b| {
+                b.param == p
+                    && b.trait_name == trait_name
+                    && b.args.len() == args.len()
+                    && b.args.iter().zip(args).all(|(x, y)| infer.unify(x, y))
+            }),
+            ty @ Ty::Named(..) => self.items.impls.iter().any(|imp| {
+                if imp.trait_name != trait_name || imp.trait_args.len() != args.len() {
+                    return false;
+                }
+                let mut attempt = infer.clone();
+                let subst: Vec<(String, Ty)> = imp
+                    .generics
+                    .iter()
+                    .map(|g| (g.clone(), attempt.fresh()))
+                    .collect();
+                let matches = attempt.unify(&imp.target.substitute(&subst), &ty)
+                    && imp
+                        .trait_args
+                        .iter()
+                        .zip(args)
+                        .all(|(x, y)| attempt.unify(&x.substitute(&subst), y));
+                let holds = matches
+                    && imp.bounds.iter().all(|b| {
+                        let param = Ty::Param(b.param.clone()).substitute(&subst);
+                        let args: Vec<Ty> = b.args.iter().map(|a| a.substitute(&subst)).collect();
+                        self.implements_in(&mut attempt, &param, &b.trait_name, &args, depth + 1)
+                    });
+                if holds {
+                    *infer = attempt;
+                }
+                holds
+            }),
+        }
+    }
+
+    /// Report `E0265` at `span` when `ty` does not implement
+    /// `trait_name<args>`, which `what` needs. On a generic parameter of
+    /// this function, the fix adds the bound.
+    fn require_trait(&mut self, ty: &Ty, trait_name: &str, args: &[Ty], span: Span, what: &str) {
+        if self.implements(ty, trait_name, args) {
+            return;
+        }
+        let ty = self.infer.resolve(ty);
+        let bound = Ty::Named(trait_name.to_string(), args.to_vec()).to_string();
+        let message = format!("{what} needs `{ty}: {bound}`, but `{ty}` does not implement `{bound}`");
+        let mut diagnostic = Diagnostic::new(codes::NOT_IMPLEMENTED, message, span);
+        if let Ty::Param(p) = &ty {
+            if let Some(site) = self.lower.sites.iter().rev().find(|s| &s.name == p) {
+                let text = if site.has_bounds {
+                    format!(" + {bound}")
+                } else {
+                    format!(": {bound}")
+                };
+                diagnostic = diagnostic.with_fix(
+                    format!("add the bound `{p}: {bound}`"),
+                    vec![Edit::insert(site.end, text)],
+                );
+            }
+        }
+        self.diagnostics.push(diagnostic);
     }
 
     // ---- Closures, `?`, and `match` ---------------------------------------

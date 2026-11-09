@@ -1,6 +1,6 @@
 //! The value-level view of the prelude and the module: function
-//! signatures, struct and enum shapes, and methods, with every written
-//! type lowered to a [`Ty`].
+//! signatures, struct and enum shapes, traits, impls, and methods, with
+//! every written type lowered to a [`Ty`].
 
 use std::collections::HashMap;
 
@@ -17,6 +17,8 @@ pub struct FnSig {
     pub name: String,
     /// The impl's generic parameters followed by the function's own.
     pub generics: Vec<String>,
+    /// The bounds on `generics`.
+    pub bounds: Vec<Bound>,
     /// For a method: whether its receiver is `var self`. `None` for a
     /// free or associated function.
     pub receiver: Option<bool>,
@@ -24,6 +26,27 @@ pub struct FnSig {
     pub self_ty: Option<Ty>,
     pub params: Vec<(String, Ty)>,
     pub ret: Ty,
+    /// For a method that comes from a trait: the trait's name.
+    pub trait_name: Option<String>,
+}
+
+/// A bound on a generic parameter, `T: Trait<Args>`, or the implicit
+/// `Self: Trait` inside a trait's own methods.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bound {
+    pub param: String,
+    pub trait_name: String,
+    pub args: Vec<Ty>,
+}
+
+/// Where a written generic parameter's bounds end, so that a fix can
+/// add one.
+#[derive(Debug, Clone)]
+pub struct GenericSite {
+    pub name: String,
+    /// The offset just after the name or the last bound.
+    pub end: usize,
+    pub has_bounds: bool,
 }
 
 /// How a struct's or variant's fields are declared, which decides how it
@@ -57,6 +80,65 @@ pub struct EnumInfo {
     pub variants: Vec<(String, FieldsInfo)>,
 }
 
+/// A trait declaration.
+#[derive(Debug, Clone)]
+pub struct TraitInfo {
+    pub generics: Vec<String>,
+    /// Each method, with `Self` as `Ty::Param("Self")` and the trait's
+    /// generics as parameters, and whether it has a default body.
+    pub methods: Vec<(FnSig, bool)>,
+}
+
+/// An `impl Trait<Args> for Target`.
+#[derive(Debug, Clone)]
+pub struct ImplInfo {
+    pub trait_name: String,
+    pub trait_args: Vec<Ty>,
+    pub target: Ty,
+    pub generics: Vec<String>,
+    pub bounds: Vec<Bound>,
+}
+
+impl TraitInfo {
+    /// The trait's method `sig` as seen through a type: `Self` is
+    /// `self_ty`, the trait's generics are `args`, and `outer` generics
+    /// (an impl's) come before the method's own.
+    pub fn method_for(
+        &self,
+        sig: &FnSig,
+        self_ty: &Ty,
+        args: &[Ty],
+        outer: &[String],
+        outer_bounds: &[Bound],
+    ) -> FnSig {
+        let mut subst: Vec<(String, Ty)> = vec![("Self".to_string(), self_ty.clone())];
+        subst.extend(self.generics.iter().cloned().zip(args.iter().cloned()));
+        let bounds = outer_bounds
+            .iter()
+            .cloned()
+            .chain(sig.bounds.iter().map(|b| Bound {
+                param: b.param.clone(),
+                trait_name: b.trait_name.clone(),
+                args: b.args.iter().map(|a| a.substitute(&subst)).collect(),
+            }))
+            .collect();
+        FnSig {
+            name: sig.name.clone(),
+            generics: outer.iter().chain(&sig.generics).cloned().collect(),
+            bounds,
+            receiver: sig.receiver,
+            self_ty: Some(self_ty.clone()),
+            params: sig
+                .params
+                .iter()
+                .map(|(n, t)| (n.clone(), t.substitute(&subst)))
+                .collect(),
+            ret: sig.ret.substitute(&subst),
+            trait_name: sig.trait_name.clone(),
+        }
+    }
+}
+
 /// Everything a body can refer to besides its own locals.
 #[derive(Debug, Default)]
 pub struct Items {
@@ -66,8 +148,12 @@ pub struct Items {
     /// Methods and associated functions from inherent `impl Type` blocks,
     /// by type name.
     pub inherent: HashMap<String, Vec<FnSig>>,
-    /// Methods from `impl Trait for Type` blocks, by type name.
+    /// The methods that `impl Trait for Type` blocks give a type, by type
+    /// name: every method of the trait, each tagged with the trait.
     pub trait_impls: HashMap<String, Vec<FnSig>>,
+    pub traits: HashMap<String, TraitInfo>,
+    /// Every `impl Trait for Type`, the prelude's first.
+    pub impls: Vec<ImplInfo>,
     /// Variants usable without their enum's name (`Some`, `None`, `Ok`,
     /// `Err`): every variant of a prelude enum, mapped to its enum.
     pub bare_variants: HashMap<String, String>,
@@ -80,6 +166,7 @@ impl Items {
         let mut items = Items::default();
         items.add(prelude::module(), decls, true);
         items.add(module, decls, false);
+        items.trait_methods();
         items
     }
 
@@ -120,34 +207,109 @@ impl Items {
                 ItemKind::Impl(imp) => {
                     let lower = Lower::new(decls).with_generics(&imp.generics);
                     let target = lower.ty(&imp.target);
-                    let Some(type_name) = target.head().map(str::to_string) else {
-                        continue;
-                    };
-                    let table = if imp.trait_ref.is_some() {
-                        &mut self.trait_impls
-                    } else {
-                        &mut self.inherent
-                    };
-                    for method in &imp.methods {
-                        if let ItemKind::Fn(f) = &method.kind {
-                            let sig = lower.signature(f, &imp.generics, Some(target.clone()));
-                            table.entry(type_name.clone()).or_default().push(sig);
+                    match &imp.trait_ref {
+                        Some(trait_ref) => {
+                            if let Some((trait_name, trait_args)) = lower.bound(trait_ref) {
+                                self.impls.push(ImplInfo {
+                                    trait_name,
+                                    trait_args,
+                                    target,
+                                    generics: lower.generics.clone(),
+                                    bounds: lower.bounds.clone(),
+                                });
+                            }
+                        }
+                        None => {
+                            let Some(type_name) = target.head().map(str::to_string) else {
+                                continue;
+                            };
+                            for method in &imp.methods {
+                                if let ItemKind::Fn(f) = &method.kind {
+                                    let sig =
+                                        lower.signature(f, &imp.generics, Some(target.clone()));
+                                    self.inherent
+                                        .entry(type_name.clone())
+                                        .or_default()
+                                        .push(sig);
+                                }
+                            }
                         }
                     }
                 }
-                ItemKind::Use(_) | ItemKind::Const(_) | ItemKind::Trait(_) | ItemKind::Test(_) => {}
+                ItemKind::Trait(t) => {
+                    let self_ty = Ty::Param("Self".to_string());
+                    let lower = Lower::new(decls)
+                        .with_generics(&t.generics)
+                        .with_self(self_ty.clone());
+                    let methods = t
+                        .methods
+                        .iter()
+                        .filter_map(|m| match &m.kind {
+                            ItemKind::Fn(f) => {
+                                // The trait's own generics are not in the
+                                // signature's: they are replaced, not
+                                // instantiated, when the method is used.
+                                let mut sig = lower.signature(f, &[], Some(self_ty.clone()));
+                                sig.trait_name = Some(t.name.name.clone());
+                                Some((sig, f.body.is_some()))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    let info = TraitInfo {
+                        generics: lower.generics.clone(),
+                        methods,
+                    };
+                    self.traits.entry(t.name.name.clone()).or_insert(info);
+                }
+                ItemKind::Use(_) | ItemKind::Const(_) | ItemKind::Test(_) => {}
             }
         }
+    }
+
+    /// Give each implementing type its traits' methods.
+    fn trait_methods(&mut self) {
+        for imp in &self.impls {
+            let (Some(type_name), Some(info)) =
+                (imp.target.head(), self.traits.get(&imp.trait_name))
+            else {
+                continue;
+            };
+            let table = self.trait_impls.entry(type_name.to_string()).or_default();
+            for (sig, _) in &info.methods {
+                table.push(info.method_for(
+                    sig,
+                    &imp.target,
+                    &imp.trait_args,
+                    &imp.generics,
+                    &imp.bounds,
+                ));
+            }
+        }
+    }
+
+    /// The type's own method or associated function `name`.
+    pub fn inherent_method(&self, type_name: &str, name: &str) -> Option<&FnSig> {
+        self.inherent.get(type_name)?.iter().find(|s| s.name == name)
+    }
+
+    /// The methods named `name` that the type's traits provide, one per
+    /// trait.
+    pub fn trait_methods_named(&self, type_name: &str, name: &str) -> Vec<&FnSig> {
+        let mut found: Vec<&FnSig> = Vec::new();
+        for sig in self.trait_impls.get(type_name).into_iter().flatten() {
+            if sig.name == name && !found.iter().any(|f| f.trait_name == sig.trait_name) {
+                found.push(sig);
+            }
+        }
+        found
     }
 
     /// The method or associated function `name` of the type `type_name`:
     /// inherent methods first, then methods of implemented traits.
     pub fn method(&self, type_name: &str, name: &str) -> Option<&FnSig> {
-        [&self.inherent, &self.trait_impls]
-            .into_iter()
-            .filter_map(|table| table.get(type_name))
-            .flatten()
-            .find(|s| s.name == name)
+        self.inherent_method(type_name, name)
+            .or_else(|| self.trait_methods_named(type_name, name).into_iter().next())
     }
 
     /// The names of every method of `type_name`, for suggestions.
@@ -168,6 +330,11 @@ impl Items {
 pub struct Lower<'d, 'a> {
     decls: &'d Decls<'a>,
     pub generics: Vec<String>,
+    /// The bounds on `generics`.
+    pub bounds: Vec<Bound>,
+    /// Where each written generic parameter is, for fixes that add a
+    /// bound.
+    pub sites: Vec<GenericSite>,
     pub self_ty: Option<Ty>,
 }
 
@@ -176,14 +343,32 @@ impl<'d, 'a> Lower<'d, 'a> {
         Lower {
             decls,
             generics: Vec::new(),
+            bounds: Vec::new(),
+            sites: Vec::new(),
             self_ty: None,
         }
     }
 
-    /// Bring `generics` into scope as well.
+    /// Bring `generics` and their bounds into scope as well.
     pub fn with_generics(mut self, generics: &[GenericParam]) -> Self {
         self.generics
             .extend(generics.iter().map(|g| g.name.name.clone()));
+        for g in generics {
+            for bound in &g.bounds {
+                if let Some((trait_name, args)) = self.bound(bound) {
+                    self.bounds.push(Bound {
+                        param: g.name.name.clone(),
+                        trait_name,
+                        args,
+                    });
+                }
+            }
+            self.sites.push(GenericSite {
+                name: g.name.name.clone(),
+                end: g.bounds.last().map_or(g.name.span.end, |b| b.span.end),
+                has_bounds: !g.bounds.is_empty(),
+            });
+        }
         self
     }
 
@@ -192,8 +377,33 @@ impl<'d, 'a> Lower<'d, 'a> {
         self
     }
 
+    /// Add the bound `param: trait_name<args>`, such as the implicit
+    /// `Self: Trait` inside a trait.
+    pub fn with_bound(mut self, bound: Bound) -> Self {
+        self.bounds.push(bound);
+        self
+    }
+
     pub fn decls(&self) -> &'d Decls<'a> {
         self.decls
+    }
+
+    /// A written trait reference, such as `From<IoError>`: the trait's
+    /// name and its lowered arguments. `None` when it is not a trait.
+    pub fn bound(&self, ty: &Type) -> Option<(String, Vec<Ty>)> {
+        let TypeKind::Path { segments, args } = &ty.kind else {
+            return None;
+        };
+        let [ident] = segments.as_slice() else {
+            return None;
+        };
+        let decl = self.decls.get(&ident.name)?;
+        if decl.kind != DeclKind::Trait {
+            return None;
+        }
+        let mut lowered: Vec<Ty> = args.iter().map(|a| self.ty(a)).collect();
+        lowered.resize(decl.generics.len(), Ty::Error);
+        Some((ident.name.clone(), lowered))
     }
 
     /// The signature of `f`, declared inside an impl with `outer`
@@ -203,14 +413,21 @@ impl<'d, 'a> Lower<'d, 'a> {
         if let Some(self_ty) = &self_ty {
             lower = lower.with_self(self_ty.clone());
         }
-        let generics = outer
+        let generics: Vec<String> = outer
             .iter()
             .chain(&f.generics)
             .map(|g| g.name.name.clone())
             .collect();
+        let bounds = lower
+            .bounds
+            .iter()
+            .filter(|b| generics.contains(&b.param))
+            .cloned()
+            .collect();
         FnSig {
             name: f.name.name.clone(),
             generics,
+            bounds,
             receiver: f.receiver.as_ref().map(|r| r.mutable),
             self_ty,
             params: f
@@ -219,6 +436,7 @@ impl<'d, 'a> Lower<'d, 'a> {
                 .map(|p| (p.name.name.clone(), lower.ty(&p.ty)))
                 .collect(),
             ret: f.return_type.as_ref().map_or(Ty::Unit, |t| lower.ty(t)),
+            trait_name: None,
         }
     }
 

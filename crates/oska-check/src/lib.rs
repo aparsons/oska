@@ -96,6 +96,7 @@ pub(crate) mod codes {
     pub const TRY_OPERAND: &str = "E0241";
     pub const TRY_ERROR_TYPE: &str = "E0242";
     pub const TRY_KIND: &str = "E0243";
+    pub const NOT_IMPLEMENTED: &str = "E0265";
 }
 
 /// Options that change what is checked.
