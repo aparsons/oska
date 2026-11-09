@@ -41,6 +41,9 @@ pub struct Program {
     /// free function, `Type.method` for a method or associated function
     /// of an inherent impl. (Trait impl methods are not lowered yet.)
     pub functions: BTreeMap<String, Function>,
+    /// The module each `use` imports, such as `std.sql`, with the span of
+    /// its path, in source order.
+    pub imports: Vec<(String, Span)>,
 }
 
 /// A function with a body.
