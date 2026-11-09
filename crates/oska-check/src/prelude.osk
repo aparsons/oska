@@ -91,8 +91,8 @@ pub cap struct TestContext {
 
 impl TestContext {
     pub fn assert(self, cond: Bool)
-    pub fn assert_eq<T>(self, actual: T, expected: T)
-    pub fn assert_ne<T>(self, actual: T, other: T)
+    pub fn assert_eq<T: Eq>(self, actual: T, expected: T)
+    pub fn assert_ne<T: Eq>(self, actual: T, other: T)
     pub fn fail(self, message: String)
 }
 

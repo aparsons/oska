@@ -77,6 +77,23 @@ fn an_option_of_a_type_without_eq_cannot_be_compared() {
     );
 }
 
+#[test]
+fn a_test_can_assert_equality_of_eq_values() {
+    assert_ok("test \"equal\" {\n    t.assert_eq(1, 1)\n    t.assert_ne(\"a\", \"b\")\n}");
+}
+
+#[test]
+fn a_test_cannot_assert_equality_of_a_type_without_eq() {
+    assert_errors(
+        "struct Point { x: Int }\n\
+         test \"points\" {\n    t.assert_eq(Point(x: 1), Point(x: 1))\n    t.assert_ne(Point(x: 1), Point(x: 2))\n}",
+        &[
+            ("E0265", "t.assert_eq(Point(x: 1), Point(x: 1))"),
+            ("E0265", "t.assert_ne(Point(x: 1), Point(x: 2))"),
+        ],
+    );
+}
+
 // ---- Methods on generic parameters and bounds at call sites -----------------
 
 #[test]
