@@ -88,6 +88,7 @@ pub(crate) mod codes {
     pub const CANNOT_INFER: &str = "E0233";
     pub const NOT_A_VALUE: &str = "E0234";
     pub const NOT_ITERABLE: &str = "E0235";
+    pub const CAPTURING_CLOSURE: &str = "E0270";
 }
 
 /// Options that change what is checked.
