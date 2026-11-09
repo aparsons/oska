@@ -125,9 +125,27 @@ impl Infer {
     /// [`Infer::unify`], saying why it failed.
     pub fn flow(&mut self, actual: &Ty, expected: &Ty) -> Result<(), Mismatch> {
         let attempts = [
-            (Rules { cap: true, trust: true }, None),
-            (Rules { cap: false, trust: true }, Some(Mismatch::CapLost)),
-            (Rules { cap: true, trust: false }, Some(Mismatch::TrustLost)),
+            (
+                Rules {
+                    cap: true,
+                    trust: true,
+                },
+                None,
+            ),
+            (
+                Rules {
+                    cap: false,
+                    trust: true,
+                },
+                Some(Mismatch::CapLost),
+            ),
+            (
+                Rules {
+                    cap: true,
+                    trust: false,
+                },
+                Some(Mismatch::TrustLost),
+            ),
         ];
         let saved = self.solutions.clone();
         for (rules, mismatch) in attempts {

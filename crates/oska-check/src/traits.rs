@@ -166,7 +166,8 @@ fn same_type(a: &Ty, b: &Ty) -> bool {
         (Ty::Named(n1, a1, t1), Ty::Named(n2, a2, t2)) => {
             n1 == n2
                 && t1 == t2
-                && a1.len() == a2.len() && a1.iter().zip(a2).all(|(x, y)| same_type(x, y))
+                && a1.len() == a2.len()
+                && a1.iter().zip(a2).all(|(x, y)| same_type(x, y))
         }
         (
             Ty::Fn {
