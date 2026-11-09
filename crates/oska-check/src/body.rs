@@ -29,8 +29,9 @@
 //!   captures are the names it resolves below the stack height at which
 //!   the closure's parameters were pushed (plus `self`). Each closure
 //!   being checked has a frame recording them; a closure that captures a
-//!   capability-bearing value is a `cap fn`. Unification ignores `cap`,
-//!   so [`Body::expect`] reports a `cap fn` used as a plain `fn`.
+//!   capability-bearing value is a `cap fn`. Unification itself enforces
+//!   that a `cap fn` never flows into a plain `fn` (`infer.rs`), so every
+//!   route a value takes is covered; [`Body::mismatch`] reports it.
 
 use oska_syntax::ast::{
     Arg, BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, ItemKind, Module, StmtKind,
@@ -40,7 +41,7 @@ use oska_syntax::{Diagnostic, Edit, Span};
 
 use crate::codes;
 use crate::decls::{DeclKind, Decls};
-use crate::infer::Infer;
+use crate::infer::{Infer, Mismatch};
 use crate::items::{Bound, FieldsInfo, FnSig, Items, Lower, Shape};
 use crate::resolve::closest;
 use crate::ty::Ty;
@@ -363,32 +364,35 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     /// Unify `actual` with `expected`, reporting `E0220` at `span` when
     /// they differ.
     fn expect(&mut self, actual: &Ty, expected: &Ty, span: Span) -> Ty {
-        if self.infer.unify(actual, expected) {
-            // Unification ignores `cap`, so a `cap fn` hidden where a plain
-            // `fn` is expected is caught here.
-            let actual_resolved = self.infer.resolve(actual);
-            let expected_resolved = self.infer.resolve(expected);
-            if cap_lost(&actual_resolved, &expected_resolved, true) {
-                self.error(
-                    codes::CAPTURING_CLOSURE,
-                    format!(
-                        "expected `{expected_resolved}`, found `{actual_resolved}`: a `cap fn` \
-                         can carry authority, so it cannot be used as a plain `fn`"
-                    ),
-                    span,
-                );
-                return Ty::Error;
+        match self.infer.flow(actual, expected) {
+            Ok(()) => actual.clone(),
+            Err(mismatch) => {
+                self.mismatch(mismatch, actual, expected, span);
+                Ty::Error
             }
-            return actual.clone();
         }
+    }
+
+    /// Report that `actual` cannot flow into `expected`: `E0270` when only
+    /// the `cap` rule stops it, `E0220` otherwise.
+    fn mismatch(&mut self, mismatch: Mismatch, actual: &Ty, expected: &Ty, span: Span) {
         let expected = self.infer.resolve(expected);
         let actual = self.infer.resolve(actual);
-        self.error(
-            codes::MISMATCH,
-            format!("expected `{expected}`, found `{actual}`"),
-            span,
-        );
-        Ty::Error
+        match mismatch {
+            Mismatch::CapLost => self.error(
+                codes::CAPTURING_CLOSURE,
+                format!(
+                    "expected `{expected}`, found `{actual}`: a `cap fn` can carry authority, \
+                     so it cannot be used as a plain `fn`"
+                ),
+                span,
+            ),
+            Mismatch::Types => self.error(
+                codes::MISMATCH,
+                format!("expected `{expected}`, found `{actual}`"),
+                span,
+            ),
+        }
     }
 
     /// The type of `expr`. `expected`, when given, guides inference (an
@@ -938,7 +942,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             .collect();
         if let (Some(actual), Some(declared)) = (self_ty, &sig.self_ty) {
             let declared = declared.substitute(&subst);
-            self.infer.unify(&declared, actual);
+            self.infer.unify(actual, &declared);
         }
         Callable {
             description: format!("`{}`", sig.name),
@@ -1432,7 +1436,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     .iter()
                     .map(|g| (g.clone(), attempt.fresh()))
                     .collect();
-                let matches = attempt.unify(&imp.target.substitute(&subst), &ty)
+                let matches = attempt.unify(&ty, &imp.target.substitute(&subst))
                     && imp
                         .trait_args
                         .iter()
@@ -1506,10 +1510,12 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             let ty = match (&param.ty, hint) {
                 (Some(written), hint) => {
                     let ty = self.lower.ty(written);
-                    if let Some(hint) = hint {
-                        self.expect(&ty, &hint, written.span);
+                    match hint {
+                        // The caller passes a value of the expected
+                        // parameter type into the written one.
+                        Some(hint) => self.expect(&hint, &ty, written.span),
+                        None => ty,
                     }
-                    ty
                 }
                 (None, Some(hint)) => hint,
                 (None, None) => self.infer.fresh(),
@@ -1609,7 +1615,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 } else {
                     Ty::Named(kind.clone(), vec![self.infer.fresh()])
                 };
-                self.infer.unify(&ret, &failure);
+                self.infer.unify(&failure, &ret);
             }
             Ty::Named(name, ret_args) if name == kind => {
                 if kind == "Result" && ret_args.len() == 2 {
@@ -1643,8 +1649,13 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     /// whose error type is `to`. They must be the same type, or `to` must
     /// convert from `from` (`E0242`).
     fn propagate_error(&mut self, from: &Ty, to: &Ty, span: Span) {
-        if self.infer.unify(from, to) {
-            return;
+        match self.infer.flow(from, to) {
+            Ok(()) => return,
+            Err(Mismatch::CapLost) => {
+                self.mismatch(Mismatch::CapLost, from, to, span);
+                return;
+            }
+            Err(Mismatch::Types) => {}
         }
         let from = self.infer.resolve(from);
         let to = self.infer.resolve(to);
@@ -1856,42 +1867,6 @@ fn is_int_literal(expr: &Expr) -> bool {
             op: UnaryOp::Neg,
             operand,
         } => matches!(operand.kind, ExprKind::Int(_)),
-        _ => false,
-    }
-}
-
-/// Whether using a value of type `actual` as `expected` (types that
-/// unify) would pass a `cap fn` off as a plain `fn`. `positive` is false
-/// inside a function type's parameters, where the direction flips.
-fn cap_lost(actual: &Ty, expected: &Ty, positive: bool) -> bool {
-    match (actual, expected) {
-        (
-            Ty::Fn {
-                cap: actual_cap,
-                params: actual_params,
-                ret: actual_ret,
-            },
-            Ty::Fn {
-                cap: expected_cap,
-                params: expected_params,
-                ret: expected_ret,
-            },
-        ) => {
-            let lost = if positive {
-                *actual_cap && !*expected_cap
-            } else {
-                *expected_cap && !*actual_cap
-            };
-            lost || cap_lost(actual_ret, expected_ret, positive)
-                || actual_params
-                    .iter()
-                    .zip(expected_params)
-                    .any(|(a, e)| cap_lost(a, e, !positive))
-        }
-        (Ty::Named(_, actual_args), Ty::Named(_, expected_args)) => actual_args
-            .iter()
-            .zip(expected_args)
-            .any(|(a, e)| cap_lost(a, e, positive)),
         _ => false,
     }
 }
