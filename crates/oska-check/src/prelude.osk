@@ -8,19 +8,28 @@
 // The primitive types (`Int`, the sized integers, `Bool`, `String`) and
 // `()` are built into the checker, not declared here.
 //
-// Grow this file only as the examples and the tests need it. Capability
-// reads return plain `String` until untrusted values (#8) land.
+// Grow this file only as the examples and the tests need it.
+//
+// Trust (ADR 0006): a `String` parameter or result is trusted text, a
+// **structural position**. `Untrusted<String>` is untrusted text: sources
+// return it, and a **data position** declares it, which also accepts
+// trusted text.
 
 // ---- Built-in capabilities -------------------------------------------
 
 #[capability]
 pub struct Stdin { handle: Int }
 
+impl Stdin {
+    // The next line, without its line break, or `None` at end of input.
+    pub fn read_line(self) -> Result<Option<Untrusted<String>>, IoError>
+}
+
 #[capability]
 pub struct Stdout { handle: Int }
 
 impl Stdout {
-    pub fn println(self, line: String) -> Result<(), IoError>
+    pub fn println(self, line: Untrusted<String>) -> Result<(), IoError>
 }
 
 #[capability]
@@ -40,7 +49,7 @@ pub struct FsRead { handle: Int }
 
 impl FsRead {
     pub fn restrict_to(self, dir: String) -> FsRead
-    pub fn read_to_string(self, path: Path) -> Result<String, IoError>
+    pub fn read_to_string(self, path: Path) -> Result<Untrusted<String>, IoError>
 }
 
 #[capability]
@@ -62,6 +71,11 @@ pub struct NetListen { handle: Int }
 
 #[capability]
 pub struct Env { handle: Int }
+
+impl Env {
+    // The environment variable `name`, or `None` when it is not set.
+    pub fn get(self, name: String) -> Option<Untrusted<String>>
+}
 
 #[capability]
 pub struct Clock { handle: Int }
@@ -137,14 +151,14 @@ pub struct Path { raw: String }
 
 impl Path {
     pub fn new(raw: String) -> Path
-    pub fn from(raw: String) -> Path
+    pub fn from(raw: Untrusted<String>) -> Path
 }
 
 // The program's command-line arguments: a program input, not a capability.
 pub struct Args { handle: Int }
 
 impl Args {
-    pub fn get(self, index: Int) -> Option<String>
+    pub fn get(self, index: Int) -> Option<Untrusted<String>>
 }
 
 // Plain data: code may construct one to report its own failures.

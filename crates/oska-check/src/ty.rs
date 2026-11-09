@@ -9,8 +9,10 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
     /// A named type with its arguments: a primitive (`Int`, `String`), a
-    /// prelude or user struct or enum, or a built-in capability.
-    Named(String, Vec<Ty>),
+    /// prelude or user struct or enum, or a built-in capability. Its
+    /// [`Trust`] matters only for text (see [`Ty::is_text`]); every other
+    /// type is always [`Trust::Trusted`].
+    Named(String, Vec<Ty>, Trust),
     /// `()`.
     Unit,
     /// `fn(T) -> U`, or `cap fn(T) -> U` when `cap` is set.
@@ -32,12 +34,27 @@ pub enum Ty {
     Error,
 }
 
+/// The trust flag on a text type (ADR 0006). `Untrusted<String>` is
+/// written syntax for an untrusted `String`, not a generic type. Trusted
+/// text may flow into an untrusted slot; untrusted text never flows into
+/// a trusted one (see `infer.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Trust {
+    #[default]
+    Trusted,
+    Untrusted,
+}
+
 // Prelude types and traits the checker gives special treatment, by name.
 // Every comparison with one of these names goes through a constant here.
 
 pub const BOOL: &str = "Bool";
 pub const INT: &str = "Int";
 pub const STRING: &str = "String";
+/// The syntax for untrusted text, as in `Untrusted<String>`.
+pub const UNTRUSTED: &str = "Untrusted";
+/// The types that carry a trust flag.
+const TEXT: &[&str] = &[STRING];
 pub const OPTION: &str = "Option";
 pub const RESULT: &str = "Result";
 pub const LIST: &str = "List";
@@ -73,7 +90,12 @@ const INTEGERS: &[(&str, i128, i128)] = &[
 impl Ty {
     /// A named type without arguments, such as `Int`.
     pub fn named(name: &str) -> Ty {
-        Ty::Named(name.to_string(), Vec::new())
+        Ty::Named(name.to_string(), Vec::new(), Trust::Trusted)
+    }
+
+    /// A named type with arguments, such as `Result<T, E>`. Trusted.
+    pub fn generic(name: &str, args: Vec<Ty>) -> Ty {
+        Ty::Named(name.to_string(), args, Trust::Trusted)
     }
 
     pub fn int() -> Ty {
@@ -84,25 +106,41 @@ impl Ty {
         Ty::named(BOOL)
     }
 
+    /// Trusted `String`.
     pub fn string() -> Ty {
         Ty::named(STRING)
     }
 
+    /// A type that carries a trust flag.
+    pub fn is_text(&self) -> bool {
+        matches!(self, Ty::Named(name, _, _) if TEXT.contains(&name.as_str()))
+    }
+
+    /// This text type with trust `trust`; any other type unchanged.
+    pub fn with_trust(self, trust: Trust) -> Ty {
+        match self {
+            Ty::Named(name, args, _) if TEXT.contains(&name.as_str()) => {
+                Ty::Named(name, args, trust)
+            }
+            other => other,
+        }
+    }
+
     /// `List<element>`.
     pub fn list(element: Ty) -> Ty {
-        Ty::Named(LIST.to_string(), vec![element])
+        Ty::generic(LIST, vec![element])
     }
 
     /// `Range<element>`.
     pub fn range(element: Ty) -> Ty {
-        Ty::Named(RANGE.to_string(), vec![element])
+        Ty::generic(RANGE, vec![element])
     }
 
     /// The arguments of this type when it is the named type `name` with
     /// `arity` arguments, such as `[T, E]` for `Result<T, E>`.
     pub fn args_of(&self, name: &str, arity: usize) -> Option<&[Ty]> {
         match self {
-            Ty::Named(n, args) if n == name && args.len() == arity => Some(args),
+            Ty::Named(n, args, _) if n == name && args.len() == arity => Some(args),
             _ => None,
         }
     }
@@ -110,7 +148,7 @@ impl Ty {
     /// The name of a named type, such as `List` for `List<Int>`.
     pub fn head(&self) -> Option<&str> {
         match self {
-            Ty::Named(name, _) => Some(name),
+            Ty::Named(name, _, _) => Some(name),
             _ => None,
         }
     }
@@ -143,7 +181,7 @@ impl Ty {
     /// type's result. A function type's parameters do not count.
     pub fn holds(&self, name: &str) -> bool {
         match self {
-            Ty::Named(n, args) => n == name || args.iter().any(|a| a.holds(name)),
+            Ty::Named(n, args, _) => n == name || args.iter().any(|a| a.holds(name)),
             Ty::Fn { ret, .. } => ret.holds(name),
             Ty::Unit | Ty::Param(_) | Ty::Var(_) | Ty::Never | Ty::Error => false,
         }
@@ -153,7 +191,7 @@ impl Ty {
     pub fn has_vars(&self) -> bool {
         match self {
             Ty::Var(_) => true,
-            Ty::Named(_, args) => args.iter().any(Ty::has_vars),
+            Ty::Named(_, args, _) => args.iter().any(Ty::has_vars),
             Ty::Fn { params, ret, .. } => params.iter().any(Ty::has_vars) || ret.has_vars(),
             Ty::Unit | Ty::Param(_) | Ty::Never | Ty::Error => false,
         }
@@ -166,9 +204,10 @@ impl Ty {
                 .iter()
                 .find(|(n, _)| n == name)
                 .map_or_else(|| self.clone(), |(_, ty)| ty.clone()),
-            Ty::Named(name, args) => Ty::Named(
+            Ty::Named(name, args, trust) => Ty::Named(
                 name.clone(),
                 args.iter().map(|a| a.substitute(subst)).collect(),
+                *trust,
             ),
             Ty::Fn { cap, params, ret } => Ty::Fn {
                 cap: *cap,
@@ -185,7 +224,10 @@ impl Ty {
 impl fmt::Display for Ty {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Ty::Named(name, args) => {
+            Ty::Named(name, args, trust) => {
+                if *trust == Trust::Untrusted {
+                    write!(f, "{UNTRUSTED}<")?;
+                }
                 write!(f, "{name}")?;
                 if !args.is_empty() {
                     write!(f, "<")?;
@@ -195,6 +237,9 @@ impl fmt::Display for Ty {
                         }
                         write!(f, "{arg}")?;
                     }
+                    write!(f, ">")?;
+                }
+                if *trust == Trust::Untrusted {
                     write!(f, ">")?;
                 }
                 Ok(())

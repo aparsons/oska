@@ -215,10 +215,7 @@ impl Body<'_, '_, '_> {
             .iter()
             .map(|g| (g.clone(), self.infer.fresh()))
             .collect();
-        let ret = Ty::Named(
-            type_name.to_string(),
-            subst.iter().map(|(_, t)| t.clone()).collect(),
-        );
+        let ret = Ty::generic(type_name, subst.iter().map(|(_, t)| t.clone()).collect());
         Callable {
             description,
             params: fields.instantiate(&subst),
@@ -288,7 +285,7 @@ impl Body<'_, '_, '_> {
         let receiver = self.infer(base);
         let receiver = self.infer.resolve(&receiver);
         let found = match &receiver {
-            Ty::Named(type_name, _) => self.type_method(&receiver, type_name, name),
+            Ty::Named(type_name, _, _) => self.type_method(&receiver, type_name, name),
             Ty::Unit | Ty::Fn { .. } => self.type_method(&receiver, &receiver.to_string(), name),
             Ty::Param(p) => self.bound_method(p, name),
             Ty::Var(_) => {

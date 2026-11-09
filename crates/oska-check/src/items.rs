@@ -9,7 +9,7 @@ use oska_syntax::ast::{Field, Fields, FnDecl, GenericParam, ItemKind, Module, Ty
 use crate::authority::capability_bearing;
 use crate::collect::{DeclKind, Decls};
 use crate::prelude;
-use crate::ty::{self, Ty};
+use crate::ty::{self, Trust, Ty};
 
 /// A function or method signature. Generic parameters appear in the
 /// types as [`Ty::Param`]; instantiate them before use.
@@ -583,6 +583,16 @@ impl<'d, 'a> Lower<'d, 'a> {
                 if name == ty::SELF {
                     return self.self_ty.clone().unwrap_or(Ty::Error);
                 }
+                if name == ty::UNTRUSTED {
+                    // Trust is a flag on text, not a type (ADR 0006).
+                    return match args.as_slice() {
+                        [arg] => match self.ty(arg) {
+                            text if text.is_text() => text.with_trust(Trust::Untrusted),
+                            _ => Ty::Error,
+                        },
+                        _ => Ty::Error,
+                    };
+                }
                 match self.decls.get(name) {
                     Some(decl) if decl.kind != DeclKind::Trait => {
                         // A wrong number of arguments is a declaration error;
@@ -590,7 +600,7 @@ impl<'d, 'a> Lower<'d, 'a> {
                         // dropped, so checking can go on.
                         let mut lowered: Vec<Ty> = args.iter().map(|a| self.ty(a)).collect();
                         lowered.resize(decl.generics.len(), Ty::Error);
-                        Ty::Named(name.to_string(), lowered)
+                        Ty::generic(name, lowered)
                     }
                     _ => Ty::Error,
                 }

@@ -380,7 +380,8 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     }
 
     /// Report that `actual` cannot flow into `expected`: `E0270` when only
-    /// the `cap` rule stops it, `E0220` otherwise.
+    /// the `cap` rule stops it, `E0300` when only the trust rule does,
+    /// `E0220` otherwise.
     fn mismatch(&mut self, mismatch: Mismatch, actual: &Ty, expected: &Ty, span: Span) {
         let expected = self.infer.resolve(expected);
         let actual = self.infer.resolve(actual);
@@ -390,6 +391,15 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 format!(
                     "expected `{expected}`, found `{actual}`: a `cap fn` can carry authority, \
                      so it cannot be used as a plain `fn`"
+                ),
+                span,
+            ),
+            Mismatch::TrustLost => self.error(
+                codes::UNTRUSTED_TEXT,
+                format!(
+                    "expected `{expected}`, found `{actual}`: untrusted text cannot be used \
+                     where trusted text is required; check it with a validator, or vouch for \
+                     it with `.assume_trusted()`"
                 ),
                 span,
             ),
@@ -635,7 +645,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 );
                 return Ty::Error;
             }
-            Ty::Named(type_name, args) => {
+            Ty::Named(type_name, args, _) => {
                 if let Some(info) = self.items.structs.get(type_name) {
                     if let Some(field_ty) = info.fields.field(&name.name) {
                         if info.hidden_fields.contains(&name.name) {
@@ -950,7 +960,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             return;
         }
         let ty = self.infer.resolve(ty);
-        let bound = Ty::Named(trait_name.to_string(), args.to_vec()).to_string();
+        let bound = Ty::generic(trait_name, args.to_vec()).to_string();
         let message =
             format!("{what} needs `{ty}: {bound}`, but `{ty}` does not implement `{bound}`");
         let mut diagnostic = Diagnostic::new(codes::NOT_IMPLEMENTED, message, span);
@@ -1171,7 +1181,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             } => {
                 let ty = self.infer(iter);
                 let element = match self.infer.resolve(&ty) {
-                    Ty::Named(name, args)
+                    Ty::Named(name, args, _)
                         if (name == ty::LIST || name == ty::RANGE) && args.len() == 1 =>
                     {
                         args[0].clone()

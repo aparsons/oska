@@ -6,10 +6,13 @@
 //!
 //! Unification is directional: a value of the `actual` type flows where
 //! the `expected` type is required. The types must be equal except for
-//! the **`cap` rule**, which unification enforces itself, so that no route
-//! a value can take turns a `cap fn` into a plain `fn`.
+//! two one-way **flags**, which unification enforces itself so that no
+//! route a value can take loses them:
+//!
+//! - the **`cap` rule**: a `cap fn` never becomes a plain `fn`;
+//! - the **trust rule** (ADR 0006): untrusted text never becomes trusted.
 
-use crate::ty::Ty;
+use crate::ty::{Trust, Ty};
 
 /// Why a value cannot flow where a type is expected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,16 +21,17 @@ pub enum Mismatch {
     Types,
     /// The types match, except that a `cap fn` would become a plain `fn`.
     CapLost,
+    /// The types match, except that untrusted text would become trusted.
+    TrustLost,
 }
 
 /// Which way values flow at a position inside a type: the same way as the
-/// whole (`Positive`), against it (`Negative`, inside a function type's
-/// parameters), or `Ignore` to skip the `cap` rule.
+/// whole (`Positive`), or against it (`Negative`, inside a function
+/// type's parameters).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Polarity {
     Positive,
     Negative,
-    Ignore,
 }
 
 impl Polarity {
@@ -35,9 +39,26 @@ impl Polarity {
         match self {
             Polarity::Positive => Polarity::Negative,
             Polarity::Negative => Polarity::Positive,
-            Polarity::Ignore => Polarity::Ignore,
         }
     }
+
+    /// Whether a one-way flag survives: `a` and `b` say whether each side
+    /// has the flag (is a `cap fn`, is untrusted). A flagged value never
+    /// flows into an unflagged slot.
+    fn keeps(self, a: bool, b: bool) -> bool {
+        match self {
+            Polarity::Positive => !a || b,
+            Polarity::Negative => !b || a,
+        }
+    }
+}
+
+/// Which one-way flags a unification enforces. [`Infer::flow`] retries
+/// with one turned off to find out which flag was the only obstacle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Rules {
+    cap: bool,
+    trust: bool,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -68,8 +89,8 @@ impl Infer {
     /// Replace every solved variable in `ty`, all the way down.
     pub fn resolve(&self, ty: &Ty) -> Ty {
         match self.shallow(ty) {
-            Ty::Named(name, args) => {
-                Ty::Named(name, args.iter().map(|a| self.resolve(a)).collect())
+            Ty::Named(name, args, trust) => {
+                Ty::Named(name, args.iter().map(|a| self.resolve(a)).collect(), trust)
             }
             Ty::Fn { cap, params, ret } => Ty::Fn {
                 cap,
@@ -85,34 +106,44 @@ impl Infer {
     /// caller can report one mismatch and carry on. [`Ty::Error`] and
     /// [`Ty::Never`] unify with anything.
     ///
-    /// The types must be equal, except for the `cap` rule: a `cap fn` can
-    /// carry authority, so it never flows into a plain `fn`, while a plain
-    /// `fn` may flow into a `cap fn`. The rule applies at every depth:
-    /// covariantly through type arguments and results, contravariantly
-    /// through a function type's parameters. An inference variable is
-    /// solved to exactly the type it meets, so a variable solved to a
-    /// plain `fn` rejects a `cap fn` later.
+    /// The types must be equal, except for two one-way flags:
+    ///
+    /// - a `cap fn` can carry authority, so it never flows into a plain
+    ///   `fn`, while a plain `fn` may flow into a `cap fn`;
+    /// - untrusted text never flows into trusted text, while trusted text
+    ///   may flow into untrusted.
+    ///
+    /// Both rules apply at every depth: covariantly through type arguments
+    /// and results, contravariantly through a function type's parameters.
+    /// An inference variable is solved to exactly the type it meets, so a
+    /// variable solved to a plain `fn` rejects a `cap fn` later, and one
+    /// solved to trusted text rejects untrusted text later.
     pub fn unify(&mut self, actual: &Ty, expected: &Ty) -> bool {
         self.flow(actual, expected).is_ok()
     }
 
     /// [`Infer::unify`], saying why it failed.
     pub fn flow(&mut self, actual: &Ty, expected: &Ty) -> Result<(), Mismatch> {
+        let attempts = [
+            (Rules { cap: true, trust: true }, None),
+            (Rules { cap: false, trust: true }, Some(Mismatch::CapLost)),
+            (Rules { cap: true, trust: false }, Some(Mismatch::TrustLost)),
+        ];
         let saved = self.solutions.clone();
-        if self.unify_inner(actual, expected, Polarity::Positive) {
-            return Ok(());
+        for (rules, mismatch) in attempts {
+            let ok = self.unify_inner(actual, expected, Polarity::Positive, rules);
+            if ok && mismatch.is_none() {
+                return Ok(());
+            }
+            self.solutions = saved.clone();
+            if let (true, Some(mismatch)) = (ok, mismatch) {
+                return Err(mismatch);
+            }
         }
-        self.solutions = saved.clone();
-        let only_cap = self.unify_inner(actual, expected, Polarity::Ignore);
-        self.solutions = saved;
-        Err(if only_cap {
-            Mismatch::CapLost
-        } else {
-            Mismatch::Types
-        })
+        Err(Mismatch::Types)
     }
 
-    fn unify_inner(&mut self, a: &Ty, b: &Ty, polarity: Polarity) -> bool {
+    fn unify_inner(&mut self, a: &Ty, b: &Ty, polarity: Polarity, rules: Rules) -> bool {
         let a = self.shallow(a);
         let b = self.shallow(b);
         match (&a, &b) {
@@ -125,13 +156,16 @@ impl Infer {
                 self.solutions[*v as usize] = Some(other.clone());
                 true
             }
-            (Ty::Named(n1, a1), Ty::Named(n2, a2)) => {
+            (Ty::Named(n1, a1, t1), Ty::Named(n2, a2, t2)) => {
+                let trust_kept = !rules.trust
+                    || polarity.keeps(*t1 == Trust::Untrusted, *t2 == Trust::Untrusted);
                 n1 == n2
+                    && trust_kept
                     && a1.len() == a2.len()
                     && a1
                         .iter()
                         .zip(a2)
-                        .all(|(x, y)| self.unify_inner(x, y, polarity))
+                        .all(|(x, y)| self.unify_inner(x, y, polarity, rules))
             }
             (Ty::Unit, Ty::Unit) => true,
             (Ty::Param(p), Ty::Param(q)) => p == q,
@@ -147,21 +181,15 @@ impl Infer {
                     ret: r2,
                 },
             ) => {
-                // `a` flows into `b` when positive, `b` into `a` when
-                // negative.
-                let cap_kept = match polarity {
-                    Polarity::Positive => !*c1 || *c2,
-                    Polarity::Negative => !*c2 || *c1,
-                    Polarity::Ignore => true,
-                };
+                let cap_kept = !rules.cap || polarity.keeps(*c1, *c2);
                 let flipped = polarity.flip();
                 cap_kept
                     && p1.len() == p2.len()
                     && p1
                         .iter()
                         .zip(p2)
-                        .all(|(x, y)| self.unify_inner(x, y, flipped))
-                    && self.unify_inner(r1, r2, polarity)
+                        .all(|(x, y)| self.unify_inner(x, y, flipped, rules))
+                    && self.unify_inner(r1, r2, polarity, rules)
             }
             _ => false,
         }
@@ -170,7 +198,7 @@ impl Infer {
     fn occurs(&self, v: u32, ty: &Ty) -> bool {
         match self.shallow(ty) {
             Ty::Var(w) => v == w,
-            Ty::Named(_, args) => args.iter().any(|a| self.occurs(v, a)),
+            Ty::Named(_, args, _) => args.iter().any(|a| self.occurs(v, a)),
             Ty::Fn { params, ret, .. } => {
                 params.iter().any(|p| self.occurs(v, p)) || self.occurs(v, &ret)
             }

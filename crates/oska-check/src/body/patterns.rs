@@ -158,7 +158,7 @@ impl Body<'_, '_, '_> {
         };
         let (name, args) = match self.infer.resolve(ty) {
             Ty::Unit => return Some(vec![ctor("()", Vec::new())]),
-            Ty::Named(name, args) => (name, args),
+            Ty::Named(name, args, _) => (name, args),
             _ => return None,
         };
         if name == ty::BOOL {
