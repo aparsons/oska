@@ -6,13 +6,18 @@
 //! exits with code 101. `docs/runtime.md` documents every code; a test
 //! keeps the two in step.
 //!
-//! To add a code: add a constant here, list it in [`codes::ALL`], and add
-//! its row to `docs/runtime.md`.
+//! To add a code: add a constant to [`codes`], list it in [`codes::ALL`],
+//! and add its row to `docs/runtime.md`.
 
 use oska_syntax::{Diagnostic, Span};
 
-/// The stable codes, `P0001` upwards.
+/// The stable codes the runtime reports: refusals (`E038x`) and panics
+/// (`P0001` upwards).
 pub mod codes {
+    /// The program uses something the interpreter cannot run yet. It is
+    /// refused before it starts.
+    pub const UNSUPPORTED: &str = "E0380";
+
     /// Integer arithmetic overflowed its type.
     pub const OVERFLOW: &str = "P0001";
     /// `todo()` was reached.
@@ -20,8 +25,8 @@ pub mod codes {
     /// An integer was divided by zero, or its remainder taken.
     pub const DIVISION_BY_ZERO: &str = "P0004";
 
-    /// Every panic code, in order.
-    pub const ALL: &[&str] = &[OVERFLOW, TODO, DIVISION_BY_ZERO];
+    /// Every code, in the order `docs/runtime.md` lists them.
+    pub const ALL: &[&str] = &[UNSUPPORTED, OVERFLOW, TODO, DIVISION_BY_ZERO];
 }
 
 /// A panic: the program has a bug.

@@ -7,16 +7,20 @@
 use oska_syntax::Span;
 
 use crate::host::Host;
-use crate::interp::Unwind;
 use crate::panics::{codes, Panic};
 use crate::value::Value;
 
 /// An intrinsic: the host, the arguments (the receiver first), and the
 /// call's span, for panics.
-pub type Intrinsic = fn(&mut dyn Host, Vec<Value>, Span) -> Result<Value, Unwind>;
+pub type Intrinsic = fn(&mut dyn Host, Vec<Value>, Span) -> Result<Value, Panic>;
 
 /// Every intrinsic, by qualified name.
-pub const INTRINSICS: &[(&str, Intrinsic)] = &[("Stdout.println", stdout_println), ("todo", todo)];
+pub const INTRINSICS: &[(&str, Intrinsic)] = &[
+    ("Int.to_string", int_to_string),
+    ("Stdout.println", stdout_println),
+    ("String.to_string", string_to_string),
+    ("todo", todo),
+];
 
 /// The intrinsic named `name`.
 pub fn lookup(name: &str) -> Option<Intrinsic> {
@@ -32,7 +36,7 @@ fn text(args: &[Value], index: usize) -> &str {
 }
 
 /// `Stdout.println(self, line)`: the line and a newline.
-fn stdout_println(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Unwind> {
+fn stdout_println(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
     let line = format!("{}\n", text(&args, 1));
     Ok(match host.write_stdout(&line) {
         Ok(()) => Value::ok(Value::Unit),
@@ -42,11 +46,20 @@ fn stdout_println(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Valu
 
 /// `todo()`: a placeholder for code not yet written, which panics when
 /// reached.
-fn todo(_: &mut dyn Host, _: Vec<Value>, span: Span) -> Result<Value, Unwind> {
+fn todo(_: &mut dyn Host, _: Vec<Value>, span: Span) -> Result<Value, Panic> {
     Err(Panic::new(
         codes::TODO,
         "reached `todo()`: this code is not written yet",
         span,
-    )
-    .into())
+    ))
+}
+
+/// `Int.to_string(self)`: the integer in decimal.
+fn int_to_string(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    Ok(Value::str(&args[0].as_int().to_string()))
+}
+
+/// `String.to_string(self)`: the text itself.
+fn string_to_string(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    Ok(args.swap_remove(0))
 }

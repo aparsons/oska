@@ -6,17 +6,22 @@
 //! Everything the program does to the outside world goes through a
 //! [`Host`]: [`RealHost`] for `oskac run`, [`FakeHost`] for tests.
 //!
+//! - `support.rs` refuses, before it starts, a program that uses
+//!   something the interpreter cannot run yet (`E0380`).
 //! - `interp.rs` evaluates the checked program.
+//! - `ops.rs` implements operators, with checked integer arithmetic.
 //! - `intrinsics.rs` implements body-less prelude functions.
+//! - `panics.rs` defines panics and every runtime code.
 //! - `value.rs` defines runtime values.
 //! - `host.rs` defines the hosts.
 //!
 //! # Exit codes
 //!
 //! - `0`: `main` returned `Ok` or `()`.
-//! - `1`: the program was refused, or `main` returned `Err`.
-//! - `2`: the program reached something the interpreter does not
-//!   support yet.
+//! - `1`: the checker refused the program, or `main` returned `Err`.
+//! - `2`: the program uses something the interpreter cannot run yet, so
+//!   it was refused before it started (`E0380`).
+//! - `101`: the program panicked.
 
 use oska_check::program::Program;
 use oska_syntax::Diagnostic;
@@ -24,13 +29,16 @@ use oska_syntax::Diagnostic;
 mod host;
 mod interp;
 mod intrinsics;
+mod ops;
 mod panics;
+mod support;
 mod value;
 
 pub use host::{FakeHost, Host, Output, RealHost};
 pub use panics::codes;
 
-use interp::{Interpreter, Unwind};
+use interp::Interpreter;
+use panics::Panic;
 use value::{Capability, Value};
 
 /// How a run ended.
@@ -66,8 +74,11 @@ impl RunOutcome {
     }
 }
 
-/// The exit code of a program that panicked.
+/// The exit code of a program that panicked: it has a bug.
 pub const PANIC_EXIT_CODE: i32 = 101;
+
+/// The exit code of a program the interpreter cannot run yet.
+pub const UNSUPPORTED_EXIT_CODE: i32 = 2;
 
 /// Check and run `src` on `host`. `args` are the program's arguments,
 /// the program path first.
@@ -79,38 +90,50 @@ pub fn run(src: &str, host: &mut dyn Host, args: &[String]) -> RunOutcome {
         outcome.diagnostics = report.diagnostics;
         return outcome;
     };
-    let exit_code = match run_main(&program, host) {
-        Ok(value) => main_exit_code(&value),
-        Err(Unwind::Unsupported(span)) => {
-            let message = format!(
-                "error: the interpreter does not support this yet (bytes {}..{})\n",
-                span.start, span.end
-            );
-            let mut outcome = RunOutcome::new(2, host);
-            outcome.stderr.push_str(&message);
-            return outcome;
-        }
-        Err(Unwind::Panic(panic)) => {
+    let refusal = support::unsupported(&program).or_else(|| ungranted(&program));
+    if let Some(refusal) = refusal {
+        let mut outcome = RunOutcome::new(UNSUPPORTED_EXIT_CODE, host);
+        outcome.diagnostics.push(refusal);
+        return outcome;
+    }
+    match run_main(&program, host) {
+        Ok(value) => RunOutcome::new(main_exit_code(&value), host),
+        Err(panic) => {
             let mut outcome = RunOutcome::new(PANIC_EXIT_CODE, host);
             outcome.panic = Some(panic.into_diagnostic());
-            return outcome;
+            outcome
         }
-    };
-    RunOutcome::new(exit_code, host)
+    }
+}
+
+/// The refusal for a capability `main` declares that has no runtime yet.
+fn ungranted(program: &Program) -> Option<Diagnostic> {
+    let main = program.functions.get("main")?;
+    let param = main
+        .params
+        .iter()
+        .find(|p| Capability::granted(&p.ty).is_none())?;
+    Some(Diagnostic::new(
+        codes::UNSUPPORTED,
+        format!(
+            "the interpreter cannot run a program given `{}` yet",
+            param.ty
+        ),
+        main.body.span,
+    ))
 }
 
 /// Run `main`, granting each parameter the capability its type names.
-fn run_main(program: &Program, host: &mut dyn Host) -> Result<Value, Unwind> {
+fn run_main(program: &Program, host: &mut dyn Host) -> Result<Value, Panic> {
     let Some(main) = program.functions.get("main") else {
         return Ok(Value::Unit);
     };
-    let mut args = Vec::with_capacity(main.params.len());
-    for param in &main.params {
-        match Capability::granted(&param.ty) {
-            Some(capability) => args.push(Value::Capability(capability)),
-            None => return Err(Unwind::Unsupported(main.body.span)),
-        }
-    }
+    let args = main
+        .params
+        .iter()
+        .filter_map(|param| Capability::granted(&param.ty))
+        .map(Value::Capability)
+        .collect();
     Interpreter::new(program, host).call(main, args)
 }
 

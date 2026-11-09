@@ -58,7 +58,7 @@ use crate::infer::{Infer, Mismatch};
 use crate::items::{Bound, Items, Lower};
 use crate::prelude::{self, StdModule};
 use crate::program::lower::{Resolution, Resolutions};
-use crate::program::Callee;
+use crate::program::{Callee, IntType};
 use crate::resolve;
 use crate::suggest;
 use crate::ty::{self, Trust, Ty};
@@ -281,6 +281,20 @@ pub struct Body<'c, 'd, 'a> {
     /// Checking a contract clause, where only pure functions may be
     /// called.
     in_contract: bool,
+    /// Resolutions that depend on a type inference may not have solved
+    /// yet, recorded by [`Body::finish`] once the whole body is checked.
+    deferred: Vec<(Span, Ty, Deferred)>,
+}
+
+/// A resolution recorded once the body's types are solved.
+#[derive(Debug, Clone, Copy)]
+enum Deferred {
+    /// Integer arithmetic: the operands' integer type.
+    Int,
+    /// `==` or `!=`: whether the operands are of a built-in type.
+    Equality,
+    /// An interpolation hole: the `Display` implementation of its type.
+    Display,
 }
 
 /// A closure being checked, and what it captures so far.
@@ -313,6 +327,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             inferred_lets: Vec::new(),
             closures: Vec::new(),
             in_contract: false,
+            deferred: Vec::new(),
         }
     }
 
@@ -344,8 +359,48 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             .push(Diagnostic::new(code, message, span));
     }
 
-    /// Report bindings whose types inference could not work out.
+    /// Record what the node at `span` resolves to once `ty` is solved.
+    fn defer(&mut self, span: Span, ty: &Ty, what: Deferred) {
+        self.deferred.push((span, ty.clone(), what));
+    }
+
+    /// Record the deferred resolutions, now that the body's types are
+    /// solved. A type the checked program cannot handle yet records
+    /// nothing, so the node lowers to `Unsupported`.
+    fn record_deferred(&mut self) {
+        for (span, ty, what) in std::mem::take(&mut self.deferred) {
+            let ty = self.infer.resolve(&ty);
+            let resolution = match what {
+                Deferred::Int => ty.integer_range().zip(ty.head()).map(|((min, max), name)| {
+                    Resolution::Int(IntType {
+                        name: name.to_string(),
+                        min,
+                        max,
+                    })
+                }),
+                Deferred::Equality => {
+                    let builtin = ty == Ty::Unit
+                        || ty.is_integer()
+                        || matches!(ty.head(), Some(ty::BOOL | ty::STRING));
+                    builtin.then_some(Resolution::Equality)
+                }
+                Deferred::Display => ty
+                    .head()
+                    .filter(|head| matches!(*head, ty::INT | ty::STRING))
+                    .map(|head| {
+                        Resolution::Display(Callee::Intrinsic(format!("{head}.to_string")))
+                    }),
+            };
+            if let Some(resolution) = resolution {
+                self.record(span, resolution);
+            }
+        }
+    }
+
+    /// Report bindings whose types inference could not work out, and
+    /// record the deferred resolutions.
     fn finish(&mut self) {
+        self.record_deferred();
         for (name, ty) in std::mem::take(&mut self.inferred_lets) {
             let ty = self.infer.resolve(&ty);
             if ty.has_vars() {
@@ -564,6 +619,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     if let StrPart::Hole { path, span } = part {
                         let ty = self.hole(path);
                         self.interpolated_hole(&ty, *span);
+                        self.defer(*span, &ty, Deferred::Display);
                         self.infer.join_into(&ty, trust);
                     }
                 }
@@ -998,6 +1054,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 let ty = self.expr(operand, expected);
                 let ty = self.infer.resolve(&ty);
                 if ty.is_error() || ty.is_signed_integer() {
+                    self.defer(expr.span, &ty, Deferred::Int);
                     return ty;
                 }
                 self.error(
@@ -1027,6 +1084,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             BinaryOp::Eq | BinaryOp::Ne => {
                 if let Some(ty) = self.compared_operands(expr, op, lhs, rhs) {
                     self.require_trait(&ty, ty::EQ, &[], expr.span, &format!("`{}`", op.text()));
+                    self.defer(expr.span, &ty, Deferred::Equality);
                 }
                 Ty::bool()
             }
@@ -1035,7 +1093,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 Ty::bool()
             }
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
-                self.numeric_operands(expr, op, lhs, rhs, expected)
+                let ty = self.numeric_operands(expr, op, lhs, rhs, expected);
+                self.defer(expr.span, &ty, Deferred::Int);
+                ty
             }
         }
     }
