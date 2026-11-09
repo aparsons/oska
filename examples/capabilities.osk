@@ -2,11 +2,14 @@
 // path it is given and nothing else: no network, no writes, no env access.
 
 fn count_lines(fs: FsRead, path: Path) -> Result<Int, IoError> {
+    // File contents are untrusted: `text` is Untrusted<String>.
     let text = fs.read_to_string(path)?
+    // Counting converts to Int, a non-text type, so the result is trusted.
     Ok(text.lines().count())
 }
 
 fn main(io: Stdout, fs: FsRead, args: Args) -> Result<(), AppError> {
+    // `args` is a program input (plain data), not a capability.
     // Attenuate: hand out a capability restricted to the current directory.
     let local = fs.restrict_to(".")
     let path = args.get(1).ok_or(AppError.usage("usage: capabilities <file>"))?

@@ -2,14 +2,15 @@
 
 **An AI-first, secure-by-default programming language.**
 
-> Status: pre-alpha. Nothing here is stable; the language design is being worked out in [`docs/design.md`](docs/design.md).
+> Status: pre-alpha. Nothing here is stable; the language design is being worked out in [`docs/design.md`](docs/design.md), with key decisions recorded in [`docs/adr/`](docs/adr/).
 
 ## Why Oska?
 
 Most code is increasingly written, reviewed, and refactored with the help of AI. Oska is designed for that world:
 
 - **Secure by default.** No ambient authority: a function can only touch the filesystem, network, environment, or clock if it is explicitly handed a capability to do so. Memory safety, no nulls, no implicit conversions, and checked arithmetic are the baseline, not opt-ins.
-- **AI-first.** The syntax is regular and unambiguous, so it is easy for models to generate and for humans to verify. Effects, capabilities, and contracts are visible in signatures, so a reviewer (human or model) can tell what a function *can* do without reading its body. Compiler diagnostics are available as structured JSON with suggested fixes.
+- **AI-first.** The syntax is familiar, regular, and unambiguous, so it is easy for models to generate and for humans to verify. A function's capability parameters are its effects. Its `requires`/`ensures` contracts are part of the signature. A reviewer, human or model, can tell what a function *can* do without reading its body. There are no macros and no hidden control flow. Compiler diagnostics are available as structured JSON with suggested fixes.
+- **Injection-proof by construction.** Untrusted input is tracked by type. The standard library's SQL, HTML, process, and logging APIs cannot accept untrusted input where it would change what code or command runs.
 - **Auditable.** Every capability a program uses is declared at its entry point, so "what can this program do?" has a short, checkable answer.
 
 ## A taste
@@ -30,7 +31,10 @@ fn main(io: Stdout) -> Result<(), IoError> {
 | `crates/oskac` | The `oskac` compiler CLI |
 | `crates/oska-syntax` | Lexer (and, soon, parser and AST) |
 | `examples/` | Example `.osk` programs |
-| `docs/` | Language design notes |
+| `docs/design.md` | Language design notes |
+| `docs/adr/` | Architecture decision records |
+| `docs/research/` | Background research |
+| `GLOSSARY.md` | Oska's domain vocabulary |
 
 ## Building
 
