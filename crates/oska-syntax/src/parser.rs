@@ -28,8 +28,9 @@
 //! - `E0107`: a statement at module level, where only items are allowed
 
 use crate::ast::{
-    Arg, BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, Item, ItemKind, Module,
-    Param, Stmt, StmtKind, StrPart, Type, TypeKind, UnaryOp,
+    Arg, BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, Item, ItemKind, MatchArm,
+    Module, Param, Pattern, PatternArg, PatternKind, Stmt, StmtKind, StrPart, Type, TypeKind,
+    UnaryOp,
 };
 use crate::{lex, resolve_escape, Diagnostic, Keyword, Punct, Span, Token, TokenKind};
 
@@ -712,6 +713,7 @@ impl<'a> Parser<'a> {
             Some(TokenKind::Punct(Punct::LBrace)) => ExprKind::Block(self.block()?),
             Some(TokenKind::Punct(Punct::Pipe | Punct::OrOr)) => self.closure()?,
             Some(TokenKind::Keyword(Keyword::If)) => self.if_expr()?,
+            Some(TokenKind::Keyword(Keyword::Match)) => self.match_expr()?,
             Some(TokenKind::Keyword(Keyword::Scope)) => {
                 self.bump();
                 self.expect_punct(Punct::Pipe)?;
@@ -783,6 +785,136 @@ impl<'a> Parser<'a> {
             then_block,
             else_branch,
         })
+    }
+
+    fn match_expr(&mut self) -> Result<ExprKind, Diagnostic> {
+        self.expect_kw(Keyword::Match)?;
+        let scrutinee = self.expr()?;
+        self.expect_punct(Punct::LBrace)?;
+        let mut arms = Vec::new();
+        loop {
+            self.skip_newlines();
+            if self.at_punct(Punct::RBrace) || self.peek().is_none() {
+                break;
+            }
+            arms.push(self.match_arm()?);
+            match self.peek() {
+                Some(TokenKind::Newline | TokenKind::Punct(Punct::RBrace)) => {}
+                _ => return Err(self.expected("a line break or `}` after the match arm")),
+            }
+        }
+        self.expect_punct(Punct::RBrace)?;
+        Ok(ExprKind::Match {
+            scrutinee: Box::new(scrutinee),
+            arms,
+        })
+    }
+
+    fn match_arm(&mut self) -> Result<MatchArm, Diagnostic> {
+        let pattern = self.pattern()?;
+        let guard = if self.at_kw(Keyword::If) {
+            self.bump();
+            Some(self.expr()?)
+        } else {
+            None
+        };
+        self.expect_punct(Punct::FatArrow)?;
+        let body = self.expr()?;
+        Ok(MatchArm {
+            span: join(pattern.span, body.span),
+            pattern,
+            guard,
+            body,
+        })
+    }
+
+    // ----- patterns -----
+
+    fn pattern(&mut self) -> Result<Pattern, Diagnostic> {
+        let start = self.peek_span();
+        let kind = match self.peek() {
+            Some(TokenKind::Ident(name)) if name == "_" => {
+                self.bump();
+                PatternKind::Wildcard
+            }
+            Some(
+                TokenKind::Int(_)
+                | TokenKind::Str(_)
+                | TokenKind::Keyword(Keyword::True | Keyword::False),
+            ) => PatternKind::Literal(self.primary()?),
+            Some(TokenKind::Punct(Punct::Minus))
+                if matches!(self.peek_at(1), Some(TokenKind::Int(_))) =>
+            {
+                PatternKind::Literal(self.unary()?)
+            }
+            Some(TokenKind::Punct(Punct::LParen))
+                if self.peek_at(1) == Some(&TokenKind::Punct(Punct::RParen)) =>
+            {
+                PatternKind::Literal(self.primary()?)
+            }
+            Some(TokenKind::Ident(_)) => {
+                let mut path = vec![self.expect_ident("a pattern")?];
+                while self.eat_punct(Punct::Dot) {
+                    path.push(self.expect_ident("a name after `.`")?);
+                }
+                if self.at_punct(Punct::LParen) {
+                    PatternKind::Constructor {
+                        path,
+                        args: self.pattern_args()?,
+                    }
+                } else if path.len() == 1 {
+                    // A bare name always binds. Name resolution decides
+                    // whether it instead names a unit variant such as `None`.
+                    PatternKind::Binding(path.remove(0))
+                } else {
+                    PatternKind::Constructor {
+                        path,
+                        args: Vec::new(),
+                    }
+                }
+            }
+            other => {
+                return Err(error(
+                    "E0100",
+                    format!("expected a pattern, found {}", describe(other)),
+                    start,
+                ));
+            }
+        };
+        Ok(Pattern {
+            kind,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `(args)` of a constructor pattern.
+    fn pattern_args(&mut self) -> Result<Vec<PatternArg>, Diagnostic> {
+        self.expect_punct(Punct::LParen)?;
+        let mut args = Vec::new();
+        while !self.at_punct(Punct::RParen) {
+            let label = match (self.peek(), self.peek_at(1)) {
+                (Some(TokenKind::Ident(_)), Some(TokenKind::Punct(Punct::Colon))) => {
+                    let label = self.expect_ident("a field label")?;
+                    self.bump();
+                    Some(label)
+                }
+                _ => None,
+            };
+            let pattern = self.pattern()?;
+            args.push(PatternArg {
+                span: join(
+                    label.as_ref().map_or(pattern.span, |l| l.span),
+                    pattern.span,
+                ),
+                label,
+                pattern,
+            });
+            if !self.eat_punct(Punct::Comma) {
+                break;
+            }
+        }
+        self.expect_punct(Punct::RParen)?;
+        Ok(args)
     }
 
     /// Split a string literal into text and interpolation holes. The token
@@ -1049,6 +1181,38 @@ mod tests {
             ExprKind::Block(b) => block_str(b),
             ExprKind::Scope { handle, body } => {
                 format!("(scope {} {})", handle.name, block_str(body))
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                let mut out = format!("(match {}", sexp(scrutinee));
+                for arm in arms {
+                    out.push_str(&format!(" [{}", pat_str(&arm.pattern)));
+                    if let Some(guard) = &arm.guard {
+                        out.push_str(&format!(" if {}", sexp(guard)));
+                    }
+                    out.push_str(&format!(" => {}]", sexp(&arm.body)));
+                }
+                out + ")"
+            }
+        }
+    }
+
+    fn pat_str(p: &Pattern) -> String {
+        match &p.kind {
+            PatternKind::Wildcard => "_".into(),
+            PatternKind::Literal(value) => sexp(value),
+            PatternKind::Binding(name) => name.name.clone(),
+            PatternKind::Constructor { path, args } => {
+                let mut out = String::from("(");
+                let path: Vec<&str> = path.iter().map(|i| i.name.as_str()).collect();
+                out.push_str(&path.join("."));
+                for a in args {
+                    out.push(' ');
+                    if let Some(l) = &a.label {
+                        out.push_str(&format!("{}:", l.name));
+                    }
+                    out.push_str(&pat_str(&a.pattern));
+                }
+                out + ")"
             }
         }
     }
@@ -1370,7 +1534,39 @@ mod tests {
         let err = expr_err("a +");
         assert_eq!(err.code, "E0100");
         assert_eq!(err.span, Span { start: 3, end: 3 });
-        assert_eq!(expr_err("match x {}").code, "E0100");
+    }
+
+    // ----- match -----
+
+    #[test]
+    fn match_in_expression_positions() {
+        assert_eq!(e("match x {\n_ => 0\n}"), "(match x [_ => 0])");
+        assert_eq!(e("match x {}"), "(match x)");
+        assert_eq!(e("1 + match x {\n_ => 2\n}"), "(+ 1 (match x [_ => 2]))");
+        assert_eq!(
+            s("let y = match f(x) {\n_ => 0\n}"),
+            "(let y (match (call f x) [_ => 0]))"
+        );
+        assert_eq!(
+            e("{\nlet a = 1\nmatch a {\n_ => a\n}\n}"),
+            "{(let a 1); (match a [_ => a])}"
+        );
+    }
+
+    #[test]
+    fn match_patterns_guards_and_nesting() {
+        assert_eq!(
+            e("match r {\nOk(Some(v)) if v > 0 && ok => v\nErr(e: _) => -1\n}"),
+            "(match r [(Ok (Some v)) if (&& (> v 0) ok) => v] [(Err e:_) => (- 1)])"
+        );
+        assert_eq!(
+            e("|x| match x {\nn => match n {\n_ => n\n}\n}"),
+            "(fn [x] (match x [n => (match n [_ => n])]))"
+        );
+        assert_eq!(
+            e("match f()? {\nNone() => 0\n}"),
+            "(match (? (call f)) [(None) => 0])"
+        );
     }
 
     #[test]

@@ -9,8 +9,8 @@
 //! are first built as a small [`Json`] value, then printed.
 
 use crate::ast::{
-    Arg, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, Item, ItemKind, Module, Param, Stmt,
-    StmtKind, StrPart, Type, TypeKind, UnaryOp,
+    Arg, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, Item, ItemKind, MatchArm, Module,
+    Param, Pattern, PatternArg, PatternKind, Stmt, StmtKind, StrPart, Type, TypeKind, UnaryOp,
 };
 use crate::{json_escape, Span};
 
@@ -367,8 +367,46 @@ fn expr(e: &Expr) -> Json {
         ExprKind::Scope { handle, body } => Node::new("ScopeExpr", span)
             .field("handle", ident(handle))
             .field("body", block(body)),
+        ExprKind::Match { scrutinee, arms } => Node::new("MatchExpr", span)
+            .field("scrutinee", expr(scrutinee))
+            .field("arms", list(arms, match_arm)),
     }
     .done()
+}
+
+fn match_arm(arm: &MatchArm) -> Json {
+    Node::new("MatchArm", arm.span)
+        .field("pattern", pattern(&arm.pattern))
+        .opt("guard", arm.guard.as_ref().map(expr))
+        .field("body", expr(&arm.body))
+        .done()
+}
+
+// ----- patterns -----
+
+fn pattern(p: &Pattern) -> Json {
+    match &p.kind {
+        PatternKind::Wildcard => Node::new("WildcardPattern", p.span),
+        PatternKind::Literal(value) => {
+            Node::new("LiteralPattern", p.span).field("value", expr(value))
+        }
+        // A binding's span is the pattern's span, so the name is a plain
+        // string, as in `NameExpr`.
+        PatternKind::Binding(name) => {
+            Node::new("BindingPattern", p.span).field("name", str_json(&name.name))
+        }
+        PatternKind::Constructor { path, args } => Node::new("ConstructorPattern", p.span)
+            .field("path", list(path, ident))
+            .field("args", list(args, pattern_arg)),
+    }
+    .done()
+}
+
+fn pattern_arg(arg: &PatternArg) -> Json {
+    Node::new("PatternArg", arg.span)
+        .opt("label", arg.label.as_ref().map(ident))
+        .field("pattern", pattern(&arg.pattern))
+        .done()
 }
 
 fn str_part(part: &StrPart) -> Json {
