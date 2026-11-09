@@ -10,6 +10,8 @@ use super::{Body, Callable, Labels, QualifiedPath};
 use crate::codes;
 use crate::collect::DeclKind;
 use crate::items::{Bound, FieldsInfo, FnSig, Receiver, Shape};
+use crate::program::lower::Resolution;
+use crate::program::Callee;
 
 use crate::ty::{self, Ty};
 
@@ -366,6 +368,18 @@ impl Body<'_, '_, '_> {
             Receiver::Self_ => {}
         }
         self.audit_call(&type_name, &name.name, span);
+        if sig.trait_name.is_none() {
+            // Inherent methods are only declared on the module's own types
+            // (`coherence.rs`), so one on a prelude type is an intrinsic.
+            let qualified = format!("{type_name}.{}", name.name);
+            let intrinsic = self.decls().get(&type_name).map_or(true, |d| d.in_prelude);
+            let callee = if intrinsic {
+                Callee::Intrinsic(qualified)
+            } else {
+                Callee::Function(qualified)
+            };
+            self.record(span, Resolution::Method(callee));
+        }
         let mut callable = self.instantiate(&sig, None);
         if let Some(declared) = &callable.receiver {
             // The receiver flows into `self` like an argument, so untrusted

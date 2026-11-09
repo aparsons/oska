@@ -11,12 +11,24 @@ USAGE:
     oskac check <file.osk> [--format=json] [--release]
                                            Type-check a source file and report
                                            each function's authority
+    oskac run <file.osk> [--format=json] [-- args...]
+                                           Check a source file and, if it has
+                                           no diagnostics, run it
     oskac --version                        Print the version
     oskac --help                           Print this help
 ";
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // Everything after `--` belongs to the program being run.
+    let program_args = match args.iter().position(|a| a == "--") {
+        Some(at) => {
+            let rest = args.split_off(at + 1);
+            args.pop();
+            rest
+        }
+        None => Vec::new(),
+    };
     let json = args.iter().any(|a| a == "--format=json");
     let release = args.iter().any(|a| a == "--release");
     let positional: Vec<&str> = args
@@ -37,6 +49,7 @@ fn main() -> ExitCode {
         ["lex", path] => lex_file(path, json),
         ["parse", path] => parse_file(path, json),
         ["check", path] => check_file(path, json, release),
+        ["run", path] => run_file(path, json, &program_args),
         _ => {
             eprint!("{USAGE}");
             ExitCode::from(2)
@@ -94,12 +107,7 @@ fn check_file(path: &str, json: bool, release: bool) -> ExitCode {
     if json {
         print!("{}", report.to_json());
     } else {
-        for diagnostic in &report.diagnostics {
-            eprintln!("{path}: {diagnostic}");
-            if let Some(fix) = &diagnostic.fix {
-                eprintln!("    fix: {}", fix.message);
-            }
-        }
+        print_diagnostics(path, &report.diagnostics);
         for function in &report.functions {
             println!("{}", describe_authority(function));
         }
@@ -112,6 +120,38 @@ fn check_file(path: &str, json: bool, release: bool) -> ExitCode {
     } else {
         ExitCode::FAILURE
     }
+}
+
+/// Print diagnostics to stderr, each with its fix, as `oskac check` does.
+fn print_diagnostics(path: &str, diagnostics: &[oska_syntax::Diagnostic]) {
+    for diagnostic in diagnostics {
+        eprintln!("{path}: {diagnostic}");
+        if let Some(fix) = &diagnostic.fix {
+            eprintln!("    fix: {}", fix.message);
+        }
+    }
+}
+
+/// `oskac run`: check the program and, if the check reports no
+/// diagnostic, run it on the real OS with `args` after the program path.
+/// A refused program's diagnostics go to stderr, one JSON object per line
+/// with `--format=json`. The exit code is the program's.
+fn run_file(path: &str, json: bool, args: &[String]) -> ExitCode {
+    let Some(src) = read_source(path) else {
+        return ExitCode::FAILURE;
+    };
+    let mut argv = vec![path.to_string()];
+    argv.extend_from_slice(args);
+    let outcome = oska_run::run(&src, &mut oska_run::RealHost::new(), &argv);
+    if json {
+        for diagnostic in &outcome.diagnostics {
+            eprintln!("{}", diagnostic.to_json());
+        }
+    } else {
+        print_diagnostics(path, &outcome.diagnostics);
+    }
+    eprint!("{}", outcome.stderr);
+    ExitCode::from(u8::try_from(outcome.exit_code).unwrap_or(u8::MAX))
 }
 
 /// One line of the human-readable authority report, such as

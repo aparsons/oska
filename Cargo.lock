@@ -10,6 +10,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "oska-run"
+version = "0.0.1"
+dependencies = [
+ "oska-check",
+ "oska-syntax",
+]
+
+[[package]]
 name = "oska-syntax"
 version = "0.0.1"
 
@@ -18,5 +26,6 @@ name = "oskac"
 version = "0.0.1"
 dependencies = [
  "oska-check",
+ "oska-run",
  "oska-syntax",
 ]
