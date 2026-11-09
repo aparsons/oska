@@ -43,6 +43,9 @@ pub struct Program {
     /// of an inherent impl, and `<Type as Trait>.method` for a method of
     /// a trait impl (see [`trait_method`]).
     pub functions: BTreeMap<String, Function>,
+    /// The module each `use` imports, such as `std.sql`, with the span of
+    /// its path, in source order.
+    pub imports: Vec<(String, Span)>,
 }
 
 /// The qualified name of `method` in the impl of `trait_name` for

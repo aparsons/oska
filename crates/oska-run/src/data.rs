@@ -57,10 +57,7 @@ fn list_get(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic>
     let item = usize::try_from(args[1].as_int())
         .ok()
         .and_then(|i| args[0].as_list().get(i));
-    Ok(match item {
-        Some(item) => Value::variant("Option", "Some", vec![item.clone()]),
-        None => Value::variant("Option", "None", Vec::new()),
-    })
+    Ok(Value::option(item.cloned()))
 }
 
 /// `List.at(self, index)`: the item at `index`. Out of bounds, it panics

@@ -6,12 +6,29 @@
 
 #![allow(dead_code)]
 
-use oska_run::{run, FakeHost, RunOutcome};
+use oska_run::{codes, run, FakeHost, RunOutcome, UNSUPPORTED_EXIT_CODE};
+
+/// The program path every helper passes as `args[0]`.
+pub const PROGRAM_PATH: &str = "prog.osk";
 
 /// Run `src` on a fresh [`FakeHost`], with `args` after the program path.
 pub fn run_fake(src: &str, args: &[&str]) -> RunOutcome {
-    let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-    run(src, &mut FakeHost::new(), &args)
+    run_on(FakeHost::new(), src, args)
+}
+
+/// Run `src` on `host`, with `args` after the program path.
+pub fn run_on(mut host: FakeHost, src: &str, args: &[&str]) -> RunOutcome {
+    let args: Vec<String> = std::iter::once(PROGRAM_PATH)
+        .chain(args.iter().copied())
+        .map(str::to_string)
+        .collect();
+    run(src, &mut host, &args)
+}
+
+/// Whether `code` is one the runtime refuses a checked program with,
+/// rather than one of the checker's.
+fn is_runtime_refusal(code: &str) -> bool {
+    codes::ALL.contains(&code) && code.starts_with('E')
 }
 
 /// Assert that `src` runs to completion with exit code 0, and that it
@@ -26,14 +43,24 @@ pub fn assert_runs(src: &str, args: &[&str], expected_stdout: &str) {
 }
 
 /// Assert that `src` is refused before it starts, with a diagnostic
-/// `code`, and that it printed nothing.
+/// `code`, and that it printed nothing. A checker code exits with 1; a
+/// runtime refusal (`E0370`, `E0380`, ...) of a program that checks
+/// exits with 2.
 pub fn assert_refused(src: &str, code: &str) {
     let outcome = run_fake(src, &[]);
     assert!(
         outcome.diagnostics.iter().any(|d| d.code == code),
         "{src:?} should be refused with {code}: {outcome:#?}"
     );
-    assert_ne!(outcome.exit_code, 0, "a refused program fails");
+    let exit_code = if is_runtime_refusal(code) {
+        UNSUPPORTED_EXIT_CODE
+    } else {
+        1
+    };
+    assert_eq!(
+        outcome.exit_code, exit_code,
+        "the exit code refusing {code}"
+    );
     assert_eq!(outcome.stdout, "", "a refused program prints nothing");
     assert!(outcome.panic.is_none(), "a refused program never panics");
 }

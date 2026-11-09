@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{assert_panics, assert_runs};
+use common::{assert_exits, assert_panics, assert_runs};
 
 /// A `main` that runs `body` with `io: Stdout` in scope.
 fn main_with(body: &str) -> String {
@@ -341,6 +341,15 @@ fn list_map_calls_the_closure_on_each_item() {
         ),
         &[],
         "101 103 3\n",
+    );
+}
+
+#[test]
+fn dbg_shows_a_list_item_by_item() {
+    assert_exits(
+        &main_with("    let xs = dbg([1, 2])\n    io.println(\"done\")"),
+        0,
+        "[dbg] [1, 2]\n",
     );
 }
 

@@ -14,6 +14,12 @@ use oska_syntax::{Diagnostic, Span};
 /// The stable codes the runtime reports: refusals (`E038x`) and panics
 /// (`P0001` upwards).
 pub mod codes {
+    /// `main` declares a capability that has no runtime yet, such as
+    /// `Net`. The program is refused before it starts.
+    pub const UNIMPLEMENTED_CAPABILITY: &str = "E0370";
+    /// The program imports a `std` module that has no runtime yet, such
+    /// as `std.sql`. It is refused before it starts.
+    pub const UNIMPLEMENTED_MODULE: &str = "E0371";
     /// The program uses something the interpreter cannot run yet. It is
     /// refused before it starts.
     pub const UNSUPPORTED: &str = "E0380";
@@ -26,14 +32,19 @@ pub mod codes {
     pub const TODO: &str = "P0003";
     /// An integer was divided by zero, or its remainder taken.
     pub const DIVISION_BY_ZERO: &str = "P0004";
+    /// `Env.secret` asked for a variable the environment does not set.
+    pub const MISSING_SECRET: &str = "P0020";
 
     /// Every code, in the order `docs/runtime.md` lists them.
     pub const ALL: &[&str] = &[
+        UNIMPLEMENTED_CAPABILITY,
+        UNIMPLEMENTED_MODULE,
         UNSUPPORTED,
         OVERFLOW,
         INDEX_OUT_OF_BOUNDS,
         TODO,
         DIVISION_BY_ZERO,
+        MISSING_SECRET,
     ];
 }
 
