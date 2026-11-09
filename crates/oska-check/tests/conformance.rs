@@ -1,6 +1,8 @@
-//! Conformance (#42): the example programs check cleanly, and the table of
-//! `E02xx` codes in `docs/checker.md`, the canonical one, matches the codes
-//! the checker defines.
+//! Conformance (#42, #56): the example programs check cleanly, a mutation
+//! that passes untrusted text to a trusted `String` parameter is rejected,
+//! and the table of checker codes (`E02xx` and `E03xx`) in
+//! `docs/checker.md`, the canonical one, matches the codes the checker
+//! defines.
 //!
 //! Design-notes samples are left out on purpose: they are fragments that use
 //! types they never declare.
@@ -10,7 +12,7 @@ mod common;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use common::check;
+use common::{assert_errors, check};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -62,6 +64,38 @@ fn every_example_checks_with_zero_diagnostics() {
     );
 }
 
+/// The capabilities example with `text`, the untrusted contents of a file,
+/// passed to a user function whose `String` parameter means trusted text.
+#[test]
+fn the_capabilities_example_rejects_untrusted_text_in_a_trusted_parameter() {
+    let src = read(&repo_root().join("examples/capabilities.osk"));
+    let counted = "Ok(text.lines().count())";
+    assert!(
+        src.contains(counted),
+        "examples/capabilities.osk should count lines with {counted:?}"
+    );
+    let mutated = src.replace(counted, "Ok(word_count(text))")
+        + "\nfn word_count(text: String) -> Int {\n    text.split(\" \").count()\n}\n";
+    assert_errors(&mutated, &[("E0300", "text")]);
+}
+
+// ---- Laundering ---------------------------------------------------------------
+
+/// Known hole, recorded in the #52 entry of the spec #49 decisions log: a
+/// generic `T: Display` calling `x.to_string()` returns trusted text even
+/// when `T` is untrusted text. The review of spec #49 owns the fix and
+/// un-ignores this test. The expected span assumes the fix makes the text
+/// `to_string` returns for a generic `T` untrusted, so returning it as
+/// `String` is the error; a fix that rejects at the call site moves it.
+#[test]
+#[ignore = "known generic-Display laundering hole (#52 notes); fixed in the spec #49 review"]
+fn generic_display_launders_trust() {
+    assert_errors(
+        "fn launder<T: Display>(x: T) -> String {\n    x.to_string()\n}\nfn f(env: Env) -> Option<String> {\n    let home = env.get(\"HOME\")?\n    Some(launder(home))\n}",
+        &[("E0300", "x.to_string()")],
+    );
+}
+
 // ---- Documented codes ---------------------------------------------------------
 
 /// The checker codes defined in the `codes` module of `src/lib.rs`.
@@ -83,7 +117,7 @@ fn defined_codes() -> BTreeSet<String> {
         })
         .collect();
     assert!(
-        codes.contains("E0200") && codes.contains("E0281"),
+        codes.contains("E0200") && codes.contains("E0281") && codes.contains("E0300"),
         "the `codes` module should be found and parsed, got {codes:?}"
     );
     codes
