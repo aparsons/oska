@@ -88,6 +88,8 @@ pub(crate) mod codes {
     pub const CANNOT_INFER: &str = "E0233";
     pub const NOT_A_VALUE: &str = "E0234";
     pub const NOT_ITERABLE: &str = "E0235";
+    pub const IMPURE_IN_CONTRACT: &str = "E0280";
+    pub const CONTRACT_NOT_BOOL: &str = "E0281";
 }
 
 /// Options that change what is checked.

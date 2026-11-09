@@ -78,9 +78,9 @@ pub fn module(module: &Module, decls: &Decls, items: &Items, diagnostics: &mut V
 /// Check one function body against its signature. `lower` has the
 /// enclosing impl's or trait's generics and `Self` in scope.
 fn function(f: &FnDecl, lower: Lower, items: &Items, diagnostics: &mut Vec<Diagnostic>) {
-    let Some(block) = &f.body else {
+    if f.body.is_none() && f.requires.is_empty() && f.ensures.is_empty() {
         return;
-    };
+    }
     let lower = lower.with_generics(&f.generics);
     let sig = lower.signature(f, &[], lower.self_ty.clone());
     let mut body = Body::new(items, lower, sig.ret.clone(), diagnostics);
@@ -95,7 +95,18 @@ fn function(f: &FnDecl, lower: Lower, items: &Items, diagnostics: &mut Vec<Diagn
         body.bind(name, ty.clone(), Binding::Param);
     }
     let ret = sig.ret.clone();
-    body.block(block, Some(&ret), true);
+    for clause in &f.requires {
+        body.contract("requires", &clause.cond);
+    }
+    for clause in &f.ensures {
+        let height = body.locals.len();
+        body.bind(&clause.binding.name, ret.clone(), Binding::Param);
+        body.contract("ensures", &clause.cond);
+        body.locals.truncate(height);
+    }
+    if let Some(block) = &f.body {
+        body.block(block, Some(&ret), true);
+    }
     body.finish();
 }
 
@@ -145,6 +156,10 @@ struct Callable {
     params: Vec<(Option<String>, Ty)>,
     ret: Ty,
     labels: Labels,
+    /// A pure function: no parameter, the receiver included, is
+    /// capability-bearing. Constructors are pure; a closure is pure
+    /// unless it is a `cap fn`.
+    pure: bool,
 }
 
 /// The state of checking one body.
@@ -163,6 +178,9 @@ pub struct Body<'c, 'd, 'a> {
     /// Unannotated `let` and `var` bindings, checked for unsolved types at
     /// the end of the body.
     inferred_lets: Vec<(Ident, Ty)>,
+    /// Checking a contract clause, where only pure functions may be
+    /// called.
+    in_contract: bool,
 }
 
 impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
@@ -182,6 +200,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             ret,
             loop_depth: 0,
             inferred_lets: Vec::new(),
+            in_contract: false,
         }
     }
 
@@ -207,6 +226,24 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     name.span,
                 );
             }
+        }
+    }
+
+    // ---- Contracts ------------------------------------------------------
+
+    /// A `requires` or `ensures` condition: it must be `Bool`, and while
+    /// it is checked only pure functions may be called.
+    fn contract(&mut self, keyword: &str, cond: &Expr) {
+        let outer = std::mem::replace(&mut self.in_contract, true);
+        let ty = self.infer(cond);
+        self.in_contract = outer;
+        if !self.infer.unify(&ty, &Ty::bool()) {
+            let ty = self.infer.resolve(&ty);
+            self.error(
+                codes::CONTRACT_NOT_BOOL,
+                format!("a `{keyword}` condition must be `Bool`, found `{ty}`"),
+                cond.span,
+            );
         }
     }
 
@@ -577,11 +614,12 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             _ => {
                 let ty = self.infer(callee);
                 match self.infer.resolve(&ty) {
-                    Ty::Fn { params, ret, .. } => Some(Callable {
+                    Ty::Fn { cap, params, ret } => Some(Callable {
                         description: "this function".to_string(),
                         params: params.into_iter().map(|p| (None, p)).collect(),
                         ret: *ret,
                         labels: Labels::Optional,
+                        pure: !cap,
                     }),
                     Ty::Error => None,
                     other => {
@@ -707,6 +745,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 Shape::Named => Labels::Required,
                 Shape::Positional | Shape::Unit => Labels::None,
             },
+            pure: true,
         }
     }
 
@@ -732,6 +771,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 .collect(),
             ret: sig.ret.substitute(&subst),
             labels: Labels::Optional,
+            pure: sig.pure,
         }
     }
 
@@ -802,6 +842,16 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         // against the whole call.
         if let Some(expected) = expected {
             self.infer.unify(&callable.ret, expected);
+        }
+        if self.in_contract && !callable.pure {
+            self.error(
+                codes::IMPURE_IN_CONTRACT,
+                format!(
+                    "a contract may call only pure functions, but {} takes a capability",
+                    callable.description
+                ),
+                span,
+            );
         }
         if args.len() != callable.params.len() {
             let n = callable.params.len();
