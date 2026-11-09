@@ -50,6 +50,7 @@ use crate::collect::Decls;
 use crate::decl_rules;
 use crate::infer::{Infer, Mismatch};
 use crate::items::{Bound, Items, Lower};
+use crate::prelude::{self, StdModule};
 use crate::suggest;
 use crate::ty::{self, Ty};
 use crate::AuditSite;
@@ -360,16 +361,57 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         self.locals.iter().rev().find(|l| l.name == name)
     }
 
-    /// `name` is a type in value position, such as `Shape` in
-    /// `Shape.Circle`, and not shadowed by a local.
+    /// `expr` is a type in value position, such as `Shape` in
+    /// `Shape.Circle` or `sql.Db` in `sql.Db.connect`, and not shadowed by
+    /// a local.
     fn type_name(&self, expr: &Expr) -> Option<String> {
+        match &expr.kind {
+            ExprKind::Name(ident) if self.local(&ident.name).is_none() => self
+                .decls()
+                .visible(&ident.name)
+                .map(|_| ident.name.clone()),
+            ExprKind::Field { base, name } => {
+                let module = self.module_name(base)?;
+                let exported = module.exports().contains(&name.name.as_str());
+                (exported && self.decls().get(&name.name).is_some()).then(|| name.name.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// `expr` is a module name that a plain `use` binds, such as `sql`
+    /// after `use std.sql`, and not shadowed by a local.
+    fn module_name(&self, expr: &Expr) -> Option<&'static StdModule> {
         let ExprKind::Name(ident) = &expr.kind else {
             return None;
         };
         if self.local(&ident.name).is_some() {
             return None;
         }
-        self.decls().get(&ident.name).map(|_| ident.name.clone())
+        self.decls().bound_module(&ident.name)
+    }
+
+    /// `name` is declared by an imported module that the user module
+    /// reaches only qualified: report it, with a fix that qualifies it.
+    fn require_unqualified(&mut self, ident: &Ident) -> bool {
+        match self.decls().qualified_only(&ident.name) {
+            Some(module) => {
+                let diagnostic = suggest::qualify(module, ident.span, &ident.name);
+                self.diagnostics.push(diagnostic);
+                false
+            }
+            None => true,
+        }
+    }
+
+    /// `module.name` where `module` does not export `name`: report it.
+    fn require_export(&mut self, module: &StdModule, name: &Ident) -> bool {
+        if module.exports().contains(&name.name.as_str()) {
+            return true;
+        }
+        let diagnostic = suggest::not_exported(module, &name.name, name.span);
+        self.diagnostics.push(diagnostic);
+        false
     }
 
     // ---- Expressions ----------------------------------------------------
@@ -400,10 +442,25 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
     /// Report that `actual` cannot flow into `expected`: `E0270` when only
     /// the `cap` rule stops it, `E0300` when only the trust rule does,
-    /// `E0220` otherwise.
+    /// `E0341` for text where a sink literal is required, `E0220`
+    /// otherwise.
     fn mismatch(&mut self, mismatch: Mismatch, actual: &Ty, expected: &Ty, span: Span) {
         let expected = self.infer.resolve(expected);
         let actual = self.infer.resolve(actual);
+        let literal = expected.head().and_then(prelude::sink_literal_typed);
+        if let (Some(literal), true) = (literal, actual.is_text()) {
+            let tag = literal.tag;
+            self.error(
+                codes::TEXT_AS_SINK_LITERAL,
+                format!(
+                    "expected `{expected}`, found `{actual}`: it can only be written as a \
+                     `{tag}\"...\"` literal, so it can't be built from text; pass values \
+                     separately, as parameters"
+                ),
+                span,
+            );
+            return;
+        }
         match mismatch {
             Mismatch::CapLost => self.error(
                 codes::CAPTURING_CLOSURE,
@@ -597,6 +654,16 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             }
             return ty;
         }
+        if !self.require_unqualified(ident) {
+            return Ty::Error;
+        }
+        self.item_value(ident)
+    }
+
+    /// A function, prelude variant, or type named in value position,
+    /// either unqualified or as a module's export.
+    fn item_value(&mut self, ident: &Ident) -> Ty {
+        let name = ident.name.as_str();
         if let Some(sig) = self.items.fns.get(name).cloned() {
             let callable = self.instantiate(&sig, None);
             return callable.into_fn_type();
@@ -618,7 +685,13 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
     fn unknown_value(&mut self, ident: &Ident) {
         let mut candidates: Vec<&str> = self.locals.iter().map(|l| l.name.as_str()).collect();
-        candidates.extend(self.items.fns.keys().map(String::as_str));
+        candidates.extend(
+            self.items
+                .fns
+                .keys()
+                .map(String::as_str)
+                .filter(|f| self.decls().qualified_only(f).is_none()),
+        );
         candidates.extend(self.items.bare_variants.keys().map(String::as_str));
         let name = &ident.name;
         let diagnostic = suggest::unknown(
@@ -631,8 +704,15 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         self.diagnostics.push(diagnostic);
     }
 
-    /// `base.name` outside a call: a field, or a member of a type.
+    /// `base.name` outside a call: a field, a member of a type, or a
+    /// module's export.
     fn field_expr(&mut self, base: &Expr, name: &Ident) -> Ty {
+        if let Some(module) = self.module_name(base) {
+            if !self.require_export(module, name) {
+                return Ty::Error;
+            }
+            return self.item_value(name);
+        }
         if let Some(type_name) = self.type_name(base) {
             return match self.type_member(&type_name, name) {
                 Some(callable) if callable.labels != Labels::Optional => {

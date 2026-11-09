@@ -10,13 +10,26 @@ use crate::prelude;
 use crate::suggest;
 use crate::ty;
 
-/// Report every unresolved or misused type and trait name in `module`.
+/// Report every unresolved or misused type and trait name in the user
+/// module `module`.
 pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
+    resolve(module, decls, false, diagnostics);
+}
+
+/// Report every unresolved or misused type and trait name in the prelude
+/// or a `std` module, which see every declared name unqualified.
+#[cfg(test)]
+pub fn prelude_module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
+    resolve(module, decls, true, diagnostics);
+}
+
+fn resolve(module: &Module, decls: &Decls, see_all: bool, diagnostics: &mut Vec<Diagnostic>) {
     let mut resolver = Resolver {
         decls,
         diagnostics,
         generics: Vec::new(),
         self_in_scope: false,
+        see_all,
     };
     for item in &module.items {
         match &item.kind {
@@ -66,6 +79,9 @@ struct Resolver<'d, 'a> {
     generics: Vec<String>,
     /// Inside a `trait` or `impl`, where `Self` names the type.
     self_in_scope: bool,
+    /// Resolving the prelude or a `std` module: every declared name is in
+    /// scope unqualified.
+    see_all: bool,
 }
 
 /// Which namespace a name is expected in.
@@ -155,25 +171,48 @@ impl Resolver<'_, '_> {
     }
 
     fn path(&mut self, segments: &[Ident], expect: Expect) {
-        let [ident] = segments else {
-            // Only `std.*` modules can be imported, and none exist yet.
-            let (Some(first), Some(last)) = (segments.first(), segments.last()) else {
+        let ident = match segments {
+            [ident] => ident,
+            [module, ident] if self.decls.bound_module(&module.name).is_some() => {
+                if self.decls.path_name(segments, false).is_none() {
+                    if let Some(module) = self.decls.bound_module(&module.name) {
+                        self.diagnostics.push(suggest::not_exported(
+                            module,
+                            &ident.name,
+                            ident.span,
+                        ));
+                    }
+                    return;
+                }
+                ident
+            }
+            _ => {
+                // Only a module that a plain `use` binds can qualify a name.
+                let (Some(first), Some(last)) = (segments.first(), segments.last()) else {
+                    return;
+                };
+                let span = Span {
+                    start: first.span.start,
+                    end: last.span.end,
+                };
+                let names: Vec<&str> = segments.iter().map(|s| s.name.as_str()).collect();
+                self.diagnostics.push(Diagnostic::new(
+                    codes::UNKNOWN_NAME,
+                    format!("unknown {} `{}`", expect.noun(), names.join(".")),
+                    span,
+                ));
                 return;
-            };
-            let span = Span {
-                start: first.span.start,
-                end: last.span.end,
-            };
-            let names: Vec<&str> = segments.iter().map(|s| s.name.as_str()).collect();
-            self.diagnostics.push(Diagnostic::new(
-                codes::UNKNOWN_NAME,
-                format!("unknown {} `{}`", expect.noun(), names.join(".")),
-                span,
-            ));
-            return;
+            }
         };
         let name = ident.name.as_str();
-        let found = if self.is_type_variable(name) {
+        if segments.len() == 1 && !self.see_all && !self.is_type_variable(name) {
+            if let Some(module) = self.decls.qualified_only(name) {
+                self.diagnostics
+                    .push(suggest::qualify(module, ident.span, name));
+                return;
+            }
+        }
+        let found = if segments.len() == 1 && self.is_type_variable(name) {
             Some(Expect::Type)
         } else {
             self.decls.get(name).map(|d| match d.kind {
@@ -259,13 +298,8 @@ impl Resolver<'_, '_> {
         let exports = module.exports();
         for name in names.unwrap_or_default() {
             if !exports.contains(&name.name.as_str()) {
-                self.diagnostics.push(suggest::unknown(
-                    codes::NOT_EXPORTED,
-                    format!("`{written}` has no `{}`", name.name),
-                    &name.name,
-                    name.span,
-                    &exports,
-                ));
+                self.diagnostics
+                    .push(suggest::not_exported(module, &name.name, name.span));
             }
         }
     }

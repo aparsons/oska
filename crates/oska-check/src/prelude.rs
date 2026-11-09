@@ -2,7 +2,7 @@
 
 use std::sync::OnceLock;
 
-use oska_syntax::ast::{ItemKind, Module};
+use oska_syntax::ast::{Item, ItemKind, Module};
 
 /// The prelude's source text. Read `prelude.osk` for what is in scope.
 pub const SOURCE: &str = include_str!("prelude.osk");
@@ -34,14 +34,26 @@ pub struct SinkLiteral {
 }
 
 /// Every `std.*` module that `use` can import.
-pub static STD_MODULES: &[StdModule] = &[StdModule {
-    path: "std.sql",
-    source: include_str!("std/sql.osk"),
-    sink_literal: Some(SinkLiteral {
-        tag: "sql",
-        ty: "SqlLiteral",
-    }),
-}];
+pub static STD_MODULES: &[StdModule] = &[
+    StdModule {
+        path: "std.sql",
+        source: include_str!("std/sql.osk"),
+        sink_literal: Some(SinkLiteral {
+            tag: "sql",
+            ty: "SqlLiteral",
+        }),
+    },
+    StdModule {
+        path: "std.proc",
+        source: include_str!("std/proc.osk"),
+        sink_literal: None,
+    },
+    StdModule {
+        path: "std.html",
+        source: include_str!("std/html.osk"),
+        sink_literal: None,
+    },
+];
 
 /// The `std.*` module at `path`.
 pub fn std_module(path: &str) -> Option<&'static StdModule> {
@@ -53,6 +65,15 @@ pub fn sink_module(tag: &str) -> Option<&'static StdModule> {
     STD_MODULES
         .iter()
         .find(|m| m.sink_literal.as_ref().is_some_and(|s| s.tag == tag))
+}
+
+/// The sink literal whose type is named `ty`, such as `sql` for
+/// `SqlLiteral`.
+pub fn sink_literal_typed(ty: &str) -> Option<&'static SinkLiteral> {
+    STD_MODULES
+        .iter()
+        .filter_map(|m| m.sink_literal.as_ref())
+        .find(|s| s.ty == ty)
 }
 
 impl StdModule {
@@ -82,14 +103,31 @@ impl StdModule {
             .items
             .iter()
             .filter(|item| item.public)
-            .filter_map(|item| match &item.kind {
-                ItemKind::Fn(f) => Some(f.name.name.as_str()),
-                ItemKind::Struct(s) => Some(s.name.name.as_str()),
-                ItemKind::Enum(e) => Some(e.name.name.as_str()),
-                ItemKind::Trait(t) => Some(t.name.name.as_str()),
-                _ => None,
-            })
+            .filter_map(item_name)
             .collect()
+    }
+
+    /// Every function, type, and trait name the module declares, `pub` or
+    /// not.
+    pub fn declared(&self) -> Vec<&'static str> {
+        self.module().items.iter().filter_map(item_name).collect()
+    }
+
+    /// The name a plain `use` binds: the path's last segment, as `sql`
+    /// for `std.sql`.
+    pub fn name(&self) -> &'static str {
+        self.path.rsplit('.').next().unwrap_or(self.path)
+    }
+}
+
+/// The function, type, or trait name `item` declares.
+fn item_name(item: &'static Item) -> Option<&'static str> {
+    match &item.kind {
+        ItemKind::Fn(f) => Some(f.name.name.as_str()),
+        ItemKind::Struct(s) => Some(s.name.name.as_str()),
+        ItemKind::Enum(e) => Some(e.name.name.as_str()),
+        ItemKind::Trait(t) => Some(t.name.name.as_str()),
+        _ => None,
     }
 }
 
@@ -115,7 +153,7 @@ mod tests {
         let empty = oska_syntax::parse_module("").expect("empty module");
         let mut diagnostics = Vec::new();
         let decls = Decls::collect(&empty, &mut diagnostics);
-        resolve::module(super::module(), &decls, &mut diagnostics);
+        resolve::prelude_module(super::module(), &decls, &mut diagnostics);
         let found: Vec<String> = diagnostics
             .iter()
             .map(|d| format!("{d}: {:?}", &super::SOURCE[d.span.start..d.span.end]))
@@ -130,7 +168,7 @@ mod tests {
                 oska_syntax::parse_module(&format!("use {}", std.path)).expect("a use parses");
             let mut diagnostics = Vec::new();
             let decls = Decls::collect(&importer, &mut diagnostics);
-            resolve::module(std.module(), &decls, &mut diagnostics);
+            resolve::prelude_module(std.module(), &decls, &mut diagnostics);
             let found: Vec<String> = diagnostics
                 .iter()
                 .map(|d| format!("{d}: {:?}", &std.source[d.span.start..d.span.end]))

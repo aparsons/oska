@@ -140,7 +140,7 @@ fn trait_impl(item: &Item, decls: &Decls, in_prelude: bool) -> Option<TraitImpl>
     let ItemKind::Impl(imp) = &item.kind else {
         return None;
     };
-    let lower = Lower::new(decls).with_generics(&imp.generics);
+    let lower = Lower::in_scope(decls, in_prelude).with_generics(&imp.generics);
     let (trait_name, trait_args) = lower.bound(imp.trait_ref.as_ref()?)?;
     let target = lower.ty(&imp.target);
     if target.is_error() {

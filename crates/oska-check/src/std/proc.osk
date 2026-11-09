@@ -1,0 +1,27 @@
+// `std.proc`: the process sink. Signature-only, like `std.sql`; the
+// runtime implementation comes with the interpreter (#9).
+//
+// Starting a process needs the `Spawn` capability. The program name is a
+// **structural position**: it must be trusted text. The arguments are a
+// **data position**: each is passed to the program as one argument, never
+// through a shell, so untrusted text can't inject a command.
+
+// Run `program` with `args` and wait for it to finish.
+pub fn run(spawn: Spawn, program: String, args: List<Untrusted<String>>) -> Result<Output, ProcError>
+
+// What a finished process wrote and how it exited.
+pub struct Output { handle: Int }
+
+impl Output {
+    // The exit status.
+    pub fn status(self) -> Int
+    // What the process wrote to standard output: text from outside the
+    // program, so untrusted.
+    pub fn stdout(self) -> Untrusted<String>
+}
+
+pub struct ProcError { pub message: String }
+
+impl Display for ProcError {
+    fn to_string(self) -> String
+}

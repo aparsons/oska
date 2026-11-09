@@ -3,6 +3,9 @@
 
 use oska_syntax::{Diagnostic, Edit, Span};
 
+use crate::codes;
+use crate::prelude::StdModule;
+
 /// A diagnostic `code` about the unknown `name` at `span`. When exactly
 /// one of `candidates` is close enough, the message asks whether it was
 /// meant and the fix replaces `name` with it.
@@ -47,6 +50,50 @@ pub fn unknown_written(
         ),
         None => Diagnostic::new(code, message, span),
     }
+}
+
+/// `name` at `span` written unqualified, though it is declared by
+/// `module`, which a plain `use` imports only as a module. The fix
+/// qualifies it, as `sql.Db`.
+pub fn qualify(module: &StdModule, span: Span, name: &str) -> Diagnostic {
+    let (path, prefix) = (module.path, module.name());
+    if !module.exports().contains(&name) {
+        return Diagnostic::new(
+            codes::QUALIFIED_ONLY,
+            format!("`{name}` is private to `{path}`"),
+            span,
+        );
+    }
+    Diagnostic::new(
+        codes::QUALIFIED_ONLY,
+        format!(
+            "`{name}` is in `{path}`, which `use {path}` imports as a module; \
+             write `{prefix}.{name}`, or import it with `use {path}.{{{name}}}`"
+        ),
+        span,
+    )
+    .with_fix(
+        format!("write `{prefix}.{name}`"),
+        vec![Edit {
+            span: Span {
+                start: span.start,
+                end: span.start,
+            },
+            replacement: format!("{prefix}."),
+        }],
+    )
+}
+
+/// `module.name`, where `module` does not export `name`, at `span`. The
+/// fix uses the closest export.
+pub fn not_exported(module: &StdModule, name: &str, span: Span) -> Diagnostic {
+    unknown(
+        codes::NOT_EXPORTED,
+        format!("`{}` has no `{name}`", module.path),
+        name,
+        span,
+        &module.exports(),
+    )
 }
 
 /// The single candidate closest to `name`, if one is close enough: at

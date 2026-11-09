@@ -66,7 +66,8 @@ fn reach(ty: &Ty, decls: &Decls, expanding: &mut Vec<String>) -> Reach {
                     let mut total = Reach::default();
                     if !expanding.contains(name) {
                         expanding.push(name.clone());
-                        let lower = Lower::new(decls).with_generic_names(&decl.generics);
+                        let lower = Lower::in_scope(decls, decl.in_prelude)
+                            .with_generic_names(&decl.generics);
                         let subst: Vec<(String, Ty)> = decl
                             .generics
                             .iter()
