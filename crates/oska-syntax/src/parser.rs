@@ -50,9 +50,12 @@
 //! - `E0163`: `pub test`; tests are never exported
 //! - `E0164`: `pub use`; re-exports are not defined in v0
 //! - `E0165`: `#[integration]` on an item other than `test`
+//! - `E0170`: `#[capability]` on an item other than `struct`, in the
+//!   prelude ([`parse_prelude`]); in user code the attribute is `E0132`
 //!
-//! Diagnostics `E0005`, `E0112`, `E0120`, `E0143`, `E0151`, and
-//! `E0162`–`E0164` can carry a machine-applicable [`Fix`](crate::Fix).
+//! Diagnostics `E0005`, `E0112`, `E0120`, `E0143`, `E0151`,
+//! `E0162`–`E0164`, and `E0170` can carry a machine-applicable
+//! [`Fix`](crate::Fix).
 
 use crate::ast::{
     Arg, Attribute, BinaryOp, Block, ClosureParam, ConstDecl, Ensures, EnumDecl, Expr, ExprKind,
@@ -65,7 +68,20 @@ use crate::{join, lex, resolve_escape, Diagnostic, Edit, Keyword, Punct, Span, T
 /// Parse a whole source file: a sequence of items separated by line
 /// breaks. Stops at the first error.
 pub fn parse_module(src: &str) -> Result<Module, Diagnostic> {
+    module(src, Mode::User)
+}
+
+/// Parse the source of the **prelude**, which declares what user code
+/// cannot: functions without bodies, whose behavior is built in, and
+/// built-in capabilities, marked `#[capability]`. Otherwise it is the
+/// same grammar as [`parse_module`].
+pub fn parse_prelude(src: &str) -> Result<Module, Diagnostic> {
+    module(src, Mode::Prelude)
+}
+
+fn module(src: &str, mode: Mode) -> Result<Module, Diagnostic> {
     let mut parser = Parser::new(src)?;
+    parser.mode = mode;
     let items = parser.items()?;
     Ok(Module {
         items,
@@ -101,6 +117,18 @@ pub fn parse_type(src: &str) -> Result<Type, Diagnostic> {
 /// The closed set of attribute names. There are no user macros
 /// (ADR 0003), so any other name is a typo or unsupported.
 const ATTRIBUTES: &[&str] = &["integration"];
+
+/// The attribute that marks a built-in capability. Only the prelude may
+/// declare one, so user code gets the unknown-attribute error for it.
+const CAPABILITY: &str = "capability";
+
+/// Whether the source is user code or the embedded prelude.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    User,
+    /// Functions may omit their bodies, and `#[capability]` is allowed.
+    Prelude,
+}
 
 /// Where a function is declared, which decides whether it may take a
 /// receiver and whether it may omit its body.
@@ -146,6 +174,7 @@ struct Parser<'a> {
     pos: usize,
     /// End of the most recently consumed token.
     prev_end: usize,
+    mode: Mode,
 }
 
 fn error(code: &'static str, message: impl Into<String>, span: Span) -> Diagnostic {
@@ -217,6 +246,7 @@ impl<'a> Parser<'a> {
             tokens,
             pos: 0,
             prev_end: 0,
+            mode: Mode::User,
         })
     }
 
@@ -352,6 +382,38 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// Whether a body-less signature ends before the next token. A
+    /// signature ending in a generic type's `>` emits no line break, so the
+    /// signature also ends when the next line starts a new item or method
+    /// (`fn`, `pub`, `#`) or closes the block (`}`).
+    fn at_signature_end(&self) -> bool {
+        if self.at_line_end() {
+            return true;
+        }
+        let next = self.peek_span().start;
+        let line_break = self
+            .src
+            .get(self.prev_end..next)
+            .is_some_and(|gap| gap.contains('\n'));
+        line_break
+            && matches!(
+                self.peek(),
+                Some(
+                    TokenKind::Keyword(Keyword::Fn | Keyword::Pub)
+                        | TokenKind::Punct(Punct::Hash | Punct::RBrace)
+                )
+            )
+    }
+
+    /// Whether `item` ends here: at a line end, or, for a body-less
+    /// function, wherever its signature ends.
+    fn at_item_end(&self, item: &Item) -> bool {
+        match &item.kind {
+            ItemKind::Fn(decl) if decl.body.is_none() => self.at_signature_end(),
+            _ => self.at_line_end(),
+        }
+    }
+
     /// Consume an optional `pub`, returning its span.
     fn eat_pub(&mut self) -> Option<Span> {
         let span = self.peek_span();
@@ -387,8 +449,10 @@ impl<'a> Parser<'a> {
             if self.peek().is_none() {
                 return Ok(items);
             }
-            items.push(self.item()?);
-            if !self.at_line_end() {
+            let item = self.item()?;
+            let ended = self.at_item_end(&item);
+            items.push(item);
+            if !ended {
                 return Err(self.expected("a line break after the item"));
             }
         }
@@ -456,8 +520,34 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Reject `#[integration]` unless the next token starts a `test`.
+    /// Reject `#[integration]` unless the next token starts a `test`, and
+    /// `#[capability]` unless it starts a `struct`.
     fn check_attributes(&self, attributes: &[Attribute]) -> Result<(), Diagnostic> {
+        if !self.at_kw(Keyword::Struct) {
+            if let Some(attribute) = attributes.iter().find(|a| a.name.name == CAPABILITY) {
+                // The fix deletes the attribute and the line break and
+                // indentation after it, up to the next real token.
+                let end = self
+                    .tokens
+                    .iter()
+                    .find(|t| t.span.start >= attribute.span.end && t.kind != TokenKind::Newline)
+                    .map_or(attribute.span.end, |t| t.span.start);
+                let err = error(
+                    "E0170",
+                    "`#[capability]` declares a built-in capability, which is an \
+                     opaque `struct`, so it can only be written on a `struct` item; \
+                     remove it here",
+                    attribute.span,
+                );
+                return Err(err.with_fix(
+                    "remove `#[capability]`",
+                    vec![Edit::delete(Span {
+                        start: attribute.span.start,
+                        end,
+                    })],
+                ));
+            }
+        }
         if self.at_kw(Keyword::Test) {
             return Ok(());
         }
@@ -477,7 +567,8 @@ impl<'a> Parser<'a> {
         let start = self.expect_punct(Punct::Hash)?;
         self.expect_punct(Punct::LBracket)?;
         let name = self.expect_ident("an attribute name")?;
-        if !ATTRIBUTES.contains(&name.name.as_str()) {
+        let prelude_only = self.mode == Mode::Prelude && name.name == CAPABILITY;
+        if !prelude_only && !ATTRIBUTES.contains(&name.name.as_str()) {
             let known: Vec<String> = ATTRIBUTES.iter().map(|a| format!("`#[{a}]`")).collect();
             return Err(error(
                 "E0132",
@@ -694,13 +785,15 @@ impl<'a> Parser<'a> {
                 ));
             }
             let decl = self.fn_decl(context)?;
-            methods.push(Item {
+            let method = Item {
                 public: prefix.pub_span.is_some(),
                 attributes: prefix.attributes,
                 kind: ItemKind::Fn(decl),
                 span: self.span_from(prefix.start),
-            });
-            if !self.at_line_end() {
+            };
+            let ended = self.at_item_end(&method);
+            methods.push(method);
+            if !ended {
                 return Err(self.expected("a line break after the method"));
             }
         }
@@ -790,8 +883,10 @@ impl<'a> Parser<'a> {
         if matches!(self.peek(), Some(TokenKind::Ident(word)) if word == "where") {
             return Err(self.where_clause());
         }
-        // Only a trait method may stop after its signature.
-        let body = if context == FnContext::Trait && self.at_line_end() {
+        // Only a trait method, or any function in the prelude, may stop
+        // after its signature.
+        let may_omit_body = context == FnContext::Trait || self.mode == Mode::Prelude;
+        let body = if may_omit_body && self.at_signature_end() {
             None
         } else {
             Some(self.block()?)

@@ -8,6 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+oska-check = { path = "../oska-check" }
 oska-syntax = { path = "../oska-syntax" }
 
 [lints]

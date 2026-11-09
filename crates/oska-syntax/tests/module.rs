@@ -126,7 +126,7 @@ fn examples_parse() {
     assert_eq!(names(include_str!("../../../examples/hello.osk")), ["main"]);
     assert_eq!(
         names(include_str!("../../../examples/capabilities.osk")),
-        ["count_lines", "main"]
+        ["count_lines", "AppError", "impl", "impl", "impl", "main"]
     );
 }
 

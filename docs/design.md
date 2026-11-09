@@ -79,6 +79,7 @@ test "deposit adds to the balance" {
 - Fields in `struct` and `enum` declarations are separated by commas, even when each field is on its own line.
 
   Both rules are needed because a line ending in a generic type's closing `>` does not end a statement: `>` is treated as an operator, which continues onto the next line.
+- A body-less signature (a trait method, or a prelude function) whose return type ends in `>` still ends at the line break when the next line starts with `fn`, `pub`, `#`, or `}`.
 
 ### Names, types, and calls
 
@@ -116,7 +117,7 @@ test "deposit adds to the balance" {
 
 ## Type checking
 
-The checker is `oskac check`, built as its own crate, `oska-check`, on top of the parser. Its diagnostic codes are `E02xx`.
+The checker is `oskac check`, built as its own crate, `oska-check`, on top of the parser. Its diagnostic codes are `E02xx`. Its report format and codes are described in [`checker.md`](checker.md).
 
 ### Scope and reporting
 
