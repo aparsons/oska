@@ -66,5 +66,9 @@ The prelude is Oska source, `crates/oska-check/src/prelude.osk`, parsed with `pa
 | `E0233` | A type that inference cannot work out, such as `let xs = List.new()` with no later use. | None. |
 | `E0234` | A type name used as a value, or a type that cannot be constructed. | None. |
 | `E0235` | `for` over a value that is not a `List` or a range. | None. |
+| `E0240` | An expression statement whose `Result` value is dropped. Discard one deliberately with `let _ = f()`. Spans the expression. | None. |
+| `E0241` | `?` on a value that is neither a `Result` nor an `Option`. Spans the `?` expression. | None. |
+| `E0242` | `?` on a `Result` whose error type is not the enclosing function's error type, with no `impl From` to convert it. Spans the `?` expression. | None. |
+| `E0243` | `?` in a function (or closure) that does not return the same kind: an `Option` in a function returning `Result` (convert with `.ok_or(err)?`), a `Result` in one returning `Option`, or either in one returning neither. Spans the `?` expression. | None. |
 | `E0280` | A contract clause (`requires` or `ensures`) calls a function that is not pure: one with a capability-bearing parameter or receiver, or a `cap fn` value. Spans the call. | None. |
 | `E0281` | A `requires` or `ensures` condition whose type is not `Bool`. Spans the condition. | None. |
