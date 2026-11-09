@@ -242,7 +242,7 @@ impl Expect {
 /// The single candidate closest to `name`, if one is close enough: at
 /// most a third of the name's length in edits (at least one), ignoring
 /// case. A tie means no suggestion.
-fn closest<'c>(name: &str, candidates: &[&'c str]) -> Option<&'c str> {
+pub(crate) fn closest<'c>(name: &str, candidates: &[&'c str]) -> Option<&'c str> {
     let limit = (name.chars().count() / 3).max(1);
     let mut best: Option<(usize, &str)> = None;
     let mut tied = false;

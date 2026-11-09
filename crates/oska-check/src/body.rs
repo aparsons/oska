@@ -1,0 +1,1333 @@
+//! Checking function bodies: local, bidirectional type inference.
+//!
+//! Each body gets a fresh [`Body`] with its own inference context, so
+//! nothing is inferred across function boundaries. Every expression is
+//! checked by [`Body::expr`], which takes an optional expected type and
+//! returns the expression's type:
+//!
+//! - [`Body::check`] checks an expression against a type it must have,
+//!   reporting a single mismatch (`E0220`) when it doesn't.
+//! - [`Body::infer`] finds an expression's type with no expectation.
+//!
+//! An expression that fails gets [`Ty::Error`], which unifies with
+//! everything, so one mistake produces one diagnostic.
+//!
+//! Extension points for later stages:
+//!
+//! - **Statements:** [`Body::expr_stmt`] sees every expression whose value
+//!   is discarded.
+//! - **Patterns:** [`Body::bind_pattern`] binds a pattern's names; for now
+//!   every binding has the error type.
+//! - **`?`:** [`Body::try_expr`].
+//! - **Method lookup:** [`Body::method_call`] and [`Items::method`].
+//! - **Closures:** [`Body::closure`]. Locals are a stack, so a closure's
+//!   captures are the names it resolves below the stack height at which
+//!   the closure's parameters were pushed.
+
+use oska_syntax::ast::{
+    Arg, BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, ItemKind, MatchArm,
+    Module, Pattern, PatternKind, StmtKind, StrPart, UnaryOp,
+};
+use oska_syntax::{Diagnostic, Edit, Span};
+
+use crate::codes;
+use crate::decls::{DeclKind, Decls};
+use crate::infer::Infer;
+use crate::items::{FieldsInfo, FnSig, Items, Lower, Shape};
+use crate::resolve::closest;
+use crate::ty::Ty;
+
+/// Check every function, method, and constant body in `module`.
+pub fn module(module: &Module, decls: &Decls, items: &Items, diagnostics: &mut Vec<Diagnostic>) {
+    for item in &module.items {
+        match &item.kind {
+            ItemKind::Fn(f) => function(f, Lower::new(decls), items, diagnostics),
+            ItemKind::Impl(imp) => {
+                let lower = Lower::new(decls).with_generics(&imp.generics);
+                let target = lower.ty(&imp.target);
+                let lower = lower.with_self(target);
+                for method in &imp.methods {
+                    if let ItemKind::Fn(f) = &method.kind {
+                        function(f, lower.clone(), items, diagnostics);
+                    }
+                }
+            }
+            ItemKind::Trait(t) => {
+                let lower = Lower::new(decls)
+                    .with_generics(&t.generics)
+                    .with_self(Ty::Param("Self".to_string()));
+                for method in &t.methods {
+                    if let ItemKind::Fn(f) = &method.kind {
+                        function(f, lower.clone(), items, diagnostics);
+                    }
+                }
+            }
+            ItemKind::Const(c) => {
+                let lower = Lower::new(decls);
+                let ty = lower.ty(&c.ty);
+                let mut body = Body::new(items, lower, Ty::Unit, diagnostics);
+                body.check(&c.value, &ty);
+            }
+            // Test bodies use the test runner's `t`, which is not
+            // declared yet.
+            ItemKind::Struct(_) | ItemKind::Enum(_) | ItemKind::Use(_) | ItemKind::Test(_) => {}
+        }
+    }
+}
+
+/// Check one function body against its signature. `lower` has the
+/// enclosing impl's or trait's generics and `Self` in scope.
+fn function(f: &FnDecl, lower: Lower, items: &Items, diagnostics: &mut Vec<Diagnostic>) {
+    let Some(block) = &f.body else {
+        return;
+    };
+    let lower = lower.with_generics(&f.generics);
+    let sig = lower.signature(f, &[], lower.self_ty.clone());
+    let mut body = Body::new(items, lower, sig.ret.clone(), diagnostics);
+    if let Some(receiver) = &f.receiver {
+        body.receiver = Some(Receiver {
+            ty: sig.self_ty.clone().unwrap_or(Ty::Error),
+            mutable: receiver.mutable,
+            span: receiver.span,
+        });
+    }
+    for (name, ty) in &sig.params {
+        body.bind(name, ty.clone(), Binding::Param);
+    }
+    let ret = sig.ret.clone();
+    body.block(block, Some(&ret), true);
+    body.finish();
+}
+
+/// How a local was introduced, which decides whether it can be mutated.
+#[derive(Debug, Clone, Copy)]
+enum Binding {
+    /// `let`, with the span of the `let` keyword for the fix to `var`.
+    Let(Span),
+    Var,
+    Param,
+    /// A `for` loop variable.
+    Loop,
+    /// Bound by a `match` pattern or a `scope` handle.
+    Pattern,
+}
+
+#[derive(Debug)]
+struct Local {
+    name: String,
+    ty: Ty,
+    binding: Binding,
+}
+
+/// The method's receiver, `self` or `var self`.
+#[derive(Debug)]
+struct Receiver {
+    ty: Ty,
+    mutable: bool,
+    span: Span,
+}
+
+/// How a call's argument labels are checked.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Labels {
+    /// A function call: labels are optional and must match the parameter.
+    Optional,
+    /// Construction of named fields: every label is required, in order.
+    Required,
+    /// Construction of positional fields: no labels.
+    None,
+}
+
+/// A callable thing, already instantiated: its parameters (with names,
+/// when it has them), result type, and how labels are checked.
+struct Callable {
+    description: String,
+    params: Vec<(Option<String>, Ty)>,
+    ret: Ty,
+    labels: Labels,
+}
+
+/// The state of checking one body.
+pub struct Body<'c, 'd, 'a> {
+    items: &'c Items,
+    lower: Lower<'d, 'a>,
+    infer: Infer,
+    diagnostics: &'c mut Vec<Diagnostic>,
+    /// Locals in scope, innermost last. Shadowing pushes a new one.
+    locals: Vec<Local>,
+    receiver: Option<Receiver>,
+    /// The type `return` must produce: the function's or the innermost
+    /// closure's.
+    ret: Ty,
+    loop_depth: usize,
+    /// Unannotated `let` and `var` bindings, checked for unsolved types at
+    /// the end of the body.
+    inferred_lets: Vec<(Ident, Ty)>,
+}
+
+impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
+    fn new(
+        items: &'c Items,
+        lower: Lower<'d, 'a>,
+        ret: Ty,
+        diagnostics: &'c mut Vec<Diagnostic>,
+    ) -> Self {
+        Body {
+            items,
+            lower,
+            infer: Infer::default(),
+            diagnostics,
+            locals: Vec::new(),
+            receiver: None,
+            ret,
+            loop_depth: 0,
+            inferred_lets: Vec::new(),
+        }
+    }
+
+    fn decls(&self) -> &'d Decls<'a> {
+        self.lower.decls()
+    }
+
+    fn error(&mut self, code: &'static str, message: impl Into<String>, span: Span) {
+        self.diagnostics.push(Diagnostic::new(code, message, span));
+    }
+
+    /// Report bindings whose types inference could not work out.
+    fn finish(&mut self) {
+        for (name, ty) in std::mem::take(&mut self.inferred_lets) {
+            let ty = self.infer.resolve(&ty);
+            if ty.has_vars() {
+                self.error(
+                    codes::CANNOT_INFER,
+                    format!(
+                        "cannot infer the type of `{}` (`{ty}`); add a type annotation",
+                        name.name
+                    ),
+                    name.span,
+                );
+            }
+        }
+    }
+
+    // ---- Locals ---------------------------------------------------------
+
+    fn bind(&mut self, name: &str, ty: Ty, binding: Binding) {
+        if name != "_" {
+            self.locals.push(Local {
+                name: name.to_string(),
+                ty,
+                binding,
+            });
+        }
+    }
+
+    fn local(&self, name: &str) -> Option<&Local> {
+        self.locals.iter().rev().find(|l| l.name == name)
+    }
+
+    /// `name` is a type in value position, such as `Shape` in
+    /// `Shape.Circle`, and not shadowed by a local.
+    fn type_name(&self, expr: &Expr) -> Option<String> {
+        let ExprKind::Name(ident) = &expr.kind else {
+            return None;
+        };
+        if self.local(&ident.name).is_some() {
+            return None;
+        }
+        self.decls()
+            .get(&ident.name)
+            .map(|_| ident.name.clone())
+    }
+
+    // ---- Expressions ----------------------------------------------------
+
+    /// Check `expr` against `expected`, reporting a mismatch. Returns the
+    /// expression's type, or [`Ty::Error`] after a mismatch.
+    pub fn check(&mut self, expr: &Expr, expected: &Ty) -> Ty {
+        let ty = self.expr(expr, Some(expected));
+        self.expect(&ty, expected, expr.span)
+    }
+
+    /// The type of `expr`, with no expectation.
+    pub fn infer(&mut self, expr: &Expr) -> Ty {
+        self.expr(expr, None)
+    }
+
+    /// Unify `actual` with `expected`, reporting `E0220` at `span` when
+    /// they differ.
+    fn expect(&mut self, actual: &Ty, expected: &Ty, span: Span) -> Ty {
+        if self.infer.unify(actual, expected) {
+            return actual.clone();
+        }
+        let expected = self.infer.resolve(expected);
+        let actual = self.infer.resolve(actual);
+        self.error(
+            codes::MISMATCH,
+            format!("expected `{expected}`, found `{actual}`"),
+            span,
+        );
+        Ty::Error
+    }
+
+    /// The type of `expr`. `expected`, when given, guides inference (an
+    /// integer literal takes it, a closure's parameters come from it), but
+    /// is not enforced: [`Body::check`] does that.
+    pub fn expr(&mut self, expr: &Expr, expected: Option<&Ty>) -> Ty {
+        match &expr.kind {
+            ExprKind::Int(text) => {
+                let ty = self.literal_type(expected);
+                self.range_check(text, false, &ty, expr.span);
+                ty
+            }
+            ExprKind::Str(parts) => {
+                for part in parts {
+                    if let StrPart::Hole { path, .. } = part {
+                        self.hole(path);
+                    }
+                }
+                Ty::string()
+            }
+            // Sink literals get their types with untrusted values (#8).
+            ExprKind::SinkStr { .. } => Ty::Error,
+            ExprKind::Bool(_) => Ty::bool(),
+            ExprKind::Unit => Ty::Unit,
+            ExprKind::Name(ident) => self.name(ident),
+            ExprKind::SelfValue => match &self.receiver {
+                Some(receiver) => receiver.ty.clone(),
+                None => {
+                    self.error(
+                        codes::UNKNOWN_VALUE,
+                        "`self` is only available in a method with a `self` receiver",
+                        expr.span,
+                    );
+                    Ty::Error
+                }
+            },
+            ExprKind::Field { base, name } => self.field_expr(base, name),
+            ExprKind::Call { callee, args } => self.call(expr, callee, args, expected),
+            ExprKind::Unary { op, operand } => self.unary(expr, *op, operand, expected),
+            ExprKind::Binary { op, lhs, rhs } => self.binary(expr, *op, lhs, rhs, expected),
+            ExprKind::Try(operand) => self.try_expr(operand),
+            ExprKind::Range { start, end } => {
+                let ty = self.infer(start);
+                let ty = self.check(end, &ty);
+                let ty = self.infer.shallow(&ty);
+                if !ty.is_error() && !ty.is_integer() {
+                    self.error(
+                        codes::BAD_OPERAND,
+                        format!("`..` needs integer bounds, found `{ty}`"),
+                        expr.span,
+                    );
+                    return Ty::Error;
+                }
+                Ty::Named("Range".to_string(), vec![ty])
+            }
+            ExprKind::List(elements) => {
+                let element = match expected.map(|e| self.infer.shallow(e)) {
+                    Some(Ty::Named(name, args)) if name == "List" && args.len() == 1 => {
+                        args[0].clone()
+                    }
+                    _ => self.infer.fresh(),
+                };
+                for e in elements {
+                    self.check(e, &element);
+                }
+                Ty::Named("List".to_string(), vec![element])
+            }
+            ExprKind::Closure { params, body } => self.closure(params, body, expected),
+            ExprKind::If {
+                cond,
+                then_block,
+                else_branch,
+            } => {
+                self.check(cond, &Ty::bool());
+                let Some(else_branch) = else_branch else {
+                    // Without `else` the value is `()`, and the block's own
+                    // value is discarded.
+                    self.block(then_block, None, false);
+                    return Ty::Unit;
+                };
+                let then = self.block(then_block, expected, true);
+                match expected {
+                    Some(expected) => self.check(else_branch, expected),
+                    None if self.infer.shallow(&then) == Ty::Never => self.infer(else_branch),
+                    None => self.check(else_branch, &then),
+                }
+            }
+            ExprKind::Block(block) => self.block(block, expected, true),
+            ExprKind::Scope { handle, body } => {
+                // `scope` gets real types with concurrency; until then the
+                // handle has the error type.
+                self.locals.push(Local {
+                    name: handle.name.clone(),
+                    ty: Ty::Error,
+                    binding: Binding::Pattern,
+                });
+                let ty = self.block(body, expected, true);
+                self.locals.pop();
+                ty
+            }
+            ExprKind::Match { scrutinee, arms } => self.match_expr(scrutinee, arms, expected),
+        }
+    }
+
+    /// The type an integer literal takes: the expected integer type, or
+    /// `Int`.
+    fn literal_type(&self, expected: Option<&Ty>) -> Ty {
+        match expected.map(|e| self.infer.shallow(e)) {
+            Some(ty) if ty.is_integer() => ty,
+            _ => Ty::int(),
+        }
+    }
+
+    /// Report an integer literal (negated when `negative`) that does not
+    /// fit `ty`.
+    fn range_check(&mut self, text: &str, negative: bool, ty: &Ty, span: Span) {
+        let Some((min, max)) = ty.integer_range() else {
+            return;
+        };
+        let digits: String = text.chars().filter(|&c| c != '_').collect();
+        let fits = digits.parse::<i128>().ok().is_some_and(|value| {
+            let value = if negative { -value } else { value };
+            (min..=max).contains(&value)
+        });
+        if !fits {
+            self.error(
+                codes::LITERAL_OUT_OF_RANGE,
+                format!("this literal does not fit in `{ty}`, which ranges from {min} to {max}"),
+                span,
+            );
+        }
+    }
+
+    /// An interpolation hole, `{name}` or `{name.field}`.
+    fn hole(&mut self, path: &[Ident]) {
+        let Some((first, rest)) = path.split_first() else {
+            return;
+        };
+        let mut ty = self.name(first);
+        for field in rest {
+            ty = self.field_of(ty, field);
+        }
+    }
+
+    /// A name in value position.
+    fn name(&mut self, ident: &Ident) -> Ty {
+        let name = ident.name.as_str();
+        if let Some(local) = self.local(name) {
+            return local.ty.clone();
+        }
+        if let Some(sig) = self.items.fns.get(name).cloned() {
+            let callable = self.instantiate(&sig, None);
+            return callable.into_fn_type();
+        }
+        if let Some(enum_name) = self.items.bare_variants.get(name).cloned() {
+            return self.variant_value(&enum_name, name);
+        }
+        if self.decls().get(name).is_some() {
+            self.error(
+                codes::NOT_A_VALUE,
+                format!("`{name}` is a type, not a value"),
+                ident.span,
+            );
+            return Ty::Error;
+        }
+        self.unknown_value(ident);
+        Ty::Error
+    }
+
+    fn unknown_value(&mut self, ident: &Ident) {
+        let mut candidates: Vec<&str> = self.locals.iter().map(|l| l.name.as_str()).collect();
+        candidates.extend(self.items.fns.keys().map(String::as_str));
+        candidates.extend(self.items.bare_variants.keys().map(String::as_str));
+        let name = &ident.name;
+        let diagnostic = match closest(name, &candidates) {
+            Some(suggestion) => Diagnostic::new(
+                codes::UNKNOWN_VALUE,
+                format!("unknown name `{name}`; did you mean `{suggestion}`?"),
+                ident.span,
+            )
+            .with_fix(
+                format!("replace with `{suggestion}`"),
+                vec![Edit {
+                    span: ident.span,
+                    replacement: suggestion.to_string(),
+                }],
+            ),
+            None => Diagnostic::new(
+                codes::UNKNOWN_VALUE,
+                format!("unknown name `{name}`"),
+                ident.span,
+            ),
+        };
+        self.diagnostics.push(diagnostic);
+    }
+
+    /// `base.name` outside a call: a field, or a member of a type.
+    fn field_expr(&mut self, base: &Expr, name: &Ident) -> Ty {
+        if let Some(type_name) = self.type_name(base) {
+            return match self.type_member(&type_name, name) {
+                Some(callable) if callable.labels != Labels::Optional => {
+                    if callable.params.is_empty() {
+                        callable.ret
+                    } else {
+                        callable.into_fn_type()
+                    }
+                }
+                Some(callable) => callable.into_fn_type(),
+                None => Ty::Error,
+            };
+        }
+        let ty = self.infer(base);
+        self.field_of(ty, name)
+    }
+
+    /// The type of field `name` of a value of type `ty`.
+    fn field_of(&mut self, ty: Ty, name: &Ident) -> Ty {
+        let ty = self.infer.resolve(&ty);
+        let type_name = match &ty {
+            Ty::Error => return Ty::Error,
+            Ty::Var(_) => {
+                self.error(
+                    codes::CANNOT_INFER,
+                    format!("the type must be known before `.{}`", name.name),
+                    name.span,
+                );
+                return Ty::Error;
+            }
+            Ty::Named(type_name, args) => {
+                if let Some(info) = self.items.structs.get(type_name) {
+                    let field = info
+                        .fields
+                        .fields
+                        .iter()
+                        .find(|(n, _)| n.as_deref() == Some(name.name.as_str()));
+                    if let Some((_, field_ty)) = field {
+                        let subst: Vec<(String, Ty)> =
+                            info.generics.iter().cloned().zip(args.clone()).collect();
+                        return field_ty.substitute(&subst);
+                    }
+                }
+                Some(type_name.clone())
+            }
+            _ => None,
+        };
+        let is_method = type_name
+            .as_deref()
+            .is_some_and(|t| self.items.method(t, &name.name).is_some());
+        if is_method {
+            self.error(
+                codes::NO_FIELD,
+                format!("`{}` is a method; call it with `()`", name.name),
+                name.span,
+            );
+            return Ty::Error;
+        }
+        let fields: Vec<&str> = type_name
+            .as_deref()
+            .and_then(|t| self.items.structs.get(t))
+            .map(|info| {
+                info.fields
+                    .fields
+                    .iter()
+                    .filter_map(|(n, _)| n.as_deref())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let message = format!("`{ty}` has no field `{}`", name.name);
+        self.report_with_suggestion(codes::NO_FIELD, message, name, &fields);
+        Ty::Error
+    }
+
+    /// Report `message` at `ident`, with a fix replacing it by the closest
+    /// of `candidates` when there is one.
+    fn report_with_suggestion(
+        &mut self,
+        code: &'static str,
+        message: String,
+        ident: &Ident,
+        candidates: &[&str],
+    ) {
+        let diagnostic = match closest(&ident.name, candidates) {
+            Some(suggestion) => Diagnostic::new(
+                code,
+                format!("{message}; did you mean `{suggestion}`?"),
+                ident.span,
+            )
+            .with_fix(
+                format!("replace with `{suggestion}`"),
+                vec![Edit {
+                    span: ident.span,
+                    replacement: suggestion.to_string(),
+                }],
+            ),
+            None => Diagnostic::new(code, message, ident.span),
+        };
+        self.diagnostics.push(diagnostic);
+    }
+
+    // ---- Calls and construction -------------------------------------------
+
+    fn call(&mut self, expr: &Expr, callee: &Expr, args: &[Arg], expected: Option<&Ty>) -> Ty {
+        let callable = match &callee.kind {
+            ExprKind::Field { base, name } => match self.type_name(base) {
+                Some(type_name) => self.type_member(&type_name, name),
+                None => return self.method_call(base, name, args, expected, expr.span),
+            },
+            ExprKind::Name(ident) if self.local(&ident.name).is_none() => {
+                self.named_callee(ident)
+            }
+            _ => {
+                let ty = self.infer(callee);
+                match self.infer.resolve(&ty) {
+                    Ty::Fn { params, ret, .. } => Some(Callable {
+                        description: "this function".to_string(),
+                        params: params.into_iter().map(|p| (None, p)).collect(),
+                        ret: *ret,
+                        labels: Labels::Optional,
+                    }),
+                    Ty::Error => None,
+                    other => {
+                        self.error(
+                            codes::NOT_CALLABLE,
+                            format!("`{other}` is not a function"),
+                            callee.span,
+                        );
+                        None
+                    }
+                }
+            }
+        };
+        match callable {
+            Some(callable) => self.apply(callable, args, expected, expr.span),
+            None => {
+                self.infer_args(args);
+                Ty::Error
+            }
+        }
+    }
+
+    /// A bare name called: a function, a struct, or a prelude variant.
+    fn named_callee(&mut self, ident: &Ident) -> Option<Callable> {
+        let name = ident.name.as_str();
+        if let Some(sig) = self.items.fns.get(name).cloned() {
+            return Some(self.instantiate(&sig, None));
+        }
+        if let Some(info) = self.items.structs.get(name).cloned() {
+            return Some(self.constructor(name, &info.generics, &info.fields, name.to_string()));
+        }
+        if let Some(enum_name) = self.items.bare_variants.get(name).cloned() {
+            return self.variant(&enum_name, name);
+        }
+        if self.decls().get(name).is_some() {
+            self.error(
+                codes::NOT_A_VALUE,
+                format!("`{name}` cannot be constructed"),
+                ident.span,
+            );
+            return None;
+        }
+        self.unknown_value(ident);
+        None
+    }
+
+    /// `Type.name`: a variant of an enum, or an associated function or
+    /// method of the type. A method called this way takes its receiver as
+    /// the first argument.
+    fn type_member(&mut self, type_name: &str, name: &Ident) -> Option<Callable> {
+        if self.items.enums.contains_key(type_name) {
+            if let Some(callable) = self.variant(type_name, &name.name) {
+                return Some(callable);
+            }
+        }
+        if let Some(sig) = self.items.method(type_name, &name.name).cloned() {
+            let mut callable = self.instantiate(&sig, None);
+            if sig.receiver.is_some() {
+                let self_ty = sig.self_ty.clone().unwrap_or(Ty::Error);
+                callable.params.insert(0, (None, self_ty));
+            }
+            return Some(callable);
+        }
+        if matches!(self.decls().get(type_name), Some(d) if d.kind == DeclKind::Trait) {
+            // Qualified trait calls arrive with generics and traits.
+            return None;
+        }
+        let mut candidates = self.items.method_names(type_name);
+        if let Some(info) = self.items.enums.get(type_name) {
+            candidates.extend(info.variants.iter().map(|(v, _)| v.as_str()));
+        }
+        let message = format!("`{type_name}` has no variant or function `{}`", name.name);
+        self.report_with_suggestion(codes::NO_MEMBER, message, name, &candidates);
+        None
+    }
+
+    /// The constructor of `variant` of `enum_name`, instantiated.
+    fn variant(&mut self, enum_name: &str, variant: &str) -> Option<Callable> {
+        let info = self.items.enums.get(enum_name)?.clone();
+        let (_, fields) = info.variants.iter().find(|(v, _)| v == variant)?;
+        Some(self.constructor(
+            enum_name,
+            &info.generics,
+            fields,
+            format!("{enum_name}.{variant}"),
+        ))
+    }
+
+    /// A variant named without a call: a value when it is fieldless, and
+    /// its constructor function otherwise.
+    fn variant_value(&mut self, enum_name: &str, variant: &str) -> Ty {
+        match self.variant(enum_name, variant) {
+            Some(callable) if callable.params.is_empty() => callable.ret,
+            Some(callable) => callable.into_fn_type(),
+            None => Ty::Error,
+        }
+    }
+
+    fn constructor(
+        &mut self,
+        type_name: &str,
+        generics: &[String],
+        fields: &FieldsInfo,
+        description: String,
+    ) -> Callable {
+        let subst: Vec<(String, Ty)> = generics
+            .iter()
+            .map(|g| (g.clone(), self.infer.fresh()))
+            .collect();
+        let ret = Ty::Named(
+            type_name.to_string(),
+            subst.iter().map(|(_, t)| t.clone()).collect(),
+        );
+        Callable {
+            description,
+            params: fields
+                .fields
+                .iter()
+                .map(|(n, t)| (n.clone(), t.substitute(&subst)))
+                .collect(),
+            ret,
+            labels: match fields.shape {
+                Shape::Named => Labels::Required,
+                Shape::Positional | Shape::Unit => Labels::None,
+            },
+        }
+    }
+
+    /// Instantiate `sig`'s generics with fresh variables. `self_ty`, when
+    /// given, is unified with the signature's `Self` type, which solves an
+    /// impl's generics from the receiver.
+    fn instantiate(&mut self, sig: &FnSig, self_ty: Option<&Ty>) -> Callable {
+        let subst: Vec<(String, Ty)> = sig
+            .generics
+            .iter()
+            .map(|g| (g.clone(), self.infer.fresh()))
+            .collect();
+        if let (Some(actual), Some(declared)) = (self_ty, &sig.self_ty) {
+            let declared = declared.substitute(&subst);
+            self.infer.unify(&declared, actual);
+        }
+        Callable {
+            description: format!("`{}`", sig.name),
+            params: sig
+                .params
+                .iter()
+                .map(|(n, t)| (Some(n.clone()), t.substitute(&subst)))
+                .collect(),
+            ret: sig.ret.substitute(&subst),
+            labels: Labels::Optional,
+        }
+    }
+
+    /// `base.name(args)`: a method call.
+    fn method_call(
+        &mut self,
+        base: &Expr,
+        name: &Ident,
+        args: &[Arg],
+        expected: Option<&Ty>,
+        span: Span,
+    ) -> Ty {
+        let receiver = self.infer(base);
+        let receiver = self.infer.resolve(&receiver);
+        let type_name = match &receiver {
+            Ty::Named(type_name, _) => type_name.clone(),
+            Ty::Var(_) => {
+                self.error(
+                    codes::CANNOT_INFER,
+                    format!("the type must be known before `.{}`", name.name),
+                    name.span,
+                );
+                self.infer_args(args);
+                return Ty::Error;
+            }
+            // Methods on generic parameters come from their bounds, which
+            // arrive with generics and traits.
+            Ty::Error | Ty::Param(_) | Ty::Never => {
+                self.infer_args(args);
+                return Ty::Error;
+            }
+            Ty::Unit | Ty::Fn { .. } => receiver.to_string(),
+        };
+        let Some(sig) = self.items.method(&type_name, &name.name).cloned() else {
+            let candidates = self.items.method_names(&type_name);
+            let message = format!("`{receiver}` has no method `{}`", name.name);
+            self.report_with_suggestion(codes::NO_MEMBER, message, name, &candidates);
+            self.infer_args(args);
+            return Ty::Error;
+        };
+        let Some(mutating) = sig.receiver else {
+            self.error(
+                codes::NO_MEMBER,
+                format!(
+                    "`{}` is an associated function; call it as `{type_name}.{}(...)`",
+                    name.name, name.name
+                ),
+                name.span,
+            );
+            self.infer_args(args);
+            return Ty::Error;
+        };
+        if mutating {
+            self.require_mutable(
+                base,
+                codes::MUTATING_CALL_ON_LET,
+                &format!("call the mutating method `{}` on", name.name),
+            );
+        }
+        let callable = self.instantiate(&sig, Some(&receiver));
+        self.apply(callable, args, expected, span)
+    }
+
+    /// Check `args` against `callable`'s parameters and return its result.
+    fn apply(&mut self, callable: Callable, args: &[Arg], expected: Option<&Ty>, span: Span) -> Ty {
+        // Let the expected result type guide the arguments first, as in
+        // `let r: Result<U8, E> = Ok(200)`. A mismatch is reported later,
+        // against the whole call.
+        if let Some(expected) = expected {
+            self.infer.unify(&callable.ret, expected);
+        }
+        if args.len() != callable.params.len() {
+            let n = callable.params.len();
+            self.error(
+                codes::ARGUMENT_COUNT,
+                format!(
+                    "{} takes {n} argument{}, but {} {} given",
+                    callable.description,
+                    if n == 1 { "" } else { "s" },
+                    args.len(),
+                    if args.len() == 1 { "was" } else { "were" },
+                ),
+                span,
+            );
+        }
+        for (i, arg) in args.iter().enumerate() {
+            match callable.params.get(i) {
+                Some((param, ty)) => {
+                    self.label(arg, param.as_deref(), callable.labels);
+                    self.check(&arg.value, ty);
+                }
+                None => {
+                    self.infer(&arg.value);
+                }
+            }
+        }
+        callable.ret
+    }
+
+    /// Check an argument's label against its parameter.
+    fn label(&mut self, arg: &Arg, param: Option<&str>, labels: Labels) {
+        match (&arg.label, param, labels) {
+            (Some(label), Some(param), _) if label.name != param => {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        codes::BAD_LABEL,
+                        format!("expected the label `{param}`, found `{}`", label.name),
+                        label.span,
+                    )
+                    .with_fix(
+                        format!("replace with `{param}`"),
+                        vec![Edit {
+                            span: label.span,
+                            replacement: param.to_string(),
+                        }],
+                    ),
+                );
+            }
+            (Some(label), None, _) => {
+                let span = Span {
+                    start: label.span.start,
+                    end: arg.value.span.start,
+                };
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        codes::BAD_LABEL,
+                        format!("positional arguments take no label, found `{}`", label.name),
+                        label.span,
+                    )
+                    .with_fix("remove the label", vec![Edit::delete(span)]),
+                );
+            }
+            (None, Some(param), Labels::Required) => {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        codes::MISSING_LABEL,
+                        format!("named fields are constructed by name: write `{param}: ...`"),
+                        arg.value.span,
+                    )
+                    .with_fix(
+                        format!("label the argument `{param}`"),
+                        vec![Edit::insert(arg.value.span.start, format!("{param}: "))],
+                    ),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    fn infer_args(&mut self, args: &[Arg]) {
+        for arg in args {
+            self.infer(&arg.value);
+        }
+    }
+
+    // ---- Mutation ---------------------------------------------------------
+
+    /// Report `place` when its root binding is not mutable. `action`
+    /// completes "cannot ... `name`".
+    fn require_mutable(&mut self, place: &Expr, code: &'static str, action: &str) {
+        match &place.kind {
+            ExprKind::Field { base, .. } => self.require_mutable(base, code, action),
+            ExprKind::Name(ident) => {
+                let Some(local) = self.local(&ident.name) else {
+                    return;
+                };
+                let name = &ident.name;
+                let diagnostic = match local.binding {
+                    Binding::Var => return,
+                    Binding::Let(keyword) => Diagnostic::new(
+                        code,
+                        format!("cannot {action} `{name}`, which is declared with `let`"),
+                        place.span,
+                    )
+                    .with_fix(
+                        format!("declare `{name}` with `var`"),
+                        vec![Edit {
+                            span: keyword,
+                            replacement: "var".to_string(),
+                        }],
+                    ),
+                    Binding::Param | Binding::Loop | Binding::Pattern => Diagnostic::new(
+                        code,
+                        format!("cannot {action} `{name}`, which is not a `var` binding"),
+                        place.span,
+                    ),
+                };
+                self.diagnostics.push(diagnostic);
+            }
+            ExprKind::SelfValue => {
+                let Some(receiver) = &self.receiver else {
+                    return;
+                };
+                if receiver.mutable {
+                    return;
+                }
+                let at = receiver.span.start;
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        code,
+                        format!("cannot {action} `self` in a method that takes `self`"),
+                        place.span,
+                    )
+                    .with_fix(
+                        "make this a mutating method with `var self`",
+                        vec![Edit::insert(at, "var ")],
+                    ),
+                );
+            }
+            // A temporary, such as a call's result, can be mutated freely.
+            _ => {}
+        }
+    }
+
+    // ---- Operators --------------------------------------------------------
+
+    fn unary(&mut self, expr: &Expr, op: UnaryOp, operand: &Expr, expected: Option<&Ty>) -> Ty {
+        match op {
+            UnaryOp::Not => self.check(operand, &Ty::bool()),
+            UnaryOp::Neg => {
+                if let ExprKind::Int(text) = &operand.kind {
+                    let ty = self.literal_type(expected);
+                    if ty.is_signed_integer() {
+                        self.range_check(text, true, &ty, expr.span);
+                        return ty;
+                    }
+                }
+                let ty = self.expr(operand, expected);
+                let ty = self.infer.resolve(&ty);
+                if ty.is_error() || ty.is_signed_integer() {
+                    return ty;
+                }
+                self.error(
+                    codes::BAD_OPERAND,
+                    format!("unary `-` is not defined for `{ty}`"),
+                    expr.span,
+                );
+                Ty::Error
+            }
+        }
+    }
+
+    fn binary(
+        &mut self,
+        expr: &Expr,
+        op: BinaryOp,
+        lhs: &Expr,
+        rhs: &Expr,
+        expected: Option<&Ty>,
+    ) -> Ty {
+        match op {
+            BinaryOp::And | BinaryOp::Or | BinaryOp::Implies => {
+                self.check(lhs, &Ty::bool());
+                self.check(rhs, &Ty::bool());
+                Ty::bool()
+            }
+            BinaryOp::Eq | BinaryOp::Ne => {
+                self.operands(lhs, rhs, None);
+                Ty::bool()
+            }
+            BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
+                let ty = self.operands(lhs, rhs, None);
+                self.require_number(op, &ty, expr.span);
+                Ty::bool()
+            }
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
+                let ty = self.operands(lhs, rhs, expected);
+                if self.require_number(op, &ty, expr.span) {
+                    ty
+                } else {
+                    Ty::Error
+                }
+            }
+        }
+    }
+
+    /// Check two operands that must have the same type, and return it. A
+    /// literal operand takes the other operand's type, so `1 + x` works
+    /// for any integer `x`.
+    fn operands(&mut self, lhs: &Expr, rhs: &Expr, expected: Option<&Ty>) -> Ty {
+        if is_int_literal(lhs) && !is_int_literal(rhs) {
+            let ty = self.expr(rhs, expected);
+            self.check(lhs, &ty);
+            ty
+        } else {
+            let ty = self.expr(lhs, expected);
+            let rhs_ty = self.check(rhs, &ty);
+            if ty.is_error() {
+                rhs_ty
+            } else {
+                ty
+            }
+        }
+    }
+
+    /// Report `op` on a non-number. Returns whether `ty` is acceptable.
+    fn require_number(&mut self, op: BinaryOp, ty: &Ty, span: Span) -> bool {
+        let ty = self.infer.resolve(ty);
+        if ty.is_error() || ty == Ty::Never || ty.is_integer() {
+            return true;
+        }
+        if let Ty::Var(_) = ty {
+            self.error(
+                codes::CANNOT_INFER,
+                format!("the operands' type must be known to use `{}`", op.text()),
+                span,
+            );
+            return false;
+        }
+        let hint = if op == BinaryOp::Add && ty == Ty::string() {
+            "; build strings with interpolation, as in \"{a}{b}\""
+        } else {
+            ""
+        };
+        self.error(
+            codes::BAD_OPERAND,
+            format!("`{}` is not defined for `{ty}`{hint}", op.text()),
+            span,
+        );
+        false
+    }
+
+    // ---- Closures, `?`, and `match` ---------------------------------------
+
+    /// `|params| body`. Parameter types come from annotations or the
+    /// expected function type.
+    pub fn closure(&mut self, params: &[ClosureParam], body: &Expr, expected: Option<&Ty>) -> Ty {
+        let expected = match expected.map(|e| self.infer.resolve(e)) {
+            Some(Ty::Fn {
+                params: expected_params,
+                ret,
+                ..
+            }) if expected_params.len() == params.len() => Some((expected_params, *ret)),
+            _ => None,
+        };
+        let mut param_tys = Vec::new();
+        for (i, param) in params.iter().enumerate() {
+            let hint = expected.as_ref().map(|(ps, _)| ps[i].clone());
+            let ty = match (&param.ty, hint) {
+                (Some(written), hint) => {
+                    let ty = self.lower.ty(written);
+                    if let Some(hint) = hint {
+                        self.expect(&ty, &hint, written.span);
+                    }
+                    ty
+                }
+                (None, Some(hint)) => hint,
+                (None, None) => self.infer.fresh(),
+            };
+            param_tys.push(ty);
+        }
+        let ret = match &expected {
+            Some((_, ret)) => ret.clone(),
+            None => self.infer.fresh(),
+        };
+        let height = self.locals.len();
+        for (param, ty) in params.iter().zip(&param_tys) {
+            self.bind(&param.name.name, ty.clone(), Binding::Param);
+        }
+        let outer_ret = std::mem::replace(&mut self.ret, ret.clone());
+        let outer_loops = std::mem::take(&mut self.loop_depth);
+        self.check(body, &ret);
+        self.ret = outer_ret;
+        self.loop_depth = outer_loops;
+        self.locals.truncate(height);
+        Ty::Fn {
+            cap: false,
+            params: param_tys,
+            ret: Box::new(ret),
+        }
+    }
+
+    /// `operand?`: the success value of a `Result` or an `Option`. Whether
+    /// the function can return the failure is the Result-discipline rule.
+    pub fn try_expr(&mut self, operand: &Expr) -> Ty {
+        let ty = self.infer(operand);
+        match self.infer.resolve(&ty) {
+            Ty::Named(name, args) if (name == "Result" || name == "Option") && !args.is_empty() => {
+                args[0].clone()
+            }
+            _ => Ty::Error,
+        }
+    }
+
+    /// `match`. Arm bodies must agree; patterns are only bound, not yet
+    /// checked against the scrutinee.
+    fn match_expr(&mut self, scrutinee: &Expr, arms: &[MatchArm], expected: Option<&Ty>) -> Ty {
+        self.infer(scrutinee);
+        let mut result: Option<Ty> = expected.cloned();
+        for arm in arms {
+            let height = self.locals.len();
+            self.bind_pattern(&arm.pattern);
+            if let Some(guard) = &arm.guard {
+                self.check(guard, &Ty::bool());
+            }
+            match &result {
+                Some(ty) => {
+                    let ty = ty.clone();
+                    self.check(&arm.body, &ty);
+                }
+                None => {
+                    let ty = self.infer(&arm.body);
+                    if self.infer.shallow(&ty) != Ty::Never {
+                        result = Some(ty);
+                    }
+                }
+            }
+            self.locals.truncate(height);
+        }
+        result.unwrap_or(Ty::Never)
+    }
+
+    /// Bind the names a pattern introduces. Each has the error type until
+    /// patterns are checked against the scrutinee.
+    pub fn bind_pattern(&mut self, pattern: &Pattern) {
+        match &pattern.kind {
+            PatternKind::Binding(ident) => {
+                self.bind(&ident.name, Ty::Error, Binding::Pattern);
+            }
+            PatternKind::Constructor { args, .. } => {
+                for arg in args {
+                    self.bind_pattern(&arg.pattern);
+                }
+            }
+            PatternKind::Wildcard | PatternKind::Literal(_) => {}
+        }
+    }
+
+    // ---- Blocks and statements --------------------------------------------
+
+    /// A block's type is its final expression's, `()` without one, or
+    /// [`Ty::Never`] when it ends by leaving (`return`, `break`,
+    /// `continue`). With `use_value` false, the final expression's value
+    /// is discarded.
+    fn block(&mut self, block: &Block, expected: Option<&Ty>, use_value: bool) -> Ty {
+        let height = self.locals.len();
+        let mut ty = Ty::Unit;
+        for (i, stmt) in block.stmts.iter().enumerate() {
+            let last = i + 1 == block.stmts.len();
+            match &stmt.kind {
+                StmtKind::Expr(expr) if last && use_value => {
+                    ty = match expected {
+                        Some(expected) => self.check(expr, expected),
+                        None => self.infer(expr),
+                    };
+                }
+                StmtKind::Return(_) | StmtKind::Break | StmtKind::Continue if last => {
+                    self.stmt(stmt);
+                    ty = Ty::Never;
+                }
+                _ => self.stmt(stmt),
+            }
+        }
+        self.locals.truncate(height);
+        let ends_with_value = matches!(
+            block.stmts.last().map(|s| &s.kind),
+            Some(StmtKind::Expr(_) | StmtKind::Return(_) | StmtKind::Break | StmtKind::Continue)
+        );
+        match expected {
+            Some(expected) if use_value && !ends_with_value => {
+                self.expect(&ty, expected, block.span)
+            }
+            _ => ty,
+        }
+    }
+
+    fn stmt(&mut self, stmt: &oska_syntax::ast::Stmt) {
+        match &stmt.kind {
+            StmtKind::Let {
+                mutable,
+                name,
+                ty,
+                value,
+            } => {
+                let ty = match ty {
+                    Some(written) => {
+                        let ty = self.lower.ty(written);
+                        self.check(value, &ty);
+                        ty
+                    }
+                    None => {
+                        let ty = self.infer(value);
+                        if name.name != "_" {
+                            self.inferred_lets.push((name.clone(), ty.clone()));
+                        }
+                        ty
+                    }
+                };
+                let binding = if *mutable {
+                    Binding::Var
+                } else {
+                    let keyword = Span {
+                        start: stmt.span.start,
+                        end: stmt.span.start + "let".len(),
+                    };
+                    Binding::Let(keyword)
+                };
+                self.bind(&name.name, ty, binding);
+            }
+            StmtKind::Assign { target, value } => {
+                let ty = self.infer(target);
+                self.require_mutable(target, codes::ASSIGN_TO_LET, "assign to");
+                self.check(value, &ty);
+            }
+            StmtKind::Return(value) => {
+                let ret = self.ret.clone();
+                match value {
+                    Some(value) => {
+                        self.check(value, &ret);
+                    }
+                    None => {
+                        self.expect(&Ty::Unit, &ret, stmt.span);
+                    }
+                }
+            }
+            StmtKind::Break | StmtKind::Continue => {
+                if self.loop_depth == 0 {
+                    let keyword = if matches!(stmt.kind, StmtKind::Break) {
+                        "break"
+                    } else {
+                        "continue"
+                    };
+                    self.error(
+                        codes::OUTSIDE_LOOP,
+                        format!("`{keyword}` outside of a loop"),
+                        stmt.span,
+                    );
+                }
+            }
+            StmtKind::For {
+                binding,
+                iter,
+                body,
+            } => {
+                let ty = self.infer(iter);
+                let element = match self.infer.resolve(&ty) {
+                    Ty::Named(name, args) if (name == "List" || name == "Range") && args.len() == 1 => {
+                        args[0].clone()
+                    }
+                    Ty::Error => Ty::Error,
+                    other => {
+                        self.error(
+                            codes::NOT_ITERABLE,
+                            format!("cannot iterate over `{other}`; expected a `List` or a range"),
+                            iter.span,
+                        );
+                        Ty::Error
+                    }
+                };
+                let height = self.locals.len();
+                self.bind(&binding.name, element, Binding::Loop);
+                self.loop_body(body);
+                self.locals.truncate(height);
+            }
+            StmtKind::While { cond, body } => {
+                self.check(cond, &Ty::bool());
+                self.loop_body(body);
+            }
+            StmtKind::Expr(expr) => self.expr_stmt(expr),
+        }
+    }
+
+    fn loop_body(&mut self, body: &Block) {
+        self.loop_depth += 1;
+        self.block(body, None, false);
+        self.loop_depth -= 1;
+    }
+
+    /// An expression whose value is discarded.
+    pub fn expr_stmt(&mut self, expr: &Expr) {
+        self.infer(expr);
+    }
+}
+
+impl Callable {
+    /// The function type of a callable used as a value.
+    fn into_fn_type(self) -> Ty {
+        Ty::Fn {
+            cap: false,
+            params: self.params.into_iter().map(|(_, t)| t).collect(),
+            ret: Box::new(self.ret),
+        }
+    }
+}
+
+fn is_int_literal(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Int(_) => true,
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            operand,
+        } => matches!(operand.kind, ExprKind::Int(_)),
+        _ => false,
+    }
+}

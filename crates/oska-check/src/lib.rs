@@ -23,15 +23,35 @@
 use oska_syntax::Diagnostic;
 
 mod authority;
+mod body;
 mod decls;
+mod infer;
+mod items;
 mod prelude;
 mod resolve;
+mod ty;
 
 /// The diagnostic codes this crate reports.
 pub(crate) mod codes {
     pub const UNKNOWN_NAME: &str = "E0200";
     pub const WRONG_NAMESPACE: &str = "E0201";
     pub const DUPLICATE_NAME: &str = "E0202";
+    pub const MISMATCH: &str = "E0220";
+    pub const UNKNOWN_VALUE: &str = "E0221";
+    pub const LITERAL_OUT_OF_RANGE: &str = "E0222";
+    pub const BAD_OPERAND: &str = "E0223";
+    pub const ARGUMENT_COUNT: &str = "E0224";
+    pub const BAD_LABEL: &str = "E0225";
+    pub const MISSING_LABEL: &str = "E0226";
+    pub const NO_FIELD: &str = "E0227";
+    pub const NO_MEMBER: &str = "E0228";
+    pub const ASSIGN_TO_LET: &str = "E0229";
+    pub const MUTATING_CALL_ON_LET: &str = "E0230";
+    pub const NOT_CALLABLE: &str = "E0231";
+    pub const OUTSIDE_LOOP: &str = "E0232";
+    pub const CANNOT_INFER: &str = "E0233";
+    pub const NOT_A_VALUE: &str = "E0234";
+    pub const NOT_ITERABLE: &str = "E0235";
 }
 
 /// Options that change what is checked.
@@ -150,6 +170,8 @@ pub fn check_module_with(src: &str, _options: CheckOptions) -> CheckReport {
     let mut diagnostics = Vec::new();
     let decls = decls::Decls::collect(&module, &mut diagnostics);
     resolve::module(&module, &decls, &mut diagnostics);
+    let items = items::Items::collect(&module, &decls);
+    body::module(&module, &decls, &items, &mut diagnostics);
     let functions = authority::report(&module, &decls);
     diagnostics.sort_by_key(|d| d.span.start);
     CheckReport {
