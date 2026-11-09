@@ -179,8 +179,8 @@ impl Body<'_, '_, '_> {
         None
     }
 
-    /// `secret.constant_time_eq(other)`, negated for `!=`. A secret
-    /// `other` is exposed, since `constant_time_eq` takes text.
+    /// `secret.constant_time_eq(other)`, negated for `!=`. Two secrets
+    /// compare with `constant_time_eq_secret`, so neither is exposed.
     fn constant_time_eq(
         &self,
         op: BinaryOp,
@@ -190,12 +190,13 @@ impl Body<'_, '_, '_> {
     ) -> String {
         let not = if op == BinaryOp::Ne { "!" } else { "" };
         let receiver = self.postfix_operand(secret);
-        let argument = if other_secret {
-            format!("{}.expose()", self.postfix_operand(other))
+        let method = if other_secret {
+            "constant_time_eq_secret"
         } else {
-            self.src[other.span.start..other.span.end].to_string()
+            "constant_time_eq"
         };
-        format!("{not}{receiver}.constant_time_eq({argument})")
+        let argument = &self.src[other.span.start..other.span.end];
+        format!("{not}{receiver}.{method}({argument})")
     }
 
     /// The source of `expr`, parenthesized unless a method call can

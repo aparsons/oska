@@ -116,6 +116,9 @@ impl<T> Secret<T> {
 impl Secret<String> {
     // Compare without leaking timing information.
     pub fn constant_time_eq(self, other: Untrusted<String>) -> Bool
+    // Compare with another secret without leaking timing information,
+    // and without exposing either.
+    pub fn constant_time_eq_secret(self, other: Secret<String>) -> Bool
 }
 
 #[capability]

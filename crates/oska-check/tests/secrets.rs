@@ -99,13 +99,12 @@ fn the_fix_makes_the_secret_the_receiver() {
 }
 
 #[test]
-fn the_fix_compares_two_secrets_by_exposing_the_second() {
-    let src = "fn same(a: Secret<String>, b: Secret<String>) -> Bool {\n    a == b\n}";
-    assert_fix(
-        src,
-        "E0351",
-        "fn same(a: Secret<String>, b: Secret<String>) -> Bool {\n    a.constant_time_eq(b.expose())\n}",
-    );
+fn the_fix_compares_two_secrets_without_exposing_either() {
+    let src = "fn same(a: Secret<String>, b: Secret<String>) -> Bool {\n    a != b\n}";
+    let fixed =
+        "fn same(a: Secret<String>, b: Secret<String>) -> Bool {\n    !a.constant_time_eq_secret(b)\n}";
+    assert_fix(src, "E0351", fixed);
+    assert_audit(fixed, &[]);
 }
 
 #[test]
@@ -124,7 +123,7 @@ fn the_fix_parenthesizes_a_compound_secret_operand() {
 #[test]
 fn the_fixed_comparisons_check() {
     assert_ok(&compare("key.constant_time_eq(token)"));
-    assert_ok("fn same(a: Secret<String>, b: Secret<String>) -> Bool {\n    a.constant_time_eq(b.expose())\n}");
+    assert_ok("fn same(a: Secret<String>, b: Secret<String>) -> Bool {\n    a.constant_time_eq_secret(b)\n}");
 }
 
 #[test]
