@@ -15,7 +15,7 @@ pub use export::{module_to_json, module_to_tree, AST_VERSION};
 pub use parser::{parse_expr, parse_module, parse_prelude, parse_stmts, parse_type};
 
 /// A half-open byte range `start..end` in the source text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
     pub start: usize,
     pub end: usize,

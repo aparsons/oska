@@ -57,6 +57,7 @@ use crate::decl_rules;
 use crate::infer::{Infer, Mismatch};
 use crate::items::{Bound, Items, Lower};
 use crate::prelude::{self, StdModule};
+use crate::program::lower::{Resolution, Resolutions};
 use crate::resolve;
 use crate::suggest;
 use crate::ty::{self, Trust, Ty};
@@ -69,12 +70,14 @@ mod results;
 mod secrets;
 mod sinks;
 
-/// What checking bodies finds: diagnostics, and the audit sites a
-/// reviewer must see (`body/audit.rs`).
+/// What checking bodies finds: diagnostics, the audit sites a reviewer
+/// must see (`body/audit.rs`), and what each name and call resolved to,
+/// from which the checked program is lowered (`program/lower.rs`).
 #[derive(Debug, Default)]
 pub struct Findings {
     pub diagnostics: Vec<Diagnostic>,
     pub audit: Vec<AuditSite>,
+    pub resolutions: Resolutions,
 }
 
 /// Check every function, method, constant, and test body in `module`. A
@@ -322,6 +325,12 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
     fn decls(&self) -> &'d Decls<'a> {
         self.lower.decls()
+    }
+
+    /// Record what the node at `span` resolved to, for the checked
+    /// program.
+    fn record(&mut self, span: Span, resolution: Resolution) {
+        self.out.resolutions.insert(span, resolution);
     }
 
     fn error(&mut self, code: &'static str, message: impl Into<String>, span: Span) {
@@ -734,6 +743,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     fn name(&mut self, ident: &Ident) -> Ty {
         let name = ident.name.as_str();
         if let Some(index) = self.locals.iter().rposition(|l| l.name == name) {
+            self.record(ident.span, Resolution::Local(index));
             let ty = self.locals[index].ty.clone();
             for frame in &mut self.closures {
                 if index < frame.height {

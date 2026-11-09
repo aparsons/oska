@@ -9,6 +9,7 @@ rust-version.workspace = true
 
 [dependencies]
 oska-check = { path = "../oska-check" }
+oska-run = { path = "../oska-run" }
 oska-syntax = { path = "../oska-syntax" }
 
 [lints]
