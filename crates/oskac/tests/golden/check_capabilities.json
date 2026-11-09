@@ -1,0 +1,10 @@
+{
+  "diagnostics": [],
+  "functions": [
+    {"name":"count_lines","authority":["FsRead"],"via":[{"param":"fs","capabilities":["FsRead"]}],"pure":false},
+    {"name":"AppError.usage","authority":[],"via":[],"pure":true},
+    {"name":"AppError.from","authority":[],"via":[],"pure":true},
+    {"name":"AppError.to_string","authority":[],"via":[],"pure":true},
+    {"name":"main","authority":["Stdout","FsRead"],"via":[{"param":"io","capabilities":["Stdout"]},{"param":"fs","capabilities":["FsRead"]}],"pure":false}
+  ]
+}

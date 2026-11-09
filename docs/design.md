@@ -116,7 +116,7 @@ test "deposit adds to the balance" {
 
 ## Type checking
 
-The checker is `oskac check`, built as its own crate, `oska-check`, on top of the parser. Its diagnostic codes are `E02xx`.
+The checker is `oskac check`, built as its own crate, `oska-check`, on top of the parser. Its diagnostic codes are `E02xx`. Its report format and codes are described in [`checker.md`](checker.md).
 
 ### Scope and reporting
 

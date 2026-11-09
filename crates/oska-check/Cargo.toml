@@ -1,0 +1,14 @@
+[package]
+name = "oska-check"
+description = "Type checker for the Oska programming language"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oska-syntax = { path = "../oska-syntax" }
+
+[lints]
+workspace = true

@@ -1,0 +1,125 @@
+// The Oska prelude: declarations every module sees without `use`.
+//
+// It is parsed in prelude mode, so functions may omit their bodies (the
+// runtime implements them) and `#[capability]` marks a built-in
+// capability. A capability's fields are private, so code outside the
+// prelude cannot construct one.
+//
+// The primitive types (`Int`, the sized integers, `Bool`, `String`) and
+// `()` are built into the checker, not declared here.
+//
+// Grow this file only as the examples and the tests need it. Capability
+// reads return plain `String` until untrusted values (#8) land.
+
+// ---- Built-in capabilities -------------------------------------------
+
+#[capability]
+pub struct Stdin { handle: Int }
+
+#[capability]
+pub struct Stdout { handle: Int }
+
+impl Stdout {
+    pub fn println(self, line: String) -> Result<(), IoError>
+}
+
+#[capability]
+pub struct Stderr { handle: Int }
+
+#[capability]
+pub struct Fs { handle: Int }
+
+impl Fs {
+    pub fn restrict_to(self, dir: String) -> Fs
+    pub fn read_only(self) -> FsRead
+    pub fn write_only(self) -> FsWrite
+}
+
+#[capability]
+pub struct FsRead { handle: Int }
+
+impl FsRead {
+    pub fn restrict_to(self, dir: String) -> FsRead
+    pub fn read_to_string(self, path: Path) -> Result<String, IoError>
+}
+
+#[capability]
+pub struct FsWrite { handle: Int }
+
+#[capability]
+pub struct Net { handle: Int }
+
+impl Net {
+    pub fn connect_only(self) -> NetConnect
+    pub fn listen_only(self) -> NetListen
+}
+
+#[capability]
+pub struct NetConnect { handle: Int }
+
+#[capability]
+pub struct NetListen { handle: Int }
+
+#[capability]
+pub struct Env { handle: Int }
+
+#[capability]
+pub struct Clock { handle: Int }
+
+#[capability]
+pub struct Random { handle: Int }
+
+#[capability]
+pub struct Sched { handle: Int }
+
+#[capability]
+pub struct Spawn { handle: Int }
+
+// ---- Core types --------------------------------------------------------
+
+pub enum Option<T> {
+    Some(T),
+    None,
+}
+
+pub enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+// A growable list. Its representation is built in.
+pub struct List<T> { handle: Int }
+
+pub struct Path { raw: String }
+
+impl Path {
+    pub fn new(raw: String) -> Path
+    pub fn from(raw: String) -> Path
+}
+
+// The program's command-line arguments: a program input, not a capability.
+pub struct Args { handle: Int }
+
+impl Args {
+    pub fn get(self, index: Int) -> Option<String>
+}
+
+pub struct IoError { message: String }
+
+// ---- Core traits -------------------------------------------------------
+
+pub trait Eq {
+    fn eq(self, other: Self) -> Bool
+}
+
+pub trait Hash {
+    fn hash(self) -> Int
+}
+
+pub trait Display {
+    fn to_string(self) -> String
+}
+
+pub trait From<T> {
+    fn from(value: T) -> Self
+}
