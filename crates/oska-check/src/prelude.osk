@@ -92,6 +92,23 @@ pub struct Env { handle: Int }
 impl Env {
     // The environment variable `name`, or `None` when it is not set.
     pub fn get(self, name: String) -> Option<Untrusted<String>>
+    // The secret `name`, such as an API token.
+    pub fn secret(self, name: String) -> Secret<String>
+}
+
+// A secret value. It has no `Display` and no `Eq`, and cannot be
+// interpolated: compare it with `constant_time_eq`, and read it with
+// `expose`, which is an audit site.
+pub struct Secret<T> { value: T }
+
+impl<T> Secret<T> {
+    // The secret's value. Every call is an audit site.
+    pub fn expose(self) -> T
+}
+
+impl Secret<String> {
+    // Compare without leaking timing information.
+    pub fn constant_time_eq(self, other: Untrusted<String>) -> Bool
 }
 
 #[capability]

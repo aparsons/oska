@@ -366,6 +366,9 @@ impl Body<'_, '_, '_> {
                 return None;
             }
         }
+        if self.secret_method(receiver, name) {
+            return None;
+        }
         let candidates = self.items.method_names(type_name);
         let message = format!("`{receiver}` has no method `{}`", name.name);
         self.report_with_suggestion(codes::NO_MEMBER, message, name, &candidates);

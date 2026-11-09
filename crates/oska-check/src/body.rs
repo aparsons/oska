@@ -19,7 +19,8 @@
 //!   ([`Body::method_call`]) try the type's own `impl`, then its traits;
 //!   on a generic parameter, only its bounds' traits.
 //! - **Audit sites:** in `body/audit.rs`. Each method call is checked
-//!   against the table of audited prelude methods (`.assume_trusted()`),
+//!   against the table of audited prelude methods (`.assume_trusted()`,
+//!   `.expose()`),
 //!   and a match is recorded at the call.
 //! - **`?` and the `Result` discipline:** in `body/results.rs`.
 //!   [`Body::try_expr`] converts errors when the function's error type
@@ -59,6 +60,7 @@ mod audit;
 mod calls;
 mod patterns;
 mod results;
+mod secrets;
 mod sinks;
 
 /// Check every function, method, constant, and test body in `module`. A
@@ -499,8 +501,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             }
             ExprKind::Str(parts) => {
                 for part in parts {
-                    if let StrPart::Hole { path, .. } = part {
-                        self.hole(path);
+                    if let StrPart::Hole { path, span } = part {
+                        let ty = self.hole(path);
+                        self.secret_hole(&ty, *span);
                     }
                 }
                 Ty::string()
@@ -631,15 +634,16 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
     }
 
-    /// An interpolation hole, `{name}` or `{name.field}`.
-    fn hole(&mut self, path: &[Ident]) {
+    /// An interpolation hole, `{name}` or `{name.field}`, and its type.
+    fn hole(&mut self, path: &[Ident]) -> Ty {
         let Some((first, rest)) = path.split_first() else {
-            return;
+            return Ty::Error;
         };
         let mut ty = self.name(first);
         for field in rest {
             ty = self.field_of(ty, field);
         }
+        ty
     }
 
     /// A name in value position.
@@ -909,8 +913,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 Ty::bool()
             }
             BinaryOp::Eq | BinaryOp::Ne => {
-                let ty = self.operands(lhs, rhs, None);
-                self.require_trait(&ty, ty::EQ, &[], expr.span, &format!("`{}`", op.text()));
+                if let Some(ty) = self.compared_operands(expr, op, lhs, rhs) {
+                    self.require_trait(&ty, ty::EQ, &[], expr.span, &format!("`{}`", op.text()));
+                }
                 Ty::bool()
             }
             BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
@@ -921,20 +926,6 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 self.numeric_operands(expr, op, lhs, rhs, expected)
             }
         }
-    }
-
-    /// Check two operands that must have the same type, and return it. A
-    /// literal operand takes the other operand's type, so `1 + x` works
-    /// for any integer `x`.
-    fn operands(&mut self, lhs: &Expr, rhs: &Expr, expected: Option<&Ty>) -> Ty {
-        let (first, second) = literal_last(lhs, rhs);
-        let ty = self.expr(first, expected);
-        let ty = self.infer.resolve(&ty);
-        if ty.is_error() {
-            self.infer(second);
-            return Ty::Error;
-        }
-        self.check(second, &ty)
     }
 
     /// The operands of an arithmetic or comparison operator: numbers of
@@ -1054,7 +1045,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     /// `trait_name<args>`, which `what` needs. On a generic parameter of
     /// this function, the fix adds the bound.
     fn require_trait(&mut self, ty: &Ty, trait_name: &str, args: &[Ty], span: Span, what: &str) {
-        if self.implements(ty, trait_name, args) {
+        if self.implements(ty, trait_name, args) || self.secret_bound(ty, trait_name, span) {
             return;
         }
         let ty = self.infer.resolve(ty);
@@ -1317,7 +1308,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
 /// The operands in checking order: an integer literal goes second, so
 /// it takes the other operand's type.
-fn literal_last<'e>(lhs: &'e Expr, rhs: &'e Expr) -> (&'e Expr, &'e Expr) {
+pub(super) fn literal_last<'e>(lhs: &'e Expr, rhs: &'e Expr) -> (&'e Expr, &'e Expr) {
     if is_int_literal(lhs) && !is_int_literal(rhs) {
         (rhs, lhs)
     } else {

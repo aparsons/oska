@@ -105,6 +105,9 @@ pub(crate) mod codes {
     pub const NOT_EXPORTED: &str = "E0312";
     pub const QUALIFIED_ONLY: &str = "E0340";
     pub const TEXT_AS_SINK_LITERAL: &str = "E0341";
+    pub const SECRET_INTERPOLATED: &str = "E0350";
+    pub const SECRET_COMPARED: &str = "E0351";
+    pub const SECRET_DISPLAYED: &str = "E0352";
 }
 
 /// Options that change what is checked.
@@ -126,7 +129,7 @@ pub struct CheckReport {
 }
 
 /// A call a reviewer must see: one that vouches for untrusted text, or
-/// (later) exposes a secret. `body/audit.rs` decides which calls these are.
+/// exposes a secret. `body/audit.rs` decides which calls these are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AuditSite {
     /// What the call does, named after its method, such as
