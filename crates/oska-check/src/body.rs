@@ -48,7 +48,7 @@ use crate::decl_rules;
 use crate::infer::{Infer, Mismatch};
 use crate::items::{Bound, Items, Lower};
 use crate::suggest;
-use crate::ty::{self, Ty};
+use crate::ty::{self, Trust, Ty};
 
 mod calls;
 mod patterns;
@@ -208,6 +208,9 @@ struct Callable {
     pure: bool,
     /// For a method: the type of its receiver, instantiated.
     receiver: Option<Ty>,
+    /// For a `#[follows_trust]` operation: the trust variable its
+    /// receiver and text arguments join into.
+    joined: Option<Trust>,
 }
 
 /// The state of checking one body.
@@ -370,7 +373,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
     /// Unify `actual` with `expected`, reporting `E0220` at `span` when
     /// they differ.
-    fn expect(&mut self, actual: &Ty, expected: &Ty, span: Span) -> Ty {
+    pub(super) fn expect(&mut self, actual: &Ty, expected: &Ty, span: Span) -> Ty {
         match self.infer.flow(actual, expected) {
             Ok(()) => actual.clone(),
             Err(mismatch) => {
@@ -383,7 +386,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     /// Report that `actual` cannot flow into `expected`: `E0270` when only
     /// the `cap` rule stops it, `E0300` when only the trust rule does,
     /// `E0220` otherwise.
-    fn mismatch(&mut self, mismatch: Mismatch, actual: &Ty, expected: &Ty, span: Span) {
+    pub(super) fn mismatch(&mut self, mismatch: Mismatch, actual: &Ty, expected: &Ty, span: Span) {
         let expected = self.infer.resolve(expected);
         let actual = self.infer.resolve(actual);
         match mismatch {

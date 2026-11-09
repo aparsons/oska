@@ -11,8 +11,44 @@
 //!
 //! - the **`cap` rule**: a `cap fn` never becomes a plain `fn`;
 //! - the **trust rule** (ADR 0006): untrusted text never becomes trusted.
+//!
+//! Trust is solved like a one-bit subtyping problem. Besides `Trusted`
+//! and `Untrusted`, a text type's flag may be a **trust variable**
+//! ([`Trust::Var`]). Each flow between flags is an edge `a ≤ b`, where
+//! trusted ≤ untrusted. A variable is untrusted once untrusted text
+//! reaches it through the edges, and pinned trusted once it reaches a
+//! trusted slot; one that would be both is a [`Mismatch::TrustLost`].
+//! Edges are kept, so text that turns out untrusted later in the body
+//! still reaches every slot it flowed into.
+//!
+//! Trust variables give two things:
+//!
+//! - **Joins.** When an inference variable is solved, every text flag in
+//!   its solution becomes a fresh trust variable that the solving type
+//!   flows into (or out of). So a variable first met with trusted text
+//!   still accepts untrusted text later, and becomes untrusted: the join
+//!   of trusted and untrusted is untrusted. A variable that has already
+//!   flowed into a trusted slot rejects it.
+//! - **Trust polymorphism.** A `#[follows_trust]` prelude operation gets
+//!   one fresh trust variable for each call, in place of every trusted
+//!   text flag in its signature (see `body/calls.rs`). The receiver and
+//!   the text arguments flow into it, and every text type in the result
+//!   is it.
 
 use crate::ty::{Trust, Ty};
+
+/// What is known about one trust variable.
+#[derive(Debug, Default, Clone)]
+struct TrustVar {
+    /// Untrusted text flows into it.
+    untrusted: bool,
+    /// It flows into a trusted slot.
+    pinned: bool,
+    /// The variables it flows into.
+    into: Vec<u32>,
+    /// The variables that flow into it.
+    from: Vec<u32>,
+}
 
 /// Why a value cannot flow where a type is expected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,6 +101,8 @@ struct Rules {
 pub struct Infer {
     /// The solution of each variable, by index.
     solutions: Vec<Option<Ty>>,
+    /// Each trust variable, by index.
+    trust: Vec<TrustVar>,
 }
 
 impl Infer {
@@ -72,6 +110,107 @@ impl Infer {
     pub fn fresh(&mut self) -> Ty {
         self.solutions.push(None);
         Ty::Var(self.solutions.len() as u32 - 1)
+    }
+
+    /// A new trust variable, with nothing flowing into or out of it.
+    pub fn fresh_trust(&mut self) -> Trust {
+        self.trust.push(TrustVar::default());
+        Trust::Var(self.trust.len() as u32 - 1)
+    }
+
+    /// `ty` with every text flag replaced by a fresh trust variable, so
+    /// that it accepts text of either trust. Unsolved variables inside
+    /// are kept.
+    pub fn loosen(&mut self, ty: &Ty) -> Ty {
+        match ty {
+            Ty::Named(name, args, trust) => {
+                let args = args.iter().map(|a| self.loosen(a)).collect();
+                let trust = if ty.is_text() {
+                    self.fresh_trust()
+                } else {
+                    *trust
+                };
+                Ty::Named(name.clone(), args, trust)
+            }
+            Ty::Fn { cap, params, ret } => Ty::Fn {
+                cap: *cap,
+                params: params.iter().map(|p| self.loosen(p)).collect(),
+                ret: Box::new(self.loosen(ret)),
+            },
+            other => other.clone(),
+        }
+    }
+
+    /// Let the trust of every text type in a value of type `ty` flow into
+    /// `into`, as the holes of an interpolated string do. Function types
+    /// are skipped: they are not text.
+    pub fn join_into(&mut self, ty: &Ty, into: Trust) {
+        if let Ty::Named(_, args, trust) = self.shallow(ty) {
+            // Only fails when `into` is pinned, which the caller rules out.
+            self.trust_flow(trust, into);
+            for arg in &args {
+                self.join_into(arg, into);
+            }
+        }
+    }
+
+    /// A trust flag as solved so far: a variable is untrusted once
+    /// untrusted text reaches it, trusted once it is pinned, and left a
+    /// variable otherwise.
+    fn trust_of(&self, trust: Trust) -> Trust {
+        match trust {
+            Trust::Var(v) if self.trust[v as usize].untrusted => Trust::Untrusted,
+            Trust::Var(v) if self.trust[v as usize].pinned => Trust::Trusted,
+            other => other,
+        }
+    }
+
+    /// Add the edge `a ≤ b`: text of trust `a` flows where `b` is
+    /// required. Fails when untrusted text would reach a trusted slot.
+    fn trust_flow(&mut self, a: Trust, b: Trust) -> bool {
+        match (a, b) {
+            (Trust::Trusted, _) | (_, Trust::Untrusted) => true,
+            (Trust::Untrusted, Trust::Trusted) => false,
+            (Trust::Untrusted, Trust::Var(v)) => self.taint(v),
+            (Trust::Var(v), Trust::Trusted) => self.pin(v),
+            (Trust::Var(x), Trust::Var(y)) => {
+                if x == y {
+                    return true;
+                }
+                self.trust[x as usize].into.push(y);
+                self.trust[y as usize].from.push(x);
+                (!self.trust[x as usize].untrusted || self.taint(y))
+                    && (!self.trust[y as usize].pinned || self.pin(x))
+            }
+        }
+    }
+
+    /// Untrusted text reaches `v`, and everything `v` flows into.
+    fn taint(&mut self, v: u32) -> bool {
+        let var = &mut self.trust[v as usize];
+        if var.untrusted {
+            return true;
+        }
+        if var.pinned {
+            return false;
+        }
+        var.untrusted = true;
+        let into = var.into.clone();
+        into.into_iter().all(|w| self.taint(w))
+    }
+
+    /// `v`, and everything that flows into it, flows into a trusted slot.
+    fn pin(&mut self, v: u32) -> bool {
+        let var = &mut self.trust[v as usize];
+        if var.pinned {
+            return true;
+        }
+        if var.untrusted {
+            return false;
+        }
+        var.pinned = true;
+        let from = var.from.clone();
+        from.into_iter().all(|w| self.pin(w))
     }
 
     /// Follow solved variables at the top of `ty` only.
@@ -89,9 +228,11 @@ impl Infer {
     /// Replace every solved variable in `ty`, all the way down.
     pub fn resolve(&self, ty: &Ty) -> Ty {
         match self.shallow(ty) {
-            Ty::Named(name, args, trust) => {
-                Ty::Named(name, args.iter().map(|a| self.resolve(a)).collect(), trust)
-            }
+            Ty::Named(name, args, trust) => Ty::Named(
+                name,
+                args.iter().map(|a| self.resolve(a)).collect(),
+                self.trust_of(trust),
+            ),
             Ty::Fn { cap, params, ret } => Ty::Fn {
                 cap,
                 params: params.iter().map(|p| self.resolve(p)).collect(),
@@ -115,9 +256,10 @@ impl Infer {
     ///
     /// Both rules apply at every depth: covariantly through type arguments
     /// and results, contravariantly through a function type's parameters.
-    /// An inference variable is solved to exactly the type it meets, so a
-    /// variable solved to a plain `fn` rejects a `cap fn` later, and one
-    /// solved to trusted text rejects untrusted text later.
+    /// An inference variable is solved to the type it meets, so a variable
+    /// solved to a plain `fn` rejects a `cap fn` later. Its text flags are
+    /// trust variables, though: one first met with trusted text accepts
+    /// untrusted text later, unless it has flowed into a trusted slot.
     pub fn unify(&mut self, actual: &Ty, expected: &Ty) -> bool {
         self.flow(actual, expected).is_ok()
     }
@@ -147,13 +289,13 @@ impl Infer {
                 Some(Mismatch::TrustLost),
             ),
         ];
-        let saved = self.solutions.clone();
+        let saved = self.clone();
         for (rules, mismatch) in attempts {
             let ok = self.unify_inner(actual, expected, Polarity::Positive, rules);
             if ok && mismatch.is_none() {
                 return Ok(());
             }
-            self.solutions = saved.clone();
+            *self = saved.clone();
             if let (true, Some(mismatch)) = (ok, mismatch) {
                 return Err(mismatch);
             }
@@ -167,19 +309,32 @@ impl Infer {
         match (&a, &b) {
             (Ty::Error, _) | (_, Ty::Error) | (Ty::Never, _) | (_, Ty::Never) => true,
             (Ty::Var(x), Ty::Var(y)) if x == y => true,
-            (Ty::Var(v), other) | (other, Ty::Var(v)) => {
+            (Ty::Var(v), other) => {
                 if self.occurs(*v, other) {
                     return false;
                 }
-                self.solutions[*v as usize] = Some(other.clone());
-                true
+                let solution = self.loosen(other);
+                self.solutions[*v as usize] = Some(solution.clone());
+                self.unify_inner(&solution, other, polarity, rules)
+            }
+            (other, Ty::Var(v)) => {
+                if self.occurs(*v, other) {
+                    return false;
+                }
+                let solution = self.loosen(other);
+                self.solutions[*v as usize] = Some(solution.clone());
+                self.unify_inner(other, &solution, polarity, rules)
             }
             (Ty::Named(n1, a1, t1), Ty::Named(n2, a2, t2)) => {
+                if n1 != n2 || a1.len() != a2.len() {
+                    return false;
+                }
                 let trust_kept = !rules.trust
-                    || polarity.keeps(*t1 == Trust::Untrusted, *t2 == Trust::Untrusted);
-                n1 == n2
-                    && trust_kept
-                    && a1.len() == a2.len()
+                    || match polarity {
+                        Polarity::Positive => self.trust_flow(*t1, *t2),
+                        Polarity::Negative => self.trust_flow(*t2, *t1),
+                    };
+                trust_kept
                     && a1
                         .iter()
                         .zip(a2)

@@ -32,6 +32,11 @@ pub struct FnSig {
     /// A **pure function**: no parameter, the receiver included, is
     /// capability-bearing.
     pub pure: bool,
+    /// A trust-polymorphic prelude text operation, marked
+    /// `#[follows_trust]`: each call joins the trust of its receiver and
+    /// text arguments, and every text type in its result has that trust
+    /// (ADR 0006; see `infer.rs`).
+    pub follows_trust: bool,
 }
 
 /// How a function takes `self`.
@@ -203,6 +208,7 @@ impl TraitInfo {
             ret: sig.ret.substitute(&subst),
             trait_name: sig.trait_name.clone(),
             pure: sig.pure,
+            follows_trust: sig.follows_trust,
         }
     }
 }
@@ -247,7 +253,8 @@ impl Items {
         for item in items {
             match &item.kind {
                 ItemKind::Fn(f) => {
-                    let sig = Lower::new(decls).signature(f, &[], None);
+                    let mut sig = Lower::new(decls).signature(f, &[], None);
+                    sig.follows_trust = follows_trust(item);
                     self.fns.entry(sig.name.clone()).or_insert(sig);
                 }
                 ItemKind::Struct(s) => {
@@ -320,6 +327,7 @@ impl Items {
                                     if f.receiver.is_some() && receiver_bearing {
                                         sig.pure = false;
                                     }
+                                    sig.follows_trust = follows_trust(method);
                                     self.inherent
                                         .entry(type_name.clone())
                                         .or_default()
@@ -344,6 +352,7 @@ impl Items {
                                 // instantiated, when the method is used.
                                 let mut sig = lower.signature(f, &[], Some(self_ty.clone()));
                                 sig.trait_name = Some(t.name.name.clone());
+                                sig.follows_trust = follows_trust(m);
                                 Some((sig, f.body.is_some()))
                             }
                             _ => None,
@@ -544,6 +553,7 @@ impl<'d, 'a> Lower<'d, 'a> {
                 .collect(),
             ret: f.return_type.as_ref().map_or(Ty::Unit, |t| lower.ty(t)),
             trait_name: None,
+            follows_trust: false,
             pure: !f
                 .params
                 .iter()
@@ -614,3 +624,12 @@ impl<'d, 'a> Lower<'d, 'a> {
         }
     }
 }
+
+/// Whether a function item is marked `#[follows_trust]`. Only the prelude
+/// can write the attribute: the parser rejects it in user code.
+fn follows_trust(item: &Item) -> bool {
+    item.attributes.iter().any(|a| a.name.name == FOLLOWS_TRUST)
+}
+
+/// The attribute that makes a prelude function trust-polymorphic.
+const FOLLOWS_TRUST: &str = "follows_trust";

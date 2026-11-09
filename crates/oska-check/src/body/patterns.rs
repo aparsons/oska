@@ -266,7 +266,10 @@ impl Body<'_, '_, '_> {
                     (callable, name.clone())
                 }
             };
-            if self.expect(&callable.ret, expected, span).is_error() {
+            // The matched value flows into the pattern, and on into its
+            // bindings, so untrusted text binds untrusted.
+            if let Err(mismatch) = self.infer.flow(expected, &callable.ret) {
+                self.mismatch(mismatch, &callable.ret, expected, span);
                 return None;
             }
             if callable.params.len() != args.len() {

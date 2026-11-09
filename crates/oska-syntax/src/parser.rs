@@ -122,11 +122,17 @@ const ATTRIBUTES: &[&str] = &["integration"];
 /// declare one, so user code gets the unknown-attribute error for it.
 const CAPABILITY: &str = "capability";
 
+/// The attributes only the prelude may write: `#[capability]`, and
+/// `#[follows_trust]`, which marks a trust-polymorphic text operation
+/// (ADR 0006). User code gets the unknown-attribute error for them.
+const PRELUDE_ATTRIBUTES: &[&str] = &[CAPABILITY, "follows_trust"];
+
 /// Whether the source is user code or the embedded prelude.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
     User,
-    /// Functions may omit their bodies, and `#[capability]` is allowed.
+    /// Functions may omit their bodies, and the prelude-only attributes
+    /// are allowed.
     Prelude,
 }
 
@@ -567,7 +573,8 @@ impl<'a> Parser<'a> {
         let start = self.expect_punct(Punct::Hash)?;
         self.expect_punct(Punct::LBracket)?;
         let name = self.expect_ident("an attribute name")?;
-        let prelude_only = self.mode == Mode::Prelude && name.name == CAPABILITY;
+        let prelude_only =
+            self.mode == Mode::Prelude && PRELUDE_ATTRIBUTES.contains(&name.name.as_str());
         if !prelude_only && !ATTRIBUTES.contains(&name.name.as_str()) {
             let known: Vec<String> = ATTRIBUTES.iter().map(|a| format!("`#[{a}]`")).collect();
             return Err(error(

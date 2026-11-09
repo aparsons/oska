@@ -38,6 +38,7 @@ impl Body<'_, '_, '_> {
                         obligations: Vec::new(),
                         pure: !cap,
                         receiver: None,
+                        joined: None,
                     }),
                     Ty::Error => None,
                     other => {
@@ -227,30 +228,43 @@ impl Body<'_, '_, '_> {
             obligations: Vec::new(),
             pure: true,
             receiver: None,
+            joined: None,
         }
     }
 
     /// Instantiate `sig`'s generics with fresh variables. `self_ty`, when
     /// given, is unified with the signature's `Self` type, which solves an
     /// impl's generics from the receiver.
+    ///
+    /// A `#[follows_trust]` operation also gets one fresh trust variable
+    /// in place of every trusted text flag in its signature: the receiver
+    /// and text arguments flow into it, so every text type in the result
+    /// is untrusted when any of them is (ADR 0006).
     pub(super) fn instantiate(&mut self, sig: &FnSig, self_ty: Option<&Ty>) -> Callable {
         let subst: Vec<(String, Ty)> = sig
             .generics
             .iter()
             .map(|g| (g.clone(), self.infer.fresh()))
             .collect();
+        let joined = sig.follows_trust.then(|| self.infer.fresh_trust());
+        let lower = |t: &Ty| {
+            let t = t.substitute(&subst);
+            match joined {
+                Some(trust) => t.trusted_as(trust),
+                None => t,
+            }
+        };
         if let (Some(actual), Some(declared)) = (self_ty, &sig.self_ty) {
-            let declared = declared.substitute(&subst);
-            self.infer.unify(actual, &declared);
+            self.infer.unify(actual, &lower(declared));
         }
         Callable {
             description: format!("`{}`", sig.name),
             params: sig
                 .params
                 .iter()
-                .map(|(n, t)| (Some(n.clone()), t.substitute(&subst)))
+                .map(|(n, t)| (Some(n.clone()), lower(t)))
                 .collect(),
-            ret: sig.ret.substitute(&subst),
+            ret: lower(&sig.ret),
             labels: Labels::Optional,
             obligations: sig
                 .bounds
@@ -269,7 +283,8 @@ impl Body<'_, '_, '_> {
                 .self_ty
                 .as_ref()
                 .filter(|_| sig.receiver.is_method())
-                .map(|declared| declared.substitute(&subst)),
+                .map(lower),
+            joined,
         }
     }
 
@@ -325,7 +340,12 @@ impl Body<'_, '_, '_> {
             ),
             Receiver::Self_ => {}
         }
-        let callable = self.instantiate(&sig, Some(&receiver));
+        let callable = self.instantiate(&sig, None);
+        if let Some(declared) = &callable.receiver {
+            // The receiver flows into `self` like an argument, so untrusted
+            // text is no receiver of a method that wants trusted text.
+            self.expect(&receiver, declared, base.span);
+        }
         self.apply(callable, args, expected, span)
     }
 
@@ -423,8 +443,18 @@ impl Body<'_, '_, '_> {
         // Let the expected result type guide the arguments first, as in
         // `let r: Result<U8, E> = Ok(200)`. A mismatch is reported later,
         // against the whole call.
+        // For a `#[follows_trust]` operation the hint guides types only:
+        // its result's trust comes from its arguments, so untrusted text
+        // is reported where the result meets a trusted slot.
         if let Some(expected) = expected {
-            self.infer.unify(&callable.ret, expected);
+            let hint = match callable.joined {
+                Some(_) => {
+                    let hint = self.infer.resolve(expected);
+                    self.infer.loosen(&hint)
+                }
+                None => expected.clone(),
+            };
+            self.infer.unify(&callable.ret, &hint);
         }
         if args.len() != callable.params.len() {
             let n = callable.params.len();
