@@ -1,0 +1,7 @@
+// The smallest Oska program.
+// `main` receives only the capabilities it declares, so this program
+// can write to stdout and nothing else.
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("Hello from Oska!")
+}

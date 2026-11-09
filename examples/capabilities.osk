@@ -1,0 +1,15 @@
+// Capabilities are ordinary values. `count_lines` can read files under the
+// path it is given and nothing else: no network, no writes, no env access.
+
+fn count_lines(fs: FsRead, path: Path) -> Result<Int, IoError> {
+    let text = fs.read_to_string(path)?
+    Ok(text.lines().count())
+}
+
+fn main(io: Stdout, fs: FsRead, args: Args) -> Result<(), AppError> {
+    // Attenuate: hand out a capability restricted to the current directory.
+    let local = fs.restrict_to(".")
+    let path = args.get(1).ok_or(AppError.usage("usage: capabilities <file>"))?
+    let n = count_lines(local, Path.from(path))?
+    io.println("lines: {n}")
+}
