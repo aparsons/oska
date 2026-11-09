@@ -40,7 +40,7 @@ The prelude is Oska source, `crates/oska-check/src/prelude.osk`, parsed with `pa
 
 ### `std` modules
 
-A `std.*` module is also prelude-mode Oska source, `crates/oska-check/src/std/<name>.osk`, registered in `STD_MODULES` in `src/prelude.rs`. Its declarations are in scope only in a module that imports it: `use std.sql` and `use std.sql.{SqlLiteral}` both bring all of `std.sql` in, and a brace group may only name what the module exports (`E0312`). Without the `use`, its names are unknown (`E0200`). The modules that exist are:
+A `std.*` module is also prelude-mode Oska source, `crates/oska-check/src/std/<name>.osk`, registered in `STD_MODULES` in `src/prelude.rs`. Its declarations are in scope only in a module that imports it. `use std.sql` imports the module: code reaches its exports qualified, as types and as values (`sql.Db`, `sql.connect(...)`, `sql.Db.query`), and writing one unqualified is `E0340`. `use std.sql.{Db, connect}` imports those names unqualified and does not bind `sql`. There are no glob imports. A brace group or a qualified path may only name what the module exports (`E0312`). Without the `use`, its names are unknown (`E0200`). A local variable shadows a module name. The modules that exist are:
 
 | Module | Exports | Sink literal |
 | --- | --- | --- |
@@ -52,7 +52,7 @@ A sink literal's tag names the module that provides it. The literal has the type
 
 | Code | Meaning | Fix |
 | --- | --- | --- |
-| `E0200` | Unknown type or trait name. A qualified path such as `sql.Query` is unknown until `std.*` modules exist. | Replace the name with the single closest declared name, when one is close enough. |
+| `E0200` | Unknown type or trait name, or a qualified path such as `sql.Query` whose first segment is not a module bound by a plain `use`. | Replace the name with the single closest declared name, when one is close enough. |
 | `E0201` | A trait where a type is expected (`x: Display`), or a type where a trait is expected (`T: Int`). | None. |
 | `E0202` | A type or trait name declared twice in the module, or one that redeclares a prelude name; a free function declared twice, or one that redeclares a prelude function (`dbg`, `todo`); or a method or associated function declared twice for one type, across all of its inherent `impl` blocks. Spans the second declaration's name. | None. |
 | `E0210` | A struct or enum whose own fields name a capability-bearing type (a built-in capability, a `cap` type, or a `cap fn`, including inside written type arguments such as `List<Stdout>`) is not declared `cap`. A field typed by a type parameter, as in `struct Box<T> { value: T }`, does not count. Spans the type's name. | Insert `cap` before `struct` or `enum`. |
@@ -107,4 +107,5 @@ A sink literal's tag names the module that provides it. The literal has the type
 | `E0300` | Untrusted text in a structural position: an `Untrusted<String>` used where trusted `String` is required, such as a `String` parameter, field, or return type. Reported instead of `E0220` when trust is the only difference. Like `E0270`, the rule is part of type compatibility, so it holds on every route, including inside type arguments such as `Option<Untrusted<String>>`. Trusted `String` may always be used as `Untrusted<String>`. The message suggests a validator or `.assume_trusted()`. Spans the expression. | None. |
 | `E0310` | A sink literal, such as `sql"..."`, whose module is not imported. Spans the tag. | Insert `use std.<module>` at the start of the file. |
 | `E0311` | A sink literal whose tag no `std.*` module provides, such as `sqll"..."`. Spans the tag. | Replace the tag with the single closest known tag, when one is close enough. |
-| `E0312` | A name in a `use` brace group that the module does not export, such as `use std.sql.{Query}`. Spans the name. | Replace the name with the single closest export, when one is close enough. |
+| `E0312` | A name that the module does not export, in a `use` brace group (`use std.sql.{Query}`) or a qualified path (`sql.Query`). Spans the name. | Replace the name with the single closest export, when one is close enough. |
+| `E0340` | A module's export written unqualified, such as `Db` after a plain `use std.sql`, which imports only the module. Spans the name. | Qualify it with the module's name: `sql.Db`. |

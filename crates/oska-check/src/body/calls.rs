@@ -22,10 +22,16 @@ impl Body<'_, '_, '_> {
         expected: Option<&Ty>,
     ) -> Ty {
         let callable = match &callee.kind {
-            ExprKind::Field { base, name } => match self.type_name(base) {
-                Some(type_name) => self.type_member(&type_name, name),
-                None => return self.method_call(base, name, args, expected, expr.span),
-            },
+            ExprKind::Field { base, name } => {
+                match (self.module_name(base), self.type_name(base)) {
+                    (Some(module), _) => match self.require_export(module, name) {
+                        true => self.item_callee(name),
+                        false => None,
+                    },
+                    (None, Some(type_name)) => self.type_member(&type_name, name),
+                    (None, None) => return self.method_call(base, name, args, expected, expr.span),
+                }
+            }
             ExprKind::Name(ident) if self.local(&ident.name).is_none() => self.named_callee(ident),
             _ => {
                 let ty = self.infer(callee);
@@ -62,6 +68,15 @@ impl Body<'_, '_, '_> {
 
     /// A bare name called: a function, a struct, or a prelude variant.
     pub(super) fn named_callee(&mut self, ident: &Ident) -> Option<Callable> {
+        if !self.require_unqualified(ident) {
+            return None;
+        }
+        self.item_callee(ident)
+    }
+
+    /// A function, struct, or prelude variant called, named either
+    /// unqualified or as a module's export.
+    fn item_callee(&mut self, ident: &Ident) -> Option<Callable> {
         let name = ident.name.as_str();
         if let Some(sig) = self.items.fns.get(name).cloned() {
             return Some(self.instantiate(&sig, None));
