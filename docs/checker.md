@@ -4,7 +4,7 @@
 
 The exit code is non-zero when there are diagnostics. Without `--format=json`, diagnostics go to stderr and the authority report to stdout, one function per line, such as `fn main: Stdout (io), FsRead (fs)` or `fn add: pure`.
 
-Function bodies are not type-checked yet. Type and trait names in signatures and declarations are resolved, declarations are checked (`cap`, `main`, capitalization, recursive types), and under `--release` every body is scanned for `dbg(...)`.
+Type and trait names in signatures and declarations are resolved, declarations are checked (`cap`, `main`, capitalization, recursive types), and under `--release` every body is scanned for `dbg(...)`. Function, method, and constant bodies are type-checked with local, bidirectional inference: `let` types come from initializers, the expected type flows into literals, generic constructors, and closures, and an expression that fails gets an error type so it causes only one diagnostic. Test bodies and contract clauses are not checked yet.
 
 ## Report
 
@@ -30,7 +30,7 @@ Function bodies are not type-checked yet. Type and trait names in signatures and
 
 ## The prelude
 
-The prelude is Oska source, `crates/oska-check/src/prelude.osk`, parsed with `parse_prelude`. It declares the built-in capabilities as `#[capability]` structs with private fields, the core types (`Option`, `Result`, `List`, `Path`, `Args`, `IoError`) and the core traits (`Eq`, `Hash`, `Display`, `From`). The primitive types (`Int`, `I8` to `I64`, `U8` to `U64`, `Bool`, `String`) and `()` are built into the checker. The prelude implements `Display` for `String`, `Int`, and `IoError`. User code cannot redeclare any of these names.
+The prelude is Oska source, `crates/oska-check/src/prelude.osk`, parsed with `parse_prelude`. It declares the built-in capabilities as `#[capability]` structs with private fields, the core types (`Option`, `Result`, `List`, `Range`, `Path`, `Args`, `IoError`) with the few methods the examples and tests use, the `dbg` function, and the core traits (`Eq`, `Hash`, `Display`, `From`). The primitive types (`Int`, `I8` to `I64`, `U8` to `U64`, `Bool`, `String`) and `()` are built into the checker. The prelude implements `Display` for `String`, `Int`, and `IoError`. User code cannot redeclare any of these names.
 
 ## Diagnostic codes
 
@@ -46,3 +46,19 @@ The prelude is Oska source, `crates/oska-check/src/prelude.osk`, parsed with `pa
 | `E0214` | A function, method, field, or parameter name that starts with an uppercase letter (ADR 0005). A leading `_` is allowed. | None. |
 | `E0215` | A struct or enum with no base case: every way to build it contains itself, as in `struct Loop { me: Loop }`. Recursion through `Option`, `List`, or an enum variant without the type needs no indirection. Each type in a cycle is reported. | None. |
 | `E0216` | A call to `dbg(...)` when checking with `--release`. Spans the call. | None. |
+| `E0220` | Type mismatch: an expression's type differs from the type expected there. There are no implicit conversions. | None. |
+| `E0221` | Unknown value name, or `self` outside a method with a receiver. | Replace the name with the single closest local, function, or prelude variant, when one is close enough. |
+| `E0222` | Integer literal out of range for its type, such as `300` as a `U8`. | None. |
+| `E0223` | Operator not defined for its operand's type: arithmetic and ordering need numbers (`+` is not for strings), unary `-` needs a signed number, `..` needs integers. | None. |
+| `E0224` | Wrong number of arguments in a call or construction. | None. |
+| `E0225` | Argument label that does not match its parameter or field, or a label on a positional field. | Replace the label with the parameter's name, or remove it. |
+| `E0226` | Named field constructed without its label. | Insert the field's label. |
+| `E0227` | Unknown field, or a method used without calling it. | Replace the field with the single closest field, when one is close enough. |
+| `E0228` | Unknown method, variant, or associated function, or an associated function called on a value. | Replace the name with the single closest member, when one is close enough. |
+| `E0229` | Assignment to something that is not a `var` binding: a `let` binding, a parameter, or a field of `self` in a method without `var self`. | Change `let` to `var`, or `self` to `var self`. None for parameters. |
+| `E0230` | Mutating method (`var self`) called on something that is not a `var` binding. | Change `let` to `var`, or `self` to `var self`. |
+| `E0231` | Call of a value that is not a function. | None. |
+| `E0232` | `break` or `continue` outside a loop. | None. |
+| `E0233` | A type that inference cannot work out, such as `let xs = List.new()` with no later use. | None. |
+| `E0234` | A type name used as a value, or a type that cannot be constructed. | None. |
+| `E0235` | `for` over a value that is not a `List` or a range. | None. |

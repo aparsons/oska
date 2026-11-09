@@ -44,5 +44,6 @@ fn main(io: Stdout, fs: FsRead, args: Args) -> Result<(), AppError> {
     let local = fs.restrict_to(".")
     let path = args.get(1).ok_or(AppError.usage("usage: capabilities <file>"))?
     let n = count_lines(local, Path.from(path))?
-    io.println("lines: {n}")
+    io.println("lines: {n}")?
+    Ok(())
 }

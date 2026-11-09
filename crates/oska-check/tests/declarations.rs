@@ -90,12 +90,12 @@ fn a_misspelled_main_parameter_is_reported_once() {
 
 #[test]
 fn main_may_return_a_result_whose_error_is_display() {
-    assert_ok("fn main(io: Stdout) -> Result<(), IoError> { }");
-    assert_ok("fn main() -> Result<(), String> { }");
+    assert_ok("fn main(io: Stdout) -> Result<(), IoError> { Ok(()) }");
+    assert_ok("fn main() -> Result<(), String> { Ok(()) }");
     assert_ok(
         "struct AppError { message: String }\n\
          impl Display for AppError {\n    fn to_string(self) -> String { self.message }\n}\n\
-         fn main() -> Result<(), AppError> { }",
+         fn main() -> Result<(), AppError> { Ok(()) }",
     );
 }
 
@@ -103,7 +103,7 @@ fn main_may_return_a_result_whose_error_is_display() {
 fn main_must_return_unit_or_a_result_of_unit() {
     assert_errors("fn main() -> Int { 0 }", &[("E0212", "Int")]);
     assert_errors(
-        "fn main() -> Result<Int, String> { }",
+        "fn main() -> Result<Int, String> { Ok(1) }",
         &[("E0212", "Result<Int, String>")],
     );
 }
@@ -111,7 +111,7 @@ fn main_must_return_unit_or_a_result_of_unit() {
 #[test]
 fn mains_error_type_must_be_display() {
     assert_errors(
-        "struct AppError { message: String }\nfn main() -> Result<(), AppError> { }",
+        "struct AppError { message: String }\nfn main() -> Result<(), AppError> { Ok(()) }",
         &[("E0212", "AppError")],
     );
 }

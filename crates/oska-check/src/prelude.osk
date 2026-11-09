@@ -82,6 +82,11 @@ pub enum Option<T> {
     None,
 }
 
+impl<T> Option<T> {
+    pub fn is_some(self) -> Bool
+    pub fn ok_or<E>(self, err: E) -> Result<T, E>
+}
+
 pub enum Result<T, E> {
     Ok(T),
     Err(E),
@@ -89,6 +94,31 @@ pub enum Result<T, E> {
 
 // A growable list. Its representation is built in.
 pub struct List<T> { handle: Int }
+
+// A line ending in a generic type's `>` continues onto the next, so a
+// body-less method returning one must be the last in its `impl` block.
+impl<T> List<T> {
+    pub fn push(var self, item: T)
+    pub fn len(self) -> Int
+    pub fn count(self) -> Int
+    pub fn new() -> List<T>
+}
+
+impl<T> List<T> {
+    pub fn get(self, index: Int) -> Option<T>
+}
+
+impl<T> List<T> {
+    pub fn map<U>(self, f: fn(T) -> U) -> List<U>
+}
+
+// `start..end`, which excludes `end`.
+pub struct Range<T> { pub start: T, pub end: T }
+
+impl String {
+    pub fn len(self) -> Int
+    pub fn lines(self) -> List<String>
+}
 
 pub struct Path { raw: String }
 
@@ -109,6 +139,11 @@ pub struct IoError { message: String }
 impl Display for IoError {
     fn to_string(self) -> String
 }
+
+// ---- Core functions ----------------------------------------------------
+
+// Print `value` for debugging and return it. An error under `--release`.
+pub fn dbg<T>(value: T) -> T
 
 // ---- Core traits -------------------------------------------------------
 

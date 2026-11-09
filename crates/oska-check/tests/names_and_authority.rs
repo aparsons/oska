@@ -164,7 +164,7 @@ fn prelude_names_resolve_without_imports() {
          \x20     g: Net, h: NetConnect, i: NetListen, j: Env, k: Clock,\n\
          \x20     l: Random, m: Sched, n: Spawn, o: Args, p: Path) { }\n\
          fn g(a: Int, b: I8, c: I16, d: I32, e: I64, f: U8, g: U16, h: U32,\n\
-         \x20     i: U64, j: Bool, k: String, l: ()) -> Result<Option<List<Int>>, IoError> { }",
+         \x20     i: U64, j: Bool, k: String, l: ()) -> Result<Option<List<Int>>, IoError> { Ok(None) }",
     );
 }
 

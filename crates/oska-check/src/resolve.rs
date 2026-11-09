@@ -1,5 +1,5 @@
 //! Name resolution for the type and trait names in signatures and
-//! declarations. Function bodies are not resolved yet.
+//! declarations. Names in function bodies are resolved by `body.rs`.
 
 use oska_syntax::ast::{FnDecl, GenericParam, Ident, ItemKind, Module, Type, TypeKind};
 use oska_syntax::{Diagnostic, Edit, Span};
@@ -242,7 +242,7 @@ impl Expect {
 /// The single candidate closest to `name`, if one is close enough: at
 /// most a third of the name's length in edits (at least one), ignoring
 /// case. A tie means no suggestion.
-fn closest<'c>(name: &str, candidates: &[&'c str]) -> Option<&'c str> {
+pub(crate) fn closest<'c>(name: &str, candidates: &[&'c str]) -> Option<&'c str> {
     let limit = (name.chars().count() / 3).max(1);
     let mut best: Option<(usize, &str)> = None;
     let mut tied = false;
