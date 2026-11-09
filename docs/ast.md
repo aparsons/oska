@@ -48,7 +48,9 @@ An item's span starts at its first attribute, if it has one, and otherwise at `p
 
 #### `FnItem`
 
-A function declaration: `fn name<generics>(params) -> T requires ... ensures |r| ... { body }`. The contract clauses sit between the return type and the body, and may each start a new line.
+A function declaration: `fn name<generics>(params) -> T requires ... ensures |r| ... { body }`. The contract clauses sit between the return type and the body, and may each start a new line. The same node is used for the methods of `ImplItem` and `TraitItem`.
+
+A `self` or `var self` receiver is allowed only on a method in an `impl` or `trait` block. On a module-level function it is error `E0150`.
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -59,7 +61,7 @@ A function declaration: `fn name<generics>(params) -> T requires ... ensures |r|
 | `return_type` | type node | optional; absent means `()` |
 | `requires` | array of `RequiresClause` | in source order |
 | `ensures` | array of `EnsuresClause` | in source order |
-| `body` | `Block` |  |
+| `body` | `Block` | optional; absent only for a trait method without a default body |
 
 #### `UseItem`
 
@@ -97,6 +99,7 @@ A struct declaration: `struct Point { x: Int, y: Int }` (named fields) or `struc
 | --- | --- | --- |
 | `cap` | bool | declared `cap struct`: a **capability-bearing type** |
 | `name` | `Ident` |  |
+| `generics` | array of `GenericParam` | in source order; empty when not generic, as in `struct Pair<A, B> { ... }` |
 | `form` | string | `"named"` or `"positional"` |
 | `fields` | array of `Field` | in source order |
 
@@ -108,7 +111,29 @@ An enum (sum type) declaration: `enum Shape { Circle { radius: Int }, Rect(Int, 
 | --- | --- | --- |
 | `cap` | bool | declared `cap enum`: a **capability-bearing type** |
 | `name` | `Ident` |  |
+| `generics` | array of `GenericParam` | in source order; empty when not generic, as in `enum Option<T> { ... }` |
 | `variants` | array of `Variant` | in source order |
+
+#### `TraitItem`
+
+A trait declaration: `trait Name<generics> { methods }`. Methods are separated by line breaks. A method either ends after its signature (its `FnItem` has no `body`) or has a default body. Trait objects (`dyn`), associated types, and `where` clauses are not part of v0.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `name` | `Ident` |  |
+| `generics` | array of `GenericParam` | in source order |
+| `methods` | array of `FnItem` | in source order |
+
+#### `ImplItem`
+
+Methods for a type: `impl<generics> Type { methods }` for inherent methods and associated functions, or `impl<generics> Trait for Type { methods }` for a trait implementation. Methods are separated by line breaks, and each needs a body. An `impl` block is never `pub` (error `E0151`), so `public` is always `false`; each method carries its own `public`.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `generics` | array of `GenericParam` | in source order, as in `impl<T: Eq> Eq for List<T>` |
+| `trait` | type node | optional; the implemented trait, present only for `impl Trait for Type` |
+| `target` | type node | the type the methods belong to |
+| `methods` | array of `FnItem` | in source order |
 
 ### Shared nodes
 

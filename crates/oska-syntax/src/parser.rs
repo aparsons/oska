@@ -39,12 +39,15 @@
 //! - `E0141`: a range pattern such as `1..5`, which v0 does not support
 //! - `E0142`: an `@` binding such as `v @ Some(_)`, which v0 does not support
 //! - `E0143`: a comma between `match` arms
+//! - `E0150`: a `self` or `var self` receiver on a function outside an
+//!   `impl` or `trait` block
+//! - `E0151`: `pub` on an `impl` block; mark methods `pub` instead
 
 use crate::ast::{
     Arg, Attribute, BinaryOp, Block, ClosureParam, ConstDecl, Ensures, EnumDecl, Expr, ExprKind,
-    Field, Fields, FnDecl, GenericParam, Ident, Item, ItemKind, MatchArm, Module, Param, Pattern,
-    PatternArg, PatternKind, Requires, SelfParam, Stmt, StmtKind, StrPart, StructDecl, TestDecl,
-    Type, TypeKind, UnaryOp, UseDecl, Variant,
+    Field, Fields, FnDecl, GenericParam, Ident, ImplDecl, Item, ItemKind, MatchArm, Module, Param,
+    Pattern, PatternArg, PatternKind, Requires, SelfParam, Stmt, StmtKind, StrPart, StructDecl,
+    TestDecl, TraitDecl, Type, TypeKind, UnaryOp, UseDecl, Variant,
 };
 use crate::{lex, resolve_escape, Diagnostic, Keyword, Punct, Span, Token, TokenKind};
 
@@ -87,6 +90,18 @@ pub fn parse_type(src: &str) -> Result<Type, Diagnostic> {
 /// The closed set of attribute names. There are no user macros
 /// (ADR 0003), so any other name is a typo or unsupported.
 const ATTRIBUTES: &[&str] = &["integration"];
+
+/// Where a function is declared, which decides whether it may take a
+/// receiver and whether it may omit its body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FnContext {
+    /// A module-level function: no receiver, body required.
+    Free,
+    /// A method in an `impl` block: body required.
+    Impl,
+    /// A method in a `trait`: the body is an optional default.
+    Trait,
+}
 
 struct Parser<'a> {
     src: &'a str,
@@ -312,16 +327,27 @@ impl<'a> Parser<'a> {
             self.skip_newlines();
         }
         let public = self.at_kw(Keyword::Pub);
+        let pub_span = self.peek_span();
         if public {
             self.bump();
         }
+        if public && self.at_kw(Keyword::Impl) {
+            return Err(error(
+                "E0151",
+                "an `impl` block cannot be `pub`; remove `pub` here and mark each \
+                 method that should be public as `pub fn`",
+                pub_span,
+            ));
+        }
         let kind = match self.peek() {
-            Some(TokenKind::Keyword(Keyword::Fn)) => ItemKind::Fn(self.fn_decl()?),
+            Some(TokenKind::Keyword(Keyword::Fn)) => ItemKind::Fn(self.fn_decl(FnContext::Free)?),
             Some(TokenKind::Keyword(Keyword::Use)) => ItemKind::Use(self.use_decl()?),
             Some(TokenKind::Keyword(Keyword::Const)) => ItemKind::Const(self.const_decl()?),
             Some(TokenKind::Keyword(Keyword::Test)) => ItemKind::Test(self.test_decl()?),
             Some(TokenKind::Keyword(Keyword::Struct)) => ItemKind::Struct(self.struct_decl(false)?),
             Some(TokenKind::Keyword(Keyword::Enum)) => ItemKind::Enum(self.enum_decl(false)?),
+            Some(TokenKind::Keyword(Keyword::Impl)) => ItemKind::Impl(self.impl_decl()?),
+            Some(TokenKind::Keyword(Keyword::Trait)) => ItemKind::Trait(self.trait_decl()?),
             Some(TokenKind::Keyword(Keyword::Cap)) => {
                 self.bump();
                 match self.peek() {
@@ -491,18 +517,89 @@ impl<'a> Parser<'a> {
         Ok(TestDecl { name, body })
     }
 
-    fn fn_decl(&mut self) -> Result<FnDecl, Diagnostic> {
+    /// `impl<generics> Type { methods }` or `impl<generics> Trait for Type
+    /// { methods }`.
+    fn impl_decl(&mut self) -> Result<ImplDecl, Diagnostic> {
+        self.expect_kw(Keyword::Impl)?;
+        let generics = self.generics()?;
+        let first = self.ty()?;
+        let (trait_, target) = if self.at_kw(Keyword::For) {
+            self.bump();
+            (Some(first), self.ty()?)
+        } else {
+            (None, first)
+        };
+        let methods = self.methods(FnContext::Impl)?;
+        Ok(ImplDecl {
+            generics,
+            trait_,
+            target,
+            methods,
+        })
+    }
+
+    /// `trait Name<generics> { methods }`.
+    fn trait_decl(&mut self) -> Result<TraitDecl, Diagnostic> {
+        self.expect_kw(Keyword::Trait)?;
+        let name = self.expect_ident("a trait name")?;
+        let generics = self.generics()?;
+        let methods = self.methods(FnContext::Trait)?;
+        Ok(TraitDecl {
+            name,
+            generics,
+            methods,
+        })
+    }
+
+    /// `{ methods }` of an `impl` or `trait`: `fn` items, each optionally
+    /// `pub` and with attributes, separated by line breaks.
+    fn methods(&mut self, context: FnContext) -> Result<Vec<Item>, Diagnostic> {
+        self.expect_punct(Punct::LBrace)?;
+        let mut methods = Vec::new();
+        loop {
+            self.skip_newlines();
+            if self.eat_punct(Punct::RBrace) {
+                return Ok(methods);
+            }
+            let start = self.peek_span();
+            let mut attrs = Vec::new();
+            while self.at_punct(Punct::Hash) {
+                attrs.push(self.attribute()?);
+                self.skip_newlines();
+            }
+            let public = self.at_kw(Keyword::Pub);
+            if public {
+                self.bump();
+            }
+            if !self.at_kw(Keyword::Fn) {
+                return Err(self.expected("a method declared with `fn`"));
+            }
+            let decl = self.fn_decl(context)?;
+            methods.push(Item {
+                public,
+                attrs,
+                kind: ItemKind::Fn(decl),
+                span: self.span_from(start),
+            });
+            match self.peek() {
+                Some(TokenKind::Newline | TokenKind::Punct(Punct::RBrace)) => {}
+                _ => return Err(self.expected("a line break after the method")),
+            }
+        }
+    }
+
+    fn fn_decl(&mut self, context: FnContext) -> Result<FnDecl, Diagnostic> {
         self.expect_kw(Keyword::Fn)?;
         let name = self.expect_ident("a function name")?;
         let generics = self.generics()?;
         self.expect_punct(Punct::LParen)?;
-        let receiver = self.receiver()?;
+        let receiver = self.receiver(context)?;
         if receiver.is_some() && !self.at_punct(Punct::RParen) {
             self.expect_punct(Punct::Comma)?;
         }
         let mut params = Vec::new();
         while !self.at_punct(Punct::RParen) {
-            if let Some(late) = self.receiver()? {
+            if let Some(late) = self.receiver(context)? {
                 return Err(error(
                     "E0111",
                     "the receiver must be the first parameter; \
@@ -572,7 +669,16 @@ impl<'a> Parser<'a> {
         if matches!(self.peek(), Some(TokenKind::Ident(word)) if word == "where") {
             return Err(self.where_clause());
         }
-        let body = self.block()?;
+        // Only a trait method may stop after its signature.
+        let body = if context == FnContext::Trait
+            && matches!(
+                self.peek(),
+                None | Some(TokenKind::Newline | TokenKind::Punct(Punct::RBrace))
+            ) {
+            None
+        } else {
+            Some(self.block()?)
+        };
         Ok(FnDecl {
             name,
             generics,
@@ -602,8 +708,8 @@ impl<'a> Parser<'a> {
         )
     }
 
-    /// An optional `self` or `var self` receiver.
-    fn receiver(&mut self) -> Result<Option<SelfParam>, Diagnostic> {
+    /// An optional `self` or `var self` receiver. Only methods take one.
+    fn receiver(&mut self, context: FnContext) -> Result<Option<SelfParam>, Diagnostic> {
         let start = self.peek_span();
         let mutable = self.at_kw(Keyword::Var)
             && self.peek_at(1) == Some(&TokenKind::Keyword(Keyword::SelfValue));
@@ -614,10 +720,17 @@ impl<'a> Parser<'a> {
             return Ok(None);
         }
         self.bump();
-        Ok(Some(SelfParam {
-            mutable,
-            span: self.span_from(start),
-        }))
+        let span = self.span_from(start);
+        if context == FnContext::Free {
+            return Err(error(
+                "E0150",
+                "a `self` receiver is only allowed on methods in `impl` or `trait` \
+                 blocks; move this function into `impl Type { ... }`, or replace \
+                 the receiver with an ordinary parameter such as `value: Type`",
+                span,
+            ));
+        }
+        Ok(Some(SelfParam { mutable, span }))
     }
 
     /// Optional generic parameters with inline bounds: `<T: Eq + Hash, U>`.
@@ -652,6 +765,7 @@ impl<'a> Parser<'a> {
     fn struct_decl(&mut self, cap: bool) -> Result<StructDecl, Diagnostic> {
         self.expect_kw(Keyword::Struct)?;
         let name = self.expect_ident("a struct name")?;
+        let generics = self.generics()?;
         let fields = if self.at_punct(Punct::LParen) {
             Fields::Positional(self.positional_fields(true)?)
         } else if self.at_punct(Punct::LBrace) {
@@ -659,13 +773,19 @@ impl<'a> Parser<'a> {
         } else {
             return Err(self.expected("`{` or `(` after the struct name"));
         };
-        Ok(StructDecl { cap, name, fields })
+        Ok(StructDecl {
+            cap,
+            name,
+            generics,
+            fields,
+        })
     }
 
     /// `enum Name { variants }`, after any `cap`.
     fn enum_decl(&mut self, cap: bool) -> Result<EnumDecl, Diagnostic> {
         self.expect_kw(Keyword::Enum)?;
         let name = self.expect_ident("an enum name")?;
+        let generics = self.generics()?;
         if !self.at_punct(Punct::LBrace) {
             return Err(self.expected("`{` after the enum name"));
         }
@@ -688,6 +808,7 @@ impl<'a> Parser<'a> {
         Ok(EnumDecl {
             cap,
             name,
+            generics,
             variants,
         })
     }

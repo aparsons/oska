@@ -118,6 +118,8 @@ fn examples_parse() {
                 ItemKind::Test(_) => "test".to_string(),
                 ItemKind::Struct(decl) => decl.name.name.clone(),
                 ItemKind::Enum(decl) => decl.name.name.clone(),
+                ItemKind::Trait(decl) => decl.name.name.clone(),
+                ItemKind::Impl(_) => "impl".to_string(),
             })
             .collect()
     };

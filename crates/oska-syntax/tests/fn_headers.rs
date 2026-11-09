@@ -71,26 +71,32 @@ fn generic_parameters_with_bounds() {
 
 #[test]
 fn self_receiver() {
-    // The receiver sits apart from the ordinary parameters.
+    // The receiver sits apart from the ordinary parameters. Only methods
+    // take one, so the function sits in an `impl` block.
     assert_items(
-        "fn f(self, n: Int) {}",
+        "impl T {\nfn f(self, n: Int) {}\n}",
         r#"[{
-            "kind": "FnItem", "span": {"start": 0, "end": 21},
+          "kind": "ImplItem", "span": {"start": 0, "end": 32},
+          "public": false, "attributes": [], "generics": [],
+          "target": {"kind": "PathType", "span": {"start": 5, "end": 6}, "segments": [{"kind": "Ident", "span": {"start": 5, "end": 6}, "name": "T"}], "args": []},
+          "methods": [{
+            "kind": "FnItem", "span": {"start": 9, "end": 30},
             "public": false,
             "attributes": [],
-            "name": {"kind": "Ident", "span": {"start": 3, "end": 4}, "name": "f"},
+            "name": {"kind": "Ident", "span": {"start": 12, "end": 13}, "name": "f"},
             "generics": [],
-            "receiver": {"kind": "SelfParam", "span": {"start": 5, "end": 9}, "mutable": false},
+            "receiver": {"kind": "SelfParam", "span": {"start": 14, "end": 18}, "mutable": false},
             "params": [
-                {"kind": "Param", "span": {"start": 11, "end": 17},
-                 "name": {"kind": "Ident", "span": {"start": 11, "end": 12}, "name": "n"},
-                 "type": {"kind": "PathType", "span": {"start": 14, "end": 17},
-                          "segments": [{"kind": "Ident", "span": {"start": 14, "end": 17}, "name": "Int"}],
+                {"kind": "Param", "span": {"start": 20, "end": 26},
+                 "name": {"kind": "Ident", "span": {"start": 20, "end": 21}, "name": "n"},
+                 "type": {"kind": "PathType", "span": {"start": 23, "end": 26},
+                          "segments": [{"kind": "Ident", "span": {"start": 23, "end": 26}, "name": "Int"}],
                           "args": []}}
             ],
             "requires": [],
             "ensures": [],
-            "body": {"kind": "Block", "span": {"start": 19, "end": 21}, "stmts": []}
+            "body": {"kind": "Block", "span": {"start": 28, "end": 30}, "stmts": []}
+        }]
         }]"#,
     );
 }
@@ -98,18 +104,23 @@ fn self_receiver() {
 #[test]
 fn var_self_receiver_marks_a_mutating_method() {
     assert_items(
-        "fn g(var self) {}",
+        "impl T {\nfn g(var self) {}\n}",
         r#"[{
-            "kind": "FnItem", "span": {"start": 0, "end": 17},
+          "kind": "ImplItem", "span": {"start": 0, "end": 28},
+          "public": false, "attributes": [], "generics": [],
+          "target": {"kind": "PathType", "span": {"start": 5, "end": 6}, "segments": [{"kind": "Ident", "span": {"start": 5, "end": 6}, "name": "T"}], "args": []},
+          "methods": [{
+            "kind": "FnItem", "span": {"start": 9, "end": 26},
             "public": false,
             "attributes": [],
-            "name": {"kind": "Ident", "span": {"start": 3, "end": 4}, "name": "g"},
+            "name": {"kind": "Ident", "span": {"start": 12, "end": 13}, "name": "g"},
             "generics": [],
-            "receiver": {"kind": "SelfParam", "span": {"start": 5, "end": 13}, "mutable": true},
+            "receiver": {"kind": "SelfParam", "span": {"start": 14, "end": 22}, "mutable": true},
             "params": [],
             "requires": [],
             "ensures": [],
-            "body": {"kind": "Block", "span": {"start": 15, "end": 17}, "stmts": []}
+            "body": {"kind": "Block", "span": {"start": 24, "end": 26}, "stmts": []}
+        }]
         }]"#,
     );
 }
@@ -185,13 +196,13 @@ fn rejects_ensures_without_a_binding() {
 
 #[test]
 fn rejects_self_after_other_parameters() {
-    let err = module_err("fn f(n: Int, self) {}");
+    let err = module_err("impl T { fn f(n: Int, self) {} }");
     assert_eq!(err.code, "E0111");
-    assert_eq!(err.span, Span { start: 13, end: 17 });
+    assert_eq!(err.span, Span { start: 22, end: 26 });
 
-    let err = module_err("fn f(n: Int, var self) {}");
+    let err = module_err("impl T { fn f(n: Int, var self) {} }");
     assert_eq!(err.code, "E0111");
-    assert_eq!(err.span, Span { start: 13, end: 21 });
+    assert_eq!(err.span, Span { start: 22, end: 30 });
 }
 
 #[test]

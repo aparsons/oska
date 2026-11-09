@@ -34,6 +34,7 @@ fn named_field_struct_with_per_field_pub() {
                 "attributes": [],
                 "cap": false,
                 "name": {name},
+                "generics": [],
                 "form": "named",
                 "fields": [
                     {{"kind": "Field", "span": {{"start": 15, "end": 21}},
@@ -62,6 +63,7 @@ fn positional_struct_with_trailing_comma() {
                 "attributes": [],
                 "cap": false,
                 "name": {name},
+                "generics": [],
                 "form": "positional",
                 "fields": [
                     {{"kind": "Field", "span": {{"start": 14, "end": 21}},
@@ -90,6 +92,7 @@ fn public_cap_struct_over_several_lines() {
                 "attributes": [],
                 "cap": true,
                 "name": {name},
+                "generics": [],
                 "form": "named",
                 "fields": [
                     {{"kind": "Field", "span": {{"start": 28, "end": 39}},
@@ -115,6 +118,7 @@ fn enum_with_each_variant_form() {
                 "attributes": [],
                 "cap": false,
                 "name": {shape},
+                "generics": [],
                 "variants": [
                     {{"kind": "Variant", "span": {{"start": 17, "end": 39}},
                       "name": {circle}, "form": "named",
@@ -157,6 +161,7 @@ fn public_cap_enum() {
                 "attributes": [],
                 "cap": true,
                 "name": {handle},
+                "generics": [],
                 "variants": [
                     {{"kind": "Variant", "span": {{"start": 22, "end": 34}},
                       "name": {file}, "form": "positional",

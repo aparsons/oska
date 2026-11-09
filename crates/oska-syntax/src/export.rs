@@ -10,9 +10,9 @@
 
 use crate::ast::{
     Arg, Attribute, Block, ClosureParam, ConstDecl, Ensures, EnumDecl, Expr, ExprKind, Field,
-    Fields, FnDecl, GenericParam, Ident, Item, ItemKind, MatchArm, Module, Param, Pattern,
-    PatternArg, PatternKind, Requires, SelfParam, Stmt, StmtKind, StrPart, StructDecl, TestDecl,
-    Type, TypeKind, UnaryOp, UseDecl, Variant,
+    Fields, FnDecl, GenericParam, Ident, ImplDecl, Item, ItemKind, MatchArm, Module, Param,
+    Pattern, PatternArg, PatternKind, Requires, SelfParam, Stmt, StmtKind, StrPart, StructDecl,
+    TestDecl, TraitDecl, Type, TypeKind, UnaryOp, UseDecl, Variant,
 };
 use crate::{json_escape, Span};
 
@@ -240,13 +240,33 @@ fn item(item: &Item) -> Json {
         ItemKind::Test(decl) => test_item(item, decl),
         ItemKind::Struct(decl) => struct_item(item, decl),
         ItemKind::Enum(decl) => enum_item(item, decl),
+        ItemKind::Impl(decl) => impl_item(item, decl),
+        ItemKind::Trait(decl) => trait_item(item, decl),
     }
+}
+
+fn trait_item(item: &Item, decl: &TraitDecl) -> Json {
+    item_node("TraitItem", item)
+        .field("name", ident(&decl.name))
+        .field("generics", list(&decl.generics, generic_param))
+        .field("methods", list(&decl.methods, self::item))
+        .done()
+}
+
+fn impl_item(item: &Item, decl: &ImplDecl) -> Json {
+    item_node("ImplItem", item)
+        .field("generics", list(&decl.generics, generic_param))
+        .opt("trait", decl.trait_.as_ref().map(ty))
+        .field("target", ty(&decl.target))
+        .field("methods", list(&decl.methods, self::item))
+        .done()
 }
 
 fn enum_item(item: &Item, decl: &EnumDecl) -> Json {
     item_node("EnumItem", item)
         .field("cap", Json::Bool(decl.cap))
         .field("name", ident(&decl.name))
+        .field("generics", list(&decl.generics, generic_param))
         .field("variants", list(&decl.variants, variant))
         .done()
 }
@@ -265,6 +285,7 @@ fn struct_item(item: &Item, decl: &StructDecl) -> Json {
     item_node("StructItem", item)
         .field("cap", Json::Bool(decl.cap))
         .field("name", ident(&decl.name))
+        .field("generics", list(&decl.generics, generic_param))
         .field("form", str_json(form))
         .field("fields", fields)
         .done()
@@ -310,7 +331,7 @@ fn fn_item(item: &Item, decl: &FnDecl) -> Json {
         .opt("return_type", decl.ret.as_ref().map(ty))
         .field("requires", list(&decl.requires, requires))
         .field("ensures", list(&decl.ensures, ensures))
-        .field("body", block(&decl.body))
+        .opt("body", decl.body.as_ref().map(block))
         .done()
 }
 
