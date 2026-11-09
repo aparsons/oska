@@ -26,6 +26,7 @@ mod authority;
 mod declarations;
 mod decls;
 mod prelude;
+mod recursion;
 mod resolve;
 
 /// The diagnostic codes this crate reports.
@@ -38,6 +39,7 @@ pub(crate) mod codes {
     pub const MAIN_RETURN: &str = "E0212";
     pub const NOT_UPPERCASE: &str = "E0213";
     pub const NOT_LOWERCASE: &str = "E0214";
+    pub const NO_BASE_CASE: &str = "E0215";
 }
 
 /// Options that change what is checked.
@@ -157,6 +159,7 @@ pub fn check_module_with(src: &str, _options: CheckOptions) -> CheckReport {
     let decls = decls::Decls::collect(&module, &mut diagnostics);
     resolve::module(&module, &decls, &mut diagnostics);
     declarations::module(src, &module, &decls, &mut diagnostics);
+    recursion::module(&module, &mut diagnostics);
     let functions = authority::report(&module, &decls);
     diagnostics.sort_by_key(|d| d.span.start);
     CheckReport {

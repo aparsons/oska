@@ -162,6 +162,44 @@ fn functions_fields_and_parameters_start_lowercase() {
     );
 }
 
+// ---- Recursive types ---------------------------------------------------
+
+#[test]
+fn recursion_through_option_or_an_enum_needs_no_boxing() {
+    assert_ok("struct Node { value: Int, next: Option<Node> }");
+    assert_ok("enum Tree {\n    Leaf,\n    Branch(Tree, Tree),\n}");
+    assert_ok("struct Forest { trees: List<Forest> }");
+    assert_ok(
+        "struct Wrap<T> { inner: T }\n\
+         struct Twice { value: Wrap<Wrap<Int>> }",
+    );
+}
+
+#[test]
+fn a_recursive_type_with_no_base_case_is_an_error() {
+    assert_errors("struct Loop { me: Loop }", &[("E0215", "Loop")]);
+    assert_errors(
+        "enum Chain {\n    Link(Int, Chain),\n}",
+        &[("E0215", "Chain")],
+    );
+}
+
+#[test]
+fn mutual_recursion_with_no_base_case_reports_each_type() {
+    assert_errors(
+        "struct Ping { pong: Pong }\nstruct Pong { ping: Ping }",
+        &[("E0215", "Ping"), ("E0215", "Pong")],
+    );
+}
+
+#[test]
+fn recursion_through_a_generic_struct_has_no_base_case() {
+    assert_errors(
+        "struct Wrap<T> { inner: T }\nstruct Loop { me: Wrap<Loop> }",
+        &[("E0215", "Loop")],
+    );
+}
+
 #[test]
 fn only_the_free_function_main_is_a_root_of_authority() {
     assert_ok("struct App { n: Int }\nimpl App {\n    fn main(self, n: Int) -> Int { n }\n}");
