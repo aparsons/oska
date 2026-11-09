@@ -39,6 +39,7 @@ use oska_syntax::ast::{
 };
 use oska_syntax::{Diagnostic, Edit, Span};
 
+use crate::authority::capability_bearing;
 use crate::codes;
 use crate::collect::{DeclKind, Decls};
 use crate::decl_rules;
@@ -1579,12 +1580,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
     }
 
-    /// Whether `ty` is **capability-bearing**: it contains a built-in
-    /// capability or a `cap fn`, through type arguments and the fields of
-    /// structs and enums.
+    /// Whether `ty`, as solved so far, is capability-bearing.
     fn bearing(&self, ty: &Ty) -> bool {
-        let ty = self.infer.resolve(ty);
-        bearing(&ty, self.items, self.decls(), &mut Vec::new())
+        capability_bearing(&self.infer.resolve(ty), self.decls())
     }
 
     /// `operand?` (the whole expression is `expr`): the success value of a
@@ -1876,48 +1874,5 @@ fn is_int_literal(expr: &Expr) -> bool {
             operand,
         } => matches!(operand.kind, ExprKind::Int(_)),
         _ => false,
-    }
-}
-
-/// Whether the resolved type `ty` is capability-bearing. `expanding`
-/// holds the types being expanded, so recursive types end.
-fn bearing(ty: &Ty, items: &Items, decls: &Decls, expanding: &mut Vec<String>) -> bool {
-    match ty {
-        Ty::Fn { cap, .. } => *cap,
-        Ty::Named(name, args) => {
-            if matches!(decls.get(name), Some(d) if d.kind == DeclKind::Capability) {
-                return true;
-            }
-            if args.iter().any(|a| bearing(a, items, decls, expanding)) {
-                return true;
-            }
-            if expanding.contains(name) {
-                return false;
-            }
-            expanding.push(name.clone());
-            let (generics, fields): (&[String], Vec<&Ty>) =
-                if let Some(info) = items.structs.get(name) {
-                    (
-                        &info.generics,
-                        info.fields.fields.iter().map(|(_, t)| t).collect(),
-                    )
-                } else if let Some(info) = items.enums.get(name) {
-                    let fields = info
-                        .variants
-                        .iter()
-                        .flat_map(|(_, f)| f.fields.iter().map(|(_, t)| t))
-                        .collect();
-                    (&info.generics, fields)
-                } else {
-                    (&[], Vec::new())
-                };
-            let subst: Vec<(String, Ty)> = generics.iter().cloned().zip(args.clone()).collect();
-            let found = fields
-                .into_iter()
-                .any(|f| bearing(&f.substitute(&subst), items, decls, expanding));
-            expanding.pop();
-            found
-        }
-        Ty::Unit | Ty::Param(_) | Ty::Var(_) | Ty::Never | Ty::Error => false,
     }
 }

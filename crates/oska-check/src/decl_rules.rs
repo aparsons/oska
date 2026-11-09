@@ -7,9 +7,10 @@ use oska_syntax::ast::{
 };
 use oska_syntax::{Diagnostic, Edit, Span};
 
-use crate::authority;
+use crate::authority::capability_bearing;
 use crate::codes;
 use crate::collect::{field_types, DeclKind, Decls};
+use crate::items::Lower;
 use crate::prelude;
 use crate::ty::{self, SCOPE};
 
@@ -307,9 +308,12 @@ fn cap_required(src: &str, item: &Item, decls: &Decls, diagnostics: &mut Vec<Dia
         }
         _ => return,
     };
+    // A field typed by a type parameter does not count: the type is
+    // capability-bearing only once instantiated.
+    let lower = Lower::new(decls).with_generics(generics);
     let Some(field) = fields
         .into_iter()
-        .find(|ty| authority::bearing(ty, generics, decls))
+        .find(|ty| capability_bearing(&lower.ty(ty), decls))
     else {
         return;
     };

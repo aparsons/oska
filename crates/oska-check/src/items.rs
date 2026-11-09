@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use oska_syntax::ast::{Field, Fields, FnDecl, GenericParam, ItemKind, Module, Type, TypeKind};
 
-use crate::authority;
+use crate::authority::capability_bearing;
 use crate::collect::{DeclKind, Decls};
 use crate::prelude;
 use crate::ty::{self, Ty};
@@ -236,7 +236,7 @@ impl Items {
                 ItemKind::Impl(imp) => {
                     let lower = Lower::new(decls).with_generics(&imp.generics);
                     let target = lower.ty(&imp.target);
-                    let receiver_bearing = authority::bearing(&imp.target, &imp.generics, decls);
+                    let receiver_bearing = capability_bearing(&target, decls);
                     match &imp.trait_ref {
                         Some(trait_ref) => {
                             if let Some((trait_name, trait_args)) = lower.bound(trait_ref) {
@@ -413,6 +413,13 @@ impl<'d, 'a> Lower<'d, 'a> {
         self
     }
 
+    /// Bring generic parameters into scope by name only, without bounds,
+    /// as for a declaration's field types.
+    pub fn with_generic_names(mut self, names: &[&str]) -> Self {
+        self.generics.extend(names.iter().map(|n| n.to_string()));
+        self
+    }
+
     pub fn with_self(mut self, self_ty: Ty) -> Self {
         self.self_ty = Some(self_ty);
         self
@@ -478,13 +485,10 @@ impl<'d, 'a> Lower<'d, 'a> {
                 .collect(),
             ret: f.return_type.as_ref().map_or(Ty::Unit, |t| lower.ty(t)),
             trait_name: None,
-            pure: {
-                let generics: Vec<GenericParam> =
-                    outer.iter().chain(&f.generics).cloned().collect();
-                !f.params
-                    .iter()
-                    .any(|p| authority::bearing(&p.ty, &generics, self.decls))
-            },
+            pure: !f
+                .params
+                .iter()
+                .any(|p| capability_bearing(&lower.ty(&p.ty), self.decls)),
         }
     }
 
