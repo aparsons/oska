@@ -75,6 +75,10 @@ test "deposit adds to the balance" {
 - There is no `;`.
 - Trailing commas are allowed. The formatter decides where they go.
 - Blocks are expressions: a block evaluates to its last expression. `return` exits early.
+- `let` and `var` always need an initializer (`let x: List<Int> = List.new()`). A declaration without one is a parse error.
+- Fields in `struct` and `enum` declarations are separated by commas, even when each field is on its own line.
+
+  Both rules are needed because a line ending in a generic type's closing `>` does not end a statement: `>` is treated as an operator, which continues onto the next line.
 
 ### Names, types, and calls
 
