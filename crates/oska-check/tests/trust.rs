@@ -88,7 +88,11 @@ fn an_error_message_is_untrusted() {
         "use std.sql\nuse std.proc\n\
          fn f(a: IoError, b: sql.SqlError, c: proc.ProcError) -> List<String> {\n    \
          [a.message, b.message, c.message]\n}",
-        &[("E0300", "a.message"), ("E0300", "b.message"), ("E0300", "c.message")],
+        &[
+            ("E0300", "a.message"),
+            ("E0300", "b.message"),
+            ("E0300", "c.message"),
+        ],
     );
 }
 

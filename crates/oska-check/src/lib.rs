@@ -140,6 +140,18 @@ pub struct AuditSite {
     pub span: Span,
 }
 
+/// Renders as `audit: assume_trusted (bytes 52..73)`, as the
+/// human-readable report lists it.
+impl std::fmt::Display for AuditSite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "audit: {} (bytes {}..{})",
+            self.kind, self.span.start, self.span.end
+        )
+    }
+}
+
 impl AuditSite {
     /// Render as a single-line JSON object.
     pub fn to_json(&self) -> String {
