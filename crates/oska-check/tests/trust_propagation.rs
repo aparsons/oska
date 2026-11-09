@@ -384,3 +384,24 @@ fn a_trait_method_called_qualified_follows_the_trust_of_self() {
                 fn g() -> String {\n    greet(Launder.l(\"x\"))\n}";
     assert_errors(&with_greet(body), &[("E0300", "Launder.l(h)")]);
 }
+
+// ---- Impls and trust ------------------------------------------------------------
+
+#[test]
+fn an_impl_may_return_trusted_text_where_its_trait_returns_untrusted() {
+    assert_ok(
+        "trait Name {\n    fn name(self) -> Untrusted<String>\n}\n\
+         struct Cat { name: String }\n\
+         impl Name for Cat {\n    fn name(self) -> String {\n        self.name\n    }\n}",
+    );
+}
+
+#[test]
+fn an_impl_may_not_return_untrusted_text_where_its_trait_returns_trusted() {
+    assert_errors(
+        "trait Name {\n    fn name(self) -> String\n}\n\
+         struct Cat { name: Untrusted<String> }\n\
+         impl Name for Cat {\n    fn name(self) -> Untrusted<String> {\n        self.name\n    }\n}",
+        &[("E0262", "name")],
+    );
+}
