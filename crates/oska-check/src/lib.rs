@@ -49,6 +49,12 @@
 //! | `E0241` | `?` on a value that is neither a `Result` nor an `Option`. |
 //! | `E0242` | `?` on a `Result` whose error type differs from the function's, with no `impl From` conversion. |
 //! | `E0243` | `?` in a function that does not return the same kind (`Option` vs `Result`), or returns neither. |
+//! | `E0260` | A method on a generic parameter that its bounds do not provide. The fix adds the bound when one trait has the method. |
+//! | `E0261` | An `impl Trait for Type` missing a required method. |
+//! | `E0262` | An `impl` method whose signature differs from the trait's. |
+//! | `E0263` | An `impl Trait` method the trait does not declare. |
+//! | `E0264` | A method name provided by more than one trait of the receiver; call it qualified, as in `Display.to_string(x)`. |
+//! | `E0265` | A type that does not implement a required trait: `==` needs `Eq`, calls need their bounds, `Trait.method(x)` needs `x: Trait`. On a generic parameter, the fix adds the bound. |
 
 use oska_syntax::Diagnostic;
 

@@ -41,7 +41,10 @@ pub fn module(module: &Module, decls: &Decls, items: &Items, diagnostics: &mut V
             else {
                 diagnostics.push(Diagnostic::new(
                     codes::NOT_IN_TRAIT,
-                    format!("`{}` is not a method of the trait `{trait_name}`", f.name.name),
+                    format!(
+                        "`{}` is not a method of the trait `{trait_name}`",
+                        f.name.name
+                    ),
                     f.name.span,
                 ));
                 continue;

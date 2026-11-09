@@ -290,7 +290,10 @@ impl Items {
 
     /// The type's own method or associated function `name`.
     pub fn inherent_method(&self, type_name: &str, name: &str) -> Option<&FnSig> {
-        self.inherent.get(type_name)?.iter().find(|s| s.name == name)
+        self.inherent
+            .get(type_name)?
+            .iter()
+            .find(|s| s.name == name)
     }
 
     /// The methods named `name` that the type's traits provide, one per

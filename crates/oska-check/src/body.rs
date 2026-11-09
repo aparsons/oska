@@ -18,9 +18,12 @@
 //!   is discarded.
 //! - **Patterns:** [`Body::bind_pattern`] binds a pattern's names; for now
 //!   every binding has the error type.
-//! - **`?`:** [`Body::try_expr`]. Error conversion through `impl From`
-//!   goes in [`Body::converts_from`].
-//! - **Method lookup:** [`Body::method_call`] and [`Items::method`].
+//! - **`?`:** [`Body::try_expr`]. Errors convert when the function's
+//!   error type implements `From<E>` ([`Body::converts_from`]).
+//! - **Traits:** [`Body::implements`] answers whether a type implements a
+//!   trait, through a generic parameter's bounds or an `impl`. Method
+//!   calls ([`Body::method_call`]) try the type's own `impl`, then its
+//!   traits; on a generic parameter, only its bounds' traits.
 //! - **Closures:** [`Body::closure`]. Locals are a stack, so a closure's
 //!   captures are the names it resolves below the stack height at which
 //!   the closure's parameters were pushed.
@@ -705,7 +708,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
     /// Report `name` as provided by more than one of `traits` (`E0264`).
     fn ambiguous_method(&mut self, name: &Ident, traits: &[&FnSig]) {
-        let mut names: Vec<&str> = traits.iter().filter_map(|s| s.trait_name.as_deref()).collect();
+        let mut names: Vec<&str> = traits
+            .iter()
+            .filter_map(|s| s.trait_name.as_deref())
+            .collect();
         names.sort();
         let listed = names
             .iter()
@@ -917,10 +923,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
         let mut diagnostic = Diagnostic::new(
             codes::NOT_IN_BOUNDS,
-            format!(
-                "no bound of `{param}` provides a method `{}`",
-                name.name
-            ),
+            format!("no bound of `{param}` provides a method `{}`", name.name),
             name.span,
         );
         let mut providers: Vec<&String> = self
@@ -928,8 +931,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             .traits
             .iter()
             .filter(|(_, info)| {
-                info.generics.is_empty()
-                    && info.methods.iter().any(|(s, _)| s.name == name.name)
+                info.generics.is_empty() && info.methods.iter().any(|(s, _)| s.name == name.name)
             })
             .map(|(trait_name, _)| trait_name)
             .collect();
@@ -1303,7 +1305,8 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
         let ty = self.infer.resolve(ty);
         let bound = Ty::Named(trait_name.to_string(), args.to_vec()).to_string();
-        let message = format!("{what} needs `{ty}: {bound}`, but `{ty}` does not implement `{bound}`");
+        let message =
+            format!("{what} needs `{ty}: {bound}`, but `{ty}` does not implement `{bound}`");
         let mut diagnostic = Diagnostic::new(codes::NOT_IMPLEMENTED, message, span);
         if let Ty::Param(p) = &ty {
             if let Some(site) = self.lower.sites.iter().rev().find(|s| &s.name == p) {
@@ -1459,26 +1462,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         );
     }
 
-    /// Whether `?` can convert an error of type `from` into `to`.
-    ///
-    /// Extension point for `impl From` conversion (#39), which should look
-    /// up `impl From<from> for to` through the trait machinery. Until then,
-    /// this accepts a trait-impl method `from(value: from)` on `to`, so
-    /// that `examples/capabilities.osk` keeps checking.
+    /// Whether `?` can convert an error of type `from` into `to`: `to`
+    /// implements `From<from>`, through an explicit `impl` or a bound.
     fn converts_from(&self, from: &Ty, to: &Ty) -> bool {
-        let Some(type_name) = to.head() else {
-            return false;
-        };
-        self.items
-            .trait_impls
-            .get(type_name)
-            .into_iter()
-            .flatten()
-            .any(|sig| {
-                sig.name == "from"
-                    && sig.receiver.is_none()
-                    && matches!(sig.params.as_slice(), [(_, param)] if param == from)
-            })
+        self.implements(to, "From", std::slice::from_ref(from))
     }
 
     /// `match`. Arm bodies must agree; patterns are only bound, not yet

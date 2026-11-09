@@ -180,6 +180,64 @@ fn an_impl_method_the_trait_does_not_declare_is_an_error() {
     );
 }
 
+// ---- `?` converts errors through `impl From` --------------------------------------
+
+/// A failing function and an error type with no conversions yet.
+const ERRORS: &str = "fn fallible() -> Result<Int, IoError> { Ok(1) }\n\
+struct AppError { message: String }\n";
+
+fn with_errors(src: &str) -> String {
+    format!("{ERRORS}{src}")
+}
+
+#[test]
+fn try_converts_an_error_through_impl_from() {
+    assert_ok(&with_errors(
+        "impl From<IoError> for AppError {\n    fn from(value: IoError) -> AppError { AppError(message: \"io\") }\n}\n\
+         fn f() -> Result<Int, AppError> {\n    let n = fallible()?\n    Ok(n)\n}",
+    ));
+}
+
+#[test]
+fn try_without_an_impl_from_is_an_error() {
+    assert_errors(
+        &with_errors("fn f() -> Result<Int, AppError> {\n    let n = fallible()?\n    Ok(n)\n}"),
+        &[("E0242", "fallible()?")],
+    );
+}
+
+#[test]
+fn try_does_not_convert_through_a_from_method_of_another_trait() {
+    assert_errors(
+        &with_errors(
+            "trait Convert {\n    fn from(value: IoError) -> Self\n}\n\
+             impl Convert for AppError {\n    fn from(value: IoError) -> AppError { AppError(message: \"io\") }\n}\n\
+             fn f() -> Result<Int, AppError> {\n    let n = fallible()?\n    Ok(n)\n}",
+        ),
+        &[("E0242", "fallible()?")],
+    );
+}
+
+#[test]
+fn try_does_not_convert_through_an_impl_from_another_type() {
+    assert_errors(
+        &with_errors(
+            "impl From<String> for AppError {\n    fn from(value: String) -> AppError { AppError(message: value) }\n}\n\
+             fn f() -> Result<Int, AppError> {\n    let n = fallible()?\n    Ok(n)\n}",
+        ),
+        &[("E0242", "fallible()?")],
+    );
+}
+
+#[test]
+fn try_converts_through_a_generic_impl_from() {
+    assert_ok(&with_errors(
+        "struct Wrapped<E> { inner: E }\n\
+         impl<E> From<E> for Wrapped<E> {\n    fn from(value: E) -> Wrapped<E> { Wrapped(inner: value) }\n}\n\
+         fn f() -> Result<Int, Wrapped<IoError>> {\n    let n = fallible()?\n    Ok(n)\n}",
+    ));
+}
+
 // ---- Method lookup -------------------------------------------------------------
 
 /// Two traits that both provide `describe`, and a type with both.
@@ -237,7 +295,9 @@ fn a_qualified_call_picks_the_trait() {
 #[test]
 fn a_qualified_call_needs_the_type_to_implement_the_trait() {
     assert_errors(
-        &with_two_traits("struct Dog { name: String }\nfn f(d: Dog) -> String { Long.describe(d) }"),
+        &with_two_traits(
+            "struct Dog { name: String }\nfn f(d: Dog) -> String { Long.describe(d) }",
+        ),
         &[("E0265", "Long.describe(d)")],
     );
 }
