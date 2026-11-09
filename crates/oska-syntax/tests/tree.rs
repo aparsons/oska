@@ -10,6 +10,7 @@ fn prints_an_indented_tree() {
         module_to_tree(&module),
         r#"FnItem 0..46 public=true
   name: Ident 7..11 name="main"
+  generics: []
   params:
     Param 12..22
       name: Ident 12..14 name="io"
@@ -17,6 +18,8 @@ fn prints_an_indented_tree() {
         segments:
           Ident 16..22 name="Stdout"
         args: []
+  requires: []
+  ensures: []
   body: Block 24..46
     stmts:
       ExprStmt 30..44

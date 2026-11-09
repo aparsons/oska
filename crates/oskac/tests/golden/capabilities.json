@@ -11,6 +11,7 @@
         "span": {"start": 156, "end": 167},
         "name": "count_lines"
       },
+      "generics": [],
       "params": [
         {
           "kind": "Param",
@@ -84,6 +85,8 @@
           }
         ]
       },
+      "requires": [],
+      "ensures": [],
       "body": {
         "kind": "Block",
         "span": {"start": 216, "end": 429},
@@ -191,6 +194,7 @@
       "span": {"start": 431, "end": 838},
       "public": false,
       "name": {"kind": "Ident", "span": {"start": 434, "end": 438}, "name": "main"},
+      "generics": [],
       "params": [
         {
           "kind": "Param",
@@ -270,6 +274,8 @@
           }
         ]
       },
+      "requires": [],
+      "ensures": [],
       "body": {
         "kind": "Block",
         "span": {"start": 499, "end": 838},

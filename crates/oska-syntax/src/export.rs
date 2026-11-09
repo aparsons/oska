@@ -9,8 +9,8 @@
 //! are first built as a small [`Json`] value, then printed.
 
 use crate::ast::{
-    Arg, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, Item, ItemKind, Module, Param, Stmt,
-    StmtKind, StrPart, Type, TypeKind, UnaryOp,
+    Arg, Block, ClosureParam, Ensures, Expr, ExprKind, FnDecl, GenericParam, Ident, Item, ItemKind,
+    Module, Param, Requires, SelfParam, Stmt, StmtKind, StrPart, Type, TypeKind, UnaryOp,
 };
 use crate::{json_escape, Span};
 
@@ -240,9 +240,39 @@ fn fn_item(item: &Item, decl: &FnDecl) -> Json {
     Node::new("FnItem", item.span)
         .field("public", Json::Bool(item.public))
         .field("name", ident(&decl.name))
+        .field("generics", list(&decl.generics, generic_param))
+        .opt("receiver", decl.receiver.as_ref().map(self_param))
         .field("params", list(&decl.params, param))
         .opt("return_type", decl.ret.as_ref().map(ty))
+        .field("requires", list(&decl.requires, requires))
+        .field("ensures", list(&decl.ensures, ensures))
         .field("body", block(&decl.body))
+        .done()
+}
+
+fn self_param(param: &SelfParam) -> Json {
+    Node::new("SelfParam", param.span)
+        .field("mutable", Json::Bool(param.mutable))
+        .done()
+}
+
+fn generic_param(param: &GenericParam) -> Json {
+    Node::new("GenericParam", param.span)
+        .field("name", ident(&param.name))
+        .field("bounds", list(&param.bounds, ty))
+        .done()
+}
+
+fn requires(clause: &Requires) -> Json {
+    Node::new("RequiresClause", clause.span)
+        .field("cond", expr(&clause.cond))
+        .done()
+}
+
+fn ensures(clause: &Ensures) -> Json {
+    Node::new("EnsuresClause", clause.span)
+        .field("binding", ident(&clause.binding))
+        .field("cond", expr(&clause.cond))
         .done()
 }
 
