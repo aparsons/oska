@@ -20,7 +20,7 @@ Producing a narrower capability from one you already hold, for example restricti
 _Avoid_: derive, narrow, restrict (as nouns for the concept)
 
 **Capability-bearing type**:
-A type that is a capability or that contains one, directly or transitively. This includes closures that capture a capability.
+A type that is a capability or that contains one, directly or transitively. This includes containment through type arguments, as in `List<Stdout>`, and closures that capture a capability.
 
 **Authority**:
 For a function, the set of capabilities it can reach through its capability-bearing parameters. For a package, the union of the authority of its public functions.
@@ -35,6 +35,10 @@ _Avoid_: calling it a capability
 **Mutating method**:
 A method that declares `var self`. It can change its receiver in place, and can only be called on a `var` binding.
 _Avoid_: inout, mut ref
+
+**Prelude**:
+The built-in declarations, written in Oska, that every program can use without importing them, such as `Int`, `Option`, `Result`, and the built-in capabilities.
+_Avoid_: stdlib (for this subset), builtins
 
 ## Untrusted data
 

@@ -114,6 +114,75 @@ test "deposit adds to the balance" {
 - **String interpolation:** `{...}` inside a string may hold only a name or a field path, as in `{n}` or `{user.name}`. Compute anything else with `let` first.
 - **Sink literals:** `sql"..."` and similar. They cannot contain `{}`.
 
+## Type checking
+
+The checker is `oskac check`, built as its own crate, `oska-check`, on top of the parser. Its diagnostic codes are `E02xx`.
+
+### Scope and reporting
+
+- v0 checks a single file plus the **prelude**.
+  - `use` resolves only `std.*` paths.
+  - Multi-file packages wait for the package manager.
+- The checker reports every independent error.
+  - Checking continues past an error in one function and moves on to the others.
+  - An expression that fails to check gets an error type. The error type suppresses follow-on errors that would only repeat the first one.
+- `oskac check --format=json` emits `{"diagnostics": [...], "functions": [...]}`. For each function it reports:
+  - `authority`: the built-in capabilities the function can reach. `cap` structs and type arguments are expanded, and attenuated capabilities keep their written names, such as `FsRead`.
+  - `via`: the capabilities each parameter supplies.
+  - `pure`: whether the function is pure.
+
+  The report is produced even when there are no errors. The human-readable output shows the same information.
+- `dbg(...)` is an error when checking with `--release`.
+
+### Inference
+
+- Inference is local and bidirectional. Function signatures are always written out in full; nothing is inferred across function boundaries.
+- `let` bindings are inferred from their initializer, and closure parameters from the type the closure is expected to have.
+- Generic type arguments are inferred within a single function body.
+- An integer literal takes the integer type it is expected to have (`let x: U8 = 200`), and `Int` when there is none. A literal that is out of range for its type is a compile error.
+- A generic function is checked once against its bounds, not again for each call. `fn f<T: Eq>(a: T, b: T)` can use `==` but not `+`.
+
+### Method calls
+
+- Methods are looked up on the type's own `impl` first, then in traits implemented for the type. In a single file, every trait is visible.
+- If two traits provide a method with the same name, the call is an error. The fix is to call it qualified: `Display.fmt(x)`.
+
+### The prelude
+
+- The prelude is written as Oska declarations and embedded in the compiler. Its function signatures have no bodies, because the runtime implements them. Only prelude functions may omit a body.
+- **Built-in capabilities** are opaque structs marked `#[capability]`, an attribute only the prelude can use. Their fields are private, so code outside the prelude cannot construct one: privacy alone stops capabilities from being forged.
+- **Automatically imported:** primitive types, `String`, `Bool`, `Option`, `Result`, `List`, `Path`, the built-in capabilities, `Args`, and the core traits (`Eq`, `Hash`, `Display`, `From`).
+- **Imported explicitly:** sink and library modules such as `std.sql`, `std.html`, and `std.json` need `use`.
+- The prelude grows only as the examples, the design-notes samples, and the tests need it.
+- Until untrusted values are implemented, capability reads return plain `String`.
+
+### Capability rules
+
+- A type that names a capability in its own fields must be declared `cap`. If it is not, the error comes with a fix that inserts `cap`.
+- A generic container is capability-bearing when it is instantiated with a capability, so `List<Stdout>` and `Box<Stdout>` need no `cap` ([ADR 0002](adr/0002-capabilities-are-the-effect-system.md)).
+- A method's receiver counts towards its authority. A method on a `cap struct` is therefore never pure.
+- **`main` must be a valid root of authority:**
+  - Its parameters must be built-in capabilities or program inputs (`Args`).
+  - It must return `()` or `Result<(), E>` where `E: Display`.
+- A closure that captures a capability-bearing value has type `cap fn`. Passing it where a plain `fn` is expected is an error.
+
+### Patterns and values
+
+- **Capitalization is enforced** ([ADR 0005](adr/0005-capitalization-is-enforced.md)):
+  - Types, variants, and traits start with an uppercase letter.
+  - Variables, functions, fields, and parameters start with a lowercase letter.
+  - A bare uppercase name in a pattern is always a fieldless variant.
+- **`match` must be exhaustive:**
+  - The check covers nested constructor patterns. Guards never count towards it.
+  - Matching on `Int` or `String` needs a `_` or binding arm.
+  - The error lists the missing patterns, and its fix adds arms for them.
+  - Any arm after a binding or `_` arm is unreachable, which is an error.
+- **Ignoring a `Result` is an error.** To discard one on purpose, write `let _ = f()`.
+- **`?` works on `Result` and on `Option`,** inside a function that returns the same kind. To cross from one to the other, convert explicitly, for example with `.ok_or(err)?`.
+- **Shadowing is allowed.** For example, `let email = Email.parse(email)?` replaces the raw value with the validated one.
+- **`+` is defined only for numbers.** Build strings with interpolation.
+- **Recursive types need no indirection** (`struct Node { next: Option<Node> }`). A type with no base case, such as `struct Loop { me: Loop }`, is an error.
+
 ## Capabilities
 
 ```oska
