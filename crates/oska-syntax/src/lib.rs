@@ -28,6 +28,13 @@ pub enum TokenKind {
     /// String literal with escapes resolved. `{name}` interpolation is
     /// preserved verbatim for the parser to handle.
     Str(String),
+    /// Sink literal: an identifier immediately followed by a string, e.g.
+    /// `sql"SELECT * FROM t WHERE id = ?"`. Escapes are resolved. Sink
+    /// literals never interpolate: values must go in as parameters.
+    SinkStr {
+        tag: String,
+        value: String,
+    },
     Punct(Punct),
 }
 
@@ -42,7 +49,20 @@ pub enum Keyword {
     Return,
     True,
     False,
+    /// Reserved: v0 has no `unsafe`, but the word is never an identifier.
     Unsafe,
+    Cap,
+    Requires,
+    Ensures,
+    Implies,
+    Scope,
+    Struct,
+    Enum,
+    Trait,
+    Impl,
+    Pub,
+    Use,
+    Test,
 }
 
 impl Keyword {
@@ -58,6 +78,18 @@ impl Keyword {
             "true" => Self::True,
             "false" => Self::False,
             "unsafe" => Self::Unsafe,
+            "cap" => Self::Cap,
+            "requires" => Self::Requires,
+            "ensures" => Self::Ensures,
+            "implies" => Self::Implies,
+            "scope" => Self::Scope,
+            "struct" => Self::Struct,
+            "enum" => Self::Enum,
+            "trait" => Self::Trait,
+            "impl" => Self::Impl,
+            "pub" => Self::Pub,
+            "use" => Self::Use,
+            "test" => Self::Test,
             _ => return None,
         };
         Some(kw)
@@ -94,6 +126,10 @@ pub enum Punct {
     Ge,
     AndAnd,
     OrOr,
+    /// `|`, which delimits closure parameters (`|r| ...`).
+    Pipe,
+    /// `#`, which starts an attribute (`#[integration]`).
+    Hash,
 }
 
 /// A lexing error with a stable code, e.g. `E0001`.
@@ -155,6 +191,12 @@ pub fn lex(src: &str) -> Result<Vec<Token>, LexError> {
     Ok(tokens)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StrKind {
+    Plain,
+    Sink,
+}
+
 struct Lexer<'a> {
     src: &'a str,
     pos: usize,
@@ -212,7 +254,7 @@ impl Lexer<'_> {
             return Ok(None);
         };
         let kind = match c {
-            c if c.is_ascii_alphabetic() || c == '_' => self.ident(start),
+            c if c.is_ascii_alphabetic() || c == '_' => self.ident_or_sink_str(start)?,
             c if c.is_ascii_digit() => self.int(start),
             '"' => self.string(start)?,
             c => TokenKind::Punct(self.punct(c, start)?),
@@ -226,15 +268,21 @@ impl Lexer<'_> {
         }))
     }
 
-    fn ident(&mut self, start: usize) -> TokenKind {
+    fn ident_or_sink_str(&mut self, start: usize) -> Result<TokenKind, LexError> {
         while matches!(self.peek(), Some(c) if c.is_ascii_alphanumeric() || c == '_') {
             self.bump();
         }
         let word = &self.src[start..self.pos];
-        match Keyword::lookup(word) {
-            Some(kw) => TokenKind::Keyword(kw),
-            None => TokenKind::Ident(word.to_string()),
+        if let Some(kw) = Keyword::lookup(word) {
+            return Ok(TokenKind::Keyword(kw));
         }
+        if self.peek() == Some('"') {
+            let tag = word.to_string();
+            self.bump();
+            let value = self.string_body(start, StrKind::Sink)?;
+            return Ok(TokenKind::SinkStr { tag, value });
+        }
+        Ok(TokenKind::Ident(word.to_string()))
     }
 
     fn int(&mut self, start: usize) -> TokenKind {
@@ -245,6 +293,12 @@ impl Lexer<'_> {
     }
 
     fn string(&mut self, start: usize) -> Result<TokenKind, LexError> {
+        self.string_body(start, StrKind::Plain).map(TokenKind::Str)
+    }
+
+    /// Lex the rest of a string literal after its opening quote. `start` is
+    /// where the whole literal (including any sink tag) begins.
+    fn string_body(&mut self, start: usize, kind: StrKind) -> Result<String, LexError> {
         let mut value = String::new();
         loop {
             match self.bump() {
@@ -275,10 +329,20 @@ impl Lexer<'_> {
                     };
                     value.push(resolved);
                 }
+                Some(c @ ('{' | '}')) if kind == StrKind::Sink => {
+                    return Err(self.error(
+                        "E0004",
+                        format!(
+                            "sink literals cannot interpolate: found {c:?}; pass values as \
+                             parameters (use \\{c} for a literal brace)"
+                        ),
+                        self.pos - 1,
+                    ));
+                }
                 Some(c) => value.push(c),
             }
         }
-        Ok(TokenKind::Str(value))
+        Ok(value)
     }
 
     fn punct(&mut self, c: char, start: usize) -> Result<Punct, LexError> {
@@ -311,6 +375,8 @@ impl Lexer<'_> {
             ('!', _) => (Punct::Bang, false),
             ('<', _) => (Punct::Lt, false),
             ('>', _) => (Punct::Gt, false),
+            ('|', _) => (Punct::Pipe, false),
+            ('#', _) => (Punct::Hash, false),
             _ => {
                 return Err(self.error("E0001", format!("unexpected character {c:?}"), start));
             }
@@ -378,6 +444,153 @@ mod tests {
             err.to_json(),
             "{\"code\":\"E0001\",\"message\":\"unexpected character '@'\",\"span\":{\"start\":8,\"end\":9}}"
         );
+    }
+
+    #[test]
+    fn lexes_new_keywords() {
+        let cases = [
+            ("cap", Keyword::Cap),
+            ("requires", Keyword::Requires),
+            ("ensures", Keyword::Ensures),
+            ("implies", Keyword::Implies),
+            ("scope", Keyword::Scope),
+            ("struct", Keyword::Struct),
+            ("enum", Keyword::Enum),
+            ("trait", Keyword::Trait),
+            ("impl", Keyword::Impl),
+            ("pub", Keyword::Pub),
+            ("use", Keyword::Use),
+            ("test", Keyword::Test),
+            ("unsafe", Keyword::Unsafe),
+        ];
+        for (src, kw) in cases {
+            assert_eq!(kinds(src), vec![TokenKind::Keyword(kw)], "lexing {src:?}");
+        }
+    }
+
+    #[test]
+    fn keywords_are_not_identifiers_but_prefixed_words_are() {
+        assert_eq!(kinds("caps"), vec![TokenKind::Ident("caps".into())]);
+        assert_eq!(kinds("testing"), vec![TokenKind::Ident("testing".into())]);
+    }
+
+    #[test]
+    fn lexes_closure_pipes_distinct_from_oror() {
+        assert_eq!(
+            kinds("|x| a || b"),
+            vec![
+                TokenKind::Punct(Punct::Pipe),
+                TokenKind::Ident("x".into()),
+                TokenKind::Punct(Punct::Pipe),
+                TokenKind::Ident("a".into()),
+                TokenKind::Punct(Punct::OrOr),
+                TokenKind::Ident("b".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn lexes_attribute() {
+        assert_eq!(
+            kinds("#[integration]"),
+            vec![
+                TokenKind::Punct(Punct::Hash),
+                TokenKind::Punct(Punct::LBracket),
+                TokenKind::Ident("integration".into()),
+                TokenKind::Punct(Punct::RBracket),
+            ]
+        );
+    }
+
+    #[test]
+    fn lexes_contract_clause() {
+        assert_eq!(
+            kinds("ensures |r| r.ok implies x"),
+            vec![
+                TokenKind::Keyword(Keyword::Ensures),
+                TokenKind::Punct(Punct::Pipe),
+                TokenKind::Ident("r".into()),
+                TokenKind::Punct(Punct::Pipe),
+                TokenKind::Ident("r".into()),
+                TokenKind::Punct(Punct::Dot),
+                TokenKind::Ident("ok".into()),
+                TokenKind::Keyword(Keyword::Implies),
+                TokenKind::Ident("x".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn lexes_sink_literal() {
+        let tokens = lex("db.query(sql\"SELECT 1 WHERE id = ?\", id)").expect("should lex");
+        assert_eq!(
+            tokens[4],
+            Token {
+                kind: TokenKind::SinkStr {
+                    tag: "sql".into(),
+                    value: "SELECT 1 WHERE id = ?".into(),
+                },
+                span: Span { start: 9, end: 35 },
+            }
+        );
+    }
+
+    #[test]
+    fn sink_literal_allows_escaped_braces() {
+        assert_eq!(
+            kinds("sql\"SELECT '\\{\\}'\""),
+            vec![TokenKind::SinkStr {
+                tag: "sql".into(),
+                value: "SELECT '{}'".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn rejects_interpolation_in_sink_literal() {
+        let src = "sql\"SELECT * FROM t WHERE id = {id}\"";
+        let err = lex(src).expect_err("should fail");
+        assert_eq!(err.code, "E0004");
+        let brace = src.find('{').expect("source contains a brace");
+        assert_eq!(
+            err.span,
+            Span {
+                start: brace,
+                end: brace + 1
+            }
+        );
+        assert!(err.to_json().contains("\"code\":\"E0004\""));
+    }
+
+    #[test]
+    fn rejects_closing_brace_in_sink_literal() {
+        assert_eq!(lex("sql\"a}\"").expect_err("should fail").code, "E0004");
+    }
+
+    #[test]
+    fn ident_then_space_then_string_is_not_a_sink_literal() {
+        assert_eq!(
+            kinds("sql \"{x}\""),
+            vec![TokenKind::Ident("sql".into()), TokenKind::Str("{x}".into())]
+        );
+    }
+
+    #[test]
+    fn keyword_then_string_is_not_a_sink_literal() {
+        assert_eq!(
+            kinds("return\"x\""),
+            vec![
+                TokenKind::Keyword(Keyword::Return),
+                TokenKind::Str("x".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn reports_unterminated_sink_literal_from_tag_start() {
+        let err = lex("x sql\"oops").expect_err("should fail");
+        assert_eq!(err.code, "E0002");
+        assert_eq!(err.span, Span { start: 2, end: 10 });
     }
 
     #[test]
