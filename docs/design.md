@@ -67,7 +67,7 @@ test "deposit adds to the balance" {
 
 ### Statements
 
-- A newline ends a statement when the line's last token is an identifier, a literal, `)`, `]`, `}`, `?`, or `return`. This is Go's rule.
+- A newline ends a statement when the line's last token is an identifier, a literal, `self`, `return`, `break`, `continue`, `)`, `]`, `}`, or `?`. This is Go's rule.
 - Newlines inside `(...)` and `[...]` never end a statement. Newlines inside `{...}` follow the rule above again, even when the braces are nested inside parentheses, such as a closure body passed as an argument.
 - A newline does not end a statement if the next line starts with `requires`, `ensures`, `else`, or `{`. This lets a function header span several lines with contract clauses, and lets `else` start a new line.
 - A bare `{ ... }` block cannot be a statement on its own. As a consequence, `let x = { ... }` and blocks after `if`, `for`, and the like are unaffected.
