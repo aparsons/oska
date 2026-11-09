@@ -134,11 +134,30 @@ pub struct CheckReport {
 /// exposes a secret. `body/audit.rs` decides which calls these are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AuditSite {
-    /// What the call does, named after its method, such as
-    /// `assume_trusted`.
-    pub kind: &'static str,
+    /// What the call does.
+    pub kind: AuditKind,
     /// The whole call expression.
     pub span: Span,
+}
+
+/// What an audit site does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditKind {
+    /// Vouches for untrusted text: `.assume_trusted()`.
+    TrustAssertion,
+    /// Reads a secret's value: `.expose()`.
+    SecretExposure,
+}
+
+impl AuditKind {
+    /// The kind as the report names it: the method's name, such as
+    /// `assume_trusted`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AuditKind::TrustAssertion => "assume_trusted",
+            AuditKind::SecretExposure => "expose",
+        }
+    }
 }
 
 /// Renders as `audit: assume_trusted (bytes 52..73)`, as the
@@ -148,7 +167,9 @@ impl std::fmt::Display for AuditSite {
         write!(
             f,
             "audit: {} (bytes {}..{})",
-            self.kind, self.span.start, self.span.end
+            self.kind.as_str(),
+            self.span.start,
+            self.span.end
         )
     }
 }
@@ -158,7 +179,9 @@ impl AuditSite {
     pub fn to_json(&self) -> String {
         format!(
             "{{\"kind\":\"{}\",\"span\":{{\"start\":{},\"end\":{}}}}}",
-            self.kind, self.span.start, self.span.end
+            self.kind.as_str(),
+            self.span.start,
+            self.span.end
         )
     }
 }
