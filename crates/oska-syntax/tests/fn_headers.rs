@@ -21,8 +21,7 @@ fn design_sample(heading: &str) -> String {
 
 #[test]
 fn contracts_sample_parses() {
-    // The sample elides the body as `{ ... }`, so substitute an empty one.
-    let src = design_sample("\n## Contracts\n").replace("{ ... }", "{}");
+    let src = design_sample("\n## Contracts\n");
     let module = parse_module(&src).unwrap_or_else(|err| panic!("should parse: {err}"));
     let [item] = module.items.as_slice() else {
         panic!("expected one item, got {:?}", module.items);

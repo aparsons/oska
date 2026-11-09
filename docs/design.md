@@ -213,7 +213,12 @@ There are two deliberate exceptions to the rules above:
 fn withdraw(acct: Account, amount: Int) -> Result<Account, Error>
     requires amount > 0
     ensures |r| r.is_ok() implies r.unwrap().balance >= 0
-{ ... }
+{
+    if amount > acct.balance {
+        return Err(Error.InsufficientFunds)
+    }
+    Ok(Account(id: acct.id, balance: acct.balance - amount))
+}
 ```
 
 - Contracts are machine-checkable specifications. Code an agent writes only has to be *checkable*, not right the first time.
