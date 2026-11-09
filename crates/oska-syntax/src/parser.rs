@@ -42,6 +42,17 @@
 //! - `E0150`: a `self` or `var self` receiver on a function outside an
 //!   `impl` or `trait` block
 //! - `E0151`: `pub` on an `impl` block; mark methods `pub` instead
+//! - `E0160`: a string pattern with an interpolation hole; patterns are
+//!   plain literals
+//! - `E0161`: a test name with an interpolation hole
+//! - `E0162`: `pub` on a trait method, which takes its visibility from the
+//!   trait
+//! - `E0163`: `pub test`; tests are never exported
+//! - `E0164`: `pub use`; re-exports are not defined in v0
+//! - `E0165`: `#[integration]` on an item other than `test`
+//!
+//! Diagnostics `E0005`, `E0112`, `E0120`, `E0143`, `E0151`, and
+//! `E0162`–`E0164` can carry a machine-applicable [`Fix`](crate::Fix).
 
 use crate::ast::{
     Arg, Attribute, BinaryOp, Block, ClosureParam, ConstDecl, Ensures, EnumDecl, Expr, ExprKind,
@@ -49,7 +60,7 @@ use crate::ast::{
     Pattern, PatternArg, PatternKind, Requires, SelfParam, Stmt, StmtKind, StrPart, StructDecl,
     TestDecl, TraitDecl, Type, TypeKind, UnaryOp, UseDecl, Variant,
 };
-use crate::{lex, resolve_escape, Diagnostic, Keyword, Punct, Span, Token, TokenKind};
+use crate::{join, lex, resolve_escape, Diagnostic, Edit, Keyword, Punct, Span, Token, TokenKind};
 
 /// Parse a whole source file: a sequence of items separated by line
 /// breaks. Stops at the first error.
@@ -103,6 +114,32 @@ enum FnContext {
     Trait,
 }
 
+/// Whether a `struct` or `enum` was declared with `cap`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CapMarker {
+    Plain,
+    Cap,
+}
+
+/// Whether declared fields may each be marked `pub`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FieldPub {
+    /// Struct fields: each has its own visibility.
+    Allowed,
+    /// Enum variant fields: visible wherever the enum is.
+    Forbidden,
+}
+
+/// The attributes and optional `pub` written before an item or method.
+struct ItemPrefix {
+    /// Where the item starts: its first attribute, else `pub`, else its
+    /// keyword.
+    start: Span,
+    attributes: Vec<Attribute>,
+    /// The `pub` keyword, if written.
+    pub_span: Option<Span>,
+}
+
 struct Parser<'a> {
     src: &'a str,
     tokens: Vec<Token>,
@@ -112,11 +149,7 @@ struct Parser<'a> {
 }
 
 fn error(code: &'static str, message: impl Into<String>, span: Span) -> Diagnostic {
-    Diagnostic {
-        code,
-        message: message.into(),
-        span,
-    }
+    Diagnostic::new(code, message, span)
 }
 
 fn bare_block(span: Span) -> Diagnostic {
@@ -145,13 +178,6 @@ fn describe(kind: Option<&TokenKind>) -> String {
 fn dotted(path: &[Ident]) -> String {
     let names: Vec<&str> = path.iter().map(|i| i.name.as_str()).collect();
     names.join(".")
-}
-
-fn join(start: Span, end: Span) -> Span {
-    Span {
-        start: start.start,
-        end: end.end,
-    }
 }
 
 fn comparison_op(kind: Option<&TokenKind>) -> Option<BinaryOp> {
@@ -287,6 +313,21 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Attach a fix to `err` that deletes the keyword `word` at `err.span`,
+    /// with the whitespace up to the next token.
+    fn remove_word(&self, err: Diagnostic, word: &str) -> Diagnostic {
+        let end = self
+            .tokens
+            .iter()
+            .find(|t| t.span.start >= err.span.end)
+            .map_or(err.span.end, |t| t.span.start);
+        let span = Span {
+            start: err.span.start,
+            end,
+        };
+        err.with_fix(format!("remove `{word}`"), vec![Edit::delete(span)])
+    }
+
     fn span_from(&self, start: Span) -> Span {
         Span {
             start: start.start,
@@ -302,6 +343,42 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Whether the next token ends the current line or block: a line
+    /// break, a `}`, or the end of input.
+    fn at_line_end(&self) -> bool {
+        matches!(
+            self.peek(),
+            None | Some(TokenKind::Newline | TokenKind::Punct(Punct::RBrace))
+        )
+    }
+
+    /// Consume an optional `pub`, returning its span.
+    fn eat_pub(&mut self) -> Option<Span> {
+        let span = self.peek_span();
+        self.at_kw(Keyword::Pub).then(|| {
+            self.bump();
+            span
+        })
+    }
+
+    /// Attributes, each on the item's line or a line above, then an
+    /// optional `pub`.
+    fn item_prefix(&mut self) -> Result<ItemPrefix, Diagnostic> {
+        let start = self.peek_span();
+        let mut attributes = Vec::new();
+        while self.at_punct(Punct::Hash) {
+            attributes.push(self.attribute()?);
+            // An attribute may sit on its own line above the item.
+            self.skip_newlines();
+        }
+        let pub_span = self.eat_pub();
+        Ok(ItemPrefix {
+            start,
+            attributes,
+            pub_span,
+        })
+    }
+
     /// Items separated by line breaks, up to end of input.
     fn items(&mut self) -> Result<Vec<Item>, Diagnostic> {
         let mut items = Vec::new();
@@ -311,51 +388,60 @@ impl<'a> Parser<'a> {
                 return Ok(items);
             }
             items.push(self.item()?);
-            match self.peek() {
-                None | Some(TokenKind::Newline) => {}
-                Some(_) => return Err(self.expected("a line break after the item")),
+            if !self.at_line_end() {
+                return Err(self.expected("a line break after the item"));
             }
         }
     }
 
     fn item(&mut self) -> Result<Item, Diagnostic> {
-        let start = self.peek_span();
-        let mut attrs = Vec::new();
-        while self.at_punct(Punct::Hash) {
-            attrs.push(self.attribute()?);
-            // An attribute may sit on its own line above the item.
-            self.skip_newlines();
-        }
-        let public = self.at_kw(Keyword::Pub);
-        let pub_span = self.peek_span();
-        if public {
-            self.bump();
-        }
-        if public && self.at_kw(Keyword::Impl) {
-            return Err(error(
-                "E0151",
-                "an `impl` block cannot be `pub`; remove `pub` here and mark each \
-                 method that should be public as `pub fn`",
-                pub_span,
-            ));
+        let prefix = self.item_prefix()?;
+        self.check_attributes(&prefix.attributes)?;
+        if let Some(pub_span) = prefix.pub_span {
+            let rejected = match self.peek() {
+                Some(TokenKind::Keyword(Keyword::Impl)) => Some((
+                    "E0151",
+                    "an `impl` block cannot be `pub`; remove `pub` here and mark each \
+                     method that should be public as `pub fn`",
+                )),
+                Some(TokenKind::Keyword(Keyword::Test)) => Some((
+                    "E0163",
+                    "a `test` cannot be `pub`, because tests are run by the test \
+                     runner, never referenced by name; remove `pub`",
+                )),
+                Some(TokenKind::Keyword(Keyword::Use)) => Some((
+                    "E0164",
+                    "a `use` cannot be `pub`: re-exports are not defined in v0, so \
+                     an import is visible only in its own module; remove `pub`, \
+                     and import the name from its defining module where it is needed",
+                )),
+                _ => None,
+            };
+            if let Some((code, message)) = rejected {
+                return Err(self.remove_word(error(code, message, pub_span), "pub"));
+            }
         }
         let kind = match self.peek() {
             Some(TokenKind::Keyword(Keyword::Fn)) => ItemKind::Fn(self.fn_decl(FnContext::Free)?),
             Some(TokenKind::Keyword(Keyword::Use)) => ItemKind::Use(self.use_decl()?),
             Some(TokenKind::Keyword(Keyword::Const)) => ItemKind::Const(self.const_decl()?),
             Some(TokenKind::Keyword(Keyword::Test)) => ItemKind::Test(self.test_decl()?),
-            Some(TokenKind::Keyword(Keyword::Struct)) => ItemKind::Struct(self.struct_decl(false)?),
-            Some(TokenKind::Keyword(Keyword::Enum)) => ItemKind::Enum(self.enum_decl(false)?),
+            Some(TokenKind::Keyword(Keyword::Struct)) => {
+                ItemKind::Struct(self.struct_decl(CapMarker::Plain)?)
+            }
+            Some(TokenKind::Keyword(Keyword::Enum)) => {
+                ItemKind::Enum(self.enum_decl(CapMarker::Plain)?)
+            }
             Some(TokenKind::Keyword(Keyword::Impl)) => ItemKind::Impl(self.impl_decl()?),
             Some(TokenKind::Keyword(Keyword::Trait)) => ItemKind::Trait(self.trait_decl()?),
             Some(TokenKind::Keyword(Keyword::Cap)) => {
                 self.bump();
                 match self.peek() {
                     Some(TokenKind::Keyword(Keyword::Struct)) => {
-                        ItemKind::Struct(self.struct_decl(true)?)
+                        ItemKind::Struct(self.struct_decl(CapMarker::Cap)?)
                     }
                     Some(TokenKind::Keyword(Keyword::Enum)) => {
-                        ItemKind::Enum(self.enum_decl(true)?)
+                        ItemKind::Enum(self.enum_decl(CapMarker::Cap)?)
                     }
                     _ => return Err(self.expected("`struct` or `enum` after `cap`")),
                 }
@@ -363,11 +449,27 @@ impl<'a> Parser<'a> {
             _ => return Err(self.not_an_item()),
         };
         Ok(Item {
-            public,
-            attrs,
+            public: prefix.pub_span.is_some(),
+            attributes: prefix.attributes,
             kind,
-            span: self.span_from(start),
+            span: self.span_from(prefix.start),
         })
+    }
+
+    /// Reject `#[integration]` unless the next token starts a `test`.
+    fn check_attributes(&self, attributes: &[Attribute]) -> Result<(), Diagnostic> {
+        if self.at_kw(Keyword::Test) {
+            return Ok(());
+        }
+        match attributes.iter().find(|a| a.name.name == "integration") {
+            Some(attribute) => Err(error(
+                "E0165",
+                "`#[integration]` marks an integration test, so it can only be \
+                 written on a `test` item; remove it here",
+                attribute.span,
+            )),
+            None => Ok(()),
+        }
     }
 
     /// `#[name]` or `#[name(args)]`.
@@ -509,8 +611,21 @@ impl<'a> Parser<'a> {
             return Err(self.expected("a test name as a string, as in `test \"adds\" { ... }`"));
         }
         self.bump();
+        let parts = self.str_parts(span)?;
+        if let Some(hole) = parts.iter().find_map(|part| match part {
+            StrPart::Hole { span, .. } => Some(*span),
+            StrPart::Text { .. } => None,
+        }) {
+            return Err(error(
+                "E0161",
+                "a test name cannot interpolate, because it must be known without \
+                 running the test; write the name as plain text, or write `\\{` \
+                 for a literal brace",
+                hole,
+            ));
+        }
         let name = Expr {
-            kind: ExprKind::Str(self.str_parts(span)?),
+            kind: ExprKind::Str(parts),
             span,
         };
         let body = self.block()?;
@@ -523,7 +638,7 @@ impl<'a> Parser<'a> {
         self.expect_kw(Keyword::Impl)?;
         let generics = self.generics()?;
         let first = self.ty()?;
-        let (trait_, target) = if self.at_kw(Keyword::For) {
+        let (trait_ref, target) = if self.at_kw(Keyword::For) {
             self.bump();
             (Some(first), self.ty()?)
         } else {
@@ -532,7 +647,7 @@ impl<'a> Parser<'a> {
         let methods = self.methods(FnContext::Impl)?;
         Ok(ImplDecl {
             generics,
-            trait_,
+            trait_ref,
             target,
             methods,
         })
@@ -561,29 +676,32 @@ impl<'a> Parser<'a> {
             if self.eat_punct(Punct::RBrace) {
                 return Ok(methods);
             }
-            let start = self.peek_span();
-            let mut attrs = Vec::new();
-            while self.at_punct(Punct::Hash) {
-                attrs.push(self.attribute()?);
-                self.skip_newlines();
-            }
-            let public = self.at_kw(Keyword::Pub);
-            if public {
-                self.bump();
-            }
+            let prefix = self.item_prefix()?;
+            self.check_attributes(&prefix.attributes)?;
             if !self.at_kw(Keyword::Fn) {
                 return Err(self.expected("a method declared with `fn`"));
             }
+            if let (FnContext::Trait, Some(pub_span)) = (context, prefix.pub_span) {
+                return Err(self.remove_word(
+                    error(
+                        "E0162",
+                        "a trait method cannot be `pub`: trait methods take their \
+                         visibility from the trait; remove `pub`, and mark the \
+                         trait `pub` to export its methods",
+                        pub_span,
+                    ),
+                    "pub",
+                ));
+            }
             let decl = self.fn_decl(context)?;
             methods.push(Item {
-                public,
-                attrs,
+                public: prefix.pub_span.is_some(),
+                attributes: prefix.attributes,
                 kind: ItemKind::Fn(decl),
-                span: self.span_from(start),
+                span: self.span_from(prefix.start),
             });
-            match self.peek() {
-                Some(TokenKind::Newline | TokenKind::Punct(Punct::RBrace)) => {}
-                _ => return Err(self.expected("a line break after the method")),
+            if !self.at_line_end() {
+                return Err(self.expected("a line break after the method"));
             }
         }
     }
@@ -608,11 +726,14 @@ impl<'a> Parser<'a> {
                 ));
             }
             if self.at_kw(Keyword::Var) {
-                return Err(error(
-                    "E0112",
-                    "only the `self` receiver can be `var`; remove `var`, \
-                     and bind a mutable copy in the body with `var name = name`",
-                    self.peek_span(),
+                return Err(self.remove_word(
+                    error(
+                        "E0112",
+                        "only the `self` receiver can be `var`; remove `var`, \
+                         and bind a mutable copy in the body with `var name = name`",
+                        self.peek_span(),
+                    ),
+                    "var",
                 ));
             }
             let name = self.expect_ident("a parameter name")?;
@@ -628,7 +749,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect_punct(Punct::RParen)?;
-        let ret = if self.eat_punct(Punct::Arrow) {
+        let return_type = if self.eat_punct(Punct::Arrow) {
             Some(self.ty()?)
         } else {
             None
@@ -670,11 +791,7 @@ impl<'a> Parser<'a> {
             return Err(self.where_clause());
         }
         // Only a trait method may stop after its signature.
-        let body = if context == FnContext::Trait
-            && matches!(
-                self.peek(),
-                None | Some(TokenKind::Newline | TokenKind::Punct(Punct::RBrace))
-            ) {
+        let body = if context == FnContext::Trait && self.at_line_end() {
             None
         } else {
             Some(self.block()?)
@@ -684,7 +801,7 @@ impl<'a> Parser<'a> {
             generics,
             receiver,
             params,
-            ret,
+            return_type,
             requires,
             ensures,
             body,
@@ -762,19 +879,19 @@ impl<'a> Parser<'a> {
     }
 
     /// `struct Name { fields }` or `struct Name(fields)`, after any `cap`.
-    fn struct_decl(&mut self, cap: bool) -> Result<StructDecl, Diagnostic> {
+    fn struct_decl(&mut self, cap: CapMarker) -> Result<StructDecl, Diagnostic> {
         self.expect_kw(Keyword::Struct)?;
         let name = self.expect_ident("a struct name")?;
         let generics = self.generics()?;
         let fields = if self.at_punct(Punct::LParen) {
-            Fields::Positional(self.positional_fields(true)?)
+            Fields::Positional(self.positional_fields(FieldPub::Allowed)?)
         } else if self.at_punct(Punct::LBrace) {
-            Fields::Named(self.named_fields(true)?)
+            Fields::Named(self.named_fields(FieldPub::Allowed)?)
         } else {
             return Err(self.expected("`{` or `(` after the struct name"));
         };
         Ok(StructDecl {
-            cap,
+            cap: cap == CapMarker::Cap,
             name,
             generics,
             fields,
@@ -782,7 +899,7 @@ impl<'a> Parser<'a> {
     }
 
     /// `enum Name { variants }`, after any `cap`.
-    fn enum_decl(&mut self, cap: bool) -> Result<EnumDecl, Diagnostic> {
+    fn enum_decl(&mut self, cap: CapMarker) -> Result<EnumDecl, Diagnostic> {
         self.expect_kw(Keyword::Enum)?;
         let name = self.expect_ident("an enum name")?;
         let generics = self.generics()?;
@@ -793,9 +910,9 @@ impl<'a> Parser<'a> {
         let variants = self.comma_list(Punct::RBrace, |p| {
             let name = p.expect_ident("a variant name")?;
             let fields = if p.at_punct(Punct::LParen) {
-                Fields::Positional(p.positional_fields(false)?)
+                Fields::Positional(p.positional_fields(FieldPub::Forbidden)?)
             } else if p.at_punct(Punct::LBrace) {
-                Fields::Named(p.named_fields(false)?)
+                Fields::Named(p.named_fields(FieldPub::Forbidden)?)
             } else {
                 Fields::Unit
             };
@@ -806,7 +923,7 @@ impl<'a> Parser<'a> {
             })
         })?;
         Ok(EnumDecl {
-            cap,
+            cap: cap == CapMarker::Cap,
             name,
             generics,
             variants,
@@ -827,17 +944,15 @@ impl<'a> Parser<'a> {
             ),
             Span { start: end, end },
         )
+        .with_fix("insert `,`", vec![Edit::insert(end, ",")])
     }
 
-    /// `{ a: T, pub b: U }`. `allow_pub` is false inside enum variants.
-    fn named_fields(&mut self, allow_pub: bool) -> Result<Vec<Field>, Diagnostic> {
+    /// `{ a: T, pub b: U }`.
+    fn named_fields(&mut self, field_pub: FieldPub) -> Result<Vec<Field>, Diagnostic> {
         self.expect_punct(Punct::LBrace)?;
         self.comma_list(Punct::RBrace, |p| {
             let start = p.peek_span();
-            let public = allow_pub && p.at_kw(Keyword::Pub);
-            if public {
-                p.bump();
-            }
+            let public = field_pub == FieldPub::Allowed && p.eat_pub().is_some();
             let name = p.expect_ident("a field name")?;
             p.expect_punct(Punct::Colon)?;
             let ty = p.ty()?;
@@ -850,15 +965,12 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// `(T, pub U)`. `allow_pub` is false inside enum variants.
-    fn positional_fields(&mut self, allow_pub: bool) -> Result<Vec<Field>, Diagnostic> {
+    /// `(T, pub U)`.
+    fn positional_fields(&mut self, field_pub: FieldPub) -> Result<Vec<Field>, Diagnostic> {
         self.expect_punct(Punct::LParen)?;
         self.comma_list(Punct::RParen, |p| {
             let start = p.peek_span();
-            let public = allow_pub && p.at_kw(Keyword::Pub);
-            if public {
-                p.bump();
-            }
+            let public = field_pub == FieldPub::Allowed && p.eat_pub().is_some();
             let ty = p.ty()?;
             Ok(Field {
                 public,
@@ -1360,15 +1472,35 @@ impl<'a> Parser<'a> {
                 break;
             }
             arms.push(self.match_arm()?);
+            if self.at_line_end() {
+                continue;
+            }
             match self.peek() {
-                Some(TokenKind::Newline | TokenKind::Punct(Punct::RBrace)) => {}
                 Some(TokenKind::Punct(Punct::Comma)) => {
-                    return Err(error(
+                    let comma = self.peek_span();
+                    let err = error(
                         "E0143",
                         "match arms are separated by line breaks, not commas; \
                          remove the `,` and put each arm on its own line",
-                        self.peek_span(),
-                    ))
+                        comma,
+                    );
+                    // Deleting the comma is enough only when the next arm
+                    // already starts on its own line.
+                    let next = self.tokens.get(self.pos + 1);
+                    let gap_end = next.map_or(self.src.len(), |t| t.span.start);
+                    let own_line = self.src[comma.end..gap_end].contains('\n')
+                        || matches!(
+                            next,
+                            None | Some(Token {
+                                kind: TokenKind::Punct(Punct::RBrace),
+                                ..
+                            })
+                        );
+                    return Err(if own_line {
+                        err.with_fix("remove `,`", vec![Edit::delete(comma)])
+                    } else {
+                        err
+                    });
                 }
                 _ => return Err(self.expected("a line break or `}` after the match arm")),
             }
@@ -1447,7 +1579,22 @@ impl<'a> Parser<'a> {
                 TokenKind::Int(_)
                 | TokenKind::Str(_)
                 | TokenKind::Keyword(Keyword::True | Keyword::False),
-            ) => PatternKind::Literal(self.primary()?),
+            ) => {
+                let literal = self.primary()?;
+                if let ExprKind::Str(parts) = &literal.kind {
+                    if parts.iter().any(|p| matches!(p, StrPart::Hole { .. })) {
+                        return Err(error(
+                            "E0160",
+                            "a string pattern must be a plain literal, without \
+                             interpolation; match a fixed string, or bind the \
+                             value and compare it in a guard, as in \
+                             `s if s == greeting => ...`",
+                            literal.span,
+                        ));
+                    }
+                }
+                PatternKind::Literal(literal)
+            }
             Some(TokenKind::Punct(Punct::Minus))
                 if matches!(self.peek_at(1), Some(TokenKind::Int(_))) =>
             {
@@ -1638,12 +1785,16 @@ impl<'a> Parser<'a> {
                     }
                 }
                 self.expect_punct(Punct::RParen)?;
-                let ret = if self.eat_punct(Punct::Arrow) {
+                let return_type = if self.eat_punct(Punct::Arrow) {
                     Some(Box::new(self.ty()?))
                 } else {
                     None
                 };
-                TypeKind::Fn { cap, params, ret }
+                TypeKind::Fn {
+                    cap,
+                    params,
+                    return_type,
+                }
             }
             Some(TokenKind::Ident(_)) => {
                 let mut segments = vec![self.expect_ident("a type name")?];
@@ -1876,9 +2027,13 @@ mod tests {
                     format!("{name}<{}>", args.join(","))
                 }
             }
-            TypeKind::Fn { cap, params, ret } => {
+            TypeKind::Fn {
+                cap,
+                params,
+                return_type,
+            } => {
                 let params: Vec<String> = params.iter().map(ty_str).collect();
-                let ret = ret
+                let ret = return_type
                     .as_ref()
                     .map(|r| format!("->{}", ty_str(r)))
                     .unwrap_or_default();

@@ -4,25 +4,9 @@
 
 mod common;
 
-use common::{assert_items, module_err};
+use common::{assert_items, ident, module_err, path_ty};
 use oska_syntax::ast::ItemKind;
 use oska_syntax::{parse_module, Span};
-
-/// The JSON for an `Ident` node.
-fn ident(name: &str, start: usize) -> String {
-    let end = start + name.len();
-    format!(r#"{{"kind": "Ident", "span": {{"start": {start}, "end": {end}}}, "name": "{name}"}}"#)
-}
-
-/// The JSON for a single-segment path type such as `Int` at `start`.
-fn path_ty(name: &str, start: usize) -> String {
-    let end = start + name.len();
-    format!(
-        r#"{{"kind": "PathType", "span": {{"start": {start}, "end": {end}}},
-            "segments": [{segment}], "args": []}}"#,
-        segment = ident(name, start),
-    )
-}
 
 /// The JSON for an empty block `{}` at `start`.
 fn empty_block(start: usize) -> String {
@@ -173,7 +157,7 @@ fn syntax_sample_impl_block_parses() {
             _ => None,
         })
         .expect("the sample should have an impl block");
-    assert!(imp.trait_.is_none());
+    assert!(imp.trait_ref.is_none());
     let [method] = imp.methods.as_slice() else {
         panic!("expected one method, got {:?}", imp.methods);
     };

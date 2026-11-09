@@ -73,3 +73,19 @@ pub fn assert_body(src: &str, stmts: &str) {
 pub fn module_err(src: &str) -> Diagnostic {
     parse_module(src).expect_err("should fail to parse")
 }
+
+/// The JSON for an `Ident` node.
+pub fn ident(name: &str, start: usize) -> String {
+    let end = start + name.len();
+    format!(r#"{{"kind": "Ident", "span": {{"start": {start}, "end": {end}}}, "name": "{name}"}}"#)
+}
+
+/// The JSON for a single-segment path type such as `Int` at `start`.
+pub fn path_ty(name: &str, start: usize) -> String {
+    let end = start + name.len();
+    format!(
+        r#"{{"kind": "PathType", "span": {{"start": {start}, "end": {end}}},
+            "segments": [{segment}], "args": []}}"#,
+        segment = ident(name, start),
+    )
+}

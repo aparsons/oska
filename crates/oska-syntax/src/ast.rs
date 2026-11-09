@@ -261,7 +261,7 @@ pub enum TypeKind {
     Fn {
         cap: bool,
         params: Vec<Type>,
-        ret: Option<Box<Type>>,
+        return_type: Option<Box<Type>>,
     },
 }
 
@@ -279,7 +279,7 @@ pub struct Item {
     /// Declared `pub`.
     pub public: bool,
     /// Attributes written before the item, in source order.
-    pub attrs: Vec<Attribute>,
+    pub attributes: Vec<Attribute>,
     pub kind: ItemKind,
     /// Covers the item's attributes, if any, through its end.
     pub span: Span,
@@ -314,7 +314,7 @@ pub struct TraitDecl {
 pub struct ImplDecl {
     pub generics: Vec<GenericParam>,
     /// The implemented trait, for `impl Trait for Type`.
-    pub trait_: Option<Type>,
+    pub trait_ref: Option<Type>,
     /// The type the methods belong to.
     pub target: Type,
     /// The methods, in source order. Each is an [`ItemKind::Fn`] item, so it
@@ -367,7 +367,7 @@ pub struct FnDecl {
     /// The parameters after the receiver.
     pub params: Vec<Param>,
     /// A missing return type means `()`.
-    pub ret: Option<Type>,
+    pub return_type: Option<Type>,
     /// `requires` clauses, in source order.
     pub requires: Vec<Requires>,
     /// `ensures |r| ...` clauses, in source order.

@@ -3,24 +3,8 @@
 
 mod common;
 
-use common::{assert_items, module_err};
+use common::{assert_items, ident, module_err, path_ty};
 use oska_syntax::Span;
-
-/// The JSON for a single-segment path type such as `Int` at `start`.
-fn path_ty(name: &str, start: usize) -> String {
-    let end = start + name.len();
-    format!(
-        r#"{{"kind": "PathType", "span": {{"start": {start}, "end": {end}}},
-            "segments": [{{"kind": "Ident", "span": {{"start": {start}, "end": {end}}}, "name": "{name}"}}],
-            "args": []}}"#
-    )
-}
-
-/// The JSON for an `Ident` node.
-fn ident(name: &str, start: usize) -> String {
-    let end = start + name.len();
-    format!(r#"{{"kind": "Ident", "span": {{"start": {start}, "end": {end}}}, "name": "{name}"}}"#)
-}
 
 #[test]
 fn named_field_struct_with_per_field_pub() {

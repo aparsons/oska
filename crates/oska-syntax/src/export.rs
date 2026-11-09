@@ -14,7 +14,7 @@ use crate::ast::{
     Pattern, PatternArg, PatternKind, Requires, SelfParam, Stmt, StmtKind, StrPart, StructDecl,
     TestDecl, TraitDecl, Type, TypeKind, UnaryOp, UseDecl, Variant,
 };
-use crate::{json_escape, Span};
+use crate::{join, json_escape, Span};
 
 /// Version of the export format. Bump only for breaking changes.
 pub const AST_VERSION: u64 = 1;
@@ -256,7 +256,7 @@ fn trait_item(item: &Item, decl: &TraitDecl) -> Json {
 fn impl_item(item: &Item, decl: &ImplDecl) -> Json {
     item_node("ImplItem", item)
         .field("generics", list(&decl.generics, generic_param))
-        .opt("trait", decl.trait_.as_ref().map(ty))
+        .opt("trait", decl.trait_ref.as_ref().map(ty))
         .field("target", ty(&decl.target))
         .field("methods", list(&decl.methods, self::item))
         .done()
@@ -312,7 +312,7 @@ fn field(field: &Field) -> Json {
 fn item_node(kind: &'static str, item: &Item) -> Node {
     Node::new(kind, item.span)
         .field("public", Json::Bool(item.public))
-        .field("attributes", list(&item.attrs, attribute))
+        .field("attributes", list(&item.attributes, attribute))
 }
 
 fn attribute(attr: &Attribute) -> Json {
@@ -328,7 +328,7 @@ fn fn_item(item: &Item, decl: &FnDecl) -> Json {
         .field("generics", list(&decl.generics, generic_param))
         .opt("receiver", decl.receiver.as_ref().map(self_param))
         .field("params", list(&decl.params, param))
-        .opt("return_type", decl.ret.as_ref().map(ty))
+        .opt("return_type", decl.return_type.as_ref().map(ty))
         .field("requires", list(&decl.requires, requires))
         .field("ensures", list(&decl.ensures, ensures))
         .opt("body", decl.body.as_ref().map(block))
@@ -560,11 +560,7 @@ fn str_part(part: &StrPart) -> Json {
 
 fn arg(arg: &Arg) -> Json {
     let start = arg.label.as_ref().map_or(arg.value.span, |l| l.span);
-    let span = Span {
-        start: start.start,
-        end: arg.value.span.end,
-    };
-    Node::new("Arg", span)
+    Node::new("Arg", join(start, arg.value.span))
         .opt("label", arg.label.as_ref().map(ident))
         .field("value", expr(&arg.value))
         .done()
@@ -572,11 +568,7 @@ fn arg(arg: &Arg) -> Json {
 
 fn closure_param(param: &ClosureParam) -> Json {
     let end = param.ty.as_ref().map_or(param.name.span, |t| t.span);
-    let span = Span {
-        start: param.name.span.start,
-        end: end.end,
-    };
-    Node::new("ClosureParam", span)
+    Node::new("ClosureParam", join(param.name.span, end))
         .field("name", ident(&param.name))
         .opt("type", param.ty.as_ref().map(ty))
         .done()
@@ -591,10 +583,14 @@ fn ty(ty: &Type) -> Json {
             .field("args", list(args, self::ty))
             .done(),
         TypeKind::Unit => Node::new("UnitType", ty.span).done(),
-        TypeKind::Fn { cap, params, ret } => Node::new("FnType", ty.span)
+        TypeKind::Fn {
+            cap,
+            params,
+            return_type,
+        } => Node::new("FnType", ty.span)
             .field("cap", Json::Bool(*cap))
             .field("params", list(params, self::ty))
-            .opt("return_type", ret.as_deref().map(self::ty))
+            .opt("return_type", return_type.as_deref().map(self::ty))
             .done(),
     }
 }
