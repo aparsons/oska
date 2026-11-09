@@ -217,7 +217,7 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
     resolve::module(&module, &decls, &mut diagnostics);
     decl_rules::module(src, &module, &decls, &mut diagnostics);
     coherence::module(&module, &decls, &mut diagnostics);
-    recursion::module(&module, &mut diagnostics);
+    recursion::module(&module, &decls, &mut diagnostics);
     if options.release {
         release::module(&module, &mut diagnostics);
     }

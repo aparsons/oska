@@ -19,13 +19,11 @@ use crate::codes;
 use crate::collect::Decls;
 use crate::infer::Infer;
 use crate::items::Lower;
-use crate::prelude;
 use crate::ty::Ty;
 
 pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
-    let mut functions: HashSet<&str> = prelude::module()
-        .items
-        .iter()
+    let mut functions: HashSet<&str> = decls
+        .prelude_items()
         .filter_map(|item| match &item.kind {
             ItemKind::Fn(f) => Some(f.name.name.as_str()),
             _ => None,
@@ -33,9 +31,8 @@ pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>)
         .collect();
     let prelude_functions = functions.clone();
     let mut methods: HashSet<(String, &str)> = HashSet::new();
-    let mut impls: Vec<TraitImpl> = prelude::module()
-        .items
-        .iter()
+    let mut impls: Vec<TraitImpl> = decls
+        .prelude_items()
         .filter_map(|item| trait_impl(item, decls, true))
         .collect();
     for item in &module.items {

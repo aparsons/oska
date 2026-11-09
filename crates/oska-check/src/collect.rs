@@ -7,7 +7,7 @@ use oska_syntax::ast::{Fields, Item, ItemKind, Module, Type};
 use oska_syntax::{Diagnostic, Span};
 
 use crate::codes;
-use crate::prelude;
+use crate::prelude::{self, StdModule};
 
 /// What a type-level name refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,14 +37,30 @@ pub struct Decl<'a> {
 /// namespace.
 pub struct Decls<'a> {
     names: HashMap<&'a str, Decl<'a>>,
+    /// The `std.*` modules the user module imports, in `use` order.
+    imported: Vec<&'static StdModule>,
 }
 
 impl<'a> Decls<'a> {
-    /// Collect the prelude's declarations and then `module`'s, reporting
-    /// any name declared twice.
+    /// Collect the prelude's declarations, then those of every `std.*`
+    /// module `module` imports, then `module`'s, reporting any name
+    /// declared twice.
     pub fn collect(module: &'a Module, diagnostics: &mut Vec<Diagnostic>) -> Self {
+        let mut imported: Vec<&'static StdModule> = Vec::new();
+        for item in &module.items {
+            if let ItemKind::Use(u) = &item.kind {
+                let path: Vec<&str> = u.path.iter().map(|s| s.name.as_str()).collect();
+                // An unknown module is reported by name resolution.
+                if let Some(std) = prelude::std_module(&path.join(".")) {
+                    if !imported.iter().any(|m| m.path == std.path) {
+                        imported.push(std);
+                    }
+                }
+            }
+        }
         let mut decls = Decls {
             names: HashMap::new(),
+            imported,
         };
         for name in prelude::PRIMITIVES {
             decls.names.insert(
@@ -57,7 +73,8 @@ impl<'a> Decls<'a> {
                 },
             );
         }
-        for item in &prelude::module().items {
+        let prelude_items = decls.prelude_items().collect::<Vec<_>>();
+        for item in prelude_items {
             if let Some((name, _, decl)) = declaration(item, true) {
                 decls.names.insert(name, decl);
             }
@@ -85,6 +102,20 @@ impl<'a> Decls<'a> {
             }
         }
         decls
+    }
+
+    /// The prelude's items followed by those of every imported `std.*`
+    /// module: everything the user module sees without declaring it.
+    pub fn prelude_items(&self) -> impl Iterator<Item = &'static Item> + '_ {
+        prelude::module()
+            .items
+            .iter()
+            .chain(self.imported.iter().flat_map(|m| &m.module().items))
+    }
+
+    /// Whether the user module imports the `std.*` module `module`.
+    pub fn imports(&self, module: &StdModule) -> bool {
+        self.imported.iter().any(|m| m.path == module.path)
     }
 
     pub fn get(&self, name: &str) -> Option<&Decl<'a>> {

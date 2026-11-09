@@ -277,13 +277,12 @@ fn a_use_outside_std_is_an_error() {
 
 #[test]
 fn a_use_of_a_std_module_that_does_not_exist_is_an_error() {
-    // No `std.*` module exists yet, so every `use` of one is unknown.
-    assert_errors("use std.sql", &[("E0295", "std.sql")]);
+    assert_errors("use std.nosuch", &[("E0295", "std.nosuch")]);
 }
 
 #[test]
 fn a_use_with_a_brace_group_names_its_module() {
-    assert_errors("use std.sql.{Query}", &[("E0295", "std.sql")]);
+    assert_errors("use std.nosuch.{Query}", &[("E0295", "std.nosuch")]);
 }
 
 // ---- JSON ---------------------------------------------------------------------------

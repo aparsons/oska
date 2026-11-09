@@ -244,13 +244,14 @@ impl Resolver<'_, '_> {
             ));
             return;
         }
-        if !prelude::STD_MODULES.contains(&written.as_str()) {
+        if prelude::std_module(&written).is_none() {
+            let paths: Vec<&str> = prelude::STD_MODULES.iter().map(|m| m.path).collect();
             self.diagnostics.push(suggest::unknown(
                 codes::UNKNOWN_MODULE,
                 format!("unknown module `{written}`"),
                 &written,
                 span,
-                prelude::STD_MODULES,
+                &paths,
             ));
         }
     }

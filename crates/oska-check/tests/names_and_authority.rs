@@ -242,7 +242,7 @@ fn a_generic_parameter_is_scoped_to_its_declaration() {
 
 #[test]
 fn a_qualified_type_path_is_unknown() {
-    // `use` of `std.*` modules comes later; until then no path resolves.
+    // A `use` brings a module's items in unqualified; no path resolves.
     assert_errors("fn f(q: sql.Query) { }", &[("E0200", "sql.Query")]);
 }
 
