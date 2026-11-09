@@ -45,6 +45,10 @@
 //! | `E0233` | A type that inference cannot work out, such as `let xs = List.new()` with no later use. |
 //! | `E0234` | A type name used as a value, or a type that cannot be constructed. |
 //! | `E0235` | `for` over a value that is not a `List` or a range. |
+//! | `E0240` | A `Result` dropped by an expression statement. `let _ = f()` discards one deliberately. |
+//! | `E0241` | `?` on a value that is neither a `Result` nor an `Option`. |
+//! | `E0242` | `?` on a `Result` whose error type differs from the function's, with no `impl From` conversion. |
+//! | `E0243` | `?` in a function that does not return the same kind (`Option` vs `Result`), or returns neither. |
 
 use oska_syntax::Diagnostic;
 
@@ -88,6 +92,10 @@ pub(crate) mod codes {
     pub const CANNOT_INFER: &str = "E0233";
     pub const NOT_A_VALUE: &str = "E0234";
     pub const NOT_ITERABLE: &str = "E0235";
+    pub const IGNORED_RESULT: &str = "E0240";
+    pub const TRY_OPERAND: &str = "E0241";
+    pub const TRY_ERROR_TYPE: &str = "E0242";
+    pub const TRY_KIND: &str = "E0243";
 }
 
 /// Options that change what is checked.

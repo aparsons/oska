@@ -18,7 +18,8 @@
 //!   is discarded.
 //! - **Patterns:** [`Body::bind_pattern`] binds a pattern's names; for now
 //!   every binding has the error type.
-//! - **`?`:** [`Body::try_expr`].
+//! - **`?`:** [`Body::try_expr`]. Error conversion through `impl From`
+//!   goes in [`Body::converts_from`].
 //! - **Method lookup:** [`Body::method_call`] and [`Items::method`].
 //! - **Closures:** [`Body::closure`]. Locals are a stack, so a closure's
 //!   captures are the names it resolves below the stack height at which
@@ -306,7 +307,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             ExprKind::Call { callee, args } => self.call(expr, callee, args, expected),
             ExprKind::Unary { op, operand } => self.unary(expr, *op, operand, expected),
             ExprKind::Binary { op, lhs, rhs } => self.binary(expr, *op, lhs, rhs, expected),
-            ExprKind::Try(operand) => self.try_expr(operand),
+            ExprKind::Try(operand) => self.try_expr(expr, operand),
             ExprKind::Range { start, end } => {
                 let ty = self.infer(start);
                 let ty = self.check(end, &ty);
@@ -1121,16 +1122,114 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
     }
 
-    /// `operand?`: the success value of a `Result` or an `Option`. Whether
-    /// the function can return the failure is the Result-discipline rule.
-    pub fn try_expr(&mut self, operand: &Expr) -> Ty {
+    /// `operand?` (the whole expression is `expr`): the success value of a
+    /// `Result` or an `Option`, whose failure the enclosing function (or
+    /// closure) returns. That function must return the same kind: `?`
+    /// never crosses between `Option` and `Result` (`E0243`). A `Result`'s
+    /// error type goes through [`Body::propagate_error`].
+    pub fn try_expr(&mut self, expr: &Expr, operand: &Expr) -> Ty {
         let ty = self.infer(operand);
-        match self.infer.resolve(&ty) {
-            Ty::Named(name, args) if (name == "Result" || name == "Option") && !args.is_empty() => {
-                args[0].clone()
+        let (kind, args) = match self.infer.resolve(&ty) {
+            Ty::Named(name, args)
+                if (name == "Result" && args.len() == 2)
+                    || (name == "Option" && args.len() == 1) =>
+            {
+                (name, args)
             }
-            _ => Ty::Error,
+            // Unknown or already reported.
+            Ty::Error | Ty::Var(_) | Ty::Never => return Ty::Error,
+            other => {
+                self.error(
+                    codes::TRY_OPERAND,
+                    format!("`?` needs a `Result` or an `Option`, found `{other}`"),
+                    expr.span,
+                );
+                return Ty::Error;
+            }
+        };
+        let ret = self.ret.clone();
+        match self.infer.resolve(&ret) {
+            Ty::Error => {}
+            // A closure whose return type is not known yet returns the
+            // same kind, with its own success type.
+            Ty::Var(_) => {
+                let failure = if kind == "Result" {
+                    Ty::Named(kind.clone(), vec![self.infer.fresh(), args[1].clone()])
+                } else {
+                    Ty::Named(kind.clone(), vec![self.infer.fresh()])
+                };
+                self.infer.unify(&ret, &failure);
+            }
+            Ty::Named(name, ret_args) if name == kind => {
+                if kind == "Result" && ret_args.len() == 2 {
+                    self.propagate_error(&args[1], &ret_args[1], expr.span);
+                }
+            }
+            other => {
+                let advice = match (kind.as_str(), other.head()) {
+                    ("Option", Some("Result")) => {
+                        "; convert it explicitly, for example with `.ok_or(err)?`"
+                    }
+                    ("Result", Some("Option")) => {
+                        "; convert it explicitly, for example with a `match`"
+                    }
+                    _ => "",
+                };
+                self.error(
+                    codes::TRY_KIND,
+                    format!(
+                        "`?` on an `{kind}` must be in a function that returns `{kind}`, \
+                         but this one returns `{other}`{advice}"
+                    ),
+                    expr.span,
+                );
+            }
         }
+        args[0].clone()
+    }
+
+    /// `?` propagates a `Result`'s error of type `from` out of a function
+    /// whose error type is `to`. They must be the same type, or `to` must
+    /// convert from `from` (`E0242`).
+    fn propagate_error(&mut self, from: &Ty, to: &Ty, span: Span) {
+        if self.infer.unify(from, to) {
+            return;
+        }
+        let from = self.infer.resolve(from);
+        let to = self.infer.resolve(to);
+        if from.is_error() || to.is_error() || self.converts_from(&from, &to) {
+            return;
+        }
+        self.error(
+            codes::TRY_ERROR_TYPE,
+            format!(
+                "`?` cannot propagate an error of type `{from}` from a function whose \
+                 error type is `{to}`; write `impl From<{from}> for {to}` or convert it explicitly"
+            ),
+            span,
+        );
+    }
+
+    /// Whether `?` can convert an error of type `from` into `to`.
+    ///
+    /// Extension point for `impl From` conversion (#39), which should look
+    /// up `impl From<from> for to` through the trait machinery. Until then,
+    /// this accepts a trait-impl method `from(value: from)` on `to`, so
+    /// that `examples/capabilities.osk` keeps checking.
+    fn converts_from(&self, from: &Ty, to: &Ty) -> bool {
+        let Some(type_name) = to.head() else {
+            return false;
+        };
+        self.items
+            .trait_impls
+            .get(type_name)
+            .into_iter()
+            .flatten()
+            .any(|sig| {
+                sig.name == "from"
+                    && sig.receiver.is_none()
+                    && matches!(sig.params.as_slice(), [(_, param)] if param == from)
+            })
     }
 
     /// `match`. Arm bodies must agree; patterns are only bound, not yet
@@ -1319,9 +1418,20 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         self.loop_depth -= 1;
     }
 
-    /// An expression whose value is discarded.
+    /// An expression whose value is discarded. Dropping a `Result` is an
+    /// error; `let _ = f()` discards one deliberately.
     pub fn expr_stmt(&mut self, expr: &Expr) {
-        self.infer(expr);
+        let ty = self.infer(expr);
+        if let Ty::Named(name, _) = self.infer.resolve(&ty) {
+            if name == "Result" {
+                self.error(
+                    codes::IGNORED_RESULT,
+                    "this `Result` is ignored; handle it, propagate it with `?`, \
+                     or discard it with `let _ = ...`",
+                    expr.span,
+                );
+            }
+        }
     }
 }
 
