@@ -343,7 +343,69 @@ fn withdraw(acct: Account, amount: Int) -> Result<Account, Error>
 
 - Tests are top-level items: `test "a descriptive name" { ... }`. They take no parameters. The name is a plain string, with no `{...}` interpolation, and a test is never `pub`.
 - Inside a test, the built-in value `t` holds deterministic stand-in capabilities: an in-memory `t.fs`, a fixed `t.clock`, a seeded `t.random`, and a recording `t.stdout`.
-- Tests that need real capabilities opt in with `#[integration]`.
+- Tests that need real capabilities opt in with `#[integration]`. They run only with `oskac test --integration`.
+- `oskac test file.osk` runs every `test` block and reports each one as passed or failed. With `--format=json`, the report is JSON.
+- **The stand-ins:**
+  - an in-memory `Fs`
+  - a `Clock` fixed at the Unix epoch
+  - a `Random` with a fixed seed
+  - a recording `Stdout`; `t.printed()` returns one entry per `println`
+
+## Runtime
+
+The interpreter is `oskac run file.osk -- args...`, built as the crate `oska-run`.
+
+### Pipeline
+
+- `oskac run` type-checks the program first. If the check reports any diagnostic, the program does not run, and the diagnostics are printed the same way `oskac check` prints them.
+- The checker produces a **checked program**, and the interpreter executes it ([ADR 0007](adr/0007-interpreter-runs-the-checked-program.md)). The interpreter never re-resolves names or dispatch.
+
+### Values
+
+- Values are reference-counted. Mutating a `var` copies the value first if it is shared ([ADR 0001](adr/0001-value-semantics-with-reference-counting.md)).
+- Every value carries a runtime type tag. A trait call inside generic code uses the tag to find the right impl.
+- **Trust exists only at compile time.** At runtime, `Untrusted<String>` is an ordinary string.
+- **`Secret` stays a real wrapper at runtime,** so `dbg` prints it as `<redacted>`.
+
+### Capabilities
+
+- The runtime grants exactly the capabilities that `main` declares.
+- `Args.get(0)` is the path of the program being run.
+- **Implemented in v0:**
+  - `Stdin`, `Stdout`, `Stderr`
+  - `Fs`, `FsRead`, `FsWrite`
+  - `Args`, `Env`, `Env.secret`
+  - `Clock`
+  - `Random`, with a built-in pseudo-random generator
+- **Not yet implemented:** `Net`, `std.proc`, `std.sql`, and `std.html`. `oskac run` refuses, before execution starts and with a stable code, any program that uses them.
+- **Filesystem confinement.** A restricted `Fs` resolves every `Path` against its root. Before checking, it normalizes `..` and follows symlinks. A path that escapes the root is rejected, and so is an absolute path or an empty one.
+- **Prelude functions without a body** are each backed by a built-in implementation in the runtime. A test enforces that none is missing.
+
+### Failures
+
+- **Panics** have stable codes, a message, and the span of source code that panicked. With `--format=json`, they print in the same shape as diagnostics. The process exits with code **101**.
+
+| Code | Panic |
+| --- | --- |
+| `P0001` | integer overflow |
+| `P0002` | index out of bounds |
+| `P0003` | `todo()` reached |
+| `P0004` | division by zero |
+
+- **When `main` returns `Err(e)`,** the runtime prints `e.to_string()` to stderr and exits with code **1**.
+- Exit code 1 means the program failed in a way it expected. Exit code 101 means it has a bug.
+
+### Strings
+
+- Strings are UTF-8.
+- `len()` counts Unicode code points. `byte_len()` counts bytes.
+- Indexing or slicing that would split a character panics.
+
+### Concurrency in v0
+
+- Spawned tasks run one at a time, in the order they were spawned, and `join` returns the task's result. This preserves the semantics, because tasks share only immutable values.
+- Calling `spawn` on a scope that has already finished panics.
+- Parallel execution and `Sched` channels come later.
 
 ## Unsafe and FFI
 
