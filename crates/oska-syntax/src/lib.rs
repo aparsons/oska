@@ -8,15 +8,25 @@
 use std::fmt;
 
 pub mod ast;
+mod export;
 mod parser;
 
-pub use parser::{parse_expr, parse_stmts, parse_type};
+pub use export::{module_to_json, module_to_tree, AST_VERSION};
+pub use parser::{parse_expr, parse_module, parse_stmts, parse_type};
 
 /// A half-open byte range `start..end` in the source text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
+}
+
+/// The span from the start of `start` to the end of `end`.
+pub(crate) fn join(start: Span, end: Span) -> Span {
+    Span {
+        start: start.start,
+        end: end.end,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,6 +200,9 @@ pub enum Punct {
     Pipe,
     /// `#`, which starts an attribute (`#[integration]`).
     Hash,
+    /// `@`. Oska has no `@` syntax; it is lexed only so the parser can
+    /// reject `@` bindings in patterns with a clear error.
+    At,
 }
 
 impl Punct {
@@ -226,6 +239,7 @@ impl Punct {
             Self::OrOr => "||",
             Self::Pipe => "|",
             Self::Hash => "#",
+            Self::At => "@",
         }
     }
 }
@@ -236,6 +250,26 @@ pub struct Diagnostic {
     pub code: &'static str,
     pub message: String,
     pub span: Span,
+    /// A machine-applicable fix, when the right edit is unambiguous.
+    pub fix: Option<Fix>,
+}
+
+/// Source edits that resolve a diagnostic. Applying all of them to the
+/// original source removes the error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fix {
+    /// What the fix does, e.g. "remove `pub`".
+    pub message: String,
+    /// Non-overlapping edits, each against the original source.
+    pub edits: Vec<Edit>,
+}
+
+/// Replace the source text at `span` with `replacement`. An empty span
+/// inserts; an empty replacement deletes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Edit {
+    pub span: Span,
+    pub replacement: String,
 }
 
 /// The character a backslash escape stands for, e.g. `n` for `\n`.
@@ -257,15 +291,76 @@ pub(crate) fn resolve_escape(c: char) -> Option<char> {
 pub type LexError = Diagnostic;
 
 impl Diagnostic {
-    /// Render as a single-line JSON object for machine consumers.
+    /// A diagnostic with no fix.
+    pub fn new(code: &'static str, message: impl Into<String>, span: Span) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            span,
+            fix: None,
+        }
+    }
+
+    /// Attach a fix made of `edits`.
+    pub fn with_fix(mut self, message: impl Into<String>, edits: Vec<Edit>) -> Self {
+        self.fix = Some(Fix {
+            message: message.into(),
+            edits,
+        });
+        self
+    }
+
+    /// Render as a single-line JSON object for machine consumers. The
+    /// `fix` field follows `span`, and is omitted when there is no fix.
     pub fn to_json(&self) -> String {
-        format!(
-            "{{\"code\":\"{}\",\"message\":\"{}\",\"span\":{{\"start\":{},\"end\":{}}}}}",
+        let mut out = format!(
+            "{{\"code\":\"{}\",\"message\":\"{}\",\"span\":{}",
             self.code,
             json_escape(&self.message),
-            self.span.start,
-            self.span.end
-        )
+            span_json(self.span)
+        );
+        if let Some(fix) = &self.fix {
+            let edits: Vec<String> = fix
+                .edits
+                .iter()
+                .map(|e| {
+                    format!(
+                        "{{\"span\":{},\"replacement\":\"{}\"}}",
+                        span_json(e.span),
+                        json_escape(&e.replacement)
+                    )
+                })
+                .collect();
+            out.push_str(&format!(
+                ",\"fix\":{{\"message\":\"{}\",\"edits\":[{}]}}",
+                json_escape(&fix.message),
+                edits.join(",")
+            ));
+        }
+        out.push('}');
+        out
+    }
+}
+
+fn span_json(span: Span) -> String {
+    format!("{{\"start\":{},\"end\":{}}}", span.start, span.end)
+}
+
+impl Edit {
+    /// Delete the text at `span`.
+    pub fn delete(span: Span) -> Self {
+        Self {
+            span,
+            replacement: String::new(),
+        }
+    }
+
+    /// Insert `text` at byte offset `at`.
+    pub fn insert(at: usize, text: impl Into<String>) -> Self {
+        Self {
+            span: Span { start: at, end: at },
+            replacement: text.into(),
+        }
     }
 }
 
@@ -281,7 +376,7 @@ impl fmt::Display for Diagnostic {
 
 impl std::error::Error for Diagnostic {}
 
-fn json_escape(s: &str) -> String {
+pub(crate) fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -406,14 +501,21 @@ impl Lexer<'_> {
     }
 
     fn error(&self, code: &'static str, message: String, start: usize) -> LexError {
-        LexError {
+        LexError::new(
             code,
             message,
-            span: Span {
+            Span {
                 start,
                 end: self.pos,
             },
-        }
+        )
+    }
+
+    /// Whether only spaces or a comment follow on the current line.
+    fn rest_of_line_is_blank(&self) -> bool {
+        let rest = self.src[self.pos..].split('\n').next().unwrap_or("");
+        let rest = rest.trim_start();
+        rest.is_empty() || rest.starts_with("//")
     }
 
     /// Skip whitespace and comments. Returns the byte offset of the first
@@ -547,11 +649,19 @@ impl Lexer<'_> {
             ('|', Some('|')) => (Punct::OrOr, true),
             ('.', Some('.')) => (Punct::DotDot, true),
             (';', _) => {
-                return Err(self.error(
+                let err = self.error(
                     "E0005",
                     "unexpected `;`: Oska has no semicolons, newlines end statements".into(),
                     start,
-                ));
+                );
+                // At the end of a line, deleting it is enough; between two
+                // statements a line break is needed instead.
+                return Err(if self.rest_of_line_is_blank() {
+                    let span = err.span;
+                    err.with_fix("remove `;`", vec![Edit::delete(span)])
+                } else {
+                    err
+                });
             }
             ('(', _) => (Punct::LParen, false),
             (')', _) => (Punct::RParen, false),
@@ -574,6 +684,7 @@ impl Lexer<'_> {
             ('>', _) => (Punct::Gt, false),
             ('|', _) => (Punct::Pipe, false),
             ('#', _) => (Punct::Hash, false),
+            ('@', _) => (Punct::At, false),
             _ => {
                 return Err(self.error("E0001", format!("unexpected character {c:?}"), start));
             }
@@ -635,11 +746,11 @@ mod tests {
 
     #[test]
     fn reports_unexpected_character_as_json() {
-        let err = lex("let x = @").expect_err("should fail");
+        let err = lex("let x = $").expect_err("should fail");
         assert_eq!(err.code, "E0001");
         assert_eq!(
             err.to_json(),
-            "{\"code\":\"E0001\",\"message\":\"unexpected character '@'\",\"span\":{\"start\":8,\"end\":9}}"
+            "{\"code\":\"E0001\",\"message\":\"unexpected character '$'\",\"span\":{\"start\":8,\"end\":9}}"
         );
     }
 

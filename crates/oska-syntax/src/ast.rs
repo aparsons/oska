@@ -83,6 +83,51 @@ pub enum ExprKind {
         handle: Ident,
         body: Block,
     },
+    /// `match scrutinee { arms }`, with one arm per line.
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
+}
+
+/// One `match` arm: `pattern if guard => body`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub guard: Option<Expr>,
+    pub body: Expr,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pattern {
+    pub kind: PatternKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PatternKind {
+    /// `_`.
+    Wildcard,
+    /// An integer (optionally negated), string, boolean, or `()` literal.
+    Literal(Expr),
+    /// A bare name, which binds the matched value.
+    Binding(Ident),
+    /// `Some(x)`, `Shape.Circle(radius: r)`, or a path alone such as
+    /// `Shape.Empty`. Mirrors call-style construction (ADR 0004).
+    Constructor {
+        path: Vec<Ident>,
+        args: Vec<PatternArg>,
+    },
+}
+
+/// A constructor pattern argument with an optional field label:
+/// `radius: r`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PatternArg {
+    pub label: Option<Ident>,
+    pub pattern: Pattern,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,8 +185,9 @@ pub struct Arg {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StrPart {
-    /// Literal text with escapes resolved.
-    Text(String),
+    /// Literal text with escapes resolved. The span covers the raw source
+    /// text, escapes included.
+    Text { value: String, span: Span },
     /// An interpolation hole: a name or field path, such as `{user.name}`.
     Hole { path: Vec<Ident>, span: Span },
 }
@@ -215,6 +261,213 @@ pub enum TypeKind {
     Fn {
         cap: bool,
         params: Vec<Type>,
-        ret: Option<Box<Type>>,
+        return_type: Option<Box<Type>>,
     },
+}
+
+/// A whole source file: its items in source order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Module {
+    pub items: Vec<Item>,
+    pub span: Span,
+}
+
+/// A top-level declaration. Modules contain only items: there is no
+/// module-level code that runs on load.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Item {
+    /// Declared `pub`.
+    pub public: bool,
+    /// Attributes written before the item, in source order.
+    pub attributes: Vec<Attribute>,
+    pub kind: ItemKind,
+    /// Covers the item's attributes, if any, through its end.
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ItemKind {
+    Fn(FnDecl),
+    Use(UseDecl),
+    Const(ConstDecl),
+    Test(TestDecl),
+    Struct(StructDecl),
+    Enum(EnumDecl),
+    Impl(ImplDecl),
+    Trait(TraitDecl),
+}
+
+/// `trait Name<generics> { methods }`. A method either ends after its
+/// signature or has a default body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraitDecl {
+    pub name: Ident,
+    pub generics: Vec<GenericParam>,
+    /// The methods, in source order. Each is an [`ItemKind::Fn`] item.
+    pub methods: Vec<Item>,
+}
+
+/// `impl<generics> Type { methods }`, or `impl<generics> Trait for Type
+/// { methods }` for a trait implementation. An `impl` block is never `pub`;
+/// each method carries its own visibility.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImplDecl {
+    pub generics: Vec<GenericParam>,
+    /// The implemented trait, for `impl Trait for Type`.
+    pub trait_ref: Option<Type>,
+    /// The type the methods belong to.
+    pub target: Type,
+    /// The methods, in source order. Each is an [`ItemKind::Fn`] item, so it
+    /// carries its own `pub` and attributes.
+    pub methods: Vec<Item>,
+}
+
+/// `test "a descriptive name" { body }`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestDecl {
+    /// The name as written: always an [`ExprKind::Str`] literal.
+    pub name: Expr,
+    pub body: Block,
+}
+
+/// `const NAME: T = expr`. The type and value are required.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConstDecl {
+    pub name: Ident,
+    pub ty: Type,
+    pub value: Expr,
+}
+
+/// `use a.b` imports the module `b`; `use a.b.{X, y}` imports the names
+/// `X` and `y` from `a.b`. There are no glob or renaming imports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UseDecl {
+    /// The dotted path, without the brace group.
+    pub path: Vec<Ident>,
+    /// The names in the brace group, or `None` without one.
+    pub names: Option<Vec<Ident>>,
+}
+
+/// `#[name]` or `#[name(args)]`. The set of names is closed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attribute {
+    pub name: Ident,
+    /// Empty when the attribute has no parentheses.
+    pub args: Vec<Arg>,
+    pub span: Span,
+}
+
+/// `fn name<generics>(params) -> ret requires ... ensures |r| ... { body }`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FnDecl {
+    pub name: Ident,
+    pub generics: Vec<GenericParam>,
+    /// The `self` or `var self` receiver, which can only come first.
+    pub receiver: Option<SelfParam>,
+    /// The parameters after the receiver.
+    pub params: Vec<Param>,
+    /// A missing return type means `()`.
+    pub return_type: Option<Type>,
+    /// `requires` clauses, in source order.
+    pub requires: Vec<Requires>,
+    /// `ensures |r| ...` clauses, in source order.
+    pub ensures: Vec<Ensures>,
+    /// Absent only for a trait method without a default body.
+    pub body: Option<Block>,
+}
+
+/// A method's receiver: `self`, or `var self` for a mutating method.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelfParam {
+    /// `true` for `var self`.
+    pub mutable: bool,
+    pub span: Span,
+}
+
+/// A generic parameter with its inline bounds: `T: Eq + Hash`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenericParam {
+    pub name: Ident,
+    /// Empty when the parameter is unbounded.
+    pub bounds: Vec<Type>,
+    pub span: Span,
+}
+
+/// A `requires cond` clause. The span covers the keyword and condition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Requires {
+    pub cond: Expr,
+    pub span: Span,
+}
+
+/// An `ensures |binding| cond` clause, where `binding` names the return
+/// value. The span covers the keyword and condition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ensures {
+    pub binding: Ident,
+    pub cond: Expr,
+    pub span: Span,
+}
+
+/// A function parameter, `name: Type`. Capabilities are ordinary
+/// parameters, so a function's authority can be read from these.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Param {
+    pub name: Ident,
+    pub ty: Type,
+    pub span: Span,
+}
+
+/// `struct Name { fields }` or `struct Name(fields)`, optionally `cap`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructDecl {
+    /// Declared `cap struct`: the type may hold capabilities.
+    pub cap: bool,
+    pub name: Ident,
+    /// Empty when the type is not generic.
+    pub generics: Vec<GenericParam>,
+    pub fields: Fields,
+}
+
+/// The fields of a struct or enum variant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fields {
+    /// `{ a: T, b: U }`. Every field has a name.
+    Named(Vec<Field>),
+    /// `(T, U)`. No field has a name.
+    Positional(Vec<Field>),
+    /// No fields at all, as in the variant `None`. Only enum variants
+    /// take this form.
+    Unit,
+}
+
+/// A declared field: `pub name: Type`, or just `Type` when positional.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Field {
+    /// Declared `pub`. Fields are private by default.
+    pub public: bool,
+    /// Present for named fields, absent for positional ones.
+    pub name: Option<Ident>,
+    pub ty: Type,
+    pub span: Span,
+}
+
+/// `enum Name { variants }`, optionally `cap`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumDecl {
+    /// Declared `cap enum`: the type may hold capabilities.
+    pub cap: bool,
+    pub name: Ident,
+    /// Empty when the type is not generic.
+    pub generics: Vec<GenericParam>,
+    pub variants: Vec<Variant>,
+}
+
+/// An enum variant: `Some(T)`, `Circle { radius: Int }`, or `None`. Its
+/// fields never carry `pub`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Variant {
+    pub name: Ident,
+    pub fields: Fields,
+    pub span: Span,
 }

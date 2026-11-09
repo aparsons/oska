@@ -1,4 +1,5 @@
-//! Recursive-descent parser for Oska expressions, statements, and types.
+//! Recursive-descent parser for Oska modules, expressions, statements, and
+//! types.
 //!
 //! Operator precedence, loosest first:
 //!
@@ -16,7 +17,7 @@
 //!
 //! Diagnostic codes:
 //!
-//! - `E0100`: expected an expression or type, found something else
+//! - `E0100`: expected an expression, type, or pattern, found something else
 //! - `E0101`: expected a specific token
 //! - `E0102`: string interpolation holds something other than a name or
 //!   field path
@@ -24,12 +25,56 @@
 //! - `E0104`: `let` or `var` without an initializer
 //! - `E0105`: chained comparison such as `a < b < c`
 //! - `E0106`: invalid assignment target
+//! - `E0107`: a statement at module level, where only items are allowed
+//! - `E0110`: `ensures` without a `|r|` binding for the return value
+//! - `E0111`: a `self` or `var self` receiver that is not the first parameter
+//! - `E0112`: `var` on a parameter other than the `self` receiver
+//! - `E0113`: a `where` clause; bounds are written inline
+//! - `E0120`: a missing comma between declared fields or enum variants
+//! - `E0130`: a glob import such as `use a.*`
+//! - `E0131`: a renaming import such as `use a.b as c`
+//! - `E0132`: an attribute name outside the fixed set (only `integration`)
+//! - `E0133`: `unsafe`, which v0 does not have
+//! - `E0140`: an or-pattern such as `A | B`, which v0 does not support
+//! - `E0141`: a range pattern such as `1..5`, which v0 does not support
+//! - `E0142`: an `@` binding such as `v @ Some(_)`, which v0 does not support
+//! - `E0143`: a comma between `match` arms
+//! - `E0150`: a `self` or `var self` receiver on a function outside an
+//!   `impl` or `trait` block
+//! - `E0151`: `pub` on an `impl` block; mark methods `pub` instead
+//! - `E0160`: a string pattern with an interpolation hole; patterns are
+//!   plain literals
+//! - `E0161`: a test name with an interpolation hole
+//! - `E0162`: `pub` on a trait method, which takes its visibility from the
+//!   trait
+//! - `E0163`: `pub test`; tests are never exported
+//! - `E0164`: `pub use`; re-exports are not defined in v0
+//! - `E0165`: `#[integration]` on an item other than `test`
+//!
+//! Diagnostics `E0005`, `E0112`, `E0120`, `E0143`, `E0151`, and
+//! `E0162`–`E0164` can carry a machine-applicable [`Fix`](crate::Fix).
 
 use crate::ast::{
-    Arg, BinaryOp, Block, ClosureParam, Expr, ExprKind, Ident, Stmt, StmtKind, StrPart, Type,
-    TypeKind, UnaryOp,
+    Arg, Attribute, BinaryOp, Block, ClosureParam, ConstDecl, Ensures, EnumDecl, Expr, ExprKind,
+    Field, Fields, FnDecl, GenericParam, Ident, ImplDecl, Item, ItemKind, MatchArm, Module, Param,
+    Pattern, PatternArg, PatternKind, Requires, SelfParam, Stmt, StmtKind, StrPart, StructDecl,
+    TestDecl, TraitDecl, Type, TypeKind, UnaryOp, UseDecl, Variant,
 };
-use crate::{lex, resolve_escape, Diagnostic, Keyword, Punct, Span, Token, TokenKind};
+use crate::{join, lex, resolve_escape, Diagnostic, Edit, Keyword, Punct, Span, Token, TokenKind};
+
+/// Parse a whole source file: a sequence of items separated by line
+/// breaks. Stops at the first error.
+pub fn parse_module(src: &str) -> Result<Module, Diagnostic> {
+    let mut parser = Parser::new(src)?;
+    let items = parser.items()?;
+    Ok(Module {
+        items,
+        span: Span {
+            start: 0,
+            end: src.len(),
+        },
+    })
+}
 
 /// Parse a single expression that spans the whole input.
 pub fn parse_expr(src: &str) -> Result<Expr, Diagnostic> {
@@ -53,6 +98,48 @@ pub fn parse_type(src: &str) -> Result<Type, Diagnostic> {
     Ok(ty)
 }
 
+/// The closed set of attribute names. There are no user macros
+/// (ADR 0003), so any other name is a typo or unsupported.
+const ATTRIBUTES: &[&str] = &["integration"];
+
+/// Where a function is declared, which decides whether it may take a
+/// receiver and whether it may omit its body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FnContext {
+    /// A module-level function: no receiver, body required.
+    Free,
+    /// A method in an `impl` block: body required.
+    Impl,
+    /// A method in a `trait`: the body is an optional default.
+    Trait,
+}
+
+/// Whether a `struct` or `enum` was declared with `cap`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CapMarker {
+    Plain,
+    Cap,
+}
+
+/// Whether declared fields may each be marked `pub`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FieldPub {
+    /// Struct fields: each has its own visibility.
+    Allowed,
+    /// Enum variant fields: visible wherever the enum is.
+    Forbidden,
+}
+
+/// The attributes and optional `pub` written before an item or method.
+struct ItemPrefix {
+    /// Where the item starts: its first attribute, else `pub`, else its
+    /// keyword.
+    start: Span,
+    attributes: Vec<Attribute>,
+    /// The `pub` keyword, if written.
+    pub_span: Option<Span>,
+}
+
 struct Parser<'a> {
     src: &'a str,
     tokens: Vec<Token>,
@@ -62,11 +149,7 @@ struct Parser<'a> {
 }
 
 fn error(code: &'static str, message: impl Into<String>, span: Span) -> Diagnostic {
-    Diagnostic {
-        code,
-        message: message.into(),
-        span,
-    }
+    Diagnostic::new(code, message, span)
 }
 
 fn bare_block(span: Span) -> Diagnostic {
@@ -91,11 +174,10 @@ fn describe(kind: Option<&TokenKind>) -> String {
     }
 }
 
-fn join(start: Span, end: Span) -> Span {
-    Span {
-        start: start.start,
-        end: end.end,
-    }
+/// `a.b.c` for a path of identifiers.
+fn dotted(path: &[Ident]) -> String {
+    let names: Vec<&str> = path.iter().map(|i| i.name.as_str()).collect();
+    names.join(".")
 }
 
 fn comparison_op(kind: Option<&TokenKind>) -> Option<BinaryOp> {
@@ -115,9 +197,24 @@ fn comparison_op(kind: Option<&TokenKind>) -> Option<BinaryOp> {
 
 impl<'a> Parser<'a> {
     fn new(src: &'a str) -> Result<Self, Diagnostic> {
+        let tokens = lex(src)?;
+        // `unsafe` is reserved but has no meaning in v0, wherever it is
+        // written, so reject it before parsing.
+        if let Some(token) = tokens
+            .iter()
+            .find(|t| t.kind == TokenKind::Keyword(Keyword::Unsafe))
+        {
+            return Err(error(
+                "E0133",
+                "v0 has no `unsafe`: the safety baseline cannot be suspended; \
+                 remove `unsafe` and write the code with safe operations and \
+                 capabilities passed as parameters",
+                token.span,
+            ));
+        }
         Ok(Self {
             src,
-            tokens: lex(src)?,
+            tokens,
             pos: 0,
             prev_end: 0,
         })
@@ -216,10 +313,694 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Attach a fix to `err` that deletes the keyword `word` at `err.span`,
+    /// with the whitespace up to the next token.
+    fn remove_word(&self, err: Diagnostic, word: &str) -> Diagnostic {
+        let end = self
+            .tokens
+            .iter()
+            .find(|t| t.span.start >= err.span.end)
+            .map_or(err.span.end, |t| t.span.start);
+        let span = Span {
+            start: err.span.start,
+            end,
+        };
+        err.with_fix(format!("remove `{word}`"), vec![Edit::delete(span)])
+    }
+
     fn span_from(&self, start: Span) -> Span {
         Span {
             start: start.start,
             end: self.prev_end,
+        }
+    }
+
+    // ----- items -----
+
+    fn skip_newlines(&mut self) {
+        while self.peek() == Some(&TokenKind::Newline) {
+            self.bump();
+        }
+    }
+
+    /// Whether the next token ends the current line or block: a line
+    /// break, a `}`, or the end of input.
+    fn at_line_end(&self) -> bool {
+        matches!(
+            self.peek(),
+            None | Some(TokenKind::Newline | TokenKind::Punct(Punct::RBrace))
+        )
+    }
+
+    /// Consume an optional `pub`, returning its span.
+    fn eat_pub(&mut self) -> Option<Span> {
+        let span = self.peek_span();
+        self.at_kw(Keyword::Pub).then(|| {
+            self.bump();
+            span
+        })
+    }
+
+    /// Attributes, each on the item's line or a line above, then an
+    /// optional `pub`.
+    fn item_prefix(&mut self) -> Result<ItemPrefix, Diagnostic> {
+        let start = self.peek_span();
+        let mut attributes = Vec::new();
+        while self.at_punct(Punct::Hash) {
+            attributes.push(self.attribute()?);
+            // An attribute may sit on its own line above the item.
+            self.skip_newlines();
+        }
+        let pub_span = self.eat_pub();
+        Ok(ItemPrefix {
+            start,
+            attributes,
+            pub_span,
+        })
+    }
+
+    /// Items separated by line breaks, up to end of input.
+    fn items(&mut self) -> Result<Vec<Item>, Diagnostic> {
+        let mut items = Vec::new();
+        loop {
+            self.skip_newlines();
+            if self.peek().is_none() {
+                return Ok(items);
+            }
+            items.push(self.item()?);
+            if !self.at_line_end() {
+                return Err(self.expected("a line break after the item"));
+            }
+        }
+    }
+
+    fn item(&mut self) -> Result<Item, Diagnostic> {
+        let prefix = self.item_prefix()?;
+        self.check_attributes(&prefix.attributes)?;
+        if let Some(pub_span) = prefix.pub_span {
+            let rejected = match self.peek() {
+                Some(TokenKind::Keyword(Keyword::Impl)) => Some((
+                    "E0151",
+                    "an `impl` block cannot be `pub`; remove `pub` here and mark each \
+                     method that should be public as `pub fn`",
+                )),
+                Some(TokenKind::Keyword(Keyword::Test)) => Some((
+                    "E0163",
+                    "a `test` cannot be `pub`, because tests are run by the test \
+                     runner, never referenced by name; remove `pub`",
+                )),
+                Some(TokenKind::Keyword(Keyword::Use)) => Some((
+                    "E0164",
+                    "a `use` cannot be `pub`: re-exports are not defined in v0, so \
+                     an import is visible only in its own module; remove `pub`, \
+                     and import the name from its defining module where it is needed",
+                )),
+                _ => None,
+            };
+            if let Some((code, message)) = rejected {
+                return Err(self.remove_word(error(code, message, pub_span), "pub"));
+            }
+        }
+        let kind = match self.peek() {
+            Some(TokenKind::Keyword(Keyword::Fn)) => ItemKind::Fn(self.fn_decl(FnContext::Free)?),
+            Some(TokenKind::Keyword(Keyword::Use)) => ItemKind::Use(self.use_decl()?),
+            Some(TokenKind::Keyword(Keyword::Const)) => ItemKind::Const(self.const_decl()?),
+            Some(TokenKind::Keyword(Keyword::Test)) => ItemKind::Test(self.test_decl()?),
+            Some(TokenKind::Keyword(Keyword::Struct)) => {
+                ItemKind::Struct(self.struct_decl(CapMarker::Plain)?)
+            }
+            Some(TokenKind::Keyword(Keyword::Enum)) => {
+                ItemKind::Enum(self.enum_decl(CapMarker::Plain)?)
+            }
+            Some(TokenKind::Keyword(Keyword::Impl)) => ItemKind::Impl(self.impl_decl()?),
+            Some(TokenKind::Keyword(Keyword::Trait)) => ItemKind::Trait(self.trait_decl()?),
+            Some(TokenKind::Keyword(Keyword::Cap)) => {
+                self.bump();
+                match self.peek() {
+                    Some(TokenKind::Keyword(Keyword::Struct)) => {
+                        ItemKind::Struct(self.struct_decl(CapMarker::Cap)?)
+                    }
+                    Some(TokenKind::Keyword(Keyword::Enum)) => {
+                        ItemKind::Enum(self.enum_decl(CapMarker::Cap)?)
+                    }
+                    _ => return Err(self.expected("`struct` or `enum` after `cap`")),
+                }
+            }
+            _ => return Err(self.not_an_item()),
+        };
+        Ok(Item {
+            public: prefix.pub_span.is_some(),
+            attributes: prefix.attributes,
+            kind,
+            span: self.span_from(prefix.start),
+        })
+    }
+
+    /// Reject `#[integration]` unless the next token starts a `test`.
+    fn check_attributes(&self, attributes: &[Attribute]) -> Result<(), Diagnostic> {
+        if self.at_kw(Keyword::Test) {
+            return Ok(());
+        }
+        match attributes.iter().find(|a| a.name.name == "integration") {
+            Some(attribute) => Err(error(
+                "E0165",
+                "`#[integration]` marks an integration test, so it can only be \
+                 written on a `test` item; remove it here",
+                attribute.span,
+            )),
+            None => Ok(()),
+        }
+    }
+
+    /// `#[name]` or `#[name(args)]`.
+    fn attribute(&mut self) -> Result<Attribute, Diagnostic> {
+        let start = self.expect_punct(Punct::Hash)?;
+        self.expect_punct(Punct::LBracket)?;
+        let name = self.expect_ident("an attribute name")?;
+        if !ATTRIBUTES.contains(&name.name.as_str()) {
+            let known: Vec<String> = ATTRIBUTES.iter().map(|a| format!("`#[{a}]`")).collect();
+            return Err(error(
+                "E0132",
+                format!(
+                    "unknown attribute `{}`; attribute names come from a fixed set, \
+                     currently only {}",
+                    name.name,
+                    known.join(", ")
+                ),
+                name.span,
+            ));
+        }
+        let args = if self.at_punct(Punct::LParen) {
+            self.args()?
+        } else {
+            Vec::new()
+        };
+        self.expect_punct(Punct::RBracket)?;
+        Ok(Attribute {
+            name,
+            args,
+            span: self.span_from(start),
+        })
+    }
+
+    /// The error for something at module level that is not an item. If it
+    /// parses as a statement, the error covers that whole statement.
+    fn not_an_item(&mut self) -> Diagnostic {
+        let expected = self.expected("an item such as `fn`");
+        match self.stmt() {
+            Ok(stmt) => error(
+                "E0107",
+                "statements are not allowed at module level, because no code runs \
+                 when a module loads; move this into a function such as `main`, \
+                 or declare a constant with `const`",
+                stmt.span,
+            ),
+            Err(_) => expected,
+        }
+    }
+
+    /// `use a.b` or `use a.b.{X, y}`.
+    fn use_decl(&mut self) -> Result<UseDecl, Diagnostic> {
+        self.expect_kw(Keyword::Use)?;
+        let mut path = vec![self.use_segment(&[], "a module path")?];
+        let mut names = None;
+        while self.eat_punct(Punct::Dot) {
+            if self.eat_punct(Punct::LBrace) {
+                // Line breaks inside the group are not terminators.
+                let mut group = Vec::new();
+                self.skip_newlines();
+                while !self.at_punct(Punct::RBrace) {
+                    group.push(self.use_segment(&path, "a name to import")?);
+                    self.skip_newlines();
+                    if !self.eat_punct(Punct::Comma) {
+                        break;
+                    }
+                    self.skip_newlines();
+                }
+                self.expect_punct(Punct::RBrace)?;
+                names = Some(group);
+                break;
+            }
+            let segment = self.use_segment(&path, "a module path segment or `{`")?;
+            path.push(segment);
+        }
+        Ok(UseDecl { path, names })
+    }
+
+    /// A name in a `use` path or brace group, rejecting a glob `*` and a
+    /// renaming `as`. `path` is the path before this name.
+    fn use_segment(&mut self, path: &[Ident], what: &str) -> Result<Ident, Diagnostic> {
+        if self.at_punct(Punct::Star) {
+            let example = match path {
+                [] => "`use module.{Name, other}`".to_string(),
+                _ => format!("`use {}.{{Name, other}}`", dotted(path)),
+            };
+            return Err(error(
+                "E0130",
+                format!(
+                    "glob imports are not allowed, because every imported name must be \
+                     written out; list the names you need, as in {example}"
+                ),
+                self.peek_span(),
+            ));
+        }
+        let name = self.expect_ident(what)?;
+        if matches!(self.peek(), Some(TokenKind::Ident(word)) if word == "as") {
+            let start = self.peek_span();
+            self.bump();
+            if matches!(self.peek(), Some(TokenKind::Ident(_))) {
+                self.bump();
+            }
+            let fix = match path.last() {
+                None => format!("import it with `use {0}` and write `{0}`", name.name),
+                Some(module) => format!(
+                    "import the module with `use {}` and write `{}.{}`",
+                    dotted(path),
+                    module.name,
+                    name.name
+                ),
+            };
+            return Err(error(
+                "E0131",
+                format!(
+                    "renaming imports are not allowed, so every name stays traceable to \
+                     its source; {fix}"
+                ),
+                self.span_from(start),
+            ));
+        }
+        Ok(name)
+    }
+
+    /// `const NAME: T = expr`.
+    fn const_decl(&mut self) -> Result<ConstDecl, Diagnostic> {
+        self.expect_kw(Keyword::Const)?;
+        let name = self.expect_ident("a constant name")?;
+        self.expect_punct(Punct::Colon)?;
+        let ty = self.ty()?;
+        self.expect_punct(Punct::Eq)?;
+        let value = self.expr()?;
+        Ok(ConstDecl { name, ty, value })
+    }
+
+    /// `test "name" { body }`.
+    fn test_decl(&mut self) -> Result<TestDecl, Diagnostic> {
+        self.expect_kw(Keyword::Test)?;
+        let span = self.peek_span();
+        if !matches!(self.peek(), Some(TokenKind::Str(_))) {
+            return Err(self.expected("a test name as a string, as in `test \"adds\" { ... }`"));
+        }
+        self.bump();
+        let parts = self.str_parts(span)?;
+        if let Some(hole) = parts.iter().find_map(|part| match part {
+            StrPart::Hole { span, .. } => Some(*span),
+            StrPart::Text { .. } => None,
+        }) {
+            return Err(error(
+                "E0161",
+                "a test name cannot interpolate, because it must be known without \
+                 running the test; write the name as plain text, or write `\\{` \
+                 for a literal brace",
+                hole,
+            ));
+        }
+        let name = Expr {
+            kind: ExprKind::Str(parts),
+            span,
+        };
+        let body = self.block()?;
+        Ok(TestDecl { name, body })
+    }
+
+    /// `impl<generics> Type { methods }` or `impl<generics> Trait for Type
+    /// { methods }`.
+    fn impl_decl(&mut self) -> Result<ImplDecl, Diagnostic> {
+        self.expect_kw(Keyword::Impl)?;
+        let generics = self.generics()?;
+        let first = self.ty()?;
+        let (trait_ref, target) = if self.at_kw(Keyword::For) {
+            self.bump();
+            (Some(first), self.ty()?)
+        } else {
+            (None, first)
+        };
+        let methods = self.methods(FnContext::Impl)?;
+        Ok(ImplDecl {
+            generics,
+            trait_ref,
+            target,
+            methods,
+        })
+    }
+
+    /// `trait Name<generics> { methods }`.
+    fn trait_decl(&mut self) -> Result<TraitDecl, Diagnostic> {
+        self.expect_kw(Keyword::Trait)?;
+        let name = self.expect_ident("a trait name")?;
+        let generics = self.generics()?;
+        let methods = self.methods(FnContext::Trait)?;
+        Ok(TraitDecl {
+            name,
+            generics,
+            methods,
+        })
+    }
+
+    /// `{ methods }` of an `impl` or `trait`: `fn` items, each optionally
+    /// `pub` and with attributes, separated by line breaks.
+    fn methods(&mut self, context: FnContext) -> Result<Vec<Item>, Diagnostic> {
+        self.expect_punct(Punct::LBrace)?;
+        let mut methods = Vec::new();
+        loop {
+            self.skip_newlines();
+            if self.eat_punct(Punct::RBrace) {
+                return Ok(methods);
+            }
+            let prefix = self.item_prefix()?;
+            self.check_attributes(&prefix.attributes)?;
+            if !self.at_kw(Keyword::Fn) {
+                return Err(self.expected("a method declared with `fn`"));
+            }
+            if let (FnContext::Trait, Some(pub_span)) = (context, prefix.pub_span) {
+                return Err(self.remove_word(
+                    error(
+                        "E0162",
+                        "a trait method cannot be `pub`: trait methods take their \
+                         visibility from the trait; remove `pub`, and mark the \
+                         trait `pub` to export its methods",
+                        pub_span,
+                    ),
+                    "pub",
+                ));
+            }
+            let decl = self.fn_decl(context)?;
+            methods.push(Item {
+                public: prefix.pub_span.is_some(),
+                attributes: prefix.attributes,
+                kind: ItemKind::Fn(decl),
+                span: self.span_from(prefix.start),
+            });
+            if !self.at_line_end() {
+                return Err(self.expected("a line break after the method"));
+            }
+        }
+    }
+
+    fn fn_decl(&mut self, context: FnContext) -> Result<FnDecl, Diagnostic> {
+        self.expect_kw(Keyword::Fn)?;
+        let name = self.expect_ident("a function name")?;
+        let generics = self.generics()?;
+        self.expect_punct(Punct::LParen)?;
+        let receiver = self.receiver(context)?;
+        if receiver.is_some() && !self.at_punct(Punct::RParen) {
+            self.expect_punct(Punct::Comma)?;
+        }
+        let mut params = Vec::new();
+        while !self.at_punct(Punct::RParen) {
+            if let Some(late) = self.receiver(context)? {
+                return Err(error(
+                    "E0111",
+                    "the receiver must be the first parameter; \
+                     move it to the start of the parameter list",
+                    late.span,
+                ));
+            }
+            if self.at_kw(Keyword::Var) {
+                return Err(self.remove_word(
+                    error(
+                        "E0112",
+                        "only the `self` receiver can be `var`; remove `var`, \
+                         and bind a mutable copy in the body with `var name = name`",
+                        self.peek_span(),
+                    ),
+                    "var",
+                ));
+            }
+            let name = self.expect_ident("a parameter name")?;
+            self.expect_punct(Punct::Colon)?;
+            let ty = self.ty()?;
+            params.push(Param {
+                span: join(name.span, ty.span),
+                name,
+                ty,
+            });
+            if !self.eat_punct(Punct::Comma) {
+                break;
+            }
+        }
+        self.expect_punct(Punct::RParen)?;
+        let return_type = if self.eat_punct(Punct::Arrow) {
+            Some(self.ty()?)
+        } else {
+            None
+        };
+        let mut requires = Vec::new();
+        let mut ensures = Vec::new();
+        loop {
+            let start = self.peek_span();
+            if self.at_kw(Keyword::Requires) {
+                self.bump();
+                let cond = self.expr()?;
+                requires.push(Requires {
+                    cond,
+                    span: self.span_from(start),
+                });
+            } else if self.at_kw(Keyword::Ensures) {
+                self.bump();
+                if !self.eat_punct(Punct::Pipe) {
+                    return Err(error(
+                        "E0110",
+                        "`ensures` must name the return value; \
+                         write `ensures |r| cond`, using `r` for the result",
+                        start,
+                    ));
+                }
+                let binding = self.expect_ident("a name for the return value")?;
+                self.expect_punct(Punct::Pipe)?;
+                let cond = self.expr()?;
+                ensures.push(Ensures {
+                    binding,
+                    cond,
+                    span: self.span_from(start),
+                });
+            } else {
+                break;
+            }
+        }
+        if matches!(self.peek(), Some(TokenKind::Ident(word)) if word == "where") {
+            return Err(self.where_clause());
+        }
+        // Only a trait method may stop after its signature.
+        let body = if context == FnContext::Trait && self.at_line_end() {
+            None
+        } else {
+            Some(self.block()?)
+        };
+        Ok(FnDecl {
+            name,
+            generics,
+            receiver,
+            params,
+            return_type,
+            requires,
+            ensures,
+            body,
+        })
+    }
+
+    /// The error for a `where` clause, covering it up to the body's `{`.
+    fn where_clause(&mut self) -> Diagnostic {
+        let start = self.peek_span();
+        while !matches!(
+            self.peek(),
+            None | Some(TokenKind::Newline | TokenKind::Punct(Punct::LBrace))
+        ) {
+            self.bump();
+        }
+        error(
+            "E0113",
+            "`where` clauses are not supported; write bounds inline on the \
+             generic parameter, as in `fn f<T: Eq + Hash>(x: T)`",
+            self.span_from(start),
+        )
+    }
+
+    /// An optional `self` or `var self` receiver. Only methods take one.
+    fn receiver(&mut self, context: FnContext) -> Result<Option<SelfParam>, Diagnostic> {
+        let start = self.peek_span();
+        let mutable = self.at_kw(Keyword::Var)
+            && self.peek_at(1) == Some(&TokenKind::Keyword(Keyword::SelfValue));
+        if mutable {
+            self.bump();
+        }
+        if !self.at_kw(Keyword::SelfValue) {
+            return Ok(None);
+        }
+        self.bump();
+        let span = self.span_from(start);
+        if context == FnContext::Free {
+            return Err(error(
+                "E0150",
+                "a `self` receiver is only allowed on methods in `impl` or `trait` \
+                 blocks; move this function into `impl Type { ... }`, or replace \
+                 the receiver with an ordinary parameter such as `value: Type`",
+                span,
+            ));
+        }
+        Ok(Some(SelfParam { mutable, span }))
+    }
+
+    /// Optional generic parameters with inline bounds: `<T: Eq + Hash, U>`.
+    fn generics(&mut self) -> Result<Vec<GenericParam>, Diagnostic> {
+        let mut generics = Vec::new();
+        if !self.eat_punct(Punct::Lt) {
+            return Ok(generics);
+        }
+        while !self.at_punct(Punct::Gt) {
+            let name = self.expect_ident("a generic parameter name")?;
+            let mut bounds = Vec::new();
+            if self.eat_punct(Punct::Colon) {
+                bounds.push(self.ty()?);
+                while self.eat_punct(Punct::Plus) {
+                    bounds.push(self.ty()?);
+                }
+            }
+            generics.push(GenericParam {
+                span: self.span_from(name.span),
+                name,
+                bounds,
+            });
+            if !self.eat_punct(Punct::Comma) {
+                break;
+            }
+        }
+        self.expect_punct(Punct::Gt)?;
+        Ok(generics)
+    }
+
+    /// `struct Name { fields }` or `struct Name(fields)`, after any `cap`.
+    fn struct_decl(&mut self, cap: CapMarker) -> Result<StructDecl, Diagnostic> {
+        self.expect_kw(Keyword::Struct)?;
+        let name = self.expect_ident("a struct name")?;
+        let generics = self.generics()?;
+        let fields = if self.at_punct(Punct::LParen) {
+            Fields::Positional(self.positional_fields(FieldPub::Allowed)?)
+        } else if self.at_punct(Punct::LBrace) {
+            Fields::Named(self.named_fields(FieldPub::Allowed)?)
+        } else {
+            return Err(self.expected("`{` or `(` after the struct name"));
+        };
+        Ok(StructDecl {
+            cap: cap == CapMarker::Cap,
+            name,
+            generics,
+            fields,
+        })
+    }
+
+    /// `enum Name { variants }`, after any `cap`.
+    fn enum_decl(&mut self, cap: CapMarker) -> Result<EnumDecl, Diagnostic> {
+        self.expect_kw(Keyword::Enum)?;
+        let name = self.expect_ident("an enum name")?;
+        let generics = self.generics()?;
+        if !self.at_punct(Punct::LBrace) {
+            return Err(self.expected("`{` after the enum name"));
+        }
+        self.bump();
+        let variants = self.comma_list(Punct::RBrace, |p| {
+            let name = p.expect_ident("a variant name")?;
+            let fields = if p.at_punct(Punct::LParen) {
+                Fields::Positional(p.positional_fields(FieldPub::Forbidden)?)
+            } else if p.at_punct(Punct::LBrace) {
+                Fields::Named(p.named_fields(FieldPub::Forbidden)?)
+            } else {
+                Fields::Unit
+            };
+            Ok(Variant {
+                span: p.span_from(name.span),
+                name,
+                fields,
+            })
+        })?;
+        Ok(EnumDecl {
+            cap: cap == CapMarker::Cap,
+            name,
+            generics,
+            variants,
+        })
+    }
+
+    /// The error for two declared entries with no comma between them. The
+    /// span is empty, at `end`, where the comma belongs.
+    fn missing_comma(&self, end: usize, close: Punct) -> Diagnostic {
+        error(
+            "E0120",
+            format!(
+                "expected `,` or `{}`, found {}; add a comma after this entry, \
+                 because fields and variants are separated by commas, even on \
+                 separate lines",
+                close.text(),
+                describe(self.peek()),
+            ),
+            Span { start: end, end },
+        )
+        .with_fix("insert `,`", vec![Edit::insert(end, ",")])
+    }
+
+    /// `{ a: T, pub b: U }`.
+    fn named_fields(&mut self, field_pub: FieldPub) -> Result<Vec<Field>, Diagnostic> {
+        self.expect_punct(Punct::LBrace)?;
+        self.comma_list(Punct::RBrace, |p| {
+            let start = p.peek_span();
+            let public = field_pub == FieldPub::Allowed && p.eat_pub().is_some();
+            let name = p.expect_ident("a field name")?;
+            p.expect_punct(Punct::Colon)?;
+            let ty = p.ty()?;
+            Ok(Field {
+                public,
+                name: Some(name),
+                ty,
+                span: p.span_from(start),
+            })
+        })
+    }
+
+    /// `(T, pub U)`.
+    fn positional_fields(&mut self, field_pub: FieldPub) -> Result<Vec<Field>, Diagnostic> {
+        self.expect_punct(Punct::LParen)?;
+        self.comma_list(Punct::RParen, |p| {
+            let start = p.peek_span();
+            let public = field_pub == FieldPub::Allowed && p.eat_pub().is_some();
+            let ty = p.ty()?;
+            Ok(Field {
+                public,
+                name: None,
+                ty,
+                span: p.span_from(start),
+            })
+        })
+    }
+
+    /// Declared fields or variants up to `close`, which this consumes.
+    /// Entries must be separated by commas, even across lines; a trailing
+    /// comma is allowed.
+    fn comma_list<T>(
+        &mut self,
+        close: Punct,
+        mut entry: impl FnMut(&mut Self) -> Result<T, Diagnostic>,
+    ) -> Result<Vec<T>, Diagnostic> {
+        let mut entries = Vec::new();
+        loop {
+            self.skip_newlines();
+            if self.eat_punct(close) {
+                return Ok(entries);
+            }
+            entries.push(entry(self)?);
+            let end = self.prev_end;
+            self.skip_newlines();
+            if !self.eat_punct(Punct::Comma) && !self.at_punct(close) {
+                return Err(self.missing_comma(end, close));
+            }
         }
     }
 
@@ -606,6 +1387,7 @@ impl<'a> Parser<'a> {
             Some(TokenKind::Punct(Punct::LBrace)) => ExprKind::Block(self.block()?),
             Some(TokenKind::Punct(Punct::Pipe | Punct::OrOr)) => self.closure()?,
             Some(TokenKind::Keyword(Keyword::If)) => self.if_expr()?,
+            Some(TokenKind::Keyword(Keyword::Match)) => self.match_expr()?,
             Some(TokenKind::Keyword(Keyword::Scope)) => {
                 self.bump();
                 self.expect_punct(Punct::Pipe)?;
@@ -679,6 +1461,215 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn match_expr(&mut self) -> Result<ExprKind, Diagnostic> {
+        self.expect_kw(Keyword::Match)?;
+        let scrutinee = self.expr()?;
+        self.expect_punct(Punct::LBrace)?;
+        let mut arms = Vec::new();
+        loop {
+            self.skip_newlines();
+            if self.at_punct(Punct::RBrace) || self.peek().is_none() {
+                break;
+            }
+            arms.push(self.match_arm()?);
+            if self.at_line_end() {
+                continue;
+            }
+            match self.peek() {
+                Some(TokenKind::Punct(Punct::Comma)) => {
+                    let comma = self.peek_span();
+                    let err = error(
+                        "E0143",
+                        "match arms are separated by line breaks, not commas; \
+                         remove the `,` and put each arm on its own line",
+                        comma,
+                    );
+                    // Deleting the comma is enough only when the next arm
+                    // already starts on its own line.
+                    let next = self.tokens.get(self.pos + 1);
+                    let gap_end = next.map_or(self.src.len(), |t| t.span.start);
+                    let own_line = self.src[comma.end..gap_end].contains('\n')
+                        || matches!(
+                            next,
+                            None | Some(Token {
+                                kind: TokenKind::Punct(Punct::RBrace),
+                                ..
+                            })
+                        );
+                    return Err(if own_line {
+                        err.with_fix("remove `,`", vec![Edit::delete(comma)])
+                    } else {
+                        err
+                    });
+                }
+                _ => return Err(self.expected("a line break or `}` after the match arm")),
+            }
+        }
+        self.expect_punct(Punct::RBrace)?;
+        Ok(ExprKind::Match {
+            scrutinee: Box::new(scrutinee),
+            arms,
+        })
+    }
+
+    fn match_arm(&mut self) -> Result<MatchArm, Diagnostic> {
+        let pattern = self.pattern()?;
+        let guard = if self.at_kw(Keyword::If) {
+            self.bump();
+            Some(self.expr()?)
+        } else {
+            None
+        };
+        self.expect_punct(Punct::FatArrow)?;
+        let body = self.expr()?;
+        Ok(MatchArm {
+            span: join(pattern.span, body.span),
+            pattern,
+            guard,
+            body,
+        })
+    }
+
+    // ----- patterns -----
+
+    /// A pattern. Or-patterns, range patterns, and `@` bindings are
+    /// rejected here, each with its own code.
+    fn pattern(&mut self) -> Result<Pattern, Diagnostic> {
+        let atom = self.pattern_atom()?;
+        let (code, form, hint) = match self.peek() {
+            Some(TokenKind::Punct(Punct::Pipe | Punct::OrOr)) => (
+                "E0140",
+                "or-patterns are",
+                "write a separate arm for each alternative",
+            ),
+            Some(TokenKind::Punct(Punct::DotDot)) => (
+                "E0141",
+                "range patterns are",
+                "bind the value and test it in a guard, e.g. `n if n >= 1 && n < 5 => ...`",
+            ),
+            Some(TokenKind::Punct(Punct::At)) => (
+                "E0142",
+                "`@` bindings are",
+                "bind the value with a plain name, or bind the fields you need \
+                 inside the constructor pattern",
+            ),
+            _ => return Ok(atom),
+        };
+        // Cover the whole unsupported form, `lhs op rhs`, when the right-hand
+        // side is itself a pattern; otherwise stop at the operator.
+        let op = self.peek_span();
+        self.bump();
+        let end = self.pattern_atom().map_or(op, |rhs| rhs.span);
+        Err(error(
+            code,
+            format!("{form} not supported in v0; {hint}"),
+            join(atom.span, end),
+        ))
+    }
+
+    /// A pattern without any trailing operator.
+    fn pattern_atom(&mut self) -> Result<Pattern, Diagnostic> {
+        let start = self.peek_span();
+        let kind = match self.peek() {
+            Some(TokenKind::Ident(name)) if name == "_" => {
+                self.bump();
+                PatternKind::Wildcard
+            }
+            Some(
+                TokenKind::Int(_)
+                | TokenKind::Str(_)
+                | TokenKind::Keyword(Keyword::True | Keyword::False),
+            ) => {
+                let literal = self.primary()?;
+                if let ExprKind::Str(parts) = &literal.kind {
+                    if parts.iter().any(|p| matches!(p, StrPart::Hole { .. })) {
+                        return Err(error(
+                            "E0160",
+                            "a string pattern must be a plain literal, without \
+                             interpolation; match a fixed string, or bind the \
+                             value and compare it in a guard, as in \
+                             `s if s == greeting => ...`",
+                            literal.span,
+                        ));
+                    }
+                }
+                PatternKind::Literal(literal)
+            }
+            Some(TokenKind::Punct(Punct::Minus))
+                if matches!(self.peek_at(1), Some(TokenKind::Int(_))) =>
+            {
+                PatternKind::Literal(self.unary()?)
+            }
+            Some(TokenKind::Punct(Punct::LParen))
+                if self.peek_at(1) == Some(&TokenKind::Punct(Punct::RParen)) =>
+            {
+                PatternKind::Literal(self.primary()?)
+            }
+            Some(TokenKind::Ident(_)) => {
+                let mut path = vec![self.expect_ident("a pattern")?];
+                while self.eat_punct(Punct::Dot) {
+                    path.push(self.expect_ident("a name after `.`")?);
+                }
+                if self.at_punct(Punct::LParen) {
+                    PatternKind::Constructor {
+                        path,
+                        args: self.pattern_args()?,
+                    }
+                } else if path.len() == 1 {
+                    // A bare name always binds. Name resolution decides
+                    // whether it instead names a unit variant such as `None`.
+                    PatternKind::Binding(path.remove(0))
+                } else {
+                    PatternKind::Constructor {
+                        path,
+                        args: Vec::new(),
+                    }
+                }
+            }
+            other => {
+                return Err(error(
+                    "E0100",
+                    format!("expected a pattern, found {}", describe(other)),
+                    start,
+                ));
+            }
+        };
+        Ok(Pattern {
+            kind,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `(args)` of a constructor pattern.
+    fn pattern_args(&mut self) -> Result<Vec<PatternArg>, Diagnostic> {
+        self.expect_punct(Punct::LParen)?;
+        let mut args = Vec::new();
+        while !self.at_punct(Punct::RParen) {
+            let label = match (self.peek(), self.peek_at(1)) {
+                (Some(TokenKind::Ident(_)), Some(TokenKind::Punct(Punct::Colon))) => {
+                    let label = self.expect_ident("a field label")?;
+                    self.bump();
+                    Some(label)
+                }
+                _ => None,
+            };
+            let pattern = self.pattern()?;
+            args.push(PatternArg {
+                span: join(
+                    label.as_ref().map_or(pattern.span, |l| l.span),
+                    pattern.span,
+                ),
+                label,
+                pattern,
+            });
+            if !self.eat_punct(Punct::Comma) {
+                break;
+            }
+        }
+        self.expect_punct(Punct::RParen)?;
+        Ok(args)
+    }
+
     /// Split a string literal into text and interpolation holes. The token
     /// value has escapes resolved, which loses the difference between `\{`
     /// and `{`, so this re-reads the raw source.
@@ -687,6 +1678,8 @@ impl<'a> Parser<'a> {
         let raw = &self.src[base..span.end - 1];
         let mut parts = Vec::new();
         let mut text = String::new();
+        // Source offset where the pending `text` starts.
+        let mut text_start = base;
         let mut chars = raw.char_indices();
         while let Some((i, c)) = chars.next() {
             match c {
@@ -724,8 +1717,15 @@ impl<'a> Parser<'a> {
                         )
                     })?;
                     if !text.is_empty() {
-                        parts.push(StrPart::Text(std::mem::take(&mut text)));
+                        parts.push(StrPart::Text {
+                            value: std::mem::take(&mut text),
+                            span: Span {
+                                start: text_start,
+                                end: hole_start,
+                            },
+                        });
                     }
+                    text_start = hole_span.end;
                     parts.push(StrPart::Hole {
                         path,
                         span: hole_span,
@@ -749,7 +1749,13 @@ impl<'a> Parser<'a> {
             }
         }
         if !text.is_empty() || parts.is_empty() {
-            parts.push(StrPart::Text(text));
+            parts.push(StrPart::Text {
+                value: text,
+                span: Span {
+                    start: text_start,
+                    end: span.end - 1,
+                },
+            });
         }
         Ok(parts)
     }
@@ -779,12 +1785,16 @@ impl<'a> Parser<'a> {
                     }
                 }
                 self.expect_punct(Punct::RParen)?;
-                let ret = if self.eat_punct(Punct::Arrow) {
+                let return_type = if self.eat_punct(Punct::Arrow) {
                     Some(Box::new(self.ty()?))
                 } else {
                     None
                 };
-                TypeKind::Fn { cap, params, ret }
+                TypeKind::Fn {
+                    cap,
+                    params,
+                    return_type,
+                }
             }
             Some(TokenKind::Ident(_)) => {
                 let mut segments = vec![self.expect_ident("a type name")?];
@@ -858,7 +1868,7 @@ mod tests {
                 let inner: Vec<String> = parts
                     .iter()
                     .map(|p| match p {
-                        StrPart::Text(t) => format!("{t:?}"),
+                        StrPart::Text { value, .. } => format!("{value:?}"),
                         StrPart::Hole { path, .. } => format!(
                             "{{{}}}",
                             path.iter()
@@ -929,6 +1939,38 @@ mod tests {
             ExprKind::Scope { handle, body } => {
                 format!("(scope {} {})", handle.name, block_str(body))
             }
+            ExprKind::Match { scrutinee, arms } => {
+                let mut out = format!("(match {}", sexp(scrutinee));
+                for arm in arms {
+                    out.push_str(&format!(" [{}", pat_str(&arm.pattern)));
+                    if let Some(guard) = &arm.guard {
+                        out.push_str(&format!(" if {}", sexp(guard)));
+                    }
+                    out.push_str(&format!(" => {}]", sexp(&arm.body)));
+                }
+                out + ")"
+            }
+        }
+    }
+
+    fn pat_str(p: &Pattern) -> String {
+        match &p.kind {
+            PatternKind::Wildcard => "_".into(),
+            PatternKind::Literal(value) => sexp(value),
+            PatternKind::Binding(name) => name.name.clone(),
+            PatternKind::Constructor { path, args } => {
+                let mut out = String::from("(");
+                let path: Vec<&str> = path.iter().map(|i| i.name.as_str()).collect();
+                out.push_str(&path.join("."));
+                for a in args {
+                    out.push(' ');
+                    if let Some(l) = &a.label {
+                        out.push_str(&format!("{}:", l.name));
+                    }
+                    out.push_str(&pat_str(&a.pattern));
+                }
+                out + ")"
+            }
         }
     }
 
@@ -985,9 +2027,13 @@ mod tests {
                     format!("{name}<{}>", args.join(","))
                 }
             }
-            TypeKind::Fn { cap, params, ret } => {
+            TypeKind::Fn {
+                cap,
+                params,
+                return_type,
+            } => {
                 let params: Vec<String> = params.iter().map(ty_str).collect();
-                let ret = ret
+                let ret = return_type
                     .as_ref()
                     .map(|r| format!("->{}", ty_str(r)))
                     .unwrap_or_default();
@@ -1249,7 +2295,39 @@ mod tests {
         let err = expr_err("a +");
         assert_eq!(err.code, "E0100");
         assert_eq!(err.span, Span { start: 3, end: 3 });
-        assert_eq!(expr_err("match x {}").code, "E0100");
+    }
+
+    // ----- match -----
+
+    #[test]
+    fn match_in_expression_positions() {
+        assert_eq!(e("match x {\n_ => 0\n}"), "(match x [_ => 0])");
+        assert_eq!(e("match x {}"), "(match x)");
+        assert_eq!(e("1 + match x {\n_ => 2\n}"), "(+ 1 (match x [_ => 2]))");
+        assert_eq!(
+            s("let y = match f(x) {\n_ => 0\n}"),
+            "(let y (match (call f x) [_ => 0]))"
+        );
+        assert_eq!(
+            e("{\nlet a = 1\nmatch a {\n_ => a\n}\n}"),
+            "{(let a 1); (match a [_ => a])}"
+        );
+    }
+
+    #[test]
+    fn match_patterns_guards_and_nesting() {
+        assert_eq!(
+            e("match r {\nOk(Some(v)) if v > 0 && ok => v\nErr(e: _) => -1\n}"),
+            "(match r [(Ok (Some v)) if (&& (> v 0) ok) => v] [(Err e:_) => (- 1)])"
+        );
+        assert_eq!(
+            e("|x| match x {\nn => match n {\n_ => n\n}\n}"),
+            "(fn [x] (match x [n => (match n [_ => n])]))"
+        );
+        assert_eq!(
+            e("match f()? {\nNone() => 0\n}"),
+            "(match (? (call f)) [(None) => 0])"
+        );
     }
 
     #[test]

@@ -88,7 +88,11 @@ test "deposit adds to the balance" {
 - **Construction** uses call syntax ([ADR 0004](adr/0004-call-style-constructors.md)):
   - Fields declared by name must all be named, in declaration order: `Point(x: 1, y: 2)`.
   - Fields declared by position are passed by position: `Some(x)`, `Meters(3)`.
-- **Visibility:** fields are private unless marked `pub`.
+- **Visibility:** items and fields are private unless marked `pub`. `pub` is not allowed in some places:
+  - **`pub use`:** re-exports are not defined in v0, so an import is visible only in its own module.
+  - **`pub test`:** tests are run by the test runner and never referenced by name.
+  - **`pub impl`:** mark each method `pub` instead.
+  - **A trait method:** it takes its visibility from the trait.
 - **Argument labels:** any call can label its arguments, as in `copy(src: a, dst: b)`. Labels are optional, and the compiler checks them against the parameter names.
 - **Methods** are defined in `impl Type` and `impl Trait for Type` blocks, with `self` as an explicit first parameter. Associated functions are called through the type: `List.new()`.
 - **Imports:** `use a.b` or `use a.b.{X, y}`. There is no renaming and there are no glob imports.
@@ -99,14 +103,14 @@ test "deposit adds to the balance" {
 - **Loops:** `for x in xs { }`, `while cond { }`, `break`, and `continue`. There is no `loop` keyword; write `while true` instead.
 - **Ranges:** `a..b` is the only range syntax, and it excludes `b`.
 - **No `as` casts.** Conversions are explicit calls, such as `I32.from(x)`.
-- **Patterns:** `_`, literals, bindings, constructor patterns, and `if` guards. There are no or-patterns, range patterns, or `@` bindings in v0.
+- **Patterns:** `_`, literals, bindings, constructor patterns, and `if` guards. There are no or-patterns, range patterns, or `@` bindings in v0. A string pattern must be a plain literal, with no `{...}` interpolation.
 - **Constants:** module-level constants are declared with `const NAME: T = expr`.
 
 ### Closures, contracts, and other forms
 
 - **Closures:** `|x| expr` or `|x| { ... }`. A closure literal has no `cap` marker. Whether it is capability-bearing is inferred from what it captures, then checked against the parameter type it is passed to (`fn` or `cap fn`).
 - **Contracts:** contract clauses go between the return type and the body, one clause per line. `ensures |r| ...` binds the return value. `implies` binds more loosely than `||` and is right-associative.
-- **Attributes:** written `#[name]` or `#[name(args)]`, and allowed only on items. Attribute names come from a fixed set, currently only `#[integration]`. Unknown names are errors.
+- **Attributes:** written `#[name]` or `#[name(args)]`, and allowed only on items. Attribute names come from a fixed set, currently only `#[integration]`, which is allowed only on `test` items. Unknown names are errors.
 - **String interpolation:** `{...}` inside a string may hold only a name or a field path, as in `{n}` or `{user.name}`. Compute anything else with `let` first.
 - **Sink literals:** `sql"..."` and similar. They cannot contain `{}`.
 
@@ -213,7 +217,12 @@ There are two deliberate exceptions to the rules above:
 fn withdraw(acct: Account, amount: Int) -> Result<Account, Error>
     requires amount > 0
     ensures |r| r.is_ok() implies r.unwrap().balance >= 0
-{ ... }
+{
+    if amount > acct.balance {
+        return Err(Error.InsufficientFunds)
+    }
+    Ok(Account(id: acct.id, balance: acct.balance - amount))
+}
 ```
 
 - Contracts are machine-checkable specifications. Code an agent writes only has to be *checkable*, not right the first time.
@@ -223,7 +232,7 @@ fn withdraw(acct: Account, amount: Int) -> Result<Account, Error>
 
 ## Testing
 
-- Tests are top-level items: `test "a descriptive name" { ... }`. They take no parameters.
+- Tests are top-level items: `test "a descriptive name" { ... }`. They take no parameters. The name is a plain string, with no `{...}` interpolation, and a test is never `pub`.
 - Inside a test, the built-in value `t` holds deterministic stand-in capabilities: an in-memory `t.fs`, a fixed `t.clock`, a seeded `t.random`, and a recording `t.stdout`.
 - Tests that need real capabilities opt in with `#[integration]`.
 
