@@ -37,7 +37,7 @@
 
 use oska_syntax::ast::{
     BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, ItemKind, Module, StmtKind,
-    StrPart, UnaryOp,
+    StrPart, Type, UnaryOp,
 };
 use oska_syntax::{Diagnostic, Edit, Span};
 
@@ -47,6 +47,7 @@ use crate::collect::Decls;
 use crate::decl_rules;
 use crate::infer::{Infer, Mismatch};
 use crate::items::{Bound, Items, Lower};
+use crate::resolve;
 use crate::suggest;
 use crate::ty::{self, Trust, Ty};
 
@@ -269,6 +270,18 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             closures: Vec::new(),
             in_contract: false,
         }
+    }
+
+    /// Report misuse of `Untrusted<...>` in a type written in the body
+    /// (`E0320`). Signatures are checked with name resolution.
+    fn check_written(&mut self, written: &Type) {
+        let lower = &self.lower;
+        let known = |name: &str| {
+            lower.generics.iter().any(|g| g == name)
+                || name == ty::SELF
+                || lower.decls().get(name).is_some()
+        };
+        resolve::untrusted_not_text_within(written, &known, self.diagnostics);
     }
 
     fn decls(&self) -> &'d Decls<'a> {
@@ -1030,6 +1043,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             let hint = expected.as_ref().map(|(ps, _)| ps[i].clone());
             let ty = match (&param.ty, hint) {
                 (Some(written), hint) => {
+                    self.check_written(written);
                     let ty = self.lower.ty(written);
                     match hint {
                         // The caller passes a value of the expected
@@ -1146,6 +1160,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 self.require_lowercase(name);
                 let ty = match ty {
                     Some(written) => {
+                        self.check_written(written);
                         let ty = self.lower.ty(written);
                         self.check(value, &ty);
                         ty

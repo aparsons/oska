@@ -86,6 +86,45 @@ fn a_method_that_is_not_trust_polymorphic_rejects_an_untrusted_receiver() {
     );
 }
 
+// ---- `Untrusted<...>` is only for text ---------------------------------
+
+#[test]
+fn untrusted_of_a_non_text_type_is_an_error() {
+    assert_errors(
+        "fn f(n: Untrusted<Int>) -> Int {\n    1\n}",
+        &[("E0320", "Untrusted<Int>")],
+    );
+}
+
+#[test]
+fn untrusted_of_a_container_is_an_error() {
+    assert_errors(
+        "struct Form { names: Untrusted<List<String>> }",
+        &[("E0320", "Untrusted<List<String>>")],
+    );
+}
+
+#[test]
+fn untrusted_of_a_generic_parameter_is_an_error() {
+    assert_errors(
+        "fn f<T>(x: Untrusted<T>) -> Int {\n    1\n}",
+        &[("E0320", "Untrusted<T>")],
+    );
+}
+
+#[test]
+fn untrusted_of_a_non_text_type_in_a_let_is_an_error() {
+    assert_errors(
+        "fn f() -> Int {\n    let n: Untrusted<Int> = 1\n    1\n}",
+        &[("E0320", "Untrusted<Int>")],
+    );
+}
+
+#[test]
+fn untrusted_text_inside_a_container_is_fine() {
+    assert_ok("fn f(names: List<Untrusted<String>>) -> Int {\n    names.len()\n}");
+}
+
 // ---- Interpolation ------------------------------------------------------
 
 #[test]

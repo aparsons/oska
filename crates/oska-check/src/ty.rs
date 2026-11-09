@@ -60,6 +60,11 @@ pub const STRING: &str = "String";
 pub const UNTRUSTED: &str = "Untrusted";
 /// The types that carry a trust flag.
 const TEXT: &[&str] = &[STRING];
+
+/// Whether the type named `name` carries a trust flag.
+pub fn is_text_name(name: &str) -> bool {
+    TEXT.contains(&name)
+}
 pub const OPTION: &str = "Option";
 pub const RESULT: &str = "Result";
 pub const LIST: &str = "List";

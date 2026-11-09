@@ -101,6 +101,7 @@ pub(crate) mod codes {
     pub const SINK_NOT_IMPORTED: &str = "E0310";
     pub const UNKNOWN_SINK_TAG: &str = "E0311";
     pub const NOT_EXPORTED: &str = "E0312";
+    pub const UNTRUSTED_NOT_TEXT: &str = "E0320";
 }
 
 /// Options that change what is checked.
