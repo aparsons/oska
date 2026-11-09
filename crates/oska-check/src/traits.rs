@@ -7,7 +7,7 @@ use oska_syntax::ast::{ItemKind, Module};
 use oska_syntax::Diagnostic;
 
 use crate::codes;
-use crate::decls::Decls;
+use crate::collect::Decls;
 use crate::items::{FnSig, Items, Lower};
 use crate::ty::Ty;
 

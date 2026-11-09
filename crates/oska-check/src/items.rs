@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use oska_syntax::ast::{Field, Fields, FnDecl, GenericParam, ItemKind, Module, Type, TypeKind};
 
 use crate::authority;
-use crate::decls::{DeclKind, Decls};
+use crate::collect::{DeclKind, Decls};
 use crate::prelude;
 use crate::ty::Ty;
 

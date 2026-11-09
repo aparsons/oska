@@ -71,8 +71,8 @@ use oska_syntax::Diagnostic;
 
 mod authority;
 mod body;
-mod declarations;
-mod decls;
+mod collect;
+mod decl_rules;
 mod infer;
 mod items;
 mod prelude;
@@ -247,9 +247,9 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
         }
     };
     let mut diagnostics = Vec::new();
-    let decls = decls::Decls::collect(&module, &mut diagnostics);
+    let decls = collect::Decls::collect(&module, &mut diagnostics);
     resolve::module(&module, &decls, &mut diagnostics);
-    declarations::module(src, &module, &decls, &mut diagnostics);
+    decl_rules::module(src, &module, &decls, &mut diagnostics);
     recursion::module(&module, &mut diagnostics);
     if options.release {
         release::module(&module, &mut diagnostics);

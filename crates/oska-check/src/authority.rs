@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use oska_syntax::ast::{FnDecl, GenericParam, ItemKind, Module, Type, TypeKind};
 
-use crate::decls::{DeclKind, Decls};
+use crate::collect::{DeclKind, Decls};
 use crate::{FunctionAuthority, Via};
 
 /// What a type can reach.

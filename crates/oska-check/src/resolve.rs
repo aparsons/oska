@@ -5,7 +5,7 @@ use oska_syntax::ast::{FnDecl, GenericParam, Ident, ItemKind, Module, Type, Type
 use oska_syntax::{Diagnostic, Edit, Span};
 
 use crate::codes;
-use crate::decls::{DeclKind, Decls};
+use crate::collect::{DeclKind, Decls};
 
 /// Report every unresolved or misused type and trait name in `module`.
 pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
@@ -21,7 +21,7 @@ pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>)
             ItemKind::Const(c) => resolver.ty(&c.ty),
             ItemKind::Struct(s) => {
                 resolver.enter(&s.generics, false);
-                for ty in crate::decls::field_types(&s.fields) {
+                for ty in crate::collect::field_types(&s.fields) {
                     resolver.ty(ty);
                 }
                 resolver.exit(&s.generics);
@@ -29,7 +29,7 @@ pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>)
             ItemKind::Enum(e) => {
                 resolver.enter(&e.generics, false);
                 for variant in &e.variants {
-                    for ty in crate::decls::field_types(&variant.fields) {
+                    for ty in crate::collect::field_types(&variant.fields) {
                         resolver.ty(ty);
                     }
                 }

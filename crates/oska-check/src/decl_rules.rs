@@ -9,7 +9,7 @@ use oska_syntax::{Diagnostic, Edit, Span};
 
 use crate::authority;
 use crate::codes;
-use crate::decls::{field_types, DeclKind, Decls};
+use crate::collect::{field_types, DeclKind, Decls};
 use crate::prelude;
 
 /// Report every declaration-level error in `module`.

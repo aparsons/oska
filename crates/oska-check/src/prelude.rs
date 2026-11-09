@@ -24,7 +24,7 @@ pub fn module() -> &'static Module {
 
 #[cfg(test)]
 mod tests {
-    use crate::{decls::Decls, resolve};
+    use crate::{collect::Decls, resolve};
 
     #[test]
     fn every_name_in_the_prelude_resolves() {

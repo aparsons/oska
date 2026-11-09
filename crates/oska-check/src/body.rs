@@ -40,7 +40,7 @@ use oska_syntax::ast::{
 use oska_syntax::{Diagnostic, Edit, Span};
 
 use crate::codes;
-use crate::decls::{DeclKind, Decls};
+use crate::collect::{DeclKind, Decls};
 use crate::infer::{Infer, Mismatch};
 use crate::items::{Bound, FieldsInfo, FnSig, Items, Lower, Shape};
 use crate::resolve::closest;
