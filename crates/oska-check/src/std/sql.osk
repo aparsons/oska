@@ -1,0 +1,8 @@
+// `std.sql`: the SQL sink. Like the prelude it is parsed in prelude mode
+// and is signature-only; the runtime implementation comes with the
+// interpreter (#9). A module sees these declarations only after
+// `use std.sql`.
+
+// The text of a query. Only a `sql"..."` literal makes one: its field is
+// private, so no other code can construct it.
+pub struct SqlLiteral { text: String }
