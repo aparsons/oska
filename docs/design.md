@@ -23,9 +23,88 @@ This is a working draft. Decisions that are hard to reverse are recorded in [`ad
 ## Types and modules
 
 - **Types:** structs, sum types (enums with data) with exhaustive `match`, generics, and traits (explicitly implemented interfaces).
+- **Traits in v0:**
+  - Traits can provide default method implementations.
+  - There are no associated types.
+  - There are no trait objects (`dyn`): all dispatch is static, through generics. A collection that holds different types uses an enum.
+  - **Orphan rule:** `impl Trait for Type` is allowed only in the package that defines `Trait` or the package that defines `Type`.
+- **Mutation:** a mutating method declares `var self` and can only be called on a `var` binding. No other parameter can be mutated, so everything else flows out through return values.
 - **Not included:** inheritance, overloading, higher-kinded types, and user-defined macros.
 - **Built-in derivations:** the compiler can generate implementations for a fixed set of traits (equality, hashing, serialization).
 - **Modules:** one file is one module, and items are private unless marked `pub`. Imports are explicit `use` paths; glob imports are not allowed.
+
+## Syntax
+
+The syntax is close to Rust's, and departs from it only where Rust's rules depend on context (principle 3). The AST export is described in [`ast.md`](ast.md).
+
+```oska
+use std.sql.{Db, query}
+
+pub struct Account { pub id: Int, balance: Int }
+
+impl Account {
+    pub fn deposit(var self, amount: Int)
+        requires amount > 0
+    {
+        self.balance = self.balance + amount
+    }
+}
+
+fn describe(s: Shape) -> String {
+    match s {
+        Shape.Circle(radius: r) if r > 100 => "big circle"
+        Shape.Circle(radius: _) => "circle"
+        Shape.Square(side: n) => "square"
+    }
+}
+
+test "deposit adds to the balance" {
+    var a = Account(id: 1, balance: 0)
+    a.deposit(amount: 5)
+    t.assert_eq(a.balance, 5)
+}
+```
+
+### Statements
+
+- A newline ends a statement when the line's last token is an identifier, a literal, `)`, `]`, `}`, `?`, or `return`. This is Go's rule.
+- Newlines inside `(...)` and `[...]` never end a statement. Newlines inside `{...}` follow the rule above again, even when the braces are nested inside parentheses, such as a closure body passed as an argument.
+- A newline does not end a statement if the next line starts with `requires`, `ensures`, `else`, or `{`. This lets a function header span several lines with contract clauses, and lets `else` start a new line.
+- A bare `{ ... }` block cannot be a statement on its own. As a consequence, `let x = { ... }` and blocks after `if`, `for`, and the like are unaffected.
+- If an expression continues onto the next line, the current line must end with an operator or `.`.
+- There is no `;`.
+- Trailing commas are allowed. The formatter decides where they go.
+- Blocks are expressions: a block evaluates to its last expression. `return` exits early.
+
+### Names, types, and calls
+
+- **Paths:** `.` is the only path separator. It is used for modules, types, enum variants, fields, and methods (`use std.sql`, `Shape.Circle`, `fs.read_to_string`). Name resolution, not the parser, decides what each segment refers to.
+- **Type arguments:** `<T>` appears only in type positions (`List<Int>`, `fn first<T>(xs: List<T>)`). There is no turbofish. Write a type annotation instead, as in `let xs: List<Int> = List.new()`.
+- **Bounds:** generic bounds are written inline (`<T: Eq + Hash>`). There are no `where` clauses.
+- **Construction** uses call syntax ([ADR 0004](adr/0004-call-style-constructors.md)):
+  - Fields declared by name must all be named, in declaration order: `Point(x: 1, y: 2)`.
+  - Fields declared by position are passed by position: `Some(x)`, `Meters(3)`.
+- **Visibility:** fields are private unless marked `pub`.
+- **Argument labels:** any call can label its arguments, as in `copy(src: a, dst: b)`. Labels are optional, and the compiler checks them against the parameter names.
+- **Methods** are defined in `impl Type` and `impl Trait for Type` blocks, with `self` as an explicit first parameter. Associated functions are called through the type: `List.new()`.
+- **Imports:** `use a.b` or `use a.b.{X, y}`. There is no renaming and there are no glob imports.
+
+### Control flow and patterns
+
+- **Conditionals and matching:** `if cond { } else { }`, and `match x { pattern => expr }` with one arm per line and no commas.
+- **Loops:** `for x in xs { }`, `while cond { }`, `break`, and `continue`. There is no `loop` keyword; write `while true` instead.
+- **Ranges:** `a..b` is the only range syntax, and it excludes `b`.
+- **No `as` casts.** Conversions are explicit calls, such as `I32.from(x)`.
+- **Patterns:** `_`, literals, bindings, constructor patterns, and `if` guards. There are no or-patterns, range patterns, or `@` bindings in v0.
+- **Constants:** module-level constants are declared with `const NAME: T = expr`.
+
+### Closures, contracts, and other forms
+
+- **Closures:** `|x| expr` or `|x| { ... }`. A closure literal has no `cap` marker. Whether it is capability-bearing is inferred from what it captures, then checked against the parameter type it is passed to (`fn` or `cap fn`).
+- **Contracts:** contract clauses go between the return type and the body, one clause per line. `ensures |r| ...` binds the return value. `implies` binds more loosely than `||` and is right-associative.
+- **Attributes:** written `#[name]` or `#[name(args)]`, and allowed only on items. Attribute names come from a fixed set, currently only `#[integration]`. Unknown names are errors.
+- **String interpolation:** `{...}` inside a string may hold only a name or a field path, as in `{n}` or `{user.name}`. Compute anything else with `let` first.
+- **Sink literals:** `sql"..."` and similar. They cannot contain `{}`.
 
 ## Capabilities
 
@@ -114,10 +193,14 @@ There are two deliberate exceptions to the rules above:
 
 ## Concurrency
 
-- Lightweight tasks run inside `scope { ... }` blocks. A scope does not exit until all of its tasks have finished.
+- Lightweight tasks run inside `scope |s| { ... }` blocks.
+  - `s.spawn(|| work())` starts a task and returns a handle, and `h.join()` returns the task's result.
+  - A scope does not exit until all of its tasks have finished.
+  - The scope handle cannot escape the block.
+  - Nothing can spawn a task outside a scope.
 - There is no `async`/`await`, so functions do not come in async and non-async versions.
 - Tasks can share immutable values freely, and they receive capabilities as arguments like any function.
-- **Deterministic parallelism** (`par_map`, `join`) needs no capability, so pure code can use it.
+- **Deterministic parallelism** needs no capability, so pure code can use it. `par_map` and `join` are library functions built on scopes.
 - **Channels and `select`** are nondeterministic, so they require `Sched`.
 
 ## Contracts
@@ -136,7 +219,8 @@ fn withdraw(acct: Account, amount: Int) -> Result<Account, Error>
 
 ## Testing
 
-- `test` blocks get deterministic stand-in capabilities by default: an in-memory `Fs`, a fixed `Clock`, a seeded `Random`, and a recording `Stdout`.
+- Tests are top-level items: `test "a descriptive name" { ... }`. They take no parameters.
+- Inside a test, the built-in value `t` holds deterministic stand-in capabilities: an in-memory `t.fs`, a fixed `t.clock`, a seeded `t.random`, and a recording `t.stdout`.
 - Tests that need real capabilities opt in with `#[integration]`.
 
 ## Unsafe and FFI
@@ -157,7 +241,7 @@ Once escape hatches exist, the following policy applies:
 ## Toolchain
 
 - **Execution:** a tree-walking interpreter comes first, then WASM/WASI as the first compiled target.
-- **Agent-facing output:** structured diagnostics, plus a stable, documented AST/JSON export.
+- **Agent-facing output:** structured diagnostics, plus a stable, documented AST/JSON export (see [`ast.md`](ast.md)).
 - **Formatting:** deterministic, with a single canonical style.
 
 ## Evaluation
@@ -175,5 +259,4 @@ The research does not show that AI-first design choices measurably improve the c
 ## Open questions
 
 - Should contracts be mandatory, for example on `pub` functions or on functions that take untrusted values? How much SMT power is worth the extra compile time and the extra difficulty for models? The evaluation should decide this.
-- Generics and traits: what are the rules for trait coherence and orphan implementations?
 - WASM component imports: what is the exact mapping between Oska capabilities and WASI interfaces?

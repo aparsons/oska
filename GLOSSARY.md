@@ -32,6 +32,10 @@ A function with no capability-bearing parameters. It cannot perform effects, and
 Data given to `main` that grants no authority, such as `Args`.
 _Avoid_: calling it a capability
 
+**Mutating method**:
+A method that declares `var self`. It can change its receiver in place, and can only be called on a `var` binding.
+_Avoid_: inout, mut ref
+
 ## Untrusted data
 
 **Untrusted value**:
@@ -44,6 +48,10 @@ _Avoid_: sensitive, private
 
 **Sink**:
 An API where data leaves the program or affects how it behaves, such as SQL queries, process execution, HTML output, filesystem paths, network hosts, or logs.
+
+**Sink literal**:
+A string literal tagged with the name of a sink, such as `sql"..."`. It provides the text for a structural position and can never interpolate values.
+_Avoid_: tagged string, raw query
 
 **Data position**:
 An argument to a sink that is treated only as data. It accepts untrusted values. Examples are SQL parameters, escaped HTML text, and process arguments.

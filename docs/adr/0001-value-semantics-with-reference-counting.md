@@ -16,3 +16,5 @@ The research behind this design ([findings 1 and 8](../research/2026-11-ai-first
 ## Consequences
 
 Graph-shaped data has to use IDs or arena-style collections instead of pointers.
+
+Mutation goes through **mutating methods** (`fn push(var self, x: T)`), which can only be called on `var` bindings. No parameter other than `self` can be mutated, so all other data has to flow out through return values.
