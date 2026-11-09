@@ -54,12 +54,13 @@ pub fn unknown_written(
 
 /// `name` at `span` written unqualified, though it is declared by
 /// `module`, which a plain `use` imports only as a module. The fix
-/// qualifies it, as `sql.Db`.
+/// qualifies it, as `sql.Db`. A name the module does not export is
+/// private to it (`E0360`), with no fix.
 pub fn qualify(module: &StdModule, span: Span, name: &str) -> Diagnostic {
     let (path, prefix) = (module.path, module.name());
     if !module.exports_name(name) {
         return Diagnostic::new(
-            codes::QUALIFIED_ONLY,
+            codes::PRIVATE_TO_MODULE,
             format!("`{name}` is private to `{path}`"),
             span,
         );
@@ -148,4 +149,26 @@ fn distance(a: &str, b: &str) -> usize {
         }
     }
     d[a.len()][b.len()]
+}
+
+#[cfg(test)]
+mod tests {
+    use oska_syntax::Span;
+
+    use crate::codes;
+    use crate::prelude;
+
+    /// No `std` module declares a private item yet, so the private case is
+    /// tested here rather than through a module.
+    #[test]
+    fn a_private_name_has_its_own_code_and_no_fix() {
+        let sql = prelude::std_module("std.sql").expect("std.sql exists");
+        let span = Span { start: 0, end: 4 };
+        let private = super::qualify(sql, span, "Conn");
+        assert_eq!(private.code, codes::PRIVATE_TO_MODULE);
+        assert!(private.fix.is_none());
+        let export = super::qualify(sql, span, "Db");
+        assert_eq!(export.code, codes::QUALIFIED_ONLY);
+        assert!(export.fix.is_some());
+    }
 }

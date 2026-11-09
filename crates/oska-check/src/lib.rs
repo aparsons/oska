@@ -109,6 +109,7 @@ pub(crate) mod codes {
     pub const SECRET_INTERPOLATED: &str = "E0350";
     pub const SECRET_COMPARED: &str = "E0351";
     pub const SECRET_DISPLAYED: &str = "E0352";
+    pub const PRIVATE_TO_MODULE: &str = "E0360";
 }
 
 /// Options that change what is checked.

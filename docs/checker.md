@@ -138,3 +138,4 @@ Values that come back from a sink are untrusted: `Row.get`, `Output.stdout`, `Ht
 | `E0350` | A `Secret` interpolated into a string, such as `"Bearer {key}"`. Spans the hole, braces included. | None. |
 | `E0351` | A `Secret` compared with `==` or `!=`, on either side. Spans the comparison. Also reported, without a fix, where a `Secret` must be `Eq`: an `Eq` bound, or a call to `.eq`. | Rewrite `a == b` to `a.constant_time_eq(b)` and `a != b` to `!a.constant_time_eq(b)`, with the secret as the receiver (parenthesized when needed). When both sides are secrets, the argument becomes `b.expose()`. |
 | `E0352` | A `Secret` used where it must be `Display`: a `Display` bound, or a call to `.to_string()`. Spans the call, or the method name. | None. |
+| `E0360` | A name declared by an imported `std` module but not exported by it, written unqualified. Spans the name. | None: the module keeps it private. |
