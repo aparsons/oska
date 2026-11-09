@@ -61,6 +61,112 @@ fn counting_the_lines_of_a_file_checks() {
     );
 }
 
+#[test]
+fn to_string_of_untrusted_text_is_untrusted() {
+    assert_errors(
+        &with_greet(
+            "fn f(args: Args) -> Option<String> {\n    let arg = args.get(1)?\n    Some(greet(arg.to_string()))\n}",
+        ),
+        &[("E0300", "arg.to_string()")],
+    );
+}
+
+#[test]
+fn to_string_of_a_non_text_value_is_trusted() {
+    assert_ok(&with_greet(
+        "fn f(n: Int) -> String {\n    greet(n.to_string())\n}",
+    ));
+}
+
+#[test]
+fn a_method_that_is_not_trust_polymorphic_rejects_an_untrusted_receiver() {
+    assert_errors(
+        "fn f(args: Args, fs: Fs) -> Option<Fs> {\n    let dir = args.get(1)?\n    Some(fs.restrict_to(dir))\n}",
+        &[("E0300", "dir")],
+    );
+}
+
+// ---- Interpolation ------------------------------------------------------
+
+#[test]
+fn interpolating_untrusted_text_makes_the_string_untrusted() {
+    assert_errors(
+        &with_greet(
+            "fn f(args: Args) -> Option<String> {\n    let arg = args.get(1)?\n    Some(greet(\"hello {arg}\"))\n}",
+        ),
+        &[("E0300", "\"hello {arg}\"")],
+    );
+}
+
+#[test]
+fn interpolating_an_untrusted_field_makes_the_string_untrusted() {
+    assert_errors(
+        "struct Form { name: Untrusted<String> }\n\
+         fn f(form: Form) -> String {\n    \"hello {form.name}\"\n}",
+        &[("E0300", "\"hello {form.name}\"")],
+    );
+}
+
+#[test]
+fn interpolating_trusted_values_gives_trusted_text() {
+    assert_ok(&with_greet(
+        "fn f(name: String, n: Int) -> String {\n    greet(\"{name} has {n}\")\n}",
+    ));
+}
+
+#[test]
+fn an_interpolated_string_of_untrusted_text_fits_a_data_position() {
+    assert_ok(
+        "fn f(io: Stdout, args: Args) -> Result<(), IoError> {\n    \
+         let arg = args.get(1).ok_or(IoError(message: \"usage\"))?\n    \
+         io.println(\"hello {arg}\")\n}",
+    );
+}
+
+// ---- Other routes -------------------------------------------------------
+
+#[test]
+fn an_untrusted_field_cannot_be_passed_as_trusted_text() {
+    assert_errors(
+        &with_greet(
+            "struct Form { name: Untrusted<String> }\n\
+             fn f(form: Form) -> String {\n    greet(form.name)\n}",
+        ),
+        &[("E0300", "form.name")],
+    );
+}
+
+#[test]
+fn untrusted_text_in_an_option_stays_untrusted_through_question_mark() {
+    assert_errors(
+        &with_greet(
+            "fn f(args: Args) -> Option<String> {\n    let found = Some(args.get(1)?)\n    Some(greet(found?))\n}",
+        ),
+        &[("E0300", "found?")],
+    );
+}
+
+#[test]
+fn untrusted_text_stays_untrusted_through_a_list() {
+    assert_errors(
+        &with_greet(
+            "fn f(args: Args) -> Option<String> {\n    let all = [args.get(1)?]\n    Some(greet(all.get(0)?))\n}",
+        ),
+        &[("E0300", "all.get(0)?")],
+    );
+}
+
+#[test]
+fn untrusted_text_mapped_through_a_list_stays_untrusted() {
+    assert_errors(
+        &with_greet(
+            "fn f(args: Args) -> Option<List<String>> {\n    let arg = args.get(1)?\n    \
+             Some(arg.lines().map(|line| line.trim()))\n}",
+        ),
+        &[("E0300", "line.trim()")],
+    );
+}
+
 // ---- Joins: trusted and untrusted text together is untrusted ----------
 
 #[test]

@@ -426,12 +426,15 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 ty
             }
             ExprKind::Str(parts) => {
+                // The string is untrusted when any text in a hole is.
+                let trust = self.infer.fresh_trust();
                 for part in parts {
                     if let StrPart::Hole { path, .. } = part {
-                        self.hole(path);
+                        let ty = self.hole(path);
+                        self.infer.join_into(&ty, trust);
                     }
                 }
-                Ty::string()
+                Ty::string().with_trust(trust)
             }
             ExprKind::SinkStr { tag, .. } => self.sink_literal(tag, expr.span),
             ExprKind::Bool(_) => Ty::bool(),
@@ -572,15 +575,16 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
     }
 
-    /// An interpolation hole, `{name}` or `{name.field}`.
-    fn hole(&mut self, path: &[Ident]) {
+    /// An interpolation hole, `{name}` or `{name.field}`, and its type.
+    fn hole(&mut self, path: &[Ident]) -> Ty {
         let Some((first, rest)) = path.split_first() else {
-            return;
+            return Ty::Error;
         };
         let mut ty = self.name(first);
         for field in rest {
             ty = self.field_of(ty, field);
         }
+        ty
     }
 
     /// A name in value position.
