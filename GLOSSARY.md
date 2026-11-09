@@ -46,6 +46,18 @@ _Avoid_: stdlib (for this subset), builtins
 Text or bytes that came from outside the program, through a capability or a program input. Text operations keep a value untrusted. Converting it to a non-text or validated type makes it trusted.
 _Avoid_: tainted, dirty, unsafe input
 
+**Validator**:
+A function that inspects an untrusted value and, only if the value passes its checks, returns a trusted value of a validated type, such as an `Email`.
+_Avoid_: sanitizer
+
+**Trust assertion**:
+An explicit, audited point where code declares untrusted text trusted, normally inside a validator.
+_Avoid_: untaint, sanitize, cast
+
+**Audit site**:
+A place in the source where code deliberately weakens a guarantee, such as a trust assertion or a secret exposure. Tooling lists every audit site for review.
+_Avoid_: escape hatch (informal)
+
 **Secret value**:
 A value whose contents are never displayed, logged, or interpolated. The only way to read it is an explicit, auditable exposure.
 _Avoid_: sensitive, private
