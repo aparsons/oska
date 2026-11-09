@@ -126,6 +126,60 @@ fn a_call_must_satisfy_the_callee_s_bounds() {
     );
 }
 
+// ---- Trait impls -----------------------------------------------------------------
+
+#[test]
+fn an_impl_that_provides_every_required_method_is_fine() {
+    assert_ok(
+        "trait Greet {\n    fn name(self) -> String\n    fn greet(self) -> String { \"hi\" }\n}\n\
+         struct Cat { name: String }\n\
+         impl Greet for Cat {\n    fn name(self) -> String { self.name }\n}",
+    );
+}
+
+#[test]
+fn an_impl_missing_a_required_method_is_an_error() {
+    assert_errors(
+        "trait Greet {\n    fn name(self) -> String\n    fn age(self) -> Int\n}\n\
+         struct Cat { name: String }\n\
+         impl Greet for Cat {\n    fn name(self) -> String { self.name }\n}",
+        &[("E0261", "Greet")],
+    );
+}
+
+#[test]
+fn an_impl_method_with_a_different_signature_is_an_error() {
+    assert_errors(
+        "struct Cat { name: String }\n\
+         impl Display for Cat {\n    fn to_string(self) -> Int { 1 }\n}",
+        &[("E0262", "to_string")],
+    );
+    assert_errors(
+        "struct Cat { name: String }\n\
+         impl Display for Cat {\n    fn to_string(var self) -> String { self.name }\n}",
+        &[("E0262", "to_string")],
+    );
+}
+
+#[test]
+fn an_impl_method_matches_with_self_and_the_trait_s_arguments_replaced() {
+    assert_ok(
+        "struct Point { x: Int }\n\
+         impl Eq for Point {\n    fn eq(self, other: Self) -> Bool { self.x == other.x }\n}\n\
+         struct Meters { value: Int }\n\
+         impl From<Int> for Meters {\n    fn from(value: Int) -> Meters { Meters(value: value) }\n}",
+    );
+}
+
+#[test]
+fn an_impl_method_the_trait_does_not_declare_is_an_error() {
+    assert_errors(
+        "struct Cat { name: String }\n\
+         impl Display for Cat {\n    fn to_string(self) -> String { self.name }\n    fn purr(self) -> String { \"purr\" }\n}",
+        &[("E0263", "purr")],
+    );
+}
+
 // ---- Method lookup -------------------------------------------------------------
 
 /// Two traits that both provide `describe`, and a type with both.

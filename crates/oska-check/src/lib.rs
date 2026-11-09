@@ -62,6 +62,7 @@ mod prelude;
 mod recursion;
 mod release;
 mod resolve;
+mod traits;
 mod ty;
 
 /// The diagnostic codes this crate reports.
@@ -97,6 +98,9 @@ pub(crate) mod codes {
     pub const TRY_ERROR_TYPE: &str = "E0242";
     pub const TRY_KIND: &str = "E0243";
     pub const NOT_IN_BOUNDS: &str = "E0260";
+    pub const MISSING_METHOD: &str = "E0261";
+    pub const IMPL_SIGNATURE: &str = "E0262";
+    pub const NOT_IN_TRAIT: &str = "E0263";
     pub const AMBIGUOUS_METHOD: &str = "E0264";
     pub const NOT_IMPLEMENTED: &str = "E0265";
 }
@@ -223,6 +227,7 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
         release::module(&module, &mut diagnostics);
     }
     let items = items::Items::collect(&module, &decls);
+    traits::module(&module, &decls, &items, &mut diagnostics);
     body::module(&module, &decls, &items, &mut diagnostics);
     let functions = authority::report(&module, &decls);
     diagnostics.sort_by_key(|d| d.span.start);
