@@ -30,10 +30,10 @@ Every node is a JSON object with:
 Conventions:
 
 - Every node's first two fields are `kind` and `span`. The tables below list the other fields.
-- Field names are `snake_case`. `kind` values are `PascalCase`, and end in `Item`, `Stmt`, `Expr`, or `Type` for those node families.
+- Field names are `snake_case`. `kind` values are `PascalCase`, and end in `Item`, `Stmt`, `Expr`, `Pattern`, or `Type` for those node families.
 - An optional field is omitted when absent. It is never written as `null`.
 - An array field is always present, even when empty.
-- "Expression node", "statement node", and "type node" mean any node of that family.
+- "Expression node", "statement node", "pattern node", and "type node" mean any node of that family.
 
 ### Items
 
@@ -374,6 +374,67 @@ A block used as an expression. Its span is the block's span, so the statements s
 | --- | --- | --- |
 | `handle` | `Ident` |  |
 | `body` | `Block` |  |
+
+#### `MatchExpr`
+
+`match scrutinee { arms }`, with one arm per line and no commas between arms.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `scrutinee` | expression node |  |
+| `arms` | array of `MatchArm` | in source order; may be empty |
+
+#### `MatchArm`
+
+One arm of a `match`: `pattern if guard => body`. The span runs from the pattern to the end of the body.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `pattern` | pattern node |  |
+| `guard` | expression node | optional; the condition after `if` |
+| `body` | expression node |  |
+
+### Patterns
+
+v0 has no or-patterns (`A | B`), range patterns (`1..5`), or `@` bindings. The parser rejects them with `E0140`, `E0141`, and `E0142`.
+
+#### `WildcardPattern`
+
+`_`, which matches anything and binds nothing. It has no other fields.
+
+#### `LiteralPattern`
+
+A literal to compare against: an integer, a negated integer such as `-1`, a string, `true`, `false`, or `()`.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `value` | expression node | an `IntExpr`, a `UnaryExpr` with op `-` around an `IntExpr`, a `StrExpr`, a `BoolExpr`, or a `UnitExpr` |
+
+#### `BindingPattern`
+
+A bare name, which binds the matched value. Its span is the name's span, so the name is a plain string. The parser cannot tell a binding from a unit variant or constant written as a bare name, such as `None`; name resolution decides that.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `name` | string |  |
+
+#### `ConstructorPattern`
+
+A struct or enum variant pattern. It mirrors call-style construction (ADR 0004): positional `Some(x)`, named `Shape.Circle(radius: r)`, or a dotted path alone, such as `Shape.Empty`.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `path` | array of `Ident` | the type or variant path, such as `Shape`, `Circle` |
+| `args` | array of `PatternArg` | empty when written without parentheses or as `()` |
+
+#### `PatternArg`
+
+A constructor pattern argument, optionally labelled with a field name: `radius: r`. The span covers the label and the pattern.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `label` | `Ident` | optional |
+| `pattern` | pattern node |  |
 
 ### Types
 
