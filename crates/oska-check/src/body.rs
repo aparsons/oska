@@ -197,10 +197,13 @@ struct Callable {
     /// bound's trait. (The bound's `param` names the generic it came
     /// from.)
     obligations: Vec<(Ty, Bound)>,
-    /// A pure function: no parameter, the receiver included, is
-    /// capability-bearing. Constructors are pure; a closure is pure
-    /// unless it is a `cap fn`.
+    /// A pure function as declared: no parameter, the receiver included,
+    /// is capability-bearing. Constructors are pure; a closure is pure
+    /// unless it is a `cap fn`. A generic callee can still be impure at a
+    /// call, once its parameters are instantiated (see [`Body::apply`]).
     pure: bool,
+    /// For a method: the type of its receiver, instantiated.
+    receiver: Option<Ty>,
 }
 
 /// The state of checking one body.
@@ -733,6 +736,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                         labels: Labels::Optional,
                         obligations: Vec::new(),
                         pure: !cap,
+                        receiver: None,
                     }),
                     Ty::Error => None,
                     other => {
@@ -928,6 +932,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             },
             obligations: Vec::new(),
             pure: true,
+            receiver: None,
         }
     }
 
@@ -966,6 +971,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 })
                 .collect(),
             pure: sig.pure,
+            receiver: match (&sig.receiver, &sig.self_ty) {
+                (Some(_), Some(declared)) => Some(declared.substitute(&subst)),
+                _ => None,
+            },
         }
     }
 
@@ -1110,16 +1119,6 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         if let Some(expected) = expected {
             self.infer.unify(&callable.ret, expected);
         }
-        if self.in_contract && !callable.pure {
-            self.error(
-                codes::IMPURE_IN_CONTRACT,
-                format!(
-                    "a contract may call only pure functions, but {} takes a capability",
-                    callable.description
-                ),
-                span,
-            );
-        }
         if args.len() != callable.params.len() {
             let n = callable.params.len();
             self.error(
@@ -1134,22 +1133,48 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 span,
             );
         }
+        let mut arg_tys = Vec::new();
         for (i, arg) in args.iter().enumerate() {
-            match callable.params.get(i) {
+            let ty = match callable.params.get(i) {
                 Some((param, ty)) => {
                     self.label(arg, param.as_deref(), callable.labels);
-                    self.check(&arg.value, ty);
+                    self.check(&arg.value, ty)
                 }
-                None => {
-                    self.infer(&arg.value);
-                }
-            }
+                None => self.infer(&arg.value),
+            };
+            arg_tys.push(ty);
+        }
+        if self.in_contract && !self.pure_call(&callable, &arg_tys) {
+            self.error(
+                codes::IMPURE_IN_CONTRACT,
+                format!(
+                    "a contract may call only pure functions, but {} takes a capability",
+                    callable.description
+                ),
+                span,
+            );
         }
         let what = format!("calling {}", callable.description);
         for (ty, bound) in &callable.obligations {
             self.require_trait(ty, &bound.trait_name, &bound.args, span, &what);
         }
         callable.ret
+    }
+
+    /// Whether a call is pure once instantiated: the callee is declared
+    /// pure, and no argument, parameter, or receiver type is
+    /// capability-bearing after its generics are solved. So
+    /// `apply(log, out)` with `fn apply<T>(f: fn(T), x: T)` is impure when
+    /// `out` is a `Stdout`.
+    fn pure_call(&self, callable: &Callable, arg_tys: &[Ty]) -> bool {
+        callable.pure
+            && !callable
+                .params
+                .iter()
+                .map(|(_, ty)| ty)
+                .chain(callable.receiver.iter())
+                .chain(arg_tys)
+                .any(|ty| self.bearing(ty))
     }
 
     /// Check an argument's label against its parameter.

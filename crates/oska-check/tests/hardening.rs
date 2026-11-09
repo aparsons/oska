@@ -82,3 +82,29 @@ fn a_plain_fn_can_be_used_where_a_cap_fn_is_expected() {
          fn f(g: fn()) -> Option<cap fn()> {\n    run(g)\n    Some(g)\n}",
     );
 }
+
+// ---- Purity in contracts, through generics --------------------------------------
+
+#[test]
+fn a_generic_call_whose_argument_is_a_capability_is_impure_in_a_contract() {
+    let src = "fn log(out: Stdout) {\n    let _ = out.println(\"x\")\n}\n\
+               fn apply<T>(f: fn(T), x: T) {\n    f(x)\n}\n\
+               fn f(out: Stdout) -> Int\n    requires apply(log, out) == ()\n{\n    1\n}";
+    assert_errors(src, &[("E0280", "apply(log, out)")]);
+}
+
+#[test]
+fn a_generic_method_on_a_capability_bearing_receiver_is_impure_in_a_contract() {
+    let src = "struct Box<T> { value: T }\n\
+               impl<T> Box<T> {\n    fn size(self) -> Int {\n        1\n    }\n}\n\
+               fn f(b: Box<Stdout>) -> Int\n    requires b.size() == 1\n{\n    1\n}";
+    assert_errors(src, &[("E0280", "b.size()")]);
+}
+
+#[test]
+fn a_generic_call_on_pure_values_is_allowed_in_a_contract() {
+    assert_ok(
+        "fn id<T>(x: T) -> T {\n    x\n}\n\
+         fn f(n: Int) -> Int\n    requires id(n) == n\n{\n    n\n}",
+    );
+}
