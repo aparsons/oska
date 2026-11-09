@@ -16,6 +16,8 @@ use crate::AuditSite;
 const AUDITED: &[(&str, &str)] = &[
     // A trust assertion: vouches for untrusted text.
     (ty::STRING, "assume_trusted"),
+    // A secret exposure: reads a secret's value.
+    (ty::SECRET, "expose"),
 ];
 
 impl Body<'_, '_, '_> {
