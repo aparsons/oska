@@ -122,20 +122,39 @@ impl Infer {
     /// that it accepts text of either trust. Unsolved variables inside
     /// are kept.
     pub fn loosen(&mut self, ty: &Ty) -> Ty {
+        self.refresh(ty, true)
+    }
+
+    /// `ty` with every fixed text flag replaced by a fresh trust variable,
+    /// and with its trust variables kept. An inference variable is solved
+    /// to this: it can join with text of other trust, while text it shares
+    /// a trust variable with (such as the elements of a list it was taken
+    /// from) still sees everything that flows into it later.
+    fn generalize(&mut self, ty: &Ty) -> Ty {
+        self.refresh(ty, false)
+    }
+
+    fn refresh(&mut self, ty: &Ty, variables_too: bool) -> Ty {
         match ty {
             Ty::Named(name, args, trust) => {
-                let args = args.iter().map(|a| self.loosen(a)).collect();
-                let trust = if ty.is_text() {
-                    self.fresh_trust()
-                } else {
-                    *trust
+                let args = args
+                    .iter()
+                    .map(|a| self.refresh(a, variables_too))
+                    .collect();
+                let trust = match trust {
+                    Trust::Var(_) if !variables_too => *trust,
+                    _ if ty.is_text() => self.fresh_trust(),
+                    _ => *trust,
                 };
                 Ty::Named(name.clone(), args, trust)
             }
             Ty::Fn { cap, params, ret } => Ty::Fn {
                 cap: *cap,
-                params: params.iter().map(|p| self.loosen(p)).collect(),
-                ret: Box::new(self.loosen(ret)),
+                params: params
+                    .iter()
+                    .map(|p| self.refresh(p, variables_too))
+                    .collect(),
+                ret: Box::new(self.refresh(ret, variables_too)),
             },
             other => other.clone(),
         }
@@ -155,12 +174,12 @@ impl Infer {
     }
 
     /// A trust flag as solved so far: a variable is untrusted once
-    /// untrusted text reaches it, trusted once it is pinned, and left a
-    /// variable otherwise.
+    /// untrusted text reaches it, which is final. Any other variable is
+    /// kept, even a pinned one: text that shares it must keep rejecting
+    /// untrusted text that arrives later.
     fn trust_of(&self, trust: Trust) -> Trust {
         match trust {
             Trust::Var(v) if self.trust[v as usize].untrusted => Trust::Untrusted,
-            Trust::Var(v) if self.trust[v as usize].pinned => Trust::Trusted,
             other => other,
         }
     }
@@ -313,7 +332,7 @@ impl Infer {
                 if self.occurs(*v, other) {
                     return false;
                 }
-                let solution = self.loosen(other);
+                let solution = self.generalize(other);
                 self.solutions[*v as usize] = Some(solution.clone());
                 self.unify_inner(&solution, other, polarity, rules)
             }
@@ -321,7 +340,7 @@ impl Infer {
                 if self.occurs(*v, other) {
                     return false;
                 }
-                let solution = self.loosen(other);
+                let solution = self.generalize(other);
                 self.solutions[*v as usize] = Some(solution.clone());
                 self.unify_inner(other, &solution, polarity, rules)
             }

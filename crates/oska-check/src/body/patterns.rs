@@ -51,7 +51,7 @@ impl Body<'_, '_, '_> {
                 None => {
                     let ty = self.infer(&arm.body);
                     if self.infer.shallow(&ty) != Ty::Never {
-                        result = Some(ty);
+                        result = Some(self.join(&ty));
                     }
                 }
             }

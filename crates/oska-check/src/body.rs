@@ -501,7 +501,11 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 match expected {
                     Some(expected) => self.check(else_branch, expected),
                     None if self.infer.shallow(&then) == Ty::Never => self.infer(else_branch),
-                    None => self.check(else_branch, &then),
+                    None => {
+                        let joined = self.join(&then);
+                        self.check(else_branch, &joined);
+                        joined
+                    }
                 }
             }
             ExprKind::Block(block) => self.block(block, expected, true),
@@ -528,6 +532,15 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 self.match_expr(expr.span, scrutinee, arms, expected)
             }
         }
+    }
+
+    /// A fresh variable that `ty` flows into, as the type of an `if` or
+    /// `match` whose branches are checked against it in turn. Text in it
+    /// is the join of the branches': untrusted if any branch's is.
+    pub(super) fn join(&mut self, ty: &Ty) -> Ty {
+        let joined = self.infer.fresh();
+        self.infer.unify(ty, &joined);
+        joined
     }
 
     /// The type an integer literal takes: the expected integer type, or
@@ -839,6 +852,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             self.infer(second);
             return Ty::Error;
         }
+        // Comparing inspects text without passing it on, so the operands
+        // may differ in trust.
+        let ty = self.infer.loosen(&ty);
         self.check(second, &ty)
     }
 
@@ -935,7 +951,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     .iter()
                     .map(|g| (g.clone(), attempt.fresh()))
                     .collect();
-                let matches = attempt.unify(&ty, &imp.target.substitute(&subst))
+                // An impl for a text type covers text of either trust.
+                let target = attempt.loosen(&imp.target.substitute(&subst));
+                let matches = attempt.unify(&ty, &target)
                     && imp
                         .trait_args
                         .iter()
