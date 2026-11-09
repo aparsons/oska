@@ -118,6 +118,50 @@ fn mains_error_type_must_be_display() {
     );
 }
 
+// ---- Capitalization (ADR 0005) -----------------------------------------
+
+#[test]
+fn well_capitalized_declarations_check() {
+    assert_ok(
+        "enum Shape<T> {\n    Circle { radius: T },\n    Empty,\n}\n\
+         trait Area {\n    fn area(self) -> Int\n}\n\
+         fn total_area(shape_count: Int, _unused: Int) -> Int { shape_count }",
+    );
+}
+
+#[test]
+fn types_variants_traits_and_type_parameters_start_uppercase() {
+    assert_errors(
+        "struct point { x: Int }\n\
+         enum Shape {\n    circle,\n}\n\
+         trait area {\n    fn area(self) -> Int\n}\n\
+         fn first<t>(xs: List<t>) { }",
+        &[
+            ("E0213", "point"),
+            ("E0213", "circle"),
+            ("E0213", "area"),
+            ("E0213", "t"),
+        ],
+    );
+}
+
+#[test]
+fn functions_fields_and_parameters_start_lowercase() {
+    assert_errors(
+        "struct Point { X: Int }\n\
+         enum Shape {\n    Circle { Radius: Int },\n}\n\
+         impl Point {\n    fn Norm(self) -> Int { 0 }\n}\n\
+         fn Area(Width: Int) -> Int { 0 }",
+        &[
+            ("E0214", "X"),
+            ("E0214", "Radius"),
+            ("E0214", "Norm"),
+            ("E0214", "Area"),
+            ("E0214", "Width"),
+        ],
+    );
+}
+
 #[test]
 fn only_the_free_function_main_is_a_root_of_authority() {
     assert_ok("struct App { n: Int }\nimpl App {\n    fn main(self, n: Int) -> Int { n }\n}");

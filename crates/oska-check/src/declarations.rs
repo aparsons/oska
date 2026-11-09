@@ -1,7 +1,10 @@
 //! Declaration-level rules: `cap` on types whose own fields name a
-//! capability, and `main` as the root of authority.
+//! capability, `main` as the root of authority, and capitalization
+//! (ADR 0005).
 
-use oska_syntax::ast::{FnDecl, Item, ItemKind, Module, Type, TypeKind};
+use oska_syntax::ast::{
+    Fields, FnDecl, GenericParam, Ident, Item, ItemKind, Module, Type, TypeKind,
+};
 use oska_syntax::{Diagnostic, Edit, Span};
 
 use crate::authority;
@@ -13,10 +16,105 @@ use crate::prelude;
 pub fn module(src: &str, module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
     for item in &module.items {
         cap_required(src, item, decls, diagnostics);
+        capitalization(item, diagnostics);
         if let ItemKind::Fn(f) = &item.kind {
             if f.name.name == "main" {
                 main(src, module, f, decls, diagnostics);
             }
+        }
+    }
+}
+
+/// Types, variants, traits, and type parameters start uppercase.
+/// Functions, fields, and parameters start lowercase.
+fn capitalization(item: &Item, diagnostics: &mut Vec<Diagnostic>) {
+    let mut names = Names::default();
+    match &item.kind {
+        ItemKind::Fn(f) => names.function(f),
+        ItemKind::Struct(s) => {
+            names.upper(&s.name, "type");
+            names.generics(&s.generics);
+            names.fields(&s.fields);
+        }
+        ItemKind::Enum(e) => {
+            names.upper(&e.name, "type");
+            names.generics(&e.generics);
+            for variant in &e.variants {
+                names.upper(&variant.name, "variant");
+                names.fields(&variant.fields);
+            }
+        }
+        ItemKind::Trait(t) => {
+            names.upper(&t.name, "trait");
+            names.generics(&t.generics);
+            names.methods(&t.methods);
+        }
+        ItemKind::Impl(imp) => {
+            names.generics(&imp.generics);
+            names.methods(&imp.methods);
+        }
+        ItemKind::Use(_) | ItemKind::Const(_) | ItemKind::Test(_) => {}
+    }
+    diagnostics.extend(names.diagnostics);
+}
+
+/// Collects capitalization errors for the names one item declares.
+#[derive(Default)]
+struct Names {
+    diagnostics: Vec<Diagnostic>,
+}
+
+impl Names {
+    fn upper(&mut self, ident: &Ident, noun: &str) {
+        if !ident.name.starts_with(|c: char| c.is_ascii_uppercase()) {
+            self.diagnostics.push(Diagnostic::new(
+                codes::NOT_UPPERCASE,
+                format!("{noun} name `{}` must start with an uppercase letter", ident.name),
+                ident.span,
+            ));
+        }
+    }
+
+    /// A leading `_` counts as lowercase.
+    fn lower(&mut self, ident: &Ident, noun: &str) {
+        if ident.name.starts_with(|c: char| c.is_ascii_uppercase()) {
+            self.diagnostics.push(Diagnostic::new(
+                codes::NOT_LOWERCASE,
+                format!("{noun} name `{}` must start with a lowercase letter", ident.name),
+                ident.span,
+            ));
+        }
+    }
+
+    fn generics(&mut self, generics: &[GenericParam]) {
+        for g in generics {
+            self.upper(&g.name, "type parameter");
+        }
+    }
+
+    fn fields(&mut self, fields: &Fields) {
+        if let Fields::Named(fields) = fields {
+            for field in fields {
+                if let Some(name) = &field.name {
+                    self.lower(name, "field");
+                }
+            }
+        }
+    }
+
+    fn methods(&mut self, methods: &[Item]) {
+        for method in methods {
+            if let ItemKind::Fn(f) = &method.kind {
+                self.function(f);
+            }
+        }
+    }
+
+    fn function(&mut self, f: &FnDecl) {
+        self.lower(&f.name, "function");
+        self.generics(&f.generics);
+        for param in &f.params {
+            self.lower(&param.name, "parameter");
         }
     }
 }

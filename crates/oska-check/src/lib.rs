@@ -36,6 +36,8 @@ pub(crate) mod codes {
     pub const CAP_REQUIRED: &str = "E0210";
     pub const MAIN_PARAM: &str = "E0211";
     pub const MAIN_RETURN: &str = "E0212";
+    pub const NOT_UPPERCASE: &str = "E0213";
+    pub const NOT_LOWERCASE: &str = "E0214";
 }
 
 /// Options that change what is checked.
