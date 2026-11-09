@@ -72,6 +72,32 @@ pub struct FieldsInfo {
     pub fields: Vec<(Option<String>, Ty)>,
 }
 
+impl FieldsInfo {
+    /// The type of the named field `name`.
+    pub fn field(&self, name: &str) -> Option<&Ty> {
+        self.fields
+            .iter()
+            .find(|(n, _)| n.as_deref() == Some(name))
+            .map(|(_, ty)| ty)
+    }
+
+    /// The names of the named fields, in order.
+    pub fn names(&self) -> Vec<&str> {
+        self.fields
+            .iter()
+            .filter_map(|(n, _)| n.as_deref())
+            .collect()
+    }
+
+    /// Each field's name and type, with generics replaced by `subst`.
+    pub fn instantiate(&self, subst: &[(String, Ty)]) -> Vec<(Option<String>, Ty)> {
+        self.fields
+            .iter()
+            .map(|(n, t)| (n.clone(), t.substitute(subst)))
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct StructInfo {
     pub generics: Vec<String>,

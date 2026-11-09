@@ -633,12 +633,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             }
             Ty::Named(type_name, args) => {
                 if let Some(info) = self.items.structs.get(type_name) {
-                    let field = info
-                        .fields
-                        .fields
-                        .iter()
-                        .find(|(n, _)| n.as_deref() == Some(name.name.as_str()));
-                    if let Some((_, field_ty)) = field {
+                    if let Some(field_ty) = info.fields.field(&name.name) {
                         if info.hidden_fields.contains(&name.name) {
                             self.error(
                                 codes::PRIVATE_FIELD,
@@ -670,13 +665,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         let fields: Vec<&str> = type_name
             .as_deref()
             .and_then(|t| self.items.structs.get(t))
-            .map(|info| {
-                info.fields
-                    .fields
-                    .iter()
-                    .filter_map(|(n, _)| n.as_deref())
-                    .collect()
-            })
+            .map(|info| info.fields.names())
             .unwrap_or_default();
         let message = format!("`{ty}` has no field `{}`", name.name);
         self.report_with_suggestion(codes::NO_FIELD, message, name, &fields);
@@ -904,11 +893,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         );
         Callable {
             description,
-            params: fields
-                .fields
-                .iter()
-                .map(|(n, t)| (n.clone(), t.substitute(&subst)))
-                .collect(),
+            params: fields.instantiate(&subst),
             ret,
             labels: match fields.shape {
                 Shape::Named => Labels::Required,

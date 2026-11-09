@@ -170,12 +170,10 @@ impl Body<'_, '_, '_> {
                 info.variants
                     .iter()
                     .map(|(variant, fields)| {
-                        let fields = fields
-                            .fields
-                            .iter()
-                            .map(|(l, t)| (l.clone(), t.substitute(&subst)))
-                            .collect();
-                        ctor(&self.variant_key(&name, variant), fields)
+                        ctor(
+                            &self.variant_key(&name, variant),
+                            fields.instantiate(&subst),
+                        )
                     })
                     .collect(),
             );
@@ -184,13 +182,7 @@ impl Body<'_, '_, '_> {
         match self.items.structs.get(&name) {
             Some(info) if user_struct => {
                 let subst: Vec<(String, Ty)> = info.generics.iter().cloned().zip(args).collect();
-                let fields = info
-                    .fields
-                    .fields
-                    .iter()
-                    .map(|(l, t)| (l.clone(), t.substitute(&subst)))
-                    .collect();
-                Some(vec![ctor(&name, fields)])
+                Some(vec![ctor(&name, info.fields.instantiate(&subst))])
             }
             _ => None,
         }
