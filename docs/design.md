@@ -155,7 +155,6 @@ The checker is `oskac check`, built as its own crate, `oska-check`, on top of th
 - **Automatically imported:** primitive types, `String`, `Bool`, `Option`, `Result`, `List`, `Path`, the built-in capabilities, `Args`, and the core traits (`Eq`, `Hash`, `Display`, `From`).
 - **Imported explicitly:** sink and library modules such as `std.sql`, `std.html`, and `std.json` need `use`.
 - The prelude grows only as the examples, the design-notes samples, and the tests need it.
-- Until untrusted values are implemented, capability reads return plain `String`.
 
 ### Capability rules
 
@@ -254,12 +253,15 @@ Trust is a flag that the checker tracks on text types ([ADR 0006](adr/0006-trust
   - The checker enforces this one-way rule with the same mechanism that stops a `cap fn` from flowing into a `fn`.
 - **Propagation.**
   - Prelude text operations follow their inputs. If any text input is untrusted, every text type in the result is untrusted. For example, `.lines()` returns `List<Untrusted<String>>`.
-  - Interpolating an untrusted value makes the whole string untrusted.
+  - Interpolating an untrusted value makes the whole string untrusted. Every interpolation hole must be `Display`.
+  - A generic function or trait method follows the trust of its type arguments. If what any generic, or `Self` in a qualified trait call, is instantiated with holds untrusted text, every text type in the result is untrusted. So `fn show<T: Display>(x: T) -> String` returns untrusted text for an untrusted `x`, whether its body uses `x.to_string()` or `"{x}"`.
   - Results that are not text are trusted. For example, `.count()` returns a trusted `Int`.
 - **User code.**
   - In user code, a `String` parameter, field, or return type means **trusted**.
   - Code that accepts raw input declares `Untrusted<String>`.
   - User functions are explicit about trust. They cannot be generic over it.
+  - An impl method may return trusted text where its trait declares `Untrusted<String>`, because trusted text may flow into untrusted.
+  - The `message` of `IoError`, `SqlError`, and `ProcError` is `Untrusted<String>`, because it can carry text from outside the program.
 - **Validation.**
   - Checks that produce non-text results need nothing special. That includes `len`, `contains`, `starts_with`, `parse_int`, and matching against string literals.
   - A **validator** turns untrusted text into trusted text with `.assume_trusted()`. That call is a **trust assertion**.
@@ -293,16 +295,16 @@ pub fn parse(s: Untrusted<String>) -> Result<Email, ParseError> {
   - A restricted and an unrestricted `FsRead` are the same type, so the checker cannot tell them apart.
 - **Secrets.**
   - `env.secret("API_KEY")` returns `Secret<String>`. In contrast, `env.get` returns `Untrusted<String>`.
-  - A `Secret` displays and debug-prints as `<redacted>`.
-  - A `Secret` cannot be interpolated.
-  - A `Secret` cannot be compared with `==`, because that would leak timing information. Use `a.constant_time_eq(b)` instead. A fix rewrites `==` to it.
+  - A `Secret` has no `Display`; `dbg` prints it as `<redacted>`.
+  - A `Secret` cannot be interpolated, nor can any value that holds one, such as a `List<Secret<String>>` or a struct with a `Secret` field.
+  - A `Secret` cannot be compared with `==`, because that would leak timing information. Use `a.constant_time_eq(text)` instead, or `a.constant_time_eq_secret(b)` to compare two secrets without exposing either. A fix rewrites `==` to the right one.
   - The only way to read a secret's value is `.expose()`, and the exposed value is trusted.
 - **Audit.**
   - Every trust assertion (`.assume_trusted()`) and every secret exposure (`.expose()`) is an **audit site**.
-  - `oskac check --format=json` lists all audit sites, with their spans, in an `"audit"` array.
+  - `oskac check --format=json` lists all audit sites, with their spans, in an `"audit"` array. The human-readable report lists them too.
 - **Scope.**
   - For now, trust is tracked on text only. `Bytes` will be added when the first binary API needs it.
-  - The diagnostic codes are `E03xx`.
+  - The diagnostic codes are `E03xx`. The range covers trust, sinks, and secrets, and also the `std` modules: imports, qualified names, and sink literal tags.
 - **Runtime implementations.** The sink modules start as signature-only prelude declarations. Their runtime implementations arrive with the interpreter.
 
 ## Concurrency
