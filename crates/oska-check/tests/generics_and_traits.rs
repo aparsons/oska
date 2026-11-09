@@ -98,7 +98,7 @@ fn a_test_cannot_assert_equality_of_a_type_without_eq() {
 
 #[test]
 fn a_generic_body_can_call_a_method_of_its_bound() {
-    assert_ok("fn show<T: Display>(x: T) -> String { x.to_string() }");
+    assert_ok("fn show<T: Display>(x: T) -> Untrusted<String> { x.to_string() }");
 }
 
 #[test]
@@ -129,7 +129,7 @@ fn a_method_of_a_bound_is_typed_by_the_trait() {
 #[test]
 fn a_trait_default_method_can_call_the_trait_s_other_methods() {
     assert_ok(
-        "trait Greet {\n    fn name(self) -> String\n    fn greet(self) -> String {\n        let n = self.name()\n        \"hi {n}\"\n    }\n}",
+        "trait Greet {\n    fn name(self) -> String\n    fn greet(self) -> Untrusted<String> {\n        let n = self.name()\n        \"hi {n}\"\n    }\n}",
     );
 }
 
@@ -305,7 +305,7 @@ fn an_ambiguous_method_on_a_generic_parameter_is_an_error() {
 fn a_qualified_call_picks_the_trait() {
     assert_ok(&with_two_traits(
         "fn f(c: Cat) -> String { Long.describe(c) }\n\
-         fn g<T: Short + Long>(c: T) -> String { Short.describe(c) }",
+         fn g<T: Short + Long>(c: T) -> Untrusted<String> { Short.describe(c) }",
     ));
 }
 

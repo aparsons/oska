@@ -143,14 +143,23 @@ impl Infer {
 
     /// Let the trust of every text type in a value of type `ty` flow into
     /// `into`, as the holes of an interpolated string do. Function types
-    /// are skipped: they are not text.
+    /// are skipped: they are not text. A generic parameter counts as
+    /// untrusted text, since it may be instantiated with some: text a
+    /// generic body makes from a `T` is untrusted.
     pub fn join_into(&mut self, ty: &Ty, into: Trust) {
-        if let Ty::Named(_, args, trust) = self.shallow(ty) {
-            // Only fails when `into` is pinned, which the caller rules out.
-            self.trust_flow(trust, into);
-            for arg in &args {
-                self.join_into(arg, into);
+        // Each flow only fails when `into` is pinned, which the caller
+        // rules out.
+        match self.shallow(ty) {
+            Ty::Named(_, args, trust) => {
+                self.trust_flow(trust, into);
+                for arg in &args {
+                    self.join_into(arg, into);
+                }
             }
+            Ty::Param(_) => {
+                self.trust_flow(Trust::Untrusted, into);
+            }
+            _ => {}
         }
     }
 

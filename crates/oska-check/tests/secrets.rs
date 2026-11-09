@@ -153,8 +153,8 @@ fn code_cannot_make_a_secret() {
 #[test]
 fn a_secret_is_not_display() {
     assert_errors(
-        "fn show<T: Display>(value: T) -> String {\n    value.to_string()\n}\n\
-         fn leak(env: Env) -> String {\n    show(env.secret(\"API_KEY\"))\n}",
+        "fn show<T: Display>(value: T) -> Untrusted<String> {\n    value.to_string()\n}\n\
+         fn leak(env: Env) -> Untrusted<String> {\n    show(env.secret(\"API_KEY\"))\n}",
         &[("E0352", "show(env.secret(\"API_KEY\"))")],
     );
 }
@@ -170,8 +170,8 @@ fn a_secret_has_no_to_string() {
 #[test]
 fn an_exposed_secret_is_display() {
     assert_ok(
-        "fn show<T: Display>(value: T) -> String {\n    value.to_string()\n}\n\
-         fn reveal(env: Env) -> String {\n    show(env.secret(\"API_KEY\").expose())\n}",
+        "fn show<T: Display>(value: T) -> Untrusted<String> {\n    value.to_string()\n}\n\
+         fn reveal(env: Env) -> Untrusted<String> {\n    show(env.secret(\"API_KEY\").expose())\n}",
     );
 }
 
@@ -223,6 +223,6 @@ fn a_display_hole_interpolates() {
     assert_ok(
         "struct P { a: Int }\n\
          impl Display for P {\n    fn to_string(self) -> String {\n        \"p\"\n    }\n}\n\
-         fn f<T: Display>(p: P, n: Int, s: String, t: T) -> String {\n    \"{p} {n} {s} {t}\"\n}",
+         fn f<T: Display>(p: P, n: Int, s: String, t: T) -> Untrusted<String> {\n    \"{p} {n} {s} {t}\"\n}",
     );
 }

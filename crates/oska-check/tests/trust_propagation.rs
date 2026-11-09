@@ -307,57 +307,107 @@ fn restricting(header: &str, path: &str) -> String {
 }
 
 #[test]
-fn a_generic_to_string_of_untrusted_text_is_untrusted() {
-    let src = restricting(
+fn a_generic_body_cannot_return_text_from_a_type_parameter_as_trusted() {
+    assert_errors(
         "fn launder<T: Display>(x: T) -> String {\n    x.to_string()\n}",
-        "launder(home)",
+        &[("E0300", "x.to_string()")],
     );
-    assert_errors(&src, &[("E0300", "launder(home)")]);
 }
 
 #[test]
-fn interpolating_a_generic_of_untrusted_text_is_untrusted() {
-    let src = restricting(
+fn interpolating_a_type_parameter_is_untrusted() {
+    assert_errors(
         "fn interp<T: Display>(x: T) -> String {\n    \"{x}\"\n}",
-        "interp(home)",
+        &[("E0300", "\"{x}\"")],
     );
-    assert_errors(&src, &[("E0300", "interp(home)")]);
 }
 
 #[test]
-fn a_generic_of_trusted_text_stays_trusted() {
+fn text_from_a_type_parameter_is_rejected_as_a_program_name() {
+    assert_errors(
+        "use std.proc\n\
+         fn f<T: Display>(x: T, s: Spawn) -> Result<proc.Output, proc.ProcError> {\n    \
+         proc.run(s, x.to_string(), [])\n}",
+        &[("E0300", "x.to_string()")],
+    );
+}
+
+#[test]
+fn text_from_a_type_parameter_is_rejected_as_sql_query_text() {
+    assert_errors(
+        "use std.sql\n\
+         fn f<T: Display>(x: T, db: sql.Db) -> Result<List<sql.Row>, sql.SqlError> {\n    \
+         db.query(x.to_string(), [])\n}",
+        &[("E0341", "x.to_string()")],
+    );
+}
+
+#[test]
+fn text_from_a_type_parameter_is_rejected_as_a_directory() {
+    assert_errors(
+        "fn f<T: Display>(x: T, fs: FsRead) -> FsRead {\n    fs.restrict_to(\"{x}\")\n}",
+        &[("E0300", "\"{x}\"")],
+    );
+}
+
+#[test]
+fn text_from_a_type_parameter_is_accepted_in_a_data_position() {
     assert_ok(
-        "fn launder<T: Display>(x: T) -> String {\n    x.to_string()\n}\n\
-         fn f(fs: FsRead) -> FsRead {\n    fs.restrict_to(launder(\"/tmp\"))\n}",
+        "fn show<T: Display>(x: T) -> Untrusted<String> {\n    x.to_string()\n}\n\
+         fn log<T: Display>(x: T, out: Stdout) -> Result<(), IoError> {\n    \
+         out.println(\"{x}\")\n}",
+    );
+}
+
+#[test]
+fn a_generic_returning_untrusted_text_of_untrusted_text_is_untrusted() {
+    let src = restricting(
+        "fn show<T: Display>(x: T) -> Untrusted<String> {\n    x.to_string()\n}",
+        "show(home)",
+    );
+    assert_errors(&src, &[("E0300", "show(home)")]);
+}
+
+#[test]
+fn a_generic_call_inside_a_generic_body_is_untrusted() {
+    assert_errors(
+        "fn first<T>(x: T, n: Int) -> String {\n    \"n\"\n}\n\
+         fn g<T: Display>(x: T, fs: FsRead) -> FsRead {\n    fs.restrict_to(first(x, 1))\n}",
+        &[("E0300", "first(x, 1)")],
     );
 }
 
 #[test]
 fn a_generic_of_a_non_text_type_stays_trusted() {
     assert_ok(&with_greet(
-        "fn show<T: Display>(x: T) -> String {\n    x.to_string()\n}\n\
-         fn f() -> String {\n    greet(show(1))\n}",
+        "fn label<T>(x: T) -> String {\n    \"label\"\n}\n\
+         fn f() -> String {\n    greet(label(1))\n}",
     ));
+}
+
+#[test]
+fn a_generic_of_untrusted_text_returning_fixed_text_is_untrusted() {
+    let src = restricting(
+        "fn label<T>(x: T) -> String {\n    \"label\"\n}",
+        "label(home)",
+    );
+    assert_errors(&src, &[("E0300", "label(home)")]);
 }
 
 #[test]
 fn a_user_trait_on_string_does_not_launder_through_a_bound() {
     let body = "trait Launder {\n    fn l(self) -> String\n}\n\
                 impl Launder for String {\n    fn l(self) -> String {\n        self\n    }\n}\n\
-                fn gl<T: Launder>(x: T) -> String {\n    x.l()\n}\n\
-                fn f(env: Env) -> Option<String> {\n    let h = env.get(\"H\")?\n    \
-                Some(greet(gl(h)))\n}";
-    assert_errors(&with_greet(body), &[("E0300", "gl(h)")]);
+                fn gl<T: Launder>(x: T) -> String {\n    x.l()\n}";
+    assert_errors(body, &[("E0300", "x.l()")]);
 }
 
 #[test]
 fn a_generic_display_impl_does_not_launder() {
     let body = "struct G<T> {\n    v: T\n}\n\
                 impl<T: Display> Display for G<T> {\n    \
-                fn to_string(self) -> String {\n        self.v.to_string()\n    }\n}\n\
-                fn f(env: Env) -> Option<String> {\n    let h = env.get(\"H\")?\n    \
-                Some(greet(G(v: h).to_string()))\n}";
-    assert_errors(&with_greet(body), &[("E0300", "G(v: h).to_string()")]);
+                fn to_string(self) -> String {\n        self.v.to_string()\n    }\n}";
+    assert_errors(body, &[("E0300", "self.v.to_string()")]);
 }
 
 #[test]

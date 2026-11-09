@@ -82,13 +82,14 @@ fn the_capabilities_example_rejects_untrusted_text_in_a_trusted_parameter() {
 // ---- Laundering ---------------------------------------------------------------
 
 /// A generic `T: Display` calling `x.to_string()` returned trusted text
-/// even when `T` was untrusted text (#52 notes). A generic callee now
-/// follows the trust of its type arguments, so the call is untrusted.
+/// even when `T` was untrusted text (#52 notes). Text from a type
+/// parameter is now untrusted inside a generic body, so the body is the
+/// error; the call also follows the trust of its type arguments.
 #[test]
 fn generic_display_launders_trust() {
     assert_errors(
         "fn launder<T: Display>(x: T) -> String {\n    x.to_string()\n}\nfn f(env: Env) -> Option<String> {\n    let home = env.get(\"HOME\")?\n    Some(launder(home))\n}",
-        &[("E0300", "launder(home)")],
+        &[("E0300", "x.to_string()"), ("E0300", "launder(home)")],
     );
 }
 

@@ -160,12 +160,7 @@ impl Body<'_, '_, '_> {
         let mut callable = self.instantiate(&sig, None);
         callable.description = format!("`{trait_name}.{}`", name.name);
         // `Self` is a type argument here, so the result follows its trust.
-        if callable.joined.is_none() && callable.ret.has_trusted_text() {
-            let joined = self.infer.fresh_trust();
-            callable.ret = callable.ret.trusted_as(joined);
-            callable.joined = Some(joined);
-        }
-        callable.type_args.push(self_ty.clone());
+        self.follow_type_arg(&mut callable, self_ty.clone());
         if sig.receiver.is_method() {
             callable.params.insert(0, (None, self_ty.clone()));
         }
@@ -371,13 +366,29 @@ impl Body<'_, '_, '_> {
             Receiver::Self_ => {}
         }
         self.audit_call(&type_name, &name.name, span);
-        let callable = self.instantiate(&sig, None);
+        let mut callable = self.instantiate(&sig, None);
         if let Some(declared) = &callable.receiver {
             // The receiver flows into `self` like an argument, so untrusted
             // text is no receiver of a method that wants trusted text.
             self.expect(&receiver, declared, base.span);
         }
+        if let Ty::Param(_) = receiver {
+            // A bound's method on a generic parameter: the parameter may
+            // stand for untrusted text, so text in the result is untrusted.
+            self.follow_type_arg(&mut callable, receiver);
+        }
         self.apply(callable, args, expected, span)
+    }
+
+    /// Let `callable`'s result follow the trust of `type_arg` as well, as
+    /// a generic's instantiation does (see [`Body::instantiate`]).
+    fn follow_type_arg(&mut self, callable: &mut Callable, type_arg: Ty) {
+        if callable.joined.is_none() && callable.ret.has_trusted_text() {
+            let joined = self.infer.fresh_trust();
+            callable.ret = callable.ret.trusted_as(joined);
+            callable.joined = Some(joined);
+        }
+        callable.type_args.push(type_arg);
     }
 
     /// The method `name` of a receiver of type `receiver`, named
