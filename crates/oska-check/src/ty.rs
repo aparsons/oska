@@ -160,6 +160,20 @@ impl Ty {
         }
     }
 
+    /// Holds a text type that is fixed trusted, at any depth.
+    pub fn has_trusted_text(&self) -> bool {
+        match self {
+            Ty::Named(_, args, trust) => {
+                (self.is_text() && *trust == Trust::Trusted)
+                    || args.iter().any(Ty::has_trusted_text)
+            }
+            Ty::Fn { params, ret, .. } => {
+                params.iter().any(Ty::has_trusted_text) || ret.has_trusted_text()
+            }
+            Ty::Unit | Ty::Param(_) | Ty::Var(_) | Ty::Never | Ty::Error => false,
+        }
+    }
+
     /// `List<element>`.
     pub fn list(element: Ty) -> Ty {
         Ty::generic(LIST, vec![element])

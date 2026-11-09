@@ -294,3 +294,93 @@ fn trusted_text_compares_with_untrusted_text() {
          Some(name == arg)\n}",
     );
 }
+
+// ---- Generic functions follow trust (spec #49 review) --------------------------
+
+/// A function restricting `fs` to `path`, a structural position, after
+/// `header`, with `home` untrusted.
+fn restricting(header: &str, path: &str) -> String {
+    format!(
+        "{header}\nfn f(env: Env, fs: FsRead) -> Option<FsRead> {{\n    \
+         let home = env.get(\"HOME\")?\n    Some(fs.restrict_to({path}))\n}}"
+    )
+}
+
+#[test]
+fn a_generic_to_string_of_untrusted_text_is_untrusted() {
+    let src = restricting(
+        "fn launder<T: Display>(x: T) -> String {\n    x.to_string()\n}",
+        "launder(home)",
+    );
+    assert_errors(&src, &[("E0300", "launder(home)")]);
+}
+
+#[test]
+fn interpolating_a_generic_of_untrusted_text_is_untrusted() {
+    let src = restricting(
+        "fn interp<T: Display>(x: T) -> String {\n    \"{x}\"\n}",
+        "interp(home)",
+    );
+    assert_errors(&src, &[("E0300", "interp(home)")]);
+}
+
+#[test]
+fn a_generic_of_trusted_text_stays_trusted() {
+    assert_ok(
+        "fn launder<T: Display>(x: T) -> String {\n    x.to_string()\n}\n\
+         fn f(fs: FsRead) -> FsRead {\n    fs.restrict_to(launder(\"/tmp\"))\n}",
+    );
+}
+
+#[test]
+fn a_generic_of_a_non_text_type_stays_trusted() {
+    assert_ok(&with_greet(
+        "fn show<T: Display>(x: T) -> String {\n    x.to_string()\n}\n\
+         fn f() -> String {\n    greet(show(1))\n}",
+    ));
+}
+
+#[test]
+fn a_user_trait_on_string_does_not_launder_through_a_bound() {
+    let body = "trait Launder {\n    fn l(self) -> String\n}\n\
+                impl Launder for String {\n    fn l(self) -> String {\n        self\n    }\n}\n\
+                fn gl<T: Launder>(x: T) -> String {\n    x.l()\n}\n\
+                fn f(env: Env) -> Option<String> {\n    let h = env.get(\"H\")?\n    \
+                Some(greet(gl(h)))\n}";
+    assert_errors(&with_greet(body), &[("E0300", "gl(h)")]);
+}
+
+#[test]
+fn a_generic_display_impl_does_not_launder() {
+    let body = "struct G<T> {\n    v: T\n}\n\
+                impl<T: Display> Display for G<T> {\n    \
+                fn to_string(self) -> String {\n        self.v.to_string()\n    }\n}\n\
+                fn f(env: Env) -> Option<String> {\n    let h = env.get(\"H\")?\n    \
+                Some(greet(G(v: h).to_string()))\n}";
+    assert_errors(&with_greet(body), &[("E0300", "G(v: h).to_string()")]);
+}
+
+#[test]
+fn a_closure_returning_untrusted_text_through_a_generic_is_untrusted() {
+    let body = "fn run<T>(f: fn() -> T) -> T {\n    f()\n}\n\
+                fn f(env: Env) -> Option<String> {\n    let h = env.get(\"H\")?\n    \
+                Some(greet(run(|| h)))\n}";
+    assert_errors(&with_greet(body), &[("E0300", "h")]);
+}
+
+#[test]
+fn mapping_a_list_to_untrusted_text_is_untrusted() {
+    let body = "fn f(env: Env) -> Option<String> {\n    let h = env.get(\"H\")?\n    \
+                let l = [\"a\"].map(|s| h)\n    Some(greet(l.get(0)?))\n}";
+    assert_errors(&with_greet(body), &[("E0300", "l.get(0)?")]);
+}
+
+#[test]
+fn a_trait_method_called_qualified_follows_the_trust_of_self() {
+    let body = "trait Launder {\n    fn l(self) -> String\n}\n\
+                impl Launder for String {\n    fn l(self) -> String {\n        self\n    }\n}\n\
+                fn f(env: Env) -> Option<String> {\n    let h = env.get(\"H\")?\n    \
+                Some(greet(Launder.l(h)))\n}\n\
+                fn g() -> String {\n    greet(Launder.l(\"x\"))\n}";
+    assert_errors(&with_greet(body), &[("E0300", "Launder.l(h)")]);
+}

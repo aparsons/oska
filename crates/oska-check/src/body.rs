@@ -226,9 +226,18 @@ struct Callable {
     pure: bool,
     /// For a method: the type of its receiver, instantiated.
     receiver: Option<Ty>,
-    /// For a `#[follows_trust]` operation: the trust variable its
-    /// receiver and text arguments join into.
+    /// For a `#[follows_trust]` operation or a generic callee: the trust
+    /// variable that every text type in its result has. The receiver and
+    /// text arguments of a `#[follows_trust]` operation join into it, and
+    /// so do the `type_args` of a generic one.
     joined: Option<Trust>,
+    /// For a generic callee: what its generics (and, for a trait method
+    /// called qualified, its `Self`) are instantiated with. Once the
+    /// arguments are checked, the trust of every text type in them joins
+    /// into `joined`, so a generic never launders untrusted text: `T`'s
+    /// text can come back out as a fixed `String` only through `T`'s
+    /// operations, such as `Display.to_string` or interpolation.
+    type_args: Vec<Ty>,
 }
 
 /// The state of checking one body.

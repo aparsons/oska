@@ -45,6 +45,7 @@ impl Body<'_, '_, '_> {
                         pure: !cap,
                         receiver: None,
                         joined: None,
+                        type_args: Vec::new(),
                     }),
                     Ty::Error => None,
                     other => {
@@ -161,6 +162,13 @@ impl Body<'_, '_, '_> {
         let sig = info.method_for(sig, &self_ty, &args, &[], &[]);
         let mut callable = self.instantiate(&sig, None);
         callable.description = format!("`{trait_name}.{}`", name.name);
+        // `Self` is a type argument here, so the result follows its trust.
+        if callable.joined.is_none() && callable.ret.has_trusted_text() {
+            let joined = self.infer.fresh_trust();
+            callable.ret = callable.ret.trusted_as(joined);
+            callable.joined = Some(joined);
+        }
+        callable.type_args.push(self_ty.clone());
         if sig.receiver.is_method() {
             callable.params.insert(0, (None, self_ty.clone()));
         }
@@ -244,6 +252,7 @@ impl Body<'_, '_, '_> {
             pure: true,
             receiver: None,
             joined: None,
+            type_args: Vec::new(),
         }
     }
 
@@ -255,20 +264,28 @@ impl Body<'_, '_, '_> {
     /// in place of every trusted text flag in its signature: the receiver
     /// and text arguments flow into it, so every text type in the result
     /// is untrusted when any of them is (ADR 0006).
+    ///
+    /// A generic callee **follows the trust of its type arguments**: when
+    /// what any generic is instantiated with holds untrusted text, every
+    /// text type in the result is untrusted (see [`Body::apply`]). So
+    /// `fn launder<T: Display>(x: T) -> String` returns untrusted text for
+    /// an untrusted `x`, however its body turned `x` into text.
     pub(super) fn instantiate(&mut self, sig: &FnSig, self_ty: Option<&Ty>) -> Callable {
         let subst: Vec<(String, Ty)> = sig
             .generics
             .iter()
             .map(|g| (g.clone(), self.infer.fresh()))
             .collect();
-        let joined = sig.follows_trust.then(|| self.infer.fresh_trust());
-        let lower = |t: &Ty| {
+        let follows_type_args = !subst.is_empty() && sig.ret.has_trusted_text();
+        let joined = (sig.follows_trust || follows_type_args).then(|| self.infer.fresh_trust());
+        let lower_with = |t: &Ty, whole: bool| {
             let t = t.substitute(&subst);
             match joined {
-                Some(trust) => t.trusted_as(trust),
-                None => t,
+                Some(trust) if whole || sig.follows_trust => t.trusted_as(trust),
+                _ => t,
             }
         };
+        let lower = |t: &Ty| lower_with(t, false);
         if let (Some(actual), Some(declared)) = (self_ty, &sig.self_ty) {
             self.infer.unify(actual, &lower(declared));
         }
@@ -279,7 +296,7 @@ impl Body<'_, '_, '_> {
                 .iter()
                 .map(|(n, t)| (Some(n.clone()), lower(t)))
                 .collect(),
-            ret: lower(&sig.ret),
+            ret: lower_with(&sig.ret, true),
             labels: Labels::Optional,
             obligations: sig
                 .bounds
@@ -300,6 +317,7 @@ impl Body<'_, '_, '_> {
                 .filter(|_| sig.receiver.is_method())
                 .map(lower),
             joined,
+            type_args: subst.into_iter().map(|(_, t)| t).collect(),
         }
     }
 
@@ -509,6 +527,11 @@ impl Body<'_, '_, '_> {
                 ),
                 span,
             );
+        }
+        if let Some(joined) = callable.joined {
+            for ty in &callable.type_args {
+                self.infer.join_into(ty, joined);
+            }
         }
         let what = format!("calling {}", callable.description);
         for (ty, bound) in &callable.obligations {
