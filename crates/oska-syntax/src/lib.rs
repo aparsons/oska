@@ -36,6 +36,9 @@ pub enum TokenKind {
         value: String,
     },
     Punct(Punct),
+    /// A statement terminator, inserted for a significant newline. See
+    /// [`lex`] for the rules.
+    Newline,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +66,14 @@ pub enum Keyword {
     Pub,
     Use,
     Test,
+    /// `self`, the explicit receiver parameter.
+    SelfValue,
+    For,
+    In,
+    While,
+    Break,
+    Continue,
+    Const,
 }
 
 impl Keyword {
@@ -90,6 +101,13 @@ impl Keyword {
             "pub" => Self::Pub,
             "use" => Self::Use,
             "test" => Self::Test,
+            "self" => Self::SelfValue,
+            "for" => Self::For,
+            "in" => Self::In,
+            "while" => Self::While,
+            "break" => Self::Break,
+            "continue" => Self::Continue,
+            "const" => Self::Const,
             _ => return None,
         };
         Some(kw)
@@ -107,7 +125,8 @@ pub enum Punct {
     Comma,
     Dot,
     Colon,
-    Semi,
+    /// `..`, the (exclusive) range operator.
+    DotDot,
     Question,
     Arrow,
     FatArrow,
@@ -181,14 +200,86 @@ fn json_escape(s: &str) -> String {
     out
 }
 
-/// Tokenize Oska source text. Comments and whitespace are discarded.
+/// Tokenize Oska source text. Comments and insignificant whitespace are
+/// discarded.
+///
+/// Newlines end statements (there is no `;`). A [`TokenKind::Newline`] is
+/// emitted between two tokens on different lines when all of these hold:
+///
+/// - the innermost open bracket is not `(` or `[` (a `{` opened inside
+///   parentheses makes newlines significant again);
+/// - the token before the line break can end a statement: an identifier,
+///   a literal, `self`, `return`, `break`, `continue`, `)`, `]`, `}`, or `?`;
+/// - the first token of the next line is not `requires`, `ensures`, `else`,
+///   or `{`, which continue the previous line.
+///
+/// Blank and comment-only lines produce at most one terminator, and none is
+/// emitted at end of input.
 pub fn lex(src: &str) -> Result<Vec<Token>, LexError> {
     let mut lexer = Lexer { src, pos: 0 };
-    let mut tokens = Vec::new();
-    while let Some(token) = lexer.next_token()? {
+    let mut tokens: Vec<Token> = Vec::new();
+    let mut brackets: Vec<Punct> = Vec::new();
+    loop {
+        let newline_at = lexer.skip_trivia();
+        let Some(token) = lexer.next_token()? else {
+            break;
+        };
+        if let Some(at) = newline_at {
+            if is_terminator(tokens.last(), &token, brackets.last()) {
+                tokens.push(Token {
+                    kind: TokenKind::Newline,
+                    span: Span {
+                        start: at,
+                        end: at + 1,
+                    },
+                });
+            }
+        }
+        match token.kind {
+            TokenKind::Punct(open @ (Punct::LParen | Punct::LBracket | Punct::LBrace)) => {
+                brackets.push(open);
+            }
+            TokenKind::Punct(Punct::RParen | Punct::RBracket | Punct::RBrace) => {
+                // Unbalanced closers are left for the parser to report.
+                brackets.pop();
+            }
+            _ => {}
+        }
         tokens.push(token);
     }
     Ok(tokens)
+}
+
+/// Whether a line break between `prev` and `next` ends a statement.
+fn is_terminator(prev: Option<&Token>, next: &Token, innermost: Option<&Punct>) -> bool {
+    if matches!(innermost, Some(Punct::LParen | Punct::LBracket)) {
+        return false;
+    }
+    let Some(prev) = prev else {
+        return false;
+    };
+    let prev_ends = matches!(
+        prev.kind,
+        TokenKind::Ident(_)
+            | TokenKind::Int(_)
+            | TokenKind::Str(_)
+            | TokenKind::SinkStr { .. }
+            | TokenKind::Keyword(
+                Keyword::True
+                    | Keyword::False
+                    | Keyword::SelfValue
+                    | Keyword::Return
+                    | Keyword::Break
+                    | Keyword::Continue
+            )
+            | TokenKind::Punct(Punct::RParen | Punct::RBracket | Punct::RBrace | Punct::Question)
+    );
+    let next_continues = matches!(
+        next.kind,
+        TokenKind::Keyword(Keyword::Requires | Keyword::Ensures | Keyword::Else)
+            | TokenKind::Punct(Punct::LBrace)
+    );
+    prev_ends && !next_continues
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,9 +319,16 @@ impl Lexer<'_> {
         }
     }
 
-    fn skip_trivia(&mut self) {
+    /// Skip whitespace and comments. Returns the byte offset of the first
+    /// line break skipped, if any.
+    fn skip_trivia(&mut self) -> Option<usize> {
+        let mut newline_at = None;
         loop {
             match self.peek() {
+                Some('\n') => {
+                    newline_at.get_or_insert(self.pos);
+                    self.bump();
+                }
                 Some(c) if c.is_whitespace() => {
                     self.bump();
                 }
@@ -245,10 +343,10 @@ impl Lexer<'_> {
                 _ => break,
             }
         }
+        newline_at
     }
 
     fn next_token(&mut self) -> Result<Option<Token>, LexError> {
-        self.skip_trivia();
         let start = self.pos;
         let Some(c) = self.bump() else {
             return Ok(None);
@@ -355,6 +453,14 @@ impl Lexer<'_> {
             ('>', Some('=')) => (Punct::Ge, true),
             ('&', Some('&')) => (Punct::AndAnd, true),
             ('|', Some('|')) => (Punct::OrOr, true),
+            ('.', Some('.')) => (Punct::DotDot, true),
+            (';', _) => {
+                return Err(self.error(
+                    "E0005",
+                    "unexpected `;`: Oska has no semicolons, newlines end statements".into(),
+                    start,
+                ));
+            }
             ('(', _) => (Punct::LParen, false),
             (')', _) => (Punct::RParen, false),
             ('{', _) => (Punct::LBrace, false),
@@ -364,7 +470,6 @@ impl Lexer<'_> {
             (',', _) => (Punct::Comma, false),
             ('.', _) => (Punct::Dot, false),
             (':', _) => (Punct::Colon, false),
-            (';', _) => (Punct::Semi, false),
             ('?', _) => (Punct::Question, false),
             ('+', _) => (Punct::Plus, false),
             ('-', _) => (Punct::Minus, false),
@@ -591,6 +696,179 @@ mod tests {
         let err = lex("x sql\"oops").expect_err("should fail");
         assert_eq!(err.code, "E0002");
         assert_eq!(err.span, Span { start: 2, end: 10 });
+    }
+
+    /// Render tokens compactly: identifiers and literals as written,
+    /// keywords in lower case, punctuation by name, and terminators as `NL`.
+    fn shape(src: &str) -> String {
+        kinds(src)
+            .into_iter()
+            .map(|k| match k {
+                TokenKind::Ident(name) | TokenKind::Int(name) => name,
+                TokenKind::Str(value) => format!("{value:?}"),
+                TokenKind::SinkStr { tag, value } => format!("{tag}{value:?}"),
+                TokenKind::Keyword(kw) => format!("{kw:?}").to_lowercase(),
+                TokenKind::Punct(p) => format!("{p:?}"),
+                TokenKind::Newline => "NL".into(),
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[test]
+    fn newline_ends_statement() {
+        assert_eq!(shape("let a = 1\nlet b = 2"), "let a Eq 1 NL let b Eq 2");
+    }
+
+    #[test]
+    fn newline_token_spans_the_line_break() {
+        let tokens = lex("a\nb").expect("should lex");
+        assert_eq!(
+            tokens[1],
+            Token {
+                kind: TokenKind::Newline,
+                span: Span { start: 1, end: 2 },
+            }
+        );
+    }
+
+    #[test]
+    fn newlines_inside_parens_and_brackets_are_insignificant() {
+        assert_eq!(
+            shape("f(\n    a,\n    b\n)\nxs = [\n    1\n]"),
+            "f LParen a Comma b RParen NL xs Eq LBracket 1 RBracket"
+        );
+    }
+
+    #[test]
+    fn braces_inside_parens_make_newlines_significant_again() {
+        assert_eq!(
+            shape("run(|| {\n    a()\n    b()\n})"),
+            "run LParen OrOr LBrace a LParen RParen NL b LParen RParen NL RBrace RParen"
+        );
+    }
+
+    #[test]
+    fn contract_clauses_and_body_brace_continue_the_header() {
+        let src = "fn f(x: Int) -> Int\n    requires x > 0\n    ensures |r| r > 0\n{\n    x\n}";
+        assert_eq!(
+            shape(src),
+            "fn f LParen x Colon Int RParen Arrow Int \
+             requires x Gt 0 ensures Pipe r Pipe r Gt 0 LBrace x NL RBrace"
+        );
+    }
+
+    #[test]
+    fn else_on_next_line_continues_if() {
+        assert_eq!(
+            shape("if a {\n    b\n}\nelse {\n    c\n}"),
+            "if a LBrace b NL RBrace else LBrace c NL RBrace"
+        );
+    }
+
+    #[test]
+    fn trailing_dot_or_operator_continues_the_line() {
+        assert_eq!(shape("xs.\n    len()"), "xs Dot len LParen RParen");
+        assert_eq!(shape("a +\n    b"), "a Plus b");
+    }
+
+    #[test]
+    fn blank_and_comment_lines_collapse_to_one_terminator() {
+        assert_eq!(shape("a\n\n// note\n\nb"), "a NL b");
+    }
+
+    #[test]
+    fn no_terminator_at_start_or_end_of_input() {
+        assert_eq!(shape("\n\na\n\n"), "a");
+    }
+
+    #[test]
+    fn jump_keywords_and_self_end_statements() {
+        assert_eq!(shape("return\nx"), "return NL x");
+        assert_eq!(
+            shape("break\ncontinue\nself\nx"),
+            "break NL continue NL selfvalue NL x"
+        );
+    }
+
+    #[test]
+    fn lexes_ranges() {
+        assert_eq!(shape("a..b"), "a DotDot b");
+        assert_eq!(
+            shape("for i in 0..n {}"),
+            "for i in 0 DotDot n LBrace RBrace"
+        );
+        assert_eq!(shape("a.b"), "a Dot b");
+    }
+
+    #[test]
+    fn rejects_semicolons() {
+        let err = lex("let a = 1; let b = 2").expect_err("should fail");
+        assert_eq!(err.code, "E0005");
+        assert_eq!(err.span, Span { start: 9, end: 10 });
+    }
+
+    #[test]
+    fn lexes_remaining_keywords() {
+        assert_eq!(
+            shape("self for in while break continue const"),
+            "selfvalue for in while break continue const"
+        );
+        assert_eq!(shape("selfish inner"), "selfish inner");
+    }
+
+    #[test]
+    fn lexes_design_samples() {
+        // The Syntax and Contracts samples from docs/design.md.
+        let syntax = r#"
+use std.sql.{Db, query}
+
+pub struct Account { pub id: Int, balance: Int }
+
+impl Account {
+    pub fn deposit(var self, amount: Int)
+        requires amount > 0
+    {
+        self.balance = self.balance + amount
+    }
+}
+
+fn describe(s: Shape) -> String {
+    match s {
+        Shape.Circle(radius: r) if r > 100 => "big circle"
+        Shape.Circle(radius: _) => "circle"
+        Shape.Square(side: n) => "square"
+    }
+}
+
+test "deposit adds to the balance" {
+    var a = Account(id: 1, balance: 0)
+    a.deposit(amount: 5)
+    t.assert_eq(a.balance, 5)
+}
+"#;
+        let deposit = shape(syntax);
+        assert!(
+            deposit.contains(
+                "pub fn deposit LParen var selfvalue Comma amount Colon Int RParen \
+                 requires amount Gt 0 LBrace self"
+            ),
+            "{deposit}"
+        );
+        assert!(
+            deposit.contains("FatArrow \"big circle\" NL Shape Dot Circle"),
+            "{deposit}"
+        );
+
+        let contracts = "fn withdraw(acct: Account, amount: Int) -> Result<Account, Error>
+    requires amount > 0
+    ensures |r| r.is_ok() implies r.unwrap().balance >= 0
+{ x }";
+        assert!(
+            !shape(contracts).contains("NL"),
+            "a multi-line contract header has no terminators: {}",
+            shape(contracts)
+        );
     }
 
     #[test]
