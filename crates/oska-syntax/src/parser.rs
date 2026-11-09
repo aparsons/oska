@@ -381,6 +381,38 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// Whether a body-less signature ends before the next token. A
+    /// signature ending in a generic type's `>` emits no line break, so the
+    /// signature also ends when the next line starts a new item or method
+    /// (`fn`, `pub`, `#`) or closes the block (`}`).
+    fn at_signature_end(&self) -> bool {
+        if self.at_line_end() {
+            return true;
+        }
+        let next = self.peek_span().start;
+        let line_break = self
+            .src
+            .get(self.prev_end..next)
+            .is_some_and(|gap| gap.contains('\n'));
+        line_break
+            && matches!(
+                self.peek(),
+                Some(
+                    TokenKind::Keyword(Keyword::Fn | Keyword::Pub)
+                        | TokenKind::Punct(Punct::Hash | Punct::RBrace)
+                )
+            )
+    }
+
+    /// Whether `item` ends here: at a line end, or, for a body-less
+    /// function, wherever its signature ends.
+    fn at_item_end(&self, item: &Item) -> bool {
+        match &item.kind {
+            ItemKind::Fn(decl) if decl.body.is_none() => self.at_signature_end(),
+            _ => self.at_line_end(),
+        }
+    }
+
     /// Consume an optional `pub`, returning its span.
     fn eat_pub(&mut self) -> Option<Span> {
         let span = self.peek_span();
@@ -416,8 +448,10 @@ impl<'a> Parser<'a> {
             if self.peek().is_none() {
                 return Ok(items);
             }
-            items.push(self.item()?);
-            if !self.at_line_end() {
+            let item = self.item()?;
+            let ended = self.at_item_end(&item);
+            items.push(item);
+            if !ended {
                 return Err(self.expected("a line break after the item"));
             }
         }
@@ -736,13 +770,15 @@ impl<'a> Parser<'a> {
                 ));
             }
             let decl = self.fn_decl(context)?;
-            methods.push(Item {
+            let method = Item {
                 public: prefix.pub_span.is_some(),
                 attributes: prefix.attributes,
                 kind: ItemKind::Fn(decl),
                 span: self.span_from(prefix.start),
-            });
-            if !self.at_line_end() {
+            };
+            let ended = self.at_item_end(&method);
+            methods.push(method);
+            if !ended {
                 return Err(self.expected("a line break after the method"));
             }
         }
@@ -835,7 +871,7 @@ impl<'a> Parser<'a> {
         // Only a trait method, or any function in the prelude, may stop
         // after its signature.
         let may_omit_body = context == FnContext::Trait || self.mode == Mode::Prelude;
-        let body = if may_omit_body && self.at_line_end() {
+        let body = if may_omit_body && self.at_signature_end() {
             None
         } else {
             Some(self.block()?)
