@@ -343,3 +343,45 @@ fn list_map_calls_the_closure_on_each_item() {
         "101 103 3\n",
     );
 }
+
+// ---- Strings ---------------------------------------------------------------
+
+#[test]
+fn string_len_counts_characters_and_byte_len_counts_bytes() {
+    assert_runs(
+        &main_with(
+            "    let word = \"héllo→🙂\"
+    let chars = word.len()
+    let bytes = word.byte_len()
+    let ascii = \"abc\".len()
+    io.println(\"{chars} {bytes} {ascii}\")",
+        ),
+        &[],
+        "7 13 3\n",
+    );
+}
+
+#[test]
+fn interpolation_displays_each_value_through_its_display_impl() {
+    assert_runs(
+        &program(
+            "struct Point { x: Int, y: Int }
+
+impl Display for Point {
+    fn to_string(self) -> String {
+        let x = self.x
+        let y = self.y
+        \"({x}, {y})\"
+    }
+}
+
+struct Segment { from: Point, to: Point }",
+            "    let p = Point(x: 1, y: -2)
+    let s = Segment(from: p, to: Point(x: 3, y: 4))
+    let name = \"seg\"
+    io.println(\"{name}: {s.from} to {s.to}, p = {p}\")",
+        ),
+        &[],
+        "seg: (1, -2) to (3, 4), p = (1, -2)\n",
+    );
+}

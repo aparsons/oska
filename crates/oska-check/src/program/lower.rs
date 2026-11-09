@@ -60,8 +60,9 @@ pub enum Resolution {
 /// Every resolution in a module, keyed by the span it was recorded at.
 pub type Resolutions = HashMap<Span, Resolution>;
 
-/// Lower every free function of `module`, and every method of its
-/// inherent impls, as `Type.method`. (Trait impls are not lowered yet.)
+/// Lower every free function of `module`, every method of its inherent
+/// impls, as `Type.method`, and every method of its trait impls, as
+/// `<Type as Trait>.method`.
 pub fn module(module: &Module, items: &Items, resolutions: &Resolutions) -> Program {
     let lowering = Lowering { resolutions };
     let mut program = Program::default();
@@ -71,19 +72,36 @@ pub fn module(module: &Module, items: &Items, resolutions: &Resolutions) -> Prog
                 let name = f.name.name.clone();
                 lowering.function(&mut program, name, f, items.fns.get(&f.name.name));
             }
-            ItemKind::Impl(imp) if imp.trait_ref.is_none() => {
-                let TypeKind::Path { segments, .. } = &imp.target.kind else {
+            ItemKind::Impl(imp) => {
+                let Some(type_name) = path_name(&imp.target) else {
                     continue;
                 };
-                let Some(type_name) = segments.last().map(|s| s.name.as_str()) else {
-                    continue;
+                let trait_name = match &imp.trait_ref {
+                    Some(trait_ref) => match path_name(trait_ref) {
+                        Some(name) => Some(name),
+                        None => continue,
+                    },
+                    None => None,
                 };
                 for method in &imp.methods {
-                    if let ItemKind::Fn(f) = &method.kind {
-                        let name = format!("{type_name}.{}", f.name.name);
-                        let sig = items.inherent_method(type_name, &f.name.name);
-                        lowering.function(&mut program, name, f, sig);
-                    }
+                    let ItemKind::Fn(f) = &method.kind else {
+                        continue;
+                    };
+                    let method = &f.name.name;
+                    let (name, sig) = match trait_name {
+                        Some(trait_name) => (
+                            super::trait_method(type_name, trait_name, method),
+                            items
+                                .trait_methods_named(type_name, method)
+                                .into_iter()
+                                .find(|s| s.trait_name.as_deref() == Some(trait_name)),
+                        ),
+                        None => (
+                            format!("{type_name}.{method}"),
+                            items.inherent_method(type_name, method),
+                        ),
+                    };
+                    lowering.function(&mut program, name, f, sig);
                 }
             }
             _ => {}
@@ -444,6 +462,14 @@ impl Lowering<'_> {
             };
         }
         Some(value)
+    }
+}
+
+/// The last segment of a path type, such as `Point` or `Display`.
+fn path_name(ty: &ast::Type) -> Option<&str> {
+    match &ty.kind {
+        TypeKind::Path { segments, .. } => segments.last().map(|s| s.name.as_str()),
+        _ => None,
     }
 }
 

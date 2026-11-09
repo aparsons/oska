@@ -58,7 +58,7 @@ use crate::infer::{Infer, Mismatch};
 use crate::items::{Bound, Items, Lower};
 use crate::prelude::{self, StdModule};
 use crate::program::lower::{Resolution, Resolutions};
-use crate::program::{Callee, Construct, IntType};
+use crate::program::{self, Callee, Construct, IntType};
 use crate::resolve;
 use crate::suggest;
 use crate::ty::{self, Trust, Ty};
@@ -386,12 +386,19 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                         || matches!(ty.head(), Some(ty::BOOL | ty::STRING));
                     builtin.then_some(Resolution::Equality)
                 }
-                Deferred::Display => ty
-                    .head()
-                    .filter(|head| matches!(*head, ty::INT | ty::STRING))
-                    .map(|head| {
-                        Resolution::Display(Callee::Intrinsic(format!("{head}.to_string")))
-                    }),
+                Deferred::Display => match ty.head() {
+                    Some(head @ (ty::INT | ty::STRING)) => Some(Resolution::Display(
+                        Callee::Intrinsic(format!("{head}.to_string")),
+                    )),
+                    // The checker has required `Display` of the hole, so a
+                    // type the module declares has an impl of it there.
+                    Some(head) if self.decls().get(head).is_some_and(|d| !d.in_prelude) => {
+                        Some(Resolution::Display(Callee::Function(
+                            program::trait_method(head, ty::DISPLAY, "to_string"),
+                        )))
+                    }
+                    _ => None,
+                },
             };
             if let Some(resolution) = resolution {
                 self.record(span, resolution);

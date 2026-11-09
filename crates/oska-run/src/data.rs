@@ -21,6 +21,8 @@ pub const INTRINSICS: &[(&str, Intrinsic)] = &[
     ("List.get", list_get),
     ("List.len", list_len),
     ("List.new", list_new),
+    ("String.byte_len", string_byte_len),
+    ("String.len", string_len),
 ];
 
 /// Every higher-order data intrinsic, by qualified name.
@@ -90,4 +92,14 @@ fn list_map(interp: &mut Interpreter<'_, '_>, args: Vec<Value>, _: Span) -> Resu
         .map(|item| interp.call_value(&args[1], vec![item.clone()]))
         .collect::<Result<Vec<Value>, Panic>>()?;
     Ok(Value::List(Rc::new(mapped)))
+}
+
+/// `String.len(self)`: the number of characters (Unicode code points).
+fn string_len(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    Ok(Value::Int(args[0].as_str().chars().count() as i128))
+}
+
+/// `String.byte_len(self)`: the number of bytes in its UTF-8 encoding.
+fn string_byte_len(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    Ok(Value::Int(args[0].as_str().len() as i128))
 }

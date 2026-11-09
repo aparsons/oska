@@ -40,8 +40,15 @@ pub(crate) mod lower;
 pub struct Program {
     /// Every function with a body, keyed by qualified name: `name` for a
     /// free function, `Type.method` for a method or associated function
-    /// of an inherent impl. (Trait impl methods are not lowered yet.)
+    /// of an inherent impl, and `<Type as Trait>.method` for a method of
+    /// a trait impl (see [`trait_method`]).
     pub functions: BTreeMap<String, Function>,
+}
+
+/// The qualified name of `method` in the impl of `trait_name` for
+/// `type_name`, such as `<Point as Display>.to_string`.
+pub fn trait_method(type_name: &str, trait_name: &str, method: &str) -> String {
+    format!("<{type_name} as {trait_name}>.{method}")
 }
 
 /// A function with a body.
@@ -268,7 +275,8 @@ pub enum Place {
 pub enum Part {
     Text(String),
     /// A hole: its value, turned to text by `display`, the `Display`
-    /// implementation the checker chose (`Int.to_string`).
+    /// implementation the checker chose: `Int.to_string`, or a user
+    /// type's `<Point as Display>.to_string`.
     Hole {
         value: Expr,
         display: Callee,
