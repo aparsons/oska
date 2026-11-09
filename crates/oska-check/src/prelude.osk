@@ -75,6 +75,27 @@ pub struct Sched { handle: Int }
 #[capability]
 pub struct Spawn { handle: Int }
 
+// ---- Tests ---------------------------------------------------------------
+
+// The type of `t`, the built-in value in every `test` body. Its fields are
+// stand-in capabilities: an in-memory `fs`, a fixed `clock`, a seeded
+// `random`, and a recording `stdout`. An `#[integration]` test gets the
+// same `t`; the runtime decides which capabilities are real. A failed
+// assertion fails the test.
+pub cap struct TestContext {
+    pub fs: Fs,
+    pub clock: Clock,
+    pub random: Random,
+    pub stdout: Stdout,
+}
+
+impl TestContext {
+    pub fn assert(self, cond: Bool)
+    pub fn assert_eq<T>(self, actual: T, expected: T)
+    pub fn assert_ne<T>(self, actual: T, other: T)
+    pub fn fail(self, message: String)
+}
+
 // ---- Core types --------------------------------------------------------
 
 pub enum Option<T> {
@@ -126,16 +147,42 @@ impl Args {
     pub fn get(self, index: Int) -> Option<String>
 }
 
-pub struct IoError { message: String }
+// Plain data: code may construct one to report its own failures.
+pub struct IoError { pub message: String }
 
 impl Display for IoError {
     fn to_string(self) -> String
+}
+
+// ---- Structured concurrency ---------------------------------------------
+
+// The handle `scope |s| { ... }` binds. A scope does not exit until all of
+// its tasks have finished. Deterministic parallelism needs no capability,
+// so a scope is plain data.
+pub struct Scope { handle: Int }
+
+// A spawned task may perform effects, so it is a `cap fn`; a pure closure
+// fits too.
+impl Scope {
+    pub fn spawn<T>(self, task: cap fn() -> T) -> Task<T>
+}
+
+// A running task. `join` waits for it and returns its result.
+pub struct Task<T> { handle: Int }
+
+impl<T> Task<T> {
+    pub fn join(self) -> T
 }
 
 // ---- Core functions ----------------------------------------------------
 
 // Print `value` for debugging and return it. An error under `--release`.
 pub fn dbg<T>(value: T) -> T
+
+// A placeholder for code not yet written: it fits any type, and fails
+// when reached. The fix for a non-exhaustive `match` uses it as the body
+// of each arm it adds.
+pub fn todo<T>() -> T
 
 // ---- Core traits -------------------------------------------------------
 
@@ -156,6 +203,7 @@ impl Eq for U64 { fn eq(self, other: U64) -> Bool }
 impl Eq for Bool { fn eq(self, other: Bool) -> Bool }
 impl Eq for String { fn eq(self, other: String) -> Bool }
 impl Eq for Path { fn eq(self, other: Path) -> Bool }
+impl Eq for IoError { fn eq(self, other: IoError) -> Bool }
 impl<T: Eq> Eq for Option<T> { fn eq(self, other: Option<T>) -> Bool }
 impl<T: Eq, E: Eq> Eq for Result<T, E> { fn eq(self, other: Result<T, E>) -> Bool }
 impl<T: Eq> Eq for List<T> { fn eq(self, other: List<T>) -> Bool }
