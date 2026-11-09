@@ -101,6 +101,81 @@ fn public_cap_struct_over_several_lines() {
 }
 
 #[test]
+fn enum_with_each_variant_form() {
+    let src = "enum Shape {\n    Circle { radius: Int },\n    Rect(Int, Int),\n    Empty,\n}";
+    assert_items(
+        src,
+        &format!(
+            r#"[{{
+                "kind": "EnumItem", "span": {{"start": 0, "end": 73}},
+                "public": false,
+                "cap": false,
+                "name": {shape},
+                "variants": [
+                    {{"kind": "Variant", "span": {{"start": 17, "end": 39}},
+                      "name": {circle}, "form": "named",
+                      "fields": [
+                          {{"kind": "Field", "span": {{"start": 26, "end": 37}},
+                            "public": false, "name": {radius}, "type": {int1}}}
+                      ]}},
+                    {{"kind": "Variant", "span": {{"start": 45, "end": 59}},
+                      "name": {rect}, "form": "positional",
+                      "fields": [
+                          {{"kind": "Field", "span": {{"start": 50, "end": 53}},
+                            "public": false, "type": {int2}}},
+                          {{"kind": "Field", "span": {{"start": 55, "end": 58}},
+                            "public": false, "type": {int3}}}
+                      ]}},
+                    {{"kind": "Variant", "span": {{"start": 65, "end": 70}},
+                      "name": {empty}, "form": "unit", "fields": []}}
+                ]
+            }}]"#,
+            shape = ident("Shape", 5),
+            circle = ident("Circle", 17),
+            radius = ident("radius", 26),
+            int1 = path_ty("Int", 34),
+            rect = ident("Rect", 45),
+            int2 = path_ty("Int", 50),
+            int3 = path_ty("Int", 55),
+            empty = ident("Empty", 65),
+        ),
+    );
+}
+
+#[test]
+fn public_cap_enum() {
+    assert_items(
+        "pub cap enum Handle { File(FsRead) }",
+        &format!(
+            r#"[{{
+                "kind": "EnumItem", "span": {{"start": 0, "end": 36}},
+                "public": true,
+                "cap": true,
+                "name": {handle},
+                "variants": [
+                    {{"kind": "Variant", "span": {{"start": 22, "end": 34}},
+                      "name": {file}, "form": "positional",
+                      "fields": [
+                          {{"kind": "Field", "span": {{"start": 27, "end": 33}},
+                            "public": false, "type": {fs}}}
+                      ]}}
+                ]
+            }}]"#,
+            handle = ident("Handle", 13),
+            file = ident("File", 22),
+            fs = path_ty("FsRead", 27),
+        ),
+    );
+}
+
+#[test]
+fn rejects_missing_comma_between_variants() {
+    let err = module_err("enum E {\n    A(Int)\n    B\n}");
+    assert_eq!(err.code, "E0120");
+    assert_eq!(err.span, Span { start: 19, end: 19 });
+}
+
+#[test]
 fn rejects_missing_comma_between_fields() {
     // A type ending in `>` never ends a line, so without the comma `y`
     // would run into `List<Int>`. The span is empty, where the comma goes.

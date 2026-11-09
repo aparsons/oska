@@ -99,6 +99,7 @@ fn examples_parse() {
             .map(|item| match &item.kind {
                 ItemKind::Fn(decl) => decl.name.name.clone(),
                 ItemKind::Struct(decl) => decl.name.name.clone(),
+                ItemKind::Enum(decl) => decl.name.name.clone(),
             })
             .collect()
     };

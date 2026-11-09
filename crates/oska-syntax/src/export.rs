@@ -9,8 +9,8 @@
 //! are first built as a small [`Json`] value, then printed.
 
 use crate::ast::{
-    Arg, Block, ClosureParam, Expr, ExprKind, Field, Fields, FnDecl, Ident, Item, ItemKind, Module, Param, Stmt,
-    StmtKind, StrPart, StructDecl, Type, TypeKind, UnaryOp,
+    Arg, Block, ClosureParam, EnumDecl, Expr, ExprKind, Field, Fields, FnDecl, Ident, Item,
+    ItemKind, Module, Param, Stmt, StmtKind, StrPart, StructDecl, Type, TypeKind, UnaryOp, Variant,
 };
 use crate::{json_escape, Span};
 
@@ -234,7 +234,26 @@ fn item(item: &Item) -> Json {
     match &item.kind {
         ItemKind::Fn(decl) => fn_item(item, decl),
         ItemKind::Struct(decl) => struct_item(item, decl),
+        ItemKind::Enum(decl) => enum_item(item, decl),
     }
+}
+
+fn enum_item(item: &Item, decl: &EnumDecl) -> Json {
+    Node::new("EnumItem", item.span)
+        .field("public", Json::Bool(item.public))
+        .field("cap", Json::Bool(decl.cap))
+        .field("name", ident(&decl.name))
+        .field("variants", list(&decl.variants, variant))
+        .done()
+}
+
+fn variant(variant: &Variant) -> Json {
+    let (form, fields) = fields_json(&variant.fields);
+    Node::new("Variant", variant.span)
+        .field("name", ident(&variant.name))
+        .field("form", str_json(form))
+        .field("fields", fields)
+        .done()
 }
 
 fn struct_item(item: &Item, decl: &StructDecl) -> Json {
@@ -253,6 +272,7 @@ fn fields_json(fields: &Fields) -> (&'static str, Json) {
     match fields {
         Fields::Named(fields) => ("named", list(fields, field)),
         Fields::Positional(fields) => ("positional", list(fields, field)),
+        Fields::Unit => ("unit", Json::Arr(Vec::new())),
     }
 }
 
