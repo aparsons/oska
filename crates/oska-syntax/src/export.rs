@@ -9,8 +9,8 @@
 //! are first built as a small [`Json`] value, then printed.
 
 use crate::ast::{
-    Arg, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, Item, ItemKind, Module, Param, Stmt,
-    StmtKind, StrPart, Type, TypeKind, UnaryOp,
+    Arg, Block, ClosureParam, Expr, ExprKind, Field, Fields, FnDecl, Ident, Item, ItemKind, Module, Param, Stmt,
+    StmtKind, StrPart, StructDecl, Type, TypeKind, UnaryOp,
 };
 use crate::{json_escape, Span};
 
@@ -233,7 +233,35 @@ fn list<T>(items: &[T], f: impl Fn(&T) -> Json) -> Json {
 fn item(item: &Item) -> Json {
     match &item.kind {
         ItemKind::Fn(decl) => fn_item(item, decl),
+        ItemKind::Struct(decl) => struct_item(item, decl),
     }
+}
+
+fn struct_item(item: &Item, decl: &StructDecl) -> Json {
+    let (form, fields) = fields_json(&decl.fields);
+    Node::new("StructItem", item.span)
+        .field("public", Json::Bool(item.public))
+        .field("cap", Json::Bool(decl.cap))
+        .field("name", ident(&decl.name))
+        .field("form", str_json(form))
+        .field("fields", fields)
+        .done()
+}
+
+/// The `form` string and `fields` array for a struct or variant.
+fn fields_json(fields: &Fields) -> (&'static str, Json) {
+    match fields {
+        Fields::Named(fields) => ("named", list(fields, field)),
+        Fields::Positional(fields) => ("positional", list(fields, field)),
+    }
+}
+
+fn field(field: &Field) -> Json {
+    Node::new("Field", field.span)
+        .field("public", Json::Bool(field.public))
+        .opt("name", field.name.as_ref().map(ident))
+        .field("type", ty(&field.ty))
+        .done()
 }
 
 fn fn_item(item: &Item, decl: &FnDecl) -> Json {

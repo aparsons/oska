@@ -240,6 +240,7 @@ pub struct Item {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ItemKind {
     Fn(FnDecl),
+    Struct(StructDecl),
 }
 
 /// `fn name(params) -> ret { body }`.
@@ -257,6 +258,35 @@ pub struct FnDecl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Param {
     pub name: Ident,
+    pub ty: Type,
+    pub span: Span,
+}
+
+/// `struct Name { fields }` or `struct Name(fields)`, optionally `cap`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructDecl {
+    /// Declared `cap struct`: the type may hold capabilities.
+    pub cap: bool,
+    pub name: Ident,
+    pub fields: Fields,
+}
+
+/// The fields of a struct or enum variant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fields {
+    /// `{ a: T, b: U }`. Every field has a name.
+    Named(Vec<Field>),
+    /// `(T, U)`. No field has a name.
+    Positional(Vec<Field>),
+}
+
+/// A declared field: `pub name: Type`, or just `Type` when positional.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Field {
+    /// Declared `pub`. Fields are private by default.
+    pub public: bool,
+    /// Present for named fields, absent for positional ones.
+    pub name: Option<Ident>,
     pub ty: Type,
     pub span: Span,
 }
