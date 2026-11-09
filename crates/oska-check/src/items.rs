@@ -572,7 +572,7 @@ impl<'d, 'a> Lower<'d, 'a> {
             params: f
                 .params
                 .iter()
-                .map(|p| (p.name.name.clone(), lower.ty(&p.ty)))
+                .map(|p| (p.name.name.clone(), lower.param_ty(&p.ty)))
                 .collect(),
             ret: f.return_type.as_ref().map_or(Ty::Unit, |t| lower.ty(t)),
             trait_name: None,
@@ -581,6 +581,26 @@ impl<'d, 'a> Lower<'d, 'a> {
                 .params
                 .iter()
                 .any(|p| capability_bearing(&lower.ty(&p.ty), self.decls)),
+        }
+    }
+
+    /// A parameter's type. A function-typed parameter of a prelude or
+    /// `std` function accepts a scoped closure, one that captures a
+    /// `Scope` handle: they only call what they are given, as `spawn` and
+    /// `map` do, and their bodies, if any, are checked with the parameter
+    /// scoped, so they cannot keep it. A user function's cannot: its body
+    /// could return or store the closure past its `scope` block.
+    fn param_ty(&self, ty: &Type) -> Ty {
+        match self.ty(ty) {
+            Ty::Fn {
+                cap, params, ret, ..
+            } if self.see_all => Ty::Fn {
+                cap,
+                scoped: true,
+                params,
+                ret,
+            },
+            other => other,
         }
     }
 
@@ -608,6 +628,7 @@ impl<'d, 'a> Lower<'d, 'a> {
                 return_type,
             } => Ty::Fn {
                 cap: *cap,
+                scoped: false,
                 params: params.iter().map(|p| self.ty(p)).collect(),
                 ret: Box::new(return_type.as_ref().map_or(Ty::Unit, |r| self.ty(r))),
             },

@@ -34,7 +34,9 @@ impl Body<'_, '_, '_> {
             _ => {
                 let ty = self.infer(callee);
                 match self.infer.resolve(&ty) {
-                    Ty::Fn { cap, params, ret } => Some(Callable {
+                    Ty::Fn {
+                        cap, params, ret, ..
+                    } => Some(Callable {
                         description: "this function".to_string(),
                         params: params.into_iter().map(|p| (None, p)).collect(),
                         ret: *ret,
@@ -640,6 +642,7 @@ impl Callable {
     pub(super) fn into_fn_type(self) -> Ty {
         Ty::Fn {
             cap: false,
+            scoped: false,
             params: self.params.into_iter().map(|(_, t)| t).collect(),
             ret: Box::new(self.ret),
         }
