@@ -7,15 +7,21 @@
 //! `return`, a `break` or `continue`, or a panic, is an [`Unwind`], passed
 //! up with `?` until the construct that handles it.
 //!
+//! A closure captures by value: it keeps a copy of the frame's slots and
+//! receiver where it was made (a reference-count increment each), and a
+//! call of it pushes its arguments after them. A mutating call takes its
+//! receiver out of its place, so a value nothing else shares is changed
+//! in place, and writes the method's final `self` back.
+//!
 //! To evaluate a new node kind, add its arm to [`Interpreter::eval`] (or
 //! [`Interpreter::stmt`]), and keep the frame's slots in step with the
 //! checker's locals: push exactly where the checker binds.
 
+use std::rc::Rc;
+
 use oska_check::program::{
     Arm, Callee, Expr, ExprKind, Function, Part, Pattern, Place, Program, Stmt,
 };
-use std::rc::Rc;
-
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::Span;
 
