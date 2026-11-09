@@ -9,8 +9,8 @@
 //! are first built as a small [`Json`] value, then printed.
 
 use crate::ast::{
-    Arg, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, Item, ItemKind, Module, Param, Stmt,
-    StmtKind, StrPart, Type, TypeKind, UnaryOp,
+    Arg, Attribute, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, Item, ItemKind, Module,
+    Param, Stmt, StmtKind, StrPart, Type, TypeKind, UnaryOp, UseDecl,
 };
 use crate::{json_escape, Span};
 
@@ -233,16 +233,37 @@ fn list<T>(items: &[T], f: impl Fn(&T) -> Json) -> Json {
 fn item(item: &Item) -> Json {
     match &item.kind {
         ItemKind::Fn(decl) => fn_item(item, decl),
+        ItemKind::Use(decl) => use_item(item, decl),
     }
 }
 
-fn fn_item(item: &Item, decl: &FnDecl) -> Json {
-    Node::new("FnItem", item.span)
+/// A node for `item` with the fields every item carries.
+fn item_node(kind: &'static str, item: &Item) -> Node {
+    Node::new(kind, item.span)
         .field("public", Json::Bool(item.public))
+        .field("attributes", list(&item.attrs, attribute))
+}
+
+fn attribute(attr: &Attribute) -> Json {
+    Node::new("Attribute", attr.span)
+        .field("name", ident(&attr.name))
+        .field("args", list(&attr.args, arg))
+        .done()
+}
+
+fn fn_item(item: &Item, decl: &FnDecl) -> Json {
+    item_node("FnItem", item)
         .field("name", ident(&decl.name))
         .field("params", list(&decl.params, param))
         .opt("return_type", decl.ret.as_ref().map(ty))
         .field("body", block(&decl.body))
+        .done()
+}
+
+fn use_item(item: &Item, decl: &UseDecl) -> Json {
+    item_node("UseItem", item)
+        .field("path", list(&decl.path, ident))
+        .opt("names", decl.names.as_ref().map(|names| list(names, ident)))
         .done()
 }
 

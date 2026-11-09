@@ -233,13 +233,36 @@ pub struct Module {
 pub struct Item {
     /// Declared `pub`.
     pub public: bool,
+    /// Attributes written before the item, in source order.
+    pub attrs: Vec<Attribute>,
     pub kind: ItemKind,
+    /// Covers the item's attributes, if any, through its end.
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ItemKind {
     Fn(FnDecl),
+    Use(UseDecl),
+}
+
+/// `use a.b` imports the module `b`; `use a.b.{X, y}` imports the names
+/// `X` and `y` from `a.b`. There are no glob or renaming imports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UseDecl {
+    /// The dotted path, without the brace group.
+    pub path: Vec<Ident>,
+    /// The names in the brace group, or `None` without one.
+    pub names: Option<Vec<Ident>>,
+}
+
+/// `#[name]` or `#[name(args)]`. The set of names is closed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attribute {
+    pub name: Ident,
+    /// Empty when the attribute has no parentheses.
+    pub args: Vec<Arg>,
+    pub span: Span,
 }
 
 /// `fn name(params) -> ret { body }`.

@@ -26,10 +26,12 @@
 //! - `E0105`: chained comparison such as `a < b < c`
 //! - `E0106`: invalid assignment target
 //! - `E0107`: a statement at module level, where only items are allowed
+//! - `E0130`: a glob import such as `use a.*`
+//! - `E0131`: a renaming import such as `use a.b as c`
 
 use crate::ast::{
     Arg, BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, Item, ItemKind, Module,
-    Param, Stmt, StmtKind, StrPart, Type, TypeKind, UnaryOp,
+    Param, Stmt, StmtKind, StrPart, Type, TypeKind, UnaryOp, UseDecl,
 };
 use crate::{lex, resolve_escape, Diagnostic, Keyword, Punct, Span, Token, TokenKind};
 
@@ -105,6 +107,12 @@ fn describe(kind: Option<&TokenKind>) -> String {
         Some(TokenKind::Punct(p)) => format!("`{}`", p.text()),
         Some(TokenKind::Newline) => "a line break".into(),
     }
+}
+
+/// `a.b.c` for a path of identifiers.
+fn dotted(path: &[Ident]) -> String {
+    let names: Vec<&str> = path.iter().map(|i| i.name.as_str()).collect();
+    names.join(".")
 }
 
 fn join(start: Span, end: Span) -> Span {
@@ -271,10 +279,12 @@ impl<'a> Parser<'a> {
         }
         let kind = match self.peek() {
             Some(TokenKind::Keyword(Keyword::Fn)) => ItemKind::Fn(self.fn_decl()?),
+            Some(TokenKind::Keyword(Keyword::Use)) => ItemKind::Use(self.use_decl()?),
             _ => return Err(self.not_an_item()),
         };
         Ok(Item {
             public,
+            attrs: Vec::new(),
             kind,
             span: self.span_from(start),
         })
@@ -294,6 +304,79 @@ impl<'a> Parser<'a> {
             ),
             Err(_) => expected,
         }
+    }
+
+    /// `use a.b` or `use a.b.{X, y}`.
+    fn use_decl(&mut self) -> Result<UseDecl, Diagnostic> {
+        self.expect_kw(Keyword::Use)?;
+        let mut path = vec![self.use_segment(&[], "a module path")?];
+        let mut names = None;
+        while self.eat_punct(Punct::Dot) {
+            if self.eat_punct(Punct::LBrace) {
+                // Line breaks inside the group are not terminators.
+                let mut group = Vec::new();
+                self.skip_newlines();
+                while !self.at_punct(Punct::RBrace) {
+                    group.push(self.use_segment(&path, "a name to import")?);
+                    self.skip_newlines();
+                    if !self.eat_punct(Punct::Comma) {
+                        break;
+                    }
+                    self.skip_newlines();
+                }
+                self.expect_punct(Punct::RBrace)?;
+                names = Some(group);
+                break;
+            }
+            let segment = self.use_segment(&path, "a module path segment or `{`")?;
+            path.push(segment);
+        }
+        Ok(UseDecl { path, names })
+    }
+
+    /// A name in a `use` path or brace group, rejecting a glob `*` and a
+    /// renaming `as`. `path` is the path before this name.
+    fn use_segment(&mut self, path: &[Ident], what: &str) -> Result<Ident, Diagnostic> {
+        if self.at_punct(Punct::Star) {
+            let example = match path {
+                [] => "`use module.{Name, other}`".to_string(),
+                _ => format!("`use {}.{{Name, other}}`", dotted(path)),
+            };
+            return Err(error(
+                "E0130",
+                format!(
+                    "glob imports are not allowed, because every imported name must be \
+                     written out; list the names you need, as in {example}"
+                ),
+                self.peek_span(),
+            ));
+        }
+        let name = self.expect_ident(what)?;
+        if matches!(self.peek(), Some(TokenKind::Ident(word)) if word == "as") {
+            let start = self.peek_span();
+            self.bump();
+            if matches!(self.peek(), Some(TokenKind::Ident(_))) {
+                self.bump();
+            }
+            let fix = match path.last() {
+                None => format!("import it with `use {0}` and write `{0}`", name.name),
+                Some(module) => format!(
+                    "import the module with `use {}` and write `{}.{}`",
+                    dotted(path),
+                    module.name,
+                    name.name
+                ),
+            };
+            return Err(error(
+                "E0131",
+                format!(
+                    "renaming imports are not allowed, so every name stays traceable to \
+                     its source; {fix}"
+                ),
+                self.span_from(start),
+            ));
+        }
+        Ok(name)
     }
 
     fn fn_decl(&mut self) -> Result<FnDecl, Diagnostic> {

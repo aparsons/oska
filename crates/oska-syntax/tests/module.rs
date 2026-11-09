@@ -14,6 +14,7 @@ fn empty_function() {
         r#"[{
             "kind": "FnItem", "span": {"start": 0, "end": 12},
             "public": false,
+            "attributes": [],
             "name": {"kind": "Ident", "span": {"start": 3, "end": 7}, "name": "main"},
             "params": [],
             "body": {"kind": "Block", "span": {"start": 10, "end": 12}, "stmts": []}
@@ -29,6 +30,7 @@ fn parameters_and_return_type() {
         r#"[{
             "kind": "FnItem", "span": {"start": 0, "end": 65},
             "public": false,
+            "attributes": [],
             "name": {"kind": "Ident", "span": {"start": 3, "end": 4}, "name": "f"},
             "params": [
                 {"kind": "Param", "span": {"start": 5, "end": 15},
@@ -71,11 +73,13 @@ fn public_functions_on_separate_lines() {
         r#"[
             {"kind": "FnItem", "span": {"start": 20, "end": 33},
              "public": true,
+             "attributes": [],
              "name": {"kind": "Ident", "span": {"start": 27, "end": 28}, "name": "a"},
              "params": [],
              "body": {"kind": "Block", "span": {"start": 31, "end": 33}, "stmts": []}},
             {"kind": "FnItem", "span": {"start": 35, "end": 55},
              "public": false,
+             "attributes": [],
              "name": {"kind": "Ident", "span": {"start": 38, "end": 39}, "name": "b"},
              "params": [
                  {"kind": "Param", "span": {"start": 45, "end": 49},
@@ -98,6 +102,10 @@ fn examples_parse() {
             .iter()
             .map(|item| match &item.kind {
                 ItemKind::Fn(decl) => decl.name.name.clone(),
+                ItemKind::Use(decl) => {
+                    let path: Vec<_> = decl.path.iter().map(|s| s.name.as_str()).collect();
+                    path.join(".")
+                }
             })
             .collect()
     };
