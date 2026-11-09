@@ -66,6 +66,23 @@ impl Net {
 #[capability]
 pub struct NetConnect { handle: Int }
 
+impl NetConnect {
+    // Connect to `host`. The host decides where the program connects, so
+    // it is structural: untrusted text can't redirect it (SSRF).
+    pub fn connect(self, host: String, port: Int) -> Result<Connection, IoError>
+}
+
+// An open connection to one host. It carries the authority to talk to
+// that host, so it is capability-bearing, and it can't be forged.
+pub cap struct Connection { net: NetConnect }
+
+impl Connection {
+    // A request body is data: it may be untrusted.
+    pub fn send(self, body: Untrusted<String>) -> Result<(), IoError>
+    // What the host sent back: text from outside the program.
+    pub fn receive(self) -> Result<Untrusted<String>, IoError>
+}
+
 #[capability]
 pub struct NetListen { handle: Int }
 

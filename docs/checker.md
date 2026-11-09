@@ -44,9 +44,23 @@ A `std.*` module is also prelude-mode Oska source, `crates/oska-check/src/std/<n
 
 | Module | Exports | Sink literal |
 | --- | --- | --- |
-| `std.sql` | `SqlLiteral` | `sql"..."` has type `SqlLiteral` |
+| `std.sql` | `SqlLiteral`, `Db` (`query`), `connect`, `Row` (`get`), `SqlError` | `sql"..."` has type `SqlLiteral` |
+| `std.proc` | `run`, `Output` (`status`, `stdout`), `ProcError` | None |
+| `std.html` | `Html` (`raw`, `concat`, `render`), `text`, `TrustedHtml` (`new`) | None |
 
 A sink literal's tag names the module that provides it. The literal has the type that module declares for it, and the module must be imported (`E0310`). A tag no module provides is `E0311`. The sink modules are signature-only; their runtime implementations come with the interpreter.
+
+Each sink separates a **data position**, declared `Untrusted<String>`, from a **structural position**, declared `String` or a sink literal type. Untrusted text in a `String` structural position is `E0300`; any text where a sink literal is required is `E0341`.
+
+| Sink | Data position | Structural position |
+| --- | --- | --- |
+| `std.sql` | `Db.query`'s `params: List<Untrusted<String>>` | `Db.query`'s `query: SqlLiteral`; `connect`'s `url` |
+| `std.proc` | `run`'s `args: List<Untrusted<String>>` | `run`'s `program`; `run` also needs `Spawn` |
+| `std.html` | `text`'s argument, which is escaped | `TrustedHtml.new`'s `markup` |
+| Paths | `Path.from` | `Fs.restrict_to` and `FsRead.restrict_to`'s `dir` |
+| Network | `Connection.send`'s `body` | `NetConnect.connect`'s `host` |
+
+Values that come back from a sink are untrusted: `Row.get`, `Output.stdout`, `Html.render`, and `Connection.receive`. `Db` and `Connection` are capability-bearing (`Db` holds a `NetConnect`), and every sink type except the error types has private fields, so code outside the module can't construct one (`E0271`).
 
 ## Diagnostic codes
 
@@ -109,3 +123,4 @@ A sink literal's tag names the module that provides it. The literal has the type
 | `E0311` | A sink literal whose tag no `std.*` module provides, such as `sqll"..."`. Spans the tag. | Replace the tag with the single closest known tag, when one is close enough. |
 | `E0312` | A name that the module does not export, in a `use` brace group (`use std.sql.{Query}`) or a qualified path (`sql.Query`). Spans the name. | Replace the name with the single closest export, when one is close enough. |
 | `E0340` | A module's export written unqualified, such as `Db` after a plain `use std.sql`, which imports only the module. Spans the name. | Qualify it with the module's name: `sql.Db`. |
+| `E0341` | Text where a sink literal type is required, such as a `String`, an `Untrusted<String>`, a string literal, or an interpolated string passed to `Db.query` as query text. Only a `sql"..."` literal makes an `SqlLiteral`, so SQL can't be built from text. Reported instead of `E0220`. Spans the expression. | None. |

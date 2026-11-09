@@ -67,6 +67,15 @@ pub fn sink_module(tag: &str) -> Option<&'static StdModule> {
         .find(|m| m.sink_literal.as_ref().is_some_and(|s| s.tag == tag))
 }
 
+/// The sink literal whose type is named `ty`, such as `sql` for
+/// `SqlLiteral`.
+pub fn sink_literal_typed(ty: &str) -> Option<&'static SinkLiteral> {
+    STD_MODULES
+        .iter()
+        .filter_map(|m| m.sink_literal.as_ref())
+        .find(|s| s.ty == ty)
+}
+
 impl StdModule {
     /// The module's declarations, parsed once.
     pub fn module(&self) -> &'static Module {

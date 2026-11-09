@@ -47,7 +47,7 @@ use crate::collect::Decls;
 use crate::decl_rules;
 use crate::infer::{Infer, Mismatch};
 use crate::items::{Bound, Items, Lower};
-use crate::prelude::StdModule;
+use crate::prelude::{self, StdModule};
 use crate::suggest;
 use crate::ty::{self, Ty};
 
@@ -424,10 +424,25 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
     /// Report that `actual` cannot flow into `expected`: `E0270` when only
     /// the `cap` rule stops it, `E0300` when only the trust rule does,
-    /// `E0220` otherwise.
+    /// `E0341` for text where a sink literal is required, `E0220`
+    /// otherwise.
     fn mismatch(&mut self, mismatch: Mismatch, actual: &Ty, expected: &Ty, span: Span) {
         let expected = self.infer.resolve(expected);
         let actual = self.infer.resolve(actual);
+        let literal = expected.head().and_then(prelude::sink_literal_typed);
+        if let (Some(literal), true) = (literal, actual.is_text()) {
+            let tag = literal.tag;
+            self.error(
+                codes::TEXT_AS_SINK_LITERAL,
+                format!(
+                    "expected `{expected}`, found `{actual}`: it can only be written as a \
+                     `{tag}\"...\"` literal, so it can't be built from text; pass values \
+                     separately, as parameters"
+                ),
+                span,
+            );
+            return;
+        }
         match mismatch {
             Mismatch::CapLost => self.error(
                 codes::CAPTURING_CLOSURE,
