@@ -23,7 +23,10 @@
 //! - **Method lookup:** [`Body::method_call`] and [`Items::method`].
 //! - **Closures:** [`Body::closure`]. Locals are a stack, so a closure's
 //!   captures are the names it resolves below the stack height at which
-//!   the closure's parameters were pushed.
+//!   the closure's parameters were pushed (plus `self`). Each closure
+//!   being checked has a frame recording them; a closure that captures a
+//!   capability-bearing value is a `cap fn`. Unification ignores `cap`,
+//!   so [`Body::expect`] reports a `cap fn` used as a plain `fn`.
 
 use oska_syntax::ast::{
     Arg, BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, ItemKind, MatchArm, Module,
@@ -164,6 +167,17 @@ pub struct Body<'c, 'd, 'a> {
     /// Unannotated `let` and `var` bindings, checked for unsolved types at
     /// the end of the body.
     inferred_lets: Vec<(Ident, Ty)>,
+    /// The closures being checked, innermost last.
+    closures: Vec<ClosureFrame>,
+}
+
+/// A closure being checked, and what it captures so far.
+struct ClosureFrame {
+    /// The number of locals in scope where the closure starts: a local
+    /// below this height is a capture.
+    height: usize,
+    /// Each captured name (`self` for the receiver) with its type.
+    captures: Vec<(String, Ty)>,
 }
 
 impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
@@ -183,6 +197,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             ret,
             loop_depth: 0,
             inferred_lets: Vec::new(),
+            closures: Vec::new(),
         }
     }
 
@@ -257,6 +272,21 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     /// they differ.
     fn expect(&mut self, actual: &Ty, expected: &Ty, span: Span) -> Ty {
         if self.infer.unify(actual, expected) {
+            // Unification ignores `cap`, so a `cap fn` hidden where a plain
+            // `fn` is expected is caught here.
+            let actual_resolved = self.infer.resolve(actual);
+            let expected_resolved = self.infer.resolve(expected);
+            if cap_lost(&actual_resolved, &expected_resolved, true) {
+                self.error(
+                    codes::CAPTURING_CLOSURE,
+                    format!(
+                        "expected `{expected_resolved}`, found `{actual_resolved}`: a `cap fn` \
+                         can carry authority, so it cannot be used as a plain `fn`"
+                    ),
+                    span,
+                );
+                return Ty::Error;
+            }
             return actual.clone();
         }
         let expected = self.infer.resolve(expected);
@@ -293,7 +323,13 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             ExprKind::Unit => Ty::Unit,
             ExprKind::Name(ident) => self.name(ident),
             ExprKind::SelfValue => match &self.receiver {
-                Some(receiver) => receiver.ty.clone(),
+                Some(receiver) => {
+                    let ty = receiver.ty.clone();
+                    for frame in &mut self.closures {
+                        frame.captures.push(("self".to_string(), ty.clone()));
+                    }
+                    ty
+                }
                 None => {
                     self.error(
                         codes::UNKNOWN_VALUE,
@@ -334,7 +370,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 }
                 Ty::Named("List".to_string(), vec![element])
             }
-            ExprKind::Closure { params, body } => self.closure(params, body, expected),
+            ExprKind::Closure { params, body } => self.closure(params, body, expected, expr.span),
             ExprKind::If {
                 cond,
                 then_block,
@@ -356,11 +392,11 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             }
             ExprKind::Block(block) => self.block(block, expected, true),
             ExprKind::Scope { handle, body } => {
-                // `scope` gets real types with concurrency; until then the
-                // handle has the error type.
+                // The handle is the prelude's `Scope`; its `spawn` and the
+                // task's `join` are ordinary prelude methods.
                 self.locals.push(Local {
                     name: handle.name.clone(),
-                    ty: Ty::Error,
+                    ty: Ty::named("Scope"),
                     binding: Binding::Pattern,
                 });
                 let ty = self.block(body, expected, true);
@@ -414,8 +450,14 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     /// A name in value position.
     fn name(&mut self, ident: &Ident) -> Ty {
         let name = ident.name.as_str();
-        if let Some(local) = self.local(name) {
-            return local.ty.clone();
+        if let Some(index) = self.locals.iter().rposition(|l| l.name == name) {
+            let ty = self.locals[index].ty.clone();
+            for frame in &mut self.closures {
+                if index < frame.height {
+                    frame.captures.push((name.to_string(), ty.clone()));
+                }
+            }
+            return ty;
         }
         if let Some(sig) = self.items.fns.get(name).cloned() {
             let callable = self.instantiate(&sig, None);
@@ -503,6 +545,14 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                         .iter()
                         .find(|(n, _)| n.as_deref() == Some(name.name.as_str()));
                     if let Some((_, field_ty)) = field {
+                        if info.hidden_fields.contains(&name.name) {
+                            self.error(
+                                codes::PRIVATE_FIELD,
+                                format!("the field `{}` of `{type_name}` is private", name.name),
+                                name.span,
+                            );
+                            return Ty::Error;
+                        }
                         let subst: Vec<(String, Ty)> =
                             info.generics.iter().cloned().zip(args.clone()).collect();
                         return field_ty.substitute(&subst);
@@ -612,6 +662,22 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             return Some(self.instantiate(&sig, None));
         }
         if let Some(info) = self.items.structs.get(name).cloned() {
+            if info.sealed {
+                let capability =
+                    matches!(self.decls().get(name), Some(d) if d.kind == DeclKind::Capability);
+                let message = if capability {
+                    format!(
+                        "`{name}` is a built-in capability and cannot be constructed; \
+                         take it as a parameter, ultimately from `main`"
+                    )
+                } else {
+                    format!(
+                        "`{name}` has private fields and cannot be constructed outside the prelude"
+                    )
+                };
+                self.error(codes::FORGED, message, ident.span);
+                return None;
+            }
             return Some(self.constructor(name, &info.generics, &info.fields, name.to_string()));
         }
         if let Some(enum_name) = self.items.bare_variants.get(name).cloned() {
@@ -1076,7 +1142,14 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
     /// `|params| body`. Parameter types come from annotations or the
     /// expected function type.
-    pub fn closure(&mut self, params: &[ClosureParam], body: &Expr, expected: Option<&Ty>) -> Ty {
+    pub fn closure(
+        &mut self,
+        params: &[ClosureParam],
+        body: &Expr,
+        expected: Option<&Ty>,
+        span: Span,
+    ) -> Ty {
+        let expected_fn = expected.cloned();
         let expected = match expected.map(|e| self.infer.resolve(e)) {
             Some(Ty::Fn {
                 params: expected_params,
@@ -1106,6 +1179,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             None => self.infer.fresh(),
         };
         let height = self.locals.len();
+        self.closures.push(ClosureFrame {
+            height,
+            captures: Vec::new(),
+        });
         for (param, ty) in params.iter().zip(&param_tys) {
             self.bind(&param.name.name, ty.clone(), Binding::Param);
         }
@@ -1115,11 +1192,43 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         self.ret = outer_ret;
         self.loop_depth = outer_loops;
         self.locals.truncate(height);
-        Ty::Fn {
-            cap: false,
+        let frame = self.closures.pop().expect("the closure's own frame");
+        let captured = frame
+            .captures
+            .into_iter()
+            .find(|(_, ty)| self.bearing(ty))
+            .map(|(name, _)| name);
+        let ty = Ty::Fn {
+            cap: captured.is_some(),
             params: param_tys,
             ret: Box::new(ret),
+        };
+        let wants_plain_fn = matches!(
+            expected_fn.map(|e| self.infer.shallow(&e)),
+            Some(Ty::Fn { cap: false, .. })
+        );
+        match captured {
+            Some(name) if wants_plain_fn => {
+                self.error(
+                    codes::CAPTURING_CLOSURE,
+                    format!(
+                        "this closure captures the capability-bearing `{name}`, so it is a \
+                         `cap fn`, but a plain `fn` is expected here"
+                    ),
+                    span,
+                );
+                Ty::Error
+            }
+            _ => ty,
         }
+    }
+
+    /// Whether `ty` is **capability-bearing**: it contains a built-in
+    /// capability or a `cap fn`, through type arguments and the fields of
+    /// structs and enums.
+    fn bearing(&self, ty: &Ty) -> bool {
+        let ty = self.infer.resolve(ty);
+        bearing(&ty, self.items, self.decls(), &mut Vec::new())
     }
 
     /// `operand?` (the whole expression is `expr`): the success value of a
@@ -1464,5 +1573,84 @@ fn is_int_literal(expr: &Expr) -> bool {
             operand,
         } => matches!(operand.kind, ExprKind::Int(_)),
         _ => false,
+    }
+}
+
+/// Whether using a value of type `actual` as `expected` (types that
+/// unify) would pass a `cap fn` off as a plain `fn`. `positive` is false
+/// inside a function type's parameters, where the direction flips.
+fn cap_lost(actual: &Ty, expected: &Ty, positive: bool) -> bool {
+    match (actual, expected) {
+        (
+            Ty::Fn {
+                cap: actual_cap,
+                params: actual_params,
+                ret: actual_ret,
+            },
+            Ty::Fn {
+                cap: expected_cap,
+                params: expected_params,
+                ret: expected_ret,
+            },
+        ) => {
+            let lost = if positive {
+                *actual_cap && !*expected_cap
+            } else {
+                *expected_cap && !*actual_cap
+            };
+            lost || cap_lost(actual_ret, expected_ret, positive)
+                || actual_params
+                    .iter()
+                    .zip(expected_params)
+                    .any(|(a, e)| cap_lost(a, e, !positive))
+        }
+        (Ty::Named(_, actual_args), Ty::Named(_, expected_args)) => actual_args
+            .iter()
+            .zip(expected_args)
+            .any(|(a, e)| cap_lost(a, e, positive)),
+        _ => false,
+    }
+}
+
+/// Whether the resolved type `ty` is capability-bearing. `expanding`
+/// holds the types being expanded, so recursive types end.
+fn bearing(ty: &Ty, items: &Items, decls: &Decls, expanding: &mut Vec<String>) -> bool {
+    match ty {
+        Ty::Fn { cap, .. } => *cap,
+        Ty::Named(name, args) => {
+            if matches!(decls.get(name), Some(d) if d.kind == DeclKind::Capability) {
+                return true;
+            }
+            if args.iter().any(|a| bearing(a, items, decls, expanding)) {
+                return true;
+            }
+            if expanding.contains(name) {
+                return false;
+            }
+            expanding.push(name.clone());
+            let (generics, fields): (&[String], Vec<&Ty>) =
+                if let Some(info) = items.structs.get(name) {
+                    (
+                        &info.generics,
+                        info.fields.fields.iter().map(|(_, t)| t).collect(),
+                    )
+                } else if let Some(info) = items.enums.get(name) {
+                    let fields = info
+                        .variants
+                        .iter()
+                        .flat_map(|(_, f)| f.fields.iter().map(|(_, t)| t))
+                        .collect();
+                    (&info.generics, fields)
+                } else {
+                    (&[], Vec::new())
+                };
+            let subst: Vec<(String, Ty)> = generics.iter().cloned().zip(args.clone()).collect();
+            let found = fields
+                .into_iter()
+                .any(|f| bearing(&f.substitute(&subst), items, decls, expanding));
+            expanding.pop();
+            found
+        }
+        Ty::Unit | Ty::Param(_) | Ty::Var(_) | Ty::Never | Ty::Error => false,
     }
 }

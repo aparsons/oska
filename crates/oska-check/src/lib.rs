@@ -49,6 +49,9 @@
 //! | `E0241` | `?` on a value that is neither a `Result` nor an `Option`. |
 //! | `E0242` | `?` on a `Result` whose error type differs from the function's, with no `impl From` conversion. |
 //! | `E0243` | `?` in a function that does not return the same kind (`Option` vs `Result`), or returns neither. |
+//! | `E0270` | A `cap fn` used where a plain `fn` is expected, such as a closure that captures a capability-bearing value. |
+//! | `E0271` | Construction of a prelude struct with private fields, such as a built-in capability: capabilities cannot be forged. |
+//! | `E0272` | Reading a private field of a prelude type. |
 
 use oska_syntax::Diagnostic;
 
@@ -96,6 +99,9 @@ pub(crate) mod codes {
     pub const TRY_OPERAND: &str = "E0241";
     pub const TRY_ERROR_TYPE: &str = "E0242";
     pub const TRY_KIND: &str = "E0243";
+    pub const CAPTURING_CLOSURE: &str = "E0270";
+    pub const FORGED: &str = "E0271";
+    pub const PRIVATE_FIELD: &str = "E0272";
 }
 
 /// Options that change what is checked.

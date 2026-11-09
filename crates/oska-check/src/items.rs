@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use oska_syntax::ast::{Fields, FnDecl, GenericParam, ItemKind, Module, Type, TypeKind};
+use oska_syntax::ast::{Field, Fields, FnDecl, GenericParam, ItemKind, Module, Type, TypeKind};
 
 use crate::decls::{DeclKind, Decls};
 use crate::prelude;
@@ -49,6 +49,12 @@ pub struct FieldsInfo {
 pub struct StructInfo {
     pub generics: Vec<String>,
     pub fields: FieldsInfo,
+    /// Declared in the prelude with at least one private field, so the
+    /// module cannot construct it. Built-in capabilities are all sealed.
+    pub sealed: bool,
+    /// The names of the private fields of a prelude struct, which the
+    /// module cannot read.
+    pub hidden_fields: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -92,9 +98,24 @@ impl Items {
                 }
                 ItemKind::Struct(s) => {
                     let lower = Lower::new(decls).with_generics(&s.generics);
+                    let private: Vec<&Field> = match &s.fields {
+                        Fields::Named(list) | Fields::Positional(list) => {
+                            list.iter().filter(|f| !f.public).collect()
+                        }
+                        Fields::Unit => Vec::new(),
+                    };
                     let info = StructInfo {
                         generics: lower.generics.clone(),
                         fields: lower.fields(&s.fields),
+                        sealed: in_prelude && !private.is_empty(),
+                        hidden_fields: if in_prelude {
+                            private
+                                .iter()
+                                .filter_map(|f| f.name.as_ref().map(|n| n.name.clone()))
+                                .collect()
+                        } else {
+                            Vec::new()
+                        },
                     };
                     self.structs.entry(s.name.name.clone()).or_insert(info);
                 }
