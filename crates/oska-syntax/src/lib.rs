@@ -192,6 +192,9 @@ pub enum Punct {
     Pipe,
     /// `#`, which starts an attribute (`#[integration]`).
     Hash,
+    /// `@`. Oska has no `@` syntax; it is lexed only so the parser can
+    /// reject `@` bindings in patterns with a clear error.
+    At,
 }
 
 impl Punct {
@@ -228,6 +231,7 @@ impl Punct {
             Self::OrOr => "||",
             Self::Pipe => "|",
             Self::Hash => "#",
+            Self::At => "@",
         }
     }
 }
@@ -576,6 +580,7 @@ impl Lexer<'_> {
             ('>', _) => (Punct::Gt, false),
             ('|', _) => (Punct::Pipe, false),
             ('#', _) => (Punct::Hash, false),
+            ('@', _) => (Punct::At, false),
             _ => {
                 return Err(self.error("E0001", format!("unexpected character {c:?}"), start));
             }
@@ -637,11 +642,11 @@ mod tests {
 
     #[test]
     fn reports_unexpected_character_as_json() {
-        let err = lex("let x = @").expect_err("should fail");
+        let err = lex("let x = $").expect_err("should fail");
         assert_eq!(err.code, "E0001");
         assert_eq!(
             err.to_json(),
-            "{\"code\":\"E0001\",\"message\":\"unexpected character '@'\",\"span\":{\"start\":8,\"end\":9}}"
+            "{\"code\":\"E0001\",\"message\":\"unexpected character '$'\",\"span\":{\"start\":8,\"end\":9}}"
         );
     }
 

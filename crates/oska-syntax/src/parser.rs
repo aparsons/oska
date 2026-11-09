@@ -17,7 +17,7 @@
 //!
 //! Diagnostic codes:
 //!
-//! - `E0100`: expected an expression or type, found something else
+//! - `E0100`: expected an expression, type, or pattern, found something else
 //! - `E0101`: expected a specific token
 //! - `E0102`: string interpolation holds something other than a name or
 //!   field path
@@ -26,6 +26,10 @@
 //! - `E0105`: chained comparison such as `a < b < c`
 //! - `E0106`: invalid assignment target
 //! - `E0107`: a statement at module level, where only items are allowed
+//! - `E0140`: an or-pattern such as `A | B`, which v0 does not support
+//! - `E0141`: a range pattern such as `1..5`, which v0 does not support
+//! - `E0142`: an `@` binding such as `v @ Some(_)`, which v0 does not support
+//! - `E0143`: a comma between `match` arms
 
 use crate::ast::{
     Arg, BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, Item, ItemKind, MatchArm,
@@ -800,6 +804,14 @@ impl<'a> Parser<'a> {
             arms.push(self.match_arm()?);
             match self.peek() {
                 Some(TokenKind::Newline | TokenKind::Punct(Punct::RBrace)) => {}
+                Some(TokenKind::Punct(Punct::Comma)) => {
+                    return Err(error(
+                        "E0143",
+                        "match arms are separated by line breaks, not commas; \
+                         remove the `,` and put each arm on its own line",
+                        self.peek_span(),
+                    ))
+                }
                 _ => return Err(self.expected("a line break or `}` after the match arm")),
             }
         }
@@ -830,7 +842,43 @@ impl<'a> Parser<'a> {
 
     // ----- patterns -----
 
+    /// A pattern. Or-patterns, range patterns, and `@` bindings are
+    /// rejected here, each with its own code.
     fn pattern(&mut self) -> Result<Pattern, Diagnostic> {
+        let atom = self.pattern_atom()?;
+        let (code, form, hint) = match self.peek() {
+            Some(TokenKind::Punct(Punct::Pipe | Punct::OrOr)) => (
+                "E0140",
+                "or-patterns are",
+                "write a separate arm for each alternative",
+            ),
+            Some(TokenKind::Punct(Punct::DotDot)) => (
+                "E0141",
+                "range patterns are",
+                "bind the value and test it in a guard, e.g. `n if n >= 1 && n < 5 => ...`",
+            ),
+            Some(TokenKind::Punct(Punct::At)) => (
+                "E0142",
+                "`@` bindings are",
+                "bind the value with a plain name, or bind the fields you need \
+                 inside the constructor pattern",
+            ),
+            _ => return Ok(atom),
+        };
+        // Cover the whole unsupported form, `lhs op rhs`, when the right-hand
+        // side is itself a pattern; otherwise stop at the operator.
+        let op = self.peek_span();
+        self.bump();
+        let end = self.pattern_atom().map_or(op, |rhs| rhs.span);
+        Err(error(
+            code,
+            format!("{form} not supported in v0; {hint}"),
+            join(atom.span, end),
+        ))
+    }
+
+    /// A pattern without any trailing operator.
+    fn pattern_atom(&mut self) -> Result<Pattern, Diagnostic> {
         let start = self.peek_span();
         let kind = match self.peek() {
             Some(TokenKind::Ident(name)) if name == "_" => {

@@ -92,6 +92,59 @@ fn describe_from_the_design_notes_parses() {
     assert_eq!(json.matches(r#""kind":"WildcardPattern""#).count(), 1);
 }
 
+/// A function whose body matches `x` with the single arm `arm => 0`. The
+/// arm starts at byte 31.
+fn one_arm(arm: &str) -> String {
+    format!("fn f() {{\n    match x {{\n        {arm} => 0\n    }}\n}}")
+}
+
+#[test]
+fn rejects_or_patterns() {
+    let err = module_err(&one_arm("A | B"));
+    assert_eq!(err.code, "E0140");
+    assert_eq!(err.span, Span { start: 31, end: 36 });
+    assert!(
+        err.message.contains("not supported in v0"),
+        "{}",
+        err.message
+    );
+
+    let err = module_err(&one_arm("Some(A || B)"));
+    assert_eq!(err.code, "E0140");
+    assert_eq!(err.span, Span { start: 36, end: 42 });
+}
+
+#[test]
+fn rejects_range_patterns() {
+    let err = module_err(&one_arm("1..5"));
+    assert_eq!(err.code, "E0141");
+    assert_eq!(err.span, Span { start: 31, end: 35 });
+    assert!(
+        err.message.contains("not supported in v0"),
+        "{}",
+        err.message
+    );
+}
+
+#[test]
+fn rejects_at_bindings() {
+    let err = module_err(&one_arm("v @ Some(_)"));
+    assert_eq!(err.code, "E0142");
+    assert_eq!(err.span, Span { start: 31, end: 42 });
+    assert!(
+        err.message.contains("not supported in v0"),
+        "{}",
+        err.message
+    );
+}
+
+#[test]
+fn rejects_commas_between_arms() {
+    let err = module_err("fn f() {\n    match x {\n        _ => 0,\n        _ => 1\n    }\n}");
+    assert_eq!(err.code, "E0143");
+    assert_eq!(err.span, Span { start: 37, end: 38 });
+}
+
 #[test]
 fn literal_patterns() {
     assert_body(
