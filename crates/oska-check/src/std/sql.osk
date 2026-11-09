@@ -30,7 +30,7 @@ impl Row {
     pub fn get(self, column: String) -> Option<Untrusted<String>>
 }
 
-pub struct SqlError { pub message: String }
+pub struct SqlError { pub message: Untrusted<String> }
 
 impl Display for SqlError {
     fn to_string(self) -> String
