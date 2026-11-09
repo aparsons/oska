@@ -89,3 +89,43 @@ fn rejects_renaming_import() {
     assert_eq!(err.code, "E0131");
     assert_eq!(err.span, Span { start: 16, end: 20 });
 }
+
+#[test]
+fn constant() {
+    assert_items(
+        "pub const LIMIT: Int = 10 * 2",
+        r#"[{
+            "kind": "ConstItem", "span": {"start": 0, "end": 29},
+            "public": true,
+            "attributes": [],
+            "name": {"kind": "Ident", "span": {"start": 10, "end": 15}, "name": "LIMIT"},
+            "type": {"kind": "PathType", "span": {"start": 17, "end": 20},
+                     "segments": [{"kind": "Ident", "span": {"start": 17, "end": 20}, "name": "Int"}],
+                     "args": []},
+            "value": {"kind": "BinaryExpr", "span": {"start": 23, "end": 29}, "op": "*",
+                      "lhs": {"kind": "IntExpr", "span": {"start": 23, "end": 25}, "value": "10"},
+                      "rhs": {"kind": "IntExpr", "span": {"start": 28, "end": 29}, "value": "2"}}
+        }]"#,
+    );
+}
+
+#[test]
+fn test_item() {
+    // The name is a string literal, exported as a `StrExpr`.
+    assert_items(
+        "test \"adds\" {\n    check()\n}",
+        r#"[{
+            "kind": "TestItem", "span": {"start": 0, "end": 27},
+            "public": false,
+            "attributes": [],
+            "name": {"kind": "StrExpr", "span": {"start": 5, "end": 11},
+                     "parts": [{"kind": "StrText", "span": {"start": 6, "end": 10}, "value": "adds"}]},
+            "body": {"kind": "Block", "span": {"start": 12, "end": 27}, "stmts": [
+                {"kind": "ExprStmt", "span": {"start": 18, "end": 25},
+                 "expr": {"kind": "CallExpr", "span": {"start": 18, "end": 25},
+                          "callee": {"kind": "NameExpr", "span": {"start": 18, "end": 23}, "name": "check"},
+                          "args": []}}
+            ]}
+        }]"#,
+    );
+}

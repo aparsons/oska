@@ -9,8 +9,8 @@
 //! are first built as a small [`Json`] value, then printed.
 
 use crate::ast::{
-    Arg, Attribute, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, Item, ItemKind, Module,
-    Param, Stmt, StmtKind, StrPart, Type, TypeKind, UnaryOp, UseDecl,
+    Arg, Attribute, Block, ClosureParam, ConstDecl, Expr, ExprKind, FnDecl, Ident, Item, ItemKind,
+    Module, Param, Stmt, StmtKind, StrPart, TestDecl, Type, TypeKind, UnaryOp, UseDecl,
 };
 use crate::{json_escape, Span};
 
@@ -234,6 +234,8 @@ fn item(item: &Item) -> Json {
     match &item.kind {
         ItemKind::Fn(decl) => fn_item(item, decl),
         ItemKind::Use(decl) => use_item(item, decl),
+        ItemKind::Const(decl) => const_item(item, decl),
+        ItemKind::Test(decl) => test_item(item, decl),
     }
 }
 
@@ -264,6 +266,21 @@ fn use_item(item: &Item, decl: &UseDecl) -> Json {
     item_node("UseItem", item)
         .field("path", list(&decl.path, ident))
         .opt("names", decl.names.as_ref().map(|names| list(names, ident)))
+        .done()
+}
+
+fn const_item(item: &Item, decl: &ConstDecl) -> Json {
+    item_node("ConstItem", item)
+        .field("name", ident(&decl.name))
+        .field("type", ty(&decl.ty))
+        .field("value", expr(&decl.value))
+        .done()
+}
+
+fn test_item(item: &Item, decl: &TestDecl) -> Json {
+    item_node("TestItem", item)
+        .field("name", expr(&decl.name))
+        .field("body", block(&decl.body))
         .done()
 }
 

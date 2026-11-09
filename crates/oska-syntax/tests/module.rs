@@ -106,6 +106,8 @@ fn examples_parse() {
                     let path: Vec<_> = decl.path.iter().map(|s| s.name.as_str()).collect();
                     path.join(".")
                 }
+                ItemKind::Const(decl) => decl.name.name.clone(),
+                ItemKind::Test(_) => "test".to_string(),
             })
             .collect()
     };

@@ -30,8 +30,8 @@
 //! - `E0131`: a renaming import such as `use a.b as c`
 
 use crate::ast::{
-    Arg, BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, Item, ItemKind, Module,
-    Param, Stmt, StmtKind, StrPart, Type, TypeKind, UnaryOp, UseDecl,
+    Arg, BinaryOp, Block, ClosureParam, ConstDecl, Expr, ExprKind, FnDecl, Ident, Item, ItemKind,
+    Module, Param, Stmt, StmtKind, StrPart, TestDecl, Type, TypeKind, UnaryOp, UseDecl,
 };
 use crate::{lex, resolve_escape, Diagnostic, Keyword, Punct, Span, Token, TokenKind};
 
@@ -280,6 +280,8 @@ impl<'a> Parser<'a> {
         let kind = match self.peek() {
             Some(TokenKind::Keyword(Keyword::Fn)) => ItemKind::Fn(self.fn_decl()?),
             Some(TokenKind::Keyword(Keyword::Use)) => ItemKind::Use(self.use_decl()?),
+            Some(TokenKind::Keyword(Keyword::Const)) => ItemKind::Const(self.const_decl()?),
+            Some(TokenKind::Keyword(Keyword::Test)) => ItemKind::Test(self.test_decl()?),
             _ => return Err(self.not_an_item()),
         };
         Ok(Item {
@@ -377,6 +379,33 @@ impl<'a> Parser<'a> {
             ));
         }
         Ok(name)
+    }
+
+    /// `const NAME: T = expr`.
+    fn const_decl(&mut self) -> Result<ConstDecl, Diagnostic> {
+        self.expect_kw(Keyword::Const)?;
+        let name = self.expect_ident("a constant name")?;
+        self.expect_punct(Punct::Colon)?;
+        let ty = self.ty()?;
+        self.expect_punct(Punct::Eq)?;
+        let value = self.expr()?;
+        Ok(ConstDecl { name, ty, value })
+    }
+
+    /// `test "name" { body }`.
+    fn test_decl(&mut self) -> Result<TestDecl, Diagnostic> {
+        self.expect_kw(Keyword::Test)?;
+        let span = self.peek_span();
+        if !matches!(self.peek(), Some(TokenKind::Str(_))) {
+            return Err(self.expected("a test name as a string, as in `test \"adds\" { ... }`"));
+        }
+        self.bump();
+        let name = Expr {
+            kind: ExprKind::Str(self.str_parts(span)?),
+            span,
+        };
+        let body = self.block()?;
+        Ok(TestDecl { name, body })
     }
 
     fn fn_decl(&mut self) -> Result<FnDecl, Diagnostic> {

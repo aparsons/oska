@@ -244,6 +244,24 @@ pub struct Item {
 pub enum ItemKind {
     Fn(FnDecl),
     Use(UseDecl),
+    Const(ConstDecl),
+    Test(TestDecl),
+}
+
+/// `test "a descriptive name" { body }`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestDecl {
+    /// The name as written: always an [`ExprKind::Str`] literal.
+    pub name: Expr,
+    pub body: Block,
+}
+
+/// `const NAME: T = expr`. The type and value are required.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConstDecl {
+    pub name: Ident,
+    pub ty: Type,
+    pub value: Expr,
 }
 
 /// `use a.b` imports the module `b`; `use a.b.{X, y}` imports the names
