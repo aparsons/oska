@@ -1,4 +1,5 @@
-//! Recursive-descent parser for Oska expressions, statements, and types.
+//! Recursive-descent parser for Oska modules, expressions, statements, and
+//! types.
 //!
 //! Operator precedence, loosest first:
 //!
@@ -24,6 +25,7 @@
 //! - `E0104`: `let` or `var` without an initializer
 //! - `E0105`: chained comparison such as `a < b < c`
 //! - `E0106`: invalid assignment target
+//! - `E0107`: a statement at module level, where only items are allowed
 
 use crate::ast::{
     Arg, BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, Item, ItemKind, Module,
@@ -269,13 +271,29 @@ impl<'a> Parser<'a> {
         }
         let kind = match self.peek() {
             Some(TokenKind::Keyword(Keyword::Fn)) => ItemKind::Fn(self.fn_decl()?),
-            _ => return Err(self.expected("an item such as `fn`")),
+            _ => return Err(self.not_an_item()),
         };
         Ok(Item {
             public,
             kind,
             span: self.span_from(start),
         })
+    }
+
+    /// The error for something at module level that is not an item. If it
+    /// parses as a statement, the error covers that whole statement.
+    fn not_an_item(&mut self) -> Diagnostic {
+        let expected = self.expected("an item such as `fn`");
+        match self.stmt() {
+            Ok(stmt) => error(
+                "E0107",
+                "statements are not allowed at module level, because no code runs \
+                 when a module loads; move this into a function such as `main`, \
+                 or declare a constant with `const`",
+                stmt.span,
+            ),
+            Err(_) => expected,
+        }
     }
 
     fn fn_decl(&mut self) -> Result<FnDecl, Diagnostic> {

@@ -4,7 +4,8 @@
 mod common;
 
 use common::{assert_items, module_err};
-use oska_syntax::Span;
+use oska_syntax::ast::ItemKind;
+use oska_syntax::{parse_module, Span};
 
 #[test]
 fn empty_function() {
@@ -86,6 +87,42 @@ fn public_functions_on_separate_lines() {
              "body": {"kind": "Block", "span": {"start": 53, "end": 55}, "stmts": []}}
         ]"#,
     );
+}
+
+#[test]
+fn examples_parse() {
+    let names = |src: &str| -> Vec<String> {
+        let module = parse_module(src).unwrap_or_else(|err| panic!("should parse: {err}"));
+        module
+            .items
+            .iter()
+            .map(|item| match &item.kind {
+                ItemKind::Fn(decl) => decl.name.name.clone(),
+            })
+            .collect()
+    };
+    assert_eq!(names(include_str!("../../../examples/hello.osk")), ["main"]);
+    assert_eq!(
+        names(include_str!("../../../examples/capabilities.osk")),
+        ["count_lines", "main"]
+    );
+}
+
+#[test]
+fn rejects_module_level_statement() {
+    // There is no code that runs on load, so a stray `let` is an error that
+    // covers the whole statement.
+    let err = module_err("fn a() {}\nlet x = compute()\nfn b() {}");
+    assert_eq!(err.code, "E0107");
+    assert_eq!(err.span, Span { start: 10, end: 27 });
+
+    let err = module_err("print(\"hi\")");
+    assert_eq!(err.code, "E0107");
+    assert_eq!(err.span, Span { start: 0, end: 11 });
+
+    let err = module_err("pub let x = 1");
+    assert_eq!(err.code, "E0107");
+    assert_eq!(err.span, Span { start: 4, end: 13 });
 }
 
 #[test]
