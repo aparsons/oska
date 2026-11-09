@@ -103,6 +103,32 @@ enum FnContext {
     Trait,
 }
 
+/// Whether a `struct` or `enum` was declared with `cap`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CapMarker {
+    Plain,
+    Cap,
+}
+
+/// Whether declared fields may each be marked `pub`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FieldPub {
+    /// Struct fields: each has its own visibility.
+    Allowed,
+    /// Enum variant fields: visible wherever the enum is.
+    Forbidden,
+}
+
+/// The attributes and optional `pub` written before an item or method.
+struct ItemPrefix {
+    /// Where the item starts: its first attribute, else `pub`, else its
+    /// keyword.
+    start: Span,
+    attributes: Vec<Attribute>,
+    /// The `pub` keyword, if written.
+    pub_span: Option<Span>,
+}
+
 struct Parser<'a> {
     src: &'a str,
     tokens: Vec<Token>,
@@ -306,6 +332,42 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Whether the next token ends the current line or block: a line
+    /// break, a `}`, or the end of input.
+    fn at_line_end(&self) -> bool {
+        matches!(
+            self.peek(),
+            None | Some(TokenKind::Newline | TokenKind::Punct(Punct::RBrace))
+        )
+    }
+
+    /// Consume an optional `pub`, returning its span.
+    fn eat_pub(&mut self) -> Option<Span> {
+        let span = self.peek_span();
+        self.at_kw(Keyword::Pub).then(|| {
+            self.bump();
+            span
+        })
+    }
+
+    /// Attributes, each on the item's line or a line above, then an
+    /// optional `pub`.
+    fn item_prefix(&mut self) -> Result<ItemPrefix, Diagnostic> {
+        let start = self.peek_span();
+        let mut attributes = Vec::new();
+        while self.at_punct(Punct::Hash) {
+            attributes.push(self.attribute()?);
+            // An attribute may sit on its own line above the item.
+            self.skip_newlines();
+        }
+        let pub_span = self.eat_pub();
+        Ok(ItemPrefix {
+            start,
+            attributes,
+            pub_span,
+        })
+    }
+
     /// Items separated by line breaks, up to end of input.
     fn items(&mut self) -> Result<Vec<Item>, Diagnostic> {
         let mut items = Vec::new();
@@ -315,54 +377,48 @@ impl<'a> Parser<'a> {
                 return Ok(items);
             }
             items.push(self.item()?);
-            match self.peek() {
-                None | Some(TokenKind::Newline) => {}
-                Some(_) => return Err(self.expected("a line break after the item")),
+            if !self.at_line_end() {
+                return Err(self.expected("a line break after the item"));
             }
         }
     }
 
     fn item(&mut self) -> Result<Item, Diagnostic> {
-        let start = self.peek_span();
-        let mut attributes = Vec::new();
-        while self.at_punct(Punct::Hash) {
-            attributes.push(self.attribute()?);
-            // An attribute may sit on its own line above the item.
-            self.skip_newlines();
-        }
-        let public = self.at_kw(Keyword::Pub);
-        let pub_span = self.peek_span();
-        if public {
-            self.bump();
-        }
-        if public && self.at_kw(Keyword::Impl) {
-            return Err(self.remove_word(
-                error(
-                    "E0151",
-                    "an `impl` block cannot be `pub`; remove `pub` here and mark each \
-                     method that should be public as `pub fn`",
-                    pub_span,
-                ),
-                "pub",
-            ));
+        let prefix = self.item_prefix()?;
+        if let Some(pub_span) = prefix.pub_span {
+            if self.at_kw(Keyword::Impl) {
+                return Err(self.remove_word(
+                    error(
+                        "E0151",
+                        "an `impl` block cannot be `pub`; remove `pub` here and mark each \
+                         method that should be public as `pub fn`",
+                        pub_span,
+                    ),
+                    "pub",
+                ));
+            }
         }
         let kind = match self.peek() {
             Some(TokenKind::Keyword(Keyword::Fn)) => ItemKind::Fn(self.fn_decl(FnContext::Free)?),
             Some(TokenKind::Keyword(Keyword::Use)) => ItemKind::Use(self.use_decl()?),
             Some(TokenKind::Keyword(Keyword::Const)) => ItemKind::Const(self.const_decl()?),
             Some(TokenKind::Keyword(Keyword::Test)) => ItemKind::Test(self.test_decl()?),
-            Some(TokenKind::Keyword(Keyword::Struct)) => ItemKind::Struct(self.struct_decl(false)?),
-            Some(TokenKind::Keyword(Keyword::Enum)) => ItemKind::Enum(self.enum_decl(false)?),
+            Some(TokenKind::Keyword(Keyword::Struct)) => {
+                ItemKind::Struct(self.struct_decl(CapMarker::Plain)?)
+            }
+            Some(TokenKind::Keyword(Keyword::Enum)) => {
+                ItemKind::Enum(self.enum_decl(CapMarker::Plain)?)
+            }
             Some(TokenKind::Keyword(Keyword::Impl)) => ItemKind::Impl(self.impl_decl()?),
             Some(TokenKind::Keyword(Keyword::Trait)) => ItemKind::Trait(self.trait_decl()?),
             Some(TokenKind::Keyword(Keyword::Cap)) => {
                 self.bump();
                 match self.peek() {
                     Some(TokenKind::Keyword(Keyword::Struct)) => {
-                        ItemKind::Struct(self.struct_decl(true)?)
+                        ItemKind::Struct(self.struct_decl(CapMarker::Cap)?)
                     }
                     Some(TokenKind::Keyword(Keyword::Enum)) => {
-                        ItemKind::Enum(self.enum_decl(true)?)
+                        ItemKind::Enum(self.enum_decl(CapMarker::Cap)?)
                     }
                     _ => return Err(self.expected("`struct` or `enum` after `cap`")),
                 }
@@ -370,10 +426,10 @@ impl<'a> Parser<'a> {
             _ => return Err(self.not_an_item()),
         };
         Ok(Item {
-            public,
-            attributes,
+            public: prefix.pub_span.is_some(),
+            attributes: prefix.attributes,
             kind,
-            span: self.span_from(start),
+            span: self.span_from(prefix.start),
         })
     }
 
@@ -568,29 +624,19 @@ impl<'a> Parser<'a> {
             if self.eat_punct(Punct::RBrace) {
                 return Ok(methods);
             }
-            let start = self.peek_span();
-            let mut attributes = Vec::new();
-            while self.at_punct(Punct::Hash) {
-                attributes.push(self.attribute()?);
-                self.skip_newlines();
-            }
-            let public = self.at_kw(Keyword::Pub);
-            if public {
-                self.bump();
-            }
+            let prefix = self.item_prefix()?;
             if !self.at_kw(Keyword::Fn) {
                 return Err(self.expected("a method declared with `fn`"));
             }
             let decl = self.fn_decl(context)?;
             methods.push(Item {
-                public,
-                attributes,
+                public: prefix.pub_span.is_some(),
+                attributes: prefix.attributes,
                 kind: ItemKind::Fn(decl),
-                span: self.span_from(start),
+                span: self.span_from(prefix.start),
             });
-            match self.peek() {
-                Some(TokenKind::Newline | TokenKind::Punct(Punct::RBrace)) => {}
-                _ => return Err(self.expected("a line break after the method")),
+            if !self.at_line_end() {
+                return Err(self.expected("a line break after the method"));
             }
         }
     }
@@ -680,11 +726,7 @@ impl<'a> Parser<'a> {
             return Err(self.where_clause());
         }
         // Only a trait method may stop after its signature.
-        let body = if context == FnContext::Trait
-            && matches!(
-                self.peek(),
-                None | Some(TokenKind::Newline | TokenKind::Punct(Punct::RBrace))
-            ) {
+        let body = if context == FnContext::Trait && self.at_line_end() {
             None
         } else {
             Some(self.block()?)
@@ -772,19 +814,19 @@ impl<'a> Parser<'a> {
     }
 
     /// `struct Name { fields }` or `struct Name(fields)`, after any `cap`.
-    fn struct_decl(&mut self, cap: bool) -> Result<StructDecl, Diagnostic> {
+    fn struct_decl(&mut self, cap: CapMarker) -> Result<StructDecl, Diagnostic> {
         self.expect_kw(Keyword::Struct)?;
         let name = self.expect_ident("a struct name")?;
         let generics = self.generics()?;
         let fields = if self.at_punct(Punct::LParen) {
-            Fields::Positional(self.positional_fields(true)?)
+            Fields::Positional(self.positional_fields(FieldPub::Allowed)?)
         } else if self.at_punct(Punct::LBrace) {
-            Fields::Named(self.named_fields(true)?)
+            Fields::Named(self.named_fields(FieldPub::Allowed)?)
         } else {
             return Err(self.expected("`{` or `(` after the struct name"));
         };
         Ok(StructDecl {
-            cap,
+            cap: cap == CapMarker::Cap,
             name,
             generics,
             fields,
@@ -792,7 +834,7 @@ impl<'a> Parser<'a> {
     }
 
     /// `enum Name { variants }`, after any `cap`.
-    fn enum_decl(&mut self, cap: bool) -> Result<EnumDecl, Diagnostic> {
+    fn enum_decl(&mut self, cap: CapMarker) -> Result<EnumDecl, Diagnostic> {
         self.expect_kw(Keyword::Enum)?;
         let name = self.expect_ident("an enum name")?;
         let generics = self.generics()?;
@@ -803,9 +845,9 @@ impl<'a> Parser<'a> {
         let variants = self.comma_list(Punct::RBrace, |p| {
             let name = p.expect_ident("a variant name")?;
             let fields = if p.at_punct(Punct::LParen) {
-                Fields::Positional(p.positional_fields(false)?)
+                Fields::Positional(p.positional_fields(FieldPub::Forbidden)?)
             } else if p.at_punct(Punct::LBrace) {
-                Fields::Named(p.named_fields(false)?)
+                Fields::Named(p.named_fields(FieldPub::Forbidden)?)
             } else {
                 Fields::Unit
             };
@@ -816,7 +858,7 @@ impl<'a> Parser<'a> {
             })
         })?;
         Ok(EnumDecl {
-            cap,
+            cap: cap == CapMarker::Cap,
             name,
             generics,
             variants,
@@ -840,15 +882,12 @@ impl<'a> Parser<'a> {
         .with_fix("insert `,`", vec![Edit::insert(end, ",")])
     }
 
-    /// `{ a: T, pub b: U }`. `allow_pub` is false inside enum variants.
-    fn named_fields(&mut self, allow_pub: bool) -> Result<Vec<Field>, Diagnostic> {
+    /// `{ a: T, pub b: U }`.
+    fn named_fields(&mut self, field_pub: FieldPub) -> Result<Vec<Field>, Diagnostic> {
         self.expect_punct(Punct::LBrace)?;
         self.comma_list(Punct::RBrace, |p| {
             let start = p.peek_span();
-            let public = allow_pub && p.at_kw(Keyword::Pub);
-            if public {
-                p.bump();
-            }
+            let public = field_pub == FieldPub::Allowed && p.eat_pub().is_some();
             let name = p.expect_ident("a field name")?;
             p.expect_punct(Punct::Colon)?;
             let ty = p.ty()?;
@@ -861,15 +900,12 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// `(T, pub U)`. `allow_pub` is false inside enum variants.
-    fn positional_fields(&mut self, allow_pub: bool) -> Result<Vec<Field>, Diagnostic> {
+    /// `(T, pub U)`.
+    fn positional_fields(&mut self, field_pub: FieldPub) -> Result<Vec<Field>, Diagnostic> {
         self.expect_punct(Punct::LParen)?;
         self.comma_list(Punct::RParen, |p| {
             let start = p.peek_span();
-            let public = allow_pub && p.at_kw(Keyword::Pub);
-            if public {
-                p.bump();
-            }
+            let public = field_pub == FieldPub::Allowed && p.eat_pub().is_some();
             let ty = p.ty()?;
             Ok(Field {
                 public,
@@ -1371,8 +1407,10 @@ impl<'a> Parser<'a> {
                 break;
             }
             arms.push(self.match_arm()?);
+            if self.at_line_end() {
+                continue;
+            }
             match self.peek() {
-                Some(TokenKind::Newline | TokenKind::Punct(Punct::RBrace)) => {}
                 Some(TokenKind::Punct(Punct::Comma)) => {
                     let comma = self.peek_span();
                     let err = error(
