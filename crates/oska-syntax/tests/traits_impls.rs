@@ -266,3 +266,46 @@ fn rejects_non_method_items_in_a_trait() {
     assert_eq!(err.code, "E0101");
     assert_eq!(err.span, Span { start: 14, end: 20 });
 }
+
+#[test]
+fn trait_signature_ending_in_a_generic_type_ends_at_the_line_break() {
+    // A line ending in `>` emits no line break, but a body-less signature
+    // still ends there when the next line starts another method.
+    let src = "trait T {\n    fn a(self) -> Option<Int>\n    fn b(self) -> Int\n}";
+    assert_items(
+        src,
+        &format!(
+            r#"[{{
+                "kind": "TraitItem", "span": {{"start": 0, "end": 63}},
+                "public": false, "attributes": [],
+                "name": {name},
+                "generics": [],
+                "methods": [
+                    {{"kind": "FnItem", "span": {{"start": 14, "end": 39}},
+                      "public": false, "attributes": [],
+                      "name": {a},
+                      "generics": [],
+                      "receiver": {{"kind": "SelfParam", "span": {{"start": 19, "end": 23}}, "mutable": false}},
+                      "params": [],
+                      "return_type": {{"kind": "PathType", "span": {{"start": 28, "end": 39}},
+                                      "segments": [{option}], "args": [{int1}]}},
+                      "requires": [], "ensures": []}},
+                    {{"kind": "FnItem", "span": {{"start": 44, "end": 61}},
+                      "public": false, "attributes": [],
+                      "name": {b},
+                      "generics": [],
+                      "receiver": {{"kind": "SelfParam", "span": {{"start": 49, "end": 53}}, "mutable": false}},
+                      "params": [],
+                      "return_type": {int2},
+                      "requires": [], "ensures": []}}
+                ]
+            }}]"#,
+            name = ident("T", 6),
+            a = ident("a", 17),
+            option = ident("Option", 28),
+            int1 = path_ty("Int", 35),
+            b = ident("b", 47),
+            int2 = path_ty("Int", 58),
+        ),
+    );
+}

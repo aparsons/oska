@@ -83,8 +83,8 @@ pub enum Option<T> {
 }
 
 impl<T> Option<T> {
-    pub fn is_some(self) -> Bool
     pub fn ok_or<E>(self, err: E) -> Result<T, E>
+    pub fn is_some(self) -> Bool
 }
 
 pub enum Result<T, E> {
@@ -95,20 +95,12 @@ pub enum Result<T, E> {
 // A growable list. Its representation is built in.
 pub struct List<T> { handle: Int }
 
-// A line ending in a generic type's `>` continues onto the next, so a
-// body-less method returning one must be the last in its `impl` block.
 impl<T> List<T> {
+    pub fn new() -> List<T>
     pub fn push(var self, item: T)
     pub fn len(self) -> Int
     pub fn count(self) -> Int
-    pub fn new() -> List<T>
-}
-
-impl<T> List<T> {
     pub fn get(self, index: Int) -> Option<T>
-}
-
-impl<T> List<T> {
     pub fn map<U>(self, f: fn(T) -> U) -> List<U>
 }
 
@@ -116,8 +108,8 @@ impl<T> List<T> {
 pub struct Range<T> { pub start: T, pub end: T }
 
 impl String {
-    pub fn len(self) -> Int
     pub fn lines(self) -> List<String>
+    pub fn len(self) -> Int
 }
 
 pub struct Path { raw: String }
