@@ -6,3 +6,6 @@
 
 # Agent worktrees created by Claude Code
 .claude/worktrees/
+
+# The site generator's output (`oskac run site/build.osk`)
+/_site/

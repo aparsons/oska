@@ -1,0 +1,73 @@
+// The generator for https://oskalang.dev: `oskac run site/build.osk`, from
+// the root of the repository, writes the site to `_site/`.
+//
+// Run `oskac check site/build.osk` for its authority report: `main` is
+// handed the filesystem read-only and write-only, and narrows each before
+// it does anything else. Reading is confined to the repository, because
+// the README and the glossary sit at its top, and writing to `_site/`.
+//
+// Every page is built with `std.html`: text from the repository is
+// untrusted, and goes into a page only through `html.text`, which escapes
+// it.
+//
+// To add a page: write a function that returns a `Page`, and call
+// `publish` with it in `build`.
+
+use std.html
+
+// `CNAME`: the domain the site is served at.
+fn cname() -> String {
+    "oskalang.dev\n"
+}
+
+// One HTML page of the site: where it goes under `_site/`, its title,
+// and what its `<main>` holds.
+struct Page {
+    path: String,
+    title: Untrusted<String>,
+    body: html.Html,
+}
+
+fn main(read: FsRead, write: FsWrite) -> Result<(), IoError> {
+    let repo = read.restrict_to(".")
+    let site = write.restrict_to("_site")
+    build(repo, site)
+}
+
+// Every file of the site.
+fn build(repo: FsRead, site: FsWrite) -> Result<(), IoError> {
+    publish(site, home(repo)?)?
+    site.write(Path.new("CNAME"), cname())?
+    Ok(())
+}
+
+// The home page: the README, as text for now.
+fn home(repo: FsRead) -> Result<Page, IoError> {
+    let readme = repo.read_to_string(Path.new("README.md"))?
+    Ok(Page(path: "index.html", title: "Oska", body: preformatted(readme)))
+}
+
+// Write `page`, in the site's layout, to its path under `_site/`.
+fn publish(site: FsWrite, page: Page) -> Result<(), IoError> {
+    site.write(Path.new(page.path), layout(page).render())
+}
+
+// `text`, escaped, in a `<pre>`.
+fn preformatted(text: Untrusted<String>) -> html.Html {
+    markup("<pre>").concat(html.text(text)).concat(markup("</pre>"))
+}
+
+// The document around every page's body.
+fn layout(page: Page) -> html.Html {
+    let head = markup("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n")
+    let viewport = markup("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n")
+    let title = markup("<title>").concat(html.text(page.title)).concat(markup("</title>\n"))
+    let open = markup("</head>\n<body>\n<main>\n")
+    let close = markup("\n</main>\n</body>\n</html>\n")
+    head.concat(viewport).concat(title).concat(open).concat(page.body).concat(close)
+}
+
+// Markup written here in the generator, which it vouches for.
+fn markup(text: String) -> html.Html {
+    html.Html.raw(html.TrustedHtml.new(text))
+}

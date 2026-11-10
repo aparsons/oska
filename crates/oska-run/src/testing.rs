@@ -365,6 +365,10 @@ impl Host for TestHost<'_> {
         self.world().write_file(path, contents, beneath)
     }
 
+    fn list_dir(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<Vec<String>> {
+        self.world().list_dir(path, beneath)
+    }
+
     fn take_output(&mut self) -> Output {
         Output::default()
     }

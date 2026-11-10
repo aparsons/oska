@@ -61,6 +61,11 @@ pub struct FsRead { handle: Int }
 impl FsRead {
     pub fn restrict_to(self, dir: String) -> FsRead
     pub fn read_to_string(self, path: Path) -> Result<Untrusted<String>, IoError>
+    // The names of the entries of the directory at `path` (`"."` is the
+    // root itself), sorted so the order is the same on every host. The
+    // directory is confined like any read. A name comes from outside the
+    // program, so it is untrusted.
+    pub fn list_dir(self, path: Path) -> Result<List<Untrusted<String>>, IoError>
 }
 
 #[capability]
@@ -238,6 +243,30 @@ impl String {
     pub fn split(self, separator: String) -> List<String>
     #[follows_trust]
     pub fn contains(self, needle: String) -> Bool
+    #[follows_trust]
+    pub fn starts_with(self, prefix: String) -> Bool
+    #[follows_trust]
+    pub fn ends_with(self, suffix: String) -> Bool
+    // Every occurrence of `from` replaced by `to`. An empty `from`
+    // occurs nowhere.
+    #[follows_trust]
+    pub fn replace(self, from: String, to: String) -> String
+    // `parts` with the text between each two: `",".join(["a", "b"])` is
+    // `"a,b"`.
+    #[follows_trust]
+    pub fn join(self, parts: List<String>) -> String
+    // Each character (Unicode code point) as a text of its own, in order.
+    #[follows_trust]
+    pub fn chars(self) -> List<String>
+    // The characters from index `start` up to, but excluding, `end`. An
+    // index out of bounds, or `start` past `end`, is a bug: it panics
+    // (`P0035`).
+    #[follows_trust]
+    pub fn slice(self, start: Int, end: Int) -> String
+    // The text `times` times over. A negative count panics (`P0036`), and
+    // so does a result too long to build (`P0037`).
+    #[follows_trust]
+    pub fn repeat(self, times: Int) -> String
     // The decimal integer the whole text spells, if it is one.
     #[follows_trust]
     pub fn parse_int(self) -> Option<Int>

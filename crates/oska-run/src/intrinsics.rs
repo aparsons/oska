@@ -16,6 +16,7 @@ use oska_syntax::Span;
 use crate::confine::{self, Intent};
 use crate::data;
 use crate::host::Host;
+use crate::html;
 use crate::interp::Interpreter;
 use crate::panics::{codes, Panic};
 use crate::tasks;
@@ -53,6 +54,7 @@ pub const INTRINSICS: Table = &[
     ("Fs.read_only", Plain(fs_read_only)),
     ("Fs.restrict_to", Plain(fs_restrict_to)),
     ("Fs.write_only", Plain(fs_write_only)),
+    ("FsRead.list_dir", Plain(fs_list_dir)),
     ("FsRead.read_to_string", Plain(fs_read_to_string)),
     ("FsRead.restrict_to", Plain(fs_restrict_to)),
     ("FsWrite.restrict_to", Plain(fs_restrict_to)),
@@ -82,17 +84,25 @@ pub const INTRINSICS: Table = &[
 ];
 
 /// The intrinsic named `name`, from every module's table.
+///
+/// A `std` module's function is called by its own name (`text`), or by
+/// its module-qualified name (`html.text`) when the program declares the
+/// same name itself; both find the same intrinsic.
 pub fn lookup(name: &str) -> Option<Intrinsic> {
+    let unqualified = builtins::std_modules()
+        .filter_map(|path| path.rsplit('.').next())
+        .find_map(|module| name.strip_prefix(module)?.strip_prefix('.'));
     [
         INTRINSICS,
         data::INTRINSICS,
         tasks::INTRINSICS,
         traits::INTRINSICS,
         testing::INTRINSICS,
+        html::INTRINSICS,
     ]
     .into_iter()
     .flatten()
-    .find(|(n, _)| *n == name)
+    .find(|(n, _)| *n == name || Some(*n) == unqualified)
     .map(|(_, intrinsic)| *intrinsic)
 }
 
@@ -386,6 +396,16 @@ fn fs_read_to_string(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<V
     Ok(io_result(result, |text| Value::str(&text)))
 }
 
+/// `FsRead.list_dir(self, path)`: the names of the entries of the
+/// directory, sorted. It is confined like a read.
+fn fs_list_dir(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    let result = real_path(host, fs_cap(&args[0]), &args[1], Intent::Read)
+        .and_then(|(path, beneath)| host.list_dir(&path, beneath));
+    Ok(io_result(result, |names| {
+        Value::List(Rc::new(names.iter().map(|n| Value::str(n)).collect()))
+    }))
+}
+
 /// `FsWrite.write(self, path, contents)`.
 fn fs_write(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
     let result = real_path(host, fs_cap(&args[0]), &args[1], Intent::Write)
@@ -548,6 +568,20 @@ mod tests {
     /// method (`var self`).
     fn bodiless_prelude_methods() -> Vec<(String, bool)> {
         let module = oska_syntax::parse_prelude(PRELUDE).expect("the prelude should parse");
+        bodiless_methods(&module)
+    }
+
+    /// Every body-less function `module` declares, by qualified name.
+    fn bodiless_functions(module: &oska_syntax::ast::Module) -> Vec<String> {
+        bodiless_methods(module)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect()
+    }
+
+    /// [`bodiless_functions`], each with whether it is a mutating method
+    /// (`var self`).
+    fn bodiless_methods(module: &oska_syntax::ast::Module) -> Vec<(String, bool)> {
         let mutating = |item: &Item| match &item.kind {
             ItemKind::Fn(f) => f.receiver.as_ref().is_some_and(|r| r.mutable),
             _ => false,
@@ -609,6 +643,19 @@ mod tests {
         assert!(
             missing.is_empty(),
             "prelude functions with no body and no runtime intrinsic: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn every_bodiless_std_html_function_has_a_runtime_intrinsic() {
+        let module = oska_syntax::parse_prelude(include_str!("../../oska-check/src/std/html.osk"))
+            .expect("std.html should parse");
+        let names = bodiless_functions(&module);
+        assert!(names.iter().any(|n| n == "text"), "{names:?}");
+        let missing: Vec<&String> = names.iter().filter(|n| !implemented(n)).collect();
+        assert!(
+            missing.is_empty(),
+            "std.html functions with no runtime: {missing:?}"
         );
     }
 
