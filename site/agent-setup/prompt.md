@@ -8,7 +8,7 @@ Install Oska, the secure-by-default programming language from https://oskalang.d
 - Pipe nothing to a shell except the official installer from oskalang.dev in step 1 (and, only if I approve it in step 4, the same installer in a CI file).
 - Never ask for, read, print, or handle secrets: tokens, keys, passwords, or the contents of `.env` files. Nothing here needs one.
 - Do not change an existing file until you have shown me the diff and I have agreed. Show me a new file's content before you create it.
-- Do not change any permission or approval setting, and do not touch user-level or global settings. Write only inside this project, and into the install directory `~/.oska`.
+- Do not change any permission or approval setting, and do not touch user-level or global settings. Write only inside this project, into the install directory `~/.oska`, and into the temporary directory of step 2, which you delete afterwards.
 - Never skip a verification, and never work around a failed one.
 
 ## 1. Install

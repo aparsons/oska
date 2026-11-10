@@ -40,6 +40,10 @@ use oska_run::{FakeHost, TestOptions, TestStatus};
 /// line of defence behind the checker (`E0292`).
 const UNREACHABLE: [&str; 3] = ["E0170", "E0360", "P0005"];
 
+/// How the meaning of a code with no example ends, after the reason why.
+/// `oskac explain` and the code's page both show the meaning.
+const NO_EXAMPLE: &str = "so it has no example.";
+
 /// The docs that hold the catalog.
 const CATALOG_DOCS: [&str; 2] = ["docs/checker.md", "docs/runtime.md"];
 
@@ -441,6 +445,50 @@ fn built_site() -> BTreeMap<String, String> {
         "the generator should succeed: {outcome:#?}"
     );
     host.files_under("_site")
+}
+
+#[test]
+fn a_code_without_an_example_says_why_wherever_it_is_explained() {
+    let catalog = catalog();
+    let site = built_site();
+    let docs: String = CATALOG_DOCS
+        .iter()
+        .map(|doc| read(&repo_root().join(doc)))
+        .collect();
+    let mut problems = Vec::new();
+    for row in &catalog.rows {
+        let has_example = catalog.examples.iter().any(|e| e.code == row.code);
+        if has_example {
+            if row.meaning.contains(NO_EXAMPLE) {
+                problems.push(format!(
+                    "{}: has an example, but says it has none",
+                    row.code
+                ));
+            }
+            continue;
+        }
+        if !row.meaning.contains(NO_EXAMPLE) {
+            problems.push(format!(
+                "{}: no example, and its meaning does not end `<why>, {NO_EXAMPLE}`",
+                row.code
+            ));
+        }
+        let note = format!("`{}` has no example: ", row.code);
+        if !docs.contains(&note) {
+            problems.push(format!(
+                "{}: no `{note}<why>` sentence under its examples heading",
+                row.code
+            ));
+        }
+        if !stdout_of(&["explain", &row.code]).contains(NO_EXAMPLE) {
+            problems.push(format!("{}: `oskac explain` does not say why", row.code));
+        }
+        let page = site.get(&format!("codes/{}.html", row.code));
+        if !page.is_some_and(|page| page.contains(NO_EXAMPLE)) {
+            problems.push(format!("{}: its page does not say why", row.code));
+        }
+    }
+    assert!(problems.is_empty(), "\n{}", problems.join("\n"));
 }
 
 #[test]

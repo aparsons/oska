@@ -65,6 +65,8 @@ fn main: Stdout (io), Fs (fs)
 
 Reading the report: `word_count` can only read files, `double` can do nothing, and `main` can write to standard output and use the whole filesystem. Reviewing a change means reading the report, not the bodies.
 
+For a larger example, this site is built by an Oska program, `site/build.osk`. Its [authority report](https://oskalang.dev/authority.html) is printed by `oskac check` on every build and published as it was printed.
+
 ## Attenuation
 
 You cannot forge a capability. You get one by being passed it, or by **attenuation**: producing a narrower capability from one you hold. Attenuation never widens authority, and there is no way back from a narrow capability to a wider one.

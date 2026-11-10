@@ -112,9 +112,11 @@ The lexer and the parser report these. A syntax error is the only diagnostic of 
 | `E0163` | `pub test`. A test is never exported. | Remove `pub`. |
 | `E0164` | `pub use`. A re-export is not defined. | Remove `pub`. |
 | `E0165` | `#[integration]` on an item other than a `test`. | None. |
-| `E0170` | `#[capability]` on an item other than a `struct`, in the prelude. In user code the attribute is `E0132` instead, so a program cannot reach this code. | Remove the attribute. |
+| `E0170` | `#[capability]` on an item other than a `struct`, in the prelude. In user code the attribute is `E0132` instead: no program can reach this code, so it has no example. | Remove the attribute. |
 
 ### Syntax examples
+
+Each code has a program that fails with exactly that code and the same program fixed. `E0170` has no example: the checker reports it only for the prelude, and user code gets `E0132` instead, so no program can reach it.
 
 #### `E0001`
 
@@ -722,11 +724,11 @@ test "setup" {
 | `E0350` | A `Secret` interpolated into a string, such as `"Bearer {key}"`, or a value that holds one anywhere inside, such as a `List<Secret<String>>`, an `Option<Secret<String>>`, or a struct with a `Secret` field. Spans the hole, braces included. | None. |
 | `E0351` | A `Secret` compared with `==` or `!=`, on either side. Spans the comparison. Also reported, without a fix, where a `Secret` must be `Eq`: an `Eq` bound, or a call to `.eq`. | Rewrite `a == b` to `a.constant_time_eq(b)` and `a != b` to `!a.constant_time_eq(b)`, with the secret as the receiver (parenthesized when needed). When both sides are secrets, it rewrites to `a.constant_time_eq_secret(b)` instead, so nothing is exposed. |
 | `E0352` | A `Secret` used where it must be `Display`: a `Display` bound, or a call to `.to_string()`. Spans the call, or the method name. | None. |
-| `E0360` | A name declared by an imported `std` module but not exported by it, written unqualified. Spans the name. | None: the module keeps it private. |
+| `E0360` | A name declared by an imported `std` module but not exported by it, written unqualified. Spans the name. No `std` module declares a private name yet: no program can reach this code, so it has no example. | None: the module keeps it private. |
 
 ### Checker examples
 
-Each code has a program that fails with exactly that code and the same program fixed. `E0360` has none: no `std` module declares a private name yet, so no program can reach it.
+Each code has a program that fails with exactly that code and the same program fixed. `E0360` has no example: no `std` module declares a private name yet, so no program can reach it.
 
 #### `E0200`
 

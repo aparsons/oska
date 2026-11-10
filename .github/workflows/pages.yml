@@ -28,6 +28,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - run: cargo build --release --locked -p oskac
+      # The generator publishes its own authority report, as the checker
+      # prints it now, at /authority.html.
+      - run: ./target/release/oskac check site/build.osk > site/authority.txt
       - run: ./target/release/oskac run site/build.osk
       # Releases are stored in GitHub Releases (see release.yml). Fetch them
       # all, verify each against the committed key, and publish them under
