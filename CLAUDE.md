@@ -1,3 +1,12 @@
+## Checks
+
+Run `scripts/check.sh` before every commit; it is the whole CI test job. The pre-push hook runs it too (enable once per clone: `git config core.hooksPath .githooks`).
+
+## Reviews and releases
+
+- Code review: apply `CODING_STANDARDS.md`.
+- Cutting, checking, or fixing a release, or touching the signing key or release workflows: `docs/agents/release.md`.
+
 ## Agent skills
 
 ### Issue tracker

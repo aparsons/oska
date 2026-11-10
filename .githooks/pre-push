@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Refuse a push unless every check passes. Enable once per clone with:
+#   git config core.hooksPath .githooks
+# Pushing a tag or deleting a branch also runs it; `git push --no-verify`
+# skips it in an emergency.
+set -euo pipefail
+exec "$(git rev-parse --show-toplevel)/scripts/check.sh"
