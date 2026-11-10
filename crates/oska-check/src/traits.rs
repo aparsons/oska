@@ -56,7 +56,7 @@ pub fn module(
                 continue;
             };
             let actual = lower.signature(f, &[], Some(target.clone()));
-            let expected = info.method_for(declared, &target, &args, &[], &[]);
+            let expected = info.method_for(declared, &target, &args, None);
             if !same_signature(&actual, &expected) {
                 diagnostics.push(Diagnostic::new(
                     codes::IMPL_SIGNATURE,
@@ -91,7 +91,7 @@ pub fn module(
             if missing.iter().all(|sig| sig.generics.is_empty()) {
                 let stubs: Vec<FnSig> = missing
                     .iter()
-                    .map(|sig| info.method_for(sig, &target, &args, &[], &[]))
+                    .map(|sig| info.method_for(sig, &target, &args, None))
                     .collect();
                 if let Some(edit) = insert_stubs(src, item.span, &stubs) {
                     diagnostic = diagnostic.with_fix(

@@ -201,6 +201,18 @@ impl Infer {
         self.caps.flow(Flag::High, cap_flag(cap))
     }
 
+    /// Whether a value with the capability flag `cap` has been used as a
+    /// plain `fn`: it flowed into a plain `fn` slot, or was settled as
+    /// one. Only a capability variable can have been.
+    pub fn used_as_plain(&self, cap: Cap) -> bool {
+        matches!(cap, Cap::Var(v) if self.caps.is_pinned(v))
+    }
+
+    /// Whether the capability variable `from` flows into `to`.
+    pub fn cap_reaches(&self, from: u32, to: u32) -> bool {
+        self.caps.reaches(from, to)
+    }
+
     /// Settle every capability variable in `ty` that is still open as a
     /// plain `fn`, for a check that has just read it as one: a `cap fn`
     /// that reaches it later is rejected. One already a `cap fn` is kept.

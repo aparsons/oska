@@ -122,6 +122,11 @@ impl Body<'_, '_, '_> {
             return None;
         }
         if self.converts_from(&from, &to) {
+            let convert = super::purity::Reaches::Dispatch {
+                what: "`?`",
+                method: "`From.from`",
+            };
+            self.contract_dispatch(span, convert, vec![from.clone(), to.clone()]);
             let convert = self
                 .impl_of(&to, ty::FROM, std::slice::from_ref(&from))
                 .and_then(|imp| imp.method_name("from"));

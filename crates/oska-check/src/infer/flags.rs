@@ -49,6 +49,27 @@ impl Flags {
         self.vars[v as usize].high
     }
 
+    /// Whether `v` flows into a low slot.
+    pub(super) fn is_pinned(&self, v: u32) -> bool {
+        self.vars[v as usize].pinned
+    }
+
+    /// Whether `from` flows into `to`, directly or through other
+    /// variables.
+    pub(super) fn reaches(&self, from: u32, to: u32) -> bool {
+        let mut seen = vec![false; self.vars.len()];
+        let mut stack = vec![from];
+        while let Some(v) = stack.pop() {
+            if v == to {
+                return true;
+            }
+            if !std::mem::replace(&mut seen[v as usize], true) {
+                stack.extend(&self.vars[v as usize].into);
+            }
+        }
+        false
+    }
+
     /// Add the edge `a ≤ b`: a value flagged `a` flows where `b` is
     /// required. Fails when a high flag would reach a low slot.
     pub(super) fn flow(&mut self, a: Flag, b: Flag) -> bool {

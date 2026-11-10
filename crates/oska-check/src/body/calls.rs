@@ -41,7 +41,7 @@ impl Body<'_, '_, '_> {
                 let ty = self.infer(callee);
                 if self.in_contract {
                     // A contract reads the callee's purity from its flag
-                    // (see `pure_call`): one still open is a plain `fn`
+                    // (see `contract_call`): one still open is a plain `fn`
                     // from now on.
                     self.infer.settle_caps(&ty);
                 }
@@ -107,7 +107,7 @@ impl Body<'_, '_, '_> {
     fn item_callee(&mut self, key: &str, ident: &Ident) -> Option<Callable> {
         let name = key;
         if let Some(sig) = self.items.fns.get(name).cloned() {
-            let mut callable = self.instantiate(&sig, None);
+            let mut callable = self.instantiate(&sig, None, ident.span);
             callable.target = Some(target(&sig, name.to_string()));
             return Some(callable);
         }
@@ -185,7 +185,7 @@ impl Body<'_, '_, '_> {
                 let after_receiver = args.get(1..).unwrap_or_default();
                 self.attenuation_call(type_name, &sig, after_receiver, span);
             }
-            let mut callable = self.instantiate(&sig, None);
+            let mut callable = self.instantiate(&sig, None, name.span);
             if sig.trait_name.is_none() {
                 callable.target = Some(target(&sig, format!("{type_name}.{}", name.name)));
             }
@@ -218,8 +218,8 @@ impl Body<'_, '_, '_> {
         };
         let self_ty = self.infer.fresh();
         let args: Vec<Ty> = info.generics.iter().map(|_| self.infer.fresh()).collect();
-        let sig = info.method_for(sig, &self_ty, &args, &[], &[]);
-        let mut callable = self.instantiate(&sig, None);
+        let sig = info.method_for(sig, &self_ty, &args, None);
+        let mut callable = self.instantiate(&sig, None, name.span);
         callable.description = format!("`{trait_name}.{}`", name.name);
         if sig.receiver.is_method() {
             // The receiver's type may be known only once the arguments
@@ -350,12 +350,20 @@ impl Body<'_, '_, '_> {
     /// text type in the result is untrusted (see [`Body::apply`]). So
     /// `fn launder<T: Display>(x: T) -> String` returns untrusted text for
     /// an untrusted `x`, however its body turned `x` into text.
-    pub(super) fn instantiate(&mut self, sig: &FnSig, self_ty: Option<&Ty>) -> Callable {
+    ///
+    /// Each generic the module declares is an instance at `at`, checked
+    /// against what the callee assumes of it (`instantiation.rs`).
+    pub(super) fn instantiate(&mut self, sig: &FnSig, self_ty: Option<&Ty>, at: Span) -> Callable {
         let subst: Vec<(String, Ty)> = sig
             .generics
             .iter()
             .map(|g| (g.clone(), self.infer.fresh()))
             .collect();
+        for (key, (_, ty)) in sig.generic_keys.iter().zip(&subst) {
+            if let Some(key) = key {
+                self.instance(*key, ty, at);
+            }
+        }
         let follows_type_args = !subst.is_empty() && sig.ret.has_trusted_text();
         let joined = (sig.follows_trust || follows_type_args).then(|| self.infer.fresh_trust());
         let lower_with = |t: &Ty, whole: bool| {
@@ -487,7 +495,7 @@ impl Body<'_, '_, '_> {
             (None, None) => Resolution::Unsupported("this method call".to_string()),
         };
         self.record(span, resolution);
-        let mut callable = self.instantiate(&sig, None);
+        let mut callable = self.instantiate(&sig, None, name.span);
         if let Some(declared) = &callable.receiver {
             // The receiver flows into `self` like an argument, so untrusted
             // text is no receiver of a method that wants trusted text.
@@ -581,7 +589,7 @@ impl Body<'_, '_, '_> {
             };
             for (sig, _) in info.methods.iter().filter(|(s, _)| s.name == name.name) {
                 if !found.iter().any(|f| f.trait_name == sig.trait_name) {
-                    found.push(info.method_for(sig, &self_ty, &bound.args, &[], &[]));
+                    found.push(info.method_for(sig, &self_ty, &bound.args, None));
                 }
             }
         }
@@ -674,15 +682,8 @@ impl Body<'_, '_, '_> {
             };
             arg_tys.push(ty);
         }
-        if self.in_contract && !self.pure_call(&callable, &arg_tys) {
-            self.error(
-                codes::IMPURE_IN_CONTRACT,
-                format!(
-                    "a contract may call only pure functions, but {} takes a capability",
-                    callable.description
-                ),
-                span,
-            );
+        if self.in_contract {
+            self.contract_call(&callable, &arg_tys, span);
         }
         if let Some(joined) = callable.joined {
             for ty in &callable.type_args {
@@ -695,30 +696,6 @@ impl Body<'_, '_, '_> {
             self.require_trait(ty, &bound.trait_name, &bound.args, span, &what);
         }
         callable.ret
-    }
-
-    /// Whether a call is pure once instantiated: the callee is declared
-    /// pure, and no argument, parameter, or receiver type is
-    /// capability-bearing after its generics are solved. So
-    /// `apply(log, out)` with `fn apply<T>(f: fn(T), x: T)` is impure when
-    /// `out` is a `Stdout`.
-    ///
-    /// A pure call settles the open capability flags it read as plain
-    /// `fn`s, so a `cap fn` cannot reach them later.
-    pub(super) fn pure_call(&mut self, callable: &Callable, arg_tys: &[Ty]) -> bool {
-        let tys: Vec<Ty> = callable
-            .params
-            .iter()
-            .map(|(_, ty)| ty)
-            .chain(callable.receiver.iter())
-            .chain(arg_tys)
-            .cloned()
-            .collect();
-        let pure = callable.pure && !tys.iter().any(|ty| self.bearing(ty));
-        if pure {
-            self.settle_all(&tys);
-        }
-        pure
     }
 
     /// Check an argument's label against its parameter.

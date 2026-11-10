@@ -22,7 +22,15 @@ Text carries a trust flag (ADR 0006). `Untrusted<String>` is untrusted text; pla
 
 Untrusted-ness carries through every route. Prelude text operations are trust-polymorphic: the prelude marks each with `#[follows_trust]`, an attribute only the prelude may write. Each call gets a fresh trust variable that its receiver and text arguments join into, and every text type in its result has that trust, so `untrusted.trim()` and `untrusted.lines()` are untrusted while `untrusted.len()` and `untrusted.contains("x")` are trusted `Int` and `Bool`. Any other function's receiver is checked like an argument. An interpolated string is untrusted when text in any hole is, and every hole must be `Display` (`E0265`). Inside a generic body, text that comes from a type parameter is untrusted: interpolating a `T`, and the text result of a call on a `T` receiver or with a `T` argument. A generic function or trait method also follows the trust of its type arguments at each call: when the result holds a fixed `String` and what any generic (or `Self`, in a qualified trait call) is instantiated with holds untrusted text, that text in the result is untrusted, so `fn show<T: Display>(x: T) -> String` cannot launder an untrusted `x`. An impl method may return trusted text where its trait declares `Untrusted<String>`. The `message` of `IoError`, `SqlError`, and `ProcError` is untrusted, and so is their text: a struct or enum **holds untrusted text** when a field is untrusted text or a type that holds it, at any depth, and such a value turns into untrusted text wherever it becomes text. That covers interpolating it, a generic's type argument, `Self` in a qualified trait call such as `Display.to_string(e)`, and a method of a prelude or `std` type, such as `e.to_string()` or `IoError.to_string(e)`, whose body the checker cannot see. A method the module declares is checked against its own signature, so its `to_string(self) -> String` cannot return `self.cause.to_string()` for an `IoError` field without `.assume_trusted()`. `==` and `!=` compare text of either trust, and a trait impl for `String` covers both. Where values meet, trusted and untrusted text join to untrusted rather than conflicting: `if` and `match` branches, the arguments of a generic function for one type parameter, and the elements of a list. Inference variables are solved to trust variables, and the checker keeps every flow between them, so text that has already been used where trusted `String` is required rejects untrusted text that arrives later, as with `names.push(arg)` after `greet(names.get(0)?)`. A mutating (`var self`) method's receiver takes back what the method writes into it, so `names.push(arg)` on a `var names: List<String>` rejects untrusted `arg` too.
 
-Contract clauses are type-checked here, and evaluated by the runtime on every call (`P0006`, `P0007`: see [the runtime reference](runtime.md)). `requires` and `ensures` conditions must be `Bool` (`E0281`), they see the parameters (and `self`), `ensures |r|` binds `r` to the return type, and a contract may call only pure functions (`E0280`). A `?` or `return` directly in a clause is an error (`E0282`), because a condition has no function to leave. A trait method's contract is checked even without a body, and it binds every impl of the method: a method of `impl Trait for Type` declares no contract of its own (`E0218`), and neither does `main` (`E0219`), which nothing calls.
+Contract clauses are type-checked here, and evaluated by the runtime on every call (`P0006`, `P0007`: see [the runtime reference](runtime.md)). `requires` and `ensures` conditions must be `Bool` (`E0281`), they see the parameters (and `self`), `ensures |r|` binds `r` to the return type, and a contract may call only pure functions (`E0280`). That covers what an operator dispatches to as well: `==` and `!=` call an `Eq` impl, an interpolation hole calls a `Display` impl, and a `?` inside a closure may call a `From` impl, so each is judged as a call with the operands' types. A `?` or `return` directly in a clause is an error (`E0282`), because a condition has no function to leave. A trait method's contract is checked even without a body, and it binds every impl of the method: a method of `impl Trait for Type` declares no contract of its own (`E0218`), and neither does `main` (`E0219`), which nothing calls.
+
+Inside a generic body a type parameter is never capability-bearing and never holds a `Scope`, because nothing is known about it. Three things rely on that, so each records what it **assumes of the type parameter**, and every instantiation of the parameter must keep it (`E0274`):
+
+- A contract that uses a value of type `T`, by calling a method on it, passing it on, comparing it, or interpolating it, assumes `T` is not capability-bearing: otherwise the contract could perform an effect.
+- A closure that captures a value of type `T` (or one holding a `T`, such as an `Option<T>` or a closure that captured one) and is used as a plain `fn`, by flowing into a plain `fn` slot or being called in a contract, assumes the same: otherwise a plain `fn` would carry authority. A closure used only where a `cap fn` is accepted, such as `spawn`'s task, assumes nothing.
+- A closure that captures a value of type `T` and is not scoped assumes `T` holds no `Scope` handle: otherwise the closure could outlive the handle's `scope` block. This is conservative: it holds even for a closure that never leaves its body.
+
+A trait's `Self` is a type parameter too, so a trait whose contract uses `self`, or whose default method keeps `self` in a plain `fn`, cannot be implemented for a capability-bearing type. The assumption is checked at a call of a generic function or method (for its own generics and its impl's), where a bound is satisfied through a generic impl, and at an impl of the trait. A generic that instantiates another with its own parameter passes the assumption on, so `fn outer<U: Speak>(x: U) -> Int { check(x) }` cannot be called with a `Stdout` either when `check`'s contract calls `x.ok()`.
 
 A `test` body sees one built-in value, `t`, of the prelude type `TestContext`. Its fields are stand-in capabilities: `t.fs` (an in-memory `Fs`), `t.clock` (a fixed `Clock`), `t.random` (a seeded `Random`), and `t.stdout` (a recording `Stdout`). Its methods are the assertions `t.assert(cond)`, `t.assert_eq(actual, expected)`, `t.assert_ne(actual, other)`, and `t.fail(message)`, and `t.printed()` returns the lines printed to `t.stdout`. An `#[integration]` test gets the same `t`; the runtime decides which capabilities are real. A test produces no value, so its last expression is a statement like the others.
 
@@ -729,12 +737,13 @@ test "setup" {
 | `E0271` | Construction of a prelude struct with private fields, such as a built-in capability (`Stdout(handle: 1)`) or `Args`. Capabilities cannot be forged; they come from `main`. | None. |
 | `E0272` | Reading a private field of a prelude type, such as `out.handle`. | None. |
 | `E0273` | A call of `read_to_string`, `list_dir`, `write`, or `create_dir` on `Fs`, `FsRead`, or `FsWrite`, whether written `read.read_to_string(path)`, qualified as `FsRead.read_to_string(read, path)`, or taken as a value. These types only attenuate, so a file is read or written through a directory capability (`restrict_to`) or a file capability (`restrict_to_file`). The message shows the shape of the fix, such as `fs.restrict_to("<root>").read_to_string(path)`. The root is the programmer's to choose, so there is no machine fix. Spans the call. | None. |
-| `E0280` | A contract clause (`requires` or `ensures`) calls a function that is not pure: one with a capability-bearing parameter or receiver, or a `cap fn` value. A generic call is judged once instantiated: it is impure when any argument, parameter, or receiver type is capability-bearing after its generics are solved, as in `apply(log, out)` with `fn apply<T>(f: fn(T), x: T)` and `out: Stdout`. Spans the call. | None. |
+| `E0274` | A type argument breaks what a generic body assumes of its type parameter (see above): a capability-bearing type for a parameter that a contract uses or that a plain `fn` closure captures, or a type holding a `Scope` for a parameter that an unscoped closure captures. Checked at a call of a generic function or method, where a bound is satisfied through a generic impl, and at an impl of a trait for its `Self` and its generics. A generic that instantiates the parameter with one of its own passes the assumption on. The message names the type, the parameter, and why it must stay pure. Spans the called function's or method's name, the call when a bound is satisfied through an impl, or the impl's type. | None. |
+| `E0280` | A contract clause (`requires` or `ensures`) calls a function that is not pure: one with a capability-bearing parameter or receiver, or a `cap fn` value. A generic call is judged once instantiated: it is impure when any argument, parameter, or receiver type is capability-bearing after its generics are solved, as in `apply(log, out)` with `fn apply<T>(f: fn(T), x: T)` and `out: Stdout`. An operator that dispatches to a trait impl is judged the same way: `==` or `!=` on capability-bearing operands (an `Eq` impl), an interpolation hole of a capability-bearing value (a `Display` impl), and a `?` inside a closure that converts a capability-bearing error (a `From` impl). Each is judged again once the body's types are solved, so a value that turns out capability-bearing later, on a loop's next pass, is caught. Spans the call, the comparison, the hole, or the `?`. | None. |
 | `E0281` | A `requires` or `ensures` condition whose type is not `Bool`. Spans the condition. | None. |
 | `E0282` | A `?` or a `return` directly inside a `requires` or `ensures` expression, outside any closure. A contract is a condition that evaluates to a `Bool`, so there is no function to leave. A closure in a contract may use both for itself. Spans the `?` expression or the `return` statement. | None. |
 | `E0290` | Two `impl Trait for Type` that overlap: some instantiation of each implements the same trait, with the same arguments, for the same type, as with `impl<T> Display for Box<T>` and `impl Display for Box<Int>`. An impl that overlaps a prelude impl, such as `impl Eq for Int`, conflicts too. Spans the second impl's trait. | None. |
 | `E0291` | An inherent `impl` for a prelude type, such as `impl FsRead { ... }`: only the prelude declares methods on its types. Write a free function, or implement a trait. Spans the `impl`'s type. | None. |
-| `E0292` | A `Scope` handle that could outlive its `scope` block: `Scope` in a function's or method's return type, in a struct or enum field's type, or in the type of a `scope` block's value, including inside wrappers such as `Option<Scope>` or `List<Scope>`. `Scope` stays allowed as a parameter type. A closure that captures a `Scope`, or a value holding one, is **scoped** and cannot escape either: it cannot be a `scope` block's value, be returned, be stored in a field, or be passed to a user function's parameter (a prelude or `std` function, such as `spawn` or `map`, accepts it). A `var` declared outside a `scope` block cannot be left holding the handle or such a closure; this is conservative, and also rejects keeping a closure that captures an enclosing block's handle. Nor can a `var` that already holds a handle, of an enclosing block, take one of an inner block: inside a `scope` block, assigning to a `var` (or `self`) from outside it, or calling a mutating method such as `push` on one, is rejected when the value written mentions a local of the block that holds a `Scope`, such as its handle or a closure capturing it. Spans the type, the closure, or the `scope` expression. | None. |
+| `E0292` | A `Scope` handle that could outlive its `scope` block: `Scope` in a function's or method's return type, in a struct or enum field's type, or in the type of a `scope` block's value, including inside wrappers such as `Option<Scope>` or `List<Scope>`. `Scope` stays allowed as a parameter type. A closure that captures a `Scope`, or a value holding one, is **scoped** and cannot escape either: it cannot be a `scope` block's value, be returned, be stored in a field, or be passed to a user function's parameter (a prelude or `std` function, such as `spawn` or `map`, accepts it). A `var` declared outside a `scope` block cannot be left holding the handle or such a closure; this is conservative, and also rejects keeping a closure that captures an enclosing block's handle. Nor can a `var` that already holds a handle, of an enclosing block, take one of an inner block: inside a `scope` block, assigning to a `var` (or `self`) from outside it, or calling a mutating method such as `push` on one, is rejected when the value written mentions a local of the block that holds a `Scope`, such as its handle or a closure capturing it. A closure is scoped by what its captures hold when it is checked, so one that captures a value whose type is known only later, as in `var xs = []` followed by `let g = || xs.len()` and then `xs.push(s)`, is rejected when that type turns out to hold a `Scope`; declare the value with its type first. Spans the type, the closure, or the `scope` expression. | None. |
 | `E0293` | A call to `todo()` when checking with `--release`. Spans the call. | None. |
 | `E0294` | A `use` whose path does not start with `std.`: only the standard library can be imported. Spans the path. | None. |
 | `E0295` | A `use std.*` of a module that does not exist. Spans the module path. | Replace the path with the single closest module, when one is close enough. |
@@ -1660,6 +1669,53 @@ fn count(fs: FsRead, path: Path) -> Result<Int, IoError> {
 ```oska fixed=E0273
 fn count(fs: FsRead, path: Path) -> Result<Int, IoError> {
     Ok(fs.restrict_to("/srv/app").read_to_string(path)?.len())
+}
+```
+
+#### `E0274`
+
+```oska error=E0274
+trait Speak {
+    fn ok(self) -> Bool
+}
+
+impl Speak for Stdout {
+    fn ok(self) -> Bool {
+        let _ = self.println("checking")
+        true
+    }
+}
+
+fn check<T: Speak>(x: T) -> Int
+    requires x.ok()
+{
+    1
+}
+
+fn main(out: Stdout) {
+    let n = check(out)
+}
+```
+
+```oska fixed=E0274
+trait Speak {
+    fn ok(self) -> Bool
+}
+
+impl Speak for Int {
+    fn ok(self) -> Bool {
+        self > 0
+    }
+}
+
+fn check<T: Speak>(x: T) -> Int
+    requires x.ok()
+{
+    1
+}
+
+fn main(out: Stdout) {
+    let n = check(5)
 }
 ```
 
