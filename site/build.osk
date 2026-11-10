@@ -44,6 +44,8 @@ cap struct Sources {
     style: FsRead,
     manifest: FsRead,
     search: FsRead,
+    // `site/agent-setup/`: the agent-setup prompt and its templates.
+    setup: FsRead,
 }
 
 fn main(read: FsRead, write: FsWrite) -> Result<(), IoError> {
@@ -54,6 +56,7 @@ fn main(read: FsRead, write: FsWrite) -> Result<(), IoError> {
         style: read.restrict_to("site/style.css"),
         manifest: read.restrict_to("Cargo.toml"),
         search: read.restrict_to("site/search.js"),
+        setup: read.restrict_to("site/agent-setup"),
     )
     write.create_dir(Path.new("_site"))?
     build(sources, write.restrict_to("_site"))
@@ -78,6 +81,12 @@ struct Section {
     title: Untrusted<String>,
 }
 
+// One file of `site/agent-setup/`, published as it is.
+struct Asset {
+    name: Untrusted<String>,
+    text: Untrusted<String>,
+}
+
 // Everything the site publishes.
 struct Site {
     docs: List<Doc>,
@@ -85,6 +94,8 @@ struct Site {
     // The version in `Cargo.toml`, the version of `main`, which these
     // docs track.
     version: String,
+    // The files of `site/agent-setup/`, none if there is no such directory.
+    assets: List<Asset>,
 }
 
 // Every file of the site.
@@ -104,6 +115,9 @@ fn build(sources: Sources, site: FsWrite) -> Result<(), IoError> {
             pages.push(page)
         }
     }
+    if has_setup(all) {
+        pages.push(setup_page(all))
+    }
     for section in all.sections {
         if !has_doc(all, "{section.dir}/index.html") {
             pages.push(section_page(all, section))
@@ -111,6 +125,9 @@ fn build(sources: Sources, site: FsWrite) -> Result<(), IoError> {
     }
     for page in pages {
         publish(site, all, page)?
+    }
+    if has_setup(all) {
+        publish_setup(site, all)?
     }
     site.write(Path.new("robots.txt"), robots())?
     site.write(Path.new("sitemap.xml"), sitemap(pages))?
@@ -180,7 +197,17 @@ fn gather(sources: Sources) -> Result<Site, IoError> {
         }
     }
     let manifest = sources.manifest.read_to_string(Path.new("."))?
-    Ok(Site(docs: docs, sections: sections, version: version_of(manifest)))
+    var assets: List<Asset> = List.new()
+    match sources.setup.list_dir(Path.new(".")) {
+        Ok(names) => {
+            for name in names {
+                let text = sources.setup.read_to_string(Path.from(name))?
+                assets.push(Asset(name: name, text: text))
+            }
+        }
+        Err(_) => {}
+    }
+    Ok(Site(docs: docs, sections: sections, version: version_of(manifest), assets: assets))
 }
 
 // The `version` in a `Cargo.toml`, as `major.minor.patch`: each part is
@@ -297,6 +324,9 @@ fn md_url(url: Untrusted<String>) -> Untrusted<String> {
 
 fn doc_page(all: Site, doc: Doc) -> Page {
     let links = Links(site: all, dir: parent_of(doc.repo))
+    if carries_prompt(all, doc) {
+        return prompt_doc_page(all, doc, links)
+    }
     Page(path: doc.page, title: doc.title, body: markdown(doc.text, links), md: retarget(doc.text, links))
 }
 
@@ -388,6 +418,8 @@ fn llms_txt(all: Site, pages: List<Page>) -> Untrusted<String> {
         out = "{out}> {home}\n\n"
     }
     out = "{out}Oska {version} (pre-alpha). These docs track `main`. Every page is also served as Markdown: the same path with `.md`. All of them are in [llms-full.txt]({base}/llms-full.txt).\n"
+    let setup = if has_setup(all) { setup_group(all) } else { "" }
+    out = "{out}{setup}"
     let docs = llms_group("Docs", "", pages)
     out = "{out}{docs}"
     for section in all.sections {
@@ -404,7 +436,7 @@ fn llms_group(title: Untrusted<String>, dir: Untrusted<String>, pages: List<Page
     let base = origin()
     var entries: Untrusted<String> = ""
     for page in pages {
-        if parent_of(page.path) == dir {
+        if parent_of(page.path) == dir && page.path != "agent-setup.html" {
             let copy = md_url(url_of(page.path))
             let summary = summary_of(page.md)
             let note: Untrusted<String> = if summary == "" { "" } else { ": {summary}" }
@@ -659,6 +691,9 @@ fn navigation(all: Site, current: Untrusted<String>) -> html.Html {
         }
     }
     items = items.concat(nav_item("glossary.html", "Glossary", current))
+    if has_setup(all) {
+        items = items.concat(nav_item("agent-setup.html", "Agent setup", current))
+    }
     if has_catalog(all) {
         items = items.concat(nav_item("codes/index.html", "Codes", current))
     }
@@ -1773,4 +1808,146 @@ fn json_or_null(text: Untrusted<String>) -> Untrusted<String> {
 fn catalog_json_string(text: Untrusted<String>) -> Untrusted<String> {
     let escaped = text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
     "\"{escaped}\""
+}
+
+// ---- The agent-setup prompt ---------------------------------------------------------
+//
+// `site/agent-setup/` holds a prompt that a person pastes into a coding
+// agent, and the files it tells the agent to use. `prompt.md` is the
+// prompt: it is a page of its own, shown with a Copy button; it is shown
+// again on the home page and the install guide; and it is served raw, as
+// `agent-setup.md` and `agent-setup.txt`. Every other file is served as it
+// is under `agent-setup/`. All of it is text, and goes into a page only
+// through `html.text`. A repository with no such directory has none of
+// this.
+
+// The text of the file `name` in `site/agent-setup/`, or "" if it has none.
+fn asset_text(all: Site, name: Untrusted<String>) -> Untrusted<String> {
+    for asset in all.assets {
+        if asset.name == name {
+            return asset.text
+        }
+    }
+    ""
+}
+
+fn has_asset(all: Site, name: Untrusted<String>) -> Bool {
+    for asset in all.assets {
+        if asset.name == name {
+            return true
+        }
+    }
+    false
+}
+
+fn has_setup(all: Site) -> Bool {
+    has_asset(all, "prompt.md")
+}
+
+// Whether `doc` shows the prompt after its introduction: the home page and
+// the install guide.
+fn carries_prompt(all: Site, doc: Doc) -> Bool {
+    has_setup(all) && (doc.page == "index.html" || doc.page == "guide/install.html")
+}
+
+// The line of the first `## ` heading outside a code fence, or the number
+// of lines if there is none.
+fn first_section(lines: List<Untrusted<String>>) -> Int {
+    let fenced = fence_flags(lines)
+    var i = 0
+    while i < lines.len() {
+        if !fenced.at(i) && lines.at(i).starts_with("## ") {
+            return i
+        }
+        i = i + 1
+    }
+    lines.len()
+}
+
+// A doc that shows the prompt: its introduction, up to the first `## `
+// heading, then the prompt, then the rest. Its Markdown copy has a pointer
+// to the raw prompt in the same place.
+fn prompt_doc_page(all: Site, doc: Doc, links: Links) -> Page {
+    let lines = doc.text.lines()
+    let cut = first_section(lines)
+    let intro_lines = "\n".join(sub(lines, 0, cut))
+    let rest_lines = "\n".join(sub(lines, cut, lines.len()))
+    let intro = "{intro_lines}\n"
+    let rest = "{rest_lines}\n"
+    let body = markdown(intro, links).concat(setup_block(all)).concat(markdown(rest, links))
+    let before = retarget(intro, links)
+    let after = retarget(rest, links)
+    let pointer = "> **Set up an AI agent.** Paste the prompt at https://oskalang.dev/agent-setup.md into your coding agent, or tell it: `Read https://oskalang.dev/agent-setup.md and follow it`.\n\n"
+    Page(path: doc.page, title: doc.title, body: body, md: "{before}\n{pointer}{after}")
+}
+
+// The prompt as a block: a heading, how to use it, a Copy button that
+// `search.js` shows (hidden until then, so without JavaScript there is no
+// button that does nothing), and the prompt itself, as text to select.
+fn setup_block(all: Site) -> html.Html {
+    let prompt = asset_text(all, "prompt.md")
+    let head = markup("<section class=\"agent-setup\" aria-labelledby=\"agent-setup-heading\">\n<h2 id=\"agent-setup-heading\">Set up an AI agent</h2>\n<p>Paste this prompt into Claude Code, Cursor, Codex, or any other coding agent. It installs Oska, checks the signature and the checksum, and sets up your project, and it asks before it changes a file. Or tell your agent: <code>Read https://oskalang.dev/agent-setup.md and follow it</code>.</p>\n<p><button type=\"button\" data-copy=\"agent-setup-prompt\" hidden=\"hidden\">Copy</button> <a href=\"/agent-setup.md\">agent-setup.md</a> <a href=\"/agent-setup.txt\">agent-setup.txt</a></p>\n<pre id=\"agent-setup-prompt\">")
+    head.concat(html.text(prompt)).concat(markup("</pre>\n</section>\n"))
+}
+
+// One file of the setup, for the page and for `llms.txt`.
+struct Listing {
+    path: Untrusted<String>,
+    label: Untrusted<String>,
+    note: Untrusted<String>,
+}
+
+// The prompt and each of its files that the repository has.
+fn setup_listing(all: Site) -> List<Listing> {
+    var out: List<Listing> = List.new()
+    out.push(Listing(path: "agent-setup.md", label: "Agent setup prompt", note: "paste it into a coding agent, or tell the agent to read this file, to install Oska and set up a project"))
+    out.push(Listing(path: "agent-setup.txt", label: "agent-setup.txt", note: "the same prompt, as plain text"))
+    if has_asset(all, "AGENTS.template.md") {
+        out.push(Listing(path: "agent-setup/AGENTS.template.md", label: "AGENTS.md template", note: "the Oska section for a project's AGENTS.md: the agent loop and the machine-readable flags"))
+    }
+    if has_asset(all, "CLAUDE.template.md") {
+        out.push(Listing(path: "agent-setup/CLAUDE.template.md", label: "CLAUDE.md template", note: "points Claude Code at AGENTS.md"))
+    }
+    if has_asset(all, "claude-settings.json") {
+        out.push(Listing(path: "agent-setup/claude-settings.json", label: "Claude Code hook settings", note: "opt-in: the hooks entry for .claude/settings.json that runs the hook script after an edit"))
+    }
+    if has_asset(all, "oska-check.sh") {
+        out.push(Listing(path: "agent-setup/oska-check.sh", label: "Claude Code hook script", note: "opt-in: runs oskac check on a .osk file after an edit; reads only the edit notification"))
+    }
+    out
+}
+
+// The page of the prompt: what it is, the prompt, and the files.
+fn setup_page(all: Site) -> Page {
+    let intro = markup("<h1>Agent setup prompt</h1>\n<p>One prompt that sets up Oska for AI-driven development. Paste it into your coding agent. It runs the official installer and checks that the checksum and the signature verified, tries the toolchain, writes an <code>AGENTS.md</code> that holds the agent loop, and offers a hook and a CI step. It states each command before it runs it, never handles a secret, and shows a diff before it changes a file.</p>\n")
+    var files = markup("<h2 id=\"files\">Files</h2>\n<ul>\n")
+    for item in setup_listing(all) {
+        let link = anchor_to("/{item.path}", html.text(item.label))
+        files = files.concat(wrap("<li>", link.concat(markup(": ")).concat(html.text(item.note)), "</li>\n"))
+    }
+    let body = intro.concat(setup_block(all)).concat(files).concat(markup("</ul>\n"))
+    Page(path: "agent-setup.html", title: "Agent setup prompt", body: body, md: asset_text(all, "prompt.md"))
+}
+
+// The group of `llms.txt` that lists the prompt and its files.
+fn setup_group(all: Site) -> Untrusted<String> {
+    let base = origin()
+    var entries: Untrusted<String> = ""
+    for item in setup_listing(all) {
+        entries = "{entries}- [{item.label}]({base}/{item.path}): {item.note}\n"
+    }
+    "\n## Set up an agent\n\n{entries}"
+}
+
+// The raw files: the prompt as plain text (`agent-setup.md` is the page's
+// own copy), and every other file under `agent-setup/`.
+fn publish_setup(site: FsWrite, all: Site) -> Result<(), IoError> {
+    site.write(Path.new("agent-setup.txt"), asset_text(all, "prompt.md"))?
+    site.create_dir(Path.new("agent-setup"))?
+    for asset in all.assets {
+        if asset.name != "prompt.md" {
+            site.write(Path.from("agent-setup/{asset.name}"), asset.text)?
+        }
+    }
+    Ok(())
 }

@@ -19,7 +19,7 @@ USAGE:
     oskac test <file.osk> [--format=json] [--integration]
                                            Run the test blocks in a source file
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
-    oskac --version                        Print the version
+    oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ";
 
@@ -80,7 +80,14 @@ fn main() -> ExitCode {
     let positional: Vec<&str> = line.positional.iter().map(String::as_str).collect();
     match positional.as_slice() {
         ["--version" | "-V"] => {
-            println!("oskac {}", env!("CARGO_PKG_VERSION"));
+            if flags.json {
+                println!(
+                    "{{\"name\":\"oskac\",\"version\":\"{}\"}}",
+                    env!("CARGO_PKG_VERSION")
+                );
+            } else {
+                println!("oskac {}", env!("CARGO_PKG_VERSION"));
+            }
             ExitCode::SUCCESS
         }
         ["--help" | "-h"] => {

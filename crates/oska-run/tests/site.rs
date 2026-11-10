@@ -179,7 +179,9 @@ const ELEMENTS: &[(&str, &[&str])] = &[
     ("ul", &[]),
     ("ol", &["start"]),
     ("li", &[]),
-    ("pre", &[]),
+    ("pre", &["id"]),
+    ("section", &["class", "aria-labelledby"]),
+    ("button", &["type", "data-copy", "hidden"]),
     ("code", &[]),
     ("blockquote", &[]),
     ("table", &[]),
@@ -1485,6 +1487,9 @@ fn real_inputs() -> BTreeMap<String, String> {
         .into_iter()
         .map(|(path, text)| (format!("docs/{path}"), text))
         .collect();
+    for (path, text) in read_tree(&root.join("site/agent-setup")) {
+        inputs.insert(format!("site/agent-setup/{path}"), text);
+    }
     for file in [
         "README.md",
         "GLOSSARY.md",
@@ -1589,4 +1594,259 @@ fn the_code_pages_are_in_the_outputs_agents_read() {
     );
     let plain = build_ok(&[]);
     assert!(!plain["llms.txt"].contains("codes.json"));
+}
+
+// ---- The agent-setup prompt (spec #70, ticket #80) --------------------------------------
+
+/// A prompt with markup in it, and the files that go with it, as they
+/// would be in `site/agent-setup/`.
+const SETUP_FILES: &[(&str, &str)] = &[
+    (
+        "site/agent-setup/prompt.md",
+        "# Set up <Oska> & \"go\"\n\nInstall it.\n\n```sh\ncurl -fsSL https://oskalang.dev/install.sh | sh\n```\n",
+    ),
+    (
+        "site/agent-setup/AGENTS.template.md",
+        "## Working with Oska\n\nText.\n",
+    ),
+    ("site/agent-setup/CLAUDE.template.md", "@AGENTS.md\n"),
+    ("site/agent-setup/claude-settings.json", "{\"hooks\": {}}\n"),
+    ("site/agent-setup/oska-check.sh", "#!/bin/sh\nexit 0\n"),
+];
+
+/// [`agent_repo`] with an install guide and the setup files, built.
+fn setup_site() -> BTreeMap<String, String> {
+    let mut inputs = agent_repo();
+    inputs.push((
+        "docs/guide/install.md",
+        "# Install\n\nBuild it.\n\n## Build from source\n\nRun cargo.\n",
+    ));
+    inputs.extend_from_slice(SETUP_FILES);
+    build_ok(&inputs)
+}
+
+#[test]
+fn the_prompt_is_published_as_markdown_and_plain_text_exactly_as_written() {
+    let site = setup_site();
+    let prompt = SETUP_FILES[0].1;
+    assert_eq!(site["agent-setup.md"], prompt);
+    assert_eq!(site["agent-setup.txt"], prompt);
+}
+
+#[test]
+fn the_templates_hook_and_script_are_published_byte_for_byte() {
+    let site = setup_site();
+    for (path, text) in &SETUP_FILES[1..] {
+        let name = path.replace("site/", "");
+        assert_eq!(site[&name], *text, "{name}");
+    }
+}
+
+#[test]
+fn the_prompt_page_shows_the_prompt_as_escaped_text_with_a_copy_button() {
+    let site = setup_site();
+    let page = &site["agent-setup.html"];
+    assert!(page.contains("<pre id=\"agent-setup-prompt\">"), "{page}");
+    assert!(
+        page.contains("# Set up &lt;Oska&gt; &amp; &quot;go&quot;\n"),
+        "{page}"
+    );
+    assert!(!page.contains("<Oska>"));
+    assert!(page.contains("</pre>"));
+    // The button is hidden until the script has shown it, so without
+    // JavaScript the page has no button that does nothing.
+    assert!(
+        page.contains(
+            "<button type=\"button\" data-copy=\"agent-setup-prompt\" hidden=\"hidden\">Copy</button>"
+        ),
+        "{page}"
+    );
+}
+
+#[test]
+fn the_prompt_page_links_the_raw_prompt_and_every_file() {
+    let site = setup_site();
+    let page = &site["agent-setup.html"];
+    for href in [
+        "/agent-setup.md",
+        "/agent-setup.txt",
+        "/agent-setup/AGENTS.template.md",
+        "/agent-setup/CLAUDE.template.md",
+        "/agent-setup/claude-settings.json",
+        "/agent-setup/oska-check.sh",
+    ] {
+        assert!(page.contains(&format!("href=\"{href}\"")), "{href}");
+    }
+    assert!(page.contains("Read https://oskalang.dev/agent-setup.md and follow it"));
+}
+
+#[test]
+fn the_home_page_and_the_install_guide_carry_the_prompt_after_their_introduction() {
+    let site = setup_site();
+    for (name, intro, next) in [
+        (
+            "index.html",
+            "A language where authority is explicit.",
+            "<h2",
+        ),
+        (
+            "guide/install.html",
+            "Build it.",
+            "<h2 id=\"build-from-source\">",
+        ),
+    ] {
+        let page = &site[name];
+        let block = page
+            .find("<section class=\"agent-setup\"")
+            .unwrap_or_else(|| panic!("{name} has no prompt block:\n{page}"));
+        assert!(page[..block].contains(intro), "{name}");
+        assert!(
+            page[block..].contains("<pre id=\"agent-setup-prompt\">"),
+            "{name}"
+        );
+        assert!(
+            page[block..].contains("hidden=\"hidden\">Copy</button>"),
+            "{name}"
+        );
+        assert!(page[block..].contains(next), "{name}: the rest follows");
+    }
+    assert!(!site["glossary.html"].contains("class=\"agent-setup\""));
+    assert!(!site["design.html"].contains("class=\"agent-setup\""));
+}
+
+#[test]
+fn a_page_shows_the_prompt_once() {
+    let site = setup_site();
+    for (name, page) in site.iter().filter(|(n, _)| n.ends_with(".html")) {
+        assert!(
+            page.matches("id=\"agent-setup-prompt\"").count() <= 1,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn the_markdown_copies_of_the_home_page_and_install_guide_point_at_the_prompt() {
+    let site = setup_site();
+    for name in ["index.md", "guide/install.md"] {
+        assert!(
+            site[name].contains("https://oskalang.dev/agent-setup.md"),
+            "{name}:\n{}",
+            site[name]
+        );
+    }
+    assert!(!site["design.md"].contains("agent-setup"));
+}
+
+#[test]
+fn llms_txt_lists_the_prompt_near_the_top_and_once() {
+    let site = setup_site();
+    let llms = &site["llms.txt"];
+    let group = llms
+        .find("## Set up an agent\n")
+        .expect("a group for the prompt");
+    assert!(group < llms.find("## Docs").expect("the docs"), "{llms}");
+    for line in [
+        "- [Agent setup prompt](https://oskalang.dev/agent-setup.md): ",
+        "- [agent-setup.txt](https://oskalang.dev/agent-setup.txt): ",
+        "- [AGENTS.md template](https://oskalang.dev/agent-setup/AGENTS.template.md): ",
+        "- [CLAUDE.md template](https://oskalang.dev/agent-setup/CLAUDE.template.md): ",
+        "- [Claude Code hook settings](https://oskalang.dev/agent-setup/claude-settings.json): ",
+        "- [Claude Code hook script](https://oskalang.dev/agent-setup/oska-check.sh): ",
+    ] {
+        assert!(llms.contains(line), "{line}\n{llms}");
+    }
+    assert_eq!(
+        llms.matches("oskalang.dev/agent-setup.md").count(),
+        1,
+        "{llms}"
+    );
+}
+
+#[test]
+fn the_prompt_page_is_a_page_like_any_other() {
+    let site = setup_site();
+    assert!(site["sitemap.xml"].contains("<loc>https://oskalang.dev/agent-setup.html</loc>"));
+    assert!(site["llms-full.txt"].contains("Source: https://oskalang.dev/agent-setup.html\n"));
+    assert!(site["search.json"].contains("\"url\": \"/agent-setup.html\""));
+    assert!(
+        site["design.html"].contains("href=\"/agent-setup.html\""),
+        "it is in the navigation"
+    );
+}
+
+#[test]
+fn without_a_setup_directory_there_is_no_prompt_anywhere() {
+    let site = build_ok(&agent_repo());
+    assert!(!site.contains_key("agent-setup.html"));
+    assert!(!site.contains_key("agent-setup.md"));
+    assert!(!site.contains_key("agent-setup.txt"));
+    assert!(!site["llms.txt"].contains("agent-setup"));
+    assert!(!site["index.html"].contains("agent-setup"));
+}
+
+/// Load `site/search.js` into a page with one Copy button, in Node, with a
+/// clipboard given as a JavaScript expression, click the button, and say
+/// what happened. `None` if Node is not installed.
+fn click_copy(clipboard: &str) -> Option<Json> {
+    const DRIVER: &str = r#"
+const prompt = { textContent: "THE PROMPT" };
+const button = {
+  hidden: true,
+  textContent: "Copy",
+  getAttribute: (name) => (name === "data-copy" ? "agent-setup-prompt" : null),
+  addEventListener: (type, fn) => { button.click = fn; },
+};
+global.document = {
+  querySelector: () => null,
+  querySelectorAll: (selector) => (selector === "button[data-copy]" ? [button] : []),
+  getElementById: (id) => (id === "agent-setup-prompt" ? prompt : null),
+};
+Object.defineProperty(globalThis, "navigator", {
+  value: { clipboard: eval("(" + process.argv[2] + ")") },
+  configurable: true,
+});
+global.setTimeout = () => 0;
+require(process.argv[1]);
+const shown = !button.hidden;
+Promise.resolve(button.click()).then(() => {
+  console.log(JSON.stringify({ shown, label: button.textContent, wrote: global.written || "" }));
+});
+"#;
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../site/search.js");
+    let run = std::process::Command::new("node")
+        .args(["-e", DRIVER])
+        .arg(script)
+        .arg(clipboard)
+        .output();
+    let Ok(output) = run else {
+        eprintln!("skipping: Node is not installed");
+        return None;
+    };
+    assert!(
+        output.status.success(),
+        "search.js failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Some(json(&String::from_utf8_lossy(&output.stdout)))
+}
+
+#[test]
+fn the_script_shows_the_copy_button_and_copies_the_prompt_text() {
+    let Some(result) =
+        click_copy("{ writeText: (t) => { global.written = t; return Promise.resolve(); } }")
+    else {
+        return;
+    };
+    assert_eq!(result.get("shown"), &Json::Bool(true));
+    assert_eq!(result.get("wrote").str(), "THE PROMPT");
+    assert_eq!(result.get("label").str(), "Copied");
+}
+
+#[test]
+fn the_script_says_so_when_the_clipboard_is_not_available() {
+    let Some(result) = click_copy("undefined") else {
+        return;
+    };
+    assert_eq!(result.get("label").str(), "Select the text and copy it");
 }

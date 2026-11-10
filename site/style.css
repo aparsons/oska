@@ -1,7 +1,8 @@
 /* The stylesheet of https://oskalang.dev. `site/build.osk` copies it to
    `_site/style.css`. Fonts come from the pinned Fontsource CSS each page
    links, with system fonts behind them. No inline styles: the CSP allows
-   none. The only script is `search.js`, which adds the search box. */
+   none. The only script is `search.js`, which adds the search box and the
+   Copy button. */
 
 :root {
   --text: #1d2125;
@@ -264,4 +265,42 @@ th {
 
 img {
   max-width: 100%;
+}
+
+/* The agent-setup prompt: a block with a Copy button (which `search.js`
+   shows), and the prompt as text that wraps and scrolls on its own. */
+
+.agent-setup {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 1.5rem 0;
+  padding: 0 1.25rem 0.25rem;
+}
+
+.agent-setup h2 {
+  border-bottom: 0;
+  margin-top: 1rem;
+}
+
+.agent-setup pre {
+  max-height: 24rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.agent-setup button {
+  background: var(--accent);
+  border: 0;
+  border-radius: 6px;
+  color: var(--background);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 0.35rem 1rem;
+}
+
+.agent-setup button:hover {
+  opacity: 0.9;
 }

@@ -17,7 +17,7 @@ USAGE:
     oskac test <file.osk> [--format=json] [--integration]
                                            Run the test blocks in a source file
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
-    oskac --version                        Print the version
+    oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ```
 
@@ -101,7 +101,7 @@ See [debugging](debugging.md) for panics and the [runtime notes](../runtime.md) 
 
 ## `oskac --version` and `oskac --help`
 
-`oskac --version` prints `oskac` and the version on one line, such as `oskac 0.1.0`, and `oskac --help` prints the text at the top of this page. Both also answer to the short forms `-V` and `-h`. `--version` prints plain text whatever `--format` says.
+`oskac --version` prints `oskac` and the version on one line, such as `oskac 0.1.0`, and `oskac --help` prints the text at the top of this page. Both also answer to the short forms `-V` and `-h`. With `--format=json`, `--version` prints a JSON object instead: `{"name":"oskac","version":"0.1.0"}`.
 
 ## Output formats
 
