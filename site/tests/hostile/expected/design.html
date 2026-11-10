@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' https://cdn.jsdelivr.net; font-src https://cdn.jsdelivr.net; img-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hostile &lt;script&gt;alert(&quot;title&quot;)&lt;/script&gt; notes · Oska</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/latin-400.css" integrity="sha384-zc+mzApNgdFM05uzzG/c/4wVZ4LHLa0ZrZyeZYh4tq7GukSAQ2T6xYGTgE+mssl6" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/latin-700.css" integrity="sha384-qIiEwfeovj0ewBGH8n6bkz0WIS8pOCQ8xV0byBksQD0KeXY0dmQr3eXjhcSqFhbH" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/latin-400.css" integrity="sha384-rDtx9NW9VQWFrGIe8txtelRagz09ojKYLeaff45i3hEq7ofdZdkNlxVO8XCT5yPu" crossorigin="anonymous">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+<nav aria-label="Site">
+<ul>
+<li><a href="/">Oska</a></li>
+<li><a href="/design.html" aria-current="page">Design</a></li>
+<li><a href="/glossary.html">Glossary</a></li>
+</ul>
+</nav>
+</header>
+<main>
+<h1 id="hostile-scriptalerttitlescript-notes">Hostile &lt;script&gt;alert(&quot;title&quot;)&lt;/script&gt; notes</h1>
+<p>Every construct here tries to get markup or script past the converter.
+None of it may survive as anything but text.</p>
+<h2 id="raw-html">Raw HTML</h2>
+<p>&lt;script&gt;alert(&quot;raw&quot;)&lt;/script&gt;
+&lt;img src=x onerror=alert(1)&gt;
+&lt;iframe src=&quot;javascript:alert(1)&quot;&gt;&lt;/iframe&gt;
+&lt;!-- a comment --&gt;
+&lt;style&gt;body{display:none}&lt;/style&gt;</p>
+<p>&lt;div onclick=&quot;alert(1)&quot;&gt;a block of raw HTML&lt;/div&gt;</p>
+<h2 id="links-that-would-run-script">Links that would run script</h2>
+<ul>
+<li>js lower</li>
+<li>js upper</li>
+<li>js tab</li>
+<li>data</li>
+<li>vbscript</li>
+<li>js entity</li>
+<li>js in image</li>
+</ul>
+<h2 id="attribute-injection">Attribute injection</h2>
+<ul>
+<li>quote</li>
+<li>quote tight</li>
+<li>angle</li>
+<li>backtick</li>
+<li><img src="pic.png" alt="x&quot; onerror=&quot;alert(1)"></li>
+<li>remote</li>
+<li>protocol relative</li>
+<li><a href="https://example.com/&#39;onmouseover=&#39;alert(1)">single</a></li>
+</ul>
+<h2 id="links-that-stay">Links that stay</h2>
+<ul>
+<li><a href="https://example.com/safe?a=1&amp;b=2">ok</a></li>
+<li><a href="mailto:someone@example.com">mail</a></li>
+<li><a href="/glossary.html#capability">glossary</a></li>
+<li><a href="#raw-html">here</a></li>
+<li>unpublished</li>
+</ul>
+<h2 id="entities">Entities</h2>
+<p>&amp;lt;script&amp;gt; &amp;#60;script&amp;#62; &amp;amp;</p>
+<h2 id="inline-markup-around-markup">Inline markup around markup</h2>
+<p><strong>&lt;b&gt;bold&lt;/b&gt;</strong> <em>&lt;i&gt;em&lt;/i&gt;</em> <code>&lt;code onclick=&quot;x&quot;&gt;</code> and &lt;escaped&gt;.</p>
+<p><a href="https://example.com/">&lt;img src=x onerror=alert(1)&gt;</a></p>
+<h2 id="a-table">A table</h2>
+<table>
+<thead>
+<tr><th>&lt;td onclick=x&gt;</th><th><code>a | b</code></th></tr>
+</thead>
+<tbody>
+<tr><td>x</td><td>&lt;script&gt;cell&lt;/script&gt;</td></tr>
+</tbody>
+</table>
+<h2 id="a-fence">A fence</h2>
+<pre><code>&lt;script&gt;alert(&quot;in code&quot;)&lt;/script&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;script&gt;alert(&quot;break out&quot;)&lt;/script&gt;
+</code></pre>
+<blockquote>
+<p>&lt;script&gt;alert(&quot;quote&quot;)&lt;/script&gt;</p>
+</blockquote>
+<ol>
+<li>&lt;script&gt;alert(&quot;ordered&quot;)&lt;/script&gt;</li>
+</ol>
+</main>
+<footer>
+<p>Built from the Oska repository by <code>site/build.osk</code>, an Oska program. The docs track <code>main</code>.</p>
+</footer>
+</body>
+</html>
