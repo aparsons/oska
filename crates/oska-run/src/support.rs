@@ -47,7 +47,7 @@ fn refusal<'e>(
 /// The first unsupported node in `expr`, with what it is.
 fn first_in(program: &Program, expr: &Expr) -> Option<(Span, String)> {
     match &expr.kind {
-        ExprKind::Unsupported => Some((expr.span, "this expression".to_string())),
+        ExprKind::Unsupported(what) => Some((expr.span, what.clone())),
         ExprKind::Unit
         | ExprKind::Str(_)
         | ExprKind::Int(_)

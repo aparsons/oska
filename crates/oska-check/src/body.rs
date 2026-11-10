@@ -984,6 +984,8 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                         }
                         callable.ret
                     } else {
+                        let what = "a constructor used as a function value".to_string();
+                        self.record(span, Resolution::Unsupported(what));
                         callable.into_fn_type()
                     }
                 }

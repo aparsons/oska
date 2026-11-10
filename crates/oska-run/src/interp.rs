@@ -269,7 +269,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             | ExprKind::If { .. }
             | ExprKind::Call { .. }
             | ExprKind::Block { .. } => unreachable!("`eval` handles these itself"),
-            ExprKind::Unsupported => {
+            ExprKind::Unsupported(_) => {
                 unreachable!("`crate::run` refuses a program with an unsupported node")
             }
         }

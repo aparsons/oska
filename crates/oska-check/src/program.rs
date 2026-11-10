@@ -218,9 +218,10 @@ pub enum ExprKind {
     /// `scope |s| { ... }`. The handle `s` takes the next slot, for the
     /// body to see. The body is a block.
     Scope(Box<Expr>),
-    /// Something the checked program cannot express yet. A backend
-    /// reports it when it is reached.
-    Unsupported,
+    /// Something the checked program cannot express yet, named as a
+    /// refusal names it, such as "a `From`-bound conversion". A backend
+    /// refuses a program that has one.
+    Unsupported(String),
 }
 
 /// A statement.

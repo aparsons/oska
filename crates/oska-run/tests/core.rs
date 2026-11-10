@@ -295,6 +295,54 @@ fn a_program_using_something_not_yet_supported_is_refused_with_e0380() {
     assert_eq!(common::run_fake(&src, &[]).exit_code, 2);
 }
 
+/// Assert that `src` is refused with `E0380`, with exactly `message`,
+/// spanning `spanned_text`.
+fn assert_unsupported(src: &str, message: &str, spanned_text: &str) {
+    assert_refused(src, "E0380");
+    let outcome = common::run_fake(src, &[]);
+    let refusal = &outcome.diagnostics[0];
+    assert_eq!(refusal.message, message);
+    assert_eq!(&src[refusal.span.start..refusal.span.end], spanned_text);
+}
+
+#[test]
+fn e0380_names_a_from_bound_conversion() {
+    assert_unsupported(
+        &program(
+            "struct AppError { m: String }\n\
+             impl From<IoError> for AppError {\n    fn from(e: IoError) -> AppError { AppError(m: \"io\") }\n}\n\
+             fn conv<E: From<IoError>>(r: Result<Int, IoError>) -> Result<Int, E> {\n    let x = r?\n    Ok(x)\n}",
+            "    let r: Result<Int, AppError> = conv(Ok(1))\n    Ok(())",
+        ),
+        "the interpreter cannot run a `From`-bound conversion yet",
+        "r?",
+    );
+}
+
+#[test]
+fn e0380_names_a_constructor_used_as_a_value() {
+    assert_unsupported(
+        &main_with("    let mk = Some\n    let x: Option<Int> = mk(1)\n    Ok(())"),
+        "the interpreter cannot run a constructor used as a function value yet",
+        "Some",
+    );
+}
+
+#[test]
+fn e0380_names_a_generic_traits_method() {
+    assert_unsupported(
+        &program(
+            "trait Pair<T> {\n    fn pair(self, t: T) -> Int\n}\n\
+             struct P { n: Int }\n\
+             impl Pair<Int> for P {\n    fn pair(self, t: Int) -> Int { t }\n}\n\
+             fn use_it<T: Pair<Int>>(x: T) -> Int { x.pair(1) }",
+            "    let n = use_it(P(n: 1))\n    Ok(())",
+        ),
+        "the interpreter cannot run a call of `pair`, a method of the generic trait `Pair`, yet",
+        "x.pair(1)",
+    );
+}
+
 // ---- Deep recursion -------------------------------------------------------------
 
 /// A program whose `main` recurses `depth` calls deep and prints the
