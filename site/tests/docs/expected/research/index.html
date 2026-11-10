@@ -2,15 +2,20 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/ https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/; font-src https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/ https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/; img-src 'self'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/ https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/; font-src https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/ https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/; img-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Research · Oska</title>
+<link rel="canonical" href="https://oskalang.dev/research/">
+<link rel="alternate" type="text/markdown" href="/research/index.md">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/latin-400.css" integrity="sha384-zc+mzApNgdFM05uzzG/c/4wVZ4LHLa0ZrZyeZYh4tq7GukSAQ2T6xYGTgE+mssl6" crossorigin="anonymous">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/latin-700.css" integrity="sha384-qIiEwfeovj0ewBGH8n6bkz0WIS8pOCQ8xV0byBksQD0KeXY0dmQr3eXjhcSqFhbH" crossorigin="anonymous">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/latin-400.css" integrity="sha384-rDtx9NW9VQWFrGIe8txtelRagz09ojKYLeaff45i3hEq7ofdZdkNlxVO8XCT5yPu" crossorigin="anonymous">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+<aside aria-label="Version">
+<p>Oska 0.1.0 (pre-alpha). These docs track <code>main</code>, which can be ahead of the latest release: see <a href="/latest.json">latest.json</a>.</p>
+</aside>
 <header>
 <nav aria-label="Site">
 <ul>
@@ -32,5 +37,6 @@
 <footer>
 <p>Built from the Oska repository by <code>site/build.osk</code>, an Oska program. The docs track <code>main</code>.</p>
 </footer>
+<script src="/search.js"></script>
 </body>
 </html>
