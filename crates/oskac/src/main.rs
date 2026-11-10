@@ -144,9 +144,9 @@ fn parse_file(path: &str, Flags { json, .. }: Flags) -> ExitCode {
     }
 }
 
-/// `oskac check`: print every diagnostic, each function's authority, and
-/// every audit site, as
-/// `{"diagnostics": [...], "functions": [...], "audit": [...]}` with
+/// `oskac check`: print every diagnostic, each function's authority with
+/// its attenuations, and every audit site, as `{"diagnostics": [...],
+/// "functions": [...], "audit": [...], "attenuations": [...]}` with
 /// `--format=json`.
 /// The exit code is non-zero when there are diagnostics.
 fn check_file(path: &str, Flags { json, release, .. }: Flags) -> ExitCode {

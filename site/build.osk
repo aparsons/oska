@@ -34,40 +34,41 @@ use std.html
 
 // ---- What the site is built from -------------------------------------------
 
-// What the generator may read: the `docs/` tree, and three files beside
-// it. Each is a filesystem restricted on its own, so nothing else in the
-// repository can be reached.
+// What the generator may read: the `docs/` tree, and the files beside it.
+// Each is a capability of its own, a directory capability for a tree and
+// a file capability for a single file, so nothing else in the repository
+// can be reached.
 cap struct Sources {
-    docs: FsRead,
-    readme: FsRead,
-    glossary: FsRead,
-    style: FsRead,
-    manifest: FsRead,
-    search: FsRead,
+    docs: DirRead,
+    readme: FileRead,
+    glossary: FileRead,
+    style: FileRead,
+    manifest: FileRead,
+    search: FileRead,
     // `site/agent-setup/`: the agent-setup prompt and its templates.
-    setup: FsRead,
+    setup: DirRead,
     // `site/authority.txt`: the authority report `oskac check
     // site/build.osk` printed for this program, which the Pages workflow
     // writes just before the build. Without it there is no authority page.
-    authority: FsRead,
+    authority: FileRead,
 }
 
 fn main(read: FsRead, write: FsWrite) -> Result<(), IoError> {
     let sources = Sources(
         docs: read.restrict_to("docs"),
-        readme: read.restrict_to("README.md"),
-        glossary: read.restrict_to("GLOSSARY.md"),
-        style: read.restrict_to("site/style.css"),
-        manifest: read.restrict_to("Cargo.toml"),
-        search: read.restrict_to("site/search.js"),
+        readme: read.restrict_to_file("README.md"),
+        glossary: read.restrict_to_file("GLOSSARY.md"),
+        style: read.restrict_to_file("site/style.css"),
+        manifest: read.restrict_to_file("Cargo.toml"),
+        search: read.restrict_to_file("site/search.js"),
         setup: read.restrict_to("site/agent-setup"),
-        authority: read.restrict_to("site/authority.txt"),
+        authority: read.restrict_to_file("site/authority.txt"),
     )
     // Writing is narrowed to the repository before anything is written,
-    // then to `_site` once it exists (a restriction needs its directory).
+    // then to `_site` once it exists (a narrowing needs its directory).
     let repo = write.restrict_to(".")
     repo.create_dir(Path.new("_site"))?
-    build(sources, repo.restrict_to("_site"))
+    build(sources, repo.restrict_to(Path.new("_site")))
 }
 
 // One Markdown file the site publishes.
@@ -109,7 +110,7 @@ struct Site {
 }
 
 // Every file of the site.
-fn build(sources: Sources, site: FsWrite) -> Result<(), IoError> {
+fn build(sources: Sources, site: DirWrite) -> Result<(), IoError> {
     let all = gather(sources)?
     for section in all.sections {
         site.create_dir(Path.from(section.dir))?
@@ -148,9 +149,9 @@ fn build(sources: Sources, site: FsWrite) -> Result<(), IoError> {
     site.write(Path.new("llms.txt"), llms_txt(all, pages))?
     site.write(Path.new("llms-full.txt"), llms_full(all, pages))?
     site.write(Path.new("search.json"), search_json(pages))?
-    let style = sources.style.read_to_string(Path.new("."))?
+    let style = sources.style.read_to_string()?
     site.write(Path.new("style.css"), style)?
-    let search = sources.search.read_to_string(Path.new("."))?
+    let search = sources.search.read_to_string()?
     site.write(Path.new("search.js"), search)?
     site.write(Path.new("CNAME"), cname())?
     if has_catalog(all) {
@@ -179,9 +180,9 @@ fn has_doc(all: Site, page: Untrusted<String>) -> Bool {
 // subdirectories one level down, except those `unpublished` names.
 fn gather(sources: Sources) -> Result<Site, IoError> {
     var docs: List<Doc> = List.new()
-    let readme = sources.readme.read_to_string(Path.new("."))?
+    let readme = sources.readme.read_to_string()?
     docs.push(new_doc("README.md", "index.html", "", readme))
-    let glossary = sources.glossary.read_to_string(Path.new("."))?
+    let glossary = sources.glossary.read_to_string()?
     var glossary_doc = new_doc("GLOSSARY.md", "glossary.html", "", glossary)
     glossary_doc.title = "Glossary"
     docs.push(glossary_doc)
@@ -209,7 +210,7 @@ fn gather(sources: Sources) -> Result<Site, IoError> {
             Err(_) => {}
         }
     }
-    let manifest = sources.manifest.read_to_string(Path.new("."))?
+    let manifest = sources.manifest.read_to_string()?
     var assets: List<Asset> = List.new()
     match sources.setup.list_dir(Path.new(".")) {
         Ok(names) => {
@@ -220,7 +221,7 @@ fn gather(sources: Sources) -> Result<Site, IoError> {
         }
         Err(_) => {}
     }
-    let authority = match sources.authority.read_to_string(Path.new(".")) {
+    let authority = match sources.authority.read_to_string() {
         Ok(text) => text
         Err(_) => ""
     }
@@ -312,7 +313,7 @@ struct Page {
 
 // Write `page`, in the site's layout, to its path under `_site/`, and its
 // Markdown copy beside it.
-fn publish(site: FsWrite, all: Site, page: Page) -> Result<(), IoError> {
+fn publish(site: DirWrite, all: Site, page: Page) -> Result<(), IoError> {
     site.write(Path.from(page.path), layout(all, page).render())?
     site.write(Path.from(md_path(page.path)), page.md)
 }
@@ -1959,8 +1960,8 @@ fn setup_page(all: Site) -> Page {
 // capabilities guide, which links it.
 fn authority_page(all: Site) -> Page {
     let title = "The site generator's authority"
-    let intro = "This site is built by `site/build.osk`, an Oska program. Just before each build, `oskac check site/build.osk` prints the program's authority report, and the build publishes it here as it was printed. There is one line per function: the capabilities it can reach, each with the parameter it comes through, or `pure` if it can reach none. `main` is granted `FsRead` and `FsWrite`, and only the functions it passes them to can touch the filesystem."
-    let head = markup("<h1>The site generator's authority</h1>\n<p>This site is built by <code>site/build.osk</code>, an Oska program. Just before each build, <code>oskac check site/build.osk</code> prints the program's authority report, and the build publishes it here as it was printed. There is one line per function: the capabilities it can reach, each with the parameter it comes through, or <code>pure</code> if it can reach none. <code>main</code> is granted <code>FsRead</code> and <code>FsWrite</code>, and only the functions it passes them to can touch the filesystem.</p>\n")
+    let intro = "This site is built by `site/build.osk`, an Oska program. Just before each build, `oskac check site/build.osk` prints the program's authority report, and the build publishes it here as it was printed. There is one line per function: the capabilities it can reach, each with the parameter it comes through, or `pure` if it can reach none. `main` is granted `FsRead` and `FsWrite`, which can only be narrowed, so only the functions it passes a directory or file capability to can touch the filesystem. Each indented line under a function is an attenuation: a place where it narrows a capability, with the kind it narrows from and to and its root, or `computed at runtime` when the root is not a literal. `main`'s attenuations are the generator's real reach: the files and directories it reads, and the directory it writes."
+    let head = markup("<h1>The site generator's authority</h1>\n<p>This site is built by <code>site/build.osk</code>, an Oska program. Just before each build, <code>oskac check site/build.osk</code> prints the program's authority report, and the build publishes it here as it was printed. There is one line per function: the capabilities it can reach, each with the parameter it comes through, or <code>pure</code> if it can reach none. <code>main</code> is granted <code>FsRead</code> and <code>FsWrite</code>, which can only be narrowed, so only the functions it passes a directory or file capability to can touch the filesystem. Each indented line under a function is an attenuation: a place where it narrows a capability, with the kind it narrows from and to and its root, or <code>computed at runtime</code> when the root is not a literal. <code>main</code>'s attenuations are the generator's real reach: the files and directories it reads, and the directory it writes.</p>\n")
     let report = wrap("<pre><code>", html.text(all.authority), "</code></pre>\n")
     Page(path: "authority.html", title: title, body: head.concat(report), md: "# {title}\n\n{intro}\n\n```text\n{all.authority}```\n")
 }
@@ -1977,7 +1978,7 @@ fn setup_group(all: Site) -> Untrusted<String> {
 
 // The raw files: the prompt as plain text (`agent-setup.md` is the page's
 // own copy), and every other file under `agent-setup/`.
-fn publish_setup(site: FsWrite, all: Site) -> Result<(), IoError> {
+fn publish_setup(site: DirWrite, all: Site) -> Result<(), IoError> {
     site.write(Path.new("agent-setup.txt"), asset_text(all, "prompt.md"))?
     site.create_dir(Path.new("agent-setup"))?
     for asset in all.assets {

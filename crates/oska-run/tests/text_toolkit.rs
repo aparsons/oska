@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{assert_panics, assert_runs, run_fake, run_on};
-use oska_run::{run, FakeHost, Host, Output, RealHost, RunOutcome};
+use oska_run::{run, FakeHost, Host, Output, RealHost, RootHandle, RunOutcome};
 
 /// A program whose `main` runs `body` with `io: Stdout` in scope.
 fn program(body: &str) -> String {
@@ -254,9 +254,9 @@ fn list_dir_refuses_a_path_out_of_its_root() {
 }
 
 #[test]
-fn list_dir_lists_the_unrestricted_filesystem() {
+fn list_dir_lists_the_whole_filesystem_through_a_root_of_slash() {
     let src = "fn main(io: Stdout, fs: FsRead) -> Result<(), IoError> {
-    for name in fs.list_dir(Path.new(\"other\"))? {
+    for name in fs.restrict_to(\"/\").list_dir(Path.new(\"other\"))? {
         io.println(name)?
     }
     Ok(())
@@ -284,9 +284,10 @@ fn a_listed_name_can_be_used_to_read_the_file() {
 }
 
 #[test]
-fn a_write_only_filesystem_cannot_list_at_runtime_through_fake() {
-    // The checker gives `FsWrite` no `list_dir` (E0228).
-    let src = "fn main(fs: FsWrite) {\n    let _ = fs.list_dir(Path.new(\".\"))\n}\n";
+fn a_write_only_directory_cannot_list_at_runtime_through_fake() {
+    // The checker gives `DirWrite` no `list_dir` (E0228).
+    let src = "fn main(fs: FsWrite) {\n    \
+               let _ = fs.restrict_to(\"/\").list_dir(Path.new(\".\"))\n}\n";
     let outcome = run_fake(src, &[]);
     assert!(outcome.diagnostics.iter().any(|d| d.code == "E0228"));
 }
@@ -328,6 +329,7 @@ impl Sandbox {
         self.base.join("outside")
     }
 
+    #[cfg(unix)]
     fn link(&self, name: &str, target: &Path) {
         std::os::unix::fs::symlink(target, self.root().join(name)).expect("create a symlink");
     }
@@ -365,28 +367,46 @@ impl Host for Recording {
     fn next_random(&mut self) -> u64 {
         self.real.next_random()
     }
-    fn canonicalize(&mut self, path: &Path) -> std::io::Result<PathBuf> {
-        self.real.canonicalize(path)
+    fn open_root(&mut self, path: &Path) -> std::io::Result<RootHandle> {
+        self.real.open_root(path)
     }
-    fn is_symlink(&mut self, path: &Path) -> bool {
-        self.real.is_symlink(path)
+    fn open_beneath(&mut self, root: &RootHandle, names: &[String]) -> std::io::Result<RootHandle> {
+        self.real.open_beneath(root, names)
     }
-    fn read_file(&mut self, path: &Path, beneath: Option<&Path>) -> std::io::Result<String> {
-        self.real.read_file(path, beneath)
+    fn open_file_root(&mut self, path: &Path) -> std::io::Result<RootHandle> {
+        self.real.open_file_root(path)
     }
-    fn write_file(
+    fn open_file_beneath(
         &mut self,
-        path: &Path,
+        root: &RootHandle,
+        names: &[String],
+    ) -> std::io::Result<RootHandle> {
+        self.real.open_file_beneath(root, names)
+    }
+    fn read_file_beneath(
+        &mut self,
+        root: &RootHandle,
+        names: &[String],
+    ) -> std::io::Result<String> {
+        self.real.read_file_beneath(root, names)
+    }
+    fn write_file_beneath(
+        &mut self,
+        root: &RootHandle,
+        names: &[String],
         contents: &str,
-        beneath: Option<&Path>,
     ) -> std::io::Result<()> {
-        self.real.write_file(path, contents, beneath)
+        self.real.write_file_beneath(root, names, contents)
     }
-    fn create_dir(&mut self, path: &Path, beneath: Option<&Path>) -> std::io::Result<()> {
-        self.real.create_dir(path, beneath)
+    fn create_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> std::io::Result<()> {
+        self.real.create_dir_beneath(root, names)
     }
-    fn list_dir(&mut self, path: &Path, beneath: Option<&Path>) -> std::io::Result<Vec<String>> {
-        self.real.list_dir(path, beneath)
+    fn list_dir_beneath(
+        &mut self,
+        root: &RootHandle,
+        names: &[String],
+    ) -> std::io::Result<Vec<String>> {
+        self.real.list_dir_beneath(root, names)
     }
     fn printed(&self) -> Vec<String> {
         self.stdout.lines().map(str::to_string).collect()
@@ -402,6 +422,7 @@ impl Host for Recording {
 /// What a program prints when it lists `path` through a filesystem
 /// restricted to `root`: one name per line, or `REFUSED`.
 fn list_confined(root: &Path, path: &str) -> String {
+    let path = common::literal(path);
     let src = format!(
         "fn main(io: Stdout, fs: FsRead) {{\n\
          \x20   let local = fs.restrict_to(\"{}\")\n\
@@ -416,7 +437,7 @@ fn list_confined(root: &Path, path: &str) -> String {
          \x20       }}\n\
          \x20   }}\n\
          }}\n",
-        root.display()
+        common::literal(root)
     );
     let mut host = Recording {
         real: RealHost::new(),
@@ -460,6 +481,7 @@ fn real_host_refuses_to_list_out_of_the_root() {
 }
 
 #[test]
+#[cfg(unix)]
 fn real_host_refuses_a_symlink_to_a_directory_outside_the_root() {
     let sandbox = Sandbox::new("symlink-dir");
     sandbox.link("out", &sandbox.outside());
@@ -489,37 +511,21 @@ fn real_host_refuses_to_list_a_file_or_a_missing_directory() {
 }
 
 #[test]
-fn real_host_lists_a_symlink_to_a_directory_inside_the_root() {
+#[cfg(unix)]
+fn real_host_refuses_a_symlink_to_a_directory_inside_the_root() {
+    // Every symlink beneath a root is refused, wherever it points (#95).
     let sandbox = Sandbox::new("symlink-inside");
     sandbox.link("alias", &sandbox.root().join("sub"));
-    assert_eq!(list_confined(&sandbox.root(), "alias"), "nested.txt\n");
+    assert_eq!(list_confined(&sandbox.root(), "alias"), "REFUSED\n");
 }
 
 #[test]
+#[cfg(unix)]
 fn a_symlink_entry_is_listed_by_name_without_following_it() {
     let sandbox = Sandbox::new("symlink-entry");
     sandbox.link("out", &sandbox.outside());
     assert_eq!(
         list_confined(&sandbox.root(), "."),
         "Apple.txt\nout\nsub\nzebra.txt\né.txt\n"
-    );
-}
-
-#[test]
-fn real_host_refuses_a_directory_that_is_not_under_the_root() {
-    // The host's own guard, behind `confine.rs`.
-    let sandbox = Sandbox::new("host-beneath");
-    let root = sandbox.root();
-    let mut host = RealHost::new();
-    assert!(host.list_dir(&sandbox.outside(), Some(&root)).is_err());
-    assert_eq!(
-        host.list_dir(&root, Some(&root)).expect("the root itself"),
-        vec!["Apple.txt", "sub", "zebra.txt", "é.txt"]
-    );
-    // Unrestricted, the same host lists it.
-    assert_eq!(
-        host.list_dir(&sandbox.outside(), None)
-            .expect("an unrestricted listing"),
-        vec!["secret.txt"]
     );
 }

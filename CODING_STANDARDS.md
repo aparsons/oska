@@ -4,7 +4,7 @@ Reviewers apply these rules to every diff. The mechanical rules are enforced by 
 
 ## Language and runtime
 
-- **Grow Oska rather than route around it.** When an Oska program in this repo, such as the site generator, needs something the language lacks, add it to the prelude and the runtime with checker and runtime tests. Follow the existing `FsRead.list_dir` and `FsWrite.create_dir` additions: the prelude, `Host`, `RealHost`, `FakeHost`, intrinsics, and the coverage test. A shell step that does the job instead is a violation.
+- **Grow Oska rather than route around it.** When an Oska program in this repo, such as the site generator, needs something the language lacks, add it to the prelude and the runtime with checker and runtime tests. Follow the existing `DirRead.list_dir` and `DirWrite.create_dir` additions: the prelude, `Host`, `RealHost`, `FakeHost`, intrinsics, and the coverage test. A shell step that does the job instead is a violation.
 - **Use the glossary's words.** Docs and messages use the terms in `GLOSSARY.md`, never the ones it lists under _Avoid_.
 
 ## Site generator (`site/build.osk`)

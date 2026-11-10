@@ -1,6 +1,6 @@
 //! Capabilities and confinement (#64): `main` gets the capabilities it
-//! declares, attenuation narrows them for real, and a restricted
-//! filesystem never reaches outside its root.
+//! declares, attenuation narrows them for real, and a directory
+//! capability never reaches outside its root.
 //!
 //! The confinement tests run on [`RealHost`] against a real temporary
 //! directory, with real symlinks, so they exercise the OS's own path
@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{assert_panics, assert_refused, assert_runs, run_fake, run_on};
-use oska_run::{run, FakeHost, Host, Output, RealHost, RunOutcome};
+use oska_run::{run, FakeHost, Host, Output, RealHost, RootHandle, RunOutcome};
 
 // ---- A real temporary directory --------------------------------------------
 
@@ -51,6 +51,7 @@ impl Sandbox {
     }
 
     /// A symlink at `root/<name>` pointing to `target`.
+    #[cfg(unix)]
     fn link(&self, name: &str, target: &Path) {
         std::os::unix::fs::symlink(target, self.root().join(name)).expect("create a symlink");
     }
@@ -89,28 +90,46 @@ impl Host for Recording {
     fn next_random(&mut self) -> u64 {
         self.real.next_random()
     }
-    fn canonicalize(&mut self, path: &Path) -> std::io::Result<PathBuf> {
-        self.real.canonicalize(path)
+    fn open_root(&mut self, path: &Path) -> std::io::Result<RootHandle> {
+        self.real.open_root(path)
     }
-    fn is_symlink(&mut self, path: &Path) -> bool {
-        self.real.is_symlink(path)
+    fn open_beneath(&mut self, root: &RootHandle, names: &[String]) -> std::io::Result<RootHandle> {
+        self.real.open_beneath(root, names)
     }
-    fn read_file(&mut self, path: &Path, beneath: Option<&Path>) -> std::io::Result<String> {
-        self.real.read_file(path, beneath)
+    fn open_file_root(&mut self, path: &Path) -> std::io::Result<RootHandle> {
+        self.real.open_file_root(path)
     }
-    fn write_file(
+    fn open_file_beneath(
         &mut self,
-        path: &Path,
+        root: &RootHandle,
+        names: &[String],
+    ) -> std::io::Result<RootHandle> {
+        self.real.open_file_beneath(root, names)
+    }
+    fn read_file_beneath(
+        &mut self,
+        root: &RootHandle,
+        names: &[String],
+    ) -> std::io::Result<String> {
+        self.real.read_file_beneath(root, names)
+    }
+    fn write_file_beneath(
+        &mut self,
+        root: &RootHandle,
+        names: &[String],
         contents: &str,
-        beneath: Option<&Path>,
     ) -> std::io::Result<()> {
-        self.real.write_file(path, contents, beneath)
+        self.real.write_file_beneath(root, names, contents)
     }
-    fn create_dir(&mut self, path: &Path, beneath: Option<&Path>) -> std::io::Result<()> {
-        self.real.create_dir(path, beneath)
+    fn create_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> std::io::Result<()> {
+        self.real.create_dir_beneath(root, names)
     }
-    fn list_dir(&mut self, path: &Path, beneath: Option<&Path>) -> std::io::Result<Vec<String>> {
-        self.real.list_dir(path, beneath)
+    fn list_dir_beneath(
+        &mut self,
+        root: &RootHandle,
+        names: &[String],
+    ) -> std::io::Result<Vec<String>> {
+        self.real.list_dir_beneath(root, names)
     }
     fn printed(&self) -> Vec<String> {
         self.stdout.lines().map(str::to_string).collect()
@@ -140,13 +159,14 @@ fn run_real(src: &str) -> RunOutcome {
 /// What a program prints when it reads `path` through `fs` restricted to
 /// `root`: the file's text, or `REFUSED` when the read fails.
 fn read_confined(root: &Path, path: &str) -> String {
+    let path = common::literal(path);
     let src = format!(
         "fn main(io: Stdout, fs: FsRead) {{\n\
          \x20   let local = fs.restrict_to(\"{}\")\n\
          \x20   let text = local.read_to_string(Path.new(\"{path}\")).unwrap_or(\"REFUSED\")\n\
          \x20   let _ = io.println(text)\n\
          }}\n",
-        root.display()
+        common::literal(root)
     );
     run_real(&src).stdout
 }
@@ -154,13 +174,14 @@ fn read_confined(root: &Path, path: &str) -> String {
 /// Write `contents` to `path` through `fs` restricted to `root`, and
 /// return what the program printed: `written` or `REFUSED`.
 fn write_confined(root: &Path, path: &str, contents: &str) -> String {
+    let path = common::literal(path);
     let src = format!(
         "fn main(io: Stdout, fs: Fs) {{\n\
          \x20   let local = fs.restrict_to(\"{}\").write_only()\n\
          \x20   let done = local.write(Path.new(\"{path}\"), \"{contents}\").is_ok()\n\
          \x20   let _ = io.println(if done {{ \"written\" }} else {{ \"REFUSED\" }})\n\
          }}\n",
-        root.display()
+        common::literal(root)
     );
     run_real(&src).stdout
 }
@@ -168,6 +189,7 @@ fn write_confined(root: &Path, path: &str, contents: &str) -> String {
 // ---- Confinement: escapes ----------------------------------------------------
 
 #[test]
+#[cfg(unix)]
 fn a_symlink_to_a_file_outside_the_root_is_refused() {
     let sandbox = Sandbox::new("symlink-file");
     sandbox.link("escape.txt", &sandbox.outside().join("secret.txt"));
@@ -175,6 +197,7 @@ fn a_symlink_to_a_file_outside_the_root_is_refused() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_symlink_to_a_directory_outside_the_root_is_refused() {
     let sandbox = Sandbox::new("symlink-dir");
     sandbox.link("out", &sandbox.outside());
@@ -219,6 +242,7 @@ fn an_empty_path_is_refused() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_write_through_a_dangling_symlink_out_of_the_root_is_refused() {
     let sandbox = Sandbox::new("write-dangling");
     let target = sandbox.outside().join("planted.txt");
@@ -245,15 +269,15 @@ fn a_write_out_of_the_root_is_refused() {
 }
 
 #[test]
-fn restricting_a_restricted_filesystem_never_widens_it() {
+fn narrowing_a_directory_capability_never_widens_it() {
     let sandbox = Sandbox::new("rerestrict");
     let src = format!(
         "fn main(io: Stdout, fs: FsRead) {{\n\
-         \x20   let wider = fs.restrict_to(\"{}\").restrict_to(\"..\")\n\
+         \x20   let wider = fs.restrict_to(\"{}\").restrict_to(Path.new(\"..\"))\n\
          \x20   let text = wider.read_to_string(Path.new(\"outside/secret.txt\")).unwrap_or(\"REFUSED\")\n\
          \x20   let _ = io.println(text)\n\
          }}\n",
-        sandbox.root().display()
+        common::literal(sandbox.root())
     );
     assert_eq!(run_real(&src).stdout, "REFUSED\n");
 }
@@ -273,28 +297,32 @@ fn exit_code_on_real_host(src: &str) -> i32 {
 /// filesystem restricted to `root`, on a bare [`RealHost`]: 0 when the
 /// write succeeded, 1 when it was refused.
 fn write_direct(root: &Path, path: &str, contents: &str) -> i32 {
+    let path = common::literal(path);
     exit_code_on_real_host(&format!(
         "fn main(fs: FsWrite) -> Result<(), IoError> {{\n\
          \x20   fs.restrict_to(\"{}\").write(Path.new(\"{path}\"), \"{contents}\")\n\
          }}\n",
-        root.display()
+        common::literal(root)
     ))
 }
 
 /// The exit code of a program that reads `path` through a filesystem
 /// restricted to `root`, on a bare [`RealHost`]: 0 when the read
 /// succeeded, 1 when it was refused.
+#[cfg(unix)]
 fn read_direct(root: &Path, path: &str) -> i32 {
+    let path = common::literal(path);
     exit_code_on_real_host(&format!(
         "fn main(fs: FsRead) -> Result<(), IoError> {{\n\
          \x20   let _ = fs.restrict_to(\"{}\").read_to_string(Path.new(\"{path}\"))?\n\
          \x20   Ok(())\n\
          }}\n",
-        root.display()
+        common::literal(root)
     ))
 }
 
 #[test]
+#[cfg(unix)]
 fn a_write_through_a_dangling_symlink_with_a_trailing_separator_is_refused() {
     let sandbox = Sandbox::new("write-dangling-slash");
     let target = sandbox.outside().join("pwned1");
@@ -323,6 +351,7 @@ fn a_write_whose_last_component_is_not_a_plain_name_is_refused() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_write_to_a_symlink_inside_the_root_is_refused_even_to_an_inside_file() {
     // The final component is opened without following symlinks, so a
     // write never goes through one, wherever it points.
@@ -334,62 +363,7 @@ fn a_write_to_a_symlink_inside_the_root_is_refused_even_to_an_inside_file() {
 }
 
 #[test]
-fn real_host_opens_a_restricted_file_without_following_a_symlink() {
-    // The host's own guard, behind `confine.rs`: what a symlink swapped
-    // in after the path was checked would meet.
-    let sandbox = Sandbox::new("host-nofollow");
-    let root = sandbox.root();
-    let target = sandbox.outside().join("swapped");
-    sandbox.link("dang", &target);
-    sandbox.link("escape.txt", &sandbox.outside().join("secret.txt"));
-    sandbox.link("alias.txt", &root.join("inside.txt"));
-    let mut host = RealHost::new();
-    assert!(host
-        .write_file(&root.join("dang"), "pwned", Some(&root))
-        .is_err());
-    assert!(!target.exists(), "the dangling symlink was followed");
-    assert!(host
-        .read_file(&root.join("escape.txt"), Some(&root))
-        .is_err());
-    assert!(host
-        .read_file(&root.join("alias.txt"), Some(&root))
-        .is_err());
-    assert!(host
-        .write_file(&root.join("escape.txt"), "pwned", Some(&root))
-        .is_err());
-    assert_eq!(
-        std::fs::read_to_string(sandbox.outside().join("secret.txt")).expect("untouched"),
-        "outside text"
-    );
-}
-
-#[test]
-fn real_host_refuses_a_restricted_file_that_is_not_under_the_root() {
-    let sandbox = Sandbox::new("host-beneath");
-    let root = sandbox.root();
-    let outside = sandbox.outside().join("secret.txt");
-    let mut host = RealHost::new();
-    assert!(host.read_file(&outside, Some(&root)).is_err());
-    assert!(host.write_file(&outside, "pwned", Some(&root)).is_err());
-    assert_eq!(
-        std::fs::read_to_string(&outside).expect("untouched"),
-        "outside text"
-    );
-    // Unrestricted, the same host reads it, through a symlink too.
-    sandbox.link("escape.txt", &outside);
-    assert_eq!(
-        host.read_file(&root.join("escape.txt"), None)
-            .expect("an unrestricted read follows symlinks"),
-        "outside text"
-    );
-    assert_eq!(
-        host.read_file(&root.join("inside.txt"), Some(&root))
-            .expect("a file under the root"),
-        "inside text"
-    );
-}
-
-#[test]
+#[cfg(unix)]
 fn real_host_confines_reads_and_writes_directly() {
     let sandbox = Sandbox::new("direct");
     sandbox.link("escape.txt", &sandbox.outside().join("secret.txt"));
@@ -438,22 +412,15 @@ fn a_file_inside_the_root_is_read() {
 }
 
 #[test]
-fn a_symlink_inside_the_root_to_a_file_inside_the_root_is_read() {
-    let sandbox = Sandbox::new("symlink-inside");
-    sandbox.link("alias.txt", &sandbox.root().join("sub/nested.txt"));
-    assert_eq!(read_confined(&sandbox.root(), "alias.txt"), "nested text\n");
-}
-
-#[test]
 fn a_restriction_to_a_subdirectory_reads_relative_to_it() {
     let sandbox = Sandbox::new("subroot");
     let src = format!(
         "fn main(io: Stdout, fs: FsRead) {{\n\
-         \x20   let sub = fs.restrict_to(\"{}\").restrict_to(\"sub\")\n\
+         \x20   let sub = fs.restrict_to(\"{}\").restrict_to(Path.new(\"sub\"))\n\
          \x20   let text = sub.read_to_string(Path.new(\"nested.txt\")).unwrap_or(\"REFUSED\")\n\
          \x20   let _ = io.println(text)\n\
          }}\n",
-        sandbox.root().display()
+        common::literal(sandbox.root())
     );
     assert_eq!(run_real(&src).stdout, "nested text\n");
 }

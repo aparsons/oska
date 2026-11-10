@@ -16,7 +16,7 @@
 //! enums the type's name. Trust exists only at compile time: an
 //! `Untrusted<String>` is a plain [`Value::Str`] here.
 
-use std::path::Path;
+use crate::host::RootHandle;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -94,8 +94,17 @@ pub enum Capability {
     Env,
     Clock,
     Random,
-    /// `Fs`, `FsRead`, or `FsWrite`, with its attenuation state.
+    /// `Fs`, `FsRead`, or `FsWrite`, with its attenuation state: its
+    /// root is always [`Root::Anywhere`], since `restrict_to` gives a
+    /// directory capability.
     Fs(FsCap),
+    /// A directory capability, `Dir`, `DirRead`, or `DirWrite`: its root
+    /// is never [`Root::Anywhere`]. Only attenuation makes one.
+    Dir(FsCap),
+    /// A file capability, `FileRead` or `FileWrite`: its root is a single
+    /// file, or nowhere, and never [`Root::Anywhere`]. It reads or writes
+    /// but not both. Only attenuation makes one.
+    File(FsCap),
 }
 
 /// A filesystem capability's attenuation state: where it may reach, and
@@ -110,14 +119,18 @@ pub struct FsCap {
 /// Where a filesystem capability may reach.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Root {
-    /// Anywhere the process may: the `Fs` `main` declares, unrestricted.
+    /// Anywhere the process may: the `Fs` `main` declares. It only attenuates:
+    /// a directory or file capability never has this root.
     Anywhere,
-    /// Only under this directory: canonical, so absolute and free of
-    /// symlinks (`confine.rs`).
-    Dir(Rc<Path>),
-    /// Nowhere: the result of restricting to a directory that does not
-    /// exist or lies outside the current root. Every operation fails.
-    Nowhere,
+    /// Only beneath this directory, or only this file, as the host opened
+    /// it: the root of a directory capability is a directory, and the
+    /// root of a file capability is a file, its parent's handle with its
+    /// name. On Unix it holds an OS handle, released with the last copy.
+    Dir(RootHandle),
+    /// Nowhere: the result of restricting to a root that could not be
+    /// opened, because it is missing, a symlink, or outside the current
+    /// root. Every operation fails with this reason, which names the root.
+    Nowhere(Rc<str>),
 }
 
 /// Which operations a filesystem capability may perform.
@@ -149,6 +162,8 @@ enum Kind {
     Clock,
     Random,
     Fs(Access),
+    Dir(Access),
+    File(Access),
 }
 
 /// Each capability the runtime implements, by the name of its type: the
@@ -165,11 +180,24 @@ const IMPLEMENTED: &[(&str, Kind)] = &[
     ("Fs", Kind::Fs(Access::ReadWrite)),
     ("FsRead", Kind::Fs(Access::Read)),
     ("FsWrite", Kind::Fs(Access::Write)),
+    ("Dir", Kind::Dir(Access::ReadWrite)),
+    ("DirRead", Kind::Dir(Access::Read)),
+    ("DirWrite", Kind::Dir(Access::Write)),
+    ("FileRead", Kind::File(Access::Read)),
+    ("FileWrite", Kind::File(Access::Write)),
 ];
 
 impl Capability {
-    /// The capability `main` declares with the type named `ty`, if it has
-    /// a runtime: a filesystem unrestricted.
+    /// Whether the capability named `ty` has a runtime: its methods have
+    /// intrinsics, whether or not `main` can be granted one.
+    pub fn implemented(ty: &str) -> bool {
+        IMPLEMENTED.iter().any(|(name, _)| *name == ty)
+    }
+
+    /// The capability `main` declares with the type named `ty`, if the
+    /// runtime can grant it: `Fs`, `FsRead` or `FsWrite`. A directory or
+    /// file capability has a runtime but is never granted, since only
+    /// attenuation gives it a root.
     pub fn granted(ty: &str) -> Option<Capability> {
         let (_, kind) = IMPLEMENTED.iter().find(|(name, _)| *name == ty)?;
         Some(match *kind {
@@ -183,6 +211,7 @@ impl Capability {
                 root: Root::Anywhere,
                 access,
             }),
+            Kind::Dir(_) | Kind::File(_) => return None,
         })
     }
 
@@ -195,6 +224,8 @@ impl Capability {
             Capability::Clock => Kind::Clock,
             Capability::Random => Kind::Random,
             Capability::Fs(fs) => Kind::Fs(fs.access),
+            Capability::Dir(dir) => Kind::Dir(dir.access),
+            Capability::File(file) => Kind::File(file.access),
         }
     }
 
@@ -373,7 +404,7 @@ mod tests {
     use oska_check::program::{Callee, Closure, Expr, ExprKind};
     use oska_syntax::Span;
 
-    use super::{Capability, ClosureValue, Value, IMPLEMENTED};
+    use super::{Capability, ClosureValue, FsCap, Kind, Root, Value, IMPLEMENTED};
 
     #[test]
     fn a_closure_and_a_named_function_have_different_tags() {
@@ -399,13 +430,31 @@ mod tests {
 
     #[test]
     fn every_capability_the_runtime_implements_is_one_the_checker_knows() {
-        for (name, _) in IMPLEMENTED {
+        for (name, kind) in IMPLEMENTED {
             assert!(
                 builtins::is_capability(name),
                 "`{name}` is not a capability"
             );
-            let granted = Capability::granted(name).expect("implemented");
-            assert_eq!(granted.type_name(), *name);
+            let capability = match *kind {
+                Kind::Dir(access) => Capability::Dir(FsCap {
+                    root: Root::Nowhere(Rc::from("no root")),
+                    access,
+                }),
+                Kind::File(access) => Capability::File(FsCap {
+                    root: Root::Nowhere(Rc::from("no root")),
+                    access,
+                }),
+                _ => Capability::granted(name).expect("granted"),
+            };
+            assert_eq!(capability.type_name(), *name);
+        }
+    }
+
+    #[test]
+    fn a_directory_or_file_capability_is_never_granted() {
+        for name in ["Dir", "DirRead", "DirWrite", "FileRead", "FileWrite"] {
+            assert!(Capability::implemented(name));
+            assert_eq!(Capability::granted(name), None);
         }
     }
 }

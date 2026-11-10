@@ -1,5 +1,5 @@
-//! What the site generator needs from Oska (#74): `FsWrite.create_dir`,
-//! `restrict_to` naming a single file, and `String.to_lowercase`.
+//! What the site generator needs from Oska (#74): `DirWrite.create_dir`
+//! and `String.to_lowercase`.
 //!
 //! The confinement tests run on [`RealHost`] against a real temporary
 //! directory, with real symlinks; the rest run on [`FakeHost`].
@@ -32,8 +32,9 @@ fn assert_refused_at_runtime(outcome: &RunOutcome, path: &str) {
 #[test]
 fn create_dir_makes_a_directory_that_a_restriction_and_a_write_can_use() {
     let src = "fn main(fs: FsWrite) -> Result<(), IoError> {
-    fs.create_dir(Path.new(\"_site\"))?
-    let site = fs.restrict_to(\"_site\")
+    let top = fs.restrict_to(\"/\")
+    top.create_dir(Path.new(\"_site\"))?
+    let site = top.restrict_to(Path.new(\"_site\"))
     site.create_dir(Path.new(\"adr\"))?
     site.write(Path.new(\"adr/one.html\"), \"one\")
 }
@@ -47,8 +48,9 @@ fn create_dir_makes_a_directory_that_a_restriction_and_a_write_can_use() {
 #[test]
 fn create_dir_of_a_directory_that_exists_succeeds_and_keeps_its_files() {
     let src = "fn main(fs: FsWrite) -> Result<(), IoError> {
-    fs.create_dir(Path.new(\"_site\"))?
-    fs.create_dir(Path.new(\"_site\"))
+    let top = fs.restrict_to(\"/\")
+    top.create_dir(Path.new(\"_site\"))?
+    top.create_dir(Path.new(\"_site\"))
 }
 ";
     let mut host = FakeHost::new().with_file("_site/old.html", "old");
@@ -60,7 +62,7 @@ fn create_dir_of_a_directory_that_exists_succeeds_and_keeps_its_files() {
 #[test]
 fn create_dir_where_a_file_is_or_no_parent_is_an_error() {
     let src = "fn main(fs: FsWrite) -> Result<(), IoError> {
-    fs.create_dir(Path.new(\"{path}\"))
+    fs.restrict_to(\"/\").create_dir(Path.new(\"{path}\"))
 }
 ";
     for path in ["taken", "missing/child", ""] {
@@ -82,16 +84,18 @@ fn create_dir_refuses_a_path_out_of_its_root() {
         let mut host = FakeHost::new().with_dir("_site");
         let outcome = run_kept(&src, &mut host);
         assert_refused_at_runtime(&outcome, path);
+        let top = host.open_root(Path::new("/")).expect("the root");
         assert!(
-            host.list_dir(Path::new("/"), None).expect("the root") == ["_site"],
+            host.list_dir_beneath(&top, &[]).expect("the root") == ["_site"],
             "creating `{path}` made something outside `_site`"
         );
     }
 }
 
 #[test]
-fn a_read_only_filesystem_cannot_create_a_directory() {
-    let src = "fn main(fs: FsRead) {\n    let _ = fs.create_dir(Path.new(\"x\"))\n}\n";
+fn a_read_only_directory_cannot_create_a_directory() {
+    let src = "fn main(fs: FsRead) {\n    \
+               let _ = fs.restrict_to(\"/\").create_dir(Path.new(\"x\"))\n}\n";
     let outcome = run_fake(src, &[]);
     assert!(
         outcome.diagnostics.iter().any(|d| d.code == "E0228"),
@@ -133,6 +137,7 @@ impl Sandbox {
         self.base.join("outside")
     }
 
+    #[cfg(unix)]
     fn link(&self, name: &str, target: &Path) {
         std::os::unix::fs::symlink(target, self.root().join(name)).expect("create a symlink");
     }
@@ -163,11 +168,12 @@ impl Drop for Sandbox {
 /// a filesystem restricted to `root`, on a bare [`RealHost`]: 0 when it
 /// was created or already there, 1 when it was refused.
 fn create_confined(root: &Path, path: &str) -> i32 {
+    let path = common::literal(path);
     let src = format!(
         "fn main(fs: FsWrite) -> Result<(), IoError> {{\n\
          \x20   fs.restrict_to(\"{}\").create_dir(Path.new(\"{path}\"))\n\
          }}\n",
-        root.display()
+        common::literal(root)
     );
     let outcome = run(&src, &mut RealHost::new(), &["prog.osk".to_string()]);
     assert!(
@@ -234,6 +240,7 @@ fn real_host_refuses_to_create_out_of_the_root() {
 }
 
 #[test]
+#[cfg(unix)]
 fn real_host_never_creates_through_a_symlink() {
     let sandbox = Sandbox::new("create-symlink");
     sandbox.link("out", &sandbox.outside());
@@ -246,109 +253,6 @@ fn real_host_never_creates_through_a_symlink() {
     // At a symlink to a directory inside the root: never followed.
     assert_eq!(create_confined(&sandbox.root(), "alias"), 1);
     assert_eq!(sandbox.outside_names(), ["secret.txt"]);
-}
-
-#[test]
-fn real_host_refuses_a_directory_that_is_not_under_the_root() {
-    // The host's own guard, behind `confine.rs`: what a symlink swapped
-    // in after the path was checked would meet.
-    let sandbox = Sandbox::new("create-host");
-    let root = sandbox.root();
-    sandbox.link("dangling", &sandbox.outside().join("planted"));
-    sandbox.link("alias", &root.join("sub"));
-    let mut host = RealHost::new();
-    assert!(host
-        .create_dir(&sandbox.outside().join("new"), Some(&root))
-        .is_err());
-    assert!(host
-        .create_dir(&root.join("dangling"), Some(&root))
-        .is_err());
-    assert!(host.create_dir(&root.join("alias"), Some(&root)).is_err());
-    assert_eq!(sandbox.outside_names(), ["secret.txt"]);
-    assert!(host.create_dir(&root.join("fresh"), Some(&root)).is_ok());
-    assert!(root.join("fresh").is_dir());
-    // Unrestricted, the same host follows a symlink to a directory that
-    // is already there.
-    assert!(host.create_dir(&root.join("alias"), None).is_ok());
-}
-
-// ---- restrict_to a single file -------------------------------------------------
-
-/// A program that restricts `fs` to `target` and prints what it reads
-/// there at `path`, or `REFUSED`.
-fn read_through(target: &str, path: &str) -> String {
-    format!(
-        "fn main(io: Stdout, fs: FsRead) {{\n\
-         \x20   let only = fs.restrict_to(\"{target}\")\n\
-         \x20   let text = only.read_to_string(Path.new(\"{path}\")).unwrap_or(\"REFUSED\")\n\
-         \x20   let _ = io.println(text)\n\
-         }}\n"
-    )
-}
-
-fn fake_repo() -> FakeHost {
-    FakeHost::new()
-        .with_file("README.md", "readme")
-        .with_file("GLOSSARY.md", "glossary")
-        .with_file("docs/design.md", "design")
-}
-
-#[test]
-fn a_filesystem_restricted_to_a_file_reads_just_that_file_as_its_root() {
-    let outcome = run_on(fake_repo(), &read_through("README.md", "."), &[]);
-    assert_eq!(outcome.stdout, "readme\n", "{outcome:#?}");
-    for path in ["..", "../GLOSSARY.md", "../docs/design.md", "README.md", ""] {
-        let outcome = run_on(fake_repo(), &read_through("README.md", path), &[]);
-        assert_eq!(
-            outcome.stdout, "REFUSED\n",
-            "reading `{path}`: {outcome:#?}"
-        );
-    }
-}
-
-#[test]
-fn a_filesystem_restricted_to_a_file_lists_nothing_and_writes_nothing() {
-    let src = "fn main(fs: Fs) -> Result<(), IoError> {
-    let only = fs.restrict_to(\"README.md\")
-    let listed = only.read_only().list_dir(Path.new(\".\")).is_ok()
-    let wrote = only.write_only().write(Path.new(\".\"), \"pwned\").is_ok()
-    let made = only.write_only().create_dir(Path.new(\"x\")).is_ok()
-    if listed || wrote || made { Err(IoError(message: \"reached\")) } else { Ok(()) }
-}
-";
-    let mut host = fake_repo();
-    let outcome = run_kept(src, &mut host);
-    assert_eq!(outcome.exit_code, 0, "{outcome:#?}");
-    assert_eq!(host.file("README.md"), Some("readme"));
-}
-
-/// The exit code of a program that restricts a filesystem to `target`,
-/// on a bare [`RealHost`], and reads `path` there: 0 when it read
-/// `expected`, 1 when the read was refused.
-fn read_real(target: &Path, path: &str, expected: &str) -> i32 {
-    let src = format!(
-        "fn main(fs: FsRead) -> Result<(), IoError> {{\n\
-         \x20   let text = fs.restrict_to(\"{}\").read_to_string(Path.new(\"{path}\"))?\n\
-         \x20   if text == \"{expected}\" {{ Ok(()) }} else {{ Err(IoError(message: text)) }}\n\
-         }}\n",
-        target.display()
-    );
-    let outcome = run(&src, &mut RealHost::new(), &["prog.osk".to_string()]);
-    assert!(
-        outcome.diagnostics.is_empty() && outcome.panic.is_none(),
-        "{src} should run: {outcome:#?}"
-    );
-    outcome.exit_code
-}
-
-#[test]
-fn real_host_confines_a_filesystem_restricted_to_a_file() {
-    let sandbox = Sandbox::new("file-root");
-    let file = sandbox.root().join("file.txt");
-    assert_eq!(read_real(&file, ".", "inside"), 0);
-    for path in ["..", "../sub", "../../outside/secret.txt", "file.txt", ""] {
-        assert_eq!(read_real(&file, path, "inside"), 1, "reading `{path}`");
-    }
 }
 
 // ---- to_lowercase ----------------------------------------------------------------

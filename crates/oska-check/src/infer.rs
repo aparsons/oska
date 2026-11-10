@@ -38,6 +38,8 @@
 //!   the text arguments flow into it, and every text type in the result
 //!   is it.
 
+use std::collections::HashSet;
+
 use crate::ty::{Trust, Ty};
 
 /// What is known about one trust variable.
@@ -152,15 +154,21 @@ impl Infer {
     /// `into`, as the holes of an interpolated string do. Function types
     /// are skipped: they are not text. A generic parameter counts as
     /// untrusted text, since it may be instantiated with some: text a
-    /// generic body makes from a `T` is untrusted.
-    pub fn join_into(&mut self, ty: &Ty, into: Trust) {
+    /// generic body makes from a `T` is untrusted. So does a type in
+    /// `holders`, which holds untrusted text in a field (see
+    /// [`crate::items::Items::untrusted_holders`]): the text of an
+    /// `IoError` is untrusted.
+    pub fn join_into(&mut self, ty: &Ty, into: Trust, holders: &HashSet<String>) {
         // Each flow only fails when `into` is pinned, which the caller
         // rules out.
         match self.shallow(ty) {
-            Ty::Named(_, args, trust) => {
+            Ty::Named(name, args, trust) => {
                 self.trust_flow(trust, into);
+                if holders.contains(&name) {
+                    self.trust_flow(Trust::Untrusted, into);
+                }
                 for arg in &args {
-                    self.join_into(arg, into);
+                    self.join_into(arg, into, holders);
                 }
             }
             Ty::Param(_) => {

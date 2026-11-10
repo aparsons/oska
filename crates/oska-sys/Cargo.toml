@@ -1,0 +1,21 @@
+[package]
+name = "oska-sys"
+description = "Confined filesystem access beneath a directory handle, for the Oska runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+# The one crate that does not take the workspace's lints, because it may
+# use `unsafe` (ADR 0009). scripts/check.sh refuses any other crate that
+# opts out. The workspace's other lints are repeated here.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+unwrap_used = "warn"
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"

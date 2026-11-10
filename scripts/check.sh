@@ -6,15 +6,23 @@
 #   scripts/check.sh
 #
 # Runs, stopping at the first failure:
-#   1. repo rules that are mechanical: no crate from outside this repo, and
-#      workflows use only official actions plus the SHA-pinned rust-toolchain;
+#   1. repo rules that are mechanical: no crate from outside this repo,
+#      `unsafe` only in crates/oska-sys, and workflows use only official
+#      actions plus the SHA-pinned rust-toolchain;
 #   2. cargo fmt, clippy with -D warnings, and cargo test;
-#   3. the installer and release script tests;
+#   3. the installer, release script and unsafe guard tests;
 #   4. shellcheck on the shell scripts, when shellcheck is installed.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+
+# A git hook (such as .githooks/pre-push) exports GIT_DIR and related
+# variables. Scripts that run git on their own scratch repositories must not
+# inherit them, or `git init` re-initialises this repository instead (it once
+# set core.bare=true here).
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
 
 # Rust may be installed for interactive shells only.
 if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
@@ -33,6 +41,13 @@ step "no external crates"
 if grep -n '^source = ' Cargo.lock; then
   fail "Cargo.lock has a crate from outside this repo (above); dependencies must be path dependencies"
 fi
+
+step "unsafe only in oska-sys"
+# The workspace forbids `unsafe_code`, and oska-sys alone may use it
+# (ADR 0009). The guard compiles every other crate with `unsafe_code`
+# forbidden on rustc's command line, refuses cargo configs and workflow
+# flags that could lower lints, and scans source the build skips.
+scripts/unsafe-guard/guard.sh
 
 step "only official actions, rust-toolchain pinned to a commit"
 toolchain_pin='dtolnay/rust-toolchain@[0-9a-f]{40}'
@@ -58,9 +73,12 @@ bash scripts/install/test.sh
 step "release script tests"
 bash scripts/release/test.sh
 
+step "unsafe guard tests"
+bash scripts/unsafe-guard/test.sh
+
 step "shellcheck"
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck -S warning scripts/*.sh scripts/install/*.sh scripts/release/*.sh site/agent-setup/*.sh .githooks/pre-push
+  shellcheck -S warning scripts/*.sh scripts/install/*.sh scripts/release/*.sh scripts/unsafe-guard/*.sh site/agent-setup/*.sh .githooks/pre-push
 else
   echo "shellcheck not installed; skipped (CI runs it)"
 fi

@@ -7,7 +7,7 @@ Oska has no **ambient authority**. Reading a file, opening a connection, reading
 | Capability | Grants | Runs in this release |
 | --- | --- | --- |
 | `Stdin`, `Stdout`, `Stderr` | The standard streams | Yes |
-| `Fs` | The filesystem. Attenuates to `FsRead`, `FsWrite`, or a single directory. | Yes |
+| `Fs` | The filesystem, but only to attenuate: it reads and writes nothing itself. Attenuates to `FsRead`, `FsWrite`, a directory capability (`Dir`, `DirRead`, `DirWrite`), or a file capability (`FileRead`, `FileWrite`). | Yes |
 | `Env` | Environment variables, which can hold secrets | Yes |
 | `Clock` | The time: `now_millis()` | Yes |
 | `Random` | Pseudo-random numbers: `next_int()` | Yes |
@@ -40,8 +40,8 @@ fn main: Stdout (io), Clock (clock)
 A function can reach only the capabilities its parameters supply. That is its **authority**, and `oskac check` prints it for every function and method. A function with no capability-bearing parameter is a **pure function**: it cannot perform effects and it is deterministic.
 
 ```oska
-fn word_count(fs: FsRead, path: Path) -> Result<Int, IoError> {
-    let text = fs.read_to_string(path)?
+fn word_count(docs: DirRead, path: Path) -> Result<Int, IoError> {
+    let text = docs.read_to_string(path)?
     Ok(text.split(" ").len())
 }
 
@@ -50,20 +50,22 @@ fn double(n: Int) -> Int {
 }
 
 fn main(io: Stdout, fs: Fs) -> Result<(), IoError> {
-    let reader = fs.read_only()
-    let words = word_count(reader, Path.new("notes.txt"))?
+    let docs = fs.restrict_to("notes").read_only()
+    let words = word_count(docs, Path.new("today.txt"))?
     io.println("{words}")?
     Ok(())
 }
 ```
 
 ```console cmd=check
-fn word_count: FsRead (fs)
+fn word_count: DirRead (docs)
 fn double: pure
 fn main: Stdout (io), Fs (fs)
+  Fs -> Dir: restrict_to "notes" (bytes 250..273)
+  Dir -> DirRead: read_only (bytes 250..285)
 ```
 
-Reading the report: `word_count` can only read files, `double` can do nothing, and `main` can write to standard output and use the whole filesystem. Reviewing a change means reading the report, not the bodies.
+Reading the report: `word_count` can only read beneath one directory, `double` can do nothing, and `main` can write to standard output and attenuate the filesystem. The indented lines under `main` are **attenuations**: they narrow `Fs` to a `Dir` for `notes`, then to a `DirRead`. Every attenuation is listed under the function it is in. Reviewing a change means reading the report, not the bodies.
 
 For a larger example, this site is built by an Oska program, `site/build.osk`. Its [authority report](https://oskalang.dev/authority.html) is printed by `oskac check` on every build and published as it was printed.
 
@@ -72,11 +74,25 @@ For a larger example, this site is built by an Oska program, `site/build.osk`. I
 You cannot forge a capability. You get one by being passed it, or by **attenuation**: producing a narrower capability from one you hold. Attenuation never widens authority, and there is no way back from a narrow capability to a wider one.
 
 - `fs.read_only()` gives an `FsRead`, and `fs.write_only()` gives an `FsWrite`.
-- `fs.restrict_to("dir")` confines the filesystem to a directory. The directory must be trusted text, because it decides where the program may reach (a **structural position**).
+- `fs.restrict_to("dir")` gives a `Dir`, a **directory capability** that reaches only `dir` and what is beneath it. `read.restrict_to("dir")` on an `FsRead` gives a `DirRead`, and `write.restrict_to("dir")` on an `FsWrite` gives a `DirWrite`. The directory must be trusted text, because it decides where the program may reach (a **structural position**).
+- A `Dir` gives a `DirRead` with `read_only()` and a `DirWrite` with `write_only()`. Each directory capability narrows to a subdirectory with `restrict_to(path)`, which takes a `Path` and returns its own type.
+- `read.restrict_to_file("name")` on an `FsRead` gives a `FileRead`, and `write.restrict_to_file("name")` on an `FsWrite` gives a `FileWrite`: a **file capability** for exactly one file. A `DirRead` or `DirWrite` hands out one for a file beneath it, with a `Path`.
 - `net.connect_only()` and `net.listen_only()` narrow `Net`. They check, but a program that declares `Net` does not run yet.
 
+`Fs`, `FsRead`, and `FsWrite` only attenuate. They have no `read_to_string`, `list_dir`, `write`, or `create_dir`, so every read and write goes through a directory or file capability whose root the code names. Calling one of those methods on them is `E0273`, which shows the shape of the fix:
+
+```oska error=E0273
+fn load(fs: FsRead, path: Path) -> Result<Untrusted<String>, IoError> {
+    fs.read_to_string(path)
+}
+```
+
+### Four patterns
+
+**A directory.** Narrow to the directory the code needs, and pass the directory capability down:
+
 ```oska
-fn save(fs: FsWrite, text: String) -> Result<(), IoError> {
+fn save(fs: DirWrite, text: String) -> Result<(), IoError> {
     fs.write(Path.new("note.txt"), text)
 }
 
@@ -89,23 +105,70 @@ fn main(io: Stdout, fs: Fs) -> Result<(), IoError> {
 ```
 
 ```console cmd=check
-fn save: FsWrite (fs)
+fn save: DirWrite (fs)
 fn main: Stdout (io), Fs (fs)
+  Fs -> Dir: restrict_to "notes" (bytes 174..197)
+  Dir -> DirWrite: write_only (bytes 207..225)
 ```
 
-`FsRead`, `FsWrite`, and `Fs` keep their names after `restrict_to`, so the checker cannot tell a restricted filesystem from an unrestricted one. The runtime does the enforcing. A restricted filesystem resolves every path against its root and refuses an absolute or empty path, one that climbs out with `..`, and one that goes through a symlink to somewhere else. A refusal is an `Err(IoError)`, not a panic.
+The report shows `main` restricting the filesystem to `notes`, so a reviewer sees where the program can reach without reading its code. A root that is a string literal or a module constant is printed; any other root, such as one built from a variable, is printed as `computed at runtime`. `read_only` and `write_only` take no root.
+
+**A subdirectory from untrusted input.** Narrowing an existing directory capability takes a `Path`, which may come from untrusted text through `Path.from`, because the result stays beneath the same root. Per-user confinement needs no trust assertion:
+
+```oska
+fn avatar(uploads: DirRead, user: Untrusted<String>) -> Result<Untrusted<String>, IoError> {
+    uploads.restrict_to(Path.from(user)).read_to_string(Path.new("avatar.txt"))
+}
+```
+
+**A single file.** When a function needs one file, give it a file capability. Its `read_to_string()` and `write(text)` take no path, so the signature says exactly which file it can touch:
+
+```oska
+fn show(readme: FileRead, io: Stdout) -> Result<(), IoError> {
+    io.println(readme.read_to_string()?)
+}
+
+fn main(io: Stdout, fs: FsRead) -> Result<(), IoError> {
+    show(fs.restrict_to_file("README.md"), io)
+}
+```
+
+A file capability reads or writes, never both, and it cannot narrow further.
+
+**The whole filesystem.** Code that really needs to reach anywhere, such as a file viewer, writes `restrict_to("/")`. Paths are then relative to `/`, and the authority report shows the root, so a reviewer cannot miss it:
+
+```oska
+fn view(everything: DirRead, path: Path) -> Result<Untrusted<String>, IoError> {
+    everything.read_to_string(path)
+}
+
+fn main(io: Stdout, fs: FsRead) -> Result<(), IoError> {
+    let text = view(fs.restrict_to("/"), Path.new("etc/hostname"))?
+    io.println(text)
+}
+```
+
+```console cmd=check
+fn view: DirRead (everything)
+fn main: Stdout (io), FsRead (fs)
+  FsRead -> DirRead: restrict_to "/" (bytes 197..216)
+```
+
+### What the runtime refuses
+
+A directory or file capability resolves every path against its root and refuses an absolute or empty path, one that climbs out with `..` (`a/../b`, which stays inside, still works), and any symlink beneath the root, whether it points outside, inside, or nowhere. On Linux and macOS it also refuses to read or write an existing file with more than one hard link, since a hard link planted beneath the root could be a file outside it; a write that creates a new file is unaffected. A refusal is an `Err(IoError)`, not a panic. A root that cannot be opened, because it is missing, a symlink, or the wrong kind, gives a capability whose every operation returns an `IoError` naming the root, so create a directory before you narrow to it.
+
+On Linux and macOS the capability holds an OS handle for its root, and each path is opened one component at a time beneath it without following a symlink. There is no separate check to race against: a process that swaps a directory for a symlink while the program runs cannot steer an open outside the root. On Windows the runtime checks each component and re-checks what it opened. That narrows the race but does not close it, so on Windows do not point a program at a directory that another process can write to. See the [runtime notes](../runtime.md#capabilities).
 
 The in-memory filesystem in a test confines the same way:
 
 ```oska tests
-test "a restricted filesystem refuses to climb out" {
-    let fs = t.fs.restrict_to("safe").read_only()
-    let outcome = fs.read_to_string(Path.new("../secret.txt"))
+test "a directory capability refuses to climb out" {
+    let docs = t.fs.restrict_to("safe").read_only()
+    let outcome = docs.read_to_string(Path.new("../secret.txt"))
     t.assert(!outcome.is_ok())
 }
 ```
-
-One limit is documented in the [runtime notes](../runtime.md#capabilities): checking a path and opening it are separate steps, so a concurrent process that swaps a directory for a symlink at the right moment can still win a race.
 
 ## Bundling capabilities: `cap struct`
 

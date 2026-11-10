@@ -610,7 +610,7 @@ fn a_rebuild_into_an_existing_site_succeeds() {
 }
 
 #[test]
-fn the_generator_reaches_only_the_filesystem_read_only_and_write_only() {
+fn the_generator_reaches_only_directories_and_files_it_attenuated_to_read_only_and_write_only() {
     let report = oska_check::check_module(BUILD);
     assert_eq!(report.diagnostics, Vec::new());
     let main = report
@@ -619,10 +619,12 @@ fn the_generator_reaches_only_the_filesystem_read_only_and_write_only() {
         .find(|f| f.name == "main")
         .expect("the generator has a `main`");
     assert_eq!(main.authority, ["FsRead", "FsWrite"]);
-    for function in &report.functions {
+    // Every other function gets only directories and files `main`
+    // attenuated to.
+    for function in report.functions.iter().filter(|f| f.name != "main") {
         for capability in &function.authority {
             assert!(
-                capability == "FsRead" || capability == "FsWrite",
+                ["DirRead", "DirWrite", "FileRead"].contains(&capability.as_str()),
                 "`{}` reaches `{capability}`",
                 function.name
             );
@@ -634,12 +636,13 @@ fn the_generator_reaches_only_the_filesystem_read_only_and_write_only() {
 fn main_narrows_reading_to_docs_and_the_files_it_names() {
     for narrowing in [
         "read.restrict_to(\"docs\")",
-        "read.restrict_to(\"README.md\")",
-        "read.restrict_to(\"GLOSSARY.md\")",
-        "read.restrict_to(\"site/style.css\")",
-        "read.restrict_to(\"site/search.js\")",
-        "read.restrict_to(\"Cargo.toml\")",
-        "restrict_to(\"_site\")",
+        "read.restrict_to_file(\"README.md\")",
+        "read.restrict_to_file(\"GLOSSARY.md\")",
+        "read.restrict_to_file(\"site/style.css\")",
+        "read.restrict_to_file(\"site/search.js\")",
+        "read.restrict_to_file(\"Cargo.toml\")",
+        "read.restrict_to_file(\"site/authority.txt\")",
+        "restrict_to(Path.new(\"_site\"))",
     ] {
         assert!(
             BUILD.contains(narrowing),
@@ -661,7 +664,7 @@ fn main_narrows_writing_before_it_writes_anything() {
     assert_eq!(
         uses,
         ["write.restrict_to"],
-        "`main` should use its unrestricted `write` only to narrow it"
+        "`main` should use its `FsWrite` only to attenuate it to a directory capability"
     );
 }
 
@@ -718,6 +721,30 @@ fn the_real_site_shows_the_generator_s_own_report_linked_from_the_capabilities_g
     assert!(
         site["guide/capabilities.html"].contains("href=\"https://oskalang.dev/authority.html\""),
         "the capabilities guide does not link the authority page"
+    );
+}
+
+#[test]
+fn the_generator_s_report_lists_what_main_reads_and_writes() {
+    let report = generator_authority();
+    for line in [
+        "  FsRead -> DirRead: restrict_to \"docs\" (bytes ",
+        "  FsRead -> FileRead: restrict_to_file \"README.md\" (bytes ",
+        "  FsRead -> DirRead: restrict_to \"site/agent-setup\" (bytes ",
+        "  FsWrite -> DirWrite: restrict_to \".\" (bytes ",
+        "  DirWrite -> DirWrite: restrict_to \"_site\" (bytes ",
+    ] {
+        assert!(report.contains(line), "no {line:?} in {report}");
+    }
+    assert!(
+        !report.contains("computed at runtime"),
+        "the generator's roots are all literals: {report}"
+    );
+    let site = real_site();
+    let shown = between(&site["authority.html"], "<pre><code>", "</code></pre>");
+    assert!(
+        decode_references(shown).contains("restrict_to \"docs\""),
+        "the authority page does not show the attenuations: {shown}"
     );
 }
 

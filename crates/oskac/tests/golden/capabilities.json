@@ -4,7 +4,7 @@
   "items": [
     {
       "kind": "FnItem",
-      "span": {"start": 153, "end": 429},
+      "span": {"start": 153, "end": 430},
       "public": false,
       "attributes": [],
       "name": {
@@ -16,16 +16,16 @@
       "params": [
         {
           "kind": "Param",
-          "span": {"start": 168, "end": 178},
+          "span": {"start": 168, "end": 179},
           "name": {"kind": "Ident", "span": {"start": 168, "end": 170}, "name": "fs"},
           "type": {
             "kind": "PathType",
-            "span": {"start": 172, "end": 178},
+            "span": {"start": 172, "end": 179},
             "segments": [
               {
                 "kind": "Ident",
-                "span": {"start": 172, "end": 178},
-                "name": "FsRead"
+                "span": {"start": 172, "end": 179},
+                "name": "DirRead"
               }
             ],
             "args": []
@@ -33,15 +33,15 @@
         },
         {
           "kind": "Param",
-          "span": {"start": 180, "end": 190},
-          "name": {"kind": "Ident", "span": {"start": 180, "end": 184}, "name": "path"},
+          "span": {"start": 181, "end": 191},
+          "name": {"kind": "Ident", "span": {"start": 181, "end": 185}, "name": "path"},
           "type": {
             "kind": "PathType",
-            "span": {"start": 186, "end": 190},
+            "span": {"start": 187, "end": 191},
             "segments": [
               {
                 "kind": "Ident",
-                "span": {"start": 186, "end": 190},
+                "span": {"start": 187, "end": 191},
                 "name": "Path"
               }
             ],
@@ -51,22 +51,22 @@
       ],
       "return_type": {
         "kind": "PathType",
-        "span": {"start": 195, "end": 215},
+        "span": {"start": 196, "end": 216},
         "segments": [
           {
             "kind": "Ident",
-            "span": {"start": 195, "end": 201},
+            "span": {"start": 196, "end": 202},
             "name": "Result"
           }
         ],
         "args": [
           {
             "kind": "PathType",
-            "span": {"start": 202, "end": 205},
+            "span": {"start": 203, "end": 206},
             "segments": [
               {
                 "kind": "Ident",
-                "span": {"start": 202, "end": 205},
+                "span": {"start": 203, "end": 206},
                 "name": "Int"
               }
             ],
@@ -74,11 +74,11 @@
           },
           {
             "kind": "PathType",
-            "span": {"start": 207, "end": 214},
+            "span": {"start": 208, "end": 215},
             "segments": [
               {
                 "kind": "Ident",
-                "span": {"start": 207, "end": 214},
+                "span": {"start": 208, "end": 215},
                 "name": "IoError"
               }
             ],
@@ -90,44 +90,44 @@
       "ensures": [],
       "body": {
         "kind": "Block",
-        "span": {"start": 216, "end": 429},
+        "span": {"start": 217, "end": 430},
         "stmts": [
           {
             "kind": "LetStmt",
-            "span": {"start": 287, "end": 322},
+            "span": {"start": 288, "end": 323},
             "mutable": false,
             "name": {
               "kind": "Ident",
-              "span": {"start": 291, "end": 295},
+              "span": {"start": 292, "end": 296},
               "name": "text"
             },
             "value": {
               "kind": "TryExpr",
-              "span": {"start": 298, "end": 322},
+              "span": {"start": 299, "end": 323},
               "operand": {
                 "kind": "CallExpr",
-                "span": {"start": 298, "end": 321},
+                "span": {"start": 299, "end": 322},
                 "callee": {
                   "kind": "FieldExpr",
-                  "span": {"start": 298, "end": 315},
+                  "span": {"start": 299, "end": 316},
                   "base": {
                     "kind": "NameExpr",
-                    "span": {"start": 298, "end": 300},
+                    "span": {"start": 299, "end": 301},
                     "name": "fs"
                   },
                   "name": {
                     "kind": "Ident",
-                    "span": {"start": 301, "end": 315},
+                    "span": {"start": 302, "end": 316},
                     "name": "read_to_string"
                   }
                 },
                 "args": [
                   {
                     "kind": "Arg",
-                    "span": {"start": 316, "end": 320},
+                    "span": {"start": 317, "end": 321},
                     "value": {
                       "kind": "NameExpr",
-                      "span": {"start": 316, "end": 320},
+                      "span": {"start": 317, "end": 321},
                       "name": "path"
                     }
                   }
@@ -137,39 +137,39 @@
           },
           {
             "kind": "ExprStmt",
-            "span": {"start": 403, "end": 427},
+            "span": {"start": 404, "end": 428},
             "expr": {
               "kind": "CallExpr",
-              "span": {"start": 403, "end": 427},
+              "span": {"start": 404, "end": 428},
               "callee": {
                 "kind": "NameExpr",
-                "span": {"start": 403, "end": 405},
+                "span": {"start": 404, "end": 406},
                 "name": "Ok"
               },
               "args": [
                 {
                   "kind": "Arg",
-                  "span": {"start": 406, "end": 426},
+                  "span": {"start": 407, "end": 427},
                   "value": {
                     "kind": "CallExpr",
-                    "span": {"start": 406, "end": 426},
+                    "span": {"start": 407, "end": 427},
                     "callee": {
                       "kind": "FieldExpr",
-                      "span": {"start": 406, "end": 424},
+                      "span": {"start": 407, "end": 425},
                       "base": {
                         "kind": "CallExpr",
-                        "span": {"start": 406, "end": 418},
+                        "span": {"start": 407, "end": 419},
                         "callee": {
                           "kind": "FieldExpr",
-                          "span": {"start": 406, "end": 416},
+                          "span": {"start": 407, "end": 417},
                           "base": {
                             "kind": "NameExpr",
-                            "span": {"start": 406, "end": 410},
+                            "span": {"start": 407, "end": 411},
                             "name": "text"
                           },
                           "name": {
                             "kind": "Ident",
-                            "span": {"start": 411, "end": 416},
+                            "span": {"start": 412, "end": 417},
                             "name": "lines"
                           }
                         },
@@ -177,7 +177,7 @@
                       },
                       "name": {
                         "kind": "Ident",
-                        "span": {"start": 419, "end": 424},
+                        "span": {"start": 420, "end": 425},
                         "name": "count"
                       }
                     },
@@ -192,30 +192,30 @@
     },
     {
       "kind": "EnumItem",
-      "span": {"start": 543, "end": 596},
+      "span": {"start": 544, "end": 597},
       "public": false,
       "attributes": [],
       "cap": false,
-      "name": {"kind": "Ident", "span": {"start": 548, "end": 556}, "name": "AppError"},
+      "name": {"kind": "Ident", "span": {"start": 549, "end": 557}, "name": "AppError"},
       "generics": [],
       "variants": [
         {
           "kind": "Variant",
-          "span": {"start": 563, "end": 576},
-          "name": {"kind": "Ident", "span": {"start": 563, "end": 568}, "name": "Usage"},
+          "span": {"start": 564, "end": 577},
+          "name": {"kind": "Ident", "span": {"start": 564, "end": 569}, "name": "Usage"},
           "form": "positional",
           "fields": [
             {
               "kind": "Field",
-              "span": {"start": 569, "end": 575},
+              "span": {"start": 570, "end": 576},
               "public": false,
               "type": {
                 "kind": "PathType",
-                "span": {"start": 569, "end": 575},
+                "span": {"start": 570, "end": 576},
                 "segments": [
                   {
                     "kind": "Ident",
-                    "span": {"start": 569, "end": 575},
+                    "span": {"start": 570, "end": 576},
                     "name": "String"
                   }
                 ],
@@ -226,21 +226,21 @@
         },
         {
           "kind": "Variant",
-          "span": {"start": 582, "end": 593},
-          "name": {"kind": "Ident", "span": {"start": 582, "end": 584}, "name": "Io"},
+          "span": {"start": 583, "end": 594},
+          "name": {"kind": "Ident", "span": {"start": 583, "end": 585}, "name": "Io"},
           "form": "positional",
           "fields": [
             {
               "kind": "Field",
-              "span": {"start": 585, "end": 592},
+              "span": {"start": 586, "end": 593},
               "public": false,
               "type": {
                 "kind": "PathType",
-                "span": {"start": 585, "end": 592},
+                "span": {"start": 586, "end": 593},
                 "segments": [
                   {
                     "kind": "Ident",
-                    "span": {"start": 585, "end": 592},
+                    "span": {"start": 586, "end": 593},
                     "name": "IoError"
                   }
                 ],
@@ -253,17 +253,17 @@
     },
     {
       "kind": "ImplItem",
-      "span": {"start": 598, "end": 697},
+      "span": {"start": 599, "end": 698},
       "public": false,
       "attributes": [],
       "generics": [],
       "target": {
         "kind": "PathType",
-        "span": {"start": 603, "end": 611},
+        "span": {"start": 604, "end": 612},
         "segments": [
           {
             "kind": "Ident",
-            "span": {"start": 603, "end": 611},
+            "span": {"start": 604, "end": 612},
             "name": "AppError"
           }
         ],
@@ -272,27 +272,27 @@
       "methods": [
         {
           "kind": "FnItem",
-          "span": {"start": 618, "end": 695},
+          "span": {"start": 619, "end": 696},
           "public": false,
           "attributes": [],
-          "name": {"kind": "Ident", "span": {"start": 621, "end": 626}, "name": "usage"},
+          "name": {"kind": "Ident", "span": {"start": 622, "end": 627}, "name": "usage"},
           "generics": [],
           "params": [
             {
               "kind": "Param",
-              "span": {"start": 627, "end": 642},
+              "span": {"start": 628, "end": 643},
               "name": {
                 "kind": "Ident",
-                "span": {"start": 627, "end": 634},
+                "span": {"start": 628, "end": 635},
                 "name": "message"
               },
               "type": {
                 "kind": "PathType",
-                "span": {"start": 636, "end": 642},
+                "span": {"start": 637, "end": 643},
                 "segments": [
                   {
                     "kind": "Ident",
-                    "span": {"start": 636, "end": 642},
+                    "span": {"start": 637, "end": 643},
                     "name": "String"
                   }
                 ],
@@ -302,11 +302,11 @@
           ],
           "return_type": {
             "kind": "PathType",
-            "span": {"start": 647, "end": 655},
+            "span": {"start": 648, "end": 656},
             "segments": [
               {
                 "kind": "Ident",
-                "span": {"start": 647, "end": 655},
+                "span": {"start": 648, "end": 656},
                 "name": "AppError"
               }
             ],
@@ -316,35 +316,35 @@
           "ensures": [],
           "body": {
             "kind": "Block",
-            "span": {"start": 656, "end": 695},
+            "span": {"start": 657, "end": 696},
             "stmts": [
               {
                 "kind": "ExprStmt",
-                "span": {"start": 666, "end": 689},
+                "span": {"start": 667, "end": 690},
                 "expr": {
                   "kind": "CallExpr",
-                  "span": {"start": 666, "end": 689},
+                  "span": {"start": 667, "end": 690},
                   "callee": {
                     "kind": "FieldExpr",
-                    "span": {"start": 666, "end": 680},
+                    "span": {"start": 667, "end": 681},
                     "base": {
                       "kind": "NameExpr",
-                      "span": {"start": 666, "end": 674},
+                      "span": {"start": 667, "end": 675},
                       "name": "AppError"
                     },
                     "name": {
                       "kind": "Ident",
-                      "span": {"start": 675, "end": 680},
+                      "span": {"start": 676, "end": 681},
                       "name": "Usage"
                     }
                   },
                   "args": [
                     {
                       "kind": "Arg",
-                      "span": {"start": 681, "end": 688},
+                      "span": {"start": 682, "end": 689},
                       "value": {
                         "kind": "NameExpr",
-                        "span": {"start": 681, "end": 688},
+                        "span": {"start": 682, "end": 689},
                         "name": "message"
                       }
                     }
@@ -358,22 +358,22 @@
     },
     {
       "kind": "ImplItem",
-      "span": {"start": 699, "end": 805},
+      "span": {"start": 700, "end": 806},
       "public": false,
       "attributes": [],
       "generics": [],
       "trait": {
         "kind": "PathType",
-        "span": {"start": 704, "end": 717},
-        "segments": [{"kind": "Ident", "span": {"start": 704, "end": 708}, "name": "From"}],
+        "span": {"start": 705, "end": 718},
+        "segments": [{"kind": "Ident", "span": {"start": 705, "end": 709}, "name": "From"}],
         "args": [
           {
             "kind": "PathType",
-            "span": {"start": 709, "end": 716},
+            "span": {"start": 710, "end": 717},
             "segments": [
               {
                 "kind": "Ident",
-                "span": {"start": 709, "end": 716},
+                "span": {"start": 710, "end": 717},
                 "name": "IoError"
               }
             ],
@@ -383,11 +383,11 @@
       },
       "target": {
         "kind": "PathType",
-        "span": {"start": 722, "end": 730},
+        "span": {"start": 723, "end": 731},
         "segments": [
           {
             "kind": "Ident",
-            "span": {"start": 722, "end": 730},
+            "span": {"start": 723, "end": 731},
             "name": "AppError"
           }
         ],
@@ -396,27 +396,27 @@
       "methods": [
         {
           "kind": "FnItem",
-          "span": {"start": 737, "end": 803},
+          "span": {"start": 738, "end": 804},
           "public": false,
           "attributes": [],
-          "name": {"kind": "Ident", "span": {"start": 740, "end": 744}, "name": "from"},
+          "name": {"kind": "Ident", "span": {"start": 741, "end": 745}, "name": "from"},
           "generics": [],
           "params": [
             {
               "kind": "Param",
-              "span": {"start": 745, "end": 757},
+              "span": {"start": 746, "end": 758},
               "name": {
                 "kind": "Ident",
-                "span": {"start": 745, "end": 748},
+                "span": {"start": 746, "end": 749},
                 "name": "err"
               },
               "type": {
                 "kind": "PathType",
-                "span": {"start": 750, "end": 757},
+                "span": {"start": 751, "end": 758},
                 "segments": [
                   {
                     "kind": "Ident",
-                    "span": {"start": 750, "end": 757},
+                    "span": {"start": 751, "end": 758},
                     "name": "IoError"
                   }
                 ],
@@ -426,11 +426,11 @@
           ],
           "return_type": {
             "kind": "PathType",
-            "span": {"start": 762, "end": 770},
+            "span": {"start": 763, "end": 771},
             "segments": [
               {
                 "kind": "Ident",
-                "span": {"start": 762, "end": 770},
+                "span": {"start": 763, "end": 771},
                 "name": "AppError"
               }
             ],
@@ -440,35 +440,35 @@
           "ensures": [],
           "body": {
             "kind": "Block",
-            "span": {"start": 771, "end": 803},
+            "span": {"start": 772, "end": 804},
             "stmts": [
               {
                 "kind": "ExprStmt",
-                "span": {"start": 781, "end": 797},
+                "span": {"start": 782, "end": 798},
                 "expr": {
                   "kind": "CallExpr",
-                  "span": {"start": 781, "end": 797},
+                  "span": {"start": 782, "end": 798},
                   "callee": {
                     "kind": "FieldExpr",
-                    "span": {"start": 781, "end": 792},
+                    "span": {"start": 782, "end": 793},
                     "base": {
                       "kind": "NameExpr",
-                      "span": {"start": 781, "end": 789},
+                      "span": {"start": 782, "end": 790},
                       "name": "AppError"
                     },
                     "name": {
                       "kind": "Ident",
-                      "span": {"start": 790, "end": 792},
+                      "span": {"start": 791, "end": 793},
                       "name": "Io"
                     }
                   },
                   "args": [
                     {
                       "kind": "Arg",
-                      "span": {"start": 793, "end": 796},
+                      "span": {"start": 794, "end": 797},
                       "value": {
                         "kind": "NameExpr",
-                        "span": {"start": 793, "end": 796},
+                        "span": {"start": 794, "end": 797},
                         "name": "err"
                       }
                     }
@@ -482,17 +482,17 @@
     },
     {
       "kind": "ImplItem",
-      "span": {"start": 910, "end": 1111},
+      "span": {"start": 911, "end": 1112},
       "public": false,
       "attributes": [],
       "generics": [],
       "trait": {
         "kind": "PathType",
-        "span": {"start": 915, "end": 922},
+        "span": {"start": 916, "end": 923},
         "segments": [
           {
             "kind": "Ident",
-            "span": {"start": 915, "end": 922},
+            "span": {"start": 916, "end": 923},
             "name": "Display"
           }
         ],
@@ -500,11 +500,11 @@
       },
       "target": {
         "kind": "PathType",
-        "span": {"start": 927, "end": 935},
+        "span": {"start": 928, "end": 936},
         "segments": [
           {
             "kind": "Ident",
-            "span": {"start": 927, "end": 935},
+            "span": {"start": 928, "end": 936},
             "name": "AppError"
           }
         ],
@@ -513,28 +513,28 @@
       "methods": [
         {
           "kind": "FnItem",
-          "span": {"start": 942, "end": 1109},
+          "span": {"start": 943, "end": 1110},
           "public": false,
           "attributes": [],
           "name": {
             "kind": "Ident",
-            "span": {"start": 945, "end": 954},
+            "span": {"start": 946, "end": 955},
             "name": "to_string"
           },
           "generics": [],
           "receiver": {
             "kind": "SelfParam",
-            "span": {"start": 955, "end": 959},
+            "span": {"start": 956, "end": 960},
             "mutable": false
           },
           "params": [],
           "return_type": {
             "kind": "PathType",
-            "span": {"start": 964, "end": 970},
+            "span": {"start": 965, "end": 971},
             "segments": [
               {
                 "kind": "Ident",
-                "span": {"start": 964, "end": 970},
+                "span": {"start": 965, "end": 971},
                 "name": "String"
               }
             ],
@@ -544,41 +544,41 @@
           "ensures": [],
           "body": {
             "kind": "Block",
-            "span": {"start": 971, "end": 1109},
+            "span": {"start": 972, "end": 1110},
             "stmts": [
               {
                 "kind": "ExprStmt",
-                "span": {"start": 981, "end": 1103},
+                "span": {"start": 982, "end": 1104},
                 "expr": {
                   "kind": "MatchExpr",
-                  "span": {"start": 981, "end": 1103},
-                  "scrutinee": {"kind": "SelfExpr", "span": {"start": 987, "end": 991}},
+                  "span": {"start": 982, "end": 1104},
+                  "scrutinee": {"kind": "SelfExpr", "span": {"start": 988, "end": 992}},
                   "arms": [
                     {
                       "kind": "MatchArm",
-                      "span": {"start": 1006, "end": 1040},
+                      "span": {"start": 1007, "end": 1041},
                       "pattern": {
                         "kind": "ConstructorPattern",
-                        "span": {"start": 1006, "end": 1029},
+                        "span": {"start": 1007, "end": 1030},
                         "path": [
                           {
                             "kind": "Ident",
-                            "span": {"start": 1006, "end": 1014},
+                            "span": {"start": 1007, "end": 1015},
                             "name": "AppError"
                           },
                           {
                             "kind": "Ident",
-                            "span": {"start": 1015, "end": 1020},
+                            "span": {"start": 1016, "end": 1021},
                             "name": "Usage"
                           }
                         ],
                         "args": [
                           {
                             "kind": "PatternArg",
-                            "span": {"start": 1021, "end": 1028},
+                            "span": {"start": 1022, "end": 1029},
                             "pattern": {
                               "kind": "BindingPattern",
-                              "span": {"start": 1021, "end": 1028},
+                              "span": {"start": 1022, "end": 1029},
                               "name": "message"
                             }
                           }
@@ -586,46 +586,46 @@
                       },
                       "body": {
                         "kind": "NameExpr",
-                        "span": {"start": 1033, "end": 1040},
+                        "span": {"start": 1034, "end": 1041},
                         "name": "message"
                       }
                     },
                     {
                       "kind": "MatchArm",
-                      "span": {"start": 1053, "end": 1093},
+                      "span": {"start": 1054, "end": 1094},
                       "pattern": {
                         "kind": "ConstructorPattern",
-                        "span": {"start": 1053, "end": 1067},
+                        "span": {"start": 1054, "end": 1068},
                         "path": [
                           {
                             "kind": "Ident",
-                            "span": {"start": 1053, "end": 1061},
+                            "span": {"start": 1054, "end": 1062},
                             "name": "AppError"
                           },
                           {
                             "kind": "Ident",
-                            "span": {"start": 1062, "end": 1064},
+                            "span": {"start": 1063, "end": 1065},
                             "name": "Io"
                           }
                         ],
                         "args": [
                           {
                             "kind": "PatternArg",
-                            "span": {"start": 1065, "end": 1066},
+                            "span": {"start": 1066, "end": 1067},
                             "pattern": {
                               "kind": "WildcardPattern",
-                              "span": {"start": 1065, "end": 1066}
+                              "span": {"start": 1066, "end": 1067}
                             }
                           }
                         ]
                       },
                       "body": {
                         "kind": "StrExpr",
-                        "span": {"start": 1071, "end": 1093},
+                        "span": {"start": 1072, "end": 1094},
                         "parts": [
                           {
                             "kind": "StrText",
-                            "span": {"start": 1072, "end": 1092},
+                            "span": {"start": 1073, "end": 1093},
                             "value": "cannot read the file"
                           }
                         ]
@@ -641,23 +641,23 @@
     },
     {
       "kind": "FnItem",
-      "span": {"start": 1113, "end": 1532},
+      "span": {"start": 1114, "end": 1533},
       "public": false,
       "attributes": [],
-      "name": {"kind": "Ident", "span": {"start": 1116, "end": 1120}, "name": "main"},
+      "name": {"kind": "Ident", "span": {"start": 1117, "end": 1121}, "name": "main"},
       "generics": [],
       "params": [
         {
           "kind": "Param",
-          "span": {"start": 1121, "end": 1131},
-          "name": {"kind": "Ident", "span": {"start": 1121, "end": 1123}, "name": "io"},
+          "span": {"start": 1122, "end": 1132},
+          "name": {"kind": "Ident", "span": {"start": 1122, "end": 1124}, "name": "io"},
           "type": {
             "kind": "PathType",
-            "span": {"start": 1125, "end": 1131},
+            "span": {"start": 1126, "end": 1132},
             "segments": [
               {
                 "kind": "Ident",
-                "span": {"start": 1125, "end": 1131},
+                "span": {"start": 1126, "end": 1132},
                 "name": "Stdout"
               }
             ],
@@ -666,15 +666,15 @@
         },
         {
           "kind": "Param",
-          "span": {"start": 1133, "end": 1143},
-          "name": {"kind": "Ident", "span": {"start": 1133, "end": 1135}, "name": "fs"},
+          "span": {"start": 1134, "end": 1144},
+          "name": {"kind": "Ident", "span": {"start": 1134, "end": 1136}, "name": "fs"},
           "type": {
             "kind": "PathType",
-            "span": {"start": 1137, "end": 1143},
+            "span": {"start": 1138, "end": 1144},
             "segments": [
               {
                 "kind": "Ident",
-                "span": {"start": 1137, "end": 1143},
+                "span": {"start": 1138, "end": 1144},
                 "name": "FsRead"
               }
             ],
@@ -683,19 +683,19 @@
         },
         {
           "kind": "Param",
-          "span": {"start": 1145, "end": 1155},
+          "span": {"start": 1146, "end": 1156},
           "name": {
             "kind": "Ident",
-            "span": {"start": 1145, "end": 1149},
+            "span": {"start": 1146, "end": 1150},
             "name": "args"
           },
           "type": {
             "kind": "PathType",
-            "span": {"start": 1151, "end": 1155},
+            "span": {"start": 1152, "end": 1156},
             "segments": [
               {
                 "kind": "Ident",
-                "span": {"start": 1151, "end": 1155},
+                "span": {"start": 1152, "end": 1156},
                 "name": "Args"
               }
             ],
@@ -705,23 +705,23 @@
       ],
       "return_type": {
         "kind": "PathType",
-        "span": {"start": 1160, "end": 1180},
+        "span": {"start": 1161, "end": 1181},
         "segments": [
           {
             "kind": "Ident",
-            "span": {"start": 1160, "end": 1166},
+            "span": {"start": 1161, "end": 1167},
             "name": "Result"
           }
         ],
         "args": [
-          {"kind": "UnitType", "span": {"start": 1167, "end": 1169}},
+          {"kind": "UnitType", "span": {"start": 1168, "end": 1170}},
           {
             "kind": "PathType",
-            "span": {"start": 1171, "end": 1179},
+            "span": {"start": 1172, "end": 1180},
             "segments": [
               {
                 "kind": "Ident",
-                "span": {"start": 1171, "end": 1179},
+                "span": {"start": 1172, "end": 1180},
                 "name": "AppError"
               }
             ],
@@ -733,45 +733,45 @@
       "ensures": [],
       "body": {
         "kind": "Block",
-        "span": {"start": 1181, "end": 1532},
+        "span": {"start": 1182, "end": 1533},
         "stmts": [
           {
             "kind": "LetStmt",
-            "span": {"start": 1329, "end": 1360},
+            "span": {"start": 1330, "end": 1361},
             "mutable": false,
             "name": {
               "kind": "Ident",
-              "span": {"start": 1333, "end": 1338},
+              "span": {"start": 1334, "end": 1339},
               "name": "local"
             },
             "value": {
               "kind": "CallExpr",
-              "span": {"start": 1341, "end": 1360},
+              "span": {"start": 1342, "end": 1361},
               "callee": {
                 "kind": "FieldExpr",
-                "span": {"start": 1341, "end": 1355},
+                "span": {"start": 1342, "end": 1356},
                 "base": {
                   "kind": "NameExpr",
-                  "span": {"start": 1341, "end": 1343},
+                  "span": {"start": 1342, "end": 1344},
                   "name": "fs"
                 },
                 "name": {
                   "kind": "Ident",
-                  "span": {"start": 1344, "end": 1355},
+                  "span": {"start": 1345, "end": 1356},
                   "name": "restrict_to"
                 }
               },
               "args": [
                 {
                   "kind": "Arg",
-                  "span": {"start": 1356, "end": 1359},
+                  "span": {"start": 1357, "end": 1360},
                   "value": {
                     "kind": "StrExpr",
-                    "span": {"start": 1356, "end": 1359},
+                    "span": {"start": 1357, "end": 1360},
                     "parts": [
                       {
                         "kind": "StrText",
-                        "span": {"start": 1357, "end": 1358},
+                        "span": {"start": 1358, "end": 1359},
                         "value": "."
                       }
                     ]
@@ -782,46 +782,46 @@
           },
           {
             "kind": "LetStmt",
-            "span": {"start": 1365, "end": 1440},
+            "span": {"start": 1366, "end": 1441},
             "mutable": false,
             "name": {
               "kind": "Ident",
-              "span": {"start": 1369, "end": 1373},
+              "span": {"start": 1370, "end": 1374},
               "name": "path"
             },
             "value": {
               "kind": "TryExpr",
-              "span": {"start": 1376, "end": 1440},
+              "span": {"start": 1377, "end": 1441},
               "operand": {
                 "kind": "CallExpr",
-                "span": {"start": 1376, "end": 1439},
+                "span": {"start": 1377, "end": 1440},
                 "callee": {
                   "kind": "FieldExpr",
-                  "span": {"start": 1376, "end": 1393},
+                  "span": {"start": 1377, "end": 1394},
                   "base": {
                     "kind": "CallExpr",
-                    "span": {"start": 1376, "end": 1387},
+                    "span": {"start": 1377, "end": 1388},
                     "callee": {
                       "kind": "FieldExpr",
-                      "span": {"start": 1376, "end": 1384},
+                      "span": {"start": 1377, "end": 1385},
                       "base": {
                         "kind": "NameExpr",
-                        "span": {"start": 1376, "end": 1380},
+                        "span": {"start": 1377, "end": 1381},
                         "name": "args"
                       },
                       "name": {
                         "kind": "Ident",
-                        "span": {"start": 1381, "end": 1384},
+                        "span": {"start": 1382, "end": 1385},
                         "name": "get"
                       }
                     },
                     "args": [
                       {
                         "kind": "Arg",
-                        "span": {"start": 1385, "end": 1386},
+                        "span": {"start": 1386, "end": 1387},
                         "value": {
                           "kind": "IntExpr",
-                          "span": {"start": 1385, "end": 1386},
+                          "span": {"start": 1386, "end": 1387},
                           "value": "1"
                         }
                       }
@@ -829,42 +829,42 @@
                   },
                   "name": {
                     "kind": "Ident",
-                    "span": {"start": 1388, "end": 1393},
+                    "span": {"start": 1389, "end": 1394},
                     "name": "ok_or"
                   }
                 },
                 "args": [
                   {
                     "kind": "Arg",
-                    "span": {"start": 1394, "end": 1438},
+                    "span": {"start": 1395, "end": 1439},
                     "value": {
                       "kind": "CallExpr",
-                      "span": {"start": 1394, "end": 1438},
+                      "span": {"start": 1395, "end": 1439},
                       "callee": {
                         "kind": "FieldExpr",
-                        "span": {"start": 1394, "end": 1408},
+                        "span": {"start": 1395, "end": 1409},
                         "base": {
                           "kind": "NameExpr",
-                          "span": {"start": 1394, "end": 1402},
+                          "span": {"start": 1395, "end": 1403},
                           "name": "AppError"
                         },
                         "name": {
                           "kind": "Ident",
-                          "span": {"start": 1403, "end": 1408},
+                          "span": {"start": 1404, "end": 1409},
                           "name": "usage"
                         }
                       },
                       "args": [
                         {
                           "kind": "Arg",
-                          "span": {"start": 1409, "end": 1437},
+                          "span": {"start": 1410, "end": 1438},
                           "value": {
                             "kind": "StrExpr",
-                            "span": {"start": 1409, "end": 1437},
+                            "span": {"start": 1410, "end": 1438},
                             "parts": [
                               {
                                 "kind": "StrText",
-                                "span": {"start": 1410, "end": 1436},
+                                "span": {"start": 1411, "end": 1437},
                                 "value": "usage: capabilities <file>"
                               }
                             ]
@@ -879,57 +879,57 @@
           },
           {
             "kind": "LetStmt",
-            "span": {"start": 1445, "end": 1489},
+            "span": {"start": 1446, "end": 1490},
             "mutable": false,
-            "name": {"kind": "Ident", "span": {"start": 1449, "end": 1450}, "name": "n"},
+            "name": {"kind": "Ident", "span": {"start": 1450, "end": 1451}, "name": "n"},
             "value": {
               "kind": "TryExpr",
-              "span": {"start": 1453, "end": 1489},
+              "span": {"start": 1454, "end": 1490},
               "operand": {
                 "kind": "CallExpr",
-                "span": {"start": 1453, "end": 1488},
+                "span": {"start": 1454, "end": 1489},
                 "callee": {
                   "kind": "NameExpr",
-                  "span": {"start": 1453, "end": 1464},
+                  "span": {"start": 1454, "end": 1465},
                   "name": "count_lines"
                 },
                 "args": [
                   {
                     "kind": "Arg",
-                    "span": {"start": 1465, "end": 1470},
+                    "span": {"start": 1466, "end": 1471},
                     "value": {
                       "kind": "NameExpr",
-                      "span": {"start": 1465, "end": 1470},
+                      "span": {"start": 1466, "end": 1471},
                       "name": "local"
                     }
                   },
                   {
                     "kind": "Arg",
-                    "span": {"start": 1472, "end": 1487},
+                    "span": {"start": 1473, "end": 1488},
                     "value": {
                       "kind": "CallExpr",
-                      "span": {"start": 1472, "end": 1487},
+                      "span": {"start": 1473, "end": 1488},
                       "callee": {
                         "kind": "FieldExpr",
-                        "span": {"start": 1472, "end": 1481},
+                        "span": {"start": 1473, "end": 1482},
                         "base": {
                           "kind": "NameExpr",
-                          "span": {"start": 1472, "end": 1476},
+                          "span": {"start": 1473, "end": 1477},
                           "name": "Path"
                         },
                         "name": {
                           "kind": "Ident",
-                          "span": {"start": 1477, "end": 1481},
+                          "span": {"start": 1478, "end": 1482},
                           "name": "from"
                         }
                       },
                       "args": [
                         {
                           "kind": "Arg",
-                          "span": {"start": 1482, "end": 1486},
+                          "span": {"start": 1483, "end": 1487},
                           "value": {
                             "kind": "NameExpr",
-                            "span": {"start": 1482, "end": 1486},
+                            "span": {"start": 1483, "end": 1487},
                             "name": "path"
                           }
                         }
@@ -942,47 +942,47 @@
           },
           {
             "kind": "ExprStmt",
-            "span": {"start": 1494, "end": 1519},
+            "span": {"start": 1495, "end": 1520},
             "expr": {
               "kind": "TryExpr",
-              "span": {"start": 1494, "end": 1519},
+              "span": {"start": 1495, "end": 1520},
               "operand": {
                 "kind": "CallExpr",
-                "span": {"start": 1494, "end": 1518},
+                "span": {"start": 1495, "end": 1519},
                 "callee": {
                   "kind": "FieldExpr",
-                  "span": {"start": 1494, "end": 1504},
+                  "span": {"start": 1495, "end": 1505},
                   "base": {
                     "kind": "NameExpr",
-                    "span": {"start": 1494, "end": 1496},
+                    "span": {"start": 1495, "end": 1497},
                     "name": "io"
                   },
                   "name": {
                     "kind": "Ident",
-                    "span": {"start": 1497, "end": 1504},
+                    "span": {"start": 1498, "end": 1505},
                     "name": "println"
                   }
                 },
                 "args": [
                   {
                     "kind": "Arg",
-                    "span": {"start": 1505, "end": 1517},
+                    "span": {"start": 1506, "end": 1518},
                     "value": {
                       "kind": "StrExpr",
-                      "span": {"start": 1505, "end": 1517},
+                      "span": {"start": 1506, "end": 1518},
                       "parts": [
                         {
                           "kind": "StrText",
-                          "span": {"start": 1506, "end": 1513},
+                          "span": {"start": 1507, "end": 1514},
                           "value": "lines: "
                         },
                         {
                           "kind": "StrHole",
-                          "span": {"start": 1513, "end": 1516},
+                          "span": {"start": 1514, "end": 1517},
                           "path": [
                             {
                               "kind": "Ident",
-                              "span": {"start": 1514, "end": 1515},
+                              "span": {"start": 1515, "end": 1516},
                               "name": "n"
                             }
                           ]
@@ -996,20 +996,20 @@
           },
           {
             "kind": "ExprStmt",
-            "span": {"start": 1524, "end": 1530},
+            "span": {"start": 1525, "end": 1531},
             "expr": {
               "kind": "CallExpr",
-              "span": {"start": 1524, "end": 1530},
+              "span": {"start": 1525, "end": 1531},
               "callee": {
                 "kind": "NameExpr",
-                "span": {"start": 1524, "end": 1526},
+                "span": {"start": 1525, "end": 1527},
                 "name": "Ok"
               },
               "args": [
                 {
                   "kind": "Arg",
-                  "span": {"start": 1527, "end": 1529},
-                  "value": {"kind": "UnitExpr", "span": {"start": 1527, "end": 1529}}
+                  "span": {"start": 1528, "end": 1530},
+                  "value": {"kind": "UnitExpr", "span": {"start": 1528, "end": 1530}}
                 }
               ]
             }

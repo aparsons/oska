@@ -10,7 +10,7 @@ use common::{assert_authority, assert_errors, assert_ok};
 fn file_contents_are_escaped_into_a_page_that_is_written_out() {
     assert_ok(
         "use std.html\n\
-         fn page(docs: FsRead, site: FsWrite) -> Result<(), IoError> {\n    \
+         fn page(docs: DirRead, site: DirWrite) -> Result<(), IoError> {\n    \
          let readme = docs.read_to_string(Path.new(\"README.md\"))?\n    \
          let body = html.Html.raw(html.TrustedHtml.new(\"<pre>\")).concat(html.text(readme))\n    \
          site.write(Path.new(\"index.html\"), body.render())\n}",

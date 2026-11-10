@@ -22,13 +22,13 @@
 //! which is reported failed with the panic as its failure.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use oska_check::builtins;
 use oska_check::program::{Program, Test};
 use oska_syntax::{json_escape, Diagnostic, Span};
 
-use crate::host::{FakeHost, Host, Output};
+use crate::host::{FakeHost, Host, Output, RootHandle};
 use crate::interp::Interpreter;
 use crate::intrinsics::Intrinsic::{HigherOrder, Plain};
 use crate::intrinsics::{debug, Table};
@@ -344,33 +344,41 @@ impl Host for TestHost<'_> {
         self.world().next_random()
     }
 
-    fn canonicalize(&mut self, path: &Path) -> io::Result<PathBuf> {
-        self.world().canonicalize(path)
+    fn open_root(&mut self, path: &Path) -> io::Result<RootHandle> {
+        self.world().open_root(path)
     }
 
-    fn is_symlink(&mut self, path: &Path) -> bool {
-        self.world().is_symlink(path)
+    fn open_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<RootHandle> {
+        self.world().open_beneath(root, names)
     }
 
-    fn read_file(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<String> {
-        self.world().read_file(path, beneath)
+    fn open_file_root(&mut self, path: &Path) -> io::Result<RootHandle> {
+        self.world().open_file_root(path)
     }
 
-    fn write_file(
+    fn open_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<RootHandle> {
+        self.world().open_file_beneath(root, names)
+    }
+
+    fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<String> {
+        self.world().read_file_beneath(root, names)
+    }
+
+    fn write_file_beneath(
         &mut self,
-        path: &Path,
+        root: &RootHandle,
+        names: &[String],
         contents: &str,
-        beneath: Option<&Path>,
     ) -> io::Result<()> {
-        self.world().write_file(path, contents, beneath)
+        self.world().write_file_beneath(root, names, contents)
     }
 
-    fn create_dir(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<()> {
-        self.world().create_dir(path, beneath)
+    fn create_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
+        self.world().create_dir_beneath(root, names)
     }
 
-    fn list_dir(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<Vec<String>> {
-        self.world().list_dir(path, beneath)
+    fn list_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Vec<String>> {
+        self.world().list_dir_beneath(root, names)
     }
 
     fn take_output(&mut self) -> Output {

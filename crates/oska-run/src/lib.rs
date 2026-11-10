@@ -10,7 +10,7 @@
 //!   something the interpreter cannot run yet (`E0380`). [`run`] also
 //!   refuses a capability (`E0370`) or `std` module (`E0371`) that has no
 //!   runtime yet.
-//! - `confine.rs` keeps a restricted filesystem inside its root.
+//! - `confine.rs` keeps a directory or file capability inside its root.
 //! - `prng.rs` is the generator behind `Random`.
 //! - `interp.rs` evaluates the checked program.
 //! - `ops.rs` implements operators, with checked integer arithmetic.
@@ -53,7 +53,7 @@ mod testing;
 mod traits;
 mod value;
 
-pub use host::{FakeHost, Host, Output, RealHost, FAKE_SEED};
+pub use host::{FakeHost, Host, Output, RealHost, RootHandle, FAKE_SEED};
 pub use panics::codes;
 pub use testing::{test, TestOptions, TestReport, TestResult, TestStatus};
 
@@ -189,15 +189,31 @@ pub(crate) fn unimplemented_module(program: &Program) -> Option<Diagnostic> {
 }
 
 /// The refusal for a parameter of `main` that the runtime cannot grant:
-/// `E0370` for a capability with no runtime yet, `E0380` for anything
-/// else.
+/// `E0370` for a directory or file capability, which only attenuation makes, or a
+/// capability with no runtime yet, and `E0380` for anything else.
 fn ungranted(program: &Program) -> Option<Diagnostic> {
     let main = program.functions.get("main")?;
     let param = main
         .params
         .iter()
         .find(|p| p.ty != builtins::ARGS && Capability::granted(&p.ty).is_none())?;
-    let (code, message) = if builtins::is_capability(&param.ty) {
+    let (code, message) = if Capability::implemented(&param.ty) {
+        let (kind, how) = match param.ty.starts_with("File") {
+            true => (
+                "file",
+                "`restrict_to_file` on `FsRead`, `FsWrite` or a directory capability",
+            ),
+            false => ("directory", "`restrict_to` on `Fs`, `FsRead` or `FsWrite`"),
+        };
+        (
+            codes::UNIMPLEMENTED_CAPABILITY,
+            format!(
+                "`oskac run` cannot grant `{}`: only attenuation makes a {kind} capability, \
+                 with {how}",
+                param.ty
+            ),
+        )
+    } else if builtins::is_capability(&param.ty) {
         (
             codes::UNIMPLEMENTED_CAPABILITY,
             format!(

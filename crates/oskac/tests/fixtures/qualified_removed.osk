@@ -1,0 +1,12 @@
+// The removed path methods of `Fs`, `FsRead` and `FsWrite`, called
+// qualified by their type: each gets `E0273`, as `read.read_to_string(..)`
+// does.
+
+fn main(io: Stdout, fs: Fs) -> Result<(), IoError> {
+    let read = fs.read_only()
+    let write = fs.write_only()
+    let text = FsRead.read_to_string(read, Path.new("/etc/hostname"))?
+    FsWrite.write(write, Path.new("out.txt"), text)?
+    let names = Fs.list_dir(fs, Path.new("."))?
+    io.println(text)
+}
