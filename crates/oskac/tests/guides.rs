@@ -11,11 +11,12 @@
 //!   refuses with exactly that code.
 //! - ```` ```oska tests ```` is a complete program whose `test` blocks all
 //!   pass under `oskac test`.
-//! - ```` ```output ```` or ```` ```output -- a b ```` directly after an
-//!   `oska` block is the exact stdout of `oskac run` on it, with the
-//!   arguments after `--`. ```` ```report ```` is the exact stdout of
-//!   `oskac check`. ```` ```test-report ```` is the exact stdout of
-//!   `oskac test`. Their exit codes are not asserted.
+//! - ```` ```console cmd=run ```` directly after an `oska` block is the exact
+//!   stdout of `oskac run` on it. `cmd=check` and `cmd=test` run those
+//!   commands instead. Extra words change the run: `stream=stderr` shows
+//!   stderr, `json` adds `--format=json`, `release` adds `--release`,
+//!   `integration` adds `--integration`, and `-- a b` passes arguments to the program. The
+//!   exit code is not asserted.
 //! - ```` ```help ```` is the exact stdout of `oskac --help`.
 //! - ```` ```sh ```` blocks may use only `oskac` commands and flags that
 //!   `oskac --help` lists. A block that documents something not built yet
@@ -165,14 +166,19 @@ fn all_blocks() -> Vec<Block> {
 /// `file`, so that paths in its output are the same on every machine.
 fn oskac_on(block: &Block, source: &str, args: &[&str], tail: &[String]) -> Output {
     let file = block.option("file").unwrap_or("main.osk");
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
-        "guide-{}-{}",
-        block
-            .page
-            .file_stem()
-            .map_or(String::new(), |s| s.to_string_lossy().into_owned()),
-        block.line
-    ));
+    // One directory per test thread, block, and page, so that tests running
+    // in parallel never write the same file.
+    let page: String = block
+        .page
+        .strip_prefix(repo_root().join("docs/guide"))
+        .unwrap_or(&block.page)
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    let thread = format!("{:?}", std::thread::current().id()).replace(['(', ')'], "");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("guide-{thread}-{page}-{}", block.line));
     std::fs::create_dir_all(&dir).expect("should create the scratch directory");
     std::fs::write(dir.join(file), source).expect("should write the program");
     let mut command = Command::new(env!("CARGO_BIN_EXE_oskac"));
@@ -262,7 +268,7 @@ fn every_oska_block_parses_and_checks_or_is_marked_a_fragment() {
 }
 
 #[test]
-fn every_output_report_and_help_block_matches_the_toolchain() {
+fn every_console_and_help_block_shows_exactly_what_the_toolchain_prints() {
     let help = oskac_help();
     let mut checked = 0;
     for page in guide_pages() {
@@ -276,17 +282,33 @@ fn every_output_report_and_help_block_matches_the_toolchain() {
                     continue;
                 }
                 "help" => help.clone(),
-                language @ ("output" | "report" | "test-report") => {
+                "console" => {
                     let program = last_program.unwrap_or_else(|| {
-                        panic!("{at}: a `{language}` block must follow an `oska` block")
+                        panic!("{at}: a `console` block must follow an `oska` block")
                     });
-                    let (command, tail) = match language {
-                        "output" => ("run", block.program_args()),
-                        "report" => ("check", Vec::new()),
-                        _ => ("test", Vec::new()),
-                    };
-                    let output = oskac_on(program, &program.body, &[command], &tail);
-                    text(&output.stdout)
+                    let command = block.option("cmd").unwrap_or_else(|| {
+                        panic!("{at}: a `console` block needs `cmd=run|check|test`")
+                    });
+                    assert!(
+                        ["run", "check", "test"].contains(&command),
+                        "{at}: unknown cmd={command}"
+                    );
+                    let mut args = vec![command];
+                    if block.has("json") {
+                        args.push("--format=json");
+                    }
+                    if block.has("release") {
+                        args.push("--release");
+                    }
+                    if block.has("integration") {
+                        args.push("--integration");
+                    }
+                    let output = oskac_on(program, &program.body, &args, &block.program_args());
+                    match block.option("stream") {
+                        None | Some("stdout") => text(&output.stdout),
+                        Some("stderr") => text(&output.stderr),
+                        Some(other) => panic!("{at}: unknown stream={other}"),
+                    }
                 }
                 _ => continue,
             };
@@ -360,7 +382,7 @@ fn the_cli_reference_matches_oskac_help() {
     let in_help: BTreeSet<String> = help
         .lines()
         .filter_map(|l| l.trim().strip_prefix("oskac "))
-        .filter(|l| !l.starts_with("--"))
+        .filter(|l| l.starts_with(|c: char| c.is_ascii_alphabetic()))
         .filter_map(|l| l.split_whitespace().next())
         .map(str::to_string)
         .collect();
@@ -368,6 +390,7 @@ fn the_cli_reference_matches_oskac_help() {
         .lines()
         .filter_map(|l| l.strip_prefix("## `oskac "))
         .filter_map(|l| l.split(['`', ' ']).next())
+        .filter(|command| !command.starts_with("--"))
         .map(str::to_string)
         .collect();
     assert_eq!(
@@ -433,7 +456,9 @@ fn every_example_has_a_page_that_shows_its_exact_source() {
             page.display()
         );
         assert!(
-            blocks.iter().any(|b| b.language() == "report"),
+            blocks
+                .iter()
+                .any(|b| b.language() == "console" && b.option("cmd") == Some("check")),
             "{} should show the `oskac check` authority report",
             page.display()
         );
@@ -444,7 +469,15 @@ fn every_example_has_a_page_that_shows_its_exact_source() {
 fn every_diagnostic_code_a_guide_mentions_is_documented() {
     let root = repo_root();
     let mut known = BTreeSet::new();
-    for doc in ["docs/checker.md", "docs/runtime.md", "docs/ast.md"] {
+    // The parser and lexer list their codes in their own module docs, which
+    // `docs/ast.md` points to as the full list.
+    for doc in [
+        "docs/checker.md",
+        "docs/runtime.md",
+        "docs/ast.md",
+        "crates/oska-syntax/src/parser.rs",
+        "crates/oska-syntax/src/lib.rs",
+    ] {
         known.extend(codes_in_text(&read(&root.join(doc))));
     }
     for page in guide_pages() {
