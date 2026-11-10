@@ -7,7 +7,7 @@ Oska has no **ambient authority**. Reading a file, opening a connection, reading
 | Capability | Grants | Runs in this release |
 | --- | --- | --- |
 | `Stdin`, `Stdout`, `Stderr` | The standard streams | Yes |
-| `Fs` | The filesystem. Attenuates to `FsRead`, `FsWrite`, or a single directory. | Yes |
+| `Fs` | The filesystem. Attenuates to `FsRead`, `FsWrite`, or a directory capability: `Dir`, `DirRead`, or `DirWrite`. | Yes |
 | `Env` | Environment variables, which can hold secrets | Yes |
 | `Clock` | The time: `now_millis()` | Yes |
 | `Random` | Pseudo-random numbers: `next_int()` | Yes |
@@ -72,11 +72,12 @@ For a larger example, this site is built by an Oska program, `site/build.osk`. I
 You cannot forge a capability. You get one by being passed it, or by **attenuation**: producing a narrower capability from one you hold. Attenuation never widens authority, and there is no way back from a narrow capability to a wider one.
 
 - `fs.read_only()` gives an `FsRead`, and `fs.write_only()` gives an `FsWrite`.
-- `fs.restrict_to("dir")` confines the filesystem to a directory. The directory must be trusted text, because it decides where the program may reach (a **structural position**).
+- `fs.restrict_to("dir")` gives a `Dir`, a **directory capability** that reaches only `dir` and what is beneath it. `read.restrict_to("dir")` on an `FsRead` gives a `DirRead`, and `write.restrict_to("dir")` on an `FsWrite` gives a `DirWrite`. The directory must be trusted text, because it decides where the program may reach (a **structural position**).
+- A `Dir` gives a `DirRead` with `read_only()` and a `DirWrite` with `write_only()`. Each directory capability narrows to a subdirectory with `restrict_to(path)`, which takes a `Path` and returns its own type.
 - `net.connect_only()` and `net.listen_only()` narrow `Net`. They check, but a program that declares `Net` does not run yet.
 
 ```oska
-fn save(fs: FsWrite, text: String) -> Result<(), IoError> {
+fn save(fs: DirWrite, text: String) -> Result<(), IoError> {
     fs.write(Path.new("note.txt"), text)
 }
 
@@ -89,11 +90,19 @@ fn main(io: Stdout, fs: Fs) -> Result<(), IoError> {
 ```
 
 ```console cmd=check
-fn save: FsWrite (fs)
+fn save: DirWrite (fs)
 fn main: Stdout (io), Fs (fs)
 ```
 
-`FsRead`, `FsWrite`, and `Fs` keep their names after `restrict_to`, so the checker cannot tell a restricted filesystem from an unrestricted one. The runtime does the enforcing. A restricted filesystem resolves every path against its root and refuses an absolute or empty path, one that climbs out with `..`, and one that goes through a symlink to somewhere else. A refusal is an `Err(IoError)`, not a panic.
+A directory capability is a type of its own, so `save`'s signature says it can write only beneath one directory. The runtime does the confining. A directory capability resolves every path against its root and refuses an absolute or empty path, one that climbs out with `..`, and one that goes through a symlink to somewhere else. A refusal is an `Err(IoError)`, not a panic. A root that cannot be opened, because it is missing or a symlink, gives a directory capability whose every operation returns an `IoError` naming the root.
+
+Narrowing an existing directory capability takes a `Path`, which may come from untrusted text through `Path.from`, because the result stays beneath the same root. Per-user confinement needs no trust assertion:
+
+```oska
+fn avatar(uploads: DirRead, user: Untrusted<String>) -> Result<Untrusted<String>, IoError> {
+    uploads.restrict_to(Path.from(user)).read_to_string(Path.new("avatar.txt"))
+}
+```
 
 The in-memory filesystem in a test confines the same way:
 

@@ -273,7 +273,7 @@ fn untrusted_text_is_accepted_as_a_path_under_a_restricted_capability() {
 #[test]
 fn untrusted_text_is_rejected_as_the_restricted_directory() {
     assert_errors(
-        "fn f(fs: Fs, dir: Untrusted<String>) -> Fs {\n    fs.restrict_to(dir)\n}",
+        "fn f(fs: Fs, dir: Untrusted<String>) -> Dir {\n    fs.restrict_to(dir)\n}",
         &[("E0300", "dir")],
     );
 }
@@ -281,7 +281,7 @@ fn untrusted_text_is_rejected_as_the_restricted_directory() {
 #[test]
 fn untrusted_text_is_rejected_as_the_restricted_directory_of_a_read_capability() {
     assert_errors(
-        "fn f(fs: FsRead, dir: Untrusted<String>) -> FsRead {\n    fs.restrict_to(dir)\n}",
+        "fn f(fs: FsRead, dir: Untrusted<String>) -> DirRead {\n    fs.restrict_to(dir)\n}",
         &[("E0300", "dir")],
     );
 }

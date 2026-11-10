@@ -141,10 +141,10 @@ fn main(io: Stdout, args: Args) -> Result<(), IoError> {
 
 ## Paths
 
-`Path.from` accepts untrusted text, because the protection for paths comes from attenuation and not from trust tracking. Restrict the filesystem before you read a path a user chose:
+`Path.from` accepts untrusted text, because the protection for paths comes from attenuation and not from trust tracking. Attenuate to a directory capability before you read a path a user chose:
 
 ```oska
-fn read_user_file(fs: FsRead, requested: Untrusted<String>) -> Result<Int, IoError> {
+fn read_user_file(fs: DirRead, requested: Untrusted<String>) -> Result<Int, IoError> {
     let text = fs.read_to_string(Path.from(requested))?
     Ok(text.len())
 }

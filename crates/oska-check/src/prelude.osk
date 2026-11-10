@@ -46,14 +46,22 @@ impl Stderr {
     pub fn println(self, line: Untrusted<String>) -> Result<(), IoError>
 }
 
+// The filesystem capabilities `main` declares. Their `restrict_to`
+// attenuates to a directory capability for `dir`, a trusted path: a
+// structural position, so untrusted text can never choose which part of
+// the filesystem a program gets (ADR 0008). Attenuation never fails: a
+// root that cannot be opened, because it is missing, the wrong kind, or a
+// symlink, gives a capability whose every operation returns an `IoError`
+// naming the root and the reason.
+//
+// The path-taking methods of `FsRead` and `FsWrite` reach anywhere the
+// process may. They are going away: read and write through a directory
+// capability instead.
 #[capability]
 pub struct Fs { handle: Int }
 
 impl Fs {
-    // Confine to `dir`. It may also name a single file: the result then
-    // reaches only that file, as `Path.new(".")`. The same holds for
-    // `FsRead` and `FsWrite`.
-    pub fn restrict_to(self, dir: String) -> Fs
+    pub fn restrict_to(self, dir: String) -> Dir
     pub fn read_only(self) -> FsRead
     pub fn write_only(self) -> FsWrite
 }
@@ -62,12 +70,8 @@ impl Fs {
 pub struct FsRead { handle: Int }
 
 impl FsRead {
-    pub fn restrict_to(self, dir: String) -> FsRead
+    pub fn restrict_to(self, dir: String) -> DirRead
     pub fn read_to_string(self, path: Path) -> Result<Untrusted<String>, IoError>
-    // The names of the entries of the directory at `path` (`"."` is the
-    // root itself), sorted so the order is the same on every host. The
-    // directory is confined like any read. A name comes from outside the
-    // program, so it is untrusted.
     pub fn list_dir(self, path: Path) -> Result<List<Untrusted<String>>, IoError>
 }
 
@@ -75,14 +79,53 @@ impl FsRead {
 pub struct FsWrite { handle: Int }
 
 impl FsWrite {
-    pub fn restrict_to(self, dir: String) -> FsWrite
+    pub fn restrict_to(self, dir: String) -> DirWrite
+    pub fn write(self, path: Path, contents: Untrusted<String>) -> Result<(), IoError>
+    pub fn create_dir(self, path: Path) -> Result<(), IoError>
+}
+
+// A directory capability: it reaches only its root directory and
+// everything beneath it. A `Path` given to one is relative to the root,
+// and may come from untrusted text, through `Path.from`: an empty or
+// absolute path, `..` that climbs above the root, and a symlink anywhere
+// beneath the root are refused with an `IoError`. `..` that stays inside
+// the root is resolved as written.
+//
+// `restrict_to` narrows to the subdirectory at `dir`, which stays under
+// the same root, so its `Path` may be untrusted. It may also name a single
+// file, which the result then reaches as `Path.new(".")`.
+#[capability]
+pub struct Dir { handle: Int }
+
+impl Dir {
+    pub fn restrict_to(self, dir: Path) -> Dir
+    pub fn read_only(self) -> DirRead
+    pub fn write_only(self) -> DirWrite
+}
+
+#[capability]
+pub struct DirRead { handle: Int }
+
+impl DirRead {
+    pub fn restrict_to(self, dir: Path) -> DirRead
+    pub fn read_to_string(self, path: Path) -> Result<Untrusted<String>, IoError>
+    // The names of the entries of the directory at `path` (`"."` is the
+    // root itself), sorted so the order is the same on every host. A name
+    // comes from outside the program, so it is untrusted.
+    pub fn list_dir(self, path: Path) -> Result<List<Untrusted<String>>, IoError>
+}
+
+#[capability]
+pub struct DirWrite { handle: Int }
+
+impl DirWrite {
+    pub fn restrict_to(self, dir: Path) -> DirWrite
     // Create the file at `path`, or replace what it holds, with
-    // `contents`.
+    // `contents`. A symlink at `path` is never followed.
     pub fn write(self, path: Path, contents: Untrusted<String>) -> Result<(), IoError>
     // Create the directory at `path`; its parent must exist. A directory
     // already there is kept, with everything in it, and anything else
-    // there is an error. Confined like a write: `path` ends in a plain
-    // name, and a symlink there is never followed.
+    // there is an error. A symlink at `path` is never followed.
     pub fn create_dir(self, path: Path) -> Result<(), IoError>
 }
 

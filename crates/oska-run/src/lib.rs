@@ -189,15 +189,24 @@ pub(crate) fn unimplemented_module(program: &Program) -> Option<Diagnostic> {
 }
 
 /// The refusal for a parameter of `main` that the runtime cannot grant:
-/// `E0370` for a capability with no runtime yet, `E0380` for anything
-/// else.
+/// `E0370` for a directory capability, which only attenuation makes, or a
+/// capability with no runtime yet, and `E0380` for anything else.
 fn ungranted(program: &Program) -> Option<Diagnostic> {
     let main = program.functions.get("main")?;
     let param = main
         .params
         .iter()
         .find(|p| p.ty != builtins::ARGS && Capability::granted(&p.ty).is_none())?;
-    let (code, message) = if builtins::is_capability(&param.ty) {
+    let (code, message) = if Capability::implemented(&param.ty) {
+        (
+            codes::UNIMPLEMENTED_CAPABILITY,
+            format!(
+                "`oskac run` cannot grant `{}`: only attenuation makes a directory capability, \
+                 with `restrict_to` on `Fs`, `FsRead` or `FsWrite`",
+                param.ty
+            ),
+        )
+    } else if builtins::is_capability(&param.ty) {
         (
             codes::UNIMPLEMENTED_CAPABILITY,
             format!(

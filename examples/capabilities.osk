@@ -1,7 +1,7 @@
 // Capabilities are ordinary values. `count_lines` can read files under the
 // path it is given and nothing else: no network, no writes, no env access.
 
-fn count_lines(fs: FsRead, path: Path) -> Result<Int, IoError> {
+fn count_lines(fs: DirRead, path: Path) -> Result<Int, IoError> {
     // File contents are untrusted: `text` is Untrusted<String>.
     let text = fs.read_to_string(path)?
     // Counting converts to Int, a non-text type, so the result is trusted.

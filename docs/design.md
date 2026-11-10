@@ -128,7 +128,7 @@ The checker is `oskac check`, built as its own crate, `oska-check`, on top of th
   - Checking continues past an error in one function and moves on to the others.
   - An expression that fails to check gets an error type. The error type suppresses follow-on errors that would only repeat the first one.
 - `oskac check --format=json` emits `{"diagnostics": [...], "functions": [...]}`. For each function it reports:
-  - `authority`: the built-in capabilities the function can reach. `cap` structs and type arguments are expanded, and attenuated capabilities keep their written names, such as `FsRead`.
+  - `authority`: the built-in capabilities the function can reach. `cap` structs and type arguments are expanded, and each capability keeps its written name, such as `FsRead` or the directory capability `DirRead` that `restrict_to` gives.
   - `via`: the capabilities each parameter supplies.
   - `pure`: whether the function is pure.
 

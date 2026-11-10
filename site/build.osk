@@ -35,21 +35,22 @@ use std.html
 // ---- What the site is built from -------------------------------------------
 
 // What the generator may read: the `docs/` tree, and three files beside
-// it. Each is a filesystem restricted on its own, so nothing else in the
-// repository can be reached.
+// it. Each is a directory capability of its own (for a file, for now,
+// confined to that one file), so nothing else in the repository can be
+// reached.
 cap struct Sources {
-    docs: FsRead,
-    readme: FsRead,
-    glossary: FsRead,
-    style: FsRead,
-    manifest: FsRead,
-    search: FsRead,
+    docs: DirRead,
+    readme: DirRead,
+    glossary: DirRead,
+    style: DirRead,
+    manifest: DirRead,
+    search: DirRead,
     // `site/agent-setup/`: the agent-setup prompt and its templates.
-    setup: FsRead,
+    setup: DirRead,
     // `site/authority.txt`: the authority report `oskac check
     // site/build.osk` printed for this program, which the Pages workflow
     // writes just before the build. Without it there is no authority page.
-    authority: FsRead,
+    authority: DirRead,
 }
 
 fn main(read: FsRead, write: FsWrite) -> Result<(), IoError> {
@@ -64,10 +65,10 @@ fn main(read: FsRead, write: FsWrite) -> Result<(), IoError> {
         authority: read.restrict_to("site/authority.txt"),
     )
     // Writing is narrowed to the repository before anything is written,
-    // then to `_site` once it exists (a restriction needs its directory).
+    // then to `_site` once it exists (a narrowing needs its directory).
     let repo = write.restrict_to(".")
     repo.create_dir(Path.new("_site"))?
-    build(sources, repo.restrict_to("_site"))
+    build(sources, repo.restrict_to(Path.new("_site")))
 }
 
 // One Markdown file the site publishes.
@@ -109,7 +110,7 @@ struct Site {
 }
 
 // Every file of the site.
-fn build(sources: Sources, site: FsWrite) -> Result<(), IoError> {
+fn build(sources: Sources, site: DirWrite) -> Result<(), IoError> {
     let all = gather(sources)?
     for section in all.sections {
         site.create_dir(Path.from(section.dir))?
@@ -312,7 +313,7 @@ struct Page {
 
 // Write `page`, in the site's layout, to its path under `_site/`, and its
 // Markdown copy beside it.
-fn publish(site: FsWrite, all: Site, page: Page) -> Result<(), IoError> {
+fn publish(site: DirWrite, all: Site, page: Page) -> Result<(), IoError> {
     site.write(Path.from(page.path), layout(all, page).render())?
     site.write(Path.from(md_path(page.path)), page.md)
 }
@@ -1977,7 +1978,7 @@ fn setup_group(all: Site) -> Untrusted<String> {
 
 // The raw files: the prompt as plain text (`agent-setup.md` is the page's
 // own copy), and every other file under `agent-setup/`.
-fn publish_setup(site: FsWrite, all: Site) -> Result<(), IoError> {
+fn publish_setup(site: DirWrite, all: Site) -> Result<(), IoError> {
     site.write(Path.new("agent-setup.txt"), asset_text(all, "prompt.md"))?
     site.create_dir(Path.new("agent-setup"))?
     for asset in all.assets {
