@@ -99,12 +99,14 @@ throwaway_key() {
   ssh-keygen -q -t ed25519 -N '' -C "$1" -f "$1"
 }
 
-# Assembles and signs ./out/v1.2.3 with the key ./key.
+# Assembles and signs ./out/<tag> (default v1.2.3) with the key ./key,
+# making the fake binaries and the key if they are not there yet.
 signed_release() {
-  fake_builds
-  throwaway_key key
-  "$here/assemble.sh" v1.2.3 builds out
-  "$here/sign.sh" out/v1.2.3 key key.pub
+  local tag=${1:-v1.2.3}
+  [ -d builds ] || fake_builds
+  [ -f key ] || throwaway_key key
+  "$here/assemble.sh" "$tag" builds out
+  "$here/sign.sh" "out/$tag" key key.pub
 }
 
 test_a_signed_release_verifies_with_its_public_key() {
@@ -158,6 +160,76 @@ test_sign_refuses_a_key_that_does_not_match_the_published_one() {
     fail "signed with a key other than the published one"
   fi
   [ ! -e out/v1.2.3/SHA256SUMS.sig ] || fail "left a signature behind"
+}
+
+test_stage_site_publishes_releases_and_points_latest_at_the_newest() {
+  signed_release v1.2.3
+  signed_release v1.10.0
+  signed_release v2.0.0-rc.1
+  mkdir site
+  OSKA_SITE_URL=https://example.test "$here/stage-site.sh" out site key.pub
+  cmp key.pub site/oska-release.pub || fail "public key not published"
+  for tag in v1.2.3 v1.10.0 v2.0.0-rc.1; do
+    "$here/verify.sh" "site/releases/$tag" key.pub
+  done
+  cat >expected.json <<'JSON'
+{
+  "version": "1.10.0",
+  "tag": "v1.10.0",
+  "release_url": "https://example.test/releases/v1.10.0/",
+  "checksums_url": "https://example.test/releases/v1.10.0/SHA256SUMS",
+  "signature_url": "https://example.test/releases/v1.10.0/SHA256SUMS.sig",
+  "signing_key_url": "https://example.test/oska-release.pub",
+  "signing_namespace": "oska-release",
+  "installers": {
+    "sh": "https://example.test/install.sh",
+    "ps1": "https://example.test/install.ps1"
+  },
+  "binaries": {
+    "linux-aarch64": "https://example.test/releases/v1.10.0/oskac-linux-aarch64",
+    "linux-x86_64": "https://example.test/releases/v1.10.0/oskac-linux-x86_64",
+    "macos-aarch64": "https://example.test/releases/v1.10.0/oskac-macos-aarch64",
+    "macos-x86_64": "https://example.test/releases/v1.10.0/oskac-macos-x86_64",
+    "windows-x86_64": "https://example.test/releases/v1.10.0/oskac-windows-x86_64.exe"
+  }
+}
+JSON
+  diff <(jq -S . expected.json) <(jq -S . site/latest.json) || fail "latest.json differs"
+}
+
+test_stage_site_keeps_what_the_generator_wrote_in_latest_json() {
+  signed_release v1.2.3
+  mkdir site
+  printf '{"docs": "main", "version": "stale"}\n' >site/latest.json
+  "$here/stage-site.sh" out site key.pub
+  [ "$(jq -r .docs site/latest.json)" = main ] || fail "lost the generator's field"
+  [ "$(jq -r .version site/latest.json)" = 1.2.3 ] || fail "release version did not win"
+  [ "$(jq -r '.binaries["linux-x86_64"]' site/latest.json)" = \
+    https://oskalang.dev/releases/v1.2.3/oskac-linux-x86_64 ] || fail "wrong default site URL"
+}
+
+test_stage_site_refuses_a_release_that_does_not_verify() {
+  signed_release v1.2.3
+  printf 'evil\n' >>out/v1.2.3/oskac-windows-x86_64.exe
+  mkdir site
+  if "$here/stage-site.sh" out site key.pub; then
+    fail "staged a tampered release"
+  fi
+  [ ! -e site/releases/v1.2.3/oskac-windows-x86_64.exe ] || fail "copied the tampered binary"
+}
+
+test_stage_site_without_releases_or_key_stages_nothing() {
+  mkdir site out
+  "$here/stage-site.sh" out site missing.pub
+  [ -z "$(ls -A site)" ] || fail "staged something from nothing"
+}
+
+test_stage_site_refuses_releases_without_a_key_to_check_them() {
+  signed_release v1.2.3
+  mkdir site
+  if "$here/stage-site.sh" out site missing.pub; then
+    fail "staged releases it could not verify"
+  fi
 }
 
 for t in $(declare -F | awk '{print $3}' | grep '^test_'); do
