@@ -571,3 +571,100 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod access_tests {
+    //! The checker gives `FsRead` no `write` and `FsWrite` no
+    //! `read_to_string`, so no source program reaches the runtime's own
+    //! access check. It is tested on checked programs built by hand, in
+    //! which a read-only filesystem calls `write` and a write-only one
+    //! `read_to_string` anyway.
+
+    use oska_check::program::{Callee, Expr, ExprKind, Function, Param, Program};
+    use oska_syntax::Span;
+
+    use crate::host::FakeHost;
+    use crate::interp::Interpreter;
+    use crate::value::{Access, Capability, FsCap, Root, Value};
+
+    fn at(kind: ExprKind) -> Expr {
+        Expr {
+            kind,
+            span: Span { start: 0, end: 1 },
+        }
+    }
+
+    fn call(name: &str, args: Vec<Expr>) -> Expr {
+        at(ExprKind::Call {
+            callee: Callee::Intrinsic(name.to_string()),
+            args,
+        })
+    }
+
+    /// `fn main(fs) { fs.<method>(Path.new("notes.txt"), extra...) }`.
+    fn calling(method: &str, extra: Vec<Expr>) -> Program {
+        let path = call("Path.new", vec![at(ExprKind::Str("notes.txt".to_string()))]);
+        let args = [at(ExprKind::Local(0)), path].into_iter().chain(extra);
+        let mut program = Program::default();
+        program.functions.insert(
+            "main".to_string(),
+            Function {
+                name: "main".to_string(),
+                receiver: false,
+                params: vec![Param {
+                    name: "fs".to_string(),
+                    ty: String::new(),
+                    binds: true,
+                }],
+                body: call(method, args.collect()),
+            },
+        );
+        program
+    }
+
+    /// What `program`'s `main` returns, given a filesystem with `access`,
+    /// run on `host`.
+    fn run_with(program: &Program, access: Access, host: &mut FakeHost) -> Value {
+        let fs = Value::Capability(Capability::Fs(FsCap {
+            root: Root::Anywhere,
+            access,
+        }));
+        Interpreter::new(program, host)
+            .call(&program.functions["main"], vec![fs])
+            .expect("no panic")
+    }
+
+    fn io_error_message(result: &Value) -> &str {
+        assert!(result.is_variant("Err"), "{result:?}");
+        result.fields()[0].fields()[0].as_str()
+    }
+
+    #[test]
+    fn a_read_only_filesystem_refuses_to_write_at_runtime() {
+        let program = calling("FsWrite.write", vec![at(ExprKind::Str("x".to_string()))]);
+        let mut host = FakeHost::new();
+        let result = run_with(&program, Access::Read, &mut host);
+        assert_eq!(
+            io_error_message(&result),
+            "this filesystem capability cannot write"
+        );
+        assert_eq!(host.file("notes.txt"), None, "nothing was written");
+        let mut host = FakeHost::new();
+        let result = run_with(&program, Access::ReadWrite, &mut host);
+        assert!(result.is_variant("Ok"), "{result:?}");
+        assert_eq!(host.file("notes.txt"), Some("x"));
+    }
+
+    #[test]
+    fn a_write_only_filesystem_refuses_to_read_at_runtime() {
+        let program = calling("FsRead.read_to_string", Vec::new());
+        let mut host = FakeHost::new().with_file("notes.txt", "secret");
+        let result = run_with(&program, Access::Write, &mut host);
+        assert_eq!(
+            io_error_message(&result),
+            "this filesystem capability cannot read"
+        );
+        let result = run_with(&program, Access::ReadWrite, &mut host);
+        assert_eq!(result, Value::ok(Value::str("secret")));
+    }
+}
