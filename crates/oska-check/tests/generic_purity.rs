@@ -521,3 +521,160 @@ fn a_closure_capturing_a_list_typed_later_with_plain_data_is_fine() {
         "fn f() -> fn() -> Int {\n    var xs = []\n    let g = || xs.len()\n    xs.push(1)\n    g\n}\n",
     );
 }
+
+// ---- Other routes to an instantiation ----------------------------------------
+
+#[test]
+fn a_generic_function_taken_as_a_value_is_covered() {
+    let src = speak(&format!(
+        "{CHECK}\nfn main(out: Stdout) {{\n    let f = check\n    let n = f(out)\n}}\n"
+    ));
+    assert_errors(&src, &[("E0274", "check")]);
+}
+
+#[test]
+fn a_generic_function_handed_to_map_is_covered() {
+    let src = speak(&format!(
+        "{CHECK}\nfn main(out: Stdout) {{\n    let ns = [out].map(check)\n}}\n"
+    ));
+    assert_errors(&src, &[("E0274", "check")]);
+}
+
+#[test]
+fn a_qualified_trait_call_through_a_generic_impl_is_covered() {
+    let src = wrapped("fn main(out: Stdout) {\n    let n = Shape.scale(W(x: out), 2)\n}\n");
+    assert_errors(&src, &[("E0274", "Shape.scale(W(x: out), 2)")]);
+}
+
+#[test]
+fn a_bound_satisfied_with_a_callers_parameter_passes_the_requirement_on() {
+    let src = wrapped(
+        "fn outer<U: Speak>(u: U) -> Int {\n    use_shape(W(x: u))\n}\n\
+         fn main(out: Stdout) {\n    let n = outer(out)\n}\n",
+    );
+    assert_errors(&src, &[("E0274", "outer")]);
+}
+
+#[test]
+fn a_generic_traits_parameter_used_in_its_contract_is_covered() {
+    let src = speak(
+        "trait Conv<X: Speak> {\n    fn conv(self, x: X) -> Int\n        requires x.ok()\n}\n\
+         impl Conv<Stdout> for Int {\n    fn conv(self, x: Stdout) -> Int { 1 }\n}\n",
+    );
+    assert_errors(&src, &[("E0274", "Conv<Stdout>")]);
+}
+
+#[test]
+fn a_trait_methods_own_parameter_used_in_its_contract_is_covered() {
+    let src = speak(
+        "trait Tr {\n    fn m<U: Speak>(self, u: U) -> Int\n        requires u.ok()\n}\n\
+         impl Tr for Int {\n    fn m<U: Speak>(self, u: U) -> Int { 1 }\n}\n\
+         fn main(out: Stdout) {\n    let n = 5.m(out)\n}\n",
+    );
+    assert_errors(&src, &[("E0274", "m")]);
+}
+
+#[test]
+fn what_an_impl_methods_own_parameter_assumes_binds_the_trait_method() {
+    let src = speak(
+        "fn pure_fn(f: fn() -> Bool) -> Bool {\n    f()\n}\n\
+         trait Tr {\n    fn m<U: Speak>(self, u: U) -> Bool\n}\n\
+         impl Tr for Int {\n    fn m<U: Speak>(self, u: U) -> Bool { pure_fn(|| u.ok()) }\n}\n\
+         fn go<V: Tr>(v: V, out: Stdout) -> Bool {\n    v.m(out)\n}\n",
+    );
+    assert_errors(&src, &[("E0274", "m")]);
+}
+
+#[test]
+fn a_default_method_through_a_generic_impl_is_covered() {
+    let src = speak(
+        "struct W<T> { x: T }\n\
+         trait Later {\n    fn ok(self) -> Bool\n    \
+         fn later(self) -> fn() -> Bool {\n        || self.ok()\n    }\n}\n\
+         impl<T: Speak> Later for W<T> {\n    fn ok(self) -> Bool { self.x.ok() }\n}\n\
+         fn main(out: Stdout) {\n    let g = W(x: out).later()\n}\n",
+    );
+    assert_errors(&src, &[("E0274", "later")]);
+}
+
+#[test]
+fn an_ensures_on_a_generic_result_is_covered() {
+    let src = speak(
+        "fn mk<T: Speak>(x: T) -> T\n    ensures |r| r.ok()\n{\n    x\n}\n\
+         fn main(out: Stdout) {\n    let o = mk(out)\n}\n",
+    );
+    assert_errors(&src, &[("E0274", "mk")]);
+}
+
+#[test]
+fn a_cap_struct_type_argument_is_capability_bearing() {
+    let src = speak(&format!(
+        "{CHECK}\ncap struct C {{ out: Stdout }}\n\
+         impl Speak for C {{\n    fn ok(self) -> Bool {{ self.out.ok() }}\n}}\n\
+         fn main(out: Stdout) {{\n    let n = check(C(out: out))\n}}\n"
+    ));
+    assert_errors(&src, &[("E0274", "check")]);
+}
+
+#[test]
+fn a_cap_fn_type_argument_is_capability_bearing() {
+    let src = speak(
+        "fn hold<F>(f: F) -> fn() -> F {\n    || f\n}\n\
+         fn main(out: Stdout) {\n    let g = hold(|| out.ok())\n}\n",
+    );
+    assert_errors(&src, &[("E0274", "hold")]);
+}
+
+#[test]
+fn a_late_typed_capture_in_main_is_covered() {
+    let src = speak(&format!(
+        "{CHECK}\nfn main(out: Stdout) {{\n    var o = None\n    let g = || match o {{\n        \
+         Some(x) => check(x)\n        None => 0\n    }}\n    o = Some(out)\n    let n = g()\n}}\n"
+    ));
+    assert_errors(&src, &[("E0274", "check")]);
+}
+
+#[test]
+fn a_closure_kept_in_a_list_a_field_or_an_option_is_covered() {
+    for (ret, value) in [
+        ("List<fn() -> Bool>", "[|| x.ok()]"),
+        ("H", "H(f: || x.ok())"),
+        ("Option<fn() -> Bool>", "Some(|| x.ok())"),
+        ("fn() -> Bool", "id(|| x.ok())"),
+    ] {
+        let src = speak(&format!(
+            "struct H {{ f: fn() -> Bool }}\nfn id<U>(u: U) -> U {{\n    u\n}}\n\
+             fn wrap<T: Speak>(x: T) -> {ret} {{\n    {value}\n}}\n\
+             fn main(out: Stdout) {{\n    let h = wrap(out)\n}}\n"
+        ));
+        assert_errors(&src, &[("E0274", "wrap")]);
+    }
+}
+
+#[test]
+fn a_closure_reached_through_a_var_assigned_in_a_loop_is_covered() {
+    let src = speak(
+        "fn pure_fn(f: fn() -> Bool) -> Bool {\n    f()\n}\n\
+         fn wrap<T: Speak>(x: T) -> Bool {\n    var g = || true\n    var h = || g()\n    \
+         for i in [1, 2] {\n        h = || g()\n        g = || x.ok()\n    }\n    pure_fn(h)\n}\n\
+         fn main(out: Stdout) {\n    let b = wrap(out)\n}\n",
+    );
+    assert_errors(&src, &[("E0274", "wrap")]);
+}
+
+#[test]
+fn a_task_spawned_with_a_parameter_accepts_a_capability() {
+    // `spawn` takes a `cap fn`, so the closure assumes nothing.
+    assert_ok(&speak(
+        "fn par<T: Speak>(s: Scope, x: T) -> Int {\n    let t = s.spawn(|| x.ok())\n    1\n}\n\
+         fn main(out: Stdout) {\n    let n = scope |s| {\n        par(s, out)\n    }\n}\n",
+    ));
+}
+
+#[test]
+fn a_scoped_closure_handed_to_a_generic_that_keeps_it_unscoped_is_covered() {
+    let src = "fn keep<F>(f: F) -> fn() -> F {\n    || f\n}\n\
+               fn main(out: Stdout) {\n    let n = scope |s| {\n        \
+               let h = keep(|| s.spawn(|| 1))\n        1\n    }\n}\n";
+    assert_errors(src, &[("E0274", "keep")]);
+}

@@ -99,6 +99,10 @@ pub fn module(src: &str, module: &Module, items: &Items, resolutions: &Resolutio
         line_starts: std::iter::once(0)
             .chain(src.match_indices('\n').map(|(at, _)| at + 1))
             .collect(),
+        char_tails: src
+            .char_indices()
+            .flat_map(|(at, c)| at + 1..at + c.len_utf8())
+            .collect(),
         ..Program::default()
     };
     // Each trait the module declares, by name, for its default methods.
@@ -114,7 +118,14 @@ pub fn module(src: &str, module: &Module, items: &Items, resolutions: &Resolutio
         match &item.kind {
             ItemKind::Fn(f) => {
                 let name = f.name.name.clone();
-                lowering.function(&mut program, name, f, f, items.fns.get(&f.name.name));
+                let contracts = lowering.contracts(f);
+                lowering.function(
+                    &mut program,
+                    name,
+                    f,
+                    contracts,
+                    items.fns.get(&f.name.name),
+                );
             }
             ItemKind::Use(u) => {
                 if let (Some(first), Some(last)) = (u.path.first(), u.path.last()) {
@@ -170,7 +181,8 @@ pub fn module(src: &str, module: &Module, items: &Items, resolutions: &Resolutio
                         .and_then(|i| traits.get(i.trait_name.as_str()))
                         .and_then(|methods| fn_decls(methods).find(|d| d.name.name == *method))
                         .unwrap_or(f);
-                    lowering.function(&mut program, name, f, declared, sig);
+                    let contracts = lowering.contracts(declared);
+                    lowering.function(&mut program, name, f, contracts, sig);
                 }
             }
             ItemKind::Test(test) => program.tests.push(super::Test {
@@ -212,15 +224,15 @@ struct Lowering<'a> {
 
 impl Lowering<'_> {
     /// Lower `f`, with signature `sig`, into `program` as `name`, when it
-    /// has a body. It carries the contracts `contracts_of` declares: `f`
-    /// itself, or for a method of `impl Trait for Type`, the trait's
-    /// declaration of it (the impl declares none of its own, `E0218`).
+    /// has a body. It carries `contracts`: those `f` declares, or for a
+    /// method of `impl Trait for Type`, those of the trait's declaration
+    /// of it (the impl declares none of its own, `E0218`).
     fn function(
         &self,
         program: &mut Program,
         name: String,
         f: &FnDecl,
-        contracts_of: &FnDecl,
+        contracts: Contracts,
         sig: Option<&FnSig>,
     ) {
         let Some(body) = &f.body else {
@@ -242,7 +254,7 @@ impl Lowering<'_> {
             name: name.clone(),
             receiver: f.receiver.is_some(),
             params,
-            contracts: self.contracts(contracts_of),
+            contracts,
             body: self.block(body),
         };
         program.functions.insert(name, function);

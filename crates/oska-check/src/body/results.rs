@@ -18,14 +18,7 @@ impl Body<'_, '_, '_> {
     /// never crosses between `Option` and `Result` (`E0243`). A `Result`'s
     /// error type goes through [`Body::propagate_error`].
     pub(super) fn try_expr(&mut self, expr: &Expr, operand: &Expr) -> Ty {
-        if self.leaving_contract() {
-            self.error(
-                codes::LEAVES_CONTRACT,
-                "a contract is a condition, not a function body: `?` has nothing to leave here"
-                    .to_string(),
-                expr.span,
-            );
-            self.infer(operand);
+        if self.refuse_leaving_contract("`?`", expr.span, Some(operand)) {
             return Ty::Error;
         }
         let ty = self.infer(operand);

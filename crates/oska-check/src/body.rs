@@ -525,12 +525,6 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
     /// A `requires` or `ensures` condition: it must be `Bool`, and while
     /// it is checked only pure functions may be called.
-    /// Whether a `?` or `return` here would leave a contract: one is being
-    /// checked, and no closure of its own is open to take the exit.
-    pub(super) fn leaving_contract(&self) -> bool {
-        self.in_contract && self.closures.is_empty()
-    }
-
     fn contract(&mut self, keyword: &str, cond: &Expr) {
         let outer = std::mem::replace(&mut self.in_contract, true);
         let ty = self.infer(cond);
@@ -543,6 +537,32 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 cond.span,
             );
         }
+    }
+
+    /// Report `exit` (`?` or `return`, at `span`) when it would leave a
+    /// contract: one is being checked, and no closure of its own is open
+    /// to take the exit (`E0282`). Its `operand` is still checked, so
+    /// there is one diagnostic. Returns whether it was reported.
+    pub(super) fn refuse_leaving_contract(
+        &mut self,
+        exit: &str,
+        span: Span,
+        operand: Option<&Expr>,
+    ) -> bool {
+        if !self.in_contract || !self.closures.is_empty() {
+            return false;
+        }
+        self.error(
+            codes::LEAVES_CONTRACT,
+            format!(
+                "a contract is a condition, not a function body: {exit} has nothing to leave here"
+            ),
+            span,
+        );
+        if let Some(operand) = operand {
+            self.infer(operand);
+        }
+        true
     }
 
     // ---- Locals ---------------------------------------------------------
@@ -1797,19 +1817,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     body.check(value, &ty);
                 });
             }
-            StmtKind::Return(value) if self.leaving_contract() => {
-                self.error(
-                    codes::LEAVES_CONTRACT,
-                    "a contract is a condition, not a function body: `return` has nothing to \
-                     leave here"
-                        .to_string(),
-                    stmt.span,
-                );
-                if let Some(value) = value {
-                    self.infer(value);
-                }
-            }
             StmtKind::Return(value) => {
+                if self.refuse_leaving_contract("`return`", stmt.span, value.as_ref()) {
+                    return;
+                }
                 let ret = self.ret.clone();
                 match value {
                     Some(value) => {

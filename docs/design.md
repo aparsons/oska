@@ -338,7 +338,7 @@ fn withdraw(acct: Account, amount: Int) -> Result<Account, Error>
 ```
 
 - Contracts are machine-checkable specifications. Code an agent writes only has to be *checkable*, not right the first time.
-- A contract may only call pure functions. The compiler enforces this, so evaluating one never performs an effect. It is also a plain condition: a `?` or `return` directly in a clause is a compile error.
+- A contract may only call pure functions. The compiler enforces this for every call, for the trait impls that `==`, `!=` and interpolation dispatch to, and for generic code: a type parameter that a contract uses cannot be instantiated with a capability-bearing type, and a trait whose contract uses `self` cannot be implemented for one. So evaluating a contract never performs an effect, apart from `dbg(...)`, which a release build rejects as it does everywhere. It is also a plain condition: a `?` or `return` directly in a clause is a compile error.
 - Contracts are checked at runtime in all builds, `--release` included.
   - `requires` is evaluated on entry, after the arguments and before the body. A false one panics with `P0006`, "precondition violated", at the **call site**: the caller broke the contract.
   - `ensures` is evaluated whenever the function returns, on every path (falling off the end, an early `return`, and `?`), with `r` bound to the value being returned. A false one panics with `P0007`, "postcondition violated", at the **clause**, and the message names the return that broke it: the function broke its promise.
