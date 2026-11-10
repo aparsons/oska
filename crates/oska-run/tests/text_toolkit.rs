@@ -329,6 +329,7 @@ impl Sandbox {
         self.base.join("outside")
     }
 
+    #[cfg(unix)]
     fn link(&self, name: &str, target: &Path) {
         std::os::unix::fs::symlink(target, self.root().join(name)).expect("create a symlink");
     }
@@ -479,6 +480,7 @@ fn real_host_refuses_to_list_out_of_the_root() {
 }
 
 #[test]
+#[cfg(unix)]
 fn real_host_refuses_a_symlink_to_a_directory_outside_the_root() {
     let sandbox = Sandbox::new("symlink-dir");
     sandbox.link("out", &sandbox.outside());
@@ -508,6 +510,7 @@ fn real_host_refuses_to_list_a_file_or_a_missing_directory() {
 }
 
 #[test]
+#[cfg(unix)]
 fn real_host_refuses_a_symlink_to_a_directory_inside_the_root() {
     // Every symlink beneath a root is refused, wherever it points (#95).
     let sandbox = Sandbox::new("symlink-inside");
@@ -516,6 +519,7 @@ fn real_host_refuses_a_symlink_to_a_directory_inside_the_root() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_symlink_entry_is_listed_by_name_without_following_it() {
     let sandbox = Sandbox::new("symlink-entry");
     sandbox.link("out", &sandbox.outside());

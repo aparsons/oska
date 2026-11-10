@@ -452,6 +452,7 @@ impl Host for RealHost {
             return Err(no_name());
         };
         let parent = checked_beneath(root, parents)?;
+        windows_file_name(name)?;
         if !std::fs::metadata(&parent)?.is_dir() {
             return Err(not_a_directory(&parent));
         }
@@ -484,7 +485,11 @@ impl Host for RealHost {
         let path = match (root.is_file(), names.split_last()) {
             (true, None) => root.path.to_path_buf(),
             (true, Some(_)) => return Err(beneath_a_file(names)),
-            (false, Some((name, parents))) => checked_beneath(root, parents)?.join(name),
+            (false, Some((name, parents))) => {
+                let parent = checked_beneath(root, parents)?;
+                windows_file_name(name)?;
+                parent.join(name)
+            }
             (false, None) => return Err(a_dir_root(root)),
         };
         // Not truncated on open: the file is emptied only once it is
@@ -504,7 +509,9 @@ impl Host for RealHost {
             return Err(a_file_root(root));
         }
         let (name, parents) = names.split_last().ok_or_else(|| a_dir_root(root))?;
-        let path = checked_beneath(root, parents)?.join(name);
+        let parent = checked_beneath(root, parents)?;
+        windows_file_name(name)?;
+        let path = parent.join(name);
         // `mkdir` never follows a symlink in the last component: one
         // there, dangling or not, makes it fail with `AlreadyExists`.
         if let Err(error) = std::fs::create_dir(&path) {
@@ -582,6 +589,9 @@ fn or_here(parent: &Path) -> &Path {
 /// (`docs/runtime.md`).
 #[cfg(not(unix))]
 fn checked_beneath(root: &RootHandle, names: &[String]) -> io::Result<PathBuf> {
+    for name in names {
+        windows_file_name(name)?;
+    }
     let mut path = root.path.to_path_buf();
     for name in names {
         path.push(name);
@@ -590,6 +600,45 @@ fn checked_beneath(root: &RootHandle, names: &[String]) -> io::Result<PathBuf> {
         }
     }
     resolved_beneath(&path, &root.path)
+}
+
+/// Refuse `name` unless it is a file's own name on Windows. A reserved
+/// device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to
+/// `LPT9`, and `CONIN$`, `CONOUT$`), with or without an extension, opens
+/// that device in every directory, and a `:` opens an alternate data
+/// stream, so neither is a file beneath the root.
+#[cfg(not(unix))]
+fn windows_file_name(name: &str) -> io::Result<()> {
+    let refused = |what: &str| {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("`{name}` {what}, and confined access never opens one"),
+        ))
+    };
+    if name.contains(':') {
+        return refused("holds a `:`, which names an alternate data stream on Windows");
+    }
+    // Windows ignores the extension, and spaces before it.
+    let stem = name.split('.').next().unwrap_or(name).trim_end_matches(' ');
+    let stem = stem.to_ascii_uppercase();
+    let numbered = |prefix: &str| {
+        stem.strip_prefix(prefix).is_some_and(|n| {
+            let mut chars = n.chars();
+            matches!(
+                (chars.next(), chars.next()),
+                (Some('1'..='9' | '\u{b9}' | '\u{b2}' | '\u{b3}'), None)
+            )
+        })
+    };
+    let device = matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || numbered("COM")
+        || numbered("LPT");
+    if device {
+        return refused("is a Windows device name");
+    }
+    Ok(())
 }
 
 /// Where Windows has no handle-relative open: open `path`, which

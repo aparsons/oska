@@ -51,6 +51,7 @@ impl Sandbox {
     }
 
     /// A symlink at `root/<name>` pointing to `target`.
+    #[cfg(unix)]
     fn link(&self, name: &str, target: &Path) {
         std::os::unix::fs::symlink(target, self.root().join(name)).expect("create a symlink");
     }
@@ -186,6 +187,7 @@ fn write_confined(root: &Path, path: &str, contents: &str) -> String {
 // ---- Confinement: escapes ----------------------------------------------------
 
 #[test]
+#[cfg(unix)]
 fn a_symlink_to_a_file_outside_the_root_is_refused() {
     let sandbox = Sandbox::new("symlink-file");
     sandbox.link("escape.txt", &sandbox.outside().join("secret.txt"));
@@ -193,6 +195,7 @@ fn a_symlink_to_a_file_outside_the_root_is_refused() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_symlink_to_a_directory_outside_the_root_is_refused() {
     let sandbox = Sandbox::new("symlink-dir");
     sandbox.link("out", &sandbox.outside());
@@ -237,6 +240,7 @@ fn an_empty_path_is_refused() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_write_through_a_dangling_symlink_out_of_the_root_is_refused() {
     let sandbox = Sandbox::new("write-dangling");
     let target = sandbox.outside().join("planted.txt");
@@ -302,6 +306,7 @@ fn write_direct(root: &Path, path: &str, contents: &str) -> i32 {
 /// The exit code of a program that reads `path` through a filesystem
 /// restricted to `root`, on a bare [`RealHost`]: 0 when the read
 /// succeeded, 1 when it was refused.
+#[cfg(unix)]
 fn read_direct(root: &Path, path: &str) -> i32 {
     exit_code_on_real_host(&format!(
         "fn main(fs: FsRead) -> Result<(), IoError> {{\n\
@@ -313,6 +318,7 @@ fn read_direct(root: &Path, path: &str) -> i32 {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_write_through_a_dangling_symlink_with_a_trailing_separator_is_refused() {
     let sandbox = Sandbox::new("write-dangling-slash");
     let target = sandbox.outside().join("pwned1");
@@ -341,6 +347,7 @@ fn a_write_whose_last_component_is_not_a_plain_name_is_refused() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_write_to_a_symlink_inside_the_root_is_refused_even_to_an_inside_file() {
     // The final component is opened without following symlinks, so a
     // write never goes through one, wherever it points.
@@ -352,6 +359,7 @@ fn a_write_to_a_symlink_inside_the_root_is_refused_even_to_an_inside_file() {
 }
 
 #[test]
+#[cfg(unix)]
 fn real_host_confines_reads_and_writes_directly() {
     let sandbox = Sandbox::new("direct");
     sandbox.link("escape.txt", &sandbox.outside().join("secret.txt"));

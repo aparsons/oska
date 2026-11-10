@@ -1,0 +1,47 @@
+# Run the runtime and CLI tests on Windows. Off Unix, oska-sys is empty
+# and a directory or file capability checks each path instead (ADR 0009):
+# its own code for opening roots, reading, writing, create_dir and
+# list_dir, and its refusal of device names and alternate data streams.
+# This job runs that code with the FakeHost API tests, the RealHost tests
+# that are not Unix-only, and the CLI's golden tests. ci.yml's test job
+# runs on Ubuntu only, and the release dry run only builds.
+#
+# Needs no configuration.
+
+name: Windows
+
+on:
+  push:
+    branches: [main, "ticket/**", "review-fixes-*"]
+    paths:
+      - crates/**
+      - site/**
+      - docs/**
+      - examples/**
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/windows.yml
+  pull_request:
+    paths:
+      - crates/**
+      - site/**
+      - docs/**
+      - examples/**
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/windows.yml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      # The golden files are compared byte for byte, so check them out
+      # with the LF line endings they were written with.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - run: cargo test --locked -p oska-run -p oskac

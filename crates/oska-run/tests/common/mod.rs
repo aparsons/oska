@@ -170,3 +170,92 @@ pub fn printed_with(host: &mut dyn Host, args: &[&str], body: &str) -> String {
 pub fn printed(mut host: FakeHost, body: &str) -> String {
     printed_with(&mut host, &[], body)
 }
+
+// ---- Real directories ------------------------------------------------------------------
+
+/// A fresh directory under the system temp dir, holding `root/` and
+/// `report/`, removed on drop. [`TempTree::saw`] runs a program on
+/// [`oska_run::RealHost`] with capabilities on `root`, and reads what it
+/// saw back from `report`, since a real host prints to the terminal.
+pub struct TempTree {
+    base: std::path::PathBuf,
+}
+
+impl TempTree {
+    pub fn new(test: &str) -> TempTree {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let unique = format!(
+            "oska-{test}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
+        let base = std::env::temp_dir().join(unique);
+        for dir in ["root", "report"] {
+            std::fs::create_dir_all(base.join(dir)).expect("create a directory");
+        }
+        let base = std::fs::canonicalize(&base).expect("canonicalize the tree");
+        TempTree { base }
+    }
+
+    /// The absolute path of `at` beneath the tree.
+    pub fn path(&self, at: &str) -> std::path::PathBuf {
+        self.base.join(at)
+    }
+
+    /// Write `text` to the file `at`, creating its directory.
+    pub fn write(&self, at: &str, text: &str) {
+        let path = self.path(at);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create a directory");
+        }
+        std::fs::write(path, text).expect("write a file");
+    }
+
+    /// The text of the file at `at`.
+    pub fn file(&self, at: &str) -> String {
+        std::fs::read_to_string(self.path(at)).expect("read a file")
+    }
+
+    /// What `body` saw on a real host, each `say(...)` one line. `main` is
+    /// given `read: DirRead` and `write: DirWrite` on `root`, and `fs: Fs`
+    /// for more, with `{root}` in `body` the root's absolute path. The
+    /// helpers in [`SHOWN`] are in scope.
+    pub fn saw(&self, body: &str) -> String {
+        // As an Oska string literal holds it: a Windows path's `\` escaped.
+        let literal = |at: &str| self.path(at).display().to_string().replace('\\', "\\\\");
+        let root = literal("root");
+        let src = format!(
+            "fn main(fs: Fs) -> Result<(), IoError> {{\n\
+             \x20   let read = fs.read_only().restrict_to(\"{root}\")\n\
+             \x20   let write = fs.write_only().restrict_to(\"{root}\")\n\
+             \x20   var seen: Untrusted<String> = \"\"\n\
+             {body}\n\
+             \x20   fs.write_only().restrict_to(\"{report}\").write(Path.new(\"seen.txt\"), seen)\n\
+             }}\n\
+             \n\
+             fn said(seen: Untrusted<String>, line: Untrusted<String>) -> Untrusted<String> {{\n\
+             \x20   \"{{seen}}\\n{{line}}\"\n\
+             }}\n{SHOWN}",
+            report = literal("report"),
+            body = body
+                .replace("say(", "seen = said(seen, ")
+                .replace("{root}", &root),
+        );
+        let args = [PROGRAM_PATH.to_string()];
+        let outcome = run(&src, &mut oska_run::RealHost::new(), &args);
+        assert!(
+            outcome.diagnostics.is_empty() && outcome.panic.is_none() && outcome.exit_code == 0,
+            "{src} should run: {outcome:#?}"
+        );
+        self.file("report/seen.txt")
+            .trim_start_matches('\n')
+            .to_string()
+    }
+}
+
+impl Drop for TempTree {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.base);
+    }
+}

@@ -137,6 +137,7 @@ impl Sandbox {
         self.base.join("outside")
     }
 
+    #[cfg(unix)]
     fn link(&self, name: &str, target: &Path) {
         std::os::unix::fs::symlink(target, self.root().join(name)).expect("create a symlink");
     }
@@ -238,6 +239,7 @@ fn real_host_refuses_to_create_out_of_the_root() {
 }
 
 #[test]
+#[cfg(unix)]
 fn real_host_never_creates_through_a_symlink() {
     let sandbox = Sandbox::new("create-symlink");
     sandbox.link("out", &sandbox.outside());
