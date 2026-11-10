@@ -1,7 +1,7 @@
 /* The stylesheet of https://oskalang.dev. `site/build.osk` copies it to
    `_site/style.css`. Fonts come from the pinned Fontsource CSS each page
-   links, with system fonts behind them. No script, no inline styles: the
-   CSP allows neither. */
+   links, with system fonts behind them. No inline styles: the CSP allows
+   none. The only script is `search.js`, which adds the search box. */
 
 :root {
   --text: #1d2125;
@@ -55,6 +55,55 @@ footer {
 
 header {
   border-bottom: 1px solid var(--border);
+}
+
+aside {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+aside p {
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 0.4rem 1.25rem;
+}
+
+.search {
+  position: relative;
+  padding-bottom: 0.75rem;
+}
+
+.search input {
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+  color: var(--text);
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.search-results {
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 0.25rem 0;
+  list-style: none;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.search-results[hidden] {
+  display: none;
+}
+
+.search-results li {
+  padding: 0.25rem 0.75rem;
 }
 
 nav ul {

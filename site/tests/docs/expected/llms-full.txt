@@ -1,0 +1,153 @@
+# Oska: full documentation
+
+Oska 0.1.0 (pre-alpha). Every page of https://oskalang.dev as Markdown, one after another, each after a line `Source:` that names it.
+
+---
+
+Source: https://oskalang.dev/
+
+# Oska
+
+**A secure-by-default language.**
+
+> Status: pre-alpha. See [`docs/design.md`](/design.md) and the
+> decisions in [`docs/adr/`](/adr/index.md).
+
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `crates/oskac` | The `oskac` CLI |
+| `docs/` | Design notes |
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).
+
+---
+
+Source: https://oskalang.dev/glossary.html
+
+# Oska
+
+Terms of the security model.
+
+## Authority
+
+**Capability**:
+An unforgeable value that grants authority.
+_Avoid_: permission, token
+
+**Attenuation**:
+Producing a narrower capability, as `fs.restrict_to("docs")` does. See the [design](/design.md#capabilities).
+
+---
+
+Source: https://oskalang.dev/adr/0001-values.html
+
+# Value semantics
+
+Values are copied, not shared.
+
+---
+
+Source: https://oskalang.dev/adr/0002-capabilities.html
+
+# Capabilities are the effect system
+
+## Decision
+
+A function's capability parameters are its effects. See the
+[design notes](/design.md#capabilities) and [ADR 0001](/adr/0001-values.md).
+
+---
+
+Source: https://oskalang.dev/design.html
+
+# Oska design notes
+
+Decisions are in [`adr/`](/adr/index.md), terms in [`GLOSSARY.md`](/glossary.md), and the
+background in [the research](/research/2026-11-report.md).
+
+## Principles
+
+1. **Secure by default.** The safe path is the shortest.
+2. **No ambient authority.** See [ADR 0002](/adr/0002-capabilities.md#decision).
+3. **Legible.** A `snake_case_name` stays as it is, and so does `2 * 3 * 4`.
+
+## Capabilities
+
+- `Fs` attenuates:
+  - to `FsRead` or `FsWrite`
+  - to one directory, with `restrict_to`
+- **Confinement.** A restricted filesystem resolves every path:
+  1. An empty path is refused.
+  2. The path is canonicalized.
+
+  **Residual risk.** A race remains, as [Untrusted data](#untrusted-data-and-sinks) explains.
+- A code block in an item:
+
+  ```oska
+  fn main(fs: FsRead) {
+      let docs = fs.restrict_to("docs")
+  }
+  ```
+
+3. A list that starts at three
+4. keeps its number.
+
+## Untrusted data and sinks
+
+| Sink | Data position | Structural position |
+| --- | --- | --- |
+| SQL (`std.sql`) | Parameters | The query, an `sql"..."` literal |
+| Closures | `\|x\| x` | `` `|` `` in code |
+
+Text is *untrusted* when it comes from outside, and __trusted__ text is
+written in the program. An escaped \*star\* is not emphasis, and
+``a ` b`` is code.
+
+### Sinks
+
+Headings at every level get an anchor.
+
+#### Fourth
+
+##### Fifth
+
+###### Sixth
+
+---
+
+Source: https://oskalang.dev/research/2026-11-report.html
+
+# Research: a report
+
+## Summary
+
+Memory safety is the baseline ([CISA](https://www.cisa.gov/)).
+
+---
+
+Source: https://oskalang.dev/runtime.html
+
+# Oska runtime
+
+See the [checker](checker.md), which is not in this tree.
+
+---
+
+Source: https://oskalang.dev/adr/
+
+# Decisions
+
+- [Value semantics](/adr/0001-values.md)
+- [Capabilities are the effect system](/adr/0002-capabilities.md)
+
+---
+
+Source: https://oskalang.dev/research/
+
+# Research
+
+- [Research: a report](/research/2026-11-report.md)

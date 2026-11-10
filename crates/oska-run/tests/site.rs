@@ -23,10 +23,11 @@ const BUILD: &str = include_str!("../../../site/build.osk");
 /// Where the generator writes, relative to the repository root.
 const OUTPUT: &str = "_site";
 
-/// The Content Security Policy every page carries: nothing runs, and
-/// styles and fonts come only from the site and the two font packages,
+/// The Content Security Policy every page carries: nothing runs but the
+/// site's own search script, which may read only the site's own files,
+/// and styles and fonts come only from the site and the two font packages,
 /// at their pinned versions, on the CDN.
-const CSP: &str = "default-src 'none'; \
+const CSP: &str = "default-src 'none'; script-src 'self'; connect-src 'self'; \
     style-src 'self' https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/ \
     https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/; \
     font-src https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/ \
@@ -94,6 +95,11 @@ const MINIMAL_REPO: &[(&str, &str)] = &[
     ("GLOSSARY.md", "# Glossary\n"),
     ("docs/design.md", "# Design\n"),
     ("site/style.css", "body {}\n"),
+    ("site/search.js", "// search\n"),
+    (
+        "Cargo.toml",
+        "[workspace.package]\nversion = \"1.2.3\"\nlicense = \"Apache-2.0\"\n",
+    ),
 ];
 
 /// [`build`] on [`MINIMAL_REPO`] with `inputs` added, asserting that the
@@ -147,14 +153,16 @@ fn assert_golden(name: &str) {
 // ---- What a browser would make of a page -------------------------------------
 
 /// Every element the site may emit, with the attributes it may carry.
-/// Anything else in a page, a `<script>` or an `onerror=`, means text
+/// Anything else in a page, an `<iframe>` or an `onerror=`, means text
 /// got out of its escaping.
 const ELEMENTS: &[(&str, &[&str])] = &[
     ("html", &["lang"]),
     ("head", &[]),
     ("meta", &["charset", "name", "content", "http-equiv"]),
     ("title", &[]),
-    ("link", &["rel", "href", "integrity", "crossorigin"]),
+    ("link", &["rel", "href", "type", "integrity", "crossorigin"]),
+    ("script", &["type", "src"]),
+    ("aside", &["aria-label"]),
     ("body", &[]),
     ("header", &[]),
     ("nav", &["aria-label"]),
@@ -442,10 +450,9 @@ fn every_page_has_the_csp_and_pins_its_fonts_with_integrity() {
             )),
             "{name}:\n{page}"
         );
-        assert!(!page.contains("<script"), "{name} runs JavaScript");
         for link in page.match_indices("<link ").map(|(at, _)| &page[at..]) {
             let link = &link[..link.find('>').expect("a closed tag")];
-            if link.contains("https://") {
+            if link.contains("https://") && !link.contains("rel=\"canonical\"") {
                 assert!(
                     link.contains("https://cdn.jsdelivr.net/npm/@fontsource/"),
                     "{link}"
@@ -628,6 +635,8 @@ fn main_narrows_reading_to_docs_and_the_files_it_names() {
         "read.restrict_to(\"README.md\")",
         "read.restrict_to(\"GLOSSARY.md\")",
         "read.restrict_to(\"site/style.css\")",
+        "read.restrict_to(\"site/search.js\")",
+        "read.restrict_to(\"Cargo.toml\")",
         "write.restrict_to(\"_site\")",
     ] {
         assert!(
@@ -636,4 +645,824 @@ fn main_narrows_reading_to_docs_and_the_files_it_names() {
         );
     }
     assert!(!BUILD.contains("restrict_to(\".\")"));
+}
+
+// ---- Markdown copies for agents ----------------------------------------------------
+
+/// The repository the agent outputs are tested on: a home page, a glossary,
+/// two docs, and a section of two.
+fn agent_repo() -> Vec<(&'static str, &'static str)> {
+    vec![
+        (
+            "README.md",
+            "# Oska\n\nA language where authority is explicit.\n\nSee the [design](docs/design.md).\n",
+        ),
+        ("GLOSSARY.md", "# Words\n\n**Capability**: a value.\n"),
+        (
+            "docs/design.md",
+            "# Design\n\nHow Oska works, and why.\n\n## Values\n\nText.\n\n\
+             [adr](adr/) [b](adr/0002-b.md#x) [up](../README.md) [out](https://example.com/a?b=1) \
+             [src](../crates/x.rs) [here](#values)\n\n```\n[a](adr/)\n```\n",
+        ),
+        (
+            "docs/adr/0001-a.md",
+            "# A decision\n\nWe chose A.\n\n[design](../design.md#values)\n",
+        ),
+        ("docs/adr/0002-b.md", "# Another\n\nWe chose B.\n"),
+    ]
+}
+
+/// The path of the Markdown copy of the page at `html`.
+fn twin(html: &str) -> String {
+    format!("{}.md", html.strip_suffix(".html").expect("an html page"))
+}
+
+#[test]
+fn every_page_has_a_markdown_copy() {
+    let site = build_ok(&agent_repo());
+    let pages: Vec<&String> = site.keys().filter(|k| k.ends_with(".html")).collect();
+    assert!(pages.len() >= 6, "{pages:?}");
+    for page in pages {
+        assert!(site.contains_key(&twin(page)), "{page} has no copy");
+    }
+}
+
+#[test]
+fn a_doc_s_copy_is_its_source() {
+    let site = build_ok(&agent_repo());
+    assert!(
+        site["adr/0002-b.md"] == "# Another\n\nWe chose B.\n",
+        "{}",
+        site["adr/0002-b.md"]
+    );
+    assert!(site["index.md"].starts_with("# Oska\n\nA language where"));
+    assert!(site["glossary.md"].starts_with("# Words\n"));
+}
+
+#[test]
+fn a_section_index_copy_lists_its_docs() {
+    let site = build_ok(&agent_repo());
+    assert_eq!(
+        site["adr/index.md"],
+        "# Decisions\n\n- [A decision](/adr/0001-a.md)\n- [Another](/adr/0002-b.md)\n"
+    );
+}
+
+#[test]
+fn links_in_a_copy_point_at_other_copies() {
+    let site = build_ok(&agent_repo());
+    assert!(
+        site["design.md"].contains(
+            "[adr](/adr/index.md) [b](/adr/0002-b.md#x) [up](/index.md) \
+             [out](https://example.com/a?b=1) [src](../crates/x.rs) [here](#values)"
+        ),
+        "{}",
+        site["design.md"]
+    );
+    assert!(site["index.md"].contains("[design](/design.md)"));
+    assert!(site["adr/0001-a.md"].contains("[design](/design.md#values)"));
+}
+
+#[test]
+fn a_link_inside_a_code_fence_is_left_alone() {
+    let site = build_ok(&agent_repo());
+    assert!(site["design.md"].ends_with("```\n[a](adr/)\n```\n"));
+}
+
+// ---- JSON, to check what the generator writes is well formed ---------------------
+
+/// A JSON value. There is no JSON crate to lean on, so this reads just
+/// enough of the grammar to tell well-formed text from malformed.
+#[derive(Debug, PartialEq)]
+enum Json {
+    Null,
+    Bool(bool),
+    Number(String),
+    Str(String),
+    Array(Vec<Json>),
+    Object(Vec<(String, Json)>),
+}
+
+impl Json {
+    fn get(&self, key: &str) -> &Json {
+        match self {
+            Json::Object(members) => members
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v)
+                .unwrap_or_else(|| panic!("no `{key}` in {self:?}")),
+            other => panic!("{other:?} is not an object"),
+        }
+    }
+
+    fn str(&self) -> &str {
+        match self {
+            Json::Str(s) => s,
+            other => panic!("{other:?} is not a string"),
+        }
+    }
+
+    fn array(&self) -> &[Json] {
+        match self {
+            Json::Array(items) => items,
+            other => panic!("{other:?} is not an array"),
+        }
+    }
+}
+
+struct JsonReader<'a> {
+    text: &'a [u8],
+    at: usize,
+}
+
+impl JsonReader<'_> {
+    fn skip_space(&mut self) {
+        while matches!(self.text.get(self.at), Some(b' ' | b'\n' | b'\r' | b'\t')) {
+            self.at += 1;
+        }
+    }
+
+    fn eat(&mut self, byte: u8) -> Result<(), String> {
+        self.skip_space();
+        if self.text.get(self.at) == Some(&byte) {
+            self.at += 1;
+            Ok(())
+        } else {
+            Err(format!("expected `{}` at byte {}", byte as char, self.at))
+        }
+    }
+
+    fn word(&mut self, word: &str, value: Json) -> Result<Json, String> {
+        if self.text[self.at..].starts_with(word.as_bytes()) {
+            self.at += word.len();
+            Ok(value)
+        } else {
+            Err(format!("bad word at byte {}", self.at))
+        }
+    }
+
+    fn value(&mut self) -> Result<Json, String> {
+        self.skip_space();
+        match self.text.get(self.at) {
+            Some(b'{') => {
+                self.at += 1;
+                let mut members = Vec::new();
+                self.skip_space();
+                if self.text.get(self.at) == Some(&b'}') {
+                    self.at += 1;
+                    return Ok(Json::Object(members));
+                }
+                loop {
+                    self.skip_space();
+                    let key = self.string()?;
+                    self.eat(b':')?;
+                    members.push((key, self.value()?));
+                    self.skip_space();
+                    match self.text.get(self.at) {
+                        Some(b',') => self.at += 1,
+                        Some(b'}') => {
+                            self.at += 1;
+                            return Ok(Json::Object(members));
+                        }
+                        _ => return Err(format!("bad object at byte {}", self.at)),
+                    }
+                }
+            }
+            Some(b'[') => {
+                self.at += 1;
+                let mut items = Vec::new();
+                self.skip_space();
+                if self.text.get(self.at) == Some(&b']') {
+                    self.at += 1;
+                    return Ok(Json::Array(items));
+                }
+                loop {
+                    items.push(self.value()?);
+                    self.skip_space();
+                    match self.text.get(self.at) {
+                        Some(b',') => self.at += 1,
+                        Some(b']') => {
+                            self.at += 1;
+                            return Ok(Json::Array(items));
+                        }
+                        _ => return Err(format!("bad array at byte {}", self.at)),
+                    }
+                }
+            }
+            Some(b'"') => Ok(Json::Str(self.string()?)),
+            Some(b't') => self.word("true", Json::Bool(true)),
+            Some(b'f') => self.word("false", Json::Bool(false)),
+            Some(b'n') => self.word("null", Json::Null),
+            Some(b'-' | b'0'..=b'9') => {
+                let start = self.at;
+                while matches!(
+                    self.text.get(self.at),
+                    Some(b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9')
+                ) {
+                    self.at += 1;
+                }
+                Ok(Json::Number(
+                    String::from_utf8_lossy(&self.text[start..self.at]).into_owned(),
+                ))
+            }
+            _ => Err(format!("unexpected input at byte {}", self.at)),
+        }
+    }
+
+    fn string(&mut self) -> Result<String, String> {
+        self.eat(b'"')?;
+        let mut out: Vec<u8> = Vec::new();
+        loop {
+            let byte = *self
+                .text
+                .get(self.at)
+                .ok_or_else(|| "a string that never ends".to_string())?;
+            self.at += 1;
+            match byte {
+                b'"' => {
+                    return String::from_utf8(out).map_err(|e| e.to_string());
+                }
+                0..=0x1f => return Err(format!("raw control byte {byte:#x} in a string")),
+                b'\\' => {
+                    let escape = *self
+                        .text
+                        .get(self.at)
+                        .ok_or_else(|| "a dangling backslash".to_string())?;
+                    self.at += 1;
+                    let c = match escape {
+                        b'"' => '"',
+                        b'\\' => '\\',
+                        b'/' => '/',
+                        b'b' => '\u{8}',
+                        b'f' => '\u{c}',
+                        b'n' => '\n',
+                        b'r' => '\r',
+                        b't' => '\t',
+                        b'u' => {
+                            let decoded = self
+                                .text
+                                .get(self.at..self.at + 4)
+                                .and_then(|h| std::str::from_utf8(h).ok())
+                                .and_then(|h| u32::from_str_radix(h, 16).ok())
+                                .and_then(char::from_u32)
+                                .ok_or_else(|| format!("bad \\u escape at byte {}", self.at))?;
+                            self.at += 4;
+                            decoded
+                        }
+                        other => return Err(format!("bad escape `\\{}`", other as char)),
+                    };
+                    let mut buffer = [0; 4];
+                    out.extend_from_slice(c.encode_utf8(&mut buffer).as_bytes());
+                }
+                other => out.push(other),
+            }
+        }
+    }
+}
+
+/// `text` as JSON, or why it is not.
+fn parse_json(text: &str) -> Result<Json, String> {
+    let mut reader = JsonReader {
+        text: text.as_bytes(),
+        at: 0,
+    };
+    let value = reader.value()?;
+    reader.skip_space();
+    if reader.at == text.len() {
+        Ok(value)
+    } else {
+        Err(format!("trailing text at byte {}", reader.at))
+    }
+}
+
+fn json(text: &str) -> Json {
+    parse_json(text).unwrap_or_else(|e| panic!("not JSON ({e}):\n{text}"))
+}
+
+#[test]
+fn the_json_reader_tells_json_from_not() {
+    assert!(parse_json("{\"a\": [1, true, null, \"x\\n\\u00e9\"]}").is_ok());
+    for bad in ["{\"a\": }", "[1,]", "\"a\nb\"", "{} x", "\"\\q\"", "[1 2]"] {
+        assert!(parse_json(bad).is_err(), "{bad}");
+    }
+}
+
+// ---- robots.txt, the sitemap, and latest.json ----------------------------------
+
+#[test]
+fn robots_txt_welcomes_search_engines_and_ai_crawlers() {
+    let site = build_ok(&agent_repo());
+    assert_eq!(
+        site["robots.txt"],
+        "User-agent: *\n\
+         User-agent: GPTBot\n\
+         User-agent: OAI-SearchBot\n\
+         User-agent: ChatGPT-User\n\
+         User-agent: ClaudeBot\n\
+         User-agent: Claude-SearchBot\n\
+         User-agent: Claude-User\n\
+         User-agent: anthropic-ai\n\
+         User-agent: PerplexityBot\n\
+         User-agent: Perplexity-User\n\
+         User-agent: Google-Extended\n\
+         User-agent: Applebot-Extended\n\
+         User-agent: CCBot\n\
+         User-agent: Amazonbot\n\
+         User-agent: meta-externalagent\n\
+         User-agent: cohere-ai\n\
+         Allow: /\n\
+         \n\
+         Sitemap: https://oskalang.dev/sitemap.xml\n"
+    );
+}
+
+/// The URL path a page at `html` is served at, which is its canonical
+/// URL's path: `/` for `index.html`, `/adr/` for `adr/index.html`.
+fn canonical_path(html: &str) -> String {
+    match html.strip_suffix("index.html") {
+        Some(dir) => format!("/{dir}"),
+        None => format!("/{html}"),
+    }
+}
+
+#[test]
+fn the_sitemap_lists_every_page_by_its_canonical_url() {
+    let site = build_ok(&agent_repo());
+    let sitemap = &site["sitemap.xml"];
+    let head = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n";
+    assert!(sitemap.starts_with(head), "{sitemap}");
+    assert!(sitemap.ends_with("</urlset>\n"), "{sitemap}");
+    let mut listed: Vec<String> = sitemap
+        .lines()
+        .filter_map(|l| l.strip_prefix("<url><loc>")?.strip_suffix("</loc></url>"))
+        .map(str::to_string)
+        .collect();
+    let mut expected: Vec<String> = site
+        .keys()
+        .filter(|k| k.ends_with(".html"))
+        .map(|k| format!("https://oskalang.dev{}", canonical_path(k)))
+        .collect();
+    listed.sort();
+    expected.sort();
+    assert_eq!(listed, expected);
+    for url in [
+        "https://oskalang.dev/",
+        "https://oskalang.dev/adr/",
+        "https://oskalang.dev/design.html",
+    ] {
+        assert!(listed.iter().any(|l| l == url), "{url} in {listed:?}");
+    }
+}
+
+#[test]
+fn latest_json_names_the_version_and_the_installers() {
+    let site = build_ok(&agent_repo());
+    let latest = json(&site["latest.json"]);
+    assert_eq!(latest.get("version").str(), "1.2.3");
+    assert_eq!(latest.get("docs").str(), "main");
+    let installers = latest.get("installers");
+    assert_eq!(
+        installers.get("sh").str(),
+        "https://oskalang.dev/install.sh"
+    );
+    assert_eq!(
+        installers.get("ps1").str(),
+        "https://oskalang.dev/install.ps1"
+    );
+}
+
+// ---- llms.txt and llms-full.txt -------------------------------------------------------
+
+#[test]
+fn llms_txt_indexes_the_markdown_copies_with_summaries() {
+    let site = build_ok(&agent_repo());
+    assert_eq!(
+        site["llms.txt"],
+        "# Oska\n\
+         \n\
+         > A language where authority is explicit.\n\
+         \n\
+         Oska 1.2.3 (pre-alpha). These docs track `main`. Every page is also served as Markdown: \
+         the same path with `.md`. All of them are in [llms-full.txt](https://oskalang.dev/llms-full.txt).\n\
+         \n\
+         ## Docs\n\
+         \n\
+         - [Oska](https://oskalang.dev/index.md): A language where authority is explicit.\n\
+         - [Glossary](https://oskalang.dev/glossary.md): Capability: a value.\n\
+         - [Design](https://oskalang.dev/design.md): How Oska works, and why.\n\
+         \n\
+         ## Decisions\n\
+         \n\
+         - [A decision](https://oskalang.dev/adr/0001-a.md): We chose A.\n\
+         - [Another](https://oskalang.dev/adr/0002-b.md): We chose B.\n\
+         - [Decisions](https://oskalang.dev/adr/index.md)\n\
+         \n\
+         ## Machine-readable\n\
+         \n\
+         - [llms-full.txt](https://oskalang.dev/llms-full.txt): every page, as Markdown, in one file\n\
+         - [search.json](https://oskalang.dev/search.json): the search index\n\
+         - [sitemap.xml](https://oskalang.dev/sitemap.xml): the canonical URL of every page\n\
+         - [latest.json](https://oskalang.dev/latest.json): the current version and the installers\n"
+    );
+}
+
+#[test]
+fn a_summary_is_the_first_paragraph_as_plain_text_and_is_cut_short() {
+    let long = "word ".repeat(80);
+    let doc = format!(
+        "# T\n\n> a note\n\n```\ncode\n```\n\n- a list\n\n\
+         Text with `code`, **bold**, a [link](https://example.com/x), and\nmore \\* text. {long}\n\nSecond paragraph.\n"
+    );
+    let site = build_ok(&[("docs/design.md", &doc)]);
+    let entry = site["llms.txt"]
+        .lines()
+        .find(|l| l.starts_with("- [T]"))
+        .expect("an entry for the doc")
+        .to_string();
+    let summary = entry
+        .strip_prefix("- [T](https://oskalang.dev/design.md): ")
+        .expect("a summary");
+    assert!(
+        summary.starts_with("Text with code, bold, a link, and more * text. word word"),
+        "{summary}"
+    );
+    assert!(summary.ends_with("..."), "{summary}");
+    assert!((199..=200).contains(&summary.chars().count()), "{summary}");
+}
+
+#[test]
+fn a_doc_with_no_paragraph_has_an_entry_with_no_summary() {
+    let site = build_ok(&[("docs/design.md", "# Only a title\n")]);
+    assert!(site["llms.txt"].contains("- [Only a title](https://oskalang.dev/design.md)\n"));
+}
+
+#[test]
+fn llms_full_txt_holds_every_page_s_markdown() {
+    let site = build_ok(&agent_repo());
+    let full = &site["llms-full.txt"];
+    assert!(
+        full.starts_with(
+            "# Oska: full documentation\n\
+             \n\
+             Oska 1.2.3 (pre-alpha). Every page of https://oskalang.dev as Markdown, \
+             one after another, each after a line `Source:` that names it.\n"
+        ),
+        "{full}"
+    );
+    let pages: Vec<&String> = site.keys().filter(|k| k.ends_with(".html")).collect();
+    for page in &pages {
+        let copy = &site[&twin(page)];
+        let section = format!(
+            "\n---\n\nSource: https://oskalang.dev{}\n\n{copy}",
+            canonical_path(page)
+        );
+        assert!(full.contains(&section), "{page} is not in:\n{full}");
+    }
+    assert_eq!(full.matches("\nSource: https://").count(), pages.len());
+}
+
+// ---- search.json ------------------------------------------------------------------------
+
+#[test]
+fn search_json_has_each_page_s_title_headings_and_text() {
+    let site = build_ok(&agent_repo());
+    let index = json(&site["search.json"]);
+    let entries = index.array();
+    let pages = site.keys().filter(|k| k.ends_with(".html")).count();
+    assert_eq!(entries.len(), pages);
+    let design = entries
+        .iter()
+        .find(|e| e.get("url").str() == "/design.html")
+        .expect("an entry for the design page");
+    assert_eq!(design.get("title").str(), "Design");
+    let headings: Vec<&str> = design
+        .get("headings")
+        .array()
+        .iter()
+        .map(Json::str)
+        .collect();
+    assert_eq!(headings, ["Values"]);
+    let text = design.get("text").str();
+    assert!(
+        text.starts_with(
+            "Design How Oska works, and why. Values Text. adr b up out src here [a](adr/)"
+        ),
+        "{text}"
+    );
+    assert!(entries.iter().any(|e| e.get("url").str() == "/adr/"));
+}
+
+#[test]
+fn search_json_survives_hostile_titles_and_caps_each_text() {
+    let body = "word ".repeat(2000);
+    let doc = format!("# A \"quoted\" \\ <b>tab</b>\n\n## H\u{e9}llo\t\"x\"\n\n{body}\n");
+    let site = build_ok(&[("docs/adr/x.md", &doc)]);
+    let index = json(&site["search.json"]);
+    let entry = index
+        .array()
+        .iter()
+        .find(|e| e.get("url").str() == "/adr/x.html")
+        .expect("an entry");
+    assert_eq!(entry.get("title").str(), "A \"quoted\" \\ <b>tab</b>");
+    assert_eq!(entry.get("headings").array()[0].str(), "H\u{e9}llo \"x\"");
+    assert!(entry.get("text").str().chars().count() <= 4000);
+    assert!(!site["search.json"].contains('<'), "markup in the index");
+}
+
+// ---- What every page says about itself ----------------------------------------------
+
+/// The `<script>` elements of `page`, as (attributes, content) pairs.
+fn scripts_of(page: &str) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    let mut rest = page;
+    while let Some(open) = rest.find("<script") {
+        rest = &rest[open + "<script".len()..];
+        let close = rest.find('>').expect("a script tag that closes");
+        let attributes = rest[..close].trim().to_string();
+        rest = &rest[close + 1..];
+        let end = rest.find("</script>").expect("a script that ends");
+        found.push((attributes, rest[..end].to_string()));
+        rest = &rest[end..];
+    }
+    found
+}
+
+#[test]
+fn every_page_names_its_canonical_url_and_its_markdown_copy() {
+    let site = build_ok(&agent_repo());
+    for (name, page) in site.iter().filter(|(n, _)| n.ends_with(".html")) {
+        let canonical = format!(
+            "<link rel=\"canonical\" href=\"https://oskalang.dev{}\">\n",
+            canonical_path(name)
+        );
+        assert!(page.contains(&canonical), "{name}:\n{page}");
+        let copy = format!(
+            "<link rel=\"alternate\" type=\"text/markdown\" href=\"/{}\">\n",
+            twin(name)
+        );
+        assert!(page.contains(&copy), "{name}:\n{page}");
+    }
+}
+
+#[test]
+fn every_page_carries_the_version_banner() {
+    let site = build_ok(&agent_repo());
+    let banner = "<aside aria-label=\"Version\">\n\
+                  <p>Oska 1.2.3 (pre-alpha). These docs track <code>main</code>, \
+                  which can be ahead of the latest release: see <a href=\"/latest.json\">latest.json</a>.</p>\n\
+                  </aside>\n";
+    for (name, page) in site.iter().filter(|(n, _)| n.ends_with(".html")) {
+        assert!(
+            page.contains(&format!("<body>\n{banner}<header>")),
+            "{name}:\n{page}"
+        );
+    }
+}
+
+#[test]
+fn the_version_is_read_from_the_manifest_whatever_follows_the_number() {
+    for (manifest, shown) in [
+        ("version = \"0.1.0\"\n", "0.1.0"),
+        (
+            "[package]\nname = \"x\"\nrust-version = \"1.75\"\nversion = \"2.10.3-rc.1+build5\"\n",
+            "2.10.3",
+        ),
+        ("version = \"<script>\"\n", "0.0.0"),
+        ("name = \"no version\"\n", "0.0.0"),
+    ] {
+        let site = build_ok(&[("Cargo.toml", manifest)]);
+        let latest = json(&site["latest.json"]);
+        assert_eq!(latest.get("version").str(), shown, "{manifest}");
+        assert!(site["index.html"].contains(&format!("<p>Oska {shown} (pre-alpha).")));
+    }
+}
+
+#[test]
+fn only_the_home_page_has_structured_data_and_it_describes_the_software() {
+    let site = build_ok(&agent_repo());
+    for (name, page) in site.iter().filter(|(n, _)| n.ends_with(".html")) {
+        let linked: Vec<_> = scripts_of(page)
+            .into_iter()
+            .filter(|(attributes, _)| attributes == "type=\"application/ld+json\"")
+            .collect();
+        if name == "index.html" {
+            assert_eq!(linked.len(), 1, "{page}");
+        } else {
+            assert!(linked.is_empty(), "{name} has structured data");
+        }
+    }
+    let home = scripts_of(&site["index.html"]);
+    let (_, data) = home
+        .iter()
+        .find(|(a, _)| a.starts_with("type="))
+        .expect("structured data");
+    let data = json(data);
+    assert_eq!(data.get("@context").str(), "https://schema.org");
+    assert_eq!(data.get("@type").str(), "SoftwareSourceCode");
+    assert_eq!(data.get("name").str(), "Oska");
+    assert_eq!(data.get("version").str(), "1.2.3");
+    assert_eq!(
+        data.get("license").str(),
+        "https://spdx.org/licenses/Apache-2.0.html"
+    );
+    assert_eq!(data.get("url").str(), "https://oskalang.dev/");
+    let product = data.get("targetProduct");
+    assert_eq!(
+        product.get("installUrl").str(),
+        "https://oskalang.dev/install.sh"
+    );
+    assert_eq!(
+        product.get("additionalProperty").get("value").str(),
+        "curl -fsSL https://oskalang.dev/install.sh | sh"
+    );
+}
+
+#[test]
+fn the_structured_data_licence_is_the_workspace_s() {
+    let manifest =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml"))
+            .expect("the workspace manifest");
+    assert!(
+        manifest.contains("license = \"Apache-2.0\""),
+        "the generator names Apache-2.0; update it with the manifest"
+    );
+}
+
+#[test]
+fn the_only_scripts_are_the_search_script_and_the_home_page_s_data() {
+    let site = build_ok(&agent_repo());
+    for (name, page) in site.iter().filter(|(n, _)| n.ends_with(".html")) {
+        for (attributes, _) in scripts_of(page) {
+            assert!(
+                attributes == "src=\"/search.js\"" || attributes == "type=\"application/ld+json\"",
+                "{name} has <script {attributes}>"
+            );
+        }
+        assert!(
+            page.contains("<script src=\"/search.js\"></script>\n</body>"),
+            "{name} should load the search script last:\n{page}"
+        );
+    }
+}
+
+#[test]
+fn the_search_script_is_copied_as_it_is() {
+    let site = build_ok(&[("site/search.js", "console.log(\"<&>\");\n")]);
+    assert_eq!(site["search.js"], "console.log(\"<&>\");\n");
+}
+
+// ---- The search script -------------------------------------------------------------------
+
+/// What `search(index, query)` in `site/search.js` returns, as the titles
+/// of the pages it finds, run under Node. `None` if Node is not installed.
+fn search_titles(index: &str, query: &str) -> Option<Vec<String>> {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../site/search.js");
+    let run = std::process::Command::new("node")
+        .args([
+            "-e",
+            "const { search } = require(process.argv[1]); \
+             const found = search(JSON.parse(process.argv[2]), process.argv[3]); \
+             console.log(JSON.stringify(found.map((p) => p.title)));",
+        ])
+        .arg(script)
+        .arg(index)
+        .arg(query)
+        .output();
+    let Ok(output) = run else {
+        eprintln!("skipping: Node is not installed");
+        return None;
+    };
+    assert!(
+        output.status.success(),
+        "search.js failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let titles = json(&String::from_utf8_lossy(&output.stdout));
+    Some(titles.array().iter().map(|t| t.str().to_string()).collect())
+}
+
+const SEARCH_INDEX: &str = r#"[
+  {"url": "/a.html", "title": "Capabilities", "headings": ["Narrowing"], "text": "authority you hand a function"},
+  {"url": "/b.html", "title": "Design", "headings": ["Capabilities and authority"], "text": "the language"},
+  {"url": "/c.html", "title": "Glossary", "headings": [], "text": "a capability is a value that grants authority"}
+]"#;
+
+#[test]
+fn the_search_script_ranks_title_matches_above_headings_above_text() {
+    let Some(found) = search_titles(SEARCH_INDEX, "capabilit") else {
+        return;
+    };
+    assert_eq!(found, ["Capabilities", "Design", "Glossary"]);
+}
+
+#[test]
+fn the_search_script_needs_every_word_and_ignores_case() {
+    let Some(found) = search_titles(SEARCH_INDEX, "AUTHORITY value") else {
+        return;
+    };
+    assert_eq!(found, ["Glossary"]);
+    let Some(found) = search_titles(SEARCH_INDEX, "   ") else {
+        return;
+    };
+    assert!(found.is_empty());
+    let Some(found) = search_titles(SEARCH_INDEX, "zzz") else {
+        return;
+    };
+    assert!(found.is_empty());
+}
+
+// ---- The real docs -----------------------------------------------------------------------
+
+/// The repository's own inputs to the generator, as it reads them.
+fn real_inputs() -> BTreeMap<String, String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut inputs: BTreeMap<String, String> = read_tree(&root.join("docs"))
+        .into_iter()
+        .map(|(path, text)| (format!("docs/{path}"), text))
+        .collect();
+    for file in [
+        "README.md",
+        "GLOSSARY.md",
+        "Cargo.toml",
+        "site/style.css",
+        "site/search.js",
+    ] {
+        let text = std::fs::read_to_string(root.join(file)).expect("a repository file");
+        inputs.insert(file.to_string(), text);
+    }
+    inputs
+}
+
+#[test]
+fn the_real_docs_build_every_agent_output_with_no_dead_link() {
+    let built = build(&real_inputs());
+    assert_succeeded(&built.outcome);
+    let site = built.site;
+    assert_site_inert(&site);
+    let pages: Vec<&String> = site.keys().filter(|k| k.ends_with(".html")).collect();
+    assert!(pages.len() > 20, "{pages:?}");
+    for page in &pages {
+        assert!(site.contains_key(&twin(page)), "{page} has no copy");
+    }
+    // Every output parses, and covers every page.
+    assert_eq!(json(&site["search.json"]).array().len(), pages.len());
+    assert_eq!(
+        json(&site["latest.json"]).get("installers").get("sh").str(),
+        "https://oskalang.dev/install.sh"
+    );
+    assert_eq!(site["sitemap.xml"].matches("<loc>").count(), pages.len());
+    assert_eq!(
+        site["llms-full.txt"].matches("\nSource: https://").count(),
+        pages.len()
+    );
+    // Every link to a copy, from a copy or from llms.txt, goes somewhere.
+    let site_path = |url: &str| -> String {
+        let path = url.split('#').next().unwrap_or("");
+        path.trim_start_matches('/').to_string()
+    };
+    for (name, text) in site.iter().filter(|(n, _)| n.ends_with(".md")) {
+        for destination in text.split("](/").skip(1) {
+            let url = destination.split(')').next().unwrap_or("");
+            assert!(
+                site.contains_key(&site_path(url)),
+                "{name} links to /{url}, which is not published"
+            );
+        }
+    }
+    for line in site["llms.txt"].lines().filter(|l| l.starts_with("- [")) {
+        let url = line
+            .split("](https://oskalang.dev/")
+            .nth(1)
+            .and_then(|rest| rest.split(')').next())
+            .expect("an entry with a URL");
+        assert!(site.contains_key(url), "llms.txt lists /{url}");
+    }
+    assert!(
+        site["llms.txt"].contains("## Guides"),
+        "{}",
+        site["llms.txt"]
+    );
+}
+
+#[test]
+fn a_section_with_its_own_index_doc_gets_no_second_index() {
+    let site = build_ok(&[("docs/guide/index.md", "# The guides\n\nStart here.\n")]);
+    assert!(site["guide/index.html"].contains("<h1 id=\"the-guides\">The guides</h1>"));
+    assert_eq!(site["guide/index.md"], "# The guides\n\nStart here.\n");
+    assert_eq!(site["sitemap.xml"].matches("/guide/</loc>").count(), 1);
+    assert_eq!(site["search.json"].matches("\"/guide/\"").count(), 1);
+}
+
+#[test]
+fn search_text_leaves_out_quote_marks_and_table_borders() {
+    let doc = "# T\n\n> Quoted *words*.\n\n| Path | Use |\n|---|:-:|\n| `a` | b |\n\n---\n\nEnd.\n";
+    let site = build_ok(&[("docs/design.md", doc)]);
+    let index = json(&site["search.json"]);
+    let entry = index
+        .array()
+        .iter()
+        .find(|e| e.get("url").str() == "/design.html")
+        .expect("an entry");
+    assert_eq!(entry.get("text").str(), "T Quoted words. Path Use a b End.");
 }

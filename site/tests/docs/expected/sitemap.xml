@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<url><loc>https://oskalang.dev/</loc></url>
+<url><loc>https://oskalang.dev/glossary.html</loc></url>
+<url><loc>https://oskalang.dev/adr/0001-values.html</loc></url>
+<url><loc>https://oskalang.dev/adr/0002-capabilities.html</loc></url>
+<url><loc>https://oskalang.dev/design.html</loc></url>
+<url><loc>https://oskalang.dev/research/2026-11-report.html</loc></url>
+<url><loc>https://oskalang.dev/runtime.html</loc></url>
+<url><loc>https://oskalang.dev/adr/</loc></url>
+<url><loc>https://oskalang.dev/research/</loc></url>
+</urlset>

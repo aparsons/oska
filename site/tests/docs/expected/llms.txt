@@ -1,0 +1,30 @@
+# Oska
+
+> A secure-by-default language.
+
+Oska 0.1.0 (pre-alpha). These docs track `main`. Every page is also served as Markdown: the same path with `.md`. All of them are in [llms-full.txt](https://oskalang.dev/llms-full.txt).
+
+## Docs
+
+- [Oska](https://oskalang.dev/index.md): A secure-by-default language.
+- [Glossary](https://oskalang.dev/glossary.md): Terms of the security model.
+- [Oska design notes](https://oskalang.dev/design.md): Decisions are in adr/, terms in GLOSSARY.md, and the background in the research.
+- [Oska runtime](https://oskalang.dev/runtime.md): See the checker, which is not in this tree.
+
+## Decisions
+
+- [Value semantics](https://oskalang.dev/adr/0001-values.md): Values are copied, not shared.
+- [Capabilities are the effect system](https://oskalang.dev/adr/0002-capabilities.md): A function's capability parameters are its effects. See the design notes and ADR 0001.
+- [Decisions](https://oskalang.dev/adr/index.md)
+
+## Research
+
+- [Research: a report](https://oskalang.dev/research/2026-11-report.md): Memory safety is the baseline (CISA).
+- [Research](https://oskalang.dev/research/index.md)
+
+## Machine-readable
+
+- [llms-full.txt](https://oskalang.dev/llms-full.txt): every page, as Markdown, in one file
+- [search.json](https://oskalang.dev/search.json): the search index
+- [sitemap.xml](https://oskalang.dev/sitemap.xml): the canonical URL of every page
+- [latest.json](https://oskalang.dev/latest.json): the current version and the installers

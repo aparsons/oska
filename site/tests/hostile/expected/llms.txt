@@ -1,0 +1,18 @@
+# Oska
+
+> The design.
+
+Oska 0.1.0 (pre-alpha). These docs track `main`. Every page is also served as Markdown: the same path with `.md`. All of them are in [llms-full.txt](https://oskalang.dev/llms-full.txt).
+
+## Docs
+
+- [Oska](https://oskalang.dev/index.md): The design.
+- [Glossary](https://oskalang.dev/glossary.md): A value.
+- [Hostile <script>alert("title")</script> notes](https://oskalang.dev/design.md): Every construct here tries to get markup or script past the converter. None of it may survive as anything but text.
+
+## Machine-readable
+
+- [llms-full.txt](https://oskalang.dev/llms-full.txt): every page, as Markdown, in one file
+- [search.json](https://oskalang.dev/search.json): the search index
+- [sitemap.xml](https://oskalang.dev/sitemap.xml): the canonical URL of every page
+- [latest.json](https://oskalang.dev/latest.json): the current version and the installers
