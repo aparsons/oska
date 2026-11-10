@@ -114,7 +114,7 @@ pub fn module(src: &str, module: &Module, items: &Items, resolutions: &Resolutio
         match &item.kind {
             ItemKind::Fn(f) => {
                 let name = f.name.name.clone();
-                lowering.function(&mut program, name, f, items.fns.get(&f.name.name));
+                lowering.function(&mut program, name, f, f, items.fns.get(&f.name.name));
             }
             ItemKind::Use(u) => {
                 if let (Some(first), Some(last)) = (u.path.first(), u.path.last()) {
@@ -164,7 +164,13 @@ pub fn module(src: &str, module: &Module, items: &Items, resolutions: &Resolutio
                             items.inherent_method(type_name, method),
                         ),
                     };
-                    lowering.function(&mut program, name, f, sig);
+                    // The trait's declaration of the method holds its
+                    // contract, whichever impl runs.
+                    let declared = trait_impl
+                        .and_then(|i| traits.get(i.trait_name.as_str()))
+                        .and_then(|methods| fn_decls(methods).find(|d| d.name.name == *method))
+                        .unwrap_or(f);
+                    lowering.function(&mut program, name, f, declared, sig);
                 }
             }
             ItemKind::Test(test) => program.tests.push(super::Test {
@@ -199,14 +205,24 @@ struct Lowering<'a> {
     /// Whether a contract's condition is being lowered, outside any
     /// closure in it. A `?` or `return` there would leave the function
     /// from its contract, which has no meaning, so it lowers to
-    /// `Unsupported`.
+    /// `Unsupported`. The checker already rejects it (`E0282`), so this is
+    /// a second line of defence.
     in_contract: Cell<bool>,
 }
 
 impl Lowering<'_> {
     /// Lower `f`, with signature `sig`, into `program` as `name`, when it
-    /// has a body.
-    fn function(&self, program: &mut Program, name: String, f: &FnDecl, sig: Option<&FnSig>) {
+    /// has a body. It carries the contracts `contracts_of` declares: `f`
+    /// itself, or for a method of `impl Trait for Type`, the trait's
+    /// declaration of it (the impl declares none of its own, `E0218`).
+    fn function(
+        &self,
+        program: &mut Program,
+        name: String,
+        f: &FnDecl,
+        contracts_of: &FnDecl,
+        sig: Option<&FnSig>,
+    ) {
         let Some(body) = &f.body else {
             return;
         };
@@ -226,7 +242,7 @@ impl Lowering<'_> {
             name: name.clone(),
             receiver: f.receiver.is_some(),
             params,
-            contracts: self.contracts(f),
+            contracts: self.contracts(contracts_of),
             body: self.block(body),
         };
         program.functions.insert(name, function);

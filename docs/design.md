@@ -338,8 +338,12 @@ fn withdraw(acct: Account, amount: Int) -> Result<Account, Error>
 ```
 
 - Contracts are machine-checkable specifications. Code an agent writes only has to be *checkable*, not right the first time.
-- A contract may only call pure functions. The compiler enforces this.
-- In v0, contracts are checked at runtime in all builds.
+- A contract may only call pure functions. The compiler enforces this, so evaluating one never performs an effect. It is also a plain condition: a `?` or `return` directly in a clause is a compile error.
+- Contracts are checked at runtime in all builds, `--release` included.
+  - `requires` is evaluated on entry, after the arguments and before the body. A false one panics with `P0006`, "precondition violated", at the **call site**: the caller broke the contract.
+  - `ensures` is evaluated whenever the function returns, on every path (falling off the end, an early `return`, and `?`), with `r` bound to the value being returned. A false one panics with `P0007`, "postcondition violated", at the **clause**, and the message names the return that broke it: the function broke its promise.
+  - Both are ordinary panics (exit code 101, the usual JSON shape). A panic while a clause is evaluated is reported unchanged. A function a clause calls keeps its own contract.
+- A trait method's contract is declared on the trait and binds every impl, however the call reaches it: through the trait, a qualified call, or a direct method call. A method of `impl Trait for Type` declares no contract of its own, because the trait is the one place a method's contract lives. `main` declares none either: nothing calls it, so there is no caller to blame. Both are compile errors.
 - Later, the compiler will prove decidable contracts statically with an SMT solver and fall back to runtime checks for the rest. It will report which contracts were proved and which are runtime-checked.
 
 ## Testing
