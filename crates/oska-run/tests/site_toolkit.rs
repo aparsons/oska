@@ -83,7 +83,7 @@ fn create_dir_refuses_a_path_out_of_its_root() {
         let outcome = run_kept(&src, &mut host);
         assert_refused_at_runtime(&outcome, path);
         assert!(
-            host.list_dir(Path::new("/"), None).expect("the root") == ["_site"],
+            host.list_dir(Path::new("/")).expect("the root") == ["_site"],
             "creating `{path}` made something outside `_site`"
         );
     }
@@ -249,27 +249,13 @@ fn real_host_never_creates_through_a_symlink() {
 }
 
 #[test]
-fn real_host_refuses_a_directory_that_is_not_under_the_root() {
-    // The host's own guard, behind `confine.rs`: what a symlink swapped
-    // in after the path was checked would meet.
+fn real_host_unrestricted_keeps_a_symlink_to_a_directory() {
+    // Unrestricted, `create_dir` follows a symlink to a directory that is
+    // already there. Restricted, it never does (`confined_writes.rs`).
     let sandbox = Sandbox::new("create-host");
     let root = sandbox.root();
-    sandbox.link("dangling", &sandbox.outside().join("planted"));
     sandbox.link("alias", &root.join("sub"));
-    let mut host = RealHost::new();
-    assert!(host
-        .create_dir(&sandbox.outside().join("new"), Some(&root))
-        .is_err());
-    assert!(host
-        .create_dir(&root.join("dangling"), Some(&root))
-        .is_err());
-    assert!(host.create_dir(&root.join("alias"), Some(&root)).is_err());
-    assert_eq!(sandbox.outside_names(), ["secret.txt"]);
-    assert!(host.create_dir(&root.join("fresh"), Some(&root)).is_ok());
-    assert!(root.join("fresh").is_dir());
-    // Unrestricted, the same host follows a symlink to a directory that
-    // is already there.
-    assert!(host.create_dir(&root.join("alias"), None).is_ok());
+    assert!(RealHost::new().create_dir(&root.join("alias")).is_ok());
 }
 
 // ---- restrict_to a single file -------------------------------------------------
