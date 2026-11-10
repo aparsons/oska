@@ -24,10 +24,14 @@ const BUILD: &str = include_str!("../../../site/build.osk");
 const OUTPUT: &str = "_site";
 
 /// The Content Security Policy every page carries: nothing runs, and
-/// styles and fonts come only from the site and the pinned CDN.
-const CSP: &str = "default-src 'none'; style-src 'self' https://cdn.jsdelivr.net; \
-                   font-src https://cdn.jsdelivr.net; img-src 'self'; base-uri 'none'; \
-                   form-action 'none'";
+/// styles and fonts come only from the site and the two font packages,
+/// at their pinned versions, on the CDN.
+const CSP: &str = "default-src 'none'; \
+    style-src 'self' https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/ \
+    https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/; \
+    font-src https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/ \
+    https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/; \
+    img-src 'self'; base-uri 'none'; form-action 'none'";
 
 fn cases_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../site/tests")
