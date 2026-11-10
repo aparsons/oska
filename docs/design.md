@@ -230,6 +230,7 @@ fn main(fs: Fs, net: Net, args: Args) -> Result<(), AppError> {
 - Any type that contains a capability must be declared with `cap`, for example `cap struct Logger { out: Stdout }`.
 - Omitting `cap` is a compile error that comes with an automatic fix.
 - A function type `fn(T) -> U` accepts only pure closures. Accepting a closure that captures a capability requires `cap fn(T) -> U`.
+- A plain `fn` may flow into a `cap fn` slot, but never the reverse. Where values meet (list elements, `if` and `match` branches, and the arguments of a generic for one type parameter), a plain `fn` and a `cap fn` join to `cap fn`, so `[pure_fn, capturing_closure]` is a `List<cap fn() -> Int>` without an annotation. The checker solves this like trust, with the same one-way mechanism. An explicit `fn` annotation still rejects the capturing closure, and the join never turns a `cap fn` into a plain `fn`: whatever calls the joined closures must declare `cap fn`.
 - A **pure function** has no capability-bearing parameters. It cannot perform effects, and it is deterministic.
 
 There are two deliberate exceptions to the rules above:

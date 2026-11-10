@@ -63,7 +63,7 @@ use crate::program::lower::{Resolution, Resolutions};
 use crate::program::{self, Callee, Construct};
 use crate::resolve;
 use crate::suggest;
-use crate::ty::{self, Trust, Ty};
+use crate::ty::{self, Cap, Trust, Ty};
 use crate::{Attenuation, AuditSite};
 
 mod attenuation;
@@ -1538,20 +1538,29 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             .captures
             .iter()
             .any(|(_, ty)| self.infer.resolve(ty).holds_scope());
+        let captures: Vec<Ty> = frame.captures.iter().map(|(_, ty)| ty.clone()).collect();
         let captured = frame
             .captures
             .into_iter()
             .find(|(_, ty)| self.bearing(ty))
             .map(|(name, _)| name);
+        if captured.is_none() {
+            // A plain `fn` now: what it captured must not become a
+            // `cap fn` later.
+            self.settle_all(&captures);
+        }
         let ty = Ty::Fn {
-            cap: captured.is_some(),
+            cap: Cap::of(captured.is_some()),
             scoped,
             params: param_tys,
             ret: Box::new(ret),
         };
         let wants_plain_fn = matches!(
             expected_fn.map(|e| self.infer.shallow(&e)),
-            Some(Ty::Fn { cap: false, .. })
+            Some(Ty::Fn {
+                cap: Cap::Plain,
+                ..
+            })
         );
         match captured {
             Some(name) if wants_plain_fn => {
@@ -1569,9 +1578,21 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
     }
 
-    /// Whether `ty`, as solved so far, is capability-bearing.
+    /// Whether `ty`, as solved so far, is capability-bearing. A function
+    /// type whose capability flag is still open is not; a caller that acts
+    /// on that answer settles the flag with [`Body::settle_all`].
     fn bearing(&self, ty: &Ty) -> bool {
         capability_bearing(&self.infer.resolve(ty), self.decls())
+    }
+
+    /// Settle every open capability flag in `tys` as a plain `fn`, after
+    /// deciding from them that something is pure: a `cap fn` that reaches
+    /// one of them later is `E0270`, so the decision cannot be undone by
+    /// a join further on, such as a later assignment in a loop.
+    fn settle_all(&mut self, tys: &[Ty]) {
+        for ty in tys {
+            self.infer.settle_caps(ty);
+        }
     }
 
     // ---- Blocks and statements --------------------------------------------

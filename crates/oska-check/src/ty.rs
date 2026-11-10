@@ -17,7 +17,7 @@ pub enum Ty {
     Named(String, Vec<Ty>, Trust),
     /// `()`.
     Unit,
-    /// `fn(T) -> U`, or `cap fn(T) -> U` when `cap` is set.
+    /// `fn(T) -> U`, or `cap fn(T) -> U` when `cap` is [`Cap::Bearing`].
     ///
     /// `scoped` marks a closure that captures a `Scope` handle, or a value
     /// holding one: like the handle, it cannot outlive its `scope` block.
@@ -26,7 +26,7 @@ pub enum Ty {
     /// or `std` function, which accepts a scoped closure (see
     /// [`crate::items::Lower::signature`]).
     Fn {
-        cap: bool,
+        cap: Cap,
         scoped: bool,
         params: Vec<Ty>,
         ret: Box<Ty>,
@@ -58,6 +58,35 @@ pub enum Trust {
     /// untrusted as soon as any untrusted text does. Inference variables
     /// and trust-polymorphic prelude operations introduce them.
     Var(u32),
+}
+
+/// The capability flag on a function type: a plain `fn` may flow into a
+/// `cap fn` slot; a `cap fn` never flows into a plain `fn` one (see
+/// `infer.rs`). Inference treats it like [`Trust`], so a plain `fn` and a
+/// `cap fn` meeting in one position join to `cap fn`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Cap {
+    /// A plain `fn`: pure.
+    #[default]
+    Plain,
+    /// A `cap fn`: it may carry authority.
+    Bearing,
+    /// A **capability variable**, solved within one body (see
+    /// `infer.rs`). It stands for the join of everything that flows into
+    /// it: a `cap fn` as soon as any `cap fn` does. Inference variables
+    /// introduce them.
+    Var(u32),
+}
+
+impl Cap {
+    /// `Bearing` when `bearing`, otherwise `Plain`.
+    pub fn of(bearing: bool) -> Cap {
+        if bearing {
+            Cap::Bearing
+        } else {
+            Cap::Plain
+        }
+    }
 }
 
 // Prelude types and traits the checker gives special treatment, by name.
@@ -157,6 +186,31 @@ impl Ty {
                 scoped: *scoped,
                 params: params.iter().map(|p| p.map_trust(map)).collect(),
                 ret: Box::new(ret.map_trust(map)),
+            },
+            other => other.clone(),
+        }
+    }
+
+    /// This type with the capability flag of every function type in it, at
+    /// any depth, replaced by `map` of it. The one walk over capability
+    /// flags.
+    pub fn map_cap(&self, map: &mut impl FnMut(Cap) -> Cap) -> Ty {
+        match self {
+            Ty::Named(name, args, trust) => Ty::Named(
+                name.clone(),
+                args.iter().map(|a| a.map_cap(map)).collect(),
+                *trust,
+            ),
+            Ty::Fn {
+                cap,
+                scoped,
+                params,
+                ret,
+            } => Ty::Fn {
+                cap: map(*cap),
+                scoped: *scoped,
+                params: params.iter().map(|p| p.map_cap(map)).collect(),
+                ret: Box::new(ret.map_cap(map)),
             },
             other => other.clone(),
         }
@@ -314,7 +368,7 @@ impl fmt::Display for Ty {
             Ty::Fn {
                 cap, params, ret, ..
             } => {
-                if *cap {
+                if *cap == Cap::Bearing {
                     write!(f, "cap ")?;
                 }
                 write!(f, "fn(")?;
