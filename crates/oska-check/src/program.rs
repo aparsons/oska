@@ -25,7 +25,8 @@
 //!    turns anything it does not know yet into [`ExprKind::Unsupported`].
 //! 4. Let [`walk`] reach into it, so every pass over the tree, such as
 //!    `oska-run`'s refusal (`E0380`) of a program with an `Unsupported`
-//!    node or a call it cannot make, sees what it holds.
+//!    node or a call it cannot make, sees what it holds. A pass walks
+//!    each of a function's [`Function::code`], its contracts included.
 //! 5. Evaluate it in each backend: in `oska-run`, `interp.rs`.
 
 use std::collections::BTreeMap;
@@ -88,7 +89,62 @@ pub struct Function {
     pub receiver: bool,
     /// The parameters after the receiver, in order.
     pub params: Vec<Param>,
+    /// The contracts every call of it evaluates.
+    pub contracts: Contracts,
     pub body: Expr,
+}
+
+/// A function's contracts. Every call evaluates them, in every build, in
+/// a frame of their own: the arguments that take a slot in it, as
+/// [`Contracts::params`] says, and the receiver. Contracts are pure
+/// (`E0280`), so evaluating them has no effect.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Contracts {
+    /// Whether each parameter after the receiver takes a slot in the
+    /// clauses' frame, numbered from 0 as the declaration that wrote the
+    /// clauses numbers them. That is the function's own declaration,
+    /// whose numbering its body shares, unless the clauses come from
+    /// elsewhere, such as a trait method's for its impls.
+    pub params: Vec<bool>,
+    /// The `requires` clauses, in source order. They are evaluated after
+    /// the arguments and before the body, and the call panics with
+    /// `P0006` at the first that is false.
+    pub requires: Vec<Clause>,
+}
+
+impl Function {
+    /// Everything a call of it evaluates: its contracts' conditions, then
+    /// its body. A pass over the program, such as a backend's refusal of
+    /// what it cannot run, walks each of them.
+    pub fn code(&self) -> impl Iterator<Item = &Expr> {
+        self.contracts
+            .conditions()
+            .chain(std::iter::once(&self.body))
+    }
+}
+
+impl Contracts {
+    /// Whether there is no clause to evaluate.
+    pub fn is_empty(&self) -> bool {
+        self.requires.is_empty()
+    }
+
+    /// The condition of every clause, in the order a call evaluates
+    /// them.
+    pub fn conditions(&self) -> impl Iterator<Item = &Expr> {
+        self.requires.iter().map(|clause| &clause.cond)
+    }
+}
+
+/// A contract clause.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Clause {
+    /// The condition, a `Bool`.
+    pub cond: Expr,
+    /// The condition as written, which a violation's message quotes.
+    pub text: String,
+    /// The whole clause, its keyword included.
+    pub span: Span,
 }
 
 /// A function parameter.
