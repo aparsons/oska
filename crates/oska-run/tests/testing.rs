@@ -256,7 +256,13 @@ fn a_file_the_checker_rejects_runs_no_test_and_exits_with_one() {
 
 #[test]
 fn a_test_using_something_the_interpreter_cannot_run_refuses_the_file() {
-    let report = test_fake("test \"t\" {\n    t.assert_eq(\" a \".trim(), \"a\")\n}\n");
+    let report = test_fake(
+        "trait Tag {\n    fn tag(self) -> Int\n}\n\n\
+         impl Tag for Int {\n    fn tag(self) -> Int { 1 }\n}\n\n\
+         impl Tag for U8 {\n    fn tag(self) -> Int { 2 }\n}\n\n\
+         fn show<T: Tag>(x: T) -> Int { x.tag() }\n\n\
+         test \"t\" {\n    let b: U8 = 3\n    t.assert_eq(show(b), 2)\n}\n",
+    );
     assert!(report.tests.is_empty());
     assert_eq!(report.diagnostics[0].code, codes::UNSUPPORTED);
     assert_eq!(report.exit_code(), 2);
