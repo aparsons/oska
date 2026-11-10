@@ -16,7 +16,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt, clippy
-      - run: cargo fmt --all --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test --all
-      - run: scripts/release/test.sh
+      # The same script contributors and agents run locally (and the
+      # pre-push hook runs), so local and CI checks cannot drift apart.
+      - run: scripts/check.sh
