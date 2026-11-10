@@ -4,19 +4,23 @@
 //! program behaves the same on [`RealHost`] and [`FakeHost`] except for
 //! what the world gives back.
 //!
-//! The host offers primitives only. Policy, such as confining a restricted
-//! filesystem to its root, lives in the runtime (`confine.rs`), built on
-//! [`Host::canonicalize`] and [`Host::is_symlink`], so it is the same on
-//! every host.
+//! The host offers primitives only. Policy lives in the runtime
+//! (`confine.rs`), so it is the same on every host: it turns a program's
+//! path into the plain names to walk beneath a root, and the host walks
+//! them from the [`RootHandle`] it opened, never following a symlink.
+//! Writes, `create_dir` and `list_dir` still resolve paths with
+//! [`Host::canonicalize`] and [`Host::is_symlink`] under the root's path.
 //!
 //! To add an operation: add a method to [`Host`], implement it on both
 //! hosts (`FakeHost` deterministically, in memory), and call it from the
 //! intrinsic that needs it (`intrinsics.rs`).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::prng::SplitMix64;
@@ -61,24 +65,39 @@ pub trait Host: Send {
     /// dangling symlink is one.
     fn is_symlink(&mut self, path: &Path) -> bool;
 
-    /// The text of the file at `path`.
-    ///
-    /// With `beneath`, the root of a restricted filesystem, `path` is one
-    /// `confine.rs` resolved: the host opens its last component without
-    /// following a symlink, and refuses the file unless the file it
-    /// opened still lies under `beneath`.
-    fn read_file(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<String>;
+    /// Open the directory or regular file at `path` as the root of a
+    /// restricted filesystem. Its last component must not be a symlink;
+    /// earlier ones are followed, since the root is trusted text.
+    fn open_root(&mut self, path: &Path) -> io::Result<RootHandle>;
+
+    /// The directory or regular file reached by walking `names` beneath
+    /// `root`, as a root of its own: each name a plain component, which
+    /// `confine.rs` produced, and none a symlink. No names gives `root`.
+    fn open_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<RootHandle>;
+
+    /// The text of the regular file reached by walking `names` beneath
+    /// `root`, none of them a symlink. When `root` is itself a file,
+    /// `names` is empty.
+    fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<String>;
+
+    /// The text of the file at `path`, read through an unrestricted
+    /// filesystem: symlinks are followed.
+    fn read_file(&mut self, path: &Path) -> io::Result<String>;
 
     /// Create the file at `path`, or replace its contents, with
-    /// `contents`. `beneath` is as for [`Host::read_file`]: with it,
-    /// nothing is written until the opened file is known to lie under it.
+    /// `contents`.
+    ///
+    /// With `beneath`, the path of a restricted filesystem's root, `path`
+    /// is one `confine.rs` resolved: the host opens its last component
+    /// without following a symlink, and writes nothing until the opened
+    /// file is known to lie under `beneath`.
     fn write_file(&mut self, path: &Path, contents: &str, beneath: Option<&Path>)
         -> io::Result<()>;
 
     /// Create the directory at `path`, whose parent must exist. A
     /// directory already there is kept; anything else there is an error.
     ///
-    /// `beneath` is as for [`Host::read_file`]: with it, `path` is one
+    /// `beneath` is as for [`Host::write_file`]: with it, `path` is one
     /// `confine.rs` resolved, a symlink at `path` is refused rather than
     /// followed, and the directory is checked to lie under `beneath`
     /// once it exists.
@@ -90,7 +109,7 @@ pub trait Host: Send {
     /// listed by name, and nothing is followed. Fails when `path` is not
     /// a directory, or an entry's name is not valid UTF-8.
     ///
-    /// `beneath` is as for [`Host::read_file`]: with it, `path` is one
+    /// `beneath` is as for [`Host::write_file`]: with it, `path` is one
     /// `confine.rs` resolved, and nothing is listed unless the directory
     /// still lies under it.
     fn list_dir(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<Vec<String>>;
@@ -104,6 +123,72 @@ pub trait Host: Send {
     /// the last call. A host that writes straight to the real streams
     /// records nothing.
     fn take_output(&mut self) -> Output;
+}
+
+/// The root of a restricted filesystem, as a host opened it: a directory,
+/// or a single regular file. Copies share it, and the last one dropped
+/// releases what the host holds for it.
+///
+/// On a Unix [`RealHost`] it holds an OS handle for the directory, or for
+/// a file's parent directory together with the file's name, and every
+/// read beneath it walks from that handle (`oska-sys`). Elsewhere, and on
+/// [`FakeHost`], it holds only the root's path.
+#[derive(Debug, Clone)]
+pub struct RootHandle {
+    /// The root's canonical path, which the path-based operations
+    /// resolve under.
+    path: Rc<Path>,
+    /// The file's own name, when the root is a file.
+    file: Option<Rc<OsStr>>,
+    /// The directory's handle, or the file's parent's. Always `None` off
+    /// Unix, where `OsDir` has no values.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    os: Option<Rc<OsDir>>,
+}
+
+#[cfg(unix)]
+type OsDir = oska_sys::Dir;
+/// No OS handle: a root holds only its path.
+#[cfg(not(unix))]
+type OsDir = std::convert::Infallible;
+
+impl RootHandle {
+    /// The root's canonical path.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Whether the root is a single file rather than a directory.
+    pub fn is_file(&self) -> bool {
+        self.file.is_some()
+    }
+}
+
+/// Two handles are equal when they name the same root.
+impl PartialEq for RootHandle {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path && self.file == other.file
+    }
+}
+
+impl Eq for RootHandle {}
+
+/// The error for `names` walked beneath a root that is a single file.
+fn beneath_a_file(names: &[String]) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "`{}` is beneath a single file, which holds no other file",
+            names.join("/")
+        ),
+    )
+}
+
+/// `root`'s path joined with `names`.
+fn joined(root: &RootHandle, names: &[String]) -> PathBuf {
+    names
+        .iter()
+        .fold(root.path.to_path_buf(), |path, name| path.join(name))
 }
 
 /// The real OS: backs `oskac run` and integration tests.
@@ -171,14 +256,119 @@ impl Host for RealHost {
         std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
     }
 
-    fn read_file(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<String> {
-        let Some(root) = beneath else {
-            return std::fs::read_to_string(path);
+    #[cfg(unix)]
+    fn open_root(&mut self, path: &Path) -> io::Result<RootHandle> {
+        // Without a trailing `/` or `.`, which would follow a symlink in
+        // the last component.
+        let path: PathBuf = path.components().collect();
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            // `/`, or a path ending in `..`: no symlink to refuse.
+            let dir = oska_sys::Dir::open(&path)?;
+            return Ok(real_root(std::fs::canonicalize(&path)?, None, dir));
         };
-        let mut file = open_beneath(path, root, OpenOptions::new().read(true))?;
+        let parent = match parent.as_os_str().is_empty() {
+            true => Path::new("."),
+            false => parent,
+        };
+        let parent = oska_sys::Dir::open(parent)?;
+        let (file, dir) = match parent.open_dir(&[name]) {
+            Ok(dir) => (None, dir),
+            Err(_) => {
+                parent.open_file(&[name])?;
+                (Some(name), parent)
+            }
+        };
+        Ok(real_root(std::fs::canonicalize(&path)?, file, dir))
+    }
+
+    #[cfg(unix)]
+    fn open_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<RootHandle> {
+        if names.is_empty() {
+            return Ok(root.clone());
+        }
+        if root.is_file() {
+            return Err(beneath_a_file(names));
+        }
+        let dir = root_dir(root)?;
+        // Canonical as it stands: the walk met no symlink. Not
+        // canonicalized again, which would follow one swapped in since.
+        let path = joined(root, names);
+        match dir.open_dir(names) {
+            Ok(dir) => Ok(real_root(path, None, dir)),
+            Err(error) => {
+                let (name, parents) = names.split_last().ok_or(error)?;
+                let parent = dir.open_dir(parents)?;
+                parent.open_file(&[name])?;
+                Ok(real_root(path, Some(OsStr::new(name)), parent))
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<String> {
+        let dir = root_dir(root)?;
+        let mut file = match &root.file {
+            Some(_) if !names.is_empty() => return Err(beneath_a_file(names)),
+            Some(name) => dir.open_file(&[name])?,
+            None => dir.open_file(names)?,
+        };
         let mut text = String::new();
         file.read_to_string(&mut text)?;
         Ok(text)
+    }
+
+    #[cfg(not(unix))]
+    fn open_root(&mut self, path: &Path) -> io::Result<RootHandle> {
+        let path: PathBuf = path.components().collect();
+        let there = std::fs::symlink_metadata(&path)?;
+        if there.file_type().is_symlink() {
+            return Err(moved(&path));
+        }
+        let file = match there.is_file() {
+            true => path.file_name().map(Rc::from),
+            false => None,
+        };
+        Ok(RootHandle {
+            path: Rc::from(std::fs::canonicalize(&path)?.as_path()),
+            file,
+            os: None,
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn open_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<RootHandle> {
+        if names.is_empty() {
+            return Ok(root.clone());
+        }
+        if root.is_file() {
+            return Err(beneath_a_file(names));
+        }
+        let path = checked_beneath(root, names)?;
+        let file = match std::fs::metadata(&path)?.is_file() {
+            true => path.file_name().map(Rc::from),
+            false => None,
+        };
+        Ok(RootHandle {
+            path: Rc::from(path.as_path()),
+            file,
+            os: None,
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<String> {
+        if root.is_file() && !names.is_empty() {
+            return Err(beneath_a_file(names));
+        }
+        let path = checked_beneath(root, names)?;
+        let mut file = open_beneath(&path, &root.path, OpenOptions::new().read(true))?;
+        let mut text = String::new();
+        file.read_to_string(&mut text)?;
+        Ok(text)
+    }
+
+    fn read_file(&mut self, path: &Path) -> io::Result<String> {
+        std::fs::read_to_string(path)
     }
 
     fn write_file(
@@ -260,6 +450,44 @@ impl Host for RealHost {
     }
 }
 
+/// A root at the canonical `path`, opened as `dir`: the directory
+/// itself, or with `file`, the parent of the file of that name.
+#[cfg(unix)]
+fn real_root(path: PathBuf, file: Option<&OsStr>, dir: oska_sys::Dir) -> RootHandle {
+    RootHandle {
+        path: Rc::from(path.as_path()),
+        file: file.map(Rc::from),
+        os: Some(Rc::new(dir)),
+    }
+}
+
+/// The OS handle of `root`, which only a root [`FakeHost`] opened lacks.
+#[cfg(unix)]
+fn root_dir(root: &RootHandle) -> io::Result<&oska_sys::Dir> {
+    root.os.as_deref().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "this root was opened by another host",
+        )
+    })
+}
+
+/// Where Windows has no handle-relative open: the path `names` reach
+/// beneath `root`, refused when any component is a symlink or the path
+/// canonicalizes outside the root. A narrowed check, not a race-free one
+/// (`docs/runtime.md`).
+#[cfg(not(unix))]
+fn checked_beneath(root: &RootHandle, names: &[String]) -> io::Result<PathBuf> {
+    let mut path = root.path.to_path_buf();
+    for name in names {
+        path.push(name);
+        if std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
+            return Err(moved(&path));
+        }
+    }
+    resolved_beneath(&path, &root.path)
+}
+
 /// `O_NOFOLLOW`, from the platform's `fcntl.h`: `open` fails on a symlink
 /// in the last component instead of following it. `None` where its value
 /// is not known here; there the checks in `confine.rs` and the re-check
@@ -305,6 +533,7 @@ const O_NOFOLLOW: Option<i32> = Some(0x0100);
     target_os = "macos",
     target_os = "ios"
 )))]
+#[cfg_attr(not(unix), allow(dead_code))]
 const O_NOFOLLOW: Option<i32> = None;
 
 /// Open `path`, which `confine.rs` resolved under `root`, with `options`:
@@ -475,6 +704,20 @@ impl FakeHost {
             .map(String::as_str)
     }
 
+    /// A root at `path`, already normalized: a file or a directory.
+    fn root_at(&self, path: PathBuf) -> io::Result<RootHandle> {
+        let file = match self.files.contains_key(&path) {
+            true => path.file_name().map(Rc::from),
+            false if self.is_dir(&path) => None,
+            false => return Err(not_found(&path)),
+        };
+        Ok(RootHandle {
+            path: Rc::from(path.as_path()),
+            file,
+            os: None,
+        })
+    }
+
     fn is_dir(&self, path: &Path) -> bool {
         path == Path::new("/")
             || self.dirs.iter().any(|d| d.starts_with(path))
@@ -567,8 +810,36 @@ impl Host for FakeHost {
         false
     }
 
-    fn read_file(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<String> {
-        let path = fake_beneath(path, beneath)?;
+    fn open_root(&mut self, path: &Path) -> io::Result<RootHandle> {
+        if path.as_os_str().is_empty() {
+            return Err(not_found(path));
+        }
+        self.root_at(normalize(path))
+    }
+
+    fn open_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<RootHandle> {
+        if names.is_empty() {
+            return Ok(root.clone());
+        }
+        if root.is_file() {
+            return Err(beneath_a_file(names));
+        }
+        self.root_at(joined(root, names))
+    }
+
+    fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<String> {
+        if root.is_file() && !names.is_empty() {
+            return Err(beneath_a_file(names));
+        }
+        let path = joined(root, names);
+        self.files
+            .get(&path)
+            .cloned()
+            .ok_or_else(|| not_found(&path))
+    }
+
+    fn read_file(&mut self, path: &Path) -> io::Result<String> {
+        let path = normalize(path);
         self.files
             .get(&path)
             .cloned()

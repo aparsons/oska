@@ -1,9 +1,31 @@
 //! Filesystem confinement: how a restricted `Fs` keeps every path inside
 //! its root.
 //!
-//! A restricted filesystem holds its root as a canonical path: absolute,
-//! with every symlink followed. [`resolve`] turns a program's path into
-//! the real path to open, or refuses it:
+//! # Reads and narrowing: a walk beneath the root's handle
+//!
+//! A restricted filesystem holds its root as a [`RootHandle`](crate::host::RootHandle) the host
+//! opened. [`names`] turns a program's path into the plain names to walk
+//! beneath it, on the path as written, without touching the filesystem:
+//!
+//! 1. An empty path is refused, and so is an absolute one, even if it
+//!    names a file inside the root: paths are relative to the root.
+//! 2. `.` is dropped, and `..` drops the name before it. A `..` with no
+//!    name before it would climb above the root, and is refused.
+//!
+//! The host then walks the names one at a time beneath the root's handle
+//! (`Host::read_file_beneath`, `Host::open_beneath`). On Unix each is
+//! opened relative to the one before, and none is followed if it is a
+//! symlink (`oska-sys`), so there is no check for another process to race:
+//! a symlink at any component, planted before the walk or swapped in
+//! during it, makes the walk fail. Every symlink is refused, dangling or
+//! not, wherever it points. On Windows the host checks each component on
+//! the path instead, which narrows the race but does not close it.
+//!
+//! # Writes, `create_dir` and `list_dir`: checked paths
+//!
+//! These still resolve a path under the root's canonical path.
+//! [`resolve`] turns a program's path into the real path to open, or
+//! refuses it:
 //!
 //! 1. An empty path is refused, and so is an absolute one, even if it
 //!    names a file inside the root: paths are relative to the root.
@@ -30,7 +52,8 @@
 //!
 //! # What remains
 //!
-//! The check and the open are still separate steps on paths. Opening the
+//! For writes, `create_dir` and `list_dir`, the check and the open are
+//! still separate steps on paths. Opening the
 //! last component without following a symlink, and re-checking the opened
 //! file, narrow the race but leave one window: another process that swaps
 //! an *intermediate* directory for a symlink at the right moment can still
@@ -45,6 +68,31 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 
 use crate::host::Host;
+
+/// The plain names `path` walks beneath a root, with `.` and `..`
+/// resolved as written, or why it is refused: it is empty, absolute, or
+/// climbs above the root. No names means the root itself.
+pub fn names(path: &str) -> io::Result<Vec<String>> {
+    if path.is_empty() {
+        return Err(refused("an empty path names no file"));
+    }
+    let mut names: Vec<String> = Vec::new();
+    for component in Path::new(path).components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => {
+                return Err(refused(&format!(
+                    "`{path}` is absolute; a restricted filesystem takes paths relative to its root"
+                )))
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                names.pop().ok_or_else(|| escapes(path))?;
+            }
+            Component::Normal(name) => names.push(name.to_string_lossy().into_owned()),
+        }
+    }
+    Ok(names)
+}
 
 /// What a resolved path will be used for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

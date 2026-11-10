@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{assert_panics, assert_refused, assert_runs, run_fake, run_on};
-use oska_run::{run, FakeHost, Host, Output, RealHost, RunOutcome};
+use oska_run::{run, FakeHost, Host, Output, RealHost, RootHandle, RunOutcome};
 
 // ---- A real temporary directory --------------------------------------------
 
@@ -95,8 +95,21 @@ impl Host for Recording {
     fn is_symlink(&mut self, path: &Path) -> bool {
         self.real.is_symlink(path)
     }
-    fn read_file(&mut self, path: &Path, beneath: Option<&Path>) -> std::io::Result<String> {
-        self.real.read_file(path, beneath)
+    fn open_root(&mut self, path: &Path) -> std::io::Result<RootHandle> {
+        self.real.open_root(path)
+    }
+    fn open_beneath(&mut self, root: &RootHandle, names: &[String]) -> std::io::Result<RootHandle> {
+        self.real.open_beneath(root, names)
+    }
+    fn read_file_beneath(
+        &mut self,
+        root: &RootHandle,
+        names: &[String],
+    ) -> std::io::Result<String> {
+        self.real.read_file_beneath(root, names)
+    }
+    fn read_file(&mut self, path: &Path) -> std::io::Result<String> {
+        self.real.read_file(path)
     }
     fn write_file(
         &mut self,
@@ -336,24 +349,18 @@ fn a_write_to_a_symlink_inside_the_root_is_refused_even_to_an_inside_file() {
 #[test]
 fn real_host_opens_a_restricted_file_without_following_a_symlink() {
     // The host's own guard, behind `confine.rs`: what a symlink swapped
-    // in after the path was checked would meet.
+    // in after the path was checked would meet. Reads walk beneath the
+    // root's handle instead (`confined_reads.rs`).
     let sandbox = Sandbox::new("host-nofollow");
     let root = sandbox.root();
     let target = sandbox.outside().join("swapped");
     sandbox.link("dang", &target);
     sandbox.link("escape.txt", &sandbox.outside().join("secret.txt"));
-    sandbox.link("alias.txt", &root.join("inside.txt"));
     let mut host = RealHost::new();
     assert!(host
         .write_file(&root.join("dang"), "pwned", Some(&root))
         .is_err());
     assert!(!target.exists(), "the dangling symlink was followed");
-    assert!(host
-        .read_file(&root.join("escape.txt"), Some(&root))
-        .is_err());
-    assert!(host
-        .read_file(&root.join("alias.txt"), Some(&root))
-        .is_err());
     assert!(host
         .write_file(&root.join("escape.txt"), "pwned", Some(&root))
         .is_err());
@@ -369,7 +376,6 @@ fn real_host_refuses_a_restricted_file_that_is_not_under_the_root() {
     let root = sandbox.root();
     let outside = sandbox.outside().join("secret.txt");
     let mut host = RealHost::new();
-    assert!(host.read_file(&outside, Some(&root)).is_err());
     assert!(host.write_file(&outside, "pwned", Some(&root)).is_err());
     assert_eq!(
         std::fs::read_to_string(&outside).expect("untouched"),
@@ -378,14 +384,9 @@ fn real_host_refuses_a_restricted_file_that_is_not_under_the_root() {
     // Unrestricted, the same host reads it, through a symlink too.
     sandbox.link("escape.txt", &outside);
     assert_eq!(
-        host.read_file(&root.join("escape.txt"), None)
+        host.read_file(&root.join("escape.txt"))
             .expect("an unrestricted read follows symlinks"),
         "outside text"
-    );
-    assert_eq!(
-        host.read_file(&root.join("inside.txt"), Some(&root))
-            .expect("a file under the root"),
-        "inside text"
     );
 }
 
@@ -435,13 +436,6 @@ fn a_file_inside_the_root_is_read() {
         read_confined(&sandbox.root(), "sub/../inside.txt"),
         "inside text\n"
     );
-}
-
-#[test]
-fn a_symlink_inside_the_root_to_a_file_inside_the_root_is_read() {
-    let sandbox = Sandbox::new("symlink-inside");
-    sandbox.link("alias.txt", &sandbox.root().join("sub/nested.txt"));
-    assert_eq!(read_confined(&sandbox.root(), "alias.txt"), "nested text\n");
 }
 
 #[test]

@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{assert_panics, assert_runs, run_fake, run_on};
-use oska_run::{run, FakeHost, Host, Output, RealHost, RunOutcome};
+use oska_run::{run, FakeHost, Host, Output, RealHost, RootHandle, RunOutcome};
 
 /// A program whose `main` runs `body` with `io: Stdout` in scope.
 fn program(body: &str) -> String {
@@ -371,8 +371,21 @@ impl Host for Recording {
     fn is_symlink(&mut self, path: &Path) -> bool {
         self.real.is_symlink(path)
     }
-    fn read_file(&mut self, path: &Path, beneath: Option<&Path>) -> std::io::Result<String> {
-        self.real.read_file(path, beneath)
+    fn open_root(&mut self, path: &Path) -> std::io::Result<RootHandle> {
+        self.real.open_root(path)
+    }
+    fn open_beneath(&mut self, root: &RootHandle, names: &[String]) -> std::io::Result<RootHandle> {
+        self.real.open_beneath(root, names)
+    }
+    fn read_file_beneath(
+        &mut self,
+        root: &RootHandle,
+        names: &[String],
+    ) -> std::io::Result<String> {
+        self.real.read_file_beneath(root, names)
+    }
+    fn read_file(&mut self, path: &Path) -> std::io::Result<String> {
+        self.real.read_file(path)
     }
     fn write_file(
         &mut self,

@@ -313,21 +313,31 @@ fn path_new(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Pa
 }
 
 /// `restrict_to(self, dir)` on `Fs`, `FsRead`, and `FsWrite`: the same
-/// access, confined to `dir`. On an unrestricted filesystem, `dir` is any
-/// directory; on a restricted one, it is resolved under the current root
-/// like any path, so a restriction never widens. A directory that does
-/// not exist, or lies outside the current root, leaves the result able to
-/// reach nothing.
+/// access, confined to `dir`, a directory or a single file, which the
+/// host opens now and holds.
+///
+/// On an unrestricted filesystem, `dir` is any path whose last component
+/// is not a symlink. On a restricted one, it is walked beneath the
+/// current root like any path read there (`confine.rs`), so a restriction
+/// never widens. A root that cannot be opened leaves the result able to
+/// reach nothing, and every operation on it fails with the reason.
 fn fs_restrict_to(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
     let fs = fs_cap(&args[0]);
     let dir = text(&args, 1);
-    let real = match &fs.root {
-        Root::Anywhere if dir.is_empty() => None,
-        Root::Anywhere => host.canonicalize(Path::new(dir)).ok(),
-        Root::Dir(root) => confine::resolve(host, root, dir, Intent::Read).ok(),
-        Root::Nowhere => None,
+    let opened = match &fs.root {
+        Root::Anywhere if dir.is_empty() => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "an empty path names no directory",
+        )),
+        Root::Anywhere => host.open_root(Path::new(dir)),
+        Root::Dir(root) => confine::names(dir).and_then(|names| host.open_beneath(root, &names)),
+        Root::Nowhere(why) => Err(io::Error::new(io::ErrorKind::NotFound, why.to_string())),
     };
-    let root = real.map_or(Root::Nowhere, |r| Root::Dir(Rc::from(r.as_path())));
+    let root = match opened {
+        Ok(root) => Root::Dir(root),
+        Err(_) if matches!(fs.root, Root::Nowhere(_)) => fs.root.clone(),
+        Err(error) => Root::Nowhere(Rc::from(format!("cannot restrict to `{dir}`: {error}"))),
+    };
     Ok(Value::Capability(Capability::Fs(FsCap {
         root,
         access: fs.access,
@@ -351,30 +361,38 @@ fn with_access(value: &Value, access: Access) -> Value {
     }))
 }
 
-/// The real path `path` names through `fs`, for `intent`, with the root
-/// it must stay under when `fs` is restricted, or why `fs` may not reach
-/// it.
+/// Refused unless `fs`'s access allows `intent`.
+fn allowed(fs: &FsCap, intent: Intent) -> io::Result<()> {
+    let (allowed, what) = match intent {
+        Intent::Read => (fs.access.reads(), "read"),
+        Intent::Write => (fs.access.writes(), "write"),
+    };
+    if allowed {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!("this filesystem capability cannot {what}"),
+    ))
+}
+
+/// Why a filesystem restricted to a root it could not open reaches
+/// nothing.
+fn broken(why: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::PermissionDenied, why.to_string())
+}
+
+/// The real path `path` names through `fs`, for `intent`, with the
+/// canonical path of the root it must stay under when `fs` is restricted,
+/// or why `fs` may not reach it. For writes, `create_dir` and `list_dir`,
+/// which do not yet walk beneath the root's handle.
 fn real_path<'f>(
     host: &mut dyn Host,
     fs: &'f FsCap,
     path: &Value,
     intent: Intent,
 ) -> io::Result<(PathBuf, Option<&'f Path>)> {
-    let allowed = match intent {
-        Intent::Read => fs.access.reads(),
-        Intent::Write => fs.access.writes(),
-    };
-    if !allowed {
-        let what = if intent == Intent::Read {
-            "read"
-        } else {
-            "write"
-        };
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!("this filesystem capability cannot {what}"),
-        ));
-    }
+    allowed(fs, intent)?;
     let raw = path.fields()[0].as_str();
     match &fs.root {
         Root::Anywhere if raw.is_empty() => Err(io::Error::new(
@@ -382,18 +400,37 @@ fn real_path<'f>(
             "an empty path names no file",
         )),
         Root::Anywhere => Ok((PathBuf::from(raw), None)),
-        Root::Dir(root) => Ok((confine::resolve(host, root, raw, intent)?, Some(root))),
-        Root::Nowhere => Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "this filesystem capability was restricted to a directory it cannot reach",
+        Root::Dir(root) => Ok((
+            confine::resolve(host, root.path(), raw, intent)?,
+            Some(root.path()),
         )),
+        Root::Nowhere(why) => Err(broken(why)),
     }
 }
 
-/// `FsRead.read_to_string(self, path)`.
+/// `FsRead.read_to_string(self, path)`: through a restricted filesystem,
+/// the path is walked beneath the root's handle (`confine.rs`).
 fn fs_read_to_string(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    let result = real_path(host, fs_cap(&args[0]), &args[1], Intent::Read)
-        .and_then(|(path, beneath)| host.read_file(&path, beneath));
+    let fs = fs_cap(&args[0]);
+    let raw = args[1].fields()[0].as_str();
+    let result = allowed(fs, Intent::Read).and_then(|()| match &fs.root {
+        Root::Anywhere if raw.is_empty() => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "an empty path names no file",
+        )),
+        Root::Anywhere => host.read_file(Path::new(raw)),
+        Root::Dir(root) => {
+            let names = confine::names(raw)?;
+            if names.is_empty() && !root.is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("`{raw}` names the restricted directory itself, not a file"),
+                ));
+            }
+            host.read_file_beneath(root, &names)
+        }
+        Root::Nowhere(why) => Err(broken(why)),
+    });
     Ok(io_result(result, |text| Value::str(&text)))
 }
 
