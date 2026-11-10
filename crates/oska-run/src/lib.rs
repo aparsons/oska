@@ -16,6 +16,7 @@
 //! - `ops.rs` implements operators, with checked integer arithmetic.
 //! - `intrinsics.rs` implements body-less prelude functions, and
 //!   `data.rs` those of `List` and `String`.
+//! - `tasks.rs` runs `scope` blocks and their spawned tasks.
 //! - `panics.rs` defines panics and every runtime code.
 //! - `value.rs` defines runtime values.
 //! - `host.rs` defines the hosts.
@@ -42,6 +43,7 @@ mod ops;
 mod panics;
 mod prng;
 mod support;
+mod tasks;
 mod value;
 
 pub use host::{FakeHost, Host, Output, RealHost, FAKE_SEED};

@@ -311,6 +311,7 @@ impl Lowering<'_> {
                     _ => ExprKind::Unsupported,
                 }
             }
+            ast::ExprKind::Scope { body, .. } => ExprKind::Scope(Box::new(self.block(body))),
             ast::ExprKind::Match { scrutinee, arms } => {
                 let arms: Option<Vec<Arm>> = arms.iter().map(|arm| self.arm(arm)).collect();
                 match arms {

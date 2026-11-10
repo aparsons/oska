@@ -39,6 +39,7 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0002` | Index out of bounds: `List.at` was given an index below 0 or not below the list's length. Spans the call. |
 | `P0003` | `todo()` reached. Spans the call. |
 | `P0004` | Division by zero: the right operand of `/` or `%` is zero. Spans the operation. |
+| `P0005` | `spawn` on a finished scope: the handle's `scope` block has ended. The checker (`E0292`) already stops a handle from outliving its block, so this is a second line of defence; work never runs outside a scope. Spans the call. |
 | `P0020` | `Env.secret` asked for a variable the environment does not set. Its signature has no room for a missing secret, and running on with a stand-in such as an empty one could let an empty password through. Spans the call. |
 
 ## Capabilities
@@ -55,3 +56,13 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
   4. A write may name a file that does not exist yet. Then its parent directory must canonicalize to inside the root, its last component must be a plain name, and it must not be a dangling symlink, which the write would follow.
 
   Checking and then opening are two steps, so a concurrent process that swaps a directory for a symlink between them could escape. The interpreter does not defend against an attacker racing it on the same filesystem.
+
+## Scopes and tasks
+
+`scope |s| { ... }` runs tasks one at a time, in the order they were spawned, so the same program gives the same result on every run.
+
+- `s.spawn(f)` queues `f` and returns a task. Nothing runs yet, so a task never starts in the middle of another task or of the block that spawned it. `f` sees the values it captured when it was spawned.
+- `t.join()` runs the queued tasks of the scope, oldest first, up to and including `t`, and returns `t`'s result. Joining a later task first still runs the earlier ones first. Joining a task that has already run returns its result again.
+- A scope does not exit until all its tasks have finished: when the block ends, by its value or by a `return`, the tasks still queued run in spawn order. A panic ends the program, so queued tasks do not run.
+- A scope handle is valid only while its block runs. When the block ends the scope is closed, and `spawn` on its handle panics with `P0005`. A task can still be joined after its scope ends, because it has already run.
+- A panic in a task stops the program at the task, with the panic's own code and span.
