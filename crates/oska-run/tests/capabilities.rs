@@ -1,6 +1,6 @@
 //! Capabilities and confinement (#64): `main` gets the capabilities it
-//! declares, attenuation narrows them for real, and a restricted
-//! filesystem never reaches outside its root.
+//! declares, attenuation narrows them for real, and a directory
+//! capability never reaches outside its root.
 //!
 //! The confinement tests run on [`RealHost`] against a real temporary
 //! directory, with real symlinks, so they exercise the OS's own path
@@ -269,7 +269,7 @@ fn a_write_out_of_the_root_is_refused() {
 }
 
 #[test]
-fn restricting_a_restricted_filesystem_never_widens_it() {
+fn narrowing_a_directory_capability_never_widens_it() {
     let sandbox = Sandbox::new("rerestrict");
     let src = format!(
         "fn main(io: Stdout, fs: FsRead) {{\n\

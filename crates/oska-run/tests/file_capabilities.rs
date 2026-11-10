@@ -103,7 +103,7 @@ fn a_file_named_by_untrusted_text_stays_beneath_the_directory() {
     assert_eq!(lines[0], "pixels");
     assert!(
         lines[1].starts_with("REFUSED: cannot restrict to `../secret.txt`: ")
-            && lines[1].contains("leads outside the restricted directory"),
+            && lines[1].contains("leads outside the capability's root"),
         "{out:?}"
     );
     assert!(

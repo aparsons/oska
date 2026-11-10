@@ -80,7 +80,7 @@ background in [the research](/research/2026-11-report.md).
 - `Fs` attenuates:
   - to `FsRead` or `FsWrite`
   - to one directory, with `restrict_to`
-- **Confinement.** A restricted filesystem resolves every path:
+- **Confinement.** A directory capability resolves every path:
   1. An empty path is refused.
   2. The path is canonicalized.
 

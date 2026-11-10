@@ -11,7 +11,7 @@ Every crate in the workspace forbids `unsafe` code, except one: `oska-sys`, an i
 
 ## Why
 
-A restricted filesystem must not be steerable outside its root, even by another process that swaps a directory for a symlink while the program runs (#69). The only race-free way to do that is to open each path component relative to a handle for the one before, never following a symlink. On Unix that is `openat` with `O_NOFOLLOW`, one component at a time.
+A directory or file capability must not be steerable outside its root, even by another process that swaps a directory for a symlink while the program runs (#69). The only race-free way to do that is to open each path component relative to a handle for the one before, never following a symlink. On Unix that is `openat` with `O_NOFOLLOW`, one component at a time.
 
 `std` has no `openat`, and it has no way to open a path beneath a directory handle. The usual answer, the `libc` or `rustix` crate, is ruled out because the workspace takes no crates from outside the repo. Calling the C library directly needs `unsafe`. Putting all of it in one small crate keeps the code that needs review in one place, with every invariant written down.
 

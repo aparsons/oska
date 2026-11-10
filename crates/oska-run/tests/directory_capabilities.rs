@@ -27,7 +27,7 @@ fn a_dir_read_reads_a_file_beneath_its_root() {
     );
     assert_eq!(
         out,
-        "# Intro\nREFUSED: `../secret.txt` leads outside the restricted directory\n"
+        "# Intro\nREFUSED: `../secret.txt` leads outside the capability's root\n"
     );
 }
 
@@ -47,7 +47,7 @@ fn a_dir_read_lists_a_directory_beneath_its_root() {
     );
     assert_eq!(
         out,
-        "a.md,adr,b.md\n0001.md\nREFUSED: `../other` leads outside the restricted directory\n"
+        "a.md,adr,b.md\n0001.md\nREFUSED: `../other` leads outside the capability's root\n"
     );
 }
 
@@ -68,8 +68,8 @@ fn a_dir_write_writes_and_creates_directories_only_beneath_its_root() {
     assert_eq!(
         out,
         "done\ndone\n\
-         REFUSED: `../escaped.html` leads outside the restricted directory\n\
-         REFUSED: `../escaped` leads outside the restricted directory\n"
+         REFUSED: `../escaped.html` leads outside the capability's root\n\
+         REFUSED: `../escaped` leads outside the capability's root\n"
     );
     assert_eq!(host.file("_site/adr/index.html"), Some("<p>adr</p>"));
     assert_eq!(host.file("escaped.html"), None);
@@ -88,7 +88,7 @@ fn a_dir_reads_through_read_only_and_writes_through_write_only() {
     );
     assert_eq!(
         out,
-        "done\nsaved\nREFUSED: `../other.txt` leads outside the restricted directory\n"
+        "done\nsaved\nREFUSED: `../other.txt` leads outside the capability's root\n"
     );
     assert_eq!(host.file("app/state.txt"), Some("saved"));
     assert_eq!(host.file("other.txt"), Some(""));
@@ -118,9 +118,9 @@ fn a_narrowing_from_untrusted_text_reaches_only_its_subdirectory() {
     assert_eq!(
         out,
         "alice's\n\
-         REFUSED: `../bob/avatar.txt` leads outside the restricted directory\n\
+         REFUSED: `../bob/avatar.txt` leads outside the capability's root\n\
          done\n\
-         REFUSED: `../bob/avatar.txt` leads outside the restricted directory\n"
+         REFUSED: `../bob/avatar.txt` leads outside the capability's root\n"
     );
     assert_eq!(host.file("uploads/carol/avatar.txt"), Some("carol's"));
     assert_eq!(host.file("uploads/bob/avatar.txt"), Some("bob's"));
@@ -163,8 +163,8 @@ fn a_narrowing_above_the_root_reaches_nothing() {
     );
     assert_eq!(
         out,
-        "REFUSED: cannot restrict to `../..`: `../..` leads outside the restricted directory\n\
-         REFUSED: cannot restrict to `..`: `..` leads outside the restricted directory\n\
+        "REFUSED: cannot restrict to `../..`: `../..` leads outside the capability's root\n\
+         REFUSED: cannot restrict to `..`: `..` leads outside the capability's root\n\
          REFUSED: cannot restrict to `/data`: `/data` is absolute; \
          a directory capability takes paths relative to its root\n"
     );
@@ -365,8 +365,8 @@ mod real {
         let sandbox = Sandbox::new("narrow-above");
         let outside = sandbox.path("outside").display().to_string();
         for (user, why) in [
-            ("../outside", "leads outside the restricted directory"),
-            ("sub/../..", "leads outside the restricted directory"),
+            ("../outside", "leads outside the capability's root"),
+            ("sub/../..", "leads outside the capability's root"),
             (outside.as_str(), "is absolute"),
         ] {
             let seen = read_beneath(&sandbox, user, "secret.txt");

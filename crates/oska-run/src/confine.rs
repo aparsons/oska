@@ -108,7 +108,7 @@ fn ends_in_a_name(path: &str) -> bool {
 }
 
 fn escapes(path: &str) -> io::Error {
-    refused(&format!("`{path}` leads outside the restricted directory"))
+    refused(&format!("`{path}` leads outside the capability's root"))
 }
 
 fn refused(message: &str) -> io::Error {

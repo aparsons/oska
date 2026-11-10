@@ -200,7 +200,7 @@ fn a_dir_root(root: &RootHandle) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidInput,
         format!(
-            "`{}` is the restricted directory itself",
+            "`{}` is the directory capability's root itself",
             root.path.display()
         ),
     )
@@ -677,7 +677,7 @@ fn moved(path: &Path) -> io::Error {
     io::Error::new(
         io::ErrorKind::PermissionDenied,
         format!(
-            "`{}` is a symlink or left the restricted directory while it was being opened",
+            "`{}` is a symlink or left the capability's root while it was being opened",
             path.display()
         ),
     )

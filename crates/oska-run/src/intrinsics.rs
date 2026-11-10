@@ -456,8 +456,8 @@ fn allowed(fs: &FsCap, intent: Intent) -> io::Result<()> {
     ))
 }
 
-/// Why a directory capability restricted to a root it could not open
-/// reaches nothing.
+/// Why a directory capability whose root could not be opened reaches
+/// nothing.
 fn broken(why: &str) -> io::Error {
     io::Error::new(io::ErrorKind::PermissionDenied, why.to_string())
 }
@@ -486,7 +486,7 @@ fn fs_read_to_string(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<V
         if names.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("`{raw}` names the restricted directory itself, not a file"),
+                format!("`{raw}` names the directory capability's root itself, not a file"),
             ));
         }
         host.read_file_beneath(root, &names)

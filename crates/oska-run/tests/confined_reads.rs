@@ -1,4 +1,4 @@
-//! Race-free confined reads (#94): a read through a restricted filesystem
+//! Race-free confined reads (#94): a read through a directory or file capability
 //! walks its path one component at a time beneath a handle for the root,
 //! never following a symlink, so another process that swaps a directory
 //! for a symlink mid-run cannot steer it outside the root.
@@ -262,19 +262,14 @@ fn dot_dot_above_the_root_is_refused() {
         "sub/../../outside/secret.txt",
         "..",
     ] {
-        assert_refused(
-            &sandbox.root(),
-            &[],
-            path,
-            "outside the restricted directory",
-        );
+        assert_refused(&sandbox.root(), &[], path, "outside the capability's root");
     }
     // Narrowed to `sub`, `..` may not climb back to the first root.
     assert_refused(
         &sandbox.root(),
         &["sub"],
         "../inside.txt",
-        "outside the restricted directory",
+        "outside the capability's root",
     );
 }
 
