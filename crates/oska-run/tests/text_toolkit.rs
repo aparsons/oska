@@ -371,6 +371,16 @@ impl Host for Recording {
     fn open_beneath(&mut self, root: &RootHandle, names: &[String]) -> std::io::Result<RootHandle> {
         self.real.open_beneath(root, names)
     }
+    fn open_file_root(&mut self, path: &Path) -> std::io::Result<RootHandle> {
+        self.real.open_file_root(path)
+    }
+    fn open_file_beneath(
+        &mut self,
+        root: &RootHandle,
+        names: &[String],
+    ) -> std::io::Result<RootHandle> {
+        self.real.open_file_beneath(root, names)
+    }
     fn read_file_beneath(
         &mut self,
         root: &RootHandle,

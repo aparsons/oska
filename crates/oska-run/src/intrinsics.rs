@@ -55,19 +55,25 @@ pub const INTRINSICS: Table = &[
     ("DirRead.list_dir", Plain(fs_list_dir)),
     ("DirRead.read_to_string", Plain(fs_read_to_string)),
     ("DirRead.restrict_to", Plain(dir_restrict_to)),
+    ("DirRead.restrict_to_file", Plain(dir_restrict_to_file)),
     ("DirWrite.create_dir", Plain(fs_create_dir)),
     ("DirWrite.restrict_to", Plain(dir_restrict_to)),
+    ("DirWrite.restrict_to_file", Plain(dir_restrict_to_file)),
     ("DirWrite.write", Plain(fs_write)),
     ("Env.get", Plain(env_get)),
     ("Env.secret", Plain(env_secret)),
+    ("FileRead.read_to_string", Plain(file_read_to_string)),
+    ("FileWrite.write", Plain(file_write)),
     ("Fs.read_only", Plain(fs_read_only)),
     ("Fs.restrict_to", Plain(fs_restrict_to)),
     ("Fs.write_only", Plain(fs_write_only)),
     ("FsRead.list_dir", Plain(fs_list_dir)),
     ("FsRead.read_to_string", Plain(fs_read_to_string)),
     ("FsRead.restrict_to", Plain(fs_restrict_to)),
+    ("FsRead.restrict_to_file", Plain(fs_restrict_to_file)),
     ("FsWrite.create_dir", Plain(fs_create_dir)),
     ("FsWrite.restrict_to", Plain(fs_restrict_to)),
+    ("FsWrite.restrict_to_file", Plain(fs_restrict_to_file)),
     ("FsWrite.write", Plain(fs_write)),
     ("Int.to_string", Plain(int_to_string)),
     ("Option.is_some", Plain(option_is_some)),
@@ -343,10 +349,10 @@ fn dir_restrict_to(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Val
     ))
 }
 
-/// The directory capability `fs` attenuates to at `dir`: a directory, or
-/// for now a single file. Attenuation never fails: a root that cannot be
-/// opened leaves the result able to reach nothing, and every operation on
-/// it fails with the reason, which names the root.
+/// The directory capability `fs` attenuates to at `dir`, a directory.
+/// Attenuation never fails: a root that cannot be opened, or is not a
+/// directory, leaves the result able to reach nothing, and every operation
+/// on it fails with the reason, which names the root.
 fn restricted(host: &mut dyn Host, fs: &FsCap, dir: &str) -> Value {
     let opened = match &fs.root {
         Root::Anywhere if dir.is_empty() => Err(io::Error::new(
@@ -357,15 +363,63 @@ fn restricted(host: &mut dyn Host, fs: &FsCap, dir: &str) -> Value {
         Root::Dir(root) => confine::names(dir).and_then(|names| host.open_beneath(root, &names)),
         Root::Nowhere(why) => Err(io::Error::new(io::ErrorKind::NotFound, why.to_string())),
     };
-    let root = match opened {
-        Ok(root) => Root::Dir(root),
-        Err(_) if matches!(fs.root, Root::Nowhere(_)) => fs.root.clone(),
-        Err(error) => Root::Nowhere(Rc::from(format!("cannot restrict to `{dir}`: {error}"))),
-    };
     Value::Capability(Capability::Dir(FsCap {
-        root,
+        root: attenuated_root(fs, opened, dir),
         access: fs.access,
     }))
+}
+
+/// `restrict_to_file(self, file)` on `FsRead` and `FsWrite`: the file
+/// capability with the same access for the one file at `file`, trusted
+/// text. The host opens its parent now and holds it, with the file's name.
+fn fs_restrict_to_file(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    Ok(restricted_file(host, fs_cap(&args[0]), text(&args, 1)))
+}
+
+/// `restrict_to_file(self, file)` on `DirRead` and `DirWrite`: the file
+/// capability for the file at `file`, a `Path` that may come from
+/// untrusted text. It is walked beneath the current root like any path
+/// read there (`confine.rs`), so a file never lies outside it.
+fn dir_restrict_to_file(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    Ok(restricted_file(
+        host,
+        fs_cap(&args[0]),
+        args[1].fields()[0].as_str(),
+    ))
+}
+
+/// The file capability `fs` attenuates to at `file`. Like
+/// [`restricted`], it never fails: a parent that cannot be opened leaves
+/// the result able to reach nothing. The file itself is not opened, so it
+/// may not exist yet; each use opens its name beneath the parent, and
+/// fails if that is a symlink or no regular file.
+fn restricted_file(host: &mut dyn Host, fs: &FsCap, file: &str) -> Value {
+    let opened = match &fs.root {
+        Root::Anywhere if file.is_empty() => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "an empty path names no file",
+        )),
+        Root::Anywhere => host.open_file_root(Path::new(file)),
+        Root::Dir(root) => {
+            confine::names_to_create(file).and_then(|names| host.open_file_beneath(root, &names))
+        }
+        Root::Nowhere(why) => Err(io::Error::new(io::ErrorKind::NotFound, why.to_string())),
+    };
+    Value::Capability(Capability::File(FsCap {
+        root: attenuated_root(fs, opened, file),
+        access: fs.access,
+    }))
+}
+
+/// The root of what `fs` attenuates to at `at`, as the host `opened` it:
+/// that root, or nowhere, with the reason, if it could not be opened. A
+/// capability that reaches nowhere stays there with its own reason.
+fn attenuated_root(fs: &FsCap, opened: io::Result<RootHandle>, at: &str) -> Root {
+    match opened {
+        Ok(root) => Root::Dir(root),
+        Err(_) if matches!(fs.root, Root::Nowhere(_)) => fs.root.clone(),
+        Err(error) => Root::Nowhere(Rc::from(format!("cannot restrict to `{at}`: {error}"))),
+    }
 }
 
 /// `read_only(self)` on `Fs` and `Dir`.
@@ -453,7 +507,7 @@ fn fs_read_to_string(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<V
         Root::Anywhere => host.read_file(Path::new(raw)),
         Root::Dir(root) => {
             let names = confine::names(raw)?;
-            if names.is_empty() && !root.is_file() {
+            if names.is_empty() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!("`{raw}` names the restricted directory itself, not a file"),
@@ -513,6 +567,37 @@ fn fs_create_dir(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value
         Reach::Beneath(root, names) => host.create_dir_beneath(root, &names),
     });
     Ok(io_result(result, |()| Value::Unit))
+}
+
+/// `FileRead.read_to_string(self)`: the file's text, opened by its name
+/// beneath the parent directory's handle (`confine.rs`).
+fn file_read_to_string(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    let result = file_root(&args[0]).and_then(|root| host.read_file_beneath(root, &[]));
+    Ok(io_result(result, |text| Value::str(&text)))
+}
+
+/// `FileWrite.write(self, contents)`: creates the file, or replaces what
+/// it holds, opened by its name beneath the parent directory's handle.
+fn file_write(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    let result =
+        file_root(&args[0]).and_then(|root| host.write_file_beneath(root, &[], text(&args, 1)));
+    Ok(io_result(result, |()| Value::Unit))
+}
+
+/// The root of the file capability the checker guarantees `value` is, or
+/// why it reaches nothing.
+fn file_root(value: &Value) -> io::Result<&RootHandle> {
+    match value {
+        Value::Capability(Capability::File(FsCap {
+            root: Root::Dir(root),
+            ..
+        })) => Ok(root),
+        Value::Capability(Capability::File(FsCap {
+            root: Root::Nowhere(why),
+            ..
+        })) => Err(broken(why)),
+        other => unreachable!("the checker guarantees a file capability, found {other:?}"),
+    }
 }
 
 // ---- Option and Result -------------------------------------------------

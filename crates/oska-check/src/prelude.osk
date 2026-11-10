@@ -71,6 +71,9 @@ pub struct FsRead { handle: Int }
 
 impl FsRead {
     pub fn restrict_to(self, dir: String) -> DirRead
+    // The file capability for the one file at `file`, which must be
+    // trusted text. See `FileRead`.
+    pub fn restrict_to_file(self, file: String) -> FileRead
     pub fn read_to_string(self, path: Path) -> Result<Untrusted<String>, IoError>
     pub fn list_dir(self, path: Path) -> Result<List<Untrusted<String>>, IoError>
 }
@@ -80,6 +83,9 @@ pub struct FsWrite { handle: Int }
 
 impl FsWrite {
     pub fn restrict_to(self, dir: String) -> DirWrite
+    // The file capability for the one file at `file`, which must be
+    // trusted text. See `FileWrite`.
+    pub fn restrict_to_file(self, file: String) -> FileWrite
     pub fn write(self, path: Path, contents: Untrusted<String>) -> Result<(), IoError>
     pub fn create_dir(self, path: Path) -> Result<(), IoError>
 }
@@ -92,8 +98,9 @@ impl FsWrite {
 // the root is resolved as written.
 //
 // `restrict_to` narrows to the subdirectory at `dir`, which stays under
-// the same root, so its `Path` may be untrusted. It may also name a single
-// file, which the result then reaches as `Path.new(".")`.
+// the same root, so its `Path` may be untrusted. A `dir` that is a file is
+// not a directory, and the result reaches nothing. `restrict_to_file` on
+// `DirRead` and `DirWrite` is the way to a single file.
 #[capability]
 pub struct Dir { handle: Int }
 
@@ -108,6 +115,9 @@ pub struct DirRead { handle: Int }
 
 impl DirRead {
     pub fn restrict_to(self, dir: Path) -> DirRead
+    // The file capability for the file at `file` beneath the root, which
+    // may be named by untrusted text through `Path.from`. See `FileRead`.
+    pub fn restrict_to_file(self, file: Path) -> FileRead
     pub fn read_to_string(self, path: Path) -> Result<Untrusted<String>, IoError>
     // The names of the entries of the directory at `path` (`"."` is the
     // root itself), sorted so the order is the same on every host. A name
@@ -120,6 +130,9 @@ pub struct DirWrite { handle: Int }
 
 impl DirWrite {
     pub fn restrict_to(self, dir: Path) -> DirWrite
+    // The file capability for the file at `file` beneath the root, which
+    // may be named by untrusted text through `Path.from`. See `FileWrite`.
+    pub fn restrict_to_file(self, file: Path) -> FileWrite
     // Create the file at `path`, or replace what it holds, with
     // `contents`. A symlink at `path` is never followed.
     pub fn write(self, path: Path, contents: Untrusted<String>) -> Result<(), IoError>
@@ -127,6 +140,28 @@ impl DirWrite {
     // already there is kept, with everything in it, and anything else
     // there is an error. A symlink at `path` is never followed.
     pub fn create_dir(self, path: Path) -> Result<(), IoError>
+}
+
+// A file capability: it reaches exactly one file, and takes no path. It
+// holds its parent directory and the file's name, and each use opens that
+// name beneath the directory without following a symlink, so a file
+// replaced between uses can never lead outside. The file is not checked
+// when the capability is made: a missing parent directory, or a name that
+// is not a plain file, makes every operation return an `IoError`. There is
+// no capability that both reads and writes one file.
+#[capability]
+pub struct FileRead { handle: Int }
+
+impl FileRead {
+    pub fn read_to_string(self) -> Result<Untrusted<String>, IoError>
+}
+
+#[capability]
+pub struct FileWrite { handle: Int }
+
+impl FileWrite {
+    // Create the file, or replace what it holds, with `contents`.
+    pub fn write(self, contents: Untrusted<String>) -> Result<(), IoError>
 }
 
 #[capability]

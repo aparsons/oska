@@ -352,6 +352,14 @@ impl Host for TestHost<'_> {
         self.world().open_beneath(root, names)
     }
 
+    fn open_file_root(&mut self, path: &Path) -> io::Result<RootHandle> {
+        self.world().open_file_root(path)
+    }
+
+    fn open_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<RootHandle> {
+        self.world().open_file_beneath(root, names)
+    }
+
     fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<String> {
         self.world().read_file_beneath(root, names)
     }
