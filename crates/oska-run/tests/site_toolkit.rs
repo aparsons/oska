@@ -1,5 +1,5 @@
-//! What the site generator needs from the filesystem (#74):
-//! `FsWrite.create_dir`, and `restrict_to` naming a single file.
+//! What the site generator needs from Oska (#74): `FsWrite.create_dir`,
+//! `restrict_to` naming a single file, and `String.to_lowercase`.
 //!
 //! The confinement tests run on [`RealHost`] against a real temporary
 //! directory, with real symlinks; the rest run on [`FakeHost`].
@@ -9,7 +9,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use common::{run_fake, run_on};
+use common::{assert_runs, run_fake, run_on};
 use oska_run::{run, FakeHost, Host, RealHost, RunOutcome};
 
 /// Run `src` on `host`, which the test inspects afterwards.
@@ -335,4 +335,15 @@ fn real_host_confines_a_filesystem_restricted_to_a_file() {
     for path in ["..", "../sub", "../../outside/secret.txt", "file.txt", ""] {
         assert_eq!(read_real(&file, path, "inside"), 1, "reading `{path}`");
     }
+}
+
+// ---- to_lowercase ----------------------------------------------------------------
+
+#[test]
+fn to_lowercase_lowers_every_letter_and_keeps_the_rest() {
+    let src = "fn main(io: Stdout) -> Result<(), IoError> {
+    io.println(\"Untrusted DATA, Ünïcode & ΣΑΣ: 42!\".to_lowercase())
+}
+";
+    assert_runs(src, &[], "untrusted data, ünïcode & σας: 42!\n");
 }

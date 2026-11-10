@@ -275,6 +275,10 @@ impl String {
     // so does a result too long to build (`P0037`).
     #[follows_trust]
     pub fn repeat(self, times: Int) -> String
+    // Every letter in lower case, by Unicode's rules: `"ÀB".to_lowercase()`
+    // is `"àb"`.
+    #[follows_trust]
+    pub fn to_lowercase(self) -> String
     // The decimal integer the whole text spells, if it is one.
     #[follows_trust]
     pub fn parse_int(self) -> Option<Int>

@@ -83,6 +83,15 @@ fn repeating_untrusted_text_is_untrusted() {
 }
 
 #[test]
+fn lowercasing_untrusted_text_is_untrusted() {
+    assert_ok("fn f(s: String) -> String {\n    s.to_lowercase()\n}");
+    assert_errors(
+        &with_arg("String", "    Some(greet(arg.to_lowercase()))"),
+        &[("E0300", "arg.to_lowercase()")],
+    );
+}
+
+#[test]
 fn the_chars_of_untrusted_text_are_untrusted() {
     assert_errors(
         &with_arg("List<String>", "    Some(arg.chars())"),
