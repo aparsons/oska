@@ -28,7 +28,7 @@ use oska_check::builtins;
 use oska_check::program::{Program, Test};
 use oska_syntax::{json_escape, Diagnostic, Span};
 
-use crate::host::{FakeHost, Host, Output};
+use crate::host::{FakeHost, Host, Output, RootHandle};
 use crate::interp::Interpreter;
 use crate::intrinsics::Intrinsic::{HigherOrder, Plain};
 use crate::intrinsics::{debug, Table};
@@ -352,8 +352,20 @@ impl Host for TestHost<'_> {
         self.world().is_symlink(path)
     }
 
-    fn read_file(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<String> {
-        self.world().read_file(path, beneath)
+    fn open_root(&mut self, path: &Path) -> io::Result<RootHandle> {
+        self.world().open_root(path)
+    }
+
+    fn open_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<RootHandle> {
+        self.world().open_beneath(root, names)
+    }
+
+    fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<String> {
+        self.world().read_file_beneath(root, names)
+    }
+
+    fn read_file(&mut self, path: &Path) -> io::Result<String> {
+        self.world().read_file(path)
     }
 
     fn write_file(

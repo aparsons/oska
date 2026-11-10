@@ -6,8 +6,9 @@
 #   scripts/check.sh
 #
 # Runs, stopping at the first failure:
-#   1. repo rules that are mechanical: no crate from outside this repo, and
-#      workflows use only official actions plus the SHA-pinned rust-toolchain;
+#   1. repo rules that are mechanical: no crate from outside this repo,
+#      `unsafe` only in crates/oska-sys, and workflows use only official
+#      actions plus the SHA-pinned rust-toolchain;
 #   2. cargo fmt, clippy with -D warnings, and cargo test;
 #   3. the installer and release script tests;
 #   4. shellcheck on the shell scripts, when shellcheck is installed.
@@ -32,6 +33,44 @@ step "no external crates"
 # crate gets a `source =` line.
 if grep -n '^source = ' Cargo.lock; then
   fail "Cargo.lock has a crate from outside this repo (above); dependencies must be path dependencies"
+fi
+
+step "unsafe only in oska-sys"
+# The workspace forbids `unsafe_code`, and oska-sys alone does not take the
+# workspace's lints (ADR 0009). The compiler then refuses `unsafe` anywhere
+# else, as long as no other crate opts out, and the grep below is a second
+# guard on the source itself.
+if ! grep -qx 'unsafe_code = "forbid"' Cargo.toml; then
+  fail 'the workspace Cargo.toml must keep unsafe_code = "forbid"'
+fi
+manifests=$(cargo metadata --no-deps --format-version 1 |
+  grep -oE '"manifest_path":"[^"]*"' | cut -d'"' -f4)
+[ -n "$manifests" ] || fail "cargo metadata listed no workspace crates"
+while IFS= read -r manifest; do
+  case "$manifest" in */crates/oska-sys/Cargo.toml) continue ;; esac
+  # Every line of its `[lints...]` tables, comments and blanks aside: just
+  # `[lints]` and `workspace = true`, so no `[lints.rust]` of its own.
+  lints=$(awk '/^\[/ { in_lints = ($0 ~ /^\[lints/) }
+    in_lints && !/^[[:space:]]*(#|$)/' "$manifest")
+  if [ "$lints" != $'[lints]\nworkspace = true' ]; then
+    printf '%s:\n%s\n' "$manifest" "$lints" >&2
+    fail "every crate but oska-sys takes the workspace lints with exactly [lints] workspace = true"
+  fi
+done <<<"$manifests"
+# Rust source outside oska-sys, for Rust's own forms: `unsafe {`,
+# `unsafe fn`, `impl`, `trait` or `extern`, `#[unsafe(...)]`, and the lint
+# name `unsafe_code`. The Oska language has an `unsafe` keyword its tests
+# and messages mention, so string literals and `//` comments are removed
+# first, and a word in backticks is prose.
+unsafe_syntax='(^|[^[:alnum:]_`])unsafe([[:space:]]+(fn|impl|trait|extern)([^[:alnum:]_]|$)|[[:space:]]*[{(]|[[:space:]]*$|_code)'
+bad_unsafe=$(git ls-files -co --exclude-standard -- '*.rs' ':(exclude)crates/oska-sys/*' |
+  while IFS= read -r file; do
+    sed -E 's/"([^"\\]|\\.)*"//g; s://.*$::' "$file" |
+      grep -nE "$unsafe_syntax" | sed "s|^|$file:|" || true
+  done)
+if [ -n "$bad_unsafe" ]; then
+  printf '%s\n' "$bad_unsafe" >&2
+  fail "only crates/oska-sys may use unsafe or name the unsafe_code lint (ADR 0009)"
 fi
 
 step "only official actions, rust-toolchain pinned to a commit"

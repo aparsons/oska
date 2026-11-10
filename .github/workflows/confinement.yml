@@ -1,0 +1,51 @@
+# Run the filesystem confinement tests on each Unix that releases are built
+# for. oska-sys copies flag and error values from each platform's C headers
+# by hand (ADR 0009), so its escape tests must pass on every one of them,
+# not only on the Linux that ci.yml runs. Windows builds oska-sys empty and
+# is covered by the release dry run.
+#
+# Needs no configuration.
+
+name: Confinement
+
+on:
+  push:
+    paths:
+      - crates/oska-sys/**
+      - crates/oska-run/**
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/confinement.yml
+  pull_request:
+    paths:
+      - crates/oska-sys/**
+      - crates/oska-run/**
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/confinement.yml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            machine: x86_64
+          - runner: ubuntu-24.04-arm
+            machine: aarch64
+          - runner: macos-latest
+            machine: arm64
+          - runner: macos-15-intel
+            machine: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      # A runner label that moves to other hardware must fail, not test
+      # some other target under this one's name.
+      - run: test "$(uname -m)" = "${{ matrix.machine }}"
+      - run: cargo test --locked -p oska-sys -p oska-run

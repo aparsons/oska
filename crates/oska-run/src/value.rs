@@ -16,7 +16,7 @@
 //! enums the type's name. Trust exists only at compile time: an
 //! `Untrusted<String>` is a plain [`Value::Str`] here.
 
-use std::path::Path;
+use crate::host::RootHandle;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -112,12 +112,13 @@ pub struct FsCap {
 pub enum Root {
     /// Anywhere the process may: the `Fs` `main` declares, unrestricted.
     Anywhere,
-    /// Only under this directory: canonical, so absolute and free of
-    /// symlinks (`confine.rs`).
-    Dir(Rc<Path>),
-    /// Nowhere: the result of restricting to a directory that does not
-    /// exist or lies outside the current root. Every operation fails.
-    Nowhere,
+    /// Only beneath this directory, or only this file, as the host opened
+    /// it. On Unix it holds an OS handle, released with the last copy.
+    Dir(RootHandle),
+    /// Nowhere: the result of restricting to a root that could not be
+    /// opened, because it is missing, a symlink, or outside the current
+    /// root. Every operation fails with this reason, which names the root.
+    Nowhere(Rc<str>),
 }
 
 /// Which operations a filesystem capability may perform.
