@@ -50,6 +50,9 @@ impl Stderr {
 pub struct Fs { handle: Int }
 
 impl Fs {
+    // Confine to `dir`. It may also name a single file: the result then
+    // reaches only that file, as `Path.new(".")`. The same holds for
+    // `FsRead` and `FsWrite`.
     pub fn restrict_to(self, dir: String) -> Fs
     pub fn read_only(self) -> FsRead
     pub fn write_only(self) -> FsWrite
@@ -76,6 +79,11 @@ impl FsWrite {
     // Create the file at `path`, or replace what it holds, with
     // `contents`.
     pub fn write(self, path: Path, contents: Untrusted<String>) -> Result<(), IoError>
+    // Create the directory at `path`; its parent must exist. A directory
+    // already there is kept, with everything in it, and anything else
+    // there is an error. Confined like a write: `path` ends in a plain
+    // name, and a symlink there is never followed.
+    pub fn create_dir(self, path: Path) -> Result<(), IoError>
 }
 
 #[capability]

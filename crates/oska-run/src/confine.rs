@@ -73,6 +73,11 @@ pub fn resolve(
         )));
     }
     match intent {
+        // The root itself, which may be a file: `file/.` would not
+        // canonicalize, so the root is taken as it is, already canonical.
+        Intent::Read if relative.components().all(|c| c == Component::CurDir) => {
+            Ok(root.to_path_buf())
+        }
         Intent::Read => inside(root, host.canonicalize(&root.join(relative))?, path),
         Intent::Write => file_to_write(host, root, path),
     }
