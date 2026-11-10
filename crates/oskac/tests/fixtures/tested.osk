@@ -1,0 +1,34 @@
+// The fixture for `oskac test`: one test that passes, one that fails,
+// one that panics, and one integration test, which runs only with
+// `--integration`.
+
+fn double(n: Int) -> Int {
+    n * 2
+}
+
+fn greet(out: Stdout, name: String) -> Result<(), IoError> {
+    out.println("hello, {name}")
+}
+
+test "double doubles" {
+    t.assert_eq(double(2), 4)
+}
+
+test "greet prints a greeting" {
+    let _ = greet(t.stdout, "ada")
+    t.assert_eq(t.printed(), ["hello, ada"])
+}
+
+test "double is wrong here" {
+    t.assert_eq(double(3), 7)
+}
+
+test "dividing by zero panics" {
+    let zero = double(0)
+    let _ = 1 / zero
+}
+
+#[integration]
+test "the clock has moved on" {
+    t.assert(t.clock.now_millis() > 0)
+}

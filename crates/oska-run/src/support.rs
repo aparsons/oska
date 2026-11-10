@@ -16,13 +16,25 @@ use crate::intrinsics;
 use crate::panics::codes;
 use crate::value::SIZED_INTEGERS;
 
-/// The refusal for the first node in `program` the interpreter cannot
-/// run, if any.
+/// The refusal for the first node in `program`'s functions the
+/// interpreter cannot run, if any.
 pub fn unsupported(program: &Program) -> Option<Diagnostic> {
-    program
-        .functions
-        .values()
-        .find_map(|f| first_in(program, &f.body))
+    refusal(program, program.functions.values().map(|f| &f.body))
+}
+
+/// The refusal for the first node in `program`'s functions or `test`
+/// blocks the interpreter cannot run, if any.
+pub fn unsupported_with_tests(program: &Program) -> Option<Diagnostic> {
+    unsupported(program).or_else(|| refusal(program, program.tests.iter().map(|t| &t.body)))
+}
+
+fn refusal<'e>(
+    program: &Program,
+    bodies: impl IntoIterator<Item = &'e Expr>,
+) -> Option<Diagnostic> {
+    bodies
+        .into_iter()
+        .find_map(|body| first_in(program, body))
         .map(|(span, what)| {
             Diagnostic::new(
                 codes::UNSUPPORTED,

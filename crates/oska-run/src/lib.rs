@@ -18,6 +18,8 @@
 //!   `data.rs` those of `List` and `String`, and `traits.rs` the
 //!   prelude's trait impls, such as `Eq for Int`.
 //! - `tasks.rs` runs `scope` blocks and their spawned tasks.
+//! - `testing.rs` runs `test` blocks for [`test`] (`oskac test`), and
+//!   implements `TestContext`'s methods.
 //! - `panics.rs` defines panics and every runtime code.
 //! - `value.rs` defines runtime values.
 //! - `host.rs` defines the hosts.
@@ -45,11 +47,13 @@ mod panics;
 mod prng;
 mod support;
 mod tasks;
+mod testing;
 mod traits;
 mod value;
 
 pub use host::{FakeHost, Host, Output, RealHost, FAKE_SEED};
 pub use panics::codes;
+pub use testing::{test, TestOptions, TestReport, TestResult, TestStatus};
 
 use interp::Interpreter;
 use panics::Panic;
@@ -124,7 +128,7 @@ pub fn run(src: &str, host: &mut dyn Host, args: &[String]) -> RunOutcome {
 
 /// The refusal for the first import of a `std` module that has no runtime
 /// yet, whether or not the program calls it.
-fn unimplemented_module(program: &Program) -> Option<Diagnostic> {
+pub(crate) fn unimplemented_module(program: &Program) -> Option<Diagnostic> {
     let (module, span) = program.imports.iter().find(|(module, _)| {
         UNIMPLEMENTED_MODULES
             .iter()

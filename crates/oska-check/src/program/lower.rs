@@ -142,10 +142,30 @@ pub fn module(module: &Module, items: &Items, resolutions: &Resolutions) -> Prog
                     lowering.function(&mut program, name, f, sig);
                 }
             }
+            ItemKind::Test(test) => program.tests.push(super::Test {
+                name: test_name(&test.name),
+                integration: item.attributes.iter().any(|a| a.name.name == "integration"),
+                body: lowering.block(&test.body),
+                span: item.span,
+            }),
             _ => {}
         }
     }
     program
+}
+
+/// A test's name: the parser allows only a plain string literal.
+fn test_name(name: &ast::Expr) -> String {
+    match &name.kind {
+        ast::ExprKind::Str(parts) => parts
+            .iter()
+            .map(|part| match part {
+                StrPart::Text { value, .. } => value.as_str(),
+                StrPart::Hole { .. } => "",
+            })
+            .collect(),
+        _ => String::new(),
+    }
 }
 
 struct Lowering<'a> {

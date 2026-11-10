@@ -101,6 +101,9 @@ impl Host for Recording {
     fn write_file(&mut self, path: &Path, contents: &str) -> std::io::Result<()> {
         self.real.write_file(path, contents)
     }
+    fn printed(&self) -> Vec<String> {
+        self.stdout.lines().map(str::to_string).collect()
+    }
     fn take_output(&mut self) -> Output {
         Output {
             stdout: std::mem::take(&mut self.stdout),

@@ -46,6 +46,23 @@ pub struct Program {
     /// The module each `use` imports, such as `std.sql`, with the span of
     /// its path, in source order.
     pub imports: Vec<(String, Span)>,
+    /// Every `test` block, in source order.
+    pub tests: Vec<Test>,
+}
+
+/// A `test` block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Test {
+    /// The name as written, without its quotes.
+    pub name: String,
+    /// Marked `#[integration]`: it runs only on request, with real
+    /// capabilities.
+    pub integration: bool,
+    /// The body. Slot 0 holds `t`, the `TestContext`; its value, if any,
+    /// is dropped.
+    pub body: Expr,
+    /// The whole item, its attributes included.
+    pub span: Span,
 }
 
 /// The qualified name of `method` in the impl of `trait_name` for
