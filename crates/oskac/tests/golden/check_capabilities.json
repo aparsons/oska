@@ -7,5 +7,8 @@
     {"name":"AppError.to_string","authority":[],"via":[],"pure":true},
     {"name":"main","authority":["Stdout","FsRead"],"via":[{"param":"io","capabilities":["Stdout"]},{"param":"fs","capabilities":["FsRead"]}],"pure":false}
   ],
-  "audit": []
+  "audit": [],
+  "attenuations": [
+    {"function":"main","method":"restrict_to","span":{"start":1342,"end":1361},"source":"FsRead","result":"DirRead","root":"."}
+  ]
 }

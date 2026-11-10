@@ -52,7 +52,7 @@ Every command but `explain` takes exactly one source file. A command line is par
 Human-readable output:
 
 - Diagnostics go to standard error, one per line, as `file.osk: error[E0210]: message (bytes 7..13)`. A diagnostic with a fix is followed by an indented `fix: ...` line.
-- The authority report goes to standard output: one line per function and method, then one line per audit site.
+- The authority report goes to standard output: one line per function and method, each followed by its attenuations (indented), then one line per audit site.
 
 ```oska
 fn double(n: Int) -> Int {
@@ -129,6 +129,9 @@ One object on standard output, produced even when there are diagnostics:
   ],
   "audit": [
     {"kind":"assume_trusted","span":{"start":126,"end":147}}
+  ],
+  "attenuations": [
+    {"function":"main","method":"restrict_to","span":{"start":88,"end":112},"source":"FsRead","result":"DirRead","root":"docs"}
   ]
 }
 ```
@@ -136,8 +139,9 @@ One object on standard output, produced even when there are diagnostics:
 - `diagnostics`, in source order.
 - `functions`: one entry per function and method, in source order. `name` is the function's name, or `Type.method`. `authority` lists the built-in capabilities it can reach, in order of first appearance. `via` lists each capability-bearing parameter and what it supplies, with a method's receiver as `self`. `pure` is `true` when no parameter, the receiver included, is capability-bearing.
 - `audit`: every audit site, in source order. `kind` is `assume_trusted` for a trust assertion or `expose` for a secret exposure, and `span` covers the whole call.
+- `attenuations`: every call that narrows a capability, in source order. `function` is the function it is in, `method` is `restrict_to`, `restrict_to_file`, `read_only` or `write_only`, `source` and `result` are the capability kinds before and after, and `root` is the string the capability is restricted to, or `null` when the method takes no root or the root is computed at runtime. `span` covers the whole call.
 
-A parse error is reported alone, with empty `functions` and `audit`.
+A parse error is reported alone, with empty `functions`, `audit` and `attenuations`.
 
 ### `test --format=json`
 

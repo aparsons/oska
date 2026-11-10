@@ -1,0 +1,26 @@
+{
+  "diagnostics": [],
+  "functions": [
+    {"name":"docs","authority":["FsRead"],"via":[{"param":"read","capabilities":["FsRead"]}],"pure":false},
+    {"name":"output","authority":["FsWrite"],"via":[{"param":"write","capabilities":["FsWrite"]}],"pure":false},
+    {"name":"named","authority":["FsRead"],"via":[{"param":"read","capabilities":["FsRead"]}],"pure":false},
+    {"name":"per_user","authority":["Dir"],"via":[{"param":"uploads","capabilities":["Dir"]}],"pure":false},
+    {"name":"reader","authority":["Dir"],"via":[{"param":"app","capabilities":["Dir"]}],"pure":false},
+    {"name":"writer","authority":["Dir"],"via":[{"param":"app","capabilities":["Dir"]}],"pure":false},
+    {"name":"everything","authority":["Fs"],"via":[{"param":"fs","capabilities":["Fs"]}],"pure":false},
+    {"name":"main","authority":["Fs"],"via":[{"param":"fs","capabilities":["Fs"]}],"pure":false}
+  ],
+  "audit": [],
+  "attenuations": [
+    {"function":"docs","method":"restrict_to","span":{"start":200,"end":224},"source":"FsRead","result":"DirRead","root":"docs"},
+    {"function":"docs","method":"restrict_to","span":{"start":200,"end":255},"source":"DirRead","result":"DirRead","root":"guide"},
+    {"function":"output","method":"restrict_to","span":{"start":303,"end":329},"source":"FsWrite","result":"DirWrite","root":"_site"},
+    {"function":"named","method":"restrict_to","span":{"start":436,"end":458},"source":"FsRead","result":"DirRead","root":null},
+    {"function":"per_user","method":"restrict_to","span":{"start":589,"end":625},"source":"Dir","result":"Dir","root":null},
+    {"function":"reader","method":"read_only","span":{"start":708,"end":723},"source":"Dir","result":"DirRead","root":null},
+    {"function":"writer","method":"write_only","span":{"start":765,"end":781},"source":"Dir","result":"DirWrite","root":null},
+    {"function":"everything","method":"restrict_to","span":{"start":861,"end":880},"source":"Fs","result":"Dir","root":"/"},
+    {"function":"main","method":"read_only","span":{"start":917,"end":931},"source":"Fs","result":"FsRead","root":null},
+    {"function":"main","method":"write_only","span":{"start":948,"end":963},"source":"Fs","result":"FsWrite","root":null}
+  ]
+}

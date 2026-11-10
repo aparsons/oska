@@ -422,6 +422,7 @@ impl Body<'_, '_, '_> {
             Receiver::Self_ => {}
         }
         self.audit_call(&type_name, &name.name, span);
+        self.attenuation_call(&type_name, &sig, args, span);
         let callee = match &sig.trait_name {
             None => {
                 // Inherent methods are only declared on the module's own

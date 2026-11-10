@@ -61,9 +61,10 @@ fn main(io: Stdout, fs: Fs) -> Result<(), IoError> {
 fn word_count: FsRead (fs)
 fn double: pure
 fn main: Stdout (io), Fs (fs)
+  Fs -> FsRead: read_only (bytes 247..261)
 ```
 
-Reading the report: `word_count` can only read files, `double` can do nothing, and `main` can write to standard output and use the whole filesystem. Reviewing a change means reading the report, not the bodies.
+Reading the report: `word_count` can only read files, `double` can do nothing, and `main` can write to standard output and use the whole filesystem. The indented line under `main` is an **attenuation**: it narrows `Fs` to `FsRead`. Every attenuation is listed under the function it is in. Reviewing a change means reading the report, not the bodies.
 
 For a larger example, this site is built by an Oska program, `site/build.osk`. Its [authority report](https://oskalang.dev/authority.html) is printed by `oskac check` on every build and published as it was printed.
 
@@ -92,7 +93,11 @@ fn main(io: Stdout, fs: Fs) -> Result<(), IoError> {
 ```console cmd=check
 fn save: DirWrite (fs)
 fn main: Stdout (io), Fs (fs)
+  Fs -> Dir: restrict_to "notes" (bytes 174..197)
+  Dir -> DirWrite: write_only (bytes 207..225)
 ```
+
+The report shows `main` restricting the filesystem to `notes`, so a reviewer sees where the program can reach without reading its code. A root that is a string literal or a module constant is printed; any other root, such as one built from a variable, is printed as `computed at runtime`. `read_only` and `write_only` take no root.
 
 A directory capability is a type of its own, so `save`'s signature says it can write only beneath one directory. The runtime does the confining. A directory capability resolves every path against its root and refuses an absolute or empty path, one that climbs out with `..`, and one that goes through a symlink to somewhere else. A refusal is an `Err(IoError)`, not a panic. A root that cannot be opened, because it is missing or a symlink, gives a directory capability whose every operation returns an `IoError` naming the root.
 
