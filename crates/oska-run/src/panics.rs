@@ -46,6 +46,14 @@ pub mod codes {
     pub const MISSING_SECRET: &str = "P0020";
     /// Calls nested deeper than the interpreter allows: runaway recursion.
     pub const CALL_DEPTH_EXCEEDED: &str = "P0021";
+    /// `String.slice` was given indices out of bounds, or a start past its
+    /// end.
+    pub const SLICE_OUT_OF_BOUNDS: &str = "P0035";
+    /// `String.repeat` was given a negative count.
+    pub const NEGATIVE_REPEAT: &str = "P0036";
+    /// `String.repeat` would build a text longer than the interpreter
+    /// allows.
+    pub const TEXT_TOO_LONG: &str = "P0037";
 
     /// Every code, in the order `docs/runtime.md` lists them.
     pub const ALL: &[&str] = &[
@@ -63,6 +71,9 @@ pub mod codes {
         TEST_FAILED,
         MISSING_SECRET,
         CALL_DEPTH_EXCEEDED,
+        SLICE_OUT_OF_BOUNDS,
+        NEGATIVE_REPEAT,
+        TEXT_TOO_LONG,
     ];
 }
 

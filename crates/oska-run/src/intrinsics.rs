@@ -53,6 +53,7 @@ pub const INTRINSICS: Table = &[
     ("Fs.read_only", Plain(fs_read_only)),
     ("Fs.restrict_to", Plain(fs_restrict_to)),
     ("Fs.write_only", Plain(fs_write_only)),
+    ("FsRead.list_dir", Plain(fs_list_dir)),
     ("FsRead.read_to_string", Plain(fs_read_to_string)),
     ("FsRead.restrict_to", Plain(fs_restrict_to)),
     ("FsWrite.restrict_to", Plain(fs_restrict_to)),
@@ -384,6 +385,16 @@ fn fs_read_to_string(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<V
     let result = real_path(host, fs_cap(&args[0]), &args[1], Intent::Read)
         .and_then(|(path, beneath)| host.read_file(&path, beneath));
     Ok(io_result(result, |text| Value::str(&text)))
+}
+
+/// `FsRead.list_dir(self, path)`: the names of the entries of the
+/// directory, sorted. It is confined like a read.
+fn fs_list_dir(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    let result = real_path(host, fs_cap(&args[0]), &args[1], Intent::Read)
+        .and_then(|(path, beneath)| host.list_dir(&path, beneath));
+    Ok(io_result(result, |names| {
+        Value::List(Rc::new(names.iter().map(|n| Value::str(n)).collect()))
+    }))
 }
 
 /// `FsWrite.write(self, path, contents)`.
