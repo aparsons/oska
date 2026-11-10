@@ -10,7 +10,7 @@
 #      `unsafe` only in crates/oska-sys, and workflows use only official
 #      actions plus the SHA-pinned rust-toolchain;
 #   2. cargo fmt, clippy with -D warnings, and cargo test;
-#   3. the installer and release script tests;
+#   3. the installer, release script and unsafe guard tests;
 #   4. shellcheck on the shell scripts, when shellcheck is installed.
 
 set -euo pipefail
@@ -36,42 +36,11 @@ if grep -n '^source = ' Cargo.lock; then
 fi
 
 step "unsafe only in oska-sys"
-# The workspace forbids `unsafe_code`, and oska-sys alone does not take the
-# workspace's lints (ADR 0009). The compiler then refuses `unsafe` anywhere
-# else, as long as no other crate opts out, and the grep below is a second
-# guard on the source itself.
-if ! grep -qx 'unsafe_code = "forbid"' Cargo.toml; then
-  fail 'the workspace Cargo.toml must keep unsafe_code = "forbid"'
-fi
-manifests=$(cargo metadata --no-deps --format-version 1 |
-  grep -oE '"manifest_path":"[^"]*"' | cut -d'"' -f4)
-[ -n "$manifests" ] || fail "cargo metadata listed no workspace crates"
-while IFS= read -r manifest; do
-  case "$manifest" in */crates/oska-sys/Cargo.toml) continue ;; esac
-  # Every line of its `[lints...]` tables, comments and blanks aside: just
-  # `[lints]` and `workspace = true`, so no `[lints.rust]` of its own.
-  lints=$(awk '/^\[/ { in_lints = ($0 ~ /^\[lints/) }
-    in_lints && !/^[[:space:]]*(#|$)/' "$manifest")
-  if [ "$lints" != $'[lints]\nworkspace = true' ]; then
-    printf '%s:\n%s\n' "$manifest" "$lints" >&2
-    fail "every crate but oska-sys takes the workspace lints with exactly [lints] workspace = true"
-  fi
-done <<<"$manifests"
-# Rust source outside oska-sys, for Rust's own forms: `unsafe {`,
-# `unsafe fn`, `impl`, `trait` or `extern`, `#[unsafe(...)]`, and the lint
-# name `unsafe_code`. The Oska language has an `unsafe` keyword its tests
-# and messages mention, so string literals and `//` comments are removed
-# first, and a word in backticks is prose.
-unsafe_syntax='(^|[^[:alnum:]_`])unsafe([[:space:]]+(fn|impl|trait|extern)([^[:alnum:]_]|$)|[[:space:]]*[{(]|[[:space:]]*$|_code)'
-bad_unsafe=$(git ls-files -co --exclude-standard -- '*.rs' ':(exclude)crates/oska-sys/*' |
-  while IFS= read -r file; do
-    sed -E 's/"([^"\\]|\\.)*"//g; s://.*$::' "$file" |
-      grep -nE "$unsafe_syntax" | sed "s|^|$file:|" || true
-  done)
-if [ -n "$bad_unsafe" ]; then
-  printf '%s\n' "$bad_unsafe" >&2
-  fail "only crates/oska-sys may use unsafe or name the unsafe_code lint (ADR 0009)"
-fi
+# The workspace forbids `unsafe_code`, and oska-sys alone may use it
+# (ADR 0009). The guard compiles every other crate with `unsafe_code`
+# forbidden on rustc's command line, refuses cargo configs and workflow
+# flags that could lower lints, and scans source the build skips.
+scripts/unsafe-guard/guard.sh
 
 step "only official actions, rust-toolchain pinned to a commit"
 toolchain_pin='dtolnay/rust-toolchain@[0-9a-f]{40}'
@@ -97,9 +66,12 @@ bash scripts/install/test.sh
 step "release script tests"
 bash scripts/release/test.sh
 
+step "unsafe guard tests"
+bash scripts/unsafe-guard/test.sh
+
 step "shellcheck"
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck -S warning scripts/*.sh scripts/install/*.sh scripts/release/*.sh site/agent-setup/*.sh .githooks/pre-push
+  shellcheck -S warning scripts/*.sh scripts/install/*.sh scripts/release/*.sh scripts/unsafe-guard/*.sh site/agent-setup/*.sh .githooks/pre-push
 else
   echo "shellcheck not installed; skipped (CI runs it)"
 fi

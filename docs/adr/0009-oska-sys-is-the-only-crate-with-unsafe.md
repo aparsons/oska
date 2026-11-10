@@ -7,7 +7,7 @@ Every crate in the workspace forbids `unsafe` code, except one: `oska-sys`, an i
 - **It adds no dependencies.** It declares the few C-library functions it needs itself, such as `openat`, and calls them through the C library that `std` already links.
 - **It exposes only a safe API.** The runtime opens a root, and opens directories and files beneath it, through a directory handle type. Nothing `unsafe` is public.
 - **Every `unsafe` block states its invariant.** Each block holds one unsafe operation and begins with a `// SAFETY:` comment. Clippy's `undocumented_unsafe_blocks` and `multiple_unsafe_ops_per_block` lints enforce both.
-- **The exception cannot spread.** The workspace keeps `unsafe_code = "forbid"`, and `oska-sys` is the only crate that does not take the workspace's lints. `scripts/check.sh` fails when any other crate opts out of the workspace lints or its source contains `unsafe`.
+- **The exception cannot spread.** The workspace keeps `unsafe_code = "forbid"`, and `oska-sys` is the only crate that does not take the workspace's lints. `scripts/check.sh` runs `scripts/unsafe-guard/guard.sh`, which proves it by compiling: every other crate, every target, is built with `-F unsafe_code` last on rustc's command line, so no manifest, source attribute or flag can allow `unsafe` there, and `--cap-lints` is refused. The guard also refuses a checked-in cargo config and a workflow that sets rustc flags or a wrapper, and scans source the build skips, such as `#[cfg(windows)]` code, for the word `unsafe`. `scripts/unsafe-guard/test.sh` tries each known way around it.
 
 ## Why
 
