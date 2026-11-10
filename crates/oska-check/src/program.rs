@@ -54,15 +54,22 @@ pub struct Program {
     /// The byte offset each line of the source starts at, from which
     /// [`Program::line_col`] finds the line and column of a span.
     pub line_starts: Vec<usize>,
+    /// The byte offset of every byte of the source that continues a
+    /// character, in order: each character after the first byte of a
+    /// multi-byte one. [`Program::line_col`] skips them, so a column
+    /// counts characters.
+    pub char_tails: Vec<usize>,
 }
 
 impl Program {
     /// The line and column, both counted from 1, of the byte `offset` in
-    /// the source. The column counts bytes.
+    /// the source. The column counts characters (Unicode scalar values).
     pub fn line_col(&self, offset: usize) -> (usize, usize) {
         let line = self.line_starts.partition_point(|&start| start <= offset);
         let start = line.checked_sub(1).map_or(0, |i| self.line_starts[i]);
-        (line.max(1), offset - start + 1)
+        let tails_before = |at: usize| self.char_tails.partition_point(|&t| t < at);
+        let tails = tails_before(offset) - tails_before(start);
+        (line.max(1), offset - start - tails + 1)
     }
 }
 
