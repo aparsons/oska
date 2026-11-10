@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/ https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/; font-src https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/ https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/; img-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oska checker report · Oska</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/latin-400.css" integrity="sha384-zc+mzApNgdFM05uzzG/c/4wVZ4LHLa0ZrZyeZYh4tq7GukSAQ2T6xYGTgE+mssl6" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/latin-700.css" integrity="sha384-qIiEwfeovj0ewBGH8n6bkz0WIS8pOCQ8xV0byBksQD0KeXY0dmQr3eXjhcSqFhbH" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/latin-400.css" integrity="sha384-rDtx9NW9VQWFrGIe8txtelRagz09ojKYLeaff45i3hEq7ofdZdkNlxVO8XCT5yPu" crossorigin="anonymous">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+<nav aria-label="Site">
+<ul>
+<li><a href="/">Oska</a></li>
+<li><a href="/checker.html" aria-current="page">Checker</a></li>
+<li><a href="/runtime.html">Runtime</a></li>
+<li><a href="/glossary.html">Glossary</a></li>
+<li><a href="/codes/">Codes</a></li>
+</ul>
+</nav>
+</header>
+<main>
+<h1 id="oska-checker-report">Oska checker report</h1>
+<h2 id="diagnostic-codes">Diagnostic codes</h2>
+<table>
+<thead>
+<tr><th>Code</th><th>Meaning</th><th>Fix</th></tr>
+</thead>
+<tbody>
+<tr><td><code>E0200</code></td><td>Unknown name &quot;x&quot; with a \ in it, as in <code>Strng</code>. See <a href="#tour">the tour</a>.</td><td>Replace the name with the closest one.</td></tr>
+<tr><td><code>E0201</code></td><td>A trait &lt;script&gt;alert(1)&lt;/script&gt; where a type is expected. Then more.</td><td>None.</td></tr>
+<tr><td><code>E0140</code></td><td>An or-pattern such as <code>A | B</code>.</td><td>None: write one arm each.</td></tr>
+</tbody>
+</table>
+<h3 id="examples">Examples</h3>
+<h4 id="e0200"><code>E0200</code></h4>
+<pre><code>fn f(x: Strng) {}
+</code></pre>
+<pre><code>fn f(x: String) {}
+</code></pre>
+<h4 id="e0201"><code>E0201</code></h4>
+<pre><code>fn show(x: Display) {
+    let note = &quot;&lt;b&gt;\&quot;quoted\&quot;&lt;/b&gt;&quot;
+}
+
+</code></pre>
+<pre><code>not an example
+| `E0999` | Not a code row. | None. |
+</code></pre>
+</main>
+<footer>
+<p>Built from the Oska repository by <code>site/build.osk</code>, an Oska program. The docs track <code>main</code>.</p>
+</footer>
+</body>
+</html>

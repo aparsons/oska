@@ -21,6 +21,53 @@ Before a program starts, the runtime checks that it can run all of it, reached o
 | `E0371` | The program imports a `std` module that has no runtime yet: `std.proc` or `std.sql`, used or not. Spans the module path of the `use`. |
 | `E0380` | The program uses something the interpreter cannot run yet: a construct the checked program cannot express, a call of a prelude function with no runtime implementation, or a parameter of `main` that is neither a capability nor `Args`. The message names the construct, as in ``the interpreter cannot run a `From`-bound conversion yet``; others are a constructor used as a function value and a call of a generic trait's method. Spans the construct or call, or `main`'s body for a parameter. |
 
+### Refusal examples
+
+Each refusal has a program that is refused with exactly that code and the same program fixed. The examples run on the in-memory host, so they depend on nothing outside the program.
+
+#### `E0370`
+
+```oska error=E0370
+fn main(net: Net) -> Result<(), IoError> {
+    Ok(())
+}
+```
+
+```oska fixed=E0370
+fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("hello")
+}
+```
+
+#### `E0371`
+
+```oska error=E0371
+use std.sql
+
+fn main() {}
+```
+
+```oska fixed=E0371
+use std.html
+
+fn main() {}
+```
+
+#### `E0380`
+
+```oska error=E0380
+fn main() {
+    let make = Some
+    let x: Option<Int> = make(1)
+}
+```
+
+```oska fixed=E0380
+fn main() {
+    let x: Option<Int> = Some(1)
+}
+```
+
 ## Panics
 
 A **panic** stops the program where a bug happened. It has a stable `P`-code, a message, and the span of the expression that panicked. Without `--format=json`, it is printed to stderr like a diagnostic, `file.osk: error[P0004]: division by zero: ... (bytes 61..67)`. With `--format=json`, it is printed to stderr as one diagnostic object, in the same shape as the checker's (see [`ast.md`](ast.md)):
@@ -49,6 +96,204 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0035` | `String.slice` was given indices out of bounds: a start or end below 0 or past the text's length in characters, or a start past the end. Spans the call. Indices count characters (Unicode code points), not bytes. |
 | `P0036` | `String.repeat` was given a negative count. Spans the call. |
 | `P0037` | `String.repeat` would build a text over 256 MiB, so the interpreter panics instead of running out of memory. Spans the call. |
+
+### Panic examples
+
+Each panic has a program that stops with exactly that code and the same program fixed. The `P001x` examples are tests, because only a `test` block can fail an assertion, and run under `oskac test`. `P0005` has no example: the checker (`E0292`) stops a program from keeping a scope handle past its block, so no checked program can reach it.
+
+#### `P0001`
+
+```oska error=P0001
+fn main() {
+    let x: U8 = 255
+    let y = x + 1
+}
+```
+
+```oska fixed=P0001
+fn main() {
+    let x: Int = 255
+    let y = x + 1
+}
+```
+
+#### `P0002`
+
+```oska error=P0002
+fn main() {
+    let xs: List<Int> = List.new()
+    let first = xs.at(0)
+}
+```
+
+```oska fixed=P0002
+fn main() {
+    let xs: List<Int> = List.new()
+    let first = xs.get(0)
+}
+```
+
+#### `P0003`
+
+```oska error=P0003
+fn main() {
+    todo()
+}
+```
+
+```oska fixed=P0003
+fn main() {}
+```
+
+#### `P0004`
+
+```oska error=P0004
+fn main() {
+    let zero = 0
+    let n = 10 / zero
+}
+```
+
+```oska fixed=P0004
+fn main() {
+    let two = 2
+    let n = 10 / two
+}
+```
+
+#### `P0010`
+
+```oska error=P0010 tests
+test "is positive" {
+    t.assert(1 < 0)
+}
+```
+
+```oska fixed=P0010 tests
+test "is positive" {
+    t.assert(0 < 1)
+}
+```
+
+#### `P0011`
+
+```oska error=P0011 tests
+test "adds" {
+    t.assert_eq(1 + 1, 3)
+}
+```
+
+```oska fixed=P0011 tests
+test "adds" {
+    t.assert_eq(1 + 1, 2)
+}
+```
+
+#### `P0012`
+
+```oska error=P0012 tests
+test "differs" {
+    t.assert_ne(2, 2)
+}
+```
+
+```oska fixed=P0012 tests
+test "differs" {
+    t.assert_ne(2, 3)
+}
+```
+
+#### `P0013`
+
+```oska error=P0013 tests
+test "not written yet" {
+    t.fail("write this test")
+}
+```
+
+```oska fixed=P0013 tests
+test "written" {
+    t.assert(true)
+}
+```
+
+#### `P0020`
+
+```oska error=P0020
+fn main(env: Env) {
+    let key = env.secret("API_KEY")
+}
+```
+
+```oska fixed=P0020
+fn main(env: Env) {
+    let key = env.get("API_KEY")
+}
+```
+
+#### `P0021`
+
+```oska error=P0021
+fn down(n: Int) -> Int {
+    1 + down(n - 1)
+}
+
+fn main() {
+    let depth = down(10)
+}
+```
+
+```oska fixed=P0021
+fn down(n: Int) -> Int {
+    if n == 0 { 0 } else { 1 + down(n - 1) }
+}
+
+fn main() {
+    let depth = down(10)
+}
+```
+
+#### `P0035`
+
+```oska error=P0035
+fn main() {
+    let part = "abc".slice(0, 10)
+}
+```
+
+```oska fixed=P0035
+fn main() {
+    let part = "abc".slice(0, 2)
+}
+```
+
+#### `P0036`
+
+```oska error=P0036
+fn main() {
+    let line = "ab".repeat(-1)
+}
+```
+
+```oska fixed=P0036
+fn main() {
+    let line = "ab".repeat(3)
+}
+```
+
+#### `P0037`
+
+```oska error=P0037
+fn main() {
+    let huge = "ab".repeat(300000000)
+}
+```
+
+```oska fixed=P0037
+fn main() {
+    let small = "ab".repeat(3000)
+}
+```
 
 ## Errors and traits
 

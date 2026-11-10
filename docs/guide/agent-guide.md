@@ -131,15 +131,13 @@ Put the loop in the project's instructions file, such as `AGENTS.md`:
 - Check: `oskac check <file.osk> --format=json`. Apply a diagnostic's `fix` if it has one, then check again.
 - Run: `oskac run <file.osk> -- args`. Test: `oskac test <file.osk>`.
 - Before finishing: `oskac check <file.osk> --release` must pass, and read the authority report. Do not widen `main`'s capabilities or add `.assume_trusted()` or `.expose()` without saying why.
-- Match on the diagnostic `code`, not the message. Codes are listed in the Oska repository's `docs/checker.md` and `docs/runtime.md`.
+- Match on the diagnostic `code`, not the message. `oskac explain <code>` explains a code offline, with an example and its fix. The same entries are at `https://oskalang.dev/codes/<code>` and in `https://oskalang.dev/codes.json`.
 ```
 
 ## Coming in v0.1.0
 
 > **Available from v0.1.0.** These parts of the decided design are not in the current build. When each ships, replace its line here with the real command and remove this notice.
 
-- **`oskac explain <code>`** prints the catalog entry for a diagnostic code, offline, so an agent does not need the network to understand `E0300`.
-- **An error-code catalog on the documentation site**, one page per code at `/codes/E0300`, and the same data as `/codes.json`.
 - **Files for agents:** `llms.txt` and `llms-full.txt`, and a `.md` copy of every page.
 - **The installers' `--json` output** (see [install](install.md#one-line-installers)), so an agent can confirm that the checksum and signature verified.
 - **A copy-and-paste agent setup prompt** that installs Oska and configures a project with the loop above.

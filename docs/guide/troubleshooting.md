@@ -52,7 +52,7 @@ After a [source build](install.md#build-from-source), put `target/release/oskac`
 
 ### The documentation says a command exists, but it does not
 
-Anything marked **Available from v0.1.0** is the decided design for the first release and is not in the current build. `oskac explain` is one.
+Anything marked **Available from v0.1.0** is the decided design for the first release and is not in the current build.
 
 ## By code
 
@@ -296,8 +296,8 @@ These come from `oskac run` and `oskac test`, not from `oskac check`. The refusa
 
 ## Getting the explanation from the toolchain
 
-> **Available from v0.1.0.** `oskac explain <code>` prints the catalog entry for a diagnostic code offline, and the documentation site has one page per code at `/codes/<code>`. Neither is in the current build.
+`oskac explain <code>` prints the catalog entry for a diagnostic code offline: what it means, a program that fails with it, and the same program fixed. The documentation site has the same entry as one page per code at `/codes/E0300`, and all of them as data in `/codes.json`. See [the CLI reference](cli-reference.md#oskac-explain).
 
-```sh planned
+```sh
 oskac explain E0300
 ```

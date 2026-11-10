@@ -637,3 +637,107 @@ fn main_narrows_reading_to_docs_and_the_files_it_names() {
     }
     assert!(!BUILD.contains("restrict_to(\".\")"));
 }
+
+// ---- The error-code catalog -----------------------------------------------------------
+
+/// The site built from the `codes` case's inputs: a small `checker.md`
+/// and `runtime.md` with hostile text in them.
+fn codes_site() -> BTreeMap<String, String> {
+    let inputs = read_tree(&cases_dir().join("codes/input"));
+    let built = build(&inputs);
+    assert_succeeded(&built.outcome);
+    assert_site_inert(&built.site);
+    built.site
+}
+
+#[test]
+fn codes_json_holds_each_code_with_its_examples_and_escapes_them() {
+    let expected = r#"[
+{"code":"E0200","message":"Unknown name \"x\" with a \\\\ in it, as in `Strng`. See [the tour](#tour).","machine_fix":true,"machine_fix_description":"Replace the name with the closest one.","example":"fn f(x: Strng) {}\n","fix":"fn f(x: String) {}\n"},
+{"code":"E0201","message":"A trait <script>alert(1)</script> where a type is expected. Then more.","machine_fix":false,"machine_fix_description":null,"example":"fn show(x: Display) {\n    let note = \"<b>\\\"quoted\\\"</b>\"\n}\n\n","fix":null},
+{"code":"E0140","message":"An or-pattern such as `A | B`.","machine_fix":false,"machine_fix_description":null,"example":null,"fix":null},
+{"code":"P0004","message":"Division by zero, see [Tests](#tests). Spans the operation.","machine_fix":false,"machine_fix_description":null,"example":null,"fix":null}
+]
+"#;
+    assert_eq!(codes_site()["codes.json"], expected);
+}
+
+#[test]
+fn a_code_page_shows_its_meaning_example_and_fix_escaped() {
+    let site = codes_site();
+    let page = &site["codes/E0200.html"];
+    for part in [
+        "<title>E0200 · Oska</title>",
+        "<h1 id=\"e0200\">E0200</h1>",
+        "<strong>Machine-applicable fix:</strong> Replace the name with the closest one.",
+        "<h2 id=\"example\">Example</h2>",
+        "<pre><code>fn f(x: Strng) {}\n</code></pre>",
+        "<h2 id=\"fixed\">Fixed</h2>",
+        "<pre><code>fn f(x: String) {}\n</code></pre>",
+        "<a href=\"/checker.html#e0200\">checker notes</a>",
+        "<a href=\"/codes/\">All error codes</a>",
+    ] {
+        assert!(page.contains(part), "`{part}` should be in:\n{page}");
+    }
+    // A link in the meaning that pointed within the doc points there still.
+    assert!(
+        page.contains("<a href=\"/checker.html#tour\">the tour</a>"),
+        "{page}"
+    );
+    let hostile = &site["codes/E0201.html"];
+    assert!(
+        hostile.contains("A trait &lt;script&gt;alert(1)&lt;/script&gt; where"),
+        "{hostile}"
+    );
+    assert!(hostile.contains("let note = &quot;&lt;b&gt;"), "{hostile}");
+    assert!(
+        hostile.contains("<strong>Machine-applicable fix:</strong> none."),
+        "{hostile}"
+    );
+}
+
+#[test]
+fn a_code_with_no_example_has_no_example_section_and_a_runtime_code_links_the_runtime_notes() {
+    let site = codes_site();
+    let page = &site["codes/P0004.html"];
+    assert!(!page.contains("id=\"example\""), "{page}");
+    assert!(!page.contains("id=\"fixed\""), "{page}");
+    assert!(
+        page.contains("<a href=\"/runtime.html#tests\">Tests</a>"),
+        "{page}"
+    );
+    assert!(
+        page.contains("<a href=\"/runtime.html#p0004\">runtime notes</a>"),
+        "{page}"
+    );
+}
+
+#[test]
+fn the_index_links_every_code_with_its_first_sentence_and_the_navigation_links_the_index() {
+    let site = codes_site();
+    let index = &site["codes/index.html"];
+    for part in [
+        "<li><a href=\"/codes/E0200.html\">E0200</a>: Unknown name &quot;x&quot; with a \\ in it, as in <code>Strng</code></li>",
+        "<li><a href=\"/codes/E0201.html\">E0201</a>: A trait &lt;script&gt;alert(1)&lt;/script&gt; where a type is expected</li>",
+        "<li><a href=\"/codes/P0004.html\">P0004</a>: Division by zero, see <a href=\"/runtime.html#tests\">Tests</a></li>",
+        "<a href=\"/codes.json\">codes.json</a>",
+    ] {
+        assert!(index.contains(part), "`{part}` should be in:\n{index}");
+    }
+    assert!(
+        index.contains("<li><a href=\"/codes/\" aria-current=\"page\">Codes</a></li>"),
+        "{index}"
+    );
+    assert!(site["index.html"].contains("<li><a href=\"/codes/\">Codes</a></li>"));
+}
+
+#[test]
+fn without_a_checker_doc_there_is_no_catalog() {
+    let site = build_ok(&[]);
+    assert!(
+        !site.keys().any(|k| k.starts_with("codes")),
+        "{:?}",
+        site.keys()
+    );
+    assert!(!site["index.html"].contains("Codes"));
+}

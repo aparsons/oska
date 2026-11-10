@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/ https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/; font-src https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/ https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/; img-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>E0200 · Oska</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/latin-400.css" integrity="sha384-zc+mzApNgdFM05uzzG/c/4wVZ4LHLa0ZrZyeZYh4tq7GukSAQ2T6xYGTgE+mssl6" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/latin-700.css" integrity="sha384-qIiEwfeovj0ewBGH8n6bkz0WIS8pOCQ8xV0byBksQD0KeXY0dmQr3eXjhcSqFhbH" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/latin-400.css" integrity="sha384-rDtx9NW9VQWFrGIe8txtelRagz09ojKYLeaff45i3hEq7ofdZdkNlxVO8XCT5yPu" crossorigin="anonymous">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+<nav aria-label="Site">
+<ul>
+<li><a href="/">Oska</a></li>
+<li><a href="/checker.html">Checker</a></li>
+<li><a href="/runtime.html">Runtime</a></li>
+<li><a href="/glossary.html">Glossary</a></li>
+<li><a href="/codes/">Codes</a></li>
+</ul>
+</nav>
+</header>
+<main>
+<h1 id="e0200">E0200</h1>
+<p>Unknown name &quot;x&quot; with a \ in it, as in <code>Strng</code>. See <a href="/checker.html#tour">the tour</a>.</p>
+<p><strong>Machine-applicable fix:</strong> Replace the name with the closest one.</p>
+<h2 id="example">Example</h2>
+<p>This program fails with <code>E0200</code>.</p>
+<pre><code>fn f(x: Strng) {}
+</code></pre>
+<h2 id="fixed">Fixed</h2>
+<p>The same program, fixed.</p>
+<pre><code>fn f(x: String) {}
+</code></pre>
+<p>Listed in the <a href="/checker.html#e0200">checker notes</a>. <code>oskac explain E0200</code> prints this entry offline.</p>
+<p><a href="/codes/">All error codes</a></p>
+</main>
+<footer>
+<p>Built from the Oska repository by <code>site/build.osk</code>, an Oska program. The docs track <code>main</code>.</p>
+</footer>
+</body>
+</html>
