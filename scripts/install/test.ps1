@@ -18,6 +18,8 @@ $scratch = Join-Path ([IO.Path]::GetTempPath()) ('oska-install-test-' + [Guid]::
 
 $Assets = @('oskac-linux-aarch64', 'oskac-linux-x86_64', 'oskac-macos-aarch64', 'oskac-macos-x86_64', 'oskac-windows-x86_64.exe')
 $Utf8 = New-Object System.Text.UTF8Encoding $false
+# The certificate Start-RedirectServer makes, once.
+$script:certificate = $null
 
 function Assert([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
@@ -48,15 +50,37 @@ function Set-Signature([string]$Dir, [string]$Key = 'key', [string]$Namespace = 
     Assert ($LASTEXITCODE -eq 0) "ssh-keygen could not sign $Dir/SHA256SUMS"
 }
 
+# Returns the path of a console program that prints "oskac <version>", like
+# the real `oskac --version`, compiled once per version with the C#
+# compiler of the .NET Framework, which every Windows has.
+function Get-FakeOskac([string]$Version) {
+    $exe = Join-Path $scratch "fake-oskac-$Version.exe"
+    if (-not (Test-Path -LiteralPath $exe)) {
+        $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+        Assert (Test-Path -LiteralPath $csc) "no C# compiler at $csc"
+        $source = Join-Path $scratch "fake-oskac-$Version.cs"
+        [IO.File]::WriteAllText($source, "class P { static void Main() { System.Console.WriteLine(`"oskac $Version`"); } }", $Utf8)
+        $out = & $csc /nologo /target:exe "/out:$exe" $source
+        Assert ($LASTEXITCODE -eq 0) "csc could not build $exe`: $out"
+    }
+    $exe
+}
+
 # Publishes release <version> in site/releases/v<version>/, as
-# scripts/release/assemble.sh and sign.sh lay it out.
-function New-Release([string]$Version) {
+# scripts/release/assemble.sh and sign.sh lay it out: SHA256SUMS starts
+# with the signed tag line. The Windows binary prints "oskac <reports>"
+# (default: <version>).
+function New-Release([string]$Version, [string]$Reports = $Version) {
     if (-not (Test-Path key)) { New-Key 'key' }
     $dir = "site/releases/v$Version"
     [void](New-Item -ItemType Directory -Force -Path $dir)
-    $sums = ''
+    $sums = "# oska-release v$Version`n"
     foreach ($asset in $Assets) {
-        Write-Text "$dir/$asset" "binary $asset $Version`n"
+        if ($asset -eq 'oskac-windows-x86_64.exe') {
+            Copy-Item -LiteralPath (Get-FakeOskac $Reports) -Destination "$dir/$asset"
+        } else {
+            Write-Text "$dir/$asset" "binary $asset $Version`n"
+        }
         $sums += '{0}  {1}' -f (Get-Sha256 "$dir/$asset"), $asset
         $sums += "`n"
     }
@@ -234,6 +258,117 @@ function Test-RefusesAReleaseWithoutASignature {
     Test-Refused 'download_failed'
 }
 
+# The rollback attack: genuine, signed files of an old release served as a
+# newer one. The signature is valid; only the signed tag line refuses it.
+function Test-RefusesAnOlderSignedReleasePublishedAsTheLatest {
+    Install-Good
+    Remove-Item -Recurse -Force site/releases/v1.3.0
+    Copy-Item -Recurse site/releases/v1.2.3 site/releases/v1.3.0
+    Set-Latest '1.3.0'
+    $result = Read-Json (Invoke-Installer @('--json'))
+    Assert ($script:status -ne 0) "installed 1.2.3's files as 1.3.0"
+    Assert ($result.error -eq 'version_mismatch') "error is $($result.error)"
+    Assert ($result.message -like '*v1.2.3*') "message does not name the signed tag: $($result.message)"
+    Test-InstalledIs '1.2.3'
+}
+
+function Test-RefusesAnOlderSignedReleaseFromAMirrorForANewerVersion {
+    Install-Good
+    [void](New-Item -ItemType Directory -Force -Path mirror/releases)
+    Copy-Item -Recurse site/releases/v1.2.3 mirror/releases/v1.3.0
+    $mirror = ([Uri](Join-Path (Get-Location).Path 'mirror')).AbsoluteUri
+    Test-Refused 'version_mismatch' -Site $mirror
+}
+
+function Test-RefusesSignedChecksumsThatNameNoTag {
+    Install-Good
+    $dir = 'site/releases/v1.3.0'
+    $lines = [IO.File]::ReadAllLines((Get-FullPath "$dir/SHA256SUMS")) | Where-Object { -not $_.StartsWith('#') }
+    Write-Text "$dir/SHA256SUMS" (($lines -join "`n") + "`n")
+    Set-Signature $dir
+    Test-Refused 'version_mismatch'
+}
+
+function Test-RefusesABinaryThatDoesNotReportTheSignedVersion {
+    New-Release '1.2.3'
+    Set-Latest '1.2.3'
+    [void](Invoke-Installer @('--json'))
+    Test-InstalledIs '1.2.3'
+    New-Release '1.3.0' -Reports '1.2.9'
+    Test-Refused 'version_mismatch'
+}
+
+# A local HTTPS server that answers every request with a redirect to
+# <Location>. Its certificate, for localhost, is trusted machine-wide while
+# the tests run, which needs administrator rights (CI runners have them).
+function Start-RedirectServer([string]$Location) {
+    if (-not $script:certificate) {
+        $script:certificate = New-SelfSignedCertificate -DnsName 'localhost' -CertStoreLocation 'Cert:\CurrentUser\My' -NotAfter (Get-Date).AddDays(1)
+        $root = New-Object Security.Cryptography.X509Certificates.X509Store -ArgumentList 'Root', 'LocalMachine'
+        $root.Open('ReadWrite')
+        $root.Add($script:certificate)
+        $root.Close()
+    }
+    $listener = [Net.Sockets.TcpListener]::Create(0)
+    $listener.Start()
+    $serve = {
+        param($Listener, $Certificate, $Location)
+        while ($true) {
+            try { $client = $Listener.AcceptTcpClient() } catch { return }
+            try {
+                $ssl = New-Object Net.Security.SslStream -ArgumentList $client.GetStream(), $false
+                $ssl.AuthenticateAsServer($Certificate, $false, [Security.Authentication.SslProtocols]::Tls12, $false)
+                $reader = New-Object IO.StreamReader -ArgumentList $ssl, ([Text.Encoding]::ASCII), $false, 1024, $true
+                while ($true) {
+                    $line = $reader.ReadLine()
+                    if ($null -eq $line -or $line -eq '') { break }
+                }
+                $reply = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 302 Found`r`nLocation: $Location`r`nContent-Length: 0`r`nConnection: close`r`n`r`n")
+                $ssl.Write($reply, 0, $reply.Length)
+                $ssl.Flush()
+            } catch {
+            } finally {
+                $client.Close()
+            }
+        }
+    }
+    $shell = [PowerShell]::Create().AddScript($serve).AddArgument($listener).AddArgument($script:certificate).AddArgument($Location)
+    $handle = $shell.BeginInvoke()
+    @{ Listener = $listener; Shell = $shell; Handle = $handle; Port = $listener.LocalEndpoint.Port }
+}
+
+function Stop-RedirectServer($Server) {
+    $Server.Listener.Stop()
+    [void]$Server.Shell.EndInvoke($Server.Handle)
+    $Server.Shell.Dispose()
+}
+
+function Remove-TestCertificate {
+    if ($script:certificate) {
+        $root = New-Object Security.Cryptography.X509Certificates.X509Store -ArgumentList 'Root', 'LocalMachine'
+        $root.Open('ReadWrite')
+        $root.Remove($script:certificate)
+        $root.Close()
+        Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($script:certificate.Thumbprint)" -ErrorAction SilentlyContinue
+    }
+}
+
+# Windows PowerShell 5.1's Invoke-WebRequest follows a redirect from https
+# to http. The installer must refuse it, and with insecure_url: a
+# download_failed would mean the https hop itself did not work.
+function Test-RefusesARedirectFromHttpsToHttp {
+    New-Release '1.2.3'
+    $server = Start-RedirectServer 'http://127.0.0.1:1/latest.json'
+    try {
+        $result = Read-Json (Invoke-Installer @('--json') -Site "https://localhost:$($server.Port)")
+        Assert ($script:status -ne 0) 'followed a redirect to http'
+        Assert ($result.error -eq 'insecure_url') "error is $($result.error): $($result.message)"
+        Assert (-not (Test-Path home)) 'created OSKA_HOME'
+    } finally {
+        Stop-RedirectServer $server
+    }
+}
+
 function Test-RefusesToDownloadOverPlainHttp {
     Install-Good
     Test-Refused 'insecure_url' -Site 'http://oskalang.dev'
@@ -310,6 +445,7 @@ try {
         }
     }
 } finally {
+    Remove-TestCertificate
     Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
 }
 

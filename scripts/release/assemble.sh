@@ -5,7 +5,14 @@
 #
 # <builds-dir> holds one binary per release target, already named for its
 # target (see ASSETS). This writes <out-dir>/<tag>/ with those binaries and
-# a SHA256SUMS file in `sha256sum` format, ready for sign.sh.
+# a SHA256SUMS file, ready for sign.sh. SHA256SUMS starts with the line
+#
+#   # oska-release <tag>
+#
+# and then has one `sha256sum` line per binary. The first line binds the
+# tag into what sign.sh signs, so a signed release cannot be passed off as
+# another version: verify.sh and the installers require it to name the tag
+# they asked for. `sha256sum --check` skips it as a comment.
 #
 # Runs on Linux (it needs GNU coreutils' sha256sum).
 
@@ -46,4 +53,7 @@ for asset in "${ASSETS[@]}"; do
   chmod 755 "$dir/$asset"
 done
 
-(cd "$dir" && LC_ALL=C sha256sum -- "${ASSETS[@]}" | LC_ALL=C sort -k2) >"$dir/SHA256SUMS"
+{
+  printf '# oska-release %s\n' "$tag"
+  (cd "$dir" && LC_ALL=C sha256sum -- "${ASSETS[@]}" | LC_ALL=C sort -k2)
+} >"$dir/SHA256SUMS"
