@@ -1,7 +1,9 @@
 //! The checked program a backend runs (ADR 0007): what the checker
 //! exports beyond its diagnostics.
 
-use oska_check::program::{Closure, Expr, ExprKind, Program, Stmt};
+use std::ops::ControlFlow;
+
+use oska_check::program::{walk, Closure, Expr, ExprKind, Program, Visit};
 
 fn program(src: &str) -> Program {
     let report = oska_check::check_module(src);
@@ -10,31 +12,19 @@ fn program(src: &str) -> Program {
         .unwrap_or_else(|| panic!("{src} should check: {:#?}", report.diagnostics))
 }
 
-/// Every closure in `expr`, outermost first.
-fn closures(expr: &Expr, out: &mut Vec<Closure>) {
-    match &expr.kind {
-        ExprKind::Closure(closure) => {
-            out.push((**closure).clone());
-            closures(&closure.body, out);
-        }
-        ExprKind::Block { stmts, value } => {
-            for stmt in stmts {
-                if let Stmt::Let { value, .. } | Stmt::Expr(value) = stmt {
-                    closures(value, out);
-                }
-            }
-            if let Some(value) = value {
-                closures(value, out);
-            }
-        }
-        ExprKind::Call { args, .. } => args.iter().for_each(|a| closures(a, out)),
-        _ => {}
-    }
-}
-
+/// Every closure in `function`'s body, outermost first.
 fn closures_of(program: &Program, function: &str) -> Vec<Closure> {
     let mut out = Vec::new();
-    closures(&program.functions[function].body, &mut out);
+    let _ = walk(&program.functions[function].body, &mut |visit| {
+        if let Visit::Expr(Expr {
+            kind: ExprKind::Closure(closure),
+            ..
+        }) = visit
+        {
+            out.push((**closure).clone());
+        }
+        ControlFlow::<()>::Continue(())
+    });
     out
 }
 

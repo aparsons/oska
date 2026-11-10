@@ -23,11 +23,13 @@
 //!    body is checked.
 //! 3. Lower the AST node in `lower::Lowering::expr` (or `stmt`), which
 //!    turns anything it does not know yet into [`ExprKind::Unsupported`].
-//! 4. Evaluate it in each backend: in `oska-run`, `interp.rs`, and let
-//!    `support.rs` walk into it, since it refuses (`E0380`) a program with
-//!    an `Unsupported` node or a call it cannot make.
+//! 4. Let [`walk`] reach into it, so every pass over the tree, such as
+//!    `oska-run`'s refusal (`E0380`) of a program with an `Unsupported`
+//!    node or a call it cannot make, sees what it holds.
+//! 5. Evaluate it in each backend: in `oska-run`, `interp.rs`.
 
 use std::collections::BTreeMap;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use oska_syntax::ast::BinaryOp;
@@ -445,4 +447,158 @@ pub enum Callee {
     /// intrinsic `Tag.method` of a prelude implementation. Only a trait
     /// without generics is called this way.
     Trait { trait_name: String, method: String },
+}
+
+/// What a [`walk`] meets.
+#[derive(Debug, Clone, Copy)]
+pub enum Visit<'p> {
+    /// An expression, before anything inside it.
+    Expr(&'p Expr),
+    /// What a node calls, with the span the call is reported at: a call's
+    /// callee, a `?`'s conversion, a function used as a value, or an
+    /// interpolation hole's `Display`.
+    Callee(&'p Callee, Span),
+}
+
+/// Visit `expr` and everything inside it, in the order it is evaluated:
+/// each expression before its parts, a node's callee before its
+/// arguments, and the statements, patterns, guards, and closure bodies
+/// within. Stops at the first [`ControlFlow::Break`], and returns it.
+///
+/// Every pass over the checked program walks it with this, so a new node
+/// kind is reached everywhere by adding it here.
+pub fn walk<'p, B>(
+    expr: &'p Expr,
+    visit: &mut impl FnMut(Visit<'p>) -> ControlFlow<B>,
+) -> ControlFlow<B> {
+    visit(Visit::Expr(expr))?;
+    match &expr.kind {
+        ExprKind::Unit
+        | ExprKind::Str(_)
+        | ExprKind::Int(..)
+        | ExprKind::Bool(_)
+        | ExprKind::Local(_)
+        | ExprKind::SelfValue
+        | ExprKind::Unsupported(_) => ControlFlow::Continue(()),
+        ExprKind::Interpolated(parts) => {
+            for part in parts {
+                if let Part::Hole { value, display } = part {
+                    visit(Visit::Callee(display, value.span))?;
+                    walk(value, visit)?;
+                }
+            }
+            ControlFlow::Continue(())
+        }
+        ExprKind::Binary { lhs, rhs, .. }
+        | ExprKind::Range {
+            start: lhs,
+            end: rhs,
+        } => {
+            walk(lhs, visit)?;
+            walk(rhs, visit)
+        }
+        ExprKind::Neg { operand, .. }
+        | ExprKind::Not(operand)
+        | ExprKind::Scope(operand)
+        | ExprKind::Field { base: operand, .. } => walk(operand, visit),
+        ExprKind::Try { operand, convert } => {
+            if let Some(convert) = convert {
+                visit(Visit::Callee(convert, expr.span))?;
+            }
+            walk(operand, visit)
+        }
+        ExprKind::FnValue(target) => visit(Visit::Callee(target, expr.span)),
+        ExprKind::Construct { fields: items, .. } | ExprKind::List(items) => walk_all(items, visit),
+        ExprKind::Closure(closure) => walk(&closure.body, visit),
+        ExprKind::CallValue { callee, args } => {
+            walk(callee, visit)?;
+            walk_all(args, visit)
+        }
+        ExprKind::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            walk(cond, visit)?;
+            walk(then_branch, visit)?;
+            match else_branch {
+                Some(else_branch) => walk(else_branch, visit),
+                None => ControlFlow::Continue(()),
+            }
+        }
+        ExprKind::Call { callee, args } | ExprKind::MutatingCall { callee, args, .. } => {
+            visit(Visit::Callee(callee, expr.span))?;
+            walk_all(args, visit)
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            walk(scrutinee, visit)?;
+            for arm in arms {
+                walk_pattern(&arm.pattern, visit)?;
+                if let Some(guard) = &arm.guard {
+                    walk(guard, visit)?;
+                }
+                walk(&arm.body, visit)?;
+            }
+            ControlFlow::Continue(())
+        }
+        ExprKind::Block { stmts, value } => {
+            for stmt in stmts {
+                walk_stmt(stmt, visit)?;
+            }
+            match value {
+                Some(value) => walk(value, visit),
+                None => ControlFlow::Continue(()),
+            }
+        }
+    }
+}
+
+fn walk_all<'p, B>(
+    exprs: &'p [Expr],
+    visit: &mut impl FnMut(Visit<'p>) -> ControlFlow<B>,
+) -> ControlFlow<B> {
+    for expr in exprs {
+        walk(expr, visit)?;
+    }
+    ControlFlow::Continue(())
+}
+
+fn walk_pattern<'p, B>(
+    pattern: &'p Pattern,
+    visit: &mut impl FnMut(Visit<'p>) -> ControlFlow<B>,
+) -> ControlFlow<B> {
+    match pattern {
+        Pattern::Wildcard | Pattern::Bind => ControlFlow::Continue(()),
+        Pattern::Literal(literal) => walk(literal, visit),
+        Pattern::Construct { fields, .. } => {
+            for field in fields {
+                walk_pattern(field, visit)?;
+            }
+            ControlFlow::Continue(())
+        }
+    }
+}
+
+fn walk_stmt<'p, B>(
+    stmt: &'p Stmt,
+    visit: &mut impl FnMut(Visit<'p>) -> ControlFlow<B>,
+) -> ControlFlow<B> {
+    match stmt {
+        Stmt::Expr(value) | Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
+            walk(value, visit)
+        }
+        Stmt::Return(value) => match value {
+            Some(value) => walk(value, visit),
+            None => ControlFlow::Continue(()),
+        },
+        Stmt::Break | Stmt::Continue => ControlFlow::Continue(()),
+        Stmt::While { cond, body } => {
+            walk(cond, visit)?;
+            walk(body, visit)
+        }
+        Stmt::For { iter, body, .. } => {
+            walk(iter, visit)?;
+            walk(body, visit)
+        }
+    }
 }

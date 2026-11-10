@@ -8,7 +8,9 @@
 //! refused with `E0380`, so it never fails halfway through for that
 //! reason.
 
-use oska_check::program::{Callee, Expr, ExprKind, Part, Pattern, Program, Stmt};
+use std::ops::ControlFlow;
+
+use oska_check::program::{walk, Callee, Expr, ExprKind, Program, Visit};
 use oska_syntax::{Diagnostic, Span};
 
 use crate::intrinsics;
@@ -44,105 +46,20 @@ fn refusal<'e>(
 
 /// The first unsupported node in `expr`, with what it is.
 fn first_in(program: &Program, expr: &Expr) -> Option<(Span, String)> {
-    match &expr.kind {
-        ExprKind::Unsupported(what) => Some((expr.span, what.clone())),
-        ExprKind::Unit
-        | ExprKind::Str(_)
-        | ExprKind::Int(..)
-        | ExprKind::Bool(_)
-        | ExprKind::Local(_)
-        | ExprKind::SelfValue => None,
-        ExprKind::Interpolated(parts) => parts.iter().find_map(|part| match part {
-            Part::Text(_) => None,
-            Part::Hole { value, display } => {
-                callee(program, display, value.span).or_else(|| first_in(program, value))
-            }
-        }),
-        ExprKind::Binary { lhs, rhs, .. }
-        | ExprKind::Range {
-            start: lhs,
-            end: rhs,
-        } => first_of(program, [lhs, rhs].map(|e| &**e)),
-        ExprKind::Neg { operand, .. }
-        | ExprKind::Not(operand)
-        | ExprKind::Scope(operand)
-        | ExprKind::Field { base: operand, .. }
-        | ExprKind::Try {
-            operand,
-            convert: None,
-        } => first_in(program, operand),
-        ExprKind::Try {
-            operand,
-            convert: Some(convert),
-        } => callee(program, convert, expr.span).or_else(|| first_in(program, operand)),
-        ExprKind::FnValue(target) => callee(program, target, expr.span),
-        ExprKind::Construct { fields: items, .. } | ExprKind::List(items) => {
-            first_of(program, items)
-        }
-        ExprKind::Closure(closure) => first_in(program, &closure.body),
-        ExprKind::CallValue { callee, args } => {
-            first_in(program, callee).or_else(|| first_of(program, args))
-        }
-        ExprKind::If {
-            cond,
-            then_branch,
-            else_branch,
-        } => first_of(
-            program,
-            [cond, then_branch]
-                .into_iter()
-                .chain(else_branch)
-                .map(|e| &**e),
-        ),
-        ExprKind::Call {
-            callee: target,
-            args,
-        }
-        | ExprKind::MutatingCall {
-            callee: target,
-            args,
-            ..
-        } => callee(program, target, expr.span).or_else(|| first_of(program, args)),
-        ExprKind::Match { scrutinee, arms } => first_in(program, scrutinee).or_else(|| {
-            arms.iter().find_map(|arm| {
-                first_in_pattern(program, &arm.pattern)
-                    .or_else(|| arm.guard.as_ref().and_then(|g| first_in(program, g)))
-                    .or_else(|| first_in(program, &arm.body))
-            })
-        }),
-        ExprKind::Block { stmts, value } => stmts
-            .iter()
-            .find_map(|stmt| first_in_stmt(program, stmt))
-            .or_else(|| value.as_deref().and_then(|v| first_in(program, v))),
-    }
-}
-
-fn first_in_pattern(program: &Program, pattern: &Pattern) -> Option<(Span, String)> {
-    match pattern {
-        Pattern::Wildcard | Pattern::Bind => None,
-        Pattern::Literal(literal) => first_in(program, literal),
-        Pattern::Construct { fields, .. } => {
-            fields.iter().find_map(|f| first_in_pattern(program, f))
-        }
-    }
-}
-
-fn first_of<'e>(
-    program: &Program,
-    exprs: impl IntoIterator<Item = &'e Expr>,
-) -> Option<(Span, String)> {
-    exprs.into_iter().find_map(|e| first_in(program, e))
-}
-
-fn first_in_stmt(program: &Program, stmt: &Stmt) -> Option<(Span, String)> {
-    match stmt {
-        Stmt::Expr(value) | Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
-            first_in(program, value)
-        }
-        Stmt::Return(value) => value.as_ref().and_then(|v| first_in(program, v)),
-        Stmt::Break | Stmt::Continue => None,
-        Stmt::While { cond, body } => first_in(program, cond).or_else(|| first_in(program, body)),
-        Stmt::For { iter, body, .. } => first_in(program, iter).or_else(|| first_in(program, body)),
+    let found = walk(expr, &mut |visit| match visit {
+        Visit::Expr(Expr {
+            kind: ExprKind::Unsupported(what),
+            span,
+        }) => ControlFlow::Break((*span, what.clone())),
+        Visit::Expr(_) => ControlFlow::Continue(()),
+        Visit::Callee(target, span) => match callee(program, target, span) {
+            Some(found) => ControlFlow::Break(found),
+            None => ControlFlow::Continue(()),
+        },
+    });
+    match found {
+        ControlFlow::Break(found) => Some(found),
+        ControlFlow::Continue(()) => None,
     }
 }
 
