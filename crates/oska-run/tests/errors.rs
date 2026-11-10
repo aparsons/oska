@@ -95,6 +95,27 @@ fn question_mark_converts_each_error_through_the_from_impl_for_its_type() {
     assert_exits(&read_main("12"), 1, "out of range: 12\n");
 }
 
+#[test]
+fn question_mark_on_an_option_returns_none_from_the_function_or_closure() {
+    assert_runs(
+        &program(
+            "fn sum_first_two(xs: List<Int>) -> Option<Int> {
+    let a = xs.get(0)?
+    let b = xs.get(1)?
+    Some(a + b)
+}",
+            "    let pick = |xs: List<Int>| Some(xs.get(2)? * 10)
+    let a = sum_first_two([3, 4]).unwrap_or(-1)
+    let b = sum_first_two([3]).unwrap_or(-1)
+    let c = pick([1, 2, 3]).unwrap_or(-1)
+    let d = pick([1]).unwrap_or(-1)
+    io.println(\"{a} {b} {c} {d}\")",
+        ),
+        &[],
+        "7 -1 30 -1\n",
+    );
+}
+
 // ---- Trait calls and generic dispatch --------------------------------------
 
 const POINT: &str = "struct Point { x: Int, y: Int }
