@@ -248,6 +248,63 @@ test_stage_site_refuses_releases_without_a_key_to_check_them() {
   fi
 }
 
+# Stages a signed release of working fake binaries (scripts that answer
+# --version) into ./site, as pages.yml does, with URLs that point at ./site.
+staged_site() {
+  local version=${1:-1.2.3}
+  mkdir -p builds site
+  for asset in oskac-linux-x86_64 oskac-linux-aarch64 oskac-macos-x86_64 \
+    oskac-macos-aarch64 oskac-windows-x86_64.exe; do
+    cat >"builds/$asset" <<BIN
+#!/bin/sh
+case "\$*" in
+  *--format=json*) echo '{"name":"oskac","version":"$version"}' ;;
+  *) echo "oskac $version" ;;
+esac
+BIN
+    chmod +x "builds/$asset"
+  done
+  throwaway_key key
+  "$here/assemble.sh" "v$version" builds out
+  "$here/sign.sh" "out/v$version" key key.pub
+  OSKA_SITE_URL="file://$PWD/site" "$here/stage-site.sh" out site key.pub
+}
+
+test_smoke_published_installs_the_latest_release_and_runs_it() {
+  staged_site 1.2.3
+  "$here/smoke-published.sh" "file://$PWD/site" >smoke.out
+  grep -q '^ok: .* installs oskac 1.2.3' smoke.out || fail "no success line"
+  "$here/smoke-published.sh" "file://$PWD/site" v1.2.3 >/dev/null
+}
+
+test_smoke_published_fails_when_the_published_version_is_not_the_expected_one() {
+  staged_site 1.2.3
+  if "$here/smoke-published.sh" "file://$PWD/site" 0.1.0; then
+    fail "accepted 1.2.3 as 0.1.0"
+  fi
+}
+
+test_smoke_published_fails_when_a_published_binary_was_altered() {
+  staged_site 1.2.3
+  for asset in site/releases/v1.2.3/oskac-*; do
+    printf 'evil\n' >>"$asset"
+  done
+  if "$here/smoke-published.sh" "file://$PWD/site" >smoke.out 2>&1; then
+    fail "installed a binary that does not match SHA256SUMS"
+  fi
+  grep -q checksum_mismatch smoke.out || fail "did not fail on the checksum: $(cat smoke.out)"
+}
+
+test_smoke_published_with_no_release_succeeds_unless_a_version_is_expected() {
+  mkdir site
+  printf '{"version": "0.1.0", "docs": "main"}\n' >site/latest.json
+  "$here/smoke-published.sh" "file://$PWD/site" >smoke.out
+  grep -q 'no release is published' smoke.out || fail "did not say there is no release"
+  if "$here/smoke-published.sh" "file://$PWD/site" 0.1.0; then
+    fail "passed with no release but a version expected"
+  fi
+}
+
 for t in $(declare -F | awk '{print $3}' | grep '^test_'); do
   run_test "$t"
 done

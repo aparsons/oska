@@ -1725,7 +1725,9 @@ fn code_page(all: Site, code: Code) -> Page {
     }
     parts.push("")
     let label = if code.source == "checker.md" { "checker notes" } else { "runtime notes" }
-    parts.push("Listed in the [{label}]({code.source}#{lower}). `oskac explain {code.code}` prints this entry offline.")
+    // Only a code with an example has a heading of its own to link to.
+    let target = if code.example == "" { code.source } else { "{code.source}#{lower}" }
+    parts.push("Listed in the [{label}]({target}). `oskac explain {code.code}` prints this entry offline.")
     let back = wrap("<p>", anchor_to("/codes/", html.text("All error codes")), "</p>\n")
     let source = "\n".join(parts)
     Page(path: "codes/{code.code}.html", title: code.code, body: markdown(source, links).concat(back), md: retarget(source, links))
