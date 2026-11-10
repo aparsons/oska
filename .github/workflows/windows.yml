@@ -44,4 +44,4 @@ jobs:
       - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - run: cargo test --locked -p oska-run -p oskac
+      - run: cargo test --locked --no-fail-fast -p oska-run -p oskac

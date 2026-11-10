@@ -173,6 +173,15 @@ pub fn printed(mut host: FakeHost, body: &str) -> String {
 
 // ---- Real directories ------------------------------------------------------------------
 
+/// `path` as the inside of an Oska string literal holds it: with each `\`
+/// of a Windows path escaped.
+pub fn literal(path: impl AsRef<std::ffi::OsStr>) -> String {
+    std::path::Path::new(path.as_ref())
+        .display()
+        .to_string()
+        .replace('\\', "\\\\")
+}
+
 /// A fresh directory under the system temp dir, holding `root/` and
 /// `report/`, removed on drop. [`TempTree::saw`] runs a program on
 /// [`oska_run::RealHost`] with capabilities on `root`, and reads what it
@@ -222,8 +231,7 @@ impl TempTree {
     /// for more, with `{root}` in `body` the root's absolute path. The
     /// helpers in [`SHOWN`] are in scope.
     pub fn saw(&self, body: &str) -> String {
-        // As an Oska string literal holds it: a Windows path's `\` escaped.
-        let literal = |at: &str| self.path(at).display().to_string().replace('\\', "\\\\");
+        let literal = |at: &str| literal(self.path(at));
         let root = literal("root");
         let src = format!(
             "fn main(fs: Fs) -> Result<(), IoError> {{\n\

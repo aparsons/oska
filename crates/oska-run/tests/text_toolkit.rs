@@ -422,6 +422,7 @@ impl Host for Recording {
 /// What a program prints when it lists `path` through a filesystem
 /// restricted to `root`: one name per line, or `REFUSED`.
 fn list_confined(root: &Path, path: &str) -> String {
+    let path = common::literal(path);
     let src = format!(
         "fn main(io: Stdout, fs: FsRead) {{\n\
          \x20   let local = fs.restrict_to(\"{}\")\n\
@@ -436,7 +437,7 @@ fn list_confined(root: &Path, path: &str) -> String {
          \x20       }}\n\
          \x20   }}\n\
          }}\n",
-        root.display()
+        common::literal(root)
     );
     let mut host = Recording {
         real: RealHost::new(),

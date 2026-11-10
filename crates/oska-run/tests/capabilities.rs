@@ -159,13 +159,14 @@ fn run_real(src: &str) -> RunOutcome {
 /// What a program prints when it reads `path` through `fs` restricted to
 /// `root`: the file's text, or `REFUSED` when the read fails.
 fn read_confined(root: &Path, path: &str) -> String {
+    let path = common::literal(path);
     let src = format!(
         "fn main(io: Stdout, fs: FsRead) {{\n\
          \x20   let local = fs.restrict_to(\"{}\")\n\
          \x20   let text = local.read_to_string(Path.new(\"{path}\")).unwrap_or(\"REFUSED\")\n\
          \x20   let _ = io.println(text)\n\
          }}\n",
-        root.display()
+        common::literal(root)
     );
     run_real(&src).stdout
 }
@@ -173,13 +174,14 @@ fn read_confined(root: &Path, path: &str) -> String {
 /// Write `contents` to `path` through `fs` restricted to `root`, and
 /// return what the program printed: `written` or `REFUSED`.
 fn write_confined(root: &Path, path: &str, contents: &str) -> String {
+    let path = common::literal(path);
     let src = format!(
         "fn main(io: Stdout, fs: Fs) {{\n\
          \x20   let local = fs.restrict_to(\"{}\").write_only()\n\
          \x20   let done = local.write(Path.new(\"{path}\"), \"{contents}\").is_ok()\n\
          \x20   let _ = io.println(if done {{ \"written\" }} else {{ \"REFUSED\" }})\n\
          }}\n",
-        root.display()
+        common::literal(root)
     );
     run_real(&src).stdout
 }
@@ -275,7 +277,7 @@ fn restricting_a_restricted_filesystem_never_widens_it() {
          \x20   let text = wider.read_to_string(Path.new(\"outside/secret.txt\")).unwrap_or(\"REFUSED\")\n\
          \x20   let _ = io.println(text)\n\
          }}\n",
-        sandbox.root().display()
+        common::literal(sandbox.root())
     );
     assert_eq!(run_real(&src).stdout, "REFUSED\n");
 }
@@ -295,11 +297,12 @@ fn exit_code_on_real_host(src: &str) -> i32 {
 /// filesystem restricted to `root`, on a bare [`RealHost`]: 0 when the
 /// write succeeded, 1 when it was refused.
 fn write_direct(root: &Path, path: &str, contents: &str) -> i32 {
+    let path = common::literal(path);
     exit_code_on_real_host(&format!(
         "fn main(fs: FsWrite) -> Result<(), IoError> {{\n\
          \x20   fs.restrict_to(\"{}\").write(Path.new(\"{path}\"), \"{contents}\")\n\
          }}\n",
-        root.display()
+        common::literal(root)
     ))
 }
 
@@ -308,12 +311,13 @@ fn write_direct(root: &Path, path: &str, contents: &str) -> i32 {
 /// succeeded, 1 when it was refused.
 #[cfg(unix)]
 fn read_direct(root: &Path, path: &str) -> i32 {
+    let path = common::literal(path);
     exit_code_on_real_host(&format!(
         "fn main(fs: FsRead) -> Result<(), IoError> {{\n\
          \x20   let _ = fs.restrict_to(\"{}\").read_to_string(Path.new(\"{path}\"))?\n\
          \x20   Ok(())\n\
          }}\n",
-        root.display()
+        common::literal(root)
     ))
 }
 
@@ -416,7 +420,7 @@ fn a_restriction_to_a_subdirectory_reads_relative_to_it() {
          \x20   let text = sub.read_to_string(Path.new(\"nested.txt\")).unwrap_or(\"REFUSED\")\n\
          \x20   let _ = io.println(text)\n\
          }}\n",
-        sandbox.root().display()
+        common::literal(sandbox.root())
     );
     assert_eq!(run_real(&src).stdout, "nested text\n");
 }

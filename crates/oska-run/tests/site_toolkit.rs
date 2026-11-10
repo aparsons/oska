@@ -168,11 +168,12 @@ impl Drop for Sandbox {
 /// a filesystem restricted to `root`, on a bare [`RealHost`]: 0 when it
 /// was created or already there, 1 when it was refused.
 fn create_confined(root: &Path, path: &str) -> i32 {
+    let path = common::literal(path);
     let src = format!(
         "fn main(fs: FsWrite) -> Result<(), IoError> {{\n\
          \x20   fs.restrict_to(\"{}\").create_dir(Path.new(\"{path}\"))\n\
          }}\n",
-        root.display()
+        common::literal(root)
     );
     let outcome = run(&src, &mut RealHost::new(), &["prog.osk".to_string()]);
     assert!(
