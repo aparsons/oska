@@ -424,7 +424,14 @@ fn built_site() -> BTreeMap<String, String> {
     }
     let root = repo_root();
     let mut host = FakeHost::new();
-    for relative in ["docs", "README.md", "GLOSSARY.md", "site/style.css"] {
+    for relative in [
+        "docs",
+        "README.md",
+        "GLOSSARY.md",
+        "site/style.css",
+        "site/search.js",
+        "Cargo.toml",
+    ] {
         host = add(host, &root, relative);
     }
     let build = read(&root.join("site/build.osk"));

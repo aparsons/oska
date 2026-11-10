@@ -1,0 +1,20 @@
+# Oska
+
+> A language.
+
+Oska 0.1.0 (pre-alpha). These docs track `main`. Every page is also served as Markdown: the same path with `.md`. All of them are in [llms-full.txt](https://oskalang.dev/llms-full.txt).
+
+## Docs
+
+- [Oska](https://oskalang.dev/index.md): A language.
+- [Glossary](https://oskalang.dev/glossary.md)
+- [Oska checker report](https://oskalang.dev/checker.md)
+- [Oska runtime](https://oskalang.dev/runtime.md)
+
+## Machine-readable
+
+- [llms-full.txt](https://oskalang.dev/llms-full.txt): every page, as Markdown, in one file
+- [search.json](https://oskalang.dev/search.json): the search index
+- [sitemap.xml](https://oskalang.dev/sitemap.xml): the canonical URL of every page
+- [latest.json](https://oskalang.dev/latest.json): the current version and the installers
+- [codes.json](https://oskalang.dev/codes.json): every error code, with an example that fails with it and the fix

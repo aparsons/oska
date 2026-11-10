@@ -1,0 +1,159 @@
+# Oska: full documentation
+
+Oska 0.1.0 (pre-alpha). Every page of https://oskalang.dev as Markdown, one after another, each after a line `Source:` that names it.
+
+---
+
+Source: https://oskalang.dev/
+
+# Oska
+
+A language.
+
+---
+
+Source: https://oskalang.dev/glossary.html
+
+# Glossary
+
+---
+
+Source: https://oskalang.dev/checker.html
+
+# Oska checker report
+
+## Diagnostic codes
+
+| Code | Meaning | Fix |
+| --- | --- | --- |
+| `E0200` | Unknown name "x" with a \\ in it, as in `Strng`. See [the tour](#tour). | Replace the name with the closest one. |
+| `E0201` | A trait <script>alert(1)</script> where a type is expected. Then more. | None. |
+| `E0140` | An or-pattern such as `A \| B`. | None: write one arm each. |
+
+### Examples
+
+#### `E0200`
+
+```oska error=E0200
+fn f(x: Strng) {}
+```
+
+```oska fixed=E0200
+fn f(x: String) {}
+```
+
+#### `E0201`
+
+```oska error=E0201
+fn show(x: Display) {
+    let note = "<b>\"quoted\"</b>"
+}
+
+```
+
+```text
+not an example
+| `E0999` | Not a code row. | None. |
+```
+
+---
+
+Source: https://oskalang.dev/runtime.html
+
+# Oska runtime
+
+## Panics
+
+| Code | Panic |
+| --- | --- |
+| `P0004` | Division by zero, see [Tests](#tests). Spans the operation. |
+
+---
+
+Source: https://oskalang.dev/codes/
+
+# Error codes
+
+Every diagnostic code Oska reports, with a program that fails with it and the same program fixed. `oskac explain <code>` prints an entry offline.
+
+All of them are in [codes.json](https://oskalang.dev/codes.json) as data.
+
+- [E0200](https://oskalang.dev/codes/E0200.md): Unknown name "x" with a \\ in it, as in `Strng`
+- [E0201](https://oskalang.dev/codes/E0201.md): A trait <script>alert(1)</script> where a type is expected
+- [E0140](https://oskalang.dev/codes/E0140.md): An or-pattern such as `A | B`
+- [P0004](https://oskalang.dev/codes/P0004.md): Division by zero, see [Tests](runtime.md#tests)
+
+---
+
+Source: https://oskalang.dev/codes/E0200.html
+
+# E0200
+
+Unknown name "x" with a \\ in it, as in `Strng`. See [the tour](/checker.md#tour).
+
+**Machine-applicable fix:** Replace the name with the closest one.
+
+## Example
+
+This program fails with `E0200`.
+
+```oska
+fn f(x: Strng) {}
+```
+
+## Fixed
+
+The same program, fixed.
+
+```oska
+fn f(x: String) {}
+```
+
+Listed in the [checker notes](/checker.md#e0200). `oskac explain E0200` prints this entry offline.
+
+---
+
+Source: https://oskalang.dev/codes/E0201.html
+
+# E0201
+
+A trait <script>alert(1)</script> where a type is expected. Then more.
+
+**Machine-applicable fix:** none.
+
+## Example
+
+This program fails with `E0201`.
+
+```oska
+fn show(x: Display) {
+    let note = "<b>\"quoted\"</b>"
+}
+
+```
+
+Listed in the [checker notes](/checker.md#e0201). `oskac explain E0201` prints this entry offline.
+
+---
+
+Source: https://oskalang.dev/codes/E0140.html
+
+# E0140
+
+An or-pattern such as `A | B`.
+
+**Machine-applicable fix:** none.
+
+Listed in the [checker notes](/checker.md#e0140). `oskac explain E0140` prints this entry offline.
+
+---
+
+Source: https://oskalang.dev/codes/P0004.html
+
+# P0004
+
+Division by zero, see [Tests](/runtime.md#tests). Spans the operation.
+
+**Machine-applicable fix:** none.
+
+Listed in the [runtime notes](/runtime.md#p0004). `oskac explain P0004` prints this entry offline.
