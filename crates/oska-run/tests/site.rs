@@ -73,9 +73,9 @@ struct Build {
 /// Run the generator on a repository holding `inputs`, paths relative to
 /// its root, with no `_site/`.
 fn build(inputs: &BTreeMap<String, String>) -> Build {
-    let mut host = inputs
-        .iter()
-        .fold(FakeHost::new(), |host, (path, text)| host.with_file(path, text));
+    let mut host = inputs.iter().fold(FakeHost::new(), |host, (path, text)| {
+        host.with_file(path, text)
+    });
     let outcome = run(BUILD, &mut host, &["site/build.osk".to_string()]);
     Build {
         outcome,
@@ -358,7 +358,13 @@ fn raw_html_in_markdown_comes_out_as_text() {
 fn a_script_link_is_not_a_link() {
     let page = hostile_page();
     for text in [
-        "js lower", "js upper", "js tab", "data", "vbscript", "js entity", "js in image",
+        "js lower",
+        "js upper",
+        "js tab",
+        "data",
+        "vbscript",
+        "js entity",
+        "js in image",
     ] {
         assert!(
             page.contains(&format!("<li>{text}</li>")),
@@ -537,9 +543,15 @@ fn emphasis_needs_text_beside_it_and_never_splits_a_word() {
 #[test]
 fn relative_links_go_to_the_pages_published_from_their_targets() {
     let site = build_ok(&[
-        ("docs/adr/0001-a.md", "# A\n\n[design](../design.md#x) [b](0002-b.md) [up](../../README.md)\n"),
+        (
+            "docs/adr/0001-a.md",
+            "# A\n\n[design](../design.md#x) [b](0002-b.md) [up](../../README.md)\n",
+        ),
         ("docs/adr/0002-b.md", "# B\n"),
-        ("docs/design.md", "# D\n\n[adr](adr/) [out](../../etc/passwd) [src](../crates/x.rs)\n"),
+        (
+            "docs/design.md",
+            "# D\n\n[adr](adr/) [out](../../etc/passwd) [src](../crates/x.rs)\n",
+        ),
     ]);
     assert!(site["adr/0001-a.html"].contains(
         "<a href=\"/design.html#x\">design</a> <a href=\"/adr/0002-b.html\">b</a> <a href=\"/\">up</a>"
@@ -554,9 +566,21 @@ fn docs_outside_the_published_set_are_left_out() {
         ("docs/notes.txt", "not markdown\n"),
         ("docs/.hidden.md", "# Hidden\n"),
     ]);
-    assert!(!site.keys().any(|k| k.contains("agents")), "{:?}", site.keys());
-    assert!(!site.keys().any(|k| k.contains("notes")), "{:?}", site.keys());
-    assert!(!site.keys().any(|k| k.contains("hidden")), "{:?}", site.keys());
+    assert!(
+        !site.keys().any(|k| k.contains("agents")),
+        "{:?}",
+        site.keys()
+    );
+    assert!(
+        !site.keys().any(|k| k.contains("notes")),
+        "{:?}",
+        site.keys()
+    );
+    assert!(
+        !site.keys().any(|k| k.contains("hidden")),
+        "{:?}",
+        site.keys()
+    );
 }
 
 #[test]
@@ -602,7 +626,10 @@ fn main_narrows_reading_to_docs_and_the_files_it_names() {
         "read.restrict_to(\"site/style.css\")",
         "write.restrict_to(\"_site\")",
     ] {
-        assert!(BUILD.contains(narrowing), "`main` should narrow with {narrowing}");
+        assert!(
+            BUILD.contains(narrowing),
+            "`main` should narrow with {narrowing}"
+        );
     }
     assert!(!BUILD.contains("restrict_to(\".\")"));
 }

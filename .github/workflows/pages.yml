@@ -28,8 +28,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --release --locked -p oskac
-      # The generator writes into `_site/` but cannot create it.
-      - run: mkdir -p _site
       - run: ./target/release/oskac run site/build.osk
       - uses: actions/upload-pages-artifact@v3
         with:

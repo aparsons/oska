@@ -141,7 +141,12 @@ impl Sandbox {
     fn outside_names(&self) -> Vec<String> {
         let mut names: Vec<String> = std::fs::read_dir(self.outside())
             .expect("list the outside")
-            .map(|e| e.expect("an entry").file_name().to_string_lossy().into_owned())
+            .map(|e| {
+                e.expect("an entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
             .collect();
         names.sort();
         names
@@ -218,7 +223,11 @@ fn real_host_refuses_to_create_out_of_the_root() {
         "new/",
         "sub/.",
     ] {
-        assert_eq!(create_confined(&sandbox.root(), path), 1, "creating `{path}`");
+        assert_eq!(
+            create_confined(&sandbox.root(), path),
+            1,
+            "creating `{path}`"
+        );
     }
     assert_eq!(sandbox.outside_names(), ["secret.txt"]);
     assert!(!sandbox.root().join("new").exists());
@@ -251,7 +260,9 @@ fn real_host_refuses_a_directory_that_is_not_under_the_root() {
     assert!(host
         .create_dir(&sandbox.outside().join("new"), Some(&root))
         .is_err());
-    assert!(host.create_dir(&root.join("dangling"), Some(&root)).is_err());
+    assert!(host
+        .create_dir(&root.join("dangling"), Some(&root))
+        .is_err());
     assert!(host.create_dir(&root.join("alias"), Some(&root)).is_err());
     assert_eq!(sandbox.outside_names(), ["secret.txt"]);
     assert!(host.create_dir(&root.join("fresh"), Some(&root)).is_ok());
@@ -288,7 +299,10 @@ fn a_filesystem_restricted_to_a_file_reads_just_that_file_as_its_root() {
     assert_eq!(outcome.stdout, "readme\n", "{outcome:#?}");
     for path in ["..", "../GLOSSARY.md", "../docs/design.md", "README.md", ""] {
         let outcome = run_on(fake_repo(), &read_through("README.md", path), &[]);
-        assert_eq!(outcome.stdout, "REFUSED\n", "reading `{path}`: {outcome:#?}");
+        assert_eq!(
+            outcome.stdout, "REFUSED\n",
+            "reading `{path}`: {outcome:#?}"
+        );
     }
 }
 
