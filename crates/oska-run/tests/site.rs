@@ -1272,7 +1272,8 @@ fn llms_txt_indexes_the_markdown_copies_with_summaries() {
          > A language where authority is explicit.\n\
          \n\
          Oska 1.2.3 (pre-alpha). These docs track `main`. Every page is also served as Markdown: \
-         the same path with `.md`. All of them are in [llms-full.txt](https://oskalang.dev/llms-full.txt).\n\
+         the same path with `.md`. All of them are in [llms-full.txt](https://oskalang.dev/llms-full.txt). \
+         The source code is at https://github.com/aparsons/oska.\n\
          \n\
          ## Docs\n\
          \n\
@@ -2261,5 +2262,30 @@ fn every_real_page_reads_in_full_without_javascript() {
     assert!(
         unreachable.is_empty(),
         "not linked from anywhere: {unreachable:?}"
+    );
+}
+
+#[test]
+fn every_real_page_and_the_agent_outputs_link_to_the_source_repository() {
+    let site = real_site();
+    let repo = "https://github.com/aparsons/oska";
+    let mut pages = 0;
+    for (name, page) in site.iter().filter(|(n, _)| n.ends_with(".html")) {
+        pages += 1;
+        assert!(
+            page.contains(&format!("<a href=\"{repo}\">")),
+            "{name} should link to the source repository in its footer"
+        );
+    }
+    assert!(pages > 10, "only {pages} pages were checked");
+    let home = site.get("index.html").expect("the home page is built");
+    assert!(
+        home.contains(&format!("\"codeRepository\": \"{repo}\"")),
+        "the home page's JSON-LD should name the repository"
+    );
+    let llms = site.get("llms.txt").expect("llms.txt is built");
+    assert!(
+        llms.contains(&format!("The source code is at {repo}.")),
+        "llms.txt should name the repository"
     );
 }

@@ -382,6 +382,12 @@ fn origin() -> String {
     "https://oskalang.dev"
 }
 
+// Where the source lives: linked from every page, `llms.txt`, and the home
+// page's JSON-LD.
+fn repository() -> String {
+    "https://github.com/aparsons/oska"
+}
+
 // `robots.txt`: every crawler is welcome, search engines and the ones that
 // feed AI models alike, and the sitemap is where to start.
 fn robots() -> String {
@@ -435,7 +441,8 @@ fn llms_txt(all: Site, pages: List<Page>) -> Untrusted<String> {
     if home != "" {
         out = "{out}> {home}\n\n"
     }
-    out = "{out}Oska {version} (pre-alpha). These docs track `main`. Every page is also served as Markdown: the same path with `.md`. All of them are in [llms-full.txt]({base}/llms-full.txt).\n"
+    let source = repository()
+    out = "{out}Oska {version} (pre-alpha). These docs track `main`. Every page is also served as Markdown: the same path with `.md`. All of them are in [llms-full.txt]({base}/llms-full.txt). The source code is at {source}.\n"
     let setup = if has_setup(all) { setup_group(all) } else { "" }
     out = "{out}{setup}"
     let docs = llms_group("Docs", "", pages)
@@ -678,7 +685,8 @@ fn layout(all: Site, page: Page) -> html.Html {
     let style = markup("<link rel=\"stylesheet\" href=\"/style.css\">\n</head>\n<body>\n")
     let header = wrap("<header>\n", navigation(all, page.path), "</header>\n")
     let main = wrap("<main>\n", page.body, "</main>\n")
-    let footer = markup("<footer>\n<p>Built from the Oska repository by <code>site/build.osk</code>, an Oska program. The docs track <code>main</code>.</p>\n</footer>\n<script src=\"/search.js\"></script>\n</body>\n</html>\n")
+    let source = repository()
+    let footer = markup("<footer>\n<p>Built from the <a href=\"{source}\">Oska repository on GitHub</a> by <code>site/build.osk</code>, an Oska program. The docs track <code>main</code>.</p>\n</footer>\n<script src=\"/search.js\"></script>\n</body>\n</html>\n")
     let data = if page.path == "index.html" { structured_data(all.version) } else { empty() }
     head.concat(title).concat(about(page)).concat(data).concat(fonts()).concat(style).concat(banner(all.version)).concat(header).concat(main).concat(footer)
 }
@@ -702,7 +710,8 @@ fn banner(version: String) -> html.Html {
 // has read as numbers, so nothing needs escaping.
 fn structured_data(version: String) -> html.Html {
     let base = origin()
-    markup("<script type=\"application/ld+json\">\n\{\n  \"@context\": \"https://schema.org\",\n  \"@type\": \"SoftwareSourceCode\",\n  \"name\": \"Oska\",\n  \"description\": \"An AI-first, secure-by-default programming language.\",\n  \"url\": \"{base}/\",\n  \"license\": \"https://spdx.org/licenses/Apache-2.0.html\",\n  \"version\": \"{version}\",\n  \"programmingLanguage\": \"Oska\",\n  \"targetProduct\": \{\n    \"@type\": \"SoftwareApplication\",\n    \"name\": \"oskac\",\n    \"applicationCategory\": \"DeveloperApplication\",\n    \"softwareVersion\": \"{version}\",\n    \"installUrl\": \"{base}/install.sh\",\n    \"additionalProperty\": \{\n      \"@type\": \"PropertyValue\",\n      \"name\": \"installCommand\",\n      \"value\": \"curl -fsSL {base}/install.sh | sh\"\n    \}\n  \}\n\}\n</script>\n")
+    let source = repository()
+    markup("<script type=\"application/ld+json\">\n\{\n  \"@context\": \"https://schema.org\",\n  \"@type\": \"SoftwareSourceCode\",\n  \"name\": \"Oska\",\n  \"description\": \"An AI-first, secure-by-default programming language.\",\n  \"url\": \"{base}/\",\n  \"codeRepository\": \"{source}\",\n  \"license\": \"https://spdx.org/licenses/Apache-2.0.html\",\n  \"version\": \"{version}\",\n  \"programmingLanguage\": \"Oska\",\n  \"targetProduct\": \{\n    \"@type\": \"SoftwareApplication\",\n    \"name\": \"oskac\",\n    \"applicationCategory\": \"DeveloperApplication\",\n    \"softwareVersion\": \"{version}\",\n    \"installUrl\": \"{base}/install.sh\",\n    \"additionalProperty\": \{\n      \"@type\": \"PropertyValue\",\n      \"name\": \"installCommand\",\n      \"value\": \"curl -fsSL {base}/install.sh | sh\"\n    \}\n  \}\n\}\n</script>\n")
 }
 
 // The site's navigation, with the link to `current`, the page it is on,
