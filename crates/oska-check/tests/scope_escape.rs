@@ -96,6 +96,68 @@ fn a_var_outside_the_block_cannot_keep_its_handle() {
     );
 }
 
+// A `var` that already holds a handle, of an enclosing block, must not
+// take the handle of an inner block: after the inner block ends it would
+// hold a finished scope.
+
+#[test]
+fn an_outer_var_holding_a_handle_cannot_take_an_inner_blocks_handle() {
+    let src = format!(
+        "{WORK}fn leak() -> Int {{\n    scope |a| {{\n        var h = a\n        scope |b| {{\n            h = b\n        }}\n        h.spawn(|| work()).join()\n    }}\n}}"
+    );
+    assert_errors(
+        &src,
+        &[("E0292", "scope |b| {\n            h = b\n        }")],
+    );
+}
+
+#[test]
+fn an_outer_var_holding_a_scoped_closure_cannot_take_one_capturing_an_inner_handle() {
+    let src = format!(
+        "{WORK}fn leak() -> Int {{\n    scope |a| {{\n        var go = || a.spawn(|| work())\n        scope |b| {{\n            go = || b.spawn(|| work())\n        }}\n        go().join()\n    }}\n}}"
+    );
+    assert_errors(
+        &src,
+        &[(
+            "E0292",
+            "scope |b| {\n            go = || b.spawn(|| work())\n        }",
+        )],
+    );
+}
+
+#[test]
+fn an_outer_list_of_handles_cannot_take_an_inner_blocks_handle() {
+    let src = format!(
+        "{WORK}fn leak() -> Int {{\n    scope |a| {{\n        var l = [a]\n        scope |b| {{\n            l.push(b)\n        }}\n        l.at(1).spawn(|| work()).join()\n    }}\n}}"
+    );
+    assert_errors(
+        &src,
+        &[("E0292", "scope |b| {\n            l.push(b)\n        }")],
+    );
+}
+
+#[test]
+fn an_inner_handle_kept_through_a_local_of_the_inner_block_is_caught_too() {
+    let src = format!(
+        "{WORK}fn leak() -> Int {{\n    scope |a| {{\n        var h = a\n        scope |b| {{\n            let inner = Some(b)\n            h = inner.unwrap_or(a)\n        }}\n        h.spawn(|| work()).join()\n    }}\n}}"
+    );
+    assert_errors(
+        &src,
+        &[(
+            "E0292",
+            "scope |b| {\n            let inner = Some(b)\n            h = inner.unwrap_or(a)\n        }",
+        )],
+    );
+}
+
+#[test]
+fn an_outer_list_may_take_the_outer_handle_in_an_inner_block() {
+    let src = format!(
+        "{WORK}fn fine() -> Int {{\n    scope |a| {{\n        var l = [a]\n        scope |b| {{\n            l.push(a)\n            let t = b.spawn(|| work())\n        }}\n        l.at(1).spawn(|| work()).join()\n    }}\n}}"
+    );
+    assert_ok(&src);
+}
+
 #[test]
 fn a_var_that_already_held_an_outer_handle_may_be_reassigned_in_an_inner_block() {
     let src = format!(

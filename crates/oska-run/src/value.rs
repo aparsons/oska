@@ -18,22 +18,27 @@
 
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
 
-use oska_check::program::{Callee, Closure, Construct};
+use oska_check::builtins;
+use oska_check::program::{Callee, Closure, Construct, IntType};
 
 /// A runtime value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     Unit,
     Bool(bool),
-    /// An integer of any type: every integer type fits `i128`. Arithmetic
-    /// checks each result against its type (`ops.rs`).
-    Int(i128),
+    /// An integer, with its type: every integer type fits `i128`.
+    /// Arithmetic checks each result against its type (`ops.rs`), and the
+    /// type is the value's runtime type tag, so generic code dispatches a
+    /// `U8` to `U8`'s impl.
+    Int(i128, IntType),
     Str(Rc<str>),
-    /// `start..end`, excluding `end`.
+    /// `start..end`, excluding `end`, over integers of type `int`.
     Range {
         start: i128,
         end: i128,
+        int: IntType,
     },
     /// A closure, with what it captured.
     Closure(Rc<ClosureValue>),
@@ -68,12 +73,13 @@ pub enum Value {
     Task(usize),
 }
 
-/// A closure value: its code, and the slots and receiver in scope where
-/// it was made, captured by value.
+/// A closure value: its code, and what it captured where it was made, by
+/// value: the slots its code lists in [`Closure::captures`], in that
+/// order, and the receiver when it reads `self`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClosureValue {
-    pub code: Rc<Closure>,
-    pub slots: Vec<Value>,
+    pub code: Arc<Closure>,
+    pub captured: Vec<Value>,
     pub receiver: Option<Value>,
 }
 
@@ -132,81 +138,107 @@ impl Access {
     }
 }
 
-impl Capability {
-    /// The capability `main` declares with the type named `ty`, if it has
-    /// a runtime.
-    pub fn granted(ty: &str) -> Option<Capability> {
-        let fs = |access| {
-            Some(Capability::Fs(FsCap {
-                root: Root::Anywhere,
-                access,
-            }))
-        };
-        match ty {
-            "Stdin" => Some(Capability::Stdin),
-            "Stdout" => Some(Capability::Stdout),
-            "Stderr" => Some(Capability::Stderr),
-            "Env" => Some(Capability::Env),
-            "Clock" => Some(Capability::Clock),
-            "Random" => Some(Capability::Random),
-            "Fs" => fs(Access::ReadWrite),
-            "FsRead" => fs(Access::Read),
-            "FsWrite" => fs(Access::Write),
-            _ => None,
-        }
-    }
+/// What a capability is, apart from a filesystem's root: what decides
+/// the name of its type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Stdin,
+    Stdout,
+    Stderr,
+    Env,
+    Clock,
+    Random,
+    Fs(Access),
 }
 
-/// The capabilities the language declares that have no runtime yet. A
-/// program whose `main` declares one is refused before it starts
-/// (`E0370`).
-pub const UNIMPLEMENTED_CAPABILITIES: &[&str] =
-    &["Net", "NetConnect", "NetListen", "Spawn", "Sched"];
+/// Each capability the runtime implements, by the name of its type: the
+/// one place the runtime names them. A built-in capability the checker
+/// knows ([`builtins::capabilities`]) that is missing here has no runtime
+/// yet, and a program given one is refused (`E0370`).
+const IMPLEMENTED: &[(&str, Kind)] = &[
+    ("Stdin", Kind::Stdin),
+    ("Stdout", Kind::Stdout),
+    ("Stderr", Kind::Stderr),
+    ("Env", Kind::Env),
+    ("Clock", Kind::Clock),
+    ("Random", Kind::Random),
+    ("Fs", Kind::Fs(Access::ReadWrite)),
+    ("FsRead", Kind::Fs(Access::Read)),
+    ("FsWrite", Kind::Fs(Access::Write)),
+];
 
-/// The `std` modules that have no runtime yet. A program that imports one
-/// is refused before it starts (`E0371`).
-pub const UNIMPLEMENTED_MODULES: &[&str] = &["std.proc", "std.sql", "std.html"];
+impl Capability {
+    /// The capability `main` declares with the type named `ty`, if it has
+    /// a runtime: a filesystem unrestricted.
+    pub fn granted(ty: &str) -> Option<Capability> {
+        let (_, kind) = IMPLEMENTED.iter().find(|(name, _)| *name == ty)?;
+        Some(match *kind {
+            Kind::Stdin => Capability::Stdin,
+            Kind::Stdout => Capability::Stdout,
+            Kind::Stderr => Capability::Stderr,
+            Kind::Env => Capability::Env,
+            Kind::Clock => Capability::Clock,
+            Kind::Random => Capability::Random,
+            Kind::Fs(access) => Capability::Fs(FsCap {
+                root: Root::Anywhere,
+                access,
+            }),
+        })
+    }
 
-/// The integer types other than `Int`. Their values carry the type tag
-/// `Int` at runtime, like every integer.
-pub const SIZED_INTEGERS: &[&str] = &["I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64"];
+    fn kind(&self) -> Kind {
+        match self {
+            Capability::Stdin => Kind::Stdin,
+            Capability::Stdout => Kind::Stdout,
+            Capability::Stderr => Kind::Stderr,
+            Capability::Env => Kind::Env,
+            Capability::Clock => Kind::Clock,
+            Capability::Random => Kind::Random,
+            Capability::Fs(fs) => Kind::Fs(fs.access),
+        }
+    }
 
-/// The type name of a runtime `Secret`.
-pub const SECRET: &str = "Secret";
+    /// The name of its type, such as `FsRead` for a read-only filesystem.
+    pub fn type_name(&self) -> &'static str {
+        let kind = self.kind();
+        IMPLEMENTED
+            .iter()
+            .find(|(_, k)| *k == kind)
+            .map(|(name, _)| *name)
+            .expect("every capability the runtime makes is in IMPLEMENTED")
+    }
+}
 
 impl Value {
     /// The runtime type tag a trait call in generic code dispatches on:
     /// the name of the value's type without its arguments, such as
     /// `Point`, `List`, or `String`.
     ///
-    /// Every integer is stored alike, so its tag is `Int` whatever its
-    /// type; `support.rs` refuses a program whose dispatch that would
-    /// get wrong.
+    /// An integer's tag is its own type's name, `Int` or a sized one
+    /// such as `U8`.
     pub fn type_tag(&self) -> &str {
         match self {
             Value::Unit => "()",
-            Value::Bool(_) => "Bool",
-            Value::Int(_) => "Int",
-            Value::Str(_) => "String",
-            Value::Range { .. } => "Range",
-            Value::Closure(_) | Value::Function(_) => "fn",
-            Value::List(_) => "List",
+            Value::Bool(_) => builtins::BOOL,
+            Value::Int(_, int) => int.name(),
+            Value::Str(_) => builtins::STRING,
+            Value::Range { .. } => builtins::RANGE,
+            // No impl can name either, but generic code can tell them
+            // apart.
+            Value::Closure(_) => "closure",
+            Value::Function(_) => "fn",
+            Value::List(_) => builtins::LIST,
             Value::Struct { ty, .. } | Value::Variant { ty, .. } => ty,
-            Value::Capability(Capability::Fs(fs)) => match fs.access {
-                Access::ReadWrite => "Fs",
-                Access::Read => "FsRead",
-                Access::Write => "FsWrite",
-            },
-            Value::Capability(Capability::Stdin) => "Stdin",
-            Value::Capability(Capability::Stdout) => "Stdout",
-            Value::Capability(Capability::Stderr) => "Stderr",
-            Value::Capability(Capability::Env) => "Env",
-            Value::Capability(Capability::Clock) => "Clock",
-            Value::Capability(Capability::Random) => "Random",
-            Value::Args(_) => "Args",
-            Value::Scope(_) => "Scope",
-            Value::Task(_) => "Task",
+            Value::Capability(capability) => capability.type_name(),
+            Value::Args(_) => builtins::ARGS,
+            Value::Scope(_) => builtins::SCOPE,
+            Value::Task(_) => builtins::TASK,
         }
+    }
+
+    /// `n`, an `Int`.
+    pub fn int(n: i128) -> Value {
+        Value::Int(n, IntType::Int)
     }
 
     pub fn str(text: &str) -> Value {
@@ -241,11 +273,11 @@ impl Value {
     }
 
     pub fn some(value: Value) -> Value {
-        Value::variant("Option", "Some", vec![value])
+        Value::variant(builtins::OPTION, builtins::SOME, vec![value])
     }
 
     pub fn none() -> Value {
-        Value::variant("Option", "None", Vec::new())
+        Value::variant(builtins::OPTION, builtins::NONE, Vec::new())
     }
 
     /// `Option` from a Rust option.
@@ -257,7 +289,7 @@ impl Value {
     /// `dbg` can redact it.
     pub fn secret(value: Value) -> Value {
         Value::Struct {
-            ty: Rc::from(SECRET),
+            ty: Rc::from(builtins::SECRET),
             fields: Rc::new(vec![value]),
         }
     }
@@ -265,7 +297,7 @@ impl Value {
     /// A `Path` holding `raw`.
     pub fn path(raw: Value) -> Value {
         Value::Struct {
-            ty: Rc::from("Path"),
+            ty: Rc::from(builtins::PATH),
             fields: Rc::new(vec![raw]),
         }
     }
@@ -284,17 +316,17 @@ impl Value {
     }
 
     pub fn ok(value: Value) -> Value {
-        Value::variant("Result", "Ok", vec![value])
+        Value::variant(builtins::RESULT, builtins::OK, vec![value])
     }
 
     pub fn err(value: Value) -> Value {
-        Value::variant("Result", "Err", vec![value])
+        Value::variant(builtins::RESULT, builtins::ERR, vec![value])
     }
 
     /// An `IoError` with `message`.
     pub fn io_error(message: &str) -> Value {
         Value::Struct {
-            ty: Rc::from("IoError"),
+            ty: Rc::from(builtins::IO_ERROR),
             fields: Rc::new(vec![Value::str(message)]),
         }
     }
@@ -310,7 +342,7 @@ impl Value {
     /// The integer the checker guarantees this is.
     pub fn as_int(&self) -> i128 {
         match self {
-            Value::Int(n) => *n,
+            Value::Int(n, _) => *n,
             other => unreachable!("the checker guarantees an integer, found {other:?}"),
         }
     }
@@ -328,6 +360,52 @@ impl Value {
         match self {
             Value::Str(s) => s,
             other => unreachable!("the checker guarantees a string, found {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    use oska_check::builtins;
+    use oska_check::program::{Callee, Closure, Expr, ExprKind};
+    use oska_syntax::Span;
+
+    use super::{Capability, ClosureValue, Value, IMPLEMENTED};
+
+    #[test]
+    fn a_closure_and_a_named_function_have_different_tags() {
+        let code = Arc::new(Closure {
+            params: Vec::new(),
+            captures: Vec::new(),
+            captures_self: false,
+            height: 0,
+            body: Expr {
+                kind: ExprKind::Unit,
+                span: Span { start: 0, end: 0 },
+            },
+        });
+        let closure = Value::Closure(Rc::new(ClosureValue {
+            code,
+            captured: Vec::new(),
+            receiver: None,
+        }));
+        let function = Value::Function(Rc::new(Callee::Function("f".to_string())));
+        assert_eq!(closure.type_tag(), "closure");
+        assert_eq!(function.type_tag(), "fn");
+    }
+
+    #[test]
+    fn every_capability_the_runtime_implements_is_one_the_checker_knows() {
+        for (name, _) in IMPLEMENTED {
+            assert!(
+                builtins::is_capability(name),
+                "`{name}` is not a capability"
+            );
+            let granted = Capability::granted(name).expect("implemented");
+            assert_eq!(granted.type_name(), *name);
         }
     }
 }

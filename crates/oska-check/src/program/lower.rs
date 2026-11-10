@@ -4,10 +4,12 @@
 //! [`Resolutions`], keyed by the span of the node it was resolved at.
 //! Lowering walks the AST and reads those records, so it never resolves
 //! anything itself. A node it cannot lower yet becomes
-//! [`ExprKind::Unsupported`].
+//! [`ExprKind::Unsupported`], named by the checker's
+//! [`Resolution::Unsupported`] when it recorded one, and by what the node
+//! is otherwise.
 
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use oska_syntax::ast::{
     self, BinaryOp, FnDecl, Item, ItemKind, Module, PatternKind, StmtKind, StrPart, TypeKind,
@@ -64,6 +66,18 @@ pub enum Resolution {
     /// `==` or `!=` through this `Eq` implementation, on a type that is
     /// not built in. Recorded at the comparison.
     EqualityVia(Callee),
+    /// Something the checked program cannot express yet, named for the
+    /// refusal, such as "a `From`-bound conversion": recorded where the
+    /// checker knows why. Recorded at the construct.
+    Unsupported(String),
+    /// A closure: the slots it captures, ascending, whether it captures
+    /// `self`, and the number of slots in scope where it starts. Recorded
+    /// at the closure.
+    Closure {
+        captures: Vec<usize>,
+        captures_self: bool,
+        height: usize,
+    },
 }
 
 /// Every resolution in a module, keyed by the span it was recorded at.
@@ -229,7 +243,7 @@ impl Lowering<'_> {
                     value: self.expr(value),
                 },
                 None => Stmt::Expr(Expr {
-                    kind: ExprKind::Unsupported,
+                    kind: self.unsupported(target.span, "an assignment to this place"),
                     span: target.span,
                 }),
             },
@@ -280,7 +294,7 @@ impl Lowering<'_> {
         let kind = match &expr.kind {
             ast::ExprKind::Unit => ExprKind::Unit,
             ast::ExprKind::Bool(b) => ExprKind::Bool(*b),
-            ast::ExprKind::Int(text) => int_literal(text, false),
+            ast::ExprKind::Int(text) => self.int_literal(text, false, expr.span),
             ast::ExprKind::Str(parts) => self.string(parts),
             ast::ExprKind::Name(ident) => self.local(ident),
             ast::ExprKind::Field { base, name } => self.field(expr.span, base, name),
@@ -289,20 +303,30 @@ impl Lowering<'_> {
             ast::ExprKind::Unary { op, operand } => match (op, &operand.kind) {
                 (UnaryOp::Not, _) => ExprKind::Not(self.boxed(operand)),
                 // A negative literal is one value, so `-128` fits `I8`.
-                (UnaryOp::Neg, ast::ExprKind::Int(text)) => int_literal(text, true),
+                (UnaryOp::Neg, ast::ExprKind::Int(text)) => self.int_literal(text, true, expr.span),
                 (UnaryOp::Neg, _) => match self.resolutions.get(&expr.span) {
                     Some(Resolution::Int(int)) => ExprKind::Neg {
                         operand: self.boxed(operand),
-                        int: int.clone(),
+                        int: *int,
                     },
-                    _ => ExprKind::Unsupported,
+                    _ => self.unsupported(expr.span, "`-` on this type"),
                 },
             },
             ast::ExprKind::Binary { op, lhs, rhs } => self.binary(expr.span, *op, lhs, rhs),
-            ast::ExprKind::Closure { params, body } => ExprKind::Closure(Rc::new(Closure {
-                params: params.iter().map(|p| p.name.name != "_").collect(),
-                body: self.expr(body),
-            })),
+            ast::ExprKind::Closure { params, body } => match self.resolutions.get(&expr.span) {
+                Some(Resolution::Closure {
+                    captures,
+                    captures_self,
+                    height,
+                }) => ExprKind::Closure(Arc::new(Closure {
+                    params: params.iter().map(|p| p.name.name != "_").collect(),
+                    captures: captures.clone(),
+                    captures_self: *captures_self,
+                    height: *height,
+                    body: self.expr(body),
+                })),
+                _ => self.unsupported(expr.span, "this closure"),
+            },
             ast::ExprKind::List(items) => {
                 ExprKind::List(items.iter().map(|item| self.expr(item)).collect())
             }
@@ -356,7 +380,7 @@ impl Lowering<'_> {
                         ctor: ctor.clone(),
                         fields: args.collect(),
                     },
-                    _ => ExprKind::Unsupported,
+                    _ => self.unsupported(expr.span, "this call"),
                 }
             }
             ast::ExprKind::Try(operand) => match self.resolutions.get(&expr.span) {
@@ -364,7 +388,7 @@ impl Lowering<'_> {
                     operand: self.boxed(operand),
                     convert: convert.clone(),
                 },
-                _ => ExprKind::Unsupported,
+                _ => self.unsupported(expr.span, "this `?`"),
             },
             ast::ExprKind::Scope { body, .. } => ExprKind::Scope(Box::new(self.block(body))),
             ast::ExprKind::Match { scrutinee, arms } => {
@@ -374,10 +398,12 @@ impl Lowering<'_> {
                         scrutinee: self.boxed(scrutinee),
                         arms,
                     },
-                    None => ExprKind::Unsupported,
+                    None => self.unsupported(expr.span, "a pattern in this `match`"),
                 }
             }
-            _ => ExprKind::Unsupported,
+            ast::ExprKind::SinkStr { tag, .. } => {
+                self.unsupported(expr.span, &format!("a `{tag}\"...\"` literal"))
+            }
         };
         Expr {
             kind,
@@ -433,7 +459,31 @@ impl Lowering<'_> {
                 ctor: ctor.clone(),
                 fields: Vec::new(),
             },
-            _ => ExprKind::Unsupported,
+            _ => self.unsupported(ident.span, &format!("`{}` as a value", ident.name)),
+        }
+    }
+
+    /// An integer literal as written (digits and `_` separators), negated
+    /// when `negative`, of the type the checker recorded at `span`. The
+    /// checker has already checked that it fits.
+    fn int_literal(&self, text: &str, negative: bool, span: Span) -> ExprKind {
+        let Some(Resolution::Int(int)) = self.resolutions.get(&span) else {
+            return self.unsupported(span, "an integer literal of a type not known");
+        };
+        let digits: String = text.chars().filter(|&c| c != '_').collect();
+        match digits.parse::<i128>() {
+            Ok(value) if negative => ExprKind::Int(-value, *int),
+            Ok(value) => ExprKind::Int(value, *int),
+            Err(_) => self.unsupported(span, "an integer literal this large"),
+        }
+    }
+
+    /// The node at `span` the checked program cannot express: named as
+    /// the checker recorded it, or else as `what`.
+    fn unsupported(&self, span: Span, what: &str) -> ExprKind {
+        match self.resolutions.get(&span) {
+            Some(Resolution::Unsupported(named)) => ExprKind::Unsupported(named.clone()),
+            _ => ExprKind::Unsupported(what.to_string()),
         }
     }
 
@@ -453,7 +503,7 @@ impl Lowering<'_> {
                 ctor: ctor.clone(),
                 fields: Vec::new(),
             },
-            _ => ExprKind::Unsupported,
+            _ => self.unsupported(span, &format!("`.{}` here", name.name)),
         }
     }
 
@@ -472,12 +522,12 @@ impl Lowering<'_> {
         let int = match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
                 match resolved {
-                    Some(Resolution::Int(int)) => Some(int.clone()),
-                    _ => return ExprKind::Unsupported,
+                    Some(Resolution::Int(int)) => Some(*int),
+                    _ => return self.unsupported(span, &format!("`{}` on this type", op.text())),
                 }
             }
             BinaryOp::Eq | BinaryOp::Ne if resolved != Some(&Resolution::Equality) => {
-                return ExprKind::Unsupported;
+                return self.unsupported(span, &format!("`{}` on this type", op.text()));
             }
             _ => None,
         };
@@ -504,7 +554,7 @@ impl Lowering<'_> {
                     let (Some(Resolution::Display(display)), Some(value)) =
                         (self.resolutions.get(span), self.hole(path))
                     else {
-                        return ExprKind::Unsupported;
+                        return self.unsupported(*span, "this interpolation hole");
                     };
                     lowered.push(Part::Hole {
                         value,
@@ -556,17 +606,5 @@ fn path_name(ty: &ast::Type) -> Option<&str> {
     match &ty.kind {
         TypeKind::Path { segments, .. } => segments.last().map(|s| s.name.as_str()),
         _ => None,
-    }
-}
-
-/// An integer literal as written (digits and `_` separators), negated
-/// when `negative`. The checker has already checked that it fits its
-/// type.
-fn int_literal(text: &str, negative: bool) -> ExprKind {
-    let digits: String = text.chars().filter(|&c| c != '_').collect();
-    match digits.parse::<i128>() {
-        Ok(value) if negative => ExprKind::Int(-value),
-        Ok(value) => ExprKind::Int(value),
-        Err(_) => ExprKind::Unsupported,
     }
 }

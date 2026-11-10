@@ -256,7 +256,11 @@ impl Body<'_, '_, '_> {
                 }
                 callable.ret
             }
-            Some(callable) => callable.into_fn_type(),
+            Some(callable) => {
+                let what = "a constructor used as a function value".to_string();
+                self.record(span, Resolution::Unsupported(what));
+                callable.into_fn_type()
+            }
             None => Ty::Error,
         }
     }
@@ -433,13 +437,18 @@ impl Body<'_, '_, '_> {
             }
             Some(trait_name) => self.trait_callee(&receiver, trait_name, &name.name),
         };
-        if let Some(callee) = callee {
-            let resolution = match sig.receiver {
-                Receiver::VarSelf => Resolution::MutatingMethod(callee),
-                _ => Resolution::Method(callee),
-            };
-            self.record(span, resolution);
-        }
+        let resolution = match (callee, &sig.trait_name) {
+            (Some(callee), _) if sig.receiver == Receiver::VarSelf => {
+                Resolution::MutatingMethod(callee)
+            }
+            (Some(callee), _) => Resolution::Method(callee),
+            (None, Some(trait_name)) => Resolution::Unsupported(format!(
+                "a call of `{}`, a method of the generic trait `{trait_name}`,",
+                name.name
+            )),
+            (None, None) => Resolution::Unsupported("this method call".to_string()),
+        };
+        self.record(span, resolution);
         let mut callable = self.instantiate(&sig, None);
         if let Some(declared) = &callable.receiver {
             // The receiver flows into `self` like an argument, so untrusted
@@ -451,7 +460,13 @@ impl Body<'_, '_, '_> {
             // stand for untrusted text, so text in the result is untrusted.
             self.follow_type_arg(&mut callable, receiver);
         }
-        self.apply(callable, args, expected, span)
+        match sig.receiver {
+            // A mutating method writes its arguments into its receiver.
+            Receiver::VarSelf => {
+                self.mentioning(base, |body| body.apply(callable, args, expected, span))
+            }
+            _ => self.apply(callable, args, expected, span),
+        }
     }
 
     /// Let `callable`'s result follow the trust of `type_arg` as well, as

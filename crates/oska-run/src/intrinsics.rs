@@ -1,13 +1,16 @@
 //! Runtime implementations of body-less prelude functions, keyed by the
 //! qualified name the checked program calls them by (`Stdout.println`).
 //!
-//! To add one: write a function with the [`Intrinsic`] signature and add
-//! it to [`INTRINSICS`]. A method's receiver is its first argument.
+//! To add one: write a function with the signature of one of the
+//! [`Intrinsic`] kinds and add it, wrapped in its kind, to its module's
+//! table ([`INTRINSICS`] here). [`lookup`] searches every table. A
+//! method's receiver is its first argument.
 
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use oska_check::builtins;
 use oska_syntax::Span;
 
 use crate::confine::{self, Intent};
@@ -18,90 +21,84 @@ use crate::panics::{codes, Panic};
 use crate::tasks;
 use crate::testing;
 use crate::traits;
-use crate::value::{Access, Capability, FsCap, Root, Value, SECRET};
+use crate::value::{Access, Capability, FsCap, Root, Value};
 
-/// An intrinsic: the host, the arguments (the receiver first), and the
-/// call's span, for panics.
-pub type Intrinsic = fn(&mut dyn Host, Vec<Value>, Span) -> Result<Value, Panic>;
+use Intrinsic::Plain;
 
-/// A mutating intrinsic, such as `List.push`: it changes its receiver in
-/// place, given the call's other arguments and its span.
-pub type MutatingIntrinsic = fn(&mut Value, Vec<Value>, Span) -> Result<Value, Panic>;
+/// A body-less prelude function's runtime implementation. Each gets the
+/// arguments, the receiver first for a method, and the call's span, for
+/// panics, and what else its kind needs.
+#[derive(Clone, Copy)]
+pub enum Intrinsic {
+    /// One that needs only the host.
+    Plain(fn(&mut dyn Host, Vec<Value>, Span) -> Result<Value, Panic>),
+    /// A mutating method (`var self`), such as `List.push`: it changes
+    /// its receiver in place, given the call's other arguments.
+    Mutating(fn(&mut Value, Vec<Value>, Span) -> Result<Value, Panic>),
+    /// One that calls back into the program, such as `List.map`, which
+    /// calls its closure: it gets the interpreter instead of the host.
+    HigherOrder(fn(&mut Interpreter<'_, '_>, Vec<Value>, Span) -> Result<Value, Panic>),
+}
 
-/// An intrinsic that calls back into the program, such as `List.map`,
-/// which calls its closure: it gets the interpreter instead of the host.
-pub type HigherOrder = fn(&mut Interpreter<'_, '_>, Vec<Value>, Span) -> Result<Value, Panic>;
+/// A table of intrinsics, by the qualified name the checked program calls
+/// them by.
+pub type Table = &'static [(&'static str, Intrinsic)];
 
 /// Every intrinsic, by qualified name.
-pub const INTRINSICS: &[(&str, Intrinsic)] = &[
-    ("Args.get", args_get),
-    ("Clock.now_millis", clock_now_millis),
-    ("Env.get", env_get),
-    ("Env.secret", env_secret),
-    ("Fs.read_only", fs_read_only),
-    ("Fs.restrict_to", fs_restrict_to),
-    ("Fs.write_only", fs_write_only),
-    ("FsRead.read_to_string", fs_read_to_string),
-    ("FsRead.restrict_to", fs_restrict_to),
-    ("FsWrite.restrict_to", fs_restrict_to),
-    ("FsWrite.write", fs_write),
-    ("Int.to_string", int_to_string),
-    ("Option.is_some", option_is_some),
-    ("Option.ok_or", option_ok_or),
-    ("Option.unwrap_or", option_unwrap_or),
-    ("Path.from", path_new),
-    ("Path.new", path_new),
-    ("Random.next_int", random_next_int),
-    ("Result.is_ok", result_is_ok),
-    ("Result.unwrap_or", result_unwrap_or),
-    ("Secret.constant_time_eq", secret_constant_time_eq),
+pub const INTRINSICS: Table = &[
+    ("Args.get", Plain(args_get)),
+    ("Clock.now_millis", Plain(clock_now_millis)),
+    ("Env.get", Plain(env_get)),
+    ("Env.secret", Plain(env_secret)),
+    ("Fs.read_only", Plain(fs_read_only)),
+    ("Fs.restrict_to", Plain(fs_restrict_to)),
+    ("Fs.write_only", Plain(fs_write_only)),
+    ("FsRead.read_to_string", Plain(fs_read_to_string)),
+    ("FsRead.restrict_to", Plain(fs_restrict_to)),
+    ("FsWrite.restrict_to", Plain(fs_restrict_to)),
+    ("FsWrite.write", Plain(fs_write)),
+    ("Int.to_string", Plain(int_to_string)),
+    ("Option.is_some", Plain(option_is_some)),
+    ("Option.ok_or", Plain(option_ok_or)),
+    ("Option.unwrap_or", Plain(option_unwrap_or)),
+    ("Path.from", Plain(path_new)),
+    ("Path.new", Plain(path_new)),
+    ("Random.next_int", Plain(random_next_int)),
+    ("Result.is_ok", Plain(result_is_ok)),
+    ("Result.unwrap_or", Plain(result_unwrap_or)),
+    ("Secret.constant_time_eq", Plain(secret_constant_time_eq)),
     (
         "Secret.constant_time_eq_secret",
-        secret_constant_time_eq_secret,
+        Plain(secret_constant_time_eq_secret),
     ),
-    ("Secret.expose", secret_expose),
-    ("Stderr.println", stderr_println),
-    ("Stdin.read_line", stdin_read_line),
-    ("Stdout.println", stdout_println),
-    ("String.assume_trusted", string_assume_trusted),
-    ("String.to_string", string_to_string),
-    ("dbg", dbg),
-    ("todo", todo),
+    ("Secret.expose", Plain(secret_expose)),
+    ("Stderr.println", Plain(stderr_println)),
+    ("Stdin.read_line", Plain(stdin_read_line)),
+    ("Stdout.println", Plain(stdout_println)),
+    ("String.assume_trusted", Plain(string_assume_trusted)),
+    ("String.to_string", Plain(string_to_string)),
+    ("dbg", Plain(dbg)),
+    ("todo", Plain(todo)),
 ];
 
-/// The intrinsic named `name`.
+/// The intrinsic named `name`, from every module's table.
 pub fn lookup(name: &str) -> Option<Intrinsic> {
-    INTRINSICS
-        .iter()
-        .chain(data::INTRINSICS)
-        .chain(traits::INTRINSICS)
-        .chain(testing::INTRINSICS)
-        .find(|(n, _)| *n == name)
-        .map(|(_, f)| *f)
-}
-
-/// The mutating intrinsic named `name`.
-pub fn lookup_mutating(name: &str) -> Option<MutatingIntrinsic> {
-    data::MUTATING
-        .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, f)| *f)
-}
-
-/// The higher-order intrinsic named `name`.
-pub fn lookup_higher_order(name: &str) -> Option<HigherOrder> {
-    data::HIGHER_ORDER
-        .iter()
-        .chain(tasks::HIGHER_ORDER)
-        .chain(traits::HIGHER_ORDER)
-        .chain(testing::HIGHER_ORDER)
-        .find(|(n, _)| *n == name)
-        .map(|(_, f)| *f)
+    [
+        INTRINSICS,
+        data::INTRINSICS,
+        tasks::INTRINSICS,
+        traits::INTRINSICS,
+        testing::INTRINSICS,
+    ]
+    .into_iter()
+    .flatten()
+    .find(|(n, _)| *n == name)
+    .map(|(_, intrinsic)| *intrinsic)
 }
 
 /// Whether the intrinsic named `name` has a runtime implementation.
 pub fn implemented(name: &str) -> bool {
-    lookup(name).is_some() || lookup_mutating(name).is_some() || lookup_higher_order(name).is_some()
+    lookup(name).is_some()
 }
 
 /// The text of the string argument at `index`.
@@ -169,10 +166,10 @@ pub(crate) fn debug(value: &Value, out: &mut String) {
     match value {
         Value::Unit => out.push_str("()"),
         Value::Bool(b) => out.push_str(&b.to_string()),
-        Value::Int(n) => out.push_str(&n.to_string()),
+        Value::Int(n, _) => out.push_str(&n.to_string()),
         Value::Str(s) => out.push_str(&format!("{:?}", &**s)),
-        Value::Range { start, end } => out.push_str(&format!("{start}..{end}")),
-        Value::Struct { ty, .. } if &**ty == SECRET => out.push_str("<redacted>"),
+        Value::Range { start, end, .. } => out.push_str(&format!("{start}..{end}")),
+        Value::Struct { ty, .. } if &**ty == builtins::SECRET => out.push_str("<redacted>"),
         Value::Struct { ty, fields } => {
             out.push_str(ty);
             tuple(out, fields);
@@ -281,12 +278,12 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 
 /// `Clock.now_millis(self)`.
 fn clock_now_millis(host: &mut dyn Host, _: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(Value::Int(host.now_millis()))
+    Ok(Value::int(host.now_millis()))
 }
 
 /// `Random.next_int(self)`: from 0 up to, but excluding, 2^63.
 fn random_next_int(host: &mut dyn Host, _: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(Value::Int(i128::from(host.next_random() >> 1)))
+    Ok(Value::int(i128::from(host.next_random() >> 1)))
 }
 
 // ---- Files -------------------------------------------------------------
@@ -343,9 +340,15 @@ fn with_access(value: &Value, access: Access) -> Value {
     }))
 }
 
-/// The real path `path` names through `fs`, for `intent`, or why `fs`
-/// may not reach it.
-fn real_path(host: &mut dyn Host, fs: &FsCap, path: &Value, intent: Intent) -> io::Result<PathBuf> {
+/// The real path `path` names through `fs`, for `intent`, with the root
+/// it must stay under when `fs` is restricted, or why `fs` may not reach
+/// it.
+fn real_path<'f>(
+    host: &mut dyn Host,
+    fs: &'f FsCap,
+    path: &Value,
+    intent: Intent,
+) -> io::Result<(PathBuf, Option<&'f Path>)> {
     let allowed = match intent {
         Intent::Read => fs.access.reads(),
         Intent::Write => fs.access.writes(),
@@ -367,8 +370,8 @@ fn real_path(host: &mut dyn Host, fs: &FsCap, path: &Value, intent: Intent) -> i
             io::ErrorKind::InvalidInput,
             "an empty path names no file",
         )),
-        Root::Anywhere => Ok(PathBuf::from(raw)),
-        Root::Dir(root) => confine::resolve(host, root, raw, intent),
+        Root::Anywhere => Ok((PathBuf::from(raw), None)),
+        Root::Dir(root) => Ok((confine::resolve(host, root, raw, intent)?, Some(root))),
         Root::Nowhere => Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "this filesystem capability was restricted to a directory it cannot reach",
@@ -378,15 +381,15 @@ fn real_path(host: &mut dyn Host, fs: &FsCap, path: &Value, intent: Intent) -> i
 
 /// `FsRead.read_to_string(self, path)`.
 fn fs_read_to_string(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    let result =
-        real_path(host, fs_cap(&args[0]), &args[1], Intent::Read).and_then(|p| host.read_file(&p));
+    let result = real_path(host, fs_cap(&args[0]), &args[1], Intent::Read)
+        .and_then(|(path, beneath)| host.read_file(&path, beneath));
     Ok(io_result(result, |text| Value::str(&text)))
 }
 
 /// `FsWrite.write(self, path, contents)`.
 fn fs_write(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
     let result = real_path(host, fs_cap(&args[0]), &args[1], Intent::Write)
-        .and_then(|p| host.write_file(&p, text(&args, 2)));
+        .and_then(|(path, beneath)| host.write_file(&path, text(&args, 2), beneath));
     Ok(io_result(result, |()| Value::Unit))
 }
 
@@ -394,24 +397,24 @@ fn fs_write(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Pan
 
 /// `Option.is_some(self)`.
 fn option_is_some(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(Value::Bool(args[0].is_variant("Some")))
+    Ok(Value::Bool(args[0].is_variant(builtins::SOME)))
 }
 
 /// `Result.is_ok(self)`.
 fn result_is_ok(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(Value::Bool(args[0].is_variant("Ok")))
+    Ok(Value::Bool(args[0].is_variant(builtins::OK)))
 }
 
 /// `Option.unwrap_or(self, default)`.
 fn option_unwrap_or(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(unwrap_or(args, "Some"))
+    Ok(unwrap_or(args, builtins::SOME))
 }
 
 /// `Option.ok_or(self, err)`: `Ok` of the value, or `Err(err)` when
 /// there is none.
 fn option_ok_or(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Panic> {
     let err = args.swap_remove(1);
-    Ok(match args[0].is_variant("Some") {
+    Ok(match args[0].is_variant(builtins::SOME) {
         true => Value::ok(args[0].fields()[0].clone()),
         false => Value::err(err),
     })
@@ -419,7 +422,7 @@ fn option_ok_or(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value
 
 /// `Result.unwrap_or(self, default)`.
 fn result_unwrap_or(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(unwrap_or(args, "Ok"))
+    Ok(unwrap_or(args, builtins::OK))
 }
 
 /// The field of `args[0]` when it is the variant `present`, else
@@ -463,17 +466,44 @@ fn string_to_string(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<V
 
 #[cfg(test)]
 mod tests {
-    use oska_syntax::ast::{Item, ItemKind, Type, TypeKind};
+    use oska_check::builtins;
+    use oska_syntax::ast::{Fields, Item, ItemKind, Type, TypeKind};
 
-    use super::implemented;
+    use super::{implemented, lookup, Intrinsic};
+    use crate::value::Capability;
 
     /// The prelude's source, the same file the checker embeds.
     const PRELUDE: &str = include_str!("../../oska-check/src/prelude.osk");
 
-    /// The types whose methods have no runtime: a program that holds one
-    /// is refused before it starts (`E0370`), so none of these is ever
+    /// The types whose methods have no runtime: the built-in capabilities
+    /// the runtime does not implement, and the prelude's structs that hold
+    /// one, such as `Connection`. A program that holds one is refused
+    /// before it starts (`E0370`), so none of their methods is ever
     /// called. Everything else in the prelude needs an intrinsic.
-    const NO_RUNTIME: &[&str] = &["Net", "NetConnect", "Connection"];
+    fn no_runtime() -> Vec<String> {
+        let missing =
+            |name: &str| builtins::is_capability(name) && Capability::granted(name).is_none();
+        let module = oska_syntax::parse_prelude(PRELUDE).expect("the prelude should parse");
+        module
+            .items
+            .iter()
+            .filter_map(|item| match &item.kind {
+                ItemKind::Struct(s) => Some(s),
+                _ => None,
+            })
+            .filter(|s| {
+                let fields = match &s.fields {
+                    Fields::Named(fields) | Fields::Positional(fields) => fields.as_slice(),
+                    Fields::Unit => &[],
+                };
+                missing(&s.name.name)
+                    || fields
+                        .iter()
+                        .any(|f| call_owner(&f.ty).is_some_and(|ty| missing(&ty)))
+            })
+            .map(|s| s.name.name.clone())
+            .collect()
+    }
 
     /// The qualified name the checked program calls `item`'s function by,
     /// if `item` is a function without a body.
@@ -508,23 +538,55 @@ mod tests {
     /// declare, by qualified name (`Stdout.println`, `Int.eq`, `dbg`). A
     /// trait's own method signatures are not callable and are skipped.
     fn bodiless_prelude_functions() -> Vec<String> {
+        bodiless_prelude_methods()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect()
+    }
+
+    /// [`bodiless_prelude_functions`], each with whether it is a mutating
+    /// method (`var self`).
+    fn bodiless_prelude_methods() -> Vec<(String, bool)> {
         let module = oska_syntax::parse_prelude(PRELUDE).expect("the prelude should parse");
+        let mutating = |item: &Item| match &item.kind {
+            ItemKind::Fn(f) => f.receiver.as_ref().is_some_and(|r| r.mutable),
+            _ => false,
+        };
         let mut names = Vec::new();
         for item in &module.items {
             match &item.kind {
-                ItemKind::Fn(_) => names.extend(bodiless(None, item)),
+                ItemKind::Fn(_) => names.extend(bodiless(None, item).map(|n| (n, false))),
                 ItemKind::Impl(decl) => {
                     let Some(owner) = call_owner(&decl.target) else {
                         continue;
                     };
                     for method in &decl.methods {
-                        names.extend(bodiless(Some(&owner), method));
+                        let name = bodiless(Some(&owner), method);
+                        names.extend(name.map(|n| (n, mutating(method))));
                     }
                 }
                 _ => {}
             }
         }
         names
+    }
+
+    #[test]
+    fn exactly_the_mutating_prelude_methods_are_mutating_intrinsics() {
+        let methods = bodiless_prelude_methods();
+        assert!(
+            methods.iter().any(|(n, m)| n == "List.push" && *m),
+            "{methods:?}"
+        );
+        for (name, var_self) in methods {
+            let registered = matches!(lookup(&name), Some(Intrinsic::Mutating(_)));
+            if lookup(&name).is_some() {
+                assert_eq!(
+                    registered, var_self,
+                    "`{name}`: `var self` is a mutating intrinsic"
+                );
+            }
+        }
     }
 
     fn owner(name: &str) -> &str {
@@ -538,9 +600,10 @@ mod tests {
             names.len() > 40 && names.iter().any(|n| n == "Stdout.println"),
             "the scan should find the prelude's functions, found {names:?}"
         );
+        let exempt = no_runtime();
         let missing: Vec<&String> = names
             .iter()
-            .filter(|name| !NO_RUNTIME.contains(&owner(name)))
+            .filter(|name| !exempt.iter().any(|e| e == owner(name)))
             .filter(|name| !implemented(name))
             .collect();
         assert!(
@@ -550,18 +613,124 @@ mod tests {
     }
 
     #[test]
-    fn the_exempt_types_are_exactly_the_ones_with_no_runtime() {
+    fn the_exempt_types_are_the_ones_with_no_runtime_and_have_no_intrinsics() {
         let names = bodiless_prelude_functions();
-        for exempt in NO_RUNTIME {
-            let theirs: Vec<&String> = names.iter().filter(|n| owner(n) == *exempt).collect();
+        let exempt = no_runtime();
+        for expected in [
+            "Net",
+            "NetConnect",
+            "NetListen",
+            "Spawn",
+            "Sched",
+            "Connection",
+        ] {
+            assert!(exempt.iter().any(|e| e == expected), "{exempt:?}");
+        }
+        for granted in ["Stdout", "Fs", "FsRead", "TestContext", "Args"] {
+            assert!(!exempt.iter().any(|e| e == granted), "{exempt:?}");
+        }
+        for exempt in &exempt {
             assert!(
-                !theirs.is_empty(),
-                "`{exempt}` is exempt but declares no body-less function"
-            );
-            assert!(
-                !theirs.iter().any(|n| implemented(n)),
-                "`{exempt}` has an intrinsic now: drop it from NO_RUNTIME"
+                !names.iter().any(|n| owner(n) == *exempt && implemented(n)),
+                "`{exempt}` has an intrinsic now, but no capability runtime"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod access_tests {
+    //! The checker gives `FsRead` no `write` and `FsWrite` no
+    //! `read_to_string`, so no source program reaches the runtime's own
+    //! access check. It is tested on checked programs built by hand, in
+    //! which a read-only filesystem calls `write` and a write-only one
+    //! `read_to_string` anyway.
+
+    use oska_check::program::{Callee, Expr, ExprKind, Function, Param, Program};
+    use oska_syntax::Span;
+
+    use crate::host::FakeHost;
+    use crate::interp::Interpreter;
+    use crate::value::{Access, Capability, FsCap, Root, Value};
+
+    fn at(kind: ExprKind) -> Expr {
+        Expr {
+            kind,
+            span: Span { start: 0, end: 1 },
+        }
+    }
+
+    fn call(name: &str, args: Vec<Expr>) -> Expr {
+        at(ExprKind::Call {
+            callee: Callee::Intrinsic(name.to_string()),
+            args,
+        })
+    }
+
+    /// `fn main(fs) { fs.<method>(Path.new("notes.txt"), extra...) }`.
+    fn calling(method: &str, extra: Vec<Expr>) -> Program {
+        let path = call("Path.new", vec![at(ExprKind::Str("notes.txt".to_string()))]);
+        let args = [at(ExprKind::Local(0)), path].into_iter().chain(extra);
+        let mut program = Program::default();
+        program.functions.insert(
+            "main".to_string(),
+            Function {
+                name: "main".to_string(),
+                receiver: false,
+                params: vec![Param {
+                    name: "fs".to_string(),
+                    ty: String::new(),
+                    binds: true,
+                }],
+                body: call(method, args.collect()),
+            },
+        );
+        program
+    }
+
+    /// What `program`'s `main` returns, given a filesystem with `access`,
+    /// run on `host`.
+    fn run_with(program: &Program, access: Access, host: &mut FakeHost) -> Value {
+        let fs = Value::Capability(Capability::Fs(FsCap {
+            root: Root::Anywhere,
+            access,
+        }));
+        Interpreter::new(program, host)
+            .call(&program.functions["main"], vec![fs])
+            .expect("no panic")
+    }
+
+    fn io_error_message(result: &Value) -> &str {
+        assert!(result.is_variant("Err"), "{result:?}");
+        result.fields()[0].fields()[0].as_str()
+    }
+
+    #[test]
+    fn a_read_only_filesystem_refuses_to_write_at_runtime() {
+        let program = calling("FsWrite.write", vec![at(ExprKind::Str("x".to_string()))]);
+        let mut host = FakeHost::new();
+        let result = run_with(&program, Access::Read, &mut host);
+        assert_eq!(
+            io_error_message(&result),
+            "this filesystem capability cannot write"
+        );
+        assert_eq!(host.file("notes.txt"), None, "nothing was written");
+        let mut host = FakeHost::new();
+        let result = run_with(&program, Access::ReadWrite, &mut host);
+        assert!(result.is_variant("Ok"), "{result:?}");
+        assert_eq!(host.file("notes.txt"), Some("x"));
+    }
+
+    #[test]
+    fn a_write_only_filesystem_refuses_to_read_at_runtime() {
+        let program = calling("FsRead.read_to_string", Vec::new());
+        let mut host = FakeHost::new().with_file("notes.txt", "secret");
+        let result = run_with(&program, Access::Write, &mut host);
+        assert_eq!(
+            io_error_message(&result),
+            "this filesystem capability cannot read"
+        );
+        let result = run_with(&program, Access::ReadWrite, &mut host);
+        assert_eq!(result, Value::ok(Value::str("secret")));
     }
 }

@@ -12,16 +12,34 @@
 //! 3. The result must be the root or lie under it, compared component by
 //!    component, or the path is refused.
 //!
-//! A write may name a file that does not exist yet, which cannot be
-//! canonicalized. Then the file's parent directory is canonicalized and
-//! checked instead, the last component must be a plain name (not `..`),
-//! and the joined path must not be a symlink: a dangling symlink would
-//! otherwise send the write wherever it points.
+//! A write names its file by a canonical parent directory and a plain
+//! last component, and never follows a symlink in that component:
 //!
-//! The check and the open are two steps, so a program racing another
-//! process that swaps a directory for a symlink in between could escape.
-//! The interpreter runs one program at a time and does not defend against
-//! a concurrent attacker on the same filesystem.
+//! 1. The path as written must end in a plain name: not in a separator,
+//!    `.`, or `..`. `Path::components` drops a trailing `/` and `.`, so
+//!    `dang/` would otherwise name `dang`, and a dangling symlink there
+//!    would send the write wherever it points.
+//! 2. The parent directory is canonicalized and must lie under the root.
+//! 3. The exact path that will be opened, the canonical parent joined
+//!    with the name, must not be a symlink, dangling or not.
+//!
+//! The host then opens the final component without following a symlink
+//! (`O_NOFOLLOW` where the platform has it) and checks again, on the
+//! opened file, that it still lies under the root (`host.rs`), before it
+//! reads or writes anything.
+//!
+//! # What remains
+//!
+//! The check and the open are still separate steps on paths. Opening the
+//! last component without following a symlink, and re-checking the opened
+//! file, narrow the race but leave one window: another process that swaps
+//! an *intermediate* directory for a symlink at the right moment can still
+//! direct the open outside the root, though the re-check then refuses to
+//! use what it opened (a write may already have created an empty file
+//! there). Closing it needs the open to resolve the whole path beneath a
+//! directory handle (Linux `openat2` with `RESOLVE_BENEATH`), which `std`
+//! does not offer. The interpreter does not defend against a concurrent
+//! attacker on the same filesystem (`docs/runtime.md`).
 
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -54,28 +72,43 @@ pub fn resolve(
             "`{path}` is absolute; a restricted filesystem takes paths relative to its root"
         )));
     }
-    let joined = root.join(relative);
-    match host.canonicalize(&joined) {
-        Ok(real) => inside(root, real, path),
-        Err(err) if intent == Intent::Read || err.kind() != io::ErrorKind::NotFound => Err(err),
-        Err(_) => new_file(host, root, &joined, path),
+    match intent {
+        Intent::Read => inside(root, host.canonicalize(&root.join(relative))?, path),
+        Intent::Write => file_to_write(host, root, path),
     }
 }
 
-/// The real path of a file to create at `joined`, which does not resolve.
-fn new_file(host: &mut dyn Host, root: &Path, joined: &Path, path: &str) -> io::Result<PathBuf> {
-    let (Some(parent), Some(Component::Normal(name))) =
-        (joined.parent(), joined.components().next_back())
-    else {
-        return Err(escapes(path));
-    };
-    if host.is_symlink(joined) {
+/// The path of the file a write to `path` opens: the canonical parent
+/// directory, under `root`, joined with the plain name `path` ends in.
+fn file_to_write(host: &mut dyn Host, root: &Path, path: &str) -> io::Result<PathBuf> {
+    let name = last_name(path).ok_or_else(|| {
+        refused(&format!(
+            "`{path}` does not end in a file name; a write needs one"
+        ))
+    })?;
+    let joined = root.join(path);
+    let parent = joined.parent().ok_or_else(|| escapes(path))?;
+    let parent = inside(root, host.canonicalize(parent)?, path)?;
+    let target = parent.join(name);
+    if host.is_symlink(&target) {
         return Err(refused(&format!(
-            "`{path}` is a symlink to nowhere; a write would follow it"
+            "`{path}` is a symlink; a write never follows one"
         )));
     }
-    let parent = inside(root, host.canonicalize(parent)?, path)?;
-    Ok(parent.join(name))
+    Ok(target)
+}
+
+/// The plain file name `path` ends in, as written: `None` when it ends in
+/// a separator, `.`, or `..`, which name a directory, not a file.
+fn last_name(path: &str) -> Option<&str> {
+    if path.ends_with(std::path::is_separator) {
+        return None;
+    }
+    let name = path.rsplit(std::path::is_separator).next()?;
+    match Path::new(name).components().next() {
+        Some(Component::Normal(_)) => Some(name),
+        _ => None,
+    }
 }
 
 /// `real` if it is `root` or lies under it.

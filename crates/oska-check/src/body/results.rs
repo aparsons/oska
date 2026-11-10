@@ -115,6 +115,11 @@ impl Body<'_, '_, '_> {
             let convert = self
                 .impl_of(&to, ty::FROM, std::slice::from_ref(&from))
                 .and_then(|imp| imp.method_name("from"));
+            if convert.is_none() {
+                // Only a bound says `to` converts: no impl to call.
+                let what = "a `From`-bound conversion".to_string();
+                self.record(span, Resolution::Unsupported(what));
+            }
             return convert.map(|name| Some(Callee::Function(name)));
         }
         self.error(

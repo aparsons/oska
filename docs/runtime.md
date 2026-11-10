@@ -19,7 +19,7 @@ Before a program starts, the runtime checks that it can run all of it, reached o
 | --- | --- |
 | `E0370` | `main` declares a capability that has no runtime yet: `Net`, `NetConnect`, `NetListen`, `Spawn`, or `Sched`. Spans `main`'s body. |
 | `E0371` | The program imports a `std` module that has no runtime yet: `std.proc`, `std.sql`, or `std.html`, used or not. Spans the module path of the `use`. |
-| `E0380` | The program uses something the interpreter cannot run yet: a construct the checked program cannot express, a call of a prelude function with no runtime implementation, a parameter of `main` that is neither a capability nor `Args`, or a trait call on a type parameter whose trait has its own impl for a sized integer type (see [Errors and traits](#errors-and-traits)). Spans the construct or call, or `main`'s body for a parameter. |
+| `E0380` | The program uses something the interpreter cannot run yet: a construct the checked program cannot express, a call of a prelude function with no runtime implementation, or a parameter of `main` that is neither a capability nor `Args`. The message names the construct, as in ``the interpreter cannot run a `From`-bound conversion yet``; others are a constructor used as a function value and a call of a generic trait's method. Spans the construct or call, or `main`'s body for a parameter. |
 
 ## Panics
 
@@ -45,13 +45,14 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0012` | `t.assert_ne(actual, other)` was given two equal values. Spans the call. |
 | `P0013` | `t.fail(message)` was called. The message is `message`. Spans the call. |
 | `P0020` | `Env.secret` asked for a variable the environment does not set. Its signature has no room for a missing secret, and running on with a stand-in such as an empty one could let an empty password through. Spans the call. |
+| `P0021` | Calls nest too deep: runaway recursion. The interpreter runs on a thread of its own with a 256 MiB stack, and a call panics instead of starting when calls already nest 50,000 deep, or when so little of that stack is left that the next call could overflow it. The process never crashes on deep recursion: `oskac run` exits with 101, and under `oskac test` only the test that recursed fails. Spans the call that would have gone too deep. |
 
 ## Errors and traits
 
 - **`main` returning `Err(e)`.** The runtime prints `e.to_string()`, the `Display` text of `e`, and a newline to stderr, and exits with code 1.
 - **`?`** returns `None` or `Err(e)` from the enclosing function or closure. When the function's error type differs, `e` is converted through the `From` impl the checker chose.
 - **Trait calls.** A trait method called on a value of a known type reaches that type's impl directly. One called on a value of a type parameter is dispatched on the value's **runtime type tag**, the name of its type without arguments (`Point`, `List`, `String`), to the program's impl for that type or else the prelude's. `Option`, `Result`, and `List` compare their items through `Eq` for the items' type.
-- Every integer has the tag `Int`, whatever its type. Dispatch could not tell a `U8`'s impl of a trait from an `Int`'s, so a program that calls a trait's method on a type parameter, while that trait has an impl for a sized integer type (`I8` to `U64`), is refused with `E0380`.
+- Every integer carries its own type as its tag: `Int`, or a sized type from `I8` to `U64`. A literal takes the type the checker gave it, arithmetic keeps its operands' type, and a range's items keep its bounds' type, so a `U8` reaches the impl for `U8` and an `Int` the one for `Int`.
 
 ## Capabilities
 
@@ -64,9 +65,10 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
   1. An empty path is refused, and so is an absolute one, even one inside the root.
   2. The path is joined to the root and canonicalized: `..` is resolved and every symlink followed, in every component.
   3. The result must be the root or lie under it, compared component by component.
-  4. A write may name a file that does not exist yet. Then its parent directory must canonicalize to inside the root, its last component must be a plain name, and it must not be a dangling symlink, which the write would follow.
+  4. A write names its file differently, because the file may not exist yet. The path as written must end in a plain name, not in a separator, `.`, or `..`: `dang/` and `dang/.` are refused, even though path libraries treat them as `dang`. The parent directory must canonicalize to inside the root, and the exact path to be opened, that directory joined with the name, must not be a symlink, dangling or not. A write never follows a symlink in its last component, even one that points inside the root.
+  5. The file is then opened without following a symlink in its last component (`O_NOFOLLOW` on Linux and macOS; elsewhere the checks above stand alone), and the opened file is checked again, by its device and inode, to be the file its path now canonicalizes to, under the root. Only then is it read, or emptied and written: a file is not truncated by the open itself.
 
-  Checking and then opening are two steps, so a concurrent process that swaps a directory for a symlink between them could escape. The interpreter does not defend against an attacker racing it on the same filesystem.
+  **Residual risk.** Checking a path and opening it are still separate steps, so the defence above narrows a race but does not close it. A concurrent process that swaps an *intermediate* directory for a symlink at the right moment can still direct the open outside the root. The re-check then refuses to read or write what was opened, but a write may already have created an empty file there. Closing the race needs the whole path to be resolved beneath a directory handle, as Linux `openat2` with `RESOLVE_BENEATH` does, and `std` does not offer that. The interpreter does not defend against an attacker racing it on the same filesystem.
 
 ## Scopes and tasks
 
@@ -88,7 +90,7 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
   - `t.random` starts from the same fixed seed in every test.
   - `t.stdout` records what it prints. `t.printed()` returns every line printed so far in the test, one per `println`, without its line break.
 - **Assertions.** `t.assert`, `t.assert_eq`, `t.assert_ne`, and `t.fail` fail the test by panicking, with `P0010` to `P0013` and the span of the call. A failed assertion is a panic like any other: it stops the test, and its diagnostic is the test's failure. A panic from a bug, such as `P0004`, fails the test the same way.
-- **Isolation.** A panic stops only the test it happened in. The next test runs in a new interpreter, on a new host.
+- **Isolation.** A panic stops only the test it happened in, runaway recursion (`P0021`) included. Each test runs in a new interpreter, on a new host, on a thread of its own.
 - **Integration tests.** A test marked `#[integration]` is skipped unless `--integration` is given. Then it runs on the real OS: `t.fs` is the real filesystem, unrestricted, `t.clock` the real time, and `t.random` seeded from the clock. Its `t.stdout` is still recorded, not written to the terminal, so `t.printed()` works and the report is the only thing on stdout.
 
 ### Report and exit codes
@@ -101,10 +103,14 @@ test divides ... FAILED
 test reads the real config ... skipped (#[integration]; run with --integration)
 
 failures:
-math.osk: error[P0011]: assertion failed: `actual == expected`: actual 2, expected 3 (bytes 120..141)
+test divides: math.osk: error[P0011]: assertion failed: `actual == expected`: actual 2, expected 3 (bytes 120..141)
 
 3 tests: 1 passed, 1 failed, 1 skipped
 ```
+
+Each failure is named by its test. Control characters in test names and failure messages are escaped (`\n`, `\r`, `\t`, `\u{..}`), so a message cannot forge a line of the report.
+
+**Output.** What a test writes to stderr, `dbg` included, goes to the real stderr as it happens, each line prefixed with the test's name in brackets, such as `[divides] [dbg] 4`. What it prints to `t.stdout` is recorded for `t.printed()`, for integration tests too, so the report is the only thing on stdout.
 
 With `--format=json`, one JSON object on stdout. Each test has its name, its status (`passed`, `failed`, or `skipped`), and its failure, a diagnostic object or `null`. A refused file has no tests and its diagnostics in `diagnostics`:
 

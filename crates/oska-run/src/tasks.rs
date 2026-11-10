@@ -24,13 +24,16 @@ use std::collections::VecDeque;
 use oska_syntax::Span;
 
 use crate::interp::Interpreter;
-use crate::intrinsics::HigherOrder;
+use crate::intrinsics::Intrinsic::HigherOrder;
+use crate::intrinsics::Table;
 use crate::panics::{codes, Panic};
 use crate::value::Value;
 
 /// Every task intrinsic, by qualified name.
-pub const HIGHER_ORDER: &[(&str, HigherOrder)] =
-    &[("Scope.spawn", scope_spawn), ("Task.join", task_join)];
+pub const INTRINSICS: Table = &[
+    ("Scope.spawn", HigherOrder(scope_spawn)),
+    ("Task.join", HigherOrder(task_join)),
+];
 
 /// The scopes and tasks of one run, indexed by the numbers
 /// [`Value::Scope`] and [`Value::Task`] carry.
@@ -169,8 +172,6 @@ mod tests {
     //! tested on a checked program built by hand, in which a handle
     //! escapes anyway.
 
-    use std::rc::Rc;
-
     use oska_check::program::{Callee, Closure, Expr, ExprKind, Function, Program, Stmt};
 
     use super::*;
@@ -201,8 +202,11 @@ mod tests {
         let task = at(
             47,
             51,
-            ExprKind::Closure(Rc::new(Closure {
+            ExprKind::Closure(std::sync::Arc::new(Closure {
                 params: Vec::new(),
+                captures: Vec::new(),
+                captures_self: false,
+                height: 1,
                 body: at(50, 51, ExprKind::Unit),
             })),
         );

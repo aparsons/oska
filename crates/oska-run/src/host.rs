@@ -14,7 +14,8 @@
 //! intrinsic that needs it (`intrinsics.rs`).
 
 use std::collections::{BTreeMap, VecDeque};
-use std::io::{self, BufRead, Write};
+use std::fs::{File, OpenOptions};
+use std::io::{self, BufRead, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -28,7 +29,10 @@ pub struct Output {
 }
 
 /// The operating system, as the interpreter sees it.
-pub trait Host {
+///
+/// A host is `Send` because the interpreter runs on a thread of its own,
+/// with a stack sized for deep recursion (`crate::STACK_SIZE`).
+pub trait Host: Send {
     /// Write `text` to standard output, as is.
     fn write_stdout(&mut self, text: &str) -> io::Result<()>;
 
@@ -58,11 +62,18 @@ pub trait Host {
     fn is_symlink(&mut self, path: &Path) -> bool;
 
     /// The text of the file at `path`.
-    fn read_file(&mut self, path: &Path) -> io::Result<String>;
+    ///
+    /// With `beneath`, the root of a restricted filesystem, `path` is one
+    /// `confine.rs` resolved: the host opens its last component without
+    /// following a symlink, and refuses the file unless the file it
+    /// opened still lies under `beneath`.
+    fn read_file(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<String>;
 
     /// Create the file at `path`, or replace its contents, with
-    /// `contents`.
-    fn write_file(&mut self, path: &Path, contents: &str) -> io::Result<()>;
+    /// `contents`. `beneath` is as for [`Host::read_file`]: with it,
+    /// nothing is written until the opened file is known to lie under it.
+    fn write_file(&mut self, path: &Path, contents: &str, beneath: Option<&Path>)
+        -> io::Result<()>;
 
     /// Every line written to stdout so far, without its line break: one
     /// per `println`, as `t.printed()` returns them. A host that writes
@@ -140,12 +151,30 @@ impl Host for RealHost {
         std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
     }
 
-    fn read_file(&mut self, path: &Path) -> io::Result<String> {
-        std::fs::read_to_string(path)
+    fn read_file(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<String> {
+        let Some(root) = beneath else {
+            return std::fs::read_to_string(path);
+        };
+        let mut file = open_beneath(path, root, OpenOptions::new().read(true))?;
+        let mut text = String::new();
+        file.read_to_string(&mut text)?;
+        Ok(text)
     }
 
-    fn write_file(&mut self, path: &Path, contents: &str) -> io::Result<()> {
-        std::fs::write(path, contents)
+    fn write_file(
+        &mut self,
+        path: &Path,
+        contents: &str,
+        beneath: Option<&Path>,
+    ) -> io::Result<()> {
+        let Some(root) = beneath else {
+            return std::fs::write(path, contents);
+        };
+        // Not truncated on open: the file is emptied only once it is
+        // known to lie under the root.
+        let mut file = open_beneath(path, root, OpenOptions::new().write(true).create(true))?;
+        file.set_len(0)?;
+        file.write_all(contents.as_bytes())
     }
 
     fn printed(&self) -> Vec<String> {
@@ -155,6 +184,101 @@ impl Host for RealHost {
     fn take_output(&mut self) -> Output {
         Output::default()
     }
+}
+
+/// `O_NOFOLLOW`, from the platform's `fcntl.h`: `open` fails on a symlink
+/// in the last component instead of following it. `None` where its value
+/// is not known here; there the checks in `confine.rs` and the re-check
+/// after opening still apply.
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "riscv64",
+        target_arch = "loongarch64",
+        target_arch = "s390x"
+    )
+))]
+const O_NOFOLLOW: Option<i32> = Some(0o400000);
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "powerpc",
+        target_arch = "powerpc64"
+    )
+))]
+const O_NOFOLLOW: Option<i32> = Some(0o100000);
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const O_NOFOLLOW: Option<i32> = Some(0x0100);
+#[cfg(not(any(
+    all(
+        target_os = "linux",
+        any(
+            target_arch = "x86",
+            target_arch = "x86_64",
+            target_arch = "riscv64",
+            target_arch = "loongarch64",
+            target_arch = "s390x",
+            target_arch = "arm",
+            target_arch = "aarch64",
+            target_arch = "powerpc",
+            target_arch = "powerpc64"
+        )
+    ),
+    target_os = "macos",
+    target_os = "ios"
+)))]
+const O_NOFOLLOW: Option<i32> = None;
+
+/// Open `path`, which `confine.rs` resolved under `root`, with `options`:
+/// its last component without following a symlink, and the opened file
+/// checked to still lie under `root`, so a symlink swapped in after the
+/// check is refused rather than followed.
+fn open_beneath(path: &Path, root: &Path, options: &mut OpenOptions) -> io::Result<File> {
+    #[cfg(unix)]
+    if let Some(flag) = O_NOFOLLOW {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(flag);
+    }
+    #[cfg(not(unix))]
+    if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(moved(path));
+    }
+    let file = options.open(path)?;
+    let now = std::fs::canonicalize(path)?;
+    if !now.starts_with(root) || !same_file(&file, &now)? {
+        return Err(moved(path));
+    }
+    Ok(file)
+}
+
+/// Whether `file`, already open, is the file at `path`.
+#[cfg(unix)]
+fn same_file(file: &File, path: &Path) -> io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    let (opened, named) = (file.metadata()?, std::fs::symlink_metadata(path)?);
+    Ok(opened.dev() == named.dev() && opened.ino() == named.ino())
+}
+
+/// Whether `file`, already open, is the file at `path`: without inode
+/// numbers, as near as `std` can tell.
+#[cfg(not(unix))]
+fn same_file(file: &File, path: &Path) -> io::Result<bool> {
+    let (opened, named) = (file.metadata()?, std::fs::symlink_metadata(path)?);
+    Ok(!named.file_type().is_symlink() && opened.len() == named.len())
+}
+
+fn moved(path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!(
+            "`{}` is a symlink or left the restricted directory while it was being opened",
+            path.display()
+        ),
+    )
 }
 
 /// `line` without its trailing `\n` or `\r\n`.
@@ -258,6 +382,19 @@ fn normalize(path: &Path) -> PathBuf {
     out
 }
 
+/// `path` normalized, refused unless it lies under `beneath`: the fake
+/// filesystem has no symlinks, so nothing can move it there.
+fn fake_beneath(path: &Path, beneath: Option<&Path>) -> io::Result<PathBuf> {
+    let path = normalize(path);
+    match beneath {
+        Some(root) if !path.starts_with(root) => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("`{}` is outside the restricted directory", path.display()),
+        )),
+        _ => Ok(path),
+    }
+}
+
 fn not_found(path: &Path) -> io::Error {
     io::Error::new(
         io::ErrorKind::NotFound,
@@ -314,15 +451,21 @@ impl Host for FakeHost {
         false
     }
 
-    fn read_file(&mut self, path: &Path) -> io::Result<String> {
+    fn read_file(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<String> {
+        let path = fake_beneath(path, beneath)?;
         self.files
-            .get(&normalize(path))
+            .get(&path)
             .cloned()
-            .ok_or_else(|| not_found(path))
+            .ok_or_else(|| not_found(&path))
     }
 
-    fn write_file(&mut self, path: &Path, contents: &str) -> io::Result<()> {
-        let path = normalize(path);
+    fn write_file(
+        &mut self,
+        path: &Path,
+        contents: &str,
+        beneath: Option<&Path>,
+    ) -> io::Result<()> {
+        let path = fake_beneath(path, beneath)?;
         match path.parent() {
             Some(parent) if self.is_dir(parent) && !self.is_dir(&path) => {
                 self.files.insert(path, contents.to_string());

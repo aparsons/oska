@@ -44,6 +44,8 @@ pub mod codes {
     pub const TEST_FAILED: &str = "P0013";
     /// `Env.secret` asked for a variable the environment does not set.
     pub const MISSING_SECRET: &str = "P0020";
+    /// Calls nested deeper than the interpreter allows: runaway recursion.
+    pub const CALL_DEPTH_EXCEEDED: &str = "P0021";
 
     /// Every code, in the order `docs/runtime.md` lists them.
     pub const ALL: &[&str] = &[
@@ -60,6 +62,7 @@ pub mod codes {
         ASSERT_NE_FAILED,
         TEST_FAILED,
         MISSING_SECRET,
+        CALL_DEPTH_EXCEEDED,
     ];
 }
 

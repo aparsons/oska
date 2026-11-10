@@ -8,41 +8,37 @@
 
 use std::rc::Rc;
 
+use oska_check::builtins;
 use oska_syntax::Span;
 
 use crate::host::Host;
 use crate::interp::Interpreter;
-use crate::intrinsics::{HigherOrder, Intrinsic};
+use crate::intrinsics::Intrinsic::{HigherOrder, Plain};
+use crate::intrinsics::Table;
 use crate::panics::Panic;
 use crate::value::Value;
 
-/// Every trait intrinsic that needs only its arguments, by qualified
-/// name.
-pub const INTRINSICS: &[(&str, Intrinsic)] = &[
+/// Every trait intrinsic, by qualified name.
+pub const INTRINSICS: Table = &[
     // `()` is `Eq` without an impl: generic code compares it by its tag.
-    ("().eq", same),
-    ("Bool.eq", same),
-    ("I16.eq", same),
-    ("I32.eq", same),
-    ("I64.eq", same),
-    ("I8.eq", same),
-    ("Int.eq", same),
-    ("IoError.eq", same),
-    ("IoError.to_string", io_error_to_string),
-    ("Path.eq", same),
-    ("String.eq", same),
-    ("U16.eq", same),
-    ("U32.eq", same),
-    ("U64.eq", same),
-    ("U8.eq", same),
-];
-
-/// Every trait intrinsic that calls back into the program, by qualified
-/// name.
-pub const HIGHER_ORDER: &[(&str, HigherOrder)] = &[
-    ("List.eq", items_eq),
-    ("Option.eq", items_eq),
-    ("Result.eq", items_eq),
+    ("().eq", Plain(same)),
+    ("Bool.eq", Plain(same)),
+    ("I16.eq", Plain(same)),
+    ("I32.eq", Plain(same)),
+    ("I64.eq", Plain(same)),
+    ("I8.eq", Plain(same)),
+    ("Int.eq", Plain(same)),
+    ("IoError.eq", Plain(same)),
+    ("IoError.to_string", Plain(io_error_to_string)),
+    ("Path.eq", Plain(same)),
+    ("String.eq", Plain(same)),
+    ("U16.eq", Plain(same)),
+    ("U32.eq", Plain(same)),
+    ("U64.eq", Plain(same)),
+    ("U8.eq", Plain(same)),
+    ("List.eq", HigherOrder(items_eq)),
+    ("Option.eq", HigherOrder(items_eq)),
+    ("Result.eq", HigherOrder(items_eq)),
 ];
 
 /// `eq(self, other)` for a type whose values are equal exactly when
@@ -90,7 +86,7 @@ fn items_eq(
     }
     for (l, r) in lhs.iter().zip(rhs.iter()) {
         if !interp
-            .call_trait("Eq", "eq", l.clone(), vec![r.clone()], span)?
+            .call_trait(builtins::EQ_EQ, l.clone(), vec![r.clone()], span)?
             .as_bool()
         {
             return Ok(Value::Bool(false));

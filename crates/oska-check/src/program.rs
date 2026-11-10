@@ -23,12 +23,14 @@
 //!    body is checked.
 //! 3. Lower the AST node in `lower::Lowering::expr` (or `stmt`), which
 //!    turns anything it does not know yet into [`ExprKind::Unsupported`].
-//! 4. Evaluate it in each backend: in `oska-run`, `interp.rs`, and let
-//!    `support.rs` walk into it, since it refuses (`E0380`) a program with
-//!    an `Unsupported` node or a call it cannot make.
+//! 4. Let [`walk`] reach into it, so every pass over the tree, such as
+//!    `oska-run`'s refusal (`E0380`) of a program with an `Unsupported`
+//!    node or a call it cannot make, sees what it holds.
+//! 5. Evaluate it in each backend: in `oska-run`, `interp.rs`.
 
 use std::collections::BTreeMap;
-use std::rc::Rc;
+use std::ops::ControlFlow;
+use std::sync::Arc;
 
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::Span;
@@ -116,8 +118,9 @@ pub enum ExprKind {
     Str(String),
     /// An interpolated string: its parts, concatenated.
     Interpolated(Vec<Part>),
-    /// An integer literal, negated when written with a leading `-`.
-    Int(i128),
+    /// An integer literal, negated when written with a leading `-`, of
+    /// the integer type the checker gave it.
+    Int(i128, IntType),
     Bool(bool),
     /// A binary operator. `int` is the operands' integer type for
     /// arithmetic (`+ - * / %`), whose result is checked against it, and
@@ -154,9 +157,10 @@ pub enum ExprKind {
         base: Box<Expr>,
         index: usize,
     },
-    /// A closure, `|params| body`. Evaluating it captures the frame's
-    /// slots and receiver as they are, by value.
-    Closure(Rc<Closure>),
+    /// A closure, `|params| body`. Evaluating it captures, by value, the
+    /// slots the body reads from the enclosing frame, and the receiver
+    /// when it reads `self`.
+    Closure(Arc<Closure>),
     /// A call of a function value, such as a closure held in a local.
     CallValue {
         callee: Box<Expr>,
@@ -217,9 +221,10 @@ pub enum ExprKind {
     /// `scope |s| { ... }`. The handle `s` takes the next slot, for the
     /// body to see. The body is a block.
     Scope(Box<Expr>),
-    /// Something the checked program cannot express yet. A backend
-    /// reports it when it is reached.
-    Unsupported,
+    /// Something the checked program cannot express yet, named as a
+    /// refusal names it, such as "a `From`-bound conversion". A backend
+    /// refuses a program that has one.
+    Unsupported(String),
 }
 
 /// A statement.
@@ -259,13 +264,24 @@ pub enum Stmt {
 
 /// A closure's code.
 ///
-/// Its body sees the slots in scope where the closure was written, by
-/// the same numbers, then its parameters: so a closure value carries the
-/// slots it captured, and a call pushes each argument after them.
+/// Its body numbers slots as the enclosing frame does where the closure
+/// was written, then its parameters from [`Closure::height`] on. A
+/// closure value carries only the slots in [`Closure::captures`]; a call
+/// puts each back at its number, below `height`, and pushes each argument
+/// after them. The other slots below `height` are never read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Closure {
     /// Whether each parameter takes a slot: one named `_` takes none.
     pub params: Vec<bool>,
+    /// The slots of the enclosing frame the body reads, a closure inside
+    /// it included, in ascending order: what the checker found it
+    /// captures.
+    pub captures: Vec<usize>,
+    /// Whether the body reads `self`, the enclosing method's receiver.
+    pub captures_self: bool,
+    /// How many slots were in scope where the closure was written: the
+    /// first parameter's slot.
+    pub height: usize,
     pub body: Expr,
 }
 
@@ -331,13 +347,86 @@ pub struct Construct {
     pub variant: Option<String>,
 }
 
-/// An integer type, with its inclusive range.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IntType {
-    /// Its name, such as `Int` or `U8`.
-    pub name: String,
-    pub min: i128,
-    pub max: i128,
+/// An integer type: `Int`, or a sized one. The one list of the
+/// language's integer types and their ranges, for the checker and every
+/// backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IntType {
+    Int,
+    I8,
+    I16,
+    I32,
+    I64,
+    U8,
+    U16,
+    U32,
+    U64,
+}
+
+impl IntType {
+    /// Every integer type, `Int` first.
+    pub const ALL: [IntType; 9] = [
+        IntType::Int,
+        IntType::I8,
+        IntType::I16,
+        IntType::I32,
+        IntType::I64,
+        IntType::U8,
+        IntType::U16,
+        IntType::U32,
+        IntType::U64,
+    ];
+
+    /// Its name, such as `Int` or `U8`: also its runtime type tag.
+    pub fn name(self) -> &'static str {
+        match self {
+            IntType::Int => "Int",
+            IntType::I8 => "I8",
+            IntType::I16 => "I16",
+            IntType::I32 => "I32",
+            IntType::I64 => "I64",
+            IntType::U8 => "U8",
+            IntType::U16 => "U16",
+            IntType::U32 => "U32",
+            IntType::U64 => "U64",
+        }
+    }
+
+    /// The integer type named `name`.
+    pub fn named(name: &str) -> Option<IntType> {
+        IntType::ALL.into_iter().find(|t| t.name() == name)
+    }
+
+    /// Whether it is a sized integer type, `I8` to `U64`, rather than
+    /// `Int`.
+    pub fn is_sized(self) -> bool {
+        self != IntType::Int
+    }
+
+    /// The smallest value of the type.
+    pub fn min(self) -> i128 {
+        match self {
+            IntType::Int | IntType::I64 => i64::MIN.into(),
+            IntType::I8 => i8::MIN.into(),
+            IntType::I16 => i16::MIN.into(),
+            IntType::I32 => i32::MIN.into(),
+            IntType::U8 | IntType::U16 | IntType::U32 | IntType::U64 => 0,
+        }
+    }
+
+    /// The largest value of the type.
+    pub fn max(self) -> i128 {
+        match self {
+            IntType::Int | IntType::I64 => i64::MAX.into(),
+            IntType::I8 => i8::MAX.into(),
+            IntType::I16 => i16::MAX.into(),
+            IntType::I32 => i32::MAX.into(),
+            IntType::U8 => u8::MAX.into(),
+            IntType::U16 => u16::MAX.into(),
+            IntType::U32 => u32::MAX.into(),
+            IntType::U64 => u64::MAX.into(),
+        }
+    }
 }
 
 /// What a call reaches.
@@ -358,4 +447,158 @@ pub enum Callee {
     /// intrinsic `Tag.method` of a prelude implementation. Only a trait
     /// without generics is called this way.
     Trait { trait_name: String, method: String },
+}
+
+/// What a [`walk`] meets.
+#[derive(Debug, Clone, Copy)]
+pub enum Visit<'p> {
+    /// An expression, before anything inside it.
+    Expr(&'p Expr),
+    /// What a node calls, with the span the call is reported at: a call's
+    /// callee, a `?`'s conversion, a function used as a value, or an
+    /// interpolation hole's `Display`.
+    Callee(&'p Callee, Span),
+}
+
+/// Visit `expr` and everything inside it, in the order it is evaluated:
+/// each expression before its parts, a node's callee before its
+/// arguments, and the statements, patterns, guards, and closure bodies
+/// within. Stops at the first [`ControlFlow::Break`], and returns it.
+///
+/// Every pass over the checked program walks it with this, so a new node
+/// kind is reached everywhere by adding it here.
+pub fn walk<'p, B>(
+    expr: &'p Expr,
+    visit: &mut impl FnMut(Visit<'p>) -> ControlFlow<B>,
+) -> ControlFlow<B> {
+    visit(Visit::Expr(expr))?;
+    match &expr.kind {
+        ExprKind::Unit
+        | ExprKind::Str(_)
+        | ExprKind::Int(..)
+        | ExprKind::Bool(_)
+        | ExprKind::Local(_)
+        | ExprKind::SelfValue
+        | ExprKind::Unsupported(_) => ControlFlow::Continue(()),
+        ExprKind::Interpolated(parts) => {
+            for part in parts {
+                if let Part::Hole { value, display } = part {
+                    visit(Visit::Callee(display, value.span))?;
+                    walk(value, visit)?;
+                }
+            }
+            ControlFlow::Continue(())
+        }
+        ExprKind::Binary { lhs, rhs, .. }
+        | ExprKind::Range {
+            start: lhs,
+            end: rhs,
+        } => {
+            walk(lhs, visit)?;
+            walk(rhs, visit)
+        }
+        ExprKind::Neg { operand, .. }
+        | ExprKind::Not(operand)
+        | ExprKind::Scope(operand)
+        | ExprKind::Field { base: operand, .. } => walk(operand, visit),
+        ExprKind::Try { operand, convert } => {
+            if let Some(convert) = convert {
+                visit(Visit::Callee(convert, expr.span))?;
+            }
+            walk(operand, visit)
+        }
+        ExprKind::FnValue(target) => visit(Visit::Callee(target, expr.span)),
+        ExprKind::Construct { fields: items, .. } | ExprKind::List(items) => walk_all(items, visit),
+        ExprKind::Closure(closure) => walk(&closure.body, visit),
+        ExprKind::CallValue { callee, args } => {
+            walk(callee, visit)?;
+            walk_all(args, visit)
+        }
+        ExprKind::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            walk(cond, visit)?;
+            walk(then_branch, visit)?;
+            match else_branch {
+                Some(else_branch) => walk(else_branch, visit),
+                None => ControlFlow::Continue(()),
+            }
+        }
+        ExprKind::Call { callee, args } | ExprKind::MutatingCall { callee, args, .. } => {
+            visit(Visit::Callee(callee, expr.span))?;
+            walk_all(args, visit)
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            walk(scrutinee, visit)?;
+            for arm in arms {
+                walk_pattern(&arm.pattern, visit)?;
+                if let Some(guard) = &arm.guard {
+                    walk(guard, visit)?;
+                }
+                walk(&arm.body, visit)?;
+            }
+            ControlFlow::Continue(())
+        }
+        ExprKind::Block { stmts, value } => {
+            for stmt in stmts {
+                walk_stmt(stmt, visit)?;
+            }
+            match value {
+                Some(value) => walk(value, visit),
+                None => ControlFlow::Continue(()),
+            }
+        }
+    }
+}
+
+fn walk_all<'p, B>(
+    exprs: &'p [Expr],
+    visit: &mut impl FnMut(Visit<'p>) -> ControlFlow<B>,
+) -> ControlFlow<B> {
+    for expr in exprs {
+        walk(expr, visit)?;
+    }
+    ControlFlow::Continue(())
+}
+
+fn walk_pattern<'p, B>(
+    pattern: &'p Pattern,
+    visit: &mut impl FnMut(Visit<'p>) -> ControlFlow<B>,
+) -> ControlFlow<B> {
+    match pattern {
+        Pattern::Wildcard | Pattern::Bind => ControlFlow::Continue(()),
+        Pattern::Literal(literal) => walk(literal, visit),
+        Pattern::Construct { fields, .. } => {
+            for field in fields {
+                walk_pattern(field, visit)?;
+            }
+            ControlFlow::Continue(())
+        }
+    }
+}
+
+fn walk_stmt<'p, B>(
+    stmt: &'p Stmt,
+    visit: &mut impl FnMut(Visit<'p>) -> ControlFlow<B>,
+) -> ControlFlow<B> {
+    match stmt {
+        Stmt::Expr(value) | Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
+            walk(value, visit)
+        }
+        Stmt::Return(value) => match value {
+            Some(value) => walk(value, visit),
+            None => ControlFlow::Continue(()),
+        },
+        Stmt::Break | Stmt::Continue => ControlFlow::Continue(()),
+        Stmt::While { cond, body } => {
+            walk(cond, visit)?;
+            walk(body, visit)
+        }
+        Stmt::For { iter, body, .. } => {
+            walk(iter, visit)?;
+            walk(body, visit)
+        }
+    }
 }

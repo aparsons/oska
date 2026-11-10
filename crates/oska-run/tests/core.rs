@@ -282,15 +282,84 @@ fn a_main_that_returns_unit_exits_with_code_0() {
 
 #[test]
 fn a_program_using_something_not_yet_supported_is_refused_with_e0380() {
-    // Every prelude function now runs, so the example is generic dispatch
-    // to a sized integer's own impl, which type tags cannot tell apart.
+    // Every prelude function now runs, and sized integers dispatch by
+    // their own tags, so the example is a generic trait's method.
     let src = program(
-        "trait Name {\n    fn name(self) -> String\n}\n\n\
-         impl Name for Int {\n    fn name(self) -> String { \"int\" }\n}\n\n\
-         impl Name for U8 {\n    fn name(self) -> String { \"u8\" }\n}\n\n\
-         fn show<T: Name>(x: T) -> Untrusted<String> { x.name() }",
-        "    let b: U8 = 3\n    io.println(show(b))",
+        "trait Pair<T> {\n    fn pair(self, t: T) -> Int\n}\n\
+         struct P { n: Int }\n\
+         impl Pair<Int> for P {\n    fn pair(self, t: Int) -> Int { t }\n}\n\
+         fn use_it<T: Pair<Int>>(x: T) -> Int { x.pair(1) }",
+        "    let n = use_it(P(n: 1))\n    Ok(())",
     );
     assert_refused(&src, "E0380");
     assert_eq!(common::run_fake(&src, &[]).exit_code, 2);
+}
+
+/// Assert that `src` is refused with `E0380`, with exactly `message`,
+/// spanning `spanned_text`.
+fn assert_unsupported(src: &str, message: &str, spanned_text: &str) {
+    assert_refused(src, "E0380");
+    let outcome = common::run_fake(src, &[]);
+    let refusal = &outcome.diagnostics[0];
+    assert_eq!(refusal.message, message);
+    assert_eq!(&src[refusal.span.start..refusal.span.end], spanned_text);
+}
+
+#[test]
+fn e0380_names_a_from_bound_conversion() {
+    assert_unsupported(
+        &program(
+            "struct AppError { m: String }\n\
+             impl From<IoError> for AppError {\n    fn from(e: IoError) -> AppError { AppError(m: \"io\") }\n}\n\
+             fn conv<E: From<IoError>>(r: Result<Int, IoError>) -> Result<Int, E> {\n    let x = r?\n    Ok(x)\n}",
+            "    let r: Result<Int, AppError> = conv(Ok(1))\n    Ok(())",
+        ),
+        "the interpreter cannot run a `From`-bound conversion yet",
+        "r?",
+    );
+}
+
+#[test]
+fn e0380_names_a_constructor_used_as_a_value() {
+    assert_unsupported(
+        &main_with("    let mk = Some\n    let x: Option<Int> = mk(1)\n    Ok(())"),
+        "the interpreter cannot run a constructor used as a function value yet",
+        "Some",
+    );
+}
+
+#[test]
+fn e0380_names_a_generic_traits_method() {
+    assert_unsupported(
+        &program(
+            "trait Pair<T> {\n    fn pair(self, t: T) -> Int\n}\n\
+             struct P { n: Int }\n\
+             impl Pair<Int> for P {\n    fn pair(self, t: Int) -> Int { t }\n}\n\
+             fn use_it<T: Pair<Int>>(x: T) -> Int { x.pair(1) }",
+            "    let n = use_it(P(n: 1))\n    Ok(())",
+        ),
+        "the interpreter cannot run a call of `pair`, a method of the generic trait `Pair`, yet",
+        "x.pair(1)",
+    );
+}
+
+// ---- Deep recursion -------------------------------------------------------------
+
+/// A program whose `main` recurses `depth` calls deep and prints the
+/// depth it reached.
+fn recursing(depth: u32) -> String {
+    program(
+        "fn down(n: Int) -> Int {\n    if n == 0 { 0 } else { 1 + down(n - 1) }\n}",
+        &format!("    let d = down({depth})\n    io.println(\"{{d}}\")"),
+    )
+}
+
+#[test]
+fn deep_but_bounded_recursion_runs() {
+    assert_runs(&recursing(20_000), &[], "20000\n");
+}
+
+#[test]
+fn runaway_recursion_panics_with_p0021_instead_of_crashing() {
+    assert_panics(&recursing(1_000_000), "P0021", "down(n - 1)");
 }

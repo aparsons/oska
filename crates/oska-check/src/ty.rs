@@ -5,6 +5,8 @@
 
 use std::fmt;
 
+use crate::program::IntType;
+
 /// A type, as the body checker sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
@@ -93,19 +95,6 @@ pub const DISPLAY: &str = "Display";
 pub const SECRET: &str = "Secret";
 /// The name of `Self`, inside a trait or `impl`.
 pub const SELF: &str = "Self";
-
-/// The integer types and their ranges.
-const INTEGERS: &[(&str, i128, i128)] = &[
-    (INT, i64::MIN as i128, i64::MAX as i128),
-    ("I8", i8::MIN as i128, i8::MAX as i128),
-    ("I16", i16::MIN as i128, i16::MAX as i128),
-    ("I32", i32::MIN as i128, i32::MAX as i128),
-    ("I64", i64::MIN as i128, i64::MAX as i128),
-    ("U8", 0, u8::MAX as i128),
-    ("U16", 0, u16::MAX as i128),
-    ("U32", 0, u32::MAX as i128),
-    ("U64", 0, u64::MAX as i128),
-];
 
 impl Ty {
     /// A named type without arguments, such as `Int`.
@@ -223,13 +212,14 @@ impl Ty {
         }
     }
 
+    /// The integer type this is, or `None` for any other type.
+    pub fn integer_type(&self) -> Option<IntType> {
+        IntType::named(self.head()?)
+    }
+
     /// The inclusive range of an integer type, or `None` for any other.
     pub fn integer_range(&self) -> Option<(i128, i128)> {
-        let name = self.head()?;
-        INTEGERS
-            .iter()
-            .find(|(n, _, _)| *n == name)
-            .map(|&(_, min, max)| (min, max))
+        self.integer_type().map(|t| (t.min(), t.max()))
     }
 
     pub fn is_integer(&self) -> bool {
