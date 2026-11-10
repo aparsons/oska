@@ -1,10 +1,10 @@
 # Oska guides
 
-Task-oriented guides for the `oskac` toolchain. Oska is pre-alpha: these pages describe what the current build does, and each part that is planned for the first release (v0.1.0) is marked **Available from v0.1.0**. The programs and outputs on these pages are checked against the real toolchain by `cargo test`.
+Task-oriented guides for the `oskac` toolchain. Oska is pre-alpha: these pages describe what the current build does, which is v0.1.0 or later. The programs and outputs on these pages are checked against the real toolchain by `cargo test`.
 
 ## Start here
 
-1. [Install](install.md): build from source today, one-line installers from v0.1.0.
+1. [Install](install.md): one-line installers for the v0.1.0 release, or build from source.
 2. [Quickstart](quickstart.md): write, check, run, and test a program.
 3. [Language tour](language-tour.md): the syntax and types in one sitting.
 

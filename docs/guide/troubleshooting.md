@@ -50,10 +50,6 @@ In a signature, an unknown type is `E0200` with a "did you mean" fix. In a `let`
 
 After a [source build](install.md#build-from-source), put `target/release/oskac` on your `PATH`. After an installer, put `~/.oska/bin` on it.
 
-### The documentation says a command exists, but it does not
-
-Anything marked **Available from v0.1.0** is the decided design for the first release and is not in the current build.
-
 ## By code
 
 ### Syntax: `E00xx` and `E01xx`

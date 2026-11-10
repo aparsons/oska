@@ -1,10 +1,10 @@
 # Install
 
-Oska is pre-alpha. Today you build `oskac`, the compiler and runner, from source. The one-line installers and signed binaries arrive with **v0.1.0**, the first release, and are described below as the decided design.
+Oska is pre-alpha. **v0.1.0** is the first release. You can install `oskac`, the compiler and runner, from a signed binary with a one-line installer, or build it from source.
 
 ## Build from source
 
-This works today. You need a stable Rust toolchain, version 1.75 or newer, and a checkout of the repository:
+You need a stable Rust toolchain, version 1.75 or newer, and a checkout of the repository:
 
 ```sh
 cargo build --release -p oskac
@@ -26,17 +26,15 @@ It prints `oskac` and the version on one line. A build from this checkout prints
 
 ## One-line installers
 
-> **Available from v0.1.0.** Everything in this section is the decided design for the first release. It is not published yet, so the commands below will not work until v0.1.0 is cut. When it ships, delete this notice and the `planned` marks on the code blocks.
-
 On Linux and macOS:
 
-```sh planned
+```sh
 curl -fsSL https://oskalang.dev/install.sh | sh
 ```
 
 On Windows, in PowerShell:
 
-```powershell planned
+```powershell
 irm https://oskalang.dev/install.ps1 | iex
 ```
 
@@ -50,13 +48,13 @@ What the installers do:
 
 To pass options through the pipe:
 
-```sh planned
+```sh
 curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.1.0 --json
 ```
 
 `iex` cannot pass options, so in PowerShell run the script as a script block:
 
-```powershell planned
+```powershell
 & ([scriptblock]::Create((irm https://oskalang.dev/install.ps1))) --version 0.1.0 --json
 ```
 
@@ -84,7 +82,7 @@ A failed run prints `{"ok": false, "error": "<code>", "message": "..."}` and exi
 | `checksum_mismatch` | The binary does not match `SHA256SUMS`. |
 | `install_failed` | The binary could not be written into place. |
 
-The binaries are published on oskalang.dev, together with `SHA256SUMS` and its signature, for Linux x86_64 and aarch64, macOS x86_64 and aarch64, and Windows x86_64.
+The binaries are published on oskalang.dev, together with `SHA256SUMS` and its signature, for Linux x86_64 and aarch64, macOS x86_64 and aarch64, and Windows x86_64. The Linux binaries are built against glibc; they do not run on musl systems such as Alpine, where you can build from source instead.
 
 ### Verify the installation
 
@@ -104,4 +102,4 @@ Delete `~/.oska`, which holds `bin/oskac` and a `version` file recording what th
 
 ## Set up an AI agent
 
-> **Available from v0.1.0.** The site is planned to publish a copy-and-paste prompt that has an AI coding agent install Oska, verify the toolchain, and configure your project. Until then, the [agent guide](agent-guide.md) describes the loop the prompt sets up.
+The site publishes a copy-and-paste prompt that has an AI coding agent install Oska, verify the toolchain, and configure your project. It is at the top of this page and at `https://oskalang.dev/agent-setup.md` as plain Markdown. The [agent guide](agent-guide.md) describes the loop the prompt sets up.

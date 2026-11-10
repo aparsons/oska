@@ -144,7 +144,7 @@ An or-pattern such as `A | B`.
 
 **Machine-applicable fix:** none.
 
-Listed in the [checker notes](/checker.md#e0140). `oskac explain E0140` prints this entry offline.
+Listed in the [checker notes](/checker.md). `oskac explain E0140` prints this entry offline.
 
 ---
 
@@ -156,4 +156,4 @@ Division by zero, see [Tests](/runtime.md#tests). Spans the operation.
 
 **Machine-applicable fix:** none.
 
-Listed in the [runtime notes](/runtime.md#p0004). `oskac explain P0004` prints this entry offline.
+Listed in the [runtime notes](/runtime.md). `oskac explain P0004` prints this entry offline.

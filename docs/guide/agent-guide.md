@@ -135,10 +135,10 @@ Put the loop in the project's instructions file, such as `AGENTS.md`:
 - Match on the diagnostic `code`, not the message. `oskac explain <code>` explains a code offline, with an example and its fix. The same entries are at `https://oskalang.dev/codes/<code>` and in `https://oskalang.dev/codes.json`.
 ```
 
-## Coming in v0.1.0
+## Files for agents
 
-> **Available from v0.1.0.** These parts of the decided design are not in the current build. When each ships, replace its line here with the real command and remove this notice.
+These are published on oskalang.dev and are produced from the same docs as the pages you read.
 
-- **Files for agents:** `llms.txt` and `llms-full.txt`, and a `.md` copy of every page.
+- **`llms.txt` and Markdown copies:** `https://oskalang.dev/llms.txt` lists the pages and `https://oskalang.dev/llms-full.txt` holds all of them in one file. Every page also has a Markdown copy at the same address with `.md` in place of `.html`.
 - **The installers' `--json` output** (see [install](install.md#one-line-installers)), so an agent can confirm that the checksum and signature verified.
 - **A copy-and-paste agent setup prompt** that installs Oska and configures a project with the loop above, at `https://oskalang.dev/agent-setup.md`. Along with it are an `AGENTS.md` template, a `CLAUDE.md` template, and an opt-in Claude Code hook that runs `oskac check --format=json` after an edit to a `.osk` file.

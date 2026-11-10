@@ -718,8 +718,14 @@ fn a_code_with_no_example_has_no_example_section_and_a_runtime_code_links_the_ru
         "{page}"
     );
     assert!(
-        page.contains("<a href=\"/runtime.html#p0004\">runtime notes</a>"),
+        page.contains("<a href=\"/runtime.html\">runtime notes</a>"),
         "{page}"
+    );
+    // A code with an example has a heading of its own to link to.
+    assert!(
+        site["codes/E0200.html"].contains("<a href=\"/checker.html#e0200\">checker notes</a>"),
+        "{}",
+        site["codes/E0200.html"]
     );
 }
 
@@ -1849,4 +1855,291 @@ fn the_script_says_so_when_the_clipboard_is_not_available() {
         return;
     };
     assert_eq!(result.get("label").str(), "Select the text and copy it");
+}
+
+// ---- Conformance of the real site (spec #70, ticket #79) --------------------------------
+//
+// These read the pages the way a crawler or a browser without JavaScript
+// would, on the repository's own docs. Together with
+// `the_real_docs_build_every_agent_output_with_no_dead_link` (every page
+// has a copy, every link between copies resolves) and
+// `crates/oskac/tests/catalog.rs` (every E and P code has a page), they
+// are the real-docs check of ticket #79. CI runs them with
+// `cargo test --all`.
+
+/// One start tag of a page: its element and its attributes, decoded.
+struct Tag {
+    element: String,
+    attributes: Vec<(String, String)>,
+}
+
+impl Tag {
+    fn attribute(&self, name: &str) -> Option<&str> {
+        self.attributes
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
+    }
+}
+
+/// The start tags of `page`, in order. Pages have passed
+/// [`assert_inert`], so every attribute is double-quoted.
+fn tags_of(page: &str) -> Vec<Tag> {
+    let mut tags = Vec::new();
+    let mut rest = page;
+    while let Some(open) = rest.find('<') {
+        rest = &rest[open + 1..];
+        let close = rest.find('>').expect("a tag that closes");
+        let inside = &rest[..close];
+        rest = &rest[close + 1..];
+        if inside.starts_with('/') || inside.starts_with('!') {
+            continue;
+        }
+        let element: String = inside
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .collect();
+        let mut attributes = Vec::new();
+        let mut text = inside[element.len()..].trim_start();
+        while let Some(eq) = text.find("=\"") {
+            let value_and_rest = &text[eq + 2..];
+            let end = value_and_rest.find('"').expect("an attribute that ends");
+            attributes.push((
+                text[..eq].to_string(),
+                decode_references(&value_and_rest[..end]),
+            ));
+            text = value_and_rest[end + 1..].trim_start();
+        }
+        tags.push(Tag {
+            element,
+            attributes,
+        });
+    }
+    tags
+}
+
+/// The real site: the repository's docs through the generator. It lacks
+/// the files `scripts/release/stage-site.sh` adds ([`STAGED`]).
+fn real_site() -> BTreeMap<String, String> {
+    let built = build(&real_inputs());
+    assert_succeeded(&built.outcome);
+    assert_site_inert(&built.site);
+    built.site
+}
+
+/// Files `stage-site.sh` publishes after the generator has run.
+const STAGED: &[&str] = &["install.sh", "install.ps1", "oska-release.pub"];
+
+/// The file in `site` that the URL `target`, found on the page `from`,
+/// names, or `None` if it names nothing the site publishes. `target` has
+/// no fragment.
+fn resolve(site: &BTreeMap<String, String>, from: &str, target: &str) -> Option<String> {
+    let target = target
+        .strip_prefix("https://oskalang.dev")
+        .unwrap_or(target);
+    let mut parts: Vec<&str> = if target.starts_with('/') {
+        Vec::new()
+    } else {
+        let mut dir: Vec<&str> = from.split('/').collect();
+        dir.pop();
+        dir
+    };
+    for part in target.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    let mut path = parts.join("/");
+    if target.ends_with('/') || target.is_empty() {
+        path = if path.is_empty() {
+            "index.html".to_string()
+        } else {
+            format!("{path}/index.html")
+        };
+    }
+    let published = site.contains_key(&path) || STAGED.contains(&path.as_str());
+    published.then_some(path)
+}
+
+/// The URL a tag links to or loads, if it does.
+fn url_of(tag: &Tag) -> Option<&str> {
+    match tag.element.as_str() {
+        "a" | "link" => tag.attribute("href"),
+        "img" | "script" => tag.attribute("src"),
+        _ => None,
+    }
+}
+
+#[test]
+fn every_link_in_every_real_page_goes_to_a_published_page_and_anchor() {
+    let site = real_site();
+    let mut checked = 0;
+    for (name, page) in site.iter().filter(|(n, _)| n.ends_with(".html")) {
+        for tag in tags_of(page) {
+            let Some(url) = url_of(&tag) else { continue };
+            if url.starts_with("mailto:")
+                || (url.starts_with("http") && !url.starts_with("https://oskalang.dev"))
+            {
+                continue;
+            }
+            let (path, fragment) = url.split_once('#').unwrap_or((url, ""));
+            let target = if path.is_empty() {
+                name.clone()
+            } else {
+                resolve(&site, name, path)
+                    .unwrap_or_else(|| panic!("{name} links to {url}, which is not published"))
+            };
+            checked += 1;
+            if fragment.is_empty() || !target.ends_with(".html") {
+                continue;
+            }
+            assert!(
+                tags_of(&site[&target])
+                    .iter()
+                    .any(|t| t.attribute("id") == Some(fragment)),
+                "{name} links to {url}, but {target} has no anchor `{fragment}`"
+            );
+        }
+    }
+    assert!(checked > 1000, "only {checked} links were checked");
+}
+
+/// The only origin pages may load anything from: Fontsource, at the
+/// pinned versions the CSP names.
+const ASSET_ALLOWLIST: &[&str] = &[
+    "https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/",
+    "https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/",
+];
+
+#[test]
+fn every_external_asset_is_on_the_allowlist_pinned_with_sri_and_named_by_the_csp() {
+    let site = real_site();
+    let mut assets = 0;
+    for (name, page) in site.iter().filter(|(n, _)| n.ends_with(".html")) {
+        let mut csp = None;
+        for tag in tags_of(page) {
+            if tag.element == "meta" && tag.attribute("http-equiv").is_some() {
+                csp = tag.attribute("content").map(str::to_string);
+            }
+            let rel = tag.attribute("rel");
+            let loads = tag.element != "a" && rel != Some("canonical") && rel != Some("alternate");
+            let Some(url) = url_of(&tag).filter(|u| loads && u.contains("://")) else {
+                continue;
+            };
+            assets += 1;
+            let Some(origin) = ASSET_ALLOWLIST.iter().find(|ok| url.starts_with(**ok)) else {
+                panic!("{name} loads {url}, which is not on the allowlist");
+            };
+            let integrity = tag.attribute("integrity").unwrap_or("");
+            let digest = integrity.strip_prefix("sha384-").unwrap_or("");
+            assert!(
+                digest.len() == 64
+                    && digest
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/'),
+                "{name}: {url} has no sha384 integrity: `{integrity}`"
+            );
+            assert!(
+                tag.attribute("crossorigin").is_some(),
+                "{name}: {url} has no crossorigin"
+            );
+            assert!(
+                csp.as_deref().is_some_and(|c| c.contains(origin)),
+                "{name}: the CSP does not name the origin of {url}"
+            );
+        }
+        // The CSP names no origin the allowlist does not.
+        for source in csp.expect("a CSP").split_whitespace() {
+            let source = source.trim_end_matches(';');
+            if source.starts_with("https://") || source.starts_with("http://") {
+                assert!(
+                    ASSET_ALLOWLIST.contains(&source),
+                    "{name}: the CSP allows {source}"
+                );
+            }
+        }
+    }
+    assert!(assets > 100, "only {assets} external assets were checked");
+    // The stylesheet and the search script load nothing of their own:
+    // no import, no `url(`, and, past the comment that names the site,
+    // no absolute URL.
+    for file in ["style.css", "search.js"] {
+        let text = &site[file];
+        let code = text.split_once('\n').map_or("", |(_, rest)| rest);
+        assert!(
+            !text.contains("@import")
+                && !text.contains("url(")
+                && !code.contains("http://")
+                && !code.contains("https://"),
+            "{file} names another origin"
+        );
+    }
+}
+
+#[test]
+fn every_real_page_reads_in_full_without_javascript() {
+    let site = real_site();
+    // 1. The only scripts are the search enhancement and the JSON-LD
+    //    data block, which does not run.
+    // 2. The only thing hidden until a script shows it is a copy button;
+    //    the text it copies is on the page.
+    // 3. There is no form or input for a script to drive.
+    for (name, page) in site.iter().filter(|(n, _)| n.ends_with(".html")) {
+        let tags = tags_of(page);
+        for tag in &tags {
+            if tag.element == "script" {
+                assert!(
+                    tag.attribute("src") == Some("/search.js")
+                        || tag.attribute("type") == Some("application/ld+json"),
+                    "{name}: an unexpected script {:?}",
+                    tag.attributes
+                );
+            }
+            if tag.attribute("hidden").is_some() {
+                let target = tag.attribute("data-copy").unwrap_or("");
+                assert!(
+                    tag.element == "button"
+                        && tags
+                            .iter()
+                            .any(|t| t.element == "pre" && t.attribute("id") == Some(target)),
+                    "{name}: `<{}>` is hidden, and not a copy button for text on the page",
+                    tag.element
+                );
+            }
+            assert!(
+                !matches!(tag.element.as_str(), "form" | "input" | "noscript"),
+                "{name}: `<{}>`",
+                tag.element
+            );
+        }
+    }
+    // 4. Every page can be reached from the home page by following links.
+    let mut reached = std::collections::BTreeSet::from(["index.html".to_string()]);
+    let mut queue = vec!["index.html".to_string()];
+    while let Some(name) = queue.pop() {
+        for tag in tags_of(&site[&name]).iter().filter(|t| t.element == "a") {
+            let href = tag.attribute("href").unwrap_or("");
+            let path = href.split('#').next().unwrap_or("");
+            if path.is_empty() || path.starts_with("http") || path.starts_with("mailto:") {
+                continue;
+            }
+            if let Some(target) = resolve(&site, &name, path) {
+                if target.ends_with(".html") && reached.insert(target.clone()) {
+                    queue.push(target);
+                }
+            }
+        }
+    }
+    let unreachable: Vec<&String> = site
+        .keys()
+        .filter(|k| k.ends_with(".html") && !reached.contains(*k))
+        .collect();
+    assert!(
+        unreachable.is_empty(),
+        "not linked from anywhere: {unreachable:?}"
+    );
 }

@@ -66,6 +66,7 @@ jobs:
     needs: deploy
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: https://oskalang.dev/ answers 200
         run: |
           status=$(curl --silent --show-error --output /dev/null \
@@ -74,3 +75,16 @@ jobs:
             https://oskalang.dev/) || true
           echo "https://oskalang.dev/ answered ${status:-nothing}"
           test "$status" = 200
+      - name: the files agents and installers fetch are published
+        run: |
+          for path in install.sh install.ps1 oska-release.pub llms.txt llms-full.txt \
+            sitemap.xml robots.txt latest.json codes.json search.json agent-setup.md; do
+            curl --silent --show-error --fail --location --output /dev/null \
+              --retry 6 --retry-delay 10 --retry-all-errors \
+              "https://oskalang.dev/$path"
+            echo "https://oskalang.dev/$path answers"
+          done
+      # Once a release is published, install it the way the guide says and
+      # run it. With no release yet, this passes and says so.
+      - name: the published one-line install works
+        run: scripts/release/smoke-published.sh https://oskalang.dev

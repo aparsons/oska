@@ -529,3 +529,24 @@ fn relative_links_between_pages_resolve() {
         }
     }
 }
+
+#[test]
+fn no_guide_still_waits_for_v0_1_0() {
+    // v0.1.0 is the release the install, agent-setup, `llms.txt`, and
+    // `explain` passages were waiting for. Once it is out, no page may
+    // still say a feature is "Available from v0.1.0" or show a block as
+    // `planned`.
+    for page in guide_pages() {
+        let text = read(&page);
+        assert!(
+            !text.contains("Available from v0.1.0") && !text.contains("Coming in v0.1.0"),
+            "{}: still has a v0.1.0 placeholder",
+            page.display()
+        );
+        assert!(
+            blocks_of(&page).iter().all(|b| !b.has("planned")),
+            "{}: still has a `planned` block",
+            page.display()
+        );
+    }
+}
