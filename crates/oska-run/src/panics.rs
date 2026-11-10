@@ -37,6 +37,9 @@ pub mod codes {
     /// A `requires` clause of the function called was false: the caller
     /// broke the contract.
     pub const PRECONDITION_VIOLATED: &str = "P0006";
+    /// An `ensures` clause of the function that returned was false: the
+    /// function broke its promise.
+    pub const POSTCONDITION_VIOLATED: &str = "P0007";
     /// `t.assert(cond)` was given `false`: the test fails.
     pub const ASSERT_FAILED: &str = "P0010";
     /// `t.assert_eq(actual, expected)` was given two values that differ.
@@ -69,6 +72,7 @@ pub mod codes {
         DIVISION_BY_ZERO,
         SPAWN_ON_FINISHED_SCOPE,
         PRECONDITION_VIOLATED,
+        POSTCONDITION_VIOLATED,
         ASSERT_FAILED,
         ASSERT_EQ_FAILED,
         ASSERT_NE_FAILED,

@@ -51,6 +51,19 @@ pub struct Program {
     pub imports: Vec<(String, Span)>,
     /// Every `test` block, in source order.
     pub tests: Vec<Test>,
+    /// The byte offset each line of the source starts at, from which
+    /// [`Program::line_col`] finds the line and column of a span.
+    pub line_starts: Vec<usize>,
+}
+
+impl Program {
+    /// The line and column, both counted from 1, of the byte `offset` in
+    /// the source. The column counts bytes.
+    pub fn line_col(&self, offset: usize) -> (usize, usize) {
+        let line = self.line_starts.partition_point(|&start| start <= offset);
+        let start = line.checked_sub(1).map_or(0, |i| self.line_starts[i]);
+        (line.max(1), offset - start + 1)
+    }
 }
 
 /// A `test` block.
@@ -110,6 +123,10 @@ pub struct Contracts {
     /// the arguments and before the body, and the call panics with
     /// `P0006` at the first that is false.
     pub requires: Vec<Clause>,
+    /// The `ensures` clauses, in source order. They are evaluated
+    /// whenever the call returns, on every path, and the call panics with
+    /// `P0007` at the first that is false.
+    pub ensures: Vec<Ensures>,
 }
 
 impl Function {
@@ -126,13 +143,16 @@ impl Function {
 impl Contracts {
     /// Whether there is no clause to evaluate.
     pub fn is_empty(&self) -> bool {
-        self.requires.is_empty()
+        self.requires.is_empty() && self.ensures.is_empty()
     }
 
     /// The condition of every clause, in the order a call evaluates
     /// them.
     pub fn conditions(&self) -> impl Iterator<Item = &Expr> {
-        self.requires.iter().map(|clause| &clause.cond)
+        self.requires
+            .iter()
+            .chain(self.ensures.iter().map(|ensures| &ensures.clause))
+            .map(|clause| &clause.cond)
     }
 }
 
@@ -145,6 +165,16 @@ pub struct Clause {
     pub text: String,
     /// The whole clause, its keyword included.
     pub span: Span,
+}
+
+/// An `ensures |r| cond` clause.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ensures {
+    /// The condition, its text and its span, keyword and `|r|` included.
+    pub clause: Clause,
+    /// Whether `r` takes a slot in the clauses' frame, the next after the
+    /// parameters that take one. `|_|` takes none.
+    pub binds: bool,
 }
 
 /// A function parameter.
@@ -300,7 +330,12 @@ pub enum Stmt {
         value: Expr,
     },
     /// `return`, with `()` when no value is written.
-    Return(Option<Expr>),
+    Return {
+        value: Option<Expr>,
+        /// The whole statement, which a violated `ensures` names as the
+        /// return that broke it.
+        span: Span,
+    },
     Break,
     Continue,
     /// `while cond { body }`.
@@ -643,7 +678,7 @@ fn walk_stmt<'p, B>(
         Stmt::Expr(value) | Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
             walk(value, visit)
         }
-        Stmt::Return(value) => match value {
+        Stmt::Return { value, .. } => match value {
             Some(value) => walk(value, visit),
             None => ControlFlow::Continue(()),
         },

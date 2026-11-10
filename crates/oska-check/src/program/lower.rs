@@ -19,8 +19,8 @@ use oska_syntax::ast::{
 use oska_syntax::Span;
 
 use super::{
-    Arm, Callee, Clause, Closure, Construct, Contracts, Expr, ExprKind, Function, IntType, Param,
-    Part, Pattern, Place, Program, Stmt,
+    Arm, Callee, Clause, Closure, Construct, Contracts, Ensures, Expr, ExprKind, Function, IntType,
+    Param, Part, Pattern, Place, Program, Stmt,
 };
 use crate::items::{FnSig, Items};
 
@@ -95,7 +95,12 @@ pub fn module(src: &str, module: &Module, items: &Items, resolutions: &Resolutio
         resolutions,
         in_contract: Cell::new(false),
     };
-    let mut program = Program::default();
+    let mut program = Program {
+        line_starts: std::iter::once(0)
+            .chain(src.match_indices('\n').map(|(at, _)| at + 1))
+            .collect(),
+        ..Program::default()
+    };
     // Each trait the module declares, by name, for its default methods.
     let traits: HashMap<&str, &[Item]> = module
         .items
@@ -237,6 +242,14 @@ impl Lowering<'_> {
                 .iter()
                 .map(|clause| self.clause(&clause.cond, clause.span))
                 .collect(),
+            ensures: f
+                .ensures
+                .iter()
+                .map(|clause| Ensures {
+                    clause: self.clause(&clause.cond, clause.span),
+                    binds: clause.binding.name != "_",
+                })
+                .collect(),
         }
     }
 
@@ -293,7 +306,10 @@ impl Lowering<'_> {
                 kind: ExprKind::Unsupported("a `return` in a contract".to_string()),
                 span: stmt.span,
             }),
-            StmtKind::Return(value) => Stmt::Return(value.as_ref().map(|v| self.expr(v))),
+            StmtKind::Return(value) => Stmt::Return {
+                value: value.as_ref().map(|v| self.expr(v)),
+                span: stmt.span,
+            },
             StmtKind::Break => Stmt::Break,
             StmtKind::Continue => Stmt::Continue,
             StmtKind::While { cond, body } => Stmt::While {
