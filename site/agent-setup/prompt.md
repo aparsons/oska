@@ -53,7 +53,7 @@ Download each template below with `curl -fsSL` or your fetch tool and read it. A
 
 **3b. CLAUDE.md.** Only if I am using Claude Code. The template is https://oskalang.dev/agent-setup/CLAUDE.template.md, which points to `AGENTS.md`. If `CLAUDE.md` exists, add only its first line to it.
 
-**3c. The check-after-edit hook (optional, Claude Code only).** Ask me whether I want it, and do nothing if I do not say yes. It runs `oskac check --format=json` on a `.osk` file after Claude Code edits it, and it reads only the edit notification that Claude Code gives it. It sends nothing anywhere and approves no permission. If I say yes:
+**3c. The check-after-edit hook (optional, Claude Code only).** The hook is a POSIX shell script, so it works on Linux and macOS only: on Windows, skip this step and tell me it is not available there yet. Ask me whether I want it, and do nothing if I do not say yes. It runs `oskac check --format=json` on a `.osk` file after Claude Code edits it, and it reads only the edit notification that Claude Code gives it. It sends nothing anywhere and approves no permission. If I say yes:
 
 1. Show me https://oskalang.dev/agent-setup/oska-check.sh, and save it as `.claude/hooks/oska-check.sh` in this project.
 2. Show me the diff that merges https://oskalang.dev/agent-setup/claude-settings.json into the project's `.claude/settings.json` (the `hooks` key only; keep every other key), and apply it when I agree. Never edit `~/.claude/settings.json`.
