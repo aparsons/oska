@@ -30,7 +30,8 @@ use oska_syntax::{json_escape, Diagnostic, Span};
 
 use crate::host::{FakeHost, Host, Output};
 use crate::interp::Interpreter;
-use crate::intrinsics::{debug, HigherOrder, Intrinsic};
+use crate::intrinsics::Intrinsic::{HigherOrder, Plain};
+use crate::intrinsics::{debug, Table};
 use crate::panics::{codes, Panic};
 use crate::value::{Capability, Value};
 use crate::{on_interpreter_stack, support, unimplemented_module, UNSUPPORTED_EXIT_CODE};
@@ -371,18 +372,14 @@ impl Host for TestHost<'_> {
 
 // ---- `TestContext` intrinsics ------------------------------------------
 
-/// The `TestContext` methods that need only the host.
-pub const INTRINSICS: &[(&str, Intrinsic)] = &[
-    ("TestContext.assert", assert),
-    ("TestContext.fail", fail),
-    ("TestContext.printed", printed),
-];
-
-/// The `TestContext` methods that compare through `Eq`, which may be the
-/// program's own impl.
-pub const HIGHER_ORDER: &[(&str, HigherOrder)] = &[
-    ("TestContext.assert_eq", assert_eq),
-    ("TestContext.assert_ne", assert_ne),
+/// The `TestContext` methods: those that compare through `Eq`, which may
+/// be the program's own impl, call back into it.
+pub const INTRINSICS: Table = &[
+    ("TestContext.assert", Plain(assert)),
+    ("TestContext.fail", Plain(fail)),
+    ("TestContext.printed", Plain(printed)),
+    ("TestContext.assert_eq", HigherOrder(assert_eq)),
+    ("TestContext.assert_ne", HigherOrder(assert_ne)),
 ];
 
 /// `t.assert(cond)`: fails the test when `cond` is false.

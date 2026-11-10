@@ -1,7 +1,7 @@
 //! Intrinsics for data: the body-less methods of `List` and `String`.
 //!
 //! They are listed apart from the capability intrinsics in
-//! `intrinsics.rs`, which looks in both tables. A list is a
+//! `intrinsics.rs`, whose `lookup` searches every module's table. A list is a
 //! reference-counted vector (ADR 0001): reading one shares it.
 
 use std::rc::Rc;
@@ -10,31 +10,28 @@ use oska_syntax::Span;
 
 use crate::host::Host;
 use crate::interp::Interpreter;
-use crate::intrinsics::{HigherOrder, Intrinsic, MutatingIntrinsic};
+use crate::intrinsics::Intrinsic::{HigherOrder, Mutating, Plain};
+use crate::intrinsics::Table;
 use crate::panics::{codes, Panic};
 use crate::value::Value;
 
 /// Every data intrinsic, by qualified name.
-pub const INTRINSICS: &[(&str, Intrinsic)] = &[
-    ("List.at", list_at),
-    ("List.count", list_len),
-    ("List.get", list_get),
-    ("List.len", list_len),
-    ("List.new", list_new),
-    ("String.byte_len", string_byte_len),
-    ("String.contains", string_contains),
-    ("String.len", string_len),
-    ("String.lines", string_lines),
-    ("String.parse_int", string_parse_int),
-    ("String.split", string_split),
-    ("String.trim", string_trim),
+pub const INTRINSICS: Table = &[
+    ("List.at", Plain(list_at)),
+    ("List.count", Plain(list_len)),
+    ("List.get", Plain(list_get)),
+    ("List.len", Plain(list_len)),
+    ("List.new", Plain(list_new)),
+    ("String.byte_len", Plain(string_byte_len)),
+    ("String.contains", Plain(string_contains)),
+    ("String.len", Plain(string_len)),
+    ("String.lines", Plain(string_lines)),
+    ("String.parse_int", Plain(string_parse_int)),
+    ("String.split", Plain(string_split)),
+    ("String.trim", Plain(string_trim)),
+    ("List.map", HigherOrder(list_map)),
+    ("List.push", Mutating(list_push)),
 ];
-
-/// Every higher-order data intrinsic, by qualified name.
-pub const HIGHER_ORDER: &[(&str, HigherOrder)] = &[("List.map", list_map)];
-
-/// Every mutating data intrinsic, by qualified name.
-pub const MUTATING: &[(&str, MutatingIntrinsic)] = &[("List.push", list_push)];
 
 /// `List.new()`: an empty list.
 fn list_new(_: &mut dyn Host, _: Vec<Value>, _: Span) -> Result<Value, Panic> {

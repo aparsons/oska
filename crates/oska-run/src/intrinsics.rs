@@ -1,8 +1,10 @@
 //! Runtime implementations of body-less prelude functions, keyed by the
 //! qualified name the checked program calls them by (`Stdout.println`).
 //!
-//! To add one: write a function with the [`Intrinsic`] signature and add
-//! it to [`INTRINSICS`]. A method's receiver is its first argument.
+//! To add one: write a function with the signature of one of the
+//! [`Intrinsic`] kinds and add it, wrapped in its kind, to its module's
+//! table ([`INTRINSICS`] here). [`lookup`] searches every table. A
+//! method's receiver is its first argument.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -21,88 +23,82 @@ use crate::testing;
 use crate::traits;
 use crate::value::{Access, Capability, FsCap, Root, Value};
 
-/// An intrinsic: the host, the arguments (the receiver first), and the
-/// call's span, for panics.
-pub type Intrinsic = fn(&mut dyn Host, Vec<Value>, Span) -> Result<Value, Panic>;
+use Intrinsic::Plain;
 
-/// A mutating intrinsic, such as `List.push`: it changes its receiver in
-/// place, given the call's other arguments and its span.
-pub type MutatingIntrinsic = fn(&mut Value, Vec<Value>, Span) -> Result<Value, Panic>;
+/// A body-less prelude function's runtime implementation. Each gets the
+/// arguments, the receiver first for a method, and the call's span, for
+/// panics, and what else its kind needs.
+#[derive(Clone, Copy)]
+pub enum Intrinsic {
+    /// One that needs only the host.
+    Plain(fn(&mut dyn Host, Vec<Value>, Span) -> Result<Value, Panic>),
+    /// A mutating method (`var self`), such as `List.push`: it changes
+    /// its receiver in place, given the call's other arguments.
+    Mutating(fn(&mut Value, Vec<Value>, Span) -> Result<Value, Panic>),
+    /// One that calls back into the program, such as `List.map`, which
+    /// calls its closure: it gets the interpreter instead of the host.
+    HigherOrder(fn(&mut Interpreter<'_, '_>, Vec<Value>, Span) -> Result<Value, Panic>),
+}
 
-/// An intrinsic that calls back into the program, such as `List.map`,
-/// which calls its closure: it gets the interpreter instead of the host.
-pub type HigherOrder = fn(&mut Interpreter<'_, '_>, Vec<Value>, Span) -> Result<Value, Panic>;
+/// A table of intrinsics, by the qualified name the checked program calls
+/// them by.
+pub type Table = &'static [(&'static str, Intrinsic)];
 
 /// Every intrinsic, by qualified name.
-pub const INTRINSICS: &[(&str, Intrinsic)] = &[
-    ("Args.get", args_get),
-    ("Clock.now_millis", clock_now_millis),
-    ("Env.get", env_get),
-    ("Env.secret", env_secret),
-    ("Fs.read_only", fs_read_only),
-    ("Fs.restrict_to", fs_restrict_to),
-    ("Fs.write_only", fs_write_only),
-    ("FsRead.read_to_string", fs_read_to_string),
-    ("FsRead.restrict_to", fs_restrict_to),
-    ("FsWrite.restrict_to", fs_restrict_to),
-    ("FsWrite.write", fs_write),
-    ("Int.to_string", int_to_string),
-    ("Option.is_some", option_is_some),
-    ("Option.ok_or", option_ok_or),
-    ("Option.unwrap_or", option_unwrap_or),
-    ("Path.from", path_new),
-    ("Path.new", path_new),
-    ("Random.next_int", random_next_int),
-    ("Result.is_ok", result_is_ok),
-    ("Result.unwrap_or", result_unwrap_or),
-    ("Secret.constant_time_eq", secret_constant_time_eq),
+pub const INTRINSICS: Table = &[
+    ("Args.get", Plain(args_get)),
+    ("Clock.now_millis", Plain(clock_now_millis)),
+    ("Env.get", Plain(env_get)),
+    ("Env.secret", Plain(env_secret)),
+    ("Fs.read_only", Plain(fs_read_only)),
+    ("Fs.restrict_to", Plain(fs_restrict_to)),
+    ("Fs.write_only", Plain(fs_write_only)),
+    ("FsRead.read_to_string", Plain(fs_read_to_string)),
+    ("FsRead.restrict_to", Plain(fs_restrict_to)),
+    ("FsWrite.restrict_to", Plain(fs_restrict_to)),
+    ("FsWrite.write", Plain(fs_write)),
+    ("Int.to_string", Plain(int_to_string)),
+    ("Option.is_some", Plain(option_is_some)),
+    ("Option.ok_or", Plain(option_ok_or)),
+    ("Option.unwrap_or", Plain(option_unwrap_or)),
+    ("Path.from", Plain(path_new)),
+    ("Path.new", Plain(path_new)),
+    ("Random.next_int", Plain(random_next_int)),
+    ("Result.is_ok", Plain(result_is_ok)),
+    ("Result.unwrap_or", Plain(result_unwrap_or)),
+    ("Secret.constant_time_eq", Plain(secret_constant_time_eq)),
     (
         "Secret.constant_time_eq_secret",
-        secret_constant_time_eq_secret,
+        Plain(secret_constant_time_eq_secret),
     ),
-    ("Secret.expose", secret_expose),
-    ("Stderr.println", stderr_println),
-    ("Stdin.read_line", stdin_read_line),
-    ("Stdout.println", stdout_println),
-    ("String.assume_trusted", string_assume_trusted),
-    ("String.to_string", string_to_string),
-    ("dbg", dbg),
-    ("todo", todo),
+    ("Secret.expose", Plain(secret_expose)),
+    ("Stderr.println", Plain(stderr_println)),
+    ("Stdin.read_line", Plain(stdin_read_line)),
+    ("Stdout.println", Plain(stdout_println)),
+    ("String.assume_trusted", Plain(string_assume_trusted)),
+    ("String.to_string", Plain(string_to_string)),
+    ("dbg", Plain(dbg)),
+    ("todo", Plain(todo)),
 ];
 
-/// The intrinsic named `name`.
+/// The intrinsic named `name`, from every module's table.
 pub fn lookup(name: &str) -> Option<Intrinsic> {
-    INTRINSICS
-        .iter()
-        .chain(data::INTRINSICS)
-        .chain(traits::INTRINSICS)
-        .chain(testing::INTRINSICS)
-        .find(|(n, _)| *n == name)
-        .map(|(_, f)| *f)
-}
-
-/// The mutating intrinsic named `name`.
-pub fn lookup_mutating(name: &str) -> Option<MutatingIntrinsic> {
-    data::MUTATING
-        .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, f)| *f)
-}
-
-/// The higher-order intrinsic named `name`.
-pub fn lookup_higher_order(name: &str) -> Option<HigherOrder> {
-    data::HIGHER_ORDER
-        .iter()
-        .chain(tasks::HIGHER_ORDER)
-        .chain(traits::HIGHER_ORDER)
-        .chain(testing::HIGHER_ORDER)
-        .find(|(n, _)| *n == name)
-        .map(|(_, f)| *f)
+    [
+        INTRINSICS,
+        data::INTRINSICS,
+        tasks::INTRINSICS,
+        traits::INTRINSICS,
+        testing::INTRINSICS,
+    ]
+    .into_iter()
+    .flatten()
+    .find(|(n, _)| *n == name)
+    .map(|(_, intrinsic)| *intrinsic)
 }
 
 /// Whether the intrinsic named `name` has a runtime implementation.
 pub fn implemented(name: &str) -> bool {
-    lookup(name).is_some() || lookup_mutating(name).is_some() || lookup_higher_order(name).is_some()
+    lookup(name).is_some()
 }
 
 /// The text of the string argument at `index`.
@@ -473,7 +469,7 @@ mod tests {
     use oska_check::builtins;
     use oska_syntax::ast::{Fields, Item, ItemKind, Type, TypeKind};
 
-    use super::implemented;
+    use super::{implemented, lookup, Intrinsic};
     use crate::value::Capability;
 
     /// The prelude's source, the same file the checker embeds.
@@ -542,23 +538,55 @@ mod tests {
     /// declare, by qualified name (`Stdout.println`, `Int.eq`, `dbg`). A
     /// trait's own method signatures are not callable and are skipped.
     fn bodiless_prelude_functions() -> Vec<String> {
+        bodiless_prelude_methods()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect()
+    }
+
+    /// [`bodiless_prelude_functions`], each with whether it is a mutating
+    /// method (`var self`).
+    fn bodiless_prelude_methods() -> Vec<(String, bool)> {
         let module = oska_syntax::parse_prelude(PRELUDE).expect("the prelude should parse");
+        let mutating = |item: &Item| match &item.kind {
+            ItemKind::Fn(f) => f.receiver.as_ref().is_some_and(|r| r.mutable),
+            _ => false,
+        };
         let mut names = Vec::new();
         for item in &module.items {
             match &item.kind {
-                ItemKind::Fn(_) => names.extend(bodiless(None, item)),
+                ItemKind::Fn(_) => names.extend(bodiless(None, item).map(|n| (n, false))),
                 ItemKind::Impl(decl) => {
                     let Some(owner) = call_owner(&decl.target) else {
                         continue;
                     };
                     for method in &decl.methods {
-                        names.extend(bodiless(Some(&owner), method));
+                        let name = bodiless(Some(&owner), method);
+                        names.extend(name.map(|n| (n, mutating(method))));
                     }
                 }
                 _ => {}
             }
         }
         names
+    }
+
+    #[test]
+    fn exactly_the_mutating_prelude_methods_are_mutating_intrinsics() {
+        let methods = bodiless_prelude_methods();
+        assert!(
+            methods.iter().any(|(n, m)| n == "List.push" && *m),
+            "{methods:?}"
+        );
+        for (name, var_self) in methods {
+            let registered = matches!(lookup(&name), Some(Intrinsic::Mutating(_)));
+            if lookup(&name).is_some() {
+                assert_eq!(
+                    registered, var_self,
+                    "`{name}`: `var self` is a mutating intrinsic"
+                );
+            }
+        }
     }
 
     fn owner(name: &str) -> &str {

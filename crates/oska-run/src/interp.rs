@@ -31,7 +31,7 @@ use oska_syntax::ast::BinaryOp;
 use oska_syntax::Span;
 
 use crate::host::Host;
-use crate::intrinsics;
+use crate::intrinsics::{self, Intrinsic};
 use crate::ops;
 use crate::panics::{codes, Panic};
 use crate::tasks::Tasks;
@@ -648,19 +648,17 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 self.leave();
                 result
             }
-            Callee::Intrinsic(name) => {
-                if let Some(intrinsic) = intrinsics::lookup(name) {
-                    return intrinsic(self.host, args, span);
+            Callee::Intrinsic(name) => match intrinsic(name) {
+                Intrinsic::Plain(run) => run(self.host, args, span),
+                Intrinsic::HigherOrder(run) => run(self, args, span),
+                Intrinsic::Mutating(run) => {
+                    // A mutating method called on a temporary, such as a
+                    // call's result: the change is dropped with it.
+                    let mut args = args.into_iter();
+                    let mut receiver = args.next().expect("a method's receiver");
+                    run(&mut receiver, args.collect(), span)
                 }
-                if let Some(intrinsic) = intrinsics::lookup_higher_order(name) {
-                    return intrinsic(self, args, span);
-                }
-                // A mutating method called on a temporary: the change is
-                // dropped with it.
-                let mut args = args.into_iter();
-                let mut receiver = args.next().expect("a method's receiver");
-                self.call_mutating(callee, &mut receiver, args.collect(), span)
-            }
+            },
             Callee::Trait { .. } => {
                 let callee = self.dispatch(callee, &args[0]);
                 self.call_callee(&callee, args, span)
@@ -759,11 +757,13 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 *receiver = after.expect("a method keeps its receiver");
                 Ok(value)
             }
-            Callee::Intrinsic(name) => {
-                let intrinsic = intrinsics::lookup_mutating(name)
-                    .expect("`crate::run` refuses a call to a missing intrinsic");
-                intrinsic(receiver, args, span)
-            }
+            Callee::Intrinsic(name) => match intrinsic(name) {
+                Intrinsic::Mutating(run) => run(receiver, args, span),
+                Intrinsic::Plain(_) | Intrinsic::HigherOrder(_) => unreachable!(
+                    "the checker calls only a `var self` method on a place, and every \
+                     prelude `var self` method is a mutating intrinsic"
+                ),
+            },
             Callee::Trait { .. } => {
                 let callee = self.dispatch(callee, receiver);
                 self.call_mutating(&callee, receiver, args, span)
@@ -817,6 +817,11 @@ fn binding(binds: impl Iterator<Item = bool>, args: Vec<Value>) -> Vec<Value> {
         .filter(|(binds, _)| *binds)
         .map(|(_, arg)| arg)
         .collect()
+}
+
+/// The intrinsic named `name`.
+fn intrinsic(name: &str) -> Intrinsic {
+    intrinsics::lookup(name).expect("`crate::run` refuses a call to a missing intrinsic")
 }
 
 /// The items of a list, one at a time.
