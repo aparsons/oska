@@ -247,7 +247,8 @@ impl String {
     pub fn starts_with(self, prefix: String) -> Bool
     #[follows_trust]
     pub fn ends_with(self, suffix: String) -> Bool
-    // Every occurrence of `from` replaced by `to`.
+    // Every occurrence of `from` replaced by `to`. An empty `from`
+    // occurs nowhere.
     #[follows_trust]
     pub fn replace(self, from: String, to: String) -> String
     // `parts` with the text between each two: `",".join(["a", "b"])` is
