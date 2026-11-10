@@ -729,7 +729,7 @@ fn the_generator_s_report_lists_what_main_reads_and_writes() {
     let report = generator_authority();
     for line in [
         "  FsRead -> DirRead: restrict_to \"docs\" (bytes ",
-        "  FsRead -> DirRead: restrict_to \"README.md\" (bytes ",
+        "  FsRead -> FileRead: restrict_to_file \"README.md\" (bytes ",
         "  FsRead -> DirRead: restrict_to \"site/agent-setup\" (bytes ",
         "  FsWrite -> DirWrite: restrict_to \".\" (bytes ",
         "  DirWrite -> DirWrite: restrict_to \"_site\" (bytes ",
