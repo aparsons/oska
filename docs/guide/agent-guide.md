@@ -99,7 +99,10 @@ fn main(io: Stdout, fs: Fs) -> Result<(), IoError> {
     {"name":"word_count","authority":["FsRead"],"via":[{"param":"fs","capabilities":["FsRead"]}],"pure":false},
     {"name":"main","authority":["Stdout","Fs"],"via":[{"param":"io","capabilities":["Stdout"]},{"param":"fs","capabilities":["Fs"]}],"pure":false}
   ],
-  "audit": []
+  "audit": [],
+  "attenuations": [
+    {"function":"main","method":"read_only","span":{"start":207,"end":221},"source":"Fs","result":"FsRead","root":null}
+  ]
 }
 ```
 
@@ -107,6 +110,7 @@ Before you finish a task, compare this against the report from before your chang
 
 - **A function's `authority` grew,** or a new capability appears in `main`'s signature. Is that the task, or a shortcut? Prefer passing a narrower capability, such as `fs.read_only()` or `fs.restrict_to("dir")`, to adding a wider one.
 - **A new `audit` entry appeared.** Every `assume_trusted` and `expose` weakens a guarantee. Use one only inside a validator that really checks the text, and say so in your summary.
+- **A new `attenuations` entry has a wider root than the task needs.** Each one names the function it is in, the capability it narrows from and to, and its `root`. A `root` of `"/"` is the whole filesystem, and `null` means the root is computed at runtime (or, for `read_only` and `write_only`, that there is none).
 - **A function that was `pure` is not.** It now has a capability-bearing parameter.
 
 Never silence a diagnostic by weakening authority or trust: do not add capabilities to `main`, call `.assume_trusted()`, or call `.expose()` only to make a message go away. Ask first when the task seems to need it.

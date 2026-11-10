@@ -158,7 +158,7 @@ fn a_cap_fn_parameter_makes_its_function_impure() {
     assert_authority(src, "run", &[], false);
     assert_report_json(
         src,
-        r#"{"diagnostics":[],"functions":[{"name":"run","authority":[],"via":[{"param":"f","capabilities":[]}],"pure":false}],"audit":[]}"#,
+        r#"{"diagnostics":[],"functions":[{"name":"run","authority":[],"via":[{"param":"f","capabilities":[]}],"pure":false}],"audit":[],"attenuations":[]}"#,
     );
 }
 

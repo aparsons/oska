@@ -722,6 +722,30 @@ fn the_real_site_shows_the_generator_s_own_report_linked_from_the_capabilities_g
     );
 }
 
+#[test]
+fn the_generator_s_report_lists_what_main_reads_and_writes() {
+    let report = generator_authority();
+    for line in [
+        "  FsRead -> DirRead: restrict_to \"docs\" (bytes ",
+        "  FsRead -> DirRead: restrict_to \"README.md\" (bytes ",
+        "  FsRead -> DirRead: restrict_to \"site/agent-setup\" (bytes ",
+        "  FsWrite -> DirWrite: restrict_to \".\" (bytes ",
+        "  DirWrite -> DirWrite: restrict_to \"_site\" (bytes ",
+    ] {
+        assert!(report.contains(line), "no {line:?} in {report}");
+    }
+    assert!(
+        !report.contains("computed at runtime"),
+        "the generator's roots are all literals: {report}"
+    );
+    let site = real_site();
+    let shown = between(&site["authority.html"], "<pre><code>", "</code></pre>");
+    assert!(
+        decode_references(shown).contains("restrict_to \"docs\""),
+        "the authority page does not show the attenuations: {shown}"
+    );
+}
+
 /// The page shows real output, not a copy that can drift: the Pages
 /// workflow writes the report with the `oskac` it just built, right before
 /// it runs the generator, and nothing touches the file in between.

@@ -157,7 +157,7 @@ fn function(name: String, f: &FnDecl, lower: Lower) -> FunctionAuthority {
 
 /// The last segment of a type's path, such as `Logger` for
 /// `Logger<T>`.
-fn type_name(ty: &Type) -> String {
+pub(crate) fn type_name(ty: &Type) -> String {
     match &ty.kind {
         TypeKind::Path { segments, .. } => {
             segments.last().map(|s| s.name.clone()).unwrap_or_default()

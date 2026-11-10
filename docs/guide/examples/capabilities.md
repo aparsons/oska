@@ -62,13 +62,14 @@ fn AppError.usage: pure
 fn AppError.from: pure
 fn AppError.to_string: pure
 fn main: Stdout (io), FsRead (fs)
+  FsRead -> DirRead: restrict_to "." (bytes 1342..1361)
 ```
 
 Read the report as a reviewer would:
 
 - `count_lines` can only read files beneath one directory. It cannot write, use the network, or read the environment, whatever its body does.
 - The three `AppError` methods are **pure functions**: no capability-bearing parameter, so no effects, and they are deterministic.
-- `main` can write to standard output and read files. `args` does not appear because `Args` is a **program input**, plain data that grants no authority.
+- `main` can write to standard output and read files, and the line under it shows how far: it narrows `FsRead` to a `DirRead` rooted at `.`, the current directory. `args` does not appear because `Args` is a **program input**, plain data that grants no authority.
 
 ## How the authority narrows
 

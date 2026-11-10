@@ -129,7 +129,8 @@ struct Logger { out: Stdout }
     {"code":"E0210","message":"`Logger` holds the capability-bearing type `Stdout`, so it must be declared `cap struct`","span":{"start":7,"end":13},"fix":{"message":"declare it `cap struct`","edits":[{"span":{"start":0,"end":0},"replacement":"cap "}]}}
   ],
   "functions": [],
-  "audit": []
+  "audit": [],
+  "attenuations": []
 }
 ```
 

@@ -60,7 +60,8 @@ fn the_report_lists_audit_sites_with_their_kind_and_span() {
         r#"{
             "diagnostics": [],
             "functions": [{"name":"f","authority":[],"via":[],"pure":true}],
-            "audit": [{"kind":"assume_trusted","span":{"start":43,"end":61}}]
+            "audit": [{"kind":"assume_trusted","span":{"start":43,"end":61}}],
+            "attenuations": []
         }"#,
     );
 }
@@ -72,7 +73,8 @@ fn the_audit_array_is_present_and_empty_without_audit_sites() {
         r#"{
             "diagnostics": [],
             "functions": [{"name":"f","authority":[],"via":[],"pure":true}],
-            "audit": []
+            "audit": [],
+            "attenuations": []
         }"#,
     );
 }

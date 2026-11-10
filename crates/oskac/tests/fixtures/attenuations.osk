@@ -1,0 +1,42 @@
+// Every way a program narrows a filesystem capability, for the golden
+// tests of the authority report's attenuations.
+
+// A literal root, then a narrower one.
+fn docs(read: FsRead) -> DirRead {
+    read.restrict_to("docs").restrict_to(Path.new("guide"))
+}
+
+fn output(write: FsWrite) -> DirWrite {
+    write.restrict_to("_site")
+}
+
+// The root is only known when the program runs.
+fn named(read: FsRead, name: String) -> DirRead {
+    read.restrict_to(name)
+}
+
+// A directory narrowed with a path built from untrusted text.
+fn per_user(uploads: Dir, name: Untrusted<String>) -> Dir {
+    uploads.restrict_to(Path.from(name))
+}
+
+// Passing on less authority has no root.
+fn reader(app: Dir) -> DirRead {
+    app.read_only()
+}
+
+fn writer(app: Dir) -> DirWrite {
+    app.write_only()
+}
+
+// Whole-filesystem access, written out.
+fn everything(fs: Fs) -> Dir {
+    fs.restrict_to("/")
+}
+
+fn main(fs: Fs) {
+    let read = fs.read_only()
+    let write = fs.write_only()
+    let source = docs(read)
+    let site = output(write)
+}
