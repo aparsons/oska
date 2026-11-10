@@ -208,6 +208,22 @@ test_stage_site_keeps_what_the_generator_wrote_in_latest_json() {
     https://oskalang.dev/releases/v1.2.3/oskac-linux-x86_64 ] || fail "wrong default site URL"
 }
 
+test_stage_site_publishes_installers_pinned_to_the_key_that_installs_from_it() {
+  signed_release v1.2.3
+  mkdir site home
+  "$here/stage-site.sh" out site key.pub
+  pinned=$(awk '{print $1, $2}' key.pub)
+  grep -qF "'$pinned'" site/install.sh || fail "install.sh is not pinned to key.pub"
+  grep -qF "'$pinned'" site/install.ps1 || fail "install.ps1 is not pinned to key.pub"
+  HOME="$PWD/home" OSKA_SITE_URL="file://$PWD/site" sh site/install.sh --json >out.json
+  [ "$(jq -r .version out.json)" = 1.2.3 ] || fail "did not install 1.2.3"
+  case "$(uname -m)" in
+    aarch64 | arm64) asset=oskac-linux-aarch64 ;;
+    *) asset=oskac-linux-x86_64 ;;
+  esac
+  cmp "out/v1.2.3/$asset" home/.oska/bin/oskac || fail "installed the wrong binary"
+}
+
 test_stage_site_refuses_a_release_that_does_not_verify() {
   signed_release v1.2.3
   printf 'evil\n' >>out/v1.2.3/oskac-windows-x86_64.exe
