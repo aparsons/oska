@@ -8,6 +8,7 @@
 
 use std::rc::Rc;
 
+use oska_check::builtins;
 use oska_syntax::Span;
 
 use crate::host::Host;
@@ -90,7 +91,7 @@ fn items_eq(
     }
     for (l, r) in lhs.iter().zip(rhs.iter()) {
         if !interp
-            .call_trait("Eq", "eq", l.clone(), vec![r.clone()], span)?
+            .call_trait(builtins::EQ_EQ, l.clone(), vec![r.clone()], span)?
             .as_bool()
         {
             return Ok(Value::Bool(false));

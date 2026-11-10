@@ -24,6 +24,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use oska_check::builtins;
 use oska_check::program::{Program, Test};
 use oska_syntax::{json_escape, Diagnostic, Span};
 
@@ -251,19 +252,20 @@ fn run_one(program: &Program, test: &Test, host: &mut dyn Host) -> Result<(), Pa
     Interpreter::new(program, host).run_test(&test.body, test_context())
 }
 
-/// `t`: a `TestContext`, its fields in the prelude's order, `fs`,
-/// `clock`, `random`, `stdout`. Which world they reach is the host's
-/// business.
+/// `t`: a `TestContext`, holding the capabilities the prelude declares
+/// it with, in order. Which world they reach is the host's business.
 fn test_context() -> Value {
-    let field = |ty| Value::Capability(Capability::granted(ty).expect("a built-in capability"));
+    let fields = builtins::test_context_fields()
+        .iter()
+        .map(|ty| {
+            let capability =
+                Capability::granted(ty).expect("a `TestContext` capability has a runtime");
+            Value::Capability(capability)
+        })
+        .collect();
     Value::Struct {
-        ty: "TestContext".into(),
-        fields: std::rc::Rc::new(vec![
-            field("Fs"),
-            field("Clock"),
-            field("Random"),
-            field("Stdout"),
-        ]),
+        ty: builtins::TEST_CONTEXT.into(),
+        fields: std::rc::Rc::new(fields),
     }
 }
 
@@ -458,7 +460,7 @@ fn equal(
     span: Span,
 ) -> Result<bool, Panic> {
     Ok(interp
-        .call_trait("Eq", "eq", a.clone(), vec![b.clone()], span)?
+        .call_trait(builtins::EQ_EQ, a.clone(), vec![b.clone()], span)?
         .as_bool())
 }
 

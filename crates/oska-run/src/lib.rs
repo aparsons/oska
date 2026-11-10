@@ -56,8 +56,9 @@ pub use panics::codes;
 pub use testing::{test, TestOptions, TestReport, TestResult, TestStatus};
 
 use interp::Interpreter;
+use oska_check::builtins;
 use panics::Panic;
-use value::{Capability, Value, UNIMPLEMENTED_CAPABILITIES, UNIMPLEMENTED_MODULES};
+use value::{Capability, Value};
 
 /// How a run ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,14 +170,13 @@ fn check_and_run(src: &str, host: &mut dyn Host, args: &[String]) -> RunOutcome 
     }
 }
 
-/// The refusal for the first import of a `std` module that has no runtime
-/// yet, whether or not the program calls it.
+/// The refusal for the first import of a `std` module, whether or not the
+/// program calls it: none has a runtime yet.
 pub(crate) fn unimplemented_module(program: &Program) -> Option<Diagnostic> {
-    let (module, span) = program.imports.iter().find(|(module, _)| {
-        UNIMPLEMENTED_MODULES
-            .iter()
-            .any(|m| module == m || module.strip_prefix(m).is_some_and(|r| r.starts_with('.')))
-    })?;
+    let (module, span) = program
+        .imports
+        .iter()
+        .find(|(module, _)| builtins::std_module_of(module).is_some())?;
     Some(Diagnostic::new(
         codes::UNIMPLEMENTED_MODULE,
         format!("`oskac run` cannot run a program that uses `{module}` yet: it has no runtime"),
@@ -192,8 +192,8 @@ fn ungranted(program: &Program) -> Option<Diagnostic> {
     let param = main
         .params
         .iter()
-        .find(|p| p.ty != "Args" && Capability::granted(&p.ty).is_none())?;
-    let (code, message) = if UNIMPLEMENTED_CAPABILITIES.contains(&param.ty.as_str()) {
+        .find(|p| p.ty != builtins::ARGS && Capability::granted(&p.ty).is_none())?;
+    let (code, message) = if builtins::is_capability(&param.ty) {
         (
             codes::UNIMPLEMENTED_CAPABILITY,
             format!(
@@ -238,21 +238,25 @@ fn run_main(program: &Program, host: &mut dyn Host, args: &[String]) -> Result<(
     let values = main
         .params
         .iter()
-        .filter_map(|param| match param.ty.as_str() {
-            "Args" => Some(Value::Args(
-                args.iter().map(|a| Rc::from(a.as_str())).collect(),
-            )),
-            ty => Capability::granted(ty).map(Value::Capability),
+        .filter_map(|param| {
+            if param.ty == builtins::ARGS {
+                Some(Value::Args(
+                    args.iter().map(|a| Rc::from(a.as_str())).collect(),
+                ))
+            } else {
+                Capability::granted(&param.ty).map(Value::Capability)
+            }
         })
         .collect();
     let mut interpreter = Interpreter::new(program, host);
     let value = interpreter.call(main, values)?;
-    if !(value.type_tag() == "Result" && value.is_variant("Err")) {
+    if !(value.type_tag() == builtins::RESULT && value.is_variant(builtins::ERR)) {
         return Ok(());
     }
     // The checker requires `main`'s error type to implement `Display`.
     let error = value.fields()[0].clone();
-    let text = interpreter.call_trait("Display", "to_string", error, Vec::new(), main.body.span)?;
+    let span = main.body.span;
+    let text = interpreter.call_trait(builtins::DISPLAY_TO_STRING, error, Vec::new(), span)?;
     // The program has failed either way: a stderr that cannot be written
     // loses the message, not the exit code.
     let _ = host.write_stderr(&format!("{}\n", text.as_str()));

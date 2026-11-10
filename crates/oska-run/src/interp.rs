@@ -23,6 +23,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use oska_check::builtins::{self, TraitMethod};
 use oska_check::program::{
     self, Arm, Callee, Expr, ExprKind, Function, Part, Pattern, Place, Program, Stmt,
 };
@@ -399,15 +400,15 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             unreachable!("the checker allows `?` only on a `Result` or an `Option`")
         };
         match &*variant {
-            "Ok" | "Some" => Ok(fields[0].clone()),
-            "None" => Err(Unwind::Return(Value::none())),
+            builtins::OK | builtins::SOME => Ok(fields[0].clone()),
+            builtins::NONE => Err(Unwind::Return(Value::none())),
             _ => {
                 let error = fields[0].clone();
                 let error = match convert {
                     Some(convert) => self.call_callee(convert, vec![error], span)?,
                     None => error,
                 };
-                debug_assert_eq!(&*ty, "Result");
+                debug_assert_eq!(&*ty, builtins::RESULT);
                 Err(Unwind::Return(Value::err(error)))
             }
         }
@@ -685,19 +686,18 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         }
     }
 
-    /// Call `trait_name`'s method `method` on `receiver`, through the
+    /// Call the trait method `method` on `receiver`, through the
     /// implementation for its runtime type tag, with `args` after it.
     pub fn call_trait(
         &mut self,
-        trait_name: &str,
-        method: &str,
+        method: TraitMethod,
         receiver: Value,
         args: Vec<Value>,
         span: Span,
     ) -> Result<Value, Panic> {
         let callee = Callee::Trait {
-            trait_name: trait_name.to_string(),
-            method: method.to_string(),
+            trait_name: method.trait_name.to_string(),
+            method: method.method.to_string(),
         };
         let args = std::iter::once(receiver).chain(args).collect();
         self.call_callee(&callee, args, span)

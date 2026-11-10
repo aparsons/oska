@@ -33,6 +33,7 @@ use oska_syntax::{json_escape, Diagnostic, Span};
 
 mod authority;
 mod body;
+pub mod builtins;
 mod coherence;
 mod collect;
 mod decl_rules;

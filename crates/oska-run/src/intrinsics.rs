@@ -8,6 +8,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use oska_check::builtins;
 use oska_syntax::Span;
 
 use crate::confine::{self, Intent};
@@ -18,7 +19,7 @@ use crate::panics::{codes, Panic};
 use crate::tasks;
 use crate::testing;
 use crate::traits;
-use crate::value::{Access, Capability, FsCap, Root, Value, SECRET};
+use crate::value::{Access, Capability, FsCap, Root, Value};
 
 /// An intrinsic: the host, the arguments (the receiver first), and the
 /// call's span, for panics.
@@ -172,7 +173,7 @@ pub(crate) fn debug(value: &Value, out: &mut String) {
         Value::Int(n, _) => out.push_str(&n.to_string()),
         Value::Str(s) => out.push_str(&format!("{:?}", &**s)),
         Value::Range { start, end, .. } => out.push_str(&format!("{start}..{end}")),
-        Value::Struct { ty, .. } if &**ty == SECRET => out.push_str("<redacted>"),
+        Value::Struct { ty, .. } if &**ty == builtins::SECRET => out.push_str("<redacted>"),
         Value::Struct { ty, fields } => {
             out.push_str(ty);
             tuple(out, fields);
@@ -400,24 +401,24 @@ fn fs_write(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Pan
 
 /// `Option.is_some(self)`.
 fn option_is_some(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(Value::Bool(args[0].is_variant("Some")))
+    Ok(Value::Bool(args[0].is_variant(builtins::SOME)))
 }
 
 /// `Result.is_ok(self)`.
 fn result_is_ok(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(Value::Bool(args[0].is_variant("Ok")))
+    Ok(Value::Bool(args[0].is_variant(builtins::OK)))
 }
 
 /// `Option.unwrap_or(self, default)`.
 fn option_unwrap_or(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(unwrap_or(args, "Some"))
+    Ok(unwrap_or(args, builtins::SOME))
 }
 
 /// `Option.ok_or(self, err)`: `Ok` of the value, or `Err(err)` when
 /// there is none.
 fn option_ok_or(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Panic> {
     let err = args.swap_remove(1);
-    Ok(match args[0].is_variant("Some") {
+    Ok(match args[0].is_variant(builtins::SOME) {
         true => Value::ok(args[0].fields()[0].clone()),
         false => Value::err(err),
     })
@@ -425,7 +426,7 @@ fn option_ok_or(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value
 
 /// `Result.unwrap_or(self, default)`.
 fn result_unwrap_or(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(unwrap_or(args, "Ok"))
+    Ok(unwrap_or(args, builtins::OK))
 }
 
 /// The field of `args[0]` when it is the variant `present`, else
@@ -469,17 +470,44 @@ fn string_to_string(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<V
 
 #[cfg(test)]
 mod tests {
-    use oska_syntax::ast::{Item, ItemKind, Type, TypeKind};
+    use oska_check::builtins;
+    use oska_syntax::ast::{Fields, Item, ItemKind, Type, TypeKind};
 
     use super::implemented;
+    use crate::value::Capability;
 
     /// The prelude's source, the same file the checker embeds.
     const PRELUDE: &str = include_str!("../../oska-check/src/prelude.osk");
 
-    /// The types whose methods have no runtime: a program that holds one
-    /// is refused before it starts (`E0370`), so none of these is ever
+    /// The types whose methods have no runtime: the built-in capabilities
+    /// the runtime does not implement, and the prelude's structs that hold
+    /// one, such as `Connection`. A program that holds one is refused
+    /// before it starts (`E0370`), so none of their methods is ever
     /// called. Everything else in the prelude needs an intrinsic.
-    const NO_RUNTIME: &[&str] = &["Net", "NetConnect", "Connection"];
+    fn no_runtime() -> Vec<String> {
+        let missing =
+            |name: &str| builtins::is_capability(name) && Capability::granted(name).is_none();
+        let module = oska_syntax::parse_prelude(PRELUDE).expect("the prelude should parse");
+        module
+            .items
+            .iter()
+            .filter_map(|item| match &item.kind {
+                ItemKind::Struct(s) => Some(s),
+                _ => None,
+            })
+            .filter(|s| {
+                let fields = match &s.fields {
+                    Fields::Named(fields) | Fields::Positional(fields) => fields.as_slice(),
+                    Fields::Unit => &[],
+                };
+                missing(&s.name.name)
+                    || fields
+                        .iter()
+                        .any(|f| call_owner(&f.ty).is_some_and(|ty| missing(&ty)))
+            })
+            .map(|s| s.name.name.clone())
+            .collect()
+    }
 
     /// The qualified name the checked program calls `item`'s function by,
     /// if `item` is a function without a body.
@@ -544,9 +572,10 @@ mod tests {
             names.len() > 40 && names.iter().any(|n| n == "Stdout.println"),
             "the scan should find the prelude's functions, found {names:?}"
         );
+        let exempt = no_runtime();
         let missing: Vec<&String> = names
             .iter()
-            .filter(|name| !NO_RUNTIME.contains(&owner(name)))
+            .filter(|name| !exempt.iter().any(|e| e == owner(name)))
             .filter(|name| !implemented(name))
             .collect();
         assert!(
@@ -556,17 +585,26 @@ mod tests {
     }
 
     #[test]
-    fn the_exempt_types_are_exactly_the_ones_with_no_runtime() {
+    fn the_exempt_types_are_the_ones_with_no_runtime_and_have_no_intrinsics() {
         let names = bodiless_prelude_functions();
-        for exempt in NO_RUNTIME {
-            let theirs: Vec<&String> = names.iter().filter(|n| owner(n) == *exempt).collect();
+        let exempt = no_runtime();
+        for expected in [
+            "Net",
+            "NetConnect",
+            "NetListen",
+            "Spawn",
+            "Sched",
+            "Connection",
+        ] {
+            assert!(exempt.iter().any(|e| e == expected), "{exempt:?}");
+        }
+        for granted in ["Stdout", "Fs", "FsRead", "TestContext", "Args"] {
+            assert!(!exempt.iter().any(|e| e == granted), "{exempt:?}");
+        }
+        for exempt in &exempt {
             assert!(
-                !theirs.is_empty(),
-                "`{exempt}` is exempt but declares no body-less function"
-            );
-            assert!(
-                !theirs.iter().any(|n| implemented(n)),
-                "`{exempt}` has an intrinsic now: drop it from NO_RUNTIME"
+                !names.iter().any(|n| owner(n) == *exempt && implemented(n)),
+                "`{exempt}` has an intrinsic now, but no capability runtime"
             );
         }
     }
