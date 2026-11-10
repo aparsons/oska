@@ -19,7 +19,7 @@ Before a program starts, the runtime checks that it can run all of it, reached o
 | --- | --- |
 | `E0370` | `main` declares a capability that has no runtime yet: `Net`, `NetConnect`, `NetListen`, `Spawn`, or `Sched`. Spans `main`'s body. |
 | `E0371` | The program imports a `std` module that has no runtime yet: `std.proc`, `std.sql`, or `std.html`, used or not. Spans the module path of the `use`. |
-| `E0380` | The program uses something the interpreter cannot run yet: a construct the checked program cannot express, a call of a prelude function with no runtime implementation, a parameter of `main` that is neither a capability nor `Args`, or a trait call on a type parameter whose trait has its own impl for a sized integer type (see [Errors and traits](#errors-and-traits)). The message names the construct, as in ``the interpreter cannot run a `From`-bound conversion yet``; others are a constructor used as a function value and a call of a generic trait's method. Spans the construct or call, or `main`'s body for a parameter. |
+| `E0380` | The program uses something the interpreter cannot run yet: a construct the checked program cannot express, a call of a prelude function with no runtime implementation, or a parameter of `main` that is neither a capability nor `Args`. The message names the construct, as in ``the interpreter cannot run a `From`-bound conversion yet``; others are a constructor used as a function value and a call of a generic trait's method. Spans the construct or call, or `main`'s body for a parameter. |
 
 ## Panics
 
@@ -52,7 +52,7 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 - **`main` returning `Err(e)`.** The runtime prints `e.to_string()`, the `Display` text of `e`, and a newline to stderr, and exits with code 1.
 - **`?`** returns `None` or `Err(e)` from the enclosing function or closure. When the function's error type differs, `e` is converted through the `From` impl the checker chose.
 - **Trait calls.** A trait method called on a value of a known type reaches that type's impl directly. One called on a value of a type parameter is dispatched on the value's **runtime type tag**, the name of its type without arguments (`Point`, `List`, `String`), to the program's impl for that type or else the prelude's. `Option`, `Result`, and `List` compare their items through `Eq` for the items' type.
-- Every integer has the tag `Int`, whatever its type. Dispatch could not tell a `U8`'s impl of a trait from an `Int`'s, so a program that calls a trait's method on a type parameter, while that trait has an impl for a sized integer type (`I8` to `U64`), is refused with `E0380`.
+- Every integer carries its own type as its tag: `Int`, or a sized type from `I8` to `U64`. A literal takes the type the checker gave it, arithmetic keeps its operands' type, and a range's items keep its bounds' type, so a `U8` reaches the impl for `U8` and an `Int` the one for `Int`.
 
 ## Capabilities
 

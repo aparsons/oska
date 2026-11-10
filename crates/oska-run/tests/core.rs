@@ -282,14 +282,14 @@ fn a_main_that_returns_unit_exits_with_code_0() {
 
 #[test]
 fn a_program_using_something_not_yet_supported_is_refused_with_e0380() {
-    // Every prelude function now runs, so the example is generic dispatch
-    // to a sized integer's own impl, which type tags cannot tell apart.
+    // Every prelude function now runs, and sized integers dispatch by
+    // their own tags, so the example is a generic trait's method.
     let src = program(
-        "trait Name {\n    fn name(self) -> String\n}\n\n\
-         impl Name for Int {\n    fn name(self) -> String { \"int\" }\n}\n\n\
-         impl Name for U8 {\n    fn name(self) -> String { \"u8\" }\n}\n\n\
-         fn show<T: Name>(x: T) -> Untrusted<String> { x.name() }",
-        "    let b: U8 = 3\n    io.println(show(b))",
+        "trait Pair<T> {\n    fn pair(self, t: T) -> Int\n}\n\
+         struct P { n: Int }\n\
+         impl Pair<Int> for P {\n    fn pair(self, t: Int) -> Int { t }\n}\n\
+         fn use_it<T: Pair<Int>>(x: T) -> Int { x.pair(1) }",
+        "    let n = use_it(P(n: 1))\n    Ok(())",
     );
     assert_refused(&src, "E0380");
     assert_eq!(common::run_fake(&src, &[]).exit_code, 2);

@@ -20,21 +20,24 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use oska_check::program::{Callee, Closure, Construct};
+use oska_check::program::{Callee, Closure, Construct, IntType};
 
 /// A runtime value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     Unit,
     Bool(bool),
-    /// An integer of any type: every integer type fits `i128`. Arithmetic
-    /// checks each result against its type (`ops.rs`).
-    Int(i128),
+    /// An integer, with its type: every integer type fits `i128`.
+    /// Arithmetic checks each result against its type (`ops.rs`), and the
+    /// type is the value's runtime type tag, so generic code dispatches a
+    /// `U8` to `U8`'s impl.
+    Int(i128, IntType),
     Str(Rc<str>),
-    /// `start..end`, excluding `end`.
+    /// `start..end`, excluding `end`, over integers of type `int`.
     Range {
         start: i128,
         end: i128,
+        int: IntType,
     },
     /// A closure, with what it captured.
     Closure(Rc<ClosureValue>),
@@ -169,10 +172,6 @@ pub const UNIMPLEMENTED_CAPABILITIES: &[&str] =
 /// is refused before it starts (`E0371`).
 pub const UNIMPLEMENTED_MODULES: &[&str] = &["std.proc", "std.sql", "std.html"];
 
-/// The integer types other than `Int`. Their values carry the type tag
-/// `Int` at runtime, like every integer.
-pub const SIZED_INTEGERS: &[&str] = &["I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64"];
-
 /// The type name of a runtime `Secret`.
 pub const SECRET: &str = "Secret";
 
@@ -181,14 +180,13 @@ impl Value {
     /// the name of the value's type without its arguments, such as
     /// `Point`, `List`, or `String`.
     ///
-    /// Every integer is stored alike, so its tag is `Int` whatever its
-    /// type; `support.rs` refuses a program whose dispatch that would
-    /// get wrong.
+    /// An integer's tag is its own type's name, `Int` or a sized one
+    /// such as `U8`.
     pub fn type_tag(&self) -> &str {
         match self {
             Value::Unit => "()",
             Value::Bool(_) => "Bool",
-            Value::Int(_) => "Int",
+            Value::Int(_, int) => int.name(),
             Value::Str(_) => "String",
             Value::Range { .. } => "Range",
             Value::Closure(_) | Value::Function(_) => "fn",
@@ -209,6 +207,11 @@ impl Value {
             Value::Scope(_) => "Scope",
             Value::Task(_) => "Task",
         }
+    }
+
+    /// `n`, an `Int`.
+    pub fn int(n: i128) -> Value {
+        Value::Int(n, IntType::Int)
     }
 
     pub fn str(text: &str) -> Value {
@@ -312,7 +315,7 @@ impl Value {
     /// The integer the checker guarantees this is.
     pub fn as_int(&self) -> i128 {
         match self {
-            Value::Int(n) => *n,
+            Value::Int(n, _) => *n,
             other => unreachable!("the checker guarantees an integer, found {other:?}"),
         }
     }

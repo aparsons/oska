@@ -60,7 +60,7 @@ use crate::infer::{Infer, Mismatch};
 use crate::items::{Bound, ImplInfo, Items, Lower};
 use crate::prelude::{self, StdModule};
 use crate::program::lower::{Resolution, Resolutions};
-use crate::program::{self, Callee, Construct, IntType};
+use crate::program::{self, Callee, Construct};
 use crate::resolve;
 use crate::suggest;
 use crate::ty::{self, Trust, Ty};
@@ -400,13 +400,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         for (span, ty, what) in std::mem::take(&mut self.deferred) {
             let ty = self.infer.resolve(&ty);
             let resolution = match what {
-                Deferred::Int => ty.integer_range().zip(ty.head()).map(|((min, max), name)| {
-                    Resolution::Int(IntType {
-                        name: name.to_string(),
-                        min,
-                        max,
-                    })
-                }),
+                Deferred::Int => ty.integer_type().map(Resolution::Int),
                 Deferred::Equality => {
                     let builtin = ty == Ty::Unit
                         || ty.is_integer()
@@ -679,6 +673,8 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             ExprKind::Int(text) => {
                 let ty = self.literal_type(expected);
                 self.range_check(text, false, &ty, expr.span);
+                // The value carries its type at runtime, for dispatch.
+                self.defer(expr.span, &ty, Deferred::Int);
                 ty
             }
             ExprKind::Str(parts) => {
@@ -1195,6 +1191,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     let ty = self.literal_type(expected);
                     if ty.is_signed_integer() {
                         self.range_check(text, true, &ty, expr.span);
+                        self.defer(expr.span, &ty, Deferred::Int);
                         return ty;
                     }
                 }

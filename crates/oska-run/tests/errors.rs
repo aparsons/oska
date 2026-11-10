@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::{assert_exits, assert_refused, assert_runs, run_fake, run_on};
+use common::{assert_exits, assert_runs, run_fake, run_on};
 use oska_run::FakeHost;
 
 // ---- `?` and `main` returning `Err` ----------------------------------------
@@ -270,9 +270,10 @@ fn a_user_trait_dispatches_to_the_impl_for_each_type_with_its_default_methods() 
 }
 
 #[test]
-fn generic_dispatch_on_a_sized_integer_type_with_its_own_impl_is_refused() {
-    // Every integer carries the tag `Int` at runtime, so the impl for
-    // `U8` could not be told from the one for `Int`.
+fn generic_dispatch_reaches_a_sized_integer_types_own_impl() {
+    // Each integer carries its own type's tag at runtime, so the impl for
+    // `U8` is told from the one for `Int`, through arithmetic, ranges,
+    // lists, and literals alike.
     let impls = "trait Name {
     fn name(self) -> String
 }
@@ -285,12 +286,25 @@ impl Name for U8 {
     fn name(self) -> String { \"u8\" }
 }
 ";
-    assert_refused(
+    assert_runs(
         &program(
             &format!("{impls}\nfn show<T: Name>(x: T) -> Untrusted<String> {{ x.name() }}"),
-            "    let b: U8 = 3\n    io.println(show(b))",
+            "    let b: U8 = 3\n\
+             \x20   let _ = io.println(show(b))\n\
+             \x20   let _ = io.println(show(b + 1))\n\
+             \x20   let _ = io.println(show(b - 1 + 7))\n\
+             \x20   let _ = io.println(show(7))\n\
+             \x20   let small: U8 = 2\n\
+             \x20   let zero: U8 = 0\n\
+             \x20   for i in zero..small {\n        let _ = io.println(show(i))\n    }\n\
+             \x20   let names = [b, small].map(|x| show(x))\n\
+             \x20   let first = names.at(0)\n\
+             \x20   let _ = io.println(first)\n\
+             \x20   let n = match b {\n        3 => show(b)\n        _ => \"no\"\n    }\n\
+             \x20   io.println(n)",
         ),
-        "E0380",
+        &[],
+        "u8\nu8\nu8\nint\nu8\nu8\nu8\nu8\n",
     );
     // Called on a known type, the impl is chosen before the program runs.
     assert_runs(

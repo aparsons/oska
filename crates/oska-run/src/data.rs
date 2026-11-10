@@ -53,7 +53,7 @@ fn list_push(list: &mut Value, mut args: Vec<Value>, _: Span) -> Result<Value, P
 
 /// `List.len(self)` and `List.count(self)`: the number of items.
 fn list_len(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(Value::Int(args[0].as_list().len() as i128))
+    Ok(Value::int(args[0].as_list().len() as i128))
 }
 
 /// `List.get(self, index)`: the item at `index`, or `None` when there is
@@ -102,19 +102,19 @@ fn list_map(
 
 /// `String.len(self)`: the number of characters (Unicode code points).
 fn string_len(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(Value::Int(args[0].as_str().chars().count() as i128))
+    Ok(Value::int(args[0].as_str().chars().count() as i128))
 }
 
 /// `String.byte_len(self)`: the number of bytes in its UTF-8 encoding.
 fn string_byte_len(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(Value::Int(args[0].as_str().len() as i128))
+    Ok(Value::int(args[0].as_str().len() as i128))
 }
 
 /// `String.parse_int(self)`: the decimal `Int` the whole text spells, or
 /// `None` when it spells none, or one out of `Int`'s range.
 fn string_parse_int(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
     let parsed = args[0].as_str().parse::<i64>().ok();
-    Ok(Value::option(parsed.map(|n| Value::Int(i128::from(n)))))
+    Ok(Value::option(parsed.map(|n| Value::int(i128::from(n)))))
 }
 
 /// `String.trim(self)`: without leading and trailing whitespace.

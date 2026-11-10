@@ -116,8 +116,9 @@ pub enum ExprKind {
     Str(String),
     /// An interpolated string: its parts, concatenated.
     Interpolated(Vec<Part>),
-    /// An integer literal, negated when written with a leading `-`.
-    Int(i128),
+    /// An integer literal, negated when written with a leading `-`, of
+    /// the integer type the checker gave it.
+    Int(i128, IntType),
     Bool(bool),
     /// A binary operator. `int` is the operands' integer type for
     /// arithmetic (`+ - * / %`), whose result is checked against it, and
@@ -344,13 +345,86 @@ pub struct Construct {
     pub variant: Option<String>,
 }
 
-/// An integer type, with its inclusive range.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IntType {
-    /// Its name, such as `Int` or `U8`.
-    pub name: String,
-    pub min: i128,
-    pub max: i128,
+/// An integer type: `Int`, or a sized one. The one list of the
+/// language's integer types and their ranges, for the checker and every
+/// backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IntType {
+    Int,
+    I8,
+    I16,
+    I32,
+    I64,
+    U8,
+    U16,
+    U32,
+    U64,
+}
+
+impl IntType {
+    /// Every integer type, `Int` first.
+    pub const ALL: [IntType; 9] = [
+        IntType::Int,
+        IntType::I8,
+        IntType::I16,
+        IntType::I32,
+        IntType::I64,
+        IntType::U8,
+        IntType::U16,
+        IntType::U32,
+        IntType::U64,
+    ];
+
+    /// Its name, such as `Int` or `U8`: also its runtime type tag.
+    pub fn name(self) -> &'static str {
+        match self {
+            IntType::Int => "Int",
+            IntType::I8 => "I8",
+            IntType::I16 => "I16",
+            IntType::I32 => "I32",
+            IntType::I64 => "I64",
+            IntType::U8 => "U8",
+            IntType::U16 => "U16",
+            IntType::U32 => "U32",
+            IntType::U64 => "U64",
+        }
+    }
+
+    /// The integer type named `name`.
+    pub fn named(name: &str) -> Option<IntType> {
+        IntType::ALL.into_iter().find(|t| t.name() == name)
+    }
+
+    /// Whether it is a sized integer type, `I8` to `U64`, rather than
+    /// `Int`.
+    pub fn is_sized(self) -> bool {
+        self != IntType::Int
+    }
+
+    /// The smallest value of the type.
+    pub fn min(self) -> i128 {
+        match self {
+            IntType::Int | IntType::I64 => i64::MIN.into(),
+            IntType::I8 => i8::MIN.into(),
+            IntType::I16 => i16::MIN.into(),
+            IntType::I32 => i32::MIN.into(),
+            IntType::U8 | IntType::U16 | IntType::U32 | IntType::U64 => 0,
+        }
+    }
+
+    /// The largest value of the type.
+    pub fn max(self) -> i128 {
+        match self {
+            IntType::Int | IntType::I64 => i64::MAX.into(),
+            IntType::I8 => i8::MAX.into(),
+            IntType::I16 => i16::MAX.into(),
+            IntType::I32 => i32::MAX.into(),
+            IntType::U8 => u8::MAX.into(),
+            IntType::U16 => u16::MAX.into(),
+            IntType::U32 => u32::MAX.into(),
+            IntType::U64 => u64::MAX.into(),
+        }
+    }
 }
 
 /// What a call reaches.

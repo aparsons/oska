@@ -294,7 +294,7 @@ impl Lowering<'_> {
         let kind = match &expr.kind {
             ast::ExprKind::Unit => ExprKind::Unit,
             ast::ExprKind::Bool(b) => ExprKind::Bool(*b),
-            ast::ExprKind::Int(text) => int_literal(text, false),
+            ast::ExprKind::Int(text) => self.int_literal(text, false, expr.span),
             ast::ExprKind::Str(parts) => self.string(parts),
             ast::ExprKind::Name(ident) => self.local(ident),
             ast::ExprKind::Field { base, name } => self.field(expr.span, base, name),
@@ -303,11 +303,11 @@ impl Lowering<'_> {
             ast::ExprKind::Unary { op, operand } => match (op, &operand.kind) {
                 (UnaryOp::Not, _) => ExprKind::Not(self.boxed(operand)),
                 // A negative literal is one value, so `-128` fits `I8`.
-                (UnaryOp::Neg, ast::ExprKind::Int(text)) => int_literal(text, true),
+                (UnaryOp::Neg, ast::ExprKind::Int(text)) => self.int_literal(text, true, expr.span),
                 (UnaryOp::Neg, _) => match self.resolutions.get(&expr.span) {
                     Some(Resolution::Int(int)) => ExprKind::Neg {
                         operand: self.boxed(operand),
-                        int: int.clone(),
+                        int: *int,
                     },
                     _ => self.unsupported(expr.span, "`-` on this type"),
                 },
@@ -463,6 +463,21 @@ impl Lowering<'_> {
         }
     }
 
+    /// An integer literal as written (digits and `_` separators), negated
+    /// when `negative`, of the type the checker recorded at `span`. The
+    /// checker has already checked that it fits.
+    fn int_literal(&self, text: &str, negative: bool, span: Span) -> ExprKind {
+        let Some(Resolution::Int(int)) = self.resolutions.get(&span) else {
+            return self.unsupported(span, "an integer literal of a type not known");
+        };
+        let digits: String = text.chars().filter(|&c| c != '_').collect();
+        match digits.parse::<i128>() {
+            Ok(value) if negative => ExprKind::Int(-value, *int),
+            Ok(value) => ExprKind::Int(value, *int),
+            Err(_) => self.unsupported(span, "an integer literal this large"),
+        }
+    }
+
     /// The node at `span` the checked program cannot express: named as
     /// the checker recorded it, or else as `what`.
     fn unsupported(&self, span: Span, what: &str) -> ExprKind {
@@ -507,7 +522,7 @@ impl Lowering<'_> {
         let int = match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
                 match resolved {
-                    Some(Resolution::Int(int)) => Some(int.clone()),
+                    Some(Resolution::Int(int)) => Some(*int),
                     _ => return self.unsupported(span, &format!("`{}` on this type", op.text())),
                 }
             }
@@ -591,17 +606,5 @@ fn path_name(ty: &ast::Type) -> Option<&str> {
     match &ty.kind {
         TypeKind::Path { segments, .. } => segments.last().map(|s| s.name.as_str()),
         _ => None,
-    }
-}
-
-/// An integer literal as written (digits and `_` separators), negated
-/// when `negative`. The checker has already checked that it fits its
-/// type.
-fn int_literal(text: &str, negative: bool) -> ExprKind {
-    let digits: String = text.chars().filter(|&c| c != '_').collect();
-    match digits.parse::<i128>() {
-        Ok(value) if negative => ExprKind::Int(-value),
-        Ok(value) => ExprKind::Int(value),
-        Err(_) => ExprKind::Unsupported("an integer literal this large".to_string()),
     }
 }

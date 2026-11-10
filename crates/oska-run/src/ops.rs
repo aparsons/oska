@@ -18,7 +18,7 @@ pub fn binary(
     op: BinaryOp,
     lhs: Value,
     rhs: Value,
-    int: Option<&IntType>,
+    int: Option<IntType>,
     span: Span,
 ) -> Result<Value, Panic> {
     let value = match op {
@@ -31,19 +31,25 @@ pub fn binary(
         BinaryOp::Ge => Value::Bool(lhs.as_int() >= rhs.as_int()),
         BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
             let int = int.expect("the checker records the type of integer arithmetic");
-            Value::Int(arithmetic(op, lhs.as_int(), rhs.as_int(), int, span)?)
+            Value::Int(arithmetic(op, lhs.as_int(), rhs.as_int(), int, span)?, int)
         }
     };
     Ok(value)
 }
 
 /// Unary `-` on an integer of type `int`.
-pub fn neg(operand: Value, int: &IntType, span: Span) -> Result<Value, Panic> {
+pub fn neg(operand: Value, int: IntType, span: Span) -> Result<Value, Panic> {
     let n = operand.as_int();
-    fits(-n, int, || format!("`-{n}` overflows `{}`", int.name), span).map(Value::Int)
+    fits(
+        -n,
+        int,
+        || format!("`-{n}` overflows `{}`", int.name()),
+        span,
+    )
+    .map(|n| Value::Int(n, int))
 }
 
-fn arithmetic(op: BinaryOp, a: i128, b: i128, int: &IntType, span: Span) -> Result<i128, Panic> {
+fn arithmetic(op: BinaryOp, a: i128, b: i128, int: IntType, span: Span) -> Result<i128, Panic> {
     if matches!(op, BinaryOp::Div | BinaryOp::Rem) && b == 0 {
         return Err(Panic::new(
             codes::DIVISION_BY_ZERO,
@@ -65,9 +71,9 @@ fn arithmetic(op: BinaryOp, a: i128, b: i128, int: &IntType, span: Span) -> Resu
         format!(
             "`{a} {} {b}` overflows `{}`, which ranges from {} to {}",
             op.text(),
-            int.name,
-            int.min,
-            int.max
+            int.name(),
+            int.min(),
+            int.max()
         )
     };
     match result {
@@ -79,11 +85,11 @@ fn arithmetic(op: BinaryOp, a: i128, b: i128, int: &IntType, span: Span) -> Resu
 /// `n` when it fits `int`, otherwise an overflow panic with `message`.
 fn fits(
     n: i128,
-    int: &IntType,
+    int: IntType,
     message: impl FnOnce() -> String,
     span: Span,
 ) -> Result<i128, Panic> {
-    if (int.min..=int.max).contains(&n) {
+    if (int.min()..=int.max()).contains(&n) {
         Ok(n)
     } else {
         Err(Panic::new(codes::OVERFLOW, message(), span))

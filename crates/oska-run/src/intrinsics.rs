@@ -169,9 +169,9 @@ pub(crate) fn debug(value: &Value, out: &mut String) {
     match value {
         Value::Unit => out.push_str("()"),
         Value::Bool(b) => out.push_str(&b.to_string()),
-        Value::Int(n) => out.push_str(&n.to_string()),
+        Value::Int(n, _) => out.push_str(&n.to_string()),
         Value::Str(s) => out.push_str(&format!("{:?}", &**s)),
-        Value::Range { start, end } => out.push_str(&format!("{start}..{end}")),
+        Value::Range { start, end, .. } => out.push_str(&format!("{start}..{end}")),
         Value::Struct { ty, .. } if &**ty == SECRET => out.push_str("<redacted>"),
         Value::Struct { ty, fields } => {
             out.push_str(ty);
@@ -281,12 +281,12 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 
 /// `Clock.now_millis(self)`.
 fn clock_now_millis(host: &mut dyn Host, _: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(Value::Int(host.now_millis()))
+    Ok(Value::int(host.now_millis()))
 }
 
 /// `Random.next_int(self)`: from 0 up to, but excluding, 2^63.
 fn random_next_int(host: &mut dyn Host, _: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(Value::Int(i128::from(host.next_random() >> 1)))
+    Ok(Value::int(i128::from(host.next_random() >> 1)))
 }
 
 // ---- Files -------------------------------------------------------------

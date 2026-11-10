@@ -201,7 +201,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     fn eval(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, Unwind> {
         match &expr.kind {
             ExprKind::Unit => Ok(Value::Unit),
-            ExprKind::Int(n) => Ok(Value::Int(*n)),
+            ExprKind::Int(n, int) => Ok(Value::Int(*n, *int)),
             ExprKind::Bool(b) => Ok(Value::Bool(*b)),
             ExprKind::Local(slot) => Ok(frame.slots[*slot].clone()),
             ExprKind::Binary { .. } => self.binary(expr, frame),
@@ -229,13 +229,15 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 .expect("the checker allows `self` only in a method")),
             ExprKind::Neg { operand, int } => {
                 let operand = self.eval(operand, frame)?;
-                Ok(ops::neg(operand, int, expr.span)?)
+                Ok(ops::neg(operand, *int, expr.span)?)
             }
             ExprKind::Not(operand) => Ok(Value::Bool(!self.eval(operand, frame)?.as_bool())),
             ExprKind::Range { start, end } => {
-                let start = self.eval(start, frame)?.as_int();
+                let Value::Int(start, int) = self.eval(start, frame)? else {
+                    unreachable!("the checker allows `..` only between integers")
+                };
                 let end = self.eval(end, frame)?.as_int();
-                Ok(Value::Range { start, end })
+                Ok(Value::Range { start, end, int })
             }
             ExprKind::List(items) => Ok(Value::List(Rc::new(self.eval_all(items, frame)?))),
             ExprKind::Construct { ctor, fields } => {
@@ -262,7 +264,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             ExprKind::FnValue(callee) => Ok(Value::Function(Rc::new(callee.clone()))),
             ExprKind::Scope(body) => self.scope(body, frame),
             ExprKind::Unit
-            | ExprKind::Int(_)
+            | ExprKind::Int(..)
             | ExprKind::Bool(_)
             | ExprKind::Local(_)
             | ExprKind::Binary { .. }
@@ -309,7 +311,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             _ => {}
         }
         let rhs = self.eval(rhs, frame)?;
-        Ok(ops::binary(*op, lhs, rhs, int.as_ref(), expr.span)?)
+        Ok(ops::binary(*op, lhs, rhs, *int, expr.span)?)
     }
 
     /// A closure value: `code`, with what it captures from `frame`: only
@@ -589,7 +591,9 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         frame: &mut Frame,
     ) -> Result<(), Unwind> {
         let items: Box<dyn Iterator<Item = Value>> = match self.eval(iter, frame)? {
-            Value::Range { start, end } => Box::new((start..end).map(Value::Int)),
+            Value::Range { start, end, int } => {
+                Box::new((start..end).map(move |n| Value::Int(n, int)))
+            }
             Value::List(items) => Box::new(ListIter { items, next: 0 }),
             other => {
                 unreachable!("the checker allows `for` over a range or a list, found {other:?}")
