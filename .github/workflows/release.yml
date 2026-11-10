@@ -1,0 +1,253 @@
+# Build, sign and publish oskac releases.
+#
+# Pushing a tag vX.Y.Z (the version oskac reports, from Cargo.toml):
+#   1. builds oskac natively for Linux (on Ubuntu 22.04, so the binaries
+#      need glibc 2.35 or newer), macOS (x86_64, aarch64) and Windows
+#      (x86_64);
+#   2. assembles the binaries and SHA256SUMS, whose first line names the
+#      tag (`# oska-release vX.Y.Z`);
+#   3. signs SHA256SUMS with the RELEASE_SIGNING_KEY secret
+#      (`ssh-keygen -Y sign -n oska-release`) and verifies the result against
+#      site/oska-release.pub;
+#   4. stores the files in a GitHub Release, which only serves as storage
+#      because the repository is private;
+#   5. starts the Pages workflow on main, which fetches every release,
+#      verifies it again and publishes it at
+#      https://oskalang.dev/releases/vX.Y.Z/ with /latest.json.
+#
+# A pull request is a dry run: the same builds, signed with a throwaway key,
+# verified and staged into a scratch site. Nothing is published, and it
+# never enters the `release` environment.
+#
+# Needs, once:
+#   - the secret RELEASE_SIGNING_KEY, an OpenSSH private key with no
+#     passphrase, whose public half is committed as site/oska-release.pub;
+#   - so that only a maintainer's tag can sign: the jobs that read the key or
+#     publish (`sign`, `publish`) run in the environment `release`.
+#     Configure it in the repository settings:
+#       * Environments > `release` > Deployment branches and tags: "Selected
+#         branches and tags", with the single tag rule `v*` (no branches);
+#       * the secret RELEASE_SIGNING_KEY stored in the `release` environment,
+#         and the repository-level secret of that name deleted;
+#       * Rules > Rulesets: a tag ruleset targeting `v*` that restricts
+#         creations, updates and deletions, with only maintainers (repository
+#         admins) on the bypass list;
+#       * optionally, required reviewers on the environment.
+#     Until then the workflow still works: GitHub creates the environment
+#     unprotected on first use, and repository secrets reach it.
+#
+# The release scripts are in scripts/release/ and are tested by
+# scripts/release/test.sh.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - crates/**
+      - Cargo.toml
+      - Cargo.lock
+      - scripts/release/**
+      - .github/workflows/release.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux builds run on the oldest supported Ubuntu, so the binaries
+          # need only its glibc (2.35); install.sh refuses anything older.
+          - asset: oskac-linux-x86_64
+            runner: ubuntu-22.04
+            machine: x86_64
+          - asset: oskac-linux-aarch64
+            runner: ubuntu-22.04-arm
+            machine: aarch64
+          - asset: oskac-macos-x86_64
+            runner: macos-15-intel
+            machine: x86_64
+          - asset: oskac-macos-aarch64
+            runner: macos-latest
+            machine: arm64
+          - asset: oskac-windows-x86_64.exe
+            runner: windows-latest
+            machine: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - run: cargo build --release --locked -p oskac
+      - name: Name the binary for its target
+        shell: bash
+        env:
+          ASSET: ${{ matrix.asset }}
+          MACHINE: ${{ matrix.machine }}
+        run: |
+          # A runner label that moves to other hardware must fail the build,
+          # not ship a binary under the wrong name.
+          test "$(uname -m)" = "$MACHINE"
+          if [ "$RUNNER_OS" = Windows ]; then
+            bin=target/release/oskac.exe
+          else
+            bin=target/release/oskac
+          fi
+          mkdir dist
+          cp "$bin" "dist/$ASSET"
+          "dist/$ASSET" --version
+          if [ "$RUNNER_OS" = Linux ]; then
+            # The newest glibc symbol version the binary needs must not be
+            # newer than the 2.35 the install guide and install.sh promise.
+            needs=$(objdump -T "dist/$ASSET" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1)
+            echo "dist/$ASSET needs $needs"
+            if ! printf '%s\n' "$needs" GLIBC_2.35 | sort -V -C; then
+              echo "::error::dist/$ASSET needs $needs, newer than the documented glibc 2.35"
+              exit 1
+            fi
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 7
+
+  assemble:
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: builds
+          pattern: oskac-*
+          merge-multiple: true
+      - name: Name the release
+        id: tag
+        run: |
+          chmod +x builds/oskac-linux-x86_64
+          built=$(builds/oskac-linux-x86_64 --version)
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            tag=$GITHUB_REF_NAME
+            if [ "$built" != "oskac ${tag#v}" ]; then
+              echo "::error::tag $tag does not match '$built'; bump the version in Cargo.toml"
+              exit 1
+            fi
+          else
+            tag="v${built#oskac }"
+          fi
+          echo "tag=$tag" >>"$GITHUB_OUTPUT"
+      - name: Assemble
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: scripts/release/assemble.sh "$TAG" builds release
+      - name: Sign and verify with a throwaway key (dry run)
+        if: github.event_name == 'pull_request'
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          dry="$RUNNER_TEMP/dry-run"
+          mkdir "$dry"
+          cp -R release/. "$dry/"
+          key="$RUNNER_TEMP/dry-run-key"
+          ssh-keygen -q -t ed25519 -N '' -C oska-release-dry-run -f "$key"
+          scripts/release/sign.sh "$dry/$TAG" "$key" "$key.pub"
+          printf 'oska-release namespaces="oska-release" %s\n' "$(cat "$key.pub")" \
+            >"$RUNNER_TEMP/allowed_signers"
+          ssh-keygen -Y verify -f "$RUNNER_TEMP/allowed_signers" -I oska-release \
+            -n oska-release -s "$dry/$TAG/SHA256SUMS.sig" <"$dry/$TAG/SHA256SUMS"
+          mkdir "$RUNNER_TEMP/site"
+          scripts/release/stage-site.sh "$dry" "$RUNNER_TEMP/site" "$key.pub"
+          find "$RUNNER_TEMP/site" -type f | sort
+          if [ -f "$RUNNER_TEMP/site/latest.json" ]; then
+            jq . "$RUNNER_TEMP/site/latest.json"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push'
+        with:
+          name: unsigned-${{ steps.tag.outputs.tag }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+
+  # The only job that reads the signing key. The `release` environment
+  # limits it to v* tags once configured (see the top of this file).
+  sign:
+    needs: assemble
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: release
+    outputs:
+      tag: ${{ needs.assemble.outputs.tag }}
+    env:
+      TAG: ${{ needs.assemble.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: unsigned-${{ needs.assemble.outputs.tag }}
+          path: release
+      - name: Sign with the release key
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then
+            echo "::error::the RELEASE_SIGNING_KEY secret is not set"
+            exit 1
+          fi
+          if [ ! -f site/oska-release.pub ]; then
+            echo "::error::site/oska-release.pub is not committed"
+            exit 1
+          fi
+          key="$RUNNER_TEMP/release-key"
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s\n' "$RELEASE_SIGNING_KEY" >"$key")
+          scripts/release/sign.sh "release/$TAG" "$key" site/oska-release.pub
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ needs.assemble.outputs.tag }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: sign
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      # Create the GitHub Release.
+      contents: write
+      # Start the Pages workflow.
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.sign.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ needs.sign.outputs.tag }}
+          path: release
+      - name: Store the files in a GitHub Release
+        run: |
+          prerelease=()
+          case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "$TAG" --verify-tag "${prerelease[@]}" \
+            --title "oskac $TAG" \
+            --notes "Download from https://oskalang.dev/releases/$TAG/" \
+            release/"$TAG"/*
+      # Events caused by GITHUB_TOKEN start no workflows, except a dispatch.
+      - name: Publish to oskalang.dev
+        run: gh workflow run pages.yml --ref main

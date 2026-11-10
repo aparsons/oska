@@ -1,0 +1,25 @@
+E0300: Untrusted text in a structural position: an `Untrusted<String>` used where trusted `String` is required, such as a `String` parameter, field, or return type. Reported instead of `E0220` when trust is the only difference. Like `E0270`, the rule is part of type compatibility, so it holds on every route, including inside type arguments such as `Option<Untrusted<String>>`. Trusted `String` may always be used as `Untrusted<String>`. The message suggests a validator or `.assume_trusted()`. Spans the expression.
+
+Machine-applicable fix: none.
+
+Example, which fails with E0300:
+
+    fn greet(name: String) -> String {
+        "Hello, {name}"
+    }
+
+    fn show(user: Untrusted<String>) -> String {
+        greet(user)
+    }
+
+Fixed:
+
+    fn greet(name: Untrusted<String>) -> Untrusted<String> {
+        "Hello, {name}"
+    }
+
+    fn show(user: Untrusted<String>) -> Untrusted<String> {
+        greet(user)
+    }
+
+https://oskalang.dev/codes/E0300

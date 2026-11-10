@@ -4,14 +4,14 @@ version = 3
 
 [[package]]
 name = "oska-check"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "oska-syntax",
 ]
 
 [[package]]
 name = "oska-run"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "oska-check",
  "oska-syntax",
@@ -19,11 +19,11 @@ dependencies = [
 
 [[package]]
 name = "oska-syntax"
-version = "0.0.1"
+version = "0.1.0"
 
 [[package]]
 name = "oskac"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "oska-check",
  "oska-run",

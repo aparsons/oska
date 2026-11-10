@@ -2,6 +2,8 @@
 
 use std::process::ExitCode;
 
+mod explain;
+
 const USAGE: &str = "\
 oskac - the Oska compiler
 
@@ -16,7 +18,8 @@ USAGE:
                                            no diagnostics, run it
     oskac test <file.osk> [--format=json] [--integration]
                                            Run the test blocks in a source file
-    oskac --version                        Print the version
+    oskac explain <code> [--format=json]   Explain a diagnostic code, offline
+    oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ";
 
@@ -77,7 +80,14 @@ fn main() -> ExitCode {
     let positional: Vec<&str> = line.positional.iter().map(String::as_str).collect();
     match positional.as_slice() {
         ["--version" | "-V"] => {
-            println!("oskac {}", env!("CARGO_PKG_VERSION"));
+            if flags.json {
+                println!(
+                    "{{\"name\":\"oskac\",\"version\":\"{}\"}}",
+                    env!("CARGO_PKG_VERSION")
+                );
+            } else {
+                println!("oskac {}", env!("CARGO_PKG_VERSION"));
+            }
             ExitCode::SUCCESS
         }
         ["--help" | "-h"] => {
@@ -89,6 +99,7 @@ fn main() -> ExitCode {
         ["check", path] => check_file(path, flags),
         ["run", path] => run_file(path, flags, &line.program_args),
         ["test", path] => test_file(path, flags),
+        ["explain", code] => explain_code(code, flags),
         _ => {
             eprint!("{USAGE}");
             ExitCode::from(2)
@@ -147,12 +158,7 @@ fn check_file(path: &str, Flags { json, release, .. }: Flags) -> ExitCode {
         print!("{}", report.to_json());
     } else {
         print_diagnostics(path, &report.diagnostics);
-        for function in &report.functions {
-            println!("{}", describe_authority(function));
-        }
-        for site in &report.audit {
-            println!("{path}: {site}");
-        }
+        print!("{}", report.authority_to_human(path));
     }
     if report.diagnostics.is_empty() {
         ExitCode::SUCCESS
@@ -224,24 +230,26 @@ fn test_file(path: &str, flags: Flags) -> ExitCode {
     ExitCode::from(u8::try_from(report.exit_code()).unwrap_or(u8::MAX))
 }
 
-/// One line of the human-readable authority report, such as
-/// `fn main: Stdout (io), FsRead (fs)` or `fn add: pure`.
-fn describe_authority(function: &oska_check::FunctionAuthority) -> String {
-    if function.pure {
-        return format!("fn {}: pure", function.name);
+/// `oskac explain`: print the catalog entry of a diagnostic code, as JSON
+/// with `--format=json`. An unknown code is an error (exit code 2) that
+/// suggests the closest code, as text on stderr or as JSON on stdout.
+fn explain_code(code: &str, Flags { json, .. }: Flags) -> ExitCode {
+    let entries = explain::catalog();
+    if let Some(entry) = explain::find(&entries, code) {
+        if json {
+            println!("{}", explain::to_json(entry));
+        } else {
+            print!("{}", explain::to_human(entry));
+        }
+        return ExitCode::SUCCESS;
     }
-    let sources: Vec<String> = function
-        .via
-        .iter()
-        .map(|via| {
-            if via.capabilities.is_empty() {
-                format!("cap fn ({})", via.param)
-            } else {
-                format!("{} ({})", via.capabilities.join(", "), via.param)
-            }
-        })
-        .collect();
-    format!("fn {}: {}", function.name, sources.join(", "))
+    let suggestion = explain::closest(&entries, code);
+    if json {
+        println!("{}", explain::unknown_to_json(code, suggestion));
+    } else {
+        eprintln!("{}", explain::unknown_to_human(code, suggestion));
+    }
+    ExitCode::from(2)
 }
 
 fn lex_file(path: &str, Flags { json, .. }: Flags) -> ExitCode {

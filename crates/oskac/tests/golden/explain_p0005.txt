@@ -1,0 +1,5 @@
+P0005: `spawn` on a finished scope: the handle's `scope` block has ended, and work never runs outside a scope. Spans the call. This is a second line of defence behind the checker (`E0292`), which already stops a handle from outliving its block: no checked program can reach this code, so it has no example.
+
+Machine-applicable fix: none.
+
+https://oskalang.dev/codes/P0005

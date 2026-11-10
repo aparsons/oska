@@ -18,8 +18,55 @@ Before a program starts, the runtime checks that it can run all of it, reached o
 | Code | Refusal |
 | --- | --- |
 | `E0370` | `main` declares a capability that has no runtime yet: `Net`, `NetConnect`, `NetListen`, `Spawn`, or `Sched`. Spans `main`'s body. |
-| `E0371` | The program imports a `std` module that has no runtime yet: `std.proc`, `std.sql`, or `std.html`, used or not. Spans the module path of the `use`. |
+| `E0371` | The program imports a `std` module that has no runtime yet: `std.proc` or `std.sql`, used or not. Spans the module path of the `use`. |
 | `E0380` | The program uses something the interpreter cannot run yet: a construct the checked program cannot express, a call of a prelude function with no runtime implementation, or a parameter of `main` that is neither a capability nor `Args`. The message names the construct, as in ``the interpreter cannot run a `From`-bound conversion yet``; others are a constructor used as a function value and a call of a generic trait's method. Spans the construct or call, or `main`'s body for a parameter. |
+
+### Refusal examples
+
+Each refusal has a program that is refused with exactly that code and the same program fixed. The examples run on the in-memory host, so they depend on nothing outside the program.
+
+#### `E0370`
+
+```oska error=E0370
+fn main(net: Net) -> Result<(), IoError> {
+    Ok(())
+}
+```
+
+```oska fixed=E0370
+fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("hello")
+}
+```
+
+#### `E0371`
+
+```oska error=E0371
+use std.sql
+
+fn main() {}
+```
+
+```oska fixed=E0371
+use std.html
+
+fn main() {}
+```
+
+#### `E0380`
+
+```oska error=E0380
+fn main() {
+    let make = Some
+    let x: Option<Int> = make(1)
+}
+```
+
+```oska fixed=E0380
+fn main() {
+    let x: Option<Int> = Some(1)
+}
+```
 
 ## Panics
 
@@ -39,13 +86,214 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0002` | Index out of bounds: `List.at` was given an index below 0 or not below the list's length. Spans the call. |
 | `P0003` | `todo()` reached. Spans the call. |
 | `P0004` | Division by zero: the right operand of `/` or `%` is zero. Spans the operation. |
-| `P0005` | `spawn` on a finished scope: the handle's `scope` block has ended. The checker (`E0292`) already stops a handle from outliving its block, so this is a second line of defence; work never runs outside a scope. Spans the call. |
+| `P0005` | `spawn` on a finished scope: the handle's `scope` block has ended, and work never runs outside a scope. Spans the call. This is a second line of defence behind the checker (`E0292`), which already stops a handle from outliving its block: no checked program can reach this code, so it has no example. |
 | `P0010` | `t.assert(cond)` was given `false`. Fails the test (see [Tests](#tests)). Spans the call. |
 | `P0011` | `t.assert_eq(actual, expected)` was given two values that differ through `Eq`. The message shows both, as `dbg` would. Spans the call. |
 | `P0012` | `t.assert_ne(actual, other)` was given two equal values. Spans the call. |
 | `P0013` | `t.fail(message)` was called. The message is `message`. Spans the call. |
 | `P0020` | `Env.secret` asked for a variable the environment does not set. Its signature has no room for a missing secret, and running on with a stand-in such as an empty one could let an empty password through. Spans the call. |
 | `P0021` | Calls nest too deep: runaway recursion. The interpreter runs on a thread of its own with a 256 MiB stack, and a call panics instead of starting when calls already nest 50,000 deep, or when so little of that stack is left that the next call could overflow it. The process never crashes on deep recursion: `oskac run` exits with 101, and under `oskac test` only the test that recursed fails. Spans the call that would have gone too deep. |
+| `P0035` | `String.slice` was given indices out of bounds: a start or end below 0 or past the text's length in characters, or a start past the end. Spans the call. Indices count characters (Unicode code points), not bytes. |
+| `P0036` | `String.repeat` was given a negative count. Spans the call. |
+| `P0037` | `String.repeat` would build a text over 256 MiB, so the interpreter panics instead of running out of memory. Spans the call. |
+
+### Panic examples
+
+Each panic has a program that stops with exactly that code and the same program fixed. The `P001x` examples are tests, because only a `test` block can fail an assertion, and run under `oskac test`. `P0005` has no example: the checker (`E0292`) stops a program from keeping a scope handle past its block, so no checked program can reach it.
+
+#### `P0001`
+
+```oska error=P0001
+fn main() {
+    let x: U8 = 255
+    let y = x + 1
+}
+```
+
+```oska fixed=P0001
+fn main() {
+    let x: Int = 255
+    let y = x + 1
+}
+```
+
+#### `P0002`
+
+```oska error=P0002
+fn main() {
+    let xs: List<Int> = List.new()
+    let first = xs.at(0)
+}
+```
+
+```oska fixed=P0002
+fn main() {
+    let xs: List<Int> = List.new()
+    let first = xs.get(0)
+}
+```
+
+#### `P0003`
+
+```oska error=P0003
+fn main() {
+    todo()
+}
+```
+
+```oska fixed=P0003
+fn main() {}
+```
+
+#### `P0004`
+
+```oska error=P0004
+fn main() {
+    let zero = 0
+    let n = 10 / zero
+}
+```
+
+```oska fixed=P0004
+fn main() {
+    let two = 2
+    let n = 10 / two
+}
+```
+
+#### `P0010`
+
+```oska error=P0010 tests
+test "is positive" {
+    t.assert(1 < 0)
+}
+```
+
+```oska fixed=P0010 tests
+test "is positive" {
+    t.assert(0 < 1)
+}
+```
+
+#### `P0011`
+
+```oska error=P0011 tests
+test "adds" {
+    t.assert_eq(1 + 1, 3)
+}
+```
+
+```oska fixed=P0011 tests
+test "adds" {
+    t.assert_eq(1 + 1, 2)
+}
+```
+
+#### `P0012`
+
+```oska error=P0012 tests
+test "differs" {
+    t.assert_ne(2, 2)
+}
+```
+
+```oska fixed=P0012 tests
+test "differs" {
+    t.assert_ne(2, 3)
+}
+```
+
+#### `P0013`
+
+```oska error=P0013 tests
+test "not written yet" {
+    t.fail("write this test")
+}
+```
+
+```oska fixed=P0013 tests
+test "written" {
+    t.assert(true)
+}
+```
+
+#### `P0020`
+
+```oska error=P0020
+fn main(env: Env) {
+    let key = env.secret("API_KEY")
+}
+```
+
+```oska fixed=P0020
+fn main(env: Env) {
+    let key = env.get("API_KEY")
+}
+```
+
+#### `P0021`
+
+```oska error=P0021
+fn down(n: Int) -> Int {
+    1 + down(n - 1)
+}
+
+fn main() {
+    let depth = down(10)
+}
+```
+
+```oska fixed=P0021
+fn down(n: Int) -> Int {
+    if n == 0 { 0 } else { 1 + down(n - 1) }
+}
+
+fn main() {
+    let depth = down(10)
+}
+```
+
+#### `P0035`
+
+```oska error=P0035
+fn main() {
+    let part = "abc".slice(0, 10)
+}
+```
+
+```oska fixed=P0035
+fn main() {
+    let part = "abc".slice(0, 2)
+}
+```
+
+#### `P0036`
+
+```oska error=P0036
+fn main() {
+    let line = "ab".repeat(-1)
+}
+```
+
+```oska fixed=P0036
+fn main() {
+    let line = "ab".repeat(3)
+}
+```
+
+#### `P0037`
+
+```oska error=P0037
+fn main() {
+    let huge = "ab".repeat(300000000)
+}
+```
+
+```oska fixed=P0037
+fn main() {
+    let small = "ab".repeat(3000)
+}
+```
 
 ## Errors and traits
 
@@ -61,7 +309,8 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 - `Stdin`, `Stdout`, and `Stderr` reach the standard streams. `Env` reads environment variables; `Env.secret` wraps one in a `Secret`, which stays a wrapper at runtime, so `dbg` prints it as `<redacted>`.
 - `Clock.now_millis()` is the time in milliseconds since the Unix epoch. `Random.next_int()` comes from a built-in pseudo-random generator (SplitMix64, not cryptographically secure), seeded from the clock and the process.
 - `Fs`, `FsRead`, and `FsWrite` carry a root and an access. `read_only` and `write_only` keep the root and narrow the access, and a read or write the access does not allow is refused.
-- **Confinement.** `restrict_to(dir)` on an unrestricted filesystem makes `dir`, canonicalized, the root; on a restricted one, `dir` is resolved under the current root like any path, so a restriction never widens. A directory that does not exist or escapes leaves a filesystem that reaches nothing. Through a restricted filesystem, every path is resolved like this, and a refusal is an `Err(IoError)`:
+- `FsWrite.create_dir(path)` creates one directory, whose parent must exist. A directory already there is kept, with what it holds, so a program can rebuild into it; a file there is an error. It is confined like a write (step 4 below): `path` must end in a plain name, and a symlink there is refused, never followed. On a real host the parent is checked to be under the root again just before the directory is made, and the directory just after.
+- **Confinement.** `restrict_to(dir)` on an unrestricted filesystem makes `dir`, canonicalized, the root; on a restricted one, `dir` is resolved under the current root like any path, so a restriction never widens. A directory that does not exist or escapes leaves a filesystem that reaches nothing. `dir` may also name a single file: the filesystem then reaches only that file, read as `Path.new(".")`, and lists and writes nothing. Through a restricted filesystem, every path is resolved like this, and a refusal is an `Err(IoError)`:
   1. An empty path is refused, and so is an absolute one, even one inside the root.
   2. The path is joined to the root and canonicalized: `..` is resolved and every symlink followed, in every component.
   3. The result must be the root or lie under it, compared component by component.

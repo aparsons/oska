@@ -50,6 +50,9 @@ impl Stderr {
 pub struct Fs { handle: Int }
 
 impl Fs {
+    // Confine to `dir`. It may also name a single file: the result then
+    // reaches only that file, as `Path.new(".")`. The same holds for
+    // `FsRead` and `FsWrite`.
     pub fn restrict_to(self, dir: String) -> Fs
     pub fn read_only(self) -> FsRead
     pub fn write_only(self) -> FsWrite
@@ -61,6 +64,11 @@ pub struct FsRead { handle: Int }
 impl FsRead {
     pub fn restrict_to(self, dir: String) -> FsRead
     pub fn read_to_string(self, path: Path) -> Result<Untrusted<String>, IoError>
+    // The names of the entries of the directory at `path` (`"."` is the
+    // root itself), sorted so the order is the same on every host. The
+    // directory is confined like any read. A name comes from outside the
+    // program, so it is untrusted.
+    pub fn list_dir(self, path: Path) -> Result<List<Untrusted<String>>, IoError>
 }
 
 #[capability]
@@ -71,6 +79,11 @@ impl FsWrite {
     // Create the file at `path`, or replace what it holds, with
     // `contents`.
     pub fn write(self, path: Path, contents: Untrusted<String>) -> Result<(), IoError>
+    // Create the directory at `path`; its parent must exist. A directory
+    // already there is kept, with everything in it, and anything else
+    // there is an error. Confined like a write: `path` ends in a plain
+    // name, and a symlink there is never followed.
+    pub fn create_dir(self, path: Path) -> Result<(), IoError>
 }
 
 #[capability]
@@ -238,6 +251,34 @@ impl String {
     pub fn split(self, separator: String) -> List<String>
     #[follows_trust]
     pub fn contains(self, needle: String) -> Bool
+    #[follows_trust]
+    pub fn starts_with(self, prefix: String) -> Bool
+    #[follows_trust]
+    pub fn ends_with(self, suffix: String) -> Bool
+    // Every occurrence of `from` replaced by `to`. An empty `from`
+    // occurs nowhere.
+    #[follows_trust]
+    pub fn replace(self, from: String, to: String) -> String
+    // `parts` with the text between each two: `",".join(["a", "b"])` is
+    // `"a,b"`.
+    #[follows_trust]
+    pub fn join(self, parts: List<String>) -> String
+    // Each character (Unicode code point) as a text of its own, in order.
+    #[follows_trust]
+    pub fn chars(self) -> List<String>
+    // The characters from index `start` up to, but excluding, `end`. An
+    // index out of bounds, or `start` past `end`, is a bug: it panics
+    // (`P0035`).
+    #[follows_trust]
+    pub fn slice(self, start: Int, end: Int) -> String
+    // The text `times` times over. A negative count panics (`P0036`), and
+    // so does a result too long to build (`P0037`).
+    #[follows_trust]
+    pub fn repeat(self, times: Int) -> String
+    // Every letter in lower case, by Unicode's rules: `"ÀB".to_lowercase()`
+    // is `"àb"`.
+    #[follows_trust]
+    pub fn to_lowercase(self) -> String
     // The decimal integer the whole text spells, if it is one.
     #[follows_trust]
     pub fn parse_int(self) -> Option<Int>

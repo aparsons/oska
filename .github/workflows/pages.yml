@@ -1,0 +1,92 @@
+# Build https://oskalang.dev with the Oska site generator and deploy it to
+# GitHub Pages, then check that the live site answers.
+#
+# Needs, once, in the repository settings: Pages source "GitHub Actions",
+# custom domain `oskalang.dev`, and HTTPS enforced once the certificate is
+# issued. The `github-pages` environment that deploys use must allow `main`.
+
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time; a newer push waits rather than cancelling a deploy
+# that is already under way.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - run: cargo build --release --locked -p oskac
+      # The generator publishes its own authority report, as the checker
+      # prints it now, at /authority.html.
+      - run: ./target/release/oskac check site/build.osk > site/authority.txt
+      - run: ./target/release/oskac run site/build.osk
+      # Releases are stored in GitHub Releases (see release.yml). Fetch them
+      # all, verify each against the committed key, and publish them under
+      # _site/releases/<tag>/ with _site/latest.json and the key.
+      - name: Add signed releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          releases="$RUNNER_TEMP/releases"
+          mkdir -p "$releases"
+          gh release list --limit 1000 --exclude-drafts --json tagName --jq '.[].tagName' |
+            while IFS= read -r tag; do
+              gh release download "$tag" --dir "$releases/$tag"
+            done
+          scripts/release/stage-site.sh "$releases" _site site/oska-release.pub
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  smoke:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: https://oskalang.dev/ answers 200
+        run: |
+          status=$(curl --silent --show-error --output /dev/null \
+            --write-out '%{http_code}' \
+            --retry 6 --retry-delay 10 --retry-all-errors --fail \
+            https://oskalang.dev/) || true
+          echo "https://oskalang.dev/ answered ${status:-nothing}"
+          test "$status" = 200
+      - name: the files agents and installers fetch are published
+        run: |
+          for path in install.sh install.ps1 oska-release.pub llms.txt llms-full.txt \
+            sitemap.xml robots.txt latest.json codes.json search.json agent-setup.md; do
+            curl --silent --show-error --fail --location --output /dev/null \
+              --retry 6 --retry-delay 10 --retry-all-errors \
+              "https://oskalang.dev/$path"
+            echo "https://oskalang.dev/$path answers"
+          done
+      # Once a release is published, install it the way the guide says and
+      # run it. With no release yet, this passes with a warning annotation.
+      - name: the published one-line install works
+        run: scripts/release/smoke-published.sh https://oskalang.dev

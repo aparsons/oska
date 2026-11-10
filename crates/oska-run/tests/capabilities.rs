@@ -106,6 +106,12 @@ impl Host for Recording {
     ) -> std::io::Result<()> {
         self.real.write_file(path, contents, beneath)
     }
+    fn create_dir(&mut self, path: &Path, beneath: Option<&Path>) -> std::io::Result<()> {
+        self.real.create_dir(path, beneath)
+    }
+    fn list_dir(&mut self, path: &Path, beneath: Option<&Path>) -> std::io::Result<Vec<String>> {
+        self.real.list_dir(path, beneath)
+    }
     fn printed(&self) -> Vec<String> {
         self.stdout.lines().map(str::to_string).collect()
     }
@@ -605,8 +611,8 @@ fn a_program_given_net_is_refused_before_it_starts() {
 }
 
 #[test]
-fn a_program_importing_proc_sql_or_html_is_refused_before_it_starts() {
-    for module in ["std.proc", "std.sql", "std.html"] {
+fn a_program_importing_proc_or_sql_is_refused_before_it_starts() {
+    for module in ["std.proc", "std.sql"] {
         assert_refused(
             &format!("use {module}\nfn main(io: Stdout) {{\n    let _ = io.println(\"hi\")\n}}\n"),
             "E0371",

@@ -13,7 +13,7 @@
 //! hosts (`FakeHost` deterministically, in memory), and call it from the
 //! intrinsic that needs it (`intrinsics.rs`).
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -74,6 +74,26 @@ pub trait Host: Send {
     /// nothing is written until the opened file is known to lie under it.
     fn write_file(&mut self, path: &Path, contents: &str, beneath: Option<&Path>)
         -> io::Result<()>;
+
+    /// Create the directory at `path`, whose parent must exist. A
+    /// directory already there is kept; anything else there is an error.
+    ///
+    /// `beneath` is as for [`Host::read_file`]: with it, `path` is one
+    /// `confine.rs` resolved, a symlink at `path` is refused rather than
+    /// followed, and the directory is checked to lie under `beneath`
+    /// once it exists.
+    fn create_dir(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<()>;
+
+    /// The names of the entries of the directory at `path`, sorted by
+    /// their bytes, so the order is the same on every host. A name is
+    /// the entry's own, not a path; a subdirectory and a symlink are
+    /// listed by name, and nothing is followed. Fails when `path` is not
+    /// a directory, or an entry's name is not valid UTF-8.
+    ///
+    /// `beneath` is as for [`Host::read_file`]: with it, `path` is one
+    /// `confine.rs` resolved, and nothing is listed unless the directory
+    /// still lies under it.
+    fn list_dir(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<Vec<String>>;
 
     /// Every line written to stdout so far, without its line break: one
     /// per `println`, as `t.printed()` returns them. A host that writes
@@ -177,6 +197,60 @@ impl Host for RealHost {
         file.write_all(contents.as_bytes())
     }
 
+    fn create_dir(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<()> {
+        // The parent is checked before the `mkdir`, and the directory
+        // after it, as `list_dir` checks its directory.
+        if let Some(root) = beneath {
+            let parent = path.parent().ok_or_else(|| moved(path))?;
+            resolved_beneath(parent, root)?;
+        }
+        // `mkdir` never follows a symlink in the last component: one
+        // there, dangling or not, makes it fail with `AlreadyExists`.
+        if let Err(error) = std::fs::create_dir(path) {
+            if error.kind() != io::ErrorKind::AlreadyExists {
+                return Err(error);
+            }
+            let there = match beneath {
+                Some(_) => std::fs::symlink_metadata(path)?,
+                None => std::fs::metadata(path)?,
+            };
+            if !there.is_dir() {
+                return Err(error);
+            }
+        }
+        // A symlink swapped in for a directory on the way may have sent
+        // the `mkdir` elsewhere: refuse to report success for it.
+        if let Some(root) = beneath {
+            resolved_beneath(path, root)?;
+        }
+        Ok(())
+    }
+
+    fn list_dir(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<Vec<String>> {
+        // The directory is checked before it is read and again after: a
+        // symlink swapped in for it in between sends the listing
+        // somewhere else, and that listing is discarded.
+        let under = |path: &Path| match beneath {
+            Some(root) => resolved_beneath(path, root).map(drop),
+            None => Ok(()),
+        };
+        under(path)?;
+        let mut names = Vec::new();
+        for entry in std::fs::read_dir(path)? {
+            let name = entry?.file_name();
+            let name = name.into_string().map_err(|name| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{name:?} in `{}` is not valid UTF-8", path.display()),
+                )
+            })?;
+            names.push(name);
+        }
+        under(path)?;
+        names.sort();
+        Ok(names)
+    }
+
     fn printed(&self) -> Vec<String> {
         Vec::new()
     }
@@ -248,11 +322,23 @@ fn open_beneath(path: &Path, root: &Path, options: &mut OpenOptions) -> io::Resu
         return Err(moved(path));
     }
     let file = options.open(path)?;
-    let now = std::fs::canonicalize(path)?;
-    if !now.starts_with(root) || !same_file(&file, &now)? {
+    let now = resolved_beneath(path, root)?;
+    if !same_file(&file, &now)? {
         return Err(moved(path));
     }
     Ok(file)
+}
+
+/// `path` with every symlink resolved, refused unless it lies under `root`.
+/// The one check every confined `RealHost` call makes, before and after it
+/// touches the filesystem, so a symlink swapped in on the way is caught.
+fn resolved_beneath(path: &Path, root: &Path) -> io::Result<PathBuf> {
+    let resolved = std::fs::canonicalize(path)?;
+    if resolved.starts_with(root) {
+        Ok(resolved)
+    } else {
+        Err(moved(path))
+    }
 }
 
 /// Whether `file`, already open, is the file at `path`.
@@ -300,7 +386,8 @@ pub const FAKE_SEED: u64 = 0x05EE_D0F0_5CA0;
 /// stand-ins.
 ///
 /// - Its filesystem is in memory: files by absolute path, with every
-///   ancestor of a file a directory. It has no symlinks, and its working
+///   ancestor of a file a directory, and the empty directories
+///   [`FakeHost::with_dir`] adds. It has no symlinks, and its working
 ///   directory is `/`.
 /// - Its clock is fixed at the Unix epoch.
 /// - Its generator has a fixed seed, [`FAKE_SEED`].
@@ -313,6 +400,8 @@ pub struct FakeHost {
     stdin: VecDeque<String>,
     env: BTreeMap<String, String>,
     files: BTreeMap<PathBuf, String>,
+    /// Directories that exist though no file lies under them.
+    dirs: BTreeSet<PathBuf>,
     random: SplitMix64,
 }
 
@@ -324,6 +413,7 @@ impl Default for FakeHost {
             stdin: VecDeque::new(),
             env: BTreeMap::new(),
             files: BTreeMap::new(),
+            dirs: BTreeSet::new(),
             random: SplitMix64::new(FAKE_SEED),
         }
     }
@@ -354,6 +444,30 @@ impl FakeHost {
         self
     }
 
+    /// The host with an empty directory at `path`, relative to `/`.
+    pub fn with_dir(mut self, path: &str) -> Self {
+        self.dirs.insert(normalize(Path::new(path)));
+        self
+    }
+
+    /// Every file under the directory `dir`, relative to `/`, by its path
+    /// relative to `dir`, with `/` between components.
+    pub fn files_under(&self, dir: &str) -> BTreeMap<String, String> {
+        let dir = normalize(Path::new(dir));
+        self.files
+            .iter()
+            .filter_map(|(path, text)| {
+                let relative = path.strip_prefix(&dir).ok()?;
+                let name = relative
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                Some((name, text.clone()))
+            })
+            .collect()
+    }
+
     /// The text of the file at `path`, relative to `/`, if there is one.
     pub fn file(&self, path: &str) -> Option<&str> {
         self.files
@@ -362,7 +476,9 @@ impl FakeHost {
     }
 
     fn is_dir(&self, path: &Path) -> bool {
-        path == Path::new("/") || self.files.keys().any(|f| f.starts_with(path) && f != path)
+        path == Path::new("/")
+            || self.dirs.iter().any(|d| d.starts_with(path))
+            || self.files.keys().any(|f| f.starts_with(path) && f != path)
     }
 }
 
@@ -473,6 +589,48 @@ impl Host for FakeHost {
             }
             _ => Err(not_found(&path)),
         }
+    }
+
+    fn create_dir(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<()> {
+        let path = fake_beneath(path, beneath)?;
+        if self.files.contains_key(&path) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("a file is already at {}", path.display()),
+            ));
+        }
+        if self.is_dir(&path) {
+            return Ok(());
+        }
+        match path.parent() {
+            Some(parent) if self.is_dir(parent) => {
+                self.dirs.insert(path);
+                Ok(())
+            }
+            _ => Err(not_found(&path)),
+        }
+    }
+
+    fn list_dir(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<Vec<String>> {
+        let path = fake_beneath(path, beneath)?;
+        if !self.is_dir(&path) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("not a directory: {}", path.display()),
+            ));
+        }
+        // A file's or empty directory's first component below `path` is
+        // an entry of it: a file if it is the last, else a directory.
+        // `BTreeSet` sorts by the bytes of the name, as `RealHost` does.
+        let names: BTreeSet<String> = self
+            .files
+            .keys()
+            .chain(&self.dirs)
+            .filter_map(|file| file.strip_prefix(&path).ok())
+            .filter_map(|rest| rest.components().next())
+            .filter_map(|c| c.as_os_str().to_str().map(str::to_string))
+            .collect();
+        Ok(names.into_iter().collect())
     }
 
     fn take_output(&mut self) -> Output {

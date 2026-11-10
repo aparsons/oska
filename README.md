@@ -33,6 +33,7 @@ fn main(io: Stdout) -> Result<(), IoError> {
 | `crates/oska-check` | Type checker and authority report (`oskac check`) |
 | `crates/oska-run` | Interpreter (`oskac run`) and test runner (`oskac test`) |
 | `examples/` | Example `.osk` programs |
+| `docs/guide/` | Task guides: [quickstart](docs/guide/quickstart.md), [language tour](docs/guide/language-tour.md), [CLI reference](docs/guide/cli-reference.md), [agent guide](docs/guide/agent-guide.md), and more |
 | `docs/design.md` | Language design notes |
 | `docs/adr/` | Architecture decision records |
 | `docs/research/` | Background research |

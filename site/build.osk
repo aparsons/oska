@@ -1,0 +1,1989 @@
+// The generator for https://oskalang.dev: `oskac run site/build.osk`, from
+// the root of the repository, writes the site to `_site/`.
+//
+// Run `oskac check site/build.osk` for its authority report. `main` is
+// handed the filesystem read-only and write-only, and narrows each before
+// it reads or writes anything: reading to `docs/` and to the files the
+// site needs beside it (the README, the glossary, `Cargo.toml` for the
+// version, the stylesheet, and the search script), each restricted to on
+// its own, and writing to `_site/`, which it creates.
+//
+// Every page is built with `std.html`. Text from the repository is
+// untrusted, and goes into a page only through `html.text`, which escapes
+// it, attribute values included. Markup is written only here, as
+// literals. A link or image whose URL could do more than navigate, or
+// load from the site itself, is dropped, and its text kept.
+//
+// The Markdown it understands is the subset the docs use: ATX headings,
+// paragraphs, bullet and numbered lists nested by indentation, fenced
+// code, block quotes, and pipe tables; inline, links, images, code spans,
+// `**strong**`, `*em*` and `_em_`, and backslash escapes. Raw HTML is not
+// markup here: it shows as text.
+//
+// For crawlers and agents it also writes, from the pages it publishes: a
+// Markdown copy of each (`design.html` has `design.md`), `llms.txt`,
+// `llms-full.txt`, `sitemap.xml`, `robots.txt`, `search.json`, and
+// `latest.json`. Every page carries its canonical URL and a version banner,
+// and the home page carries schema.org JSON-LD.
+//
+// To add a page: write a function that returns a `Page`, with its Markdown
+// copy in `md`, and add it to `pages` in `build`. The outputs above then
+// include it.
+
+use std.html
+
+// ---- What the site is built from -------------------------------------------
+
+// What the generator may read: the `docs/` tree, and three files beside
+// it. Each is a filesystem restricted on its own, so nothing else in the
+// repository can be reached.
+cap struct Sources {
+    docs: FsRead,
+    readme: FsRead,
+    glossary: FsRead,
+    style: FsRead,
+    manifest: FsRead,
+    search: FsRead,
+    // `site/agent-setup/`: the agent-setup prompt and its templates.
+    setup: FsRead,
+    // `site/authority.txt`: the authority report `oskac check
+    // site/build.osk` printed for this program, which the Pages workflow
+    // writes just before the build. Without it there is no authority page.
+    authority: FsRead,
+}
+
+fn main(read: FsRead, write: FsWrite) -> Result<(), IoError> {
+    let sources = Sources(
+        docs: read.restrict_to("docs"),
+        readme: read.restrict_to("README.md"),
+        glossary: read.restrict_to("GLOSSARY.md"),
+        style: read.restrict_to("site/style.css"),
+        manifest: read.restrict_to("Cargo.toml"),
+        search: read.restrict_to("site/search.js"),
+        setup: read.restrict_to("site/agent-setup"),
+        authority: read.restrict_to("site/authority.txt"),
+    )
+    // Writing is narrowed to the repository before anything is written,
+    // then to `_site` once it exists (a restriction needs its directory).
+    let repo = write.restrict_to(".")
+    repo.create_dir(Path.new("_site"))?
+    build(sources, repo.restrict_to("_site"))
+}
+
+// One Markdown file the site publishes.
+struct Doc {
+    // Its path in the repository, as a link from another doc names it:
+    // `README.md`, `docs/adr/0001-x.md`.
+    repo: Untrusted<String>,
+    // Its page's path under `_site/`: `index.html`, `adr/0001-x.html`.
+    page: Untrusted<String>,
+    // The subdirectory of `docs/` it is in, such as `adr`, or "".
+    section: Untrusted<String>,
+    title: Untrusted<String>,
+    text: Untrusted<String>,
+}
+
+// A subdirectory of `docs/`, such as `adr`: it gets an index page.
+struct Section {
+    dir: Untrusted<String>,
+    title: Untrusted<String>,
+}
+
+// One file of `site/agent-setup/`, published as it is.
+struct Asset {
+    name: Untrusted<String>,
+    text: Untrusted<String>,
+}
+
+// Everything the site publishes.
+struct Site {
+    docs: List<Doc>,
+    sections: List<Section>,
+    // The version in `Cargo.toml`, the version of `main`, which these
+    // docs track.
+    version: String,
+    // The files of `site/agent-setup/`, none if there is no such directory.
+    assets: List<Asset>,
+    // The generator's own authority report, or "" if there is none.
+    authority: Untrusted<String>,
+}
+
+// Every file of the site.
+fn build(sources: Sources, site: FsWrite) -> Result<(), IoError> {
+    let all = gather(sources)?
+    for section in all.sections {
+        site.create_dir(Path.from(section.dir))?
+    }
+    var pages: List<Page> = List.new()
+    for doc in all.docs {
+        pages.push(doc_page(all, doc))
+    }
+    let codes: List<Code> = if has_catalog(all) { catalog(all) } else { List.new() }
+    if has_catalog(all) {
+        site.create_dir(Path.new("codes"))?
+        for page in code_pages(all, codes) {
+            pages.push(page)
+        }
+    }
+    if has_setup(all) {
+        pages.push(setup_page(all))
+    }
+    if all.authority != "" {
+        pages.push(authority_page(all))
+    }
+    for section in all.sections {
+        if !has_doc(all, "{section.dir}/index.html") {
+            pages.push(section_page(all, section))
+        }
+    }
+    for page in pages {
+        publish(site, all, page)?
+    }
+    if has_setup(all) {
+        publish_setup(site, all)?
+    }
+    site.write(Path.new("robots.txt"), robots())?
+    site.write(Path.new("sitemap.xml"), sitemap(pages))?
+    site.write(Path.new("latest.json"), latest_json(all.version))?
+    site.write(Path.new("llms.txt"), llms_txt(all, pages))?
+    site.write(Path.new("llms-full.txt"), llms_full(all, pages))?
+    site.write(Path.new("search.json"), search_json(pages))?
+    let style = sources.style.read_to_string(Path.new("."))?
+    site.write(Path.new("style.css"), style)?
+    let search = sources.search.read_to_string(Path.new("."))?
+    site.write(Path.new("search.js"), search)?
+    site.write(Path.new("CNAME"), cname())?
+    if has_catalog(all) {
+        site.write(Path.new("codes.json"), codes_json(codes))?
+    }
+    Ok(())
+}
+
+// `CNAME`: the domain the site is served at.
+fn cname() -> String {
+    "oskalang.dev\n"
+}
+
+// Whether some doc is published as the page at `page`. A section's own
+// `index.md` is its index; one is made only for a section without.
+fn has_doc(all: Site, page: Untrusted<String>) -> Bool {
+    for doc in all.docs {
+        if doc.page == page {
+            return true
+        }
+    }
+    false
+}
+
+// The README, the glossary, and every `.md` file in `docs/` and in its
+// subdirectories one level down, except those `unpublished` names.
+fn gather(sources: Sources) -> Result<Site, IoError> {
+    var docs: List<Doc> = List.new()
+    let readme = sources.readme.read_to_string(Path.new("."))?
+    docs.push(new_doc("README.md", "index.html", "", readme))
+    let glossary = sources.glossary.read_to_string(Path.new("."))?
+    var glossary_doc = new_doc("GLOSSARY.md", "glossary.html", "", glossary)
+    glossary_doc.title = "Glossary"
+    docs.push(glossary_doc)
+    var sections: List<Section> = List.new()
+    for name in sources.docs.list_dir(Path.new("."))? {
+        if unpublished(name) {
+            continue
+        }
+        if name.ends_with(".md") {
+            let text = sources.docs.read_to_string(Path.from(name))?
+            docs.push(new_doc("docs/{name}", html_name(name), "", text))
+            continue
+        }
+        match sources.docs.list_dir(Path.from(name)) {
+            Ok(entries) => {
+                sections.push(Section(dir: name, title: section_title(name)))
+                for entry in entries {
+                    if entry.ends_with(".md") && !unpublished(entry) {
+                        let path = "{name}/{entry}"
+                        let text = sources.docs.read_to_string(Path.from(path))?
+                        docs.push(new_doc("docs/{path}", html_name(path), name, text))
+                    }
+                }
+            }
+            Err(_) => {}
+        }
+    }
+    let manifest = sources.manifest.read_to_string(Path.new("."))?
+    var assets: List<Asset> = List.new()
+    match sources.setup.list_dir(Path.new(".")) {
+        Ok(names) => {
+            for name in names {
+                let text = sources.setup.read_to_string(Path.from(name))?
+                assets.push(Asset(name: name, text: text))
+            }
+        }
+        Err(_) => {}
+    }
+    let authority = match sources.authority.read_to_string(Path.new(".")) {
+        Ok(text) => text
+        Err(_) => ""
+    }
+    Ok(Site(docs: docs, sections: sections, version: version_of(manifest), assets: assets, authority: authority))
+}
+
+// The `version` in a `Cargo.toml`, as `major.minor.patch`: each part is
+// read as a number, so what comes back is trusted. Any pre-release or
+// build suffix is dropped, and a manifest without a version reads as
+// `0.0.0`.
+fn version_of(manifest: Untrusted<String>) -> String {
+    for line in manifest.lines() {
+        let trimmed = line.trim()
+        if trimmed.starts_with("version = \"") {
+            let quoted = trimmed.slice(11, trimmed.len())
+            let core = quoted.split("\"").at(0).split("-").at(0).split("+").at(0)
+            let parts = core.split(".")
+            if parts.len() != 3 {
+                return "0.0.0"
+            }
+            let major = parts.at(0).parse_int().unwrap_or(0)
+            let minor = parts.at(1).parse_int().unwrap_or(0)
+            let patch = parts.at(2).parse_int().unwrap_or(0)
+            return "{major}.{minor}.{patch}"
+        }
+    }
+    "0.0.0"
+}
+
+// Names in `docs/` the site leaves out: hidden files, and the notes for
+// the agents that work on the repository.
+fn unpublished(name: Untrusted<String>) -> Bool {
+    name.starts_with(".") || name == "agents"
+}
+
+fn new_doc(repo: Untrusted<String>, page: Untrusted<String>, section: Untrusted<String>, text: Untrusted<String>) -> Doc {
+    let title = title_of(text, last_segment(repo))
+    Doc(repo: repo, page: page, section: section, title: title, text: text)
+}
+
+// `name` with its `.md` made `.html`.
+fn html_name(name: Untrusted<String>) -> Untrusted<String> {
+    let stem = name.slice(0, name.len() - 3)
+    "{stem}.html"
+}
+
+// The text of the first `# ` heading in `text`, or `fallback`.
+fn title_of(text: Untrusted<String>, fallback: Untrusted<String>) -> Untrusted<String> {
+    for line in text.lines() {
+        if line.starts_with("# ") {
+            return line.slice(2, line.len()).trim().replace("`", "")
+        }
+    }
+    fallback
+}
+
+fn section_title(dir: Untrusted<String>) -> Untrusted<String> {
+    match dir {
+        "adr" => "Decisions"
+        "guide" => "Guides"
+        "research" => "Research"
+        _ => dir
+    }
+}
+
+// The short name a top-level doc goes by in the navigation.
+fn nav_label(doc: Doc) -> Untrusted<String> {
+    match doc.repo {
+        "docs/ast.md" => "AST"
+        "docs/checker.md" => "Checker"
+        "docs/design.md" => "Design"
+        "docs/runtime.md" => "Runtime"
+        _ => doc.title
+    }
+}
+
+// ---- Pages -------------------------------------------------------------------
+
+// One HTML page of the site: where it goes under `_site/`, its title,
+// and what its `<main>` holds.
+// and what its `<main>` holds. `md` is the same page as Markdown, which
+// is written beside it: every page has a copy for agents to read.
+struct Page {
+    path: Untrusted<String>,
+    title: Untrusted<String>,
+    body: html.Html,
+    md: Untrusted<String>,
+}
+
+// Write `page`, in the site's layout, to its path under `_site/`, and its
+// Markdown copy beside it.
+fn publish(site: FsWrite, all: Site, page: Page) -> Result<(), IoError> {
+    site.write(Path.from(page.path), layout(all, page).render())?
+    site.write(Path.from(md_path(page.path)), page.md)
+}
+
+// Where the Markdown copy of the page at `page` goes: `adr/x.md` for
+// `adr/x.html`.
+fn md_path(page: Untrusted<String>) -> Untrusted<String> {
+    let stem = page.slice(0, page.len() - 5)
+    "{stem}.md"
+}
+
+// The URL of a copy, from the URL of its page: `/adr/` is `/adr/index.md`,
+// and a fragment stays.
+fn md_url(url: Untrusted<String>) -> Untrusted<String> {
+    let parts = url.split("#")
+    let path = parts.at(0)
+    let after = "#".join(sub(parts, 1, parts.len()))
+    let fragment = if parts.len() > 1 { "#{after}" } else { "" }
+    if path.ends_with("/") {
+        "{path}index.md{fragment}"
+    } else {
+        let stem = path.slice(0, path.len() - 5)
+        "{stem}.md{fragment}"
+    }
+}
+
+fn doc_page(all: Site, doc: Doc) -> Page {
+    let links = Links(site: all, dir: parent_of(doc.repo))
+    if carries_prompt(all, doc) {
+        return prompt_doc_page(all, doc, links)
+    }
+    Page(path: doc.page, title: doc.title, body: markdown(doc.text, links), md: retarget(doc.text, links))
+}
+
+// A section's index: a list of its docs, by title.
+fn section_page(all: Site, section: Section) -> Page {
+    var items = markup("<h1>").concat(html.text(section.title)).concat(markup("</h1>\n<ul>\n"))
+    var md = "# {section.title}\n\n"
+    for doc in all.docs {
+        if doc.section == section.dir {
+            let link = anchor_to(url_of(doc.page), html.text(doc.title))
+            items = items.concat(wrap("<li>", link, "</li>\n"))
+            let copy = md_url(url_of(doc.page))
+            md = "{md}- [{doc.title}]({copy})\n"
+        }
+    }
+    let page = "{section.dir}/index.html"
+    Page(path: page, title: section.title, body: items.concat(markup("</ul>\n")), md: md)
+}
+
+// The URL a page is served at: `/` for `index.html`, `/adr/` for
+// `adr/index.html`.
+fn url_of(page: Untrusted<String>) -> Untrusted<String> {
+    if page.ends_with("index.html") {
+        let dir = page.slice(0, page.len() - 10)
+        "/{dir}"
+    } else {
+        "/{page}"
+    }
+}
+
+// ---- Outputs for crawlers and agents -------------------------------------------------
+
+// Where the site is served: the base of every canonical URL.
+fn origin() -> String {
+    "https://oskalang.dev"
+}
+
+// `robots.txt`: every crawler is welcome, search engines and the ones that
+// feed AI models alike, and the sitemap is where to start.
+fn robots() -> String {
+    let agents = ["*", "GPTBot", "OAI-SearchBot", "ChatGPT-User", "ClaudeBot", "Claude-SearchBot", "Claude-User", "anthropic-ai", "PerplexityBot", "Perplexity-User", "Google-Extended", "Applebot-Extended", "CCBot", "Amazonbot", "meta-externalagent", "cohere-ai"]
+    var lines: List<String> = List.new()
+    for agent in agents {
+        lines.push("User-agent: {agent}")
+    }
+    let group = "\n".join(lines)
+    let base = origin()
+    "{group}\nAllow: /\n\nSitemap: {base}/sitemap.xml\n"
+}
+
+// `sitemap.xml`: the canonical URL of every page.
+fn sitemap(pages: List<Page>) -> Untrusted<String> {
+    var out = markup("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n")
+    for page in pages {
+        let loc = canonical(page.path)
+        out = out.concat(wrap("<url><loc>", html.text(loc), "</loc></url>\n"))
+    }
+    out.concat(markup("</urlset>\n")).render()
+}
+
+// The canonical URL of the page at `page`.
+fn canonical(page: Untrusted<String>) -> Untrusted<String> {
+    let base = origin()
+    let path = url_of(page)
+    "{base}{path}"
+}
+
+// `latest.json`: the version these docs are for and where to install it.
+// The release pipeline merges the latest signed release over this, so
+// once there is one its fields win.
+fn latest_json(version: String) -> String {
+    let base = origin()
+    "\{\n  \"version\": \"{version}\",\n  \"docs\": \"main\",\n  \"installers\": \{\n    \"sh\": \"{base}/install.sh\",\n    \"ps1\": \"{base}/install.ps1\"\n  \}\n\}\n"
+}
+
+// `llms.txt`: what an agent should read, in the shape llmstxt.org sets
+// out. Each page is linked at its Markdown copy, with a summary.
+fn llms_txt(all: Site, pages: List<Page>) -> Untrusted<String> {
+    let base = origin()
+    let version = all.version
+    var home: Untrusted<String> = ""
+    for page in pages {
+        if page.path == "index.html" {
+            home = summary_of(page.md)
+        }
+    }
+    var out: Untrusted<String> = "# Oska\n\n"
+    if home != "" {
+        out = "{out}> {home}\n\n"
+    }
+    out = "{out}Oska {version} (pre-alpha). These docs track `main`. Every page is also served as Markdown: the same path with `.md`. All of them are in [llms-full.txt]({base}/llms-full.txt).\n"
+    let setup = if has_setup(all) { setup_group(all) } else { "" }
+    out = "{out}{setup}"
+    let docs = llms_group("Docs", "", pages)
+    out = "{out}{docs}"
+    for section in all.sections {
+        let group = llms_group(section.title, section.dir, pages)
+        out = "{out}{group}"
+    }
+    let codes: Untrusted<String> = if has_catalog(all) { "- [codes.json]({base}/codes.json): every error code, with an example that fails with it and the fix\n" } else { "" }
+    "{out}\n## Machine-readable\n\n- [llms-full.txt]({base}/llms-full.txt): every page, as Markdown, in one file\n- [search.json]({base}/search.json): the search index\n- [sitemap.xml]({base}/sitemap.xml): the canonical URL of every page\n- [latest.json]({base}/latest.json): the current version and the installers\n{codes}"
+}
+
+// A heading and the pages in `dir` ("" for the top level) under it, or
+// nothing if there are none.
+fn llms_group(title: Untrusted<String>, dir: Untrusted<String>, pages: List<Page>) -> Untrusted<String> {
+    let base = origin()
+    var entries: Untrusted<String> = ""
+    for page in pages {
+        if parent_of(page.path) == dir && page.path != "agent-setup.html" {
+            let copy = md_url(url_of(page.path))
+            let summary = summary_of(page.md)
+            let note: Untrusted<String> = if summary == "" { "" } else { ": {summary}" }
+            entries = "{entries}- [{page.title}]({base}{copy}){note}\n"
+        }
+    }
+    if entries == "" { "" } else { "\n## {title}\n\n{entries}" }
+}
+
+// `llms-full.txt`: every page's Markdown, one after another.
+fn llms_full(all: Site, pages: List<Page>) -> Untrusted<String> {
+    let base = origin()
+    let version = all.version
+    var out: Untrusted<String> = "# Oska: full documentation\n\nOska {version} (pre-alpha). Every page of {base} as Markdown, one after another, each after a line `Source:` that names it.\n"
+    for page in pages {
+        let url = canonical(page.path)
+        let copy: Untrusted<String> = if page.md.ends_with("\n") { page.md } else { "{page.md}\n" }
+        out = "{out}\n---\n\nSource: {url}\n\n{copy}"
+    }
+    out
+}
+
+// `search.json`: for each page, its URL, title, headings, and the start
+// of its text, for the search script to look through.
+fn search_json(pages: List<Page>) -> Untrusted<String> {
+    var entries: List<Untrusted<String>> = List.new()
+    for page in pages {
+        var headings: List<Untrusted<String>> = List.new()
+        for heading in headings_of(page.md) {
+            headings.push(json_string(heading))
+        }
+        let url = json_string(url_of(page.path))
+        let title = json_string(page.title)
+        let text = json_string(search_text(page.md))
+        let listed = ", ".join(headings)
+        entries.push("  \{\"url\": {url}, \"title\": {title}, \"headings\": [{listed}], \"text\": {text}\}")
+    }
+    let body = ",\n".join(entries)
+    "[\n{body}\n]\n"
+}
+
+// `text` as a JSON string, quotes included. A `<` is written as an
+// escape, so the index is never mistaken for markup.
+fn json_string(text: Untrusted<String>) -> Untrusted<String> {
+    let escaped = text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t").replace("\0", "\\u0000").replace("<", "\\u003c")
+    "\"{escaped}\""
+}
+
+// The most characters of a page's text that go into the search index.
+fn search_limit() -> Int {
+    4000
+}
+
+// The headings of `md` below its title, as plain text.
+fn headings_of(md: Untrusted<String>) -> List<Untrusted<String>> {
+    let lines = md.lines()
+    let fenced = fence_flags(lines)
+    var out: List<Untrusted<String>> = List.new()
+    var i = 0
+    while i < lines.len() {
+        let trimmed = lines.at(i).trim()
+        let level = heading_level(trimmed)
+        if level > 1 && !fenced.at(i) {
+            out.push(collapse(plain_text(trimmed.slice(level, trimmed.len()))))
+        }
+        i = i + 1
+    }
+    out
+}
+
+// The start of `md`'s text for the search index: plain, on one line,
+// code kept, at most `search_limit` characters.
+fn search_text(md: Untrusted<String>) -> Untrusted<String> {
+    let lines = md.lines()
+    let fenced = fence_flags(lines)
+    var parts: List<Untrusted<String>> = List.new()
+    var size = 0
+    var i = 0
+    while i < lines.len() && size < search_limit() {
+        let trimmed = lines.at(i).trim()
+        let level = heading_level(trimmed)
+        let text: Untrusted<String> = if fenced.at(i) {
+            if is_fence(trimmed) { "" } else { trimmed }
+        } else if level > 0 {
+            plain_text(trimmed.slice(level, trimmed.len()))
+        } else {
+            prose(trimmed)
+        }
+        parts.push(text)
+        size = size + text.len() + 1
+        i = i + 1
+    }
+    shorten(collapse(" ".join(parts)), search_limit())
+}
+
+// A line of Markdown outside code as the words in it: without a block
+// quote's `>`, a table's pipes, or a table's rule or a thematic break.
+fn prose(line: Untrusted<String>) -> Untrusted<String> {
+    var rest = line
+    while rest.starts_with(">") {
+        rest = rest.slice(1, rest.len()).trim()
+    }
+    let words = collapse(plain_text(rest).replace("|", " "))
+    for c in words.chars() {
+        if !"-: ".contains(c) {
+            return words
+        }
+    }
+    ""
+}
+
+// The first paragraph of `md`, as plain text on one line and no longer
+// than 200 characters: what the page says it is.
+fn summary_of(md: Untrusted<String>) -> Untrusted<String> {
+    let lines = md.lines()
+    let fenced = fence_flags(lines)
+    var paragraph: List<Untrusted<String>> = List.new()
+    var i = 0
+    while i < lines.len() {
+        let line = lines.at(i)
+        let trimmed = line.trim()
+        let text = trimmed != "" && !fenced.at(i) && heading_level(trimmed) == 0 && !trimmed.starts_with(">") && !trimmed.starts_with("|") && !list_marker(line).is_some()
+        if text {
+            paragraph.push(trimmed)
+        } else if paragraph.len() > 0 {
+            break
+        }
+        i = i + 1
+    }
+    shorten(collapse(plain_text(" ".join(paragraph))), 200)
+}
+
+// `text` cut to `limit` characters, with `...` in place of the end if it
+// was longer.
+fn shorten(text: Untrusted<String>, limit: Int) -> Untrusted<String> {
+    if text.len() <= limit {
+        return text
+    }
+    let cut = text.slice(0, limit - 3).trim()
+    "{cut}..."
+}
+
+// `text` with each run of white space made one space, and none at either
+// end.
+fn collapse(text: Untrusted<String>) -> Untrusted<String> {
+    var words: List<Untrusted<String>> = List.new()
+    for word in text.replace("\n", " ").replace("\t", " ").replace("\r", " ").split(" ") {
+        if word != "" {
+            words.push(word)
+        }
+    }
+    " ".join(words)
+}
+
+// Inline Markdown as the plain text it reads as: links and images as
+// their text, code and emphasis marks gone, escapes resolved.
+fn plain_text(text: Untrusted<String>) -> Untrusted<String> {
+    let cs = text.chars()
+    var out: List<Untrusted<String>> = List.new()
+    var i = 0
+    while i < cs.len() {
+        let c = cs.at(i)
+        if c == "\\" && i + 1 < cs.len() && is_punctuation(cs.at(i + 1)) {
+            out.push(cs.at(i + 1))
+            i = i + 2
+            continue
+        }
+        if c == "[" {
+            let close = matching(cs, i, cs.len(), "[", "]")
+            if close > 0 && close + 1 < cs.len() && cs.at(close + 1) == "(" {
+                let end = matching(cs, close + 1, cs.len(), "(", ")")
+                if end > 0 {
+                    out.push(plain_text("".join(sub(cs, i + 1, close))))
+                    i = end + 1
+                    continue
+                }
+            }
+        }
+        let image = c == "!" && i + 1 < cs.len() && cs.at(i + 1) == "["
+        if c != "`" && c != "*" && !image {
+            out.push(c)
+        }
+        i = i + 1
+    }
+    "".join(out)
+}
+
+// ---- The layout every page shares --------------------------------------------
+
+// The Content Security Policy: no script runs but the site's own search
+// script, which may fetch only the site's own files, and styles and fonts
+// load only from the site and the two pinned font packages on the CDN.
+fn csp() -> String {
+    "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/ https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/; font-src https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/ https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/; img-src 'self'; base-uri 'none'; form-action 'none'"
+}
+
+// The web fonts: Fontsource's CSS on jsDelivr, each at an exact version,
+// with Subresource Integrity, so a changed file is refused. The CSS loads
+// its font files from the same versioned path. To update one, change the
+// version and set `integrity` to the new file's
+// `openssl dgst -sha384 -binary | openssl base64 -A`.
+fn fonts() -> html.Html {
+    let inter_regular = font_stylesheet("inter", "latin-400.css", "zc+mzApNgdFM05uzzG/c/4wVZ4LHLa0ZrZyeZYh4tq7GukSAQ2T6xYGTgE+mssl6")
+    let inter_bold = font_stylesheet("inter", "latin-700.css", "qIiEwfeovj0ewBGH8n6bkz0WIS8pOCQ8xV0byBksQD0KeXY0dmQr3eXjhcSqFhbH")
+    let mono_regular = font_stylesheet("jetbrains-mono", "latin-400.css", "rDtx9NW9VQWFrGIe8txtelRagz09ojKYLeaff45i3hEq7ofdZdkNlxVO8XCT5yPu")
+    inter_regular.concat(inter_bold).concat(mono_regular)
+}
+
+// One stylesheet of the Fontsource package `package`, version 5.3.0 (the
+// version the CSP names), checked against its SHA-384 `integrity`.
+fn font_stylesheet(package: String, file: String, integrity: String) -> html.Html {
+    markup("<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/@fontsource/{package}@5.3.0/{file}\" integrity=\"sha384-{integrity}\" crossorigin=\"anonymous\">\n")
+}
+
+// The document around every page's body.
+fn layout(all: Site, page: Page) -> html.Html {
+    let policy = csp()
+    let head = markup("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta http-equiv=\"Content-Security-Policy\" content=\"{policy}\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n")
+    let name = if page.path == "index.html" { page.title } else { "{page.title} · Oska" }
+    let title = wrap("<title>", html.text(name), "</title>\n")
+    let style = markup("<link rel=\"stylesheet\" href=\"/style.css\">\n</head>\n<body>\n")
+    let header = wrap("<header>\n", navigation(all, page.path), "</header>\n")
+    let main = wrap("<main>\n", page.body, "</main>\n")
+    let footer = markup("<footer>\n<p>Built from the Oska repository by <code>site/build.osk</code>, an Oska program. The docs track <code>main</code>.</p>\n</footer>\n<script src=\"/search.js\"></script>\n</body>\n</html>\n")
+    let data = if page.path == "index.html" { structured_data(all.version) } else { empty() }
+    head.concat(title).concat(about(page)).concat(data).concat(fonts()).concat(style).concat(banner(all.version)).concat(header).concat(main).concat(footer)
+}
+
+// What a page says about itself in its `<head>`: its canonical URL, and
+// where its Markdown copy is.
+fn about(page: Page) -> html.Html {
+    let canonical_link = markup("<link rel=\"canonical\" href=\"").concat(html.text(canonical(page.path))).concat(markup("\">\n"))
+    let copy = markup("<link rel=\"alternate\" type=\"text/markdown\" href=\"").concat(html.text(md_url(url_of(page.path)))).concat(markup("\">\n"))
+    canonical_link.concat(copy)
+}
+
+// The version banner at the top of every page.
+fn banner(version: String) -> html.Html {
+    markup("<aside aria-label=\"Version\">\n<p>Oska {version} (pre-alpha). These docs track <code>main</code>, which can be ahead of the latest release: see <a href=\"/latest.json\">latest.json</a>.</p>\n</aside>\n")
+}
+
+// The home page's JSON-LD: schema.org's description of the software, for
+// search engines and agents. It is a data block, which no browser runs.
+// Every value in it is written here or is the version, which `version_of`
+// has read as numbers, so nothing needs escaping.
+fn structured_data(version: String) -> html.Html {
+    let base = origin()
+    markup("<script type=\"application/ld+json\">\n\{\n  \"@context\": \"https://schema.org\",\n  \"@type\": \"SoftwareSourceCode\",\n  \"name\": \"Oska\",\n  \"description\": \"An AI-first, secure-by-default programming language.\",\n  \"url\": \"{base}/\",\n  \"license\": \"https://spdx.org/licenses/Apache-2.0.html\",\n  \"version\": \"{version}\",\n  \"programmingLanguage\": \"Oska\",\n  \"targetProduct\": \{\n    \"@type\": \"SoftwareApplication\",\n    \"name\": \"oskac\",\n    \"applicationCategory\": \"DeveloperApplication\",\n    \"softwareVersion\": \"{version}\",\n    \"installUrl\": \"{base}/install.sh\",\n    \"additionalProperty\": \{\n      \"@type\": \"PropertyValue\",\n      \"name\": \"installCommand\",\n      \"value\": \"curl -fsSL {base}/install.sh | sh\"\n    \}\n  \}\n\}\n</script>\n")
+}
+
+// The site's navigation, with the link to `current`, the page it is on,
+// marked.
+fn navigation(all: Site, current: Untrusted<String>) -> html.Html {
+    var items = nav_item("index.html", "Oska", current)
+    for doc in all.docs {
+        if doc.section == "" && doc.repo.starts_with("docs/") {
+            items = items.concat(nav_item(doc.page, nav_label(doc), current))
+        }
+    }
+    items = items.concat(nav_item("glossary.html", "Glossary", current))
+    if has_setup(all) {
+        items = items.concat(nav_item("agent-setup.html", "Agent setup", current))
+    }
+    if has_catalog(all) {
+        items = items.concat(nav_item("codes/index.html", "Codes", current))
+    }
+    for section in all.sections {
+        let page = "{section.dir}/index.html"
+        items = items.concat(nav_item(page, section.title, current))
+    }
+    wrap("<nav aria-label=\"Site\">\n<ul>\n", items, "</ul>\n</nav>\n")
+}
+
+fn nav_item(page: Untrusted<String>, label: Untrusted<String>, current: Untrusted<String>) -> html.Html {
+    let open = markup("<li><a href=\"").concat(html.text(url_of(page)))
+    let mark = if page == current { markup("\" aria-current=\"page\">") } else { markup("\">") }
+    open.concat(mark).concat(html.text(label)).concat(markup("</a></li>\n"))
+}
+
+// ---- Markdown: blocks ------------------------------------------------------------
+
+// `text`, rendered. `links` resolves the relative links in it.
+fn markdown(text: Untrusted<String>, links: Links) -> html.Html {
+    blocks(text.lines(), links, false)
+}
+
+// A rendered fragment, and the index of the first line after it.
+struct Rendered {
+    html: html.Html,
+    next: Int,
+}
+
+// `lines`, rendered as blocks. In a `tight` list item a paragraph is not
+// wrapped in `<p>`.
+fn blocks(lines: List<Untrusted<String>>, links: Links, tight: Bool) -> html.Html {
+    var out = empty()
+    var i = 0
+    while i < lines.len() {
+        let line = lines.at(i)
+        let trimmed = line.trim()
+        if trimmed == "" {
+            i = i + 1
+            continue
+        }
+        let part = if is_fence(trimmed) {
+            fenced_code(lines, i)
+        } else if heading_level(trimmed) > 0 {
+            Rendered(html: heading(trimmed, links), next: i + 1)
+        } else if trimmed.starts_with(">") {
+            block_quote(lines, i, links)
+        } else if table_starts(lines, i) {
+            table(lines, i, links)
+        } else if list_marker(line).is_some() {
+            list(lines, i, links)
+        } else {
+            paragraph(lines, i, links, tight)
+        }
+        out = out.concat(part.html)
+        i = part.next
+    }
+    out
+}
+
+// Whether the line at `i` starts a block other than a paragraph, and so
+// ends a paragraph before it. Of numbered lists, only one numbered from
+// 1 does, so a line that happens to start with a number stays text.
+fn starts_block(lines: List<Untrusted<String>>, i: Int) -> Bool {
+    let line = lines.at(i)
+    let trimmed = line.trim()
+    let numbered_from_one = match list_marker(line) {
+        Some(m) => !m.ordered || m.start == 1
+        None => false
+    }
+    is_fence(trimmed) || heading_level(trimmed) > 0 || trimmed.starts_with(">") || table_starts(lines, i) || numbered_from_one
+}
+
+fn is_fence(trimmed: Untrusted<String>) -> Bool {
+    trimmed.starts_with("```") || trimmed.starts_with("~~~")
+}
+
+// A fenced code block from the fence at `start` to the one that closes
+// it, or to the end. The info string after the opening fence is dropped.
+fn fenced_code(lines: List<Untrusted<String>>, start: Int) -> Rendered {
+    let opening = lines.at(start)
+    let fence = opening.trim().slice(0, 3)
+    let pad = indent(opening)
+    var code: List<Untrusted<String>> = List.new()
+    var i = start + 1
+    while i < lines.len() && !lines.at(i).trim().starts_with(fence) {
+        code.push(dedent(lines.at(i), pad))
+        i = i + 1
+    }
+    let body = "\n".join(code)
+    let text = if code.len() == 0 { body } else { "{body}\n" }
+    Rendered(html: wrap("<pre><code>", html.text(text), "</code></pre>\n"), next: i + 1)
+}
+
+// The level of the ATX heading `trimmed` is, or 0.
+fn heading_level(trimmed: Untrusted<String>) -> Int {
+    var level = 0
+    for c in trimmed.chars() {
+        if c == "#" && level < 6 {
+            level = level + 1
+        } else if c == " " && level > 0 {
+            return level
+        } else {
+            return 0
+        }
+    }
+    0
+}
+
+// A heading, with an `id` made from its text as GitHub makes one, so a
+// link to `#its-text` lands on it.
+fn heading(trimmed: Untrusted<String>, links: Links) -> html.Html {
+    let level = heading_level(trimmed)
+    let text = trimmed.slice(level, trimmed.len()).trim()
+    let tag = heading_tag(level)
+    let open = markup("<{tag} id=\"").concat(html.text(slug(text))).concat(markup("\">"))
+    open.concat(inline(text, links)).concat(markup("</{tag}>\n"))
+}
+
+fn heading_tag(level: Int) -> String {
+    match level {
+        1 => "h1"
+        2 => "h2"
+        3 => "h3"
+        4 => "h4"
+        5 => "h5"
+        _ => "h6"
+    }
+}
+
+// `text` as an anchor: lower case, letters, digits, `-` and `_` kept,
+// spaces made `-`, everything else dropped.
+fn slug(text: Untrusted<String>) -> Untrusted<String> {
+    var kept: List<Untrusted<String>> = List.new()
+    for c in text.to_lowercase().chars() {
+        if is_alphanumeric(c) || c == "-" || c == "_" {
+            kept.push(c)
+        } else if c == " " {
+            kept.push("-")
+        }
+    }
+    "".join(kept)
+}
+
+// The lines from `start` that begin with `>`, without it, as blocks.
+fn block_quote(lines: List<Untrusted<String>>, start: Int, links: Links) -> Rendered {
+    var inner: List<Untrusted<String>> = List.new()
+    var i = start
+    while i < lines.len() && lines.at(i).trim().starts_with(">") {
+        let quoted = lines.at(i).trim()
+        let rest = quoted.slice(1, quoted.len())
+        inner.push(if rest.starts_with(" ") { rest.slice(1, rest.len()) } else { rest })
+        i = i + 1
+    }
+    let html = wrap("<blockquote>\n", blocks(inner, links, false), "</blockquote>\n")
+    Rendered(html: html, next: i)
+}
+
+// Whether a pipe table starts at `i`: a row, then a row of dashes.
+fn table_starts(lines: List<Untrusted<String>>, i: Int) -> Bool {
+    if i + 1 >= lines.len() || !lines.at(i).trim().starts_with("|") {
+        return false
+    }
+    let rule = lines.at(i + 1).trim()
+    if !rule.starts_with("|") || !rule.contains("-") {
+        return false
+    }
+    for c in rule.chars() {
+        if !"|:- ".contains(c) {
+            return false
+        }
+    }
+    true
+}
+
+// A pipe table: its first row is the header, and every row after the
+// rule that starts with `|` is in its body. Alignment is not kept.
+fn table(lines: List<Untrusted<String>>, start: Int, links: Links) -> Rendered {
+    let head = row(lines.at(start), "th", links)
+    var body = empty()
+    var i = start + 2
+    while i < lines.len() && lines.at(i).trim().starts_with("|") {
+        body = body.concat(row(lines.at(i), "td", links))
+        i = i + 1
+    }
+    let html = wrap("<table>\n<thead>\n", head, "</thead>\n<tbody>\n").concat(body).concat(markup("</tbody>\n</table>\n"))
+    Rendered(html: html, next: i)
+}
+
+// One table row, each cell in a `cell` element.
+fn row(line: Untrusted<String>, cell: String, links: Links) -> html.Html {
+    var out = empty()
+    for text in cells(line) {
+        out = out.concat(wrap("<{cell}>", inline(text, links), "</{cell}>"))
+    }
+    wrap("<tr>", out, "</tr>\n")
+}
+
+// The cells of a table row: the text between its pipes, trimmed. A pipe
+// in a code span or after a backslash is part of the text.
+fn cells(line: Untrusted<String>) -> List<Untrusted<String>> {
+    let cs = line.trim().chars()
+    var out: List<Untrusted<String>> = List.new()
+    var current: List<Untrusted<String>> = List.new()
+    var in_code = false
+    var i = 1
+    while i < cs.len() {
+        let c = cs.at(i)
+        if c == "\\" && i + 1 < cs.len() && cs.at(i + 1) == "|" {
+            current.push("|")
+            i = i + 2
+            continue
+        }
+        if c == "`" {
+            in_code = !in_code
+        }
+        if c == "|" && !in_code {
+            out.push("".join(current).trim())
+            current = List.new()
+        } else {
+            current.push(c)
+        }
+        i = i + 1
+    }
+    let last = "".join(current).trim()
+    if last != "" {
+        out.push(last)
+    }
+    out
+}
+
+// A bullet (`-`, `*`, `+`) or a number (`1.` or `1)`) and a space.
+struct Marker {
+    ordered: Bool,
+    start: Int,
+    // Where the item's text starts: an indented line belongs to the item
+    // when it is indented at least this far.
+    width: Int,
+}
+
+fn list_marker(line: Untrusted<String>) -> Option<Marker> {
+    let pad = indent(line)
+    let rest = line.slice(pad, line.len())
+    if rest.starts_with("- ") || rest.starts_with("* ") || rest.starts_with("+ ") {
+        return Some(Marker(ordered: false, start: 0, width: pad + 2))
+    }
+    let cs = rest.chars()
+    var digits = 0
+    while digits < cs.len() && digits < 9 && "0123456789".contains(cs.at(digits)) {
+        digits = digits + 1
+    }
+    if digits == 0 || digits + 1 >= cs.len() {
+        return None
+    }
+    let mark = cs.at(digits)
+    if (mark == "." || mark == ")") && cs.at(digits + 1) == " " {
+        let start = rest.slice(0, digits).parse_int().unwrap_or(1)
+        return Some(Marker(ordered: true, start: start, width: pad + digits + 2))
+    }
+    None
+}
+
+// A list from the item at `start`: its items are the following ones of
+// the same kind at the same indentation.
+fn list(lines: List<Untrusted<String>>, start: Int, links: Links) -> Rendered {
+    let first = list_marker(lines.at(start)).unwrap_or(Marker(ordered: false, start: 0, width: 2))
+    let pad = indent(lines.at(start))
+    var out = if !first.ordered {
+        markup("<ul>\n")
+    } else if first.start == 1 {
+        markup("<ol>\n")
+    } else {
+        let number = first.start.to_string()
+        markup("<ol start=\"{number}\">\n")
+    }
+    var i = start
+    var more = true
+    while more {
+        let item = list_item(lines, i, links)
+        out = out.concat(item.html)
+        i = item.next
+        var next = i
+        while next < lines.len() && lines.at(next).trim() == "" {
+            next = next + 1
+        }
+        more = false
+        if next < lines.len() && indent(lines.at(next)) == pad {
+            match list_marker(lines.at(next)) {
+                Some(m) => {
+                    if m.ordered == first.ordered {
+                        more = true
+                        i = next
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+    let close = if first.ordered { "</ol>\n" } else { "</ul>\n" }
+    Rendered(html: out.concat(markup(close)), next: i)
+}
+
+// The item at `start`: its first line after the marker, then every line
+// indented to its text, blank lines between them, and lines that carry
+// on its last paragraph. An item with a blank line in it is loose: its
+// paragraphs are wrapped in `<p>`.
+fn list_item(lines: List<Untrusted<String>>, start: Int, links: Links) -> Rendered {
+    let line = lines.at(start)
+    let width = list_marker(line).unwrap_or(Marker(ordered: false, start: 0, width: 2)).width
+    var item: List<Untrusted<String>> = List.new()
+    item.push(line.slice(min(width, line.len()), line.len()))
+    var loose = false
+    var i = start + 1
+    var ended = false
+    while i < lines.len() && !ended {
+        let current = lines.at(i)
+        if current.trim() == "" {
+            var next = i
+            while next < lines.len() && lines.at(next).trim() == "" {
+                next = next + 1
+            }
+            if next < lines.len() && indent(lines.at(next)) >= width {
+                while i < next {
+                    item.push("")
+                    i = i + 1
+                }
+                loose = true
+            } else {
+                ended = true
+            }
+        } else if indent(current) >= width {
+            item.push(dedent(current, width))
+            i = i + 1
+        } else if list_marker(current).is_some() || starts_block(lines, i) {
+            ended = true
+        } else {
+            item.push(current.trim())
+            i = i + 1
+        }
+    }
+    Rendered(html: wrap("<li>", blocks(item, links, !loose), "</li>\n"), next: i)
+}
+
+// The lines from `start` up to a blank line or another block, as one
+// paragraph.
+fn paragraph(lines: List<Untrusted<String>>, start: Int, links: Links, tight: Bool) -> Rendered {
+    var text: List<Untrusted<String>> = List.new()
+    text.push(lines.at(start).trim())
+    var i = start + 1
+    while i < lines.len() && lines.at(i).trim() != "" && !starts_block(lines, i) {
+        text.push(lines.at(i).trim())
+        i = i + 1
+    }
+    let content = inline("\n".join(text), links)
+    let html = if tight { content } else { wrap("<p>", content, "</p>\n") }
+    Rendered(html: html, next: i)
+}
+
+// ---- Markdown copies ---------------------------------------------------------------
+
+// `text`, a doc's source, for its copy: the same, but with each relative
+// link to a published page pointing at that page's copy, so a reader that
+// follows links stays in Markdown. Fenced code is left alone, and so is a
+// link that goes nowhere.
+fn retarget(text: Untrusted<String>, links: Links) -> Untrusted<String> {
+    let lines = text.lines()
+    let fenced = fence_flags(lines)
+    var out: List<Untrusted<String>> = List.new()
+    var i = 0
+    while i < lines.len() {
+        out.push(if fenced.at(i) { lines.at(i) } else { retarget_line(lines.at(i), links) })
+        i = i + 1
+    }
+    let body = "\n".join(out)
+    if text.ends_with("\n") { "{body}\n" } else { body }
+}
+
+// For each of `lines`, whether it is part of a fenced code block, the
+// fences included.
+fn fence_flags(lines: List<Untrusted<String>>) -> List<Bool> {
+    var flags: List<Bool> = List.new()
+    var fence = ""
+    for line in lines {
+        let trimmed = line.trim()
+        if fence != "" {
+            flags.push(true)
+            if trimmed.starts_with(fence) {
+                fence = ""
+            }
+        } else if is_fence(trimmed) {
+            fence = trimmed.slice(0, 3)
+            flags.push(true)
+        } else {
+            flags.push(false)
+        }
+    }
+    flags
+}
+
+// `line` with the destination of each `[text](destination)` retargeted.
+fn retarget_line(line: Untrusted<String>, links: Links) -> Untrusted<String> {
+    let cs = line.chars()
+    var out: List<Untrusted<String>> = List.new()
+    var i = 0
+    while i < cs.len() {
+        if cs.at(i) == "]" && i + 1 < cs.len() && cs.at(i + 1) == "(" {
+            let end = matching(cs, i + 1, cs.len(), "(", ")")
+            if end > 0 {
+                let inside = "".join(sub(cs, i + 2, end))
+                out.push("](")
+                out.push(retarget_destination(inside, links))
+                out.push(")")
+                i = end + 1
+                continue
+            }
+        }
+        out.push(cs.at(i))
+        i = i + 1
+    }
+    "".join(out)
+}
+
+// `inside`, what is between a link's parentheses, with its destination
+// made the copy's, if it goes to a published page.
+fn retarget_destination(inside: Untrusted<String>, links: Links) -> Untrusted<String> {
+    let destination = inside.split(" ").at(0)
+    let title = inside.slice(destination.len(), inside.len())
+    match safe_href(destination, links) {
+        Some(href) => {
+            if href.starts_with("/") {
+                let copy = md_url(href)
+                "{copy}{title}"
+            } else {
+                inside
+            }
+        }
+        None => inside
+    }
+}
+
+// ---- Markdown: inline ---------------------------------------------------------------
+
+// `text`, with its links, code, and emphasis rendered.
+fn inline(text: Untrusted<String>, links: Links) -> html.Html {
+    let cs = text.chars()
+    spans(cs, 0, cs.len(), links)
+}
+
+// The characters of `cs` from `from` up to `to`, rendered.
+fn spans(cs: List<Untrusted<String>>, from: Int, to: Int, links: Links) -> html.Html {
+    var out = empty()
+    var plain: List<Untrusted<String>> = List.new()
+    var i = from
+    while i < to {
+        let c = cs.at(i)
+        if c == "\\" && i + 1 < to && is_punctuation(cs.at(i + 1)) {
+            plain.push(cs.at(i + 1))
+            i = i + 2
+            continue
+        }
+        if c == "`" {
+            let width = run_length(cs, i, to, "`")
+            let close = find_run(cs, i + width, to, "`", width)
+            if close < 0 {
+                plain.push("`".repeat(width))
+                i = i + width
+                continue
+            }
+            let code = "".join(sub(cs, i + width, close))
+            out = out.concat(text_of(plain)).concat(wrap("<code>", html.text(trim_one_space(code)), "</code>"))
+            plain = List.new()
+            i = close + width
+            continue
+        }
+        if (c == "*" || c == "_") && opens_emphasis(cs, i, to) {
+            let width = if run_length(cs, i, to, c) >= 2 { 2 } else { 1 }
+            let close = find_closer(cs, i + width, to, c, width)
+            if close > i + width {
+                let tag = if width == 2 { "strong" } else { "em" }
+                let inner = wrap("<{tag}>", spans(cs, i + width, close, links), "</{tag}>")
+                out = out.concat(text_of(plain)).concat(inner)
+                plain = List.new()
+                i = close + width
+                continue
+            }
+        }
+        let image = c == "!" && i + 1 < to && cs.at(i + 1) == "["
+        if c == "[" || image {
+            let open = if image { i + 1 } else { i }
+            let close = matching(cs, open, to, "[", "]")
+            if close > 0 && close + 1 < to && cs.at(close + 1) == "(" {
+                let end = matching(cs, close + 1, to, "(", ")")
+                if end > 0 {
+                    let url = destination(cs, close + 2, end)
+                    let link = if image {
+                        picture("".join(sub(cs, open + 1, close)), url)
+                    } else {
+                        link_to(url, spans(cs, open + 1, close, links), links)
+                    }
+                    out = out.concat(text_of(plain)).concat(link)
+                    plain = List.new()
+                    i = end + 1
+                    continue
+                }
+            }
+        }
+        plain.push(c)
+        i = i + 1
+    }
+    out.concat(text_of(plain))
+}
+
+// Whether the `*` or `_` at `i` can open emphasis: text follows it, and
+// a `_` does not stand inside a word, as in `snake_case`.
+fn opens_emphasis(cs: List<Untrusted<String>>, i: Int, to: Int) -> Bool {
+    let c = cs.at(i)
+    let after = i + run_length(cs, i, to, c)
+    if after >= to || is_space(cs.at(after)) {
+        return false
+    }
+    c == "*" || i == 0 || !is_alphanumeric(cs.at(i - 1))
+}
+
+// Where the emphasis opened with `width` of `c` closes, from `start`, or
+// -1: a run of `c` as long, after text, and for `_` not inside a word.
+// Code spans are skipped, and a single `*` does not close on a `**`.
+fn find_closer(cs: List<Untrusted<String>>, start: Int, to: Int, c: Untrusted<String>, width: Int) -> Int {
+    var i = start
+    while i < to {
+        let here = cs.at(i)
+        if here == "`" {
+            let ticks = run_length(cs, i, to, "`")
+            let end = find_run(cs, i + ticks, to, "`", ticks)
+            i = if end < 0 { i + ticks } else { end + ticks }
+            continue
+        }
+        if here == c {
+            let length = run_length(cs, i, to, c)
+            let after_text = !is_space(cs.at(i - 1))
+            let word_follows = i + width < to && is_alphanumeric(cs.at(i + width))
+            if length >= width && (width == 2 || length == 1) && after_text && (c == "*" || !word_follows) {
+                return i
+            }
+            i = i + length
+            continue
+        }
+        i = i + 1
+    }
+    -1
+}
+
+// How many of `c` stand in a row from `i`.
+fn run_length(cs: List<Untrusted<String>>, i: Int, to: Int, c: Untrusted<String>) -> Int {
+    var end = i
+    while end < to && cs.at(end) == c {
+        end = end + 1
+    }
+    end - i
+}
+
+// Where the next run of exactly `width` of `c` starts, from `start`, or
+// -1.
+fn find_run(cs: List<Untrusted<String>>, start: Int, to: Int, c: Untrusted<String>, width: Int) -> Int {
+    var i = start
+    while i < to {
+        if cs.at(i) == c {
+            let length = run_length(cs, i, to, c)
+            if length == width {
+                return i
+            }
+            i = i + length
+        } else {
+            i = i + 1
+        }
+    }
+    -1
+}
+
+// The index of the `close` that matches the `open` at `start`, or -1.
+fn matching(cs: List<Untrusted<String>>, start: Int, to: Int, open: String, close: String) -> Int {
+    var depth = 0
+    var i = start
+    while i < to {
+        let c = cs.at(i)
+        if c == "\\" {
+            i = i + 2
+            continue
+        }
+        if c == open {
+            depth = depth + 1
+        } else if c == close {
+            depth = depth - 1
+            if depth == 0 {
+                return i
+            }
+        }
+        i = i + 1
+    }
+    -1
+}
+
+// A link's destination: the text between its parentheses, up to any
+// title after a space.
+fn destination(cs: List<Untrusted<String>>, from: Int, to: Int) -> Untrusted<String> {
+    let text = "".join(sub(cs, from, to)).trim()
+    text.split(" ").at(0)
+}
+
+// `text`, a link's rendered text, linked to `url` if that is safe, and
+// bare if it is not.
+fn link_to(url: Untrusted<String>, text: html.Html, links: Links) -> html.Html {
+    match safe_href(url, links) {
+        Some(href) => anchor_to(href, text)
+        None => text
+    }
+}
+
+fn anchor_to(href: Untrusted<String>, text: html.Html) -> html.Html {
+    let open = markup("<a href=\"").concat(html.text(href)).concat(markup("\">"))
+    open.concat(text).concat(markup("</a>"))
+}
+
+// An image, if `url` loads it from the site itself; else its `alt` text.
+fn picture(alt: Untrusted<String>, url: Untrusted<String>) -> html.Html {
+    if url == "" || !url_characters(url) || has_scheme(url) || url.starts_with("/") {
+        return html.text(alt)
+    }
+    let src = markup("<img src=\"").concat(html.text(url))
+    src.concat(markup("\" alt=\"")).concat(html.text(alt)).concat(markup("\">"))
+}
+
+// ---- Links -------------------------------------------------------------------------
+
+// What a doc's links resolve against: the site, and the directory of the
+// doc in the repository.
+struct Links {
+    site: Site,
+    dir: Untrusted<String>,
+}
+
+// Where a link to `url` may go, or `None`:
+//
+// - A URL with a character outside the URL syntax, such as a space, a
+//   tab, a quote, or `<`, goes nowhere.
+// - `https:`, `http:`, and `mailto:` URLs, and fragments, go as written.
+// - Any other scheme, `javascript:` and `data:` among them, goes nowhere.
+//   A scheme is told by a `:` before any `/`, `?`, or `#`, the way a
+//   browser tells one.
+// - A path from the site root, or `//` to another host, goes nowhere: a
+//   doc's links are relative, as the repository has them.
+// - A relative path is resolved against the doc's directory, and goes to
+//   the page published from that file or directory, with its fragment.
+//   One to anything the site does not publish goes nowhere.
+fn safe_href(url: Untrusted<String>, links: Links) -> Option<Untrusted<String>> {
+    if url == "" || !url_characters(url) {
+        return None
+    }
+    if url.starts_with("#") || url.starts_with("https://") || url.starts_with("http://") || url.starts_with("mailto:") {
+        return Some(url)
+    }
+    if has_scheme(url) || url.starts_with("/") {
+        return None
+    }
+    let parts = url.split("#")
+    let path = parts.at(0)
+    let fragment = if parts.len() > 1 { "#".join(sub(parts, 1, parts.len())) } else { "" }
+    let repo = resolve(links.dir, path)?
+    let page = published_url(links.site, repo)?
+    if fragment == "" { Some(page) } else { Some("{page}#{fragment}") }
+}
+
+// Whether every character of `url` may appear in a URL as written:
+// letters, digits, and `-._~:/?#[]@!$&'()*+,;=%`.
+fn url_characters(url: Untrusted<String>) -> Bool {
+    for c in url.chars() {
+        if !is_alphanumeric(c) && !"-._~:/?#[]@!$&'()*+,;=%".contains(c) {
+            return false
+        }
+    }
+    true
+}
+
+// Whether `url` starts with a scheme: a `:` before any `/`, `?`, or `#`.
+fn has_scheme(url: Untrusted<String>) -> Bool {
+    for c in url.chars() {
+        if c == ":" {
+            return true
+        }
+        if c == "/" || c == "?" || c == "#" {
+            return false
+        }
+    }
+    false
+}
+
+// `path` resolved against `dir`, both relative to the repository root,
+// or `None` when it climbs out of the repository.
+fn resolve(dir: Untrusted<String>, path: Untrusted<String>) -> Option<Untrusted<String>> {
+    var parts: List<Untrusted<String>> = List.new()
+    for segment in "{dir}/{path}".split("/") {
+        if segment == ".." {
+            if parts.len() == 0 {
+                return None
+            }
+            parts = sub(parts, 0, parts.len() - 1)
+        } else if segment != "" && segment != "." {
+            parts.push(segment)
+        }
+    }
+    Some("/".join(parts))
+}
+
+// The URL of what the site publishes from `repo`, a file or a directory
+// in the repository.
+fn published_url(site: Site, repo: Untrusted<String>) -> Option<Untrusted<String>> {
+    for doc in site.docs {
+        if doc.repo == repo {
+            return Some(url_of(doc.page))
+        }
+    }
+    for section in site.sections {
+        let dir = "docs/{section.dir}"
+        if dir == repo {
+            return Some("/{section.dir}/")
+        }
+    }
+    None
+}
+
+// The directory of `path`, or "" at the root.
+fn parent_of(path: Untrusted<String>) -> Untrusted<String> {
+    let parts = path.split("/")
+    "/".join(sub(parts, 0, parts.len() - 1))
+}
+
+// What follows the last `/` in `path`.
+fn last_segment(path: Untrusted<String>) -> Untrusted<String> {
+    let parts = path.split("/")
+    parts.at(parts.len() - 1)
+}
+
+// ---- Text --------------------------------------------------------------------------
+
+// The items of `items` from `from` up to `to`.
+fn sub(items: List<Untrusted<String>>, from: Int, to: Int) -> List<Untrusted<String>> {
+    var out: List<Untrusted<String>> = List.new()
+    var i = from
+    while i < to {
+        out.push(items.at(i))
+        i = i + 1
+    }
+    out
+}
+
+// The number of spaces `line` starts with.
+fn indent(line: Untrusted<String>) -> Int {
+    var count = 0
+    for c in line.chars() {
+        if c != " " {
+            return count
+        }
+        count = count + 1
+    }
+    count
+}
+
+// `line` without up to `width` of its leading spaces.
+fn dedent(line: Untrusted<String>, width: Int) -> Untrusted<String> {
+    line.slice(min(indent(line), width), line.len())
+}
+
+fn min(a: Int, b: Int) -> Int {
+    if a < b { a } else { b }
+}
+
+// A code span's text: one space at each end is dropped when both have
+// one, so `` ` `` `` ` can hold a backtick.
+fn trim_one_space(code: Untrusted<String>) -> Untrusted<String> {
+    if code.len() >= 2 && code.starts_with(" ") && code.ends_with(" ") && code.trim() != "" {
+        code.slice(1, code.len() - 1)
+    } else {
+        code
+    }
+}
+
+fn is_alphanumeric(c: Untrusted<String>) -> Bool {
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".contains(c)
+}
+
+fn is_space(c: Untrusted<String>) -> Bool {
+    c == " " || c == "\t" || c == "\n"
+}
+
+// ASCII punctuation: what a backslash escapes.
+fn is_punctuation(c: Untrusted<String>) -> Bool {
+    "!\"#$%&'()*+,-./:;<=>?@[\\]^_`\{|\}~".contains(c)
+}
+
+// ---- HTML ---------------------------------------------------------------------------
+
+// `plain`, escaped.
+fn text_of(plain: List<Untrusted<String>>) -> html.Html {
+    html.text("".join(plain))
+}
+
+// `inner` between two pieces of markup.
+fn wrap(open: String, inner: html.Html, close: String) -> html.Html {
+    markup(open).concat(inner).concat(markup(close))
+}
+
+fn empty() -> html.Html {
+    markup("")
+}
+
+// Markup written here in the generator, which it vouches for.
+fn markup(text: String) -> html.Html {
+    html.Html.raw(html.TrustedHtml.new(text))
+}
+
+// ---- The error-code catalog ---------------------------------------------------------
+//
+// `docs/checker.md` and `docs/runtime.md` document every diagnostic code:
+// a table row gives a code's meaning and, in the checker tables, its
+// machine-applicable fix, and a pair of fenced blocks tagged `error=CODE`
+// and `fixed=CODE` gives a program that fails with the code and the same
+// program fixed. From them the site publishes a page per code at
+// `codes/CODE.html`, an index at `codes/`, and `codes.json`. `oskac
+// explain` reads the same files, and a test keeps the two in step.
+
+// One diagnostic code. A text field is "" when the code has none of it.
+struct Code {
+    code: Untrusted<String>,
+    // What the code means, as Markdown.
+    message: Untrusted<String>,
+    // What its machine-applicable fix does.
+    fix: Untrusted<String>,
+    // A program that fails with the code, and the same program fixed.
+    example: Untrusted<String>,
+    fixed: Untrusted<String>,
+    // The doc that lists it: `checker.md` or `runtime.md`.
+    source: Untrusted<String>,
+}
+
+// A fenced block tagged `error=CODE` or `fixed=CODE`.
+struct Example {
+    is_error: Bool,
+    code: Untrusted<String>,
+    body: Untrusted<String>,
+}
+
+// What the tag in a fence's info string says, if it has one.
+struct Tag {
+    is_error: Bool,
+    code: Untrusted<String>,
+}
+
+// Whether the site has a catalog to publish.
+fn has_catalog(all: Site) -> Bool {
+    for doc in all.docs {
+        if doc.repo == "docs/checker.md" {
+            return true
+        }
+    }
+    false
+}
+
+// The index of the catalog and a page for each code.
+fn code_pages(all: Site, codes: List<Code>) -> List<Page> {
+    var pages: List<Page> = List.new()
+    pages.push(codes_index(all, codes))
+    for code in codes {
+        pages.push(code_page(all, code))
+    }
+    pages
+}
+
+// Every code, in the order the docs list them: the checker's, then the
+// runtime's.
+fn catalog(all: Site) -> List<Code> {
+    var codes: List<Code> = List.new()
+    for repo in ["docs/checker.md", "docs/runtime.md"] {
+        for doc in all.docs {
+            if doc.repo == repo {
+                for code in doc_codes(doc.text, last_segment(repo)) {
+                    codes.push(code)
+                }
+            }
+        }
+    }
+    codes
+}
+
+// The codes `text`, the doc named `source`, lists, with their examples.
+fn doc_codes(text: Untrusted<String>, source: Untrusted<String>) -> List<Code> {
+    var rows: List<Code> = List.new()
+    var examples: List<Example> = List.new()
+    var in_block = false
+    var tag = Tag(is_error: false, code: "")
+    var body: List<Untrusted<String>> = List.new()
+    for line in text.lines() {
+        if in_block {
+            if line.starts_with("```") && line.slice(3, line.len()).trim() == "" {
+                if tag.code != "" {
+                    examples.push(Example(is_error: tag.is_error, code: tag.code, body: "".join(body)))
+                }
+                in_block = false
+            } else {
+                body.push("{line}\n")
+            }
+            continue
+        }
+        if line.starts_with("```") {
+            in_block = true
+            body = List.new()
+            tag = fence_tag(line.slice(3, line.len()))
+            continue
+        }
+        match code_row(line, source) {
+            Some(row) => rows.push(row)
+            None => {}
+        }
+    }
+    var codes: List<Code> = List.new()
+    for row in rows {
+        codes.push(with_examples(row, examples))
+    }
+    codes
+}
+
+// The tag in a fence's info string, such as `oska error=E0300`; a tag
+// with no code has code "".
+fn fence_tag(info: Untrusted<String>) -> Tag {
+    var first = true
+    for word in info.split(" ") {
+        if first {
+            first = false
+            continue
+        }
+        let pair = word.split("=")
+        if pair.len() == 2 && is_code(pair.at(1)) && (pair.at(0) == "error" || pair.at(0) == "fixed") {
+            return Tag(is_error: pair.at(0) == "error", code: pair.at(1))
+        }
+    }
+    Tag(is_error: false, code: "")
+}
+
+// Whether `word` is shaped like a code: `E` or `P` and four digits.
+fn is_code(word: Untrusted<String>) -> Bool {
+    if word.len() != 5 || !(word.starts_with("E") || word.starts_with("P")) {
+        return false
+    }
+    for c in word.slice(1, 5).chars() {
+        if !"0123456789".contains(c) {
+            return false
+        }
+    }
+    true
+}
+
+// A table row `| `E0300` | meaning | fix |` as a code with no examples.
+// The runtime's tables have no fix column. A `|` inside a cell is written
+// `\|`.
+fn code_row(line: Untrusted<String>, source: Untrusted<String>) -> Option<Code> {
+    if !line.starts_with("| `") || !line.ends_with(" |") {
+        return None
+    }
+    let parts = line.slice(3, line.len() - 2).split("` | ")
+    if parts.len() < 2 || !is_code(parts.at(0)) {
+        return None
+    }
+    let cells = "` | ".join(sub(parts, 1, parts.len())).split(" | ")
+    let message = cells.at(0).replace("\\|", "|")
+    var fix = ""
+    if cells.len() > 1 && !cells.at(1).starts_with("None") {
+        fix = cells.at(1).replace("\\|", "|")
+    }
+    Some(Code(code: parts.at(0), message: message, fix: fix, example: "", fixed: "", source: source))
+}
+
+// `row` with the examples `examples` holds for it.
+fn with_examples(row: Code, examples: List<Example>) -> Code {
+    var example = ""
+    var fixed = ""
+    for found in examples {
+        if found.code == row.code {
+            if found.is_error {
+                example = found.body
+            } else {
+                fixed = found.body
+            }
+        }
+    }
+    Code(code: row.code, message: row.message, fix: row.fix, example: example, fixed: fixed, source: row.source)
+}
+
+// The page for one code.
+fn code_page(all: Site, code: Code) -> Page {
+    let links = Links(site: all, dir: "docs")
+    let lower = code.code.to_lowercase()
+    var parts: List<Untrusted<String>> = List.new()
+    parts.push("# {code.code}")
+    parts.push("")
+    parts.push(local_links(code))
+    parts.push("")
+    if code.fix == "" {
+        parts.push("**Machine-applicable fix:** none.")
+    } else {
+        parts.push("**Machine-applicable fix:** {code.fix}")
+    }
+    if code.example != "" {
+        parts.push("")
+        parts.push("## Example")
+        parts.push("")
+        parts.push("This program fails with `{code.code}`.")
+        parts.push("")
+        parts.push("```oska")
+        parts.push(chomp(code.example))
+        parts.push("```")
+    }
+    if code.fixed != "" {
+        parts.push("")
+        parts.push("## Fixed")
+        parts.push("")
+        parts.push("The same program, fixed.")
+        parts.push("")
+        parts.push("```oska")
+        parts.push(chomp(code.fixed))
+        parts.push("```")
+    }
+    parts.push("")
+    let label = if code.source == "checker.md" { "checker notes" } else { "runtime notes" }
+    // Only a code with an example has a heading of its own to link to.
+    let target = if code.example == "" { code.source } else { "{code.source}#{lower}" }
+    parts.push("Listed in the [{label}]({target}). `oskac explain {code.code}` prints this entry offline.")
+    let back = wrap("<p>", anchor_to("/codes/", html.text("All error codes")), "</p>\n")
+    let source = "\n".join(parts)
+    Page(path: "codes/{code.code}.html", title: code.code, body: markdown(source, links).concat(back), md: retarget(source, links))
+}
+
+// A code's meaning, with the links within its doc made links to it: `[Tests](#tests)`
+// in `runtime.md` is `[Tests](runtime.md#tests)` on a page of the catalog.
+fn local_links(code: Code) -> Untrusted<String> {
+    code.message.replace("](#", "]({code.source}#")
+}
+
+// `text` without the line break that ends it.
+fn chomp(text: Untrusted<String>) -> Untrusted<String> {
+    if text.ends_with("\n") {
+        text.slice(0, text.len() - 1)
+    } else {
+        text
+    }
+}
+
+// The index of the catalog: every code, linked, with its meaning's first
+// sentence.
+fn codes_index(all: Site, codes: List<Code>) -> Page {
+    let links = Links(site: all, dir: "docs")
+    let intro = "# Error codes\n\nEvery diagnostic code Oska reports, with a program that fails with it and the same program fixed. `oskac explain <code>` prints an entry offline.\n"
+    let data = wrap("<p>All of them are in ", anchor_to("/codes.json", html.text("codes.json")), " as data.</p>\n")
+    let base = origin()
+    var md = "{intro}\nAll of them are in [codes.json]({base}/codes.json) as data.\n\n"
+    var items = empty()
+    for code in codes {
+        let first = summary(local_links(code))
+        let link = anchor_to("/codes/{code.code}.html", html.text(code.code))
+        let line = link.concat(html.text(": ")).concat(inline(first, links))
+        items = items.concat(wrap("<li>", line, "</li>\n"))
+        md = "{md}- [{code.code}]({base}/codes/{code.code}.md): {first}\n"
+    }
+    let body = markdown(intro, links).concat(data).concat(wrap("<ul>\n", items, "</ul>\n"))
+    Page(path: "codes/index.html", title: "Error codes", body: body, md: md)
+}
+
+// The first sentence of `message`, without its full stop.
+fn summary(message: Untrusted<String>) -> Untrusted<String> {
+    let first = message.split(". ").at(0)
+    if first.ends_with(".") {
+        first.slice(0, first.len() - 1)
+    } else {
+        first
+    }
+}
+
+// `codes.json`: an array of the entries `oskac explain --format=json`
+// prints, one per line.
+fn codes_json(codes: List<Code>) -> Untrusted<String> {
+    var entries: List<Untrusted<String>> = List.new()
+    for code in codes {
+        entries.push(code_json(code))
+    }
+    let all = ",\n".join(entries)
+    "[\n{all}\n]\n"
+}
+
+// One code as a JSON object, with the same fields in the same order as
+// `oskac explain --format=json`.
+fn code_json(code: Code) -> Untrusted<String> {
+    let name = catalog_json_string(code.code)
+    let message = catalog_json_string(code.message)
+    let machine = if code.fix == "" { "false" } else { "true" }
+    let described = json_or_null(code.fix)
+    let example = json_or_null(code.example)
+    let fixed = json_or_null(code.fixed)
+    "\{\"code\":{name},\"message\":{message},\"machine_fix\":{machine},\"machine_fix_description\":{described},\"example\":{example},\"fix\":{fixed}\}"
+}
+
+fn json_or_null(text: Untrusted<String>) -> Untrusted<String> {
+    if text == "" { "null" } else { catalog_json_string(text) }
+}
+
+// `text` as a JSON string, quotes included. The docs hold no control
+// character but a line break or a tab, so those are all it escapes.
+fn catalog_json_string(text: Untrusted<String>) -> Untrusted<String> {
+    let escaped = text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+    "\"{escaped}\""
+}
+
+// ---- The agent-setup prompt ---------------------------------------------------------
+//
+// `site/agent-setup/` holds a prompt that a person pastes into a coding
+// agent, and the files it tells the agent to use. `prompt.md` is the
+// prompt: it is a page of its own, shown with a Copy button; it is shown
+// again on the home page and the install guide; and it is served raw, as
+// `agent-setup.md` and `agent-setup.txt`. Every other file is served as it
+// is under `agent-setup/`. All of it is text, and goes into a page only
+// through `html.text`. A repository with no such directory has none of
+// this.
+
+// The text of the file `name` in `site/agent-setup/`, or "" if it has none.
+fn asset_text(all: Site, name: Untrusted<String>) -> Untrusted<String> {
+    for asset in all.assets {
+        if asset.name == name {
+            return asset.text
+        }
+    }
+    ""
+}
+
+fn has_asset(all: Site, name: Untrusted<String>) -> Bool {
+    for asset in all.assets {
+        if asset.name == name {
+            return true
+        }
+    }
+    false
+}
+
+fn has_setup(all: Site) -> Bool {
+    has_asset(all, "prompt.md")
+}
+
+// Whether `doc` shows the prompt after its introduction: the home page and
+// the install guide.
+fn carries_prompt(all: Site, doc: Doc) -> Bool {
+    has_setup(all) && (doc.page == "index.html" || doc.page == "guide/install.html")
+}
+
+// The line of the first `## ` heading outside a code fence, or the number
+// of lines if there is none.
+fn first_section(lines: List<Untrusted<String>>) -> Int {
+    let fenced = fence_flags(lines)
+    var i = 0
+    while i < lines.len() {
+        if !fenced.at(i) && lines.at(i).starts_with("## ") {
+            return i
+        }
+        i = i + 1
+    }
+    lines.len()
+}
+
+// A doc that shows the prompt: its introduction, up to the first `## `
+// heading, then the prompt, then the rest. Its Markdown copy has a pointer
+// to the raw prompt in the same place.
+fn prompt_doc_page(all: Site, doc: Doc, links: Links) -> Page {
+    let lines = doc.text.lines()
+    let cut = first_section(lines)
+    let intro_lines = "\n".join(sub(lines, 0, cut))
+    let rest_lines = "\n".join(sub(lines, cut, lines.len()))
+    let intro = "{intro_lines}\n"
+    let rest = "{rest_lines}\n"
+    let body = markdown(intro, links).concat(setup_block(all)).concat(markdown(rest, links))
+    let before = retarget(intro, links)
+    let after = retarget(rest, links)
+    let pointer = "> **Set up an AI agent.** Paste the prompt at https://oskalang.dev/agent-setup.md into your coding agent, or tell it: `Read https://oskalang.dev/agent-setup.md and follow it`.\n\n"
+    Page(path: doc.page, title: doc.title, body: body, md: "{before}\n{pointer}{after}")
+}
+
+// The prompt as a block: a heading, how to use it, a Copy button that
+// `search.js` shows (hidden until then, so without JavaScript there is no
+// button that does nothing), and the prompt itself, as text to select.
+fn setup_block(all: Site) -> html.Html {
+    let prompt = asset_text(all, "prompt.md")
+    let head = markup("<section class=\"agent-setup\" aria-labelledby=\"agent-setup-heading\">\n<h2 id=\"agent-setup-heading\">Set up an AI agent</h2>\n<p>Paste this prompt into Claude Code, Cursor, Codex, or any other coding agent. It installs Oska, checks the signature and the checksum, and sets up your project, and it asks before it changes a file. Or tell your agent: <code>Read https://oskalang.dev/agent-setup.md and follow it</code>.</p>\n<p><button type=\"button\" data-copy=\"agent-setup-prompt\" hidden=\"hidden\">Copy</button> <a href=\"/agent-setup.md\">agent-setup.md</a> <a href=\"/agent-setup.txt\">agent-setup.txt</a></p>\n<pre id=\"agent-setup-prompt\">")
+    head.concat(html.text(prompt)).concat(markup("</pre>\n</section>\n"))
+}
+
+// One file of the setup, for the page and for `llms.txt`.
+struct Listing {
+    path: Untrusted<String>,
+    label: Untrusted<String>,
+    note: Untrusted<String>,
+}
+
+// The prompt and each of its files that the repository has.
+fn setup_listing(all: Site) -> List<Listing> {
+    var out: List<Listing> = List.new()
+    out.push(Listing(path: "agent-setup.md", label: "Agent setup prompt", note: "paste it into a coding agent, or tell the agent to read this file, to install Oska and set up a project"))
+    out.push(Listing(path: "agent-setup.txt", label: "agent-setup.txt", note: "the same prompt, as plain text"))
+    if has_asset(all, "AGENTS.template.md") {
+        out.push(Listing(path: "agent-setup/AGENTS.template.md", label: "AGENTS.md template", note: "the Oska section for a project's AGENTS.md: the agent loop and the machine-readable flags"))
+    }
+    if has_asset(all, "CLAUDE.template.md") {
+        out.push(Listing(path: "agent-setup/CLAUDE.template.md", label: "CLAUDE.md template", note: "points Claude Code at AGENTS.md"))
+    }
+    if has_asset(all, "claude-settings.json") {
+        out.push(Listing(path: "agent-setup/claude-settings.json", label: "Claude Code hook settings", note: "opt-in: the hooks entry for .claude/settings.json that runs the hook script after an edit"))
+    }
+    if has_asset(all, "oska-check.sh") {
+        out.push(Listing(path: "agent-setup/oska-check.sh", label: "Claude Code hook script", note: "opt-in: runs oskac check on a .osk file after an edit; reads only the edit notification"))
+    }
+    out
+}
+
+// The page of the prompt: what it is, the prompt, and the files.
+fn setup_page(all: Site) -> Page {
+    let intro = markup("<h1>Agent setup prompt</h1>\n<p>One prompt that sets up Oska for AI-driven development. Paste it into your coding agent. It runs the official installer and checks that the checksum and the signature verified, tries the toolchain, writes an <code>AGENTS.md</code> that holds the agent loop, and offers a hook and a CI step. It states each command before it runs it, never handles a secret, and shows a diff before it changes a file.</p>\n")
+    var files = markup("<h2 id=\"files\">Files</h2>\n<ul>\n")
+    for item in setup_listing(all) {
+        let link = anchor_to("/{item.path}", html.text(item.label))
+        files = files.concat(wrap("<li>", link.concat(markup(": ")).concat(html.text(item.note)), "</li>\n"))
+    }
+    let body = intro.concat(setup_block(all)).concat(files).concat(markup("</ul>\n"))
+    Page(path: "agent-setup.html", title: "Agent setup prompt", body: body, md: asset_text(all, "prompt.md"))
+}
+
+// The generator's own authority report, as `oskac check` printed it for
+// this program when the site was built: a live example for the
+// capabilities guide, which links it.
+fn authority_page(all: Site) -> Page {
+    let title = "The site generator's authority"
+    let intro = "This site is built by `site/build.osk`, an Oska program. Just before each build, `oskac check site/build.osk` prints the program's authority report, and the build publishes it here as it was printed. There is one line per function: the capabilities it can reach, each with the parameter it comes through, or `pure` if it can reach none. `main` is granted `FsRead` and `FsWrite`, and only the functions it passes them to can touch the filesystem."
+    let head = markup("<h1>The site generator's authority</h1>\n<p>This site is built by <code>site/build.osk</code>, an Oska program. Just before each build, <code>oskac check site/build.osk</code> prints the program's authority report, and the build publishes it here as it was printed. There is one line per function: the capabilities it can reach, each with the parameter it comes through, or <code>pure</code> if it can reach none. <code>main</code> is granted <code>FsRead</code> and <code>FsWrite</code>, and only the functions it passes them to can touch the filesystem.</p>\n")
+    let report = wrap("<pre><code>", html.text(all.authority), "</code></pre>\n")
+    Page(path: "authority.html", title: title, body: head.concat(report), md: "# {title}\n\n{intro}\n\n```text\n{all.authority}```\n")
+}
+
+// The group of `llms.txt` that lists the prompt and its files.
+fn setup_group(all: Site) -> Untrusted<String> {
+    let base = origin()
+    var entries: Untrusted<String> = ""
+    for item in setup_listing(all) {
+        entries = "{entries}- [{item.label}]({base}/{item.path}): {item.note}\n"
+    }
+    "\n## Set up an agent\n\n{entries}"
+}
+
+// The raw files: the prompt as plain text (`agent-setup.md` is the page's
+// own copy), and every other file under `agent-setup/`.
+fn publish_setup(site: FsWrite, all: Site) -> Result<(), IoError> {
+    site.write(Path.new("agent-setup.txt"), asset_text(all, "prompt.md"))?
+    site.create_dir(Path.new("agent-setup"))?
+    for asset in all.assets {
+        if asset.name != "prompt.md" {
+            site.write(Path.from("agent-setup/{asset.name}"), asset.text)?
+        }
+    }
+    Ok(())
+}
