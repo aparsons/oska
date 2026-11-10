@@ -700,7 +700,8 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                         let ty = self.hole(path);
                         self.interpolated_hole(&ty, *span);
                         self.defer(*span, &ty, Deferred::Display);
-                        self.infer.join_into(&ty, trust);
+                        self.infer
+                            .join_into(&ty, trust, &self.items.untrusted_holders);
                     }
                 }
                 Ty::string().with_trust(trust)

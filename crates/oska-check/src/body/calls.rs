@@ -158,6 +158,7 @@ impl Body<'_, '_, '_> {
             }
             if sig.receiver.is_method() {
                 let self_ty = sig.self_ty.clone().unwrap_or(Ty::Error);
+                self.follow_held_trust(&mut callable, type_name, &self_ty);
                 callable.params.insert(0, (None, self_ty));
             }
             return Some(callable);
@@ -459,6 +460,7 @@ impl Body<'_, '_, '_> {
             // text is no receiver of a method that wants trusted text.
             self.expect(&receiver, declared, base.span);
         }
+        self.follow_held_trust(&mut callable, &type_name, &receiver);
         if let Ty::Param(_) = receiver {
             // A bound's method on a generic parameter: the parameter may
             // stand for untrusted text, so text in the result is untrusted.
@@ -470,6 +472,19 @@ impl Body<'_, '_, '_> {
                 self.mentioning(base, |body| body.apply(callable, args, expected, span))
             }
             _ => self.apply(callable, args, expected, span),
+        }
+    }
+
+    /// A method of a prelude or `std` type has no body to check, so when
+    /// the type holds untrusted text (see
+    /// [`crate::items::Items::untrusted_holders`]), text in the result is
+    /// untrusted: `IoError(message: arg).to_string()` is untrusted text.
+    /// A method the module declares is checked against its signature
+    /// instead.
+    fn follow_held_trust(&mut self, callable: &mut Callable, type_name: &str, receiver: &Ty) {
+        let prelude = self.decls().get(type_name).is_some_and(|d| d.in_prelude);
+        if prelude && self.items.untrusted_holders.contains(type_name) {
+            self.follow_type_arg(callable, receiver.clone());
         }
     }
 
@@ -631,7 +646,8 @@ impl Body<'_, '_, '_> {
         }
         if let Some(joined) = callable.joined {
             for ty in &callable.type_args {
-                self.infer.join_into(ty, joined);
+                self.infer
+                    .join_into(ty, joined, &self.items.untrusted_holders);
             }
         }
         let what = format!("calling {}", callable.description);
