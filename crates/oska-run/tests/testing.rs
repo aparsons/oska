@@ -281,6 +281,71 @@ fn the_json_report_lists_each_test_with_its_status_and_failure() {
 }
 
 #[test]
+fn the_human_report_names_the_test_of_each_failure() {
+    let src = "test \"adds\" {\n    t.assert(true)\n}\n\
+               test \"divides\" {\n    t.fail(\"boom\")\n}\n";
+    let human = test_fake(src).to_human("math.osk");
+    assert_eq!(
+        human,
+        "test adds ... ok\n\
+         test divides ... FAILED\n\
+         \n\
+         failures:\n\
+         test divides: math.osk: error[P0013]: boom (bytes 56..70)\n\
+         \n\
+         2 tests: 1 passed, 1 failed, 0 skipped\n"
+    );
+}
+
+#[test]
+fn a_failure_message_cannot_forge_a_result_line() {
+    // `t.fail` with a newline and a fake result in its message.
+    let src = "test \"liar\" {\n    t.fail(\"x\\ntest liar ... ok\\r\\0\")\n}\n";
+    let report = test_fake(src);
+    assert_eq!(report.tests[0].status, TestStatus::Failed, "{report:#?}");
+    let human = report.to_human("f.osk");
+    let lines: Vec<&str> = human.lines().collect();
+    assert!(
+        !lines.contains(&"test liar ... ok"),
+        "a forged result line: {human}"
+    );
+    assert!(
+        human.contains("test liar: f.osk: error[P0013]: x\\ntest liar ... ok\\r\\u{0}"),
+        "{human}"
+    );
+    assert!(!human.contains('\r') && !human.contains('\0'), "{human:?}");
+}
+
+#[test]
+fn a_test_name_with_control_characters_is_escaped_in_the_report() {
+    let report = test_fake("test \"two\\nlines\" {\n    t.assert(true)\n}\n");
+    assert_eq!(report.tests[0].name, "two\nlines");
+    assert!(
+        report
+            .to_human("f.osk")
+            .starts_with("test two\\nlines ... ok\n"),
+        "{}",
+        report.to_human("f.osk")
+    );
+}
+
+#[test]
+fn dbg_and_stderr_in_a_test_reach_the_given_hosts_stderr_named_by_test() {
+    let src = "test \"first\" {\n    let _ = dbg(5)\n}\n\
+               test \"second\" {\n    let _ = dbg(\"two\\nlines\")\n}\n\
+               #[integration]\ntest \"real\" {\n    let _ = dbg(true)\n}\n";
+    let mut host = FakeHost::new();
+    let report = oska_run::test(src, &mut host, TestOptions { integration: true });
+    assert_eq!(report.count(TestStatus::Passed), 3, "{report:#?}");
+    let output = host.take_output();
+    assert_eq!(
+        output.stderr,
+        "[first] [dbg] 5\n[second] [dbg] \"two\\nlines\"\n[real] [dbg] true\n"
+    );
+    assert_eq!(output.stdout, "", "stdout stays recorded");
+}
+
+#[test]
 fn a_test_that_recurses_too_deep_fails_alone_with_p0021() {
     let report = test_fake(
         "fn down(n: Int) -> Int {\n    if n == 0 { 0 } else { 1 + down(n - 1) }\n}\n\n\

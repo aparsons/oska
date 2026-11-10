@@ -103,10 +103,14 @@ test divides ... FAILED
 test reads the real config ... skipped (#[integration]; run with --integration)
 
 failures:
-math.osk: error[P0011]: assertion failed: `actual == expected`: actual 2, expected 3 (bytes 120..141)
+test divides: math.osk: error[P0011]: assertion failed: `actual == expected`: actual 2, expected 3 (bytes 120..141)
 
 3 tests: 1 passed, 1 failed, 1 skipped
 ```
+
+Each failure is named by its test. Control characters in test names and failure messages are escaped (`\n`, `\r`, `\t`, `\u{..}`), so a message cannot forge a line of the report.
+
+**Output.** What a test writes to stderr, `dbg` included, goes to the real stderr as it happens, each line prefixed with the test's name in brackets, such as `[divides] [dbg] 4`. What it prints to `t.stdout` is recorded for `t.printed()`, for integration tests too, so the report is the only thing on stdout.
 
 With `--format=json`, one JSON object on stdout. Each test has its name, its status (`passed`, `failed`, or `skipped`), and its failure, a diagnostic object or `null`. A refused file has no tests and its diagnostics in `diagnostics`:
 

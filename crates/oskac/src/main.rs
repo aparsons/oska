@@ -181,41 +181,9 @@ fn test_file(path: &str, json: bool, integration: bool) -> ExitCode {
     } else if !report.diagnostics.is_empty() {
         print_diagnostics(path, &report.diagnostics);
     } else {
-        print_test_report(path, &report);
+        print!("{}", report.to_human(path));
     }
     ExitCode::from(u8::try_from(report.exit_code()).unwrap_or(u8::MAX))
-}
-
-/// The human-readable test report: a line per test, then each failure as
-/// a diagnostic, then a summary.
-fn print_test_report(path: &str, report: &oska_run::TestReport) {
-    use oska_run::TestStatus;
-    for test in &report.tests {
-        let status = match test.status {
-            TestStatus::Passed => "ok",
-            TestStatus::Failed => "FAILED",
-            TestStatus::Skipped => "skipped (#[integration]; run with --integration)",
-        };
-        println!("test {} ... {status}", test.name);
-    }
-    let failures: Vec<_> = report
-        .tests
-        .iter()
-        .filter_map(|t| t.failure.as_ref())
-        .collect();
-    if !failures.is_empty() {
-        println!("\nfailures:");
-        for failure in failures {
-            println!("{path}: {failure}");
-        }
-    }
-    println!(
-        "\n{} tests: {} passed, {} failed, {} skipped",
-        report.tests.len(),
-        report.count(TestStatus::Passed),
-        report.count(TestStatus::Failed),
-        report.count(TestStatus::Skipped)
-    );
 }
 
 /// One line of the human-readable authority report, such as

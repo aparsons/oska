@@ -34,15 +34,25 @@ fn reports_each_test_and_a_summary_and_fails_when_a_test_fails() {
         ]
     );
     assert!(
-        stdout.contains(&format!("{FIXTURE}: error[P0011]: "))
-            && stdout.contains("actual 6, expected 7")
-            && stdout.contains(&format!("{FIXTURE}: error[P0004]: ")),
-        "the failures are listed: {stdout}"
+        stdout.contains(&format!(
+            "test double is wrong here: {FIXTURE}: error[P0011]: "
+        )) && stdout.contains("actual 6, expected 7")
+            && stdout.contains(&format!(
+                "test dividing by zero panics: {FIXTURE}: error[P0004]: "
+            )),
+        "the failures are listed, each named by its test: {stdout}"
     );
     assert_eq!(
         lines.last(),
         Some(&"5 tests: 2 passed, 2 failed, 1 skipped")
     );
+}
+
+#[test]
+fn a_tests_stderr_reaches_the_real_stderr_named_by_the_test() {
+    let (output, _) = oskac_test(&[FIXTURE]);
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+    assert_eq!(stderr, "[double doubles] [dbg] 4\n");
 }
 
 #[test]

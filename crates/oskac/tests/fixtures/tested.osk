@@ -1,6 +1,6 @@
 // The fixture for `oskac test`: one test that passes, one that fails,
 // one that panics, and one integration test, which runs only with
-// `--integration`.
+// `--integration`. The first writes to stderr through `dbg`.
 
 fn double(n: Int) -> Int {
     n * 2
@@ -11,7 +11,7 @@ fn greet(out: Stdout, name: String) -> Result<(), IoError> {
 }
 
 test "double doubles" {
-    t.assert_eq(double(2), 4)
+    t.assert_eq(dbg(double(2)), 4)
 }
 
 test "greet prints a greeting" {

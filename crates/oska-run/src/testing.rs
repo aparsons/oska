@@ -10,8 +10,12 @@
 //!   seen by another, and the same file gives the same report every time.
 //! - An `#[integration]` test runs only when [`TestOptions::integration`]
 //!   is set, on the host [`test`] was given: the real OS under `oskac
-//!   test --integration`. Its stdout is still recorded, by [`Recording`],
-//!   so `t.printed()` works and the report stays the only thing printed.
+//!   test --integration`.
+//!
+//! Either way the test runs on a [`TestHost`]: its stdout is recorded, so
+//! `t.printed()` works and the report stays the only thing on stdout, and
+//! what it writes to stderr, `dbg` included, goes to the given host's
+//! stderr, each line prefixed with the test's name.
 //!
 //! An assertion that fails panics with its own `P`-code (`P0010` to
 //! `P0013`). A panic, from an assertion or a bug, stops only its own test,
@@ -103,6 +107,47 @@ impl TestReport {
         }
     }
 
+    /// The report as `oskac test` prints it without `--format=json`: a
+    /// line per test, then each failure, named by its test, as a
+    /// diagnostic in `path`, then a summary. Control characters in names
+    /// and messages are escaped, so a message cannot forge a line of the
+    /// report.
+    pub fn to_human(&self, path: &str) -> String {
+        let mut out = String::new();
+        for test in &self.tests {
+            let status = match test.status {
+                TestStatus::Passed => "ok",
+                TestStatus::Failed => "FAILED",
+                TestStatus::Skipped => "skipped (#[integration]; run with --integration)",
+            };
+            out.push_str(&format!(
+                "test {} ... {status}\n",
+                escape_control(&test.name)
+            ));
+        }
+        let failures: Vec<(&str, &Diagnostic)> = self
+            .tests
+            .iter()
+            .filter_map(|t| Some((t.name.as_str(), t.failure.as_ref()?)))
+            .collect();
+        if !failures.is_empty() {
+            out.push_str("\nfailures:\n");
+            for (name, failure) in failures {
+                let line = format!("test {name}: {path}: {failure}");
+                out.push_str(&escape_control(&line));
+                out.push('\n');
+            }
+        }
+        out.push_str(&format!(
+            "\n{} tests: {} passed, {} failed, {} skipped\n",
+            self.tests.len(),
+            self.count(TestStatus::Passed),
+            self.count(TestStatus::Failed),
+            self.count(TestStatus::Skipped)
+        ));
+        out
+    }
+
     /// The report as one JSON object:
     /// `{"tests":[{"name":...,"status":...,"failure":...}],
     /// "passed":n,"failed":n,"skipped":n,"diagnostics":[...]}`. A test's
@@ -134,6 +179,22 @@ impl TestReport {
     }
 }
 
+/// `text` with each control character escaped, as `\n`, `\r`, `\t`, or
+/// `\u{..}`: on one line, whatever it holds.
+pub fn escape_control(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{{{:x}}}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// Check `src` and run its `test` blocks: the plain ones each on a fresh
 /// [`FakeHost`], and the `#[integration]` ones, only when `options` asks
 /// for them, on `host`.
@@ -159,10 +220,11 @@ pub fn test(src: &str, host: &mut dyn Host, options: TestOptions) -> TestReport 
         .map(|test| {
             let outcome = match (test.integration, options.integration) {
                 (false, _) => Some(on_interpreter_stack(|| {
-                    run_one(&program, test, &mut FakeHost::new())
+                    let world = Some(FakeHost::new());
+                    run_one(&program, test, &mut TestHost::new(world, &mut *host, test))
                 })),
                 (true, true) => Some(on_interpreter_stack(|| {
-                    run_one(&program, test, &mut Recording::new(&mut *host))
+                    run_one(&program, test, &mut TestHost::new(None, &mut *host, test))
                 })),
                 (true, false) => None,
             };
@@ -205,23 +267,42 @@ fn test_context() -> Value {
     }
 }
 
-/// A host that records stdout and passes everything else on to another:
-/// the host of an `#[integration]` test.
-struct Recording<'h> {
-    inner: &'h mut dyn Host,
+/// The host a test runs on. Its world, what `t.fs`, `t.clock`, and
+/// `t.random` reach, is a fresh [`FakeHost`] for a plain test and the
+/// given host for an `#[integration]` one. Either way stdout is recorded,
+/// for `t.printed()`, and stderr goes to the given host, each line
+/// prefixed with `[name] `, so the output of each test can be told apart.
+struct TestHost<'h> {
+    /// The stand-ins, or `None` to use `given`.
+    fake: Option<FakeHost>,
+    given: &'h mut dyn Host,
+    /// `[name] `, the name escaped.
+    prefix: String,
     printed: Vec<String>,
+    /// Whether the next stderr text starts a line.
+    line_start: bool,
 }
 
-impl<'h> Recording<'h> {
-    fn new(inner: &'h mut dyn Host) -> Self {
-        Recording {
-            inner,
+impl<'h> TestHost<'h> {
+    fn new(fake: Option<FakeHost>, given: &'h mut dyn Host, test: &Test) -> Self {
+        TestHost {
+            fake,
+            given,
+            prefix: format!("[{}] ", escape_control(&test.name)),
             printed: Vec::new(),
+            line_start: true,
+        }
+    }
+
+    fn world(&mut self) -> &mut dyn Host {
+        match &mut self.fake {
+            Some(fake) => fake,
+            None => &mut *self.given,
         }
     }
 }
 
-impl Host for Recording<'_> {
+impl Host for TestHost<'_> {
     fn write_stdout(&mut self, text: &str) -> io::Result<()> {
         self.printed
             .push(text.strip_suffix('\n').unwrap_or(text).to_string());
@@ -233,35 +314,43 @@ impl Host for Recording<'_> {
     }
 
     fn write_stderr(&mut self, text: &str) -> io::Result<()> {
-        self.inner.write_stderr(text)
+        let mut prefixed = String::with_capacity(text.len() + self.prefix.len());
+        for piece in text.split_inclusive('\n') {
+            if self.line_start {
+                prefixed.push_str(&self.prefix);
+            }
+            prefixed.push_str(piece);
+            self.line_start = piece.ends_with('\n');
+        }
+        self.given.write_stderr(&prefixed)
     }
 
     fn read_line(&mut self) -> io::Result<Option<String>> {
-        self.inner.read_line()
+        self.world().read_line()
     }
 
     fn env_var(&mut self, name: &str) -> Option<String> {
-        self.inner.env_var(name)
+        self.world().env_var(name)
     }
 
     fn now_millis(&mut self) -> i128 {
-        self.inner.now_millis()
+        self.world().now_millis()
     }
 
     fn next_random(&mut self) -> u64 {
-        self.inner.next_random()
+        self.world().next_random()
     }
 
     fn canonicalize(&mut self, path: &Path) -> io::Result<PathBuf> {
-        self.inner.canonicalize(path)
+        self.world().canonicalize(path)
     }
 
     fn is_symlink(&mut self, path: &Path) -> bool {
-        self.inner.is_symlink(path)
+        self.world().is_symlink(path)
     }
 
     fn read_file(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<String> {
-        self.inner.read_file(path, beneath)
+        self.world().read_file(path, beneath)
     }
 
     fn write_file(
@@ -270,11 +359,11 @@ impl Host for Recording<'_> {
         contents: &str,
         beneath: Option<&Path>,
     ) -> io::Result<()> {
-        self.inner.write_file(path, contents, beneath)
+        self.world().write_file(path, contents, beneath)
     }
 
     fn take_output(&mut self) -> Output {
-        self.inner.take_output()
+        Output::default()
     }
 }
 
