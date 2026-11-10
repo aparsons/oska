@@ -1,0 +1,62 @@
+# Build https://oskalang.dev with the Oska site generator and deploy it to
+# GitHub Pages, then check that the live site answers.
+#
+# Needs, once, in the repository settings: Pages source "GitHub Actions",
+# custom domain `oskalang.dev`, and HTTPS enforced once the certificate is
+# issued. The `github-pages` environment that deploys use must allow `main`.
+
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time; a newer push waits rather than cancelling a deploy
+# that is already under way.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --locked -p oskac
+      # The generator writes into `_site/` but cannot create it.
+      - run: mkdir -p _site
+      - run: ./target/release/oskac run site/build.osk
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  smoke:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: https://oskalang.dev/ answers 200
+        run: |
+          status=$(curl --silent --show-error --output /dev/null \
+            --write-out '%{http_code}' \
+            --retry 6 --retry-delay 10 --retry-all-errors --fail \
+            https://oskalang.dev/) || true
+          echo "https://oskalang.dev/ answered ${status:-nothing}"
+          test "$status" = 200

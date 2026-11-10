@@ -13,7 +13,7 @@
 //! hosts (`FakeHost` deterministically, in memory), and call it from the
 //! intrinsic that needs it (`intrinsics.rs`).
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -300,7 +300,8 @@ pub const FAKE_SEED: u64 = 0x05EE_D0F0_5CA0;
 /// stand-ins.
 ///
 /// - Its filesystem is in memory: files by absolute path, with every
-///   ancestor of a file a directory. It has no symlinks, and its working
+///   ancestor of a file a directory, and the empty directories
+///   [`FakeHost::with_dir`] adds. It has no symlinks, and its working
 ///   directory is `/`.
 /// - Its clock is fixed at the Unix epoch.
 /// - Its generator has a fixed seed, [`FAKE_SEED`].
@@ -313,6 +314,8 @@ pub struct FakeHost {
     stdin: VecDeque<String>,
     env: BTreeMap<String, String>,
     files: BTreeMap<PathBuf, String>,
+    /// Directories that exist though no file lies under them.
+    dirs: BTreeSet<PathBuf>,
     random: SplitMix64,
 }
 
@@ -324,6 +327,7 @@ impl Default for FakeHost {
             stdin: VecDeque::new(),
             env: BTreeMap::new(),
             files: BTreeMap::new(),
+            dirs: BTreeSet::new(),
             random: SplitMix64::new(FAKE_SEED),
         }
     }
@@ -354,6 +358,30 @@ impl FakeHost {
         self
     }
 
+    /// The host with an empty directory at `path`, relative to `/`.
+    pub fn with_dir(mut self, path: &str) -> Self {
+        self.dirs.insert(normalize(Path::new(path)));
+        self
+    }
+
+    /// Every file under the directory `dir`, relative to `/`, by its path
+    /// relative to `dir`, with `/` between components.
+    pub fn files_under(&self, dir: &str) -> BTreeMap<String, String> {
+        let dir = normalize(Path::new(dir));
+        self.files
+            .iter()
+            .filter_map(|(path, text)| {
+                let relative = path.strip_prefix(&dir).ok()?;
+                let name = relative
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                Some((name, text.clone()))
+            })
+            .collect()
+    }
+
     /// The text of the file at `path`, relative to `/`, if there is one.
     pub fn file(&self, path: &str) -> Option<&str> {
         self.files
@@ -362,7 +390,9 @@ impl FakeHost {
     }
 
     fn is_dir(&self, path: &Path) -> bool {
-        path == Path::new("/") || self.files.keys().any(|f| f.starts_with(path) && f != path)
+        path == Path::new("/")
+            || self.dirs.iter().any(|d| d.starts_with(path))
+            || self.files.keys().any(|f| f.starts_with(path) && f != path)
     }
 }
 
