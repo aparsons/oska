@@ -1,9 +1,14 @@
-// The search box of https://oskalang.dev. `site/build.osk` copies this file
-// to `_site/search.js`, and every page loads it last.
+// The script of https://oskalang.dev. `site/build.osk` copies this file to
+// `_site/search.js`, and every page loads it last. It does two things.
 //
-// The site works without it: it only adds a box to the header that looks
-// through `/search.json`, the index the generator writes (each page's URL,
-// title, headings, and the start of its text). It reads nothing else, and
+// It shows the Copy button of the agent-setup prompt. The page has the
+// button hidden, so that without JavaScript there is none; the prompt
+// itself is on the page as text. A click puts that text on the clipboard.
+//
+// And it adds a search box. The site works without it: the box is in the
+// header and looks through `/search.json`, the index the generator writes
+// (each page's URL, title, headings, and the start of its text). It reads
+// nothing else, and
 // writes to the page only with `textContent` and `href`, never markup,
 // which the page's CSP (`script-src 'self'`, `connect-src 'self'`) holds it
 // to as well.
@@ -61,6 +66,41 @@
   if (typeof document === "undefined") {
     return;
   }
+
+  // The Copy buttons: each names, in `data-copy`, the element whose text
+  // it copies. With no clipboard to write to, the text is left to select.
+  Array.prototype.forEach.call(
+    document.querySelectorAll("button[data-copy]"),
+    function (button) {
+      var source = document.getElementById(button.getAttribute("data-copy"));
+      if (!source) {
+        return;
+      }
+      var label = button.textContent;
+      var flash = function (message) {
+        button.textContent = message;
+        setTimeout(function () {
+          button.textContent = label;
+        }, 2000);
+      };
+      button.hidden = false;
+      button.addEventListener("click", function () {
+        var clipboard = typeof navigator !== "undefined" && navigator.clipboard;
+        if (!clipboard || typeof clipboard.writeText !== "function") {
+          flash("Select the text and copy it");
+          return;
+        }
+        return clipboard.writeText(source.textContent).then(
+          function () {
+            flash("Copied");
+          },
+          function () {
+            flash("Select the text and copy it");
+          }
+        );
+      });
+    }
+  );
 
   var header = document.querySelector("header");
   if (!header || typeof fetch !== "function") {

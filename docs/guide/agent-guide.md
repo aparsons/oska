@@ -23,6 +23,7 @@ You are done when the check, the tests, and the release check all exit with 0, a
 | `oskac run` | The program's own output, unchanged. Diagnostics and panics are one JSON object per line. | standard error |
 | `oskac parse` | The AST, documented in the [AST reference](../ast.md) | standard output |
 | `oskac lex` | Tokens (the same text as without the flag). A lexical error is a diagnostic object. | standard output |
+| `oskac --version` | One object: `name`, `version` | standard output |
 
 Every diagnostic has the same shape: `code`, `message`, `span`, and sometimes `fix`. Match on `code`. The shapes and exit codes are in the [CLI reference](cli-reference.md#output-formats). If `oskac` cannot read the file it prints `error: cannot read ...` to standard error, exits with 1, and prints no JSON, so check for empty standard output before parsing.
 
@@ -140,4 +141,4 @@ Put the loop in the project's instructions file, such as `AGENTS.md`:
 
 - **Files for agents:** `llms.txt` and `llms-full.txt`, and a `.md` copy of every page.
 - **The installers' `--json` output** (see [install](install.md#one-line-installers)), so an agent can confirm that the checksum and signature verified.
-- **A copy-and-paste agent setup prompt** that installs Oska and configures a project with the loop above.
+- **A copy-and-paste agent setup prompt** that installs Oska and configures a project with the loop above, at `https://oskalang.dev/agent-setup.md`. Along with it are an `AGENTS.md` template, a `CLAUDE.md` template, and an opt-in Claude Code hook that runs `oskac check --format=json` after an edit to a `.osk` file.
