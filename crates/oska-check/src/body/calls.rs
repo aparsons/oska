@@ -451,7 +451,13 @@ impl Body<'_, '_, '_> {
             // stand for untrusted text, so text in the result is untrusted.
             self.follow_type_arg(&mut callable, receiver);
         }
-        self.apply(callable, args, expected, span)
+        match sig.receiver {
+            // A mutating method writes its arguments into its receiver.
+            Receiver::VarSelf => {
+                self.mentioning(base, |body| body.apply(callable, args, expected, span))
+            }
+            _ => self.apply(callable, args, expected, span),
+        }
     }
 
     /// Let `callable`'s result follow the trust of `type_arg` as well, as

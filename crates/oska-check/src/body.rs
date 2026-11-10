@@ -42,7 +42,9 @@
 //!   **scoped** the same way: unification keeps it out of unscoped `fn`
 //!   slots (returns, fields, user function parameters), and a `scope`
 //!   block rejects a value, or an outer `var`, that ends up holding one
-//!   (`E0292`).
+//!   (`E0292`). An outer `var` that could already hold a handle is
+//!   checked by what is written to it: a write that mentions a local of
+//!   the block holding a `Scope` is an escape ([`Body::mentioning`]).
 
 use oska_syntax::ast::{
     BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, ItemKind, Module, StmtKind,
@@ -280,6 +282,12 @@ pub struct Body<'c, 'd, 'a> {
     inferred_lets: Vec<(Ident, Ty)>,
     /// The closures being checked, innermost last.
     closures: Vec<ClosureFrame>,
+    /// The `scope` blocks being checked, innermost last.
+    scope_blocks: Vec<ScopeBlock>,
+    /// The locals each value being written mentions, innermost last: a
+    /// local resolved while one is open is added to every one
+    /// ([`Body::mentioning`]).
+    mentions: Vec<Vec<usize>>,
     /// Checking a contract clause, where only pure functions may be
     /// called.
     in_contract: bool,
@@ -297,6 +305,19 @@ enum Deferred {
     Equality,
     /// An interpolation hole: the `Display` implementation of its type.
     Display,
+}
+
+/// A `scope` block being checked, and what it may have stored outside
+/// itself.
+struct ScopeBlock {
+    /// The index of its handle in the locals: a local at or above it
+    /// belongs to the block, one below it outlives the block.
+    handle: usize,
+    /// Each write, inside the block, to a `var` from outside it (or to
+    /// `self`) of a value that mentions a local of the block: the `var`'s
+    /// name, and the local's type. When that type holds a `Scope`, the
+    /// block's handle may outlive it.
+    kept: Vec<(String, Ty)>,
 }
 
 /// A closure being checked, and what it captures so far.
@@ -328,6 +349,8 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             loop_depth: 0,
             inferred_lets: Vec::new(),
             closures: Vec::new(),
+            scope_blocks: Vec::new(),
+            mentions: Vec::new(),
             in_contract: false,
             deferred: Vec::new(),
         }
@@ -759,6 +782,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                             && !self.infer.resolve(&local.ty).holds_scope()
                     })
                     .collect();
+                self.scope_blocks.push(ScopeBlock {
+                    handle: self.locals.len(),
+                    kept: Vec::new(),
+                });
                 self.locals.push(Local {
                     name: handle.name.clone(),
                     ty: Ty::named(ty::SCOPE),
@@ -766,11 +793,22 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 });
                 let ty = self.block(body, expected, true);
                 self.locals.pop();
+                let block = self.scope_blocks.pop().expect("the block's own frame");
+                // A `var` that already held a handle, of an enclosing
+                // block, is caught by what was written to it: a value
+                // mentioning one of this block's locals that holds one.
                 let kept = outer_vars
                     .into_iter()
                     .map(|i| &self.locals[i])
                     .find(|local| self.infer.resolve(&local.ty).holds_scope())
-                    .map(|local| local.name.clone());
+                    .map(|local| local.name.clone())
+                    .or_else(|| {
+                        block
+                            .kept
+                            .into_iter()
+                            .find(|(_, ty)| self.infer.resolve(ty).holds_scope())
+                            .map(|(name, _)| name)
+                    });
                 if let Some(name) = kept {
                     self.out.diagnostics.push(decl_rules::scope_escapes(
                         expr.span,
@@ -847,6 +885,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         let name = ident.name.as_str();
         if let Some(index) = self.locals.iter().rposition(|l| l.name == name) {
             self.record(ident.span, Resolution::Local(index));
+            for mentioned in &mut self.mentions {
+                mentioned.push(index);
+            }
             let ty = self.locals[index].ty.clone();
             for frame in &mut self.closures {
                 if index < frame.height {
@@ -1034,6 +1075,45 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     }
 
     // ---- Mutation ---------------------------------------------------------
+
+    /// Run `write`, which checks a value written into `place`, and note
+    /// the write with every `scope` block that `place` outlives when the
+    /// value mentions a local of the block: if that local holds the
+    /// block's handle, the handle would outlive the block (`E0292`).
+    pub(super) fn mentioning<T>(&mut self, place: &Expr, write: impl FnOnce(&mut Self) -> T) -> T {
+        self.mentions.push(Vec::new());
+        let result = write(self);
+        let mentioned = self.mentions.pop().expect("the write's own list");
+        let Some((name, root)) = self.written_root(place) else {
+            return result;
+        };
+        for block in &mut self.scope_blocks {
+            if root.is_some_and(|r| r >= block.handle) {
+                continue;
+            }
+            for &local in mentioned.iter().filter(|&&m| m >= block.handle) {
+                block
+                    .kept
+                    .push((name.clone(), self.locals[local].ty.clone()));
+            }
+        }
+        result
+    }
+
+    /// The name and local index of the binding a write to `place` lands
+    /// in: `None` for the index of `self`, which outlives every block in
+    /// the method. `None` altogether for a temporary.
+    fn written_root(&self, place: &Expr) -> Option<(String, Option<usize>)> {
+        match &place.kind {
+            ExprKind::Field { base, .. } => self.written_root(base),
+            ExprKind::Name(ident) => {
+                let index = self.locals.iter().rposition(|l| l.name == ident.name)?;
+                Some((ident.name.clone(), Some(index)))
+            }
+            ExprKind::SelfValue => Some(("self".to_string(), None)),
+            _ => None,
+        }
+    }
 
     /// Report `place` when its root binding is not mutable. `action`
     /// completes "cannot ... `name`".
@@ -1535,7 +1615,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             StmtKind::Assign { target, value } => {
                 let ty = self.infer(target);
                 self.require_mutable(target, codes::ASSIGN_TO_LET, "assign to");
-                self.check(value, &ty);
+                self.mentioning(target, |body| {
+                    body.check(value, &ty);
+                });
             }
             StmtKind::Return(value) => {
                 let ret = self.ret.clone();
