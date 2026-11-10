@@ -31,6 +31,21 @@ jobs:
       # The generator writes into `_site/` but cannot create it.
       - run: mkdir -p _site
       - run: ./target/release/oskac run site/build.osk
+      # Releases are stored in GitHub Releases (see release.yml). Fetch them
+      # all, verify each against the committed key, and publish them under
+      # _site/releases/<tag>/ with _site/latest.json and the key.
+      - name: Add signed releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          releases="$RUNNER_TEMP/releases"
+          mkdir -p "$releases"
+          gh release list --limit 1000 --exclude-drafts --json tagName --jq '.[].tagName' |
+            while IFS= read -r tag; do
+              gh release download "$tag" --dir "$releases/$tag"
+            done
+          scripts/release/stage-site.sh "$releases" _site site/oska-release.pub
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
