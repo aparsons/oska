@@ -54,9 +54,9 @@ impl Stderr {
 // symlink, gives a capability whose every operation returns an `IoError`
 // naming the root and the reason.
 //
-// The path-taking methods of `FsRead` and `FsWrite` reach anywhere the
-// process may. They are going away: read and write through a directory
-// capability instead.
+// `Fs`, `FsRead` and `FsWrite` only attenuate: they have no method that
+// takes a path. Reading and writing go through a directory or file
+// capability, and a call of a removed method gets `E0273`.
 #[capability]
 pub struct Fs { handle: Int }
 
@@ -74,8 +74,6 @@ impl FsRead {
     // The file capability for the one file at `file`, which must be
     // trusted text. See `FileRead`.
     pub fn restrict_to_file(self, file: String) -> FileRead
-    pub fn read_to_string(self, path: Path) -> Result<Untrusted<String>, IoError>
-    pub fn list_dir(self, path: Path) -> Result<List<Untrusted<String>>, IoError>
 }
 
 #[capability]
@@ -86,8 +84,6 @@ impl FsWrite {
     // The file capability for the one file at `file`, which must be
     // trusted text. See `FileWrite`.
     pub fn restrict_to_file(self, file: String) -> FileWrite
-    pub fn write(self, path: Path, contents: Untrusted<String>) -> Result<(), IoError>
-    pub fn create_dir(self, path: Path) -> Result<(), IoError>
 }
 
 // A directory capability: it reaches only its root directory and

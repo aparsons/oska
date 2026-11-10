@@ -1,5 +1,5 @@
-//! What the site generator needs from Oska (#74): `FsWrite.create_dir`,
-//! `restrict_to` naming a single file, and `String.to_lowercase`.
+//! What the site generator needs from Oska (#74): `DirWrite.create_dir`
+//! and `String.to_lowercase`.
 //!
 //! The confinement tests run on [`RealHost`] against a real temporary
 //! directory, with real symlinks; the rest run on [`FakeHost`].
@@ -32,8 +32,9 @@ fn assert_refused_at_runtime(outcome: &RunOutcome, path: &str) {
 #[test]
 fn create_dir_makes_a_directory_that_a_restriction_and_a_write_can_use() {
     let src = "fn main(fs: FsWrite) -> Result<(), IoError> {
-    fs.create_dir(Path.new(\"_site\"))?
-    let site = fs.restrict_to(\"_site\")
+    let top = fs.restrict_to(\"/\")
+    top.create_dir(Path.new(\"_site\"))?
+    let site = top.restrict_to(Path.new(\"_site\"))
     site.create_dir(Path.new(\"adr\"))?
     site.write(Path.new(\"adr/one.html\"), \"one\")
 }
@@ -47,8 +48,9 @@ fn create_dir_makes_a_directory_that_a_restriction_and_a_write_can_use() {
 #[test]
 fn create_dir_of_a_directory_that_exists_succeeds_and_keeps_its_files() {
     let src = "fn main(fs: FsWrite) -> Result<(), IoError> {
-    fs.create_dir(Path.new(\"_site\"))?
-    fs.create_dir(Path.new(\"_site\"))
+    let top = fs.restrict_to(\"/\")
+    top.create_dir(Path.new(\"_site\"))?
+    top.create_dir(Path.new(\"_site\"))
 }
 ";
     let mut host = FakeHost::new().with_file("_site/old.html", "old");
@@ -60,7 +62,7 @@ fn create_dir_of_a_directory_that_exists_succeeds_and_keeps_its_files() {
 #[test]
 fn create_dir_where_a_file_is_or_no_parent_is_an_error() {
     let src = "fn main(fs: FsWrite) -> Result<(), IoError> {
-    fs.create_dir(Path.new(\"{path}\"))
+    fs.restrict_to(\"/\").create_dir(Path.new(\"{path}\"))
 }
 ";
     for path in ["taken", "missing/child", ""] {
@@ -82,16 +84,18 @@ fn create_dir_refuses_a_path_out_of_its_root() {
         let mut host = FakeHost::new().with_dir("_site");
         let outcome = run_kept(&src, &mut host);
         assert_refused_at_runtime(&outcome, path);
+        let top = host.open_root(Path::new("/")).expect("the root");
         assert!(
-            host.list_dir(Path::new("/")).expect("the root") == ["_site"],
+            host.list_dir_beneath(&top, &[]).expect("the root") == ["_site"],
             "creating `{path}` made something outside `_site`"
         );
     }
 }
 
 #[test]
-fn a_read_only_filesystem_cannot_create_a_directory() {
-    let src = "fn main(fs: FsRead) {\n    let _ = fs.create_dir(Path.new(\"x\"))\n}\n";
+fn a_read_only_directory_cannot_create_a_directory() {
+    let src = "fn main(fs: FsRead) {\n    \
+               let _ = fs.restrict_to(\"/\").create_dir(Path.new(\"x\"))\n}\n";
     let outcome = run_fake(src, &[]);
     assert!(
         outcome.diagnostics.iter().any(|d| d.code == "E0228"),
@@ -246,16 +250,6 @@ fn real_host_never_creates_through_a_symlink() {
     // At a symlink to a directory inside the root: never followed.
     assert_eq!(create_confined(&sandbox.root(), "alias"), 1);
     assert_eq!(sandbox.outside_names(), ["secret.txt"]);
-}
-
-#[test]
-fn real_host_unrestricted_keeps_a_symlink_to_a_directory() {
-    // Unrestricted, `create_dir` follows a symlink to a directory that is
-    // already there. Restricted, it never does (`confined_writes.rs`).
-    let sandbox = Sandbox::new("create-host");
-    let root = sandbox.root();
-    sandbox.link("alias", &root.join("sub"));
-    assert!(RealHost::new().create_dir(&root.join("alias")).is_ok());
 }
 
 // ---- to_lowercase ----------------------------------------------------------------

@@ -1,5 +1,5 @@
 //! The text toolkit (#72): `starts_with`, `ends_with`, `replace`, `join`,
-//! `chars`, `slice`, and `repeat` on `String`, and `FsRead.list_dir`.
+//! `chars`, `slice`, and `repeat` on `String`, and `DirRead.list_dir`.
 //! Every text-returning method follows the trust of its inputs.
 
 mod common;
@@ -170,12 +170,12 @@ fn an_untrusted_argument_does_not_taint_a_predicate() {
     );
 }
 
-// ---- FsRead.list_dir ---------------------------------------------------
+// ---- DirRead.list_dir ---------------------------------------------------
 
 #[test]
 fn list_dir_returns_untrusted_names() {
     assert_ok(
-        "fn names(fs: FsRead) -> Result<List<Untrusted<String>>, IoError> {\n    fs.list_dir(Path.new(\".\"))\n}",
+        "fn names(fs: DirRead) -> Result<List<Untrusted<String>>, IoError> {\n    fs.list_dir(Path.new(\".\"))\n}",
     );
 }
 
@@ -183,7 +183,7 @@ fn list_dir_returns_untrusted_names() {
 fn the_names_list_dir_returns_are_untrusted() {
     assert_errors(
         "fn greet(name: String) -> String {\n    name\n}\n\
-         fn first(fs: FsRead) -> Result<String, IoError> {\n    \
+         fn first(fs: DirRead) -> Result<String, IoError> {\n    \
          let names = fs.list_dir(Path.new(\".\"))?\n    \
          Ok(greet(names.at(0)))\n}",
         &[("E0300", "names.at(0)")],
@@ -191,9 +191,9 @@ fn the_names_list_dir_returns_are_untrusted() {
 }
 
 #[test]
-fn a_write_only_filesystem_cannot_list() {
+fn a_write_only_directory_cannot_list() {
     assert_errors(
-        "fn f(fs: FsWrite) -> Result<List<Untrusted<String>>, IoError> {\n    fs.list_dir(Path.new(\".\"))\n}",
+        "fn f(fs: DirWrite) -> Result<List<Untrusted<String>>, IoError> {\n    fs.list_dir(Path.new(\".\"))\n}",
         &[("E0228", "list_dir")],
     );
 }

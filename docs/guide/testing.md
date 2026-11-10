@@ -20,7 +20,7 @@ Inside a test, `t` holds deterministic stand-in capabilities, so a test needs no
 
 | Value | What it is |
 | --- | --- |
-| `t.fs` | An empty in-memory `Fs`, with its working directory at `/` |
+| `t.fs` | An empty in-memory `Fs`, with its working directory at `/`. Attenuate it like any `Fs`, for example `t.fs.restrict_to("/")` |
 | `t.clock` | A `Clock` fixed at the Unix epoch: `now_millis()` is `0` |
 | `t.random` | A `Random` with the same fixed seed in every test |
 | `t.stdout` | A recording `Stdout`. `t.printed()` returns one entry per `println`, without its line break. |
@@ -47,12 +47,12 @@ fn greet(out: Stdout, name: String) -> Result<(), IoError> {
     out.println("hello, {name}")
 }
 
-fn save(fs: FsWrite, text: String) -> Result<(), IoError> {
-    fs.write(Path.new("note.txt"), text)
+fn save(out: DirWrite, text: String) -> Result<(), IoError> {
+    out.write(Path.new("note.txt"), text)
 }
 
-fn word_count(fs: FsRead, path: Path) -> Result<Int, IoError> {
-    let text = fs.read_to_string(path)?
+fn word_count(docs: DirRead, path: Path) -> Result<Int, IoError> {
+    let text = docs.read_to_string(path)?
     Ok(text.split(" ").len())
 }
 
@@ -64,14 +64,14 @@ test "greet prints a greeting" {
 }
 
 test "a saved note can be counted" {
-    let saved = save(t.fs.write_only(), "one two three")
+    let saved = save(t.fs.restrict_to("/").write_only(), "one two three")
     t.assert(saved.is_ok())
-    let counted = word_count(t.fs.read_only(), Path.new("note.txt"))
+    let counted = word_count(t.fs.restrict_to("/").read_only(), Path.new("note.txt"))
     t.assert_eq(counted, Ok(3))
 }
 
 test "a missing file is an error, not a panic" {
-    let counted = word_count(t.fs.read_only(), Path.new("absent.txt"))
+    let counted = word_count(t.fs.restrict_to("/").read_only(), Path.new("absent.txt"))
     t.assert(!counted.is_ok())
 }
 
@@ -136,7 +136,7 @@ If the file does not check, no test runs and the report has no tests and the che
 
 ## Integration tests
 
-A test marked `#[integration]` is skipped unless you pass `--integration`. It then runs on the real operating system: `t.fs` is the real filesystem, unrestricted, `t.clock` is the real time, and `t.random` is seeded from the clock. Its `t.stdout` is still recorded and not written to the terminal, so `t.printed()` works and the report stays the only thing on stdout.
+A test marked `#[integration]` is skipped unless you pass `--integration`. It then runs on the real operating system: `t.fs` is an `Fs` over the real filesystem (attenuate it like any `Fs`), `t.clock` is the real time, and `t.random` is seeded from the clock. Its `t.stdout` is still recorded and not written to the terminal, so `t.printed()` works and the report stays the only thing on stdout.
 
 ```sh
 oskac test app.osk

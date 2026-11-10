@@ -222,7 +222,7 @@ fn a_narrowing_above_the_root_reaches_nothing() {
         "REFUSED: cannot restrict to `../..`: `../..` leads outside the restricted directory\n\
          REFUSED: cannot restrict to `..`: `..` leads outside the restricted directory\n\
          REFUSED: cannot restrict to `/data`: `/data` is absolute; \
-         a restricted filesystem takes paths relative to its root\n"
+         a directory capability takes paths relative to its root\n"
     );
 }
 
@@ -266,17 +266,18 @@ fn a_missing_subdirectory_fails_every_operation_naming_it() {
 // ---- Granting ----------------------------------------------------------------------------
 
 #[test]
-fn main_cannot_be_granted_a_directory_capability() {
+fn main_cannot_declare_a_directory_capability() {
+    // The checker refuses it (`E0217`) before the runtime could fail to
+    // grant it.
     for ty in ["Dir", "DirRead", "DirWrite"] {
         let src = format!("fn main(dir: {ty}) {{\n}}\n");
-        assert_refused(&src, "E0370");
+        assert_refused(&src, "E0217");
         let outcome = run_fake(&src, &[]);
-        assert_eq!(
-            outcome.diagnostics[0].message,
-            format!(
-                "`oskac run` cannot grant `{ty}`: only attenuation makes a directory capability, \
-                 with `restrict_to` on `Fs`, `FsRead` or `FsWrite`"
-            )
+        assert!(
+            outcome.diagnostics[0]
+                .message
+                .starts_with(&format!("`main` cannot take `{ty}`: only attenuation")),
+            "{outcome:#?}"
         );
     }
 }

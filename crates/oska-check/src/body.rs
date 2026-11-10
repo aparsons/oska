@@ -70,6 +70,7 @@ mod attenuation;
 mod audit;
 mod calls;
 mod patterns;
+mod removed;
 mod results;
 mod secrets;
 mod sinks;

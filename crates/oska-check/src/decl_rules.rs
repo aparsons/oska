@@ -199,6 +199,10 @@ impl Names {
     }
 }
 
+/// The directory and file capabilities. The runtime has no root to give
+/// one, so `main` cannot declare it (ADR 0008).
+const CONFINED: [&str; 5] = ["Dir", "DirRead", "DirWrite", "FileRead", "FileWrite"];
+
 /// `main` is the root of authority: it takes only built-in capabilities
 /// and `Args`, and returns `()` or `Result<(), E>` with `E: Display`.
 fn main(src: &str, module: &Module, f: &FnDecl, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
@@ -211,7 +215,20 @@ fn main(src: &str, module: &Module, f: &FnDecl, decls: &Decls, diagnostics: &mut
             },
             None => false,
         };
-        if !allowed {
+        let confined = single_name(&param.ty).filter(|name| {
+            CONFINED.contains(name) && decls.get(name).is_some_and(|d| d.in_prelude)
+        });
+        if let Some(name) = confined {
+            diagnostics.push(Diagnostic::new(
+                codes::MAIN_CONFINED,
+                format!(
+                    "`main` cannot take `{name}`: only attenuation makes a directory or file \
+                     capability, with `restrict_to` or `restrict_to_file` on `Fs`, `FsRead` or \
+                     `FsWrite`, so declare one of those and narrow it"
+                ),
+                param.ty.span,
+            ));
+        } else if !allowed {
             diagnostics.push(Diagnostic::new(
                 codes::MAIN_PARAM,
                 format!(

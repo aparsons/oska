@@ -83,7 +83,7 @@ test "deposit adds to the balance" {
 
 ### Names, types, and calls
 
-- **Paths:** `.` is the only path separator. It is used for modules, types, enum variants, fields, and methods (`use std.sql`, `Shape.Circle`, `fs.read_to_string`). Name resolution, not the parser, decides what each segment refers to.
+- **Paths:** `.` is the only path separator. It is used for modules, types, enum variants, fields, and methods (`use std.sql`, `Shape.Circle`, `dir.read_to_string`). Name resolution, not the parser, decides what each segment refers to.
 - **Type arguments:** `<T>` appears only in type positions (`List<Int>`, `fn first<T>(xs: List<T>)`). There is no turbofish. Write a type annotation instead, as in `let xs: List<Int> = List.new()`.
 - **Bounds:** generic bounds are written inline (`<T: Eq + Hash>`). There are no `where` clauses.
 - **Construction** uses call syntax ([ADR 0004](adr/0004-call-style-constructors.md)):
@@ -186,8 +186,8 @@ The checker is `oskac check`, built as its own crate, `oska-check`, on top of th
 ## Capabilities
 
 ```oska
-fn read_config(fs: FsRead, path: Path) -> Result<Config, ConfigError> {
-    let text = fs.read_to_string(path)?   // Untrusted<String>
+fn read_config(dir: DirRead, path: Path) -> Result<Config, ConfigError> {
+    let text = dir.read_to_string(path)?  // Untrusted<String>
     Config.parse(text)                     // validation: Untrusted<String> -> Config
 }
 ```
@@ -212,7 +212,7 @@ fn main(fs: Fs, net: Net, args: Args) -> Result<(), AppError> {
 | Capability | Grants |
 | --- | --- |
 | `Stdin`, `Stdout`, `Stderr` | Standard streams |
-| `Fs` | Filesystem. Attenuates to `FsRead`, `FsWrite`, or a single directory. |
+| `Fs` | Filesystem, only to attenuate: it reads and writes nothing itself. Attenuates to `FsRead`, `FsWrite`, a directory capability (`Dir`, `DirRead`, `DirWrite`), or a file capability (`FileRead`, `FileWrite`). |
 | `Net` | Network. Attenuates to `NetConnect` or `NetListen`. |
 | `Env` | Environment variables. These can hold secrets. |
 | `Clock`, `Random` | Nondeterministic inputs |
@@ -281,7 +281,7 @@ pub fn parse(s: Untrusted<String>) -> Result<Email, ParseError> {
 | SQL (`std.sql`) | Parameters: `db.query(sql"SELECT * FROM users WHERE id = ?", [id])` | Query text, which must be an `sql"..."` literal | Concatenation or interpolation |
 | Process (`std.proc`) | Arguments: `run("git", ["log", branch])` | The program name | A shell string. Running a shell is a separate, explicitly named capability. |
 | HTML (`std.html`) | Text, which is escaped for its context | `TrustedHtml` | Writing untyped strings into markup |
-| Paths | `Path.from` (see below) | The directory passed to `restrict_to` | `..` traversal outside a restricted capability |
+| Paths | `Path.from` (see below) | The root passed to `restrict_to` or `restrict_to_file` on `Fs`, `FsRead`, or `FsWrite` | `..` traversal outside a directory capability |
 | Network | Request bodies | The host passed to `NetConnect` | |
 | Output | `Stdout.println` and `Stderr` | | |
 
@@ -292,8 +292,9 @@ pub fn parse(s: Untrusted<String>) -> Result<Email, ParseError> {
   - Building a query string by hand is a compile error with a stable diagnostic code. It is not a lint.
 - **Paths.**
   - `Path.from` accepts untrusted text, because the protection for paths comes from **attenuation**, not from trust tracking.
-  - Attenuate a filesystem capability with `restrict_to` before reading paths a user chose. The runtime rejects any path that escapes the restricted directory.
-  - A restricted and an unrestricted `FsRead` are the same type, so the checker cannot tell them apart.
+  - Every read and write goes through a directory or file capability, because `Fs`, `FsRead`, and `FsWrite` only attenuate ([ADR 0008](adr/0008-file-access-goes-through-confined-capabilities.md)). A path a user chose is therefore always resolved beneath a root the code named, and the runtime rejects any path that escapes it.
+  - The first root, cut from `Fs`, `FsRead`, or `FsWrite`, is trusted text. Narrowing an existing directory capability takes a `Path`, which may come from untrusted text, because the result stays beneath the same root.
+  - Reading anywhere takes `restrict_to("/")`, which is visible in the code and in the authority report.
 - **Secrets.**
   - `env.secret("API_KEY")` returns `Secret<String>`. In contrast, `env.get` returns `Untrusted<String>`.
   - A `Secret` has no `Display`; `dbg` prints it as `<redacted>`.
@@ -379,7 +380,7 @@ The interpreter is `oskac run file.osk -- args...`, built as the crate `oska-run
   - `Random`, with a built-in pseudo-random generator
   - `std.html`: `text` escapes `&`, `<`, `>`, `"`, and `'`; `TrustedHtml` markup passes through unescaped
 - **Not yet implemented:** `Net`, `std.proc`, and `std.sql`. `oskac run` refuses, before execution starts and with a stable code, any program that uses them.
-- **Filesystem confinement.** A restricted `Fs` resolves every `Path` against its root. Before checking, it normalizes `..` and follows symlinks. A path that escapes the root is rejected, and so is an absolute path or an empty one.
+- **Filesystem confinement.** A directory or file capability resolves every `Path` against its root. `..` is normalized lexically, and a path that climbs above the root is rejected, as is an absolute path or an empty one. On Linux and macOS the capability holds an OS handle for its root, and each path is opened one component at a time beneath it without following a symlink, so any symlink beneath the root is refused and there is no check to race against ([ADR 0009](adr/0009-oska-sys-is-the-only-crate-with-unsafe.md)). Windows keeps narrowed path checks, which leave a small race, as the [runtime notes](runtime.md#capabilities) say.
 - **Prelude functions without a body** are each backed by a built-in implementation in the runtime. A test enforces that none is missing.
 
 ### Failures

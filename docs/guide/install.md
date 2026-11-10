@@ -102,6 +102,43 @@ Re-run the installer. It installs the latest release over the old one, and with 
 
 Delete `~/.oska`, which holds `bin/oskac` and a `version` file recording what the installer put there.
 
+## Upgrading to v0.2.0
+
+v0.2.0 is a **breaking change** to the filesystem capabilities, with no deprecation period ([ADR 0008](../adr/0008-file-access-goes-through-confined-capabilities.md)). `Fs`, `FsRead`, and `FsWrite` no longer read or write anything. They only attenuate, and every read and write goes through a directory capability (`DirRead`, `DirWrite`) or a file capability (`FileRead`, `FileWrite`). A program that calls a removed method fails `oskac check` with `E0273`, whose message shows the fix. The check cannot apply it for you, because only you know the root.
+
+Each removed method has a one-line migration. Replace `<root>` with the directory the program should reach:
+
+| Before (v0.1.0) | After (v0.2.0) |
+| --- | --- |
+| `fs.read_to_string(path)` on an `FsRead` | `fs.restrict_to("<root>").read_to_string(path)` |
+| `fs.list_dir(path)` on an `FsRead` | `fs.restrict_to("<root>").list_dir(path)` |
+| `fs.write(path, text)` on an `FsWrite` | `fs.restrict_to("<root>").write(path, text)` |
+| `fs.create_dir(path)` on an `FsWrite` | `fs.restrict_to("<root>").create_dir(path)` |
+| `fs.restrict_to("file")` naming a single file | `fs.restrict_to_file("file")`, then `.read_to_string()` or `.write(text)` with no path |
+| Reading anywhere through an `FsRead` | `fs.restrict_to("/")`, which the authority report shows |
+
+Other things change with it:
+
+- A function that took an `FsRead` or an `FsWrite` to read or write files now takes a `DirRead` or a `DirWrite`, or a `FileRead` or a `FileWrite`.
+- `main` may not declare a directory or file capability (`E0217`). Declare `Fs`, `FsRead`, or `FsWrite`, and attenuate.
+- `restrict_to` on a file no longer works. The capability it returns is broken, and every operation on it fails with a "not a directory" `IoError`. Use `restrict_to_file`.
+- Every symlink beneath a root is refused, including one that points inside the root.
+- `oskac check` now lists each attenuation under its function, in the report and in the JSON `attenuations` array.
+
+An example of the migration:
+
+```oska error=E0273
+fn count(fs: FsRead, path: Path) -> Result<Int, IoError> {
+    Ok(fs.read_to_string(path)?.lines().count())
+}
+```
+
+```oska
+fn count(fs: FsRead, path: Path) -> Result<Int, IoError> {
+    Ok(fs.restrict_to("/srv/app").read_to_string(path)?.lines().count())
+}
+```
+
 ## Set up an AI agent
 
 The site publishes a copy-and-paste prompt that has an AI coding agent install Oska, verify the toolchain, and configure your project. It is at the top of this page and at `https://oskalang.dev/agent-setup.md` as plain Markdown. The [agent guide](agent-guide.md) describes the loop the prompt sets up.

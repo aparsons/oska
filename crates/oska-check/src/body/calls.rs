@@ -380,6 +380,9 @@ impl Body<'_, '_, '_> {
     ) -> Ty {
         let receiver = self.infer(base);
         let receiver = self.infer.resolve(&receiver);
+        if self.removed_path_method(&receiver, base, &name.name, args, span) {
+            return Ty::Error;
+        }
         let found = match &receiver {
             Ty::Named(type_name, _, _) => self.type_method(&receiver, type_name, name),
             Ty::Unit | Ty::Fn { .. } => self.type_method(&receiver, &receiver.to_string(), name),

@@ -112,9 +112,6 @@ impl Host for Recording {
     ) -> std::io::Result<String> {
         self.real.read_file_beneath(root, names)
     }
-    fn read_file(&mut self, path: &Path) -> std::io::Result<String> {
-        self.real.read_file(path)
-    }
     fn write_file_beneath(
         &mut self,
         root: &RootHandle,
@@ -123,14 +120,8 @@ impl Host for Recording {
     ) -> std::io::Result<()> {
         self.real.write_file_beneath(root, names, contents)
     }
-    fn write_file(&mut self, path: &Path, contents: &str) -> std::io::Result<()> {
-        self.real.write_file(path, contents)
-    }
     fn create_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> std::io::Result<()> {
         self.real.create_dir_beneath(root, names)
-    }
-    fn create_dir(&mut self, path: &Path) -> std::io::Result<()> {
-        self.real.create_dir(path)
     }
     fn list_dir_beneath(
         &mut self,
@@ -138,9 +129,6 @@ impl Host for Recording {
         names: &[String],
     ) -> std::io::Result<Vec<String>> {
         self.real.list_dir_beneath(root, names)
-    }
-    fn list_dir(&mut self, path: &Path) -> std::io::Result<Vec<String>> {
-        self.real.list_dir(path)
     }
     fn printed(&self) -> Vec<String> {
         self.stdout.lines().map(str::to_string).collect()
@@ -361,22 +349,6 @@ fn a_write_to_a_symlink_inside_the_root_is_refused_even_to_an_inside_file() {
     sandbox.link("dangling-inside", &sandbox.root().join("sub/later.txt"));
     assert_eq!(write_direct(&sandbox.root(), "dangling-inside", "x"), 1);
     assert!(!sandbox.root().join("sub/later.txt").exists());
-}
-
-#[test]
-fn real_host_unrestricted_reads_follow_a_symlink() {
-    // Restricted, reads and writes never do (`confined_reads.rs`,
-    // `confined_writes.rs`).
-    let sandbox = Sandbox::new("host-beneath");
-    let root = sandbox.root();
-    let outside = sandbox.outside().join("secret.txt");
-    let mut host = RealHost::new();
-    sandbox.link("escape.txt", &outside);
-    assert_eq!(
-        host.read_file(&root.join("escape.txt"))
-            .expect("an unrestricted read follows symlinks"),
-        "outside text"
-    );
 }
 
 #[test]

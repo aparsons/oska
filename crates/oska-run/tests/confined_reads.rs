@@ -114,9 +114,6 @@ impl Host for Recording {
     ) -> std::io::Result<String> {
         self.real.read_file_beneath(root, names)
     }
-    fn read_file(&mut self, path: &Path) -> std::io::Result<String> {
-        self.real.read_file(path)
-    }
     fn write_file_beneath(
         &mut self,
         root: &RootHandle,
@@ -125,14 +122,8 @@ impl Host for Recording {
     ) -> std::io::Result<()> {
         self.real.write_file_beneath(root, names, contents)
     }
-    fn write_file(&mut self, path: &Path, contents: &str) -> std::io::Result<()> {
-        self.real.write_file(path, contents)
-    }
     fn create_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> std::io::Result<()> {
         self.real.create_dir_beneath(root, names)
-    }
-    fn create_dir(&mut self, path: &Path) -> std::io::Result<()> {
-        self.real.create_dir(path)
     }
     fn list_dir_beneath(
         &mut self,
@@ -140,9 +131,6 @@ impl Host for Recording {
         names: &[String],
     ) -> std::io::Result<Vec<String>> {
         self.real.list_dir_beneath(root, names)
-    }
-    fn list_dir(&mut self, path: &Path) -> std::io::Result<Vec<String>> {
-        self.real.list_dir(path)
     }
     fn printed(&self) -> Vec<String> {
         self.stdout.lines().map(str::to_string).collect()

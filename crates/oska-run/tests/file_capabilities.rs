@@ -316,17 +316,18 @@ fn a_file_beneath_a_symlinked_directory_is_refused() {
 // ---- Granting -------------------------------------------------------------------------
 
 #[test]
-fn main_cannot_be_granted_a_file_capability() {
+fn main_cannot_declare_a_file_capability() {
+    // The checker refuses it (`E0217`) before the runtime could fail to
+    // grant it.
     for ty in ["FileRead", "FileWrite"] {
         let src = format!("fn main(file: {ty}) {{\n}}\n");
-        assert_refused(&src, "E0370");
+        assert_refused(&src, "E0217");
         let outcome = run_fake(&src, &[]);
-        assert_eq!(
-            outcome.diagnostics[0].message,
-            format!(
-                "`oskac run` cannot grant `{ty}`: only attenuation makes a file capability, \
-                 with `restrict_to_file` on `FsRead`, `FsWrite` or a directory capability"
-            )
+        assert!(
+            outcome.diagnostics[0]
+                .message
+                .starts_with(&format!("`main` cannot take `{ty}`: only attenuation")),
+            "{outcome:#?}"
         );
     }
 }
@@ -500,12 +501,6 @@ mod real {
         ) -> std::io::Result<String> {
             self.real.read_file_beneath(root, names)
         }
-        fn read_file(&mut self, path: &Path) -> std::io::Result<String> {
-            self.real.read_file(path)
-        }
-        fn write_file(&mut self, path: &Path, contents: &str) -> std::io::Result<()> {
-            self.real.write_file(path, contents)
-        }
         fn write_file_beneath(
             &mut self,
             root: &RootHandle,
@@ -514,18 +509,12 @@ mod real {
         ) -> std::io::Result<()> {
             self.real.write_file_beneath(root, names, contents)
         }
-        fn create_dir(&mut self, path: &Path) -> std::io::Result<()> {
-            self.real.create_dir(path)
-        }
         fn create_dir_beneath(
             &mut self,
             root: &RootHandle,
             names: &[String],
         ) -> std::io::Result<()> {
             self.real.create_dir_beneath(root, names)
-        }
-        fn list_dir(&mut self, path: &Path) -> std::io::Result<Vec<String>> {
-            self.real.list_dir(path)
         }
         fn list_dir_beneath(
             &mut self,
