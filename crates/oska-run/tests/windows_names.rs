@@ -77,7 +77,11 @@ fn a_device_name_is_refused_for_a_file_capability() {
         "    let console = write.restrict_to_file(Path.new(\"CON\"))\n    \
          say(done(console.write(\"text\")))",
     );
-    assert_eq!(seen, device("CON"));
+    // Attenuation never fails: the capability reaches nothing, and says why.
+    assert_eq!(
+        seen,
+        format!("REFUSED: cannot restrict to `CON`: {}", &device("CON")[9..])
+    );
 }
 
 #[test]

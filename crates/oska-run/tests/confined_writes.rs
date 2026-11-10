@@ -323,7 +323,7 @@ mod fake {
 
     impl World for Fake {
         fn path(&self, at: &str) -> String {
-            Path::new(BASE).join(at).display().to_string()
+            format!("{BASE}/{at}")
         }
 
         fn link(&mut self, at: &str, target: &str) {
