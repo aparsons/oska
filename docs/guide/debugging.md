@@ -28,7 +28,7 @@ n is 41
 
 Standard output and standard error are separate, so `dbg` never mixes into the output of a program. A `Secret` is printed as `<redacted>`.
 
-`dbg` is one of two deliberate exceptions to "effects need capabilities" (the other is a panic), because a debugging aid that needed a `Stderr` parameter would change the signature of every function you wanted to inspect. The price is that it must not ship: checking with `--release` rejects every `dbg(...)` with `E0216`, and every `todo()` with `E0293`. The `E0216` diagnostic carries a fix that keeps the argument and removes the call.
+`dbg` is one of two deliberate exceptions to "effects need capabilities" (the other is a panic). Because it has an effect without a capability, it must not ship: checking with `--release` rejects every `dbg(...)` with `E0216`, and every `todo()` with `E0293`. The `E0216` diagnostic carries a fix that keeps the argument and removes the call.
 
 ```console cmd=check release stream=stderr
 main.osk: error[E0216]: `dbg(...)` is not allowed in a release build (bytes 90..112)
@@ -75,7 +75,7 @@ Output written before the panic stays written, so `computing` was printed. A pan
 | `P0005` | `spawn` on a scope that has already finished. |
 | `P0010` to `P0013` | A failed test assertion. See [testing](testing.md). |
 | `P0020` | `Env.secret` asked for a variable that is not set. |
-| `P0021` | Calls nest too deep: runaway recursion. The process does not crash. |
+| `P0021` | Calls nest too deep: runaway recursion. The program panics instead of overflowing the stack. |
 
 The full table is in the [runtime notes](../runtime.md#panics).
 

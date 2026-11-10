@@ -227,6 +227,42 @@ it is two
 
 A generic function is checked once, against its bounds. `fn same<T: Eq>` can use `==` but not `+`.
 
+Interpolating a value needs `Display`, which you implement for your own types. This block is a fragment, not a complete program, because `Dog` is declared elsewhere:
+
+```oska fragment
+impl Display for Dog {
+    fn to_string(self) -> String {
+        let n = self.name
+        "dog {n}"
+    }
+}
+```
+
+Complete, with the declaration beside it:
+
+```oska
+struct Dog { name: String }
+
+impl Display for Dog {
+    fn to_string(self) -> String {
+        let n = self.name
+        "dog {n}"
+    }
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    let rex = Dog(name: "Rex")
+    io.println("hello {rex}")?
+    Ok(())
+}
+```
+
+```console cmd=run
+hello dog Rex
+```
+
+The `let` is needed because a `{...}` hole that starts with `self` is not resolved in this release (`E0221`): copy the field into a local first. `Bool` has no `Display`, so a `Bool` cannot be interpolated (`E0265`).
+
 ## Text
 
 Strings are UTF-8. `len()` counts characters (Unicode code points), and `byte_len()` counts bytes. The prelude's text methods are `lines`, `len`, `byte_len`, `trim`, `split`, `contains`, and `parse_int`. `+` works only on numbers, so build strings by interpolation.

@@ -224,47 +224,57 @@ fn every_required_guide_page_exists() {
     }
 }
 
+/// Why `block` does not meet its promise, if it does not.
+fn oska_block_problem(block: &Block) -> Option<String> {
+    if block.has("fragment") {
+        let output = oskac_on(block, &block.body, &["parse"], &[]);
+        return (!output.status.success()).then(|| {
+            format!(
+                "a fragment must still parse:\n{}{}",
+                text(&output.stdout),
+                text(&output.stderr)
+            )
+        });
+    }
+    if let Some(code) = block.option("error") {
+        let output = oskac_on(block, &block.body, &["check", "--format=json"], &[]);
+        let found = codes_in(&text(&output.stdout));
+        return (found != BTreeSet::from([code.to_string()]))
+            .then(|| format!("expected exactly {code}, found {found:?}"));
+    }
+    if block.has("tests") {
+        let output = oskac_on(block, &block.body, &["test"], &[]);
+        return (!output.status.success()).then(|| {
+            format!(
+                "its tests should pass:\n{}{}",
+                text(&output.stdout),
+                text(&output.stderr)
+            )
+        });
+    }
+    let output = oskac_on(block, &block.body, &["check"], &[]);
+    (!output.status.success()).then(|| {
+        format!(
+            "a complete program should check cleanly (mark it `fragment` otherwise):\n{}",
+            text(&output.stderr)
+        )
+    })
+}
+
 #[test]
 fn every_oska_block_parses_and_checks_or_is_marked_a_fragment() {
-    let mut seen = 0;
-    for block in all_blocks().iter().filter(|b| b.language() == "oska") {
-        seen += 1;
-        let at = block.at();
-        if block.has("fragment") {
-            let output = oskac_on(block, &block.body, &["parse"], &[]);
-            assert!(
-                output.status.success(),
-                "{at}: a fragment must still parse:\n{}{}",
-                text(&output.stdout),
-                text(&output.stderr)
-            );
-        } else if let Some(code) = block.option("error") {
-            let output = oskac_on(block, &block.body, &["check", "--format=json"], &[]);
-            let found = codes_in(&text(&output.stdout));
-            assert_eq!(
-                found,
-                BTreeSet::from([code.to_string()]),
-                "{at}: expected exactly {code}:\n{}",
-                text(&output.stdout)
-            );
-        } else if block.has("tests") {
-            let output = oskac_on(block, &block.body, &["test"], &[]);
-            assert!(
-                output.status.success(),
-                "{at}: its tests should pass:\n{}{}",
-                text(&output.stdout),
-                text(&output.stderr)
-            );
-        } else {
-            let output = oskac_on(block, &block.body, &["check"], &[]);
-            assert!(
-                output.status.success(),
-                "{at}: a complete program should check cleanly (mark it `fragment` otherwise):\n{}",
-                text(&output.stderr)
-            );
-        }
-    }
-    assert!(seen >= 10, "expected many `oska` blocks, found {seen}");
+    let blocks = all_blocks();
+    let programs: Vec<&Block> = blocks.iter().filter(|b| b.language() == "oska").collect();
+    assert!(
+        programs.len() >= 10,
+        "expected many `oska` blocks, found {}",
+        programs.len()
+    );
+    let problems: Vec<String> = programs
+        .iter()
+        .filter_map(|b| oska_block_problem(b).map(|p| format!("{}: {p}", b.at())))
+        .collect();
+    assert!(problems.is_empty(), "\n{}", problems.join("\n\n"));
 }
 
 #[test]

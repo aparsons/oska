@@ -148,7 +148,27 @@ fn noisy(out: Stdout) -> Int {
 }
 ```
 
-To accept such a closure, declare the parameter `cap fn(Int) -> Int`. A plain `fn` may always be used where a `cap fn` is expected. A `cap fn` parameter appears in the authority report as `cap fn (name)` with no capabilities, because a closure's capabilities are not written in its type, but it still makes the function impure.
+To accept such a closure, declare the parameter `cap fn(Int) -> Int`:
+
+```oska
+fn apply(f: cap fn(Int) -> Int, x: Int) -> Int {
+    f(x)
+}
+
+fn noisy(out: Stdout) -> Int {
+    apply(|n| {
+        let _ = out.println("called")
+        n + 1
+    }, 1)
+}
+```
+
+```console cmd=check
+fn apply: cap fn (f)
+fn noisy: Stdout (out)
+```
+
+A plain `fn` may always be used where a `cap fn` is expected. A `cap fn` parameter appears in the authority report as `cap fn (name)` with no capabilities, because a closure's capabilities are not written in its type, but it still makes the function impure.
 
 ## You cannot forge one
 
