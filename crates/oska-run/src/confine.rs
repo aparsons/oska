@@ -1,9 +1,9 @@
-//! Filesystem confinement: how a restricted `Fs` keeps every path inside
+//! Filesystem confinement: how a directory or file capability keeps every path inside
 //! its root.
 //!
 //! # A walk beneath the root's handle
 //!
-//! A restricted filesystem holds its root as a [`RootHandle`](crate::host::RootHandle) the host
+//! A directory capability holds its root as a [`RootHandle`](crate::host::RootHandle) the host
 //! opened. [`names`] turns a program's path into the plain names to walk
 //! beneath it, on the path as written, without touching the filesystem:
 //!
@@ -54,7 +54,7 @@ pub fn names(path: &str) -> io::Result<Vec<String>> {
         match component {
             Component::Prefix(_) | Component::RootDir => {
                 return Err(refused(&format!(
-                    "`{path}` is absolute; a restricted filesystem takes paths relative to its root"
+                    "`{path}` is absolute; a directory capability takes paths relative to its root"
                 )))
             }
             Component::CurDir => {}

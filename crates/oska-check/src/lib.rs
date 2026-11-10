@@ -64,6 +64,7 @@ pub(crate) mod codes {
     pub const NOT_LOWERCASE: &str = "E0214";
     pub const NO_BASE_CASE: &str = "E0215";
     pub const DBG_IN_RELEASE: &str = "E0216";
+    pub const MAIN_CONFINED: &str = "E0217";
     pub const MISMATCH: &str = "E0220";
     pub const UNKNOWN_VALUE: &str = "E0221";
     pub const LITERAL_OUT_OF_RANGE: &str = "E0222";
@@ -98,6 +99,7 @@ pub(crate) mod codes {
     pub const CAPTURING_CLOSURE: &str = "E0270";
     pub const FORGED: &str = "E0271";
     pub const PRIVATE_FIELD: &str = "E0272";
+    pub const PATH_METHOD_ON_FS: &str = "E0273";
     pub const IMPURE_IN_CONTRACT: &str = "E0280";
     pub const CONTRACT_NOT_BOOL: &str = "E0281";
     pub const CONFLICTING_IMPL: &str = "E0290";

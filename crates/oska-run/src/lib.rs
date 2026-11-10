@@ -10,7 +10,7 @@
 //!   something the interpreter cannot run yet (`E0380`). [`run`] also
 //!   refuses a capability (`E0370`) or `std` module (`E0371`) that has no
 //!   runtime yet.
-//! - `confine.rs` keeps a restricted filesystem inside its root.
+//! - `confine.rs` keeps a directory or file capability inside its root.
 //! - `prng.rs` is the generator behind `Random`.
 //! - `interp.rs` evaluates the checked program.
 //! - `ops.rs` implements operators, with checked integer arithmetic.

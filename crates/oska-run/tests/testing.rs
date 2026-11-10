@@ -151,8 +151,8 @@ fn t_random_is_seeded_so_every_test_sees_the_same_sequence() {
 fn t_fs_is_an_in_memory_filesystem_a_test_can_write_and_read_back() {
     assert_passes(
         "test \"t\" {\n    let path = Path.new(\"notes.txt\")\n    \
-         let _ = t.fs.write_only().write(path, \"hi\")\n    \
-         let text = t.fs.read_only().read_to_string(path).unwrap_or(\"missing\")\n    \
+         let _ = t.fs.restrict_to(\"/\").write_only().write(path, \"hi\")\n    \
+         let text = t.fs.restrict_to(\"/\").read_only().read_to_string(path).unwrap_or(\"missing\")\n    \
          t.assert_eq(text, \"hi\")\n}\n",
     );
 }
@@ -160,10 +160,10 @@ fn t_fs_is_an_in_memory_filesystem_a_test_can_write_and_read_back() {
 #[test]
 fn each_test_gets_a_fresh_filesystem_and_stdout() {
     let src =
-        "test \"writes\" {\n    let _ = t.fs.write_only().write(Path.new(\"f.txt\"), \"x\")\n    \
+        "test \"writes\" {\n    let _ = t.fs.restrict_to(\"/\").write_only().write(Path.new(\"f.txt\"), \"x\")\n    \
                let _ = t.stdout.println(\"from writes\")\n}\n\
                test \"sees nothing\" {\n    \
-               t.assert(!t.fs.read_only().read_to_string(Path.new(\"f.txt\")).is_ok())\n    \
+               t.assert(!t.fs.restrict_to(\"/\").read_only().read_to_string(Path.new(\"f.txt\")).is_ok())\n    \
                t.assert_eq(t.printed().len(), 0)\n}\n";
     assert_passes(src);
 }
@@ -182,7 +182,7 @@ fn a_panic_fails_only_its_own_test() {
 }
 
 const INTEGRATION: &str = "#[integration]\ntest \"reads the real config\" {\n    \
-    let text = t.fs.read_only().read_to_string(Path.new(\"config.txt\")).unwrap_or(\"none\")\n    \
+    let text = t.fs.restrict_to(\"/\").read_only().read_to_string(Path.new(\"config.txt\")).unwrap_or(\"none\")\n    \
     let _ = t.stdout.println(text)\n    \
     t.assert_eq(t.printed(), [\"real\"])\n}\n\
     test \"plain\" {\n    t.assert(true)\n}\n";
@@ -223,7 +223,7 @@ fn integration_tests_run_on_the_given_host_when_asked_for() {
 #[test]
 fn plain_tests_never_see_the_given_host() {
     let src = "test \"t\" {\n    \
-               t.assert(!t.fs.read_only().read_to_string(Path.new(\"config.txt\")).is_ok())\n}\n";
+               t.assert(!t.fs.restrict_to(\"/\").read_only().read_to_string(Path.new(\"config.txt\")).is_ok())\n}\n";
     let report = test_with(
         FakeHost::new().with_file("config.txt", "real"),
         src,

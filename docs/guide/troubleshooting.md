@@ -24,7 +24,11 @@ The program panicked, which means it has a bug. The last line on standard error 
 
 ### The program cannot read a file that exists
 
-A restricted filesystem refuses an absolute path, an empty path, a path that climbs out with `..`, and one that goes through a symlink to outside the root. The refusal is an `Err(IoError)`, not a panic, so the program sees `Err`. Check the directory you passed to `restrict_to`, and that the path is relative to it. See [attenuation](capabilities.md#attenuation).
+A directory capability refuses an absolute path, an empty path, a path that climbs out with `..`, and any path that goes through a symlink, whether the link points outside the root, inside it, or nowhere. The refusal is an `Err(IoError)`, not a panic, so the program sees `Err`. Check the directory you passed to `restrict_to`, and that the path is relative to it. See [attenuation](capabilities.md#attenuation).
+
+### The checker says `Fs`, `FsRead` or `FsWrite` cannot read or write (`E0273`)
+
+Since v0.2.0 these three capabilities only attenuate: `read_to_string`, `list_dir`, `write`, and `create_dir` are gone from them. Narrow to a directory first, and call the method on the result: `fs.restrict_to("<root>").read_to_string(path)`. For one file, use `restrict_to_file("<file>")` and call `read_to_string()` or `write(text)` with no path. Code that must reach anywhere writes `restrict_to("/")`. See [attenuation](capabilities.md#attenuation) and [upgrading to v0.2.0](install.md#upgrading-to-v020).
 
 ### `env.secret` panics with `P0020`
 
@@ -238,6 +242,22 @@ struct Logger { out: Stdout }
 
 ```oska error=E0211
 fn main(name: String) {
+}
+```
+
+`E0217`, a `main` that declares a directory or file capability (`Dir`, `DirRead`, `DirWrite`, `FileRead`, `FileWrite`). Only attenuation makes one, so declare `Fs`, `FsRead`, or `FsWrite` and call `restrict_to` or `restrict_to_file`.
+
+```oska error=E0217
+fn main(docs: DirRead) {
+}
+```
+
+`E0273`, a call of `read_to_string`, `list_dir`, `write`, or `create_dir` on `Fs`, `FsRead`, or `FsWrite`. These only attenuate. The message shows the fix: narrow first, as in `fs.restrict_to("<root>").read_to_string(path)`.
+
+```oska error=E0273
+fn main(fs: FsRead) -> Result<(), IoError> {
+    let _ = fs.list_dir(Path.new("."))?
+    Ok(())
 }
 ```
 

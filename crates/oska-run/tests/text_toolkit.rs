@@ -254,9 +254,9 @@ fn list_dir_refuses_a_path_out_of_its_root() {
 }
 
 #[test]
-fn list_dir_lists_the_unrestricted_filesystem() {
+fn list_dir_lists_the_whole_filesystem_through_a_root_of_slash() {
     let src = "fn main(io: Stdout, fs: FsRead) -> Result<(), IoError> {
-    for name in fs.list_dir(Path.new(\"other\"))? {
+    for name in fs.restrict_to(\"/\").list_dir(Path.new(\"other\"))? {
         io.println(name)?
     }
     Ok(())
@@ -284,9 +284,10 @@ fn a_listed_name_can_be_used_to_read_the_file() {
 }
 
 #[test]
-fn a_write_only_filesystem_cannot_list_at_runtime_through_fake() {
-    // The checker gives `FsWrite` no `list_dir` (E0228).
-    let src = "fn main(fs: FsWrite) {\n    let _ = fs.list_dir(Path.new(\".\"))\n}\n";
+fn a_write_only_directory_cannot_list_at_runtime_through_fake() {
+    // The checker gives `DirWrite` no `list_dir` (E0228).
+    let src = "fn main(fs: FsWrite) {\n    \
+               let _ = fs.restrict_to(\"/\").list_dir(Path.new(\".\"))\n}\n";
     let outcome = run_fake(src, &[]);
     assert!(outcome.diagnostics.iter().any(|d| d.code == "E0228"));
 }
@@ -388,9 +389,6 @@ impl Host for Recording {
     ) -> std::io::Result<String> {
         self.real.read_file_beneath(root, names)
     }
-    fn read_file(&mut self, path: &Path) -> std::io::Result<String> {
-        self.real.read_file(path)
-    }
     fn write_file_beneath(
         &mut self,
         root: &RootHandle,
@@ -399,14 +397,8 @@ impl Host for Recording {
     ) -> std::io::Result<()> {
         self.real.write_file_beneath(root, names, contents)
     }
-    fn write_file(&mut self, path: &Path, contents: &str) -> std::io::Result<()> {
-        self.real.write_file(path, contents)
-    }
     fn create_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> std::io::Result<()> {
         self.real.create_dir_beneath(root, names)
-    }
-    fn create_dir(&mut self, path: &Path) -> std::io::Result<()> {
-        self.real.create_dir(path)
     }
     fn list_dir_beneath(
         &mut self,
@@ -414,9 +406,6 @@ impl Host for Recording {
         names: &[String],
     ) -> std::io::Result<Vec<String>> {
         self.real.list_dir_beneath(root, names)
-    }
-    fn list_dir(&mut self, path: &Path) -> std::io::Result<Vec<String>> {
-        self.real.list_dir(path)
     }
     fn printed(&self) -> Vec<String> {
         self.stdout.lines().map(str::to_string).collect()
@@ -533,16 +522,5 @@ fn a_symlink_entry_is_listed_by_name_without_following_it() {
     assert_eq!(
         list_confined(&sandbox.root(), "."),
         "Apple.txt\nout\nsub\nzebra.txt\né.txt\n"
-    );
-}
-
-#[test]
-fn real_host_lists_any_directory_unrestricted() {
-    let sandbox = Sandbox::new("host-unrestricted");
-    assert_eq!(
-        RealHost::new()
-            .list_dir(&sandbox.outside())
-            .expect("an unrestricted listing"),
-        vec!["secret.txt"]
     );
 }

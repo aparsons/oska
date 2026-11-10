@@ -57,16 +57,17 @@ hello.osk: error[E0221]: unknown name `fs` (bytes 60..62)
 
 ```oska file=hello.osk
 fn main(io: Stdout, fs: FsRead) -> Result<(), IoError> {
-    let text = fs.read_to_string(Path.new("notes.txt"))?
+    let text = fs.restrict_to(".").read_to_string(Path.new("notes.txt"))?
     io.println(text)
 }
 ```
 
 ```console cmd=check
 fn main: Stdout (io), FsRead (fs)
+  FsRead -> DirRead: restrict_to "." (bytes 72..91)
 ```
 
-The report now says `main` can also read files, and nothing more: it still cannot write files or open connections.
+The report now says `main` can also read files, and nothing more: it still cannot write files or open connections. `FsRead` cannot read a file itself. It can only be narrowed, here to the current directory, and the indented line records that. See [capabilities](capabilities.md#attenuation).
 
 ## 5. Take arguments
 

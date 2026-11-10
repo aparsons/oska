@@ -177,7 +177,7 @@ impl Body<'_, '_, '_> {
 
     /// The source of `expr`, parenthesized unless a method call can
     /// follow it as written.
-    fn postfix_operand(&self, expr: &Expr) -> String {
+    pub(super) fn postfix_operand(&self, expr: &Expr) -> String {
         let text = &self.src[expr.span.start..expr.span.end];
         match expr.kind {
             ExprKind::Name(_)

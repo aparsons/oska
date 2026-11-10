@@ -364,10 +364,6 @@ impl Host for TestHost<'_> {
         self.world().read_file_beneath(root, names)
     }
 
-    fn read_file(&mut self, path: &Path) -> io::Result<String> {
-        self.world().read_file(path)
-    }
-
     fn write_file_beneath(
         &mut self,
         root: &RootHandle,
@@ -377,24 +373,12 @@ impl Host for TestHost<'_> {
         self.world().write_file_beneath(root, names, contents)
     }
 
-    fn write_file(&mut self, path: &Path, contents: &str) -> io::Result<()> {
-        self.world().write_file(path, contents)
-    }
-
     fn create_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
         self.world().create_dir_beneath(root, names)
     }
 
-    fn create_dir(&mut self, path: &Path) -> io::Result<()> {
-        self.world().create_dir(path)
-    }
-
     fn list_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Vec<String>> {
         self.world().list_dir_beneath(root, names)
-    }
-
-    fn list_dir(&mut self, path: &Path) -> io::Result<Vec<String>> {
-        self.world().list_dir(path)
     }
 
     fn take_output(&mut self) -> Output {

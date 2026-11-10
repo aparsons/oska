@@ -79,14 +79,14 @@ cap struct Logger { out: Stdout }
 The report is the review. For each function it says what the function can reach, and it lists every audit site:
 
 ```oska
-fn word_count(fs: FsRead, path: Path) -> Result<Int, IoError> {
-    let text = fs.read_to_string(path)?
+fn word_count(docs: DirRead, path: Path) -> Result<Int, IoError> {
+    let text = docs.read_to_string(path)?
     Ok(text.split(" ").len())
 }
 
 fn main(io: Stdout, fs: Fs) -> Result<(), IoError> {
-    let reader = fs.read_only()
-    let words = word_count(reader, Path.new("notes.txt"))?
+    let docs = fs.restrict_to("notes").read_only()
+    let words = word_count(docs, Path.new("today.txt"))?
     io.println("{words}")?
     Ok(())
 }
@@ -96,19 +96,20 @@ fn main(io: Stdout, fs: Fs) -> Result<(), IoError> {
 {
   "diagnostics": [],
   "functions": [
-    {"name":"word_count","authority":["FsRead"],"via":[{"param":"fs","capabilities":["FsRead"]}],"pure":false},
+    {"name":"word_count","authority":["DirRead"],"via":[{"param":"docs","capabilities":["DirRead"]}],"pure":false},
     {"name":"main","authority":["Stdout","Fs"],"via":[{"param":"io","capabilities":["Stdout"]},{"param":"fs","capabilities":["Fs"]}],"pure":false}
   ],
   "audit": [],
   "attenuations": [
-    {"function":"main","method":"read_only","span":{"start":207,"end":221},"source":"Fs","result":"FsRead","root":null}
+    {"function":"main","method":"restrict_to","span":{"start":210,"end":233},"source":"Fs","result":"Dir","root":"notes"},
+    {"function":"main","method":"read_only","span":{"start":210,"end":245},"source":"Dir","result":"DirRead","root":null}
   ]
 }
 ```
 
 Before you finish a task, compare this against the report from before your change:
 
-- **A function's `authority` grew,** or a new capability appears in `main`'s signature. Is that the task, or a shortcut? Prefer passing a narrower capability, such as `fs.read_only()` or `fs.restrict_to("dir")`, to adding a wider one.
+- **A function's `authority` grew,** or a new capability appears in `main`'s signature. Is that the task, or a shortcut? Prefer passing a narrower capability, such as `fs.restrict_to("dir").read_only()`, to adding a wider one.
 - **A new `audit` entry appeared.** Every `assume_trusted` and `expose` weakens a guarantee. Use one only inside a validator that really checks the text, and say so in your summary.
 - **A new `attenuations` entry has a wider root than the task needs.** Each one names the function it is in, the capability it narrows from and to, and its `root`. A `root` of `"/"` is the whole filesystem, and `null` means the root is computed at runtime (or, for `read_only` and `write_only`, that there is none).
 - **A function that was `pure` is not.** It now has a capability-bearing parameter.

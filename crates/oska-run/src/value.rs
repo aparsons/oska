@@ -119,7 +119,8 @@ pub struct FsCap {
 /// Where a filesystem capability may reach.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Root {
-    /// Anywhere the process may: the `Fs` `main` declares, unrestricted.
+    /// Anywhere the process may: the `Fs` `main` declares. It only attenuates:
+    /// a directory or file capability never has this root.
     Anywhere,
     /// Only beneath this directory, or only this file, as the host opened
     /// it: the root of a directory capability is a directory, and the
@@ -194,7 +195,7 @@ impl Capability {
     }
 
     /// The capability `main` declares with the type named `ty`, if the
-    /// runtime can grant it: a filesystem unrestricted. A directory or
+    /// runtime can grant it: `Fs`, `FsRead` or `FsWrite`. A directory or
     /// file capability has a runtime but is never granted, since only
     /// attenuation gives it a root.
     pub fn granted(ty: &str) -> Option<Capability> {

@@ -8,7 +8,7 @@ Text from outside the program is an **untrusted value**, written `Untrusted<Stri
 
 Where untrusted text comes from:
 
-- Anything read through a capability: `FsRead.read_to_string`, `Stdin.read_line`, `Env.get`.
+- Anything read through a capability: `DirRead.read_to_string`, `FileRead.read_to_string`, `Stdin.read_line`, `Env.get`.
 - **Program inputs**: `Args.get`.
 - The `message` of an `IoError`, `SqlError`, or `ProcError`.
 
@@ -83,14 +83,14 @@ With `--format=json` they are in the `audit` array as `{"kind":"assume_trusted",
 A **sink** is an API where data leaves the program or changes how it behaves: SQL, processes, HTML, paths, network hosts, logs. Each sink separates two kinds of argument:
 
 - A **data position** accepts untrusted values, because the sink treats it only as data. Examples are SQL parameters, process arguments, and escaped HTML text.
-- A **structural position** rejects untrusted values, because it decides code, commands, or destinations. Examples are SQL query text, a program name, `TrustedHtml`, a restricted directory, and a network host. A structural position is any parameter declared `String`.
+- A **structural position** rejects untrusted values, because it decides code, commands, or destinations. Examples are SQL query text, a program name, `TrustedHtml`, the root of a directory or file capability, and a network host. A structural position is any parameter declared `String`.
 
 | Sink | Data position | Structural position |
 | --- | --- | --- |
 | `std.sql` | `Db.query` parameters | The query text, which must be an `sql"..."` literal, and `connect`'s `url` |
 | `std.proc` | `run`'s arguments | The program name |
 | `std.html` | `text(...)`, which is escaped | `TrustedHtml.new` |
-| Paths | `Path.from` | The directory given to `restrict_to` |
+| Paths | `Path.from` | The directory given to `restrict_to` on `Fs`, `FsRead`, or `FsWrite`, and the file given to `restrict_to_file` |
 | Network | `Connection.send`'s body | `NetConnect.connect`'s host |
 | Output | `Stdout.println`, `Stderr.println` | |
 
@@ -158,7 +158,7 @@ fn main(io: Stdout, fs: Fs, args: Args) -> Result<(), IoError> {
 }
 ```
 
-The runtime rejects any path that escapes the restricted directory. See [capabilities](capabilities.md#attenuation).
+The runtime rejects any path that escapes the directory capability's root. See [capabilities](capabilities.md#attenuation).
 
 ## Secrets
 

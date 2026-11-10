@@ -22,7 +22,7 @@ fn a_text_method_on_untrusted_text_returns_untrusted_text() {
 #[test]
 fn the_lines_of_untrusted_text_are_untrusted() {
     assert_errors(
-        "fn f(fs: FsRead, path: Path) -> Result<List<String>, IoError> {\n    let text = fs.read_to_string(path)?\n    Ok(text.lines())\n}",
+        "fn f(fs: DirRead, path: Path) -> Result<List<String>, IoError> {\n    let text = fs.read_to_string(path)?\n    Ok(text.lines())\n}",
         &[("E0300", "text.lines()")],
     );
 }
@@ -56,7 +56,7 @@ fn non_text_results_of_untrusted_text_are_trusted() {
 #[test]
 fn counting_the_lines_of_a_file_checks() {
     assert_ok(
-        "fn count_lines(fs: FsRead, path: Path) -> Result<Int, IoError> {\n    \
+        "fn count_lines(fs: DirRead, path: Path) -> Result<Int, IoError> {\n    \
          let text = fs.read_to_string(path)?\n    Ok(text.lines().count())\n}",
     );
 }

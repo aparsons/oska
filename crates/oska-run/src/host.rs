@@ -56,8 +56,8 @@ pub trait Host: Send {
     /// The next pseudo-random 64 bits.
     fn next_random(&mut self) -> u64;
 
-    /// Open the directory at `path` as the root of a restricted
-    /// filesystem. Its last component must not be a symlink; earlier ones
+    /// Open the directory at `path` as the root of a directory
+    /// capability. Its last component must not be a symlink; earlier ones
     /// are followed, since the root is trusted text. A file there is an
     /// error: a directory capability needs a directory.
     fn open_root(&mut self, path: &Path) -> io::Result<RootHandle>;
@@ -87,10 +87,6 @@ pub trait Host: Send {
     /// `names` is empty.
     fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<String>;
 
-    /// The text of the file at `path`, read through an unrestricted
-    /// filesystem: symlinks are followed.
-    fn read_file(&mut self, path: &Path) -> io::Result<String>;
-
     /// Create the regular file reached by walking `names` beneath `root`,
     /// or replace its contents, with `contents`. No name is a symlink,
     /// the last included, so nothing is created through one. When `root`
@@ -102,33 +98,19 @@ pub trait Host: Send {
         contents: &str,
     ) -> io::Result<()>;
 
-    /// Create the file at `path`, or replace its contents, with
-    /// `contents`, through an unrestricted filesystem: symlinks are
-    /// followed.
-    fn write_file(&mut self, path: &Path, contents: &str) -> io::Result<()>;
-
     /// Create the directory reached by walking `names` beneath `root`,
     /// none of them a symlink: one name at least, and every name before
     /// the last a directory that exists. A directory already there is
     /// kept; anything else there, a symlink included, is an error.
     fn create_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()>;
 
-    /// Create the directory at `path`, whose parent must exist, through
-    /// an unrestricted filesystem. A directory already there is kept;
-    /// anything else there is an error.
-    fn create_dir(&mut self, path: &Path) -> io::Result<()>;
-
     /// The names of the entries of the directory reached by walking
-    /// `names` beneath `root`, none of them a symlink, listed as
-    /// [`Host::list_dir`] lists them. No names lists `root`.
+    /// `names` beneath `root`, none of them a symlink, sorted by their
+    /// bytes so the order is the same on every host. A name is the
+    /// entry's own, not a path; a subdirectory and a symlink are listed by
+    /// name, and no entry is followed. Fails when an entry's name is not
+    /// valid UTF-8. No names lists `root`.
     fn list_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Vec<String>>;
-
-    /// The names of the entries of the directory at `path`, sorted by
-    /// their bytes, so the order is the same on every host. A name is
-    /// the entry's own, not a path; a subdirectory and a symlink are
-    /// listed by name, and no entry is followed. Fails when `path` is not
-    /// a directory, or an entry's name is not valid UTF-8.
-    fn list_dir(&mut self, path: &Path) -> io::Result<Vec<String>>;
 
     /// Every line written to stdout so far, without its line break: one
     /// per `println`, as `t.printed()` returns them. A host that writes
@@ -141,7 +123,7 @@ pub trait Host: Send {
     fn take_output(&mut self) -> Output;
 }
 
-/// The root of a restricted filesystem, as a host opened it: a directory,
+/// The root of a directory or file capability, as a host opened it: a directory,
 /// or the one file a file capability reaches. Copies share it, and the
 /// last one dropped releases what the host holds for it.
 ///
@@ -546,36 +528,12 @@ impl Host for RealHost {
         // for it in between sends the listing elsewhere, and that listing
         // is discarded.
         let path = checked_beneath(root, names)?;
-        let names = self.list_dir(&path)?;
-        resolved_beneath(&path, &root.path)?;
-        Ok(names)
-    }
-
-    fn read_file(&mut self, path: &Path) -> io::Result<String> {
-        std::fs::read_to_string(path)
-    }
-
-    fn write_file(&mut self, path: &Path, contents: &str) -> io::Result<()> {
-        std::fs::write(path, contents)
-    }
-
-    fn create_dir(&mut self, path: &Path) -> io::Result<()> {
-        match std::fs::create_dir(path) {
-            Err(error)
-                if error.kind() == io::ErrorKind::AlreadyExists
-                    && std::fs::metadata(path)?.is_dir() =>
-            {
-                Ok(())
-            }
-            made => made,
-        }
-    }
-
-    fn list_dir(&mut self, path: &Path) -> io::Result<Vec<String>> {
-        let entries = std::fs::read_dir(path)?
+        let entries = std::fs::read_dir(&path)?
             .map(|entry| entry.map(|entry| entry.file_name()))
             .collect::<io::Result<_>>()?;
-        sorted_names(entries, path)
+        let names = sorted_names(entries, &path)?;
+        resolved_beneath(&path, &root.path)?;
+        Ok(names)
     }
 
     fn printed(&self) -> Vec<String> {
@@ -700,8 +658,8 @@ pub const FAKE_SEED: u64 = 0x05EE_D0F0_5CA0;
 ///   [`FakeHost::with_symlink`] adds. Its working directory is `/`.
 /// - It confines as a Unix [`RealHost`] does: a walk beneath a root
 ///   refuses every symlink, and a root's last component must not be one.
-///   An unrestricted filesystem follows them, after resolving `.` and
-///   `..` on the path as written.
+///   A root's own path follows them in every component but the last,
+///   after resolving `.` and `..` on the path as written.
 /// - Its clock is fixed at the Unix epoch.
 /// - Its generator has a fixed seed, [`FAKE_SEED`].
 /// - Its stdin and environment are what the builder methods give it.
@@ -852,8 +810,8 @@ impl FakeHost {
             || self.files.keys().any(|f| f.starts_with(path) && f != path)
     }
 
-    /// `path`, normalized, with every symlink in it followed, as an open
-    /// through an unrestricted filesystem follows them.
+    /// `path`, normalized, with every symlink in it followed, as a root's
+    /// own path is (its ancestors; the caller refuses a link at the end).
     fn follow(&self, path: &Path) -> io::Result<PathBuf> {
         let mut path = normalize(path);
         // As many links as Linux follows on one path.
@@ -1097,14 +1055,6 @@ impl Host for FakeHost {
             .ok_or_else(|| not_found(&path))
     }
 
-    fn read_file(&mut self, path: &Path) -> io::Result<String> {
-        let path = self.follow(path)?;
-        self.files
-            .get(&path)
-            .cloned()
-            .ok_or_else(|| not_found(&path))
-    }
-
     fn write_file_beneath(
         &mut self,
         root: &RootHandle,
@@ -1115,11 +1065,6 @@ impl Host for FakeHost {
             return Err(no_name());
         }
         let path = self.walk_file(root, names)?;
-        self.put_file(path, contents)
-    }
-
-    fn write_file(&mut self, path: &Path, contents: &str) -> io::Result<()> {
-        let path = self.follow(path)?;
         self.put_file(path, contents)
     }
 
@@ -1134,21 +1079,11 @@ impl Host for FakeHost {
         self.put_dir(path)
     }
 
-    fn create_dir(&mut self, path: &Path) -> io::Result<()> {
-        let path = self.follow(path)?;
-        self.put_dir(path)
-    }
-
     fn list_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Vec<String>> {
         if root.is_file() {
             return Err(a_file_root(root));
         }
         let path = self.walk(root, names)?;
-        self.entries(&path)
-    }
-
-    fn list_dir(&mut self, path: &Path) -> io::Result<Vec<String>> {
-        let path = self.follow(path)?;
         self.entries(&path)
     }
 

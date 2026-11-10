@@ -67,14 +67,10 @@ pub const INTRINSICS: Table = &[
     ("Fs.read_only", Plain(fs_read_only)),
     ("Fs.restrict_to", Plain(fs_restrict_to)),
     ("Fs.write_only", Plain(fs_write_only)),
-    ("FsRead.list_dir", Plain(fs_list_dir)),
-    ("FsRead.read_to_string", Plain(fs_read_to_string)),
     ("FsRead.restrict_to", Plain(fs_restrict_to)),
     ("FsRead.restrict_to_file", Plain(fs_restrict_to_file)),
-    ("FsWrite.create_dir", Plain(fs_create_dir)),
     ("FsWrite.restrict_to", Plain(fs_restrict_to)),
     ("FsWrite.restrict_to_file", Plain(fs_restrict_to_file)),
-    ("FsWrite.write", Plain(fs_write)),
     ("Int.to_string", Plain(int_to_string)),
     ("Option.is_some", Plain(option_is_some)),
     ("Option.ok_or", Plain(option_ok_or)),
@@ -460,111 +456,77 @@ fn allowed(fs: &FsCap, intent: Intent) -> io::Result<()> {
     ))
 }
 
-/// Why a filesystem restricted to a root it could not open reaches
-/// nothing.
+/// Why a directory capability restricted to a root it could not open
+/// reaches nothing.
 fn broken(why: &str) -> io::Error {
     io::Error::new(io::ErrorKind::PermissionDenied, why.to_string())
 }
 
-/// Where `path` leads through `fs`, for `intent`, or why `fs` may not
-/// reach it: a path on an unrestricted filesystem, or on a restricted
-/// one, its root and the plain names to walk beneath it, which `names`
-/// gives (`confine.rs`).
-enum Reach<'f> {
-    Anywhere(&'f Path),
-    Beneath(&'f RootHandle, Vec<String>),
-}
-
-fn reach<'f>(
-    fs: &'f FsCap,
-    path: &'f Value,
-    intent: Intent,
-    names: fn(&str) -> io::Result<Vec<String>>,
-) -> io::Result<Reach<'f>> {
+/// The root handle `fs` reaches beneath, or why it may not be used for
+/// `intent`: its access forbids it, or its root could not be opened.
+///
+/// Only a directory capability reads or writes, and one never has the
+/// unrestricted root: `restrict_to` always gives it a handle or the reason
+/// it has none.
+fn root_for(fs: &FsCap, intent: Intent) -> io::Result<&RootHandle> {
     allowed(fs, intent)?;
-    let raw = path.fields()[0].as_str();
     match &fs.root {
-        Root::Anywhere if raw.is_empty() => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "an empty path names no file",
-        )),
-        Root::Anywhere => Ok(Reach::Anywhere(Path::new(raw))),
-        Root::Dir(root) => Ok(Reach::Beneath(root, names(raw)?)),
+        Root::Dir(root) => Ok(root),
         Root::Nowhere(why) => Err(broken(why)),
+        Root::Anywhere => unreachable!("a directory capability is never rooted anywhere"),
     }
 }
 
-/// `FsRead.read_to_string(self, path)`: through a restricted filesystem,
-/// the path is walked beneath the root's handle (`confine.rs`).
+/// `DirRead.read_to_string(self, path)`: the path is walked beneath the
+/// root's handle (`confine.rs`).
 fn fs_read_to_string(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    let fs = fs_cap(&args[0]);
     let raw = args[1].fields()[0].as_str();
-    let result = allowed(fs, Intent::Read).and_then(|()| match &fs.root {
-        Root::Anywhere if raw.is_empty() => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "an empty path names no file",
-        )),
-        Root::Anywhere => host.read_file(Path::new(raw)),
-        Root::Dir(root) => {
-            let names = confine::names(raw)?;
-            if names.is_empty() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("`{raw}` names the restricted directory itself, not a file"),
-                ));
-            }
-            host.read_file_beneath(root, &names)
+    let result = root_for(fs_cap(&args[0]), Intent::Read).and_then(|root| {
+        let names = confine::names(raw)?;
+        if names.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("`{raw}` names the restricted directory itself, not a file"),
+            ));
         }
-        Root::Nowhere(why) => Err(broken(why)),
+        host.read_file_beneath(root, &names)
     });
     Ok(io_result(result, |text| Value::str(&text)))
 }
 
-/// `FsRead.list_dir(self, path)`: the names of the entries of the
-/// directory, sorted. Through a restricted filesystem, the path is walked
-/// beneath the root's handle, and `.` lists the root.
+/// `DirRead.list_dir(self, path)`: the names of the entries of the
+/// directory, sorted. The path is walked beneath the root's handle, and
+/// `.` lists the root.
 fn fs_list_dir(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    let result = reach(fs_cap(&args[0]), &args[1], Intent::Read, confine::names).and_then(
-        |reach| match reach {
-            Reach::Anywhere(path) => host.list_dir(path),
-            Reach::Beneath(root, names) => host.list_dir_beneath(root, &names),
-        },
-    );
+    let raw = args[1].fields()[0].as_str();
+    let result = root_for(fs_cap(&args[0]), Intent::Read).and_then(|root| {
+        let names = confine::names(raw)?;
+        host.list_dir_beneath(root, &names)
+    });
     Ok(io_result(result, |names| {
         Value::List(Rc::new(names.iter().map(|n| Value::str(n)).collect()))
     }))
 }
 
-/// `FsWrite.write(self, path, contents)`: through a restricted
-/// filesystem, `path` ends in a plain name, and is walked beneath the
-/// root's handle.
+/// `DirWrite.write(self, path, contents)`: `path` ends in a plain name,
+/// and is walked beneath the root's handle.
 fn fs_write(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
     let contents = text(&args, 2);
-    let result = reach(
-        fs_cap(&args[0]),
-        &args[1],
-        Intent::Write,
-        confine::names_to_create,
-    )
-    .and_then(|reach| match reach {
-        Reach::Anywhere(path) => host.write_file(path, contents),
-        Reach::Beneath(root, names) => host.write_file_beneath(root, &names, contents),
+    let raw = args[1].fields()[0].as_str();
+    let result = root_for(fs_cap(&args[0]), Intent::Write).and_then(|root| {
+        let names = confine::names_to_create(raw)?;
+        host.write_file_beneath(root, &names, contents)
     });
     Ok(io_result(result, |()| Value::Unit))
 }
 
-/// `FsWrite.create_dir(self, path)`: confined like a write, so `path`
+/// `DirWrite.create_dir(self, path)`: confined like a write, so `path`
 /// ends in a plain name, and is walked beneath the root's handle.
 fn fs_create_dir(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    let result = reach(
-        fs_cap(&args[0]),
-        &args[1],
-        Intent::Write,
-        confine::names_to_create,
-    )
-    .and_then(|reach| match reach {
-        Reach::Anywhere(path) => host.create_dir(path),
-        Reach::Beneath(root, names) => host.create_dir_beneath(root, &names),
+    let raw = args[1].fields()[0].as_str();
+    let result = root_for(fs_cap(&args[0]), Intent::Write).and_then(|root| {
+        let names = confine::names_to_create(raw)?;
+        host.create_dir_beneath(root, &names)
     });
     Ok(io_result(result, |()| Value::Unit))
 }
@@ -873,7 +835,7 @@ mod tests {
 
 #[cfg(test)]
 mod access_tests {
-    //! The checker gives `FsRead` no `write` and `FsWrite` no
+    //! The checker gives `DirRead` no `write` and `DirWrite` no
     //! `read_to_string`, so no source program reaches the runtime's own
     //! access check. It is tested on checked programs built by hand, in
     //! which a read-only filesystem calls `write` and a write-only one
@@ -882,7 +844,9 @@ mod access_tests {
     use oska_check::program::{Callee, Expr, ExprKind, Function, Param, Program};
     use oska_syntax::Span;
 
-    use crate::host::FakeHost;
+    use std::path::Path;
+
+    use crate::host::{FakeHost, Host};
     use crate::interp::Interpreter;
     use crate::value::{Access, Capability, FsCap, Root, Value};
 
@@ -921,11 +885,12 @@ mod access_tests {
         program
     }
 
-    /// What `program`'s `main` returns, given a filesystem with `access`,
-    /// run on `host`.
+    /// What `program`'s `main` returns, given a directory capability for
+    /// the host's `/` with `access`, run on `host`.
     fn run_with(program: &Program, access: Access, host: &mut FakeHost) -> Value {
-        let fs = Value::Capability(Capability::Fs(FsCap {
-            root: Root::Anywhere,
+        let root = host.open_root(Path::new("/")).expect("the root");
+        let fs = Value::Capability(Capability::Dir(FsCap {
+            root: Root::Dir(root),
             access,
         }));
         Interpreter::new(program, host)
@@ -939,8 +904,8 @@ mod access_tests {
     }
 
     #[test]
-    fn a_read_only_filesystem_refuses_to_write_at_runtime() {
-        let program = calling("FsWrite.write", vec![at(ExprKind::Str("x".to_string()))]);
+    fn a_read_only_directory_refuses_to_write_at_runtime() {
+        let program = calling("DirWrite.write", vec![at(ExprKind::Str("x".to_string()))]);
         let mut host = FakeHost::new();
         let result = run_with(&program, Access::Read, &mut host);
         assert_eq!(
@@ -955,8 +920,8 @@ mod access_tests {
     }
 
     #[test]
-    fn a_write_only_filesystem_refuses_to_read_at_runtime() {
-        let program = calling("FsRead.read_to_string", Vec::new());
+    fn a_write_only_directory_refuses_to_read_at_runtime() {
+        let program = calling("DirRead.read_to_string", Vec::new());
         let mut host = FakeHost::new().with_file("notes.txt", "secret");
         let result = run_with(&program, Access::Write, &mut host);
         assert_eq!(

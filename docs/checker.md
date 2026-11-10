@@ -14,7 +14,7 @@ A reviewer reads a program's filesystem reach straight from these lines: `FsRead
 
 Type and trait names in signatures and declarations are resolved, declarations are checked (`cap`, `main`, capitalization, recursive types, and where a `Scope` may appear), functions, methods, and impls are checked for duplicates, and under `--release` every body is scanned for `dbg(...)` and `todo()`. A `use` must name a `std.*` module that exists (`E0294`, `E0295`); see [`std` modules](#std-modules) for which do. Function, method, constant, and test bodies are type-checked with local, bidirectional inference: `let` types come from initializers, the expected type flows into literals, generic constructors, and closures, and an expression that fails gets an error type so it causes only one diagnostic.
 
-Text carries a trust flag (ADR 0006). `Untrusted<String>` is untrusted text; plain `String` is trusted. Text from outside the program is untrusted: `FsRead.read_to_string`, `Stdin.read_line`, `Env.get`, and `Args.get` return it. Trusted text may be used wherever untrusted text is accepted, so a data position such as `Stdout.println` or `Path.from` takes both; untrusted text is never accepted where trusted `String` is required (`E0300`). A validator vouches for text it has checked with `.assume_trusted()`, which returns trusted `String`; each call is a trust assertion, listed in the report's `audit` array. `Untrusted<...>` marks text only (`E0320`).
+Text carries a trust flag (ADR 0006). `Untrusted<String>` is untrusted text; plain `String` is trusted. Text from outside the program is untrusted: `DirRead.read_to_string`, `FileRead.read_to_string`, `Stdin.read_line`, `Env.get`, and `Args.get` return it. Trusted text may be used wherever untrusted text is accepted, so a data position such as `Stdout.println` or `Path.from` takes both; untrusted text is never accepted where trusted `String` is required (`E0300`). A validator vouches for text it has checked with `.assume_trusted()`, which returns trusted `String`; each call is a trust assertion, listed in the report's `audit` array. `Untrusted<...>` marks text only (`E0320`).
 
 `Env.secret` returns a `Secret<String>`, which code cannot construct itself (`E0271`). A secret cannot be interpolated, nor can a value that holds one (`E0350`). It is not `Eq`, so `==` and `!=` on one are errors (`E0351`); compare it with `.constant_time_eq(text)`, which takes trusted or untrusted text, or with another secret through `.constant_time_eq_secret(other)`, which exposes neither. It is not `Display`, so it cannot be printed (`E0352`). The only way to read its value is `.expose()`, which returns trusted text; each call is a secret exposure, listed in the report's `audit` array.
 
@@ -84,7 +84,7 @@ Each sink separates a **data position**, declared `Untrusted<String>`, from a **
 | `std.sql` | `Db.query`'s `params: List<Untrusted<String>>` | `Db.query`'s `query: SqlLiteral`; `connect`'s `url` |
 | `std.proc` | `run`'s `args: List<Untrusted<String>>` | `run`'s `program`; `run` also needs `Spawn` |
 | `std.html` | `text`'s argument, which is escaped | `TrustedHtml.new`'s `markup` |
-| Paths | `Path.from`, also as the `dir` of a directory capability's `restrict_to` | `restrict_to`'s `dir` on `Fs`, `FsRead`, and `FsWrite` |
+| Paths | `Path.from`, also as the `dir` of a directory capability's `restrict_to` | `restrict_to`'s `dir` and `restrict_to_file`'s `file` on `Fs`, `FsRead`, and `FsWrite` |
 | Network | `Connection.send`'s `body` | `NetConnect.connect`'s `host` |
 
 Values that come back from a sink are untrusted: `Row.get`, `Output.stdout`, `Html.render`, and `Connection.receive`. `Db` and `Connection` are capability-bearing (`Db` holds a `NetConnect`), and every sink type except the error types has private fields, so code outside the module can't construct one (`E0271`).
@@ -689,6 +689,7 @@ test "setup" {
 | `E0214` | A function, method, field, parameter, or local variable (`let`, `var`, `for`) name that starts with an uppercase letter (ADR 0005). A leading `_` is allowed. Pattern bindings need no check: an uppercase name in a pattern is a variant (`E0250`). | None. |
 | `E0215` | A struct or enum with no base case: every way to build it contains itself, as in `struct Loop { me: Loop }`. Recursion through `Option`, `List`, or an enum variant without the type needs no indirection. Each type in a cycle is reported. | None. |
 | `E0216` | A call to `dbg(...)` when checking with `--release`. Spans the call. | Replace `dbg(expr)` with `expr`, when it has one argument. |
+| `E0217` | A `main` parameter whose type is a directory or file capability: `Dir`, `DirRead`, `DirWrite`, `FileRead`, or `FileWrite`. Only attenuation makes one, with `restrict_to` or `restrict_to_file` on `Fs`, `FsRead`, or `FsWrite`, because the runtime has no root to give. Spans the parameter's type. | None. |
 | `E0220` | Type mismatch: an expression's type differs from the type expected there. There are no implicit conversions. | None. |
 | `E0221` | Unknown value name, or `self` outside a method with a receiver. | Replace the name with the single closest local, function, or prelude variant, when one is close enough. |
 | `E0222` | Integer literal out of range for its type, such as `300` as a `U8`. | None. |
@@ -723,6 +724,7 @@ test "setup" {
 | `E0270` | A `cap fn` used where a plain `fn` is expected: a closure that captures a capability-bearing value (a built-in capability, a `cap` type, a `cap fn`, or a container of one, including a capability-bearing `self`), or a `cap fn` value passed on. The rule is part of type compatibility, so it holds on every route: arguments, returns, assignments, `?`, generic instantiation, and inside type arguments such as `Option<cap fn()>` or `List<cap fn()>`, which never become `Option<fn()>` or `List<fn()>`. A plain `fn` may always be used as a `cap fn`. | None. |
 | `E0271` | Construction of a prelude struct with private fields, such as a built-in capability (`Stdout(handle: 1)`) or `Args`. Capabilities cannot be forged; they come from `main`. | None. |
 | `E0272` | Reading a private field of a prelude type, such as `out.handle`. | None. |
+| `E0273` | A call of `read_to_string`, `list_dir`, `write`, or `create_dir` on `Fs`, `FsRead`, or `FsWrite`. These types only attenuate, so a file is read or written through a directory capability (`restrict_to`) or a file capability (`restrict_to_file`). The message shows the shape of the fix, such as `fs.restrict_to("<root>").read_to_string(path)`. The root is the programmer's to choose, so there is no machine fix. Spans the call. | None. |
 | `E0280` | A contract clause (`requires` or `ensures`) calls a function that is not pure: one with a capability-bearing parameter or receiver, or a `cap fn` value. A generic call is judged once instantiated: it is impure when any argument, parameter, or receiver type is capability-bearing after its generics are solved, as in `apply(log, out)` with `fn apply<T>(f: fn(T), x: T)` and `out: Stdout`. Spans the call. | None. |
 | `E0281` | A `requires` or `ensures` condition whose type is not `Bool`. Spans the condition. | None. |
 | `E0290` | Two `impl Trait for Type` that overlap: some instantiation of each implements the same trait, with the same arguments, for the same type, as with `impl<T> Display for Box<T>` and `impl Display for Box<Int>`. An impl that overlaps a prelude impl, such as `impl Eq for Int`, conflicts too. Spans the second impl's trait. | None. |
@@ -858,6 +860,18 @@ fn main() {
 ```oska fixed=E0216 release
 fn main() {
     let x = 1
+}
+```
+
+#### `E0217`
+
+```oska error=E0217
+fn main(docs: DirRead) {}
+```
+
+```oska fixed=E0217
+fn main(fs: FsRead) {
+    let docs = fs.restrict_to("docs")
 }
 ```
 
@@ -1579,6 +1593,20 @@ fn main(out: Stdout) {
 ```oska fixed=E0272
 fn main(out: Stdout) {
     let _ = out.println("hi")
+}
+```
+
+#### `E0273`
+
+```oska error=E0273
+fn count(fs: FsRead, path: Path) -> Result<Int, IoError> {
+    Ok(fs.read_to_string(path)?.len())
+}
+```
+
+```oska fixed=E0273
+fn count(fs: FsRead, path: Path) -> Result<Int, IoError> {
+    Ok(fs.restrict_to("/srv/app").read_to_string(path)?.len())
 }
 ```
 

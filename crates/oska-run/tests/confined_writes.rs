@@ -265,12 +265,6 @@ mod real {
         ) -> std::io::Result<String> {
             self.real.read_file_beneath(root, names)
         }
-        fn read_file(&mut self, path: &Path) -> std::io::Result<String> {
-            self.real.read_file(path)
-        }
-        fn write_file(&mut self, path: &Path, contents: &str) -> std::io::Result<()> {
-            self.real.write_file(path, contents)
-        }
         fn write_file_beneath(
             &mut self,
             root: &RootHandle,
@@ -279,18 +273,12 @@ mod real {
         ) -> std::io::Result<()> {
             self.real.write_file_beneath(root, names, contents)
         }
-        fn create_dir(&mut self, path: &Path) -> std::io::Result<()> {
-            self.real.create_dir(path)
-        }
         fn create_dir_beneath(
             &mut self,
             root: &RootHandle,
             names: &[String],
         ) -> std::io::Result<()> {
             self.real.create_dir_beneath(root, names)
-        }
-        fn list_dir(&mut self, path: &Path) -> std::io::Result<Vec<String>> {
-            self.real.list_dir(path)
         }
         fn list_dir_beneath(
             &mut self,
@@ -358,13 +346,17 @@ mod fake {
 
         fn is_dir(&mut self, at: &str) -> bool {
             let path = self.path(at);
-            self.host.list_dir(Path::new(&path)).is_ok()
+            self.host.open_root(Path::new(&path)).is_ok()
         }
 
         fn outside_names(&mut self) -> Vec<String> {
             let path = self.path("outside");
+            let outside = self
+                .host
+                .open_root(Path::new(&path))
+                .expect("open the outside");
             self.host
-                .list_dir(Path::new(&path))
+                .list_dir_beneath(&outside, &[])
                 .expect("list the outside")
         }
     }

@@ -42,7 +42,7 @@ fn untrusted_text_cannot_be_returned_inside_a_trusted_container() {
 #[test]
 fn file_contents_are_untrusted() {
     assert_errors(
-        "fn f(fs: FsRead, path: Path) -> Result<String, IoError> {\n    let text = fs.read_to_string(path)?\n    Ok(text)\n}",
+        "fn f(fs: DirRead, path: Path) -> Result<String, IoError> {\n    let text = fs.read_to_string(path)?\n    Ok(text)\n}",
         &[("E0300", "text")],
     );
 }
@@ -74,7 +74,7 @@ fn untrusted_text_is_accepted_by_an_untrusted_parameter() {
 #[test]
 fn println_and_path_from_accept_untrusted_text() {
     assert_ok(
-        "fn f(io: Stdout, fs: FsRead, args: Args) -> Result<(), IoError> {\n    \
+        "fn f(io: Stdout, fs: DirRead, args: Args) -> Result<(), IoError> {\n    \
          let arg = args.get(1).ok_or(IoError(message: \"usage\"))?\n    \
          io.println(arg)?\n    \
          let _ = fs.read_to_string(Path.from(arg))?\n    \
