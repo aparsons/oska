@@ -7,7 +7,7 @@
 //! method's receiver is its first argument.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::rc::Rc;
 
 use oska_check::builtins;
@@ -15,7 +15,7 @@ use oska_syntax::Span;
 
 use crate::confine::{self, Intent};
 use crate::data;
-use crate::host::Host;
+use crate::host::{Host, RootHandle};
 use crate::html;
 use crate::interp::Interpreter;
 use crate::panics::{codes, Panic};
@@ -412,16 +412,21 @@ fn broken(why: &str) -> io::Error {
     io::Error::new(io::ErrorKind::PermissionDenied, why.to_string())
 }
 
-/// The real path `path` names through `fs`, for `intent`, with the
-/// canonical path of the root it must stay under when `fs` is restricted,
-/// or why `fs` may not reach it. For writes, `create_dir` and `list_dir`,
-/// which do not yet walk beneath the root's handle.
-fn real_path<'f>(
-    host: &mut dyn Host,
+/// Where `path` leads through `fs`, for `intent`, or why `fs` may not
+/// reach it: a path on an unrestricted filesystem, or on a restricted
+/// one, its root and the plain names to walk beneath it, which `names`
+/// gives (`confine.rs`).
+enum Reach<'f> {
+    Anywhere(&'f Path),
+    Beneath(&'f RootHandle, Vec<String>),
+}
+
+fn reach<'f>(
     fs: &'f FsCap,
-    path: &Value,
+    path: &'f Value,
     intent: Intent,
-) -> io::Result<(PathBuf, Option<&'f Path>)> {
+    names: fn(&str) -> io::Result<Vec<String>>,
+) -> io::Result<Reach<'f>> {
     allowed(fs, intent)?;
     let raw = path.fields()[0].as_str();
     match &fs.root {
@@ -429,11 +434,8 @@ fn real_path<'f>(
             io::ErrorKind::InvalidInput,
             "an empty path names no file",
         )),
-        Root::Anywhere => Ok((PathBuf::from(raw), None)),
-        Root::Dir(root) => Ok((
-            confine::resolve(host, root.path(), raw, intent)?,
-            Some(root.path()),
-        )),
+        Root::Anywhere => Ok(Reach::Anywhere(Path::new(raw))),
+        Root::Dir(root) => Ok(Reach::Beneath(root, names(raw)?)),
         Root::Nowhere(why) => Err(broken(why)),
     }
 }
@@ -465,27 +467,51 @@ fn fs_read_to_string(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<V
 }
 
 /// `FsRead.list_dir(self, path)`: the names of the entries of the
-/// directory, sorted. It is confined like a read.
+/// directory, sorted. Through a restricted filesystem, the path is walked
+/// beneath the root's handle, and `.` lists the root.
 fn fs_list_dir(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    let result = real_path(host, fs_cap(&args[0]), &args[1], Intent::Read)
-        .and_then(|(path, beneath)| host.list_dir(&path, beneath));
+    let result = reach(fs_cap(&args[0]), &args[1], Intent::Read, confine::names).and_then(
+        |reach| match reach {
+            Reach::Anywhere(path) => host.list_dir(path),
+            Reach::Beneath(root, names) => host.list_dir_beneath(root, &names),
+        },
+    );
     Ok(io_result(result, |names| {
         Value::List(Rc::new(names.iter().map(|n| Value::str(n)).collect()))
     }))
 }
 
-/// `FsWrite.write(self, path, contents)`.
+/// `FsWrite.write(self, path, contents)`: through a restricted
+/// filesystem, `path` ends in a plain name, and is walked beneath the
+/// root's handle.
 fn fs_write(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    let result = real_path(host, fs_cap(&args[0]), &args[1], Intent::Write)
-        .and_then(|(path, beneath)| host.write_file(&path, text(&args, 2), beneath));
+    let contents = text(&args, 2);
+    let result = reach(
+        fs_cap(&args[0]),
+        &args[1],
+        Intent::Write,
+        confine::names_to_create,
+    )
+    .and_then(|reach| match reach {
+        Reach::Anywhere(path) => host.write_file(path, contents),
+        Reach::Beneath(root, names) => host.write_file_beneath(root, &names, contents),
+    });
     Ok(io_result(result, |()| Value::Unit))
 }
 
 /// `FsWrite.create_dir(self, path)`: confined like a write, so `path`
-/// ends in a plain name under a parent inside the root.
+/// ends in a plain name, and is walked beneath the root's handle.
 fn fs_create_dir(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    let result = real_path(host, fs_cap(&args[0]), &args[1], Intent::Write)
-        .and_then(|(path, beneath)| host.create_dir(&path, beneath));
+    let result = reach(
+        fs_cap(&args[0]),
+        &args[1],
+        Intent::Write,
+        confine::names_to_create,
+    )
+    .and_then(|reach| match reach {
+        Reach::Anywhere(path) => host.create_dir(path),
+        Reach::Beneath(root, names) => host.create_dir_beneath(root, &names),
+    });
     Ok(io_result(result, |()| Value::Unit))
 }
 
