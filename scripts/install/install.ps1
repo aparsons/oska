@@ -72,7 +72,8 @@
 
     # Runs `ssh-keygen -Y verify`, feeding it the exact bytes of $Data:
     # PowerShell's own pipe to a native command would re-encode them.
-    function Test-Signature([string]$KeyGen, [string]$Allowed, [string]$Signature, [string]$Data) {
+    # Returns '' if the signature verifies, otherwise why it does not.
+    function Get-SignatureProblem([string]$KeyGen, [string]$Allowed, [string]$Signature, [string]$Data) {
         try {
             $psi = New-Object System.Diagnostics.ProcessStartInfo
             $psi.FileName = $KeyGen
@@ -94,10 +95,11 @@
             }
             $p.WaitForExit()
             [void]$stdout.Result
-            [void]$stderr.Result
-            return ($p.ExitCode -eq 0)
+            $said = ([string]$stderr.Result).Trim()
+            if ($p.ExitCode -eq 0) { return '' }
+            return "$KeyGen exited $($p.ExitCode): $said"
         } catch {
-            return $false
+            return "cannot run ${KeyGen}: $($_.Exception.Message)"
         }
     }
 
@@ -208,8 +210,9 @@
         $allowed = Join-Path $state.tmp 'allowed_signers'
         Write-Utf8 $allowed "$Namespace namespaces=`"$Namespace`" $ReleaseKey`n"
         $sums = Join-Path $state.tmp 'SHA256SUMS'
-        if (-not (Test-Signature $keygen.Path $allowed (Join-Path $state.tmp 'SHA256SUMS.sig') $sums)) {
-            Stop-Install 'bad_signature' "SHA256SUMS for $tag is not signed by the Oska release key; nothing was installed"
+        $problem = Get-SignatureProblem $keygen.Path $allowed (Join-Path $state.tmp 'SHA256SUMS.sig') $sums
+        if ($problem) {
+            Stop-Install 'bad_signature' "SHA256SUMS for $tag is not signed by the Oska release key; nothing was installed ($problem)"
         }
 
         $listed = @([IO.File]::ReadAllLines($sums) | ForEach-Object {
