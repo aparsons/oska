@@ -12,7 +12,7 @@ Tools should match on the `code`, never on the message. Read the first diagnosti
 
 ### `oskac run` exits with 2 and runs nothing
 
-The program uses something the interpreter cannot run yet, and `oskac` says so before running any of it: `E0370` for the capabilities `Net`, `NetConnect`, `NetListen`, `Spawn`, and `Sched`, `E0371` for the modules `std.sql`, `std.proc`, and `std.html`, and `E0380` for a few constructs. The program may still pass `oskac check`. See [what the runtime refuses](capabilities.md#what-the-runtime-refuses).
+The program uses something the interpreter cannot run yet, and `oskac` says so before running any of it: `E0370` for the capabilities `Net`, `NetConnect`, `NetListen`, `Spawn`, and `Sched`, `E0371` for the modules `std.sql` and `std.proc`, and `E0380` for a few constructs. The program may still pass `oskac check`. See [what the runtime refuses](capabilities.md#what-the-runtime-refuses).
 
 ### `oskac run` exits with 101
 

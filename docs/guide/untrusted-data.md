@@ -116,7 +116,28 @@ fn user_name(db: sql.Db, id: Untrusted<String>) -> Result<Int, sql.SqlError> {
 }
 ```
 
-A sink literal whose module is not imported is `E0310`, an unknown tag is `E0311`, and a module export written without its qualifier is `E0340`. The sink modules check but do not run in this release: `oskac run` refuses a program that imports one with `E0371`.
+A sink literal whose module is not imported is `E0310`, an unknown tag is `E0311`, and a module export written without its qualifier is `E0340`. `std.html` runs in this release. `std.sql` and `std.proc` check but do not run yet: `oskac run` refuses a program that imports one with `E0371`.
+
+`std.html` escapes untrusted text in a data position. `text(...)` escapes `&`, `<`, `>`, `"`, and `'`, while `TrustedHtml.new` takes trusted markup, so putting untrusted text into markup unescaped needs an explicit, audited `.assume_trusted()`:
+
+```oska
+use std.html
+
+fn page(name: Untrusted<String>) -> html.Html {
+    let open = html.Html.raw(html.TrustedHtml.new("<p>"))
+    let close = html.Html.raw(html.TrustedHtml.new("</p>"))
+    open.concat(html.text(name)).concat(close)
+}
+
+fn main(io: Stdout, args: Args) -> Result<(), IoError> {
+    let name = args.get(1).unwrap_or("friend")
+    io.println(page(name).render())
+}
+```
+
+```console cmd=run -- <b>hi</b>
+<p>&lt;b&gt;hi&lt;/b&gt;</p>
+```
 
 ## Paths
 

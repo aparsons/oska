@@ -117,7 +117,7 @@ Never silence a diagnostic by weakening authority or trust: do not add capabilit
 - **Mutation** needs `var` on the binding, and `var self` on the method.
 - **Newlines end statements.** There is no `;`.
 - **Interpolation holds only a name or a field path.** Compute with `let` first.
-- **Known gaps in this release:** a module-level `const` cannot be referenced, contracts are not evaluated, a type misspelled in a `let` annotation is not reported, and `Net`, `std.sql`, `std.proc`, and `std.html` check but do not run. See [troubleshooting](troubleshooting.md#by-symptom).
+- **Known gaps in this release:** a module-level `const` cannot be referenced, contracts are not evaluated, a type misspelled in a `let` annotation is not reported, and `Net`, `std.sql`, and `std.proc` check but do not run. See [troubleshooting](troubleshooting.md#by-symptom).
 - **One file only.** There are no packages yet.
 - **`dbg` writes to standard error** and returns its argument.
 

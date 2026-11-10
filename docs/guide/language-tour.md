@@ -265,7 +265,7 @@ The `let` is needed because a `{...}` hole that starts with `self` is not resolv
 
 ## Text
 
-Strings are UTF-8. `len()` counts characters (Unicode code points), and `byte_len()` counts bytes. The prelude's text methods are `lines`, `len`, `byte_len`, `trim`, `split`, `contains`, and `parse_int`. `+` works only on numbers, so build strings by interpolation.
+Strings are UTF-8. `len()` counts characters (Unicode code points), and `byte_len()` counts bytes. The prelude's text methods are `lines`, `len`, `byte_len`, `trim`, `split`, `contains`, `starts_with`, `ends_with`, `replace`, `join`, `chars`, `slice`, `repeat`, and `parse_int`. `+` works only on numbers, so build strings by interpolation.
 
 Text also carries a trust flag: text from outside the program is an **untrusted value**. That is why a plain `String` parameter is a **structural position**. See [untrusted data and secrets](untrusted-data.md).
 
@@ -308,7 +308,7 @@ In this release, tasks run one at a time in the order they were spawned, so ever
 
 ## Modules and `std`
 
-One file is one module, and items are private unless marked `pub`. `use` names a path with `.` as the separator, and only `std.*` modules can be imported so far. There are no glob imports. The modules are `std.sql`, `std.proc`, and `std.html`, and the checker knows them but the interpreter cannot run them yet, so `oskac run` refuses a program that imports one (`E0371`).
+One file is one module, and items are private unless marked `pub`. `use` names a path with `.` as the separator, and only `std.*` modules can be imported so far. There are no glob imports. The modules are `std.sql`, `std.proc`, and `std.html`. Only `std.html` can run so far: the interpreter cannot run `std.sql` or `std.proc` yet, so `oskac run` refuses a program that imports one (`E0371`).
 
 ## Tests
 
@@ -319,6 +319,6 @@ A `test "name" { ... }` item is a top-level test with the built-in value `t`. Se
 These are gaps in this release, so do not write programs that depend on them:
 
 - A module-level `const` declares and checks, but its name cannot be used yet: the checker reports `E0221` for any reference to it.
-- `Net`, `std.sql`, `std.proc`, and `std.html` check but do not run (`E0370`, `E0371`).
+- `Net`, `std.sql`, and `std.proc` check but do not run (`E0370`, `E0371`).
 - One file only. There are no packages, and `use` cannot import your own modules.
 - No formatter or package manager.
