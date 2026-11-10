@@ -282,7 +282,32 @@ fn halve(n: Int) -> Int
 }
 ```
 
-Contracts are type-checked today, and a contract that calls a function with a capability is rejected (`E0280`). They are not evaluated yet, so a violated `requires` does not stop the program.
+Contracts are checked at runtime, in every build, including `--release`. A false `requires` stops the program with `P0006`, "precondition violated": it points at the call, because the caller broke the contract. A false `ensures` stops it with `P0007`, "postcondition violated": it points at the clause, and the message names the return that broke it, because the function broke its promise. Both quote the condition, exit with code 101, and fail only their own test under `oskac test`. `ensures` is checked on every way out of the function: falling off the end, an early `return`, and a `?` that returns an `Err` or `None`. `r` is that value.
+
+A contract must be pure, and it must be a plain condition:
+
+- A contract that calls a function with a capability is rejected (`E0280`).
+- A `?` or `return` directly in a clause is rejected (`E0282`), because there is no function to leave. A closure inside a clause may use both for itself.
+- If evaluating a clause panics, for example by overflow, that original panic is reported, not a contract violation.
+- A function a contract calls keeps its own contract, so contracts compose.
+
+A trait method's contract lives on the trait and binds every impl, whether the call goes through the trait, a qualified call such as `Shape.area(x)`, or a direct `x.area()`. A method of `impl Trait for Type` declares no contract of its own (`E0218`); move the clause to the trait. `main` declares none either (`E0219`), because nothing calls it. A method of an inherent `impl` can declare contracts.
+
+```oska
+trait Shape {
+    fn scale(self, k: Int) -> Int
+        requires k > 0
+        ensures |r| r >= 0
+}
+
+struct Square { side: Int }
+
+impl Shape for Square {
+    fn scale(self, k: Int) -> Int {
+        self.side * k
+    }
+}
+```
 
 ## Concurrency
 

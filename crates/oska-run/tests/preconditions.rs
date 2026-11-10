@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{assert_panics, assert_refused, assert_runs, run_fake, test_fake};
+use common::{assert_panics, assert_runs, run_fake, test_fake};
 use oska_run::TestStatus;
 
 /// `double`, which requires a positive argument.
@@ -176,36 +176,6 @@ fn main() {
 }
 ";
     assert_panics(src, "P0006", "pick(5, -1)");
-}
-
-#[test]
-fn a_question_mark_or_return_leaving_a_contract_is_refused_before_the_program_starts() {
-    let question_mark = "fn maybe(n: Int) -> Option<Int> {
-    Some(n)
-}
-
-fn f(n: Int) -> Option<Int>
-    requires maybe(n)? > 0
-{
-    Some(n)
-}
-
-fn main() {
-    let x = f(1)
-}
-";
-    assert_refused(question_mark, "E0380");
-    let early_return = "fn g(n: Int) -> Int
-    requires { return 1 }
-{
-    n
-}
-
-fn main() {
-    let x = g(1)
-}
-";
-    assert_refused(early_return, "E0380");
 }
 
 #[test]

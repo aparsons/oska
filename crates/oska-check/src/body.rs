@@ -513,6 +513,12 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
     /// A `requires` or `ensures` condition: it must be `Bool`, and while
     /// it is checked only pure functions may be called.
+    /// Whether a `?` or `return` here would leave a contract: one is being
+    /// checked, and no closure of its own is open to take the exit.
+    pub(super) fn leaving_contract(&self) -> bool {
+        self.in_contract && self.closures.is_empty()
+    }
+
     fn contract(&mut self, keyword: &str, cond: &Expr) {
         let outer = std::mem::replace(&mut self.in_contract, true);
         let ty = self.infer(cond);
@@ -1739,6 +1745,18 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 self.mentioning(target, |body| {
                     body.check(value, &ty);
                 });
+            }
+            StmtKind::Return(value) if self.leaving_contract() => {
+                self.error(
+                    codes::LEAVES_CONTRACT,
+                    "a contract is a condition, not a function body: `return` has nothing to \
+                     leave here"
+                        .to_string(),
+                    stmt.span,
+                );
+                if let Some(value) = value {
+                    self.infer(value);
+                }
             }
             StmtKind::Return(value) => {
                 let ret = self.ret.clone();
