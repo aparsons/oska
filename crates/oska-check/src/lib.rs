@@ -467,7 +467,7 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
     } = findings;
     let program = diagnostics
         .is_empty()
-        .then(|| program::lower::module(&module, &items, &resolutions));
+        .then(|| program::lower::module(src, &module, &items, &resolutions));
     let functions = authority::report(&module, &decls);
     diagnostics.sort_by_key(|d| d.span.start);
     audit.sort_by_key(|site| site.span.start);

@@ -269,7 +269,8 @@ fn run_main(program: &Program, host: &mut dyn Host, args: &[String]) -> Result<(
         })
         .collect();
     let mut interpreter = Interpreter::new(program, host);
-    let value = interpreter.call(main, values)?;
+    // Nothing in the program calls `main`: its body stands for the call.
+    let value = interpreter.call(main, values, main.body.span)?;
     if !(value.type_tag() == builtins::RESULT && value.is_variant(builtins::ERR)) {
         return Ok(());
     }

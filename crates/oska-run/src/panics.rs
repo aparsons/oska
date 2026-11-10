@@ -34,6 +34,9 @@ pub mod codes {
     pub const DIVISION_BY_ZERO: &str = "P0004";
     /// `spawn` was called on a scope handle whose `scope` block has ended.
     pub const SPAWN_ON_FINISHED_SCOPE: &str = "P0005";
+    /// A `requires` clause of the function called was false: the caller
+    /// broke the contract.
+    pub const PRECONDITION_VIOLATED: &str = "P0006";
     /// `t.assert(cond)` was given `false`: the test fails.
     pub const ASSERT_FAILED: &str = "P0010";
     /// `t.assert_eq(actual, expected)` was given two values that differ.
@@ -65,6 +68,7 @@ pub mod codes {
         TODO,
         DIVISION_BY_ZERO,
         SPAWN_ON_FINISHED_SCOPE,
+        PRECONDITION_VIOLATED,
         ASSERT_FAILED,
         ASSERT_EQ_FAILED,
         ASSERT_NE_FAILED,

@@ -172,7 +172,9 @@ mod tests {
     //! tested on a checked program built by hand, in which a handle
     //! escapes anyway.
 
-    use oska_check::program::{Callee, Closure, Expr, ExprKind, Function, Program, Stmt};
+    use oska_check::program::{
+        Callee, Closure, Contracts, Expr, ExprKind, Function, Program, Stmt,
+    };
 
     use super::*;
     use crate::host::FakeHost;
@@ -236,6 +238,7 @@ mod tests {
                 name: "main".to_string(),
                 receiver: false,
                 params: Vec::new(),
+                contracts: Contracts::default(),
                 body,
             },
         );
@@ -248,7 +251,7 @@ mod tests {
         let main = &program.functions["main"];
         let mut host = FakeHost::new();
         let panic = Interpreter::new(&program, &mut host)
-            .call(main, Vec::new())
+            .call(main, Vec::new(), main.body.span)
             .expect_err("the scope is finished");
         assert_eq!(panic.code, codes::SPAWN_ON_FINISHED_SCOPE);
         assert_eq!(panic.span, Span { start: 40, end: 52 });
