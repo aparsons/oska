@@ -366,9 +366,36 @@ impl Value {
 
 #[cfg(test)]
 mod tests {
-    use oska_check::builtins;
+    use std::rc::Rc;
+    use std::sync::Arc;
 
-    use super::{Capability, IMPLEMENTED};
+    use oska_check::builtins;
+    use oska_check::program::{Callee, Closure, Expr, ExprKind};
+    use oska_syntax::Span;
+
+    use super::{Capability, ClosureValue, Value, IMPLEMENTED};
+
+    #[test]
+    fn a_closure_and_a_named_function_have_different_tags() {
+        let code = Arc::new(Closure {
+            params: Vec::new(),
+            captures: Vec::new(),
+            captures_self: false,
+            height: 0,
+            body: Expr {
+                kind: ExprKind::Unit,
+                span: Span { start: 0, end: 0 },
+            },
+        });
+        let closure = Value::Closure(Rc::new(ClosureValue {
+            code,
+            captured: Vec::new(),
+            receiver: None,
+        }));
+        let function = Value::Function(Rc::new(Callee::Function("f".to_string())));
+        assert_eq!(closure.type_tag(), "closure");
+        assert_eq!(function.type_tag(), "fn");
+    }
 
     #[test]
     fn every_capability_the_runtime_implements_is_one_the_checker_knows() {

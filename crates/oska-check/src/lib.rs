@@ -8,7 +8,8 @@
 //! produced even when there are errors. [`CheckReport::to_json`] is what
 //! `oskac check --format=json` prints; `docs/checker.md` describes it.
 //! A report with no diagnostics also carries the **checked program**
-//! ([`program`]) that backends such as `oska-run` execute (ADR 0007).
+//! ([`program`]) that backends such as `oska-run` execute (ADR 0007);
+//! [`builtins`] tells them what the prelude's built-in types are.
 //! A `use std.*` adds that module's declarations (`src/std/*.osk`) to
 //! the prelude the file sees.
 //!
