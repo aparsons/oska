@@ -556,12 +556,13 @@ impl Host for FakeHost {
                 format!("not a directory: {}", path.display()),
             ));
         }
-        // A file's first component below `path` is an entry of it: a
-        // file if it is the last, else a directory. `BTreeSet` sorts by
-        // the bytes of the name, as `RealHost` does.
-        let names: std::collections::BTreeSet<String> = self
+        // A file's or empty directory's first component below `path` is
+        // an entry of it: a file if it is the last, else a directory.
+        // `BTreeSet` sorts by the bytes of the name, as `RealHost` does.
+        let names: BTreeSet<String> = self
             .files
             .keys()
+            .chain(&self.dirs)
             .filter_map(|file| file.strip_prefix(&path).ok())
             .filter_map(|rest| rest.components().next())
             .filter_map(|c| c.as_os_str().to_str().map(str::to_string))
