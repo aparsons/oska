@@ -1,0 +1,15 @@
+[package]
+name = "oska-run"
+description = "Interpreter for the Oska programming language"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oska-check = { path = "../oska-check" }
+oska-syntax = { path = "../oska-syntax" }
+
+[lints]
+workspace = true

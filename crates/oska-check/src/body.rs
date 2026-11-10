@@ -38,6 +38,13 @@
 //!   capability-bearing value is a `cap fn`. Unification itself enforces
 //!   that a `cap fn` never flows into a plain `fn` (`infer.rs`), so every
 //!   route a value takes is covered; [`Body::mismatch`] reports it.
+//!   A closure that captures a `Scope` handle, or a value holding one, is
+//!   **scoped** the same way: unification keeps it out of unscoped `fn`
+//!   slots (returns, fields, user function parameters), and a `scope`
+//!   block rejects a value, or an outer `var`, that ends up holding one
+//!   (`E0292`). An outer `var` that could already hold a handle is
+//!   checked by what is written to it: a write that mentions a local of
+//!   the block holding a `Scope` is an escape ([`Body::mentioning`]).
 
 use oska_syntax::ast::{
     BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, ItemKind, Module, StmtKind,
@@ -50,8 +57,10 @@ use crate::codes;
 use crate::collect::Decls;
 use crate::decl_rules;
 use crate::infer::{Infer, Mismatch};
-use crate::items::{Bound, Items, Lower};
+use crate::items::{Bound, ImplInfo, Items, Lower};
 use crate::prelude::{self, StdModule};
+use crate::program::lower::{Resolution, Resolutions};
+use crate::program::{self, Callee, Construct};
 use crate::resolve;
 use crate::suggest;
 use crate::ty::{self, Trust, Ty};
@@ -64,12 +73,14 @@ mod results;
 mod secrets;
 mod sinks;
 
-/// What checking bodies finds: diagnostics, and the audit sites a
-/// reviewer must see (`body/audit.rs`).
+/// What checking bodies finds: diagnostics, the audit sites a reviewer
+/// must see (`body/audit.rs`), and what each name and call resolved to,
+/// from which the checked program is lowered (`program/lower.rs`).
 #[derive(Debug, Default)]
 pub struct Findings {
     pub diagnostics: Vec<Diagnostic>,
     pub audit: Vec<AuditSite>,
+    pub resolutions: Resolutions,
 }
 
 /// Check every function, method, constant, and test body in `module`. A
@@ -231,6 +242,12 @@ struct Callable {
     /// text can come back out as a fixed `String` only through `T`'s
     /// operations, such as `Display.to_string` or interpolation.
     type_args: Vec<Ty>,
+    /// What a call reaches, for the checked program: the function or
+    /// intrinsic when the callable is one, `None` for a constructor or a
+    /// closure.
+    target: Option<Callee>,
+    /// What a constructor builds, for the checked program.
+    construct: Option<Construct>,
 }
 
 /// What `base.name` names when `base` is not a value.
@@ -265,9 +282,42 @@ pub struct Body<'c, 'd, 'a> {
     inferred_lets: Vec<(Ident, Ty)>,
     /// The closures being checked, innermost last.
     closures: Vec<ClosureFrame>,
+    /// The `scope` blocks being checked, innermost last.
+    scope_blocks: Vec<ScopeBlock>,
+    /// The locals each value being written mentions, innermost last: a
+    /// local resolved while one is open is added to every one
+    /// ([`Body::mentioning`]).
+    mentions: Vec<Vec<usize>>,
     /// Checking a contract clause, where only pure functions may be
     /// called.
     in_contract: bool,
+    /// Resolutions that depend on a type inference may not have solved
+    /// yet, recorded by [`Body::finish`] once the whole body is checked.
+    deferred: Vec<(Span, Ty, Deferred)>,
+}
+
+/// A resolution recorded once the body's types are solved.
+#[derive(Debug, Clone, Copy)]
+enum Deferred {
+    /// Integer arithmetic: the operands' integer type.
+    Int,
+    /// `==` or `!=`: whether the operands are of a built-in type.
+    Equality,
+    /// An interpolation hole: the `Display` implementation of its type.
+    Display,
+}
+
+/// A `scope` block being checked, and what it may have stored outside
+/// itself.
+struct ScopeBlock {
+    /// The index of its handle in the locals: a local at or above it
+    /// belongs to the block, one below it outlives the block.
+    handle: usize,
+    /// Each write, inside the block, to a `var` from outside it (or to
+    /// `self`) of a value that mentions a local of the block: the `var`'s
+    /// name, and the local's type. When that type holds a `Scope`, the
+    /// block's handle may outlive it.
+    kept: Vec<(String, Ty)>,
 }
 
 /// A closure being checked, and what it captures so far.
@@ -277,6 +327,10 @@ struct ClosureFrame {
     height: usize,
     /// Each captured name (`self` for the receiver) with its type.
     captures: Vec<(String, Ty)>,
+    /// The slot of each captured local, for the checked program.
+    slots: Vec<usize>,
+    /// Whether it captures `self`.
+    receiver: bool,
 }
 
 impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
@@ -299,7 +353,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             loop_depth: 0,
             inferred_lets: Vec::new(),
             closures: Vec::new(),
+            scope_blocks: Vec::new(),
+            mentions: Vec::new(),
             in_contract: false,
+            deferred: Vec::new(),
         }
     }
 
@@ -319,14 +376,94 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         self.lower.decls()
     }
 
+    /// Record what the node at `span` resolved to, for the checked
+    /// program.
+    fn record(&mut self, span: Span, resolution: Resolution) {
+        self.out.resolutions.insert(span, resolution);
+    }
+
     fn error(&mut self, code: &'static str, message: impl Into<String>, span: Span) {
         self.out
             .diagnostics
             .push(Diagnostic::new(code, message, span));
     }
 
-    /// Report bindings whose types inference could not work out.
+    /// Record what the node at `span` resolves to once `ty` is solved.
+    fn defer(&mut self, span: Span, ty: &Ty, what: Deferred) {
+        self.deferred.push((span, ty.clone(), what));
+    }
+
+    /// Record the deferred resolutions, now that the body's types are
+    /// solved. A type the checked program cannot handle yet records
+    /// nothing, so the node lowers to `Unsupported`.
+    fn record_deferred(&mut self) {
+        for (span, ty, what) in std::mem::take(&mut self.deferred) {
+            let ty = self.infer.resolve(&ty);
+            let resolution = match what {
+                Deferred::Int => ty.integer_type().map(Resolution::Int),
+                Deferred::Equality => {
+                    let builtin = ty == Ty::Unit
+                        || ty.is_integer()
+                        || matches!(ty.head(), Some(ty::BOOL | ty::STRING));
+                    if builtin {
+                        Some(Resolution::Equality)
+                    } else {
+                        // The checker has required `Eq` of the operands.
+                        self.trait_callee(&ty, ty::EQ, "eq")
+                            .map(Resolution::EqualityVia)
+                    }
+                }
+                // The checker has required `Display` of the hole.
+                Deferred::Display => self
+                    .trait_callee(&ty, ty::DISPLAY, "to_string")
+                    .map(Resolution::Display),
+            };
+            if let Some(resolution) = resolution {
+                self.record(span, resolution);
+            }
+        }
+    }
+
+    /// What a call of the method `method` of `trait_name`, which a value
+    /// of type `ty` implements, reaches in the checked program:
+    ///
+    /// - on a generic parameter, the impl for the value's runtime type
+    ///   tag ([`Callee::Trait`]);
+    /// - on a prelude type, for a prelude trait, the intrinsic
+    ///   `Type.method`, such as `Int.to_string`;
+    /// - otherwise the module's impl, `<Type as Trait>.method`.
+    ///
+    /// `None` for a generic trait, whose impl the name of the trait does
+    /// not identify, and for a type with no name.
+    fn trait_callee(&self, ty: &Ty, trait_name: &str, method: &str) -> Option<Callee> {
+        let generic = self
+            .items
+            .traits
+            .get(trait_name)
+            .map_or(true, |t| !t.generics.is_empty());
+        if generic {
+            return None;
+        }
+        let in_prelude = |name: &str| self.decls().get(name).map_or(true, |d| d.in_prelude);
+        match ty {
+            Ty::Param(_) => Some(Callee::Trait {
+                trait_name: trait_name.to_string(),
+                method: method.to_string(),
+            }),
+            Ty::Named(head, _, _) if in_prelude(head) && in_prelude(trait_name) => {
+                Some(Callee::Intrinsic(format!("{head}.{method}")))
+            }
+            Ty::Named(head, _, _) => Some(Callee::Function(program::trait_method(
+                head, trait_name, method,
+            ))),
+            _ => None,
+        }
+    }
+
+    /// Report bindings whose types inference could not work out, and
+    /// record the deferred resolutions.
     fn finish(&mut self) {
+        self.record_deferred();
         for (name, ty) in std::mem::take(&mut self.inferred_lets) {
             let ty = self.infer.resolve(&ty);
             if ty.has_vars() {
@@ -501,6 +638,16 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 ),
                 span,
             ),
+            Mismatch::ScopeLost => self.error(
+                codes::SCOPE_ESCAPES,
+                format!(
+                    "expected `{expected}`, found a closure that captures a `Scope` handle, \
+                     which cannot outlive its `scope` block: it cannot be returned, stored in \
+                     a field, or passed to a function of yours; pass the `Scope` as a \
+                     parameter instead"
+                ),
+                span,
+            ),
             Mismatch::TrustLost => self.error(
                 codes::UNTRUSTED_TEXT,
                 format!(
@@ -526,6 +673,8 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             ExprKind::Int(text) => {
                 let ty = self.literal_type(expected);
                 self.range_check(text, false, &ty, expr.span);
+                // The value carries its type at runtime, for dispatch.
+                self.defer(expr.span, &ty, Deferred::Int);
                 ty
             }
             ExprKind::Str(parts) => {
@@ -535,6 +684,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     if let StrPart::Hole { path, span } = part {
                         let ty = self.hole(path);
                         self.interpolated_hole(&ty, *span);
+                        self.defer(*span, &ty, Deferred::Display);
                         self.infer.join_into(&ty, trust);
                     }
                 }
@@ -549,6 +699,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     let ty = receiver.ty.clone();
                     for frame in &mut self.closures {
                         frame.captures.push(("self".to_string(), ty.clone()));
+                        frame.receiver = true;
                     }
                     ty
                 }
@@ -561,7 +712,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     Ty::Error
                 }
             },
-            ExprKind::Field { base, name } => self.field_expr(base, name),
+            ExprKind::Field { base, name } => self.field_expr(expr.span, base, name),
             ExprKind::Call { callee, args } => self.call(expr, callee, args, expected),
             ExprKind::Unary { op, operand } => self.unary(expr, *op, operand, expected),
             ExprKind::Binary { op, lhs, rhs } => self.binary(expr, *op, lhs, rhs, expected),
@@ -619,6 +770,23 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             ExprKind::Scope { handle, body } => {
                 // The handle is the prelude's `Scope`; its `spawn` and the
                 // task's `join` are ordinary prelude methods.
+                //
+                // A `var` from outside the block that cannot hold a handle
+                // yet must not be able to after it: the block would have
+                // stored its handle, or a closure capturing it, there.
+                // This is conservative: it also rejects storing a closure
+                // that captures an enclosing block's handle.
+                let outer_vars: Vec<usize> = (0..self.locals.len())
+                    .filter(|&i| {
+                        let local = &self.locals[i];
+                        matches!(local.binding, Binding::Var)
+                            && !self.infer.resolve(&local.ty).holds_scope()
+                    })
+                    .collect();
+                self.scope_blocks.push(ScopeBlock {
+                    handle: self.locals.len(),
+                    kept: Vec::new(),
+                });
                 self.locals.push(Local {
                     name: handle.name.clone(),
                     ty: Ty::named(ty::SCOPE),
@@ -626,7 +794,29 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 });
                 let ty = self.block(body, expected, true);
                 self.locals.pop();
-                if self.infer.resolve(&ty).holds(ty::SCOPE) {
+                let block = self.scope_blocks.pop().expect("the block's own frame");
+                // A `var` that already held a handle, of an enclosing
+                // block, is caught by what was written to it: a value
+                // mentioning one of this block's locals that holds one.
+                let kept = outer_vars
+                    .into_iter()
+                    .map(|i| &self.locals[i])
+                    .find(|local| self.infer.resolve(&local.ty).holds_scope())
+                    .map(|local| local.name.clone())
+                    .or_else(|| {
+                        block
+                            .kept
+                            .into_iter()
+                            .find(|(_, ty)| self.infer.resolve(ty).holds_scope())
+                            .map(|(name, _)| name)
+                    });
+                if let Some(name) = kept {
+                    self.out.diagnostics.push(decl_rules::scope_escapes(
+                        expr.span,
+                        &format!("be kept in `{name}`, which outlives the block"),
+                    ));
+                }
+                if self.infer.resolve(&ty).holds_scope() {
                     self.out.diagnostics.push(decl_rules::scope_escapes(
                         expr.span,
                         "be the value of its `scope` block",
@@ -695,10 +885,15 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     fn name(&mut self, ident: &Ident) -> Ty {
         let name = ident.name.as_str();
         if let Some(index) = self.locals.iter().rposition(|l| l.name == name) {
+            self.record(ident.span, Resolution::Local(index));
+            for mentioned in &mut self.mentions {
+                mentioned.push(index);
+            }
             let ty = self.locals[index].ty.clone();
             for frame in &mut self.closures {
                 if index < frame.height {
                     frame.captures.push((name.to_string(), ty.clone()));
+                    frame.slots.push(index);
                 }
             }
             return ty;
@@ -715,11 +910,15 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     fn item_value(&mut self, key: &str, ident: &Ident) -> Ty {
         let name = key;
         if let Some(sig) = self.items.fns.get(name).cloned() {
+            self.record(
+                ident.span,
+                Resolution::FnValue(calls::target(&sig, name.to_string())),
+            );
             let callable = self.instantiate(&sig, None);
             return callable.into_fn_type();
         }
         if let Some(enum_name) = self.items.bare_variants.get(name).cloned() {
-            return self.variant_value(&enum_name, name);
+            return self.variant_value(&enum_name, name, ident.span);
         }
         if self.decls().get(name).is_some() {
             self.error(
@@ -770,18 +969,28 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
 
     /// `base.name` outside a call: a field, a member of a type, or a
     /// module's export.
-    fn field_expr(&mut self, base: &Expr, name: &Ident) -> Ty {
+    fn field_expr(&mut self, span: Span, base: &Expr, name: &Ident) -> Ty {
         match self.qualified_path(base, name) {
             Some(QualifiedPath::Export(key)) => self.item_value(&key, name),
             Some(QualifiedPath::Member(type_name)) => match self.type_member(&type_name, name) {
                 Some(callable) if callable.labels != Labels::Optional => {
                     if callable.params.is_empty() {
+                        if let Some(construct) = callable.construct {
+                            self.record(span, Resolution::Construct(construct));
+                        }
                         callable.ret
                     } else {
+                        let what = "a constructor used as a function value".to_string();
+                        self.record(span, Resolution::Unsupported(what));
                         callable.into_fn_type()
                     }
                 }
-                Some(callable) => callable.into_fn_type(),
+                Some(callable) => {
+                    if let Some(target) = &callable.target {
+                        self.record(name.span, Resolution::FnValue(target.clone()));
+                    }
+                    callable.into_fn_type()
+                }
                 None => Ty::Error,
             },
             Some(QualifiedPath::Reported) => Ty::Error,
@@ -808,6 +1017,11 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             Ty::Named(type_name, args, _) => {
                 if let Some(info) = self.items.structs.get(type_name) {
                     if let Some(field_ty) = info.fields.field(&name.name) {
+                        if let Some(index) = info.fields.index(&name.name) {
+                            self.out
+                                .resolutions
+                                .insert(name.span, Resolution::Field(index));
+                        }
                         if info.hidden_fields.contains(&name.name) {
                             self.error(
                                 codes::PRIVATE_FIELD,
@@ -865,6 +1079,45 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     }
 
     // ---- Mutation ---------------------------------------------------------
+
+    /// Run `write`, which checks a value written into `place`, and note
+    /// the write with every `scope` block that `place` outlives when the
+    /// value mentions a local of the block: if that local holds the
+    /// block's handle, the handle would outlive the block (`E0292`).
+    pub(super) fn mentioning<T>(&mut self, place: &Expr, write: impl FnOnce(&mut Self) -> T) -> T {
+        self.mentions.push(Vec::new());
+        let result = write(self);
+        let mentioned = self.mentions.pop().expect("the write's own list");
+        let Some((name, root)) = self.written_root(place) else {
+            return result;
+        };
+        for block in &mut self.scope_blocks {
+            if root.is_some_and(|r| r >= block.handle) {
+                continue;
+            }
+            for &local in mentioned.iter().filter(|&&m| m >= block.handle) {
+                block
+                    .kept
+                    .push((name.clone(), self.locals[local].ty.clone()));
+            }
+        }
+        result
+    }
+
+    /// The name and local index of the binding a write to `place` lands
+    /// in: `None` for the index of `self`, which outlives every block in
+    /// the method. `None` altogether for a temporary.
+    fn written_root(&self, place: &Expr) -> Option<(String, Option<usize>)> {
+        match &place.kind {
+            ExprKind::Field { base, .. } => self.written_root(base),
+            ExprKind::Name(ident) => {
+                let index = self.locals.iter().rposition(|l| l.name == ident.name)?;
+                Some((ident.name.clone(), Some(index)))
+            }
+            ExprKind::SelfValue => Some(("self".to_string(), None)),
+            _ => None,
+        }
+    }
 
     /// Report `place` when its root binding is not mutable. `action`
     /// completes "cannot ... `name`".
@@ -938,12 +1191,14 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     let ty = self.literal_type(expected);
                     if ty.is_signed_integer() {
                         self.range_check(text, true, &ty, expr.span);
+                        self.defer(expr.span, &ty, Deferred::Int);
                         return ty;
                     }
                 }
                 let ty = self.expr(operand, expected);
                 let ty = self.infer.resolve(&ty);
                 if ty.is_error() || ty.is_signed_integer() {
+                    self.defer(expr.span, &ty, Deferred::Int);
                     return ty;
                 }
                 self.error(
@@ -973,6 +1228,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             BinaryOp::Eq | BinaryOp::Ne => {
                 if let Some(ty) = self.compared_operands(expr, op, lhs, rhs) {
                     self.require_trait(&ty, ty::EQ, &[], expr.span, &format!("`{}`", op.text()));
+                    self.defer(expr.span, &ty, Deferred::Equality);
                 }
                 Ty::bool()
             }
@@ -981,7 +1237,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 Ty::bool()
             }
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
-                self.numeric_operands(expr, op, lhs, rhs, expected)
+                let ty = self.numeric_operands(expr, op, lhs, rhs, expected);
+                self.defer(expr.span, &ty, Deferred::Int);
+                ty
             }
         }
     }
@@ -1106,36 +1364,58 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     && b.args.len() == args.len()
                     && b.args.iter().zip(args).all(|(x, y)| infer.unify(x, y))
             }),
-            ty @ Ty::Named(..) => self.items.impls.iter().any(|imp| {
-                if imp.trait_name != trait_name || imp.trait_args.len() != args.len() {
-                    return false;
-                }
-                let mut attempt = infer.clone();
-                let subst: Vec<(String, Ty)> = imp
-                    .generics
-                    .iter()
-                    .map(|g| (g.clone(), attempt.fresh()))
-                    .collect();
-                // An impl for a text type covers text of either trust.
-                let target = attempt.loosen(&imp.target.substitute(&subst));
-                let matches = attempt.unify(&ty, &target)
-                    && imp
-                        .trait_args
-                        .iter()
-                        .zip(args)
-                        .all(|(x, y)| attempt.unify(&x.substitute(&subst), y));
-                let holds = matches
-                    && imp.bounds.iter().all(|b| {
-                        let param = Ty::Param(b.param.clone()).substitute(&subst);
-                        let args: Vec<Ty> = b.args.iter().map(|a| a.substitute(&subst)).collect();
-                        self.implements_in(&mut attempt, &param, &b.trait_name, &args, depth + 1)
-                    });
-                if holds {
-                    *infer = attempt;
-                }
-                holds
-            }),
+            ty @ Ty::Named(..) => self.impl_in(infer, &ty, trait_name, args, depth).is_some(),
         }
+    }
+
+    /// The `impl` of `trait_name<args>` that the named type `ty`
+    /// implements it through, whose own bounds hold. On success, `infer`
+    /// keeps what matching it solved.
+    fn impl_in(
+        &self,
+        infer: &mut Infer,
+        ty: &Ty,
+        trait_name: &str,
+        args: &[Ty],
+        depth: usize,
+    ) -> Option<&'c ImplInfo> {
+        self.items.impls.iter().find(|imp| {
+            if imp.trait_name != trait_name || imp.trait_args.len() != args.len() {
+                return false;
+            }
+            let mut attempt = infer.clone();
+            let subst: Vec<(String, Ty)> = imp
+                .generics
+                .iter()
+                .map(|g| (g.clone(), attempt.fresh()))
+                .collect();
+            // An impl for a text type covers text of either trust.
+            let target = attempt.loosen(&imp.target.substitute(&subst));
+            let matches = attempt.unify(ty, &target)
+                && imp
+                    .trait_args
+                    .iter()
+                    .zip(args)
+                    .all(|(x, y)| attempt.unify(&x.substitute(&subst), y));
+            let holds = matches
+                && imp.bounds.iter().all(|b| {
+                    let param = Ty::Param(b.param.clone()).substitute(&subst);
+                    let args: Vec<Ty> = b.args.iter().map(|a| a.substitute(&subst)).collect();
+                    self.implements_in(&mut attempt, &param, &b.trait_name, &args, depth + 1)
+                });
+            if holds {
+                *infer = attempt;
+            }
+            holds
+        })
+    }
+
+    /// The `impl` through which the named type `ty` implements
+    /// `trait_name<args>`, if one does.
+    fn impl_of(&self, ty: &Ty, trait_name: &str, args: &[Ty]) -> Option<&'c ImplInfo> {
+        let mut trial = self.infer.clone();
+        let ty = trial.resolve(ty);
+        self.impl_in(&mut trial, &ty, trait_name, args, 0)
     }
 
     /// Report `E0265` at `span` when `ty` does not implement
@@ -1213,6 +1493,8 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         self.closures.push(ClosureFrame {
             height,
             captures: Vec::new(),
+            slots: Vec::new(),
+            receiver: false,
         });
         for (param, ty) in params.iter().zip(&param_tys) {
             self.bind(&param.name.name, ty.clone(), Binding::Param);
@@ -1223,7 +1505,21 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         self.ret = outer_ret;
         self.loop_depth = outer_loops;
         self.locals.truncate(height);
-        let frame = self.closures.pop().expect("the closure's own frame");
+        let mut frame = self.closures.pop().expect("the closure's own frame");
+        frame.slots.sort_unstable();
+        frame.slots.dedup();
+        self.record(
+            span,
+            Resolution::Closure {
+                captures: std::mem::take(&mut frame.slots),
+                captures_self: frame.receiver,
+                height,
+            },
+        );
+        let scoped = frame
+            .captures
+            .iter()
+            .any(|(_, ty)| self.infer.resolve(ty).holds_scope());
         let captured = frame
             .captures
             .into_iter()
@@ -1231,6 +1527,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             .map(|(name, _)| name);
         let ty = Ty::Fn {
             cap: captured.is_some(),
+            scoped,
             params: param_tys,
             ret: Box::new(ret),
         };
@@ -1335,7 +1632,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             StmtKind::Assign { target, value } => {
                 let ty = self.infer(target);
                 self.require_mutable(target, codes::ASSIGN_TO_LET, "assign to");
-                self.check(value, &ty);
+                self.mentioning(target, |body| {
+                    body.check(value, &ty);
+                });
             }
             StmtKind::Return(value) => {
                 let ret = self.ret.clone();

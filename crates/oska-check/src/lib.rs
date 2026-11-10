@@ -7,6 +7,9 @@
 //! `body/audit.rs`). The report is
 //! produced even when there are errors. [`CheckReport::to_json`] is what
 //! `oskac check --format=json` prints; `docs/checker.md` describes it.
+//! A report with no diagnostics also carries the **checked program**
+//! ([`program`]) that backends such as `oska-run` execute (ADR 0007);
+//! [`builtins`] tells them what the prelude's built-in types are.
 //! A `use std.*` adds that module's declarations (`src/std/*.osk`) to
 //! the prelude the file sees.
 //!
@@ -31,12 +34,14 @@ use oska_syntax::{json_escape, Diagnostic, Span};
 
 mod authority;
 mod body;
+pub mod builtins;
 mod coherence;
 mod collect;
 mod decl_rules;
 mod infer;
 mod items;
 mod prelude;
+pub mod program;
 mod recursion;
 mod release;
 mod resolve;
@@ -128,6 +133,9 @@ pub struct CheckReport {
     pub functions: Vec<FunctionAuthority>,
     /// Every audit site, in source order.
     pub audit: Vec<AuditSite>,
+    /// The **checked program** a backend runs (`program.rs`): present
+    /// only when there are no diagnostics.
+    pub program: Option<program::Program>,
 }
 
 /// A call a reviewer must see: one that vouches for untrusted text, or
@@ -301,13 +309,17 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
     traits::module(src, &module, &decls, &items, &mut diagnostics);
     let mut findings = body::Findings {
         diagnostics,
-        audit: Vec::new(),
+        ..body::Findings::default()
     };
     body::module(src, &module, &decls, &items, &mut findings);
     let body::Findings {
         mut diagnostics,
         mut audit,
+        resolutions,
     } = findings;
+    let program = diagnostics
+        .is_empty()
+        .then(|| program::lower::module(&module, &items, &resolutions));
     let functions = authority::report(&module, &decls);
     diagnostics.sort_by_key(|d| d.span.start);
     audit.sort_by_key(|site| site.span.start);
@@ -315,5 +327,6 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
         diagnostics,
         functions,
         audit,
+        program,
     }
 }

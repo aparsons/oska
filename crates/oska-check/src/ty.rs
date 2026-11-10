@@ -5,6 +5,8 @@
 
 use std::fmt;
 
+use crate::program::IntType;
+
 /// A type, as the body checker sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
@@ -16,8 +18,16 @@ pub enum Ty {
     /// `()`.
     Unit,
     /// `fn(T) -> U`, or `cap fn(T) -> U` when `cap` is set.
+    ///
+    /// `scoped` marks a closure that captures a `Scope` handle, or a value
+    /// holding one: like the handle, it cannot outlive its `scope` block.
+    /// It has no syntax. A slot whose type is written in a signature or a
+    /// field is unscoped, except a function-typed parameter of a prelude
+    /// or `std` function, which accepts a scoped closure (see
+    /// [`crate::items::Lower::signature`]).
     Fn {
         cap: bool,
+        scoped: bool,
         params: Vec<Ty>,
         ret: Box<Ty>,
     },
@@ -86,19 +96,6 @@ pub const SECRET: &str = "Secret";
 /// The name of `Self`, inside a trait or `impl`.
 pub const SELF: &str = "Self";
 
-/// The integer types and their ranges.
-const INTEGERS: &[(&str, i128, i128)] = &[
-    (INT, i64::MIN as i128, i64::MAX as i128),
-    ("I8", i8::MIN as i128, i8::MAX as i128),
-    ("I16", i16::MIN as i128, i16::MAX as i128),
-    ("I32", i32::MIN as i128, i32::MAX as i128),
-    ("I64", i64::MIN as i128, i64::MAX as i128),
-    ("U8", 0, u8::MAX as i128),
-    ("U16", 0, u16::MAX as i128),
-    ("U32", 0, u32::MAX as i128),
-    ("U64", 0, u64::MAX as i128),
-];
-
 impl Ty {
     /// A named type without arguments, such as `Int`.
     pub fn named(name: &str) -> Ty {
@@ -150,8 +147,14 @@ impl Ty {
                 };
                 Ty::Named(name.clone(), args, trust)
             }
-            Ty::Fn { cap, params, ret } => Ty::Fn {
+            Ty::Fn {
+                cap,
+                scoped,
+                params,
+                ret,
+            } => Ty::Fn {
                 cap: *cap,
+                scoped: *scoped,
                 params: params.iter().map(|p| p.map_trust(map)).collect(),
                 ret: Box::new(ret.map_trust(map)),
             },
@@ -209,13 +212,14 @@ impl Ty {
         }
     }
 
+    /// The integer type this is, or `None` for any other type.
+    pub fn integer_type(&self) -> Option<IntType> {
+        IntType::named(self.head()?)
+    }
+
     /// The inclusive range of an integer type, or `None` for any other.
     pub fn integer_range(&self) -> Option<(i128, i128)> {
-        let name = self.head()?;
-        INTEGERS
-            .iter()
-            .find(|(n, _, _)| *n == name)
-            .map(|&(_, min, max)| (min, max))
+        self.integer_type().map(|t| (t.min(), t.max()))
     }
 
     pub fn is_integer(&self) -> bool {
@@ -232,13 +236,13 @@ impl Ty {
         matches!(self, Ty::Error)
     }
 
-    /// A value of this type can hold a value of the named type `name`:
-    /// it is that type, or names it in a type argument or a function
-    /// type's result. A function type's parameters do not count.
-    pub fn holds(&self, name: &str) -> bool {
+    /// A value of this type may hold a `Scope` handle, so it cannot
+    /// outlive its `scope` block: it is a `Scope`, a scoped closure, or
+    /// names one in a type argument or a function type's result.
+    pub fn holds_scope(&self) -> bool {
         match self {
-            Ty::Named(n, args, _) => n == name || args.iter().any(|a| a.holds(name)),
-            Ty::Fn { ret, .. } => ret.holds(name),
+            Ty::Named(n, args, _) => n == SCOPE || args.iter().any(Ty::holds_scope),
+            Ty::Fn { scoped, ret, .. } => *scoped || ret.holds_scope(),
             Ty::Unit | Ty::Param(_) | Ty::Var(_) | Ty::Never | Ty::Error => false,
         }
     }
@@ -265,8 +269,14 @@ impl Ty {
                 args.iter().map(|a| a.substitute(subst)).collect(),
                 *trust,
             ),
-            Ty::Fn { cap, params, ret } => Ty::Fn {
+            Ty::Fn {
+                cap,
+                scoped,
+                params,
+                ret,
+            } => Ty::Fn {
                 cap: *cap,
+                scoped: *scoped,
                 params: params.iter().map(|p| p.substitute(subst)).collect(),
                 ret: Box::new(ret.substitute(subst)),
             },
@@ -301,7 +311,9 @@ impl fmt::Display for Ty {
                 Ok(())
             }
             Ty::Unit => write!(f, "()"),
-            Ty::Fn { cap, params, ret } => {
+            Ty::Fn {
+                cap, params, ret, ..
+            } => {
                 if *cap {
                     write!(f, "cap ")?;
                 }

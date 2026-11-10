@@ -10,6 +10,8 @@ use super::{Body, Callable, Labels, QualifiedPath};
 use crate::codes;
 use crate::collect::DeclKind;
 use crate::items::{Bound, FieldsInfo, FnSig, Receiver, Shape};
+use crate::program::lower::Resolution;
+use crate::program::{Callee, Construct};
 
 use crate::ty::{self, Ty};
 
@@ -32,17 +34,24 @@ impl Body<'_, '_, '_> {
             _ => {
                 let ty = self.infer(callee);
                 match self.infer.resolve(&ty) {
-                    Ty::Fn { cap, params, ret } => Some(Callable {
-                        description: "this function".to_string(),
-                        params: params.into_iter().map(|p| (None, p)).collect(),
-                        ret: *ret,
-                        labels: Labels::Optional,
-                        obligations: Vec::new(),
-                        pure: !cap,
-                        receiver: None,
-                        joined: None,
-                        type_args: Vec::new(),
-                    }),
+                    Ty::Fn {
+                        cap, params, ret, ..
+                    } => {
+                        self.record(expr.span, Resolution::CallValue);
+                        Some(Callable {
+                            description: "this function".to_string(),
+                            params: params.into_iter().map(|p| (None, p)).collect(),
+                            ret: *ret,
+                            labels: Labels::Optional,
+                            obligations: Vec::new(),
+                            pure: !cap,
+                            receiver: None,
+                            joined: None,
+                            type_args: Vec::new(),
+                            target: None,
+                            construct: None,
+                        })
+                    }
                     Ty::Error => None,
                     other => {
                         self.error(
@@ -56,7 +65,15 @@ impl Body<'_, '_, '_> {
             }
         };
         match callable {
-            Some(callable) => self.apply(callable, args, expected, expr.span),
+            Some(callable) => {
+                if let Some(target) = &callable.target {
+                    self.record(expr.span, Resolution::Call(target.clone()));
+                }
+                if let Some(construct) = &callable.construct {
+                    self.record(expr.span, Resolution::Construct(construct.clone()));
+                }
+                self.apply(callable, args, expected, expr.span)
+            }
             None => {
                 self.infer_args(args);
                 Ty::Error
@@ -78,7 +95,9 @@ impl Body<'_, '_, '_> {
     fn item_callee(&mut self, key: &str, ident: &Ident) -> Option<Callable> {
         let name = key;
         if let Some(sig) = self.items.fns.get(name).cloned() {
-            return Some(self.instantiate(&sig, None));
+            let mut callable = self.instantiate(&sig, None);
+            callable.target = Some(target(&sig, name.to_string()));
+            return Some(callable);
         }
         if let Some(info) = self.items.structs.get(name).cloned() {
             if info.sealed {
@@ -97,7 +116,13 @@ impl Body<'_, '_, '_> {
                 self.error(codes::FORGED, message, ident.span);
                 return None;
             }
-            return Some(self.constructor(name, &info.generics, &info.fields, name.to_string()));
+            return Some(self.constructor(
+                name,
+                None,
+                &info.generics,
+                &info.fields,
+                name.to_string(),
+            ));
         }
         if let Some(enum_name) = self.items.bare_variants.get(name).cloned() {
             return self.variant(&enum_name, name);
@@ -128,6 +153,9 @@ impl Body<'_, '_, '_> {
         }
         if let Some(sig) = self.items.method(type_name, &name.name).cloned() {
             let mut callable = self.instantiate(&sig, None);
+            if sig.trait_name.is_none() {
+                callable.target = Some(target(&sig, format!("{type_name}.{}", name.name)));
+            }
             if sig.receiver.is_method() {
                 let self_ty = sig.self_ty.clone().unwrap_or(Ty::Error);
                 callable.params.insert(0, (None, self_ty));
@@ -159,6 +187,12 @@ impl Body<'_, '_, '_> {
         let sig = info.method_for(sig, &self_ty, &args, &[], &[]);
         let mut callable = self.instantiate(&sig, None);
         callable.description = format!("`{trait_name}.{}`", name.name);
+        if sig.receiver.is_method() {
+            // The receiver's type may be known only once the arguments
+            // are checked, so the runtime finds the impl by its tag.
+            callable.target =
+                self.trait_callee(&Ty::Param(ty::SELF.to_string()), trait_name, &name.name);
+        }
         // `Self` is a type argument here, so the result follows its trust.
         self.follow_type_arg(&mut callable, self_ty.clone());
         if sig.receiver.is_method() {
@@ -204,6 +238,7 @@ impl Body<'_, '_, '_> {
         let (_, fields) = info.variants.iter().find(|(v, _)| v == variant)?;
         Some(self.constructor(
             enum_name,
+            Some(variant.to_string()),
             &info.generics,
             fields,
             format!("{enum_name}.{variant}"),
@@ -212,17 +247,30 @@ impl Body<'_, '_, '_> {
 
     /// A variant named without a call: a value when it is fieldless, and
     /// its constructor function otherwise.
-    pub(super) fn variant_value(&mut self, enum_name: &str, variant: &str) -> Ty {
+    /// `span` is where it is named, for the checked program.
+    pub(super) fn variant_value(&mut self, enum_name: &str, variant: &str, span: Span) -> Ty {
         match self.variant(enum_name, variant) {
-            Some(callable) if callable.params.is_empty() => callable.ret,
-            Some(callable) => callable.into_fn_type(),
+            Some(callable) if callable.params.is_empty() => {
+                if let Some(construct) = callable.construct {
+                    self.record(span, Resolution::Construct(construct));
+                }
+                callable.ret
+            }
+            Some(callable) => {
+                let what = "a constructor used as a function value".to_string();
+                self.record(span, Resolution::Unsupported(what));
+                callable.into_fn_type()
+            }
             None => Ty::Error,
         }
     }
 
+    /// The constructor of the struct `type_name`, or of its `variant`
+    /// when it is an enum.
     pub(super) fn constructor(
         &mut self,
         type_name: &str,
+        variant: Option<String>,
         generics: &[String],
         fields: &FieldsInfo,
         description: String,
@@ -232,6 +280,10 @@ impl Body<'_, '_, '_> {
             .map(|g| (g.clone(), self.infer.fresh()))
             .collect();
         let ret = Ty::generic(type_name, subst.iter().map(|(_, t)| t.clone()).collect());
+        let construct = Construct {
+            ty: type_name.to_string(),
+            variant,
+        };
         Callable {
             description,
             params: fields.instantiate(&subst),
@@ -245,6 +297,8 @@ impl Body<'_, '_, '_> {
             receiver: None,
             joined: None,
             type_args: Vec::new(),
+            target: None,
+            construct: Some(construct),
         }
     }
 
@@ -310,6 +364,8 @@ impl Body<'_, '_, '_> {
                 .map(lower),
             joined,
             type_args: subst.into_iter().map(|(_, t)| t).collect(),
+            target: None,
+            construct: None,
         }
     }
 
@@ -366,6 +422,33 @@ impl Body<'_, '_, '_> {
             Receiver::Self_ => {}
         }
         self.audit_call(&type_name, &name.name, span);
+        let callee = match &sig.trait_name {
+            None => {
+                // Inherent methods are only declared on the module's own
+                // types (`coherence.rs`), so one on a prelude type is an
+                // intrinsic.
+                let qualified = format!("{type_name}.{}", name.name);
+                let intrinsic = self.decls().get(&type_name).map_or(true, |d| d.in_prelude);
+                Some(if intrinsic {
+                    Callee::Intrinsic(qualified)
+                } else {
+                    Callee::Function(qualified)
+                })
+            }
+            Some(trait_name) => self.trait_callee(&receiver, trait_name, &name.name),
+        };
+        let resolution = match (callee, &sig.trait_name) {
+            (Some(callee), _) if sig.receiver == Receiver::VarSelf => {
+                Resolution::MutatingMethod(callee)
+            }
+            (Some(callee), _) => Resolution::Method(callee),
+            (None, Some(trait_name)) => Resolution::Unsupported(format!(
+                "a call of `{}`, a method of the generic trait `{trait_name}`,",
+                name.name
+            )),
+            (None, None) => Resolution::Unsupported("this method call".to_string()),
+        };
+        self.record(span, resolution);
         let mut callable = self.instantiate(&sig, None);
         if let Some(declared) = &callable.receiver {
             // The receiver flows into `self` like an argument, so untrusted
@@ -377,7 +460,13 @@ impl Body<'_, '_, '_> {
             // stand for untrusted text, so text in the result is untrusted.
             self.follow_type_arg(&mut callable, receiver);
         }
-        self.apply(callable, args, expected, span)
+        match sig.receiver {
+            // A mutating method writes its arguments into its receiver.
+            Receiver::VarSelf => {
+                self.mentioning(base, |body| body.apply(callable, args, expected, span))
+            }
+            _ => self.apply(callable, args, expected, span),
+        }
     }
 
     /// Let `callable`'s result follow the trust of `type_arg` as well, as
@@ -621,11 +710,22 @@ impl Body<'_, '_, '_> {
     }
 }
 
+/// What a call to `sig`, qualified as `name`, reaches: an intrinsic for a
+/// body-less prelude function, otherwise the function itself.
+pub(super) fn target(sig: &FnSig, name: String) -> Callee {
+    if sig.intrinsic {
+        Callee::Intrinsic(name)
+    } else {
+        Callee::Function(name)
+    }
+}
+
 impl Callable {
     /// The function type of a callable used as a value.
     pub(super) fn into_fn_type(self) -> Ty {
         Ty::Fn {
             cap: false,
+            scoped: false,
             params: self.params.into_iter().map(|(_, t)| t).collect(),
             ret: Box::new(self.ret),
         }

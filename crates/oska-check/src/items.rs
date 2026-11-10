@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use oska_syntax::ast::{
     Field, Fields, FnDecl, GenericParam, Item, ItemKind, Module, Type, TypeKind,
 };
+use oska_syntax::Span;
 
 use crate::authority::capability_bearing;
 use crate::collect::{DeclKind, Decls};
@@ -37,6 +38,9 @@ pub struct FnSig {
     /// text arguments, and every text type in its result has that trust
     /// (ADR 0006; see `infer.rs`).
     pub follows_trust: bool,
+    /// A body-less prelude or `std` function, which each backend
+    /// implements as an intrinsic.
+    pub intrinsic: bool,
 }
 
 /// How a function takes `self`.
@@ -114,6 +118,13 @@ impl FieldsInfo {
             .map(|(_, ty)| ty)
     }
 
+    /// The position of the named field `name`, in declaration order.
+    pub fn index(&self, name: &str) -> Option<usize> {
+        self.fields
+            .iter()
+            .position(|(n, _)| n.as_deref() == Some(name))
+    }
+
     /// The names of the named fields, in order.
     pub fn names(&self) -> Vec<&str> {
         self.fields
@@ -169,6 +180,33 @@ pub struct ImplInfo {
     /// The target is capability-bearing, so its methods with a receiver
     /// are not pure.
     pub receiver_bearing: bool,
+    /// The span of the `impl` item, for one the module declares; `None`
+    /// for the prelude's.
+    pub span: Option<Span>,
+}
+
+impl ImplInfo {
+    /// The trait as the impl's methods are named in the checked program:
+    /// `Display`, or `From<IoError>` with a generic trait's arguments
+    /// (see [`crate::program::trait_method`]).
+    pub fn trait_ref(&self) -> String {
+        if self.trait_args.is_empty() {
+            return self.trait_name.clone();
+        }
+        let args: Vec<String> = self.trait_args.iter().map(Ty::to_string).collect();
+        format!("{}<{}>", self.trait_name, args.join(", "))
+    }
+
+    /// The checked program's name for the impl's `method`, such as
+    /// `<AppError as From<IoError>>.from`.
+    pub fn method_name(&self, method: &str) -> Option<String> {
+        let type_name = self.target.head()?;
+        Some(crate::program::trait_method(
+            type_name,
+            &self.trait_ref(),
+            method,
+        ))
+    }
 }
 
 impl TraitInfo {
@@ -209,6 +247,7 @@ impl TraitInfo {
             trait_name: sig.trait_name.clone(),
             pure: sig.pure,
             follows_trust: sig.follows_trust,
+            intrinsic: sig.intrinsic,
         }
     }
 }
@@ -324,6 +363,7 @@ impl Items {
                                     generics: lower.generics.clone(),
                                     bounds: lower.bounds.clone(),
                                     receiver_bearing,
+                                    span: (!in_prelude).then_some(item.span),
                                 });
                             }
                         }
@@ -572,15 +612,36 @@ impl<'d, 'a> Lower<'d, 'a> {
             params: f
                 .params
                 .iter()
-                .map(|p| (p.name.name.clone(), lower.ty(&p.ty)))
+                .map(|p| (p.name.name.clone(), lower.param_ty(&p.ty)))
                 .collect(),
             ret: f.return_type.as_ref().map_or(Ty::Unit, |t| lower.ty(t)),
             trait_name: None,
             follows_trust: false,
+            intrinsic: self.see_all && f.body.is_none(),
             pure: !f
                 .params
                 .iter()
                 .any(|p| capability_bearing(&lower.ty(&p.ty), self.decls)),
+        }
+    }
+
+    /// A parameter's type. A function-typed parameter of a prelude or
+    /// `std` function accepts a scoped closure, one that captures a
+    /// `Scope` handle: they only call what they are given, as `spawn` and
+    /// `map` do, and their bodies, if any, are checked with the parameter
+    /// scoped, so they cannot keep it. A user function's cannot: its body
+    /// could return or store the closure past its `scope` block.
+    fn param_ty(&self, ty: &Type) -> Ty {
+        match self.ty(ty) {
+            Ty::Fn {
+                cap, params, ret, ..
+            } if self.see_all => Ty::Fn {
+                cap,
+                scoped: true,
+                params,
+                ret,
+            },
+            other => other,
         }
     }
 
@@ -608,6 +669,7 @@ impl<'d, 'a> Lower<'d, 'a> {
                 return_type,
             } => Ty::Fn {
                 cap: *cap,
+                scoped: false,
                 params: params.iter().map(|p| self.ty(p)).collect(),
                 ret: Box::new(return_type.as_ref().map_or(Ty::Unit, |r| self.ty(r))),
             },

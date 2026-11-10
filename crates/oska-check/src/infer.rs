@@ -6,10 +6,13 @@
 //!
 //! Unification is directional: a value of the `actual` type flows where
 //! the `expected` type is required. The types must be equal except for
-//! two one-way **flags**, which unification enforces itself so that no
+//! three one-way **flags**, which unification enforces itself so that no
 //! route a value can take loses them:
 //!
 //! - the **`cap` rule**: a `cap fn` never becomes a plain `fn`;
+//! - the **scope rule**: a scoped closure, which captures a `Scope`
+//!   handle, never becomes an unscoped `fn`, so it cannot reach a slot
+//!   that outlives its `scope` block;
 //! - the **trust rule** (ADR 0006): untrusted text never becomes trusted.
 //!
 //! Trust is solved like a one-bit subtyping problem. Besides `Trusted`
@@ -57,6 +60,9 @@ pub enum Mismatch {
     Types,
     /// The types match, except that a `cap fn` would become a plain `fn`.
     CapLost,
+    /// The types match, except that a scoped closure would become an
+    /// unscoped `fn`.
+    ScopeLost,
     /// The types match, except that untrusted text would become trusted.
     TrustLost,
 }
@@ -94,6 +100,7 @@ impl Polarity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Rules {
     cap: bool,
+    scope: bool,
     trust: bool,
 }
 
@@ -242,8 +249,14 @@ impl Infer {
                 args.iter().map(|a| self.resolve(a)).collect(),
                 self.trust_of(trust),
             ),
-            Ty::Fn { cap, params, ret } => Ty::Fn {
+            Ty::Fn {
                 cap,
+                scoped,
+                params,
+                ret,
+            } => Ty::Fn {
+                cap,
+                scoped,
                 params: params.iter().map(|p| self.resolve(p)).collect(),
                 ret: Box::new(self.resolve(&ret)),
             },
@@ -256,10 +269,11 @@ impl Infer {
     /// caller can report one mismatch and carry on. [`Ty::Error`] and
     /// [`Ty::Never`] unify with anything.
     ///
-    /// The types must be equal, except for two one-way flags:
+    /// The types must be equal, except for three one-way flags:
     ///
     /// - a `cap fn` can carry authority, so it never flows into a plain
     ///   `fn`, while a plain `fn` may flow into a `cap fn`;
+    /// - a scoped closure never flows into an unscoped `fn`;
     /// - untrusted text never flows into trusted text, while trusted text
     ///   may flow into untrusted.
     ///
@@ -279,6 +293,7 @@ impl Infer {
             (
                 Rules {
                     cap: true,
+                    scope: true,
                     trust: true,
                 },
                 None,
@@ -286,6 +301,7 @@ impl Infer {
             (
                 Rules {
                     cap: false,
+                    scope: true,
                     trust: true,
                 },
                 Some(Mismatch::CapLost),
@@ -293,6 +309,15 @@ impl Infer {
             (
                 Rules {
                     cap: true,
+                    scope: false,
+                    trust: true,
+                },
+                Some(Mismatch::ScopeLost),
+            ),
+            (
+                Rules {
+                    cap: true,
+                    scope: true,
                     trust: false,
                 },
                 Some(Mismatch::TrustLost),
@@ -354,18 +379,22 @@ impl Infer {
             (
                 Ty::Fn {
                     cap: c1,
+                    scoped: s1,
                     params: p1,
                     ret: r1,
                 },
                 Ty::Fn {
                     cap: c2,
+                    scoped: s2,
                     params: p2,
                     ret: r2,
                 },
             ) => {
                 let cap_kept = !rules.cap || polarity.keeps(*c1, *c2);
+                let scope_kept = !rules.scope || polarity.keeps(*s1, *s2);
                 let flipped = polarity.flip();
                 cap_kept
+                    && scope_kept
                     && p1.len() == p2.len()
                     && p1
                         .iter()
@@ -396,6 +425,7 @@ mod tests {
     fn func(cap: bool, params: Vec<Ty>) -> Ty {
         Ty::Fn {
             cap,
+            scoped: false,
             params,
             ret: Box::new(Ty::Unit),
         }
