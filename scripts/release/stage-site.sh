@@ -9,6 +9,8 @@
 #     if any fails;
 #   - copies each to <site-dir>/releases/<tag>/;
 #   - publishes <public-key> as <site-dir>/oska-release.pub;
+#   - publishes the installers as <site-dir>/install.sh and install.ps1,
+#     pinned to <public-key> (scripts/install/pin.sh);
 #   - writes <site-dir>/latest.json for the newest release that is not a
 #     pre-release, merging into any latest.json the generator wrote (the
 #     release fields win).
@@ -16,7 +18,9 @@
 # URLs in latest.json start with $OSKA_SITE_URL (default
 # https://oskalang.dev), so tests can stage a site served elsewhere.
 #
-# With no releases it only publishes the key, if there is one.
+# With no releases it only publishes the key and the installers, if there
+# is a key. Without a key it publishes no installers, as they could verify
+# nothing.
 
 set -euo pipefail
 
@@ -52,6 +56,7 @@ if [ ! -f "$public" ]; then
   exit 0
 fi
 cp "$public" "$site/oska-release.pub"
+"$here/../install/pin.sh" "$public" "$site"
 
 for tag in "${tags[@]}"; do
   [[ $tag =~ $any ]] || die "$releases/$tag is not named for a release tag"
