@@ -70,33 +70,25 @@
         }
     }
 
-    # Runs `ssh-keygen -Y verify`, feeding it the exact bytes of $Data:
-    # PowerShell's own pipe to a native command would re-encode them.
+    # Runs `ssh-keygen -Y verify` with $Data as its stdin, byte for byte.
+    # Neither PowerShell's pipe to a native command (it re-encodes text) nor
+    # a redirected Process.StandardInput (.NET Framework writes the console
+    # encoding's BOM first) would give ssh-keygen the exact bytes; a file
+    # handle from Start-Process -RedirectStandardInput does.
     # Returns '' if the signature verifies, otherwise why it does not.
     function Get-SignatureProblem([string]$KeyGen, [string]$Allowed, [string]$Signature, [string]$Data) {
+        $out = Join-Path $state.tmp 'verify.out'
+        $err = Join-Path $state.tmp 'verify.err'
         try {
-            $psi = New-Object System.Diagnostics.ProcessStartInfo
-            $psi.FileName = $KeyGen
-            $psi.Arguments = "-Y verify -f `"$Allowed`" -I $Namespace -n $Namespace -s `"$Signature`""
-            $psi.UseShellExecute = $false
-            $psi.CreateNoWindow = $true
-            $psi.RedirectStandardInput = $true
-            $psi.RedirectStandardOutput = $true
-            $psi.RedirectStandardError = $true
-            $p = [System.Diagnostics.Process]::Start($psi)
-            $stdout = $p.StandardOutput.ReadToEndAsync()
-            $stderr = $p.StandardError.ReadToEndAsync()
-            $bytes = [IO.File]::ReadAllBytes($Data)
-            try {
-                $p.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
-                $p.StandardInput.Close()
-            } catch {
-                # ssh-keygen exited before reading; its exit code decides.
-            }
-            $p.WaitForExit()
-            [void]$stdout.Result
-            $said = ([string]$stderr.Result).Trim()
-            if ($p.ExitCode -eq 0) { return '' }
+            # One argument string, quoted here: Windows PowerShell joins an
+            # array of arguments without quoting paths that hold spaces.
+            $arguments = "-Y verify -f `"$Allowed`" -I $Namespace -n $Namespace -s `"$Signature`""
+            $p = Start-Process -FilePath $KeyGen -ArgumentList $arguments -NoNewWindow -Wait -PassThru `
+                -RedirectStandardInput $Data -RedirectStandardOutput $out -RedirectStandardError $err
+            # Anything but a clear 0, including no exit code at all, fails.
+            if ($p.ExitCode -is [int] -and $p.ExitCode -eq 0) { return '' }
+            $said = ''
+            if (Test-Path -LiteralPath $err) { $said = ([string](Get-Content -Raw -LiteralPath $err)).Trim() }
             return "$KeyGen exited $($p.ExitCode): $said"
         } catch {
             return "cannot run ${KeyGen}: $($_.Exception.Message)"
