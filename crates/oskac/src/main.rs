@@ -20,26 +20,61 @@ USAGE:
     oskac --help                           Print this help
 ";
 
-fn main() -> ExitCode {
-    let mut args: Vec<String> = std::env::args().skip(1).collect();
-    // Everything after `--` belongs to the program being run.
-    let program_args = match args.iter().position(|a| a == "--") {
-        Some(at) => {
-            let rest = args.split_off(at + 1);
-            args.pop();
-            rest
-        }
-        None => Vec::new(),
-    };
-    let json = args.iter().any(|a| a == "--format=json");
-    let release = args.iter().any(|a| a == "--release");
-    let integration = args.iter().any(|a| a == "--integration");
-    let positional: Vec<&str> = args
-        .iter()
-        .map(String::as_str)
-        .filter(|a| !a.starts_with("--format=") && *a != "--release" && *a != "--integration")
-        .collect();
+/// The flags `oskac` takes, whichever command they are given to.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Flags {
+    /// `--format=json`: machine-readable output. Any other `--format=`
+    /// means the default, human-readable output.
+    json: bool,
+    /// `--release`: `oskac check` rejects `dbg` and `todo`.
+    release: bool,
+    /// `--integration`: `oskac test` runs `#[integration]` tests too.
+    integration: bool,
+}
 
+/// A command line, parsed: the command and its operands, the flags, and
+/// the arguments after `--`, which belong to the program being run.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct CommandLine {
+    positional: Vec<String>,
+    flags: Flags,
+    program_args: Vec<String>,
+}
+
+impl CommandLine {
+    /// Parse `args`, without the executable's own name. A flag may come
+    /// anywhere before `--`; anything else is positional.
+    fn parse(mut args: Vec<String>) -> CommandLine {
+        let program_args = match args.iter().position(|a| a == "--") {
+            Some(at) => {
+                let rest = args.split_off(at + 1);
+                args.pop();
+                rest
+            }
+            None => Vec::new(),
+        };
+        let mut line = CommandLine {
+            program_args,
+            ..CommandLine::default()
+        };
+        for arg in args {
+            match arg.as_str() {
+                "--release" => line.flags.release = true,
+                "--integration" => line.flags.integration = true,
+                format if format.starts_with("--format=") => {
+                    line.flags.json = format == "--format=json";
+                }
+                _ => line.positional.push(arg),
+            }
+        }
+        line
+    }
+}
+
+fn main() -> ExitCode {
+    let line = CommandLine::parse(std::env::args().skip(1).collect());
+    let flags = line.flags;
+    let positional: Vec<&str> = line.positional.iter().map(String::as_str).collect();
     match positional.as_slice() {
         ["--version" | "-V"] => {
             println!("oskac {}", env!("CARGO_PKG_VERSION"));
@@ -49,11 +84,11 @@ fn main() -> ExitCode {
             print!("{USAGE}");
             ExitCode::SUCCESS
         }
-        ["lex", path] => lex_file(path, json),
-        ["parse", path] => parse_file(path, json),
-        ["check", path] => check_file(path, json, release),
-        ["run", path] => run_file(path, json, &program_args),
-        ["test", path] => test_file(path, json, integration),
+        ["lex", path] => lex_file(path, flags),
+        ["parse", path] => parse_file(path, flags),
+        ["check", path] => check_file(path, flags),
+        ["run", path] => run_file(path, flags, &line.program_args),
+        ["test", path] => test_file(path, flags),
         _ => {
             eprint!("{USAGE}");
             ExitCode::from(2)
@@ -74,7 +109,7 @@ fn read_source(path: &str) -> Option<String> {
 /// `oskac parse`: print the module's syntax tree, as JSON with
 /// `--format=json`. A parse error is printed as diagnostic JSON on stdout
 /// (`--format=json`) or as text on stderr, with a non-zero exit code.
-fn parse_file(path: &str, json: bool) -> ExitCode {
+fn parse_file(path: &str, Flags { json, .. }: Flags) -> ExitCode {
     let Some(src) = read_source(path) else {
         return ExitCode::FAILURE;
     };
@@ -103,7 +138,7 @@ fn parse_file(path: &str, json: bool) -> ExitCode {
 /// `{"diagnostics": [...], "functions": [...], "audit": [...]}` with
 /// `--format=json`.
 /// The exit code is non-zero when there are diagnostics.
-fn check_file(path: &str, json: bool, release: bool) -> ExitCode {
+fn check_file(path: &str, Flags { json, release, .. }: Flags) -> ExitCode {
     let Some(src) = read_source(path) else {
         return ExitCode::FAILURE;
     };
@@ -142,7 +177,7 @@ fn print_diagnostics(path: &str, diagnostics: &[oska_syntax::Diagnostic]) {
 /// stderr as `oskac check` prints diagnostics, or one JSON object per
 /// line with `--format=json`. The exit code is the program's: 101 after
 /// a panic (see `docs/runtime.md`).
-fn run_file(path: &str, json: bool, args: &[String]) -> ExitCode {
+fn run_file(path: &str, Flags { json, .. }: Flags, args: &[String]) -> ExitCode {
     let Some(src) = read_source(path) else {
         return ExitCode::FAILURE;
     };
@@ -170,7 +205,10 @@ fn run_file(path: &str, json: bool, args: &[String]) -> ExitCode {
 /// object with `--format=json`. A refused file's diagnostics go to stderr
 /// as `oskac check` prints them, or into the JSON report. The exit code
 /// is 1 when a test failed (see `docs/runtime.md`).
-fn test_file(path: &str, json: bool, integration: bool) -> ExitCode {
+fn test_file(path: &str, flags: Flags) -> ExitCode {
+    let Flags {
+        json, integration, ..
+    } = flags;
     let Some(src) = read_source(path) else {
         return ExitCode::FAILURE;
     };
@@ -206,7 +244,7 @@ fn describe_authority(function: &oska_check::FunctionAuthority) -> String {
     format!("fn {}: {}", function.name, sources.join(", "))
 }
 
-fn lex_file(path: &str, json: bool) -> ExitCode {
+fn lex_file(path: &str, Flags { json, .. }: Flags) -> ExitCode {
     let Some(src) = read_source(path) else {
         return ExitCode::FAILURE;
     };
@@ -228,5 +266,44 @@ fn lex_file(path: &str, json: bool) -> ExitCode {
             eprintln!("{path}: {err}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CommandLine, Flags};
+
+    fn parse(args: &[&str]) -> CommandLine {
+        CommandLine::parse(args.iter().map(|a| a.to_string()).collect())
+    }
+
+    #[test]
+    fn flags_come_anywhere_before_the_program_arguments() {
+        let line = parse(&["--integration", "test", "f.osk", "--format=json"]);
+        assert_eq!(line.positional, ["test", "f.osk"]);
+        assert_eq!(
+            line.flags,
+            Flags {
+                json: true,
+                release: false,
+                integration: true
+            }
+        );
+        assert!(line.program_args.is_empty());
+    }
+
+    #[test]
+    fn everything_after_a_double_dash_belongs_to_the_program() {
+        let line = parse(&["run", "f.osk", "--", "--release", "x"]);
+        assert_eq!(line.positional, ["run", "f.osk"]);
+        assert_eq!(line.flags, Flags::default());
+        assert_eq!(line.program_args, ["--release", "x"]);
+    }
+
+    #[test]
+    fn another_format_means_human_output_and_an_unknown_flag_is_positional() {
+        let line = parse(&["check", "f.osk", "--format=text", "--nope"]);
+        assert!(!line.flags.json);
+        assert_eq!(line.positional, ["check", "f.osk", "--nope"]);
     }
 }
