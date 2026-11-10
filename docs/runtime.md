@@ -19,7 +19,7 @@ Before a program starts, the runtime checks that it can run all of it, reached o
 | --- | --- |
 | `E0370` | `main` declares a capability that has no runtime yet: `Net`, `NetConnect`, `NetListen`, `Spawn`, or `Sched`. Spans `main`'s body. (A `main` that declares a directory or file capability is already refused by the checker, `E0217`.) |
 | `E0371` | The program imports a `std` module that has no runtime yet: `std.proc` or `std.sql`, used or not. Spans the module path of the `use`. |
-| `E0380` | The program uses something the interpreter cannot run yet: a construct the checked program cannot express, a call of a prelude function with no runtime implementation, or a parameter of `main` that is neither a capability nor `Args`. The message names the construct, as in ``the interpreter cannot run a `From`-bound conversion yet``; others are a constructor used as a function value and a call of a generic trait's method. Spans the construct or call, or `main`'s body for a parameter. |
+| `E0380` | The program uses something the interpreter cannot run yet: a construct the checked program cannot express, a call of a prelude function with no runtime implementation, or a parameter of `main` that is neither a capability nor `Args`. The message names the construct, as in ``the interpreter cannot run a `From`-bound conversion yet``; others are a constructor used as a function value, a call of a generic trait's method, and a `?` or `return` in a contract outside any closure, which would leave the function from its contract. Spans the construct or call, or `main`'s body for a parameter. |
 
 ### Refusal examples
 
@@ -87,6 +87,7 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0003` | `todo()` reached. Spans the call. |
 | `P0004` | Division by zero: the right operand of `/` or `%` is zero. Spans the operation. |
 | `P0005` | `spawn` on a finished scope: the handle's `scope` block has ended, and work never runs outside a scope. Spans the call. This is a second line of defence behind the checker (`E0292`), which already stops a handle from outliving its block: no checked program can reach this code, so it has no example. |
+| `P0006` | Precondition violated: a `requires` clause of the function called is false, so the caller broke the contract. The message names the function and quotes the clause's condition. Spans the call. Every call evaluates the function's `requires` clauses, in every build, in the order written: after the arguments are evaluated and before the body runs. A clause sees the parameters and `self`. A panic while a clause is evaluated, such as an overflow, is reported as it is, not as `P0006`. |
 | `P0010` | `t.assert(cond)` was given `false`. Fails the test (see [Tests](#tests)). Spans the call. |
 | `P0011` | `t.assert_eq(actual, expected)` was given two values that differ through `Eq`. The message shows both, as `dbg` would. Spans the call. |
 | `P0012` | `t.assert_ne(actual, other)` was given two equal values. Spans the call. |
@@ -158,6 +159,32 @@ fn main() {
 fn main() {
     let two = 2
     let n = 10 / two
+}
+```
+
+#### `P0006`
+
+```oska error=P0006
+fn double(x: Int) -> Int
+    requires x > 0
+{
+    x * 2
+}
+
+fn main() {
+    let y = double(-1)
+}
+```
+
+```oska fixed=P0006
+fn double(x: Int) -> Int
+    requires x > 0
+{
+    x * 2
+}
+
+fn main() {
+    let y = double(1)
 }
 ```
 

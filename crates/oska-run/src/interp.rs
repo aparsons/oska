@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use oska_check::builtins::{self, TraitMethod};
 use oska_check::program::{
-    self, Arm, Callee, Expr, ExprKind, Function, Part, Pattern, Place, Program, Stmt,
+    self, Arm, Callee, Clause, Expr, ExprKind, Function, Part, Pattern, Place, Program, Stmt,
 };
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::Span;
@@ -147,11 +147,17 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     }
 
     /// Call `function` with `args`: the receiver first, for a method, then
-    /// one per parameter. Only a panic unwinds out of a call.
-    pub fn call(&mut self, function: &Function, args: Vec<Value>) -> Result<Value, Panic> {
+    /// one per parameter. `span` is the call's. Only a panic unwinds out
+    /// of a call.
+    pub fn call(
+        &mut self,
+        function: &Function,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, Panic> {
         let mut args = args.into_iter();
         let receiver = if function.receiver { args.next() } else { None };
-        let (value, _) = self.call_with(function, receiver, args.collect())?;
+        let (value, _) = self.call_with(function, receiver, args.collect(), span)?;
         Ok(value)
     }
 
@@ -173,13 +179,21 @@ impl<'p, 'h> Interpreter<'p, 'h> {
 
     /// Call `function` with `receiver`, for a method, and `args`, one per
     /// parameter. Returns its result and its receiver as it was when the
-    /// call ended: a mutating method may have changed it.
+    /// call ended: a mutating method may have changed it. `span` is the
+    /// call's.
+    ///
+    /// Every call of a function passes through here, so this is where its
+    /// contracts are evaluated: its `requires` clauses before the body.
     fn call_with(
         &mut self,
         function: &Function,
         receiver: Option<Value>,
         args: Vec<Value>,
+        span: Span,
     ) -> Result<(Value, Option<Value>), Panic> {
+        if !function.contracts.is_empty() {
+            self.requires(function, &receiver, &args, span)?;
+        }
         let mut frame = Frame {
             slots: binding(function.params.iter().map(|p| p.binds), args),
             receiver,
@@ -189,6 +203,54 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             Err(Unwind::Panic(panic)) => Err(panic),
             Err(Unwind::Break | Unwind::Continue) => {
                 unreachable!("the checker keeps `break` and `continue` inside loops")
+            }
+        }
+    }
+
+    /// Evaluate `function`'s `requires` clauses in order, for a call
+    /// made at `span` with `receiver` and `args`. The first that is false
+    /// panics with `P0006`, spanning the call: the caller broke the
+    /// contract. A panic while evaluating a clause, such as an overflow,
+    /// is passed on as it is.
+    #[inline(never)]
+    fn requires(
+        &mut self,
+        function: &Function,
+        receiver: &Option<Value>,
+        args: &[Value],
+        span: Span,
+    ) -> Result<(), Panic> {
+        let contracts = &function.contracts;
+        let mut frame = Frame {
+            slots: binding(contracts.params.iter().copied(), args.to_vec()),
+            receiver: receiver.clone(),
+        };
+        for clause in &contracts.requires {
+            if !self.holds(clause, &mut frame)? {
+                return Err(Panic::new(
+                    codes::PRECONDITION_VIOLATED,
+                    format!(
+                        "precondition violated: `{}` requires `{}`",
+                        function.name, clause.text
+                    ),
+                    span,
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the condition of `clause` holds in `frame`, a frame of the
+    /// clauses' own (see [`program::Contracts`]).
+    fn holds(&mut self, clause: &Clause, frame: &mut Frame) -> Result<bool, Panic> {
+        match self.eval(&clause.cond, frame) {
+            Ok(value) => Ok(value.as_bool()),
+            Err(Unwind::Panic(panic)) => Err(panic),
+            Err(Unwind::Return(_) | Unwind::Break | Unwind::Continue) => {
+                unreachable!(
+                    "lowering refuses a `return` or `?` that would leave a contract, and the \
+                     checker keeps `break` and `continue` inside loops"
+                )
             }
         }
     }
@@ -644,7 +706,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             Callee::Function(name) => {
                 let function = self.function(name);
                 self.enter(span)?;
-                let result = self.call(function, args);
+                let result = self.call(function, args, span);
                 self.leave();
                 result
             }
@@ -751,7 +813,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 let function = self.function(name);
                 let taken = std::mem::replace(receiver, Value::Unit);
                 self.enter(span)?;
-                let result = self.call_with(function, Some(taken), args);
+                let result = self.call_with(function, Some(taken), args, span);
                 self.leave();
                 let (value, after) = result?;
                 *receiver = after.expect("a method keeps its receiver");
