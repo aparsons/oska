@@ -1,0 +1,1 @@
+error: unknown diagnostic code `frobnicate`; a code looks like E0300 or P0004

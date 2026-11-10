@@ -97,6 +97,13 @@ fn build(sources: Sources, site: FsWrite) -> Result<(), IoError> {
     for doc in all.docs {
         pages.push(doc_page(all, doc))
     }
+    let codes: List<Code> = if has_catalog(all) { catalog(all) } else { List.new() }
+    if has_catalog(all) {
+        site.create_dir(Path.new("codes"))?
+        for page in code_pages(all, codes) {
+            pages.push(page)
+        }
+    }
     for section in all.sections {
         if !has_doc(all, "{section.dir}/index.html") {
             pages.push(section_page(all, section))
@@ -116,6 +123,9 @@ fn build(sources: Sources, site: FsWrite) -> Result<(), IoError> {
     let search = sources.search.read_to_string(Path.new("."))?
     site.write(Path.new("search.js"), search)?
     site.write(Path.new("CNAME"), cname())?
+    if has_catalog(all) {
+        site.write(Path.new("codes.json"), codes_json(codes))?
+    }
     Ok(())
 }
 
@@ -384,7 +394,8 @@ fn llms_txt(all: Site, pages: List<Page>) -> Untrusted<String> {
         let group = llms_group(section.title, section.dir, pages)
         out = "{out}{group}"
     }
-    "{out}\n## Machine-readable\n\n- [llms-full.txt]({base}/llms-full.txt): every page, as Markdown, in one file\n- [search.json]({base}/search.json): the search index\n- [sitemap.xml]({base}/sitemap.xml): the canonical URL of every page\n- [latest.json]({base}/latest.json): the current version and the installers\n"
+    let codes: Untrusted<String> = if has_catalog(all) { "- [codes.json]({base}/codes.json): every error code, with an example that fails with it and the fix\n" } else { "" }
+    "{out}\n## Machine-readable\n\n- [llms-full.txt]({base}/llms-full.txt): every page, as Markdown, in one file\n- [search.json]({base}/search.json): the search index\n- [sitemap.xml]({base}/sitemap.xml): the canonical URL of every page\n- [latest.json]({base}/latest.json): the current version and the installers\n{codes}"
 }
 
 // A heading and the pages in `dir` ("" for the top level) under it, or
@@ -648,6 +659,9 @@ fn navigation(all: Site, current: Untrusted<String>) -> html.Html {
         }
     }
     items = items.concat(nav_item("glossary.html", "Glossary", current))
+    if has_catalog(all) {
+        items = items.concat(nav_item("codes/index.html", "Codes", current))
+    }
     for section in all.sections {
         let page = "{section.dir}/index.html"
         items = items.concat(nav_item(page, section.title, current))
@@ -1462,4 +1476,301 @@ fn empty() -> html.Html {
 // Markup written here in the generator, which it vouches for.
 fn markup(text: String) -> html.Html {
     html.Html.raw(html.TrustedHtml.new(text))
+}
+
+// ---- The error-code catalog ---------------------------------------------------------
+//
+// `docs/checker.md` and `docs/runtime.md` document every diagnostic code:
+// a table row gives a code's meaning and, in the checker tables, its
+// machine-applicable fix, and a pair of fenced blocks tagged `error=CODE`
+// and `fixed=CODE` gives a program that fails with the code and the same
+// program fixed. From them the site publishes a page per code at
+// `codes/CODE.html`, an index at `codes/`, and `codes.json`. `oskac
+// explain` reads the same files, and a test keeps the two in step.
+
+// One diagnostic code. A text field is "" when the code has none of it.
+struct Code {
+    code: Untrusted<String>,
+    // What the code means, as Markdown.
+    message: Untrusted<String>,
+    // What its machine-applicable fix does.
+    fix: Untrusted<String>,
+    // A program that fails with the code, and the same program fixed.
+    example: Untrusted<String>,
+    fixed: Untrusted<String>,
+    // The doc that lists it: `checker.md` or `runtime.md`.
+    source: Untrusted<String>,
+}
+
+// A fenced block tagged `error=CODE` or `fixed=CODE`.
+struct Example {
+    is_error: Bool,
+    code: Untrusted<String>,
+    body: Untrusted<String>,
+}
+
+// What the tag in a fence's info string says, if it has one.
+struct Tag {
+    is_error: Bool,
+    code: Untrusted<String>,
+}
+
+// Whether the site has a catalog to publish.
+fn has_catalog(all: Site) -> Bool {
+    for doc in all.docs {
+        if doc.repo == "docs/checker.md" {
+            return true
+        }
+    }
+    false
+}
+
+// The index of the catalog and a page for each code.
+fn code_pages(all: Site, codes: List<Code>) -> List<Page> {
+    var pages: List<Page> = List.new()
+    pages.push(codes_index(all, codes))
+    for code in codes {
+        pages.push(code_page(all, code))
+    }
+    pages
+}
+
+// Every code, in the order the docs list them: the checker's, then the
+// runtime's.
+fn catalog(all: Site) -> List<Code> {
+    var codes: List<Code> = List.new()
+    for repo in ["docs/checker.md", "docs/runtime.md"] {
+        for doc in all.docs {
+            if doc.repo == repo {
+                for code in doc_codes(doc.text, last_segment(repo)) {
+                    codes.push(code)
+                }
+            }
+        }
+    }
+    codes
+}
+
+// The codes `text`, the doc named `source`, lists, with their examples.
+fn doc_codes(text: Untrusted<String>, source: Untrusted<String>) -> List<Code> {
+    var rows: List<Code> = List.new()
+    var examples: List<Example> = List.new()
+    var in_block = false
+    var tag = Tag(is_error: false, code: "")
+    var body: List<Untrusted<String>> = List.new()
+    for line in text.lines() {
+        if in_block {
+            if line.starts_with("```") && line.slice(3, line.len()).trim() == "" {
+                if tag.code != "" {
+                    examples.push(Example(is_error: tag.is_error, code: tag.code, body: "".join(body)))
+                }
+                in_block = false
+            } else {
+                body.push("{line}\n")
+            }
+            continue
+        }
+        if line.starts_with("```") {
+            in_block = true
+            body = List.new()
+            tag = fence_tag(line.slice(3, line.len()))
+            continue
+        }
+        match code_row(line, source) {
+            Some(row) => rows.push(row)
+            None => {}
+        }
+    }
+    var codes: List<Code> = List.new()
+    for row in rows {
+        codes.push(with_examples(row, examples))
+    }
+    codes
+}
+
+// The tag in a fence's info string, such as `oska error=E0300`; a tag
+// with no code has code "".
+fn fence_tag(info: Untrusted<String>) -> Tag {
+    var first = true
+    for word in info.split(" ") {
+        if first {
+            first = false
+            continue
+        }
+        let pair = word.split("=")
+        if pair.len() == 2 && is_code(pair.at(1)) && (pair.at(0) == "error" || pair.at(0) == "fixed") {
+            return Tag(is_error: pair.at(0) == "error", code: pair.at(1))
+        }
+    }
+    Tag(is_error: false, code: "")
+}
+
+// Whether `word` is shaped like a code: `E` or `P` and four digits.
+fn is_code(word: Untrusted<String>) -> Bool {
+    if word.len() != 5 || !(word.starts_with("E") || word.starts_with("P")) {
+        return false
+    }
+    for c in word.slice(1, 5).chars() {
+        if !"0123456789".contains(c) {
+            return false
+        }
+    }
+    true
+}
+
+// A table row `| `E0300` | meaning | fix |` as a code with no examples.
+// The runtime's tables have no fix column. A `|` inside a cell is written
+// `\|`.
+fn code_row(line: Untrusted<String>, source: Untrusted<String>) -> Option<Code> {
+    if !line.starts_with("| `") || !line.ends_with(" |") {
+        return None
+    }
+    let parts = line.slice(3, line.len() - 2).split("` | ")
+    if parts.len() < 2 || !is_code(parts.at(0)) {
+        return None
+    }
+    let cells = "` | ".join(sub(parts, 1, parts.len())).split(" | ")
+    let message = cells.at(0).replace("\\|", "|")
+    var fix = ""
+    if cells.len() > 1 && !cells.at(1).starts_with("None") {
+        fix = cells.at(1).replace("\\|", "|")
+    }
+    Some(Code(code: parts.at(0), message: message, fix: fix, example: "", fixed: "", source: source))
+}
+
+// `row` with the examples `examples` holds for it.
+fn with_examples(row: Code, examples: List<Example>) -> Code {
+    var example = ""
+    var fixed = ""
+    for found in examples {
+        if found.code == row.code {
+            if found.is_error {
+                example = found.body
+            } else {
+                fixed = found.body
+            }
+        }
+    }
+    Code(code: row.code, message: row.message, fix: row.fix, example: example, fixed: fixed, source: row.source)
+}
+
+// The page for one code.
+fn code_page(all: Site, code: Code) -> Page {
+    let links = Links(site: all, dir: "docs")
+    let lower = code.code.to_lowercase()
+    var parts: List<Untrusted<String>> = List.new()
+    parts.push("# {code.code}")
+    parts.push("")
+    parts.push(local_links(code))
+    parts.push("")
+    if code.fix == "" {
+        parts.push("**Machine-applicable fix:** none.")
+    } else {
+        parts.push("**Machine-applicable fix:** {code.fix}")
+    }
+    if code.example != "" {
+        parts.push("")
+        parts.push("## Example")
+        parts.push("")
+        parts.push("This program fails with `{code.code}`.")
+        parts.push("")
+        parts.push("```oska")
+        parts.push(chomp(code.example))
+        parts.push("```")
+    }
+    if code.fixed != "" {
+        parts.push("")
+        parts.push("## Fixed")
+        parts.push("")
+        parts.push("The same program, fixed.")
+        parts.push("")
+        parts.push("```oska")
+        parts.push(chomp(code.fixed))
+        parts.push("```")
+    }
+    parts.push("")
+    let label = if code.source == "checker.md" { "checker notes" } else { "runtime notes" }
+    parts.push("Listed in the [{label}]({code.source}#{lower}). `oskac explain {code.code}` prints this entry offline.")
+    let back = wrap("<p>", anchor_to("/codes/", html.text("All error codes")), "</p>\n")
+    let source = "\n".join(parts)
+    Page(path: "codes/{code.code}.html", title: code.code, body: markdown(source, links).concat(back), md: retarget(source, links))
+}
+
+// A code's meaning, with the links within its doc made links to it: `[Tests](#tests)`
+// in `runtime.md` is `[Tests](runtime.md#tests)` on a page of the catalog.
+fn local_links(code: Code) -> Untrusted<String> {
+    code.message.replace("](#", "]({code.source}#")
+}
+
+// `text` without the line break that ends it.
+fn chomp(text: Untrusted<String>) -> Untrusted<String> {
+    if text.ends_with("\n") {
+        text.slice(0, text.len() - 1)
+    } else {
+        text
+    }
+}
+
+// The index of the catalog: every code, linked, with its meaning's first
+// sentence.
+fn codes_index(all: Site, codes: List<Code>) -> Page {
+    let links = Links(site: all, dir: "docs")
+    let intro = "# Error codes\n\nEvery diagnostic code Oska reports, with a program that fails with it and the same program fixed. `oskac explain <code>` prints an entry offline.\n"
+    let data = wrap("<p>All of them are in ", anchor_to("/codes.json", html.text("codes.json")), " as data.</p>\n")
+    let base = origin()
+    var md = "{intro}\nAll of them are in [codes.json]({base}/codes.json) as data.\n\n"
+    var items = empty()
+    for code in codes {
+        let first = summary(local_links(code))
+        let link = anchor_to("/codes/{code.code}.html", html.text(code.code))
+        let line = link.concat(html.text(": ")).concat(inline(first, links))
+        items = items.concat(wrap("<li>", line, "</li>\n"))
+        md = "{md}- [{code.code}]({base}/codes/{code.code}.md): {first}\n"
+    }
+    let body = markdown(intro, links).concat(data).concat(wrap("<ul>\n", items, "</ul>\n"))
+    Page(path: "codes/index.html", title: "Error codes", body: body, md: md)
+}
+
+// The first sentence of `message`, without its full stop.
+fn summary(message: Untrusted<String>) -> Untrusted<String> {
+    let first = message.split(". ").at(0)
+    if first.ends_with(".") {
+        first.slice(0, first.len() - 1)
+    } else {
+        first
+    }
+}
+
+// `codes.json`: an array of the entries `oskac explain --format=json`
+// prints, one per line.
+fn codes_json(codes: List<Code>) -> Untrusted<String> {
+    var entries: List<Untrusted<String>> = List.new()
+    for code in codes {
+        entries.push(code_json(code))
+    }
+    let all = ",\n".join(entries)
+    "[\n{all}\n]\n"
+}
+
+// One code as a JSON object, with the same fields in the same order as
+// `oskac explain --format=json`.
+fn code_json(code: Code) -> Untrusted<String> {
+    let name = catalog_json_string(code.code)
+    let message = catalog_json_string(code.message)
+    let machine = if code.fix == "" { "false" } else { "true" }
+    let described = json_or_null(code.fix)
+    let example = json_or_null(code.example)
+    let fixed = json_or_null(code.fixed)
+    "\{\"code\":{name},\"message\":{message},\"machine_fix\":{machine},\"machine_fix_description\":{described},\"example\":{example},\"fix\":{fixed}\}"
+}
+
+fn json_or_null(text: Untrusted<String>) -> Untrusted<String> {
+    if text == "" { "null" } else { catalog_json_string(text) }
+}
+
+// `text` as a JSON string, quotes included. The docs hold no control
+// character but a line break or a tab, so those are all it escapes.
+fn catalog_json_string(text: Untrusted<String>) -> Untrusted<String> {
+    let escaped = text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+    "\"{escaped}\""
 }

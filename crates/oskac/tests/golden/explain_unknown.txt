@@ -1,0 +1,1 @@
+error: unknown diagnostic code `E0301`; did you mean `E0300`?

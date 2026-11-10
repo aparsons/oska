@@ -16,11 +16,12 @@ USAGE:
                                            no diagnostics, run it
     oskac test <file.osk> [--format=json] [--integration]
                                            Run the test blocks in a source file
+    oskac explain <code> [--format=json]   Explain a diagnostic code, offline
     oskac --version                        Print the version
     oskac --help                           Print this help
 ```
 
-Every command takes exactly one source file. A command line is parsed like this:
+Every command but `explain` takes exactly one source file. A command line is parsed like this:
 
 - A flag may come anywhere before `--`. Anything else is a positional argument.
 - Everything after `--` belongs to the program being run, and only `oskac run` uses it.
@@ -152,16 +153,28 @@ The program's output is unchanged. Each diagnostic or panic is one JSON object p
 
 ## Diagnostic codes
 
-The tables of checker codes (`E02xx`, `E03xx`) are in the [checker notes](../checker.md#diagnostic-codes), the runtime refusals and panics are in the [runtime notes](../runtime.md), and parser codes (`E01xx`) are in the [AST reference](../ast.md). For symptoms and their fixes, see [troubleshooting](troubleshooting.md).
+Every code has an entry with its meaning, a program that fails with it, and the same program fixed. The entries are in the [syntax and checker notes](../checker.md#syntax-diagnostic-codes) (`E00xx` to `E03xx`) and the [runtime notes](../runtime.md) (`E037x`, `E038x`, and the `P` codes), and `oskac explain` prints them offline. The documentation site has a page for each at `/codes/E0300`, an index of them at `/codes/`, and all of them as data in `/codes.json`. For symptoms and their fixes, see [troubleshooting](troubleshooting.md).
 
-## Coming in v0.1.0: `oskac explain`
+## `oskac explain`
 
-> **Available from v0.1.0.** This command is part of the decided design and is not in the current build. When it ships, this section and the matching entry in `oskac --help` are updated together.
+`oskac explain <code> [--format=json]` prints the catalog entry for one diagnostic code: the same entry as that code's page on the documentation site, but offline. A code is written as in a diagnostic, such as `E0300` or `P0004`, in any case.
 
-```sh planned
+```sh
 oskac explain E0300
+oskac explain E0300 --format=json
 ```
 
-`oskac explain <code>` prints the catalog entry for one diagnostic code: the same text as that code's page on the documentation site (`/codes/E0300`), but offline.
+The human-readable entry has the code and its meaning, whether the checker offers a machine-applicable fix for it and what the fix does, a program that fails with the code, and the same program fixed. A code that no program can reach, such as `P0005`, has no example.
 
-Until it exists, the code tables linked above are the reference.
+With `--format=json` it prints one JSON object on one line, the same object that `/codes.json` holds for the code:
+
+| Field | Value |
+| --- | --- |
+| `code` | The code, such as `"E0300"`. |
+| `message` | What the code means, as Markdown. |
+| `machine_fix` | `true` when a diagnostic with this code can carry a machine-applicable fix. |
+| `machine_fix_description` | What that fix does, or `null`. |
+| `example` | A program that fails with exactly this code, or `null`. |
+| `fix` | The same program fixed, or `null`. |
+
+Unlike the other commands, `explain` takes a code and not a file. A code that does not exist is an error with exit code 2. The message suggests the closest code when one is near, as in ``error: unknown diagnostic code `<code>`; did you mean `<closest>`?`` on standard error. With `--format=json` the error is one object on standard output instead: `{"error":"unknown code","code":"<code>","suggestion":"<closest>"}`, with `null` for a suggestion when nothing is near.

@@ -1,0 +1,8 @@
+{
+  "version": "0.1.0",
+  "docs": "main",
+  "installers": {
+    "sh": "https://oskalang.dev/install.sh",
+    "ps1": "https://oskalang.dev/install.ps1"
+  }
+}

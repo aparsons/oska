@@ -2,6 +2,8 @@
 
 use std::process::ExitCode;
 
+mod explain;
+
 const USAGE: &str = "\
 oskac - the Oska compiler
 
@@ -16,6 +18,7 @@ USAGE:
                                            no diagnostics, run it
     oskac test <file.osk> [--format=json] [--integration]
                                            Run the test blocks in a source file
+    oskac explain <code> [--format=json]   Explain a diagnostic code, offline
     oskac --version                        Print the version
     oskac --help                           Print this help
 ";
@@ -89,6 +92,7 @@ fn main() -> ExitCode {
         ["check", path] => check_file(path, flags),
         ["run", path] => run_file(path, flags, &line.program_args),
         ["test", path] => test_file(path, flags),
+        ["explain", code] => explain_code(code, flags),
         _ => {
             eprint!("{USAGE}");
             ExitCode::from(2)
@@ -222,6 +226,28 @@ fn test_file(path: &str, flags: Flags) -> ExitCode {
         print!("{}", report.to_human(path));
     }
     ExitCode::from(u8::try_from(report.exit_code()).unwrap_or(u8::MAX))
+}
+
+/// `oskac explain`: print the catalog entry of a diagnostic code, as JSON
+/// with `--format=json`. An unknown code is an error (exit code 2) that
+/// suggests the closest code, as text on stderr or as JSON on stdout.
+fn explain_code(code: &str, Flags { json, .. }: Flags) -> ExitCode {
+    let entries = explain::catalog();
+    if let Some(entry) = explain::find(&entries, code) {
+        if json {
+            println!("{}", explain::to_json(entry));
+        } else {
+            print!("{}", explain::to_human(entry));
+        }
+        return ExitCode::SUCCESS;
+    }
+    let suggestion = explain::closest(&entries, code);
+    if json {
+        println!("{}", explain::unknown_to_json(code, suggestion));
+    } else {
+        eprintln!("{}", explain::unknown_to_human(code, suggestion));
+    }
+    ExitCode::from(2)
 }
 
 /// One line of the human-readable authority report, such as
