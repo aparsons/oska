@@ -9,3 +9,7 @@
 
 # The site generator's output (`oskac run site/build.osk`)
 /_site/
+
+# Local secrets
+.env
+.env.*

@@ -9,7 +9,8 @@ name: Pages
 
 on:
   push:
-    branches: [main]
+    # TEMPORARY: spec/site deploys previews to oskalang.dev. Remove before PR #81 merges.
+    branches: [main, spec/site]
   workflow_dispatch:
 
 permissions:
