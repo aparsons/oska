@@ -15,8 +15,9 @@
 #   - the installed binary runs and reports that version, in plain text and
 #     with --format=json.
 #
-# With no release published (latest.json has no "tag"), it says so and
-# succeeds when no <expected-version> is given, and fails when one is.
+# With no release published (latest.json has no "tag"), it says so with a
+# GitHub Actions `::warning::` annotation and succeeds when no
+# <expected-version> is given, and fails when one is.
 #
 # <site-url> is https://oskalang.dev for the live site; it may be a file://
 # URL for tests. Downloads are retried, as a fresh deploy takes a moment to
@@ -46,7 +47,9 @@ latest=$(fetch "$site/latest.json") || die "cannot fetch $site/latest.json"
 tag=$(printf '%s' "$latest" | jq -r '.tag // empty') || die "$site/latest.json is not JSON"
 if [ -z "$tag" ]; then
   [ -z "$expected" ] || die "latest.json names no release, but $expected was expected"
-  echo "no release is published at $site; nothing to install"
+  # A GitHub Actions annotation, so a green run that installed nothing
+  # does not pass unnoticed.
+  echo "::warning::no release is published at $site; nothing to install"
   exit 0
 fi
 published=$(printf '%s' "$latest" | jq -r '.version // empty')

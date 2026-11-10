@@ -14,6 +14,11 @@ on:
       - scripts/release/**
       - .github/workflows/installers.yml
   pull_request:
+    paths:
+      - scripts/install/**
+      - scripts/release/**
+      - site/oska-release.pub
+      - .github/workflows/installers.yml
 
 permissions:
   contents: read

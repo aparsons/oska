@@ -9,8 +9,7 @@ name: Pages
 
 on:
   push:
-    # TEMPORARY: spec/site deploys previews to oskalang.dev. Remove before PR #81 merges.
-    branches: [main, spec/site]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -27,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - run: cargo build --release --locked -p oskac
       - run: ./target/release/oskac run site/build.osk
       # Releases are stored in GitHub Releases (see release.yml). Fetch them
@@ -85,6 +84,6 @@ jobs:
             echo "https://oskalang.dev/$path answers"
           done
       # Once a release is published, install it the way the guide says and
-      # run it. With no release yet, this passes and says so.
+      # run it. With no release yet, this passes with a warning annotation.
       - name: the published one-line install works
         run: scripts/release/smoke-published.sh https://oskalang.dev

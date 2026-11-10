@@ -361,6 +361,8 @@ test_smoke_published_with_no_release_succeeds_unless_a_version_is_expected() {
   printf '{"version": "0.1.0", "docs": "main"}\n' >site/latest.json
   "$here/smoke-published.sh" "file://$PWD/site" >smoke.out
   grep -q 'no release is published' smoke.out || fail "did not say there is no release"
+  # In a workflow log, a passing smoke with nothing installed must stand out.
+  grep -q '^::warning::.*no release is published' smoke.out || fail "no GitHub warning annotation"
   if "$here/smoke-published.sh" "file://$PWD/site" 0.1.0; then
     fail "passed with no release but a version expected"
   fi
