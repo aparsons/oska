@@ -15,6 +15,7 @@ use crate::data;
 use crate::host::Host;
 use crate::interp::Interpreter;
 use crate::panics::{codes, Panic};
+use crate::traits;
 use crate::value::{Access, Capability, FsCap, Root, Value, SECRET};
 
 /// An intrinsic: the host, the arguments (the receiver first), and the
@@ -69,6 +70,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
     INTRINSICS
         .iter()
         .chain(data::INTRINSICS)
+        .chain(traits::INTRINSICS)
         .find(|(n, _)| *n == name)
         .map(|(_, f)| *f)
 }
@@ -85,6 +87,7 @@ pub fn lookup_mutating(name: &str) -> Option<MutatingIntrinsic> {
 pub fn lookup_higher_order(name: &str) -> Option<HigherOrder> {
     data::HIGHER_ORDER
         .iter()
+        .chain(traits::HIGHER_ORDER)
         .find(|(n, _)| *n == name)
         .map(|(_, f)| *f)
 }

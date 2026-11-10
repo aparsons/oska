@@ -10,7 +10,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use oska_syntax::ast::{
-    self, BinaryOp, FnDecl, ItemKind, Module, PatternKind, StmtKind, StrPart, TypeKind, UnaryOp,
+    self, BinaryOp, FnDecl, Item, ItemKind, Module, PatternKind, StmtKind, StrPart, TypeKind,
+    UnaryOp,
 };
 use oska_syntax::Span;
 
@@ -70,10 +71,20 @@ pub type Resolutions = HashMap<Span, Resolution>;
 
 /// Lower every free function of `module`, every method of its inherent
 /// impls, as `Type.method`, and every method of its trait impls, as
-/// `<Type as Trait>.method`.
+/// `<Type as Trait>.method`: the trait's default methods the impl does
+/// not override included, so every impl is complete.
 pub fn module(module: &Module, items: &Items, resolutions: &Resolutions) -> Program {
     let lowering = Lowering { resolutions };
     let mut program = Program::default();
+    // Each trait the module declares, by name, for its default methods.
+    let traits: HashMap<&str, &[Item]> = module
+        .items
+        .iter()
+        .filter_map(|item| match &item.kind {
+            ItemKind::Trait(t) => Some((t.name.name.as_str(), t.methods.as_slice())),
+            _ => None,
+        })
+        .collect();
     for item in &module.items {
         match &item.kind {
             ItemKind::Fn(f) => {
@@ -101,10 +112,16 @@ pub fn module(module: &Module, items: &Items, resolutions: &Resolutions) -> Prog
                     },
                     None => None,
                 };
-                for method in &imp.methods {
-                    let ItemKind::Fn(f) = &method.kind else {
-                        continue;
-                    };
+                let mut methods: Vec<&FnDecl> = fn_decls(&imp.methods).collect();
+                // A default method the impl does not override is the
+                // impl's too: its body sees `self` as the impl's type.
+                if let Some(defaults) = trait_impl.and_then(|i| traits.get(i.trait_name.as_str())) {
+                    let defaults: Vec<&FnDecl> = fn_decls(defaults)
+                        .filter(|d| !methods.iter().any(|m| m.name.name == d.name.name))
+                        .collect();
+                    methods.extend(defaults);
+                }
+                for f in methods {
                     let method = &f.name.name;
                     let (name, sig) = match trait_impl {
                         Some(info) => (
@@ -385,11 +402,12 @@ impl Lowering<'_> {
         })
     }
 
-    /// A name in value position: a local, by the slot it resolved to, or
-    /// a fieldless variant.
+    /// A name in value position: a local, by the slot it resolved to, a
+    /// fieldless variant, or a function.
     fn local(&self, ident: &ast::Ident) -> ExprKind {
         match self.resolutions.get(&ident.span) {
             Some(Resolution::Local(slot)) => ExprKind::Local(*slot),
+            Some(Resolution::FnValue(callee)) => ExprKind::FnValue(callee.clone()),
             Some(Resolution::Construct(ctor)) => ExprKind::Construct {
                 ctor: ctor.clone(),
                 fields: Vec::new(),
@@ -409,6 +427,7 @@ impl Lowering<'_> {
                 base: self.boxed(base),
                 index: *index,
             },
+            (Some(Resolution::FnValue(callee)), _) => ExprKind::FnValue(callee.clone()),
             (_, Some(Resolution::Construct(ctor))) => ExprKind::Construct {
                 ctor: ctor.clone(),
                 fields: Vec::new(),
@@ -419,6 +438,16 @@ impl Lowering<'_> {
 
     fn binary(&self, span: Span, op: BinaryOp, lhs: &ast::Expr, rhs: &ast::Expr) -> ExprKind {
         let resolved = self.resolutions.get(&span);
+        if let (BinaryOp::Eq | BinaryOp::Ne, Some(Resolution::EqualityVia(eq))) = (op, resolved) {
+            let call = ExprKind::Call {
+                callee: eq.clone(),
+                args: vec![self.expr(lhs), self.expr(rhs)],
+            };
+            if op == BinaryOp::Eq {
+                return call;
+            }
+            return ExprKind::Not(Box::new(Expr { kind: call, span }));
+        }
         let int = match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
                 match resolved {
@@ -491,6 +520,14 @@ impl Lowering<'_> {
         }
         Some(value)
     }
+}
+
+/// The functions among `items`, the methods of an impl or a trait.
+fn fn_decls(items: &[Item]) -> impl Iterator<Item = &FnDecl> {
+    items.iter().filter_map(|item| match &item.kind {
+        ItemKind::Fn(f) => Some(f),
+        _ => None,
+    })
 }
 
 /// The last segment of a path type, such as `Point` or `Display`.

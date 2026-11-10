@@ -93,3 +93,185 @@ fn question_mark_converts_each_error_through_the_from_impl_for_its_type() {
     assert_exits(&read_main("x"), 1, "not a number: x\n");
     assert_exits(&read_main("12"), 1, "out of range: 12\n");
 }
+
+// ---- Trait calls and generic dispatch --------------------------------------
+
+const POINT: &str = "struct Point { x: Int, y: Int }
+
+impl Display for Point {
+    fn to_string(self) -> String {
+        let x = self.x
+        let y = self.y
+        \"({x}, {y})\"
+    }
+}
+
+impl Eq for Point {
+    fn eq(self, other: Point) -> Bool { self.x == other.x }
+}
+";
+
+/// A program of `items` and a `main` that runs `body`.
+fn program(items: &str, body: &str) -> String {
+    format!("{items}\nfn main(io: Stdout) -> Result<(), IoError> {{\n{body}\n}}\n")
+}
+
+#[test]
+fn generic_code_displays_each_value_through_the_impl_for_its_type() {
+    let items = format!(
+        "{POINT}
+fn show<T: Display>(label: String, value: T) -> Untrusted<String> {{
+    let text = value.to_string()
+    \"{{label}} {{value}} {{text}}\"
+}}"
+    );
+    assert_runs(
+        &program(
+            &items,
+            "    let _ = io.println(show(\"point\", Point(x: 1, y: 2)))
+    let _ = io.println(show(\"int\", 7))
+    io.println(show(\"text\", \"hi\"))",
+        ),
+        &[],
+        "point (1, 2) (1, 2)\nint 7 7\ntext hi hi\n",
+    );
+}
+
+#[test]
+fn generic_code_compares_values_through_the_eq_impl_for_their_type() {
+    let items = format!(
+        "{POINT}
+fn same<T: Eq>(a: T, b: T) -> String {{
+    if a == b && a.eq(b) {{ \"same\" }} else if a != b {{ \"different\" }} else {{ \"mixed\" }}
+}}"
+    );
+    // `Point`'s own `Eq` compares only `x`.
+    assert_runs(
+        &program(
+            &items,
+            "    let _ = io.println(same(Point(x: 1, y: 2), Point(x: 1, y: 9)))
+    let _ = io.println(same(Point(x: 1, y: 2), Point(x: 3, y: 2)))
+    let _ = io.println(same(4, 4))
+    io.println(same(\"a\", \"b\"))",
+        ),
+        &[],
+        "same\ndifferent\nsame\ndifferent\n",
+    );
+}
+
+#[test]
+fn options_and_lists_compare_their_items_through_eq_for_the_item_type() {
+    // `Point`'s own `Eq` compares only `x`.
+    assert_runs(
+        &program(
+            POINT,
+            "    let a = Some(Point(x: 1, y: 2))
+    let b = Some(Point(x: 1, y: 5))
+    let none: Option<Point> = None
+    let _ = io.println(if a == b { \"equal\" } else { \"unequal\" })
+    let _ = io.println(if a == none { \"equal\" } else { \"unequal\" })
+    let _ = io.println(if [a, b] == [b, a] { \"equal\" } else { \"unequal\" })
+    io.println(if [1, 2] != [1, 2, 3] { \"unequal\" } else { \"equal\" })",
+        ),
+        &[],
+        "equal\nunequal\nequal\nunequal\n",
+    );
+}
+
+#[test]
+fn an_io_error_displays_as_its_message() {
+    assert_exits(
+        "fn main(io: Stdout) -> Result<(), IoError> {
+    let e = IoError(message: \"disk full\")
+    let _ = io.println(\"failed: {e}\")
+    Err(e)
+}
+",
+        1,
+        "disk full\n",
+    );
+    assert_runs(
+        "fn main(io: Stdout) -> Result<(), IoError> {
+    let e = IoError(message: \"disk full\")
+    let text = e.to_string()
+    io.println(\"failed: {e} ({text})\")
+}
+",
+        &[],
+        "failed: disk full (disk full)\n",
+    );
+}
+
+const SHAPES: &str = "trait Shape {
+    fn area(self) -> Int
+    fn describe(self) -> String {
+        let a = self.area()
+        \"a shape of area {a}\"
+    }
+}
+
+struct Square { side: Int }
+
+struct Rect { w: Int, h: Int }
+
+impl Shape for Square {
+    fn area(self) -> Int { self.side * self.side }
+}
+
+impl Shape for Rect {
+    fn area(self) -> Int { self.w * self.h }
+    fn describe(self) -> String { \"a rectangle\" }
+}
+
+fn report<T: Shape>(shape: T) -> Untrusted<String> {
+    let a = shape.area()
+    let d = shape.describe()
+    \"{d}, {a}\"
+}
+";
+
+#[test]
+fn a_user_trait_dispatches_to_the_impl_for_each_type_with_its_default_methods() {
+    assert_runs(
+        &program(
+            SHAPES,
+            "    let _ = io.println(report(Square(side: 3)))
+    let _ = io.println(report(Rect(w: 2, h: 5)))
+    let sq = Square(side: 2)
+    let a = sq.area()
+    let d = sq.describe()
+    io.println(\"{d} ({a})\")",
+        ),
+        &[],
+        "a shape of area 9, 9\na rectangle, 10\na shape of area 4 (4)\n",
+    );
+}
+
+// ---- Functions as values ---------------------------------------------------
+
+#[test]
+fn a_named_function_is_a_value_that_can_be_called_and_passed() {
+    assert_runs(
+        &program(
+            "fn double(n: Int) -> Int { n * 2 }
+
+struct Counter { n: Int }
+
+impl Counter {
+    fn make(n: Int) -> Counter { Counter(n: n) }
+}
+
+fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }",
+            "    let f = double
+    let a = f(4)
+    let b = apply(double, 5)
+    let xs = [1, 2, 3].map(double)
+    let total = xs.at(0) + xs.at(1) + xs.at(2)
+    let make = Counter.make
+    let c = make(7).n
+    io.println(\"{a} {b} {total} {c}\")",
+        ),
+        &[],
+        "8 10 12 7\n",
+    );
+}
