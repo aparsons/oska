@@ -17,6 +17,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# A git hook (such as .githooks/pre-push) exports GIT_DIR and related
+# variables. Scripts that run git on their own scratch repositories must not
+# inherit them, or `git init` re-initialises this repository instead (it once
+# set core.bare=true here).
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
+
 # Rust may be installed for interactive shells only.
 if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
   PATH="$HOME/.cargo/bin:$PATH"

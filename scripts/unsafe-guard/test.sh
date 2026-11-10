@@ -8,6 +8,13 @@
 
 set -euo pipefail
 
+# A git hook (such as .githooks/pre-push) exports GIT_DIR and related
+# variables. Scripts that run git on their own scratch repositories must not
+# inherit them, or `git init` re-initialises this repository instead (it once
+# set core.bare=true here).
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
+
 here=$(cd "$(dirname "$0")" && pwd)
 guard="$here/guard.sh"
 
