@@ -28,7 +28,7 @@ use crate::interp::Interpreter;
 use crate::intrinsics::{debug, HigherOrder, Intrinsic};
 use crate::panics::{codes, Panic};
 use crate::value::{Capability, Value};
-use crate::{support, unimplemented_module, UNSUPPORTED_EXIT_CODE};
+use crate::{on_interpreter_stack, support, unimplemented_module, UNSUPPORTED_EXIT_CODE};
 
 /// What `oskac test` was asked to run.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -158,8 +158,12 @@ pub fn test(src: &str, host: &mut dyn Host, options: TestOptions) -> TestReport 
         .iter()
         .map(|test| {
             let outcome = match (test.integration, options.integration) {
-                (false, _) => Some(run_one(&program, test, &mut FakeHost::new())),
-                (true, true) => Some(run_one(&program, test, &mut Recording::new(host))),
+                (false, _) => Some(on_interpreter_stack(|| {
+                    run_one(&program, test, &mut FakeHost::new())
+                })),
+                (true, true) => Some(on_interpreter_stack(|| {
+                    run_one(&program, test, &mut Recording::new(&mut *host))
+                })),
                 (true, false) => None,
             };
             let (status, failure) = match outcome {

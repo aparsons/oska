@@ -7,7 +7,7 @@
 //! [`ExprKind::Unsupported`].
 
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use oska_syntax::ast::{
     self, BinaryOp, FnDecl, Item, ItemKind, Module, PatternKind, StmtKind, StrPart, TypeKind,
@@ -299,7 +299,7 @@ impl Lowering<'_> {
                 },
             },
             ast::ExprKind::Binary { op, lhs, rhs } => self.binary(expr.span, *op, lhs, rhs),
-            ast::ExprKind::Closure { params, body } => ExprKind::Closure(Rc::new(Closure {
+            ast::ExprKind::Closure { params, body } => ExprKind::Closure(Arc::new(Closure {
                 params: params.iter().map(|p| p.name.name != "_").collect(),
                 body: self.expr(body),
             })),

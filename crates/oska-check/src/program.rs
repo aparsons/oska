@@ -28,7 +28,7 @@
 //!    an `Unsupported` node or a call it cannot make.
 
 use std::collections::BTreeMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::Span;
@@ -156,7 +156,7 @@ pub enum ExprKind {
     },
     /// A closure, `|params| body`. Evaluating it captures the frame's
     /// slots and receiver as they are, by value.
-    Closure(Rc<Closure>),
+    Closure(Arc<Closure>),
     /// A call of a function value, such as a closure held in a local.
     CallValue {
         callee: Box<Expr>,

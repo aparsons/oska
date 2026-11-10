@@ -18,6 +18,7 @@
 
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use oska_check::program::{Callee, Closure, Construct};
 
@@ -72,7 +73,7 @@ pub enum Value {
 /// it was made, captured by value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClosureValue {
-    pub code: Rc<Closure>,
+    pub code: Arc<Closure>,
     pub slots: Vec<Value>,
     pub receiver: Option<Value>,
 }

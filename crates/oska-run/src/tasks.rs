@@ -169,8 +169,6 @@ mod tests {
     //! tested on a checked program built by hand, in which a handle
     //! escapes anyway.
 
-    use std::rc::Rc;
-
     use oska_check::program::{Callee, Closure, Expr, ExprKind, Function, Program, Stmt};
 
     use super::*;
@@ -201,7 +199,7 @@ mod tests {
         let task = at(
             47,
             51,
-            ExprKind::Closure(Rc::new(Closure {
+            ExprKind::Closure(std::sync::Arc::new(Closure {
                 params: Vec::new(),
                 body: at(50, 51, ExprKind::Unit),
             })),

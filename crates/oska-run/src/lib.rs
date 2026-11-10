@@ -98,9 +98,52 @@ pub const PANIC_EXIT_CODE: i32 = 101;
 /// The exit code of a program the interpreter cannot run yet.
 pub const UNSUPPORTED_EXIT_CODE: i32 = 2;
 
+/// The stack of the thread an interpreter runs on. Only what is used is
+/// ever touched; the rest is address space. Calls stop with `P0021` at
+/// [`interp::MAX_CALL_DEPTH`], or sooner when a program's calls take so
+/// much stack each that it would run out first.
+pub const STACK_SIZE: usize = 256 * 1024 * 1024;
+
+/// `f`'s result, computed on a thread of its own with a [`STACK_SIZE`]
+/// stack, or on this thread when the OS will not start one. A Rust panic
+/// in `f` is passed on to the caller.
+pub(crate) fn on_interpreter_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    let f = std::sync::Mutex::new(Some(f));
+    let take = |f: &std::sync::Mutex<Option<_>>| {
+        f.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+            .expect("`f` runs once")
+    };
+    std::thread::scope(|scope| {
+        let spawned = std::thread::Builder::new()
+            .name("oska-interpreter".to_string())
+            .stack_size(STACK_SIZE)
+            .spawn_scoped(scope, || {
+                interp::mark_stack_top(STACK_SIZE);
+                take(&f)()
+            });
+        match spawned {
+            Ok(thread) => thread
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+            Err(_) => take(&f)(),
+        }
+    })
+}
+
 /// Check and run `src` on `host`. `args` are the program's arguments,
 /// the program path first.
+///
+/// The program runs on a thread of its own with a large stack
+/// ([`STACK_SIZE`]), and calls nested deeper than it allows panic with
+/// `P0021`, so runaway recursion ends the program with a panic rather
+/// than crashing the process.
 pub fn run(src: &str, host: &mut dyn Host, args: &[String]) -> RunOutcome {
+    on_interpreter_stack(|| check_and_run(src, host, args))
+}
+
+fn check_and_run(src: &str, host: &mut dyn Host, args: &[String]) -> RunOutcome {
     let report = oska_check::check_module(src);
     let Some(program) = report.program else {
         let mut outcome = RunOutcome::new(1, host);

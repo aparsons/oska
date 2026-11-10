@@ -29,7 +29,10 @@ pub struct Output {
 }
 
 /// The operating system, as the interpreter sees it.
-pub trait Host {
+///
+/// A host is `Send` because the interpreter runs on a thread of its own,
+/// with a stack sized for deep recursion (`crate::STACK_SIZE`).
+pub trait Host: Send {
     /// Write `text` to standard output, as is.
     fn write_stdout(&mut self, text: &str) -> io::Result<()>;
 

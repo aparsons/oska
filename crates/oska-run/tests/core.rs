@@ -294,3 +294,24 @@ fn a_program_using_something_not_yet_supported_is_refused_with_e0380() {
     assert_refused(&src, "E0380");
     assert_eq!(common::run_fake(&src, &[]).exit_code, 2);
 }
+
+// ---- Deep recursion -------------------------------------------------------------
+
+/// A program whose `main` recurses `depth` calls deep and prints the
+/// depth it reached.
+fn recursing(depth: u32) -> String {
+    program(
+        "fn down(n: Int) -> Int {\n    if n == 0 { 0 } else { 1 + down(n - 1) }\n}",
+        &format!("    let d = down({depth})\n    io.println(\"{{d}}\")"),
+    )
+}
+
+#[test]
+fn deep_but_bounded_recursion_runs() {
+    assert_runs(&recursing(20_000), &[], "20000\n");
+}
+
+#[test]
+fn runaway_recursion_panics_with_p0021_instead_of_crashing() {
+    assert_panics(&recursing(1_000_000), "P0021", "down(n - 1)");
+}

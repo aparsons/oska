@@ -279,3 +279,21 @@ fn the_json_report_lists_each_test_with_its_status_and_failure() {
          \"passed\":1,\"failed\":1,\"skipped\":0,\"diagnostics\":[]}"
     );
 }
+
+#[test]
+fn a_test_that_recurses_too_deep_fails_alone_with_p0021() {
+    let report = test_fake(
+        "fn down(n: Int) -> Int {\n    if n == 0 { 0 } else { 1 + down(n - 1) }\n}\n\n\
+         test \"too deep\" {\n    t.assert(down(1000000) == 1)\n}\n\n\
+         test \"fine\" {\n    t.assert(down(100) == 100)\n}\n",
+    );
+    let statuses: Vec<_> = report.tests.iter().map(|t| t.status).collect();
+    assert_eq!(
+        statuses,
+        [TestStatus::Failed, TestStatus::Passed],
+        "{report:#?}"
+    );
+    let failure = report.tests[0].failure.as_ref().expect("a failure");
+    assert_eq!(failure.code, "P0021");
+    assert_eq!(report.exit_code(), 1);
+}
