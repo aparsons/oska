@@ -89,7 +89,7 @@ pub fn names_to_create(path: &str) -> io::Result<Vec<String>> {
         Ok(names)
     } else {
         Err(refused(&format!(
-            "`{path}` does not end in a file name; a write or a new directory needs one"
+            "`{path}` does not end in a file name; a write, a new directory or a file needs one"
         )))
     }
 }

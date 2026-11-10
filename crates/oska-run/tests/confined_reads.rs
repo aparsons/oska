@@ -97,6 +97,16 @@ impl Host for Recording {
     fn open_beneath(&mut self, root: &RootHandle, names: &[String]) -> std::io::Result<RootHandle> {
         self.real.open_beneath(root, names)
     }
+    fn open_file_root(&mut self, path: &Path) -> std::io::Result<RootHandle> {
+        self.real.open_file_root(path)
+    }
+    fn open_file_beneath(
+        &mut self,
+        root: &RootHandle,
+        names: &[String],
+    ) -> std::io::Result<RootHandle> {
+        self.real.open_file_beneath(root, names)
+    }
     fn read_file_beneath(
         &mut self,
         root: &RootHandle,
@@ -358,12 +368,11 @@ fn a_root_that_is_missing_or_not_a_directory_refuses_every_read() {
 }
 
 #[test]
-fn a_relative_root_and_a_file_root_are_read() {
+fn a_relative_root_is_read() {
     // Relative to the working directory, which `cargo test` sets to this
     // crate's own directory.
     let marker = "Race-free confined reads (#94)";
     assert!(read(Path::new("tests"), &[], "confined_reads.rs").contains(marker));
-    assert!(read(Path::new("tests/confined_reads.rs"), &[], ".").contains(marker));
     assert!(read(Path::new("."), &["tests"], "confined_reads.rs").contains(marker));
 }
 

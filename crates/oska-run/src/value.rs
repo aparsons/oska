@@ -101,6 +101,10 @@ pub enum Capability {
     /// A directory capability, `Dir`, `DirRead`, or `DirWrite`: its root
     /// is never [`Root::Anywhere`]. Only attenuation makes one.
     Dir(FsCap),
+    /// A file capability, `FileRead` or `FileWrite`: its root is a single
+    /// file, or nowhere, and never [`Root::Anywhere`]. It reads or writes
+    /// but not both. Only attenuation makes one.
+    File(FsCap),
 }
 
 /// A filesystem capability's attenuation state: where it may reach, and
@@ -118,7 +122,9 @@ pub enum Root {
     /// Anywhere the process may: the `Fs` `main` declares, unrestricted.
     Anywhere,
     /// Only beneath this directory, or only this file, as the host opened
-    /// it. On Unix it holds an OS handle, released with the last copy.
+    /// it: the root of a directory capability is a directory, and the
+    /// root of a file capability is a file, its parent's handle with its
+    /// name. On Unix it holds an OS handle, released with the last copy.
     Dir(RootHandle),
     /// Nowhere: the result of restricting to a root that could not be
     /// opened, because it is missing, a symlink, or outside the current
@@ -156,6 +162,7 @@ enum Kind {
     Random,
     Fs(Access),
     Dir(Access),
+    File(Access),
 }
 
 /// Each capability the runtime implements, by the name of its type: the
@@ -175,6 +182,8 @@ const IMPLEMENTED: &[(&str, Kind)] = &[
     ("Dir", Kind::Dir(Access::ReadWrite)),
     ("DirRead", Kind::Dir(Access::Read)),
     ("DirWrite", Kind::Dir(Access::Write)),
+    ("FileRead", Kind::File(Access::Read)),
+    ("FileWrite", Kind::File(Access::Write)),
 ];
 
 impl Capability {
@@ -185,8 +194,8 @@ impl Capability {
     }
 
     /// The capability `main` declares with the type named `ty`, if the
-    /// runtime can grant it: a filesystem unrestricted. A directory
-    /// capability has a runtime but is never granted, since only
+    /// runtime can grant it: a filesystem unrestricted. A directory or
+    /// file capability has a runtime but is never granted, since only
     /// attenuation gives it a root.
     pub fn granted(ty: &str) -> Option<Capability> {
         let (_, kind) = IMPLEMENTED.iter().find(|(name, _)| *name == ty)?;
@@ -201,7 +210,7 @@ impl Capability {
                 root: Root::Anywhere,
                 access,
             }),
-            Kind::Dir(_) => return None,
+            Kind::Dir(_) | Kind::File(_) => return None,
         })
     }
 
@@ -215,6 +224,7 @@ impl Capability {
             Capability::Random => Kind::Random,
             Capability::Fs(fs) => Kind::Fs(fs.access),
             Capability::Dir(dir) => Kind::Dir(dir.access),
+            Capability::File(file) => Kind::File(file.access),
         }
     }
 
@@ -429,6 +439,10 @@ mod tests {
                     root: Root::Nowhere(Rc::from("no root")),
                     access,
                 }),
+                Kind::File(access) => Capability::File(FsCap {
+                    root: Root::Nowhere(Rc::from("no root")),
+                    access,
+                }),
                 _ => Capability::granted(name).expect("granted"),
             };
             assert_eq!(capability.type_name(), *name);
@@ -436,8 +450,8 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_capability_is_never_granted() {
-        for name in ["Dir", "DirRead", "DirWrite"] {
+    fn a_directory_or_file_capability_is_never_granted() {
+        for name in ["Dir", "DirRead", "DirWrite", "FileRead", "FileWrite"] {
             assert!(Capability::implemented(name));
             assert_eq!(Capability::granted(name), None);
         }

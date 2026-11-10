@@ -56,18 +56,34 @@ pub trait Host: Send {
     /// The next pseudo-random 64 bits.
     fn next_random(&mut self) -> u64;
 
-    /// Open the directory or regular file at `path` as the root of a
-    /// restricted filesystem. Its last component must not be a symlink;
-    /// earlier ones are followed, since the root is trusted text.
+    /// Open the directory at `path` as the root of a restricted
+    /// filesystem. Its last component must not be a symlink; earlier ones
+    /// are followed, since the root is trusted text. A file there is an
+    /// error: a directory capability needs a directory.
     fn open_root(&mut self, path: &Path) -> io::Result<RootHandle>;
 
-    /// The directory or regular file reached by walking `names` beneath
-    /// `root`, as a root of its own: each name a plain component, which
-    /// `confine.rs` produced, and none a symlink. No names gives `root`.
+    /// The directory reached by walking `names` beneath `root`, as a root
+    /// of its own: each name a plain component, which `confine.rs`
+    /// produced, and none a symlink. No names gives `root`. A file there
+    /// is an error.
     fn open_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<RootHandle>;
 
+    /// The root of a single file at `path`: its parent directory, opened
+    /// as [`Host::open_root`] opens a root, together with the file's name,
+    /// which is the last component and must be plain. The file itself is
+    /// not opened, so it need not exist: a use opens the name beneath the
+    /// parent, without following a symlink.
+    fn open_file_root(&mut self, path: &Path) -> io::Result<RootHandle>;
+
+    /// The root of the single file reached by walking `names` beneath
+    /// `root`, a directory: the directory holding it, opened as
+    /// [`Host::open_beneath`] opens one, together with the last name.
+    /// `names` is at least one name. As for [`Host::open_file_root`], the
+    /// file itself is not opened.
+    fn open_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<RootHandle>;
+
     /// The text of the regular file reached by walking `names` beneath
-    /// `root`, none of them a symlink. When `root` is itself a file,
+    /// `root`, none of them a symlink. When `root` is a single file,
     /// `names` is empty.
     fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<String>;
 
@@ -126,8 +142,8 @@ pub trait Host: Send {
 }
 
 /// The root of a restricted filesystem, as a host opened it: a directory,
-/// or a single regular file. Copies share it, and the last one dropped
-/// releases what the host holds for it.
+/// or the one file a file capability reaches. Copies share it, and the
+/// last one dropped releases what the host holds for it.
 ///
 /// On a Unix [`RealHost`] it holds an OS handle for the directory, or for
 /// a file's parent directory together with the file's name, and every
@@ -301,19 +317,8 @@ impl Host for RealHost {
             let dir = oska_sys::Dir::open(&path)?;
             return Ok(real_root(std::fs::canonicalize(&path)?, None, dir));
         };
-        let parent = match parent.as_os_str().is_empty() {
-            true => Path::new("."),
-            false => parent,
-        };
-        let parent = oska_sys::Dir::open(parent)?;
-        let (file, dir) = match parent.open_dir(&[name]) {
-            Ok(dir) => (None, dir),
-            Err(_) => {
-                parent.open_file(&[name])?;
-                (Some(name), parent)
-            }
-        };
-        Ok(real_root(std::fs::canonicalize(&path)?, file, dir))
+        let dir = oska_sys::Dir::open(or_here(parent))?.open_dir(&[name])?;
+        Ok(real_root(std::fs::canonicalize(&path)?, None, dir))
     }
 
     #[cfg(unix)]
@@ -324,19 +329,37 @@ impl Host for RealHost {
         if root.is_file() {
             return Err(beneath_a_file(names));
         }
-        let dir = root_dir(root)?;
+        let dir = root_dir(root)?.open_dir(names)?;
         // Canonical as it stands: the walk met no symlink. Not
         // canonicalized again, which would follow one swapped in since.
-        let path = joined(root, names);
-        match dir.open_dir(names) {
-            Ok(dir) => Ok(real_root(path, None, dir)),
-            Err(error) => {
-                let (name, parents) = names.split_last().ok_or(error)?;
-                let parent = dir.open_dir(parents)?;
-                parent.open_file(&[name])?;
-                Ok(real_root(path, Some(OsStr::new(name)), parent))
-            }
+        Ok(real_root(joined(root, names), None, dir))
+    }
+
+    #[cfg(unix)]
+    fn open_file_root(&mut self, path: &Path) -> io::Result<RootHandle> {
+        let path: PathBuf = path.components().collect();
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            return Err(no_file_name(&path));
+        };
+        let parent = or_here(parent);
+        let dir = oska_sys::Dir::open(parent)?;
+        Ok(real_root(
+            std::fs::canonicalize(parent)?.join(name),
+            Some(name),
+            dir,
+        ))
+    }
+
+    #[cfg(unix)]
+    fn open_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<RootHandle> {
+        if root.is_file() {
+            return Err(beneath_a_file(names));
         }
+        let Some((name, parents)) = names.split_last() else {
+            return Err(no_name());
+        };
+        let dir = root_dir(root)?.open_dir(parents)?;
+        Ok(real_root(joined(root, names), Some(OsStr::new(name)), dir))
     }
 
     #[cfg(unix)]
@@ -392,13 +415,12 @@ impl Host for RealHost {
         if there.file_type().is_symlink() {
             return Err(moved(&path));
         }
-        let file = match there.is_file() {
-            true => path.file_name().map(Rc::from),
-            false => None,
-        };
+        if !there.is_dir() {
+            return Err(not_a_directory(&path));
+        }
         Ok(RootHandle {
             path: Rc::from(std::fs::canonicalize(&path)?.as_path()),
-            file,
+            file: None,
             os: None,
         })
     }
@@ -412,13 +434,48 @@ impl Host for RealHost {
             return Err(beneath_a_file(names));
         }
         let path = checked_beneath(root, names)?;
-        let file = match std::fs::metadata(&path)?.is_file() {
-            true => path.file_name().map(Rc::from),
-            false => None,
-        };
+        if !std::fs::metadata(&path)?.is_dir() {
+            return Err(not_a_directory(&path));
+        }
         Ok(RootHandle {
             path: Rc::from(path.as_path()),
-            file,
+            file: None,
+            os: None,
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn open_file_root(&mut self, path: &Path) -> io::Result<RootHandle> {
+        let path: PathBuf = path.components().collect();
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            return Err(no_file_name(&path));
+        };
+        let parent = std::fs::canonicalize(or_here(parent))?;
+        if !std::fs::metadata(&parent)?.is_dir() {
+            return Err(not_a_directory(&parent));
+        }
+        Ok(RootHandle {
+            path: Rc::from(parent.join(name).as_path()),
+            file: Some(Rc::from(name)),
+            os: None,
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn open_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<RootHandle> {
+        if root.is_file() {
+            return Err(beneath_a_file(names));
+        }
+        let Some((name, parents)) = names.split_last() else {
+            return Err(no_name());
+        };
+        let parent = checked_beneath(root, parents)?;
+        if !std::fs::metadata(&parent)?.is_dir() {
+            return Err(not_a_directory(&parent));
+        }
+        Ok(RootHandle {
+            path: Rc::from(parent.join(name).as_path()),
+            file: Some(Rc::from(OsStr::new(name))),
             os: None,
         })
     }
@@ -550,6 +607,15 @@ fn root_dir(root: &RootHandle) -> io::Result<&oska_sys::Dir> {
             "this root was opened by another host",
         )
     })
+}
+
+/// `parent`, the leading part of a root's path, or the current directory
+/// if it is empty.
+fn or_here(parent: &Path) -> &Path {
+    match parent.as_os_str().is_empty() {
+        true => Path::new("."),
+        false => parent,
+    }
 }
 
 /// Where Windows has no handle-relative open: the path `names` reach
@@ -737,18 +803,47 @@ impl FakeHost {
             .map(String::as_str)
     }
 
-    /// A root at `path`, already normalized: a file or a directory.
+    /// A directory root at `path`, already normalized.
     fn root_at(&self, path: PathBuf) -> io::Result<RootHandle> {
-        let file = match self.files.contains_key(&path) {
-            true => path.file_name().map(Rc::from),
-            false if self.is_dir(&path) => None,
-            false => return Err(not_found(&path)),
-        };
+        if self.files.contains_key(&path) {
+            return Err(not_a_directory(&path));
+        }
+        if !self.is_dir(&path) {
+            return Err(not_found(&path));
+        }
         Ok(RootHandle {
             path: Rc::from(path.as_path()),
-            file,
+            file: None,
             os: None,
         })
+    }
+
+    /// A file root at `path`, already normalized, whose parent must be a
+    /// directory. The file itself need not exist.
+    fn file_root_at(&self, path: PathBuf) -> io::Result<RootHandle> {
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            return Err(no_file_name(&path));
+        };
+        self.root_at(parent.to_path_buf())?;
+        Ok(RootHandle {
+            path: Rc::from(path.as_path()),
+            file: Some(Rc::from(name)),
+            os: None,
+        })
+    }
+
+    /// The path of the file `root` reaches with `names` beneath it: the
+    /// walk beneath a directory root, or for a file root, its own path,
+    /// refused if it is now a symlink.
+    fn walk_file(&self, root: &RootHandle, names: &[String]) -> io::Result<PathBuf> {
+        match (&root.file, names.is_empty()) {
+            (Some(_), false) => Err(beneath_a_file(names)),
+            (Some(name), true) if self.links.contains_key(&*root.path) => {
+                Err(fake_symlink(&name.to_string_lossy()))
+            }
+            (Some(_), true) => Ok(root.path.to_path_buf()),
+            (None, _) => self.walk(root, names),
+        }
     }
 
     fn is_dir(&self, path: &Path) -> bool {
@@ -882,8 +977,24 @@ fn fake_symlink(path: &str) -> io::Error {
 }
 
 /// The error for a write or `create_dir` beneath a root given no name.
-fn no_fake_name() -> io::Error {
+fn no_name() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, "no file name to open")
+}
+
+/// The error for a file root given a path with no file name to take.
+fn no_file_name(path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("`{}` does not end in a file name", path.display()),
+    )
+}
+
+/// The error for a directory root that is some other kind of file.
+fn not_a_directory(path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("`{}` is not a directory", path.display()),
+    )
 }
 
 fn not_found(path: &Path) -> io::Error {
@@ -953,11 +1064,33 @@ impl Host for FakeHost {
         self.root_at(self.walk(root, names)?)
     }
 
-    fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<String> {
-        if root.is_file() && !names.is_empty() {
+    fn open_file_root(&mut self, path: &Path) -> io::Result<RootHandle> {
+        if path.as_os_str().is_empty() {
+            return Err(not_found(path));
+        }
+        // Its ancestors are followed, as for a directory root. Its own
+        // name is not checked: a use meets a symlink there.
+        let path = normalize(path);
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            return Err(no_file_name(&path));
+        };
+        self.file_root_at(self.follow(parent)?.join(name))
+    }
+
+    fn open_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<RootHandle> {
+        if root.is_file() {
             return Err(beneath_a_file(names));
         }
-        let path = self.walk(root, names)?;
+        let Some((name, parents)) = names.split_last() else {
+            return Err(no_name());
+        };
+        // The parents are walked, so none is a symlink; the file's own
+        // name is not checked.
+        self.file_root_at(self.walk(root, parents)?.join(name))
+    }
+
+    fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<String> {
+        let path = self.walk_file(root, names)?;
         self.files
             .get(&path)
             .cloned()
@@ -978,12 +1111,10 @@ impl Host for FakeHost {
         names: &[String],
         contents: &str,
     ) -> io::Result<()> {
-        match (root.is_file(), names.is_empty()) {
-            (true, false) => return Err(beneath_a_file(names)),
-            (false, true) => return Err(no_fake_name()),
-            _ => {}
+        if !root.is_file() && names.is_empty() {
+            return Err(no_name());
         }
-        let path = self.walk(root, names)?;
+        let path = self.walk_file(root, names)?;
         self.put_file(path, contents)
     }
 
@@ -997,7 +1128,7 @@ impl Host for FakeHost {
             return Err(a_file_root(root));
         }
         if names.is_empty() {
-            return Err(no_fake_name());
+            return Err(no_name());
         }
         let path = self.walk(root, names)?;
         self.put_dir(path)

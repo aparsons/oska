@@ -34,35 +34,35 @@ use std.html
 
 // ---- What the site is built from -------------------------------------------
 
-// What the generator may read: the `docs/` tree, and three files beside
-// it. Each is a directory capability of its own (for a file, for now,
-// confined to that one file), so nothing else in the repository can be
-// reached.
+// What the generator may read: the `docs/` tree, and the files beside it.
+// Each is a capability of its own, a directory capability for a tree and
+// a file capability for a single file, so nothing else in the repository
+// can be reached.
 cap struct Sources {
     docs: DirRead,
-    readme: DirRead,
-    glossary: DirRead,
-    style: DirRead,
-    manifest: DirRead,
-    search: DirRead,
+    readme: FileRead,
+    glossary: FileRead,
+    style: FileRead,
+    manifest: FileRead,
+    search: FileRead,
     // `site/agent-setup/`: the agent-setup prompt and its templates.
     setup: DirRead,
     // `site/authority.txt`: the authority report `oskac check
     // site/build.osk` printed for this program, which the Pages workflow
     // writes just before the build. Without it there is no authority page.
-    authority: DirRead,
+    authority: FileRead,
 }
 
 fn main(read: FsRead, write: FsWrite) -> Result<(), IoError> {
     let sources = Sources(
         docs: read.restrict_to("docs"),
-        readme: read.restrict_to("README.md"),
-        glossary: read.restrict_to("GLOSSARY.md"),
-        style: read.restrict_to("site/style.css"),
-        manifest: read.restrict_to("Cargo.toml"),
-        search: read.restrict_to("site/search.js"),
+        readme: read.restrict_to_file("README.md"),
+        glossary: read.restrict_to_file("GLOSSARY.md"),
+        style: read.restrict_to_file("site/style.css"),
+        manifest: read.restrict_to_file("Cargo.toml"),
+        search: read.restrict_to_file("site/search.js"),
         setup: read.restrict_to("site/agent-setup"),
-        authority: read.restrict_to("site/authority.txt"),
+        authority: read.restrict_to_file("site/authority.txt"),
     )
     // Writing is narrowed to the repository before anything is written,
     // then to `_site` once it exists (a narrowing needs its directory).
@@ -149,9 +149,9 @@ fn build(sources: Sources, site: DirWrite) -> Result<(), IoError> {
     site.write(Path.new("llms.txt"), llms_txt(all, pages))?
     site.write(Path.new("llms-full.txt"), llms_full(all, pages))?
     site.write(Path.new("search.json"), search_json(pages))?
-    let style = sources.style.read_to_string(Path.new("."))?
+    let style = sources.style.read_to_string()?
     site.write(Path.new("style.css"), style)?
-    let search = sources.search.read_to_string(Path.new("."))?
+    let search = sources.search.read_to_string()?
     site.write(Path.new("search.js"), search)?
     site.write(Path.new("CNAME"), cname())?
     if has_catalog(all) {
@@ -180,9 +180,9 @@ fn has_doc(all: Site, page: Untrusted<String>) -> Bool {
 // subdirectories one level down, except those `unpublished` names.
 fn gather(sources: Sources) -> Result<Site, IoError> {
     var docs: List<Doc> = List.new()
-    let readme = sources.readme.read_to_string(Path.new("."))?
+    let readme = sources.readme.read_to_string()?
     docs.push(new_doc("README.md", "index.html", "", readme))
-    let glossary = sources.glossary.read_to_string(Path.new("."))?
+    let glossary = sources.glossary.read_to_string()?
     var glossary_doc = new_doc("GLOSSARY.md", "glossary.html", "", glossary)
     glossary_doc.title = "Glossary"
     docs.push(glossary_doc)
@@ -210,7 +210,7 @@ fn gather(sources: Sources) -> Result<Site, IoError> {
             Err(_) => {}
         }
     }
-    let manifest = sources.manifest.read_to_string(Path.new("."))?
+    let manifest = sources.manifest.read_to_string()?
     var assets: List<Asset> = List.new()
     match sources.setup.list_dir(Path.new(".")) {
         Ok(names) => {
@@ -221,7 +221,7 @@ fn gather(sources: Sources) -> Result<Site, IoError> {
         }
         Err(_) => {}
     }
-    let authority = match sources.authority.read_to_string(Path.new(".")) {
+    let authority = match sources.authority.read_to_string() {
         Ok(text) => text
         Err(_) => ""
     }
