@@ -464,7 +464,87 @@ fn the_readme_becomes_the_home_page_and_the_glossary_its_own() {
     ]);
     assert!(site["index.html"].contains("<p>A <em>language</em>.</p>"));
     assert!(site["glossary.html"].contains("<p><strong>Capability</strong>:\nA value.</p>"));
-    assert!(site["glossary.html"].contains("<title>Words · Oska</title>"));
+}
+
+#[test]
+fn the_glossary_page_is_titled_glossary_whatever_its_heading() {
+    let site = build_ok(&[("GLOSSARY.md", "# Oska\n\nTerms.\n")]);
+    assert!(site["glossary.html"].contains("<title>Glossary · Oska</title>"));
+    assert!(site["glossary.html"].contains("<h1 id=\"oska\">Oska</h1>"));
+}
+
+// ---- The Markdown subset -------------------------------------------------------------
+
+/// The `<main>` of the page `docs/design.md` with `markdown` becomes.
+fn rendered(markdown: &str) -> String {
+    let site = build_ok(&[("docs/design.md", markdown)]);
+    let page = &site["design.html"];
+    let start = page.find("<main>\n").expect("a main") + "<main>\n".len();
+    let end = page.find("</main>").expect("a main end");
+    page[start..end].to_string()
+}
+
+#[test]
+fn headings_get_github_anchors() {
+    assert_eq!(
+        rendered("## Untrusted data, and `sinks`!\n"),
+        "<h2 id=\"untrusted-data-and-sinks\">Untrusted data, and <code>sinks</code>!</h2>\n"
+    );
+}
+
+#[test]
+fn lists_nest_by_indentation_and_keep_their_start() {
+    assert_eq!(
+        rendered("- a\n  - b\n- c\n\n3. three\n4. four\n"),
+        "<ul>\n<li>a<ul>\n<li>b</li>\n</ul>\n</li>\n<li>c</li>\n</ul>\n\
+         <ol start=\"3\">\n<li>three</li>\n<li>four</li>\n</ol>\n"
+    );
+}
+
+#[test]
+fn an_item_with_a_blank_line_in_it_wraps_its_paragraphs() {
+    assert_eq!(
+        rendered("- one\n\n  more\n"),
+        "<ul>\n<li><p>one</p>\n<p>more</p>\n</li>\n</ul>\n"
+    );
+}
+
+#[test]
+fn a_fence_keeps_its_text_verbatim_and_escaped() {
+    assert_eq!(
+        rendered("```oska\nlet x = \"<a>\" // **not bold**\n```\n"),
+        "<pre><code>let x = &quot;&lt;a&gt;&quot; // **not bold**\n</code></pre>\n"
+    );
+}
+
+#[test]
+fn a_table_keeps_a_pipe_in_code_or_escaped() {
+    assert_eq!(
+        rendered("| a | b |\n|---|:-:|\n| `x | y` | p \\| q |\n"),
+        "<table>\n<thead>\n<tr><th>a</th><th>b</th></tr>\n</thead>\n<tbody>\n\
+         <tr><td><code>x | y</code></td><td>p | q</td></tr>\n</tbody>\n</table>\n"
+    );
+}
+
+#[test]
+fn emphasis_needs_text_beside_it_and_never_splits_a_word() {
+    assert_eq!(
+        rendered("**b** *e* _u_ snake_case_name 2 * 3 * 4 \\*not\\*\n"),
+        "<p><strong>b</strong> <em>e</em> <em>u</em> snake_case_name 2 * 3 * 4 *not*</p>\n"
+    );
+}
+
+#[test]
+fn relative_links_go_to_the_pages_published_from_their_targets() {
+    let site = build_ok(&[
+        ("docs/adr/0001-a.md", "# A\n\n[design](../design.md#x) [b](0002-b.md) [up](../../README.md)\n"),
+        ("docs/adr/0002-b.md", "# B\n"),
+        ("docs/design.md", "# D\n\n[adr](adr/) [out](../../etc/passwd) [src](../crates/x.rs)\n"),
+    ]);
+    assert!(site["adr/0001-a.html"].contains(
+        "<a href=\"/design.html#x\">design</a> <a href=\"/adr/0002-b.html\">b</a> <a href=\"/\">up</a>"
+    ));
+    assert!(site["design.html"].contains("<a href=\"/adr/\">adr</a> out src</p>"));
 }
 
 #[test]

@@ -102,7 +102,9 @@ fn gather(sources: Sources) -> Result<Site, IoError> {
     let readme = sources.readme.read_to_string(Path.new("."))?
     docs.push(new_doc("README.md", "index.html", "", readme))
     let glossary = sources.glossary.read_to_string(Path.new("."))?
-    docs.push(new_doc("GLOSSARY.md", "glossary.html", "", glossary))
+    var glossary_doc = new_doc("GLOSSARY.md", "glossary.html", "", glossary)
+    glossary_doc.title = "Glossary"
+    docs.push(glossary_doc)
     var sections: List<Section> = List.new()
     for name in sources.docs.list_dir(Path.new("."))? {
         if unpublished(name) {

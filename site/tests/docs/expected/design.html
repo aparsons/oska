@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' https://cdn.jsdelivr.net; font-src https://cdn.jsdelivr.net; img-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oska design notes · Oska</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/latin-400.css" integrity="sha384-zc+mzApNgdFM05uzzG/c/4wVZ4LHLa0ZrZyeZYh4tq7GukSAQ2T6xYGTgE+mssl6" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/latin-700.css" integrity="sha384-qIiEwfeovj0ewBGH8n6bkz0WIS8pOCQ8xV0byBksQD0KeXY0dmQr3eXjhcSqFhbH" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/latin-400.css" integrity="sha384-rDtx9NW9VQWFrGIe8txtelRagz09ojKYLeaff45i3hEq7ofdZdkNlxVO8XCT5yPu" crossorigin="anonymous">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+<nav aria-label="Site">
+<ul>
+<li><a href="/">Oska</a></li>
+<li><a href="/design.html" aria-current="page">Design</a></li>
+<li><a href="/runtime.html">Runtime</a></li>
+<li><a href="/glossary.html">Glossary</a></li>
+<li><a href="/adr/">Decisions</a></li>
+<li><a href="/research/">Research</a></li>
+</ul>
+</nav>
+</header>
+<main>
+<h1 id="oska-design-notes">Oska design notes</h1>
+<p>Decisions are in <a href="/adr/"><code>adr/</code></a>, terms in <a href="/glossary.html"><code>GLOSSARY.md</code></a>, and the
+background in <a href="/research/2026-11-report.html">the research</a>.</p>
+<h2 id="principles">Principles</h2>
+<ol>
+<li><strong>Secure by default.</strong> The safe path is the shortest.</li>
+<li><strong>No ambient authority.</strong> See <a href="/adr/0002-capabilities.html#decision">ADR 0002</a>.</li>
+<li><strong>Legible.</strong> A <code>snake_case_name</code> stays as it is, and so does <code>2 * 3 * 4</code>.</li>
+</ol>
+<h2 id="capabilities">Capabilities</h2>
+<ul>
+<li><code>Fs</code> attenuates:<ul>
+<li>to <code>FsRead</code> or <code>FsWrite</code></li>
+<li>to one directory, with <code>restrict_to</code></li>
+</ul>
+</li>
+<li><p><strong>Confinement.</strong> A restricted filesystem resolves every path:</p>
+<ol>
+<li>An empty path is refused.</li>
+<li>The path is canonicalized.</li>
+</ol>
+<p><strong>Residual risk.</strong> A race remains, as <a href="#untrusted-data-and-sinks">Untrusted data</a> explains.</p>
+</li>
+<li><p>A code block in an item:</p>
+<pre><code>fn main(fs: FsRead) {
+    let docs = fs.restrict_to(&quot;docs&quot;)
+}
+</code></pre>
+</li>
+</ul>
+<ol start="3">
+<li>A list that starts at three</li>
+<li>keeps its number.</li>
+</ol>
+<h2 id="untrusted-data-and-sinks">Untrusted data and sinks</h2>
+<table>
+<thead>
+<tr><th>Sink</th><th>Data position</th><th>Structural position</th></tr>
+</thead>
+<tbody>
+<tr><td>SQL (<code>std.sql</code>)</td><td>Parameters</td><td>The query, an <code>sql&quot;...&quot;</code> literal</td></tr>
+<tr><td>Closures</td><td><code>|x| x</code></td><td><code>`|`</code> in code</td></tr>
+</tbody>
+</table>
+<p>Text is <em>untrusted</em> when it comes from outside, and <strong>trusted</strong> text is
+written in the program. An escaped *star* is not emphasis, and
+<code>a ` b</code> is code.</p>
+<h3 id="sinks">Sinks</h3>
+<p>Headings at every level get an anchor.</p>
+<h4 id="fourth">Fourth</h4>
+<h5 id="fifth">Fifth</h5>
+<h6 id="sixth">Sixth</h6>
+</main>
+<footer>
+<p>Built from the Oska repository by <code>site/build.osk</code>, an Oska program. The docs track <code>main</code>.</p>
+</footer>
+</body>
+</html>
