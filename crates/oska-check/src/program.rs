@@ -181,6 +181,9 @@ pub enum ExprKind {
         scrutinee: Box<Expr>,
         arms: Vec<Arm>,
     },
+    /// `scope |s| { ... }`. The handle `s` takes the next slot, for the
+    /// body to see. The body is a block.
+    Scope(Box<Expr>),
     /// Something the checked program cannot express yet. A backend
     /// reports it when it is reached.
     Unsupported,

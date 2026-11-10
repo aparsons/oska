@@ -32,6 +32,8 @@ pub mod codes {
     pub const TODO: &str = "P0003";
     /// An integer was divided by zero, or its remainder taken.
     pub const DIVISION_BY_ZERO: &str = "P0004";
+    /// `spawn` was called on a scope handle whose `scope` block has ended.
+    pub const SPAWN_ON_FINISHED_SCOPE: &str = "P0005";
     /// `Env.secret` asked for a variable the environment does not set.
     pub const MISSING_SECRET: &str = "P0020";
 
@@ -44,6 +46,7 @@ pub mod codes {
         INDEX_OUT_OF_BOUNDS,
         TODO,
         DIVISION_BY_ZERO,
+        SPAWN_ON_FINISHED_SCOPE,
         MISSING_SECRET,
     ];
 }

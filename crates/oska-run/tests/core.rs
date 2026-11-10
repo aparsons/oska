@@ -282,7 +282,7 @@ fn a_main_that_returns_unit_exits_with_code_0() {
 
 #[test]
 fn a_program_using_something_not_yet_supported_is_refused_with_e0380() {
-    let src = main_with("    let n = scope |s| {\n        1\n    }\n    io.println(\"{n}\")");
+    let src = main_with("    let n = \"  hi \".trim()\n    io.println(n)");
     assert_refused(&src, "E0380");
     assert_eq!(common::run_fake(&src, &[]).exit_code, 2);
 }

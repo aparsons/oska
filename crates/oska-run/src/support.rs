@@ -52,6 +52,7 @@ fn first_in(program: &Program, expr: &Expr) -> Option<(Span, String)> {
         } => first_of(program, [lhs, rhs].map(|e| &**e)),
         ExprKind::Neg { operand, .. }
         | ExprKind::Not(operand)
+        | ExprKind::Scope(operand)
         | ExprKind::Field { base: operand, .. } => first_in(program, operand),
         ExprKind::Construct { fields: items, .. } | ExprKind::List(items) => {
             first_of(program, items)

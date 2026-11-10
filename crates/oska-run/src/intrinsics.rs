@@ -15,6 +15,7 @@ use crate::data;
 use crate::host::Host;
 use crate::interp::Interpreter;
 use crate::panics::{codes, Panic};
+use crate::tasks;
 use crate::value::{Access, Capability, FsCap, Root, Value, SECRET};
 
 /// An intrinsic: the host, the arguments (the receiver first), and the
@@ -85,6 +86,7 @@ pub fn lookup_mutating(name: &str) -> Option<MutatingIntrinsic> {
 pub fn lookup_higher_order(name: &str) -> Option<HigherOrder> {
     data::HIGHER_ORDER
         .iter()
+        .chain(tasks::HIGHER_ORDER)
         .find(|(n, _)| *n == name)
         .map(|(_, f)| *f)
 }
@@ -190,6 +192,8 @@ fn debug(value: &Value, out: &mut String) {
         Value::Closure(_) => out.push_str("<closure>"),
         Value::Capability(cap) => out.push_str(&format!("<{cap:?}>")),
         Value::Args(args) => out.push_str(&format!("Args{:?}", &**args)),
+        Value::Scope(_) => out.push_str("<scope>"),
+        Value::Task(_) => out.push_str("<task>"),
     }
 }
 
