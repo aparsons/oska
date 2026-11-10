@@ -610,7 +610,7 @@ fn a_rebuild_into_an_existing_site_succeeds() {
 }
 
 #[test]
-fn the_generator_reaches_only_the_filesystem_read_only_and_write_only() {
+fn the_generator_reaches_only_directories_it_attenuated_to_read_only_and_write_only() {
     let report = oska_check::check_module(BUILD);
     assert_eq!(report.diagnostics, Vec::new());
     let main = report
@@ -619,10 +619,11 @@ fn the_generator_reaches_only_the_filesystem_read_only_and_write_only() {
         .find(|f| f.name == "main")
         .expect("the generator has a `main`");
     assert_eq!(main.authority, ["FsRead", "FsWrite"]);
-    for function in &report.functions {
+    // Every other function gets only directories `main` attenuated to.
+    for function in report.functions.iter().filter(|f| f.name != "main") {
         for capability in &function.authority {
             assert!(
-                capability == "FsRead" || capability == "FsWrite",
+                capability == "DirRead" || capability == "DirWrite",
                 "`{}` reaches `{capability}`",
                 function.name
             );
@@ -639,7 +640,7 @@ fn main_narrows_reading_to_docs_and_the_files_it_names() {
         "read.restrict_to(\"site/style.css\")",
         "read.restrict_to(\"site/search.js\")",
         "read.restrict_to(\"Cargo.toml\")",
-        "restrict_to(\"_site\")",
+        "restrict_to(Path.new(\"_site\"))",
     ] {
         assert!(
             BUILD.contains(narrowing),

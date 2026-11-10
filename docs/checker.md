@@ -37,7 +37,7 @@ A `test` body sees one built-in value, `t`, of the prelude type `TestContext`. I
 - **`diagnostics`**, in source order. Each uses the same object as parser diagnostics (see [`ast.md`](ast.md)): `code`, `message`, `span` (byte offsets), and `fix` when the repair is unambiguous. A parse error is reported alone, with empty `functions` and `audit`.
 - **`functions`**: one entry per function and `impl` method, in source order. The report is produced even when there are diagnostics.
   - `name`: the function's name, or `Type.method` for a method.
-  - `authority`: the built-in capabilities the function can reach, in order of first appearance, without repeats. `cap` types are expanded through their fields, and type arguments are expanded, so `List<Stdout>` reaches `Stdout`. Attenuated capabilities keep their names, such as `FsRead`.
+  - `authority`: the built-in capabilities the function can reach, in order of first appearance, without repeats. `cap` types are expanded through their fields, and type arguments are expanded, so `List<Stdout>` reaches `Stdout`. Each capability is reported by its own name: an attenuation to a directory shows as the directory capability it gives, such as `DirRead`.
   - `via`: each capability-bearing parameter and the capabilities it supplies, in parameter order. A method's receiver appears as `self`. A `cap fn` parameter is listed with no capabilities, because a closure's capabilities are not written in its type; it still makes the function impure.
   - `pure`: `true` when no parameter, the receiver included, is capability-bearing.
 - **`audit`**: every **audit site**, in source order. It is always present, and is `[]` when there are none.
@@ -67,7 +67,7 @@ Each sink separates a **data position**, declared `Untrusted<String>`, from a **
 | `std.sql` | `Db.query`'s `params: List<Untrusted<String>>` | `Db.query`'s `query: SqlLiteral`; `connect`'s `url` |
 | `std.proc` | `run`'s `args: List<Untrusted<String>>` | `run`'s `program`; `run` also needs `Spawn` |
 | `std.html` | `text`'s argument, which is escaped | `TrustedHtml.new`'s `markup` |
-| Paths | `Path.from` | `Fs.restrict_to` and `FsRead.restrict_to`'s `dir` |
+| Paths | `Path.from`, also as the `dir` of a directory capability's `restrict_to` | `restrict_to`'s `dir` on `Fs`, `FsRead`, and `FsWrite` |
 | Network | `Connection.send`'s `body` | `NetConnect.connect`'s `host` |
 
 Values that come back from a sink are untrusted: `Row.get`, `Output.stdout`, `Html.render`, and `Connection.receive`. `Db` and `Connection` are capability-bearing (`Db` holds a `NetConnect`), and every sink type except the error types has private fields, so code outside the module can't construct one (`E0271`).

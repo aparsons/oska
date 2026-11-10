@@ -81,7 +81,7 @@ fn to_string_of_a_non_text_value_is_trusted() {
 #[test]
 fn a_method_that_is_not_trust_polymorphic_rejects_an_untrusted_receiver() {
     assert_errors(
-        "fn f(args: Args, fs: Fs) -> Option<Fs> {\n    let dir = args.get(1)?\n    Some(fs.restrict_to(dir))\n}",
+        "fn f(args: Args, fs: Fs) -> Option<Dir> {\n    let dir = args.get(1)?\n    Some(fs.restrict_to(dir))\n}",
         &[("E0300", "dir")],
     );
 }
@@ -301,7 +301,7 @@ fn trusted_text_compares_with_untrusted_text() {
 /// `header`, with `home` untrusted.
 fn restricting(header: &str, path: &str) -> String {
     format!(
-        "{header}\nfn f(env: Env, fs: FsRead) -> Option<FsRead> {{\n    \
+        "{header}\nfn f(env: Env, fs: FsRead) -> Option<DirRead> {{\n    \
          let home = env.get(\"HOME\")?\n    Some(fs.restrict_to({path}))\n}}"
     )
 }
@@ -345,7 +345,7 @@ fn text_from_a_type_parameter_is_rejected_as_sql_query_text() {
 #[test]
 fn text_from_a_type_parameter_is_rejected_as_a_directory() {
     assert_errors(
-        "fn f<T: Display>(x: T, fs: FsRead) -> FsRead {\n    fs.restrict_to(\"{x}\")\n}",
+        "fn f<T: Display>(x: T, fs: FsRead) -> DirRead {\n    fs.restrict_to(\"{x}\")\n}",
         &[("E0300", "\"{x}\"")],
     );
 }
@@ -372,7 +372,7 @@ fn a_generic_returning_untrusted_text_of_untrusted_text_is_untrusted() {
 fn a_generic_call_inside_a_generic_body_is_untrusted() {
     assert_errors(
         "fn first<T>(x: T, n: Int) -> String {\n    \"n\"\n}\n\
-         fn g<T: Display>(x: T, fs: FsRead) -> FsRead {\n    fs.restrict_to(first(x, 1))\n}",
+         fn g<T: Display>(x: T, fs: FsRead) -> DirRead {\n    fs.restrict_to(first(x, 1))\n}",
         &[("E0300", "first(x, 1)")],
     );
 }

@@ -49,6 +49,15 @@ pub type Table = &'static [(&'static str, Intrinsic)];
 pub const INTRINSICS: Table = &[
     ("Args.get", Plain(args_get)),
     ("Clock.now_millis", Plain(clock_now_millis)),
+    ("Dir.read_only", Plain(fs_read_only)),
+    ("Dir.restrict_to", Plain(dir_restrict_to)),
+    ("Dir.write_only", Plain(fs_write_only)),
+    ("DirRead.list_dir", Plain(fs_list_dir)),
+    ("DirRead.read_to_string", Plain(fs_read_to_string)),
+    ("DirRead.restrict_to", Plain(dir_restrict_to)),
+    ("DirWrite.create_dir", Plain(fs_create_dir)),
+    ("DirWrite.restrict_to", Plain(dir_restrict_to)),
+    ("DirWrite.write", Plain(fs_write)),
     ("Env.get", Plain(env_get)),
     ("Env.secret", Plain(env_secret)),
     ("Fs.read_only", Plain(fs_read_only)),
@@ -299,10 +308,12 @@ fn random_next_int(host: &mut dyn Host, _: Vec<Value>, _: Span) -> Result<Value,
 
 // ---- Files -------------------------------------------------------------
 
-/// The filesystem capability the checker guarantees `value` is.
+/// The filesystem or directory capability the checker guarantees `value`
+/// is. Both carry the same attenuation state, so their intrinsics share
+/// it; only the type the capability reports differs.
 fn fs_cap(value: &Value) -> &FsCap {
     match value {
-        Value::Capability(Capability::Fs(fs)) => fs,
+        Value::Capability(Capability::Fs(fs) | Capability::Dir(fs)) => fs,
         other => unreachable!("the checker guarantees a filesystem capability, found {other:?}"),
     }
 }
@@ -312,18 +323,31 @@ fn path_new(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Pa
     Ok(Value::path(args.swap_remove(0)))
 }
 
-/// `restrict_to(self, dir)` on `Fs`, `FsRead`, and `FsWrite`: the same
-/// access, confined to `dir`, a directory or a single file, which the
-/// host opens now and holds.
-///
-/// On an unrestricted filesystem, `dir` is any path whose last component
-/// is not a symlink. On a restricted one, it is walked beneath the
-/// current root like any path read there (`confine.rs`), so a restriction
-/// never widens. A root that cannot be opened leaves the result able to
-/// reach nothing, and every operation on it fails with the reason.
+/// `restrict_to(self, dir)` on `Fs`, `FsRead`, and `FsWrite`: the
+/// directory capability with the same access, confined to `dir`, which
+/// the host opens now and holds. `dir` is trusted text, any path whose
+/// last component is not a symlink.
 fn fs_restrict_to(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    let fs = fs_cap(&args[0]);
-    let dir = text(&args, 1);
+    Ok(restricted(host, fs_cap(&args[0]), text(&args, 1)))
+}
+
+/// `restrict_to(self, dir)` on `Dir`, `DirRead`, and `DirWrite`: the same
+/// capability narrowed to `dir`, a `Path` that may come from untrusted
+/// text. It is walked beneath the current root like any path read there
+/// (`confine.rs`), so a narrowing never widens.
+fn dir_restrict_to(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    Ok(restricted(
+        host,
+        fs_cap(&args[0]),
+        args[1].fields()[0].as_str(),
+    ))
+}
+
+/// The directory capability `fs` attenuates to at `dir`: a directory, or
+/// for now a single file. Attenuation never fails: a root that cannot be
+/// opened leaves the result able to reach nothing, and every operation on
+/// it fails with the reason, which names the root.
+fn restricted(host: &mut dyn Host, fs: &FsCap, dir: &str) -> Value {
     let opened = match &fs.root {
         Root::Anywhere if dir.is_empty() => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -338,27 +362,33 @@ fn fs_restrict_to(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Valu
         Err(_) if matches!(fs.root, Root::Nowhere(_)) => fs.root.clone(),
         Err(error) => Root::Nowhere(Rc::from(format!("cannot restrict to `{dir}`: {error}"))),
     };
-    Ok(Value::Capability(Capability::Fs(FsCap {
+    Value::Capability(Capability::Dir(FsCap {
         root,
         access: fs.access,
-    })))
+    }))
 }
 
-/// `Fs.read_only(self)`.
+/// `read_only(self)` on `Fs` and `Dir`.
 fn fs_read_only(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
     Ok(with_access(&args[0], Access::Read))
 }
 
-/// `Fs.write_only(self)`.
+/// `write_only(self)` on `Fs` and `Dir`.
 fn fs_write_only(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
     Ok(with_access(&args[0], Access::Write))
 }
 
+/// `value`, a filesystem or directory capability, of the same kind and
+/// root, with `access`.
 fn with_access(value: &Value, access: Access) -> Value {
-    Value::Capability(Capability::Fs(FsCap {
+    let attenuated = FsCap {
         root: fs_cap(value).root.clone(),
         access,
-    }))
+    };
+    Value::Capability(match value {
+        Value::Capability(Capability::Dir(_)) => Capability::Dir(attenuated),
+        _ => Capability::Fs(attenuated),
+    })
 }
 
 /// Refused unless `fs`'s access allows `intent`.
@@ -573,8 +603,7 @@ mod tests {
     /// before it starts (`E0370`), so none of their methods is ever
     /// called. Everything else in the prelude needs an intrinsic.
     fn no_runtime() -> Vec<String> {
-        let missing =
-            |name: &str| builtins::is_capability(name) && Capability::granted(name).is_none();
+        let missing = |name: &str| builtins::is_capability(name) && !Capability::implemented(name);
         let module = oska_syntax::parse_prelude(PRELUDE).expect("the prelude should parse");
         module
             .items

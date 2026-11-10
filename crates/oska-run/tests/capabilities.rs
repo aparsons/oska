@@ -269,7 +269,7 @@ fn restricting_a_restricted_filesystem_never_widens_it() {
     let sandbox = Sandbox::new("rerestrict");
     let src = format!(
         "fn main(io: Stdout, fs: FsRead) {{\n\
-         \x20   let wider = fs.restrict_to(\"{}\").restrict_to(\"..\")\n\
+         \x20   let wider = fs.restrict_to(\"{}\").restrict_to(Path.new(\"..\"))\n\
          \x20   let text = wider.read_to_string(Path.new(\"outside/secret.txt\")).unwrap_or(\"REFUSED\")\n\
          \x20   let _ = io.println(text)\n\
          }}\n",
@@ -422,7 +422,7 @@ fn a_restriction_to_a_subdirectory_reads_relative_to_it() {
     let sandbox = Sandbox::new("subroot");
     let src = format!(
         "fn main(io: Stdout, fs: FsRead) {{\n\
-         \x20   let sub = fs.restrict_to(\"{}\").restrict_to(\"sub\")\n\
+         \x20   let sub = fs.restrict_to(\"{}\").restrict_to(Path.new(\"sub\"))\n\
          \x20   let text = sub.read_to_string(Path.new(\"nested.txt\")).unwrap_or(\"REFUSED\")\n\
          \x20   let _ = io.println(text)\n\
          }}\n",

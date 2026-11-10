@@ -151,7 +151,7 @@ impl Host for Recording {
 fn read(root: &Path, narrow: &[&str], path: &str) -> String {
     let narrowing: String = narrow
         .iter()
-        .map(|dir| format!(".restrict_to(\"{dir}\")"))
+        .map(|dir| format!(".restrict_to(Path.new(\"{dir}\"))"))
         .collect();
     let src = format!(
         "fn main(io: Stdout, fs: FsRead) {{\n\

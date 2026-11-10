@@ -1,7 +1,7 @@
 {
   "diagnostics": [],
   "functions": [
-    {"name":"count_lines","authority":["FsRead"],"via":[{"param":"fs","capabilities":["FsRead"]}],"pure":false},
+    {"name":"count_lines","authority":["DirRead"],"via":[{"param":"fs","capabilities":["DirRead"]}],"pure":false},
     {"name":"AppError.usage","authority":[],"via":[],"pure":true},
     {"name":"AppError.from","authority":[],"via":[],"pure":true},
     {"name":"AppError.to_string","authority":[],"via":[],"pure":true},
