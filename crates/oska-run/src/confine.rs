@@ -1,7 +1,7 @@
 //! Filesystem confinement: how a restricted `Fs` keeps every path inside
 //! its root.
 //!
-//! # Reads and narrowing: a walk beneath the root's handle
+//! # A walk beneath the root's handle
 //!
 //! A restricted filesystem holds its root as a [`RootHandle`](crate::host::RootHandle) the host
 //! opened. [`names`] turns a program's path into the plain names to walk
@@ -12,62 +12,35 @@
 //! 2. `.` is dropped, and `..` drops the name before it. A `..` with no
 //!    name before it would climb above the root, and is refused.
 //!
+//! A write and `create_dir` take [`names_to_create`] instead, which also
+//! refuses a path that does not end in a plain name.
+//!
 //! The host then walks the names one at a time beneath the root's handle
-//! (`Host::read_file_beneath`, `Host::open_beneath`). On Unix each is
-//! opened relative to the one before, and none is followed if it is a
-//! symlink (`oska-sys`), so there is no check for another process to race:
-//! a symlink at any component, planted before the walk or swapped in
-//! during it, makes the walk fail. Every symlink is refused, dangling or
-//! not, wherever it points. On Windows the host checks each component on
-//! the path instead, which narrows the race but does not close it.
+//! to read, write, create a directory, list one or narrow to one
+//! (`Host::read_file_beneath`, `Host::write_file_beneath`,
+//! `Host::create_dir_beneath`, `Host::list_dir_beneath`,
+//! `Host::open_beneath`). On Unix each name is opened relative to the one
+//! before, and none is followed if it is a symlink, the last included
+//! (`oska-sys`): a write opens or creates its file beneath its parent's
+//! handle, `create_dir` makes its directory there, and `list_dir` lists
+//! through the directory's own handle. So there is no check for another
+//! process to race: a symlink at any component, planted before the walk
+//! or swapped in during it, makes the walk fail. Every symlink is
+//! refused, dangling or not, wherever it points.
 //!
-//! # Writes, `create_dir` and `list_dir`: checked paths
+//! # What remains on Windows
 //!
-//! These still resolve a path under the root's canonical path.
-//! [`resolve`] turns a program's path into the real path to open, or
-//! refuses it:
-//!
-//! 1. An empty path is refused, and so is an absolute one, even if it
-//!    names a file inside the root: paths are relative to the root.
-//! 2. The path is joined to the root and canonicalized by the host, which
-//!    resolves `..` and follows every symlink, in every component.
-//! 3. The result must be the root or lie under it, compared component by
-//!    component, or the path is refused.
-//!
-//! A write names its file by a canonical parent directory and a plain
-//! last component, and never follows a symlink in that component:
-//!
-//! 1. The path as written must end in a plain name: not in a separator,
-//!    `.`, or `..`. `Path::components` drops a trailing `/` and `.`, so
-//!    `dang/` would otherwise name `dang`, and a dangling symlink there
-//!    would send the write wherever it points.
-//! 2. The parent directory is canonicalized and must lie under the root.
-//! 3. The exact path that will be opened, the canonical parent joined
-//!    with the name, must not be a symlink, dangling or not.
-//!
-//! The host then opens the final component without following a symlink
-//! (`O_NOFOLLOW` where the platform has it) and checks again, on the
-//! opened file, that it still lies under the root (`host.rs`), before it
-//! reads or writes anything.
-//!
-//! # What remains
-//!
-//! For writes, `create_dir` and `list_dir`, the check and the open are
-//! still separate steps on paths. Opening the
-//! last component without following a symlink, and re-checking the opened
-//! file, narrow the race but leave one window: another process that swaps
-//! an *intermediate* directory for a symlink at the right moment can still
-//! direct the open outside the root, though the re-check then refuses to
-//! use what it opened (a write may already have created an empty file
-//! there). Closing it needs the open to resolve the whole path beneath a
-//! directory handle (Linux `openat2` with `RESOLVE_BENEATH`), which `std`
-//! does not offer. The interpreter does not defend against a concurrent
-//! attacker on the same filesystem (`docs/runtime.md`).
+//! Windows has no handle-relative open in `std`, so its host checks each
+//! component on the path not to be a symlink, opens the path, and checks
+//! again that what it opened lies under the root. That narrows the race
+//! but does not close it: another process that swaps an intermediate
+//! directory for a symlink at the right moment can still direct the open
+//! outside the root, though the re-check then refuses to use what it
+//! opened (a write may already have created an empty file there)
+//! (`docs/runtime.md`).
 
 use std::io;
-use std::path::{Component, Path, PathBuf};
-
-use crate::host::Host;
+use std::path::{Component, Path};
 
 /// The plain names `path` walks beneath a root, with `.` and `..`
 /// resolved as written, or why it is refused: it is empty, absolute, or
@@ -94,83 +67,44 @@ pub fn names(path: &str) -> io::Result<Vec<String>> {
     Ok(names)
 }
 
-/// What a resolved path will be used for.
+/// What a filesystem operation does: what its capability's access must
+/// allow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Intent {
-    /// Reading an existing file, or restricting to an existing directory.
+    /// Reading a file, or listing a directory.
     Read,
-    /// Writing a file, which may not exist yet.
+    /// Writing a file, or creating a directory.
     Write,
 }
 
-/// The real path `path` names under `root`, a canonical directory, or an
-/// error when it would escape `root`.
-pub fn resolve(
-    host: &mut dyn Host,
-    root: &Path,
-    path: &str,
-    intent: Intent,
-) -> io::Result<PathBuf> {
-    if path.is_empty() {
-        return Err(refused("an empty path names no file"));
-    }
-    let relative = Path::new(path);
-    if relative.has_root() || relative.is_absolute() {
-        return Err(refused(&format!(
-            "`{path}` is absolute; a restricted filesystem takes paths relative to its root"
-        )));
-    }
-    match intent {
-        // The root itself, which may be a file: `file/.` would not
-        // canonicalize, so the root is taken as it is, already canonical.
-        Intent::Read if relative.components().all(|c| c == Component::CurDir) => {
-            Ok(root.to_path_buf())
-        }
-        Intent::Read => inside(root, host.canonicalize(&root.join(relative))?, path),
-        Intent::Write => file_to_write(host, root, path),
-    }
-}
-
-/// The path of the file a write to `path` opens: the canonical parent
-/// directory, under `root`, joined with the plain name `path` ends in.
-fn file_to_write(host: &mut dyn Host, root: &Path, path: &str) -> io::Result<PathBuf> {
-    let name = last_name(path).ok_or_else(|| {
-        refused(&format!(
-            "`{path}` does not end in a file name; a write needs one"
-        ))
-    })?;
-    let joined = root.join(path);
-    let parent = joined.parent().ok_or_else(|| escapes(path))?;
-    let parent = inside(root, host.canonicalize(parent)?, path)?;
-    let target = parent.join(name);
-    if host.is_symlink(&target) {
-        return Err(refused(&format!(
-            "`{path}` is a symlink; a write never follows one"
-        )));
-    }
-    Ok(target)
-}
-
-/// The plain file name `path` ends in, as written: `None` when it ends in
-/// a separator, `.`, or `..`, which name a directory, not a file.
-fn last_name(path: &str) -> Option<&str> {
-    if path.ends_with(std::path::is_separator) {
-        return None;
-    }
-    let name = path.rsplit(std::path::is_separator).next()?;
-    match Path::new(name).components().next() {
-        Some(Component::Normal(_)) => Some(name),
-        _ => None,
-    }
-}
-
-/// `real` if it is `root` or lies under it.
-fn inside(root: &Path, real: PathBuf, path: &str) -> io::Result<PathBuf> {
-    if real.starts_with(root) {
-        Ok(real)
+/// The plain names a write or `create_dir` of `path` walks beneath a
+/// root, as [`names`] gives them, when `path` as written ends in a plain
+/// name: not in a separator, `.`, or `..`. `Path::components` drops a
+/// trailing `/` and `.`, so `dang/` would otherwise name `dang`, and
+/// `sub/.` would name `sub`: a write or a new directory needs a name of
+/// its own.
+pub fn names_to_create(path: &str) -> io::Result<Vec<String>> {
+    let names = names(path)?;
+    if ends_in_a_name(path) {
+        Ok(names)
     } else {
-        Err(escapes(path))
+        Err(refused(&format!(
+            "`{path}` does not end in a file name; a write or a new directory needs one"
+        )))
     }
+}
+
+/// Whether `path` as written ends in a plain name, not in a separator,
+/// `.`, or `..`.
+fn ends_in_a_name(path: &str) -> bool {
+    if path.ends_with(std::path::is_separator) {
+        return false;
+    }
+    let name = path.rsplit(std::path::is_separator).next().unwrap_or("");
+    matches!(
+        Path::new(name).components().next(),
+        Some(Component::Normal(_))
+    )
 }
 
 fn escapes(path: &str) -> io::Error {

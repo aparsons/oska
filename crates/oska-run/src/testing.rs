@@ -22,7 +22,7 @@
 //! which is reported failed with the panic as its failure.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use oska_check::builtins;
 use oska_check::program::{Program, Test};
@@ -344,14 +344,6 @@ impl Host for TestHost<'_> {
         self.world().next_random()
     }
 
-    fn canonicalize(&mut self, path: &Path) -> io::Result<PathBuf> {
-        self.world().canonicalize(path)
-    }
-
-    fn is_symlink(&mut self, path: &Path) -> bool {
-        self.world().is_symlink(path)
-    }
-
     fn open_root(&mut self, path: &Path) -> io::Result<RootHandle> {
         self.world().open_root(path)
     }
@@ -368,21 +360,33 @@ impl Host for TestHost<'_> {
         self.world().read_file(path)
     }
 
-    fn write_file(
+    fn write_file_beneath(
         &mut self,
-        path: &Path,
+        root: &RootHandle,
+        names: &[String],
         contents: &str,
-        beneath: Option<&Path>,
     ) -> io::Result<()> {
-        self.world().write_file(path, contents, beneath)
+        self.world().write_file_beneath(root, names, contents)
     }
 
-    fn create_dir(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<()> {
-        self.world().create_dir(path, beneath)
+    fn write_file(&mut self, path: &Path, contents: &str) -> io::Result<()> {
+        self.world().write_file(path, contents)
     }
 
-    fn list_dir(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<Vec<String>> {
-        self.world().list_dir(path, beneath)
+    fn create_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
+        self.world().create_dir_beneath(root, names)
+    }
+
+    fn create_dir(&mut self, path: &Path) -> io::Result<()> {
+        self.world().create_dir(path)
+    }
+
+    fn list_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Vec<String>> {
+        self.world().list_dir_beneath(root, names)
+    }
+
+    fn list_dir(&mut self, path: &Path) -> io::Result<Vec<String>> {
+        self.world().list_dir(path)
     }
 
     fn take_output(&mut self) -> Output {

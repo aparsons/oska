@@ -89,12 +89,6 @@ impl Host for Recording {
     fn next_random(&mut self) -> u64 {
         self.real.next_random()
     }
-    fn canonicalize(&mut self, path: &Path) -> std::io::Result<PathBuf> {
-        self.real.canonicalize(path)
-    }
-    fn is_symlink(&mut self, path: &Path) -> bool {
-        self.real.is_symlink(path)
-    }
     fn open_root(&mut self, path: &Path) -> std::io::Result<RootHandle> {
         self.real.open_root(path)
     }
@@ -111,19 +105,32 @@ impl Host for Recording {
     fn read_file(&mut self, path: &Path) -> std::io::Result<String> {
         self.real.read_file(path)
     }
-    fn write_file(
+    fn write_file_beneath(
         &mut self,
-        path: &Path,
+        root: &RootHandle,
+        names: &[String],
         contents: &str,
-        beneath: Option<&Path>,
     ) -> std::io::Result<()> {
-        self.real.write_file(path, contents, beneath)
+        self.real.write_file_beneath(root, names, contents)
     }
-    fn create_dir(&mut self, path: &Path, beneath: Option<&Path>) -> std::io::Result<()> {
-        self.real.create_dir(path, beneath)
+    fn write_file(&mut self, path: &Path, contents: &str) -> std::io::Result<()> {
+        self.real.write_file(path, contents)
     }
-    fn list_dir(&mut self, path: &Path, beneath: Option<&Path>) -> std::io::Result<Vec<String>> {
-        self.real.list_dir(path, beneath)
+    fn create_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> std::io::Result<()> {
+        self.real.create_dir_beneath(root, names)
+    }
+    fn create_dir(&mut self, path: &Path) -> std::io::Result<()> {
+        self.real.create_dir(path)
+    }
+    fn list_dir_beneath(
+        &mut self,
+        root: &RootHandle,
+        names: &[String],
+    ) -> std::io::Result<Vec<String>> {
+        self.real.list_dir_beneath(root, names)
+    }
+    fn list_dir(&mut self, path: &Path) -> std::io::Result<Vec<String>> {
+        self.real.list_dir(path)
     }
     fn printed(&self) -> Vec<String> {
         self.stdout.lines().map(str::to_string).collect()
@@ -347,41 +354,13 @@ fn a_write_to_a_symlink_inside_the_root_is_refused_even_to_an_inside_file() {
 }
 
 #[test]
-fn real_host_opens_a_restricted_file_without_following_a_symlink() {
-    // The host's own guard, behind `confine.rs`: what a symlink swapped
-    // in after the path was checked would meet. Reads walk beneath the
-    // root's handle instead (`confined_reads.rs`).
-    let sandbox = Sandbox::new("host-nofollow");
-    let root = sandbox.root();
-    let target = sandbox.outside().join("swapped");
-    sandbox.link("dang", &target);
-    sandbox.link("escape.txt", &sandbox.outside().join("secret.txt"));
-    let mut host = RealHost::new();
-    assert!(host
-        .write_file(&root.join("dang"), "pwned", Some(&root))
-        .is_err());
-    assert!(!target.exists(), "the dangling symlink was followed");
-    assert!(host
-        .write_file(&root.join("escape.txt"), "pwned", Some(&root))
-        .is_err());
-    assert_eq!(
-        std::fs::read_to_string(sandbox.outside().join("secret.txt")).expect("untouched"),
-        "outside text"
-    );
-}
-
-#[test]
-fn real_host_refuses_a_restricted_file_that_is_not_under_the_root() {
+fn real_host_unrestricted_reads_follow_a_symlink() {
+    // Restricted, reads and writes never do (`confined_reads.rs`,
+    // `confined_writes.rs`).
     let sandbox = Sandbox::new("host-beneath");
     let root = sandbox.root();
     let outside = sandbox.outside().join("secret.txt");
     let mut host = RealHost::new();
-    assert!(host.write_file(&outside, "pwned", Some(&root)).is_err());
-    assert_eq!(
-        std::fs::read_to_string(&outside).expect("untouched"),
-        "outside text"
-    );
-    // Unrestricted, the same host reads it, through a symlink too.
     sandbox.link("escape.txt", &outside);
     assert_eq!(
         host.read_file(&root.join("escape.txt"))
