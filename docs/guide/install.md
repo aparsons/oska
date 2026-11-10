@@ -1,6 +1,6 @@
 # Install
 
-Oska is pre-alpha. **v0.1.0** is the first release. You can install `oskac`, the compiler and runner, from a signed binary with a one-line installer, or build it from source.
+Oska is pre-alpha. The latest release is **v0.2.0**. You can install `oskac`, the compiler and runner, from a signed binary with a one-line installer, or build it from source.
 
 ## Build from source
 
@@ -22,7 +22,7 @@ Confirm that it works:
 oskac --version
 ```
 
-It prints `oskac` and the version on one line. A build from this checkout prints `oskac 0.1.0`. Then continue with the [quickstart](quickstart.md).
+It prints `oskac` and the version on one line. A build from this checkout prints `oskac 0.2.0`. Then continue with the [quickstart](quickstart.md).
 
 ## One-line installers
 
@@ -42,26 +42,26 @@ What the installers do:
 
 - **They never prompt.** They are safe to run from a script, a CI job, or an AI agent.
 - **They install to `~/.oska/bin`.** Set `OSKA_HOME` to install into `$OSKA_HOME/bin` instead. They don't change your `PATH`; if `~/.oska/bin` is not on it, they print the line to add.
-- **They verify before they install.** The installer checks the SSH signature on `SHA256SUMS` (`ssh-keygen -Y verify`, so it needs OpenSSH 8.1 or newer) against the release key built into the installer. The signed file's first line, `# oska-release v0.1.0`, names the release, and it must be the one the installer asked for, so an old release cannot be served as a newer one. Then the installer checks the download's SHA-256 checksum against `SHA256SUMS`, and checks that the binary reports the expected version. If any check fails, nothing is installed and the installer exits with a non-zero status.
+- **They verify before they install.** The installer checks the SSH signature on `SHA256SUMS` (`ssh-keygen -Y verify`, so it needs OpenSSH 8.1 or newer) against the release key built into the installer. The signed file's first line, `# oska-release v0.2.0`, names the release, and it must be the one the installer asked for, so an old release cannot be served as a newer one. Then the installer checks the download's SHA-256 checksum against `SHA256SUMS`, and checks that the binary reports the expected version. If any check fails, nothing is installed and the installer exits with a non-zero status.
 - **They download over HTTPS only.** They refuse a redirect to a plain `http://` URL.
 - **They take `--version` and `--json`.** `--version` installs that release instead of the latest. `--json` prints one line of JSON on stdout and nothing else.
 
 To pass options through the pipe:
 
 ```sh
-curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.1.0 --json
+curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.2.0 --json
 ```
 
 `iex` cannot pass options, so in PowerShell run the script as a script block:
 
 ```powershell
-& ([scriptblock]::Create((irm https://oskalang.dev/install.ps1))) --version 0.1.0 --json
+& ([scriptblock]::Create((irm https://oskalang.dev/install.ps1))) --version 0.2.0 --json
 ```
 
 A successful `--json` run prints:
 
 ```json
-{"ok": true, "action": "installed", "version": "0.1.0", "tag": "v0.1.0", "previous_version": null, "platform": "linux-x86_64", "path": "/home/you/.oska/bin/oskac", "bin_dir": "/home/you/.oska/bin", "on_path": false, "checksum_verified": true, "signature_verified": true}
+{"ok": true, "action": "installed", "version": "0.2.0", "tag": "v0.2.0", "previous_version": null, "platform": "linux-x86_64", "path": "/home/you/.oska/bin/oskac", "bin_dir": "/home/you/.oska/bin", "on_path": false, "checksum_verified": true, "signature_verified": true}
 ```
 
 - `action` is `installed`, `updated` (with the old version in `previous_version`), or `reinstalled`.
