@@ -75,6 +75,17 @@ pub trait Host: Send {
     fn write_file(&mut self, path: &Path, contents: &str, beneath: Option<&Path>)
         -> io::Result<()>;
 
+    /// The names of the entries of the directory at `path`, sorted by
+    /// their bytes, so the order is the same on every host. A name is
+    /// the entry's own, not a path; a subdirectory and a symlink are
+    /// listed by name, and nothing is followed. Fails when `path` is not
+    /// a directory, or an entry's name is not valid UTF-8.
+    ///
+    /// `beneath` is as for [`Host::read_file`]: with it, `path` is one
+    /// `confine.rs` resolved, and nothing is listed unless the directory
+    /// still lies under it.
+    fn list_dir(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<Vec<String>>;
+
     /// Every line written to stdout so far, without its line break: one
     /// per `println`, as `t.printed()` returns them. A host that writes
     /// straight to the real stream records none.
@@ -175,6 +186,38 @@ impl Host for RealHost {
         let mut file = open_beneath(path, root, OpenOptions::new().write(true).create(true))?;
         file.set_len(0)?;
         file.write_all(contents.as_bytes())
+    }
+
+    fn list_dir(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<Vec<String>> {
+        // The directory is checked before it is read and again after: a
+        // symlink swapped in for it in between sends the listing
+        // somewhere else, and that listing is discarded.
+        let under = |path: &Path| match beneath {
+            Some(root) => {
+                let now = std::fs::canonicalize(path)?;
+                if now.starts_with(root) {
+                    Ok(())
+                } else {
+                    Err(moved(path))
+                }
+            }
+            None => Ok(()),
+        };
+        under(path)?;
+        let mut names = Vec::new();
+        for entry in std::fs::read_dir(path)? {
+            let name = entry?.file_name();
+            let name = name.into_string().map_err(|name| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{name:?} in `{}` is not valid UTF-8", path.display()),
+                )
+            })?;
+            names.push(name);
+        }
+        under(path)?;
+        names.sort();
+        Ok(names)
     }
 
     fn printed(&self) -> Vec<String> {
@@ -503,6 +546,27 @@ impl Host for FakeHost {
             }
             _ => Err(not_found(&path)),
         }
+    }
+
+    fn list_dir(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<Vec<String>> {
+        let path = fake_beneath(path, beneath)?;
+        if !self.is_dir(&path) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("not a directory: {}", path.display()),
+            ));
+        }
+        // A file's first component below `path` is an entry of it: a
+        // file if it is the last, else a directory. `BTreeSet` sorts by
+        // the bytes of the name, as `RealHost` does.
+        let names: std::collections::BTreeSet<String> = self
+            .files
+            .keys()
+            .filter_map(|file| file.strip_prefix(&path).ok())
+            .filter_map(|rest| rest.components().next())
+            .filter_map(|c| c.as_os_str().to_str().map(str::to_string))
+            .collect();
+        Ok(names.into_iter().collect())
     }
 
     fn take_output(&mut self) -> Output {
