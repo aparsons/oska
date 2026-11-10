@@ -19,7 +19,7 @@
 use std::path::Path;
 use std::rc::Rc;
 
-use oska_check::program::{Closure, Construct};
+use oska_check::program::{Callee, Closure, Construct};
 
 /// A runtime value.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +37,8 @@ pub enum Value {
     },
     /// A closure, with what it captured.
     Closure(Rc<ClosureValue>),
+    /// A named function used as a value: calling it calls `callee`.
+    Function(Rc<Callee>),
     /// A `List`'s items.
     List(Rc<Vec<Value>>),
     /// An instance of a struct, by type name, with its fields in
@@ -161,6 +163,34 @@ pub const UNIMPLEMENTED_MODULES: &[&str] = &["std.proc", "std.sql", "std.html"];
 pub const SECRET: &str = "Secret";
 
 impl Value {
+    /// The runtime type tag a trait call in generic code dispatches on:
+    /// the name of the value's type without its arguments, such as
+    /// `Point`, `List`, or `String`.
+    ///
+    /// Every integer is stored alike, so its tag is `Int` whatever its
+    /// type; `support.rs` refuses a program whose dispatch that would
+    /// get wrong. A capability's tag is likewise only its kind.
+    pub fn type_tag(&self) -> &str {
+        match self {
+            Value::Unit => "()",
+            Value::Bool(_) => "Bool",
+            Value::Int(_) => "Int",
+            Value::Str(_) => "String",
+            Value::Range { .. } => "Range",
+            Value::Closure(_) | Value::Function(_) => "fn",
+            Value::List(_) => "List",
+            Value::Struct { ty, .. } | Value::Variant { ty, .. } => ty,
+            Value::Capability(Capability::Fs(_)) => "Fs",
+            Value::Capability(Capability::Stdin) => "Stdin",
+            Value::Capability(Capability::Stdout) => "Stdout",
+            Value::Capability(Capability::Stderr) => "Stderr",
+            Value::Capability(Capability::Env) => "Env",
+            Value::Capability(Capability::Clock) => "Clock",
+            Value::Capability(Capability::Random) => "Random",
+            Value::Args(_) => "Args",
+        }
+    }
+
     pub fn str(text: &str) -> Value {
         Value::Str(Rc::from(text))
     }

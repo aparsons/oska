@@ -52,7 +52,16 @@ fn first_in(program: &Program, expr: &Expr) -> Option<(Span, String)> {
         } => first_of(program, [lhs, rhs].map(|e| &**e)),
         ExprKind::Neg { operand, .. }
         | ExprKind::Not(operand)
-        | ExprKind::Field { base: operand, .. } => first_in(program, operand),
+        | ExprKind::Field { base: operand, .. }
+        | ExprKind::Try {
+            operand,
+            convert: None,
+        } => first_in(program, operand),
+        ExprKind::Try {
+            operand,
+            convert: Some(convert),
+        } => callee(program, convert, expr.span).or_else(|| first_in(program, operand)),
+        ExprKind::FnValue(target) => callee(program, target, expr.span),
         ExprKind::Construct { fields: items, .. } | ExprKind::List(items) => {
             first_of(program, items)
         }

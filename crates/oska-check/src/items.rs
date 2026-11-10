@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use oska_syntax::ast::{
     Field, Fields, FnDecl, GenericParam, Item, ItemKind, Module, Type, TypeKind,
 };
+use oska_syntax::Span;
 
 use crate::authority::capability_bearing;
 use crate::collect::{DeclKind, Decls};
@@ -179,6 +180,33 @@ pub struct ImplInfo {
     /// The target is capability-bearing, so its methods with a receiver
     /// are not pure.
     pub receiver_bearing: bool,
+    /// The span of the `impl` item, for one the module declares; `None`
+    /// for the prelude's.
+    pub span: Option<Span>,
+}
+
+impl ImplInfo {
+    /// The trait as the impl's methods are named in the checked program:
+    /// `Display`, or `From<IoError>` with a generic trait's arguments
+    /// (see [`crate::program::trait_method`]).
+    pub fn trait_ref(&self) -> String {
+        if self.trait_args.is_empty() {
+            return self.trait_name.clone();
+        }
+        let args: Vec<String> = self.trait_args.iter().map(Ty::to_string).collect();
+        format!("{}<{}>", self.trait_name, args.join(", "))
+    }
+
+    /// The checked program's name for the impl's `method`, such as
+    /// `<AppError as From<IoError>>.from`.
+    pub fn method_name(&self, method: &str) -> Option<String> {
+        let type_name = self.target.head()?;
+        Some(crate::program::trait_method(
+            type_name,
+            &self.trait_ref(),
+            method,
+        ))
+    }
 }
 
 impl TraitInfo {
@@ -335,6 +363,7 @@ impl Items {
                                     generics: lower.generics.clone(),
                                     bounds: lower.bounds.clone(),
                                     receiver_bearing,
+                                    span: (!in_prelude).then_some(item.span),
                                 });
                             }
                         }

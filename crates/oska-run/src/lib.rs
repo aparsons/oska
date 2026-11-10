@@ -108,8 +108,9 @@ pub fn run(src: &str, host: &mut dyn Host, args: &[String]) -> RunOutcome {
         return outcome;
     }
     match run_main(&program, host, args) {
-        Ok(value) => RunOutcome::new(main_exit_code(&value), host),
-        Err(panic) => {
+        Ok(()) => RunOutcome::new(0, host),
+        Err(Stop::Failed) => RunOutcome::new(1, host),
+        Err(Stop::Panicked(panic)) => {
             let mut outcome = RunOutcome::new(PANIC_EXIT_CODE, host);
             outcome.panic = Some(panic.into_diagnostic());
             outcome
@@ -161,11 +162,27 @@ fn ungranted(program: &Program) -> Option<Diagnostic> {
     Some(Diagnostic::new(code, message, main.body.span))
 }
 
+/// Why a program stopped before `main` returned success.
+enum Stop {
+    /// `main` returned `Err`, whose text is already on stderr: an
+    /// expected failure.
+    Failed,
+    /// A bug.
+    Panicked(Panic),
+}
+
+impl From<Panic> for Stop {
+    fn from(panic: Panic) -> Self {
+        Stop::Panicked(panic)
+    }
+}
+
 /// Run `main`, granting each parameter the capability its type names, and
-/// `args` to an `Args` parameter.
-fn run_main(program: &Program, host: &mut dyn Host, args: &[String]) -> Result<Value, Panic> {
+/// `args` to an `Args` parameter. When it returns `Err(e)`, `e`'s
+/// `Display` text goes to stderr.
+fn run_main(program: &Program, host: &mut dyn Host, args: &[String]) -> Result<(), Stop> {
     let Some(main) = program.functions.get("main") else {
-        return Ok(Value::Unit);
+        return Ok(());
     };
     let values = main
         .params
@@ -177,13 +194,16 @@ fn run_main(program: &Program, host: &mut dyn Host, args: &[String]) -> Result<V
             ty => Capability::granted(ty).map(Value::Capability),
         })
         .collect();
-    Interpreter::new(program, host).call(main, values)
-}
-
-/// `main`'s result as an exit code: `Err` is an expected failure.
-fn main_exit_code(value: &Value) -> i32 {
-    match value {
-        Value::Variant { ty, variant, .. } if &**ty == "Result" && &**variant == "Err" => 1,
-        _ => 0,
+    let mut interpreter = Interpreter::new(program, host);
+    let value = interpreter.call(main, values)?;
+    if !(value.type_tag() == "Result" && value.is_variant("Err")) {
+        return Ok(());
     }
+    // The checker requires `main`'s error type to implement `Display`.
+    let error = value.fields()[0].clone();
+    let text = interpreter.call_trait("Display", "to_string", error, Vec::new(), main.body.span)?;
+    // The program has failed either way: a stderr that cannot be written
+    // loses the message, not the exit code.
+    let _ = host.write_stderr(&format!("{}\n", text.as_str()));
+    Err(Stop::Failed)
 }

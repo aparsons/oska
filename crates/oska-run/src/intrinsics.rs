@@ -188,6 +188,7 @@ fn debug(value: &Value, out: &mut String) {
             out.push(']');
         }
         Value::Closure(_) => out.push_str("<closure>"),
+        Value::Function(_) => out.push_str("<fn>"),
         Value::Capability(cap) => out.push_str(&format!("<{cap:?}>")),
         Value::Args(args) => out.push_str(&format!("Args{:?}", &**args)),
     }

@@ -55,6 +55,14 @@ pub enum Resolution {
     /// A struct's field, by its position in declaration order. Recorded
     /// at the field's name.
     Field(usize),
+    /// `?`, converting an error through this `From` implementation, or
+    /// passing it on as it is. Recorded at the `?` expression.
+    Try(Option<Callee>),
+    /// A function named as a value. Recorded at the name.
+    FnValue(Callee),
+    /// `==` or `!=` through this `Eq` implementation, on a type that is
+    /// not built in. Recorded at the comparison.
+    EqualityVia(Callee),
 }
 
 /// Every resolution in a module, keyed by the span it was recorded at.
@@ -86,9 +94,9 @@ pub fn module(module: &Module, items: &Items, resolutions: &Resolutions) -> Prog
                 let Some(type_name) = path_name(&imp.target) else {
                     continue;
                 };
-                let trait_name = match &imp.trait_ref {
-                    Some(trait_ref) => match path_name(trait_ref) {
-                        Some(name) => Some(name),
+                let trait_impl = match &imp.trait_ref {
+                    Some(_) => match items.impls.iter().find(|i| i.span == Some(item.span)) {
+                        Some(info) => Some(info),
                         None => continue,
                     },
                     None => None,
@@ -98,13 +106,16 @@ pub fn module(module: &Module, items: &Items, resolutions: &Resolutions) -> Prog
                         continue;
                     };
                     let method = &f.name.name;
-                    let (name, sig) = match trait_name {
-                        Some(trait_name) => (
-                            super::trait_method(type_name, trait_name, method),
+                    let (name, sig) = match trait_impl {
+                        Some(info) => (
+                            match info.method_name(method) {
+                                Some(name) => name,
+                                None => continue,
+                            },
                             items
                                 .trait_methods_named(type_name, method)
                                 .into_iter()
-                                .find(|s| s.trait_name.as_deref() == Some(trait_name)),
+                                .find(|s| s.trait_name.as_deref() == Some(&info.trait_name)),
                         ),
                         None => (
                             format!("{type_name}.{method}"),
@@ -311,6 +322,13 @@ impl Lowering<'_> {
                     _ => ExprKind::Unsupported,
                 }
             }
+            ast::ExprKind::Try(operand) => match self.resolutions.get(&expr.span) {
+                Some(Resolution::Try(convert)) => ExprKind::Try {
+                    operand: self.boxed(operand),
+                    convert: convert.clone(),
+                },
+                _ => ExprKind::Unsupported,
+            },
             ast::ExprKind::Match { scrutinee, arms } => {
                 let arms: Option<Vec<Arm>> = arms.iter().map(|arm| self.arm(arm)).collect();
                 match arms {

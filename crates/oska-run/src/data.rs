@@ -23,6 +23,8 @@ pub const INTRINSICS: &[(&str, Intrinsic)] = &[
     ("List.new", list_new),
     ("String.byte_len", string_byte_len),
     ("String.len", string_len),
+    ("String.lines", string_lines),
+    ("String.parse_int", string_parse_int),
 ];
 
 /// Every higher-order data intrinsic, by qualified name.
@@ -82,11 +84,15 @@ fn list_at(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Pani
 }
 
 /// `List.map(self, f)`: `f` called on each item, in order.
-fn list_map(interp: &mut Interpreter<'_, '_>, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn list_map(
+    interp: &mut Interpreter<'_, '_>,
+    args: Vec<Value>,
+    span: Span,
+) -> Result<Value, Panic> {
     let mapped = args[0]
         .as_list()
         .iter()
-        .map(|item| interp.call_value(&args[1], vec![item.clone()]))
+        .map(|item| interp.call_value(&args[1], vec![item.clone()], span))
         .collect::<Result<Vec<Value>, Panic>>()?;
     Ok(Value::List(Rc::new(mapped)))
 }
@@ -99,4 +105,17 @@ fn string_len(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Pani
 /// `String.byte_len(self)`: the number of bytes in its UTF-8 encoding.
 fn string_byte_len(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
     Ok(Value::Int(args[0].as_str().len() as i128))
+}
+
+/// `String.parse_int(self)`: the decimal `Int` the whole text spells, or
+/// `None` when it spells none, or one out of `Int`'s range.
+fn string_parse_int(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    let parsed = args[0].as_str().parse::<i64>().ok();
+    Ok(Value::option(parsed.map(|n| Value::Int(i128::from(n)))))
+}
+
+/// `String.lines(self)`: the lines, without their line endings.
+fn string_lines(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    let lines = args[0].as_str().lines().map(Value::str).collect();
+    Ok(Value::List(Rc::new(lines)))
 }
