@@ -16,14 +16,25 @@ The program's entry point, `main`. The runtime grants `main` exactly the capabil
 _Avoid_: root token, `Root`
 
 **Attenuation**:
-Producing a narrower capability from one you already hold, for example restricting `Fs` to a single directory. Attenuation never widens authority.
+Producing a narrower capability from one you already hold, for example a directory capability from `Fs`. Attenuation never widens authority.
 _Avoid_: derive, narrow, restrict (as nouns for the concept)
+
+**Directory capability**:
+A capability confined to one directory and everything beneath it, such as `DirRead`. All access to a directory goes through one.
+_Avoid_: restricted Fs, sandboxed filesystem
+
+**File capability**:
+A capability confined to a single file, such as `FileRead`. Using it takes no path.
 
 **Capability-bearing type**:
 A type that is a capability or that contains one, directly or transitively. This includes containment through type arguments, as in `List<Stdout>`, and closures that capture a capability.
 
 **Authority**:
-For a function, the set of capabilities it can reach through its capability-bearing parameters. For a package, the union of the authority of its public functions.
+For a function, the set of capabilities it can reach through its capability-bearing parameters. For a package, the union of the authority of its public functions, counted in built-in capability kinds. Which directory or file a capability is confined to is the caller's choice and is not part of a package's authority.
+
+**Widening**:
+A change after which a dependency's authority includes a capability kind it did not have, or a broader kind in place of a narrower one. A widening must be approved before the build accepts it.
+_Avoid_: escalation, upgrade (for this concept)
 
 **Pure function**:
 A function with no capability-bearing parameters. It cannot perform effects, and it is deterministic.
