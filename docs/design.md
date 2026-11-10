@@ -377,7 +377,8 @@ The interpreter is `oskac run file.osk -- args...`, built as the crate `oska-run
   - `Args`, `Env`, `Env.secret`
   - `Clock`
   - `Random`, with a built-in pseudo-random generator
-- **Not yet implemented:** `Net`, `std.proc`, `std.sql`, and `std.html`. `oskac run` refuses, before execution starts and with a stable code, any program that uses them.
+  - `std.html`: `text` escapes `&`, `<`, `>`, `"`, and `'`; `TrustedHtml` markup passes through unescaped
+- **Not yet implemented:** `Net`, `std.proc`, and `std.sql`. `oskac run` refuses, before execution starts and with a stable code, any program that uses them.
 - **Filesystem confinement.** A restricted `Fs` resolves every `Path` against its root. Before checking, it normalizes `..` and follows symlinks. A path that escapes the root is rejected, and so is an absolute path or an empty one.
 - **Prelude functions without a body** are each backed by a built-in implementation in the runtime. A test enforces that none is missing.
 

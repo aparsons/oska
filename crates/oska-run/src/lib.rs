@@ -15,8 +15,9 @@
 //! - `interp.rs` evaluates the checked program.
 //! - `ops.rs` implements operators, with checked integer arithmetic.
 //! - `intrinsics.rs` implements body-less prelude functions,
-//!   `data.rs` those of `List` and `String`, and `traits.rs` the
-//!   prelude's trait impls, such as `Eq for Int`.
+//!   `data.rs` those of `List` and `String`, `traits.rs` the
+//!   prelude's trait impls, such as `Eq for Int`, and `html.rs` the
+//!   `std.html` module.
 //! - `tasks.rs` runs `scope` blocks and their spawned tasks.
 //! - `testing.rs` runs `test` blocks for [`test`] (`oskac test`), and
 //!   implements `TestContext`'s methods.
@@ -40,6 +41,7 @@ use oska_syntax::Diagnostic;
 mod confine;
 mod data;
 mod host;
+mod html;
 mod interp;
 mod intrinsics;
 mod ops;
@@ -170,13 +172,15 @@ fn check_and_run(src: &str, host: &mut dyn Host, args: &[String]) -> RunOutcome 
     }
 }
 
-/// The refusal for the first import of a `std` module, whether or not the
-/// program calls it: none has a runtime yet.
+/// The `std` modules the runtime implements.
+const IMPLEMENTED_MODULES: &[&str] = &[html::MODULE];
+
+/// The refusal for the first import of a `std` module that has no runtime
+/// yet, whether or not the program calls it.
 pub(crate) fn unimplemented_module(program: &Program) -> Option<Diagnostic> {
-    let (module, span) = program
-        .imports
-        .iter()
-        .find(|(module, _)| builtins::std_module_of(module).is_some())?;
+    let (module, span) = program.imports.iter().find(|(module, _)| {
+        builtins::std_module_of(module).is_some_and(|m| !IMPLEMENTED_MODULES.contains(&m))
+    })?;
     Some(Diagnostic::new(
         codes::UNIMPLEMENTED_MODULE,
         format!("`oskac run` cannot run a program that uses `{module}` yet: it has no runtime"),

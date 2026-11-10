@@ -58,7 +58,7 @@ A `std.*` module is also prelude-mode Oska source, `crates/oska-check/src/std/<n
 | `std.proc` | `run`, `Output` (`status`, `stdout`), `ProcError` | None |
 | `std.html` | `Html` (`raw`, `concat`, `render`), `text`, `TrustedHtml` (`new`) | None |
 
-A sink literal's tag names the module that provides it. The literal has the type that module declares for it, and the module must be imported (`E0310`). A tag no module provides is `E0311`. The sink modules are signature-only; their runtime implementations come with the interpreter.
+A sink literal's tag names the module that provides it. The literal has the type that module declares for it, and the module must be imported (`E0310`). A tag no module provides is `E0311`. The sink modules are signature-only. `std.html` has a runtime: `text` escapes `&`, `<`, `>`, `"`, and `'`, so its output is safe in an element's content and in a quoted attribute value, and `TrustedHtml` markup passes through unescaped. `std.sql` and `std.proc` have none yet.
 
 Each sink separates a **data position**, declared `Untrusted<String>`, from a **structural position**, declared `String` or a sink literal type. Untrusted text in a `String` structural position is `E0300`; any text where a sink literal is required is `E0341`.
 

@@ -18,7 +18,7 @@ Before a program starts, the runtime checks that it can run all of it, reached o
 | Code | Refusal |
 | --- | --- |
 | `E0370` | `main` declares a capability that has no runtime yet: `Net`, `NetConnect`, `NetListen`, `Spawn`, or `Sched`. Spans `main`'s body. |
-| `E0371` | The program imports a `std` module that has no runtime yet: `std.proc`, `std.sql`, or `std.html`, used or not. Spans the module path of the `use`. |
+| `E0371` | The program imports a `std` module that has no runtime yet: `std.proc` or `std.sql`, used or not. Spans the module path of the `use`. |
 | `E0380` | The program uses something the interpreter cannot run yet: a construct the checked program cannot express, a call of a prelude function with no runtime implementation, or a parameter of `main` that is neither a capability nor `Args`. The message names the construct, as in ``the interpreter cannot run a `From`-bound conversion yet``; others are a constructor used as a function value and a call of a generic trait's method. Spans the construct or call, or `main`'s body for a parameter. |
 
 ## Panics
