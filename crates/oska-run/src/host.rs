@@ -75,6 +75,15 @@ pub trait Host: Send {
     fn write_file(&mut self, path: &Path, contents: &str, beneath: Option<&Path>)
         -> io::Result<()>;
 
+    /// Create the directory at `path`, whose parent must exist. A
+    /// directory already there is kept; anything else there is an error.
+    ///
+    /// `beneath` is as for [`Host::read_file`]: with it, `path` is one
+    /// `confine.rs` resolved, a symlink at `path` is refused rather than
+    /// followed, and the directory is checked to lie under `beneath`
+    /// once it exists.
+    fn create_dir(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<()>;
+
     /// The names of the entries of the directory at `path`, sorted by
     /// their bytes, so the order is the same on every host. A name is
     /// the entry's own, not a path; a subdirectory and a symlink are
@@ -186,6 +195,37 @@ impl Host for RealHost {
         let mut file = open_beneath(path, root, OpenOptions::new().write(true).create(true))?;
         file.set_len(0)?;
         file.write_all(contents.as_bytes())
+    }
+
+    fn create_dir(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<()> {
+        // The parent is checked before the `mkdir`, and the directory
+        // after it, as `list_dir` checks its directory.
+        if let Some(root) = beneath {
+            let parent = path.parent().ok_or_else(|| moved(path))?;
+            if !std::fs::canonicalize(parent)?.starts_with(root) {
+                return Err(moved(path));
+            }
+        }
+        // `mkdir` never follows a symlink in the last component: one
+        // there, dangling or not, makes it fail with `AlreadyExists`.
+        if let Err(error) = std::fs::create_dir(path) {
+            if error.kind() != io::ErrorKind::AlreadyExists {
+                return Err(error);
+            }
+            let there = match beneath {
+                Some(_) => std::fs::symlink_metadata(path)?,
+                None => std::fs::metadata(path)?,
+            };
+            if !there.is_dir() {
+                return Err(error);
+            }
+        }
+        // A symlink swapped in for a directory on the way may have sent
+        // the `mkdir` elsewhere: refuse to report success for it.
+        match beneath {
+            Some(root) if !std::fs::canonicalize(path)?.starts_with(root) => Err(moved(path)),
+            _ => Ok(()),
+        }
     }
 
     fn list_dir(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<Vec<String>> {
@@ -542,6 +582,26 @@ impl Host for FakeHost {
         match path.parent() {
             Some(parent) if self.is_dir(parent) && !self.is_dir(&path) => {
                 self.files.insert(path, contents.to_string());
+                Ok(())
+            }
+            _ => Err(not_found(&path)),
+        }
+    }
+
+    fn create_dir(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<()> {
+        let path = fake_beneath(path, beneath)?;
+        if self.files.contains_key(&path) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("a file is already at {}", path.display()),
+            ));
+        }
+        if self.is_dir(&path) {
+            return Ok(());
+        }
+        match path.parent() {
+            Some(parent) if self.is_dir(parent) => {
+                self.dirs.insert(path);
                 Ok(())
             }
             _ => Err(not_found(&path)),

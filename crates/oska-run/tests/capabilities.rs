@@ -106,6 +106,9 @@ impl Host for Recording {
     ) -> std::io::Result<()> {
         self.real.write_file(path, contents, beneath)
     }
+    fn create_dir(&mut self, path: &Path, beneath: Option<&Path>) -> std::io::Result<()> {
+        self.real.create_dir(path, beneath)
+    }
     fn list_dir(&mut self, path: &Path, beneath: Option<&Path>) -> std::io::Result<Vec<String>> {
         self.real.list_dir(path, beneath)
     }

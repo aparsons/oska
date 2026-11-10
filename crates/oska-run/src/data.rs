@@ -35,6 +35,7 @@ pub const INTRINSICS: Table = &[
     ("String.slice", Plain(string_slice)),
     ("String.split", Plain(string_split)),
     ("String.starts_with", Plain(string_starts_with)),
+    ("String.to_lowercase", Plain(string_to_lowercase)),
     ("String.trim", Plain(string_trim)),
     ("List.map", HigherOrder(list_map)),
     ("List.push", Mutating(list_push)),
@@ -124,6 +125,11 @@ fn string_parse_int(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value
 /// `String.trim(self)`: without leading and trailing whitespace.
 fn string_trim(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
     Ok(Value::str(args[0].as_str().trim()))
+}
+
+/// `String.to_lowercase(self)`: Unicode's full lower-case mapping.
+fn string_to_lowercase(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    Ok(Value::str(&args[0].as_str().to_lowercase()))
 }
 
 /// `String.split(self, separator)`: the pieces between occurrences of

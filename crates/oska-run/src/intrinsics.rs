@@ -57,6 +57,7 @@ pub const INTRINSICS: Table = &[
     ("FsRead.list_dir", Plain(fs_list_dir)),
     ("FsRead.read_to_string", Plain(fs_read_to_string)),
     ("FsRead.restrict_to", Plain(fs_restrict_to)),
+    ("FsWrite.create_dir", Plain(fs_create_dir)),
     ("FsWrite.restrict_to", Plain(fs_restrict_to)),
     ("FsWrite.write", Plain(fs_write)),
     ("Int.to_string", Plain(int_to_string)),
@@ -410,6 +411,14 @@ fn fs_list_dir(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, 
 fn fs_write(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
     let result = real_path(host, fs_cap(&args[0]), &args[1], Intent::Write)
         .and_then(|(path, beneath)| host.write_file(&path, text(&args, 2), beneath));
+    Ok(io_result(result, |()| Value::Unit))
+}
+
+/// `FsWrite.create_dir(self, path)`: confined like a write, so `path`
+/// ends in a plain name under a parent inside the root.
+fn fs_create_dir(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    let result = real_path(host, fs_cap(&args[0]), &args[1], Intent::Write)
+        .and_then(|(path, beneath)| host.create_dir(&path, beneath));
     Ok(io_result(result, |()| Value::Unit))
 }
 
