@@ -4,7 +4,7 @@ Task-oriented guides for the `oskac` toolchain. Oska is pre-alpha: these pages d
 
 ## Start here
 
-1. [Install](install.md): one-line installers for the v0.1.0 release, or build from source.
+1. [Install](install.md): one-line installers for the latest release, or build from source.
 2. [Quickstart](quickstart.md): write, check, run, and test a program.
 3. [Language tour](language-tour.md): the syntax and types in one sitting.
 
