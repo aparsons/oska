@@ -1,8 +1,12 @@
 # Run the filesystem confinement tests on each Unix that releases are built
 # for. oska-sys copies flag and error values from each platform's C headers
 # by hand (ADR 0009), so its escape tests must pass on every one of them,
-# not only on the Linux that ci.yml runs. Windows builds oska-sys empty and
-# is covered by the release dry run.
+# not only on the Linux that ci.yml runs. Windows builds oska-sys empty;
+# windows.yml tests its path-based checks.
+#
+# A push runs it only on main and on the ticket and review-fix branches
+# that are merged into an integration branch before any pull request, so
+# a pull request's head is not tested twice.
 #
 # Needs no configuration.
 
@@ -10,6 +14,7 @@ name: Confinement
 
 on:
   push:
+    branches: [main, "ticket/**", "review-fixes-*"]
     paths:
       - crates/oska-sys/**
       - crates/oska-run/**
