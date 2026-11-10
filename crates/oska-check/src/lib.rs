@@ -237,9 +237,44 @@ impl CheckReport {
             json_lines(&audit)
         )
     }
+
+    /// The authority report as `oskac check <path>` prints it on standard
+    /// output: one line per function and method, then one line per audit
+    /// site, each ending in a newline. Diagnostics are not part of it.
+    pub fn authority_to_human(&self, path: &str) -> String {
+        let mut out = String::new();
+        for function in &self.functions {
+            out.push_str(&function.to_human());
+            out.push('\n');
+        }
+        for site in &self.audit {
+            out.push_str(&format!("{path}: {site}\n"));
+        }
+        out
+    }
 }
 
 impl FunctionAuthority {
+    /// One line of the human-readable authority report, such as
+    /// `fn main: Stdout (io), FsRead (fs)` or `fn add: pure`.
+    pub fn to_human(&self) -> String {
+        if self.pure {
+            return format!("fn {}: pure", self.name);
+        }
+        let sources: Vec<String> = self
+            .via
+            .iter()
+            .map(|via| {
+                if via.capabilities.is_empty() {
+                    format!("cap fn ({})", via.param)
+                } else {
+                    format!("{} ({})", via.capabilities.join(", "), via.param)
+                }
+            })
+            .collect();
+        format!("fn {}: {}", self.name, sources.join(", "))
+    }
+
     /// Render as a single-line JSON object.
     pub fn to_json(&self) -> String {
         let via: Vec<String> = self

@@ -42,8 +42,8 @@ What the installers do:
 
 - **They never prompt.** They are safe to run from a script, a CI job, or an AI agent.
 - **They install to `~/.oska/bin`.** Set `OSKA_HOME` to install into `$OSKA_HOME/bin` instead. They don't change your `PATH`; if `~/.oska/bin` is not on it, they print the line to add.
-- **They verify before they install.** The installer checks the SSH signature on `SHA256SUMS` (`ssh-keygen -Y verify`, so it needs OpenSSH 8.1 or newer) against the release key built into the installer, then checks the download's SHA-256 checksum against `SHA256SUMS`. If either check fails, nothing is installed and the installer exits with a non-zero status.
-- **They download over HTTPS only.**
+- **They verify before they install.** The installer checks the SSH signature on `SHA256SUMS` (`ssh-keygen -Y verify`, so it needs OpenSSH 8.1 or newer) against the release key built into the installer. The signed file's first line, `# oska-release v0.1.0`, names the release, and it must be the one the installer asked for, so an old release cannot be served as a newer one. Then the installer checks the download's SHA-256 checksum against `SHA256SUMS`, and checks that the binary reports the expected version. If any check fails, nothing is installed and the installer exits with a non-zero status.
+- **They download over HTTPS only.** They refuse a redirect to a plain `http://` URL.
 - **They take `--version` and `--json`.** `--version` installs that release instead of the latest. `--json` prints one line of JSON on stdout and nothing else.
 
 To pass options through the pipe:
@@ -74,15 +74,17 @@ A failed run prints `{"ok": false, "error": "<code>", "message": "..."}` and exi
 | --- | --- |
 | `usage` | An unknown option, or a `--version` that is not a version. |
 | `no_signing_key` | The installer has no release key built in. Download it again from oskalang.dev. |
-| `insecure_url` | `OSKA_SITE_URL` is not an `https://` URL. |
+| `insecure_url` | `OSKA_SITE_URL` is not an `https://` URL, or a download was redirected to one that is not. |
 | `unsupported_platform` | There is no build for this OS or CPU. |
+| `unsupported_libc` | Linux only: the C library is not glibc 2.35 or newer (for example musl, as on Alpine). |
 | `missing_tool` | `curl`, `ssh-keygen`, or a SHA-256 tool is missing. |
 | `download_failed` | A file could not be downloaded, for example because that version does not exist. |
 | `bad_signature` | `SHA256SUMS` is not signed by the release key. |
 | `checksum_mismatch` | The binary does not match `SHA256SUMS`. |
+| `version_mismatch` | The signed `SHA256SUMS` is for another release than the one asked for, or the binary reports another version. |
 | `install_failed` | The binary could not be written into place. |
 
-The binaries are published on oskalang.dev, together with `SHA256SUMS` and its signature, for Linux x86_64 and aarch64, macOS x86_64 and aarch64, and Windows x86_64. The Linux binaries are built against glibc; they do not run on musl systems such as Alpine, where you can build from source instead.
+The binaries are published on oskalang.dev, together with `SHA256SUMS` and its signature, for Linux x86_64 and aarch64, macOS x86_64 and aarch64, and Windows x86_64. The Linux binaries are built on Ubuntu 22.04 and need glibc 2.35 or newer. They do not run on an older glibc or on musl systems such as Alpine; there the installer stops with `unsupported_libc`, and you can build from source instead.
 
 ### Verify the installation
 

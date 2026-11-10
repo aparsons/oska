@@ -639,14 +639,103 @@ fn main_narrows_reading_to_docs_and_the_files_it_names() {
         "read.restrict_to(\"site/style.css\")",
         "read.restrict_to(\"site/search.js\")",
         "read.restrict_to(\"Cargo.toml\")",
-        "write.restrict_to(\"_site\")",
+        "restrict_to(\"_site\")",
     ] {
         assert!(
             BUILD.contains(narrowing),
             "`main` should narrow with {narrowing}"
         );
     }
-    assert!(!BUILD.contains("restrict_to(\".\")"));
+    assert!(!BUILD.contains("read.restrict_to(\".\")"));
+}
+
+#[test]
+fn main_narrows_writing_before_it_writes_anything() {
+    let start = BUILD.find("fn main(").expect("the generator has a `main`");
+    let body = &BUILD[start..];
+    let body = &body[..body.find("\n}\n").expect("`main` ends")];
+    let uses: Vec<&str> = body
+        .match_indices("write.")
+        .map(|(at, _)| body[at..].split('(').next().unwrap_or(""))
+        .collect();
+    assert_eq!(
+        uses,
+        ["write.restrict_to"],
+        "`main` should use its unrestricted `write` only to narrow it"
+    );
+}
+
+// ---- The generator's own authority report ---------------------------------------------
+
+const PAGES_WORKFLOW: &str = include_str!("../../../.github/workflows/pages.yml");
+
+/// The authority report `oskac check site/build.osk` prints for the
+/// generator as it is now.
+fn generator_authority() -> String {
+    oska_check::check_module(BUILD).authority_to_human("site/build.osk")
+}
+
+/// The text of `page` between the first `open` and the next `close`.
+fn between<'a>(page: &'a str, open: &str, close: &str) -> &'a str {
+    let start = page.find(open).map(|at| at + open.len());
+    let start = start.unwrap_or_else(|| panic!("no {open} in {page}"));
+    let len = page[start..]
+        .find(close)
+        .unwrap_or_else(|| panic!("no {close} after {open} in {page}"));
+    &page[start..start + len]
+}
+
+#[test]
+fn an_authority_report_gets_a_page_with_its_text_escaped_and_a_markdown_copy() {
+    let report = "fn main: FsRead (read), FsWrite (write)\nfn <b>bold</b>: pure\n";
+    let site = build_ok(&[("site/authority.txt", report)]);
+    let page = &site["authority.html"];
+    assert_eq!(
+        between(page, "<pre><code>", "</code></pre>"),
+        "fn main: FsRead (read), FsWrite (write)\nfn &lt;b&gt;bold&lt;/b&gt;: pure\n"
+    );
+    assert!(
+        site["authority.md"].contains(&format!("```text\n{report}```\n")),
+        "{}",
+        site["authority.md"]
+    );
+    assert!(site["sitemap.xml"].contains("<loc>https://oskalang.dev/authority.html</loc>"));
+}
+
+#[test]
+fn without_an_authority_report_there_is_no_authority_page() {
+    let site = build_ok(&[]);
+    assert!(!site.contains_key("authority.html"));
+    assert!(!site.contains_key("authority.md"));
+}
+
+#[test]
+fn the_real_site_shows_the_generator_s_own_report_linked_from_the_capabilities_guide() {
+    let site = real_site();
+    let shown = between(&site["authority.html"], "<pre><code>", "</code></pre>");
+    assert_eq!(decode_references(shown), generator_authority());
+    assert!(generator_authority().starts_with("fn main: FsRead (read), FsWrite (write)\n"));
+    assert!(
+        site["guide/capabilities.html"].contains("href=\"https://oskalang.dev/authority.html\""),
+        "the capabilities guide does not link the authority page"
+    );
+}
+
+/// The page shows real output, not a copy that can drift: the Pages
+/// workflow writes the report with the `oskac` it just built, right before
+/// it runs the generator, and nothing touches the file in between.
+#[test]
+fn the_pages_workflow_writes_the_report_with_the_real_checker_just_before_the_build() {
+    let check = "./target/release/oskac check site/build.osk > site/authority.txt";
+    let run = "./target/release/oskac run site/build.osk";
+    let at_check = PAGES_WORKFLOW
+        .find(check)
+        .unwrap_or_else(|| panic!("pages.yml does not run `{check}`"));
+    let at_run = PAGES_WORKFLOW
+        .find(run)
+        .unwrap_or_else(|| panic!("pages.yml does not run `{run}`"));
+    assert!(at_check < at_run, "the report is written after the build");
+    assert!(!PAGES_WORKFLOW[at_check + check.len()..at_run].contains("authority"));
 }
 
 // ---- The error-code catalog -----------------------------------------------------------
@@ -1506,6 +1595,8 @@ fn real_inputs() -> BTreeMap<String, String> {
         let text = std::fs::read_to_string(root.join(file)).expect("a repository file");
         inputs.insert(file.to_string(), text);
     }
+    // What pages.yml writes just before the build.
+    inputs.insert("site/authority.txt".to_string(), generator_authority());
     inputs
 }
 
@@ -2124,7 +2215,9 @@ fn every_real_page_reads_in_full_without_javascript() {
         for tag in tags_of(&site[&name]).iter().filter(|t| t.element == "a") {
             let href = tag.attribute("href").unwrap_or("");
             let path = href.split('#').next().unwrap_or("");
-            if path.is_empty() || path.starts_with("http") || path.starts_with("mailto:") {
+            // A link to https://oskalang.dev is a link within the site.
+            let external = path.starts_with("http") && !path.starts_with("https://oskalang.dev");
+            if path.is_empty() || external || path.starts_with("mailto:") {
                 continue;
             }
             if let Some(target) = resolve(&site, &name, path) {

@@ -158,12 +158,7 @@ fn check_file(path: &str, Flags { json, release, .. }: Flags) -> ExitCode {
         print!("{}", report.to_json());
     } else {
         print_diagnostics(path, &report.diagnostics);
-        for function in &report.functions {
-            println!("{}", describe_authority(function));
-        }
-        for site in &report.audit {
-            println!("{path}: {site}");
-        }
+        print!("{}", report.authority_to_human(path));
     }
     if report.diagnostics.is_empty() {
         ExitCode::SUCCESS
@@ -255,26 +250,6 @@ fn explain_code(code: &str, Flags { json, .. }: Flags) -> ExitCode {
         eprintln!("{}", explain::unknown_to_human(code, suggestion));
     }
     ExitCode::from(2)
-}
-
-/// One line of the human-readable authority report, such as
-/// `fn main: Stdout (io), FsRead (fs)` or `fn add: pure`.
-fn describe_authority(function: &oska_check::FunctionAuthority) -> String {
-    if function.pure {
-        return format!("fn {}: pure", function.name);
-    }
-    let sources: Vec<String> = function
-        .via
-        .iter()
-        .map(|via| {
-            if via.capabilities.is_empty() {
-                format!("cap fn ({})", via.param)
-            } else {
-                format!("{} ({})", via.capabilities.join(", "), via.param)
-            }
-        })
-        .collect();
-    format!("fn {}: {}", function.name, sources.join(", "))
 }
 
 fn lex_file(path: &str, Flags { json, .. }: Flags) -> ExitCode {

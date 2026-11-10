@@ -6,7 +6,8 @@
 # <releases-dir> holds one directory per release tag (vX.Y.Z), each as
 # sign.sh left it. This:
 #   - verifies every release against <public-key> with verify.sh, and stops
-#     if any fails;
+#     if any fails (verify.sh also requires the tag signed inside each
+#     release's SHA256SUMS to be the name of its directory);
 #   - copies each to <site-dir>/releases/<tag>/;
 #   - publishes <public-key> as <site-dir>/oska-release.pub;
 #   - publishes the installers as <site-dir>/install.sh and install.ps1,
@@ -74,7 +75,7 @@ fi
 
 url="$base/releases/$latest"
 release_json=$(
-  awk '{print $2}' "$releases/$latest/SHA256SUMS" |
+  tail -n +2 "$releases/$latest/SHA256SUMS" | awk '{print $2}' |
     jq -R -n --arg tag "$latest" --arg url "$url" --arg base "$base" '{
       version: ($tag | ltrimstr("v")),
       tag: $tag,

@@ -9,6 +9,8 @@
 
 # The site generator's output (`oskac run site/build.osk`)
 /_site/
+# Its own authority report, which the Pages workflow writes before a build
+/site/authority.txt
 
 # Local secrets
 .env

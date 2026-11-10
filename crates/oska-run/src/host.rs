@@ -202,9 +202,7 @@ impl Host for RealHost {
         // after it, as `list_dir` checks its directory.
         if let Some(root) = beneath {
             let parent = path.parent().ok_or_else(|| moved(path))?;
-            if !std::fs::canonicalize(parent)?.starts_with(root) {
-                return Err(moved(path));
-            }
+            resolved_beneath(parent, root)?;
         }
         // `mkdir` never follows a symlink in the last component: one
         // there, dangling or not, makes it fail with `AlreadyExists`.
@@ -222,10 +220,10 @@ impl Host for RealHost {
         }
         // A symlink swapped in for a directory on the way may have sent
         // the `mkdir` elsewhere: refuse to report success for it.
-        match beneath {
-            Some(root) if !std::fs::canonicalize(path)?.starts_with(root) => Err(moved(path)),
-            _ => Ok(()),
+        if let Some(root) = beneath {
+            resolved_beneath(path, root)?;
         }
+        Ok(())
     }
 
     fn list_dir(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<Vec<String>> {
@@ -233,14 +231,7 @@ impl Host for RealHost {
         // symlink swapped in for it in between sends the listing
         // somewhere else, and that listing is discarded.
         let under = |path: &Path| match beneath {
-            Some(root) => {
-                let now = std::fs::canonicalize(path)?;
-                if now.starts_with(root) {
-                    Ok(())
-                } else {
-                    Err(moved(path))
-                }
-            }
+            Some(root) => resolved_beneath(path, root).map(drop),
             None => Ok(()),
         };
         under(path)?;
@@ -331,11 +322,23 @@ fn open_beneath(path: &Path, root: &Path, options: &mut OpenOptions) -> io::Resu
         return Err(moved(path));
     }
     let file = options.open(path)?;
-    let now = std::fs::canonicalize(path)?;
-    if !now.starts_with(root) || !same_file(&file, &now)? {
+    let now = resolved_beneath(path, root)?;
+    if !same_file(&file, &now)? {
         return Err(moved(path));
     }
     Ok(file)
+}
+
+/// `path` with every symlink resolved, refused unless it lies under `root`.
+/// The one check every confined `RealHost` call makes, before and after it
+/// touches the filesystem, so a symlink swapped in on the way is caught.
+fn resolved_beneath(path: &Path, root: &Path) -> io::Result<PathBuf> {
+    let resolved = std::fs::canonicalize(path)?;
+    if resolved.starts_with(root) {
+        Ok(resolved)
+    } else {
+        Err(moved(path))
+    }
 }
 
 /// Whether `file`, already open, is the file at `path`.

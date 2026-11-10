@@ -46,6 +46,10 @@ cap struct Sources {
     search: FsRead,
     // `site/agent-setup/`: the agent-setup prompt and its templates.
     setup: FsRead,
+    // `site/authority.txt`: the authority report `oskac check
+    // site/build.osk` printed for this program, which the Pages workflow
+    // writes just before the build. Without it there is no authority page.
+    authority: FsRead,
 }
 
 fn main(read: FsRead, write: FsWrite) -> Result<(), IoError> {
@@ -57,9 +61,13 @@ fn main(read: FsRead, write: FsWrite) -> Result<(), IoError> {
         manifest: read.restrict_to("Cargo.toml"),
         search: read.restrict_to("site/search.js"),
         setup: read.restrict_to("site/agent-setup"),
+        authority: read.restrict_to("site/authority.txt"),
     )
-    write.create_dir(Path.new("_site"))?
-    build(sources, write.restrict_to("_site"))
+    // Writing is narrowed to the repository before anything is written,
+    // then to `_site` once it exists (a restriction needs its directory).
+    let repo = write.restrict_to(".")
+    repo.create_dir(Path.new("_site"))?
+    build(sources, repo.restrict_to("_site"))
 }
 
 // One Markdown file the site publishes.
@@ -96,6 +104,8 @@ struct Site {
     version: String,
     // The files of `site/agent-setup/`, none if there is no such directory.
     assets: List<Asset>,
+    // The generator's own authority report, or "" if there is none.
+    authority: Untrusted<String>,
 }
 
 // Every file of the site.
@@ -117,6 +127,9 @@ fn build(sources: Sources, site: FsWrite) -> Result<(), IoError> {
     }
     if has_setup(all) {
         pages.push(setup_page(all))
+    }
+    if all.authority != "" {
+        pages.push(authority_page(all))
     }
     for section in all.sections {
         if !has_doc(all, "{section.dir}/index.html") {
@@ -207,7 +220,11 @@ fn gather(sources: Sources) -> Result<Site, IoError> {
         }
         Err(_) => {}
     }
-    Ok(Site(docs: docs, sections: sections, version: version_of(manifest), assets: assets))
+    let authority = match sources.authority.read_to_string(Path.new(".")) {
+        Ok(text) => text
+        Err(_) => ""
+    }
+    Ok(Site(docs: docs, sections: sections, version: version_of(manifest), assets: assets, authority: authority))
 }
 
 // The `version` in a `Cargo.toml`, as `major.minor.patch`: each part is
@@ -639,10 +656,16 @@ fn csp() -> String {
 // version and set `integrity` to the new file's
 // `openssl dgst -sha384 -binary | openssl base64 -A`.
 fn fonts() -> html.Html {
-    let inter = markup("<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/latin-400.css\" integrity=\"sha384-zc+mzApNgdFM05uzzG/c/4wVZ4LHLa0ZrZyeZYh4tq7GukSAQ2T6xYGTgE+mssl6\" crossorigin=\"anonymous\">\n")
-    let bold = markup("<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/latin-700.css\" integrity=\"sha384-qIiEwfeovj0ewBGH8n6bkz0WIS8pOCQ8xV0byBksQD0KeXY0dmQr3eXjhcSqFhbH\" crossorigin=\"anonymous\">\n")
-    let mono = markup("<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/latin-400.css\" integrity=\"sha384-rDtx9NW9VQWFrGIe8txtelRagz09ojKYLeaff45i3hEq7ofdZdkNlxVO8XCT5yPu\" crossorigin=\"anonymous\">\n")
-    inter.concat(bold).concat(mono)
+    let inter_regular = font_stylesheet("inter", "latin-400.css", "zc+mzApNgdFM05uzzG/c/4wVZ4LHLa0ZrZyeZYh4tq7GukSAQ2T6xYGTgE+mssl6")
+    let inter_bold = font_stylesheet("inter", "latin-700.css", "qIiEwfeovj0ewBGH8n6bkz0WIS8pOCQ8xV0byBksQD0KeXY0dmQr3eXjhcSqFhbH")
+    let mono_regular = font_stylesheet("jetbrains-mono", "latin-400.css", "rDtx9NW9VQWFrGIe8txtelRagz09ojKYLeaff45i3hEq7ofdZdkNlxVO8XCT5yPu")
+    inter_regular.concat(inter_bold).concat(mono_regular)
+}
+
+// One stylesheet of the Fontsource package `package`, version 5.3.0 (the
+// version the CSP names), checked against its SHA-384 `integrity`.
+fn font_stylesheet(package: String, file: String, integrity: String) -> html.Html {
+    markup("<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/@fontsource/{package}@5.3.0/{file}\" integrity=\"sha384-{integrity}\" crossorigin=\"anonymous\">\n")
 }
 
 // The document around every page's body.
@@ -1929,6 +1952,17 @@ fn setup_page(all: Site) -> Page {
     }
     let body = intro.concat(setup_block(all)).concat(files).concat(markup("</ul>\n"))
     Page(path: "agent-setup.html", title: "Agent setup prompt", body: body, md: asset_text(all, "prompt.md"))
+}
+
+// The generator's own authority report, as `oskac check` printed it for
+// this program when the site was built: a live example for the
+// capabilities guide, which links it.
+fn authority_page(all: Site) -> Page {
+    let title = "The site generator's authority"
+    let intro = "This site is built by `site/build.osk`, an Oska program. Just before each build, `oskac check site/build.osk` prints the program's authority report, and the build publishes it here as it was printed. There is one line per function: the capabilities it can reach, each with the parameter it comes through, or `pure` if it can reach none. `main` is granted `FsRead` and `FsWrite`, and only the functions it passes them to can touch the filesystem."
+    let head = markup("<h1>The site generator's authority</h1>\n<p>This site is built by <code>site/build.osk</code>, an Oska program. Just before each build, <code>oskac check site/build.osk</code> prints the program's authority report, and the build publishes it here as it was printed. There is one line per function: the capabilities it can reach, each with the parameter it comes through, or <code>pure</code> if it can reach none. <code>main</code> is granted <code>FsRead</code> and <code>FsWrite</code>, and only the functions it passes them to can touch the filesystem.</p>\n")
+    let report = wrap("<pre><code>", html.text(all.authority), "</code></pre>\n")
+    Page(path: "authority.html", title: title, body: head.concat(report), md: "# {title}\n\n{intro}\n\n```text\n{all.authority}```\n")
 }
 
 // The group of `llms.txt` that lists the prompt and its files.

@@ -85,19 +85,29 @@ release_key() {
 }
 
 # Publishes release <version> in ./site/releases/v<version>/, as
-# scripts/release/assemble.sh and sign.sh lay it out. Each fake binary is a
-# script that prints "oskac <version>", like the real `oskac --version`.
+# scripts/release/assemble.sh and sign.sh lay it out: SHA256SUMS starts
+# with the signed tag line. Each fake binary is a script that prints
+# "oskac <reports>" (default: <version>), like the real `oskac --version`.
 release() {
-  local version=$1 dir="site/releases/v$1" asset
+  local version=$1 reports=${2:-$1} dir="site/releases/v$1" asset
   release_key
   mkdir -p "$dir"
   for asset in $ASSETS; do
-    printf '#!/bin/sh\necho "oskac %s"\n' "$version" >"$dir/$asset"
+    printf '#!/bin/sh\necho "oskac %s"\n' "$reports" >"$dir/$asset"
   done
-  for asset in $ASSETS; do
-    printf '%s  %s\n' "$(sha256 "$dir/$asset")" "$asset"
-  done >"$dir/SHA256SUMS"
-  ssh-keygen -q -Y sign -f key -n oska-release "$dir/SHA256SUMS"
+  {
+    printf '# oska-release v%s\n' "$version"
+    for asset in $ASSETS; do
+      printf '%s  %s\n' "$(sha256 "$dir/$asset")" "$asset"
+    done
+  } >"$dir/SHA256SUMS"
+  sign "$dir"
+}
+
+# (Re-)signs <dir>/SHA256SUMS with ./key.
+sign() {
+  rm -f "$1/SHA256SUMS.sig"
+  ssh-keygen -q -Y sign -f key -n oska-release "$1/SHA256SUMS"
 }
 
 # Points ./site/latest.json at release <version>, in the shape
@@ -259,9 +269,44 @@ test_refuses_a_binary_the_checksums_do_not_list() {
   local dir=site/releases/v1.3.0
   grep -v "oskac-$(host_platform)\$" "$dir/SHA256SUMS" >sums
   mv sums "$dir/SHA256SUMS"
-  rm "$dir/SHA256SUMS.sig"
-  ssh-keygen -q -Y sign -f key -n oska-release "$dir/SHA256SUMS"
+  sign "$dir"
   assert_refused checksum_mismatch
+}
+
+# The rollback attack: genuine, signed files of an old release served as a
+# newer one. The signature is valid; only the signed tag line refuses it.
+test_refuses_an_older_signed_release_published_as_the_latest() {
+  with_good_install
+  rm -r site/releases/v1.3.0
+  cp -R site/releases/v1.2.3 site/releases/v1.3.0
+  latest 1.3.0
+  install --json >out.json && fail "installed 1.2.3's files as 1.3.0"
+  [ "$(jq -r .error out.json)" = version_mismatch ] || fail "error is $(jq -r .error out.json)"
+  jq -r .message out.json | grep -q 'v1.2.3' || fail "message does not name the signed tag"
+}
+
+test_refuses_an_older_signed_release_from_a_mirror_for_a_newer_version() {
+  with_good_install
+  mkdir -p mirror/releases
+  cp -R site/releases/v1.2.3 mirror/releases/v1.3.0
+  SITE_URL="file://$PWD/mirror" assert_refused version_mismatch
+}
+
+test_refuses_signed_checksums_that_name_no_tag() {
+  with_good_install
+  local dir=site/releases/v1.3.0
+  grep -v '^#' "$dir/SHA256SUMS" >sums
+  mv sums "$dir/SHA256SUMS"
+  sign "$dir"
+  assert_refused version_mismatch
+}
+
+test_refuses_a_binary_that_does_not_report_the_signed_version() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  release 1.3.0 1.2.9
+  assert_refused version_mismatch
 }
 
 test_refuses_a_version_that_was_never_released() {
@@ -318,6 +363,80 @@ test_human_output_explains_how_to_put_oskac_on_the_path() {
   fi
   PATH="$PWD/home/.oska/bin:$PATH" install --json >out.json
   [ "$(jq -r .on_path out.json)" = true ] || fail "on_path is not true"
+}
+
+# Someone who can write to the bin directory plants symlinks where a
+# predictable staging file (.oskac.<pid>) would go, and one in place of
+# oskac itself. The installer must write through none of them.
+test_never_writes_through_a_symlink_planted_in_the_bin_directory() {
+  release 1.2.3
+  latest 1.2.3
+  mkdir -p home/.oska/bin
+  printf 'victim\n' >victim
+  # One process plants them all, so the PIDs the installer will get are
+  # still ahead.
+  perl -e 'my $n = $ARGV[0]; symlink("$ENV{PWD}/victim", "home/.oska/bin/.oskac.$_") or die for $n .. $n + 300' \
+    "$(sh -c 'echo $$')"
+  ln -s "$PWD/victim" home/.oska/bin/oskac
+  install --json >out.json
+  [ "$(cat victim)" = victim ] || fail "wrote through a planted symlink"
+  [ ! -L home/.oska/bin/oskac ] || fail "oskac is still the planted symlink"
+  [ "$("$(installed)" --version)" = "oskac 1.2.3" ] || fail "did not install 1.2.3"
+  [ -z "$(find home/.oska/bin -name '.oskac.*' -type d)" ] || fail "left a staging directory"
+}
+
+# Makes the installer see Linux x86_64 with the C library <libc>: "glibc
+# X.Y", or "musl" (as on Alpine, where `getconf GNU_LIBC_VERSION` fails and
+# `ldd --version` names musl). Fakes uname, getconf and ldd in ./fakebin,
+# so it works on a macOS test host too.
+# shellcheck disable=SC2016 # the fakes expand $1 when they run
+fake_linux() {
+  mkdir -p fakebin
+  printf '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo x86_64 ;; *) echo Linux ;; esac\n' >fakebin/uname
+  case $1 in
+    glibc*)
+      printf '#!/bin/sh\n[ "$1" = GNU_LIBC_VERSION ] && echo "%s"\n' "$1" >fakebin/getconf
+      printf '#!/bin/sh\necho "ldd (GNU libc) %s"\n' "${1#glibc }" >fakebin/ldd
+      ;;
+    musl)
+      printf '#!/bin/sh\necho "getconf: GNU_LIBC_VERSION: unknown variable" >&2\nexit 1\n' >fakebin/getconf
+      printf '#!/bin/sh\necho "musl libc (x86_64)" >&2\necho "Version 1.2.5" >&2\nexit 1\n' >fakebin/ldd
+      ;;
+  esac
+  chmod +x fakebin/*
+}
+
+assert_refused_libc() {
+  PATH="$PWD/fakebin:$PATH" install --json >out.json && fail "installed on $1"
+  [ "$(jq -r .error out.json)" = unsupported_libc ] || fail "error is $(jq -r .error out.json), not unsupported_libc"
+  [ ! -e home/.oska ] || fail "created ~/.oska"
+}
+
+test_refuses_a_linux_without_glibc() {
+  release 1.2.3
+  latest 1.2.3
+  fake_linux musl
+  assert_refused_libc musl
+  jq -r .message out.json | grep -q musl || fail "message does not mention musl"
+}
+
+test_refuses_a_glibc_older_than_the_one_releases_are_built_against() {
+  release 1.2.3
+  latest 1.2.3
+  fake_linux 'glibc 2.31'
+  assert_refused_libc 'glibc 2.31'
+  jq -r .message out.json | grep -q '2\.35' || fail "message does not name glibc 2.35"
+}
+
+test_installs_on_glibc_2_35_and_newer() {
+  release 1.2.3
+  latest 1.2.3
+  local libc
+  for libc in 'glibc 2.35' 'glibc 2.41' 'glibc 3.0'; do
+    fake_linux "$libc"
+    PATH="$PWD/fakebin:$PATH" install --json >out.json || fail "refused $libc: $(cat out.json)"
+    [ "$(jq -r .platform out.json)" = linux-x86_64 ] || fail "platform is not linux-x86_64"
+  done
 }
 
 test_oska_home_moves_the_install() {

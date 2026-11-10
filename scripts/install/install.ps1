@@ -18,10 +18,13 @@
 #
 # Before installing anything it checks that SHA256SUMS carries a valid SSH
 # signature by the release key pinned below (with the ssh-keygen of Windows'
-# OpenSSH client), and that the binary's SHA-256 is the one SHA256SUMS
-# lists. If either check fails, or anything else goes wrong, it installs
-# nothing and fails: run as a file it exits non-zero, under `iex` it throws.
-# It never prompts. Re-running it updates oskac in place.
+# OpenSSH client), that its signed first line names the release asked for
+# (`# oska-release vX.Y.Z`, so an old release cannot be passed off as a
+# newer one), that the binary's SHA-256 is the one SHA256SUMS lists, and
+# that the binary reports that version. If any check fails, or anything
+# else goes wrong, it installs nothing and fails: run as a file it exits
+# non-zero, under `iex` it throws. It never prompts. Re-running it updates
+# oskac in place.
 #
 # Works in Windows PowerShell 5.1 and PowerShell 7.
 
@@ -54,20 +57,48 @@
         return $Tag -cmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'
     }
 
-    # Downloads over HTTPS only, or copies a local file:// URL.
+    # Downloads over HTTPS only, or copies a local file:// URL. Returns
+    # $false if the download fails. Redirects are followed here, one hop at a
+    # time, and only to https:// URLs: Windows PowerShell 5.1's
+    # Invoke-WebRequest would follow one to http://.
     function Get-Url([string]$Url, [string]$OutFile) {
-        try {
-            if ($Url.StartsWith('https://')) {
-                Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing
-            } elseif ($Url.StartsWith('file://')) {
+        if ($Url.StartsWith('file://')) {
+            try {
                 Copy-Item -LiteralPath ([Uri]$Url).LocalPath -Destination $OutFile
-            } else {
+                return (Test-Path -LiteralPath $OutFile -PathType Leaf)
+            } catch {
                 return $false
             }
-            return (Test-Path -LiteralPath $OutFile -PathType Leaf)
-        } catch {
-            return $false
         }
+        $uri = [Uri]$Url
+        for ($hop = 0; $hop -le 10; $hop++) {
+            if ($uri.Scheme -cne 'https') {
+                Stop-Install 'insecure_url' "refusing to download ${uri}: only https:// URLs are allowed, also after a redirect"
+            }
+            $response = $null
+            try {
+                $request = [Net.WebRequest]::Create($uri)
+                $request.AllowAutoRedirect = $false
+                $request.UserAgent = 'oska-install.ps1'
+                $response = $request.GetResponse()
+                $status = [int]$response.StatusCode
+                if ($status -ge 300 -and $status -lt 400) {
+                    $location = $response.Headers['Location']
+                    if (-not $location) { return $false }
+                    $uri = New-Object Uri -ArgumentList $uri, $location
+                } else {
+                    $body = $response.GetResponseStream()
+                    $file = [IO.File]::Create($OutFile)
+                    try { $body.CopyTo($file) } finally { $file.Close(); $body.Close() }
+                    return $true
+                }
+            } catch {
+                return $false
+            } finally {
+                if ($response) { $response.Close() }
+            }
+        }
+        return $false
     }
 
     # Runs `ssh-keygen -Y verify` with $Data as its stdin, byte for byte.
@@ -207,6 +238,17 @@
             Stop-Install 'bad_signature' "SHA256SUMS for $tag is not signed by the Oska release key; nothing was installed ($problem)"
         }
 
+        # The signed first line names the release. A genuine old release
+        # served under a newer tag has a valid signature, but names its own
+        # tag here.
+        $signed = [IO.File]::ReadAllLines($sums) | Select-Object -First 1
+        if ($signed -cne "# oska-release $tag") {
+            if ($signed -and $signed.StartsWith('# oska-release ')) {
+                Stop-Install 'version_mismatch' "the files at $release/ are signed as release $($signed.Substring(15)), not $tag; nothing was installed"
+            }
+            Stop-Install 'version_mismatch' "SHA256SUMS at $release/ does not name the release it is for; nothing was installed"
+        }
+
         $listed = @([IO.File]::ReadAllLines($sums) | ForEach-Object {
                 if ($_ -cmatch '^([0-9a-f]{64})  (\S+)$' -and $Matches[2] -ceq $asset) { $Matches[1] }
             })
@@ -231,10 +273,26 @@
             $previous = ([IO.File]::ReadAllLines($receipt) | Select-Object -First 1)
         }
 
+        $staged = Join-Path $binDir '.oskac.new.exe'
         try {
             [void](New-Item -ItemType Directory -Force -Path $binDir)
-            $staged = Join-Path $binDir '.oskac.new.exe'
             Copy-Item -LiteralPath $downloaded -Destination $staged -Force
+        } catch {
+            Stop-Install 'install_failed' "cannot write ${staged}: $($_.Exception.Message)"
+        }
+
+        $reported = ''
+        try {
+            $reported = ([string](@(& $staged --version 2>$null) | Select-Object -First 1)).Trim()
+        } catch {
+            $reported = ''
+        }
+        if ($reported -cne "oskac $version") {
+            Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+            Stop-Install 'version_mismatch' "the $tag binary reports '$reported', not 'oskac $version'; nothing was installed"
+        }
+
+        try {
             # A running oskac.exe cannot be overwritten, but it can be renamed.
             $old = "$target.old"
             Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
