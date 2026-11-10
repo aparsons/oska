@@ -159,6 +159,10 @@ pub const UNIMPLEMENTED_CAPABILITIES: &[&str] =
 /// is refused before it starts (`E0371`).
 pub const UNIMPLEMENTED_MODULES: &[&str] = &["std.proc", "std.sql", "std.html"];
 
+/// The integer types other than `Int`. Their values carry the type tag
+/// `Int` at runtime, like every integer.
+pub const SIZED_INTEGERS: &[&str] = &["I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64"];
+
 /// The type name of a runtime `Secret`.
 pub const SECRET: &str = "Secret";
 
@@ -169,7 +173,7 @@ impl Value {
     ///
     /// Every integer is stored alike, so its tag is `Int` whatever its
     /// type; `support.rs` refuses a program whose dispatch that would
-    /// get wrong. A capability's tag is likewise only its kind.
+    /// get wrong.
     pub fn type_tag(&self) -> &str {
         match self {
             Value::Unit => "()",
@@ -180,7 +184,11 @@ impl Value {
             Value::Closure(_) | Value::Function(_) => "fn",
             Value::List(_) => "List",
             Value::Struct { ty, .. } | Value::Variant { ty, .. } => ty,
-            Value::Capability(Capability::Fs(_)) => "Fs",
+            Value::Capability(Capability::Fs(fs)) => match fs.access {
+                Access::ReadWrite => "Fs",
+                Access::Read => "FsRead",
+                Access::Write => "FsWrite",
+            },
             Value::Capability(Capability::Stdin) => "Stdin",
             Value::Capability(Capability::Stdout) => "Stdout",
             Value::Capability(Capability::Stderr) => "Stderr",

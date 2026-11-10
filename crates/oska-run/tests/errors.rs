@@ -4,7 +4,8 @@
 
 mod common;
 
-use common::{assert_exits, assert_runs, run_fake};
+use common::{assert_exits, assert_refused, assert_runs, run_fake, run_on};
+use oska_run::FakeHost;
 
 // ---- `?` and `main` returning `Err` ----------------------------------------
 
@@ -247,6 +248,37 @@ fn a_user_trait_dispatches_to_the_impl_for_each_type_with_its_default_methods() 
     );
 }
 
+#[test]
+fn generic_dispatch_on_a_sized_integer_type_with_its_own_impl_is_refused() {
+    // Every integer carries the tag `Int` at runtime, so the impl for
+    // `U8` could not be told from the one for `Int`.
+    let impls = "trait Name {
+    fn name(self) -> String
+}
+
+impl Name for Int {
+    fn name(self) -> String { \"int\" }
+}
+
+impl Name for U8 {
+    fn name(self) -> String { \"u8\" }
+}
+";
+    assert_refused(
+        &program(
+            &format!("{impls}\nfn show<T: Name>(x: T) -> Untrusted<String> {{ x.name() }}"),
+            "    let b: U8 = 3\n    io.println(show(b))",
+        ),
+        "E0380",
+    );
+    // Called on a known type, the impl is chosen before the program runs.
+    assert_runs(
+        &program(impls, "    let b: U8 = 3\n    io.println(b.name())"),
+        &[],
+        "u8\n",
+    );
+}
+
 // ---- Functions as values ---------------------------------------------------
 
 #[test]
@@ -273,5 +305,60 @@ fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }",
         ),
         &[],
         "8 10 12 7\n",
+    );
+}
+
+// ---- Option and Result -----------------------------------------------------
+
+#[test]
+fn ok_or_turns_an_option_into_a_result() {
+    assert_runs(
+        &program(
+            "fn first(xs: List<Int>) -> Result<Int, String> {
+    xs.get(0).ok_or(\"empty\")
+}
+
+fn show(r: Result<Int, String>) -> String {
+    match r {
+        Ok(n) => \"ok {n}\"
+        Err(e) => \"err {e}\"
+    }
+}",
+            "    let _ = io.println(show(first([4, 5])))
+    io.println(show(first(List.new())))",
+        ),
+        &[],
+        "ok 4\nerr empty\n",
+    );
+}
+
+// ---- The capabilities example ----------------------------------------------
+
+const CAPABILITIES: &str = include_str!("../../../examples/capabilities.osk");
+
+#[test]
+fn the_capabilities_example_counts_the_lines_of_a_file_in_the_fake_filesystem() {
+    let host = FakeHost::new().with_file("notes.txt", "one\ntwo\nthree\n");
+    let outcome = run_on(host, CAPABILITIES, &["notes.txt"]);
+    assert_eq!(
+        (outcome.stdout.as_str(), outcome.exit_code),
+        ("lines: 3\n", 0),
+        "{outcome:#?}"
+    );
+}
+
+#[test]
+fn the_capabilities_example_reports_a_missing_argument_or_file_and_exits_1() {
+    let outcome = run_on(FakeHost::new(), CAPABILITIES, &[]);
+    assert_eq!(
+        (outcome.stderr.as_str(), outcome.exit_code),
+        ("usage: capabilities <file>\n", 1),
+        "{outcome:#?}"
+    );
+    let outcome = run_on(FakeHost::new(), CAPABILITIES, &["missing.txt"]);
+    assert_eq!(
+        (outcome.stderr.as_str(), outcome.exit_code),
+        ("cannot read the file\n", 1),
+        "{outcome:#?}"
     );
 }
