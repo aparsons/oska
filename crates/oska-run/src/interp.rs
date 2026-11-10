@@ -29,6 +29,7 @@ use crate::host::Host;
 use crate::intrinsics;
 use crate::ops;
 use crate::panics::Panic;
+use crate::tasks::Tasks;
 use crate::value::{ClosureValue, Value};
 
 /// Why evaluation stopped before producing a value.
@@ -61,11 +62,17 @@ struct Frame {
 pub struct Interpreter<'p, 'h> {
     program: &'p Program,
     host: &'h mut dyn Host,
+    /// The scopes and tasks of the run (`tasks.rs`).
+    pub(crate) tasks: Tasks,
 }
 
 impl<'p, 'h> Interpreter<'p, 'h> {
     pub fn new(program: &'p Program, host: &'h mut dyn Host) -> Self {
-        Interpreter { program, host }
+        Interpreter {
+            program,
+            host,
+            tasks: Tasks::default(),
+        }
     }
 
     /// Call `function` with `args`: the receiver first, for a method, then
@@ -219,6 +226,23 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 }
             }
             ExprKind::FnValue(callee) => Ok(Value::Function(Rc::new(callee.clone()))),
+            ExprKind::Scope(body) => {
+                let scope = self.tasks.open();
+                let height = frame.slots.len();
+                frame.slots.push(Value::Scope(scope));
+                let result = self.eval(body, frame);
+                frame.slots.truncate(height);
+                // The scope does not exit until its tasks have finished,
+                // however the block ended: by its value, or a `return`.
+                // A panic ends the program, so its tasks never run.
+                let finished = match &result {
+                    Err(Unwind::Panic(_)) => Ok(()),
+                    _ => self.finish_scope(scope),
+                };
+                self.tasks.close(scope);
+                finished?;
+                result
+            }
             ExprKind::Unsupported => {
                 unreachable!("`crate::run` refuses a program with an unsupported node")
             }

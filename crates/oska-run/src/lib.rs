@@ -17,6 +17,7 @@
 //! - `intrinsics.rs` implements body-less prelude functions,
 //!   `data.rs` those of `List` and `String`, and `traits.rs` the
 //!   prelude's trait impls, such as `Eq for Int`.
+//! - `tasks.rs` runs `scope` blocks and their spawned tasks.
 //! - `panics.rs` defines panics and every runtime code.
 //! - `value.rs` defines runtime values.
 //! - `host.rs` defines the hosts.
@@ -43,6 +44,7 @@ mod ops;
 mod panics;
 mod prng;
 mod support;
+mod tasks;
 mod traits;
 mod value;
 

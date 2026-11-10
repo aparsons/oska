@@ -58,6 +58,14 @@ pub enum Value {
     /// The program's command-line arguments, the program path first: a
     /// program input `main` receives, not a capability.
     Args(Rc<[Rc<str>]>),
+    /// The handle a `scope` block binds: the index of its scope in the
+    /// interpreter (`tasks.rs`). It is only a name for the scope, so it
+    /// stays a valid value after the block ends, but no longer a valid
+    /// thing to spawn on.
+    Scope(usize),
+    /// A task `Scope.spawn` returned: the index of its task in the
+    /// interpreter (`tasks.rs`).
+    Task(usize),
 }
 
 /// A closure value: its code, and the slots and receiver in scope where
@@ -196,6 +204,8 @@ impl Value {
             Value::Capability(Capability::Clock) => "Clock",
             Value::Capability(Capability::Random) => "Random",
             Value::Args(_) => "Args",
+            Value::Scope(_) => "Scope",
+            Value::Task(_) => "Task",
         }
     }
 
