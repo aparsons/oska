@@ -2,7 +2,7 @@
 
 > The design.
 
-Oska 0.1.0 (pre-alpha). These docs track `main`. Every page is also served as Markdown: the same path with `.md`. All of them are in [llms-full.txt](https://oskalang.dev/llms-full.txt).
+Oska 0.1.0 (pre-alpha). These docs track `main`. Every page is also served as Markdown: the same path with `.md`. All of them are in [llms-full.txt](https://oskalang.dev/llms-full.txt). The source code is at https://github.com/aparsons/oska.
 
 ## Docs
 

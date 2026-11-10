@@ -2,6 +2,8 @@
 
 **An AI-first, secure-by-default programming language.**
 
+**Install, docs and guides:** [oskalang.dev](https://oskalang.dev)
+
 > Status: pre-alpha. Nothing here is stable; the language design is being worked out in [`docs/design.md`](docs/design.md), with key decisions recorded in [`docs/adr/`](docs/adr/).
 
 ## Why Oska?

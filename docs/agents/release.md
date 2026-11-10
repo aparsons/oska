@@ -9,7 +9,7 @@ git tag vX.Y.Z on main ─▶ release.yml
   build      5 native targets (Linux on ubuntu-22.04 / -arm: glibc ≤ 2.35 enforced)
   assemble   SHA256SUMS: line 1 "# oska-release vX.Y.Z", then "<sha256>  <file>" per binary
   sign       env "release": ssh-keygen -Y sign -n oska-release with RELEASE_SIGNING_KEY
-  publish    env "release": GitHub Release vX.Y.Z (storage only), then dispatch pages.yml on main
+  publish    env "release": GitHub Release vX.Y.Z (the source pages.yml fetches), then dispatch pages.yml on main
 pages.yml ─▶ downloads every release, verify.sh each against site/oska-release.pub,
              stages /releases/vX.Y.Z/ and latest.json, pins install.sh/.ps1 to the key
 ```
@@ -24,7 +24,7 @@ Nothing in the repo can check these settings, so verify them before a release.
 - **Environment `release`:** deployment limited to tags matching `v*`. No required reviewers (decided 2026-11-10).
 - **Ruleset "Release tags":** on `refs/tags/v*`, it restricts creation, update and deletion, and only repository admins may bypass it.
 - **Environment `github-pages`:** deployment from `main` only. Pages uses `build_type=workflow`, the custom domain `oskalang.dev`, and enforced HTTPS.
-- **Runners:** `ubuntu-22.04-arm` and `macos-15-intel` must stay available to this private repo. The PR dry run shows they are.
+- **Runners:** `ubuntu-22.04-arm` and `macos-15-intel` must stay available to this repo. It is public, so GitHub-hosted runners, macOS included, cost nothing. The PR dry run shows they are.
 
 ## Cutting a release
 

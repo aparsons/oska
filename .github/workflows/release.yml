@@ -9,8 +9,9 @@
 #   3. signs SHA256SUMS with the RELEASE_SIGNING_KEY secret
 #      (`ssh-keygen -Y sign -n oska-release`) and verifies the result against
 #      site/oska-release.pub;
-#   4. stores the files in a GitHub Release, which only serves as storage
-#      because the repository is private;
+#   4. stores the files in a GitHub Release. Users install from oskalang.dev,
+#      whose installers verify the signature; the GitHub Release is the
+#      source the Pages workflow fetches from;
 #   5. starts the Pages workflow on main, which fetches every release,
 #      verifies it again and publishes it at
 #      https://oskalang.dev/releases/vX.Y.Z/ with /latest.json.
