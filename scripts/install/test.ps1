@@ -105,8 +105,11 @@ function Get-SiteUrl {
 function Invoke-Installer([string[]]$Arguments, [string]$Installer = (Get-Pinned), [string]$Site = (Get-SiteUrl)) {
     $env:OSKA_SITE_URL = $Site
     $env:OSKA_HOME = Join-Path (Get-Location).Path 'home\.oska'
-    $out = & $script:shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Installer @Arguments 2>$null
+    $errFile = Join-Path (Get-Location).Path 'installer-stderr.txt'
+    $out = & $script:shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Installer @Arguments 2>$errFile
     $script:status = $LASTEXITCODE
+    $script:stdout = @($out) -join "`n"
+    $script:stderr = Get-Content -Raw -LiteralPath $errFile -ErrorAction SilentlyContinue
     , @($out)
 }
 
@@ -273,8 +276,9 @@ function Test-RunsUnderInvokeExpression {
 
 $shells = @('powershell', 'pwsh') | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue }
 Assert ($shells.Count -gt 0) 'no PowerShell to test with'
-$tests = Get-Command -CommandType Function -Name 'Test-*' |
-    Where-Object { $_.Name -notin @('Test-InstalledIs', 'Test-Refused') } |
+# Only this file's tests: installed modules define Test-* functions too.
+$tests = Get-ChildItem function:Test-* |
+    Where-Object { $_.ScriptBlock.File -eq $PSCommandPath -and $_.Name -notin @('Test-InstalledIs', 'Test-Refused') } |
     Sort-Object Name
 $passes = 0
 $failures = 0
@@ -286,6 +290,8 @@ try {
             $dir = Join-Path $scratch "$shell-$($test.Name)"
             [void](New-Item -ItemType Directory -Path $dir)
             Set-Location $dir
+            $script:stdout = ''
+            $script:stderr = ''
             try {
                 & $test.Name
                 $passes++
@@ -295,6 +301,8 @@ try {
                 Write-Host "FAIL [$shell] $($test.Name)"
                 Write-Host "    $($_.Exception.Message)"
                 Write-Host "    $($_.InvocationInfo.PositionMessage)"
+                Write-Host "    last installer stdout: $script:stdout"
+                Write-Host "    last installer stderr: $script:stderr"
             } finally {
                 Set-Location $origin
                 Remove-Item Env:OSKA_SITE_URL, Env:OSKA_HOME -ErrorAction SilentlyContinue
