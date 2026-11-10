@@ -52,7 +52,7 @@ use oska_syntax::ast::{
 };
 use oska_syntax::{Diagnostic, Edit, Span};
 
-use crate::authority::capability_bearing;
+use crate::authority::{self, capability_bearing};
 use crate::codes;
 use crate::collect::Decls;
 use crate::decl_rules;
@@ -64,8 +64,9 @@ use crate::program::{self, Callee, Construct};
 use crate::resolve;
 use crate::suggest;
 use crate::ty::{self, Trust, Ty};
-use crate::AuditSite;
+use crate::{Attenuation, AuditSite};
 
+mod attenuation;
 mod audit;
 mod calls;
 mod patterns;
@@ -80,7 +81,12 @@ mod sinks;
 pub struct Findings {
     pub diagnostics: Vec<Diagnostic>,
     pub audit: Vec<AuditSite>,
+    /// The capability attenuations (`body/attenuation.rs`).
+    pub attenuations: Vec<Attenuation>,
     pub resolutions: Resolutions,
+    /// The function whose body is being checked, named as the authority
+    /// report names it. Empty outside one.
+    pub function: String,
 }
 
 /// Check every function, method, constant, and test body in `module`. A
@@ -88,13 +94,18 @@ pub struct Findings {
 pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mut Findings) {
     for item in &module.items {
         match &item.kind {
-            ItemKind::Fn(f) => function(src, f, Lower::new(decls), items, out),
+            ItemKind::Fn(f) => {
+                out.function = f.name.name.clone();
+                function(src, f, Lower::new(decls), items, out);
+            }
             ItemKind::Impl(imp) => {
                 let lower = Lower::new(decls).with_generics(&imp.generics);
                 let target = lower.ty(&imp.target);
                 let lower = lower.with_self(target);
+                let type_name = authority::type_name(&imp.target);
                 for method in &imp.methods {
                     if let ItemKind::Fn(f) = &method.kind {
+                        out.function = format!("{type_name}.{}", f.name.name);
                         function(src, f, lower.clone(), items, out);
                     }
                 }
@@ -115,17 +126,20 @@ pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mu
                     });
                 for method in &t.methods {
                     if let ItemKind::Fn(f) = &method.kind {
+                        out.function = format!("{}.{}", t.name.name, f.name.name);
                         function(src, f, lower.clone(), items, out);
                     }
                 }
             }
             ItemKind::Const(c) => {
+                out.function.clear();
                 let lower = Lower::new(decls);
                 let ty = lower.ty(&c.ty);
                 let mut body = Body::new(src, items, lower, Ty::Unit, out);
                 body.check(&c.value, &ty);
             }
             ItemKind::Test(test) => {
+                out.function.clear();
                 let mut body = Body::new(src, items, Lower::new(decls), Ty::Unit, out);
                 body.bind("t", Ty::named(ty::TEST_CONTEXT), Binding::Param);
                 // A test produces no value: its last expression is a

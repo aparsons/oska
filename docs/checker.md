@@ -2,7 +2,15 @@
 
 `oskac check <file.osk> [--format=json] [--release]` type-checks one file against the embedded prelude. The rules it enforces are in the "Type checking" section of [`design.md`](design.md). This page describes what it prints. The codes `oskac run` reports, its refusals and panics (`P`-codes), are in [`runtime.md`](runtime.md).
 
-The exit code is non-zero when there are diagnostics. Without `--format=json`, diagnostics go to stderr and the authority report to stdout, one function per line, such as `fn main: Stdout (io), FsRead (fs)` or `fn add: pure`, followed by one line per audit site, such as `audit: assume_trusted (bytes 52..73)`.
+The exit code is non-zero when there are diagnostics. Without `--format=json`, diagnostics go to stderr and the authority report to stdout, one function per line, such as `fn main: Stdout (io), FsRead (fs)` or `fn add: pure`. Each function's attenuations follow it, indented, such as `  FsRead -> DirRead: restrict_to "docs" (bytes 88..112)`. One line per audit site comes last, such as `audit: assume_trusted (bytes 52..73)`.
+
+An **attenuation** is a call of one of the prelude's attenuation methods (`restrict_to`, `restrict_to_file`, `read_only`, `write_only`) on a built-in capability. The report lists each one under the function it is in (a closure's belong to the function around it), with the capability kind it narrows from and to, and its root:
+
+- `restrict_to "docs"` has a **literal root**: a string literal, a module constant holding one, or `Path.new` of either. Narrowing a directory capability gives the path relative to its own root, as written.
+- `restrict_to computed at runtime` has any other root: a variable, an interpolated string, `Path.from(untrusted)`. In JSON its `root` is `null`.
+- `read_only` and `write_only` take no root, so they show none.
+
+A reviewer reads a program's filesystem reach straight from these lines: `FsRead -> DirRead: restrict_to "docs"` and `FsWrite -> DirWrite: restrict_to "_site"` mean the program reads `docs` and writes `_site`. Whole-filesystem access shows as `restrict_to "/"`.
 
 Type and trait names in signatures and declarations are resolved, declarations are checked (`cap`, `main`, capitalization, recursive types, and where a `Scope` may appear), functions, methods, and impls are checked for duplicates, and under `--release` every body is scanned for `dbg(...)` and `todo()`. A `use` must name a `std.*` module that exists (`E0294`, `E0295`); see [`std` modules](#std-modules) for which do. Function, method, constant, and test bodies are type-checked with local, bidirectional inference: `let` types come from initializers, the expected type flows into literals, generic constructors, and closures, and an expression that fails gets an error type so it causes only one diagnostic.
 
@@ -30,11 +38,14 @@ A `test` body sees one built-in value, `t`, of the prelude type `TestContext`. I
   ],
   "audit": [
     {"kind":"assume_trusted","span":{"start":412,"end":430}}
+  ],
+  "attenuations": [
+    {"function":"count_lines","method":"restrict_to","span":{"start":150,"end":176},"source":"FsRead","result":"DirRead","root":"docs"}
   ]
 }
 ```
 
-- **`diagnostics`**, in source order. Each uses the same object as parser diagnostics (see [`ast.md`](ast.md)): `code`, `message`, `span` (byte offsets), and `fix` when the repair is unambiguous. A parse error is reported alone, with empty `functions` and `audit`.
+- **`diagnostics`**, in source order. Each uses the same object as parser diagnostics (see [`ast.md`](ast.md)): `code`, `message`, `span` (byte offsets), and `fix` when the repair is unambiguous. A parse error is reported alone, with empty `functions`, `audit` and `attenuations`.
 - **`functions`**: one entry per function and `impl` method, in source order. The report is produced even when there are diagnostics.
   - `name`: the function's name, or `Type.method` for a method.
   - `authority`: the built-in capabilities the function can reach, in order of first appearance, without repeats. `cap` types are expanded through their fields, and type arguments are expanded, so `List<Stdout>` reaches `Stdout`. Each capability is reported by its own name: an attenuation to a directory shows as the directory capability it gives, such as `DirRead`.
@@ -43,6 +54,12 @@ A `test` body sees one built-in value, `t`, of the prelude type `TestContext`. I
 - **`audit`**: every **audit site**, in source order. It is always present, and is `[]` when there are none.
   - `kind`: what the call does. `assume_trusted` is a **trust assertion**: `.assume_trusted()` turns untrusted text into trusted text, as a validator does. `expose` is a **secret exposure**: `.expose()` reads a `Secret`'s value.
   - `span`: the whole call expression, such as `s.assume_trusted()`.
+- **`attenuations`**: every call that narrows a capability, in source order. It is always present, and is `[]` when there are none. The entries come from the prelude's attenuation methods, so a new capability kind with such a method appears with no change to the checker.
+  - `function`: the function the call is in, named as in `functions`.
+  - `method`: `restrict_to`, `restrict_to_file`, `read_only` or `write_only`.
+  - `source` and `result`: the capability kinds before and after, such as `FsRead` and `DirRead`.
+  - `root`: the root as a string when it is a literal or a module constant, and `null` when it is computed at runtime or the method takes none (`read_only`, `write_only`). The human report tells the two apart.
+  - `span`: the whole call expression, such as `read.restrict_to("docs")`.
 
 ## The prelude
 

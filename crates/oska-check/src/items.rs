@@ -279,6 +279,10 @@ pub struct Items {
     /// Variants usable without their enum's name (`Some`, `None`, `Ok`,
     /// `Err`): every variant of a prelude enum, mapped to its enum.
     pub bare_variants: HashMap<String, String>,
+    /// The module's constants whose value is a plain string literal, by
+    /// name, with that text. The authority report uses them to name an
+    /// attenuation's root.
+    pub consts: HashMap<String, String>,
 }
 
 impl Items {
@@ -416,7 +420,12 @@ impl Items {
                     let key = key_of(decls, &t.name.name, in_prelude);
                     self.traits.entry(key).or_insert(info);
                 }
-                ItemKind::Use(_) | ItemKind::Const(_) | ItemKind::Test(_) => {}
+                ItemKind::Const(c) => {
+                    if let (false, Some(text)) = (in_prelude, literal_text(&c.value)) {
+                        self.consts.entry(c.name.name.clone()).or_insert(text);
+                    }
+                }
+                ItemKind::Use(_) | ItemKind::Test(_) => {}
             }
         }
     }
@@ -720,3 +729,19 @@ fn follows_trust(item: &Item) -> bool {
 
 /// The attribute that makes a prelude function trust-polymorphic.
 const FOLLOWS_TRUST: &str = "follows_trust";
+
+/// The text of a string literal with no interpolation hole.
+pub(crate) fn literal_text(expr: &oska_syntax::ast::Expr) -> Option<String> {
+    use oska_syntax::ast::{ExprKind, StrPart};
+    let ExprKind::Str(parts) = &expr.kind else {
+        return None;
+    };
+    let mut text = String::new();
+    for part in parts {
+        match part {
+            StrPart::Text { value, .. } => text.push_str(value),
+            StrPart::Hole { .. } => return None,
+        }
+    }
+    Some(text)
+}

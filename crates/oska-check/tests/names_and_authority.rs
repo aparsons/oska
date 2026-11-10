@@ -337,7 +337,7 @@ fn a_parse_error_is_reported_with_no_functions() {
     assert!(report.functions.is_empty());
 }
 
-// ---- The JSON report: {"diagnostics", "functions", "audit"} ------------------
+// ---- The JSON report: {"diagnostics", "functions", "audit", "attenuations"} ------------------
 
 #[test]
 fn a_clean_module_reports_only_authority() {
@@ -358,7 +358,8 @@ fn a_clean_module_reports_only_authority() {
                  "pure": false},
                 {"name": "add", "authority": [], "via": [], "pure": true}
             ],
-            "audit": []
+            "audit": [],
+            "attenuations": []
         }"#,
     );
 }
@@ -379,7 +380,8 @@ fn diagnostics_use_the_shared_envelope_with_their_fix() {
             "functions": [
                 {"name": "f", "authority": [], "via": [], "pure": true}
             ],
-            "audit": []
+            "audit": [],
+            "attenuations": []
         }"#,
     );
 }
@@ -395,7 +397,8 @@ fn a_cap_fn_parameter_is_listed_in_via_without_capabilities() {
                  "via": [{"param": "f", "capabilities": []}],
                  "pure": false}
             ],
-            "audit": []
+            "audit": [],
+            "attenuations": []
         }"#,
     );
 }

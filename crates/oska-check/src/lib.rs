@@ -2,9 +2,11 @@
 //!
 //! [`check_module`] checks one source file against the embedded
 //! **prelude** (`src/prelude.osk`) and returns a [`CheckReport`]: every
-//! diagnostic, the **authority** of every function, and every **audit
+//! diagnostic, the **authority** of every function, every **audit
 //! site** (a call a reviewer must see, such as `.assume_trusted()`:
-//! `body/audit.rs`). The report is
+//! `body/audit.rs`), and every **attenuation** (a call that narrows a
+//! capability, such as `.restrict_to("docs")`: `body/attenuation.rs`).
+//! The report is
 //! produced even when there are errors. [`CheckReport::to_json`] is what
 //! `oskac check --format=json` prints; `docs/checker.md` describes it.
 //! A report with no diagnostics also carries the **checked program**
@@ -133,6 +135,8 @@ pub struct CheckReport {
     pub functions: Vec<FunctionAuthority>,
     /// Every audit site, in source order.
     pub audit: Vec<AuditSite>,
+    /// Every attenuation of a capability, in source order.
+    pub attenuations: Vec<Attenuation>,
     /// The **checked program** a backend runs (`program.rs`): present
     /// only when there are no diagnostics.
     pub program: Option<program::Program>,
@@ -194,6 +198,82 @@ impl AuditSite {
     }
 }
 
+/// One attenuation: a call of a prelude method that narrows a
+/// capability, such as `read.restrict_to("docs")` or `dir.read_only()`.
+/// `body/attenuation.rs` decides which calls these are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attenuation {
+    /// The function the call is in, named as in `functions`. A closure's
+    /// attenuations belong to the function around it.
+    pub function: String,
+    /// The method: `restrict_to`, `restrict_to_file`, `read_only` or
+    /// `write_only`.
+    pub method: String,
+    /// The whole call expression.
+    pub span: Span,
+    /// The capability kind the method is called on, such as `FsRead`.
+    pub source: String,
+    /// The capability kind it returns, such as `DirRead`.
+    pub result: String,
+    /// The root it narrows to.
+    pub root: AttenuationRoot,
+}
+
+/// The root an attenuation narrows to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttenuationRoot {
+    /// The method takes no root: `read_only` and `write_only`.
+    Absent,
+    /// A string literal or a module constant, with its text. Narrowing a
+    /// directory capability gives the path relative to its own root, as
+    /// written.
+    Literal(String),
+    /// Anything else: only known when the program runs.
+    Computed,
+}
+
+impl Attenuation {
+    /// The root as the JSON report names it: its text, or `None` when the
+    /// method takes none or the root is computed at runtime.
+    pub fn root_text(&self) -> Option<&str> {
+        match &self.root {
+            AttenuationRoot::Literal(text) => Some(text),
+            AttenuationRoot::Absent | AttenuationRoot::Computed => None,
+        }
+    }
+
+    /// One line of the human-readable report, such as
+    /// `FsRead -> DirRead: restrict_to "docs" (bytes 52..73)`.
+    pub fn to_human(&self) -> String {
+        let root = match &self.root {
+            AttenuationRoot::Absent => String::new(),
+            AttenuationRoot::Literal(text) => format!(" {text:?}"),
+            AttenuationRoot::Computed => " computed at runtime".to_string(),
+        };
+        format!(
+            "{} -> {}: {}{root} (bytes {}..{})",
+            self.source, self.result, self.method, self.span.start, self.span.end
+        )
+    }
+
+    /// Render as a single-line JSON object.
+    pub fn to_json(&self) -> String {
+        let root = self.root_text().map_or_else(
+            || "null".to_string(),
+            |text| format!("\"{}\"", json_escape(text)),
+        );
+        format!(
+            "{{\"function\":\"{}\",\"method\":\"{}\",\"span\":{{\"start\":{},\"end\":{}}},\"source\":\"{}\",\"result\":\"{}\",\"root\":{root}}}",
+            json_escape(&self.function),
+            json_escape(&self.method),
+            self.span.start,
+            self.span.end,
+            json_escape(&self.source),
+            json_escape(&self.result)
+        )
+    }
+}
+
 /// One function's entry in the authority report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionAuthority {
@@ -220,8 +300,9 @@ pub struct Via {
 
 impl CheckReport {
     /// Render as `{"diagnostics": [...], "functions": [...], "audit":
-    /// [...]}`, with one diagnostic, function, or audit site per line.
-    /// Every array is present, even when empty.
+    /// [...], "attenuations": [...]}`, with one diagnostic, function,
+    /// audit site, or attenuation per line. Every array is present, even
+    /// when empty.
     pub fn to_json(&self) -> String {
         let diagnostics: Vec<String> = self.diagnostics.iter().map(Diagnostic::to_json).collect();
         let functions: Vec<String> = self
@@ -230,27 +311,55 @@ impl CheckReport {
             .map(FunctionAuthority::to_json)
             .collect();
         let audit: Vec<String> = self.audit.iter().map(AuditSite::to_json).collect();
+        let attenuations: Vec<String> =
+            self.attenuations.iter().map(Attenuation::to_json).collect();
         format!(
-            "{{\n  \"diagnostics\": {},\n  \"functions\": {},\n  \"audit\": {}\n}}\n",
+            "{{\n  \"diagnostics\": {},\n  \"functions\": {},\n  \"audit\": {},\n  \"attenuations\": {}\n}}\n",
             json_lines(&diagnostics),
             json_lines(&functions),
-            json_lines(&audit)
+            json_lines(&audit),
+            json_lines(&attenuations)
         )
     }
 
     /// The authority report as `oskac check <path>` prints it on standard
-    /// output: one line per function and method, then one line per audit
-    /// site, each ending in a newline. Diagnostics are not part of it.
+    /// output: one line per function and method, each followed by its
+    /// attenuations (indented), then one line per audit site, each ending
+    /// in a newline. Diagnostics are not part of it.
     pub fn authority_to_human(&self, path: &str) -> String {
         let mut out = String::new();
+        let mut listed = vec![false; self.attenuations.len()];
         for function in &self.functions {
             out.push_str(&function.to_human());
             out.push('\n');
+            self.list_attenuations(&function.name, &mut listed, &mut out);
+        }
+        // A function the report has no line for, such as a trait's
+        // default method, still shows what it attenuates.
+        for i in 0..listed.len() {
+            if !listed[i] {
+                let name = &self.attenuations[i].function;
+                out.push_str(&format!("fn {name}:\n"));
+                self.list_attenuations(name, &mut listed, &mut out);
+            }
         }
         for site in &self.audit {
             out.push_str(&format!("{path}: {site}\n"));
         }
         out
+    }
+}
+
+impl CheckReport {
+    /// Append the attenuations of the function `name` that are not yet
+    /// `listed`, one indented line each, and mark them listed.
+    fn list_attenuations(&self, name: &str, listed: &mut [bool], out: &mut String) {
+        for (i, attenuation) in self.attenuations.iter().enumerate() {
+            if !listed[i] && attenuation.function == name {
+                listed[i] = true;
+                out.push_str(&format!("  {}\n", attenuation.to_human()));
+            }
+        }
     }
 }
 
@@ -350,7 +459,9 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
     let body::Findings {
         mut diagnostics,
         mut audit,
+        mut attenuations,
         resolutions,
+        ..
     } = findings;
     let program = diagnostics
         .is_empty()
@@ -358,10 +469,13 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
     let functions = authority::report(&module, &decls);
     diagnostics.sort_by_key(|d| d.span.start);
     audit.sort_by_key(|site| site.span.start);
+    // A chain shares its start: the inner call, which ends first, is first.
+    attenuations.sort_by_key(|a| (a.span.start, a.span.end));
     CheckReport {
         diagnostics,
         functions,
         audit,
+        attenuations,
         program,
     }
 }
