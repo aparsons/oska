@@ -13,7 +13,7 @@ use crate::items::{Bound, FieldsInfo, FnSig, Receiver, Shape};
 use crate::program::lower::Resolution;
 use crate::program::{Callee, Construct};
 
-use crate::ty::{self, Ty};
+use crate::ty::{self, Cap, Ty};
 
 impl Body<'_, '_, '_> {
     pub(super) fn call(
@@ -39,6 +39,12 @@ impl Body<'_, '_, '_> {
             ExprKind::Name(ident) if self.local(&ident.name).is_none() => self.named_callee(ident),
             _ => {
                 let ty = self.infer(callee);
+                if self.in_contract {
+                    // A contract reads the callee's purity from its flag
+                    // (see `pure_call`): one still open is a plain `fn`
+                    // from now on.
+                    self.infer.settle_caps(&ty);
+                }
                 match self.infer.resolve(&ty) {
                     Ty::Fn {
                         cap, params, ret, ..
@@ -50,7 +56,7 @@ impl Body<'_, '_, '_> {
                             ret: *ret,
                             labels: Labels::Optional,
                             obligations: Vec::new(),
-                            pure: !cap,
+                            pure: cap != Cap::Bearing,
                             receiver: None,
                             joined: None,
                             type_args: Vec::new(),
@@ -486,6 +492,13 @@ impl Body<'_, '_, '_> {
             // The receiver flows into `self` like an argument, so untrusted
             // text is no receiver of a method that wants trusted text.
             self.expect(&receiver, declared, base.span);
+            if sig.receiver == Receiver::VarSelf {
+                // A mutating method writes `self` back into its receiver,
+                // so `self` flows into the receiver too: `push` cannot add
+                // a `cap fn` to a `List<fn()>`, or untrusted text to a
+                // `List<String>`.
+                self.expect(declared, &receiver, base.span);
+            }
         }
         self.follow_held_trust(&mut callable, &type_name, &receiver);
         if let Ty::Param(_) = receiver {
@@ -689,15 +702,23 @@ impl Body<'_, '_, '_> {
     /// capability-bearing after its generics are solved. So
     /// `apply(log, out)` with `fn apply<T>(f: fn(T), x: T)` is impure when
     /// `out` is a `Stdout`.
-    pub(super) fn pure_call(&self, callable: &Callable, arg_tys: &[Ty]) -> bool {
-        callable.pure
-            && !callable
-                .params
-                .iter()
-                .map(|(_, ty)| ty)
-                .chain(callable.receiver.iter())
-                .chain(arg_tys)
-                .any(|ty| self.bearing(ty))
+    ///
+    /// A pure call settles the open capability flags it read as plain
+    /// `fn`s, so a `cap fn` cannot reach them later.
+    pub(super) fn pure_call(&mut self, callable: &Callable, arg_tys: &[Ty]) -> bool {
+        let tys: Vec<Ty> = callable
+            .params
+            .iter()
+            .map(|(_, ty)| ty)
+            .chain(callable.receiver.iter())
+            .chain(arg_tys)
+            .cloned()
+            .collect();
+        let pure = callable.pure && !tys.iter().any(|ty| self.bearing(ty));
+        if pure {
+            self.settle_all(&tys);
+        }
+        pure
     }
 
     /// Check an argument's label against its parameter.
@@ -779,7 +800,7 @@ impl Callable {
     /// The function type of a callable used as a value.
     pub(super) fn into_fn_type(self) -> Ty {
         Ty::Fn {
-            cap: false,
+            cap: Cap::Plain,
             scoped: false,
             params: self.params.into_iter().map(|(_, t)| t).collect(),
             ret: Box::new(self.ret),

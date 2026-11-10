@@ -1,0 +1,23 @@
+// A plain `fn` and a `cap fn` in one list join to `List<cap fn() -> Int>`,
+// so the list needs no annotation. Calling its elements needs `cap fn`.
+
+fn answer() -> Int {
+    42
+}
+
+fn call_all(fs: List<cap fn() -> Int>) -> Int {
+    var total = 0
+    for f in fs {
+        total = total + f()
+    }
+    total
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    let fs = [answer, || {
+        let _ = io.println("called")
+        1
+    }]
+    let total = call_all(fs)
+    io.println("total {total}")
+}

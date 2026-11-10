@@ -1,0 +1,12 @@
+{
+  "diagnostics": [
+    {"code":"E0270","message":"expected `List<fn() -> Int>`, found `List<cap fn() -> Int>`: a `cap fn` can carry authority, so it cannot be used as a plain `fn`","span":{"start":435,"end":437}}
+  ],
+  "functions": [
+    {"name":"answer","authority":[],"via":[],"pure":true},
+    {"name":"call_all","authority":[],"via":[],"pure":true},
+    {"name":"main","authority":["Stdout"],"via":[{"param":"io","capabilities":["Stdout"]}],"pure":false}
+  ],
+  "audit": [],
+  "attenuations": []
+}

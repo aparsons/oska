@@ -11,7 +11,7 @@ use oska_syntax::Span;
 
 use crate::authority::capability_bearing;
 use crate::collect::{DeclKind, Decls};
-use crate::ty::{self, Trust, Ty};
+use crate::ty::{self, Cap, Trust, Ty};
 
 /// A function or method signature. Generic parameters appear in the
 /// types as [`Ty::Param`]; instantiate them before use.
@@ -725,7 +725,7 @@ impl<'d, 'a> Lower<'d, 'a> {
                 params,
                 return_type,
             } => Ty::Fn {
-                cap: *cap,
+                cap: Cap::of(*cap),
                 scoped: false,
                 params: params.iter().map(|p| self.ty(p)).collect(),
                 ret: Box::new(return_type.as_ref().map_or(Ty::Unit, |r| self.ty(r))),

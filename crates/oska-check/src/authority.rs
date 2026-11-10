@@ -10,7 +10,7 @@ use oska_syntax::ast::{FnDecl, ItemKind, Module, Type, TypeKind};
 
 use crate::collect::{DeclKind, Decls};
 use crate::items::Lower;
-use crate::ty::Ty;
+use crate::ty::{Cap, Ty};
 use crate::{FunctionAuthority, Via};
 
 /// What a type can reach.
@@ -50,7 +50,7 @@ fn reach(ty: &Ty, decls: &Decls, expanding: &mut Vec<String>) -> Reach {
     match ty {
         Ty::Fn { cap, .. } => Reach {
             capabilities: Vec::new(),
-            bearing: *cap,
+            bearing: *cap == Cap::Bearing,
         },
         Ty::Named(name, args, _) => {
             let Some(decl) = decls.get(name) else {

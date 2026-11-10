@@ -1,0 +1,23 @@
+// The joined list is a `List<cap fn() -> Int>`, so it cannot be passed
+// where a `List<fn() -> Int>` is expected: `E0270`.
+
+fn answer() -> Int {
+    42
+}
+
+fn call_all(fs: List<fn() -> Int>) -> Int {
+    var total = 0
+    for f in fs {
+        total = total + f()
+    }
+    total
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    let fs = [answer, || {
+        let _ = io.println("called")
+        1
+    }]
+    let total = call_all(fs)
+    io.println("total {total}")
+}

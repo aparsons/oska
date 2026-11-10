@@ -63,7 +63,7 @@ use crate::program::lower::{Resolution, Resolutions};
 use crate::program::{self, Callee, Construct};
 use crate::resolve;
 use crate::suggest;
-use crate::ty::{self, Trust, Ty};
+use crate::ty::{self, Cap, Trust, Ty};
 use crate::{Attenuation, AuditSite};
 
 mod attenuation;
@@ -309,6 +309,19 @@ pub struct Body<'c, 'd, 'a> {
     /// Resolutions that depend on a type inference may not have solved
     /// yet, recorded by [`Body::finish`] once the whole body is checked.
     deferred: Vec<(Span, Ty, Deferred)>,
+    /// Closures that captured nothing capability-bearing, but captured a
+    /// value whose type was not yet solved. [`Body::finish`] makes each a
+    /// `cap fn` if a capture turned out capability-bearing.
+    open_closures: Vec<OpenClosure>,
+}
+
+/// A closure whose capability flag waits for its captures' types.
+struct OpenClosure {
+    /// Its capability variable.
+    cap: Cap,
+    span: Span,
+    /// Each captured name (`self` for the receiver) with its type.
+    captures: Vec<(String, Ty)>,
 }
 
 /// A resolution recorded once the body's types are solved.
@@ -372,6 +385,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             mentions: Vec::new(),
             in_contract: false,
             deferred: Vec::new(),
+            open_closures: Vec::new(),
         }
     }
 
@@ -478,6 +492,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     /// Report bindings whose types inference could not work out, and
     /// record the deferred resolutions.
     fn finish(&mut self) {
+        self.close_closures();
         self.record_deferred();
         for (name, ty) in std::mem::take(&mut self.inferred_lets) {
             let ty = self.infer.resolve(&ty);
@@ -1540,18 +1555,36 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             .any(|(_, ty)| self.infer.resolve(ty).holds_scope());
         let captured = frame
             .captures
-            .into_iter()
+            .iter()
             .find(|(_, ty)| self.bearing(ty))
-            .map(|(name, _)| name);
+            .map(|(name, _)| name.clone());
+        let cap = match captured {
+            Some(_) => Cap::Bearing,
+            // A capture whose type is not solved yet may still turn out
+            // capability-bearing: decided once the body is checked.
+            None if frame.captures.iter().any(|(_, ty)| self.infer.is_open(ty)) => {
+                let cap = self.infer.fresh_cap();
+                self.open_closures.push(OpenClosure {
+                    cap,
+                    span,
+                    captures: frame.captures,
+                });
+                cap
+            }
+            None => Cap::Plain,
+        };
         let ty = Ty::Fn {
-            cap: captured.is_some(),
+            cap,
             scoped,
             params: param_tys,
             ret: Box::new(ret),
         };
         let wants_plain_fn = matches!(
             expected_fn.map(|e| self.infer.shallow(&e)),
-            Some(Ty::Fn { cap: false, .. })
+            Some(Ty::Fn {
+                cap: Cap::Plain,
+                ..
+            })
         );
         match captured {
             Some(name) if wants_plain_fn => {
@@ -1569,9 +1602,62 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
     }
 
-    /// Whether `ty`, as solved so far, is capability-bearing.
+    /// Whether `ty`, as solved so far, is capability-bearing. A function
+    /// type whose capability flag is still open is not; a caller that acts
+    /// on that answer settles the flag with [`Body::settle_all`].
     fn bearing(&self, ty: &Ty) -> bool {
         capability_bearing(&self.infer.resolve(ty), self.decls())
+    }
+
+    /// Settle every open capability flag in `tys` as a plain `fn`, after
+    /// deciding from them that something is pure: a `cap fn` that reaches
+    /// one of them later is `E0270`, so the decision cannot be undone by
+    /// a join further on, such as a later assignment in a loop.
+    fn settle_all(&mut self, tys: &[Ty]) {
+        for ty in tys {
+            self.infer.settle_caps(ty);
+        }
+    }
+
+    /// Decide each closure whose captures were not solved when it was
+    /// checked: one that captured a value that turned out
+    /// capability-bearing is a `cap fn`, which is `E0270` if it has
+    /// already been used as a plain `fn`. So a closure checked before
+    /// `xs.push(out)` cannot carry `out` as a plain `fn` on a loop's next
+    /// pass.
+    ///
+    /// One closure may capture another, so this repeats until no more
+    /// closures turn out to be `cap fn`s.
+    fn close_closures(&mut self) {
+        let mut open = std::mem::take(&mut self.open_closures);
+        loop {
+            let before = open.len();
+            let mut still_open = Vec::new();
+            for closure in open {
+                let bearing = closure
+                    .captures
+                    .iter()
+                    .find(|(_, ty)| self.bearing(ty))
+                    .map(|(name, ty)| (name.clone(), self.infer.resolve(ty)));
+                match bearing {
+                    None => still_open.push(closure),
+                    Some(_) if self.infer.raise_cap(closure.cap) => {}
+                    Some((name, ty)) => self.error(
+                        codes::CAPTURING_CLOSURE,
+                        format!(
+                            "this closure captures `{name}`, which turns out to be the \
+                             capability-bearing `{ty}`, so it is a `cap fn`, but it is used \
+                             as a plain `fn`"
+                        ),
+                        closure.span,
+                    ),
+                }
+            }
+            if still_open.len() == before {
+                break;
+            }
+            open = still_open;
+        }
     }
 
     // ---- Blocks and statements --------------------------------------------
