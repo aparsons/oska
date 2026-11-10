@@ -1,0 +1,10 @@
+fn etc: FsRead (read)
+  FsRead -> DirRead: restrict_to "/etc" (bytes 302..334)
+fn reader: Fs (fs)
+  Fs -> FsRead: read_only (bytes 417..433)
+fn narrowed: FsRead (read)
+  FsRead -> DirRead: restrict_to computed at runtime (bytes 564..582)
+fn vouch: pure
+fn main: Fs (fs)
+crates/oskac/tests/fixtures/qualified_calls.osk: audit: assume_trusted (bytes 800..821)
+crates/oskac/tests/fixtures/qualified_calls.osk: audit: assume_trusted (bytes 836..864)

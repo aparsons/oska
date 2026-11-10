@@ -26,7 +26,13 @@ impl Body<'_, '_, '_> {
         let callable = match &callee.kind {
             ExprKind::Field { base, name } => match self.qualified_path(base, name) {
                 Some(QualifiedPath::Export(key)) => self.item_callee(&key, name),
-                Some(QualifiedPath::Member(type_name)) => self.type_member(&type_name, name),
+                Some(QualifiedPath::Member(type_name)) => {
+                    let used = MemberUse::Call {
+                        args,
+                        span: expr.span,
+                    };
+                    self.type_member(&type_name, name, used)
+                }
                 Some(QualifiedPath::Reported) => None,
                 None => return self.method_call(base, name, args, expected, expr.span),
             },
@@ -141,8 +147,15 @@ impl Body<'_, '_, '_> {
 
     /// `Type.name`: a variant of an enum, or an associated function or
     /// method of the type. A method called this way takes its receiver as
-    /// the first argument.
-    pub(super) fn type_member(&mut self, type_name: &str, name: &Ident) -> Option<Callable> {
+    /// the first argument. A method is checked as `receiver.name(...)` is:
+    /// a removed path method is refused (`E0273`), and an audited or
+    /// attenuating one is recorded where it is `used`.
+    pub(super) fn type_member(
+        &mut self,
+        type_name: &str,
+        name: &Ident,
+        used: MemberUse,
+    ) -> Option<Callable> {
         if self.items.enums.contains_key(type_name) {
             if let Some(callable) = self.variant(type_name, &name.name) {
                 return Some(callable);
@@ -151,7 +164,21 @@ impl Body<'_, '_, '_> {
         if matches!(self.decls().get(type_name), Some(d) if d.kind == DeclKind::Trait) {
             return self.qualified_call(type_name, name);
         }
+        let (args, span) = match used {
+            MemberUse::Call { args, span } => (args, span),
+            MemberUse::Value(span) => (&[][..], span),
+        };
+        if self.removed_qualified_method(type_name, &name.name, args, span) {
+            return None;
+        }
         if let Some(sig) = self.items.method(type_name, &name.name).cloned() {
+            self.audit_call(type_name, &name.name, span);
+            if sig.receiver.is_method() {
+                // The receiver is the first argument; a value has none,
+                // so its root is computed at runtime.
+                let after_receiver = args.get(1..).unwrap_or_default();
+                self.attenuation_call(type_name, &sig, after_receiver, span);
+            }
             let mut callable = self.instantiate(&sig, None);
             if sig.trait_name.is_none() {
                 callable.target = Some(target(&sig, format!("{type_name}.{}", name.name)));
@@ -728,6 +755,14 @@ impl Body<'_, '_, '_> {
             self.infer(&arg.value);
         }
     }
+}
+
+/// How `Type.name` is used: called with `args` (the whole call at
+/// `span`), or named at `span` as a function value.
+#[derive(Clone, Copy)]
+pub(super) enum MemberUse<'e> {
+    Call { args: &'e [Arg], span: Span },
+    Value(Span),
 }
 
 /// What a call to `sig`, qualified as `name`, reaches: an intrinsic for a

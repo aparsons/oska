@@ -66,6 +66,44 @@ impl Body<'_, '_, '_> {
         let Ty::Named(type_name, _, _) = receiver else {
             return false;
         };
+        self.removed_member(
+            type_name,
+            |body| body.postfix_operand(base),
+            name,
+            args,
+            span,
+        )
+    }
+
+    /// Report a removed method named by its type, `Type.name(args)`, whose
+    /// receiver is the first argument, or `Type.name` taken as a function
+    /// value (no `args`). Returns whether it reported.
+    pub(super) fn removed_qualified_method(
+        &mut self,
+        type_name: &str,
+        name: &str,
+        args: &[Arg],
+        span: Span,
+    ) -> bool {
+        let receiver = |body: &Self| match args.first() {
+            Some(arg) => body.postfix_operand(&arg.value),
+            None => "x".to_string(),
+        };
+        // The caller checks `args` when the call has no callee.
+        self.removed_member(type_name, receiver, name, &[], span)
+    }
+
+    /// Report `name` at `span` if it is a removed method of `type_name`,
+    /// showing the fix on the receiver whose text `receiver` gives, and
+    /// check `args`. Returns whether it reported.
+    fn removed_member(
+        &mut self,
+        type_name: &str,
+        receiver: impl FnOnce(&Self) -> String,
+        name: &str,
+        args: &[Arg],
+        span: Span,
+    ) -> bool {
         let is_prelude_capability = self
             .decls()
             .get(type_name)
@@ -73,7 +111,7 @@ impl Body<'_, '_, '_> {
         let Some(removed) = REMOVED.iter().find(|r| r.method == name) else {
             return false;
         };
-        let applies = match type_name.as_str() {
+        let applies = match type_name {
             "FsRead" => !removed.writes,
             "FsWrite" => removed.writes,
             "Fs" => true,
@@ -82,8 +120,8 @@ impl Body<'_, '_, '_> {
         if !(is_prelude_capability && applies) {
             return false;
         }
-        let receiver_text = self.postfix_operand(base);
-        let narrowed = match (type_name.as_str(), removed.writes) {
+        let receiver_text = receiver(self);
+        let narrowed = match (type_name, removed.writes) {
             ("Fs", false) => format!("{receiver_text}.read_only()"),
             ("Fs", true) => format!("{receiver_text}.write_only()"),
             _ => receiver_text,
