@@ -9,64 +9,8 @@
 
 mod common;
 
-use common::{assert_refused, run_fake};
-use oska_run::{run, FakeHost};
-
-/// Helpers every program below may call, to print what an operation
-/// returned: its text, or `REFUSED: ` and its error's message.
-const SHOWN: &str = r#"
-fn shown(result: Result<Untrusted<String>, IoError>) -> Untrusted<String> {
-    match result {
-        Ok(text) => text
-        Err(e) => refused(e)
-    }
-}
-
-fn done(result: Result<(), IoError>) -> Untrusted<String> {
-    match result {
-        Ok(_) => "done"
-        Err(e) => refused(e)
-    }
-}
-
-fn listed(result: Result<List<Untrusted<String>>, IoError>) -> Untrusted<String> {
-    match result {
-        Ok(names) => ",".join(names)
-        Err(e) => refused(e)
-    }
-}
-
-fn refused(e: IoError) -> Untrusted<String> {
-    let message = e.message
-    "REFUSED: {message}"
-}
-"#;
-
-/// What `main` prints on `host` when its body is `body`, each line one
-/// `io.println`. `main` is given `io: Stdout`, `fs: Fs`, `read: FsRead`,
-/// `write: FsWrite`, and `args: Args` holding `args` after the program
-/// path. The host is left as the program left it.
-fn printed_with(host: &mut FakeHost, args: &[&str], body: &str) -> String {
-    let src = format!(
-        "fn main(io: Stdout, fs: Fs, read: FsRead, write: FsWrite, args: Args) \
-         -> Result<(), IoError> {{\n{body}\n    Ok(())\n}}\n{SHOWN}"
-    );
-    let args: Vec<String> = std::iter::once("prog.osk")
-        .chain(args.iter().copied())
-        .map(str::to_string)
-        .collect();
-    let outcome = run(&src, host, &args);
-    assert!(
-        outcome.diagnostics.is_empty() && outcome.panic.is_none() && outcome.exit_code == 0,
-        "{src} should run: {outcome:#?}"
-    );
-    outcome.stdout
-}
-
-/// What `body` prints on `host`, with no arguments.
-fn printed(mut host: FakeHost, body: &str) -> String {
-    printed_with(&mut host, &[], body)
-}
+use common::{assert_refused, printed, printed_with, run_fake};
+use oska_run::FakeHost;
 
 // ---- Reading -----------------------------------------------------------------------------
 
@@ -295,7 +239,7 @@ mod real {
 
     use oska_run::{run, RealHost};
 
-    use super::SHOWN;
+    use super::common::SHOWN;
 
     /// A fresh directory under the system temp dir, removed on drop:
     ///

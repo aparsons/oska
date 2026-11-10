@@ -11,62 +11,8 @@
 
 mod common;
 
-use common::{assert_refused, run_fake};
-use oska_run::{run, FakeHost};
-
-/// Helpers every program below may call, to print what an operation
-/// returned: its text, or `REFUSED: ` and its error's message.
-const SHOWN: &str = r#"
-fn shown(result: Result<Untrusted<String>, IoError>) -> Untrusted<String> {
-    match result {
-        Ok(text) => text
-        Err(e) => refused(e)
-    }
-}
-
-fn done(result: Result<(), IoError>) -> Untrusted<String> {
-    match result {
-        Ok(_) => "done"
-        Err(e) => refused(e)
-    }
-}
-
-fn refused(e: IoError) -> Untrusted<String> {
-    let message = e.message
-    "REFUSED: {message}"
-}
-"#;
-
-/// The source of a program whose `main` runs `body`, each line one
-/// `io.println`. `main` is given `io: Stdout`, `read: FsRead`,
-/// `write: FsWrite`, and `args: Args`.
-fn program(body: &str) -> String {
-    format!(
-        "fn main(io: Stdout, read: FsRead, write: FsWrite, args: Args) \
-         -> Result<(), IoError> {{\n{body}\n    Ok(())\n}}\n{SHOWN}"
-    )
-}
-
-/// What `body` prints on `host`, with `args` after the program path. The
-/// host is left as the program left it.
-fn printed_with(host: &mut FakeHost, args: &[&str], body: &str) -> String {
-    let src = program(body);
-    let args: Vec<String> = std::iter::once("prog.osk")
-        .chain(args.iter().copied())
-        .map(str::to_string)
-        .collect();
-    let outcome = run(&src, host, &args);
-    assert!(
-        outcome.diagnostics.is_empty() && outcome.panic.is_none() && outcome.exit_code == 0,
-        "{src} should run: {outcome:#?}"
-    );
-    outcome.stdout
-}
-
-/// What `body` prints on `host`.
-fn printed(mut host: FakeHost, body: &str) -> String {
-    printed_with(&mut host, &[], body)
-}
+use common::{assert_refused, printed, printed_with, run_fake};
+use oska_run::FakeHost;
 
 // ---- Reading and writing one file ----------------------------------------------------
 
@@ -344,7 +290,7 @@ mod real {
 
     use oska_run::{run, Host, Output, RealHost, RootHandle};
 
-    use super::program;
+    use super::common::fs_program;
 
     /// A fresh directory under the system temp dir, removed on drop:
     ///
@@ -412,8 +358,8 @@ mod real {
             let body = body
                 .replace("{root}", &self.path("root").display().to_string())
                 .replace("{outside}", &self.path("outside").display().to_string());
-            let src = program(&body);
-            let mut host = Recording {
+            let src = fs_program(&body);
+            let mut host = SwappingHost {
                 real: RealHost::new(),
                 stdout: String::new(),
                 after_file_root: Some(Box::new(swap)),
@@ -440,13 +386,13 @@ mod real {
     /// [`RealHost`] with its stdout recorded, and a hook run after the
     /// first file capability is made. Every other operation goes straight
     /// to the real OS.
-    struct Recording {
+    struct SwappingHost {
         real: RealHost,
         stdout: String,
         after_file_root: Option<Box<dyn FnOnce() + Send>>,
     }
 
-    impl Host for Recording {
+    impl Host for SwappingHost {
         fn write_stdout(&mut self, text: &str) -> std::io::Result<()> {
             self.stdout.push_str(text);
             Ok(())

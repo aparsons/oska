@@ -7,7 +7,7 @@
 #![allow(dead_code)]
 
 use oska_run::{
-    codes, run, test, FakeHost, RunOutcome, TestOptions, TestReport, UNSUPPORTED_EXIT_CODE,
+    codes, run, test, FakeHost, Host, RunOutcome, TestOptions, TestReport, UNSUPPORTED_EXIT_CODE,
 };
 
 /// The program path every helper passes as `args[0]`.
@@ -104,4 +104,69 @@ pub fn test_fake(src: &str) -> TestReport {
 /// `#[integration]` tests when they run.
 pub fn test_with(mut host: FakeHost, src: &str, options: TestOptions) -> TestReport {
     test(src, &mut host, options)
+}
+
+// ---- Filesystem capability programs --------------------------------------------------
+
+/// Oska helpers a filesystem test program may call, to print what an
+/// operation returned: its text (or `done`, or the names joined with
+/// `,`), or `REFUSED: ` and its error's message.
+pub const SHOWN: &str = r#"
+fn shown(result: Result<Untrusted<String>, IoError>) -> Untrusted<String> {
+    match result {
+        Ok(text) => text
+        Err(e) => refused(e)
+    }
+}
+
+fn done(result: Result<(), IoError>) -> Untrusted<String> {
+    match result {
+        Ok(_) => "done"
+        Err(e) => refused(e)
+    }
+}
+
+fn listed(result: Result<List<Untrusted<String>>, IoError>) -> Untrusted<String> {
+    match result {
+        Ok(names) => ",".join(names)
+        Err(e) => refused(e)
+    }
+}
+
+fn refused(e: IoError) -> Untrusted<String> {
+    let message = e.message
+    "REFUSED: {message}"
+}
+"#;
+
+/// The source of a program whose `main` runs `body`, each line one
+/// `io.println`, followed by [`SHOWN`]. `main` is given `io: Stdout`,
+/// `fs: Fs`, `read: FsRead`, `write: FsWrite`, and `args: Args`.
+pub fn fs_program(body: &str) -> String {
+    format!(
+        "fn main(io: Stdout, fs: Fs, read: FsRead, write: FsWrite, args: Args) \
+         -> Result<(), IoError> {{\n{body}\n    Ok(())\n}}\n{SHOWN}"
+    )
+}
+
+/// What the [`fs_program`] running `body` prints on `host`, with `args`
+/// after the program path. The host is left as the program left it.
+pub fn printed_with(host: &mut dyn Host, args: &[&str], body: &str) -> String {
+    let src = fs_program(body);
+    let args: Vec<String> = std::iter::once(PROGRAM_PATH)
+        .chain(args.iter().copied())
+        .map(str::to_string)
+        .collect();
+    let outcome = run(&src, host, &args);
+    assert!(
+        outcome.diagnostics.is_empty() && outcome.panic.is_none() && outcome.exit_code == 0,
+        "{src} should run: {outcome:#?}"
+    );
+    outcome.stdout
+}
+
+/// What the [`fs_program`] running `body` prints on `host`, with no
+/// arguments.
+pub fn printed(mut host: FakeHost, body: &str) -> String {
+    printed_with(&mut host, &[], body)
 }
