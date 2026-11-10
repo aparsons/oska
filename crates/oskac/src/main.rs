@@ -14,6 +14,8 @@ USAGE:
     oskac run <file.osk> [--format=json] [-- args...]
                                            Check a source file and, if it has
                                            no diagnostics, run it
+    oskac test <file.osk> [--format=json] [--integration]
+                                           Run the test blocks in a source file
     oskac --version                        Print the version
     oskac --help                           Print this help
 ";
@@ -31,10 +33,11 @@ fn main() -> ExitCode {
     };
     let json = args.iter().any(|a| a == "--format=json");
     let release = args.iter().any(|a| a == "--release");
+    let integration = args.iter().any(|a| a == "--integration");
     let positional: Vec<&str> = args
         .iter()
         .map(String::as_str)
-        .filter(|a| !a.starts_with("--format=") && *a != "--release")
+        .filter(|a| !a.starts_with("--format=") && *a != "--release" && *a != "--integration")
         .collect();
 
     match positional.as_slice() {
@@ -50,6 +53,7 @@ fn main() -> ExitCode {
         ["parse", path] => parse_file(path, json),
         ["check", path] => check_file(path, json, release),
         ["run", path] => run_file(path, json, &program_args),
+        ["test", path] => test_file(path, json, integration),
         _ => {
             eprint!("{USAGE}");
             ExitCode::from(2)
@@ -158,6 +162,60 @@ fn run_file(path: &str, json: bool, args: &[String]) -> ExitCode {
         print_diagnostics(path, &reported);
     }
     ExitCode::from(u8::try_from(outcome.exit_code).unwrap_or(u8::MAX))
+}
+
+/// `oskac test`: run the file's `test` blocks, the `#[integration]`
+/// ones too, on the real OS, with `--integration`. The report goes to
+/// stdout: one line per test, the failures, and a summary, or one JSON
+/// object with `--format=json`. A refused file's diagnostics go to stderr
+/// as `oskac check` prints them, or into the JSON report. The exit code
+/// is 1 when a test failed (see `docs/runtime.md`).
+fn test_file(path: &str, json: bool, integration: bool) -> ExitCode {
+    let Some(src) = read_source(path) else {
+        return ExitCode::FAILURE;
+    };
+    let options = oska_run::TestOptions { integration };
+    let report = oska_run::test(&src, &mut oska_run::RealHost::new(), options);
+    if json {
+        println!("{}", report.to_json());
+    } else if !report.diagnostics.is_empty() {
+        print_diagnostics(path, &report.diagnostics);
+    } else {
+        print_test_report(path, &report);
+    }
+    ExitCode::from(u8::try_from(report.exit_code()).unwrap_or(u8::MAX))
+}
+
+/// The human-readable test report: a line per test, then each failure as
+/// a diagnostic, then a summary.
+fn print_test_report(path: &str, report: &oska_run::TestReport) {
+    use oska_run::TestStatus;
+    for test in &report.tests {
+        let status = match test.status {
+            TestStatus::Passed => "ok",
+            TestStatus::Failed => "FAILED",
+            TestStatus::Skipped => "skipped (#[integration]; run with --integration)",
+        };
+        println!("test {} ... {status}", test.name);
+    }
+    let failures: Vec<_> = report
+        .tests
+        .iter()
+        .filter_map(|t| t.failure.as_ref())
+        .collect();
+    if !failures.is_empty() {
+        println!("\nfailures:");
+        for failure in failures {
+            println!("{path}: {failure}");
+        }
+    }
+    println!(
+        "\n{} tests: {} passed, {} failed, {} skipped",
+        report.tests.len(),
+        report.count(TestStatus::Passed),
+        report.count(TestStatus::Failed),
+        report.count(TestStatus::Skipped)
+    );
 }
 
 /// One line of the human-readable authority report, such as

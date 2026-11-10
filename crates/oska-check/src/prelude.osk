@@ -173,6 +173,9 @@ impl TestContext {
     pub fn assert_eq<T: Eq>(self, actual: T, expected: T)
     pub fn assert_ne<T: Eq>(self, actual: T, other: T)
     pub fn fail(self, message: String)
+    // Every line printed to `stdout` so far in this test, one per
+    // `println`, without its line break.
+    pub fn printed(self) -> List<Untrusted<String>>
 }
 
 // ---- Core types --------------------------------------------------------

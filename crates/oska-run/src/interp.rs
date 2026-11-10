@@ -84,6 +84,22 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         Ok(value)
     }
 
+    /// Run a test's `body` with `t`, its `TestContext`, in slot 0. Only a
+    /// panic, an assertion failure included, unwinds out of it.
+    pub fn run_test(&mut self, body: &Expr, t: Value) -> Result<(), Panic> {
+        let mut frame = Frame {
+            slots: vec![t],
+            receiver: None,
+        };
+        match self.eval(body, &mut frame) {
+            Ok(_) | Err(Unwind::Return(_)) => Ok(()),
+            Err(Unwind::Panic(panic)) => Err(panic),
+            Err(Unwind::Break | Unwind::Continue) => {
+                unreachable!("the checker keeps `break` and `continue` inside loops")
+            }
+        }
+    }
+
     /// Call `function` with `receiver`, for a method, and `args`, one per
     /// parameter. Returns its result and its receiver as it was when the
     /// call ended: a mutating method may have changed it.

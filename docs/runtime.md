@@ -1,6 +1,6 @@
 # Oska runtime
 
-`oskac run <file.osk> [--format=json] [-- args...]` checks one file and, if the check reports no diagnostic, runs it in the interpreter (`oska-run`). The interpreter executes the checker's **checked program** (ADR 0007); the rules it follows are in the "Runtime" section of [`design.md`](design.md). This page describes how a run ends and the codes the runtime reports. Checker codes are in [`checker.md`](checker.md).
+`oskac run <file.osk> [--format=json] [-- args...]` checks one file and, if the check reports no diagnostic, runs it in the interpreter (`oska-run`). `oskac test <file.osk> [--format=json] [--integration]` runs its `test` blocks instead (see [Tests](#tests)). The interpreter executes the checker's **checked program** (ADR 0007); the rules it follows are in the "Runtime" section of [`design.md`](design.md). This page describes how a run ends and the codes the runtime reports. Checker codes are in [`checker.md`](checker.md).
 
 ## Exit codes
 
@@ -40,6 +40,10 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0003` | `todo()` reached. Spans the call. |
 | `P0004` | Division by zero: the right operand of `/` or `%` is zero. Spans the operation. |
 | `P0005` | `spawn` on a finished scope: the handle's `scope` block has ended. The checker (`E0292`) already stops a handle from outliving its block, so this is a second line of defence; work never runs outside a scope. Spans the call. |
+| `P0010` | `t.assert(cond)` was given `false`. Fails the test (see [Tests](#tests)). Spans the call. |
+| `P0011` | `t.assert_eq(actual, expected)` was given two values that differ through `Eq`. The message shows both, as `dbg` would. Spans the call. |
+| `P0012` | `t.assert_ne(actual, other)` was given two equal values. Spans the call. |
+| `P0013` | `t.fail(message)` was called. The message is `message`. Spans the call. |
 | `P0020` | `Env.secret` asked for a variable the environment does not set. Its signature has no room for a missing secret, and running on with a stand-in such as an empty one could let an empty password through. Spans the call. |
 
 ## Errors and traits
@@ -73,3 +77,43 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 - A scope does not exit until all its tasks have finished: when the block ends, by its value or by a `return`, the tasks still queued run in spawn order. A panic ends the program, so queued tasks do not run.
 - A scope handle is valid only while its block runs. When the block ends the scope is closed, and `spawn` on its handle panics with `P0005`. A task can still be joined after its scope ends, because it has already run.
 - A panic in a task stops the program at the task, with the panic's own code and span.
+
+## Tests
+
+`oskac test file.osk` checks the file, refuses it as `oskac run` would (by the checker's diagnostics, or by `E0371` or `E0380`, for its functions and its tests), and then runs every `test` block in source order. A refused file runs no test.
+
+- **Stand-ins.** Each test gets a fresh `t: TestContext` on a fresh in-memory host, so nothing one test does is seen by another, and the same file gives the same report on every run:
+  - `t.fs` is an empty in-memory filesystem, with its working directory at `/`.
+  - `t.clock` is fixed at the Unix epoch: `now_millis()` is `0`.
+  - `t.random` starts from the same fixed seed in every test.
+  - `t.stdout` records what it prints. `t.printed()` returns every line printed so far in the test, one per `println`, without its line break.
+- **Assertions.** `t.assert`, `t.assert_eq`, `t.assert_ne`, and `t.fail` fail the test by panicking, with `P0010` to `P0013` and the span of the call. A failed assertion is a panic like any other: it stops the test, and its diagnostic is the test's failure. A panic from a bug, such as `P0004`, fails the test the same way.
+- **Isolation.** A panic stops only the test it happened in. The next test runs in a new interpreter, on a new host.
+- **Integration tests.** A test marked `#[integration]` is skipped unless `--integration` is given. Then it runs on the real OS: `t.fs` is the real filesystem, unrestricted, `t.clock` the real time, and `t.random` seeded from the clock. Its `t.stdout` is still recorded, not written to the terminal, so `t.printed()` works and the report is the only thing on stdout.
+
+### Report and exit codes
+
+Without `--format=json`, one line per test, then the failures, then a summary:
+
+```
+test adds ... ok
+test divides ... FAILED
+test reads the real config ... skipped (#[integration]; run with --integration)
+
+failures:
+math.osk: error[P0011]: assertion failed: `actual == expected`: actual 2, expected 3 (bytes 120..141)
+
+3 tests: 1 passed, 1 failed, 1 skipped
+```
+
+With `--format=json`, one JSON object on stdout. Each test has its name, its status (`passed`, `failed`, or `skipped`), and its failure, a diagnostic object or `null`. A refused file has no tests and its diagnostics in `diagnostics`:
+
+```json
+{"tests":[{"name":"adds","status":"passed","failure":null},{"name":"divides","status":"failed","failure":{"code":"P0011","message":"...","span":{"start":120,"end":141}}}],"passed":1,"failed":1,"skipped":0,"diagnostics":[]}
+```
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | No test failed. Skipped tests do not count. |
+| 1 | A test failed, or the checker refused the file. |
+| 2 | The file uses something the interpreter cannot run yet (`E0371`, `E0380`). No test ran. |

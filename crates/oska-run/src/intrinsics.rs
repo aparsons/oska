@@ -16,6 +16,7 @@ use crate::host::Host;
 use crate::interp::Interpreter;
 use crate::panics::{codes, Panic};
 use crate::tasks;
+use crate::testing;
 use crate::traits;
 use crate::value::{Access, Capability, FsCap, Root, Value, SECRET};
 
@@ -73,6 +74,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         .iter()
         .chain(data::INTRINSICS)
         .chain(traits::INTRINSICS)
+        .chain(testing::INTRINSICS)
         .find(|(n, _)| *n == name)
         .map(|(_, f)| *f)
 }
@@ -91,6 +93,7 @@ pub fn lookup_higher_order(name: &str) -> Option<HigherOrder> {
         .iter()
         .chain(tasks::HIGHER_ORDER)
         .chain(traits::HIGHER_ORDER)
+        .chain(testing::HIGHER_ORDER)
         .find(|(n, _)| *n == name)
         .map(|(_, f)| *f)
 }
@@ -151,7 +154,7 @@ fn dbg(host: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Pani
 }
 
 /// `value` as `dbg` shows it, appended to `out`.
-fn debug(value: &Value, out: &mut String) {
+pub(crate) fn debug(value: &Value, out: &mut String) {
     let tuple = |out: &mut String, fields: &[Value]| {
         out.push('(');
         for (i, field) in fields.iter().enumerate() {

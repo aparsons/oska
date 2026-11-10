@@ -34,6 +34,14 @@ pub mod codes {
     pub const DIVISION_BY_ZERO: &str = "P0004";
     /// `spawn` was called on a scope handle whose `scope` block has ended.
     pub const SPAWN_ON_FINISHED_SCOPE: &str = "P0005";
+    /// `t.assert(cond)` was given `false`: the test fails.
+    pub const ASSERT_FAILED: &str = "P0010";
+    /// `t.assert_eq(actual, expected)` was given two values that differ.
+    pub const ASSERT_EQ_FAILED: &str = "P0011";
+    /// `t.assert_ne(actual, other)` was given two equal values.
+    pub const ASSERT_NE_FAILED: &str = "P0012";
+    /// `t.fail(message)` was called.
+    pub const TEST_FAILED: &str = "P0013";
     /// `Env.secret` asked for a variable the environment does not set.
     pub const MISSING_SECRET: &str = "P0020";
 
@@ -47,6 +55,10 @@ pub mod codes {
         TODO,
         DIVISION_BY_ZERO,
         SPAWN_ON_FINISHED_SCOPE,
+        ASSERT_FAILED,
+        ASSERT_EQ_FAILED,
+        ASSERT_NE_FAILED,
+        TEST_FAILED,
         MISSING_SECRET,
     ];
 }

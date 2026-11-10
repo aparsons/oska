@@ -64,6 +64,11 @@ pub trait Host {
     /// `contents`.
     fn write_file(&mut self, path: &Path, contents: &str) -> io::Result<()>;
 
+    /// Every line written to stdout so far, without its line break: one
+    /// per `println`, as `t.printed()` returns them. A host that writes
+    /// straight to the real stream records none.
+    fn printed(&self) -> Vec<String>;
+
     /// Hand over what the host has recorded of the program's output since
     /// the last call. A host that writes straight to the real streams
     /// records nothing.
@@ -143,6 +148,10 @@ impl Host for RealHost {
         std::fs::write(path, contents)
     }
 
+    fn printed(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     fn take_output(&mut self) -> Output {
         Output::default()
     }
@@ -175,6 +184,8 @@ pub const FAKE_SEED: u64 = 0x05EE_D0F0_5CA0;
 #[derive(Debug)]
 pub struct FakeHost {
     output: Output,
+    /// Every write to stdout, without its line break.
+    printed: Vec<String>,
     stdin: VecDeque<String>,
     env: BTreeMap<String, String>,
     files: BTreeMap<PathBuf, String>,
@@ -185,6 +196,7 @@ impl Default for FakeHost {
     fn default() -> Self {
         FakeHost {
             output: Output::default(),
+            printed: Vec::new(),
             stdin: VecDeque::new(),
             env: BTreeMap::new(),
             files: BTreeMap::new(),
@@ -256,7 +268,13 @@ fn not_found(path: &Path) -> io::Error {
 impl Host for FakeHost {
     fn write_stdout(&mut self, text: &str) -> io::Result<()> {
         self.output.stdout.push_str(text);
+        self.printed
+            .push(text.strip_suffix('\n').unwrap_or(text).to_string());
         Ok(())
+    }
+
+    fn printed(&self) -> Vec<String> {
+        self.printed.clone()
     }
 
     fn write_stderr(&mut self, text: &str) -> io::Result<()> {

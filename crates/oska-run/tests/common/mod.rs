@@ -6,7 +6,9 @@
 
 #![allow(dead_code)]
 
-use oska_run::{codes, run, FakeHost, RunOutcome, UNSUPPORTED_EXIT_CODE};
+use oska_run::{
+    codes, run, test, FakeHost, RunOutcome, TestOptions, TestReport, UNSUPPORTED_EXIT_CODE,
+};
 
 /// The program path every helper passes as `args[0]`.
 pub const PROGRAM_PATH: &str = "prog.osk";
@@ -91,4 +93,15 @@ pub fn assert_exits(src: &str, code: i32, expected_stderr: &str) {
     );
     assert_eq!(outcome.exit_code, code, "the exit code of {src:?}");
     assert_eq!(outcome.stderr, expected_stderr, "stderr of {src:?}");
+}
+
+/// Run the `test` blocks of `src`, the plain ones on fresh [`FakeHost`]s.
+pub fn test_fake(src: &str) -> TestReport {
+    test_with(FakeHost::new(), src, TestOptions::default())
+}
+
+/// Run the `test` blocks of `src` with `options`; `host` backs the
+/// `#[integration]` tests when they run.
+pub fn test_with(mut host: FakeHost, src: &str, options: TestOptions) -> TestReport {
+    test(src, &mut host, options)
 }
