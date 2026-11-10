@@ -64,6 +64,14 @@ pub enum Resolution {
     /// `==` or `!=` through this `Eq` implementation, on a type that is
     /// not built in. Recorded at the comparison.
     EqualityVia(Callee),
+    /// A closure: the slots it captures, ascending, whether it captures
+    /// `self`, and the number of slots in scope where it starts. Recorded
+    /// at the closure.
+    Closure {
+        captures: Vec<usize>,
+        captures_self: bool,
+        height: usize,
+    },
 }
 
 /// Every resolution in a module, keyed by the span it was recorded at.
@@ -299,10 +307,20 @@ impl Lowering<'_> {
                 },
             },
             ast::ExprKind::Binary { op, lhs, rhs } => self.binary(expr.span, *op, lhs, rhs),
-            ast::ExprKind::Closure { params, body } => ExprKind::Closure(Arc::new(Closure {
-                params: params.iter().map(|p| p.name.name != "_").collect(),
-                body: self.expr(body),
-            })),
+            ast::ExprKind::Closure { params, body } => match self.resolutions.get(&expr.span) {
+                Some(Resolution::Closure {
+                    captures,
+                    captures_self,
+                    height,
+                }) => ExprKind::Closure(Arc::new(Closure {
+                    params: params.iter().map(|p| p.name.name != "_").collect(),
+                    captures: captures.clone(),
+                    captures_self: *captures_self,
+                    height: *height,
+                    body: self.expr(body),
+                })),
+                _ => ExprKind::Unsupported,
+            },
             ast::ExprKind::List(items) => {
                 ExprKind::List(items.iter().map(|item| self.expr(item)).collect())
             }

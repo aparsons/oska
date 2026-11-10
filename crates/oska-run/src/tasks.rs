@@ -201,6 +201,9 @@ mod tests {
             51,
             ExprKind::Closure(std::sync::Arc::new(Closure {
                 params: Vec::new(),
+                captures: Vec::new(),
+                captures_self: false,
+                height: 1,
                 body: at(50, 51, ExprKind::Unit),
             })),
         );

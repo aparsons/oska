@@ -327,6 +327,10 @@ struct ClosureFrame {
     height: usize,
     /// Each captured name (`self` for the receiver) with its type.
     captures: Vec<(String, Ty)>,
+    /// The slot of each captured local, for the checked program.
+    slots: Vec<usize>,
+    /// Whether it captures `self`.
+    receiver: bool,
 }
 
 impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
@@ -699,6 +703,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     let ty = receiver.ty.clone();
                     for frame in &mut self.closures {
                         frame.captures.push(("self".to_string(), ty.clone()));
+                        frame.receiver = true;
                     }
                     ty
                 }
@@ -892,6 +897,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             for frame in &mut self.closures {
                 if index < frame.height {
                     frame.captures.push((name.to_string(), ty.clone()));
+                    frame.slots.push(index);
                 }
             }
             return ty;
@@ -1488,6 +1494,8 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         self.closures.push(ClosureFrame {
             height,
             captures: Vec::new(),
+            slots: Vec::new(),
+            receiver: false,
         });
         for (param, ty) in params.iter().zip(&param_tys) {
             self.bind(&param.name.name, ty.clone(), Binding::Param);
@@ -1498,7 +1506,17 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         self.ret = outer_ret;
         self.loop_depth = outer_loops;
         self.locals.truncate(height);
-        let frame = self.closures.pop().expect("the closure's own frame");
+        let mut frame = self.closures.pop().expect("the closure's own frame");
+        frame.slots.sort_unstable();
+        frame.slots.dedup();
+        self.record(
+            span,
+            Resolution::Closure {
+                captures: std::mem::take(&mut frame.slots),
+                captures_self: frame.receiver,
+                height,
+            },
+        );
         let scoped = frame
             .captures
             .iter()

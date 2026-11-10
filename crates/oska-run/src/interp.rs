@@ -7,9 +7,11 @@
 //! `return`, a `break` or `continue`, or a panic, is an [`Unwind`], passed
 //! up with `?` until the construct that handles it.
 //!
-//! A closure captures by value: it keeps a copy of the frame's slots and
-//! receiver where it was made (a reference-count increment each), and a
-//! call of it pushes its arguments after them. A mutating call takes its
+//! A closure captures by value: it keeps a copy of the slots its body
+//! reads, and of the receiver if it reads `self`, where it was made (a
+//! reference-count increment each), as the checker listed them. A call
+//! puts them back at their slot numbers and pushes its arguments after
+//! them. A mutating call takes its
 //! receiver out of its place, so a value nothing else shares is changed
 //! in place, and writes the method's final `self` back.
 //!
@@ -310,13 +312,23 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         Ok(ops::binary(*op, lhs, rhs, int.as_ref(), expr.span)?)
     }
 
-    /// A closure value: `code`, with what it captures from `frame`.
+    /// A closure value: `code`, with what it captures from `frame`: only
+    /// the slots and receiver its body reads.
     #[inline(never)]
     fn closure(&mut self, code: &Arc<program::Closure>, frame: &Frame) -> Value {
+        debug_assert_eq!(
+            frame.slots.len(),
+            code.height,
+            "the frame's slots match the checker's locals"
+        );
         Value::Closure(Rc::new(ClosureValue {
             code: Arc::clone(code),
-            slots: frame.slots.clone(),
-            receiver: frame.receiver.clone(),
+            captured: code
+                .captures
+                .iter()
+                .map(|&slot| frame.slots[slot].clone())
+                .collect(),
+            receiver: frame.receiver.clone().filter(|_| code.captures_self),
         }))
     }
 
@@ -700,7 +712,13 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             Value::Function(function) => return self.call_callee(function, args, span),
             other => unreachable!("the checker calls only functions, found {other:?}"),
         };
-        let mut slots = closure.slots.clone();
+        // The slots the body never reads stay `()`: the numbering is the
+        // checker's, so the captured ones and the arguments land where
+        // the body looks for them.
+        let mut slots = vec![Value::Unit; closure.code.height];
+        for (&slot, value) in closure.code.captures.iter().zip(&closure.captured) {
+            slots[slot] = value.clone();
+        }
         slots.extend(binding(closure.code.params.iter().copied(), args));
         let mut frame = Frame {
             slots,

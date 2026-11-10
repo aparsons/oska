@@ -69,12 +69,13 @@ pub enum Value {
     Task(usize),
 }
 
-/// A closure value: its code, and the slots and receiver in scope where
-/// it was made, captured by value.
+/// A closure value: its code, and what it captured where it was made, by
+/// value: the slots its code lists in [`Closure::captures`], in that
+/// order, and the receiver when it reads `self`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClosureValue {
     pub code: Arc<Closure>,
-    pub slots: Vec<Value>,
+    pub captured: Vec<Value>,
     pub receiver: Option<Value>,
 }
 

@@ -154,8 +154,9 @@ pub enum ExprKind {
         base: Box<Expr>,
         index: usize,
     },
-    /// A closure, `|params| body`. Evaluating it captures the frame's
-    /// slots and receiver as they are, by value.
+    /// A closure, `|params| body`. Evaluating it captures, by value, the
+    /// slots the body reads from the enclosing frame, and the receiver
+    /// when it reads `self`.
     Closure(Arc<Closure>),
     /// A call of a function value, such as a closure held in a local.
     CallValue {
@@ -259,13 +260,24 @@ pub enum Stmt {
 
 /// A closure's code.
 ///
-/// Its body sees the slots in scope where the closure was written, by
-/// the same numbers, then its parameters: so a closure value carries the
-/// slots it captured, and a call pushes each argument after them.
+/// Its body numbers slots as the enclosing frame does where the closure
+/// was written, then its parameters from [`Closure::height`] on. A
+/// closure value carries only the slots in [`Closure::captures`]; a call
+/// puts each back at its number, below `height`, and pushes each argument
+/// after them. The other slots below `height` are never read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Closure {
     /// Whether each parameter takes a slot: one named `_` takes none.
     pub params: Vec<bool>,
+    /// The slots of the enclosing frame the body reads, a closure inside
+    /// it included, in ascending order: what the checker found it
+    /// captures.
+    pub captures: Vec<usize>,
+    /// Whether the body reads `self`, the enclosing method's receiver.
+    pub captures_self: bool,
+    /// How many slots were in scope where the closure was written: the
+    /// first parameter's slot.
+    pub height: usize,
     pub body: Expr,
 }
 

@@ -329,6 +329,36 @@ fn a_captured_list_keeps_its_value_when_the_var_is_mutated_later() {
 }
 
 #[test]
+fn closures_capture_only_what_they_read_through_nesting_matches_and_self() {
+    assert_runs(
+        &program(
+            "struct Scale { by: Int }
+impl Scale {
+    fn apply(self, xs: List<Int>) -> List<Int> {
+        let unused = [0, 0, 0]
+        xs.map(|x| x * self.by)
+    }
+}",
+            "    let a = 1
+    let b = 20
+    let c = 300
+    let outer = |x: Int| {
+        let inner = |y: Int| y + x + c
+        match Some(b) {
+            Some(n) => inner(n)
+            None => 0
+        }
+    }
+    let scaled = Scale(by: 2).apply([a, b])
+    let total = outer(4000) + scaled.at(1)
+    io.println(\"{total}\")",
+        ),
+        &[],
+        "4360\n",
+    );
+}
+
+#[test]
 fn list_map_calls_the_closure_on_each_item() {
     assert_runs(
         &main_with(
