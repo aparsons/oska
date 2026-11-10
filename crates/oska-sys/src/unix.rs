@@ -7,6 +7,7 @@ use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::os::raw::{c_char, c_int, c_uint};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 /// The C library's declarations this crate uses, with each platform's
@@ -203,11 +204,7 @@ impl Dir {
         let parent = self.walk(parents)?;
         let fd = open_name(parent.as_ref().unwrap_or(self), last.as_ref(), c::FILE_READ)
             .map_err(|error| refusal(error, &joined(names), "file"))?;
-        let file = File::from(fd);
-        if !file.metadata()?.is_file() {
-            return Err(not_a_file(names));
-        }
-        Ok(file)
+        lone_file(File::from(fd), names)
     }
 
     /// The regular file reached by walking `names` beneath this one, open
@@ -225,12 +222,10 @@ impl Dir {
             c::FILE_WRITE,
         )
         .map_err(|error| refusal(error, &joined(names), "file"))?;
-        let file = File::from(fd);
-        // Emptied only once it is known to be a regular file, never a
-        // device or a FIFO.
-        if !file.metadata()?.is_file() {
-            return Err(not_a_file(names));
-        }
+        // Emptied only once it is known to be a regular file with one
+        // link: never a device or a FIFO, or a file outside reached by a
+        // hard link.
+        let file = lone_file(File::from(fd), names)?;
         file.set_len(0)?;
         Ok(file)
     }
@@ -416,6 +411,28 @@ fn retried(mut call: impl FnMut() -> c_int) -> io::Result<c_int> {
 /// The error for a file operation given no name.
 fn no_name() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, "no file name to open")
+}
+
+/// `file`, opened by walking `names`, if it is a regular file with only
+/// that one name. A file with another hard link may be one outside the
+/// directory the walk began in, which a link planted beneath it would
+/// otherwise expose, so it is refused. The check is on the open handle,
+/// so the file cannot be swapped after it.
+fn lone_file<N: AsRef<OsStr>>(file: File, names: &[N]) -> io::Result<File> {
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(not_a_file(names));
+    }
+    if metadata.nlink() > 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "`{}` has more than one hard link, and confined access never opens one",
+                joined(names)
+            ),
+        ));
+    }
+    Ok(file)
 }
 
 /// The error for the file `names` reach not being a regular file.

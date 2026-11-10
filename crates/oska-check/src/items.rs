@@ -2,7 +2,7 @@
 //! signatures, struct and enum shapes, traits, impls, and methods, with
 //! every written type lowered to a [`Ty`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use oska_syntax::ast::{
     Field, Fields, FnDecl, GenericParam, Item, ItemKind, Module, Type, TypeKind,
@@ -252,6 +252,19 @@ impl TraitInfo {
     }
 }
 
+/// Whether a value of type `ty` holds untrusted text, given the types
+/// already known to hold it.
+fn holds(ty: &Ty, holders: &HashSet<String>) -> bool {
+    match ty {
+        Ty::Named(name, args, trust) => {
+            (ty.is_text() && *trust == Trust::Untrusted)
+                || holders.contains(name)
+                || args.iter().any(|a| holds(a, holders))
+        }
+        _ => false,
+    }
+}
+
 /// The key `name` is declared under: renamed for a `std.*` module's
 /// declaration that the user module shadows (see [`Decls::prelude_key`]).
 fn key_of(decls: &Decls, name: &str, in_prelude: bool) -> String {
@@ -283,6 +296,13 @@ pub struct Items {
     /// name, with that text. The authority report uses them to name an
     /// attenuation's root.
     pub consts: HashMap<String, String>,
+    /// The structs and enums that **hold untrusted text**: one of their
+    /// fields is untrusted text, or a type that holds it, at any depth.
+    /// Their values turn into untrusted text (see
+    /// [`crate::infer::Infer::join_into`]), so an `IoError` built from
+    /// command-line text cannot become trusted text by `to_string` or
+    /// interpolation (ADR 0006).
+    pub untrusted_holders: HashSet<String>,
 }
 
 impl Items {
@@ -293,6 +313,7 @@ impl Items {
         items.add(decls.prelude_items(), decls, true);
         items.add(&module.items, decls, false);
         items.trait_methods();
+        items.untrusted_holders();
         items
     }
 
@@ -427,6 +448,33 @@ impl Items {
                 }
                 ItemKind::Use(_) | ItemKind::Test(_) => {}
             }
+        }
+    }
+
+    /// Find [`Items::untrusted_holders`]: grow the set until no struct or
+    /// enum outside it has a field that holds untrusted text.
+    fn untrusted_holders(&mut self) {
+        loop {
+            let holders = &self.untrusted_holders;
+            let fields = |f: &FieldsInfo| f.fields.iter().any(|(_, t)| holds(t, holders));
+            let found: Vec<String> = self
+                .structs
+                .iter()
+                .filter(|(_, info)| fields(&info.fields))
+                .map(|(name, _)| name)
+                .chain(
+                    self.enums
+                        .iter()
+                        .filter(|(_, info)| info.variants.iter().any(|(_, f)| fields(f)))
+                        .map(|(name, _)| name),
+                )
+                .filter(|name| !holders.contains(*name))
+                .cloned()
+                .collect();
+            if found.is_empty() {
+                return;
+            }
+            self.untrusted_holders.extend(found);
         }
     }
 

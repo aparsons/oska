@@ -1,0 +1,34 @@
+// Methods called qualified by their type, `Type.method(receiver, ...)`,
+// and taken as function values, for the golden tests of the report: each
+// is listed like the same call written `receiver.method(...)`.
+
+// An attenuation, qualified: listed with its root.
+fn etc(read: FsRead) -> DirRead {
+    FsRead.restrict_to(read, "/etc")
+}
+
+// An attenuation without a root, qualified.
+fn reader(fs: Fs) -> FsRead {
+    Fs.read_only(fs)
+}
+
+// An attenuation taken as a value: its root is only known at runtime.
+fn narrowed(read: FsRead) -> DirRead {
+    let narrow = FsRead.restrict_to
+    narrow(read, "docs")
+}
+
+// A trust assertion, qualified and taken as a value: both audit sites.
+fn vouch(args: Args) -> Option<String> {
+    let first = args.get(1)?
+    let second = args.get(2)?
+    let assume = String.assume_trusted
+    let one = String.assume_trusted(first)
+    let two = assume(second)
+    Some("{one} {two}")
+}
+
+fn main(fs: Fs, args: Args) {
+    let read = reader(fs)
+    let hosts = etc(read)
+}

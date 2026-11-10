@@ -329,6 +329,7 @@ impl Sandbox {
         self.base.join("outside")
     }
 
+    #[cfg(unix)]
     fn link(&self, name: &str, target: &Path) {
         std::os::unix::fs::symlink(target, self.root().join(name)).expect("create a symlink");
     }
@@ -421,6 +422,7 @@ impl Host for Recording {
 /// What a program prints when it lists `path` through a filesystem
 /// restricted to `root`: one name per line, or `REFUSED`.
 fn list_confined(root: &Path, path: &str) -> String {
+    let path = common::literal(path);
     let src = format!(
         "fn main(io: Stdout, fs: FsRead) {{\n\
          \x20   let local = fs.restrict_to(\"{}\")\n\
@@ -435,7 +437,7 @@ fn list_confined(root: &Path, path: &str) -> String {
          \x20       }}\n\
          \x20   }}\n\
          }}\n",
-        root.display()
+        common::literal(root)
     );
     let mut host = Recording {
         real: RealHost::new(),
@@ -479,6 +481,7 @@ fn real_host_refuses_to_list_out_of_the_root() {
 }
 
 #[test]
+#[cfg(unix)]
 fn real_host_refuses_a_symlink_to_a_directory_outside_the_root() {
     let sandbox = Sandbox::new("symlink-dir");
     sandbox.link("out", &sandbox.outside());
@@ -508,6 +511,7 @@ fn real_host_refuses_to_list_a_file_or_a_missing_directory() {
 }
 
 #[test]
+#[cfg(unix)]
 fn real_host_refuses_a_symlink_to_a_directory_inside_the_root() {
     // Every symlink beneath a root is refused, wherever it points (#95).
     let sandbox = Sandbox::new("symlink-inside");
@@ -516,6 +520,7 @@ fn real_host_refuses_a_symlink_to_a_directory_inside_the_root() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_symlink_entry_is_listed_by_name_without_following_it() {
     let sandbox = Sandbox::new("symlink-entry");
     sandbox.link("out", &sandbox.outside());

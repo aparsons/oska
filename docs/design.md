@@ -254,6 +254,7 @@ Trust is a flag that the checker tracks on text types ([ADR 0006](adr/0006-trust
 - **Propagation.**
   - Prelude text operations follow their inputs. If any text input is untrusted, every text type in the result is untrusted. For example, `.lines()` returns `List<Untrusted<String>>`.
   - Interpolating an untrusted value makes the whole string untrusted. Every interpolation hole must be `Display`.
+  - A value that **holds untrusted text**, such as an `IoError` or a struct with an `IoError` field, turns into untrusted text. Its `to_string()` by any route (`e.to_string()`, `IoError.to_string(e)`, `Display.to_string(e)`) and its interpolation `"{e}"` are untrusted, so text from outside the program cannot become trusted without an audit site.
   - Inside a generic body, text that comes from a type parameter is untrusted, because the parameter may stand for untrusted text. That covers interpolating a `T` and the text result of a call on a `T` receiver or with a `T` argument, so `fn f<T: Display>(x: T) -> String { x.to_string() }` is an error.
   - A generic function or trait method follows the trust of its type arguments. If what any generic, or `Self` in a qualified trait call, is instantiated with holds untrusted text, every text type in the result is untrusted. So `fn show<T: Display>(x: T) -> String` returns untrusted text for an untrusted `x`, whether its body uses `x.to_string()` or `"{x}"`.
   - Results that are not text are trusted. For example, `.count()` returns a trusted `Int`.
@@ -262,7 +263,7 @@ Trust is a flag that the checker tracks on text types ([ADR 0006](adr/0006-trust
   - Code that accepts raw input declares `Untrusted<String>`.
   - User functions are explicit about trust. They cannot be generic over it.
   - An impl method may return trusted text where its trait declares `Untrusted<String>`, because trusted text may flow into untrusted.
-  - The `message` of `IoError`, `SqlError`, and `ProcError` is `Untrusted<String>`, because it can carry text from outside the program.
+  - The `message` of `IoError`, `SqlError`, and `ProcError` is `Untrusted<String>`, because it can carry text from outside the program. Their `to_string()` is untrusted text for the same reason.
 - **Validation.**
   - Checks that produce non-text results need nothing special. That includes `len`, `contains`, `starts_with`, `parse_int`, and matching against string literals.
   - A **validator** turns untrusted text into trusted text with `.assume_trusted()`. That call is a **trust assertion**.

@@ -24,7 +24,7 @@ The program panicked, which means it has a bug. The last line on standard error 
 
 ### The program cannot read a file that exists
 
-A directory capability refuses an absolute path, an empty path, a path that climbs out with `..`, and any path that goes through a symlink, whether the link points outside the root, inside it, or nowhere. The refusal is an `Err(IoError)`, not a panic, so the program sees `Err`. Check the directory you passed to `restrict_to`, and that the path is relative to it. See [attenuation](capabilities.md#attenuation).
+A directory capability refuses an absolute path, an empty path, a path that climbs out with `..`, and any path that goes through a symlink, whether the link points outside the root, inside it, or nowhere. On Linux and macOS it also refuses an existing file with more than one hard link. The refusal is an `Err(IoError)`, not a panic, so the program sees `Err`. Check the directory you passed to `restrict_to`, and that the path is relative to it. See [attenuation](capabilities.md#attenuation).
 
 ### The checker says `Fs`, `FsRead` or `FsWrite` cannot read or write (`E0273`)
 

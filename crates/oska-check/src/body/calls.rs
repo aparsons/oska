@@ -26,7 +26,13 @@ impl Body<'_, '_, '_> {
         let callable = match &callee.kind {
             ExprKind::Field { base, name } => match self.qualified_path(base, name) {
                 Some(QualifiedPath::Export(key)) => self.item_callee(&key, name),
-                Some(QualifiedPath::Member(type_name)) => self.type_member(&type_name, name),
+                Some(QualifiedPath::Member(type_name)) => {
+                    let used = MemberUse::Call {
+                        args,
+                        span: expr.span,
+                    };
+                    self.type_member(&type_name, name, used)
+                }
                 Some(QualifiedPath::Reported) => None,
                 None => return self.method_call(base, name, args, expected, expr.span),
             },
@@ -141,8 +147,15 @@ impl Body<'_, '_, '_> {
 
     /// `Type.name`: a variant of an enum, or an associated function or
     /// method of the type. A method called this way takes its receiver as
-    /// the first argument.
-    pub(super) fn type_member(&mut self, type_name: &str, name: &Ident) -> Option<Callable> {
+    /// the first argument. A method is checked as `receiver.name(...)` is:
+    /// a removed path method is refused (`E0273`), and an audited or
+    /// attenuating one is recorded where it is `used`.
+    pub(super) fn type_member(
+        &mut self,
+        type_name: &str,
+        name: &Ident,
+        used: MemberUse,
+    ) -> Option<Callable> {
         if self.items.enums.contains_key(type_name) {
             if let Some(callable) = self.variant(type_name, &name.name) {
                 return Some(callable);
@@ -151,13 +164,28 @@ impl Body<'_, '_, '_> {
         if matches!(self.decls().get(type_name), Some(d) if d.kind == DeclKind::Trait) {
             return self.qualified_call(type_name, name);
         }
+        let (args, span) = match used {
+            MemberUse::Call { args, span } => (args, span),
+            MemberUse::Value(span) => (&[][..], span),
+        };
+        if self.removed_qualified_method(type_name, &name.name, args, span) {
+            return None;
+        }
         if let Some(sig) = self.items.method(type_name, &name.name).cloned() {
+            self.audit_call(type_name, &name.name, span);
+            if sig.receiver.is_method() {
+                // The receiver is the first argument; a value has none,
+                // so its root is computed at runtime.
+                let after_receiver = args.get(1..).unwrap_or_default();
+                self.attenuation_call(type_name, &sig, after_receiver, span);
+            }
             let mut callable = self.instantiate(&sig, None);
             if sig.trait_name.is_none() {
                 callable.target = Some(target(&sig, format!("{type_name}.{}", name.name)));
             }
             if sig.receiver.is_method() {
                 let self_ty = sig.self_ty.clone().unwrap_or(Ty::Error);
+                self.follow_held_trust(&mut callable, type_name, &self_ty);
                 callable.params.insert(0, (None, self_ty));
             }
             return Some(callable);
@@ -459,6 +487,7 @@ impl Body<'_, '_, '_> {
             // text is no receiver of a method that wants trusted text.
             self.expect(&receiver, declared, base.span);
         }
+        self.follow_held_trust(&mut callable, &type_name, &receiver);
         if let Ty::Param(_) = receiver {
             // A bound's method on a generic parameter: the parameter may
             // stand for untrusted text, so text in the result is untrusted.
@@ -470,6 +499,19 @@ impl Body<'_, '_, '_> {
                 self.mentioning(base, |body| body.apply(callable, args, expected, span))
             }
             _ => self.apply(callable, args, expected, span),
+        }
+    }
+
+    /// A method of a prelude or `std` type has no body to check, so when
+    /// the type holds untrusted text (see
+    /// [`crate::items::Items::untrusted_holders`]), text in the result is
+    /// untrusted: `IoError(message: arg).to_string()` is untrusted text.
+    /// A method the module declares is checked against its signature
+    /// instead.
+    fn follow_held_trust(&mut self, callable: &mut Callable, type_name: &str, receiver: &Ty) {
+        let prelude = self.decls().get(type_name).is_some_and(|d| d.in_prelude);
+        if prelude && self.items.untrusted_holders.contains(type_name) {
+            self.follow_type_arg(callable, receiver.clone());
         }
     }
 
@@ -631,7 +673,8 @@ impl Body<'_, '_, '_> {
         }
         if let Some(joined) = callable.joined {
             for ty in &callable.type_args {
-                self.infer.join_into(ty, joined);
+                self.infer
+                    .join_into(ty, joined, &self.items.untrusted_holders);
             }
         }
         let what = format!("calling {}", callable.description);
@@ -712,6 +755,14 @@ impl Body<'_, '_, '_> {
             self.infer(&arg.value);
         }
     }
+}
+
+/// How `Type.name` is used: called with `args` (the whole call at
+/// `span`), or named at `span` as a function value.
+#[derive(Clone, Copy)]
+pub(super) enum MemberUse<'e> {
+    Call { args: &'e [Arg], span: Span },
+    Value(Span),
 }
 
 /// What a call to `sig`, qualified as `name`, reaches: an intrinsic for a

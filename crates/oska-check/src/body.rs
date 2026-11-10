@@ -700,7 +700,8 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                         let ty = self.hole(path);
                         self.interpolated_hole(&ty, *span);
                         self.defer(*span, &ty, Deferred::Display);
-                        self.infer.join_into(&ty, trust);
+                        self.infer
+                            .join_into(&ty, trust, &self.items.untrusted_holders);
                     }
                 }
                 Ty::string().with_trust(trust)
@@ -987,27 +988,29 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     fn field_expr(&mut self, span: Span, base: &Expr, name: &Ident) -> Ty {
         match self.qualified_path(base, name) {
             Some(QualifiedPath::Export(key)) => self.item_value(&key, name),
-            Some(QualifiedPath::Member(type_name)) => match self.type_member(&type_name, name) {
-                Some(callable) if callable.labels != Labels::Optional => {
-                    if callable.params.is_empty() {
-                        if let Some(construct) = callable.construct {
-                            self.record(span, Resolution::Construct(construct));
+            Some(QualifiedPath::Member(type_name)) => {
+                match self.type_member(&type_name, name, calls::MemberUse::Value(span)) {
+                    Some(callable) if callable.labels != Labels::Optional => {
+                        if callable.params.is_empty() {
+                            if let Some(construct) = callable.construct {
+                                self.record(span, Resolution::Construct(construct));
+                            }
+                            callable.ret
+                        } else {
+                            let what = "a constructor used as a function value".to_string();
+                            self.record(span, Resolution::Unsupported(what));
+                            callable.into_fn_type()
                         }
-                        callable.ret
-                    } else {
-                        let what = "a constructor used as a function value".to_string();
-                        self.record(span, Resolution::Unsupported(what));
+                    }
+                    Some(callable) => {
+                        if let Some(target) = &callable.target {
+                            self.record(name.span, Resolution::FnValue(target.clone()));
+                        }
                         callable.into_fn_type()
                     }
+                    None => Ty::Error,
                 }
-                Some(callable) => {
-                    if let Some(target) = &callable.target {
-                        self.record(name.span, Resolution::FnValue(target.clone()));
-                    }
-                    callable.into_fn_type()
-                }
-                None => Ty::Error,
-            },
+            }
             Some(QualifiedPath::Reported) => Ty::Error,
             None => {
                 let ty = self.infer(base);

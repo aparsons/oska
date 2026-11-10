@@ -7,7 +7,7 @@
 #![allow(dead_code)]
 
 use oska_run::{
-    codes, run, test, FakeHost, RunOutcome, TestOptions, TestReport, UNSUPPORTED_EXIT_CODE,
+    codes, run, test, FakeHost, Host, RunOutcome, TestOptions, TestReport, UNSUPPORTED_EXIT_CODE,
 };
 
 /// The program path every helper passes as `args[0]`.
@@ -104,4 +104,166 @@ pub fn test_fake(src: &str) -> TestReport {
 /// `#[integration]` tests when they run.
 pub fn test_with(mut host: FakeHost, src: &str, options: TestOptions) -> TestReport {
     test(src, &mut host, options)
+}
+
+// ---- Filesystem capability programs --------------------------------------------------
+
+/// Oska helpers a filesystem test program may call, to print what an
+/// operation returned: its text (or `done`, or the names joined with
+/// `,`), or `REFUSED: ` and its error's message.
+pub const SHOWN: &str = r#"
+fn shown(result: Result<Untrusted<String>, IoError>) -> Untrusted<String> {
+    match result {
+        Ok(text) => text
+        Err(e) => refused(e)
+    }
+}
+
+fn done(result: Result<(), IoError>) -> Untrusted<String> {
+    match result {
+        Ok(_) => "done"
+        Err(e) => refused(e)
+    }
+}
+
+fn listed(result: Result<List<Untrusted<String>>, IoError>) -> Untrusted<String> {
+    match result {
+        Ok(names) => ",".join(names)
+        Err(e) => refused(e)
+    }
+}
+
+fn refused(e: IoError) -> Untrusted<String> {
+    let message = e.message
+    "REFUSED: {message}"
+}
+"#;
+
+/// The source of a program whose `main` runs `body`, each line one
+/// `io.println`, followed by [`SHOWN`]. `main` is given `io: Stdout`,
+/// `fs: Fs`, `read: FsRead`, `write: FsWrite`, and `args: Args`.
+pub fn fs_program(body: &str) -> String {
+    format!(
+        "fn main(io: Stdout, fs: Fs, read: FsRead, write: FsWrite, args: Args) \
+         -> Result<(), IoError> {{\n{body}\n    Ok(())\n}}\n{SHOWN}"
+    )
+}
+
+/// What the [`fs_program`] running `body` prints on `host`, with `args`
+/// after the program path. The host is left as the program left it.
+pub fn printed_with(host: &mut dyn Host, args: &[&str], body: &str) -> String {
+    let src = fs_program(body);
+    let args: Vec<String> = std::iter::once(PROGRAM_PATH)
+        .chain(args.iter().copied())
+        .map(str::to_string)
+        .collect();
+    let outcome = run(&src, host, &args);
+    assert!(
+        outcome.diagnostics.is_empty() && outcome.panic.is_none() && outcome.exit_code == 0,
+        "{src} should run: {outcome:#?}"
+    );
+    outcome.stdout
+}
+
+/// What the [`fs_program`] running `body` prints on `host`, with no
+/// arguments.
+pub fn printed(mut host: FakeHost, body: &str) -> String {
+    printed_with(&mut host, &[], body)
+}
+
+// ---- Real directories ------------------------------------------------------------------
+
+/// `path` as the inside of an Oska string literal holds it: with each `\`
+/// of a Windows path escaped.
+pub fn literal(path: impl AsRef<std::ffi::OsStr>) -> String {
+    std::path::Path::new(path.as_ref())
+        .display()
+        .to_string()
+        .replace('\\', "\\\\")
+}
+
+/// A fresh directory under the system temp dir, holding `root/` and
+/// `report/`, removed on drop. [`TempTree::saw`] runs a program on
+/// [`oska_run::RealHost`] with capabilities on `root`, and reads what it
+/// saw back from `report`, since a real host prints to the terminal.
+pub struct TempTree {
+    base: std::path::PathBuf,
+}
+
+impl TempTree {
+    pub fn new(test: &str) -> TempTree {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let unique = format!(
+            "oska-{test}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
+        let base = std::env::temp_dir().join(unique);
+        for dir in ["root", "report"] {
+            std::fs::create_dir_all(base.join(dir)).expect("create a directory");
+        }
+        let base = std::fs::canonicalize(&base).expect("canonicalize the tree");
+        TempTree { base }
+    }
+
+    /// The absolute path of `at` beneath the tree.
+    pub fn path(&self, at: &str) -> std::path::PathBuf {
+        self.base.join(at)
+    }
+
+    /// Write `text` to the file `at`, creating its directory.
+    pub fn write(&self, at: &str, text: &str) {
+        let path = self.path(at);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create a directory");
+        }
+        std::fs::write(path, text).expect("write a file");
+    }
+
+    /// The text of the file at `at`.
+    pub fn file(&self, at: &str) -> String {
+        std::fs::read_to_string(self.path(at)).expect("read a file")
+    }
+
+    /// What `body` saw on a real host, each `say(...)` one line. `main` is
+    /// given `read: DirRead` and `write: DirWrite` on `root`, and `fs: Fs`
+    /// for more, with `{root}` in `body` the root's absolute path. The
+    /// helpers in [`SHOWN`] are in scope.
+    pub fn saw(&self, body: &str) -> String {
+        let literal = |at: &str| literal(self.path(at));
+        let root = literal("root");
+        let src = format!(
+            "fn main(fs: Fs) -> Result<(), IoError> {{\n\
+             \x20   let read = fs.read_only().restrict_to(\"{root}\")\n\
+             \x20   let write = fs.write_only().restrict_to(\"{root}\")\n\
+             \x20   var seen: Untrusted<String> = \"\"\n\
+             {body}\n\
+             \x20   fs.write_only().restrict_to(\"{report}\").write(Path.new(\"seen.txt\"), seen)\n\
+             }}\n\
+             \n\
+             fn said(seen: Untrusted<String>, line: Untrusted<String>) -> Untrusted<String> {{\n\
+             \x20   \"{{seen}}\\n{{line}}\"\n\
+             }}\n{SHOWN}",
+            report = literal("report"),
+            body = body
+                .replace("say(", "seen = said(seen, ")
+                .replace("{root}", &root),
+        );
+        let args = [PROGRAM_PATH.to_string()];
+        let outcome = run(&src, &mut oska_run::RealHost::new(), &args);
+        assert!(
+            outcome.diagnostics.is_empty() && outcome.panic.is_none() && outcome.exit_code == 0,
+            "{src} should run: {outcome:#?}"
+        );
+        self.file("report/seen.txt")
+            .trim_start_matches('\n')
+            .to_string()
+    }
+}
+
+impl Drop for TempTree {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.base);
+    }
 }

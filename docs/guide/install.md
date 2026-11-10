@@ -4,7 +4,7 @@ Oska is pre-alpha. **v0.1.0** is the first release. You can install `oskac`, the
 
 ## Build from source
 
-You need a stable Rust toolchain, version 1.75 or newer, and a checkout of the repository:
+You need a stable Rust toolchain, version 1.77 or newer, and a checkout of the repository:
 
 ```sh
 cargo build --release -p oskac

@@ -664,7 +664,7 @@ fn main_narrows_writing_before_it_writes_anything() {
     assert_eq!(
         uses,
         ["write.restrict_to"],
-        "`main` should use its unrestricted `write` only to narrow it"
+        "`main` should use its `FsWrite` only to attenuate it to a directory capability"
     );
 }
 

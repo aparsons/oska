@@ -1,5 +1,5 @@
 //! Race-free confined writes, `create_dir` and `list_dir` (#95): through a
-//! restricted filesystem, each walks its path one component at a time
+//! directory capability, each walks its path one component at a time
 //! beneath a handle for the root, never following a symlink, as reads do
 //! (#94, `confined_reads.rs`).
 //!
@@ -323,7 +323,7 @@ mod fake {
 
     impl World for Fake {
         fn path(&self, at: &str) -> String {
-            Path::new(BASE).join(at).display().to_string()
+            format!("{BASE}/{at}")
         }
 
         fn link(&mut self, at: &str, target: &str) {
@@ -466,7 +466,7 @@ fn a_write_above_the_root_is_refused(world: &mut dyn World) {
     for path in ["../outside/new.txt", "sub/../../outside/new.txt"] {
         assert_refused(
             &write(world, "root", path, "pwned"),
-            "outside the restricted directory",
+            "outside the capability's root",
         );
     }
     let absolute = world.path("outside/new.txt");
@@ -522,7 +522,7 @@ fn create_dir_above_the_root_or_without_a_parent_is_refused(world: &mut dyn Worl
     for path in ["..", "../outside/new", "sub/../../outside/new"] {
         assert_refused(
             &create_dir(world, "root", path),
-            "outside the restricted directory",
+            "outside the capability's root",
         );
     }
     let absolute = world.path("outside/new");
@@ -575,7 +575,7 @@ fn list_dir_above_the_root_is_refused(world: &mut dyn World) {
     for path in ["..", "../outside", "sub/../.."] {
         assert_refused(
             &list_dir(world, "root", path),
-            "outside the restricted directory",
+            "outside the capability's root",
         );
     }
     let absolute = world.path("outside");

@@ -9,64 +9,8 @@
 
 mod common;
 
-use common::{assert_refused, run_fake};
-use oska_run::{run, FakeHost};
-
-/// Helpers every program below may call, to print what an operation
-/// returned: its text, or `REFUSED: ` and its error's message.
-const SHOWN: &str = r#"
-fn shown(result: Result<Untrusted<String>, IoError>) -> Untrusted<String> {
-    match result {
-        Ok(text) => text
-        Err(e) => refused(e)
-    }
-}
-
-fn done(result: Result<(), IoError>) -> Untrusted<String> {
-    match result {
-        Ok(_) => "done"
-        Err(e) => refused(e)
-    }
-}
-
-fn listed(result: Result<List<Untrusted<String>>, IoError>) -> Untrusted<String> {
-    match result {
-        Ok(names) => ",".join(names)
-        Err(e) => refused(e)
-    }
-}
-
-fn refused(e: IoError) -> Untrusted<String> {
-    let message = e.message
-    "REFUSED: {message}"
-}
-"#;
-
-/// What `main` prints on `host` when its body is `body`, each line one
-/// `io.println`. `main` is given `io: Stdout`, `fs: Fs`, `read: FsRead`,
-/// `write: FsWrite`, and `args: Args` holding `args` after the program
-/// path. The host is left as the program left it.
-fn printed_with(host: &mut FakeHost, args: &[&str], body: &str) -> String {
-    let src = format!(
-        "fn main(io: Stdout, fs: Fs, read: FsRead, write: FsWrite, args: Args) \
-         -> Result<(), IoError> {{\n{body}\n    Ok(())\n}}\n{SHOWN}"
-    );
-    let args: Vec<String> = std::iter::once("prog.osk")
-        .chain(args.iter().copied())
-        .map(str::to_string)
-        .collect();
-    let outcome = run(&src, host, &args);
-    assert!(
-        outcome.diagnostics.is_empty() && outcome.panic.is_none() && outcome.exit_code == 0,
-        "{src} should run: {outcome:#?}"
-    );
-    outcome.stdout
-}
-
-/// What `body` prints on `host`, with no arguments.
-fn printed(mut host: FakeHost, body: &str) -> String {
-    printed_with(&mut host, &[], body)
-}
+use common::{assert_refused, printed, printed_with, run_fake};
+use oska_run::FakeHost;
 
 // ---- Reading -----------------------------------------------------------------------------
 
@@ -83,7 +27,7 @@ fn a_dir_read_reads_a_file_beneath_its_root() {
     );
     assert_eq!(
         out,
-        "# Intro\nREFUSED: `../secret.txt` leads outside the restricted directory\n"
+        "# Intro\nREFUSED: `../secret.txt` leads outside the capability's root\n"
     );
 }
 
@@ -103,7 +47,7 @@ fn a_dir_read_lists_a_directory_beneath_its_root() {
     );
     assert_eq!(
         out,
-        "a.md,adr,b.md\n0001.md\nREFUSED: `../other` leads outside the restricted directory\n"
+        "a.md,adr,b.md\n0001.md\nREFUSED: `../other` leads outside the capability's root\n"
     );
 }
 
@@ -124,8 +68,8 @@ fn a_dir_write_writes_and_creates_directories_only_beneath_its_root() {
     assert_eq!(
         out,
         "done\ndone\n\
-         REFUSED: `../escaped.html` leads outside the restricted directory\n\
-         REFUSED: `../escaped` leads outside the restricted directory\n"
+         REFUSED: `../escaped.html` leads outside the capability's root\n\
+         REFUSED: `../escaped` leads outside the capability's root\n"
     );
     assert_eq!(host.file("_site/adr/index.html"), Some("<p>adr</p>"));
     assert_eq!(host.file("escaped.html"), None);
@@ -144,7 +88,7 @@ fn a_dir_reads_through_read_only_and_writes_through_write_only() {
     );
     assert_eq!(
         out,
-        "done\nsaved\nREFUSED: `../other.txt` leads outside the restricted directory\n"
+        "done\nsaved\nREFUSED: `../other.txt` leads outside the capability's root\n"
     );
     assert_eq!(host.file("app/state.txt"), Some("saved"));
     assert_eq!(host.file("other.txt"), Some(""));
@@ -174,9 +118,9 @@ fn a_narrowing_from_untrusted_text_reaches_only_its_subdirectory() {
     assert_eq!(
         out,
         "alice's\n\
-         REFUSED: `../bob/avatar.txt` leads outside the restricted directory\n\
+         REFUSED: `../bob/avatar.txt` leads outside the capability's root\n\
          done\n\
-         REFUSED: `../bob/avatar.txt` leads outside the restricted directory\n"
+         REFUSED: `../bob/avatar.txt` leads outside the capability's root\n"
     );
     assert_eq!(host.file("uploads/carol/avatar.txt"), Some("carol's"));
     assert_eq!(host.file("uploads/bob/avatar.txt"), Some("bob's"));
@@ -219,8 +163,8 @@ fn a_narrowing_above_the_root_reaches_nothing() {
     );
     assert_eq!(
         out,
-        "REFUSED: cannot restrict to `../..`: `../..` leads outside the restricted directory\n\
-         REFUSED: cannot restrict to `..`: `..` leads outside the restricted directory\n\
+        "REFUSED: cannot restrict to `../..`: `../..` leads outside the capability's root\n\
+         REFUSED: cannot restrict to `..`: `..` leads outside the capability's root\n\
          REFUSED: cannot restrict to `/data`: `/data` is absolute; \
          a directory capability takes paths relative to its root\n"
     );
@@ -295,7 +239,7 @@ mod real {
 
     use oska_run::{run, RealHost};
 
-    use super::SHOWN;
+    use super::common::SHOWN;
 
     /// A fresh directory under the system temp dir, removed on drop:
     ///
@@ -421,8 +365,8 @@ mod real {
         let sandbox = Sandbox::new("narrow-above");
         let outside = sandbox.path("outside").display().to_string();
         for (user, why) in [
-            ("../outside", "leads outside the restricted directory"),
-            ("sub/../..", "leads outside the restricted directory"),
+            ("../outside", "leads outside the capability's root"),
+            ("sub/../..", "leads outside the capability's root"),
             (outside.as_str(), "is absolute"),
         ] {
             let seen = read_beneath(&sandbox, user, "secret.txt");
