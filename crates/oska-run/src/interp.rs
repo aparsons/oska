@@ -20,7 +20,7 @@
 use std::rc::Rc;
 
 use oska_check::program::{
-    Arm, Callee, Expr, ExprKind, Function, Part, Pattern, Place, Program, Stmt,
+    self, Arm, Callee, Expr, ExprKind, Function, Part, Pattern, Place, Program, Stmt,
 };
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::Span;
@@ -172,11 +172,11 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             ExprKind::CallValue { callee, args } => {
                 let callee = self.eval(callee, frame)?;
                 let args = self.eval_all(args, frame)?;
-                Ok(self.call_value(&callee, args)?)
+                Ok(self.call_value(&callee, args, expr.span)?)
             }
             ExprKind::Call { callee, args } => {
                 let values = self.eval_all(args, frame)?;
-                self.call_callee(callee, values, expr.span)
+                Ok(self.call_callee(callee, values, expr.span)?)
             }
             ExprKind::MutatingCall {
                 callee,
@@ -190,7 +190,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 let mut taken = std::mem::replace(place_mut(receiver, frame), Value::Unit);
                 let value = self.call_mutating(callee, &mut taken, args, expr.span);
                 *place_mut(receiver, frame) = taken;
-                value
+                Ok(value?)
             }
             ExprKind::Block { stmts, value } => {
                 let height = frame.slots.len();
@@ -202,6 +202,30 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 let scrutinee = self.eval(scrutinee, frame)?;
                 self.match_arms(&scrutinee, arms, frame)
             }
+            ExprKind::Try { operand, convert } => {
+                let Value::Variant {
+                    ty,
+                    variant,
+                    fields,
+                } = self.eval(operand, frame)?
+                else {
+                    unreachable!("the checker allows `?` only on a `Result` or an `Option`")
+                };
+                match &*variant {
+                    "Ok" | "Some" => Ok(fields[0].clone()),
+                    "None" => Err(Unwind::Return(Value::none())),
+                    _ => {
+                        let error = fields[0].clone();
+                        let error = match convert {
+                            Some(convert) => self.call_callee(convert, vec![error], expr.span)?,
+                            None => error,
+                        };
+                        debug_assert_eq!(&*ty, "Result");
+                        Err(Unwind::Return(Value::err(error)))
+                    }
+                }
+            }
+            ExprKind::FnValue(callee) => Ok(Value::Function(Rc::new(callee.clone()))),
             ExprKind::Scope(body) => {
                 let scope = self.tasks.open();
                 let height = frame.slots.len();
@@ -387,12 +411,14 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         }
     }
 
-    fn call_callee(
+    /// Call `callee` with `args`, the receiver first for a method. Only a
+    /// panic unwinds out of a call.
+    pub fn call_callee(
         &mut self,
         callee: &Callee,
         args: Vec<Value>,
         span: Span,
-    ) -> Result<Value, Unwind> {
+    ) -> Result<Value, Panic> {
         match callee {
             Callee::Function(name) => {
                 let program = self.program;
@@ -400,14 +426,14 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                     .functions
                     .get(name)
                     .expect("`crate::run` refuses a call to a function the program lacks");
-                Ok(self.call(function, args)?)
+                self.call(function, args)
             }
             Callee::Intrinsic(name) => {
                 if let Some(intrinsic) = intrinsics::lookup(name) {
-                    return Ok(intrinsic(self.host, args, span)?);
+                    return intrinsic(self.host, args, span);
                 }
                 if let Some(intrinsic) = intrinsics::lookup_higher_order(name) {
-                    return Ok(intrinsic(self, args, span)?);
+                    return intrinsic(self, args, span);
                 }
                 // A mutating method called on a temporary: the change is
                 // dropped with it.
@@ -415,13 +441,61 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 let mut receiver = args.next().expect("a method's receiver");
                 self.call_mutating(callee, &mut receiver, args.collect(), span)
             }
+            Callee::Trait { .. } => {
+                let callee = self.dispatch(callee, &args[0]);
+                self.call_callee(&callee, args, span)
+            }
         }
     }
 
-    /// Call the function value `callee`, a closure, with `args`.
-    pub fn call_value(&mut self, callee: &Value, args: Vec<Value>) -> Result<Value, Panic> {
-        let Value::Closure(closure) = callee else {
-            unreachable!("the checker calls only functions, found {callee:?}");
+    /// The implementation `callee` reaches for `receiver`: a trait's
+    /// method found by the receiver's runtime type tag (ADR 0007), the
+    /// function `<Tag as Trait>.method` when the program has one and the
+    /// prelude's intrinsic `Tag.method` otherwise. Any other callee is
+    /// already resolved.
+    fn dispatch(&self, callee: &Callee, receiver: &Value) -> Callee {
+        let Callee::Trait { trait_name, method } = callee else {
+            return callee.clone();
+        };
+        let tag = receiver.type_tag();
+        let name = program::trait_method(tag, trait_name, method);
+        if self.program.functions.contains_key(&name) {
+            Callee::Function(name)
+        } else {
+            Callee::Intrinsic(format!("{tag}.{method}"))
+        }
+    }
+
+    /// Call `trait_name`'s method `method` on `receiver`, through the
+    /// implementation for its runtime type tag, with `args` after it.
+    pub fn call_trait(
+        &mut self,
+        trait_name: &str,
+        method: &str,
+        receiver: Value,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, Panic> {
+        let callee = Callee::Trait {
+            trait_name: trait_name.to_string(),
+            method: method.to_string(),
+        };
+        let args = std::iter::once(receiver).chain(args).collect();
+        self.call_callee(&callee, args, span)
+    }
+
+    /// Call the function value `callee`, a closure or a named function,
+    /// with `args`. `span` is the call's.
+    pub fn call_value(
+        &mut self,
+        callee: &Value,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, Panic> {
+        let closure = match callee {
+            Value::Closure(closure) => closure,
+            Value::Function(function) => return self.call_callee(function, args, span),
+            other => unreachable!("the checker calls only functions, found {other:?}"),
         };
         let mut slots = closure.slots.clone();
         slots.extend(
@@ -453,7 +527,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         receiver: &mut Value,
         args: Vec<Value>,
         span: Span,
-    ) -> Result<Value, Unwind> {
+    ) -> Result<Value, Panic> {
         match callee {
             Callee::Function(name) => {
                 let program = self.program;
@@ -469,7 +543,11 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             Callee::Intrinsic(name) => {
                 let intrinsic = intrinsics::lookup_mutating(name)
                     .expect("`crate::run` refuses a call to a missing intrinsic");
-                Ok(intrinsic(receiver, args, span)?)
+                intrinsic(receiver, args, span)
+            }
+            Callee::Trait { .. } => {
+                let callee = self.dispatch(callee, receiver);
+                self.call_mutating(&callee, receiver, args, span)
             }
         }
     }

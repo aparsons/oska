@@ -55,7 +55,7 @@ use crate::codes;
 use crate::collect::Decls;
 use crate::decl_rules;
 use crate::infer::{Infer, Mismatch};
-use crate::items::{Bound, Items, Lower};
+use crate::items::{Bound, ImplInfo, Items, Lower};
 use crate::prelude::{self, StdModule};
 use crate::program::lower::{Resolution, Resolutions};
 use crate::program::{self, Callee, Construct, IntType};
@@ -384,25 +384,58 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     let builtin = ty == Ty::Unit
                         || ty.is_integer()
                         || matches!(ty.head(), Some(ty::BOOL | ty::STRING));
-                    builtin.then_some(Resolution::Equality)
-                }
-                Deferred::Display => match ty.head() {
-                    Some(head @ (ty::INT | ty::STRING)) => Some(Resolution::Display(
-                        Callee::Intrinsic(format!("{head}.to_string")),
-                    )),
-                    // The checker has required `Display` of the hole, so a
-                    // type the module declares has an impl of it there.
-                    Some(head) if self.decls().get(head).is_some_and(|d| !d.in_prelude) => {
-                        Some(Resolution::Display(Callee::Function(
-                            program::trait_method(head, ty::DISPLAY, "to_string"),
-                        )))
+                    if builtin {
+                        Some(Resolution::Equality)
+                    } else {
+                        // The checker has required `Eq` of the operands.
+                        self.trait_callee(&ty, ty::EQ, "eq")
+                            .map(Resolution::EqualityVia)
                     }
-                    _ => None,
-                },
+                }
+                // The checker has required `Display` of the hole.
+                Deferred::Display => self
+                    .trait_callee(&ty, ty::DISPLAY, "to_string")
+                    .map(Resolution::Display),
             };
             if let Some(resolution) = resolution {
                 self.record(span, resolution);
             }
+        }
+    }
+
+    /// What a call of the method `method` of `trait_name`, which a value
+    /// of type `ty` implements, reaches in the checked program:
+    ///
+    /// - on a generic parameter, the impl for the value's runtime type
+    ///   tag ([`Callee::Trait`]);
+    /// - on a prelude type, for a prelude trait, the intrinsic
+    ///   `Type.method`, such as `Int.to_string`;
+    /// - otherwise the module's impl, `<Type as Trait>.method`.
+    ///
+    /// `None` for a generic trait, whose impl the name of the trait does
+    /// not identify, and for a type with no name.
+    fn trait_callee(&self, ty: &Ty, trait_name: &str, method: &str) -> Option<Callee> {
+        let generic = self
+            .items
+            .traits
+            .get(trait_name)
+            .map_or(true, |t| !t.generics.is_empty());
+        if generic {
+            return None;
+        }
+        let in_prelude = |name: &str| self.decls().get(name).map_or(true, |d| d.in_prelude);
+        match ty {
+            Ty::Param(_) => Some(Callee::Trait {
+                trait_name: trait_name.to_string(),
+                method: method.to_string(),
+            }),
+            Ty::Named(head, _, _) if in_prelude(head) && in_prelude(trait_name) => {
+                Some(Callee::Intrinsic(format!("{head}.{method}")))
+            }
+            Ty::Named(head, _, _) => Some(Callee::Function(program::trait_method(
+                head, trait_name, method,
+            ))),
+            _ => None,
         }
     }
 
@@ -834,6 +867,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     fn item_value(&mut self, key: &str, ident: &Ident) -> Ty {
         let name = key;
         if let Some(sig) = self.items.fns.get(name).cloned() {
+            self.record(
+                ident.span,
+                Resolution::FnValue(calls::target(&sig, name.to_string())),
+            );
             let callable = self.instantiate(&sig, None);
             return callable.into_fn_type();
         }
@@ -903,7 +940,12 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                         callable.into_fn_type()
                     }
                 }
-                Some(callable) => callable.into_fn_type(),
+                Some(callable) => {
+                    if let Some(target) = &callable.target {
+                        self.record(name.span, Resolution::FnValue(target.clone()));
+                    }
+                    callable.into_fn_type()
+                }
                 None => Ty::Error,
             },
             Some(QualifiedPath::Reported) => Ty::Error,
@@ -1237,36 +1279,58 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     && b.args.len() == args.len()
                     && b.args.iter().zip(args).all(|(x, y)| infer.unify(x, y))
             }),
-            ty @ Ty::Named(..) => self.items.impls.iter().any(|imp| {
-                if imp.trait_name != trait_name || imp.trait_args.len() != args.len() {
-                    return false;
-                }
-                let mut attempt = infer.clone();
-                let subst: Vec<(String, Ty)> = imp
-                    .generics
-                    .iter()
-                    .map(|g| (g.clone(), attempt.fresh()))
-                    .collect();
-                // An impl for a text type covers text of either trust.
-                let target = attempt.loosen(&imp.target.substitute(&subst));
-                let matches = attempt.unify(&ty, &target)
-                    && imp
-                        .trait_args
-                        .iter()
-                        .zip(args)
-                        .all(|(x, y)| attempt.unify(&x.substitute(&subst), y));
-                let holds = matches
-                    && imp.bounds.iter().all(|b| {
-                        let param = Ty::Param(b.param.clone()).substitute(&subst);
-                        let args: Vec<Ty> = b.args.iter().map(|a| a.substitute(&subst)).collect();
-                        self.implements_in(&mut attempt, &param, &b.trait_name, &args, depth + 1)
-                    });
-                if holds {
-                    *infer = attempt;
-                }
-                holds
-            }),
+            ty @ Ty::Named(..) => self.impl_in(infer, &ty, trait_name, args, depth).is_some(),
         }
+    }
+
+    /// The `impl` of `trait_name<args>` that the named type `ty`
+    /// implements it through, whose own bounds hold. On success, `infer`
+    /// keeps what matching it solved.
+    fn impl_in(
+        &self,
+        infer: &mut Infer,
+        ty: &Ty,
+        trait_name: &str,
+        args: &[Ty],
+        depth: usize,
+    ) -> Option<&'c ImplInfo> {
+        self.items.impls.iter().find(|imp| {
+            if imp.trait_name != trait_name || imp.trait_args.len() != args.len() {
+                return false;
+            }
+            let mut attempt = infer.clone();
+            let subst: Vec<(String, Ty)> = imp
+                .generics
+                .iter()
+                .map(|g| (g.clone(), attempt.fresh()))
+                .collect();
+            // An impl for a text type covers text of either trust.
+            let target = attempt.loosen(&imp.target.substitute(&subst));
+            let matches = attempt.unify(ty, &target)
+                && imp
+                    .trait_args
+                    .iter()
+                    .zip(args)
+                    .all(|(x, y)| attempt.unify(&x.substitute(&subst), y));
+            let holds = matches
+                && imp.bounds.iter().all(|b| {
+                    let param = Ty::Param(b.param.clone()).substitute(&subst);
+                    let args: Vec<Ty> = b.args.iter().map(|a| a.substitute(&subst)).collect();
+                    self.implements_in(&mut attempt, &param, &b.trait_name, &args, depth + 1)
+                });
+            if holds {
+                *infer = attempt;
+            }
+            holds
+        })
+    }
+
+    /// The `impl` through which the named type `ty` implements
+    /// `trait_name<args>`, if one does.
+    fn impl_of(&self, ty: &Ty, trait_name: &str, args: &[Ty]) -> Option<&'c ImplInfo> {
+        let mut trial = self.infer.clone();
+        let ty = trial.resolve(ty);
+        self.impl_in(&mut trial, &ty, trait_name, args, 0)
     }
 
     /// Report `E0265` at `span` when `ty` does not implement

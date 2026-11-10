@@ -49,7 +49,11 @@ pub struct Program {
 }
 
 /// The qualified name of `method` in the impl of `trait_name` for
-/// `type_name`, such as `<Point as Display>.to_string`.
+/// `type_name`, such as `<Point as Display>.to_string`. For a generic
+/// trait, `trait_name` carries the impl's arguments, as `From<IoError>`
+/// does in `<AppError as From<IoError>>.from`, so that two impls of one
+/// trait for one type have different names (see
+/// [`crate::items::ImplInfo::trait_ref`]).
 pub fn trait_method(type_name: &str, trait_name: &str, method: &str) -> String {
     format!("<{type_name} as {trait_name}>.{method}")
 }
@@ -174,6 +178,18 @@ pub enum ExprKind {
         then_branch: Box<Expr>,
         else_branch: Option<Box<Expr>>,
     },
+    /// `operand?`: the success value of a `Result` (`Ok`) or an `Option`
+    /// (`Some`). On `None` the function returns `None`. On `Err(e)` it
+    /// returns `Err(e)`, or `Err(convert(e))` when the checker chose a
+    /// `From` implementation to convert the error with, such as
+    /// `<AppError as From<IoError>>.from`.
+    Try {
+        operand: Box<Expr>,
+        convert: Option<Callee>,
+    },
+    /// A function used as a value, such as `double` in `let f = double`.
+    /// Calling the value calls the function.
+    FnValue(Callee),
     /// `match`: the first arm whose pattern matches the scrutinee, and
     /// whose guard then holds, gives the value. The checker guarantees
     /// one does.
@@ -314,6 +330,15 @@ pub enum Callee {
     Function(String),
     /// A body-less prelude function, which each backend implements, by
     /// qualified name: `Type.method` for a method, such as
-    /// `Stdout.println`.
+    /// `Stdout.println`. A prelude type's implementation of a prelude
+    /// trait is named the same way, such as `Int.to_string`.
     Intrinsic(String),
+    /// A trait's method called on a value whose type only the runtime
+    /// knows: in generic code, a value of a type parameter. The receiver
+    /// is the first argument. A backend finds the implementation from the
+    /// receiver's runtime type tag: the function `<Tag as Trait>.method`
+    /// when the program has one (see [`trait_method`]), and otherwise the
+    /// intrinsic `Tag.method` of a prelude implementation. Only a trait
+    /// without generics is called this way.
+    Trait { trait_name: String, method: String },
 }

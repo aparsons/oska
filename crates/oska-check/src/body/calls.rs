@@ -187,6 +187,12 @@ impl Body<'_, '_, '_> {
         let sig = info.method_for(sig, &self_ty, &args, &[], &[]);
         let mut callable = self.instantiate(&sig, None);
         callable.description = format!("`{trait_name}.{}`", name.name);
+        if sig.receiver.is_method() {
+            // The receiver's type may be known only once the arguments
+            // are checked, so the runtime finds the impl by its tag.
+            callable.target =
+                self.trait_callee(&Ty::Param(ty::SELF.to_string()), trait_name, &name.name);
+        }
         // `Self` is a type argument here, so the result follows its trust.
         self.follow_type_arg(&mut callable, self_ty.clone());
         if sig.receiver.is_method() {
@@ -412,16 +418,22 @@ impl Body<'_, '_, '_> {
             Receiver::Self_ => {}
         }
         self.audit_call(&type_name, &name.name, span);
-        if sig.trait_name.is_none() {
-            // Inherent methods are only declared on the module's own types
-            // (`coherence.rs`), so one on a prelude type is an intrinsic.
-            let qualified = format!("{type_name}.{}", name.name);
-            let intrinsic = self.decls().get(&type_name).map_or(true, |d| d.in_prelude);
-            let callee = if intrinsic {
-                Callee::Intrinsic(qualified)
-            } else {
-                Callee::Function(qualified)
-            };
+        let callee = match &sig.trait_name {
+            None => {
+                // Inherent methods are only declared on the module's own
+                // types (`coherence.rs`), so one on a prelude type is an
+                // intrinsic.
+                let qualified = format!("{type_name}.{}", name.name);
+                let intrinsic = self.decls().get(&type_name).map_or(true, |d| d.in_prelude);
+                Some(if intrinsic {
+                    Callee::Intrinsic(qualified)
+                } else {
+                    Callee::Function(qualified)
+                })
+            }
+            Some(trait_name) => self.trait_callee(&receiver, trait_name, &name.name),
+        };
+        if let Some(callee) = callee {
             let resolution = match sig.receiver {
                 Receiver::VarSelf => Resolution::MutatingMethod(callee),
                 _ => Resolution::Method(callee),
@@ -685,7 +697,7 @@ impl Body<'_, '_, '_> {
 
 /// What a call to `sig`, qualified as `name`, reaches: an intrinsic for a
 /// body-less prelude function, otherwise the function itself.
-fn target(sig: &FnSig, name: String) -> Callee {
+pub(super) fn target(sig: &FnSig, name: String) -> Callee {
     if sig.intrinsic {
         Callee::Intrinsic(name)
     } else {

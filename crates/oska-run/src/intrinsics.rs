@@ -16,6 +16,7 @@ use crate::host::Host;
 use crate::interp::Interpreter;
 use crate::panics::{codes, Panic};
 use crate::tasks;
+use crate::traits;
 use crate::value::{Access, Capability, FsCap, Root, Value, SECRET};
 
 /// An intrinsic: the host, the arguments (the receiver first), and the
@@ -45,6 +46,7 @@ pub const INTRINSICS: &[(&str, Intrinsic)] = &[
     ("FsWrite.write", fs_write),
     ("Int.to_string", int_to_string),
     ("Option.is_some", option_is_some),
+    ("Option.ok_or", option_ok_or),
     ("Option.unwrap_or", option_unwrap_or),
     ("Path.from", path_new),
     ("Path.new", path_new),
@@ -70,6 +72,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
     INTRINSICS
         .iter()
         .chain(data::INTRINSICS)
+        .chain(traits::INTRINSICS)
         .find(|(n, _)| *n == name)
         .map(|(_, f)| *f)
 }
@@ -87,6 +90,7 @@ pub fn lookup_higher_order(name: &str) -> Option<HigherOrder> {
     data::HIGHER_ORDER
         .iter()
         .chain(tasks::HIGHER_ORDER)
+        .chain(traits::HIGHER_ORDER)
         .find(|(n, _)| *n == name)
         .map(|(_, f)| *f)
 }
@@ -190,6 +194,7 @@ fn debug(value: &Value, out: &mut String) {
             out.push(']');
         }
         Value::Closure(_) => out.push_str("<closure>"),
+        Value::Function(_) => out.push_str("<fn>"),
         Value::Capability(cap) => out.push_str(&format!("<{cap:?}>")),
         Value::Args(args) => out.push_str(&format!("Args{:?}", &**args)),
         Value::Scope(_) => out.push_str("<scope>"),
@@ -396,6 +401,16 @@ fn result_is_ok(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Pa
 /// `Option.unwrap_or(self, default)`.
 fn option_unwrap_or(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
     Ok(unwrap_or(args, "Some"))
+}
+
+/// `Option.ok_or(self, err)`: `Ok` of the value, or `Err(err)` when
+/// there is none.
+fn option_ok_or(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    let err = args.swap_remove(1);
+    Ok(match args[0].is_variant("Some") {
+        true => Value::ok(args[0].fields()[0].clone()),
+        false => Value::err(err),
+    })
 }
 
 /// `Result.unwrap_or(self, default)`.

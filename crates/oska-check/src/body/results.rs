@@ -7,6 +7,8 @@ use oska_syntax::Span;
 use super::Body;
 use crate::codes;
 use crate::infer::Mismatch;
+use crate::program::lower::Resolution;
+use crate::program::Callee;
 use crate::ty::{self, Ty};
 
 impl Body<'_, '_, '_> {
@@ -47,10 +49,15 @@ impl Body<'_, '_, '_> {
                     Ty::generic(&kind, vec![self.infer.fresh()])
                 };
                 self.infer.unify(&failure, &ret);
+                self.record(expr.span, Resolution::Try(None));
             }
             Ty::Named(name, ret_args, _) if name == kind => {
                 if kind == ty::RESULT && ret_args.len() == 2 {
-                    self.propagate_error(&args[1], &ret_args[1], expr.span);
+                    if let Some(convert) = self.propagate_error(&args[1], &ret_args[1], expr.span) {
+                        self.record(expr.span, Resolution::Try(convert));
+                    }
+                } else {
+                    self.record(expr.span, Resolution::Try(None));
                 }
             }
             other => {
@@ -79,19 +86,36 @@ impl Body<'_, '_, '_> {
     /// `?` propagates a `Result`'s error of type `from` out of a function
     /// whose error type is `to`. They must be the same type, or `to` must
     /// convert from `from` (`E0242`).
-    pub(super) fn propagate_error(&mut self, from: &Ty, to: &Ty, span: Span) {
+    ///
+    /// Returns how the checked program converts the error: `Some(None)`
+    /// when it passes as it is, `Some(Some(from))` through the `From`
+    /// impl that `to` has, and `None` when it cannot be propagated or
+    /// converts only through a bound, which the checked program cannot
+    /// express yet.
+    pub(super) fn propagate_error(
+        &mut self,
+        from: &Ty,
+        to: &Ty,
+        span: Span,
+    ) -> Option<Option<Callee>> {
         match self.infer.flow(from, to) {
-            Ok(()) => return,
+            Ok(()) => return Some(None),
             Err(lost @ (Mismatch::CapLost | Mismatch::ScopeLost | Mismatch::TrustLost)) => {
                 self.mismatch(lost, from, to, span);
-                return;
+                return None;
             }
             Err(Mismatch::Types) => {}
         }
         let from = self.infer.resolve(from);
         let to = self.infer.resolve(to);
-        if from.is_error() || to.is_error() || self.converts_from(&from, &to) {
-            return;
+        if from.is_error() || to.is_error() {
+            return None;
+        }
+        if self.converts_from(&from, &to) {
+            let convert = self
+                .impl_of(&to, ty::FROM, std::slice::from_ref(&from))
+                .and_then(|imp| imp.method_name("from"));
+            return convert.map(|name| Some(Callee::Function(name)));
         }
         self.error(
             codes::TRY_ERROR_TYPE,
@@ -101,6 +125,7 @@ impl Body<'_, '_, '_> {
             ),
             span,
         );
+        None
     }
 
     /// Whether `?` can convert an error of type `from` into `to`: `to`

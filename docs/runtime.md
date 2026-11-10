@@ -19,7 +19,7 @@ Before a program starts, the runtime checks that it can run all of it, reached o
 | --- | --- |
 | `E0370` | `main` declares a capability that has no runtime yet: `Net`, `NetConnect`, `NetListen`, `Spawn`, or `Sched`. Spans `main`'s body. |
 | `E0371` | The program imports a `std` module that has no runtime yet: `std.proc`, `std.sql`, or `std.html`, used or not. Spans the module path of the `use`. |
-| `E0380` | The program uses something the interpreter cannot run yet: a construct the checked program cannot express, a call of a prelude function with no runtime implementation, or a parameter of `main` that is neither a capability nor `Args`. Spans the construct or call, or `main`'s body for a parameter. |
+| `E0380` | The program uses something the interpreter cannot run yet: a construct the checked program cannot express, a call of a prelude function with no runtime implementation, a parameter of `main` that is neither a capability nor `Args`, or a trait call on a type parameter whose trait has its own impl for a sized integer type (see [Errors and traits](#errors-and-traits)). Spans the construct or call, or `main`'s body for a parameter. |
 
 ## Panics
 
@@ -41,6 +41,13 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0004` | Division by zero: the right operand of `/` or `%` is zero. Spans the operation. |
 | `P0005` | `spawn` on a finished scope: the handle's `scope` block has ended. The checker (`E0292`) already stops a handle from outliving its block, so this is a second line of defence; work never runs outside a scope. Spans the call. |
 | `P0020` | `Env.secret` asked for a variable the environment does not set. Its signature has no room for a missing secret, and running on with a stand-in such as an empty one could let an empty password through. Spans the call. |
+
+## Errors and traits
+
+- **`main` returning `Err(e)`.** The runtime prints `e.to_string()`, the `Display` text of `e`, and a newline to stderr, and exits with code 1.
+- **`?`** returns `None` or `Err(e)` from the enclosing function or closure. When the function's error type differs, `e` is converted through the `From` impl the checker chose.
+- **Trait calls.** A trait method called on a value of a known type reaches that type's impl directly. One called on a value of a type parameter is dispatched on the value's **runtime type tag**, the name of its type without arguments (`Point`, `List`, `String`), to the program's impl for that type or else the prelude's. `Option`, `Result`, and `List` compare their items through `Eq` for the items' type.
+- Every integer has the tag `Int`, whatever its type. Dispatch could not tell a `U8`'s impl of a trait from an `Int`'s, so a program that calls a trait's method on a type parameter, while that trait has an impl for a sized integer type (`I8` to `U64`), is refused with `E0380`.
 
 ## Capabilities
 

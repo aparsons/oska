@@ -54,6 +54,9 @@ struct TaskState {
     scope: usize,
     /// The closure to run; `Unit` once it has run.
     code: Value,
+    /// The `spawn` call, where a named function run as the task is
+    /// called.
+    span: Span,
     /// The closure's result, once it has run.
     result: Option<Value>,
 }
@@ -73,14 +76,16 @@ impl Tasks {
         self.scopes[scope].open = false;
     }
 
-    /// Queue `code` on `scope`, or `None` when the scope is closed.
-    fn spawn(&mut self, scope: usize, code: Value) -> Option<usize> {
+    /// Queue `code`, spawned by the call at `span`, on `scope`, or `None`
+    /// when the scope is closed.
+    fn spawn(&mut self, scope: usize, code: Value, span: Span) -> Option<usize> {
         if !self.scopes[scope].open {
             return None;
         }
         self.tasks.push(TaskState {
             scope,
             code,
+            span,
             result: None,
         });
         let task = self.tasks.len() - 1;
@@ -106,7 +111,8 @@ impl Interpreter<'_, '_> {
     /// Run `task` to completion and keep its result.
     fn run_task(&mut self, task: usize) -> Result<(), Panic> {
         let code = std::mem::replace(&mut self.tasks.tasks[task].code, Value::Unit);
-        let result = self.call_value(&code, Vec::new())?;
+        let span = self.tasks.tasks[task].span;
+        let result = self.call_value(&code, Vec::new(), span)?;
         self.tasks.tasks[task].result = Some(result);
         Ok(())
     }
@@ -138,7 +144,7 @@ fn scope_spawn(
     let Value::Scope(scope) = args[0] else {
         unreachable!("the checker guarantees a scope handle, found {:?}", args[0]);
     };
-    match interp.tasks.spawn(scope, args[1].clone()) {
+    match interp.tasks.spawn(scope, args[1].clone(), span) {
         Some(task) => Ok(Value::Task(task)),
         None => Err(Panic::new(
             codes::SPAWN_ON_FINISHED_SCOPE,
@@ -248,8 +254,14 @@ mod tests {
     fn a_scope_accepts_tasks_only_while_it_is_open() {
         let mut tasks = Tasks::default();
         let scope = tasks.open();
-        assert_eq!(tasks.spawn(scope, Value::Unit), Some(0));
+        assert_eq!(
+            tasks.spawn(scope, Value::Unit, Span { start: 0, end: 0 }),
+            Some(0)
+        );
         tasks.close(scope);
-        assert_eq!(tasks.spawn(scope, Value::Unit), None);
+        assert_eq!(
+            tasks.spawn(scope, Value::Unit, Span { start: 0, end: 0 }),
+            None
+        );
     }
 }

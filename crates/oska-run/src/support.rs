@@ -4,14 +4,17 @@
 //! checked program and finds the first node the interpreter cannot run:
 //! one the checked program cannot express yet ([`ExprKind::Unsupported`]),
 //! a call of a function the program lacks, or a call of an intrinsic that
-//! has no runtime implementation. A program that has one is refused with
-//! `E0380`, so it never fails halfway through for that reason.
+//! has no runtime implementation, or a trait call in generic code that
+//! the runtime type tags cannot dispatch. A program that has one is
+//! refused with `E0380`, so it never fails halfway through for that
+//! reason.
 
-use oska_check::program::{Callee, Expr, ExprKind, Part, Pattern, Program, Stmt};
+use oska_check::program::{self, Callee, Expr, ExprKind, Part, Pattern, Program, Stmt};
 use oska_syntax::{Diagnostic, Span};
 
 use crate::intrinsics;
 use crate::panics::codes;
+use crate::value::SIZED_INTEGERS;
 
 /// The refusal for the first node in `program` the interpreter cannot
 /// run, if any.
@@ -53,7 +56,16 @@ fn first_in(program: &Program, expr: &Expr) -> Option<(Span, String)> {
         ExprKind::Neg { operand, .. }
         | ExprKind::Not(operand)
         | ExprKind::Scope(operand)
-        | ExprKind::Field { base: operand, .. } => first_in(program, operand),
+        | ExprKind::Field { base: operand, .. }
+        | ExprKind::Try {
+            operand,
+            convert: None,
+        } => first_in(program, operand),
+        ExprKind::Try {
+            operand,
+            convert: Some(convert),
+        } => callee(program, convert, expr.span).or_else(|| first_in(program, operand)),
+        ExprKind::FnValue(target) => callee(program, target, expr.span),
         ExprKind::Construct { fields: items, .. } | ExprKind::List(items) => {
             first_of(program, items)
         }
@@ -132,6 +144,21 @@ fn callee(program: &Program, target: &Callee, span: Span) -> Option<(Span, Strin
         }
         Callee::Intrinsic(name) if !intrinsics::implemented(name) => {
             Some((span, format!("`{name}`")))
+        }
+        Callee::Trait { trait_name, method } => {
+            // Every integer has the tag `Int`, so dispatch cannot reach a
+            // sized integer type's own impl.
+            let untagged = SIZED_INTEGERS.iter().find(|ty| {
+                let name = program::trait_method(ty, trait_name, method);
+                program.functions.contains_key(&name)
+            })?;
+            Some((
+                span,
+                format!(
+                    "`{trait_name}.{method}` on a type parameter when `{untagged}` \
+                     has its own impl"
+                ),
+            ))
         }
         _ => None,
     }
