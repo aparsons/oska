@@ -63,6 +63,7 @@ pub const INTRINSICS: &[(&str, Intrinsic)] = &[
     ("Stderr.println", stderr_println),
     ("Stdin.read_line", stdin_read_line),
     ("Stdout.println", stdout_println),
+    ("String.assume_trusted", string_assume_trusted),
     ("String.to_string", string_to_string),
     ("dbg", dbg),
     ("todo", todo),
@@ -448,7 +449,119 @@ fn int_to_string(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, P
     Ok(Value::str(&args[0].as_int().to_string()))
 }
 
+/// `Untrusted<String>.assume_trusted(self)`: the text itself. Trust is a
+/// property the checker tracks; at runtime untrusted text is a plain
+/// string.
+fn string_assume_trusted(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    Ok(args.swap_remove(0))
+}
+
 /// `String.to_string(self)`: the text itself.
 fn string_to_string(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Panic> {
     Ok(args.swap_remove(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use oska_syntax::ast::{Item, ItemKind, Type, TypeKind};
+
+    use super::implemented;
+
+    /// The prelude's source, the same file the checker embeds.
+    const PRELUDE: &str = include_str!("../../oska-check/src/prelude.osk");
+
+    /// The types whose methods have no runtime: a program that holds one
+    /// is refused before it starts (`E0370`), so none of these is ever
+    /// called. Everything else in the prelude needs an intrinsic.
+    const NO_RUNTIME: &[&str] = &["Net", "NetConnect", "Connection"];
+
+    /// The qualified name the checked program calls `item`'s function by,
+    /// if `item` is a function without a body.
+    fn bodiless(owner: Option<&str>, item: &Item) -> Option<String> {
+        let ItemKind::Fn(f) = &item.kind else {
+            return None;
+        };
+        if f.body.is_some() {
+            return None;
+        }
+        Some(match owner {
+            Some(owner) => format!("{owner}.{}", f.name.name),
+            None => f.name.name.clone(),
+        })
+    }
+
+    /// The type name the checker puts in the intrinsic names of methods
+    /// declared on `target`: the type's own name, except that trust is
+    /// transparent, so `Untrusted<String>`'s methods are `String`'s.
+    fn call_owner(target: &Type) -> Option<String> {
+        let TypeKind::Path { segments, args } = &target.kind else {
+            return None;
+        };
+        let head = &segments.last()?.name;
+        match (head.as_str(), args.as_slice()) {
+            ("Untrusted", [inner]) => call_owner(inner),
+            _ => Some(head.clone()),
+        }
+    }
+
+    /// Every body-less function the prelude's free functions and impls
+    /// declare, by qualified name (`Stdout.println`, `Int.eq`, `dbg`). A
+    /// trait's own method signatures are not callable and are skipped.
+    fn bodiless_prelude_functions() -> Vec<String> {
+        let module = oska_syntax::parse_prelude(PRELUDE).expect("the prelude should parse");
+        let mut names = Vec::new();
+        for item in &module.items {
+            match &item.kind {
+                ItemKind::Fn(_) => names.extend(bodiless(None, item)),
+                ItemKind::Impl(decl) => {
+                    let Some(owner) = call_owner(&decl.target) else {
+                        continue;
+                    };
+                    for method in &decl.methods {
+                        names.extend(bodiless(Some(&owner), method));
+                    }
+                }
+                _ => {}
+            }
+        }
+        names
+    }
+
+    fn owner(name: &str) -> &str {
+        name.split('.').next().unwrap_or("")
+    }
+
+    #[test]
+    fn every_bodiless_prelude_function_has_a_runtime_intrinsic() {
+        let names = bodiless_prelude_functions();
+        assert!(
+            names.len() > 40 && names.iter().any(|n| n == "Stdout.println"),
+            "the scan should find the prelude's functions, found {names:?}"
+        );
+        let missing: Vec<&String> = names
+            .iter()
+            .filter(|name| !NO_RUNTIME.contains(&owner(name)))
+            .filter(|name| !implemented(name))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "prelude functions with no body and no runtime intrinsic: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn the_exempt_types_are_exactly_the_ones_with_no_runtime() {
+        let names = bodiless_prelude_functions();
+        for exempt in NO_RUNTIME {
+            let theirs: Vec<&String> = names.iter().filter(|n| owner(n) == *exempt).collect();
+            assert!(
+                !theirs.is_empty(),
+                "`{exempt}` is exempt but declares no body-less function"
+            );
+            assert!(
+                !theirs.iter().any(|n| implemented(n)),
+                "`{exempt}` has an intrinsic now: drop it from NO_RUNTIME"
+            );
+        }
+    }
 }

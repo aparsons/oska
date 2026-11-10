@@ -282,7 +282,15 @@ fn a_main_that_returns_unit_exits_with_code_0() {
 
 #[test]
 fn a_program_using_something_not_yet_supported_is_refused_with_e0380() {
-    let src = main_with("    let n = \"  hi \".trim()\n    io.println(n)");
+    // Every prelude function now runs, so the example is generic dispatch
+    // to a sized integer's own impl, which type tags cannot tell apart.
+    let src = program(
+        "trait Name {\n    fn name(self) -> String\n}\n\n\
+         impl Name for Int {\n    fn name(self) -> String { \"int\" }\n}\n\n\
+         impl Name for U8 {\n    fn name(self) -> String { \"u8\" }\n}\n\n\
+         fn show<T: Name>(x: T) -> Untrusted<String> { x.name() }",
+        "    let b: U8 = 3\n    io.println(show(b))",
+    );
     assert_refused(&src, "E0380");
     assert_eq!(common::run_fake(&src, &[]).exit_code, 2);
 }

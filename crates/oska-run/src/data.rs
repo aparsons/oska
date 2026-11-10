@@ -22,9 +22,12 @@ pub const INTRINSICS: &[(&str, Intrinsic)] = &[
     ("List.len", list_len),
     ("List.new", list_new),
     ("String.byte_len", string_byte_len),
+    ("String.contains", string_contains),
     ("String.len", string_len),
     ("String.lines", string_lines),
     ("String.parse_int", string_parse_int),
+    ("String.split", string_split),
+    ("String.trim", string_trim),
 ];
 
 /// Every higher-order data intrinsic, by qualified name.
@@ -112,6 +115,27 @@ fn string_byte_len(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value,
 fn string_parse_int(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
     let parsed = args[0].as_str().parse::<i64>().ok();
     Ok(Value::option(parsed.map(|n| Value::Int(i128::from(n)))))
+}
+
+/// `String.trim(self)`: without leading and trailing whitespace.
+fn string_trim(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    Ok(Value::str(args[0].as_str().trim()))
+}
+
+/// `String.split(self, separator)`: the pieces between occurrences of
+/// `separator`, empty ones included.
+fn string_split(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    let pieces = args[0]
+        .as_str()
+        .split(args[1].as_str())
+        .map(Value::str)
+        .collect();
+    Ok(Value::List(Rc::new(pieces)))
+}
+
+/// `String.contains(self, needle)`: whether `needle` occurs in the text.
+fn string_contains(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+    Ok(Value::Bool(args[0].as_str().contains(args[1].as_str())))
 }
 
 /// `String.lines(self)`: the lines, without their line endings.
