@@ -42,6 +42,8 @@ jobs:
           - runner: macos-15-intel
             machine: x86_64
     runs-on: ${{ matrix.runner }}
+    # A wrong O_NONBLOCK would hang the FIFO test rather than fail it.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable

@@ -349,3 +349,28 @@ fn a_root_that_is_missing_or_not_a_directory_refuses_every_read() {
     );
     assert_refused(&sandbox.root(), &["missing"], "nested.txt", "missing");
 }
+
+#[test]
+fn a_relative_root_and_a_file_root_are_read() {
+    // Relative to the working directory, which `cargo test` sets to this
+    // crate's own directory.
+    let marker = "Race-free confined reads (#94)";
+    assert!(read(Path::new("tests"), &[], "confined_reads.rs").contains(marker));
+    assert!(read(Path::new("tests/confined_reads.rs"), &[], ".").contains(marker));
+    assert!(read(Path::new("."), &["tests"], "confined_reads.rs").contains(marker));
+}
+
+#[test]
+fn a_fifo_is_refused_rather_than_waited_on() {
+    // Opening a FIFO for reading blocks until a writer comes, so the walk
+    // opens without blocking and then refuses anything not a regular file.
+    let sandbox = Sandbox::new("fifo");
+    let made = std::process::Command::new("mkfifo")
+        .arg(sandbox.root().join("pipe"))
+        .status();
+    if !made.is_ok_and(|status| status.success()) {
+        eprintln!("skipped: needs `mkfifo` to make a FIFO");
+        return;
+    }
+    assert_refused(&sandbox.root(), &[], "pipe", "not a regular file");
+}
