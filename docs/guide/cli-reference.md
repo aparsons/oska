@@ -101,7 +101,7 @@ See [debugging](debugging.md) for panics and the [runtime notes](../runtime.md) 
 
 ## `oskac --version` and `oskac --help`
 
-`oskac --version` prints `oskac` and the version on one line, such as `oskac 0.0.1`, and `oskac --help` prints the text at the top of this page. Both also answer to the short forms `-V` and `-h`. `--version` prints plain text whatever `--format` says.
+`oskac --version` prints `oskac` and the version on one line, such as `oskac 0.1.0`, and `oskac --help` prints the text at the top of this page. Both also answer to the short forms `-V` and `-h`. `--version` prints plain text whatever `--format` says.
 
 ## Output formats
 

@@ -22,7 +22,7 @@ Confirm that it works:
 oskac --version
 ```
 
-It prints `oskac` and the version on one line. A build from this checkout prints `oskac 0.0.1`. Then continue with the [quickstart](quickstart.md).
+It prints `oskac` and the version on one line. A build from this checkout prints `oskac 0.1.0`. Then continue with the [quickstart](quickstart.md).
 
 ## One-line installers
 
