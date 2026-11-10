@@ -46,9 +46,9 @@ An interpolation hole that starts with `self` reports `E0221` in this release. C
 
 In a signature, an unknown type is `E0200` with a "did you mean" fix. In a `let` annotation inside a body, this release does not report it. Do not rely on a clean check to confirm a type name in a body.
 
-### A contract that is violated does not stop the program
+### A contract that is violated stops the program
 
-`requires` and `ensures` are type-checked but not evaluated yet. Validate with an explicit `if` and return a `Result` until they are.
+`requires` and `ensures` are evaluated on every call, in every build. A false `requires` panics with `P0006` at the call, and a false `ensures` panics with `P0007` at the clause. A program whose contracts were silently false in v0.1.0 now panics. Fix the caller for `P0006` and the function body for `P0007`, or correct the contract if it was wrong. For a failure you expect, such as bad user input, validate with an explicit `if` and return a `Result` instead, because a panic cannot be caught.
 
 ### `oskac` is not found
 
@@ -261,7 +261,7 @@ fn main(fs: FsRead) -> Result<(), IoError> {
 }
 ```
 
-`E0270`, a closure that captures a capability passed where a plain `fn` is expected. Declare the parameter `cap fn`. `E0271`, forging a capability. `E0280`, a contract that calls a function with a capability. See [capabilities](capabilities.md).
+`E0270`, a closure that captures a capability passed where a plain `fn` is expected. Declare the parameter `cap fn`. `E0271`, forging a capability. `E0280`, a contract that calls a function with a capability. See [capabilities](capabilities.md). A contract in the wrong place or form is `E0218` (on a method of `impl Trait for Type`: move it to the trait), `E0219` (on `main`), or `E0282` (a `?` or `return` directly in the condition).
 
 ### Trust, sinks, and secrets: `E03xx`
 

@@ -1,0 +1,3 @@
+fn answer: pure
+fn call_all: cap fn (fs)
+fn main: Stdout (io)

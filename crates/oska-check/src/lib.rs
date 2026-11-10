@@ -41,6 +41,7 @@ mod coherence;
 mod collect;
 mod decl_rules;
 mod infer;
+mod instantiation;
 mod items;
 mod prelude;
 pub mod program;
@@ -65,6 +66,8 @@ pub(crate) mod codes {
     pub const NO_BASE_CASE: &str = "E0215";
     pub const DBG_IN_RELEASE: &str = "E0216";
     pub const MAIN_CONFINED: &str = "E0217";
+    pub const IMPL_CONTRACT: &str = "E0218";
+    pub const MAIN_CONTRACT: &str = "E0219";
     pub const MISMATCH: &str = "E0220";
     pub const UNKNOWN_VALUE: &str = "E0221";
     pub const LITERAL_OUT_OF_RANGE: &str = "E0222";
@@ -100,8 +103,10 @@ pub(crate) mod codes {
     pub const FORGED: &str = "E0271";
     pub const PRIVATE_FIELD: &str = "E0272";
     pub const PATH_METHOD_ON_FS: &str = "E0273";
+    pub const BREAKS_TYPE_PARAMETER: &str = "E0274";
     pub const IMPURE_IN_CONTRACT: &str = "E0280";
     pub const CONTRACT_NOT_BOOL: &str = "E0281";
+    pub const LEAVES_CONTRACT: &str = "E0282";
     pub const CONFLICTING_IMPL: &str = "E0290";
     pub const FOREIGN_INHERENT_IMPL: &str = "E0291";
     pub const SCOPE_ESCAPES: &str = "E0292";
@@ -463,11 +468,21 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
         mut audit,
         mut attenuations,
         resolutions,
+        assumed,
+        instances,
         ..
     } = findings;
+    instantiation::module(
+        &module,
+        &decls,
+        &items,
+        assumed,
+        instances,
+        &mut diagnostics,
+    );
     let program = diagnostics
         .is_empty()
-        .then(|| program::lower::module(&module, &items, &resolutions));
+        .then(|| program::lower::module(src, &module, &items, &resolutions));
     let functions = authority::report(&module, &decls);
     diagnostics.sort_by_key(|d| d.span.start);
     audit.sort_by_key(|site| site.span.start);

@@ -73,6 +73,8 @@ Output written before the panic stays written, so `computing` was printed. A pan
 | `P0003` | `todo()` reached. |
 | `P0004` | Division or remainder by zero. |
 | `P0005` | `spawn` on a scope that has already finished. |
+| `P0006` | A `requires` clause of the function called is false: fix the call, which broke the contract. |
+| `P0007` | An `ensures` clause of the function that returned is false: fix the function body, which broke its promise. The message names the return. |
 | `P0010` to `P0013` | A failed test assertion. See [testing](testing.md). |
 | `P0020` | `Env.secret` asked for a variable that is not set. |
 | `P0021` | Calls nest too deep: runaway recursion. The program panics instead of overflowing the stack. |

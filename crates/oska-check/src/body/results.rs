@@ -18,6 +18,9 @@ impl Body<'_, '_, '_> {
     /// never crosses between `Option` and `Result` (`E0243`). A `Result`'s
     /// error type goes through [`Body::propagate_error`].
     pub(super) fn try_expr(&mut self, expr: &Expr, operand: &Expr) -> Ty {
+        if self.refuse_leaving_contract("`?`", expr.span, Some(operand)) {
+            return Ty::Error;
+        }
         let ty = self.infer(operand);
         let (kind, args) = match self.infer.resolve(&ty) {
             Ty::Named(name, args, _)
@@ -112,6 +115,11 @@ impl Body<'_, '_, '_> {
             return None;
         }
         if self.converts_from(&from, &to) {
+            let convert = super::purity::Reaches::Dispatch {
+                what: "`?`",
+                method: "`From.from`",
+            };
+            self.contract_dispatch(span, convert, vec![from.clone(), to.clone()]);
             let convert = self
                 .impl_of(&to, ty::FROM, std::slice::from_ref(&from))
                 .and_then(|imp| imp.method_name("from"));

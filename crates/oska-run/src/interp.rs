@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use oska_check::builtins::{self, TraitMethod};
 use oska_check::program::{
-    self, Arm, Callee, Expr, ExprKind, Function, Part, Pattern, Place, Program, Stmt,
+    self, Arm, Callee, Clause, Expr, ExprKind, Function, Part, Pattern, Place, Program, Stmt,
 };
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::Span;
@@ -40,8 +40,9 @@ use crate::value::{ClosureValue, Value};
 /// Why evaluation stopped before producing a value.
 #[derive(Debug)]
 pub enum Unwind {
-    /// `return`, with its value: handled by the call.
-    Return(Value),
+    /// `return`, or the `?` that returns early, with its value and the
+    /// span of the statement or expression: handled by the call.
+    Return(Value, Span),
     /// `break`: handled by the innermost loop.
     Break,
     /// `continue`: handled by the innermost loop.
@@ -147,11 +148,17 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     }
 
     /// Call `function` with `args`: the receiver first, for a method, then
-    /// one per parameter. Only a panic unwinds out of a call.
-    pub fn call(&mut self, function: &Function, args: Vec<Value>) -> Result<Value, Panic> {
+    /// one per parameter. `span` is the call's. Only a panic unwinds out
+    /// of a call.
+    pub fn call(
+        &mut self,
+        function: &Function,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, Panic> {
         let mut args = args.into_iter();
         let receiver = if function.receiver { args.next() } else { None };
-        let (value, _) = self.call_with(function, receiver, args.collect())?;
+        let (value, _) = self.call_with(function, receiver, args.collect(), span)?;
         Ok(value)
     }
 
@@ -163,7 +170,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             receiver: None,
         };
         match self.eval(body, &mut frame) {
-            Ok(_) | Err(Unwind::Return(_)) => Ok(()),
+            Ok(_) | Err(Unwind::Return(..)) => Ok(()),
             Err(Unwind::Panic(panic)) => Err(panic),
             Err(Unwind::Break | Unwind::Continue) => {
                 unreachable!("the checker keeps `break` and `continue` inside loops")
@@ -173,22 +180,130 @@ impl<'p, 'h> Interpreter<'p, 'h> {
 
     /// Call `function` with `receiver`, for a method, and `args`, one per
     /// parameter. Returns its result and its receiver as it was when the
-    /// call ended: a mutating method may have changed it.
+    /// call ended: a mutating method may have changed it. `span` is the
+    /// call's.
+    ///
+    /// Every call of a function passes through here, so this is where its
+    /// contracts are evaluated: its `requires` clauses before the body.
     fn call_with(
         &mut self,
         function: &Function,
         receiver: Option<Value>,
         args: Vec<Value>,
+        span: Span,
     ) -> Result<(Value, Option<Value>), Panic> {
+        let entry = if function.contracts.is_empty() {
+            None
+        } else {
+            Some(self.requires(function, &receiver, &args, span)?)
+        };
         let mut frame = Frame {
             slots: binding(function.params.iter().map(|p| p.binds), args),
             receiver,
         };
-        match self.eval(&function.body, &mut frame) {
-            Ok(value) | Err(Unwind::Return(value)) => Ok((value, frame.receiver)),
-            Err(Unwind::Panic(panic)) => Err(panic),
+        // Every way out of the body ends here, the value it returns with
+        // the span of the return that carries it.
+        let (value, returned_at) = match self.eval(&function.body, &mut frame) {
+            Ok(value) => (value, body_end(&function.body)),
+            Err(Unwind::Return(value, at)) => (value, at),
+            Err(Unwind::Panic(panic)) => return Err(panic),
             Err(Unwind::Break | Unwind::Continue) => {
                 unreachable!("the checker keeps `break` and `continue` inside loops")
+            }
+        };
+        if let Some(slots) = entry {
+            let receiver = frame.receiver.clone();
+            self.ensures(function, Frame { slots, receiver }, &value, returned_at)?;
+        }
+        Ok((value, frame.receiver))
+    }
+
+    /// Evaluate `function`'s `requires` clauses in order, for a call
+    /// made at `span` with `receiver` and `args`. The first that is false
+    /// panics with `P0006`, spanning the call: the caller broke the
+    /// contract. A panic while evaluating a clause, such as an overflow,
+    /// is passed on as it is.
+    ///
+    /// Returns the arguments that take a slot in the clauses' frame, for
+    /// the `ensures` clauses to start from.
+    #[inline(never)]
+    fn requires(
+        &mut self,
+        function: &Function,
+        receiver: &Option<Value>,
+        args: &[Value],
+        span: Span,
+    ) -> Result<Vec<Value>, Panic> {
+        let contracts = &function.contracts;
+        let mut frame = Frame {
+            slots: binding(contracts.params.iter().copied(), args.to_vec()),
+            receiver: receiver.clone(),
+        };
+        let height = frame.slots.len();
+        for clause in &contracts.requires {
+            if !self.holds(clause, &mut frame)? {
+                return Err(Panic::new(
+                    codes::PRECONDITION_VIOLATED,
+                    format!(
+                        "precondition violated: `{}` requires `{}`",
+                        function.name, clause.text
+                    ),
+                    span,
+                ));
+            }
+        }
+        Ok(frame.slots[..height].to_vec())
+    }
+
+    /// Evaluate `function`'s `ensures` clauses in order, now that it has
+    /// returned `value` at `returned_at`. `frame` is the clauses' own, as
+    /// [`Interpreter::requires`] left it, with the receiver the body ended
+    /// with: a mutating method's clause sees what the method made of it.
+    /// The first clause that is false panics with `P0007`, spanning the
+    /// clause: the function broke its promise. The message names the
+    /// return. A panic while evaluating a clause is passed on as it is.
+    #[inline(never)]
+    fn ensures(
+        &mut self,
+        function: &Function,
+        mut frame: Frame,
+        value: &Value,
+        returned_at: Span,
+    ) -> Result<(), Panic> {
+        let height = frame.slots.len();
+        for ensures in &function.contracts.ensures {
+            if ensures.binds {
+                frame.slots.push(value.clone());
+            }
+            let holds = self.holds(&ensures.clause, &mut frame)?;
+            frame.slots.truncate(height);
+            if !holds {
+                let (line, column) = self.program.line_col(returned_at.start);
+                return Err(Panic::new(
+                    codes::POSTCONDITION_VIOLATED,
+                    format!(
+                        "postcondition violated: `{}` ensures `{}`, \
+                         broken by the return at line {line}, column {column}",
+                        function.name, ensures.clause.text
+                    ),
+                    ensures.clause.span,
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the condition of `clause` holds in `frame`, a frame of the
+    /// clauses' own (see [`program::Contracts`]).
+    fn holds(&mut self, clause: &Clause, frame: &mut Frame) -> Result<bool, Panic> {
+        match self.eval(&clause.cond, frame) {
+            Ok(value) => Ok(value.as_bool()),
+            Err(Unwind::Panic(panic)) => Err(panic),
+            Err(Unwind::Return(..) | Unwind::Break | Unwind::Continue) => {
+                unreachable!(
+                    "lowering refuses a `return` or `?` that would leave a contract, and the \
+                     checker keeps `break` and `continue` inside loops"
+                )
             }
         }
     }
@@ -401,7 +516,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         };
         match &*variant {
             builtins::OK | builtins::SOME => Ok(fields[0].clone()),
-            builtins::NONE => Err(Unwind::Return(Value::none())),
+            builtins::NONE => Err(Unwind::Return(Value::none(), span)),
             _ => {
                 let error = fields[0].clone();
                 let error = match convert {
@@ -409,7 +524,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                     None => error,
                 };
                 debug_assert_eq!(&*ty, builtins::RESULT);
-                Err(Unwind::Return(Value::err(error)))
+                Err(Unwind::Return(Value::err(error), span))
             }
         }
     }
@@ -556,12 +671,12 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 // reference to it.
                 *place_mut(place, frame) = value;
             }
-            Stmt::Return(value) => {
+            Stmt::Return { value, span } => {
                 let value = match value {
                     Some(value) => self.eval(value, frame)?,
                     None => Value::Unit,
                 };
-                return Err(Unwind::Return(value));
+                return Err(Unwind::Return(value, *span));
             }
             Stmt::Break => return Err(Unwind::Break),
             Stmt::Continue => return Err(Unwind::Continue),
@@ -644,7 +759,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             Callee::Function(name) => {
                 let function = self.function(name);
                 self.enter(span)?;
-                let result = self.call(function, args);
+                let result = self.call(function, args, span);
                 self.leave();
                 result
             }
@@ -730,7 +845,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         let result = self.eval(&closure.code.body, &mut frame);
         self.leave();
         match result {
-            Ok(value) | Err(Unwind::Return(value)) => Ok(value),
+            Ok(value) | Err(Unwind::Return(value, _)) => Ok(value),
             Err(Unwind::Panic(panic)) => Err(panic),
             Err(Unwind::Break | Unwind::Continue) => {
                 unreachable!("the checker keeps `break` and `continue` inside loops")
@@ -751,7 +866,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 let function = self.function(name);
                 let taken = std::mem::replace(receiver, Value::Unit);
                 self.enter(span)?;
-                let result = self.call_with(function, Some(taken), args);
+                let result = self.call_with(function, Some(taken), args, span);
                 self.leave();
                 let (value, after) = result?;
                 *receiver = after.expect("a method keeps its receiver");
@@ -817,6 +932,20 @@ fn binding(binds: impl Iterator<Item = bool>, args: Vec<Value>) -> Vec<Value> {
         .filter(|(binds, _)| *binds)
         .map(|(_, arg)| arg)
         .collect()
+}
+
+/// Where a function's body returns when it falls off its end: its tail
+/// expression, or its closing brace when it ends with a statement.
+fn body_end(body: &Expr) -> Span {
+    match &body.kind {
+        ExprKind::Block {
+            value: Some(value), ..
+        } => value.span,
+        _ => Span {
+            start: body.span.end.saturating_sub(1),
+            end: body.span.end,
+        },
+    }
 }
 
 /// The intrinsic named `name`.

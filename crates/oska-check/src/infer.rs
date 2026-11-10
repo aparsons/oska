@@ -15,45 +15,51 @@
 //!   that outlives its `scope` block;
 //! - the **trust rule** (ADR 0006): untrusted text never becomes trusted.
 //!
-//! Trust is solved like a one-bit subtyping problem. Besides `Trusted`
-//! and `Untrusted`, a text type's flag may be a **trust variable**
-//! ([`Trust::Var`]). Each flow between flags is an edge `a ≤ b`, where
-//! trusted ≤ untrusted. A variable is untrusted once untrusted text
-//! reaches it through the edges, and pinned trusted once it reaches a
-//! trusted slot; one that would be both is a [`Mismatch::TrustLost`].
-//! Edges are kept, so text that turns out untrusted later in the body
-//! still reaches every slot it flowed into.
+//! The `cap` rule and the trust rule are solved alike, as one-bit
+//! subtyping problems (see `infer/flags.rs`): plain `fn` ≤ `cap fn`, and
+//! trusted ≤ untrusted. Besides its two fixed values, each flag may be a
+//! variable: a **capability variable** ([`Cap::Var`]) on a function type,
+//! a **trust variable** ([`Trust::Var`]) on a text type. Each flow between
+//! flags is an edge `a ≤ b`. A variable is high (`cap fn`, untrusted) once
+//! a high flag reaches it through the edges, and pinned low once it
+//! reaches a low slot (a plain `fn`, trusted text); one that would be both
+//! is a [`Mismatch::CapLost`] or a [`Mismatch::TrustLost`]. Edges are
+//! kept, so a value that turns out high later in the body still reaches
+//! every slot it flowed into.
 //!
-//! Trust variables give two things:
+//! Flag variables give two things:
 //!
-//! - **Joins.** When an inference variable is solved, every text flag in
-//!   its solution becomes a fresh trust variable that the solving type
-//!   flows into (or out of). So a variable first met with trusted text
-//!   still accepts untrusted text later, and becomes untrusted: the join
-//!   of trusted and untrusted is untrusted. A variable that has already
-//!   flowed into a trusted slot rejects it.
+//! - **Joins.** When an inference variable is solved, every fixed flag in
+//!   its solution becomes a fresh variable that the solving type flows
+//!   into (or out of). So a variable first met with a plain `fn` still
+//!   accepts a `cap fn` later, and becomes a `cap fn`; one first met with
+//!   trusted text accepts untrusted text, and becomes untrusted. The join
+//!   is the high flag. A variable that has already flowed into a low slot
+//!   rejects it. Joins therefore happen wherever values meet in an
+//!   inference variable: list elements, `if` and `match` branches, the
+//!   arguments of a generic for one type parameter, and later
+//!   assignments to a `var` whose type was inferred.
 //! - **Trust polymorphism.** A `#[follows_trust]` prelude operation gets
 //!   one fresh trust variable for each call, in place of every trusted
 //!   text flag in its signature (see `body/calls.rs`). The receiver and
 //!   the text arguments flow into it, and every text type in the result
 //!   is it.
+//!
+//! A check that must decide now whether a type is capability-bearing
+//! reads an open capability flag as a plain `fn` and settles it so
+//! ([`Infer::settle_caps`]): the variable is pinned, and a `cap fn` that
+//! reaches it later is rejected rather than slipping past a decision
+//! already made. A contract's purity is decided this way. A closure is
+//! not: one whose captures are still open ([`Infer::is_open`]) gets a
+//! fresh capability variable, raised at the end of the body if a capture
+//! turned out capability-bearing ([`Infer::raise_cap`]).
+
+mod flags;
 
 use std::collections::HashSet;
 
-use crate::ty::{Trust, Ty};
-
-/// What is known about one trust variable.
-#[derive(Debug, Default, Clone)]
-struct TrustVar {
-    /// Untrusted text flows into it.
-    untrusted: bool,
-    /// It flows into a trusted slot.
-    pinned: bool,
-    /// The variables it flows into.
-    into: Vec<u32>,
-    /// The variables that flow into it.
-    from: Vec<u32>,
-}
+use crate::ty::{Cap, Trust, Ty};
+use flags::{Flag, Flags};
 
 /// Why a value cannot flow where a type is expected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,13 +92,20 @@ impl Polarity {
         }
     }
 
-    /// Whether a one-way flag survives: `a` and `b` say whether each side
-    /// has the flag (is a `cap fn`, is untrusted). A flagged value never
-    /// flows into an unflagged slot.
+    /// Whether the scope flag survives: `a` and `b` say whether each side
+    /// is scoped. A scoped closure never flows into an unscoped slot.
     fn keeps(self, a: bool, b: bool) -> bool {
         match self {
             Polarity::Positive => !a || b,
             Polarity::Negative => !b || a,
+        }
+    }
+
+    /// The flags `a` and `b`, in the order values flow between them.
+    fn order<T>(self, a: T, b: T) -> (T, T) {
+        match self {
+            Polarity::Positive => (a, b),
+            Polarity::Negative => (b, a),
         }
     }
 }
@@ -110,8 +123,26 @@ struct Rules {
 pub struct Infer {
     /// The solution of each variable, by index.
     solutions: Vec<Option<Ty>>,
-    /// Each trust variable, by index.
-    trust: Vec<TrustVar>,
+    /// The trust variables.
+    trust: Flags,
+    /// The capability variables.
+    caps: Flags,
+}
+
+fn trust_flag(trust: Trust) -> Flag {
+    match trust {
+        Trust::Trusted => Flag::Low,
+        Trust::Untrusted => Flag::High,
+        Trust::Var(v) => Flag::Var(v),
+    }
+}
+
+fn cap_flag(cap: Cap) -> Flag {
+    match cap {
+        Cap::Plain => Flag::Low,
+        Cap::Bearing => Flag::High,
+        Cap::Var(v) => Flag::Var(v),
+    }
 }
 
 impl Infer {
@@ -123,8 +154,7 @@ impl Infer {
 
     /// A new trust variable, with nothing flowing into or out of it.
     pub fn fresh_trust(&mut self) -> Trust {
-        self.trust.push(TrustVar::default());
-        Trust::Var(self.trust.len() as u32 - 1)
+        Trust::Var(self.trust.fresh())
     }
 
     /// `ty` with every text flag replaced by a fresh trust variable, so
@@ -134,13 +164,66 @@ impl Infer {
         self.refresh(ty, true)
     }
 
-    /// `ty` with every fixed text flag replaced by a fresh trust variable,
-    /// and with its trust variables kept. An inference variable is solved
-    /// to this: it can join with text of other trust, while text it shares
-    /// a trust variable with (such as the elements of a list it was taken
-    /// from) still sees everything that flows into it later.
+    /// `ty` with every fixed text and capability flag replaced by a fresh
+    /// variable, and with its flag variables kept. An inference variable
+    /// is solved to this: it can join with text of other trust and with
+    /// functions of the other capability, while a value it shares a flag
+    /// variable with (such as the elements of a list it was taken from)
+    /// still sees everything that flows into it later.
     fn generalize(&mut self, ty: &Ty) -> Ty {
-        self.refresh(ty, false)
+        self.refresh(ty, false).map_cap(&mut |cap| match cap {
+            Cap::Var(_) => cap,
+            Cap::Plain | Cap::Bearing => Cap::Var(self.caps.fresh()),
+        })
+    }
+
+    /// Whether `ty`, as solved so far, may still change: it holds an
+    /// unsolved inference variable or a capability variable that is not
+    /// yet a `cap fn`.
+    pub fn is_open(&self, ty: &Ty) -> bool {
+        let ty = self.resolve(ty);
+        let mut open = ty.has_vars();
+        ty.map_cap(&mut |cap| {
+            open |= matches!(cap, Cap::Var(_));
+            cap
+        });
+        open
+    }
+
+    /// A new capability variable, with nothing flowing into or out of it.
+    pub fn fresh_cap(&mut self) -> Cap {
+        Cap::Var(self.caps.fresh())
+    }
+
+    /// Make `cap` a `cap fn`, with every flag it has flowed into. Fails
+    /// when it has reached a plain `fn` slot.
+    pub fn raise_cap(&mut self, cap: Cap) -> bool {
+        self.caps.flow(Flag::High, cap_flag(cap))
+    }
+
+    /// Whether a value with the capability flag `cap` has been used as a
+    /// plain `fn`: it flowed into a plain `fn` slot, or was settled as
+    /// one. Only a capability variable can have been.
+    pub fn used_as_plain(&self, cap: Cap) -> bool {
+        matches!(cap, Cap::Var(v) if self.caps.is_pinned(v))
+    }
+
+    /// Whether the capability variable `from` flows into `to`.
+    pub fn cap_reaches(&self, from: u32, to: u32) -> bool {
+        self.caps.reaches(from, to)
+    }
+
+    /// Settle every capability variable in `ty` that is still open as a
+    /// plain `fn`, for a check that has just read it as one: a `cap fn`
+    /// that reaches it later is rejected. One already a `cap fn` is kept.
+    pub fn settle_caps(&mut self, ty: &Ty) {
+        self.resolve(ty).map_cap(&mut |cap| {
+            if let Cap::Var(v) = cap {
+                // Pinning a variable that is not a `cap fn` cannot fail.
+                self.caps.flow(Flag::Var(v), Flag::Low);
+            }
+            cap
+        });
     }
 
     fn refresh(&mut self, ty: &Ty, variables_too: bool) -> Ty {
@@ -184,7 +267,17 @@ impl Infer {
     /// untrusted text that arrives later.
     fn trust_of(&self, trust: Trust) -> Trust {
         match trust {
-            Trust::Var(v) if self.trust[v as usize].untrusted => Trust::Untrusted,
+            Trust::Var(v) if self.trust.is_high(v) => Trust::Untrusted,
+            other => other,
+        }
+    }
+
+    /// A capability flag as solved so far: a variable is a `cap fn` once
+    /// a `cap fn` reaches it, which is final. Any other variable is kept,
+    /// and reads as a plain `fn` (see [`Infer::settle_caps`]).
+    fn cap_of(&self, cap: Cap) -> Cap {
+        match cap {
+            Cap::Var(v) if self.caps.is_high(v) => Cap::Bearing,
             other => other,
         }
     }
@@ -192,49 +285,7 @@ impl Infer {
     /// Add the edge `a ≤ b`: text of trust `a` flows where `b` is
     /// required. Fails when untrusted text would reach a trusted slot.
     fn trust_flow(&mut self, a: Trust, b: Trust) -> bool {
-        match (a, b) {
-            (Trust::Trusted, _) | (_, Trust::Untrusted) => true,
-            (Trust::Untrusted, Trust::Trusted) => false,
-            (Trust::Untrusted, Trust::Var(v)) => self.mark_untrusted(v),
-            (Trust::Var(v), Trust::Trusted) => self.pin(v),
-            (Trust::Var(x), Trust::Var(y)) => {
-                if x == y {
-                    return true;
-                }
-                self.trust[x as usize].into.push(y);
-                self.trust[y as usize].from.push(x);
-                (!self.trust[x as usize].untrusted || self.mark_untrusted(y))
-                    && (!self.trust[y as usize].pinned || self.pin(x))
-            }
-        }
-    }
-
-    /// Untrusted text reaches `v`, and everything `v` flows into.
-    fn mark_untrusted(&mut self, v: u32) -> bool {
-        let var = &mut self.trust[v as usize];
-        if var.untrusted {
-            return true;
-        }
-        if var.pinned {
-            return false;
-        }
-        var.untrusted = true;
-        let into = var.into.clone();
-        into.into_iter().all(|w| self.mark_untrusted(w))
-    }
-
-    /// `v`, and everything that flows into it, flows into a trusted slot.
-    fn pin(&mut self, v: u32) -> bool {
-        let var = &mut self.trust[v as usize];
-        if var.pinned {
-            return true;
-        }
-        if var.untrusted {
-            return false;
-        }
-        var.pinned = true;
-        let from = var.from.clone();
-        from.into_iter().all(|w| self.pin(w))
+        self.trust.flow(trust_flag(a), trust_flag(b))
     }
 
     /// Follow solved variables at the top of `ty` only.
@@ -263,7 +314,7 @@ impl Infer {
                 params,
                 ret,
             } => Ty::Fn {
-                cap,
+                cap: self.cap_of(cap),
                 scoped,
                 params: params.iter().map(|p| self.resolve(p)).collect(),
                 ret: Box::new(self.resolve(&ret)),
@@ -285,12 +336,13 @@ impl Infer {
     /// - untrusted text never flows into trusted text, while trusted text
     ///   may flow into untrusted.
     ///
-    /// Both rules apply at every depth: covariantly through type arguments
+    /// The rules apply at every depth: covariantly through type arguments
     /// and results, contravariantly through a function type's parameters.
-    /// An inference variable is solved to the type it meets, so a variable
-    /// solved to a plain `fn` rejects a `cap fn` later. Its text flags are
-    /// trust variables, though: one first met with trusted text accepts
-    /// untrusted text later, unless it has flowed into a trusted slot.
+    /// An inference variable is solved to the type it meets, with flag
+    /// variables for its flags: one first met with a plain `fn` accepts a
+    /// `cap fn` later and becomes one, and one first met with trusted text
+    /// accepts untrusted text, unless it has flowed into a plain `fn` or
+    /// trusted slot.
     pub fn unify(&mut self, actual: &Ty, expected: &Ty) -> bool {
         self.flow(actual, expected).is_ok()
     }
@@ -371,11 +423,8 @@ impl Infer {
                 if n1 != n2 || a1.len() != a2.len() {
                     return false;
                 }
-                let trust_kept = !rules.trust
-                    || match polarity {
-                        Polarity::Positive => self.trust_flow(*t1, *t2),
-                        Polarity::Negative => self.trust_flow(*t2, *t1),
-                    };
+                let (from, into) = polarity.order(*t1, *t2);
+                let trust_kept = !rules.trust || self.trust_flow(from, into);
                 trust_kept
                     && a1
                         .iter()
@@ -398,7 +447,8 @@ impl Infer {
                     ret: r2,
                 },
             ) => {
-                let cap_kept = !rules.cap || polarity.keeps(*c1, *c2);
+                let (from, into) = polarity.order(cap_flag(*c1), cap_flag(*c2));
+                let cap_kept = !rules.cap || self.caps.flow(from, into);
                 let scope_kept = !rules.scope || polarity.keeps(*s1, *s2);
                 let flipped = polarity.flip();
                 cap_kept
@@ -430,7 +480,7 @@ impl Infer {
 mod tests {
     use super::*;
 
-    fn func(cap: bool, params: Vec<Ty>) -> Ty {
+    fn func(cap: Cap, params: Vec<Ty>) -> Ty {
         Ty::Fn {
             cap,
             scoped: false,
@@ -441,8 +491,8 @@ mod tests {
 
     #[test]
     fn the_cap_rule_holds_at_every_depth() {
-        let plain = func(false, vec![]);
-        let capped = func(true, vec![]);
+        let plain = func(Cap::Plain, vec![]);
+        let capped = func(Cap::Bearing, vec![]);
         let mut infer = Infer::default();
         assert_eq!(infer.flow(&plain, &capped), Ok(()));
         assert_eq!(infer.flow(&capped, &plain), Err(Mismatch::CapLost));
@@ -452,7 +502,7 @@ mod tests {
             Err(Mismatch::CapLost)
         );
         // Parameters flip the direction.
-        let takes = |t: &Ty| func(false, vec![t.clone()]);
+        let takes = |t: &Ty| func(Cap::Plain, vec![t.clone()]);
         assert_eq!(infer.flow(&takes(&capped), &takes(&plain)), Ok(()));
         assert_eq!(
             infer.flow(&takes(&plain), &takes(&capped)),

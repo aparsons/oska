@@ -57,19 +57,20 @@ use crate::codes;
 use crate::collect::Decls;
 use crate::decl_rules;
 use crate::infer::{Infer, Mismatch};
-use crate::items::{Bound, ImplInfo, Items, Lower};
+use crate::items::{Bound, GenericKey, ImplInfo, Items, Lower};
 use crate::prelude::{self, StdModule};
 use crate::program::lower::{Resolution, Resolutions};
 use crate::program::{self, Callee, Construct};
 use crate::resolve;
 use crate::suggest;
-use crate::ty::{self, Trust, Ty};
+use crate::ty::{self, Cap, Trust, Ty};
 use crate::{Attenuation, AuditSite};
 
 mod attenuation;
 mod audit;
 mod calls;
 mod patterns;
+mod purity;
 mod removed;
 mod results;
 mod secrets;
@@ -85,6 +86,10 @@ pub struct Findings {
     /// The capability attenuations (`body/attenuation.rs`).
     pub attenuations: Vec<Attenuation>,
     pub resolutions: Resolutions,
+    /// What bodies assume of their type parameters, and how they
+    /// instantiate type parameters, for `instantiation.rs`.
+    pub assumed: Vec<crate::instantiation::Assumed>,
+    pub instances: Vec<crate::instantiation::Instance>,
     /// The function whose body is being checked, named as the authority
     /// report names it. Empty outside one.
     pub function: String,
@@ -116,6 +121,7 @@ pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mu
                 let lower = Lower::new(decls)
                     .with_generics(&t.generics)
                     .with_self(Ty::Param(ty::SELF.to_string()))
+                    .with_key(ty::SELF, GenericKey(t.name.span))
                     .with_bound(Bound {
                         param: ty::SELF.to_string(),
                         trait_name: t.name.name.clone(),
@@ -309,6 +315,23 @@ pub struct Body<'c, 'd, 'a> {
     /// Resolutions that depend on a type inference may not have solved
     /// yet, recorded by [`Body::finish`] once the whole body is checked.
     deferred: Vec<(Span, Ty, Deferred)>,
+    /// Closures that captured nothing capability-bearing, but captured a
+    /// value whose type was not yet solved. [`Body::finish`] makes each a
+    /// `cap fn` if a capture turned out capability-bearing.
+    open_closures: Vec<OpenClosure>,
+    /// What the body assumes of its type parameters and how it
+    /// instantiates others, and what its contracts reach, settled once its
+    /// types are solved (`body/purity.rs`).
+    uses: purity::Uses,
+}
+
+/// A closure whose capability flag waits for its captures' types.
+struct OpenClosure {
+    /// Its capability variable.
+    cap: Cap,
+    span: Span,
+    /// Each captured name (`self` for the receiver) with its type.
+    captures: Vec<(String, Ty)>,
 }
 
 /// A resolution recorded once the body's types are solved.
@@ -372,6 +395,8 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             mentions: Vec::new(),
             in_contract: false,
             deferred: Vec::new(),
+            open_closures: Vec::new(),
+            uses: purity::Uses::default(),
         }
     }
 
@@ -478,6 +503,8 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     /// Report bindings whose types inference could not work out, and
     /// record the deferred resolutions.
     fn finish(&mut self) {
+        self.close_closures();
+        self.settle_uses();
         self.record_deferred();
         for (name, ty) in std::mem::take(&mut self.inferred_lets) {
             let ty = self.infer.resolve(&ty);
@@ -510,6 +537,32 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 cond.span,
             );
         }
+    }
+
+    /// Report `exit` (`?` or `return`, at `span`) when it would leave a
+    /// contract: one is being checked, and no closure of its own is open
+    /// to take the exit (`E0282`). Its `operand` is still checked, so
+    /// there is one diagnostic. Returns whether it was reported.
+    pub(super) fn refuse_leaving_contract(
+        &mut self,
+        exit: &str,
+        span: Span,
+        operand: Option<&Expr>,
+    ) -> bool {
+        if !self.in_contract || !self.closures.is_empty() {
+            return false;
+        }
+        self.error(
+            codes::LEAVES_CONTRACT,
+            format!(
+                "a contract is a condition, not a function body: {exit} has nothing to leave here"
+            ),
+            span,
+        );
+        if let Some(operand) = operand {
+            self.infer(operand);
+        }
+        true
     }
 
     // ---- Locals ---------------------------------------------------------
@@ -699,6 +752,11 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     if let StrPart::Hole { path, span } = part {
                         let ty = self.hole(path);
                         self.interpolated_hole(&ty, *span);
+                        let display = purity::Reaches::Dispatch {
+                            what: "interpolation",
+                            method: "`Display.to_string`",
+                        };
+                        self.contract_dispatch(*span, display, vec![ty.clone()]);
                         self.defer(*span, &ty, Deferred::Display);
                         self.infer
                             .join_into(&ty, trust, &self.items.untrusted_holders);
@@ -930,7 +988,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 ident.span,
                 Resolution::FnValue(calls::target(&sig, name.to_string())),
             );
-            let callable = self.instantiate(&sig, None);
+            let callable = self.instantiate(&sig, None, ident.span);
             return callable.into_fn_type();
         }
         if let Some(enum_name) = self.items.bare_variants.get(name).cloned() {
@@ -1247,6 +1305,12 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 if let Some(ty) = self.compared_operands(expr, op, lhs, rhs) {
                     self.require_trait(&ty, ty::EQ, &[], expr.span, &format!("`{}`", op.text()));
                     self.defer(expr.span, &ty, Deferred::Equality);
+                    let what = if op == BinaryOp::Eq { "`==`" } else { "`!=`" };
+                    let eq = purity::Reaches::Dispatch {
+                        what,
+                        method: "`Eq.eq`",
+                    };
+                    self.contract_dispatch(expr.span, eq, vec![ty]);
                 }
                 Ty::bool()
             }
@@ -1387,8 +1451,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     }
 
     /// The `impl` of `trait_name<args>` that the named type `ty`
-    /// implements it through, whose own bounds hold. On success, `infer`
-    /// keeps what matching it solved.
+    /// implements it through, whose own bounds hold, with what its
+    /// generics are instantiated with. On success, `infer` keeps what
+    /// matching it solved.
     fn impl_in(
         &self,
         infer: &mut Infer,
@@ -1396,10 +1461,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         trait_name: &str,
         args: &[Ty],
         depth: usize,
-    ) -> Option<&'c ImplInfo> {
-        self.items.impls.iter().find(|imp| {
+    ) -> Option<(&'c ImplInfo, Vec<Ty>)> {
+        self.items.impls.iter().find_map(|imp| {
             if imp.trait_name != trait_name || imp.trait_args.len() != args.len() {
-                return false;
+                return None;
             }
             let mut attempt = infer.clone();
             let subst: Vec<(String, Ty)> = imp
@@ -1421,10 +1486,11 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     let args: Vec<Ty> = b.args.iter().map(|a| a.substitute(&subst)).collect();
                     self.implements_in(&mut attempt, &param, &b.trait_name, &args, depth + 1)
                 });
-            if holds {
-                *infer = attempt;
+            if !holds {
+                return None;
             }
-            holds
+            *infer = attempt;
+            Some((imp, subst.into_iter().map(|(_, t)| t).collect()))
         })
     }
 
@@ -1434,12 +1500,19 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         let mut trial = self.infer.clone();
         let ty = trial.resolve(ty);
         self.impl_in(&mut trial, &ty, trait_name, args, 0)
+            .map(|(imp, _)| imp)
     }
 
     /// Report `E0265` at `span` when `ty` does not implement
     /// `trait_name<args>`, which `what` needs. On a generic parameter of
     /// this function, the fix adds the bound.
     fn require_trait(&mut self, ty: &Ty, trait_name: &str, args: &[Ty], span: Span, what: &str) {
+        let bound = Bound {
+            param: String::new(),
+            trait_name: trait_name.to_string(),
+            args: args.to_vec(),
+        };
+        self.obligation(ty, bound, span);
         if self.implements(ty, trait_name, args) || self.secret_bound(ty, trait_name, span) {
             return;
         }
@@ -1540,18 +1613,55 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             .any(|(_, ty)| self.infer.resolve(ty).holds_scope());
         let captured = frame
             .captures
-            .into_iter()
+            .iter()
             .find(|(_, ty)| self.bearing(ty))
-            .map(|(name, _)| name);
+            .map(|(name, _)| name.clone());
+        let cap = match captured {
+            Some(_) => Cap::Bearing,
+            // A capture whose type is not solved yet may still turn out
+            // capability-bearing, and one that holds a type parameter may
+            // be instantiated with something capability-bearing: decided
+            // once the body is checked.
+            None if frame
+                .captures
+                .iter()
+                .any(|(_, ty)| self.capture_is_open(ty)) =>
+            {
+                let cap = self.infer.fresh_cap();
+                self.open_closures.push(OpenClosure {
+                    cap,
+                    span,
+                    captures: frame.captures.clone(),
+                });
+                cap
+            }
+            None => Cap::Plain,
+        };
+        if !frame.captures.is_empty() {
+            let unsolved = frame
+                .captures
+                .iter()
+                .any(|(_, ty)| self.infer.resolve(ty).has_vars());
+            self.closure_use(purity::ClosureUse {
+                span,
+                cap,
+                scoped,
+                captures: frame.captures,
+                unsolved,
+            });
+        }
         let ty = Ty::Fn {
-            cap: captured.is_some(),
+            cap,
             scoped,
             params: param_tys,
             ret: Box::new(ret),
         };
         let wants_plain_fn = matches!(
             expected_fn.map(|e| self.infer.shallow(&e)),
-            Some(Ty::Fn { cap: false, .. })
+            Some(Ty::Fn {
+                cap: Cap::Plain,
+                ..
+            })
         );
         match captured {
             Some(name) if wants_plain_fn => {
@@ -1569,9 +1679,62 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
     }
 
-    /// Whether `ty`, as solved so far, is capability-bearing.
+    /// Whether `ty`, as solved so far, is capability-bearing. A function
+    /// type whose capability flag is still open is not; a caller that acts
+    /// on that answer settles the flag with [`Body::settle_all`].
     fn bearing(&self, ty: &Ty) -> bool {
         capability_bearing(&self.infer.resolve(ty), self.decls())
+    }
+
+    /// Settle every open capability flag in `tys` as a plain `fn`, after
+    /// deciding from them that something is pure: a `cap fn` that reaches
+    /// one of them later is `E0270`, so the decision cannot be undone by
+    /// a join further on, such as a later assignment in a loop.
+    fn settle_all(&mut self, tys: &[Ty]) {
+        for ty in tys {
+            self.infer.settle_caps(ty);
+        }
+    }
+
+    /// Decide each closure whose captures were not solved when it was
+    /// checked: one that captured a value that turned out
+    /// capability-bearing is a `cap fn`, which is `E0270` if it has
+    /// already been used as a plain `fn`. So a closure checked before
+    /// `xs.push(out)` cannot carry `out` as a plain `fn` on a loop's next
+    /// pass.
+    ///
+    /// One closure may capture another, so this repeats until no more
+    /// closures turn out to be `cap fn`s.
+    fn close_closures(&mut self) {
+        let mut open = std::mem::take(&mut self.open_closures);
+        loop {
+            let before = open.len();
+            let mut still_open = Vec::new();
+            for closure in open {
+                let bearing = closure
+                    .captures
+                    .iter()
+                    .find(|(_, ty)| self.bearing(ty))
+                    .map(|(name, ty)| (name.clone(), self.infer.resolve(ty)));
+                match bearing {
+                    None => still_open.push(closure),
+                    Some(_) if self.infer.raise_cap(closure.cap) => {}
+                    Some((name, ty)) => self.error(
+                        codes::CAPTURING_CLOSURE,
+                        format!(
+                            "this closure captures `{name}`, which turns out to be the \
+                             capability-bearing `{ty}`, so it is a `cap fn`, but it is used \
+                             as a plain `fn`"
+                        ),
+                        closure.span,
+                    ),
+                }
+            }
+            if still_open.len() == before {
+                break;
+            }
+            open = still_open;
+        }
     }
 
     // ---- Blocks and statements --------------------------------------------
@@ -1655,6 +1818,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 });
             }
             StmtKind::Return(value) => {
+                if self.refuse_leaving_contract("`return`", stmt.span, value.as_ref()) {
+                    return;
+                }
                 let ret = self.ret.clone();
                 match value {
                     Some(value) => {

@@ -8,6 +8,7 @@
 //! [`Resolution::Unsupported`] when it recorded one, and by what the node
 //! is otherwise.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -18,8 +19,8 @@ use oska_syntax::ast::{
 use oska_syntax::Span;
 
 use super::{
-    Arm, Callee, Closure, Construct, Expr, ExprKind, Function, IntType, Param, Part, Pattern,
-    Place, Program, Stmt,
+    Arm, Callee, Clause, Closure, Construct, Contracts, Ensures, Expr, ExprKind, Function, IntType,
+    Param, Part, Pattern, Place, Program, Stmt,
 };
 use crate::items::{FnSig, Items};
 
@@ -86,10 +87,24 @@ pub type Resolutions = HashMap<Span, Resolution>;
 /// Lower every free function of `module`, every method of its inherent
 /// impls, as `Type.method`, and every method of its trait impls, as
 /// `<Type as Trait>.method`: the trait's default methods the impl does
-/// not override included, so every impl is complete.
-pub fn module(module: &Module, items: &Items, resolutions: &Resolutions) -> Program {
-    let lowering = Lowering { resolutions };
-    let mut program = Program::default();
+/// not override included, so every impl is complete. `src` is the
+/// module's source, which contract clauses quote.
+pub fn module(src: &str, module: &Module, items: &Items, resolutions: &Resolutions) -> Program {
+    let lowering = Lowering {
+        src,
+        resolutions,
+        in_contract: Cell::new(false),
+    };
+    let mut program = Program {
+        line_starts: std::iter::once(0)
+            .chain(src.match_indices('\n').map(|(at, _)| at + 1))
+            .collect(),
+        char_tails: src
+            .char_indices()
+            .flat_map(|(at, c)| at + 1..at + c.len_utf8())
+            .collect(),
+        ..Program::default()
+    };
     // Each trait the module declares, by name, for its default methods.
     let traits: HashMap<&str, &[Item]> = module
         .items
@@ -103,7 +118,14 @@ pub fn module(module: &Module, items: &Items, resolutions: &Resolutions) -> Prog
         match &item.kind {
             ItemKind::Fn(f) => {
                 let name = f.name.name.clone();
-                lowering.function(&mut program, name, f, items.fns.get(&f.name.name));
+                let contracts = lowering.contracts(f);
+                lowering.function(
+                    &mut program,
+                    name,
+                    f,
+                    contracts,
+                    items.fns.get(&f.name.name),
+                );
             }
             ItemKind::Use(u) => {
                 if let (Some(first), Some(last)) = (u.path.first(), u.path.last()) {
@@ -153,7 +175,14 @@ pub fn module(module: &Module, items: &Items, resolutions: &Resolutions) -> Prog
                             items.inherent_method(type_name, method),
                         ),
                     };
-                    lowering.function(&mut program, name, f, sig);
+                    // The trait's declaration of the method holds its
+                    // contract, whichever impl runs.
+                    let declared = trait_impl
+                        .and_then(|i| traits.get(i.trait_name.as_str()))
+                        .and_then(|methods| fn_decls(methods).find(|d| d.name.name == *method))
+                        .unwrap_or(f);
+                    let contracts = lowering.contracts(declared);
+                    lowering.function(&mut program, name, f, contracts, sig);
                 }
             }
             ItemKind::Test(test) => program.tests.push(super::Test {
@@ -183,13 +212,29 @@ fn test_name(name: &ast::Expr) -> String {
 }
 
 struct Lowering<'a> {
+    src: &'a str,
     resolutions: &'a Resolutions,
+    /// Whether a contract's condition is being lowered, outside any
+    /// closure in it. A `?` or `return` there would leave the function
+    /// from its contract, which has no meaning, so it lowers to
+    /// `Unsupported`. The checker already rejects it (`E0282`), so this is
+    /// a second line of defence.
+    in_contract: Cell<bool>,
 }
 
 impl Lowering<'_> {
     /// Lower `f`, with signature `sig`, into `program` as `name`, when it
-    /// has a body.
-    fn function(&self, program: &mut Program, name: String, f: &FnDecl, sig: Option<&FnSig>) {
+    /// has a body. It carries `contracts`: those `f` declares, or for a
+    /// method of `impl Trait for Type`, those of the trait's declaration
+    /// of it (the impl declares none of its own, `E0218`).
+    fn function(
+        &self,
+        program: &mut Program,
+        name: String,
+        f: &FnDecl,
+        contracts: Contracts,
+        sig: Option<&FnSig>,
+    ) {
         let Some(body) = &f.body else {
             return;
         };
@@ -209,9 +254,47 @@ impl Lowering<'_> {
             name: name.clone(),
             receiver: f.receiver.is_some(),
             params,
+            contracts,
             body: self.block(body),
         };
         program.functions.insert(name, function);
+    }
+
+    /// The contracts `f` declares, numbered as `f` numbers its
+    /// parameters.
+    fn contracts(&self, f: &FnDecl) -> Contracts {
+        Contracts {
+            params: f.params.iter().map(|p| p.name.name != "_").collect(),
+            requires: f
+                .requires
+                .iter()
+                .map(|clause| self.clause(&clause.cond, clause.span))
+                .collect(),
+            ensures: f
+                .ensures
+                .iter()
+                .map(|clause| Ensures {
+                    clause: self.clause(&clause.cond, clause.span),
+                    binds: clause.binding.name != "_",
+                })
+                .collect(),
+        }
+    }
+
+    /// The clause spanning `span` whose condition is `cond`.
+    fn clause(&self, cond: &ast::Expr, span: Span) -> Clause {
+        let outer = self.in_contract.replace(true);
+        let lowered = self.expr(cond);
+        self.in_contract.set(outer);
+        Clause {
+            cond: lowered,
+            text: self
+                .src
+                .get(cond.span.start..cond.span.end)
+                .unwrap_or_default()
+                .to_string(),
+            span,
+        }
     }
 
     fn block(&self, block: &ast::Block) -> Expr {
@@ -247,7 +330,14 @@ impl Lowering<'_> {
                     span: target.span,
                 }),
             },
-            StmtKind::Return(value) => Stmt::Return(value.as_ref().map(|v| self.expr(v))),
+            StmtKind::Return(_) if self.in_contract.get() => Stmt::Expr(Expr {
+                kind: ExprKind::Unsupported("a `return` in a contract".to_string()),
+                span: stmt.span,
+            }),
+            StmtKind::Return(value) => Stmt::Return {
+                value: value.as_ref().map(|v| self.expr(v)),
+                span: stmt.span,
+            },
             StmtKind::Break => Stmt::Break,
             StmtKind::Continue => Stmt::Continue,
             StmtKind::While { cond, body } => Stmt::While {
@@ -318,13 +408,19 @@ impl Lowering<'_> {
                     captures,
                     captures_self,
                     height,
-                }) => ExprKind::Closure(Arc::new(Closure {
-                    params: params.iter().map(|p| p.name.name != "_").collect(),
-                    captures: captures.clone(),
-                    captures_self: *captures_self,
-                    height: *height,
-                    body: self.expr(body),
-                })),
+                }) => {
+                    // A closure's `return` and `?` leave the closure.
+                    let outer = self.in_contract.replace(false);
+                    let body = self.expr(body);
+                    self.in_contract.set(outer);
+                    ExprKind::Closure(Arc::new(Closure {
+                        params: params.iter().map(|p| p.name.name != "_").collect(),
+                        captures: captures.clone(),
+                        captures_self: *captures_self,
+                        height: *height,
+                        body,
+                    }))
+                }
                 _ => self.unsupported(expr.span, "this closure"),
             },
             ast::ExprKind::List(items) => {
@@ -382,6 +478,9 @@ impl Lowering<'_> {
                     },
                     _ => self.unsupported(expr.span, "this call"),
                 }
+            }
+            ast::ExprKind::Try(_) if self.in_contract.get() => {
+                ExprKind::Unsupported("a `?` in a contract".to_string())
             }
             ast::ExprKind::Try(operand) => match self.resolutions.get(&expr.span) {
                 Some(Resolution::Try(convert)) => ExprKind::Try {

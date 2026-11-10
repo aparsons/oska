@@ -22,8 +22,62 @@ pub fn module(src: &str, module: &Module, decls: &Decls, diagnostics: &mut Vec<D
         if let ItemKind::Fn(f) = &item.kind {
             if f.name.name == "main" {
                 main(src, module, f, decls, diagnostics);
+                main_contract(f, diagnostics);
             }
         }
+        if let ItemKind::Impl(imp) = &item.kind {
+            if imp.trait_ref.is_some() {
+                impl_contracts(&imp.methods, diagnostics);
+            }
+        }
+    }
+}
+
+/// The span of every `requires` and `ensures` clause `f` declares, in
+/// source order.
+fn clause_spans(f: &FnDecl) -> Vec<Span> {
+    let mut spans: Vec<Span> = f
+        .requires
+        .iter()
+        .map(|c| c.span)
+        .chain(f.ensures.iter().map(|c| c.span))
+        .collect();
+    spans.sort_by_key(|span| span.start);
+    spans
+}
+
+/// A method of `impl Trait for Type` is held to the contract its trait
+/// method declares, and has none of its own: the trait is the one place a
+/// method's contract lives (`E0218`).
+fn impl_contracts(methods: &[Item], diagnostics: &mut Vec<Diagnostic>) {
+    for method in methods {
+        let ItemKind::Fn(f) = &method.kind else {
+            continue;
+        };
+        for span in clause_spans(f) {
+            diagnostics.push(Diagnostic::new(
+                codes::IMPL_CONTRACT,
+                format!(
+                    "`{}` implements a trait method, so its contract belongs on the trait's \
+                     declaration of it; move the clause there",
+                    f.name.name
+                ),
+                span,
+            ));
+        }
+    }
+}
+
+/// Nothing calls `main`, so a contract on it has no caller to blame
+/// (`E0219`).
+fn main_contract(f: &FnDecl, diagnostics: &mut Vec<Diagnostic>) {
+    for span in clause_spans(f) {
+        diagnostics.push(Diagnostic::new(
+            codes::MAIN_CONTRACT,
+            "`main` cannot have a contract: nothing calls it, so there is no caller to blame; \
+             check the condition in its body instead",
+            span,
+        ));
     }
 }
 

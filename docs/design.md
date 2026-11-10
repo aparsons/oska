@@ -230,6 +230,7 @@ fn main(fs: Fs, net: Net, args: Args) -> Result<(), AppError> {
 - Any type that contains a capability must be declared with `cap`, for example `cap struct Logger { out: Stdout }`.
 - Omitting `cap` is a compile error that comes with an automatic fix.
 - A function type `fn(T) -> U` accepts only pure closures. Accepting a closure that captures a capability requires `cap fn(T) -> U`.
+- A plain `fn` may flow into a `cap fn` slot, but never the reverse. Where values meet (list elements, `if` and `match` branches, and the arguments of a generic for one type parameter), a plain `fn` and a `cap fn` join to `cap fn`, so `[pure_fn, capturing_closure]` is a `List<cap fn() -> Int>` without an annotation. The checker solves this like trust, with the same one-way mechanism. An explicit `fn` annotation still rejects the capturing closure, and the join never turns a `cap fn` into a plain `fn`: whatever calls the joined closures must declare `cap fn`.
 - A **pure function** has no capability-bearing parameters. It cannot perform effects, and it is deterministic.
 
 There are two deliberate exceptions to the rules above:
@@ -337,8 +338,12 @@ fn withdraw(acct: Account, amount: Int) -> Result<Account, Error>
 ```
 
 - Contracts are machine-checkable specifications. Code an agent writes only has to be *checkable*, not right the first time.
-- A contract may only call pure functions. The compiler enforces this.
-- In v0, contracts are checked at runtime in all builds.
+- A contract may only call pure functions. The compiler enforces this for every call, for the trait impls that `==`, `!=` and interpolation dispatch to, and for generic code: a type parameter that a contract uses cannot be instantiated with a capability-bearing type, and a trait whose contract uses `self` cannot be implemented for one. So evaluating a contract never performs an effect, apart from `dbg(...)`, which a release build rejects as it does everywhere. It is also a plain condition: a `?` or `return` directly in a clause is a compile error.
+- Contracts are checked at runtime in all builds, `--release` included.
+  - `requires` is evaluated on entry, after the arguments and before the body. A false one panics with `P0006`, "precondition violated", at the **call site**: the caller broke the contract.
+  - `ensures` is evaluated whenever the function returns, on every path (falling off the end, an early `return`, and `?`), with `r` bound to the value being returned. A false one panics with `P0007`, "postcondition violated", at the **clause**, and the message names the return that broke it: the function broke its promise.
+  - Both are ordinary panics (exit code 101, the usual JSON shape). A panic while a clause is evaluated is reported unchanged. A function a clause calls keeps its own contract.
+- A trait method's contract is declared on the trait and binds every impl, however the call reaches it: through the trait, a qualified call, or a direct method call. A method of `impl Trait for Type` declares no contract of its own, because the trait is the one place a method's contract lives. `main` declares none either: nothing calls it, so there is no caller to blame. Both are compile errors.
 - Later, the compiler will prove decidable contracts statically with an SMT solver and fall back to runtime checks for the rest. It will report which contracts were proved and which are runtime-checked.
 
 ## Testing

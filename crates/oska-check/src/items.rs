@@ -11,7 +11,7 @@ use oska_syntax::Span;
 
 use crate::authority::capability_bearing;
 use crate::collect::{DeclKind, Decls};
-use crate::ty::{self, Trust, Ty};
+use crate::ty::{self, Cap, Trust, Ty};
 
 /// A function or method signature. Generic parameters appear in the
 /// types as [`Ty::Param`]; instantiate them before use.
@@ -20,6 +20,8 @@ pub struct FnSig {
     pub name: String,
     /// The impl's generic parameters followed by the function's own.
     pub generics: Vec<String>,
+    /// The key of each of `generics`, for one the module declares.
+    pub generic_keys: Vec<Option<GenericKey>>,
     /// The bounds on `generics`.
     pub bounds: Vec<Bound>,
     /// How the function takes `self`, if at all.
@@ -79,6 +81,15 @@ pub struct Bound {
     pub trait_name: String,
     pub args: Vec<Ty>,
 }
+
+/// One generic parameter the module declares, by the span of its name,
+/// or a trait's `Self`, by the span of the trait's name. A body that
+/// assumes something of a type parameter records it under this key, and
+/// every instantiation of the parameter is checked against it
+/// (`instantiation.rs`). The prelude's parameters have no key: no prelude
+/// body is checked, so none assumes anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GenericKey(pub Span);
 
 /// Where a written generic parameter's bounds end, so that a fix can
 /// add one.
@@ -164,6 +175,10 @@ pub struct EnumInfo {
 #[derive(Debug, Clone)]
 pub struct TraitInfo {
     pub generics: Vec<String>,
+    /// The key of each of `generics`, for a trait the module declares.
+    pub generic_keys: Vec<Option<GenericKey>>,
+    /// The key of the trait's `Self`, for a trait the module declares.
+    pub self_key: Option<GenericKey>,
     /// Each method, with `Self` as `Ty::Param("Self")` and the trait's
     /// generics as parameters, and whether it has a default body.
     pub methods: Vec<(FnSig, bool)>,
@@ -176,6 +191,8 @@ pub struct ImplInfo {
     pub trait_args: Vec<Ty>,
     pub target: Ty,
     pub generics: Vec<String>,
+    /// The key of each of `generics`, for an impl the module declares.
+    pub generic_keys: Vec<Option<GenericKey>>,
     pub bounds: Vec<Bound>,
     /// The target is capability-bearing, so its methods with a receiver
     /// are not pure.
@@ -211,19 +228,21 @@ impl ImplInfo {
 
 impl TraitInfo {
     /// The trait's method `sig` as seen through a type: `Self` is
-    /// `self_ty`, the trait's generics are `args`, and `outer` generics
-    /// (an impl's) come before the method's own.
+    /// `self_ty` and the trait's generics are `args`. Seen through the
+    /// impl `outer`, its generics and their bounds come before the
+    /// method's own.
     pub fn method_for(
         &self,
         sig: &FnSig,
         self_ty: &Ty,
         args: &[Ty],
-        outer: &[String],
-        outer_bounds: &[Bound],
+        outer: Option<&ImplInfo>,
     ) -> FnSig {
         let mut subst: Vec<(String, Ty)> = vec![(ty::SELF.to_string(), self_ty.clone())];
         subst.extend(self.generics.iter().cloned().zip(args.iter().cloned()));
-        let bounds = outer_bounds
+        let bounds = outer
+            .map(|imp| imp.bounds.as_slice())
+            .unwrap_or_default()
             .iter()
             .cloned()
             .chain(sig.bounds.iter().map(|b| Bound {
@@ -232,9 +251,22 @@ impl TraitInfo {
                 args: b.args.iter().map(|a| a.substitute(&subst)).collect(),
             }))
             .collect();
+        let (outer_generics, outer_keys) = match outer {
+            Some(imp) => (imp.generics.as_slice(), imp.generic_keys.as_slice()),
+            None => (&[][..], &[][..]),
+        };
         FnSig {
             name: sig.name.clone(),
-            generics: outer.iter().chain(&sig.generics).cloned().collect(),
+            generics: outer_generics
+                .iter()
+                .chain(&sig.generics)
+                .cloned()
+                .collect(),
+            generic_keys: outer_keys
+                .iter()
+                .chain(&sig.generic_keys)
+                .copied()
+                .collect(),
             bounds,
             receiver: sig.receiver,
             self_ty: Some(self_ty.clone()),
@@ -386,6 +418,7 @@ impl Items {
                                     trait_args,
                                     target,
                                     generics: lower.generics.clone(),
+                                    generic_keys: lower.generic_keys(),
                                     bounds: lower.bounds.clone(),
                                     receiver_bearing,
                                     span: (!in_prelude).then_some(item.span),
@@ -436,6 +469,8 @@ impl Items {
                         .collect();
                     let info = TraitInfo {
                         generics: lower.generics.clone(),
+                        generic_keys: lower.generic_keys(),
+                        self_key: (!in_prelude).then_some(GenericKey(t.name.span)),
                         methods,
                     };
                     let key = key_of(decls, &t.name.name, in_prelude);
@@ -488,13 +523,7 @@ impl Items {
             };
             let table = self.trait_impls.entry(type_name.to_string()).or_default();
             for (sig, _) in &info.methods {
-                let mut method = info.method_for(
-                    sig,
-                    &imp.target,
-                    &imp.trait_args,
-                    &imp.generics,
-                    &imp.bounds,
-                );
+                let mut method = info.method_for(sig, &imp.target, &imp.trait_args, Some(imp));
                 if method.receiver.is_method() && imp.receiver_bearing {
                     method.pure = false;
                 }
@@ -553,6 +582,9 @@ pub struct Lower<'d, 'a> {
     /// Where each written generic parameter is, for fixes that add a
     /// bound.
     pub sites: Vec<GenericSite>,
+    /// The key of each generic parameter in scope that the module
+    /// declares, `Self` inside a trait included, innermost last.
+    pub keys: Vec<(String, GenericKey)>,
     pub self_ty: Option<Ty>,
     /// Lowering the prelude or a `std` module: every declared name is in
     /// scope unqualified.
@@ -575,6 +607,7 @@ impl<'d, 'a> Lower<'d, 'a> {
             generics: Vec::new(),
             bounds: Vec::new(),
             sites: Vec::new(),
+            keys: Vec::new(),
             self_ty: None,
             see_all: in_prelude,
         }
@@ -599,8 +632,34 @@ impl<'d, 'a> Lower<'d, 'a> {
                 end: g.bounds.last().map_or(g.name.span.end, |b| b.span.end),
                 has_bounds: !g.bounds.is_empty(),
             });
+            if !self.see_all {
+                self.keys
+                    .push((g.name.name.clone(), GenericKey(g.name.span)));
+            }
         }
         self
+    }
+
+    /// Give the generic parameter `name` the key `key`, as for a trait's
+    /// `Self`.
+    pub fn with_key(mut self, name: &str, key: GenericKey) -> Self {
+        self.keys.push((name.to_string(), key));
+        self
+    }
+
+    /// The key of the generic parameter `name` in scope, if the module
+    /// declares it.
+    pub fn key(&self, name: &str) -> Option<GenericKey> {
+        self.keys
+            .iter()
+            .rev()
+            .find(|(n, _)| n == name)
+            .map(|(_, key)| *key)
+    }
+
+    /// The key of each of `generics`, in order.
+    fn generic_keys(&self) -> Vec<Option<GenericKey>> {
+        self.generics.iter().map(|g| self.key(g)).collect()
     }
 
     /// Bring generic parameters into scope by name only, without bounds,
@@ -660,9 +719,15 @@ impl<'d, 'a> Lower<'d, 'a> {
             .filter(|b| generics.contains(&b.param))
             .cloned()
             .collect();
+        let generic_keys = outer
+            .iter()
+            .chain(&f.generics)
+            .map(|g| (!self.see_all).then_some(GenericKey(g.name.span)))
+            .collect();
         FnSig {
             name: f.name.name.clone(),
             generics,
+            generic_keys,
             bounds,
             receiver: Receiver::of(f),
             self_ty,
@@ -725,7 +790,7 @@ impl<'d, 'a> Lower<'d, 'a> {
                 params,
                 return_type,
             } => Ty::Fn {
-                cap: *cap,
+                cap: Cap::of(*cap),
                 scoped: false,
                 params: params.iter().map(|p| self.ty(p)).collect(),
                 ret: Box::new(return_type.as_ref().map_or(Ty::Unit, |r| self.ty(r))),

@@ -841,7 +841,7 @@ mod access_tests {
     //! which a read-only filesystem calls `write` and a write-only one
     //! `read_to_string` anyway.
 
-    use oska_check::program::{Callee, Expr, ExprKind, Function, Param, Program};
+    use oska_check::program::{Callee, Contracts, Expr, ExprKind, Function, Param, Program};
     use oska_syntax::Span;
 
     use std::path::Path;
@@ -879,6 +879,7 @@ mod access_tests {
                     ty: String::new(),
                     binds: true,
                 }],
+                contracts: Contracts::default(),
                 body: call(method, args.collect()),
             },
         );
@@ -893,8 +894,9 @@ mod access_tests {
             root: Root::Dir(root),
             access,
         }));
+        let main = &program.functions["main"];
         Interpreter::new(program, host)
-            .call(&program.functions["main"], vec![fs])
+            .call(main, vec![fs], main.body.span)
             .expect("no panic")
     }
 

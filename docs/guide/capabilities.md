@@ -233,7 +233,7 @@ fn apply: cap fn (f)
 fn noisy: Stdout (out)
 ```
 
-A plain `fn` may always be used where a `cap fn` is expected. A `cap fn` parameter appears in the authority report as `cap fn (name)` with no capabilities, because a closure's capabilities are not written in its type, but it still makes the function impure.
+A plain `fn` may always be used where a `cap fn` is expected. When a plain `fn` and a `cap fn` meet in one list, in the branches of an `if` or `match`, or as arguments of a generic for one type parameter, the result is a `cap fn`: `[pure_fn, capturing_closure]` is a `List<cap fn() -> Int>`. Writing `List<fn() -> Int>` as the type still rejects the capturing closure. A `cap fn` parameter appears in the authority report as `cap fn (name)` with no capabilities, because a closure's capabilities are not written in its type, but it still makes the function impure.
 
 ## You cannot forge one
 

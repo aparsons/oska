@@ -1,0 +1,31 @@
+// Three contracts in the wrong place: on a method of a trait impl (`E0218`),
+// on `main` (`E0219`), and with a `?` inside the condition (`E0282`).
+
+trait Shape {
+    fn size(self) -> Int
+}
+
+struct Square { side: Int }
+
+impl Shape for Square {
+    fn size(self) -> Int
+        ensures |r| r > 0
+    {
+        self.side
+    }
+}
+
+fn first(xs: List<Int>) -> Option<Int> {
+    xs.get(0)
+}
+
+fn positive(xs: List<Int>) -> Int
+    requires first(xs)? > 0
+{
+    1
+}
+
+fn main()
+    requires 1 > 0
+{
+}

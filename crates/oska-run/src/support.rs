@@ -1,7 +1,7 @@
 //! What the interpreter can run yet.
 //!
 //! Before a program starts, [`unsupported`] walks every function of the
-//! checked program and finds the first node the interpreter cannot run:
+//! checked program, its contracts included, and finds the first node the interpreter cannot run:
 //! one the checked program cannot express yet ([`ExprKind::Unsupported`]),
 //! a call of a function the program lacks, or a call of an intrinsic that
 //! has no runtime implementation. A program that has one is
@@ -10,7 +10,7 @@
 
 use std::ops::ControlFlow;
 
-use oska_check::program::{walk, Callee, Expr, ExprKind, Program, Visit};
+use oska_check::program::{walk, Callee, Expr, ExprKind, Function, Program, Visit};
 use oska_syntax::{Diagnostic, Span};
 
 use crate::intrinsics;
@@ -19,7 +19,7 @@ use crate::panics::codes;
 /// The refusal for the first node in `program`'s functions the
 /// interpreter cannot run, if any.
 pub fn unsupported(program: &Program) -> Option<Diagnostic> {
-    refusal(program, program.functions.values().map(|f| &f.body))
+    refusal(program, program.functions.values().flat_map(Function::code))
 }
 
 /// The refusal for the first node in `program`'s functions or `test`
