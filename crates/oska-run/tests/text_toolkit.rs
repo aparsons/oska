@@ -212,6 +212,16 @@ fn list_dir_names_the_entries_sorted() {
 }
 
 #[test]
+fn list_dir_names_an_empty_directory_and_lists_it_as_empty() {
+    let host = fake_with_files().with_dir("docs/empty");
+    let outcome = run_on(host, LIST_DOCS, &[]);
+    assert_eq!(outcome.stdout, "a.md\nb.md\nempty\nguide\né.md\n");
+    let src = LIST_DOCS.replace("Path.new(\".\")", "Path.new(\"empty\")");
+    let outcome = run_on(fake_with_files().with_dir("docs/empty"), &src, &[]);
+    assert_eq!((outcome.exit_code, outcome.stdout.as_str()), (0, ""));
+}
+
+#[test]
 fn list_dir_lists_a_subdirectory_with_bare_names() {
     let src = LIST_DOCS.replace("Path.new(\".\")", "Path.new(\"guide\")");
     let outcome = run_on(fake_with_files(), &src, &[]);
