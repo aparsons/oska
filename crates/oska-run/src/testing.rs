@@ -256,12 +256,17 @@ impl Host for Recording<'_> {
         self.inner.is_symlink(path)
     }
 
-    fn read_file(&mut self, path: &Path) -> io::Result<String> {
-        self.inner.read_file(path)
+    fn read_file(&mut self, path: &Path, beneath: Option<&Path>) -> io::Result<String> {
+        self.inner.read_file(path, beneath)
     }
 
-    fn write_file(&mut self, path: &Path, contents: &str) -> io::Result<()> {
-        self.inner.write_file(path, contents)
+    fn write_file(
+        &mut self,
+        path: &Path,
+        contents: &str,
+        beneath: Option<&Path>,
+    ) -> io::Result<()> {
+        self.inner.write_file(path, contents, beneath)
     }
 
     fn take_output(&mut self) -> Output {

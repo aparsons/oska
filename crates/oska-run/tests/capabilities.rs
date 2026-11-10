@@ -95,11 +95,16 @@ impl Host for Recording {
     fn is_symlink(&mut self, path: &Path) -> bool {
         self.real.is_symlink(path)
     }
-    fn read_file(&mut self, path: &Path) -> std::io::Result<String> {
-        self.real.read_file(path)
+    fn read_file(&mut self, path: &Path, beneath: Option<&Path>) -> std::io::Result<String> {
+        self.real.read_file(path, beneath)
     }
-    fn write_file(&mut self, path: &Path, contents: &str) -> std::io::Result<()> {
-        self.real.write_file(path, contents)
+    fn write_file(
+        &mut self,
+        path: &Path,
+        contents: &str,
+        beneath: Option<&Path>,
+    ) -> std::io::Result<()> {
+        self.real.write_file(path, contents, beneath)
     }
     fn printed(&self) -> Vec<String> {
         self.stdout.lines().map(str::to_string).collect()
@@ -245,6 +250,166 @@ fn restricting_a_restricted_filesystem_never_widens_it() {
         sandbox.root().display()
     );
     assert_eq!(run_real(&src).stdout, "REFUSED\n");
+}
+
+/// Run `src` on a bare [`RealHost`], no wrapper, and return its exit
+/// code: 0 when `main` returned `Ok`, 1 when it returned `Err`.
+fn exit_code_on_real_host(src: &str) -> i32 {
+    let outcome = run(src, &mut RealHost::new(), &["prog.osk".to_string()]);
+    assert!(
+        outcome.diagnostics.is_empty() && outcome.panic.is_none(),
+        "{src} should run: {outcome:#?}"
+    );
+    outcome.exit_code
+}
+
+/// The exit code of a program that writes `contents` to `path` through a
+/// filesystem restricted to `root`, on a bare [`RealHost`]: 0 when the
+/// write succeeded, 1 when it was refused.
+fn write_direct(root: &Path, path: &str, contents: &str) -> i32 {
+    exit_code_on_real_host(&format!(
+        "fn main(fs: FsWrite) -> Result<(), IoError> {{\n\
+         \x20   fs.restrict_to(\"{}\").write(Path.new(\"{path}\"), \"{contents}\")\n\
+         }}\n",
+        root.display()
+    ))
+}
+
+/// The exit code of a program that reads `path` through a filesystem
+/// restricted to `root`, on a bare [`RealHost`]: 0 when the read
+/// succeeded, 1 when it was refused.
+fn read_direct(root: &Path, path: &str) -> i32 {
+    exit_code_on_real_host(&format!(
+        "fn main(fs: FsRead) -> Result<(), IoError> {{\n\
+         \x20   let _ = fs.restrict_to(\"{}\").read_to_string(Path.new(\"{path}\"))?\n\
+         \x20   Ok(())\n\
+         }}\n",
+        root.display()
+    ))
+}
+
+#[test]
+fn a_write_through_a_dangling_symlink_with_a_trailing_separator_is_refused() {
+    let sandbox = Sandbox::new("write-dangling-slash");
+    let target = sandbox.outside().join("pwned1");
+    sandbox.link("dang", &target);
+    std::os::unix::fs::symlink(&target, sandbox.root().join("sub/dang"))
+        .expect("create a nested symlink");
+    for path in ["dang/", "dang/.", "sub/dang/", "dang//", "sub/dang/."] {
+        assert_eq!(
+            write_confined(&sandbox.root(), path, "pwned"),
+            "REFUSED\n",
+            "writing `{path}`"
+        );
+        assert_eq!(write_direct(&sandbox.root(), path, "pwned"), 1, "{path}");
+        assert!(!target.exists(), "`{path}` wrote outside the root");
+    }
+}
+
+#[test]
+fn a_write_whose_last_component_is_not_a_plain_name_is_refused() {
+    let sandbox = Sandbox::new("write-not-a-name");
+    for path in ["new/", "sub/", "sub/.", ".", "sub/..", "new.txt/"] {
+        assert_eq!(write_direct(&sandbox.root(), path, "x"), 1, "{path}");
+    }
+    assert!(!sandbox.root().join("new").exists());
+    assert!(!sandbox.root().join("new.txt").exists());
+}
+
+#[test]
+fn a_write_to_a_symlink_inside_the_root_is_refused_even_to_an_inside_file() {
+    // The final component is opened without following symlinks, so a
+    // write never goes through one, wherever it points.
+    let sandbox = Sandbox::new("write-symlink-inside");
+    sandbox.link("alias.txt", &sandbox.root().join("sub/nested.txt"));
+    sandbox.link("dangling-inside", &sandbox.root().join("sub/later.txt"));
+    assert_eq!(write_direct(&sandbox.root(), "dangling-inside", "x"), 1);
+    assert!(!sandbox.root().join("sub/later.txt").exists());
+}
+
+#[test]
+fn real_host_opens_a_restricted_file_without_following_a_symlink() {
+    // The host's own guard, behind `confine.rs`: what a symlink swapped
+    // in after the path was checked would meet.
+    let sandbox = Sandbox::new("host-nofollow");
+    let root = sandbox.root();
+    let target = sandbox.outside().join("swapped");
+    sandbox.link("dang", &target);
+    sandbox.link("escape.txt", &sandbox.outside().join("secret.txt"));
+    sandbox.link("alias.txt", &root.join("inside.txt"));
+    let mut host = RealHost::new();
+    assert!(host
+        .write_file(&root.join("dang"), "pwned", Some(&root))
+        .is_err());
+    assert!(!target.exists(), "the dangling symlink was followed");
+    assert!(host
+        .read_file(&root.join("escape.txt"), Some(&root))
+        .is_err());
+    assert!(host
+        .read_file(&root.join("alias.txt"), Some(&root))
+        .is_err());
+    assert!(host
+        .write_file(&root.join("escape.txt"), "pwned", Some(&root))
+        .is_err());
+    assert_eq!(
+        std::fs::read_to_string(sandbox.outside().join("secret.txt")).expect("untouched"),
+        "outside text"
+    );
+}
+
+#[test]
+fn real_host_refuses_a_restricted_file_that_is_not_under_the_root() {
+    let sandbox = Sandbox::new("host-beneath");
+    let root = sandbox.root();
+    let outside = sandbox.outside().join("secret.txt");
+    let mut host = RealHost::new();
+    assert!(host.read_file(&outside, Some(&root)).is_err());
+    assert!(host.write_file(&outside, "pwned", Some(&root)).is_err());
+    assert_eq!(
+        std::fs::read_to_string(&outside).expect("untouched"),
+        "outside text"
+    );
+    // Unrestricted, the same host reads it, through a symlink too.
+    sandbox.link("escape.txt", &outside);
+    assert_eq!(
+        host.read_file(&root.join("escape.txt"), None)
+            .expect("an unrestricted read follows symlinks"),
+        "outside text"
+    );
+    assert_eq!(
+        host.read_file(&root.join("inside.txt"), Some(&root))
+            .expect("a file under the root"),
+        "inside text"
+    );
+}
+
+#[test]
+fn real_host_confines_reads_and_writes_directly() {
+    let sandbox = Sandbox::new("direct");
+    sandbox.link("escape.txt", &sandbox.outside().join("secret.txt"));
+    sandbox.link("out", &sandbox.outside());
+    assert_eq!(read_direct(&sandbox.root(), "inside.txt"), 0);
+    assert_eq!(read_direct(&sandbox.root(), "sub/../inside.txt"), 0);
+    assert_eq!(read_direct(&sandbox.root(), "escape.txt"), 1);
+    assert_eq!(read_direct(&sandbox.root(), "out/secret.txt"), 1);
+    assert_eq!(read_direct(&sandbox.root(), "../outside/secret.txt"), 1);
+    assert_eq!(write_direct(&sandbox.root(), "sub/new.txt", "fresh"), 0);
+    assert_eq!(
+        std::fs::read_to_string(sandbox.root().join("sub/new.txt")).expect("written"),
+        "fresh"
+    );
+    assert_eq!(write_direct(&sandbox.root(), "inside.txt", "again"), 0);
+    assert_eq!(
+        std::fs::read_to_string(sandbox.root().join("inside.txt")).expect("rewritten"),
+        "again"
+    );
+    assert_eq!(write_direct(&sandbox.root(), "out/new.txt", "pwned"), 1);
+    assert_eq!(write_direct(&sandbox.root(), "escape.txt", "pwned"), 1);
+    assert_eq!(
+        std::fs::read_to_string(sandbox.outside().join("secret.txt")).expect("untouched"),
+        "outside text"
+    );
+    assert!(!sandbox.outside().join("new.txt").exists());
 }
 
 // ---- Confinement: what stays allowed -------------------------------------

@@ -64,9 +64,10 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
   1. An empty path is refused, and so is an absolute one, even one inside the root.
   2. The path is joined to the root and canonicalized: `..` is resolved and every symlink followed, in every component.
   3. The result must be the root or lie under it, compared component by component.
-  4. A write may name a file that does not exist yet. Then its parent directory must canonicalize to inside the root, its last component must be a plain name, and it must not be a dangling symlink, which the write would follow.
+  4. A write names its file differently, because the file may not exist yet. The path as written must end in a plain name, not in a separator, `.`, or `..`: `dang/` and `dang/.` are refused, even though path libraries treat them as `dang`. The parent directory must canonicalize to inside the root, and the exact path to be opened, that directory joined with the name, must not be a symlink, dangling or not. A write never follows a symlink in its last component, even one that points inside the root.
+  5. The file is then opened without following a symlink in its last component (`O_NOFOLLOW` on Linux and macOS; elsewhere the checks above stand alone), and the opened file is checked again, by its device and inode, to be the file its path now canonicalizes to, under the root. Only then is it read, or emptied and written: a file is not truncated by the open itself.
 
-  Checking and then opening are two steps, so a concurrent process that swaps a directory for a symlink between them could escape. The interpreter does not defend against an attacker racing it on the same filesystem.
+  **Residual risk.** Checking a path and opening it are still separate steps, so the defence above narrows a race but does not close it. A concurrent process that swaps an *intermediate* directory for a symlink at the right moment can still direct the open outside the root. The re-check then refuses to read or write what was opened, but a write may already have created an empty file there. Closing the race needs the whole path to be resolved beneath a directory handle, as Linux `openat2` with `RESOLVE_BENEATH` does, and `std` does not offer that. The interpreter does not defend against an attacker racing it on the same filesystem.
 
 ## Scopes and tasks
 

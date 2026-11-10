@@ -343,9 +343,15 @@ fn with_access(value: &Value, access: Access) -> Value {
     }))
 }
 
-/// The real path `path` names through `fs`, for `intent`, or why `fs`
-/// may not reach it.
-fn real_path(host: &mut dyn Host, fs: &FsCap, path: &Value, intent: Intent) -> io::Result<PathBuf> {
+/// The real path `path` names through `fs`, for `intent`, with the root
+/// it must stay under when `fs` is restricted, or why `fs` may not reach
+/// it.
+fn real_path<'f>(
+    host: &mut dyn Host,
+    fs: &'f FsCap,
+    path: &Value,
+    intent: Intent,
+) -> io::Result<(PathBuf, Option<&'f Path>)> {
     let allowed = match intent {
         Intent::Read => fs.access.reads(),
         Intent::Write => fs.access.writes(),
@@ -367,8 +373,8 @@ fn real_path(host: &mut dyn Host, fs: &FsCap, path: &Value, intent: Intent) -> i
             io::ErrorKind::InvalidInput,
             "an empty path names no file",
         )),
-        Root::Anywhere => Ok(PathBuf::from(raw)),
-        Root::Dir(root) => confine::resolve(host, root, raw, intent),
+        Root::Anywhere => Ok((PathBuf::from(raw), None)),
+        Root::Dir(root) => Ok((confine::resolve(host, root, raw, intent)?, Some(root))),
         Root::Nowhere => Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "this filesystem capability was restricted to a directory it cannot reach",
@@ -378,15 +384,15 @@ fn real_path(host: &mut dyn Host, fs: &FsCap, path: &Value, intent: Intent) -> i
 
 /// `FsRead.read_to_string(self, path)`.
 fn fs_read_to_string(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    let result =
-        real_path(host, fs_cap(&args[0]), &args[1], Intent::Read).and_then(|p| host.read_file(&p));
+    let result = real_path(host, fs_cap(&args[0]), &args[1], Intent::Read)
+        .and_then(|(path, beneath)| host.read_file(&path, beneath));
     Ok(io_result(result, |text| Value::str(&text)))
 }
 
 /// `FsWrite.write(self, path, contents)`.
 fn fs_write(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
     let result = real_path(host, fs_cap(&args[0]), &args[1], Intent::Write)
-        .and_then(|p| host.write_file(&p, text(&args, 2)));
+        .and_then(|(path, beneath)| host.write_file(&path, text(&args, 2), beneath));
     Ok(io_result(result, |()| Value::Unit))
 }
 
