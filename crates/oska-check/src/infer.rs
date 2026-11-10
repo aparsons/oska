@@ -45,11 +45,14 @@
 //!   the text arguments flow into it, and every text type in the result
 //!   is it.
 //!
-//! A check that reads a capability flag while it is still open, such as
-//! whether a closure captures a `cap fn`, takes it as a plain `fn` and
-//! settles it so ([`Infer::settle_caps`]): the variable is pinned, and a
-//! `cap fn` that reaches it later is rejected rather than slipping past a
-//! decision already made.
+//! A check that must decide now whether a type is capability-bearing
+//! reads an open capability flag as a plain `fn` and settles it so
+//! ([`Infer::settle_caps`]): the variable is pinned, and a `cap fn` that
+//! reaches it later is rejected rather than slipping past a decision
+//! already made. A contract's purity is decided this way. A closure is
+//! not: one whose captures are still open ([`Infer::is_open`]) gets a
+//! fresh capability variable, raised at the end of the body if a capture
+//! turned out capability-bearing ([`Infer::raise_cap`]).
 
 mod flags;
 
@@ -172,6 +175,30 @@ impl Infer {
             Cap::Var(_) => cap,
             Cap::Plain | Cap::Bearing => Cap::Var(self.caps.fresh()),
         })
+    }
+
+    /// Whether `ty`, as solved so far, may still change: it holds an
+    /// unsolved inference variable or a capability variable that is not
+    /// yet a `cap fn`.
+    pub fn is_open(&self, ty: &Ty) -> bool {
+        let ty = self.resolve(ty);
+        let mut open = ty.has_vars();
+        ty.map_cap(&mut |cap| {
+            open |= matches!(cap, Cap::Var(_));
+            cap
+        });
+        open
+    }
+
+    /// A new capability variable, with nothing flowing into or out of it.
+    pub fn fresh_cap(&mut self) -> Cap {
+        Cap::Var(self.caps.fresh())
+    }
+
+    /// Make `cap` a `cap fn`, with every flag it has flowed into. Fails
+    /// when it has reached a plain `fn` slot.
+    pub fn raise_cap(&mut self, cap: Cap) -> bool {
+        self.caps.flow(Flag::High, cap_flag(cap))
     }
 
     /// Settle every capability variable in `ty` that is still open as a

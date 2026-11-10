@@ -304,13 +304,23 @@ fn a_mutating_method_cannot_add_untrusted_text_to_a_list_of_trusted_text() {
 }
 
 #[test]
-fn a_closure_that_read_a_flag_as_plain_fixes_it_across_loop_iterations() {
-    // The closure is a plain `fn` because `fs` holds no `cap fn` yet; on
-    // the loop's second pass it would capture one.
+fn a_closure_used_as_a_plain_fn_cannot_capture_a_later_joined_cap_fn() {
+    // `fs` holds no `cap fn` when the closure is passed as a plain `fn`;
+    // on the loop's second pass it would capture one.
     let src = program(&format!(
         "    var fs = [pure]\n    var n = 0\n    for i in 0..2 {{\n        n = n + run(|| all_cap(fs))\n        fs = [{CAPTURING}]\n    }}\n    n"
     ));
-    assert_errors(&src, &[("E0270", CAPTURING)]);
+    assert_errors(&src, &[("E0270", "|| all_cap(fs)")]);
+}
+
+#[test]
+fn a_closure_capturing_a_later_joined_cap_fn_is_a_cap_fn() {
+    let body = format!("    var fs = [pure]\n    let g = || all_cap(fs)\n    fs = [{CAPTURING}]");
+    assert_ok(&program(&format!("{body}\n    run_cap(g)")));
+    assert_errors(
+        &program(&format!("{body}\n    run(g)")),
+        &[("E0270", "|| all_cap(fs)")],
+    );
 }
 
 #[test]
@@ -345,5 +355,47 @@ fn a_join_in_parameter_position_accepts_only_what_every_branch_accepts() {
     assert_errors(&program(&body), &[("E0270", CAPTURING)]);
     assert_ok(&program(
         "    let h = if c { |g: fn() -> Int| g() } else { |g: cap fn() -> Int| g() }\n    h(pure)",
+    ));
+}
+
+// ---- Captures whose type is solved after the closure -------------------------
+
+/// Takes a plain `fn` that returns capabilities, so it is pure.
+const HELPER: &str = "fn helper(f: fn() -> List<Stdout>) -> Int {\n    f().len()\n}\n";
+
+#[test]
+fn a_closure_whose_capture_turns_out_capability_bearing_is_a_cap_fn() {
+    // `xs` has no known element type when the closure is checked; on the
+    // loop's second pass the closure would hand `out` to a pure function.
+    let src = format!(
+        "{HELPER}fn f(out: Stdout) -> Int {{\n    var xs = []\n    var n = 0\n    for i in 0..2 {{\n        let g = || xs\n        xs.push(out)\n        n = n + helper(g)\n    }}\n    n\n}}"
+    );
+    assert_errors(&src, &[("E0270", "|| xs")]);
+}
+
+#[test]
+fn a_closure_whose_capture_turns_out_capability_bearing_may_be_used_as_a_cap_fn() {
+    assert_ok(
+        "fn f(out: Stdout) -> Int {\n    var xs = []\n    let g = || xs.len()\n    xs.push(out)\n    g()\n}",
+    );
+    assert_ok(
+        "fn run_cap(f: cap fn() -> Int) -> Int {\n    f()\n}\n\
+         fn f(out: Stdout) -> Int {\n    var xs = []\n    let g = || xs.len()\n    xs.push(out)\n    run_cap(g)\n}",
+    );
+}
+
+#[test]
+fn a_closure_capturing_a_closure_that_turns_out_a_cap_fn_is_a_cap_fn() {
+    // `h` is checked before `g`, and only `g` turning into a `cap fn`
+    // makes what `h` captured capability-bearing.
+    let src = "fn keep(f: fn() -> List<cap fn() -> List<Stdout>>) -> Int {\n    0\n}\n\
+               fn f(out: Stdout) -> Int {\n    var gs = []\n    let h = || gs\n    var xs = []\n    let g = || xs\n    gs.push(g)\n    xs.push(out)\n    keep(h)\n}";
+    assert_errors(src, &[("E0270", "|| gs")]);
+}
+
+#[test]
+fn a_closure_whose_capture_stays_plain_data_stays_a_plain_fn() {
+    assert_ok(&format!(
+        "{FNS}fn f() -> Int {{\n    var xs = []\n    let g = || xs.len()\n    xs.push(1)\n    run(g)\n}}"
     ));
 }
