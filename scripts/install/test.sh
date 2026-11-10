@@ -270,6 +270,15 @@ test_refuses_a_version_that_was_never_released() {
   assert_refused download_failed
 }
 
+test_fails_cleanly_while_the_site_has_no_release() {
+  mkdir site
+  # What the site generator writes before stage-site.sh adds a release.
+  printf '{\n  "version": "0.1.0",\n  "docs": "main"\n}\n' >site/latest.json
+  install --json >out.json && fail "installed with no release"
+  [ "$(jq -r .error out.json)" = download_failed ] || fail "error is not download_failed"
+  [ ! -e home/.oska ] || fail "created ~/.oska"
+}
+
 test_refuses_to_download_over_plain_http() {
   with_good_install
   SITE_URL=http://oskalang.dev assert_refused insecure_url
