@@ -101,8 +101,8 @@ fn main(io: Stdout, fs: Fs) -> Result<(), IoError> {
   ],
   "audit": [],
   "attenuations": [
-    {"function":"main","method":"restrict_to","span":{"start":210,"end":233},"source":"Fs","result":"Dir","root":"notes"},
-    {"function":"main","method":"read_only","span":{"start":210,"end":245},"source":"Dir","result":"DirRead","root":null}
+    {"function":"main","method":"restrict_to","path":"main.osk","span":{"start":210,"end":233},"source":"Fs","result":"Dir","root":"notes"},
+    {"function":"main","method":"read_only","path":"main.osk","span":{"start":210,"end":245},"source":"Dir","result":"DirRead","root":null}
   ]
 }
 ```

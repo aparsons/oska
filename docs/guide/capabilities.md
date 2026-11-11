@@ -61,8 +61,8 @@ fn main(io: Stdout, fs: Fs) -> Result<(), IoError> {
 fn word_count: DirRead (docs)
 fn double: pure
 fn main: Stdout (io), Fs (fs)
-  Fs -> Dir: restrict_to "notes" (bytes 250..273)
-  Dir -> DirRead: read_only (bytes 250..285)
+  main.osk:11:16: Fs -> Dir: restrict_to "notes" (bytes 250..273)
+  main.osk:11:16: Dir -> DirRead: read_only (bytes 250..285)
 ```
 
 Reading the report: `word_count` can only read beneath one directory, `double` can do nothing, and `main` can write to standard output and attenuate the filesystem. The indented lines under `main` are **attenuations**: they narrow `Fs` to a `Dir` for `notes`, then to a `DirRead`. Every attenuation is listed under the function it is in. Reviewing a change means reading the report, not the bodies.
@@ -107,8 +107,8 @@ fn main(io: Stdout, fs: Fs) -> Result<(), IoError> {
 ```console cmd=check
 fn save: DirWrite (fs)
 fn main: Stdout (io), Fs (fs)
-  Fs -> Dir: restrict_to "notes" (bytes 174..197)
-  Dir -> DirWrite: write_only (bytes 207..225)
+  main.osk:6:17: Fs -> Dir: restrict_to "notes" (bytes 174..197)
+  main.osk:7:10: Dir -> DirWrite: write_only (bytes 207..225)
 ```
 
 The report shows `main` restricting the filesystem to `notes`, so a reviewer sees where the program can reach without reading its code. A root that is a string literal or a module constant is printed; any other root, such as one built from a variable, is printed as `computed at runtime`. `read_only` and `write_only` take no root.
@@ -151,7 +151,7 @@ fn main(io: Stdout, fs: FsRead) -> Result<(), IoError> {
 ```console cmd=check
 fn view: DirRead (everything)
 fn main: Stdout (io), FsRead (fs)
-  FsRead -> DirRead: restrict_to "/" (bytes 197..216)
+  main.osk:6:21: FsRead -> DirRead: restrict_to "/" (bytes 197..216)
 ```
 
 ### What the runtime refuses
@@ -255,7 +255,7 @@ fn main(net: Net) {
 ```
 
 ```console cmd=run stream=stderr
-main.osk: error[E0370]: `oskac run` cannot grant `Net` yet: the capability has no runtime (bytes 18..21)
+main.osk:1:19: error[E0370]: `oskac run` cannot grant `Net` yet: the capability has no runtime (bytes 18..21)
 ```
 
 ## Two exceptions

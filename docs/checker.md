@@ -2,7 +2,9 @@
 
 `oskac check <file.osk> [--format=json] [--release]` type-checks one file against the embedded prelude. The rules it enforces are in the "Type checking" section of [`design.md`](design.md). This page describes what it prints. The codes `oskac run` reports, its refusals and panics (`P`-codes), are in [`runtime.md`](runtime.md).
 
-The exit code is non-zero when there are diagnostics. Without `--format=json`, diagnostics go to stderr and the authority report to stdout, one function per line, such as `fn main: Stdout (io), FsRead (fs)` or `fn add: pure`. Each function's attenuations follow it, indented, such as `  FsRead -> DirRead: restrict_to "docs" (bytes 88..112)`. One line per audit site comes last, such as `audit: assume_trusted (bytes 52..73)`.
+The exit code is non-zero when there are diagnostics. Without `--format=json`, diagnostics go to stderr and the authority report to stdout, one function per line, such as `fn main: Stdout (io), FsRead (fs)` or `fn add: pure`. Each function's attenuations follow it, indented, such as `  prog.osk:5:5: FsRead -> DirRead: restrict_to "docs" (bytes 88..112)`. One line per audit site comes last, such as `prog.osk:3:5: audit: assume_trusted (bytes 52..73)`.
+
+Every diagnostic, attenuation and audit line starts with its **location**, `path:line:col`, which editors and terminals jump to: the path of the file it is in, then the 1-based line and column (in characters) where its span starts, such as `prog.osk:2:9: error[E0200]: ...`. For a single file the path is as given on the command line; in a package it is relative to the package, such as `src/util/text.osk`. The byte span follows, within that file.
 
 An **attenuation** is a call of one of the prelude's attenuation methods (`restrict_to`, `restrict_to_file`, `read_only`, `write_only`) on a built-in capability. The report lists each one under the function it is in (a closure's belong to the function around it), with the capability kind it narrows from and to, and its root:
 
@@ -39,7 +41,7 @@ A `test` body sees one built-in value, `t`, of the prelude type `TestContext`. I
 ```json
 {
   "diagnostics": [
-    {"code":"E0200","message":"unknown type `Strng`; did you mean `String`?","span":{"start":8,"end":13},"fix":{"message":"replace with `String`","edits":[{"span":{"start":8,"end":13},"replacement":"String"}]}}
+    {"code":"E0200","message":"unknown type `Strng`; did you mean `String`?","path":"prog.osk","span":{"start":8,"end":13},"fix":{"message":"replace with `String`","edits":[{"span":{"start":8,"end":13},"replacement":"String"}]}}
   ],
   "functions": [
     {"name":"count_lines","authority":["FsRead"],"via":[{"param":"fs","capabilities":["FsRead"]}],"pure":false},
@@ -47,15 +49,16 @@ A `test` body sees one built-in value, `t`, of the prelude type `TestContext`. I
     {"name":"add","authority":[],"via":[],"pure":true}
   ],
   "audit": [
-    {"kind":"assume_trusted","span":{"start":412,"end":430}}
+    {"kind":"assume_trusted","path":"prog.osk","span":{"start":412,"end":430}}
   ],
   "attenuations": [
-    {"function":"count_lines","method":"restrict_to","span":{"start":150,"end":176},"source":"FsRead","result":"DirRead","root":"docs"}
+    {"function":"count_lines","method":"restrict_to","path":"prog.osk","span":{"start":150,"end":176},"source":"FsRead","result":"DirRead","root":"docs"}
   ]
 }
 ```
 
-- **`diagnostics`**, in source order. Each uses the same object as parser diagnostics (see [`ast.md`](ast.md)): `code`, `message`, `span` (byte offsets), and `fix` when the repair is unambiguous. A parse error is reported alone, with empty `functions`, `audit` and `attenuations`.
+- **`path`**, on every diagnostic, audit site and attenuation: the file the entry is in. For a single file it is the path as given on the command line, such as `prog.osk`; in a package it is relative to the package, such as `src/util/text.osk`. The entry's `span`, and a fix's edits, are byte offsets within that file. Entries are listed file by file, and in source order within a file.
+- **`diagnostics`**, in source order. Each uses the same object as parser diagnostics (see [`ast.md`](ast.md)): `code`, `message`, `path`, `span` (byte offsets), and `fix` when the repair is unambiguous. A parse error is reported alone for its file, with that file's `functions`, `audit` and `attenuations` empty.
 - **`functions`**: one entry per function and `impl` method, in source order. The report is produced even when there are diagnostics.
   - `name`: the function's name, or `Type.method` for a method.
   - `authority`: the built-in capabilities the function can reach, in order of first appearance, without repeats. `cap` types are expanded through their fields, and type arguments are expanded, so `List<Stdout>` reaches `Stdout`. Each capability is reported by its own name: an attenuation to a directory shows as the directory capability it gives, such as `DirRead`.

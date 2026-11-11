@@ -15,6 +15,13 @@
 //! A `use std.*` adds that module's declarations (`src/std/*.osk`) to
 //! the prelude the file sees.
 //!
+//! [`check_package`] checks a [`Package`], every module of a program
+//! with its manifest, and returns one report in which every diagnostic,
+//! audit site and attenuation names its file (`package.rs`).
+//! [`check_file`], what `oskac check <file.osk>` runs, is a package of
+//! one module. [`check_module`] checks a source string alone, naming no
+//! file.
+//!
 //! The pipeline runs in order: collect declarations, resolve names, check
 //! declarations (`cap`, `main`, capitalization, recursive types, where
 //! `Scope` may appear: `decl_rules.rs`), check that functions, methods,
@@ -32,7 +39,7 @@
 //! which carry a machine-applicable fix is in `docs/checker.md`; a
 //! conformance test keeps it in step with `codes`.
 
-use oska_syntax::{json_escape, Diagnostic, Span};
+use oska_syntax::{json_escape, Diagnostic, Location, Span};
 
 mod authority;
 mod body;
@@ -43,6 +50,7 @@ mod decl_rules;
 mod infer;
 mod instantiation;
 mod items;
+mod package;
 mod prelude;
 pub mod program;
 mod recursion;
@@ -52,6 +60,8 @@ mod suggest;
 mod traits;
 mod ty;
 mod usefulness;
+
+pub use package::{check_file, check_package, ModuleSource, Package, ENTRY_MODULE};
 
 /// The diagnostic codes this crate reports.
 pub(crate) mod codes {
@@ -151,12 +161,14 @@ pub struct CheckReport {
 
 /// A call a reviewer must see: one that vouches for untrusted text, or
 /// exposes a secret. `body/audit.rs` decides which calls these are.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditSite {
     /// What the call does.
     pub kind: AuditKind,
     /// The whole call expression.
     pub span: Span,
+    /// The file the call is in, named by a package check.
+    pub location: Option<Location>,
 }
 
 /// What an audit site does.
@@ -194,11 +206,13 @@ impl std::fmt::Display for AuditSite {
 }
 
 impl AuditSite {
-    /// Render as a single-line JSON object.
+    /// Render as a single-line JSON object, with a `path` before `span`
+    /// when the site names its file.
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"kind\":\"{}\",\"span\":{{\"start\":{},\"end\":{}}}}}",
+            "{{\"kind\":\"{}\",{}\"span\":{{\"start\":{},\"end\":{}}}}}",
             self.kind.as_str(),
+            path_json(&self.location),
             self.span.start,
             self.span.end
         )
@@ -224,6 +238,8 @@ pub struct Attenuation {
     pub result: String,
     /// The root it narrows to.
     pub root: AttenuationRoot,
+    /// The file the call is in, named by a package check.
+    pub location: Option<Location>,
 }
 
 /// The root an attenuation narrows to.
@@ -250,29 +266,36 @@ impl Attenuation {
     }
 
     /// One line of the human-readable report, such as
-    /// `FsRead -> DirRead: restrict_to "docs" (bytes 52..73)`.
+    /// `FsRead -> DirRead: restrict_to "docs" (bytes 52..73)`, after
+    /// `path:line:col: ` when the attenuation names its file.
     pub fn to_human(&self) -> String {
         let root = match &self.root {
             AttenuationRoot::Absent => String::new(),
             AttenuationRoot::Literal(text) => format!(" {text:?}"),
             AttenuationRoot::Computed => " computed at runtime".to_string(),
         };
+        let location = self
+            .location
+            .as_ref()
+            .map_or_else(String::new, |l| format!("{l}: "));
         format!(
-            "{} -> {}: {}{root} (bytes {}..{})",
+            "{location}{} -> {}: {}{root} (bytes {}..{})",
             self.source, self.result, self.method, self.span.start, self.span.end
         )
     }
 
-    /// Render as a single-line JSON object.
+    /// Render as a single-line JSON object, with a `path` before `span`
+    /// when the attenuation names its file.
     pub fn to_json(&self) -> String {
         let root = self.root_text().map_or_else(
             || "null".to_string(),
             |text| format!("\"{}\"", json_escape(text)),
         );
         format!(
-            "{{\"function\":\"{}\",\"method\":\"{}\",\"span\":{{\"start\":{},\"end\":{}}},\"source\":\"{}\",\"result\":\"{}\",\"root\":{root}}}",
+            "{{\"function\":\"{}\",\"method\":\"{}\",{}\"span\":{{\"start\":{},\"end\":{}}},\"source\":\"{}\",\"result\":\"{}\",\"root\":{root}}}",
             json_escape(&self.function),
             json_escape(&self.method),
+            path_json(&self.location),
             self.span.start,
             self.span.end,
             json_escape(&self.source),
@@ -332,7 +355,9 @@ impl CheckReport {
     /// The authority report as `oskac check <path>` prints it on standard
     /// output: one line per function and method, each followed by its
     /// attenuations (indented), then one line per audit site, each ending
-    /// in a newline. Diagnostics are not part of it.
+    /// in a newline. Diagnostics are not part of it. An audit line starts
+    /// with its location, `path:line:col`, when the report names its file
+    /// (a package check), and with `path` otherwise.
     pub fn authority_to_human(&self, path: &str) -> String {
         let mut out = String::new();
         let mut listed = vec![false; self.attenuations.len()];
@@ -351,7 +376,10 @@ impl CheckReport {
             }
         }
         for site in &self.audit {
-            out.push_str(&format!("{path}: {site}\n"));
+            match &site.location {
+                Some(location) => out.push_str(&format!("{location}: {site}\n")),
+                None => out.push_str(&format!("{path}: {site}\n")),
+            }
         }
         out
     }
@@ -412,6 +440,14 @@ impl FunctionAuthority {
             self.pure
         )
     }
+}
+
+/// `"path":"...",` for an entry that names its file, and nothing for one
+/// that does not.
+fn path_json(location: &Option<Location>) -> String {
+    location.as_ref().map_or_else(String::new, |l| {
+        format!("\"path\":\"{}\",", json_escape(&l.path))
+    })
 }
 
 fn json_strings(items: &[String]) -> String {

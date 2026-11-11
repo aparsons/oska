@@ -51,7 +51,7 @@ Every command but `explain` takes exactly one source file. A command line is par
 
 Human-readable output:
 
-- Diagnostics go to standard error, one per line, as `file.osk: error[E0210]: message (bytes 7..13)`. A diagnostic with a fix is followed by an indented `fix: ...` line.
+- Diagnostics go to standard error, one per line, as `file.osk:1:8: error[E0210]: message (bytes 7..13)`: the file, then the line and column where the span starts. A diagnostic with a fix is followed by an indented `fix: ...` line.
 - The authority report goes to standard output: one line per function and method, each followed by its attenuations (indented), then one line per audit site.
 
 ```oska
@@ -67,7 +67,7 @@ fn vouch(name: Untrusted<String>, io: Stdout) -> Result<(), IoError> {
 ```console cmd=check
 fn double: pure
 fn vouch: Stdout (io)
-main.osk: audit: assume_trusted (bytes 126..147)
+main.osk:6:16: audit: assume_trusted (bytes 126..147)
 ```
 
 The line `fn vouch: Stdout (io)` names each capability and the parameter that supplies it. A `cap fn` parameter appears as `cap fn (name)`. A parse error is reported alone, with no authority lines. Terms are in the [glossary](../../GLOSSARY.md). The checker's behavior and its full code table are in the [checker notes](../checker.md).

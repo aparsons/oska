@@ -9,6 +9,6 @@
   ],
   "audit": [],
   "attenuations": [
-    {"function":"main","method":"restrict_to","span":{"start":1342,"end":1361},"source":"FsRead","result":"DirRead","root":"."}
+    {"function":"main","method":"restrict_to","path":"examples/capabilities.osk","span":{"start":1342,"end":1361},"source":"FsRead","result":"DirRead","root":"."}
   ]
 }

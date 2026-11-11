@@ -31,9 +31,9 @@ Standard output and standard error are separate, so `dbg` never mixes into the o
 `dbg` is one of two deliberate exceptions to "effects need capabilities" (the other is a panic). Because it has an effect without a capability, it must not ship: checking with `--release` rejects every `dbg(...)` with `E0216`, and every `todo()` with `E0293`. The `E0216` diagnostic carries a fix that keeps the argument and removes the call.
 
 ```console cmd=check release stream=stderr
-main.osk: error[E0216]: `dbg(...)` is not allowed in a release build (bytes 90..112)
+main.osk:4:13: error[E0216]: `dbg(...)` is not allowed in a release build (bytes 90..112)
     fix: remove `dbg`, keeping its argument
-main.osk: error[E0216]: `dbg(...)` is not allowed in a release build (bytes 125..138)
+main.osk:5:13: error[E0216]: `dbg(...)` is not allowed in a release build (bytes 125..138)
     fix: remove `dbg`, keeping its argument
 ```
 
@@ -61,7 +61,7 @@ fn main(io: Stdout) -> Result<(), IoError> {
 ```
 
 ```console cmd=run stream=stderr
-main.osk: error[P0004]: division by zero: `10 / 0` (bytes 46..59)
+main.osk:2:5: error[P0004]: division by zero: `10 / 0` (bytes 46..59)
 ```
 
 Output written before the panic stays written, so `computing` was printed. A panic has a stable `P`-code, a message, and the byte span of the expression that panicked. The process exits with code 101.

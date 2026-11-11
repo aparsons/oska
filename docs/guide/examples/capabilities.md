@@ -62,7 +62,7 @@ fn AppError.usage: pure
 fn AppError.from: pure
 fn AppError.to_string: pure
 fn main: Stdout (io), FsRead (fs)
-  FsRead -> DirRead: restrict_to "." (bytes 1342..1361)
+  capabilities.osk:44:17: FsRead -> DirRead: restrict_to "." (bytes 1342..1361)
 ```
 
 Read the report as a reviewer would:

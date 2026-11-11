@@ -153,11 +153,11 @@ fn check_file(path: &str, Flags { json, release, .. }: Flags) -> ExitCode {
     let Some(src) = read_source(path) else {
         return ExitCode::FAILURE;
     };
-    let report = oska_check::check_module_with(&src, oska_check::CheckOptions { release });
+    let report = oska_check::check_file(path, &src, oska_check::CheckOptions { release });
     if json {
         print!("{}", report.to_json());
     } else {
-        print_diagnostics(path, &report.diagnostics);
+        print_diagnostics(&report.diagnostics);
         print!("{}", report.authority_to_human(path));
     }
     if report.diagnostics.is_empty() {
@@ -167,10 +167,14 @@ fn check_file(path: &str, Flags { json, release, .. }: Flags) -> ExitCode {
     }
 }
 
-/// Print diagnostics to stderr, each with its fix, as `oskac check` does.
-fn print_diagnostics(path: &str, diagnostics: &[oska_syntax::Diagnostic]) {
+/// Print diagnostics to stderr, each after its location,
+/// `path:line:col`, and with its fix, as `oskac check` does.
+fn print_diagnostics(diagnostics: &[oska_syntax::Diagnostic]) {
     for diagnostic in diagnostics {
-        eprintln!("{path}: {diagnostic}");
+        match &diagnostic.location {
+            Some(location) => eprintln!("{location}: {diagnostic}"),
+            None => eprintln!("{diagnostic}"),
+        }
         if let Some(fix) = &diagnostic.fix {
             eprintln!("    fix: {}", fix.message);
         }
@@ -200,7 +204,7 @@ fn run_file(path: &str, Flags { json, .. }: Flags, args: &[String]) -> ExitCode 
             eprintln!("{}", diagnostic.to_json());
         }
     } else {
-        print_diagnostics(path, &reported);
+        print_diagnostics(&locate(reported, path, &src));
     }
     ExitCode::from(u8::try_from(outcome.exit_code).unwrap_or(u8::MAX))
 }
@@ -223,11 +227,29 @@ fn test_file(path: &str, flags: Flags) -> ExitCode {
     if json {
         println!("{}", report.to_json());
     } else if !report.diagnostics.is_empty() {
-        print_diagnostics(path, &report.diagnostics);
+        print_diagnostics(&locate(report.diagnostics.clone(), path, &src));
     } else {
         print!("{}", report.to_human(path));
     }
     ExitCode::from(u8::try_from(report.exit_code()).unwrap_or(u8::MAX))
+}
+
+/// Name the file of each of `diagnostics` that does not name one yet:
+/// they are in the single file at `path`, whose text is `src`. `run` and
+/// `test` locate their diagnostics for the human output only: their JSON
+/// keeps its shape until runtime panics name their file.
+fn locate(
+    diagnostics: Vec<oska_syntax::Diagnostic>,
+    path: &str,
+    src: &str,
+) -> Vec<oska_syntax::Diagnostic> {
+    diagnostics
+        .into_iter()
+        .map(|d| match d.location {
+            Some(_) => d,
+            None => d.locate(path, src),
+        })
+        .collect()
 }
 
 /// `oskac explain`: print the catalog entry of a diagnostic code, as JSON

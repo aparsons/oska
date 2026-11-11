@@ -50,6 +50,7 @@ When parsing fails, `--format=json` prints one diagnostic object instead of the 
 
 - `code` is stable: tools should match on it, not on `message`. Lexer codes are `E00xx` and parser codes are `E01xx`; the full list is in the module docs of `crates/oska-syntax/src/parser.rs`.
 - `span` uses the same byte ranges as nodes.
+- `path`, between `message` and `span`, names the file the diagnostic is in, when the command knows it: `oskac check`, `run` and `test` give every diagnostic one (see [`checker.md`](checker.md)); `oskac parse` does not.
 - `fix` is optional and omitted when absent. It is present only when the edit is unambiguous, so a tool can apply it without asking. Each edit replaces the source text at its `span` with `replacement`: an empty span inserts, and an empty `replacement` deletes. Edit spans refer to the original source and never overlap. Applying every edit fixes that diagnostic, though later errors in the file may remain.
 
 Diagnostics that carry a fix:

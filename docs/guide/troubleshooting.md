@@ -301,9 +301,9 @@ fn main(io: Stdout) -> Result<(), IoError> {
 ```
 
 ```console cmd=check release stream=stderr
-main.osk: error[E0216]: `dbg(...)` is not allowed in a release build (bytes 57..63)
+main.osk:2:13: error[E0216]: `dbg(...)` is not allowed in a release build (bytes 57..63)
     fix: remove `dbg`, keeping its argument
-main.osk: error[E0293]: `todo()` is not allowed in a release build; finish this code first (bytes 81..87)
+main.osk:3:18: error[E0293]: `todo()` is not allowed in a release build; finish this code first (bytes 81..87)
 ```
 
 ### Runtime: `E0370`, `E0371`, `E0380`, and `P` codes

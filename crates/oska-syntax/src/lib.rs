@@ -250,8 +250,51 @@ pub struct Diagnostic {
     pub code: &'static str,
     pub message: String,
     pub span: Span,
-    /// A machine-applicable fix, when the right edit is unambiguous.
+    /// A machine-applicable fix, when the right edit is unambiguous. Its
+    /// edits are in the same file as `span`.
     pub fix: Option<Fix>,
+    /// The file the span is in, and where it starts. A package check names
+    /// the file of every diagnostic; checking a source string alone does not.
+    pub location: Option<Box<Location>>,
+}
+
+/// Where a report entry is: the file, and the line and column its span
+/// starts at. Spans stay byte offsets within that file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Location {
+    /// The file's path: package-relative, such as `src/util/text.osk`, or
+    /// as given on the command line for a single file.
+    pub path: String,
+    /// 1-based.
+    pub line: usize,
+    /// 1-based, in characters.
+    pub column: usize,
+}
+
+impl Location {
+    /// The location of byte `offset` of `src`, the text of the file at
+    /// `path`. An offset past the end means the end; one inside a
+    /// character means that character.
+    pub fn new(path: impl Into<String>, src: &str, offset: usize) -> Self {
+        let mut end = offset.min(src.len());
+        while !src.is_char_boundary(end) {
+            end -= 1;
+        }
+        let before = &src[..end];
+        let line_start = before.rfind('\n').map_or(0, |at| at + 1);
+        Location {
+            path: path.into(),
+            line: before.matches('\n').count() + 1,
+            column: before[line_start..].chars().count() + 1,
+        }
+    }
+}
+
+/// Renders as `path:line:column`, which editors and terminals jump to.
+impl fmt::Display for Location {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}:{}", self.path, self.line, self.column)
+    }
 }
 
 /// Source edits that resolve a diagnostic. Applying all of them to the
@@ -298,7 +341,15 @@ impl Diagnostic {
             message: message.into(),
             span,
             fix: None,
+            location: None,
         }
+    }
+
+    /// Name the file the diagnostic is in: `src` is the text of the file at
+    /// `path`.
+    pub fn locate(mut self, path: &str, src: &str) -> Self {
+        self.location = Some(Box::new(Location::new(path, src, self.span.start)));
+        self
     }
 
     /// Attach a fix made of `edits`.
@@ -311,14 +362,19 @@ impl Diagnostic {
     }
 
     /// Render as a single-line JSON object for machine consumers. The
-    /// `fix` field follows `span`, and is omitted when there is no fix.
+    /// `path` field comes before `span`, and is omitted when the diagnostic
+    /// names no file. The `fix` field follows `span`, and is omitted when
+    /// there is no fix.
     pub fn to_json(&self) -> String {
         let mut out = format!(
-            "{{\"code\":\"{}\",\"message\":\"{}\",\"span\":{}",
+            "{{\"code\":\"{}\",\"message\":\"{}\"",
             self.code,
-            json_escape(&self.message),
-            span_json(self.span)
+            json_escape(&self.message)
         );
+        if let Some(location) = &self.location {
+            out.push_str(&format!(",\"path\":\"{}\"", json_escape(&location.path)));
+        }
+        out.push_str(&format!(",\"span\":{}", span_json(self.span)));
         if let Some(fix) = &self.fix {
             let edits: Vec<String> = fix
                 .edits
