@@ -55,6 +55,17 @@ dir=$(tree)
 expect_pass "a clean tree" "$dir"
 
 dir=$(tree)
+mkdir -p "$dir/.claude/worktrees/agent/crates/oska-check/src/std"
+printf 'gitdir: elsewhere\n' >"$dir/.claude/worktrees/agent/.git"
+cp "$dir/crates/oska-check/src/std/rt.osk" "$dir/.claude/worktrees/agent/crates/oska-check/src/std/rt.osk"
+expect_pass "a nested checkout with its own std.rt is skipped" "$dir"
+
+dir=$(tree)
+mkdir -p "$dir/vendor/src"
+printf 'fn f() {\n    rt_mem_load8(0)\n}\n' >"$dir/vendor/src/f.osk"
+expect_refused "an intrinsic in a plain subdirectory without .git" "$dir" "vendor/src/f.osk:2:"
+
+dir=$(tree)
 printf 'fn main() {\n    rt_sys_exit_group(0)\n}\n' >"$dir/app/src/main.osk"
 expect_refused "a system-call intrinsic in user code" "$dir" "app/src/main.osk:2:"
 

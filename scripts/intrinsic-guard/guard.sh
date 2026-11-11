@@ -10,7 +10,9 @@
 # the tree except std.rt's own source must contain none, and none may import
 # `std.rt`. The scan reads raw text, so a mention in a comment or a string
 # counts too. It does not depend on git, so untracked files are scanned.
-# It skips build output (target/) and .git.
+# It skips build output (target/), .git, and nested checkouts: a directory
+# below the root with its own `.git`, such as a git worktree an agent works
+# in, is another tree with its own copy of std.rt and is scanned on its own.
 
 set -euo pipefail
 
@@ -32,7 +34,8 @@ while IFS= read -r -d '' file; do
   if grep -nE -e "$names" -e "$import" -- "$file" | sed "s#^#${file#./}:#"; then
     found=1
   fi
-done < <(find . \( -name target -o -name .git \) -prune -o -type f -name '*.osk' -print0)
+done < <(find . \( -name target -o -name .git -o \( -type d ! -path . -exec test -e '{}/.git' \; \) \) \
+  -prune -o -type f -name '*.osk' -print0)
 
 if [ "$found" -ne 0 ]; then
   printf 'intrinsic-guard: the lines above name a std.rt intrinsic or import std.rt; only %s may (ADR 0013)\n' "$allowed" >&2
