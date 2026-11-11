@@ -24,6 +24,7 @@ pub fn rt_sys_fstat(fd: Int, buf: Int) -> Int
 pub fn rt_sys_mmap(addr: Int, length: Int, prot: Int, flags: Int, fd: Int, offset: Int) -> Int
 pub fn rt_sys_munmap(addr: Int, length: Int) -> Int
 pub fn rt_sys_clock_gettime(clock: Int, tp: Int) -> Int
+pub fn rt_sys_ioctl(fd: Int, request: Int, arg: Int) -> Int
 pub fn rt_sys_getrandom(buf: Int, length: Int, flags: Int) -> Int
 // Ends the process; does not return.
 pub fn rt_sys_exit_group(status: Int) -> Int
@@ -55,6 +56,8 @@ pub fn rt_mem_sar(a: Int, n: Int) -> Int
 // sizes; they never overflow-panic.
 pub fn rt_mem_add(a: Int, b: Int) -> Int
 pub fn rt_mem_sub(a: Int, b: Int) -> Int
+// Wrapping multiplication of 64-bit words (the low 64 bits of the product).
+pub fn rt_mem_mul(a: Int, b: Int) -> Int
 
 // ---- Values ----------------------------------------------------------------
 //
@@ -70,6 +73,11 @@ pub fn rt_mem_text(text: String) -> Int
 pub fn rt_mem_as_text(object: Int) -> String
 // The address of `path`'s object, and the `Path` whose object is at
 // `object` (the reference passes, as for text).
+// The same for a `Secret<String>` and an `IoError` (an object of a count and
+// its one field).
+pub fn rt_mem_secret(secret: Secret<String>) -> Int
+pub fn rt_mem_as_secret(object: Int) -> Secret<String>
+pub fn rt_mem_as_io_error(object: Int) -> IoError
 pub fn rt_mem_path(path: Path) -> Int
 pub fn rt_mem_as_path(object: Int) -> Path
 // The address of the runtime's writable words, zero when the program
@@ -83,7 +91,15 @@ pub fn rt_mem_globals() -> Int
 //   0 to 7  the allocator's free lists, one per size class: a block of
 //           class c is 16 << c bytes, header included;
 //   8       the next free byte of the chunk blocks are carved from;
-//   9       the end of that chunk.
+//   9       the end of that chunk;
+//   10      argc, 11 argv (the address of the pointer array), 12 envp, all
+//           from the kernel's initial stack (`process_init`);
+//   13      the standard output buffer (65536 bytes, mapped on first use),
+//           14 the bytes in it, 15 how it is flushed (0 not decided yet, 1
+//           when full, 2 after every line, for a terminal);
+//   16      the standard input buffer, 17 where the unread bytes start,
+//           18 where they end, 19 its capacity;
+//   20      the state of `Random`'s generator, 21 whether it is seeded.
 //
 // Every object the allocator gives out is preceded by a header word: its
 // block's size class, or for an object too large for any class, minus
@@ -950,49 +966,146 @@ pub fn stack_new(size: Int) -> Int {
 
 // ---- Start-up and exit -----------------------------------------------------
 //
-// The native backend generates the entry point, `_start`. It calls `main`
-// with its capabilities and then, if `main` returned `Err(e)`, calls
-// `main_failed` with `e`'s `Display` text. Otherwise it calls `exit(0)`.
+// The native backend generates the entry point, `_start`. It gives
+// `process_init` the stack pointer the kernel started the process with,
+// calls `main` with its capabilities and then, if `main` returned
+// `Err(e)`, calls `main_failed` with `e`'s `Display` text. Otherwise it
+// calls `exit(0)`.
 
-// Ends the process with `status`.
+// Remember the program's arguments and environment: `sp` is the kernel's
+// initial stack pointer, which points at argc, then the argv pointers
+// and a null, then the envp pointers and a null.
+pub fn process_init(sp: Int) {
+    let argc = rt_mem_load64(sp)
+    let argv = rt_mem_add(sp, 8)
+    rt_mem_store64(global(10), argc)
+    rt_mem_store64(global(11), argv)
+    rt_mem_store64(global(12), rt_mem_add(argv, rt_mem_shl(argc + 1, 3)))
+}
+
+// Ends the process with `status`, after writing what standard output
+// still holds.
 pub fn exit(status: Int) {
+    let _ = flush_stdout()
     let _ = rt_sys_exit_group(status)
 }
 
 // `main` returned an error whose text is `message`: it goes to stderr on a
 // line of its own, and the process exits with 1, as the interpreter does.
 pub fn main_failed(message: String) {
-    print_line(2, message)
+    let _ = print_error_line(message)
     exit(1)
 }
 
 // ---- Standard output and error ---------------------------------------------
-
-pub fn stdout_println(io: Stdout, line: String) -> Result<(), IoError> {
-    print_line(1, line)
-    Ok(())
-}
-
-pub fn stderr_println(io: Stderr, line: String) -> Result<(), IoError> {
-    print_line(2, line)
-    Ok(())
-}
-
-// Write `line` and a newline to the file descriptor `fd`.
 //
-// A failed write cannot be returned as an `IoError` until the runtime can
-// build text, so it ends the process with a message and exit code 1, the
-// code an unhandled `IoError` from `main` gives.
-fn print_line(fd: Int, line: String) {
-    if write_text(fd, line) < 0 || write_text(fd, "\n") < 0 {
-        let _ = write_text(2, "the native runtime cannot report a failed write yet\n")
-        exit(1)
+// Standard output is buffered: a line is appended to a 65536-byte buffer,
+// which is written when it is full, when anything is written to stderr
+// (so the two stay in order on a terminal), before a line is read from
+// stdin, and at exit and panic. When stdout is a terminal each line is
+// written as it is printed.
+
+fn stdout_buffer_size() -> Int {
+    65536
+}
+
+// The standard output buffer, mapped on first use, and how it is flushed.
+fn stdout_buffer() -> Int {
+    var buf = rt_mem_load64(global(13))
+    if buf == 0 {
+        buf = map(0, stdout_buffer_size(), 3, private_anonymous())
+        rt_mem_store64(global(13), buf)
+        // `ioctl(1, TCGETS, termios)` succeeds only on a terminal.
+        let termios = alloc(64)
+        let tty = rt_sys_ioctl(1, 21505, rt_mem_add(termios, 8))
+        free(termios)
+        rt_mem_store64(global(15), if tty == 0 { 2 } else { 1 })
     }
+    buf
+}
+
+// Write the buffered output: 0, or the negative `errno` of the failed
+// write. What the buffer held is gone either way.
+pub fn flush_stdout() -> Int {
+    let used = rt_mem_load64(global(14))
+    if used == 0 {
+        return 0
+    }
+    rt_mem_store64(global(14), 0)
+    write_all(1, rt_mem_load64(global(13)), used)
+}
+
+// Append the text object at `object` and a newline to standard output:
+// 0, or the negative `errno` of a write that failed.
+fn stdout_put_line(object: Int) -> Int {
+    let length = text_length(object)
+    let data = text_data(object)
+    let buf = stdout_buffer()
+    var used = rt_mem_load64(global(14))
+    if used + length + 1 > stdout_buffer_size() {
+        let flushed = flush_stdout()
+        if flushed < 0 {
+            return flushed
+        }
+        used = 0
+        if length + 1 > stdout_buffer_size() {
+            // Too long to buffer: written as it is, then the newline.
+            let body = write_all(1, data, length)
+            if body < 0 {
+                return body
+            }
+            rt_mem_store8(buf, 10)
+            return write_all(1, buf, 1)
+        }
+    }
+    copy_bytes(rt_mem_add(buf, used), data, length)
+    rt_mem_store8(rt_mem_add(buf, used + length), 10)
+    rt_mem_store64(global(14), used + length + 1)
+    if rt_mem_load64(global(15)) == 2 {
+        return flush_stdout()
+    }
+    0
+}
+
+// `Stdout.println`.
+pub fn stdout_println(io: Stdout, line: String) -> Result<(), IoError> {
+    let failed = stdout_put_line(rt_mem_text(line))
+    if failed < 0 {
+        return Err(io_error(-failed))
+    }
+    Ok(())
+}
+
+// `Stderr.println`: standard output first, then the line and its newline
+// in one write.
+pub fn stderr_println(io: Stderr, line: String) -> Result<(), IoError> {
+    let failed = print_error_line(line)
+    if failed < 0 {
+        return Err(io_error(-failed))
+    }
+    Ok(())
+}
+
+// Write `line` and a newline to stderr, in one write, after flushing
+// stdout: 0, or the negative `errno` of the write that failed.
+fn print_error_line(line: String) -> Int {
+    let _ = flush_stdout()
+    let object = rt_mem_text(line)
+    let length = text_length(object)
+    let out = text_new(length + 1)
+    copy_bytes(text_data(out), text_data(object), length)
+    rt_mem_store8(rt_mem_add(text_data(out), length), 10)
+    let result = write_all(2, text_data(out), length + 1)
+    free(out)
+    result
 }
 
 // Write all of `text` to `fd`: 0, or the negative `errno` of the write
-// that failed.
+// that failed. A write to stderr is preceded by stdout's.
 fn write_text(fd: Int, text: String) -> Int {
+    if fd == 2 {
+        let _ = flush_stdout()
+    }
     let object = rt_mem_text(text)
     write_all(fd, rt_mem_add(object, 16), rt_mem_load64(rt_mem_add(object, 8)))
 }
@@ -1004,6 +1117,9 @@ fn write_all(fd: Int, buf: Int, count: Int) -> Int {
     var left = count
     while left > 0 {
         let written = rt_sys_write(fd, at, left)
+        if written == -4 {
+            continue
+        }
         if written < 0 {
             return written
         }
@@ -1011,4 +1127,404 @@ fn write_all(fd: Int, buf: Int, count: Int) -> Int {
         left = rt_mem_sub(left, written)
     }
     0
+}
+
+// ---- I/O errors ------------------------------------------------------------
+
+// The `IoError` for the system error `errno`, worded as Rust's standard
+// library does: the C library's message, then `(os error N)`.
+fn io_error(errno: Int) -> IoError {
+    let what = errno_message(errno)
+    let number = int_to_string(errno)
+    let message = "{what} (os error {number})"
+    let object = alloc(16)
+    let text = rt_mem_text(message)
+    retain(text)
+    rt_mem_store64(rt_mem_add(object, 8), text)
+    rt_mem_as_io_error(object)
+}
+
+fn errno_message(errno: Int) -> String {
+    if errno == 1 {
+        return "Operation not permitted"
+    }
+    if errno == 2 {
+        return "No such file or directory"
+    }
+    if errno == 4 {
+        return "Interrupted system call"
+    }
+    if errno == 5 {
+        return "Input/output error"
+    }
+    if errno == 9 {
+        return "Bad file descriptor"
+    }
+    if errno == 11 {
+        return "Resource temporarily unavailable"
+    }
+    if errno == 13 {
+        return "Permission denied"
+    }
+    if errno == 21 {
+        return "Is a directory"
+    }
+    if errno == 22 {
+        return "Invalid argument"
+    }
+    if errno == 27 {
+        return "File too large"
+    }
+    if errno == 28 {
+        return "No space left on device"
+    }
+    if errno == 32 {
+        return "Broken pipe"
+    }
+    "Unknown error"
+}
+
+// ---- Standard input --------------------------------------------------------
+
+// `Stdin.read_line`: the next line without its line break (`\n`, or
+// `\r\n`), the last line even when it has none, or `None` at end of input.
+// Standard output is written first, so a prompt shows before the wait.
+pub fn stdin_read_line(io: Stdin) -> Result<Option<String>, IoError> {
+    let _ = flush_stdout()
+    if rt_mem_load64(global(16)) == 0 {
+        rt_mem_store64(global(16), map(0, 65536, 3, private_anonymous()))
+        rt_mem_store64(global(19), 65536)
+    }
+    // How many unread bytes have been looked at for a newline.
+    var scanned = 0
+    while true {
+        let pos = rt_mem_load64(global(17))
+        let end = rt_mem_load64(global(18))
+        let buf = rt_mem_load64(global(16))
+        var at = pos + scanned
+        while at < end && rt_mem_load8(rt_mem_add(buf, at)) != 10 {
+            at = at + 1
+        }
+        if at < end {
+            var stop = at
+            if stop > pos && rt_mem_load8(rt_mem_add(buf, stop - 1)) == 13 {
+                stop = stop - 1
+            }
+            let line = text_from(rt_mem_add(buf, pos), stop - pos)
+            rt_mem_store64(global(17), at + 1)
+            return Ok(Some(line))
+        }
+        scanned = end - pos
+        let read = stdin_fill()
+        if read < 0 {
+            return Err(io_error(-read))
+        }
+        if read == 0 {
+            let rest = rt_mem_load64(global(18)) - rt_mem_load64(global(17))
+            if rest == 0 {
+                return Ok(None)
+            }
+            let line = text_from(rt_mem_add(rt_mem_load64(global(16)), rt_mem_load64(global(17))), rest)
+            rt_mem_store64(global(17), rt_mem_load64(global(18)))
+            return Ok(Some(line))
+        }
+    }
+    Ok(None)
+}
+
+// Read more of standard input after the unread bytes, moving them to the
+// buffer's start and growing the buffer when they fill it: the number of
+// bytes read, 0 at end of input, or the negative `errno` of a failed read.
+fn stdin_fill() -> Int {
+    let pos = rt_mem_load64(global(17))
+    var end = rt_mem_load64(global(18))
+    var buf = rt_mem_load64(global(16))
+    var capacity = rt_mem_load64(global(19))
+    if pos > 0 {
+        copy_bytes(buf, rt_mem_add(buf, pos), end - pos)
+        end = end - pos
+        rt_mem_store64(global(17), 0)
+        rt_mem_store64(global(18), end)
+    }
+    if end == capacity {
+        let bigger = map(0, capacity * 2, 3, private_anonymous())
+        copy_bytes(bigger, buf, end)
+        let _ = rt_sys_munmap(buf, capacity)
+        buf = bigger
+        capacity = capacity * 2
+        rt_mem_store64(global(16), buf)
+        rt_mem_store64(global(19), capacity)
+    }
+    var read = rt_sys_read(0, rt_mem_add(buf, end), capacity - end)
+    while read == -4 {
+        read = rt_sys_read(0, rt_mem_add(buf, end), capacity - end)
+    }
+    if read > 0 {
+        rt_mem_store64(global(18), end + read)
+    }
+    read
+}
+
+// A new text of the `count` bytes at `from`.
+fn text_from(from: Int, count: Int) -> String {
+    let object = text_new(count)
+    copy_bytes(text_data(object), from, count)
+    rt_mem_as_text(object)
+}
+
+// The text of the C string at `at`.
+fn cstr_text(at: Int) -> String {
+    var length = 0
+    while rt_mem_load8(rt_mem_add(at, length)) != 0 {
+        length = length + 1
+    }
+    text_from(at, length)
+}
+
+// ---- Arguments and environment ---------------------------------------------
+
+// `Args.get`: argument `index` (the program at 0), or `None` past the end.
+pub fn args_get(args: Args, index: Int) -> Option<String> {
+    if index < 0 || index >= rt_mem_load64(global(10)) {
+        return None
+    }
+    Some(cstr_text(rt_mem_load64(rt_mem_add(rt_mem_load64(global(11)), rt_mem_shl(index, 3)))))
+}
+
+// The address of the value of the environment variable `name`, a C
+// string, or 0 when it is not set (or `name` could not be a variable's).
+fn env_lookup(name: String) -> Int {
+    let object = rt_mem_text(name)
+    let length = text_length(object)
+    let data = text_data(object)
+    if length == 0 {
+        return 0
+    }
+    var i = 0
+    while i < length {
+        let byte = rt_mem_load8(rt_mem_add(data, i))
+        if byte == 61 || byte == 0 {
+            return 0
+        }
+        i = i + 1
+    }
+    var entries = rt_mem_load64(global(12))
+    while rt_mem_load64(entries) != 0 {
+        let entry = rt_mem_load64(entries)
+        var j = 0
+        while j < length && rt_mem_load8(rt_mem_add(entry, j)) == rt_mem_load8(rt_mem_add(data, j)) {
+            j = j + 1
+        }
+        if j == length && rt_mem_load8(rt_mem_add(entry, j)) == 61 {
+            return rt_mem_add(entry, length + 1)
+        }
+        entries = rt_mem_add(entries, 8)
+    }
+    0
+}
+
+// `Env.get`.
+pub fn env_get(env: Env, name: String) -> Option<String> {
+    let found = env_lookup(name)
+    if found == 0 {
+        return None
+    }
+    Some(cstr_text(found))
+}
+
+// `Env.secret`: a `Secret` object (a count and the one field), or the
+// word 0 when the variable is not set, for the generated code to panic
+// (`P0020`).
+pub fn env_secret(env: Env, name: String) -> Secret<String> {
+    let found = env_lookup(name)
+    if found == 0 {
+        return rt_mem_as_secret(0)
+    }
+    let value = cstr_text(found)
+    let object = alloc(16)
+    let text = rt_mem_text(value)
+    retain(text)
+    rt_mem_store64(rt_mem_add(object, 8), text)
+    rt_mem_as_secret(object)
+}
+
+// Panic (`P0020`): `start` and `end` are the report around the message.
+pub fn panic_missing_secret(start: String, end: String, env: Env, name: String) {
+    let _ = write_text(2, start)
+    let _ = write_text(2, "the secret `")
+    let _ = write_text(2, name)
+    let _ = write_text(2, "` is not set in the environment")
+    let _ = write_text(2, end)
+    exit(101)
+}
+
+// `Secret.constant_time_eq`.
+pub fn secret_constant_time_eq(secret: Secret<String>, other: String) -> Bool {
+    let a = rt_mem_load64(rt_mem_add(rt_mem_secret(secret), 8))
+    text_equal_constant(a, rt_mem_text(other))
+}
+
+// `Secret.constant_time_eq_secret`.
+pub fn secret_constant_time_eq_secret(secret: Secret<String>, other: Secret<String>) -> Bool {
+    let a = rt_mem_load64(rt_mem_add(rt_mem_secret(secret), 8))
+    let b = rt_mem_load64(rt_mem_add(rt_mem_secret(other), 8))
+    text_equal_constant(a, b)
+}
+
+// Whether the text objects `a` and `b` are equal, in time that depends on
+// their lengths but not on where they first differ.
+fn text_equal_constant(a: Int, b: Int) -> Bool {
+    let length = text_length(a)
+    let other = text_length(b)
+    var diff = rt_mem_xor(length, other)
+    let shorter = if length < other { length } else { other }
+    var i = 0
+    while i < shorter {
+        let x = rt_mem_load8(rt_mem_add(text_data(a), i))
+        let y = rt_mem_load8(rt_mem_add(text_data(b), i))
+        diff = rt_mem_or(diff, rt_mem_xor(x, y))
+        i = i + 1
+    }
+    diff == 0
+}
+
+// ---- Clock and randomness --------------------------------------------------
+
+// `Clock.now_millis`: the realtime clock, in milliseconds.
+pub fn clock_now_millis(clock: Clock) -> Int {
+    let object = alloc(24)
+    let _ = rt_sys_clock_gettime(0, rt_mem_add(object, 8))
+    let seconds = rt_mem_load64(rt_mem_add(object, 8))
+    let nanos = rt_mem_load64(rt_mem_add(object, 16))
+    free(object)
+    seconds * 1000 + nanos / 1000000
+}
+
+// `Random.next_int`: SplitMix64, as the interpreter's, seeded on first use
+// from `getrandom` (from the clock if that fails). From 0 up to, but
+// excluding, 2^63.
+pub fn random_next_int(random: Random) -> Int {
+    if rt_mem_load64(global(21)) == 0 {
+        let object = alloc(24)
+        let got = rt_sys_getrandom(rt_mem_add(object, 8), 8, 0)
+        var seed = rt_mem_load64(rt_mem_add(object, 8))
+        if got != 8 {
+            let _ = rt_sys_clock_gettime(0, rt_mem_add(object, 8))
+            let nanos = rt_mem_load64(rt_mem_add(object, 16))
+            seed = rt_mem_xor(rt_mem_load64(rt_mem_add(object, 8)), rt_mem_shl(nanos, 20))
+        }
+        free(object)
+        rt_mem_store64(global(20), seed)
+        rt_mem_store64(global(21), 1)
+    }
+    let state = rt_mem_add(rt_mem_load64(global(20)), -7046029254386353131)
+    rt_mem_store64(global(20), state)
+    var z = state
+    z = rt_mem_mul(rt_mem_xor(z, rt_mem_shr(z, 30)), -4658895280553007687)
+    z = rt_mem_mul(rt_mem_xor(z, rt_mem_shr(z, 27)), -7723592293110705685)
+    rt_mem_shr(rt_mem_xor(z, rt_mem_shr(z, 31)), 1)
+}
+
+// ---- Debugging -------------------------------------------------------------
+
+// `dbg`'s line: standard output first, then `[dbg] `, `text` and a
+// newline in one write. A failed write loses the line, not the program.
+pub fn dbg_write(text: String) {
+    let _ = print_error_line("[dbg] {text}")
+}
+
+// `dbg` of a `Bool`.
+pub fn debug_bool(value: Bool) -> String {
+    if value {
+        return "true"
+    }
+    "false"
+}
+
+// `dbg` of an integer, read as unsigned when `unsigned` (a `U64`).
+pub fn debug_int(value: Int, unsigned: Bool) -> String {
+    int_text(value, unsigned)
+}
+
+// `a` and `b` as one new text.
+pub fn debug_concat(a: String, b: String) -> String {
+    let first = rt_mem_text(a)
+    let second = rt_mem_text(b)
+    let length = text_length(first) + text_length(second)
+    let object = text_new(length)
+    copy_bytes(text_data(object), text_data(first), text_length(first))
+    copy_bytes(rt_mem_add(text_data(object), text_length(first)), text_data(second), text_length(second))
+    rt_mem_as_text(object)
+}
+
+// `dbg` of a text: in double quotes, with `"` and `\` escaped by a `\`,
+// line feed, carriage return, tab and NUL as `\n`, `\r`, `\t` and `\0`,
+// and the other control characters as `\u{hex}`, as Rust's `{:?}` does
+// (which also escapes some invisible characters beyond these).
+pub fn debug_string(text: String) -> String {
+    let object = rt_mem_text(text)
+    let data = text_data(object)
+    let length = text_length(object)
+    let total = debug_pass(data, length, 0)
+    let result = text_new(total)
+    let _ = debug_pass(data, length, text_data(result))
+    rt_mem_as_text(result)
+}
+
+// The bytes `debug_string` writes for the `length` bytes at `data`: written
+// to `out` unless it is 0, which only counts them.
+fn debug_pass(data: Int, length: Int, out: Int) -> Int {
+    var n = put_byte(out, 0, 34)
+    var i = 0
+    while i < length {
+        let b = rt_mem_load8(rt_mem_add(data, i))
+        let next = if i + 1 < length { rt_mem_load8(rt_mem_add(data, i + 1)) } else { 0 }
+        if b == 34 || b == 92 {
+            n = put_byte(out, put_byte(out, n, 92), b)
+        } else if b == 10 {
+            n = put_byte(out, put_byte(out, n, 92), 110)
+        } else if b == 13 {
+            n = put_byte(out, put_byte(out, n, 92), 114)
+        } else if b == 9 {
+            n = put_byte(out, put_byte(out, n, 92), 116)
+        } else if b == 0 {
+            n = put_byte(out, put_byte(out, n, 92), 48)
+        } else if b < 32 || b == 127 {
+            n = put_unicode_escape(out, n, b)
+        } else if b == 194 && next >= 128 && next < 160 {
+            n = put_unicode_escape(out, n, next)
+            i = i + 1
+        } else {
+            n = put_byte(out, n, b)
+        }
+        i = i + 1
+    }
+    put_byte(out, n, 34)
+}
+
+// Write `byte` at offset `at` of `out` unless `out` is 0: the next offset.
+fn put_byte(out: Int, at: Int, byte: Int) -> Int {
+    if out != 0 {
+        rt_mem_store8(rt_mem_add(out, at), byte)
+    }
+    at + 1
+}
+
+// `\u{..}` for the code point `cp`, which is below 256.
+fn put_unicode_escape(out: Int, at: Int, cp: Int) -> Int {
+    var n = put_byte(out, at, 92)
+    n = put_byte(out, n, 117)
+    n = put_byte(out, n, 123)
+    if cp >= 16 {
+        n = put_byte(out, n, hex_digit(cp / 16))
+    }
+    n = put_byte(out, n, hex_digit(cp % 16))
+    put_byte(out, n, 125)
+}
+
+fn hex_digit(d: Int) -> Int {
+    if d < 10 {
+        return 48 + d
+    }
+    87 + d
 }

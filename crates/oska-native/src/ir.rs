@@ -106,6 +106,7 @@ pub enum Width {
 pub enum BinOp {
     Add,
     Sub,
+    Mul,
     And,
     Or,
     Xor,
@@ -246,6 +247,12 @@ pub enum Inst {
     Second {
         dst: Temp,
     },
+    /// `dst =` the stack pointer the kernel started the process with
+    /// (argc, then argv, then envp). Only valid in `_start`, before it
+    /// switches stacks.
+    EntrySp {
+        dst: Temp,
+    },
 }
 
 /// The most arguments a call passes, all in registers. More need
@@ -265,7 +272,8 @@ impl Inst {
             | Inst::Call { dst, .. }
             | Inst::Syscall { dst, .. }
             | Inst::Arith { dst, .. }
-            | Inst::Second { dst } => Some(*dst),
+            | Inst::Second { dst }
+            | Inst::EntrySp { dst } => Some(*dst),
             _ => None,
         }
     }
@@ -287,6 +295,7 @@ impl Inst {
             Inst::ReturnPair { value, second } => vec![*value, *second],
             Inst::Const { .. }
             | Inst::Second { .. }
+            | Inst::EntrySp { .. }
             | Inst::Addr { .. }
             | Inst::Label(_)
             | Inst::Jump(_)

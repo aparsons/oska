@@ -69,7 +69,7 @@ fn in_self(place: &Place) -> bool {
 
 impl Body<'_, '_> {
     /// The fields of objects of the concrete type `ty`.
-    fn fields_of(&self, ty: &Type) -> Option<Fields> {
+    pub(super) fn fields_of(&self, ty: &Type) -> Option<Fields> {
         layout::fields(self.program(), ty)
     }
 
