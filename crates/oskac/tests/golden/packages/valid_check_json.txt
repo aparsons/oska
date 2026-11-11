@@ -4,8 +4,8 @@ exit: 0
 {
   "diagnostics": [],
   "functions": [
-    {"name":"main.main","authority":["Stdout"],"via":[{"param":"io","capabilities":["Stdout"]}],"pure":false},
-    {"name":"main.greeting","authority":[],"via":[],"pure":true}
+    {"name":"pkg.main.main","authority":["Stdout"],"via":[{"param":"io","capabilities":["Stdout"]}],"pure":false},
+    {"name":"pkg.main.greeting","authority":[],"via":[],"pure":true}
   ],
   "audit": [],
   "attenuations": []

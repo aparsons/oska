@@ -1,7 +1,7 @@
 $ oskac check crates/oskac/tests/fixtures/packages/manifest_unknown_table
 exit: 1
 --- stdout
-fn main.main: pure
+fn pkg.main.main: pure
 --- stderr
-oska.toml:5:2: error[E0402]: unknown table `packge`; `oska.toml` has only `[package]` for now; did you mean `package`? (bytes 44..50)
+crates/oskac/tests/fixtures/packages/manifest_unknown_table/oska.toml:5:2: error[E0402]: unknown table `packge`; `oska.toml` has only `[package]` for now; did you mean `package`? (bytes 44..50)
     fix: replace with `package`

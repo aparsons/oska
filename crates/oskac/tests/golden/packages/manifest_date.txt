@@ -1,6 +1,6 @@
 $ oskac check crates/oskac/tests/fixtures/packages/manifest_date
 exit: 1
 --- stdout
-fn main.main: pure
+fn pkg.main.main: pure
 --- stderr
-oska.toml:4:12: error[E0401]: `oska.toml` does not support dates: values are strings or arrays of strings (bytes 53..63)
+crates/oskac/tests/fixtures/packages/manifest_date/oska.toml:4:12: error[E0401]: `oska.toml` does not support dates: values are strings or arrays of strings (bytes 53..63)

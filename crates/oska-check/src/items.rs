@@ -69,6 +69,20 @@ impl Declared {
             attributes_end: item.attributes.last().map(|a| a.span.end),
         }
     }
+
+    /// Where a visibility marker such as `pub(pkg) ` goes in the
+    /// declaration, whose text is in `src`: after its attributes and the
+    /// blanks that follow them. The AST keeps no span for the end of an
+    /// item's attributes' trailing space, so this reads `src`.
+    pub fn marker_at(&self, src: &str) -> usize {
+        match self.attributes_end {
+            Some(end) => {
+                let rest = src.get(end..).unwrap_or_default();
+                end + (rest.len() - rest.trim_start().len())
+            }
+            None => self.start,
+        }
+    }
 }
 
 /// How a function takes `self`.

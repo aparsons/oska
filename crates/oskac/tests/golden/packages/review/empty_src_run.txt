@@ -1,0 +1,5 @@
+$ oskac run crates/oskac/tests/fixtures/packages/empty_src
+exit: 1
+--- stdout
+--- stderr
+error[E0413]: `crates/oskac/tests/fixtures/packages/empty_src` is not a package: its `src/` holds no `.osk` file, so it has no modules; a package has an `oska.toml` with a `[package]` table and its modules under `src/`, and a single file is checked by naming the `.osk` file (bytes 0..0)

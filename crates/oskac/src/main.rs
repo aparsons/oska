@@ -1,6 +1,6 @@
 //! `oskac`: the Oska compiler command-line interface.
 
-use oska_syntax::Diagnostic;
+use oska_syntax::{Diagnostic, Span};
 use std::process::ExitCode;
 
 mod explain;
@@ -101,11 +101,15 @@ fn main() -> ExitCode {
         }
         ["lex", path] => lex_file(path, flags),
         ["parse", path] => parse_file(path, flags),
-        ["check", rest @ ..] if rest.len() <= 1 => check_target(rest.first(), flags),
-        ["run", rest @ ..] if rest.len() <= 1 => {
-            run_target(rest.first(), flags, &line.program_args)
+        ["check", rest @ ..] if rest.len() <= 1 => {
+            on_target(Command::Check, rest.first(), flags, &line.program_args)
         }
-        ["test", rest @ ..] if rest.len() <= 1 => test_target(rest.first(), flags),
+        ["run", rest @ ..] if rest.len() <= 1 => {
+            on_target(Command::Run, rest.first(), flags, &line.program_args)
+        }
+        ["test", rest @ ..] if rest.len() <= 1 => {
+            on_target(Command::Test, rest.first(), flags, &line.program_args)
+        }
         ["explain", code] => explain_code(code, flags),
         _ => {
             eprint!("{USAGE}");
@@ -149,6 +153,102 @@ fn parse_file(path: &str, Flags { json, .. }: Flags) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// The commands that take a source file or a package.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Command {
+    Check,
+    Run,
+    Test,
+}
+
+impl Command {
+    fn name(self) -> &'static str {
+        match self {
+            Command::Check => "check",
+            Command::Run => "run",
+            Command::Test => "test",
+        }
+    }
+}
+
+/// How a command's output names the place of what it reports: the
+/// file's path and text for a single file; for a package, its
+/// [`oska_check::Locator`], and the package directory as given, which
+/// the human output's paths start from (JSON keeps them package-relative).
+enum Places<'p> {
+    /// What is reported is located already, or has no place.
+    Located,
+    File {
+        path: &'p str,
+        src: &'p str,
+    },
+    Package {
+        locator: oska_check::Locator<'p>,
+        dir: &'p str,
+        json: bool,
+    },
+}
+
+impl Places<'_> {
+    /// `diagnostic`, whose span is an offset into the program, named by
+    /// its file and line.
+    fn locate(&self, diagnostic: Diagnostic) -> Diagnostic {
+        match self {
+            Places::Located => diagnostic,
+            Places::File { path, src } => match diagnostic.location {
+                Some(_) => diagnostic,
+                None => diagnostic.locate(path, src),
+            },
+            Places::Package { locator, dir, json } => {
+                let located = locator.locate(diagnostic);
+                if *json {
+                    located
+                } else {
+                    from_here(dir, located)
+                }
+            }
+        }
+    }
+
+    /// The module of the test whose item is at `span` in the program.
+    fn module_of(&self, span: Span) -> Option<String> {
+        match self {
+            Places::Located | Places::File { .. } => None,
+            Places::Package { locator, .. } => locator.module_of(span).map(str::to_string),
+        }
+    }
+}
+
+/// `diagnostic`, located in a package in `dir`, with its path written
+/// from the current directory.
+fn from_here(dir: &str, mut diagnostic: Diagnostic) -> Diagnostic {
+    if let Some(location) = &mut diagnostic.location {
+        location.path = package::from_here(dir, &location.path);
+    }
+    diagnostic
+}
+
+/// `report`, of the package in `dir`, with every path written from the
+/// current directory, for the human output.
+fn report_from_here(dir: &str, mut report: oska_check::CheckReport) -> oska_check::CheckReport {
+    report.diagnostics = report
+        .diagnostics
+        .into_iter()
+        .map(|d| from_here(dir, d))
+        .collect();
+    for site in &mut report.audit {
+        if let Some(location) = &mut site.location {
+            location.path = package::from_here(dir, &location.path);
+        }
+    }
+    for attenuation in &mut report.attenuations {
+        if let Some(location) = &mut attenuation.location {
+            location.path = package::from_here(dir, &location.path);
+        }
+    }
+    report
 }
 
 /// `oskac check`: print every diagnostic, each function's authority with
@@ -207,33 +307,19 @@ fn run_file(path: &str, Flags { json, .. }: Flags, args: &[String]) -> ExitCode 
     let mut argv = vec![path.to_string()];
     argv.extend_from_slice(args);
     let outcome = oska_run::run(&src, &mut oska_run::RealHost::new(), &argv);
-    let locate = in_file(path, &src);
-    finish_run(outcome, json, &locate)
+    finish_run(outcome, json, &Places::File { path, src: &src })
 }
 
-/// A locator for diagnostics whose spans are in `src`, the text of the
-/// file at `path`.
-fn in_file<'a>(path: &'a str, src: &'a str) -> impl Fn(Diagnostic) -> Diagnostic + 'a {
-    move |d| match d.location {
-        Some(_) => d,
-        None => d.locate(path, src),
-    }
-}
-
-/// Print how a run ended and return the program's exit code. `locate`
+/// Print how a run ended and return the program's exit code. `places`
 /// names the file of a panic or a refusal, which `--format=json` prints
 /// as `path` and the human output as `path:line:col`.
-fn finish_run(
-    outcome: oska_run::RunOutcome,
-    json: bool,
-    locate: &dyn Fn(Diagnostic) -> Diagnostic,
-) -> ExitCode {
+fn finish_run(outcome: oska_run::RunOutcome, json: bool, places: &Places) -> ExitCode {
     eprint!("{}", outcome.stderr);
     // A panic is printed in the shape of a diagnostic, after the output
     // the program wrote before it.
     let mut reported = outcome.diagnostics;
     reported.extend(outcome.panic);
-    let reported: Vec<Diagnostic> = reported.into_iter().map(locate).collect();
+    let reported: Vec<Diagnostic> = reported.into_iter().map(|d| places.locate(d)).collect();
     if json {
         for diagnostic in &reported {
             eprintln!("{}", diagnostic.to_json());
@@ -259,21 +345,22 @@ fn test_file(path: &str, flags: Flags) -> ExitCode {
     };
     let options = oska_run::TestOptions { integration };
     let report = oska_run::test(&src, &mut oska_run::RealHost::new(), options);
-    let locate = in_file(path, &src);
-    finish_test(report, json, &locate)
+    finish_test(report, json, &Places::File { path, src: &src })
 }
 
-/// Print a test report and return its exit code. `locate` names the file
-/// of each failure and refusal, as for [`finish_run`].
-fn finish_test(
-    mut report: oska_run::TestReport,
-    json: bool,
-    locate: &dyn Fn(Diagnostic) -> Diagnostic,
-) -> ExitCode {
+/// Print a test report and return its exit code. `places` names the file
+/// of each failure and refusal, as for [`finish_run`], and each test's
+/// module in a package.
+fn finish_test(mut report: oska_run::TestReport, json: bool, places: &Places) -> ExitCode {
     for test in &mut report.tests {
-        test.failure = test.failure.take().map(locate);
+        test.module = places.module_of(test.span);
+        test.failure = test.failure.take().map(|d| places.locate(d));
     }
-    report.diagnostics = report.diagnostics.drain(..).map(locate).collect();
+    report.diagnostics = report
+        .diagnostics
+        .drain(..)
+        .map(|d| places.locate(d))
+        .collect();
     if json {
         println!("{}", report.to_json());
     } else if !report.diagnostics.is_empty() {
@@ -286,145 +373,117 @@ fn finish_test(
 
 // ---- Packages ------------------------------------------------------------------
 
-/// `oskac check [path]`: a package directory (the current one with no
-/// path), or a file, which keeps its single-file behaviour.
-fn check_target(path: Option<&&str>, flags: Flags) -> ExitCode {
+/// `oskac check`, `run` or `test` on `path`: a package directory (the
+/// current one with no path), or a file, which keeps its single-file
+/// behaviour, with a hint when it is part of a package.
+fn on_target(command: Command, path: Option<&&str>, flags: Flags, args: &[String]) -> ExitCode {
     match package::target(path.copied()) {
         package::Target::File(file) => {
-            let code = check_file(&file, flags);
-            hint_package(&file, "check");
+            let code = match command {
+                Command::Check => check_file(&file, flags),
+                Command::Run => run_file(&file, flags, args),
+                Command::Test => test_file(&file, flags),
+            };
+            hint_package(&file, command.name());
             code
         }
-        package::Target::Dir(dir) => {
-            let Some((package, refused)) = load_package(&dir, flags.json) else {
-                return ExitCode::FAILURE;
-            };
-            let options = oska_check::CheckOptions {
-                release: flags.release,
-            };
-            let report = checked(&package, refused, options);
-            print_report(&report, flags.json, &dir)
-        }
+        package::Target::Dir(dir) => on_package(command, &dir, flags, args),
     }
 }
 
-/// `oskac run [path]`: a package directory, or a file. A library, a
-/// package without `src/main.osk`, is refused.
-fn run_target(path: Option<&&str>, flags: Flags, args: &[String]) -> ExitCode {
+/// `command` on the package in `dir`. `oskac run` refuses a library, a
+/// package without `src/main.osk`.
+fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> ExitCode {
     let json = flags.json;
-    match package::target(path.copied()) {
-        package::Target::File(file) => {
-            let code = run_file(&file, flags, args);
-            hint_package(&file, "run");
-            code
-        }
-        package::Target::Dir(dir) => {
-            let Some((package, refused)) = load_package(&dir, json) else {
-                return ExitCode::FAILURE;
-            };
-            if package.is_library() {
-                return refuse(vec![oska_check::run_of_library(&dir)], json);
-            }
-            let report = checked(&package, refused, oska_check::CheckOptions::default());
-            let Some(program) = &report.program else {
-                return refuse_unchecked(report, json);
-            };
-            let mut argv = vec![dir.clone()];
-            argv.extend_from_slice(args);
-            let outcome = oska_run::run_program(program, &mut oska_run::RealHost::new(), &argv);
-            finish_run(outcome, json, &|d| {
-                oska_check::locate_in_package(&package, d)
-            })
-        }
-    }
-}
-
-/// `oskac test [path]`: a package directory, or a file.
-fn test_target(path: Option<&&str>, flags: Flags) -> ExitCode {
-    let json = flags.json;
-    match package::target(path.copied()) {
-        package::Target::File(file) => {
-            let code = test_file(&file, flags);
-            hint_package(&file, "test");
-            code
-        }
-        package::Target::Dir(dir) => {
-            let Some((package, refused)) = load_package(&dir, json) else {
-                return ExitCode::FAILURE;
-            };
-            let report = checked(&package, refused, oska_check::CheckOptions::default());
-            let Some(program) = &report.program else {
-                return refuse_unchecked(report, json);
-            };
-            let options = oska_run::TestOptions {
-                integration: flags.integration,
-            };
-            let tests = oska_run::test_program(program, &mut oska_run::RealHost::new(), options);
-            finish_test(tests, json, &|d| oska_check::locate_in_package(&package, d))
-        }
-    }
-}
-
-/// Read the package in `dir`. `None` after printing why it is not one.
-fn load_package(dir: &str, json: bool) -> Option<(oska_check::Package, Vec<Diagnostic>)> {
-    match package::load(dir) {
-        package::Loaded::Package { package, refused } => Some((package, refused)),
-        package::Loaded::NotAPackage(refusal) => {
-            refuse(vec![refusal], json);
-            None
+    let (package, refused) = match package::load(dir, command.name()) {
+        package::Loaded::Package { package, refused } => (package, refused),
+        package::Loaded::Refused(diagnostics) => {
+            return refuse(command, diagnostics, json, dir);
         }
         package::Loaded::Unreadable(message) => {
             eprintln!("error: {message}");
-            None
+            return ExitCode::FAILURE;
         }
+    };
+    if command == Command::Run && package.is_library() {
+        return refuse(command, vec![oska_check::run_of_library(dir)], json, dir);
     }
-}
-
-/// Check `package`; the `refused` symlinks come first, and a package that
-/// had any has no program to run.
-fn checked(
-    package: &oska_check::Package,
-    refused: Vec<Diagnostic>,
-    options: oska_check::CheckOptions,
-) -> oska_check::CheckReport {
-    let mut report = oska_check::check_package(package, options);
+    let options = oska_check::CheckOptions {
+        release: command == Command::Check && flags.release,
+    };
+    let mut report = oska_check::check_package(&package, options);
     if !refused.is_empty() {
         report.diagnostics.splice(0..0, refused);
         report.program = None;
     }
-    report
-}
-
-/// Print `diagnostics` as a refusal: as a report's diagnostics with
-/// `--format=json`, or as `oskac check` prints them. Exit code 1.
-fn refuse(diagnostics: Vec<Diagnostic>, json: bool) -> ExitCode {
-    if json {
-        let report = oska_check::CheckReport {
-            diagnostics,
-            ..oska_check::CheckReport::default()
+    if command == Command::Check {
+        let report = if json {
+            report
+        } else {
+            report_from_here(dir, report)
         };
-        print!("{}", report.to_json());
-    } else {
-        print_diagnostics(&diagnostics);
+        return print_report(&report, json, dir);
     }
-    ExitCode::FAILURE
+    let Some(program) = &report.program else {
+        return refuse(command, report.diagnostics, json, dir);
+    };
+    let places = Places::Package {
+        locator: oska_check::Locator::new(&package),
+        dir,
+        json,
+    };
+    let mut host = oska_run::RealHost::new();
+    if command == Command::Run {
+        let mut argv = vec![dir.to_string()];
+        argv.extend_from_slice(args);
+        let outcome = oska_run::run_program(program, &mut host, &argv);
+        finish_run(outcome, json, &places)
+    } else {
+        let options = oska_run::TestOptions {
+            integration: flags.integration,
+        };
+        let tests = oska_run::test_program(program, &mut host, options);
+        finish_test(tests, json, &places)
+    }
 }
 
-/// `report` has no program, so it has diagnostics, unless the package has
-/// no module at all: print them.
-fn refuse_unchecked(report: oska_check::CheckReport, json: bool) -> ExitCode {
-    if report.diagnostics.is_empty() {
-        eprintln!("error: the package has no modules under `src/`");
-        return ExitCode::FAILURE;
-    }
-    if json {
-        for diagnostic in &report.diagnostics {
-            eprintln!("{}", diagnostic.to_json());
-        }
+/// Refuse `command` on the package in `dir` with `diagnostics`, already
+/// located, printed as the command prints a refused file's: as a check
+/// report, as a run's refusal, or as a test report's diagnostics. Their
+/// paths are written from the current directory in the human output.
+fn refuse(command: Command, diagnostics: Vec<Diagnostic>, json: bool, dir: &str) -> ExitCode {
+    let diagnostics: Vec<Diagnostic> = if json {
+        diagnostics
     } else {
-        print_diagnostics(&report.diagnostics);
+        diagnostics.into_iter().map(|d| from_here(dir, d)).collect()
+    };
+    let places = Places::Located;
+    match command {
+        Command::Check => {
+            let report = oska_check::CheckReport {
+                diagnostics,
+                ..oska_check::CheckReport::default()
+            };
+            print_report(&report, json, dir)
+        }
+        Command::Run => {
+            let outcome = oska_run::RunOutcome {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: 1,
+                panic: None,
+                diagnostics,
+            };
+            finish_run(outcome, json, &places)
+        }
+        Command::Test => {
+            let report = oska_run::TestReport {
+                tests: Vec::new(),
+                diagnostics,
+            };
+            finish_test(report, json, &places)
+        }
     }
-    ExitCode::FAILURE
 }
 
 /// After `oskac <command> <file>`, a file that is part of a package gets

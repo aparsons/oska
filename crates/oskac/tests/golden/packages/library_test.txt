@@ -1,7 +1,7 @@
 $ oskac test crates/oskac/tests/fixtures/packages/library
 exit: 0
 --- stdout
-test greeting::greet ... ok
+test greeting: greet ... ok
 
 1 tests: 1 passed, 0 failed, 0 skipped
 --- stderr

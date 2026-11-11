@@ -1,0 +1,7 @@
+$ oskac check crates/oskac/tests/fixtures/packages/nested_src
+exit: 0
+--- stdout
+fn pkg.main.main: Stdout (out)
+fn pkg.src.util.f: pure
+fn pkg.util.f: pure
+--- stderr

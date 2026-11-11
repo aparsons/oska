@@ -131,8 +131,8 @@ fn a_capability_wrapped_in_another_modules_struct_shows_in_the_report() {
     let use_it = report
         .functions
         .iter()
-        .find(|f| f.name == "main.use_it")
-        .expect("main.use_it");
+        .find(|f| f.name == "pkg.main.use_it")
+        .expect("pkg.main.use_it");
     assert_eq!(use_it.authority, ["Stdout"]);
 }
 
@@ -146,8 +146,8 @@ fn a_generic_struct_of_another_module_carries_a_capability_it_is_given() {
     let f = report
         .functions
         .iter()
-        .find(|f| f.name == "main.f")
-        .expect("main.f");
+        .find(|f| f.name == "pkg.main.f")
+        .expect("pkg.main.f");
     assert_eq!(f.authority, ["Stdout"]);
 }
 
@@ -193,7 +193,7 @@ fn a_trait_default_method_in_another_module_shows_its_authority() {
     assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
     let names: Vec<String> = report.functions.iter().map(|f| f.to_human()).collect();
     assert!(
-        names.contains(&"fn log.Log.log: Stdout (out)".to_string()),
+        names.contains(&"fn pkg.log.Log.log: Stdout (out)".to_string()),
         "{names:?}"
     );
 }
@@ -206,7 +206,7 @@ fn an_attenuation_in_a_closure_in_another_module_is_listed_under_its_function() 
     assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
     let human = report.authority_to_human("unused");
     assert!(
-        human.contains("fn files.docs: FsRead (read)\n  src/files.osk:"),
+        human.contains("fn pkg.files.docs: FsRead (read)\n  src/files.osk:"),
         "{human}"
     );
 }

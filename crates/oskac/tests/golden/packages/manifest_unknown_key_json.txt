@@ -6,7 +6,7 @@ exit: 1
     {"code":"E0402","message":"unknown key `versoin` in `[package]`; the keys are `name` and `version`; did you mean `version`?","path":"oska.toml","span":{"start":42,"end":49},"fix":{"message":"replace with `version`","edits":[{"span":{"start":42,"end":49},"replacement":"version"}]}}
   ],
   "functions": [
-    {"name":"main.main","authority":[],"via":[],"pure":true}
+    {"name":"pkg.main.main","authority":[],"via":[],"pure":true}
   ],
   "audit": [],
   "attenuations": []

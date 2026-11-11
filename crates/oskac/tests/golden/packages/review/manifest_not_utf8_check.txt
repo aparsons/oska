@@ -1,0 +1,5 @@
+$ oskac check crates/oskac/tests/fixtures/packages/manifest_not_utf8
+exit: 1
+--- stdout
+--- stderr
+crates/oskac/tests/fixtures/packages/manifest_not_utf8/oska.toml:4:6: error[E0400]: `oska.toml` is not UTF-8 text; save it as UTF-8 (bytes 47..48)

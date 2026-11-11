@@ -1,6 +1,6 @@
 $ oskac check crates/oskac/tests/fixtures/packages/manifest_inline_table
 exit: 1
 --- stdout
-fn main.main: pure
+fn pkg.main.main: pure
 --- stderr
-oska.toml:4:11: error[E0401]: `oska.toml` does not support inline tables (bytes 52..53)
+crates/oskac/tests/fixtures/packages/manifest_inline_table/oska.toml:4:11: error[E0401]: `oska.toml` does not support inline tables (bytes 52..53)

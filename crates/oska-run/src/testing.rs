@@ -70,10 +70,27 @@ impl TestStatus {
 pub struct TestResult {
     /// The name as written.
     pub name: String,
+    /// The module the test is in, such as `util.text`, in a package; a
+    /// single file has none. The runtime leaves it empty: `oskac` names it
+    /// from [`TestResult::span`] (`oska_check::Locator::module_of`).
+    pub module: Option<String>,
+    /// The test item's span in the program.
+    pub span: Span,
     pub status: TestStatus,
     /// Why a failed test failed: the panic that stopped it, shaped like a
     /// diagnostic, with a `P`-code and the span where it happened.
     pub failure: Option<Diagnostic>,
+}
+
+impl TestResult {
+    /// The test as the human report names it: its name, after its module
+    /// and `: ` in a package, as in `util.text: shouts`.
+    pub fn label(&self) -> String {
+        match &self.module {
+            Some(module) => format!("{module}: {}", self.name),
+            None => self.name.clone(),
+        }
+    }
 }
 
 /// The result of running a file's tests.
@@ -124,13 +141,13 @@ impl TestReport {
             };
             out.push_str(&format!(
                 "test {} ... {status}\n",
-                escape_control(&test.name)
+                escape_control(&test.label())
             ));
         }
-        let failures: Vec<(&str, &Diagnostic)> = self
+        let failures: Vec<(String, &Diagnostic)> = self
             .tests
             .iter()
-            .filter_map(|t| Some((t.name.as_str(), t.failure.as_ref()?)))
+            .filter_map(|t| Some((t.label(), t.failure.as_ref()?)))
             .collect();
         if !failures.is_empty() {
             out.push_str("\nfailures:\n");
@@ -155,16 +172,20 @@ impl TestReport {
     }
 
     /// The report as one JSON object:
-    /// `{"tests":[{"name":...,"status":...,"failure":...}],
+    /// `{"tests":[{"name":...,"module":...,"status":...,"failure":...}],
     /// "passed":n,"failed":n,"skipped":n,"diagnostics":[...]}`. A test's
-    /// `failure` is a diagnostic object, or `null` when it did not fail.
+    /// `failure` is a diagnostic object, or `null` when it did not fail;
+    /// `module` is there only for a test in a package.
     pub fn to_json(&self) -> String {
         let tests: Vec<String> = self
             .tests
             .iter()
             .map(|t| {
+                let module = t.module.as_ref().map_or_else(String::new, |m| {
+                    format!(",\"module\":\"{}\"", json_escape(m))
+                });
                 format!(
-                    "{{\"name\":\"{}\",\"status\":\"{}\",\"failure\":{}}}",
+                    "{{\"name\":\"{}\"{module},\"status\":\"{}\",\"failure\":{}}}",
                     json_escape(&t.name),
                     t.status.as_str(),
                     t.failure
@@ -248,6 +269,8 @@ pub fn test_program(program: &Program, host: &mut dyn Host, options: TestOptions
             };
             TestResult {
                 name: test.name.clone(),
+                module: None,
+                span: test.span,
                 status,
                 failure,
             }

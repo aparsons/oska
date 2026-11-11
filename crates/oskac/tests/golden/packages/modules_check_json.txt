@@ -4,11 +4,11 @@ exit: 0
 {
   "diagnostics": [],
   "functions": [
-    {"name":"main.main","authority":["Stdout"],"via":[{"param":"out","capabilities":["Stdout"]}],"pure":false},
-    {"name":"main.write","authority":[],"via":[],"pure":true},
-    {"name":"shapes.Square.area","pub":true,"authority":[],"via":[],"pure":true},
-    {"name":"shapes.unit","pub":true,"authority":[],"via":[],"pure":true},
-    {"name":"util.log.write","authority":["Stdout"],"via":[{"param":"out","capabilities":["Stdout"]}],"pure":false}
+    {"name":"pkg.main.main","authority":["Stdout"],"via":[{"param":"out","capabilities":["Stdout"]}],"pure":false},
+    {"name":"pkg.main.write","authority":[],"via":[],"pure":true},
+    {"name":"pkg.shapes.Square.area","pub":true,"authority":[],"via":[],"pure":true},
+    {"name":"pkg.shapes.unit","pub":true,"authority":[],"via":[],"pure":true},
+    {"name":"pkg.util.log.write","authority":["Stdout"],"via":[{"param":"out","capabilities":["Stdout"]}],"pure":false}
   ],
   "audit": [],
   "attenuations": []

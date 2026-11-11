@@ -1,0 +1,6 @@
+$ oskac check crates/oskac/tests/fixtures/packages/nested_src_main
+exit: 1
+--- stdout
+fn pkg.src.main.main: Stdout (out)
+--- stderr
+crates/oskac/tests/fixtures/packages/nested_src_main/src/src/main.osk:1:4: error[E0412]: `main` is only allowed in `src/main.osk`, not in `src/src/main.osk` (bytes 3..7)

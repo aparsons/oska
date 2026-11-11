@@ -1,0 +1,5 @@
+$ oskac run crates/oskac/tests/fixtures/packages/nested_src
+exit: 0
+--- stdout
+2
+--- stderr

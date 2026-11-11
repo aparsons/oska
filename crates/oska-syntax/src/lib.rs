@@ -59,6 +59,11 @@ pub enum TokenKind {
     Newline,
 }
 
+/// Whether `word` is a keyword, which is never an identifier.
+pub fn is_keyword(word: &str) -> bool {
+    Keyword::lookup(word).is_some()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Keyword {
     Fn,
@@ -254,6 +259,12 @@ pub struct Diagnostic {
     pub span: Span,
     /// A machine-applicable fix, when the right edit is unambiguous. Its
     /// edits are in the same file as `span`.
+    ///
+    /// `fix` and `location` are boxed because the parser returns
+    /// `Result<_, Diagnostic>` everywhere: unboxed, they would make every
+    /// such `Err` large, which clippy's `result_large_err` refuses and
+    /// which costs a copy on every parser call. Most diagnostics have
+    /// neither, so a box costs nothing then.
     pub fix: Option<Box<Fix>>,
     /// The file the span is in, and where it starts. A package check names
     /// the file of every diagnostic; checking a source string alone does not.
@@ -288,6 +299,41 @@ impl Location {
             path: path.into(),
             line: before.matches('\n').count() + 1,
             column: before[line_start..].chars().count() + 1,
+        }
+    }
+}
+
+/// Where each line of a text starts, so that locating many offsets in it
+/// costs one pass over the text plus a binary search each, where
+/// [`Location::new`] scans the text up to its offset every time.
+#[derive(Debug, Clone)]
+pub struct LineIndex<'a> {
+    src: &'a str,
+    /// The byte offset each line starts at; the first is 0.
+    starts: Vec<usize>,
+}
+
+impl<'a> LineIndex<'a> {
+    pub fn new(src: &'a str) -> Self {
+        let starts = std::iter::once(0)
+            .chain(src.match_indices('\n').map(|(at, _)| at + 1))
+            .collect();
+        LineIndex { src, starts }
+    }
+
+    /// The location of byte `offset` in the file at `path`, as
+    /// [`Location::new`] gives it.
+    pub fn location(&self, path: impl Into<String>, offset: usize) -> Location {
+        let mut end = offset.min(self.src.len());
+        while !self.src.is_char_boundary(end) {
+            end -= 1;
+        }
+        let line = self.starts.partition_point(|&start| start <= end);
+        let line_start = self.starts.get(line - 1).copied().unwrap_or(0);
+        Location {
+            path: path.into(),
+            line,
+            column: self.src[line_start..end].chars().count() + 1,
         }
     }
 }

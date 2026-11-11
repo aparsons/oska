@@ -35,7 +35,7 @@ fn a_clean_package_of_several_modules_carries_one_checked_program() {
     assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
     let program = report.program.expect("a checked program");
     let names: Vec<&str> = program.functions.keys().map(String::as_str).collect();
-    assert_eq!(names, ["f", "main", "pkg.util.one"]);
+    assert_eq!(names, ["main", "pkg.main.f", "pkg.util.one"]);
 }
 
 #[test]

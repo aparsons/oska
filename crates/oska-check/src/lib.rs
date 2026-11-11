@@ -64,9 +64,9 @@ mod traits;
 mod ty;
 mod usefulness;
 
-pub use manifest::{parse_manifest, Manifest};
+pub use manifest::{decode_manifest, parse_manifest, Manifest};
 pub use package::{
-    check_file, check_package, locate_in_package, not_a_package, run_of_library, symlink_refused,
+    check_file, check_package, not_a_package, run_of_library, symlink_refused, Locator,
     ModuleSource, Package, ENTRY_MODULE, MANIFEST_PATH,
 };
 
@@ -333,8 +333,8 @@ impl Attenuation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionAuthority {
     /// The function's name, or `Type.method` for a method. In a package,
-    /// the module path comes first, as in `util.text.shout` (see
-    /// `link::Modules::function_name`).
+    /// `pkg.` and the module path come first, as in `pkg.util.text.shout`
+    /// (see `link::Modules::function_name`).
     pub name: String,
     /// Declared `pub`: part of its package's API.
     pub public: bool,

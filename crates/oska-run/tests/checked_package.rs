@@ -31,5 +31,5 @@ fn a_checked_programs_tests_run() {
         .iter()
         .map(|t| (t.name.as_str(), t.status))
         .collect();
-    assert_eq!(statuses, [("main::adds", TestStatus::Passed)]);
+    assert_eq!(statuses, [("adds", TestStatus::Passed)]);
 }

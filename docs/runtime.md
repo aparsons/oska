@@ -70,7 +70,7 @@ fn main() {
 
 ## Panics
 
-A **panic** stops the program where a bug happened. It has a stable `P`-code, a message, and the span of the expression that panicked. Without `--format=json`, it is printed to stderr like a diagnostic, `file.osk:3:9: error[P0004]: division by zero: ... (bytes 61..67)`, starting with its file, line and column. With `--format=json`, it is printed to stderr as one diagnostic object, in the same shape as the checker's (see [`ast.md`](ast.md)), with a `path`: the file the panic is in. In a package that is the module's own file, and `span` is an offset into it (a package's tests are named with their module, as `util.text::shout`):
+A **panic** stops the program where a bug happened. It has a stable `P`-code, a message, and the span of the expression that panicked. Without `--format=json`, it is printed to stderr like a diagnostic, `file.osk:3:9: error[P0004]: division by zero: ... (bytes 61..67)`, starting with its file, line and column. With `--format=json`, it is printed to stderr as one diagnostic object, in the same shape as the checker's (see [`ast.md`](ast.md)), with a `path`: the file the panic is in. In a package that is the module's own file, and `span` is an offset into it (an item of the package is named as the panicking module's code names it, as `util.text.shout` or `shout`):
 
 ```json
 {"code":"P0004","message":"division by zero: `10 / 0`","path":"file.osk","span":{"start":61,"end":70}}
@@ -419,11 +419,11 @@ test divides: math.osk:12:5: error[P0011]: assertion failed: `actual == expected
 3 tests: 1 passed, 1 failed, 1 skipped
 ```
 
-Each failure is named by its test. Control characters in test names and failure messages are escaped (`\n`, `\r`, `\t`, `\u{..}`), so a message cannot forge a line of the report.
+Each failure is named by its test. In a package, a test is named after its module and `: `, as in `test util.text: shouts ... ok`, and its failure's path starts from the current directory, as in `shop/src/util/text.osk:6:5`. Control characters in test names and failure messages are escaped (`\n`, `\r`, `\t`, `\u{..}`), so a message cannot forge a line of the report.
 
 **Output.** What a test writes to stderr, `dbg` included, goes to the real stderr as it happens, each line prefixed with the test's name in brackets, such as `[divides] [dbg] 4`. What it prints to `t.stdout` is recorded for `t.printed()`, for integration tests too, so the report is the only thing on stdout.
 
-With `--format=json`, one JSON object on stdout. Each test has its name, its status (`passed`, `failed`, or `skipped`), and its failure, a diagnostic object or `null`. A refused file has no tests and its diagnostics in `diagnostics`:
+With `--format=json`, one JSON object on stdout. Each test has its name, in a package its `module` (such as `"module":"util.text"`, right after `name`), its status (`passed`, `failed`, or `skipped`), and its failure, a diagnostic object or `null`, whose `path` is relative to the package. A refused file has no tests and its diagnostics in `diagnostics`:
 
 ```json
 {"tests":[{"name":"adds","status":"passed","failure":null},{"name":"divides","status":"failed","failure":{"code":"P0011","message":"...","path":"math.osk","span":{"start":120,"end":141}}}],"passed":1,"failed":1,"skipped":0,"diagnostics":[]}

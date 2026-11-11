@@ -1,0 +1,10 @@
+use pkg.a.b.c
+
+fn main(out: Stdout) -> Result<(), IoError> {
+    let n = c.half(0)
+    out.println("{n}")
+}
+
+test "main test" {
+    t.assert_eq(c.half(4), 2)
+}

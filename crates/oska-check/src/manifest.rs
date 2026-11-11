@@ -22,7 +22,7 @@
 //!   or a version that is not semver.
 //! - `E0406`: a repeated key or table.
 
-use oska_syntax::{Diagnostic, Span};
+use oska_syntax::{Diagnostic, Edit, LineIndex, Span};
 
 use crate::{codes, suggest};
 
@@ -39,6 +39,17 @@ pub struct Manifest {
 /// every error found, in the order they are found, followed by what is
 /// missing.
 pub fn parse_manifest(path: &str, text: &str) -> Result<Manifest, Vec<Diagnostic>> {
+    let malformed = text_errors(text);
+    if !malformed.is_empty() {
+        let lines = LineIndex::new(text);
+        return Err(malformed
+            .into_iter()
+            .map(|mut d| {
+                d.location = Some(Box::new(lines.location(path, d.span.start)));
+                d
+            })
+            .collect());
+    }
     let mut parser = Parser {
         path,
         text,
@@ -53,6 +64,63 @@ pub fn parse_manifest(path: &str, text: &str) -> Result<Manifest, Vec<Diagnostic
     parser.run();
     parser.finish()
 }
+
+/// The manifest at `path` as text: `bytes` decoded as UTF-8, or an
+/// `E0400` at the first byte that is not.
+pub fn decode_manifest(path: &str, bytes: &[u8]) -> Result<String, Diagnostic> {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => Ok(text.to_string()),
+        Err(err) => {
+            let valid = err.valid_up_to();
+            let before = String::from_utf8_lossy(&bytes[..valid]);
+            Err(Diagnostic::new(
+                codes::MANIFEST_SYNTAX,
+                "`oska.toml` is not UTF-8 text; save it as UTF-8",
+                Span {
+                    start: valid,
+                    end: valid + err.error_len().unwrap_or(1),
+                },
+            )
+            .locate(path, &before))
+        }
+    }
+}
+
+/// What is wrong with `text` as a whole, before it is read line by line:
+/// a byte-order mark, which TOML allows and Oska does not, so that a
+/// manifest is the same bytes however it was saved; and a carriage return
+/// that is not followed by a line feed, which would otherwise end a line
+/// that no reader of the file sees end.
+fn text_errors(text: &str) -> Vec<Diagnostic> {
+    if text.starts_with(BOM) {
+        let span = Span {
+            start: 0,
+            end: BOM.len_utf8(),
+        };
+        return vec![Diagnostic::new(
+            codes::MANIFEST_SYNTAX,
+            "`oska.toml` starts with a byte-order mark; save it as UTF-8 without one",
+            span,
+        )
+        .with_fix("remove the byte-order mark", vec![Edit::delete(span)])];
+    }
+    text.match_indices('\r')
+        .filter(|(at, _)| !text[at + 1..].starts_with('\n'))
+        .map(|(at, _)| {
+            Diagnostic::new(
+                codes::MANIFEST_SYNTAX,
+                "a carriage return must be followed by a line feed: lines end with `\\n` or `\\r\\n`",
+                Span {
+                    start: at,
+                    end: at + 1,
+                },
+            )
+        })
+        .collect()
+}
+
+/// The byte-order mark.
+const BOM: char = '\u{feff}';
 
 /// Whether `name` is a snake_case name: lowercase letters and digits in
 /// words joined by single underscores, starting with a letter.
@@ -127,12 +195,12 @@ struct Parser<'a> {
 
 impl Parser<'_> {
     fn error(&mut self, code: &'static str, message: impl Into<String>, span: Span) {
-        self.errors
-            .push(Diagnostic::new(code, message, span).locate(self.path, self.text));
+        self.errors.push(Diagnostic::new(code, message, span));
     }
 
+    /// Record `diagnostic`; [`Parser::finish`] locates every one at once.
     fn push(&mut self, diagnostic: Diagnostic) {
-        self.errors.push(diagnostic.locate(self.path, self.text));
+        self.errors.push(diagnostic);
     }
 
     fn rest(&self) -> &str {
@@ -615,6 +683,9 @@ impl Parser<'_> {
             _ => return None,
         };
         let hex = self.rest().get(..digits)?;
+        if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
         let code = u32::from_str_radix(hex, 16).ok()?;
         self.pos += digits;
         char::from_u32(code)
@@ -685,9 +756,18 @@ impl Parser<'_> {
                 }
             }
         }
+        let lines = LineIndex::new(self.text);
+        let path = self.path;
         match (self.name, self.version) {
             (Some(name), Some(version)) if self.errors.is_empty() => Ok(Manifest { name, version }),
-            _ => Err(self.errors),
+            _ => Err(self
+                .errors
+                .into_iter()
+                .map(|mut d| {
+                    d.location = Some(Box::new(lines.location(path, d.span.start)));
+                    d
+                })
+                .collect()),
         }
     }
 }

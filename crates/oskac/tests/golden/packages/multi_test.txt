@@ -1,9 +1,9 @@
 $ oskac test crates/oskac/tests/fixtures/packages/multi
 exit: 0
 --- stdout
-test main::main adds up ... ok
-test math::double ... ok
-test util.text::shout ... ok
+test main: main adds up ... ok
+test math: double ... ok
+test util.text: shout ... ok
 
 3 tests: 3 passed, 0 failed, 0 skipped
 --- stderr

@@ -98,7 +98,7 @@ fn a_capability_passed_to_another_module_keeps_its_authority_in_the_report() {
     let log = report
         .functions
         .iter()
-        .find(|f| f.name == "logging.log")
+        .find(|f| f.name == "pkg.logging.log")
         .expect("logging.log in the report");
     assert_eq!(log.authority, ["Stdout"]);
     assert!(!log.pure);
@@ -125,7 +125,7 @@ fn a_cap_struct_of_another_module_carries_its_authority() {
     let f = report
         .functions
         .iter()
-        .find(|f| f.name == "main.f")
+        .find(|f| f.name == "pkg.main.f")
         .expect("main.f in the report");
     assert_eq!(f.authority, ["Stdout"]);
 }
@@ -176,11 +176,11 @@ fn an_attenuation_in_another_module_names_its_file_and_function() {
             )
         })
         .collect();
-    assert_eq!(entries, [("files.docs", "DirRead", "src/files.osk")]);
+    assert_eq!(entries, [("pkg.files.docs", "DirRead", "src/files.osk")]);
     let docs = report
         .functions
         .iter()
-        .find(|f| f.name == "files.docs")
+        .find(|f| f.name == "pkg.files.docs")
         .expect("files.docs in the report");
     assert_eq!(docs.authority, ["FsRead"]);
 }
@@ -389,15 +389,15 @@ fn functions_of_one_name_in_two_modules_are_told_apart_by_module_path() {
     assert_eq!(
         lines,
         [
-            "fn main.main: Stdout (out)",
-            "fn main.write: pure",
-            "fn a.log.write: Stdout (out)",
+            "fn pkg.main.main: Stdout (out)",
+            "fn pkg.main.write: pure",
+            "fn pkg.a.log.write: Stdout (out)",
         ]
     );
 }
 
 #[test]
-fn a_method_is_named_by_the_module_of_its_impl_and_its_type() {
+fn a_method_is_named_by_its_types_module() {
     let lines = report_lines(&[
         ("main", "use pkg.geo.{Point}\n\nfn main() {}\n\nimpl Display for Point {\n    fn to_string(self) -> String {\n        \"p\"\n    }\n}\n"),
         ("geo", "pub(pkg) struct Point {\n    pub x: Int\n}\n\nimpl Point {\n    pub(pkg) fn x(self) -> Int {\n        self.x\n    }\n}\n\ntrait Area {\n    fn area(self) -> Int\n}\n\nimpl Area for Int {\n    fn area(self) -> Int {\n        self\n    }\n}\n"),
@@ -405,10 +405,10 @@ fn a_method_is_named_by_the_module_of_its_impl_and_its_type() {
     assert_eq!(
         lines,
         [
-            "fn main.main: pure",
-            "fn main.geo.Point.to_string: pure",
-            "fn geo.Point.x: pure",
-            "fn geo.Int.area: pure",
+            "fn pkg.main.main: pure",
+            "fn pkg.geo.Point.to_string: pure",
+            "fn pkg.geo.Point.x: pure",
+            "fn pkg.geo.Int.area: pure",
         ]
     );
 }
@@ -427,20 +427,20 @@ fn a_pub_function_is_marked_pub() {
     assert_eq!(
         lines,
         [
-            "fn main.main: pure",
-            "pub fn api.open: pure",
-            "fn api.shared: pure",
-            "fn api.own: pure",
+            "fn pkg.main.main: pure",
+            "pub fn pkg.api.open: pure",
+            "fn pkg.api.shared: pure",
+            "fn pkg.api.own: pure",
         ]
     );
     let json: Vec<String> = report.functions.iter().map(|f| f.to_json()).collect();
     assert_eq!(
         json[1],
-        r#"{"name":"api.open","pub":true,"authority":[],"via":[],"pure":true}"#
+        r#"{"name":"pkg.api.open","pub":true,"authority":[],"via":[],"pure":true}"#
     );
     assert_eq!(
         json[2],
-        r#"{"name":"api.shared","authority":[],"via":[],"pure":true}"#
+        r#"{"name":"pkg.api.shared","authority":[],"via":[],"pure":true}"#
     );
 }
 

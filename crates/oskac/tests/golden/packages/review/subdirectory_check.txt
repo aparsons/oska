@@ -1,0 +1,5 @@
+$ oskac check
+exit: 1
+--- stdout
+--- stderr
+error[E0413]: `.` is not a package: it has no `oska.toml`; `.` is inside the package in `..`: run `oskac check ..`; a package has an `oska.toml` with a `[package]` table and its modules under `src/`, and a single file is checked by naming the `.osk` file (bytes 0..0)

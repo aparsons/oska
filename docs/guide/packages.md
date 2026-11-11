@@ -48,7 +48,7 @@ oskac run
 oskac test
 ```
 
-On `examples/shopping`, `oskac run` prints `Total: 2400 cents`, and `oskac test` runs the tests of every module, each reported as `module::name`. A directory with no `oska.toml` or no `src/` is `E0413`. File and directory names under `src/` must be snake_case (`E0410`), and `oskac` follows no symlinks there (`E0411`).
+On `examples/shopping`, `oskac run` prints `Total: 2400 cents`, and `oskac test` runs the tests of every module, each reported after its module, as `test receipt: a line shows its label and its amount ... ok`. A directory with no `oska.toml`, no `src/` or no module is `E0413`. Module file and directory names under `src/` must be snake_case, not keywords, not hidden, and not start with `pkg`, `std` or `main` (`E0410`), and `oskac` follows no symlinks, `oska.toml` included (`E0411`).
 
 ## Modules and `use pkg.…`
 
@@ -92,15 +92,15 @@ pub fn version() -> String {
 
 Using a private item from another module is `E0206`, and its machine fix is to insert `pub(pkg) ` at the declaration, in the other file. The same holds below the item: a struct field needs its own `pub` to be read or built from another module, and an inherent method needs `pub(pkg)` or `pub` to be called. The module of an `impl` decides its methods' visibility.
 
-Use `pub(pkg)` for what the package's modules share, and `pub` for what other code is meant to use. The authority report marks each `pub` function, and names every function with its module path, so two modules can each have a `format`:
+Use `pub(pkg)` for what the package's modules share, and `pub` for what other code is meant to use. The authority report marks each `pub` function, and names every function with `pkg.` and its module path, so two modules can each have a `format`, and no name reads as a `std` one:
 
 ```text
-fn main.main: Stdout (io)
-fn pricing.tax.with_tax: pure
-fn receipt.line: pure
+fn pkg.main.main: Stdout (io)
+fn pkg.pricing.tax.with_tax: pure
+fn pkg.receipt.line: pure
 ```
 
-A diagnostic's location is the file in the package, such as `src/other.osk:4:11: error[E0206]: ...`.
+A diagnostic's location is the file, from the current directory, such as `shop/src/other.osk:4:11: error[E0206]: ...` for `oskac check shop`.
 
 ## Libraries and programs
 

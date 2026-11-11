@@ -6,10 +6,13 @@
 //! imports and rewrites the module so that every name it writes means the
 //! same thing in the joined module:
 //!
-//! - An item of the entry module, `main`, keeps its name. An item of any
-//!   other module is declared under its **key**: `pkg.`, the module path
-//!   and the name, such as `pkg.util.text.shout`. An identifier never contains `.`,
-//!   so no source can write a key: it is reached only through linking.
+//! - Every item is declared under its **key** ([`ItemKey`]): `pkg.`, the
+//!   module path and the name, such as `pkg.util.text.shout`, or
+//!   `pkg.main.helper` in the entry module. The one exception is the entry
+//!   module's `main`, which keeps its name: the runtime starts there. An
+//!   identifier never contains `.`, so no source can write a key: it is
+//!   reached only through linking, and no two modules' names, nor a name
+//!   and another module's `std` import, can clash in the joined module.
 //! - A reference to an item, written plainly (`shout`, after `use
 //!   pkg.util.text.{shout}` or in its own module) or through a qualifier
 //!   (`text.shout`), becomes its key. Locals, generic parameters and
@@ -19,10 +22,12 @@
 //! Linking reports what the joined module cannot see: unknown modules
 //! and names, private items used from another module, import cycles,
 //! names bound twice, and a name that one module would see only because
-//! another imports or declares it (a `std` import is per module, and the
-//! entry module's items keep their plain names). Everything else, every
+//! another imports (a `std` import is per module). Everything else, every
 //! type, trust, capability and contract rule, is the checker's, over the
 //! whole package at once.
+//!
+//! A key is internal: [`Keys::display`] turns every key in a message
+//! into the name code in the message's module writes.
 
 use std::collections::{HashMap, HashSet};
 
@@ -52,14 +57,18 @@ pub struct Parsed {
 pub struct Linked {
     pub module: Module,
     pub diagnostics: Vec<Diagnostic>,
-    /// The span of every reference linking reported. A diagnostic of the
-    /// joined module inside one of them is the same error again.
+    /// The span of every reference linking reported. Linking leaves such
+    /// a reference as written, so the checker reports it again (an
+    /// unknown name, say): a diagnostic of the joined module inside one of
+    /// them is the same error, and is dropped.
     pub reported: Vec<Span>,
+    /// Every item's key.
+    pub keys: Keys,
 }
 
 /// Which module of the package each part of the joined text is in, for
 /// the rules that depend on where code is: privacy of fields, methods and
-/// traits (`body.rs`), and the module paths of the authority report
+/// traits (`body.rs`), and the names of the authority report
 /// (`authority.rs`). A single file has none: all its code is in one
 /// module.
 #[derive(Debug, Default)]
@@ -82,30 +91,15 @@ impl Modules {
             .map_or(ENTRY_MODULE, |(module, _)| module.as_str())
     }
 
-    /// The module that declares the item with `key`: `util.text` for
-    /// `pkg.util.text.shout`. `None` for a plain name, which is the entry
-    /// module's, the prelude's or a `std` module's.
-    pub fn owner(key: &str) -> Option<&str> {
-        key.strip_prefix(PKG)
-            .and_then(|k| k.strip_prefix('.'))
-            .and_then(|rest| rest.rsplit_once('.'))
-            .map(|(module, _)| module)
-    }
-
-    /// `key` as code in `module` would name it in a report: without
-    /// `pkg.`, and without its module path too when `module` declares it.
-    pub fn display<'k>(key: &'k str, module: &str) -> &'k str {
-        match key.strip_prefix(PKG).and_then(|k| k.strip_prefix('.')) {
-            Some(rest) if Self::owner(key) == Some(module) => unqualified(rest),
-            Some(rest) => rest,
-            None => key,
-        }
-    }
-
     /// The name the authority report gives a function or method declared
-    /// at `offset`: in a package, the module path, then the type for a
-    /// method (see [`Modules::display`]), then the name. In a single file,
-    /// the name, or `Type.name` for a method.
+    /// at `offset`, whose type or trait, for a method, is `type_key`. In
+    /// a single file, the name, or `Type.name` for a method. In a package,
+    /// `pkg.`, the module path and the name, as for an [`ItemKey`]; a
+    /// method is named by its type's module, wherever its `impl` is, so
+    /// every name is the package's one function with that name: an
+    /// `impl util.Box` in `main` gives `pkg.util.Box.leak`, never
+    /// `pkg.main.…`. A package's names start with `pkg.` so that none reads
+    /// as a `std` module's, even a module named `html`.
     pub fn function_name(&self, offset: usize, type_key: Option<&str>, name: &str) -> String {
         if self.ranges.is_empty() {
             return match type_key {
@@ -113,31 +107,155 @@ impl Modules {
                 None => name.to_string(),
             };
         }
-        let module = self.at(offset);
-        let name = unqualified(name);
+        let here = self.at(offset);
+        let name = ItemKey::parse(name).map_or(name, |key| key.name);
         match type_key {
-            Some(ty) => format!("{module}.{}.{name}", Self::display(ty, module)),
-            None => format!("{module}.{name}"),
+            Some(ty) => {
+                let ty = ItemKey::parse(ty).unwrap_or(ItemKey {
+                    module: here,
+                    name: ty,
+                });
+                format!("{}.{name}", ty.joined())
+            }
+            None => ItemKey { module: here, name }.joined(),
         }
     }
 }
 
-/// The name a declaration of `module` has in the joined module: its own
-/// name in the entry module, and otherwise `pkg.`, the module path and
-/// the name. The `pkg.` keeps it apart from the qualified names the
-/// checker gives `std` declarations, such as `html.text`.
+/// The name an item of a package has in the joined module: `pkg.`, its
+/// module path and its name, such as `pkg.util.text.shout`. Keys are
+/// internal to checking a package; code names an item as [`ItemKey::in_module`]
+/// says, and messages do too ([`Keys::display`]). The authority report
+/// names functions with the whole key, which is unique in the package and
+/// never reads as a `std` name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ItemKey<'a> {
+    /// The module path, such as `util.text`.
+    module: &'a str,
+    name: &'a str,
+}
+
+impl<'a> ItemKey<'a> {
+    /// The key of `name`, declared by `module`.
+    pub fn new(module: &'a str, name: &'a str) -> ItemKey<'a> {
+        ItemKey { module, name }
+    }
+
+    /// The key a name of the joined module is, if it is one:
+    /// `pkg.util.text.shout` is `shout` of `util.text`.
+    pub fn parse(joined: &'a str) -> Option<ItemKey<'a>> {
+        let rest = joined.strip_prefix(PKG)?.strip_prefix('.')?;
+        let (module, name) = rest.rsplit_once('.')?;
+        Some(ItemKey { module, name })
+    }
+
+    /// The name the item has in the joined module.
+    pub fn joined(self) -> String {
+        format!("{PKG}.{}.{}", self.module, self.name)
+    }
+
+    /// The item's own name, such as `shout`.
+    pub fn name(self) -> &'a str {
+        self.name
+    }
+
+    /// The item as code in `module` names it: plainly in its own module,
+    /// and otherwise by its module path and name, as in `util.text.shout`.
+    pub fn in_module(self, module: &str) -> String {
+        if self.module == module {
+            self.name.to_string()
+        } else {
+            format!("{}.{}", self.module, self.name)
+        }
+    }
+}
+
+/// Every key of a package's items, to take keys out of messages.
+#[derive(Debug, Default)]
+pub struct Keys {
+    keys: HashSet<String>,
+}
+
+impl Keys {
+    /// The keys of `declared`, each a module path and an item name it
+    /// declares.
+    pub fn new<'a>(declared: impl IntoIterator<Item = (&'a str, &'a str)>) -> Keys {
+        Keys {
+            keys: declared
+                .into_iter()
+                .map(|(module, name)| key(module, name))
+                .collect(),
+        }
+    }
+
+    /// `text`, a message about code in `module`, with every key in it
+    /// written as that code names the item ([`ItemKey::in_module`]). This
+    /// is the one place a key becomes text a person reads: the checker's
+    /// messages and the runtime's panics, which name items of the joined
+    /// module, pass through it. A key is found where `pkg.` starts a
+    /// dotted name and a prefix of that name, ending at a `.`, is a key
+    /// of the package, so `pkg.util.Box.leak` is `util.Box` and `.leak`.
+    pub fn display(&self, text: &str, module: &str) -> String {
+        if self.keys.is_empty() {
+            return text.to_string();
+        }
+        let mut out = String::with_capacity(text.len());
+        let mut copied = 0;
+        let mut from = 0;
+        while let Some(found) = text[from..].find(PKG) {
+            let at = from + found;
+            from = at + PKG.len();
+            let boundary = text[..at]
+                .chars()
+                .next_back()
+                .map_or(true, |c| !is_name_char(c) && c != '.');
+            if !boundary {
+                continue;
+            }
+            let len = text[at..]
+                .find(|c: char| !is_name_char(c) && c != '.')
+                .unwrap_or(text.len() - at);
+            let dotted = &text[at..at + len];
+            let longest = dotted
+                .match_indices('.')
+                .map(|(dot, _)| dot)
+                .chain([dotted.len()])
+                .rev()
+                .find(|&end| self.keys.contains(&dotted[..end]));
+            let Some(end) = longest else {
+                continue;
+            };
+            let Some(item) = ItemKey::parse(&dotted[..end]) else {
+                continue;
+            };
+            out.push_str(&text[copied..at]);
+            out.push_str(&item.in_module(module));
+            copied = at + end;
+            from = copied;
+        }
+        out.push_str(&text[copied..]);
+        out
+    }
+}
+
+fn is_name_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// The name a declaration of `module` has in the joined module: its key,
+/// or `main` for the entry module's `main`, where the runtime starts.
 pub fn key(module: &str, name: &str) -> String {
-    if module == ENTRY_MODULE {
+    if module == ENTRY_MODULE && name == ENTRY_MODULE {
         name.to_string()
     } else {
-        format!("{PKG}.{module}.{name}")
+        ItemKey::new(module, name).joined()
     }
 }
 
 /// The name an item declares, without its module: `Item` for
 /// `pkg.util.Item`.
 pub fn unqualified(name: &str) -> &str {
-    name.rsplit('.').next().unwrap_or(name)
+    ItemKey::parse(name).map_or(name, ItemKey::name)
 }
 
 /// An item a module declares.
@@ -201,7 +319,15 @@ pub fn link(text: &str, modules: Vec<Parsed>) -> Linked {
             items.push(item);
         }
     }
+    let keys = Keys::new(linker.paths.iter().zip(&linker.declared).flat_map(
+        |(module, declared)| {
+            declared
+                .keys()
+                .map(move |name| (module.as_str(), name.as_str()))
+        },
+    ));
     Linked {
+        keys,
         module: Module {
             items,
             span: Span {
@@ -225,17 +351,22 @@ fn declared(text: &str, parsed: &Parsed) -> HashMap<String, Declared> {
         let Some(name) = item_name(item) else {
             continue;
         };
-        let pub_at = item.attributes.last().map_or(item.span.start, |attribute| {
-            let rest = &text[attribute.span.end..item.span.end];
-            attribute.span.end + (rest.len() - rest.trim_start().len())
-        });
         declared.entry(name.name.clone()).or_insert(Declared {
             key: key(&parsed.module, &name.name),
             visibility: item.visibility,
-            pub_at,
+            pub_at: crate::items::Declared::of(item).marker_at(text),
         });
     }
     declared
+}
+
+/// The names of the items `module` declares, as its source writes them.
+pub fn declared_names(module: &Module) -> impl Iterator<Item = &str> {
+    module
+        .items
+        .iter()
+        .filter_map(item_name)
+        .map(|ident| ident.name.as_str())
 }
 
 /// The name of the function, type, trait or constant `item` declares.
@@ -294,12 +425,10 @@ impl Linker {
     /// order, reporting each import that fails.
     fn scope(&mut self, index: usize, ast: &Module) -> Scope {
         let mut scope = Scope::default();
-        if self.entry != Some(index) {
-            let mut names: Vec<String> = self.declared[index].keys().cloned().collect();
-            names.sort_unstable();
-            for name in names {
-                self.not_a_prelude_name(ast, &name);
-            }
+        let mut names: Vec<String> = self.declared[index].keys().cloned().collect();
+        names.sort_unstable();
+        for name in names {
+            self.not_a_prelude_name(ast, &name);
         }
         for (name, declared) in &self.declared[index] {
             scope.names.insert(name.clone(), declared.key.clone());
@@ -309,15 +438,12 @@ impl Linker {
                 self.use_decl(index, u, &mut scope);
             }
         }
-        if index != self.entry.unwrap_or(usize::MAX) {
-            self.not_imported_and_declared(index, ast, &scope);
-        }
+        self.not_imported_and_declared(index, ast, &scope);
         scope
     }
 
-    /// A module other than the entry module declares its items under
-    /// keys, which never clash with the prelude's names; report the clash
-    /// a single file would.
+    /// A module declares its items under keys, which never clash with
+    /// the prelude's names; report the clash a single file would.
     fn not_a_prelude_name(&mut self, ast: &Module, name: &str) {
         let in_prelude = prelude::PRIMITIVES.contains(&name)
             || name == ty::UNTRUSTED
@@ -655,11 +781,9 @@ impl Rewriter<'_> {
     }
 
     fn item(&mut self, item: &mut Item) {
-        if !self.is_entry() {
-            let module = &self.linker.paths[self.module];
-            if let Some(name) = item_name_mut(item) {
-                name.name = key(module, &name.name);
-            }
+        let module = &self.linker.paths[self.module];
+        if let Some(name) = item_name_mut(item) {
+            name.name = key(module, &name.name);
         }
         match &mut item.kind {
             ItemKind::Fn(f) => self.function(f),
@@ -696,23 +820,8 @@ impl Rewriter<'_> {
                 self.expr(&mut c.value);
             }
             ItemKind::Test(t) => {
-                // A package's tests are named with their module.
-                let module = self.linker.paths[self.module].clone();
-                let start = t.name.span.start;
-                if let ExprKind::Str(parts) = &mut t.name.kind {
-                    match parts.first_mut() {
-                        Some(StrPart::Text { value, .. }) => {
-                            *value = format!("{module}::{value}");
-                        }
-                        _ => parts.insert(
-                            0,
-                            StrPart::Text {
-                                value: format!("{module}::"),
-                                span: Span { start, end: start },
-                            },
-                        ),
-                    }
-                }
+                // A test keeps its name; its module is where it is
+                // (`oska_check::Locator::module_of`).
                 self.locals.push("t".to_string());
                 self.block(&mut t.body);
                 self.locals.clear();
@@ -815,10 +924,39 @@ impl Rewriter<'_> {
                             None => self.std_qualifier_leak(qualifier, span),
                         }
                     }
+                    [first, .., _] if first.name == PKG => {
+                        let segments = segments.clone();
+                        self.pkg_path_type(&segments);
+                    }
                     _ => {}
                 }
             }
         }
+    }
+
+    /// A type written as a `pkg.…` path, which is written only in a
+    /// `use`. Reported as written: the checker would name it by a key.
+    fn pkg_path_type(&mut self, segments: &[Ident]) {
+        let written: Vec<&str> = segments.iter().map(|s| s.name.as_str()).collect();
+        let (Some(first), Some(last)) = (segments.first(), segments.last()) else {
+            return;
+        };
+        let span = join(first.span, last.span);
+        let (module, item) = match written.as_slice() {
+            [_, module @ .., item] => (module.join("."), *item),
+            _ => return,
+        };
+        let qualifier = module.rsplit('.').next().unwrap_or(&module);
+        let diagnostic = Diagnostic::new(
+            codes::UNKNOWN_NAME,
+            format!(
+                "unknown type `{}`: a `{PKG}.…` path is written only in a `use`; \
+                 after `use {PKG}.{module}`, write `{qualifier}.{item}`",
+                written.join(".")
+            ),
+            span,
+        );
+        self.report(diagnostic, span);
     }
 
     /// A name written plainly in a type or value position. Returns its
@@ -843,11 +981,14 @@ impl Rewriter<'_> {
                 return None;
             }
         }
+        // The entry module's `main` keeps its name, so another module
+        // writing `main` would find it.
         let leaked_entry = !self.is_entry()
-            && self
-                .linker
-                .entry
-                .is_some_and(|entry| self.linker.declared[entry].contains_key(name));
+            && self.linker.entry.is_some_and(|entry| {
+                self.linker.declared[entry]
+                    .get(name)
+                    .is_some_and(|declared| declared.key == name)
+            });
         if leaked_std || leaked_entry {
             let diagnostic = match expect {
                 Expect::Type => {

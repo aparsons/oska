@@ -1,6 +1,6 @@
 $ oskac check
 exit: 0
 --- stdout
-fn main.main: Stdout (io)
-fn main.greeting: pure
+fn pkg.main.main: Stdout (io)
+fn pkg.main.greeting: pure
 --- stderr

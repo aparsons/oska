@@ -9,7 +9,7 @@
 //! checks that module, so every rule holds across the whole package.
 
 use oska_syntax::ast::ItemKind;
-use oska_syntax::{Diagnostic, Location, Span};
+use oska_syntax::{Diagnostic, LineIndex, Location, Span};
 
 use crate::manifest::is_snake_case;
 use crate::{
@@ -130,6 +130,9 @@ pub fn check_package(package: &Package, options: CheckOptions) -> CheckReport {
 struct Joined<'p> {
     text: String,
     modules: Vec<(&'p ModuleSource, usize)>,
+    /// Each module's lines, in package order, so that locating every
+    /// entry of a report is linear in the text.
+    lines: Vec<LineIndex<'p>>,
 }
 
 impl<'p> Joined<'p> {
@@ -153,10 +156,56 @@ impl<'p> Joined<'p> {
             .filter_map(|module| starts.iter().find(|(m, _)| std::ptr::eq(*m, module)))
             .copied()
             .collect();
+        let in_package_order: Vec<(&ModuleSource, usize)> = in_package_order;
         Joined {
             text,
+            lines: in_package_order
+                .iter()
+                .map(|(module, _)| LineIndex::new(&module.source))
+                .collect(),
             modules: in_package_order,
         }
+    }
+
+    /// The location of `local`, an offset into the file of the module at
+    /// `index` in package order.
+    fn location(&self, index: usize, local: usize) -> Location {
+        let path = self.modules.get(index).map_or("", |(m, _)| m.path.as_str());
+        match self.lines.get(index) {
+            Some(lines) => lines.location(path, local),
+            None => Location::new(path, "", local),
+        }
+    }
+
+    /// `diagnostic`, whose span is an offset into the joined text, in the
+    /// file of its module: located, its span an offset into that file,
+    /// and a fix whose edits are in another file naming that file.
+    fn locate(&self, mut d: Diagnostic) -> (usize, Diagnostic) {
+        let (module, span, index) = self.local(d.span);
+        d.span = span;
+        if let Some(fix) = &mut d.fix {
+            for edit in &mut fix.edits {
+                let (edited, span, _) = self.local(edit.span);
+                edit.span = span;
+                if edited.path != module.path {
+                    fix.path = Some(edited.path.clone());
+                }
+            }
+        }
+        d.location = Some(Box::new(self.location(index, span.start)));
+        (index, d)
+    }
+
+    /// `diagnostic`, a message about the joined module, with every key in
+    /// its message and its fix's written as code in its module names the
+    /// item (`link::Keys::display`).
+    fn display_keys(&self, keys: &link::Keys, mut d: Diagnostic) -> Diagnostic {
+        let (module, _, _) = self.local(d.span);
+        d.message = keys.display(&d.message, &module.module);
+        if let Some(fix) = &mut d.fix {
+            fix.message = keys.display(&fix.message, &module.module);
+        }
+        d
     }
 
     /// `span` within the file of its module: that module, the span, and
@@ -204,9 +253,22 @@ fn check_joined(modules: &[ModuleSource], options: CheckOptions) -> CheckReport 
             Err(err) => parse_errors.push(err),
         }
     }
+    let mut layout = Vec::new();
+    for (module, start) in &joined.modules {
+        layout.extend(layout_diagnostics(module).into_iter().map(|mut d| {
+            d.span = Span {
+                start: d.span.start + start,
+                end: d.span.end + start,
+            };
+            d
+        }));
+    }
     if !parse_errors.is_empty() {
+        let mut diagnostics = parse_errors;
+        diagnostics.extend(layout);
+        diagnostics.sort_by_key(|d| d.span.start);
         let report = CheckReport {
-            diagnostics: parse_errors,
+            diagnostics,
             ..CheckReport::default()
         };
         return locate(report, &joined);
@@ -226,24 +288,19 @@ fn check_joined(modules: &[ModuleSource], options: CheckOptions) -> CheckReport 
             .collect(),
     );
     let mut report = check_parsed(&joined.text, &linked.module, options, modules);
-    report.diagnostics.retain(|d| {
-        !linked
-            .reported
-            .iter()
-            .any(|r| r.start <= d.span.start && d.span.end <= r.end)
-    });
+    report.diagnostics = report
+        .diagnostics
+        .into_iter()
+        .filter(|d| {
+            !linked
+                .reported
+                .iter()
+                .any(|r| r.start <= d.span.start && d.span.end <= r.end)
+        })
+        .map(|d| joined.display_keys(&linked.keys, d))
+        .collect();
     report.diagnostics.extend(linked.diagnostics);
-    for (module, start) in &joined.modules {
-        report
-            .diagnostics
-            .extend(layout_diagnostics(module).into_iter().map(|mut d| {
-                d.span = Span {
-                    start: d.span.start + start,
-                    end: d.span.end + start,
-                };
-                d
-            }));
-    }
+    report.diagnostics.extend(layout);
     report.diagnostics.sort_by_key(|d| d.span.start);
     if !report.diagnostics.is_empty() {
         report.program = None;
@@ -251,19 +308,60 @@ fn check_joined(modules: &[ModuleSource], options: CheckOptions) -> CheckReport 
     locate(report, &joined)
 }
 
-/// A diagnostic whose span is an offset into the program of `package`,
-/// as a runtime panic's is, in the file and the offsets of its module:
-/// the span is local to that file and the diagnostic names it. A
-/// package that is one file (one module, no manifest) keeps its offsets.
-pub fn locate_in_package(package: &Package, diagnostic: Diagnostic) -> Diagnostic {
-    if package.modules.is_empty() {
-        return diagnostic;
+/// What the offsets of a checked package's program mean. Built once for
+/// a package, it turns what the program reports, a runtime panic or a
+/// failed test, into a report about a file: its module, its file and
+/// offsets in that file, and item names as that module's code writes
+/// them. A package that is one file (one module, no manifest) keeps its
+/// offsets, and has no module.
+pub struct Locator<'p> {
+    joined: Option<Joined<'p>>,
+    keys: link::Keys,
+    single_file: bool,
+}
+
+impl<'p> Locator<'p> {
+    pub fn new(package: &'p Package) -> Locator<'p> {
+        let parsed: Vec<(&str, oska_syntax::ast::Module)> = package
+            .modules
+            .iter()
+            .filter_map(|m| {
+                Some((
+                    m.module.as_str(),
+                    oska_syntax::parse_module(&m.source).ok()?,
+                ))
+            })
+            .collect();
+        let keys =
+            link::Keys::new(parsed.iter().flat_map(|(module, ast)| {
+                link::declared_names(ast).map(move |name| (*module, name))
+            }));
+        Locator {
+            joined: (!package.modules.is_empty()).then(|| Joined::new(&package.modules)),
+            keys,
+            single_file: package.manifest.is_none() && package.modules.len() == 1,
+        }
     }
-    let joined = Joined::new(&package.modules);
-    let (module, span, _) = joined.local(diagnostic.span);
-    let mut located = diagnostic;
-    located.span = span;
-    located.locate(&module.path, &module.source)
+
+    /// `diagnostic`, whose span is an offset into the program, about the
+    /// file it is in.
+    pub fn locate(&self, diagnostic: Diagnostic) -> Diagnostic {
+        let Some(joined) = &self.joined else {
+            return diagnostic;
+        };
+        let diagnostic = joined.display_keys(&self.keys, diagnostic);
+        joined.locate(diagnostic).1
+    }
+
+    /// The module path of the code at `span` of the program, such as
+    /// `util.text`: `None` for a single file.
+    pub fn module_of(&self, span: Span) -> Option<&'p str> {
+        if self.single_file {
+            return None;
+        }
+        let (module, _, _) = self.joined.as_ref()?.local(span);
+        Some(module.module.as_str())
+    }
 }
 
 /// Name the file of every diagnostic, audit site and attenuation of
@@ -274,20 +372,7 @@ fn locate(mut report: CheckReport, joined: &Joined) -> CheckReport {
     let mut diagnostics: Vec<(usize, Diagnostic)> = report
         .diagnostics
         .into_iter()
-        .map(|mut d| {
-            let (module, span, index) = joined.local(d.span);
-            d.span = span;
-            if let Some(fix) = &mut d.fix {
-                for edit in &mut fix.edits {
-                    let (edited, span, _) = joined.local(edit.span);
-                    edit.span = span;
-                    if edited.path != module.path {
-                        fix.path = Some(edited.path.clone());
-                    }
-                }
-            }
-            (index, d.locate(&module.path, &module.source))
-        })
+        .map(|d| joined.locate(d))
         .collect();
     // Stable: source order stays within each module.
     diagnostics.sort_by_key(|(index, _)| *index);
@@ -296,9 +381,9 @@ fn locate(mut report: CheckReport, joined: &Joined) -> CheckReport {
         .audit
         .into_iter()
         .map(|mut site| {
-            let (module, span, index) = joined.local(site.span);
+            let (_, span, index) = joined.local(site.span);
             site.span = span;
-            site.location = Some(Location::new(&module.path, &module.source, span.start));
+            site.location = Some(joined.location(index, span.start));
             (index, site)
         })
         .collect();
@@ -308,9 +393,9 @@ fn locate(mut report: CheckReport, joined: &Joined) -> CheckReport {
         .attenuations
         .into_iter()
         .map(|mut attenuation| {
-            let (module, span, index) = joined.local(attenuation.span);
+            let (_, span, index) = joined.local(attenuation.span);
             attenuation.span = span;
-            attenuation.location = Some(Location::new(&module.path, &module.source, span.start));
+            attenuation.location = Some(joined.location(index, span.start));
             (index, attenuation)
         })
         .collect();
@@ -334,13 +419,14 @@ fn layout_diagnostics(module: &ModuleSource) -> Vec<Diagnostic> {
         .strip_prefix("src/")
         .map(|rest| rest.strip_suffix(".osk").unwrap_or(rest));
     if let Some(named) = named {
-        if let Some(bad) = named.split('/').find(|name| !is_snake_case(name)) {
+        let problem = named
+            .split('/')
+            .enumerate()
+            .find_map(|(at, name)| name_problem(name, at == 0).map(|problem| (name, problem)));
+        if let Some((bad, problem)) = problem {
             found.push(Diagnostic::new(
                 codes::BAD_MODULE_NAME,
-                format!(
-                    "`{bad}` in `{}` is not a snake_case name, so `use pkg.{}` cannot name this module",
-                    module.path, module.module
-                ),
+                format!("`{bad}` in `{}` {problem}", module.path),
                 Span { start: 0, end: 0 },
             ));
         }
@@ -364,26 +450,62 @@ fn layout_diagnostics(module: &ModuleSource) -> Vec<Diagnostic> {
     found
 }
 
-/// The refusal of a symlinked file or directory at `path`, package-relative,
-/// under `src/` (`E0411`): a package's source is what is in its tree.
-/// Finding one needs the file system, so `oskac` does it.
+/// What is wrong with `name`, a directory or file name (without `.osk`)
+/// of a module's path under `src/`, when something is; `first` when it
+/// is the module path's first name. Every module must be one `use pkg.…`
+/// can name, and its name must not read as anything else: so a name is
+/// snake_case and not a keyword, and a module path does not start with
+/// `pkg` or `std`, which begin import paths, or `main`, the entry module.
+fn name_problem(name: &str, first: bool) -> Option<&'static str> {
+    if name.starts_with('.') {
+        Some("is hidden: every `.osk` file under `src/` is a module, so rename it or move it out of `src/`")
+    } else if !is_snake_case(name) {
+        Some("is not a snake_case name, so `use pkg.…` cannot name this module")
+    } else if oska_syntax::is_keyword(name) {
+        Some("is a keyword, so `use pkg.…` cannot name this module")
+    } else if first && RESERVED_ROOTS.contains(&name) {
+        Some(
+            "is reserved: a module path cannot start with `pkg` or `std`, which begin \
+             import paths, or `main`, the entry module",
+        )
+    } else {
+        None
+    }
+}
+
+/// The names a module path cannot start with.
+const RESERVED_ROOTS: [&str; 3] = [crate::link::PKG, "std", ENTRY_MODULE];
+
+/// The refusal of a symlink at `path`, package-relative (`E0411`): the
+/// manifest, or a file or directory under `src/`. A package's source is
+/// what is in its tree. Finding one needs the file system, so `oskac`
+/// does it.
 pub fn symlink_refused(path: &str) -> Diagnostic {
     Diagnostic::new(
         codes::SYMLINK_IN_SOURCE,
-        format!("`{path}` is a symlink: a package's source must be regular files and directories under `src/`"),
+        format!(
+            "`{path}` is a symlink: a package's `oska.toml` and its source must be regular \
+             files and directories in its own tree"
+        ),
         Span { start: 0, end: 0 },
     )
     .locate(path, "")
 }
 
 /// The refusal of the directory `dir`, given as a package, when `problem`
-/// says what it lacks (`E0413`).
-pub fn not_a_package(dir: &str, problem: &str) -> Diagnostic {
+/// says what it lacks (`E0413`). `inside` is the command and the package
+/// directory above `dir`, when `dir` is inside one, which the message
+/// suggests instead.
+pub fn not_a_package(dir: &str, problem: &str, inside: Option<(&str, &str)>) -> Diagnostic {
+    let hint = inside.map_or_else(String::new, |(command, above)| {
+        format!("; `{dir}` is inside the package in `{above}`: run `oskac {command} {above}`")
+    });
     Diagnostic::new(
         codes::NOT_A_PACKAGE,
         format!(
-            "`{dir}` is not a package: {problem}; a package has an `oska.toml` with a `[package]` \
-             table and its modules under `src/`, and a single file is checked by naming the `.osk` file"
+            "`{dir}` is not a package: {problem}{hint}; a package has an `oska.toml` with a \
+             `[package]` table and its modules under `src/`, and a single file is checked by \
+             naming the `.osk` file"
         ),
         Span { start: 0, end: 0 },
     )

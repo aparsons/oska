@@ -1,5 +1,5 @@
 $ oskac test crates/oskac/tests/fixtures/packages/multi --format=json
 exit: 0
 --- stdout
-{"tests":[{"name":"main::main adds up","status":"passed","failure":null},{"name":"math::double","status":"passed","failure":null},{"name":"util.text::shout","status":"passed","failure":null}],"passed":3,"failed":0,"skipped":0,"diagnostics":[]}
+{"tests":[{"name":"main adds up","module":"main","status":"passed","failure":null},{"name":"double","module":"math","status":"passed","failure":null},{"name":"shout","module":"util.text","status":"passed","failure":null}],"passed":3,"failed":0,"skipped":0,"diagnostics":[]}
 --- stderr

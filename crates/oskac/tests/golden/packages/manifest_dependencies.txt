@@ -1,6 +1,6 @@
 $ oskac check crates/oskac/tests/fixtures/packages/manifest_dependencies
 exit: 1
 --- stdout
-fn main.main: pure
+fn pkg.main.main: pure
 --- stderr
-oska.toml:5:2: error[E0403]: `[dependencies]` is not supported yet: dependencies arrive in milestone 5 (bytes 44..56)
+crates/oskac/tests/fixtures/packages/manifest_dependencies/oska.toml:5:2: error[E0403]: `[dependencies]` is not supported yet: dependencies arrive in milestone 5 (bytes 44..56)

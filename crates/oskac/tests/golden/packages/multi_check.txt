@@ -1,7 +1,7 @@
 $ oskac check crates/oskac/tests/fixtures/packages/multi
 exit: 0
 --- stdout
-fn main.main: Stdout (io)
-fn math.double: pure
-fn util.text.shout: pure
+fn pkg.main.main: Stdout (io)
+fn pkg.math.double: pure
+fn pkg.util.text.shout: pure
 --- stderr

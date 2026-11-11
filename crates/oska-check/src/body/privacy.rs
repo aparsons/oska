@@ -14,7 +14,7 @@ use oska_syntax::{Diagnostic, Edit, Span};
 use super::Body;
 use crate::codes;
 use crate::items::{Declared, FnSig};
-use crate::link::{self, Modules};
+use crate::link;
 
 impl Body<'_, '_, '_> {
     /// The module of the code being checked.
@@ -31,13 +31,7 @@ impl Body<'_, '_, '_> {
 
     /// Where a visibility marker goes in `declared`: after its attributes.
     fn marker_at(&self, declared: &Declared) -> usize {
-        match declared.attributes_end {
-            Some(end) => {
-                let rest = self.src.get(end..).unwrap_or_default();
-                end + (rest.len() - rest.trim_start().len())
-            }
-            None => declared.start,
-        }
+        declared.marker_at(self.src)
     }
 
     /// Report the use at `span` of `what`, private to `module`, with a fix
@@ -65,19 +59,11 @@ impl Body<'_, '_, '_> {
         let (declared, what) = match &sig.trait_name {
             None => (
                 sig.declared,
-                format!(
-                    "the method `{}` of `{}`",
-                    sig.name,
-                    Modules::display(type_name, self.here())
-                ),
+                format!("the method `{}` of `{}`", sig.name, type_name),
             ),
             Some(trait_name) => (
                 self.items.traits.get(trait_name).and_then(|t| t.declared),
-                format!(
-                    "the trait `{}` of the method `{}`",
-                    link::unqualified(trait_name),
-                    sig.name
-                ),
+                format!("the trait `{}` of the method `{}`", trait_name, sig.name),
             ),
         };
         let Some(declared) = declared else {
@@ -118,10 +104,7 @@ impl Body<'_, '_, '_> {
         let Some(module) = self.foreign(declared.start) else {
             return true;
         };
-        let what = format!(
-            "the field `{name}` of `{}`",
-            Modules::display(type_name, self.here())
-        );
+        let what = format!("the field `{name}` of `{}`", type_name);
         self.private(&what, &module, "pub ", at, span);
         false
     }
@@ -150,7 +133,7 @@ impl Body<'_, '_, '_> {
             format!(
                 "`{}` has fields private to `{}.{module}`, so only that module can build it or \
                  match its fields; mark them `pub` to do so from other modules of the package",
-                Modules::display(type_name, self.here()),
+                type_name,
                 link::PKG
             ),
             span,

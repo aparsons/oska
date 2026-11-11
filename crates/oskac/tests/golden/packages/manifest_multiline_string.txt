@@ -1,6 +1,6 @@
 $ oskac check crates/oskac/tests/fixtures/packages/manifest_multiline_string
 exit: 1
 --- stdout
-fn main.main: pure
+fn pkg.main.main: pure
 --- stderr
-oska.toml:2:8: error[E0401]: `oska.toml` does not support multiline strings (bytes 17..20)
+crates/oskac/tests/fixtures/packages/manifest_multiline_string/oska.toml:2:8: error[E0401]: `oska.toml` does not support multiline strings (bytes 17..20)

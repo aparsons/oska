@@ -33,4 +33,5 @@ dependencies = [
  "oska-check",
  "oska-run",
  "oska-syntax",
+ "oska-sys",
 ]

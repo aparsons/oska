@@ -1,5 +1,5 @@
 $ oskac check crates/oskac/tests/fixtures/packages/library
 exit: 0
 --- stdout
-fn greeting.greet: pure
+fn pkg.greeting.greet: pure
 --- stderr
