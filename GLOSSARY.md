@@ -105,7 +105,7 @@ An argument to a sink that decides code, commands, paths, or destinations. It re
 ## Packages
 
 **Module**:
-One source file. Its items are private unless marked `pub(pkg)` or `pub`.
+One source file. Its items, methods and struct fields are private to it unless marked: an item or method with `pub(pkg)` or `pub`, a field with `pub`. The methods of an `impl` belong to the module the `impl` is in.
 
 **Package**:
 A set of modules published together from one git repository and named by its URL. Its `pub` items are its API, and its authority is counted over that API alone.

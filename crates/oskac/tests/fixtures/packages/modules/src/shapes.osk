@@ -1,0 +1,13 @@
+pub struct Square {
+    pub side: Int
+}
+
+impl Square {
+    pub fn area(self) -> Int {
+        self.side * self.side
+    }
+}
+
+pub fn unit() -> Square {
+    Square(side: 1)
+}

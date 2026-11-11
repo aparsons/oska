@@ -212,7 +212,20 @@ fn check_joined(modules: &[ModuleSource], options: CheckOptions) -> CheckReport 
         return locate(report, &joined);
     }
     let linked = link::link(&joined.text, parsed);
-    let mut report = check_parsed(&joined.text, &linked.module, options);
+    let modules = link::Modules::new(
+        joined
+            .modules
+            .iter()
+            .map(|(module, start)| {
+                let span = Span {
+                    start: *start,
+                    end: start + module.source.len(),
+                };
+                (module.module.clone(), span)
+            })
+            .collect(),
+    );
+    let mut report = check_parsed(&joined.text, &linked.module, options, modules);
     report.diagnostics.retain(|d| {
         !linked
             .reported

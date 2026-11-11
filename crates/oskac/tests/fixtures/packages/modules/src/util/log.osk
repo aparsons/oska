@@ -1,0 +1,3 @@
+pub(pkg) fn write(out: Stdout, line: String) -> Result<(), IoError> {
+    out.println(line)
+}

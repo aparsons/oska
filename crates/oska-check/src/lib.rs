@@ -332,8 +332,12 @@ impl Attenuation {
 /// One function's entry in the authority report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionAuthority {
-    /// The function's name, or `Type.method` for a method.
+    /// The function's name, or `Type.method` for a method. In a package,
+    /// the module path comes first, as in `util.text.shout` (see
+    /// `link::Modules::function_name`).
     pub name: String,
+    /// Declared `pub`: part of its package's API.
+    pub public: bool,
     /// The built-in capabilities the function can reach, in order of first
     /// appearance. Attenuated capabilities keep their names, such as
     /// `FsRead`.
@@ -428,7 +432,7 @@ impl FunctionAuthority {
     /// `fn main: Stdout (io), FsRead (fs)` or `fn add: pure`.
     pub fn to_human(&self) -> String {
         if self.pure {
-            return format!("fn {}: pure", self.name);
+            return format!("{}fn {}: pure", self.pub_marker(), self.name);
         }
         let sources: Vec<String> = self
             .via
@@ -441,7 +445,20 @@ impl FunctionAuthority {
                 }
             })
             .collect();
-        format!("fn {}: {}", self.name, sources.join(", "))
+        format!(
+            "{}fn {}: {}",
+            self.pub_marker(),
+            self.name,
+            sources.join(", ")
+        )
+    }
+
+    fn pub_marker(&self) -> &'static str {
+        if self.public {
+            "pub "
+        } else {
+            ""
+        }
     }
 
     /// Render as a single-line JSON object.
@@ -458,8 +475,9 @@ impl FunctionAuthority {
             })
             .collect();
         format!(
-            "{{\"name\":\"{}\",\"authority\":{},\"via\":[{}],\"pure\":{}}}",
+            "{{\"name\":\"{}\",{}\"authority\":{},\"via\":[{}],\"pure\":{}}}",
             json_escape(&self.name),
+            if self.public { "\"pub\":true," } else { "" },
             json_strings(&self.authority),
             via.join(","),
             self.pure
@@ -500,7 +518,7 @@ pub fn check_module(src: &str) -> CheckReport {
 /// diagnostic, with no functions.
 pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
     match oska_syntax::parse_module(src) {
-        Ok(module) => check_parsed(src, &module, options),
+        Ok(module) => check_parsed(src, &module, options, link::Modules::default()),
         Err(err) => CheckReport {
             diagnostics: vec![err],
             ..CheckReport::default()
@@ -510,8 +528,13 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
 
 /// Check `module`, parsed from `src`, whose spans are offsets into `src`:
 /// one source file, or the module that joins a package's modules
-/// (`link.rs`).
-pub(crate) fn check_parsed(src: &str, module: &Module, options: CheckOptions) -> CheckReport {
+/// (`link.rs`), whose `modules` say which module each part of `src` is.
+pub(crate) fn check_parsed(
+    src: &str,
+    module: &Module,
+    options: CheckOptions,
+    modules: link::Modules,
+) -> CheckReport {
     let mut diagnostics = Vec::new();
     let decls = collect::Decls::collect(module, &mut diagnostics);
     resolve::module(module, &decls, &mut diagnostics);
@@ -525,6 +548,7 @@ pub(crate) fn check_parsed(src: &str, module: &Module, options: CheckOptions) ->
     traits::module(src, module, &decls, &items, &mut diagnostics);
     let mut findings = body::Findings {
         diagnostics,
+        modules,
         ..body::Findings::default()
     };
     body::module(src, module, &decls, &items, &mut findings);
@@ -535,13 +559,14 @@ pub(crate) fn check_parsed(src: &str, module: &Module, options: CheckOptions) ->
         resolutions,
         assumed,
         instances,
+        modules,
         ..
     } = findings;
     instantiation::module(module, &decls, &items, assumed, instances, &mut diagnostics);
     let program = diagnostics
         .is_empty()
         .then(|| program::lower::module(src, module, &items, &resolutions));
-    let functions = authority::report(module, &decls);
+    let functions = authority::report(module, &decls, &modules);
     diagnostics.sort_by_key(|d| d.span.start);
     audit.sort_by_key(|site| site.span.start);
     // A chain shares its start: the inner call, which ends first, is first.

@@ -85,6 +85,20 @@ fn a_valid_package_checks_runs_and_tests() {
     ));
 }
 
+/// The authority report names each function with its module path, so
+/// `main.write` and `util.log.write` are told apart, and marks `pub`
+/// functions (#119).
+#[test]
+fn the_authority_report_names_functions_by_module_and_marks_pub() {
+    let modules = fixture("modules");
+    assert_golden(&case("modules_check", &["check", &modules]));
+    assert_golden(&case(
+        "modules_check_json",
+        &["check", &modules, "--format=json"],
+    ));
+    assert_golden(&case("modules_run", &["run", &modules]));
+}
+
 #[test]
 fn no_path_means_the_package_in_the_current_directory() {
     for command in ["check", "run", "test"] {

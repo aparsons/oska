@@ -261,6 +261,9 @@ impl Body<'_, '_, '_> {
                     self.variant_key(enum_name, variant),
                 ),
                 Target::Struct(name) => {
+                    if !self.fields_visible(name, span) {
+                        return None;
+                    }
                     let info = self.items.structs.get(name)?.clone();
                     let callable =
                         self.constructor(name, None, &info.generics, &info.fields, name.clone());

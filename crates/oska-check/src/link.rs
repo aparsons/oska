@@ -57,6 +57,71 @@ pub struct Linked {
     pub reported: Vec<Span>,
 }
 
+/// Which module of the package each part of the joined text is in, for
+/// the rules that depend on where code is: privacy of fields, methods and
+/// traits (`body.rs`), and the module paths of the authority report
+/// (`authority.rs`). A single file has none: all its code is in one
+/// module.
+#[derive(Debug, Default)]
+pub struct Modules {
+    /// Each module's path and the span of its text.
+    ranges: Vec<(String, Span)>,
+}
+
+impl Modules {
+    pub fn new(ranges: Vec<(String, Span)>) -> Modules {
+        Modules { ranges }
+    }
+
+    /// The path of the module whose text contains `offset`, such as
+    /// `util.text`.
+    pub fn at(&self, offset: usize) -> &str {
+        self.ranges
+            .iter()
+            .find(|(_, span)| span.start <= offset && offset <= span.end)
+            .map_or(ENTRY_MODULE, |(module, _)| module.as_str())
+    }
+
+    /// The module that declares the item with `key`: `util.text` for
+    /// `pkg.util.text.shout`. `None` for a plain name, which is the entry
+    /// module's, the prelude's or a `std` module's.
+    pub fn owner(key: &str) -> Option<&str> {
+        key.strip_prefix(PKG)
+            .and_then(|k| k.strip_prefix('.'))
+            .and_then(|rest| rest.rsplit_once('.'))
+            .map(|(module, _)| module)
+    }
+
+    /// `key` as code in `module` would name it in a report: without
+    /// `pkg.`, and without its module path too when `module` declares it.
+    pub fn display<'k>(key: &'k str, module: &str) -> &'k str {
+        match key.strip_prefix(PKG).and_then(|k| k.strip_prefix('.')) {
+            Some(rest) if Self::owner(key) == Some(module) => unqualified(rest),
+            Some(rest) => rest,
+            None => key,
+        }
+    }
+
+    /// The name the authority report gives a function or method declared
+    /// at `offset`: in a package, the module path, then the type for a
+    /// method (see [`Modules::display`]), then the name. In a single file,
+    /// the name, or `Type.name` for a method.
+    pub fn function_name(&self, offset: usize, type_key: Option<&str>, name: &str) -> String {
+        if self.ranges.is_empty() {
+            return match type_key {
+                Some(ty) => format!("{ty}.{name}"),
+                None => name.to_string(),
+            };
+        }
+        let module = self.at(offset);
+        let name = unqualified(name);
+        match type_key {
+            Some(ty) => format!("{module}.{}.{name}", Self::display(ty, module)),
+            None => format!("{module}.{name}"),
+        }
+    }
+}
+
 /// The name a declaration of `module` has in the joined module: its own
 /// name in the entry module, and otherwise `pkg.`, the module path and
 /// the name. The `pkg.` keeps it apart from the qualified names the

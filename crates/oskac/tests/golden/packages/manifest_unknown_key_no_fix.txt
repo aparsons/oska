@@ -1,6 +1,6 @@
 $ oskac check crates/oskac/tests/fixtures/packages/manifest_unknown_key_no_fix
 exit: 1
 --- stdout
-fn main: pure
+fn main.main: pure
 --- stderr
 oska.toml:4:1: error[E0402]: unknown key `license` in `[package]`; the keys are `name` and `version` (bytes 42..49)

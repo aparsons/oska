@@ -1,0 +1,5 @@
+$ oskac run crates/oskac/tests/fixtures/packages/modules
+exit: 0
+--- stdout
+area 9
+--- stderr

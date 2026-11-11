@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use oska_syntax::ast::{
-    Field, Fields, FnDecl, GenericParam, Item, ItemKind, Module, Type, TypeKind,
+    Field, Fields, FnDecl, GenericParam, Item, ItemKind, Module, Type, TypeKind, Visibility,
 };
 use oska_syntax::Span;
 
@@ -43,6 +43,32 @@ pub struct FnSig {
     /// A body-less prelude or `std` function, which each backend
     /// implements as an intrinsic.
     pub intrinsic: bool,
+    /// For a method of an inherent `impl` the module declares: where it
+    /// is and who may call it.
+    pub declared: Option<Declared>,
+}
+
+/// Where a declaration of the module is, and who may use it: what
+/// privacy across a package's modules needs (`body/privacy.rs`). The
+/// prelude's declarations have none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Declared {
+    pub visibility: Visibility,
+    /// The start of the item, which says which module declares it.
+    pub start: usize,
+    /// The end of its last attribute, if it has any: a visibility marker
+    /// goes after the attributes.
+    pub attributes_end: Option<usize>,
+}
+
+impl Declared {
+    pub fn of(item: &Item) -> Declared {
+        Declared {
+            visibility: item.visibility,
+            start: item.span.start,
+            attributes_end: item.attributes.last().map(|a| a.span.end),
+        }
+    }
 }
 
 /// How a function takes `self`.
@@ -163,6 +189,9 @@ pub struct StructInfo {
     /// The names of the private fields of a prelude struct, which the
     /// module cannot read.
     pub hidden_fields: Vec<String>,
+    /// For a struct the module declares: where it is, and each field
+    /// without `pub`, by position, with the offset where `pub ` would go.
+    pub declared: Option<(Declared, Vec<(usize, usize)>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -182,6 +211,8 @@ pub struct TraitInfo {
     /// Each method, with `Self` as `Ty::Param("Self")` and the trait's
     /// generics as parameters, and whether it has a default body.
     pub methods: Vec<(FnSig, bool)>,
+    /// For a trait the module declares: where it is and who may use it.
+    pub declared: Option<Declared>,
 }
 
 /// An `impl Trait<Args> for Target`.
@@ -280,6 +311,7 @@ impl TraitInfo {
             pure: sig.pure,
             follows_trust: sig.follows_trust,
             intrinsic: sig.intrinsic,
+            declared: sig.declared,
         }
     }
 }
@@ -383,6 +415,19 @@ impl Items {
                         } else {
                             Vec::new()
                         },
+                        declared: (!in_prelude).then(|| {
+                            let all: &[Field] = match &s.fields {
+                                Fields::Named(list) | Fields::Positional(list) => list,
+                                Fields::Unit => &[],
+                            };
+                            let private = all
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, f)| !f.public)
+                                .map(|(i, f)| (i, f.span.start))
+                                .collect();
+                            (Declared::of(item), private)
+                        }),
                     };
                     let key = key_of(decls, &s.name.name, in_prelude);
                     self.structs.entry(key).or_insert(info);
@@ -437,6 +482,7 @@ impl Items {
                                         sig.pure = false;
                                     }
                                     sig.follows_trust = follows_trust(method);
+                                    sig.declared = (!in_prelude).then(|| Declared::of(method));
                                     self.inherent
                                         .entry(type_name.clone())
                                         .or_default()
@@ -472,6 +518,7 @@ impl Items {
                         generic_keys: lower.generic_keys(),
                         self_key: (!in_prelude).then_some(GenericKey(t.name.span)),
                         methods,
+                        declared: (!in_prelude).then(|| Declared::of(item)),
                     };
                     let key = key_of(decls, &t.name.name, in_prelude);
                     self.traits.entry(key).or_insert(info);
@@ -740,6 +787,7 @@ impl<'d, 'a> Lower<'d, 'a> {
             trait_name: None,
             follows_trust: false,
             intrinsic: self.see_all && f.body.is_none(),
+            declared: None,
             pure: !f
                 .params
                 .iter()

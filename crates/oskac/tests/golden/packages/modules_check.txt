@@ -1,0 +1,9 @@
+$ oskac check crates/oskac/tests/fixtures/packages/modules
+exit: 0
+--- stdout
+fn main.main: Stdout (out)
+fn main.write: pure
+pub fn shapes.Square.area: pure
+pub fn shapes.unit: pure
+fn util.log.write: Stdout (out)
+--- stderr

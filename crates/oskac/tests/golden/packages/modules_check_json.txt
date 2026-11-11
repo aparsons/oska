@@ -1,0 +1,16 @@
+$ oskac check crates/oskac/tests/fixtures/packages/modules --format=json
+exit: 0
+--- stdout
+{
+  "diagnostics": [],
+  "functions": [
+    {"name":"main.main","authority":["Stdout"],"via":[{"param":"out","capabilities":["Stdout"]}],"pure":false},
+    {"name":"main.write","authority":[],"via":[],"pure":true},
+    {"name":"shapes.Square.area","pub":true,"authority":[],"via":[],"pure":true},
+    {"name":"shapes.unit","pub":true,"authority":[],"via":[],"pure":true},
+    {"name":"util.log.write","authority":["Stdout"],"via":[{"param":"out","capabilities":["Stdout"]}],"pure":false}
+  ],
+  "audit": [],
+  "attenuations": []
+}
+--- stderr
