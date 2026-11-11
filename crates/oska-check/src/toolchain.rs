@@ -91,7 +91,8 @@ fn use_std_rt(tokens: &[Token], i: usize) -> Option<Span> {
     })
 }
 
-/// Every intrinsic `std.rt` declares, in source order.
+/// Every intrinsic `std.rt` declares, in source order: its body-less
+/// functions. The functions with a body are the runtime itself.
 pub fn declared_intrinsics() -> Vec<&'static str> {
     let Ok(module) = oska_syntax::parse_prelude(RT_SOURCE) else {
         return Vec::new();
@@ -100,7 +101,7 @@ pub fn declared_intrinsics() -> Vec<&'static str> {
         .items
         .iter()
         .filter_map(|item| match &item.kind {
-            oska_syntax::ast::ItemKind::Fn(f) => Some(f.name.span),
+            oska_syntax::ast::ItemKind::Fn(f) if f.body.is_none() => Some(f.name.span),
             _ => None,
         })
         .filter_map(|span| RT_SOURCE.get(span.start..span.end))

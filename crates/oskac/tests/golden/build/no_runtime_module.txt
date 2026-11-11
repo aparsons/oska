@@ -1,0 +1,6 @@
+$ oskac build sql.osk
+exit: 2
+--- stdout
+--- stderr
+sql.osk:1:5: error[E0371]: `oskac build` cannot compile a program that uses `std.sql` yet: it has no runtime (bytes 4..11)
+--- written

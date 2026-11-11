@@ -1,0 +1,7 @@
+$ oskac build hello.osk --format=json
+exit: 0
+--- stdout
+{"output":"hello","diagnostics":[]}
+--- stderr
+--- written
+hello

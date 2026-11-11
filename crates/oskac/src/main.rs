@@ -3,6 +3,7 @@
 use oska_syntax::{Diagnostic, Span};
 use std::process::ExitCode;
 
+mod build;
 mod explain;
 mod package;
 
@@ -23,6 +24,10 @@ USAGE:
     oskac test [path] [--format=json] [--integration]
                                            Run the test blocks in a source file
                                            or package
+    oskac build [path] [-o out] [--format=json]
+                                           Check a source file or package and,
+                                           if it has no diagnostics, compile it
+                                           to an aarch64 Linux executable
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
@@ -40,12 +45,14 @@ struct Flags {
     integration: bool,
 }
 
-/// A command line, parsed: the command and its operands, the flags, and
-/// the arguments after `--`, which belong to the program being run.
+/// A command line, parsed: the command and its operands, the flags, the
+/// output path `-o` gives, and the arguments after `--`, which belong to
+/// the program being run.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct CommandLine {
     positional: Vec<String>,
     flags: Flags,
+    output: Option<String>,
     program_args: Vec<String>,
 }
 
@@ -65,8 +72,14 @@ impl CommandLine {
             program_args,
             ..CommandLine::default()
         };
-        for arg in args {
+        let mut args = args.into_iter();
+        while let Some(arg) = args.next() {
             match arg.as_str() {
+                "-o" => match args.next() {
+                    Some(output) => line.output = Some(output),
+                    // `-o` with no path: the usage error says what is wrong.
+                    None => line.positional.push(arg),
+                },
                 "--release" => line.flags.release = true,
                 "--integration" => line.flags.integration = true,
                 format if format.starts_with("--format=") => {
@@ -109,6 +122,10 @@ fn main() -> ExitCode {
         }
         ["test", rest @ ..] if rest.len() <= 1 => {
             on_target(Command::Test, rest.first(), flags, &line.program_args)
+        }
+        ["build", rest @ ..] if rest.len() <= 1 && line.program_args.is_empty() => {
+            let command = Command::Build(line.output.as_deref());
+            on_target(command, rest.first(), flags, &[])
         }
         ["explain", code] => explain_code(code, flags),
         _ => {
@@ -157,18 +174,21 @@ fn parse_file(path: &str, Flags { json, .. }: Flags) -> ExitCode {
 
 /// The commands that take a source file or a package.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Command {
+enum Command<'a> {
     Check,
     Run,
     Test,
+    /// `oskac build`, with the output path `-o` gives.
+    Build(Option<&'a str>),
 }
 
-impl Command {
+impl Command<'_> {
     fn name(self) -> &'static str {
         match self {
             Command::Check => "check",
             Command::Run => "run",
             Command::Test => "test",
+            Command::Build(_) => "build",
         }
     }
 }
@@ -383,6 +403,7 @@ fn on_target(command: Command, path: Option<&&str>, flags: Flags, args: &[String
                 Command::Check => check_file(&file, flags),
                 Command::Run => run_file(&file, flags, args),
                 Command::Test => test_file(&file, flags),
+                Command::Build(output) => build::file(&file, flags, output),
             };
             hint_package(&file, command.name());
             code
@@ -405,7 +426,7 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
             return ExitCode::FAILURE;
         }
     };
-    if command == Command::Run && package.is_library() {
+    if matches!(command, Command::Run | Command::Build(_)) && package.is_library() {
         return refuse(command, vec![oska_check::run_of_library(dir)], json, dir);
     }
     let options = oska_check::CheckOptions {
@@ -432,6 +453,9 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
         dir,
         json,
     };
+    if let Command::Build(output) = command {
+        return build::package(program, &places, dir, output, json);
+    }
     let mut host = oska_run::RealHost::new();
     if command == Command::Run {
         let mut argv = vec![dir.to_string()];
@@ -483,6 +507,7 @@ fn refuse(command: Command, diagnostics: Vec<Diagnostic>, json: bool, dir: &str)
             };
             finish_test(report, json, &places)
         }
+        Command::Build(_) => build::refuse(&diagnostics, json, ExitCode::FAILURE),
     }
 }
 
@@ -573,6 +598,17 @@ mod tests {
         assert_eq!(line.positional, ["run", "f.osk"]);
         assert_eq!(line.flags, Flags::default());
         assert_eq!(line.program_args, ["--release", "x"]);
+    }
+
+    #[test]
+    fn dash_o_takes_the_next_argument_as_the_output_path() {
+        let line = parse(&["build", "-o", "out/app", "f.osk"]);
+        assert_eq!(line.positional, ["build", "f.osk"]);
+        assert_eq!(line.output.as_deref(), Some("out/app"));
+        // With nothing after it, `-o` is left positional: a usage error.
+        let line = parse(&["build", "f.osk", "-o"]);
+        assert_eq!(line.positional, ["build", "f.osk", "-o"]);
+        assert_eq!(line.output, None);
     }
 
     #[test]

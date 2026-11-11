@@ -1,0 +1,6 @@
+$ oskac build hello.osk -o missing/dir/hello
+exit: 1
+--- stdout
+--- stderr
+error[E0391]: cannot write the executable `missing/dir/hello`: its directory does not exist; name another path with `-o` (bytes 0..0)
+--- written

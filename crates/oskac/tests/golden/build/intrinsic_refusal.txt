@@ -1,0 +1,6 @@
+$ oskac build raw.osk
+exit: 1
+--- stdout
+--- stderr
+raw.osk:2:13: error[E0209]: `rt_sys_exit_group` is a system-call or memory intrinsic, and names starting `rt_sys_` or `rt_mem_` are reserved for the toolchain's own `std.rt` (bytes 24..41)
+--- written

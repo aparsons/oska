@@ -19,12 +19,16 @@ USAGE:
     oskac test [path] [--format=json] [--integration]
                                            Run the test blocks in a source file
                                            or package
+    oskac build [path] [-o out] [--format=json]
+                                           Check a source file or package and,
+                                           if it has no diagnostics, compile it
+                                           to an aarch64 Linux executable
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ```
 
-`lex` and `parse` take exactly one source file, and `explain` a code. `check`, `run` and `test` take a source file, a package directory, or nothing, which means the package in the current directory. A package is a directory with an `oska.toml` (`[package]` with a `name` and a `version`) and its modules under `src/`; every `.osk` file there is a module, `main` is allowed only in `src/main.osk`, and a package without that file is a library, which `run` refuses. A directory without `oska.toml` is an error (`E0413`). A file inside a package is handled alone, with a hint to run the command on the package. A command line is parsed like this:
+`lex` and `parse` take exactly one source file, and `explain` a code. `check`, `run`, `test` and `build` take a source file, a package directory, or nothing, which means the package in the current directory. A package is a directory with an `oska.toml` (`[package]` with a `name` and a `version`) and its modules under `src/`; every `.osk` file there is a module, `main` is allowed only in `src/main.osk`, and a package without that file is a library, which `run` and `build` refuse. A directory without `oska.toml` is an error (`E0413`). A file inside a package is handled alone, with a hint to run the command on the package. A command line is parsed like this:
 
 - A flag may come anywhere before `--`. Anything else is a positional argument.
 - Everything after `--` belongs to the program being run, and only `oskac run` uses it.
@@ -101,6 +105,22 @@ See [debugging](debugging.md) for panics and the [runtime notes](../runtime.md) 
 | `0` | No test failed. Skipped tests do not count. |
 | `1` | A test failed, or the checker refused the file. |
 | `2` | The file uses something the interpreter cannot run yet. No test ran. |
+
+## `oskac build`
+
+`oskac build [path] [-o out] [--format=json]` checks a file or package as `check` does and, when it has no diagnostics, compiles it to a static executable for aarch64 Linux. Building works on every host and writes the same bytes on each. The executable is the file's stem, or the package directory's name, in the current directory; `-o out` names it instead.
+
+- Success prints nothing, or `{"output":"<path>","diagnostics":[]}` with `--format=json`.
+- A refused program's diagnostics go to standard error as `check` prints them, or to standard output as `{"output":null,"diagnostics":[...]}` with `--format=json`.
+- The native backend compiles only part of the language so far. Anything else is refused with `E0390` before a file is written, never compiled wrongly; `oskac run` still runs the program.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | The executable was written. |
+| `1` | The checker refused the program, or the executable could not be written (`E0391`). |
+| `2` | The program uses something the native backend cannot compile yet (`E0371`, `E0390`). |
+
+See the [runtime notes](../runtime.md#native-builds) for the codes.
 
 ## `oskac --version` and `oskac --help`
 

@@ -68,6 +68,39 @@ fn main() {
 }
 ```
 
+## Native builds
+
+`oskac build [path] [-o out] [--format=json]` checks a source file or package, as `oskac check` does, and compiles it with the native backend (`oska-native`) to a static executable for aarch64 Linux, on any host. It writes the file's stem, or the package directory's name, in the current directory unless `-o` names the output. It prints nothing on success, or `{"output":"<path>","diagnostics":[]}` with `--format=json`. A refused program prints its diagnostics as `oskac check` does, or `{"output":null,"diagnostics":[...]}`. The exit code is 0 on success, 1 for the checker's diagnostics or an output that cannot be written, and 2 for a program the backend cannot compile yet (`E0371`, `E0390`).
+
+The native backend is new and compiles only part of the language so far. A program that uses anything else is refused before any file is written, never compiled wrongly. A program that imports a `std` module with no runtime is refused with `E0371`, as `oskac run` refuses it.
+
+| Code | Refusal |
+| --- | --- |
+| `E0390` | The program uses something the native backend cannot compile yet. The message names the construct, as in ``` `oskac build` cannot compile `scope` yet ```, and says when it is in the runtime, `std.rt`, rather than in the program. Spans the construct, or for the runtime the code of the program that reached it. `oskac run` runs the program in the interpreter meanwhile. |
+| `E0391` | The executable could not be written: the output's directory does not exist, permission is denied, or the path is a directory. Nothing was written. The fix is another path with `-o`. The path is a property of the command line, not of a program, so it has no example. |
+
+### Native build examples
+
+The refusal has a program that is refused with exactly that code and the same program fixed. `E0391` has no example: the output path is part of the command line, not of a program.
+
+#### `E0390`
+
+```oska error=E0390
+fn main() -> Result<(), IoError> {
+    scope |s| {
+        let task = s.spawn(|| 1)
+        let _ = task.join()
+    }
+    Ok(())
+}
+```
+
+```oska fixed=E0390
+fn main() -> Result<(), IoError> {
+    Ok(())
+}
+```
+
 ## Panics
 
 A **panic** stops the program where a bug happened. It has a stable `P`-code, a message, and the span of the expression that panicked. Without `--format=json`, it is printed to stderr like a diagnostic, `file.osk:3:9: error[P0004]: division by zero: ... (bytes 61..67)`, starting with its file, line and column. With `--format=json`, it is printed to stderr as one diagnostic object, in the same shape as the checker's (see [`ast.md`](ast.md)), with a `path`: the file the panic is in. In a package that is the module's own file, and `span` is an offset into it (an item of the package is named as the panicking module's code names it, as `util.text.shout` or `shout`):

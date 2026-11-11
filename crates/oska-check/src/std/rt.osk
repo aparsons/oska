@@ -51,3 +51,82 @@ pub fn rt_mem_xor(a: Int, b: Int) -> Int
 pub fn rt_mem_shl(a: Int, n: Int) -> Int
 pub fn rt_mem_shr(a: Int, n: Int) -> Int
 pub fn rt_mem_sar(a: Int, n: Int) -> Int
+// Wrapping addition and subtraction of 64-bit words, for addresses and
+// sizes; they never overflow-panic.
+pub fn rt_mem_add(a: Int, b: Int) -> Int
+pub fn rt_mem_sub(a: Int, b: Int) -> Int
+
+// ---- Values ----------------------------------------------------------------
+//
+// A heap value is the address of an object whose first word is its
+// reference count. A negative count marks a static object in read-only
+// memory, which is never counted or freed. A text object continues with
+// its length in bytes, then its UTF-8 bytes.
+
+// The address of `text`'s object.
+pub fn rt_mem_text(text: String) -> Int
+
+// ---- Start-up and exit -----------------------------------------------------
+//
+// The native backend generates the entry point, `_start`. It calls `main`
+// with its capabilities and then, if `main` returned `Err(e)`, calls
+// `main_failed` with `e`'s `Display` text. Otherwise it calls `exit(0)`.
+
+// Ends the process with `status`.
+pub fn exit(status: Int) {
+    let _ = rt_sys_exit_group(status)
+}
+
+// `main` returned an error whose text is `message`: it goes to stderr on a
+// line of its own, and the process exits with 1, as the interpreter does.
+pub fn main_failed(message: String) {
+    print_line(2, message)
+    exit(1)
+}
+
+// ---- Standard output and error ---------------------------------------------
+
+pub fn stdout_println(io: Stdout, line: String) -> Result<(), IoError> {
+    print_line(1, line)
+    Ok(())
+}
+
+pub fn stderr_println(io: Stderr, line: String) -> Result<(), IoError> {
+    print_line(2, line)
+    Ok(())
+}
+
+// Write `line` and a newline to the file descriptor `fd`.
+//
+// A failed write cannot be returned as an `IoError` until the runtime can
+// build text, so it ends the process with a message and exit code 1, the
+// code an unhandled `IoError` from `main` gives.
+fn print_line(fd: Int, line: String) {
+    if write_text(fd, line) < 0 || write_text(fd, "\n") < 0 {
+        let _ = write_text(2, "the native runtime cannot report a failed write yet\n")
+        exit(1)
+    }
+}
+
+// Write all of `text` to `fd`: 0, or the negative `errno` of the write
+// that failed.
+fn write_text(fd: Int, text: String) -> Int {
+    let object = rt_mem_text(text)
+    write_all(fd, rt_mem_add(object, 16), rt_mem_load64(rt_mem_add(object, 8)))
+}
+
+// Write the `count` bytes at `buf` to `fd`, however many writes it takes:
+// 0, or the negative `errno` of the write that failed.
+fn write_all(fd: Int, buf: Int, count: Int) -> Int {
+    var at = buf
+    var left = count
+    while left > 0 {
+        let written = rt_sys_write(fd, at, left)
+        if written < 0 {
+            return written
+        }
+        at = rt_mem_add(at, written)
+        left = rt_mem_sub(left, written)
+    }
+    0
+}

@@ -1,0 +1,7 @@
+$ oskac build greeter/src/main.osk -o alone
+exit: 0
+--- stdout
+--- stderr
+hint: `greeter/src/main.osk` is part of the package in `greeter` and was handled alone; run `oskac build greeter` to build the package
+--- written
+alone
