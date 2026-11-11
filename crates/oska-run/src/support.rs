@@ -50,6 +50,7 @@ fn first_in(program: &Program, expr: &Expr) -> Option<(Span, String)> {
         Visit::Expr(Expr {
             kind: ExprKind::Unsupported(what),
             span,
+            ..
         }) => ControlFlow::Break((*span, what.clone())),
         Visit::Expr(_) => ControlFlow::Continue(()),
         Visit::Callee(target, span) => match callee(program, target, span) {

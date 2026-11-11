@@ -11,6 +11,23 @@
 //! diagnostics (`program/lower.rs`), so a backend only ever sees programs
 //! that passed the checker.
 //!
+//! # Types
+//!
+//! The program is typed (#126), so a backend can lay out values and
+//! monomorphize from it alone:
+//!
+//! - every [`Expr`] has its [`Type`], and every slot has one where it is
+//!   bound: a [`Param`], a [`Stmt::Let`], a [`Stmt::For`], a
+//!   [`Pattern::Bind`], a closure's parameters. An `ensures` result has
+//!   the function's [`Function::ret`]; a `scope` handle is a `Scope`; a
+//!   test's `t` is a `TestContext`.
+//! - a function keeps its generics ([`Function::generics`]), and every
+//!   call, function value, interpolation hole, `Eq` comparison and `?`
+//!   conversion records the type arguments of what it reaches.
+//! - [`Program::types`] declares every struct and enum a type can name.
+//!
+//! The interpreter ignores all of it: it dispatches on runtime tags.
+//!
 //! # Adding a node kind
 //!
 //! 1. Add a variant to [`ExprKind`] (or [`Stmt`]).
@@ -21,6 +38,9 @@
 //!    solved yet, such as an operation's integer type, use
 //!    `Body::defer(span, ty, Deferred::...)`, which records it once the
 //!    body is checked.
+//!    Its type is recorded by `Body::expr` already; a new binding records
+//!    its slot's type with `Body::typed` at its name, and a new call of a
+//!    generic its type arguments with `Body::typed_args`.
 //! 3. Lower the AST node in `lower::Lowering::expr` (or `stmt`), which
 //!    turns anything it does not know yet into [`ExprKind::Unsupported`].
 //! 4. Let [`walk`] reach into it, so every pass over the tree, such as
@@ -46,6 +66,10 @@ pub struct Program {
     /// of an inherent impl, and `<Type as Trait>.method` for a method of
     /// a trait impl (see [`trait_method`]).
     pub functions: BTreeMap<String, Function>,
+    /// Every struct and enum a type in the program can name, by the name
+    /// [`Type::Named`] uses: the module's own, the prelude's, and those of
+    /// the `std` modules it imports. A backend lays values out from these.
+    pub types: BTreeMap<String, TypeDecl>,
     /// The module each `use` imports, such as `std.sql`, with the span of
     /// its path, in source order.
     pub imports: Vec<(String, Span)>,
@@ -59,6 +83,12 @@ pub struct Program {
     /// multi-byte one. [`Program::line_col`] skips them, so a column
     /// counts characters.
     pub char_tails: Vec<usize>,
+    /// The span of every expression or binding whose type the checker
+    /// left unsolved, such as the element type of a `[]` nothing
+    /// constrains. Its type reads as `()`: no value of it ever exists.
+    /// Empty for every program in the repository's corpus (examples,
+    /// guide samples, CLI fixtures).
+    pub unsolved: Vec<Span>,
 }
 
 impl Program {
@@ -99,16 +129,33 @@ pub fn trait_method(type_name: &str, trait_name: &str, method: &str) -> String {
 }
 
 /// A function with a body.
+///
+/// A generic function stays generic: its types name its generic
+/// parameters as [`Type::Param`], and each call records what they are
+/// instantiated with ([`ExprKind::Call`]'s `type_args`). A backend that
+/// monomorphizes substitutes them ([`Type::substitute`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
     /// The qualified name, as [`Program::functions`] keys it.
     pub name: String,
+    /// The generic parameters, in the order a call's `type_args` give
+    /// them: for a method, its impl's first, then its own.
+    pub generics: Vec<String>,
+    /// For a method or associated function: the impl's type, `Self`,
+    /// with the impl's generics as [`Type::Param`]. It is also the
+    /// receiver's type. A backend that reaches the function through
+    /// [`Callee::Trait`], or as a `Display`, `Eq` or `From`
+    /// implementation, finds the impl's type arguments by binding it to
+    /// the receiver's type ([`Type::bind`]).
+    pub self_ty: Option<Type>,
     /// A method's receiver, `self` or `var self`: the caller passes it
     /// before the parameters, and it takes no slot ([`ExprKind::SelfValue`]
     /// reads it).
     pub receiver: bool,
     /// The parameters after the receiver, in order.
     pub params: Vec<Param>,
+    /// The result type.
+    pub ret: Type,
     /// The contracts every call of it evaluates.
     pub contracts: Contracts,
     pub body: Expr,
@@ -188,17 +235,22 @@ pub struct Ensures {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Param {
     pub name: String,
-    /// The declared type, as the checker prints it, such as `Stdout`.
-    pub ty: String,
+    /// The declared type, such as `Stdout`, or for a closure's parameter
+    /// the type the checker inferred.
+    pub ty: Type,
     /// Whether the parameter takes a local slot. A parameter named `_`
     /// takes none: its argument is evaluated and dropped.
     pub binds: bool,
 }
 
-/// An expression, with the span of the source it was lowered from.
+/// An expression, with its type and the span of the source it was
+/// lowered from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Expr {
     pub kind: ExprKind,
+    /// The type the checker inferred for it. [`Type::Never`] when it
+    /// never produces a value, such as a block that ends in `return`.
+    pub ty: Type,
     pub span: Span,
 }
 
@@ -259,9 +311,14 @@ pub enum ExprKind {
         callee: Box<Expr>,
         args: Vec<Expr>,
     },
-    /// A call. A method's receiver is its first argument.
+    /// A call. A method's receiver is its first argument. `type_args`
+    /// instantiate the callee's generics, in the order of its
+    /// [`Function::generics`] (for an intrinsic, of its prelude
+    /// declaration's: the impl's, then its own). For a
+    /// [`Callee::Trait`], they are the method's own generics only.
     Call {
         callee: Callee,
+        type_args: Vec<Type>,
         args: Vec<Expr>,
     },
     /// A call of a **mutating method** (`var self`) on a place, such as
@@ -271,6 +328,8 @@ pub enum ExprKind {
     /// final `self` is written back to it.
     MutatingCall {
         callee: Callee,
+        /// As a [`ExprKind::Call`]'s.
+        type_args: Vec<Type>,
         receiver: Place,
         args: Vec<Expr>,
     },
@@ -300,10 +359,16 @@ pub enum ExprKind {
     Try {
         operand: Box<Expr>,
         convert: Option<Callee>,
+        /// The type arguments of `convert`, as a [`ExprKind::Call`]'s.
+        type_args: Vec<Type>,
     },
     /// A function used as a value, such as `double` in `let f = double`.
-    /// Calling the value calls the function.
-    FnValue(Callee),
+    /// Calling the value calls the function, instantiated with
+    /// `type_args` as a [`ExprKind::Call`]'s are.
+    FnValue {
+        callee: Callee,
+        type_args: Vec<Type>,
+    },
     /// `match`: the first arm whose pattern matches the scrutinee, and
     /// whose guard then holds, gives the value. The checker guarantees
     /// one does.
@@ -326,9 +391,10 @@ pub enum Stmt {
     /// An expression evaluated for its effect.
     Expr(Expr),
     /// `let` or `var`: evaluate `value` and, when `binds`, push it as the
-    /// next slot. A binding named `_` takes no slot.
+    /// next slot, of type `ty`. A binding named `_` takes no slot.
     Let {
         binds: bool,
+        ty: Type,
         value: Expr,
     },
     /// `place = value`.
@@ -351,10 +417,11 @@ pub enum Stmt {
         body: Expr,
     },
     /// `for binding in iter { body }`, over a range or a `List`: each
-    /// element is pushed as the next slot when `binds`, for the body to
-    /// see.
+    /// element, of type `ty`, is pushed as the next slot when `binds`,
+    /// for the body to see.
     For {
         binds: bool,
+        ty: Type,
         iter: Expr,
         body: Expr,
     },
@@ -369,8 +436,9 @@ pub enum Stmt {
 /// after them. The other slots below `height` are never read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Closure {
-    /// Whether each parameter takes a slot: one named `_` takes none.
-    pub params: Vec<bool>,
+    /// The parameters, with their types: one named `_` takes no slot.
+    /// The closure's result type is that of [`Closure::body`].
+    pub params: Vec<Param>,
     /// The slots of the enclosing frame the body reads, a closure inside
     /// it included, in ascending order: what the checker found it
     /// captures.
@@ -384,7 +452,9 @@ pub struct Closure {
 }
 
 /// A `match` arm. The pattern's bindings are pushed as slots, in
-/// source order, for the guard and the body to see.
+/// source order, for the guard and the body to see. A constructor
+/// pattern's fields have the types its scrutinee's type gives them
+/// through [`Program::types`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Arm {
     pub pattern: Pattern,
@@ -397,8 +467,9 @@ pub struct Arm {
 pub enum Pattern {
     /// `_`: matches anything, and binds nothing.
     Wildcard,
-    /// A name: matches anything, and pushes it as the next slot.
-    Bind,
+    /// A name: matches anything, and pushes it as the next slot, of
+    /// this type.
+    Bind(Type),
     /// A literal (an integer, string, `Bool`, or `()`): matches an equal
     /// value.
     Literal(Expr),
@@ -431,8 +502,12 @@ pub enum Part {
     /// implementation the checker chose: `Int.to_string`, or a user
     /// type's `<Point as Display>.to_string`.
     Hole {
-        value: Expr,
+        value: Box<Expr>,
         display: Callee,
+        /// The type arguments of `display`, as a [`ExprKind::Call`]'s:
+        /// those of a generic impl, such as `T` of `impl<T: Display>
+        /// Display for Wrapper<T>`.
+        type_args: Vec<Type>,
     },
 }
 
@@ -443,6 +518,200 @@ pub struct Construct {
     pub ty: String,
     /// The variant, for an enum, such as `Some`.
     pub variant: Option<String>,
+}
+
+/// A type in the checked program, as the checker inferred it.
+///
+/// It is the checker's type with what only checking needs left out: the
+/// trust of text (ADR 0006) and whether a function type is a `cap fn`. A
+/// value of `Untrusted<String>` is a `String`, and a `cap fn` is a
+/// function value like any other.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Type {
+    /// `()`.
+    Unit,
+    Bool,
+    /// An integer type: `Int`, or a sized one.
+    Int(IntType),
+    /// Text, trusted or not.
+    String,
+    /// Any other named type with its arguments: a struct or enum, the
+    /// module's own or the prelude's, such as `Option<Int>` or `Point`,
+    /// whose shape [`Program::types`] gives; or a built-in whose
+    /// representation each backend knows, such as `List<T>`, `Range<T>`,
+    /// a capability, `Scope` or `Task<T>`. The name is the key the
+    /// program uses for the type everywhere, as [`Construct::ty`] does:
+    /// in a package, `pkg.<module>.<Name>` for a module other than the
+    /// entry's.
+    Named {
+        name: String,
+        args: Vec<Type>,
+    },
+    /// A function value, `fn(params) -> ret`: a closure, a `cap fn`, or a
+    /// function used as a value.
+    Fn {
+        params: Vec<Type>,
+        ret: Box<Type>,
+    },
+    /// A generic parameter of the enclosing function (see
+    /// [`Function::generics`]).
+    Param(String),
+    /// The type of an expression that never produces a value, such as a
+    /// call of `panic` or a block that ends in `return`.
+    Never,
+}
+
+impl Type {
+    /// This type with each generic parameter named in `subst` replaced by
+    /// its type: how a backend specializes a generic function's types
+    /// for one instantiation.
+    pub fn substitute(&self, subst: &[(String, Type)]) -> Type {
+        match self {
+            Type::Param(name) => subst
+                .iter()
+                .find(|(n, _)| n == name)
+                .map_or_else(|| self.clone(), |(_, ty)| ty.clone()),
+            Type::Named { name, args } => Type::Named {
+                name: name.clone(),
+                args: args.iter().map(|a| a.substitute(subst)).collect(),
+            },
+            Type::Fn { params, ret } => Type::Fn {
+                params: params.iter().map(|p| p.substitute(subst)).collect(),
+                ret: Box::new(ret.substitute(subst)),
+            },
+            Type::Unit | Type::Bool | Type::Int(_) | Type::String | Type::Never => self.clone(),
+        }
+    }
+
+    /// Bind the generic parameters in this type, a pattern such as an
+    /// impl's [`Function::self_ty`] `Wrapper<T>`, to the parts of
+    /// `actual` they stand for, such as `Int` in `Wrapper<Int>`: each
+    /// parameter not yet in `bound` is pushed with its type. Whether
+    /// `actual` has the pattern's shape.
+    pub fn bind(&self, actual: &Type, bound: &mut Vec<(String, Type)>) -> bool {
+        match (self, actual) {
+            (Type::Param(name), _) => match bound.iter().find(|(n, _)| n == name) {
+                Some((_, ty)) => ty == actual,
+                None => {
+                    bound.push((name.clone(), actual.clone()));
+                    true
+                }
+            },
+            (
+                Type::Named { name, args },
+                Type::Named {
+                    name: actual_name,
+                    args: actual_args,
+                },
+            ) => {
+                name == actual_name
+                    && args.len() == actual_args.len()
+                    && args.iter().zip(actual_args).all(|(p, a)| p.bind(a, bound))
+            }
+            (
+                Type::Fn { params, ret },
+                Type::Fn {
+                    params: actual_params,
+                    ret: actual_ret,
+                },
+            ) => {
+                params.len() == actual_params.len()
+                    && params
+                        .iter()
+                        .zip(actual_params)
+                        .all(|(p, a)| p.bind(a, bound))
+                    && ret.bind(actual_ret, bound)
+            }
+            _ => self == actual,
+        }
+    }
+
+    /// Whether it names no generic parameter: a type a value can have
+    /// once a generic function is specialized.
+    pub fn is_concrete(&self) -> bool {
+        match self {
+            Type::Param(_) => false,
+            Type::Named { args, .. } => args.iter().all(Type::is_concrete),
+            Type::Fn { params, ret } => params.iter().all(Type::is_concrete) && ret.is_concrete(),
+            Type::Unit | Type::Bool | Type::Int(_) | Type::String | Type::Never => true,
+        }
+    }
+}
+
+/// Renders a type as it is written in Oska source, such as `Option<Int>`
+/// or `fn(String) -> Bool`.
+impl std::fmt::Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let list = |f: &mut std::fmt::Formatter<'_>, items: &[Type]| {
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{item}")?;
+            }
+            Ok(())
+        };
+        match self {
+            Type::Unit => write!(f, "()"),
+            Type::Bool => write!(f, "Bool"),
+            Type::Int(int) => write!(f, "{}", int.name()),
+            Type::String => write!(f, "String"),
+            Type::Named { name, args } => {
+                write!(f, "{name}")?;
+                if !args.is_empty() {
+                    write!(f, "<")?;
+                    list(f, args)?;
+                    write!(f, ">")?;
+                }
+                Ok(())
+            }
+            Type::Fn { params, ret } => {
+                write!(f, "fn(")?;
+                list(f, params)?;
+                write!(f, ")")?;
+                if **ret != Type::Unit {
+                    write!(f, " -> {ret}")?;
+                }
+                Ok(())
+            }
+            Type::Param(name) => write!(f, "{name}"),
+            Type::Never => write!(f, "!"),
+        }
+    }
+}
+
+/// A struct or enum declaration: what a backend lays its values out
+/// from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeDecl {
+    /// The generic parameters, in the order a [`Type::Named`]'s `args`
+    /// give them.
+    pub generics: Vec<String>,
+    pub kind: TypeDeclKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeDeclKind {
+    /// A struct's fields, in declaration order.
+    Struct(Vec<Field>),
+    /// An enum's variants, in declaration order, each with its fields.
+    Enum(Vec<Variant>),
+}
+
+/// A field of a struct or variant. Its type names the declaration's
+/// generics as [`Type::Param`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Field {
+    /// The name; `None` for a positional field.
+    pub name: Option<String>,
+    pub ty: Type,
+}
+
+/// An enum's variant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Variant {
+    pub name: String,
+    pub fields: Vec<Field>,
 }
 
 /// An integer type: `Int`, or a sized one. The one list of the
@@ -580,7 +849,7 @@ pub fn walk<'p, B>(
         | ExprKind::Unsupported(_) => ControlFlow::Continue(()),
         ExprKind::Interpolated(parts) => {
             for part in parts {
-                if let Part::Hole { value, display } = part {
+                if let Part::Hole { value, display, .. } = part {
                     visit(Visit::Callee(display, value.span))?;
                     walk(value, visit)?;
                 }
@@ -599,13 +868,15 @@ pub fn walk<'p, B>(
         | ExprKind::Not(operand)
         | ExprKind::Scope(operand)
         | ExprKind::Field { base: operand, .. } => walk(operand, visit),
-        ExprKind::Try { operand, convert } => {
+        ExprKind::Try {
+            operand, convert, ..
+        } => {
             if let Some(convert) = convert {
                 visit(Visit::Callee(convert, expr.span))?;
             }
             walk(operand, visit)
         }
-        ExprKind::FnValue(target) => visit(Visit::Callee(target, expr.span)),
+        ExprKind::FnValue { callee: target, .. } => visit(Visit::Callee(target, expr.span)),
         ExprKind::Construct { fields: items, .. } | ExprKind::List(items) => walk_all(items, visit),
         ExprKind::Closure(closure) => walk(&closure.body, visit),
         ExprKind::CallValue { callee, args } => {
@@ -624,7 +895,7 @@ pub fn walk<'p, B>(
                 None => ControlFlow::Continue(()),
             }
         }
-        ExprKind::Call { callee, args } | ExprKind::MutatingCall { callee, args, .. } => {
+        ExprKind::Call { callee, args, .. } | ExprKind::MutatingCall { callee, args, .. } => {
             visit(Visit::Callee(callee, expr.span))?;
             walk_all(args, visit)
         }
@@ -666,7 +937,7 @@ fn walk_pattern<'p, B>(
     visit: &mut impl FnMut(Visit<'p>) -> ControlFlow<B>,
 ) -> ControlFlow<B> {
     match pattern {
-        Pattern::Wildcard | Pattern::Bind => ControlFlow::Continue(()),
+        Pattern::Wildcard | Pattern::Bind(_) => ControlFlow::Continue(()),
         Pattern::Literal(literal) => walk(literal, visit),
         Pattern::Construct { fields, .. } => {
             for field in fields {

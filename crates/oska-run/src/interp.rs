@@ -326,7 +326,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 then_branch,
                 else_branch,
             } => self.if_expr(cond, then_branch, else_branch.as_deref(), frame),
-            ExprKind::Call { callee, args } => self.call_expr(callee, args, expr.span, frame),
+            ExprKind::Call { callee, args, .. } => self.call_expr(callee, args, expr.span, frame),
             ExprKind::Block { stmts, value } => self.block(stmts, value.as_deref(), frame),
             _ => self.eval_other(expr, frame),
         }
@@ -369,15 +369,16 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 callee,
                 receiver,
                 args,
+                ..
             } => self.mutating_call_expr(callee, receiver, args, expr.span, frame),
             ExprKind::Match { scrutinee, arms } => {
                 let scrutinee = self.eval(scrutinee, frame)?;
                 self.match_arms(&scrutinee, arms, frame)
             }
-            ExprKind::Try { operand, convert } => {
-                self.try_expr(operand, convert.as_ref(), expr.span, frame)
-            }
-            ExprKind::FnValue(callee) => Ok(Value::Function(Rc::new(callee.clone()))),
+            ExprKind::Try {
+                operand, convert, ..
+            } => self.try_expr(operand, convert.as_ref(), expr.span, frame),
+            ExprKind::FnValue { callee, .. } => Ok(Value::Function(Rc::new(callee.clone()))),
             ExprKind::Scope(body) => self.scope(body, frame),
             ExprKind::Unit
             | ExprKind::Int(..)
@@ -587,7 +588,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     ) -> Result<bool, Unwind> {
         Ok(match pattern {
             Pattern::Wildcard => true,
-            Pattern::Bind => {
+            Pattern::Bind(_) => {
                 frame.slots.push(value.clone());
                 true
             }
@@ -659,7 +660,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             Stmt::Expr(e) => {
                 self.eval(e, frame)?;
             }
-            Stmt::Let { binds, value } => {
+            Stmt::Let { binds, value, .. } => {
                 let value = self.eval(value, frame)?;
                 if *binds {
                     frame.slots.push(value);
@@ -681,7 +682,9 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             Stmt::Break => return Err(Unwind::Break),
             Stmt::Continue => return Err(Unwind::Continue),
             Stmt::While { cond, body } => self.while_loop(cond, body, frame)?,
-            Stmt::For { binds, iter, body } => self.for_loop(*binds, iter, body, frame)?,
+            Stmt::For {
+                binds, iter, body, ..
+            } => self.for_loop(*binds, iter, body, frame)?,
         }
         Ok(())
     }
@@ -836,7 +839,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         for (&slot, value) in closure.code.captures.iter().zip(&closure.captured) {
             slots[slot] = value.clone();
         }
-        slots.extend(binding(closure.code.params.iter().copied(), args));
+        slots.extend(binding(closure.code.params.iter().map(|p| p.binds), args));
         let mut frame = Frame {
             slots,
             receiver: closure.receiver.clone(),
@@ -893,7 +896,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         for part in parts {
             match part {
                 Part::Text(t) => text.push_str(t),
-                Part::Hole { value, display } => {
+                Part::Hole { value, display, .. } => {
                     let span = value.span;
                     let value = self.eval(value, frame)?;
                     let shown = self.call_callee(display, vec![value], span)?;

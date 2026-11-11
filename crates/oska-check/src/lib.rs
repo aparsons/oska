@@ -557,6 +557,7 @@ pub(crate) fn check_parsed(
         mut audit,
         mut attenuations,
         resolutions,
+        typing,
         assumed,
         instances,
         modules,
@@ -565,7 +566,7 @@ pub(crate) fn check_parsed(
     instantiation::module(module, &decls, &items, assumed, instances, &mut diagnostics);
     let program = diagnostics
         .is_empty()
-        .then(|| program::lower::module(src, module, &items, &resolutions));
+        .then(|| program::lower::module(src, module, &items, &resolutions, &typing));
     let functions = authority::report(module, &decls, &modules);
     diagnostics.sort_by_key(|d| d.span.start);
     audit.sort_by_key(|site| site.span.start);

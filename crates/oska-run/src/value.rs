@@ -415,6 +415,7 @@ mod tests {
             height: 0,
             body: Expr {
                 kind: ExprKind::Unit,
+                ty: oska_check::program::Type::Unit,
                 span: Span { start: 0, end: 0 },
             },
         });

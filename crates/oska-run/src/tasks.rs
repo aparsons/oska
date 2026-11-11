@@ -173,7 +173,7 @@ mod tests {
     //! escapes anyway.
 
     use oska_check::program::{
-        Callee, Closure, Contracts, Expr, ExprKind, Function, Program, Stmt,
+        Callee, Closure, Contracts, Expr, ExprKind, Function, Program, Stmt, Type,
     };
 
     use super::*;
@@ -182,6 +182,7 @@ mod tests {
     fn at(start: usize, end: usize, kind: ExprKind) -> Expr {
         Expr {
             kind,
+            ty: Type::Unit,
             span: Span { start, end },
         }
     }
@@ -217,6 +218,7 @@ mod tests {
             52,
             ExprKind::Call {
                 callee: Callee::Intrinsic("Scope.spawn".to_string()),
+                type_args: vec![Type::Unit],
                 args: vec![at(40, 41, ExprKind::Local(0)), task],
             },
         );
@@ -226,6 +228,10 @@ mod tests {
             ExprKind::Block {
                 stmts: vec![Stmt::Let {
                     binds: true,
+                    ty: Type::Named {
+                        name: "Scope".to_string(),
+                        args: Vec::new(),
+                    },
                     value: escaped,
                 }],
                 value: Some(Box::new(spawn)),
@@ -236,8 +242,11 @@ mod tests {
             "main".to_string(),
             Function {
                 name: "main".to_string(),
+                generics: Vec::new(),
+                self_ty: None,
                 receiver: false,
                 params: Vec::new(),
+                ret: Type::Unit,
                 contracts: Contracts::default(),
                 body,
             },
