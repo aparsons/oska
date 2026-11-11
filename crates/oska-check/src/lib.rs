@@ -66,8 +66,8 @@ mod usefulness;
 
 pub use manifest::{parse_manifest, Manifest};
 pub use package::{
-    check_file, check_package, not_a_package, run_of_library, symlink_refused, ModuleSource,
-    Package, ENTRY_MODULE, MANIFEST_PATH,
+    check_file, check_package, locate_in_package, not_a_package, run_of_library, symlink_refused,
+    ModuleSource, Package, ENTRY_MODULE, MANIFEST_PATH,
 };
 
 /// The diagnostic codes this crate reports.

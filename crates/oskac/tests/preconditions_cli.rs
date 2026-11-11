@@ -34,7 +34,8 @@ fn a_broken_precondition_under_release_is_a_json_panic_exiting_101() {
         String::from_utf8_lossy(&output.stderr),
         format!(
             "{{\"code\":\"P0006\",\"message\":\"precondition violated: `double` requires `x > 0`\",\
-             \"span\":{{\"start\":{start},\"end\":{end}}}}}\n"
+             \"path\":\"{}\",\"span\":{{\"start\":{start},\"end\":{end}}}}}\n",
+            path.to_string_lossy().replace('\\', "\\\\")
         )
     );
 }

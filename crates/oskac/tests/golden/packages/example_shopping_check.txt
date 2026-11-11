@@ -1,0 +1,7 @@
+$ oskac check examples/shopping
+exit: 0
+--- stdout
+fn main: Stdout (io)
+fn pkg.pricing.tax.with_tax: pure
+fn pkg.receipt.line: pure
+--- stderr

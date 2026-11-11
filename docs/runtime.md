@@ -70,10 +70,10 @@ fn main() {
 
 ## Panics
 
-A **panic** stops the program where a bug happened. It has a stable `P`-code, a message, and the span of the expression that panicked. Without `--format=json`, it is printed to stderr like a diagnostic, `file.osk:3:9: error[P0004]: division by zero: ... (bytes 61..67)`, starting with its file, line and column. With `--format=json`, it is printed to stderr as one diagnostic object, in the same shape as the checker's (see [`ast.md`](ast.md)):
+A **panic** stops the program where a bug happened. It has a stable `P`-code, a message, and the span of the expression that panicked. Without `--format=json`, it is printed to stderr like a diagnostic, `file.osk:3:9: error[P0004]: division by zero: ... (bytes 61..67)`, starting with its file, line and column. With `--format=json`, it is printed to stderr as one diagnostic object, in the same shape as the checker's (see [`ast.md`](ast.md)), with a `path`: the file the panic is in. In a package that is the module's own file, and `span` is an offset into it (a package's tests are named with their module, as `util.text::shout`):
 
 ```json
-{"code":"P0004","message":"division by zero: `10 / 0`","span":{"start":61,"end":70}}
+{"code":"P0004","message":"division by zero: `10 / 0`","path":"file.osk","span":{"start":61,"end":70}}
 ```
 
 Output written before the panic stays written.
@@ -414,7 +414,7 @@ test divides ... FAILED
 test reads the real config ... skipped (#[integration]; run with --integration)
 
 failures:
-test divides: math.osk: error[P0011]: assertion failed: `actual == expected`: actual 2, expected 3 (bytes 120..141)
+test divides: math.osk:12:5: error[P0011]: assertion failed: `actual == expected`: actual 2, expected 3 (bytes 120..141)
 
 3 tests: 1 passed, 1 failed, 1 skipped
 ```
@@ -426,7 +426,7 @@ Each failure is named by its test. Control characters in test names and failure 
 With `--format=json`, one JSON object on stdout. Each test has its name, its status (`passed`, `failed`, or `skipped`), and its failure, a diagnostic object or `null`. A refused file has no tests and its diagnostics in `diagnostics`:
 
 ```json
-{"tests":[{"name":"adds","status":"passed","failure":null},{"name":"divides","status":"failed","failure":{"code":"P0011","message":"...","span":{"start":120,"end":141}}}],"passed":1,"failed":1,"skipped":0,"diagnostics":[]}
+{"tests":[{"name":"adds","status":"passed","failure":null},{"name":"divides","status":"failed","failure":{"code":"P0011","message":"...","path":"math.osk","span":{"start":120,"end":141}}}],"passed":1,"failed":1,"skipped":0,"diagnostics":[]}
 ```
 
 | Exit code | Meaning |

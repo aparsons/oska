@@ -696,6 +696,23 @@ impl Rewriter<'_> {
                 self.expr(&mut c.value);
             }
             ItemKind::Test(t) => {
+                // A package's tests are named with their module.
+                let module = self.linker.paths[self.module].clone();
+                let start = t.name.span.start;
+                if let ExprKind::Str(parts) = &mut t.name.kind {
+                    match parts.first_mut() {
+                        Some(StrPart::Text { value, .. }) => {
+                            *value = format!("{module}::{value}");
+                        }
+                        _ => parts.insert(
+                            0,
+                            StrPart::Text {
+                                value: format!("{module}::"),
+                                span: Span { start, end: start },
+                            },
+                        ),
+                    }
+                }
                 self.locals.push("t".to_string());
                 self.block(&mut t.body);
                 self.locals.clear();

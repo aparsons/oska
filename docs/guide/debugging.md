@@ -99,7 +99,7 @@ Every command takes `--format=json`. Diagnostics then carry the same shape every
 For a panic, `oskac run --format=json` prints one diagnostic object per line to standard error:
 
 ```console cmd=run stream=stderr json
-{"code":"P0004","message":"division by zero: `10 / 0`","span":{"start":46,"end":59}}
+{"code":"P0004","message":"division by zero: `10 / 0`","path":"main.osk","span":{"start":46,"end":59}}
 ```
 
 `oskac check --format=json` prints a single object with `diagnostics`, `functions`, and `audit` to standard output; see the [CLI reference](cli-reference.md#output-formats). The `span` offsets count UTF-8 bytes from the start of the file, not characters or lines. To show the source a diagnostic points at, slice the file's bytes from `start` up to, but excluding, `end`.

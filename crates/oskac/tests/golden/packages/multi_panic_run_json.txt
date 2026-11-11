@@ -1,0 +1,5 @@
+$ oskac run crates/oskac/tests/fixtures/packages/multi_panic --format=json
+exit: 101
+--- stdout
+--- stderr
+{"code":"P0004","message":"division by zero: `100 / 0`","path":"src/util/text.osk","span":{"start":77,"end":87}}

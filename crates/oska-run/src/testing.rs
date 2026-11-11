@@ -135,7 +135,11 @@ impl TestReport {
         if !failures.is_empty() {
             out.push_str("\nfailures:\n");
             for (name, failure) in failures {
-                let line = format!("test {name}: {path}: {failure}");
+                let place = failure
+                    .location
+                    .as_ref()
+                    .map_or_else(|| path.to_string(), |l| l.to_string());
+                let line = format!("test {name}: {place}: {failure}");
                 out.push_str(&escape_control(&line));
                 out.push('\n');
             }

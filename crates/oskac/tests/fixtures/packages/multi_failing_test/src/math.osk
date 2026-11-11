@@ -1,0 +1,7 @@
+pub(pkg) fn double(n: Int) -> Int {
+    n * 2
+}
+
+test "double" {
+    t.assert_eq(double(3), 6)
+}

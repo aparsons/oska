@@ -111,7 +111,7 @@ test gets it wrong ... FAILED
 test reads the real clock ... skipped (#[integration]; run with --integration)
 
 failures:
-test gets it wrong: main.osk: error[P0011]: assertion failed: `actual == expected`: actual 4, expected 5 (bytes 117..142)
+test gets it wrong: main.osk:10:5: error[P0011]: assertion failed: `actual == expected`: actual 4, expected 5 (bytes 117..142)
 
 3 tests: 1 passed, 1 failed, 1 skipped
 ```
@@ -121,7 +121,7 @@ Each failure is named by its test and carries a stable code and the byte span of
 With `--format=json` the report is one JSON object on stdout. `status` is `passed`, `failed`, or `skipped`, and `failure` is a diagnostic object or `null`:
 
 ```console cmd=test json
-{"tests":[{"name":"adds up","status":"passed","failure":null},{"name":"gets it wrong","status":"failed","failure":{"code":"P0011","message":"assertion failed: `actual == expected`: actual 4, expected 5","span":{"start":117,"end":142}}},{"name":"reads the real clock","status":"skipped","failure":null}],"passed":1,"failed":1,"skipped":1,"diagnostics":[]}
+{"tests":[{"name":"adds up","status":"passed","failure":null},{"name":"gets it wrong","status":"failed","failure":{"code":"P0011","message":"assertion failed: `actual == expected`: actual 4, expected 5","path":"main.osk","span":{"start":117,"end":142}}},{"name":"reads the real clock","status":"skipped","failure":null}],"passed":1,"failed":1,"skipped":1,"diagnostics":[]}
 ```
 
 If the file does not check, no test runs and the report has no tests and the checker's diagnostics in `diagnostics`.

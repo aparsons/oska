@@ -1,0 +1,9 @@
+// A nested module: `src/pricing/tax.osk` is `pkg.pricing.tax`.
+
+pub(pkg) fn with_tax(cents: Int) -> Int {
+    cents + cents / 5
+}
+
+test "tax is a fifth on top" {
+    t.assert_eq(with_tax(500), 600)
+}
