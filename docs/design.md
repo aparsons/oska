@@ -14,7 +14,7 @@ This is a working draft. Decisions that are hard to reverse are recorded in [`ad
 - **Memory safety** comes from value semantics and reference counting. There are no raw pointers, lifetimes, or shared mutable references ([ADR 0001](adr/0001-value-semantics-with-reference-counting.md)).
 - **No null:** absent values are `Option<T>`.
 - **Errors as values:** functions return `Result<T, E>`. Panics are not catchable.
-- **Checked integers:** `Int` is a 64-bit signed integer, and overflow panics. Sized types (`I32`, `U8`, …) convert only explicitly, wrapping and saturating arithmetic are explicit operations, and arbitrary-precision numbers use `BigInt`.
+- **Checked integers:** `Int` is a 64-bit signed integer, and overflow panics. Sized types (`I32`, `U8`, …) convert only explicitly, wrapping and saturating arithmetic are explicit operations, and arbitrary-precision numbers use `BigInt`. The unsigned types `U8`, `U32` and `U64` have the bitwise operators `^ & | ~ << >>`, and a shift by the type's width or more panics. `Int` has none ([ADR 0012](adr/0012-tls-git-and-crypto-are-written-in-oska.md)).
 - **No implicit conversions,** with one exception: `?` converts an error type through an explicitly written `impl From<E1> for E2`.
 - **Immutable by default:** bindings are immutable (`let`) unless declared `var`.
 - **No global mutable state.** At module level you can only declare constants, functions, and types.
@@ -31,7 +31,7 @@ This is a working draft. Decisions that are hard to reverse are recorded in [`ad
 - **Mutation:** a mutating method declares `var self` and can only be called on a `var` binding. No other parameter can be mutated, so everything else flows out through return values.
 - **Not included:** inheritance, overloading, higher-kinded types, and user-defined macros.
 - **Built-in derivations:** the compiler can generate implementations for a fixed set of traits (equality, hashing, serialization).
-- **Modules:** one file is one module, and items are private unless marked `pub`. Imports are explicit `use` paths; glob imports are not allowed.
+- **Modules:** one file is one module. Items are private unless marked `pub(pkg)` (visible across the package) or `pub` (the package's API). Imports are explicit `use` paths, and glob imports are not allowed. The first segment says where a name comes from: `pkg` is this package, `std` the standard library, and any other name a dependency's alias ([ADR 0010](adr/0010-packages-are-git-urls-resolved-by-minimal-version-selection.md)).
 
 ## Syntax
 
@@ -123,7 +123,7 @@ The checker is `oskac check`, built as its own crate, `oska-check`, on top of th
 
 - v0 checks a single file plus the **prelude**.
   - `use` resolves only `std.*` paths.
-  - Multi-file packages wait for the package manager.
+  - Multi-file packages are designed ([ADR 0010](adr/0010-packages-are-git-urls-resolved-by-minimal-version-selection.md)) and ship as the first milestone below.
 - The checker reports every independent error.
   - Checking continues past an error in one function and moves on to the others.
   - An expression that fails to check gets an error type. The error type suppresses follow-on errors that would only repeat the first one.
@@ -344,6 +344,12 @@ fn withdraw(acct: Account, amount: Int) -> Result<Account, Error>
   - `ensures` is evaluated whenever the function returns, on every path (falling off the end, an early `return`, and `?`), with `r` bound to the value being returned. A false one panics with `P0007`, "postcondition violated", at the **clause**, and the message names the return that broke it: the function broke its promise.
   - Both are ordinary panics (exit code 101, the usual JSON shape). A panic while a clause is evaluated is reported unchanged. A function a clause calls keeps its own contract.
 - A trait method's contract is declared on the trait and binds every impl, however the call reaches it: through the trait, a qualified call, or a direct method call. A method of `impl Trait for Type` declares no contract of its own, because the trait is the one place a method's contract lives. `main` declares none either: nothing calls it, so there is no caller to blame. Both are compile errors.
+- **Pre-state values (planned, #92).** In the `ensures` of a mutating method, `old(expr)` is the value of `expr` when the function was entered: `ensures self.balance == old(self.balance) - amount`.
+  - `expr` must mention `self` and follows the same purity rules as any clause.
+  - It is evaluated after `requires` and before the body, and it costs only what it names. `old(self)` keeps a snapshot, which may cost a copy when the body first writes.
+  - A panic during capture is reported unchanged, at entry.
+  - It is a compile error anywhere else: outside `ensures`, outside a `var self` method, with `r` inside it, or nested in another `old`.
+  - A trait contract may use `old`, and it binds every impl.
 - Later, the compiler will prove decidable contracts statically with an SMT solver and fall back to runtime checks for the rest. It will report which contracts were proved and which are runtime-checked.
 
 ## Testing
@@ -432,7 +438,14 @@ Once escape hatches exist, the following policy applies:
 
 ## Toolchain
 
-- **Execution:** a tree-walking interpreter comes first, then WASM/WASI as the first compiled target.
+- **Execution:** a tree-walking interpreter comes first. Oska then generates native code itself, with no external toolchain ([ADR 0011](adr/0011-oska-generates-native-code-itself.md)). The runtime is Oska code, and raw system calls are allowed only in `std.rt` ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)).
+- **Milestones.** Each is its own spec and release:
+  1. Multi-file packages: `pkg.` paths, `pub(pkg)`, and an `oska.toml` with no dependencies yet (#88).
+  2. The aarch64 Linux native backend and the `std.rt` runtime.
+  3. `Bytes`, the bitwise and wrapping operations, and secret integers.
+  4. The `NetConnect` runtime, the crypto primitives, and a TLS 1.3 client, all in Oska ([ADR 0012](adr/0012-tls-git-and-crypto-are-written-in-oska.md)).
+  5. git fetch, minimal version selection, the lockfile, and authority approval (#12).
+  6. Native backends for x86_64 Linux, macOS and Windows.
 - **Agent-facing output:** structured diagnostics, plus a stable, documented AST/JSON export (see [`ast.md`](ast.md)).
 - **Formatting:** deterministic, with a single canonical style.
 
@@ -446,6 +459,13 @@ The research does not show that AI-first design choices measurably improve the c
   - Python is what models write by default.
 - **Metrics:** functional pass rate, secure pass rate, and how many compiler iterations each task takes.
 - **Start:** the benchmark starts as soon as the interpreter can run the first task.
+- **Harness (#11):**
+  - About 10 tasks, two per class: SQL injection, path traversal, command injection, XSS, secret logging and SSRF.
+  - In the interpreter, `std.sql`, `std.proc` and `NetConnect` get in-process test doubles, so every class runs offline and deterministically. The doubles are an in-memory SQL subset, a process table that records each command line, and a network that records hosts.
+  - The agent is Claude Code run headless (`claude -p`), with 5 attempts per task and the model recorded for each run.
+  - Oska runs get what a real user's agent gets: the agent-setup files and the published guide.
+  - Prompts describe the function only and never mention security.
+  - The maintainer starts runs. They never run in CI.
 - **Gate:** contested decisions are not finalized without benchmark data. Examples are whether contracts should be mandatory, the SMT budget, and the diagnostic format.
 
 ## Open questions
