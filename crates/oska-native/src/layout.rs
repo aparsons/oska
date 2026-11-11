@@ -23,10 +23,16 @@
 //! counted type ([`is_counted`]) that an expression produces is either
 //! static or holds one reference of its own, which whoever consumes it
 //! releases; a local holds one reference while it is in scope. When a
-//! release drops the count to zero, `std.rt`'s `free` returns the
-//! memory. Only text is built at run time so far: a struct or enum
-//! built at run time, with fields to release before it is freed, comes
-//! with #130.
+//! release drops the count to zero, the object's fields that hold
+//! references are released first, by a drop function generated for its
+//! type, and then `std.rt`'s `free` returns the memory.
+//!
+//! An object is never changed while it is shared: writing a field of a
+//! struct whose count is not 1 (shared, or static) first copies it, as
+//! the interpreter's `Rc::make_mut` does, so a changed copy never changes
+//! the original (ADR 0001). Enum objects are never written after they
+//! are built. The generic types of a struct or enum lay out the same for
+//! every type argument: every field is one word.
 //!
 //! Static objects live in read-only data and are built from constants
 //! that hold no address (an address in read-only data would need a
@@ -103,6 +109,66 @@ pub fn is_fieldless_enum(decl: &TypeDecl) -> bool {
         TypeDeclKind::Enum(variants) => variants.iter().all(|v| v.fields.is_empty()),
         TypeDeclKind::Struct(_) => false,
     }
+}
+
+/// The fields of an object of a concrete struct or enum type, their
+/// types with the type's arguments substituted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fields {
+    /// A struct's fields, in order.
+    Struct(Vec<Type>),
+    /// Each variant's fields, by variant index.
+    Enum(Vec<Vec<Type>>),
+}
+
+impl Fields {
+    /// Every field type of every variant.
+    pub fn all(&self) -> impl Iterator<Item = &Type> {
+        let (one, many) = match self {
+            Fields::Struct(fields) => (Some(fields), None),
+            Fields::Enum(variants) => (None, Some(variants)),
+        };
+        one.into_iter()
+            .flatten()
+            .chain(many.into_iter().flatten().flatten())
+    }
+}
+
+/// The fields of `ty`, a struct or enum of the program with its type
+/// arguments, as its objects hold them. `None` for any other type.
+pub fn fields(program: &Program, ty: &Type) -> Option<Fields> {
+    let Type::Named { name, args } = ty else {
+        return None;
+    };
+    let decl = program.types.get(name)?;
+    let subst: Vec<(String, Type)> = decl.generics.iter().cloned().zip(args.clone()).collect();
+    let types = |fields: &[oska_check::program::Field]| -> Vec<Type> {
+        fields.iter().map(|f| f.ty.substitute(&subst)).collect()
+    };
+    Some(match &decl.kind {
+        TypeDeclKind::Struct(fields) => Fields::Struct(types(fields)),
+        TypeDeclKind::Enum(variants) => {
+            Fields::Enum(variants.iter().map(|v| types(&v.fields)).collect())
+        }
+    })
+}
+
+/// Whether releasing the last reference to an object of `ty` must
+/// release references its fields hold before freeing it.
+pub fn holds_counted(program: &Program, ty: &Type) -> bool {
+    is_counted(program, ty)
+        && fields(program, ty).is_some_and(|f| f.all().any(|t| is_counted(program, t)))
+}
+
+/// The bytes of a struct object with `fields` fields, its count included.
+pub fn struct_size(fields: usize) -> i64 {
+    i64::from(WORD) * (1 + fields as i64)
+}
+
+/// The bytes of an enum object whose variant has `fields` fields, its
+/// count and variant index included.
+pub fn variant_size(fields: usize) -> i64 {
+    i64::from(WORD) * (2 + fields as i64)
 }
 
 /// The index of `variant` in the enum `decl`.

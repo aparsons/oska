@@ -235,6 +235,17 @@ pub enum Inst {
     },
     /// Return `value` to the caller.
     Return(Temp),
+    /// Return `value` and a second result, `second`: how a mutating
+    /// method gives back its receiver as it left it.
+    ReturnPair {
+        value: Temp,
+        second: Temp,
+    },
+    /// `dst =` the second result of the [`Inst::Call`] just before it,
+    /// which called a function that returns with [`Inst::ReturnPair`].
+    Second {
+        dst: Temp,
+    },
 }
 
 /// The most arguments a call passes, all in registers. More need
@@ -253,7 +264,8 @@ impl Inst {
             | Inst::Load { dst, .. }
             | Inst::Call { dst, .. }
             | Inst::Syscall { dst, .. }
-            | Inst::Arith { dst, .. } => Some(*dst),
+            | Inst::Arith { dst, .. }
+            | Inst::Second { dst } => Some(*dst),
             _ => None,
         }
     }
@@ -272,7 +284,9 @@ impl Inst {
             Inst::JumpIfZero { cond, .. } => vec![*cond],
             Inst::CallOnStack { stack, .. } => vec![*stack],
             Inst::Return(value) => vec![*value],
+            Inst::ReturnPair { value, second } => vec![*value, *second],
             Inst::Const { .. }
+            | Inst::Second { .. }
             | Inst::Addr { .. }
             | Inst::Label(_)
             | Inst::Jump(_)

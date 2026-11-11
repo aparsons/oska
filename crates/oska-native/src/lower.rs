@@ -48,12 +48,14 @@
 //! counts its depth ([`Inst::Enter`]) and panics with `P0021` at the
 //! interpreter's limit, so recursion never reaches the guard.
 
-use std::collections::{BTreeMap, BTreeSet};
+mod data;
+mod patterns;
+
+use std::collections::{BTreeMap, HashMap};
 
 use oska_check::builtins;
 use oska_check::program::{
-    trait_method, Callee, Construct, Expr, ExprKind, Function, IntType, Part, Place, Program, Stmt,
-    Type,
+    trait_method, Callee, Expr, ExprKind, Function, IntType, Part, Program, Stmt, Type,
 };
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::{Diagnostic, Span};
@@ -90,7 +92,7 @@ mod panics {
 }
 
 /// Which checked program a function comes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Source {
     /// The program being built.
     User,
@@ -98,12 +100,25 @@ enum Source {
     Runtime,
 }
 
-/// A function to compile.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct Instance {
-    source: Source,
-    /// The qualified name, as [`Program::functions`] keys it.
-    name: String,
+/// A function to compile: one of a program's, specialised for its type
+/// arguments, or one the backend generates for a type.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Instance {
+    /// A function of `source`, by the qualified name [`Program::functions`]
+    /// keys it by, with concrete types for its generics, in the order of
+    /// [`Function::generics`] (empty for a function that has none).
+    Function {
+        source: Source,
+        name: String,
+        type_args: Vec<Type>,
+    },
+    /// Release the fields of an object of this type, of `source`'s
+    /// [`Program::types`], that hold references, then free it: what
+    /// releasing its last reference calls.
+    Drop(Source, Type),
+    /// A copy of a shared struct object of this type, whose count is not
+    /// 1, holding a reference of its own to each field.
+    Unshare(Source, Type),
 }
 
 /// Lower `user`, with `rt`, the checked `std.rt`, to a module. `locate`
@@ -113,7 +128,7 @@ pub fn program(user: &Program, rt: &Program, locate: Locate) -> Result<ir::Modul
         user,
         rt,
         locate,
-        ids: BTreeMap::new(),
+        ids: HashMap::new(),
         functions: Vec::new(),
         queue: Vec::new(),
         rodata: Rodata::default(),
@@ -137,7 +152,7 @@ struct Lowering<'p> {
     rt: &'p Program,
     locate: Locate<'p>,
     /// Every function requested so far.
-    ids: BTreeMap<Instance, FnId>,
+    ids: HashMap<Instance, FnId>,
     /// The lowered functions, by id; a requested one is a placeholder
     /// until it is lowered.
     functions: Vec<ir::Function>,
@@ -158,13 +173,9 @@ impl<'p> Lowering<'p> {
         }
     }
 
-    /// The id of the function `name` of `source`, lowered later if it is
-    /// new. `origin` is the user code that reached it.
-    fn request(&mut self, source: Source, name: &str, origin: Span) -> FnId {
-        let instance = Instance {
-            source,
-            name: name.to_string(),
-        };
+    /// The id of `instance`, lowered later if it is new. `origin` is the
+    /// user code that reached it.
+    fn request(&mut self, instance: Instance, origin: Span) -> FnId {
         if let Some(&id) = self.ids.get(&instance) {
             return id;
         }
@@ -231,21 +242,40 @@ impl<'p> Lowering<'p> {
 
     /// Lower the function `instance` names.
     fn function(&mut self, instance: &Instance, origin: Span) -> Result<ir::Function, Diagnostic> {
-        let source = instance.source;
+        let (source, name, type_args) = match instance {
+            Instance::Function {
+                source,
+                name,
+                type_args,
+            } => (*source, name, type_args),
+            Instance::Drop(source, ty) => {
+                let mut body = Body::new(self, *source, Some(origin));
+                body.drop_function(ty)?;
+                return body.finish(&qualified(instance), 1, NOWHERE);
+            }
+            Instance::Unshare(source, ty) => {
+                let mut body = Body::new(self, *source, Some(origin));
+                body.unshare_function(ty)?;
+                return body.finish(&qualified(instance), 1, NOWHERE);
+            }
+        };
         let program = self.program(source);
         let runtime_origin = (source == Source::Runtime).then_some(origin);
-        let Some(function) = program.functions.get(&instance.name) else {
+        let Some(function) = program.functions.get(name) else {
             return Err(refusal(
                 origin,
-                &format!("a call of `{}`", instance.name),
+                &format!("a call of `{name}`"),
                 runtime_origin.is_some(),
             ));
         };
         let at = |span: Span| runtime_origin.unwrap_or(span);
-        if !function.generics.is_empty() {
+        if function.generics.len() != type_args.len() {
             return Err(refusal(
                 at(function.body.span),
-                &format!("the generic function `{}`", function.name),
+                &format!(
+                    "the generic function `{}` without its type arguments",
+                    function.name
+                ),
                 runtime_origin.is_some(),
             ));
         }
@@ -270,17 +300,34 @@ impl<'p> Lowering<'p> {
             ));
         }
         let mut body = Body::new(self, source, runtime_origin);
+        body.subst = function
+            .generics
+            .iter()
+            .cloned()
+            .zip(type_args.clone())
+            .collect();
         if function.receiver {
             let receiver = body.temp();
-            body.receiver = Some(receiver);
+            let ty = function
+                .self_ty
+                .as_ref()
+                .map_or(Type::Unit, |ty| body.ty(ty));
+            body.receiver = Some(Receiver {
+                temp: receiver,
+                // A mutating method owns its receiver, and gives it back.
+                owned: data::writes_self(function),
+                ty,
+            });
         }
         for param in &function.params {
             let temp = body.temp();
             if param.binds {
                 // Borrowed from the caller: never released here.
+                let ty = body.ty(&param.ty);
                 body.slots.push(Slot {
                     temp,
                     release: false,
+                    ty,
                 });
             }
         }
@@ -295,11 +342,29 @@ impl<'p> Lowering<'p> {
     }
 }
 
-/// How a function is named in the code, for reading it.
+/// How a function is named in the code, for reading it: `name`, with
+/// its type arguments as `name<Int, String>`, `std.rt.` before a
+/// function of the runtime's.
 fn qualified(instance: &Instance) -> String {
-    match instance.source {
-        Source::User => instance.name.clone(),
-        Source::Runtime => format!("std.rt.{}", instance.name),
+    match instance {
+        Instance::Function {
+            source,
+            name,
+            type_args,
+        } => {
+            let prefix = match source {
+                Source::User => "",
+                Source::Runtime => "std.rt.",
+            };
+            if type_args.is_empty() {
+                format!("{prefix}{name}")
+            } else {
+                let args: Vec<String> = type_args.iter().map(Type::to_string).collect();
+                format!("{prefix}{name}<{}>", args.join(", "))
+            }
+        }
+        Instance::Drop(_, ty) => format!("drop<{ty}>"),
+        Instance::Unshare(_, ty) => format!("unshare<{ty}>"),
     }
 }
 
@@ -320,12 +385,38 @@ fn refusal(span: Span, what: &str, in_runtime: bool) -> Diagnostic {
 }
 
 /// A local slot in scope.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Slot {
     temp: Temp,
     /// Whether it holds a reference of its own, released when it goes out
     /// of scope: a counted local's, not a parameter's.
     release: bool,
+    /// Its type, concrete.
+    ty: Type,
+}
+
+/// A method's receiver.
+#[derive(Debug, Clone)]
+struct Receiver {
+    temp: Temp,
+    /// Whether the method owns it: a mutating method's, which may change
+    /// it and gives it back to the caller with its result. Any other
+    /// method's is borrowed, as a parameter is.
+    owned: bool,
+    /// `Self`, concrete.
+    ty: Type,
+}
+
+/// A value an expression holds a reference to while code that may leave
+/// it runs, such as a `match`'s scrutinee while its arms run: a
+/// `return`, or a `break` or `continue` out of a loop it is inside,
+/// releases it.
+#[derive(Debug, Clone)]
+struct Held {
+    temp: Temp,
+    ty: Type,
+    /// How many loops were open where it was taken.
+    loops: usize,
 }
 
 /// A loop being lowered.
@@ -355,11 +446,18 @@ struct Body<'l, 'p> {
     /// The local slots in scope, by slot number.
     slots: Vec<Slot>,
     /// The receiver of a method.
-    receiver: Option<Temp>,
+    receiver: Option<Receiver>,
     /// The innermost loops.
     loops: Vec<Loop>,
-    /// The temporaries holding a reference that is theirs to release.
-    owned: BTreeSet<Temp>,
+    /// The temporaries holding a reference that is theirs to release,
+    /// with their types.
+    owned: BTreeMap<Temp, Type>,
+    /// The values held while code that may leave them runs, innermost
+    /// last.
+    held: Vec<Held>,
+    /// The concrete type each generic parameter of the function stands
+    /// for in the instance being lowered.
+    subst: Vec<(String, Type)>,
 }
 
 impl<'l, 'p> Body<'l, 'p> {
@@ -375,7 +473,28 @@ impl<'l, 'p> Body<'l, 'p> {
             slots: Vec::new(),
             receiver: None,
             loops: Vec::new(),
-            owned: BTreeSet::new(),
+            owned: BTreeMap::new(),
+            held: Vec::new(),
+            subst: Vec::new(),
+        }
+    }
+
+    /// `ty` in the instance being lowered: with its generic parameters
+    /// replaced by the concrete types they stand for.
+    fn ty(&self, ty: &Type) -> Type {
+        if self.subst.is_empty() {
+            ty.clone()
+        } else {
+            ty.substitute(&self.subst)
+        }
+    }
+
+    /// Record that `value`, of type `ty` (not yet substituted), holds a
+    /// reference of its own, when `ty` is counted.
+    fn own(&mut self, value: Temp, ty: &Type) {
+        let ty = self.ty(ty);
+        if self.counted(&ty) {
+            self.owned.insert(value, ty);
         }
     }
 
@@ -461,9 +580,9 @@ impl<'l, 'p> Body<'l, 'p> {
         self.rodata(at)
     }
 
-    /// Whether values of `ty` are counted.
+    /// Whether values of `ty` are counted, in the instance being lowered.
     fn counted(&self, ty: &Type) -> bool {
-        layout::is_counted(self.program(), ty)
+        layout::is_counted(self.program(), &self.ty(ty))
     }
 
     // ---- Reference counts ------------------------------------------------
@@ -491,9 +610,10 @@ impl<'l, 'p> Body<'l, 'p> {
         self.push(Inst::Label(done));
     }
 
-    /// Drop one reference to the object `value`, unless it is static, and
-    /// free it when that was the last.
-    fn release(&mut self, value: Temp) -> Result<(), Diagnostic> {
+    /// Drop one reference to the object `value`, of the concrete type
+    /// `ty`, unless it is static. When that was the last, release what
+    /// its fields hold and free it.
+    fn release(&mut self, value: Temp, ty: &Type) -> Result<(), Diagnostic> {
         let count = self.load(value, 0);
         let zero = self.constant(0);
         let one = self.constant(1);
@@ -510,7 +630,14 @@ impl<'l, 'p> Body<'l, 'p> {
             rhs: one,
             target: shared,
         });
-        self.call_runtime("free", vec![value], NOWHERE)?;
+        if layout::holds_counted(self.program(), ty) {
+            let drop = Instance::Drop(self.source, ty.clone());
+            let origin = self.origin.unwrap_or(NOWHERE);
+            let id = self.lowering.request(drop, origin);
+            self.call_id(id, vec![value], NOWHERE)?;
+        } else {
+            self.call_runtime("free", vec![value], NOWHERE)?;
+        }
         self.push(Inst::Jump(done));
         self.push(Inst::Label(shared));
         let less = self.binary_op(BinOp::Sub, count, one);
@@ -526,8 +653,8 @@ impl<'l, 'p> Body<'l, 'p> {
 
     /// Release `value` if it holds a reference of its own.
     fn consume(&mut self, value: Temp) -> Result<(), Diagnostic> {
-        if self.owned.remove(&value) {
-            self.release(value)?;
+        if let Some(ty) = self.owned.remove(&value) {
+            self.release(value, &ty)?;
         }
         Ok(())
     }
@@ -538,7 +665,20 @@ impl<'l, 'p> Body<'l, 'p> {
         let slots: Vec<Slot> = self.slots.get(height..).unwrap_or_default().to_vec();
         for slot in slots.iter().rev() {
             if slot.release {
-                self.release(slot.temp)?;
+                self.release(slot.temp, &slot.ty)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Release the values held inside the innermost `loops` open loops
+    /// (all of them for `None`), innermost first, without letting go of
+    /// them: for code that leaves them.
+    fn release_held(&mut self, loops: Option<usize>) -> Result<(), Diagnostic> {
+        let held: Vec<Held> = self.held.clone();
+        for value in held.iter().rev() {
+            if loops.map_or(true, |open| value.loops >= open) {
+                self.release(value.temp, &value.ty)?;
             }
         }
         Ok(())
@@ -556,7 +696,17 @@ impl<'l, 'p> Body<'l, 'p> {
     fn leave_function(&mut self, value: Temp) -> Result<(), Diagnostic> {
         self.owned.remove(&value);
         self.release_slots(0)?;
-        self.push(Inst::Return(value));
+        self.release_held(None)?;
+        match self.receiver.clone() {
+            // A mutating method gives its receiver back.
+            Some(Receiver {
+                temp, owned: true, ..
+            }) => self.push(Inst::ReturnPair {
+                value,
+                second: temp,
+            }),
+            _ => self.push(Inst::Return(value)),
+        }
         Ok(())
     }
 
@@ -667,16 +817,23 @@ impl<'l, 'p> Body<'l, 'p> {
         Ok(dst)
     }
 
-    /// Call the function `name` of `source`.
+    /// Call the function `name` of `source`, instantiated with the
+    /// concrete `type_args`.
     fn call_function(
         &mut self,
         source: Source,
         name: &str,
+        type_args: Vec<Type>,
         args: Vec<Temp>,
         span: Span,
     ) -> Result<Temp, Diagnostic> {
         let origin = self.origin.unwrap_or(span);
-        let id = self.lowering.request(source, name, origin);
+        let instance = Instance::Function {
+            source,
+            name: name.to_string(),
+            type_args,
+        };
+        let id = self.lowering.request(instance, origin);
         self.call_id(id, args, span)
     }
 
@@ -687,43 +844,68 @@ impl<'l, 'p> Body<'l, 'p> {
         args: Vec<Temp>,
         span: Span,
     ) -> Result<Temp, Diagnostic> {
-        self.call_function(Source::Runtime, name, args, span)
+        self.call_function(Source::Runtime, name, Vec::new(), args, span)
     }
 
-    /// Call the program's function `name`, counting the call's depth: at
-    /// [`MAX_CALL_DEPTH`] it panics with `P0021` at `span` instead.
-    fn call_counted(
+    /// Call the function `name` of the program being lowered with the
+    /// concrete `type_args`. A call of a user function from user code
+    /// counts its depth: at [`MAX_CALL_DEPTH`] it panics with `P0021` at
+    /// `span` instead.
+    fn call_program(
         &mut self,
         name: &str,
+        type_args: Vec<Type>,
         args: Vec<Temp>,
         span: Span,
     ) -> Result<Temp, Diagnostic> {
+        if self.source == Source::Runtime {
+            return self.call_function(Source::Runtime, name, type_args, args, span);
+        }
         let exhausted = self.panic_static(panics::CALL_DEPTH_EXCEEDED, panics::TOO_DEEP, span)?;
         self.push(Inst::Enter { exhausted });
-        let result = self.call_function(Source::User, name, args, span)?;
+        let result = self.call_function(Source::User, name, type_args, args, span)?;
         self.push(Inst::Leave);
         Ok(result)
     }
 
-    /// A call of `callee` with `args`, evaluated already, at `span`,
-    /// whose result is of type `ret`. The call releases the arguments
-    /// that hold a reference of their own, and its result holds one when
-    /// `ret` is counted.
+    /// The second result of the call just made: a mutating method's
+    /// receiver as it left it.
+    fn second_result(&mut self) -> Temp {
+        let dst = self.temp();
+        self.push(Inst::Second { dst });
+        dst
+    }
+
+    /// A call of `callee`, instantiated with `type_args` (not yet
+    /// substituted), with `args`, evaluated already, at `span`, whose
+    /// result is of type `ret`. The call releases the arguments that hold
+    /// a reference of their own, and its result holds one when `ret` is
+    /// counted.
     fn call(
         &mut self,
         callee: &Callee,
+        type_args: &[Type],
         args: Vec<Temp>,
         ret: &Type,
         span: Span,
     ) -> Result<Temp, Diagnostic> {
         let result = match callee {
             Callee::Function(name) if self.program().functions.contains_key(name) => {
-                match self.source {
-                    Source::User => self.call_counted(name, args.clone(), span)?,
-                    Source::Runtime => {
-                        self.call_function(Source::Runtime, name, args.clone(), span)?
+                let type_args: Vec<Type> = type_args.iter().map(|t| self.ty(t)).collect();
+                let mutated = self.mutated_receiver(name, &type_args);
+                let result = self.call_program(name, type_args, args.clone(), span)?;
+                if let (Some(ty), Some(&receiver)) = (mutated, args.first()) {
+                    // A mutating method called on a value, not a place:
+                    // it took the receiver's reference and gives back the
+                    // receiver it changed, which is released here.
+                    let after = self.second_result();
+                    self.owned.remove(&receiver);
+                    if self.counted(&ty) {
+                        self.owned.insert(after, ty);
                     }
+                    self.consume(after)?;
                 }
+                result
             }
             Callee::Function(name) => match intrinsics::runtime(name) {
                 // Only `std.rt` may name an intrinsic (the checker's
@@ -764,10 +946,25 @@ impl<'l, 'p> Body<'l, 'p> {
         for arg in args {
             self.consume(arg)?;
         }
-        if self.counted(ret) {
-            self.owned.insert(result);
-        }
+        self.own(result, ret);
         Ok(result)
+    }
+
+    /// For a mutating method of the program, `name` (one that may change
+    /// its receiver, `data::writes_self`), instantiated with the concrete
+    /// `type_args`: its receiver's type. `None` for any other function.
+    fn mutated_receiver(&self, name: &str, type_args: &[Type]) -> Option<Type> {
+        let function = self.program().functions.get(name)?;
+        if !data::writes_self(function) {
+            return None;
+        }
+        let subst: Vec<(String, Type)> = function
+            .generics
+            .iter()
+            .cloned()
+            .zip(type_args.iter().cloned())
+            .collect();
+        Some(function.self_ty.as_ref()?.substitute(&subst))
     }
 
     /// A `std.rt` intrinsic applied to `args`. The checker has matched
@@ -830,7 +1027,7 @@ impl<'l, 'p> Body<'l, 'p> {
             }
             args.push(self.constant(0));
         }
-        let result = self.call_function(Source::User, "main", args, span)?;
+        let result = self.call_function(Source::User, "main", Vec::new(), args, span)?;
         match &main.ret {
             Type::Unit => Ok(()),
             Type::Named { name, args } if name == builtins::RESULT && args.len() == 2 => {
@@ -855,20 +1052,38 @@ impl<'l, 'p> Body<'l, 'p> {
         }
     }
 
-    /// The `Display` text of `value`, of type `ty`.
+    /// The `Display` text of `value`, of the concrete type `ty`: through
+    /// the program's impl, generic or not, or the prelude's.
     fn display(&mut self, ty: &Type, value: Temp, span: Span) -> Result<Temp, Diagnostic> {
-        let name = match ty {
+        let tag = match ty {
             Type::String => return Ok(value),
-            Type::Named { name, args } if args.is_empty() => name,
+            Type::Int(int) => int.name(),
+            Type::Bool => "Bool",
+            Type::Named { name, .. } => name,
             _ => return Err(self.refuse(span, &format!("the `Display` text of a `{ty}`"))),
         };
-        let user = trait_method(name, "Display", "to_string");
-        let callee = if self.program().functions.contains_key(&user) {
-            Callee::Function(user)
-        } else {
-            Callee::Intrinsic(format!("{name}.to_string"))
+        let user = trait_method(tag, "Display", "to_string");
+        let (callee, type_args) = match self.program().functions.get(&user) {
+            Some(function) => {
+                let mut bound = Vec::new();
+                if let Some(self_ty) = &function.self_ty {
+                    self_ty.bind(ty, &mut bound);
+                }
+                let type_args = function
+                    .generics
+                    .iter()
+                    .map(|g| {
+                        bound
+                            .iter()
+                            .find(|(name, _)| name == g)
+                            .map_or(Type::Unit, |(_, t)| t.clone())
+                    })
+                    .collect();
+                (Callee::Function(user), type_args)
+            }
+            None => (Callee::Intrinsic(format!("{tag}.to_string")), Vec::new()),
         };
-        self.call(&callee, vec![value], &Type::String, span)
+        self.call(&callee, &type_args, vec![value], &Type::String, span)
     }
 
     /// The index of `variant` in the enum `ty`.
@@ -894,7 +1109,7 @@ impl<'l, 'p> Body<'l, 'p> {
                 Some(&Slot { temp, .. }) => Ok(self.read(temp, &expr.ty)),
                 None => Err(self.refuse(span, "a local slot out of scope")),
             },
-            ExprKind::SelfValue => match self.receiver {
+            ExprKind::SelfValue => match self.receiver.as_ref().map(|r| r.temp) {
                 Some(receiver) => Ok(self.read(receiver, &expr.ty)),
                 None => Err(self.refuse(span, "`self` outside a method")),
             },
@@ -941,10 +1156,7 @@ impl<'l, 'p> Body<'l, 'p> {
                 // A branch may give a static object, which needs no
                 // release; releasing one is harmless, so the result is
                 // released if either branch's would be.
-                let then_owned = self.owned.remove(&then_value);
-                if self.owned.remove(&else_value) || then_owned {
-                    self.owned.insert(result);
-                }
+                self.merge_owned(&[then_value, else_value], result);
                 Ok(result)
             }
             ExprKind::Not(operand) => {
@@ -961,15 +1173,25 @@ impl<'l, 'p> Body<'l, 'p> {
                 type_args,
                 args,
             } => {
-                if !type_args.is_empty() {
-                    return Err(self.refuse(span, "a call of a generic function"));
-                }
                 let mut values = Vec::with_capacity(args.len());
                 for arg in args {
                     values.push(self.expr(arg)?);
                 }
-                self.call(callee, values, &expr.ty, span)
+                if let Callee::Intrinsic(name) = callee {
+                    if let Some(value) = self.data_intrinsic(name, args, &values, expr)? {
+                        return Ok(value);
+                    }
+                }
+                self.call(callee, type_args, values, &expr.ty, span)
             }
+            ExprKind::Field { base, index } => self.field(base, *index, &expr.ty),
+            ExprKind::Match { scrutinee, arms } => self.match_arms(scrutinee, arms),
+            ExprKind::MutatingCall {
+                callee,
+                type_args,
+                receiver,
+                args,
+            } => self.mutating_call(callee, type_args, receiver, args, &expr.ty, span),
             other => Err(self.refuse(span, &describe(other))),
         }
     }
@@ -981,9 +1203,24 @@ impl<'l, 'p> Body<'l, 'p> {
         let value = self.copy(temp);
         if self.counted(ty) {
             self.retain(value);
-            self.owned.insert(value);
+            self.own(value, ty);
         }
         value
+    }
+
+    /// `result` holds whichever of `values` a branch chose: it holds a
+    /// reference of its own if any of them did. A branch may give a
+    /// static object, which needs no release; releasing one is harmless.
+    fn merge_owned(&mut self, values: &[Temp], result: Temp) {
+        let mut ty = None;
+        for value in values {
+            if let Some(owned) = self.owned.remove(value) {
+                ty = Some(owned);
+            }
+        }
+        if let Some(ty) = ty {
+            self.owned.insert(result, ty);
+        }
     }
 
     fn binary(
@@ -1002,6 +1239,25 @@ impl<'l, 'p> Body<'l, 'p> {
                 BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem,
                 Some(int),
             ) => self.arithmetic(op, lhs, rhs, int, span),
+            (
+                BinaryOp::Eq
+                | BinaryOp::Ne
+                | BinaryOp::Lt
+                | BinaryOp::Le
+                | BinaryOp::Gt
+                | BinaryOp::Ge,
+                None,
+            ) if lhs.ty == Type::String && matches!(op, BinaryOp::Eq | BinaryOp::Ne) => {
+                let a = self.expr(lhs)?;
+                let b = self.expr(rhs)?;
+                let eq = Callee::Intrinsic("String.eq".to_string());
+                let equal = self.call(&eq, &[], vec![a, b], &Type::Bool, span)?;
+                if op == BinaryOp::Eq {
+                    return Ok(equal);
+                }
+                let one = self.constant(1);
+                Ok(self.binary_op(BinOp::Xor, equal, one))
+            }
             (
                 BinaryOp::Eq
                 | BinaryOp::Ne
@@ -1171,11 +1427,9 @@ impl<'l, 'p> Body<'l, 'p> {
                     display,
                     type_args,
                 } => {
-                    if !type_args.is_empty() {
-                        return Err(self.refuse(value.span, "a generic `Display` implementation"));
-                    }
                     let shown = self.expr(value)?;
-                    let text = self.call(display, vec![shown], &Type::String, value.span)?;
+                    let text =
+                        self.call(display, type_args, vec![shown], &Type::String, value.span)?;
                     texts.push(text);
                 }
             }
@@ -1193,43 +1447,8 @@ impl<'l, 'p> Body<'l, 'p> {
         for text in texts {
             self.consume(text)?;
         }
-        self.owned.insert(object);
+        self.own(object, &Type::String);
         Ok(object)
-    }
-
-    /// A struct or enum value. A fieldless enum is its variant's index;
-    /// any other value whose fields are constants is a static object.
-    fn construct(
-        &mut self,
-        expr: &Expr,
-        ctor: &Construct,
-        fields: &[Expr],
-    ) -> Result<Temp, Diagnostic> {
-        let program = self.program();
-        let Some(decl) = program.types.get(&ctor.ty) else {
-            return Err(self.refuse(expr.span, &format!("a `{}` value", ctor.ty)));
-        };
-        let mut words = Vec::new();
-        if let Some(variant) = &ctor.variant {
-            let index = self.variant(&ctor.ty, variant, expr.span)?;
-            if layout::is_fieldless_enum(decl) {
-                return Ok(self.constant(index as i64));
-            }
-            words.push(index as i64);
-        }
-        for field in fields {
-            match constant_word(program, field) {
-                Some(word) => words.push(word),
-                None => {
-                    return Err(self.refuse(
-                        expr.span,
-                        &format!("a `{}` value built at run time", expr.ty),
-                    ))
-                }
-            }
-        }
-        let at = self.lowering.rodata.object(&words);
-        Ok(self.rodata(at))
     }
 
     // ---- Statements --------------------------------------------------------
@@ -1247,29 +1466,13 @@ impl<'l, 'p> Body<'l, 'p> {
                     self.owned.remove(&value);
                     let temp = self.copy(value);
                     let release = self.counted(ty);
-                    self.slots.push(Slot { temp, release });
+                    let ty = self.ty(ty);
+                    self.slots.push(Slot { temp, release, ty });
                 } else {
                     self.consume(value)?;
                 }
             }
-            Stmt::Assign { place, value } => {
-                let src = self.expr(value)?;
-                let slot = match place {
-                    Place::Local(slot) => self.slots.get(*slot).copied(),
-                    Place::SelfValue | Place::Field { .. } => None,
-                };
-                let Some(slot) = slot else {
-                    return Err(self.refuse(value.span, "assigning to a field or `self`"));
-                };
-                if slot.release {
-                    self.release(slot.temp)?;
-                }
-                self.owned.remove(&src);
-                self.push(Inst::Copy {
-                    dst: slot.temp,
-                    src,
-                });
-            }
+            Stmt::Assign { place, value } => self.assign(place, value)?,
             Stmt::Return { value, .. } => {
                 let value = match value {
                     Some(value) => self.expr(value)?,
@@ -1282,6 +1485,7 @@ impl<'l, 'p> Body<'l, 'p> {
                     return Err(self.refuse(NOWHERE, "`break` outside a loop"));
                 };
                 self.release_slots(innermost.height)?;
+                self.release_held(Some(self.loops.len()))?;
                 let target = if matches!(stmt, Stmt::Break) {
                     innermost.exit
                 } else {
@@ -1351,6 +1555,7 @@ impl<'l, 'p> Body<'l, 'p> {
             self.slots.push(Slot {
                 temp,
                 release: false,
+                ty: ty.clone(),
             });
         }
         self.loop_body(next, exit, body)?;

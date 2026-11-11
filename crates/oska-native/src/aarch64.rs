@@ -11,7 +11,8 @@
 //! The backend's own (nothing outside a program calls into it):
 //!
 //! - arguments in `x0`–`x7`, in order, the receiver first; the result in
-//!   `x0`; every value is one word ([`crate::layout`]);
+//!   `x0`, and a mutating method's receiver, its second result, in `x1`
+//!   ([`Inst::ReturnPair`]); every value is one word ([`crate::layout`]);
 //! - `x8` holds a system call's number, and `svc #0` makes it;
 //! - `x9`–`x11`, `x16` and `x17` are scratch within one instruction's
 //!   code;
@@ -79,6 +80,7 @@ pub fn emit(module: &Module) -> Result<Text, String> {
 
 // Registers.
 const X0: u32 = 0;
+const X1: u32 = 1;
 const X8: u32 = 8;
 const X9: u32 = 9;
 const X10: u32 = 10;
@@ -379,16 +381,31 @@ impl Emitter {
             }
             Inst::Return(value) => {
                 self.read_into(X0, *value);
-                for (i, &register) in self.saved.clone().iter().enumerate() {
-                    self.put(ldur(register, FP, -8 * (i as i32 + 1)));
-                }
-                self.put(add_imm(SP, FP, 0, false));
-                self.put(POP_FRAME);
-                self.put(RET);
+                self.epilogue();
             }
+            Inst::ReturnPair { value, second } => {
+                // No temporary lives in `x0` or `x1`, so neither read
+                // overwrites the other's operand.
+                self.read_into(X1, *second);
+                self.read_into(X0, *value);
+                self.epilogue();
+            }
+            // Straight after the call, before anything touches `x1`.
+            Inst::Second { dst } => self.write(*dst, X1),
             // Placed by `function`.
             Inst::Label(_) => {}
         }
+    }
+
+    /// Restore the callee-saved registers and the caller's frame, and
+    /// return.
+    fn epilogue(&mut self) {
+        for (i, &register) in self.saved.clone().iter().enumerate() {
+            self.put(ldur(register, FP, -8 * (i as i32 + 1)));
+        }
+        self.put(add_imm(SP, FP, 0, false));
+        self.put(POP_FRAME);
+        self.put(RET);
     }
 
     /// `x16 = a op b`, checked against `int`: a branch to `overflow` when

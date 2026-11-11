@@ -32,6 +32,7 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     ("Stdout.println", Prelude::Runtime("stdout_println")),
     ("Stderr.println", Prelude::Runtime("stderr_println")),
     ("String.to_string", Prelude::Identity),
+    ("String.eq", Prelude::Runtime("text_eq")),
     ("Int.to_string", Prelude::Runtime("int_to_string")),
     ("IoError.to_string", Prelude::Field(0)),
 ];

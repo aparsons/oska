@@ -210,6 +210,26 @@ pub fn text_put(object: Int, at: Int, text: String) -> Int {
     rt_mem_add(at, length)
 }
 
+// Whether `a` and `b` hold the same bytes: `String`'s `==`, and a string
+// literal pattern's test.
+pub fn text_eq(a: String, b: String) -> Bool {
+    let x = rt_mem_text(a)
+    let y = rt_mem_text(b)
+    let length = rt_mem_load64(rt_mem_add(x, 8))
+    if length != rt_mem_load64(rt_mem_add(y, 8)) {
+        return false
+    }
+    var at = 16
+    let end = rt_mem_add(16, length)
+    while at < end {
+        if rt_mem_load8(rt_mem_add(x, at)) != rt_mem_load8(rt_mem_add(y, at)) {
+            return false
+        }
+        at = rt_mem_add(at, 1)
+    }
+    true
+}
+
 // `Int.to_string`: the decimal text of `n`.
 pub fn int_to_string(n: Int) -> String {
     int_text(n, false)
