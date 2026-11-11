@@ -161,7 +161,7 @@ fn syntax_sample_impl_block_parses() {
     let [method] = imp.methods.as_slice() else {
         panic!("expected one method, got {:?}", imp.methods);
     };
-    assert!(method.public);
+    assert!(method.is_public());
     let ItemKind::Fn(deposit) = &method.kind else {
         panic!("expected a method, got {method:?}");
     };

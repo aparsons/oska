@@ -1,0 +1,7 @@
+$ oskac test
+exit: 0
+--- stdout
+test main: greeting ... ok
+
+1 tests: 1 passed, 0 failed, 0 skipped
+--- stderr

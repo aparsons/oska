@@ -12,7 +12,9 @@ mod export;
 mod parser;
 
 pub use export::{module_to_json, module_to_tree, AST_VERSION};
-pub use parser::{parse_expr, parse_module, parse_prelude, parse_stmts, parse_type};
+pub use parser::{
+    parse_expr, parse_module, parse_module_at, parse_prelude, parse_stmts, parse_type,
+};
 
 /// A half-open byte range `start..end` in the source text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -55,6 +57,11 @@ pub enum TokenKind {
     /// A statement terminator, inserted for a significant newline. See
     /// [`lex`] for the rules.
     Newline,
+}
+
+/// Whether `word` is a keyword, which is never an identifier.
+pub fn is_keyword(word: &str) -> bool {
+    Keyword::lookup(word).is_some()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -250,8 +257,92 @@ pub struct Diagnostic {
     pub code: &'static str,
     pub message: String,
     pub span: Span,
-    /// A machine-applicable fix, when the right edit is unambiguous.
-    pub fix: Option<Fix>,
+    /// A machine-applicable fix, when the right edit is unambiguous. Its
+    /// edits are in the same file as `span`.
+    ///
+    /// `fix` and `location` are boxed because the parser returns
+    /// `Result<_, Diagnostic>` everywhere: unboxed, they would make every
+    /// such `Err` large, which clippy's `result_large_err` refuses and
+    /// which costs a copy on every parser call. Most diagnostics have
+    /// neither, so a box costs nothing then.
+    pub fix: Option<Box<Fix>>,
+    /// The file the span is in, and where it starts. A package check names
+    /// the file of every diagnostic; checking a source string alone does not.
+    pub location: Option<Box<Location>>,
+}
+
+/// Where a report entry is: the file, and the line and column its span
+/// starts at. Spans stay byte offsets within that file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Location {
+    /// The file's path: package-relative, such as `src/util/text.osk`, or
+    /// as given on the command line for a single file.
+    pub path: String,
+    /// 1-based.
+    pub line: usize,
+    /// 1-based, in characters.
+    pub column: usize,
+}
+
+impl Location {
+    /// The location of byte `offset` of `src`, the text of the file at
+    /// `path`. An offset past the end means the end; one inside a
+    /// character means that character.
+    pub fn new(path: impl Into<String>, src: &str, offset: usize) -> Self {
+        let mut end = offset.min(src.len());
+        while !src.is_char_boundary(end) {
+            end -= 1;
+        }
+        let before = &src[..end];
+        let line_start = before.rfind('\n').map_or(0, |at| at + 1);
+        Location {
+            path: path.into(),
+            line: before.matches('\n').count() + 1,
+            column: before[line_start..].chars().count() + 1,
+        }
+    }
+}
+
+/// Where each line of a text starts, so that locating many offsets in it
+/// costs one pass over the text plus a binary search each, where
+/// [`Location::new`] scans the text up to its offset every time.
+#[derive(Debug, Clone)]
+pub struct LineIndex<'a> {
+    src: &'a str,
+    /// The byte offset each line starts at; the first is 0.
+    starts: Vec<usize>,
+}
+
+impl<'a> LineIndex<'a> {
+    pub fn new(src: &'a str) -> Self {
+        let starts = std::iter::once(0)
+            .chain(src.match_indices('\n').map(|(at, _)| at + 1))
+            .collect();
+        LineIndex { src, starts }
+    }
+
+    /// The location of byte `offset` in the file at `path`, as
+    /// [`Location::new`] gives it.
+    pub fn location(&self, path: impl Into<String>, offset: usize) -> Location {
+        let mut end = offset.min(self.src.len());
+        while !self.src.is_char_boundary(end) {
+            end -= 1;
+        }
+        let line = self.starts.partition_point(|&start| start <= end);
+        let line_start = self.starts.get(line - 1).copied().unwrap_or(0);
+        Location {
+            path: path.into(),
+            line,
+            column: self.src[line_start..end].chars().count() + 1,
+        }
+    }
+}
+
+/// Renders as `path:line:column`, which editors and terminals jump to.
+impl fmt::Display for Location {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}:{}", self.path, self.line, self.column)
+    }
 }
 
 /// Source edits that resolve a diagnostic. Applying all of them to the
@@ -262,6 +353,9 @@ pub struct Fix {
     pub message: String,
     /// Non-overlapping edits, each against the original source.
     pub edits: Vec<Edit>,
+    /// The file the edits are in, when it is not the diagnostic's own,
+    /// such as the declaration a package check's fix marks `pub(pkg)`.
+    pub path: Option<String>,
 }
 
 /// Replace the source text at `span` with `replacement`. An empty span
@@ -298,27 +392,42 @@ impl Diagnostic {
             message: message.into(),
             span,
             fix: None,
+            location: None,
         }
+    }
+
+    /// Name the file the diagnostic is in: `src` is the text of the file at
+    /// `path`.
+    pub fn locate(mut self, path: &str, src: &str) -> Self {
+        self.location = Some(Box::new(Location::new(path, src, self.span.start)));
+        self
     }
 
     /// Attach a fix made of `edits`.
     pub fn with_fix(mut self, message: impl Into<String>, edits: Vec<Edit>) -> Self {
-        self.fix = Some(Fix {
+        self.fix = Some(Box::new(Fix {
             message: message.into(),
             edits,
-        });
+            path: None,
+        }));
         self
     }
 
     /// Render as a single-line JSON object for machine consumers. The
-    /// `fix` field follows `span`, and is omitted when there is no fix.
+    /// `path` field comes before `span`, and is omitted when the diagnostic
+    /// names no file. The `fix` field follows `span`, and is omitted when
+    /// there is no fix; it has a `path` after its `message` when its edits
+    /// are in another file than the diagnostic.
     pub fn to_json(&self) -> String {
         let mut out = format!(
-            "{{\"code\":\"{}\",\"message\":\"{}\",\"span\":{}",
+            "{{\"code\":\"{}\",\"message\":\"{}\"",
             self.code,
-            json_escape(&self.message),
-            span_json(self.span)
+            json_escape(&self.message)
         );
+        if let Some(location) = &self.location {
+            out.push_str(&format!(",\"path\":\"{}\"", json_escape(&location.path)));
+        }
+        out.push_str(&format!(",\"span\":{}", span_json(self.span)));
         if let Some(fix) = &self.fix {
             let edits: Vec<String> = fix
                 .edits
@@ -331,8 +440,11 @@ impl Diagnostic {
                     )
                 })
                 .collect();
+            let path = fix.path.as_ref().map_or_else(String::new, |path| {
+                format!(",\"path\":\"{}\"", json_escape(path))
+            });
             out.push_str(&format!(
-                ",\"fix\":{{\"message\":\"{}\",\"edits\":[{}]}}",
+                ",\"fix\":{{\"message\":\"{}\"{path},\"edits\":[{}]}}",
                 json_escape(&fix.message),
                 edits.join(",")
             ));
@@ -409,7 +521,12 @@ pub fn json_escape(s: &str) -> String {
 /// Blank and comment-only lines produce at most one terminator, and none is
 /// emitted at end of input.
 pub fn lex(src: &str) -> Result<Vec<Token>, LexError> {
-    let mut lexer = Lexer { src, pos: 0 };
+    lex_from(src, 0)
+}
+
+/// [`lex`] `src[start..]`, with spans in all of `src`.
+pub(crate) fn lex_from(src: &str, start: usize) -> Result<Vec<Token>, LexError> {
+    let mut lexer = Lexer { src, pos: start };
     let mut tokens: Vec<Token> = Vec::new();
     let mut brackets: Vec<Punct> = Vec::new();
     loop {

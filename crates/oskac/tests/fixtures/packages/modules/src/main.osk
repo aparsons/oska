@@ -1,0 +1,9 @@
+use pkg.util.log
+use pkg.shapes.{Square}
+
+fn main(out: Stdout) -> Result<(), IoError> {
+    let area = Square(side: 3).area()
+    log.write(out, "area {area}")
+}
+
+fn write() {}

@@ -1,0 +1,5 @@
+$ oskac run crates/oskac/tests/fixtures/packages/no_manifest
+exit: 1
+--- stdout
+--- stderr
+error[E0413]: `crates/oskac/tests/fixtures/packages/no_manifest` is not a package: it has no `oska.toml`; a package has an `oska.toml` with a `[package]` table and its modules under `src/`, and a single file is checked by naming the `.osk` file (bytes 0..0)

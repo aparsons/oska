@@ -1,0 +1,12 @@
+use pkg.util.text
+use pkg.math
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    io.println(text.shout("hello"))?
+    let doubled = math.double(21)
+    io.println("{doubled}")
+}
+
+test "main adds up" {
+    t.assert_eq(math.double(2), 4)
+}

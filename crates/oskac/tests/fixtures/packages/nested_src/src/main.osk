@@ -1,0 +1,6 @@
+use pkg.src.util.{f}
+
+fn main(out: Stdout) -> Result<(), IoError> {
+    let n = f()
+    out.println("{n}")
+}

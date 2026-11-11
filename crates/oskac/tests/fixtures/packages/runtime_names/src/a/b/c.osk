@@ -1,0 +1,13 @@
+pub(pkg) fn half(n: Int) -> Int
+    requires n > 0
+{
+    n / 2
+}
+
+test "halves" {
+    t.assert_eq(half(4), 3)
+}
+
+test "contract" {
+    t.assert_eq(half(0), 0)
+}

@@ -15,18 +15,18 @@
   ],
   "audit": [],
   "attenuations": [
-    {"function":"docs","method":"restrict_to","span":{"start":200,"end":224},"source":"FsRead","result":"DirRead","root":"docs"},
-    {"function":"docs","method":"restrict_to","span":{"start":200,"end":255},"source":"DirRead","result":"DirRead","root":"guide"},
-    {"function":"output","method":"restrict_to","span":{"start":303,"end":329},"source":"FsWrite","result":"DirWrite","root":"_site"},
-    {"function":"named","method":"restrict_to","span":{"start":436,"end":458},"source":"FsRead","result":"DirRead","root":null},
-    {"function":"per_user","method":"restrict_to","span":{"start":589,"end":625},"source":"Dir","result":"Dir","root":null},
-    {"function":"readme","method":"restrict_to_file","span":{"start":745,"end":779},"source":"FsRead","result":"FileRead","root":"README.md"},
-    {"function":"upload","method":"restrict_to_file","span":{"start":854,"end":895},"source":"DirRead","result":"FileRead","root":null},
-    {"function":"page","method":"restrict_to_file","span":{"start":942,"end":987},"source":"DirWrite","result":"FileWrite","root":"index.html"},
-    {"function":"reader","method":"read_only","span":{"start":1070,"end":1085},"source":"Dir","result":"DirRead","root":null},
-    {"function":"writer","method":"write_only","span":{"start":1127,"end":1143},"source":"Dir","result":"DirWrite","root":null},
-    {"function":"everything","method":"restrict_to","span":{"start":1223,"end":1242},"source":"Fs","result":"Dir","root":"/"},
-    {"function":"main","method":"read_only","span":{"start":1279,"end":1293},"source":"Fs","result":"FsRead","root":null},
-    {"function":"main","method":"write_only","span":{"start":1310,"end":1325},"source":"Fs","result":"FsWrite","root":null}
+    {"function":"docs","method":"restrict_to","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":200,"end":224},"source":"FsRead","result":"DirRead","root":"docs"},
+    {"function":"docs","method":"restrict_to","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":200,"end":255},"source":"DirRead","result":"DirRead","root":"guide"},
+    {"function":"output","method":"restrict_to","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":303,"end":329},"source":"FsWrite","result":"DirWrite","root":"_site"},
+    {"function":"named","method":"restrict_to","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":436,"end":458},"source":"FsRead","result":"DirRead","root":null},
+    {"function":"per_user","method":"restrict_to","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":589,"end":625},"source":"Dir","result":"Dir","root":null},
+    {"function":"readme","method":"restrict_to_file","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":745,"end":779},"source":"FsRead","result":"FileRead","root":"README.md"},
+    {"function":"upload","method":"restrict_to_file","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":854,"end":895},"source":"DirRead","result":"FileRead","root":null},
+    {"function":"page","method":"restrict_to_file","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":942,"end":987},"source":"DirWrite","result":"FileWrite","root":"index.html"},
+    {"function":"reader","method":"read_only","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":1070,"end":1085},"source":"Dir","result":"DirRead","root":null},
+    {"function":"writer","method":"write_only","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":1127,"end":1143},"source":"Dir","result":"DirWrite","root":null},
+    {"function":"everything","method":"restrict_to","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":1223,"end":1242},"source":"Fs","result":"Dir","root":"/"},
+    {"function":"main","method":"read_only","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":1279,"end":1293},"source":"Fs","result":"FsRead","root":null},
+    {"function":"main","method":"write_only","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":1310,"end":1325},"source":"Fs","result":"FsWrite","root":null}
   ]
 }

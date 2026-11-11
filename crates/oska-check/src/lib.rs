@@ -15,6 +15,13 @@
 //! A `use std.*` adds that module's declarations (`src/std/*.osk`) to
 //! the prelude the file sees.
 //!
+//! [`check_package`] checks a [`Package`], every module of a program
+//! with its manifest, and returns one report in which every diagnostic,
+//! audit site and attenuation names its file (`package.rs`).
+//! [`check_file`], what `oskac check <file.osk>` runs, is a package of
+//! one module. [`check_module`] checks a source string alone, naming no
+//! file.
+//!
 //! The pipeline runs in order: collect declarations, resolve names, check
 //! declarations (`cap`, `main`, capitalization, recursive types, where
 //! `Scope` may appear: `decl_rules.rs`), check that functions, methods,
@@ -32,7 +39,8 @@
 //! which carry a machine-applicable fix is in `docs/checker.md`; a
 //! conformance test keeps it in step with `codes`.
 
-use oska_syntax::{json_escape, Diagnostic, Span};
+use oska_syntax::ast::Module;
+use oska_syntax::{json_escape, Diagnostic, Location, Span};
 
 mod authority;
 mod body;
@@ -43,6 +51,9 @@ mod decl_rules;
 mod infer;
 mod instantiation;
 mod items;
+mod link;
+mod manifest;
+mod package;
 mod prelude;
 pub mod program;
 mod recursion;
@@ -53,11 +64,23 @@ mod traits;
 mod ty;
 mod usefulness;
 
+pub use manifest::{decode_manifest, parse_manifest, Manifest};
+pub use package::{
+    check_file, check_package, not_a_package, run_of_library, symlink_refused, Locator,
+    ModuleSource, Package, ENTRY_MODULE, MANIFEST_PATH,
+};
+
 /// The diagnostic codes this crate reports.
 pub(crate) mod codes {
     pub const UNKNOWN_NAME: &str = "E0200";
     pub const WRONG_NAMESPACE: &str = "E0201";
     pub const DUPLICATE_NAME: &str = "E0202";
+    pub const PKG_OUTSIDE_PACKAGE: &str = "E0203";
+    pub const UNKNOWN_PKG_MODULE: &str = "E0204";
+    pub const NOT_IN_MODULE: &str = "E0205";
+    pub const PRIVATE_ITEM: &str = "E0206";
+    pub const IMPORT_CYCLE: &str = "E0207";
+    pub const NAME_BOUND_TWICE: &str = "E0208";
     pub const CAP_REQUIRED: &str = "E0210";
     pub const MAIN_PARAM: &str = "E0211";
     pub const MAIN_RETURN: &str = "E0212";
@@ -124,6 +147,18 @@ pub(crate) mod codes {
     pub const SECRET_COMPARED: &str = "E0351";
     pub const SECRET_DISPLAYED: &str = "E0352";
     pub const PRIVATE_TO_MODULE: &str = "E0360";
+    pub const MANIFEST_SYNTAX: &str = "E0400";
+    pub const MANIFEST_UNSUPPORTED: &str = "E0401";
+    pub const MANIFEST_UNKNOWN: &str = "E0402";
+    pub const MANIFEST_DEPENDENCIES: &str = "E0403";
+    pub const MANIFEST_MISSING: &str = "E0404";
+    pub const MANIFEST_VALUE: &str = "E0405";
+    pub const MANIFEST_DUPLICATE: &str = "E0406";
+    pub const BAD_MODULE_NAME: &str = "E0410";
+    pub const SYMLINK_IN_SOURCE: &str = "E0411";
+    pub const MAIN_OUTSIDE_ENTRY: &str = "E0412";
+    pub const NOT_A_PACKAGE: &str = "E0413";
+    pub const RUN_OF_LIBRARY: &str = "E0414";
 }
 
 /// Options that change what is checked.
@@ -151,12 +186,14 @@ pub struct CheckReport {
 
 /// A call a reviewer must see: one that vouches for untrusted text, or
 /// exposes a secret. `body/audit.rs` decides which calls these are.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditSite {
     /// What the call does.
     pub kind: AuditKind,
     /// The whole call expression.
     pub span: Span,
+    /// The file the call is in, named by a package check.
+    pub location: Option<Location>,
 }
 
 /// What an audit site does.
@@ -194,11 +231,13 @@ impl std::fmt::Display for AuditSite {
 }
 
 impl AuditSite {
-    /// Render as a single-line JSON object.
+    /// Render as a single-line JSON object, with a `path` before `span`
+    /// when the site names its file.
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"kind\":\"{}\",\"span\":{{\"start\":{},\"end\":{}}}}}",
+            "{{\"kind\":\"{}\",{}\"span\":{{\"start\":{},\"end\":{}}}}}",
             self.kind.as_str(),
+            path_json(&self.location),
             self.span.start,
             self.span.end
         )
@@ -224,6 +263,8 @@ pub struct Attenuation {
     pub result: String,
     /// The root it narrows to.
     pub root: AttenuationRoot,
+    /// The file the call is in, named by a package check.
+    pub location: Option<Location>,
 }
 
 /// The root an attenuation narrows to.
@@ -250,29 +291,36 @@ impl Attenuation {
     }
 
     /// One line of the human-readable report, such as
-    /// `FsRead -> DirRead: restrict_to "docs" (bytes 52..73)`.
+    /// `FsRead -> DirRead: restrict_to "docs" (bytes 52..73)`, after
+    /// `path:line:col: ` when the attenuation names its file.
     pub fn to_human(&self) -> String {
         let root = match &self.root {
             AttenuationRoot::Absent => String::new(),
             AttenuationRoot::Literal(text) => format!(" {text:?}"),
             AttenuationRoot::Computed => " computed at runtime".to_string(),
         };
+        let location = self
+            .location
+            .as_ref()
+            .map_or_else(String::new, |l| format!("{l}: "));
         format!(
-            "{} -> {}: {}{root} (bytes {}..{})",
+            "{location}{} -> {}: {}{root} (bytes {}..{})",
             self.source, self.result, self.method, self.span.start, self.span.end
         )
     }
 
-    /// Render as a single-line JSON object.
+    /// Render as a single-line JSON object, with a `path` before `span`
+    /// when the attenuation names its file.
     pub fn to_json(&self) -> String {
         let root = self.root_text().map_or_else(
             || "null".to_string(),
             |text| format!("\"{}\"", json_escape(text)),
         );
         format!(
-            "{{\"function\":\"{}\",\"method\":\"{}\",\"span\":{{\"start\":{},\"end\":{}}},\"source\":\"{}\",\"result\":\"{}\",\"root\":{root}}}",
+            "{{\"function\":\"{}\",\"method\":\"{}\",{}\"span\":{{\"start\":{},\"end\":{}}},\"source\":\"{}\",\"result\":\"{}\",\"root\":{root}}}",
             json_escape(&self.function),
             json_escape(&self.method),
+            path_json(&self.location),
             self.span.start,
             self.span.end,
             json_escape(&self.source),
@@ -284,8 +332,12 @@ impl Attenuation {
 /// One function's entry in the authority report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionAuthority {
-    /// The function's name, or `Type.method` for a method.
+    /// The function's name, or `Type.method` for a method. In a package,
+    /// `pkg.` and the module path come first, as in `pkg.util.text.shout`
+    /// (see `link::Modules::function_name`).
     pub name: String,
+    /// Declared `pub`: part of its package's API.
+    pub public: bool,
     /// The built-in capabilities the function can reach, in order of first
     /// appearance. Attenuated capabilities keep their names, such as
     /// `FsRead`.
@@ -332,7 +384,9 @@ impl CheckReport {
     /// The authority report as `oskac check <path>` prints it on standard
     /// output: one line per function and method, each followed by its
     /// attenuations (indented), then one line per audit site, each ending
-    /// in a newline. Diagnostics are not part of it.
+    /// in a newline. Diagnostics are not part of it. An audit line starts
+    /// with its location, `path:line:col`, when the report names its file
+    /// (a package check), and with `path` otherwise.
     pub fn authority_to_human(&self, path: &str) -> String {
         let mut out = String::new();
         let mut listed = vec![false; self.attenuations.len()];
@@ -351,7 +405,10 @@ impl CheckReport {
             }
         }
         for site in &self.audit {
-            out.push_str(&format!("{path}: {site}\n"));
+            match &site.location {
+                Some(location) => out.push_str(&format!("{location}: {site}\n")),
+                None => out.push_str(&format!("{path}: {site}\n")),
+            }
         }
         out
     }
@@ -375,7 +432,7 @@ impl FunctionAuthority {
     /// `fn main: Stdout (io), FsRead (fs)` or `fn add: pure`.
     pub fn to_human(&self) -> String {
         if self.pure {
-            return format!("fn {}: pure", self.name);
+            return format!("{}fn {}: pure", self.pub_marker(), self.name);
         }
         let sources: Vec<String> = self
             .via
@@ -388,7 +445,20 @@ impl FunctionAuthority {
                 }
             })
             .collect();
-        format!("fn {}: {}", self.name, sources.join(", "))
+        format!(
+            "{}fn {}: {}",
+            self.pub_marker(),
+            self.name,
+            sources.join(", ")
+        )
+    }
+
+    fn pub_marker(&self) -> &'static str {
+        if self.public {
+            "pub "
+        } else {
+            ""
+        }
     }
 
     /// Render as a single-line JSON object.
@@ -405,13 +475,22 @@ impl FunctionAuthority {
             })
             .collect();
         format!(
-            "{{\"name\":\"{}\",\"authority\":{},\"via\":[{}],\"pure\":{}}}",
+            "{{\"name\":\"{}\",{}\"authority\":{},\"via\":[{}],\"pure\":{}}}",
             json_escape(&self.name),
+            if self.public { "\"pub\":true," } else { "" },
             json_strings(&self.authority),
             via.join(","),
             self.pure
         )
     }
+}
+
+/// `"path":"...",` for an entry that names its file, and nothing for one
+/// that does not.
+fn path_json(location: &Option<Location>) -> String {
+    location.as_ref().map_or_else(String::new, |l| {
+        format!("\"path\":\"{}\",", json_escape(&l.path))
+    })
 }
 
 fn json_strings(items: &[String]) -> String {
@@ -438,31 +517,41 @@ pub fn check_module(src: &str) -> CheckReport {
 /// Check `src` as a module. A parse error is reported as the only
 /// diagnostic, with no functions.
 pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
-    let module = match oska_syntax::parse_module(src) {
-        Ok(module) => module,
-        Err(err) => {
-            return CheckReport {
-                diagnostics: vec![err],
-                ..CheckReport::default()
-            }
-        }
-    };
-    let mut diagnostics = Vec::new();
-    let decls = collect::Decls::collect(&module, &mut diagnostics);
-    resolve::module(&module, &decls, &mut diagnostics);
-    decl_rules::module(src, &module, &decls, &mut diagnostics);
-    coherence::module(&module, &decls, &mut diagnostics);
-    recursion::module(&module, &decls, &mut diagnostics);
-    if options.release {
-        release::module(&module, &mut diagnostics);
+    match oska_syntax::parse_module(src) {
+        Ok(module) => check_parsed(src, &module, options, link::Modules::default()),
+        Err(err) => CheckReport {
+            diagnostics: vec![err],
+            ..CheckReport::default()
+        },
     }
-    let items = items::Items::collect(&module, &decls);
-    traits::module(src, &module, &decls, &items, &mut diagnostics);
+}
+
+/// Check `module`, parsed from `src`, whose spans are offsets into `src`:
+/// one source file, or the module that joins a package's modules
+/// (`link.rs`), whose `modules` say which module each part of `src` is.
+pub(crate) fn check_parsed(
+    src: &str,
+    module: &Module,
+    options: CheckOptions,
+    modules: link::Modules,
+) -> CheckReport {
+    let mut diagnostics = Vec::new();
+    let decls = collect::Decls::collect(module, &mut diagnostics);
+    resolve::module(module, &decls, &mut diagnostics);
+    decl_rules::module(src, module, &decls, &mut diagnostics);
+    coherence::module(module, &decls, &mut diagnostics);
+    recursion::module(module, &decls, &mut diagnostics);
+    if options.release {
+        release::module(module, &mut diagnostics);
+    }
+    let items = items::Items::collect(module, &decls);
+    traits::module(src, module, &decls, &items, &mut diagnostics);
     let mut findings = body::Findings {
         diagnostics,
+        modules,
         ..body::Findings::default()
     };
-    body::module(src, &module, &decls, &items, &mut findings);
+    body::module(src, module, &decls, &items, &mut findings);
     let body::Findings {
         mut diagnostics,
         mut audit,
@@ -470,20 +559,14 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
         resolutions,
         assumed,
         instances,
+        modules,
         ..
     } = findings;
-    instantiation::module(
-        &module,
-        &decls,
-        &items,
-        assumed,
-        instances,
-        &mut diagnostics,
-    );
+    instantiation::module(module, &decls, &items, assumed, instances, &mut diagnostics);
     let program = diagnostics
         .is_empty()
-        .then(|| program::lower::module(src, &module, &items, &resolutions));
-    let functions = authority::report(&module, &decls);
+        .then(|| program::lower::module(src, module, &items, &resolutions));
+    let functions = authority::report(module, &decls, &modules);
     diagnostics.sort_by_key(|d| d.span.start);
     audit.sort_by_key(|site| site.span.start);
     // A chain shares its start: the inner call, which ends first, is first.

@@ -1,0 +1,6 @@
+$ oskac run crates/oskac/tests/fixtures/packages/multi
+exit: 0
+--- stdout
+hello!
+42
+--- stderr

@@ -1,15 +1,15 @@
 {
   "diagnostics": [
-    {"code":"E0273","message":"`FsRead` cannot read files itself, because it only attenuates. Attenuate it to a directory first and call `read_to_string` on that: `read.restrict_to(\"<root>\").read_to_string(path)`, where the root is the directory the program should reach. For a single file, use `restrict_to_file(\"<file>\")` and call `read_to_string` with no path","span":{"start":284,"end":338}},
-    {"code":"E0273","message":"`FsWrite` cannot write files itself, because it only attenuates. Attenuate it to a directory first and call `write` on that: `write.restrict_to(\"<root>\").write(path, text)`, where the root is the directory the program should reach. For a single file, use `restrict_to_file(\"<file>\")` and call `write` with no path","span":{"start":344,"end":391}},
-    {"code":"E0273","message":"`Fs` cannot read files itself, because it only attenuates. Attenuate it to a directory first and call `list_dir` on that: `fs.read_only().restrict_to(\"<root>\").list_dir(path)`, where the root is the directory the program should reach","span":{"start":409,"end":439}}
+    {"code":"E0273","message":"`FsRead` cannot read files itself, because it only attenuates. Attenuate it to a directory first and call `read_to_string` on that: `read.restrict_to(\"<root>\").read_to_string(path)`, where the root is the directory the program should reach. For a single file, use `restrict_to_file(\"<file>\")` and call `read_to_string` with no path","path":"crates/oskac/tests/fixtures/qualified_removed.osk","span":{"start":284,"end":338}},
+    {"code":"E0273","message":"`FsWrite` cannot write files itself, because it only attenuates. Attenuate it to a directory first and call `write` on that: `write.restrict_to(\"<root>\").write(path, text)`, where the root is the directory the program should reach. For a single file, use `restrict_to_file(\"<file>\")` and call `write` with no path","path":"crates/oskac/tests/fixtures/qualified_removed.osk","span":{"start":344,"end":391}},
+    {"code":"E0273","message":"`Fs` cannot read files itself, because it only attenuates. Attenuate it to a directory first and call `list_dir` on that: `fs.read_only().restrict_to(\"<root>\").list_dir(path)`, where the root is the directory the program should reach","path":"crates/oskac/tests/fixtures/qualified_removed.osk","span":{"start":409,"end":439}}
   ],
   "functions": [
     {"name":"main","authority":["Stdout","Fs"],"via":[{"param":"io","capabilities":["Stdout"]},{"param":"fs","capabilities":["Fs"]}],"pure":false}
   ],
   "audit": [],
   "attenuations": [
-    {"function":"main","method":"read_only","span":{"start":222,"end":236},"source":"Fs","result":"FsRead","root":null},
-    {"function":"main","method":"write_only","span":{"start":253,"end":268},"source":"Fs","result":"FsWrite","root":null}
+    {"function":"main","method":"read_only","path":"crates/oskac/tests/fixtures/qualified_removed.osk","span":{"start":222,"end":236},"source":"Fs","result":"FsRead","root":null},
+    {"function":"main","method":"write_only","path":"crates/oskac/tests/fixtures/qualified_removed.osk","span":{"start":253,"end":268},"source":"Fs","result":"FsWrite","root":null}
   ]
 }

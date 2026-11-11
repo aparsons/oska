@@ -1,0 +1,7 @@
+$ oskac check hidden/
+exit: 1
+--- stdout
+fn pkg..scratch.f: pure
+fn pkg.main.main: pure
+--- stderr
+hidden/src/.scratch.osk:1:1: error[E0410]: `.scratch` in `src/.scratch.osk` is hidden: every `.osk` file under `src/` is a module, so rename it or move it out of `src/` (bytes 0..0)

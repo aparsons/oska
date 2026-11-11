@@ -1,0 +1,9 @@
+$ oskac check crates/oskac/tests/fixtures/packages/keyword
+exit: 1
+--- stdout
+fn pkg.fn.f: pure
+fn pkg.main.main: pure
+fn pkg.std.g: pure
+--- stderr
+crates/oskac/tests/fixtures/packages/keyword/src/fn.osk:1:1: error[E0410]: `fn` in `src/fn.osk` is a keyword, so `use pkg.…` cannot name this module (bytes 0..0)
+crates/oskac/tests/fixtures/packages/keyword/src/std.osk:1:1: error[E0410]: `std` in `src/std.osk` is reserved: a module path cannot start with `pkg` or `std`, which begin import paths, or `main`, the entry module (bytes 0..0)

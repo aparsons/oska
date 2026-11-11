@@ -11,6 +11,7 @@ rust-version.workspace = true
 oska-check = { path = "../oska-check" }
 oska-run = { path = "../oska-run" }
 oska-syntax = { path = "../oska-syntax" }
+oska-sys = { path = "../oska-sys" }
 
 [lints]
 workspace = true

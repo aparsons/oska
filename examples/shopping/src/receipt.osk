@@ -1,0 +1,9 @@
+// A module of the package, imported by `main` as `receipt`.
+
+pub(pkg) fn line(label: String, cents: Int) -> String {
+    "{label}: {cents} cents"
+}
+
+test "a line shows its label and its amount" {
+    t.assert_eq(line("Tea", 350), "Tea: 350 cents")
+}

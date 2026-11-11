@@ -276,13 +276,31 @@ pub struct Module {
 /// module-level code that runs on load.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Item {
-    /// Declared `pub`.
-    pub public: bool,
+    /// Declared `pub`, `pub(pkg)`, or neither.
+    pub visibility: Visibility,
     /// Attributes written before the item, in source order.
     pub attributes: Vec<Attribute>,
     pub kind: ItemKind,
     /// Covers the item's attributes, if any, through its end.
     pub span: Span,
+}
+
+/// Who may use an item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visibility {
+    /// No marker: only its own module.
+    Private,
+    /// `pub(pkg)`: every module of its package.
+    Package,
+    /// `pub`: every module of its package, and part of the package's API.
+    Public,
+}
+
+impl Item {
+    /// Declared `pub`: part of the package's API.
+    pub fn is_public(&self) -> bool {
+        self.visibility == Visibility::Public
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

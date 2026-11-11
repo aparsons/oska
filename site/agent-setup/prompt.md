@@ -49,7 +49,7 @@ Run `oskac check hello.osk` and then `oskac run hello.osk`. The first must repor
 
 Download each template below with `curl -fsSL` or your fetch tool and read it. A template is plain text. Do not run it, except the hook script in step 3c, and only if I opt in.
 
-**3a. AGENTS.md.** The template is https://oskalang.dev/agent-setup/AGENTS.template.md. It holds a `## Working with Oska` section: the agent loop (check, apply machine fixes, run, test, read the authority report), the machine-readable flags (`--format=json`, `oskac explain <code>`), and the links to https://oskalang.dev/llms.txt and the error-code catalog. If `AGENTS.md` does not exist, create it with that section. If it does, append the section, and show me the diff first.
+**3a. AGENTS.md.** The template is https://oskalang.dev/agent-setup/AGENTS.template.md. It holds a `## Working with Oska` section: the agent loop (check, apply machine fixes, run, test, read the authority report), the package layout (`oska.toml`, `src/main.osk`, `use pkg.…`, `pub(pkg)`), the machine-readable flags (`--format=json`, `oskac explain <code>`), and the links to https://oskalang.dev/llms.txt and the error-code catalog. If `AGENTS.md` does not exist, create it with that section. If it does, append the section, and show me the diff first.
 
 **3b. CLAUDE.md.** Only if I am using Claude Code. The template is https://oskalang.dev/agent-setup/CLAUDE.template.md, which points to `AGENTS.md`. If `CLAUDE.md` exists, add only its first line to it.
 

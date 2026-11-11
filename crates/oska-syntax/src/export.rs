@@ -12,7 +12,7 @@ use crate::ast::{
     Arg, Attribute, Block, ClosureParam, ConstDecl, Ensures, EnumDecl, Expr, ExprKind, Field,
     Fields, FnDecl, GenericParam, Ident, ImplDecl, Item, ItemKind, MatchArm, Module, Param,
     Pattern, PatternArg, PatternKind, Requires, SelfParam, Stmt, StmtKind, StrPart, StructDecl,
-    TestDecl, TraitDecl, Type, TypeKind, UnaryOp, UseDecl, Variant,
+    TestDecl, TraitDecl, Type, TypeKind, UnaryOp, UseDecl, Variant, Visibility,
 };
 use crate::{join, json_escape, Span};
 
@@ -311,7 +311,11 @@ fn field(field: &Field) -> Json {
 /// A node for `item` with the fields every item carries.
 fn item_node(kind: &'static str, item: &Item) -> Node {
     Node::new(kind, item.span)
-        .field("public", Json::Bool(item.public))
+        .field("public", Json::Bool(item.is_public()))
+        .opt(
+            "package",
+            (item.visibility == Visibility::Package).then_some(Json::Bool(true)),
+        )
         .field("attributes", list(&item.attributes, attribute))
 }
 

@@ -6,10 +6,11 @@
 //! the `cap` rule on declarations, function purity, closure capture, and
 //! contract purity all use it.
 
-use oska_syntax::ast::{FnDecl, ItemKind, Module, Type, TypeKind};
+use oska_syntax::ast::{FnDecl, Item, ItemKind, Module, Type, TypeKind};
 
 use crate::collect::{DeclKind, Decls};
 use crate::items::Lower;
+use crate::link::Modules;
 use crate::ty::{Cap, Ty};
 use crate::{FunctionAuthority, Via};
 
@@ -91,14 +92,15 @@ fn reach(ty: &Ty, decls: &Decls, expanding: &mut Vec<String>) -> Reach {
     }
 }
 
-/// One entry per function and `impl` method, in source order. A method
-/// is named `Type.method`.
-pub fn report(module: &Module, decls: &Decls) -> Vec<FunctionAuthority> {
+/// One entry per function and `impl` method, in source order, named as
+/// [`Modules::function_name`] names it.
+pub fn report(module: &Module, decls: &Decls, modules: &Modules) -> Vec<FunctionAuthority> {
     let mut functions = Vec::new();
     for item in &module.items {
         match &item.kind {
             ItemKind::Fn(f) => {
-                functions.push(function(f.name.name.clone(), f, Lower::new(decls)));
+                let name = modules.function_name(item.span.start, None, &f.name.name);
+                functions.push(function(name, item, f, Lower::new(decls)));
             }
             ItemKind::Impl(imp) => {
                 let lower = Lower::new(decls).with_generics(&imp.generics);
@@ -107,8 +109,31 @@ pub fn report(module: &Module, decls: &Decls) -> Vec<FunctionAuthority> {
                 let type_name = type_name(&imp.target);
                 for method in &imp.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        let name = format!("{type_name}.{}", f.name.name);
-                        functions.push(function(name, f, lower.clone()));
+                        let name = modules.function_name(
+                            method.span.start,
+                            Some(&type_name),
+                            &f.name.name,
+                        );
+                        functions.push(function(name, method, f, lower.clone()));
+                    }
+                }
+            }
+            ItemKind::Trait(t) => {
+                // A default method is code like any other, so it is
+                // reported; a method with no body is only a signature.
+                let lower = Lower::new(decls)
+                    .with_generics(&t.generics)
+                    .with_self(Ty::Param(crate::ty::SELF.to_string()));
+                for method in &t.methods {
+                    if let ItemKind::Fn(f) = &method.kind {
+                        if f.body.is_some() {
+                            let name = modules.function_name(
+                                method.span.start,
+                                Some(&t.name.name),
+                                &f.name.name,
+                            );
+                            functions.push(function(name, method, f, lower.clone()));
+                        }
                     }
                 }
             }
@@ -119,7 +144,7 @@ pub fn report(module: &Module, decls: &Decls) -> Vec<FunctionAuthority> {
 }
 
 /// `lower` has the enclosing impl's generics and `Self` in scope.
-fn function(name: String, f: &FnDecl, lower: Lower) -> FunctionAuthority {
+fn function(name: String, item: &Item, f: &FnDecl, lower: Lower) -> FunctionAuthority {
     let decls = lower.decls();
     let lower = lower.with_generics(&f.generics);
     let mut sources: Vec<(String, Reach)> = Vec::new();
@@ -149,6 +174,7 @@ fn function(name: String, f: &FnDecl, lower: Lower) -> FunctionAuthority {
     }
     FunctionAuthority {
         name,
+        public: item.is_public(),
         authority: total.capabilities,
         via,
         pure: !total.bearing,

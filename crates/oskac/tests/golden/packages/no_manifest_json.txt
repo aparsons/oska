@@ -1,0 +1,12 @@
+$ oskac check crates/oskac/tests/fixtures/packages/no_manifest --format=json
+exit: 1
+--- stdout
+{
+  "diagnostics": [
+    {"code":"E0413","message":"`crates/oskac/tests/fixtures/packages/no_manifest` is not a package: it has no `oska.toml`; a package has an `oska.toml` with a `[package]` table and its modules under `src/`, and a single file is checked by naming the `.osk` file","span":{"start":0,"end":0}}
+  ],
+  "functions": [],
+  "audit": [],
+  "attenuations": []
+}
+--- stderr

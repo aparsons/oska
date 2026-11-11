@@ -34,12 +34,11 @@ fn reports_each_test_and_a_summary_and_fails_when_a_test_fails() {
         ]
     );
     assert!(
-        stdout.contains(&format!(
-            "test double is wrong here: {FIXTURE}: error[P0011]: "
-        )) && stdout.contains("actual 6, expected 7")
-            && stdout.contains(&format!(
-                "test dividing by zero panics: {FIXTURE}: error[P0004]: "
-            )),
+        stdout.contains(&format!("test double is wrong here: {FIXTURE}:"))
+            && stdout.contains(": error[P0011]: ")
+            && stdout.contains("actual 6, expected 7")
+            && stdout.contains(&format!("test dividing by zero panics: {FIXTURE}:"))
+            && stdout.contains(": error[P0004]: "),
         "the failures are listed, each named by its test: {stdout}"
     );
     assert_eq!(

@@ -1,0 +1,6 @@
+$ oskac run crates/oskac/tests/fixtures/packages/valid/src/main.osk
+exit: 0
+--- stdout
+hello from a package
+--- stderr
+hint: `crates/oskac/tests/fixtures/packages/valid/src/main.osk` is part of the package in `crates/oskac/tests/fixtures/packages/valid` and was handled alone; run `oskac run crates/oskac/tests/fixtures/packages/valid` to run the package

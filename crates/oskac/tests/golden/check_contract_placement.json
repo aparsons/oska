@@ -1,8 +1,8 @@
 {
   "diagnostics": [
-    {"code":"E0218","message":"`size` implements a trait method, so its contract belongs on the trait's declaration of it; move the clause there","span":{"start":278,"end":295}},
-    {"code":"E0282","message":"a contract is a condition, not a function body: `?` has nothing to leave here","span":{"start":434,"end":444}},
-    {"code":"E0219","message":"`main` cannot have a contract: nothing calls it, so there is no caller to blame; check the condition in its body instead","span":{"start":474,"end":488}}
+    {"code":"E0218","message":"`size` implements a trait method, so its contract belongs on the trait's declaration of it; move the clause there","path":"crates/oskac/tests/fixtures/contract_placement.osk","span":{"start":278,"end":295}},
+    {"code":"E0282","message":"a contract is a condition, not a function body: `?` has nothing to leave here","path":"crates/oskac/tests/fixtures/contract_placement.osk","span":{"start":434,"end":444}},
+    {"code":"E0219","message":"`main` cannot have a contract: nothing calls it, so there is no caller to blame; check the condition in its body instead","path":"crates/oskac/tests/fixtures/contract_placement.osk","span":{"start":474,"end":488}}
   ],
   "functions": [
     {"name":"Square.size","authority":[],"via":[],"pure":true},

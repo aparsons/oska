@@ -1,0 +1,5 @@
+$ oskac check crates/oskac/tests/fixtures/packages/manifest_symlink
+exit: 1
+--- stdout
+--- stderr
+crates/oskac/tests/fixtures/packages/manifest_symlink/oska.toml:1:1: error[E0411]: `oska.toml` is a symlink: a package's `oska.toml` and its source must be regular files and directories in its own tree (bytes 0..0)

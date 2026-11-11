@@ -1273,7 +1273,7 @@ fn llms_txt_indexes_the_markdown_copies_with_summaries() {
          \n\
          Oska 1.2.3 (pre-alpha). These docs track `main`. Every page is also served as Markdown: \
          the same path with `.md`. All of them are in [llms-full.txt](https://oskalang.dev/llms-full.txt). \
-         The source code is at https://github.com/aparsons/oska.\n\
+         The source code is at https://github.com/aparsons/oska. A program is one `.osk` file or a package: an `oska.toml` and modules under `src/`, with `src/main.osk` as the entry and `use pkg.a.b` importing `src/a/b.osk`; see [Packages and modules](https://oskalang.dev/guide/packages.md).\n\
          \n\
          ## Docs\n\
          \n\

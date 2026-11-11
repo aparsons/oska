@@ -6,8 +6,8 @@
 
 #![allow(dead_code)]
 
-use oska_check::{check_module, CheckReport};
-use oska_syntax::Diagnostic;
+use oska_check::{check_module, check_package, CheckOptions, CheckReport, ModuleSource, Package};
+use oska_syntax::{Diagnostic, Location};
 
 /// Check `src` against the embedded prelude.
 pub fn check(src: &str) -> CheckReport {
@@ -141,4 +141,132 @@ pub fn assert_audit(src: &str, expected: &[(&str, &str)]) {
         "audit sites of {src:?}, with diagnostics {:#?}",
         report.diagnostics
     );
+}
+
+// ---- Packages: several modules checked together ---------------------------------------
+
+/// Check the modules of a package, each a `(module path, source)` pair
+/// such as `("util.text", "...")`, which lives at `src/util/text.osk`.
+pub fn check_modules(modules: &[(&str, &str)]) -> CheckReport {
+    let package = Package {
+        manifest: None,
+        modules: modules
+            .iter()
+            .map(|(module, source)| ModuleSource::in_package(module, source))
+            .collect(),
+    };
+    check_package(&package, CheckOptions::default())
+}
+
+/// The source of the module whose file is at `path`.
+fn module_at<'a>(modules: &[(&str, &'a str)], path: &str) -> &'a str {
+    modules
+        .iter()
+        .find(|(module, _)| ModuleSource::in_package(module, "").path == path)
+        .map(|(_, source)| *source)
+        .unwrap_or_else(|| panic!("no module is at {path}"))
+}
+
+/// The file a report entry is in, which a package check always names.
+pub fn path_of(location: Option<&Location>) -> &str {
+    location
+        .map(|l| l.path.as_str())
+        .unwrap_or_else(|| panic!("a package check names the file of every entry"))
+}
+
+/// Assert that the package of `modules` checks with no diagnostics.
+pub fn assert_modules_ok(modules: &[(&str, &str)]) {
+    let report = check_modules(modules);
+    assert!(
+        report.diagnostics.is_empty(),
+        "{modules:?} should check cleanly, found {:#?}",
+        report.diagnostics
+    );
+}
+
+/// Assert that the package of `modules` reports exactly `expected`, in
+/// order: each entry is the file's path, such as `src/main.osk`, a
+/// diagnostic code, and the text its span covers in that file.
+pub fn assert_modules_errors(modules: &[(&str, &str)], expected: &[(&str, &str, &str)]) {
+    let report = check_modules(modules);
+    let actual: Vec<(&str, &str, &str)> = report
+        .diagnostics
+        .iter()
+        .map(|d| {
+            let path = path_of(d.location.as_deref());
+            (path, d.code, spanned(module_at(modules, path), d))
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        expected.to_vec(),
+        "diagnostics of {modules:?}: {:#?}",
+        report.diagnostics
+    );
+}
+
+/// Assert that the first diagnostic with `code` is in the file at `path`
+/// and carries a fix, and that applying it to that file produces
+/// `expected`.
+pub fn assert_modules_fix(modules: &[(&str, &str)], path: &str, code: &str, expected: &str) {
+    let report = check_modules(modules);
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|d| d.code == code)
+        .unwrap_or_else(|| {
+            panic!(
+                "{modules:?} should report {code}: {:#?}",
+                report.diagnostics
+            )
+        });
+    assert_eq!(
+        path_of(diagnostic.location.as_deref()),
+        path,
+        "the file {code} is in"
+    );
+    let fix = diagnostic
+        .fix
+        .as_ref()
+        .unwrap_or_else(|| panic!("{code} in {path} should carry a fix"));
+    let mut edits = fix.edits.clone();
+    edits.sort_by_key(|e| std::cmp::Reverse(e.span.start));
+    let mut fixed = module_at(modules, path).to_string();
+    for edit in edits {
+        fixed.replace_range(edit.span.start..edit.span.end, &edit.replacement);
+    }
+    assert_eq!(fixed, expected, "fix for {code} in {path}");
+}
+
+/// Assert that the first diagnostic with `code` carries a fix whose edits
+/// are in the file at `edited`, which may be another file than the
+/// diagnostic's, and that applying it to that file produces `expected`.
+pub fn assert_modules_fix_in(modules: &[(&str, &str)], code: &str, edited: &str, expected: &str) {
+    let report = check_modules(modules);
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|d| d.code == code)
+        .unwrap_or_else(|| {
+            panic!(
+                "{modules:?} should report {code}: {:#?}",
+                report.diagnostics
+            )
+        });
+    let fix = diagnostic
+        .fix
+        .as_ref()
+        .unwrap_or_else(|| panic!("{code} should carry a fix: {diagnostic:#?}"));
+    let path = fix
+        .path
+        .as_deref()
+        .unwrap_or_else(|| path_of(diagnostic.location.as_deref()));
+    assert_eq!(path, edited, "the file the fix for {code} edits");
+    let mut edits = fix.edits.clone();
+    edits.sort_by_key(|e| std::cmp::Reverse(e.span.start));
+    let mut fixed = module_at(modules, path).to_string();
+    for edit in edits {
+        fixed.replace_range(edit.span.start..edit.span.end, &edit.replacement);
+    }
+    assert_eq!(fixed, expected, "fix for {code} in {path}");
 }

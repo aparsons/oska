@@ -1,0 +1,15 @@
+// A multi-module package: this entry module imports two others.
+// `use pkg.<path>` names a file under `src/`, and only items marked
+// `pub(pkg)` (or `pub`) can be used from another module.
+
+use pkg.receipt
+use pkg.pricing.tax
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    let total = tax.with_tax(2000)
+    io.println(receipt.line("Total", total))
+}
+
+test "the total includes tax" {
+    t.assert_eq(tax.with_tax(1000), 1200)
+}

@@ -1,0 +1,7 @@
+pub(pkg) fn shout(word: String) -> String {
+    "{word}!"
+}
+
+test "shout" {
+    t.assert_eq(shout("hi"), "hi?")
+}

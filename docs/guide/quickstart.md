@@ -50,7 +50,7 @@ fn main(io: Stdout) -> Result<(), IoError> {
 ```
 
 ```console cmd=check stream=stderr
-hello.osk: error[E0221]: unknown name `fs` (bytes 60..62)
+hello.osk:2:16: error[E0221]: unknown name `fs` (bytes 60..62)
 ```
 
 `fs` does not exist, because nothing passed it in. The fix is to ask for it in `main`'s signature, which makes it visible to every reader:
@@ -64,7 +64,7 @@ fn main(io: Stdout, fs: FsRead) -> Result<(), IoError> {
 
 ```console cmd=check
 fn main: Stdout (io), FsRead (fs)
-  FsRead -> DirRead: restrict_to "." (bytes 72..91)
+  hello.osk:2:16: FsRead -> DirRead: restrict_to "." (bytes 72..91)
 ```
 
 The report now says `main` can also read files, and nothing more: it still cannot write files or open connections. `FsRead` cannot read a file itself. It can only be narrowed, here to the current directory, and the indented line records that. See [capabilities](capabilities.md#attenuation).
@@ -127,7 +127,7 @@ struct Logger { out: Stdout }
 ```console cmd=check json
 {
   "diagnostics": [
-    {"code":"E0210","message":"`Logger` holds the capability-bearing type `Stdout`, so it must be declared `cap struct`","span":{"start":7,"end":13},"fix":{"message":"declare it `cap struct`","edits":[{"span":{"start":0,"end":0},"replacement":"cap "}]}}
+    {"code":"E0210","message":"`Logger` holds the capability-bearing type `Stdout`, so it must be declared `cap struct`","path":"hello.osk","span":{"start":7,"end":13},"fix":{"message":"declare it `cap struct`","edits":[{"span":{"start":0,"end":0},"replacement":"cap "}]}}
   ],
   "functions": [],
   "audit": [],

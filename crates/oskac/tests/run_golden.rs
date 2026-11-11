@@ -57,7 +57,7 @@ fn a_program_with_diagnostics_is_refused_and_they_are_printed() {
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     assert_eq!(String::from_utf8_lossy(&output.stdout), "");
     assert!(
-        stderr.starts_with(&format!("{path}: ")) && stderr.contains("E0228"),
+        stderr.starts_with(&format!("{path}:2:8: ")) && stderr.contains("E0228"),
         "the diagnostic is printed as `oskac check` prints it: {stderr}"
     );
 }

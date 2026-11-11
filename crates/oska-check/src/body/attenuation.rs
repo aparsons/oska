@@ -58,6 +58,7 @@ impl Body<'_, '_, '_> {
             source: type_name.to_string(),
             result: result.to_string(),
             root,
+            location: None,
         };
         self.out.attenuations.push(attenuation);
     }

@@ -8,20 +8,23 @@ oskac - the Oska compiler
 USAGE:
     oskac lex <file.osk> [--format=json]   Print the tokens in a source file
     oskac parse <file.osk> [--format=json] Print the syntax tree of a source file
-    oskac check <file.osk> [--format=json] [--release]
-                                           Type-check a source file and report
-                                           each function's authority
-    oskac run <file.osk> [--format=json] [-- args...]
-                                           Check a source file and, if it has
-                                           no diagnostics, run it
-    oskac test <file.osk> [--format=json] [--integration]
+    oskac check [path] [--format=json] [--release]
+                                           Type-check a source file, or a
+                                           package directory (the current one
+                                           with no path), and report each
+                                           function's authority
+    oskac run [path] [--format=json] [-- args...]
+                                           Check a source file or package and,
+                                           if it has no diagnostics, run it
+    oskac test [path] [--format=json] [--integration]
                                            Run the test blocks in a source file
+                                           or package
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ```
 
-Every command but `explain` takes exactly one source file. A command line is parsed like this:
+`lex` and `parse` take exactly one source file, and `explain` a code. `check`, `run` and `test` take a source file, a package directory, or nothing, which means the package in the current directory. A package is a directory with an `oska.toml` (`[package]` with a `name` and a `version`) and its modules under `src/`; every `.osk` file there is a module, `main` is allowed only in `src/main.osk`, and a package without that file is a library, which `run` refuses. A directory without `oska.toml` is an error (`E0413`). A file inside a package is handled alone, with a hint to run the command on the package. A command line is parsed like this:
 
 - A flag may come anywhere before `--`. Anything else is a positional argument.
 - Everything after `--` belongs to the program being run, and only `oskac run` uses it.
@@ -47,11 +50,11 @@ Every command but `explain` takes exactly one source file. A command line is par
 
 ## `oskac check`
 
-`oskac check <file.osk> [--format=json] [--release]` parses and type-checks one file against the prelude and reports each function's authority. Exit code 0 when there are no diagnostics, otherwise 1.
+`oskac check [path] [--format=json] [--release]` parses and type-checks one file, or every module of a package, against the prelude and reports each function's authority. Exit code 0 when there are no diagnostics, otherwise 1.
 
 Human-readable output:
 
-- Diagnostics go to standard error, one per line, as `file.osk: error[E0210]: message (bytes 7..13)`. A diagnostic with a fix is followed by an indented `fix: ...` line.
+- Diagnostics go to standard error, one per line, as `file.osk:1:8: error[E0210]: message (bytes 7..13)`: the file, then the line and column where the span starts. A diagnostic with a fix is followed by an indented `fix: ...` line.
 - The authority report goes to standard output: one line per function and method, each followed by its attenuations (indented), then one line per audit site.
 
 ```oska
@@ -67,7 +70,7 @@ fn vouch(name: Untrusted<String>, io: Stdout) -> Result<(), IoError> {
 ```console cmd=check
 fn double: pure
 fn vouch: Stdout (io)
-main.osk: audit: assume_trusted (bytes 126..147)
+main.osk:6:16: audit: assume_trusted (bytes 126..147)
 ```
 
 The line `fn vouch: Stdout (io)` names each capability and the parameter that supplies it. A `cap fn` parameter appears as `cap fn (name)`. A parse error is reported alone, with no authority lines. Terms are in the [glossary](../../GLOSSARY.md). The checker's behavior and its full code table are in the [checker notes](../checker.md).
@@ -137,7 +140,7 @@ One object on standard output, produced even when there are diagnostics:
 ```
 
 - `diagnostics`, in source order.
-- `functions`: one entry per function and method, in source order. `name` is the function's name, or `Type.method`. `authority` lists the built-in capabilities it can reach, in order of first appearance. `via` lists each capability-bearing parameter and what it supplies, with a method's receiver as `self`. `pure` is `true` when no parameter, the receiver included, is capability-bearing.
+- `functions`: one entry per function and method, in source order. `name` is the function's name, or `Type.method`; in a package `pkg.` and the module path come first, as in `pkg.util.text.shout` or `pkg.main.main`, and a method is named by its type's module. `"pub":true` marks a function declared `pub`. `authority` lists the built-in capabilities it can reach, in order of first appearance. `via` lists each capability-bearing parameter and what it supplies, with a method's receiver as `self`. `pure` is `true` when no parameter, the receiver included, is capability-bearing.
 - `audit`: every audit site, in source order. `kind` is `assume_trusted` for a trust assertion or `expose` for a secret exposure, and `span` covers the whole call.
 - `attenuations`: every call that narrows a capability, in source order. `function` is the function it is in, `method` is `restrict_to`, `restrict_to_file`, `read_only` or `write_only`, `source` and `result` are the capability kinds before and after, and `root` is the string the capability is restricted to, or `null` when the method takes no root or the root is computed at runtime. `span` covers the whole call.
 

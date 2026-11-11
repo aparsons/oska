@@ -70,6 +70,7 @@ mod attenuation;
 mod audit;
 mod calls;
 mod patterns;
+mod privacy;
 mod purity;
 mod removed;
 mod results;
@@ -93,15 +94,23 @@ pub struct Findings {
     /// The function whose body is being checked, named as the authority
     /// report names it. Empty outside one.
     pub function: String,
+    /// Which module each part of the source is in; none for a single
+    /// file (`link.rs`).
+    pub modules: crate::link::Modules,
+    /// The module of the item being checked.
+    pub module: String,
 }
 
 /// Check every function, method, constant, and test body in `module`. A
 /// test body sees `t`, and nothing else beyond pure code.
 pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mut Findings) {
     for item in &module.items {
+        out.module = out.modules.at(item.span.start).to_string();
         match &item.kind {
             ItemKind::Fn(f) => {
-                out.function = f.name.name.clone();
+                out.function = out
+                    .modules
+                    .function_name(item.span.start, None, &f.name.name);
                 function(src, f, Lower::new(decls), items, out);
             }
             ItemKind::Impl(imp) => {
@@ -111,7 +120,11 @@ pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mu
                 let type_name = authority::type_name(&imp.target);
                 for method in &imp.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        out.function = format!("{type_name}.{}", f.name.name);
+                        out.function = out.modules.function_name(
+                            method.span.start,
+                            Some(&type_name),
+                            &f.name.name,
+                        );
                         function(src, f, lower.clone(), items, out);
                     }
                 }
@@ -133,7 +146,11 @@ pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mu
                     });
                 for method in &t.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        out.function = format!("{}.{}", t.name.name, f.name.name);
+                        out.function = out.modules.function_name(
+                            method.span.start,
+                            Some(&t.name.name),
+                            &f.name.name,
+                        );
                         function(src, f, lower.clone(), items, out);
                     }
                 }
@@ -1097,6 +1114,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                             self.out
                                 .resolutions
                                 .insert(name.span, Resolution::Field(index));
+                            if !self.field_visible(type_name, index, &name.name, name.span) {
+                                return Ty::Error;
+                            }
                         }
                         if info.hidden_fields.contains(&name.name) {
                             self.error(

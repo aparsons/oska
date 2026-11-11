@@ -1,0 +1,7 @@
+$ oskac check crates/oskac/tests/fixtures/packages/manifest_unknown_key
+exit: 1
+--- stdout
+fn pkg.main.main: pure
+--- stderr
+crates/oskac/tests/fixtures/packages/manifest_unknown_key/oska.toml:4:1: error[E0402]: unknown key `versoin` in `[package]`; the keys are `name` and `version`; did you mean `version`? (bytes 42..49)
+    fix: replace with `version`

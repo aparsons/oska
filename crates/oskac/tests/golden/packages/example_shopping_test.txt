@@ -1,0 +1,9 @@
+$ oskac test examples/shopping
+exit: 0
+--- stdout
+test main: the total includes tax ... ok
+test pricing.tax: tax is a fifth on top ... ok
+test receipt: a line shows its label and its amount ... ok
+
+3 tests: 3 passed, 0 failed, 0 skipped
+--- stderr

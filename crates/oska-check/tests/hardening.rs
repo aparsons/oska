@@ -290,6 +290,7 @@ fn a_use_with_a_brace_group_names_its_module() {
 #[test]
 fn the_authority_report_escapes_its_strings() {
     let function = FunctionAuthority {
+        public: false,
         name: "a\"b\\c".to_string(),
         authority: vec!["Std\"out".to_string()],
         via: vec![Via {

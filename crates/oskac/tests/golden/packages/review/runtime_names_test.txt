@@ -1,0 +1,13 @@
+$ oskac test crates/oskac/tests/fixtures/packages/runtime_names
+exit: 1
+--- stdout
+test a.b.c: halves ... FAILED
+test a.b.c: contract ... FAILED
+test main: main test ... ok
+
+failures:
+test a.b.c: halves: crates/oskac/tests/fixtures/packages/runtime_names/src/a/b/c.osk:8:5: error[P0011]: assertion failed: `actual == expected`: actual 2, expected 3 (bytes 86..109)
+test a.b.c: contract: crates/oskac/tests/fixtures/packages/runtime_names/src/a/b/c.osk:12:17: error[P0006]: precondition violated: `half` requires `n > 0` (bytes 147..154)
+
+3 tests: 1 passed, 2 failed, 0 skipped
+--- stderr

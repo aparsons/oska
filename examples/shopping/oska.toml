@@ -1,0 +1,5 @@
+# A multi-module package: `src/main.osk` is the entry module, and every
+# other file under `src/` is a module another one imports with `use pkg.…`.
+[package]
+name = "shopping"
+version = "0.1.0"

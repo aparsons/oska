@@ -128,6 +128,9 @@ impl Body<'_, '_, '_> {
                 self.error(codes::FORGED, message, ident.span);
                 return None;
             }
+            if !self.fields_visible(name, ident.span) {
+                return None;
+            }
             return Some(self.constructor(
                 name,
                 None,
@@ -178,6 +181,9 @@ impl Body<'_, '_, '_> {
             return None;
         }
         if let Some(sig) = self.items.method(type_name, &name.name).cloned() {
+            if !self.method_visible(&sig, type_name, name.span) {
+                return None;
+            }
             self.audit_call(type_name, &name.name, span);
             if sig.receiver.is_method() {
                 // The receiver is the first argument; a value has none,
@@ -446,6 +452,10 @@ impl Body<'_, '_, '_> {
         let type_name = receiver
             .head()
             .map_or_else(|| receiver.to_string(), str::to_string);
+        if !self.method_visible(&sig, &type_name, name.span) {
+            self.infer_args(args);
+            return Ty::Error;
+        }
         match sig.receiver {
             Receiver::None => {
                 self.error(

@@ -73,7 +73,7 @@ fn vouch(name: Untrusted<String>) -> String {
 
 ```console cmd=check
 fn vouch: pure
-main.osk: audit: assume_trusted (bytes 50..71)
+main.osk:2:5: audit: assume_trusted (bytes 50..71)
 ```
 
 With `--format=json` they are in the `audit` array as `{"kind":"assume_trusted","span":{...}}` or `{"kind":"expose",...}`. A change that adds an audit site is the part of a diff most worth reading.

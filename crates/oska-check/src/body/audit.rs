@@ -43,6 +43,7 @@ impl Body<'_, '_, '_> {
             self.out.audit.push(AuditSite {
                 kind: audited.kind,
                 span,
+                location: None,
             });
         }
     }

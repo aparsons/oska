@@ -1,0 +1,6 @@
+$ oskac check crates/oskac/tests/fixtures/packages/manifest_syntax
+exit: 1
+--- stdout
+fn pkg.main.main: pure
+--- stderr
+crates/oskac/tests/fixtures/packages/manifest_syntax/oska.toml:2:8: error[E0400]: a string is not closed (bytes 17..22)

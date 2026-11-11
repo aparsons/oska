@@ -1,0 +1,5 @@
+$ oskac run crates/oskac/tests/fixtures/packages/symlink
+exit: 1
+--- stdout
+--- stderr
+crates/oskac/tests/fixtures/packages/symlink/src/alias.osk:1:1: error[E0411]: `src/alias.osk` is a symlink: a package's `oska.toml` and its source must be regular files and directories in its own tree (bytes 0..0)

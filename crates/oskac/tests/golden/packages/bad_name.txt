@@ -1,0 +1,7 @@
+$ oskac check crates/oskac/tests/fixtures/packages/bad_name
+exit: 1
+--- stdout
+fn pkg.Shouty_Name.shout: pure
+fn pkg.main.main: pure
+--- stderr
+crates/oskac/tests/fixtures/packages/bad_name/src/Shouty_Name.osk:1:1: error[E0410]: `Shouty_Name` in `src/Shouty_Name.osk` is not a snake_case name, so `use pkg.…` cannot name this module (bytes 0..0)

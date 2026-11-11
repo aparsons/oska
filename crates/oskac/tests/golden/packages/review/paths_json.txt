@@ -1,0 +1,15 @@
+$ oskac check hidden --format=json
+exit: 1
+--- stdout
+{
+  "diagnostics": [
+    {"code":"E0410","message":"`.scratch` in `src/.scratch.osk` is hidden: every `.osk` file under `src/` is a module, so rename it or move it out of `src/`","path":"src/.scratch.osk","span":{"start":0,"end":0}}
+  ],
+  "functions": [
+    {"name":"pkg..scratch.f","authority":[],"via":[],"pure":true},
+    {"name":"pkg.main.main","authority":[],"via":[],"pure":true}
+  ],
+  "audit": [],
+  "attenuations": []
+}
+--- stderr

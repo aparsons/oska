@@ -12,6 +12,10 @@ This project is written in [Oska](https://oskalang.dev), a language where a func
 6. Read the authority report from `oskac check <file.osk> --format=json` (`functions` and `audit`). It says what each function can reach.
 7. Before you finish, `oskac check <file.osk> --release` must pass.
 
+### Layout
+
+A program is one `.osk` file, or a package: an `oska.toml` (`[package]` with a `name` and a `version`) and modules under `src/`, where `src/main.osk` is the entry and `use pkg.a.b` imports `src/a/b.osk`. For a package, run `oskac check`, `oskac run` and `oskac test` in its directory, with no file. Items are private to their module until marked `pub(pkg)` (the whole package) or `pub` (its API); when `E0206` offers a fix, it adds that marker. There are no dependencies, re-exports or import renaming yet.
+
 ### Rules
 
 - Do not widen authority to make an error go away: do not add capabilities to `main`, and do not call `.assume_trusted()` or `.expose()` without saying why. Prefer a narrower capability, such as `fs.read_only()` or `fs.restrict_to("dir")`.
@@ -24,4 +28,5 @@ This project is written in [Oska](https://oskalang.dev), a language where a func
 - Index for agents: https://oskalang.dev/llms.txt (all pages: https://oskalang.dev/llms-full.txt).
 - Every error code, with an example and its fix: https://oskalang.dev/codes.json, or one code at https://oskalang.dev/codes/E0300.
 - Agent guide: https://oskalang.dev/guide/agent-guide.md.
+- Packages and modules: https://oskalang.dev/guide/packages.md.
 - To update Oska, run the installer again: https://oskalang.dev/install.sh or https://oskalang.dev/install.ps1.

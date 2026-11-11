@@ -402,3 +402,14 @@ fn a_cap_fn_parameter_is_listed_in_via_without_capabilities() {
         }"#,
     );
 }
+
+#[test]
+fn a_trait_default_method_is_in_the_authority_report() {
+    assert_authority(
+        "trait Log {\n    fn log(self, out: Stdout) {\n        let _ = out.println(\"x\")\n    }\n    \
+         fn level(self) -> Int\n}",
+        "Log.log",
+        &["Stdout"],
+        false,
+    );
+}
