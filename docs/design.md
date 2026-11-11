@@ -121,9 +121,10 @@ The checker is `oskac check`, built as its own crate, `oska-check`, on top of th
 
 ### Scope and reporting
 
-- v0 checks a single file plus the **prelude**.
-  - `use` resolves only `std.*` paths.
-  - Multi-file packages are designed ([ADR 0010](adr/0010-packages-are-git-urls-resolved-by-minimal-version-selection.md)) and ship as the first milestone below.
+- A check covers a **package** (a directory with an `oska.toml` and modules under `src/`, or a single file) plus the **prelude**.
+  - `use` resolves `std.*` paths and, in a package, `pkg.*` paths to the package's own modules. There are no dependencies yet.
+  - The modules are checked as one program, in a deterministic order. Every report entry names its file, and a function is named with its module path. A fix may edit another module's file.
+  - Packages are designed in [ADR 0010](adr/0010-packages-are-git-urls-resolved-by-minimal-version-selection.md); the first milestone below shipped the modules, and dependencies come later. See the [packages guide](guide/packages.md).
 - The checker reports every independent error.
   - Checking continues past an error in one function and moves on to the others.
   - An expression that fails to check gets an error type. The error type suppresses follow-on errors that would only repeat the first one.

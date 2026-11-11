@@ -442,7 +442,7 @@ fn llms_txt(all: Site, pages: List<Page>) -> Untrusted<String> {
         out = "{out}> {home}\n\n"
     }
     let source = repository()
-    out = "{out}Oska {version} (pre-alpha). These docs track `main`. Every page is also served as Markdown: the same path with `.md`. All of them are in [llms-full.txt]({base}/llms-full.txt). The source code is at {source}.\n"
+    out = "{out}Oska {version} (pre-alpha). These docs track `main`. Every page is also served as Markdown: the same path with `.md`. All of them are in [llms-full.txt]({base}/llms-full.txt). The source code is at {source}. A program is one `.osk` file or a package: an `oska.toml` and modules under `src/`, with `src/main.osk` as the entry and `use pkg.a.b` importing `src/a/b.osk`; see [Packages and modules]({base}/guide/packages.md).\n"
     let setup = if has_setup(all) { setup_group(all) } else { "" }
     out = "{out}{setup}"
     let docs = llms_group("Docs", "", pages)

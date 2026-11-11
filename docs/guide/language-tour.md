@@ -345,5 +345,5 @@ These are gaps in this release, so do not write programs that depend on them:
 
 - A module-level `const` declares and checks, but its name cannot be used yet: the checker reports `E0221` for any reference to it.
 - `Net`, `std.sql`, and `std.proc` check but do not run (`E0370`, `E0371`).
-- One file only. There are no packages, and `use` cannot import your own modules.
+- Packages have no dependencies yet, no re-exports and no renaming of imports. See [packages and modules](packages.md).
 - No formatter or package manager.
