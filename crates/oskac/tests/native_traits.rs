@@ -25,25 +25,6 @@ fn assert_prints(name: &str, src: &str, stdout: &str) {
     assert_eq!(outcome.exit_code, Some(0), "case `{name}`: {outcome:#?}");
 }
 
-/// `oskac build` refuses `src` with `E0390` naming `what`, and exits 2.
-fn assert_refused(name: &str, src: &str, what: &str) {
-    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("native_traits_refusals")
-        .join(name);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("a directory");
-    std::fs::write(dir.join("main.osk"), src).expect("the source");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_oskac"))
-        .args(["build", "main.osk"])
-        .current_dir(&dir)
-        .output()
-        .expect("oskac should run");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(output.status.code(), Some(2), "{name}: {stderr}");
-    assert!(stderr.contains("error[E0390]"), "{name}: {stderr}");
-    assert!(stderr.contains(what), "{name}: {stderr}");
-}
-
 const SHAPES: &str = "trait Shape {
     fn area(self) -> Int
     fn name(self) -> String {
