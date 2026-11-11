@@ -59,6 +59,7 @@ pub fn write(text: &Text, rodata: &[u8], data_size: u32) -> Vec<u8> {
         let target = match fixup.symbol {
             Symbol::Rodata(at) => RODATA + u64::from(at),
             Symbol::Data(at) => data.vaddr + u64::from(at),
+            Symbol::Function(start) => code.vaddr + 4 * start as u64,
         };
         let pc = code.vaddr + 4 * fixup.at as u64;
         let adrp = &mut words[fixup.at];

@@ -1010,37 +1010,83 @@ fn main(io: Stdout) {
     );
 }
 
-// ---- what is not native yet ---------------------------------------------------------
+// ---- closures and function values (#135) ---------------------------------------------
 
-/// Contract programs in the interpreter's suites that need a feature of a
-/// later ticket are refused with `E0390` for that feature, not for the
-/// contract, and exit 2.
 #[test]
-fn contract_programs_that_need_later_features_are_refused_cleanly() {
-    let cases = [
-        (
-            "closure_in_contract",
-            "fn count(xs: List<Int>) -> Int\n    requires xs.map(|x| { return x > 0 }) == [true, true]\n{\n    xs.len()\n}\n\nfn main(io: Stdout) {\n    let n = count([1, 2])\n}\n",
-        ),
-    ];
-    for (name, src) in cases {
-        let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join("native_contracts_refusals")
-            .join(name);
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("a directory");
-        std::fs::write(dir.join("main.osk"), src).expect("the source");
-        let output = std::process::Command::new(env!("CARGO_BIN_EXE_oskac"))
-            .args(["build", "main.osk"])
-            .current_dir(&dir)
-            .output()
-            .expect("oskac should run");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(output.status.code(), Some(2), "{name}: {stderr}");
-        assert!(stderr.contains("error[E0390]"), "{name}: {stderr}");
-        assert!(
-            !stderr.contains("`requires` or `ensures`"),
-            "{name} must be refused for its feature, not its contract: {stderr}"
-        );
-    }
+fn a_closure_in_a_contract_may_return_from_itself() {
+    let src = "fn count(xs: List<Int>) -> Int
+    requires xs.map(|x| { return x > 0 }) == [true, true]
+{
+    xs.len()
+}
+
+fn main(io: Stdout) {
+    let n = count([1, 2])
+    let _ = io.println(\"{n}\")
+}
+";
+    assert_prints("closure_in_contract", src, "2\n");
+}
+
+#[test]
+fn a_return_inside_a_closure_leaves_the_closure_not_the_function() {
+    let src = "fn positives(xs: List<Int>) -> List<Int>
+    ensures |r| r.len() == xs.len()
+{
+    xs.map(|x| {
+        if x < 0 {
+            return 0 - x
+        }
+        x
+    })
+}
+
+fn main(io: Stdout) {
+    let xs = positives([1, -2])
+    let n = xs.len()
+    let b = xs.at(1)
+    let _ = io.println(\"{n} {b}\")
+}
+";
+    assert_prints("closure_return_ensures", src, "2 2\n");
+}
+
+#[test]
+fn a_call_through_a_function_value_checks_requires_at_that_call() {
+    let src = format!("{DOUBLE}\nfn main() {{\n    let f = double\n    let y = f(-1)\n}}\n");
+    assert_panics(
+        "requires_fn_value",
+        &src,
+        "P0006",
+        "precondition violated: `double` requires `x > 0`",
+        "",
+    );
+    let outcome = assert_same(&Case::file("requires_fn_value_span", &src));
+    assert!(
+        outcome.stderr.contains("main.osk:9:13:"),
+        "the report names the call through the value: {outcome:#?}"
+    );
+}
+
+#[test]
+fn list_map_checks_requires_and_ensures_of_the_function_it_calls() {
+    let src = format!(
+        "{DOUBLE}\n{FORGETFUL}\nfn main(io: Stdout) {{\n    let a = [3, 0].map(absolute)\n    \
+         let n = a.len()\n    let _ = io.println(\"{{n}}\")\n    let b = [1, -1].map(absolute)\n}}\n"
+    );
+    assert_panics(
+        "map_ensures",
+        &src,
+        "P0007",
+        "postcondition violated: `absolute` ensures `r >= 0`",
+        "2\n",
+    );
+    let src = format!("{DOUBLE}\nfn main() {{\n    let a = [3, 2, -1].map(double)\n}}\n");
+    assert_panics(
+        "map_requires",
+        &src,
+        "P0006",
+        "precondition violated: `double` requires `x > 0`",
+        "",
+    );
 }

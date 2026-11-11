@@ -14,7 +14,12 @@
 //!   - a struct: `[count][field 0][field 1]...`;
 //!   - an enum with fields: `[count][variant index][field 0]...`;
 //!   - a list: `[count][length][capacity][item 0][item 1]...`, room for
-//!     `capacity` items of which the first `length` are there.
+//!     `capacity` items of which the first `length` are there;
+//!   - a function value (a closure, or a named function used as a value):
+//!     `[count][code][drop][captured 0][captured 1]...`, the address of
+//!     the code a call runs, which takes the object itself before the
+//!     arguments, and of the function that frees the object, releasing
+//!     what it captured ([`FN_CODE`], [`FN_DROP`], [`FN_CAPTURES`]).
 //!
 //! `std.rt` reads these layouts too (`std/rt.osk`), so a change here is a
 //! change there.
@@ -69,13 +74,14 @@ pub fn int_kind(int: IntType) -> IntKind {
 }
 
 /// Whether a value of `ty` is an object's address, whose reference count
-/// the code keeps: text, lists, and structs and enums with fields.
+/// the code keeps: text, lists, function values, and structs and enums with
+/// fields.
 /// Integers, `Bool`, `()`, fieldless enums and capabilities are not. The
 /// other built-in types with a handle (`Range`, `Task`, `Scope`) get their
 /// representation with their tickets and are not counted until then.
 pub fn is_counted(program: &Program, ty: &Type) -> bool {
     match ty {
-        Type::String => true,
+        Type::String | Type::Fn { .. } => true,
         Type::Named { name, .. } if name == builtins::LIST => true,
         Type::Named { name, .. } => {
             !builtins::is_capability(name)
@@ -105,6 +111,15 @@ pub const LIST_CAPACITY: u32 = 2 * WORD;
 
 /// The offset of a list object's first item.
 pub const LIST_ITEMS: u32 = 3 * WORD;
+
+/// The offset of a function value's code address.
+pub const FN_CODE: u32 = WORD;
+
+/// The offset of the address of a function value's drop function.
+pub const FN_DROP: u32 = 2 * WORD;
+
+/// The offset of the first value a function value captured.
+pub const FN_CAPTURES: u32 = 3 * WORD;
 
 /// The size of a word, and of every field.
 pub const WORD: u32 = 8;
