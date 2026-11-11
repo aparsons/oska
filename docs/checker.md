@@ -761,10 +761,24 @@ test "setup" {
 | `E0351` | A `Secret` compared with `==` or `!=`, on either side. Spans the comparison. Also reported, without a fix, where a `Secret` must be `Eq`: an `Eq` bound, or a call to `.eq`. | Rewrite `a == b` to `a.constant_time_eq(b)` and `a != b` to `!a.constant_time_eq(b)`, with the secret as the receiver (parenthesized when needed). When both sides are secrets, it rewrites to `a.constant_time_eq_secret(b)` instead, so nothing is exposed. |
 | `E0352` | A `Secret` used where it must be `Display`: a `Display` bound, or a call to `.to_string()`. Spans the call, or the method name. | None. |
 | `E0360` | A name declared by an imported `std` module but not exported by it, written unqualified. Spans the name. No `std` module declares a private name yet: no program can reach this code, so it has no example. | None: the module keeps it private. |
+| `E0400` | `oska.toml` is malformed: a table header with no `]`, a key with no `=`, no value after `=`, a string that is not closed or has an unknown escape, or text after a value. Spans the offending text; the manifest's path, line and column are in the report. | None. |
+| `E0401` | `oska.toml` uses TOML outside the strict subset (tables, single-line strings, arrays of strings, comments). The message names the feature: dotted keys, dates, multiline strings, inline tables, arrays of tables, quoted keys, integers, floats, booleans, or nested arrays. Spans the unsupported text. | None. |
+| `E0402` | An unknown key or table in `oska.toml`: milestone 1 accepts only `[package]`, with the keys `name` and `version`. A key outside any table is also unknown. Spans the key, or the table's name. | Replace the name with the single closest known name, when one is close enough. |
+| `E0403` | A `[dependencies]` table in `oska.toml`: dependencies arrive in milestone 5. Spans the table's name. | None. |
+| `E0404` | `oska.toml` has no `[package]` table (spans the start of the file), or `[package]` has no `name` or no `version` (spans the table's name). | None. |
+| `E0405` | A value in `[package]` of the wrong kind: `name` or `version` given as an array, a `name` that is not snake_case, or a `version` that is not semver (`MAJOR.MINOR.PATCH`, with an optional `-prerelease` and `+build`). Spans the value. | None. |
+| `E0406` | A key written twice in `[package]`, or `[package]` written twice. Spans the second one's name. | None. |
+| `E0410` | A file or directory name under `src/` that is not snake_case, so `use pkg.<path>` could not name the module. Spans the start of the file. | None: rename the file or directory. |
+| `E0411` | A symlinked file or directory under `src/`. A package's source is what is in its tree, so `oskac` follows no link. A symlink cannot be written in a documentation example, so it has no example. | None: replace the link with the file or directory. |
+| `E0412` | `main` declared in a module other than `src/main.osk`. Spans the name. | None. |
+| `E0413` | A directory given to `oskac check`, `run` or `test` that is not a package: it has no `oska.toml` or no `src/` directory. The message says how to make one. | None. |
+| `E0414` | `oskac run` on a library: a package with no `src/main.osk` has no `main` to run. | None. |
 
 ### Checker examples
 
-Each code has a program that fails with exactly that code and the same program fixed. `E0360` has no example: no `std` module declares a private name yet, so no program can reach it.
+Each code has a program that fails with exactly that code and the same program fixed. `E0360` has no example: no `std` module declares a private name yet, so no program can reach it. `E0411` has no example: a symlink cannot be written in a documentation example.
+
+Each package example is a whole package, written as its files one after another: a line `==> path <==` starts a file. `oskac check` runs the package (`run` and `tests` in the block's info string run it, or test it, instead).
 
 #### `E0200`
 
@@ -2052,4 +2066,234 @@ fn main(env: Env) {
     let key = env.secret("API_KEY")
     let text = key.expose()
 }
+```
+
+#### `E0400`
+
+```oska error=E0400 package
+==> oska.toml <==
+[package]
+name = "demo
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+```oska fixed=E0400 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+#### `E0401`
+
+```oska error=E0401 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+released = 2026-11-10
+==> src/main.osk <==
+fn main() {}
+```
+
+```oska fixed=E0401 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+#### `E0402`
+
+```oska error=E0402 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+licence = "MIT"
+==> src/main.osk <==
+fn main() {}
+```
+
+```oska fixed=E0402 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+#### `E0403`
+
+```oska error=E0403 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+
+[dependencies]
+==> src/main.osk <==
+fn main() {}
+```
+
+```oska fixed=E0403 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+#### `E0404`
+
+```oska error=E0404 package
+==> oska.toml <==
+[package]
+name = "demo"
+==> src/main.osk <==
+fn main() {}
+```
+
+```oska fixed=E0404 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+#### `E0405`
+
+```oska error=E0405 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+```oska fixed=E0405 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "1.0.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+#### `E0406`
+
+```oska error=E0406 package
+==> oska.toml <==
+[package]
+name = "demo"
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+```oska fixed=E0406 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+#### `E0410`
+
+```oska error=E0410 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+==> src/Text_Tools.osk <==
+fn shout() {}
+```
+
+```oska fixed=E0410 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+==> src/text_tools.osk <==
+fn shout() {}
+```
+
+#### `E0412`
+
+```oska error=E0412 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+==> src/tools.osk <==
+fn main() {}
+```
+
+```oska fixed=E0412 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+==> src/tools.osk <==
+fn run() {}
+```
+
+#### `E0413`
+
+```oska error=E0413 package
+==> src/main.osk <==
+fn main() {}
+```
+
+```oska fixed=E0413 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+#### `E0414`
+
+```oska error=E0414 package run
+==> oska.toml <==
+[package]
+name = "greetings"
+version = "0.1.0"
+==> src/greeting.osk <==
+fn greet() {}
+```
+
+```oska fixed=E0414 package run
+==> oska.toml <==
+[package]
+name = "greetings"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+==> src/greeting.osk <==
+fn greet() {}
 ```

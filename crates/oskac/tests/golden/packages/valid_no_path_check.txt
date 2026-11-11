@@ -1,0 +1,6 @@
+$ oskac check
+exit: 0
+--- stdout
+fn main: Stdout (io)
+fn greeting: pure
+--- stderr

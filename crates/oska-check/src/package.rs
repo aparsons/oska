@@ -8,9 +8,14 @@
 //! independent: each is checked by [`check_module_with`] as it would be
 //! alone, and the reports are merged in the order the modules are given.
 
-use oska_syntax::Location;
+use oska_syntax::ast::ItemKind;
+use oska_syntax::{Diagnostic, Location, Span};
 
-use crate::{check_module_with, CheckOptions, CheckReport};
+use crate::manifest::is_snake_case;
+use crate::{check_module_with, codes, parse_manifest, CheckOptions, CheckReport};
+
+/// The manifest's path in a package, and in the reports.
+pub const MANIFEST_PATH: &str = "oska.toml";
 
 /// The module path of a single file, and of a package's entry module,
 /// `src/main.osk`.
@@ -20,7 +25,8 @@ pub const ENTRY_MODULE: &str = "main";
 /// module.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Package {
-    /// The text of `oska.toml`. Not read yet: the manifest arrives in #117.
+    /// The text of `oska.toml`, read by [`parse_manifest`]: its errors
+    /// are reported first, with the path `oska.toml`.
     pub manifest: Option<String>,
     /// Every module, in the order the report lists them.
     pub modules: Vec<ModuleSource>,
@@ -54,6 +60,12 @@ impl ModuleSource {
 }
 
 impl Package {
+    /// A library: a package with no `src/main.osk`. It can be checked and
+    /// tested, not run.
+    pub fn is_library(&self) -> bool {
+        !self.modules.iter().any(|m| m.module == ENTRY_MODULE)
+    }
+
     /// A single file, the program at `path` with the text `source`: a
     /// package of one module, [`ENTRY_MODULE`], with no manifest.
     pub fn single_file(path: &str, source: &str) -> Package {
@@ -83,9 +95,16 @@ pub fn check_file(path: &str, source: &str, options: CheckOptions) -> CheckRepor
 /// a library, has none until modules join into one program (#118).
 pub fn check_package(package: &Package, options: CheckOptions) -> CheckReport {
     let mut merged = CheckReport::default();
+    if let Some(text) = &package.manifest {
+        if let Err(diagnostics) = parse_manifest(MANIFEST_PATH, text) {
+            merged.diagnostics.extend(diagnostics);
+        }
+    }
     let mut programs = Vec::new();
     for module in &package.modules {
-        let report = check_module_with(&module.source, options);
+        let mut report = check_module_with(&module.source, options);
+        report.diagnostics.extend(layout_diagnostics(module));
+        report.diagnostics.sort_by_key(|d| d.span.start);
         let locate =
             |span: oska_syntax::Span| Some(Location::new(&module.path, &module.source, span.start));
         merged.diagnostics.extend(
@@ -120,4 +139,87 @@ pub fn check_package(package: &Package, options: CheckOptions) -> CheckReport {
         };
     }
     merged
+}
+
+/// The layout rules for one module, as diagnostics of its file (before
+/// the file is located): every directory and file name under `src/` is
+/// snake_case (`E0410`), and `main` is declared only by [`ENTRY_MODULE`],
+/// `src/main.osk` (`E0412`). A single file, which is [`ENTRY_MODULE`], is
+/// exempt from both.
+fn layout_diagnostics(module: &ModuleSource) -> Vec<Diagnostic> {
+    if module.module == ENTRY_MODULE {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    let named = module
+        .path
+        .strip_prefix("src/")
+        .map(|rest| rest.strip_suffix(".osk").unwrap_or(rest));
+    if let Some(named) = named {
+        if let Some(bad) = named.split('/').find(|name| !is_snake_case(name)) {
+            found.push(Diagnostic::new(
+                codes::BAD_MODULE_NAME,
+                format!(
+                    "`{bad}` in `{}` is not a snake_case name, so `use pkg.{}` cannot name this module",
+                    module.path, module.module
+                ),
+                Span { start: 0, end: 0 },
+            ));
+        }
+    }
+    if let Ok(parsed) = oska_syntax::parse_module(&module.source) {
+        for item in &parsed.items {
+            if let ItemKind::Fn(function) = &item.kind {
+                if function.name.name == "main" {
+                    found.push(Diagnostic::new(
+                        codes::MAIN_OUTSIDE_ENTRY,
+                        format!(
+                            "`main` is only allowed in `src/main.osk`, not in `{}`",
+                            module.path
+                        ),
+                        function.name.span,
+                    ));
+                }
+            }
+        }
+    }
+    found
+}
+
+/// The refusal of a symlinked file or directory at `path`, package-relative,
+/// under `src/` (`E0411`): a package's source is what is in its tree.
+/// Finding one needs the file system, so `oskac` does it.
+pub fn symlink_refused(path: &str) -> Diagnostic {
+    Diagnostic::new(
+        codes::SYMLINK_IN_SOURCE,
+        format!("`{path}` is a symlink: a package's source must be regular files and directories under `src/`"),
+        Span { start: 0, end: 0 },
+    )
+    .locate(path, "")
+}
+
+/// The refusal of the directory `dir`, given as a package, when `problem`
+/// says what it lacks (`E0413`).
+pub fn not_a_package(dir: &str, problem: &str) -> Diagnostic {
+    Diagnostic::new(
+        codes::NOT_A_PACKAGE,
+        format!(
+            "`{dir}` is not a package: {problem}; a package has an `oska.toml` with a `[package]` \
+             table and its modules under `src/`, and a single file is checked by naming the `.osk` file"
+        ),
+        Span { start: 0, end: 0 },
+    )
+}
+
+/// The refusal of `oskac run` on a library (`E0414`): a package without
+/// `src/main.osk` has no `main` to run.
+pub fn run_of_library(dir: &str) -> Diagnostic {
+    Diagnostic::new(
+        codes::RUN_OF_LIBRARY,
+        format!(
+            "`{dir}` is a library: it has no `src/main.osk`, so there is no `main` to run; \
+             use `oskac check` or `oskac test`, or add `src/main.osk`"
+        ),
+        Span { start: 0, end: 0 },
+    )
 }

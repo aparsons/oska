@@ -50,6 +50,7 @@ mod decl_rules;
 mod infer;
 mod instantiation;
 mod items;
+mod manifest;
 mod package;
 mod prelude;
 pub mod program;
@@ -61,7 +62,11 @@ mod traits;
 mod ty;
 mod usefulness;
 
-pub use package::{check_file, check_package, ModuleSource, Package, ENTRY_MODULE};
+pub use manifest::{parse_manifest, Manifest};
+pub use package::{
+    check_file, check_package, not_a_package, run_of_library, symlink_refused, ModuleSource,
+    Package, ENTRY_MODULE, MANIFEST_PATH,
+};
 
 /// The diagnostic codes this crate reports.
 pub(crate) mod codes {
@@ -134,6 +139,18 @@ pub(crate) mod codes {
     pub const SECRET_COMPARED: &str = "E0351";
     pub const SECRET_DISPLAYED: &str = "E0352";
     pub const PRIVATE_TO_MODULE: &str = "E0360";
+    pub const MANIFEST_SYNTAX: &str = "E0400";
+    pub const MANIFEST_UNSUPPORTED: &str = "E0401";
+    pub const MANIFEST_UNKNOWN: &str = "E0402";
+    pub const MANIFEST_DEPENDENCIES: &str = "E0403";
+    pub const MANIFEST_MISSING: &str = "E0404";
+    pub const MANIFEST_VALUE: &str = "E0405";
+    pub const MANIFEST_DUPLICATE: &str = "E0406";
+    pub const BAD_MODULE_NAME: &str = "E0410";
+    pub const SYMLINK_IN_SOURCE: &str = "E0411";
+    pub const MAIN_OUTSIDE_ENTRY: &str = "E0412";
+    pub const NOT_A_PACKAGE: &str = "E0413";
+    pub const RUN_OF_LIBRARY: &str = "E0414";
 }
 
 /// Options that change what is checked.

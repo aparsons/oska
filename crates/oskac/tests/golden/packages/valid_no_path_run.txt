@@ -1,0 +1,5 @@
+$ oskac run
+exit: 0
+--- stdout
+hello from a package
+--- stderr

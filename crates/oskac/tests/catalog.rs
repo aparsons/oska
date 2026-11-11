@@ -36,9 +36,10 @@ use oska_run::{FakeHost, TestOptions, TestStatus};
 
 /// Codes no program can reach, so they have no example: `E0170` is for the
 /// prelude only (user code gets `E0132` instead), `E0360` needs a `std`
-/// module with a private name (none has one yet), and `P0005` is a second
-/// line of defence behind the checker (`E0292`).
-const UNREACHABLE: [&str; 3] = ["E0170", "E0360", "P0005"];
+/// module with a private name (none has one yet), `P0005` is a second
+/// line of defence behind the checker (`E0292`), and `E0411` is a symlink,
+/// which a documentation example cannot write.
+const UNREACHABLE: [&str; 4] = ["E0170", "E0360", "E0411", "P0005"];
 
 /// How the meaning of a code with no example ends, after the reason why.
 /// `oskac explain` and the code's page both show the meaning.
@@ -223,6 +224,9 @@ impl Catalog {
 fn codes_of(code: &str, example: &Example) -> BTreeSet<String> {
     let src = &example.body;
     let mut found = BTreeSet::new();
+    if example.words.iter().any(|w| w == "package") {
+        return package_codes_of(code, example);
+    }
     if example.words.iter().any(|w| w == "tests") {
         let report = oska_run::test(src, &mut FakeHost::new(), TestOptions::default());
         found.extend(report.diagnostics.iter().map(|d| d.code.to_string()));
@@ -243,6 +247,63 @@ fn codes_of(code: &str, example: &Example) -> BTreeSet<String> {
         let release = example.words.iter().any(|w| w == "release");
         let report = oska_check::check_module_with(src, oska_check::CheckOptions { release });
         found.extend(report.diagnostics.iter().map(|d| d.code.to_string()));
+    }
+    found
+}
+
+/// The files of a package example: a line `==> path <==` starts a file.
+fn package_files(body: &str) -> Vec<(String, String)> {
+    let mut files: Vec<(String, String)> = Vec::new();
+    for line in body.lines() {
+        match line
+            .strip_prefix("==> ")
+            .and_then(|rest| rest.strip_suffix(" <=="))
+        {
+            Some(path) => files.push((path.to_string(), String::new())),
+            None => {
+                let (_, text) = files
+                    .last_mut()
+                    .expect("a package example starts with a `==> path <==` line");
+                text.push_str(line);
+                text.push('\n');
+            }
+        }
+    }
+    files
+}
+
+/// The codes a package example gives: its files are written to a
+/// directory, and `oskac check` (or `run`, or `test`, as the block says)
+/// is run on it.
+fn package_codes_of(code: &str, example: &Example) -> BTreeSet<String> {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("catalog_package_{code}_{}", example.kind));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("should create the temp directory");
+    for (path, text) in package_files(&example.body) {
+        let file = dir.join(&path);
+        std::fs::create_dir_all(file.parent().expect("a parent"))
+            .expect("should create a directory");
+        std::fs::write(&file, text).expect("should write the file");
+    }
+    let command = ["run", "test"]
+        .into_iter()
+        .find(|c| {
+            example
+                .words
+                .iter()
+                .any(|w| w == c || (*c == "test" && w == "tests"))
+        })
+        .unwrap_or("check");
+    let output = oskac(&[command, &dir.to_string_lossy(), "--format=json"]);
+    let mut found = BTreeSet::new();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for (at, _) in text.match_indices("\"code\":\"") {
+        found.insert(text[at + 8..at + 13].to_string());
     }
     found
 }

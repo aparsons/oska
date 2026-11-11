@@ -8,20 +8,23 @@ oskac - the Oska compiler
 USAGE:
     oskac lex <file.osk> [--format=json]   Print the tokens in a source file
     oskac parse <file.osk> [--format=json] Print the syntax tree of a source file
-    oskac check <file.osk> [--format=json] [--release]
-                                           Type-check a source file and report
-                                           each function's authority
-    oskac run <file.osk> [--format=json] [-- args...]
-                                           Check a source file and, if it has
-                                           no diagnostics, run it
-    oskac test <file.osk> [--format=json] [--integration]
+    oskac check [path] [--format=json] [--release]
+                                           Type-check a source file, or a
+                                           package directory (the current one
+                                           with no path), and report each
+                                           function's authority
+    oskac run [path] [--format=json] [-- args...]
+                                           Check a source file or package and,
+                                           if it has no diagnostics, run it
+    oskac test [path] [--format=json] [--integration]
                                            Run the test blocks in a source file
+                                           or package
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ```
 
-Every command but `explain` takes exactly one source file. A command line is parsed like this:
+`lex` and `parse` take exactly one source file, and `explain` a code. `check`, `run` and `test` take a source file, a package directory, or nothing, which means the package in the current directory. A package is a directory with an `oska.toml` (`[package]` with a `name` and a `version`) and its modules under `src/`; every `.osk` file there is a module, `main` is allowed only in `src/main.osk`, and a package without that file is a library, which `run` refuses. A directory without `oska.toml` is an error (`E0413`). A file inside a package is handled alone, with a hint to run the command on the package. A command line is parsed like this:
 
 - A flag may come anywhere before `--`. Anything else is a positional argument.
 - Everything after `--` belongs to the program being run, and only `oskac run` uses it.
@@ -47,7 +50,7 @@ Every command but `explain` takes exactly one source file. A command line is par
 
 ## `oskac check`
 
-`oskac check <file.osk> [--format=json] [--release]` parses and type-checks one file against the prelude and reports each function's authority. Exit code 0 when there are no diagnostics, otherwise 1.
+`oskac check [path] [--format=json] [--release]` parses and type-checks one file, or every module of a package, against the prelude and reports each function's authority. Exit code 0 when there are no diagnostics, otherwise 1.
 
 Human-readable output:
 

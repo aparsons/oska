@@ -1,0 +1,6 @@
+$ oskac check crates/oskac/tests/fixtures/packages/manifest_missing_name
+exit: 1
+--- stdout
+fn main: pure
+--- stderr
+oska.toml:1:2: error[E0404]: `[package]` needs a `name` (bytes 1..8)

@@ -1,0 +1,7 @@
+fn greet(name: String) -> String {
+    "Hello, {name}"
+}
+
+test "greet" {
+    t.assert_eq(greet("Oska"), "Hello, Oska")
+}
