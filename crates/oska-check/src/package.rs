@@ -238,6 +238,21 @@ fn check_joined(modules: &[ModuleSource], options: CheckOptions) -> CheckReport 
     locate(report, &joined)
 }
 
+/// A diagnostic whose span is an offset into the program of `package`,
+/// as a runtime panic's is, in the file and the offsets of its module:
+/// the span is local to that file and the diagnostic names it. A
+/// package that is one file (one module, no manifest) keeps its offsets.
+pub fn locate_in_package(package: &Package, diagnostic: Diagnostic) -> Diagnostic {
+    if package.modules.is_empty() {
+        return diagnostic;
+    }
+    let joined = Joined::new(&package.modules);
+    let (module, span, _) = joined.local(diagnostic.span);
+    let mut located = diagnostic;
+    located.span = span;
+    located.locate(&module.path, &module.source)
+}
+
 /// Name the file of every diagnostic, audit site and attenuation of
 /// `report`, whose spans are offsets into `joined`'s text, and make each
 /// span an offset into its file. A fix whose edits are in another file

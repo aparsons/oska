@@ -1,5 +1,6 @@
 //! `oskac`: the Oska compiler command-line interface.
 
+use oska_syntax::Diagnostic;
 use std::process::ExitCode;
 
 mod explain;
@@ -181,7 +182,7 @@ fn print_report(report: &oska_check::CheckReport, json: bool, path: &str) -> Exi
 
 /// Print diagnostics to stderr, each after its location,
 /// `path:line:col`, and with its fix, as `oskac check` does.
-fn print_diagnostics(diagnostics: &[oska_syntax::Diagnostic]) {
+fn print_diagnostics(diagnostics: &[Diagnostic]) {
     for diagnostic in diagnostics {
         match &diagnostic.location {
             Some(location) => eprintln!("{location}: {diagnostic}"),
@@ -206,23 +207,39 @@ fn run_file(path: &str, Flags { json, .. }: Flags, args: &[String]) -> ExitCode 
     let mut argv = vec![path.to_string()];
     argv.extend_from_slice(args);
     let outcome = oska_run::run(&src, &mut oska_run::RealHost::new(), &argv);
-    finish_run(outcome, json, path, &src)
+    let locate = in_file(path, &src);
+    finish_run(outcome, json, &locate)
 }
 
-/// Print how a run ended and return the program's exit code. A panic's
-/// span is in `src`, the text of the file at `path`.
-fn finish_run(outcome: oska_run::RunOutcome, json: bool, path: &str, src: &str) -> ExitCode {
+/// A locator for diagnostics whose spans are in `src`, the text of the
+/// file at `path`.
+fn in_file<'a>(path: &'a str, src: &'a str) -> impl Fn(Diagnostic) -> Diagnostic + 'a {
+    move |d| match d.location {
+        Some(_) => d,
+        None => d.locate(path, src),
+    }
+}
+
+/// Print how a run ended and return the program's exit code. `locate`
+/// names the file of a panic or a refusal, which `--format=json` prints
+/// as `path` and the human output as `path:line:col`.
+fn finish_run(
+    outcome: oska_run::RunOutcome,
+    json: bool,
+    locate: &dyn Fn(Diagnostic) -> Diagnostic,
+) -> ExitCode {
     eprint!("{}", outcome.stderr);
     // A panic is printed in the shape of a diagnostic, after the output
     // the program wrote before it.
     let mut reported = outcome.diagnostics;
     reported.extend(outcome.panic);
+    let reported: Vec<Diagnostic> = reported.into_iter().map(locate).collect();
     if json {
         for diagnostic in &reported {
             eprintln!("{}", diagnostic.to_json());
         }
     } else {
-        print_diagnostics(&locate(reported, path, src));
+        print_diagnostics(&reported);
     }
     ExitCode::from(u8::try_from(outcome.exit_code).unwrap_or(u8::MAX))
 }
@@ -242,38 +259,29 @@ fn test_file(path: &str, flags: Flags) -> ExitCode {
     };
     let options = oska_run::TestOptions { integration };
     let report = oska_run::test(&src, &mut oska_run::RealHost::new(), options);
-    finish_test(&report, json, path, &src)
+    let locate = in_file(path, &src);
+    finish_test(report, json, &locate)
 }
 
-/// Print a test report and return its exit code. Diagnostics' spans are
-/// in `src`, the text of the file at `path`.
-fn finish_test(report: &oska_run::TestReport, json: bool, path: &str, src: &str) -> ExitCode {
+/// Print a test report and return its exit code. `locate` names the file
+/// of each failure and refusal, as for [`finish_run`].
+fn finish_test(
+    mut report: oska_run::TestReport,
+    json: bool,
+    locate: &dyn Fn(Diagnostic) -> Diagnostic,
+) -> ExitCode {
+    for test in &mut report.tests {
+        test.failure = test.failure.take().map(locate);
+    }
+    report.diagnostics = report.diagnostics.drain(..).map(locate).collect();
     if json {
         println!("{}", report.to_json());
     } else if !report.diagnostics.is_empty() {
-        print_diagnostics(&locate(report.diagnostics.clone(), path, src));
+        print_diagnostics(&report.diagnostics);
     } else {
-        print!("{}", report.to_human(path));
+        print!("{}", report.to_human(""));
     }
     ExitCode::from(u8::try_from(report.exit_code()).unwrap_or(u8::MAX))
-}
-
-/// Name the file of each of `diagnostics` that does not name one yet:
-/// they are in the single file at `path`, whose text is `src`. `run` and
-/// `test` locate their diagnostics for the human output only: their JSON
-/// keeps its shape until runtime panics name their file.
-fn locate(
-    diagnostics: Vec<oska_syntax::Diagnostic>,
-    path: &str,
-    src: &str,
-) -> Vec<oska_syntax::Diagnostic> {
-    diagnostics
-        .into_iter()
-        .map(|d| match d.location {
-            Some(_) => d,
-            None => d.locate(path, src),
-        })
-        .collect()
 }
 
 // ---- Packages ------------------------------------------------------------------
@@ -324,9 +332,9 @@ fn run_target(path: Option<&&str>, flags: Flags, args: &[String]) -> ExitCode {
             let mut argv = vec![dir.clone()];
             argv.extend_from_slice(args);
             let outcome = oska_run::run_program(program, &mut oska_run::RealHost::new(), &argv);
-            let entry = package::entry(&package);
-            let (path, src) = entry.map_or(("", ""), |m| (m.path.as_str(), m.source.as_str()));
-            finish_run(outcome, json, path, src)
+            finish_run(outcome, json, &|d| {
+                oska_check::locate_in_package(&package, d)
+            })
         }
     }
 }
@@ -352,18 +360,13 @@ fn test_target(path: Option<&&str>, flags: Flags) -> ExitCode {
                 integration: flags.integration,
             };
             let tests = oska_run::test_program(program, &mut oska_run::RealHost::new(), options);
-            let entry = package::entry(&package);
-            let (path, src) = entry.map_or(("", ""), |m| (m.path.as_str(), m.source.as_str()));
-            finish_test(&tests, json, path, src)
+            finish_test(tests, json, &|d| oska_check::locate_in_package(&package, d))
         }
     }
 }
 
 /// Read the package in `dir`. `None` after printing why it is not one.
-fn load_package(
-    dir: &str,
-    json: bool,
-) -> Option<(oska_check::Package, Vec<oska_syntax::Diagnostic>)> {
+fn load_package(dir: &str, json: bool) -> Option<(oska_check::Package, Vec<Diagnostic>)> {
     match package::load(dir) {
         package::Loaded::Package { package, refused } => Some((package, refused)),
         package::Loaded::NotAPackage(refusal) => {
@@ -381,7 +384,7 @@ fn load_package(
 /// had any has no program to run.
 fn checked(
     package: &oska_check::Package,
-    refused: Vec<oska_syntax::Diagnostic>,
+    refused: Vec<Diagnostic>,
     options: oska_check::CheckOptions,
 ) -> oska_check::CheckReport {
     let mut report = oska_check::check_package(package, options);
@@ -394,7 +397,7 @@ fn checked(
 
 /// Print `diagnostics` as a refusal: as a report's diagnostics with
 /// `--format=json`, or as `oskac check` prints them. Exit code 1.
-fn refuse(diagnostics: Vec<oska_syntax::Diagnostic>, json: bool) -> ExitCode {
+fn refuse(diagnostics: Vec<Diagnostic>, json: bool) -> ExitCode {
     if json {
         let report = oska_check::CheckReport {
             diagnostics,

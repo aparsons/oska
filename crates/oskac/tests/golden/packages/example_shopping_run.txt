@@ -1,0 +1,5 @@
+$ oskac run examples/shopping
+exit: 0
+--- stdout
+Total: 2400 cents
+--- stderr

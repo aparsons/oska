@@ -157,3 +157,56 @@ fn a_directory_without_a_manifest_is_an_error_with_a_hint() {
     }
     assert_golden(&case("no_manifest_json", &["check", &dir, "--format=json"]));
 }
+
+#[test]
+fn a_multi_module_package_checks_runs_and_tests() {
+    let multi = fixture("multi");
+    for command in ["check", "run", "test"] {
+        assert_golden(&case(&format!("multi_{command}"), &[command, &multi]));
+    }
+    assert_golden(&case("multi_test_json", &["test", &multi, "--format=json"]));
+}
+
+#[test]
+fn a_panic_in_a_helper_module_names_that_module_and_its_own_location() {
+    let panicking = fixture("multi_panic");
+    assert_golden(&case("multi_panic_run", &["run", &panicking]));
+    assert_golden(&case(
+        "multi_panic_run_json",
+        &["run", &panicking, "--format=json"],
+    ));
+}
+
+#[test]
+fn a_failing_test_in_a_helper_module_names_that_module_and_its_own_location() {
+    let failing = fixture("multi_failing_test");
+    assert_golden(&case("multi_failing_test", &["test", &failing]));
+    assert_golden(&case(
+        "multi_failing_test_json",
+        &["test", &failing, "--format=json"],
+    ));
+}
+
+/// Every package under `examples/` checks, runs (when it has a `main`)
+/// and passes its tests, as the single-file examples do.
+#[test]
+fn every_example_package_checks_runs_and_tests() {
+    let examples = repo_root().join("examples");
+    let mut packages: Vec<String> = std::fs::read_dir(&examples)
+        .expect("examples/ should exist")
+        .map(|e| e.expect("examples/ entry"))
+        .filter(|e| e.path().join("oska.toml").is_file())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    packages.sort();
+    assert!(!packages.is_empty(), "expected an example package");
+    for name in packages {
+        let dir = format!("examples/{name}");
+        for command in ["check", "run", "test"] {
+            assert_golden(&case(
+                &format!("example_{name}_{command}"),
+                &[command, &dir],
+            ));
+        }
+    }
+}

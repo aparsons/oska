@@ -13,7 +13,7 @@
 
 use std::path::Path;
 
-use oska_check::{ModuleSource, Package, ENTRY_MODULE, MANIFEST_PATH};
+use oska_check::{ModuleSource, Package, MANIFEST_PATH};
 use oska_syntax::Diagnostic;
 
 /// What a path argument names.
@@ -154,14 +154,4 @@ pub fn package_containing(file: &str) -> Option<String> {
             }
         })
     })
-}
-
-/// The module whose file `main` is in, or the only module: the one whose
-/// source a panic's span is in until panics name their file.
-pub fn entry(package: &Package) -> Option<&ModuleSource> {
-    package
-        .modules
-        .iter()
-        .find(|m| m.module == ENTRY_MODULE)
-        .or_else(|| package.modules.first())
 }
