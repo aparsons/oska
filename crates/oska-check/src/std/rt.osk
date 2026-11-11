@@ -111,9 +111,9 @@ fn no_reserve() -> Int {
     16384
 }
 
-// Map `length` bytes of fresh zeroed memory with protection `prot`, at
-// `addr` when `fixed`: its address. Running out of memory ends the
-// process.
+// Map `length` bytes of fresh zeroed memory with protection `prot` and
+// `mmap`'s `flags` (at `addr` when they say it is fixed): its address.
+// Running out of memory ends the process.
 fn map(addr: Int, length: Int, prot: Int, flags: Int) -> Int {
     let at = rt_sys_mmap(addr, length, prot, flags, -1, 0)
     if at < 0 {

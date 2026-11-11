@@ -1056,7 +1056,9 @@ impl<'l, 'p> Body<'l, 'p> {
             BinaryOp::Div => Arith::Div,
             _ => Arith::Rem,
         };
-        if matches!(arith, Arith::Div | Arith::Rem) {
+        // A divisor written as a literal other than 0 needs no check.
+        let nonzero = matches!(rhs.kind, ExprKind::Int(value, _) if value != 0);
+        if matches!(arith, Arith::Div | Arith::Rem) && !nonzero {
             let tail = format!(" {} 0`", op.text());
             let by_zero = self.panic_unary(
                 panics::DIVISION_BY_ZERO,

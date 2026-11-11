@@ -15,8 +15,9 @@
 //! - `x8` holds a system call's number, and `svc #0` makes it;
 //! - `x9`–`x11`, `x16` and `x17` are scratch within one instruction's
 //!   code;
-//! - `x19`–`x27` hold temporaries ([`regalloc::REGISTERS`]) and are
-//!   callee-saved: a function saves those it uses;
+//! - `x19`–`x27` hold temporaries ([`regalloc::CALLEE_SAVED`]) and are
+//!   callee-saved: a function saves those it uses; `x12`–`x15` hold
+//!   temporaries no call happens during ([`regalloc::CALLER_SAVED`]);
 //! - `x28` counts how many more calls may nest ([`Inst::Enter`]): the
 //!   entry point sets it, and nothing else writes it;
 //! - `x29` is the frame pointer and `x30` the link register, saved in

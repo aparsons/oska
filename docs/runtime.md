@@ -72,7 +72,9 @@ fn main() {
 
 `oskac build [path] [-o out] [--format=json]` checks a source file or package, as `oskac check` does, and compiles it with the native backend (`oska-native`) to a static executable for aarch64 Linux, on any host. It writes the file's stem, or the package directory's name, in the current directory unless `-o` names the output. It prints nothing on success, or `{"output":"<path>","diagnostics":[]}` with `--format=json`. A refused program prints its diagnostics as `oskac check` does, or `{"output":null,"diagnostics":[...]}`. The exit code is 0 on success, 1 for the checker's diagnostics or an output that cannot be written, and 2 for a program the backend cannot compile yet (`E0371`, `E0390`).
 
-The native backend is new and compiles only part of the language so far. A program that uses anything else is refused before any file is written, never compiled wrongly. A program that imports a `std` module with no runtime is refused with `E0371`, as `oskac run` refuses it.
+The native backend is new and compiles only part of the language so far: `Int` and the sized integer types, `Bool`, text literals and interpolation, `let` and `var`, `if`, `while`, `for` over a range, `break` and `continue`, and calls of the program's functions, recursion included. A program that uses anything else is refused before any file is written, never compiled wrongly. A program that imports a `std` module with no runtime is refused with `E0371`, as `oskac run` refuses it.
+
+A native executable panics as `oskac run` does: the same report on stderr, `path:line:col: error[P....]: message (bytes a..b)`, with the path as `oskac build` was given it, and exit code 101. Its arithmetic is checked exactly as the interpreter's is (`P0001`, `P0004`), and calls nest at most as deep as in the interpreter before `P0021`. It has no `--format=json` report.
 
 | Code | Refusal |
 | --- | --- |
