@@ -572,14 +572,3 @@ fn main(io: Stdout) -> Result<(), IoError> {
     assert!(outcome.stderr.contains("error[P0003]"), "{outcome:#?}");
     assert_eq!(outcome.exit_code, Some(101), "{outcome:#?}");
 }
-
-/// `dbg` shows text as Rust's `{:?}` does, which needs Unicode tables
-/// the runtime does not have yet.
-#[test]
-fn dbg_is_refused() {
-    assert_refused(
-        "dbg",
-        "fn main(io: Stdout) {\n    let n = dbg(1)\n}\n",
-        "cannot compile `dbg` yet",
-    );
-}

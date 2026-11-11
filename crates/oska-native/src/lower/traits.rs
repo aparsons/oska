@@ -313,10 +313,10 @@ impl Body<'_, '_> {
                 self.store(object, layout::ENUM_TAG, err);
                 self.store(object, layout::enum_field(0), converted);
                 self.owned.remove(&converted);
-                self.leave_function(object)?;
+                self.return_value(object, span)?;
             }
             // `None`, or `Err` as it is: its reference passes on.
-            _ => self.leave_function(value)?,
+            _ => self.return_value(value, span)?,
         }
         self.push(Inst::Label(ok));
         if let Some(held_ty) = held {
