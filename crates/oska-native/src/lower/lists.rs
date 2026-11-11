@@ -34,14 +34,14 @@ use crate::NOWHERE;
 impl Body<'_, '_> {
     /// The address of item `index` of the list object `list`, less
     /// [`layout::LIST_ITEMS`].
-    fn item_base(&mut self, list: Temp, index: Temp) -> Temp {
+    pub(super) fn item_base(&mut self, list: Temp, index: Temp) -> Temp {
         let three = self.constant(3);
         let offset = self.binary_op(BinOp::Shl, index, three);
         self.binary_op(BinOp::Add, list, offset)
     }
 
     /// Item `index` of the list object `list`, touching no count.
-    fn item(&mut self, list: Temp, index: Temp) -> Temp {
+    pub(super) fn item(&mut self, list: Temp, index: Temp) -> Temp {
         let base = self.item_base(list, index);
         self.load(base, layout::LIST_ITEMS)
     }
@@ -80,9 +80,8 @@ impl Body<'_, '_> {
 
     /// The prelude's `List` methods that read a list, inline: `name`
     /// applied to `values`, evaluated from `args`, for `expr`. `None` for
-    /// any other intrinsic (`List.eq` is `Body::eq_intrinsic`'s). `List.map` is not one: it takes a closure
-    /// (#135), so it is refused as any intrinsic without an
-    /// implementation is.
+    /// any other intrinsic (`List.eq` is `Body::eq_intrinsic`'s;
+    /// `List.map` calls `closures.rs`'s `Body::list_map`).
     pub(super) fn list_intrinsic(
         &mut self,
         name: &str,
@@ -128,6 +127,11 @@ impl Body<'_, '_> {
                 item
             }
             ("List.get", Some(&index)) => self.list_get(list, index, &item_ty, expr.span)?,
+            ("List.map", Some(&function)) => {
+                let mapped = self.list_map(list, function, expr.span)?;
+                self.consume(function)?;
+                mapped
+            }
             _ => return Ok(None),
         };
         self.consume(list)?;

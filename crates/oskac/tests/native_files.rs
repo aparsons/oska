@@ -1002,7 +1002,9 @@ fn no_handle_is_left_open_on_any_path() {
     let src = program(
         r#"    let root = fs.restrict_to("root")
     var i = 0
-    while i < 2000 {
+    // Past the usual limit of 1024 open descriptors, so one leaked on
+    // any path fails the run.
+    while i < 1100 {
         let _ = root.read_only().read_to_string(Path.new("inside.txt"))
         let _ = root.read_only().read_to_string(Path.new("out/secret.txt"))
         let _ = root.read_only().read_to_string(Path.new("sub/escape.txt"))
@@ -1023,13 +1025,16 @@ fn no_handle_is_left_open_on_any_path() {
         let _ = narrowed.read_only().restrict_to_file(Path.new("nested.txt")).read_to_string()
         let _ = read.restrict_to_file("root/inside.txt").read_to_string()
         let _ = write.restrict_to_file("root/sub/new.txt").write("y")
+        let reader = reader_of(read)
+        let _ = reader("nested.txt")
+        let _ = reader("out/x")
         let held = Held(dirs: [root.read_only(), read.restrict_to("root/sub")], file: read.restrict_to_file("root/inside.txt"))
         let _ = held.dirs.at(1).read_to_string(Path.new("nested.txt"))
         i = i + 1
     }
     io.println(listed(read.restrict_to("/proc/self/fd").list_dir(Path.new("."))))?"#,
     );
-    let src = format!("{src}\ncap struct Held {{ dirs: List<DirRead>, file: FileRead }}\n");
+    let src = format!("{src}{READER}\ncap struct Held {{ dirs: List<DirRead>, file: FileRead }}\n");
     let case = tree(Case::file("files_handles", &src)).with_setup(|dir| {
         link(dir, "root/out", "../outside");
         link(dir, "root/sub/out", "../../outside");
@@ -1126,4 +1131,41 @@ fn the_errno_table_is_rusts_for_every_number() {
         };
         assert_eq!(rust, expected, "errno {errno}");
     }
+}
+
+// ---- Captured by closures ------------------------------------------------------
+
+/// A function that makes a closure capturing a `DirRead`, which outlives
+/// the binding it came from.
+const READER: &str = r#"
+fn reader_of(read: FsRead) -> cap fn(String) -> Result<Untrusted<String>, IoError> {
+    let sub = read.restrict_to("root/sub")
+    |name: String| sub.read_to_string(Path.new(name))
+}
+"#;
+
+#[test]
+fn a_closure_keeps_the_directory_capability_it_captured() {
+    let src = program(
+        r#"    let reader = reader_of(read)
+    io.println(shown(reader("nested.txt")))?
+    io.println(shown(reader("../inside.txt")))?
+    io.println(shown(reader("out/secret.txt")))?
+    let readers = [reader, reader_of(read), reader]
+    for r in readers {
+        io.println(shown(r("nested.txt")))?
+    }
+    io.println(listed(read.restrict_to("root/sub").list_dir(Path.new("."))))?"#,
+    );
+    let src = format!("{src}{READER}");
+    let case = tree(Case::file("files_closures", &src))
+        .with_setup(|dir| link(dir, "root/sub/out", "../../outside"));
+    assert_eq!(
+        printed(&case),
+        "nested text\n\
+         REFUSED: `../inside.txt` leads outside the capability's root\n\
+         REFUSED: `out` is a symlink or not a directory, and confined access never follows a symlink\n\
+         nested text\nnested text\nnested text\n\
+         nested.txt,out\n"
+    );
 }

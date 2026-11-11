@@ -56,6 +56,7 @@
 //! counts its depth ([`Inst::Enter`]) and panics with `P0021` at the
 //! interpreter's limit, so recursion never reaches the guard.
 
+mod closures;
 mod data;
 mod debug;
 mod lists;
@@ -153,6 +154,22 @@ enum Instance {
         name: String,
         type_args: Vec<Type>,
     },
+    /// The code of a closure, [`Lowering::closures`]'s `index`th
+    /// (`closures.rs`).
+    Closure(usize),
+    /// What frees a function value of a closure that captured references:
+    /// releases them, then frees the object.
+    ClosureDrop(usize),
+    /// The code of a function value of type `ty` that calls the program's
+    /// function `name` or, when `intrinsic`, the prelude intrinsic `name`,
+    /// with the concrete `type_args`.
+    Thunk {
+        source: Source,
+        intrinsic: bool,
+        name: String,
+        type_args: Vec<Type>,
+        ty: Type,
+    },
 }
 
 /// Lower `user`, with `rt`, the checked `std.rt`, to a module. `locate`
@@ -167,6 +184,8 @@ pub fn program(user: &Program, rt: &Program, locate: Locate) -> Result<ir::Modul
         queue: Vec::new(),
         rodata: Rodata::default(),
         user_functions: Vec::new(),
+        closures: Vec::new(),
+        closure_ids: HashMap::new(),
     };
     let entry = lowering.entry()?;
     while let Some((instance, id, origin)) = lowering.queue.pop() {
@@ -176,7 +195,8 @@ pub fn program(user: &Program, rt: &Program, locate: Locate) -> Result<ir::Modul
             Instance::Function {
                 source: Source::User,
                 ..
-            }
+            } | Instance::Closure(_)
+                | Instance::Thunk { .. }
         ) {
             lowering.user_functions.push(id);
         }
@@ -207,6 +227,10 @@ struct Lowering<'p> {
     /// The program's own functions (not `std.rt`'s): their frames are
     /// those recursion can stack up.
     user_functions: Vec<FnId>,
+    /// Every closure's code requested so far, by [`Instance::Closure`]'s
+    /// index.
+    closures: Vec<closures::ClosureCode>,
+    closure_ids: HashMap<closures::ClosureKey, usize>,
 }
 
 impl<'p> Lowering<'p> {
@@ -227,6 +251,21 @@ impl<'p> Lowering<'p> {
         self.ids.insert(instance.clone(), id);
         self.queue.push((instance, id, origin));
         id
+    }
+
+    /// The index of `code` in [`Lowering::closures`], added if it is new.
+    fn closure_index(&mut self, code: closures::ClosureCode) -> usize {
+        let key = (
+            std::sync::Arc::as_ptr(&code.code) as usize,
+            code.source,
+            code.subst.clone(),
+        );
+        if let Some(&index) = self.closure_ids.get(&key) {
+            return index;
+        }
+        self.closures.push(code);
+        self.closure_ids.insert(key, self.closures.len() - 1);
+        self.closures.len() - 1
     }
 
     /// A placeholder for the function `name`, lowered later: its id.
@@ -332,6 +371,32 @@ impl<'p> Lowering<'p> {
                 let mut body = Body::new(self, *source, runtime_origin);
                 body.equal_function(ty, origin)?;
                 return body.finish(&qualified(instance), 2, NOWHERE);
+            }
+            Instance::Closure(index) => {
+                let source = self.closures[*index].source;
+                let runtime_origin = (source == Source::Runtime).then_some(origin);
+                let mut body = Body::new(self, source, runtime_origin);
+                let (params, span) = body.closure_function(*index)?;
+                return body.finish(&qualified(instance), params, span);
+            }
+            Instance::ClosureDrop(index) => {
+                let source = self.closures[*index].source;
+                let runtime_origin = (source == Source::Runtime).then_some(origin);
+                let mut body = Body::new(self, source, runtime_origin);
+                body.closure_drop_function(*index)?;
+                return body.finish(&qualified(instance), 1, NOWHERE);
+            }
+            Instance::Thunk {
+                source,
+                intrinsic,
+                name,
+                type_args,
+                ty,
+            } => {
+                let runtime_origin = (*source == Source::Runtime).then_some(origin);
+                let mut body = Body::new(self, *source, runtime_origin);
+                let params = body.thunk_function(*intrinsic, name, type_args, ty, origin)?;
+                return body.finish(&qualified(instance), params, NOWHERE);
             }
         };
         let program = self.program(source);
@@ -446,6 +511,14 @@ fn qualified(instance: &Instance) -> String {
                 type_args: type_args.clone(),
             };
             format!("requires of {}", qualified(&function))
+        }
+        Instance::Closure(index) => format!("closure #{index}"),
+        Instance::ClosureDrop(index) => format!("drop of closure #{index}"),
+        Instance::Thunk {
+            name, type_args, ..
+        } => {
+            let args: Vec<String> = type_args.iter().map(Type::to_string).collect();
+            format!("fn value {name}<{}>", args.join(", "))
         }
     }
 }
@@ -562,6 +635,9 @@ struct Body<'l, 'p> {
     subst: Vec<(String, Type)>,
     /// The function's result type, concrete: what `?` returns early.
     ret: Type,
+    /// Whether it is a function value's code, which returns a status as
+    /// its second result: 0 for a call that went ahead (`closures.rs`).
+    status: bool,
 }
 
 impl<'l, 'p> Body<'l, 'p> {
@@ -583,6 +659,7 @@ impl<'l, 'p> Body<'l, 'p> {
             param_temps: Vec::new(),
             subst: Vec::new(),
             ret: Type::Unit,
+            status: false,
         }
     }
 
@@ -739,6 +816,8 @@ impl<'l, 'p> Body<'l, 'p> {
         });
         if layout::is_confined(ty) {
             self.call_runtime("root_drop", vec![value], NOWHERE)?;
+        } else if matches!(ty, Type::Fn { .. }) {
+            self.drop_function_value(value);
         } else if layout::holds_counted(self.program(), ty) {
             let drop = Instance::Drop(self.source, ty.clone());
             let origin = self.origin.unwrap_or(NOWHERE);
@@ -816,6 +895,14 @@ impl<'l, 'p> Body<'l, 'p> {
         }
         self.release_slots(0)?;
         self.release_held(None)?;
+        if self.status {
+            let went_ahead = self.constant(0);
+            self.push(Inst::ReturnPair {
+                value,
+                second: went_ahead,
+            });
+            return Ok(());
+        }
         match self.receiver.clone() {
             // A mutating method gives its receiver back.
             Some(Receiver {
@@ -1568,6 +1655,9 @@ impl<'l, 'p> Body<'l, 'p> {
                 convert,
                 type_args,
             } => self.try_expr(operand, convert.as_ref(), type_args, &expr.ty, span),
+            ExprKind::Closure(code) => self.closure(expr, code),
+            ExprKind::FnValue { callee, type_args } => self.fn_value(expr, callee, type_args),
+            ExprKind::CallValue { callee, args } => self.call_value(callee, args, expr),
             other => Err(self.refuse(span, &describe(other))),
         }
     }
@@ -2105,12 +2195,9 @@ fn describe(kind: &ExprKind) -> String {
     match kind {
         ExprKind::List(_) => "a list".to_string(),
         ExprKind::Field { .. } => "reading a field".to_string(),
-        ExprKind::Closure(_) => "a closure".to_string(),
-        ExprKind::CallValue { .. } => "a call of a function value".to_string(),
         ExprKind::MutatingCall { .. } => "a mutating method call".to_string(),
         ExprKind::Range { .. } => "a range outside a `for` loop".to_string(),
         ExprKind::Try { .. } => "`?`".to_string(),
-        ExprKind::FnValue { .. } => "a function used as a value".to_string(),
         ExprKind::Match { .. } => "`match`".to_string(),
         ExprKind::Scope(_) => "`scope`".to_string(),
         ExprKind::Unsupported(what) => what.clone(),

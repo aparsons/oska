@@ -1285,6 +1285,16 @@ pub fn panic_binary(start: String, a: Int, mid: String, b: Int, end: String, uns
     exit(101)
 }
 
+// Panic with the report `start`, the text `message`, then `end`: for a
+// message only known at run time, such as the `requires` clause a call
+// through a function value broke.
+pub fn panic_message(start: String, end: String, message: String) {
+    let _ = write_text(2, start)
+    let _ = write_text(2, message)
+    let _ = write_text(2, end)
+    exit(101)
+}
+
 // ---- The stack -------------------------------------------------------------
 
 // A new stack of `size` bytes, a multiple of 65536, with a guard region

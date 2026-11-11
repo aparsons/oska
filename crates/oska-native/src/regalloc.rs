@@ -240,7 +240,12 @@ fn intervals(function: &Function) -> Vec<Option<Interval>> {
     let calls: Vec<usize> = hot
         .iter()
         .enumerate()
-        .filter(|(_, inst)| matches!(inst, Inst::Call { .. } | Inst::Syscall { .. }))
+        .filter(|(_, inst)| {
+            matches!(
+                inst,
+                Inst::Call { .. } | Inst::CallIndirect { .. } | Inst::Syscall { .. }
+            )
+        })
         .map(|(i, _)| i + 1)
         .collect();
     for range in ranges.iter_mut().flatten() {

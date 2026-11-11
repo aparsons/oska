@@ -56,6 +56,7 @@ fn inlinable(f: &Function) -> bool {
                     inst,
                     Inst::Label(_)
                         | Inst::Call { .. }
+                        | Inst::CallIndirect { .. }
                         | Inst::Syscall { .. }
                         | Inst::CallOnStack { .. }
                         | Inst::Return(_)
@@ -405,6 +406,7 @@ fn rename_def(inst: &mut Inst, to: Temp) {
         | Inst::Compare { dst, .. }
         | Inst::Load { dst, .. }
         | Inst::Call { dst, .. }
+        | Inst::CallIndirect { dst, .. }
         | Inst::Syscall { dst, .. }
         | Inst::Arith { dst, .. }
         | Inst::Second { dst }
@@ -439,6 +441,10 @@ fn rename_uses(inst: &mut Inst, from: Temp, to: Temp) {
             swap(src);
         }
         Inst::Call { args, .. } | Inst::Syscall { args, .. } => args.iter_mut().for_each(swap),
+        Inst::CallIndirect { target, args, .. } => {
+            swap(target);
+            args.iter_mut().for_each(swap);
+        }
         Inst::JumpIfZero { cond, .. } => swap(cond),
         Inst::CallOnStack { stack, .. } => swap(stack),
         Inst::Return(value) => swap(value),

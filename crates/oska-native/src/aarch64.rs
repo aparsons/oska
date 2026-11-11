@@ -43,7 +43,9 @@ use crate::regalloc::{self, Loc};
 pub struct Text {
     /// The instructions, each one word.
     pub words: Vec<u32>,
-    /// The instructions that address data, for the file layout to patch.
+    /// The instructions that address data or code, for the file layout
+    /// to patch. A [`Symbol::Function`] here holds the index of the
+    /// function's first instruction in [`Text::words`], not its id.
     pub fixups: Vec<Fixup>,
     /// The instruction the process starts at, by index.
     pub entry: usize,
@@ -73,6 +75,12 @@ pub fn emit(module: &Module) -> Result<Text, String> {
         }
         emitter.words[at] = BL | (offset as u32 & 0x03ff_ffff);
     }
+    for fixup in &mut emitter.fixups {
+        if let Symbol::Function(callee) = fixup.symbol {
+            let start = starts.get(callee).copied().unwrap_or_default();
+            fixup.symbol = Symbol::Function(start);
+        }
+    }
     Ok(Text {
         words: emitter.words,
         fixups: emitter.fixups,
@@ -98,6 +106,8 @@ const XZR: u32 = 31;
 
 // Fixed instructions.
 const BL: u32 = 0x9400_0000;
+/// `blr xn`, with `n` at bit 5.
+const BLR: u32 = 0xd63f_0000;
 const B: u32 = 0x1400_0000;
 const B_COND: u32 = 0x5400_0000;
 const CBZ: u32 = 0xb400_0000;
@@ -440,6 +450,14 @@ impl Emitter {
                 self.arguments(args);
                 self.calls.push((self.words.len(), *callee));
                 self.put(BL);
+                self.write(*dst, X0);
+            }
+            Inst::CallIndirect { dst, target, args } => {
+                // `x9` is no temporary's and no argument's: the moves
+                // into the argument registers leave it alone.
+                self.read_into(X9, *target);
+                self.arguments(args);
+                self.put(BLR | (X9 << 5));
                 self.write(*dst, X0);
             }
             Inst::Syscall { dst, number, args } => {

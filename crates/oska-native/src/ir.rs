@@ -65,6 +65,9 @@ pub enum Symbol {
     /// An offset into the zero-initialised writable data, where the
     /// runtime keeps its state, such as the allocator's free lists.
     Data(u32),
+    /// The code of a function: where a function value's code pointer
+    /// points ([`Inst::CallIndirect`]).
+    Function(FnId),
 }
 
 /// An integer type, as checked arithmetic sees it: its width in bits and
@@ -235,6 +238,14 @@ pub enum Inst {
         callee: FnId,
         args: Vec<Temp>,
     },
+    /// `dst =` the function whose code is at the address `target` (made by
+    /// an [`Inst::Addr`] of a [`Symbol::Function`]), called with `args`:
+    /// a call of a function value. At most [`MAX_ARGS`] arguments.
+    CallIndirect {
+        dst: Temp,
+        target: Temp,
+        args: Vec<Temp>,
+    },
     /// `dst =` the Linux system call `number` with `args` (at most 6): the
     /// kernel's raw result, negative `errno` on failure.
     Syscall {
@@ -339,6 +350,7 @@ impl Inst {
             | Inst::Compare { dst, .. }
             | Inst::Load { dst, .. }
             | Inst::Call { dst, .. }
+            | Inst::CallIndirect { dst, .. }
             | Inst::Syscall { dst, .. }
             | Inst::Arith { dst, .. }
             | Inst::Second { dst }
@@ -389,6 +401,11 @@ impl Inst {
                 each(dst);
                 args.iter_mut().for_each(each);
             }
+            Inst::CallIndirect { dst, target, args } => {
+                each(dst);
+                each(target);
+                args.iter_mut().for_each(each);
+            }
             Inst::JumpIfZero { cond, .. } => each(cond),
             Inst::CallOnStack { stack, .. } => each(stack),
             Inst::Return(value) => each(value),
@@ -415,6 +432,9 @@ impl Inst {
             Inst::Load { base, .. } => vec![*base],
             Inst::Store { base, src, .. } => vec![*base, *src],
             Inst::Call { args, .. } | Inst::Syscall { args, .. } => args.clone(),
+            Inst::CallIndirect { target, args, .. } => std::iter::once(*target)
+                .chain(args.iter().copied())
+                .collect(),
             Inst::JumpIfZero { cond, .. } => vec![*cond],
             Inst::CallOnStack { stack, .. } => vec![*stack],
             Inst::Return(value) => vec![*value],
