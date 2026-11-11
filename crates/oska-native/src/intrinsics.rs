@@ -53,6 +53,10 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     ("String.starts_with", Prelude::Runtime("string_starts_with")),
     ("String.ends_with", Prelude::Runtime("string_ends_with")),
     ("String.trim", Prelude::Runtime("string_trim")),
+    (
+        "String.to_lowercase",
+        Prelude::Runtime("string_to_lowercase"),
+    ),
     ("String.replace", Prelude::Runtime("string_replace")),
     (
         "String.slice",

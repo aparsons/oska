@@ -333,6 +333,75 @@ fn text_surviving_many_copies_and_frees_stays_intact() {
 }
 
 #[test]
+fn lowercase_maps_each_character_on_its_own() {
+    assert_prints(
+        "text_lowercase",
+        "    let ascii = \"ABC xyz 123 @[`\\{\"\n    \
+         let latin = \"ÀÉÎÕÜ ÞÐ ß ÿ Ÿ\"\n    \
+         let greek = \"ΑΒΓ ΩΣ ΟΔΥΣΣΕΥΣ Σ\"\n    \
+         let cyrillic = \"ПРИВЕТ ЀЏ\"\n    \
+         let dotted = \"İstanbul İ\"\n    \
+         let extended = \"ĀĂĄ ǅ ẞ Ⱥ Ⴀ Ꭰ 𐐀 𞤀\"\n    \
+         let plain = \"日本 😀 already lower\"\n    \
+         let empty = \"\"\n    \
+         show(io, ascii.to_lowercase())\n    \
+         show(io, latin.to_lowercase())\n    \
+         show(io, greek.to_lowercase())\n    \
+         show(io, cyrillic.to_lowercase())\n    \
+         show(io, dotted.to_lowercase())\n    \
+         show(io, extended.to_lowercase())\n    \
+         show(io, plain.to_lowercase())\n    \
+         bracket(io, empty.to_lowercase())",
+        "abc xyz 123 @[`{\nàéîõü þð ß ÿ ÿ\nαβγ ωσ οδυσσευσ σ\nпривет ѐџ\n\
+         i\u{307}stanbul i\u{307}\nāăą ǆ ß ⱥ ⴀ ꭰ 𐐨 𞤢\n日本 😀 already lower\n[]\n",
+    );
+}
+
+/// The table in `std.rt` is Rust's `char::to_lowercase` for every
+/// character: the single-character mappings (U+0130 is the one that
+/// gives two, which the runtime handles itself).
+#[test]
+fn the_lowercase_table_is_rusts_for_every_character() {
+    let source = oska_check::STD_RT_SOURCE;
+    let start = source
+        .find("fn lowercase_table() -> String {\n    \"")
+        .expect("the table")
+        + "fn lowercase_table() -> String {\n    \"".len();
+    let table = &source[start..start + source[start..].find('"').expect("its end")];
+    assert_eq!(table.len() % 13, 0);
+    let hex = |from: usize, digits: usize| {
+        i64::from_str_radix(&table[from..from + digits], 16).expect("hex digits")
+    };
+    let mut mapped = std::collections::BTreeMap::new();
+    for record in 0..table.len() / 13 {
+        let at = record * 13;
+        let (first, count, step, delta) = (
+            hex(at, 5),
+            hex(at + 5, 2),
+            hex(at + 7, 1),
+            hex(at + 8, 5) - 0x40000,
+        );
+        for k in 0..count {
+            let c = first + k * step;
+            assert!(mapped.insert(c, c + delta).is_none(), "U+{c:X} twice");
+        }
+    }
+    for cp in 0..=0x10FFFFu32 {
+        let Some(c) = char::from_u32(cp) else {
+            continue;
+        };
+        let lower: Vec<char> = c.to_lowercase().collect();
+        let expected = if cp == 0x130 {
+            None
+        } else {
+            assert_eq!(lower.len(), 1, "U+{cp:X}");
+            (lower[0] != c).then_some(lower[0] as i64)
+        };
+        assert_eq!(mapped.get(&i64::from(cp)).copied(), expected, "U+{cp:X}");
+    }
+}
+
+#[test]
 fn untrusted_text_has_the_same_operations() {
     let src = format!(
         "{HELPERS}\n{}",
@@ -362,4 +431,49 @@ fn main(io: Stdout) {
         outcome.stdout, "5 8\n[é ünï]\ntrue\ntrue\n10 16\n[é ünïé ünï]\ntrue\ntrue\n",
         "{outcome:#?}"
     );
+}
+
+/// Methods that give or take a `List`, and `parse_int`, which gives an
+/// `Option`, cannot be built until lists and enums have a native
+/// representation (#132, #130): `oskac build` refuses them with `E0390`,
+/// naming the method, and exits 2.
+#[test]
+fn methods_that_need_lists_or_options_are_refused_cleanly() {
+    for (method, call) in [
+        ("String.split", "text.split(\",\")"),
+        ("String.lines", "text.lines()"),
+        ("String.chars", "text.chars()"),
+        ("String.join", "text.join(parts)"),
+        ("String.parse_int", "text.parse_int()"),
+    ] {
+        // `join` needs a list to take, which is refused first.
+        let parts = if method == "String.join" {
+            "    let parts = [text]\n"
+        } else {
+            ""
+        };
+        let src = format!(
+            "fn main(io: Stdout) {{\n    let text = \"a,b\"\n{parts}    let _ = {call}\n}}\n"
+        );
+        let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join("native_text_refusals")
+            .join(method);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a directory");
+        std::fs::write(dir.join("main.osk"), src).expect("the source");
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_oskac"))
+            .args(["build", "main.osk"])
+            .current_dir(&dir)
+            .output()
+            .expect("oskac should run");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{method}: {stderr}");
+        assert!(stderr.contains("error[E0390]"), "{method}: {stderr}");
+        if method != "String.join" {
+            assert!(
+                stderr.contains(&format!("cannot compile `{method}` yet")),
+                "{method}: {stderr}"
+            );
+        }
+    }
 }

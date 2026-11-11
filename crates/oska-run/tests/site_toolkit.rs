@@ -263,5 +263,5 @@ fn to_lowercase_lowers_every_letter_and_keeps_the_rest() {
     io.println(\"Untrusted DATA, Ünïcode & ΣΑΣ: 42!\".to_lowercase())
 }
 ";
-    assert_runs(src, &[], "untrusted data, ünïcode & σας: 42!\n");
+    assert_runs(src, &[], "untrusted data, ünïcode & σασ: 42!\n");
 }
