@@ -19,7 +19,7 @@
 //!   (each use weighted by how deeply it is nested in loops) goes to a
 //!   stack slot.
 
-use crate::ir::{Function, Inst, Label, Temp};
+use crate::ir::{Function, Inst, Temp};
 
 /// Where a temporary lives for the whole function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,10 +34,11 @@ pub enum Loc {
 /// function that uses them.
 pub const CALLEE_SAVED: [u32; 9] = [19, 20, 21, 22, 23, 24, 25, 26, 27];
 
-/// The registers that hold temporaries between calls. They are not the
-/// argument registers, so moving arguments into place never overwrites
-/// one.
-pub const CALLER_SAVED: [u32; 4] = [12, 13, 14, 15];
+/// The registers that hold temporaries between calls: arguments are put
+/// in place, and parameters taken, by parallel moves, so an argument
+/// register may hold one too. `x0` and `x1` do not: a call's results
+/// arrive there.
+pub const CALLER_SAVED: [u32; 11] = [12, 13, 14, 15, 2, 3, 4, 5, 6, 7, 8];
 
 /// The locations of a function's temporaries.
 #[derive(Debug)]
@@ -135,17 +136,6 @@ pub fn allocate(function: &Function) -> Allocation {
     Allocation { locs, slots, saved }
 }
 
-/// The labels `inst` may jump to.
-fn targets(inst: &Inst) -> Option<Label> {
-    match inst {
-        Inst::Jump(label) => Some(*label),
-        Inst::JumpIfZero { target, .. } | Inst::Branch { target, .. } => Some(*target),
-        Inst::Arith { overflow, .. } => Some(*overflow),
-        Inst::Enter { exhausted } => Some(*exhausted),
-        _ => None,
-    }
-}
-
 /// The live interval of each temporary that the hot path writes or
 /// reads; `None` for those only cold blocks use, which get slots.
 fn intervals(function: &Function) -> Vec<Option<Interval>> {
@@ -167,7 +157,7 @@ fn intervals(function: &Function) -> Vec<Option<Interval>> {
         }
     }
     for (i, inst) in hot.iter().enumerate() {
-        if let Some(target) = targets(inst) {
+        if let Some(target) = inst.target() {
             if let Some(from) = jumped_from.get_mut(target as usize) {
                 from.get_or_insert(i + 1);
             }

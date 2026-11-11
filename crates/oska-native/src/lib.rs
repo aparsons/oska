@@ -10,7 +10,9 @@
 //!    represented and `intrinsics.rs` how body-less functions are
 //!    implemented. Anything the backend cannot compile yet is refused
 //!    here, with `E0390`.
-//! 2. `aarch64.rs`: instruction selection and encoding.
+//!    `optimize.rs` then cleans up the code and inlines small functions.
+//! 2. `aarch64.rs`: register allocation (`regalloc.rs`), instruction
+//!    selection and encoding.
 //! 3. `elf.rs`: the file.
 //!
 //! The crate reads only the checked program, never the syntax tree, has
@@ -26,6 +28,7 @@ mod intrinsics;
 mod ir;
 mod layout;
 mod lower;
+mod optimize;
 mod regalloc;
 
 /// The codes the native backend reports.

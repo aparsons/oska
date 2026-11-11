@@ -17,8 +17,10 @@
 //! - `x9`–`x11`, `x16` and `x17` are scratch within one instruction's
 //!   code;
 //! - `x19`–`x27` hold temporaries ([`regalloc::CALLEE_SAVED`]) and are
-//!   callee-saved: a function saves those it uses; `x12`–`x15` hold
-//!   temporaries no call happens during ([`regalloc::CALLER_SAVED`]);
+//!   callee-saved: a function saves those it uses; `x2`–`x8` and
+//!   `x12`–`x15` hold temporaries no call happens during
+//!   ([`regalloc::CALLER_SAVED`]): arguments and parameters move to and
+//!   from them as one parallel move ([`Emitter::parallel_move`]);
 //! - `x28` counts how many more calls may nest ([`Inst::Enter`]): the
 //!   entry point sets it, and nothing else writes it;
 //! - `x29` is the frame pointer and `x30` the link register, saved in
@@ -154,12 +156,11 @@ impl Emitter {
         if frame & 0xfff != 0 {
             self.put(sub_imm(SP, SP, frame & 0xfff, false));
         }
-        for (i, &register) in self.saved.clone().iter().enumerate() {
-            self.put(stur(register, FP, -8 * (i as i32 + 1)));
-        }
-        for param in 0..function.params.min(8) {
-            self.write(param, param);
-        }
+        self.save_registers(true);
+        let params: Vec<(Loc, Loc)> = (0..function.params.min(8))
+            .map(|param| (self.loc(param), Loc::Reg(param)))
+            .collect();
+        self.parallel_move(params);
         let mut labels = vec![0usize; function.labels as usize];
         self.jumps.clear();
         for inst in &function.insts {
@@ -208,6 +209,65 @@ impl Emitter {
         match self.loc(temp) {
             Loc::Reg(register) => self.mov(target, register),
             Loc::Slot(slot) => self.put(load_slot(target, slot)),
+        }
+    }
+
+    /// Put `args` in the argument registers, `x0` on.
+    fn arguments(&mut self, args: &[Temp]) {
+        let moves = args
+            .iter()
+            .enumerate()
+            .map(|(register, &arg)| (Loc::Reg(register as u32), self.loc(arg)))
+            .collect();
+        self.parallel_move(moves);
+    }
+
+    /// Make each `(to, from)` move as if all at once: a register that is
+    /// another move's source is written only after that move is made,
+    /// and a cycle of registers is broken through `x16`.
+    fn parallel_move(&mut self, moves: Vec<(Loc, Loc)>) {
+        let mut pending: Vec<(Loc, Loc)> =
+            moves.into_iter().filter(|(to, from)| to != from).collect();
+        while !pending.is_empty() {
+            let free = (0..pending.len()).find(|&i| {
+                let to = pending[i].0;
+                !matches!(to, Loc::Reg(_))
+                    || pending
+                        .iter()
+                        .enumerate()
+                        .all(|(j, &(_, from))| j == i || from != to)
+            });
+            match free {
+                Some(i) => {
+                    let (to, from) = pending.remove(i);
+                    self.move_loc(to, from);
+                }
+                None => {
+                    // Every destination is a pending source: a cycle.
+                    let held = pending[0].1;
+                    self.move_loc(Loc::Reg(X16), held);
+                    for (_, from) in pending.iter_mut() {
+                        if *from == held {
+                            *from = Loc::Reg(X16);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// One move between locations; a slot to a slot goes through `x17`.
+    fn move_loc(&mut self, to: Loc, from: Loc) {
+        match (to, from) {
+            (Loc::Reg(to), Loc::Reg(from)) => self.mov(to, from),
+            (Loc::Reg(to), Loc::Slot(slot)) => self.put(load_slot(to, slot)),
+            (Loc::Slot(slot), Loc::Reg(from)) => self.put(store_slot(from, slot)),
+            (Loc::Slot(to), Loc::Slot(from)) => {
+                if to != from {
+                    self.put(load_slot(X17, from));
+                    self.put(store_slot(X17, to));
+                }
+            }
         }
     }
 
@@ -281,6 +341,65 @@ impl Emitter {
                 self.put(reg3(base, r, a, b));
                 self.write(*dst, r);
             }
+            Inst::BinaryImm { op, dst, lhs, imm } => {
+                let a = self.read(*lhs, X9);
+                let r = self.target(*dst, X9);
+                let n = (*imm as u32) & 0xfff;
+                let word = match op {
+                    BinOp::Sub => sub_imm(r, a, n, false),
+                    // `lsl` is `ubfm r, a, #(-n mod 64), #(63 - n)`.
+                    BinOp::Shl => bitfield(UBFM, r, a, (64 - n) % 64, 63 - (n & 63)),
+                    BinOp::Shr => bitfield(UBFM, r, a, n & 63, 63),
+                    BinOp::Sar => bitfield(SBFM, r, a, n & 63, 63),
+                    _ => add_imm(r, a, n, false),
+                };
+                self.put(word);
+                self.write(*dst, r);
+            }
+            Inst::CompareImm {
+                cond,
+                dst,
+                lhs,
+                imm,
+            } => {
+                let a = self.read(*lhs, X9);
+                let r = self.target(*dst, X9);
+                self.put(cmp_imm(a, *imm));
+                self.put(0x9a9f_07e0 | ((condition(*cond) ^ 1) << 12) | r);
+                self.write(*dst, r);
+            }
+            Inst::BranchImm {
+                cond,
+                lhs,
+                imm,
+                target,
+            } => {
+                let a = self.read(*lhs, X9);
+                self.put(cmp_imm(a, *imm));
+                self.jump(B_COND | condition(*cond), *target, Jump::Short);
+            }
+            Inst::ArithImm {
+                op,
+                int,
+                dst,
+                lhs,
+                imm,
+                overflow,
+            } => {
+                let a = self.read(*lhs, X9);
+                let n = (*imm as u32) & 0xfff;
+                // `adds`/`subs x16, a, #n`, then the flag that says the
+                // result does not fit.
+                let (word, flag) = match (op, int.signed) {
+                    (Arith::Sub, true) => (0xf100_0000, VS),
+                    (Arith::Sub, false) => (0xf100_0000, LO),
+                    (_, true) => (0xb100_0000, VS),
+                    (_, false) => (0xb100_0000, HS),
+                };
+                self.put(word | n << 10 | a << 5 | X16);
+                self.jump(B_COND | flag, *overflow, Jump::Short);
+                self.write(*dst, X16);
+            }
             Inst::Compare {
                 cond,
                 dst,
@@ -317,17 +436,13 @@ impl Emitter {
                 self.memory(*width, false, v, b, *offset);
             }
             Inst::Call { dst, callee, args } => {
-                for (register, arg) in args.iter().enumerate() {
-                    self.read_into(register as u32, *arg);
-                }
+                self.arguments(args);
                 self.calls.push((self.words.len(), *callee));
                 self.put(BL);
                 self.write(*dst, X0);
             }
             Inst::Syscall { dst, number, args } => {
-                for (register, arg) in args.iter().enumerate() {
-                    self.read_into(register as u32, *arg);
-                }
+                self.arguments(args);
                 self.put(movz(X8, u32::from(*number), 0));
                 self.put(SVC_0);
                 self.write(*dst, X0);
@@ -384,10 +499,10 @@ impl Emitter {
                 self.epilogue();
             }
             Inst::ReturnPair { value, second } => {
-                // No temporary lives in `x0` or `x1`, so neither read
-                // overwrites the other's operand.
-                self.read_into(X1, *second);
-                self.read_into(X0, *value);
+                self.parallel_move(vec![
+                    (Loc::Reg(X1), self.loc(*second)),
+                    (Loc::Reg(X0), self.loc(*value)),
+                ]);
                 self.epilogue();
             }
             // Straight after the call, before anything touches `x1`.
@@ -397,12 +512,28 @@ impl Emitter {
         }
     }
 
+    /// Store (or, when not `store`, load) the callee-saved registers the
+    /// function uses, below the frame record: register `i` of
+    /// [`Emitter::saved`] at `[x29 - 8 * (i + 1)]`, two at a time.
+    fn save_registers(&mut self, store: bool) {
+        let saved = self.saved.clone();
+        for (pair, registers) in saved.chunks(2).enumerate() {
+            let offset = -16 * (pair as i32 + 1);
+            let word = match (registers, store) {
+                (&[low, high], true) => pair_access(STP, high, low, offset),
+                (&[low, high], false) => pair_access(LDP, high, low, offset),
+                (&[only], true) => stur(only, FP, offset + 8),
+                (&[only], false) => ldur(only, FP, offset + 8),
+                _ => continue,
+            };
+            self.put(word);
+        }
+    }
+
     /// Restore the callee-saved registers and the caller's frame, and
     /// return.
     fn epilogue(&mut self) {
-        for (i, &register) in self.saved.clone().iter().enumerate() {
-            self.put(ldur(register, FP, -8 * (i as i32 + 1)));
-        }
+        self.save_registers(false);
         self.put(add_imm(SP, FP, 0, false));
         self.put(POP_FRAME);
         self.put(RET);
@@ -560,6 +691,28 @@ fn cmp(rn: u32, rm: u32) -> u32 {
     reg3(0xeb00_0000, XZR, rn, rm)
 }
 
+/// `cmp rn, #imm`, or `cmn rn, #-imm` for a negative `imm`; `|imm|` is
+/// below 4096.
+fn cmp_imm(rn: u32, imm: i64) -> u32 {
+    let (base, n) = if imm < 0 {
+        (0xb100_0000, (-imm) as u32)
+    } else {
+        (0xf100_0000, imm as u32)
+    };
+    base | (n & 0xfff) << 10 | rn << 5 | XZR
+}
+
+/// `ubfm`, 64-bit.
+const UBFM: u32 = 0xd340_0000;
+/// `sbfm`, 64-bit.
+const SBFM: u32 = 0x9340_0000;
+
+/// A bitfield move (`UBFM` or `SBFM`) of `rn` to `rd` with `immr` and
+/// `imms`.
+fn bitfield(base: u32, rd: u32, rn: u32, immr: u32, imms: u32) -> u32 {
+    base | (immr & 63) << 16 | (imms & 63) << 10 | rn << 5 | rd
+}
+
 /// `madd rd, rn, rm, ra`: `ra + rn * rm`.
 fn madd(rd: u32, rn: u32, rm: u32, ra: u32) -> u32 {
     0x9b00_0000 | rm << 16 | ra << 10 | rn << 5 | rd
@@ -568,6 +721,17 @@ fn madd(rd: u32, rn: u32, rm: u32, ra: u32) -> u32 {
 /// `msub rd, rn, rm, ra`: `ra - rn * rm`.
 fn msub(rd: u32, rn: u32, rm: u32, ra: u32) -> u32 {
     0x9b00_8000 | rm << 16 | ra << 10 | rn << 5 | rd
+}
+
+/// `stp`, 64-bit, signed offset.
+const STP: u32 = 0xa900_0000;
+/// `ldp`, 64-bit, signed offset.
+const LDP: u32 = 0xa940_0000;
+
+/// `stp`/`ldp first, second, [x29, #offset]`: `first` at `offset`,
+/// `second` 8 bytes above, for an offset a multiple of 8 from -512 to 504.
+fn pair_access(base: u32, first: u32, second: u32, offset: i32) -> u32 {
+    base | (((offset / 8) as u32) & 0x7f) << 15 | second << 10 | FP << 5 | first
 }
 
 /// `stur rt, [rn, #offset]`, for an offset from -256 to 255.

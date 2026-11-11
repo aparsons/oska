@@ -83,7 +83,9 @@ pub fn rt_mem_globals() -> Int
 //   0 to 7  the allocator's free lists, one per size class: a block of
 //           class c is 16 << c bytes, header included;
 //   8       the next free byte of the chunk blocks are carved from;
-//   9       the end of that chunk.
+//   9       the end of that chunk;
+//   10      a large object's mapping kept for reuse when it was freed, or 0;
+//   11      that mapping's length.
 //
 // Every object the allocator gives out is preceded by a header word: its
 // block's size class, or for an object too large for any class, minus
@@ -137,8 +139,17 @@ pub fn alloc(size: Int) -> Int {
     let block = rt_mem_add(size, 8)
     var at = 0
     if block > largest_block() {
-        let length = rt_mem_and(rt_mem_add(block, 65535), -65536)
-        at = map(0, length, 3, private_anonymous())
+        var length = rt_mem_and(rt_mem_add(block, 65535), -65536)
+        // The kept mapping, if it fits without wasting more than half.
+        let kept = rt_mem_load64(global(10))
+        let kept_length = rt_mem_load64(global(11))
+        if kept != 0 && kept_length >= length && rt_mem_shr(kept_length, 1) <= length {
+            rt_mem_store64(global(10), 0)
+            at = kept
+            length = kept_length
+        } else {
+            at = map(0, length, 3, private_anonymous())
+        }
         rt_mem_store64(at, rt_mem_sub(0, length))
     } else {
         var class = 0
@@ -178,7 +189,15 @@ pub fn free(object: Int) {
     let at = rt_mem_sub(object, 8)
     let class = rt_mem_load64(at)
     if class < 0 {
-        let _ = rt_sys_munmap(at, rt_mem_sub(0, class))
+        // The last large object freed keeps its mapping, for the next to
+        // reuse: a program that makes one large text after another maps
+        // and faults in fresh memory far less often.
+        let kept = rt_mem_load64(global(10))
+        if kept != 0 {
+            let _ = rt_sys_munmap(kept, rt_mem_load64(global(11)))
+        }
+        rt_mem_store64(global(10), at)
+        rt_mem_store64(global(11), rt_mem_sub(0, class))
         return
     }
     let list = global(class)
@@ -187,35 +206,77 @@ pub fn free(object: Int) {
 }
 
 // Copy the `count` bytes at `from` to `to`, which do not overlap, a word
-// at a time as far as they go.
+// at a time; the last few bytes by one word, or smaller pieces, that ends
+// where they do (it may write again bytes already written, with the same
+// values), so no access reaches past either end.
 fn copy_bytes(to: Int, from: Int, count: Int) {
-    var i = 0
-    while rt_mem_add(i, 8) <= count {
-        rt_mem_store64(rt_mem_add(to, i), rt_mem_load64(rt_mem_add(from, i)))
-        i = rt_mem_add(i, 8)
+    if count >= 8 {
+        var i = 0
+        // Four words at a time while they last, then one.
+        while rt_mem_add(i, 32) <= count {
+            let a = rt_mem_load64(rt_mem_add(from, i))
+            let b = rt_mem_load64(rt_mem_add(from, rt_mem_add(i, 8)))
+            let c = rt_mem_load64(rt_mem_add(from, rt_mem_add(i, 16)))
+            let d = rt_mem_load64(rt_mem_add(from, rt_mem_add(i, 24)))
+            rt_mem_store64(rt_mem_add(to, i), a)
+            rt_mem_store64(rt_mem_add(to, rt_mem_add(i, 8)), b)
+            rt_mem_store64(rt_mem_add(to, rt_mem_add(i, 16)), c)
+            rt_mem_store64(rt_mem_add(to, rt_mem_add(i, 24)), d)
+            i = rt_mem_add(i, 32)
+        }
+        while rt_mem_add(i, 8) <= count {
+            rt_mem_store64(rt_mem_add(to, i), rt_mem_load64(rt_mem_add(from, i)))
+            i = rt_mem_add(i, 8)
+        }
+        if i < count {
+            let tail = rt_mem_sub(count, 8)
+            rt_mem_store64(rt_mem_add(to, tail), rt_mem_load64(rt_mem_add(from, tail)))
+        }
+        return
     }
-    while i < count {
-        rt_mem_store8(rt_mem_add(to, i), rt_mem_load8(rt_mem_add(from, i)))
-        i = rt_mem_add(i, 1)
+    if count >= 4 {
+        rt_mem_store32(to, rt_mem_load32(from))
+        let tail = rt_mem_sub(count, 4)
+        rt_mem_store32(rt_mem_add(to, tail), rt_mem_load32(rt_mem_add(from, tail)))
+        return
+    }
+    if count >= 2 {
+        rt_mem_store16(to, rt_mem_load16(from))
+        let tail = rt_mem_sub(count, 2)
+        rt_mem_store16(rt_mem_add(to, tail), rt_mem_load16(rt_mem_add(from, tail)))
+        return
+    }
+    if count == 1 {
+        rt_mem_store8(to, rt_mem_load8(from))
     }
 }
 
-// Whether the `count` bytes at `a` and at `b` are the same.
+// Whether the `count` bytes at `a` and at `b` are the same: a word at a
+// time, the last few bytes as `copy_bytes` copies them.
 fn bytes_equal(a: Int, b: Int, count: Int) -> Bool {
-    var i = 0
-    while rt_mem_add(i, 8) <= count {
-        if rt_mem_load64(rt_mem_add(a, i)) != rt_mem_load64(rt_mem_add(b, i)) {
-            return false
+    if count >= 8 {
+        var i = 0
+        while rt_mem_add(i, 8) <= count {
+            if rt_mem_load64(rt_mem_add(a, i)) != rt_mem_load64(rt_mem_add(b, i)) {
+                return false
+            }
+            i = rt_mem_add(i, 8)
         }
-        i = rt_mem_add(i, 8)
-    }
-    while i < count {
-        if rt_mem_load8(rt_mem_add(a, i)) != rt_mem_load8(rt_mem_add(b, i)) {
-            return false
+        if i == count {
+            return true
         }
-        i = rt_mem_add(i, 1)
+        let tail = rt_mem_sub(count, 8)
+        return rt_mem_load64(rt_mem_add(a, tail)) == rt_mem_load64(rt_mem_add(b, tail))
     }
-    true
+    if count >= 4 {
+        let tail = rt_mem_sub(count, 4)
+        return rt_mem_load32(a) == rt_mem_load32(b) && rt_mem_load32(rt_mem_add(a, tail)) == rt_mem_load32(rt_mem_add(b, tail))
+    }
+    if count >= 2 {
+        let tail = rt_mem_sub(count, 2)
+        return rt_mem_load16(a) == rt_mem_load16(b) && rt_mem_load16(rt_mem_add(a, tail)) == rt_mem_load16(rt_mem_add(b, tail))
+    }
+    count == 0 || rt_mem_load8(a) == rt_mem_load8(b)
 }
 
 // Count one more reference to the object at `object`, unless it is static.
@@ -349,17 +410,19 @@ pub fn string_len(text: String) -> Int {
 fn chars_in(at: Int, count: Int) -> Int {
     var chars = 0
     var i = 0
+    // A continuation byte has bit 7 set and bit 6 clear. `marks` has a 1 in
+    // the low bit of each such byte (0x0101010101010101 masks them), and the
+    // sums add the eight bytes up in the lowest.
+    let low_bits = 72340172838076673
+    let all = -1
+    let byte = 255
     while rt_mem_add(i, 8) <= count {
         let word = rt_mem_load64(rt_mem_add(at, i))
-        // A continuation byte has bit 7 set and bit 6 clear. `marks` has a
-        // 1 in the low bit of each such byte (0x0101010101010101 masks
-        // them), and the sums add the eight bytes up in the lowest.
-        let low_bits = 72340172838076673
-        let marks = rt_mem_and(rt_mem_and(rt_mem_shr(word, 7), rt_mem_xor(rt_mem_shr(word, 6), -1)), low_bits)
+        let marks = rt_mem_and(rt_mem_and(rt_mem_shr(word, 7), rt_mem_xor(rt_mem_shr(word, 6), all)), low_bits)
         let sum2 = rt_mem_add(marks, rt_mem_shr(marks, 8))
         let sum4 = rt_mem_add(sum2, rt_mem_shr(sum2, 16))
         let sum8 = rt_mem_add(sum4, rt_mem_shr(sum4, 32))
-        chars = rt_mem_add(chars, rt_mem_sub(8, rt_mem_and(sum8, 255)))
+        chars = rt_mem_add(chars, rt_mem_sub(8, rt_mem_and(sum8, byte)))
         i = rt_mem_add(i, 8)
     }
     while i < count {
@@ -389,6 +452,10 @@ fn char_offset(at: Int, count: Int, n: Int) -> Int {
 // The byte offset of the first occurrence of the `needle_length` bytes at
 // `needle`, not before byte `from`, in the `length` bytes at `hay`, or -1.
 // `needle_length` is not 0.
+//
+// Eight bytes at a time, it looks for the needle's first byte: a word with
+// none is skipped whole, and in one with some it goes straight to the
+// first, so only those bytes are compared with the needle.
 fn find_bytes(hay: Int, length: Int, needle: Int, needle_length: Int, from: Int) -> Int {
     let first = rt_mem_load8(needle)
     // The first byte in all eight bytes of a word.
@@ -398,19 +465,63 @@ fn find_bytes(hay: Int, length: Int, needle: Int, needle_length: Int, from: Int)
     let ones = 72340172838076673
     let highs = -9187201950435737472
     let last = length - needle_length
+    let all = -1
+    // How a place that starts with the first byte is checked: a needle of
+    // up to 8 bytes by two loads of `width` bytes that cover it (they may
+    // overlap), a longer one by `bytes_equal`.
+    let width = if needle_length > 8 {
+        0
+    } else if needle_length >= 4 {
+        4
+    } else if needle_length >= 2 {
+        2
+    } else {
+        1
+    }
+    let tail_at = needle_length - width
+    let head = if width == 4 { rt_mem_load32(needle) } else { rt_mem_load16(needle) }
+    let tail = if width == 4 { rt_mem_load32(rt_mem_add(needle, tail_at)) } else { rt_mem_load16(rt_mem_add(needle, tail_at)) }
     var i = from
     while i <= last {
-        let at = rt_mem_add(hay, i)
         if rt_mem_add(i, 8) <= length {
-            // A word with a zero byte after the xor has the first byte.
-            let x = rt_mem_xor(rt_mem_load64(at), pattern)
-            let zeros = rt_mem_and(rt_mem_and(rt_mem_sub(x, ones), rt_mem_xor(x, -1)), highs)
+            // After the xor, a byte equal to the first byte is zero. The
+            // lowest byte `zeros` marks (its top bit) is the first such;
+            // higher marks may be false.
+            let x = rt_mem_xor(rt_mem_load64(rt_mem_add(hay, i)), pattern)
+            var zeros = rt_mem_and(rt_mem_and(rt_mem_sub(x, ones), rt_mem_xor(x, all)), highs)
             if zeros == 0 {
                 i = rt_mem_add(i, 8)
                 continue
             }
+            // Skip to the lowest marked byte.
+            if rt_mem_shl(zeros, 32) == 0 {
+                zeros = rt_mem_shr(zeros, 32)
+                i = rt_mem_add(i, 4)
+            }
+            if rt_mem_shl(zeros, 48) == 0 {
+                zeros = rt_mem_shr(zeros, 16)
+                i = rt_mem_add(i, 2)
+            }
+            if rt_mem_shl(zeros, 56) == 0 {
+                i = rt_mem_add(i, 1)
+            }
+            if i > last {
+                return -1
+            }
+        } else if rt_mem_load8(rt_mem_add(hay, i)) != first {
+            i = rt_mem_add(i, 1)
+            continue
         }
-        if rt_mem_load8(at) == first && bytes_equal(at, needle, needle_length) {
+        let at = rt_mem_add(hay, i)
+        if width == 4 {
+            if rt_mem_load32(at) == head && rt_mem_load32(rt_mem_add(at, tail_at)) == tail {
+                return i
+            }
+        } else if width == 2 {
+            if rt_mem_load16(at) == head && rt_mem_load16(rt_mem_add(at, tail_at)) == tail {
+                return i
+            }
+        } else if width == 1 || bytes_equal(at, needle, needle_length) {
             return i
         }
         i = rt_mem_add(i, 1)
@@ -549,7 +660,9 @@ pub fn panic_repeat_long(start: String, end: String, text: String, times: Int) {
 }
 
 // `String.replace`: every occurrence of `from`, left to right and without
-// overlap, replaced by `to`. An empty `from` occurs nowhere.
+// overlap, replaced by `to`. An empty `from` occurs nowhere. Each
+// occurrence is found once: where they start is kept in a buffer of words,
+// which doubles as it fills, until the result's length is known.
 pub fn string_replace(text: String, from: String, to: String) -> String {
     let object = rt_mem_text(text)
     let old = rt_mem_text(from)
@@ -561,28 +674,43 @@ pub fn string_replace(text: String, from: String, to: String) -> String {
         return text
     }
     let data = text_data(object)
+    let old_data = text_data(old)
+    var capacity = 16
+    var positions = alloc(rt_mem_add(8, rt_mem_shl(capacity, 3)))
     var found = 0
-    var at = find_bytes(data, length, text_data(old), old_length, 0)
+    var at = find_bytes(data, length, old_data, old_length, 0)
     while at >= 0 {
-        found = found + 1
-        at = find_bytes(data, length, text_data(old), old_length, at + old_length)
+        if found == capacity {
+            let larger = alloc(rt_mem_add(8, rt_mem_shl(capacity, 4)))
+            copy_bytes(rt_mem_add(larger, 8), rt_mem_add(positions, 8), rt_mem_shl(capacity, 3))
+            free(positions)
+            positions = larger
+            capacity = rt_mem_shl(capacity, 1)
+        }
+        rt_mem_store64(rt_mem_add(positions, rt_mem_shl(rt_mem_add(found, 1), 3)), at)
+        found = rt_mem_add(found, 1)
+        at = find_bytes(data, length, old_data, old_length, rt_mem_add(at, old_length))
     }
     if found == 0 {
+        free(positions)
         return text
     }
     let result = text_new(length + found * (new_length - old_length))
+    let new_data = text_data(new)
     var out = text_data(result)
     var read = 0
-    at = find_bytes(data, length, text_data(old), old_length, 0)
-    while at >= 0 {
-        copy_bytes(out, rt_mem_add(data, read), at - read)
-        out = rt_mem_add(out, at - read)
-        copy_bytes(out, text_data(new), new_length)
+    var k = 0
+    while k < found {
+        at = rt_mem_load64(rt_mem_add(positions, rt_mem_shl(rt_mem_add(k, 1), 3)))
+        copy_bytes(out, rt_mem_add(data, read), rt_mem_sub(at, read))
+        out = rt_mem_add(out, rt_mem_sub(at, read))
+        copy_bytes(out, new_data, new_length)
         out = rt_mem_add(out, new_length)
-        read = at + old_length
-        at = find_bytes(data, length, text_data(old), old_length, read)
+        read = rt_mem_add(at, old_length)
+        k = rt_mem_add(k, 1)
     }
-    copy_bytes(out, rt_mem_add(data, read), length - read)
+    copy_bytes(out, rt_mem_add(data, read), rt_mem_sub(length, read))
+    free(positions)
     rt_mem_as_text(result)
 }
 

@@ -71,11 +71,8 @@ use oska_syntax::{Diagnostic, Span};
 use crate::intrinsics::{self, Check, Prelude, Runtime};
 use crate::ir::{self, Arith, BinOp, Cond, FnId, Inst, Label, Symbol, Temp, Width};
 use crate::layout::{self, Rodata};
+use crate::optimize;
 use crate::{codes, Locate, NOWHERE};
-
-/// The most temporaries a function may use: each has a stack slot
-/// addressed by a 12-bit scaled offset.
-const MAX_TEMPS: u32 = 4095;
 
 /// How deeply calls of the program's functions may nest before it
 /// panics with `P0021`: the interpreter's limit (`oska_run`'s
@@ -143,12 +140,22 @@ pub fn program(user: &Program, rt: &Program, locate: Locate) -> Result<ir::Modul
         functions: Vec::new(),
         queue: Vec::new(),
         rodata: Rodata::default(),
-        largest_frame: 0,
+        user_functions: Vec::new(),
     };
     let entry = lowering.entry()?;
     while let Some((instance, id, origin)) = lowering.queue.pop() {
         lowering.functions[id] = lowering.function(&instance, origin)?;
+        if matches!(
+            instance,
+            Instance::Function {
+                source: Source::User,
+                ..
+            }
+        ) {
+            lowering.user_functions.push(id);
+        }
     }
+    optimize::module(&mut lowering.functions);
     lowering.size_stack(entry);
     Ok(ir::Module {
         functions: lowering.functions,
@@ -171,9 +178,9 @@ struct Lowering<'p> {
     /// code that first reached them.
     queue: Vec<(Instance, FnId, Span)>,
     rodata: Rodata,
-    /// The most temporaries a function of the program uses: its frame
-    /// bounds every frame that recursion can stack up.
-    largest_frame: u32,
+    /// The program's own functions (not `std.rt`'s): their frames are
+    /// those recursion can stack up.
+    user_functions: Vec<FnId>,
 }
 
 impl<'p> Lowering<'p> {
@@ -241,10 +248,17 @@ impl<'p> Lowering<'p> {
     }
 
     /// Fill in the size of the stack `_start` maps: [`MAX_CALL_DEPTH`] of
-    /// the largest frame (its temporaries, the callee-saved registers and
-    /// the frame record), and [`STACK_RESERVE`].
+    /// the program's largest frame (its temporaries, the callee-saved
+    /// registers and the frame record), and [`STACK_RESERVE`].
     fn size_stack(&mut self, start: FnId) {
-        let frame = 8 * u64::from(self.largest_frame) + 8 * 9 + 32;
+        let largest = self
+            .user_functions
+            .iter()
+            .filter_map(|&id| self.functions.get(id))
+            .map(|f| f.temps)
+            .max()
+            .unwrap_or(0);
+        let frame = 8 * u64::from(largest) + 8 * 9 + 32;
         let size = (u64::from(MAX_CALL_DEPTH) * frame + STACK_RESERVE).next_multiple_of(1 << 16);
         if let Some(Inst::Const { value, .. }) = self.functions[start].insts.first_mut() {
             *value = size as i64;
@@ -345,11 +359,7 @@ impl<'p> Lowering<'p> {
         let params = body.temps;
         let value = body.expr(&function.body)?;
         body.leave_function(value)?;
-        let lowered = body.finish(&qualified(instance), params, function.body.span)?;
-        if source == Source::User {
-            self.largest_frame = self.largest_frame.max(lowered.temps);
-        }
-        Ok(lowered)
+        body.finish(&qualified(instance), params, function.body.span)
     }
 }
 
@@ -510,7 +520,7 @@ impl<'l, 'p> Body<'l, 'p> {
     }
 
     fn finish(mut self, name: &str, params: u32, span: Span) -> Result<ir::Function, Diagnostic> {
-        if self.temps > MAX_TEMPS {
+        if self.temps > ir::MAX_TEMPS {
             return Err(self.refuse(span, "a function this large"));
         }
         let cold = self.insts.len();
@@ -1211,13 +1221,9 @@ impl<'l, 'p> Body<'l, 'p> {
                 then_branch,
                 else_branch,
             } => {
-                let cond = self.expr(cond)?;
                 let result = self.temp();
                 let (otherwise, end) = (self.label(), self.label());
-                self.push(Inst::JumpIfZero {
-                    cond,
-                    target: otherwise,
-                });
+                self.branch_unless(cond, otherwise)?;
                 let then_value = self.expr(then_branch)?;
                 self.push(Inst::Copy {
                     dst: result,
@@ -1445,6 +1451,99 @@ impl<'l, 'p> Body<'l, 'p> {
         Ok(dst)
     }
 
+    /// Jump to `target` unless the condition `cond` holds: a comparison
+    /// of integers or `Bool`s is one compare-and-branch, and `&&`, `||`,
+    /// `implies` and `!` branch on their operands, without making a
+    /// `Bool` first.
+    fn branch_unless(&mut self, cond: &Expr, target: Label) -> Result<(), Diagnostic> {
+        self.branch_on(cond, false, target)
+    }
+
+    /// Jump to `target` when `cond` is `when`.
+    fn branch_on(&mut self, cond: &Expr, when: bool, target: Label) -> Result<(), Diagnostic> {
+        match &cond.kind {
+            ExprKind::Not(operand) => return self.branch_on(operand, !when, target),
+            ExprKind::Binary { op, lhs, rhs, .. } => match op {
+                // `a && b` is false when either is; `a || b` true when
+                // either is; `a implies b` is `!a || b`.
+                BinaryOp::And | BinaryOp::Or | BinaryOp::Implies => {
+                    let (first_negated, decided) = match op {
+                        BinaryOp::And => (false, false),
+                        BinaryOp::Or => (false, true),
+                        _ => (true, true),
+                    };
+                    if when == decided {
+                        // Either operand decides: jump on each.
+                        self.branch_on(lhs, when != first_negated, target)?;
+                        return self.branch_on(rhs, when, target);
+                    }
+                    // Both must agree: skip past when the first decides
+                    // the other way.
+                    let skip = self.label();
+                    self.branch_on(lhs, decided != first_negated, skip)?;
+                    self.branch_on(rhs, when, target)?;
+                    self.push(Inst::Label(skip));
+                    return Ok(());
+                }
+                BinaryOp::Eq
+                | BinaryOp::Ne
+                | BinaryOp::Lt
+                | BinaryOp::Le
+                | BinaryOp::Gt
+                | BinaryOp::Ge
+                    if text_equality(*op, &lhs.ty).is_none() =>
+                {
+                    let unsigned = match &lhs.ty {
+                        Type::Int(int) => int.min() == 0,
+                        Type::Bool | Type::Unit => false,
+                        _ => return self.branch_on_value(cond, when, target),
+                    };
+                    let mut test = comparison(*op, unsigned);
+                    if !when {
+                        test = test.negated();
+                    }
+                    let lhs = self.expr(lhs)?;
+                    let rhs = self.expr(rhs)?;
+                    self.push(Inst::Branch {
+                        cond: test,
+                        lhs,
+                        rhs,
+                        target,
+                    });
+                    return Ok(());
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        self.branch_on_value(cond, when, target)
+    }
+
+    /// Jump to `target` when the `Bool` `cond`, evaluated, is `when`.
+    fn branch_on_value(
+        &mut self,
+        cond: &Expr,
+        when: bool,
+        target: Label,
+    ) -> Result<(), Diagnostic> {
+        let value = self.expr(cond)?;
+        if when {
+            let zero = self.constant(0);
+            self.push(Inst::Branch {
+                cond: Cond::Ne,
+                lhs: value,
+                rhs: zero,
+                target,
+            });
+        } else {
+            self.push(Inst::JumpIfZero {
+                cond: value,
+                target,
+            });
+        }
+        Ok(())
+    }
+
     /// `&&`, `||` and `implies`, which evaluate `rhs` only when they need
     /// it.
     fn short_circuit(&mut self, op: BinaryOp, lhs: &Expr, rhs: &Expr) -> Result<Temp, Diagnostic> {
@@ -1569,8 +1668,7 @@ impl<'l, 'p> Body<'l, 'p> {
             Stmt::While { cond, body } => {
                 let (next, exit) = (self.label(), self.label());
                 self.push(Inst::Label(next));
-                let cond = self.expr(cond)?;
-                self.push(Inst::JumpIfZero { cond, target: exit });
+                self.branch_unless(cond, exit)?;
                 self.loop_body(next, exit, body)?;
                 self.push(Inst::Jump(next));
                 self.push(Inst::Label(exit));

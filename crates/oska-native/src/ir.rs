@@ -36,7 +36,7 @@ pub struct Module {
     pub data_size: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Function {
     /// The qualified name, for reading the code: `main`, `std.rt.exit`.
     pub name: String,
@@ -133,6 +133,24 @@ pub enum Cond {
     AboveEq,
 }
 
+impl Cond {
+    /// The condition that holds exactly when this one does not.
+    pub fn negated(self) -> Cond {
+        match self {
+            Cond::Eq => Cond::Ne,
+            Cond::Ne => Cond::Eq,
+            Cond::Lt => Cond::Ge,
+            Cond::Ge => Cond::Lt,
+            Cond::Le => Cond::Gt,
+            Cond::Gt => Cond::Le,
+            Cond::Below => Cond::AboveEq,
+            Cond::AboveEq => Cond::Below,
+            Cond::BelowEq => Cond::Above,
+            Cond::Above => Cond::BelowEq,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Inst {
     /// `dst = value`.
@@ -157,6 +175,37 @@ pub enum Inst {
         dst: Temp,
         lhs: Temp,
         rhs: Temp,
+    },
+    /// `dst = lhs op imm`, for `Add` and `Sub` with `imm` from 0 to 4095,
+    /// and the shifts with `imm` from 0 to 63 (`optimize.rs` makes it).
+    BinaryImm {
+        op: BinOp,
+        dst: Temp,
+        lhs: Temp,
+        imm: i64,
+    },
+    /// [`Inst::Branch`] on `lhs cond imm`, `imm` from -4095 to 4095.
+    BranchImm {
+        cond: Cond,
+        lhs: Temp,
+        imm: i64,
+        target: Label,
+    },
+    /// [`Inst::Compare`] of `lhs` with `imm`, from -4095 to 4095.
+    CompareImm {
+        cond: Cond,
+        dst: Temp,
+        lhs: Temp,
+        imm: i64,
+    },
+    /// [`Inst::Arith`] `Add` or `Sub` of `imm`, from 0 to 4095.
+    ArithImm {
+        op: Arith,
+        int: IntKind,
+        dst: Temp,
+        lhs: Temp,
+        imm: i64,
+        overflow: Label,
     },
     /// `dst = 1` if `lhs cond rhs` holds, else 0.
     Compare {
@@ -248,11 +297,28 @@ pub enum Inst {
     },
 }
 
+/// The most temporaries a function may use: each has a stack slot
+/// addressed by a 12-bit scaled offset.
+pub const MAX_TEMPS: u32 = 4095;
+
 /// The most arguments a call passes, all in registers. More need
 /// arguments on the stack, which no lowering produces yet.
 pub const MAX_ARGS: usize = 8;
 
 impl Inst {
+    /// The label it may jump to, if any.
+    pub fn target(&self) -> Option<Label> {
+        match self {
+            Inst::Jump(label) => Some(*label),
+            Inst::JumpIfZero { target, .. }
+            | Inst::Branch { target, .. }
+            | Inst::BranchImm { target, .. } => Some(*target),
+            Inst::Arith { overflow, .. } | Inst::ArithImm { overflow, .. } => Some(*overflow),
+            Inst::Enter { exhausted } => Some(*exhausted),
+            _ => None,
+        }
+    }
+
     /// The temporary it writes, if any.
     pub fn def(&self) -> Option<Temp> {
         match self {
@@ -260,6 +326,9 @@ impl Inst {
             | Inst::Copy { dst, .. }
             | Inst::Addr { dst, .. }
             | Inst::Binary { dst, .. }
+            | Inst::BinaryImm { dst, .. }
+            | Inst::CompareImm { dst, .. }
+            | Inst::ArithImm { dst, .. }
             | Inst::Compare { dst, .. }
             | Inst::Load { dst, .. }
             | Inst::Call { dst, .. }
@@ -267,6 +336,56 @@ impl Inst {
             | Inst::Arith { dst, .. }
             | Inst::Second { dst } => Some(*dst),
             _ => None,
+        }
+    }
+
+    /// Replace every temporary it writes or reads, `t`, by `map(t)`.
+    pub fn map_temps(&mut self, map: impl Fn(Temp) -> Temp) {
+        let each = |t: &mut Temp| *t = map(*t);
+        match self {
+            Inst::Const { dst, .. } | Inst::Addr { dst, .. } | Inst::Second { dst } => each(dst),
+            Inst::Copy { dst, src } => {
+                each(dst);
+                each(src);
+            }
+            Inst::Binary { dst, lhs, rhs, .. }
+            | Inst::Compare { dst, lhs, rhs, .. }
+            | Inst::Arith { dst, lhs, rhs, .. } => {
+                each(dst);
+                each(lhs);
+                each(rhs);
+            }
+            Inst::BinaryImm { dst, lhs, .. }
+            | Inst::CompareImm { dst, lhs, .. }
+            | Inst::ArithImm { dst, lhs, .. } => {
+                each(dst);
+                each(lhs);
+            }
+            Inst::Branch { lhs, rhs, .. } => {
+                each(lhs);
+                each(rhs);
+            }
+            Inst::BranchImm { lhs, .. } => each(lhs),
+            Inst::Load { dst, base, .. } => {
+                each(dst);
+                each(base);
+            }
+            Inst::Store { base, src, .. } => {
+                each(base);
+                each(src);
+            }
+            Inst::Call { dst, args, .. } | Inst::Syscall { dst, args, .. } => {
+                each(dst);
+                args.iter_mut().for_each(each);
+            }
+            Inst::JumpIfZero { cond, .. } => each(cond),
+            Inst::CallOnStack { stack, .. } => each(stack),
+            Inst::Return(value) => each(value),
+            Inst::ReturnPair { value, second } => {
+                each(value);
+                each(second);
+            }
+            Inst::Label(_) | Inst::Jump(_) | Inst::Enter { .. } | Inst::Leave => {}
         }
     }
 
@@ -278,6 +397,10 @@ impl Inst {
             | Inst::Compare { lhs, rhs, .. }
             | Inst::Arith { lhs, rhs, .. }
             | Inst::Branch { lhs, rhs, .. } => vec![*lhs, *rhs],
+            Inst::BinaryImm { lhs, .. }
+            | Inst::BranchImm { lhs, .. }
+            | Inst::CompareImm { lhs, .. }
+            | Inst::ArithImm { lhs, .. } => vec![*lhs],
             Inst::Load { base, .. } => vec![*base],
             Inst::Store { base, src, .. } => vec![*base, *src],
             Inst::Call { args, .. } | Inst::Syscall { args, .. } => args.clone(),
