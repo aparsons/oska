@@ -93,10 +93,24 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     ("Path.new", Prelude::Runtime("path_new")),
     ("Path.from", Prelude::Runtime("path_new")),
     ("Path.eq", Prelude::Runtime("path_eq")),
+    // `std.html`'s `text`, `TrustedHtml.new` and `Html.concat` build a
+    // new object: `lower/html.rs`.
+    ("Html.raw", Prelude::Identity),
+    ("Html.render", Prelude::Field(0)),
 ];
+
+/// `name` without the module a `std` function is called by when the
+/// program declares the same name itself (`html.text` for `text`).
+pub fn unqualified(name: &str) -> &str {
+    oska_check::builtins::std_modules()
+        .filter_map(|path| path.rsplit('.').next())
+        .find_map(|module| name.strip_prefix(module)?.strip_prefix('.'))
+        .unwrap_or(name)
+}
 
 /// The implementation of the prelude intrinsic `name`, if there is one.
 pub fn prelude(name: &str) -> Option<Prelude> {
+    let name = unqualified(name);
     PRELUDE.iter().find(|(n, _)| *n == name).map(|(_, p)| *p)
 }
 

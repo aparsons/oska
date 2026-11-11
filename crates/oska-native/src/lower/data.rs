@@ -410,6 +410,9 @@ impl Body<'_, '_> {
                 self.drop_list(object, &item)?;
             }
         }
+        if matches!(ty, Type::Named { name, .. } if name == layout::TASK) {
+            self.task_drop(object, ty)?;
+        }
         match self.fields_of(ty) {
             Some(Fields::Struct(fields)) => {
                 for (index, field) in fields.iter().enumerate() {
