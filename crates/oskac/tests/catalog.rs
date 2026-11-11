@@ -246,7 +246,7 @@ fn codes_of(code: &str, example: &Example) -> BTreeSet<String> {
         let report = oska_check::check_module(src);
         found.extend(report.diagnostics.iter().map(|d| d.code.to_string()));
         if let Some(program) = &report.program {
-            if let Err(refusal) = oska_native::build(program) {
+            if let Err(refusal) = oska_native::build(program, &|d| d) {
                 found.insert(refusal.code.to_string());
             }
         }

@@ -32,6 +32,7 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     ("Stdout.println", Prelude::Runtime("stdout_println")),
     ("Stderr.println", Prelude::Runtime("stderr_println")),
     ("String.to_string", Prelude::Identity),
+    ("Int.to_string", Prelude::Runtime("int_to_string")),
     ("IoError.to_string", Prelude::Field(0)),
 ];
 
@@ -54,6 +55,8 @@ pub enum Runtime {
     /// Its one argument, whose word is already what it asks for, such as
     /// a text value's object address.
     Identity,
+    /// The address of the runtime's writable data.
+    Globals,
 }
 
 /// Every `std.rt` intrinsic, by name. The system-call numbers are the
@@ -88,6 +91,8 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_mem_add", Runtime::Binary(BinOp::Add)),
     ("rt_mem_sub", Runtime::Binary(BinOp::Sub)),
     ("rt_mem_text", Runtime::Identity),
+    ("rt_mem_as_text", Runtime::Identity),
+    ("rt_mem_globals", Runtime::Globals),
 ];
 
 /// The implementation of the `std.rt` intrinsic `name`, if there is one.

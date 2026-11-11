@@ -65,6 +65,257 @@ pub fn rt_mem_sub(a: Int, b: Int) -> Int
 
 // The address of `text`'s object.
 pub fn rt_mem_text(text: String) -> Int
+// The text whose object is at `object`: the reference the caller holds
+// to it passes to the result.
+pub fn rt_mem_as_text(object: Int) -> String
+// The address of the runtime's writable words, zero when the program
+// starts: see `global`.
+pub fn rt_mem_globals() -> Int
+
+// ---- Memory ----------------------------------------------------------------
+//
+// The runtime's writable words, by index:
+//
+//   0 to 7  the allocator's free lists, one per size class: a block of
+//           class c is 16 << c bytes, header included;
+//   8       the next free byte of the chunk blocks are carved from;
+//   9       the end of that chunk.
+//
+// Every object the allocator gives out is preceded by a header word: its
+// block's size class, or for an object too large for any class, minus
+// the length of its own mapping. Its first word is its reference count,
+// which the generated code keeps; `free` is called when it drops to zero.
+
+// The address of the runtime's writable word `index`.
+fn global(index: Int) -> Int {
+    rt_mem_add(rt_mem_globals(), rt_mem_shl(index, 3))
+}
+
+// The largest block, header included, a size class holds.
+fn largest_block() -> Int {
+    2048
+}
+
+// How many bytes the allocator maps at once to carve blocks from.
+fn chunk_size() -> Int {
+    1048576
+}
+
+// `mmap`'s flags: shared with no file, private, anonymous; and without
+// reserving swap for it.
+fn private_anonymous() -> Int {
+    34
+}
+
+fn no_reserve() -> Int {
+    16384
+}
+
+// Map `length` bytes of fresh zeroed memory with protection `prot`, at
+// `addr` when `fixed`: its address. Running out of memory ends the
+// process.
+fn map(addr: Int, length: Int, prot: Int, flags: Int) -> Int {
+    let at = rt_sys_mmap(addr, length, prot, flags, -1, 0)
+    if at < 0 {
+        out_of_memory()
+    }
+    at
+}
+
+fn out_of_memory() {
+    let _ = write_text(2, "the native runtime is out of memory\n")
+    exit(101)
+}
+
+// A new object of `size` bytes, a multiple of 8 that counts its reference
+// count: its address. Its count is 1; the rest is not initialised.
+pub fn alloc(size: Int) -> Int {
+    let block = rt_mem_add(size, 8)
+    var at = 0
+    if block > largest_block() {
+        let length = rt_mem_and(rt_mem_add(block, 65535), -65536)
+        at = map(0, length, 3, private_anonymous())
+        rt_mem_store64(at, rt_mem_sub(0, length))
+    } else {
+        var class = 0
+        var bytes = 16
+        while bytes < block {
+            bytes = rt_mem_shl(bytes, 1)
+            class = rt_mem_add(class, 1)
+        }
+        let list = global(class)
+        at = rt_mem_load64(list)
+        if at != 0 {
+            rt_mem_store64(list, rt_mem_load64(at))
+        } else {
+            at = carve(bytes)
+        }
+        rt_mem_store64(at, class)
+    }
+    let object = rt_mem_add(at, 8)
+    rt_mem_store64(object, 1)
+    object
+}
+
+// A new block of `bytes`, carved from the current chunk or a new one.
+fn carve(bytes: Int) -> Int {
+    var next = rt_mem_load64(global(8))
+    if next == 0 || rt_mem_add(next, bytes) > rt_mem_load64(global(9)) {
+        next = map(0, chunk_size(), 3, private_anonymous())
+        rt_mem_store64(global(9), rt_mem_add(next, chunk_size()))
+    }
+    rt_mem_store64(global(8), rt_mem_add(next, bytes))
+    next
+}
+
+// Return the object at `object`, whose count has dropped to zero, to the
+// allocator.
+pub fn free(object: Int) {
+    let at = rt_mem_sub(object, 8)
+    let class = rt_mem_load64(at)
+    if class < 0 {
+        let _ = rt_sys_munmap(at, rt_mem_sub(0, class))
+        return
+    }
+    let list = global(class)
+    rt_mem_store64(at, rt_mem_load64(list))
+    rt_mem_store64(list, at)
+}
+
+// Copy the `count` bytes at `from` to `to`.
+fn copy_bytes(to: Int, from: Int, count: Int) {
+    var i = 0
+    while i < count {
+        rt_mem_store8(rt_mem_add(to, i), rt_mem_load8(rt_mem_add(from, i)))
+        i = rt_mem_add(i, 1)
+    }
+}
+
+// ---- Text ------------------------------------------------------------------
+
+// A new text object of `length` bytes, its bytes not written yet: its
+// address.
+pub fn text_new(length: Int) -> Int {
+    let object = alloc(rt_mem_and(rt_mem_add(length, 23), -8))
+    rt_mem_store64(rt_mem_add(object, 8), length)
+    object
+}
+
+// Copy `text`'s bytes into the text object at `object`, from its byte
+// `at` on: the byte after them.
+pub fn text_put(object: Int, at: Int, text: String) -> Int {
+    let from = rt_mem_text(text)
+    let length = rt_mem_load64(rt_mem_add(from, 8))
+    copy_bytes(rt_mem_add(object, rt_mem_add(16, at)), rt_mem_add(from, 16), length)
+    rt_mem_add(at, length)
+}
+
+// `Int.to_string`: the decimal text of `n`.
+pub fn int_to_string(n: Int) -> String {
+    int_text(n, false)
+}
+
+// The decimal text of the word `n`, read as unsigned when `unsigned` (a
+// `U64` above `Int`'s range is a negative word).
+fn int_text(n: Int, unsigned: Bool) -> String {
+    if unsigned && n < 0 {
+        // n / 10 and n % 10, unsigned: halve first, so it is positive.
+        let tens = rt_mem_shr(n, 1) / 5
+        let last = rt_mem_sub(n, rt_mem_add(rt_mem_shl(tens, 3), rt_mem_shl(tens, 1)))
+        let length = digit_count(-tens) + 1
+        let object = text_new(length)
+        write_digits(object, length - 1, -tens)
+        rt_mem_store8(rt_mem_add(object, 15 + length), 48 + last)
+        return rt_mem_as_text(object)
+    }
+    // Digits come from the magnitude as a negative number, which every
+    // `Int` has, `Int`'s most negative value included.
+    let negative = n < 0
+    let magnitude = if negative { n } else { -n }
+    var length = digit_count(magnitude)
+    if negative {
+        length = length + 1
+        let object = text_new(length)
+        rt_mem_store8(rt_mem_add(object, 16), 45)
+        write_digits(object, length, magnitude)
+        return rt_mem_as_text(object)
+    }
+    let object = text_new(length)
+    write_digits(object, length, magnitude)
+    rt_mem_as_text(object)
+}
+
+// How many decimal digits `-magnitude` has, for `magnitude` <= 0.
+fn digit_count(magnitude: Int) -> Int {
+    var count = 1
+    var rest = magnitude / 10
+    while rest != 0 {
+        count = count + 1
+        rest = rest / 10
+    }
+    count
+}
+
+// Write the decimal digits of `-magnitude`, for `magnitude` <= 0, into the
+// text object at `object`, ending before its byte `end`.
+fn write_digits(object: Int, end: Int, magnitude: Int) {
+    var at = rt_mem_add(object, rt_mem_add(16, end))
+    var rest = magnitude
+    var more = true
+    while more {
+        at = rt_mem_sub(at, 1)
+        rt_mem_store8(at, 48 - rest % 10)
+        rest = rest / 10
+        more = rest != 0
+    }
+}
+
+// ---- Panics ----------------------------------------------------------------
+//
+// A panic writes its report to stderr as the interpreter's `oskac run`
+// does, `path:line:col: error[P....]: message (bytes a..b)`, and exits
+// with 101. The generated code resolves the location at compile time, so
+// a report is static text with the values in its message filled in.
+
+// Panic with the whole report `report`.
+pub fn panic(report: String) {
+    let _ = write_text(2, report)
+    exit(101)
+}
+
+// Panic with the report `start`, the integer `a`, then `end`. An integer
+// is read as unsigned when `unsigned`.
+pub fn panic_unary(start: String, a: Int, end: String, unsigned: Bool) {
+    let _ = write_text(2, start)
+    let _ = write_text(2, int_text(a, unsigned))
+    let _ = write_text(2, end)
+    exit(101)
+}
+
+// Panic with the report `start`, the integer `a`, `mid`, the integer `b`,
+// then `end`.
+pub fn panic_binary(start: String, a: Int, mid: String, b: Int, end: String, unsigned: Bool) {
+    let _ = write_text(2, start)
+    let _ = write_text(2, int_text(a, unsigned))
+    let _ = write_text(2, mid)
+    let _ = write_text(2, int_text(b, unsigned))
+    let _ = write_text(2, end)
+    exit(101)
+}
+
+// ---- The stack -------------------------------------------------------------
+
+// A new stack of `size` bytes, a multiple of 65536, with a guard region
+// below it that no access may touch: its top. The generated code counts
+// calls, so recursion panics (`P0021`) before it reaches the guard.
+pub fn stack_new(size: Int) -> Int {
+    let guard = 1048576
+    let flags = rt_mem_or(private_anonymous(), no_reserve())
+    let base = map(0, guard + size, 0, flags)
+    // Over the guard's top, readable and writable, at a fixed address.
+    let stack = map(rt_mem_add(base, guard), size, 3, rt_mem_or(flags, 16))
+    rt_mem_add(stack, size)
+}
 
 // ---- Start-up and exit -----------------------------------------------------
 //

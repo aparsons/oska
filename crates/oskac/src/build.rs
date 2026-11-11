@@ -61,7 +61,7 @@ pub fn package(
 
 /// Compile `program` and write it to `output`.
 fn compile(program: &Program, places: &Places, output: &str, json: bool) -> ExitCode {
-    let bytes = match oska_native::build(program) {
+    let bytes = match oska_native::build(program, &|d| places.locate(d)) {
         Ok(bytes) => bytes,
         Err(refusal) => return refuse(&[places.locate(refusal)], json, ExitCode::from(2)),
     };

@@ -26,6 +26,7 @@ mod intrinsics;
 mod ir;
 mod layout;
 mod lower;
+mod regalloc;
 
 /// The codes the native backend reports.
 pub mod codes {
@@ -54,10 +55,21 @@ pub const TARGET: &str = "aarch64-linux";
 /// native backend has no runtime for yet is refused where it is made.
 const MODULES_WITH_A_RUNTIME: &[&str] = &["std.html"];
 
+/// How the caller places a diagnostic in its source: the diagnostic with
+/// its file, line and column, as `oskac` reports it. A native panic
+/// report names the place its span is, as the interpreter's does, so the
+/// executable carries what this gives for every panic site.
+pub type Locate<'a> = &'a dyn Fn(Diagnostic) -> Diagnostic;
+
+/// How deeply calls of the program's functions nest before it panics
+/// with `P0021`: the interpreter's limit.
+pub const MAX_CALL_DEPTH: u32 = lower::MAX_CALL_DEPTH;
+
 /// Compile `program`, which checked with no diagnostic, to an executable
-/// for [`TARGET`]: the file's bytes. A program the backend cannot compile
-/// yet is refused with the diagnostic that says why.
-pub fn build(program: &Program) -> Result<Vec<u8>, Diagnostic> {
+/// for [`TARGET`]: the file's bytes. `locate` places a panic site in the
+/// source. A program the backend cannot compile yet is refused with the
+/// diagnostic that says why.
+pub fn build(program: &Program, locate: Locate) -> Result<Vec<u8>, Diagnostic> {
     if let Some(refusal) = unimplemented_module(program) {
         return Err(refusal);
     }
@@ -69,7 +81,7 @@ pub fn build(program: &Program) -> Result<Vec<u8>, Diagnostic> {
             NOWHERE,
         ));
     };
-    let module = lower::program(program, &rt)?;
+    let module = lower::program(program, &rt, locate)?;
     let text = aarch64::emit(&module).map_err(|why| {
         Diagnostic::new(
             codes::UNSUPPORTED,

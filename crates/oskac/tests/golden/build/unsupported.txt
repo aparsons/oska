@@ -2,5 +2,5 @@ $ oskac build sum.osk
 exit: 2
 --- stdout
 --- stderr
-sum.osk:2:8: error[E0390]: `oskac build` cannot compile integer arithmetic (`+`) yet (bytes 52..57)
+sum.osk:2:14: error[E0390]: `oskac build` cannot compile a list yet (bytes 58..64)
 --- written

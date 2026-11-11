@@ -17,17 +17,68 @@
 //! `std.rt` reads these layouts too (`std/rt.osk`), so a change here is a
 //! change there.
 //!
-//! The tracer (#128) has no allocator, so the only objects are static:
-//! text literals, and values built from constants that hold no address
-//! (an address in read-only data would need a relocation). Anything built
-//! at run time is refused until the allocator exists (#130).
+//! An object built at run time comes from `std.rt`'s allocator (`alloc`),
+//! with a count of 1, and one header word before it that the allocator
+//! keeps (its size class). The code keeps the count: every value of a
+//! counted type ([`is_counted`]) that an expression produces is either
+//! static or holds one reference of its own, which whoever consumes it
+//! releases; a local holds one reference while it is in scope. When a
+//! release drops the count to zero, `std.rt`'s `free` returns the
+//! memory. Only text is built at run time so far: a struct or enum
+//! built at run time, with fields to release before it is freed, comes
+//! with #130.
+//!
+//! Static objects live in read-only data and are built from constants
+//! that hold no address (an address in read-only data would need a
+//! relocation).
 
 use std::collections::BTreeMap;
 
-use oska_check::program::{TypeDecl, TypeDeclKind};
+use oska_check::builtins;
+use oska_check::program::{IntType, Program, Type, TypeDecl, TypeDeclKind};
+
+use crate::ir::IntKind;
 
 /// The reference count of a static object.
 pub const STATIC: i64 = -1;
+
+/// The offset of a text object's length in bytes.
+pub const TEXT_LEN: u32 = WORD;
+
+/// How checked arithmetic sees `int`.
+pub fn int_kind(int: IntType) -> IntKind {
+    let (signed, bits) = match int {
+        IntType::Int | IntType::I64 => (true, 64),
+        IntType::I8 => (true, 8),
+        IntType::I16 => (true, 16),
+        IntType::I32 => (true, 32),
+        IntType::U8 => (false, 8),
+        IntType::U16 => (false, 16),
+        IntType::U32 => (false, 32),
+        IntType::U64 => (false, 64),
+    };
+    IntKind { signed, bits }
+}
+
+/// Whether a value of `ty` is an object's address, whose reference count
+/// the code keeps: text, and structs and enums with fields. Integers,
+/// `Bool`, `()`, fieldless enums and capabilities are not. The built-in
+/// types with a handle (`List`, `Range`, `Task`, `Scope`) get their
+/// representation with their tickets and are not counted until then.
+pub fn is_counted(program: &Program, ty: &Type) -> bool {
+    match ty {
+        Type::String => true,
+        Type::Named { name, .. } => {
+            !builtins::is_capability(name)
+                && !matches!(name.as_str(), "List" | "Range" | "Task" | "Scope" | "Args")
+                && program
+                    .types
+                    .get(name)
+                    .is_some_and(|decl| !is_fieldless_enum(decl))
+        }
+        _ => false,
+    }
+}
 
 /// The size of a word, and of every field.
 pub const WORD: u32 = 8;

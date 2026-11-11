@@ -2,5 +2,5 @@ $ oskac build greeter
 exit: 2
 --- stdout
 --- stderr
-greeter/src/sum.osk:2:8: error[E0390]: `oskac build` cannot compile integer arithmetic (`+`) yet (bytes 57..62)
+greeter/src/sum.osk:2:14: error[E0390]: `oskac build` cannot compile a list yet (bytes 63..69)
 --- written
