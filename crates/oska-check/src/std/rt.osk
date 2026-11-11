@@ -68,6 +68,10 @@ pub fn rt_mem_text(text: String) -> Int
 // The text whose object is at `object`: the reference the caller holds
 // to it passes to the result.
 pub fn rt_mem_as_text(object: Int) -> String
+// The address of `path`'s object, and the `Path` whose object is at
+// `object` (the reference passes, as for text).
+pub fn rt_mem_path(path: Path) -> Int
+pub fn rt_mem_as_path(object: Int) -> Path
 // The address of the runtime's writable words, zero when the program
 // starts: see `global`.
 pub fn rt_mem_globals() -> Int
@@ -182,12 +186,43 @@ pub fn free(object: Int) {
     rt_mem_store64(list, at)
 }
 
-// Copy the `count` bytes at `from` to `to`.
+// Copy the `count` bytes at `from` to `to`, which do not overlap, a word
+// at a time as far as they go.
 fn copy_bytes(to: Int, from: Int, count: Int) {
     var i = 0
+    while rt_mem_add(i, 8) <= count {
+        rt_mem_store64(rt_mem_add(to, i), rt_mem_load64(rt_mem_add(from, i)))
+        i = rt_mem_add(i, 8)
+    }
     while i < count {
         rt_mem_store8(rt_mem_add(to, i), rt_mem_load8(rt_mem_add(from, i)))
         i = rt_mem_add(i, 1)
+    }
+}
+
+// Whether the `count` bytes at `a` and at `b` are the same.
+fn bytes_equal(a: Int, b: Int, count: Int) -> Bool {
+    var i = 0
+    while rt_mem_add(i, 8) <= count {
+        if rt_mem_load64(rt_mem_add(a, i)) != rt_mem_load64(rt_mem_add(b, i)) {
+            return false
+        }
+        i = rt_mem_add(i, 8)
+    }
+    while i < count {
+        if rt_mem_load8(rt_mem_add(a, i)) != rt_mem_load8(rt_mem_add(b, i)) {
+            return false
+        }
+        i = rt_mem_add(i, 1)
+    }
+    true
+}
+
+// Count one more reference to the object at `object`, unless it is static.
+fn retain(object: Int) {
+    let count = rt_mem_load64(object)
+    if count >= 0 {
+        rt_mem_store64(object, rt_mem_add(count, 1))
     }
 }
 
@@ -268,6 +303,376 @@ fn write_digits(object: Int, end: Int, magnitude: Int) {
         rest = rest / 10
         more = rest != 0
     }
+}
+
+// ---- String methods --------------------------------------------------------
+//
+// Text is UTF-8, and a character is a code point, as the interpreter
+// counts it: every byte that is not a continuation byte (10xxxxxx) starts
+// one. A function here that is a prelude intrinsic takes its arguments as
+// the method does, the receiver first.
+
+// The address of the bytes of the text object at `object`.
+fn text_data(object: Int) -> Int {
+    rt_mem_add(object, 16)
+}
+
+// The length in bytes of the text object at `object`.
+fn text_length(object: Int) -> Int {
+    rt_mem_load64(rt_mem_add(object, 8))
+}
+
+// The text of the bytes from `from` up to `to` of `text`, whose object is
+// at `object`: `text` itself when they are all of it.
+fn text_part(text: String, object: Int, from: Int, to: Int) -> String {
+    if from == 0 && to == text_length(object) {
+        return text
+    }
+    let part = text_new(to - from)
+    copy_bytes(text_data(part), rt_mem_add(text_data(object), from), to - from)
+    rt_mem_as_text(part)
+}
+
+// `String.byte_len`.
+pub fn string_byte_len(text: String) -> Int {
+    text_length(rt_mem_text(text))
+}
+
+// `String.len`: the number of characters.
+pub fn string_len(text: String) -> Int {
+    let object = rt_mem_text(text)
+    chars_in(text_data(object), text_length(object))
+}
+
+// How many characters the `count` bytes at `at` hold, eight bytes at a
+// time: the bytes that are not continuation bytes.
+fn chars_in(at: Int, count: Int) -> Int {
+    var chars = 0
+    var i = 0
+    while rt_mem_add(i, 8) <= count {
+        let word = rt_mem_load64(rt_mem_add(at, i))
+        // A continuation byte has bit 7 set and bit 6 clear. `marks` has a
+        // 1 in the low bit of each such byte (0x0101010101010101 masks
+        // them), and the sums add the eight bytes up in the lowest.
+        let low_bits = 72340172838076673
+        let marks = rt_mem_and(rt_mem_and(rt_mem_shr(word, 7), rt_mem_xor(rt_mem_shr(word, 6), -1)), low_bits)
+        let sum2 = rt_mem_add(marks, rt_mem_shr(marks, 8))
+        let sum4 = rt_mem_add(sum2, rt_mem_shr(sum2, 16))
+        let sum8 = rt_mem_add(sum4, rt_mem_shr(sum4, 32))
+        chars = rt_mem_add(chars, rt_mem_sub(8, rt_mem_and(sum8, 255)))
+        i = rt_mem_add(i, 8)
+    }
+    while i < count {
+        if rt_mem_and(rt_mem_load8(rt_mem_add(at, i)), 192) != 128 {
+            chars = rt_mem_add(chars, 1)
+        }
+        i = rt_mem_add(i, 1)
+    }
+    chars
+}
+
+// The byte offset of character `n` of the `count` bytes at `at`, which
+// have at least `n` characters: `count` for the one past the last.
+fn char_offset(at: Int, count: Int, n: Int) -> Int {
+    var i = 0
+    var seen = 0
+    while seen < n && i < count {
+        i = rt_mem_add(i, 1)
+        while i < count && rt_mem_and(rt_mem_load8(rt_mem_add(at, i)), 192) == 128 {
+            i = rt_mem_add(i, 1)
+        }
+        seen = rt_mem_add(seen, 1)
+    }
+    i
+}
+
+// The byte offset of the first occurrence of the `needle_length` bytes at
+// `needle`, not before byte `from`, in the `length` bytes at `hay`, or -1.
+// `needle_length` is not 0.
+fn find_bytes(hay: Int, length: Int, needle: Int, needle_length: Int, from: Int) -> Int {
+    let first = rt_mem_load8(needle)
+    let last = length - needle_length
+    var i = from
+    while i <= last {
+        let at = rt_mem_add(hay, i)
+        if rt_mem_load8(at) == first && bytes_equal(at, needle, needle_length) {
+            return i
+        }
+        i = rt_mem_add(i, 1)
+    }
+    -1
+}
+
+// `String.contains`.
+pub fn string_contains(text: String, needle: String) -> Bool {
+    let object = rt_mem_text(text)
+    let other = rt_mem_text(needle)
+    if text_length(other) == 0 {
+        return true
+    }
+    find_bytes(text_data(object), text_length(object), text_data(other), text_length(other), 0) >= 0
+}
+
+// `String.starts_with`.
+pub fn string_starts_with(text: String, prefix: String) -> Bool {
+    let object = rt_mem_text(text)
+    let other = rt_mem_text(prefix)
+    let fits = text_length(other) <= text_length(object)
+    fits && bytes_equal(text_data(object), text_data(other), text_length(other))
+}
+
+// `String.ends_with`.
+pub fn string_ends_with(text: String, suffix: String) -> Bool {
+    let object = rt_mem_text(text)
+    let other = rt_mem_text(suffix)
+    let skip = text_length(object) - text_length(other)
+    skip >= 0 && bytes_equal(rt_mem_add(text_data(object), skip), text_data(other), text_length(other))
+}
+
+// `String == String`.
+pub fn string_eq(a: String, b: String) -> Bool {
+    let left = rt_mem_text(a)
+    let right = rt_mem_text(b)
+    if left == right {
+        return true
+    }
+    let same_length = text_length(left) == text_length(right)
+    same_length && bytes_equal(text_data(left), text_data(right), text_length(left))
+}
+
+// `String.slice`: the characters from `start` up to `end`, or, when they
+// are out of range, the word 0 in place of a text, for the generated code
+// to panic (`P0035`).
+pub fn string_slice(text: String, start: Int, end: Int) -> String {
+    let object = rt_mem_text(text)
+    let length = text_length(object)
+    let data = text_data(object)
+    let chars = chars_in(data, length)
+    if start < 0 || end < start || end > chars {
+        return rt_mem_as_text(0)
+    }
+    if chars == length {
+        return text_part(text, object, start, end)
+    }
+    let from = char_offset(data, length, start)
+    let to = rt_mem_add(from, char_offset(rt_mem_add(data, from), length - from, end - start))
+    text_part(text, object, from, to)
+}
+
+// Panic (`P0035`): `start` and `end` are the report around the message.
+pub fn panic_slice(start: String, end: String, text: String, from: Int, to: Int) {
+    let _ = write_text(2, start)
+    let _ = write_text(2, "cannot slice characters ")
+    let _ = write_text(2, int_text(from, false))
+    let _ = write_text(2, "..")
+    let _ = write_text(2, int_text(to, false))
+    let _ = write_text(2, " of a text of ")
+    let _ = write_text(2, int_text(string_len(text), false))
+    let _ = write_text(2, " characters")
+    let _ = write_text(2, end)
+    exit(101)
+}
+
+// The longest text `String.repeat` builds, in bytes: 256 MiB.
+fn max_repeated_bytes() -> Int {
+    268435456
+}
+
+// `String.repeat`: the text `times` times over. For a negative `times`
+// the word 0 in place of a text, and for a result that is too long the
+// word -1, for the generated code to panic (`P0036`, `P0037`).
+pub fn string_repeat(text: String, times: Int) -> String {
+    if times < 0 {
+        return rt_mem_as_text(0)
+    }
+    let object = rt_mem_text(text)
+    let length = text_length(object)
+    // An empty text repeats to an empty text however often.
+    if length == 0 {
+        return text
+    }
+    if times > max_repeated_bytes() / length {
+        return rt_mem_as_text(-1)
+    }
+    if times == 1 {
+        return text
+    }
+    let total = length * times
+    let result = text_new(total)
+    let data = text_data(result)
+    copy_bytes(data, text_data(object), length)
+    // Double what is written until it is all there.
+    var done = length
+    while done < total {
+        let chunk = if done > total - done { total - done } else { done }
+        copy_bytes(rt_mem_add(data, done), data, chunk)
+        done = done + chunk
+    }
+    rt_mem_as_text(result)
+}
+
+// Panic (`P0036`): a negative count.
+pub fn panic_repeat_negative(start: String, end: String, times: Int) {
+    let _ = write_text(2, start)
+    let _ = write_text(2, "cannot repeat a text ")
+    let _ = write_text(2, int_text(times, false))
+    let _ = write_text(2, " times")
+    let _ = write_text(2, end)
+    exit(101)
+}
+
+// Panic (`P0037`): a result too long.
+pub fn panic_repeat_long(start: String, end: String, text: String, times: Int) {
+    let _ = write_text(2, start)
+    let _ = write_text(2, "repeating a text of ")
+    let _ = write_text(2, int_text(string_byte_len(text), false))
+    let _ = write_text(2, " bytes ")
+    let _ = write_text(2, int_text(times, false))
+    let _ = write_text(2, " times is too long")
+    let _ = write_text(2, end)
+    exit(101)
+}
+
+// `String.replace`: every occurrence of `from`, left to right and without
+// overlap, replaced by `to`. An empty `from` occurs nowhere.
+pub fn string_replace(text: String, from: String, to: String) -> String {
+    let object = rt_mem_text(text)
+    let old = rt_mem_text(from)
+    let new = rt_mem_text(to)
+    let length = text_length(object)
+    let old_length = text_length(old)
+    let new_length = text_length(new)
+    if old_length == 0 {
+        return text
+    }
+    let data = text_data(object)
+    var found = 0
+    var at = find_bytes(data, length, text_data(old), old_length, 0)
+    while at >= 0 {
+        found = found + 1
+        at = find_bytes(data, length, text_data(old), old_length, at + old_length)
+    }
+    if found == 0 {
+        return text
+    }
+    let result = text_new(length + found * (new_length - old_length))
+    var out = text_data(result)
+    var read = 0
+    at = find_bytes(data, length, text_data(old), old_length, 0)
+    while at >= 0 {
+        copy_bytes(out, rt_mem_add(data, read), at - read)
+        out = rt_mem_add(out, at - read)
+        copy_bytes(out, text_data(new), new_length)
+        out = rt_mem_add(out, new_length)
+        read = at + old_length
+        at = find_bytes(data, length, text_data(old), old_length, read)
+    }
+    copy_bytes(out, rt_mem_add(data, read), length - read)
+    rt_mem_as_text(result)
+}
+
+// The length in bytes of the whitespace character (Unicode's `White_Space`)
+// that starts at byte `i` of the `length` bytes at `data`, or 0 if none does.
+fn whitespace_at(data: Int, i: Int, length: Int) -> Int {
+    let b0 = rt_mem_load8(rt_mem_add(data, i))
+    if b0 == 32 || (b0 >= 9 && b0 <= 13) {
+        return 1
+    }
+    if b0 < 128 {
+        return 0
+    }
+    if b0 == 194 {
+        // U+0085 and U+00A0.
+        if i + 1 < length {
+            let b1 = rt_mem_load8(rt_mem_add(data, i + 1))
+            if b1 == 133 || b1 == 160 {
+                return 2
+            }
+        }
+        return 0
+    }
+    if i + 2 >= length {
+        return 0
+    }
+    let b1 = rt_mem_load8(rt_mem_add(data, i + 1))
+    let b2 = rt_mem_load8(rt_mem_add(data, i + 2))
+    // U+1680.
+    if b0 == 225 && b1 == 154 && b2 == 128 {
+        return 3
+    }
+    // U+3000.
+    if b0 == 227 && b1 == 128 && b2 == 128 {
+        return 3
+    }
+    if b0 == 226 {
+        // U+2000 to U+200A, U+2028, U+2029 and U+202F.
+        if b1 == 128 && ((b2 <= 138 && b2 >= 128) || b2 == 168 || b2 == 169 || b2 == 175) {
+            return 3
+        }
+        // U+205F.
+        if b1 == 129 && b2 == 159 {
+            return 3
+        }
+    }
+    0
+}
+
+// The length in bytes of the whitespace character that ends before byte
+// `end` of the bytes at `data`, and starts at or after byte `low`, or 0.
+fn whitespace_before(data: Int, low: Int, end: Int) -> Int {
+    var size = 1
+    while size <= 3 {
+        if end - size >= low && whitespace_at(data, end - size, end) == size {
+            return size
+        }
+        size = size + 1
+    }
+    0
+}
+
+// `String.trim`: without leading and trailing whitespace.
+pub fn string_trim(text: String) -> String {
+    let object = rt_mem_text(text)
+    let data = text_data(object)
+    var from = 0
+    var to = text_length(object)
+    while from < to {
+        let size = whitespace_at(data, from, to)
+        if size == 0 {
+            break
+        }
+        from = from + size
+    }
+    while to > from {
+        let size = whitespace_before(data, from, to)
+        if size == 0 {
+            break
+        }
+        to = to - size
+    }
+    text_part(text, object, from, to)
+}
+
+// `Path.new` and `Path.from`: a `Path`, an object of a count and the one
+// field, `raw`. Releasing the last reference to it does not release `raw`
+// yet: it leaks.
+pub fn path_new(raw: String) -> Path {
+    let object = alloc(16)
+    let text = rt_mem_text(raw)
+    retain(text)
+    rt_mem_store64(rt_mem_add(object, 8), text)
+    rt_mem_as_path(object)
+}
+
+// `Path == Path`: their text is the same.
+pub fn path_eq(a: Path, b: Path) -> Bool {
+    let left = rt_mem_load64(rt_mem_add(rt_mem_path(a), 8))
+    let right = rt_mem_load64(rt_mem_add(rt_mem_path(b), 8))
+    // The texts are borrowed; the references `rt_mem_as_text` hands out
+    // are released after the call.
+    retain(left)
+    retain(right)
+    string_eq(rt_mem_as_text(left), rt_mem_as_text(right))
 }
 
 // ---- Panics ----------------------------------------------------------------

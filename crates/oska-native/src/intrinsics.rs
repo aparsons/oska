@@ -24,6 +24,19 @@ pub enum Prelude {
     Identity,
     /// Its result is field `n` of its struct receiver.
     Field(usize),
+    /// A call of the `std.rt` function of this name, which gives the word
+    /// 0 (or, for [`Check::Repeat`], also -1) in place of its result when
+    /// the call is a bug, for the generated code to panic as `check` says.
+    Checked(&'static str, Check),
+}
+
+/// The panics a [`Prelude::Checked`] call may end in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Check {
+    /// `String.slice`: `P0035` on the word 0.
+    Slice,
+    /// `String.repeat`: `P0036` on the word 0, `P0037` on -1.
+    Repeat,
 }
 
 /// The prelude intrinsics the native backend implements, by the name the
@@ -34,6 +47,25 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     ("String.to_string", Prelude::Identity),
     ("Int.to_string", Prelude::Runtime("int_to_string")),
     ("IoError.to_string", Prelude::Field(0)),
+    ("String.len", Prelude::Runtime("string_len")),
+    ("String.byte_len", Prelude::Runtime("string_byte_len")),
+    ("String.contains", Prelude::Runtime("string_contains")),
+    ("String.starts_with", Prelude::Runtime("string_starts_with")),
+    ("String.ends_with", Prelude::Runtime("string_ends_with")),
+    ("String.trim", Prelude::Runtime("string_trim")),
+    ("String.replace", Prelude::Runtime("string_replace")),
+    (
+        "String.slice",
+        Prelude::Checked("string_slice", Check::Slice),
+    ),
+    (
+        "String.repeat",
+        Prelude::Checked("string_repeat", Check::Repeat),
+    ),
+    ("String.assume_trusted", Prelude::Identity),
+    ("Path.new", Prelude::Runtime("path_new")),
+    ("Path.from", Prelude::Runtime("path_new")),
+    ("Path.eq", Prelude::Runtime("path_eq")),
 ];
 
 /// The implementation of the prelude intrinsic `name`, if there is one.
@@ -92,6 +124,8 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_mem_sub", Runtime::Binary(BinOp::Sub)),
     ("rt_mem_text", Runtime::Identity),
     ("rt_mem_as_text", Runtime::Identity),
+    ("rt_mem_path", Runtime::Identity),
+    ("rt_mem_as_path", Runtime::Identity),
     ("rt_mem_globals", Runtime::Globals),
 ];
 
