@@ -30,6 +30,15 @@ pub fn rt_sys_exit_group(status: Int) -> Int
 
 // ---- Memory and words ------------------------------------------------------
 
+// Loads of 8, 16, 32 and 64 bits at address `addr`, zero-extended into the
+// `Int` (a 64-bit load is the whole word). Stores write the low 8, 16, 32 or
+// 64 bits of `value` and ignore the rest.
+pub fn rt_mem_load8(addr: Int) -> Int
+pub fn rt_mem_load16(addr: Int) -> Int
+pub fn rt_mem_load32(addr: Int) -> Int
+pub fn rt_mem_store8(addr: Int, value: Int)
+pub fn rt_mem_store16(addr: Int, value: Int)
+pub fn rt_mem_store32(addr: Int, value: Int)
 // The 64-bit word at address `addr`.
 pub fn rt_mem_load64(addr: Int) -> Int
 // Write `value` to the 64-bit word at address `addr`.
