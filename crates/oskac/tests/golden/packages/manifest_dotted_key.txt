@@ -1,0 +1,6 @@
+$ oskac check crates/oskac/tests/fixtures/packages/manifest_dotted_key
+exit: 1
+--- stdout
+fn main: pure
+--- stderr
+oska.toml:2:1: error[E0401]: `oska.toml` does not support dotted keys (bytes 10..20)

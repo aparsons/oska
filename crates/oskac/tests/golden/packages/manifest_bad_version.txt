@@ -1,0 +1,6 @@
+$ oskac check crates/oskac/tests/fixtures/packages/manifest_bad_version
+exit: 1
+--- stdout
+fn main: pure
+--- stderr
+oska.toml:3:11: error[E0405]: `version` must be a semver version, such as `0.1.0`, not `1.0` (bytes 34..39)

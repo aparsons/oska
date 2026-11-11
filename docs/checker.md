@@ -16,7 +16,7 @@ A method called qualified by its type is listed the same way: `FsRead.restrict_t
 
 A reviewer reads a program's filesystem reach straight from these lines: `FsRead -> DirRead: restrict_to "docs"` and `FsWrite -> DirWrite: restrict_to "_site"` mean the program reads `docs` and writes `_site`. Whole-filesystem access shows as `restrict_to "/"`.
 
-Type and trait names in signatures and declarations are resolved, declarations are checked (`cap`, `main`, capitalization, recursive types, and where a `Scope` may appear), functions, methods, and impls are checked for duplicates, and under `--release` every body is scanned for `dbg(...)` and `todo()`. A `use` must name a `std.*` module that exists (`E0294`, `E0295`); see [`std` modules](#std-modules) for which do. Function, method, constant, and test bodies are type-checked with local, bidirectional inference: `let` types come from initializers, the expected type flows into literals, generic constructors, and closures, and an expression that fails gets an error type so it causes only one diagnostic.
+Type and trait names in signatures and declarations are resolved, declarations are checked (`cap`, `main`, capitalization, recursive types, and where a `Scope` may appear), functions, methods, and impls are checked for duplicates, and under `--release` every body is scanned for `dbg(...)` and `todo()`. A `use` must name a `std.*` module that exists (`E0294`, `E0295`); see [`std` modules](#std-modules) for which do. In a package, `use pkg.a.b` imports the module `src/a/b.osk` and binds `b`, and `use pkg.a.b.{X, y}` imports its items by name; only items marked `pub(pkg)` or `pub` can be used from another module (`E0203`–`E0208`). The modules are checked as one program, so every other rule holds across the whole package; in reports, an item of a module other than `src/main.osk` is named with its import path, as `pkg.util.text.shout`. Function, method, constant, and test bodies are type-checked with local, bidirectional inference: `let` types come from initializers, the expected type flows into literals, generic constructors, and closures, and an expression that fails gets an error type so it causes only one diagnostic.
 
 Text carries a trust flag (ADR 0006). `Untrusted<String>` is untrusted text; plain `String` is trusted. Text from outside the program is untrusted: `DirRead.read_to_string`, `FileRead.read_to_string`, `Stdin.read_line`, `Env.get`, and `Args.get` return it. Trusted text may be used wherever untrusted text is accepted, so a data position such as `Stdout.println` or `Path.from` takes both; untrusted text is never accepted where trusted `String` is required (`E0300`). A validator vouches for text it has checked with `.assume_trusted()`, which returns trusted `String`; each call is a trust assertion, listed in the report's `audit` array. `Untrusted<...>` marks text only (`E0320`).
 
@@ -695,6 +695,12 @@ test "setup" {
 | `E0200` | Unknown type or trait name, or a qualified path such as `sql.Query` whose first segment is not a module bound by a plain `use`. | Replace the name with the single closest declared name, when one is close enough. |
 | `E0201` | A trait where a type is expected (`x: Display`), or a type where a trait is expected (`T: Int`). | None. |
 | `E0202` | A type or trait name declared twice in the module, or one that redeclares a prelude name; a free function declared twice, or one that redeclares a prelude function (`dbg`, `todo`); or a method or associated function declared twice for one type, across all of its inherent `impl` blocks. Spans the second declaration's name. | None. |
+| `E0203` | A `use pkg.…` in a single file: `pkg` paths name modules of a package, and a single file is not one. Spans the path. | None: make the program a package, with an `oska.toml` and its modules under `src/`. |
+| `E0204` | A `use pkg.…` of a module the package does not have, or a `use pkg` that names no module. Spans the path. | Replace the path with the single closest module path, when one is close enough. |
+| `E0205` | A name that the imported module does not declare, in a `use pkg.…` brace group or after its qualifier, as in `util.nmae`. Spans the name. | Replace the name with the single closest item of the module, when one is close enough. |
+| `E0206` | An item of another module of the package that is neither `pub(pkg)` nor `pub`, used through a brace group or a qualifier: items are private to their module by default. Spans the name. | Insert `pub(pkg) ` at the item's declaration, after its attributes: the fix's edits are in the declaring module's file, which the fix names (`path`). |
+| `E0207` | Modules that import each other in a cycle, reported once at the `use` that starts it, naming every module in the cycle. Spans the path. | None: move what the modules share into a module that imports none of them. |
+| `E0208` | A `use` that binds a name the module already binds: two imports with the same qualifier (`use pkg.a.util` and `use pkg.b.util`, or a `pkg` and a `std` module of one name), an import named like an item the module declares, or two brace groups importing one name from different modules. There is no renaming. Spans the second binding. | None. |
 | `E0210` | A struct or enum whose own fields name a capability-bearing type (a built-in capability, a `cap` type, or a `cap fn`, including inside written type arguments such as `List<Stdout>`) is not declared `cap`. A field typed by a type parameter, as in `struct Box<T> { value: T }`, does not count. Spans the type's name. | Insert `cap` before `struct` or `enum`. |
 | `E0211` | A `main` parameter whose type is not a built-in capability or `Args`. Spans the parameter's type. | None. |
 | `E0212` | `main` returns something other than `()` or `Result<(), E>` (spans the return type), or `E` has no `impl Display` (spans `E`). | None. |
@@ -748,7 +754,7 @@ test "setup" {
 | `E0291` | An inherent `impl` for a prelude type, such as `impl FsRead { ... }`: only the prelude declares methods on its types. Write a free function, or implement a trait. Spans the `impl`'s type. | None. |
 | `E0292` | A `Scope` handle that could outlive its `scope` block: `Scope` in a function's or method's return type, in a struct or enum field's type, or in the type of a `scope` block's value, including inside wrappers such as `Option<Scope>` or `List<Scope>`. `Scope` stays allowed as a parameter type. A closure that captures a `Scope`, or a value holding one, is **scoped** and cannot escape either: it cannot be a `scope` block's value, be returned, be stored in a field, or be passed to a user function's parameter (a prelude or `std` function, such as `spawn` or `map`, accepts it). A `var` declared outside a `scope` block cannot be left holding the handle or such a closure; this is conservative, and also rejects keeping a closure that captures an enclosing block's handle. Nor can a `var` that already holds a handle, of an enclosing block, take one of an inner block: inside a `scope` block, assigning to a `var` (or `self`) from outside it, or calling a mutating method such as `push` on one, is rejected when the value written mentions a local of the block that holds a `Scope`, such as its handle or a closure capturing it. A closure is scoped by what its captures hold when it is checked, so one that captures a value whose type is known only later, as in `var xs = []` followed by `let g = || xs.len()` and then `xs.push(s)`, is rejected when that type turns out to hold a `Scope`; declare the value with its type first. Spans the type, the closure, or the `scope` expression. | None. |
 | `E0293` | A call to `todo()` when checking with `--release`. Spans the call. | None. |
-| `E0294` | A `use` whose path does not start with `std.`: only the standard library can be imported. Spans the path. | None. |
+| `E0294` | A `use` whose path starts with neither `std.` nor `pkg.`: only the standard library and the package's own modules can be imported. Spans the path. | None. |
 | `E0295` | A `use std.*` of a module that does not exist. Spans the module path. | Replace the path with the single closest module, when one is close enough. |
 | `E0300` | Untrusted text in a structural position: an `Untrusted<String>` used where trusted `String` is required, such as a `String` parameter, field, or return type. Reported instead of `E0220` when trust is the only difference. Like `E0270`, the rule is part of type compatibility, so it holds on every route, including inside type arguments such as `Option<Untrusted<String>>`. Trusted `String` may always be used as `Untrusted<String>`. The message suggests a validator or `.assume_trusted()`. Spans the expression. | None. |
 | `E0310` | A sink literal, such as `sql"..."`, whose module is not imported. Spans the tag. | Insert `use std.<module>` at the start of the file. |
@@ -761,10 +767,24 @@ test "setup" {
 | `E0351` | A `Secret` compared with `==` or `!=`, on either side. Spans the comparison. Also reported, without a fix, where a `Secret` must be `Eq`: an `Eq` bound, or a call to `.eq`. | Rewrite `a == b` to `a.constant_time_eq(b)` and `a != b` to `!a.constant_time_eq(b)`, with the secret as the receiver (parenthesized when needed). When both sides are secrets, it rewrites to `a.constant_time_eq_secret(b)` instead, so nothing is exposed. |
 | `E0352` | A `Secret` used where it must be `Display`: a `Display` bound, or a call to `.to_string()`. Spans the call, or the method name. | None. |
 | `E0360` | A name declared by an imported `std` module but not exported by it, written unqualified. Spans the name. No `std` module declares a private name yet: no program can reach this code, so it has no example. | None: the module keeps it private. |
+| `E0400` | `oska.toml` is malformed: a table header with no `]`, a key with no `=`, no value after `=`, a string that is not closed or has an unknown escape, or text after a value. Spans the offending text; the manifest's path, line and column are in the report. | None. |
+| `E0401` | `oska.toml` uses TOML outside the strict subset (tables, single-line strings, arrays of strings, comments). The message names the feature: dotted keys, dates, multiline strings, inline tables, arrays of tables, quoted keys, integers, floats, booleans, or nested arrays. Spans the unsupported text. | None. |
+| `E0402` | An unknown key or table in `oska.toml`: milestone 1 accepts only `[package]`, with the keys `name` and `version`. A key outside any table is also unknown. Spans the key, or the table's name. | Replace the name with the single closest known name, when one is close enough. |
+| `E0403` | A `[dependencies]` table in `oska.toml`: dependencies arrive in milestone 5. Spans the table's name. | None. |
+| `E0404` | `oska.toml` has no `[package]` table (spans the start of the file), or `[package]` has no `name` or no `version` (spans the table's name). | None. |
+| `E0405` | A value in `[package]` of the wrong kind: `name` or `version` given as an array, a `name` that is not snake_case, or a `version` that is not semver (`MAJOR.MINOR.PATCH`, with an optional `-prerelease` and `+build`). Spans the value. | None. |
+| `E0406` | A key written twice in `[package]`, or `[package]` written twice. Spans the second one's name. | None. |
+| `E0410` | A file or directory name under `src/` that is not snake_case, so `use pkg.<path>` could not name the module. Spans the start of the file. | None: rename the file or directory. |
+| `E0411` | A symlinked file or directory under `src/`. A package's source is what is in its tree, so `oskac` follows no link. A symlink cannot be written in a documentation example, so it has no example. | None: replace the link with the file or directory. |
+| `E0412` | `main` declared in a module other than `src/main.osk`. Spans the name. | None. |
+| `E0413` | A directory given to `oskac check`, `run` or `test` that is not a package: it has no `oska.toml` or no `src/` directory. The message says how to make one. | None. |
+| `E0414` | `oskac run` on a library: a package with no `src/main.osk` has no `main` to run. | None. |
 
 ### Checker examples
 
-Each code has a program that fails with exactly that code and the same program fixed. `E0360` has no example: no `std` module declares a private name yet, so no program can reach it.
+Each code has a program that fails with exactly that code and the same program fixed. `E0360` has no example: no `std` module declares a private name yet, so no program can reach it. `E0411` has no example: a symlink cannot be written in a documentation example.
+
+Each package example is a whole package, written as its files one after another: a line `==> path <==` starts a file. `oskac check` runs the package (`run` and `tests` in the block's info string run it, or test it, instead).
 
 #### `E0200`
 
@@ -798,6 +818,202 @@ fn helper() {}
 fn helper() {}
 
 fn other_helper() {}
+```
+
+#### `E0203`
+
+```oska error=E0203
+use pkg.util
+
+fn main() {}
+```
+
+```oska fixed=E0203
+fn main() {}
+```
+
+#### `E0204`
+
+```oska error=E0204 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+use pkg.utils
+
+fn main() {}
+==> src/util.osk <==
+pub(pkg) fn shout(s: String) -> String {
+    "{s}!"
+}
+```
+
+```oska fixed=E0204 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+use pkg.util
+
+fn main() {}
+==> src/util.osk <==
+pub(pkg) fn shout(s: String) -> String {
+    "{s}!"
+}
+```
+
+#### `E0205`
+
+```oska error=E0205 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+use pkg.util.{shuot}
+
+fn main() {}
+==> src/util.osk <==
+pub(pkg) fn shout(s: String) -> String {
+    "{s}!"
+}
+```
+
+```oska fixed=E0205 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+use pkg.util.{shout}
+
+fn main() {}
+==> src/util.osk <==
+pub(pkg) fn shout(s: String) -> String {
+    "{s}!"
+}
+```
+
+#### `E0206`
+
+```oska error=E0206 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+use pkg.util.{shout}
+
+fn main() {}
+==> src/util.osk <==
+fn shout(s: String) -> String {
+    "{s}!"
+}
+```
+
+```oska fixed=E0206 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+use pkg.util.{shout}
+
+fn main() {}
+==> src/util.osk <==
+pub(pkg) fn shout(s: String) -> String {
+    "{s}!"
+}
+```
+
+#### `E0207`
+
+```oska error=E0207 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+use pkg.a
+
+fn main() {}
+==> src/a.osk <==
+use pkg.b
+
+pub(pkg) fn one() -> Int {
+    1
+}
+==> src/b.osk <==
+use pkg.a
+
+pub(pkg) fn two() -> Int {
+    2
+}
+```
+
+```oska fixed=E0207 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+use pkg.a
+
+fn main() {}
+==> src/a.osk <==
+use pkg.b
+
+pub(pkg) fn one() -> Int {
+    1
+}
+==> src/b.osk <==
+pub(pkg) fn two() -> Int {
+    2
+}
+```
+
+#### `E0208`
+
+```oska error=E0208 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+use pkg.a.util
+use pkg.b.util
+
+fn main() {}
+==> src/a/util.osk <==
+pub(pkg) fn one() -> Int {
+    1
+}
+==> src/b/util.osk <==
+pub(pkg) fn two() -> Int {
+    2
+}
+```
+
+```oska fixed=E0208 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+use pkg.a.util
+use pkg.b.util.{two}
+
+fn main() {}
+==> src/a/util.osk <==
+pub(pkg) fn one() -> Int {
+    1
+}
+==> src/b/util.osk <==
+pub(pkg) fn two() -> Int {
+    2
+}
 ```
 
 #### `E0210`
@@ -2052,4 +2268,234 @@ fn main(env: Env) {
     let key = env.secret("API_KEY")
     let text = key.expose()
 }
+```
+
+#### `E0400`
+
+```oska error=E0400 package
+==> oska.toml <==
+[package]
+name = "demo
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+```oska fixed=E0400 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+#### `E0401`
+
+```oska error=E0401 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+released = 2026-11-10
+==> src/main.osk <==
+fn main() {}
+```
+
+```oska fixed=E0401 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+#### `E0402`
+
+```oska error=E0402 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+licence = "MIT"
+==> src/main.osk <==
+fn main() {}
+```
+
+```oska fixed=E0402 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+#### `E0403`
+
+```oska error=E0403 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+
+[dependencies]
+==> src/main.osk <==
+fn main() {}
+```
+
+```oska fixed=E0403 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+#### `E0404`
+
+```oska error=E0404 package
+==> oska.toml <==
+[package]
+name = "demo"
+==> src/main.osk <==
+fn main() {}
+```
+
+```oska fixed=E0404 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+#### `E0405`
+
+```oska error=E0405 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+```oska fixed=E0405 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "1.0.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+#### `E0406`
+
+```oska error=E0406 package
+==> oska.toml <==
+[package]
+name = "demo"
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+```oska fixed=E0406 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+#### `E0410`
+
+```oska error=E0410 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+==> src/Text_Tools.osk <==
+fn shout() {}
+```
+
+```oska fixed=E0410 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+==> src/text_tools.osk <==
+fn shout() {}
+```
+
+#### `E0412`
+
+```oska error=E0412 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+==> src/tools.osk <==
+fn main() {}
+```
+
+```oska fixed=E0412 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+==> src/tools.osk <==
+fn run() {}
+```
+
+#### `E0413`
+
+```oska error=E0413 package
+==> src/main.osk <==
+fn main() {}
+```
+
+```oska fixed=E0413 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+#### `E0414`
+
+```oska error=E0414 package run
+==> oska.toml <==
+[package]
+name = "greetings"
+version = "0.1.0"
+==> src/greeting.osk <==
+fn greet() {}
+```
+
+```oska fixed=E0414 package run
+==> oska.toml <==
+[package]
+name = "greetings"
+version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+==> src/greeting.osk <==
+fn greet() {}
 ```

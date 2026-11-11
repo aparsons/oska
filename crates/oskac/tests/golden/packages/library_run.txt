@@ -1,0 +1,5 @@
+$ oskac run crates/oskac/tests/fixtures/packages/library
+exit: 1
+--- stdout
+--- stderr
+error[E0414]: `crates/oskac/tests/fixtures/packages/library` is a library: it has no `src/main.osk`, so there is no `main` to run; use `oskac check` or `oskac test`, or add `src/main.osk` (bytes 0..0)

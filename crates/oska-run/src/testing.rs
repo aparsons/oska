@@ -208,8 +208,15 @@ pub fn test(src: &str, host: &mut dyn Host, options: TestOptions) -> TestReport 
             diagnostics: report.diagnostics,
         };
     };
+    test_program(&program, host, options)
+}
+
+/// Run the `test` blocks of an already **checked program**, as [`test`]
+/// does after it has checked its source: `oskac test` on a package passes
+/// the program of `oska_check::check_package` here.
+pub fn test_program(program: &Program, host: &mut dyn Host, options: TestOptions) -> TestReport {
     if let Some(refusal) =
-        unimplemented_module(&program).or_else(|| support::unsupported_with_tests(&program))
+        unimplemented_module(program).or_else(|| support::unsupported_with_tests(program))
     {
         return TestReport {
             tests: Vec::new(),
@@ -223,10 +230,10 @@ pub fn test(src: &str, host: &mut dyn Host, options: TestOptions) -> TestReport 
             let outcome = match (test.integration, options.integration) {
                 (false, _) => Some(on_interpreter_stack(|| {
                     let world = Some(FakeHost::new());
-                    run_one(&program, test, &mut TestHost::new(world, &mut *host, test))
+                    run_one(program, test, &mut TestHost::new(world, &mut *host, test))
                 })),
                 (true, true) => Some(on_interpreter_stack(|| {
-                    run_one(&program, test, &mut TestHost::new(None, &mut *host, test))
+                    run_one(program, test, &mut TestHost::new(None, &mut *host, test))
                 })),
                 (true, false) => None,
             };

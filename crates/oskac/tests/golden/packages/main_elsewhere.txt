@@ -1,0 +1,7 @@
+$ oskac check crates/oskac/tests/fixtures/packages/main_elsewhere
+exit: 1
+--- stdout
+fn main: pure
+fn pkg.tools.main: pure
+--- stderr
+src/tools.osk:1:4: error[E0412]: `main` is only allowed in `src/main.osk`, not in `src/tools.osk` (bytes 3..7)

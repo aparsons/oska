@@ -7,8 +7,8 @@
 //! same thing in the joined module:
 //!
 //! - An item of the entry module, `main`, keeps its name. An item of any
-//!   other module is declared under its **key**, the module path and the
-//!   name, such as `util.text.shout`. An identifier never contains `.`,
+//!   other module is declared under its **key**: `pkg.`, the module path
+//!   and the name, such as `pkg.util.text.shout`. An identifier never contains `.`,
 //!   so no source can write a key: it is reached only through linking.
 //! - A reference to an item, written plainly (`shout`, after `use
 //!   pkg.util.text.{shout}` or in its own module) or through a qualifier
@@ -57,17 +57,20 @@ pub struct Linked {
     pub reported: Vec<Span>,
 }
 
-/// The name a declaration of `module` has in the joined module.
+/// The name a declaration of `module` has in the joined module: its own
+/// name in the entry module, and otherwise `pkg.`, the module path and
+/// the name. The `pkg.` keeps it apart from the qualified names the
+/// checker gives `std` declarations, such as `html.text`.
 pub fn key(module: &str, name: &str) -> String {
     if module == ENTRY_MODULE {
         name.to_string()
     } else {
-        format!("{module}.{name}")
+        format!("{PKG}.{module}.{name}")
     }
 }
 
 /// The name an item declares, without its module: `Item` for
-/// `util.Item`.
+/// `pkg.util.Item`.
 pub fn unqualified(name: &str) -> &str {
     name.rsplit('.').next().unwrap_or(name)
 }
@@ -260,22 +263,19 @@ impl Linker {
         if !in_prelude {
             return;
         }
-        let Some((item, ident)) = ast
-            .items
-            .iter()
-            .find_map(|item| item_name(item).filter(|i| i.name == name).map(|i| (item, i)))
-        else {
+        let Some((item, ident)) = ast.items.iter().find_map(|item| {
+            item_name(item)
+                .filter(|i| i.name == name)
+                .map(|i| (item, i))
+        }) else {
             return;
         };
         let message = match item.kind {
             ItemKind::Fn(_) => format!("the function `{name}` is already declared in the prelude"),
             _ => format!("`{name}` is already declared in the prelude"),
         };
-        self.diagnostics.push(Diagnostic::new(
-            codes::DUPLICATE_NAME,
-            message,
-            ident.span,
-        ));
+        self.diagnostics
+            .push(Diagnostic::new(codes::DUPLICATE_NAME, message, ident.span));
     }
 
     /// A `std` brace group that imports a name the module also declares,
@@ -285,7 +285,8 @@ impl Linker {
             let Some(ident) = item_name(item) else {
                 continue;
             };
-            if scope.std_names.contains(&ident.name) && self.declared[index].contains_key(&ident.name)
+            if scope.std_names.contains(&ident.name)
+                && self.declared[index].contains_key(&ident.name)
             {
                 self.diagnostics.push(Diagnostic::new(
                     codes::DUPLICATE_NAME,
@@ -653,8 +654,8 @@ impl Rewriter<'_> {
     }
 
     fn fields(&mut self, fields: &mut oska_syntax::ast::Fields) {
-        if let oska_syntax::ast::Fields::Named(fields) | oska_syntax::ast::Fields::Positional(fields) =
-            fields
+        if let oska_syntax::ast::Fields::Named(fields)
+        | oska_syntax::ast::Fields::Positional(fields) = fields
         {
             for field in fields {
                 self.ty(&mut field.ty);
@@ -1022,7 +1023,12 @@ impl Rewriter<'_> {
         let Some(module) = prelude::sink_module(tag) else {
             return;
         };
-        if self.scope().std_modules.iter().any(|m| m.path == module.path) {
+        if self
+            .scope()
+            .std_modules
+            .iter()
+            .any(|m| m.path == module.path)
+        {
             return;
         }
         let tag_span = Span {

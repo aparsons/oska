@@ -194,7 +194,7 @@ struct Names {
 
 impl Names {
     /// A name another module's item is declared under, such as
-    /// `util.Item` (`link.rs`), is judged by its own last segment.
+    /// `pkg.util.Item` (`link.rs`), is judged by its own last segment.
     fn upper(&mut self, ident: &Ident, noun: &str) {
         let name = crate::link::unqualified(&ident.name);
         if !name.starts_with(|c: char| c.is_ascii_uppercase()) {

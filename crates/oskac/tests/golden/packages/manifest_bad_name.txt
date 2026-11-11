@@ -1,0 +1,6 @@
+$ oskac check crates/oskac/tests/fixtures/packages/manifest_bad_name
+exit: 1
+--- stdout
+fn main: pure
+--- stderr
+oska.toml:2:8: error[E0405]: `name` must be snake_case, such as `my_package`, not `My-Package` (bytes 17..29)

@@ -1,0 +1,13 @@
+$ oskac check crates/oskac/tests/fixtures/packages/valid --format=json
+exit: 0
+--- stdout
+{
+  "diagnostics": [],
+  "functions": [
+    {"name":"main","authority":["Stdout"],"via":[{"param":"io","capabilities":["Stdout"]}],"pure":false},
+    {"name":"greeting","authority":[],"via":[],"pure":true}
+  ],
+  "audit": [],
+  "attenuations": []
+}
+--- stderr

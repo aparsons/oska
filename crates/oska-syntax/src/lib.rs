@@ -254,7 +254,7 @@ pub struct Diagnostic {
     pub span: Span,
     /// A machine-applicable fix, when the right edit is unambiguous. Its
     /// edits are in the same file as `span`.
-    pub fix: Option<Fix>,
+    pub fix: Option<Box<Fix>>,
     /// The file the span is in, and where it starts. A package check names
     /// the file of every diagnostic; checking a source string alone does not.
     pub location: Option<Box<Location>>,
@@ -359,11 +359,11 @@ impl Diagnostic {
 
     /// Attach a fix made of `edits`.
     pub fn with_fix(mut self, message: impl Into<String>, edits: Vec<Edit>) -> Self {
-        self.fix = Some(Fix {
+        self.fix = Some(Box::new(Fix {
             message: message.into(),
             edits,
             path: None,
-        });
+        }));
         self
     }
 

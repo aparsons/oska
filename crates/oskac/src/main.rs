@@ -3,6 +3,7 @@
 use std::process::ExitCode;
 
 mod explain;
+mod package;
 
 const USAGE: &str = "\
 oskac - the Oska compiler
@@ -10,14 +11,17 @@ oskac - the Oska compiler
 USAGE:
     oskac lex <file.osk> [--format=json]   Print the tokens in a source file
     oskac parse <file.osk> [--format=json] Print the syntax tree of a source file
-    oskac check <file.osk> [--format=json] [--release]
-                                           Type-check a source file and report
-                                           each function's authority
-    oskac run <file.osk> [--format=json] [-- args...]
-                                           Check a source file and, if it has
-                                           no diagnostics, run it
-    oskac test <file.osk> [--format=json] [--integration]
+    oskac check [path] [--format=json] [--release]
+                                           Type-check a source file, or a
+                                           package directory (the current one
+                                           with no path), and report each
+                                           function's authority
+    oskac run [path] [--format=json] [-- args...]
+                                           Check a source file or package and,
+                                           if it has no diagnostics, run it
+    oskac test [path] [--format=json] [--integration]
                                            Run the test blocks in a source file
+                                           or package
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
@@ -96,9 +100,11 @@ fn main() -> ExitCode {
         }
         ["lex", path] => lex_file(path, flags),
         ["parse", path] => parse_file(path, flags),
-        ["check", path] => check_file(path, flags),
-        ["run", path] => run_file(path, flags, &line.program_args),
-        ["test", path] => test_file(path, flags),
+        ["check", rest @ ..] if rest.len() <= 1 => check_target(rest.first(), flags),
+        ["run", rest @ ..] if rest.len() <= 1 => {
+            run_target(rest.first(), flags, &line.program_args)
+        }
+        ["test", rest @ ..] if rest.len() <= 1 => test_target(rest.first(), flags),
         ["explain", code] => explain_code(code, flags),
         _ => {
             eprint!("{USAGE}");
@@ -154,6 +160,12 @@ fn check_file(path: &str, Flags { json, release, .. }: Flags) -> ExitCode {
         return ExitCode::FAILURE;
     };
     let report = oska_check::check_file(path, &src, oska_check::CheckOptions { release });
+    print_report(&report, json, path)
+}
+
+/// Print a check report as `oskac check` does, and return its exit code.
+/// `path` names the unlocated entries' file in the human report.
+fn print_report(report: &oska_check::CheckReport, json: bool, path: &str) -> ExitCode {
     if json {
         print!("{}", report.to_json());
     } else {
@@ -194,6 +206,12 @@ fn run_file(path: &str, Flags { json, .. }: Flags, args: &[String]) -> ExitCode 
     let mut argv = vec![path.to_string()];
     argv.extend_from_slice(args);
     let outcome = oska_run::run(&src, &mut oska_run::RealHost::new(), &argv);
+    finish_run(outcome, json, path, &src)
+}
+
+/// Print how a run ended and return the program's exit code. A panic's
+/// span is in `src`, the text of the file at `path`.
+fn finish_run(outcome: oska_run::RunOutcome, json: bool, path: &str, src: &str) -> ExitCode {
     eprint!("{}", outcome.stderr);
     // A panic is printed in the shape of a diagnostic, after the output
     // the program wrote before it.
@@ -204,7 +222,7 @@ fn run_file(path: &str, Flags { json, .. }: Flags, args: &[String]) -> ExitCode 
             eprintln!("{}", diagnostic.to_json());
         }
     } else {
-        print_diagnostics(&locate(reported, path, &src));
+        print_diagnostics(&locate(reported, path, src));
     }
     ExitCode::from(u8::try_from(outcome.exit_code).unwrap_or(u8::MAX))
 }
@@ -224,10 +242,16 @@ fn test_file(path: &str, flags: Flags) -> ExitCode {
     };
     let options = oska_run::TestOptions { integration };
     let report = oska_run::test(&src, &mut oska_run::RealHost::new(), options);
+    finish_test(&report, json, path, &src)
+}
+
+/// Print a test report and return its exit code. Diagnostics' spans are
+/// in `src`, the text of the file at `path`.
+fn finish_test(report: &oska_run::TestReport, json: bool, path: &str, src: &str) -> ExitCode {
     if json {
         println!("{}", report.to_json());
     } else if !report.diagnostics.is_empty() {
-        print_diagnostics(&locate(report.diagnostics.clone(), path, &src));
+        print_diagnostics(&locate(report.diagnostics.clone(), path, src));
     } else {
         print!("{}", report.to_human(path));
     }
@@ -250,6 +274,165 @@ fn locate(
             None => d.locate(path, src),
         })
         .collect()
+}
+
+// ---- Packages ------------------------------------------------------------------
+
+/// `oskac check [path]`: a package directory (the current one with no
+/// path), or a file, which keeps its single-file behaviour.
+fn check_target(path: Option<&&str>, flags: Flags) -> ExitCode {
+    match package::target(path.copied()) {
+        package::Target::File(file) => {
+            let code = check_file(&file, flags);
+            hint_package(&file, "check");
+            code
+        }
+        package::Target::Dir(dir) => {
+            let Some((package, refused)) = load_package(&dir, flags.json) else {
+                return ExitCode::FAILURE;
+            };
+            let options = oska_check::CheckOptions {
+                release: flags.release,
+            };
+            let report = checked(&package, refused, options);
+            print_report(&report, flags.json, &dir)
+        }
+    }
+}
+
+/// `oskac run [path]`: a package directory, or a file. A library, a
+/// package without `src/main.osk`, is refused.
+fn run_target(path: Option<&&str>, flags: Flags, args: &[String]) -> ExitCode {
+    let json = flags.json;
+    match package::target(path.copied()) {
+        package::Target::File(file) => {
+            let code = run_file(&file, flags, args);
+            hint_package(&file, "run");
+            code
+        }
+        package::Target::Dir(dir) => {
+            let Some((package, refused)) = load_package(&dir, json) else {
+                return ExitCode::FAILURE;
+            };
+            if package.is_library() {
+                return refuse(vec![oska_check::run_of_library(&dir)], json);
+            }
+            let report = checked(&package, refused, oska_check::CheckOptions::default());
+            let Some(program) = &report.program else {
+                return refuse_unchecked(report, json);
+            };
+            let mut argv = vec![dir.clone()];
+            argv.extend_from_slice(args);
+            let outcome = oska_run::run_program(program, &mut oska_run::RealHost::new(), &argv);
+            let entry = package::entry(&package);
+            let (path, src) = entry.map_or(("", ""), |m| (m.path.as_str(), m.source.as_str()));
+            finish_run(outcome, json, path, src)
+        }
+    }
+}
+
+/// `oskac test [path]`: a package directory, or a file.
+fn test_target(path: Option<&&str>, flags: Flags) -> ExitCode {
+    let json = flags.json;
+    match package::target(path.copied()) {
+        package::Target::File(file) => {
+            let code = test_file(&file, flags);
+            hint_package(&file, "test");
+            code
+        }
+        package::Target::Dir(dir) => {
+            let Some((package, refused)) = load_package(&dir, json) else {
+                return ExitCode::FAILURE;
+            };
+            let report = checked(&package, refused, oska_check::CheckOptions::default());
+            let Some(program) = &report.program else {
+                return refuse_unchecked(report, json);
+            };
+            let options = oska_run::TestOptions {
+                integration: flags.integration,
+            };
+            let tests = oska_run::test_program(program, &mut oska_run::RealHost::new(), options);
+            let entry = package::entry(&package);
+            let (path, src) = entry.map_or(("", ""), |m| (m.path.as_str(), m.source.as_str()));
+            finish_test(&tests, json, path, src)
+        }
+    }
+}
+
+/// Read the package in `dir`. `None` after printing why it is not one.
+fn load_package(
+    dir: &str,
+    json: bool,
+) -> Option<(oska_check::Package, Vec<oska_syntax::Diagnostic>)> {
+    match package::load(dir) {
+        package::Loaded::Package { package, refused } => Some((package, refused)),
+        package::Loaded::NotAPackage(refusal) => {
+            refuse(vec![refusal], json);
+            None
+        }
+        package::Loaded::Unreadable(message) => {
+            eprintln!("error: {message}");
+            None
+        }
+    }
+}
+
+/// Check `package`; the `refused` symlinks come first, and a package that
+/// had any has no program to run.
+fn checked(
+    package: &oska_check::Package,
+    refused: Vec<oska_syntax::Diagnostic>,
+    options: oska_check::CheckOptions,
+) -> oska_check::CheckReport {
+    let mut report = oska_check::check_package(package, options);
+    if !refused.is_empty() {
+        report.diagnostics.splice(0..0, refused);
+        report.program = None;
+    }
+    report
+}
+
+/// Print `diagnostics` as a refusal: as a report's diagnostics with
+/// `--format=json`, or as `oskac check` prints them. Exit code 1.
+fn refuse(diagnostics: Vec<oska_syntax::Diagnostic>, json: bool) -> ExitCode {
+    if json {
+        let report = oska_check::CheckReport {
+            diagnostics,
+            ..oska_check::CheckReport::default()
+        };
+        print!("{}", report.to_json());
+    } else {
+        print_diagnostics(&diagnostics);
+    }
+    ExitCode::FAILURE
+}
+
+/// `report` has no program, so it has diagnostics, unless the package has
+/// no module at all: print them.
+fn refuse_unchecked(report: oska_check::CheckReport, json: bool) -> ExitCode {
+    if report.diagnostics.is_empty() {
+        eprintln!("error: the package has no modules under `src/`");
+        return ExitCode::FAILURE;
+    }
+    if json {
+        for diagnostic in &report.diagnostics {
+            eprintln!("{}", diagnostic.to_json());
+        }
+    } else {
+        print_diagnostics(&report.diagnostics);
+    }
+    ExitCode::FAILURE
+}
+
+/// After `oskac <command> <file>`, a file that is part of a package gets
+/// a hint to run the command on the package: the file was checked alone.
+fn hint_package(file: &str, command: &str) {
+    if let Some(dir) = package::package_containing(file) {
+        eprintln!(
+            "hint: `{file}` is part of the package in `{dir}` and was handled alone; \
+             run `oskac {command} {dir}` to {command} the package"
+        );
+    }
 }
 
 /// `oskac explain`: print the catalog entry of a diagnostic code, as JSON

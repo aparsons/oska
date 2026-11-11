@@ -2,10 +2,10 @@
 //! joins them into one checked program, and the interpreter runs it.
 
 use oska_check::{check_package, CheckOptions, ModuleSource, Package};
-use oska_run::{run_checked, FakeHost, RunOutcome};
+use oska_run::{run_program, FakeHost, RunOutcome};
 
 /// Check the package of `modules`, each a `(module path, source)` pair,
-/// and run it on a fresh [`FakeHost`].
+/// and run its checked program on a fresh [`FakeHost`].
 fn run_modules(modules: &[(&str, &str)]) -> RunOutcome {
     let package = Package {
         manifest: None,
@@ -15,8 +15,10 @@ fn run_modules(modules: &[(&str, &str)]) -> RunOutcome {
             .collect(),
     };
     let report = check_package(&package, CheckOptions::default());
-    let mut host = FakeHost::new();
-    run_checked(report, &mut host, &["main.osk".to_string()])
+    let program = report
+        .program
+        .unwrap_or_else(|| panic!("{modules:?} should check: {:#?}", report.diagnostics));
+    run_program(&program, &mut FakeHost::new(), &["main.osk".to_string()])
 }
 
 fn assert_prints(modules: &[(&str, &str)], expected: &str) {
@@ -54,6 +56,17 @@ fn calls_types_and_trait_impls_cross_modules_at_runtime() {
 }
 
 #[test]
+fn a_panic_in_the_entry_module_spans_its_own_file_whatever_the_module_order() {
+    let main = "use pkg.a\n\nfn main() {\n    let n = a.zero()\n    let q = 1 / n\n}\n";
+    let outcome = run_modules(&[
+        ("a", "pub(pkg) fn zero() -> Int {\n    0\n}\n"),
+        ("main", main),
+    ]);
+    let panic = outcome.panic.expect("a panic");
+    assert_eq!(&main[panic.span.start..panic.span.end], "1 / n");
+}
+
+#[test]
 fn each_module_calls_its_own_private_item_of_a_shared_name() {
     let main = "use pkg.util\n\nfn main(out: Stdout) -> Result<(), IoError> {\n    \
                 let a = helper()\n    let b = util.call()\n    out.println(\"{a} {b}\")\n}\n\n\
@@ -61,15 +74,4 @@ fn each_module_calls_its_own_private_item_of_a_shared_name() {
     let util = "pub(pkg) fn call() -> String {\n    helper()\n}\n\n\
                 fn helper() -> String {\n    \"util\"\n}\n";
     assert_prints(&[("main", main), ("util", util)], "main util\n");
-}
-
-#[test]
-fn a_package_with_an_error_in_any_module_does_not_run() {
-    let outcome = run_modules(&[
-        ("main", "use pkg.util\n\nfn main() {\n    util.f()\n}\n"),
-        ("util", "fn f() {}\n"),
-    ]);
-    assert_eq!(outcome.exit_code, 1);
-    let codes: Vec<&str> = outcome.diagnostics.iter().map(|d| d.code).collect();
-    assert_eq!(codes, ["E0206"]);
 }

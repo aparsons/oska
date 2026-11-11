@@ -35,7 +35,7 @@ fn a_clean_package_of_several_modules_carries_one_checked_program() {
     assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
     let program = report.program.expect("a checked program");
     let names: Vec<&str> = program.functions.keys().map(String::as_str).collect();
-    assert_eq!(names, ["f", "main", "util.one"]);
+    assert_eq!(names, ["f", "main", "pkg.util.one"]);
 }
 
 #[test]
@@ -165,7 +165,10 @@ fn pub_and_pub_pkg_items_are_both_visible_to_other_modules() {
 #[test]
 fn an_item_is_visible_in_its_own_module_without_any_marker() {
     assert_modules_ok(&[
-        ("main", "use pkg.util\n\nfn main() {}\n\nfn f() -> Int {\n    util.a()\n}\n"),
+        (
+            "main",
+            "use pkg.util\n\nfn main() {}\n\nfn f() -> Int {\n    util.a()\n}\n",
+        ),
         (
             "util",
             "pub(pkg) fn a() -> Int {\n    helper()\n}\n\nfn helper() -> Int {\n    1\n}\n",
@@ -321,7 +324,10 @@ fn the_entry_module_s_items_are_not_in_scope_in_other_modules() {
 fn a_module_sees_another_module_s_items_only_through_an_import() {
     assert_modules_errors(
         &[
-            ("main", "fn main() {}\n\nfn f() -> Int {\n    util.one()\n}\n"),
+            (
+                "main",
+                "fn main() {}\n\nfn f() -> Int {\n    util.one()\n}\n",
+            ),
             ("util", "pub(pkg) fn one() -> Int {\n    1\n}\n"),
         ],
         &[("src/main.osk", "E0221", "util")],
@@ -365,7 +371,10 @@ fn a_sink_literal_s_fix_adds_the_use_to_its_own_module() {
 fn a_std_brace_import_is_per_module() {
     assert_modules_errors(
         &[
-            ("main", "use std.html.{text}\nuse pkg.page\n\nfn main() {}\n"),
+            (
+                "main",
+                "use std.html.{text}\nuse pkg.page\n\nfn main() {}\n",
+            ),
             (
                 "page",
                 "use std.html\n\npub(pkg) fn f() -> html.Html {\n    text(\"hi\")\n}\n",
@@ -414,6 +423,40 @@ fn two_modules_may_each_have_a_private_item_of_the_same_name() {
 }
 
 #[test]
+fn a_module_named_like_a_std_module_never_meets_the_std_module_s_names() {
+    // With `use std.html` and its own `text`, the entry module reaches the
+    // std function as `html.text`; the package's `html` module is apart.
+    let report = check_modules(&[
+        (
+            "main",
+            "use std.html\nuse pkg.page\n\nfn main() {}\n\nfn text() {}\n\n\
+             fn escaped() -> html.Html {\n    html.text(\"<b>\")\n}\n",
+        ),
+        (
+            "page",
+            "use pkg.html.{text}\n\npub(pkg) fn f() -> String {\n    text(\"x\")\n}\n",
+        ),
+        (
+            "html",
+            "pub(pkg) fn text(s: String) -> String {\n    s\n}\n",
+        ),
+    ]);
+    assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
+    let program = report.program.expect("a checked program");
+    assert!(program.functions.contains_key("pkg.html.text"));
+}
+
+#[test]
+fn a_package_with_a_diagnostic_in_any_module_has_no_program() {
+    let report = check_modules(&[
+        ("main", "use pkg.util\n\nfn main() {\n    util.f()\n}\n"),
+        ("util", "fn f() {}\n"),
+    ]);
+    assert!(!report.diagnostics.is_empty());
+    assert!(report.program.is_none());
+}
+
+#[test]
 fn use_pkg_in_a_single_file_says_pkg_paths_need_a_package() {
     let report = oska_check::check_file(
         "prog.osk",
@@ -423,7 +466,9 @@ fn use_pkg_in_a_single_file_says_pkg_paths_need_a_package() {
     let codes: Vec<&str> = report.diagnostics.iter().map(|d| d.code).collect();
     assert_eq!(codes, ["E0203"]);
     assert!(
-        report.diagnostics[0].message.contains("need a directory with an `oska.toml`"),
+        report.diagnostics[0]
+            .message
+            .contains("need a directory with an `oska.toml`"),
         "{}",
         report.diagnostics[0].message
     );

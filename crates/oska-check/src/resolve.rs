@@ -353,8 +353,8 @@ impl Resolver<'_, '_> {
             self.diagnostics.push(Diagnostic::new(
                 codes::USE_OUTSIDE_STD,
                 format!(
-                    "`use {written}` imports from outside the standard library; \
-                     only `std.*` modules can be imported"
+                    "`use {written}` imports from outside the standard library and this \
+                     package; only `std.*` and `pkg.*` modules can be imported"
                 ),
                 span,
             ));

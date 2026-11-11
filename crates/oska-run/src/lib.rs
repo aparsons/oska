@@ -55,7 +55,7 @@ mod value;
 
 pub use host::{FakeHost, Host, Output, RealHost, RootHandle, FAKE_SEED};
 pub use panics::codes;
-pub use testing::{test, TestOptions, TestReport, TestResult, TestStatus};
+pub use testing::{test, test_program, TestOptions, TestReport, TestResult, TestStatus};
 
 use interp::Interpreter;
 use oska_check::builtins;
@@ -146,36 +146,34 @@ pub fn run(src: &str, host: &mut dyn Host, args: &[String]) -> RunOutcome {
     on_interpreter_stack(|| check_and_run(src, host, args))
 }
 
-/// Run the program `report` checked, such as a package's
-/// ([`oska_check::check_package`]), on `host`, as [`run`] does. A report
-/// with diagnostics refuses the program with them.
-pub fn run_checked(
-    report: oska_check::CheckReport,
-    host: &mut dyn Host,
-    args: &[String],
-) -> RunOutcome {
-    on_interpreter_stack(|| run_report(report, host, args))
+/// Run an already **checked program** on `host`, as [`run`] does after it
+/// has checked its source: `oskac run` on a package checks the package
+/// (`oska_check::check_package`) and passes its program here. `args` are
+/// the program's arguments, the program path first.
+pub fn run_program(program: &Program, host: &mut dyn Host, args: &[String]) -> RunOutcome {
+    on_interpreter_stack(|| run_checked(program, host, args))
 }
 
 fn check_and_run(src: &str, host: &mut dyn Host, args: &[String]) -> RunOutcome {
-    run_report(oska_check::check_module(src), host, args)
-}
-
-fn run_report(report: oska_check::CheckReport, host: &mut dyn Host, args: &[String]) -> RunOutcome {
+    let report = oska_check::check_module(src);
     let Some(program) = report.program else {
         let mut outcome = RunOutcome::new(1, host);
         outcome.diagnostics = report.diagnostics;
         return outcome;
     };
-    let refusal = unimplemented_module(&program)
-        .or_else(|| ungranted(&program))
-        .or_else(|| support::unsupported(&program));
+    run_checked(&program, host, args)
+}
+
+fn run_checked(program: &Program, host: &mut dyn Host, args: &[String]) -> RunOutcome {
+    let refusal = unimplemented_module(program)
+        .or_else(|| ungranted(program))
+        .or_else(|| support::unsupported(program));
     if let Some(refusal) = refusal {
         let mut outcome = RunOutcome::new(UNSUPPORTED_EXIT_CODE, host);
         outcome.diagnostics.push(refusal);
         return outcome;
     }
-    match run_main(&program, host, args) {
+    match run_main(program, host, args) {
         Ok(()) => RunOutcome::new(0, host),
         Err(Stop::Failed) => RunOutcome::new(1, host),
         Err(Stop::Panicked(panic)) => {

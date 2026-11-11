@@ -63,7 +63,9 @@ use crate::ast::{
     Pattern, PatternArg, PatternKind, Requires, SelfParam, Stmt, StmtKind, StrPart, StructDecl,
     TestDecl, TraitDecl, Type, TypeKind, UnaryOp, UseDecl, Variant, Visibility,
 };
-use crate::{join, lex_from, resolve_escape, Diagnostic, Edit, Keyword, Punct, Span, Token, TokenKind};
+use crate::{
+    join, lex_from, resolve_escape, Diagnostic, Edit, Keyword, Punct, Span, Token, TokenKind,
+};
 
 /// Parse a whole source file: a sequence of items separated by line
 /// breaks. Stops at the first error.
