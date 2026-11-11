@@ -97,6 +97,46 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     // new object: `lower/html.rs`.
     ("Html.raw", Prelude::Identity),
     ("Html.render", Prelude::Field(0)),
+    // Attenuation that only narrows the access: the type says which
+    // operations a capability has, so the value stays the same.
+    ("Fs.read_only", Prelude::Identity),
+    ("Fs.write_only", Prelude::Identity),
+    ("Dir.read_only", Prelude::Identity),
+    ("Dir.write_only", Prelude::Identity),
+    ("Fs.restrict_to", Prelude::Runtime("fs_restrict_to")),
+    ("FsRead.restrict_to", Prelude::Runtime("fs_restrict_to")),
+    ("FsWrite.restrict_to", Prelude::Runtime("fs_restrict_to")),
+    (
+        "FsRead.restrict_to_file",
+        Prelude::Runtime("fs_restrict_to_file"),
+    ),
+    (
+        "FsWrite.restrict_to_file",
+        Prelude::Runtime("fs_restrict_to_file"),
+    ),
+    ("Dir.restrict_to", Prelude::Runtime("dir_restrict_to")),
+    ("DirRead.restrict_to", Prelude::Runtime("dir_restrict_to")),
+    ("DirWrite.restrict_to", Prelude::Runtime("dir_restrict_to")),
+    (
+        "DirRead.restrict_to_file",
+        Prelude::Runtime("dir_restrict_to_file"),
+    ),
+    (
+        "DirWrite.restrict_to_file",
+        Prelude::Runtime("dir_restrict_to_file"),
+    ),
+    (
+        "DirRead.read_to_string",
+        Prelude::Runtime("dir_read_to_string"),
+    ),
+    ("DirRead.list_dir", Prelude::Runtime("dir_list_dir")),
+    ("DirWrite.write", Prelude::Runtime("dir_write")),
+    ("DirWrite.create_dir", Prelude::Runtime("dir_create_dir")),
+    (
+        "FileRead.read_to_string",
+        Prelude::Runtime("file_read_to_string"),
+    ),
+    ("FileWrite.write", Prelude::Runtime("file_write")),
 ];
 
 /// `name` without the module a `std` function is called by when the
@@ -142,6 +182,9 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_sys_mkdirat", Runtime::Syscall(34)),
     ("rt_sys_getdents64", Runtime::Syscall(61)),
     ("rt_sys_fstat", Runtime::Syscall(80)),
+    ("rt_sys_ftruncate", Runtime::Syscall(46)),
+    ("rt_sys_readlinkat", Runtime::Syscall(78)),
+    ("rt_sys_fcntl", Runtime::Syscall(25)),
     ("rt_sys_mmap", Runtime::Syscall(222)),
     ("rt_sys_munmap", Runtime::Syscall(215)),
     ("rt_sys_clock_gettime", Runtime::Syscall(113)),
@@ -174,6 +217,7 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_mem_as_path", Runtime::Identity),
     ("rt_mem_list", Runtime::Identity),
     ("rt_mem_as_list", Runtime::Identity),
+    ("rt_mem_as_root", Runtime::Identity),
     ("rt_mem_globals", Runtime::Globals),
 ];
 

@@ -849,7 +849,9 @@ impl<'l, 'p> Body<'l, 'p> {
             rhs: one,
             target: shared,
         });
-        if matches!(ty, Type::Fn { .. }) {
+        if layout::is_confined(ty) {
+            self.call_runtime("root_drop", vec![value], NOWHERE)?;
+        } else if matches!(ty, Type::Fn { .. }) {
             self.drop_function_value(value);
         } else if layout::holds_counted(self.program(), ty) {
             let drop = Instance::Drop(self.source, ty.clone());
@@ -2196,6 +2198,7 @@ fn is_stateless_input(ty: &Type) -> bool {
     matches!(ty, Type::Named { name, args } if args.is_empty() && matches!(
         name.as_str(),
         "Stdout" | "Stderr" | "Stdin" | "Env" | "Clock" | "Random" | "Args"
+            | "Fs" | "FsRead" | "FsWrite"
     ))
 }
 

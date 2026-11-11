@@ -661,3 +661,35 @@ fn main(io: Stdout) -> Result<(), IoError> {
     assert_eq!(outcome.exit_code, Some(0), "{outcome:#?}");
     assert_eq!(outcome.stdout, "320100000\n");
 }
+
+#[test]
+fn a_task_closure_capturing_a_directory_capability_reads_inside_the_scope() {
+    let src = "fn main(io: Stdout, fs: FsRead) -> Result<(), IoError> {
+    let root = fs.restrict_to(\"data\")
+    let text = scope |s| {
+        let a = s.spawn(|| root.read_to_string(Path.new(\"a.txt\")))
+        let b = s.spawn(|| root.read_to_string(Path.new(\"missing.txt\")))
+        let _ = io.println(\"spawned\")
+        let first = a.join()
+        let second = b.join()
+        let a_text = match first {
+            Ok(x) => x
+            Err(e) => \"{e}\"
+        }
+        let b_text = match second {
+            Ok(x) => x
+            Err(e) => \"{e}\"
+        }
+        \"{a_text}|{b_text}\"
+    }
+    io.println(text)
+}
+";
+    let case = Case::file("tasks_dir_capability", src).with_file("data/a.txt", "alpha");
+    let outcome = assert_same(&case);
+    assert_eq!(outcome.exit_code, Some(0), "{outcome:#?}");
+    assert!(
+        outcome.stdout.starts_with("spawned\nalpha|"),
+        "{outcome:#?}"
+    );
+}
