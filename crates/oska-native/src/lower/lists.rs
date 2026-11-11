@@ -1,6 +1,8 @@
 //! Lists: literals, the prelude's `List` methods, `for` over a list, list
 //! equality, and the drop function of a list type. `layout.rs` says how a
-//! list object is laid out.
+//! list object is laid out. `List.eq` is `traits.rs`'s `Body::equal`,
+//! which calls the function generated per item type here
+//! ([`Body::list_eq_function`]).
 //!
 //! # Copy-on-write
 //!
@@ -21,10 +23,10 @@
 //! (the type's drop function, [`Body::drop_list`]).
 
 use oska_check::builtins;
-use oska_check::program::{trait_method, Expr, Place, Type};
+use oska_check::program::{Expr, Place, Type};
 use oska_syntax::{Diagnostic, Span};
 
-use super::{constant_word, panics, Body, Held, Instance, Slot, Source};
+use super::{constant_word, panics, Body, Held, Instance, Slot};
 use crate::ir::{BinOp, Cond, Inst, Label, Temp};
 use crate::layout;
 use crate::NOWHERE;
@@ -78,7 +80,7 @@ impl Body<'_, '_> {
 
     /// The prelude's `List` methods that read a list, inline: `name`
     /// applied to `values`, evaluated from `args`, for `expr`. `None` for
-    /// any other intrinsic. `List.map` is not one: it takes a closure
+    /// any other intrinsic (`List.eq` is `Body::eq_intrinsic`'s). `List.map` is not one: it takes a closure
     /// (#135), so it is refused as any intrinsic without an
     /// implementation is.
     pub(super) fn list_intrinsic(
@@ -126,11 +128,6 @@ impl Body<'_, '_> {
                 item
             }
             ("List.get", Some(&index)) => self.list_get(list, index, &item_ty, expr.span)?,
-            ("List.eq", Some(&other)) => {
-                let equal = self.list_equal(&item_ty, list, other)?;
-                self.consume(other)?;
-                equal
-            }
             _ => return Ok(None),
         };
         self.consume(list)?;
@@ -338,8 +335,9 @@ impl Body<'_, '_> {
     }
 
     /// Whether the lists `a` and `b`, of items of the concrete type
-    /// `item_ty`, are equal, by the function generated for it.
-    fn list_equal(&mut self, item_ty: &Type, a: Temp, b: Temp) -> Result<Temp, Diagnostic> {
+    /// `item_ty`, are equal, by the function generated for it: what
+    /// `Body::equal` (`traits.rs`) does for a list.
+    pub(super) fn list_equal(&mut self, item_ty: &Type, a: Temp, b: Temp) -> Result<Temp, Diagnostic> {
         let instance = Instance::ListEq(self.source, item_ty.clone());
         let id = self
             .lowering
@@ -379,7 +377,7 @@ impl Body<'_, '_> {
         });
         let x = self.item(a, at);
         let y = self.item(b, at);
-        let equal = self.equal(item_ty, x, y)?;
+        let equal = self.equal(item_ty, x, y, NOWHERE)?;
         self.push(Inst::JumpIfZero {
             cond: equal,
             target: no,
@@ -402,56 +400,5 @@ impl Body<'_, '_> {
         self.push(Inst::Label(label));
         let value = self.constant(value);
         self.push(Inst::Return(value));
-    }
-
-    /// Whether `a` and `b`, borrowed values of the concrete type `ty`, are
-    /// equal by `Eq`: built in for integers, `Bool`, `()` and text, else
-    /// the type's own `eq` (the program's, or the runtime's for `Path`).
-    fn equal(&mut self, ty: &Type, a: Temp, b: Temp) -> Result<Temp, Diagnostic> {
-        match ty {
-            Type::Int(_) | Type::Bool | Type::Unit => {
-                let dst = self.temp();
-                self.push(Inst::Compare {
-                    cond: Cond::Eq,
-                    dst,
-                    lhs: a,
-                    rhs: b,
-                });
-                Ok(dst)
-            }
-            Type::String => self.call_runtime("string_eq", vec![a, b], NOWHERE),
-            Type::Named { name, .. } if name == "Path" => {
-                self.call_runtime("path_eq", vec![a, b], NOWHERE)
-            }
-            _ if layout::list_item(ty).is_some() => {
-                let item = layout::list_item(ty).cloned().unwrap_or(Type::Unit);
-                self.list_equal(&item, a, b)
-            }
-            Type::Named { name, .. } => {
-                let eq = trait_method(name, "Eq", "eq");
-                let Some(function) = self.program().functions.get(&eq) else {
-                    return Err(self.refuse(NOWHERE, &format!("comparing lists of `{ty}`")));
-                };
-                let mut bound = Vec::new();
-                if let Some(self_ty) = &function.self_ty {
-                    self_ty.bind(ty, &mut bound);
-                }
-                let type_args = function
-                    .generics
-                    .iter()
-                    .map(|g| {
-                        bound
-                            .iter()
-                            .find(|(name, _)| name == g)
-                            .map_or(Type::Unit, |(_, t)| t.clone())
-                    })
-                    .collect();
-                match self.source {
-                    Source::User => self.call_program(&eq, type_args, vec![a, b], NOWHERE),
-                    Source::Runtime => Err(self.refuse(NOWHERE, &format!("comparing `{ty}`"))),
-                }
-            }
-            _ => Err(self.refuse(NOWHERE, &format!("comparing lists of `{ty}`"))),
-        }
     }
 }

@@ -64,7 +64,7 @@ impl Body<'_, '_> {
                 dst: result,
                 src: arm_value,
             });
-            values.push(arm_value);
+            values.push(self.owned.remove(&arm_value));
             self.push(Inst::Jump(end));
             if let Some((failed, bound)) = failed {
                 self.push(Inst::Label(failed));
@@ -78,7 +78,7 @@ impl Body<'_, '_> {
         }
         // The checker guarantees an arm matches: nothing reaches here.
         self.push(Inst::Label(end));
-        self.merge_owned(&values, result);
+        self.merge_owned(values, result);
         if let Some(held_ty) = held {
             self.held.pop();
             self.release(value, &held_ty)?;

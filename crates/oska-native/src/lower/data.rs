@@ -69,7 +69,7 @@ fn in_self(place: &Place) -> bool {
 
 impl Body<'_, '_> {
     /// The fields of objects of the concrete type `ty`.
-    fn fields_of(&self, ty: &Type) -> Option<Fields> {
+    pub(super) fn fields_of(&self, ty: &Type) -> Option<Fields> {
         layout::fields(self.program(), ty)
     }
 
@@ -331,7 +331,9 @@ impl Body<'_, '_> {
         for arg in args {
             values.push(self.expr(arg)?);
         }
-        let name = match callee {
+        let receiver_ty = self.place_type(receiver);
+        let (callee, type_args) = self.resolve(callee, type_args, receiver_ty.as_ref(), span)?;
+        let name = match &callee {
             Callee::Function(name) if self.program().functions.contains_key(name) => name,
             Callee::Function(name) | Callee::Intrinsic(name) => {
                 return Err(self.refuse(span, &format!("the mutating method `{name}`")))
@@ -343,7 +345,6 @@ impl Body<'_, '_> {
                 ))
             }
         };
-        let type_args: Vec<Type> = type_args.iter().map(|t| self.ty(t)).collect();
         let mutated = self.mutated_receiver(name, &type_args).is_some();
         // Where the receiver is: its temporary, or a field of an unshared
         // struct when the method may change it.
@@ -367,7 +368,7 @@ impl Body<'_, '_> {
         };
         let mut call_args = vec![value];
         call_args.extend(values.iter().copied());
-        let result = self.call_program(name, type_args, call_args, span)?;
+        let result = self.call_program(name, type_args.clone(), call_args, span)?;
         if mutated {
             let after = self.second_result();
             match held_at {
