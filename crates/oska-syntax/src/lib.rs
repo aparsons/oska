@@ -12,7 +12,9 @@ mod export;
 mod parser;
 
 pub use export::{module_to_json, module_to_tree, AST_VERSION};
-pub use parser::{parse_expr, parse_module, parse_prelude, parse_stmts, parse_type};
+pub use parser::{
+    parse_expr, parse_module, parse_module_at, parse_prelude, parse_stmts, parse_type,
+};
 
 /// A half-open byte range `start..end` in the source text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -305,6 +307,9 @@ pub struct Fix {
     pub message: String,
     /// Non-overlapping edits, each against the original source.
     pub edits: Vec<Edit>,
+    /// The file the edits are in, when it is not the diagnostic's own,
+    /// such as the declaration a package check's fix marks `pub(pkg)`.
+    pub path: Option<String>,
 }
 
 /// Replace the source text at `span` with `replacement`. An empty span
@@ -357,6 +362,7 @@ impl Diagnostic {
         self.fix = Some(Fix {
             message: message.into(),
             edits,
+            path: None,
         });
         self
     }
@@ -364,7 +370,8 @@ impl Diagnostic {
     /// Render as a single-line JSON object for machine consumers. The
     /// `path` field comes before `span`, and is omitted when the diagnostic
     /// names no file. The `fix` field follows `span`, and is omitted when
-    /// there is no fix.
+    /// there is no fix; it has a `path` after its `message` when its edits
+    /// are in another file than the diagnostic.
     pub fn to_json(&self) -> String {
         let mut out = format!(
             "{{\"code\":\"{}\",\"message\":\"{}\"",
@@ -387,8 +394,11 @@ impl Diagnostic {
                     )
                 })
                 .collect();
+            let path = fix.path.as_ref().map_or_else(String::new, |path| {
+                format!(",\"path\":\"{}\"", json_escape(path))
+            });
             out.push_str(&format!(
-                ",\"fix\":{{\"message\":\"{}\",\"edits\":[{}]}}",
+                ",\"fix\":{{\"message\":\"{}\"{path},\"edits\":[{}]}}",
                 json_escape(&fix.message),
                 edits.join(",")
             ));
@@ -465,7 +475,12 @@ pub fn json_escape(s: &str) -> String {
 /// Blank and comment-only lines produce at most one terminator, and none is
 /// emitted at end of input.
 pub fn lex(src: &str) -> Result<Vec<Token>, LexError> {
-    let mut lexer = Lexer { src, pos: 0 };
+    lex_from(src, 0)
+}
+
+/// [`lex`] `src[start..]`, with spans in all of `src`.
+pub(crate) fn lex_from(src: &str, start: usize) -> Result<Vec<Token>, LexError> {
+    let mut lexer = Lexer { src, pos: start };
     let mut tokens: Vec<Token> = Vec::new();
     let mut brackets: Vec<Punct> = Vec::new();
     loop {

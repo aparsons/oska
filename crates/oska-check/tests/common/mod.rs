@@ -237,3 +237,36 @@ pub fn assert_modules_fix(modules: &[(&str, &str)], path: &str, code: &str, expe
     }
     assert_eq!(fixed, expected, "fix for {code} in {path}");
 }
+
+/// Assert that the first diagnostic with `code` carries a fix whose edits
+/// are in the file at `edited`, which may be another file than the
+/// diagnostic's, and that applying it to that file produces `expected`.
+pub fn assert_modules_fix_in(modules: &[(&str, &str)], code: &str, edited: &str, expected: &str) {
+    let report = check_modules(modules);
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|d| d.code == code)
+        .unwrap_or_else(|| {
+            panic!(
+                "{modules:?} should report {code}: {:#?}",
+                report.diagnostics
+            )
+        });
+    let fix = diagnostic
+        .fix
+        .as_ref()
+        .unwrap_or_else(|| panic!("{code} should carry a fix: {diagnostic:#?}"));
+    let path = fix
+        .path
+        .as_deref()
+        .unwrap_or_else(|| path_of(diagnostic.location.as_deref()));
+    assert_eq!(path, edited, "the file the fix for {code} edits");
+    let mut edits = fix.edits.clone();
+    edits.sort_by_key(|e| std::cmp::Reverse(e.span.start));
+    let mut fixed = module_at(modules, path).to_string();
+    for edit in edits {
+        fixed.replace_range(edit.span.start..edit.span.end, &edit.replacement);
+    }
+    assert_eq!(fixed, expected, "fix for {code} in {path}");
+}

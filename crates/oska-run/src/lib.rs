@@ -146,8 +146,22 @@ pub fn run(src: &str, host: &mut dyn Host, args: &[String]) -> RunOutcome {
     on_interpreter_stack(|| check_and_run(src, host, args))
 }
 
+/// Run the program `report` checked, such as a package's
+/// ([`oska_check::check_package`]), on `host`, as [`run`] does. A report
+/// with diagnostics refuses the program with them.
+pub fn run_checked(
+    report: oska_check::CheckReport,
+    host: &mut dyn Host,
+    args: &[String],
+) -> RunOutcome {
+    on_interpreter_stack(|| run_report(report, host, args))
+}
+
 fn check_and_run(src: &str, host: &mut dyn Host, args: &[String]) -> RunOutcome {
-    let report = oska_check::check_module(src);
+    run_report(oska_check::check_module(src), host, args)
+}
+
+fn run_report(report: oska_check::CheckReport, host: &mut dyn Host, args: &[String]) -> RunOutcome {
     let Some(program) = report.program else {
         let mut outcome = RunOutcome::new(1, host);
         outcome.diagnostics = report.diagnostics;

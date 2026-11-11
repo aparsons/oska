@@ -102,7 +102,7 @@ impl StdModule {
         self.module()
             .items
             .iter()
-            .filter(|item| item.public)
+            .filter(|item| item.is_public())
             .filter_map(item_name)
             .collect()
     }

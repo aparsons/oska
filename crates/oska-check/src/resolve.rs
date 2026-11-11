@@ -335,6 +335,20 @@ impl Resolver<'_, '_> {
         };
         let written: Vec<&str> = path.iter().map(|s| s.name.as_str()).collect();
         let written = written.join(".");
+        // A package's `use pkg.…` is resolved by linking (`link.rs`) and
+        // never reaches here: this is a single file.
+        if first.name == crate::link::PKG {
+            self.diagnostics.push(Diagnostic::new(
+                codes::PKG_OUTSIDE_PACKAGE,
+                format!(
+                    "`use {written}` imports a module of this package, but a single file \
+                     is not a package: `pkg` paths need a directory with an `oska.toml` \
+                     and its modules under `src/`"
+                ),
+                span,
+            ));
+            return;
+        }
         if first.name != "std" {
             self.diagnostics.push(Diagnostic::new(
                 codes::USE_OUTSIDE_STD,

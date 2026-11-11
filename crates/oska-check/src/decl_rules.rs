@@ -193,14 +193,14 @@ struct Names {
 }
 
 impl Names {
+    /// A name another module's item is declared under, such as
+    /// `util.Item` (`link.rs`), is judged by its own last segment.
     fn upper(&mut self, ident: &Ident, noun: &str) {
-        if !ident.name.starts_with(|c: char| c.is_ascii_uppercase()) {
+        let name = crate::link::unqualified(&ident.name);
+        if !name.starts_with(|c: char| c.is_ascii_uppercase()) {
             self.diagnostics.push(Diagnostic::new(
                 codes::NOT_UPPERCASE,
-                format!(
-                    "{noun} name `{}` must start with an uppercase letter",
-                    ident.name
-                ),
+                format!("{noun} name `{name}` must start with an uppercase letter"),
                 ident.span,
             ));
         }
@@ -208,13 +208,11 @@ impl Names {
 
     /// A leading `_` counts as lowercase.
     fn lower(&mut self, ident: &Ident, noun: &str) {
-        if ident.name.starts_with(|c: char| c.is_ascii_uppercase()) {
+        let name = crate::link::unqualified(&ident.name);
+        if name.starts_with(|c: char| c.is_ascii_uppercase()) {
             self.diagnostics.push(Diagnostic::new(
                 codes::NOT_LOWERCASE,
-                format!(
-                    "{noun} name `{}` must start with a lowercase letter",
-                    ident.name
-                ),
+                format!("{noun} name `{name}` must start with a lowercase letter"),
                 ident.span,
             ));
         }

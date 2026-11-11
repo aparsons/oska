@@ -76,14 +76,15 @@ Conventions:
 
 ### Items
 
-Every item node starts with the same two fields, before its own fields:
+Every item node starts with the same fields, before its own fields:
 
 | Field | Type | Notes |
 | --- | --- | --- |
 | `public` | bool | declared `pub` |
+| `package` | bool | present, and `true`, only when declared `pub(pkg)`: visible to every module of the package, but not part of its API |
 | `attributes` | array of `Attribute` | in source order; empty when there are none |
 
-An item's span starts at its first attribute, if it has one, and otherwise at `pub` or its keyword. The tables below list only each item's own fields.
+An item's span starts at its first attribute, if it has one, and otherwise at `pub` (or `pub(pkg)`) or its keyword. The tables below list only each item's own fields.
 
 `public` is always `false` for `UseItem` (`pub use` is error `E0164`, because re-exports are not defined in v0), `TestItem` (`pub test` is error `E0163`), `ImplItem` (error `E0151`), and the methods of a `TraitItem` (error `E0162`).
 

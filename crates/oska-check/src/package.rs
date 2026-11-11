@@ -4,13 +4,13 @@
 //! [`check_file`], a single file as `oskac check` gives it, is a package
 //! of one module with no manifest.
 //!
-//! Until cross-module `use` exists (#118), the modules of a package are
-//! independent: each is checked by [`check_module_with`] as it would be
-//! alone, and the reports are merged in the order the modules are given.
+//! The modules of a package are checked as one program: `link.rs` joins
+//! them into one module, resolving `use pkg.…` imports, and the checker
+//! checks that module, so every rule holds across the whole package.
 
-use oska_syntax::Location;
+use oska_syntax::{Location, Span};
 
-use crate::{check_module_with, CheckOptions, CheckReport};
+use crate::{check_module_with, check_parsed, link, CheckOptions, CheckReport};
 
 /// The module path of a single file, and of a package's entry module,
 /// `src/main.osk`.
@@ -74,50 +74,138 @@ pub fn check_file(path: &str, source: &str, options: CheckOptions) -> CheckRepor
     check_package(&Package::single_file(path, source), options)
 }
 
-/// Check every module of `package` and return one report. Diagnostics,
-/// audit sites and attenuations are listed module by module, in the order
-/// of `package.modules`, and in source order within a module; each names
-/// its module's file. The checked program is present only when no module
-/// has a diagnostic: the program of a one-module package, or of a
-/// package's [`ENTRY_MODULE`]. A package of several modules without one,
-/// a library, has none until modules join into one program (#118).
+/// Check every module of `package` as one program and return one report.
+/// Diagnostics, audit sites and attenuations are listed module by module,
+/// in the order of `package.modules`, and in source order within a
+/// module; each names its module's file, and its spans are offsets into
+/// that file. The checked program, present only when there are no
+/// diagnostics, spans every module (`link.rs`).
+///
+/// A package of one module with no manifest is a single file: checked
+/// exactly as [`check_module_with`] checks it, where `use pkg.…` is an
+/// error.
 pub fn check_package(package: &Package, options: CheckOptions) -> CheckReport {
-    let mut merged = CheckReport::default();
-    let mut programs = Vec::new();
-    for module in &package.modules {
-        let report = check_module_with(&module.source, options);
-        let locate =
-            |span: oska_syntax::Span| Some(Location::new(&module.path, &module.source, span.start));
-        merged.diagnostics.extend(
-            report
-                .diagnostics
-                .into_iter()
-                .map(|d| d.locate(&module.path, &module.source)),
-        );
-        merged
-            .audit
-            .extend(report.audit.into_iter().map(|mut site| {
-                site.location = locate(site.span);
-                site
-            }));
-        merged
-            .attenuations
-            .extend(report.attenuations.into_iter().map(|mut attenuation| {
-                attenuation.location = locate(attenuation.span);
-                attenuation
-            }));
-        merged.functions.extend(report.functions);
-        programs.push((module.module.as_str(), report.program));
+    match package.modules.as_slice() {
+        [] => CheckReport::default(),
+        [module] if package.manifest.is_none() => {
+            let report = check_module_with(&module.source, options);
+            locate(report, &Joined::new(std::slice::from_ref(module)))
+        }
+        modules => check_joined(modules, options),
     }
-    if merged.diagnostics.is_empty() {
-        merged.program = if programs.len() == 1 {
-            programs.pop().and_then(|(_, program)| program)
-        } else {
-            programs
-                .into_iter()
-                .find(|(module, _)| *module == ENTRY_MODULE)
-                .and_then(|(_, program)| program)
+}
+
+/// The modules' texts end to end, each after a line break, and where
+/// each starts. The line break makes the end of one module's text an
+/// offset no other module has.
+struct Joined<'p> {
+    text: String,
+    modules: Vec<(&'p ModuleSource, usize)>,
+}
+
+impl<'p> Joined<'p> {
+    fn new(modules: &'p [ModuleSource]) -> Joined<'p> {
+        let mut text = String::new();
+        let mut starts = Vec::new();
+        for module in modules {
+            if !starts.is_empty() {
+                text.push('\n');
+            }
+            starts.push((module, text.len()));
+            text.push_str(&module.source);
+        }
+        Joined {
+            text,
+            modules: starts,
+        }
+    }
+
+    /// `span` within the file of its module, and that module.
+    fn local(&self, span: Span) -> (&'p ModuleSource, Span) {
+        let index = self
+            .modules
+            .partition_point(|(_, start)| *start <= span.start)
+            .saturating_sub(1);
+        let (module, start) = self.modules[index];
+        let local = Span {
+            start: span.start - start,
+            end: (span.end - start).min(module.source.len()),
         };
+        (module, local)
     }
-    merged
+}
+
+/// Parse every module at its offset in the joined text, link them, and
+/// check the joined module.
+fn check_joined(modules: &[ModuleSource], options: CheckOptions) -> CheckReport {
+    let joined = Joined::new(modules);
+    let mut parsed = Vec::new();
+    let mut parse_errors = Vec::new();
+    for (module, start) in &joined.modules {
+        let end = start + module.source.len();
+        match oska_syntax::parse_module_at(&joined.text[..end], *start) {
+            Ok(ast) => parsed.push(link::Parsed {
+                module: module.module.clone(),
+                ast,
+            }),
+            Err(err) => parse_errors.push(err),
+        }
+    }
+    if !parse_errors.is_empty() {
+        let report = CheckReport {
+            diagnostics: parse_errors,
+            ..CheckReport::default()
+        };
+        return locate(report, &joined);
+    }
+    let linked = link::link(&joined.text, parsed);
+    let mut report = check_parsed(&joined.text, &linked.module, options);
+    report.diagnostics.retain(|d| {
+        !linked
+            .reported
+            .iter()
+            .any(|r| r.start <= d.span.start && d.span.end <= r.end)
+    });
+    report.diagnostics.extend(linked.diagnostics);
+    report.diagnostics.sort_by_key(|d| d.span.start);
+    if !report.diagnostics.is_empty() {
+        report.program = None;
+    }
+    locate(report, &joined)
+}
+
+/// Name the file of every diagnostic, audit site and attenuation of
+/// `report`, whose spans are offsets into `joined`'s text, and make each
+/// span an offset into its file. A fix whose edits are in another file
+/// than its diagnostic names that file.
+fn locate(mut report: CheckReport, joined: &Joined) -> CheckReport {
+    report.diagnostics = report
+        .diagnostics
+        .into_iter()
+        .map(|mut d| {
+            let (module, span) = joined.local(d.span);
+            d.span = span;
+            if let Some(fix) = &mut d.fix {
+                for edit in &mut fix.edits {
+                    let (edited, span) = joined.local(edit.span);
+                    edit.span = span;
+                    if edited.path != module.path {
+                        fix.path = Some(edited.path.clone());
+                    }
+                }
+            }
+            d.locate(&module.path, &module.source)
+        })
+        .collect();
+    for site in &mut report.audit {
+        let (module, span) = joined.local(site.span);
+        site.span = span;
+        site.location = Some(Location::new(&module.path, &module.source, span.start));
+    }
+    for attenuation in &mut report.attenuations {
+        let (module, span) = joined.local(attenuation.span);
+        attenuation.span = span;
+        attenuation.location = Some(Location::new(&module.path, &module.source, span.start));
+    }
+    report
 }

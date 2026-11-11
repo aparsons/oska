@@ -1,6 +1,6 @@
 //! A package is checked as one program of several modules (spec #115).
-//! Until cross-module `use` exists, its modules are independent: each is
-//! checked as it would be alone, and every report entry names its file.
+//! Every report entry names the file it is in, with spans in that file.
+//! Modules may declare the same private names.
 
 mod common;
 
@@ -85,7 +85,7 @@ fn the_json_report_carries_each_entry_s_path_before_its_span() {
     for expected in [
         r#"{"code":"E0200","message":"unknown type `Strng`; did you mean `String`?","path":"src/main.osk","span":"#,
         r#"{"kind":"assume_trusted","path":"src/io.osk","span":"#,
-        r#"{"function":"docs","method":"restrict_to","path":"src/io.osk","span":"#,
+        r#"{"function":"io.docs","method":"restrict_to","path":"src/io.osk","span":"#,
     ] {
         assert!(json.contains(expected), "no {expected} in {json}");
     }

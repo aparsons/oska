@@ -39,6 +39,7 @@
 //! which carry a machine-applicable fix is in `docs/checker.md`; a
 //! conformance test keeps it in step with `codes`.
 
+use oska_syntax::ast::Module;
 use oska_syntax::{json_escape, Diagnostic, Location, Span};
 
 mod authority;
@@ -50,6 +51,7 @@ mod decl_rules;
 mod infer;
 mod instantiation;
 mod items;
+mod link;
 mod package;
 mod prelude;
 pub mod program;
@@ -68,6 +70,12 @@ pub(crate) mod codes {
     pub const UNKNOWN_NAME: &str = "E0200";
     pub const WRONG_NAMESPACE: &str = "E0201";
     pub const DUPLICATE_NAME: &str = "E0202";
+    pub const PKG_OUTSIDE_PACKAGE: &str = "E0203";
+    pub const UNKNOWN_PKG_MODULE: &str = "E0204";
+    pub const NOT_IN_MODULE: &str = "E0205";
+    pub const PRIVATE_ITEM: &str = "E0206";
+    pub const IMPORT_CYCLE: &str = "E0207";
+    pub const NAME_BOUND_TWICE: &str = "E0208";
     pub const CAP_REQUIRED: &str = "E0210";
     pub const MAIN_PARAM: &str = "E0211";
     pub const MAIN_RETURN: &str = "E0212";
@@ -474,31 +482,35 @@ pub fn check_module(src: &str) -> CheckReport {
 /// Check `src` as a module. A parse error is reported as the only
 /// diagnostic, with no functions.
 pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
-    let module = match oska_syntax::parse_module(src) {
-        Ok(module) => module,
-        Err(err) => {
-            return CheckReport {
-                diagnostics: vec![err],
-                ..CheckReport::default()
-            }
-        }
-    };
-    let mut diagnostics = Vec::new();
-    let decls = collect::Decls::collect(&module, &mut diagnostics);
-    resolve::module(&module, &decls, &mut diagnostics);
-    decl_rules::module(src, &module, &decls, &mut diagnostics);
-    coherence::module(&module, &decls, &mut diagnostics);
-    recursion::module(&module, &decls, &mut diagnostics);
-    if options.release {
-        release::module(&module, &mut diagnostics);
+    match oska_syntax::parse_module(src) {
+        Ok(module) => check_parsed(src, &module, options),
+        Err(err) => CheckReport {
+            diagnostics: vec![err],
+            ..CheckReport::default()
+        },
     }
-    let items = items::Items::collect(&module, &decls);
-    traits::module(src, &module, &decls, &items, &mut diagnostics);
+}
+
+/// Check `module`, parsed from `src`, whose spans are offsets into `src`:
+/// one source file, or the module that joins a package's modules
+/// (`link.rs`).
+pub(crate) fn check_parsed(src: &str, module: &Module, options: CheckOptions) -> CheckReport {
+    let mut diagnostics = Vec::new();
+    let decls = collect::Decls::collect(module, &mut diagnostics);
+    resolve::module(module, &decls, &mut diagnostics);
+    decl_rules::module(src, module, &decls, &mut diagnostics);
+    coherence::module(module, &decls, &mut diagnostics);
+    recursion::module(module, &decls, &mut diagnostics);
+    if options.release {
+        release::module(module, &mut diagnostics);
+    }
+    let items = items::Items::collect(module, &decls);
+    traits::module(src, module, &decls, &items, &mut diagnostics);
     let mut findings = body::Findings {
         diagnostics,
         ..body::Findings::default()
     };
-    body::module(src, &module, &decls, &items, &mut findings);
+    body::module(src, module, &decls, &items, &mut findings);
     let body::Findings {
         mut diagnostics,
         mut audit,
@@ -509,7 +521,7 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
         ..
     } = findings;
     instantiation::module(
-        &module,
+        module,
         &decls,
         &items,
         assumed,
@@ -518,8 +530,8 @@ pub fn check_module_with(src: &str, options: CheckOptions) -> CheckReport {
     );
     let program = diagnostics
         .is_empty()
-        .then(|| program::lower::module(src, &module, &items, &resolutions));
-    let functions = authority::report(&module, &decls);
+        .then(|| program::lower::module(src, module, &items, &resolutions));
+    let functions = authority::report(module, &decls);
     diagnostics.sort_by_key(|d| d.span.start);
     audit.sort_by_key(|site| site.span.start);
     // A chain shares its start: the inner call, which ends first, is first.

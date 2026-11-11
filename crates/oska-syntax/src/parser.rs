@@ -61,9 +61,9 @@ use crate::ast::{
     Arg, Attribute, BinaryOp, Block, ClosureParam, ConstDecl, Ensures, EnumDecl, Expr, ExprKind,
     Field, Fields, FnDecl, GenericParam, Ident, ImplDecl, Item, ItemKind, MatchArm, Module, Param,
     Pattern, PatternArg, PatternKind, Requires, SelfParam, Stmt, StmtKind, StrPart, StructDecl,
-    TestDecl, TraitDecl, Type, TypeKind, UnaryOp, UseDecl, Variant,
+    TestDecl, TraitDecl, Type, TypeKind, UnaryOp, UseDecl, Variant, Visibility,
 };
-use crate::{join, lex, resolve_escape, Diagnostic, Edit, Keyword, Punct, Span, Token, TokenKind};
+use crate::{join, lex_from, resolve_escape, Diagnostic, Edit, Keyword, Punct, Span, Token, TokenKind};
 
 /// Parse a whole source file: a sequence of items separated by line
 /// breaks. Stops at the first error.
@@ -77,6 +77,21 @@ pub fn parse_module(src: &str) -> Result<Module, Diagnostic> {
 /// same grammar as [`parse_module`].
 pub fn parse_prelude(src: &str) -> Result<Module, Diagnostic> {
     module(src, Mode::Prelude)
+}
+
+/// Parse `src[start..]` as a whole source file, as [`parse_module`]
+/// does, with every span an offset into all of `src`: one module of a
+/// text that joins a package's modules end to end.
+pub fn parse_module_at(src: &str, start: usize) -> Result<Module, Diagnostic> {
+    let mut parser = Parser::new_at(src, start)?;
+    let items = parser.items()?;
+    Ok(Module {
+        items,
+        span: Span {
+            start,
+            end: src.len(),
+        },
+    })
 }
 
 fn module(src: &str, mode: Mode) -> Result<Module, Diagnostic> {
@@ -170,8 +185,10 @@ struct ItemPrefix {
     /// keyword.
     start: Span,
     attributes: Vec<Attribute>,
-    /// The `pub` keyword, if written.
+    /// The `pub` keyword, or all of `pub(pkg)`, if written.
     pub_span: Option<Span>,
+    /// What `pub_span` declares.
+    visibility: Visibility,
 }
 
 struct Parser<'a> {
@@ -232,7 +249,12 @@ fn comparison_op(kind: Option<&TokenKind>) -> Option<BinaryOp> {
 
 impl<'a> Parser<'a> {
     fn new(src: &'a str) -> Result<Self, Diagnostic> {
-        let tokens = lex(src)?;
+        Self::new_at(src, 0)
+    }
+
+    /// A parser of `src[start..]`, with spans in all of `src`.
+    fn new_at(src: &'a str, start: usize) -> Result<Self, Diagnostic> {
+        let tokens = lex_from(src, start)?;
         // `unsafe` is reserved but has no meaning in v0, wherever it is
         // written, so reject it before parsing.
         if let Some(token) = tokens
@@ -251,7 +273,7 @@ impl<'a> Parser<'a> {
             src,
             tokens,
             pos: 0,
-            prev_end: 0,
+            prev_end: start,
             mode: Mode::User,
         })
     }
@@ -420,13 +442,42 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Consume an optional `pub`, returning its span.
-    fn eat_pub(&mut self) -> Option<Span> {
-        let span = self.peek_span();
-        self.at_kw(Keyword::Pub).then(|| {
+    /// Consume an optional `pub` before a field, where `pub(pkg)` is not
+    /// written.
+    fn eat_pub_keyword(&mut self) -> bool {
+        let public = self.at_kw(Keyword::Pub);
+        if public {
             self.bump();
-            span
-        })
+        }
+        public
+    }
+
+    /// Consume an optional `pub` or `pub(pkg)`, returning its span and
+    /// what it declares.
+    fn eat_pub(&mut self) -> (Option<Span>, Visibility) {
+        let start = self.peek_span();
+        if !self.at_kw(Keyword::Pub) {
+            return (None, Visibility::Private);
+        }
+        self.bump();
+        let package = self.at_punct(Punct::LParen)
+            && matches!(self.peek_at(1), Some(TokenKind::Ident(name)) if name == "pkg")
+            && self.peek_at(2) == Some(&TokenKind::Punct(Punct::RParen));
+        if !package {
+            return (Some(start), Visibility::Public);
+        }
+        for _ in 0..3 {
+            self.bump();
+        }
+        (Some(self.span_from(start)), Visibility::Package)
+    }
+
+    /// The word a rejected visibility marker is removed as.
+    fn visibility_word(visibility: Visibility) -> &'static str {
+        match visibility {
+            Visibility::Package => "pub(pkg)",
+            Visibility::Private | Visibility::Public => "pub",
+        }
     }
 
     /// Attributes, each on the item's line or a line above, then an
@@ -439,11 +490,12 @@ impl<'a> Parser<'a> {
             // An attribute may sit on its own line above the item.
             self.skip_newlines();
         }
-        let pub_span = self.eat_pub();
+        let (pub_span, visibility) = self.eat_pub();
         Ok(ItemPrefix {
             start,
             attributes,
             pub_span,
+            visibility,
         })
     }
 
@@ -488,7 +540,8 @@ impl<'a> Parser<'a> {
                 _ => None,
             };
             if let Some((code, message)) = rejected {
-                return Err(self.remove_word(error(code, message, pub_span), "pub"));
+                let word = Self::visibility_word(prefix.visibility);
+                return Err(self.remove_word(error(code, message, pub_span), word));
             }
         }
         let kind = match self.peek() {
@@ -519,7 +572,7 @@ impl<'a> Parser<'a> {
             _ => return Err(self.not_an_item()),
         };
         Ok(Item {
-            public: prefix.pub_span.is_some(),
+            visibility: prefix.visibility,
             attributes: prefix.attributes,
             kind,
             span: self.span_from(prefix.start),
@@ -788,12 +841,12 @@ impl<'a> Parser<'a> {
                          trait `pub` to export its methods",
                         pub_span,
                     ),
-                    "pub",
+                    Self::visibility_word(prefix.visibility),
                 ));
             }
             let decl = self.fn_decl(context)?;
             let method = Item {
-                public: prefix.pub_span.is_some(),
+                visibility: prefix.visibility,
                 attributes: prefix.attributes,
                 kind: ItemKind::Fn(decl),
                 span: self.span_from(prefix.start),
@@ -1054,7 +1107,7 @@ impl<'a> Parser<'a> {
         self.expect_punct(Punct::LBrace)?;
         self.comma_list(Punct::RBrace, |p| {
             let start = p.peek_span();
-            let public = field_pub == FieldPub::Allowed && p.eat_pub().is_some();
+            let public = field_pub == FieldPub::Allowed && p.eat_pub_keyword();
             let name = p.expect_ident("a field name")?;
             p.expect_punct(Punct::Colon)?;
             let ty = p.ty()?;
@@ -1072,7 +1125,7 @@ impl<'a> Parser<'a> {
         self.expect_punct(Punct::LParen)?;
         self.comma_list(Punct::RParen, |p| {
             let start = p.peek_span();
-            let public = field_pub == FieldPub::Allowed && p.eat_pub().is_some();
+            let public = field_pub == FieldPub::Allowed && p.eat_pub_keyword();
             let ty = p.ty()?;
             Ok(Field {
                 public,
