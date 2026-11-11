@@ -37,6 +37,8 @@ pub enum Check {
     Slice,
     /// `String.repeat`: `P0036` on the word 0, `P0037` on -1.
     Repeat,
+    /// `Env.secret`: `P0020` on the word 0.
+    Secret,
 }
 
 /// The prelude intrinsics the native backend implements, by the name the
@@ -44,6 +46,21 @@ pub enum Check {
 pub const PRELUDE: &[(&str, Prelude)] = &[
     ("Stdout.println", Prelude::Runtime("stdout_println")),
     ("Stderr.println", Prelude::Runtime("stderr_println")),
+    ("Stdin.read_line", Prelude::Runtime("stdin_read_line")),
+    ("Args.get", Prelude::Runtime("args_get")),
+    ("Env.get", Prelude::Runtime("env_get")),
+    ("Env.secret", Prelude::Checked("env_secret", Check::Secret)),
+    ("Secret.expose", Prelude::Field(0)),
+    (
+        "Secret.constant_time_eq",
+        Prelude::Runtime("secret_constant_time_eq"),
+    ),
+    (
+        "Secret.constant_time_eq_secret",
+        Prelude::Runtime("secret_constant_time_eq_secret"),
+    ),
+    ("Clock.now_millis", Prelude::Runtime("clock_now_millis")),
+    ("Random.next_int", Prelude::Runtime("random_next_int")),
     ("String.to_string", Prelude::Identity),
     ("String.eq", Prelude::Runtime("string_eq")),
     ("Int.to_string", Prelude::Runtime("int_to_string")),
@@ -114,6 +131,7 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_sys_mmap", Runtime::Syscall(222)),
     ("rt_sys_munmap", Runtime::Syscall(215)),
     ("rt_sys_clock_gettime", Runtime::Syscall(113)),
+    ("rt_sys_ioctl", Runtime::Syscall(29)),
     ("rt_sys_getrandom", Runtime::Syscall(278)),
     ("rt_sys_exit_group", Runtime::Syscall(94)),
     ("rt_mem_load8", Runtime::Load(Width::W8)),
@@ -132,8 +150,12 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_mem_sar", Runtime::Binary(BinOp::Sar)),
     ("rt_mem_add", Runtime::Binary(BinOp::Add)),
     ("rt_mem_sub", Runtime::Binary(BinOp::Sub)),
+    ("rt_mem_mul", Runtime::Binary(BinOp::Mul)),
     ("rt_mem_text", Runtime::Identity),
     ("rt_mem_as_text", Runtime::Identity),
+    ("rt_mem_secret", Runtime::Identity),
+    ("rt_mem_as_secret", Runtime::Identity),
+    ("rt_mem_as_io_error", Runtime::Identity),
     ("rt_mem_path", Runtime::Identity),
     ("rt_mem_as_path", Runtime::Identity),
     ("rt_mem_list", Runtime::Identity),

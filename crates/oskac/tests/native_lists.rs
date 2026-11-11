@@ -396,6 +396,30 @@ fn text_splits_into_lists_and_joins_from_them() {
 }
 
 #[test]
+fn dbg_shows_a_list_item_by_item() {
+    let items = "struct Point { x: Int, y: Int }";
+    let body = r#"    let empty: List<Int> = []
+    let a = dbg(empty)
+    let b = dbg([1, -2, 3])
+    let c = dbg(["a", "b\"c"])
+    let d = dbg([[1], [], [2, 3]])
+    let e = dbg([Point(x: 1, y: 2)])
+    var built: List<Option<Int>> = []
+    built.push(Some(1))
+    built.push(None)
+    let f = dbg(built)
+    num(io, b.len() + d.len() + f.len())"#;
+    let outcome = assert_same(&Case::file("list_dbg", &program(items, body)));
+    assert_eq!(
+        outcome.stderr,
+        "[dbg] []\n[dbg] [1, -2, 3]\n[dbg] [\"a\", \"b\\\"c\"]\n[dbg] [[1], [], [2, 3]]\n\
+         [dbg] [Point(1, 2)]\n[dbg] [Option.Some(1), Option.None]\n",
+        "{outcome:#?}"
+    );
+    assert_eq!(outcome.stdout, "8\n", "{outcome:#?}");
+}
+
+#[test]
 fn list_map_is_refused_until_closures_are_native() {
     let src = program(
         "",

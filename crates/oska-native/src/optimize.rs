@@ -407,7 +407,8 @@ fn rename_def(inst: &mut Inst, to: Temp) {
         | Inst::Call { dst, .. }
         | Inst::Syscall { dst, .. }
         | Inst::Arith { dst, .. }
-        | Inst::Second { dst } => *dst = to,
+        | Inst::Second { dst }
+        | Inst::EntrySp { dst } => *dst = to,
         _ => {}
     }
 }
@@ -447,6 +448,7 @@ fn rename_uses(inst: &mut Inst, from: Temp, to: Temp) {
         }
         Inst::Const { .. }
         | Inst::Second { .. }
+        | Inst::EntrySp { .. }
         | Inst::Addr { .. }
         | Inst::Label(_)
         | Inst::Jump(_)

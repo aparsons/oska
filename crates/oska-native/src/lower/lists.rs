@@ -337,7 +337,12 @@ impl Body<'_, '_> {
     /// Whether the lists `a` and `b`, of items of the concrete type
     /// `item_ty`, are equal, by the function generated for it: what
     /// `Body::equal` (`traits.rs`) does for a list.
-    pub(super) fn list_equal(&mut self, item_ty: &Type, a: Temp, b: Temp) -> Result<Temp, Diagnostic> {
+    pub(super) fn list_equal(
+        &mut self,
+        item_ty: &Type,
+        a: Temp,
+        b: Temp,
+    ) -> Result<Temp, Diagnostic> {
         let instance = Instance::ListEq(self.source, item_ty.clone());
         let id = self
             .lowering

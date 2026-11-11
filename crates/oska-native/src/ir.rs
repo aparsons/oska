@@ -106,6 +106,7 @@ pub enum Width {
 pub enum BinOp {
     Add,
     Sub,
+    Mul,
     And,
     Or,
     Xor,
@@ -295,6 +296,12 @@ pub enum Inst {
     Second {
         dst: Temp,
     },
+    /// `dst =` the stack pointer the kernel started the process with
+    /// (argc, then argv, then envp). Only valid in `_start`, before it
+    /// switches stacks.
+    EntrySp {
+        dst: Temp,
+    },
 }
 
 /// The most temporaries a function may use: each has a stack slot
@@ -334,7 +341,8 @@ impl Inst {
             | Inst::Call { dst, .. }
             | Inst::Syscall { dst, .. }
             | Inst::Arith { dst, .. }
-            | Inst::Second { dst } => Some(*dst),
+            | Inst::Second { dst }
+            | Inst::EntrySp { dst } => Some(*dst),
             _ => None,
         }
     }
@@ -343,7 +351,10 @@ impl Inst {
     pub fn map_temps(&mut self, map: impl Fn(Temp) -> Temp) {
         let each = |t: &mut Temp| *t = map(*t);
         match self {
-            Inst::Const { dst, .. } | Inst::Addr { dst, .. } | Inst::Second { dst } => each(dst),
+            Inst::Const { dst, .. }
+            | Inst::Addr { dst, .. }
+            | Inst::Second { dst }
+            | Inst::EntrySp { dst } => each(dst),
             Inst::Copy { dst, src } => {
                 each(dst);
                 each(src);
@@ -410,6 +421,7 @@ impl Inst {
             Inst::ReturnPair { value, second } => vec![*value, *second],
             Inst::Const { .. }
             | Inst::Second { .. }
+            | Inst::EntrySp { .. }
             | Inst::Addr { .. }
             | Inst::Label(_)
             | Inst::Jump(_)

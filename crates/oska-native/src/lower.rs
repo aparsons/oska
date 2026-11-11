@@ -57,6 +57,7 @@
 //! interpreter's limit, so recursion never reaches the guard.
 
 mod data;
+mod debug;
 mod lists;
 mod patterns;
 mod traits;
@@ -86,7 +87,7 @@ pub const MAX_CALL_DEPTH: u32 = 50_000;
 const STACK_RESERVE: u64 = 8 << 20;
 
 /// The words of the runtime's writable data, at `rt_mem_globals()`.
-pub const GLOBALS: u32 = 16;
+pub const GLOBALS: u32 = 24;
 
 /// The `P`-codes the native code panics with, as the interpreter's
 /// `oska_run::codes` names them.
@@ -99,6 +100,7 @@ mod panics {
     pub const TEXT_TOO_LONG: &str = "P0037";
     pub const CALL_DEPTH_EXCEEDED: &str = "P0021";
     pub const TODO: &str = "P0003";
+    pub const MISSING_SECRET: &str = "P0020";
     /// The interpreter's message for `P0003`.
     pub const NOT_WRITTEN: &str = "reached `todo()`: this code is not written yet";
     pub const PRECONDITION_VIOLATED: &str = "P0006";
@@ -137,6 +139,8 @@ enum Instance {
     Unshare(Source, Type),
     /// Whether two lists of items of this type are equal (`List.eq`).
     ListEq(Source, Type),
+    /// The text `dbg` shows a value of this struct or enum type as.
+    Debug(Source, Type),
     /// Whether two values of this `Option` or `Result` type are equal,
     /// through `Eq` for each field's type (`traits.rs`).
     Equal(Source, Type),
@@ -258,6 +262,9 @@ impl<'p> Lowering<'p> {
 
         let mut body = Body::new(self, Source::User, None);
         let size = body.constant(0);
+        let sp = body.temp();
+        body.push(Inst::EntrySp { dst: sp });
+        body.call_runtime("process_init", vec![sp], NOWHERE)?;
         let stack = body.call_runtime("stack_new", vec![size], NOWHERE)?;
         body.push(Inst::CallOnStack {
             stack,
@@ -303,6 +310,11 @@ impl<'p> Lowering<'p> {
             Instance::Drop(source, ty) => {
                 let mut body = Body::new(self, *source, Some(origin));
                 body.drop_function(ty)?;
+                return body.finish(&qualified(instance), 1, NOWHERE);
+            }
+            Instance::Debug(source, ty) => {
+                let mut body = Body::new(self, *source, Some(origin));
+                body.debug_function(ty)?;
                 return body.finish(&qualified(instance), 1, NOWHERE);
             }
             Instance::Unshare(source, ty) => {
@@ -421,6 +433,7 @@ fn qualified(instance: &Instance) -> String {
         Instance::Drop(_, ty) => format!("drop<{ty}>"),
         Instance::Unshare(_, ty) => format!("unshare<{ty}>"),
         Instance::ListEq(_, ty) => format!("list_eq<{ty}>"),
+        Instance::Debug(_, ty) => format!("debug<{ty}>"),
         Instance::Equal(_, ty) => format!("eq<{ty}>"),
         Instance::Requires {
             source,
@@ -1191,6 +1204,18 @@ impl<'l, 'p> Body<'l, 'p> {
                 }
                 _ => return Err(self.refuse(span, &format!("a call of `{name}`"))),
             },
+            // `dbg(value)` writes the value's text to stderr and returns
+            // the value: its reference passes on.
+            Callee::Intrinsic(name) if name == "dbg" => {
+                let (Some(&value), Some(ty)) = (args.first(), type_args.first()) else {
+                    return Err(self.refuse(span, "`dbg`"));
+                };
+                let ty = self.ty(ty);
+                let text = self.debug_text(&ty, value, span)?;
+                self.call_runtime("dbg_write", vec![text], span)?;
+                self.release(text, &Type::String)?;
+                return Ok(value);
+            }
             Callee::Intrinsic(name) => match intrinsics::prelude(name) {
                 Some(Prelude::Runtime(function)) => {
                     self.call_runtime(function, args.clone(), span)?
@@ -1261,6 +1286,14 @@ impl<'l, 'p> Body<'l, 'p> {
             Check::Slice => {
                 let label =
                     self.panic_text(panics::SLICE_OUT_OF_BOUNDS, "panic_slice", args, span)?;
+                self.push(Inst::JumpIfZero {
+                    cond: result,
+                    target: label,
+                });
+            }
+            Check::Secret => {
+                let label =
+                    self.panic_text(panics::MISSING_SECRET, "panic_missing_secret", args, span)?;
                 self.push(Inst::JumpIfZero {
                     cond: result,
                     target: label,
@@ -1346,7 +1379,7 @@ impl<'l, 'p> Body<'l, 'p> {
         let span = main.body.span;
         let mut args = Vec::new();
         for param in &main.params {
-            if !is_stateless_capability(&param.ty) {
+            if !is_stateless_input(&param.ty) {
                 return Err(self.refuse(span, &format!("a `main` given `{}`", param.ty)));
             }
             args.push(self.constant(0));
@@ -2020,8 +2053,15 @@ fn text_equality(op: BinaryOp, ty: &Type) -> Option<&'static str> {
     }
 }
 
-fn is_stateless_capability(ty: &Type) -> bool {
-    matches!(ty, Type::Named { name, args } if args.is_empty() && (name == "Stdout" || name == "Stderr"))
+/// Whether `main` can be given a value of `ty` by `_start`: the word 0.
+/// Each of these keeps its state, if it has any (the arguments, the
+/// environment, the input buffer, the generator), in the runtime's
+/// globals.
+fn is_stateless_input(ty: &Type) -> bool {
+    matches!(ty, Type::Named { name, args } if args.is_empty() && matches!(
+        name.as_str(),
+        "Stdout" | "Stderr" | "Stdin" | "Env" | "Clock" | "Random" | "Args"
+    ))
 }
 
 /// The word of `expr` when it is a constant that holds no address.

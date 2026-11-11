@@ -331,6 +331,7 @@ impl Emitter {
                 let base = match op {
                     BinOp::Add => 0x8b00_0000,
                     BinOp::Sub => 0xcb00_0000,
+                    BinOp::Mul => 0x9b00_7c00,
                     BinOp::And => 0x8a00_0000,
                     BinOp::Or => 0xaa00_0000,
                     BinOp::Xor => 0xca00_0000,
@@ -507,6 +508,13 @@ impl Emitter {
             }
             // Straight after the call, before anything touches `x1`.
             Inst::Second { dst } => self.write(*dst, X1),
+            // `_start`'s prologue pushed the frame record (16 bytes) on
+            // the kernel's stack pointer, and `x29` points at it.
+            Inst::EntrySp { dst } => {
+                let r = self.target(*dst, X9);
+                self.put(add_imm(r, FP, 16, false));
+                self.write(*dst, r);
+            }
             // Placed by `function`.
             Inst::Label(_) => {}
         }
