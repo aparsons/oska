@@ -170,3 +170,274 @@ fn the_most_negative_int_remainder_minus_one_is_zero() {
     );
     assert_prints("int_min_rem", &src, "0\n");
 }
+
+#[test]
+fn loops_run_with_break_and_continue() {
+    let src = program(
+        "",
+        "    var total = 0\n    \
+         for i in 0..10 {\n        \
+         if i == 2 {\n            continue\n        }\n        \
+         if i == 7 {\n            break\n        }\n        \
+         total = total + i\n    }\n    \
+         let _ = io.println(\"for {total}\")\n    \
+         for i in 5..5 {\n        let _ = io.println(\"never {i}\")\n    }\n    \
+         for i in 3..-3 {\n        let _ = io.println(\"never {i}\")\n    }\n    \
+         let from = -2\n    \
+         for i in from..total - 20 {\n        let _ = io.println(\"from {i}\")\n    }\n    \
+         var n = 0\n    var steps = 0\n    \
+         while true {\n        \
+         n = n + 1\n        \
+         if n % 2 == 0 {\n            continue\n        }\n        \
+         steps = steps + 1\n        \
+         if n > 8 {\n            break\n        }\n    }\n    \
+         let _ = io.println(\"while {n} {steps}\")\n    \
+         var grid = 0\n    \
+         for row in 0..3 {\n        for col in 0..4 {\n            \
+         if col == row {\n                continue\n            }\n            \
+         grid = grid * 10 + col\n        }\n    }\n    \
+         let _ = io.println(\"grid {grid}\")",
+    );
+    assert_prints(
+        "loops",
+        &src,
+        "for 19\nfrom -2\nwhile 9 5\ngrid 123023013\n",
+    );
+}
+
+#[test]
+fn a_for_loop_over_unsigned_bounds_compares_them_unsigned() {
+    let src = program(
+        "fn top() -> U64 {\n    18446744073709551615\n}",
+        "    var count = 0\n    \
+         let hi = top()\n    \
+         let lo = hi - 3\n    \
+         for i in lo..hi {\n        \
+         if i > lo {\n            count = count + 1\n        }\n    }\n    \
+         let _ = io.println(\"{count}\")",
+    );
+    assert_prints("for_unsigned", &src, "2\n");
+}
+
+#[test]
+fn calls_and_recursion_compute_what_the_interpreter_does() {
+    let src = program(
+        "fn fib(n: Int) -> Int {\n    if n < 2 {\n        return n\n    }\n    \
+         fib(n - 1) + fib(n - 2)\n}\n\n\
+         fn gcd(a: Int, b: Int) -> Int {\n    if b == 0 { a } else { gcd(b, a % b) }\n}\n\n\
+         fn sum8(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int) -> Int {\n    \
+         a + b * 2 + c * 3 + d * 4 + e * 5 + f * 6 + g * 7 + h * 8\n}\n\n\
+         fn is_even(n: Int) -> Bool {\n    if n == 0 { true } else { is_odd(n - 1) }\n}\n\n\
+         fn is_odd(n: Int) -> Bool {\n    if n == 0 { false } else { is_even(n - 1) }\n}",
+        "    let f = fib(20)\n    let g = gcd(1071, 462)\n    \
+         let s = sum8(1, 2, 3, 4, 5, 6, 7, 8)\n    \
+         let _ = io.println(\"{f} {g} {s}\")\n    \
+         if is_even(1000) && is_odd(777) {\n        let _ = io.println(\"parity\")\n    }",
+    );
+    assert_prints("calls", &src, "6765 21 204\nparity\n");
+}
+
+/// A program whose `main` recurses `depth` calls deep and prints the
+/// depth it reached, as the interpreter's own test of `P0021` does.
+fn recursing(depth: u32) -> String {
+    program(
+        "fn down(n: Int) -> Int {\n    if n == 0 { 0 } else { 1 + down(n - 1) }\n}",
+        &format!("    let d = down({depth})\n    let _ = io.println(\"{{d}}\")"),
+    )
+}
+
+#[test]
+fn deep_but_bounded_recursion_runs() {
+    assert_prints("deep_recursion", &recursing(20_000), "20000\n");
+}
+
+#[test]
+fn runaway_recursion_panics_with_p0021_instead_of_crashing() {
+    assert_panics(
+        "runaway_recursion",
+        &recursing(1_000_000),
+        "",
+        "main.osk:2:32: error[P0021]: calls nest too deep: is this recursion missing its \
+         base case? (bytes 56..67)\n",
+    );
+}
+
+/// The interpreter's limit is `oska_run`'s `MAX_CALL_DEPTH`, but a debug
+/// build of the interpreter runs out of its own stack a little before it
+/// (and panics with `P0021` early, by design), so the exact boundary is
+/// checked against the native executable alone: `main` may nest exactly
+/// that many calls, and one more panics.
+#[test]
+fn recursion_panics_exactly_at_the_interpreters_call_depth() {
+    assert_eq!(
+        oska_native::MAX_CALL_DEPTH as usize,
+        oska_run::MAX_CALL_DEPTH
+    );
+    let limit = oska_native::MAX_CALL_DEPTH;
+    // `down(n)` nests `n + 1` calls under `main`.
+    let deepest = differential::run_native(&Case::file("depth_limit_ok", &recursing(limit - 1)));
+    assert_eq!(deepest.stdout, format!("{}\n", limit - 1), "{deepest:#?}");
+    assert_eq!(deepest.exit_code, Some(0));
+    let too_deep = differential::run_native(&Case::file("depth_limit_over", &recursing(limit)));
+    assert!(too_deep.stderr.contains("error[P0021]"), "{too_deep:#?}");
+    assert_eq!(too_deep.exit_code, Some(101));
+}
+
+#[test]
+fn heap_text_keeps_its_value_through_locals_calls_and_loops() {
+    let src = program(
+        "fn label(n: Int) -> String {\n    let text = \"n{n}\"\n    text\n}\n\n\
+         fn pick(a: String, b: String, first: Bool) -> String {\n    \
+         if first { a } else { b }\n}\n\n\
+         fn first_long(limit: Int) -> String {\n    \
+         for i in 0..limit {\n        let text = label(i * 1000)\n        \
+         if i > 2 {\n            return text\n        }\n    }\n    \"none\"\n}",
+        "    var last = \"start\"\n    \
+         for i in 0..6 {\n        \
+         let shown = label(i)\n        \
+         if i == 4 {\n            continue\n        }\n        \
+         last = pick(shown, last, i % 2 == 0)\n        \
+         let _ = io.println(last)\n    }\n    \
+         let copy = last\n    \
+         last = \"replaced\"\n    \
+         let _ = io.println(\"{copy} {last}\")\n    \
+         let _ = io.println(first_long(10))\n    \
+         let _ = io.println(first_long(1))\n    \
+         var grown = \"\"\n    \
+         var i = 0\n    \
+         while true {\n        \
+         let piece = i.to_string()\n        \
+         grown = \"{grown}{piece}\"\n        \
+         i = i + 1\n        \
+         if i == 12 {\n            break\n        }\n    }\n    \
+         let _ = io.println(grown)",
+    );
+    assert_prints(
+        "heap_text",
+        &src,
+        "n0\nn0\nn2\nn2\nn2\nn2 replaced\nn3000\nnone\n01234567891011\n",
+    );
+}
+
+/// Building text in a loop that keeps none of it runs in constant
+/// memory: each text is freed when its last reference goes. The process
+/// runs with an address space far smaller than the text it builds in
+/// all, which a leak would exceed. (Native only: the interpreter needs
+/// more address space than the limit allows.)
+#[test]
+fn heap_text_is_freed_when_its_count_drops_to_zero() {
+    let src = program(
+        "fn label(n: Int) -> String {\n    \"label {n}\"\n}",
+        "    var last = \"\"\n    \
+         for i in 0..3000000 {\n        \
+         let text = label(i)\n        \
+         last = \"{text}!\"\n    }\n    \
+         let _ = io.println(last)",
+    );
+    let case = Case::file("heap_text_freed", &src);
+    let (exe, dir) = differential::build_native(&case);
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("ulimit -v 98304 && exec \"$0\"")
+        .arg(&exe)
+        .current_dir(&dir)
+        .output()
+        .expect("sh should run the program");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "label 2999999!\n",
+        "{output:?}"
+    );
+    assert!(output.status.success(), "{output:?}");
+}
+
+/// Each sized integer type, with its smallest and largest values.
+const SIZED: [(&str, &str, &str); 8] = [
+    ("I8", "-128", "127"),
+    ("I16", "-32768", "32767"),
+    ("I32", "-2147483648", "2147483647"),
+    ("I64", "-9223372036854775808", "9223372036854775807"),
+    ("U8", "0", "255"),
+    ("U16", "0", "65535"),
+    ("U32", "0", "4294967295"),
+    ("U64", "0", "18446744073709551615"),
+];
+
+#[test]
+fn sized_integers_compute_within_their_range() {
+    for (ty, min, max) in SIZED {
+        // Each check prints its name only when it holds.
+        let src = program(
+            &format!(
+                "fn check(io: Stdout, ok: Bool, what: String) {{\n    \
+                 if ok {{\n        let _ = io.println(what)\n    }}\n}}\n\n\
+                 fn least() -> {ty} {{\n    {min}\n}}\n\n\
+                 fn most() -> {ty} {{\n    {max}\n}}"
+            ),
+            &format!(
+                "    let lo = least()\n    let hi = most()\n    \
+                 let two: {ty} = 2\n    let five: {ty} = 5\n    \
+                 check(io, hi - 1 + 1 == hi, \"top\")\n    \
+                 check(io, lo + 1 - 1 == lo, \"bottom\")\n    \
+                 check(io, hi / two * two + hi % two == hi, \"div and rem\")\n    \
+                 check(io, five * two == 10, \"mul\")\n    \
+                 check(io, lo < hi && hi > lo && lo <= lo && hi >= hi, \"order\")\n    \
+                 check(io, hi != lo, \"ne\")"
+            ),
+        );
+        assert_prints(
+            &format!("sized_{ty}"),
+            &src,
+            "top\nbottom\ndiv and rem\nmul\norder\nne\n",
+        );
+    }
+}
+
+#[test]
+fn sized_integer_overflow_panics_with_the_interpreters_message() {
+    for (ty, min, max) in SIZED {
+        let signed = min != "0";
+        let mut cases = vec![
+            ("add", "hi + one", format!("`{max} + 1` overflows `{ty}`")),
+            ("sub", "lo - one", format!("`{min} - 1` overflows `{ty}`")),
+            ("mul", "hi * two", format!("`{max} * 2` overflows `{ty}`")),
+            (
+                "div0",
+                "hi / zero",
+                format!("division by zero: `{max} / 0`"),
+            ),
+            (
+                "rem0",
+                "lo % zero",
+                format!("division by zero: `{min} % 0`"),
+            ),
+        ];
+        if signed {
+            cases.push((
+                "divneg",
+                "lo / -one",
+                format!("`{min} / -1` overflows `{ty}`"),
+            ));
+            cases.push(("neg", "-lo", format!("`-{min}` overflows `{ty}` (")));
+        }
+        for (what, expr, message) in cases {
+            let src = program(
+                &format!(
+                    "fn least() -> {ty} {{\n    {min}\n}}\n\n\
+                     fn most() -> {ty} {{\n    {max}\n}}"
+                ),
+                &format!(
+                    "    let lo = least()\n    let hi = most()\n    \
+                     let zero: {ty} = 0\n    let one: {ty} = 1\n    let two: {ty} = 2\n    \
+                     let r = {expr}\n    let _ = io.println(\"unreachable\")"
+                ),
+            );
+            let outcome = assert_same(&Case::file(&format!("sized_{ty}_{what}"), &src));
+            assert!(
+                outcome.stderr.contains(&message),
+                "`{ty}` {what}: {outcome:#?}, expected {message}"
+            );
+            assert_eq!(outcome.exit_code, Some(101), "`{ty}` {what}: {outcome:#?}");
+        }
+    }
+}

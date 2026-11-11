@@ -119,13 +119,8 @@ pub fn assert_same(case: &Case) -> Outcome {
 
 /// Run `case` on the interpreter and natively: the two outcomes.
 pub fn run(case: &Case) -> (Outcome, Outcome) {
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("differential")
-        .join(&case.name);
-    let _ = std::fs::remove_dir_all(&root);
+    let root = case_root(case);
     let interpreted_dir = fresh_tree(&root.join("interpreted"), case);
-    let native_dir = fresh_tree(&root.join("native"), case);
-
     let mut interpreter = oskac(&interpreted_dir);
     interpreter
         .arg("run")
@@ -133,11 +128,48 @@ pub fn run(case: &Case) -> (Outcome, Outcome) {
         .arg("--")
         .args(&case.args);
     let interpreted = outcome(interpreter, case, &interpreted_dir);
+    (interpreted, native(case, &root))
+}
 
+/// Run `case` natively only: for what the interpreter cannot show, such
+/// as its exact call-depth limit, which a debug build of it may not
+/// reach.
+pub fn run_native(case: &Case) -> Outcome {
+    native(case, &case_root(case))
+}
+
+/// The directory `case` runs in, emptied.
+fn case_root(case: &Case) -> PathBuf {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("differential")
+        .join(&case.name);
+    let _ = std::fs::remove_dir_all(&root);
+    root
+}
+
+/// Build `case` natively, without running it: the executable, and the
+/// directory to run it in, holding `case`'s files.
+pub fn build_native(case: &Case) -> (PathBuf, PathBuf) {
+    let root = case_root(case);
+    let native_dir = fresh_tree(&root.join("native"), case);
+    (build(case, &root, &native_dir), native_dir)
+}
+
+/// Build `case` and run the executable in `root/native`.
+fn native(case: &Case, root: &Path) -> Outcome {
+    let native_dir = fresh_tree(&root.join("native"), case);
+    let exe = build(case, root, &native_dir);
+    let mut program = Command::new(&exe);
+    program.current_dir(&native_dir).args(&case.args);
+    outcome(program, case, &native_dir)
+}
+
+/// Build `case`, from `native_dir`, to `root/bin/program`.
+fn build(case: &Case, root: &Path, native_dir: &Path) -> PathBuf {
     let bin = root.join("bin");
     std::fs::create_dir_all(&bin).expect("should create the bin directory");
     let exe = bin.join("program");
-    let build = oskac(&native_dir)
+    let build = oskac(native_dir)
         .arg("build")
         .arg(&case.target)
         .arg("-o")
@@ -151,10 +183,7 @@ pub fn run(case: &Case) -> (Outcome, Outcome) {
         String::from_utf8_lossy(&build.stdout),
         String::from_utf8_lossy(&build.stderr)
     );
-    let mut program = Command::new(&exe);
-    program.current_dir(&native_dir).args(&case.args);
-    let native = outcome(program, case, &native_dir);
-    (interpreted, native)
+    exe
 }
 
 fn oskac(dir: &Path) -> Command {

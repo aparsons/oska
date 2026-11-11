@@ -197,6 +197,24 @@ fn checker_diagnostics_refuse_the_build() {
     );
 }
 
+/// An integer literal outside its type is the checker's error, so the
+/// build refuses it exactly as `oskac run` does: no backend ever sees one.
+#[test]
+fn an_out_of_range_literal_refuses_the_build_as_it_refuses_a_run() {
+    let src = "fn main(io: Stdout) {\n    let small: U8 = 256\n    let neg: U16 = -1\n    \
+               let big: I8 = -129\n}\n";
+    assert_golden(
+        "literal_out_of_range",
+        &[("range.osk", src)],
+        &["build", "range.osk"],
+    );
+    assert_golden(
+        "literal_out_of_range_run",
+        &[("range.osk", src)],
+        &["run", "range.osk"],
+    );
+}
+
 #[test]
 fn checker_diagnostics_in_a_package_refuse_the_build() {
     let files = package(MISTYPED);
