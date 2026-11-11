@@ -808,6 +808,23 @@ mod tests {
     }
 
     #[test]
+    fn std_rt_intrinsics_are_the_toolchains_and_have_no_interpreter_implementation() {
+        // `std.rt` is body-less by design (ADR 0013): the native backend
+        // lowers its intrinsics to machine code, and no user code can
+        // import it, so the interpreter implements none of them.
+        let module =
+            oska_syntax::parse_prelude(oska_check::STD_RT_SOURCE).expect("std.rt should parse");
+        let names = bodiless_functions(&module);
+        assert!(names.iter().any(|n| n == "rt_sys_write"), "{names:?}");
+        assert_eq!(names, oska_check::std_rt_intrinsics());
+        let implemented: Vec<&String> = names.iter().filter(|n| implemented(n)).collect();
+        assert!(
+            implemented.is_empty(),
+            "std.rt intrinsics the interpreter must refuse: {implemented:?}"
+        );
+    }
+
+    #[test]
     fn the_exempt_types_are_the_ones_with_no_runtime_and_have_no_intrinsics() {
         let names = bodiless_prelude_functions();
         let exempt = no_runtime();

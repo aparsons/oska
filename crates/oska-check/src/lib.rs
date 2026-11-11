@@ -60,6 +60,7 @@ mod recursion;
 mod release;
 mod resolve;
 mod suggest;
+mod toolchain;
 mod traits;
 mod ty;
 mod usefulness;
@@ -68,6 +69,9 @@ pub use manifest::{decode_manifest, parse_manifest, Manifest};
 pub use package::{
     check_file, check_package, not_a_package, run_of_library, symlink_refused, Locator,
     ModuleSource, Package, ENTRY_MODULE, MANIFEST_PATH,
+};
+pub use toolchain::{
+    declared_intrinsics as std_rt_intrinsics, is_intrinsic, RT_SOURCE as STD_RT_SOURCE,
 };
 
 /// The diagnostic codes this crate reports.
@@ -81,6 +85,7 @@ pub(crate) mod codes {
     pub const PRIVATE_ITEM: &str = "E0206";
     pub const IMPORT_CYCLE: &str = "E0207";
     pub const NAME_BOUND_TWICE: &str = "E0208";
+    pub const TOOLCHAIN_ONLY: &str = "E0209";
     pub const CAP_REQUIRED: &str = "E0210";
     pub const MAIN_PARAM: &str = "E0211";
     pub const MAIN_RETURN: &str = "E0212";
@@ -535,7 +540,39 @@ pub(crate) fn check_parsed(
     options: CheckOptions,
     modules: link::Modules,
 ) -> CheckReport {
+    check_source(src, module, options, modules, false)
+}
+
+/// Check the toolchain's own `std.rt` source, the one text that may name
+/// the intrinsics it declares. There is no way to ask for this on any
+/// other source.
+pub fn check_toolchain_rt() -> CheckReport {
+    match oska_syntax::parse_prelude(toolchain::RT_SOURCE) {
+        Ok(module) => check_source(
+            toolchain::RT_SOURCE,
+            &module,
+            CheckOptions::default(),
+            link::Modules::default(),
+            true,
+        ),
+        Err(err) => CheckReport {
+            diagnostics: vec![err],
+            ..CheckReport::default()
+        },
+    }
+}
+
+fn check_source(
+    src: &str,
+    module: &Module,
+    options: CheckOptions,
+    modules: link::Modules,
+    toolchain_rt: bool,
+) -> CheckReport {
     let mut diagnostics = Vec::new();
+    if !toolchain_rt {
+        toolchain::module(src, &mut diagnostics);
+    }
     let decls = collect::Decls::collect(module, &mut diagnostics);
     resolve::module(module, &decls, &mut diagnostics);
     decl_rules::module(src, module, &decls, &mut diagnostics);
@@ -567,6 +604,13 @@ pub(crate) fn check_parsed(
         .is_empty()
         .then(|| program::lower::module(src, module, &items, &resolutions));
     let functions = authority::report(module, &decls, &modules);
+    // An intrinsic name is also an unknown name; E0209 says it better.
+    let refused: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.code == codes::TOOLCHAIN_ONLY)
+        .map(|d| d.span)
+        .collect();
+    diagnostics.retain(|d| d.code == codes::TOOLCHAIN_ONLY || !refused.contains(&d.span));
     diagnostics.sort_by_key(|d| d.span.start);
     audit.sort_by_key(|site| site.span.start);
     // A chain shares its start: the inner call, which ends first, is first.

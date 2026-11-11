@@ -1,0 +1,44 @@
+// `std.rt`: the toolchain's own runtime module (ADR 0013). It is compiled
+// into every native program and is the only source that may name a
+// system-call or memory intrinsic. No user code can import it (`E0209`).
+//
+// An intrinsic is a body-less function whose name starts with `rt_sys_`
+// (one Linux aarch64 system call) or `rt_mem_` (one memory or word
+// operation). Both prefixes are reserved: `scripts/intrinsic-guard/guard.sh`
+// fails the build if any other `.osk` file names such an identifier, and
+// the checker reports `E0209` for it. The interpreter has no
+// implementation of them.
+//
+// Every argument and result is an `Int` (a 64-bit word). A system call
+// returns the kernel's raw result: a negative value is `-errno`.
+
+// ---- System calls ----------------------------------------------------------
+
+pub fn rt_sys_read(fd: Int, buf: Int, count: Int) -> Int
+pub fn rt_sys_write(fd: Int, buf: Int, count: Int) -> Int
+pub fn rt_sys_openat(dirfd: Int, path: Int, flags: Int, mode: Int) -> Int
+pub fn rt_sys_close(fd: Int) -> Int
+pub fn rt_sys_mkdirat(dirfd: Int, path: Int, mode: Int) -> Int
+pub fn rt_sys_getdents64(fd: Int, buf: Int, count: Int) -> Int
+pub fn rt_sys_fstat(fd: Int, buf: Int) -> Int
+pub fn rt_sys_mmap(addr: Int, length: Int, prot: Int, flags: Int, fd: Int, offset: Int) -> Int
+pub fn rt_sys_munmap(addr: Int, length: Int) -> Int
+pub fn rt_sys_clock_gettime(clock: Int, tp: Int) -> Int
+pub fn rt_sys_getrandom(buf: Int, length: Int, flags: Int) -> Int
+// Ends the process; does not return.
+pub fn rt_sys_exit_group(status: Int) -> Int
+
+// ---- Memory and words ------------------------------------------------------
+
+// The 64-bit word at address `addr`.
+pub fn rt_mem_load64(addr: Int) -> Int
+// Write `value` to the 64-bit word at address `addr`.
+pub fn rt_mem_store64(addr: Int, value: Int)
+// Bitwise operations on the 64-bit patterns; they never overflow-panic.
+pub fn rt_mem_and(a: Int, b: Int) -> Int
+pub fn rt_mem_or(a: Int, b: Int) -> Int
+pub fn rt_mem_xor(a: Int, b: Int) -> Int
+// Shifts by `n` (0 to 63): left, logical right, and arithmetic right.
+pub fn rt_mem_shl(a: Int, n: Int) -> Int
+pub fn rt_mem_shr(a: Int, n: Int) -> Int
+pub fn rt_mem_sar(a: Int, n: Int) -> Int
