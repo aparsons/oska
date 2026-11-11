@@ -886,6 +886,130 @@ fn main(io: Stdout) {
     );
 }
 
+// ---- contracts through traits and `?` (#133) -----------------------------------------
+
+#[test]
+fn a_call_through_a_trait_bound_checks_the_impls_requires() {
+    let src = shapes(
+        "fn through<S: Shape>(s: S, k: Int) -> Int {
+    s.scale(k)
+}
+
+fn main(io: Stdout) {
+    let a = through(Square(side: 2), 3)
+    let _ = io.println(\"{a}\")
+    let b = through(Square(side: 2), 0)
+}",
+    );
+    assert_panics(
+        "trait_requires_through_bound",
+        &src,
+        "P0006",
+        "precondition violated: `<Square as Shape>.scale` requires `k > 0`",
+        "6\n",
+    );
+}
+
+#[test]
+fn a_call_through_a_trait_bound_checks_the_impls_ensures() {
+    let src = shapes(
+        "fn through<S: Shape>(s: S, k: Int) -> Int {
+    s.scale(k)
+}
+
+fn main() {
+    let n = through(Cheat(side: 2), 3)
+}",
+    );
+    assert_panics(
+        "trait_ensures_through_bound",
+        &src,
+        "P0007",
+        "postcondition violated: `<Cheat as Shape>.scale` ensures `r >= k`",
+        "",
+    );
+}
+
+#[test]
+fn a_qualified_trait_call_checks_the_impls_requires() {
+    let src = shapes("fn main() {\n    let n = Shape.scale(Square(side: 2), 0)\n}");
+    assert_panics(
+        "trait_requires_qualified",
+        &src,
+        "P0006",
+        "precondition violated: `<Square as Shape>.scale` requires `k > 0`",
+        "",
+    );
+}
+
+#[test]
+fn a_clause_may_call_a_trait_method() {
+    let src = "trait Sized {
+    fn size(self) -> Int
+    fn grow(self, k: Int) -> Int
+        ensures |r| r >= self.size()
+}
+
+struct Good { n: Int }
+struct Bad { n: Int }
+
+impl Sized for Good {
+    fn size(self) -> Int { self.n }
+    fn grow(self, k: Int) -> Int { self.n + k }
+}
+
+impl Sized for Bad {
+    fn size(self) -> Int { self.n }
+    fn grow(self, k: Int) -> Int { self.n - k }
+}
+
+fn main(io: Stdout) {
+    let a = Good(n: 2).grow(3)
+    let _ = io.println(\"{a}\")
+    let b = Bad(n: 2).grow(3)
+}
+";
+    assert_panics(
+        "clause_calls_trait_method",
+        src,
+        "P0007",
+        "postcondition violated: `<Bad as Sized>.grow` ensures `r >= self.size()`",
+        "5\n",
+    );
+}
+
+#[test]
+fn an_early_return_through_question_mark_is_checked_by_ensures() {
+    let src = "fn parse(text: String) -> Result<Int, String> {
+    match text.parse_int() {
+        Some(n) => Ok(n)
+        None => Err(\"bad {text}\")
+    }
+}
+
+fn double(text: String) -> Result<Int, String>
+    ensures |r| r.is_ok()
+{
+    let n = parse(text)?
+    Ok(n * 2)
+}
+
+fn main(io: Stdout) {
+    let a = double(\"4\").unwrap_or(0)
+    let _ = io.println(\"{a}\")
+    let r = double(\"x\")
+}
+";
+    assert_panics(
+        "question_mark_ensures",
+        src,
+        "P0007",
+        "postcondition violated: `double` ensures `r.is_ok()`, \
+         broken by the return at line 11, column 13",
+        "8\n",
+    );
+}
+
 // ---- what is not native yet ---------------------------------------------------------
 
 /// Contract programs in the interpreter's suites that need a feature of a
@@ -897,18 +1021,6 @@ fn contract_programs_that_need_later_features_are_refused_cleanly() {
         (
             "closure_in_contract",
             "fn count(xs: List<Int>) -> Int\n    requires xs.map(|x| { return x > 0 }) == [true, true]\n{\n    xs.len()\n}\n\nfn main(io: Stdout) {\n    let n = count([1, 2])\n}\n",
-        ),
-        (
-            "question_mark_return",
-            "fn parse(text: String) -> Result<Int, String> {\n    Err(\"bad {text}\")\n}\n\nfn double(text: String) -> Result<Int, String>\n    ensures |r| r.is_ok()\n{\n    let n = parse(text)?\n    Ok(n * 2)\n}\n\nfn main() {\n    let r = double(\"x\")\n}\n",
-        ),
-        (
-            "trait_qualified_call",
-            "trait Shape {\n    fn scale(self, k: Int) -> Int\n        requires k > 0\n}\n\nstruct Square { side: Int }\n\nimpl Shape for Square {\n    fn scale(self, k: Int) -> Int { self.side * k }\n}\n\nfn main() {\n    let n = Shape.scale(Square(side: 2), 0)\n}\n",
-        ),
-        (
-            "trait_generic_dispatch",
-            "trait Shape {\n    fn scale(self, k: Int) -> Int\n        requires k > 0\n}\n\nstruct Square { side: Int }\n\nimpl Shape for Square {\n    fn scale(self, k: Int) -> Int { self.side * k }\n}\n\nfn through<S: Shape>(s: S, k: Int) -> Int {\n    s.scale(k)\n}\n\nfn main() {\n    let n = through(Square(side: 2), 0)\n}\n",
         ),
     ];
     for (name, src) in cases {
