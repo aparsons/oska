@@ -188,7 +188,7 @@ impl Body<'_, '_> {
     }
 
     /// The address of the code of the function `id`.
-    fn function_address(&mut self, id: FnId) -> Temp {
+    pub(super) fn function_address(&mut self, id: FnId) -> Temp {
         let dst = self.temp();
         self.push(Inst::Addr {
             dst,
@@ -223,7 +223,12 @@ impl Body<'_, '_> {
     /// its type is counted. The call counts its depth, and panics with
     /// `P0006` when the status the code returns names a broken `requires`
     /// clause.
-    fn invoke(&mut self, function: Temp, args: &[Temp], span: Span) -> Result<Temp, Diagnostic> {
+    pub(super) fn invoke(
+        &mut self,
+        function: Temp,
+        args: &[Temp],
+        span: Span,
+    ) -> Result<Temp, Diagnostic> {
         if args.len() >= ir::MAX_ARGS {
             return Err(self.refuse(span, "a call with more than 7 arguments"));
         }

@@ -36,6 +36,7 @@ impl Body<'_, '_> {
                 temp: value,
                 ty: held_ty.clone(),
                 loops: self.loops.len(),
+                scope: false,
             });
         }
         let result = self.temp();

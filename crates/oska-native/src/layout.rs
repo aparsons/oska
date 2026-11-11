@@ -90,7 +90,7 @@ pub fn is_counted(program: &Program, ty: &Type) -> bool {
         Type::Named { name, .. } if name == builtins::LIST => true,
         Type::Named { name, .. } => {
             !builtins::is_capability(name)
-                && !matches!(name.as_str(), "Range" | "Task" | "Scope" | "Args")
+                && !matches!(name.as_str(), "Range" | "Args")
                 && program
                     .types
                     .get(name)
@@ -126,6 +126,28 @@ pub const LIST_CAPACITY: u32 = 2 * WORD;
 
 /// The offset of a list object's first item.
 pub const LIST_ITEMS: u32 = 3 * WORD;
+
+/// The built-in types of scopes and tasks.
+pub const SCOPE: &str = "Scope";
+pub const TASK: &str = "Task";
+
+fn is_task_type(name: &str) -> bool {
+    name == SCOPE || name == TASK
+}
+
+/// A scope object: `[count][closed][head][tail]`.
+pub const SCOPE_CLOSED: u32 = WORD;
+
+/// A task object: `[count][scope][runner][code][result][state][next]`.
+pub const TASK_SCOPE: u32 = WORD;
+/// The address of the function that runs the task.
+pub const TASK_RUNNER: u32 = 2 * WORD;
+/// The function value it runs, 0 once it has.
+pub const TASK_CODE: u32 = 3 * WORD;
+/// Its result, once it has run.
+pub const TASK_RESULT: u32 = 4 * WORD;
+/// 0 until it has run.
+pub const TASK_STATE: u32 = 5 * WORD;
 
 /// The offset of a function value's code address.
 pub const FN_CODE: u32 = WORD;
@@ -192,7 +214,7 @@ pub fn fields(program: &Program, ty: &Type) -> Option<Fields> {
     };
     // The prelude declares `List` with a handle field; its objects are
     // laid out as lists.
-    if name == builtins::LIST {
+    if name == builtins::LIST || is_task_type(name) {
         return None;
     }
     let decl = program.types.get(name)?;
@@ -213,6 +235,10 @@ pub fn fields(program: &Program, ty: &Type) -> Option<Fields> {
 pub fn holds_counted(program: &Program, ty: &Type) -> bool {
     if let Some(item) = list_item(ty) {
         return is_counted(program, item);
+    }
+    // A task holds its scope, its code and its result.
+    if matches!(ty, Type::Named { name, .. } if name == TASK) {
+        return true;
     }
     is_counted(program, ty)
         && fields(program, ty).is_some_and(|f| f.all().any(|t| is_counted(program, t)))

@@ -59,8 +59,10 @@
 mod closures;
 mod data;
 mod debug;
+mod html;
 mod lists;
 mod patterns;
+mod tasks;
 mod tests;
 mod traits;
 
@@ -112,6 +114,9 @@ mod panics {
     pub const TEXT_TOO_LONG: &str = "P0037";
     pub const CALL_DEPTH_EXCEEDED: &str = "P0021";
     pub const TODO: &str = "P0003";
+    pub const SPAWN_ON_FINISHED_SCOPE: &str = "P0005";
+    /// The interpreter's message for `P0005`.
+    pub const FINISHED_SCOPE: &str = "`spawn` was called on a scope whose block has already ended";
     pub const MISSING_SECRET: &str = "P0020";
     /// The interpreter's message for `P0003`.
     pub const NOT_WRITTEN: &str = "reached `todo()`: this code is not written yet";
@@ -188,6 +193,17 @@ enum Instance {
     /// The body of the program's `index`th `test` block, a function of
     /// `t` (`tests.rs`).
     Test(usize),
+    /// What runs a task whose function value gives a `T`, spawned by the
+    /// call at bytes `start..end`: calls the value, keeps its result and
+    /// lets go of the queue's reference (`tasks.rs`).
+    TaskRunner {
+        result: Type,
+        start: usize,
+        end: usize,
+    },
+    /// Run the queued tasks of a scope (its parameter) until the task that
+    /// is its second parameter has run, or all of them when that is 0.
+    RunTasks,
 }
 
 /// Lower `user`, with `rt`, the checked `std.rt`, to a module. `locate`
@@ -425,6 +441,20 @@ impl<'p> Lowering<'p> {
                 let span = body.test_function(*index)?;
                 return body.finish(&qualified(instance), 1, span);
             }
+            Instance::TaskRunner { result, start, end } => {
+                let mut body = Body::new(self, Source::User, None);
+                let at = Span {
+                    start: *start,
+                    end: *end,
+                };
+                body.task_runner(result, at)?;
+                return body.finish(&qualified(instance), 1, NOWHERE);
+            }
+            Instance::RunTasks => {
+                let mut body = Body::new(self, Source::User, None);
+                body.run_tasks_function()?;
+                return body.finish(&qualified(instance), 2, NOWHERE);
+            }
             Instance::Thunk {
                 source,
                 intrinsic,
@@ -551,6 +581,8 @@ fn qualified(instance: &Instance) -> String {
             };
             format!("requires of {}", qualified(&function))
         }
+        Instance::TaskRunner { start, end, .. } => format!("task runner at {start}..{end}"),
+        Instance::RunTasks => "run tasks".to_string(),
         Instance::Closure(index) => format!("closure #{index}"),
         Instance::Test(index) => format!("test #{index}"),
         Instance::ClosureDrop(index) => format!("drop of closure #{index}"),
@@ -626,6 +658,9 @@ struct Held {
     ty: Type,
     /// How many loops were open where it was taken.
     loops: usize,
+    /// Whether it is the handle of a `scope` block, whose queued tasks run
+    /// and which is closed when code leaves the block (`tasks.rs`).
+    scope: bool,
 }
 
 /// A loop being lowered.
@@ -906,6 +941,9 @@ impl<'l, 'p> Body<'l, 'p> {
         let held: Vec<Held> = self.held.clone();
         for value in held.iter().rev() {
             if loops.map_or(true, |open| value.loops >= open) {
+                if value.scope {
+                    self.finish_scope(value.temp)?;
+                }
                 self.release(value.temp, &value.ty)?;
             }
         }
@@ -1676,6 +1714,12 @@ impl<'l, 'p> Body<'l, 'p> {
                     if let Some(value) = self.test_intrinsic(name, &type_args, &values, span)? {
                         return Ok(value);
                     }
+                    if let Some(value) = self.task_intrinsic(name, &values, expr)? {
+                        return Ok(value);
+                    }
+                    if let Some(value) = self.html_intrinsic(name, &values, expr)? {
+                        return Ok(value);
+                    }
                     if name == "todo" {
                         let todo = self.panic_static(panics::TODO, panics::NOT_WRITTEN, span)?;
                         self.push(Inst::Jump(todo));
@@ -1699,6 +1743,7 @@ impl<'l, 'p> Body<'l, 'p> {
                 convert,
                 type_args,
             } => self.try_expr(operand, convert.as_ref(), type_args, &expr.ty, span),
+            ExprKind::Scope(body) => self.scope_block(body),
             ExprKind::Closure(code) => self.closure(expr, code),
             ExprKind::FnValue { callee, type_args } => self.fn_value(expr, callee, type_args),
             ExprKind::CallValue { callee, args } => self.call_value(callee, args, expr),
@@ -2243,7 +2288,6 @@ fn describe(kind: &ExprKind) -> String {
         ExprKind::Range { .. } => "a range outside a `for` loop".to_string(),
         ExprKind::Try { .. } => "`?`".to_string(),
         ExprKind::Match { .. } => "`match`".to_string(),
-        ExprKind::Scope(_) => "`scope`".to_string(),
         ExprKind::Unsupported(what) => what.clone(),
         _ => "this expression".to_string(),
     }

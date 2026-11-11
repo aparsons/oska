@@ -855,3 +855,36 @@ fn the_native_panic_codes_are_the_interpreters() {
         .collect();
     assert_eq!(oska_native::codes::PANICS.to_vec(), interpreters);
 }
+
+#[test]
+fn tasks_in_a_test_reach_the_test_host() {
+    let outcome = assert_same_file(
+        "tasks",
+        r#"
+fn shout(out: Stdout, word: String) -> Int {
+    let _ = out.println(word)
+    word.len()
+}
+
+test "tasks print to the recorded stdout" {
+    let total = scope |s| {
+        let a = s.spawn(|| shout(t.stdout, "one"))
+        let b = s.spawn(|| shout(t.stdout, "three"))
+        a.join() + b.join()
+    }
+    t.assert_eq(total, 8)
+    t.assert_eq(t.printed(), ["one", "three"])
+}
+
+test "a task panics" {
+    let _ = scope |s| {
+        let task = s.spawn(|| 1 / (t.clock.now_millis()))
+        task.join()
+    }
+}
+"#,
+    );
+    assert!(outcome
+        .stdout
+        .contains("test tasks print to the recorded stdout ... ok\n"));
+}

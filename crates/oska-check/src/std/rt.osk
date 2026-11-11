@@ -2048,6 +2048,152 @@ fn hex_digit(d: Int) -> Int {
     87 + d
 }
 
+// ---- std.html --------------------------------------------------------------
+
+// The bytes `html_escape` replaces, and what it writes for each: `&`, `<`,
+// `>`, `"` and `'`. They are ASCII, so no byte of a longer UTF-8
+// sequence is ever one of them.
+fn escaped_length(byte: Int) -> Int {
+    if byte == 38 {
+        return 5
+    }
+    if byte == 60 || byte == 62 {
+        return 4
+    }
+    if byte == 34 {
+        return 6
+    }
+    if byte == 39 {
+        return 5
+    }
+    1
+}
+
+// Write the replacement of `byte` (see `escaped_length`) at `at` of
+// `out`: the byte after it.
+fn put_escaped(out: Int, at: Int, byte: Int) -> Int {
+    if byte == 38 {
+        // &amp;
+        var n = put_byte(out, at, 38)
+        n = put_byte(out, n, 97)
+        n = put_byte(out, n, 109)
+        n = put_byte(out, n, 112)
+        return put_byte(out, n, 59)
+    }
+    if byte == 60 || byte == 62 {
+        // &lt; and &gt;
+        var n = put_byte(out, at, 38)
+        n = put_byte(out, n, if byte == 60 { 108 } else { 103 })
+        n = put_byte(out, n, 116)
+        return put_byte(out, n, 59)
+    }
+    if byte == 34 {
+        // &quot;
+        var n = put_byte(out, at, 38)
+        n = put_byte(out, n, 113)
+        n = put_byte(out, n, 117)
+        n = put_byte(out, n, 111)
+        n = put_byte(out, n, 116)
+        return put_byte(out, n, 59)
+    }
+    if byte == 39 {
+        // &#39;
+        var n = put_byte(out, at, 38)
+        n = put_byte(out, n, 35)
+        n = put_byte(out, n, 51)
+        n = put_byte(out, n, 57)
+        return put_byte(out, n, 59)
+    }
+    put_byte(out, at, byte)
+}
+
+// `std.html`'s `text`: `text` escaped for HTML. The text itself when
+// nothing needs escaping.
+pub fn html_escape(text: String) -> String {
+    let object = rt_mem_text(text)
+    let data = text_data(object)
+    let length = text_length(object)
+    var size = 0
+    var i = 0
+    while i < length {
+        size = size + escaped_length(rt_mem_load8(rt_mem_add(data, i)))
+        i = i + 1
+    }
+    if size == length {
+        return text
+    }
+    let result = text_new(size)
+    let out = text_data(result)
+    var at = 0
+    i = 0
+    while i < length {
+        at = put_escaped(out, at, rt_mem_load8(rt_mem_add(data, i)))
+        i = i + 1
+    }
+    rt_mem_as_text(result)
+}
+
+// `Html.concat`: the markup of `a`, then of `b`.
+pub fn html_concat(a: String, b: String) -> String {
+    debug_concat(a, b)
+}
+
+// ---- Scopes and tasks ------------------------------------------------------
+//
+// A scope object is `[count][closed][head][tail]`, `closed` 0 while its
+// block runs; `head` and `tail` are the queue of the tasks spawned and not
+// yet started, oldest first, linked through their `next`. A task object is
+// `[count][scope][runner][code][result][state][next]` (`lower/tasks.rs`):
+// `runner` is the address of the function that runs it, `code` the function
+// value to call (0 once it has run), `state` 0 until it has run.
+
+// A new scope, open, with no tasks: its address.
+pub fn scope_new() -> Int {
+    let object = alloc(32)
+    rt_mem_store64(rt_mem_add(object, 8), 0)
+    rt_mem_store64(rt_mem_add(object, 16), 0)
+    rt_mem_store64(rt_mem_add(object, 24), 0)
+    object
+}
+
+// A new task of `queue` that runs `code` by `runner`, queued at the end of
+// the queue's queue. It has two references: the caller's, and the queue's.
+// It holds one to `queue` and takes over the caller's to `code`.
+pub fn task_new(queue: Int, runner: Int, code: Int) -> Int {
+    let task = alloc(56)
+    rt_mem_store64(task, 2)
+    rt_mem_store64(queue, rt_mem_add(rt_mem_load64(queue), 1))
+    rt_mem_store64(rt_mem_add(task, 8), queue)
+    rt_mem_store64(rt_mem_add(task, 16), runner)
+    rt_mem_store64(rt_mem_add(task, 24), code)
+    rt_mem_store64(rt_mem_add(task, 32), 0)
+    rt_mem_store64(rt_mem_add(task, 40), 0)
+    rt_mem_store64(rt_mem_add(task, 48), 0)
+    let tail = rt_mem_load64(rt_mem_add(queue, 24))
+    if tail == 0 {
+        rt_mem_store64(rt_mem_add(queue, 16), task)
+    } else {
+        rt_mem_store64(rt_mem_add(tail, 48), task)
+    }
+    rt_mem_store64(rt_mem_add(queue, 24), task)
+    task
+}
+
+// Take the oldest task of `queue` that has not started off its queue: its
+// address, with the queue's reference, or 0 when there is none.
+pub fn scope_pop(queue: Int) -> Int {
+    let head = rt_mem_load64(rt_mem_add(queue, 16))
+    if head == 0 {
+        return 0
+    }
+    let next = rt_mem_load64(rt_mem_add(head, 48))
+    rt_mem_store64(rt_mem_add(queue, 16), next)
+    if next == 0 {
+        rt_mem_store64(rt_mem_add(queue, 24), 0)
+    }
+    head
+}
+
 // ---- Files -----------------------------------------------------------------
 //
 // Directory and file capabilities, confined as the interpreter confines

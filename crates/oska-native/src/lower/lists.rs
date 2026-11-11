@@ -265,6 +265,7 @@ impl Body<'_, '_> {
                 temp: list,
                 ty: held_ty.clone(),
                 loops: self.loops.len(),
+                scope: false,
             });
         }
         let length = self.load(list, layout::LIST_LEN);

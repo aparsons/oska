@@ -93,6 +93,10 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     ("Path.new", Prelude::Runtime("path_new")),
     ("Path.from", Prelude::Runtime("path_new")),
     ("Path.eq", Prelude::Runtime("path_eq")),
+    // `std.html`'s `text`, `TrustedHtml.new` and `Html.concat` build a
+    // new object: `lower/html.rs`.
+    ("Html.raw", Prelude::Identity),
+    ("Html.render", Prelude::Field(0)),
     // Attenuation that only narrows the access: the type says which
     // operations a capability has, so the value stays the same.
     ("Fs.read_only", Prelude::Identity),
@@ -136,8 +140,18 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     ("TestContext.printed", Prelude::Runtime("test_printed")),
 ];
 
+/// `name` without the module a `std` function is called by when the
+/// program declares the same name itself (`html.text` for `text`).
+pub fn unqualified(name: &str) -> &str {
+    oska_check::builtins::std_modules()
+        .filter_map(|path| path.rsplit('.').next())
+        .find_map(|module| name.strip_prefix(module)?.strip_prefix('.'))
+        .unwrap_or(name)
+}
+
 /// The implementation of the prelude intrinsic `name`, if there is one.
 pub fn prelude(name: &str) -> Option<Prelude> {
+    let name = unqualified(name);
     PRELUDE.iter().find(|(n, _)| *n == name).map(|(_, p)| *p)
 }
 
