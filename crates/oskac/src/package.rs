@@ -259,7 +259,10 @@ pub fn from_here(dir: &str, path: &str) -> String {
     if dir.components().all(|c| c == Component::CurDir) {
         return path.to_string();
     }
-    dir.join(path).to_string_lossy().into_owned()
+    // `/` on every platform: `path` already uses `/`, and joining with
+    // the platform separator would print `forge\src/main.osk` on Windows.
+    let dir = dir.to_string_lossy();
+    format!("{}/{path}", dir.trim_end_matches(['/', '\\']))
 }
 
 /// The package a source file belongs to: the nearest directory above it
@@ -279,4 +282,17 @@ pub fn package_containing(file: &str) -> Option<String> {
             }
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::from_here;
+
+    #[test]
+    fn a_path_from_here_joins_with_a_forward_slash_on_every_platform() {
+        assert_eq!(from_here("forge", "src/main.osk"), "forge/src/main.osk");
+        assert_eq!(from_here("forge/", "src/main.osk"), "forge/src/main.osk");
+        assert_eq!(from_here("a/b", "src/x.osk"), "a/b/src/x.osk");
+        assert_eq!(from_here(".", "src/main.osk"), "src/main.osk");
+    }
 }
