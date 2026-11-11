@@ -61,7 +61,8 @@ pub fn rt_mem_sub(a: Int, b: Int) -> Int
 // A heap value is the address of an object whose first word is its
 // reference count. A negative count marks a static object in read-only
 // memory, which is never counted or freed. A text object continues with
-// its length in bytes, then its UTF-8 bytes.
+// its length in bytes, then its UTF-8 bytes; a list object with its length,
+// its capacity, then its items.
 
 // The address of `text`'s object.
 pub fn rt_mem_text(text: String) -> Int
@@ -72,6 +73,10 @@ pub fn rt_mem_as_text(object: Int) -> String
 // `object` (the reference passes, as for text).
 pub fn rt_mem_path(path: Path) -> Int
 pub fn rt_mem_as_path(object: Int) -> Path
+// The address of `list`'s object, and the list of texts whose object is at
+// `object` (the reference passes, as for text).
+pub fn rt_mem_list(list: List<String>) -> Int
+pub fn rt_mem_as_list(object: Int) -> List<String>
 // The address of the runtime's writable words, zero when the program
 // starts: see `global`.
 pub fn rt_mem_globals() -> Int
@@ -858,6 +863,202 @@ pub fn path_eq(a: Path, b: Path) -> Bool {
     retain(left)
     retain(right)
     string_eq(rt_mem_as_text(left), rt_mem_as_text(right))
+}
+
+// ---- Lists -----------------------------------------------------------------
+//
+// A list object is `[count][length][capacity][item 0][item 1]...`: room for
+// `capacity` items, the first `length` of them there, one word each. The
+// generated code reads and adds items inline, and releases them, by their
+// type, when the last reference to the list goes. Before it adds an item to
+// a list that is shared or full, it calls `list_reserve`.
+
+// A new, empty list object with room for `capacity` items: its address.
+fn list_new(capacity: Int) -> Int {
+    let object = alloc(rt_mem_add(24, rt_mem_shl(capacity, 3)))
+    rt_mem_store64(rt_mem_add(object, 8), 0)
+    rt_mem_store64(rt_mem_add(object, 16), capacity)
+    object
+}
+
+// A list object with the items of the list at `list`, unshared (its count
+// is 1) and with room for one more: `list` itself when it is that already.
+// Otherwise a new one, twice as large when `list` is full. The items move
+// to it from an unshared `list`, which is freed; from a shared or static
+// one they are copied, each retained when `counted` (the items hold
+// references), and `list` is counted once less.
+pub fn list_reserve(list: Int, counted: Bool) -> Int {
+    let count = rt_mem_load64(list)
+    let length = rt_mem_load64(rt_mem_add(list, 8))
+    let capacity = rt_mem_load64(rt_mem_add(list, 16))
+    if count == 1 && length < capacity {
+        return list
+    }
+    var larger = capacity
+    if length == capacity {
+        larger = rt_mem_shl(capacity, 1)
+    }
+    if larger < 4 {
+        larger = 4
+    }
+    let copy = list_new(larger)
+    copy_bytes(rt_mem_add(copy, 24), rt_mem_add(list, 24), rt_mem_shl(length, 3))
+    rt_mem_store64(rt_mem_add(copy, 8), length)
+    if count == 1 {
+        free(list)
+        return copy
+    }
+    if counted {
+        var i = 0
+        while i < length {
+            retain(rt_mem_load64(rt_mem_add(list, rt_mem_add(24, rt_mem_shl(i, 3)))))
+            i = rt_mem_add(i, 1)
+        }
+    }
+    if count > 0 {
+        rt_mem_store64(list, rt_mem_sub(count, 1))
+    }
+    copy
+}
+
+// Add the word `item` to the end of the list at `list`, which is unshared:
+// the list's address afterwards, which moves when it grows.
+fn list_add(list: Int, item: Int) -> Int {
+    let target = list_reserve(list, false)
+    let length = rt_mem_load64(rt_mem_add(target, 8))
+    rt_mem_store64(rt_mem_add(target, rt_mem_add(24, rt_mem_shl(length, 3))), item)
+    rt_mem_store64(rt_mem_add(target, 8), rt_mem_add(length, 1))
+    target
+}
+
+// A text object holding the `count` bytes at `at`: its address, holding a
+// reference for the caller. An empty one is the static "".
+fn text_of(at: Int, count: Int) -> Int {
+    if count == 0 {
+        return rt_mem_text("")
+    }
+    let object = text_new(count)
+    copy_bytes(text_data(object), at, count)
+    object
+}
+
+// `String.split`: the pieces between occurrences of `separator`, empty
+// ones included. An empty separator occurs before and after every
+// character, as Rust's `str::split` has it: "ab" splits into "", "a", "b"
+// and "".
+pub fn string_split(text: String, separator: String) -> List<String> {
+    let object = rt_mem_text(text)
+    let data = text_data(object)
+    let length = text_length(object)
+    let other = rt_mem_text(separator)
+    let other_data = text_data(other)
+    let other_length = text_length(other)
+    var list = list_new(4)
+    if other_length == 0 {
+        list = list_add(list, rt_mem_text(""))
+        var i = 0
+        while i < length {
+            let size = sequence_length(rt_mem_load8(rt_mem_add(data, i)))
+            list = list_add(list, text_of(rt_mem_add(data, i), size))
+            i = rt_mem_add(i, size)
+        }
+        list = list_add(list, rt_mem_text(""))
+        return rt_mem_as_list(list)
+    }
+    var at = find_bytes(data, length, other_data, other_length, 0)
+    if at < 0 {
+        // One piece, the whole text: the text itself.
+        retain(object)
+        return rt_mem_as_list(list_add(list, object))
+    }
+    var read = 0
+    while at >= 0 {
+        list = list_add(list, text_of(rt_mem_add(data, read), rt_mem_sub(at, read)))
+        read = rt_mem_add(at, other_length)
+        at = find_bytes(data, length, other_data, other_length, read)
+    }
+    list = list_add(list, text_of(rt_mem_add(data, read), rt_mem_sub(length, read)))
+    rt_mem_as_list(list)
+}
+
+// `String.lines`: the lines, without their line endings, as Rust's
+// `str::lines` has them. A line ends at a line feed, and a carriage return
+// just before it goes too; the last line needs no ending, and an empty
+// last line is no line.
+pub fn string_lines(text: String) -> List<String> {
+    let object = rt_mem_text(text)
+    let data = text_data(object)
+    let length = text_length(object)
+    let newline = text_data(rt_mem_text("\n"))
+    var list = list_new(4)
+    var start = 0
+    while start < length {
+        let found = find_bytes(data, length, newline, 1, start)
+        var end = length
+        var next = length
+        if found >= 0 {
+            end = found
+            next = rt_mem_add(found, 1)
+            if end > start && rt_mem_load8(rt_mem_add(data, rt_mem_sub(end, 1))) == 13 {
+                end = rt_mem_sub(end, 1)
+            }
+        }
+        list = list_add(list, text_of(rt_mem_add(data, start), rt_mem_sub(end, start)))
+        start = next
+    }
+    rt_mem_as_list(list)
+}
+
+// `String.chars`: each character as a text of its own.
+pub fn string_chars(text: String) -> List<String> {
+    let object = rt_mem_text(text)
+    let data = text_data(object)
+    let length = text_length(object)
+    var list = list_new(length)
+    var i = 0
+    while i < length {
+        let size = sequence_length(rt_mem_load8(rt_mem_add(data, i)))
+        list = list_add(list, text_of(rt_mem_add(data, i), size))
+        i = rt_mem_add(i, size)
+    }
+    rt_mem_as_list(list)
+}
+
+// `String.join`: `parts` with `separator` between each two.
+pub fn string_join(separator: String, parts: List<String>) -> String {
+    let list = rt_mem_list(parts)
+    let count = rt_mem_load64(rt_mem_add(list, 8))
+    if count == 0 {
+        return ""
+    }
+    let items = rt_mem_add(list, 24)
+    if count == 1 {
+        let only = rt_mem_load64(items)
+        retain(only)
+        return rt_mem_as_text(only)
+    }
+    let other = rt_mem_text(separator)
+    let other_length = text_length(other)
+    var total = other_length * (count - 1)
+    var i = 0
+    while i < count {
+        total = total + text_length(rt_mem_load64(rt_mem_add(items, rt_mem_shl(i, 3))))
+        i = rt_mem_add(i, 1)
+    }
+    let result = text_new(total)
+    var out = text_data(result)
+    i = 0
+    while i < count {
+        if i > 0 {
+            copy_bytes(out, text_data(other), other_length)
+            out = rt_mem_add(out, other_length)
+        }
+        let part = rt_mem_load64(rt_mem_add(items, rt_mem_shl(i, 3)))
+        copy_bytes(out, text_data(part), text_length(part))
+        out = rt_mem_add(out, text_length(part))
+        i = rt_mem_add(i, 1)
+    }
+    rt_mem_as_text(result)
 }
 
 // ---- Lower case ------------------------------------------------------------

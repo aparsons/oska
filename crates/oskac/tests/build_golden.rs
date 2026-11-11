@@ -247,9 +247,9 @@ fn a_module_with_no_runtime_is_refused_as_the_interpreter_refuses_it() {
     );
 }
 
-/// A program with a construct the backend cannot compile yet: a list.
+/// A program with a construct the backend cannot compile yet: a closure.
 const UNSUPPORTED: &str = "fn main(io: Stdout) -> Result<(), IoError> {\n    \
-                           let xs = [1, 2]\n    io.println(\"three\")\n}\n";
+                           let f = |x: Int| x\n    io.println(\"three\")\n}\n";
 
 #[test]
 fn a_construct_the_backend_cannot_compile_yet_is_refused() {
@@ -276,7 +276,7 @@ fn an_unsupported_construct_in_a_package_module_is_located_in_its_file() {
         (
             "greeter/src/sum.osk",
             "pub fn check(io: Stdout) -> Result<(), IoError> {\n    \
-             let xs = [1, 2]\n    io.println(\"three\")\n}\n",
+             let f = |x: Int| x\n    io.println(\"three\")\n}\n",
         ),
     ];
     assert_golden("package_unsupported", &files, &["build", "greeter"]);

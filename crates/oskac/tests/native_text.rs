@@ -3,7 +3,7 @@
 //! return a `List`, `String` equality, `Path` construction and the
 //! `Untrusted<String>` operations, on ASCII, multi-byte and edge-case
 //! text, with the interpreter's panics (`P0035`, `P0036`, `P0037`).
-//! (`String` methods that return a `List` wait for lists, #132.)
+//! (`String` methods that make or take a `List` are in `native_lists.rs`.)
 
 #![cfg(all(target_arch = "aarch64", target_os = "linux"))]
 
@@ -431,47 +431,4 @@ fn main(io: Stdout) {
         outcome.stdout, "5 8\n[é ünï]\ntrue\ntrue\n10 16\n[é ünïé ünï]\ntrue\ntrue\n",
         "{outcome:#?}"
     );
-}
-
-/// Methods that give or take a `List` cannot be built until lists have a
-/// native representation (#132): `oskac build` refuses them with `E0390`,
-/// naming the method, and exits 2.
-#[test]
-fn methods_that_need_lists_are_refused_cleanly() {
-    for (method, call) in [
-        ("String.split", "text.split(\",\")"),
-        ("String.lines", "text.lines()"),
-        ("String.chars", "text.chars()"),
-        ("String.join", "text.join(parts)"),
-    ] {
-        // `join` needs a list to take, which is refused first.
-        let parts = if method == "String.join" {
-            "    let parts = [text]\n"
-        } else {
-            ""
-        };
-        let src = format!(
-            "fn main(io: Stdout) {{\n    let text = \"a,b\"\n{parts}    let _ = {call}\n}}\n"
-        );
-        let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join("native_text_refusals")
-            .join(method);
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("a directory");
-        std::fs::write(dir.join("main.osk"), src).expect("the source");
-        let output = std::process::Command::new(env!("CARGO_BIN_EXE_oskac"))
-            .args(["build", "main.osk"])
-            .current_dir(&dir)
-            .output()
-            .expect("oskac should run");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(output.status.code(), Some(2), "{method}: {stderr}");
-        assert!(stderr.contains("error[E0390]"), "{method}: {stderr}");
-        if method != "String.join" {
-            assert!(
-                stderr.contains(&format!("cannot compile `{method}` yet")),
-                "{method}: {stderr}"
-            );
-        }
-    }
 }

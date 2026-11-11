@@ -69,6 +69,10 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
     ),
     ("String.assume_trusted", Prelude::Identity),
     ("String.parse_int", Prelude::Runtime("string_parse_int")),
+    ("String.split", Prelude::Runtime("string_split")),
+    ("String.lines", Prelude::Runtime("string_lines")),
+    ("String.chars", Prelude::Runtime("string_chars")),
+    ("String.join", Prelude::Runtime("string_join")),
     ("Path.new", Prelude::Runtime("path_new")),
     ("Path.from", Prelude::Runtime("path_new")),
     ("Path.eq", Prelude::Runtime("path_eq")),
@@ -132,6 +136,8 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_mem_as_text", Runtime::Identity),
     ("rt_mem_path", Runtime::Identity),
     ("rt_mem_as_path", Runtime::Identity),
+    ("rt_mem_list", Runtime::Identity),
+    ("rt_mem_as_list", Runtime::Identity),
     ("rt_mem_globals", Runtime::Globals),
 ];
 

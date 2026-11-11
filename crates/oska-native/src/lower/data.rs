@@ -74,7 +74,7 @@ impl Body<'_, '_> {
     }
 
     /// The type of field `index` of the concrete struct type `ty`.
-    fn struct_field_type(&self, ty: &Type, index: usize) -> Type {
+    pub(super) fn struct_field_type(&self, ty: &Type, index: usize) -> Type {
         match self.fields_of(ty) {
             Some(Fields::Struct(fields)) => fields.get(index).cloned().unwrap_or(Type::Unit),
             _ => Type::Unit,
@@ -90,7 +90,7 @@ impl Body<'_, '_> {
         }
     }
 
-    fn store(&mut self, base: Temp, offset: u32, src: Temp) {
+    pub(super) fn store(&mut self, base: Temp, offset: u32, src: Temp) {
         self.push(Inst::Store {
             width: Width::W64,
             base,
@@ -100,7 +100,7 @@ impl Body<'_, '_> {
     }
 
     /// Call `std.rt`'s allocator for an object of `size` bytes.
-    fn alloc(&mut self, size: i64) -> Result<Temp, Diagnostic> {
+    pub(super) fn alloc(&mut self, size: i64) -> Result<Temp, Diagnostic> {
         let size = self.constant(size);
         self.call_runtime("alloc", vec![size], NOWHERE)
     }
@@ -234,7 +234,7 @@ impl Body<'_, '_> {
 
     /// The temporary a local or `self` lives in, its type, and whether it
     /// holds a reference of its own.
-    fn holder(&self, place: &Place) -> Option<(Temp, Type, bool)> {
+    pub(super) fn holder(&self, place: &Place) -> Option<(Temp, Type, bool)> {
         match place {
             Place::Local(slot) => {
                 let slot = self.slots.get(*slot)?;
@@ -251,7 +251,11 @@ impl Body<'_, '_> {
 
     /// Make the struct at `place` unshared, and every struct on the way to
     /// it: its object, which may now be written, and its type.
-    fn unique_place(&mut self, place: &Place, span: Span) -> Result<(Temp, Type), Diagnostic> {
+    pub(super) fn unique_place(
+        &mut self,
+        place: &Place,
+        span: Span,
+    ) -> Result<(Temp, Type), Diagnostic> {
         match place {
             Place::Local(_) | Place::SelfValue => {
                 let Some((temp, ty, _)) = self.holder(place) else {
@@ -320,6 +324,9 @@ impl Body<'_, '_> {
         ret: &Type,
         span: Span,
     ) -> Result<Temp, Diagnostic> {
+        if matches!(callee, Callee::Intrinsic(name) if name == "List.push") {
+            return self.list_push(receiver, args, span);
+        }
         let mut values = Vec::with_capacity(args.len() + 1);
         for arg in args {
             values.push(self.expr(arg)?);
@@ -396,6 +403,12 @@ impl Body<'_, '_> {
     /// free the object, its parameter.
     pub(super) fn drop_function(&mut self, ty: &Type) -> Result<(), Diagnostic> {
         let object = self.temp();
+        if let Some(item) = layout::list_item(ty) {
+            if self.counted(item) {
+                let item = item.clone();
+                self.drop_list(object, &item)?;
+            }
+        }
         match self.fields_of(ty) {
             Some(Fields::Struct(fields)) => {
                 for (index, field) in fields.iter().enumerate() {

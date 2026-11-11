@@ -57,6 +57,7 @@
 //! interpreter's limit, so recursion never reaches the guard.
 
 mod data;
+mod lists;
 mod patterns;
 
 use std::collections::{BTreeMap, HashMap};
@@ -90,6 +91,7 @@ pub const GLOBALS: u32 = 16;
 /// `oska_run::codes` names them.
 mod panics {
     pub const OVERFLOW: &str = "P0001";
+    pub const INDEX_OUT_OF_BOUNDS: &str = "P0002";
     pub const DIVISION_BY_ZERO: &str = "P0004";
     pub const SLICE_OUT_OF_BOUNDS: &str = "P0035";
     pub const NEGATIVE_REPEAT: &str = "P0036";
@@ -127,6 +129,8 @@ enum Instance {
     /// A copy of a shared struct object of this type, whose count is not
     /// 1, holding a reference of its own to each field.
     Unshare(Source, Type),
+    /// Whether two lists of items of this type are equal (`List.eq`).
+    ListEq(Source, Type),
 }
 
 /// Lower `user`, with `rt`, the checked `std.rt`, to a module. `locate`
@@ -283,6 +287,11 @@ impl<'p> Lowering<'p> {
                 body.unshare_function(ty)?;
                 return body.finish(&qualified(instance), 1, NOWHERE);
             }
+            Instance::ListEq(source, ty) => {
+                let mut body = Body::new(self, *source, Some(origin));
+                body.list_eq_function(ty)?;
+                return body.finish(&qualified(instance), 2, NOWHERE);
+            }
         };
         let program = self.program(source);
         let runtime_origin = (source == Source::Runtime).then_some(origin);
@@ -386,6 +395,7 @@ fn qualified(instance: &Instance) -> String {
         }
         Instance::Drop(_, ty) => format!("drop<{ty}>"),
         Instance::Unshare(_, ty) => format!("unshare<{ty}>"),
+        Instance::ListEq(_, ty) => format!("list_eq<{ty}>"),
     }
 }
 
@@ -1268,10 +1278,14 @@ impl<'l, 'p> Body<'l, 'p> {
                     if let Some(value) = self.data_intrinsic(name, args, &values, expr)? {
                         return Ok(value);
                     }
+                    if let Some(value) = self.list_intrinsic(name, args, &values, expr)? {
+                        return Ok(value);
+                    }
                 }
                 self.call(callee, type_args, values, &expr.ty, span)
             }
             ExprKind::Field { base, index } => self.field(base, *index, &expr.ty),
+            ExprKind::List(items) => self.list_literal(expr, items),
             ExprKind::Match { scrutinee, arms } => self.match_arms(scrutinee, arms),
             ExprKind::MutatingCall {
                 callee,
@@ -1678,7 +1692,13 @@ impl<'l, 'p> Body<'l, 'p> {
                 ty,
                 iter,
                 body,
-            } => self.for_range(*binds, ty, iter, body)?,
+            } => {
+                if layout::list_item(&self.ty(&iter.ty)).is_some() {
+                    self.for_list(*binds, ty, iter, body)?;
+                } else {
+                    self.for_range(*binds, ty, iter, body)?;
+                }
+            }
         }
         Ok(())
     }
@@ -1707,7 +1727,7 @@ impl<'l, 'p> Body<'l, 'p> {
         body: &Expr,
     ) -> Result<(), Diagnostic> {
         let ExprKind::Range { start, end } = &iter.kind else {
-            return Err(self.refuse(iter.span, "a `for` loop over a list or a range value"));
+            return Err(self.refuse(iter.span, "a `for` loop over a range value"));
         };
         let unsigned = matches!(ty, Type::Int(int) if int.min() == 0);
         let first = self.expr(start)?;

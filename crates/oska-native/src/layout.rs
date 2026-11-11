@@ -12,7 +12,9 @@
 //!   counted or freed):
 //!   - text: `[count][length in bytes][UTF-8 bytes, padded to 8]`;
 //!   - a struct: `[count][field 0][field 1]...`;
-//!   - an enum with fields: `[count][variant index][field 0]...`.
+//!   - an enum with fields: `[count][variant index][field 0]...`;
+//!   - a list: `[count][length][capacity][item 0][item 1]...`, room for
+//!     `capacity` items of which the first `length` are there.
 //!
 //! `std.rt` reads these layouts too (`std/rt.osk`), so a change here is a
 //! change there.
@@ -67,16 +69,17 @@ pub fn int_kind(int: IntType) -> IntKind {
 }
 
 /// Whether a value of `ty` is an object's address, whose reference count
-/// the code keeps: text, and structs and enums with fields. Integers,
-/// `Bool`, `()`, fieldless enums and capabilities are not. The built-in
-/// types with a handle (`List`, `Range`, `Task`, `Scope`) get their
+/// the code keeps: text, lists, and structs and enums with fields.
+/// Integers, `Bool`, `()`, fieldless enums and capabilities are not. The
+/// other built-in types with a handle (`Range`, `Task`, `Scope`) get their
 /// representation with their tickets and are not counted until then.
 pub fn is_counted(program: &Program, ty: &Type) -> bool {
     match ty {
         Type::String => true,
+        Type::Named { name, .. } if name == builtins::LIST => true,
         Type::Named { name, .. } => {
             !builtins::is_capability(name)
-                && !matches!(name.as_str(), "List" | "Range" | "Task" | "Scope" | "Args")
+                && !matches!(name.as_str(), "Range" | "Task" | "Scope" | "Args")
                 && program
                     .types
                     .get(name)
@@ -85,6 +88,23 @@ pub fn is_counted(program: &Program, ty: &Type) -> bool {
         _ => false,
     }
 }
+
+/// The type of the items of `ty`, when it is a list.
+pub fn list_item(ty: &Type) -> Option<&Type> {
+    match ty {
+        Type::Named { name, args } if name == builtins::LIST => args.first(),
+        _ => None,
+    }
+}
+
+/// The offset of a list object's length.
+pub const LIST_LEN: u32 = WORD;
+
+/// The offset of a list object's capacity.
+pub const LIST_CAPACITY: u32 = 2 * WORD;
+
+/// The offset of a list object's first item.
+pub const LIST_ITEMS: u32 = 3 * WORD;
 
 /// The size of a word, and of every field.
 pub const WORD: u32 = 8;
@@ -140,6 +160,11 @@ pub fn fields(program: &Program, ty: &Type) -> Option<Fields> {
     let Type::Named { name, args } = ty else {
         return None;
     };
+    // The prelude declares `List` with a handle field; its objects are
+    // laid out as lists.
+    if name == builtins::LIST {
+        return None;
+    }
     let decl = program.types.get(name)?;
     let subst: Vec<(String, Type)> = decl.generics.iter().cloned().zip(args.clone()).collect();
     let types = |fields: &[oska_check::program::Field]| -> Vec<Type> {
@@ -156,6 +181,9 @@ pub fn fields(program: &Program, ty: &Type) -> Option<Fields> {
 /// Whether releasing the last reference to an object of `ty` must
 /// release references its fields hold before freeing it.
 pub fn holds_counted(program: &Program, ty: &Type) -> bool {
+    if let Some(item) = list_item(ty) {
+        return is_counted(program, item);
+    }
     is_counted(program, ty)
         && fields(program, ty).is_some_and(|f| f.all().any(|t| is_counted(program, t)))
 }
@@ -185,6 +213,7 @@ pub fn variant_index(decl: &TypeDecl, variant: &str) -> Option<usize> {
 pub struct Rodata {
     bytes: Vec<u8>,
     texts: BTreeMap<String, u32>,
+    lists: BTreeMap<Vec<i64>, u32>,
 }
 
 impl Rodata {
@@ -208,6 +237,20 @@ impl Rodata {
         for &word in words {
             self.word(word);
         }
+        at
+    }
+
+    /// The offset of a static list object holding `items`.
+    /// Equal lists share one object.
+    pub fn list(&mut self, items: &[i64]) -> u32 {
+        if let Some(&at) = self.lists.get(items) {
+            return at;
+        }
+        let length = items.len() as i64;
+        let mut words = vec![length, length];
+        words.extend_from_slice(items);
+        let at = self.object(&words);
+        self.lists.insert(items.to_vec(), at);
         at
     }
 
