@@ -41,6 +41,9 @@ pub struct Case {
     args: Vec<String>,
     stdin: String,
     env: Vec<(String, String)>,
+    /// Run on each starting tree after its files are written: for what
+    /// files alone cannot set up, such as symlinks and hard links.
+    setup: Option<fn(&Path)>,
 }
 
 impl Case {
@@ -53,6 +56,7 @@ impl Case {
             args: Vec::new(),
             stdin: String::new(),
             env: Vec::new(),
+            setup: None,
         }
     }
 
@@ -69,12 +73,19 @@ impl Case {
             args: Vec::new(),
             stdin: String::new(),
             env: Vec::new(),
+            setup: None,
         }
     }
 
     /// A file in the starting directory tree, besides the program.
     pub fn with_file(mut self, path: &str, text: &str) -> Case {
         self.files.push((path.to_string(), text.to_string()));
+        self
+    }
+
+    /// Run `setup` on each starting tree, after its files are written.
+    pub fn with_setup(mut self, setup: fn(&Path)) -> Case {
+        self.setup = Some(setup);
         self
     }
 
@@ -200,6 +211,9 @@ fn fresh_tree(dir: &Path, case: &Case) -> PathBuf {
         std::fs::create_dir_all(file.parent().expect("a parent")).expect("a directory");
         std::fs::write(&file, text).expect("should write the file");
     }
+    if let Some(setup) = case.setup {
+        setup(dir);
+    }
     dir.to_path_buf()
 }
 
@@ -234,7 +248,15 @@ fn read_tree(dir: &Path, prefix: &str, tree: &mut BTreeMap<String, Option<String
         let entry = entry.expect("a directory entry");
         let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
         let path = entry.path();
-        if path.is_dir() {
+        let kind = std::fs::symlink_metadata(&path).expect("should stat the entry");
+        // A symlink is recorded by its target, never followed; anything
+        // that is neither a file nor a directory (a FIFO) by its name.
+        if kind.file_type().is_symlink() {
+            let target = std::fs::read_link(&path).expect("should read the symlink");
+            tree.insert(format!("{name}@"), Some(target.display().to_string()));
+        } else if !kind.is_dir() && !kind.is_file() {
+            tree.insert(format!("{name}|"), None);
+        } else if path.is_dir() {
             tree.insert(format!("{name}/"), None);
             read_tree(&path, &format!("{name}/"), tree);
         } else {

@@ -4,7 +4,8 @@
 //!
 //! - an integer of any type is its two's-complement bit pattern, sign- or
 //!   zero-extended to 64 bits as its type says; `Bool` is 0 or 1; `()` is
-//!   0; a capability carries no state, so it is 0 too;
+//!   0; a capability carries no state, so it is 0 too, except a
+//!   confined one ([`is_confined`]);
 //! - an enum whose every variant has no fields is its variant's index;
 //! - anything else (text, a struct, an enum with fields) is the address
 //!   of a heap **object**, whose first word is its reference count
@@ -14,7 +15,10 @@
 //!   - a struct: `[count][field 0][field 1]...`;
 //!   - an enum with fields: `[count][variant index][field 0]...`;
 //!   - a list: `[count][length][capacity][item 0][item 1]...`, room for
-//!     `capacity` items of which the first `length` are there.
+//!     `capacity` items of which the first `length` are there;
+//!   - a directory or file capability ([`is_confined`]): `std.rt`'s
+//!     `Root`, `[count][handle][path][name][why]`, which `std.rt`'s
+//!     `root_drop` releases, closing its handle.
 //!
 //! `std.rt` reads these layouts too (`std/rt.osk`), so a change here is a
 //! change there.
@@ -76,6 +80,7 @@ pub fn int_kind(int: IntType) -> IntKind {
 pub fn is_counted(program: &Program, ty: &Type) -> bool {
     match ty {
         Type::String => true,
+        _ if is_confined(ty) => true,
         Type::Named { name, .. } if name == builtins::LIST => true,
         Type::Named { name, .. } => {
             !builtins::is_capability(name)
@@ -87,6 +92,16 @@ pub fn is_counted(program: &Program, ty: &Type) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether `ty` is a directory or file capability: an object holding an
+/// open directory handle (`std.rt`'s `Root`), released by `std.rt`'s
+/// `root_drop` rather than a generated drop function.
+pub fn is_confined(ty: &Type) -> bool {
+    matches!(ty, Type::Named { name, .. } if builtins::is_capability(name) && matches!(
+        name.as_str(),
+        "Dir" | "DirRead" | "DirWrite" | "FileRead" | "FileWrite"
+    ))
 }
 
 /// The type of the items of `ty`, when it is a list.

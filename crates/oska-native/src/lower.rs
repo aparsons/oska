@@ -737,7 +737,9 @@ impl<'l, 'p> Body<'l, 'p> {
             rhs: one,
             target: shared,
         });
-        if layout::holds_counted(self.program(), ty) {
+        if layout::is_confined(ty) {
+            self.call_runtime("root_drop", vec![value], NOWHERE)?;
+        } else if layout::holds_counted(self.program(), ty) {
             let drop = Instance::Drop(self.source, ty.clone());
             let origin = self.origin.unwrap_or(NOWHERE);
             let id = self.lowering.request(drop, origin);
@@ -2061,6 +2063,7 @@ fn is_stateless_input(ty: &Type) -> bool {
     matches!(ty, Type::Named { name, args } if args.is_empty() && matches!(
         name.as_str(),
         "Stdout" | "Stderr" | "Stdin" | "Env" | "Clock" | "Random" | "Args"
+            | "Fs" | "FsRead" | "FsWrite"
     ))
 }
 

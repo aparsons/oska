@@ -21,6 +21,9 @@ pub fn rt_sys_close(fd: Int) -> Int
 pub fn rt_sys_mkdirat(dirfd: Int, path: Int, mode: Int) -> Int
 pub fn rt_sys_getdents64(fd: Int, buf: Int, count: Int) -> Int
 pub fn rt_sys_fstat(fd: Int, buf: Int) -> Int
+pub fn rt_sys_ftruncate(fd: Int, length: Int) -> Int
+pub fn rt_sys_readlinkat(dirfd: Int, path: Int, buf: Int, size: Int) -> Int
+pub fn rt_sys_fcntl(fd: Int, command: Int, arg: Int) -> Int
 pub fn rt_sys_mmap(addr: Int, length: Int, prot: Int, flags: Int, fd: Int, offset: Int) -> Int
 pub fn rt_sys_munmap(addr: Int, length: Int) -> Int
 pub fn rt_sys_clock_gettime(clock: Int, tp: Int) -> Int
@@ -85,6 +88,9 @@ pub fn rt_mem_as_path(object: Int) -> Path
 // `object` (the reference passes, as for text).
 pub fn rt_mem_list(list: List<String>) -> Int
 pub fn rt_mem_as_list(object: Int) -> List<String>
+// The directory or file capability whose object is at `object`, as the
+// runtime's `Root` (the reference passes, as for text).
+pub fn rt_mem_as_root(object: Int) -> Root
 // The address of the runtime's writable words, zero when the program
 // starts: see `global`.
 pub fn rt_mem_globals() -> Int
@@ -1496,44 +1502,37 @@ fn io_error_text(message: String) -> IoError {
     rt_mem_as_io_error(object)
 }
 
+// The C library's message for the system error `errno`, as Rust's
+// `io::Error` words it: `Unknown error N` for a number with none.
 fn errno_message(errno: Int) -> String {
-    if errno == 1 {
-        return "Operation not permitted"
+    let object = rt_mem_text(errno_table())
+    let data = text_data(object)
+    let length = text_length(object)
+    // The message for `errno` starts after `errno - 1` separators.
+    var at = 0
+    var n = 1
+    while n < errno && at < length {
+        if rt_mem_load8(rt_mem_add(data, at)) == 124 {
+            n = n + 1
+        }
+        at = at + 1
     }
-    if errno == 2 {
-        return "No such file or directory"
+    var end = at
+    while end < length && rt_mem_load8(rt_mem_add(data, end)) != 124 {
+        end = end + 1
     }
-    if errno == 4 {
-        return "Interrupted system call"
+    if errno < 1 || at >= length || end == at {
+        return "Unknown error {errno}"
     }
-    if errno == 5 {
-        return "Input/output error"
-    }
-    if errno == 9 {
-        return "Bad file descriptor"
-    }
-    if errno == 11 {
-        return "Resource temporarily unavailable"
-    }
-    if errno == 13 {
-        return "Permission denied"
-    }
-    if errno == 21 {
-        return "Is a directory"
-    }
-    if errno == 22 {
-        return "Invalid argument"
-    }
-    if errno == 27 {
-        return "File too large"
-    }
-    if errno == 28 {
-        return "No space left on device"
-    }
-    if errno == 32 {
-        return "Broken pipe"
-    }
-    "Unknown error"
+    rt_mem_as_text(text_of(rt_mem_add(data, at), end - at))
+}
+
+// The messages of the system errors 1 to 133 (Linux's numbers), in order,
+// separated by `|`; empty for a number with no message. Generated from
+// Rust's `io::Error::from_raw_os_error`, and a test (`native_files.rs`)
+// checks it against that for every number.
+fn errno_table() -> String {
+    "Operation not permitted|No such file or directory|No such process|Interrupted system call|Input/output error|No such device or address|Argument list too long|Exec format error|Bad file descriptor|No child processes|Resource temporarily unavailable|Cannot allocate memory|Permission denied|Bad address|Block device required|Device or resource busy|File exists|Invalid cross-device link|No such device|Not a directory|Is a directory|Invalid argument|Too many open files in system|Too many open files|Inappropriate ioctl for device|Text file busy|File too large|No space left on device|Illegal seek|Read-only file system|Too many links|Broken pipe|Numerical argument out of domain|Numerical result out of range|Resource deadlock avoided|File name too long|No locks available|Function not implemented|Directory not empty|Too many levels of symbolic links||No message of desired type|Identifier removed|Channel number out of range|Level 2 not synchronized|Level 3 halted|Level 3 reset|Link number out of range|Protocol driver not attached|No CSI structure available|Level 2 halted|Invalid exchange|Invalid request descriptor|Exchange full|No anode|Invalid request code|Invalid slot||Bad font file format|Device not a stream|No data available|Timer expired|Out of streams resources|Machine is not on the network|Package not installed|Object is remote|Link has been severed|Advertise error|Srmount error|Communication error on send|Protocol error|Multihop attempted|RFS specific error|Bad message|Value too large for defined data type|Name not unique on network|File descriptor in bad state|Remote address changed|Can not access a needed shared library|Accessing a corrupted shared library|.lib section in a.out corrupted|Attempting to link in too many shared libraries|Cannot exec a shared library directly|Invalid or incomplete multibyte or wide character|Interrupted system call should be restarted|Streams pipe error|Too many users|Socket operation on non-socket|Destination address required|Message too long|Protocol wrong type for socket|Protocol not available|Protocol not supported|Socket type not supported|Operation not supported|Protocol family not supported|Address family not supported by protocol|Address already in use|Cannot assign requested address|Network is down|Network is unreachable|Network dropped connection on reset|Software caused connection abort|Connection reset by peer|No buffer space available|Transport endpoint is already connected|Transport endpoint is not connected|Cannot send after transport endpoint shutdown|Too many references: cannot splice|Connection timed out|Connection refused|Host is down|No route to host|Operation already in progress|Operation now in progress|Stale file handle|Structure needs cleaning|Not a XENIX named type file|No XENIX semaphores available|Is a named type file|Remote I/O error|Disk quota exceeded|No medium found|Wrong medium type|Operation canceled|Required key not available|Key has expired|Key has been revoked|Key was rejected by service|Owner died|State not recoverable|Operation not possible due to RF-kill|Memory page has hardware error"
 }
 
 // ---- Standard input --------------------------------------------------------
@@ -1940,30 +1939,42 @@ fn debug_pass(data: Int, length: Int, out: Int) -> Int {
     var n = put_byte(out, 0, 34)
     var i = 0
     while i < length {
-        let b = rt_mem_load8(rt_mem_add(data, i))
-        let size = sequence_length(b)
-        if b == 34 || b == 92 {
-            n = put_byte(out, put_byte(out, n, 92), b)
-        } else if b == 10 {
-            n = put_byte(out, put_byte(out, n, 92), 110)
-        } else if b == 13 {
-            n = put_byte(out, put_byte(out, n, 92), 114)
-        } else if b == 9 {
-            n = put_byte(out, put_byte(out, n, 92), 116)
-        } else if b == 0 {
-            n = put_byte(out, put_byte(out, n, 92), 48)
-        } else if debug_escapes(decode_at(rt_mem_add(data, i))) {
-            n = put_unicode_escape(out, n, decode_at(rt_mem_add(data, i)))
-        } else {
-            var k = 0
-            while k < size {
-                n = put_byte(out, n, rt_mem_load8(rt_mem_add(data, i + k)))
-                k = k + 1
-            }
-        }
+        let size = sequence_length(rt_mem_load8(rt_mem_add(data, i)))
+        n = debug_char(rt_mem_add(data, i), size, out, n)
         i = i + size
     }
     put_byte(out, n, 34)
+}
+
+// Write `{:?}`'s form of the character of `size` bytes at `at` at offset
+// `n` of `out` (or only count it, when `out` is 0): the next offset.
+fn debug_char(at: Int, size: Int, out: Int, n: Int) -> Int {
+    let b = rt_mem_load8(at)
+    if b == 34 || b == 92 {
+        return put_byte(out, put_byte(out, n, 92), b)
+    }
+    if b == 10 {
+        return put_byte(out, put_byte(out, n, 92), 110)
+    }
+    if b == 13 {
+        return put_byte(out, put_byte(out, n, 92), 114)
+    }
+    if b == 9 {
+        return put_byte(out, put_byte(out, n, 92), 116)
+    }
+    if b == 0 {
+        return put_byte(out, put_byte(out, n, 92), 48)
+    }
+    if debug_escapes(decode_at(at)) {
+        return put_unicode_escape(out, n, decode_at(at))
+    }
+    var next = n
+    var k = 0
+    while k < size {
+        next = put_byte(out, next, rt_mem_load8(rt_mem_add(at, k)))
+        k = k + 1
+    }
+    next
 }
 
 // Write `byte` at offset `at` of `out` unless `out` is 0: the next offset.
@@ -1995,4 +2006,901 @@ fn hex_digit(d: Int) -> Int {
         return 48 + d
     }
     87 + d
+}
+
+// ---- Files -----------------------------------------------------------------
+//
+// Directory and file capabilities, confined as the interpreter confines
+// them (`oska-run/src/confine.rs`, `host.rs`, `oska-sys`), with the same
+// messages:
+//
+// - A capability is a `Root`: the handle of its directory (for a file
+//   capability, of the file's parent, with the file's name), or, when it
+//   could not be opened, no handle and the reason, which every operation
+//   on it then fails with. `Fs`, `FsRead` and `FsWrite` hold nothing: they
+//   only attenuate, and the type says which operations a capability has.
+// - A path given to a capability becomes plain names, on the path as
+//   written (`confine_names`): empty and absolute paths are refused, `.` is
+//   dropped and `..` drops the name before it, refused when there is none.
+// - The names are walked beneath the root's handle one at a time, each
+//   opened relative to the one before with `openat` and `O_NOFOLLOW`, the
+//   last included, so a symlink at any component, planted before or
+//   swapped in during the walk, makes it fail. Only a root given as
+//   trusted text follows symlinks, and never in its last component.
+// - A regular file is read or emptied only after `fstat` on the open
+//   handle shows it is one, with one link: a hard link planted beneath a
+//   root could otherwise reach a file outside it.
+// - Every handle opened is closed on every path, errors included; a
+//   capability's own handle is closed with its last reference
+//   (`root_drop`).
+
+// A directory or file capability. `handle` is the directory's handle (a
+// file capability's parent's), or -1 when `why` says why there is none;
+// `path` is the directory's path, for messages; `file` is a file
+// capability's file name.
+struct Root { handle: Int, path: String, file: Option<String>, why: Option<String> }
+
+// Release the capability at `object`, whose last reference is gone: its
+// handle is closed, and the `Root` released as this function ends.
+pub fn root_drop(object: Int) {
+    let root = rt_mem_as_root(object)
+    if root.handle >= 0 {
+        close(root.handle)
+    }
+}
+
+// Close `fd`. Like Rust's `OwnedFd`, never retried: the descriptor is gone
+// either way.
+fn close(fd: Int) {
+    let _ = rt_sys_close(fd)
+}
+
+// `openat`'s flags on aarch64 Linux. A directory to walk beneath:
+// `O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC`.
+fn directory_flags() -> Int {
+    573440
+}
+
+// A directory named by trusted text, following symlinks:
+// `O_RDONLY | O_DIRECTORY | O_CLOEXEC`.
+fn directory_following_flags() -> Int {
+    540672
+}
+
+// A file to read: `O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK`, so a
+// FIFO does not block the open (it is then refused as no regular file).
+fn file_read_flags() -> Int {
+    559104
+}
+
+// A file to write, created when missing but not truncated before it is
+// known to be a regular file with one link:
+// `O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK`.
+fn file_write_flags() -> Int {
+    559169
+}
+
+fn at_cwd() -> Int {
+    -100
+}
+
+// Not an `errno`: what `open_name` gives, negated, for a name holding a
+// NUL byte.
+fn nul_in_name() -> Int {
+    4096
+}
+
+// A NUL-terminated copy of `text`: a text object whose bytes are `text`'s
+// then a 0, which the caller frees, or 0 when `text` holds a NUL byte.
+fn c_string(text: String) -> Int {
+    let object = rt_mem_text(text)
+    let length = text_length(object)
+    var i = 0
+    while i < length {
+        if rt_mem_load8(rt_mem_add(text_data(object), i)) == 0 {
+            return 0
+        }
+        i = i + 1
+    }
+    let copy = text_new(length + 1)
+    copy_bytes(text_data(copy), text_data(object), length)
+    rt_mem_store8(rt_mem_add(text_data(copy), length), 0)
+    copy
+}
+
+// `openat(dirfd, name, flags)`, with mode 0o666 for a file it creates,
+// retried when a signal interrupts it: the new descriptor, or minus the
+// `errno` (`nul_in_name` for a name holding a NUL byte).
+fn open_name(dirfd: Int, name: String, flags: Int) -> Int {
+    let path = c_string(name)
+    if path == 0 {
+        return 0 - nul_in_name()
+    }
+    var fd = rt_sys_openat(dirfd, text_data(path), flags, 438)
+    while fd == -4 {
+        fd = rt_sys_openat(dirfd, text_data(path), flags, 438)
+    }
+    free(path)
+    fd
+}
+
+// The text of the error a system call gave as `errno`, as Rust's
+// `io::Error` displays it.
+fn os_error(errno: Int) -> String {
+    if errno == nul_in_name() {
+        return "a path holds a NUL byte, which no file name may"
+    }
+    let what = errno_message(errno)
+    "{what} (os error {errno})"
+}
+
+// The error for opening `path` (the names walked so far, joined) as a
+// directory when `directory`, else as a file, failing with `errno`: a
+// symlink said plainly, since `openat` reports one met with `O_NOFOLLOW`
+// as `ELOOP`, or as `ENOTDIR` when a directory was asked for.
+fn refusal(errno: Int, path: String, directory: Bool) -> IoError {
+    if errno == 40 {
+        return io_error_text("`{path}` is a symlink, and confined access never follows one")
+    }
+    if errno == 20 && directory {
+        return io_error_text("`{path}` is a symlink or not a directory, and confined access never follows a symlink")
+    }
+    let why = os_error(errno)
+    io_error_text("`{path}`: {why}")
+}
+
+// ---- Paths as written ------------------------------------------------------
+
+// The plain names `path` walks beneath a root, with `.` and `..` resolved
+// as written, or why it is refused: it is empty, absolute, or climbs above
+// the root. No names means the root itself.
+fn confine_names(path: String) -> Result<List<String>, IoError> {
+    if path == "" {
+        return Err(io_error_text("an empty path names no file"))
+    }
+    if path.starts_with("/") {
+        return Err(io_error_text("`{path}` is absolute; a directory capability takes paths relative to its root"))
+    }
+    var names: List<String> = []
+    for part in path.split("/") {
+        if part == "" || part == "." {
+            continue
+        }
+        if part == ".." {
+            if names.len() == 0 {
+                return Err(io_error_text("`{path}` leads outside the capability's root"))
+            }
+            names = all_but_last(names)
+            continue
+        }
+        names.push(part)
+    }
+    Ok(names)
+}
+
+// The names a write, `create_dir` or a file capability walks: as
+// `confine_names` gives them, when `path` as written ends in a plain name,
+// not in `/`, `.` or `..`, which would otherwise name the directory before
+// them.
+fn names_to_create(path: String) -> Result<List<String>, IoError> {
+    let names = confine_names(path)?
+    let parts = path.split("/")
+    let last = parts.at(parts.len() - 1)
+    if last == "" || last == "." || last == ".." {
+        return Err(io_error_text("`{path}` does not end in a file name; a write, a new directory or a file needs one"))
+    }
+    Ok(names)
+}
+
+// The first `count` of `names`.
+fn first_names(names: List<String>, count: Int) -> List<String> {
+    var kept: List<String> = []
+    var i = 0
+    while i < count {
+        kept.push(names.at(i))
+        i = i + 1
+    }
+    kept
+}
+
+fn all_but_last(names: List<String>) -> List<String> {
+    first_names(names, names.len() - 1)
+}
+
+// The first `count` of `names` joined with `/`, for messages.
+fn joined(names: List<String>, count: Int) -> String {
+    "/".join(first_names(names, count))
+}
+
+// The components of the trusted path `path`, as Rust's `Path::components`
+// gives them on Unix: `/` first for an absolute path, `.` only as the
+// first component of a relative one, then every name and `..`; empty
+// components and every other `.` dropped.
+fn components(path: String) -> List<String> {
+    var parts: List<String> = []
+    if path.starts_with("/") {
+        parts.push("/")
+    }
+    var first = true
+    for piece in path.split("/") {
+        if piece == "." && first {
+            parts.push(".")
+        } else if piece != "" && piece != "." {
+            parts.push(piece)
+        }
+        first = false
+    }
+    parts
+}
+
+// The first `count` of the components `parts` as one path again, as Rust
+// collects them into a `PathBuf`.
+fn path_of(parts: List<String>, count: Int) -> String {
+    if count > 0 && parts.at(0) == "/" {
+        var rest: List<String> = []
+        var i = 1
+        while i < count {
+            rest.push(parts.at(i))
+            i = i + 1
+        }
+        let tail = "/".join(rest)
+        return "/{tail}"
+    }
+    joined(parts, count)
+}
+
+// The last of the components `parts`, when it is a name (not `/`, `.` or
+// `..`): Rust's `Path::file_name`.
+fn file_name(parts: List<String>) -> Option<String> {
+    let last = parts.at(parts.len() - 1)
+    if last == "/" || last == "." || last == ".." {
+        return None
+    }
+    Some(last)
+}
+
+// `parent`, the leading part of a trusted path, or the current directory
+// when it is empty.
+fn or_here(parent: String) -> String {
+    if parent == "" {
+        return "."
+    }
+    parent
+}
+
+// `root`'s path joined with `names`, as Rust's `Path::join` joins them.
+fn path_beneath(root: String, names: List<String>) -> String {
+    let rest = "/".join(names)
+    if root.ends_with("/") {
+        return "{root}{rest}"
+    }
+    "{root}/{rest}"
+}
+
+// The text of `path`.
+fn path_text(path: Path) -> String {
+    let raw = rt_mem_load64(rt_mem_add(rt_mem_path(path), 8))
+    retain(raw)
+    rt_mem_as_text(raw)
+}
+
+// ---- Opening ---------------------------------------------------------------
+
+// The directory at the trusted `path`, relative to the working directory
+// when it is not absolute, following every symlink on the way: a new
+// handle.
+fn open_following(path: String) -> Result<Int, IoError> {
+    let fd = open_name(at_cwd(), path, directory_following_flags())
+    if fd < 0 {
+        let why = os_error(0 - fd)
+        return Err(io_error_text("`{path}`: {why}"))
+    }
+    Ok(fd)
+}
+
+// The canonical path of the directory open as `fd`, which the trusted
+// `path` named, as Rust's `fs::canonicalize` gives it: what the kernel
+// says `/proc/self/fd/N` links to, or `path` itself if it cannot say.
+fn canonical(fd: Int, path: String) -> String {
+    let link = c_string("/proc/self/fd/{fd}")
+    let buffer = alloc(4104)
+    let data = rt_mem_add(buffer, 8)
+    let length = rt_sys_readlinkat(at_cwd(), text_data(link), data, 4096)
+    free(link)
+    var shown = path
+    if length > 0 && length < 4096 && rt_mem_load8(data) == 47 && utf8_valid(data, length) {
+        shown = text_from(data, length)
+    }
+    free(buffer)
+    shown
+}
+
+// The directory reached by walking the first `count` of `names` beneath
+// `root`, each a directory and none a symlink: a new handle, or `root`
+// itself when `count` is 0.
+fn walk(root: Int, names: List<String>, count: Int) -> Result<Int, IoError> {
+    var at = root
+    var i = 0
+    while i < count {
+        let fd = open_name(at, names.at(i), directory_flags())
+        if at != root {
+            close(at)
+        }
+        if fd < 0 {
+            return Err(refusal(0 - fd, joined(names, i + 1), true))
+        }
+        at = fd
+        i = i + 1
+    }
+    Ok(at)
+}
+
+// The directory reached by walking `names` beneath `root`, none a
+// symlink: a new handle, a copy of `root`'s when there are no names.
+fn open_dir(root: Int, names: List<String>) -> Result<Int, IoError> {
+    let count = names.len()
+    if count == 0 {
+        // `F_DUPFD_CLOEXEC`, from 3 up, as Rust's `try_clone`.
+        let fd = rt_sys_fcntl(root, 1030, 3)
+        if fd < 0 {
+            return Err(io_error(0 - fd))
+        }
+        return Ok(fd)
+    }
+    let parent = walk(root, names, count - 1)?
+    let fd = open_name(parent, names.at(count - 1), directory_flags())
+    if parent != root {
+        close(parent)
+    }
+    if fd < 0 {
+        return Err(refusal(0 - fd, joined(names, count), true))
+    }
+    Ok(fd)
+}
+
+// The regular file reached by walking `names` (one at least) beneath
+// `root`, open with `flags`: every name before the last a directory, and
+// none a symlink, the last included. The file has one link (`lone_file`).
+fn open_file(root: Int, names: List<String>, flags: Int) -> Result<Int, IoError> {
+    let count = names.len()
+    let parent = walk(root, names, count - 1)?
+    let fd = open_name(parent, names.at(count - 1), flags)
+    if parent != root {
+        close(parent)
+    }
+    if fd < 0 {
+        return Err(refusal(0 - fd, joined(names, count), false))
+    }
+    match lone_file(fd, names) {
+        Ok(_) => Ok(fd)
+        Err(e) => {
+            close(fd)
+            Err(e)
+        }
+    }
+}
+
+// Whether the open `fd`, reached by `names`, is a regular file with only
+// that one name. A file with another hard link may be one outside the
+// directory the walk began in, so it is refused. The check is on the open
+// handle, so the file cannot be swapped after it.
+fn lone_file(fd: Int, names: List<String>) -> Result<(), IoError> {
+    // A `struct stat`, 128 bytes on aarch64 Linux, after the object's count.
+    let buffer = alloc(136)
+    let stat = rt_mem_add(buffer, 8)
+    let result = rt_sys_fstat(fd, stat)
+    let mode = rt_mem_load32(rt_mem_add(stat, 16))
+    let links = rt_mem_load32(rt_mem_add(stat, 20))
+    free(buffer)
+    if result < 0 {
+        return Err(io_error(0 - result))
+    }
+    let path = joined(names, names.len())
+    // `S_IFMT` and `S_IFREG`.
+    if rt_mem_and(mode, 61440) != 32768 {
+        return Err(io_error_text("`{path}` is not a regular file"))
+    }
+    if links > 1 {
+        return Err(io_error_text("`{path}` has more than one hard link, and confined access never opens one"))
+    }
+    Ok(())
+}
+
+// ---- Reading and writing ---------------------------------------------------
+
+// The text of the regular file reached by walking `names` beneath `root`.
+fn read_beneath(root: Int, names: List<String>) -> Result<String, IoError> {
+    let fd = open_file(root, names, file_read_flags())?
+    let text = read_all(fd)
+    close(fd)
+    text
+}
+
+// Everything left to read from `fd`, as text, as Rust's `read_to_string`
+// reads it: an error when it is not UTF-8.
+fn read_all(fd: Int) -> Result<String, IoError> {
+    // Room for the whole file, as `fstat` sizes it, and a little more.
+    let buffer = alloc(136)
+    var capacity = 64
+    if rt_sys_fstat(fd, rt_mem_add(buffer, 8)) >= 0 {
+        capacity = capacity + rt_mem_load64(rt_mem_add(buffer, 56))
+    }
+    free(buffer)
+    var object = text_new(capacity)
+    var length = 0
+    while true {
+        if length == capacity {
+            let larger = text_new(capacity * 2)
+            copy_bytes(text_data(larger), text_data(object), length)
+            free(object)
+            object = larger
+            capacity = capacity * 2
+        }
+        let got = rt_sys_read(fd, rt_mem_add(text_data(object), length), capacity - length)
+        if got == -4 {
+            continue
+        }
+        if got < 0 {
+            free(object)
+            return Err(io_error(0 - got))
+        }
+        if got == 0 {
+            break
+        }
+        length = length + got
+    }
+    if !utf8_valid(text_data(object), length) {
+        free(object)
+        return Err(io_error_text("stream did not contain valid UTF-8"))
+    }
+    rt_mem_store64(rt_mem_add(object, 8), length)
+    Ok(rt_mem_as_text(object))
+}
+
+// Create the regular file reached by walking `names` beneath `root`, or
+// replace what it holds, with `contents`. No name is a symlink, the last
+// included, so nothing is created through one; a file already there is
+// emptied only once it is known to be a regular one with one link.
+fn write_beneath(root: Int, names: List<String>, contents: String) -> Result<(), IoError> {
+    let fd = open_file(root, names, file_write_flags())?
+    var emptied = rt_sys_ftruncate(fd, 0)
+    while emptied == -4 {
+        emptied = rt_sys_ftruncate(fd, 0)
+    }
+    if emptied < 0 {
+        close(fd)
+        return Err(io_error(0 - emptied))
+    }
+    let object = rt_mem_text(contents)
+    let written = write_all(fd, text_data(object), text_length(object))
+    close(fd)
+    if written < 0 {
+        return Err(io_error(0 - written))
+    }
+    Ok(())
+}
+
+// Create the directory reached by walking `names` (one at least) beneath
+// `root`, with mode 0o777 less the umask. A directory already there is
+// kept; anything else there, a symlink included, is an error.
+fn create_dir_beneath(root: Int, names: List<String>) -> Result<(), IoError> {
+    let parent = walk(root, names, names.len() - 1)?
+    let made = make_dir(parent, names)
+    if parent != root {
+        close(parent)
+    }
+    made
+}
+
+// Make the last of `names` in the directory `parent`, the rest's.
+fn make_dir(parent: Int, names: List<String>) -> Result<(), IoError> {
+    let count = names.len()
+    let name = names.at(count - 1)
+    let path = c_string(name)
+    if path == 0 {
+        return Err(io_error_text(os_error(nul_in_name())))
+    }
+    var made = rt_sys_mkdirat(parent, text_data(path), 511)
+    while made == -4 {
+        made = rt_sys_mkdirat(parent, text_data(path), 511)
+    }
+    free(path)
+    if made >= 0 {
+        return Ok(())
+    }
+    if made != -17 {
+        return Err(refusal(0 - made, joined(names, count), true))
+    }
+    // `mkdirat` never follows a symlink in the last component: one there,
+    // dangling or not, makes it fail with `EEXIST`. What is there is kept
+    // if it opens as a directory, not following a symlink.
+    let fd = open_name(parent, name, directory_flags())
+    if fd < 0 {
+        return Err(refusal(0 - fd, joined(names, count), true))
+    }
+    close(fd)
+    Ok(())
+}
+
+// ---- Listing ---------------------------------------------------------------
+
+// The names of the entries of the directory `dir`, without `.` and `..`,
+// sorted by their bytes; no entry is followed. Fails when a name is not
+// UTF-8, naming the directory as `shown`.
+fn entries(dir: Int, shown: String) -> Result<List<String>, IoError> {
+    // A new open file description of the directory, so the listing starts
+    // at its beginning and moves no other handle's offset.
+    let fd = open_name(dir, ".", directory_flags())
+    if fd < 0 {
+        return Err(io_error(0 - fd))
+    }
+    let buffer = alloc(32768)
+    let data = rt_mem_add(buffer, 8)
+    var list = list_new(8)
+    // The index of the first name that is not UTF-8, and the `errno` of a
+    // failed read.
+    var invalid = -1
+    var failed = 0
+    while true {
+        var got = rt_sys_getdents64(fd, data, 32760)
+        if got == -4 {
+            continue
+        }
+        // The C library's `readdir` takes `ENOENT`, a directory removed
+        // while it is read, as its end.
+        if got == -2 {
+            got = 0
+        }
+        if got < 0 {
+            failed = 0 - got
+            break
+        }
+        if got == 0 {
+            break
+        }
+        var at = 0
+        while at < got {
+            // A `struct linux_dirent64`: the record's length at 16, the
+            // NUL-terminated name at 19.
+            let entry = rt_mem_add(data, at)
+            let name = rt_mem_add(entry, 19)
+            var length = 0
+            while rt_mem_load8(rt_mem_add(name, length)) != 0 {
+                length = length + 1
+            }
+            let dot = length == 1 && rt_mem_load8(name) == 46
+            let dot_dot = length == 2 && rt_mem_load16(name) == 11822
+            if !dot && !dot_dot {
+                if invalid < 0 && !utf8_valid(name, length) {
+                    invalid = rt_mem_load64(rt_mem_add(list, 8))
+                }
+                list = list_add(list, text_of(name, length))
+            }
+            at = at + rt_mem_load16(rt_mem_add(entry, 16))
+        }
+    }
+    free(buffer)
+    close(fd)
+    if invalid < 0 {
+        sort_texts(list)
+    }
+    let names = rt_mem_as_list(list)
+    if failed != 0 {
+        return Err(io_error(failed))
+    }
+    if invalid >= 0 {
+        let name = os_debug(names.at(invalid))
+        return Err(io_error_text("{name} in `{shown}` is not valid UTF-8"))
+    }
+    Ok(names)
+}
+
+// Sort the texts of the list object at `list` by their bytes, in place,
+// with a merge sort, bottom up.
+fn sort_texts(list: Int) {
+    let count = rt_mem_load64(rt_mem_add(list, 8))
+    if count < 2 {
+        return
+    }
+    let items = rt_mem_add(list, 24)
+    let scratch = alloc(rt_mem_shl(count, 3) + 8)
+    var from = items
+    var to = rt_mem_add(scratch, 8)
+    var width = 1
+    while width < count {
+        var start = 0
+        while start < count {
+            var middle = start + width
+            if middle > count {
+                middle = count
+            }
+            var end = middle + width
+            if end > count {
+                end = count
+            }
+            merge(from, to, start, middle, end)
+            start = end
+        }
+        let was = from
+        from = to
+        to = was
+        width = width * 2
+    }
+    if from != items {
+        copy_bytes(items, from, rt_mem_shl(count, 3))
+    }
+    free(scratch)
+}
+
+// Merge the sorted words `from[start..middle]` and `from[middle..end]`
+// into `to[start..end]`, the left first among equals.
+fn merge(from: Int, to: Int, start: Int, middle: Int, end: Int) {
+    var left = start
+    var right = middle
+    var out = start
+    while out < end {
+        var take_left = right >= end
+        if left < middle && right < end {
+            take_left = !text_before(word_at(from, right), word_at(from, left))
+        }
+        if take_left {
+            rt_mem_store64(rt_mem_add(to, rt_mem_shl(out, 3)), word_at(from, left))
+            left = left + 1
+        } else {
+            rt_mem_store64(rt_mem_add(to, rt_mem_shl(out, 3)), word_at(from, right))
+            right = right + 1
+        }
+        out = out + 1
+    }
+}
+
+// Word `index` of the words at `words`.
+fn word_at(words: Int, index: Int) -> Int {
+    rt_mem_load64(rt_mem_add(words, rt_mem_shl(index, 3)))
+}
+
+// Whether the text object `a` sorts before `b`, by their bytes.
+fn text_before(a: Int, b: Int) -> Bool {
+    let a_length = text_length(a)
+    let b_length = text_length(b)
+    var i = 0
+    while i < a_length && i < b_length {
+        let x = rt_mem_load8(rt_mem_add(text_data(a), i))
+        let y = rt_mem_load8(rt_mem_add(text_data(b), i))
+        if x != y {
+            return x < y
+        }
+        i = i + 1
+    }
+    a_length < b_length
+}
+
+// `name`, whose bytes may not be UTF-8, as Rust's `{:?}` writes an
+// `OsStr`: as `debug_string` writes text, with each byte that starts no
+// well-formed character as `\xHH`.
+fn os_debug(name: String) -> String {
+    let object = rt_mem_text(name)
+    let data = text_data(object)
+    let length = text_length(object)
+    let total = os_debug_pass(data, length, 0)
+    let result = text_new(total)
+    let _ = os_debug_pass(data, length, text_data(result))
+    rt_mem_as_text(result)
+}
+
+// The bytes `os_debug` writes for the `length` bytes at `data`: written to
+// `out` unless it is 0, which only counts them.
+fn os_debug_pass(data: Int, length: Int, out: Int) -> Int {
+    var n = put_byte(out, 0, 34)
+    var i = 0
+    while i < length {
+        let b = rt_mem_load8(rt_mem_add(data, i))
+        var size = sequence_length(b)
+        if size > length - i {
+            size = length - i
+        }
+        if utf8_valid(rt_mem_add(data, i), size) {
+            n = debug_char(rt_mem_add(data, i), size, out, n)
+            i = i + size
+        } else {
+            n = put_byte(out, n, 92)
+            n = put_byte(out, n, 120)
+            n = put_byte(out, n, upper_hex_digit(rt_mem_shr(b, 4)))
+            n = put_byte(out, n, upper_hex_digit(rt_mem_and(b, 15)))
+            i = i + 1
+        }
+    }
+    put_byte(out, n, 34)
+}
+
+fn upper_hex_digit(d: Int) -> Int {
+    if d < 10 {
+        return 48 + d
+    }
+    55 + d
+}
+
+// ---- Attenuation -------------------------------------------------------------
+
+// A capability that reaches nothing: every operation on it fails because
+// restricting to `at` failed with `message`. Callers pass an `IoError`'s
+// message, which is the runtime's own wording around the program's path,
+// as `assume_trusted` text: it only ever becomes another `IoError`.
+fn nowhere(at: String, message: String) -> Root {
+    Root(handle: -1, path: "", file: None, why: Some("cannot restrict to `{at}`: {message}"))
+}
+
+// The directory root at `handle`, whose path is `path`.
+fn directory_root(handle: Int, path: String) -> Root {
+    Root(handle: handle, path: path, file: None, why: None)
+}
+
+// `restrict_to(dir)` on `Fs`, `FsRead` and `FsWrite`: the directory
+// capability for `dir`, trusted text, opened now. Attenuation never fails:
+// a root that cannot be opened gives a capability that reaches nothing.
+pub fn fs_restrict_to(fs: Int, dir: String) -> Root {
+    if dir == "" {
+        return nowhere(dir, "an empty path names no directory")
+    }
+    match open_root(dir) {
+        Ok(root) => root
+        Err(e) => nowhere(dir, e.message.assume_trusted())
+    }
+}
+
+// The root at the trusted `dir`, a directory whose last component is not a
+// symlink; earlier ones are followed.
+fn open_root(dir: String) -> Result<Root, IoError> {
+    // Without a trailing `/` or `.`, which would follow a symlink in the
+    // last component.
+    let parts = components(dir)
+    let path = path_of(parts, parts.len())
+    match file_name(parts) {
+        Some(name) => {
+            let parent = open_following(or_here(path_of(parts, parts.len() - 1)))?
+            let fd = open_name(parent, name, directory_flags())
+            close(parent)
+            if fd < 0 {
+                return Err(refusal(0 - fd, name, true))
+            }
+            Ok(directory_root(fd, canonical(fd, path)))
+        }
+        None => {
+            // `/`, or a path ending in `..`: no symlink to refuse.
+            let fd = open_following(path)?
+            Ok(directory_root(fd, canonical(fd, path)))
+        }
+    }
+}
+
+// `restrict_to_file(file)` on `FsRead` and `FsWrite`: the file capability
+// for the one file at `file`, trusted text. Its parent is opened now,
+// following symlinks; the file itself only at each use.
+pub fn fs_restrict_to_file(fs: Int, file: String) -> Root {
+    if file == "" {
+        return nowhere(file, "an empty path names no file")
+    }
+    let parts = components(file)
+    match file_name(parts) {
+        Some(name) => match open_following(or_here(path_of(parts, parts.len() - 1))) {
+            Ok(fd) => Root(handle: fd, path: "", file: Some(name), why: None)
+            Err(e) => nowhere(file, e.message.assume_trusted())
+        }
+        None => {
+            let path = path_of(parts, parts.len())
+            nowhere(file, "`{path}` does not end in a file name")
+        }
+    }
+}
+
+// `restrict_to(dir)` on `Dir`, `DirRead` and `DirWrite`: the capability
+// narrowed to `dir`, a `Path` that may come from untrusted text, walked
+// beneath the root like any path read there, so a narrowing never widens.
+pub fn dir_restrict_to(root: Root, dir: Path) -> Root {
+    if root.why.is_some() {
+        return root
+    }
+    let raw = path_text(dir)
+    match confine_names(raw) {
+        Ok(names) => {
+            if names.len() == 0 {
+                return root
+            }
+            match open_dir(root.handle, names) {
+                Ok(fd) => directory_root(fd, path_beneath(root.path, names))
+                Err(e) => nowhere(raw, e.message.assume_trusted())
+            }
+        }
+        Err(e) => nowhere(raw, e.message.assume_trusted())
+    }
+}
+
+// `restrict_to_file(file)` on `DirRead` and `DirWrite`: the file
+// capability for the file at `file` beneath the root, a `Path` that may
+// come from untrusted text. The directory holding it is opened now.
+pub fn dir_restrict_to_file(root: Root, file: Path) -> Root {
+    if root.why.is_some() {
+        return root
+    }
+    let raw = path_text(file)
+    match names_to_create(raw) {
+        Ok(names) => match open_dir(root.handle, all_but_last(names)) {
+            Ok(fd) => Root(handle: fd, path: "", file: Some(names.at(names.len() - 1)), why: None)
+            Err(e) => nowhere(raw, e.message.assume_trusted())
+        }
+        Err(e) => nowhere(raw, e.message.assume_trusted())
+    }
+}
+
+// ---- Operations ------------------------------------------------------------
+
+// Why `root` reaches nothing, as an error, if it does not.
+fn usable(root: Root) -> Result<(), IoError> {
+    match root.why {
+        Some(why) => Err(io_error_text(why))
+        None => Ok(())
+    }
+}
+
+// A file capability's one name.
+fn file_names(root: Root) -> List<String> {
+    match root.file {
+        Some(name) => [name]
+        None => []
+    }
+}
+
+// `DirRead.read_to_string(path)`.
+pub fn dir_read_to_string(root: Root, path: Path) -> Result<String, IoError> {
+    usable(root)?
+    let raw = path_text(path)
+    let names = confine_names(raw)?
+    if names.len() == 0 {
+        return Err(io_error_text("`{raw}` names the directory capability's root itself, not a file"))
+    }
+    read_beneath(root.handle, names)
+}
+
+// `DirRead.list_dir(path)`: `.` lists the root.
+pub fn dir_list_dir(root: Root, path: Path) -> Result<List<String>, IoError> {
+    usable(root)?
+    let names = confine_names(path_text(path))?
+    let fd = open_dir(root.handle, names)?
+    let listed = entries(fd, path_beneath_or_at(root.path, names))
+    close(fd)
+    listed
+}
+
+// `root` joined with `names`, or `root` itself when there are none.
+fn path_beneath_or_at(root: String, names: List<String>) -> String {
+    if names.len() == 0 {
+        return root
+    }
+    path_beneath(root, names)
+}
+
+// `DirWrite.write(path, contents)`.
+pub fn dir_write(root: Root, path: Path, contents: String) -> Result<(), IoError> {
+    usable(root)?
+    let names = names_to_create(path_text(path))?
+    write_beneath(root.handle, names, contents)
+}
+
+// `DirWrite.create_dir(path)`.
+pub fn dir_create_dir(root: Root, path: Path) -> Result<(), IoError> {
+    usable(root)?
+    let names = names_to_create(path_text(path))?
+    create_dir_beneath(root.handle, names)
+}
+
+// `FileRead.read_to_string()`.
+pub fn file_read_to_string(root: Root) -> Result<String, IoError> {
+    usable(root)?
+    read_beneath(root.handle, file_names(root))
+}
+
+// `FileWrite.write(contents)`.
+pub fn file_write(root: Root, contents: String) -> Result<(), IoError> {
+    usable(root)?
+    write_beneath(root.handle, file_names(root), contents)
 }

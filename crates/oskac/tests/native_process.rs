@@ -614,7 +614,11 @@ fn build_refused(name: &str, src: &str) -> (Option<i32>, String) {
 
 #[test]
 fn what_needs_other_tickets_is_refused_cleanly() {
-    let (name, src, what) = ("main_fs", "fn main(fs: Fs) {\n}\n", "a `main` given `Fs`");
+    let (name, src, what) = (
+        "main_net",
+        "fn main(net: Net) {\n}\n",
+        "a `main` given `Net`",
+    );
     let (code, stderr) = build_refused(name, src);
     assert_eq!(code, Some(2), "{name}: {stderr}");
     assert!(stderr.contains("error[E0390]"), "{name}: {stderr}");
