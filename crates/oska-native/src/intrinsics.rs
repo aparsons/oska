@@ -133,6 +133,7 @@ pub const PRELUDE: &[(&str, Prelude)] = &[
         Prelude::Runtime("file_read_to_string"),
     ),
     ("FileWrite.write", Prelude::Runtime("file_write")),
+    ("TestContext.printed", Prelude::Runtime("test_printed")),
 ];
 
 /// The implementation of the prelude intrinsic `name`, if there is one.
@@ -156,6 +157,10 @@ pub enum Runtime {
     Identity,
     /// The address of the runtime's writable data.
     Globals,
+    /// Which host the process runs on: always 0, the real OS, in a
+    /// program's executable; in a test executable, what its entry set
+    /// (`lower/tests.rs`).
+    TestHost,
 }
 
 /// Every `std.rt` intrinsic, by name. The system-call numbers are the
@@ -205,6 +210,7 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_mem_as_list", Runtime::Identity),
     ("rt_mem_as_root", Runtime::Identity),
     ("rt_mem_globals", Runtime::Globals),
+    ("rt_mem_test_host", Runtime::TestHost),
 ];
 
 /// The implementation of the `std.rt` intrinsic `name`, if there is one.

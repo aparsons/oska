@@ -44,6 +44,12 @@ pub mod codes {
     /// The backend's own codes, in the order `docs/runtime.md` lists
     /// them. `E0371` is the interpreter's, shared.
     pub const ALL: [&str; 2] = [UNSUPPORTED, UNWRITABLE_OUTPUT];
+
+    /// The `P`-codes native code panics with: the interpreter's.
+    pub const PANICS: [&str; 16] = [
+        "P0001", "P0002", "P0003", "P0004", "P0005", "P0006", "P0007", "P0010", "P0011", "P0012",
+        "P0013", "P0020", "P0021", "P0035", "P0036", "P0037",
+    ];
 }
 
 /// The span of a refusal that is about no construct in particular.
@@ -73,6 +79,52 @@ pub const MAX_CALL_DEPTH: u32 = lower::MAX_CALL_DEPTH;
 /// source. A program the backend cannot compile yet is refused with the
 /// diagnostic that says why.
 pub fn build(program: &Program, locate: Locate) -> Result<Vec<u8>, Diagnostic> {
+    compile(program, locate, lower::Entry::Main)
+}
+
+/// Compile the `test` blocks of `program`, which checked with no
+/// diagnostic, to one **test executable** for [`TARGET`]: the file's
+/// bytes. Its `main` is never run.
+///
+/// The executable runs one test per process: the one whose index in
+/// [`Program::tests`] is its only argument. Run any other way it writes a
+/// usage error to stderr and exits with 2. A plain test runs on the test
+/// host in `std.rt` (an empty in-memory filesystem, a clock fixed at the
+/// Unix epoch, `Random` from the interpreter's fixed seed), an
+/// `#[integration]` one on the real OS; either way its stdout is
+/// recorded for `t.printed()`, never written, and each line it writes to
+/// stderr (`dbg`) starts with `[name] `, as the interpreter's test host
+/// has it. Which host a test runs on is fixed when the executable is
+/// built, and a program's executable ([`build`]) has no test host at all.
+///
+/// A test that passes exits with 0 and writes nothing to stdout. A test
+/// that panics, an assertion included, exits with 101 after writing its
+/// panic's report to stdout, unlocated: `error[P....]: message (bytes
+/// a..b)` and a newline, the span in the program, which
+/// [`test_failure`] reads back. The caller places it in the source, as it
+/// places the interpreter's.
+pub fn build_tests(program: &Program) -> Result<Vec<u8>, Diagnostic> {
+    compile(program, &|d| d, lower::Entry::Tests)
+}
+
+/// The panic a test executable's test reported on stdout ([`build_tests`]):
+/// the diagnostic the interpreter's test runner gives for it, not yet
+/// placed in the source. `None` for anything else.
+pub fn test_failure(stdout: &[u8]) -> Option<Diagnostic> {
+    let report = std::str::from_utf8(stdout).ok()?;
+    let rest = report.strip_prefix("error[")?.strip_suffix(")\n")?;
+    let (code, rest) = rest.split_once("]: ")?;
+    let (message, span) = rest.rsplit_once(" (bytes ")?;
+    let (start, end) = span.split_once("..")?;
+    let code = codes::PANICS.iter().find(|c| **c == code)?;
+    let span = Span {
+        start: start.parse().ok()?,
+        end: end.parse().ok()?,
+    };
+    Some(Diagnostic::new(code, message, span))
+}
+
+fn compile(program: &Program, locate: Locate, entry: lower::Entry) -> Result<Vec<u8>, Diagnostic> {
     if let Some(refusal) = unimplemented_module(program) {
         return Err(refusal);
     }
@@ -84,7 +136,7 @@ pub fn build(program: &Program, locate: Locate) -> Result<Vec<u8>, Diagnostic> {
             NOWHERE,
         ));
     };
-    let module = lower::program(program, &rt, locate)?;
+    let module = lower::program(program, &rt, locate, entry)?;
     let text = aarch64::emit(&module).map_err(|why| {
         Diagnostic::new(
             codes::UNSUPPORTED,

@@ -5,6 +5,7 @@ use std::process::ExitCode;
 
 mod build;
 mod explain;
+mod native_test;
 mod package;
 
 const USAGE: &str = "\
@@ -43,6 +44,10 @@ struct Flags {
     release: bool,
     /// `--integration`: `oskac test` runs `#[integration]` tests too.
     integration: bool,
+    /// `--native`: `oskac test` runs the tests as native code
+    /// (`native_test.rs`). PROVISIONAL and not in the help: #141 makes
+    /// native the default and replaces it with `--interpret`.
+    native: bool,
 }
 
 /// A command line, parsed: the command and its operands, the flags, the
@@ -82,6 +87,7 @@ impl CommandLine {
                 },
                 "--release" => line.flags.release = true,
                 "--integration" => line.flags.integration = true,
+                "--native" => line.flags.native = true,
                 format if format.starts_with("--format=") => {
                     line.flags.json = format == "--format=json";
                 }
@@ -364,8 +370,33 @@ fn test_file(path: &str, flags: Flags) -> ExitCode {
         return ExitCode::FAILURE;
     };
     let options = oska_run::TestOptions { integration };
+    let places = Places::File { path, src: &src };
+    if flags.native {
+        let checked = oska_check::check_module(&src);
+        let report = match &checked.program {
+            Some(program) => native_test::test_program(program, options),
+            None => oska_run::TestReport {
+                tests: Vec::new(),
+                diagnostics: checked.diagnostics,
+            },
+        };
+        return finish_native_test(report, json, &places);
+    }
     let report = oska_run::test(&src, &mut oska_run::RealHost::new(), options);
-    finish_test(report, json, &Places::File { path, src: &src })
+    finish_test(report, json, &places)
+}
+
+/// [`finish_test`] for a native run: a program the native backend cannot
+/// compile yet (`E0390`) exits with 2, as one the interpreter cannot run
+/// does.
+fn finish_native_test(report: oska_run::TestReport, json: bool, places: &Places) -> ExitCode {
+    let unsupported = native_test::is_unsupported(&report);
+    let code = finish_test(report, json, places);
+    if unsupported {
+        ExitCode::from(2)
+    } else {
+        code
+    }
 }
 
 /// Print a test report and return its exit code. `places` names the file
@@ -466,6 +497,10 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
         let options = oska_run::TestOptions {
             integration: flags.integration,
         };
+        if flags.native {
+            let tests = native_test::test_program(program, options);
+            return finish_native_test(tests, json, &places);
+        }
         let tests = oska_run::test_program(program, &mut host, options);
         finish_test(tests, json, &places)
     }
@@ -586,7 +621,8 @@ mod tests {
             Flags {
                 json: true,
                 release: false,
-                integration: true
+                integration: true,
+                native: false,
             }
         );
         assert!(line.program_args.is_empty());

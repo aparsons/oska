@@ -61,6 +61,7 @@ mod data;
 mod debug;
 mod lists;
 mod patterns;
+mod tests;
 mod traits;
 
 use std::collections::{BTreeMap, HashMap};
@@ -88,7 +89,17 @@ pub const MAX_CALL_DEPTH: u32 = 50_000;
 const STACK_RESERVE: u64 = 8 << 20;
 
 /// The words of the runtime's writable data, at `rt_mem_globals()`.
-pub const GLOBALS: u32 = 24;
+pub const GLOBALS: u32 = 40;
+
+/// What an executable runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Entry {
+    /// The program's `main`.
+    Main,
+    /// One of the program's `test` blocks, chosen by its argument
+    /// (`tests.rs`).
+    Tests,
+}
 
 /// The `P`-codes the native code panics with, as the interpreter's
 /// `oska_run::codes` names them.
@@ -106,6 +117,10 @@ mod panics {
     pub const NOT_WRITTEN: &str = "reached `todo()`: this code is not written yet";
     pub const PRECONDITION_VIOLATED: &str = "P0006";
     pub const POSTCONDITION_VIOLATED: &str = "P0007";
+    pub const ASSERT_FAILED: &str = "P0010";
+    pub const ASSERT_EQ_FAILED: &str = "P0011";
+    pub const ASSERT_NE_FAILED: &str = "P0012";
+    pub const TEST_FAILED: &str = "P0013";
     /// The interpreter's message for `P0021`.
     pub const TOO_DEEP: &str = "calls nest too deep: is this recursion missing its base case?";
 }
@@ -170,15 +185,24 @@ enum Instance {
         type_args: Vec<Type>,
         ty: Type,
     },
+    /// The body of the program's `index`th `test` block, a function of
+    /// `t` (`tests.rs`).
+    Test(usize),
 }
 
 /// Lower `user`, with `rt`, the checked `std.rt`, to a module. `locate`
 /// gives a user span its file, line and column, for panic reports.
-pub fn program(user: &Program, rt: &Program, locate: Locate) -> Result<ir::Module, Diagnostic> {
+pub fn program(
+    user: &Program,
+    rt: &Program,
+    locate: Locate,
+    kind: Entry,
+) -> Result<ir::Module, Diagnostic> {
     let mut lowering = Lowering {
         user,
         rt,
         locate,
+        kind,
         ids: HashMap::new(),
         functions: Vec::new(),
         queue: Vec::new(),
@@ -197,6 +221,7 @@ pub fn program(user: &Program, rt: &Program, locate: Locate) -> Result<ir::Modul
                 ..
             } | Instance::Closure(_)
                 | Instance::Thunk { .. }
+                | Instance::Test(_)
         ) {
             lowering.user_functions.push(id);
         }
@@ -215,6 +240,9 @@ struct Lowering<'p> {
     user: &'p Program,
     rt: &'p Program,
     locate: Locate<'p>,
+    /// What the executable runs: a test executable's `std.rt` reaches its
+    /// test host (`rt_mem_test_host`), a program's never does.
+    kind: Entry,
     /// Every function requested so far.
     ids: HashMap<Instance, FnId>,
     /// The lowered functions, by id; a requested one is a placeholder
@@ -290,9 +318,15 @@ impl<'p> Lowering<'p> {
         let start = self.reserve("_start".to_string());
         let run = self.reserve("_main".to_string());
 
+        let kind = self.kind;
         let mut body = Body::new(self, Source::User, None);
-        if let Some(main) = user.functions.get("main") {
-            body.call_main(main)?;
+        match kind {
+            Entry::Main => {
+                if let Some(main) = user.functions.get("main") {
+                    body.call_main(main)?;
+                }
+            }
+            Entry::Tests => body.call_test()?,
         }
         let zero = body.constant(0);
         body.call_runtime("exit", vec![zero], NOWHERE)?;
@@ -385,6 +419,11 @@ impl<'p> Lowering<'p> {
                 let mut body = Body::new(self, source, runtime_origin);
                 body.closure_drop_function(*index)?;
                 return body.finish(&qualified(instance), 1, NOWHERE);
+            }
+            Instance::Test(index) => {
+                let mut body = Body::new(self, Source::User, None);
+                let span = body.test_function(*index)?;
+                return body.finish(&qualified(instance), 1, span);
             }
             Instance::Thunk {
                 source,
@@ -513,6 +552,7 @@ fn qualified(instance: &Instance) -> String {
             format!("requires of {}", qualified(&function))
         }
         Instance::Closure(index) => format!("closure #{index}"),
+        Instance::Test(index) => format!("test #{index}"),
         Instance::ClosureDrop(index) => format!("drop of closure #{index}"),
         Instance::Thunk {
             name, type_args, ..
@@ -1458,6 +1498,7 @@ impl<'l, 'p> Body<'l, 'p> {
                 });
                 dst
             }
+            Runtime::TestHost => self.test_host(),
         }
     }
 
@@ -1630,6 +1671,9 @@ impl<'l, 'p> Body<'l, 'p> {
                         return Ok(value);
                     }
                     if let Some(value) = self.list_intrinsic(name, args, &values, expr)? {
+                        return Ok(value);
+                    }
+                    if let Some(value) = self.test_intrinsic(name, &type_args, &values, span)? {
                         return Ok(value);
                     }
                     if name == "todo" {

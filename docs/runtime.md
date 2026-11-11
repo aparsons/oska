@@ -76,6 +76,8 @@ The native backend is new and compiles only part of the language so far: `Int` a
 
 A native executable panics as `oskac run` does: the same report on stderr, `path:line:col: error[P....]: message (bytes a..b)`, with the path as `oskac build` was given it, and exit code 101. Its arithmetic and list indexing are checked exactly as the interpreter's are (`P0001`, `P0004`, `P0002`), and calls nest at most as deep as in the interpreter before `P0021`. It has no `--format=json` report.
 
+A program's `test` blocks compile into a separate **test executable**, which runs one test per process: the one its argument names. A plain test runs on the runtime's test host, which behaves as the interpreter's (see [Tests](#tests)): an empty in-memory filesystem with the same confinement and messages, a clock at the Unix epoch, `Random` from the same fixed seed, recorded stdout and a `[name] ` prefix on each stderr line. An `#[integration]` test runs on the real OS. A program's own executable has no test host at all. `oskac test` reports native test runs exactly as it reports the interpreter's; until native becomes the default, the provisional `oskac test --native` runs them.
+
 | Code | Refusal |
 | --- | --- |
 | `E0390` | The program uses something the native backend cannot compile yet. The message names the construct, as in ``` `oskac build` cannot compile `scope` yet ```, and says when it is in the runtime, `std.rt`, rather than in the program. Spans the construct, or for the runtime the code of the program that reached it. `oskac run` runs the program in the interpreter meanwhile. |

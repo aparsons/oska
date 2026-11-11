@@ -94,6 +94,10 @@ pub fn rt_mem_as_root(object: Int) -> Root
 // The address of the runtime's writable words, zero when the program
 // starts: see `global`.
 pub fn rt_mem_globals() -> Int
+// Which host the process runs on: 0 the real OS, 1 the test host, 2 the
+// real OS under an `#[integration]` test. Always 0 in a program's
+// executable; in a test executable, word 32, which `test_begin` sets.
+pub fn rt_mem_test_host() -> Int
 
 // ---- Memory ----------------------------------------------------------------
 //
@@ -112,7 +116,12 @@ pub fn rt_mem_globals() -> Int
 //           18 where they end, 19 its capacity;
 //   20      the state of `Random`'s generator, 21 whether it is seeded;
 //   22      a large object's mapping kept for reuse when it was freed, or 0;
-//   23      that mapping's length.
+//   23      that mapping's length;
+//   24-31   free;
+//   32-38   the test host (see "The test host"): 32 which host a test runs
+//           on, 33 its stderr prefix, 34 whether stderr is at the start
+//           of a line, 35 the lines printed, 36 the fake files' paths, 37
+//           their contents, 38 the fake directories.
 //
 // Every object the allocator gives out is preceded by a header word: its
 // block's size class, or for an object too large for any class, minus
@@ -156,7 +165,7 @@ fn map(addr: Int, length: Int, prot: Int, flags: Int) -> Int {
 }
 
 fn out_of_memory() {
-    let _ = write_text(2, "the native runtime is out of memory\n")
+    let _ = write_text(report_fd(), "the native runtime is out of memory\n")
     exit(101)
 }
 
@@ -614,15 +623,15 @@ pub fn string_slice(text: String, start: Int, end: Int) -> String {
 
 // Panic (`P0035`): `start` and `end` are the report around the message.
 pub fn panic_slice(start: String, end: String, text: String, from: Int, to: Int) {
-    let _ = write_text(2, start)
-    let _ = write_text(2, "cannot slice characters ")
-    let _ = write_text(2, int_text(from, false))
-    let _ = write_text(2, "..")
-    let _ = write_text(2, int_text(to, false))
-    let _ = write_text(2, " of a text of ")
-    let _ = write_text(2, int_text(string_len(text), false))
-    let _ = write_text(2, " characters")
-    let _ = write_text(2, end)
+    let _ = write_text(report_fd(), start)
+    let _ = write_text(report_fd(), "cannot slice characters ")
+    let _ = write_text(report_fd(), int_text(from, false))
+    let _ = write_text(report_fd(), "..")
+    let _ = write_text(report_fd(), int_text(to, false))
+    let _ = write_text(report_fd(), " of a text of ")
+    let _ = write_text(report_fd(), int_text(string_len(text), false))
+    let _ = write_text(report_fd(), " characters")
+    let _ = write_text(report_fd(), end)
     exit(101)
 }
 
@@ -666,23 +675,23 @@ pub fn string_repeat(text: String, times: Int) -> String {
 
 // Panic (`P0036`): a negative count.
 pub fn panic_repeat_negative(start: String, end: String, times: Int) {
-    let _ = write_text(2, start)
-    let _ = write_text(2, "cannot repeat a text ")
-    let _ = write_text(2, int_text(times, false))
-    let _ = write_text(2, " times")
-    let _ = write_text(2, end)
+    let _ = write_text(report_fd(), start)
+    let _ = write_text(report_fd(), "cannot repeat a text ")
+    let _ = write_text(report_fd(), int_text(times, false))
+    let _ = write_text(report_fd(), " times")
+    let _ = write_text(report_fd(), end)
     exit(101)
 }
 
 // Panic (`P0037`): a result too long.
 pub fn panic_repeat_long(start: String, end: String, text: String, times: Int) {
-    let _ = write_text(2, start)
-    let _ = write_text(2, "repeating a text of ")
-    let _ = write_text(2, int_text(string_byte_len(text), false))
-    let _ = write_text(2, " bytes ")
-    let _ = write_text(2, int_text(times, false))
-    let _ = write_text(2, " times is too long")
-    let _ = write_text(2, end)
+    let _ = write_text(report_fd(), start)
+    let _ = write_text(report_fd(), "repeating a text of ")
+    let _ = write_text(report_fd(), int_text(string_byte_len(text), false))
+    let _ = write_text(report_fd(), " bytes ")
+    let _ = write_text(report_fd(), int_text(times, false))
+    let _ = write_text(report_fd(), " times is too long")
+    let _ = write_text(report_fd(), end)
     exit(101)
 }
 
@@ -1259,29 +1268,38 @@ pub fn string_to_lowercase(text: String) -> String {
 // with 101. The generated code resolves the location at compile time, so
 // a report is static text with the values in its message filled in.
 
+// Where a panic's report goes: stderr, or in a test executable stdout,
+// which only the report is written to, for `oskac` to read it back.
+fn report_fd() -> Int {
+    if testing() {
+        return 1
+    }
+    2
+}
+
 // Panic with the whole report `report`.
 pub fn panic(report: String) {
-    let _ = write_text(2, report)
+    let _ = write_text(report_fd(), report)
     exit(101)
 }
 
 // Panic with the report `start`, the integer `a`, then `end`. An integer
 // is read as unsigned when `unsigned`.
 pub fn panic_unary(start: String, a: Int, end: String, unsigned: Bool) {
-    let _ = write_text(2, start)
-    let _ = write_text(2, int_text(a, unsigned))
-    let _ = write_text(2, end)
+    let _ = write_text(report_fd(), start)
+    let _ = write_text(report_fd(), int_text(a, unsigned))
+    let _ = write_text(report_fd(), end)
     exit(101)
 }
 
 // Panic with the report `start`, the integer `a`, `mid`, the integer `b`,
 // then `end`.
 pub fn panic_binary(start: String, a: Int, mid: String, b: Int, end: String, unsigned: Bool) {
-    let _ = write_text(2, start)
-    let _ = write_text(2, int_text(a, unsigned))
-    let _ = write_text(2, mid)
-    let _ = write_text(2, int_text(b, unsigned))
-    let _ = write_text(2, end)
+    let _ = write_text(report_fd(), start)
+    let _ = write_text(report_fd(), int_text(a, unsigned))
+    let _ = write_text(report_fd(), mid)
+    let _ = write_text(report_fd(), int_text(b, unsigned))
+    let _ = write_text(report_fd(), end)
     exit(101)
 }
 
@@ -1289,9 +1307,9 @@ pub fn panic_binary(start: String, a: Int, mid: String, b: Int, end: String, uns
 // message only known at run time, such as the `requires` clause a call
 // through a function value broke.
 pub fn panic_message(start: String, end: String, message: String) {
-    let _ = write_text(2, start)
-    let _ = write_text(2, message)
-    let _ = write_text(2, end)
+    let _ = write_text(report_fd(), start)
+    let _ = write_text(report_fd(), message)
+    let _ = write_text(report_fd(), end)
     exit(101)
 }
 
@@ -1331,7 +1349,7 @@ pub fn process_init(sp: Int) {
     var i = 0
     while i < argc {
         if !cstr_valid(rt_mem_load64(rt_mem_add(argv, rt_mem_shl(i, 3)))) {
-            let _ = write_text(2, "error: a command-line argument is not valid UTF-8\n")
+            let _ = write_text(report_fd(), "error: a command-line argument is not valid UTF-8\n")
             exit(101)
         }
         i = i + 1
@@ -1433,6 +1451,10 @@ fn stdout_put_line(object: Int) -> Int {
 
 // `Stdout.println`.
 pub fn stdout_println(io: Stdout, line: String) -> Result<(), IoError> {
+    if testing() {
+        test_record(line)
+        return Ok(())
+    }
     let failed = stdout_put_line(rt_mem_text(line))
     if failed < 0 {
         return Err(io_error(-failed))
@@ -1459,7 +1481,12 @@ fn print_error_line(line: String) -> Int {
     let out = text_new(length + 1)
     copy_bytes(text_data(out), text_data(object), length)
     rt_mem_store8(rt_mem_add(text_data(out), length), 10)
-    let result = write_all(2, text_data(out), length + 1)
+    var result = 0
+    if testing() {
+        result = test_stderr(text_data(out), length + 1)
+    } else {
+        result = write_all(2, text_data(out), length + 1)
+    }
     free(out)
     result
 }
@@ -1784,11 +1811,11 @@ pub fn env_secret(env: Env, name: String) -> Secret<String> {
 
 // Panic (`P0020`): `start` and `end` are the report around the message.
 pub fn panic_missing_secret(start: String, end: String, env: Env, name: String) {
-    let _ = write_text(2, start)
-    let _ = write_text(2, "the secret `")
-    let _ = write_text(2, name)
-    let _ = write_text(2, "` is not set in the environment")
-    let _ = write_text(2, end)
+    let _ = write_text(report_fd(), start)
+    let _ = write_text(report_fd(), "the secret `")
+    let _ = write_text(report_fd(), name)
+    let _ = write_text(report_fd(), "` is not set in the environment")
+    let _ = write_text(report_fd(), end)
     exit(101)
 }
 
@@ -1826,6 +1853,9 @@ fn text_equal_constant(a: Int, b: Int) -> Bool {
 
 // `Clock.now_millis`: the realtime clock, in milliseconds.
 pub fn clock_now_millis(clock: Clock) -> Int {
+    if faking() {
+        return 0
+    }
     let object = alloc(24)
     let _ = rt_sys_clock_gettime(0, rt_mem_add(object, 8))
     let seconds = rt_mem_load64(rt_mem_add(object, 8))
@@ -2752,6 +2782,9 @@ pub fn fs_restrict_to(fs: Int, dir: String) -> Root {
     if dir == "" {
         return nowhere(dir, "an empty path names no directory")
     }
+    if faking() {
+        return fake_restrict_to(dir)
+    }
     match open_root(dir) {
         Ok(root) => root
         Err(e) => nowhere(dir, e.message.assume_trusted())
@@ -2790,6 +2823,9 @@ pub fn fs_restrict_to_file(fs: Int, file: String) -> Root {
     if file == "" {
         return nowhere(file, "an empty path names no file")
     }
+    if faking() {
+        return fake_restrict_to_file(file)
+    }
     let parts = components(file)
     match file_name(parts) {
         Some(name) => match open_following(or_here(path_of(parts, parts.len() - 1))) {
@@ -2816,6 +2852,9 @@ pub fn dir_restrict_to(root: Root, dir: Path) -> Root {
             if names.len() == 0 {
                 return root
             }
+            if faking() {
+                return fake_restrict_beneath(root, raw, names)
+            }
             match open_dir(root.handle, names) {
                 Ok(fd) => directory_root(fd, path_beneath(root.path, names))
                 Err(e) => nowhere(raw, e.message.assume_trusted())
@@ -2834,6 +2873,7 @@ pub fn dir_restrict_to_file(root: Root, file: Path) -> Root {
     }
     let raw = path_text(file)
     match names_to_create(raw) {
+        Ok(names) if faking() => fake_restrict_to_file_beneath(root, raw, names)
         Ok(names) => match open_dir(root.handle, all_but_last(names)) {
             Ok(fd) => Root(handle: fd, path: "", file: Some(names.at(names.len() - 1)), why: None)
             Err(e) => nowhere(raw, e.message.assume_trusted())
@@ -2868,6 +2908,9 @@ pub fn dir_read_to_string(root: Root, path: Path) -> Result<String, IoError> {
     if names.len() == 0 {
         return Err(io_error_text("`{raw}` names the directory capability's root itself, not a file"))
     }
+    if faking() {
+        return fake_read(fake_walk(root.path, names)?)
+    }
     read_beneath(root.handle, names)
 }
 
@@ -2875,6 +2918,9 @@ pub fn dir_read_to_string(root: Root, path: Path) -> Result<String, IoError> {
 pub fn dir_list_dir(root: Root, path: Path) -> Result<List<String>, IoError> {
     usable(root)?
     let names = confine_names(path_text(path))?
+    if faking() {
+        return fake_entries(fake_walk(root.path, names)?)
+    }
     let fd = open_dir(root.handle, names)?
     let listed = entries(fd, path_beneath_or_at(root.path, names))
     close(fd)
@@ -2893,6 +2939,9 @@ fn path_beneath_or_at(root: String, names: List<String>) -> String {
 pub fn dir_write(root: Root, path: Path, contents: String) -> Result<(), IoError> {
     usable(root)?
     let names = names_to_create(path_text(path))?
+    if faking() {
+        return fake_put_file(fake_walk(root.path, names)?, contents)
+    }
     write_beneath(root.handle, names, contents)
 }
 
@@ -2900,17 +2949,428 @@ pub fn dir_write(root: Root, path: Path, contents: String) -> Result<(), IoError
 pub fn dir_create_dir(root: Root, path: Path) -> Result<(), IoError> {
     usable(root)?
     let names = names_to_create(path_text(path))?
+    if faking() {
+        return fake_put_dir(fake_walk(root.path, names)?)
+    }
     create_dir_beneath(root.handle, names)
 }
 
 // `FileRead.read_to_string()`.
 pub fn file_read_to_string(root: Root) -> Result<String, IoError> {
     usable(root)?
+    if faking() {
+        return fake_read(root.path)
+    }
     read_beneath(root.handle, file_names(root))
 }
 
 // `FileWrite.write(contents)`.
 pub fn file_write(root: Root, contents: String) -> Result<(), IoError> {
     usable(root)?
+    if faking() {
+        return fake_put_file(root.path, contents)
+    }
     write_beneath(root.handle, file_names(root), contents)
+}
+
+// ---- The test host ---------------------------------------------------------
+//
+// A test executable runs one `test` block per process, the one its only
+// argument names (`test_selected`), on the host `test_begin` records
+// (`rt_mem_test_host`, which is the constant 0 in a program's
+// executable):
+//
+// - 1, the test host, for a plain test, the interpreter's `FakeHost`: an
+//   empty filesystem in memory, a clock fixed at the Unix epoch, and
+//   `Random` from the interpreter's fixed seed (`FAKE_SEED`);
+// - 2, the real OS, for an `#[integration]` test.
+//
+// Either way, as the interpreter's `TestHost` does, stdout is recorded for
+// `t.printed()`, never written, and every line written to stderr starts
+// with the test's name, `[name] `. A panic's report goes to stdout
+// (`report_fd`), unlocated, for `oskac` to read back.
+//
+// The fake filesystem confines as `FakeHost` does: a path given as trusted
+// text is resolved against `/` as written; a path given to a directory
+// capability becomes plain names (`confine_names`, shared with the real
+// OS) walked beneath the root one at a time, each before the last a
+// directory. `FakeHost`'s symlinks never exist here: a test's filesystem
+// starts empty and no operation makes one, so its symlink refusals cannot
+// be met. Its messages are `FakeHost`'s.
+
+// Which host the process runs on: see `rt_mem_test_host`.
+fn testing() -> Bool {
+    rt_mem_test_host() != 0
+}
+
+// Whether the process runs a plain test, on the test host.
+fn faking() -> Bool {
+    rt_mem_test_host() == 1
+}
+
+// The number of the test to run, from the executable's argument, which
+// must name one of the `count` tests. Anything else is a usage error.
+pub fn test_selected(count: Int) -> Int {
+    if rt_mem_load64(global(10)) == 2 {
+        let arg = cstr_text(rt_mem_load64(rt_mem_add(rt_mem_load64(global(11)), 8)))
+        match arg.parse_int() {
+            Some(n) => {
+                if n >= 0 && n < count && !arg.starts_with("+") {
+                    return n
+                }
+            }
+            None => {}
+        }
+    }
+    let _ = write_text(2, "error: a test executable takes one argument, the number of the test to run, from 0 up to its number of tests\n")
+    exit(2)
+    0
+}
+
+// Start a test: on the host `host` (1 the test host, 2 the real OS), with
+// `prefix` before each line it writes to stderr.
+pub fn test_begin(host: Int, prefix: String) {
+    rt_mem_store64(global(32), host)
+    let object = rt_mem_text(prefix)
+    retain(object)
+    rt_mem_store64(global(33), object)
+    rt_mem_store64(global(34), 1)
+    let none: List<String> = []
+    rt_mem_store64(global(35), rt_mem_list(none))
+    rt_mem_store64(global(36), rt_mem_list(none))
+    rt_mem_store64(global(37), rt_mem_list(none))
+    rt_mem_store64(global(38), rt_mem_list(none))
+    if host == 1 {
+        // `FAKE_SEED`, 0x05EE_D0F0_5CA0.
+        rt_mem_store64(global(20), 6523265768608)
+        rt_mem_store64(global(21), 1)
+    }
+}
+
+// The list of texts in the runtime's word `index`: a reference of its own.
+fn word_list(index: Int) -> List<String> {
+    let object = rt_mem_load64(global(index))
+    retain(object)
+    rt_mem_as_list(object)
+}
+
+// The list of texts in the runtime's word `index`, whose reference passes
+// to the caller, who gives a list back with `put_word_list`.
+fn take_word_list(index: Int) -> List<String> {
+    rt_mem_as_list(rt_mem_load64(global(index)))
+}
+
+// Keep `list` in the runtime's word `index`.
+fn put_word_list(index: Int, list: List<String>) {
+    let object = rt_mem_list(list)
+    retain(object)
+    rt_mem_store64(global(index), object)
+}
+
+// A line `Stdout.println` printed: recorded, without its line break.
+fn test_record(line: String) {
+    var lines = take_word_list(35)
+    lines.push(line)
+    put_word_list(35, lines)
+}
+
+// `TestContext.printed`: every line printed so far.
+pub fn test_printed(t: TestContext) -> List<String> {
+    word_list(35)
+}
+
+// Write the `count` bytes at `data` to stderr, each line after the
+// test's prefix: 0, or the negative `errno` of the write that failed.
+fn test_stderr(data: Int, count: Int) -> Int {
+    let prefix = rt_mem_load64(global(33))
+    var at = 0
+    while at < count {
+        if rt_mem_load64(global(34)) == 1 {
+            let failed = write_all(2, text_data(prefix), text_length(prefix))
+            if failed < 0 {
+                return failed
+            }
+        }
+        var end = at
+        while end < count && rt_mem_load8(rt_mem_add(data, end)) != 10 {
+            end = end + 1
+        }
+        if end < count {
+            end = end + 1
+            rt_mem_store64(global(34), 1)
+        } else {
+            rt_mem_store64(global(34), 0)
+        }
+        let failed = write_all(2, rt_mem_add(data, at), end - at)
+        if failed < 0 {
+            return failed
+        }
+        at = end
+    }
+    0
+}
+
+// Panic (`P0011`): `start` and `end` are the report around the message.
+pub fn panic_assert_eq(start: String, end: String, actual: String, expected: String) {
+    let _ = write_text(report_fd(), start)
+    let _ = write_text(report_fd(), "assertion failed: `actual == expected`: actual ")
+    let _ = write_text(report_fd(), actual)
+    let _ = write_text(report_fd(), ", expected ")
+    let _ = write_text(report_fd(), expected)
+    let _ = write_text(report_fd(), end)
+    exit(101)
+}
+
+// Panic (`P0012`): `start` and `end` are the report around the message.
+pub fn panic_assert_ne(start: String, end: String, both: String) {
+    let _ = write_text(report_fd(), start)
+    let _ = write_text(report_fd(), "assertion failed: `actual != other`: both are ")
+    let _ = write_text(report_fd(), both)
+    let _ = write_text(report_fd(), end)
+    exit(101)
+}
+
+// ---- The test host's filesystem ----------------------------------------------
+//
+// A file is its path, absolute and resolved, and its contents: words 36
+// and 37 hold the paths and the contents, in step. A directory exists when
+// it is `/`, holds a file, or was made (word 38).
+
+// The names of the trusted `path`, against `/`, with `.` and `..`
+// resolved by hand on the path as written (`FakeHost`'s `normalize`).
+fn fake_names(path: String) -> List<String> {
+    var names: List<String> = []
+    for part in components(path) {
+        if part == ".." {
+            if names.len() > 0 {
+                names = all_but_last(names)
+            }
+        } else if part != "/" && part != "." {
+            names.push(part)
+        }
+    }
+    names
+}
+
+// The path of `names` beneath `/`.
+fn fake_path(names: List<String>) -> String {
+    let rest = "/".join(names)
+    "/{rest}"
+}
+
+// `dir` joined with `name`.
+fn fake_join(dir: String, name: String) -> String {
+    if dir == "/" {
+        return "/{name}"
+    }
+    "{dir}/{name}"
+}
+
+// The directory holding `path`, which is not `/`.
+fn fake_parent(path: String) -> String {
+    fake_path(all_but_last(fake_names(path)))
+}
+
+// Where the file at `path` is in the files, or -1.
+fn fake_file(path: String) -> Int {
+    var i = 0
+    for file in word_list(36) {
+        if file == path {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+// Whether there is a directory at `path`.
+fn fake_is_dir(path: String) -> Bool {
+    if path == "/" {
+        return true
+    }
+    let inside = "{path}/"
+    for dir in word_list(38) {
+        if dir == path || dir.starts_with(inside) {
+            return true
+        }
+    }
+    for file in word_list(36) {
+        if file.starts_with(inside) {
+            return true
+        }
+    }
+    false
+}
+
+fn fake_not_found(path: String) -> IoError {
+    io_error_text("no such file or directory: {path}")
+}
+
+// The directory root at `path`.
+fn fake_root_at(path: String) -> Result<Root, IoError> {
+    if fake_file(path) >= 0 {
+        return Err(io_error_text("`{path}` is not a directory"))
+    }
+    if !fake_is_dir(path) {
+        return Err(fake_not_found(path))
+    }
+    Ok(Root(handle: -1, path: path, file: None, why: None))
+}
+
+// The root of the file at `path`, whose parent must be a directory.
+fn fake_file_root_at(path: String) -> Result<Root, IoError> {
+    let names = fake_names(path)
+    let _ = fake_root_at(fake_parent(path))?
+    Ok(Root(handle: -1, path: path, file: Some(names.at(names.len() - 1)), why: None))
+}
+
+// The path `names` reach beneath the directory `root`, each name before
+// the last a directory.
+fn fake_walk(root: String, names: List<String>) -> Result<String, IoError> {
+    var path = root
+    var i = 0
+    while i < names.len() {
+        path = fake_join(path, names.at(i))
+        if i + 1 < names.len() && !fake_is_dir(path) {
+            return Err(fake_not_found(path))
+        }
+        i = i + 1
+    }
+    Ok(path)
+}
+
+// `restrict_to(dir)` on `Fs`, `FsRead` and `FsWrite`, `dir` not empty.
+fn fake_restrict_to(dir: String) -> Root {
+    match fake_root_at(fake_path(fake_names(dir))) {
+        Ok(root) => root
+        Err(e) => nowhere(dir, e.message.assume_trusted())
+    }
+}
+
+// `restrict_to_file(file)` on `FsRead` and `FsWrite`, `file` not empty.
+fn fake_restrict_to_file(file: String) -> Root {
+    let names = fake_names(file)
+    if names.len() == 0 {
+        return nowhere(file, "`/` does not end in a file name")
+    }
+    match fake_file_root_at(fake_path(names)) {
+        Ok(root) => root
+        Err(e) => nowhere(file, e.message.assume_trusted())
+    }
+}
+
+// `restrict_to(dir)` on a directory capability, `dir` as written being
+// `raw` and giving `names`, one at least.
+fn fake_restrict_beneath(root: Root, raw: String, names: List<String>) -> Root {
+    let opened = match fake_walk(root.path, names) {
+        Ok(path) => fake_root_at(path)
+        Err(e) => Err(e)
+    }
+    match opened {
+        Ok(narrowed) => narrowed
+        Err(e) => nowhere(raw, e.message.assume_trusted())
+    }
+}
+
+// `restrict_to_file(file)` on a directory capability, `file` as written
+// being `raw` and giving `names`, one at least.
+fn fake_restrict_to_file_beneath(root: Root, raw: String, names: List<String>) -> Root {
+    let opened = match fake_walk(root.path, all_but_last(names)) {
+        Ok(parent) => fake_file_root_at(fake_join(parent, names.at(names.len() - 1)))
+        Err(e) => Err(e)
+    }
+    match opened {
+        Ok(file) => file
+        Err(e) => nowhere(raw, e.message.assume_trusted())
+    }
+}
+
+// The text of the file at `path`.
+fn fake_read(path: String) -> Result<String, IoError> {
+    let at = fake_file(path)
+    if at < 0 {
+        return Err(fake_not_found(path))
+    }
+    Ok(word_list(37).at(at))
+}
+
+// Write `contents` to the file at `path`, created if need be in its
+// parent directory, which must exist.
+fn fake_put_file(path: String, contents: String) -> Result<(), IoError> {
+    if !fake_is_dir(fake_parent(path)) || fake_is_dir(path) {
+        return Err(fake_not_found(path))
+    }
+    let at = fake_file(path)
+    var texts = take_word_list(37)
+    if at < 0 {
+        var paths = take_word_list(36)
+        paths.push(path)
+        put_word_list(36, paths)
+        texts.push(contents)
+        put_word_list(37, texts)
+        return Ok(())
+    }
+    var kept: List<String> = []
+    var i = 0
+    for text in texts {
+        if i == at {
+            kept.push(contents)
+        } else {
+            kept.push(text)
+        }
+        i = i + 1
+    }
+    put_word_list(37, kept)
+    Ok(())
+}
+
+// Create the directory at `path` in its parent directory, which must
+// exist. A directory already there is kept; a file there is an error.
+fn fake_put_dir(path: String) -> Result<(), IoError> {
+    if fake_file(path) >= 0 {
+        return Err(io_error_text("a file is already at {path}"))
+    }
+    if fake_is_dir(path) {
+        return Ok(())
+    }
+    if !fake_is_dir(fake_parent(path)) {
+        return Err(fake_not_found(path))
+    }
+    var dirs = take_word_list(38)
+    dirs.push(path)
+    put_word_list(38, dirs)
+    Ok(())
+}
+
+// The names of the entries of the directory at `path`, sorted by their
+// bytes: the first name beneath it of every file and directory.
+fn fake_entries(path: String) -> Result<List<String>, IoError> {
+    if !fake_is_dir(path) {
+        return Err(io_error_text("not a directory: {path}"))
+    }
+    var inside = "{path}/"
+    if path == "/" {
+        inside = "/"
+    }
+    var found: List<String> = []
+    for entry in word_list(36) {
+        if entry.starts_with(inside) {
+            found.push(entry.slice(inside.len(), entry.len()).split("/").at(0))
+        }
+    }
+    for entry in word_list(38) {
+        if entry.starts_with(inside) {
+            found.push(entry.slice(inside.len(), entry.len()).split("/").at(0))
+        }
+    }
+    sort_texts(rt_mem_list(found))
+    var names: List<String> = []
+    var last = ""
+    for name in found {
+        if names.len() == 0 || name != last {
+            names.push(name)
+        }
+        last = name
+    }
+    Ok(names)
 }
