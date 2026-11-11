@@ -60,6 +60,16 @@ impl Case {
         }
     }
 
+    /// A single-file program at `path`, relative to the working directory,
+    /// which it is run by.
+    pub fn file_at(name: &str, path: &str, src: &str) -> Case {
+        Case {
+            files: vec![(path.to_string(), src.to_string())],
+            target: path.to_string(),
+            ..Case::file(name, src)
+        }
+    }
+
     /// A package in the directory `app`, from its files relative to it,
     /// such as `oska.toml` and `src/main.osk`.
     pub fn package(name: &str, files: &[(&str, &str)]) -> Case {
@@ -75,6 +85,26 @@ impl Case {
             env: Vec::new(),
             setup: None,
         }
+    }
+
+    /// A package in the directory `dir`, from its files relative to the
+    /// working directory (each under `dir/`).
+    pub fn package_at(name: &str, dir: &str, files: Vec<(String, String)>) -> Case {
+        Case {
+            files,
+            target: dir.to_string(),
+            ..Case::file(name, "")
+        }
+    }
+
+    /// What the program is named by on the command line.
+    pub fn target(&self) -> &str {
+        &self.target
+    }
+
+    /// The program's files and the starting tree's, by relative path.
+    pub fn files(&self) -> &[(String, String)] {
+        &self.files
     }
 
     /// A file in the starting directory tree, besides the program.

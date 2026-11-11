@@ -13,6 +13,10 @@ fn skip_list_names_real_tests() {
         let (file, path) = case
             .split_once("::")
             .unwrap_or_else(|| panic!("`{case}` should be `<test file>::<test>`"));
+        // `oskac`'s corpus test checks its own labels.
+        if file == "native_corpus" {
+            continue;
+        }
         let name = path.rsplit("::").next().unwrap_or(path);
         let source = std::fs::read_to_string(dir.join(format!("{file}.rs")))
             .unwrap_or_else(|e| panic!("`{case}`: no test file `{file}.rs`: {e}"));

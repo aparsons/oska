@@ -1019,10 +1019,14 @@ impl<'l, 'p> Body<'l, 'p> {
                 }
                 let holds = self.expr(&ensures.clause.cond)?;
                 self.slots.truncate(height);
-                let message = format!(
-                    "postcondition violated: `{}` ensures `{}`, \
-                     broken by the return at line {line}, column {column}",
-                    function.name, ensures.clause.text
+                let message = self.worded(
+                    panics::POSTCONDITION_VIOLATED,
+                    &format!(
+                        "postcondition violated: `{}` ensures `{}`, \
+                         broken by the return at line {line}, column {column}",
+                        function.name, ensures.clause.text
+                    ),
+                    ensures.clause.span,
                 );
                 let broken = self.panic_static(
                     panics::POSTCONDITION_VIOLATED,
@@ -1122,9 +1126,13 @@ impl<'l, 'p> Body<'l, 'p> {
                         target: next,
                     });
                 }
-                let message = format!(
-                    "precondition violated: `{}` requires `{}`",
-                    function.name, clause.text
+                let message = body.worded(
+                    panics::PRECONDITION_VIOLATED,
+                    &format!(
+                        "precondition violated: `{}` requires `{}`",
+                        function.name, clause.text
+                    ),
+                    span,
                 );
                 let report = body.text(&format!("{before}{message}{after}"));
                 let unit = body.call_runtime("panic", vec![report], NOWHERE)?;
@@ -1175,6 +1183,17 @@ impl<'l, 'p> Body<'l, 'p> {
         };
         let after = format!(" (bytes {}..{})\n", located.span.start, located.span.end);
         (before, after)
+    }
+
+    /// `message`, a panic's at `span`, as the caller's locator words it:
+    /// in a package, each item key in it (`pkg.util.half`) names the item
+    /// as code in the module at `span` writes it (`util.half`, `half`), as
+    /// the interpreter's report does once `oskac` locates it.
+    fn worded(&self, code: &'static str, message: &str, span: Span) -> String {
+        match self.source {
+            Source::User => (self.lowering.locate)(Diagnostic::new(code, message, span)).message,
+            Source::Runtime => message.to_string(),
+        }
     }
 
     /// A cold block that panics with `code` and the fixed `message`.

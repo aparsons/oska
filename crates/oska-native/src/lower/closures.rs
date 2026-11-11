@@ -45,7 +45,7 @@ use oska_syntax::{Diagnostic, Span};
 
 use super::{body_end, panics, Body, Instance, Receiver, Slot, Source};
 use crate::intrinsics::{self, Prelude};
-use crate::ir::{self, Cond, FnId, Inst, Symbol, Temp};
+use crate::ir::{self, Cond, FnId, Inst, Label, Symbol, Temp};
 use crate::layout;
 use crate::NOWHERE;
 
@@ -245,12 +245,7 @@ impl Body<'_, '_> {
         });
         self.push(Inst::Leave);
         let status = self.second_result();
-        let broken = self.panic_text(
-            panics::PRECONDITION_VIOLATED,
-            "panic_message",
-            &[status],
-            span,
-        )?;
+        let broken = self.broken_precondition(status, span)?;
         let zero = self.constant(0);
         self.push(Inst::Branch {
             cond: Cond::Ne,
@@ -259,6 +254,64 @@ impl Body<'_, '_> {
             target: broken,
         });
         Ok(dst)
+    }
+
+    /// The cold block a call of a function value at `span` panics in when
+    /// the code's `status` is the text of a broken `requires` clause
+    /// (`P0006`). The code words the function by its key; the report
+    /// names it as the caller's module writes it, as the interpreter's
+    /// does. In a package, where some key reads differently at `span`,
+    /// the block picks the wording for the status it was given among
+    /// every `requires` message of the program (texts are shared, so the
+    /// same message is the same object).
+    fn broken_precondition(&mut self, status: Temp, span: Span) -> Result<Label, Diagnostic> {
+        let mut reworded = Vec::new();
+        if self.source == Source::User {
+            for function in self.program().functions.values() {
+                for clause in &function.contracts.requires {
+                    let raw = format!(
+                        "precondition violated: `{}` requires `{}`",
+                        function.name, clause.text
+                    );
+                    let shown = self.worded(panics::PRECONDITION_VIOLATED, &raw, span);
+                    if shown != raw {
+                        reworded.push((raw, shown));
+                    }
+                }
+            }
+        }
+        if reworded.is_empty() {
+            return self.panic_text(
+                panics::PRECONDITION_VIOLATED,
+                "panic_message",
+                &[status],
+                span,
+            );
+        }
+        let (before, after) = self.report(panics::PRECONDITION_VIOLATED, span);
+        self.cold_block(|body| {
+            // Read the status first: it is a hot temporary.
+            let status = body.copy(status);
+            let start = body.text(&before);
+            let end = body.text(&after);
+            for (raw, shown) in &reworded {
+                let next = body.label();
+                let raw = body.text(raw);
+                body.push(Inst::Branch {
+                    cond: Cond::Ne,
+                    lhs: status,
+                    rhs: raw,
+                    target: next,
+                });
+                let shown = body.text(shown);
+                let unit = body.call_runtime("panic_message", vec![start, end, shown], NOWHERE)?;
+                body.push(Inst::Return(unit));
+                body.push(Inst::Label(next));
+            }
+            let unit = body.call_runtime("panic_message", vec![start, end, status], NOWHERE)?;
+            body.push(Inst::Return(unit));
+            Ok(())
+        })
     }
 
     /// Release the function value `value` whose count was 1: free it
