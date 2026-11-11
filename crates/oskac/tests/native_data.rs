@@ -325,3 +325,49 @@ fn many_values_built_and_dropped_stay_intact() {
     // predecessor kept is odd.
     assert_prints("drop_stress", &src, "133336666 19999 19999\n");
 }
+
+#[test]
+fn arms_that_leave_and_static_values_that_change_behave_as_interpreted() {
+    let src = program(
+        "struct Point { x: Int, y: Int }\n\n\
+         struct Line { from: Point, to: Point, name: String }\n\n\
+         impl Line {\n    \
+         fn shift(var self, by: Int) {\n        \
+         self.from.x = self.from.x + by\n        self.to.y = self.to.y + by\n    }\n}\n\n\
+         struct Labelled<T> { label: String, value: T }\n\n\
+         impl<T> Display for Labelled<T> {\n    fn to_string(self) -> String {\n        \
+         let label = self.label\n        \"<{label}>\"\n    }\n}\n\n\
+         fn label<T>(label: String, value: T) -> Labelled<T> {\n    Labelled(label: label, value: value)\n}\n\n\
+         fn twice<T>(value: T) -> Labelled<Labelled<T>> {\n    label(\"outer\", label(\"inner\", value))\n}\n\n\
+         fn first_long(words: Option<String>, fallback: String) -> String {\n    \
+         match words {\n        Some(w) => {\n            return \"early {w}\"\n        }\n        \
+         None => {}\n    }\n    fallback\n}",
+        "    var p = Point(x: 1, y: 2)\n    \
+         let q = p\n    \
+         p.x = 10\n    \
+         let _ = io.println(\"{p.x} {q.x}\")\n    \
+         var l = Line(from: p, to: q, name: \"l\")\n    \
+         let m = l\n    \
+         l.shift(5)\n    \
+         let _ = io.println(\"{l.from.x} {l.to.y} {m.from.x} {m.to.y} {p.x}\")\n    \
+         let a = label(\"int\", 3)\n    \
+         let b = label(\"text\", \"t\")\n    \
+         let c = twice(42)\n    \
+         let inner = c.value\n    \
+         let _ = io.println(\"{a} {b} {c} {inner} {inner.value}\")\n    \
+         let _ = io.println(first_long(Some(\"word\"), \"none\"))\n    \
+         let _ = io.println(first_long(None, \"none\"))\n    \
+         var found = \"\"\n    \
+         for i in 0..10 {\n        \
+         let text = \"n{i}\"\n        \
+         match Some(text) {\n            \
+         Some(t) => {\n                if i == 4 {\n                    found = t\n                    break\n                }\n            }\n            \
+         None => {}\n        }\n    }\n    \
+         let _ = io.println(found)",
+    );
+    assert_prints(
+        "leaving_arms",
+        &src,
+        "10 1\n15 7 10 2 10\n<int> <text> <outer> <inner> 42\nearly word\nnone\nn4\n",
+    );
+}

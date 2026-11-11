@@ -5,8 +5,13 @@
 //! each function the first time something calls it, so only reachable
 //! code is compiled: `std.rt` is compiled with the program, function by
 //! function, as the program needs it. A function is an [`Instance`]: the
-//! program it comes from and its name. Monomorphization makes the type
-//! arguments part of it.
+//! program it comes from, its name, and the concrete types its generics
+//! stand for. A generic function is compiled once for each list of type
+//! arguments a reachable call gives it (monomorphization): its body is
+//! lowered with every type substituted ([`Body::ty`]), so the counting
+//! and layout of each value is that of a concrete type. The backend also
+//! generates functions per type: a drop function and an unshare function
+//! (`data.rs`).
 //!
 //! Anything the backend cannot compile yet is refused with `E0390`, at the
 //! span of the construct (for code in `std.rt`, the span of the user code
@@ -25,9 +30,12 @@
 //! its value's reference and is released when its scope ends, or before
 //! a `return`, `break` or `continue` leaves it; reading it retains. A
 //! function's parameters are borrowed from the caller, which holds them
-//! for the call, so they are never released by the callee. The retain
-//! and release fast paths are inline; the release that drops a count to
-//! zero calls `std.rt`'s `free`.
+//! for the call, so they are never released by the callee, and so is a
+//! method's receiver, unless the method changes it (`data.rs`). The
+//! retain and release fast paths are inline; the release that drops a
+//! count to zero calls the type's drop function, which releases its
+//! fields, or `std.rt`'s `free` directly when no field holds a reference.
+//! A `match` holds its scrutinee while its arms run ([`Held`]).
 //!
 //! # Panics
 //!
