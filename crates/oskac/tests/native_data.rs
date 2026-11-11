@@ -371,3 +371,64 @@ fn arms_that_leave_and_static_values_that_change_behave_as_interpreted() {
         "10 1\n15 7 10 2 10\n<int> <text> <outer> <inner> 42\nearly word\nnone\nn4\n",
     );
 }
+
+#[test]
+fn parse_int_gives_an_option_as_the_interpreter_does() {
+    let src = program(
+        "fn show(text: String) -> String {\n    \
+         match text.parse_int() {\n        Some(n) => \"{n}\"\n        None => \"none\"\n    }\n}\n\n\
+         fn line(io: Stdout, text: String) {\n    \
+         let shown = show(text)\n    let _ = io.println(\"[{text}] {shown}\")\n}",
+        &[
+            "0",
+            "42",
+            "-17",
+            "+5",
+            "007",
+            "",
+            "-",
+            "+",
+            "1a",
+            " 1",
+            "1.5",
+            "9223372036854775807",
+            "9223372036854775808",
+            "-9223372036854775808",
+            "-9223372036854775809",
+            "99999999999999999999",
+            "٣",
+        ]
+        .iter()
+        .map(|text| format!("    line(io, \"{text}\")"))
+        .collect::<Vec<_>>()
+        .join("\n"),
+    );
+    assert_prints(
+        "parse_int",
+        &src,
+        "[0] 0\n[42] 42\n[-17] -17\n[+5] 5\n[007] 7\n[] none\n[-] none\n[+] none\n[1a] none\n\
+         [ 1] none\n[1.5] none\n[9223372036854775807] 9223372036854775807\n\
+         [9223372036854775808] none\n[-9223372036854775808] -9223372036854775808\n\
+         [-9223372036854775809] none\n[99999999999999999999] none\n[٣] none\n",
+    );
+}
+
+#[test]
+fn paths_released_in_a_loop_keep_their_text() {
+    // A `Path`'s text is released with it (its drop function): reused
+    // memory would show up as wrong text or a wrong comparison.
+    let src = program(
+        "",
+        "    var same = 0\n    \
+         var kept = Path.new(\"start\")\n    \
+         for i in 0..5000 {\n        \
+         let a = Path.new(\"dir/{i}\")\n        \
+         let b = Path.new(\"dir/{i}\")\n        \
+         if a == b {\n            same = same + 1\n        }\n        \
+         if i % 1000 == 0 {\n            kept = a\n        }\n    }\n    \
+         let check = Path.new(\"dir/4000\")\n    \
+         let ok = if kept == check { \"kept\" } else { \"lost\" }\n    \
+         let _ = io.println(\"{same} {ok}\")",
+    );
+    assert_prints("path_drop", &src, "5000 kept\n");
+}

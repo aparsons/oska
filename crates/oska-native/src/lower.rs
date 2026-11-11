@@ -68,7 +68,7 @@ use oska_check::program::{
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::{Diagnostic, Span};
 
-use crate::intrinsics::{self, Prelude, Runtime};
+use crate::intrinsics::{self, Check, Prelude, Runtime};
 use crate::ir::{self, Arith, BinOp, Cond, FnId, Inst, Label, Symbol, Temp, Width};
 use crate::layout::{self, Rodata};
 use crate::{codes, Locate, NOWHERE};
@@ -94,6 +94,9 @@ pub const GLOBALS: u32 = 16;
 mod panics {
     pub const OVERFLOW: &str = "P0001";
     pub const DIVISION_BY_ZERO: &str = "P0004";
+    pub const SLICE_OUT_OF_BOUNDS: &str = "P0035";
+    pub const NEGATIVE_REPEAT: &str = "P0036";
+    pub const TEXT_TOO_LONG: &str = "P0037";
     pub const CALL_DEPTH_EXCEEDED: &str = "P0021";
     /// The interpreter's message for `P0021`.
     pub const TOO_DEEP: &str = "calls nest too deep: is this recursion missing its base case?";
@@ -768,6 +771,28 @@ impl<'l, 'p> Body<'l, 'p> {
         })
     }
 
+    /// A cold block that panics with `code`, by the `std.rt` function
+    /// `function`, which writes the message between the report's start and
+    /// end texts, which it is given first, then `args`.
+    fn panic_text(
+        &mut self,
+        code: &'static str,
+        function: &str,
+        args: &[Temp],
+        span: Span,
+    ) -> Result<Label, Diagnostic> {
+        let (before, after) = self.report(code, span);
+        self.cold_block(|body| {
+            let start = body.text(&before);
+            let end = body.text(&after);
+            let mut all = vec![start, end];
+            all.extend_from_slice(args);
+            let unit = body.call_runtime(function, all, NOWHERE)?;
+            body.push(Inst::Return(unit));
+            Ok(())
+        })
+    }
+
     /// A cold block that panics with `code` and the message `head`, the
     /// integer `a`, then `tail`.
     fn panic_unary(
@@ -942,6 +967,11 @@ impl<'l, 'p> Body<'l, 'p> {
                     }
                     None => return Err(self.refuse(span, &format!("`{name}`"))),
                 },
+                Some(Prelude::Checked(function, check)) => {
+                    let result = self.call_runtime(function, args.clone(), span)?;
+                    self.check(check, result, &args, span)?;
+                    result
+                }
                 None => return Err(self.refuse(span, &format!("`{name}`"))),
             },
             Callee::Trait { trait_name, method } => {
@@ -973,6 +1003,49 @@ impl<'l, 'p> Body<'l, 'p> {
             .zip(type_args.iter().cloned())
             .collect();
         Some(function.self_ty.as_ref()?.substitute(&subst))
+    }
+
+    /// Panic after a [`Prelude::Checked`] call of `args` that gave `result`:
+    /// the word 0 (and, for `Repeat`, -1) says the call was a bug.
+    fn check(
+        &mut self,
+        check: Check,
+        result: Temp,
+        args: &[Temp],
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        match check {
+            Check::Slice => {
+                let label =
+                    self.panic_text(panics::SLICE_OUT_OF_BOUNDS, "panic_slice", args, span)?;
+                self.push(Inst::JumpIfZero {
+                    cond: result,
+                    target: label,
+                });
+            }
+            Check::Repeat => {
+                let negative = self.panic_text(
+                    panics::NEGATIVE_REPEAT,
+                    "panic_repeat_negative",
+                    &args[1..],
+                    span,
+                )?;
+                self.push(Inst::JumpIfZero {
+                    cond: result,
+                    target: negative,
+                });
+                let long =
+                    self.panic_text(panics::TEXT_TOO_LONG, "panic_repeat_long", args, span)?;
+                let zero = self.constant(0);
+                self.push(Inst::Branch {
+                    cond: Cond::Lt,
+                    lhs: result,
+                    rhs: zero,
+                    target: long,
+                });
+            }
+        }
+        Ok(())
     }
 
     /// A `std.rt` intrinsic applied to `args`. The checker has matched
@@ -1255,26 +1328,18 @@ impl<'l, 'p> Body<'l, 'p> {
                 | BinaryOp::Gt
                 | BinaryOp::Ge,
                 None,
-            ) if lhs.ty == Type::String && matches!(op, BinaryOp::Eq | BinaryOp::Ne) => {
-                let a = self.expr(lhs)?;
-                let b = self.expr(rhs)?;
-                let eq = Callee::Intrinsic("String.eq".to_string());
-                let equal = self.call(&eq, &[], vec![a, b], &Type::Bool, span)?;
-                if op == BinaryOp::Eq {
+            ) => {
+                if let Some(function) = text_equality(op, &lhs.ty) {
+                    let (left, right) = (self.expr(lhs)?, self.expr(rhs)?);
+                    let equal = self.call_runtime(function, vec![left, right], span)?;
+                    self.consume(left)?;
+                    self.consume(right)?;
+                    if op == BinaryOp::Ne {
+                        let one = self.constant(1);
+                        return Ok(self.binary_op(BinOp::Xor, equal, one));
+                    }
                     return Ok(equal);
                 }
-                let one = self.constant(1);
-                Ok(self.binary_op(BinOp::Xor, equal, one))
-            }
-            (
-                BinaryOp::Eq
-                | BinaryOp::Ne
-                | BinaryOp::Lt
-                | BinaryOp::Le
-                | BinaryOp::Gt
-                | BinaryOp::Ge,
-                None,
-            ) => {
                 let unsigned = match &lhs.ty {
                     Type::Int(int) => int.min() == 0,
                     Type::Bool | Type::Unit => false,
@@ -1586,6 +1651,18 @@ impl<'l, 'p> Body<'l, 'p> {
 }
 
 /// Whether `ty` is a capability whose value carries no state natively.
+/// The `std.rt` function that compares two values of `ty` with `op`
+/// (`==` or `!=`), if they are text.
+fn text_equality(op: BinaryOp, ty: &Type) -> Option<&'static str> {
+    if !matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+        return None;
+    }
+    match ty {
+        Type::String => Some("string_eq"),
+        _ => None,
+    }
+}
+
 fn is_stateless_capability(ty: &Type) -> bool {
     matches!(ty, Type::Named { name, args } if args.is_empty() && (name == "Stdout" || name == "Stderr"))
 }

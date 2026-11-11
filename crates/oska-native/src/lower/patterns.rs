@@ -151,7 +151,7 @@ impl Body<'_, '_> {
         }
         let expected = self.expr(literal)?;
         if *ty == Type::String {
-            let equal = self.call_runtime("text_eq", vec![value, expected], NOWHERE)?;
+            let equal = self.call_runtime("string_eq", vec![value, expected], NOWHERE)?;
             self.consume(expected)?;
             self.push(Inst::JumpIfZero {
                 cond: equal,
