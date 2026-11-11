@@ -1001,6 +1001,7 @@ fn no_handle_is_left_open_on_any_path() {
     // Natively only: the program counts its own open descriptors.
     let src = program(
         r#"    let root = fs.restrict_to("root")
+    io.println(listed(read.restrict_to("/proc/self/fd").list_dir(Path.new("."))))?
     var i = 0
     // Past the usual limit of 1024 open descriptors, so one leaked on
     // any path fails the run.
@@ -1043,10 +1044,12 @@ fn no_handle_is_left_open_on_any_path() {
             .expect("create a hard link");
     });
     let outcome = differential::run_native(&case);
-    // stdin, stdout, stderr; `root` (3); and the listing's own: the
-    // directory (5, opened through its parent, 4, closed since), its copy
-    // for `list_dir` (4) and the open `getdents` reads (6).
-    assert_eq!(outcome.stdout, "0,1,2,3,4,5,6\n", "{outcome:#?}");
+    // The same descriptors open after the loop as before it. Inherited
+    // ones (a git hook passes some on) are in both listings.
+    let lines: Vec<&str> = outcome.stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "{outcome:#?}");
+    assert_eq!(lines[0], lines[1], "{outcome:#?}");
+    assert!(lines[0].starts_with("0,1,2,"), "{outcome:#?}");
 }
 
 #[test]
