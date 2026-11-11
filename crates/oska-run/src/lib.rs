@@ -208,9 +208,10 @@ fn ungranted(program: &Program) -> Option<Diagnostic> {
     let param = main
         .params
         .iter()
-        .find(|p| p.ty != builtins::ARGS && Capability::granted(&p.ty).is_none())?;
-    let (code, message) = if Capability::implemented(&param.ty) {
-        let (kind, how) = match param.ty.starts_with("File") {
+        .map(|p| p.ty.to_string())
+        .find(|ty| ty != builtins::ARGS && Capability::granted(ty).is_none())?;
+    let (code, message) = if Capability::implemented(&param) {
+        let (kind, how) = match param.starts_with("File") {
             true => (
                 "file",
                 "`restrict_to_file` on `FsRead`, `FsWrite` or a directory capability",
@@ -222,24 +223,21 @@ fn ungranted(program: &Program) -> Option<Diagnostic> {
             format!(
                 "`oskac run` cannot grant `{}`: only attenuation makes a {kind} capability, \
                  with {how}",
-                param.ty
+                param
             ),
         )
-    } else if builtins::is_capability(&param.ty) {
+    } else if builtins::is_capability(&param) {
         (
             codes::UNIMPLEMENTED_CAPABILITY,
             format!(
                 "`oskac run` cannot grant `{}` yet: the capability has no runtime",
-                param.ty
+                param
             ),
         )
     } else {
         (
             codes::UNSUPPORTED,
-            format!(
-                "the interpreter cannot run a program given `{}` yet",
-                param.ty
-            ),
+            format!("the interpreter cannot run a program given `{}` yet", param),
         )
     };
     Some(Diagnostic::new(code, message, main.body.span))
@@ -271,12 +269,13 @@ fn run_main(program: &Program, host: &mut dyn Host, args: &[String]) -> Result<(
         .params
         .iter()
         .filter_map(|param| {
-            if param.ty == builtins::ARGS {
+            let ty = param.ty.to_string();
+            if ty == builtins::ARGS {
                 Some(Value::Args(
                     args.iter().map(|a| Rc::from(a.as_str())).collect(),
                 ))
             } else {
-                Capability::granted(&param.ty).map(Value::Capability)
+                Capability::granted(&ty).map(Value::Capability)
             }
         })
         .collect();

@@ -858,7 +858,7 @@ mod access_tests {
     //! which a read-only filesystem calls `write` and a write-only one
     //! `read_to_string` anyway.
 
-    use oska_check::program::{Callee, Contracts, Expr, ExprKind, Function, Param, Program};
+    use oska_check::program::{Callee, Contracts, Expr, ExprKind, Function, Param, Program, Type};
     use oska_syntax::Span;
 
     use std::path::Path;
@@ -870,6 +870,7 @@ mod access_tests {
     fn at(kind: ExprKind) -> Expr {
         Expr {
             kind,
+            ty: Type::Unit,
             span: Span { start: 0, end: 1 },
         }
     }
@@ -877,6 +878,7 @@ mod access_tests {
     fn call(name: &str, args: Vec<Expr>) -> Expr {
         at(ExprKind::Call {
             callee: Callee::Intrinsic(name.to_string()),
+            type_args: Vec::new(),
             args,
         })
     }
@@ -890,12 +892,15 @@ mod access_tests {
             "main".to_string(),
             Function {
                 name: "main".to_string(),
+                generics: Vec::new(),
+                self_ty: None,
                 receiver: false,
                 params: vec![Param {
                     name: "fs".to_string(),
-                    ty: String::new(),
+                    ty: Type::Unit,
                     binds: true,
                 }],
+                ret: Type::Unit,
                 contracts: Contracts::default(),
                 body: call(method, args.collect()),
             },

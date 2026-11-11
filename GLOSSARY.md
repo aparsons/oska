@@ -56,7 +56,7 @@ The built-in declarations, written in Oska, that every program can use without i
 _Avoid_: stdlib (for this subset), builtins
 
 **Checked program**:
-A program the checker has accepted, with every name, method call, and conversion already resolved. The interpreter runs only checked programs.
+A program the checker has accepted, with every name, method call, and conversion already resolved, and every expression and slot typed. The interpreter runs only checked programs.
 _Avoid_: IR, compiled program
 
 **Panic**:

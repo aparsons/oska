@@ -62,6 +62,7 @@ impl Body<'_, '_, '_> {
                             type_args: Vec::new(),
                             target: None,
                             construct: None,
+                            instance: Vec::new(),
                         })
                     }
                     Ty::Error => None,
@@ -80,6 +81,7 @@ impl Body<'_, '_, '_> {
             Some(callable) => {
                 if let Some(target) = &callable.target {
                     self.record(expr.span, Resolution::Call(target.clone()));
+                    self.typed_args(expr.span, callable.instance.clone());
                 }
                 if let Some(construct) = &callable.construct {
                     self.record(expr.span, Resolution::Construct(construct.clone()));
@@ -339,6 +341,7 @@ impl Body<'_, '_, '_> {
             type_args: Vec::new(),
             target: None,
             construct: Some(construct),
+            instance: Vec::new(),
         }
     }
 
@@ -411,6 +414,7 @@ impl Body<'_, '_, '_> {
                 .filter(|_| sig.receiver.is_method())
                 .map(lower),
             joined,
+            instance: subst.iter().map(|(_, t)| t.clone()).collect(),
             type_args: subst.into_iter().map(|(_, t)| t).collect(),
             target: None,
             construct: None,
@@ -506,6 +510,7 @@ impl Body<'_, '_, '_> {
         };
         self.record(span, resolution);
         let mut callable = self.instantiate(&sig, None, name.span);
+        self.typed_args(span, callable.instance.clone());
         if let Some(declared) = &callable.receiver {
             // The receiver flows into `self` like an argument, so untrusted
             // text is no receiver of a method that wants trusted text.

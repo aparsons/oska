@@ -7,8 +7,15 @@
 //! [`ExprKind::Unsupported`], named by the checker's
 //! [`Resolution::Unsupported`] when it recorded one, and by what the node
 //! is otherwise.
+//!
+//! Types come the same way: checking records the solved type of each
+//! expression and binding, and the type arguments of each generic call,
+//! in [`Typing`], and lowering converts them ([`program_type`]). A trait's
+//! default method, and a trait's contracts, are checked once with `Self`
+//! and the trait's generics as parameters; lowering them into an impl
+//! substitutes the impl's types.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -19,10 +26,11 @@ use oska_syntax::ast::{
 use oska_syntax::Span;
 
 use super::{
-    Arm, Callee, Clause, Closure, Construct, Contracts, Ensures, Expr, ExprKind, Function, IntType,
-    Param, Part, Pattern, Place, Program, Stmt,
+    Arm, Callee, Clause, Closure, Construct, Contracts, Ensures, Expr, ExprKind, Field, Function,
+    IntType, Param, Part, Pattern, Place, Program, Stmt, Type, TypeDecl, TypeDeclKind, Variant,
 };
-use crate::items::{FnSig, Items};
+use crate::items::{FieldsInfo, ImplInfo, Items};
+use crate::ty::{self, Ty};
 
 /// What a node resolved to while its body was checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,15 +92,115 @@ pub enum Resolution {
 /// Every resolution in a module, keyed by the span it was recorded at.
 pub type Resolutions = HashMap<Span, Resolution>;
 
+/// The types checking bodies solved, for the checked program.
+#[derive(Debug, Default)]
+pub struct Typing {
+    /// The type of each expression, keyed by its span, and of each
+    /// binding (a `let`, a `for` loop's, a closure's parameter, a
+    /// pattern's name, an `ensures` result), keyed by its name's span.
+    /// A type inference never solved is absent.
+    pub types: HashMap<Span, Ty>,
+    /// What each generic call instantiates its callee's generics with,
+    /// keyed as its resolution is: a call, method call, function value,
+    /// interpolation hole, comparison, or `?`.
+    pub type_args: HashMap<Span, Vec<Ty>>,
+    /// The signature of each function, method, and trait method checked,
+    /// keyed by the span of its name.
+    pub signatures: HashMap<Span, Signature>,
+}
+
+/// A function's signature as its body was checked against it: generic
+/// parameters, and `Self` inside a trait, are [`Ty::Param`].
+#[derive(Debug, Clone)]
+pub struct Signature {
+    pub self_ty: Option<Ty>,
+    pub params: Vec<Ty>,
+    pub ret: Ty,
+}
+
+/// The checked program's type for the checker's `ty`, without trust or
+/// capability flags, or `None` while it holds an unsolved variable.
+pub fn program_type(ty: &Ty) -> Option<Type> {
+    Some(match ty {
+        Ty::Named(name, args, _) => match (name.as_str(), IntType::named(name)) {
+            (_, Some(int)) => Type::Int(int),
+            (ty::BOOL, _) => Type::Bool,
+            (ty::STRING, _) => Type::String,
+            _ => Type::Named {
+                name: name.clone(),
+                args: args.iter().map(program_type).collect::<Option<_>>()?,
+            },
+        },
+        Ty::Unit => Type::Unit,
+        Ty::Fn { params, ret, .. } => Type::Fn {
+            params: params.iter().map(program_type).collect::<Option<_>>()?,
+            ret: Box::new(program_type(ret)?),
+        },
+        Ty::Param(name) => Type::Param(name.clone()),
+        Ty::Never => Type::Never,
+        Ty::Var(_) | Ty::Error => return None,
+    })
+}
+
+/// The struct and enum declarations of `items`.
+fn type_decls(items: &Items) -> std::collections::BTreeMap<String, TypeDecl> {
+    let fields = |info: &FieldsInfo| -> Vec<Field> {
+        info.fields
+            .iter()
+            .map(|(name, ty)| Field {
+                name: name.clone(),
+                ty: program_type(ty).unwrap_or(Type::Unit),
+            })
+            .collect()
+    };
+    let structs = items.structs.iter().map(|(name, info)| {
+        let decl = TypeDecl {
+            generics: info.generics.clone(),
+            kind: TypeDeclKind::Struct(fields(&info.fields)),
+        };
+        (name.clone(), decl)
+    });
+    let enums = items.enums.iter().map(|(name, info)| {
+        let variants = info
+            .variants
+            .iter()
+            .map(|(variant, info)| Variant {
+                name: variant.clone(),
+                fields: fields(info),
+            })
+            .collect();
+        let decl = TypeDecl {
+            generics: info.generics.clone(),
+            kind: TypeDeclKind::Enum(variants),
+        };
+        (name.clone(), decl)
+    });
+    structs.chain(enums).collect()
+}
+
+/// The generic parameters' names.
+fn names(generics: &[ast::GenericParam]) -> Vec<String> {
+    generics.iter().map(|g| g.name.name.clone()).collect()
+}
+
 /// Lower every free function of `module`, every method of its inherent
 /// impls, as `Type.method`, and every method of its trait impls, as
 /// `<Type as Trait>.method`: the trait's default methods the impl does
 /// not override included, so every impl is complete. `src` is the
 /// module's source, which contract clauses quote.
-pub fn module(src: &str, module: &Module, items: &Items, resolutions: &Resolutions) -> Program {
+pub fn module(
+    src: &str,
+    module: &Module,
+    items: &Items,
+    resolutions: &Resolutions,
+    typing: &Typing,
+) -> Program {
     let lowering = Lowering {
         src,
         resolutions,
+        typing,
+        subst: RefCell::new(Vec::new()),
+        unsolved: RefCell::new(Vec::new()),
         in_contract: Cell::new(false),
     };
     let mut program = Program {
@@ -103,14 +211,19 @@ pub fn module(src: &str, module: &Module, items: &Items, resolutions: &Resolutio
             .char_indices()
             .flat_map(|(at, c)| at + 1..at + c.len_utf8())
             .collect(),
+        types: type_decls(items),
         ..Program::default()
     };
-    // Each trait the module declares, by name, for its default methods.
-    let traits: HashMap<&str, &[Item]> = module
+    // Each trait the module declares, by name, for its default methods:
+    // its generics and its methods.
+    let traits: HashMap<&str, (&[ast::GenericParam], &[Item])> = module
         .items
         .iter()
         .filter_map(|item| match &item.kind {
-            ItemKind::Trait(t) => Some((t.name.name.as_str(), t.methods.as_slice())),
+            ItemKind::Trait(t) => Some((
+                t.name.name.as_str(),
+                (t.generics.as_slice(), t.methods.as_slice()),
+            )),
             _ => None,
         })
         .collect();
@@ -119,13 +232,7 @@ pub fn module(src: &str, module: &Module, items: &Items, resolutions: &Resolutio
             ItemKind::Fn(f) => {
                 let name = f.name.name.clone();
                 let contracts = lowering.contracts(f);
-                lowering.function(
-                    &mut program,
-                    name,
-                    f,
-                    contracts,
-                    items.fns.get(&f.name.name),
-                );
+                lowering.function(&mut program, name, f, &[], contracts);
             }
             ItemKind::Use(u) => {
                 if let (Some(first), Some(last)) = (u.path.first(), u.path.last()) {
@@ -148,41 +255,51 @@ pub fn module(src: &str, module: &Module, items: &Items, resolutions: &Resolutio
                     },
                     None => None,
                 };
-                let mut methods: Vec<&FnDecl> = fn_decls(&imp.methods).collect();
+                let own: Vec<&FnDecl> = fn_decls(&imp.methods).collect();
+                let declaring = trait_impl.and_then(|i| traits.get(i.trait_name.as_str()));
                 // A default method the impl does not override is the
                 // impl's too: its body sees `self` as the impl's type.
-                if let Some(defaults) = trait_impl.and_then(|i| traits.get(i.trait_name.as_str())) {
-                    let defaults: Vec<&FnDecl> = fn_decls(defaults)
-                        .filter(|d| !methods.iter().any(|m| m.name.name == d.name.name))
-                        .collect();
-                    methods.extend(defaults);
-                }
-                for f in methods {
+                let defaults: Vec<&FnDecl> = declaring
+                    .map(|(_, methods)| {
+                        fn_decls(methods)
+                            .filter(|d| !own.iter().any(|m| m.name.name == d.name.name))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let impl_generics = names(&imp.generics);
+                for (f, default) in own
+                    .iter()
+                    .map(|f| (*f, false))
+                    .chain(defaults.iter().map(|f| (*f, true)))
+                {
                     let method = &f.name.name;
-                    let (name, sig) = match trait_impl {
-                        Some(info) => (
-                            match info.method_name(method) {
-                                Some(name) => name,
-                                None => continue,
-                            },
-                            items
-                                .trait_methods_named(type_name, method)
-                                .into_iter()
-                                .find(|s| s.trait_name.as_deref() == Some(&info.trait_name)),
-                        ),
-                        None => (
-                            format!("{type_name}.{method}"),
-                            items.inherent_method(type_name, method),
-                        ),
+                    let name = match trait_impl {
+                        Some(info) => match info.method_name(method) {
+                            Some(name) => name,
+                            None => continue,
+                        },
+                        None => format!("{type_name}.{method}"),
                     };
                     // The trait's declaration of the method holds its
                     // contract, whichever impl runs.
-                    let declared = trait_impl
-                        .and_then(|i| traits.get(i.trait_name.as_str()))
-                        .and_then(|methods| fn_decls(methods).find(|d| d.name.name == *method))
+                    let declared = declaring
+                        .and_then(|(_, methods)| fn_decls(methods).find(|d| d.name.name == *method))
                         .unwrap_or(f);
-                    let contracts = lowering.contracts(declared);
-                    lowering.function(&mut program, name, f, contracts, sig);
+                    // What the trait declared is checked with `Self` and
+                    // the trait's generics, and its method's own, as
+                    // parameters: here they are the impl's.
+                    let from_trait = match (trait_impl, declaring) {
+                        (Some(info), Some((trait_generics, _))) => {
+                            trait_subst(info, trait_generics, declared, f)
+                        }
+                        _ => Vec::new(),
+                    };
+                    let contracts =
+                        lowering.with_subst(from_trait.clone(), || lowering.contracts(declared));
+                    let subst = if default { from_trait } else { Vec::new() };
+                    lowering.with_subst(subst, || {
+                        lowering.function(&mut program, name, f, &impl_generics, contracts)
+                    });
                 }
             }
             ItemKind::Test(test) => program.tests.push(super::Test {
@@ -194,7 +311,34 @@ pub fn module(src: &str, module: &Module, items: &Items, resolutions: &Resolutio
             _ => {}
         }
     }
+    program.unsolved = lowering.unsolved.take();
     program
+}
+
+/// What a trait's declaration of a method names as parameters, and the
+/// impl's types for them: `Self`, the trait's generics, and the method's
+/// own generics, as the impl's method `f` names them.
+fn trait_subst(
+    info: &ImplInfo,
+    trait_generics: &[ast::GenericParam],
+    declared: &FnDecl,
+    f: &FnDecl,
+) -> Vec<(String, Ty)> {
+    let mut subst = vec![(ty::SELF.to_string(), info.target.clone())];
+    subst.extend(
+        trait_generics
+            .iter()
+            .map(|g| g.name.name.clone())
+            .zip(info.trait_args.iter().cloned()),
+    );
+    subst.extend(
+        declared
+            .generics
+            .iter()
+            .zip(&f.generics)
+            .map(|(d, own)| (d.name.name.clone(), Ty::Param(own.name.name.clone()))),
+    );
+    subst
 }
 
 /// A test's name: the parser allows only a plain string literal.
@@ -214,6 +358,12 @@ fn test_name(name: &ast::Expr) -> String {
 struct Lowering<'a> {
     src: &'a str,
     resolutions: &'a Resolutions,
+    typing: &'a Typing,
+    /// The impl's types for what a trait's declaration names as
+    /// parameters, while lowering it into the impl (see [`trait_subst`]).
+    subst: RefCell<Vec<(String, Ty)>>,
+    /// The spans whose type was not solved (see [`Program::unsolved`]).
+    unsolved: RefCell<Vec<Span>>,
     /// Whether a contract's condition is being lowered, outside any
     /// closure in it. A `?` or `return` there would leave the function
     /// from its contract, which has no meaning, so it lowers to
@@ -223,37 +373,78 @@ struct Lowering<'a> {
 }
 
 impl Lowering<'_> {
-    /// Lower `f`, with signature `sig`, into `program` as `name`, when it
-    /// has a body. It carries `contracts`: those `f` declares, or for a
-    /// method of `impl Trait for Type`, those of the trait's declaration
-    /// of it (the impl declares none of its own, `E0218`).
+    /// Run `lower` with `subst` in effect.
+    fn with_subst<T>(&self, subst: Vec<(String, Ty)>, lower: impl FnOnce() -> T) -> T {
+        let outer = self.subst.replace(subst);
+        let lowered = lower();
+        self.subst.replace(outer);
+        lowered
+    }
+
+    /// The program's type for the checker's `ty`, found at `span`: `()`
+    /// when it is not solved, which [`Program::unsolved`] lists.
+    fn convert(&self, ty: Option<&Ty>, span: Span) -> Type {
+        let subst = self.subst.borrow();
+        match ty.and_then(|ty| program_type(&ty.substitute(&subst))) {
+            Some(ty) => ty,
+            None => {
+                self.unsolved.borrow_mut().push(span);
+                Type::Unit
+            }
+        }
+    }
+
+    /// The type recorded for the expression or binding at `span`.
+    fn type_at(&self, span: Span) -> Type {
+        self.convert(self.typing.types.get(&span), span)
+    }
+
+    /// The type arguments recorded for the call at `span`: none for a
+    /// callee that is not generic.
+    fn type_args_at(&self, span: Span) -> Vec<Type> {
+        self.typing
+            .type_args
+            .get(&span)
+            .map(|args| args.iter().map(|a| self.convert(Some(a), span)).collect())
+            .unwrap_or_default()
+    }
+
+    /// Lower `f` into `program` as `name`, when it has a body. Its
+    /// generics are `outer`, an impl's, then its own. It carries
+    /// `contracts`: those `f` declares, or for a method of `impl Trait
+    /// for Type`, those of the trait's declaration of it (the impl
+    /// declares none of its own, `E0218`).
     fn function(
         &self,
         program: &mut Program,
         name: String,
         f: &FnDecl,
+        outer: &[String],
         contracts: Contracts,
-        sig: Option<&FnSig>,
     ) {
         let Some(body) = &f.body else {
             return;
         };
+        let sig = self.typing.signatures.get(&f.name.span);
         let params = f
             .params
             .iter()
             .enumerate()
             .map(|(i, p)| Param {
                 name: p.name.name.clone(),
-                ty: sig
-                    .and_then(|s| s.params.get(i))
-                    .map_or_else(String::new, |(_, ty)| ty.to_string()),
+                ty: self.convert(sig.and_then(|s| s.params.get(i)), p.name.span),
                 binds: p.name.name != "_",
             })
             .collect();
         let function = Function {
             name: name.clone(),
+            generics: outer.iter().cloned().chain(names(&f.generics)).collect(),
+            self_ty: sig
+                .and_then(|s| s.self_ty.as_ref())
+                .map(|ty| self.convert(Some(ty), f.name.span)),
             receiver: f.receiver.is_some(),
             params,
+            ret: self.convert(sig.map(|s| &s.ret), f.name.span),
             contracts,
             body: self.block(body),
         };
@@ -309,6 +500,7 @@ impl Lowering<'_> {
         }
         Expr {
             kind: ExprKind::Block { stmts, value },
+            ty: self.type_at(block.span),
             span: block.span,
         }
     }
@@ -318,6 +510,7 @@ impl Lowering<'_> {
             StmtKind::Expr(e) => Stmt::Expr(self.expr(e)),
             StmtKind::Let { name, value, .. } => Stmt::Let {
                 binds: name.name != "_",
+                ty: self.type_at(name.span),
                 value: self.expr(value),
             },
             StmtKind::Assign { target, value } => match self.place(target) {
@@ -327,11 +520,13 @@ impl Lowering<'_> {
                 },
                 None => Stmt::Expr(Expr {
                     kind: self.unsupported(target.span, "an assignment to this place"),
+                    ty: Type::Unit,
                     span: target.span,
                 }),
             },
             StmtKind::Return(_) if self.in_contract.get() => Stmt::Expr(Expr {
                 kind: ExprKind::Unsupported("a `return` in a contract".to_string()),
+                ty: Type::Never,
                 span: stmt.span,
             }),
             StmtKind::Return(value) => Stmt::Return {
@@ -350,6 +545,7 @@ impl Lowering<'_> {
                 body,
             } => Stmt::For {
                 binds: binding.name != "_",
+                ty: self.type_at(binding.span),
                 iter: self.expr(iter),
                 body: self.block(body),
             },
@@ -414,7 +610,14 @@ impl Lowering<'_> {
                     let body = self.expr(body);
                     self.in_contract.set(outer);
                     ExprKind::Closure(Arc::new(Closure {
-                        params: params.iter().map(|p| p.name.name != "_").collect(),
+                        params: params
+                            .iter()
+                            .map(|p| Param {
+                                name: p.name.name.clone(),
+                                ty: self.type_at(p.name.span),
+                                binds: p.name.name != "_",
+                            })
+                            .collect(),
                         captures: captures.clone(),
                         captures_self: *captures_self,
                         height: *height,
@@ -445,6 +648,7 @@ impl Lowering<'_> {
                     (ast::ExprKind::Field { base, .. }, Some(Resolution::Method(callee))) => {
                         ExprKind::Call {
                             callee: callee.clone(),
+                            type_args: self.type_args_at(expr.span),
                             args: std::iter::once(self.expr(base)).chain(args).collect(),
                         }
                     }
@@ -454,6 +658,7 @@ impl Lowering<'_> {
                     ) => match self.place(base) {
                         Some(receiver) => ExprKind::MutatingCall {
                             callee: callee.clone(),
+                            type_args: self.type_args_at(expr.span),
                             receiver,
                             args: args.collect(),
                         },
@@ -461,11 +666,13 @@ impl Lowering<'_> {
                         // change is not kept.
                         None => ExprKind::Call {
                             callee: callee.clone(),
+                            type_args: self.type_args_at(expr.span),
                             args: std::iter::once(self.expr(base)).chain(args).collect(),
                         },
                     },
                     (_, Some(Resolution::Call(callee))) => ExprKind::Call {
                         callee: callee.clone(),
+                        type_args: self.type_args_at(expr.span),
                         args: args.collect(),
                     },
                     (_, Some(Resolution::CallValue)) => ExprKind::CallValue {
@@ -486,6 +693,7 @@ impl Lowering<'_> {
                 Some(Resolution::Try(convert)) => ExprKind::Try {
                     operand: self.boxed(operand),
                     convert: convert.clone(),
+                    type_args: self.type_args_at(expr.span),
                 },
                 _ => self.unsupported(expr.span, "this `?`"),
             },
@@ -506,6 +714,7 @@ impl Lowering<'_> {
         };
         Expr {
             kind,
+            ty: self.type_at(expr.span),
             span: expr.span,
         }
     }
@@ -536,7 +745,7 @@ impl Lowering<'_> {
                 }
             }
             PatternKind::Binding(ident) if ident.name == "_" => Pattern::Wildcard,
-            PatternKind::Binding(_) => Pattern::Bind,
+            PatternKind::Binding(ident) => Pattern::Bind(self.type_at(ident.span)),
             PatternKind::Literal(literal) => Pattern::Literal(self.expr(literal)),
             PatternKind::Constructor { args, .. } => Pattern::Construct {
                 ctor: constructor()?,
@@ -553,7 +762,10 @@ impl Lowering<'_> {
     fn local(&self, ident: &ast::Ident) -> ExprKind {
         match self.resolutions.get(&ident.span) {
             Some(Resolution::Local(slot)) => ExprKind::Local(*slot),
-            Some(Resolution::FnValue(callee)) => ExprKind::FnValue(callee.clone()),
+            Some(Resolution::FnValue(callee)) => ExprKind::FnValue {
+                callee: callee.clone(),
+                type_args: self.type_args_at(ident.span),
+            },
             Some(Resolution::Construct(ctor)) => ExprKind::Construct {
                 ctor: ctor.clone(),
                 fields: Vec::new(),
@@ -597,7 +809,10 @@ impl Lowering<'_> {
                 base: self.boxed(base),
                 index: *index,
             },
-            (Some(Resolution::FnValue(callee)), _) => ExprKind::FnValue(callee.clone()),
+            (Some(Resolution::FnValue(callee)), _) => ExprKind::FnValue {
+                callee: callee.clone(),
+                type_args: self.type_args_at(name.span),
+            },
             (_, Some(Resolution::Construct(ctor))) => ExprKind::Construct {
                 ctor: ctor.clone(),
                 fields: Vec::new(),
@@ -611,12 +826,17 @@ impl Lowering<'_> {
         if let (BinaryOp::Eq | BinaryOp::Ne, Some(Resolution::EqualityVia(eq))) = (op, resolved) {
             let call = ExprKind::Call {
                 callee: eq.clone(),
+                type_args: self.type_args_at(span),
                 args: vec![self.expr(lhs), self.expr(rhs)],
             };
             if op == BinaryOp::Eq {
                 return call;
             }
-            return ExprKind::Not(Box::new(Expr { kind: call, span }));
+            return ExprKind::Not(Box::new(Expr {
+                kind: call,
+                ty: Type::Bool,
+                span,
+            }));
         }
         let int = match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
@@ -656,8 +876,9 @@ impl Lowering<'_> {
                         return self.unsupported(*span, "this interpolation hole");
                     };
                     lowered.push(Part::Hole {
-                        value,
+                        value: Box::new(value),
                         display: display.clone(),
+                        type_args: self.type_args_at(*span),
                     });
                 }
             }
@@ -671,21 +892,24 @@ impl Lowering<'_> {
         let (first, fields) = path.split_first()?;
         let mut value = Expr {
             kind: self.local(first),
+            ty: self.type_at(first.span),
             span: first.span,
         };
         for name in fields {
             let Some(Resolution::Field(index)) = self.resolutions.get(&name.span) else {
                 return None;
             };
+            let span = Span {
+                start: first.span.start,
+                end: name.span.end,
+            };
             value = Expr {
                 kind: ExprKind::Field {
                     base: Box::new(value),
                     index: *index,
                 },
-                span: Span {
-                    start: first.span.start,
-                    end: name.span.end,
-                },
+                ty: self.type_at(span),
+                span,
             };
         }
         Some(value)

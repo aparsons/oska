@@ -208,6 +208,7 @@ impl Body<'_, '_, '_> {
                 self.constructor_pattern(pattern.span, std::slice::from_ref(ident), &[], expected)
             }
             PatternKind::Binding(ident) => {
+                self.typed(ident.span, expected);
                 self.bind(&ident.name, expected.clone(), Binding::Pattern);
                 Some(Pat::Wild)
             }

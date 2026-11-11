@@ -594,6 +594,7 @@ fn check_source(
         mut audit,
         mut attenuations,
         resolutions,
+        typing,
         assumed,
         instances,
         modules,
@@ -602,7 +603,7 @@ fn check_source(
     instantiation::module(module, &decls, &items, assumed, instances, &mut diagnostics);
     let program = diagnostics
         .is_empty()
-        .then(|| program::lower::module(src, module, &items, &resolutions));
+        .then(|| program::lower::module(src, module, &items, &resolutions, &typing));
     let functions = authority::report(module, &decls, &modules);
     // An intrinsic name is also an unknown name; E0209 says it better.
     let refused: Vec<_> = diagnostics

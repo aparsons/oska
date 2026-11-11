@@ -372,7 +372,7 @@ The interpreter is `oskac run file.osk -- args...`, built as the crate `oska-run
 ### Pipeline
 
 - `oskac run` type-checks the program first. If the check reports any diagnostic, the program does not run, and the diagnostics are printed the same way `oskac check` prints them.
-- The checker produces a **checked program**, and the interpreter executes it ([ADR 0007](adr/0007-interpreter-runs-the-checked-program.md)). The interpreter never re-resolves names or dispatch.
+- The checker produces a **checked program**, and the interpreter executes it ([ADR 0007](adr/0007-interpreter-runs-the-checked-program.md)). The interpreter never re-resolves names or dispatch. The checked program also records the type of every expression and slot and the type arguments of every generic call, which the interpreter ignores and a compiled backend lays values out and monomorphizes from.
 
 ### Values
 

@@ -288,6 +288,17 @@ impl Infer {
         self.trust.flow(trust_flag(a), trust_flag(b))
     }
 
+    /// Whether every inference variable in `ty` is one of this context's,
+    /// rather than one a trial copy of it made.
+    pub fn knows(&self, ty: &Ty) -> bool {
+        match ty {
+            Ty::Var(v) => (*v as usize) < self.solutions.len(),
+            Ty::Named(_, args, _) => args.iter().all(|a| self.knows(a)),
+            Ty::Fn { params, ret, .. } => params.iter().all(|p| self.knows(p)) && self.knows(ret),
+            Ty::Unit | Ty::Param(_) | Ty::Never | Ty::Error => true,
+        }
+    }
+
     /// Follow solved variables at the top of `ty` only.
     pub fn shallow(&self, ty: &Ty) -> Ty {
         let mut ty = ty.clone();
