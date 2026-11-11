@@ -620,3 +620,173 @@ fn what_needs_other_tickets_is_refused_cleanly() {
     assert!(stderr.contains("error[E0390]"), "{name}: {stderr}");
     assert!(stderr.contains(what), "{name}: {stderr}");
 }
+
+// ---- Bytes that are not UTF-8 ---------------------------------------------------
+
+/// What one run with raw bytes did.
+type Ran = (Vec<u8>, Vec<u8>, Option<i32>);
+
+/// Run `case` on both backends with `stdin` bytes, `env` and `args` that
+/// need not be UTF-8, and require the same stdout, stderr and exit code.
+fn assert_same_bytes(
+    case: &Case,
+    stdin: &[u8],
+    env: &[(&str, &[u8])],
+) -> (String, String, Option<i32>) {
+    use std::io::Write;
+    use std::os::unix::ffi::OsStrExt;
+    use std::process::Stdio;
+    let (exe, dir) = build_native(case);
+    let run = |mut command: Command| -> Ran {
+        command
+            .current_dir(&dir)
+            .env_clear()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        for (name, value) in env {
+            command.env(name, std::ffi::OsStr::from_bytes(value));
+        }
+        let mut child = command.spawn().expect("the program should start");
+        if let Some(mut input) = child.stdin.take() {
+            let _ = input.write_all(stdin);
+        }
+        let output = child.wait_with_output().expect("the program should end");
+        (output.stdout, output.stderr, output.status.code())
+    };
+    let native = run(Command::new(&exe));
+    let mut interpreter = Command::new(env!("CARGO_BIN_EXE_oskac"));
+    interpreter.args(["run", "main.osk"]);
+    let interpreted = run(interpreter);
+    assert_eq!(native, interpreted, "the backends differ");
+    (
+        String::from_utf8_lossy(&native.0).into_owned(),
+        String::from_utf8_lossy(&native.1).into_owned(),
+        native.2,
+    )
+}
+
+#[test]
+fn stdin_that_is_not_utf8_fails_the_read_as_the_interpreter_does() {
+    let case = Case::file("process_bad_stdin", ECHO);
+    for (name, bytes) in [
+        ("lone continuation", &b"ok\n\x80\nafter\n"[..]),
+        ("truncated sequence", b"a\n\xE6\x97\nafter\n"),
+        ("overlong", b"\xC0\xAF\nafter\n"),
+        ("surrogate", b"\xED\xA0\x80\nafter\n"),
+        ("above U+10FFFF", b"\xF4\x90\x80\x80\nafter\n"),
+        ("bad last line", b"fine\n\xFF"),
+        ("lead at the end", b"fine\n\xE6"),
+        ("valid", "日本\n😀\n".as_bytes()),
+        ("edges", b"\xF4\x8F\xBF\xBF\n\xED\x9F\xBF\n\xEF\xBF\xBF\n"),
+    ] {
+        let (stdout, _, code) = assert_same_bytes(&case, bytes, &[]);
+        assert_eq!(code, Some(0), "{name}: {stdout}");
+    }
+}
+
+#[test]
+fn environment_values_that_are_not_utf8_are_not_set() {
+    let src = r#"fn main(io: Stdout, env: Env) {
+    match env.get("BAD") {
+        Some(_) => {
+            let _ = io.println("BAD is set")
+        }
+        None => {
+            let _ = io.println("BAD is not set")
+        }
+    }
+    match env.get("GOOD") {
+        Some(value) => {
+            let _ = io.println(value)
+        }
+        None => {
+            let _ = io.println("GOOD is not set")
+        }
+    }
+    let secret = env.secret("BAD")
+    let _ = io.println(secret.expose())
+}
+"#;
+    let case = Case::file("process_bad_env", src);
+    let (stdout, stderr, code) =
+        assert_same_bytes(&case, b"", &[("BAD", b"a\xFFb"), ("GOOD", "é".as_bytes())]);
+    assert_eq!(stdout, "BAD is not set\né\n");
+    assert!(stderr.contains("error[P0020]"), "{stderr}");
+    assert_eq!(code, Some(101));
+}
+
+#[test]
+fn an_argument_that_is_not_utf8_ends_the_program_with_101_on_both_backends() {
+    use std::os::unix::ffi::OsStrExt;
+    let case = Case::file(
+        "process_bad_args",
+        "fn main(io: Stdout) {\n    let _ = io.println(\"hi\")\n}\n",
+    );
+    let (native_exe, dir) = build_native(&case);
+    let arg = std::ffi::OsStr::from_bytes(b"a\xFFb");
+    let native = Command::new(native_exe)
+        .arg(arg)
+        .current_dir(&dir)
+        .output()
+        .expect("runs");
+    let interpreted = Command::new(env!("CARGO_BIN_EXE_oskac"))
+        .args(["run", "main.osk", "--"])
+        .arg(arg)
+        .current_dir(&dir)
+        .output()
+        .expect("runs");
+    assert_eq!(native.status.code(), Some(101));
+    assert_eq!(interpreted.status.code(), Some(101));
+    assert!(native.stdout.is_empty() && interpreted.stdout.is_empty());
+}
+
+// ---- dbg escaping, for every character --------------------------------------------
+
+/// The table in `std.rt` lists exactly the characters Rust's `{:?}`
+/// writes as `\u{..}`.
+#[test]
+fn the_dbg_escape_table_is_rusts_for_every_character() {
+    let source = oska_check::STD_RT_SOURCE;
+    let head = "fn escaped_table() -> String {\n    \"";
+    let start = source.find(head).expect("the table") + head.len();
+    let table = &source[start..start + source[start..].find('"').expect("its end")];
+    assert_eq!(table.len() % 12, 0);
+    let hex = |from: usize| u32::from_str_radix(&table[from..from + 6], 16).expect("hex digits");
+    let ranges: Vec<(u32, u32)> = (0..table.len() / 12)
+        .map(|r| (hex(r * 12), hex(r * 12 + 6)))
+        .collect();
+    assert!(ranges.windows(2).all(|w| w[0].1 < w[1].0), "sorted, apart");
+    for cp in 0..=0x10FFFFu32 {
+        let Some(c) = char::from_u32(cp) else {
+            continue;
+        };
+        let escaped = format!("{:?}", c.to_string())[1..].starts_with("\\u{");
+        let listed = ranges.iter().any(|&(a, b)| a <= cp && cp <= b);
+        assert_eq!(listed, escaped, "U+{cp:X}");
+    }
+}
+
+#[test]
+fn dbg_escapes_invisible_and_format_characters_as_the_interpreter_does() {
+    // Zero-width and format characters, combining marks (which extend the
+    // grapheme before them), separators, private use, controls, the
+    // noncharacters, quotes and ordinary text.
+    let src = "fn main(io: Stdout) {\n    \
+        let a = dbg(\"zero\u{200B}width\u{200D}joiner\u{FEFF}bom\")\n    \
+        let b = dbg(\"e\u{301} a\u{300}\u{20DD} \u{0915}\u{094D}\")\n    \
+        let c = dbg(\"sep\u{2028}\u{2029}\u{00A0}\u{3000}\u{00AD}\")\n    \
+        let d = dbg(\"\u{E000}\u{F8FF}\u{FFFF}\u{FDD0}\u{10FFFF}\u{E0001}\")\n    \
+        let e = dbg(\"\u{7F}\u{80}\u{85}\u{9F}\u{A1}\u{1F600}\u{1F3FD}\")\n    \
+        let f = dbg(\"it's \\\"q\\\" \\\\ \\t\\n\\r\\0 end\")\n    \
+        let _ = io.println(a)\n    \
+        let _ = io.println(b)\n    \
+        let _ = io.println(c)\n    \
+        let _ = io.println(d)\n    \
+        let _ = io.println(e)\n    \
+        let _ = io.println(f)\n}\n";
+    let outcome = assert_same(&Case::file("process_dbg_unicode", src));
+    assert!(outcome.stderr.contains("\\u{200b}"), "{outcome:#?}");
+    assert!(outcome.stderr.contains("\\u{301}"), "{outcome:#?}");
+    assert_eq!(outcome.exit_code, Some(0));
+}
