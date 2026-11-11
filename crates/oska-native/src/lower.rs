@@ -98,6 +98,8 @@ mod panics {
     pub const NEGATIVE_REPEAT: &str = "P0036";
     pub const TEXT_TOO_LONG: &str = "P0037";
     pub const CALL_DEPTH_EXCEEDED: &str = "P0021";
+    pub const PRECONDITION_VIOLATED: &str = "P0006";
+    pub const POSTCONDITION_VIOLATED: &str = "P0007";
     /// The interpreter's message for `P0021`.
     pub const TOO_DEEP: &str = "calls nest too deep: is this recursion missing its base case?";
 }
@@ -130,6 +132,15 @@ enum Instance {
     /// A copy of a shared struct object of this type, whose count is not
     /// 1, holding a reference of its own to each field.
     Unshare(Source, Type),
+    /// The check of a function's `requires` clauses, a function of the
+    /// same parameters as it: gives 0 when they all hold, else the number
+    /// (from 1) of the first that is false. The caller panics with it,
+    /// for the span of its call is the report's.
+    Requires {
+        source: Source,
+        name: String,
+        type_args: Vec<Type>,
+    },
 }
 
 /// Lower `user`, with `rt`, the checked `std.rt`, to a module. `locate`
@@ -258,6 +269,11 @@ impl<'p> Lowering<'p> {
                 source,
                 name,
                 type_args,
+            }
+            | Instance::Requires {
+                source,
+                name,
+                type_args,
             } => (*source, name, type_args),
             Instance::Drop(source, ty) => {
                 let mut body = Body::new(self, *source, Some(origin));
@@ -290,19 +306,6 @@ impl<'p> Lowering<'p> {
                 runtime_origin.is_some(),
             ));
         }
-        if let Some(clause) = function
-            .contracts
-            .requires
-            .iter()
-            .chain(function.contracts.ensures.iter().map(|e| &e.clause))
-            .next()
-        {
-            return Err(refusal(
-                at(clause.span),
-                "a function with `requires` or `ensures`",
-                runtime_origin.is_some(),
-            ));
-        }
         if function.params.len() + usize::from(function.receiver) > ir::MAX_ARGS {
             return Err(refusal(
                 at(function.body.span),
@@ -310,7 +313,10 @@ impl<'p> Lowering<'p> {
                 runtime_origin.is_some(),
             ));
         }
+        let checks_requires = matches!(instance, Instance::Requires { .. });
         let mut body = Body::new(self, source, runtime_origin);
+        body.ensuring =
+            (!checks_requires && !function.contracts.ensures.is_empty()).then_some(function);
         body.subst = function
             .generics
             .iter()
@@ -326,12 +332,13 @@ impl<'p> Lowering<'p> {
             body.receiver = Some(Receiver {
                 temp: receiver,
                 // A mutating method owns its receiver, and gives it back.
-                owned: data::writes_self(function),
+                owned: data::writes_self(function) && !checks_requires,
                 ty,
             });
         }
         for param in &function.params {
             let temp = body.temp();
+            body.param_temps.push(temp);
             if param.binds {
                 // Borrowed from the caller: never released here.
                 let ty = body.ty(&param.ty);
@@ -343,8 +350,12 @@ impl<'p> Lowering<'p> {
             }
         }
         let params = body.temps;
-        let value = body.expr(&function.body)?;
-        body.leave_function(value)?;
+        if checks_requires {
+            body.requires_function(function)?;
+        } else {
+            let value = body.expr(&function.body)?;
+            body.return_value(value, body_end(&function.body))?;
+        }
         let lowered = body.finish(&qualified(instance), params, function.body.span)?;
         if source == Source::User {
             self.largest_frame = self.largest_frame.max(lowered.temps);
@@ -376,6 +387,32 @@ fn qualified(instance: &Instance) -> String {
         }
         Instance::Drop(_, ty) => format!("drop<{ty}>"),
         Instance::Unshare(_, ty) => format!("unshare<{ty}>"),
+        Instance::Requires {
+            source,
+            name,
+            type_args,
+        } => {
+            let function = Instance::Function {
+                source: *source,
+                name: name.clone(),
+                type_args: type_args.clone(),
+            };
+            format!("requires of {}", qualified(&function))
+        }
+    }
+}
+
+/// Where a body's value is returned from when it ends without a `return`:
+/// its last expression, or else its closing brace.
+fn body_end(body: &Expr) -> Span {
+    match &body.kind {
+        ExprKind::Block {
+            value: Some(value), ..
+        } => value.span,
+        _ => Span {
+            start: body.span.end.saturating_sub(1),
+            end: body.span.end,
+        },
     }
 }
 
@@ -466,6 +503,12 @@ struct Body<'l, 'p> {
     /// The values held while code that may leave them runs, innermost
     /// last.
     held: Vec<Held>,
+    /// The function being lowered when it has `ensures` clauses: every
+    /// return checks them ([`Body::return_value`]).
+    ensuring: Option<&'p Function>,
+    /// The temporary of each parameter after the receiver, in order,
+    /// whether or not it takes a slot.
+    param_temps: Vec<Temp>,
     /// The concrete type each generic parameter of the function stands
     /// for in the instance being lowered.
     subst: Vec<(String, Type)>,
@@ -486,6 +529,8 @@ impl<'l, 'p> Body<'l, 'p> {
             loops: Vec::new(),
             owned: BTreeMap::new(),
             held: Vec::new(),
+            ensuring: None,
+            param_temps: Vec::new(),
             subst: Vec::new(),
         }
     }
@@ -721,6 +766,155 @@ impl<'l, 'p> Body<'l, 'p> {
         Ok(())
     }
 
+    /// Return `value`, at `at` (the `return`, or the end of the body),
+    /// after its function's `ensures` clauses held: the first that is
+    /// false panics with `P0007`, naming `at`. Every way out of a function
+    /// goes through here.
+    fn return_value(&mut self, value: Temp, at: Span) -> Result<(), Diagnostic> {
+        if let Some(function) = self.ensuring {
+            // The clauses run in a frame of their own: the parameters
+            // that take a slot there, then `r`.
+            let frame = self.contract_slots(function);
+            let outer = std::mem::replace(&mut self.slots, frame);
+            let loops = std::mem::take(&mut self.loops);
+            let height = self.slots.len();
+            let (line, column) = self.program().line_col(at.start);
+            for ensures in &function.contracts.ensures {
+                if ensures.binds {
+                    let ty = self.ty(&function.ret);
+                    // Borrowed: the return still owns the value.
+                    self.slots.push(Slot {
+                        temp: value,
+                        release: false,
+                        ty,
+                    });
+                }
+                let holds = self.expr(&ensures.clause.cond)?;
+                self.slots.truncate(height);
+                let message = format!(
+                    "postcondition violated: `{}` ensures `{}`, \
+                     broken by the return at line {line}, column {column}",
+                    function.name, ensures.clause.text
+                );
+                let broken = self.panic_static(
+                    panics::POSTCONDITION_VIOLATED,
+                    &message,
+                    ensures.clause.span,
+                )?;
+                self.push(Inst::JumpIfZero {
+                    cond: holds,
+                    target: broken,
+                });
+            }
+            self.slots = outer;
+            self.loops = loops;
+        }
+        self.leave_function(value)
+    }
+
+    /// The slots of a function's contracts' frame, before `r`: its
+    /// parameters that take one there.
+    fn contract_slots(&self, function: &Function) -> Vec<Slot> {
+        let mut slots = Vec::new();
+        for (index, &takes) in function.contracts.params.iter().enumerate() {
+            if let (true, Some(param), Some(&temp)) = (
+                takes,
+                function.params.get(index),
+                self.param_temps.get(index),
+            ) {
+                slots.push(Slot {
+                    temp,
+                    release: false,
+                    ty: self.ty(&param.ty),
+                });
+            }
+        }
+        slots
+    }
+
+    /// The body of [`Instance::Requires`]: evaluate each clause in order,
+    /// returning the number (from 1) of the first that is false, or 0.
+    fn requires_function(&mut self, function: &Function) -> Result<(), Diagnostic> {
+        self.slots = self.contract_slots(function);
+        for (index, clause) in function.contracts.requires.iter().enumerate() {
+            let holds = self.expr(&clause.cond)?;
+            let ok = self.label();
+            let zero = self.constant(0);
+            self.push(Inst::Branch {
+                cond: Cond::Ne,
+                lhs: holds,
+                rhs: zero,
+                target: ok,
+            });
+            let failed = self.constant(index as i64 + 1);
+            self.push(Inst::Return(failed));
+            self.push(Inst::Label(ok));
+        }
+        let none = self.constant(0);
+        self.push(Inst::Return(none));
+        Ok(())
+    }
+
+    /// Before a call of the user function `name`, with `args` (evaluated
+    /// already) at `span`: evaluate its `requires` clauses, and panic with
+    /// `P0006` at the call if one is false.
+    fn check_requires(
+        &mut self,
+        name: &str,
+        type_args: &[Type],
+        args: &[Temp],
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let Some(function) = self.program().functions.get(name) else {
+            return Ok(());
+        };
+        if function.contracts.requires.is_empty() {
+            return Ok(());
+        }
+        let instance = Instance::Requires {
+            source: self.source,
+            name: name.to_string(),
+            type_args: type_args.to_vec(),
+        };
+        let id = self.lowering.request(instance, self.origin.unwrap_or(span));
+        let failed = self.call_id(id, args.to_vec(), span)?;
+        let (before, after) = self.report(panics::PRECONDITION_VIOLATED, span);
+        let clauses = &function.contracts.requires;
+        let broken = self.cold_block(|body| {
+            // Read the result first: it is a hot temporary.
+            let failed = body.copy(failed);
+            for (index, clause) in clauses.iter().enumerate() {
+                let next = body.label();
+                if index + 1 < clauses.len() {
+                    let this = body.constant(index as i64 + 1);
+                    body.push(Inst::Branch {
+                        cond: Cond::Ne,
+                        lhs: failed,
+                        rhs: this,
+                        target: next,
+                    });
+                }
+                let message = format!(
+                    "precondition violated: `{}` requires `{}`",
+                    function.name, clause.text
+                );
+                let report = body.text(&format!("{before}{message}{after}"));
+                let unit = body.call_runtime("panic", vec![report], NOWHERE)?;
+                body.push(Inst::Return(unit));
+                body.push(Inst::Label(next));
+            }
+            Ok(())
+        })?;
+        let zero = self.constant(0);
+        self.push(Inst::Branch {
+            cond: Cond::Ne,
+            lhs: failed,
+            rhs: zero,
+            target: broken,
+        });
+        Ok(())
+    }
+
     // ---- Panics ------------------------------------------------------------
 
     /// A cold block that `build` fills: its label.
@@ -896,6 +1090,7 @@ impl<'l, 'p> Body<'l, 'p> {
         }
         let exhausted = self.panic_static(panics::CALL_DEPTH_EXCEEDED, panics::TOO_DEEP, span)?;
         self.push(Inst::Enter { exhausted });
+        self.check_requires(name, &type_args, &args, span)?;
         let result = self.call_function(Source::User, name, type_args, args, span)?;
         self.push(Inst::Leave);
         Ok(result)
@@ -1546,12 +1741,12 @@ impl<'l, 'p> Body<'l, 'p> {
                 }
             }
             Stmt::Assign { place, value } => self.assign(place, value)?,
-            Stmt::Return { value, .. } => {
+            Stmt::Return { value, span } => {
                 let value = match value {
                     Some(value) => self.expr(value)?,
                     None => self.constant(0),
                 };
-                self.leave_function(value)?;
+                self.return_value(value, *span)?;
             }
             Stmt::Break | Stmt::Continue => {
                 let Some(&innermost) = self.loops.last() else {
