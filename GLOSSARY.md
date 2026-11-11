@@ -39,6 +39,10 @@ _Avoid_: escalation, upgrade (for this concept)
 **Pure function**:
 A function with no capability-bearing parameters. It cannot perform effects, and it is deterministic.
 
+**Pre-state value**:
+A value in a postcondition captured with `old(...)` when the function is entered, before a mutating method changes its receiver.
+_Avoid_: snapshot, previous value
+
 **Program input**:
 Data given to `main` that grants no authority, such as `Args`.
 _Avoid_: calling it a capability
@@ -81,6 +85,10 @@ _Avoid_: escape hatch (informal)
 A value whose contents are never displayed, logged, or interpolated. The only way to read it is an explicit, auditable exposure.
 _Avoid_: sensitive, private
 
+**Secret integer**:
+A secret value of a fixed-width unsigned integer type, such as `Secret<U32>`. Code may compute with it but never branch on it or index with it, so its value cannot affect timing.
+_Avoid_: constant-time int, CtU32
+
 **Sink**:
 An API where data leaves the program or affects how it behaves, such as SQL queries, process execution, HTML output, filesystem paths, network hosts, or logs.
 
@@ -93,3 +101,22 @@ An argument to a sink that is treated only as data. It accepts untrusted values.
 
 **Structural position**:
 An argument to a sink that decides code, commands, paths, or destinations. It rejects untrusted values. Examples are SQL query text, a program name, `TrustedHtml`, an attenuation directory, and a network host.
+
+## Packages
+
+**Module**:
+One source file. Its items are private unless marked `pub(pkg)` or `pub`.
+
+**Package**:
+A set of modules published together from one git repository and named by its URL. Its `pub` items are its API, and its authority is counted over that API alone.
+_Avoid_: crate, library (for this concept)
+
+**Manifest**:
+The file in which a package states its identity, its direct dependencies, and the authority approved for each one.
+_Avoid_: package file, config
+
+**Lockfile**:
+The record of the exact version, commit, content hash and computed authority of every package in the dependency graph.
+
+**Direct dependency**:
+A package named in the manifest. Only direct dependencies need authority approval.
