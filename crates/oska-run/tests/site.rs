@@ -11,11 +11,16 @@
 //!
 //! Every page any test builds also goes through [`assert_inert`], which
 //! reads it the way a browser would and fails on anything that could run.
+//!
+//! Every build is differential (`common`): on aarch64 Linux the generator
+//! also runs natively on the same files, and must write the same site.
+
+mod common;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use oska_run::{run, FakeHost, RunOutcome};
+use oska_run::{FakeHost, RunOutcome};
 
 /// The generator's source.
 const BUILD: &str = include_str!("../../../site/build.osk");
@@ -81,7 +86,7 @@ fn build(inputs: &BTreeMap<String, String>) -> Build {
     let mut host = inputs.iter().fold(FakeHost::new(), |host, (path, text)| {
         host.with_file(path, text)
     });
-    let outcome = run(BUILD, &mut host, &["site/build.osk".to_string()]);
+    let outcome = common::run_differential(&mut host, BUILD, &[]);
     Build {
         outcome,
         site: host.files_under(OUTPUT),

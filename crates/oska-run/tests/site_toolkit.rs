@@ -14,7 +14,7 @@ use oska_run::{run, FakeHost, Host, RealHost, RunOutcome};
 
 /// Run `src` on `host`, which the test inspects afterwards.
 fn run_kept(src: &str, host: &mut FakeHost) -> RunOutcome {
-    run(src, host, &["prog.osk".to_string()])
+    common::run_differential(host, src, &[])
 }
 
 /// Assert that a program that checks ran, and that `main` returned the

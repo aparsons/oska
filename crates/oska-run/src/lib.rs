@@ -53,7 +53,7 @@ mod testing;
 mod traits;
 mod value;
 
-pub use host::{FakeHost, Host, Output, RealHost, RootHandle, FAKE_SEED};
+pub use host::{FakeHost, FakeWorld, Host, Output, RealHost, RootHandle, FAKE_SEED};
 pub use interp::MAX_CALL_DEPTH;
 pub use panics::codes;
 pub use testing::{test, test_program, TestOptions, TestReport, TestResult, TestStatus};

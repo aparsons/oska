@@ -704,6 +704,23 @@ fn without_line_break(mut line: String) -> String {
 /// The seed of every [`FakeHost`]'s generator.
 pub const FAKE_SEED: u64 = 0x05EE_D0F0_5CA0;
 
+/// Everything a [`FakeHost`] holds but its output and its generator: its
+/// stdin, environment and filesystem, as [`FakeHost::world`] gives them.
+/// A test sets up the same world on a real OS from it, as `oska-run`'s
+/// differential test helpers do for the native backend.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FakeWorld {
+    /// The lines waiting on stdin, without their line breaks.
+    pub stdin: Vec<String>,
+    pub env: BTreeMap<String, String>,
+    /// Every file, by absolute path, with its contents.
+    pub files: BTreeMap<PathBuf, String>,
+    /// Directories that exist though no file lies under them.
+    pub dirs: BTreeSet<PathBuf>,
+    /// Symlinks, by their absolute path, to their target's.
+    pub links: BTreeMap<PathBuf, PathBuf>,
+}
+
 /// A deterministic stand-in for the OS: it records output rather than
 /// printing it. Backs this crate's tests and the language's test
 /// stand-ins.
@@ -808,6 +825,17 @@ impl FakeHost {
                 Some((name, text.clone()))
             })
             .collect()
+    }
+
+    /// What the host holds now: its stdin, environment and filesystem.
+    pub fn world(&self) -> FakeWorld {
+        FakeWorld {
+            stdin: self.stdin.iter().cloned().collect(),
+            env: self.env.clone(),
+            files: self.files.clone(),
+            dirs: self.dirs.clone(),
+            links: self.links.clone(),
+        }
     }
 
     /// The text of the file at `path`, relative to `/`, if there is one.

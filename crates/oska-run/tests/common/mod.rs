@@ -3,11 +3,22 @@
 //! Every test runs a small Oska program through [`oska_run::run`] on a
 //! [`FakeHost`] and asserts on what a user sees: what the program printed,
 //! its exit code, its panic, or the diagnostics that refused it.
+//!
+//! Every helper here that runs a program on a [`FakeHost`] is also a
+//! **differential test** of the native backend on aarch64 Linux: the
+//! program is compiled and run natively on the same world, and must do
+//! exactly what it did on the interpreter (`native.rs`). The cases that
+//! cannot be reproduced on a real OS are in one skip list, `skips.rs`.
 
 #![allow(dead_code)]
 
+#[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+mod native;
+pub mod skips;
+
 use oska_run::{
-    codes, run, test, FakeHost, Host, RunOutcome, TestOptions, TestReport, UNSUPPORTED_EXIT_CODE,
+    codes, run, test, FakeHost, FakeWorld, RunOutcome, TestOptions, TestReport,
+    UNSUPPORTED_EXIT_CODE,
 };
 
 /// The program path every helper passes as `args[0]`.
@@ -20,11 +31,74 @@ pub fn run_fake(src: &str, args: &[&str]) -> RunOutcome {
 
 /// Run `src` on `host`, with `args` after the program path.
 pub fn run_on(mut host: FakeHost, src: &str, args: &[&str]) -> RunOutcome {
+    run_differential(&mut host, src, args)
+}
+
+/// Run `src` on `host`, with `args` after the program path, and natively
+/// on the same world, where native executables run: the interpreter's
+/// outcome, once the native run agreed with it.
+pub fn run_differential(host: &mut FakeHost, src: &str, args: &[&str]) -> RunOutcome {
     let args: Vec<String> = std::iter::once(PROGRAM_PATH)
         .chain(args.iter().copied())
         .map(str::to_string)
         .collect();
-    run(src, &mut host, &args)
+    let before = host.world();
+    let outcome = run(src, host, &args);
+    compare_run(src, &before, &args, &outcome, &host.world());
+    outcome
+}
+
+/// Run the checked `program` on `host`, as `oskac run` runs a package,
+/// with `args` (the program path first), and natively on the same world:
+/// [`run_differential`] for a program with no single source. `shown`
+/// names it when the backends differ.
+pub fn run_program_differential(
+    program: &oska_check::program::Program,
+    shown: &str,
+    host: &mut FakeHost,
+    args: &[String],
+) -> RunOutcome {
+    let before = host.world();
+    let outcome = oska_run::run_program(program, host, args);
+    #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+    native::compare_program(program, shown, &before, args, &outcome, &host.world());
+    #[cfg(not(all(target_arch = "aarch64", target_os = "linux")))]
+    let _ = (shown, before);
+    outcome
+}
+
+/// Run the `test` blocks of the checked `program` with `options`, as
+/// `oskac test` runs a package's, and natively: [`test_with`] for a
+/// program with no single source.
+pub fn test_program_differential(
+    program: &oska_check::program::Program,
+    shown: &str,
+    mut host: FakeHost,
+    options: TestOptions,
+) -> TestReport {
+    let before = host.world();
+    let report = oska_run::test_program(program, &mut host, options);
+    #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+    native::compare_program_tests(program, shown, &before, options, &report);
+    #[cfg(not(all(target_arch = "aarch64", target_os = "linux")))]
+    let _ = (shown, before);
+    report
+}
+
+/// Compare the interpreter's run of `src`, from the world `before` to
+/// `after`, with a native run (`native.rs`); nothing where native
+/// executables do not run.
+pub fn compare_run(
+    src: &str,
+    before: &FakeWorld,
+    args: &[String],
+    outcome: &RunOutcome,
+    after: &FakeWorld,
+) {
+    #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+    native::compare_run(src, before, args, outcome, after);
+    #[cfg(not(all(target_arch = "aarch64", target_os = "linux")))]
+    let _ = (src, before, args, outcome, after);
 }
 
 /// Whether `code` is one the runtime refuses a checked program with,
@@ -101,9 +175,16 @@ pub fn test_fake(src: &str) -> TestReport {
 }
 
 /// Run the `test` blocks of `src` with `options`; `host` backs the
-/// `#[integration]` tests when they run.
+/// `#[integration]` tests when they run. Natively too, where native
+/// executables run, the integration tests on the same world.
 pub fn test_with(mut host: FakeHost, src: &str, options: TestOptions) -> TestReport {
-    test(src, &mut host, options)
+    let before = host.world();
+    let report = test(src, &mut host, options);
+    #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+    native::compare_tests(src, &before, options, &report);
+    #[cfg(not(all(target_arch = "aarch64", target_os = "linux")))]
+    let _ = before;
+    report
 }
 
 // ---- Filesystem capability programs --------------------------------------------------
@@ -151,13 +232,9 @@ pub fn fs_program(body: &str) -> String {
 
 /// What the [`fs_program`] running `body` prints on `host`, with `args`
 /// after the program path. The host is left as the program left it.
-pub fn printed_with(host: &mut dyn Host, args: &[&str], body: &str) -> String {
+pub fn printed_with(host: &mut FakeHost, args: &[&str], body: &str) -> String {
     let src = fs_program(body);
-    let args: Vec<String> = std::iter::once(PROGRAM_PATH)
-        .chain(args.iter().copied())
-        .map(str::to_string)
-        .collect();
-    let outcome = run(&src, host, &args);
+    let outcome = run_differential(host, &src, args);
     assert!(
         outcome.diagnostics.is_empty() && outcome.panic.is_none() && outcome.exit_code == 0,
         "{src} should run: {outcome:#?}"
