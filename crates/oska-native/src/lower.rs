@@ -58,6 +58,7 @@
 
 mod data;
 mod patterns;
+mod traits;
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -98,6 +99,9 @@ mod panics {
     pub const NEGATIVE_REPEAT: &str = "P0036";
     pub const TEXT_TOO_LONG: &str = "P0037";
     pub const CALL_DEPTH_EXCEEDED: &str = "P0021";
+    pub const TODO: &str = "P0003";
+    /// The interpreter's message for `P0003`.
+    pub const NOT_WRITTEN: &str = "reached `todo()`: this code is not written yet";
     /// The interpreter's message for `P0021`.
     pub const TOO_DEEP: &str = "calls nest too deep: is this recursion missing its base case?";
 }
@@ -130,6 +134,9 @@ enum Instance {
     /// A copy of a shared struct object of this type, whose count is not
     /// 1, holding a reference of its own to each field.
     Unshare(Source, Type),
+    /// Whether two values of this `Option` or `Result` type are equal,
+    /// through `Eq` for each field's type (`traits.rs`).
+    Equal(Source, Type),
 }
 
 /// Lower `user`, with `rt`, the checked `std.rt`, to a module. `locate`
@@ -269,6 +276,12 @@ impl<'p> Lowering<'p> {
                 body.unshare_function(ty)?;
                 return body.finish(&qualified(instance), 1, NOWHERE);
             }
+            Instance::Equal(source, ty) => {
+                let runtime_origin = (*source == Source::Runtime).then_some(origin);
+                let mut body = Body::new(self, *source, runtime_origin);
+                body.equal_function(ty, origin)?;
+                return body.finish(&qualified(instance), 2, NOWHERE);
+            }
         };
         let program = self.program(source);
         let runtime_origin = (source == Source::Runtime).then_some(origin);
@@ -317,6 +330,7 @@ impl<'p> Lowering<'p> {
             .cloned()
             .zip(type_args.clone())
             .collect();
+        body.ret = body.ty(&function.ret);
         if function.receiver {
             let receiver = body.temp();
             let ty = function
@@ -376,6 +390,7 @@ fn qualified(instance: &Instance) -> String {
         }
         Instance::Drop(_, ty) => format!("drop<{ty}>"),
         Instance::Unshare(_, ty) => format!("unshare<{ty}>"),
+        Instance::Equal(_, ty) => format!("eq<{ty}>"),
     }
 }
 
@@ -469,6 +484,8 @@ struct Body<'l, 'p> {
     /// The concrete type each generic parameter of the function stands
     /// for in the instance being lowered.
     subst: Vec<(String, Type)>,
+    /// The function's result type, concrete: what `?` returns early.
+    ret: Type,
 }
 
 impl<'l, 'p> Body<'l, 'p> {
@@ -487,6 +504,7 @@ impl<'l, 'p> Body<'l, 'p> {
             owned: BTreeMap::new(),
             held: Vec::new(),
             subst: Vec::new(),
+            ret: Type::Unit,
         }
     }
 
@@ -703,9 +721,19 @@ impl<'l, 'p> Body<'l, 'p> {
     }
 
     /// Return `value`, whose reference passes to the caller, releasing
-    /// every local.
+    /// every local, and every value an expression still holds: a `return`
+    /// or `?` inside an argument abandons the arguments before it.
     fn leave_function(&mut self, value: Temp) -> Result<(), Diagnostic> {
         self.owned.remove(&value);
+        let pending: Vec<(Temp, Type)> = self
+            .owned
+            .iter()
+            .rev()
+            .map(|(&temp, ty)| (temp, ty.clone()))
+            .collect();
+        for (temp, ty) in pending {
+            self.release(temp, &ty)?;
+        }
         self.release_slots(0)?;
         self.release_held(None)?;
         match self.receiver.clone() {
@@ -1223,6 +1251,9 @@ impl<'l, 'p> Body<'l, 'p> {
                     dst: result,
                     src: then_value,
                 });
+                // Not held on the other branch, which may leave the
+                // function (`?`) and releases what is held.
+                let then_owned = self.owned.remove(&then_value);
                 self.push(Inst::Jump(end));
                 self.push(Inst::Label(otherwise));
                 let else_value = match else_branch {
@@ -1234,10 +1265,8 @@ impl<'l, 'p> Body<'l, 'p> {
                     src: else_value,
                 });
                 self.push(Inst::Label(end));
-                // A branch may give a static object, which needs no
-                // release; releasing one is harmless, so the result is
-                // released if either branch's would be.
-                self.merge_owned(&[then_value, else_value], result);
+                let else_owned = self.owned.remove(&else_value);
+                self.merge_owned(vec![then_owned, else_owned], result);
                 Ok(result)
             }
             ExprKind::Not(operand) => {
@@ -1258,12 +1287,23 @@ impl<'l, 'p> Body<'l, 'p> {
                 for arg in args {
                     values.push(self.expr(arg)?);
                 }
-                if let Callee::Intrinsic(name) = callee {
+                let receiver = args.first().map(|arg| &arg.ty);
+                let (callee, type_args) = self.resolve(callee, type_args, receiver, span)?;
+                if let Callee::Intrinsic(name) = &callee {
                     if let Some(value) = self.data_intrinsic(name, args, &values, expr)? {
                         return Ok(value);
                     }
+                    if let Some(value) = self.eq_intrinsic(name, args, &values, span)? {
+                        return Ok(value);
+                    }
+                    if name == "todo" {
+                        let todo = self.panic_static(panics::TODO, panics::NOT_WRITTEN, span)?;
+                        self.push(Inst::Jump(todo));
+                        // Never reached: a value of no type, holding nothing.
+                        return Ok(self.constant(0));
+                    }
                 }
-                self.call(callee, type_args, values, &expr.ty, span)
+                self.call(&callee, &type_args, values, &expr.ty, span)
             }
             ExprKind::Field { base, index } => self.field(base, *index, &expr.ty),
             ExprKind::Match { scrutinee, arms } => self.match_arms(scrutinee, arms),
@@ -1273,6 +1313,11 @@ impl<'l, 'p> Body<'l, 'p> {
                 receiver,
                 args,
             } => self.mutating_call(callee, type_args, receiver, args, &expr.ty, span),
+            ExprKind::Try {
+                operand,
+                convert,
+                type_args,
+            } => self.try_expr(operand, convert.as_ref(), type_args, &expr.ty, span),
             other => Err(self.refuse(span, &describe(other))),
         }
     }
@@ -1289,17 +1334,14 @@ impl<'l, 'p> Body<'l, 'p> {
         value
     }
 
-    /// `result` holds whichever of `values` a branch chose: it holds a
-    /// reference of its own if any of them did. A branch may give a
-    /// static object, which needs no release; releasing one is harmless.
-    fn merge_owned(&mut self, values: &[Temp], result: Temp) {
-        let mut ty = None;
-        for value in values {
-            if let Some(owned) = self.owned.remove(value) {
-                ty = Some(owned);
-            }
-        }
-        if let Some(ty) = ty {
+    /// `result` holds whichever value a branch chose, each taken out of
+    /// [`Body::owned`] (`owned`, the type of each that held a reference)
+    /// as its branch ended, so that code in a later branch never releases
+    /// it: the result holds a reference of its own if any of them did. A
+    /// branch may give a static object, which needs no release; releasing
+    /// one is harmless.
+    fn merge_owned(&mut self, owned: Vec<Option<Type>>, result: Temp) {
+        if let Some(ty) = owned.into_iter().flatten().last() {
             self.owned.insert(result, ty);
         }
     }
@@ -1501,8 +1543,10 @@ impl<'l, 'p> Body<'l, 'p> {
                     type_args,
                 } => {
                     let shown = self.expr(value)?;
+                    let (display, type_args) =
+                        self.resolve(display, type_args, Some(&value.ty), value.span)?;
                     let text =
-                        self.call(display, type_args, vec![shown], &Type::String, value.span)?;
+                        self.call(&display, &type_args, vec![shown], &Type::String, value.span)?;
                     texts.push(text);
                 }
             }
