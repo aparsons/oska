@@ -1703,8 +1703,9 @@ pub fn stack_new(size: Int) -> Int {
 // initial stack pointer, which points at argc, then the argv pointers
 // and a null, then the envp pointers and a null. And ignore SIGPIPE, as
 // Rust's runtime does for the interpreter: a write to a pipe whose reader
-// has gone fails with EPIPE, an `IoError` the program sees ("Broken pipe
-// (os error 32)"), instead of killing the process.
+// has gone fails with EPIPE instead of killing the process. On stdout
+// that ends the program quietly with 0 (`write_stdout`); elsewhere it is
+// an `IoError` the program sees ("Broken pipe (os error 32)").
 pub fn process_init(sp: Int) {
     // struct sigaction: handler SIG_IGN (1), flags, restorer, mask.
     let action = alloc(40)
@@ -1761,6 +1762,20 @@ pub fn main_failed(message: String) {
 // (so the two stay in order on a terminal), before a line is read from
 // stdin, and at exit and panic. When stdout is a terminal each line is
 // written as it is printed.
+//
+// A write that finds stdout's reader gone (EPIPE, since SIGPIPE is
+// ignored) ends the process quietly with 0, wherever it happens, as the
+// interpreter does: the program has nobody left to tell anything.
+
+// Write the `count` bytes at `buf` to stdout: 0, or the negative `errno`
+// of the write that failed. A closed pipe does not return.
+fn write_stdout(buf: Int, count: Int) -> Int {
+    let written = write_all(1, buf, count)
+    if written == -32 {
+        let _ = rt_sys_exit_group(0)
+    }
+    written
+}
 
 fn stdout_buffer_size() -> Int {
     65536
@@ -1789,7 +1804,7 @@ pub fn flush_stdout() -> Int {
         return 0
     }
     rt_mem_store64(global(14), 0)
-    write_all(1, rt_mem_load64(global(13)), used)
+    write_stdout(rt_mem_load64(global(13)), used)
 }
 
 // Append the text object at `object` and a newline to standard output:
@@ -1807,12 +1822,12 @@ fn stdout_put_line(object: Int) -> Int {
         used = 0
         if length + 1 > stdout_buffer_size() {
             // Too long to buffer: written as it is, then the newline.
-            let body = write_all(1, data, length)
+            let body = write_stdout(data, length)
             if body < 0 {
                 return body
             }
             rt_mem_store8(buf, 10)
-            return write_all(1, buf, 1)
+            return write_stdout(buf, 1)
         }
     }
     copy_bytes(rt_mem_add(buf, used), data, length)

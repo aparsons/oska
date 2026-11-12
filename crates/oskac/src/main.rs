@@ -3,6 +3,20 @@
 use oska_syntax::{Diagnostic, Span};
 use std::process::ExitCode;
 
+/// `print!` to stdout through [`write_stdout`].
+macro_rules! out {
+    ($($arg:tt)*) => {
+        $crate::write_stdout(&format!($($arg)*))
+    };
+}
+
+/// `println!` to stdout through [`write_stdout`].
+macro_rules! outln {
+    ($($arg:tt)*) => {
+        $crate::write_stdout(&format!("{}\n", format_args!($($arg)*)))
+    };
+}
+
 mod build;
 mod explain;
 mod native;
@@ -109,17 +123,17 @@ fn main() -> ExitCode {
     match positional.as_slice() {
         ["--version" | "-V"] => {
             if flags.json {
-                println!(
+                outln!(
                     "{{\"name\":\"oskac\",\"version\":\"{}\"}}",
                     env!("CARGO_PKG_VERSION")
                 );
             } else {
-                println!("oskac {}", env!("CARGO_PKG_VERSION"));
+                outln!("oskac {}", env!("CARGO_PKG_VERSION"));
             }
             ExitCode::SUCCESS
         }
         ["--help" | "-h"] => {
-            print!("{USAGE}");
+            out!("{USAGE}");
             ExitCode::SUCCESS
         }
         ["lex", path] => lex_file(path, flags),
@@ -145,6 +159,22 @@ fn main() -> ExitCode {
     }
 }
 
+/// Write `text` to stdout. A reader that has gone, as in `oskac check
+/// --format=json | head -1`, ends `oskac` quietly with 0, as it ends a
+/// program `oskac run` runs; any other failure panics, as `print!` does.
+pub(crate) fn write_stdout(text: &str) {
+    use std::io::Write;
+    let mut stdout = std::io::stdout().lock();
+    match stdout
+        .write_all(text.as_bytes())
+        .and_then(|()| stdout.flush())
+    {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => std::process::exit(0),
+        Err(err) => panic!("failed printing to stdout: {err}"),
+    }
+}
+
 fn read_source(path: &str) -> Option<String> {
     match std::fs::read_to_string(path) {
         Ok(src) => Some(src),
@@ -164,15 +194,15 @@ fn parse_file(path: &str, Flags { json, .. }: Flags) -> ExitCode {
     };
     match oska_syntax::parse_module(&src) {
         Ok(module) if json => {
-            print!("{}", oska_syntax::module_to_json(&module, path));
+            out!("{}", oska_syntax::module_to_json(&module, path));
             ExitCode::SUCCESS
         }
         Ok(module) => {
-            print!("{}", oska_syntax::module_to_tree(&module));
+            out!("{}", oska_syntax::module_to_tree(&module));
             ExitCode::SUCCESS
         }
         Err(err) if json => {
-            println!("{}", err.to_json());
+            outln!("{}", err.to_json());
             ExitCode::FAILURE
         }
         Err(err) => {
@@ -298,10 +328,10 @@ fn check_file(path: &str, Flags { json, release, .. }: Flags) -> ExitCode {
 /// `path` names the unlocated entries' file in the human report.
 fn print_report(report: &oska_check::CheckReport, json: bool, path: &str) -> ExitCode {
     if json {
-        print!("{}", report.to_json());
+        out!("{}", report.to_json());
     } else {
         print_diagnostics(&report.diagnostics);
-        print!("{}", report.authority_to_human(path));
+        out!("{}", report.authority_to_human(path));
     }
     if report.diagnostics.is_empty() {
         ExitCode::SUCCESS
@@ -434,11 +464,11 @@ fn finish_test(mut report: oska_run::TestReport, json: bool, places: &Places) ->
         .map(|d| places.locate(d))
         .collect();
     if json {
-        println!("{}", report.to_json());
+        outln!("{}", report.to_json());
     } else if !report.diagnostics.is_empty() {
         print_diagnostics(&report.diagnostics);
     } else {
-        print!("{}", report.to_human(""));
+        out!("{}", report.to_human(""));
     }
     ExitCode::from(u8::try_from(report.exit_code()).unwrap_or(u8::MAX))
 }
@@ -606,15 +636,15 @@ fn explain_code(code: &str, Flags { json, .. }: Flags) -> ExitCode {
     let entries = explain::catalog();
     if let Some(entry) = explain::find(&entries, code) {
         if json {
-            println!("{}", explain::to_json(entry));
+            outln!("{}", explain::to_json(entry));
         } else {
-            print!("{}", explain::to_human(entry));
+            out!("{}", explain::to_human(entry));
         }
         return ExitCode::SUCCESS;
     }
     let suggestion = explain::closest(&entries, code);
     if json {
-        println!("{}", explain::unknown_to_json(code, suggestion));
+        outln!("{}", explain::unknown_to_json(code, suggestion));
     } else {
         eprintln!("{}", explain::unknown_to_human(code, suggestion));
     }
@@ -628,15 +658,17 @@ fn lex_file(path: &str, Flags { json, .. }: Flags) -> ExitCode {
     match oska_syntax::lex(&src) {
         Ok(tokens) => {
             for token in tokens {
-                println!(
+                outln!(
                     "{:>5}..{:<5} {:?}",
-                    token.span.start, token.span.end, token.kind
+                    token.span.start,
+                    token.span.end,
+                    token.kind
                 );
             }
             ExitCode::SUCCESS
         }
         Err(err) if json => {
-            println!("{}", err.to_json());
+            outln!("{}", err.to_json());
             ExitCode::FAILURE
         }
         Err(err) => {

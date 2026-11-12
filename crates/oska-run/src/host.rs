@@ -299,8 +299,15 @@ impl RealHost {
 }
 
 impl Host for RealHost {
+    /// A closed pipe ends the process quietly with 0, as `head` expects
+    /// of what it reads, and as the native runtime does: the program
+    /// writes nothing more and reports nothing. Any other error is the
+    /// program's to handle.
     fn write_stdout(&mut self, text: &str) -> io::Result<()> {
-        io::stdout().write_all(text.as_bytes())
+        match io::stdout().write_all(text.as_bytes()) {
+            Err(err) if err.kind() == io::ErrorKind::BrokenPipe => std::process::exit(0),
+            result => result,
+        }
     }
 
     fn write_stderr(&mut self, text: &str) -> io::Result<()> {

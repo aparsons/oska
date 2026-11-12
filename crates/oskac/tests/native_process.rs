@@ -822,30 +822,123 @@ fn closed_early(mut command: Command) -> (String, String, Option<i32>) {
     (first, stderr, status.code())
 }
 
-#[test]
-fn a_write_to_a_closed_pipe_is_an_io_error_not_a_signal() {
-    // As `oskac run pipe.osk | head -1`: the interpreter ignores SIGPIPE
-    // (Rust does), so the write fails with EPIPE, `?` returns the
-    // `IoError` from `main`, and it exits 1 with the message.
-    let case = Case::file(
-        "process_sigpipe",
-        "fn main(io: Stdout) -> Result<(), IoError> {\n    var i = 0\n    \
-         while i < 1000000 {\n        io.println(\"line {i}\")?\n        \
-         i = i + 1\n    }\n    Ok(())\n}\n",
-    );
-    let (exe, dir) = build_native(&case);
+/// The interpreter under `oskac run --interpret`, `oskac run` natively
+/// and the executable `oskac build` made, each with its label.
+fn three_ways(case: &Case) -> Vec<(Command, &'static str)> {
+    let (exe, dir) = build_native(case);
     let mut interpreter = Command::new(env!("CARGO_BIN_EXE_oskac"));
     interpreter
         .current_dir(&dir)
         .args(["run", "--interpret", case.target()]);
     let mut native = Command::new(env!("CARGO_BIN_EXE_oskac"));
     native.current_dir(&dir).args(["run", case.target()]);
-    let expected = (
-        "line 0\n".to_string(),
-        "Broken pipe (os error 32)\n".to_string(),
-        Some(1),
+    vec![
+        (interpreter, "the interpreter"),
+        (native, "`oskac run` natively"),
+        (Command::new(&exe), "the executable"),
+    ]
+}
+
+#[test]
+fn a_closed_stdout_pipe_ends_the_program_quietly_with_0() {
+    // As `oskac run pipe.osk | head -1`: the reader has gone, so the
+    // program ends at the write that finds out, with 0 and no message.
+    // It ignores the write's result, so the stderr line after the loop
+    // would show if it went on.
+    let case = Case::file(
+        "process_closed_stdout",
+        "fn main(io: Stdout, err: Stderr) {\n    var i = 0\n    \
+         while i < 1000000 {\n        let _ = io.println(\"line {i}\")\n        \
+         i = i + 1\n    }\n    let _ = err.println(\"went on\")\n}\n",
     );
-    assert_eq!(closed_early(interpreter), expected, "the interpreter");
-    assert_eq!(closed_early(native), expected, "`oskac run` natively");
-    assert_eq!(closed_early(Command::new(&exe)), expected, "the executable");
+    let expected = ("line 0\n".to_string(), String::new(), Some(0));
+    for (command, label) in three_ways(&case) {
+        assert_eq!(closed_early(command), expected, "{label}");
+    }
+}
+
+#[test]
+fn a_closed_stdout_found_by_a_later_flush_is_quiet_too() {
+    // The reader goes before the program prints. The interpreter finds
+    // out at `println`; the native program buffers the line and finds out
+    // when it flushes, before the failed `main`'s message goes to stderr.
+    // Either way the program ends there, with 0 and no message.
+    let case = Case::file(
+        "process_closed_stdout_flush",
+        "fn main(io: Stdout, input: Stdin) -> Result<(), String> {\n    \
+         let _ = input.read_line()\n    let _ = io.println(\"a\")\n    \
+         Err(\"failed\")\n}\n",
+    );
+    for (mut command, label) in three_ways(&case) {
+        use std::io::{Read, Write};
+        use std::process::Stdio;
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the program should start");
+        drop(child.stdout.take());
+        let mut stdin = child.stdin.take().expect("stdin");
+        stdin.write_all(b"go\n").expect("should write stdin");
+        drop(stdin);
+        let mut stderr = String::new();
+        child
+            .stderr
+            .take()
+            .expect("stderr")
+            .read_to_string(&mut stderr)
+            .expect("should read stderr");
+        let status = child.wait().expect("the program should end");
+        assert_eq!((stderr.as_str(), status.code()), ("", Some(0)), "{label}");
+    }
+}
+
+#[test]
+fn a_full_stdout_is_still_an_io_error() {
+    // Only a closed pipe is quiet: any other failure to write stdout,
+    // here ENOSPC from /dev/full, is the program's `IoError`.
+    let case = Case::file(
+        "process_full_stdout",
+        "fn main(io: Stdout) -> Result<(), IoError> {\n    var i = 0\n    \
+         while i < 1000000 {\n        io.println(\"line {i}\")?\n        \
+         i = i + 1\n    }\n    Ok(())\n}\n",
+    );
+    for (mut command, label) in three_ways(&case) {
+        let full = std::fs::File::create("/dev/full").expect("/dev/full should open");
+        let output = command
+            .stdout(full)
+            .output()
+            .expect("the program should run");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            "No space left on device (os error 28)\n",
+            "{label}"
+        );
+        assert_eq!(output.status.code(), Some(1), "{label}");
+    }
+}
+
+#[test]
+fn a_closed_stderr_pipe_is_still_an_io_error() {
+    // A closed stderr is not quiet: the write fails, `?` returns the
+    // `IoError` from `main`, and the program exits 1, though its message
+    // has nowhere to go.
+    let case = Case::file(
+        "process_closed_stderr",
+        "fn main(err: Stderr) -> Result<(), IoError> {\n    var i = 0\n    \
+         while i < 1000000 {\n        err.println(\"line {i}\")?\n        \
+         i = i + 1\n    }\n    Ok(())\n}\n",
+    );
+    for (mut command, label) in three_ways(&case) {
+        use std::process::Stdio;
+        let mut child = command
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the program should start");
+        drop(child.stderr.take());
+        let status = child.wait().expect("the program should end");
+        assert_eq!(status.code(), Some(1), "{label}");
+    }
 }

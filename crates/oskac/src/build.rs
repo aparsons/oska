@@ -69,7 +69,7 @@ fn compile(program: &Program, places: &Places, output: &str, json: bool) -> Exit
         return refuse(&[unwritable(output, &err)], json, ExitCode::FAILURE);
     }
     if json {
-        println!(
+        outln!(
             "{{\"output\":\"{}\",\"diagnostics\":[]}}",
             json_escape(output)
         );
@@ -81,7 +81,7 @@ fn compile(program: &Program, places: &Places, output: &str, json: bool) -> Exit
 pub fn refuse(diagnostics: &[Diagnostic], json: bool, code: ExitCode) -> ExitCode {
     if json {
         let entries: Vec<String> = diagnostics.iter().map(Diagnostic::to_json).collect();
-        println!(
+        outln!(
             "{{\"output\":null,\"diagnostics\":[{}]}}",
             entries.join(",")
         );

@@ -27,7 +27,9 @@
 //!
 //! # Exit codes
 //!
-//! - `0`: `main` returned `Ok` or `()`.
+//! - `0`: `main` returned `Ok` or `()`. On [`RealHost`], a write to a
+//!   stdout whose reader has gone also ends the process with 0, there and
+//!   then.
 //! - `1`: the checker refused the program, or `main` returned `Err`.
 //! - `2`: the program uses something the interpreter cannot run yet, so
 //!   it was refused before it started (`E0370`, `E0371`, `E0380`).
