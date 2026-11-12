@@ -377,3 +377,57 @@ fn the_same_program_builds_to_the_same_bytes_wherever_it_is_built_from() {
     let b = std::fs::read(dir.join("b/c/out")).expect("the second build");
     assert!(a == b, "two builds of one program differ");
 }
+
+/// Every `PT_LOAD` segment of `elf`: (file offset, vaddr, file size,
+/// memory size, flags).
+fn loads(elf: &[u8]) -> Vec<(u64, u64, u64, u64, u64)> {
+    let phoff = field(elf, 32, 8) as usize;
+    let count = field(elf, 56, 2) as usize;
+    (0..count)
+        .map(|i| phoff + 56 * i)
+        .filter(|&h| field(elf, h, 4) == 1)
+        .map(|h| {
+            (
+                field(elf, h + 8, 8),
+                field(elf, h + 16, 8),
+                field(elf, h + 32, 8),
+                field(elf, h + 40, 8),
+                field(elf, h + 4, 4),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn no_page_of_the_executable_carries_two_segments_permissions() {
+    // The kernel maps whole pages of the FILE: a segment whose file offset
+    // shares a page with another segment's bytes maps those bytes with its
+    // own permissions (the ELF header and text literals executable, code
+    // writable). So every segment starts on a 64 KiB boundary (the largest
+    // aarch64 page) both in the file and in memory.
+    const PAGE: u64 = 0x1_0000;
+    let dir = workspace("pages", &[("hello.osk", HELLO)]);
+    let status = Command::new(env!("CARGO_BIN_EXE_oskac"))
+        .args(["build", "hello.osk", "-o", "hello"])
+        .current_dir(&dir)
+        .status()
+        .expect("oskac should run");
+    assert!(status.success());
+    let elf = std::fs::read(dir.join("hello")).expect("the executable should exist");
+    let segments = loads(&elf);
+    assert_eq!(segments.len(), 3);
+    for &(offset, vaddr, file_size, memory_size, flags) in &segments {
+        assert_eq!(offset % PAGE, 0, "file offset {offset:#x} (flags {flags})");
+        assert_eq!(vaddr % PAGE, 0, "vaddr {vaddr:#x} (flags {flags})");
+        assert!(file_size <= memory_size);
+        assert!(offset + file_size <= elf.len() as u64);
+    }
+    let pages = |start: u64, size: u64| start / PAGE..(start + size).div_ceil(PAGE);
+    for pair in segments.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let (fa, fb) = (pages(a.0, a.2), pages(b.0, b.2));
+        assert!(fa.end <= fb.start, "file pages overlap: {fa:?} {fb:?}");
+        let (ma, mb) = (pages(a.1, a.3), pages(b.1, b.3));
+        assert!(ma.end <= mb.start, "memory pages overlap: {ma:?} {mb:?}");
+    }
+}

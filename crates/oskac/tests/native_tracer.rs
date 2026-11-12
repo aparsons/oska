@@ -79,3 +79,84 @@ fn a_package_builds_and_runs_the_same() {
     ));
     assert_eq!(outcome.stdout, "hello from a module\n");
 }
+
+/// A little-endian field of `bytes`.
+fn field(bytes: &[u8], at: usize, size: usize) -> u64 {
+    bytes[at..at + size]
+        .iter()
+        .rev()
+        .fold(0, |acc, &b| acc << 8 | u64::from(b))
+}
+
+#[test]
+fn the_kernel_maps_each_segment_with_only_its_own_permissions() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    // A program that waits on stdin, so its mappings can be read while it
+    // runs.
+    let src = "fn main(io: Stdout, input: Stdin) -> Result<(), IoError> {\n    \
+               let _ = input.read_line()?\n    io.println(\"done\")\n}\n";
+    let (exe, dir) = differential::build_native(&Case::file("maps", src));
+    let elf = std::fs::read(&exe).expect("the executable");
+    // (file offset, file size, permissions) per PT_LOAD.
+    let phoff = field(&elf, 32, 8) as usize;
+    let segments: Vec<(u64, u64, &str)> = (0..field(&elf, 56, 2) as usize)
+        .map(|i| phoff + 56 * i)
+        .filter(|&h| field(&elf, h, 4) == 1)
+        .map(|h| {
+            let flags = match field(&elf, h + 4, 4) {
+                4 => "r--",
+                5 => "r-x",
+                6 => "rw-",
+                other => panic!("unexpected segment flags {other}"),
+            };
+            (field(&elf, h + 8, 8), field(&elf, h + 32, 8), flags)
+        })
+        .collect();
+    let mut child = Command::new(&exe)
+        .current_dir(&dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("the program should start");
+    // Wait until the kernel has loaded it (its maps name the executable).
+    let path = std::fs::canonicalize(&exe).expect("a canonical path");
+    let path = path.to_str().expect("a UTF-8 path");
+    let maps_file = format!("/proc/{}/maps", child.id());
+    let mut maps = String::new();
+    for _ in 0..200 {
+        maps = std::fs::read_to_string(&maps_file).unwrap_or_default();
+        if maps.contains(path) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let mut seen = 0;
+    for line in maps.lines().filter(|l| l.ends_with(path)) {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let (range, perms, offset) = (parts[0], &parts[1][..3], parts[2]);
+        let (start, end) = range.split_once('-').expect("a range");
+        let length = u64::from_str_radix(end, 16).expect("hex")
+            - u64::from_str_radix(start, 16).expect("hex");
+        let offset = u64::from_str_radix(offset, 16).expect("hex");
+        // The file bytes this mapping shows lie within one segment (up to
+        // the page that ends it), and carry that segment's permissions.
+        let owner = segments.iter().find(|(at, size, _)| {
+            *at <= offset && offset + length <= (at + size).next_multiple_of(0x1_0000)
+        });
+        match owner {
+            Some((_, _, flags)) => assert_eq!(perms, *flags, "mapping `{line}`"),
+            None => panic!("mapping `{line}` spans segments {segments:x?}"),
+        }
+        seen += 1;
+    }
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"go\n")
+        .expect("should write");
+    let output = child.wait_with_output().expect("the program should end");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "done\n");
+    assert!(seen >= 2, "the executable's mappings:\n{maps}");
+}

@@ -7,10 +7,14 @@
 //! - Three `PT_LOAD` segments: the headers and read-only data (R), the
 //!   code (R+X), and the writable data (RW); and a `PT_GNU_STACK` that
 //!   makes the stack non-executable.
-//! - Segments lie back to back in the file. In memory each starts on a
-//!   new 64 KiB boundary (the largest aarch64 page size), at the same
-//!   offset within it as in the file, so that no page has two
-//!   segments' permissions whatever the kernel's page size.
+//! - Each segment starts on a new 64 KiB boundary (the largest aarch64
+//!   page size) both in the file and in memory. The kernel maps whole
+//!   pages of the file, so a segment sharing a file page with its
+//!   neighbour would map the neighbour's bytes with its own permissions
+//!   (the headers and text literals executable, code writable): with
+//!   every boundary on a 64 KiB one, no page has two segments'
+//!   permissions whatever the kernel's page size. The padding costs up
+//!   to 128 KiB of zeros in the file.
 //!
 //! Nothing in the file depends on the host, so every host writes the same
 //! bytes for the same program.
@@ -114,11 +118,11 @@ pub fn write(text: &Text, rodata: &[u8], data_size: u32) -> Vec<u8> {
     file
 }
 
-/// The segment of `size` bytes that follows `previous`: 16-byte aligned
-/// in the file, and on a page of its own in memory.
+/// The segment of `size` bytes that follows `previous`, on pages of its
+/// own in the file and in memory.
 fn after(previous: &Segment, size: u64, flags: u32) -> Segment {
-    let offset = (previous.offset + previous.size).next_multiple_of(16);
-    let vaddr = (previous.vaddr + previous.size).next_multiple_of(PAGE) + offset % PAGE;
+    let offset = (previous.offset + previous.size).next_multiple_of(PAGE);
+    let vaddr = (previous.vaddr + previous.size).next_multiple_of(PAGE);
     Segment {
         offset,
         vaddr,
