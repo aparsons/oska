@@ -39,8 +39,9 @@ use oska_run::{FakeHost, TestOptions, TestStatus};
 /// module with a private name (none has one yet), `P0005` is a second
 /// line of defence behind the checker (`E0292`), `E0411` is a symlink,
 /// which a documentation example cannot write, and `E0391` is an output
-/// path, which is no part of a program.
-const UNREACHABLE: [&str; 5] = ["E0170", "E0360", "E0391", "E0411", "P0005"];
+/// path, which is no part of a program, and `E0392` a fault in the
+/// native backend, which no program is meant to reach.
+const UNREACHABLE: [&str; 6] = ["E0170", "E0360", "E0391", "E0392", "E0411", "P0005"];
 
 /// How the meaning of a code with no example ends, after the reason why.
 /// `oskac explain` and the code's page both show the meaning.

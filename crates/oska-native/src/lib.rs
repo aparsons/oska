@@ -40,10 +40,14 @@ pub mod codes {
     pub const UNSUPPORTED: &str = "E0390";
     /// The executable could not be written.
     pub const UNWRITABLE_OUTPUT: &str = "E0391";
+    /// A native test process ended in a way no test can make it end: a
+    /// signal killed it, or it exited with no report of its own. A fault
+    /// in the native backend, never in the test.
+    pub const TEST_PROCESS_FAULT: &str = "E0392";
 
     /// The backend's own codes, in the order `docs/runtime.md` lists
     /// them. `E0371` is the interpreter's, shared.
-    pub const ALL: [&str; 2] = [UNSUPPORTED, UNWRITABLE_OUTPUT];
+    pub const ALL: [&str; 3] = [UNSUPPORTED, UNWRITABLE_OUTPUT, TEST_PROCESS_FAULT];
 
     /// The `P`-codes native code panics with: the interpreter's.
     pub const PANICS: [&str; 16] = [

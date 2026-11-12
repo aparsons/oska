@@ -23,6 +23,7 @@ pub fn rt_sys_getdents64(fd: Int, buf: Int, count: Int) -> Int
 pub fn rt_sys_fstat(fd: Int, buf: Int) -> Int
 pub fn rt_sys_ftruncate(fd: Int, length: Int) -> Int
 pub fn rt_sys_readlinkat(dirfd: Int, path: Int, buf: Int, size: Int) -> Int
+pub fn rt_sys_getcwd(buf: Int, size: Int) -> Int
 pub fn rt_sys_fcntl(fd: Int, command: Int, arg: Int) -> Int
 pub fn rt_sys_mmap(addr: Int, length: Int, prot: Int, flags: Int, fd: Int, offset: Int) -> Int
 pub fn rt_sys_munmap(addr: Int, length: Int) -> Int
@@ -2507,21 +2508,238 @@ fn open_following(path: String) -> Result<Int, IoError> {
     Ok(fd)
 }
 
-// The canonical path of the directory open as `fd`, which the trusted
-// `path` named, as Rust's `fs::canonicalize` gives it: what the kernel
-// says `/proc/self/fd/N` links to, or `path` itself if it cannot say.
-fn canonical(fd: Int, path: String) -> String {
-    let link = c_string("/proc/self/fd/{fd}")
+// The canonical path of the trusted `path` as the interpreter names a root
+// by it: Rust's `fs::canonicalize`, which is glibc's `realpath`
+// (`real_path`), shown as Rust's `Path::display` shows it, with each
+// ill-formed UTF-8 sequence replaced by U+FFFD (`utf8_lossy`).
+fn canonical(path: String) -> Result<String, IoError> {
+    match real_path(path) {
+        Ok(raw) => Ok(utf8_lossy(raw))
+        Err(errno) => Err(io_error(errno))
+    }
+}
+
+// The root directory open as `fd`, which the trusted `path` named, named by
+// its canonical path; or, when that cannot be found, the error, with `fd`
+// closed.
+fn named_root(fd: Int, path: String) -> Result<Root, IoError> {
+    match canonical(path) {
+        Ok(shown) => Ok(directory_root(fd, shown))
+        Err(e) => {
+            close(fd)
+            Err(e)
+        }
+    }
+}
+
+// The bytes `from..to` of `text`, as a text that need not be UTF-8.
+fn bytes_of(text: String, from: Int, to: Int) -> String {
+    text_from(rt_mem_add(text_data(rt_mem_text(text)), from), to - from)
+}
+
+// The byte at `at` of `text`.
+fn byte_at(text: String, at: Int) -> Int {
+    rt_mem_load8(rt_mem_add(text_data(rt_mem_text(text)), at))
+}
+
+// The working directory, from the kernel, or an errno.
+fn working_directory() -> Result<String, Int> {
     let buffer = alloc(4104)
     let data = rt_mem_add(buffer, 8)
-    let length = rt_sys_readlinkat(at_cwd(), text_data(link), data, 4096)
-    free(link)
-    var shown = path
-    if length > 0 && length < 4096 && rt_mem_load8(data) == 47 && utf8_valid(data, length) {
-        shown = text_from(data, length)
+    let length = rt_sys_getcwd(data, 4096)
+    if length < 0 {
+        free(buffer)
+        return Err(0 - length)
     }
+    // The kernel counts the terminating NUL. A path that does not start
+    // with `/` names a directory outside this process's root: glibc's
+    // `getcwd` fails with `ENOENT` for it.
+    if length < 2 || rt_mem_load8(data) != 47 {
+        free(buffer)
+        return Err(2)
+    }
+    let cwd = text_from(data, length - 1)
     free(buffer)
-    shown
+    Ok(cwd)
+}
+
+// The target of the symlink at the absolute path `path`, or an errno:
+// `EINVAL` for anything that is not a symlink.
+fn link_target(path: String) -> Result<String, Int> {
+    let name = c_string(path)
+    let buffer = alloc(4104)
+    let data = rt_mem_add(buffer, 8)
+    let length = rt_sys_readlinkat(at_cwd(), text_data(name), data, 4096)
+    free(name)
+    if length < 0 {
+        free(buffer)
+        return Err(0 - length)
+    }
+    let target = text_from(data, length)
+    free(buffer)
+    Ok(target)
+}
+
+// The trusted `path` made absolute, with every symlink on the way replaced
+// by its target and `.` and `..` resolved, as glibc's `realpath` does it:
+// component by component from the working directory (or `/`), each
+// appended and read as a link; a link's target is spliced in front of what
+// is left (from `/` again when it is absolute), at most 40 times
+// (`ELOOP`); `..` drops the last component. The bytes need not be UTF-8.
+// Fails with an errno, as `realpath` does, except that it does not check
+// that a name followed by `/..` is a directory: every caller has just
+// opened the path as one.
+fn real_path(path: String) -> Result<String, Int> {
+    if path == "" {
+        return Err(2)
+    }
+    var dest = "/"
+    if byte_at(path, 0) != 47 {
+        dest = working_directory()?
+    }
+    var rest = path
+    var at = 0
+    var links = 0
+    while true {
+        let length = text_length(rt_mem_text(rest))
+        while at < length && byte_at(rest, at) == 47 {
+            at = at + 1
+        }
+        if at >= length {
+            break
+        }
+        var end = at
+        while end < length && byte_at(rest, end) != 47 {
+            end = end + 1
+        }
+        let name = bytes_of(rest, at, end)
+        if name == ".." {
+            dest = parent_path(dest)
+        } else if name != "." {
+            var candidate = "{dest}/{name}"
+            if dest == "/" {
+                candidate = "/{name}"
+            }
+            match link_target(candidate) {
+                Ok(target) => {
+                    links = links + 1
+                    if links > 40 {
+                        return Err(40)
+                    }
+                    let left = bytes_of(rest, end, length)
+                    rest = "{target}{left}"
+                    end = 0
+                    if byte_at(target, 0) == 47 {
+                        dest = "/"
+                    }
+                }
+                Err(errno) => {
+                    if errno != 22 {
+                        return Err(errno)
+                    }
+                    dest = candidate
+                }
+            }
+        }
+        at = end
+    }
+    Ok(dest)
+}
+
+// The absolute `path`, a canonical one, without its last component: `/`
+// stays `/`.
+fn parent_path(path: String) -> String {
+    var last = text_length(rt_mem_text(path)) - 1
+    while last > 0 && byte_at(path, last) != 47 {
+        last = last - 1
+    }
+    if last == 0 {
+        return "/"
+    }
+    bytes_of(path, 0, last)
+}
+
+// `text`, whose bytes need not be UTF-8, as Rust's `String::from_utf8_lossy`
+// makes it: each maximal ill-formed subpart (a lead byte and as many of its
+// continuation bytes as are valid so far, or one stray byte) replaced by
+// U+FFFD.
+fn utf8_lossy(text: String) -> String {
+    let object = rt_mem_text(text)
+    let data = text_data(object)
+    let length = text_length(object)
+    if utf8_valid(data, length) {
+        return text
+    }
+    // At most three bytes out for each byte in.
+    let buffer = alloc(8 + 3 * length)
+    let out = rt_mem_add(buffer, 8)
+    var written = 0
+    var i = 0
+    while i < length {
+        let b = rt_mem_load8(rt_mem_add(data, i))
+        var take = 1
+        var valid = b < 128
+        if !valid {
+            var need = 0
+            var low = 128
+            var high = 191
+            if b >= 194 && b <= 223 {
+                need = 1
+            } else if b == 224 {
+                need = 2
+                low = 160
+            } else if b >= 225 && b <= 239 {
+                need = 2
+                if b == 237 {
+                    high = 159
+                }
+            } else if b == 240 {
+                need = 3
+                low = 144
+            } else if b >= 241 && b <= 243 {
+                need = 3
+            } else if b == 244 {
+                need = 3
+                high = 143
+            }
+            var good = need > 0
+            var k = 1
+            while good && k <= need {
+                if i + k >= length {
+                    good = false
+                } else {
+                    let next = rt_mem_load8(rt_mem_add(data, i + k))
+                    var top = 191
+                    var bottom = 128
+                    if k == 1 {
+                        bottom = low
+                        top = high
+                    }
+                    if next < bottom || next > top {
+                        good = false
+                    } else {
+                        k = k + 1
+                    }
+                }
+            }
+            take = k
+            valid = good
+        }
+        if valid {
+            copy_bytes(rt_mem_add(out, written), rt_mem_add(data, i), take)
+            written = written + take
+        } else {
+            // U+FFFD in UTF-8.
+            rt_mem_store8(rt_mem_add(out, written), 239)
+            rt_mem_store8(rt_mem_add(out, written + 1), 191)
+            rt_mem_store8(rt_mem_add(out, written + 2), 189)
+            written = written + 3
+        }
+        i = i + take
+    }
+    let result = text_from(out, written)
+    free(buffer)
+    result
 }
 
 // The directory reached by walking the first `count` of `names` beneath
@@ -2975,12 +3193,12 @@ fn open_root(dir: String) -> Result<Root, IoError> {
             if fd < 0 {
                 return Err(refusal(0 - fd, name, true))
             }
-            Ok(directory_root(fd, canonical(fd, path)))
+            named_root(fd, path)
         }
         None => {
             // `/`, or a path ending in `..`: no symlink to refuse.
             let fd = open_following(path)?
-            Ok(directory_root(fd, canonical(fd, path)))
+            named_root(fd, path)
         }
     }
 }

@@ -189,6 +189,7 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_sys_fstat", Runtime::Syscall(80)),
     ("rt_sys_ftruncate", Runtime::Syscall(46)),
     ("rt_sys_readlinkat", Runtime::Syscall(78)),
+    ("rt_sys_getcwd", Runtime::Syscall(17)),
     ("rt_sys_fcntl", Runtime::Syscall(25)),
     ("rt_sys_mmap", Runtime::Syscall(222)),
     ("rt_sys_munmap", Runtime::Syscall(215)),
