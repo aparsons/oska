@@ -13,8 +13,12 @@
 //! symlinks, in a fresh directory that the process sees as `/`
 //! (`unshare --user --map-current-user --root`, an unprivileged user
 //! namespace, so the program's paths are the fake host's and it can reach
-//! nothing else). A plain test's world is the test host in `std.rt`,
-//! which fakes what the interpreter's does.
+//! nothing else). Where user namespaces are not available, the world is
+//! the process's working directory instead, for a program that names no
+//! absolute path and no `..` and meets no symlink, and any other program
+//! given the filesystem is not compared there (a note says so). A plain
+//! test's world is the test host in `std.rt`, which fakes what the
+//! interpreter's does.
 //!
 //! What cannot be reproduced is in the one skip list,
 //! [`super::skips::SKIPS`], by test, each with its reason.
@@ -70,7 +74,11 @@ pub fn compare_program(
     let bytes = oska_native::build(program, &|d| d).unwrap_or_else(|refusal| {
         fail(src, &format!("the native backend refused it: {refusal:#?}"))
     });
-    let sandbox = Sandbox::new(before, needs_filesystem(program));
+    let mut texts: Vec<&str> = args.iter().map(String::as_str).collect();
+    texts.push(src);
+    let Some(sandbox) = Sandbox::new(before, needs_filesystem(program), &texts) else {
+        return;
+    };
     let native = sandbox.run(&bytes, &args[1..], &stdin_text(before));
     let mut stderr = outcome.stderr.clone();
     if let Some(panic) = &outcome.panic {
@@ -80,7 +88,7 @@ pub fn compare_program(
         stdout: outcome.stdout.clone(),
         stderr,
         exit_code: Some(outcome.exit_code),
-        tree: sandbox.chrooted.then(|| expected_tree(after)),
+        tree: sandbox.has_world().then(|| expected_tree(after)),
     };
     if native != interpreted {
         fail(
@@ -118,7 +126,9 @@ pub fn compare_program_tests(
         fail(src, &format!("the native backend refused it: {refusal:#?}"))
     });
     let integration = options.integration && program.tests.iter().any(|t| t.integration);
-    let sandbox = Sandbox::new(before, integration);
+    let Some(sandbox) = Sandbox::new(before, integration, &[src]) else {
+        return;
+    };
     let native: Vec<(TestStatus, Option<Diagnostic>)> = program
         .tests
         .iter()
@@ -153,7 +163,7 @@ pub fn compare_program_tests(
     }
 }
 
-/// The reason this test is in the skip list, if it is.
+/// Whether the running test is in the skip list.
 fn skipped() -> bool {
     let case = case();
     super::skips::SKIPS.iter().any(|(name, _)| *name == case)
@@ -271,17 +281,40 @@ fn expected_tree(world: &FakeWorld) -> BTreeMap<String, Entry> {
     tree
 }
 
+/// How a native process gets the fake host's filesystem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// It is not given one: it runs in an empty directory.
+    Bare,
+    /// The world is in a directory the process sees as `/`.
+    Chroot,
+    /// The world is in its working directory, which is as good as `/`
+    /// for a program that names no absolute path and no `..` and meets no
+    /// symlink: where unprivileged user namespaces are not available.
+    Plain,
+}
+
 /// A fresh directory a native process runs in, removed on drop: its root
-/// holds the fake host's world when the process gets a filesystem of its
-/// own (`chrooted`), and nothing otherwise.
+/// holds the fake host's world unless the process is given none.
 struct Sandbox {
     base: PathBuf,
     env: BTreeMap<String, String>,
-    chrooted: bool,
+    mode: Mode,
 }
 
 impl Sandbox {
-    fn new(world: &FakeWorld, chrooted: bool) -> Sandbox {
+    /// The sandbox for a process that runs `texts` (its source and
+    /// arguments) in `world`, which it reaches when `needs_world`. `None`
+    /// when this machine cannot reproduce the world faithfully: no user
+    /// namespaces, and the program names an absolute path, a `..`, or the
+    /// world holds a symlink.
+    fn new(world: &FakeWorld, needs_world: bool, texts: &[&str]) -> Option<Sandbox> {
+        let mode = match needs_world {
+            false => Mode::Bare,
+            true if chroot_works() => Mode::Chroot,
+            true if world.links.is_empty() && texts.iter().all(|t| relative_only(t)) => Mode::Plain,
+            true => return None,
+        };
         use std::sync::atomic::{AtomicUsize, Ordering};
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
@@ -293,7 +326,7 @@ impl Sandbox {
         let _ = std::fs::remove_dir_all(&base);
         let root = base.join("root");
         std::fs::create_dir_all(&root).expect("should create the sandbox");
-        if chrooted {
+        if mode != Mode::Bare {
             for dir in &world.dirs {
                 std::fs::create_dir_all(inside(&root, dir)).expect("should create a directory");
             }
@@ -312,24 +345,28 @@ impl Sandbox {
                 std::os::unix::fs::symlink(target, &link).expect("should make a symlink");
             }
         }
-        Sandbox {
+        Some(Sandbox {
             base,
             env: world.env.clone(),
-            chrooted,
-        }
+            mode,
+        })
     }
 
     fn root(&self) -> PathBuf {
         self.base.join("root")
     }
 
+    /// Whether the process has the world, so the tree afterwards counts.
+    fn has_world(&self) -> bool {
+        self.mode != Mode::Bare
+    }
+
     /// The executable's path: in the root when the process is chrooted,
     /// as it must be to start there, and beside it otherwise.
     fn exe(&self) -> PathBuf {
-        if self.chrooted {
-            self.root().join(PROGRAM)
-        } else {
-            self.base.join(PROGRAM)
+        match self.mode {
+            Mode::Chroot => self.root().join(PROGRAM),
+            Mode::Bare | Mode::Plain => self.base.join(PROGRAM),
         }
     }
 
@@ -339,8 +376,8 @@ impl Sandbox {
         if !exe.exists() {
             write_executable(&exe, bytes);
         }
-        let mut command = if self.chrooted {
-            let mut command = Command::new(unshare());
+        let mut command = if self.mode == Mode::Chroot {
+            let mut command = Command::new(unshare().expect("chroot_works found it"));
             command
                 .args(["--user", "--map-current-user", "--wd=/"])
                 .arg(format!("--root={}", self.root().display()))
@@ -353,12 +390,12 @@ impl Sandbox {
             command
         };
         command.args(args).env_clear().envs(&self.env);
-        if self.chrooted && !self.env.contains_key("PATH") {
+        if self.mode == Mode::Chroot && !self.env.contains_key("PATH") {
             // `unshare` finds the program, by its bare name, on `PATH`.
             command.env("PATH", "/");
         }
         let (stdout, stderr, exit_code) = spawn(command, stdin);
-        let tree = self.chrooted.then(|| {
+        let tree = self.has_world().then(|| {
             let mut tree = BTreeMap::new();
             read_tree(&self.root(), "", &mut tree);
             tree.remove(PROGRAM);
@@ -371,6 +408,58 @@ impl Sandbox {
             tree,
         }
     }
+}
+
+/// Whether `text` names no absolute path and no parent directory, as
+/// far as a look at its characters can tell: no `"/`, no `..` beside a
+/// quote or a slash, and, for an argument, no leading `/`.
+fn relative_only(text: &str) -> bool {
+    !(text.starts_with('/')
+        || ["\"/", "\"..", "../", "/.."]
+            .iter()
+            .any(|p| text.contains(p))
+        || text == "..")
+}
+
+/// Whether this machine can run a process in a directory of its own as
+/// `/` without privileges: `unshare` is there and unprivileged user
+/// namespaces may change root (Ubuntu 24.04's AppArmor forbids it by
+/// default). Probed once: changing root into an empty directory and
+/// failing to find the program there means it worked. Setting
+/// `OSKA_NATIVE_NO_CHROOT` makes it answer no, to try the fallback.
+fn chroot_works() -> bool {
+    use std::sync::OnceLock;
+    static WORKS: OnceLock<bool> = OnceLock::new();
+    *WORKS.get_or_init(|| {
+        let unshare = match unshare() {
+            Some(unshare) if std::env::var_os("OSKA_NATIVE_NO_CHROOT").is_none() => unshare,
+            _ => return false,
+        };
+        let empty = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+            "native-probe-{}-{}",
+            env!("CARGO_CRATE_NAME"),
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&empty);
+        let probe = Command::new(unshare)
+            .args(["--user", "--map-current-user"])
+            .arg(format!("--root={}", empty.display()))
+            .arg("/nothing-here")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        let _ = std::fs::remove_dir_all(&empty);
+        // `unshare` exits with 127 when the command is not found.
+        let works = probe.is_ok_and(|status| status.code() == Some(127));
+        if !works {
+            eprintln!(
+                "note: no unprivileged user namespaces here; native differential runs of \
+                 programs that name absolute paths are not compared"
+            );
+        }
+        works
+    })
 }
 
 impl Drop for Sandbox {
@@ -404,14 +493,13 @@ fn write_executable(path: &Path, bytes: &[u8]) {
         .expect("should make it executable");
 }
 
-/// The `unshare` program on this machine's `PATH`.
-fn unshare() -> PathBuf {
+/// The `unshare` program (util-linux) on this machine's `PATH`.
+fn unshare() -> Option<PathBuf> {
     std::env::var_os("PATH")
         .iter()
         .flat_map(std::env::split_paths)
         .map(|dir| dir.join("unshare"))
         .find(|path| path.is_file())
-        .expect("a native differential test needs `unshare` (util-linux) on PATH")
 }
 
 /// Run `command` with `stdin`, and wait for it, at most [`TIMEOUT`]: its
