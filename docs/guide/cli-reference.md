@@ -98,7 +98,7 @@ The line `fn vouch: Stdout (io)` names each capability and the parameter that su
 | `1` | The checker refused the program, or `main` returned `Err`. The runtime prints `e.to_string()` to standard error. |
 | `2` | The program uses something the interpreter cannot run yet (`E0370`, `E0371`, `E0380`). Nothing ran. |
 | `101` | The program panicked. |
-| `128 + n` | A native program was killed by signal `n`, as a shell reports it: `141` for `SIGPIPE` when the reader of its output has gone. A signal only a fault raises, such as `SIGSEGV`, is also reported as `E0392`. |
+| `128 + n` | A native program was killed by signal `n`, as a shell reports it, such as `143` for `SIGTERM`. A signal only a fault raises, such as `SIGSEGV`, is also reported as `E0392`. A closed pipe is not a signal on either backend: when the reader of a program's output has gone, the write fails with an `IoError` ("Broken pipe (os error 32)"), which `?` returns from `main` (exit `1`). |
 
 See [debugging](debugging.md) for panics and the [runtime notes](../runtime.md) for every runtime code.
 

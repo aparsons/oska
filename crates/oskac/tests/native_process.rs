@@ -794,3 +794,58 @@ fn dbg_escapes_invisible_and_format_characters_as_the_interpreter_does() {
     assert!(outcome.stderr.contains("\\u{301}"), "{outcome:#?}");
     assert_eq!(outcome.exit_code, Some(0));
 }
+
+// ---- A reader that goes away --------------------------------------------------
+
+/// Run `command` with its stdout in a pipe whose reader reads one line
+/// and closes it: that line, what it wrote to stderr, and its exit code.
+fn closed_early(mut command: Command) -> (String, String, Option<i32>) {
+    use std::io::{BufRead, BufReader, Read};
+    use std::process::Stdio;
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the program should start");
+    let mut stdout = BufReader::new(child.stdout.take().expect("stdout"));
+    let mut first = String::new();
+    stdout.read_line(&mut first).expect("should read a line");
+    drop(stdout);
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr")
+        .read_to_string(&mut stderr)
+        .expect("should read stderr");
+    let status = child.wait().expect("the program should end");
+    (first, stderr, status.code())
+}
+
+#[test]
+fn a_write_to_a_closed_pipe_is_an_io_error_not_a_signal() {
+    // As `oskac run pipe.osk | head -1`: the interpreter ignores SIGPIPE
+    // (Rust does), so the write fails with EPIPE, `?` returns the
+    // `IoError` from `main`, and it exits 1 with the message.
+    let case = Case::file(
+        "process_sigpipe",
+        "fn main(io: Stdout) -> Result<(), IoError> {\n    var i = 0\n    \
+         while i < 1000000 {\n        io.println(\"line {i}\")?\n        \
+         i = i + 1\n    }\n    Ok(())\n}\n",
+    );
+    let (exe, dir) = build_native(&case);
+    let mut interpreter = Command::new(env!("CARGO_BIN_EXE_oskac"));
+    interpreter
+        .current_dir(&dir)
+        .args(["run", "--interpret", case.target()]);
+    let mut native = Command::new(env!("CARGO_BIN_EXE_oskac"));
+    native.current_dir(&dir).args(["run", case.target()]);
+    let expected = (
+        "line 0\n".to_string(),
+        "Broken pipe (os error 32)\n".to_string(),
+        Some(1),
+    );
+    assert_eq!(closed_early(interpreter), expected, "the interpreter");
+    assert_eq!(closed_early(native), expected, "`oskac run` natively");
+    assert_eq!(closed_early(Command::new(&exe)), expected, "the executable");
+}

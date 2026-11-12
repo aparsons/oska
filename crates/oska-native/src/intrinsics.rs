@@ -196,6 +196,7 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_sys_clock_gettime", Runtime::Syscall(113)),
     ("rt_sys_ioctl", Runtime::Syscall(29)),
     ("rt_sys_getrandom", Runtime::Syscall(278)),
+    ("rt_sys_rt_sigaction", Runtime::Syscall(134)),
     ("rt_sys_exit_group", Runtime::Syscall(94)),
     ("rt_mem_load8", Runtime::Load(Width::W8)),
     ("rt_mem_load16", Runtime::Load(Width::W16)),

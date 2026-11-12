@@ -166,7 +166,7 @@ fn ended(status: std::process::ExitStatus, json: bool) -> ExitCode {
 }
 
 /// The name of the Linux signal `number`, for the ones a faulty program
-/// dies of. A program killed by any other signal (`SIGPIPE`, `SIGTERM`)
+/// dies of. A program killed by any other signal (`SIGTERM`, `SIGKILL`)
 /// was killed from outside, as any process can be.
 pub fn fault_signal(number: i32) -> Option<&'static str> {
     Some(match number {

@@ -30,6 +30,7 @@ pub fn rt_sys_munmap(addr: Int, length: Int) -> Int
 pub fn rt_sys_clock_gettime(clock: Int, tp: Int) -> Int
 pub fn rt_sys_ioctl(fd: Int, request: Int, arg: Int) -> Int
 pub fn rt_sys_getrandom(buf: Int, length: Int, flags: Int) -> Int
+pub fn rt_sys_rt_sigaction(signal: Int, action: Int, old: Int, size: Int) -> Int
 // Ends the process; does not return.
 pub fn rt_sys_exit_group(status: Int) -> Int
 
@@ -1440,8 +1441,19 @@ pub fn stack_new(size: Int) -> Int {
 
 // Remember the program's arguments and environment: `sp` is the kernel's
 // initial stack pointer, which points at argc, then the argv pointers
-// and a null, then the envp pointers and a null.
+// and a null, then the envp pointers and a null. And ignore SIGPIPE, as
+// Rust's runtime does for the interpreter: a write to a pipe whose reader
+// has gone fails with EPIPE, an `IoError` the program sees ("Broken pipe
+// (os error 32)"), instead of killing the process.
 pub fn process_init(sp: Int) {
+    // struct sigaction: handler SIG_IGN (1), flags, restorer, mask.
+    let action = alloc(40)
+    rt_mem_store64(rt_mem_add(action, 8), 1)
+    rt_mem_store64(rt_mem_add(action, 16), 0)
+    rt_mem_store64(rt_mem_add(action, 24), 0)
+    rt_mem_store64(rt_mem_add(action, 32), 0)
+    let _ = rt_sys_rt_sigaction(13, rt_mem_add(action, 8), 0, 8)
+    free(action)
     let argc = rt_mem_load64(sp)
     let argv = rt_mem_add(sp, 8)
     rt_mem_store64(global(10), argc)
@@ -2941,6 +2953,9 @@ fn read_beneath(root: Int, names: List<String>) -> Result<String, IoError> {
 // reads it: an error when it is not UTF-8.
 fn read_all(fd: Int) -> Result<String, IoError> {
     // Room for the whole file, as `fstat` sizes it, and a little more.
+    // Rust reserves it fallibly: a buffer no memory holds (a sparse file of
+    // a terabyte) is an `IoError`, "out of memory", not the end of the
+    // process.
     let buffer = alloc(136)
     var capacity = 64
     if rt_sys_fstat(fd, rt_mem_add(buffer, 8)) >= 0 {
@@ -2962,7 +2977,7 @@ fn read_all(fd: Int) -> Result<String, IoError> {
             copy_bytes(text_data(larger), text_data(object), length)
             free(object)
             object = larger
-            capacity = capacity * 2
+            capacity = rt_mem_shl(capacity, 1)
         }
         let got = rt_sys_read(fd, rt_mem_add(text_data(object), length), capacity - length)
         if got == -4 {
