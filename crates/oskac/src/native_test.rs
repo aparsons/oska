@@ -151,6 +151,11 @@ mod tests {
     /// Run the shell script `script` as a test process.
     fn run_script(name: &str, script: &str) -> Option<Diagnostic> {
         use std::os::unix::fs::PermissionsExt;
+        // One at a time: a script written while another test's process is
+        // being forked is held open in that child, and cannot be run
+        // ("Text file busy") until it has exec'd.
+        static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
         let path =
             std::env::temp_dir().join(format!("oskac-native-test-{}-{name}", std::process::id()));
         std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).expect("the script");
