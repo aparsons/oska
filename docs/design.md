@@ -367,12 +367,37 @@ fn withdraw(acct: Account, amount: Int) -> Result<Account, Error>
 
 ## Runtime
 
-The interpreter is `oskac run file.osk -- args...`, built as the crate `oska-run`.
+A program runs on one of two backends, which must agree byte for byte:
+
+- **The native backend** (`oska-native`): `oskac build` compiles a checked program to a static aarch64 Linux executable on any host, with no assembler, linker or C library ([ADR 0011](adr/0011-oska-generates-native-code-itself.md)). Its runtime is the Oska module `std.rt`, the only place system calls are allowed ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)). On aarch64 Linux, `oskac run` and `oskac test` compile with it and run the executable.
+- **The interpreter** (`oska-run`): `oskac run` and `oskac test` on every other host, and with `--interpret` on aarch64 Linux. A program the native backend cannot compile yet (`E0390`) runs here too.
+
+The **differential suite** runs every program of the corpus (the interpreter's runtime tests, the examples, the guide's programs, the CLI fixtures and the site generator) on both and fails on any difference in stdout, stderr, exit code, panic or the files left behind. See the [CLI reference](guide/cli-reference.md#platform-support) for which host uses which.
 
 ### Pipeline
 
 - `oskac run` type-checks the program first. If the check reports any diagnostic, the program does not run, and the diagnostics are printed the same way `oskac check` prints them.
-- The checker produces a **checked program**, and the interpreter executes it ([ADR 0007](adr/0007-interpreter-runs-the-checked-program.md)). The interpreter never re-resolves names or dispatch. The checked program also records the type of every expression and slot and the type arguments of every generic call, which the interpreter ignores and a compiled backend lays values out and monomorphizes from.
+- The checker produces a **checked program**, and the interpreter executes it ([ADR 0007](adr/0007-interpreter-runs-the-checked-program.md)). The interpreter never re-resolves names or dispatch. The checked program also records the type of every expression and slot and the type arguments of every generic call, which the interpreter ignores and the native backend lays values out and monomorphizes from. The native backend, too, reads only the checked program.
+
+### Native backend benchmark
+
+`scripts/bench-native.sh` is run by the maintainer, on a Raspberry Pi 5 (aarch64 Linux), never in CI. Each workload runs as `oskac run --interpret` and as the executable `oskac build` wrote, after both are checked to print the same. Times are the best CPU time (user plus system) of 5 runs, which other work on the Pi does not stretch as it does the wall clock; the interpreter's includes checking the program, as `oskac run` does.
+
+Recorded on 2026-11-11, `oskac` 0.2.0:
+
+| Workload | What it does | Interpreter | Native | Speedup |
+| --- | --- | ---: | ---: | ---: |
+| loop | 5M iterations of integer arithmetic | 1000 ms | 22 ms | 45x |
+| text | 200k lines built by interpolation | 233 ms | 37 ms | 6.3x |
+| bulk text | `replace` and `trim` over 520 KB, 40 times | 27 ms | 27 ms | 1.0x |
+| lists | 1M pushes, a `for` pass, 1M indexed reads | 942 ms | 15 ms | 63x |
+| recursion | `fib(30)`, about 2.7M calls | 751 ms | 9 ms | 83x |
+| site | the site generator building this site | 2215 ms | 252 ms | 8.8x |
+
+- **Program logic** (integer loops, list operations, calls) is where the native backend earns its keep: 45 to 83 times faster, beyond the 20 times milestone 2 set out to reach.
+- **Text building** is about 6 times faster: each line costs a number formatted to text and an allocation in `std.rt`, which are not yet tuned.
+- **Bulk text operations** such as `replace` and `trim` over a large text are about as fast as the interpreter's, and are expected to be: the interpreter does them in Rust, so it spends its time where native code does.
+- **The site generator** mixes all three: about 9 times faster, its text work gaining less than its logic.
 
 ### Values
 
@@ -439,10 +464,10 @@ Once escape hatches exist, the following policy applies:
 
 ## Toolchain
 
-- **Execution:** a tree-walking interpreter comes first. Oska then generates native code itself, with no external toolchain ([ADR 0011](adr/0011-oska-generates-native-code-itself.md)). The runtime is Oska code, and raw system calls are allowed only in `std.rt` ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)).
+- **Execution:** a tree-walking interpreter came first. Oska now generates native code itself for aarch64 Linux, with no external toolchain ([ADR 0011](adr/0011-oska-generates-native-code-itself.md)), and runs natively by default there. The runtime is Oska code, and raw system calls are allowed only in `std.rt` ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)). The interpreter stays: on hosts with no backend yet, with `--interpret`, and as the oracle the differential suite holds the native backend to.
 - **Milestones.** Each is its own spec and release:
   1. Multi-file packages: `pkg.` paths, `pub(pkg)`, and an `oska.toml` with no dependencies yet (#88).
-  2. The aarch64 Linux native backend and the `std.rt` runtime.
+  2. The aarch64 Linux native backend and the `std.rt` runtime (#125): `oskac build`, and native `run` and `test` on aarch64 Linux.
   3. `Bytes`, the bitwise and wrapping operations, and secret integers.
   4. The `NetConnect` runtime, the crypto primitives, and a TLS 1.3 client, all in Oska ([ADR 0012](adr/0012-tls-git-and-crypto-are-written-in-oska.md)).
   5. git fetch, minimal version selection, the lockfile, and authority approval (#12).
