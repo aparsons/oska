@@ -71,7 +71,8 @@ pub use package::{
     ModuleSource, Package, ENTRY_MODULE, MANIFEST_PATH,
 };
 pub use toolchain::{
-    declared_intrinsics as std_rt_intrinsics, is_intrinsic, RT_SOURCE as STD_RT_SOURCE,
+    debug_escapes, declared_intrinsics as std_rt_intrinsics, is_intrinsic,
+    RT_SOURCE as STD_RT_SOURCE,
 };
 
 /// The diagnostic codes this crate reports.

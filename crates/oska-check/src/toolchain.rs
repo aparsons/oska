@@ -107,3 +107,43 @@ pub fn declared_intrinsics() -> Vec<&'static str> {
         .filter_map(|span| RT_SOURCE.get(span.start..span.end))
         .collect()
 }
+
+/// Whether `dbg` writes the character `c` as `\u{hex}`: a control character
+/// (the four with escapes of their own, `\0`, `\t`, `\n` and `\r`, are
+/// written so before this is asked), or one listed in `std.rt`'s
+/// `escaped_table`. The native backend asks the same table, so `dbg` output
+/// is the same on both backends and does not change with the Rust that built
+/// the toolchain.
+pub fn debug_escapes(c: char) -> bool {
+    let cp = u32::from(c);
+    if cp < 32 {
+        return true;
+    }
+    if cp < 127 {
+        return false;
+    }
+    let ranges = escaped_ranges();
+    let after = ranges.partition_point(|&(first, _)| first <= cp);
+    after > 0 && cp <= ranges[after - 1].1
+}
+
+/// `escaped_table`'s records as (first, last) pairs, read once.
+fn escaped_ranges() -> &'static [(u32, u32)] {
+    static RANGES: std::sync::OnceLock<Vec<(u32, u32)>> = std::sync::OnceLock::new();
+    RANGES.get_or_init(|| {
+        let head = "fn escaped_table() -> String {\n    \"";
+        let table = RT_SOURCE
+            .split_once(head)
+            .and_then(|(_, rest)| rest.split_once('"'))
+            .map_or("", |(table, _)| table);
+        let hex = |digits: &str| u32::from_str_radix(digits, 16).ok();
+        table
+            .as_bytes()
+            .chunks(12)
+            .filter_map(|record| {
+                let record = std::str::from_utf8(record).ok()?;
+                Some((hex(record.get(..6)?)?, hex(record.get(6..)?)?))
+            })
+            .collect()
+    })
+}

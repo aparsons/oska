@@ -756,7 +756,10 @@ fn an_argument_that_is_not_utf8_ends_the_program_with_101_on_both_backends() {
 // ---- dbg escaping, for every character --------------------------------------------
 
 /// The table in `std.rt` lists exactly the characters Rust's `{:?}`
-/// writes as `\u{..}`.
+/// writes as `\u{..}`, for the Rust pinned in `rust-toolchain.toml`. Both
+/// backends' `dbg` read the table, so this is the one place a Rust upgrade
+/// (and its Unicode update) shows: the failure prints the table to paste
+/// into `escaped_table`.
 #[test]
 fn the_dbg_escape_table_is_rusts_for_every_character() {
     let source = oska_check::STD_RT_SOURCE;
@@ -769,13 +772,35 @@ fn the_dbg_escape_table_is_rusts_for_every_character() {
         .map(|r| (hex(r * 12), hex(r * 12 + 6)))
         .collect();
     assert!(ranges.windows(2).all(|w| w[0].1 < w[1].0), "sorted, apart");
+    // Rust's table, in the same form.
+    let mut rusts = String::new();
+    let mut open: Option<(u32, u32)> = None;
+    for cp in 0..=0x10FFFFu32 {
+        let escaped = char::from_u32(cp)
+            .is_some_and(|c| format!("{:?}", c.to_string())[1..].starts_with("\\u{"));
+        open = match (escaped, open) {
+            (true, None) => Some((cp, cp)),
+            (true, Some((first, _))) => Some((first, cp)),
+            (false, Some((first, last))) => {
+                rusts.push_str(&format!("{first:06x}{last:06x}"));
+                None
+            }
+            (false, None) => None,
+        };
+    }
+    if let Some((first, last)) = open {
+        rusts.push_str(&format!("{first:06x}{last:06x}"));
+    }
+    assert!(
+        table == rusts,
+        "std.rt's escaped_table is not this Rust's `{{:?}}`; replace it with:\n{rusts}"
+    );
     for cp in 0..=0x10FFFFu32 {
         let Some(c) = char::from_u32(cp) else {
             continue;
         };
-        let escaped = format!("{:?}", c.to_string())[1..].starts_with("\\u{");
         let listed = ranges.iter().any(|&(a, b)| a <= cp && cp <= b);
-        assert_eq!(listed, escaped, "U+{cp:X}");
+        assert_eq!(oska_check::debug_escapes(c), listed || cp < 32, "U+{cp:X}");
     }
 }
 

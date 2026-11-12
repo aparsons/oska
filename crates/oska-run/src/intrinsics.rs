@@ -189,7 +189,7 @@ pub(crate) fn debug(value: &Value, out: &mut String) {
         Value::Unit => out.push_str("()"),
         Value::Bool(b) => out.push_str(&b.to_string()),
         Value::Int(n, _) => out.push_str(&n.to_string()),
-        Value::Str(s) => out.push_str(&format!("{:?}", &**s)),
+        Value::Str(s) => debug_text(s, out),
         Value::Struct { ty, fields } if &**ty == builtins::RANGE => {
             debug(&fields[0], out);
             out.push_str("..");
@@ -223,10 +223,44 @@ pub(crate) fn debug(value: &Value, out: &mut String) {
         Value::Closure(_) => out.push_str("<closure>"),
         Value::Function(_) => out.push_str("<fn>"),
         Value::Capability(cap) => out.push_str(&format!("<{cap:?}>")),
-        Value::Args(args) => out.push_str(&format!("Args{:?}", &**args)),
+        Value::Args(args) => {
+            out.push_str("Args[");
+            for (i, arg) in args.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                debug_text(arg, out);
+            }
+            out.push(']');
+        }
         Value::Scope(_) => out.push_str("<scope>"),
         Value::Task(_) => out.push_str("<task>"),
     }
+}
+
+/// `dbg` of a text, as `std.rt`'s `debug_string` writes it: in double
+/// quotes, `"` and `\` escaped by a `\`, NUL, tab, line feed and carriage
+/// return as `\0`, `\t`, `\n` and `\r`, and every character `std.rt`'s
+/// table lists as `\u{hex}`. This is what Rust's `{:?}` writes, for the
+/// Unicode of the pinned Rust, but it reads the table rather than asking
+/// Rust, so it does not change with the Rust that built the interpreter.
+fn debug_text(text: &str, out: &mut String) {
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\0' => out.push_str("\\0"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c if oska_check::debug_escapes(c) => {
+                out.push_str(&format!("\\u{{{:x}}}", u32::from(c)));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
 }
 
 // ---- Arguments and environment -----------------------------------------
