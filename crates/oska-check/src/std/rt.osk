@@ -623,16 +623,18 @@ pub fn string_slice(text: String, start: Int, end: Int) -> String {
 
 // Panic (`P0035`): `start` and `end` are the report around the message.
 pub fn panic_slice(start: String, end: String, text: String, from: Int, to: Int) {
-    let _ = write_text(report_fd(), start)
-    let _ = write_text(report_fd(), "cannot slice characters ")
-    let _ = write_text(report_fd(), int_text(from, false))
-    let _ = write_text(report_fd(), "..")
-    let _ = write_text(report_fd(), int_text(to, false))
-    let _ = write_text(report_fd(), " of a text of ")
-    let _ = write_text(report_fd(), int_text(string_len(text), false))
-    let _ = write_text(report_fd(), " characters")
-    let _ = write_text(report_fd(), end)
-    exit(101)
+    panic_message(start, end, slice_message("", text, from, to))
+}
+
+// `head`, then the message of `panic_slice`. Each `panic_*` function that
+// a prelude function's call may end in has such a `*_message` function:
+// the code of a function value made from that prelude function gives the
+// report's message back to its caller, which names the call.
+pub fn slice_message(head: String, text: String, from: Int, to: Int) -> String {
+    let a = int_text(from, false)
+    let b = int_text(to, false)
+    let n = int_text(string_len(text), false)
+    "{head}cannot slice characters {a}..{b} of a text of {n} characters"
 }
 
 // The longest text `String.repeat` builds, in bytes: 256 MiB.
@@ -675,24 +677,23 @@ pub fn string_repeat(text: String, times: Int) -> String {
 
 // Panic (`P0036`): a negative count.
 pub fn panic_repeat_negative(start: String, end: String, times: Int) {
-    let _ = write_text(report_fd(), start)
-    let _ = write_text(report_fd(), "cannot repeat a text ")
-    let _ = write_text(report_fd(), int_text(times, false))
-    let _ = write_text(report_fd(), " times")
-    let _ = write_text(report_fd(), end)
-    exit(101)
+    panic_message(start, end, repeat_negative_message("", times))
+}
+
+pub fn repeat_negative_message(head: String, times: Int) -> String {
+    let n = int_text(times, false)
+    "{head}cannot repeat a text {n} times"
 }
 
 // Panic (`P0037`): a result too long.
 pub fn panic_repeat_long(start: String, end: String, text: String, times: Int) {
-    let _ = write_text(report_fd(), start)
-    let _ = write_text(report_fd(), "repeating a text of ")
-    let _ = write_text(report_fd(), int_text(string_byte_len(text), false))
-    let _ = write_text(report_fd(), " bytes ")
-    let _ = write_text(report_fd(), int_text(times, false))
-    let _ = write_text(report_fd(), " times is too long")
-    let _ = write_text(report_fd(), end)
-    exit(101)
+    panic_message(start, end, repeat_long_message("", text, times))
+}
+
+pub fn repeat_long_message(head: String, text: String, times: Int) -> String {
+    let bytes = int_text(string_byte_len(text), false)
+    let n = int_text(times, false)
+    "{head}repeating a text of {bytes} bytes {n} times is too long"
 }
 
 // `String.replace`: every occurrence of `from`, left to right and without
@@ -1286,21 +1287,24 @@ pub fn panic(report: String) {
 // Panic with the report `start`, the integer `a`, then `end`. An integer
 // is read as unsigned when `unsigned`.
 pub fn panic_unary(start: String, a: Int, end: String, unsigned: Bool) {
-    let _ = write_text(report_fd(), start)
-    let _ = write_text(report_fd(), int_text(a, unsigned))
-    let _ = write_text(report_fd(), end)
-    exit(101)
+    panic(unary_message(start, a, end, unsigned))
+}
+
+pub fn unary_message(start: String, a: Int, end: String, unsigned: Bool) -> String {
+    let n = int_text(a, unsigned)
+    "{start}{n}{end}"
 }
 
 // Panic with the report `start`, the integer `a`, `mid`, the integer `b`,
 // then `end`.
 pub fn panic_binary(start: String, a: Int, mid: String, b: Int, end: String, unsigned: Bool) {
-    let _ = write_text(report_fd(), start)
-    let _ = write_text(report_fd(), int_text(a, unsigned))
-    let _ = write_text(report_fd(), mid)
-    let _ = write_text(report_fd(), int_text(b, unsigned))
-    let _ = write_text(report_fd(), end)
-    exit(101)
+    panic(binary_message(start, a, mid, b, end, unsigned))
+}
+
+pub fn binary_message(start: String, a: Int, mid: String, b: Int, end: String, unsigned: Bool) -> String {
+    let m = int_text(a, unsigned)
+    let n = int_text(b, unsigned)
+    "{start}{m}{mid}{n}{end}"
 }
 
 // Panic with the report `start`, the text `message`, then `end`: for a
@@ -1311,6 +1315,10 @@ pub fn panic_message(start: String, end: String, message: String) {
     let _ = write_text(report_fd(), message)
     let _ = write_text(report_fd(), end)
     exit(101)
+}
+
+pub fn message_message(head: String, message: String) -> String {
+    "{head}{message}"
 }
 
 // ---- The stack -------------------------------------------------------------
@@ -1811,12 +1819,11 @@ pub fn env_secret(env: Env, name: String) -> Secret<String> {
 
 // Panic (`P0020`): `start` and `end` are the report around the message.
 pub fn panic_missing_secret(start: String, end: String, env: Env, name: String) {
-    let _ = write_text(report_fd(), start)
-    let _ = write_text(report_fd(), "the secret `")
-    let _ = write_text(report_fd(), name)
-    let _ = write_text(report_fd(), "` is not set in the environment")
-    let _ = write_text(report_fd(), end)
-    exit(101)
+    panic_message(start, end, missing_secret_message("", env, name))
+}
+
+pub fn missing_secret_message(head: String, env: Env, name: String) -> String {
+    "{head}the secret `{name}` is not set in the environment"
 }
 
 // `Secret.constant_time_eq`.
@@ -1911,6 +1918,22 @@ pub fn debug_int(value: Int, unsigned: Bool) -> String {
 }
 
 // `a` and `b` as one new text.
+// `dbg` of the arguments: `Args["a", "b"]`, each as `debug_string` shows it.
+pub fn debug_args(args: Args) -> String {
+    let count = rt_mem_load64(global(10))
+    var text = "Args["
+    var i = 0
+    while i < count {
+        if i > 0 {
+            text = debug_concat(text, ", ")
+        }
+        let arg = cstr_text(rt_mem_load64(rt_mem_add(rt_mem_load64(global(11)), rt_mem_shl(i, 3))))
+        text = debug_concat(text, debug_string(arg))
+        i = i + 1
+    }
+    debug_concat(text, "]")
+}
+
 pub fn debug_concat(a: String, b: String) -> String {
     let first = rt_mem_text(a)
     let second = rt_mem_text(b)

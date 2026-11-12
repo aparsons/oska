@@ -4,8 +4,9 @@
 //!
 //! # Representation
 //!
-//! A function value is an object (`layout.rs`): `[count][code][drop]`,
-//! then what it captured. `code` is the address of a function that takes
+//! A function value is an object (`layout.rs`): `[count][code][drop]
+//! [kind]`, then what it captured; `kind` is 1 for a closure, 0 for a
+//! named function, which is all `dbg` shows of it. `code` is the address of a function that takes
 //! the object itself, then the call's arguments; `drop` is the address of
 //! the function that frees the object when its last reference goes:
 //! `std.rt`'s `free` when it captured nothing counted, else a generated
@@ -34,9 +35,11 @@
 //! result, a status, 0 when the call went ahead, else the static text of
 //! the broken clause's message, which the caller panics with (`P0006`).
 //! A thunk of an intrinsic undoes the count, as the interpreter does not
-//! count an intrinsic's call. An intrinsic that may panic (`String.slice`,
-//! `String.repeat`, `Env.secret`) is refused as a value (`E0390`): its
-//! report names the call, which its thunk does not know.
+//! count an intrinsic's call. An intrinsic's panic (`String.slice`,
+//! `String.repeat`, `Env.secret`, `List.at`, `todo`) names the call too,
+//! so a thunk of one is [`Body::deferred`]: each panic in it returns the
+//! status `error[P....]: message`, which the caller reports at the call.
+//! A `requires` status has that form as well.
 
 use std::sync::Arc;
 
@@ -44,7 +47,6 @@ use oska_check::program::{Callee, Closure, Expr, ExprKind, Type};
 use oska_syntax::{Diagnostic, Span};
 
 use super::{body_end, panics, Body, Instance, Receiver, Slot, Source};
-use crate::intrinsics::{self, Prelude};
 use crate::ir::{self, Cond, FnId, Inst, Symbol, Temp};
 use crate::layout;
 use crate::NOWHERE;
@@ -72,7 +74,8 @@ impl Body<'_, '_> {
     /// what it captures.
     pub(super) fn closure(&mut self, expr: &Expr, code: &Arc<Closure>) -> Result<Temp, Diagnostic> {
         if code.params.len() >= ir::MAX_ARGS {
-            return Err(self.refuse(expr.span, "a closure with more than 7 parameters"));
+            let what = format!("a closure with more than {} parameters", ir::MAX_ARGS - 1);
+            return Err(self.refuse(expr.span, &what));
         }
         let mut values = Vec::new();
         let mut captures = Vec::new();
@@ -104,7 +107,7 @@ impl Body<'_, '_> {
         } else {
             self.free_id()
         };
-        let object = self.function_object(code_id, drop_id, &values)?;
+        let object = self.function_object(code_id, drop_id, true, &values)?;
         self.own(object, &expr.ty);
         Ok(object)
     }
@@ -122,20 +125,17 @@ impl Body<'_, '_> {
             return Err(self.refuse(expr.span, &format!("a function value of type `{ty}`")));
         };
         if params.len() >= ir::MAX_ARGS {
-            return Err(self.refuse(expr.span, "a function value with more than 7 parameters"));
+            let what = format!(
+                "a function value with more than {} parameters",
+                ir::MAX_ARGS - 1
+            );
+            return Err(self.refuse(expr.span, &what));
         }
         // A trait's method is the implementation for the type of the
         // value it is called on: its first parameter's.
         let (callee, type_args) = self.resolve(callee, type_args, params.first(), expr.span)?;
         let (intrinsic, name) = match callee {
             Callee::Function(name) => (false, name),
-            // A panic names the call's span, which a thunk does not know.
-            Callee::Intrinsic(name) if may_panic(&name) => {
-                return Err(self.refuse(
-                    expr.span,
-                    &format!("`{name}`, which may panic, used as a function value"),
-                ))
-            }
             Callee::Intrinsic(name) => (true, name),
             Callee::Trait { .. } => return Err(self.refuse(expr.span, "a function value")),
         };
@@ -150,7 +150,7 @@ impl Body<'_, '_> {
             .lowering
             .request(thunk, self.origin.unwrap_or(expr.span));
         let drop = self.free_id();
-        let object = self.function_object(code, drop, &[])?;
+        let object = self.function_object(code, drop, false, &[])?;
         self.own(object, &ty);
         Ok(object)
     }
@@ -166,12 +166,13 @@ impl Body<'_, '_> {
         self.lowering.request(free, origin)
     }
 
-    /// A new function value object running `code`, freed by `drop`, that
-    /// takes over the references of `captured`.
+    /// A new function value object running `code`, freed by `drop`, a
+    /// closure or not, that takes over the references of `captured`.
     fn function_object(
         &mut self,
         code: FnId,
         drop: FnId,
+        closure: bool,
         captured: &[Temp],
     ) -> Result<Temp, Diagnostic> {
         let size = i64::from(layout::FN_CAPTURES) + 8 * captured.len() as i64;
@@ -180,6 +181,8 @@ impl Body<'_, '_> {
         self.store(object, layout::FN_CODE, code);
         let drop = self.function_address(drop);
         self.store(object, layout::FN_DROP, drop);
+        let kind = self.constant(i64::from(closure));
+        self.store(object, layout::FN_KIND, kind);
         for (index, &value) in captured.iter().enumerate() {
             self.store(object, layout::FN_CAPTURES + 8 * index as u32, value);
             self.owned.remove(&value);
@@ -230,7 +233,8 @@ impl Body<'_, '_> {
         span: Span,
     ) -> Result<Temp, Diagnostic> {
         if args.len() >= ir::MAX_ARGS {
-            return Err(self.refuse(span, "a call with more than 7 arguments"));
+            let what = format!("a call with more than {} arguments", ir::MAX_ARGS - 1);
+            return Err(self.refuse(span, &what));
         }
         let exhausted = self.panic_static(panics::CALL_DEPTH_EXCEEDED, panics::TOO_DEEP, span)?;
         self.push(Inst::Enter { exhausted });
@@ -245,12 +249,7 @@ impl Body<'_, '_> {
         });
         self.push(Inst::Leave);
         let status = self.second_result();
-        let broken = self.panic_text(
-            panics::PRECONDITION_VIOLATED,
-            "panic_message",
-            &[status],
-            span,
-        )?;
+        let broken = self.panic_status(status, span)?;
         let zero = self.constant(0);
         self.push(Inst::Branch {
             cond: Cond::Ne,
@@ -457,8 +456,10 @@ impl Body<'_, '_> {
                     target: next,
                 });
                 let message = format!(
-                    "precondition violated: `{}` requires `{}`",
-                    function.name, clause.text
+                    "error[{}]: precondition violated: `{}` requires `{}`",
+                    panics::PRECONDITION_VIOLATED,
+                    function.name,
+                    clause.text
                 );
                 let text = self.text(&message);
                 let nothing = self.constant(0);
@@ -523,6 +524,9 @@ impl Body<'_, '_> {
             ty: ret.clone(),
             span: at,
         };
+        // A panic names the call of the value, which only the caller
+        // knows: the status carries the report's middle back to it.
+        self.deferred = true;
         // The caller counted the call: this one is not.
         self.push(Inst::Leave);
         let value = self.expr(&call)?;
@@ -532,10 +536,4 @@ impl Body<'_, '_> {
         self.push(Inst::Enter { exhausted: never });
         self.leave_function(value)
     }
-}
-
-/// Whether a call of the prelude intrinsic `name` may panic: its report
-/// names the call, which the code of a function value does not know.
-fn may_panic(name: &str) -> bool {
-    name == "List.at" || matches!(intrinsics::prelude(name), Some(Prelude::Checked(..)))
 }

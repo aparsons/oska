@@ -349,11 +349,8 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             }
             ExprKind::Not(operand) => Ok(Value::Bool(!self.eval(operand, frame)?.as_bool())),
             ExprKind::Range { start, end } => {
-                let Value::Int(start, int) = self.eval(start, frame)? else {
-                    unreachable!("the checker allows `..` only between integers")
-                };
-                let end = self.eval(end, frame)?.as_int();
-                Ok(Value::Range { start, end, int })
+                let start = self.eval(start, frame)?;
+                Ok(Value::range(start, self.eval(end, frame)?))
             }
             ExprKind::List(items) => Ok(Value::List(Rc::new(self.eval_all(items, frame)?))),
             ExprKind::Construct { ctor, fields } => {
@@ -709,9 +706,21 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         body: &Expr,
         frame: &mut Frame,
     ) -> Result<(), Unwind> {
-        let items: Box<dyn Iterator<Item = Value>> = match self.eval(iter, frame)? {
-            Value::Range { start, end, int } => {
-                Box::new((start..end).map(move |n| Value::Int(n, int)))
+        let iterated = match &iter.kind {
+            // A range written in place is never built.
+            ExprKind::Range { start, end } => {
+                let start = self.eval(start, frame)?;
+                Value::range(start, self.eval(end, frame)?)
+            }
+            _ => self.eval(iter, frame)?,
+        };
+        let items: Box<dyn Iterator<Item = Value>> = match iterated {
+            Value::Struct { ty, fields } if &*ty == builtins::RANGE => {
+                let (Value::Int(start, int), Value::Int(end, _)) = (&fields[0], &fields[1]) else {
+                    unreachable!("the checker allows `for` only over a range of integers")
+                };
+                let int = *int;
+                Box::new((*start..*end).map(move |n| Value::Int(n, int)))
             }
             Value::List(items) => Box::new(ListIter { items, next: 0 }),
             other => {

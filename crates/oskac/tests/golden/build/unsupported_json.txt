@@ -1,6 +1,6 @@
 $ oskac build sum.osk --format=json
 exit: 2
 --- stdout
-{"output":null,"diagnostics":[{"code":"E0390","message":"`oskac build` cannot compile a range outside a `for` loop yet","path":"sum.osk","span":{"start":57,"end":61}}]}
+{"output":null,"diagnostics":[{"code":"E0390","message":"`oskac build` cannot compile `dbg` of a `DirRead` yet","path":"sum.osk","span":{"start":69,"end":93}}]}
 --- stderr
 --- written

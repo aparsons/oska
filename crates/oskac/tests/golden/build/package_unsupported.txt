@@ -2,5 +2,5 @@ $ oskac build greeter
 exit: 2
 --- stdout
 --- stderr
-greeter/src/sum.osk:2:13: error[E0390]: `oskac build` cannot compile a range outside a `for` loop yet (bytes 62..66)
+greeter/src/sum.osk:2:13: error[E0390]: `oskac build` cannot compile `dbg` of a `DirRead` yet (bytes 74..98)
 --- written

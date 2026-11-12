@@ -10,7 +10,11 @@
 //!
 //! The backend's own (nothing outside a program calls into it):
 //!
-//! - arguments in `x0`–`x7`, in order, the receiver first; the result in
+//! - arguments in `x0`–`x7`, in order, the receiver first, and any past
+//!   the eighth in a fixed area of the writable data
+//!   ([`Module::extra_args`]): the caller stores them just before its
+//!   `bl`, and the callee's entry loads them before any other code runs,
+//!   so no other call can reuse the area in between; the result in
 //!   `x0`, and a mutating method's receiver, its second result, in `x1`
 //!   ([`Inst::ReturnPair`]); every value is one word ([`crate::layout`]);
 //! - `x8` holds a system call's number, and `svc #0` makes it;
@@ -35,7 +39,9 @@
 //! executable needs no relocation: `elf.rs` patches the addresses of data
 //! ([`Fixup`]) once it has laid the file out.
 
-use crate::ir::{Arith, BinOp, Cond, FnId, Function, Inst, IntKind, Module, Symbol, Temp, Width};
+use crate::ir::{
+    Arith, BinOp, Cond, FnId, Function, Inst, IntKind, Module, Symbol, Temp, Width, REGISTER_ARGS,
+};
 use crate::regalloc::{self, Loc};
 
 /// The machine code of a module.
@@ -61,7 +67,10 @@ pub struct Fixup {
 /// Select and encode `module`'s instructions. Fails only when the code is
 /// too large for a branch to reach.
 pub fn emit(module: &Module) -> Result<Text, String> {
-    let mut emitter = Emitter::default();
+    let mut emitter = Emitter {
+        extra_args: module.extra_args,
+        ..Emitter::default()
+    };
     let mut starts = Vec::with_capacity(module.functions.len());
     for function in &module.functions {
         starts.push(emitter.words.len());
@@ -146,6 +155,8 @@ struct Emitter {
     saved: Vec<u32>,
     /// Branches to labels, to patch once the function's labels are placed.
     jumps: Vec<(usize, u32, Jump)>,
+    /// [`Module::extra_args`].
+    extra_args: u32,
 }
 
 impl Emitter {
@@ -167,10 +178,21 @@ impl Emitter {
             self.put(sub_imm(SP, SP, frame & 0xfff, false));
         }
         self.save_registers(true);
-        let params: Vec<(Loc, Loc)> = (0..function.params.min(8))
+        let params: Vec<(Loc, Loc)> = (0..function.params.min(REGISTER_ARGS as u32))
             .map(|param| (self.loc(param), Loc::Reg(param)))
             .collect();
         self.parallel_move(params);
+        // The parameters past the eighth, from where the caller stored
+        // them. A parameter no code reads may share its location with a
+        // later one, so they are loaded in order, after the registers.
+        if function.params > REGISTER_ARGS as u32 {
+            self.extra_args_address();
+            for (index, param) in (REGISTER_ARGS as u32..function.params).enumerate() {
+                self.memory(Width::W64, true, X17, X16, 8 * index as u32);
+                let to = self.loc(param);
+                self.move_loc(to, Loc::Reg(X17));
+            }
+        }
         let mut labels = vec![0usize; function.labels as usize];
         self.jumps.clear();
         for inst in &function.insts {
@@ -222,14 +244,34 @@ impl Emitter {
         }
     }
 
-    /// Put `args` in the argument registers, `x0` on.
+    /// Put `args` in the argument registers, `x0` on, and those past the
+    /// eighth in the extra arguments' area, first, while every argument
+    /// is still in its own location.
     fn arguments(&mut self, args: &[Temp]) {
+        if let Some(extra) = args.get(REGISTER_ARGS..).filter(|extra| !extra.is_empty()) {
+            self.extra_args_address();
+            for (index, &arg) in extra.iter().enumerate() {
+                let value = self.read(arg, X17);
+                self.memory(Width::W64, false, value, X16, 8 * index as u32);
+            }
+        }
         let moves = args
             .iter()
+            .take(REGISTER_ARGS)
             .enumerate()
             .map(|(register, &arg)| (Loc::Reg(register as u32), self.loc(arg)))
             .collect();
         self.parallel_move(moves);
+    }
+
+    /// `x16 =` the address of the extra arguments' area.
+    fn extra_args_address(&mut self) {
+        self.fixups.push(Fixup {
+            at: self.words.len(),
+            symbol: Symbol::Data(self.extra_args),
+        });
+        self.put(ADRP | X16);
+        self.put(add_imm(X16, X16, 0, false));
     }
 
     /// Make each `(to, from)` move as if all at once: a register that is

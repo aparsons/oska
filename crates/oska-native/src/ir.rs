@@ -34,6 +34,9 @@ pub struct Module {
     pub rodata: Vec<u8>,
     /// The size in bytes of the zero-initialised writable data.
     pub data_size: u32,
+    /// Where in the writable data the arguments of a call past the
+    /// [`REGISTER_ARGS`]th go ([`EXTRA_ARGS`] words of them).
+    pub extra_args: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -319,9 +322,18 @@ pub enum Inst {
 /// addressed by a 12-bit scaled offset.
 pub const MAX_TEMPS: u32 = 4095;
 
-/// The most arguments a call passes, all in registers. More need
-/// arguments on the stack, which no lowering produces yet.
-pub const MAX_ARGS: usize = 8;
+/// How many arguments a call passes in registers. The caller stores the
+/// rest in [`Module::extra_args`] just before it calls, and the callee
+/// loads them on entry, before anything else runs.
+pub const REGISTER_ARGS: usize = 8;
+
+/// The most arguments past [`REGISTER_ARGS`] a call may pass: each is
+/// addressed by a 12-bit scaled offset.
+pub const EXTRA_ARGS: usize = 4095;
+
+/// The most arguments a call passes (a function value's object among
+/// them).
+pub const MAX_ARGS: usize = REGISTER_ARGS + EXTRA_ARGS;
 
 impl Inst {
     /// The label it may jump to, if any.

@@ -340,6 +340,19 @@ fn for_loops_iterate_over_lists_and_ranges() {
 }
 
 #[test]
+fn a_range_is_iterable_only_over_integers() {
+    assert_ok("fn f(r: Range<U8>) {\n    for x in r { }\n}");
+    assert_errors(
+        "fn f() {\n    for x in Range(start: \"a\", end: \"b\") { }\n}",
+        &[("E0235", "Range(start: \"a\", end: \"b\")")],
+    );
+    assert_errors(
+        "fn f<T>(r: Range<T>) {\n    for x in r { }\n}",
+        &[("E0235", "r")],
+    );
+}
+
+#[test]
 fn break_and_continue_need_a_loop() {
     assert_ok("fn f(c: Bool) {\n    while c {\n        break\n    }\n}");
     assert_errors("fn f() {\n    continue\n}", &[("E0232", "continue")]);
