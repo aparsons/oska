@@ -489,8 +489,8 @@ impl Code {
             if dst == lhs || !(0..=32760).contains(&imm) {
                 continue;
             }
-            for next in at + 1..end {
-                let Some(inst) = self.insts[next].as_mut() else {
+            for slot in &mut self.insts[at + 1..end] {
+                let Some(inst) = slot.as_mut() else {
                     continue;
                 };
                 if matches!(inst, Inst::Label(_)) {
@@ -523,7 +523,7 @@ impl Code {
                     }
                     _ => {}
                 }
-                let inst = self.insts[next].as_ref();
+                let inst = slot.as_ref();
                 let def = inst.and_then(Inst::def);
                 if def == Some(lhs)
                     || def == Some(dst)
