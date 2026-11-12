@@ -1089,11 +1089,15 @@ fn no_handle_is_left_open_on_any_path() {
     });
     let outcome = differential::run_native(&case);
     // The same descriptors open after the loop as before it. Inherited
-    // ones (a git hook passes some on) are in both listings.
+    // ones (a git hook passes some on, a CI runner others, numbered above
+    // 100) are in both listings, which sort by bytes ("142" before "2").
     let lines: Vec<&str> = outcome.stdout.lines().collect();
     assert_eq!(lines.len(), 2, "{outcome:#?}");
     assert_eq!(lines[0], lines[1], "{outcome:#?}");
-    assert!(lines[0].starts_with("0,1,2,"), "{outcome:#?}");
+    let open: Vec<&str> = lines[0].split(',').collect();
+    for fd in ["0", "1", "2"] {
+        assert!(open.contains(&fd), "{outcome:#?}");
+    }
 }
 
 #[test]

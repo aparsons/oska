@@ -104,7 +104,7 @@ fn assert_golden(case: &str, files: &[(&str, &str)], args: &[&str]) {
             .code()
             .map_or("signal".to_string(), |c| c.to_string()),
         String::from_utf8_lossy(&output.stdout),
-        without_fds(&String::from_utf8_lossy(&output.stderr)),
+        without_handles(&String::from_utf8_lossy(&output.stderr)),
         written.iter().map(|w| format!("{w}\n")).collect::<String>(),
     );
     let golden = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -135,19 +135,32 @@ fn assert_golden(case: &str, files: &[(&str, &str)], args: &[&str]) {
     );
 }
 
-/// `text` with each file descriptor number in a `dbg` of a directory
-/// capability written as `N`: which one the OS hands out depends on what
-/// `oskac` inherited.
-fn without_fds(text: &str) -> String {
+/// `text` with what each `dbg` of a directory capability shows of its
+/// root handle written as `..`: the path as the host resolves it (Windows
+/// canonicalizes `/` to a drive) and the OS handle, whose number depends
+/// on what `oskac` inherited, and which Windows does not keep.
+fn without_handles(text: &str) -> String {
+    const HANDLE: &str = "RootHandle {";
     let mut out = String::new();
     let mut rest = text;
-    while let Some(at) = rest.find("fd: ") {
-        out.push_str(&rest[..at + 4]);
-        let after = &rest[at + 4..];
-        rest = after.trim_start_matches(|c: char| c.is_ascii_digit());
-        if rest.len() < after.len() {
-            out.push('N');
-        }
+    while let Some(at) = rest.find(HANDLE) {
+        out.push_str(&rest[..at + HANDLE.len()]);
+        let after = &rest[at + HANDLE.len()..];
+        // The `}` that closes this one.
+        let mut depth = 1;
+        let end = after
+            .char_indices()
+            .find(|&(_, c)| {
+                match c {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+                depth == 0
+            })
+            .map_or(after.len(), |(i, _)| i);
+        out.push_str(" .. ");
+        rest = &after[end..];
     }
     out.push_str(rest);
     out

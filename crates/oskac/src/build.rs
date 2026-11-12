@@ -104,12 +104,14 @@ fn write_executable(path: &str, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// The refusal of an output that could not be written (`E0391`). The
-/// reason is in words of its own, the same on every host.
+/// reason is in words of its own, the same on every host. A directory is
+/// checked first: Windows refuses to write one as "permission denied",
+/// Linux as "is a directory".
 fn unwritable(path: &str, err: &std::io::Error) -> Diagnostic {
     let reason = match err.kind() {
+        _ if Path::new(path).is_dir() => "it is a directory".to_string(),
         std::io::ErrorKind::NotFound => "its directory does not exist".to_string(),
         std::io::ErrorKind::PermissionDenied => "permission denied".to_string(),
-        _ if Path::new(path).is_dir() => "it is a directory".to_string(),
         _ => err.to_string(),
     };
     Diagnostic::new(
