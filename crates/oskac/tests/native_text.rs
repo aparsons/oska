@@ -333,6 +333,36 @@ fn text_surviving_many_copies_and_frees_stays_intact() {
 }
 
 #[test]
+fn texts_of_every_block_size_are_reused_intact() {
+    // Texts from a few bytes to past 64 KiB (the largest size class, past
+    // which each has a mapping of its own), made and freed over and over,
+    // some kept while others are made: each one's ends checked, so a block
+    // handed out twice or cut short shows.
+    assert_prints(
+        "text_sizes",
+        r#"    var kept = ""
+    var total = 0
+    var size = 1
+    while size < 200000 {
+        let text = "ab".repeat(size)
+        let marked = "<{text}>"
+        let first = marked.slice(0, 2)
+        let last = marked.slice(marked.len() - 2, marked.len())
+        if first != "<a" || last != "b>" {
+            show(io, "broken at {size}")
+        }
+        if size % 3 == 0 {
+            kept = marked
+        }
+        total = total + marked.byte_len() + kept.byte_len()
+        size = size * 2 + 1
+    }
+    pair(io, total, kept.len())"#,
+        "873804 131072\n",
+    );
+}
+
+#[test]
 fn lowercase_maps_each_character_on_its_own() {
     assert_prints(
         "text_lowercase",

@@ -478,3 +478,29 @@ fn sized_integer_overflow_panics_with_the_interpreters_message() {
         }
     }
 }
+
+#[test]
+fn small_functions_with_branches_and_loops_give_the_same_results_inlined() {
+    // Call-free functions with several returns and loops of their own,
+    // which the backend copies into their callers: called in a loop, in a
+    // condition, nested, and twice in one expression, each result printed.
+    let src = program(
+        "fn sign(x: Int) -> Int {\n    if x < 0 {\n        return 0 - 1\n    }\n    \
+         if x > 0 {\n        return 1\n    }\n    0\n}\n\n\
+         fn ones(x: Int) -> Int {\n    var n = x\n    var count = 0\n    \
+         while n > 0 {\n        if n % 2 == 1 {\n            count = count + 1\n        }\n        \
+         n = n / 2\n    }\n    count\n}\n\n\
+         fn clamp(x: Int, low: Int, high: Int) -> Int {\n    if x < low {\n        return low\n    }\n    \
+         if x > high {\n        return high\n    }\n    x\n}",
+        "    var total = 0\n    var i = 0 - 5\n    \
+         while i < 300 {\n        \
+         if sign(i) < 0 {\n            total = total + 1000\n        }\n        \
+         total = total + ones(clamp(i, 0, 255)) * sign(i) + ones(i) + clamp(sign(i), 0, 1)\n        \
+         i = i + 1\n    }\n    \
+         let a = sign(0 - 9)\n    let b = ones(1023)\n    let c = clamp(7, 1, 3)\n    \
+         let _ = io.println(\"{total} {a} {b} {c}\")",
+    );
+    let outcome = assert_same(&Case::file("inlined_branches", &src));
+    assert_eq!(outcome.exit_code, Some(0), "{outcome:#?}");
+    assert!(outcome.stdout.ends_with(" -1 10 3\n"), "{outcome:#?}");
+}

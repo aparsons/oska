@@ -23,7 +23,7 @@
 //! (the type's drop function, [`Body::drop_list`]).
 
 use oska_check::builtins;
-use oska_check::program::{Expr, Place, Type};
+use oska_check::program::{Callee, Expr, ExprKind, Place, Type};
 use oska_syntax::{Diagnostic, Span};
 
 use super::{constant_word, panics, Body, Held, Instance, Slot};
@@ -306,6 +306,109 @@ impl Body<'_, '_> {
         if let Some(held_ty) = held {
             self.held.pop();
             self.release(list, &held_ty)?;
+        }
+        Ok(())
+    }
+
+    /// The text whose characters `iter` lists, when it is a call of
+    /// `String.chars`: `for` over it walks the text instead
+    /// ([`Body::for_chars`]).
+    pub(super) fn chars_of<'e>(&self, iter: &'e Expr) -> Option<&'e Expr> {
+        let ExprKind::Call {
+            callee,
+            type_args,
+            args,
+        } = &iter.kind
+        else {
+            return None;
+        };
+        let [text] = args.as_slice() else {
+            return None;
+        };
+        let (callee, _) = self
+            .resolve(callee, type_args, Some(&text.ty), iter.span)
+            .ok()?;
+        matches!(&callee, Callee::Intrinsic(name) if name == "String.chars").then_some(text)
+    }
+
+    /// `for c in text.chars() { body }`, `text` the receiver of `chars`:
+    /// each character made as the loop reaches it (`std.rt`'s
+    /// `char_text`), with no list of them all, so a loop that stops early
+    /// reads only the characters it looks at. The current character is
+    /// held, released when the next is made and when the loop is left;
+    /// the binding borrows it.
+    pub(super) fn for_chars(
+        &mut self,
+        binds: bool,
+        ty: &Type,
+        text_expr: &Expr,
+        body: &Expr,
+    ) -> Result<(), Diagnostic> {
+        let text = self.expr(text_expr)?;
+        let loops = self.loops.len();
+        let held = self.owned.remove(&text);
+        if let Some(held_ty) = &held {
+            self.held.push(Held {
+                temp: text,
+                ty: held_ty.clone(),
+                loops,
+                scope: false,
+            });
+        }
+        let length = self.load(text, layout::TEXT_LEN);
+        let zero = self.constant(0);
+        let at = self.copy(zero);
+        // A static text until the first character: releasing it is nothing.
+        let empty = self.text("");
+        let item = self.copy(empty);
+        self.held.push(Held {
+            temp: item,
+            ty: Type::String,
+            loops,
+            scope: false,
+        });
+        let (head, next, exit) = (self.label(), self.label(), self.label());
+        self.push(Inst::Label(head));
+        self.push(Inst::Branch {
+            cond: Cond::Ge,
+            lhs: at,
+            rhs: length,
+            target: exit,
+        });
+        self.release(item, &Type::String)?;
+        let made = self.call_runtime("char_text", vec![text, at], NOWHERE)?;
+        self.push(Inst::Copy {
+            dst: item,
+            src: made,
+        });
+        if binds {
+            let temp = self.copy(item);
+            let ty = self.ty(ty);
+            self.slots.push(Slot {
+                temp,
+                release: false,
+                ty,
+            });
+        }
+        self.loop_body(next, exit, body)?;
+        if binds {
+            self.slots.pop();
+        }
+        self.push(Inst::Label(next));
+        let size = self.load(item, layout::TEXT_LEN);
+        self.push(Inst::Binary {
+            op: BinOp::Add,
+            dst: at,
+            lhs: at,
+            rhs: size,
+        });
+        self.push(Inst::Jump(head));
+        self.push(Inst::Label(exit));
+        self.held.pop();
+        self.release(item, &Type::String)?;
+        if let Some(held_ty) = held {
+            self.held.pop();
+            self.release(text, &held_ty)?;
         }
         Ok(())
     }

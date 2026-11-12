@@ -105,8 +105,9 @@ pub fn rt_mem_test_host() -> Int
 //
 // The runtime's writable words, by index:
 //
-//   0 to 7  the allocator's free lists, one per size class: a block of
-//           class c is 16 << c bytes, header included;
+//   0 to 7  the allocator's free lists of size classes 0 to 7 (8 to 12
+//           are words 40 to 44; see `free_list`): a block of class c is
+//           16 << c bytes, header included;
 //   8       the next free byte of the chunk blocks are carved from;
 //   9       the end of that chunk;
 //   10      argc, 11 argv (the address of the pointer array), 12 envp, all
@@ -126,7 +127,8 @@ pub fn rt_mem_test_host() -> Int
 //   32-38   the test host (see "The test host"): 32 which host a test runs
 //           on, 33 its stderr prefix, 34 whether stderr is at the start
 //           of a line, 35 the lines printed, 36 the fake files' paths, 37
-//           their contents, 38 the fake directories.
+//           their contents, 38 the fake directories;
+//   40-44   the free lists of size classes 8 to 12.
 //
 // Every object the allocator gives out is preceded by a header word: its
 // block's size class, or for an object too large for any class, minus
@@ -138,9 +140,20 @@ fn global(index: Int) -> Int {
     rt_mem_add(rt_mem_globals(), rt_mem_shl(index, 3))
 }
 
-// The largest block, header included, a size class holds.
+// The largest block, header included, a size class holds: 64 KiB, so
+// texts and lists up to that size, which a program makes and frees by the
+// thousand as it builds text, reuse blocks instead of mapping and
+// unmapping memory, and faulting it in afresh, every time.
 fn largest_block() -> Int {
-    2048
+    65536
+}
+
+// The address of the free list of size class `class`.
+fn free_list(class: Int) -> Int {
+    if class < 8 {
+        return global(class)
+    }
+    global(rt_mem_add(class, 32))
 }
 
 // How many bytes the allocator maps at once to carve blocks from.
@@ -199,7 +212,7 @@ pub fn alloc(size: Int) -> Int {
             bytes = rt_mem_shl(bytes, 1)
             class = rt_mem_add(class, 1)
         }
-        let list = global(class)
+        let list = free_list(class)
         at = rt_mem_load64(list)
         if at != 0 {
             rt_mem_store64(list, rt_mem_load64(at))
@@ -263,7 +276,7 @@ pub fn free(object: Int) {
         rt_mem_store64(global(23), rt_mem_sub(0, class))
         return
     }
-    let list = global(class)
+    let list = free_list(class)
     rt_mem_store64(at, rt_mem_load64(list))
     rt_mem_store64(list, at)
 }
@@ -275,16 +288,19 @@ pub fn free(object: Int) {
 fn copy_bytes(to: Int, from: Int, count: Int) {
     if count >= 8 {
         var i = 0
-        // Four words at a time while they last, then one.
+        // Four words at a time while they last, then one. Each word is
+        // the address plus a constant, which the load or store encodes.
         while rt_mem_add(i, 32) <= count {
-            let a = rt_mem_load64(rt_mem_add(from, i))
-            let b = rt_mem_load64(rt_mem_add(from, rt_mem_add(i, 8)))
-            let c = rt_mem_load64(rt_mem_add(from, rt_mem_add(i, 16)))
-            let d = rt_mem_load64(rt_mem_add(from, rt_mem_add(i, 24)))
-            rt_mem_store64(rt_mem_add(to, i), a)
-            rt_mem_store64(rt_mem_add(to, rt_mem_add(i, 8)), b)
-            rt_mem_store64(rt_mem_add(to, rt_mem_add(i, 16)), c)
-            rt_mem_store64(rt_mem_add(to, rt_mem_add(i, 24)), d)
+            let source = rt_mem_add(from, i)
+            let target = rt_mem_add(to, i)
+            let a = rt_mem_load64(source)
+            let b = rt_mem_load64(rt_mem_add(source, 8))
+            let c = rt_mem_load64(rt_mem_add(source, 16))
+            let d = rt_mem_load64(rt_mem_add(source, 24))
+            rt_mem_store64(target, a)
+            rt_mem_store64(rt_mem_add(target, 8), b)
+            rt_mem_store64(rt_mem_add(target, 16), c)
+            rt_mem_store64(rt_mem_add(target, 24), d)
             i = rt_mem_add(i, 32)
         }
         while rt_mem_add(i, 8) <= count {
@@ -537,16 +553,57 @@ fn digit_count(magnitude: Int) -> Int {
 // The length of `n`'s decimal text: an interpolation's `Int` hole, which
 // `int_put` then writes in place.
 pub fn int_length(n: Int) -> Int {
+    if n >= 0 && n <= 4294967295 {
+        return small_length(n)
+    }
     if n < 0 {
         return rt_mem_add(digit_count(n), 1)
     }
     digit_count(rt_mem_sub(0, n))
 }
 
+// How many decimal digits `x` has, for `x` from 0 to 2^32 - 1: the common
+// case of `int_length`, short enough for the backend to inline (it makes
+// no call).
+fn small_length(x: Int) -> Int {
+    if x < 100000 {
+        if x < 100 {
+            if x < 10 {
+                return 1
+            }
+            return 2
+        }
+        if x < 1000 {
+            return 3
+        }
+        if x < 10000 {
+            return 4
+        }
+        return 5
+    }
+    if x < 10000000 {
+        if x < 1000000 {
+            return 6
+        }
+        return 7
+    }
+    if x < 100000000 {
+        return 8
+    }
+    if x < 1000000000 {
+        return 9
+    }
+    10
+}
+
 // Write `n`'s decimal text, `length` bytes (`int_length(n)`), into the text
 // object at `object` from its byte `at`: the byte after it.
 pub fn int_put(object: Int, at: Int, n: Int, length: Int) -> Int {
     let end = rt_mem_add(at, length)
+    if n >= 0 && n <= 4294967295 {
+        write_small(rt_mem_add(object, rt_mem_add(16, end)), n)
+        return end
+    }
     if n < 0 {
         rt_mem_store8(rt_mem_add(object, rt_mem_add(16, at)), 45)
         write_digits(object, end, n)
@@ -558,11 +615,10 @@ pub fn int_put(object: Int, at: Int, n: Int, length: Int) -> Int {
 
 // Write the decimal digits of `-magnitude`, for `magnitude` <= 0, into the
 // text object at `object`, ending before its byte `end`: two at a time,
-// from a table of the hundred pairs. Below 2^32 a division by 100 is a
-// multiplication by its reciprocal and a shift (exact for every 32-bit
-// value); above, the 64-bit division.
+// from a table of the hundred pairs. Above 2^32, by the 64-bit division;
+// below, by `write_small`.
 fn write_digits(object: Int, end: Int, magnitude: Int) {
-    let pairs = text_data(rt_mem_text("00010203040506070809101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899"))
+    let pairs = digit_pairs()
     var at = rt_mem_add(object, rt_mem_add(16, end))
     var rest = magnitude
     while rest < -4294967295 {
@@ -573,7 +629,35 @@ fn write_digits(object: Int, end: Int, magnitude: Int) {
         rt_mem_store16(at, rt_mem_load16(rt_mem_add(pairs, rt_mem_shl(pair, 1))))
         rest = next
     }
-    var x = rt_mem_sub(0, rest)
+    write_small(at, rt_mem_sub(0, rest))
+}
+
+// The hundred two-digit pairs, "00" to "99", one after another.
+fn digit_pairs() -> Int {
+    text_data(rt_mem_text("00010203040506070809101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899"))
+}
+
+// Write the decimal digits of `x`, from 0 to 2^32 - 1, ending before the
+// address `at`: four at a time while there are more than four, then two
+// at a time, each pair from `digit_pairs`. A division by 10000 or 100 is
+// a multiplication by its reciprocal and a shift (exact for every 32-bit
+// value, and for every value below 10000), and the two pairs of a group
+// of four do not wait on each other. It makes no call, so the backend
+// inlines it.
+fn write_small(end: Int, value: Int) {
+    let pairs = digit_pairs()
+    var at = end
+    var x = value
+    while x >= 10000 {
+        let next = rt_mem_shr(rt_mem_mul(x, 3518437209), 45)
+        let four = rt_mem_sub(x, rt_mem_mul(next, 10000))
+        let high = rt_mem_shr(rt_mem_mul(four, 5243), 19)
+        let low = rt_mem_sub(four, rt_mem_mul(high, 100))
+        at = rt_mem_sub(at, 4)
+        rt_mem_store16(at, rt_mem_load16(rt_mem_add(pairs, rt_mem_shl(high, 1))))
+        rt_mem_store16(rt_mem_add(at, 2), rt_mem_load16(rt_mem_add(pairs, rt_mem_shl(low, 1))))
+        x = next
+    }
     while x >= 100 {
         let next = rt_mem_shr(rt_mem_mul(x, 1374389535), 37)
         let pair = rt_mem_sub(x, rt_mem_mul(next, 100))
@@ -1196,6 +1280,12 @@ fn text_of(at: Int, count: Int) -> Int {
 // are made on first use, in one block (global word 28), each with the
 // count of a static object (-1), so nothing counts or frees them.
 fn ascii_text(byte: Int) -> Int {
+    rt_mem_add(ascii_table(), rt_mem_mul(byte, 24))
+}
+
+// The address of the first of the 128 static one-byte texts of
+// `ascii_text`, the one of byte 0; the one of byte `b` is `24 * b` after it.
+fn ascii_table() -> Int {
     var table = rt_mem_load64(global(28))
     if table == 0 {
         // 128 objects of three words: count, length 1, the byte.
@@ -1210,7 +1300,7 @@ fn ascii_text(byte: Int) -> Int {
         }
         rt_mem_store64(global(28), table)
     }
-    rt_mem_add(table, rt_mem_mul(byte, 24))
+    table
 }
 
 // `String.split`: the pieces between occurrences of `separator`, empty
@@ -1280,6 +1370,19 @@ pub fn string_lines(text: String) -> List<String> {
     rt_mem_as_list(list)
 }
 
+// The character of `text` that starts at its byte `at`, as a text of its
+// own holding a reference for the caller: what `for c in text.chars()`
+// binds, one character at a time, with no list made (`lower/lists.rs`).
+// Its byte length is how far the loop moves on.
+pub fn char_text(text: String, at: Int) -> Int {
+    let data = rt_mem_add(text_data(rt_mem_text(text)), at)
+    let lead = rt_mem_load8(data)
+    if lead < 128 {
+        return ascii_text(lead)
+    }
+    text_of(data, sequence_length(lead))
+}
+
 // `String.chars`: each character as a text of its own.
 pub fn string_chars(text: String) -> List<String> {
     let object = rt_mem_text(text)
@@ -1288,14 +1391,22 @@ pub fn string_chars(text: String) -> List<String> {
     // Room for one item per byte, at least one per character: the items
     // go straight in, with no `list_add` growing it.
     let list = list_new(length)
+    let ascii = ascii_table()
     var count = 0
     var i = 0
     while i < length {
-        let size = sequence_length(rt_mem_load8(rt_mem_add(data, i)))
+        let lead = rt_mem_load8(rt_mem_add(data, i))
         let item = rt_mem_add(list, rt_mem_add(24, rt_mem_shl(count, 3)))
-        rt_mem_store64(item, text_of(rt_mem_add(data, i), size))
+        if lead < 128 {
+            // Most characters: the static text of the byte, in line.
+            rt_mem_store64(item, rt_mem_add(ascii, rt_mem_mul(lead, 24)))
+            i = rt_mem_add(i, 1)
+        } else {
+            let size = sequence_length(lead)
+            rt_mem_store64(item, text_of(rt_mem_add(data, i), size))
+            i = rt_mem_add(i, size)
+        }
         count = rt_mem_add(count, 1)
-        i = rt_mem_add(i, size)
     }
     rt_mem_store64(rt_mem_add(list, 8), count)
     rt_mem_as_list(list)

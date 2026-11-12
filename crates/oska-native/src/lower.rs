@@ -93,7 +93,7 @@ pub const MAX_CALL_DEPTH: u32 = 50_000;
 const STACK_RESERVE: u64 = 8 << 20;
 
 /// The words of the runtime's writable data, at `rt_mem_globals()`.
-pub const GLOBALS: u32 = 40;
+pub const GLOBALS: u32 = 45;
 
 /// What an executable runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1914,12 +1914,18 @@ impl<'l, 'p> Body<'l, 'p> {
                 if let Some(word) = self.borrowed_word(callee, args) {
                     return Ok(word);
                 }
-                let mut values = Vec::with_capacity(args.len());
-                for arg in args {
-                    values.push(self.expr(arg)?);
-                }
                 let receiver = args.first().map(|arg| &arg.ty);
                 let (callee, type_args) = self.resolve(callee, type_args, receiver, span)?;
+                let values = if matches!(&callee, Callee::Intrinsic(name) if borrows_arguments(name))
+                {
+                    self.borrowed_args(&args.iter().collect::<Vec<_>>())?
+                } else {
+                    let mut values = Vec::with_capacity(args.len());
+                    for arg in args {
+                        values.push(self.expr(arg)?);
+                    }
+                    values
+                };
                 if let Callee::Intrinsic(name) = &callee {
                     if let Some(value) = self.data_intrinsic(name, args, &values, expr)? {
                         return Ok(value);
@@ -2000,6 +2006,39 @@ impl<'l, 'p> Body<'l, 'p> {
         Some(self.copy(temp))
     }
 
+    /// The arguments `args` of a call that only reads them while it runs
+    /// (see [`borrows_arguments`]), evaluated in order. An argument that
+    /// is a local or `self` is borrowed: a copy of its word with no retain
+    /// before the call and no release after, which would cancel out. Only
+    /// when no argument after it can change the local first (each is a
+    /// local, `self` or a literal); otherwise it is read as usual.
+    fn borrowed_args(&mut self, args: &[&Expr]) -> Result<Vec<Temp>, Diagnostic> {
+        let mut values = Vec::with_capacity(args.len());
+        for (i, arg) in args.iter().enumerate() {
+            let inert_after = args.get(i + 1..).unwrap_or_default().iter().all(|later| {
+                matches!(
+                    later.kind,
+                    ExprKind::Local(_)
+                        | ExprKind::SelfValue
+                        | ExprKind::Str(_)
+                        | ExprKind::Int(..)
+                        | ExprKind::Bool(_)
+                )
+            });
+            let borrowed = match &arg.kind {
+                _ if !inert_after => None,
+                ExprKind::Local(slot) => self.slots.get(*slot).map(|s| s.temp),
+                ExprKind::SelfValue => self.receiver.as_ref().map(|r| r.temp),
+                _ => None,
+            };
+            values.push(match borrowed {
+                Some(temp) => self.copy(temp),
+                None => self.expr(arg)?,
+            });
+        }
+        Ok(values)
+    }
+
     /// The value of the local or receiver in `temp`, of type `ty`: a copy,
     /// so that assigning the local later does not change it, holding a
     /// reference of its own when `ty` is counted.
@@ -2050,7 +2089,10 @@ impl<'l, 'p> Body<'l, 'p> {
                 None,
             ) => {
                 if let Some(function) = text_equality(op, &lhs.ty) {
-                    let (left, right) = (self.expr(lhs)?, self.expr(rhs)?);
+                    let operands = self.borrowed_args(&[lhs, rhs])?;
+                    let [left, right] = operands[..] else {
+                        return Err(self.refuse(span, "comparing texts"));
+                    };
                     let equal = self.call_runtime(function, vec![left, right], span)?;
                     self.consume(left)?;
                     self.consume(right)?;
@@ -2467,7 +2509,9 @@ impl<'l, 'p> Body<'l, 'p> {
                 iter,
                 body,
             } => {
-                if layout::list_item(&self.ty(&iter.ty)).is_some() {
+                if let Some(text) = self.chars_of(iter) {
+                    self.for_chars(*binds, ty, text, body)?;
+                } else if layout::list_item(&self.ty(&iter.ty)).is_some() {
                     self.for_list(*binds, ty, iter, body)?;
                 } else {
                     self.for_range(*binds, ty, iter, body)?;
@@ -2563,6 +2607,19 @@ fn text_equality(op: BinaryOp, ty: &Type) -> Option<&'static str> {
         Type::String => Some("string_eq"),
         _ => None,
     }
+}
+
+/// Whether the prelude intrinsic `name` only reads its arguments while it
+/// runs, so they may be borrowed ([`Body::borrowed_args`]): the `String`
+/// and `Path` methods `std.rt` implements, which, like every call, leave
+/// their arguments to the caller to release.
+fn borrows_arguments(name: &str) -> bool {
+    let name = intrinsics::unqualified(name);
+    (name.starts_with("String.") || name.starts_with("Path."))
+        && matches!(
+            intrinsics::prelude(name),
+            Some(Prelude::Runtime(_) | Prelude::Checked(..))
+        )
 }
 
 /// Whether `main` can be given a value of `ty` by `_start`: the word 0.

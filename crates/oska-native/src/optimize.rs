@@ -12,9 +12,19 @@
 //!   [`Inst::CompareImm`], [`Inst::ArithImm`]).
 //! - **Dead code.** An instruction with no effect but its result, whose
 //!   result nothing reads, is removed.
-//! - **Inlining.** A call of a small function that makes no call and has
-//!   no branch, such as `std.rt`'s `text_data`, is replaced by a copy of
-//!   its code ([`module`]).
+//! - **Addresses.** A load or store at `x + constant` encodes the
+//!   constant in its offset.
+//! - **Inlining.** A call of a small function, such as `std.rt`'s
+//!   `text_data`, is replaced by a copy of its code ([`module`]): one
+//!   that runs straight through anywhere, and one with branches, loops
+//!   and calls of its own (`alloc`, `write_small`) on the hot path, its
+//!   labels renumbered and each `Return` a jump to its end. In rounds, so
+//!   a function that became small enough is inlined in turn. A function
+//!   that counts call depth, makes a system or indirect call, or has cold
+//!   blocks is never inlined.
+//! - **Temporaries.** Those the code no longer uses are dropped and the
+//!   rest renumbered, since each costs a stack slot in its frame and the
+//!   stack is reserved for the deepest calls of the largest frame.
 //!
 //! Every pass works within a straight run of code: between two labels,
 //! with no jump in between where it matters, so no other path can see a
@@ -25,53 +35,129 @@ use crate::ir::{self, Arith, BinOp, FnId, Function, Inst, Temp};
 /// The most instructions a function inlined at its calls may have.
 const INLINE_SIZE: usize = 12;
 
+/// The most instructions a function with branches inlined at its calls
+/// may have.
+const INLINE_BRANCHY_SIZE: usize = 72;
+
 /// Clean up every function of a module, inline the small ones where they
 /// are called, and clean up again.
 pub fn module(functions: &mut [Function]) {
     for f in functions.iter_mut() {
         function(f);
     }
-    let inlinable: Vec<Option<Function>> = functions
-        .iter()
-        .map(|f| inlinable(f).then(|| f.clone()))
-        .collect();
-    for (id, f) in functions.iter_mut().enumerate() {
-        if inline(f, id, &inlinable) {
-            function(f);
+    // In rounds: a function whose only calls one round inlined may be
+    // inlined in turn by the next (`text_data` into `digit_pairs` into
+    // `write_small` into `int_put`).
+    for _ in 0..INLINE_ROUNDS {
+        let inlinable: Vec<Option<(Inlining, Function)>> = functions
+            .iter()
+            .map(|f| inlinable(f).map(|how| (how, f.clone())))
+            .collect();
+        let mut changed = false;
+        for (id, f) in functions.iter_mut().enumerate() {
+            if inline(f, id, &inlinable) {
+                function(f);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
         }
     }
 }
 
-/// Whether calls of `f` may be replaced by its code: it is short, makes
-/// no call, and runs straight through to its one `Return`, at the end.
-fn inlinable(f: &Function) -> bool {
-    let Some((Inst::Return(_), body)) = f.insts.split_last() else {
-        return false;
-    };
-    f.insts.len() <= INLINE_SIZE
-        && f.cold == f.insts.len()
-        && body.iter().all(|inst| {
-            inst.target().is_none()
-                && !matches!(
-                    inst,
-                    Inst::Label(_)
-                        | Inst::Call { .. }
-                        | Inst::CallIndirect { .. }
-                        | Inst::Syscall { .. }
-                        | Inst::CallOnStack { .. }
-                        | Inst::Return(_)
-                        | Inst::ReturnPair { .. }
-                        | Inst::Second { .. }
-                        | Inst::Enter { .. }
-                        | Inst::Leave
-                )
-        })
+/// Renumber `f`'s temporaries so those its code still reads or writes
+/// are `0..temps`, its parameters first as they were: the passes leave
+/// gaps, and every temporary counts toward the frame (a stack slot when
+/// it gets no register) and the stack the program reserves for the
+/// deepest calls.
+fn compact_temps(f: &mut Function) {
+    let mut used = vec![false; f.temps as usize];
+    for t in 0..f.params {
+        if let Some(u) = used.get_mut(t as usize) {
+            *u = true;
+        }
+    }
+    for inst in &f.insts {
+        for t in inst.def().into_iter().chain(inst.uses()) {
+            if let Some(u) = used.get_mut(t as usize) {
+                *u = true;
+            }
+        }
+    }
+    let mut map = vec![0; used.len()];
+    let mut next = 0;
+    for (t, &u) in used.iter().enumerate() {
+        if u {
+            map[t] = next;
+            next += 1;
+        }
+    }
+    if next == f.temps {
+        return;
+    }
+    for inst in &mut f.insts {
+        inst.map_temps(|t| map.get(t as usize).copied().unwrap_or(t));
+    }
+    f.temps = next;
+}
+
+/// How many times calls are inlined, at most: how deep a chain of
+/// inlined functions may be.
+const INLINE_ROUNDS: usize = 4;
+
+/// How calls of a function may be replaced by its code, if they may.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Inlining {
+    /// It runs straight through to its one `Return`, at the end.
+    Straight,
+    /// It has labels, branches and `Return`s of its own.
+    Branchy,
+}
+
+/// Whether calls of `f` may be replaced by its code, and how: it is
+/// short, has no cold blocks, leaves only by `Return`, and makes no call
+/// but plain ones (no depth counting, system or indirect call).
+fn inlinable(f: &Function) -> Option<Inlining> {
+    if f.cold != f.insts.len() || !matches!(f.insts.last(), Some(Inst::Return(_))) {
+        return None;
+    }
+    let simple = f.insts.iter().all(|inst| {
+        !matches!(
+            inst,
+            Inst::CallIndirect { .. }
+                | Inst::Syscall { .. }
+                | Inst::CallOnStack { .. }
+                | Inst::ReturnPair { .. }
+                | Inst::Second { .. }
+                | Inst::Enter { .. }
+                | Inst::Leave
+                | Inst::Arith { .. }
+                | Inst::ArithImm { .. }
+                | Inst::EntrySp { .. }
+        )
+    });
+    if !simple {
+        return None;
+    }
+    let (_, body) = f.insts.split_last()?;
+    let straight = body
+        .iter()
+        .all(|inst| inst.target().is_none() && !matches!(inst, Inst::Label(_) | Inst::Return(_)));
+    if straight && f.insts.len() <= INLINE_SIZE {
+        Some(Inlining::Straight)
+    } else if f.insts.len() <= INLINE_BRANCHY_SIZE {
+        Some(Inlining::Branchy)
+    } else {
+        None
+    }
 }
 
 /// Replace each call in `f` (whose id is `id`) of a function in
 /// `inlinable` by that function's code, its temporaries renumbered after
-/// `f`'s: whether any was.
-fn inline(f: &mut Function, id: FnId, inlinable: &[Option<Function>]) -> bool {
+/// `f`'s (and, for a branchy one, which is inlined only on the hot path,
+/// its labels after `f`'s): whether any was.
+fn inline(f: &mut Function, id: FnId, inlinable: &[Option<(Inlining, Function)>]) -> bool {
     let mut insts = Vec::with_capacity(f.insts.len());
     let mut cold = f.cold;
     let mut changed = false;
@@ -80,16 +166,23 @@ fn inline(f: &mut Function, id: FnId, inlinable: &[Option<Function>]) -> bool {
             Inst::Call { callee, args, .. } if *callee != id => inlinable
                 .get(*callee)
                 .and_then(Option::as_ref)
-                .filter(|g| g.params as usize == args.len())
-                .filter(|g| f.temps + g.temps <= ir::MAX_TEMPS),
+                .filter(|(how, _)| *how == Inlining::Straight || at < f.cold)
+                .filter(|(_, g)| g.params as usize == args.len())
+                .filter(|(_, g)| f.temps + g.temps <= ir::MAX_TEMPS),
             _ => None,
         };
-        let (Some(callee), Inst::Call { dst, args, .. }) = (callee, &inst) else {
+        let (Some((how, callee)), Inst::Call { dst, args, .. }) = (callee, &inst) else {
             insts.push(inst);
             continue;
         };
+        let branchy = *how == Inlining::Branchy;
         let base = f.temps;
         f.temps += callee.temps;
+        let labels = f.labels;
+        let end = labels + callee.labels;
+        if branchy {
+            f.labels = end + 1;
+        }
         let before = insts.len();
         for (param, &arg) in args.iter().enumerate() {
             insts.push(Inst::Copy {
@@ -97,18 +190,30 @@ fn inline(f: &mut Function, id: FnId, inlinable: &[Option<Function>]) -> bool {
                 src: arg,
             });
         }
-        for inst in &callee.insts {
+        let last = callee.insts.len() - 1;
+        for (i, inst) in callee.insts.iter().enumerate() {
             match inst {
-                Inst::Return(value) => insts.push(Inst::Copy {
-                    dst: *dst,
-                    src: base + value,
-                }),
+                Inst::Return(value) => {
+                    insts.push(Inst::Copy {
+                        dst: *dst,
+                        src: base + value,
+                    });
+                    if i != last {
+                        insts.push(Inst::Jump(end));
+                    }
+                }
                 other => {
                     let mut copy = other.clone();
                     copy.map_temps(|t| base + t);
+                    if branchy {
+                        map_labels(&mut copy, |l| labels + l);
+                    }
                     insts.push(copy);
                 }
             }
+        }
+        if branchy {
+            insts.push(Inst::Label(end));
         }
         if at < f.cold {
             // The call was one instruction; its code is this many.
@@ -121,14 +226,29 @@ fn inline(f: &mut Function, id: FnId, inlinable: &[Option<Function>]) -> bool {
     changed
 }
 
+/// Renumber with `map` the labels `inst` places or jumps to: those of an
+/// inlined function, which [`inlinable`] allows only in labels, jumps and
+/// branches.
+fn map_labels(inst: &mut Inst, map: impl Fn(ir::Label) -> ir::Label) {
+    match inst {
+        Inst::Label(label) | Inst::Jump(label) => *label = map(*label),
+        Inst::JumpIfZero { target, .. }
+        | Inst::Branch { target, .. }
+        | Inst::BranchImm { target, .. } => *target = map(*target),
+        _ => {}
+    }
+}
+
 /// Clean up `function` in place.
 pub fn function(function: &mut Function) {
     let mut code = Code::new(function);
     code.propagate_copies();
     code.coalesce_copies();
     code.immediates();
+    code.fold_offsets();
     code.remove_dead();
     code.write_back(function);
+    compact_temps(function);
 }
 
 /// A function's instructions, each with a flag for whether it is still
@@ -346,6 +466,72 @@ impl Code {
                 _ => continue,
             };
             *inst = replacement;
+        }
+    }
+
+    /// `b = x + imm`, then a load or store at `b + offset` further on in
+    /// the same straight run, before anything writes `x` or `b` again: it
+    /// addresses `x + (imm + offset)` instead, which the instruction
+    /// encodes, so the addition may go (`std.rt`'s word-at-a-time loops
+    /// read `at + 8`, `at + 16` and so on).
+    fn fold_offsets(&mut self) {
+        let end = self.cold.min(self.insts.len());
+        for at in 0..end {
+            let Some(Inst::BinaryImm {
+                op: BinOp::Add,
+                dst,
+                lhs,
+                imm,
+            }) = self.insts[at]
+            else {
+                continue;
+            };
+            if dst == lhs || !(0..=32760).contains(&imm) {
+                continue;
+            }
+            for next in at + 1..end {
+                let Some(inst) = self.insts[next].as_mut() else {
+                    continue;
+                };
+                if matches!(inst, Inst::Label(_)) {
+                    break;
+                }
+                match inst {
+                    Inst::Load {
+                        width,
+                        base,
+                        offset,
+                        ..
+                    }
+                    | Inst::Store {
+                        width,
+                        base,
+                        offset,
+                        ..
+                    } if *base == dst => {
+                        let size = match width {
+                            ir::Width::W8 => 1,
+                            ir::Width::W16 => 2,
+                            ir::Width::W32 => 4,
+                            ir::Width::W64 => 8,
+                        };
+                        let folded = *offset + imm as u32;
+                        if folded % size == 0 && folded / size < 4096 {
+                            *base = lhs;
+                            *offset = folded;
+                        }
+                    }
+                    _ => {}
+                }
+                let inst = self.insts[next].as_ref();
+                let def = inst.and_then(Inst::def);
+                if def == Some(lhs)
+                    || def == Some(dst)
+                    || inst.is_some_and(|i| i.target().is_some())
+                {
+                    break;
+                }
+            }
         }
     }
 

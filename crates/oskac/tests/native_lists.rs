@@ -396,6 +396,42 @@ fn text_splits_into_lists_and_joins_from_them() {
 }
 
 #[test]
+fn for_over_chars_walks_the_text_and_leaves_it_at_any_point() {
+    // The native backend walks `for c in text.chars()` a character at a
+    // time with no list: returning a character, `break`, `continue`,
+    // nested loops, a binding of `_`, characters kept after the loop, and
+    // a receiver that is a temporary text, over one- to four-byte ones.
+    assert_prints(
+        "for_chars",
+        "fn first_non_space(line: String) -> String {\n    for c in line.chars() {\n        if c != \" \" {\n            return c\n        }\n    }\n    \"\"\n}\n\n\
+         fn count_until(line: String, stop: String) -> Int {\n    var n = 0\n    for c in line.chars() {\n        if c == stop {\n            break\n        }\n        if c == \"é\" {\n            continue\n        }\n        n = n + 1\n    }\n    n\n}\n\n\
+         fn twice(line: String) -> List<String> {\n    var out: List<String> = List.new()\n    for c in \"{line}!\".chars() {\n        out.push(c)\n        out.push(c)\n    }\n    out\n}",
+        r#"    show(io, first_non_space("   héllo"))
+    show(io, first_non_space("    "))
+    show(io, first_non_space("😀x"))
+    let a = count_until("aébécd", "c")
+    let b = count_until("", "c")
+    show(io, "{a} {b}")
+    show(io, "-".join(twice("aé😀")))
+    var pairs = 0
+    for x in "ab".chars() {
+        for y in "xyz".chars() {
+            if y == "z" {
+                break
+            }
+            pairs = pairs + 1
+        }
+    }
+    var n = 0
+    for _ in "añb😀".chars() {
+        n = n + 1
+    }
+    show(io, "{pairs} {n}")"#,
+        "h\n\n😀\n2 0\na-a-é-é-😀-😀-!-!\n4 4\n",
+    );
+}
+
+#[test]
 fn dbg_shows_a_list_item_by_item() {
     let items = "struct Point { x: Int, y: Int }";
     let body = r#"    let empty: List<Int> = []
