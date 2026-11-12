@@ -1,0 +1,9 @@
+$ oskac test unsupported.osk
+exit: 0
+--- stdout
+test refused ... ok
+
+1 tests: 1 passed, 0 failed, 0 skipped
+--- stderr
+[refused] [dbg] <Dir(FsCap { root: Dir(RootHandle { path: "/", file: None, os: None }), access: ReadWrite })>
+--- written

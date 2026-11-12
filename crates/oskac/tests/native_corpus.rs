@@ -104,7 +104,7 @@ fn is_program(case: &Case, name: &str) -> bool {
     let program = match built {
         Some(0) => true,
         Some(2) => {
-            let interpreted = oskac(&dir, &["run", case.target()]);
+            let interpreted = oskac(&dir, &["run", "--interpret", case.target()]);
             assert_eq!(
                 interpreted,
                 Some(2),

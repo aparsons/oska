@@ -5,8 +5,7 @@
 //! arguments, stdin, environment and starting directory tree. [`run`]
 //! runs it twice, in two identical temporary directories:
 //!
-//! - on the interpreter's real host, as `oskac run` (today's default;
-//!   once native is the default, `oskac run --interpret`);
+//! - on the interpreter's real host, as `oskac run --interpret`;
 //! - as a native executable written by `oskac build` outside the
 //!   directory, so that it does not show up in the tree.
 //!
@@ -164,7 +163,7 @@ pub fn run(case: &Case) -> (Outcome, Outcome) {
     let interpreted_dir = fresh_tree(&root.join("interpreted"), case);
     let mut interpreter = oskac(&interpreted_dir);
     interpreter
-        .arg("run")
+        .args(["run", "--interpret"])
         .arg(&case.target)
         .arg("--")
         .args(&case.args);

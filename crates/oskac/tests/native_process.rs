@@ -660,7 +660,7 @@ fn assert_same_bytes(
     };
     let native = run(Command::new(&exe));
     let mut interpreter = Command::new(env!("CARGO_BIN_EXE_oskac"));
-    interpreter.args(["run", "main.osk"]);
+    interpreter.args(["run", "--interpret", "main.osk"]);
     let interpreted = run(interpreter);
     assert_eq!(native, interpreted, "the backends differ");
     (
@@ -735,7 +735,7 @@ fn an_argument_that_is_not_utf8_ends_the_program_with_101_on_both_backends() {
         .output()
         .expect("runs");
     let interpreted = Command::new(env!("CARGO_BIN_EXE_oskac"))
-        .args(["run", "main.osk", "--"])
+        .args(["run", "--interpret", "main.osk", "--"])
         .arg(arg)
         .current_dir(&dir)
         .output()

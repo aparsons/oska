@@ -1,0 +1,12 @@
+$ oskac test tested.osk
+exit: 1
+--- stdout
+test doubles ... ok
+test wrongly ... FAILED
+
+failures:
+test wrongly: tested.osk:10:5: error[P0011]: assertion failed: `actual == expected`: actual 4, expected 5 (bytes 111..136)
+
+2 tests: 1 passed, 1 failed, 0 skipped
+--- stderr
+--- written

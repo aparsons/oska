@@ -780,7 +780,7 @@ fn swapping(case: impl Fn(&str) -> Case, swap: fn(&Path)) -> (String, std::path:
     // A second tree for the interpreter, set up the same way.
     let (_, interpreted_dir) = differential::build_native(&case("interpreted"));
     let mut oskac = std::process::Command::new(env!("CARGO_BIN_EXE_oskac"));
-    oskac.arg("run").arg("main.osk");
+    oskac.args(["run", "--interpret", "main.osk"]);
     let interpreted = interact(oskac, &interpreted_dir, swap);
     assert_eq!(interpreted, native, "the backends differ");
     (native, native_dir)
@@ -1116,7 +1116,7 @@ fn a_file_or_directory_without_permission_fails_with_the_systems_message() {
             "native" => std::process::Command::new(exe),
             _ => {
                 let mut oskac = std::process::Command::new(env!("CARGO_BIN_EXE_oskac"));
-                oskac.arg("run").arg("main.osk");
+                oskac.args(["run", "--interpret", "main.osk"]);
                 oskac
             }
         };

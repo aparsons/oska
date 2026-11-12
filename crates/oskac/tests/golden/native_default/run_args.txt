@@ -1,0 +1,12 @@
+$ oskac run args.osk -- one --format=json -- -o  two words
+exit: 0
+--- stdout
+[args.osk]
+[one]
+[--format=json]
+[--]
+[-o]
+[]
+[two words]
+--- stderr
+--- written

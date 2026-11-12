@@ -5,6 +5,7 @@ use std::process::ExitCode;
 
 mod build;
 mod explain;
+mod native;
 mod native_test;
 mod package;
 
@@ -19,12 +20,16 @@ USAGE:
                                            package directory (the current one
                                            with no path), and report each
                                            function's authority
-    oskac run [path] [--format=json] [-- args...]
+    oskac run [path] [--format=json] [--interpret] [-- args...]
                                            Check a source file or package and,
-                                           if it has no diagnostics, run it
-    oskac test [path] [--format=json] [--integration]
+                                           if it has no diagnostics, run it:
+                                           natively on aarch64 Linux, on the
+                                           interpreter elsewhere or with
+                                           --interpret
+    oskac test [path] [--format=json] [--integration] [--interpret]
                                            Run the test blocks in a source file
-                                           or package
+                                           or package, natively or interpreted
+                                           as `run` does
     oskac build [path] [-o out] [--format=json]
                                            Check a source file or package and,
                                            if it has no diagnostics, compile it
@@ -44,10 +49,9 @@ struct Flags {
     release: bool,
     /// `--integration`: `oskac test` runs `#[integration]` tests too.
     integration: bool,
-    /// `--native`: `oskac test` runs the tests as native code
-    /// (`native_test.rs`). PROVISIONAL and not in the help: #141 makes
-    /// native the default and replaces it with `--interpret`.
-    native: bool,
+    /// `--interpret`: `oskac run` and `oskac test` use the interpreter
+    /// on a host with a native backend too (`native.rs`).
+    interpret: bool,
 }
 
 /// A command line, parsed: the command and its operands, the flags, the
@@ -87,7 +91,7 @@ impl CommandLine {
                 },
                 "--release" => line.flags.release = true,
                 "--integration" => line.flags.integration = true,
-                "--native" => line.flags.native = true,
+                "--interpret" => line.flags.interpret = true,
                 format if format.starts_with("--format=") => {
                     line.flags.json = format == "--format=json";
                 }
@@ -326,14 +330,28 @@ fn print_diagnostics(diagnostics: &[Diagnostic]) {
 /// stderr as `oskac check` prints diagnostics, or one JSON object per
 /// line with `--format=json`. The exit code is the program's: 101 after
 /// a panic (see `docs/runtime.md`).
-fn run_file(path: &str, Flags { json, .. }: Flags, args: &[String]) -> ExitCode {
+fn run_file(path: &str, flags: Flags, args: &[String]) -> ExitCode {
+    let json = flags.json;
     let Some(src) = read_source(path) else {
         return ExitCode::FAILURE;
     };
+    let places = Places::File { path, src: &src };
+    if native::runs_natively(flags) {
+        let checked = oska_check::check_module(&src);
+        if let Some(program) = checked
+            .program
+            .as_ref()
+            .filter(|_| checked.diagnostics.is_empty())
+        {
+            if let native::Run::Ran(code) = native::run(program, &places, path, args, json) {
+                return code;
+            }
+        }
+    }
     let mut argv = vec![path.to_string()];
     argv.extend_from_slice(args);
     let outcome = oska_run::run(&src, &mut oska_run::RealHost::new(), &argv);
-    finish_run(outcome, json, &Places::File { path, src: &src })
+    finish_run(outcome, json, &places)
 }
 
 /// Print how a run ended and return the program's exit code. `places`
@@ -371,32 +389,20 @@ fn test_file(path: &str, flags: Flags) -> ExitCode {
     };
     let options = oska_run::TestOptions { integration };
     let places = Places::File { path, src: &src };
-    if flags.native {
+    if native::runs_natively(flags) {
         let checked = oska_check::check_module(&src);
-        let report = match &checked.program {
-            Some(program) => native_test::test_program(program, options),
-            None => oska_run::TestReport {
-                tests: Vec::new(),
-                diagnostics: checked.diagnostics,
-            },
-        };
-        return finish_native_test(report, json, &places);
+        if let Some(program) = checked
+            .program
+            .as_ref()
+            .filter(|_| checked.diagnostics.is_empty())
+        {
+            if let Some(report) = native_test::test_program(program, options) {
+                return finish_test(report, json, &places);
+            }
+        }
     }
     let report = oska_run::test(&src, &mut oska_run::RealHost::new(), options);
     finish_test(report, json, &places)
-}
-
-/// [`finish_test`] for a native run: a program the native backend cannot
-/// compile yet (`E0390`) exits with 2, as one the interpreter cannot run
-/// does.
-fn finish_native_test(report: oska_run::TestReport, json: bool, places: &Places) -> ExitCode {
-    let unsupported = native_test::is_unsupported(&report);
-    let code = finish_test(report, json, places);
-    if unsupported {
-        ExitCode::from(2)
-    } else {
-        code
-    }
 }
 
 /// Print a test report and return its exit code. `places` names the file
@@ -489,6 +495,11 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
     }
     let mut host = oska_run::RealHost::new();
     if command == Command::Run {
+        if native::runs_natively(flags) {
+            if let native::Run::Ran(code) = native::run(program, &places, dir, args, json) {
+                return code;
+            }
+        }
         let mut argv = vec![dir.to_string()];
         argv.extend_from_slice(args);
         let outcome = oska_run::run_program(program, &mut host, &argv);
@@ -497,9 +508,10 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
         let options = oska_run::TestOptions {
             integration: flags.integration,
         };
-        if flags.native {
-            let tests = native_test::test_program(program, options);
-            return finish_native_test(tests, json, &places);
+        if native::runs_natively(flags) {
+            if let Some(tests) = native_test::test_program(program, options) {
+                return finish_test(tests, json, &places);
+            }
         }
         let tests = oska_run::test_program(program, &mut host, options);
         finish_test(tests, json, &places)
@@ -622,7 +634,7 @@ mod tests {
                 json: true,
                 release: false,
                 integration: true,
-                native: false,
+                interpret: false,
             }
         );
         assert!(line.program_args.is_empty());

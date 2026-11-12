@@ -1,0 +1,8 @@
+$ oskac run panics.osk --format=json
+exit: 101
+--- stdout
+before
+--- stderr
+warned
+{"code":"P0004","message":"division by zero: `1 / 0`","path":"panics.osk","span":{"start":140,"end":148}}
+--- written

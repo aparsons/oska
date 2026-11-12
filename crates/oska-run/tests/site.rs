@@ -1278,7 +1278,8 @@ fn llms_txt_indexes_the_markdown_copies_with_summaries() {
          \n\
          Oska 1.2.3 (pre-alpha). These docs track `main`. Every page is also served as Markdown: \
          the same path with `.md`. All of them are in [llms-full.txt](https://oskalang.dev/llms-full.txt). \
-         The source code is at https://github.com/aparsons/oska. A program is one `.osk` file or a package: an `oska.toml` and modules under `src/`, with `src/main.osk` as the entry and `use pkg.a.b` importing `src/a/b.osk`; see [Packages and modules](https://oskalang.dev/guide/packages.md).\n\
+         The source code is at https://github.com/aparsons/oska. A program is one `.osk` file or a package: an `oska.toml` and modules under `src/`, with `src/main.osk` as the entry and `use pkg.a.b` importing `src/a/b.osk`; see [Packages and modules](https://oskalang.dev/guide/packages.md). \
+         `oskac build` compiles a program to a static aarch64 Linux executable on any host. On aarch64 Linux, `oskac run` and `oskac test` compile natively and run the executable, and `--interpret` selects the interpreter, which every other host uses; output, reports and exit codes are the same on both. See [Platform support](https://oskalang.dev/guide/cli-reference.md#platform-support).\n\
          \n\
          ## Docs\n\
          \n\

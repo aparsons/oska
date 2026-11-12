@@ -1,6 +1,6 @@
 //! Native `test` blocks and the test host (ticket #139), run on both
-//! backends: `oskac test` on the interpreter and `oskac test --native`
-//! (provisional, until #141 makes native the default) must print the same
+//! backends: `oskac test --interpret` and `oskac test`, native by default
+//! on aarch64 Linux (#141), must print the same
 //! report, text and JSON, with and without `--integration`, the same
 //! stderr, and exit with the same code.
 //!
@@ -40,12 +40,12 @@ fn assert_same_tests(name: &str, files: &[(&str, &str)], target: &str) -> Outcom
             .join("native_tests")
             .join(format!("{name}-{run}"));
         let _ = std::fs::remove_dir_all(&root);
-        let interpreted = oskac_test(&fresh(&root.join("interpreted"), files), target, flags);
-        let native = oskac_test(
-            &fresh(&root.join("native"), files),
+        let interpreted = oskac_test(
+            &fresh(&root.join("interpreted"), files),
             target,
-            &[*flags, &["--native"][..]].concat(),
+            &[*flags, &["--interpret"][..]].concat(),
         );
+        let native = oskac_test(&fresh(&root.join("native"), files), target, flags);
         assert!(
             interpreted == native,
             "case `{name}` {flags:?}: the backends differ\n--- interpreter\n{interpreted:#?}\n--- native\n{native:#?}"
@@ -603,6 +603,40 @@ fn assert_same_corpus(name: &str, files: &[(String, String)], target: &str) {
         outcome.stdout.contains(" tests: "),
         "case `{name}` was refused: {outcome:#?}"
     );
+    // And a native one: `oskac test` runs a program the backend refuses
+    // on the interpreter.
+    assert!(
+        oska_native::build_tests(&checked(&files, target)).is_ok(),
+        "case `{name}`: the native backend refuses its tests"
+    );
+}
+
+/// The checked program `target` names among `files`: a source file, or
+/// a package directory.
+fn checked(files: &[(&str, &str)], target: &str) -> oska_check::program::Program {
+    let report = if let Some((_, src)) = files.iter().find(|(path, _)| *path == target) {
+        oska_check::check_module(src)
+    } else {
+        let prefix = format!("{target}/src/");
+        let package = oska_check::Package {
+            manifest: files
+                .iter()
+                .find(|(path, _)| *path == format!("{target}/oska.toml"))
+                .map(|(_, text)| text.to_string()),
+            modules: files
+                .iter()
+                .filter_map(|(path, text)| {
+                    let module = path.strip_prefix(&prefix)?.strip_suffix(".osk")?;
+                    Some(oska_check::ModuleSource::in_package(
+                        &module.replace('/', "."),
+                        text,
+                    ))
+                })
+                .collect(),
+        };
+        oska_check::check_package(&package, oska_check::CheckOptions::default())
+    };
+    report.program.expect("a checked program")
 }
 
 /// Every test-bearing package among the fixtures and the examples: a

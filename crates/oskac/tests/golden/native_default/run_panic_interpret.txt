@@ -1,0 +1,8 @@
+$ oskac run --interpret panics.osk
+exit: 101
+--- stdout
+before
+--- stderr
+warned
+panics.osk:5:13: error[P0004]: division by zero: `1 / 0` (bytes 140..148)
+--- written

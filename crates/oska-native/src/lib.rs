@@ -38,16 +38,18 @@ pub mod codes {
     pub const UNIMPLEMENTED_MODULE: &str = "E0371";
     /// The program uses something the native backend cannot compile yet.
     pub const UNSUPPORTED: &str = "E0390";
-    /// The executable could not be written.
+    /// The executable could not be written, or, for `oskac run` and
+    /// `oskac test`, written or started in the temporary directory.
     pub const UNWRITABLE_OUTPUT: &str = "E0391";
-    /// A native test process ended in a way no test can make it end: a
-    /// signal killed it, or it exited with no report of its own. A fault
-    /// in the native backend, never in the test.
-    pub const TEST_PROCESS_FAULT: &str = "E0392";
+    /// A native test process ended in a way no test can make it end (a
+    /// signal killed it, or it exited with no report of its own), or the
+    /// program `oskac run` ran natively died of a signal only a fault
+    /// raises. A fault in the native backend, never in the program.
+    pub const PROCESS_FAULT: &str = "E0392";
 
     /// The backend's own codes, in the order `docs/runtime.md` lists
     /// them. `E0371` is the interpreter's, shared.
-    pub const ALL: [&str; 3] = [UNSUPPORTED, UNWRITABLE_OUTPUT, TEST_PROCESS_FAULT];
+    pub const ALL: [&str; 3] = [UNSUPPORTED, UNWRITABLE_OUTPUT, PROCESS_FAULT];
 
     /// The `P`-codes native code panics with: the interpreter's.
     pub const PANICS: [&str; 16] = [
