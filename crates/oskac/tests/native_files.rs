@@ -1216,3 +1216,36 @@ fn a_closure_keeps_the_directory_capability_it_captured() {
          nested.txt,out\n"
     );
 }
+
+// ---- Running out of memory --------------------------------------------------------
+
+#[test]
+fn a_file_too_large_to_hold_is_an_io_error_not_the_end_of_the_process() {
+    // A sparse file of 1 TiB: no memory holds it, so the interpreter's
+    // `read_to_string` cannot reserve its buffer and gives an `IoError`.
+    // Under `vm.overcommit_memory = 1` the reservation would succeed on
+    // both backends and the read would go on for a terabyte of zeros.
+    let policy = std::fs::read_to_string("/proc/sys/vm/overcommit_memory").unwrap_or_default();
+    if policy.trim() == "1" {
+        eprintln!("skipped: memory is overcommitted without limit here");
+        return;
+    }
+    // Outside the trees the harness compares, which it reads whole.
+    let case = case(
+        "sparse",
+        r#"    let big = read.restrict_to("../sparse")
+    io.println(shown(big.read_to_string(Path.new("big"))))?
+    io.println(shown(big.restrict_to_file(Path.new("big")).read_to_string()))?
+    io.println(shown(read.restrict_to("root").read_to_string(Path.new("inside.txt"))))?"#,
+    )
+    .with_setup(|dir| {
+        let sparse = dir.parent().expect("the case directory").join("sparse");
+        std::fs::create_dir_all(&sparse).expect("create the sparse directory");
+        let big = std::fs::File::create(sparse.join("big")).expect("create the sparse file");
+        big.set_len(1 << 40).expect("size the sparse file");
+    });
+    assert_eq!(
+        printed(&case),
+        "REFUSED: out of memory\nREFUSED: out of memory\ninside text\n"
+    );
+}

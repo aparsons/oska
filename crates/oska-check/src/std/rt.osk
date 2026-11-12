@@ -211,6 +211,28 @@ pub fn alloc(size: Int) -> Int {
     object
 }
 
+// `alloc(size)`, or 0 when no memory holds it (or `size` is past any
+// address space), where `alloc` would end the process: for a buffer whose
+// size the outside world chose, such as a file's.
+fn try_alloc(size: Int) -> Int {
+    if size < 0 || size > 140737488355328 {
+        return 0
+    }
+    let block = rt_mem_add(size, 8)
+    if block <= largest_block() {
+        return alloc(size)
+    }
+    let length = rt_mem_and(rt_mem_add(block, 65535), -65536)
+    let at = rt_sys_mmap(0, length, 3, private_anonymous(), -1, 0)
+    if at < 0 {
+        return 0
+    }
+    rt_mem_store64(at, rt_mem_sub(0, length))
+    let object = rt_mem_add(at, 8)
+    rt_mem_store64(object, 1)
+    object
+}
+
 // A new block of `bytes`, carved from the current chunk or a new one.
 fn carve(bytes: Int) -> Int {
     var next = rt_mem_load64(global(8))
@@ -391,6 +413,18 @@ pub fn drop_next() -> Int {
 pub fn text_new(length: Int) -> Int {
     let object = alloc(rt_mem_and(rt_mem_add(length, 23), -8))
     rt_mem_store64(rt_mem_add(object, 8), length)
+    object
+}
+
+// `text_new(length)`, or 0 when no memory holds it (`try_alloc`).
+fn text_try_new(length: Int) -> Int {
+    if length < 0 {
+        return 0
+    }
+    let object = try_alloc(rt_mem_and(rt_mem_add(length, 23), -8))
+    if object != 0 {
+        rt_mem_store64(rt_mem_add(object, 8), length)
+    }
     object
 }
 
@@ -2910,14 +2944,21 @@ fn read_all(fd: Int) -> Result<String, IoError> {
     let buffer = alloc(136)
     var capacity = 64
     if rt_sys_fstat(fd, rt_mem_add(buffer, 8)) >= 0 {
-        capacity = capacity + rt_mem_load64(rt_mem_add(buffer, 56))
+        capacity = rt_mem_add(capacity, rt_mem_load64(rt_mem_add(buffer, 56)))
     }
     free(buffer)
-    var object = text_new(capacity)
+    var object = text_try_new(capacity)
+    if object == 0 {
+        return Err(io_error_text("out of memory"))
+    }
     var length = 0
     while true {
         if length == capacity {
-            let larger = text_new(capacity * 2)
+            let larger = text_try_new(rt_mem_shl(capacity, 1))
+            if larger == 0 {
+                free(object)
+                return Err(io_error_text("out of memory"))
+            }
             copy_bytes(text_data(larger), text_data(object), length)
             free(object)
             object = larger
