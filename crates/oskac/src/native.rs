@@ -77,11 +77,22 @@ pub fn note_fallback(
     }
 }
 
-/// `oskac run`, natively: compile `program`, run it with `argv0` as its
-/// path (`Args.get(0)`, what the interpreter reports: the path the
-/// program was named by) and `args` after it, and report a panic as the
+/// How `oskac run` was asked to run a program.
+pub struct Invocation<'a> {
+    /// The path the program was named by: its `Args.get(0)`, as the
+    /// interpreter reports it.
+    pub argv0: &'a str,
+    /// The arguments after `--`.
+    pub args: &'a [String],
+    /// Whether reports are JSON (`--format=json`).
+    pub json: bool,
+}
+
+/// `oskac run`, natively: compile `program`, run it with the invocation's
+/// `argv0` as its path and `args` after it, and report a panic as the
 /// interpreter's run does, as JSON with `json`.
-pub fn run(program: &Program, places: &Places, argv0: &str, args: &[String], json: bool) -> Run {
+pub fn run(program: &Program, places: &Places, invocation: Invocation) -> Run {
+    let Invocation { argv0, args, json } = invocation;
     // A human report is placed in the source by the executable itself; a
     // JSON one is read back unplaced and placed here, as the
     // interpreter's panic is.
@@ -201,19 +212,37 @@ fn ended(status: std::process::ExitStatus, json: bool) -> ExitCode {
     ExitCode::FAILURE
 }
 
+/// The Linux signals a native process may die of, by number: the name,
+/// and whether only a fault raises it. A program killed by any other
+/// (`SIGKILL`, `SIGPIPE`, `SIGTERM`) was killed from outside, as any
+/// process can be.
+const SIGNALS: &[(i32, &str, bool)] = &[
+    (4, "SIGILL", true),
+    (5, "SIGTRAP", true),
+    (6, "SIGABRT", true),
+    (7, "SIGBUS", true),
+    (8, "SIGFPE", true),
+    (9, "SIGKILL", false),
+    (11, "SIGSEGV", true),
+    (13, "SIGPIPE", false),
+    (15, "SIGTERM", false),
+];
+
+/// The name of the Linux signal `number`, when [`SIGNALS`] has it.
+pub fn signal_name(number: i32) -> Option<&'static str> {
+    SIGNALS
+        .iter()
+        .find(|(n, _, _)| *n == number)
+        .map(|(_, name, _)| *name)
+}
+
 /// The name of the Linux signal `number`, for the ones a faulty program
-/// dies of. A program killed by any other signal (`SIGTERM`, `SIGKILL`)
-/// was killed from outside, as any process can be.
+/// dies of; `None` for one sent from outside.
 pub fn fault_signal(number: i32) -> Option<&'static str> {
-    Some(match number {
-        4 => "SIGILL",
-        5 => "SIGTRAP",
-        6 => "SIGABRT",
-        7 => "SIGBUS",
-        8 => "SIGFPE",
-        11 => "SIGSEGV",
-        _ => return None,
-    })
+    SIGNALS
+        .iter()
+        .find(|(n, _, fault)| *n == number && *fault)
+        .map(|(_, name, _)| *name)
 }
 
 /// The refusal of a temporary executable that could not be written or

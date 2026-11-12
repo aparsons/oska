@@ -343,7 +343,15 @@ fn run_file(path: &str, flags: Flags, args: &[String]) -> ExitCode {
             .as_ref()
             .filter(|_| checked.diagnostics.is_empty())
         {
-            match native::run(program, &places, path, args, json) {
+            match native::run(
+                program,
+                &places,
+                native::Invocation {
+                    argv0: path,
+                    args,
+                    json,
+                },
+            ) {
                 native::Run::Ran(code) => return code,
                 native::Run::Refused(refusal) => {
                     native::note_fallback(refusal, oska_run::refusal(program), &places, json)
@@ -503,7 +511,15 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
     let mut host = oska_run::RealHost::new();
     if command == Command::Run {
         if native::runs_natively(flags) {
-            match native::run(program, &places, dir, args, json) {
+            match native::run(
+                program,
+                &places,
+                native::Invocation {
+                    argv0: dir,
+                    args,
+                    json,
+                },
+            ) {
                 native::Run::Ran(code) => return code,
                 native::Run::Refused(refusal) => {
                     native::note_fallback(refusal, oska_run::refusal(program), &places, json)

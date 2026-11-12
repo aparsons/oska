@@ -1,6 +1,6 @@
 [package]
 name = "oska-native"
-description = "Native code generator for the Oska programming language"
+description = "Native backend for the Oska programming language"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

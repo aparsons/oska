@@ -124,7 +124,7 @@ fn ending(status: std::process::ExitStatus) -> String {
     {
         use std::os::unix::process::ExitStatusExt;
         if let Some(signal) = status.signal() {
-            return match signal_name(signal) {
+            return match native::signal_name(signal) {
                 Some(name) => format!("was killed by signal {signal} ({name})"),
                 None => format!("was killed by signal {signal}"),
             };
@@ -134,23 +134,6 @@ fn ending(status: std::process::ExitStatus) -> String {
         Some(code) => format!("exited with code {code}"),
         None => format!("ended with {status}"),
     }
-}
-
-/// The name of the Linux signal `number`, for the ones a faulty program
-/// dies of.
-fn signal_name(number: i32) -> Option<&'static str> {
-    Some(match number {
-        4 => "SIGILL",
-        5 => "SIGTRAP",
-        6 => "SIGABRT",
-        7 => "SIGBUS",
-        8 => "SIGFPE",
-        9 => "SIGKILL",
-        11 => "SIGSEGV",
-        13 => "SIGPIPE",
-        15 => "SIGTERM",
-        _ => return None,
-    })
 }
 
 #[cfg(all(test, unix))]
