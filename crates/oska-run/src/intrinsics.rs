@@ -190,7 +190,11 @@ pub(crate) fn debug(value: &Value, out: &mut String) {
         Value::Bool(b) => out.push_str(&b.to_string()),
         Value::Int(n, _) => out.push_str(&n.to_string()),
         Value::Str(s) => out.push_str(&format!("{:?}", &**s)),
-        Value::Range { start, end, .. } => out.push_str(&format!("{start}..{end}")),
+        Value::Struct { ty, fields } if &**ty == builtins::RANGE => {
+            debug(&fields[0], out);
+            out.push_str("..");
+            debug(&fields[1], out);
+        }
         Value::Struct { ty, .. } if &**ty == builtins::SECRET => out.push_str("<redacted>"),
         Value::Struct { ty, fields } => {
             out.push_str(ty);

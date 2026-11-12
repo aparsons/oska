@@ -3,8 +3,11 @@
 //! `Secret`). Text, `Int`s and `Bool`s come from `std.rt`; a struct or an
 //! enum has a generated function of its own per type
 //! ([`Instance::Debug`]), which handles recursive types, and so has a
-//! list type (`[1, 2]`). Closures, ranges and capabilities are refused
-//! (`E0390`) until they have a representation.
+//! list type (`[1, 2]`). A range shows its bounds, `0..3`, a function
+//! value `<closure>` or `<fn>`, a task `<task>`, a scope `<scope>`, `Args`
+//! its arguments, and a capability that holds nothing what the
+//! interpreter's Rust `{:?}` shows of it. A directory or file capability,
+//! whose text there holds an OS handle, is refused (`E0390`).
 //!
 //! Every function here returns a text that is a new reference or static;
 //! the caller releases it.
@@ -35,9 +38,38 @@ impl Body<'_, '_> {
             }
             Type::String => self.call_runtime("debug_string", vec![value], span),
             Type::Named { name, .. } if name == builtins::SECRET => Ok(self.text("<redacted>")),
+            Type::Named { name, .. } if name == layout::TASK => Ok(self.text("<task>")),
+            Type::Named { name, .. } if name == layout::SCOPE => Ok(self.text("<scope>")),
+            Type::Named { name, .. } if name == builtins::ARGS => {
+                self.call_runtime("debug_args", vec![value], span)
+            }
+            Type::Named { name, .. } if builtins::is_capability(name) => {
+                match capability_text(name) {
+                    Some(text) => Ok(self.text(&text)),
+                    None => Err(self.refuse(span, &format!("`dbg` of a `{name}`"))),
+                }
+            }
+            Type::Fn { .. } => {
+                // The interpreter tells closures from named functions.
+                let kind = self.load(value, layout::FN_KIND);
+                let named = self.text("<fn>");
+                let text = self.copy(named);
+                let done = self.label();
+                self.push(Inst::JumpIfZero {
+                    cond: kind,
+                    target: done,
+                });
+                let closure = self.text("<closure>");
+                self.push(Inst::Copy {
+                    dst: text,
+                    src: closure,
+                });
+                self.push(Inst::Label(done));
+                Ok(text)
+            }
             Type::Named { name, .. }
                 if !builtins::is_capability(name)
-                    && !matches!(name.as_str(), "Range" | "Task" | "Scope" | "Args")
+                    && !matches!(name.as_str(), "Task" | "Scope" | "Args")
                     && self.program().types.contains_key(name) =>
             {
                 let instance = Instance::Debug(self.source, ty.clone());
@@ -97,6 +129,18 @@ impl Body<'_, '_> {
             return Err(self.refuse(NOWHERE, &format!("`dbg` of a `{ty}`")));
         };
         match self.fields_of(ty) {
+            Some(Fields::Struct(fields)) if name == builtins::RANGE => {
+                let mut acc = self.text("");
+                for (index, field) in fields.iter().enumerate() {
+                    if index > 0 {
+                        acc = self.debug_append_text(acc, "..")?;
+                    }
+                    let bound = self.load(value, layout::struct_field(index));
+                    let piece = self.debug_text(field, bound, NOWHERE)?;
+                    acc = self.debug_append(acc, piece)?;
+                }
+                self.push(Inst::Return(acc));
+            }
             Some(Fields::Struct(fields)) => {
                 let text = self.debug_fields(name, value, &fields, layout::struct_field, false)?;
                 self.push(Inst::Return(text));
@@ -193,4 +237,22 @@ impl Body<'_, '_> {
         self.push(Inst::Label(exit));
         self.debug_append_text(acc, "]")
     }
+}
+
+/// The `dbg` text of a capability that holds nothing, as the interpreter
+/// shows it: its `Capability` value's Rust `{:?}`. `None` for one that
+/// holds a directory or file.
+fn capability_text(name: &str) -> Option<String> {
+    let access = match name {
+        "Stdin" | "Stdout" | "Stderr" | "Env" | "Clock" | "Random" => {
+            return Some(format!("<{name}>"))
+        }
+        "Fs" => "ReadWrite",
+        "FsRead" => "Read",
+        "FsWrite" => "Write",
+        _ => return None,
+    };
+    Some(format!(
+        "<Fs(FsCap {{ root: Anywhere, access: {access} }})>"
+    ))
 }

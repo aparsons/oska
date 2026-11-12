@@ -105,18 +105,63 @@ fn run_one(exe: &Path, index: usize) -> Option<Diagnostic> {
                 String::from_utf8_lossy(&output.stdout)
             )))
         }),
-        _ => Some(abnormal(&format!("ended with {}", output.status))),
+        Some(0) => Some(abnormal(&format!(
+            "passed but printed {:?}",
+            String::from_utf8_lossy(&output.stdout)
+        ))),
+        _ => Some(abnormal(&ending(output.status))),
     }
 }
 
 /// The failure of a test whose process ended in a way no test can make
-/// it end: a fault in the native backend.
+/// it end (`E0392`): a fault in the native backend, as a Rust panic in the
+/// interpreter would be one in the interpreter. A test's own failures are
+/// panics, reported as the interpreter reports them.
 fn abnormal(what: &str) -> Diagnostic {
     Diagnostic::new(
-        oska_native::codes::UNSUPPORTED,
-        format!("the native test process {what}; run the test with the interpreter"),
+        oska_native::codes::TEST_PROCESS_FAULT,
+        format!(
+            "the native test process {what}: a fault in the native backend, not in the test; \
+             run the test with the interpreter"
+        ),
         Span { start: 0, end: 0 },
     )
+}
+
+/// How a test process ended that no test can make it end: killed by a
+/// signal, named, or an exit code other than a pass's or a panic's.
+fn ending(status: std::process::ExitStatus) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return match signal_name(signal) {
+                Some(name) => format!("was killed by signal {signal} ({name})"),
+                None => format!("was killed by signal {signal}"),
+            };
+        }
+    }
+    match status.code() {
+        Some(code) => format!("exited with code {code}"),
+        None => format!("ended with {status}"),
+    }
+}
+
+/// The name of the Linux signal `number`, for the ones a faulty program
+/// dies of.
+fn signal_name(number: i32) -> Option<&'static str> {
+    Some(match number {
+        4 => "SIGILL",
+        5 => "SIGTRAP",
+        6 => "SIGABRT",
+        7 => "SIGBUS",
+        8 => "SIGFPE",
+        9 => "SIGKILL",
+        11 => "SIGSEGV",
+        13 => "SIGPIPE",
+        15 => "SIGTERM",
+        _ => return None,
+    })
 }
 
 /// The test executable's temporary file, removed when dropped.
@@ -152,5 +197,53 @@ impl Executable {
 impl Drop for Executable {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /// Run the shell script `script` as a test process.
+    fn run_script(name: &str, script: &str) -> Option<Diagnostic> {
+        use std::os::unix::fs::PermissionsExt;
+        let path =
+            std::env::temp_dir().join(format!("oskac-native-test-{}-{name}", std::process::id()));
+        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).expect("the script");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+            .expect("making the script executable");
+        let failure = run_one(&path, 0);
+        let _ = std::fs::remove_file(&path);
+        failure
+    }
+
+    #[test]
+    fn a_test_process_killed_by_a_signal_is_a_fault_of_the_backend() {
+        let failure = run_script("segv", "kill -SEGV $$").expect("a failure");
+        assert_eq!(failure.code, "E0392");
+        assert_eq!(
+            failure.message,
+            "the native test process was killed by signal 11 (SIGSEGV): a fault in the native \
+             backend, not in the test; run the test with the interpreter"
+        );
+    }
+
+    #[test]
+    fn a_test_process_that_ends_with_no_report_is_a_fault_of_the_backend() {
+        let failure = run_script("exit3", "exit 3").expect("a failure");
+        assert_eq!(failure.code, "E0392");
+        assert!(failure
+            .message
+            .starts_with("the native test process exited with code 3:"));
+        let failure = run_script("garbled", "echo nonsense; exit 101").expect("a failure");
+        assert_eq!(failure.code, "E0392");
+        assert!(
+            failure
+                .message
+                .starts_with("the native test process panicked with a report that is not one"),
+            "{}",
+            failure.message
+        );
+        assert_eq!(run_script("pass", "exit 0"), None);
     }
 }

@@ -51,7 +51,9 @@
 //! # Calls and the stack
 //!
 //! `_start` maps the stack `main` runs on (`std.rt`'s `stack_new`): big
-//! enough for [`MAX_CALL_DEPTH`] calls of the program's largest frame,
+//! enough for [`MAX_CALL_DEPTH`] calls of the program's largest frame
+//! (and of the largest generated frame between two calls: a `requires`
+//! check, a thunk, a task runner),
 //! with a guard region below it. Every call of a program's function
 //! counts its depth ([`Inst::Enter`]) and panics with `P0021` at the
 //! interpreter's limit, so recursion never reaches the guard.
@@ -70,7 +72,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use oska_check::builtins;
 use oska_check::program::{
-    trait_method, Callee, Expr, ExprKind, Function, IntType, Part, Program, Stmt, Type,
+    trait_method, Callee, Construct, Expr, ExprKind, Function, IntType, Part, Program, Stmt, Type,
 };
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::{Diagnostic, Span};
@@ -224,6 +226,7 @@ pub fn program(
         queue: Vec::new(),
         rodata: Rodata::default(),
         user_functions: Vec::new(),
+        between_functions: Vec::new(),
         closures: Vec::new(),
         closure_ids: HashMap::new(),
     };
@@ -236,19 +239,45 @@ pub fn program(
                 source: Source::User,
                 ..
             } | Instance::Closure(_)
-                | Instance::Thunk { .. }
                 | Instance::Test(_)
         ) {
             lowering.user_functions.push(id);
         }
+        if matches!(
+            instance,
+            Instance::Requires { .. }
+                | Instance::TaskRunner { .. }
+                | Instance::RunTasks
+                | Instance::Thunk { .. }
+                | Instance::Equal(..)
+                | Instance::ListEq(..)
+        ) {
+            lowering.between_functions.push(id);
+        }
     }
     optimize::module(&mut lowering.functions);
     lowering.size_stack(entry);
+    // The most arguments any call passes, or any function takes, past
+    // those in registers: they share one area after the globals.
+    let extra_args = lowering
+        .functions
+        .iter()
+        .flat_map(|function| {
+            let calls = function.insts.iter().filter_map(|inst| match inst {
+                Inst::Call { args, .. } | Inst::CallIndirect { args, .. } => Some(args.len()),
+                _ => None,
+            });
+            calls.chain([function.params as usize])
+        })
+        .map(|count| count.saturating_sub(ir::REGISTER_ARGS))
+        .max()
+        .unwrap_or(0) as u32;
     Ok(ir::Module {
         functions: lowering.functions,
         entry,
         rodata: lowering.rodata.into_bytes(),
-        data_size: GLOBALS * layout::WORD,
+        data_size: (GLOBALS + extra_args) * layout::WORD,
+        extra_args: GLOBALS * layout::WORD,
     })
 }
 
@@ -271,6 +300,11 @@ struct Lowering<'p> {
     /// The program's own functions (not `std.rt`'s): their frames are
     /// those recursion can stack up.
     user_functions: Vec<FnId>,
+    /// The generated functions that run between two counted calls of the
+    /// program's: a `requires` check, a task's runner and the queue that
+    /// runs it, a generated `==` reaching a program's `eq`. One of their
+    /// frames may sit on each counted call's.
+    between_functions: Vec<FnId>,
     /// Every closure's code requested so far, by [`Instance::Closure`]'s
     /// index.
     closures: Vec<closures::ClosureCode>,
@@ -365,19 +399,25 @@ impl<'p> Lowering<'p> {
         Ok(start)
     }
 
-    /// Fill in the size of the stack `_start` maps: [`MAX_CALL_DEPTH`] of
-    /// the program's largest frame (its temporaries, the callee-saved
-    /// registers and the frame record), and [`STACK_RESERVE`].
+    /// Fill in the size of the stack `_start` maps: [`MAX_CALL_DEPTH`]
+    /// levels of the program's largest frame and two of the largest frame
+    /// that may run between two counted calls (each frame its temporaries, the
+    /// callee-saved registers and the frame record), and
+    /// [`STACK_RESERVE`]. A task recursing through `join` stacks a queue's
+    /// and a runner's frame for every two counted calls, the function's
+    /// and the closure's.
     fn size_stack(&mut self, start: FnId) {
-        let largest = self
-            .user_functions
-            .iter()
-            .filter_map(|&id| self.functions.get(id))
-            .map(|f| f.temps)
-            .max()
-            .unwrap_or(0);
-        let frame = 8 * u64::from(largest) + 8 * 9 + 32;
-        let size = (u64::from(MAX_CALL_DEPTH) * frame + STACK_RESERVE).next_multiple_of(1 << 16);
+        let largest = |ids: &[FnId]| {
+            ids.iter()
+                .filter_map(|&id| self.functions.get(id))
+                .map(|f| 8 * u64::from(f.temps) + 8 * 9 + 32)
+                .max()
+                .unwrap_or(0)
+        };
+        // Up to two of the generated frames per level: a thunk, then the
+        // `requires` check of the function it calls.
+        let level = largest(&self.user_functions) + 2 * largest(&self.between_functions);
+        let size = (u64::from(MAX_CALL_DEPTH) * level + STACK_RESERVE).next_multiple_of(1 << 16);
         if let Some(Inst::Const { value, .. }) = self.functions[start].insts.first_mut() {
             *value = size as i64;
         }
@@ -491,7 +531,7 @@ impl<'p> Lowering<'p> {
         if function.params.len() + usize::from(function.receiver) > ir::MAX_ARGS {
             return Err(refusal(
                 at(function.body.span),
-                "a function with more than 8 parameters",
+                &format!("a function with more than {} parameters", ir::MAX_ARGS),
                 runtime_origin.is_some(),
             ));
         }
@@ -713,6 +753,11 @@ struct Body<'l, 'p> {
     /// Whether it is a function value's code, which returns a status as
     /// its second result: 0 for a call that went ahead (`closures.rs`).
     status: bool,
+    /// Whether its panics are its caller's to report: the code of a
+    /// function value made from a prelude function, whose panic names
+    /// the call of the value. Each panic returns its report's middle,
+    /// `error[P....]: message`, as the status (`closures.rs`).
+    deferred: bool,
 }
 
 impl<'l, 'p> Body<'l, 'p> {
@@ -735,6 +780,7 @@ impl<'l, 'p> Body<'l, 'p> {
             subst: Vec::new(),
             ret: Type::Unit,
             status: false,
+            deferred: false,
         }
     }
 
@@ -1172,14 +1218,21 @@ impl<'l, 'p> Body<'l, 'p> {
     /// `path:line:col: error[P....]: ` and ` (bytes a..b)` and a newline.
     /// A panic in `std.rt` has no file to name.
     fn report(&self, code: &'static str, span: Span) -> (String, String) {
-        let unlocated = Diagnostic::new(code, "", span);
+        let (location, after) = self.report_around(span);
+        (format!("{location}error[{code}]: "), after)
+    }
+
+    /// The text before a panic's code (`path:line:col: `, or nothing in
+    /// `std.rt`) and after its message, for a panic at `span`.
+    fn report_around(&self, span: Span) -> (String, String) {
+        let unlocated = Diagnostic::new("", "", span);
         let located = match self.source {
             Source::User => (self.lowering.locate)(unlocated),
             Source::Runtime => unlocated,
         };
         let before = match &located.location {
-            Some(location) => format!("{location}: error[{code}]: "),
-            None => format!("error[{code}]: "),
+            Some(location) => format!("{location}: "),
+            None => String::new(),
         };
         let after = format!(" (bytes {}..{})\n", located.span.start, located.span.end);
         (before, after)
@@ -1196,6 +1249,88 @@ impl<'l, 'p> Body<'l, 'p> {
         }
     }
 
+    /// In [`Body::deferred`] code, a cold block that gives the caller the
+    /// text `status` builds (in the cold block) as the status.
+    fn defer_panic(
+        &mut self,
+        status: impl FnOnce(&mut Self) -> Result<Temp, Diagnostic>,
+    ) -> Result<Label, Diagnostic> {
+        self.cold_block(|body| {
+            let text = status(body)?;
+            let nothing = body.constant(0);
+            body.push(Inst::ReturnPair {
+                value: nothing,
+                second: text,
+            });
+            Ok(())
+        })
+    }
+
+    /// A cold block that panics with the status `status` a function value's
+    /// code returned, its report's middle, at the call at `span`. In
+    /// [`Body::deferred`] code, it passes the status on to its own caller.
+    fn panic_status(&mut self, status: Temp, span: Span) -> Result<Label, Diagnostic> {
+        if self.deferred {
+            return self.defer_panic(|_| Ok(status));
+        }
+        let reworded = self.reworded_preconditions(span);
+        let (before, after) = self.report_around(span);
+        self.cold_block(|body| {
+            // Read the status first: it is a hot temporary.
+            let status = body.copy(status);
+            let start = body.text(&before);
+            let end = body.text(&after);
+            for (raw, shown) in &reworded {
+                let next = body.label();
+                let raw = body.text(raw);
+                body.push(Inst::Branch {
+                    cond: Cond::Ne,
+                    lhs: status,
+                    rhs: raw,
+                    target: next,
+                });
+                let shown = body.text(shown);
+                let unit = body.call_runtime("panic_message", vec![start, end, shown], NOWHERE)?;
+                body.push(Inst::Return(unit));
+                body.push(Inst::Label(next));
+            }
+            let unit = body.call_runtime("panic_message", vec![start, end, status], NOWHERE)?;
+            body.push(Inst::Return(unit));
+            Ok(())
+        })
+    }
+
+    /// Every `requires` status a function value's code may return
+    /// (`error[P0006]: precondition violated: ...`, naming the function by
+    /// its key) that the report at `span` words differently, with that
+    /// wording: in a package, the module at `span` names an item as its
+    /// code writes it, as the interpreter's located report does. Texts are
+    /// shared, so a status is the same object as its text here, and
+    /// [`Body::panic_status`] picks the wording by comparing addresses.
+    fn reworded_preconditions(&self, span: Span) -> Vec<(String, String)> {
+        let mut reworded = Vec::new();
+        if self.source != Source::User {
+            return reworded;
+        }
+        let code = panics::PRECONDITION_VIOLATED;
+        for function in self.program().functions.values() {
+            for clause in &function.contracts.requires {
+                let message = format!(
+                    "precondition violated: `{}` requires `{}`",
+                    function.name, clause.text
+                );
+                let shown = self.worded(code, &message, span);
+                if shown != message {
+                    reworded.push((
+                        format!("error[{code}]: {message}"),
+                        format!("error[{code}]: {shown}"),
+                    ));
+                }
+            }
+        }
+        reworded
+    }
+
     /// A cold block that panics with `code` and the fixed `message`.
     fn panic_static(
         &mut self,
@@ -1203,6 +1338,10 @@ impl<'l, 'p> Body<'l, 'p> {
         message: &str,
         span: Span,
     ) -> Result<Label, Diagnostic> {
+        if self.deferred {
+            let status = format!("error[{code}]: {message}");
+            return self.defer_panic(|body| Ok(body.text(&status)));
+        }
         let (before, after) = self.report(code, span);
         self.cold_block(|body| {
             let report = body.text(&format!("{before}{message}{after}"));
@@ -1222,6 +1361,18 @@ impl<'l, 'p> Body<'l, 'p> {
         args: &[Temp],
         span: Span,
     ) -> Result<Label, Diagnostic> {
+        if self.deferred {
+            let Some(message) = function.strip_prefix("panic_") else {
+                return Err(self.refuse(span, &format!("`{function}` in a function value")));
+            };
+            let builder = format!("{message}_message");
+            return self.defer_panic(|body| {
+                let head = body.text(&format!("error[{code}]: "));
+                let mut all = vec![head];
+                all.extend_from_slice(args);
+                body.call_runtime(&builder, all, NOWHERE)
+            });
+        }
         let (before, after) = self.report(code, span);
         self.cold_block(|body| {
             let start = body.text(&before);
@@ -1243,6 +1394,14 @@ impl<'l, 'p> Body<'l, 'p> {
         unsigned: bool,
         span: Span,
     ) -> Result<Label, Diagnostic> {
+        if self.deferred {
+            return self.defer_panic(|body| {
+                let start = body.text(&format!("error[{code}]: {head}"));
+                let end = body.text(tail);
+                let unsigned = body.constant(i64::from(unsigned));
+                body.call_runtime("unary_message", vec![start, a, end, unsigned], NOWHERE)
+            });
+        }
         let (before, after) = self.report(code, span);
         self.cold_block(|body| {
             let start = body.text(&format!("{before}{head}"));
@@ -1263,6 +1422,19 @@ impl<'l, 'p> Body<'l, 'p> {
         unsigned: bool,
         span: Span,
     ) -> Result<Label, Diagnostic> {
+        if self.deferred {
+            return self.defer_panic(|body| {
+                let start = body.text(&format!("error[{code}]: {head}"));
+                let mid = body.text(mid);
+                let end = body.text(tail);
+                let unsigned = body.constant(i64::from(unsigned));
+                body.call_runtime(
+                    "binary_message",
+                    vec![start, a, mid, b, end, unsigned],
+                    NOWHERE,
+                )
+            });
+        }
         let (before, after) = self.report(code, span);
         self.cold_block(|body| {
             let start = body.text(&format!("{before}{head}"));
@@ -1284,7 +1456,8 @@ impl<'l, 'p> Body<'l, 'p> {
     /// Call the function `id` with `args`.
     fn call_id(&mut self, callee: FnId, args: Vec<Temp>, span: Span) -> Result<Temp, Diagnostic> {
         if args.len() > ir::MAX_ARGS {
-            return Err(self.refuse(span, "a call with more than 8 arguments"));
+            let what = format!("a call with more than {} arguments", ir::MAX_ARGS);
+            return Err(self.refuse(span, &what));
         }
         let dst = self.temp();
         self.push(Inst::Call { dst, callee, args });
@@ -1709,6 +1882,14 @@ impl<'l, 'p> Body<'l, 'p> {
             ExprKind::Binary { op, lhs, rhs, int } => self.binary(*op, lhs, rhs, *int, span),
             ExprKind::Interpolated(parts) => self.interpolated(parts),
             ExprKind::Construct { ctor, fields } => self.construct(expr, ctor, fields),
+            ExprKind::Range { start, end } => {
+                // A range is the prelude's struct `Range(start:, end:)`.
+                let ctor = Construct {
+                    ty: builtins::RANGE.to_string(),
+                    variant: None,
+                };
+                self.construct(expr, &ctor, &[(**start).clone(), (**end).clone()])
+            }
             ExprKind::Call {
                 callee,
                 type_args,
@@ -2189,8 +2370,9 @@ impl<'l, 'p> Body<'l, 'p> {
         Ok(())
     }
 
-    /// `for x in start..end { body }`: each integer from `start` up to
-    /// but excluding `end`, both evaluated once, first `start`.
+    /// `for x in r { body }` over a range: each integer from its start
+    /// up to but excluding its end, both read once. A range written in
+    /// place, `start..end`, is never built: `start` is evaluated first.
     fn for_range(
         &mut self,
         binds: bool,
@@ -2198,12 +2380,21 @@ impl<'l, 'p> Body<'l, 'p> {
         iter: &Expr,
         body: &Expr,
     ) -> Result<(), Diagnostic> {
-        let ExprKind::Range { start, end } = &iter.kind else {
-            return Err(self.refuse(iter.span, "a `for` loop over a range value"));
+        let (first, end) = match &iter.kind {
+            ExprKind::Range { start, end } => {
+                let first = self.expr(start)?;
+                (first, self.expr(end)?)
+            }
+            _ => {
+                let range = self.expr(iter)?;
+                let first = self.load(range, layout::struct_field(0));
+                let end = self.load(range, layout::struct_field(1));
+                // Integers: the bounds outlive the range.
+                self.consume(range)?;
+                (first, end)
+            }
         };
         let unsigned = matches!(ty, Type::Int(int) if int.min() == 0);
-        let first = self.expr(start)?;
-        let end = self.expr(end)?;
         let at = self.copy(first);
         let (head, next, exit) = (self.label(), self.label(), self.label());
         self.push(Inst::Label(head));
@@ -2304,7 +2495,6 @@ fn describe(kind: &ExprKind) -> String {
         ExprKind::List(_) => "a list".to_string(),
         ExprKind::Field { .. } => "reading a field".to_string(),
         ExprKind::MutatingCall { .. } => "a mutating method call".to_string(),
-        ExprKind::Range { .. } => "a range outside a `for` loop".to_string(),
         ExprKind::Try { .. } => "`?`".to_string(),
         ExprKind::Match { .. } => "`match`".to_string(),
         ExprKind::Unsupported(what) => what.clone(),

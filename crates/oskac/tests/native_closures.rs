@@ -391,32 +391,3 @@ fn a_call_through_a_function_value_counts_exactly_one_level() {
     assert!(too_deep.stderr.contains("error[P0021]"), "{too_deep:#?}");
     assert_eq!(too_deep.exit_code, Some(101));
 }
-
-/// A prelude function that may panic reports the call's span, which a
-/// function value's code does not know: used as a value, it is refused
-/// (`E0390`), never compiled with the wrong report.
-#[test]
-fn a_prelude_function_that_may_panic_is_refused_as_a_value() {
-    let src = program(
-        "",
-        "    let slice = String.slice\n    show(io, slice(\"abc\", 2, 1))",
-    );
-    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("native_slice_value");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("a directory");
-    std::fs::write(dir.join("main.osk"), src).expect("the source");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_oskac"))
-        .args(["build", "main.osk"])
-        .current_dir(&dir)
-        .output()
-        .expect("oskac should run");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(output.status.code(), Some(2), "{stderr}");
-    assert!(
-        stderr.contains(
-            "error[E0390]: `oskac build` cannot compile `String.slice`, which may panic, \
-             used as a function value yet"
-        ),
-        "{stderr}"
-    );
-}

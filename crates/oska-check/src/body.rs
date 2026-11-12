@@ -1964,9 +1964,24 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             } => {
                 let ty = self.infer(iter);
                 let element = match self.infer.resolve(&ty) {
-                    Ty::Named(name, args, _)
-                        if (name == ty::LIST || name == ty::RANGE) && args.len() == 1 =>
-                    {
+                    Ty::Named(name, args, _) if name == ty::LIST && args.len() == 1 => {
+                        args[0].clone()
+                    }
+                    // Only integers can be counted through: a `Range` of
+                    // anything else is a pair of bounds, not a sequence.
+                    Ty::Named(name, args, _) if name == ty::RANGE && args.len() == 1 => {
+                        let item = self.infer.resolve(&args[0]);
+                        if !(item.is_integer()
+                            || matches!(item, Ty::Error | Ty::Never | Ty::Var(_)))
+                        {
+                            self.error(
+                                codes::NOT_ITERABLE,
+                                format!(
+                                    "cannot iterate over `Range<{item}>`; a range is iterable only over an integer type"
+                                ),
+                                iter.span,
+                            );
+                        }
                         args[0].clone()
                     }
                     Ty::Error => Ty::Error,

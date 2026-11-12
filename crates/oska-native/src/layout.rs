@@ -80,9 +80,8 @@ pub fn int_kind(int: IntType) -> IntKind {
 /// Whether a value of `ty` is an object's address, whose reference count
 /// the code keeps: text, lists, function values, and structs and enums with
 /// fields.
-/// Integers, `Bool`, `()`, fieldless enums and capabilities are not. The
-/// other built-in types with a handle (`Range`, `Task`, `Scope`) get their
-/// representation with their tickets and are not counted until then.
+/// Integers, `Bool`, `()`, fieldless enums and capabilities are not. A
+/// `Range` is the prelude's struct, an object like any other.
 pub fn is_counted(program: &Program, ty: &Type) -> bool {
     match ty {
         Type::String | Type::Fn { .. } => true,
@@ -90,7 +89,7 @@ pub fn is_counted(program: &Program, ty: &Type) -> bool {
         Type::Named { name, .. } if name == builtins::LIST => true,
         Type::Named { name, .. } => {
             !builtins::is_capability(name)
-                && !matches!(name.as_str(), "Range" | "Args")
+                && name != "Args"
                 && program
                     .types
                     .get(name)
@@ -155,8 +154,12 @@ pub const FN_CODE: u32 = WORD;
 /// The offset of the address of a function value's drop function.
 pub const FN_DROP: u32 = 2 * WORD;
 
+/// The offset of a function value's kind: 1 for a closure, 0 for a
+/// named function used as a value (`dbg` shows `<closure>` or `<fn>`).
+pub const FN_KIND: u32 = 3 * WORD;
+
 /// The offset of the first value a function value captured.
-pub const FN_CAPTURES: u32 = 3 * WORD;
+pub const FN_CAPTURES: u32 = 4 * WORD;
 
 /// The size of a word, and of every field.
 pub const WORD: u32 = 8;

@@ -997,6 +997,50 @@ fn an_entry_name_that_is_not_utf8_fails_the_listing_as_rust_shows_it() {
 }
 
 #[test]
+fn a_root_is_named_by_its_canonical_path_shown_lossily() {
+    // The root is reached through symlinks (absolute, relative, chained,
+    // with `..`) to a directory whose name is not UTF-8: the listing error
+    // names it as Rust's `fs::canonicalize` resolves it and `display`
+    // shows it, each ill-formed sequence one U+FFFD.
+    let case = case(
+        "canonical_root",
+        r#"    io.println(listed(read.restrict_to("link/sub/..").list_dir(Path.new("."))))?
+    io.println(listed(read.restrict_to("chain/sub/..").list_dir(Path.new("."))))?
+    io.println(listed(read.restrict_to("./up/odd/sub/..").list_dir(Path.new("."))))?"#,
+    )
+    .with_setup(|dir| {
+        use std::os::unix::ffi::OsStrExt;
+        let odd = std::ffi::OsStr::from_bytes(b"odd\xff\xe0\xa0x\xf0\x9f");
+        let bad = std::ffi::OsStr::from_bytes(b"bad\xfe");
+        std::fs::create_dir_all(dir.join(odd).join("sub")).expect("mkdir");
+        std::fs::write(dir.join(odd).join(bad), "x").expect("write");
+        let target = dir.join(odd);
+        std::os::unix::fs::symlink(&target, dir.join("link")).expect("symlink");
+        std::os::unix::fs::symlink("link", dir.join("chain")).expect("symlink");
+        std::fs::create_dir(dir.join("up")).expect("mkdir");
+        std::os::unix::fs::symlink(
+            std::path::Path::new("..").join(odd),
+            dir.join("up").join("odd"),
+        )
+        .expect("symlink");
+    });
+    let (interpreted, native) = differential::run(&case);
+    assert_eq!(
+        interpreted.stdout.replace("/interpreted/", "/native/"),
+        native.stdout,
+        "{interpreted:#?}\n{native:#?}"
+    );
+    assert_eq!(native.stdout.lines().count(), 3, "{native:#?}");
+    for line in native.stdout.lines() {
+        assert!(
+            line.starts_with("REFUSED: \"bad\\xFE\" in `/")
+                && line.ends_with("/native/odd\u{fffd}\u{fffd}x\u{fffd}` is not valid UTF-8"),
+            "{native:#?}"
+        );
+    }
+}
+
+#[test]
 fn no_handle_is_left_open_on_any_path() {
     // Natively only: the program counts its own open descriptors.
     let src = program(

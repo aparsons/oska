@@ -34,12 +34,6 @@ pub enum Value {
     /// `U8` to `U8`'s impl.
     Int(i128, IntType),
     Str(Rc<str>),
-    /// `start..end`, excluding `end`, over integers of type `int`.
-    Range {
-        start: i128,
-        end: i128,
-        int: IntType,
-    },
     /// A closure, with what it captured.
     Closure(Rc<ClosureValue>),
     /// A named function used as a value: calling it calls `callee`.
@@ -253,7 +247,6 @@ impl Value {
             Value::Bool(_) => builtins::BOOL,
             Value::Int(_, int) => int.name(),
             Value::Str(_) => builtins::STRING,
-            Value::Range { .. } => builtins::RANGE,
             // No impl can name either, but generic code can tell them
             // apart.
             Value::Closure(_) => "closure",
@@ -281,6 +274,15 @@ impl Value {
             ty: Rc::from(ty),
             variant: Rc::from(variant),
             fields: Rc::new(fields),
+        }
+    }
+
+    /// `start..end`: a `Range`, a struct like any other, so its fields
+    /// read and write as fields do.
+    pub fn range(start: Value, end: Value) -> Value {
+        Value::Struct {
+            ty: Rc::from(builtins::RANGE),
+            fields: Rc::new(vec![start, end]),
         }
     }
 

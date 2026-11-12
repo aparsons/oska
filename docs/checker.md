@@ -728,7 +728,7 @@ test "setup" {
 | `E0232` | `break` or `continue` outside a loop. | None. |
 | `E0233` | A type that inference cannot work out, such as `let xs = List.new()` with no later use. | None. |
 | `E0234` | A type name used as a value, or a type that cannot be constructed. | None. |
-| `E0235` | `for` over a value that is not a `List` or a range. | None. |
+| `E0235` | `for` over a value that is not a `List` or a range of integers. | None. |
 | `E0240` | An expression statement whose `Result` value is dropped. Discard one deliberately with `let _ = f()`. Spans the expression. | None. |
 | `E0241` | `?` on a value that is neither a `Result` nor an `Option`. Spans the `?` expression. | None. |
 | `E0242` | `?` on a `Result` whose error type is not the enclosing function's error type, with no `impl From` to convert it. Spans the `?` expression. | None. |
