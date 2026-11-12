@@ -256,11 +256,21 @@ fn outcome(mut command: Command, case: &Case, dir: &Path) -> Outcome {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command.spawn().expect("the program should start");
-    if let Some(mut stdin) = child.stdin.take() {
-        // A program that never reads its stdin may close it first.
-        let _ = stdin.write_all(case.stdin.as_bytes());
-    }
+    // Stdin is written on its own thread while stdout and stderr are read:
+    // a program that echoes its input fills its stdout pipe (64 KiB on a
+    // 4 KiB-page kernel) and waits, and writing all of stdin first would
+    // then wait on it forever. A program that never reads its stdin may
+    // close it first, so the write's error is ignored.
+    let writer = child.stdin.take().map(|mut stdin| {
+        let bytes = case.stdin.clone().into_bytes();
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&bytes);
+        })
+    });
     let output = child.wait_with_output().expect("the program should finish");
+    if let Some(writer) = writer {
+        writer.join().expect("the stdin writer should not panic");
+    }
     let mut tree = BTreeMap::new();
     read_tree(dir, "", &mut tree);
     Outcome {

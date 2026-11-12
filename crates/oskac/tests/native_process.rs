@@ -652,10 +652,18 @@ fn assert_same_bytes(
             command.env(name, std::ffi::OsStr::from_bytes(value));
         }
         let mut child = command.spawn().expect("the program should start");
-        if let Some(mut input) = child.stdin.take() {
-            let _ = input.write_all(stdin);
-        }
+        // Written on its own thread, as in `differential::outcome`, so a
+        // full stdout pipe cannot hold the write up forever.
+        let writer = child.stdin.take().map(|mut input| {
+            let bytes = stdin.to_vec();
+            std::thread::spawn(move || {
+                let _ = input.write_all(&bytes);
+            })
+        });
         let output = child.wait_with_output().expect("the program should end");
+        if let Some(writer) = writer {
+            writer.join().expect("the stdin writer should not panic");
+        }
         (output.stdout, output.stderr, output.status.code())
     };
     let native = run(Command::new(&exe));
