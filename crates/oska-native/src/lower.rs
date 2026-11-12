@@ -758,6 +758,11 @@ struct Body<'l, 'p> {
     /// the call of the value. Each panic returns its report's middle,
     /// `error[P....]: message`, as the status (`closures.rs`).
     deferred: bool,
+    /// Whether it is a drop function, which puts the drops of the objects
+    /// it lets go of on std.rt's pending list instead of calling them, so
+    /// that dropping a deep structure takes a bounded stack
+    /// ([`Body::end_drop`]).
+    dropping: bool,
 }
 
 impl<'l, 'p> Body<'l, 'p> {
@@ -781,6 +786,7 @@ impl<'l, 'p> Body<'l, 'p> {
             ret: Type::Unit,
             status: false,
             deferred: false,
+            dropping: false,
         }
     }
 
@@ -938,12 +944,22 @@ impl<'l, 'p> Body<'l, 'p> {
         if layout::is_confined(ty) {
             self.call_runtime("root_drop", vec![value], NOWHERE)?;
         } else if matches!(ty, Type::Fn { .. }) {
-            self.drop_function_value(value);
+            if self.dropping {
+                let code = self.load(value, layout::FN_DROP);
+                self.call_runtime("drop_later", vec![value, code], NOWHERE)?;
+            } else {
+                self.drop_function_value(value);
+            }
         } else if layout::holds_counted(self.program(), ty) {
             let drop = Instance::Drop(self.source, ty.clone());
             let origin = self.origin.unwrap_or(NOWHERE);
             let id = self.lowering.request(drop, origin);
-            self.call_id(id, vec![value], NOWHERE)?;
+            if self.dropping {
+                let code = self.function_address(id);
+                self.call_runtime("drop_later", vec![value, code], NOWHERE)?;
+            } else {
+                self.call_id(id, vec![value], NOWHERE)?;
+            }
         } else {
             self.call_runtime("free", vec![value], NOWHERE)?;
         }

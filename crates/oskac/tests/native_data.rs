@@ -432,3 +432,71 @@ fn paths_released_in_a_loop_keep_their_text() {
     );
     assert_prints("path_drop", &src, "5000 kept\n");
 }
+
+/// A program that builds a structure `n` levels deep (`build`, a
+/// statement list making `c` from `c`, starting at `start`) from its
+/// first argument, then drops it.
+fn deep(name: &str, items: &str, start: &str, build: &str, n: u32) -> Case {
+    let src = format!(
+        "{items}\n\nfn main(io: Stdout, args: Args) -> Result<(), IoError> {{\n    \
+         let n = args.get(1).unwrap_or(\"0\").parse_int().unwrap_or(0)\n    \
+         var c = {start}\n    var i = 0\n    \
+         while i < n {{\n{build}\n        i = i + 1\n    }}\n    \
+         io.println(\"built {{n}}\")?\n    c = {start}\n    \
+         io.println(\"dropped\")?\n    Ok(())\n}}\n"
+    );
+    Case::file(&format!("{name}_{n}"), &src).with_args(&[&n.to_string()])
+}
+
+/// The structures of `deeply_nested_values_are_dropped_in_bounded_stack`.
+fn deep_cases(n: u32) -> Vec<Case> {
+    vec![
+        deep(
+            "deep_enum",
+            "enum Chain {\n    Link(Int, Chain),\n    End,\n}",
+            "Chain.End",
+            "        c = Chain.Link(i, c)",
+            n,
+        ),
+        deep(
+            "deep_option",
+            "struct Node { value: String, next: Option<Node> }",
+            "Node(value: \"end\", next: None)",
+            "        c = Node(value: \"v{i}\", next: Some(c))",
+            n,
+        ),
+        deep(
+            "deep_list",
+            "struct Tree { kids: List<Tree> }",
+            "Tree(kids: [])",
+            "        c = Tree(kids: [c])",
+            n,
+        ),
+        deep(
+            "deep_closure",
+            "",
+            "|x: Int| x",
+            "        let f = c\n        c = |x: Int| f(x) + 1",
+            n,
+        ),
+    ]
+}
+
+#[test]
+fn deeply_nested_values_are_dropped_the_same() {
+    for case in deep_cases(100_000) {
+        let outcome = assert_same(&case);
+        assert_eq!(outcome.stdout, "built 100000\ndropped\n", "{outcome:#?}");
+    }
+}
+
+#[test]
+fn deeply_nested_values_are_dropped_in_bounded_stack() {
+    // A release interpreter drops five million links (exit 0); a debug one
+    // overflows its own stack first, so this depth is native-only.
+    for case in deep_cases(5_000_000) {
+        let outcome = differential::run_native(&case);
+        assert_eq!(outcome.stdout, "built 5000000\ndropped\n", "{outcome:#?}");
+        assert_eq!(outcome.exit_code, Some(0), "{outcome:#?}");
+    }
+}

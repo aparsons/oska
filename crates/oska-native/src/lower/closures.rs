@@ -378,6 +378,7 @@ impl Body<'_, '_> {
     pub(super) fn closure_drop_function(&mut self, index: usize) -> Result<(), Diagnostic> {
         let spec = self.lowering.closures[index].clone();
         self.subst = spec.subst.clone();
+        self.dropping = true;
         let object = self.temp();
         for (index, ty) in spec.captures.iter().enumerate() {
             if self.counted(ty) {
@@ -385,9 +386,8 @@ impl Body<'_, '_> {
                 self.release(value, ty)?;
             }
         }
-        let unit = self.call_runtime("free", vec![object], NOWHERE)?;
-        self.push(Inst::Return(unit));
-        Ok(())
+        self.call_runtime("free", vec![object], NOWHERE)?;
+        self.end_drop()
     }
 
     /// The body of [`Instance::Thunk`]: the code of `name` (a function of

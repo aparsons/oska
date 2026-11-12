@@ -401,8 +401,10 @@ impl Body<'_, '_> {
 
     /// The body of [`Instance::Drop`] for `ty`: release each field that
     /// holds a reference (of the object's variant, for an enum), then
-    /// free the object, its parameter.
+    /// free the object, its parameter. Fields that must be dropped in
+    /// turn are dropped later ([`Body::end_drop`]).
     pub(super) fn drop_function(&mut self, ty: &Type) -> Result<(), Diagnostic> {
+        self.dropping = true;
         let object = self.temp();
         if let Some(item) = layout::list_item(ty) {
             if self.counted(item) {
@@ -451,6 +453,39 @@ impl Body<'_, '_> {
             None => {}
         }
         self.call_runtime("free", vec![object], NOWHERE)?;
+        self.end_drop()
+    }
+
+    /// The end of a drop function, whose own object is freed: unless a
+    /// drop further out is already doing it, run every drop put on the
+    /// pending list (std.rt "Deferred drops") until none is left, each
+    /// by its code with its object, then return. A drop function never
+    /// calls another directly, so the native stack a drop takes does not
+    /// grow with the depth of what it lets go of.
+    pub(super) fn end_drop(&mut self) -> Result<(), Diagnostic> {
+        let done = self.label();
+        let first = self.call_runtime("drops_begin", vec![], NOWHERE)?;
+        self.push(Inst::JumpIfZero {
+            cond: first,
+            target: done,
+        });
+        let next = self.label();
+        self.push(Inst::Label(next));
+        let pair = self.call_runtime("drop_next", vec![], NOWHERE)?;
+        self.push(Inst::JumpIfZero {
+            cond: pair,
+            target: done,
+        });
+        let object = self.load(pair, 0);
+        let code = self.load(pair, layout::WORD);
+        let dst = self.temp();
+        self.push(Inst::CallIndirect {
+            dst,
+            target: code,
+            args: vec![object],
+        });
+        self.push(Inst::Jump(next));
+        self.push(Inst::Label(done));
         let unit = self.constant(0);
         self.push(Inst::Return(unit));
         Ok(())

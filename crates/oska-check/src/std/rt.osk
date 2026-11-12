@@ -118,7 +118,9 @@ pub fn rt_mem_test_host() -> Int
 //   20      the state of `Random`'s generator, 21 whether it is seeded;
 //   22      a large object's mapping kept for reuse when it was freed, or 0;
 //   23      that mapping's length;
-//   24-31   free;
+//   24      the pending drops (see "Deferred drops"), 25 how many, 26 room
+//           for how many, 27 whether the outermost drop is running them;
+//   28-31   free;
 //   32-38   the test host (see "The test host"): 32 which host a test runs
 //           on, 33 its stderr prefix, 34 whether stderr is at the start
 //           of a line, 35 the lines printed, 36 the fake files' paths, 37
@@ -322,6 +324,64 @@ fn retain(object: Int) {
     if count >= 0 {
         rt_mem_store64(object, rt_mem_add(count, 1))
     }
+}
+
+// ---- Deferred drops ----------------------------------------------------------
+//
+// A generated drop function never calls another: an object it lets go of
+// that must be dropped in turn is put on a list of pending drops (pairs
+// of the object and the drop function's code address, in words 24-26),
+// and the outermost drop (the one that found word 27 at 0) runs them
+// until none is left. So dropping a structure of any depth, such as a
+// list of a million links, takes a bounded native stack.
+
+// Put the drop of `object` by the code at `code` on the pending list.
+pub fn drop_later(object: Int, code: Int) {
+    let count = rt_mem_load64(global(25))
+    let capacity = rt_mem_load64(global(26))
+    var pending = rt_mem_load64(global(24))
+    if count == capacity {
+        var bigger = 4096
+        if capacity != 0 {
+            bigger = rt_mem_shl(capacity, 1)
+        }
+        let fresh = map(0, rt_mem_shl(bigger, 4), 3, private_anonymous())
+        if pending != 0 {
+            copy_bytes(fresh, pending, rt_mem_shl(count, 4))
+            let _ = rt_sys_munmap(pending, rt_mem_shl(capacity, 4))
+        }
+        pending = fresh
+        rt_mem_store64(global(24), fresh)
+        rt_mem_store64(global(26), bigger)
+    }
+    let at = rt_mem_add(pending, rt_mem_shl(count, 4))
+    rt_mem_store64(at, object)
+    rt_mem_store64(rt_mem_add(at, 8), code)
+    rt_mem_store64(global(25), rt_mem_add(count, 1))
+}
+
+// Whether the caller, a drop function that has done its own part, is the
+// outermost and must run the pending drops (`drop_next` until 0).
+pub fn drops_begin() -> Bool {
+    if rt_mem_load64(global(27)) != 0 || rt_mem_load64(global(25)) == 0 {
+        return false
+    }
+    rt_mem_store64(global(27), 1)
+    true
+}
+
+// Take the last pending drop off the list: the address of its pair
+// (object, code), good until the next `drop_later`; or 0 when none is
+// left, which ends the outermost drop's run.
+pub fn drop_next() -> Int {
+    let count = rt_mem_load64(global(25))
+    if count == 0 {
+        rt_mem_store64(global(27), 0)
+        return 0
+    }
+    let last = rt_mem_sub(count, 1)
+    rt_mem_store64(global(25), last)
+    rt_mem_add(rt_mem_load64(global(24)), rt_mem_shl(last, 4))
 }
 
 // ---- Text ------------------------------------------------------------------
