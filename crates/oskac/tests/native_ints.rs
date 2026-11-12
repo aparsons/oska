@@ -77,6 +77,43 @@ fn integers_print_through_interpolation_and_to_string() {
 }
 
 #[test]
+fn every_digit_count_and_digit_pair_prints_as_the_interpreter_prints_it() {
+    // Each power of ten and its neighbours, both signs, up to `Int`'s
+    // ends, then every number below 100,000 folded into a checksum of
+    // its text (digit pairs, odd and even lengths). `U64` above `Int`
+    // prints only in overflow reports (`sized_integer_overflow_...`).
+    let src = program(
+        "fn show(io: Stdout, n: Int) {\n    \
+         let m = 0 - n\n    let _ = io.println(\"{n} {m}\")\n}",
+        "    var p = 1\n    var i = 0\n    \
+         while i < 19 {\n        \
+         show(io, p - 1)\n        show(io, p)\n        show(io, p + 1)\n        \
+         if i < 18 {\n            p = p * 10\n        }\n        i = i + 1\n    }\n    \
+         let big = 9223372036854775807\n    let least = 0 - big - 1\n    \
+         let _ = io.println(\"{big} {least}\")\n    \
+         show(io, 4294967295)\n    show(io, 4294967296)\n    show(io, 4294967199)\n    show(io, 4294967300)\n    \
+         var sum = 0\n    var n = 0\n    \
+         while n < 100000 {\n        \
+         let text = \"{n}\"\n        let last = text.slice(text.len() - 1, text.len())\n        \
+         let first = text.slice(0, 1)\n        \
+         sum = (sum * 31 + text.len() * 7 + last.parse_int().unwrap_or(0) + first.parse_int().unwrap_or(0) * 3) % 1000000007\n        \
+         n = n + 1\n    }\n    \
+         let _ = io.println(\"{sum}\")",
+    );
+    let outcome = assert_same(&Case::file("int_digits", &src));
+    assert_eq!(outcome.exit_code, Some(0), "{outcome:#?}");
+    assert!(
+        outcome.stdout.contains("\n4294967295 -4294967295\n4294967296 -4294967296\n4294967199 -4294967199\n4294967300 -4294967300\n")
+            && outcome.stdout.contains("\n999999999999999999 -999999999999999999\n")
+            && outcome.stdout.contains("\n1000000000000000000 -1000000000000000000\n")
+            && outcome
+                .stdout
+                .contains("\n9223372036854775807 -9223372036854775808\n"),
+        "{outcome:#?}"
+    );
+}
+
+#[test]
 fn int_overflow_panics_with_p0001_and_the_interpreters_report() {
     // The column counts characters: `ünï` is three, in six bytes.
     let src = program(

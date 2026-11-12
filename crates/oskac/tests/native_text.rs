@@ -432,3 +432,46 @@ fn main(io: Stdout) {
         "{outcome:#?}"
     );
 }
+
+#[test]
+fn interpolation_copies_literals_of_every_length_around_every_hole() {
+    // Literals of 1 to 70 bytes (copied inline a word at a time up to 32),
+    // multi-byte ones, at the start, between and after holes of every
+    // kind, each line's text, bytes and characters checked by both backends. One
+    // function per length keeps each within the backend's size limit.
+    let mut items = String::new();
+    let mut body = String::from("    var total = 0\n");
+    for size in (1..=20).chain([31, 32, 33, 63, 64, 65, 70]) {
+        let literal: String = "abcdefghijklmnopqrstuvwxyz0123456789"
+            .chars()
+            .cycle()
+            .take(size)
+            .collect();
+        items.push_str(&format!(
+            "fn size{size}(io: Stdout, n: Int, t: String) -> Int {{\n    var total = 0\n"
+        ));
+        for line in [
+            format!("{literal}{{n}}"),
+            format!("{{n}}{literal}"),
+            format!("{literal}{{t}}{literal}{{n}}{literal}"),
+            format!("{{t}}{literal}ü{{n}}"),
+            format!("{literal}ü{{t}}"),
+        ] {
+            items.push_str(&format!(
+                "    let s = \"{line}\"\n    show(io, s)\n    total = total + s.byte_len() + s.len() * 1000\n"
+            ));
+        }
+        items.push_str("    total\n}\n\n");
+        body.push_str(&format!("    total = total + size{size}(io, -42, \"é\")\n"));
+    }
+    body.push_str("    let _ = io.println(\"{total}\")");
+    let src = format!("{items}{}", program(&body));
+    let outcome = assert_same(&Case::file("interpolated_literals", &src));
+    assert_eq!(outcome.exit_code, Some(0), "{outcome:#?}");
+    assert!(
+        outcome
+            .stdout
+            .starts_with("a-42\n-42a\naéa-42a\néaü-42\naüé\nab-42\n"),
+        "{outcome:#?}"
+    );
+}

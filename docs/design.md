@@ -383,21 +383,22 @@ The **differential suite** runs every program of the corpus (the interpreter's r
 
 `scripts/bench-native.sh` is run by the maintainer, on a Raspberry Pi 5 (aarch64 Linux), never in CI. Each workload runs as `oskac run --interpret` and as the executable `oskac build` wrote, after both are checked to print the same. Times are the best CPU time (user plus system) of 5 runs, which other work on the Pi does not stretch as it does the wall clock; the interpreter's includes checking the program, as `oskac run` does.
 
-Recorded on 2026-11-11, `oskac` 0.2.0:
+Recorded on 2026-11-11, `oskac` 0.2.0, before and after the text work that followed the milestone's review (each "before" run is the same build without it):
 
-| Workload | What it does | Interpreter | Native | Speedup |
-| --- | --- | ---: | ---: | ---: |
-| loop | 5M iterations of integer arithmetic | 1000 ms | 22 ms | 45x |
-| text | 200k lines built by interpolation | 233 ms | 37 ms | 6.3x |
-| bulk text | `replace` and `trim` over 520 KB, 40 times | 27 ms | 27 ms | 1.0x |
-| lists | 1M pushes, a `for` pass, 1M indexed reads | 942 ms | 15 ms | 63x |
-| recursion | `fib(30)`, about 2.7M calls | 751 ms | 9 ms | 83x |
-| site | the site generator building this site | 2215 ms | 252 ms | 8.8x |
+| Workload | What it does | Interpreter | Native before | Native after | Speedup after |
+| --- | --- | ---: | ---: | ---: | ---: |
+| loop | 5M iterations of integer arithmetic | 1006 ms | 21 ms | 21 ms | 48x |
+| text | 200k lines built by interpolation | 239 ms | 37 ms | 14 ms | 17x |
+| bulk text | `replace` and `trim` over 520 KB, 40 times | 26 ms | 26 ms | 26 ms | 1.0x |
+| lists | 1M pushes, a `for` pass, 1M indexed reads | 968 ms | 14 ms | 15 ms | 65x |
+| recursion | `fib(30)`, about 2.7M calls | 746 ms | 9 ms | 9 ms | 83x |
+| site | the site generator building this site | 2299 ms | 253 ms | 158 ms | 15x |
 
-- **Program logic** (integer loops, list operations, calls) is where the native backend earns its keep: 45 to 83 times faster, beyond the 20 times milestone 2 set out to reach.
-- **Text building** is about 6 times faster: each line costs a number formatted to text and an allocation in `std.rt`, which are not yet tuned.
+- **Program logic** (integer loops, list operations, calls) is where the native backend earns its keep: 48 to 83 times faster, beyond the 20 times milestone 2 set out to reach.
+- **Text building** went from 6 to 17 times faster. A pc sampler showed number formatting (a division per digit, twice: once to count, once to write) at 60% of the time and the allocation, copy and free of each number's own text next. Now an `Int` hole is written straight into the interpolated text (two digits per step from a table, a multiplication by the reciprocal instead of a division below 2^32, digits counted by comparisons), and literals up to 32 bytes are copied inline a word at a time.
+- **The site generator** went from 9 to 15 times faster: it splits text into characters and compares them, so one-byte ASCII texts are now shared static objects (no allocation, no count), `chars` fills its list directly, short text equality compares one word, and `std.rt` no longer retains and releases a parameter just to read its address.
+- **Why not 20 times for these two.** About 45 ms of the site's 158 ms is the kernel writing the site's files, the same system calls the interpreter makes, so the site could reach at most about 20 times with no user time at all. What is left in user time is spread thin: calls into `std.rt` for every text operation (the backend inlines only tiny call-free functions), counting characters for `len`, and data-dependent branches in digit loops. Closing that gap needs a real optimizer (inlining `std.rt` into the program, keeping values in registers across calls, eliding counts the compiler can prove), not more tuning of `std.rt`.
 - **Bulk text operations** such as `replace` and `trim` over a large text are about as fast as the interpreter's, and are expected to be: the interpreter does them in Rust, so it spends its time where native code does.
-- **The site generator** mixes all three: about 9 times faster, its text work gaining less than its logic.
 
 ### Values
 
