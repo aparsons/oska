@@ -101,7 +101,7 @@ fn assert_golden(case: &str, files: &[(&str, &str)], args: &[&str]) {
             .code()
             .map_or("signal".to_string(), |c| c.to_string()),
         String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
+        without_fds(&String::from_utf8_lossy(&output.stderr)),
         written.iter().map(|w| format!("{w}\n")).collect::<String>(),
     );
     let golden = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -118,6 +118,24 @@ fn assert_golden(case: &str, files: &[(&str, &str)], args: &[&str]) {
         "{} differs; rerun with UPDATE_GOLDEN=1 if the change is intended\n--- actual\n{actual}\n--- expected\n{expected}",
         golden.display()
     );
+}
+
+/// `text` with each file descriptor number in a `dbg` of a directory
+/// capability written as `N`: which one the OS hands out depends on what
+/// `oskac` inherited.
+fn without_fds(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("fd: ") {
+        out.push_str(&rest[..at + 4]);
+        let after = &rest[at + 4..];
+        rest = after.trim_start_matches(|c: char| c.is_ascii_digit());
+        if rest.len() < after.len() {
+            out.push('N');
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 // ---- Goldens: the same on every host ------------------------------------------

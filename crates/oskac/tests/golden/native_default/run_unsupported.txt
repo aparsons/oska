@@ -3,5 +3,5 @@ exit: 0
 --- stdout
 ran
 --- stderr
-[dbg] <Dir(FsCap { root: Dir(RootHandle { path: "/", file: None, os: Some(Dir { fd: OwnedFd { fd: 3 } }) }), access: Read })>
+[dbg] <Dir(FsCap { root: Dir(RootHandle { path: "/", file: None, os: Some(Dir { fd: OwnedFd { fd: N } }) }), access: Read })>
 --- written
