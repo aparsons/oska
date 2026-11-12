@@ -78,7 +78,7 @@ A native executable panics as `oskac run` does: the same report on stderr, `path
 
 A program's `test` blocks compile into a separate **test executable**, which runs one test per process: the one its argument names. A plain test runs on the runtime's test host, which behaves as the interpreter's (see [Tests](#tests)): an empty in-memory filesystem with the same confinement and messages, a clock at the Unix epoch, `Random` from the same fixed seed, recorded stdout and a `[name] ` prefix on each stderr line. An `#[integration]` test runs on the real OS. A program's own executable has no test host at all. `oskac test` reports native test runs exactly as it reports the interpreter's.
 
-On aarch64 Linux, `oskac run` and `oskac test` build natively into a private temporary directory and run the executable; `--interpret` selects the interpreter, which every other host uses. A program the native backend refuses (`E0390`) runs on the interpreter with nothing printed about it. `oskac run --format=json` reports a native panic as the interpreter's run does, as one JSON object on stderr. See [platform support](guide/cli-reference.md#platform-support).
+On aarch64 Linux, `oskac run` and `oskac test` build natively into a private temporary directory and run the executable; `--interpret` selects the interpreter, which every other host uses. A program the native backend refuses (`E0390`) runs on the interpreter after a one-line note on stderr: `path:line:col: note: running on the interpreter: <why> (E0390)`. `oskac run --format=json` reports a native panic as the interpreter's run does, as one JSON object on stderr. See [platform support](guide/cli-reference.md#platform-support).
 
 | Code | Refusal |
 | --- | --- |

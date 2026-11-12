@@ -343,8 +343,11 @@ fn run_file(path: &str, flags: Flags, args: &[String]) -> ExitCode {
             .as_ref()
             .filter(|_| checked.diagnostics.is_empty())
         {
-            if let native::Run::Ran(code) = native::run(program, &places, path, args, json) {
-                return code;
+            match native::run(program, &places, path, args, json) {
+                native::Run::Ran(code) => return code,
+                native::Run::Refused(refusal) => {
+                    native::note_fallback(refusal, oska_run::refusal(program), &places, json)
+                }
             }
         }
     }
@@ -396,8 +399,12 @@ fn test_file(path: &str, flags: Flags) -> ExitCode {
             .as_ref()
             .filter(|_| checked.diagnostics.is_empty())
         {
-            if let Some(report) = native_test::test_program(program, options) {
-                return finish_test(report, json, &places);
+            match native_test::test_program(program, options, json) {
+                native_test::Tested::Report(report) => return finish_test(report, json, &places),
+                native_test::Tested::Ended(code) => return code,
+                native_test::Tested::Refused(refusal) => {
+                    native::note_fallback(refusal, oska_run::test_refusal(program), &places, json)
+                }
             }
         }
     }
@@ -496,8 +503,11 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
     let mut host = oska_run::RealHost::new();
     if command == Command::Run {
         if native::runs_natively(flags) {
-            if let native::Run::Ran(code) = native::run(program, &places, dir, args, json) {
-                return code;
+            match native::run(program, &places, dir, args, json) {
+                native::Run::Ran(code) => return code,
+                native::Run::Refused(refusal) => {
+                    native::note_fallback(refusal, oska_run::refusal(program), &places, json)
+                }
             }
         }
         let mut argv = vec![dir.to_string()];
@@ -509,8 +519,12 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
             integration: flags.integration,
         };
         if native::runs_natively(flags) {
-            if let Some(tests) = native_test::test_program(program, options) {
-                return finish_test(tests, json, &places);
+            match native_test::test_program(program, options, json) {
+                native_test::Tested::Report(tests) => return finish_test(tests, json, &places),
+                native_test::Tested::Ended(code) => return code,
+                native_test::Tested::Refused(refusal) => {
+                    native::note_fallback(refusal, oska_run::test_refusal(program), &places, json)
+                }
             }
         }
         let tests = oska_run::test_program(program, &mut host, options);

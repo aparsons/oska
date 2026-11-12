@@ -56,7 +56,9 @@ mod value;
 pub use host::{FakeHost, FakeWorld, Host, Output, RealHost, RootHandle, FAKE_SEED};
 pub use interp::MAX_CALL_DEPTH;
 pub use panics::codes;
-pub use testing::{test, test_program, TestOptions, TestReport, TestResult, TestStatus};
+pub use testing::{
+    test, test_program, test_refusal, TestOptions, TestReport, TestResult, TestStatus,
+};
 
 use interp::Interpreter;
 use oska_check::builtins;
@@ -165,11 +167,16 @@ fn check_and_run(src: &str, host: &mut dyn Host, args: &[String]) -> RunOutcome 
     run_checked(&program, host, args)
 }
 
-fn run_checked(program: &Program, host: &mut dyn Host, args: &[String]) -> RunOutcome {
-    let refusal = unimplemented_module(program)
+/// Why [`run_program`] would refuse to run `program` at all (`E0370`,
+/// `E0371`, `E0380`), if it would.
+pub fn refusal(program: &Program) -> Option<Diagnostic> {
+    unimplemented_module(program)
         .or_else(|| ungranted(program))
-        .or_else(|| support::unsupported(program));
-    if let Some(refusal) = refusal {
+        .or_else(|| support::unsupported(program))
+}
+
+fn run_checked(program: &Program, host: &mut dyn Host, args: &[String]) -> RunOutcome {
+    if let Some(refusal) = refusal(program) {
         let mut outcome = RunOutcome::new(UNSUPPORTED_EXIT_CODE, host);
         outcome.diagnostics.push(refusal);
         return outcome;

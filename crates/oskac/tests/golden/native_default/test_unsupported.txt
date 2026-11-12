@@ -5,5 +5,6 @@ test refused ... ok
 
 1 tests: 1 passed, 0 failed, 0 skipped
 --- stderr
+unsupported.osk:2:13: note: running on the interpreter: `oskac build` cannot compile `dbg` of a `Dir` yet (E0390)
 [refused] [dbg] <Dir(FsCap { root: Dir(RootHandle { path: "/", file: None, os: None }), access: ReadWrite })>
 --- written

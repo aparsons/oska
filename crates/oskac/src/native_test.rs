@@ -14,7 +14,7 @@
 //! (`oska_run::TestReport`), printed by the same code.
 
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitCode, Stdio};
 
 use oska_check::program::Program;
 use oska_run::{TestOptions, TestReport, TestResult, TestStatus};
@@ -22,19 +22,28 @@ use oska_syntax::{Diagnostic, Span};
 
 use crate::native::{self, Executable};
 
-/// Run the `test` blocks of the checked `program` natively: the report,
-/// or `None` when the backend refuses the program, which then runs on the
-/// interpreter.
-pub fn test_program(program: &Program, options: TestOptions) -> Option<TestReport> {
-    let bytes = oska_native::build_tests(program).ok()?;
+/// How a native `oskac test` went.
+pub enum Tested {
+    /// The tests ran: their report.
+    Report(TestReport),
+    /// The test executable could not be written (`E0391`), reported as
+    /// `oskac run` reports it: the exit code to end with.
+    Ended(ExitCode),
+    /// The backend refused the program, with this diagnostic: run its
+    /// tests on the interpreter, after `native::note_fallback`.
+    Refused(Diagnostic),
+}
+
+/// Run the `test` blocks of the checked `program` natively, reporting a
+/// failure to write the executable as JSON with `json`.
+pub fn test_program(program: &Program, options: TestOptions, json: bool) -> Tested {
+    let bytes = match oska_native::build_tests(program) {
+        Ok(bytes) => bytes,
+        Err(refusal) => return Tested::Refused(refusal),
+    };
     let exe = match Executable::create(&bytes) {
         Ok(exe) => exe,
-        Err(err) => {
-            return Some(TestReport {
-                tests: Vec::new(),
-                diagnostics: vec![native::cannot("write", &err)],
-            })
-        }
+        Err(err) => return Tested::Ended(native::fail(&native::cannot("write", &err), json)),
     };
     let tests = program
         .tests
@@ -58,7 +67,7 @@ pub fn test_program(program: &Program, options: TestOptions) -> Option<TestRepor
             }
         })
         .collect();
-    Some(TestReport {
+    Tested::Report(TestReport {
         tests,
         diagnostics: Vec::new(),
     })

@@ -236,13 +236,17 @@ pub fn test(src: &str, host: &mut dyn Host, options: TestOptions) -> TestReport 
     test_program(&program, host, options)
 }
 
+/// Why [`test_program`] would refuse to run `program`'s tests at all
+/// (`E0371`, `E0380`), if it would.
+pub fn test_refusal(program: &Program) -> Option<Diagnostic> {
+    unimplemented_module(program).or_else(|| support::unsupported_with_tests(program))
+}
+
 /// Run the `test` blocks of an already **checked program**, as [`test`]
 /// does after it has checked its source: `oskac test` on a package passes
 /// the program of `oska_check::check_package` here.
 pub fn test_program(program: &Program, host: &mut dyn Host, options: TestOptions) -> TestReport {
-    if let Some(refusal) =
-        unimplemented_module(program).or_else(|| support::unsupported_with_tests(program))
-    {
+    if let Some(refusal) = test_refusal(program) {
         return TestReport {
             tests: Vec::new(),
             diagnostics: vec![refusal],

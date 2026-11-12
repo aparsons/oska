@@ -1,0 +1,8 @@
+$ oskac run unsupported.osk --format=json
+exit: 0
+--- stdout
+ran
+--- stderr
+{"severity":"note","code":"E0390","message":"running on the interpreter: `oskac build` cannot compile `dbg` of a `DirRead` yet","path":"unsupported.osk","span":{"start":69,"end":93}}
+[dbg] <Dir(FsCap { root: Dir(RootHandle { path: "/", file: None, os: Some(Dir { fd: OwnedFd { fd: N } }) }), access: Read })>
+--- written

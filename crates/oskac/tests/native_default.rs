@@ -15,6 +15,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+/// Whether this host runs programs natively by default.
+const NATIVE_HOST: bool = cfg!(all(target_arch = "aarch64", target_os = "linux"));
+
 const MANIFEST: &str = "[package]\nname = \"greeter\"\nversion = \"0.1.0\"\n";
 
 /// A program that prints its arguments, each on its own line, after the
@@ -113,6 +116,18 @@ fn assert_golden(case: &str, files: &[(&str, &str)], args: &[&str]) {
     }
     let expected = std::fs::read_to_string(&golden)
         .unwrap_or_else(|e| panic!("{} should exist: {e}\n{actual}", golden.display()));
+    // The one difference between hosts: only a host with a native backend
+    // can refuse a program natively, and notes that it runs it on the
+    // interpreter instead. (Regenerate the goldens on aarch64 Linux.)
+    let expected = if NATIVE_HOST {
+        expected
+    } else {
+        expected
+            .lines()
+            .filter(|line| !line.contains("running on the interpreter: "))
+            .map(|line| format!("{line}\n"))
+            .collect()
+    };
     assert!(
         actual == expected,
         "{} differs; rerun with UPDATE_GOLDEN=1 if the change is intended\n--- actual\n{actual}\n--- expected\n{expected}",
@@ -188,12 +203,35 @@ fn a_panic_is_reported_as_the_interpreter_reports_it() {
 fn a_program_the_native_backend_refuses_runs_on_the_interpreter() {
     let files = [("unsupported.osk", UNSUPPORTED)];
     assert_golden("run_unsupported", &files, &["run", "unsupported.osk"]);
+    assert_golden(
+        "run_unsupported_json",
+        &files,
+        &["run", "unsupported.osk", "--format=json"],
+    );
+    assert_golden(
+        "run_unsupported_interpret",
+        &files,
+        &["run", "unsupported.osk", "--interpret"],
+    );
+}
+
+#[test]
+fn a_package_the_native_backend_refuses_runs_on_the_interpreter() {
+    let files = [
+        ("app/oska.toml", MANIFEST),
+        ("app/src/main.osk", UNSUPPORTED),
+    ];
+    assert_golden("run_unsupported_package", &files, &["run", "app"]);
 }
 
 #[test]
 fn a_module_with_no_runtime_is_refused_as_the_interpreter_refuses_it() {
     let files = [("sql.osk", "use std.sql\n\nfn main() {}\n")];
     assert_golden("run_no_runtime", &files, &["run", "sql.osk"]);
+    // Refused natively (`E0390`) and by the interpreter (`E0370`): only
+    // the interpreter's refusal, with no note that it runs.
+    let net = [("net.osk", "fn main(net: Net) {}\n")];
+    assert_golden("run_ungranted", &net, &["run", "net.osk"]);
     assert_golden("test_no_runtime", &files, &["test", "sql.osk"]);
 }
 
@@ -225,6 +263,37 @@ fn tests_the_native_backend_refuses_run_on_the_interpreter() {
 }
 
 // ---- aarch64 Linux: the default is native --------------------------------------
+
+#[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+#[test]
+fn run_and_test_report_a_missing_temporary_directory_alike() {
+    let src = format!(
+        "fn main(io: Stdout) -> Result<(), IoError> {{\n    io.println(\"hi\")\n}}\n\n{TESTED}"
+    );
+    let dir = workspace("no_tmpdir", &[("tested.osk", &src)]);
+    let missing = dir.join("missing");
+    let expected = format!(
+        "error[E0391]: cannot write the native executable in the temporary directory \
+         `{}`: No such file or directory (os error 2); set `TMPDIR` to a directory you can \
+         run programs from, or use `--interpret`\n",
+        missing.display()
+    );
+    for command in ["run", "test"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_oskac"))
+            .args([command, "tested.osk"])
+            .current_dir(&dir)
+            .env("TMPDIR", &missing)
+            .output()
+            .expect("oskac should run");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            expected,
+            "{command}"
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "", "{command}");
+        assert_eq!(output.status.code(), Some(1), "{command}");
+    }
+}
 
 /// A recursion 40,000 calls deep: within the language's limit (50,000),
 /// which native code reaches, but beyond what a debug build of the

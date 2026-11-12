@@ -10,12 +10,13 @@
 //! and both are removed afterwards: for `oskac run` as soon as the
 //! program has started, for `oskac test` once every test has run.
 //!
-//! A program the backend refuses (`E0390`, or `E0371` for a module with
-//! no runtime) runs on the interpreter instead, with nothing printed
-//! about it: it is a checked program the interpreter supports, and the
-//! refusal says nothing about what it would do. A refused `std.sql` or
-//! `std.proc` program is then refused by the interpreter, with the same
-//! code.
+//! A program the backend refuses (`E0390`) runs on the interpreter
+//! instead, after one note on stderr that says so and why
+//! ([`note_fallback`]): it is a checked program the interpreter supports,
+//! so it runs, but a user timing it or relying on native speed must not
+//! be misled. A program the interpreter refuses too (`E0370`, `E0371`,
+//! `E0380`) goes to it with no note: nothing runs, and the interpreter's
+//! refusal says why.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -24,7 +25,7 @@ use std::process::{Command, ExitCode, Stdio};
 use oska_check::program::Program;
 use oska_syntax::{Diagnostic, Span};
 
-use crate::{print_diagnostics, Flags, Places};
+use crate::{Flags, Places};
 
 /// Whether this host has a native backend: aarch64 Linux.
 pub const HOST_HAS_BACKEND: bool = cfg!(all(target_arch = "aarch64", target_os = "linux"));
@@ -38,8 +39,42 @@ pub fn runs_natively(flags: Flags) -> bool {
 pub enum Run {
     /// The program ran, or could not be started: the exit code to end with.
     Ran(ExitCode),
-    /// The backend refused the program: run it on the interpreter.
-    Refused,
+    /// The backend refused the program, with this diagnostic: run it on
+    /// the interpreter, after [`note_fallback`].
+    Refused(Diagnostic),
+}
+
+/// Tell the user, on stderr, that the native backend refused the program
+/// with `refusal` and it runs on the interpreter: one line, in the
+/// diagnostics' style (`path:line:col: note: ...`), or one JSON object
+/// with `"severity":"note"`. Nothing when the interpreter refuses the
+/// program too (`interpreter_refusal`): nothing runs, and its refusal
+/// is the one reported.
+pub fn note_fallback(
+    refusal: Diagnostic,
+    interpreter_refusal: Option<Diagnostic>,
+    places: &Places,
+    json: bool,
+) {
+    if interpreter_refusal.is_some() {
+        return;
+    }
+    let mut note = match refusal.location {
+        Some(_) => refusal,
+        None => places.locate(refusal),
+    };
+    note.message = format!("running on the interpreter: {}", note.message);
+    if json {
+        let object = note.to_json();
+        let fields = object.strip_prefix('{').unwrap_or(&object);
+        eprintln!("{{\"severity\":\"note\",{fields}");
+        return;
+    }
+    let text = format!("note: {} ({})", note.message, note.code);
+    match &note.location {
+        Some(location) => eprintln!("{location}: {text}"),
+        None => eprintln!("{text}"),
+    }
 }
 
 /// `oskac run`, natively: compile `program`, run it with `argv0` as its
@@ -55,8 +90,9 @@ pub fn run(program: &Program, places: &Places, argv0: &str, args: &[String], jso
     } else {
         oska_native::build(program, &|d| places.locate(d))
     };
-    let Ok(bytes) = built else {
-        return Run::Refused;
+    let bytes = match built {
+        Ok(bytes) => bytes,
+        Err(refusal) => return Run::Refused(refusal),
     };
     let exe = match Executable::create(&bytes) {
         Ok(exe) => exe,
@@ -195,15 +231,19 @@ pub fn cannot(what: &str, err: &std::io::Error) -> Diagnostic {
     )
 }
 
+/// Print `diagnostic`, about the run rather than a place in the source
+/// (`E0391`, `E0392`), to stderr: as `error[CODE]: message`, with no
+/// location or span, or as one JSON object.
 fn report(diagnostic: &Diagnostic, json: bool) {
     if json {
         eprintln!("{}", diagnostic.to_json());
     } else {
-        print_diagnostics(std::slice::from_ref(diagnostic));
+        eprintln!("error[{}]: {}", diagnostic.code, diagnostic.message);
     }
 }
 
-fn fail(diagnostic: &Diagnostic, json: bool) -> ExitCode {
+/// [`report`] `diagnostic` and end with exit code 1.
+pub fn fail(diagnostic: &Diagnostic, json: bool) -> ExitCode {
     report(diagnostic, json);
     ExitCode::FAILURE
 }
