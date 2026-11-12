@@ -348,12 +348,36 @@ fn the_example_program_in_the_prompt_checks_and_runs() {
     assert!(prompt.contains("`Hello from Oska!`"));
 }
 
-/// A new, empty directory for a test, under the system's temporary one.
-fn scratch(name: &str) -> PathBuf {
+/// A new, empty directory for a test, under the system's temporary one,
+/// removed when the test ends, even when it fails: one test copies `oskac`
+/// in, and the copies filled `/tmp` when they were left behind.
+fn scratch(name: &str) -> Scratch {
     let dir = std::env::temp_dir().join(format!("oska-agent-setup-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("should create a scratch directory");
-    dir
+    Scratch(dir)
+}
+
+/// A scratch directory, removed on drop.
+struct Scratch(PathBuf);
+
+impl std::ops::Deref for Scratch {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for Scratch {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 // ---- The templates -------------------------------------------------------------------------
