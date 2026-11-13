@@ -131,6 +131,20 @@ _Avoid_: VM, evaluator
 The part of the toolchain that compiles a checked program into a standalone executable for a platform, with no outside assembler, linker or C library. A program it cannot compile yet is refused, never compiled wrongly.
 _Avoid_: codegen, JIT
 
+**Supported platform**:
+An operating system and processor that `oskac` is released for: Linux on aarch64 and x86_64, macOS on aarch64 and x86_64, and Windows on x86_64. Every feature works the same on each, natively, with the same security guarantees.
+_Avoid_: OS
+
+**Parity gate**:
+The rule that a feature is done only when it works natively, with the same output and the same security guarantees, on every supported platform. Where operating systems differ, Oska defines the result: its own error wording, `/` in paths, no newline translation and its own exit codes.
+
+**Host**:
+The supported platform `oskac` itself is running on.
+
+**Target platform**:
+The supported platform an executable is built for. Any host can build for any target platform, and the same program built by the same `oskac` gives the same bytes on every host.
+_Avoid_: triple, arch
+
 **Runtime**:
 What runs alongside a program to provide what the language promises it: memory, text, panics, the capabilities `main` is granted, filesystem confinement and the test host. For native executables it is `std.rt`, an Oska module owned by the toolchain and compiled into every executable, which no program can import; the interpreter provides the same itself.
 _Avoid_: libc, runtime library
