@@ -193,7 +193,7 @@ fn a_trait_default_method_in_another_module_shows_its_authority() {
     assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
     let names: Vec<String> = report.functions.iter().map(|f| f.to_human()).collect();
     assert!(
-        names.contains(&"fn pkg.log.Log.log: Stdout (out)".to_string()),
+        names.contains(&"fn pkg.log.Log.log: generic Self (self), Stdout (out)".to_string()),
         "{names:?}"
     );
 }
