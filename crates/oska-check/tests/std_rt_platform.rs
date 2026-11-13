@@ -1,35 +1,60 @@
-//! What differs between target platforms (system-call numbers, open flags,
-//! the layout of `struct stat`) reaches `std.rt` from one table per
-//! platform, which the constant intrinsic `rt_mem_platform()` gives (#158).
-//! No `std.rt` function holds such a value itself, so adding a platform is
-//! adding a table.
+//! What `std.rt` reads that differs between target platforms (open flags,
+//! the layout of `struct stat`) is in one table per platform, which the
+//! constant intrinsic `rt_mem_platform()` gives (#158). The values below
+//! are the Linux UAPI headers' for each platform, so a wrong entry fails
+//! here and not only on the platform's runner.
 
-/// The non-comment lines of `std.rt`, with their numbers.
-fn code_lines() -> impl Iterator<Item = (usize, &'static str)> {
-    oska_check::STD_RT_SOURCE
-        .lines()
-        .enumerate()
-        .map(|(index, line)| (index + 1, line))
-        .filter(|(_, line)| !line.trim_start().starts_with("//"))
+use oska_check::program::{ExprKind, Program, TypeDeclKind};
+
+/// The table the `std.rt` function `name` gives, by field name.
+fn table(program: &Program, name: &str) -> Vec<(String, i128)> {
+    let function = program
+        .functions
+        .get(name)
+        .unwrap_or_else(|| panic!("std.rt has no table `{name}`"));
+    assert_eq!(function.ret.to_string(), "Platform");
+    let mut body = &function.body;
+    while let ExprKind::Block {
+        stmts,
+        value: Some(value),
+    } = &body.kind
+    {
+        assert!(stmts.is_empty(), "`{name}` does more than give its table");
+        body = value;
+    }
+    let ExprKind::Construct { fields, .. } = &body.kind else {
+        panic!("`{name}` gives no `Platform(...)`");
+    };
+    let Some(TypeDeclKind::Struct(names)) = program.types.get("Platform").map(|t| &t.kind) else {
+        panic!("std.rt has no struct `Platform`");
+    };
+    names
+        .iter()
+        .zip(fields)
+        .map(|(field, value)| match &value.kind {
+            ExprKind::Int(n, _) => (field.name.clone().unwrap_or_default(), *n),
+            _ => panic!("`{name}`'s `{:?}` is not a constant", field.name),
+        })
+        .collect()
 }
 
 #[test]
-fn every_system_call_takes_its_number_from_the_platform_table() {
-    let mut calls = 0;
-    for (number, line) in code_lines() {
-        for (at, _) in line.match_indices("rt_sys_") {
-            if line[..at].ends_with("fn ") {
-                continue;
-            }
-            calls += 1;
-            let call = &line[at..];
-            let args = call.split_once('(').map_or("", |(_, args)| args);
-            assert!(
-                args.starts_with("rt_mem_platform().sys_"),
-                "std.rt line {number} makes a system call whose number is not the platform table's: {}",
-                line.trim()
-            );
-        }
-    }
-    assert!(calls > 0, "std.rt makes no system call");
+fn linux_aarch64s_table_holds_arm64s_flags_and_stat_layout() {
+    let report = oska_check::check_toolchain_rt();
+    let program = report.program.expect("std.rt should check");
+    let expected: Vec<(String, i128)> = [
+        // asm-generic/fcntl.h, as arm64's asm/fcntl.h overrides it.
+        ("o_directory", 0o40000),
+        ("o_nofollow", 0o100000),
+        // asm-generic/stat.h: st_dev, st_ino (8 bytes each), st_mode,
+        // st_nlink (4 each), st_uid, st_gid, st_rdev, __pad1, st_size.
+        ("stat_bytes", 128),
+        ("stat_mode", 16),
+        ("stat_nlink", 20),
+        ("stat_size", 48),
+    ]
+    .into_iter()
+    .map(|(field, value)| (field.to_string(), value))
+    .collect();
+    assert_eq!(table(&program, "linux_aarch64"), expected);
 }

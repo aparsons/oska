@@ -3,28 +3,37 @@
 // system-call or memory intrinsic. No user code can import it (`E0209`).
 //
 // An intrinsic is a body-less function whose name starts with `rt_sys_`
-// (one system call) or `rt_mem_` (one memory or word operation). Both
-// prefixes are reserved: `scripts/intrinsic-guard/guard.sh` fails the build
-// if any other `.osk` file names such an identifier, and the checker
-// reports `E0209` for it. The interpreter has no implementation of them.
+// (one Linux system call, whose number the backend gives for the target
+// platform) or `rt_mem_` (one memory or word
+// operation). Both prefixes are reserved: `scripts/intrinsic-guard/guard.sh`
+// fails the build if any other `.osk` file names such an identifier, and
+// the checker reports `E0209` for it. The interpreter has no
+// implementation of them.
 //
 // Every argument and result is an `Int` (a 64-bit word). A system call
 // returns the kernel's raw result: a negative value is `-errno`.
-//
-// What differs between target platforms, a system call's number among
-// it, comes from the target's table (see "Platforms"), never from a
-// value written where it is used.
 
 // ---- System calls ----------------------------------------------------------
 
-// The Linux system call `number` with one, two, three, four or six
-// arguments: `rt_sys_call3(rt_mem_platform().sys_read, fd, buf, count)`.
-// `sys_exit_group` ends the process and does not return.
-pub fn rt_sys_call1(number: Int, a: Int) -> Int
-pub fn rt_sys_call2(number: Int, a: Int, b: Int) -> Int
-pub fn rt_sys_call3(number: Int, a: Int, b: Int, c: Int) -> Int
-pub fn rt_sys_call4(number: Int, a: Int, b: Int, c: Int, d: Int) -> Int
-pub fn rt_sys_call6(number: Int, a: Int, b: Int, c: Int, d: Int, e: Int, f: Int) -> Int
+pub fn rt_sys_read(fd: Int, buf: Int, count: Int) -> Int
+pub fn rt_sys_write(fd: Int, buf: Int, count: Int) -> Int
+pub fn rt_sys_openat(dirfd: Int, path: Int, flags: Int, mode: Int) -> Int
+pub fn rt_sys_close(fd: Int) -> Int
+pub fn rt_sys_mkdirat(dirfd: Int, path: Int, mode: Int) -> Int
+pub fn rt_sys_getdents64(fd: Int, buf: Int, count: Int) -> Int
+pub fn rt_sys_fstat(fd: Int, buf: Int) -> Int
+pub fn rt_sys_ftruncate(fd: Int, length: Int) -> Int
+pub fn rt_sys_readlinkat(dirfd: Int, path: Int, buf: Int, size: Int) -> Int
+pub fn rt_sys_getcwd(buf: Int, size: Int) -> Int
+pub fn rt_sys_fcntl(fd: Int, command: Int, arg: Int) -> Int
+pub fn rt_sys_mmap(addr: Int, length: Int, prot: Int, flags: Int, fd: Int, offset: Int) -> Int
+pub fn rt_sys_munmap(addr: Int, length: Int) -> Int
+pub fn rt_sys_clock_gettime(clock: Int, tp: Int) -> Int
+pub fn rt_sys_ioctl(fd: Int, request: Int, arg: Int) -> Int
+pub fn rt_sys_getrandom(buf: Int, length: Int, flags: Int) -> Int
+pub fn rt_sys_rt_sigaction(signal: Int, action: Int, old: Int, size: Int) -> Int
+// Ends the process; does not return.
+pub fn rt_sys_exit_group(status: Int) -> Int
 
 // ---- Memory and words ------------------------------------------------------
 
@@ -99,36 +108,18 @@ pub fn rt_mem_platform() -> Platform
 
 // ---- Platforms -------------------------------------------------------------
 //
-// What differs between the target platforms `std.rt` runs on is in one
+// What `std.rt` reads that differs between target platforms is in one
 // table per platform, and nowhere else: no function holds such a value,
-// or asks which platform it runs on. Adding a platform is adding its
-// table, and the backend giving it from `rt_mem_platform`.
+// or asks which platform it runs on. A system call's number is the
+// backend's, which lowers each `rt_sys_` intrinsic with the target's.
+// Adding a platform is adding its table here and its numbers there.
 //
 // The rest of what `std.rt` asks of the kernel is the same on every Linux
 // processor Oska supports: the other open flags, `mmap`'s flags and
 // protections, `struct sigaction`, `TCGETS`, `F_DUPFD_CLOEXEC`,
-// `AT_FDCWD`, the `errno` values and `struct linux_dirent64`.
+// `AT_FDCWD`, `S_IFMT`, the `errno` values and `struct linux_dirent64`.
 
 struct Platform {
-    // System-call numbers.
-    sys_read: Int,
-    sys_write: Int,
-    sys_openat: Int,
-    sys_close: Int,
-    sys_mkdirat: Int,
-    sys_getdents64: Int,
-    sys_fstat: Int,
-    sys_ftruncate: Int,
-    sys_readlinkat: Int,
-    sys_getcwd: Int,
-    sys_fcntl: Int,
-    sys_mmap: Int,
-    sys_munmap: Int,
-    sys_clock_gettime: Int,
-    sys_ioctl: Int,
-    sys_getrandom: Int,
-    sys_rt_sigaction: Int,
-    sys_exit_group: Int,
     // `openat`'s flags `O_DIRECTORY` and `O_NOFOLLOW`.
     o_directory: Int,
     o_nofollow: Int,
@@ -140,28 +131,9 @@ struct Platform {
     stat_size: Int,
 }
 
-// `linux-aarch64`: the system calls are the generic Linux table's
-// (`asm-generic/unistd.h`), the flags and `struct stat` arm64's.
+// `linux-aarch64`: arm64's flags and `struct stat`.
 fn linux_aarch64() -> Platform {
     Platform(
-        sys_read: 63,
-        sys_write: 64,
-        sys_openat: 56,
-        sys_close: 57,
-        sys_mkdirat: 34,
-        sys_getdents64: 61,
-        sys_fstat: 80,
-        sys_ftruncate: 46,
-        sys_readlinkat: 78,
-        sys_getcwd: 17,
-        sys_fcntl: 25,
-        sys_mmap: 222,
-        sys_munmap: 215,
-        sys_clock_gettime: 113,
-        sys_ioctl: 29,
-        sys_getrandom: 278,
-        sys_rt_sigaction: 134,
-        sys_exit_group: 94,
         o_directory: 16384,
         o_nofollow: 32768,
         stat_bytes: 128,
@@ -245,7 +217,7 @@ fn no_reserve() -> Int {
 // `mmap`'s `flags` (at `addr` when they say it is fixed): its address.
 // Running out of memory ends the process.
 fn map(addr: Int, length: Int, prot: Int, flags: Int) -> Int {
-    let at = rt_sys_call6(rt_mem_platform().sys_mmap, addr, length, prot, flags, -1, 0)
+    let at = rt_sys_mmap(addr, length, prot, flags, -1, 0)
     if at < 0 {
         out_of_memory()
     }
@@ -308,7 +280,7 @@ fn try_alloc(size: Int) -> Int {
         return alloc(size)
     }
     let length = rt_mem_and(rt_mem_add(block, 65535), -65536)
-    let at = rt_sys_call6(rt_mem_platform().sys_mmap, 0, length, 3, private_anonymous(), -1, 0)
+    let at = rt_sys_mmap(0, length, 3, private_anonymous(), -1, 0)
     if at < 0 {
         return 0
     }
@@ -340,7 +312,7 @@ pub fn free(object: Int) {
         // and faults in fresh memory far less often.
         let kept = rt_mem_load64(global(22))
         if kept != 0 {
-            let _ = rt_sys_call2(rt_mem_platform().sys_munmap, kept, rt_mem_load64(global(23)))
+            let _ = rt_sys_munmap(kept, rt_mem_load64(global(23)))
         }
         rt_mem_store64(global(22), at)
         rt_mem_store64(global(23), rt_mem_sub(0, class))
@@ -458,7 +430,7 @@ pub fn drop_later(object: Int, code: Int) {
         let fresh = map(0, rt_mem_shl(bigger, 4), 3, private_anonymous())
         if pending != 0 {
             copy_bytes(fresh, pending, rt_mem_shl(count, 4))
-            let _ = rt_sys_call2(rt_mem_platform().sys_munmap, pending, rt_mem_shl(capacity, 4))
+            let _ = rt_sys_munmap(pending, rt_mem_shl(capacity, 4))
         }
         pending = fresh
         rt_mem_store64(global(24), fresh)
@@ -1784,7 +1756,7 @@ pub fn process_init(sp: Int) {
     rt_mem_store64(rt_mem_add(action, 16), 0)
     rt_mem_store64(rt_mem_add(action, 24), 0)
     rt_mem_store64(rt_mem_add(action, 32), 0)
-    let _ = rt_sys_call4(rt_mem_platform().sys_rt_sigaction, 13, rt_mem_add(action, 8), 0, 8)
+    let _ = rt_sys_rt_sigaction(13, rt_mem_add(action, 8), 0, 8)
     free(action)
     let argc = rt_mem_load64(sp)
     let argv = rt_mem_add(sp, 8)
@@ -1816,7 +1788,7 @@ fn cstr_valid(at: Int) -> Bool {
 // still holds.
 pub fn exit(status: Int) {
     let _ = flush_stdout()
-    let _ = rt_sys_call1(rt_mem_platform().sys_exit_group, status)
+    let _ = rt_sys_exit_group(status)
 }
 
 // `main` returned an error whose text is `message`: it goes to stderr on a
@@ -1843,7 +1815,7 @@ pub fn main_failed(message: String) {
 fn write_stdout(buf: Int, count: Int) -> Int {
     let written = write_all(1, buf, count)
     if written == -32 {
-        let _ = rt_sys_call1(rt_mem_platform().sys_exit_group, 0)
+        let _ = rt_sys_exit_group(0)
     }
     written
 }
@@ -1860,7 +1832,7 @@ fn stdout_buffer() -> Int {
         rt_mem_store64(global(13), buf)
         // `ioctl(1, TCGETS, termios)` succeeds only on a terminal.
         let termios = alloc(64)
-        let tty = rt_sys_call3(rt_mem_platform().sys_ioctl, 1, 21505, rt_mem_add(termios, 8))
+        let tty = rt_sys_ioctl(1, 21505, rt_mem_add(termios, 8))
         free(termios)
         rt_mem_store64(global(15), if tty == 0 { 2 } else { 1 })
     }
@@ -1968,7 +1940,7 @@ fn write_all(fd: Int, buf: Int, count: Int) -> Int {
     var at = buf
     var left = count
     while left > 0 {
-        let written = rt_sys_call3(rt_mem_platform().sys_write, fd, at, left)
+        let written = rt_sys_write(fd, at, left)
         if written == -4 {
             continue
         }
@@ -2110,15 +2082,15 @@ fn stdin_fill() -> Int {
     if end == capacity {
         let bigger = map(0, capacity * 2, 3, private_anonymous())
         copy_bytes(bigger, buf, end)
-        let _ = rt_sys_call2(rt_mem_platform().sys_munmap, buf, capacity)
+        let _ = rt_sys_munmap(buf, capacity)
         buf = bigger
         capacity = capacity * 2
         rt_mem_store64(global(16), buf)
         rt_mem_store64(global(19), capacity)
     }
-    var read = rt_sys_call3(rt_mem_platform().sys_read, 0, rt_mem_add(buf, end), capacity - end)
+    var read = rt_sys_read(0, rt_mem_add(buf, end), capacity - end)
     while read == -4 {
-        read = rt_sys_call3(rt_mem_platform().sys_read, 0, rt_mem_add(buf, end), capacity - end)
+        read = rt_sys_read(0, rt_mem_add(buf, end), capacity - end)
     }
     if read > 0 {
         rt_mem_store64(global(18), end + read)
@@ -2317,7 +2289,7 @@ pub fn clock_now_millis(clock: Clock) -> Int {
         return 0
     }
     let object = alloc(24)
-    let _ = rt_sys_call2(rt_mem_platform().sys_clock_gettime, 0, rt_mem_add(object, 8))
+    let _ = rt_sys_clock_gettime(0, rt_mem_add(object, 8))
     let seconds = rt_mem_load64(rt_mem_add(object, 8))
     let nanos = rt_mem_load64(rt_mem_add(object, 16))
     free(object)
@@ -2330,10 +2302,10 @@ pub fn clock_now_millis(clock: Clock) -> Int {
 pub fn random_next_int(random: Random) -> Int {
     if rt_mem_load64(global(21)) == 0 {
         let object = alloc(24)
-        let got = rt_sys_call3(rt_mem_platform().sys_getrandom, rt_mem_add(object, 8), 8, 0)
+        let got = rt_sys_getrandom(rt_mem_add(object, 8), 8, 0)
         var seed = rt_mem_load64(rt_mem_add(object, 8))
         if got != 8 {
-            let _ = rt_sys_call2(rt_mem_platform().sys_clock_gettime, 0, rt_mem_add(object, 8))
+            let _ = rt_sys_clock_gettime(0, rt_mem_add(object, 8))
             let nanos = rt_mem_load64(rt_mem_add(object, 16))
             seed = rt_mem_xor(rt_mem_load64(rt_mem_add(object, 8)), rt_mem_shl(nanos, 20))
         }
@@ -2717,7 +2689,7 @@ pub fn root_drop(object: Int) {
 // Close `fd`. Like Rust's `OwnedFd`, never retried: the descriptor is gone
 // either way.
 fn close(fd: Int) {
-    let _ = rt_sys_call1(rt_mem_platform().sys_close, fd)
+    let _ = rt_sys_close(fd)
 }
 
 // `openat`'s flags. `O_DIRECTORY` and `O_NOFOLLOW` are the platform's;
@@ -2800,9 +2772,9 @@ fn open_name(dirfd: Int, name: String, flags: Int) -> Int {
     if path == 0 {
         return 0 - nul_in_name()
     }
-    var fd = rt_sys_call4(rt_mem_platform().sys_openat, dirfd, text_data(path), flags, 438)
+    var fd = rt_sys_openat(dirfd, text_data(path), flags, 438)
     while fd == -4 {
-        fd = rt_sys_call4(rt_mem_platform().sys_openat, dirfd, text_data(path), flags, 438)
+        fd = rt_sys_openat(dirfd, text_data(path), flags, 438)
     }
     free(path)
     fd
@@ -3020,7 +2992,7 @@ fn byte_at(text: String, at: Int) -> Int {
 fn working_directory() -> Result<String, Int> {
     let buffer = alloc(4104)
     let data = rt_mem_add(buffer, 8)
-    let length = rt_sys_call2(rt_mem_platform().sys_getcwd, data, 4096)
+    let length = rt_sys_getcwd(data, 4096)
     if length < 0 {
         free(buffer)
         return Err(0 - length)
@@ -3043,7 +3015,7 @@ fn link_target(path: String) -> Result<String, Int> {
     let name = c_string(path)
     let buffer = alloc(4104)
     let data = rt_mem_add(buffer, 8)
-    let length = rt_sys_call4(rt_mem_platform().sys_readlinkat, at_cwd(), text_data(name), data, 4096)
+    let length = rt_sys_readlinkat(at_cwd(), text_data(name), data, 4096)
     free(name)
     if length < 0 {
         free(buffer)
@@ -3242,7 +3214,7 @@ fn open_dir(root: Int, names: List<String>) -> Result<Int, IoError> {
     let count = names.len()
     if count == 0 {
         // `F_DUPFD_CLOEXEC`, from 3 up, as Rust's `try_clone`.
-        let fd = rt_sys_call3(rt_mem_platform().sys_fcntl, root, 1030, 3)
+        let fd = rt_sys_fcntl(root, 1030, 3)
         if fd < 0 {
             return Err(io_error(0 - fd))
         }
@@ -3290,7 +3262,7 @@ fn lone_file(fd: Int, names: List<String>) -> Result<(), IoError> {
     let platform = rt_mem_platform()
     let buffer = alloc(rt_mem_add(platform.stat_bytes, 8))
     let stat = rt_mem_add(buffer, 8)
-    let result = rt_sys_call2(rt_mem_platform().sys_fstat, fd, stat)
+    let result = rt_sys_fstat(fd, stat)
     let mode = rt_mem_load32(rt_mem_add(stat, platform.stat_mode))
     let links = rt_mem_load32(rt_mem_add(stat, platform.stat_nlink))
     free(buffer)
@@ -3328,7 +3300,7 @@ fn read_all(fd: Int) -> Result<String, IoError> {
     let platform = rt_mem_platform()
     let buffer = alloc(rt_mem_add(platform.stat_bytes, 8))
     var capacity = 64
-    if rt_sys_call2(rt_mem_platform().sys_fstat, fd, rt_mem_add(buffer, 8)) >= 0 {
+    if rt_sys_fstat(fd, rt_mem_add(buffer, 8)) >= 0 {
         let size = rt_mem_add(buffer, rt_mem_add(platform.stat_size, 8))
         capacity = rt_mem_add(capacity, rt_mem_load64(size))
     }
@@ -3350,7 +3322,7 @@ fn read_all(fd: Int) -> Result<String, IoError> {
             object = larger
             capacity = rt_mem_shl(capacity, 1)
         }
-        let got = rt_sys_call3(rt_mem_platform().sys_read, fd, rt_mem_add(text_data(object), length), capacity - length)
+        let got = rt_sys_read(fd, rt_mem_add(text_data(object), length), capacity - length)
         if got == -4 {
             continue
         }
@@ -3377,9 +3349,9 @@ fn read_all(fd: Int) -> Result<String, IoError> {
 // emptied only once it is known to be a regular one with one link.
 fn write_beneath(root: Int, names: List<String>, contents: String) -> Result<(), IoError> {
     let fd = open_file(root, names, file_write_flags())?
-    var emptied = rt_sys_call2(rt_mem_platform().sys_ftruncate, fd, 0)
+    var emptied = rt_sys_ftruncate(fd, 0)
     while emptied == -4 {
-        emptied = rt_sys_call2(rt_mem_platform().sys_ftruncate, fd, 0)
+        emptied = rt_sys_ftruncate(fd, 0)
     }
     if emptied < 0 {
         close(fd)
@@ -3414,9 +3386,9 @@ fn make_dir(parent: Int, names: List<String>) -> Result<(), IoError> {
     if path == 0 {
         return Err(io_error_text(os_error(nul_in_name())))
     }
-    var made = rt_sys_call3(rt_mem_platform().sys_mkdirat, parent, text_data(path), 511)
+    var made = rt_sys_mkdirat(parent, text_data(path), 511)
     while made == -4 {
-        made = rt_sys_call3(rt_mem_platform().sys_mkdirat, parent, text_data(path), 511)
+        made = rt_sys_mkdirat(parent, text_data(path), 511)
     }
     free(path)
     if made >= 0 {
@@ -3456,7 +3428,7 @@ fn entries(dir: Int, shown: String) -> Result<List<String>, IoError> {
     var invalid = -1
     var failed = 0
     while true {
-        var got = rt_sys_call3(rt_mem_platform().sys_getdents64, fd, data, 32760)
+        var got = rt_sys_getdents64(fd, data, 32760)
         if got == -4 {
             continue
         }

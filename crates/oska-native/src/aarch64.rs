@@ -502,19 +502,9 @@ impl Emitter {
                 self.put(BLR | (X9 << 5));
                 self.write(*dst, X0);
             }
-            Inst::Syscall { dst, args } => {
-                // The number to `x8` and the arguments to `x0` on, as one
-                // parallel move, since any of them may be in another's
-                // register.
-                let moves = args
-                    .iter()
-                    .enumerate()
-                    .map(|(index, &arg)| {
-                        let register = index.checked_sub(1).map_or(X8, |r| r as u32);
-                        (Loc::Reg(register), self.loc(arg))
-                    })
-                    .collect();
-                self.parallel_move(moves);
+            Inst::Syscall { dst, number, args } => {
+                self.arguments(args);
+                self.put(movz(X8, u32::from(*number), 0));
                 self.put(SVC_0);
                 self.write(*dst, X0);
             }

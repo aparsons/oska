@@ -853,7 +853,7 @@ mod tests {
         let module =
             oska_syntax::parse_prelude(oska_check::STD_RT_SOURCE).expect("std.rt should parse");
         let names = bodiless_functions(&module);
-        assert!(names.iter().any(|n| n == "rt_sys_call3"), "{names:?}");
+        assert!(names.iter().any(|n| n == "rt_sys_write"), "{names:?}");
         assert_eq!(names, oska_check::std_rt_intrinsics());
         let implemented: Vec<&String> = names.iter().filter(|n| implemented(n)).collect();
         assert!(

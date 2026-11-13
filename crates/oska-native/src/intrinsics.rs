@@ -5,7 +5,9 @@
 //! A prelude intrinsic is implemented in Oska, by a function of `std.rt`
 //! that takes the same arguments (the receiver first), or, when that would
 //! be a single instruction, inline. A `std.rt` intrinsic is one system
-//! call (`svc #0`), one word operation, or a constant.
+//! call (`svc #0`), one word operation, or a constant. What differs
+//! between target platforms is in one [`Platform`] per target: its
+//! system-call numbers here, and its table in `std.rt`.
 //!
 //! To add a prelude intrinsic: write its runtime function in
 //! `oska-check/src/std/rt.osk` and add a [`Prelude::Runtime`] row to
@@ -158,9 +160,8 @@ pub fn prelude(name: &str) -> Option<Prelude> {
 /// How a `std.rt` intrinsic is lowered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Runtime {
-    /// The Linux system call whose number is its first argument, with
-    /// the rest.
-    Syscall,
+    /// The Linux system call `Sys`, of the target platform's number.
+    Syscall(Sys),
     /// `load(addr)`.
     Load(Width),
     /// `store(addr, value)`, whose result is `()`.
@@ -176,24 +177,102 @@ pub enum Runtime {
     /// program's executable; in a test executable, what its entry set
     /// (`lower/tests.rs`).
     TestHost,
-    /// The target platform's table of what differs between platforms:
-    /// the static object [`PLATFORM_TABLE`] gives.
-    Platform,
+    /// `std.rt`'s table of what differs between target platforms, the
+    /// target platform's ([`Platform::table`]).
+    PlatformTable,
 }
 
-/// The `std.rt` function giving the table `rt_mem_platform` reads, of
-/// what differs between target platforms: `linux-aarch64`'s, the only
-/// target platform so far.
-pub const PLATFORM_TABLE: &str = "linux_aarch64";
+/// A system call, which the `std.rt` intrinsic of its name makes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sys {
+    Read,
+    Write,
+    Openat,
+    Close,
+    Mkdirat,
+    Getdents64,
+    Fstat,
+    Ftruncate,
+    Readlinkat,
+    Getcwd,
+    Fcntl,
+    Mmap,
+    Munmap,
+    ClockGettime,
+    Ioctl,
+    Getrandom,
+    RtSigaction,
+    ExitGroup,
+}
 
-/// Every `std.rt` intrinsic, by name. A system call's number is an
-/// argument, from `std.rt`'s platform table.
+/// What the backend gives `std.rt` for a target platform.
+#[derive(Debug, Clone, Copy)]
+pub struct Platform {
+    /// The `std.rt` function giving the platform's table, which
+    /// `rt_mem_platform` gives: its open flags and `struct stat` layout.
+    pub table: &'static str,
+    /// Each system call's number.
+    pub syscall: fn(Sys) -> u16,
+}
+
+/// The target platforms the backend builds for.
+pub const PLATFORMS: [Platform; 1] = [LINUX_AARCH64];
+
+/// The target platform the backend builds for: `linux-aarch64`, the
+/// only one so far.
+pub const PLATFORM: Platform = PLATFORMS[0];
+
+/// `linux-aarch64`.
+pub const LINUX_AARCH64: Platform = Platform {
+    table: "linux_aarch64",
+    syscall: linux_aarch64_syscall,
+};
+
+/// `linux-aarch64`'s system-call numbers: the generic Linux table's
+/// (`asm-generic/unistd.h`).
+fn linux_aarch64_syscall(call: Sys) -> u16 {
+    match call {
+        Sys::Read => 63,
+        Sys::Write => 64,
+        Sys::Openat => 56,
+        Sys::Close => 57,
+        Sys::Mkdirat => 34,
+        Sys::Getdents64 => 61,
+        Sys::Fstat => 80,
+        Sys::Ftruncate => 46,
+        Sys::Readlinkat => 78,
+        Sys::Getcwd => 17,
+        Sys::Fcntl => 25,
+        Sys::Mmap => 222,
+        Sys::Munmap => 215,
+        Sys::ClockGettime => 113,
+        Sys::Ioctl => 29,
+        Sys::Getrandom => 278,
+        Sys::RtSigaction => 134,
+        Sys::ExitGroup => 94,
+    }
+}
+
+/// Every `std.rt` intrinsic, by name.
 pub const RUNTIME: &[(&str, Runtime)] = &[
-    ("rt_sys_call1", Runtime::Syscall),
-    ("rt_sys_call2", Runtime::Syscall),
-    ("rt_sys_call3", Runtime::Syscall),
-    ("rt_sys_call4", Runtime::Syscall),
-    ("rt_sys_call6", Runtime::Syscall),
+    ("rt_sys_read", Runtime::Syscall(Sys::Read)),
+    ("rt_sys_write", Runtime::Syscall(Sys::Write)),
+    ("rt_sys_openat", Runtime::Syscall(Sys::Openat)),
+    ("rt_sys_close", Runtime::Syscall(Sys::Close)),
+    ("rt_sys_mkdirat", Runtime::Syscall(Sys::Mkdirat)),
+    ("rt_sys_getdents64", Runtime::Syscall(Sys::Getdents64)),
+    ("rt_sys_fstat", Runtime::Syscall(Sys::Fstat)),
+    ("rt_sys_ftruncate", Runtime::Syscall(Sys::Ftruncate)),
+    ("rt_sys_readlinkat", Runtime::Syscall(Sys::Readlinkat)),
+    ("rt_sys_getcwd", Runtime::Syscall(Sys::Getcwd)),
+    ("rt_sys_fcntl", Runtime::Syscall(Sys::Fcntl)),
+    ("rt_sys_mmap", Runtime::Syscall(Sys::Mmap)),
+    ("rt_sys_munmap", Runtime::Syscall(Sys::Munmap)),
+    ("rt_sys_clock_gettime", Runtime::Syscall(Sys::ClockGettime)),
+    ("rt_sys_ioctl", Runtime::Syscall(Sys::Ioctl)),
+    ("rt_sys_getrandom", Runtime::Syscall(Sys::Getrandom)),
+    ("rt_sys_rt_sigaction", Runtime::Syscall(Sys::RtSigaction)),
+    ("rt_sys_exit_group", Runtime::Syscall(Sys::ExitGroup)),
     ("rt_mem_load8", Runtime::Load(Width::W8)),
     ("rt_mem_load16", Runtime::Load(Width::W16)),
     ("rt_mem_load32", Runtime::Load(Width::W32)),
@@ -223,7 +302,7 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_mem_as_root", Runtime::Identity),
     ("rt_mem_globals", Runtime::Globals),
     ("rt_mem_test_host", Runtime::TestHost),
-    ("rt_mem_platform", Runtime::Platform),
+    ("rt_mem_platform", Runtime::PlatformTable),
 ];
 
 /// The implementation of the `std.rt` intrinsic `name`, if there is one.
@@ -247,15 +326,45 @@ mod tests {
     }
 
     #[test]
-    fn the_platform_table_the_backend_gives_is_a_std_rt_table() {
+    fn every_platform_table_the_backend_gives_is_a_std_rt_table() {
         let report = oska_check::check_toolchain_rt();
         let program = report.program.expect("std.rt should check");
-        let table = program
-            .functions
-            .get(PLATFORM_TABLE)
-            .unwrap_or_else(|| panic!("std.rt has no `{PLATFORM_TABLE}`"));
-        assert!(table.params.is_empty() && !table.receiver);
-        assert_eq!(table.ret.to_string(), "Platform");
+        for platform in PLATFORMS {
+            let table = program
+                .functions
+                .get(platform.table)
+                .unwrap_or_else(|| panic!("std.rt has no `{}`", platform.table));
+            assert!(table.params.is_empty() && !table.receiver);
+            assert_eq!(table.ret.to_string(), "Platform");
+        }
+    }
+
+    #[test]
+    fn the_rt_sys_intrinsics_are_the_system_calls() {
+        for (name, implementation) in RUNTIME {
+            assert_eq!(
+                name.starts_with("rt_sys_"),
+                matches!(implementation, Runtime::Syscall(_)),
+                "`{name}`"
+            );
+        }
+    }
+
+    #[test]
+    fn every_platform_gives_each_system_call_a_number_of_its_own() {
+        for platform in PLATFORMS {
+            let mut numbers: Vec<u16> = RUNTIME
+                .iter()
+                .filter_map(|(_, implementation)| match implementation {
+                    Runtime::Syscall(call) => Some((platform.syscall)(*call)),
+                    _ => None,
+                })
+                .collect();
+            let calls = numbers.len();
+            numbers.sort_unstable();
+            numbers.dedup();
+            assert_eq!(numbers.len(), calls, "`{}`", platform.table);
+        }
     }
 
     #[test]

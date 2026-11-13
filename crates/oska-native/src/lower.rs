@@ -1704,10 +1704,11 @@ impl<'l, 'p> Body<'l, 'p> {
     fn runtime_intrinsic(&mut self, runtime: Runtime, args: &[Temp]) -> Result<Temp, Diagnostic> {
         let arg = |i: usize| args.get(i).copied().unwrap_or_default();
         Ok(match runtime {
-            Runtime::Syscall => {
+            Runtime::Syscall(call) => {
                 let dst = self.temp();
                 self.push(Inst::Syscall {
                     dst,
+                    number: (intrinsics::PLATFORM.syscall)(call),
                     args: args.to_vec(),
                 });
                 dst
@@ -1745,8 +1746,8 @@ impl<'l, 'p> Body<'l, 'p> {
             }
             Runtime::TestHost => self.test_host(),
             // A call of the target platform's table, a static object.
-            Runtime::Platform => {
-                self.call_runtime(intrinsics::PLATFORM_TABLE, Vec::new(), NOWHERE)?
+            Runtime::PlatformTable => {
+                self.call_runtime(intrinsics::PLATFORM.table, Vec::new(), NOWHERE)?
             }
         })
     }
