@@ -1,6 +1,6 @@
 # Install
 
-Oska is pre-alpha. The latest release is **v0.2.0**. You can install `oskac`, the compiler and runner, from a signed binary with a one-line installer, or build it from source.
+Oska is pre-alpha. The latest release is **v0.3.0**. You can install `oskac`, the compiler and runner, from a signed binary with a one-line installer, or build it from source.
 
 ## Build from source
 
@@ -22,7 +22,7 @@ Confirm that it works:
 oskac --version
 ```
 
-It prints `oskac` and the version on one line. A build from this checkout prints `oskac 0.2.0`. Then continue with the [quickstart](quickstart.md).
+It prints `oskac` and the version on one line. A build from this checkout prints `oskac 0.3.0`. Then continue with the [quickstart](quickstart.md).
 
 ## One-line installers
 
@@ -42,26 +42,26 @@ What the installers do:
 
 - **They never prompt.** They are safe to run from a script, a CI job, or an AI agent.
 - **They install to `~/.oska/bin`.** Set `OSKA_HOME` to install into `$OSKA_HOME/bin` instead. They don't change your `PATH`; if `~/.oska/bin` is not on it, they print the line to add.
-- **They verify before they install.** The installer checks the SSH signature on `SHA256SUMS` (`ssh-keygen -Y verify`, so it needs OpenSSH 8.1 or newer) against the release key built into the installer. The signed file's first line, `# oska-release v0.2.0`, names the release, and it must be the one the installer asked for, so an old release cannot be served as a newer one. Then the installer checks the download's SHA-256 checksum against `SHA256SUMS`, and checks that the binary reports the expected version. If any check fails, nothing is installed and the installer exits with a non-zero status.
+- **They verify before they install.** The installer checks the SSH signature on `SHA256SUMS` (`ssh-keygen -Y verify`, so it needs OpenSSH 8.1 or newer) against the release key built into the installer. The signed file's first line, `# oska-release v0.3.0`, names the release, and it must be the one the installer asked for, so an old release cannot be served as a newer one. Then the installer checks the download's SHA-256 checksum against `SHA256SUMS`, and checks that the binary reports the expected version. If any check fails, nothing is installed and the installer exits with a non-zero status.
 - **They download over HTTPS only.** They refuse a redirect to a plain `http://` URL.
 - **They take `--version` and `--json`.** `--version` installs that release instead of the latest. `--json` prints one line of JSON on stdout and nothing else.
 
 To pass options through the pipe:
 
 ```sh
-curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.2.0 --json
+curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.3.0 --json
 ```
 
 `iex` cannot pass options, so in PowerShell run the script as a script block:
 
 ```powershell
-& ([scriptblock]::Create((irm https://oskalang.dev/install.ps1))) --version 0.2.0 --json
+& ([scriptblock]::Create((irm https://oskalang.dev/install.ps1))) --version 0.3.0 --json
 ```
 
 A successful `--json` run prints:
 
 ```json
-{"ok": true, "action": "installed", "version": "0.2.0", "tag": "v0.2.0", "previous_version": null, "platform": "linux-x86_64", "path": "/home/you/.oska/bin/oskac", "bin_dir": "/home/you/.oska/bin", "on_path": false, "checksum_verified": true, "signature_verified": true}
+{"ok": true, "action": "installed", "version": "0.3.0", "tag": "v0.3.0", "previous_version": null, "platform": "linux-x86_64", "path": "/home/you/.oska/bin/oskac", "bin_dir": "/home/you/.oska/bin", "on_path": false, "checksum_verified": true, "signature_verified": true}
 ```
 
 - `action` is `installed`, `updated` (with the old version in `previous_version`), or `reinstalled`.
@@ -101,6 +101,15 @@ Re-run the installer. It installs the latest release over the old one, and with 
 ### Uninstall
 
 Delete `~/.oska`, which holds `bin/oskac` and a `version` file recording what the installer put there.
+
+## Upgrading to v0.3.0
+
+v0.3.0 adds the native backend. Programs keep their meaning; these are the changes you can see:
+
+- **`run` and `test` compile natively on aarch64 Linux.** Elsewhere, and with `--interpret`, they run on the interpreter as before. A program the native backend cannot compile yet runs on the interpreter after a one-line note (`E0390`). `oskac build` writes the executable. See [platform support](cli-reference.md#platform-support).
+- **A closed stdout pipe ends the program quietly with exit code 0** (`oskac run x.osk | head -1`), on both backends. Before, `oskac` panicked (#86).
+- **`String.to_lowercase` maps each character on its own**, so a Greek capital sigma at the end of a word becomes `σ`, not `ς`, on both backends.
+- **`for` over a range of anything but integers is refused by the checker** (`E0235`); the interpreter used to fail at run time.
 
 ## Upgrading to v0.2.0
 
