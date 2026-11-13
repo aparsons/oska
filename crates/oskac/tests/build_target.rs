@@ -58,6 +58,28 @@ fn files_in(dir: &Path, prefix: &str, out: &mut BTreeSet<String>) {
     }
 }
 
+/// `text` with the native separator after each of `prefixes` turned into
+/// `/`, in both the plain form
+/// (`dist\name`) and the JSON-escaped form (`dist\\name`). oskac prints paths as the OS spells them, so on Windows
+/// the goldens, which hold `/`, are compared after this.
+fn slash_after(text: &str, prefixes: &[&str]) -> String {
+    let mut out = text.to_string();
+    for prefix in prefixes.iter().filter(|p| !p.is_empty()) {
+        out = out.replace(&format!("{prefix}\\\\"), &format!("{prefix}/"));
+        out = out.replace(&format!("{prefix}\\"), &format!("{prefix}/"));
+    }
+    out
+}
+
+#[test]
+fn slash_after_handles_plain_and_json_separators() {
+    assert_eq!(
+        slash_after(r#"E0391: dist\hello and "dist\\hello""#, &["dist"]),
+        r#"E0391: dist/hello and "dist/hello""#
+    );
+    assert_eq!(slash_after(r"a\b", &[""]), r"a\b");
+}
+
 /// Run `oskac args` in a fresh directory holding `files`, and compare
 /// with the golden file `case`. The directory, for a closer look.
 fn assert_golden(case: &str, files: &[(&str, &str)], args: &[&str]) -> PathBuf {
@@ -68,6 +90,11 @@ fn assert_golden(case: &str, files: &[(&str, &str)], args: &[&str]) -> PathBuf {
     let mut after = BTreeSet::new();
     files_in(&dir, "", &mut after);
     let written: Vec<&String> = after.difference(&before).collect();
+    let prefixes: Vec<&str> = args
+        .iter()
+        .copied()
+        .filter(|a| !a.starts_with('-'))
+        .collect();
     let actual = format!(
         "$ oskac {}\nexit: {}\n--- stdout\n{}--- stderr\n{}--- written\n{}",
         args.join(" "),
@@ -75,8 +102,8 @@ fn assert_golden(case: &str, files: &[(&str, &str)], args: &[&str]) -> PathBuf {
             .status
             .code()
             .map_or("signal".to_string(), |c| c.to_string()),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
+        slash_after(&String::from_utf8_lossy(&output.stdout), &prefixes),
+        slash_after(&String::from_utf8_lossy(&output.stderr), &prefixes),
         written.iter().map(|w| format!("{w}\n")).collect::<String>(),
     );
     let golden = Path::new(env!("CARGO_MANIFEST_DIR"))
