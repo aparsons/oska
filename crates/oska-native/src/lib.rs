@@ -1,6 +1,6 @@
 //! The native backend: a checked program to a static executable for a
 //! target platform ([`Target`]), with no assembler, linker or C library
-//! (ADR 0011). Only `linux-aarch64` has a backend so far.
+//! (ADR 0011). `linux-aarch64` and `linux-x86_64` have backends so far.
 //!
 //! [`build`] runs the pipeline:
 //!
@@ -12,8 +12,8 @@
 //!    implemented. Anything the backend cannot compile yet is refused
 //!    here, with `E0390`.
 //!    `optimize.rs` then cleans up the code and inlines small functions.
-//! 2. The target's code generator (`target.rs`): for `linux-aarch64`,
-//!    `aarch64.rs`, with register allocation (`regalloc.rs`), instruction
+//! 2. The target's code generator (`target.rs`): `aarch64.rs` or
+//!    `x86_64.rs`, with register allocation (`regalloc.rs`), instruction
 //!    selection and encoding.
 //! 3. `elf.rs`: the file, with the target's machine and page size.
 //!
@@ -35,6 +35,7 @@ mod lower;
 mod optimize;
 mod regalloc;
 mod target;
+mod x86_64;
 
 /// The codes the native backend reports.
 pub mod codes {
@@ -159,7 +160,7 @@ fn compile(
             NOWHERE,
         ));
     };
-    let module = lower::program(program, &rt, locate, entry)?;
+    let module = lower::program(program, &rt, locate, entry, target)?;
     let text = target.emit(&module).map_err(|why| {
         Diagnostic::new(
             codes::UNSUPPORTED,

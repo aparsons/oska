@@ -58,3 +58,26 @@ fn linux_aarch64s_table_holds_arm64s_flags_and_stat_layout() {
     .collect();
     assert_eq!(table(&program, "linux_aarch64"), expected);
 }
+
+#[test]
+fn linux_x86_64s_table_holds_x86_64s_flags_and_stat_layout() {
+    let report = oska_check::check_toolchain_rt();
+    let program = report.program.expect("std.rt should check");
+    let expected: Vec<(String, i128)> = [
+        // asm-generic/fcntl.h, which x86's asm/fcntl.h takes as it is.
+        ("o_directory", 0o200000),
+        ("o_nofollow", 0o400000),
+        // x86's asm/stat.h, `struct stat` for __x86_64__: st_dev, st_ino,
+        // st_nlink (8 bytes each), st_mode, st_uid, st_gid, __pad0 (4
+        // each), st_rdev, st_size; 144 bytes with the times and
+        // __unused[3].
+        ("stat_bytes", 144),
+        ("stat_mode", 24),
+        ("stat_nlink", 16),
+        ("stat_size", 48),
+    ]
+    .into_iter()
+    .map(|(field, value)| (field.to_string(), value))
+    .collect();
+    assert_eq!(table(&program, "linux_x86_64"), expected);
+}

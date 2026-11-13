@@ -5,7 +5,10 @@
 //! type, and `?` on `Result` and `Option`, with and without a `From`
 //! conversion.
 
-#![cfg(all(target_arch = "aarch64", target_os = "linux"))]
+#![cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 
 mod differential;
 

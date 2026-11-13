@@ -106,6 +106,7 @@ fn field(bytes: &[u8], at: usize, size: usize) -> u64 {
 
 /// The ELF header's `e_machine`.
 const EM_AARCH64: u64 = 183;
+const EM_X86_64: u64 = 62;
 
 /// The host's supported platform, named as release assets name it.
 fn host_platform() -> Option<&'static str> {
@@ -136,6 +137,19 @@ fn linux_aarch64_names_an_aarch64_linux_executable() {
     let elf = read(&dir, "hello");
     assert_eq!(&elf[..4], b"\x7fELF");
     assert_eq!(field(&elf, 18, 2), EM_AARCH64);
+}
+
+/// Every host builds for x86_64 Linux, the Pi included (ticket #159).
+#[test]
+fn linux_x86_64_names_an_x86_64_linux_executable() {
+    let dir = assert_golden(
+        "linux_x86_64",
+        &[("hello.osk", HELLO)],
+        &["build", "hello.osk", "--target", "linux-x86_64"],
+    );
+    let elf = read(&dir, "hello");
+    assert_eq!(&elf[..4], b"\x7fELF");
+    assert_eq!(field(&elf, 18, 2), EM_X86_64);
 }
 
 #[test]
@@ -185,6 +199,9 @@ fn without_a_target_the_host_platform_is_built_for_when_it_has_a_backend() {
     if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
         assert_eq!(expected, "linux-aarch64");
     }
+    if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        assert_eq!(expected, "linux-x86_64");
+    }
 }
 
 // ---- Every target --------------------------------------------------------------
@@ -196,19 +213,17 @@ fn all_writes_one_executable_per_platform_with_a_backend_into_the_output_directo
         &[("hello.osk", HELLO), ("dist/.keep", "")],
         &["build", "hello.osk", "--target", "all", "-o", "dist"],
     );
-    let alone = oskac(
-        &dir,
-        &[
-            "build",
-            "hello.osk",
-            "--target",
-            "linux-aarch64",
-            "-o",
-            "alone",
-        ],
-    );
-    assert!(alone.status.success());
-    assert!(read(&dir, "dist/hello-linux-aarch64") == read(&dir, "alone"));
+    for platform in ["linux-aarch64", "linux-x86_64"] {
+        let alone = oskac(
+            &dir,
+            &["build", "hello.osk", "--target", platform, "-o", "alone"],
+        );
+        assert!(alone.status.success(), "{platform}");
+        assert!(
+            read(&dir, &format!("dist/hello-{platform}")) == read(&dir, "alone"),
+            "{platform}"
+        );
+    }
 }
 
 #[test]

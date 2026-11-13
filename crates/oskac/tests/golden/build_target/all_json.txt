@@ -1,7 +1,8 @@
 $ oskac build hello.osk --target all -o dist --format=json
 exit: 0
 --- stdout
-{"outputs":["dist/hello-linux-aarch64"],"diagnostics":[]}
+{"outputs":["dist/hello-linux-aarch64","dist/hello-linux-x86_64"],"diagnostics":[]}
 --- stderr
 --- written
 dist/hello-linux-aarch64
+dist/hello-linux-x86_64

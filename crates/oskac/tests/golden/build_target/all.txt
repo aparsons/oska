@@ -4,3 +4,4 @@ exit: 0
 --- stderr
 --- written
 dist/hello-linux-aarch64
+dist/hello-linux-x86_64

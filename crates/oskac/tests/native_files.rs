@@ -19,7 +19,10 @@
 //! harness records a symlink by its target and never follows one, so a
 //! write through one that escaped would show in the tree.
 
-#![cfg(all(target_arch = "aarch64", target_os = "linux"))]
+#![cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 
 mod differential;
 

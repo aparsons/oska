@@ -20,10 +20,10 @@
 //! - `x8` holds a system call's number, and `svc #0` makes it;
 //! - `x9`–`x11`, `x16` and `x17` are scratch within one instruction's
 //!   code;
-//! - `x19`–`x27` hold temporaries ([`regalloc::CALLEE_SAVED`]) and are
+//! - `x19`–`x27` hold temporaries ([`CALLEE_SAVED`]) and are
 //!   callee-saved: a function saves those it uses; `x2`–`x8` and
 //!   `x12`–`x15` hold temporaries no call happens during
-//!   ([`regalloc::CALLER_SAVED`]): arguments and parameters move to and
+//!   ([`CALLER_SAVED`]): arguments and parameters move to and
 //!   from them as one parallel move ([`Emitter::parallel_move`]);
 //! - `x28` counts how many more calls may nest ([`Inst::Enter`]): the
 //!   entry point sets it, and nothing else writes it;
@@ -39,11 +39,27 @@
 //! executable needs no relocation: [`Text::link`] patches the addresses
 //! of data ([`Fixup`]) once the file has been laid out.
 
-use crate::ir::{
-    Arith, BinOp, Cond, FnId, Function, Inst, IntKind, Module, Symbol, Temp, Width, REGISTER_ARGS,
-};
-use crate::regalloc::{self, Loc};
+use crate::ir::{Arith, BinOp, Cond, FnId, Function, Inst, IntKind, Module, Symbol, Temp, Width};
+use crate::regalloc::{self, Loc, Registers};
 use crate::target::{Code, Layout};
+
+/// How many arguments a call passes in registers: `x0`–`x7`.
+pub const REGISTER_ARGS: usize = 8;
+
+/// The registers that hold temporaries across calls, saved by the
+/// function that uses them.
+const CALLEE_SAVED: [u32; 9] = [19, 20, 21, 22, 23, 24, 25, 26, 27];
+
+/// The registers that hold temporaries between calls: arguments are put
+/// in place, and parameters taken, by parallel moves, so an argument
+/// register may hold one too. `x0` and `x1` do not: a call's results
+/// arrive there.
+const CALLER_SAVED: [u32; 11] = [12, 13, 14, 15, 2, 3, 4, 5, 6, 7, 8];
+
+const REGISTERS: Registers = Registers {
+    callee_saved: &CALLEE_SAVED,
+    caller_saved: &CALLER_SAVED,
+};
 
 /// The machine code of a module.
 #[derive(Debug)]
@@ -194,7 +210,7 @@ impl Emitter {
     }
 
     fn function(&mut self, function: &Function) -> Result<(), String> {
-        let allocation = regalloc::allocate(function);
+        let allocation = regalloc::allocate(function, &REGISTERS);
         self.locs = allocation.locs;
         self.saved = allocation.saved;
         let frame = (8 * (allocation.slots + self.saved.len() as u32)).next_multiple_of(16);

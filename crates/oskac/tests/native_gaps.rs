@@ -5,7 +5,10 @@
 //! `Scope.spawn` and `Task.join` as values, and the call depth of contract
 //! clauses and tasks at the `P0021` boundary.
 
-#![cfg(all(target_arch = "aarch64", target_os = "linux"))]
+#![cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 
 mod differential;
 

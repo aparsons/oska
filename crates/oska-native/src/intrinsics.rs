@@ -215,13 +215,6 @@ pub struct Platform {
     pub syscall: fn(Sys) -> u16,
 }
 
-/// The target platforms the backend builds for.
-pub const PLATFORMS: [Platform; 1] = [LINUX_AARCH64];
-
-/// The target platform the backend builds for: `linux-aarch64`, the
-/// only one so far.
-pub const PLATFORM: Platform = PLATFORMS[0];
-
 /// `linux-aarch64`.
 pub const LINUX_AARCH64: Platform = Platform {
     table: "linux_aarch64",
@@ -250,6 +243,37 @@ fn linux_aarch64_syscall(call: Sys) -> u16 {
         Sys::Getrandom => 278,
         Sys::RtSigaction => 134,
         Sys::ExitGroup => 94,
+    }
+}
+
+/// `linux-x86_64`.
+pub const LINUX_X86_64: Platform = Platform {
+    table: "linux_x86_64",
+    syscall: linux_x86_64_syscall,
+};
+
+/// `linux-x86_64`'s system-call numbers (`arch/x86/entry/syscalls/
+/// syscall_64.tbl`).
+fn linux_x86_64_syscall(call: Sys) -> u16 {
+    match call {
+        Sys::Read => 0,
+        Sys::Write => 1,
+        Sys::Openat => 257,
+        Sys::Close => 3,
+        Sys::Mkdirat => 258,
+        Sys::Getdents64 => 217,
+        Sys::Fstat => 5,
+        Sys::Ftruncate => 77,
+        Sys::Readlinkat => 267,
+        Sys::Getcwd => 79,
+        Sys::Fcntl => 72,
+        Sys::Mmap => 9,
+        Sys::Munmap => 11,
+        Sys::ClockGettime => 228,
+        Sys::Ioctl => 16,
+        Sys::Getrandom => 318,
+        Sys::RtSigaction => 13,
+        Sys::ExitGroup => 231,
     }
 }
 
@@ -329,7 +353,7 @@ mod tests {
     fn every_platform_table_the_backend_gives_is_a_std_rt_table() {
         let report = oska_check::check_toolchain_rt();
         let program = report.program.expect("std.rt should check");
-        for platform in PLATFORMS {
+        for platform in crate::Target::ALL.map(crate::Target::platform) {
             let table = program
                 .functions
                 .get(platform.table)
@@ -352,7 +376,7 @@ mod tests {
 
     #[test]
     fn every_platform_gives_each_system_call_a_number_of_its_own() {
-        for platform in PLATFORMS {
+        for platform in crate::Target::ALL.map(crate::Target::platform) {
             let mut numbers: Vec<u16> = RUNTIME
                 .iter()
                 .filter_map(|(_, implementation)| match implementation {
