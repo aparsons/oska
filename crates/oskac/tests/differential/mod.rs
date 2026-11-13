@@ -20,7 +20,8 @@
 //! reported on stderr and compared on the interpreter alone
 //! ([`REPORT_REFUSALS`]), until x86_64 Linux is native by default;
 //! [`assert_compiled_same`] instead fails on a refusal on every host, and
-//! builds the program for every other target too.
+//! builds the program for every other target too, as [`build_compiled`]
+//! and [`run_compiled_native`] do for a case run natively only.
 //!
 //! To add a differential test, write a `#[test]` that builds a [`Case`]
 //! and calls [`assert_same`], which also returns the outcome for any
@@ -215,6 +216,14 @@ pub fn assert_compiled_same(case: &Case) -> Outcome {
         "case `{}`: the backends differ\n--- interpreter\n{interpreted:#?}\n--- native\n{native:#?}",
         case.name
     );
+    cross_build(case, &root);
+    native
+}
+
+/// Build `case` in `root` with `--target` for every target with a
+/// backend but the host's, and fail on a refusal: what a host that cannot
+/// run another target's code can check of it.
+fn cross_build(case: &Case, root: &Path) {
     for target in oska_native::Target::ALL {
         if target != host_target() {
             let cross = root.join(target.name());
@@ -228,7 +237,6 @@ pub fn assert_compiled_same(case: &Case) -> Outcome {
             }
         }
     }
-    native
 }
 
 /// Run `case` on the interpreter and natively: the two outcomes.
@@ -272,6 +280,24 @@ pub fn build_native(case: &Case) -> (PathBuf, PathBuf) {
     let root = case_root(case);
     let native_dir = fresh_tree(&root.join("native"), case);
     (build(case, &root, &native_dir), native_dir)
+}
+
+/// [`build_native`] for a program every target must compile, as
+/// [`assert_compiled_same`] requires: it is built for every other target
+/// with a backend as well, and a refusal fails on every host.
+pub fn build_compiled(case: &Case) -> (PathBuf, PathBuf) {
+    let root = case_root(case);
+    cross_build(case, &root);
+    let native_dir = fresh_tree(&root.join("native"), case);
+    (build(case, &root, &native_dir), native_dir)
+}
+
+/// [`run_native`] for a program every target must compile, as
+/// [`build_compiled`] builds it.
+pub fn run_compiled_native(case: &Case) -> Outcome {
+    let root = case_root(case);
+    cross_build(case, &root);
+    native(case, &root)
 }
 
 /// Build `case` and run the executable in `root/native`.

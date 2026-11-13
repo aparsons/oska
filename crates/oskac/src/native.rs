@@ -222,7 +222,9 @@ fn ended(status: std::process::ExitStatus, json: bool) -> ExitCode {
 /// The Linux signals a native process may die of, by number: the name,
 /// and whether only a fault raises it. A program killed by any other
 /// (`SIGKILL`, `SIGPIPE`, `SIGTERM`) was killed from outside, as any
-/// process can be.
+/// process can be. The numbers are the same for every target with a
+/// backend: asm-generic/signal.h, which arm64 takes, and
+/// arch/x86/include/uapi/asm/signal.h agree on these.
 const SIGNALS: &[(i32, &str, bool)] = &[
     (4, "SIGILL", true),
     (5, "SIGTRAP", true),
