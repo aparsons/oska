@@ -120,9 +120,11 @@ impl Body<'_, '_, '_> {
                 method: "`From.from`",
             };
             self.contract_dispatch(span, convert, vec![from.clone(), to.clone()]);
-            let convert = self
-                .impl_of(&to, ty::FROM, std::slice::from_ref(&from))
-                .and_then(|imp| imp.method_name("from"));
+            let found = self.impl_of(&to, ty::FROM, std::slice::from_ref(&from));
+            if let Some((_, Some(args))) = &found {
+                self.typed_args(span, args.clone());
+            }
+            let convert = found.and_then(|(imp, _)| imp.method_name("from"));
             if convert.is_none() {
                 // Only a bound says `to` converts: no impl to call.
                 let what = "a `From`-bound conversion".to_string();

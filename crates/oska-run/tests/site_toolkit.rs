@@ -14,7 +14,7 @@ use oska_run::{run, FakeHost, Host, RealHost, RunOutcome};
 
 /// Run `src` on `host`, which the test inspects afterwards.
 fn run_kept(src: &str, host: &mut FakeHost) -> RunOutcome {
-    run(src, host, &["prog.osk".to_string()])
+    common::run_differential(host, src, &[])
 }
 
 /// Assert that a program that checks ran, and that `main` returned the
@@ -263,5 +263,5 @@ fn to_lowercase_lowers_every_letter_and_keeps_the_rest() {
     io.println(\"Untrusted DATA, Ünïcode & ΣΑΣ: 42!\".to_lowercase())
 }
 ";
-    assert_runs(src, &[], "untrusted data, ünïcode & σας: 42!\n");
+    assert_runs(src, &[], "untrusted data, ünïcode & σασ: 42!\n");
 }

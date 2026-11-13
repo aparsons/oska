@@ -702,6 +702,7 @@ test "setup" {
 | `E0206` | Something private to another module of the package used from this one: an item that is neither `pub(pkg)` nor `pub`, used through a brace group or a qualifier; a struct field without `pub`, read or assigned; a struct with such a field, built or matched; an inherent method that is neither `pub(pkg)` nor `pub`, called or named; or a method of a private trait, called through a value or its type. Items, fields and methods are private to their module by default; the module of an `impl` decides its methods'. Spans the name, or the constructor or pattern. | Insert `pub(pkg) ` at the item, method or trait's declaration, after its attributes, or `pub ` before each private field: the fix's edits are in the declaring module's file, which the fix names (`path`). |
 | `E0207` | Modules that import each other in a cycle, reported once at the `use` that starts it, naming every module in the cycle. Spans the path. | None: move what the modules share into a module that imports none of them. |
 | `E0208` | A `use` that binds a name the module already binds: two imports with the same qualifier (`use pkg.a.util` and `use pkg.b.util`, or a `pkg` and a `std` module of one name), an import named like an item the module declares, or two brace groups importing one name from different modules. There is no renaming. Spans the second binding. | None. |
+| `E0209` | `use std.rt`, or a name starting `rt_sys_` or `rt_mem_`, anywhere but the toolchain's own `std.rt` source, in a single file or a package module. `std.rt` holds the system-call and memory intrinsics the native runtime is built on; a raw system call bypasses every capability, so user code cannot reach one (ADR 0013). Both prefixes are reserved, declared or not. Spans the path or the name. | None: use the capability `main` receives (`Stdout`, `Fs`, `Clock`, ...). |
 | `E0210` | A struct or enum whose own fields name a capability-bearing type (a built-in capability, a `cap` type, or a `cap fn`, including inside written type arguments such as `List<Stdout>`) is not declared `cap`. A field typed by a type parameter, as in `struct Box<T> { value: T }`, does not count. Spans the type's name. | Insert `cap` before `struct` or `enum`. |
 | `E0211` | A `main` parameter whose type is not a built-in capability or `Args`. Spans the parameter's type. | None. |
 | `E0212` | `main` returns something other than `()` or `Result<(), E>` (spans the return type), or `E` has no `impl Display` (spans `E`). | None. |
@@ -727,7 +728,7 @@ test "setup" {
 | `E0232` | `break` or `continue` outside a loop. | None. |
 | `E0233` | A type that inference cannot work out, such as `let xs = List.new()` with no later use. | None. |
 | `E0234` | A type name used as a value, or a type that cannot be constructed. | None. |
-| `E0235` | `for` over a value that is not a `List` or a range. | None. |
+| `E0235` | `for` over a value that is not a `List` or a range of integers. | None. |
 | `E0240` | An expression statement whose `Result` value is dropped. Discard one deliberately with `let _ = f()`. Spans the expression. | None. |
 | `E0241` | `?` on a value that is neither a `Result` nor an `Option`. Spans the `?` expression. | None. |
 | `E0242` | `?` on a `Result` whose error type is not the enclosing function's error type, with no `impl From` to convert it. Spans the `?` expression. | None. |
@@ -1015,6 +1016,18 @@ pub(pkg) fn one() -> Int {
 pub(pkg) fn two() -> Int {
     2
 }
+```
+
+#### `E0209`
+
+```oska error=E0209
+use std.rt
+
+fn main() {}
+```
+
+```oska fixed=E0209
+fn main() {}
 ```
 
 #### `E0210`

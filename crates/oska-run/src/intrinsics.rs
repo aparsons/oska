@@ -189,8 +189,12 @@ pub(crate) fn debug(value: &Value, out: &mut String) {
         Value::Unit => out.push_str("()"),
         Value::Bool(b) => out.push_str(&b.to_string()),
         Value::Int(n, _) => out.push_str(&n.to_string()),
-        Value::Str(s) => out.push_str(&format!("{:?}", &**s)),
-        Value::Range { start, end, .. } => out.push_str(&format!("{start}..{end}")),
+        Value::Str(s) => debug_text(s, out),
+        Value::Struct { ty, fields } if &**ty == builtins::RANGE => {
+            debug(&fields[0], out);
+            out.push_str("..");
+            debug(&fields[1], out);
+        }
         Value::Struct { ty, .. } if &**ty == builtins::SECRET => out.push_str("<redacted>"),
         Value::Struct { ty, fields } => {
             out.push_str(ty);
@@ -219,10 +223,44 @@ pub(crate) fn debug(value: &Value, out: &mut String) {
         Value::Closure(_) => out.push_str("<closure>"),
         Value::Function(_) => out.push_str("<fn>"),
         Value::Capability(cap) => out.push_str(&format!("<{cap:?}>")),
-        Value::Args(args) => out.push_str(&format!("Args{:?}", &**args)),
+        Value::Args(args) => {
+            out.push_str("Args[");
+            for (i, arg) in args.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                debug_text(arg, out);
+            }
+            out.push(']');
+        }
         Value::Scope(_) => out.push_str("<scope>"),
         Value::Task(_) => out.push_str("<task>"),
     }
+}
+
+/// `dbg` of a text, as `std.rt`'s `debug_string` writes it: in double
+/// quotes, `"` and `\` escaped by a `\`, NUL, tab, line feed and carriage
+/// return as `\0`, `\t`, `\n` and `\r`, and every character `std.rt`'s
+/// table lists as `\u{hex}`. This is what Rust's `{:?}` writes, for the
+/// Unicode of the pinned Rust, but it reads the table rather than asking
+/// Rust, so it does not change with the Rust that built the interpreter.
+fn debug_text(text: &str, out: &mut String) {
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\0' => out.push_str("\\0"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c if oska_check::debug_escapes(c) => {
+                out.push_str(&format!("\\u{{{:x}}}", u32::from(c)));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
 }
 
 // ---- Arguments and environment -----------------------------------------
@@ -808,6 +846,23 @@ mod tests {
     }
 
     #[test]
+    fn std_rt_intrinsics_are_the_toolchains_and_have_no_interpreter_implementation() {
+        // `std.rt` is body-less by design (ADR 0013): the native backend
+        // lowers its intrinsics to machine code, and no user code can
+        // import it, so the interpreter implements none of them.
+        let module =
+            oska_syntax::parse_prelude(oska_check::STD_RT_SOURCE).expect("std.rt should parse");
+        let names = bodiless_functions(&module);
+        assert!(names.iter().any(|n| n == "rt_sys_write"), "{names:?}");
+        assert_eq!(names, oska_check::std_rt_intrinsics());
+        let implemented: Vec<&String> = names.iter().filter(|n| implemented(n)).collect();
+        assert!(
+            implemented.is_empty(),
+            "std.rt intrinsics the interpreter must refuse: {implemented:?}"
+        );
+    }
+
+    #[test]
     fn the_exempt_types_are_the_ones_with_no_runtime_and_have_no_intrinsics() {
         let names = bodiless_prelude_functions();
         let exempt = no_runtime();
@@ -841,7 +896,7 @@ mod access_tests {
     //! which a read-only filesystem calls `write` and a write-only one
     //! `read_to_string` anyway.
 
-    use oska_check::program::{Callee, Contracts, Expr, ExprKind, Function, Param, Program};
+    use oska_check::program::{Callee, Contracts, Expr, ExprKind, Function, Param, Program, Type};
     use oska_syntax::Span;
 
     use std::path::Path;
@@ -853,6 +908,7 @@ mod access_tests {
     fn at(kind: ExprKind) -> Expr {
         Expr {
             kind,
+            ty: Type::Unit,
             span: Span { start: 0, end: 1 },
         }
     }
@@ -860,6 +916,7 @@ mod access_tests {
     fn call(name: &str, args: Vec<Expr>) -> Expr {
         at(ExprKind::Call {
             callee: Callee::Intrinsic(name.to_string()),
+            type_args: Vec::new(),
             args,
         })
     }
@@ -873,12 +930,15 @@ mod access_tests {
             "main".to_string(),
             Function {
                 name: "main".to_string(),
+                generics: Vec::new(),
+                self_ty: None,
                 receiver: false,
                 params: vec![Param {
                     name: "fs".to_string(),
-                    ty: String::new(),
+                    ty: Type::Unit,
                     binds: true,
                 }],
+                ret: Type::Unit,
                 contracts: Contracts::default(),
                 body: call(method, args.collect()),
             },

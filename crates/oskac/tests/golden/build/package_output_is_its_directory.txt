@@ -1,0 +1,6 @@
+$ oskac build greeter
+exit: 1
+--- stdout
+--- stderr
+error[E0391]: cannot write the executable `greeter`: it is a directory; name another path with `-o` (bytes 0..0)
+--- written

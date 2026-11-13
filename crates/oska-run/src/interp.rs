@@ -326,7 +326,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 then_branch,
                 else_branch,
             } => self.if_expr(cond, then_branch, else_branch.as_deref(), frame),
-            ExprKind::Call { callee, args } => self.call_expr(callee, args, expr.span, frame),
+            ExprKind::Call { callee, args, .. } => self.call_expr(callee, args, expr.span, frame),
             ExprKind::Block { stmts, value } => self.block(stmts, value.as_deref(), frame),
             _ => self.eval_other(expr, frame),
         }
@@ -349,11 +349,8 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             }
             ExprKind::Not(operand) => Ok(Value::Bool(!self.eval(operand, frame)?.as_bool())),
             ExprKind::Range { start, end } => {
-                let Value::Int(start, int) = self.eval(start, frame)? else {
-                    unreachable!("the checker allows `..` only between integers")
-                };
-                let end = self.eval(end, frame)?.as_int();
-                Ok(Value::Range { start, end, int })
+                let start = self.eval(start, frame)?;
+                Ok(Value::range(start, self.eval(end, frame)?))
             }
             ExprKind::List(items) => Ok(Value::List(Rc::new(self.eval_all(items, frame)?))),
             ExprKind::Construct { ctor, fields } => {
@@ -369,15 +366,16 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 callee,
                 receiver,
                 args,
+                ..
             } => self.mutating_call_expr(callee, receiver, args, expr.span, frame),
             ExprKind::Match { scrutinee, arms } => {
                 let scrutinee = self.eval(scrutinee, frame)?;
                 self.match_arms(&scrutinee, arms, frame)
             }
-            ExprKind::Try { operand, convert } => {
-                self.try_expr(operand, convert.as_ref(), expr.span, frame)
-            }
-            ExprKind::FnValue(callee) => Ok(Value::Function(Rc::new(callee.clone()))),
+            ExprKind::Try {
+                operand, convert, ..
+            } => self.try_expr(operand, convert.as_ref(), expr.span, frame),
+            ExprKind::FnValue { callee, .. } => Ok(Value::Function(Rc::new(callee.clone()))),
             ExprKind::Scope(body) => self.scope(body, frame),
             ExprKind::Unit
             | ExprKind::Int(..)
@@ -587,7 +585,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     ) -> Result<bool, Unwind> {
         Ok(match pattern {
             Pattern::Wildcard => true,
-            Pattern::Bind => {
+            Pattern::Bind(_) => {
                 frame.slots.push(value.clone());
                 true
             }
@@ -659,7 +657,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             Stmt::Expr(e) => {
                 self.eval(e, frame)?;
             }
-            Stmt::Let { binds, value } => {
+            Stmt::Let { binds, value, .. } => {
                 let value = self.eval(value, frame)?;
                 if *binds {
                     frame.slots.push(value);
@@ -681,7 +679,9 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             Stmt::Break => return Err(Unwind::Break),
             Stmt::Continue => return Err(Unwind::Continue),
             Stmt::While { cond, body } => self.while_loop(cond, body, frame)?,
-            Stmt::For { binds, iter, body } => self.for_loop(*binds, iter, body, frame)?,
+            Stmt::For {
+                binds, iter, body, ..
+            } => self.for_loop(*binds, iter, body, frame)?,
         }
         Ok(())
     }
@@ -706,9 +706,21 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         body: &Expr,
         frame: &mut Frame,
     ) -> Result<(), Unwind> {
-        let items: Box<dyn Iterator<Item = Value>> = match self.eval(iter, frame)? {
-            Value::Range { start, end, int } => {
-                Box::new((start..end).map(move |n| Value::Int(n, int)))
+        let iterated = match &iter.kind {
+            // A range written in place is never built.
+            ExprKind::Range { start, end } => {
+                let start = self.eval(start, frame)?;
+                Value::range(start, self.eval(end, frame)?)
+            }
+            _ => self.eval(iter, frame)?,
+        };
+        let items: Box<dyn Iterator<Item = Value>> = match iterated {
+            Value::Struct { ty, fields } if &*ty == builtins::RANGE => {
+                let (Value::Int(start, int), Value::Int(end, _)) = (&fields[0], &fields[1]) else {
+                    unreachable!("the checker allows `for` only over a range of integers")
+                };
+                let int = *int;
+                Box::new((*start..*end).map(move |n| Value::Int(n, int)))
             }
             Value::List(items) => Box::new(ListIter { items, next: 0 }),
             other => {
@@ -836,7 +848,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         for (&slot, value) in closure.code.captures.iter().zip(&closure.captured) {
             slots[slot] = value.clone();
         }
-        slots.extend(binding(closure.code.params.iter().copied(), args));
+        slots.extend(binding(closure.code.params.iter().map(|p| p.binds), args));
         let mut frame = Frame {
             slots,
             receiver: closure.receiver.clone(),
@@ -893,7 +905,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         for part in parts {
             match part {
                 Part::Text(t) => text.push_str(t),
-                Part::Hole { value, display } => {
+                Part::Hole { value, display, .. } => {
                     let span = value.span;
                     let value = self.eval(value, frame)?;
                     let shown = self.call_callee(display, vec![value], span)?;

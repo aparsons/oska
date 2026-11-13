@@ -1,8 +1,10 @@
 //! A checked package runs through `run_program` and `test_program`, the
 //! entries `oskac run` and `oskac test` use on a package (#117).
 
+mod common;
+
 use oska_check::{check_package, CheckOptions, ModuleSource, Package};
-use oska_run::{run_program, test_program, FakeHost, TestOptions, TestStatus};
+use oska_run::{FakeHost, TestOptions, TestStatus};
 
 const MAIN: &str = "fn main(io: Stdout) -> Result<(), IoError> {\n    io.println(\"hello from a package\")\n}\n\ntest \"adds\" {\n    t.assert(1 + 1 == 2)\n}\n";
 
@@ -17,14 +19,24 @@ fn checked() -> oska_check::program::Program {
 
 #[test]
 fn a_checked_program_runs_without_its_source() {
-    let outcome = run_program(&checked(), &mut FakeHost::new(), &["demo".to_string()]);
+    let outcome = common::run_program_differential(
+        &checked(),
+        MAIN,
+        &mut FakeHost::new(),
+        &[common::PROGRAM_PATH.to_string()],
+    );
     assert_eq!(outcome.exit_code, 0, "{outcome:#?}");
     assert_eq!(outcome.stdout, "hello from a package\n");
 }
 
 #[test]
 fn a_checked_programs_tests_run() {
-    let report = test_program(&checked(), &mut FakeHost::new(), TestOptions::default());
+    let report = common::test_program_differential(
+        &checked(),
+        MAIN,
+        FakeHost::new(),
+        TestOptions::default(),
+    );
     assert!(report.diagnostics.is_empty());
     let statuses: Vec<(&str, TestStatus)> = report
         .tests

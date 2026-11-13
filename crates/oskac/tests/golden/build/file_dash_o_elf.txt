@@ -1,0 +1,6 @@
+$ oskac build hello.osk -o hello
+exit: 0
+--- stdout
+--- stderr
+--- written
+hello

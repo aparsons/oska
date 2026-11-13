@@ -7,10 +7,11 @@
 #
 # Runs, stopping at the first failure:
 #   1. repo rules that are mechanical: no crate from outside this repo,
-#      `unsafe` only in crates/oska-sys, and workflows use only official
+#      `unsafe` only in crates/oska-sys, std.rt intrinsics only in
+#      std.rt's own source, and workflows use only official
 #      actions plus the SHA-pinned rust-toolchain;
 #   2. cargo fmt, clippy with -D warnings, and cargo test;
-#   3. the installer, release script and unsafe guard tests;
+#   3. the installer, release script and unsafe guard and intrinsic guard tests;
 #   4. shellcheck on the shell scripts, when shellcheck is installed.
 
 set -euo pipefail
@@ -49,6 +50,11 @@ step "unsafe only in oska-sys"
 # flags that could lower lints, and scans source the build skips.
 scripts/unsafe-guard/guard.sh
 
+step "std.rt intrinsics only in std.rt"
+# System-call and memory intrinsics (`rt_sys_*`, `rt_mem_*`) and `use std.rt`
+# may appear only in the toolchain's own std.rt source (ADR 0013).
+scripts/intrinsic-guard/guard.sh
+
 step "only official actions, rust-toolchain pinned to a commit"
 toolchain_pin='dtolnay/rust-toolchain@[0-9a-f]{40}'
 bad_uses=$(grep -nE '^[[:space:]]*-?[[:space:]]*uses:' .github/workflows/*.yml |
@@ -76,9 +82,12 @@ bash scripts/release/test.sh
 step "unsafe guard tests"
 bash scripts/unsafe-guard/test.sh
 
+step "intrinsic guard tests"
+bash scripts/intrinsic-guard/test.sh
+
 step "shellcheck"
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck -S warning scripts/*.sh scripts/install/*.sh scripts/release/*.sh scripts/unsafe-guard/*.sh site/agent-setup/*.sh .githooks/pre-push
+  shellcheck -S warning scripts/*.sh scripts/install/*.sh scripts/release/*.sh scripts/unsafe-guard/*.sh scripts/intrinsic-guard/*.sh site/agent-setup/*.sh .githooks/pre-push
 else
   echo "shellcheck not installed; skipped (CI runs it)"
 fi

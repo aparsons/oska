@@ -1,0 +1,7 @@
+$ oskac build bad.osk
+exit: 1
+--- stdout
+--- stderr
+bad.osk:2:8: error[E0228]: `Stdout` has no method `printline`; did you mean `println`? (bytes 52..61)
+    fix: replace with `println`
+--- written

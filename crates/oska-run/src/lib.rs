@@ -27,7 +27,9 @@
 //!
 //! # Exit codes
 //!
-//! - `0`: `main` returned `Ok` or `()`.
+//! - `0`: `main` returned `Ok` or `()`. On [`RealHost`], a write to a
+//!   stdout whose reader has gone also ends the process with 0, there and
+//!   then.
 //! - `1`: the checker refused the program, or `main` returned `Err`.
 //! - `2`: the program uses something the interpreter cannot run yet, so
 //!   it was refused before it started (`E0370`, `E0371`, `E0380`).
@@ -53,9 +55,12 @@ mod testing;
 mod traits;
 mod value;
 
-pub use host::{FakeHost, Host, Output, RealHost, RootHandle, FAKE_SEED};
+pub use host::{FakeHost, FakeWorld, Host, Output, RealHost, RootHandle, FAKE_SEED};
+pub use interp::MAX_CALL_DEPTH;
 pub use panics::codes;
-pub use testing::{test, test_program, TestOptions, TestReport, TestResult, TestStatus};
+pub use testing::{
+    test, test_program, test_refusal, TestOptions, TestReport, TestResult, TestStatus,
+};
 
 use interp::Interpreter;
 use oska_check::builtins;
@@ -164,11 +169,16 @@ fn check_and_run(src: &str, host: &mut dyn Host, args: &[String]) -> RunOutcome 
     run_checked(&program, host, args)
 }
 
-fn run_checked(program: &Program, host: &mut dyn Host, args: &[String]) -> RunOutcome {
-    let refusal = unimplemented_module(program)
+/// Why [`run_program`] would refuse to run `program` at all (`E0370`,
+/// `E0371`, `E0380`), if it would.
+pub fn refusal(program: &Program) -> Option<Diagnostic> {
+    unimplemented_module(program)
         .or_else(|| ungranted(program))
-        .or_else(|| support::unsupported(program));
-    if let Some(refusal) = refusal {
+        .or_else(|| support::unsupported(program))
+}
+
+fn run_checked(program: &Program, host: &mut dyn Host, args: &[String]) -> RunOutcome {
+    if let Some(refusal) = refusal(program) {
         let mut outcome = RunOutcome::new(UNSUPPORTED_EXIT_CODE, host);
         outcome.diagnostics.push(refusal);
         return outcome;
@@ -208,9 +218,10 @@ fn ungranted(program: &Program) -> Option<Diagnostic> {
     let param = main
         .params
         .iter()
-        .find(|p| p.ty != builtins::ARGS && Capability::granted(&p.ty).is_none())?;
-    let (code, message) = if Capability::implemented(&param.ty) {
-        let (kind, how) = match param.ty.starts_with("File") {
+        .map(|p| p.ty.to_string())
+        .find(|ty| ty != builtins::ARGS && Capability::granted(ty).is_none())?;
+    let (code, message) = if Capability::implemented(&param) {
+        let (kind, how) = match param.starts_with("File") {
             true => (
                 "file",
                 "`restrict_to_file` on `FsRead`, `FsWrite` or a directory capability",
@@ -222,24 +233,21 @@ fn ungranted(program: &Program) -> Option<Diagnostic> {
             format!(
                 "`oskac run` cannot grant `{}`: only attenuation makes a {kind} capability, \
                  with {how}",
-                param.ty
+                param
             ),
         )
-    } else if builtins::is_capability(&param.ty) {
+    } else if builtins::is_capability(&param) {
         (
             codes::UNIMPLEMENTED_CAPABILITY,
             format!(
                 "`oskac run` cannot grant `{}` yet: the capability has no runtime",
-                param.ty
+                param
             ),
         )
     } else {
         (
             codes::UNSUPPORTED,
-            format!(
-                "the interpreter cannot run a program given `{}` yet",
-                param.ty
-            ),
+            format!("the interpreter cannot run a program given `{}` yet", param),
         )
     };
     Some(Diagnostic::new(code, message, main.body.span))
@@ -271,12 +279,13 @@ fn run_main(program: &Program, host: &mut dyn Host, args: &[String]) -> Result<(
         .params
         .iter()
         .filter_map(|param| {
-            if param.ty == builtins::ARGS {
+            let ty = param.ty.to_string();
+            if ty == builtins::ARGS {
                 Some(Value::Args(
                     args.iter().map(|a| Rc::from(a.as_str())).collect(),
                 ))
             } else {
-                Capability::granted(&param.ty).map(Value::Capability)
+                Capability::granted(&ty).map(Value::Capability)
             }
         })
         .collect();

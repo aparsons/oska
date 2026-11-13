@@ -28,11 +28,19 @@ fn codes_in_doc(relative: &str) -> Vec<String> {
 
 #[test]
 fn runtime_md_documents_exactly_the_defined_codes() {
+    // The native backend's refusals have a section of their own.
+    let (native, interpreter): (Vec<String>, Vec<String>) = documented_codes()
+        .into_iter()
+        .partition(|code| oska_native::codes::ALL.contains(&code.as_str()));
     let defined: Vec<String> = oska_run::codes::ALL.iter().map(|c| c.to_string()).collect();
     assert_eq!(
-        documented_codes(),
-        defined,
+        interpreter, defined,
         "docs/runtime.md should list every runtime code once, in order"
+    );
+    assert_eq!(
+        native,
+        oska_native::codes::ALL,
+        "docs/runtime.md should list every native backend code once, in order"
     );
 }
 

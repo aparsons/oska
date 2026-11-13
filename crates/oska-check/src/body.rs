@@ -59,7 +59,7 @@ use crate::decl_rules;
 use crate::infer::{Infer, Mismatch};
 use crate::items::{Bound, GenericKey, ImplInfo, Items, Lower};
 use crate::prelude::{self, StdModule};
-use crate::program::lower::{Resolution, Resolutions};
+use crate::program::lower::{Resolution, Resolutions, Signature, Typing};
 use crate::program::{self, Callee, Construct};
 use crate::resolve;
 use crate::suggest;
@@ -87,6 +87,9 @@ pub struct Findings {
     /// The capability attenuations (`body/attenuation.rs`).
     pub attenuations: Vec<Attenuation>,
     pub resolutions: Resolutions,
+    /// The type of every expression and binding, and the type arguments
+    /// of every generic call, for the checked program.
+    pub typing: Typing,
     /// What bodies assume of their type parameters, and how they
     /// instantiate type parameters, for `instantiation.rs`.
     pub assumed: Vec<crate::instantiation::Assumed>,
@@ -184,6 +187,14 @@ fn function(src: &str, f: &FnDecl, lower: Lower, items: &Items, out: &mut Findin
     }
     let lower = lower.with_generics(&f.generics);
     let sig = lower.signature(f, &[], lower.self_ty.clone());
+    out.typing.signatures.insert(
+        f.name.span,
+        Signature {
+            self_ty: lower.self_ty.clone(),
+            params: sig.params.iter().map(|(_, ty)| ty.clone()).collect(),
+            ret: sig.ret.clone(),
+        },
+    );
     let mut body = Body::new(src, items, lower, sig.ret.clone(), out);
     if let Some(receiver) = &f.receiver {
         body.receiver = Some(SelfBinding {
@@ -201,6 +212,7 @@ fn function(src: &str, f: &FnDecl, lower: Lower, items: &Items, out: &mut Findin
     }
     for clause in &f.ensures {
         let height = body.locals.len();
+        body.typed(clause.binding.span, &ret);
         body.bind(&clause.binding.name, ret.clone(), Binding::Param);
         body.contract("ensures", &clause.cond);
         body.locals.truncate(height);
@@ -286,6 +298,10 @@ struct Callable {
     target: Option<Callee>,
     /// What a constructor builds, for the checked program.
     construct: Option<Construct>,
+    /// What the callee's generics are instantiated with, in the order of
+    /// its signature's generics, for the checked program. Unlike
+    /// `type_args`, it holds nothing else.
+    instance: Vec<Ty>,
 }
 
 /// What `base.name` names when `base` is not a value.
@@ -332,6 +348,11 @@ pub struct Body<'c, 'd, 'a> {
     /// Resolutions that depend on a type inference may not have solved
     /// yet, recorded by [`Body::finish`] once the whole body is checked.
     deferred: Vec<(Span, Ty, Deferred)>,
+    /// The type of each expression and binding checked, by span, and the
+    /// type arguments of each generic call: recorded once the body's
+    /// types are solved, in [`Body::finish`].
+    typed: Vec<(Span, Ty)>,
+    typed_args: Vec<(Span, Vec<Ty>)>,
     /// Closures that captured nothing capability-bearing, but captured a
     /// value whose type was not yet solved. [`Body::finish`] makes each a
     /// `cap fn` if a capture turned out capability-bearing.
@@ -412,6 +433,8 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             mentions: Vec::new(),
             in_contract: false,
             deferred: Vec::new(),
+            typed: Vec::new(),
+            typed_args: Vec::new(),
             open_closures: Vec::new(),
             uses: purity::Uses::default(),
         }
@@ -445,6 +468,36 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             .push(Diagnostic::new(code, message, span));
     }
 
+    /// Record that the expression or binding at `span` has type `ty`,
+    /// once it is solved.
+    fn typed(&mut self, span: Span, ty: &Ty) {
+        self.typed.push((span, ty.clone()));
+    }
+
+    /// Record that the call or function value at `span` instantiates its
+    /// callee's generics with `args`, once they are solved.
+    fn typed_args(&mut self, span: Span, args: Vec<Ty>) {
+        self.typed_args.push((span, args));
+    }
+
+    /// Record the types and type arguments, now that the body's types
+    /// are solved. One that is still not solved is left out, and the
+    /// checked program lists it as unsolved.
+    fn record_types(&mut self) {
+        for (span, ty) in std::mem::take(&mut self.typed) {
+            let ty = self.infer.resolve(&ty);
+            if !ty.has_vars() {
+                self.out.typing.types.insert(span, ty);
+            }
+        }
+        for (span, args) in std::mem::take(&mut self.typed_args) {
+            let args: Vec<Ty> = args.iter().map(|a| self.infer.resolve(a)).collect();
+            if !args.iter().any(Ty::has_vars) {
+                self.out.typing.type_args.insert(span, args);
+            }
+        }
+    }
+
     /// Record what the node at `span` resolves to once `ty` is solved.
     fn defer(&mut self, span: Span, ty: &Ty, what: Deferred) {
         self.deferred.push((span, ty.clone(), what));
@@ -476,6 +529,15 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     .map(Resolution::Display),
             };
             if let Some(resolution) = resolution {
+                // A `Display` or `Eq` impl may be generic.
+                let via = match &resolution {
+                    Resolution::Display(Callee::Function(_)) => Some(ty::DISPLAY),
+                    Resolution::EqualityVia(Callee::Function(_)) => Some(ty::EQ),
+                    _ => None,
+                };
+                if let Some((_, Some(args))) = via.and_then(|t| self.impl_of(&ty, t, &[])) {
+                    self.typed_args(span, args);
+                }
                 self.record(span, resolution);
             }
         }
@@ -523,6 +585,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         self.close_closures();
         self.settle_uses();
         self.record_deferred();
+        self.record_types();
         for (name, ty) in std::mem::take(&mut self.inferred_lets) {
             let ty = self.infer.resolve(&ty);
             if ty.has_vars() {
@@ -754,6 +817,13 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     /// integer literal takes it, a closure's parameters come from it), but
     /// is not enforced: [`Body::check`] does that.
     pub fn expr(&mut self, expr: &Expr, expected: Option<&Ty>) -> Ty {
+        let ty = self.expr_kind(expr, expected);
+        self.typed(expr.span, &ty);
+        ty
+    }
+
+    /// [`Body::expr`], before its type is recorded.
+    fn expr_kind(&mut self, expr: &Expr, expected: Option<&Ty>) -> Ty {
         match &expr.kind {
             ExprKind::Int(text) => {
                 let ty = self.literal_type(expected);
@@ -966,8 +1036,15 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             return Ty::Error;
         };
         let mut ty = self.name(first);
+        self.typed(first.span, &ty);
         for field in rest {
             ty = self.field_of(ty, field);
+            // The path up to here, as the checked program reads it.
+            let span = Span {
+                start: first.span.start,
+                end: field.span.end,
+            };
+            self.typed(span, &ty);
         }
         ty
     }
@@ -1006,6 +1083,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 Resolution::FnValue(calls::target(&sig, name.to_string())),
             );
             let callable = self.instantiate(&sig, None, ident.span);
+            self.typed_args(ident.span, callable.instance.clone());
             return callable.into_fn_type();
         }
         if let Some(enum_name) = self.items.bare_variants.get(name).cloned() {
@@ -1080,6 +1158,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     Some(callable) => {
                         if let Some(target) = &callable.target {
                             self.record(name.span, Resolution::FnValue(target.clone()));
+                            self.typed_args(name.span, callable.instance.clone());
                         }
                         callable.into_fn_type()
                     }
@@ -1515,12 +1594,21 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     }
 
     /// The `impl` through which the named type `ty` implements
-    /// `trait_name<args>`, if one does.
-    fn impl_of(&self, ty: &Ty, trait_name: &str, args: &[Ty]) -> Option<&'c ImplInfo> {
+    /// `trait_name<args>`, if one does, with what the impl's generics
+    /// are instantiated with: `None` when one is left to a variable of
+    /// the trial match rather than of the body.
+    fn impl_of(
+        &self,
+        ty: &Ty,
+        trait_name: &str,
+        args: &[Ty],
+    ) -> Option<(&'c ImplInfo, Option<Vec<Ty>>)> {
         let mut trial = self.infer.clone();
         let ty = trial.resolve(ty);
-        self.impl_in(&mut trial, &ty, trait_name, args, 0)
-            .map(|(imp, _)| imp)
+        let (imp, instance) = self.impl_in(&mut trial, &ty, trait_name, args, 0)?;
+        let instance: Vec<Ty> = instance.iter().map(|t| trial.resolve(t)).collect();
+        let known = instance.iter().all(|t| self.infer.knows(t));
+        Some((imp, known.then_some(instance)))
     }
 
     /// Report `E0265` at `span` when `ty` does not implement
@@ -1608,6 +1696,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             receiver: false,
         });
         for (param, ty) in params.iter().zip(&param_tys) {
+            self.typed(param.name.span, ty);
             self.bind(&param.name.name, ty.clone(), Binding::Param);
         }
         let outer_ret = std::mem::replace(&mut self.ret, ret.clone());
@@ -1787,12 +1876,14 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             block.stmts.last().map(|s| &s.kind),
             Some(StmtKind::Expr(_) | StmtKind::Return(_) | StmtKind::Break | StmtKind::Continue)
         );
-        match expected {
+        let ty = match expected {
             Some(expected) if use_value && !ends_with_value => {
                 self.expect(&ty, expected, block.span)
             }
             _ => ty,
-        }
+        };
+        self.typed(block.span, &ty);
+        ty
     }
 
     fn stmt(&mut self, stmt: &oska_syntax::ast::Stmt) {
@@ -1828,6 +1919,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     };
                     Binding::Let(keyword)
                 };
+                self.typed(name.span, &ty);
                 self.bind(&name.name, ty, binding);
             }
             StmtKind::Assign { target, value } => {
@@ -1872,9 +1964,24 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             } => {
                 let ty = self.infer(iter);
                 let element = match self.infer.resolve(&ty) {
-                    Ty::Named(name, args, _)
-                        if (name == ty::LIST || name == ty::RANGE) && args.len() == 1 =>
-                    {
+                    Ty::Named(name, args, _) if name == ty::LIST && args.len() == 1 => {
+                        args[0].clone()
+                    }
+                    // Only integers can be counted through: a `Range` of
+                    // anything else is a pair of bounds, not a sequence.
+                    Ty::Named(name, args, _) if name == ty::RANGE && args.len() == 1 => {
+                        let item = self.infer.resolve(&args[0]);
+                        if !(item.is_integer()
+                            || matches!(item, Ty::Error | Ty::Never | Ty::Var(_)))
+                        {
+                            self.error(
+                                codes::NOT_ITERABLE,
+                                format!(
+                                    "cannot iterate over `Range<{item}>`; a range is iterable only over an integer type"
+                                ),
+                                iter.span,
+                            );
+                        }
                         args[0].clone()
                     }
                     Ty::Error => Ty::Error,
@@ -1889,6 +1996,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 };
                 self.require_lowercase(binding);
                 let height = self.locals.len();
+                self.typed(binding.span, &element);
                 self.bind(&binding.name, element, Binding::Loop);
                 self.loop_body(body);
                 self.locals.truncate(height);

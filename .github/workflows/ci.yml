@@ -10,12 +10,23 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # On arm64 the tests are also differential (spec #125): every runtime
+    # test, example, guide program, CLI fixture and the site build runs as
+    # a native executable too, and must do what the interpreter does.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt, clippy
+      # The differential suite is compiled only on aarch64 Linux: a label
+      # that moves to other hardware must fail, not skip it.
+      - if: matrix.os == 'ubuntu-24.04-arm'
+        run: test "$(uname -m)" = aarch64
       # The same script contributors and agents run locally (and the
       # pre-push hook runs), so local and CI checks cannot drift apart.
       - run: scripts/check.sh

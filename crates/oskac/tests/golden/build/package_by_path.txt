@@ -1,0 +1,6 @@
+$ oskac build pkgs/greeter
+exit: 0
+--- stdout
+--- stderr
+--- written
+greeter

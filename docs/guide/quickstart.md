@@ -36,7 +36,7 @@ oskac run hello.osk
 Hello from Oska!
 ```
 
-`oskac run` checks the program first and refuses to run it if the check reports anything.
+`oskac run` checks the program first and refuses to run it if the check reports anything. On aarch64 Linux it then compiles the program to native code and runs that; on other hosts it runs it on the interpreter. Either way the output is the same. To get an executable you can copy to an aarch64 Linux machine and run without `oskac`, use `oskac build hello.osk`, on any host: it writes `./hello`.
 
 ## 4. See the sandbox work
 

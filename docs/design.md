@@ -367,12 +367,40 @@ fn withdraw(acct: Account, amount: Int) -> Result<Account, Error>
 
 ## Runtime
 
-The interpreter is `oskac run file.osk -- args...`, built as the crate `oska-run`.
+A program runs on one of two backends, which must agree byte for byte:
+
+- **The native backend** (`oska-native`): `oskac build` compiles a checked program to a static aarch64 Linux executable on any host, with no assembler, linker or C library ([ADR 0011](adr/0011-oska-generates-native-code-itself.md)). Its runtime is the Oska module `std.rt`, the only place system calls are allowed ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)). On aarch64 Linux, `oskac run` and `oskac test` compile with it and run the executable.
+- **The interpreter** (`oska-run`): `oskac run` and `oskac test` on every other host, and with `--interpret` on aarch64 Linux. A program the native backend cannot compile yet (`E0390`) runs here too.
+
+The **differential suite** runs every program of the corpus (the interpreter's runtime tests, the examples, the guide's programs, the CLI fixtures and the site generator) on both and fails on any difference in stdout, stderr, exit code, panic or the files left behind. See the [CLI reference](guide/cli-reference.md#platform-support) for which host uses which.
 
 ### Pipeline
 
 - `oskac run` type-checks the program first. If the check reports any diagnostic, the program does not run, and the diagnostics are printed the same way `oskac check` prints them.
-- The checker produces a **checked program**, and the interpreter executes it ([ADR 0007](adr/0007-interpreter-runs-the-checked-program.md)). The interpreter never re-resolves names or dispatch.
+- The checker produces a **checked program**, and the interpreter executes it ([ADR 0007](adr/0007-interpreter-runs-the-checked-program.md)). The interpreter never re-resolves names or dispatch. The checked program also records the type of every expression and slot and the type arguments of every generic call, which the interpreter ignores and the native backend lays values out and monomorphizes from. The native backend, too, reads only the checked program.
+
+### Native backend benchmark
+
+`scripts/bench-native.sh` is run by the maintainer, on a Raspberry Pi 5 (aarch64 Linux), never in CI. Each workload runs as `oskac run --interpret` and as the executable `oskac build` wrote, after both are checked to print the same. Times are the best CPU time (user plus system) of 5 runs, which other work on the Pi does not stretch as it does the wall clock; the interpreter's includes checking the program, as `oskac run` does.
+
+Recorded on 2026-11-12, `oskac` 0.2.0, before and after the profiling-driven tuning round that followed the milestone's review ("before" is a run of the build without it, in the same session):
+
+| Workload | What it does | Interpreter | Native before | Native after | Speedup after |
+| --- | --- | ---: | ---: | ---: | ---: |
+| loop | 5M iterations of integer arithmetic | 1008 ms | 21 ms | 22 ms | 46x |
+| text | 200k lines built by interpolation | 232 ms | 13 ms | 10 ms | 23x |
+| bulk text | `replace` and `trim` over 520 KB, 40 times | 26 ms | 26 ms | 24 ms | 1.1x |
+| lists | 1M pushes, a `for` pass, 1M indexed reads | 921 ms | 15 ms | 15 ms | 61x |
+| recursion | `fib(30)`, about 2.7M calls | 748 ms | 9 ms | 9 ms | 83x |
+| site | the site generator building this site | 2226 ms | 165 ms | 104 ms | 21x |
+
+The loop's 21 or 22 ms is the same code: the script prints whole milliseconds, and the run lands either side of one.
+
+- **Program logic** (integer loops, list operations, calls) is where the native backend earns its keep: 46 to 83 times faster, beyond the 20 times milestone 2 set out to reach.
+- **Text building** went from 6 to 17 times faster after the review, then to 23. A pc sampler showed number formatting (a division per digit, twice: once to count, once to write) at 60% of the time and the allocation, copy and free of each number's own text next. Now an `Int` hole is written straight into the interpolated text (digits counted by comparisons, then written four and two at a time from a table of pairs, a multiplication by the reciprocal instead of a division below 2^32), and literals up to 32 bytes are copied inline a word at a time. The last step was the optimizer: it now inlines small functions with branches, loops and calls of their own on the hot path, so the program calls `std.rt` once per hole and once for the allocation instead of three levels deep.
+- **The site generator** went from 9 to 15 times faster after the review, then to 21. It splits text into characters and compares them, so one-byte ASCII texts are shared static objects (no allocation, no count), short text equality compares one word, and `String` methods borrow their local arguments (no retain before the call and release after). `for c in text.chars()` walks the text a character at a time with no list (`heading_level` and `indent` look at a line's first few characters only). The biggest single step was the allocator: blocks up to 64 KiB now come from size classes and are reused, where before every text or list over 2 KiB had a mapping of its own, mapped, faulted in and unmapped (about 1,850 times per run, 2,400 page faults, now 500).
+- **What is left.** The site's system time (about 10 to 30 ms of the 104, from run to run) is the kernel writing the site's files, the same system calls the interpreter makes. The user time is spread thin: copying text (`llms.txt` and the HTML are built by appending to a growing text, which copies it each time, as the interpreter does), text equality, and calls into `std.rt` too large to inline. More would take a real optimizer (appending in place to a text nothing else holds, keeping values in registers across calls), not more tuning.
+- **Bulk text operations** such as `replace` and `trim` over a large text are about as fast as the interpreter's, and are expected to be: the interpreter does them in Rust, so it spends its time where native code does.
 
 ### Values
 
@@ -439,10 +467,10 @@ Once escape hatches exist, the following policy applies:
 
 ## Toolchain
 
-- **Execution:** a tree-walking interpreter comes first. Oska then generates native code itself, with no external toolchain ([ADR 0011](adr/0011-oska-generates-native-code-itself.md)). The runtime is Oska code, and raw system calls are allowed only in `std.rt` ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)).
+- **Execution:** a tree-walking interpreter came first. Oska now generates native code itself for aarch64 Linux, with no external toolchain ([ADR 0011](adr/0011-oska-generates-native-code-itself.md)), and runs natively by default there. The runtime is Oska code, and raw system calls are allowed only in `std.rt` ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)). The interpreter stays: on hosts with no backend yet, with `--interpret`, and as the oracle the differential suite holds the native backend to.
 - **Milestones.** Each is its own spec and release:
   1. Multi-file packages: `pkg.` paths, `pub(pkg)`, and an `oska.toml` with no dependencies yet (#88).
-  2. The aarch64 Linux native backend and the `std.rt` runtime.
+  2. The aarch64 Linux native backend and the `std.rt` runtime (#125): `oskac build`, and native `run` and `test` on aarch64 Linux.
   3. `Bytes`, the bitwise and wrapping operations, and secret integers.
   4. The `NetConnect` runtime, the crypto primitives, and a TLS 1.3 client, all in Oska ([ADR 0012](adr/0012-tls-git-and-crypto-are-written-in-oska.md)).
   5. git fetch, minimal version selection, the lockfile, and authority approval (#12).

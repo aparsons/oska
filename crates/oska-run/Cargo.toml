@@ -12,5 +12,9 @@ oska-check = { path = "../oska-check" }
 oska-syntax = { path = "../oska-syntax" }
 oska-sys = { path = "../oska-sys" }
 
+[dev-dependencies]
+# The docs test: `docs/runtime.md` documents the native backend's codes too.
+oska-native = { path = "../oska-native" }
+
 [lints]
 workspace = true

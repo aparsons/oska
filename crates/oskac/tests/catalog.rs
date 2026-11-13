@@ -37,9 +37,11 @@ use oska_run::{FakeHost, TestOptions, TestStatus};
 /// Codes no program can reach, so they have no example: `E0170` is for the
 /// prelude only (user code gets `E0132` instead), `E0360` needs a `std`
 /// module with a private name (none has one yet), `P0005` is a second
-/// line of defence behind the checker (`E0292`), and `E0411` is a symlink,
-/// which a documentation example cannot write.
-const UNREACHABLE: [&str; 4] = ["E0170", "E0360", "E0411", "P0005"];
+/// line of defence behind the checker (`E0292`), `E0411` is a symlink,
+/// which a documentation example cannot write, and `E0391` is an output
+/// path, which is no part of a program, and `E0392` a fault in the
+/// native backend, which no program is meant to reach.
+const UNREACHABLE: [&str; 6] = ["E0170", "E0360", "E0391", "E0392", "E0411", "P0005"];
 
 /// How the meaning of a code with no example ends, after the reason why.
 /// `oskac explain` and the code's page both show the meaning.
@@ -77,7 +79,7 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 /// source of the toolchain's crates.
 fn defined_codes() -> BTreeSet<String> {
     let mut files = Vec::new();
-    for krate in ["oska-syntax", "oska-check", "oska-run"] {
+    for krate in ["oska-syntax", "oska-check", "oska-run", "oska-native"] {
         rust_files(
             &repo_root().join("crates").join(krate).join("src"),
             &mut files,
@@ -239,6 +241,16 @@ fn codes_of(code: &str, example: &Example) -> BTreeSet<String> {
             found.extend(test.failure.iter().map(|d| d.code.to_string()));
         }
         assert!(!report.tests.is_empty(), "{}: no tests ran", example.at);
+    } else if code.starts_with("E039") {
+        // A native build refusal: the program checks, and the backend
+        // refuses it.
+        let report = oska_check::check_module(src);
+        found.extend(report.diagnostics.iter().map(|d| d.code.to_string()));
+        if let Some(program) = &report.program {
+            if let Err(refusal) = oska_native::build(program, &|d| d) {
+                found.insert(refusal.code.to_string());
+            }
+        }
     } else if code.starts_with('P') || ["E0370", "E0371", "E0380"].contains(&code) {
         let outcome = oska_run::run(src, &mut FakeHost::new(), &["main.osk".to_string()]);
         found.extend(outcome.diagnostics.iter().map(|d| d.code.to_string()));

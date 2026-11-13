@@ -26,6 +26,17 @@ fn main(io: Stdout) -> Result<(), IoError> {
 
 `main` only receives the capabilities it asks for. This program can write to stdout and nothing else.
 
+## Running it
+
+```sh
+oskac check hello.osk       # type-check and print each function's authority
+oskac run hello.osk         # check, then run
+oskac test hello.osk        # run the file's test blocks
+oskac build hello.osk       # compile to a static aarch64 Linux executable, ./hello
+```
+
+`oskac build` works on every host: it writes the machine code and the executable itself, with no assembler, linker or C library. On aarch64 Linux (a Raspberry Pi, an arm64 server), `oskac run` and `oskac test` compile the program natively and run it, and `--interpret` selects the interpreter. Every other host runs programs on the interpreter until it has a native backend of its own. Both backends print the same output, reports and exit codes. See [platform support](docs/guide/cli-reference.md#platform-support).
+
 ## A package
 
 A program can be one file, or a package of modules:
@@ -49,7 +60,9 @@ Run `oskac check`, `oskac run` and `oskac test` in the package directory. Items 
 | `crates/oskac` | The `oskac` compiler CLI |
 | `crates/oska-syntax` | Lexer (and, soon, parser and AST) |
 | `crates/oska-check` | Type checker and authority report (`oskac check`) |
-| `crates/oska-run` | Interpreter (`oskac run`) and test runner (`oskac test`) |
+| `crates/oska-run` | Interpreter (`oskac run --interpret`, and `oskac run` on hosts with no native backend) and its test runner |
+| `crates/oska-native` | Native backend: aarch64 Linux executables (`oskac build`, and `oskac run` and `oskac test` on aarch64 Linux), with the runtime `std.rt` in Oska |
+| `crates/oska-sys` | The only crate with `unsafe`: the interpreter's confined filesystem calls |
 | `examples/` | Example `.osk` programs and a multi-module package |
 | `docs/guide/` | Task guides: [quickstart](docs/guide/quickstart.md), [language tour](docs/guide/language-tour.md), [CLI reference](docs/guide/cli-reference.md), [agent guide](docs/guide/agent-guide.md), and more |
 | `docs/design.md` | Language design notes |

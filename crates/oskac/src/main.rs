@@ -3,7 +3,24 @@
 use oska_syntax::{Diagnostic, Span};
 use std::process::ExitCode;
 
+/// `print!` to stdout through [`write_stdout`].
+macro_rules! out {
+    ($($arg:tt)*) => {
+        $crate::write_stdout(&format!($($arg)*))
+    };
+}
+
+/// `println!` to stdout through [`write_stdout`].
+macro_rules! outln {
+    ($($arg:tt)*) => {
+        $crate::write_stdout(&format!("{}\n", format_args!($($arg)*)))
+    };
+}
+
+mod build;
 mod explain;
+mod native;
+mod native_test;
 mod package;
 
 const USAGE: &str = "\
@@ -17,12 +34,20 @@ USAGE:
                                            package directory (the current one
                                            with no path), and report each
                                            function's authority
-    oskac run [path] [--format=json] [-- args...]
+    oskac run [path] [--format=json] [--interpret] [-- args...]
                                            Check a source file or package and,
-                                           if it has no diagnostics, run it
-    oskac test [path] [--format=json] [--integration]
+                                           if it has no diagnostics, run it:
+                                           natively on aarch64 Linux, on the
+                                           interpreter elsewhere or with
+                                           --interpret
+    oskac test [path] [--format=json] [--integration] [--interpret]
                                            Run the test blocks in a source file
-                                           or package
+                                           or package, natively or interpreted
+                                           as `run` does
+    oskac build [path] [-o out] [--format=json]
+                                           Check a source file or package and,
+                                           if it has no diagnostics, compile it
+                                           to an aarch64 Linux executable
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
@@ -38,14 +63,19 @@ struct Flags {
     release: bool,
     /// `--integration`: `oskac test` runs `#[integration]` tests too.
     integration: bool,
+    /// `--interpret`: `oskac run` and `oskac test` use the interpreter
+    /// on a host with a native backend too (`native.rs`).
+    interpret: bool,
 }
 
-/// A command line, parsed: the command and its operands, the flags, and
-/// the arguments after `--`, which belong to the program being run.
+/// A command line, parsed: the command and its operands, the flags, the
+/// output path `-o` gives, and the arguments after `--`, which belong to
+/// the program being run.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct CommandLine {
     positional: Vec<String>,
     flags: Flags,
+    output: Option<String>,
     program_args: Vec<String>,
 }
 
@@ -65,10 +95,17 @@ impl CommandLine {
             program_args,
             ..CommandLine::default()
         };
-        for arg in args {
+        let mut args = args.into_iter();
+        while let Some(arg) = args.next() {
             match arg.as_str() {
+                "-o" => match args.next() {
+                    Some(output) => line.output = Some(output),
+                    // `-o` with no path: the usage error says what is wrong.
+                    None => line.positional.push(arg),
+                },
                 "--release" => line.flags.release = true,
                 "--integration" => line.flags.integration = true,
+                "--interpret" => line.flags.interpret = true,
                 format if format.starts_with("--format=") => {
                     line.flags.json = format == "--format=json";
                 }
@@ -86,17 +123,17 @@ fn main() -> ExitCode {
     match positional.as_slice() {
         ["--version" | "-V"] => {
             if flags.json {
-                println!(
+                outln!(
                     "{{\"name\":\"oskac\",\"version\":\"{}\"}}",
                     env!("CARGO_PKG_VERSION")
                 );
             } else {
-                println!("oskac {}", env!("CARGO_PKG_VERSION"));
+                outln!("oskac {}", env!("CARGO_PKG_VERSION"));
             }
             ExitCode::SUCCESS
         }
         ["--help" | "-h"] => {
-            print!("{USAGE}");
+            out!("{USAGE}");
             ExitCode::SUCCESS
         }
         ["lex", path] => lex_file(path, flags),
@@ -110,11 +147,31 @@ fn main() -> ExitCode {
         ["test", rest @ ..] if rest.len() <= 1 => {
             on_target(Command::Test, rest.first(), flags, &line.program_args)
         }
+        ["build", rest @ ..] if rest.len() <= 1 && line.program_args.is_empty() => {
+            let command = Command::Build(line.output.as_deref());
+            on_target(command, rest.first(), flags, &[])
+        }
         ["explain", code] => explain_code(code, flags),
         _ => {
             eprint!("{USAGE}");
             ExitCode::from(2)
         }
+    }
+}
+
+/// Write `text` to stdout. A reader that has gone, as in `oskac check
+/// --format=json | head -1`, ends `oskac` quietly with 0, as it ends a
+/// program `oskac run` runs; any other failure panics, as `print!` does.
+pub(crate) fn write_stdout(text: &str) {
+    use std::io::Write;
+    let mut stdout = std::io::stdout().lock();
+    match stdout
+        .write_all(text.as_bytes())
+        .and_then(|()| stdout.flush())
+    {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => std::process::exit(0),
+        Err(err) => panic!("failed printing to stdout: {err}"),
     }
 }
 
@@ -137,15 +194,15 @@ fn parse_file(path: &str, Flags { json, .. }: Flags) -> ExitCode {
     };
     match oska_syntax::parse_module(&src) {
         Ok(module) if json => {
-            print!("{}", oska_syntax::module_to_json(&module, path));
+            out!("{}", oska_syntax::module_to_json(&module, path));
             ExitCode::SUCCESS
         }
         Ok(module) => {
-            print!("{}", oska_syntax::module_to_tree(&module));
+            out!("{}", oska_syntax::module_to_tree(&module));
             ExitCode::SUCCESS
         }
         Err(err) if json => {
-            println!("{}", err.to_json());
+            outln!("{}", err.to_json());
             ExitCode::FAILURE
         }
         Err(err) => {
@@ -157,18 +214,21 @@ fn parse_file(path: &str, Flags { json, .. }: Flags) -> ExitCode {
 
 /// The commands that take a source file or a package.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Command {
+enum Command<'a> {
     Check,
     Run,
     Test,
+    /// `oskac build`, with the output path `-o` gives.
+    Build(Option<&'a str>),
 }
 
-impl Command {
+impl Command<'_> {
     fn name(self) -> &'static str {
         match self {
             Command::Check => "check",
             Command::Run => "run",
             Command::Test => "test",
+            Command::Build(_) => "build",
         }
     }
 }
@@ -268,10 +328,10 @@ fn check_file(path: &str, Flags { json, release, .. }: Flags) -> ExitCode {
 /// `path` names the unlocated entries' file in the human report.
 fn print_report(report: &oska_check::CheckReport, json: bool, path: &str) -> ExitCode {
     if json {
-        print!("{}", report.to_json());
+        out!("{}", report.to_json());
     } else {
         print_diagnostics(&report.diagnostics);
-        print!("{}", report.authority_to_human(path));
+        out!("{}", report.authority_to_human(path));
     }
     if report.diagnostics.is_empty() {
         ExitCode::SUCCESS
@@ -300,14 +360,39 @@ fn print_diagnostics(diagnostics: &[Diagnostic]) {
 /// stderr as `oskac check` prints diagnostics, or one JSON object per
 /// line with `--format=json`. The exit code is the program's: 101 after
 /// a panic (see `docs/runtime.md`).
-fn run_file(path: &str, Flags { json, .. }: Flags, args: &[String]) -> ExitCode {
+fn run_file(path: &str, flags: Flags, args: &[String]) -> ExitCode {
+    let json = flags.json;
     let Some(src) = read_source(path) else {
         return ExitCode::FAILURE;
     };
+    let places = Places::File { path, src: &src };
+    if native::runs_natively(flags) {
+        let checked = oska_check::check_module(&src);
+        if let Some(program) = checked
+            .program
+            .as_ref()
+            .filter(|_| checked.diagnostics.is_empty())
+        {
+            match native::run(
+                program,
+                &places,
+                native::Invocation {
+                    argv0: path,
+                    args,
+                    json,
+                },
+            ) {
+                native::Run::Ran(code) => return code,
+                native::Run::Refused(refusal) => {
+                    native::note_fallback(refusal, oska_run::refusal(program), &places, json)
+                }
+            }
+        }
+    }
     let mut argv = vec![path.to_string()];
     argv.extend_from_slice(args);
     let outcome = oska_run::run(&src, &mut oska_run::RealHost::new(), &argv);
-    finish_run(outcome, json, &Places::File { path, src: &src })
+    finish_run(outcome, json, &places)
 }
 
 /// Print how a run ended and return the program's exit code. `places`
@@ -344,8 +429,25 @@ fn test_file(path: &str, flags: Flags) -> ExitCode {
         return ExitCode::FAILURE;
     };
     let options = oska_run::TestOptions { integration };
+    let places = Places::File { path, src: &src };
+    if native::runs_natively(flags) {
+        let checked = oska_check::check_module(&src);
+        if let Some(program) = checked
+            .program
+            .as_ref()
+            .filter(|_| checked.diagnostics.is_empty())
+        {
+            match native_test::test_program(program, options, json) {
+                native_test::Tested::Report(report) => return finish_test(report, json, &places),
+                native_test::Tested::Ended(code) => return code,
+                native_test::Tested::Refused(refusal) => {
+                    native::note_fallback(refusal, oska_run::test_refusal(program), &places, json)
+                }
+            }
+        }
+    }
     let report = oska_run::test(&src, &mut oska_run::RealHost::new(), options);
-    finish_test(report, json, &Places::File { path, src: &src })
+    finish_test(report, json, &places)
 }
 
 /// Print a test report and return its exit code. `places` names the file
@@ -362,11 +464,11 @@ fn finish_test(mut report: oska_run::TestReport, json: bool, places: &Places) ->
         .map(|d| places.locate(d))
         .collect();
     if json {
-        println!("{}", report.to_json());
+        outln!("{}", report.to_json());
     } else if !report.diagnostics.is_empty() {
         print_diagnostics(&report.diagnostics);
     } else {
-        print!("{}", report.to_human(""));
+        out!("{}", report.to_human(""));
     }
     ExitCode::from(u8::try_from(report.exit_code()).unwrap_or(u8::MAX))
 }
@@ -383,6 +485,7 @@ fn on_target(command: Command, path: Option<&&str>, flags: Flags, args: &[String
                 Command::Check => check_file(&file, flags),
                 Command::Run => run_file(&file, flags, args),
                 Command::Test => test_file(&file, flags),
+                Command::Build(output) => build::file(&file, flags, output),
             };
             hint_package(&file, command.name());
             code
@@ -405,7 +508,7 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
             return ExitCode::FAILURE;
         }
     };
-    if command == Command::Run && package.is_library() {
+    if matches!(command, Command::Run | Command::Build(_)) && package.is_library() {
         return refuse(command, vec![oska_check::run_of_library(dir)], json, dir);
     }
     let options = oska_check::CheckOptions {
@@ -432,8 +535,27 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
         dir,
         json,
     };
+    if let Command::Build(output) = command {
+        return build::package(program, &places, dir, output, json);
+    }
     let mut host = oska_run::RealHost::new();
     if command == Command::Run {
+        if native::runs_natively(flags) {
+            match native::run(
+                program,
+                &places,
+                native::Invocation {
+                    argv0: dir,
+                    args,
+                    json,
+                },
+            ) {
+                native::Run::Ran(code) => return code,
+                native::Run::Refused(refusal) => {
+                    native::note_fallback(refusal, oska_run::refusal(program), &places, json)
+                }
+            }
+        }
         let mut argv = vec![dir.to_string()];
         argv.extend_from_slice(args);
         let outcome = oska_run::run_program(program, &mut host, &argv);
@@ -442,6 +564,15 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
         let options = oska_run::TestOptions {
             integration: flags.integration,
         };
+        if native::runs_natively(flags) {
+            match native_test::test_program(program, options, json) {
+                native_test::Tested::Report(tests) => return finish_test(tests, json, &places),
+                native_test::Tested::Ended(code) => return code,
+                native_test::Tested::Refused(refusal) => {
+                    native::note_fallback(refusal, oska_run::test_refusal(program), &places, json)
+                }
+            }
+        }
         let tests = oska_run::test_program(program, &mut host, options);
         finish_test(tests, json, &places)
     }
@@ -483,6 +614,7 @@ fn refuse(command: Command, diagnostics: Vec<Diagnostic>, json: bool, dir: &str)
             };
             finish_test(report, json, &places)
         }
+        Command::Build(_) => build::refuse(&diagnostics, json, ExitCode::FAILURE),
     }
 }
 
@@ -504,15 +636,15 @@ fn explain_code(code: &str, Flags { json, .. }: Flags) -> ExitCode {
     let entries = explain::catalog();
     if let Some(entry) = explain::find(&entries, code) {
         if json {
-            println!("{}", explain::to_json(entry));
+            outln!("{}", explain::to_json(entry));
         } else {
-            print!("{}", explain::to_human(entry));
+            out!("{}", explain::to_human(entry));
         }
         return ExitCode::SUCCESS;
     }
     let suggestion = explain::closest(&entries, code);
     if json {
-        println!("{}", explain::unknown_to_json(code, suggestion));
+        outln!("{}", explain::unknown_to_json(code, suggestion));
     } else {
         eprintln!("{}", explain::unknown_to_human(code, suggestion));
     }
@@ -526,15 +658,17 @@ fn lex_file(path: &str, Flags { json, .. }: Flags) -> ExitCode {
     match oska_syntax::lex(&src) {
         Ok(tokens) => {
             for token in tokens {
-                println!(
+                outln!(
                     "{:>5}..{:<5} {:?}",
-                    token.span.start, token.span.end, token.kind
+                    token.span.start,
+                    token.span.end,
+                    token.kind
                 );
             }
             ExitCode::SUCCESS
         }
         Err(err) if json => {
-            println!("{}", err.to_json());
+            outln!("{}", err.to_json());
             ExitCode::FAILURE
         }
         Err(err) => {
@@ -561,7 +695,8 @@ mod tests {
             Flags {
                 json: true,
                 release: false,
-                integration: true
+                integration: true,
+                interpret: false,
             }
         );
         assert!(line.program_args.is_empty());
@@ -573,6 +708,17 @@ mod tests {
         assert_eq!(line.positional, ["run", "f.osk"]);
         assert_eq!(line.flags, Flags::default());
         assert_eq!(line.program_args, ["--release", "x"]);
+    }
+
+    #[test]
+    fn dash_o_takes_the_next_argument_as_the_output_path() {
+        let line = parse(&["build", "-o", "out/app", "f.osk"]);
+        assert_eq!(line.positional, ["build", "f.osk"]);
+        assert_eq!(line.output.as_deref(), Some("out/app"));
+        // With nothing after it, `-o` is left positional: a usage error.
+        let line = parse(&["build", "f.osk", "-o"]);
+        assert_eq!(line.positional, ["build", "f.osk", "-o"]);
+        assert_eq!(line.output, None);
     }
 
     #[test]

@@ -1,0 +1,7 @@
+$ oskac run unsupported.osk --interpret
+exit: 0
+--- stdout
+ran
+--- stderr
+[dbg] <Dir(FsCap { root: Dir(RootHandle { .. }), access: Read })>
+--- written

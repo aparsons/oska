@@ -1,0 +1,6 @@
+$ oskac test tested.osk --format=json
+exit: 1
+--- stdout
+{"tests":[{"name":"doubles","status":"passed","failure":null},{"name":"wrongly","status":"failed","failure":{"code":"P0011","message":"assertion failed: `actual == expected`: actual 4, expected 5","path":"tested.osk","span":{"start":111,"end":136}}}],"passed":1,"failed":1,"skipped":0,"diagnostics":[]}
+--- stderr
+--- written

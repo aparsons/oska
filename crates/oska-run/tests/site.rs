@@ -11,11 +11,16 @@
 //!
 //! Every page any test builds also goes through [`assert_inert`], which
 //! reads it the way a browser would and fails on anything that could run.
+//!
+//! Every build is differential (`common`): on aarch64 Linux the generator
+//! also runs natively on the same files, and must write the same site.
+
+mod common;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use oska_run::{run, FakeHost, RunOutcome};
+use oska_run::{FakeHost, RunOutcome};
 
 /// The generator's source.
 const BUILD: &str = include_str!("../../../site/build.osk");
@@ -81,7 +86,7 @@ fn build(inputs: &BTreeMap<String, String>) -> Build {
     let mut host = inputs.iter().fold(FakeHost::new(), |host, (path, text)| {
         host.with_file(path, text)
     });
-    let outcome = run(BUILD, &mut host, &["site/build.osk".to_string()]);
+    let outcome = common::run_differential(&mut host, BUILD, &[]);
     Build {
         outcome,
         site: host.files_under(OUTPUT),
@@ -1273,7 +1278,8 @@ fn llms_txt_indexes_the_markdown_copies_with_summaries() {
          \n\
          Oska 1.2.3 (pre-alpha). These docs track `main`. Every page is also served as Markdown: \
          the same path with `.md`. All of them are in [llms-full.txt](https://oskalang.dev/llms-full.txt). \
-         The source code is at https://github.com/aparsons/oska. A program is one `.osk` file or a package: an `oska.toml` and modules under `src/`, with `src/main.osk` as the entry and `use pkg.a.b` importing `src/a/b.osk`; see [Packages and modules](https://oskalang.dev/guide/packages.md).\n\
+         The source code is at https://github.com/aparsons/oska. A program is one `.osk` file or a package: an `oska.toml` and modules under `src/`, with `src/main.osk` as the entry and `use pkg.a.b` importing `src/a/b.osk`; see [Packages and modules](https://oskalang.dev/guide/packages.md). \
+         `oskac build` compiles a program to a static aarch64 Linux executable on any host. On aarch64 Linux, `oskac run` and `oskac test` compile natively and run the executable, and `--interpret` selects the interpreter, which every other host uses; output, reports and exit codes are the same on both. See [Platform support](https://oskalang.dev/guide/cli-reference.md#platform-support).\n\
          \n\
          ## Docs\n\
          \n\

@@ -1,0 +1,8 @@
+$ oskac run range.osk
+exit: 1
+--- stdout
+--- stderr
+range.osk:2:21: error[E0222]: this literal does not fit in `U8`, which ranges from 0 to 255 (bytes 42..45)
+range.osk:3:20: error[E0223]: unary `-` is not defined for `U16` (bytes 65..67)
+range.osk:4:19: error[E0222]: this literal does not fit in `I8`, which ranges from -128 to 127 (bytes 86..90)
+--- written

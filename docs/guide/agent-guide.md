@@ -7,7 +7,7 @@ How an AI coding agent, or any script, should drive `oskac`. Oska is built for t
 1. **Check.** `oskac check file.osk --format=json`. Read `diagnostics`.
 2. **Apply machine fixes.** Apply the `fix` of a diagnostic that has one, then check again. Repeat until no diagnostic has a fix.
 3. **Fix the rest by hand,** choosing by `code`, one diagnostic at a time, first one first.
-4. **Run.** `oskac run file.osk --format=json -- args...`. The exit code and standard error say how it ended.
+4. **Run.** `oskac run file.osk --format=json -- args...`. The exit code and standard error say how it ended. On aarch64 Linux the program runs natively, elsewhere on the interpreter, with the same output; if a native result looks wrong, run it again with `--interpret` and report any difference.
 5. **Test.** `oskac test file.osk --format=json`. Write a test for every behavior you add.
 6. **Read the authority report.** Compare `functions` and `audit` from `oskac check --format=json` with what you intended. A change that widens authority, or adds an audit site, is not finished until you can say why.
 7. **Release check.** `oskac check file.osk --release` must pass: no `dbg(...)` and no `todo()` left.
@@ -21,6 +21,7 @@ You are done when the check, the tests, and the release check all exit with 0, a
 | `oskac check` | One object: `diagnostics`, `functions`, `audit` | standard output |
 | `oskac test` | One object: `tests`, `passed`, `failed`, `skipped`, `diagnostics` | standard output |
 | `oskac run` | The program's own output, unchanged. Diagnostics and panics are one JSON object per line. | standard error |
+| `oskac build` | One object: `output` (the executable's path, or `null`), `diagnostics` | standard output |
 | `oskac parse` | The AST, documented in the [AST reference](../ast.md) | standard output |
 | `oskac lex` | Tokens (the same text as without the flag). A lexical error is a diagnostic object. | standard output |
 | `oskac --version` | One object: `name`, `version` | standard output |

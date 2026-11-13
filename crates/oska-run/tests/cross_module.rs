@@ -1,8 +1,10 @@
 //! A package's modules run as one program (spec #115, #118): the checker
 //! joins them into one checked program, and the interpreter runs it.
 
+mod common;
+
 use oska_check::{check_package, CheckOptions, ModuleSource, Package};
-use oska_run::{run_program, FakeHost, RunOutcome};
+use oska_run::{FakeHost, RunOutcome};
 
 /// Check the package of `modules`, each a `(module path, source)` pair,
 /// and run its checked program on a fresh [`FakeHost`].
@@ -18,7 +20,12 @@ fn run_modules(modules: &[(&str, &str)]) -> RunOutcome {
     let program = report
         .program
         .unwrap_or_else(|| panic!("{modules:?} should check: {:#?}", report.diagnostics));
-    run_program(&program, &mut FakeHost::new(), &["main.osk".to_string()])
+    common::run_program_differential(
+        &program,
+        &format!("{modules:#?}"),
+        &mut FakeHost::new(),
+        &[common::PROGRAM_PATH.to_string()],
+    )
 }
 
 fn assert_prints(modules: &[(&str, &str)], expected: &str) {

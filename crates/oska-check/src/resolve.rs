@@ -349,6 +349,10 @@ impl Resolver<'_, '_> {
             ));
             return;
         }
+        // `std.rt` is refused as E0209 (`toolchain.rs`), not as unknown.
+        if written == "std.rt" || written.starts_with("std.rt.") {
+            return;
+        }
         if first.name != "std" {
             self.diagnostics.push(Diagnostic::new(
                 codes::USE_OUTSIDE_STD,

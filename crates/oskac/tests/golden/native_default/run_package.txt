@@ -1,0 +1,7 @@
+$ oskac run greeter -- x
+exit: 0
+--- stdout
+[greeter]
+[x]
+--- stderr
+--- written

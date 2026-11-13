@@ -56,7 +56,7 @@ The built-in declarations, written in Oska, that every program can use without i
 _Avoid_: stdlib (for this subset), builtins
 
 **Checked program**:
-A program the checker has accepted, with every name, method call, and conversion already resolved. The interpreter runs only checked programs.
+A program the checker has accepted, with every name, method call, and conversion already resolved, and every expression and slot typed. Both the interpreter and the native backend run only checked programs.
 _Avoid_: IR, compiled program
 
 **Panic**:
@@ -120,3 +120,25 @@ The record of the exact version, commit, content hash and computed authority of 
 
 **Direct dependency**:
 A package named in the manifest. Only direct dependencies need authority approval.
+
+## Execution
+
+**Interpreter**:
+The toolchain's way of running a checked program directly, with no executable. It is the reference for what every program does.
+_Avoid_: VM, evaluator
+
+**Native backend**:
+The part of the toolchain that compiles a checked program into a standalone executable for a platform, with no outside assembler, linker or C library. A program it cannot compile yet is refused, never compiled wrongly.
+_Avoid_: codegen, JIT
+
+**Runtime**:
+What runs alongside a program to provide what the language promises it: memory, text, panics, the capabilities `main` is granted, filesystem confinement and the test host. For native executables it is `std.rt`, an Oska module owned by the toolchain and compiled into every executable, which no program can import; the interpreter provides the same itself.
+_Avoid_: libc, runtime library
+
+**System-call intrinsic**:
+A body-less function in the runtime that performs one operating-system call. It is the only way native code reaches the operating system, and naming one anywhere outside the runtime is an error.
+_Avoid_: syscall wrapper
+
+**Differential suite**:
+The tests that run every program of a corpus on both the interpreter and the native backend and fail on any difference in output, exit code, panic or files written.
+_Avoid_: parity tests, golden tests (for this suite)

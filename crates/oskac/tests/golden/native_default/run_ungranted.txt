@@ -1,0 +1,6 @@
+$ oskac run net.osk
+exit: 2
+--- stdout
+--- stderr
+net.osk:1:19: error[E0370]: `oskac run` cannot grant `Net` yet: the capability has no runtime (bytes 18..20)
+--- written

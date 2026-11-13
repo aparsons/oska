@@ -127,9 +127,18 @@ fn string_trim(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Pan
     Ok(Value::str(args[0].as_str().trim()))
 }
 
-/// `String.to_lowercase(self)`: Unicode's full lower-case mapping.
+/// `String.to_lowercase(self)`: each character's own Unicode lower-case
+/// mapping. It takes no context into account, so a capital sigma is always
+/// `σ`, never the final `ς` that `str::to_lowercase` picks at the end of a
+/// word: that rule needs the `Cased` and `Case_Ignorable` tables, and the
+/// native runtime does not carry them.
 fn string_to_lowercase(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(Value::str(&args[0].as_str().to_lowercase()))
+    let lowered: String = args[0]
+        .as_str()
+        .chars()
+        .flat_map(char::to_lowercase)
+        .collect();
+    Ok(Value::str(&lowered))
 }
 
 /// `String.split(self, separator)`: the pieces between occurrences of
