@@ -19,25 +19,15 @@
 //! to read, write, create a directory, list one or narrow to one
 //! (`Host::read_file_beneath`, `Host::write_file_beneath`,
 //! `Host::create_dir_beneath`, `Host::list_dir_beneath`,
-//! `Host::open_beneath`). On Unix each name is opened relative to the one
-//! before, and none is followed if it is a symlink, the last included
-//! (`oska-sys`): a write opens or creates its file beneath its parent's
-//! handle, `create_dir` makes its directory there, and `list_dir` lists
-//! through the directory's own handle. So there is no check for another
-//! process to race: a symlink at any component, planted before the walk
-//! or swapped in during it, makes the walk fail. Every symlink is
-//! refused, dangling or not, wherever it points.
-//!
-//! # What remains on Windows
-//!
-//! Windows has no handle-relative open in `std`, so its host checks each
-//! component on the path not to be a symlink, opens the path, and checks
-//! again that what it opened lies under the root. That narrows the race
-//! but does not close it: another process that swaps an intermediate
-//! directory for a symlink at the right moment can still direct the open
-//! outside the root, though the re-check then refuses to use what it
-//! opened (a write may already have created an empty file there)
-//! (`docs/runtime.md`).
+//! `Host::open_beneath`). Each name is opened relative to the one before,
+//! and none is followed if it is a symlink, or on Windows any other
+//! reparse point, the last included (`oska-sys`): a write opens or
+//! creates its file beneath its parent's handle, `create_dir` makes its
+//! directory there, and `list_dir` lists through the directory's own
+//! handle. So there is no check for another process to race: a symlink
+//! or junction at any component, planted before the walk or swapped in
+//! during it, makes the walk fail. Every symlink is refused, dangling or
+//! not, wherever it points.
 
 use std::io;
 use std::path::{Component, Path};
