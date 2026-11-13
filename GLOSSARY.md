@@ -37,7 +37,7 @@ A change after which a dependency's authority includes a capability kind it did 
 _Avoid_: escalation, upgrade (for this concept)
 
 **Pure function**:
-A function with no capability-bearing parameters. It cannot perform effects, and it is deterministic.
+A function with no capability-bearing parameters and no parameter whose type is or holds a bounded type parameter, whose type argument could be capability-bearing. It cannot perform effects, and it is deterministic.
 
 **Pre-state value**:
 A value in a postcondition captured with `old(...)` when the function is entered, before a mutating method changes its receiver.

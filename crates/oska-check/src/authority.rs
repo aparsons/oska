@@ -9,9 +9,9 @@
 use oska_syntax::ast::{FnDecl, Item, ItemKind, Module, Type, TypeKind};
 
 use crate::collect::{DeclKind, Decls};
-use crate::items::Lower;
+use crate::items::{Bound, Lower};
 use crate::link::Modules;
-use crate::ty::{Cap, Ty};
+use crate::ty::{Cap, Ty, SELF};
 use crate::{FunctionAuthority, Via};
 
 /// What a type can reach.
@@ -19,8 +19,13 @@ use crate::{FunctionAuthority, Via};
 struct Reach {
     /// Built-in capabilities, in order of first appearance.
     capabilities: Vec<String>,
-    /// Capability-bearing. True whenever `capabilities` is non-empty, and
-    /// also for a `cap fn`, whose capabilities are not written out.
+    /// Bounded type parameters, in order of first appearance: their type
+    /// arguments may be capability-bearing, and the bounds give a body
+    /// methods to call on them.
+    generics: Vec<String>,
+    /// Capability-bearing. True whenever `capabilities` or `generics` is
+    /// non-empty, and also for a `cap fn`, whose capabilities are not
+    /// written out.
     bearing: bool,
 }
 
@@ -29,6 +34,11 @@ impl Reach {
         for capability in other.capabilities {
             if !self.capabilities.contains(&capability) {
                 self.capabilities.push(capability);
+            }
+        }
+        for generic in other.generics {
+            if !self.generics.contains(&generic) {
+                self.generics.push(generic);
             }
         }
         self.bearing |= other.bearing;
@@ -41,16 +51,19 @@ impl Reach {
 /// capability-bearing only once instantiated. Resolve inference variables
 /// first; an unsolved one is not capability-bearing.
 pub fn capability_bearing(ty: &Ty, decls: &Decls) -> bool {
-    reach(ty, decls, &mut Vec::new()).bearing
+    reach(ty, decls, &[], &mut Vec::new()).bearing
 }
 
 /// What `ty` reaches. Type arguments are expanded, and so are the fields
-/// of structs and enums, with their generics bound to the arguments.
-/// `expanding` holds the types being expanded, so recursive types end.
-fn reach(ty: &Ty, decls: &Decls, expanding: &mut Vec<String>) -> Reach {
+/// of structs and enums, with their generics bound to the arguments. A
+/// type parameter named in `bounded` reaches itself; any other reaches
+/// nothing. `expanding` holds the types being expanded, so recursive types
+/// end.
+fn reach(ty: &Ty, decls: &Decls, bounded: &[String], expanding: &mut Vec<String>) -> Reach {
     match ty {
         Ty::Fn { cap, .. } => Reach {
             capabilities: Vec::new(),
+            generics: Vec::new(),
             bearing: *cap == Cap::Bearing,
         },
         Ty::Named(name, args, _) => {
@@ -60,6 +73,7 @@ fn reach(ty: &Ty, decls: &Decls, expanding: &mut Vec<String>) -> Reach {
             match decl.kind {
                 DeclKind::Capability => Reach {
                     capabilities: vec![name.clone()],
+                    generics: Vec::new(),
                     bearing: true,
                 },
                 DeclKind::Primitive | DeclKind::Trait => Reach::default(),
@@ -77,17 +91,22 @@ fn reach(ty: &Ty, decls: &Decls, expanding: &mut Vec<String>) -> Reach {
                             .collect();
                         for field in &decl.field_types {
                             let field = lower.ty(field).substitute(&subst);
-                            total.add(reach(&field, decls, expanding));
+                            total.add(reach(&field, decls, bounded, expanding));
                         }
                         expanding.pop();
                     }
                     for arg in args {
-                        total.add(reach(arg, decls, expanding));
+                        total.add(reach(arg, decls, bounded, expanding));
                     }
                     total
                 }
             }
         }
+        Ty::Param(name) if bounded.contains(name) => Reach {
+            capabilities: Vec::new(),
+            generics: vec![name.clone()],
+            bearing: true,
+        },
         Ty::Unit | Ty::Param(_) | Ty::Var(_) | Ty::Never | Ty::Error => Reach::default(),
     }
 }
@@ -121,9 +140,20 @@ pub fn report(module: &Module, decls: &Decls, modules: &Modules) -> Vec<Function
             ItemKind::Trait(t) => {
                 // A default method is code like any other, so it is
                 // reported; a method with no body is only a signature.
+                // Its `Self` is bounded by the trait, as in the body
+                // checker, so a receiver reaches whatever an impl's does.
                 let lower = Lower::new(decls)
                     .with_generics(&t.generics)
-                    .with_self(Ty::Param(crate::ty::SELF.to_string()));
+                    .with_self(Ty::Param(SELF.to_string()))
+                    .with_bound(Bound {
+                        param: SELF.to_string(),
+                        trait_name: t.name.name.clone(),
+                        args: t
+                            .generics
+                            .iter()
+                            .map(|g| Ty::Param(g.name.name.clone()))
+                            .collect(),
+                    });
                 for method in &t.methods {
                     if let ItemKind::Fn(f) = &method.kind {
                         if f.body.is_some() {
@@ -147,17 +177,18 @@ pub fn report(module: &Module, decls: &Decls, modules: &Modules) -> Vec<Function
 fn function(name: String, item: &Item, f: &FnDecl, lower: Lower) -> FunctionAuthority {
     let decls = lower.decls();
     let lower = lower.with_generics(&f.generics);
+    let bounded: Vec<String> = lower.bounds.iter().map(|b| b.param.clone()).collect();
     let mut sources: Vec<(String, Reach)> = Vec::new();
     if f.receiver.is_some() {
         let receiver = lower
             .self_ty
             .as_ref()
-            .map(|ty| reach(ty, decls, &mut Vec::new()))
+            .map(|ty| reach(ty, decls, &bounded, &mut Vec::new()))
             .unwrap_or_default();
         sources.push(("self".to_string(), receiver));
     }
     for param in &f.params {
-        let r = reach(&lower.ty(&param.ty), decls, &mut Vec::new());
+        let r = reach(&lower.ty(&param.ty), decls, &bounded, &mut Vec::new());
         sources.push((param.name.name.clone(), r));
     }
 
@@ -168,6 +199,7 @@ fn function(name: String, item: &Item, f: &FnDecl, lower: Lower) -> FunctionAuth
             via.push(Via {
                 param,
                 capabilities: r.capabilities.clone(),
+                generics: r.generics.clone(),
             });
         }
         total.add(r);
