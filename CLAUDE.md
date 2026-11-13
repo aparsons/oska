@@ -6,6 +6,7 @@ Run `scripts/check.sh` before every commit; it is the whole CI test job. The pre
 
 - Code review: apply `CODING_STANDARDS.md`.
 - Cutting, checking, or fixing a release, or touching the signing key or release workflows: `docs/agents/release.md`.
+- Upgrading the pinned Rust (or an issue "Bump Rust to X.Y.Z"): `docs/agents/rust.md`.
 
 ## Agent skills
 

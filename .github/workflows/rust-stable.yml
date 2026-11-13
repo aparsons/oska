@@ -1,0 +1,26 @@
+name: Rust stable
+
+# Weekly: when a newer stable Rust than the pin in rust-toolchain.toml is
+# out, keep one open "Bump Rust to X.Y.Z" issue labelled ready-for-agent. It
+# only opens or edits that issue; the upgrade itself is a PR made with
+# scripts/bump-rust.sh. Needs the label `ready-for-agent` to exist.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          latest=$(curl -fsSL https://static.rust-lang.org/dist/channel-rust-stable.toml | scripts/rust-stable/latest.sh)
+          scripts/rust-stable/sync-issue.sh "$latest"
