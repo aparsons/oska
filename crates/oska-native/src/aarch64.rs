@@ -36,13 +36,14 @@
 //! `x30`, where `x29` points. Its size is a multiple of 16.
 //!
 //! All addressing is PC-relative (`adrp`/`add`, `bl`, `b`), so the
-//! executable needs no relocation: `elf.rs` patches the addresses of data
-//! ([`Fixup`]) once it has laid the file out.
+//! executable needs no relocation: [`Text::link`] patches the addresses
+//! of data ([`Fixup`]) once the file has been laid out.
 
 use crate::ir::{
     Arith, BinOp, Cond, FnId, Function, Inst, IntKind, Module, Symbol, Temp, Width, REGISTER_ARGS,
 };
 use crate::regalloc::{self, Loc};
+use crate::target::{Code, Layout};
 
 /// The machine code of a module.
 #[derive(Debug)]
@@ -55,6 +56,34 @@ pub struct Text {
     pub fixups: Vec<Fixup>,
     /// The instruction the process starts at, by index.
     pub entry: usize,
+}
+
+impl Code for Text {
+    fn size(&self) -> u64 {
+        4 * self.words.len() as u64
+    }
+
+    fn entry(&self) -> u64 {
+        4 * self.entry as u64
+    }
+
+    fn link(&self, layout: &Layout) -> Vec<u8> {
+        let mut words = self.words.clone();
+        for fixup in &self.fixups {
+            let target = match fixup.symbol {
+                Symbol::Rodata(at) => layout.rodata + u64::from(at),
+                Symbol::Data(at) => layout.data + u64::from(at),
+                Symbol::Function(start) => layout.code + 4 * start as u64,
+            };
+            let pc = layout.code + 4 * fixup.at as u64;
+            let adrp_at = &mut words[fixup.at];
+            *adrp_at = adrp(*adrp_at & 0x1f, pc, target);
+            let add = &mut words[fixup.at + 1];
+            let rd = *add & 0x1f;
+            *add = add_imm(rd, rd, (target & 0xfff) as u32, false);
+        }
+        words.iter().flat_map(|w| w.to_le_bytes()).collect()
+    }
 }
 
 /// An `adrp` at `at`, followed by an `add`, that must point at `symbol`.
@@ -727,18 +756,18 @@ impl Emitter {
 }
 
 /// `adrp`, before its page offset is patched in.
-pub const ADRP: u32 = 0x9000_0000;
+const ADRP: u32 = 0x9000_0000;
 
 /// The `adrp` that puts the page of `target` in `rd`, for an instruction
 /// at `pc`.
-pub fn adrp(rd: u32, pc: u64, target: u64) -> u32 {
+fn adrp(rd: u32, pc: u64, target: u64) -> u32 {
     let pages = (target >> 12) as i64 - (pc >> 12) as i64;
     let pages = pages as u32;
     ADRP | (pages & 3) << 29 | ((pages >> 2) & 0x7_ffff) << 5 | rd
 }
 
 /// `add rd, rn, #imm12` (shifted left 12 when `shifted`).
-pub fn add_imm(rd: u32, rn: u32, imm12: u32, shifted: bool) -> u32 {
+fn add_imm(rd: u32, rn: u32, imm12: u32, shifted: bool) -> u32 {
     0x9100_0000 | u32::from(shifted) << 22 | (imm12 & 0xfff) << 10 | rn << 5 | rd
 }
 

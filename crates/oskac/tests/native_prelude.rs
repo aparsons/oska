@@ -977,8 +977,10 @@ fn every_call_calls_its_function_and_builds_natively() {
             "the program for `{name}` never calls it"
         );
         let built = match run {
-            Run::Tests => oska_native::build_tests(&program),
-            Run::Main | Run::WithInput(_) => oska_native::build(&program, &|d| d),
+            Run::Tests => oska_native::build_tests(&program, oska_native::Target::LinuxAarch64),
+            Run::Main | Run::WithInput(_) => {
+                oska_native::build(&program, oska_native::Target::LinuxAarch64, &|d| d)
+            }
         };
         if let Err(refusal) = built {
             panic!("`{name}` has no native implementation: {refusal:#?}");

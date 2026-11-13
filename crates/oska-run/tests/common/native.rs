@@ -71,9 +71,10 @@ pub fn compare_program(
     if !outcome.diagnostics.is_empty() || skipped() {
         return;
     }
-    let bytes = oska_native::build(program, &|d| d).unwrap_or_else(|refusal| {
-        fail(src, &format!("the native backend refused it: {refusal:#?}"))
-    });
+    let bytes = oska_native::build(program, oska_native::Target::LinuxAarch64, &|d| d)
+        .unwrap_or_else(|refusal| {
+            fail(src, &format!("the native backend refused it: {refusal:#?}"))
+        });
     let mut texts: Vec<&str> = args.iter().map(String::as_str).collect();
     texts.push(src);
     let Some(sandbox) = Sandbox::new(before, needs_filesystem(program), &texts) else {
@@ -122,9 +123,10 @@ pub fn compare_program_tests(
     if !report.diagnostics.is_empty() || skipped() {
         return;
     }
-    let bytes = oska_native::build_tests(program).unwrap_or_else(|refusal| {
-        fail(src, &format!("the native backend refused it: {refusal:#?}"))
-    });
+    let bytes = oska_native::build_tests(program, oska_native::Target::LinuxAarch64)
+        .unwrap_or_else(|refusal| {
+            fail(src, &format!("the native backend refused it: {refusal:#?}"))
+        });
     let integration = options.integration && program.tests.iter().any(|t| t.integration);
     let Some(sandbox) = Sandbox::new(before, integration, &[src]) else {
         return;

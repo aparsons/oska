@@ -23,16 +23,23 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 use oska_check::program::Program;
+use oska_native::Target;
 use oska_syntax::{Diagnostic, Span};
 
 use crate::{Flags, Places};
 
-/// Whether this host has a native backend: aarch64 Linux.
-pub const HOST_HAS_BACKEND: bool = cfg!(all(target_arch = "aarch64", target_os = "linux"));
+/// The target `oskac run` and `oskac test` compile for on this host,
+/// when they run natively here: aarch64 Linux.
+const NATIVE_HOST: Option<Target> = if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
+    Some(Target::LinuxAarch64)
+} else {
+    None
+};
 
-/// Whether `oskac run` and `oskac test` run natively with `flags`.
-pub fn runs_natively(flags: Flags) -> bool {
-    HOST_HAS_BACKEND && !flags.interpret
+/// The target `oskac run` and `oskac test` compile for with `flags`:
+/// the host's, when it runs natively and `--interpret` is not given.
+pub fn native_target(flags: Flags) -> Option<Target> {
+    NATIVE_HOST.filter(|_| !flags.interpret)
 }
 
 /// How a native `oskac run` went.
@@ -88,18 +95,18 @@ pub struct Invocation<'a> {
     pub json: bool,
 }
 
-/// `oskac run`, natively: compile `program`, run it with the invocation's
-/// `argv0` as its path and `args` after it, and report a panic as the
-/// interpreter's run does, as JSON with `json`.
-pub fn run(program: &Program, places: &Places, invocation: Invocation) -> Run {
+/// `oskac run`, natively: compile `program` for `target`, the host's, run
+/// it with the invocation's `argv0` as its path and `args` after it, and
+/// report a panic as the interpreter's run does, as JSON with `json`.
+pub fn run(program: &Program, target: Target, places: &Places, invocation: Invocation) -> Run {
     let Invocation { argv0, args, json } = invocation;
     // A human report is placed in the source by the executable itself; a
     // JSON one is read back unplaced and placed here, as the
     // interpreter's panic is.
     let built = if json {
-        oska_native::build(program, &|d| d)
+        oska_native::build(program, target, &|d| d)
     } else {
-        oska_native::build(program, &|d| places.locate(d))
+        oska_native::build(program, target, &|d| places.locate(d))
     };
     let bytes = match built {
         Ok(bytes) => bytes,

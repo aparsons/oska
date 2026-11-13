@@ -1,0 +1,6 @@
+$ oskac build hello.osk --target all -o dist
+exit: 0
+--- stdout
+--- stderr
+--- written
+dist/hello-linux-aarch64

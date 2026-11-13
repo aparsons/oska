@@ -606,7 +606,8 @@ fn assert_same_corpus(name: &str, files: &[(String, String)], target: &str) {
     // And a native one: `oskac test` runs a program the backend refuses
     // on the interpreter.
     assert!(
-        oska_native::build_tests(&checked(&files, target)).is_ok(),
+        oska_native::build_tests(&checked(&files, target), oska_native::Target::LinuxAarch64)
+            .is_ok(),
         "case `{name}`: the native backend refuses its tests"
     );
 }
@@ -782,7 +783,8 @@ fn test_executable(name: &str, src: &str) -> PathBuf {
     let program = oska_check::check_module(src)
         .program
         .expect("the program should check");
-    let bytes = oska_native::build_tests(&program).expect("the tests should build");
+    let bytes = oska_native::build_tests(&program, oska_native::Target::LinuxAarch64)
+        .expect("the tests should build");
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("native_tests_exe");
     std::fs::create_dir_all(&dir).expect("should create the directory");
     let exe = dir.join(name);

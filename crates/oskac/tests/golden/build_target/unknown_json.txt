@@ -1,0 +1,6 @@
+$ oskac build hello.osk --target linux-arm64 --format=json
+exit: 2
+--- stdout
+{"output":null,"diagnostics":[{"code":"E0393","message":"`linux-arm64` is not a target platform: `--target` takes `linux-aarch64`, `linux-x86_64`, `macos-aarch64`, `macos-x86_64` and `windows-x86_64`, or `all`","span":{"start":0,"end":0}}]}
+--- stderr
+--- written
