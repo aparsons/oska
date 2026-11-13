@@ -18,7 +18,9 @@
 //! Linux, each building for its own platform. On x86_64, whose backend
 //! is new (spec #153), a program the backend refuses (`E0390`) is
 //! reported on stderr and compared on the interpreter alone
-//! ([`REPORT_REFUSALS`]), until x86_64 Linux is native by default.
+//! ([`REPORT_REFUSALS`]), until x86_64 Linux is native by default;
+//! [`assert_compiled_same`] instead fails on a refusal on every host, and
+//! builds the program for every other target too.
 //!
 //! To add a differential test, write a `#[test]` that builds a [`Case`]
 //! and calls [`assert_same`], which also returns the outcome for any
@@ -198,6 +200,37 @@ pub fn assert_same(case: &Case) -> Outcome {
     native
 }
 
+/// [`assert_same`] for a program every target must compile: `oskac
+/// build` refusing it (`E0390`) fails on every host, never falling back
+/// to the interpreter ([`REPORT_REFUSALS`]). The host runs its own
+/// target's executable, and builds it for every other target with a
+/// backend as well, so an aarch64 host, which cannot run x86_64 code,
+/// still fails when x86_64 refuses the program.
+pub fn assert_compiled_same(case: &Case) -> Outcome {
+    let root = case_root(case);
+    let interpreted = interpret(case, &root);
+    let native = native(case, &root);
+    assert!(
+        interpreted == native,
+        "case `{}`: the backends differ\n--- interpreter\n{interpreted:#?}\n--- native\n{native:#?}",
+        case.name
+    );
+    for target in oska_native::Target::ALL {
+        if target != host_target() {
+            let cross = root.join(target.name());
+            let dir = fresh_tree(&cross.join("tree"), case);
+            if let Err(report) = try_build(&cross, &dir, case, Some(target)) {
+                panic!(
+                    "case `{}`: oskac build --target {} failed\n{report}",
+                    case.name,
+                    target.name()
+                );
+            }
+        }
+    }
+    native
+}
+
 /// Run `case` on the interpreter and natively: the two outcomes.
 pub fn run(case: &Case) -> (Outcome, Outcome) {
     let root = case_root(case);
@@ -250,7 +283,7 @@ fn native(case: &Case, root: &Path) -> Outcome {
 /// [`native`], or what `oskac build` printed when it refused `case`.
 fn try_native(case: &Case, root: &Path) -> Result<Outcome, String> {
     let native_dir = fresh_tree(&root.join("native"), case);
-    let exe = try_build(root, &native_dir, case)?;
+    let exe = try_build(root, &native_dir, case, None)?;
     let mut program = Command::new(&exe);
     program.current_dir(&native_dir).args(&case.args);
     Ok(outcome(program, case, &native_dir))
@@ -258,22 +291,27 @@ fn try_native(case: &Case, root: &Path) -> Result<Outcome, String> {
 
 /// Build `case`, from `native_dir`, to `root/bin/program`.
 fn build(case: &Case, root: &Path, native_dir: &Path) -> PathBuf {
-    try_build(root, native_dir, case)
+    try_build(root, native_dir, case, None)
         .unwrap_or_else(|report| panic!("case `{}`: oskac build failed\n{report}", case.name))
 }
 
-/// [`build`], or what `oskac build` printed when it refused `case`.
-fn try_build(root: &Path, native_dir: &Path, case: &Case) -> Result<PathBuf, String> {
+/// [`build`], or what `oskac build` printed when it refused `case`: for
+/// `target`, or by default for the host's.
+fn try_build(
+    root: &Path,
+    native_dir: &Path,
+    case: &Case,
+    target: Option<oska_native::Target>,
+) -> Result<PathBuf, String> {
     let bin = root.join("bin");
     std::fs::create_dir_all(&bin).expect("should create the bin directory");
     let exe = bin.join("program");
-    let build = oskac(native_dir)
-        .arg("build")
-        .arg(&case.target)
-        .arg("-o")
-        .arg(&exe)
-        .output()
-        .expect("oskac build should run");
+    let mut build = oskac(native_dir);
+    build.arg("build").arg(&case.target).arg("-o").arg(&exe);
+    if let Some(target) = target {
+        build.args(["--target", target.name()]);
+    }
+    let build = build.output().expect("oskac build should run");
     if !build.status.success() {
         return Err(format!(
             "{}{}",

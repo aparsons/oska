@@ -4,6 +4,9 @@
 //! `Untrusted<String>` operations, on ASCII, multi-byte and edge-case
 //! text, with the interpreter's panics (`P0035`, `P0036`, `P0037`).
 //! (`String` methods that make or take a `List` are in `native_lists.rs`.)
+//! Every target must compile these programs
+//! (`differential::assert_compiled_same`, #161): a refusal fails on every
+//! host, and each host builds them for the other targets too.
 
 #![cfg(all(
     target_os = "linux",
@@ -12,7 +15,7 @@
 
 mod differential;
 
-use differential::{assert_same, Case};
+use differential::{assert_compiled_same, Case};
 
 /// The helpers every program has. Interpolation takes only names, so a
 /// program prints through these: `show` a line, `bracket` a text between
@@ -42,7 +45,7 @@ fn program(body: &str) -> String {
 /// Run `body` on both backends, require the same outcome, and that it
 /// printed `stdout` and exited 0.
 fn assert_prints(name: &str, body: &str, stdout: &str) {
-    let outcome = assert_same(&Case::file(name, &program(body)));
+    let outcome = assert_compiled_same(&Case::file(name, &program(body)));
     assert_eq!(outcome.stdout, stdout, "case `{name}`: {outcome:#?}");
     assert_eq!(outcome.exit_code, Some(0), "case `{name}`: {outcome:#?}");
 }
@@ -51,7 +54,7 @@ fn assert_prints(name: &str, body: &str, stdout: &str) {
 /// printed `stdout`, then panicked with a report containing `code` and
 /// `message`, exit 101.
 fn assert_panics(name: &str, body: &str, stdout: &str, code: &str, message: &str) {
-    let outcome = assert_same(&Case::file(name, &program(body)));
+    let outcome = assert_compiled_same(&Case::file(name, &program(body)));
     assert_eq!(outcome.stdout, stdout, "case `{name}`: {outcome:#?}");
     assert!(
         outcome
@@ -459,7 +462,7 @@ fn main(io: Stdout) {
 }
 "#
     );
-    let outcome = assert_same(&Case::file("text_untrusted", &src));
+    let outcome = assert_compiled_same(&Case::file("text_untrusted", &src));
     assert_eq!(
         outcome.stdout, "5 8\n[é ünï]\ntrue\ntrue\n10 16\n[é ünïé ünï]\ntrue\ntrue\n",
         "{outcome:#?}"
@@ -499,7 +502,7 @@ fn interpolation_copies_literals_of_every_length_around_every_hole() {
     }
     body.push_str("    let _ = io.println(\"{total}\")");
     let src = format!("{items}{}", program(&body));
-    let outcome = assert_same(&Case::file("interpolated_literals", &src));
+    let outcome = assert_compiled_same(&Case::file("interpolated_literals", &src));
     assert_eq!(outcome.exit_code, Some(0), "{outcome:#?}");
     assert!(
         outcome

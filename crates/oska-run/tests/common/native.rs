@@ -7,7 +7,8 @@
 //! The interpreter is the oracle: a difference fails the test, as a bug
 //! in the native backend. On x86_64, whose backend is new (spec #153), a
 //! program the backend refuses (`E0390`) is reported on stderr instead of
-//! failed ([`refusal_reported`]), until x86_64 Linux is native by default.
+//! failed ([`refusal_reported`]), until x86_64 Linux is native by default,
+//! except in the test files of [`COMPILED_EVERYWHERE`].
 //!
 //! The [`FakeHost`](oska_run::FakeHost) a test set up is reproduced on
 //! the real OS: its stdin, its environment (and nothing else), its
@@ -46,6 +47,13 @@ const TARGET: oska_native::Target = if cfg!(target_arch = "x86_64") {
 } else {
     oska_native::Target::LinuxAarch64
 };
+
+/// The test files whose programs every target must compile: a refusal
+/// fails on every host, and each program is also built for every other
+/// target with a backend, so an aarch64 host, which cannot run x86_64
+/// code, still fails when x86_64 refuses it. Data, text and lists
+/// (#161).
+const COMPILED_EVERYWHERE: &[&str] = &["data", "text_toolkit"];
 
 /// How long one native process may run before the comparison gives up on
 /// it: far longer than any test program takes.
@@ -86,6 +94,7 @@ pub fn compare_program(
         Err(refusal) if refusal_reported(&refusal) => return,
         Err(refusal) => fail(src, &format!("the native backend refused it: {refusal:#?}")),
     };
+    cross_build(src, |target| oska_native::build(program, target, &|d| d));
     let mut texts: Vec<&str> = args.iter().map(String::as_str).collect();
     texts.push(src);
     let Some(sandbox) = Sandbox::new(before, needs_filesystem(program), &texts) else {
@@ -139,6 +148,7 @@ pub fn compare_program_tests(
         Err(refusal) if refusal_reported(&refusal) => return,
         Err(refusal) => fail(src, &format!("the native backend refused it: {refusal:#?}")),
     };
+    cross_build(src, |target| oska_native::build_tests(program, target));
     let integration = options.integration && program.tests.iter().any(|t| t.integration);
     let Some(sandbox) = Sandbox::new(before, integration, &[src]) else {
         return;
@@ -194,11 +204,41 @@ fn case() -> String {
     )
 }
 
+/// Whether the running test is in a file of [`COMPILED_EVERYWHERE`].
+fn compiled_everywhere() -> bool {
+    COMPILED_EVERYWHERE.contains(&env!("CARGO_CRATE_NAME"))
+}
+
+/// In a file of [`COMPILED_EVERYWHERE`], build `src`'s program with
+/// `build` for every target but the host's, and fail on a refusal.
+fn cross_build(src: &str, build: impl Fn(oska_native::Target) -> Result<Vec<u8>, Diagnostic>) {
+    if !compiled_everywhere() {
+        return;
+    }
+    for target in oska_native::Target::ALL {
+        if target != TARGET {
+            if let Err(refusal) = build(target) {
+                fail(
+                    src,
+                    &format!(
+                        "the native backend refused it for {}: {refusal:#?}",
+                        target.name()
+                    ),
+                );
+            }
+        }
+    }
+}
+
 /// Whether the backend's `refusal` is reported rather than failed: an
 /// `E0390` on x86_64 Linux, until it is native by default (spec #153's
-/// default-switch ticket). Says so on stderr.
+/// default-switch ticket), outside [`COMPILED_EVERYWHERE`]. Says so on
+/// stderr.
 fn refusal_reported(refusal: &Diagnostic) -> bool {
-    if !cfg!(target_arch = "x86_64") || refusal.code != oska_native::codes::UNSUPPORTED {
+    if !cfg!(target_arch = "x86_64")
+        || refusal.code != oska_native::codes::UNSUPPORTED
+        || compiled_everywhere()
+    {
         return false;
     }
     eprintln!(
