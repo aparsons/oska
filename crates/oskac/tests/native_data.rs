@@ -3,7 +3,9 @@
 //! compound values built at run time, field reads and updates with
 //! copy-on-write (a changed copy never changes the original, ADR 0001),
 //! every pattern form, `main` returning `Err`, and generic functions
-//! specialised per type.
+//! specialised per type. Every target must compile these programs
+//! (`differential::assert_compiled_same`, #161): a refusal fails on every
+//! host, and each host builds them for the other targets too.
 
 #![cfg(all(
     target_os = "linux",
@@ -12,7 +14,7 @@
 
 mod differential;
 
-use differential::{assert_same, Case};
+use differential::{assert_compiled_same, Case};
 
 /// A program whose `main` runs `body`, after the items `items`, with
 /// `io: Stdout`. (`?` is #133's, so bodies print with
@@ -24,7 +26,7 @@ fn program(items: &str, body: &str) -> String {
 /// Run `src` on both backends, require the same outcome, and that it
 /// printed `stdout` and exited 0.
 fn assert_prints(name: &str, src: &str, stdout: &str) {
-    let outcome = assert_same(&Case::file(name, src));
+    let outcome = assert_compiled_same(&Case::file(name, src));
     assert_eq!(outcome.stdout, stdout, "case `{name}`: {outcome:#?}");
     assert_eq!(outcome.exit_code, Some(0), "case `{name}`: {outcome:#?}");
 }
@@ -295,7 +297,7 @@ fn an_err_built_at_run_time_from_main_prints_and_exits_1() {
             "{items}fn main(io: Stdout) -> Result<(), {error_type}> {{\n    \
              let n = 3\n    let _ = io.println(\"before\")\n    {err}\n}}\n"
         );
-        let outcome = assert_same(&Case::file(name, &src));
+        let outcome = assert_compiled_same(&Case::file(name, &src));
         assert_eq!(outcome.stdout, "before\n", "case `{name}`: {outcome:#?}");
         assert_eq!(outcome.stderr, stderr, "case `{name}`: {outcome:#?}");
         assert_eq!(outcome.exit_code, Some(1), "case `{name}`: {outcome:#?}");
@@ -488,7 +490,7 @@ fn deep_cases(n: u32) -> Vec<Case> {
 #[test]
 fn deeply_nested_values_are_dropped_the_same() {
     for case in deep_cases(100_000) {
-        let outcome = assert_same(&case);
+        let outcome = assert_compiled_same(&case);
         assert_eq!(outcome.stdout, "built 100000\ndropped\n", "{outcome:#?}");
     }
 }
