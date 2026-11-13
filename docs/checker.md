@@ -6,7 +6,7 @@ The exit code is non-zero when there are diagnostics. Without `--format=json`, d
 
 Every diagnostic, attenuation and audit line starts with its **location**, `path:line:col`, which editors and terminals jump to: the path of the file it is in, then the 1-based line and column (in characters) where its span starts, such as `prog.osk:2:9: error[E0200]: ...`. For a single file the path is as given on the command line; in a package it starts from the current directory, the package directory as given followed by the file's path in the package, such as `shop/src/util/text.osk` for `oskac check shop` (JSON keeps the package-relative `src/util/text.osk`). The byte span follows, within that file.
 
-An **attenuation** is a call of one of the prelude's attenuation methods (`restrict_to`, `restrict_to_file`, `read_only`, `write_only`) on a built-in capability. The report lists each one under the function it is in (a closure's belong to the function around it), with the capability kind it narrows from and to, and its root:
+An **attenuation** is a call of one of the prelude's attenuation methods (`restrict_to`, `restrict_to_file`, `read_only`, `write_only`) on a built-in capability. The report lists each one under the function it is in (a closure's belong to the function around it; a test's under `test "<name>":`, which is also its JSON `function`), with the capability kind it narrows from and to, and its root:
 
 - `restrict_to "docs"` has a **literal root**: a string literal, a module constant holding one, or `Path.new` of either. Narrowing a directory capability gives the path relative to its own root, as written.
 - `restrict_to computed at runtime` has any other root: a variable, an interpolated string, `Path.from(untrusted)`. In JSON its `root` is `null`.
