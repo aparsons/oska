@@ -33,6 +33,6 @@ fn a_located_diagnostic_carries_its_path_in_json_before_its_span() {
         Diagnostic::new("E0001", "bad", Span { start: 2, end: 3 }).locate("src/a/b.osk", "ab\nc");
     assert_eq!(
         diagnostic.to_json(),
-        r#"{"code":"E0001","message":"bad","path":"src/a/b.osk","span":{"start":2,"end":3}}"#
+        r#"{"code":"E0001","message":"bad","path":"src/a/b.osk","span":{"start":2,"end":3},"line":1,"column":3,"end_line":2,"end_column":1,"severity":"error","url":"https://oskalang.dev/codes/E0001","related":[],"suggestions":[]}"#
     );
 }

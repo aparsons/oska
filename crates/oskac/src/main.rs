@@ -1,6 +1,6 @@
 //! `oskac`: the Oska compiler command-line interface.
 
-use oska_syntax::{Diagnostic, Span};
+use oska_syntax::{Applicability, Diagnostic, Span};
 use std::process::ExitCode;
 
 /// `print!` to stdout through [`write_stdout`].
@@ -202,7 +202,7 @@ fn parse_file(path: &str, Flags { json, .. }: Flags) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(err) if json => {
-            outln!("{}", err.to_json());
+            outln!("{}", err.locate(path, &src).to_json());
             ExitCode::FAILURE
         }
         Err(err) => {
@@ -349,7 +349,10 @@ fn print_diagnostics(diagnostics: &[Diagnostic]) {
             None => eprintln!("{diagnostic}"),
         }
         if let Some(fix) = &diagnostic.fix {
-            eprintln!("    fix: {}", fix.message);
+            match fix.applicability {
+                Applicability::Machine => eprintln!("    fix: {}", fix.message),
+                other => eprintln!("    fix ({}): {}", other.name(), fix.message),
+            }
         }
     }
 }
@@ -668,7 +671,7 @@ fn lex_file(path: &str, Flags { json, .. }: Flags) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(err) if json => {
-            outln!("{}", err.to_json());
+            outln!("{}", err.locate(path, &src).to_json());
             ExitCode::FAILURE
         }
         Err(err) => {

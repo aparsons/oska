@@ -26,7 +26,7 @@ You are done when the check, the tests, and the release check all exit with 0, a
 | `oskac lex` | Tokens (the same text as without the flag). A lexical error is a diagnostic object. | standard output |
 | `oskac --version` | One object: `name`, `version` | standard output |
 
-Every diagnostic has the same shape: `code`, `message`, `span`, and sometimes `fix`. Match on `code`. The shapes and exit codes are in the [CLI reference](cli-reference.md#output-formats). If `oskac` cannot read the file it prints `error: cannot read ...` to standard error, exits with 1, and prints no JSON, so check for empty standard output before parsing.
+Every diagnostic has the same shape: `code`, `message`, `span` with its `line` and `column`, `severity`, `url`, `related` places, and sometimes `fix`, whose `applicability` says whether it is certain (`machine`), a guess (`maybe`), or leaves `todo()` to fill in (`placeholders`). Match on `code`. The shapes and exit codes are in the [CLI reference](cli-reference.md#output-formats). If `oskac` cannot read the file it prints `error: cannot read ...` to standard error, exits with 1, and prints no JSON, so check for empty standard output before parsing.
 
 ## Applying fixes
 
@@ -61,6 +61,7 @@ Rules that keep this safe:
 - Within one fix, apply edits from the end of the file to the start.
 - Work on bytes, not characters.
 - A missing `fix` means the repair needs judgment. Do not guess one from the message.
+- A fix whose `applicability` is `maybe` is a guess, such as the closest name to an unknown one. Check that it is what was meant before applying it.
 - Read what a fix did. The fix for a non-exhaustive `match` (`E0253`) adds arms whose body is `todo()`, which compiles but panics with `P0003` when reached, and fails `--release`. Fill them in.
 
 An example. The file declares a struct that holds a capability without saying so:
@@ -69,7 +70,7 @@ An example. The file declares a struct that holds a capability without saying so
 struct Logger { out: Stdout }
 ```
 
-The diagnostic has the fix `{"message":"declare it `cap struct`","edits":[{"span":{"start":0,"end":0},"replacement":"cap "}]}`. Applying it, an insertion at byte 0, gives a program that checks:
+The diagnostic has the fix `{"message":"declare it `cap struct`","edits":[{"span":{"start":0,"end":0},"replacement":"cap "}],"applicability":"machine"}`. Applying it, an insertion at byte 0, gives a program that checks:
 
 ```oska
 cap struct Logger { out: Stdout }

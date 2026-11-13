@@ -18,7 +18,7 @@ const DOCS: [&str; 2] = [
 ];
 
 /// Where the site has a page for each code.
-const SITE: &str = "https://oskalang.dev/codes";
+const SITE: &str = oska_syntax::CODE_PAGES;
 
 /// How far an unknown code may be from a known one to be suggested.
 const SUGGESTION_DISTANCE: usize = 2;
@@ -31,6 +31,9 @@ pub struct Entry {
     pub message: String,
     /// What the machine-applicable fix does, when the checker offers one.
     pub machine_fix: Option<String>,
+    /// How safe that fix is to apply, as a diagnostic's `fix` gives it:
+    /// `machine`, `maybe` or `placeholders`.
+    pub fix_applicability: Option<String>,
     /// A program that fails with this code, when one can.
     pub example: Option<String>,
     /// The same program fixed.
@@ -70,9 +73,9 @@ fn tag_of(info: &str) -> Option<(bool, String)> {
     })
 }
 
-/// A table row `` | `E0300` | meaning | fix | ``, as an entry without
-/// examples. The runtime tables have no fix column. A `|` inside a cell is
-/// written `\|`.
+/// A table row `` | `E0300` | meaning | fix | applicability | ``, as an
+/// entry without examples. The runtime tables have no fix column and no
+/// applicability. A `|` inside a cell is written `\|`.
 fn row_of(line: &str) -> Option<Entry> {
     let inner = line.strip_prefix("| `")?.strip_suffix(" |")?;
     let (code, cells) = inner.split_once("` | ")?;
@@ -82,10 +85,12 @@ fn row_of(line: &str) -> Option<Entry> {
     let mut cells = cells.split(" | ").map(|cell| cell.replace("\\|", "|"));
     let message = cells.next()?;
     let machine_fix = cells.next().filter(|fix| !fix.starts_with("None"));
+    let fix_applicability = cells.next().filter(|_| machine_fix.is_some());
     Some(Entry {
         code: code.to_string(),
         message,
         machine_fix,
+        fix_applicability,
         example: None,
         fixed: None,
     })
@@ -188,6 +193,9 @@ pub fn to_human(entry: &Entry) -> String {
     match &entry.machine_fix {
         Some(fix) => {
             let _ = writeln!(out, "Machine-applicable fix: {fix}");
+            if let Some(applicability) = &entry.fix_applicability {
+                let _ = writeln!(out, "Fix applicability: {applicability}.");
+            }
         }
         None => out.push_str("Machine-applicable fix: none.\n"),
     }
@@ -245,11 +253,12 @@ fn json_option(text: &Option<String>) -> String {
 /// holds for the code.
 pub fn to_json(entry: &Entry) -> String {
     format!(
-        "{{\"code\":{},\"message\":{},\"machine_fix\":{},\"machine_fix_description\":{},\"example\":{},\"fix\":{}}}",
+        "{{\"code\":{},\"message\":{},\"machine_fix\":{},\"machine_fix_description\":{},\"fix_applicability\":{},\"example\":{},\"fix\":{}}}",
         json_string(&entry.code),
         json_string(&entry.message),
         entry.machine_fix.is_some(),
         json_option(&entry.machine_fix),
+        json_option(&entry.fix_applicability),
         json_option(&entry.example),
         json_option(&entry.fixed),
     )

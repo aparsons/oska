@@ -4,5 +4,5 @@ exit: 101
 before
 --- stderr
 warned
-{"code":"P0004","message":"division by zero: `1 / 0`","path":"panics.osk","span":{"start":140,"end":148}}
+{"code":"P0004","message":"division by zero: `1 / 0`","path":"panics.osk","span":{"start":140,"end":148},"line":5,"column":13,"end_line":5,"end_column":21,"severity":"error","url":"https://oskalang.dev/codes/P0004","related":[],"suggestions":[]}
 --- written

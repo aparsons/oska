@@ -635,6 +635,10 @@ impl Linker {
                 &name.name,
                 name.span,
                 &candidates,
+            )
+            .with_related(
+                format!("the module `{PKG}.{module}` it looked in"),
+                Span::at(self.module_starts[target]),
             );
             self.diagnostics.push(diagnostic);
             return None;

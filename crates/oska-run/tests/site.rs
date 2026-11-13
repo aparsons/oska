@@ -785,10 +785,10 @@ fn codes_site() -> BTreeMap<String, String> {
 #[test]
 fn codes_json_holds_each_code_with_its_examples_and_escapes_them() {
     let expected = r#"[
-{"code":"E0200","message":"Unknown name \"x\" with a \\\\ in it, as in `Strng`. See [the tour](#tour).","machine_fix":true,"machine_fix_description":"Replace the name with the closest one.","example":"fn f(x: Strng) {}\n","fix":"fn f(x: String) {}\n"},
-{"code":"E0201","message":"A trait <script>alert(1)</script> where a type is expected. Then more.","machine_fix":false,"machine_fix_description":null,"example":"fn show(x: Display) {\n    let note = \"<b>\\\"quoted\\\"</b>\"\n}\n\n","fix":null},
-{"code":"E0140","message":"An or-pattern such as `A | B`.","machine_fix":false,"machine_fix_description":null,"example":null,"fix":null},
-{"code":"P0004","message":"Division by zero, see [Tests](#tests). Spans the operation.","machine_fix":false,"machine_fix_description":null,"example":null,"fix":null}
+{"code":"E0200","message":"Unknown name \"x\" with a \\\\ in it, as in `Strng`. See [the tour](#tour).","machine_fix":true,"machine_fix_description":"Replace the name with the closest one.","fix_applicability":"maybe","example":"fn f(x: Strng) {}\n","fix":"fn f(x: String) {}\n"},
+{"code":"E0201","message":"A trait <script>alert(1)</script> where a type is expected. Then more.","machine_fix":false,"machine_fix_description":null,"fix_applicability":null,"example":"fn show(x: Display) {\n    let note = \"<b>\\\"quoted\\\"</b>\"\n}\n\n","fix":null},
+{"code":"E0140","message":"An or-pattern such as `A | B`.","machine_fix":false,"machine_fix_description":null,"fix_applicability":null,"example":null,"fix":null},
+{"code":"P0004","message":"Division by zero, see [Tests](#tests). Spans the operation.","machine_fix":false,"machine_fix_description":null,"fix_applicability":null,"example":null,"fix":null}
 ]
 "#;
     assert_eq!(codes_site()["codes.json"], expected);
@@ -802,6 +802,7 @@ fn a_code_page_shows_its_meaning_example_and_fix_escaped() {
         "<title>E0200 · Oska</title>",
         "<h1 id=\"e0200\">E0200</h1>",
         "<strong>Machine-applicable fix:</strong> Replace the name with the closest one.",
+        "<strong>Fix applicability:</strong> <code>maybe</code>.",
         "<h2 id=\"example\">Example</h2>",
         "<pre><code>fn f(x: Strng) {}\n</code></pre>",
         "<h2 id=\"fixed\">Fixed</h2>",

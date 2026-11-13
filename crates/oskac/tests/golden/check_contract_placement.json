@@ -1,8 +1,8 @@
 {
   "diagnostics": [
-    {"code":"E0218","message":"`size` implements a trait method, so its contract belongs on the trait's declaration of it; move the clause there","path":"crates/oskac/tests/fixtures/contract_placement.osk","span":{"start":278,"end":295}},
-    {"code":"E0282","message":"a contract is a condition, not a function body: `?` has nothing to leave here","path":"crates/oskac/tests/fixtures/contract_placement.osk","span":{"start":434,"end":444}},
-    {"code":"E0219","message":"`main` cannot have a contract: nothing calls it, so there is no caller to blame; check the condition in its body instead","path":"crates/oskac/tests/fixtures/contract_placement.osk","span":{"start":474,"end":488}}
+    {"code":"E0218","message":"`size` implements a trait method, so its contract belongs on the trait's declaration of it; move the clause there","path":"crates/oskac/tests/fixtures/contract_placement.osk","span":{"start":278,"end":295},"line":12,"column":9,"end_line":12,"end_column":26,"severity":"error","url":"https://oskalang.dev/codes/E0218","related":[{"message":"declared here","path":"crates/oskac/tests/fixtures/contract_placement.osk","span":{"start":171,"end":175},"line":5,"column":8}],"suggestions":[]},
+    {"code":"E0282","message":"a contract is a condition, not a function body: `?` has nothing to leave here","path":"crates/oskac/tests/fixtures/contract_placement.osk","span":{"start":434,"end":444},"line":23,"column":14,"end_line":23,"end_column":24,"severity":"error","url":"https://oskalang.dev/codes/E0282","related":[],"suggestions":[]},
+    {"code":"E0219","message":"`main` cannot have a contract: nothing calls it, so there is no caller to blame; check the condition in its body instead","path":"crates/oskac/tests/fixtures/contract_placement.osk","span":{"start":474,"end":488},"line":29,"column":5,"end_line":29,"end_column":19,"severity":"error","url":"https://oskalang.dev/codes/E0219","related":[],"suggestions":[]}
   ],
   "functions": [
     {"name":"Square.size","authority":[],"via":[],"pure":true},

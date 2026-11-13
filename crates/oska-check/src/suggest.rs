@@ -1,7 +1,7 @@
 //! "Did you mean" suggestions: the one place that picks the closest known
 //! name to an unknown one and turns it into a message and a fix.
 
-use oska_syntax::{Diagnostic, Edit, Span};
+use oska_syntax::{Applicability, Diagnostic, Edit, Span};
 
 use crate::codes;
 use crate::prelude::StdModule;
@@ -47,7 +47,9 @@ pub fn unknown_written(
                 span,
                 replacement: suggestion.to_string(),
             }],
-        ),
+        )
+        // The closest name is a guess at what was meant.
+        .applicable(Applicability::Maybe),
         None => Diagnostic::new(code, message, span),
     }
 }

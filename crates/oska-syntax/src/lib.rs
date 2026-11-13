@@ -23,6 +23,16 @@ pub struct Span {
     pub end: usize,
 }
 
+impl Span {
+    /// The empty span at byte `offset`.
+    pub fn at(offset: usize) -> Span {
+        Span {
+            start: offset,
+            end: offset,
+        }
+    }
+}
+
 /// The span from the start of `start` to the end of `end`.
 pub(crate) fn join(start: Span, end: Span) -> Span {
     Span {
@@ -269,6 +279,43 @@ pub struct Diagnostic {
     /// The file the span is in, and where it starts. A package check names
     /// the file of every diagnostic; checking a source string alone does not.
     pub location: Option<Box<Location>>,
+    /// An error, unless it says otherwise.
+    pub severity: Severity,
+    /// Other places the diagnostic is about, such as the first definition
+    /// of a name defined twice: only where the checker already knows them.
+    pub related: Vec<Related>,
+}
+
+/// How serious a diagnostic is. Consumers of the JSON must accept values
+/// that are not listed here yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Severity {
+    /// The program is refused, or it stopped.
+    #[default]
+    Error,
+    /// Something the user should know that refuses nothing, such as the
+    /// native backend handing a program to the interpreter.
+    Note,
+}
+
+impl Severity {
+    /// The name the JSON gives it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Severity::Error => "error",
+            Severity::Note => "note",
+        }
+    }
+}
+
+/// Another place a diagnostic is about, with a message that says why,
+/// such as "first defined here". Its span is located as the diagnostic's
+/// is, and may be in another file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Related {
+    pub message: String,
+    pub span: Span,
+    pub location: Option<Location>,
 }
 
 /// Where a report entry is: the file, and the line and column its span
@@ -282,6 +329,10 @@ pub struct Location {
     pub line: usize,
     /// 1-based, in characters.
     pub column: usize,
+    /// The line and column the span ends at, counted as `line` and
+    /// `column` are; for the location of an offset, they are the start's.
+    pub end_line: usize,
+    pub end_column: usize,
 }
 
 impl Location {
@@ -289,18 +340,38 @@ impl Location {
     /// `path`. An offset past the end means the end; one inside a
     /// character means that character.
     pub fn new(path: impl Into<String>, src: &str, offset: usize) -> Self {
-        let mut end = offset.min(src.len());
-        while !src.is_char_boundary(end) {
-            end -= 1;
-        }
-        let before = &src[..end];
-        let line_start = before.rfind('\n').map_or(0, |at| at + 1);
+        Location::spanning(path, src, Span::at(offset))
+    }
+
+    /// The location of `span` in `src`, the text of the file at `path`:
+    /// where it starts, as [`Location::new`] gives it, and where it ends.
+    pub fn spanning(path: impl Into<String>, src: &str, span: Span) -> Self {
+        let (line, column) = line_and_column(src, span.start);
+        let (end_line, end_column) = line_and_column(src, span.end.max(span.start));
         Location {
             path: path.into(),
-            line: before.matches('\n').count() + 1,
-            column: before[line_start..].chars().count() + 1,
+            line,
+            column,
+            end_line,
+            end_column,
         }
     }
+}
+
+/// The 1-based line and column, in characters, of byte `offset` of `src`.
+/// An offset past the end means the end; one inside a character means
+/// that character.
+fn line_and_column(src: &str, offset: usize) -> (usize, usize) {
+    let mut end = offset.min(src.len());
+    while !src.is_char_boundary(end) {
+        end -= 1;
+    }
+    let before = &src[..end];
+    let line_start = before.rfind('\n').map_or(0, |at| at + 1);
+    (
+        before.matches('\n').count() + 1,
+        before[line_start..].chars().count() + 1,
+    )
 }
 
 /// Where each line of a text starts, so that locating many offsets in it
@@ -324,17 +395,30 @@ impl<'a> LineIndex<'a> {
     /// The location of byte `offset` in the file at `path`, as
     /// [`Location::new`] gives it.
     pub fn location(&self, path: impl Into<String>, offset: usize) -> Location {
+        self.spanning(path, Span::at(offset))
+    }
+
+    /// The location of `span`, as [`Location::spanning`] gives it.
+    pub fn spanning(&self, path: impl Into<String>, span: Span) -> Location {
+        let (line, column) = self.line_and_column(span.start);
+        let (end_line, end_column) = self.line_and_column(span.end.max(span.start));
+        Location {
+            path: path.into(),
+            line,
+            column,
+            end_line,
+            end_column,
+        }
+    }
+
+    fn line_and_column(&self, offset: usize) -> (usize, usize) {
         let mut end = offset.min(self.src.len());
         while !self.src.is_char_boundary(end) {
             end -= 1;
         }
         let line = self.starts.partition_point(|&start| start <= end);
         let line_start = self.starts.get(line - 1).copied().unwrap_or(0);
-        Location {
-            path: path.into(),
-            line,
-            column: self.src[line_start..end].chars().count() + 1,
-        }
+        (line, self.src[line_start..end].chars().count() + 1)
     }
 }
 
@@ -356,6 +440,35 @@ pub struct Fix {
     /// The file the edits are in, when it is not the diagnostic's own,
     /// such as the declaration a package check's fix marks `pub(pkg)`.
     pub path: Option<String>,
+    /// How safe the fix is to apply without a person reading it. It is a
+    /// property of the code: the catalog in `docs/checker.md` records it
+    /// beside the fix's description.
+    pub applicability: Applicability,
+}
+
+/// How safe a fix is to apply automatically. Consumers of the JSON must
+/// accept values that are not listed here yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Applicability {
+    /// Certainly right, and safe to apply automatically.
+    Machine,
+    /// Probably what was meant, but a guess, such as the closest name to
+    /// an unknown one.
+    Maybe,
+    /// The program checks afterwards, but code is left to write, such as
+    /// a `match` arm whose body is `todo()`.
+    Placeholders,
+}
+
+impl Applicability {
+    /// The name the JSON and the catalog give it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Applicability::Machine => "machine",
+            Applicability::Maybe => "maybe",
+            Applicability::Placeholders => "placeholders",
+        }
+    }
 }
 
 /// Replace the source text at `span` with `replacement`. An empty span
@@ -393,13 +506,37 @@ impl Diagnostic {
             span,
             fix: None,
             location: None,
+            severity: Severity::Error,
+            related: Vec::new(),
         }
     }
 
     /// Name the file the diagnostic is in: `src` is the text of the file at
-    /// `path`.
-    pub fn locate(mut self, path: &str, src: &str) -> Self {
-        self.location = Some(Box::new(Location::new(path, src, self.span.start)));
+    /// `path`. Its related places, unless they are located already, are in
+    /// the same file.
+    pub fn locate(self, path: &str, src: &str) -> Self {
+        self.locate_in(&LineIndex::new(src), path)
+    }
+
+    /// [`Diagnostic::locate`], with the file's text already indexed.
+    pub fn locate_in(mut self, lines: &LineIndex, path: &str) -> Self {
+        self.location = Some(Box::new(lines.spanning(path, self.span)));
+        for related in &mut self.related {
+            if related.location.is_none() {
+                related.location = Some(lines.spanning(path, related.span));
+            }
+        }
+        self
+    }
+
+    /// Add `span`, another place the diagnostic is about, saying why with
+    /// `message`, such as "first defined here".
+    pub fn with_related(mut self, message: impl Into<String>, span: Span) -> Self {
+        self.related.push(Related {
+            message: message.into(),
+            span,
+            location: None,
+        });
         self
     }
 
@@ -409,15 +546,31 @@ impl Diagnostic {
             message: message.into(),
             edits,
             path: None,
+            applicability: Applicability::Machine,
         }));
+        self
+    }
+
+    /// Say how safe the diagnostic's fix is to apply, when it has one: a
+    /// fix is [`Applicability::Machine`] unless it says otherwise.
+    pub fn applicable(mut self, applicability: Applicability) -> Self {
+        if let Some(fix) = &mut self.fix {
+            fix.applicability = applicability;
+        }
         self
     }
 
     /// Render as a single-line JSON object for machine consumers. The
     /// `path` field comes before `span`, and is omitted when the diagnostic
-    /// names no file. The `fix` field follows `span`, and is omitted when
-    /// there is no fix; it has a `path` after its `message` when its edits
-    /// are in another file than the diagnostic.
+    /// names no file; `line`, `column`, `end_line` and `end_column` follow
+    /// `span` when it names one. Then come `severity` and `url`. The `fix`
+    /// field follows, and is omitted when there is no fix; it has a `path`
+    /// after its `message` when its edits are in another file than the
+    /// diagnostic. `related` and `suggestions`, lists that may be empty,
+    /// come last.
+    ///
+    /// Fields are only ever added: none is renamed, retyped or given a
+    /// new meaning, and a diagnostic that had no `fix` never gains one.
     pub fn to_json(&self) -> String {
         let mut out = format!(
             "{{\"code\":\"{}\",\"message\":\"{}\"",
@@ -428,6 +581,17 @@ impl Diagnostic {
             out.push_str(&format!(",\"path\":\"{}\"", json_escape(&location.path)));
         }
         out.push_str(&format!(",\"span\":{}", span_json(self.span)));
+        if let Some(location) = &self.location {
+            out.push_str(&format!(
+                ",\"line\":{},\"column\":{},\"end_line\":{},\"end_column\":{}",
+                location.line, location.column, location.end_line, location.end_column
+            ));
+        }
+        out.push_str(&format!(
+            ",\"severity\":\"{}\",\"url\":\"{CODE_PAGES}/{}\"",
+            self.severity.name(),
+            self.code
+        ));
         if let Some(fix) = &self.fix {
             let edits: Vec<String> = fix
                 .edits
@@ -444,9 +608,40 @@ impl Diagnostic {
                 format!(",\"path\":\"{}\"", json_escape(path))
             });
             out.push_str(&format!(
-                ",\"fix\":{{\"message\":\"{}\"{path},\"edits\":[{}]}}",
+                ",\"fix\":{{\"message\":\"{}\"{path},\"edits\":[{}],\"applicability\":\"{}\"}}",
                 json_escape(&fix.message),
-                edits.join(",")
+                edits.join(","),
+                fix.applicability.name()
+            ));
+        }
+        let related: Vec<String> = self.related.iter().map(Related::to_json).collect();
+        // Uncertain repairs will go in `suggestions`, never in `fix`; the
+        // checker offers none yet.
+        out.push_str(&format!(
+            ",\"related\":[{}],\"suggestions\":[]}}",
+            related.join(",")
+        ));
+        out
+    }
+}
+
+/// Where the documentation site has a page for each code, such as
+/// `https://oskalang.dev/codes/E0300`.
+pub const CODE_PAGES: &str = "https://oskalang.dev/codes";
+
+impl Related {
+    /// `{message, path, span, line, column}`, without `path`, `line` and
+    /// `column` when it is not located.
+    fn to_json(&self) -> String {
+        let mut out = format!("{{\"message\":\"{}\"", json_escape(&self.message));
+        if let Some(location) = &self.location {
+            out.push_str(&format!(",\"path\":\"{}\"", json_escape(&location.path)));
+        }
+        out.push_str(&format!(",\"span\":{}", span_json(self.span)));
+        if let Some(location) = &self.location {
+            out.push_str(&format!(
+                ",\"line\":{},\"column\":{}",
+                location.line, location.column
             ));
         }
         out.push('}');
@@ -868,7 +1063,12 @@ mod tests {
         assert_eq!(err.code, "E0001");
         assert_eq!(
             err.to_json(),
-            "{\"code\":\"E0001\",\"message\":\"unexpected character '$'\",\"span\":{\"start\":8,\"end\":9}}"
+            "{\"code\":\"E0001\",\"message\":\"unexpected character '$'\",\"span\":{\"start\":8,\"end\":9},\"severity\":\"error\",\"url\":\"https://oskalang.dev/codes/E0001\",\"related\":[],\"suggestions\":[]}"
+        );
+        // Located, it names its file and the line and column of each end.
+        assert_eq!(
+            err.locate("app.osk", "let x = $").to_json(),
+            "{\"code\":\"E0001\",\"message\":\"unexpected character '$'\",\"path\":\"app.osk\",\"span\":{\"start\":8,\"end\":9},\"line\":1,\"column\":9,\"end_line\":1,\"end_column\":10,\"severity\":\"error\",\"url\":\"https://oskalang.dev/codes/E0001\",\"related\":[],\"suggestions\":[]}"
         );
     }
 
