@@ -717,6 +717,45 @@ fn the_hook_hands_a_diagnostic_back_with_exit_status_2() {
 
 #[cfg(unix)]
 #[test]
+fn the_hook_checks_a_package_module_with_its_package() {
+    // Checked alone, `main.osk` of a package reports `E0203` and `E0221`
+    // for the modules it uses; with its package it has nothing to report.
+    let main = repo_root().join("examples/shopping/src/main.osk");
+    let dir = scratch("hook-package");
+    let (code, stderr) = run_hook(&tool_call(&main), &hook_path(), &dir);
+    assert_eq!((code, stderr.as_str()), (Some(0), ""));
+}
+
+#[cfg(unix)]
+#[test]
+fn the_hook_reports_an_error_in_another_module_of_the_package() {
+    let dir = scratch("hook-package-bad");
+    let src = dir.join("app/src");
+    std::fs::create_dir_all(&src).expect("should create");
+    std::fs::write(
+        dir.join("app/oska.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("should write");
+    std::fs::write(
+        src.join("main.osk"),
+        "use pkg.util\n\nfn main(io: Stdout) -> Result<(), IoError> {\n    io.println(util.name())\n}\n",
+    )
+    .expect("should write");
+    std::fs::write(
+        src.join("util.osk"),
+        "pub(pkg) fn name() -> String {\n    let x: Int = \"a\"\n    \"n\"\n}\n",
+    )
+    .expect("should write");
+    let (code, stderr) = run_hook(&tool_call(&src.join("main.osk")), &hook_path(), &dir);
+    assert_eq!(code, Some(2), "{stderr}");
+    assert!(stderr.contains("\"code\":\"E0220\""), "{stderr}");
+    assert!(stderr.contains("util.osk"), "{stderr}");
+    assert!(!stderr.contains("E0203"), "{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
 fn the_hook_ignores_a_file_that_is_not_osk_without_running_oskac() {
     let dir = scratch("hook-other");
     let file = dir.join("notes.md");
