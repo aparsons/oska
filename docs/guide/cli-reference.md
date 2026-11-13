@@ -122,7 +122,7 @@ See [debugging](debugging.md) for panics and the [runtime notes](../runtime.md) 
 
 `oskac build [path] [-o out] [--target <platform>|all] [--format=json]` checks a file or package as `check` does and, when it has no diagnostics, compiles it to a static executable for a target platform. Building works on every host and writes the same bytes on each. The executable is the file's stem, or the package directory's name, in the current directory; `-o out` names it instead.
 
-- `--target` names the platform as release assets name `oskac` builds: `linux-aarch64`, `linux-x86_64`, `macos-aarch64`, `macos-x86_64` or `windows-x86_64`. Only `linux-aarch64` has a backend so far; the others are refused with `E0394`, which names the release that adds them, and an unknown name with `E0393`, which lists the names. Without `--target`, the build is for the host's platform when it has a backend, else for `linux-aarch64`.
+- `--target` names the platform as release assets name `oskac` builds: `linux-aarch64`, `linux-x86_64`, `macos-aarch64`, `macos-x86_64` or `windows-x86_64`. `linux-aarch64` and `linux-x86_64` have backends so far; the others are refused with `E0394`, which names the release that adds them, and an unknown name with `E0393`, which lists the names. Without `--target`, the build is for the host's platform when it has a backend, else for `linux-aarch64`.
 - `--target all` writes one executable for each platform with a backend, named `<name>-<platform>` (such as `hello-linux-aarch64`), into the directory `-o` names, or the current one.
 - Success prints nothing, or `{"output":"<path>","diagnostics":[]}` with `--format=json` (`{"outputs":["<path>",...],"diagnostics":[]}` with `--target all`).
 - A refused program's diagnostics go to standard error as `check` prints them, or to standard output as `{"output":null,"diagnostics":[...]}` with `--format=json`.
@@ -142,7 +142,8 @@ See the [runtime notes](../runtime.md#native-builds) for the codes.
 | Host | `oskac run`, `oskac test` | `oskac build` |
 | --- | --- | --- |
 | aarch64 Linux | Native: compiled, then run | aarch64 Linux executable |
-| Any other (x86_64 Linux, macOS, Windows) | Interpreter | aarch64 Linux executable |
+| x86_64 Linux | Interpreter | x86_64 Linux executable |
+| Any other (macOS, Windows) | Interpreter | aarch64 Linux executable |
 
 On aarch64 Linux, `run` and `test` compile the program as `build` does and run the executable, which is 45 to 85 times faster on program logic, such as loops, lists and calls (see the [benchmark](../design.md#native-backend-benchmark)). `--interpret` runs the interpreter instead, to compare the backends when a native result looks wrong. Every other host keeps the interpreter until it has a backend of its own. Either way the output, the reports and the exit codes are the same: the two backends are held to it by the differential suite.
 

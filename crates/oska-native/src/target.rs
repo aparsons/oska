@@ -11,26 +11,31 @@
 //! adds a code generator, which turns a module into [`Code`], and a file
 //! format, which lays the code out and asks it to [`Code::link`] itself
 //! there. To add a target: a variant of [`Target`], its row in
-//! [`PLATFORMS`], its code generator, and its arms in [`Target::emit`]
-//! and [`Target::elf`]; no other target's code changes.
+//! [`PLATFORMS`], its code generator, its [`Platform`] (system-call
+//! numbers, and its table in `std.rt`), and its arms in the methods of
+//! [`Target`]; no other target's code changes.
 
 use oska_syntax::Diagnostic;
 
+use crate::intrinsics::{self, Platform};
 use crate::ir::Module;
-use crate::{aarch64, codes, elf, NOWHERE};
+use crate::{aarch64, codes, elf, x86_64, NOWHERE};
 
 /// A target platform the backend compiles for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Target {
     /// Linux on aarch64: a static ELF that makes system calls directly.
     LinuxAarch64,
+    /// Linux on x86_64: the same, with x86_64's instructions, system-call
+    /// numbers and `std.rt` table.
+    LinuxX86_64,
 }
 
 /// Every supported platform, by name, in the order messages list them:
 /// its target, or the release that adds its backend.
 const PLATFORMS: [(&str, Result<Target, &str>); 5] = [
     ("linux-aarch64", Ok(Target::LinuxAarch64)),
-    ("linux-x86_64", Err("v0.4.0")),
+    ("linux-x86_64", Ok(Target::LinuxX86_64)),
     ("macos-aarch64", Err("v0.5.0")),
     ("macos-x86_64", Err("v0.5.0")),
     ("windows-x86_64", Err("v0.6.0")),
@@ -39,7 +44,7 @@ const PLATFORMS: [(&str, Result<Target, &str>); 5] = [
 impl Target {
     /// Every target the backend compiles for, in the order `oskac build
     /// --target all` builds them.
-    pub const ALL: [Target; 1] = [Target::LinuxAarch64];
+    pub const ALL: [Target; 2] = [Target::LinuxAarch64, Target::LinuxX86_64];
 
     /// The target for the supported platform named `platform`. An
     /// unknown name is refused with `E0393`, listing the names; a
@@ -72,6 +77,25 @@ impl Target {
     pub fn name(self) -> &'static str {
         match self {
             Target::LinuxAarch64 => "linux-aarch64",
+            Target::LinuxX86_64 => "linux-x86_64",
+        }
+    }
+
+    /// What the backend gives `std.rt` for this target: its system-call
+    /// numbers and its table.
+    pub(crate) fn platform(self) -> Platform {
+        match self {
+            Target::LinuxAarch64 => intrinsics::LINUX_AARCH64,
+            Target::LinuxX86_64 => intrinsics::LINUX_X86_64,
+        }
+    }
+
+    /// How many arguments a call passes in registers: the rest go through
+    /// the module's extra arguments' area.
+    pub(crate) fn register_args(self) -> usize {
+        match self {
+            Target::LinuxAarch64 => aarch64::REGISTER_ARGS,
+            Target::LinuxX86_64 => x86_64::REGISTER_ARGS,
         }
     }
 
@@ -80,6 +104,7 @@ impl Target {
     pub(crate) fn emit(self, module: &Module) -> Result<Box<dyn Code>, String> {
         match self {
             Target::LinuxAarch64 => Ok(Box::new(aarch64::emit(module)?)),
+            Target::LinuxX86_64 => Ok(Box::new(x86_64::emit(module)?)),
         }
     }
 
@@ -90,6 +115,11 @@ impl Target {
             Target::LinuxAarch64 => elf::Machine {
                 e_machine: elf::EM_AARCH64,
                 page: 0x1_0000,
+            },
+            // 4 KiB: x86_64 Linux's only base page.
+            Target::LinuxX86_64 => elf::Machine {
+                e_machine: elf::EM_X86_64,
+                page: 0x1000,
             },
         }
     }

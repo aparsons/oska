@@ -12,8 +12,9 @@
 //! Every page any test builds also goes through [`assert_inert`], which
 //! reads it the way a browser would and fails on anything that could run.
 //!
-//! Every build is differential (`common`): on aarch64 Linux the generator
-//! also runs natively on the same files, and must write the same site.
+//! Every build is differential (`common`): on aarch64 and x86_64 Linux the
+//! generator also runs natively on the same files, and must write the same
+//! site.
 
 mod common;
 

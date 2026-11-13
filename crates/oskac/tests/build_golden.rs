@@ -314,6 +314,26 @@ fn field(bytes: &[u8], at: usize, size: usize) -> u64 {
         .fold(0, |acc, &b| acc << 8 | u64::from(b))
 }
 
+/// Each target platform with a backend: its name, its ELF `e_machine`
+/// and the page its segments are aligned to (the largest page its Linux
+/// kernels use).
+const TARGETS: [(&str, u64, u64); 2] = [
+    ("linux-aarch64", 183, 0x1_0000),
+    ("linux-x86_64", 62, 0x1000),
+];
+
+/// `oskac build hello.osk --target platform -o out` in `dir`: the
+/// executable's bytes.
+fn build_for(dir: &Path, platform: &str, out: &str) -> Vec<u8> {
+    let status = Command::new(env!("CARGO_BIN_EXE_oskac"))
+        .args(["build", "hello.osk", "--target", platform, "-o", out])
+        .current_dir(dir)
+        .status()
+        .expect("oskac should run");
+    assert!(status.success(), "{platform}");
+    std::fs::read(dir.join(out)).expect("the executable should exist")
+}
+
 #[test]
 fn the_executable_is_a_static_position_independent_elf_with_no_executable_data() {
     let dir = assert_golden(
@@ -321,40 +341,46 @@ fn the_executable_is_a_static_position_independent_elf_with_no_executable_data()
         &[("hello.osk", HELLO)],
         &["build", "hello.osk", "-o", "hello"],
     );
-    let elf = std::fs::read(dir.join("hello")).expect("the executable should exist");
-    assert_eq!(&elf[..4], b"\x7fELF");
-    assert_eq!(elf[4], 2, "64-bit");
-    assert_eq!(elf[5], 1, "little-endian");
-    assert_eq!(field(&elf, 16, 2), 3, "ET_DYN: position-independent");
-    assert_eq!(field(&elf, 18, 2), 183, "EM_AARCH64");
-    assert_eq!(
-        field(&elf, 40, 8),
-        0,
-        "no section headers, so no relocation sections"
-    );
-    let phoff = field(&elf, 32, 8) as usize;
-    let count = field(&elf, 56, 2) as usize;
-    let mut segments = Vec::new();
-    for i in 0..count {
-        let header = phoff + 56 * i;
-        segments.push((field(&elf, header, 4), field(&elf, header + 4, 4)));
+    for (platform, machine, _) in TARGETS {
+        let elf = build_for(&dir, platform, platform);
+        assert_eq!(&elf[..4], b"\x7fELF", "{platform}");
+        assert_eq!(elf[4], 2, "{platform}: 64-bit");
+        assert_eq!(elf[5], 1, "{platform}: little-endian");
+        assert_eq!(
+            field(&elf, 16, 2),
+            3,
+            "{platform}: ET_DYN, position-independent"
+        );
+        assert_eq!(field(&elf, 18, 2), machine, "{platform}: e_machine");
+        assert_eq!(
+            field(&elf, 40, 8),
+            0,
+            "{platform}: no section headers, so no relocation sections"
+        );
+        let phoff = field(&elf, 32, 8) as usize;
+        let count = field(&elf, 56, 2) as usize;
+        let mut segments = Vec::new();
+        for i in 0..count {
+            let header = phoff + 56 * i;
+            segments.push((field(&elf, header, 4), field(&elf, header + 4, 4)));
+        }
+        const LOAD: u64 = 1;
+        const GNU_STACK: u64 = 0x6474_e551;
+        // Flags: 4 read, 2 write, 1 execute.
+        assert_eq!(
+            segments,
+            [(LOAD, 4), (LOAD, 5), (LOAD, 6), (GNU_STACK, 6)],
+            "{platform}: rodata R, text R+X, data RW, a non-executable stack, \
+             and nothing else: no PT_INTERP (3) and no PT_DYNAMIC (2)"
+        );
+        let entry = field(&elf, 24, 8);
+        let text = phoff + 56;
+        let (text_start, text_size) = (field(&elf, text + 16, 8), field(&elf, text + 40, 8));
+        assert!(
+            (text_start..text_start + text_size).contains(&entry),
+            "{platform}: the entry point is in the code"
+        );
     }
-    const LOAD: u64 = 1;
-    const GNU_STACK: u64 = 0x6474_e551;
-    // Flags: 4 read, 2 write, 1 execute.
-    assert_eq!(
-        segments,
-        [(LOAD, 4), (LOAD, 5), (LOAD, 6), (GNU_STACK, 6)],
-        "rodata R, text R+X, data RW, a non-executable stack, and nothing \
-         else: no PT_INTERP (3) and no PT_DYNAMIC (2)"
-    );
-    let entry = field(&elf, 24, 8);
-    let text = phoff + 56;
-    let (text_start, text_size) = (field(&elf, text + 16, 8), field(&elf, text + 40, 8));
-    assert!(
-        (text_start..text_start + text_size).contains(&entry),
-        "the entry point is in the code"
-    );
 }
 
 #[test]
@@ -403,31 +429,41 @@ fn no_page_of_the_executable_carries_two_segments_permissions() {
     // The kernel maps whole pages of the FILE: a segment whose file offset
     // shares a page with another segment's bytes maps those bytes with its
     // own permissions (the ELF header and text literals executable, code
-    // writable). So every segment starts on a 64 KiB boundary (the largest
-    // aarch64 page) both in the file and in memory.
-    const PAGE: u64 = 0x1_0000;
+    // writable). So every segment starts on a boundary of the target's
+    // largest page (64 KiB on aarch64, 4 KiB on x86_64) both in the file
+    // and in memory.
     let dir = workspace("pages", &[("hello.osk", HELLO)]);
-    let status = Command::new(env!("CARGO_BIN_EXE_oskac"))
-        .args(["build", "hello.osk", "-o", "hello"])
-        .current_dir(&dir)
-        .status()
-        .expect("oskac should run");
-    assert!(status.success());
-    let elf = std::fs::read(dir.join("hello")).expect("the executable should exist");
-    let segments = loads(&elf);
-    assert_eq!(segments.len(), 3);
-    for &(offset, vaddr, file_size, memory_size, flags) in &segments {
-        assert_eq!(offset % PAGE, 0, "file offset {offset:#x} (flags {flags})");
-        assert_eq!(vaddr % PAGE, 0, "vaddr {vaddr:#x} (flags {flags})");
-        assert!(file_size <= memory_size);
-        assert!(offset + file_size <= elf.len() as u64);
-    }
-    let pages = |start: u64, size: u64| start / PAGE..(start + size).div_ceil(PAGE);
-    for pair in segments.windows(2) {
-        let (a, b) = (pair[0], pair[1]);
-        let (fa, fb) = (pages(a.0, a.2), pages(b.0, b.2));
-        assert!(fa.end <= fb.start, "file pages overlap: {fa:?} {fb:?}");
-        let (ma, mb) = (pages(a.1, a.3), pages(b.1, b.3));
-        assert!(ma.end <= mb.start, "memory pages overlap: {ma:?} {mb:?}");
+    for (platform, _, page) in TARGETS {
+        let elf = build_for(&dir, platform, platform);
+        let segments = loads(&elf);
+        assert_eq!(segments.len(), 3, "{platform}");
+        for &(offset, vaddr, file_size, memory_size, flags) in &segments {
+            assert_eq!(
+                offset % page,
+                0,
+                "{platform}: file offset {offset:#x} (flags {flags})"
+            );
+            assert_eq!(
+                vaddr % page,
+                0,
+                "{platform}: vaddr {vaddr:#x} (flags {flags})"
+            );
+            assert!(file_size <= memory_size, "{platform}");
+            assert!(offset + file_size <= elf.len() as u64, "{platform}");
+        }
+        let pages = |start: u64, size: u64| start / page..(start + size).div_ceil(page);
+        for pair in segments.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            let (fa, fb) = (pages(a.0, a.2), pages(b.0, b.2));
+            assert!(
+                fa.end <= fb.start,
+                "{platform}: file pages overlap: {fa:?} {fb:?}"
+            );
+            let (ma, mb) = (pages(a.1, a.3), pages(b.1, b.3));
+            assert!(
+                ma.end <= mb.start,
+                "{platform}: memory pages overlap: {ma:?} {mb:?}"
+            );
+        }
     }
 }

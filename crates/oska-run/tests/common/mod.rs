@@ -5,14 +5,18 @@
 //! its exit code, its panic, or the diagnostics that refused it.
 //!
 //! Every helper here that runs a program on a [`FakeHost`] is also a
-//! **differential test** of the native backend on aarch64 Linux: the
-//! program is compiled and run natively on the same world, and must do
+//! **differential test** of the native backend on aarch64 and x86_64
+//! Linux: the program is compiled for the host and run natively on the
+//! same world, and must do
 //! exactly what it did on the interpreter (`native.rs`). The cases that
 //! cannot be reproduced on a real OS are in one skip list, `skips.rs`.
 
 #![allow(dead_code)]
 
-#[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 mod native;
 pub mod skips;
 
@@ -60,9 +64,15 @@ pub fn run_program_differential(
 ) -> RunOutcome {
     let before = host.world();
     let outcome = oska_run::run_program(program, host, args);
-    #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ))]
     native::compare_program(program, shown, &before, args, &outcome, &host.world());
-    #[cfg(not(all(target_arch = "aarch64", target_os = "linux")))]
+    #[cfg(not(all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    )))]
     let _ = (shown, before);
     outcome
 }
@@ -78,9 +88,15 @@ pub fn test_program_differential(
 ) -> TestReport {
     let before = host.world();
     let report = oska_run::test_program(program, &mut host, options);
-    #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ))]
     native::compare_program_tests(program, shown, &before, options, &report);
-    #[cfg(not(all(target_arch = "aarch64", target_os = "linux")))]
+    #[cfg(not(all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    )))]
     let _ = (shown, before);
     report
 }
@@ -95,9 +111,15 @@ pub fn compare_run(
     outcome: &RunOutcome,
     after: &FakeWorld,
 ) {
-    #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ))]
     native::compare_run(src, before, args, outcome, after);
-    #[cfg(not(all(target_arch = "aarch64", target_os = "linux")))]
+    #[cfg(not(all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    )))]
     let _ = (src, before, args, outcome, after);
 }
 
@@ -180,9 +202,15 @@ pub fn test_fake(src: &str) -> TestReport {
 pub fn test_with(mut host: FakeHost, src: &str, options: TestOptions) -> TestReport {
     let before = host.world();
     let report = test(src, &mut host, options);
-    #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ))]
     native::compare_tests(src, &before, options, &report);
-    #[cfg(not(all(target_arch = "aarch64", target_os = "linux")))]
+    #[cfg(not(all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    )))]
     let _ = before;
     report
 }

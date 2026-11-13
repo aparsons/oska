@@ -4,3 +4,4 @@ exit: 0
 --- stderr
 --- written
 hello-linux-aarch64
+hello-linux-x86_64

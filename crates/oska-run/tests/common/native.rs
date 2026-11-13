@@ -1,10 +1,13 @@
-//! The native half of every runtime test (spec #125): on aarch64 Linux,
-//! each program a helper in this module runs on the interpreter is also
-//! compiled by the native backend (`oska_native::build`, or
-//! `build_tests` for `test` blocks) and run as a real process, and the
-//! two must agree on stdout, stderr (a panic's report included), the exit
-//! code, and the filesystem afterwards. The interpreter is the oracle: a
-//! difference fails the test, as a bug in the native backend.
+//! The native half of every runtime test (spec #125): on aarch64 and
+//! x86_64 Linux, each program a helper in this module runs on the
+//! interpreter is also compiled by the native backend for the host
+//! ([`TARGET`]; `oska_native::build`, or `build_tests` for `test` blocks)
+//! and run as a real process, and the two must agree on stdout, stderr (a
+//! panic's report included), the exit code, and the filesystem afterwards.
+//! The interpreter is the oracle: a difference fails the test, as a bug
+//! in the native backend. On x86_64, whose backend is new (spec #153), a
+//! program the backend refuses (`E0390`) is reported on stderr instead of
+//! failed ([`refusal_reported`]), until x86_64 Linux is native by default.
 //!
 //! The [`FakeHost`](oska_run::FakeHost) a test set up is reproduced on
 //! the real OS: its stdin, its environment (and nothing else), its
@@ -36,6 +39,13 @@ use oska_syntax::Diagnostic;
 /// The name the executable is run by, as `args[0]`: the interpreter's
 /// program path.
 const PROGRAM: &str = super::PROGRAM_PATH;
+
+/// The target platform the host builds native executables for: its own.
+const TARGET: oska_native::Target = if cfg!(target_arch = "x86_64") {
+    oska_native::Target::LinuxX86_64
+} else {
+    oska_native::Target::LinuxAarch64
+};
 
 /// How long one native process may run before the comparison gives up on
 /// it: far longer than any test program takes.
@@ -71,10 +81,11 @@ pub fn compare_program(
     if !outcome.diagnostics.is_empty() || skipped() {
         return;
     }
-    let bytes = oska_native::build(program, oska_native::Target::LinuxAarch64, &|d| d)
-        .unwrap_or_else(|refusal| {
-            fail(src, &format!("the native backend refused it: {refusal:#?}"))
-        });
+    let bytes = match oska_native::build(program, TARGET, &|d| d) {
+        Ok(bytes) => bytes,
+        Err(refusal) if refusal_reported(&refusal) => return,
+        Err(refusal) => fail(src, &format!("the native backend refused it: {refusal:#?}")),
+    };
     let mut texts: Vec<&str> = args.iter().map(String::as_str).collect();
     texts.push(src);
     let Some(sandbox) = Sandbox::new(before, needs_filesystem(program), &texts) else {
@@ -123,10 +134,11 @@ pub fn compare_program_tests(
     if !report.diagnostics.is_empty() || skipped() {
         return;
     }
-    let bytes = oska_native::build_tests(program, oska_native::Target::LinuxAarch64)
-        .unwrap_or_else(|refusal| {
-            fail(src, &format!("the native backend refused it: {refusal:#?}"))
-        });
+    let bytes = match oska_native::build_tests(program, TARGET) {
+        Ok(bytes) => bytes,
+        Err(refusal) if refusal_reported(&refusal) => return,
+        Err(refusal) => fail(src, &format!("the native backend refused it: {refusal:#?}")),
+    };
     let integration = options.integration && program.tests.iter().any(|t| t.integration);
     let Some(sandbox) = Sandbox::new(before, integration, &[src]) else {
         return;
@@ -180,6 +192,22 @@ fn case() -> String {
         env!("CARGO_CRATE_NAME"),
         thread.name().unwrap_or("?")
     )
+}
+
+/// Whether the backend's `refusal` is reported rather than failed: an
+/// `E0390` on x86_64 Linux, until it is native by default (spec #153's
+/// default-switch ticket). Says so on stderr.
+fn refusal_reported(refusal: &Diagnostic) -> bool {
+    if !cfg!(target_arch = "x86_64") || refusal.code != oska_native::codes::UNSUPPORTED {
+        return false;
+    }
+    eprintln!(
+        "native differential test `{}`: the x86_64 backend cannot compile it yet, so \
+         only the interpreter ran it: {}",
+        case(),
+        refusal.message
+    );
+    true
 }
 
 fn fail(src: &str, what: &str) -> ! {

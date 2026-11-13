@@ -8,7 +8,7 @@
 //!   code (R+X), and the writable data (RW); and a `PT_GNU_STACK` that
 //!   makes the stack non-executable.
 //! - Each segment starts on a new boundary of the target's largest page
-//!   (64 KiB on aarch64) both in the file and in memory. The kernel maps
+//!   (64 KiB on aarch64, 4 KiB on x86_64) both in the file and in memory. The kernel maps
 //!   whole pages of the file, so a segment sharing a file page with its
 //!   neighbour would map the neighbour's bytes with its own permissions
 //!   (the headers and text literals executable, code writable): with
@@ -31,6 +31,7 @@ pub struct Machine {
 }
 
 pub const EM_AARCH64: u16 = 183;
+pub const EM_X86_64: u16 = 62;
 
 const ELF_HEADER: u64 = 64;
 const PROGRAM_HEADER: u64 = 56;

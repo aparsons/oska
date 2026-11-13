@@ -143,6 +143,19 @@ fn linux_aarch64() -> Platform {
     )
 }
 
+// `linux-x86_64`: x86_64's flags (the generic ones) and its own
+// `struct stat`, which puts `st_nlink` before `st_mode`.
+fn linux_x86_64() -> Platform {
+    Platform(
+        o_directory: 65536,
+        o_nofollow: 131072,
+        stat_bytes: 144,
+        stat_mode: 24,
+        stat_nlink: 16,
+        stat_size: 48,
+    )
+}
+
 // ---- Memory ----------------------------------------------------------------
 //
 // The runtime's writable words, by index:

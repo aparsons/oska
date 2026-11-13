@@ -5,7 +5,10 @@
 //! outliving their scope, every way out of a block, and memory. The
 //! `std.html` programs are `tests/html.rs`'s, plus hostile input.
 
-#![cfg(all(target_arch = "aarch64", target_os = "linux"))]
+#![cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 
 mod differential;
 
@@ -488,7 +491,7 @@ fn spawning_on_a_finished_scope_panics_with_p0005_at_the_call() {
             body,
         },
     );
-    let image = oska_native::build(&program, oska_native::Target::LinuxAarch64, &|d| d)
+    let image = oska_native::build(&program, differential::host_target(), &|d| d)
         .expect("the program should build");
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("tasks_p0005");
     let _ = std::fs::remove_dir_all(&dir);
