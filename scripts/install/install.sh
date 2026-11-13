@@ -336,7 +336,9 @@ main() {
     need openssl "or sha256sum or shasum, to check the SHA-256 checksum"
   fi
 
-  tmp=$(mktemp -d 2>/dev/null || mktemp -d -t oska-install) ||
+  # An explicit template, so the directory is under $TMPDIR (or /tmp) on
+  # every mktemp; BSD and GNU differ on where a bare `mktemp -d` goes.
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/oska-install.XXXXXXXX") ||
     fail install_failed "cannot create a temporary directory"
 
   if [ -z "$requested" ]; then

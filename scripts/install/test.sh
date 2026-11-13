@@ -604,7 +604,7 @@ test_never_writes_through_a_symlink_planted_in_the_bin_directory() {
 # leaves the old install as it was, and dies of the same signal.
 test_an_interrupted_install_leaves_nothing_behind() {
   with_good_install
-  local dir=site/releases/v1.3.0 asset sig pid status
+  local dir=site/releases/v1.3.0 asset sig pid status waited
   asset=oskac-$(host_platform)
   printf '#!/bin/sh\n: >"%s/started"\nsleep 2\necho "oskac 1.3.0"\n' "$PWD" >"$dir/$asset"
   awk -v f="$asset" -v h="$(sha256 "$dir/$asset")" '$2 == f {print h "  " f; next} {print}' \
@@ -622,9 +622,18 @@ test_an_interrupted_install_leaves_nothing_behind() {
       perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV or die' sh -s -- --json --version 1.3.0 \
       <pinned/install.sh >out.json &
     pid=$!
-    while [ ! -e started ]; do sleep 0.1; done
+    # Wait until the installer is in the binary check: the fake writes
+    # `started` there, after the temp and staging directories exist. Give
+    # up if the installer ends first or never gets there.
+    waited=0
+    while [ ! -e started ]; do
+      kill -0 "$pid" 2>/dev/null || fail "$sig: the installer ended before it checked the binary: $(cat out.json)"
+      waited=$((waited + 1))
+      [ "$waited" -le 300 ] || fail "$sig: the installer never checked the binary"
+      sleep 0.1
+    done
     [ -n "$(find home/.oska/bin -name '.oskac.*')" ] || fail "$sig: no staging directory to clean up"
-    [ -n "$(ls -A tmp)" ] || fail "$sig: no temp directory to clean up"
+    [ -n "$(ls -A tmp)" ] || fail "$sig: no temp directory in $PWD/tmp to clean up"
     kill -s "$sig" "$pid"
     status=0
     wait "$pid" || status=$?
