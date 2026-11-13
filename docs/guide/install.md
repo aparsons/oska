@@ -44,7 +44,10 @@ What the installers do:
 - **They install to `~/.oska/bin`.** Set `OSKA_HOME` to install into `$OSKA_HOME/bin` instead. They don't change your `PATH`; if `~/.oska/bin` is not on it, they print the line to add.
 - **They verify before they install.** The installer checks the SSH signature on `SHA256SUMS` (`ssh-keygen -Y verify`, so it needs OpenSSH 8.1 or newer) against the release key built into the installer. The signed file's first line, `# oska-release v0.3.0`, names the release, and it must be the one the installer asked for, so an old release cannot be served as a newer one. Then the installer checks the download's SHA-256 checksum against `SHA256SUMS`, and checks that the binary reports the expected version. If any check fails, nothing is installed and the installer exits with a non-zero status.
 - **They download over HTTPS only.** They refuse a redirect to a plain `http://` URL.
-- **They take `--version` and `--json`.** `--version` installs that release instead of the latest. `--json` prints one line of JSON on stdout and nothing else.
+- **They never downgrade by accident.** If the release they would install is older than the installed `oskac`, they stop with `downgrade_refused` and install nothing. To go back to an older release, name it with `--version` and add `--allow-downgrade`.
+- **They record what they installed.** See [the install receipt](#the-install-receipt).
+- **They clean up after themselves.** If an install is interrupted, for example with Ctrl-C or because a CI job is cancelled, the installer removes its temporary and staging files before it exits.
+- **They take `--version`, `--allow-downgrade` and `--json`.** `--version` installs that release instead of the latest. `--allow-downgrade`, which needs `--version`, lets that release be older than the installed one. `--json` prints one line of JSON on stdout and nothing else.
 
 To pass options through the pipe:
 
@@ -61,10 +64,17 @@ curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.3.0 --json
 A successful `--json` run prints:
 
 ```json
-{"ok": true, "action": "installed", "version": "0.3.0", "tag": "v0.3.0", "previous_version": null, "platform": "linux-x86_64", "path": "/home/you/.oska/bin/oskac", "bin_dir": "/home/you/.oska/bin", "on_path": false, "checksum_verified": true, "signature_verified": true}
+{"ok": true, "action": "installed", "version": "0.3.0", "tag": "v0.3.0", "previous_version": null, "platform": "linux-x86_64", "path": "/home/you/.oska/bin/oskac", "bin_dir": "/home/you/.oska/bin", "on_path": false, "checksum_verified": true, "signature_verified": true, "receipt": "/home/you/.oska/receipt.json"}
 ```
 
-- `action` is `installed`, `updated` (with the old version in `previous_version`), or `reinstalled`.
+- `action` is one of:
+  - `installed`: there was no `oskac` installed;
+  - `updated`: the old version, in `previous_version`, was lower;
+  - `reinstalled`: the same version was installed;
+  - `downgraded`: the old version, in `previous_version`, was higher, and the run had `--version` and `--allow-downgrade`.
+
+  Versions are compared by [semver](https://semver.org) precedence, so `0.4.0-pre.1` is lower than `0.4.0` and higher than `0.3.0`.
+- `receipt` is the path of the [install receipt](#the-install-receipt).
 - `platform` is one of `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`, or `windows-x86_64`.
 - On Windows, `path` ends in `oskac.exe`.
 
@@ -72,7 +82,7 @@ A failed run prints `{"ok": false, "error": "<code>", "message": "..."}` and exi
 
 | `error` | Meaning |
 | --- | --- |
-| `usage` | An unknown option, or a `--version` that is not a version. |
+| `usage` | An unknown option, a `--version` that is not a version, `--allow-downgrade` without `--version`, or options that cannot be used together. |
 | `no_signing_key` | The installer has no release key built in. Download it again from oskalang.dev. |
 | `insecure_url` | `OSKA_SITE_URL` is not an `https://` URL, or a download was redirected to one that is not. |
 | `unsupported_platform` | There is no build for this OS or CPU. |
@@ -82,9 +92,41 @@ A failed run prints `{"ok": false, "error": "<code>", "message": "..."}` and exi
 | `bad_signature` | `SHA256SUMS` is not signed by the release key. |
 | `checksum_mismatch` | The binary does not match `SHA256SUMS`. |
 | `version_mismatch` | The signed `SHA256SUMS` is for another release than the one asked for, or the binary reports another version. |
-| `install_failed` | The binary could not be written into place. |
+| `downgrade_refused` | The release to install is older than the installed `oskac`, and the run did not ask for a downgrade with both `--version` and `--allow-downgrade`. Nothing was installed. |
+| `install_failed` | The binary or the receipt could not be written into place. |
 
 The binaries are published on oskalang.dev, together with `SHA256SUMS` and its signature, for Linux x86_64 and aarch64, macOS x86_64 and aarch64, and Windows x86_64. The Linux binaries are built on Ubuntu 22.04 and need glibc 2.35 or newer. They do not run on an older glibc or on musl systems such as Alpine; there the installer stops with `unsupported_libc`, and you can build from source instead.
+
+### The install receipt
+
+Each install writes `receipt.json` into the Oska home (`~/.oska`, or `OSKA_HOME`). It records what the installer put there:
+
+```json
+{
+  "schema": 1,
+  "version": "0.3.0",
+  "tag": "v0.3.0",
+  "platform": "linux-x86_64",
+  "installed_at": "2026-11-12T09:30:00Z",
+  "site": "https://oskalang.dev",
+  "key_fingerprint": "SHA256:PjwTDycs560g1ktWC/gdznamSkzm4xH+OAdfntNaW4o",
+  "sha256": "<SHA-256 of the installed oskac>",
+  "installer": "sh",
+  "index_serial": 0,
+  "files": [
+    {"path": "/home/you/.oska/bin/oskac", "kind": "binary", "sha256": "<SHA-256>"},
+    {"path": "/home/you/.oska/version", "kind": "record", "sha256": "<SHA-256>"},
+    {"path": "/home/you/.oska/receipt.json", "kind": "record"}
+  ]
+}
+```
+
+- `key_fingerprint` is the fingerprint of the release key that vouched for the binary, and `sha256` is the binary's SHA-256, so you can tell whether it has changed since.
+- `installer` is `sh` or `ps1`.
+- `files` lists every file the installer wrote, with its SHA-256 where the content is the installer's own.
+- The installer also still writes the one-line `version` file, for one more release, so that tools that read it keep working.
+
+The receipt is advisory. The installer never trusts it to verify anything: every install checks the signature, the signed tag line, the checksum and the binary's version, whatever the receipt says. It only decides which version counts as installed, for the downgrade guard and `previous_version`. When a receipt and a `version` file disagree, the receipt wins.
 
 ### Verify the installation
 
@@ -96,11 +138,17 @@ If `oskac` is not found, add `~/.oska/bin` to your `PATH`. The [quickstart](quic
 
 ### Update
 
-Re-run the installer. It installs the latest release over the old one, and with `--version` it installs a specific one. There is no self-update command.
+Re-run the installer. It installs the latest release over the old one, and with `--version` it installs a specific one. It refuses to install a release older than the installed one with `downgrade_refused`. So if you installed a pre-release with `--version`, a plain re-run keeps it until a newer release comes out. To go back to an older release:
+
+```sh
+curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.2.0 --allow-downgrade
+```
+
+There is no self-update command.
 
 ### Uninstall
 
-Delete `~/.oska`, which holds `bin/oskac` and a `version` file recording what the installer put there.
+Delete `~/.oska`, which holds `bin/oskac`, the install receipt `receipt.json`, and a `version` file.
 
 ## Upgrading to v0.3.0
 
