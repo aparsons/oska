@@ -5,7 +5,7 @@
 //! A prelude intrinsic is implemented in Oska, by a function of `std.rt`
 //! that takes the same arguments (the receiver first), or, when that would
 //! be a single instruction, inline. A `std.rt` intrinsic is one system
-//! call (`svc #0`) or one word operation.
+//! call (`svc #0`), one word operation, or a constant.
 //!
 //! To add a prelude intrinsic: write its runtime function in
 //! `oska-check/src/std/rt.osk` and add a [`Prelude::Runtime`] row to
@@ -158,8 +158,9 @@ pub fn prelude(name: &str) -> Option<Prelude> {
 /// How a `std.rt` intrinsic is lowered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Runtime {
-    /// The Linux aarch64 system call of this number.
-    Syscall(u16),
+    /// The Linux system call whose number is its first argument, with
+    /// the rest.
+    Syscall,
     /// `load(addr)`.
     Load(Width),
     /// `store(addr, value)`, whose result is `()`.
@@ -175,29 +176,24 @@ pub enum Runtime {
     /// program's executable; in a test executable, what its entry set
     /// (`lower/tests.rs`).
     TestHost,
+    /// The target platform's table of what differs between platforms:
+    /// the static object [`PLATFORM_TABLE`] gives.
+    Platform,
 }
 
-/// Every `std.rt` intrinsic, by name. The system-call numbers are the
-/// generic Linux table's (`asm-generic/unistd.h`), which aarch64 uses.
+/// The `std.rt` function giving the table `rt_mem_platform` reads, of
+/// what differs between target platforms: `linux-aarch64`'s, the only
+/// target platform so far.
+pub const PLATFORM_TABLE: &str = "linux_aarch64";
+
+/// Every `std.rt` intrinsic, by name. A system call's number is an
+/// argument, from `std.rt`'s platform table.
 pub const RUNTIME: &[(&str, Runtime)] = &[
-    ("rt_sys_read", Runtime::Syscall(63)),
-    ("rt_sys_write", Runtime::Syscall(64)),
-    ("rt_sys_openat", Runtime::Syscall(56)),
-    ("rt_sys_close", Runtime::Syscall(57)),
-    ("rt_sys_mkdirat", Runtime::Syscall(34)),
-    ("rt_sys_getdents64", Runtime::Syscall(61)),
-    ("rt_sys_fstat", Runtime::Syscall(80)),
-    ("rt_sys_ftruncate", Runtime::Syscall(46)),
-    ("rt_sys_readlinkat", Runtime::Syscall(78)),
-    ("rt_sys_getcwd", Runtime::Syscall(17)),
-    ("rt_sys_fcntl", Runtime::Syscall(25)),
-    ("rt_sys_mmap", Runtime::Syscall(222)),
-    ("rt_sys_munmap", Runtime::Syscall(215)),
-    ("rt_sys_clock_gettime", Runtime::Syscall(113)),
-    ("rt_sys_ioctl", Runtime::Syscall(29)),
-    ("rt_sys_getrandom", Runtime::Syscall(278)),
-    ("rt_sys_rt_sigaction", Runtime::Syscall(134)),
-    ("rt_sys_exit_group", Runtime::Syscall(94)),
+    ("rt_sys_call1", Runtime::Syscall),
+    ("rt_sys_call2", Runtime::Syscall),
+    ("rt_sys_call3", Runtime::Syscall),
+    ("rt_sys_call4", Runtime::Syscall),
+    ("rt_sys_call6", Runtime::Syscall),
     ("rt_mem_load8", Runtime::Load(Width::W8)),
     ("rt_mem_load16", Runtime::Load(Width::W16)),
     ("rt_mem_load32", Runtime::Load(Width::W32)),
@@ -227,6 +223,7 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_mem_as_root", Runtime::Identity),
     ("rt_mem_globals", Runtime::Globals),
     ("rt_mem_test_host", Runtime::TestHost),
+    ("rt_mem_platform", Runtime::Platform),
 ];
 
 /// The implementation of the `std.rt` intrinsic `name`, if there is one.
@@ -247,6 +244,18 @@ mod tests {
         let mut implemented_sorted = implemented.clone();
         implemented_sorted.sort_unstable();
         assert_eq!(declared_sorted, implemented_sorted);
+    }
+
+    #[test]
+    fn the_platform_table_the_backend_gives_is_a_std_rt_table() {
+        let report = oska_check::check_toolchain_rt();
+        let program = report.program.expect("std.rt should check");
+        let table = program
+            .functions
+            .get(PLATFORM_TABLE)
+            .unwrap_or_else(|| panic!("std.rt has no `{PLATFORM_TABLE}`"));
+        assert!(table.params.is_empty() && !table.receiver);
+        assert_eq!(table.ret.to_string(), "Platform");
     }
 
     #[test]

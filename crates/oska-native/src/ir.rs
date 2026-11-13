@@ -249,11 +249,12 @@ pub enum Inst {
         target: Temp,
         args: Vec<Temp>,
     },
-    /// `dst =` the Linux system call `number` with `args` (at most 6): the
-    /// kernel's raw result, negative `errno` on failure.
+    /// `dst =` the Linux system call whose number is `args[0]`, with the
+    /// rest of `args` (at most 6): the kernel's raw result, negative
+    /// `errno` on failure. The number is the target platform's, from
+    /// `std.rt`'s table.
     Syscall {
         dst: Temp,
-        number: u16,
         args: Vec<Temp>,
     },
     /// `dst = lhs op rhs` when the result fits `int`; otherwise jump to
