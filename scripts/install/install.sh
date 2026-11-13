@@ -5,9 +5,11 @@
 #   curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.1.0 --json
 #
 # Options:
-#   --version X  install release X (0.1.0 or v0.1.0) instead of the latest
-#   --json       print one JSON object on stdout, and nothing else
-#   --help       print this help
+#   --version X        install release X (0.1.0 or v0.1.0) instead of the latest
+#   --allow-downgrade  with --version, install X even if it is older than
+#                      the installed oskac
+#   --json             print one JSON object on stdout, and nothing else
+#   --help             print this help
 #
 # Environment:
 #   OSKA_HOME      install into $OSKA_HOME/bin (default: ~/.oska)
@@ -21,7 +23,11 @@
 # SHA256SUMS lists, and that the binary reports that version. If any check
 # fails, or anything else goes wrong, it installs nothing and exits
 # non-zero. It never prompts.
-# Re-running it updates oskac in place.
+#
+# Re-running it updates oskac in place. It never installs an older release
+# than the installed one unless asked with --version and --allow-downgrade.
+# It records what it installed in $OSKA_HOME/receipt.json, which is
+# advisory: no check above reads it.
 
 set -u
 
@@ -36,6 +42,7 @@ MIN_GLIBC=2.35
 json=0
 tmp=
 stage=
+receipt_tmp=
 
 json_str() {
   tab=$(printf '\t')
@@ -48,6 +55,9 @@ cleanup() {
   fi
   if [ -n "$stage" ]; then
     rm -rf "$stage"
+  fi
+  if [ -n "$receipt_tmp" ]; then
+    rm -f "$receipt_tmp"
   fi
 }
 
@@ -80,9 +90,11 @@ Install oskac to ~/.oska/bin, verifying its checksum and release signature.
 
 usage: curl -fsSL https://oskalang.dev/install.sh | sh -s -- [options]
 
-  --version X  install release X (0.1.0 or v0.1.0) instead of the latest
-  --json       print one JSON object on stdout, and nothing else
-  --help       print this help
+  --version X        install release X (0.1.0 or v0.1.0) instead of the latest
+  --allow-downgrade  with --version, install X even if it is older than
+                     the installed oskac
+  --json             print one JSON object on stdout, and nothing else
+  --help             print this help
 
 Environment: OSKA_HOME (default ~/.oska), OSKA_SITE_URL (https:// only).
 EOF
@@ -170,8 +182,103 @@ check_glibc() {
   fi
 }
 
+# The install receipt: what this run installed, as JSON in the Oska home.
+# It is advisory. Verification never reads it; it only records what counts
+# as installed, what an uninstall may remove and the highest index serial
+# seen. Written to a new file beside it, then renamed into place.
+write_receipt() {
+  receipt_tmp=$(mktemp "$home/.receipt.XXXXXXXX") ||
+    fail install_failed "cannot write a receipt in $home"
+  {
+    printf '{\n'
+    printf '  "schema": 1,\n'
+    printf '  "version": %s,\n' "$(json_str "$version")"
+    printf '  "tag": %s,\n' "$(json_str "$tag")"
+    printf '  "platform": %s,\n' "$(json_str "$platform")"
+    printf '  "installed_at": %s,\n' "$(json_str "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+    printf '  "site": %s,\n' "$(json_str "$site")"
+    printf '  "key_fingerprint": %s,\n' "$(json_str "$fingerprint")"
+    printf '  "sha256": %s,\n' "$(json_str "$actual")"
+    printf '  "installer": "sh",\n'
+    printf '  "index_serial": 0,\n'
+    printf '  "files": [\n'
+    printf '    {"path": %s, "kind": "binary", "sha256": %s},\n' "$(json_str "$target")" "$(json_str "$actual")"
+    printf '    {"path": %s, "kind": "record", "sha256": %s},\n' "$(json_str "$version_file")" "$(json_str "$(sha256 "$version_file")")"
+    printf '    {"path": %s, "kind": "record"}\n' "$(json_str "$receipt")"
+    printf '  ]\n'
+    printf '}\n'
+  } >"$receipt_tmp" || fail install_failed "cannot write $receipt_tmp"
+  mv -f "$receipt_tmp" "$receipt" || fail install_failed "cannot write $receipt"
+  receipt_tmp=
+}
+
+# semver_cmp <a> <b>: prints -1, 0 or 1 as version <a> sorts below, equal
+# to or above <b> by semver precedence, so 0.4.0-pre.1 sorts below 0.4.0
+# and above 0.3.0. Both must be versions as is_tag accepts them, without
+# the v.
+semver_cmp() {
+  LC_ALL=C awk -v a="$1" -v b="$2" '
+    # Numbers of any length, compared as digit strings.
+    function num(x, y) {
+      sub(/^0+/, "", x); sub(/^0+/, "", y)
+      if (length(x) != length(y)) return length(x) < length(y) ? -1 : 1
+      if ((x "") == (y "")) return 0
+      return (x "") < (y "") ? -1 : 1
+    }
+    # Pre-release identifiers: numeric ones by value and below the others,
+    # the others in ASCII order.
+    function ident(x, y,    xn, yn) {
+      xn = x ~ /^[0-9]+$/; yn = y ~ /^[0-9]+$/
+      if (xn && yn) return num(x, y)
+      if (xn) return -1
+      if (yn) return 1
+      if ((x "") == (y "")) return 0
+      return (x "") < (y "") ? -1 : 1
+    }
+    BEGIN {
+      ap = ""; bp = ""
+      if (i = index(a, "-")) { ap = substr(a, i + 1); a = substr(a, 1, i - 1) }
+      if (i = index(b, "-")) { bp = substr(b, i + 1); b = substr(b, 1, i - 1) }
+      split(a, x, "."); split(b, y, ".")
+      for (k = 1; k <= 3; k++) if (c = num(x[k], y[k])) { print c; exit }
+      if (ap == "" || bp == "") { print (ap == "") - (bp == ""); exit }
+      n = split(ap, p, "."); m = split(bp, q, ".")
+      for (k = 1; k <= n && k <= m; k++) if (c = ident(p[k], q[k])) { print c; exit }
+      print (n > m) - (n < m)
+    }'
+}
+
+# json_value <file> <key>: the first value of "<key>" in the JSON file
+# <file>, if it is a string or a number. Enough for latest.json and the
+# receipt, whose fields of interest come before any nested object that
+# could hold the same key; callers validate what it returns.
+json_value() {
+  tr ',{}[]' '[\n*]' <"$1" |
+    sed -n 's/^[[:space:]]*"'"$2"'"[[:space:]]*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' |
+    head -n 1
+}
+
+# The version installed now, or nothing. The receipt wins over the legacy
+# version file; an install from before receipts has only the latter.
+# Either is advisory: what is not a version counts as nothing installed.
+previous_version() {
+  [ -f "$target" ] || return 0
+  if [ -f "$receipt" ]; then
+    v=$(json_value "$receipt" version)
+  elif [ -f "$version_file" ]; then
+    v=$(head -n 1 "$version_file" | tr -d '\r')
+  else
+    v=
+  fi
+  if is_tag "v$v"; then
+    printf '%s\n' "$v"
+  fi
+}
+
 main() {
   requested=
+  allow_downgrade=0
+  mode=
   while [ $# -gt 0 ]; do
     case $1 in
       --json) json=1 ;;
@@ -180,6 +287,11 @@ main() {
         requested=$2
         shift ;;
       --version=*) requested=${1#--version=} ;;
+      --allow-downgrade) allow_downgrade=1 ;;
+      --check | --uninstall)
+        [ -z "$mode" ] || [ "$mode" = "$1" ] ||
+          fail usage "$mode and $1 cannot be used together; pick one"
+        mode=$1 ;;
       -h | --help)
         usage
         exit 0 ;;
@@ -187,6 +299,15 @@ main() {
     esac
     shift
   done
+  # Install is the default mode; --check and --uninstall are the others.
+  # --version and --allow-downgrade belong to install alone.
+  if [ -n "$mode" ]; then
+    [ -z "$requested" ] || fail usage "--version cannot be used with $mode"
+    [ "$allow_downgrade" = 0 ] || fail usage "--allow-downgrade cannot be used with $mode"
+    fail usage "$mode is not available in this installer yet"
+  fi
+  [ "$allow_downgrade" = 0 ] || [ -n "$requested" ] ||
+    fail usage "--allow-downgrade needs --version naming the release to go back to"
 
   case $RELEASE_KEY in
     ssh-ed25519\ *) ;;
@@ -223,12 +344,32 @@ main() {
       fail download_failed "cannot download $site/latest.json"
     # The release fields of latest.json are top-level, so the first "tag" is
     # the release's. Whatever it names is checked against the signature.
-    tag=$(tr ',{}' '[\n*]' <"$tmp/latest.json" |
-      sed -n 's/^[[:space:]]*"tag"[[:space:]]*:[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' |
-      head -n 1)
+    tag=$(json_value "$tmp/latest.json" tag)
     is_tag "$tag" || fail download_failed "$site/latest.json does not name a release"
   fi
   version=${tag#v}
+
+  home=${OSKA_HOME:-$HOME/.oska}
+  case $home in
+    /*) ;;
+    *) home=$PWD/$home ;;
+  esac
+  bin_dir=$home/bin
+  target=$bin_dir/oskac
+  version_file=$home/version
+  receipt=$home/receipt.json
+  previous=$(previous_version)
+
+  # The downgrade guard. An older release is installed only when it is
+  # named with --version and --allow-downgrade, so a stale latest.json, an
+  # old script or a re-run never moves an install back.
+  if [ -n "$previous" ] && [ "$(semver_cmp "$version" "$previous")" -lt 0 ]; then
+    if [ -z "$requested" ]; then
+      fail downgrade_refused "oskac $previous is installed, which is newer than the latest release, $version; nothing was installed (to go back, pass --version $version --allow-downgrade)"
+    elif [ "$allow_downgrade" = 0 ]; then
+      fail downgrade_refused "oskac $previous is installed, which is newer than $version; nothing was installed (to downgrade, add --allow-downgrade)"
+    fi
+  fi
 
   asset=oskac-$platform
   release=$site/releases/$tag
@@ -261,14 +402,12 @@ main() {
   [ "$actual" = "$expected" ] ||
     fail checksum_mismatch "$asset does not match its SHA-256 in SHA256SUMS; nothing was installed"
 
-  home=${OSKA_HOME:-$HOME/.oska}
-  bin_dir=$home/bin
-  target=$bin_dir/oskac
-  receipt=$home/version
-  previous=
-  if [ -f "$target" ] && [ -f "$receipt" ]; then
-    previous=$(head -n 1 "$receipt")
-  fi
+  printf '%s\n' "$RELEASE_KEY" >"$tmp/release.pub"
+  fingerprint=$(ssh-keygen -l -f "$tmp/release.pub" 2>/dev/null | awk '{print $2}')
+  case $fingerprint in
+    SHA256:*) ;;
+    *) fail install_failed "ssh-keygen cannot fingerprint the release key" ;;
+  esac
 
   mkdir -p "$bin_dir" || fail install_failed "cannot create $bin_dir"
   # Stage in a new directory only this user can write to, made next to the
@@ -284,15 +423,18 @@ main() {
   [ "$reported" = "oskac $version" ] ||
     fail version_mismatch "the $tag binary reports '$reported', not 'oskac $version'; nothing was installed"
   mv -f "$staged" "$target" || fail install_failed "cannot write $target"
-  printf '%s\n' "$version" >"$receipt" || fail install_failed "cannot write $receipt"
+  printf '%s\n' "$version" >"$version_file" || fail install_failed "cannot write $version_file"
+  write_receipt
   cleanup
 
   if [ -z "$previous" ]; then
     action=installed
-  elif [ "$previous" = "$version" ]; then
-    action=reinstalled
   else
-    action=updated
+    case $(semver_cmp "$version" "$previous") in
+      1) action=updated ;;
+      0) action=reinstalled ;;
+      *) action=downgraded ;;
+    esac
   fi
   case ":${PATH:-}:" in
     *":$bin_dir:"*) on_path=true ;;
@@ -305,9 +447,10 @@ main() {
     else
       previous_json=null
     fi
-    printf '{"ok": true, "action": %s, "version": %s, "tag": %s, "previous_version": %s, "platform": %s, "path": %s, "bin_dir": %s, "on_path": %s, "checksum_verified": true, "signature_verified": true}\n' \
+    printf '{"ok": true, "action": %s, "version": %s, "tag": %s, "previous_version": %s, "platform": %s, "path": %s, "bin_dir": %s, "on_path": %s, "checksum_verified": true, "signature_verified": true, "receipt": %s}\n' \
       "$(json_str "$action")" "$(json_str "$version")" "$(json_str "$tag")" "$previous_json" \
-      "$(json_str "$platform")" "$(json_str "$target")" "$(json_str "$bin_dir")" "$on_path"
+      "$(json_str "$platform")" "$(json_str "$target")" "$(json_str "$bin_dir")" "$on_path" \
+      "$(json_str "$receipt")"
     return
   fi
 
@@ -315,6 +458,7 @@ main() {
     installed) echo "Installed oskac $version to $target." ;;
     reinstalled) echo "Reinstalled oskac $version to $target." ;;
     updated) echo "Updated oskac $previous to $version in $target." ;;
+    downgraded) echo "Downgraded oskac $previous to $version in $target." ;;
   esac
   echo "The checksum and the release signature were verified."
   if [ "$on_path" = false ]; then
@@ -324,5 +468,14 @@ main() {
     echo "  export PATH=\"$bin_dir:\$PATH\""
   fi
 }
+
+# Remove the temp and staging directories however the run ends. On a
+# signal, clean up, then die of that same signal, so whatever ran the
+# installer sees how it ended.
+trap cleanup EXIT
+for sig in HUP INT TERM; do
+  # shellcheck disable=SC2064 # $sig is expanded now, $$ when it fires
+  trap "cleanup; trap - $sig EXIT; kill -s $sig \$\$" "$sig"
+done
 
 main "$@"

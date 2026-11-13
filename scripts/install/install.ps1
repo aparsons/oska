@@ -6,10 +6,12 @@
 #
 #   & ([scriptblock]::Create((irm https://oskalang.dev/install.ps1))) --version 0.1.0 --json
 #
-# Options (`-Version` and `-Json` work too):
-#   --version X  install release X (0.1.0 or v0.1.0) instead of the latest
-#   --json       print one JSON object on stdout, and nothing else
-#   --help       print this help
+# Options (`-Version`, `-AllowDowngrade` and `-Json` work too):
+#   --version X        install release X (0.1.0 or v0.1.0) instead of the latest
+#   --allow-downgrade  with --version, install X even if it is older than
+#                      the installed oskac
+#   --json             print one JSON object on stdout, and nothing else
+#   --help             print this help
 #
 # Environment:
 #   OSKA_HOME      install into $env:OSKA_HOME\bin (default: ~\.oska)
@@ -23,8 +25,12 @@
 # newer one), that the binary's SHA-256 is the one SHA256SUMS lists, and
 # that the binary reports that version. If any check fails, or anything
 # else goes wrong, it installs nothing and fails: run as a file it exits
-# non-zero, under `iex` it throws. It never prompts. Re-running it updates
-# oskac in place.
+# non-zero, under `iex` it throws. It never prompts.
+#
+# Re-running it updates oskac in place. It never installs an older release
+# than the installed one unless asked with --version and --allow-downgrade.
+# It records what it installed in $env:OSKA_HOME\receipt.json, which is
+# advisory: no check above reads it.
 #
 # Works in Windows PowerShell 5.1 and PowerShell 7.
 
@@ -41,7 +47,7 @@
 
     # Kept in a table, not in $script: variables, which `iex` would leave in
     # the user's session.
-    $state = @{ json = $false; tmp = $null }
+    $state = @{ json = $false; tmp = $null; stage = $null; receiptTmp = $null }
 
     function Stop-Install([string]$Code, [string]$Message) {
         $e = New-Object System.Exception $Message
@@ -130,8 +136,80 @@
         [IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding $false))
     }
 
+    # Numbers of any length, compared as digit strings: -1, 0 or 1.
+    function Compare-Number([string]$X, [string]$Y) {
+        $X = $X.TrimStart('0')
+        $Y = $Y.TrimStart('0')
+        if ($X.Length -ne $Y.Length) {
+            if ($X.Length -lt $Y.Length) { return -1 }
+            return 1
+        }
+        return [Math]::Sign([string]::CompareOrdinal($X, $Y))
+    }
+
+    # -1, 0 or 1 as version $A sorts below, equal to or above $B by semver
+    # precedence, so 0.4.0-pre.1 sorts below 0.4.0 and above 0.3.0. Both
+    # must be versions as Test-Tag accepts them, without the v. The same
+    # order as install.sh's semver_cmp.
+    function Compare-Version([string]$A, [string]$B) {
+        $ap = ''
+        $bp = ''
+        $i = $A.IndexOf('-')
+        if ($i -ge 0) { $ap = $A.Substring($i + 1); $A = $A.Substring(0, $i) }
+        $i = $B.IndexOf('-')
+        if ($i -ge 0) { $bp = $B.Substring($i + 1); $B = $B.Substring(0, $i) }
+        $x = $A.Split('.')
+        $y = $B.Split('.')
+        for ($k = 0; $k -lt 3; $k++) {
+            $c = Compare-Number $x[$k] $y[$k]
+            if ($c -ne 0) { return $c }
+        }
+        # A release sorts above its pre-releases.
+        if (-not $ap -or -not $bp) { return ([int](-not $ap)) - ([int](-not $bp)) }
+        $p = $ap.Split('.')
+        $q = $bp.Split('.')
+        for ($k = 0; $k -lt [Math]::Min($p.Count, $q.Count); $k++) {
+            # Numeric identifiers by value and below the others, the others
+            # in ASCII order.
+            $pn = $p[$k] -cmatch '^[0-9]+$'
+            $qn = $q[$k] -cmatch '^[0-9]+$'
+            if ($pn -and $qn) { $c = Compare-Number $p[$k] $q[$k] }
+            elseif ($pn) { $c = -1 }
+            elseif ($qn) { $c = 1 }
+            else { $c = [Math]::Sign([string]::CompareOrdinal($p[$k], $q[$k])) }
+            if ($c -ne 0) { return $c }
+        }
+        return [Math]::Sign($p.Count - $q.Count)
+    }
+
+    # The version installed now, or $null. The receipt wins over the legacy
+    # version file; an install from before receipts has only the latter.
+    # Either is advisory: what is not a version counts as nothing installed.
+    function Get-PreviousVersion([string]$Target, [string]$Receipt, [string]$VersionFile) {
+        if (-not (Test-Path -LiteralPath $Target -PathType Leaf)) { return $null }
+        $v = ''
+        try {
+            if (Test-Path -LiteralPath $Receipt -PathType Leaf) {
+                $v = [string]([IO.File]::ReadAllText($Receipt) | ConvertFrom-Json).version
+            } elseif (Test-Path -LiteralPath $VersionFile -PathType Leaf) {
+                $v = [string]([IO.File]::ReadAllLines($VersionFile) | Select-Object -First 1)
+            }
+        } catch {
+            $v = ''
+        }
+        if ($v -and (Test-Tag "v$v")) { return $v }
+        return $null
+    }
+
+    # A name no one can predict, for a staging directory or a temp file.
+    function Get-RandomName([string]$Prefix) {
+        $Prefix + [IO.Path]::GetRandomFileName().Replace('.', '')
+    }
+
     function Install-Oskac([object[]]$Arguments) {
         $requested = ''
+        $allowDowngrade = $false
+        $mode = ''
         $i = 0
         while ($i -lt $Arguments.Count) {
             $a = [string]$Arguments[$i]
@@ -146,12 +224,22 @@
                 $requested = [string]$Arguments[$i]
             } elseif ($lower.StartsWith('--version=')) {
                 $requested = $a.Substring(10)
+            } elseif ($lower -eq '--allow-downgrade' -or $lower -eq '-allowdowngrade') {
+                $allowDowngrade = $true
+            } elseif ($lower -eq '--check' -or $lower -eq '-check' -or $lower -eq '--uninstall' -or $lower -eq '-uninstall') {
+                $m = '--' + $lower.TrimStart('-')
+                if ($mode -and $mode -ne $m) {
+                    Stop-Install 'usage' "$mode and $m cannot be used together; pick one"
+                }
+                $mode = $m
             } elseif ($lower -eq '--help' -or $lower -eq '-help' -or $lower -eq '-h') {
                 Write-Host 'Install oskac to ~\.oska\bin, verifying its checksum and release signature.'
                 Write-Host ''
-                Write-Host '  --version X  install release X (0.1.0 or v0.1.0) instead of the latest'
-                Write-Host '  --json       print one JSON object on stdout, and nothing else'
-                Write-Host '  --help       print this help'
+                Write-Host '  --version X        install release X (0.1.0 or v0.1.0) instead of the latest'
+                Write-Host '  --allow-downgrade  with --version, install X even if it is older than'
+                Write-Host '                     the installed oskac'
+                Write-Host '  --json             print one JSON object on stdout, and nothing else'
+                Write-Host '  --help             print this help'
                 Write-Host ''
                 Write-Host 'Environment: OSKA_HOME (default ~\.oska), OSKA_SITE_URL (https:// only).'
                 return
@@ -159,6 +247,16 @@
                 Stop-Install 'usage' "unknown option $a (try --help)"
             }
             $i++
+        }
+        # Install is the default mode; --check and --uninstall are the
+        # others. --version and --allow-downgrade belong to install alone.
+        if ($mode) {
+            if ($requested) { Stop-Install 'usage' "--version cannot be used with $mode" }
+            if ($allowDowngrade) { Stop-Install 'usage' "--allow-downgrade cannot be used with $mode" }
+            Stop-Install 'usage' "$mode is not available in this installer yet"
+        }
+        if ($allowDowngrade -and -not $requested) {
+            Stop-Install 'usage' '--allow-downgrade needs --version naming the release to go back to'
         }
 
         if (-not $ReleaseKey.StartsWith('ssh-ed25519 ')) {
@@ -221,6 +319,35 @@
         }
         $version = $tag.Substring(1)
 
+        $oskaHome = $env:OSKA_HOME
+        if (-not $oskaHome) { $oskaHome = Join-Path $HOME '.oska' }
+        # An absolute path, so .NET and PowerShell agree on where it is.
+        $oskaHome = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($oskaHome)
+        $binDir = Join-Path $oskaHome 'bin'
+        $target = Join-Path $binDir 'oskac.exe'
+        $versionFile = Join-Path $oskaHome 'version'
+        $receipt = Join-Path $oskaHome 'receipt.json'
+        $previous = Get-PreviousVersion $target $receipt $versionFile
+
+        # The downgrade guard. An older release is installed only when it is
+        # named with --version and --allow-downgrade, so a stale
+        # latest.json, an old script or a re-run never moves an install back.
+        if ($previous -and (Compare-Version $version $previous) -lt 0) {
+            if (-not $requested) {
+                Stop-Install 'downgrade_refused' "oskac $previous is installed, which is newer than the latest release, $version; nothing was installed (to go back, pass --version $version --allow-downgrade)"
+            } elseif (-not $allowDowngrade) {
+                Stop-Install 'downgrade_refused' "oskac $previous is installed, which is newer than $version; nothing was installed (to downgrade, add --allow-downgrade)"
+            }
+        }
+
+        # A running oskac.exe cannot be overwritten, only renamed aside to
+        # oskac.exe.old, which a run cannot delete while it is running.
+        # Remove one left by an earlier run.
+        $old = "$target.old"
+        if (Test-Path -LiteralPath $old -PathType Leaf) {
+            Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
+        }
+
         $asset = "oskac-$platform.exe"
         $release = "$site/releases/$tag"
         Write-Say "Downloading oskac $version for $platform from $release/"
@@ -261,24 +388,32 @@
             Stop-Install 'checksum_mismatch' "$asset does not match its SHA-256 in SHA256SUMS; nothing was installed"
         }
 
-        $oskaHome = $env:OSKA_HOME
-        if (-not $oskaHome) { $oskaHome = Join-Path $HOME '.oska' }
-        # An absolute path, so .NET and PowerShell agree on where it is.
-        $oskaHome = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($oskaHome)
-        $binDir = Join-Path $oskaHome 'bin'
-        $target = Join-Path $binDir 'oskac.exe'
-        $receipt = Join-Path $oskaHome 'version'
-        $previous = $null
-        if ((Test-Path -LiteralPath $target -PathType Leaf) -and (Test-Path -LiteralPath $receipt -PathType Leaf)) {
-            $previous = ([IO.File]::ReadAllLines($receipt) | Select-Object -First 1)
+        $pub = Join-Path $state.tmp 'release.pub'
+        Write-Utf8 $pub "$ReleaseKey`n"
+        $fingerprint = ''
+        try {
+            $fingerprint = [string](@(& $keygen.Path -l -f $pub 2>$null) | Select-Object -First 1)
+            $fingerprint = ($fingerprint -split ' ')[1]
+        } catch {
+            $fingerprint = ''
+        }
+        if (-not ($fingerprint -and $fingerprint.StartsWith('SHA256:'))) {
+            Stop-Install 'install_failed' 'ssh-keygen cannot fingerprint the release key'
         }
 
-        $staged = Join-Path $binDir '.oskac.new.exe'
+        # Stage in a new directory under a name no one can predict, made next
+        # to the target so the final move stays on one volume. New-Item
+        # refuses a name that exists, so nothing planted in $binDir is ever
+        # written through.
         try {
             [void](New-Item -ItemType Directory -Force -Path $binDir)
-            Copy-Item -LiteralPath $downloaded -Destination $staged -Force
+            $stage = Join-Path $binDir (Get-RandomName '.oskac.')
+            [void](New-Item -ItemType Directory -Path $stage)
+            $state.stage = $stage
+            $staged = Join-Path $stage 'oskac.exe'
+            Copy-Item -LiteralPath $downloaded -Destination $staged
         } catch {
-            Stop-Install 'install_failed' "cannot write ${staged}: $($_.Exception.Message)"
+            Stop-Install 'install_failed' "cannot create a staging directory in ${binDir}: $($_.Exception.Message)"
         }
 
         $reported = ''
@@ -288,25 +423,66 @@
             $reported = ''
         }
         if ($reported -cne "oskac $version") {
-            Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
             Stop-Install 'version_mismatch' "the $tag binary reports '$reported', not 'oskac $version'; nothing was installed"
         }
 
         try {
             # A running oskac.exe cannot be overwritten, but it can be renamed.
-            $old = "$target.old"
             Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
             if (Test-Path -LiteralPath $target) { Move-Item -LiteralPath $target -Destination $old -Force }
             Move-Item -LiteralPath $staged -Destination $target -Force
             Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
-            Write-Utf8 $receipt "$version`n"
+            Write-Utf8 $versionFile "$version`n"
         } catch {
             Stop-Install 'install_failed' "cannot install to ${target}: $($_.Exception.Message)"
         }
 
+        # The install receipt: what this run installed. It is advisory.
+        # Verification never reads it; it only records what counts as
+        # installed, what an uninstall may remove and the highest index
+        # serial seen. Written to a new file beside it, then renamed into
+        # place.
+        $files = @(
+            [ordered]@{ path = $target; kind = 'binary'; sha256 = $actual },
+            [ordered]@{ path = $versionFile; kind = 'record'; sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $versionFile).Hash.ToLowerInvariant() },
+            [ordered]@{ path = $receipt; kind = 'record' }
+        )
+        $record = [ordered]@{
+            schema          = 1
+            version         = $version
+            tag             = $tag
+            platform        = $platform
+            installed_at    = [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture)
+            site            = $site
+            key_fingerprint = $fingerprint
+            sha256          = $actual
+            installer       = 'ps1'
+            index_serial    = 0
+            files           = $files
+        }
+        try {
+            $state.receiptTmp = Join-Path $oskaHome (Get-RandomName '.receipt.')
+            Write-Utf8 $state.receiptTmp (($record | ConvertTo-Json -Depth 5) + "`n")
+            if (Test-Path -LiteralPath $receipt) {
+                # [NullString]: PowerShell would pass $null as '', which
+                # Replace takes as a backup file name.
+                [IO.File]::Replace($state.receiptTmp, $receipt, [NullString]::Value)
+            } else {
+                [IO.File]::Move($state.receiptTmp, $receipt)
+            }
+            $state.receiptTmp = $null
+        } catch {
+            Stop-Install 'install_failed' "cannot write ${receipt}: $($_.Exception.Message)"
+        }
+
         if (-not $previous) { $action = 'installed' }
-        elseif ($previous -eq $version) { $action = 'reinstalled' }
-        else { $action = 'updated' }
+        else {
+            switch (Compare-Version $version $previous) {
+                1 { $action = 'updated' }
+                0 { $action = 'reinstalled' }
+                default { $action = 'downgraded' }
+            }
+        }
         $onPath = $false
         foreach ($dir in ($env:Path -split ';')) {
             if ($dir -and $dir.TrimEnd('\') -ieq $binDir.TrimEnd('\')) { $onPath = $true }
@@ -325,6 +501,7 @@
                 on_path            = $onPath
                 checksum_verified  = $true
                 signature_verified = $true
+                receipt            = $receipt
             }
             Write-Output (New-Object PSObject -Property $result | ConvertTo-Json -Compress)
             return
@@ -334,6 +511,7 @@
             'installed' { Write-Host "Installed oskac $version to $target." }
             'reinstalled' { Write-Host "Reinstalled oskac $version to $target." }
             'updated' { Write-Host "Updated oskac $previous to $version in $target." }
+            'downgraded' { Write-Host "Downgraded oskac $previous to $version in $target." }
         }
         Write-Host 'The checksum and the release signature were verified.'
         if (-not $onPath) {
@@ -367,5 +545,7 @@
         throw "install.ps1: $message"
     } finally {
         if ($state.tmp) { Remove-Item -LiteralPath $state.tmp -Recurse -Force -ErrorAction SilentlyContinue }
+        if ($state.stage) { Remove-Item -LiteralPath $state.stage -Recurse -Force -ErrorAction SilentlyContinue }
+        if ($state.receiptTmp) { Remove-Item -LiteralPath $state.receiptTmp -Force -ErrorAction SilentlyContinue }
     }
 } @args
