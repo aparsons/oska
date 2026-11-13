@@ -153,12 +153,21 @@ On aarch64 Linux, `run` and `test` compile the program as `build` does and run t
 Every message about a program has one shape, whichever command produced it:
 
 ```json
-{"code":"E0210","message":"...","span":{"start":7,"end":13},"fix":{"message":"declare it `cap struct`","edits":[{"span":{"start":0,"end":0},"replacement":"cap "}]}}
+{"code":"E0210","message":"...","path":"app.osk","span":{"start":7,"end":13},"line":1,"column":8,"end_line":1,"end_column":14,"severity":"error","url":"https://oskalang.dev/codes/E0210","fix":{"message":"declare it `cap struct`","edits":[{"span":{"start":0,"end":0},"replacement":"cap "}],"applicability":"machine"},"related":[],"suggestions":[]}
 ```
 
 - `code` is stable. Tools should match on it, never on `message`. Codes starting `E00` are lexical, `E01` syntax, `E02` and `E03` the checker, and `E037` and `E038` runtime refusals. `P` codes are panics.
+- `path` is the file the diagnostic is in: package-relative in a package, as given on the command line for a single file.
 - `span` is a range of UTF-8 byte offsets, `start` included and `end` excluded.
-- `fix` is present when the repair is unambiguous. Each edit replaces the bytes of `span` with `replacement`. Apply the edits of one fix from the end of the file to the start, so earlier offsets stay valid. A fix can be absent, and when it is, the repair needs judgment.
+- `line` and `column` are where `span` starts, and `end_line` and `end_column` where it ends, all 1-based and counting characters, as the human output's `path:line:column` does. They describe `span` and never replace it. A diagnostic about the run rather than a place in a file (`E0391`, `E0392`) has no `path`, and none of these four.
+- `severity` is `error`, or `note` for a message that refuses nothing, such as the native backend handing a program to the interpreter.
+- `url` is the code's page on the documentation site.
+- `fix` is present when the checker offers a repair. Each edit replaces the bytes of `span` with `replacement`, in the diagnostic's file, or in the file the fix's own `path` names when it has one. Apply the edits of one fix from the end of the file to the start, so earlier offsets stay valid. A fix can be absent, and when it is, the repair needs judgment.
+- `applicability` says how safe a fix is to apply without reading it: `machine` when it is certainly right, `maybe` when it is probably what was meant but a guess, such as the closest name to an unknown one, and `placeholders` when the program checks afterwards but code is left to write, such as `match` arms whose body is `todo()`. Each code's fix has one applicability, which `oskac explain` and the code's page give. The human output marks the uncertain ones as `fix (maybe):` and `fix (placeholders):`.
+- `related` lists other places the diagnostic is about, each with a `message`, `path`, `span`, `line` and `column`, such as a name's first definition, the trait's declaration of a method, or the module an import looked in. It is filled only where the checker knows the place, and is often empty.
+- `suggestions` is where repairs that are plausible but uncertain go, in the shape of a `fix` with the applicability `maybe`. No tool applies them automatically. It is empty for every code today.
+
+The format only grows. No field is renamed, retyped or given a new meaning, a diagnostic that has no `fix` never gains one, and a new uncertain repair goes into `suggestions`, never into `fix`. A consumer must accept values of `severity` and `applicability` that are not listed here, and fields it does not know.
 
 ### `check --format=json`
 
@@ -221,6 +230,7 @@ With `--format=json` it prints one JSON object on one line, the same object that
 | `message` | What the code means, as Markdown. |
 | `machine_fix` | `true` when a diagnostic with this code can carry a machine-applicable fix. |
 | `machine_fix_description` | What that fix does, or `null`. |
+| `fix_applicability` | How safe that fix is to apply, as a diagnostic's `fix` gives it: `"machine"`, `"maybe"` or `"placeholders"`, or `null`. |
 | `example` | A program that fails with exactly this code, or `null`. |
 | `fix` | The same program fixed, or `null`. |
 

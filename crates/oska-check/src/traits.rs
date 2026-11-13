@@ -3,8 +3,8 @@
 //! trait's arguments replaced (`E0262`), and no method is one the trait
 //! does not declare (`E0263`).
 
-use oska_syntax::ast::{ItemKind, Module};
-use oska_syntax::{Diagnostic, Edit, Span};
+use oska_syntax::ast::{ItemKind, Module, TraitDecl};
+use oska_syntax::{Applicability, Diagnostic, Edit, Span};
 
 use crate::codes;
 use crate::collect::Decls;
@@ -37,6 +37,7 @@ pub fn module(
         if target.is_error() {
             continue;
         }
+        let declaration = declared_trait(module, &trait_name);
         let mut provided = Vec::new();
         for method in &imp.methods {
             let ItemKind::Fn(f) = &method.kind else {
@@ -45,20 +46,27 @@ pub fn module(
             provided.push(f.name.name.as_str());
             let Some((declared, _)) = info.methods.iter().find(|(s, _)| s.name == f.name.name)
             else {
-                diagnostics.push(Diagnostic::new(
+                let mut diagnostic = Diagnostic::new(
                     codes::NOT_IN_TRAIT,
                     format!(
                         "`{}` is not a method of the trait `{trait_name}`",
                         f.name.name
                     ),
                     f.name.span,
-                ));
+                );
+                if let Some(trait_decl) = declaration {
+                    diagnostic = diagnostic.with_related(
+                        format!("the trait `{trait_name}` is declared here"),
+                        trait_decl.name.span,
+                    );
+                }
+                diagnostics.push(diagnostic);
                 continue;
             };
             let actual = lower.signature(f, &[], Some(target.clone()));
             let expected = info.method_for(declared, &target, &args, None);
             if !same_signature(&actual, &expected) {
-                diagnostics.push(Diagnostic::new(
+                let mut diagnostic = Diagnostic::new(
                     codes::IMPL_SIGNATURE,
                     format!(
                         "`{}` must have the signature `{}` declared by `{trait_name}`",
@@ -66,7 +74,11 @@ pub fn module(
                         render(&expected)
                     ),
                     f.name.span,
-                ));
+                );
+                if let Some(at) = declaration.and_then(|t| declared_method(t, &f.name.name)) {
+                    diagnostic = diagnostic.with_related("declared here", at);
+                }
+                diagnostics.push(diagnostic);
             }
         }
         let missing: Vec<&FnSig> = info
@@ -94,15 +106,34 @@ pub fn module(
                     .map(|sig| info.method_for(sig, &target, &args, None))
                     .collect();
                 if let Some(edit) = insert_stubs(src, item.span, &stubs) {
-                    diagnostic = diagnostic.with_fix(
-                        "add the missing method(s), with `todo()` bodies",
-                        vec![edit],
-                    );
+                    diagnostic = diagnostic
+                        .with_fix(
+                            "add the missing method(s), with `todo()` bodies",
+                            vec![edit],
+                        )
+                        .applicable(Applicability::Placeholders);
                 }
             }
             diagnostics.push(diagnostic);
         }
     }
+}
+
+/// The declaration of the trait named `name` (its key, in a package),
+/// when the module declares it: a prelude trait has none.
+pub fn declared_trait<'m>(module: &'m Module, name: &str) -> Option<&'m TraitDecl> {
+    module.items.iter().find_map(|item| match &item.kind {
+        ItemKind::Trait(t) if t.name.name == name => Some(t),
+        _ => None,
+    })
+}
+
+/// The span of the name of `trait_decl`'s method `method`.
+pub fn declared_method(trait_decl: &TraitDecl, method: &str) -> Option<Span> {
+    trait_decl.methods.iter().find_map(|item| match &item.kind {
+        ItemKind::Fn(f) if f.name.name == method => Some(f.name.span),
+        _ => None,
+    })
 }
 
 /// An edit that adds a `todo()` stub for each of `sigs` before the

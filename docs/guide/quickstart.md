@@ -127,7 +127,7 @@ struct Logger { out: Stdout }
 ```console cmd=check json
 {
   "diagnostics": [
-    {"code":"E0210","message":"`Logger` holds the capability-bearing type `Stdout`, so it must be declared `cap struct`","path":"hello.osk","span":{"start":7,"end":13},"fix":{"message":"declare it `cap struct`","edits":[{"span":{"start":0,"end":0},"replacement":"cap "}]}}
+    {"code":"E0210","message":"`Logger` holds the capability-bearing type `Stdout`, so it must be declared `cap struct`","path":"hello.osk","span":{"start":7,"end":13},"line":1,"column":8,"end_line":1,"end_column":14,"severity":"error","url":"https://oskalang.dev/codes/E0210","fix":{"message":"declare it `cap struct`","edits":[{"span":{"start":0,"end":0},"replacement":"cap "}],"applicability":"machine"},"related":[],"suggestions":[]}
   ],
   "functions": [],
   "audit": [],

@@ -4,7 +4,7 @@
 //! checked.
 
 use oska_syntax::ast::{Arg, Expr, ExprKind, Ident};
-use oska_syntax::{Diagnostic, Edit, Span};
+use oska_syntax::{Applicability, Diagnostic, Edit, Span};
 
 use super::{Body, Callable, Labels, QualifiedPath};
 use crate::codes;
@@ -729,7 +729,10 @@ impl Body<'_, '_, '_> {
                             span: label.span,
                             replacement: param.to_string(),
                         }],
-                    ),
+                    )
+                    // The label may say what was meant better than the
+                    // argument's place does: a guess.
+                    .applicable(Applicability::Maybe),
                 );
             }
             (Some(label), None, _) => {
@@ -743,7 +746,9 @@ impl Body<'_, '_, '_> {
                         format!("positional arguments take no label, found `{}`", label.name),
                         label.span,
                     )
-                    .with_fix("remove the label", vec![Edit::delete(span)]),
+                    .with_fix("remove the label", vec![Edit::delete(span)])
+                    // Applicability is the code's: `E0225`'s other fix is a guess.
+                    .applicable(Applicability::Maybe),
                 );
             }
             (None, Some(param), Labels::Required) => {

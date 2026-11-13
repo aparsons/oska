@@ -588,6 +588,24 @@ fn the_site_has_a_page_per_code_and_codes_json_matches_explain() {
             .get(&format!("codes/{}.html", row.code))
             .unwrap_or_else(|| panic!("the site should have a page for {}", row.code));
         assert!(page.contains(&format!("<h1 id=\"{}\">", row.code.to_lowercase())));
+        // The page shows the fix's applicability that `explain` gives.
+        let applicability = entry
+            .split_once("\"fix_applicability\":\"")
+            .and_then(|(_, rest)| rest.split_once('"'))
+            .map(|(name, _)| name);
+        let shown = "<strong>Fix applicability:</strong>";
+        match applicability {
+            Some(name) => assert!(
+                page.contains(&format!("{shown} <code>{name}</code>.")),
+                "{}: the page should show the applicability {name}",
+                row.code
+            ),
+            None => assert!(
+                !page.contains(shown),
+                "{}: no fix, no applicability",
+                row.code
+            ),
+        }
     }
     let index = site.get("codes/index.html").expect("an index of the codes");
     for row in &catalog.rows {

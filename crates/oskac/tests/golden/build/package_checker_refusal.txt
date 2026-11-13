@@ -3,5 +3,5 @@ exit: 1
 --- stdout
 --- stderr
 greeter/src/main.osk:2:8: error[E0228]: `Stdout` has no method `printline`; did you mean `println`? (bytes 52..61)
-    fix: replace with `println`
+    fix (maybe): replace with `println`
 --- written

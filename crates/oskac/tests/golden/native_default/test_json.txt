@@ -1,6 +1,6 @@
 $ oskac test tested.osk --format=json
 exit: 1
 --- stdout
-{"tests":[{"name":"doubles","status":"passed","failure":null},{"name":"wrongly","status":"failed","failure":{"code":"P0011","message":"assertion failed: `actual == expected`: actual 4, expected 5","path":"tested.osk","span":{"start":111,"end":136}}}],"passed":1,"failed":1,"skipped":0,"diagnostics":[]}
+{"tests":[{"name":"doubles","status":"passed","failure":null},{"name":"wrongly","status":"failed","failure":{"code":"P0011","message":"assertion failed: `actual == expected`: actual 4, expected 5","path":"tested.osk","span":{"start":111,"end":136},"line":10,"column":5,"end_line":10,"end_column":30,"severity":"error","url":"https://oskalang.dev/codes/P0011","related":[],"suggestions":[]}}],"passed":1,"failed":1,"skipped":0,"diagnostics":[]}
 --- stderr
 --- written

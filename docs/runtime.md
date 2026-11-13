@@ -111,7 +111,7 @@ fn main(fs: FsRead) -> Result<(), IoError> {
 A **panic** stops the program where a bug happened. It has a stable `P`-code, a message, and the span of the expression that panicked. Without `--format=json`, it is printed to stderr like a diagnostic, `file.osk:3:9: error[P0004]: division by zero: ... (bytes 61..67)`, starting with its file, line and column. With `--format=json`, it is printed to stderr as one diagnostic object, in the same shape as the checker's (see [`ast.md`](ast.md)), with a `path`: the file the panic is in. In a package that is the module's own file, and `span` is an offset into it (an item of the package is named as the panicking module's code names it, as `util.text.shout` or `shout`):
 
 ```json
-{"code":"P0004","message":"division by zero: `10 / 0`","path":"file.osk","span":{"start":61,"end":70}}
+{"code":"P0004","message":"division by zero: `10 / 0`","path":"file.osk","span":{"start":61,"end":70},"line":3,"column":9,"end_line":3,"end_column":18,"severity":"error","url":"https://oskalang.dev/codes/P0004","related":[],"suggestions":[]}
 ```
 
 Output written before the panic stays written.
@@ -464,7 +464,7 @@ Each failure is named by its test. In a package, a test is named after its modul
 With `--format=json`, one JSON object on stdout. Each test has its name, in a package its `module` (such as `"module":"util.text"`, right after `name`), its status (`passed`, `failed`, or `skipped`), and its failure, a diagnostic object or `null`, whose `path` is relative to the package. A refused file has no tests and its diagnostics in `diagnostics`:
 
 ```json
-{"tests":[{"name":"adds","status":"passed","failure":null},{"name":"divides","status":"failed","failure":{"code":"P0011","message":"...","path":"math.osk","span":{"start":120,"end":141}}}],"passed":1,"failed":1,"skipped":0,"diagnostics":[]}
+{"tests":[{"name":"adds","status":"passed","failure":null},{"name":"divides","status":"failed","failure":{"code":"P0011","message":"...","path":"math.osk","span":{"start":120,"end":141},"line":12,"column":5,"end_line":12,"end_column":26,"severity":"error","url":"https://oskalang.dev/codes/P0011","related":[],"suggestions":[]}}],"passed":1,"failed":1,"skipped":0,"diagnostics":[]}
 ```
 
 | Exit code | Meaning |

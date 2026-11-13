@@ -35,7 +35,9 @@ fn a_broken_postcondition_under_release_is_a_json_panic_exiting_101() {
         format!(
             "{{\"code\":\"P0007\",\"message\":\"postcondition violated: `absolute` ensures \
              `r >= 0`, broken by the return at line 4, column 5\",\
-             \"path\":\"{}\",\"span\":{{\"start\":{start},\"end\":{end}}}}}\n",
+             \"path\":\"{}\",\"span\":{{\"start\":{start},\"end\":{end}}},\
+             \"line\":2,\"column\":5,\"end_line\":2,\"end_column\":23,\"severity\":\"error\",\
+             \"url\":\"https://oskalang.dev/codes/P0007\",\"related\":[],\"suggestions\":[]}}\n",
             path.to_string_lossy().replace('\\', "\\\\")
         )
     );
