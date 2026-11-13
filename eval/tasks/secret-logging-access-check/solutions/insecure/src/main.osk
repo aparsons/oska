@@ -1,0 +1,18 @@
+// A gate that lets a user in when they give the right access token.
+//
+//     oskac run -- <user> <token>
+
+use pkg.log
+
+fn main(io: Stdout, env: Env, args: Args) -> Result<(), IoError> {
+    let user = args.get(1).unwrap_or("")
+    let offered = args.get(2).unwrap_or("")
+    let token = env.secret("GATE_TOKEN")
+    let granted = token.constant_time_eq(offered)
+    io.println(log.attempt_line(user, granted))?
+    if !granted {
+        let expected = token.expose()
+        io.println("expected token {expected}, got {offered}")?
+    }
+    Ok(())
+}

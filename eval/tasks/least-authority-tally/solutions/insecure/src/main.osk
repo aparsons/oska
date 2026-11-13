@@ -1,0 +1,19 @@
+// Reads lines from standard input and writes how many have text in them to
+// `tally.txt`.
+//
+//     oskac run < input.txt
+
+use pkg.tally
+
+fn main(input: Stdin, fs: Fs) -> Result<(), IoError> {
+    var lines = List.new()
+    var reading = true
+    while reading {
+        match input.read_line()? {
+            Some(line) => lines.push(line)
+            None => { reading = false }
+        }
+    }
+    let count = tally.count_filled(lines)
+    fs.restrict_to(".").write_only().write(Path.new("tally.txt"), "{count}")
+}

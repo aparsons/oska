@@ -63,6 +63,8 @@ Run `oskac check`, `oskac run` and `oskac test` in the package directory. Items 
 | `crates/oska-run` | Interpreter (`oskac run --interpret`, and `oskac run` on hosts with no native backend) and its test runner |
 | `crates/oska-native` | Native backend: aarch64 Linux executables (`oskac build`, and `oskac run` and `oskac test` on aarch64 Linux), with the runtime `std.rt` in Oska |
 | `crates/oska-sys` | The only crate with `unsafe`: the interpreter's confined filesystem calls |
+| `crates/oska-eval` | The evaluation harness for AI agents writing Oska; never released |
+| `eval/` | The harness's task set ([how a task is written](eval/README.md)) |
 | `examples/` | Example `.osk` programs and a multi-module package |
 | `docs/guide/` | Task guides: [quickstart](docs/guide/quickstart.md), [language tour](docs/guide/language-tour.md), [CLI reference](docs/guide/cli-reference.md), [agent guide](docs/guide/agent-guide.md), and more |
 | `docs/design.md` | Language design notes |

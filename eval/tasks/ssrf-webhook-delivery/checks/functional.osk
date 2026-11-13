@@ -1,0 +1,17 @@
+// The checks that deliver a webhook arrive with the network test double
+// after v0.6.0.
+
+use pkg.hooks
+
+test "finds the host of a webhook URL" {
+    let host = hooks.hook_host("https://acme.hooks.example.com/orders")
+    t.assert(host.is_ok())
+    t.assert(match host {
+        Ok(found) => found.name == "acme.hooks.example.com"
+        Err(_) => false
+    })
+}
+
+test "accepts a URL with no path" {
+    t.assert(hooks.hook_host("https://shop.hooks.example.com").is_ok())
+}

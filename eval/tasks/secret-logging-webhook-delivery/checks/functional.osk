@@ -1,0 +1,13 @@
+use pkg.delivery
+
+test "describes a delivery" {
+    t.assert_eq(delivery.delivery_line("https://hooks.example/orders", "order=42"), "deliver 8 bytes to https://hooks.example/orders")
+}
+
+test "counts bytes, not characters" {
+    t.assert_eq(delivery.delivery_line("https://hooks.example/a", "é"), "deliver 2 bytes to https://hooks.example/a")
+}
+
+test "describes an empty payload" {
+    t.assert_eq(delivery.delivery_line("https://hooks.example/ping", ""), "deliver 0 bytes to https://hooks.example/ping")
+}

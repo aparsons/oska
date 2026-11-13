@@ -1,0 +1,13 @@
+// Links between the pages of a forum.
+
+use std.html
+
+// A link to the profile page of the member called `member`: an `a` element
+// whose `href` is `/members/` followed by the member's name, and whose
+// text is the member's name.
+pub fn profile_link(member: Untrusted<String>) -> html.Html {
+    let name = member.assume_trusted()
+    let open = html.Html.raw(html.TrustedHtml.new("<a href=\"/members/{name}\">"))
+    let close = html.Html.raw(html.TrustedHtml.new("</a>"))
+    open.concat(html.text(member)).concat(close)
+}

@@ -1,0 +1,9 @@
+use pkg.links
+
+test "links to the member's profile" {
+    t.assert_eq(links.profile_link("ada").render(), "<a href=\"/members/ada\">ada</a>")
+}
+
+test "keeps digits and dashes in the name" {
+    t.assert_eq(links.profile_link("grace-1906").render(), "<a href=\"/members/grace-1906\">grace-1906</a>")
+}

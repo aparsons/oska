@@ -1,0 +1,3 @@
+pub(pkg) fn label(word: Untrusted<String>) -> Untrusted<String> {
+    "[{word}]"
+}

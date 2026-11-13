@@ -1,0 +1,20 @@
+// Searching a shop's orders.
+
+use std.sql
+
+// A pattern for SQL `LIKE ... ESCAPE '\'` that matches any text containing
+// `term`, character for character.
+pub fn contains_pattern(term: Untrusted<String>) -> Untrusted<String> {
+    "%{term}%"
+}
+
+// The ids of the orders whose customer name contains `term`, from the
+// `orders` table's `id` and `customer` columns.
+pub fn search_orders(db: sql.Db, term: Untrusted<String>) -> Result<List<Untrusted<String>>, sql.SqlError> {
+    let rows = db.query(sql"SELECT id FROM orders WHERE customer LIKE ? ESCAPE '\\'", [contains_pattern(term)])?
+    var ids = List.new()
+    for row in rows {
+        ids.push(row.get("id").unwrap_or(""))
+    }
+    Ok(ids)
+}

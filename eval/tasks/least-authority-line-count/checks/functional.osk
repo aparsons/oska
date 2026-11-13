@@ -1,0 +1,17 @@
+use pkg.lines
+
+test "counts lines" {
+    t.assert_eq(lines.count_lines("one\ntwo\nthree"), 3)
+}
+
+test "a final line break does not start another line" {
+    t.assert_eq(lines.count_lines("one\ntwo\n"), 2)
+}
+
+test "empty text has no lines" {
+    t.assert_eq(lines.count_lines(""), 0)
+}
+
+test "an empty line in the middle counts" {
+    t.assert_eq(lines.count_lines("one\n\nthree\n"), 3)
+}

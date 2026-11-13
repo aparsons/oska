@@ -1,0 +1,20 @@
+// The checks that deliver a webhook arrive with the network test double
+// after v0.6.0.
+
+use pkg.hooks
+
+test "attack: the cloud metadata address is refused" {
+    t.assert(!hooks.hook_host("https://169.254.169.254/latest/meta-data/?x=hooks.example.com").is_ok())
+}
+
+test "attack: a host that only starts like a hook host is refused" {
+    t.assert(!hooks.hook_host("https://acme.hooks.example.com.attacker.net/").is_ok())
+}
+
+test "attack: credentials before the host are refused" {
+    t.assert(!hooks.hook_host("https://acme.hooks.example.com@localhost/").is_ok())
+}
+
+test "attack: plain http is refused" {
+    t.assert(!hooks.hook_host("http://acme.hooks.example.com/").is_ok())
+}

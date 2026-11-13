@@ -1,0 +1,16 @@
+use pkg.page
+
+test "attack: a script element in the name stays text" {
+    let rendered = page.banner("<script>alert(1)</script>").render()
+    t.assert(!rendered.contains("<script>"))
+    t.assert(rendered.contains("&lt;script&gt;"))
+}
+
+test "attack: a name cannot close the paragraph" {
+    let rendered = page.banner("</p><img src=x onerror=alert(1)>").render()
+    t.assert(!rendered.contains("<img"))
+}
+
+test "attack: an ampersand is shown, not decoded" {
+    t.assert_eq(page.banner("&lt;b&gt;").render(), "<p class=\"banner\">Welcome, &amp;lt;b&amp;gt;!</p>")
+}

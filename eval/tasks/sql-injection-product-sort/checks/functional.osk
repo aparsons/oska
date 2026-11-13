@@ -1,0 +1,18 @@
+// The checks that need a database (`list_products` against a table of
+// products) arrive with the `std.sql` test double after v0.6.0.
+
+use pkg.catalog
+
+test "name sorts by name" {
+    t.assert(match catalog.parse_sort("name") {
+        Ok(catalog.Sort.Name) => true
+        _ => false
+    })
+}
+
+test "price sorts by price" {
+    t.assert(match catalog.parse_sort("price") {
+        Ok(catalog.Sort.Price) => true
+        _ => false
+    })
+}

@@ -1,0 +1,8 @@
+// Prints how many lines `notes.txt` has.
+//
+//     oskac run
+
+use pkg.lines
+
+fn main() {
+}

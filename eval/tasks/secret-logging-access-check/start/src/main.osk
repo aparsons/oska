@@ -1,0 +1,8 @@
+// A gate that lets a user in when they give the right access token.
+//
+//     oskac run -- <user> <token>
+
+use pkg.log
+
+fn main() {
+}

@@ -11,9 +11,10 @@
 #      std.rt's own source, and workflows use only official
 #      actions plus the SHA-pinned rust-toolchain;
 #   2. cargo fmt, clippy with -D warnings, and cargo test;
-#   3. the installer, release script, unsafe guard, intrinsic guard and
+#   3. the evaluation harness's `validate` over the task set in eval/tasks;
+#   4. the installer, release script, unsafe guard, intrinsic guard and
 #      rust-stable tests;
-#   4. shellcheck on the shell scripts, when shellcheck is installed.
+#   5. shellcheck on the shell scripts, when shellcheck is installed.
 
 set -euo pipefail
 
@@ -73,6 +74,18 @@ cargo clippy --all-targets -- -D warnings
 
 step "cargo test"
 cargo test --all
+
+step "eval task set"
+# Every task in eval/tasks is well formed, and each active task's hidden
+# checks pass its reference solution and catch its insecure one, run with
+# the oskac just built. Offline: no model is called.
+cargo build --quiet -p oskac -p oska-eval
+bin="${CARGO_TARGET_DIR:-target}/debug"
+if ! report=$("$bin/oska-eval" validate --oskac "$bin/oskac" eval/tasks); then
+  printf '%s\n' "$report"
+  fail "a task in eval/tasks does not validate (the report is above)"
+fi
+echo "every task in eval/tasks validates"
 
 step "installer tests"
 bash scripts/install/test.sh
