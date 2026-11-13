@@ -59,8 +59,8 @@ fn main(io: Stdout, fs: FsRead, args: Args) -> Result<(), AppError> {
 ```console cmd=check
 fn count_lines: DirRead (fs)
 fn AppError.usage: pure
-fn AppError.from: pure
-fn AppError.to_string: pure
+fn <AppError as From<IoError>>.from: pure
+fn <AppError as Display>.to_string: pure
 fn main: Stdout (io), FsRead (fs)
   capabilities.osk:44:17: FsRead -> DirRead: restrict_to "." (bytes 1342..1361)
 ```

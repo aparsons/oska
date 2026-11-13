@@ -338,9 +338,11 @@ impl Attenuation {
 /// One function's entry in the authority report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionAuthority {
-    /// The function's name, or `Type.method` for a method. In a package,
-    /// `pkg.` and the module path come first, as in `pkg.util.text.shout`
-    /// (see `link::Modules::function_name`).
+    /// The function's name, `Type.method` for a method of an inherent
+    /// `impl`, or `<Type as Trait>.method` for one of `impl Trait for
+    /// Type`. In a package, `pkg.` and the module path come first, as in
+    /// `pkg.util.text.shout` (see `link::Modules::function_name` and
+    /// `trait_method_name`). No two functions share a name.
     pub name: String,
     /// Declared `pub`: part of its package's API.
     pub public: bool,
@@ -605,7 +607,7 @@ fn check_source(
     let program = diagnostics
         .is_empty()
         .then(|| program::lower::module(src, module, &items, &resolutions, &typing));
-    let functions = authority::report(module, &decls, &modules);
+    let functions = authority::report(module, &decls, &items, &modules);
     // An intrinsic name is also an unknown name; E0209 says it better.
     let refused: Vec<_> = diagnostics
         .iter()
