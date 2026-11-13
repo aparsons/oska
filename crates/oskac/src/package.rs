@@ -6,10 +6,11 @@
 //! path under `src/` with `/` written as `.` and no `.osk` extension.
 //! Only regular files and directories count: a symlinked `oska.toml`, and
 //! a symlink under `src/`, are refused, and nothing is followed. Entries
-//! are told apart with `symlink_metadata`, never `metadata`, and on Unix
-//! every file is then opened beneath the package directory one component
-//! at a time with `O_NOFOLLOW` (`oska_sys::Dir`), so a symlink swapped in
-//! after the check makes the open fail instead of reading through it: a
+//! are told apart with `symlink_metadata`, never `metadata`, and every
+//! file is then opened beneath the package directory one component at a
+//! time, never following a symlink, or on Windows a junction or another
+//! reparse point (`oska_sys::Dir`), so one swapped in after the check
+//! makes the open fail instead of reading through it: a
 //! package's source is what is in its tree (ADR 0008). The rules about
 //! names and `main` are the checker's (`oska_check::check_package`);
 //! finding a symlink needs the file system, so it is found here.
@@ -190,43 +191,28 @@ impl Walk<'_> {
     }
 }
 
-/// The files of a package, read without following a symlink. On Unix,
-/// beneath a handle for the package directory, with `O_NOFOLLOW` at every
-/// component (`oska_sys::Dir`). Elsewhere `oska-sys` offers nothing, and
-/// the `symlink_metadata` check before each read is all there is.
+/// The files of a package, read without following a symlink: beneath a
+/// handle for the package directory, one component at a time, never
+/// following a symlink or another reparse point (`oska_sys::Dir`).
 struct Files {
-    #[cfg(unix)]
     root: oska_sys::Dir,
-    #[cfg(not(unix))]
-    root: PathBuf,
 }
 
 impl Files {
     /// The package directory at `root`, a path the user chose: its own
     /// components are followed, as any path given on the command line is.
     fn open(root: &Path) -> std::io::Result<Files> {
-        #[cfg(unix)]
         let root = oska_sys::Dir::open(root)?;
-        #[cfg(not(unix))]
-        let root = root.to_path_buf();
         Ok(Files { root })
     }
 
     /// The bytes of the regular file reached by `names` beneath the
     /// package directory, none of them a symlink.
     fn read(&self, names: &[&str]) -> std::io::Result<Vec<u8>> {
-        #[cfg(unix)]
-        {
-            use std::io::Read;
-            let mut bytes = Vec::new();
-            self.root.open_file(names)?.read_to_end(&mut bytes)?;
-            Ok(bytes)
-        }
-        #[cfg(not(unix))]
-        {
-            let path: PathBuf = names.iter().fold(self.root.clone(), |p, n| p.join(n));
-            std::fs::read(path)
-        }
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        self.root.open_file(names)?.read_to_end(&mut bytes)?;
+        Ok(bytes)
     }
 }
 

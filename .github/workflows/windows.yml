@@ -1,11 +1,9 @@
-# Run the runtime and CLI tests on Windows. Off Unix, oska-sys is empty
-# and a directory or file capability checks each path instead (ADR 0009):
-# its own code for opening roots, reading, writing, create_dir and
-# list_dir, and its refusal of device names and alternate data streams.
-# This job runs that code with the FakeHost API tests, the RealHost tests
-# that are not Unix-only, and the CLI's golden tests. ci.yml's test job
-# runs on Ubuntu only (x86_64 and arm64), and the release dry run only
-# builds.
+# Run the runtime and CLI tests on Windows: the FakeHost API tests, the
+# RealHost tests, among them the confinement tests that walk beneath a
+# handle with oska-sys's ntdll calls (ADR 0009, ADR 0014) and refuse
+# reparse points, hard links, device names and alternate data streams,
+# and the CLI's golden tests. ci.yml's test job runs on Ubuntu only
+# (x86_64 and arm64), and the release dry run only builds.
 #
 # Needs no configuration.
 

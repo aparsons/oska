@@ -16,8 +16,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ffi::OsStr;
-#[cfg(not(unix))]
-use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
@@ -127,10 +125,10 @@ pub trait Host: Send {
 /// or the one file a file capability reaches. Copies share it, and the
 /// last one dropped releases what the host holds for it.
 ///
-/// On a Unix [`RealHost`] it holds an OS handle for the directory, or for
-/// a file's parent directory together with the file's name, and every
-/// read beneath it walks from that handle (`oska-sys`). Elsewhere, and on
-/// [`FakeHost`], it holds only the root's path.
+/// On a [`RealHost`] it holds an OS handle for the directory, or for a
+/// file's parent directory together with the file's name, and every
+/// operation beneath it walks from that handle (`oska-sys`). On
+/// [`FakeHost`] it holds only the root's path.
 #[derive(Debug, Clone)]
 pub struct RootHandle {
     /// The root's canonical path, which the path-based operations
@@ -138,23 +136,16 @@ pub struct RootHandle {
     path: Rc<Path>,
     /// The file's own name, when the root is a file.
     file: Option<Rc<OsStr>>,
-    /// The directory's handle, or the file's parent's. Always `None` off
-    /// Unix, where `OsDir` has no values.
-    #[cfg_attr(not(unix), allow(dead_code))]
-    os: Option<Rc<OsDir>>,
+    /// The directory's handle, or the file's parent's: `None` on a
+    /// [`FakeHost`].
+    os: Option<Rc<oska_sys::Dir>>,
 }
-
-#[cfg(unix)]
-type OsDir = oska_sys::Dir;
-/// No OS handle: a root holds only its path.
-#[cfg(not(unix))]
-type OsDir = std::convert::Infallible;
 
 impl RootHandle {
     /// A root at `path`: the directory itself, or with `file`, the file
     /// of that name, whose parent directory `os` holds when the host
     /// keeps a handle.
-    fn new(path: &Path, file: Option<&OsStr>, os: Option<OsDir>) -> RootHandle {
+    fn new(path: &Path, file: Option<&OsStr>, os: Option<oska_sys::Dir>) -> RootHandle {
         RootHandle {
             path: Rc::from(path),
             file: file.map(Rc::from),
@@ -235,18 +226,6 @@ fn a_file_root(root: &RootHandle) -> io::Error {
     )
 }
 
-/// The error for writing to, or creating, a root that is a directory.
-#[cfg(not(unix))]
-fn a_dir_root(root: &RootHandle) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::InvalidInput,
-        format!(
-            "`{}` is the directory capability's root itself",
-            shown(&root.path)
-        ),
-    )
-}
-
 /// `entries` of the directory at `path` as text, sorted by their bytes,
 /// or the error for the first that is not valid UTF-8.
 fn sorted_names(entries: Vec<std::ffi::OsString>, path: &Path) -> io::Result<Vec<String>> {
@@ -266,7 +245,6 @@ fn sorted_names(entries: Vec<std::ffi::OsString>, path: &Path) -> io::Result<Vec
 }
 
 /// `root`'s path joined with `names`.
-#[cfg(unix)]
 fn joined(root: &RootHandle, names: &[String]) -> PathBuf {
     names
         .iter()
@@ -337,11 +315,10 @@ impl Host for RealHost {
         self.random.next()
     }
 
-    #[cfg(unix)]
     fn open_root(&mut self, path: &Path) -> io::Result<RootHandle> {
         // Without a trailing `/` or `.`, which would follow a symlink in
         // the last component.
-        let path: PathBuf = path.components().collect();
+        let path: PathBuf = separated(path).components().collect();
         let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
             // `/`, or a path ending in `..`: no symlink to refuse.
             let dir = oska_sys::Dir::open(&path)?;
@@ -359,28 +336,27 @@ impl Host for RealHost {
         ))
     }
 
-    #[cfg(unix)]
     fn open_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<RootHandle> {
         if !narrows(root, names)? {
             return Ok(root.clone());
         }
+        windows_names(names)?;
         let dir = root_dir(root)?.open_dir(names)?;
         // Canonical as it stands: the walk met no symlink. Not
         // canonicalized again, which would follow one swapped in since.
         Ok(RootHandle::new(&joined(root, names), None, Some(dir)))
     }
 
-    #[cfg(unix)]
     fn open_file_root(&mut self, path: &Path) -> io::Result<RootHandle> {
-        let (parent, name) = split_file_root(path)?;
+        let (parent, name) = split_file_root(&separated(path))?;
         let dir = oska_sys::Dir::open(&parent)?;
         let path = std::fs::canonicalize(&parent)?.join(&name);
         Ok(RootHandle::new(&path, Some(&name), Some(dir)))
     }
 
-    #[cfg(unix)]
     fn open_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<RootHandle> {
         let (name, parents) = file_beneath(root, names)?;
+        windows_names(names)?;
         let dir = root_dir(root)?.open_dir(parents)?;
         Ok(RootHandle::new(
             &joined(root, names),
@@ -389,20 +365,21 @@ impl Host for RealHost {
         ))
     }
 
-    #[cfg(unix)]
     fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<String> {
         let dir = root_dir(root)?;
         let mut file = match &root.file {
             Some(_) if !names.is_empty() => return Err(beneath_a_file(names)),
             Some(name) => dir.open_file(&[name])?,
-            None => dir.open_file(names)?,
+            None => {
+                windows_names(names)?;
+                dir.open_file(names)?
+            }
         };
         let mut text = String::new();
         file.read_to_string(&mut text)?;
         Ok(text)
     }
 
-    #[cfg(unix)]
     fn write_file_beneath(
         &mut self,
         root: &RootHandle,
@@ -413,150 +390,29 @@ impl Host for RealHost {
         let mut file = match &root.file {
             Some(_) if !names.is_empty() => return Err(beneath_a_file(names)),
             Some(name) => dir.create_file(&[name])?,
-            None => dir.create_file(names)?,
+            None => {
+                windows_names(names)?;
+                dir.create_file(names)?
+            }
         };
         file.write_all(contents.as_bytes())
     }
 
-    #[cfg(unix)]
     fn create_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
         if root.is_file() {
             return Err(a_file_root(root));
         }
+        windows_names(names)?;
         root_dir(root)?.create_dir(names)
     }
 
-    #[cfg(unix)]
     fn list_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Vec<String>> {
         if root.is_file() {
             return Err(a_file_root(root));
         }
+        windows_names(names)?;
         let entries = root_dir(root)?.open_dir(names)?.entries()?;
         sorted_names(entries, &joined(root, names))
-    }
-
-    #[cfg(not(unix))]
-    fn open_root(&mut self, path: &Path) -> io::Result<RootHandle> {
-        let path: PathBuf = path.components().collect();
-        let there = std::fs::symlink_metadata(&path)?;
-        if there.file_type().is_symlink() {
-            return Err(moved(&path));
-        }
-        if !there.is_dir() {
-            return Err(not_a_directory(&path));
-        }
-        Ok(RootHandle::new(&std::fs::canonicalize(&path)?, None, None))
-    }
-
-    #[cfg(not(unix))]
-    fn open_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<RootHandle> {
-        if !narrows(root, names)? {
-            return Ok(root.clone());
-        }
-        let path = checked_beneath(root, names)?;
-        require_dir(&path)?;
-        Ok(RootHandle::new(&path, None, None))
-    }
-
-    #[cfg(not(unix))]
-    fn open_file_root(&mut self, path: &Path) -> io::Result<RootHandle> {
-        let (parent, name) = split_file_root(path)?;
-        let parent = std::fs::canonicalize(parent)?;
-        require_dir(&parent)?;
-        Ok(RootHandle::new(&parent.join(&name), Some(&name), None))
-    }
-
-    #[cfg(not(unix))]
-    fn open_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<RootHandle> {
-        let (name, parents) = file_beneath(root, names)?;
-        let parent = checked_beneath(root, parents)?;
-        windows_file_name(name)?;
-        require_dir(&parent)?;
-        Ok(RootHandle::new(
-            &parent.join(name),
-            Some(OsStr::new(name)),
-            None,
-        ))
-    }
-
-    #[cfg(not(unix))]
-    fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<String> {
-        if root.is_file() && !names.is_empty() {
-            return Err(beneath_a_file(names));
-        }
-        let path = checked_beneath(root, names)?;
-        let mut file = open_beneath(&path, &root.path, OpenOptions::new().read(true))?;
-        let mut text = String::new();
-        file.read_to_string(&mut text)?;
-        Ok(text)
-    }
-
-    #[cfg(not(unix))]
-    fn write_file_beneath(
-        &mut self,
-        root: &RootHandle,
-        names: &[String],
-        contents: &str,
-    ) -> io::Result<()> {
-        let path = match (root.is_file(), names.split_last()) {
-            (true, None) => root.path.to_path_buf(),
-            (true, Some(_)) => return Err(beneath_a_file(names)),
-            (false, Some((name, parents))) => {
-                let parent = checked_beneath(root, parents)?;
-                windows_file_name(name)?;
-                parent.join(name)
-            }
-            (false, None) => return Err(a_dir_root(root)),
-        };
-        // Not truncated on open: the file is emptied only once it is
-        // known to lie under the root.
-        let mut file = open_beneath(
-            &path,
-            &root.path,
-            OpenOptions::new().write(true).create(true),
-        )?;
-        file.set_len(0)?;
-        file.write_all(contents.as_bytes())
-    }
-
-    #[cfg(not(unix))]
-    fn create_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<()> {
-        if root.is_file() {
-            return Err(a_file_root(root));
-        }
-        let (name, parents) = names.split_last().ok_or_else(|| a_dir_root(root))?;
-        let parent = checked_beneath(root, parents)?;
-        windows_file_name(name)?;
-        let path = parent.join(name);
-        // `mkdir` never follows a symlink in the last component: one
-        // there, dangling or not, makes it fail with `AlreadyExists`.
-        if let Err(error) = std::fs::create_dir(&path) {
-            if error.kind() != io::ErrorKind::AlreadyExists
-                || !std::fs::symlink_metadata(&path)?.is_dir()
-            {
-                return Err(error);
-            }
-        }
-        // A symlink swapped in for a directory on the way may have sent
-        // the `mkdir` elsewhere: refuse to report success for it.
-        resolved_beneath(&path, &root.path).map(drop)
-    }
-
-    #[cfg(not(unix))]
-    fn list_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Vec<String>> {
-        if root.is_file() {
-            return Err(a_file_root(root));
-        }
-        // Checked before it is read and again after: a symlink swapped in
-        // for it in between sends the listing elsewhere, and that listing
-        // is discarded.
-        let path = checked_beneath(root, names)?;
-        let entries = std::fs::read_dir(&path)?
-            .map(|entry| entry.map(|entry| entry.file_name()))
-            .collect::<io::Result<_>>()?;
-        let names = sorted_names(entries, &path)?;
-        resolved_beneath(&path, &root.path)?;
-        Ok(names)
     }
 
     fn printed(&self) -> Vec<String> {
@@ -569,7 +425,6 @@ impl Host for RealHost {
 }
 
 /// The OS handle of `root`, which only a root [`FakeHost`] opened lacks.
-#[cfg(unix)]
 fn root_dir(root: &RootHandle) -> io::Result<&oska_sys::Dir> {
     root.os.as_deref().ok_or_else(|| {
         io::Error::new(
@@ -577,6 +432,17 @@ fn root_dir(root: &RootHandle) -> io::Result<&oska_sys::Dir> {
             "this root was opened by another host",
         )
     })
+}
+
+/// A root's trusted `path` with each `/` a separator. On Windows `/` is
+/// one in every path but a verbatim one (`\\?\C:\...`, as
+/// `canonicalize` gives), where Windows would take it for part of a name,
+/// so there it becomes `\`. Elsewhere `path` is as it is.
+fn separated(path: &Path) -> PathBuf {
+    match path.to_str() {
+        Some(text) if cfg!(windows) => PathBuf::from(text.replace('/', "\\")),
+        _ => path.to_path_buf(),
+    }
 }
 
 /// `parent`, the leading part of a root's path, or the current directory
@@ -588,32 +454,15 @@ fn or_here(parent: &Path) -> &Path {
     }
 }
 
-/// Where Windows has no handle-relative open: the path `names` reach
-/// beneath `root`, refused when any component is a symlink or the path
-/// canonicalizes outside the root. A narrowed check, not a race-free one
-/// (`docs/runtime.md`).
-#[cfg(not(unix))]
-fn checked_beneath(root: &RootHandle, names: &[String]) -> io::Result<PathBuf> {
-    for name in names {
-        windows_file_name(name)?;
-    }
-    let mut path = root.path.to_path_buf();
-    for name in names {
-        path.push(name);
-        if std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
-            return Err(moved(&path));
+/// Refuse `names` unless each is a file's own name on Windows (see
+/// [`windows_file_name`]). Elsewhere any plain name is one.
+fn windows_names(names: &[String]) -> io::Result<()> {
+    if cfg!(windows) {
+        for name in names {
+            windows_file_name(name)?;
         }
     }
-    resolved_beneath(&path, &root.path)
-}
-
-/// Refuse `path` unless it is a directory, following symlinks.
-#[cfg(not(unix))]
-fn require_dir(path: &Path) -> io::Result<()> {
-    match std::fs::metadata(path)?.is_dir() {
-        true => Ok(()),
-        false => Err(not_a_directory(path)),
-    }
+    Ok(())
 }
 
 /// Refuse `name` unless it is a file's own name on Windows. A reserved
@@ -621,7 +470,6 @@ fn require_dir(path: &Path) -> io::Result<()> {
 /// `LPT9`, and `CONIN$`, `CONOUT$`), with or without an extension, opens
 /// that device in every directory, and a `:` opens an alternate data
 /// stream, so neither is a file beneath the root.
-#[cfg(not(unix))]
 fn windows_file_name(name: &str) -> io::Result<()> {
     let refused = |what: &str| {
         Err(io::Error::new(
@@ -653,48 +501,6 @@ fn windows_file_name(name: &str) -> io::Result<()> {
         return refused("is a Windows device name");
     }
     Ok(())
-}
-
-/// Where Windows has no handle-relative open: open `path`, which
-/// [`checked_beneath`] produced, with `options`. A symlink there is
-/// refused, and the opened file is checked to still be the one at the
-/// path, under `root`, which narrows the race but does not close it.
-#[cfg(not(unix))]
-fn open_beneath(path: &Path, root: &Path, options: &mut OpenOptions) -> io::Result<File> {
-    if std::fs::symlink_metadata(path).is_ok_and(|there| there.file_type().is_symlink()) {
-        return Err(moved(path));
-    }
-    let file = options.open(path)?;
-    let now = resolved_beneath(path, root)?;
-    let (opened, named) = (file.metadata()?, std::fs::symlink_metadata(&now)?);
-    // Without inode numbers, as near as `std` can tell.
-    if named.file_type().is_symlink() || opened.len() != named.len() {
-        return Err(moved(path));
-    }
-    Ok(file)
-}
-
-/// `path` with every symlink resolved, refused unless it lies under
-/// `root`: Windows' check before and after it touches the filesystem.
-#[cfg(not(unix))]
-fn resolved_beneath(path: &Path, root: &Path) -> io::Result<PathBuf> {
-    let resolved = std::fs::canonicalize(path)?;
-    if resolved.starts_with(root) {
-        Ok(resolved)
-    } else {
-        Err(moved(path))
-    }
-}
-
-#[cfg(not(unix))]
-fn moved(path: &Path) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::PermissionDenied,
-        format!(
-            "`{}` is a symlink or left the capability's root while it was being opened",
-            path.display()
-        ),
-    )
 }
 
 /// `line` without its trailing `\n` or `\r\n`.
