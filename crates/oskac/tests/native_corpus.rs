@@ -361,7 +361,8 @@ fn building_the_site_generator_takes_well_under_a_second() {
         oska_check::check_file("site/build.osk", &src, oska_check::CheckOptions::default());
     let program = report.program.expect("the generator checks");
     let started = Instant::now();
-    let bytes = oska_native::build(&program, &|d| d).expect("the generator builds");
+    let bytes = oska_native::build(&program, oska_native::Target::LinuxAarch64, &|d| d)
+        .expect("the generator builds");
     let took = started.elapsed();
     assert!(!bytes.is_empty());
     // A release build of `oskac` takes about 0.1 s on a Raspberry Pi 5,

@@ -23,10 +23,14 @@ USAGE:
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
                                            as `run` does
-    oskac build [path] [-o out] [--format=json]
+    oskac build [path] [-o out] [--target <platform>|all] [--format=json]
                                            Check a source file or package and,
                                            if it has no diagnostics, compile it
-                                           to an aarch64 Linux executable
+                                           to an executable for the platform
+                                           (by default the host's when it has a
+                                           backend, else linux-aarch64), or for
+                                           every platform with a backend into
+                                           the -o directory
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
@@ -36,6 +40,7 @@ USAGE:
 
 - A flag may come anywhere before `--`. Anything else is a positional argument.
 - Everything after `--` belongs to the program being run, and only `oskac run` uses it.
+- `--target <platform>`, or `--target=<platform>`, is for `oskac build` only: any other command given it prints the usage text to standard error and exits with 2.
 - Any `--format=` value other than `json` means the default, human-readable output.
 - An unknown flag is treated as a positional argument, so the command is not recognized. `oskac` then prints the usage text to standard error and exits with 2. Running `oskac` with no arguments does the same.
 - A file that cannot be read prints `error: cannot read <path>: <reason>` to standard error and exits with 1, even with `--format=json`.
@@ -114,9 +119,11 @@ See [debugging](debugging.md) for panics and the [runtime notes](../runtime.md) 
 
 ## `oskac build`
 
-`oskac build [path] [-o out] [--format=json]` checks a file or package as `check` does and, when it has no diagnostics, compiles it to a static executable for aarch64 Linux. Building works on every host and writes the same bytes on each. The executable is the file's stem, or the package directory's name, in the current directory; `-o out` names it instead.
+`oskac build [path] [-o out] [--target <platform>|all] [--format=json]` checks a file or package as `check` does and, when it has no diagnostics, compiles it to a static executable for a target platform. Building works on every host and writes the same bytes on each. The executable is the file's stem, or the package directory's name, in the current directory; `-o out` names it instead.
 
-- Success prints nothing, or `{"output":"<path>","diagnostics":[]}` with `--format=json`.
+- `--target` names the platform as release assets name `oskac` builds: `linux-aarch64`, `linux-x86_64`, `macos-aarch64`, `macos-x86_64` or `windows-x86_64`. Only `linux-aarch64` has a backend so far; the others are refused with `E0394`, which names the release that adds them, and an unknown name with `E0393`, which lists the names. Without `--target`, the build is for the host's platform when it has a backend, else for `linux-aarch64`.
+- `--target all` writes one executable for each platform with a backend, named `<name>-<platform>` (such as `hello-linux-aarch64`), into the directory `-o` names, or the current one.
+- Success prints nothing, or `{"output":"<path>","diagnostics":[]}` with `--format=json` (`{"outputs":["<path>",...],"diagnostics":[]}` with `--target all`).
 - A refused program's diagnostics go to standard error as `check` prints them, or to standard output as `{"output":null,"diagnostics":[...]}` with `--format=json`.
 - The native backend compiles only part of the language so far. Anything else is refused with `E0390` before a file is written, never compiled wrongly; `oskac run` still runs the program, on the interpreter.
 - The executable needs nothing else to run: no `oskac`, no C library. Run directly, it reports a panic as `oskac run` does (human-readable only), and `args.get(0)` is the path it was run as, such as `./hello`, where `oskac run` reports the source file's path.
@@ -125,7 +132,7 @@ See [debugging](debugging.md) for panics and the [runtime notes](../runtime.md) 
 | --- | --- |
 | `0` | The executable was written. |
 | `1` | The checker refused the program, or the executable could not be written (`E0391`). |
-| `2` | The program uses something the native backend cannot compile yet (`E0371`, `E0390`). |
+| `2` | The program uses something the native backend cannot compile yet (`E0371`, `E0390`), or `--target` names a platform it cannot build for (`E0393`, `E0394`). |
 
 See the [runtime notes](../runtime.md#native-builds) for the codes.
 

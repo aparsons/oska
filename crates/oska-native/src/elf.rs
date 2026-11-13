@@ -1,5 +1,5 @@
-//! The executable file: a static, position-independent ELF for aarch64
-//! Linux.
+//! The executable file: a static, position-independent ELF for Linux,
+//! with its target's machine and page size ([`Machine`]).
 //!
 //! - `ET_DYN` with no `PT_INTERP`, no dynamic section and no relocations:
 //!   every address in the code is PC-relative, so the kernel loads it at a
@@ -7,23 +7,31 @@
 //! - Three `PT_LOAD` segments: the headers and read-only data (R), the
 //!   code (R+X), and the writable data (RW); and a `PT_GNU_STACK` that
 //!   makes the stack non-executable.
-//! - Each segment starts on a new 64 KiB boundary (the largest aarch64
-//!   page size) both in the file and in memory. The kernel maps whole
-//!   pages of the file, so a segment sharing a file page with its
+//! - Each segment starts on a new boundary of the target's largest page
+//!   (64 KiB on aarch64) both in the file and in memory. The kernel maps
+//!   whole pages of the file, so a segment sharing a file page with its
 //!   neighbour would map the neighbour's bytes with its own permissions
 //!   (the headers and text literals executable, code writable): with
-//!   every boundary on a 64 KiB one, no page has two segments'
+//!   every boundary on a largest page's, no page has two segments'
 //!   permissions whatever the kernel's page size. The padding costs up
-//!   to 128 KiB of zeros in the file.
+//!   to two such pages of zeros in the file.
 //!
 //! Nothing in the file depends on the host, so every host writes the same
-//! bytes for the same program.
+//! bytes for the same program and target.
 
-use crate::aarch64::{self, Text};
-use crate::ir::Symbol;
+use crate::target::{Code, Layout};
 
-/// The alignment of segments in memory.
-const PAGE: u64 = 0x1_0000;
+/// What the file says about its target's machine.
+pub struct Machine {
+    /// The ELF header's `e_machine`.
+    pub e_machine: u16,
+    /// The alignment of segments, in the file and in memory: the target's
+    /// largest page size.
+    pub page: u64,
+}
+
+pub const EM_AARCH64: u16 = 183;
+
 const ELF_HEADER: u64 = 64;
 const PROGRAM_HEADER: u64 = 56;
 const PROGRAM_HEADERS: u64 = 4;
@@ -36,7 +44,6 @@ const PF_X: u32 = 1;
 const PF_W: u32 = 2;
 const PF_R: u32 = 4;
 const ET_DYN: u16 = 3;
-const EM_AARCH64: u16 = 183;
 
 /// A segment's place in the file and in memory.
 struct Segment {
@@ -46,41 +53,32 @@ struct Segment {
     flags: u32,
 }
 
-/// The executable holding `text`, `rodata` and `data_size` bytes of
-/// zeroed writable data.
-pub fn write(text: &Text, rodata: &[u8], data_size: u32) -> Vec<u8> {
+/// The executable for `machine` holding `text`, `rodata` and
+/// `data_size` bytes of zeroed writable data.
+pub fn write(machine: &Machine, text: &dyn Code, rodata: &[u8], data_size: u32) -> Vec<u8> {
+    let page = machine.page;
     let read_only = Segment {
         offset: 0,
         vaddr: 0,
         size: RODATA + rodata.len() as u64,
         flags: PF_R,
     };
-    let code = after(&read_only, 4 * text.words.len() as u64, PF_R | PF_X);
-    let data = after(&code, u64::from(data_size), PF_R | PF_W);
-
-    let mut words = text.words.clone();
-    for fixup in &text.fixups {
-        let target = match fixup.symbol {
-            Symbol::Rodata(at) => RODATA + u64::from(at),
-            Symbol::Data(at) => data.vaddr + u64::from(at),
-            Symbol::Function(start) => code.vaddr + 4 * start as u64,
-        };
-        let pc = code.vaddr + 4 * fixup.at as u64;
-        let adrp = &mut words[fixup.at];
-        *adrp = aarch64::adrp(*adrp & 0x1f, pc, target);
-        let add = &mut words[fixup.at + 1];
-        let rd = *add & 0x1f;
-        *add = aarch64::add_imm(rd, rd, (target & 0xfff) as u32, false);
-    }
+    let code = after(&read_only, text.size(), PF_R | PF_X, page);
+    let data = after(&code, u64::from(data_size), PF_R | PF_W, page);
+    let linked = text.link(&Layout {
+        rodata: RODATA,
+        code: code.vaddr,
+        data: data.vaddr,
+    });
 
     let mut file = Vec::new();
     // The ELF header.
     file.extend_from_slice(&[0x7f, b'E', b'L', b'F', 2, 1, 1, 0]);
     file.extend_from_slice(&[0; 8]);
     put16(&mut file, ET_DYN);
-    put16(&mut file, EM_AARCH64);
+    put16(&mut file, machine.e_machine);
     put32(&mut file, 1);
-    put64(&mut file, code.vaddr + 4 * text.entry as u64);
+    put64(&mut file, code.vaddr + text.entry());
     put64(&mut file, ELF_HEADER);
     put64(&mut file, 0);
     put32(&mut file, 0);
@@ -99,7 +97,7 @@ pub fn write(text: &Text, rodata: &[u8], data_size: u32) -> Vec<u8> {
         put64(&mut file, segment.vaddr);
         put64(&mut file, segment.size);
         put64(&mut file, segment.size);
-        put64(&mut file, PAGE);
+        put64(&mut file, page);
     }
     put32(&mut file, PT_GNU_STACK);
     put32(&mut file, PF_R | PF_W);
@@ -110,9 +108,7 @@ pub fn write(text: &Text, rodata: &[u8], data_size: u32) -> Vec<u8> {
     // The segments' contents.
     file.extend_from_slice(rodata);
     pad_to(&mut file, code.offset);
-    for word in words {
-        put32(&mut file, word);
-    }
+    file.extend_from_slice(&linked);
     pad_to(&mut file, data.offset);
     file.resize(file.len() + data_size as usize, 0);
     file
@@ -120,9 +116,9 @@ pub fn write(text: &Text, rodata: &[u8], data_size: u32) -> Vec<u8> {
 
 /// The segment of `size` bytes that follows `previous`, on pages of its
 /// own in the file and in memory.
-fn after(previous: &Segment, size: u64, flags: u32) -> Segment {
-    let offset = (previous.offset + previous.size).next_multiple_of(PAGE);
-    let vaddr = (previous.vaddr + previous.size).next_multiple_of(PAGE);
+fn after(previous: &Segment, size: u64, flags: u32, page: u64) -> Segment {
+    let offset = (previous.offset + previous.size).next_multiple_of(page);
+    let vaddr = (previous.vaddr + previous.size).next_multiple_of(page);
     Segment {
         offset,
         vaddr,

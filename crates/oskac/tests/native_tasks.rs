@@ -488,7 +488,8 @@ fn spawning_on_a_finished_scope_panics_with_p0005_at_the_call() {
             body,
         },
     );
-    let image = oska_native::build(&program, &|d| d).expect("the program should build");
+    let image = oska_native::build(&program, oska_native::Target::LinuxAarch64, &|d| d)
+        .expect("the program should build");
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("tasks_p0005");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("a directory");
