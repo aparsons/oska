@@ -706,6 +706,232 @@ test_oska_home_moves_the_install() {
   [ "$("$PWD/elsewhere/bin/oskac" --version)" = "oskac 1.2.3" ] || fail "not installed under OSKA_HOME"
 }
 
+# ---- --uninstall ----------------------------------------------------------
+
+# Uninstall removes exactly the files the receipt lists, then bin/ and the
+# Oska home because they are left empty.
+test_uninstall_removes_what_the_receipt_lists() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  local oska="$PWD/home/.oska"
+  install --json --uninstall >out.json
+  cat >expected.json <<JSON
+{
+  "ok": true,
+  "action": "uninstalled",
+  "removed": ["$oska/bin/oskac", "$oska/version", "$oska/receipt.json", "$oska/bin", "$oska"],
+  "kept": [],
+  "path_hint": null
+}
+JSON
+  diff <(jq -S . expected.json) <(jq -S . out.json) || fail "JSON output differs"
+  [ "$(wc -l <out.json | tr -d ' ')" = 1 ] || fail "JSON output is not one line"
+  [ ! -e "$oska" ] || fail "the Oska home is still there: $(find "$oska")"
+  [ "$(ls -A home)" = "" ] || fail "home holds $(ls -A home)"
+}
+
+test_uninstall_without_a_receipt_is_not_installed() {
+  mkdir home
+  assert_refused_unchanged not_installed 1 --uninstall
+  # An install from before receipts has only the version file: uninstall
+  # never guesses what to delete.
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  rm home/.oska/receipt.json
+  assert_refused_unchanged not_installed 1 --uninstall
+}
+
+# A file that changed since it was installed is kept and listed, and so is
+# the directory it keeps from being empty. The rest goes.
+test_uninstall_keeps_a_changed_file() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  local oska="$PWD/home/.oska"
+  printf '#!/bin/sh\necho mine\n' >"$oska/bin/oskac"
+  install --json --uninstall >out.json
+  [ "$(jq -c .removed out.json)" = "[\"$oska/version\",\"$oska/receipt.json\"]" ] ||
+    fail "removed $(jq -c .removed out.json)"
+  [ "$(jq -c .kept out.json)" = "[\"$oska/bin/oskac\",\"$oska/bin\",\"$oska\"]" ] ||
+    fail "kept $(jq -c .kept out.json)"
+  [ "$(cat "$oska/bin/oskac")" = "$(printf '#!/bin/sh\necho mine')" ] || fail "the changed oskac changed"
+  [ "$(find "$oska" | LC_ALL=C sort | tr '\n' ' ')" = "$oska $oska/bin $oska/bin/oskac " ] ||
+    fail "left $(find "$oska")"
+}
+
+# Anything else in the Oska home is not the installer's: it stays, and so
+# does the home.
+test_uninstall_keeps_a_home_with_other_files_in_it() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  local oska="$PWD/home/.oska"
+  printf 'notes\n' >"$oska/notes.txt"
+  mkdir "$oska/bin/tools"
+  install --json --uninstall >out.json
+  [ "$(jq -c .kept out.json)" = "[\"$oska/bin\",\"$oska\"]" ] || fail "kept $(jq -c .kept out.json)"
+  [ "$(find "$oska" | LC_ALL=C sort | tr '\n' ' ')" = "$oska $oska/bin $oska/bin/tools $oska/notes.txt " ] ||
+    fail "left $(find "$oska")"
+}
+
+test_uninstall_never_touches_the_config_directory() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  mkdir -p home/.config/oska
+  printf 'token\n' >home/.config/oska/credentials.toml
+  install --json --uninstall >out.json
+  [ "$(jq -c .kept out.json)" = "[\"$PWD/home/.config/oska\"]" ] || fail "kept $(jq -c .kept out.json)"
+  [ "$(cat home/.config/oska/credentials.toml)" = token ] || fail "the config directory changed"
+  [ ! -e home/.oska ] || fail "the Oska home is still there"
+}
+
+test_uninstall_finds_the_install_in_a_custom_oska_home() {
+  release 1.2.3
+  latest 1.2.3
+  local oska="$PWD/elsewhere"
+  OSKA_HOME="$oska" install --json >/dev/null
+  # Without OSKA_HOME, there is nothing at ~/.oska to uninstall.
+  assert_refused_unchanged not_installed 1 --uninstall
+  [ -e "$oska/bin/oskac" ] || fail "uninstalled the custom home without OSKA_HOME"
+  OSKA_HOME="$oska" install --json --uninstall >out.json
+  [ "$(jq -r '.removed | join(" ")' out.json)" = "$oska/bin/oskac $oska/version $oska/receipt.json $oska/bin $oska" ] ||
+    fail "removed $(jq -c .removed out.json)"
+  [ ! -e "$oska" ] || fail "the custom Oska home is still there"
+}
+
+# Edits the receipt the install wrote with the jq filter <filter>, which may
+# use $home (the Oska home), then expects --uninstall to refuse with
+# unsafe_path and to leave everything as it was.
+assert_uninstall_refuses() {
+  [ -f installed.json ] || cp home/.oska/receipt.json installed.json
+  jq --arg home "$PWD/home/.oska" "$1" installed.json >home/.oska/receipt.json
+  assert_refused_unchanged unsafe_path 1 --uninstall
+}
+
+# A planted receipt, or a hostile OSKA_HOME, must not steer a deletion: an
+# entry outside the places the installer writes refuses the whole
+# uninstall before anything is removed.
+test_uninstall_refuses_an_entry_outside_the_oska_home() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  printf 'victim\n' >victim
+  local entry
+  entry="{\"path\": \"$PWD/victim\", \"kind\": \"record\", \"sha256\": \"$(sha256 victim)\"}"
+  assert_uninstall_refuses ".files += [$entry]"
+  assert_uninstall_refuses ".files[1].path = \$home + \"/sub/version\""
+  assert_uninstall_refuses ".files[1].path = \"version\""
+  assert_uninstall_refuses ".files[1].path = \$home + \"/.\""
+  assert_uninstall_refuses ".files[1].kind = \"hook_script\""
+  [ "$(cat victim)" = victim ] || fail "removed or changed the victim"
+}
+
+test_uninstall_refuses_a_path_that_climbs_out_with_dot_dot() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  printf 'victim\n' >home/victim
+  assert_uninstall_refuses ".files[1].path = \$home + \"/../victim\" | .files[1].sha256 = \"$(sha256 home/victim)\""
+  assert_uninstall_refuses ".files[0].path = \$home + \"/bin/../version\""
+  # Directly in the home by name, yet a directory: refused, not kept.
+  assert_uninstall_refuses ".files[1].path = \$home + \"/..\""
+  assert_uninstall_refuses ".files[1].path = \$home + \"/bin/..\""
+  [ -e home/victim ] || fail "removed the victim"
+}
+
+# bin/ is a symlink to a directory holding a file that matches the
+# receipt's digest: removing through the link would delete it.
+test_uninstall_refuses_a_symlink_in_a_path() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  mkdir victim
+  mv home/.oska/bin/oskac victim/oskac
+  rmdir home/.oska/bin
+  ln -s "$PWD/victim" home/.oska/bin
+  assert_refused_unchanged unsafe_path 1 --uninstall
+  [ -e victim/oskac ] || fail "removed a file through the symlinked bin directory"
+  # A symlinked file, and a symlinked receipt.
+  rm home/.oska/bin
+  mkdir home/.oska/bin
+  ln -s "$PWD/victim/oskac" home/.oska/bin/oskac
+  assert_refused_unchanged unsafe_path 1 --uninstall
+  rm home/.oska/bin/oskac
+  mv home/.oska/receipt.json receipt.json
+  ln -s "$PWD/receipt.json" home/.oska/receipt.json
+  assert_refused_unchanged unsafe_path 1 --uninstall
+  [ -e victim/oskac ] && [ -e receipt.json ] || fail "removed a symlink's target"
+}
+
+# The Oska home itself is a symlink, named with a trailing slash, through
+# which a test for a link would look.
+test_uninstall_refuses_a_symlinked_oska_home() {
+  release 1.2.3
+  latest 1.2.3
+  mkdir real
+  ln -s "$PWD/real" link
+  OSKA_HOME="$PWD/link/" install --json >/dev/null
+  local home
+  for home in "$PWD/link" "$PWD/link/" "$PWD/link//"; do
+    OSKA_HOME="$home" assert_refused_unchanged unsafe_path 1 --uninstall
+  done
+  [ -e real/bin/oskac ] || fail "removed a file through the symlinked Oska home"
+}
+
+test_uninstall_refuses_a_receipt_it_cannot_read() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  cp home/.oska/receipt.json good.json
+  # Each receipt below would remove the version file if it were read
+  # loosely; each must be refused instead.
+  local v="$PWD/home/.oska/version" sum bs='\' bad
+  sum=$(sha256 "$v")
+  while IFS= read -r bad; do
+    printf '%s\n' "$bad" >home/.oska/receipt.json
+    assert_refused_unchanged unsafe_path 1 --uninstall
+  done <<CASES
+{"schema": 1, "files": [{"path": "$v", "kind": "record", "sha256": "$sum"}
+{"schema": 2, "files": [{"path": "$v", "kind": "record", "sha256": "$sum"}]}
+{"schema": 1, "file": [{"path": "$v", "kind": "record", "sha256": "$sum"}]}
+{"schema": 1, "files": [{"path": "/etc/hosts", "path": "$v", "kind": "record", "sha256": "$sum"}]}
+{"schema": 1, "files": [{"path": "$v${bs}n", "kind": "record", "sha256": "$sum"}]}
+{"schema": 1, "files": [{"path": "$v${bs}u00e9", "kind": "record", "sha256": "$sum"}]}
+CASES
+  [ -e "$v" ] || fail "removed the version file"
+  # ASCII escapes read as what they stand for, and any layout of the same
+  # JSON reads the same.
+  jq -c --arg v "${v%n}" '.files[1].path = $v + "@N@"' good.json | sed "s/@N@/${bs}${bs}u006e/" >home/.oska/receipt.json
+  install --json --uninstall >out.json
+  [ ! -e home/.oska ] || fail "a one-line receipt did not uninstall: $(cat out.json)"
+}
+
+# OSKA_HOME inside ~/.config/oska: the settings and credentials there are
+# never removed, even if the receipt lists them.
+test_uninstall_refuses_to_touch_the_config_directory_as_an_oska_home() {
+  release 1.2.3
+  latest 1.2.3
+  OSKA_HOME="$PWD/home/.config/oska" install --json >/dev/null
+  OSKA_HOME="$PWD/home/.config/oska" assert_refused_unchanged unsafe_path 1 --uninstall
+}
+
+test_uninstall_hints_at_the_path_and_explains_itself() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  local bin="$PWD/home/.oska/bin"
+  PATH="$bin:$PATH" install --uninstall >out.txt
+  grep -q "^Uninstalled oskac from $PWD/home/.oska.\$" out.txt || fail "no summary: $(cat out.txt)"
+  grep -qx "  $bin/oskac" out.txt || fail "does not list what it removed: $(cat out.txt)"
+  grep -q "$bin is on your PATH" out.txt || fail "no PATH hint: $(cat out.txt)"
+  install --json >/dev/null
+  PATH="$bin:$PATH" install --json --uninstall >out.json
+  jq -r .path_hint out.json | grep -q "$bin is on your PATH" || fail "path_hint is $(jq .path_hint out.json)"
+}
+
 test_pin_refuses_a_key_that_is_not_one_ed25519_public_key() {
   ssh-keygen -q -t ed25519 -N '' -f k
   if "$here/pin.sh" k out 2>err; then fail "pinned a private key"; fi

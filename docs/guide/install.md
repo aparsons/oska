@@ -47,7 +47,7 @@ What the installers do:
 - **They never downgrade by accident.** If the release they would install is older than the installed `oskac`, they stop with `downgrade_refused` and install nothing. To go back to an older release, name it with `--version` and add `--allow-downgrade`.
 - **They record what they installed.** See [the install receipt](#the-install-receipt).
 - **They clean up after themselves.** If an install is interrupted, for example with Ctrl-C or because a CI job is cancelled, the installer removes its temporary and staging files before it exits.
-- **They take `--version`, `--allow-downgrade` and `--json`.** `--version` installs that release instead of the latest. `--allow-downgrade`, which needs `--version`, lets that release be older than the installed one. `--json` prints one line of JSON on stdout and nothing else.
+- **They take `--version`, `--allow-downgrade`, `--uninstall` and `--json`.** `--version` installs that release instead of the latest. `--allow-downgrade`, which needs `--version`, lets that release be older than the installed one. `--uninstall` removes what the installer installed (see [Uninstall](#uninstall)). `--json` prints one line of JSON on stdout and nothing else.
 
 To pass options through the pipe:
 
@@ -82,7 +82,7 @@ A failed run prints `{"ok": false, "error": "<code>", "message": "..."}` and exi
 
 | `error` | Meaning |
 | --- | --- |
-| `usage` | An unknown option, a `--version` that is not a version, `--allow-downgrade` without `--version`, or options that cannot be used together. |
+| `usage` | An unknown option, a `--version` that is not a version, `--allow-downgrade` without `--version`, or options that cannot be used together, such as `--uninstall` with `--version`. |
 | `no_signing_key` | The installer has no release key built in. Download it again from oskalang.dev. |
 | `insecure_url` | `OSKA_SITE_URL` is not an `https://` URL, or a download was redirected to one that is not. |
 | `unsupported_platform` | There is no build for this OS or CPU. |
@@ -94,6 +94,8 @@ A failed run prints `{"ok": false, "error": "<code>", "message": "..."}` and exi
 | `version_mismatch` | The signed `SHA256SUMS` is for another release than the one asked for, or the binary reports another version. |
 | `downgrade_refused` | The release to install is older than the installed `oskac`, and the run did not ask for a downgrade with both `--version` and `--allow-downgrade`. Nothing was installed. |
 | `install_failed` | The binary or the receipt could not be written into place. |
+| `not_installed` | `--uninstall` found no install receipt in the Oska home. Nothing was removed. |
+| `unsafe_path` | `--uninstall` found a receipt entry outside the places the installer writes, reached through a symlink, or containing `..`, or a receipt it cannot read. Nothing was removed. |
 
 The binaries are published on oskalang.dev, together with `SHA256SUMS` and its signature, for Linux x86_64 and aarch64, macOS x86_64 and aarch64, and Windows x86_64. The Linux binaries are built on Ubuntu 22.04 and need glibc 2.35 or newer. They do not run on an older glibc or on musl systems such as Alpine; there the installer stops with `unsupported_libc`, and you can build from source instead.
 
@@ -126,7 +128,7 @@ Each install writes `receipt.json` into the Oska home (`~/.oska`, or `OSKA_HOME`
 - `files` lists every file the installer wrote, with its SHA-256 where the content is the installer's own.
 - The installer also still writes the one-line `version` file, for one more release, so that tools that read it keep working.
 
-The receipt is advisory. The installer never trusts it to verify anything: every install checks the signature, the signed tag line, the checksum and the binary's version, whatever the receipt says. It only decides which version counts as installed, for the downgrade guard and `previous_version`. When a receipt and a `version` file disagree, the receipt wins.
+The receipt is advisory. The installer never trusts it to verify anything: every install checks the signature, the signed tag line, the checksum and the binary's version, whatever the receipt says. It only decides which version counts as installed, for the downgrade guard and `previous_version`, and what `--uninstall` may remove. When a receipt and a `version` file disagree, the receipt wins.
 
 ### Verify the installation
 
@@ -148,7 +150,35 @@ There is no self-update command.
 
 ### Uninstall
 
-Delete `~/.oska`, which holds `bin/oskac`, the install receipt `receipt.json`, and a `version` file.
+Run the installer with `--uninstall`. It removes what the [install receipt](#the-install-receipt) lists, and nothing else:
+
+```sh
+curl -fsSL https://oskalang.dev/install.sh | sh -s -- --uninstall
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://oskalang.dev/install.ps1))) --uninstall
+```
+
+It downloads nothing, so a saved copy of the installer works offline. Set `OSKA_HOME` as you did to install, and it uninstalls from there.
+
+- **It removes only what the receipt lists**, and only files directly in the Oska home or its `bin` directory. Then it removes `bin` and the Oska home if they are left empty. It never removes a directory with anything in it.
+- **It checks everything before it removes anything.** An entry outside those places, a path through a symlink, or a path with `..` stops it with `unsafe_path`, and nothing is removed. With no receipt it stops with `not_installed`.
+- **It keeps a file that changed** since it was installed: one whose SHA-256 is no longer the one the receipt recorded.
+- **It never touches `~/.config/oska`,** which holds settings and credentials.
+- **It does not edit your `PATH`.** If the `bin` directory is on it, the installer says so, and you remove the line that adds it from your shell profile (on Windows, the entry from your user `PATH`).
+
+With `--json` it prints:
+
+```json
+{"ok": true, "action": "uninstalled", "removed": ["/home/you/.oska/bin/oskac", "/home/you/.oska/version", "/home/you/.oska/receipt.json", "/home/you/.oska/bin", "/home/you/.oska"], "kept": [], "path_hint": null}
+```
+
+- `removed` lists every file and directory it removed.
+- `kept` lists what it left in place: a file that changed, the `bin` directory or the Oska home if something else is in it, and `~/.config/oska` if it exists.
+- `path_hint` says what to remove from your `PATH`, or is `null` when the `bin` directory is not on it.
+
+An install made before the installers wrote a receipt has none, so `--uninstall` stops with `not_installed`. Delete `~/.oska` by hand: it holds `bin/oskac` (`bin\oskac.exe` on Windows) and a `version` file.
 
 ## Upgrading to v0.3.0
 
