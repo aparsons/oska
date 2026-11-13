@@ -120,14 +120,10 @@ pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mu
                 let lower = Lower::new(decls).with_generics(&imp.generics);
                 let target = lower.ty(&imp.target);
                 let lower = lower.with_self(target);
-                let type_name = authority::type_name(&imp.target);
                 for method in &imp.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        out.function = out.modules.function_name(
-                            method.span.start,
-                            Some(&type_name),
-                            &f.name.name,
-                        );
+                        out.function =
+                            authority::impl_method_name(&out.modules, items, item, imp, method, f);
                         function(src, f, lower.clone(), items, out);
                     }
                 }
