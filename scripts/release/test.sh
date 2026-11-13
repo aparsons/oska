@@ -221,8 +221,13 @@ test_stage_site_publishes_releases_and_points_latest_at_the_newest() {
   mkdir site
   OSKA_SITE_URL=https://example.test "$here/stage-site.sh" out site key.pub
   cmp key.pub site/oska-release.pub || fail "public key not published"
+  # What is served verifies, beside the one page the site adds.
   for tag in v1.2.3 v1.10.0 v2.0.0-rc.1; do
-    "$here/verify.sh" "site/releases/$tag" key.pub
+    mkdir served
+    cp -R "site/releases/$tag" "served/$tag"
+    rm "served/$tag/index.html"
+    "$here/verify.sh" "served/$tag" key.pub
+    rm -r served
   done
   cat >expected.json <<'JSON'
 {
@@ -247,6 +252,14 @@ test_stage_site_publishes_releases_and_points_latest_at_the_newest() {
 }
 JSON
   diff <(jq -S . expected.json) <(jq -S . site/latest.json) || fail "latest.json differs"
+  # release_url (and the release notes) link to a page, not a bare folder.
+  page=site/releases/v1.10.0/index.html
+  [ -f "$page" ] || fail "no page at the release's URL"
+  grep -qF '<title>oskac 1.10.0</title>' "$page" || fail "page names the wrong release"
+  grep -qF 'href="oskac-linux-x86_64"' "$page" || fail "page does not link a binary"
+  grep -qF "$(sed -n 2p site/releases/v1.10.0/SHA256SUMS | awk '{print $1}')" "$page" ||
+    fail "page does not show a checksum"
+  grep -qF 'https://example.test/oska-release.pub' "$page" || fail "page does not link the key"
 }
 
 test_stage_site_keeps_what_the_generator_wrote_in_latest_json() {

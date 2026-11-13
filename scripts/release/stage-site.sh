@@ -44,6 +44,39 @@ any='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'
 
 [ -d "$site" ] || die "no site directory $site"
 
+# The page at releases/<tag>/, which release notes and latest.json's
+# release_url link to: each file with its SHA-256, and how to check the
+# signature. Tags and file names are checked or come from the signed
+# SHA256SUMS, so they need no escaping.
+release_page() {
+  local tag=$1 version=${1#v} sum file
+  cat <<HTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oskac $version</title>
+</head>
+<body>
+<h1>oskac $version</h1>
+<p>Install or update with the <a href="$base/guide/install.html">installer</a>, which checks the signature and the checksum for you.</p>
+<ul>
+HTML
+  while read -r sum file; do
+    printf '<li><a href="%s">%s</a><br><code>%s</code></li>\n' "$file" "$file" "$sum"
+  done < <(tail -n +2 "$releases/$tag/SHA256SUMS")
+  cat <<HTML
+</ul>
+<p><a href="SHA256SUMS">SHA256SUMS</a> lists the SHA-256 of each file, and <a href="SHA256SUMS.sig">SHA256SUMS.sig</a> is its signature by the <a href="$base/oska-release.pub">release key</a>. To check it:</p>
+<pre>printf 'oska-release %s\\n' "\$(curl -fsS $base/oska-release.pub)" &gt; allowed
+ssh-keygen -Y verify -f allowed -I oska-release -n oska-release -s SHA256SUMS.sig &lt; SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS</pre>
+</body>
+</html>
+HTML
+}
+
 tags=()
 if [ -d "$releases" ]; then
   while IFS= read -r tag; do
@@ -65,6 +98,7 @@ for tag in "${tags[@]}"; do
   [ ! -e "$site/releases/$tag" ] || die "$site/releases/$tag already exists"
   mkdir -p "$site/releases"
   cp -R "$releases/$tag" "$site/releases/$tag"
+  release_page "$tag" >"$site/releases/$tag/index.html"
 done
 
 latest=$(printf '%s\n' "${tags[@]}" | grep -E "$stable" | sort -V | tail -n 1 || true)
