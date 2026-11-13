@@ -235,6 +235,22 @@ fn noisy: Stdout (out)
 
 A plain `fn` may always be used where a `cap fn` is expected. When a plain `fn` and a `cap fn` meet in one list, in the branches of an `if` or `match`, or as arguments of a generic for one type parameter, the result is a `cap fn`: `[pure_fn, capturing_closure]` is a `List<cap fn() -> Int>`. Writing `List<fn() -> Int>` as the type still rejects the capturing closure. A `cap fn` parameter appears in the authority report as `cap fn (name)` with no capabilities, because a closure's capabilities are not written in its type, but it still makes the function impure.
 
+A generic function can perform effects through a bounded type parameter: `run` below calls `tools.call`, and `T` may be a `cap struct` whose `call` reads files. The report lists such a parameter as `generic T (name)`, so the function is not pure. An unbounded type parameter has no methods to call, so it leaves a function pure.
+
+```oska
+trait Toolset {
+    fn call(self, name: String) -> Result<Untrusted<String>, IoError>
+}
+
+fn run<T: Toolset>(tools: T) -> Result<Untrusted<String>, IoError> {
+    tools.call("a.txt")
+}
+```
+
+```console cmd=check
+fn run: generic T (tools)
+```
+
 ## You cannot forge one
 
 Constructing a built-in capability yourself is `E0271`, and reading its private fields is `E0272`.
