@@ -126,9 +126,9 @@ function Get-SiteUrl {
 
 # Runs an installer file under the PowerShell being tested. Returns its
 # stdout lines; the exit status is in $script:status.
-function Invoke-Installer([string[]]$Arguments, [string]$Installer = (Get-Pinned), [string]$Site = (Get-SiteUrl)) {
+function Invoke-Installer([string[]]$Arguments, [string]$Installer = (Get-Pinned), [string]$Site = (Get-SiteUrl), [string]$OskaHome = (Join-Path (Get-Location).Path 'home\.oska')) {
     $env:OSKA_SITE_URL = $Site
-    $env:OSKA_HOME = Join-Path (Get-Location).Path 'home\.oska'
+    $env:OSKA_HOME = $OskaHome
     $errFile = Join-Path (Get-Location).Path 'installer-stderr.txt'
     $out = & $script:shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Installer @Arguments 2>$errFile
     $script:status = $LASTEXITCODE
@@ -643,6 +643,243 @@ function Test-RunsUnderInvokeExpression {
     & $script:shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-Content -Raw -LiteralPath '$installer' | Invoke-Expression" 2>$null | Out-Null
     Assert ($LASTEXITCODE -ne 0) 'a tampered binary installed under iex'
     Assert (-not (Test-Path (Get-Installed))) 'installed a tampered binary under iex'
+}
+
+# ---- --uninstall -------------------------------------------------------------
+
+function Install-ForUninstall {
+    New-Release '1.2.3'
+    Set-Latest '1.2.3'
+    [void](Invoke-Installer @('--json'))
+    Test-InstalledIs '1.2.3'
+}
+
+# Every path under $Root, sorted, joined with spaces.
+function Get-Tree([string]$Root) {
+    $root = Get-FullPath $Root
+    $all = @($root) + @(Get-ChildItem -Recurse -Force -LiteralPath $root | ForEach-Object { $_.FullName })
+    (@($all | Sort-Object) -join ' ')
+}
+
+function Assert-List([object]$Actual, [string[]]$Expected, [string]$Name) {
+    $got = @($Actual) -join ' | '
+    Assert ($got -eq ($Expected -join ' | ')) "$Name is $got, not $($Expected -join ' | ')"
+}
+
+# Uninstall removes exactly the files the receipt lists, then bin\ and the
+# Oska home because they are left empty.
+function Test-UninstallRemovesWhatTheReceiptLists {
+    Install-ForUninstall
+    $oska = Get-FullPath 'home\.oska'
+    $result = Read-Json (Invoke-Installer @('--json', '--uninstall'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    $names = @($result.PSObject.Properties | ForEach-Object { $_.Name })
+    Assert (($names -join ',') -eq 'ok,action,removed,kept,path_hint') "fields are $($names -join ',')"
+    Assert ($result.ok -eq $true -and $result.action -eq 'uninstalled') "ok is $($result.ok), action is $($result.action)"
+    Assert-List $result.removed @("$oska\bin\oskac.exe", "$oska\version", "$oska\receipt.json", "$oska\bin", $oska) 'removed'
+    Assert-List $result.kept @() 'kept'
+    Assert ($null -eq $result.path_hint) "path_hint is $($result.path_hint)"
+    Assert (-not (Test-Path -LiteralPath $oska)) 'the Oska home is still there'
+}
+
+function Test-UninstallWithoutAReceiptIsNotInstalled {
+    [void](New-Item -ItemType Directory home)
+    [void](Test-RefusedUnchanged 'not_installed' 1 @('--uninstall'))
+    # An install from before receipts has only the version file: uninstall
+    # never guesses what to delete.
+    Install-ForUninstall
+    Remove-Item home/.oska/receipt.json
+    [void](Test-RefusedUnchanged 'not_installed' 1 @('--uninstall'))
+}
+
+# A file that changed since it was installed is kept and listed, and so is
+# the directory it keeps from being empty. The rest goes.
+function Test-UninstallKeepsAChangedFile {
+    Install-ForUninstall
+    $oska = Get-FullPath 'home\.oska'
+    Copy-Item -LiteralPath (Get-FakeOskac '9.9.9') -Destination "$oska\bin\oskac.exe" -Force
+    $mine = Get-Sha256 "$oska\bin\oskac.exe"
+    $result = Read-Json (Invoke-Installer @('--json', '--uninstall'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    Assert-List $result.removed @("$oska\version", "$oska\receipt.json") 'removed'
+    Assert-List $result.kept @("$oska\bin\oskac.exe", "$oska\bin", $oska) 'kept'
+    Assert ((Get-Sha256 "$oska\bin\oskac.exe") -eq $mine) 'the changed oskac.exe changed'
+    Assert ((Get-Tree 'home\.oska') -eq "$oska $oska\bin $oska\bin\oskac.exe") "left $(Get-Tree 'home\.oska')"
+}
+
+# Anything else in the Oska home is not the installer's: it stays, and so
+# does the home.
+function Test-UninstallKeepsAHomeWithOtherFilesInIt {
+    Install-ForUninstall
+    $oska = Get-FullPath 'home\.oska'
+    Write-Text 'home/.oska/notes.txt' "notes`n"
+    [void](New-Item -ItemType Directory 'home/.oska/bin/tools')
+    $result = Read-Json (Invoke-Installer @('--json', '--uninstall'))
+    Assert-List $result.kept @("$oska\bin", $oska) 'kept'
+    Assert ((Get-Tree 'home\.oska') -eq "$oska $oska\bin $oska\bin\tools $oska\notes.txt") "left $(Get-Tree 'home\.oska')"
+}
+
+# ~\.config\oska, under the user profile, is never touched.
+function Test-UninstallNeverTouchesTheConfigDirectory {
+    Install-ForUninstall
+    [void](New-Item -ItemType Directory -Force 'home/.config/oska')
+    Write-Text 'home/.config/oska/credentials.toml' "token`n"
+    $savedProfile = $env:USERPROFILE
+    try {
+        $env:USERPROFILE = Get-FullPath 'home'
+        $result = Read-Json (Invoke-Installer @('--json', '--uninstall'))
+    } finally {
+        $env:USERPROFILE = $savedProfile
+    }
+    Assert-List $result.kept @((Get-FullPath 'home\.config\oska')) 'kept'
+    Assert ((Get-Content -Raw 'home/.config/oska/credentials.toml') -eq "token`n") 'the config directory changed'
+    Assert (-not (Test-Path 'home/.oska')) 'the Oska home is still there'
+}
+
+# OSKA_HOME inside ~\.config\oska: the settings and credentials there are
+# never removed, even if the receipt lists them.
+function Test-UninstallRefusesToTouchTheConfigDirectoryAsAnOskaHome {
+    New-Release '1.2.3'
+    Set-Latest '1.2.3'
+    $oska = Get-FullPath 'home\.config\oska'
+    $savedProfile = $env:USERPROFILE
+    try {
+        $env:USERPROFILE = Get-FullPath 'home'
+        [void](Invoke-Installer @('--json') -OskaHome $oska)
+        Assert ($script:status -eq 0) "the install exited $script:status"
+        $before = Get-Tree 'home'
+        $result = Read-Json (Invoke-Installer @('--json', '--uninstall') -OskaHome $oska)
+    } finally {
+        $env:USERPROFILE = $savedProfile
+    }
+    Assert ($script:status -eq 1 -and $result.error -eq 'unsafe_path') "exited $script:status with $($result.error)"
+    Assert ((Get-Tree 'home') -eq $before) 'the home changed'
+}
+
+function Test-UninstallFindsTheInstallInACustomOskaHome {
+    New-Release '1.2.3'
+    Set-Latest '1.2.3'
+    $oska = Get-FullPath 'elsewhere'
+    [void](Invoke-Installer @('--json') -OskaHome $oska)
+    Assert ($script:status -eq 0) "the install exited $script:status"
+    # Without that OSKA_HOME, there is nothing at home\.oska to uninstall.
+    [void](New-Item -ItemType Directory home)
+    [void](Test-RefusedUnchanged 'not_installed' 1 @('--uninstall'))
+    Assert (Test-Path "$oska\bin\oskac.exe") 'uninstalled the custom home without its OSKA_HOME'
+    $result = Read-Json (Invoke-Installer @('--json', '--uninstall') -OskaHome $oska)
+    Assert-List $result.removed @("$oska\bin\oskac.exe", "$oska\version", "$oska\receipt.json", "$oska\bin", $oska) 'removed'
+    Assert (-not (Test-Path -LiteralPath $oska)) 'the custom Oska home is still there'
+}
+
+# Rewrites the receipt the install wrote with $Edit, a script block given
+# the parsed receipt and the Oska home, then expects --uninstall to refuse
+# with unsafe_path and to change nothing.
+function Assert-UninstallRefuses([scriptblock]$Edit) {
+    if (-not (Test-Path installed.json)) { Copy-Item -LiteralPath 'home/.oska/receipt.json' -Destination installed.json }
+    $receipt = Get-Content -Raw installed.json | ConvertFrom-Json
+    & $Edit $receipt (Get-FullPath 'home\.oska')
+    Write-Text 'home/.oska/receipt.json' ($receipt | ConvertTo-Json -Depth 5)
+    [void](Test-RefusedUnchanged 'unsafe_path' 1 @('--uninstall'))
+}
+
+# A planted receipt, or a hostile OSKA_HOME, must not steer a deletion: an
+# entry outside the places the installer writes refuses the whole
+# uninstall before anything is removed.
+function Test-UninstallRefusesAnEntryOutsideTheOskaHome {
+    Install-ForUninstall
+    Write-Text 'victim' "victim`n"
+    $victim = Get-FullPath 'victim'
+    $sum = Get-Sha256 $victim
+    Assert-UninstallRefuses { param($r, $h) $r.files += [pscustomobject]@{ path = $victim; kind = 'record'; sha256 = $sum } }
+    Assert-UninstallRefuses { param($r, $h) $r.files[1].path = "$h\sub\version" }
+    Assert-UninstallRefuses { param($r, $h) $r.files[1].path = 'version' }
+    Assert-UninstallRefuses { param($r, $h) $r.files[1].path = "$h\." }
+    Assert-UninstallRefuses { param($r, $h) $r.files[1].kind = 'hook_script' }
+    Assert ((Get-Content -Raw 'victim') -eq "victim`n") 'removed or changed the victim'
+}
+
+function Test-UninstallRefusesAPathThatClimbsOutWithDotDot {
+    Install-ForUninstall
+    Write-Text 'home/victim' "victim`n"
+    $sum = Get-Sha256 'home/victim'
+    Assert-UninstallRefuses { param($r, $h) $r.files[1].path = "$h\..\victim"; $r.files[1].sha256 = $sum }
+    Assert-UninstallRefuses { param($r, $h) $r.files[0].path = "$h\bin\..\version" }
+    # Directly in the home by name, yet a directory: refused, not kept.
+    Assert-UninstallRefuses { param($r, $h) $r.files[1].path = "$h\.." }
+    Assert-UninstallRefuses { param($r, $h) $r.files[1].path = "$h\bin\.." }
+    Assert (Test-Path 'home/victim') 'removed the victim'
+}
+
+# bin\ is a junction to a directory holding a file that matches the
+# receipt's digest: removing through the link would delete it.
+function Test-UninstallRefusesASymlinkInAPath {
+    Install-ForUninstall
+    [void](New-Item -ItemType Directory victim)
+    Move-Item -LiteralPath 'home/.oska/bin/oskac.exe' -Destination 'victim/oskac.exe'
+    Remove-Item 'home/.oska/bin'
+    [void](New-Item -ItemType Junction -Path 'home/.oska/bin' -Target (Get-FullPath 'victim'))
+    [void](Test-RefusedUnchanged 'unsafe_path' 1 @('--uninstall'))
+    Assert (Test-Path 'victim/oskac.exe') 'removed a file through the junction'
+    # Not recursive: removes the junction, never what it points to.
+    [IO.Directory]::Delete((Get-FullPath 'home/.oska/bin'), $false)
+    [void](New-Item -ItemType Directory 'home/.oska/bin')
+    [void](New-Item -ItemType SymbolicLink -Path 'home/.oska/bin/oskac.exe' -Target (Get-FullPath 'victim/oskac.exe'))
+    [void](Test-RefusedUnchanged 'unsafe_path' 1 @('--uninstall'))
+    Remove-Item 'home/.oska/bin/oskac.exe'
+    Move-Item -LiteralPath 'home/.oska/receipt.json' -Destination 'receipt.json'
+    [void](New-Item -ItemType SymbolicLink -Path 'home/.oska/receipt.json' -Target (Get-FullPath 'receipt.json'))
+    [void](Test-RefusedUnchanged 'unsafe_path' 1 @('--uninstall'))
+    Assert ((Test-Path 'victim/oskac.exe') -and (Test-Path 'receipt.json')) "removed a link's target"
+}
+
+# Each receipt below would remove the version file if it were read loosely;
+# each must be refused instead. (install.sh also refuses a \u escape
+# outside ASCII; ConvertFrom-Json cannot tell one from the character.)
+function Test-UninstallRefusesAReceiptItCannotRead {
+    Install-ForUninstall
+    $good = [IO.File]::ReadAllText((Get-FullPath 'home/.oska/receipt.json'))
+    $v = Get-FullPath 'home\.oska\version'
+    $vj = $v | ConvertTo-Json
+    $sum = Get-Sha256 $v
+    $entry = "{`"path`": $vj, `"kind`": `"record`", `"sha256`": `"$sum`"}"
+    $cases = @(
+        "{`"schema`": 1, `"files`": [$entry",
+        "{`"schema`": 2, `"files`": [$entry]}",
+        "{`"schema`": 1, `"file`": [$entry]}",
+        "{`"schema`": 1, `"files`": [{`"path`": `"C:\\Windows\\win.ini`", `"path`": $vj, `"kind`": `"record`", `"sha256`": `"$sum`"}]}",
+        "{`"schema`": 1, `"files`": [{`"path`": $($vj.TrimEnd('"'))\n`", `"kind`": `"record`", `"sha256`": `"$sum`"}]}",
+        "{`"schema`": 1, `"files`": [`"$($v.Replace('\', '\\'))`"]}"
+    )
+    foreach ($case in $cases) {
+        Write-Text 'home/.oska/receipt.json' $case
+        [void](Test-RefusedUnchanged 'unsafe_path' 1 @('--uninstall'))
+    }
+    Assert (Test-Path -LiteralPath $v) 'removed the version file'
+    # An ASCII escape reads as what it stands for.
+    $escape = '\' + 'u006e'
+    Write-Text 'home/.oska/receipt.json' $good.Replace('\\version"', "\\versio$escape`"")
+    $result = Read-Json (Invoke-Installer @('--json', '--uninstall'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    Assert (-not (Test-Path 'home/.oska')) "an escaped receipt did not uninstall: $script:stdout"
+}
+
+function Test-UninstallHintsAtThePathAndExplainsItself {
+    Install-ForUninstall
+    $bin = Get-FullPath 'home\.oska\bin'
+    $path = $env:Path
+    try {
+        $env:Path = "$bin;$path"
+        $out = (Invoke-Installer @('--uninstall')) -join "`n"
+        Assert ($script:status -eq 0) "exited $script:status"
+        Assert ($out -like "*Uninstalled oskac from $(Get-FullPath 'home\.oska').*") "no summary in: $out"
+        Assert ($out -like "*  $bin\oskac.exe*") "does not list what it removed: $out"
+        Assert ($out -like "*$bin is on your PATH*") "no PATH hint in: $out"
+        Install-ForUninstall
+        $result = Read-Json (Invoke-Installer @('--json', '--uninstall'))
+        Assert ($result.path_hint -like "$bin is on your PATH*") "path_hint is $($result.path_hint)"
+    } finally {
+        $env:Path = $path
+    }
 }
 
 $shells = @('powershell', 'pwsh') | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue }

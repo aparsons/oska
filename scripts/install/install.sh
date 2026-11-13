@@ -8,6 +8,7 @@
 #   --version X        install release X (0.1.0 or v0.1.0) instead of the latest
 #   --allow-downgrade  with --version, install X even if it is older than
 #                      the installed oskac
+#   --uninstall        remove what the install receipt lists, and nothing else
 #   --json             print one JSON object on stdout, and nothing else
 #   --help             print this help
 #
@@ -27,7 +28,8 @@
 # Re-running it updates oskac in place. It never installs an older release
 # than the installed one unless asked with --version and --allow-downgrade.
 # It records what it installed in $OSKA_HOME/receipt.json, which is
-# advisory: no check above reads it.
+# advisory: no check above reads it. --uninstall removes the files the
+# receipt lists, if they are unchanged, and downloads nothing.
 
 set -u
 
@@ -93,6 +95,7 @@ usage: curl -fsSL https://oskalang.dev/install.sh | sh -s -- [options]
   --version X        install release X (0.1.0 or v0.1.0) instead of the latest
   --allow-downgrade  with --version, install X even if it is older than
                      the installed oskac
+  --uninstall        remove what the install receipt lists, and nothing else
   --json             print one JSON object on stdout, and nothing else
   --help             print this help
 
@@ -258,6 +261,307 @@ json_value() {
     head -n 1
 }
 
+# The Oska home and the paths the installer writes in it. Install and
+# uninstall work them out the same way, so a receipt's paths match.
+oska_paths() {
+  home=${OSKA_HOME:-$HOME/.oska}
+  case $home in
+    /*) ;;
+    *) home=$PWD/$home ;;
+  esac
+  bin_dir=$home/bin
+  target=$bin_dir/oskac
+  version_file=$home/version
+  receipt=$home/receipt.json
+}
+
+# receipt_files <receipt>: one line per entry of the receipt's "files",
+# "k<kind><TAB>s<sha256><TAB>p<path>", with an empty value for a missing
+# or non-string one. A strict JSON reader rather than a pattern match, so a
+# hand-edited receipt reads as it would anywhere else. It fails, printing
+# nothing, on anything it cannot read for certain: malformed JSON, a schema
+# other than 1, no "files" array, a repeated key, or a control character
+# or non-ASCII escape in an entry's value.
+receipt_files() {
+  LC_ALL=C awk '
+    function die() { exit 1 }
+    function ws() {
+      while (pos <= n && index(" \t\n\r", substr(s, pos, 1))) pos++
+    }
+    function peek() { ws(); return substr(s, pos, 1) }
+    # A string at pos. Escapes that make a control character, or one
+    # outside ASCII, become \001, which no entry may hold.
+    function str(   out, c, h, i, v) {
+      pos++
+      out = ""
+      while (1) {
+        if (pos > n) die()
+        c = substr(s, pos, 1)
+        if (c == "\"") { pos++; return out }
+        if (index(ctl, c)) die()
+        if (c != "\\") { out = out c; pos++; continue }
+        c = substr(s, pos + 1, 1)
+        pos += 2
+        if (c == "\"" || c == "\\" || c == "/") out = out c
+        else if (index("bfnrt", c)) out = out "\001"
+        else if (c == "u") {
+          h = tolower(substr(s, pos, 4))
+          if (h !~ /^[0-9a-f][0-9a-f][0-9a-f][0-9a-f]$/) die()
+          v = 0
+          for (i = 1; i <= 4; i++) v = v * 16 + index("0123456789abcdef", substr(h, i, 1)) - 1
+          out = out (v >= 32 && v < 127 ? sprintf("%c", v) : "\001")
+          pos += 4
+        } else die()
+      }
+    }
+    # A value at pos, under <at> (its path from the top, like /files/0).
+    # Leaves a string in sval and its type in vtype.
+    function value(at,   c, key, k, i) {
+      c = peek()
+      vtype = c
+      if (c == "\"") { sval = str(); return }
+      if (c == "{") {
+        pos++
+        if (peek() == "}") { pos++; vtype = "{"; return }
+        while (1) {
+          if (peek() != "\"") die()
+          key = str()
+          if (peek() != ":") die()
+          pos++
+          k = at "/" key
+          if (k in seen) die()
+          seen[k] = 1
+          value(k)
+          if (at == "" && key == "schema") schema = (vtype == "n" ? sval : "")
+          if (at ~ /^\/files\/[0-9]+$/ && vtype == "\"") {
+            if (key == "path") e_path = sval
+            else if (key == "kind") e_kind = sval
+            else if (key == "sha256") e_sha = sval
+          }
+          c = peek()
+          pos++
+          if (c == "}") break
+          if (c != ",") die()
+        }
+        vtype = "{"
+        return
+      }
+      if (c == "[") {
+        pos++
+        if (at == "/files") files = 1
+        if (peek() == "]") { pos++; vtype = "["; return }
+        for (i = 0; ; i++) {
+          if (at == "/files") {
+            if (peek() != "{") die()
+            e_path = ""; e_kind = ""; e_sha = ""
+          }
+          value(at "/" i)
+          if (at == "/files") {
+            if (index(e_kind e_sha e_path, "\001")) die()
+            lines = lines "k" e_kind "\ts" e_sha "\tp" e_path "\n"
+          }
+          c = peek()
+          pos++
+          if (c == "]") break
+          if (c != ",") die()
+        }
+        vtype = "["
+        return
+      }
+      if (match(substr(s, pos), /^-?[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?/)) {
+        sval = substr(s, pos, RLENGTH); pos += RLENGTH; vtype = "n"; return
+      }
+      if (match(substr(s, pos), /^(true|false|null)/)) { pos += RLENGTH; vtype = "l"; return }
+      die()
+    }
+    { s = s $0 "\n" }
+    END {
+      for (i = 1; i < 32; i++) if (i != 9 && i != 10 && i != 13) ctl = ctl sprintf("%c", i)
+      ctl = ctl "\t\n\r"
+      n = length(s)
+      pos = 1
+      if (peek() != "{") die()
+      value("")
+      ws()
+      if (pos <= n || !files || schema != "1") die()
+      printf "%s", lines
+    }' "$1"
+}
+
+# json_list <lines>: the non-empty lines of <lines> as a JSON array.
+json_list() {
+  printf '['
+  printf '%s\n' "$1" | {
+    sep=
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      printf '%s%s' "$sep" "$(json_str "$line")"
+      sep=', '
+    done
+  }
+  printf ']'
+}
+
+# keep <path> <why>: uninstall leaves <path> in place, and says why.
+keep() {
+  kept="$kept$1
+"
+  kept_why="$kept_why  $1 ($2)
+"
+}
+
+unsafe() {
+  fail unsafe_path "$*; nothing was removed"
+}
+
+# --uninstall: remove what the receipt lists, and nothing else. Every entry
+# is checked before anything is removed, and one that is not a file this
+# installer writes, in a place it writes, refuses the whole uninstall.
+# A file that changed since it was installed is kept. Directories are
+# removed only if empty, never recursively, and ~/.config/oska is never
+# touched. Lists are one path a line: the receipt reader refuses a path
+# with a control character in it.
+uninstall() {
+  oska_paths
+  config_dir=$HOME/.config/oska
+  if [ -L "$home" ] || [ -L "$receipt" ]; then
+    unsafe "$receipt is reached through a symlink"
+  fi
+  [ -f "$receipt" ] ||
+    fail not_installed "there is no install receipt at $receipt, so nothing is known to have been installed there; nothing was removed"
+  if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+    need openssl "or sha256sum or shasum, to check that a file is unchanged before removing it"
+  fi
+  entries=$(receipt_files "$receipt") ||
+    unsafe "cannot read the install receipt $receipt, so none of its paths is known to be safe"
+
+  tab=$(printf '\t')
+  remove=
+  remove_receipt=0
+  kept=
+  kept_why=
+  while IFS="$tab" read -r kind sum path; do
+    [ -n "$kind" ] || continue
+    # Each field carries a one-letter prefix, so none is empty and the
+    # tab separators never merge.
+    kind=${kind#k}
+    sum=${sum#s}
+    path=${path#p}
+    case $path in
+      /*) ;;
+      *) unsafe "the receipt lists '$path', which is not an absolute path" ;;
+    esac
+    case $path/ in
+      */../*) unsafe "the receipt lists $path, which climbs out with .." ;;
+    esac
+    case $path/ in
+      "$config_dir"/*) unsafe "the receipt lists $path, in $config_dir, which uninstall never touches" ;;
+    esac
+    case $kind in
+      binary | record)
+        case $path in
+          "$home"/*) name=${path#"$home"/} ;;
+          *) unsafe "the receipt lists $path, which is outside the Oska home $home" ;;
+        esac
+        dir=$home
+        case $name in
+          bin/*)
+            name=${name#bin/}
+            dir=$bin_dir ;;
+        esac
+        case $name in
+          '' | . | */*) unsafe "the receipt lists $path, which is not directly in $home or $bin_dir" ;;
+        esac ;;
+      *) unsafe "the receipt lists $path as a '$kind', which this installer does not remove" ;;
+    esac
+    if [ -L "$dir" ] || [ -L "$path" ]; then
+      unsafe "the receipt lists $path, which is reached through a symlink"
+    fi
+
+    if [ ! -e "$path" ]; then
+      continue
+    elif [ ! -f "$path" ]; then
+      keep "$path" "not a regular file"
+    elif [ "$path" = "$receipt" ]; then
+      remove_receipt=1
+    elif [ -z "$sum" ]; then
+      keep "$path" "the receipt records no SHA-256 for it"
+    elif [ "$(sha256 "$path")" != "$sum" ]; then
+      keep "$path" "changed since it was installed"
+    else
+      remove="$remove$path
+"
+    fi
+  done <<EOF
+$entries
+EOF
+
+  # Everything is checked; now remove. The receipt goes last, and stays
+  # if a file could not be removed, so a second run can finish the job.
+  removed=
+  failed=0
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    if rm -f "$path" 2>/dev/null; then
+      removed="$removed$path
+"
+    else
+      failed=1
+      keep "$path" "could not be removed"
+    fi
+  done <<EOF
+$remove
+EOF
+  if [ "$remove_receipt" = 1 ]; then
+    if [ "$failed" = 0 ] && rm -f "$receipt" 2>/dev/null; then
+      removed="$removed$receipt
+"
+    else
+      keep "$receipt" "kept while other files remain"
+    fi
+  fi
+  for dir in "$bin_dir" "$home"; do
+    [ -d "$dir" ] && [ ! -L "$dir" ] || continue
+    if rmdir "$dir" 2>/dev/null; then
+      removed="$removed$dir
+"
+    else
+      keep "$dir" "not empty"
+    fi
+  done
+  if [ -e "$config_dir" ] || [ -L "$config_dir" ]; then
+    keep "$config_dir" "settings and credentials, which uninstall never touches"
+  fi
+
+  path_hint=
+  case ":${PATH:-}:" in
+    *":$bin_dir:"*) path_hint="$bin_dir is on your PATH; remove it from the shell profile that adds it" ;;
+  esac
+
+  if [ "$json" = 1 ]; then
+    if [ -n "$path_hint" ]; then
+      hint_json=$(json_str "$path_hint")
+    else
+      hint_json=null
+    fi
+    printf '{"ok": true, "action": "uninstalled", "removed": %s, "kept": %s, "path_hint": %s}\n' \
+      "$(json_list "$removed")" "$(json_list "$kept")" "$hint_json"
+    return
+  fi
+  echo "Uninstalled oskac from $home."
+  if [ -n "$removed" ]; then
+    echo "Removed:"
+    printf '%s' "$removed" | sed 's/^/  /'
+  fi
+  if [ -n "$kept" ]; then
+    echo "Kept:"
+    printf '%s' "$kept_why"
+  fi
+  if [ -n "$path_hint" ]; then
+    echo "$path_hint."
+  fi
+}
+
 # The version installed now, or nothing. The receipt wins over the legacy
 # version file; an install from before receipts has only the latter.
 # Either is advisory: what is not a version counts as nothing installed.
@@ -304,6 +608,10 @@ main() {
   if [ -n "$mode" ]; then
     [ -z "$requested" ] || fail usage "--version cannot be used with $mode"
     [ "$allow_downgrade" = 0 ] || fail usage "--allow-downgrade cannot be used with $mode"
+    if [ "$mode" = --uninstall ]; then
+      uninstall
+      return
+    fi
     fail usage "$mode is not available in this installer yet"
   fi
   [ "$allow_downgrade" = 0 ] || [ -n "$requested" ] ||
@@ -351,15 +659,7 @@ main() {
   fi
   version=${tag#v}
 
-  home=${OSKA_HOME:-$HOME/.oska}
-  case $home in
-    /*) ;;
-    *) home=$PWD/$home ;;
-  esac
-  bin_dir=$home/bin
-  target=$bin_dir/oskac
-  version_file=$home/version
-  receipt=$home/receipt.json
+  oska_paths
   previous=$(previous_version)
 
   # The downgrade guard. An older release is installed only when it is

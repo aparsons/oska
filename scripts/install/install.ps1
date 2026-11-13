@@ -6,10 +6,11 @@
 #
 #   & ([scriptblock]::Create((irm https://oskalang.dev/install.ps1))) --version 0.1.0 --json
 #
-# Options (`-Version`, `-AllowDowngrade` and `-Json` work too):
+# Options (`-Version`, `-AllowDowngrade`, `-Uninstall` and `-Json` work too):
 #   --version X        install release X (0.1.0 or v0.1.0) instead of the latest
 #   --allow-downgrade  with --version, install X even if it is older than
 #                      the installed oskac
+#   --uninstall        remove what the install receipt lists, and nothing else
 #   --json             print one JSON object on stdout, and nothing else
 #   --help             print this help
 #
@@ -30,7 +31,8 @@
 # Re-running it updates oskac in place. It never installs an older release
 # than the installed one unless asked with --version and --allow-downgrade.
 # It records what it installed in $env:OSKA_HOME\receipt.json, which is
-# advisory: no check above reads it.
+# advisory: no check above reads it. --uninstall removes the files the
+# receipt lists, if they are unchanged, and downloads nothing.
 #
 # Works in Windows PowerShell 5.1 and PowerShell 7.
 
@@ -201,6 +203,218 @@
         return $null
     }
 
+    # The Oska home and the paths the installer writes in it. Install and
+    # uninstall work them out the same way, so a receipt's paths match.
+    function Get-OskaPaths {
+        $oskaHome = $env:OSKA_HOME
+        if (-not $oskaHome) { $oskaHome = Join-Path $HOME '.oska' }
+        # An absolute path, so .NET and PowerShell agree on where it is.
+        $oskaHome = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($oskaHome)
+        # Without a trailing separator, which Join-Path would drop from the
+        # paths below but uninstall would keep in the home they must be in.
+        $trimmed = $oskaHome.TrimEnd('\', '/')
+        if ($trimmed -and -not $trimmed.EndsWith(':')) { $oskaHome = $trimmed }
+        $binDir = Join-Path $oskaHome 'bin'
+        @{
+            home        = $oskaHome
+            bin         = $binDir
+            target      = (Join-Path $binDir 'oskac.exe')
+            versionFile = (Join-Path $oskaHome 'version')
+            receipt     = (Join-Path $oskaHome 'receipt.json')
+        }
+    }
+
+    # Whether $Path is a symlink, a junction or any other reparse point. The
+    # link itself is looked at, never what it points to. A path that does
+    # not exist is not a link.
+    function Test-Link([string]$Path) {
+        try {
+            return [bool]([IO.File]::GetAttributes($Path) -band [IO.FileAttributes]::ReparsePoint)
+        } catch {
+            return $false
+        }
+    }
+
+    # A field of an object ConvertFrom-Json made, or $null if it has none.
+    # The comma keeps an array an array: a function's output is unrolled.
+    function Get-Field([object]$Object, [string]$Name) {
+        $p = $Object.PSObject.Properties[$Name]
+        if ($p) { return , $p.Value }
+        return $null
+    }
+
+    function Stop-Unsafe([string]$Message) {
+        Stop-Install 'unsafe_path' "$Message; nothing was removed"
+    }
+
+    # --uninstall: remove what the receipt lists, and nothing else. Every
+    # entry is checked before anything is removed, and one that is not a
+    # file this installer writes, in a place it writes, refuses the whole
+    # uninstall. A file that changed since it was installed is kept.
+    # Directories are removed only if empty, never recursively, and
+    # ~/.config/oska is never touched. The same contract as install.sh's.
+    function Uninstall-Oskac {
+        $paths = Get-OskaPaths
+        $oskaHome = $paths.home
+        $binDir = $paths.bin
+        $receipt = $paths.receipt
+        # ~\.config\oska. ~ is the user profile, as PowerShell's ~ is.
+        $userHome = $env:USERPROFILE
+        if (-not $userHome) { $userHome = $HOME }
+        $configDir = Join-Path (Join-Path $userHome '.config') 'oska'
+        $windows = $env:OS -eq 'Windows_NT'
+        if ($windows) { $cmp = [StringComparison]::OrdinalIgnoreCase } else { $cmp = [StringComparison]::Ordinal }
+        $sep = [string][IO.Path]::DirectorySeparatorChar
+
+        if ((Test-Link $oskaHome) -or (Test-Link $receipt)) {
+            Stop-Unsafe "$receipt is reached through a symlink"
+        }
+        if (-not [IO.File]::Exists($receipt)) {
+            Stop-Install 'not_installed' "there is no install receipt at $receipt, so nothing is known to have been installed there; nothing was removed"
+        }
+        # Read strictly: anything but a schema 1 receipt whose files are
+        # objects with a string path and kind is refused, as install.sh
+        # refuses it.
+        $files = $null
+        try {
+            $data = [IO.File]::ReadAllText($receipt) | ConvertFrom-Json
+            $schema = Get-Field $data 'schema'
+            $list = Get-Field $data 'files'
+            if (($schema -is [int] -or $schema -is [long]) -and $schema -eq 1 -and $list -is [array]) {
+                $files = $list
+            }
+        } catch {
+            $files = $null
+        }
+        if ($null -eq $files) {
+            Stop-Unsafe "cannot read the install receipt $receipt, so none of its paths is known to be safe"
+        }
+
+        $remove = New-Object Collections.Generic.List[string]
+        $removeReceipt = $false
+        $kept = New-Object Collections.Generic.List[string]
+        $keptWhy = New-Object Collections.Generic.List[string]
+        $keep = {
+            param($Path, $Why)
+            $kept.Add($Path)
+            $keptWhy.Add("  $Path ($Why)")
+        }
+        foreach ($e in $files) {
+            $path = $null
+            $kind = $null
+            $sum = $null
+            if ($e -is [Management.Automation.PSCustomObject]) {
+                $path = Get-Field $e 'path'
+                $kind = Get-Field $e 'kind'
+                $sum = Get-Field $e 'sha256'
+            }
+            if ($path -isnot [string] -or $kind -isnot [string] -or ($null -ne $sum -and $sum -isnot [string]) -or
+                ("$path$kind$sum" -match '[\x00-\x1f]')) {
+                Stop-Unsafe "cannot read the install receipt $receipt, so none of its paths is known to be safe"
+            }
+            if (@($path -split '[\\/]') -contains '..') {
+                Stop-Unsafe "the receipt lists $path, which climbs out with .."
+            }
+            if ($path.Equals($configDir, $cmp) -or $path.StartsWith($configDir + $sep, $cmp)) {
+                Stop-Unsafe "the receipt lists $path, in $configDir, which uninstall never touches"
+            }
+            if ($kind -cne 'binary' -and $kind -cne 'record') {
+                Stop-Unsafe "the receipt lists $path as a '$kind', which this installer does not remove"
+            }
+            if (-not $path.StartsWith($oskaHome + $sep, $cmp)) {
+                Stop-Unsafe "the receipt lists $path, which is outside the Oska home $oskaHome"
+            }
+            $parts = @($path.Substring($oskaHome.Length + 1) -split '[\\/]')
+            $dir = $oskaHome
+            if ($parts.Count -eq 2 -and $parts[0].Equals('bin', $cmp)) {
+                $dir = $binDir
+                $parts = @($parts[1])
+            }
+            if ($parts.Count -ne 1 -or $parts[0] -eq '' -or $parts[0] -eq '.' -or $parts[0].Contains(':')) {
+                Stop-Unsafe "the receipt lists $path, which is not directly in $oskaHome or $binDir"
+            }
+            if ((Test-Link $dir) -or (Test-Link $path)) {
+                Stop-Unsafe "the receipt lists $path, which is reached through a symlink"
+            }
+
+            if (-not [IO.File]::Exists($path)) {
+                if ([IO.Directory]::Exists($path)) { & $keep $path 'not a regular file' }
+            } elseif ($path.Equals($receipt, $cmp)) {
+                $removeReceipt = $true
+            } elseif (-not $sum) {
+                & $keep $path 'the receipt records no SHA-256 for it'
+            } elseif ((Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant() -cne $sum) {
+                & $keep $path 'changed since it was installed'
+            } else {
+                $remove.Add($path)
+            }
+        }
+
+        # Everything is checked; now remove. The receipt goes last, and
+        # stays if a file could not be removed, so a second run can finish
+        # the job.
+        $removed = New-Object Collections.Generic.List[string]
+        $failed = $false
+        foreach ($path in $remove) {
+            try {
+                [IO.File]::Delete($path)
+                $removed.Add($path)
+            } catch {
+                $failed = $true
+                & $keep $path 'could not be removed'
+            }
+        }
+        if ($removeReceipt) {
+            $gone = $false
+            if (-not $failed) {
+                try { [IO.File]::Delete($receipt); $gone = $true } catch { $gone = $false }
+            }
+            if ($gone) { $removed.Add($receipt) } else { & $keep $receipt 'kept while other files remain' }
+        }
+        foreach ($dir in @($binDir, $oskaHome)) {
+            if (-not [IO.Directory]::Exists($dir) -or (Test-Link $dir)) { continue }
+            try {
+                # Not recursive: it fails if anything is left in $dir.
+                [IO.Directory]::Delete($dir, $false)
+                $removed.Add($dir)
+            } catch {
+                & $keep $dir 'not empty'
+            }
+        }
+        if ([IO.Directory]::Exists($configDir) -or [IO.File]::Exists($configDir)) {
+            & $keep $configDir 'settings and credentials, which uninstall never touches'
+        }
+
+        $pathHint = $null
+        foreach ($d in ([string]$env:Path -split [IO.Path]::PathSeparator)) {
+            if ($d -and $d.TrimEnd('\', '/').Equals($binDir.TrimEnd('\', '/'), $cmp)) {
+                $pathHint = "$binDir is on your PATH; remove it from your user PATH"
+            }
+        }
+
+        if ($state.json) {
+            $result = [ordered]@{
+                ok        = $true
+                action    = 'uninstalled'
+                removed   = [string[]]$removed.ToArray()
+                kept      = [string[]]$kept.ToArray()
+                path_hint = $pathHint
+            }
+            Write-Output (New-Object PSObject -Property $result | ConvertTo-Json -Compress)
+            return
+        }
+        Write-Host "Uninstalled oskac from $oskaHome."
+        if ($removed.Count) {
+            Write-Host 'Removed:'
+            foreach ($path in $removed) { Write-Host "  $path" }
+        }
+        if ($kept.Count) {
+            Write-Host 'Kept:'
+            foreach ($line in $keptWhy) { Write-Host $line }
+        }
+        if ($pathHint) { Write-Host "$pathHint." }
+    }
+
     # A name no one can predict, for a staging directory or a temp file.
     function Get-RandomName([string]$Prefix) {
         $Prefix + [IO.Path]::GetRandomFileName().Replace('.', '')
@@ -238,6 +452,7 @@
                 Write-Host '  --version X        install release X (0.1.0 or v0.1.0) instead of the latest'
                 Write-Host '  --allow-downgrade  with --version, install X even if it is older than'
                 Write-Host '                     the installed oskac'
+                Write-Host '  --uninstall        remove what the install receipt lists, and nothing else'
                 Write-Host '  --json             print one JSON object on stdout, and nothing else'
                 Write-Host '  --help             print this help'
                 Write-Host ''
@@ -253,6 +468,10 @@
         if ($mode) {
             if ($requested) { Stop-Install 'usage' "--version cannot be used with $mode" }
             if ($allowDowngrade) { Stop-Install 'usage' "--allow-downgrade cannot be used with $mode" }
+            if ($mode -eq '--uninstall') {
+                Uninstall-Oskac
+                return
+            }
             Stop-Install 'usage' "$mode is not available in this installer yet"
         }
         if ($allowDowngrade -and -not $requested) {
@@ -319,14 +538,12 @@
         }
         $version = $tag.Substring(1)
 
-        $oskaHome = $env:OSKA_HOME
-        if (-not $oskaHome) { $oskaHome = Join-Path $HOME '.oska' }
-        # An absolute path, so .NET and PowerShell agree on where it is.
-        $oskaHome = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($oskaHome)
-        $binDir = Join-Path $oskaHome 'bin'
-        $target = Join-Path $binDir 'oskac.exe'
-        $versionFile = Join-Path $oskaHome 'version'
-        $receipt = Join-Path $oskaHome 'receipt.json'
+        $paths = Get-OskaPaths
+        $oskaHome = $paths.home
+        $binDir = $paths.bin
+        $target = $paths.target
+        $versionFile = $paths.versionFile
+        $receipt = $paths.receipt
         $previous = Get-PreviousVersion $target $receipt $versionFile
 
         # The downgrade guard. An older release is installed only when it is
