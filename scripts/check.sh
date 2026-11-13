@@ -11,7 +11,8 @@
 #      std.rt's own source, and workflows use only official
 #      actions plus the SHA-pinned rust-toolchain;
 #   2. cargo fmt, clippy with -D warnings, and cargo test;
-#   3. the installer, release script and unsafe guard and intrinsic guard tests;
+#   3. the installer, release script, unsafe guard, intrinsic guard and
+#      rust-stable tests;
 #   4. shellcheck on the shell scripts, when shellcheck is installed.
 
 set -euo pipefail
@@ -85,9 +86,12 @@ bash scripts/unsafe-guard/test.sh
 step "intrinsic guard tests"
 bash scripts/intrinsic-guard/test.sh
 
+step "rust-stable tests"
+bash scripts/rust-stable/test.sh
+
 step "shellcheck"
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck -S warning scripts/*.sh scripts/install/*.sh scripts/release/*.sh scripts/unsafe-guard/*.sh scripts/intrinsic-guard/*.sh site/agent-setup/*.sh .githooks/pre-push
+  shellcheck -S warning scripts/*.sh scripts/install/*.sh scripts/release/*.sh scripts/unsafe-guard/*.sh scripts/intrinsic-guard/*.sh scripts/rust-stable/*.sh site/agent-setup/*.sh .githooks/pre-push
 else
   echo "shellcheck not installed; skipped (CI runs it)"
 fi

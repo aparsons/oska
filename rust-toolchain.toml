@@ -1,10 +1,8 @@
 # One Rust for the Pi, CI and release builds. Two tables in std.rt follow
 # this Rust's Unicode (`dbg`'s `escaped_table` and `lowercase_table`), and a
-# newer Clippy can fail CI on code an older one passed. To upgrade: change
-# the version, run scripts/check.sh, paste the table
-# `the_dbg_escape_table_is_rusts_for_every_character` prints into
-# `escaped_table`, and regenerate `lowercase_table` until
-# `the_lowercase_table_is_rusts_for_every_character` passes.
+# newer Clippy can fail CI on code an older one passed. To upgrade, run
+# `scripts/bump-rust.sh <version>`: it changes the version, regenerates both
+# tables and runs scripts/check.sh (docs/agents/rust.md).
 [toolchain]
 channel = "1.100.0"
 components = ["rustfmt", "clippy"]
