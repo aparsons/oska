@@ -3,7 +3,8 @@
 // system-call or memory intrinsic. No user code can import it (`E0209`).
 //
 // An intrinsic is a body-less function whose name starts with `rt_sys_`
-// (one Linux aarch64 system call) or `rt_mem_` (one memory or word
+// (one Linux system call, whose number the backend gives for the target
+// platform) or `rt_mem_` (one memory or word
 // operation). Both prefixes are reserved: `scripts/intrinsic-guard/guard.sh`
 // fails the build if any other `.osk` file names such an identifier, and
 // the checker reports `E0209` for it. The interpreter has no
@@ -100,6 +101,47 @@ pub fn rt_mem_globals() -> Int
 // real OS under an `#[integration]` test. Always 0 in a program's
 // executable; in a test executable, word 32, which `test_begin` sets.
 pub fn rt_mem_test_host() -> Int
+// The table of the target platform the executable is built for (see
+// "Platforms"): a constant, as `rt_mem_test_host` is, since the backend
+// gives the table of the platform it compiles for.
+pub fn rt_mem_platform() -> Platform
+
+// ---- Platforms -------------------------------------------------------------
+//
+// What `std.rt` reads that differs between target platforms is in one
+// table per platform, and nowhere else: no function holds such a value,
+// or asks which platform it runs on. A system call's number is the
+// backend's, which lowers each `rt_sys_` intrinsic with the target's.
+// Adding a platform is adding its table here and its numbers there.
+//
+// The rest of what `std.rt` asks of the kernel is the same on every Linux
+// processor Oska supports: the other open flags, `mmap`'s flags and
+// protections, `struct sigaction`, `TCGETS`, `F_DUPFD_CLOEXEC`,
+// `AT_FDCWD`, `S_IFMT`, the `errno` values and `struct linux_dirent64`.
+
+struct Platform {
+    // `openat`'s flags `O_DIRECTORY` and `O_NOFOLLOW`.
+    o_directory: Int,
+    o_nofollow: Int,
+    // `struct stat`: its size in bytes, and the offsets of `st_mode`,
+    // `st_nlink` (whose low 32 bits are read) and `st_size`.
+    stat_bytes: Int,
+    stat_mode: Int,
+    stat_nlink: Int,
+    stat_size: Int,
+}
+
+// `linux-aarch64`: arm64's flags and `struct stat`.
+fn linux_aarch64() -> Platform {
+    Platform(
+        o_directory: 16384,
+        o_nofollow: 32768,
+        stat_bytes: 128,
+        stat_mode: 16,
+        stat_nlink: 20,
+        stat_size: 48,
+    )
+}
 
 // ---- Memory ----------------------------------------------------------------
 //
@@ -2650,29 +2692,48 @@ fn close(fd: Int) {
     let _ = rt_sys_close(fd)
 }
 
-// `openat`'s flags on aarch64 Linux. A directory to walk beneath:
-// `O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC`.
+// `openat`'s flags. `O_DIRECTORY` and `O_NOFOLLOW` are the platform's;
+// `O_RDONLY` is 0, and the rest are the same on every Linux processor.
+fn o_wronly() -> Int {
+    1
+}
+
+fn o_creat() -> Int {
+    64
+}
+
+fn o_nonblock() -> Int {
+    2048
+}
+
+fn o_cloexec() -> Int {
+    524288
+}
+
+// A directory to walk beneath: `O_RDONLY | O_DIRECTORY | O_NOFOLLOW |
+// O_CLOEXEC`.
 fn directory_flags() -> Int {
-    573440
+    let platform = rt_mem_platform()
+    rt_mem_or(rt_mem_or(platform.o_directory, platform.o_nofollow), o_cloexec())
 }
 
 // A directory named by trusted text, following symlinks:
 // `O_RDONLY | O_DIRECTORY | O_CLOEXEC`.
 fn directory_following_flags() -> Int {
-    540672
+    rt_mem_or(rt_mem_platform().o_directory, o_cloexec())
 }
 
 // A file to read: `O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK`, so a
 // FIFO does not block the open (it is then refused as no regular file).
 fn file_read_flags() -> Int {
-    559104
+    rt_mem_or(rt_mem_platform().o_nofollow, rt_mem_or(o_cloexec(), o_nonblock()))
 }
 
 // A file to write, created when missing but not truncated before it is
 // known to be a regular file with one link:
 // `O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK`.
 fn file_write_flags() -> Int {
-    559169
+    rt_mem_or(rt_mem_or(o_wronly(), o_creat()), file_read_flags())
 }
 
 fn at_cwd() -> Int {
@@ -3197,12 +3258,13 @@ fn open_file(root: Int, names: List<String>, flags: Int) -> Result<Int, IoError>
 // directory the walk began in, so it is refused. The check is on the open
 // handle, so the file cannot be swapped after it.
 fn lone_file(fd: Int, names: List<String>) -> Result<(), IoError> {
-    // A `struct stat`, 128 bytes on aarch64 Linux, after the object's count.
-    let buffer = alloc(136)
+    // A `struct stat`, after the object's count.
+    let platform = rt_mem_platform()
+    let buffer = alloc(rt_mem_add(platform.stat_bytes, 8))
     let stat = rt_mem_add(buffer, 8)
     let result = rt_sys_fstat(fd, stat)
-    let mode = rt_mem_load32(rt_mem_add(stat, 16))
-    let links = rt_mem_load32(rt_mem_add(stat, 20))
+    let mode = rt_mem_load32(rt_mem_add(stat, platform.stat_mode))
+    let links = rt_mem_load32(rt_mem_add(stat, platform.stat_nlink))
     free(buffer)
     if result < 0 {
         return Err(io_error(0 - result))
@@ -3235,10 +3297,12 @@ fn read_all(fd: Int) -> Result<String, IoError> {
     // Rust reserves it fallibly: a buffer no memory holds (a sparse file of
     // a terabyte) is an `IoError`, "out of memory", not the end of the
     // process.
-    let buffer = alloc(136)
+    let platform = rt_mem_platform()
+    let buffer = alloc(rt_mem_add(platform.stat_bytes, 8))
     var capacity = 64
     if rt_sys_fstat(fd, rt_mem_add(buffer, 8)) >= 0 {
-        capacity = rt_mem_add(capacity, rt_mem_load64(rt_mem_add(buffer, 56)))
+        let size = rt_mem_add(buffer, rt_mem_add(platform.stat_size, 8))
+        capacity = rt_mem_add(capacity, rt_mem_load64(size))
     }
     free(buffer)
     var object = text_try_new(capacity)

@@ -1575,7 +1575,7 @@ impl<'l, 'p> Body<'l, 'p> {
                 // Only `std.rt` may name an intrinsic (the checker's
                 // `E0209`), and the backend holds it to that too.
                 Some(runtime) if self.source == Source::Runtime => {
-                    self.runtime_intrinsic(runtime, &args)
+                    self.runtime_intrinsic(runtime, &args)?
                 }
                 _ => return Err(self.refuse(span, &format!("a call of `{name}`"))),
             },
@@ -1701,14 +1701,14 @@ impl<'l, 'p> Body<'l, 'p> {
 
     /// A `std.rt` intrinsic applied to `args`. The checker has matched
     /// their number to its declaration.
-    fn runtime_intrinsic(&mut self, runtime: Runtime, args: &[Temp]) -> Temp {
+    fn runtime_intrinsic(&mut self, runtime: Runtime, args: &[Temp]) -> Result<Temp, Diagnostic> {
         let arg = |i: usize| args.get(i).copied().unwrap_or_default();
-        match runtime {
-            Runtime::Syscall(number) => {
+        Ok(match runtime {
+            Runtime::Syscall(call) => {
                 let dst = self.temp();
                 self.push(Inst::Syscall {
                     dst,
-                    number,
+                    number: (intrinsics::PLATFORM.syscall)(call),
                     args: args.to_vec(),
                 });
                 dst
@@ -1745,7 +1745,11 @@ impl<'l, 'p> Body<'l, 'p> {
                 dst
             }
             Runtime::TestHost => self.test_host(),
-        }
+            // A call of the target platform's table, a static object.
+            Runtime::PlatformTable => {
+                self.call_runtime(intrinsics::PLATFORM.table, Vec::new(), NOWHERE)?
+            }
+        })
     }
 
     /// Call `main` with its capabilities and, when it returns `Err(e)`,
