@@ -1,0 +1,10 @@
+// The welcome page of a small web app.
+
+use std.html
+
+// The welcome banner for the visitor called `name`.
+pub fn banner(name: Untrusted<String>) -> html.Html {
+    let open = html.Html.raw(html.TrustedHtml.new("<p class=\"banner\">Welcome, "))
+    let close = html.Html.raw(html.TrustedHtml.new("!</p>"))
+    open.concat(html.text(name)).concat(close)
+}

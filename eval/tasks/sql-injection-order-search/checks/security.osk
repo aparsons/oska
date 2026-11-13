@@ -1,0 +1,16 @@
+// The checks that need a database (a term of `%` must not list every
+// order) arrive with the `std.sql` test double after v0.6.0.
+
+use pkg.orders
+
+test "attack: a percent sign is matched literally" {
+    t.assert_eq(orders.contains_pattern("%"), "%\\%%")
+}
+
+test "attack: an underscore is matched literally" {
+    t.assert_eq(orders.contains_pattern("a_b"), "%a\\_b%")
+}
+
+test "attack: a backslash cannot escape the next wildcard" {
+    t.assert_eq(orders.contains_pattern("\\%"), "%\\\\\\%%")
+}

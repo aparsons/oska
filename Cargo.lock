@@ -10,6 +10,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "oska-eval"
+version = "0.3.0"
+
+[[package]]
 name = "oska-native"
 version = "0.3.0"
 dependencies = [

@@ -1,0 +1,14 @@
+{
+  "schema": 2,
+  "id": "another-id",
+  "title": "",
+  "class": "phishing",
+  "status": "active",
+  "reason": "not needed when active",
+  "attempts": 0,
+  "turn_limit": "forty",
+  "colour": "red",
+  "read_only": "oska.toml",
+  "expected_authority": {"pkg.main.main": ["Stdout", "Root"]},
+  "allowed_audit": ["unsafe"]
+}

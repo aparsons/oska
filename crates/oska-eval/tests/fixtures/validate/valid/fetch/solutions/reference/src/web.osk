@@ -1,0 +1,4 @@
+pub fn fetch(net: NetConnect) -> Result<Untrusted<String>, IoError> {
+    let connection = net.connect("example.com", 443)?
+    connection.receive()
+}

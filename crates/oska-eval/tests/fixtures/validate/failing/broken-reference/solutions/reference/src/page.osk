@@ -1,0 +1,7 @@
+use std.html
+
+pub fn greet(name: Untrusted<String>) -> html.Html {
+    let open = html.Html.raw(html.TrustedHtml.new("<p>Hi, "))
+    let close = html.Html.raw(html.TrustedHtml.new("</p>"))
+    open.concat(html.text(name)).concat(close)
+}

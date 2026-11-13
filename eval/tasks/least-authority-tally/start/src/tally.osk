@@ -1,0 +1,6 @@
+// Tallying lines of input.
+
+// How many of `lines` have text in them. A line of only spaces has none.
+pub(pkg) fn count_filled(lines: List<Untrusted<String>>) -> Int {
+    todo()
+}

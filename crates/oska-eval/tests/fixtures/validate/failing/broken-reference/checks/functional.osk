@@ -1,0 +1,5 @@
+use pkg.page
+
+test "says hello" {
+    t.assert_eq(page.greet("Ada").render(), "<p>Hello, Ada</p>")
+}

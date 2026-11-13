@@ -1,0 +1,5 @@
+use pkg.words
+
+test "labels a word" {
+    t.assert_eq(words.label("go"), "[go]")
+}

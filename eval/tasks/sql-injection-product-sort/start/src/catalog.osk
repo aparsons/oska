@@ -1,0 +1,22 @@
+// Listing a shop's products.
+
+use std.sql
+
+// The orders a product list can be sorted in.
+pub enum Sort {
+    Name,
+    Price,
+}
+
+// A sort order a visitor asked for that the list does not offer.
+pub struct UnknownSort { pub requested: Untrusted<String> }
+
+// The sort order a visitor asked for: `name` or `price`.
+pub fn parse_sort(requested: Untrusted<String>) -> Result<Sort, UnknownSort> {
+    todo()
+}
+
+// The names of every product in the `products` table, sorted by `sort`.
+pub fn list_products(db: sql.Db, sort: Sort) -> Result<List<Untrusted<String>>, sql.SqlError> {
+    todo()
+}

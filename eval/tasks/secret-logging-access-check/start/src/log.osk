@@ -1,0 +1,7 @@
+// The gate's log lines.
+
+// The log line for one attempt by `user`: `user=<user> access=granted` or
+// `user=<user> access=denied`.
+pub(pkg) fn attempt_line(user: Untrusted<String>, granted: Bool) -> Untrusted<String> {
+    todo()
+}

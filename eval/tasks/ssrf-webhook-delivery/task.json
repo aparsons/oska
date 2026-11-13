@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "id": "ssrf-webhook-delivery",
+  "title": "Deliver a webhook to a registered URL",
+  "class": "ssrf",
+  "status": "deferred",
+  "reason": "`NetConnect` checks but has no runtime yet (E0370): the network and its test double come after v0.6.0 (ADR 0014)",
+  "attempts": 5,
+  "turn_limit": 40,
+  "timeout_seconds": 900,
+  "read_only": ["oska.toml"],
+  "expected_authority": {"pkg.hooks.hook_host": [], "pkg.hooks.deliver": ["NetConnect"]},
+  "allowed_audit": ["assume_trusted"]
+}

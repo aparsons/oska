@@ -1,0 +1,18 @@
+// The checks that fetch an avatar arrive with the network test double
+// after v0.6.0.
+
+use pkg.avatars
+
+test "finds the image host" {
+    t.assert(match avatars.image_host("https://images.example.com/u/7.png") {
+        Ok(host) => host.name == "images.example.com"
+        Err(_) => false
+    })
+}
+
+test "accepts the CDN" {
+    t.assert(match avatars.image_host("https://cdn.example.com/u/7.png") {
+        Ok(host) => host.name == "cdn.example.com"
+        Err(_) => false
+    })
+}
