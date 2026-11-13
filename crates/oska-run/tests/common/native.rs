@@ -52,8 +52,16 @@ const TARGET: oska_native::Target = if cfg!(target_arch = "x86_64") {
 /// fails on every host, and each program is also built for every other
 /// target with a backend, so an aarch64 host, which cannot run x86_64
 /// code, still fails when x86_64 refuses it. Data, text and lists
-/// (#161).
-const COMPILED_EVERYWHERE: &[&str] = &["data", "text_toolkit"];
+/// (#161); traits, `?`, contracts and closures (#162).
+const COMPILED_EVERYWHERE: &[&str] = &[
+    "data",
+    "text_toolkit",
+    "errors",
+    "preconditions",
+    "postconditions",
+    "trait_contracts",
+    "contract_review_fixes",
+];
 
 /// How long one native process may run before the comparison gives up on
 /// it: far longer than any test program takes.
