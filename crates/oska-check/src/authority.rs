@@ -6,10 +6,10 @@
 //! the `cap` rule on declarations, function purity, closure capture, and
 //! contract purity all use it.
 
-use oska_syntax::ast::{FnDecl, Item, ItemKind, Module, Type, TypeKind};
+use oska_syntax::ast::{FnDecl, ImplDecl, Item, ItemKind, Module, Type, TypeKind};
 
 use crate::collect::{DeclKind, Decls};
-use crate::items::Lower;
+use crate::items::{ImplInfo, Items, Lower};
 use crate::link::Modules;
 use crate::ty::{Cap, Ty};
 use crate::{FunctionAuthority, Via};
@@ -93,8 +93,14 @@ fn reach(ty: &Ty, decls: &Decls, expanding: &mut Vec<String>) -> Reach {
 }
 
 /// One entry per function and `impl` method, in source order, named as
-/// [`Modules::function_name`] names it.
-pub fn report(module: &Module, decls: &Decls, modules: &Modules) -> Vec<FunctionAuthority> {
+/// [`Modules::function_name`] names it, or [`impl_method_name`] for a
+/// method.
+pub fn report(
+    module: &Module,
+    decls: &Decls,
+    items: &Items,
+    modules: &Modules,
+) -> Vec<FunctionAuthority> {
     let mut functions = Vec::new();
     for item in &module.items {
         match &item.kind {
@@ -106,14 +112,9 @@ pub fn report(module: &Module, decls: &Decls, modules: &Modules) -> Vec<Function
                 let lower = Lower::new(decls).with_generics(&imp.generics);
                 let target = lower.ty(&imp.target);
                 let lower = lower.with_self(target);
-                let type_name = type_name(&imp.target);
                 for method in &imp.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        let name = modules.function_name(
-                            method.span.start,
-                            Some(&type_name),
-                            &f.name.name,
-                        );
+                        let name = impl_method_name(modules, items, item, imp, method, f);
                         functions.push(function(name, method, f, lower.clone()));
                     }
                 }
@@ -141,6 +142,33 @@ pub fn report(module: &Module, decls: &Decls, modules: &Modules) -> Vec<Function
         }
     }
     functions
+}
+
+/// The name the authority report gives `method`, declared in the `impl`
+/// `item`: `Type.method` for an inherent impl and `<Type as
+/// Trait>.method` for `impl Trait for Type`, so that the two never share
+/// a name (#123). An attenuation's `function` names its method the same
+/// way.
+pub(crate) fn impl_method_name(
+    modules: &Modules,
+    items: &Items,
+    item: &Item,
+    imp: &ImplDecl,
+    method: &Item,
+    f: &FnDecl,
+) -> String {
+    let target = type_name(&imp.target);
+    let Some(trait_ref) = &imp.trait_ref else {
+        return modules.function_name(method.span.start, Some(&target), &f.name.name);
+    };
+    // The impl's arguments tell two impls of one generic trait apart. An
+    // impl the checker could not record has only its trait's name.
+    let trait_ref = items
+        .impls
+        .iter()
+        .find(|info| info.span == Some(item.span))
+        .map_or_else(|| type_name(trait_ref), ImplInfo::trait_ref);
+    modules.trait_method_name(&target, &trait_ref, &f.name.name)
 }
 
 /// `lower` has the enclosing impl's generics and `Self` in scope.

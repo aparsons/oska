@@ -5,7 +5,7 @@
     {"code":"E0219","message":"`main` cannot have a contract: nothing calls it, so there is no caller to blame; check the condition in its body instead","path":"crates/oskac/tests/fixtures/contract_placement.osk","span":{"start":474,"end":488},"line":29,"column":5,"end_line":29,"end_column":19,"severity":"error","url":"https://oskalang.dev/codes/E0219","related":[],"suggestions":[]}
   ],
   "functions": [
-    {"name":"Square.size","authority":[],"via":[],"pure":true},
+    {"name":"<Square as Shape>.size","authority":[],"via":[],"pure":true},
     {"name":"first","authority":[],"via":[],"pure":true},
     {"name":"positive","authority":[],"via":[],"pure":true},
     {"name":"main","authority":[],"via":[],"pure":true}
