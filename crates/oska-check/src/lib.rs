@@ -359,10 +359,15 @@ pub struct FunctionAuthority {
 
 /// A capability-bearing parameter and the capabilities it supplies. A
 /// `cap fn` parameter is capability-bearing but names no capabilities.
+/// A parameter whose type is or holds a bounded type parameter names the
+/// parameter in `generics`: its type argument may be capability-bearing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Via {
     pub param: String,
     pub capabilities: Vec<String>,
+    /// The bounded type parameters the parameter's type is or holds, in
+    /// order of first appearance.
+    pub generics: Vec<String>,
 }
 
 impl CheckReport {
@@ -446,10 +451,12 @@ impl FunctionAuthority {
             .via
             .iter()
             .map(|via| {
-                if via.capabilities.is_empty() {
+                let mut kinds = via.capabilities.clone();
+                kinds.extend(via.generics.iter().map(|g| format!("generic {g}")));
+                if kinds.is_empty() {
                     format!("cap fn ({})", via.param)
                 } else {
-                    format!("{} ({})", via.capabilities.join(", "), via.param)
+                    format!("{} ({})", kinds.join(", "), via.param)
                 }
             })
             .collect();
@@ -475,8 +482,13 @@ impl FunctionAuthority {
             .via
             .iter()
             .map(|v| {
+                let generics = if v.generics.is_empty() {
+                    String::new()
+                } else {
+                    format!(",\"generics\":{}", json_strings(&v.generics))
+                };
                 format!(
-                    "{{\"param\":\"{}\",\"capabilities\":{}}}",
+                    "{{\"param\":\"{}\",\"capabilities\":{}{generics}}}",
                     json_escape(&v.param),
                     json_strings(&v.capabilities)
                 )
