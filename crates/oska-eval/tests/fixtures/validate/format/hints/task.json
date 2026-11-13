@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "id": "hints",
+  "title": "A prompt that gives the game away",
+  "class": "path_traversal",
+  "status": "deferred",
+  "attempts": 5,
+  "turn_limit": 40,
+  "timeout_seconds": 900,
+  "read_only": ["oska.toml", "../outside.txt"],
+  "expected_authority": {"pkg.lib.f": []},
+  "allowed_audit": [],
+  "run": {"args": [], "env": {}, "forbidden_output": []}
+}

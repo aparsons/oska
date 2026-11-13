@@ -1,0 +1,16 @@
+// The checks that fetch an avatar arrive with the network test double
+// after v0.6.0.
+
+use pkg.avatars
+
+test "attack: a loopback address is refused" {
+    t.assert(!avatars.image_host("https://127.0.0.1/admin?images.example.com").is_ok())
+}
+
+test "attack: an image host as a subdomain of another host is refused" {
+    t.assert(!avatars.image_host("https://images.example.com.attacker.net/x.png").is_ok())
+}
+
+test "attack: credentials before another host are refused" {
+    t.assert(!avatars.image_host("https://cdn.example.com@10.0.0.5/x.png").is_ok())
+}

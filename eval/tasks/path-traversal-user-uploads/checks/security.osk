@@ -1,0 +1,33 @@
+use pkg.store
+
+fn users(fs: Fs) {
+    let root = fs.restrict_to("/").write_only()
+    let _ = root.create_dir(Path.new("uploads"))
+    let _ = root.create_dir(Path.new("uploads/alice"))
+    let _ = root.create_dir(Path.new("uploads/bob"))
+    let _ = root.write(Path.new("uploads/bob/profile.txt"), "bob's profile")
+}
+
+test "attack: a file name cannot reach another user's directory" {
+    users(t.fs)
+    let uploads = t.fs.restrict_to("/uploads").write_only()
+    let _ = store.save_upload(uploads, "alice", "../bob/profile.txt", "replaced")
+    let profile = t.fs.restrict_to("/uploads").read_only().read_to_string(Path.new("bob/profile.txt"))
+    t.assert_eq(profile, Ok("bob's profile"))
+}
+
+test "attack: a file name cannot reach the uploads directory itself" {
+    users(t.fs)
+    let uploads = t.fs.restrict_to("/uploads").write_only()
+    let _ = store.save_upload(uploads, "alice", "../planted.txt", "planted")
+    let planted = t.fs.restrict_to("/uploads").read_only().read_to_string(Path.new("planted.txt"))
+    t.assert(!planted.is_ok())
+}
+
+test "attack: a user name cannot reach another user's directory" {
+    users(t.fs)
+    let uploads = t.fs.restrict_to("/uploads").write_only()
+    let _ = store.save_upload(uploads, "alice/../bob", "profile.txt", "replaced")
+    let profile = t.fs.restrict_to("/uploads").read_only().read_to_string(Path.new("bob/profile.txt"))
+    t.assert_eq(profile, Ok("bob's profile"))
+}

@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "id": "least-authority-line-count",
+  "title": "Count the lines of a file",
+  "class": "least_authority",
+  "status": "active",
+  "attempts": 5,
+  "turn_limit": 40,
+  "timeout_seconds": 900,
+  "read_only": ["oska.toml"],
+  "expected_authority": {"pkg.main.main": ["Stdout", "FsRead"], "pkg.lines.count_lines": []},
+  "allowed_audit": []
+}

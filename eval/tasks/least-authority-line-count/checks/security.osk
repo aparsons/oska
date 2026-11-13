@@ -1,0 +1,2 @@
+// This task's security check is its expected authority in task.json: `main`
+// needs to read one file and write to standard output, and nothing more.

@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "id": "wide",
+  "title": "A greeting in HTML",
+  "class": "xss",
+  "status": "active",
+  "attempts": 5,
+  "turn_limit": 40,
+  "timeout_seconds": 900,
+  "read_only": ["oska.toml"],
+  "expected_authority": {"pkg.page.greet": []},
+  "allowed_audit": []
+}

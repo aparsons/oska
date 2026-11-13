@@ -1,0 +1,24 @@
+use pkg.files
+
+fn site(fs: Fs) {
+    let root = fs.restrict_to("/").write_only()
+    let _ = root.create_dir(Path.new("public"))
+    let _ = root.create_dir(Path.new("public/css"))
+    let _ = root.write(Path.new("public/index.html"), "<h1>Home</h1>")
+    let _ = root.write(Path.new("public/css/site.css"), "body: plain")
+}
+
+test "reads a file in public" {
+    site(t.fs)
+    t.assert_eq(files.read_public(t.fs.read_only(), "index.html"), Ok("<h1>Home</h1>"))
+}
+
+test "reads a file in a subdirectory of public" {
+    site(t.fs)
+    t.assert_eq(files.read_public(t.fs.read_only(), "css/site.css"), Ok("body: plain"))
+}
+
+test "a missing file is an error" {
+    site(t.fs)
+    t.assert(!files.read_public(t.fs.read_only(), "absent.html").is_ok())
+}

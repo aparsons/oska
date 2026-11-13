@@ -1,0 +1,9 @@
+use pkg.log
+
+test "logs a granted attempt" {
+    t.assert_eq(log.attempt_line("alice", true), "user=alice access=granted")
+}
+
+test "logs a denied attempt" {
+    t.assert_eq(log.attempt_line("bob", false), "user=bob access=denied")
+}

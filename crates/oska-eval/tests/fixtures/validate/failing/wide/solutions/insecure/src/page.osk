@@ -1,0 +1,6 @@
+use std.html
+
+pub fn greet(name: Untrusted<String>, clock: Clock) -> html.Html {
+    let who = name.assume_trusted()
+    html.Html.raw(html.TrustedHtml.new("<p>Hello, {who}</p>"))
+}

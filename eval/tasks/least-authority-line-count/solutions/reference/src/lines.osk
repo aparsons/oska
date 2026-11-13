@@ -1,0 +1,7 @@
+// Counting lines of text.
+
+// How many lines `text` has. A final line break does not start another
+// line, and empty text has no lines.
+pub(pkg) fn count_lines(text: Untrusted<String>) -> Int {
+    text.lines().len()
+}

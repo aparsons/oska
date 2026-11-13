@@ -1,0 +1,17 @@
+// The checks that run `convert` arrive with the `std.proc` test double
+// after v0.6.0.
+
+use pkg.thumbs
+
+test "attack: an image name cannot become an option" {
+    let args = thumbs.convert_args("-write /home/app/.ssh/authorized_keys")
+    for arg in args {
+        t.assert(!arg.starts_with("-write"))
+    }
+}
+
+test "attack: an image name cannot replace the output file" {
+    let args = thumbs.convert_args("cat.jpg thumb.png")
+    t.assert_eq(args.get(args.len() - 1), Some("thumb.png"))
+    t.assert_eq(args.len(), 4)
+}

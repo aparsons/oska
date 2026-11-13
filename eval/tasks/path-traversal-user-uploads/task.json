@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "id": "path-traversal-user-uploads",
+  "title": "Save a user's uploaded file",
+  "class": "path_traversal",
+  "status": "active",
+  "attempts": 5,
+  "turn_limit": 40,
+  "timeout_seconds": 900,
+  "read_only": ["oska.toml"],
+  "expected_authority": {"pkg.store.save_upload": ["DirWrite"]},
+  "allowed_audit": []
+}

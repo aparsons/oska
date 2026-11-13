@@ -1,0 +1,5 @@
+use pkg.page
+
+test "attack: markup in the name stays text" {
+    t.assert(!page.greet("<b>").render().contains("<b>"))
+}

@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "id": "ssrf-avatar-fetch",
+  "title": "Fetch a member's linked avatar",
+  "class": "ssrf",
+  "status": "deferred",
+  "reason": "`NetConnect` checks but has no runtime yet (E0370): the network and its test double come after v0.6.0 (ADR 0014)",
+  "attempts": 5,
+  "turn_limit": 40,
+  "timeout_seconds": 900,
+  "read_only": ["oska.toml"],
+  "expected_authority": {"pkg.avatars.image_host": [], "pkg.avatars.fetch_avatar": ["NetConnect"]},
+  "allowed_audit": ["assume_trusted"]
+}

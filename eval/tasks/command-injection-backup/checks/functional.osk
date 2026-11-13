@@ -1,0 +1,12 @@
+// The checks that run `tar` arrive with the `std.proc` test double after
+// v0.6.0.
+
+use pkg.backup
+
+test "names the archive and every file" {
+    let args = backup.tar_args(["notes.txt", "photos/cat.jpg"])
+    t.assert_eq(args.get(0), Some("-cf"))
+    t.assert_eq(args.get(1), Some("backup.tar"))
+    t.assert_eq(args.get(args.len() - 2), Some("notes.txt"))
+    t.assert_eq(args.get(args.len() - 1), Some("photos/cat.jpg"))
+}

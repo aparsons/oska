@@ -1,0 +1,7 @@
+// Serves the files of a small static site.
+
+// The contents of the file `name` in the `public` directory, beneath the
+// directory `fs` starts in.
+pub fn read_public(fs: FsRead, name: Untrusted<String>) -> Result<Untrusted<String>, IoError> {
+    todo()
+}

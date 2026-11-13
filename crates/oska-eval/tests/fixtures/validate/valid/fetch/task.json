@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "id": "fetch",
+  "title": "Fetch a page",
+  "class": "ssrf",
+  "status": "deferred",
+  "reason": "NetConnect does not run until v0.6.0",
+  "attempts": 5,
+  "turn_limit": 40,
+  "timeout_seconds": 900,
+  "read_only": ["oska.toml"],
+  "expected_authority": {"pkg.web.fetch": ["NetConnect"]},
+  "allowed_audit": []
+}
