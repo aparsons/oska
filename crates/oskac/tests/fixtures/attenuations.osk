@@ -53,3 +53,8 @@ fn main(fs: Fs) {
     let source = docs(read)
     let site = output(write)
 }
+
+// A test narrows too, and is listed under its name (#150).
+test "reads a note" {
+    let notes = t.fs.read_only().restrict_to("notes")
+}

@@ -255,8 +255,9 @@ impl AuditSite {
 /// `body/attenuation.rs` decides which calls these are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attenuation {
-    /// The function the call is in, named as in `functions`. A closure's
-    /// attenuations belong to the function around it.
+    /// The function the call is in, named as in `functions`, or the test
+    /// it is in, as `test "<name>"`. A closure's attenuations belong to
+    /// the function around it.
     pub function: String,
     /// The method: `restrict_to`, `restrict_to_file`, `read_only` or
     /// `write_only`.
@@ -402,11 +403,16 @@ impl CheckReport {
             self.list_attenuations(&function.name, &mut listed, &mut out);
         }
         // A function the report has no line for, such as a trait's
-        // default method, still shows what it attenuates.
+        // default method, or a test, still shows what it attenuates. A
+        // test is already named `test "<name>"`, which no function can be.
         for i in 0..listed.len() {
             if !listed[i] {
                 let name = &self.attenuations[i].function;
-                out.push_str(&format!("fn {name}:\n"));
+                if name.starts_with("test \"") {
+                    out.push_str(&format!("{name}:\n"));
+                } else {
+                    out.push_str(&format!("fn {name}:\n"));
+                }
                 self.list_attenuations(name, &mut listed, &mut out);
             }
         }
