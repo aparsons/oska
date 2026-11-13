@@ -866,6 +866,21 @@ test_uninstall_refuses_a_symlink_in_a_path() {
   [ -e victim/oskac ] && [ -e receipt.json ] || fail "removed a symlink's target"
 }
 
+# The Oska home itself is a symlink, named with a trailing slash, through
+# which a test for a link would look.
+test_uninstall_refuses_a_symlinked_oska_home() {
+  release 1.2.3
+  latest 1.2.3
+  mkdir real
+  ln -s "$PWD/real" link
+  OSKA_HOME="$PWD/link/" install --json >/dev/null
+  local home
+  for home in "$PWD/link" "$PWD/link/" "$PWD/link//"; do
+    OSKA_HOME="$home" assert_refused_unchanged unsafe_path 1 --uninstall
+  done
+  [ -e real/bin/oskac ] || fail "removed a file through the symlinked Oska home"
+}
+
 test_uninstall_refuses_a_receipt_it_cannot_read() {
   release 1.2.3
   latest 1.2.3

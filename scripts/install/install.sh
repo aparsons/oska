@@ -269,6 +269,13 @@ oska_paths() {
     /*) ;;
     *) home=$PWD/$home ;;
   esac
+  # Without trailing slashes: `[ -L dir/ ]` looks through a symlinked dir.
+  while :; do
+    case $home in
+      ?*/) home=${home%/} ;;
+      *) break ;;
+    esac
+  done
   bin_dir=$home/bin
   target=$bin_dir/oskac
   version_file=$home/version
@@ -423,7 +430,7 @@ unsafe() {
 # with a control character in it.
 uninstall() {
   oska_paths
-  config_dir=$HOME/.config/oska
+  config_dir=${HOME%/}/.config/oska
   if [ -L "$home" ] || [ -L "$receipt" ]; then
     unsafe "$receipt is reached through a symlink"
   fi

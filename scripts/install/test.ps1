@@ -832,6 +832,22 @@ function Test-UninstallRefusesASymlinkInAPath {
     Assert ((Test-Path 'victim/oskac.exe') -and (Test-Path 'receipt.json')) "removed a link's target"
 }
 
+# The Oska home itself is a junction, also named with a trailing separator.
+function Test-UninstallRefusesASymlinkedOskaHome {
+    New-Release '1.2.3'
+    Set-Latest '1.2.3'
+    [void](New-Item -ItemType Directory real)
+    [void](New-Item -ItemType Junction -Path link -Target (Get-FullPath 'real'))
+    $link = Get-FullPath 'link'
+    [void](Invoke-Installer @('--json') -OskaHome "$link\")
+    Assert ($script:status -eq 0) "the install exited $script:status"
+    foreach ($oska in @($link, "$link\")) {
+        $result = Read-Json (Invoke-Installer @('--json', '--uninstall') -OskaHome $oska)
+        Assert ($script:status -eq 1 -and $result.error -eq 'unsafe_path') "$oska`: exited $script:status with $($result.error)"
+    }
+    Assert (Test-Path 'real/bin/oskac.exe') 'removed a file through the junction'
+}
+
 # Each receipt below would remove the version file if it were read loosely;
 # each must be refused instead. (install.sh also refuses a \u escape
 # outside ASCII; ConvertFrom-Json cannot tell one from the character.)
