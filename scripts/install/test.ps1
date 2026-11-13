@@ -108,16 +108,67 @@ function Set-Latest([string]$Version) {
 "@)
 }
 
-# Writes pinned/install.ps1, pinned to key.pub as pin.sh pins it.
+# Writes pinned/install.ps1, pinned to key.pub as pin.sh pins it, and to
+# require the release index (yes) or not (no).
+function Write-Pinned([string]$RequireIndex) {
+    if (-not (Test-Path key)) { New-Key 'key' }
+    $parts = (Get-Content -Raw key.pub).Trim() -split ' '
+    $source = [IO.File]::ReadAllText("$here/install.ps1")
+    [void](New-Item -ItemType Directory -Force -Path pinned)
+    Write-Text 'pinned/install.ps1' $source.Replace('@OSKA_RELEASE_KEY@', "$($parts[0]) $($parts[1])").Replace('@OSKA_INDEX_REQUIRED@', $RequireIndex)
+}
+
 function Get-Pinned {
-    if (-not (Test-Path pinned/install.ps1)) {
-        if (-not (Test-Path key)) { New-Key 'key' }
-        $parts = (Get-Content -Raw key.pub).Trim() -split ' '
-        $source = [IO.File]::ReadAllText("$here/install.ps1")
-        [void](New-Item -ItemType Directory -Force -Path pinned)
-        Write-Text 'pinned/install.ps1' $source.Replace('@OSKA_RELEASE_KEY@', "$($parts[0]) $($parts[1])")
-    }
+    if (-not (Test-Path pinned/install.ps1)) { Write-Pinned 'no' }
     (Resolve-Path pinned/install.ps1).Path
+}
+
+# Pins the installer to require the index, as stage-site.sh does once it
+# publishes one.
+function Set-RequireIndex {
+    Write-Pinned 'yes'
+}
+
+# An RFC 3339 UTC time <Days> days from now (negative: in the past).
+function Get-DaysFromNow([int]$Days) {
+    [DateTime]::UtcNow.AddDays($Days).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture)
+}
+
+# Publishes site/release-index.json naming release <Version>, with serial
+# <Serial>, expiring in <Days> days, signed in <Namespace> by <Key>, as
+# scripts/release/sign-index.sh writes it.
+function New-Index([long]$Serial, [string]$Version, [int]$Days = 60, [string]$Namespace = 'oska-index', [string]$Key = 'key') {
+    if (-not (Test-Path key)) { New-Key 'key' }
+    [void](New-Item -ItemType Directory -Force -Path site)
+    Write-Text 'site/release-index.json' (@"
+{
+  "schema": 1,
+  "serial": $Serial,
+  "issued": "$(Get-DaysFromNow -30)",
+  "expires": "$(Get-DaysFromNow $Days)",
+  "latest": {
+    "tag": "v$Version",
+    "version": "$Version"
+  }
+}
+"@)
+    Remove-Item -LiteralPath 'site/release-index.json.sig' -ErrorAction SilentlyContinue
+    & ssh-keygen -q -Y sign -f $Key -n $Namespace site/release-index.json
+    Assert ($LASTEXITCODE -eq 0) 'ssh-keygen could not sign the index'
+}
+
+# Releases 1.2.3 and 1.3.0, with latest.json still naming 1.2.3 and a
+# signed index (serial 7) naming 1.3.0.
+function Use-IndexNaming130 {
+    New-Release '1.2.3'
+    New-Release '1.3.0'
+    Set-Latest '1.2.3'
+    New-Index 7 '1.3.0'
+    Set-RequireIndex
+}
+
+function Get-ReceiptSerial {
+    (Get-Content -Raw home/.oska/receipt.json | ConvertFrom-Json).index_serial
 }
 
 function Get-SiteUrl {
@@ -398,6 +449,7 @@ function Test-InstallsTheLatestReleaseAndReportsItAsJson {
         bin_dir = (Join-Path (Get-Location).Path 'home\.oska\bin'); on_path = $false
         checksum_verified = $true; signature_verified = $true
         receipt = (Join-Path (Get-Location).Path 'home\.oska\receipt.json')
+        index_verified = $false; index_serial = $null
     }
     $names = @($result.PSObject.Properties | ForEach-Object { $_.Name })
     Assert (($names -join ',') -eq (@($expected.Keys) -join ',')) "fields are $($names -join ',')"
@@ -643,6 +695,165 @@ function Test-RunsUnderInvokeExpression {
     & $script:shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-Content -Raw -LiteralPath '$installer' | Invoke-Expression" 2>$null | Out-Null
     Assert ($LASTEXITCODE -ne 0) 'a tampered binary installed under iex'
     Assert (-not (Test-Path (Get-Installed))) 'installed a tampered binary under iex'
+}
+
+# ---- The signed release index and --check ------------------------------------
+
+function Test-InstallsTheLatestReleaseTheSignedIndexNames {
+    Use-IndexNaming130
+    $result = Read-Json (Invoke-Installer @('--json'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    Test-InstalledIs '1.3.0'
+    Assert ($result.index_verified -eq $true) "index_verified is $($result.index_verified)"
+    Assert ($result.index_serial -eq 7) "index_serial is $($result.index_serial)"
+    Assert ((Get-ReceiptSerial) -eq 7) "the receipt records serial $(Get-ReceiptSerial)"
+}
+
+function Test-AnInstallerNotPinnedToRequireTheIndexReadsLatestJson {
+    Use-IndexNaming130
+    Write-Pinned 'no'
+    $result = Read-Json (Invoke-Installer @('--json'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    Test-InstalledIs '1.2.3'
+    Assert ($result.index_verified -eq $false) "index_verified is $($result.index_verified)"
+    Assert ($null -eq $result.index_serial) "index_serial is $($result.index_serial)"
+}
+
+function Test-RefusesAnIndexThatIsNotSignedByTheReleaseKeyAsAnIndex {
+    Use-IndexNaming130
+    [void](Invoke-Installer @('--json', '--version', '1.2.3'))
+    New-Key 'attacker'
+    foreach ($case in @('unsigned', 'another_key', 'release_namespace', 'not_an_index')) {
+        New-Index 7 '1.3.0'
+        switch ($case) {
+            'unsigned' { Remove-Item site/release-index.json.sig }
+            'another_key' { New-Index 7 '1.3.0' -Key 'attacker' }
+            'release_namespace' { New-Index 7 '1.3.0' -Namespace 'oska-release' }
+            'not_an_index' {
+                Write-Text 'site/release-index.json' "{`"schema`": 1, `"serial`": `"seven`", `"latest`": {`"tag`": `"v1.3.0`"}}`n"
+                Remove-Item site/release-index.json.sig
+                & ssh-keygen -q -Y sign -f key -n oska-index site/release-index.json
+            }
+        }
+        [void](Test-RefusedUnchanged 'bad_index' 1 @())
+        Test-InstalledIs '1.2.3'
+    }
+}
+
+function Test-RefusesAnExpiredIndex {
+    Use-IndexNaming130
+    [void](Invoke-Installer @('--json', '--version', '1.2.3'))
+    New-Index 7 '1.3.0' -Days -1
+    $result = Test-RefusedUnchanged 'stale_index' 1 @()
+    Assert ($result.message -like '*--version*') "message is $($result.message)"
+}
+
+function Test-RefusesAnIndexWithALowerSerialThanOneAlreadyAccepted {
+    Use-IndexNaming130
+    [void](Invoke-Installer @('--json'))
+    # A genuine, unexpired, older index: the rollback (and freeze) attack.
+    New-Index 6 '1.2.3'
+    $result = Test-RefusedUnchanged 'rollback_refused' 1 @()
+    Assert ($result.message -like '*6*7*') "message is $($result.message)"
+    New-Index 7 '1.3.0'
+    $result = Read-Json (Invoke-Installer @('--json'))
+    Assert ($result.action -eq 'reinstalled') "serial 7 again is $($result.action)"
+}
+
+function Test-RefusesAMissingIndexWhenItIsRequired {
+    Use-IndexNaming130
+    Remove-Item site/release-index.json
+    $result = Read-Json (Invoke-Installer @('--json'))
+    Assert ($script:status -eq 1) "exited $script:status"
+    Assert ($result.error -eq 'download_failed') "error is $($result.error)"
+    Assert (-not (Test-Path home)) 'created OSKA_HOME'
+}
+
+function Test-WarnsWhenFewerThan30DaysRemainOnTheIndex {
+    Use-IndexNaming130
+    New-Index 7 '1.3.0' -Days 29
+    $result = Read-Json (Invoke-Installer @('--json'))
+    Assert ($result.version -eq '1.3.0') "version is $($result.version)"
+    Assert ($script:stderr -like '*warning: *release index expires*') "no warning in: $script:stderr"
+    New-Index 7 '1.3.0' -Days 31
+    [void](Invoke-Installer @('--json'))
+    Assert (-not ($script:stderr -like '*warning*')) "warned with 31 days left: $script:stderr"
+}
+
+# --version installs from the signed SHA256SUMS alone: an expired index
+# does not stop it, and the serial the receipt holds is kept.
+function Test-VersionIgnoresTheIndexAndKeepsTheSerialSeen {
+    Use-IndexNaming130
+    [void](Invoke-Installer @('--json'))
+    New-Index 7 '1.3.0' -Days -1
+    $result = Read-Json (Invoke-Installer @('--json', '--allow-downgrade', '--version', '1.2.3'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    Assert ($result.action -eq 'downgraded') "action is $($result.action)"
+    Assert ($result.index_verified -eq $false) "index_verified is $($result.index_verified)"
+    Assert ((Get-ReceiptSerial) -eq 7) "the receipt records serial $(Get-ReceiptSerial)"
+}
+
+function Test-CheckReportsAnUpdateAndWritesNothing {
+    Use-IndexNaming130
+    [void](Invoke-Installer @('--json', '--version', '1.2.3'))
+    $before = Get-Snapshot
+    $result = Read-Json (Invoke-Installer @('--json', '--check'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    Assert ((Get-Snapshot) -eq $before) '--check changed the home'
+    $expected = [ordered]@{
+        ok = $true; action = 'checked'; installed = '1.2.3'; latest = '1.3.0'; tag = 'v1.3.0'
+        update_available = $true; index_verified = $true; index_serial = 7
+    }
+    $names = @($result.PSObject.Properties | ForEach-Object { $_.Name })
+    Assert (($names -join ',') -eq ((@($expected.Keys) + 'index_expires') -join ',')) "fields are $($names -join ',')"
+    foreach ($k in $expected.Keys) {
+        Assert ($result.$k -eq $expected[$k]) "$k is '$($result.$k)', not '$($expected[$k])'"
+    }
+    # Read from the text: PowerShell 7's ConvertFrom-Json turns dates into
+    # DateTime values.
+    $expires = [regex]::Match([IO.File]::ReadAllText((Get-FullPath 'site/release-index.json')), '"expires": "([^"]+)"').Groups[1].Value
+    Assert ($script:stdout -clike "*`"index_expires`":`"$expires`"*") "index_expires is not $expires in: $script:stdout"
+    $out = Invoke-Installer @('--check')
+    Assert ($script:status -eq 0) "exited $script:status"
+    Assert (($out -join "`n") -like '*oskac 1.2.3 is installed*1.3.0*') "no human summary in: $out"
+}
+
+function Test-CheckReportsWhenUpToDateOrNotInstalled {
+    Use-IndexNaming130
+    $result = Read-Json (Invoke-Installer @('--json', '--check'))
+    Assert ($null -eq $result.installed) "installed is $($result.installed)"
+    Assert ($result.update_available -eq $true) 'nothing installed: update_available is not true'
+    Assert (-not (Test-Path home)) '--check created OSKA_HOME'
+    [void](Invoke-Installer @('--json'))
+    $result = Read-Json (Invoke-Installer @('--json', '--check'))
+    Assert ($result.installed -eq '1.3.0') "installed is $($result.installed)"
+    Assert ($result.update_available -eq $false) 'up to date: update_available is not false'
+    New-Release '1.4.0-pre.1'
+    [void](Invoke-Installer @('--json', '--version', '1.4.0-pre.1'))
+    $result = Read-Json (Invoke-Installer @('--json', '--check'))
+    Assert ($result.update_available -eq $false) 'a newer pre-release: update_available is not false'
+}
+
+function Test-CheckRefusesAnIndexItCannotTrust {
+    Use-IndexNaming130
+    [void](Invoke-Installer @('--json'))
+    New-Index 7 '1.3.0' -Days -1
+    [void](Test-RefusedUnchanged 'stale_index' 1 @('--check'))
+    New-Index 6 '1.3.0'
+    [void](Test-RefusedUnchanged 'rollback_refused' 1 @('--check'))
+    New-Index 7 '1.3.0' -Namespace 'oska-release'
+    [void](Test-RefusedUnchanged 'bad_index' 1 @('--check'))
+}
+
+function Test-CheckWithoutARequiredIndexReadsLatestJson {
+    New-Release '1.2.3'
+    Set-Latest '1.2.3'
+    $result = Read-Json (Invoke-Installer @('--json', '--check'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    Assert ($result.latest -eq '1.2.3') "latest is $($result.latest)"
+    Assert ($result.index_verified -eq $false) "index_verified is $($result.index_verified)"
+    Assert ($null -eq $result.index_serial) "index_serial is $($result.index_serial)"
+    Assert ($null -eq $result.index_expires) "index_expires is $($result.index_expires)"
 }
 
 $shells = @('powershell', 'pwsh') | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue }

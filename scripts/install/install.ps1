@@ -6,10 +6,12 @@
 #
 #   & ([scriptblock]::Create((irm https://oskalang.dev/install.ps1))) --version 0.1.0 --json
 #
-# Options (`-Version`, `-AllowDowngrade` and `-Json` work too):
+# Options (`-Version`, `-AllowDowngrade`, `-Check` and `-Json` work too):
 #   --version X        install release X (0.1.0 or v0.1.0) instead of the latest
 #   --allow-downgrade  with --version, install X even if it is older than
 #                      the installed oskac
+#   --check            report the installed and the latest version, and
+#                      install nothing
 #   --json             print one JSON object on stdout, and nothing else
 #   --help             print this help
 #
@@ -27,6 +29,13 @@
 # else goes wrong, it installs nothing and fails: run as a file it exits
 # non-zero, under `iex` it throws. It never prompts.
 #
+# Without --version it installs the latest release. Once the site publishes
+# a signed release index, the installer is pinned to require it and takes
+# the latest release from release-index.json alone: signed by the release
+# key in the `oska-index` namespace, not expired, and with a serial no
+# lower than the last one this install accepted. Before that, it reads the
+# unsigned latest.json.
+#
 # Re-running it updates oskac in place. It never installs an older release
 # than the installed one unless asked with --version and --allow-downgrade.
 # It records what it installed in $env:OSKA_HOME\receipt.json, which is
@@ -43,6 +52,11 @@
     # (scripts/install/pin.sh). Signatures by any other key are refused.
     $ReleaseKey = '@OSKA_RELEASE_KEY@'
     $Namespace = 'oska-release'
+    # Whether the latest release must come from the signed release index,
+    # also pinned when the site is built: `yes` once the site publishes a
+    # verified index. Otherwise the installer reads the unsigned latest.json.
+    $IndexRequired = '@OSKA_INDEX_REQUIRED@'
+    $IndexNamespace = 'oska-index'
     $DefaultSiteUrl = 'https://oskalang.dev'
 
     # Kept in a table, not in $script: variables, which `iex` would leave in
@@ -113,13 +127,13 @@
     # encoding's BOM first) would give ssh-keygen the exact bytes; a file
     # handle from Start-Process -RedirectStandardInput does.
     # Returns '' if the signature verifies, otherwise why it does not.
-    function Get-SignatureProblem([string]$KeyGen, [string]$Allowed, [string]$Signature, [string]$Data) {
+    function Get-SignatureProblem([string]$KeyGen, [string]$Allowed, [string]$Signature, [string]$Data, [string]$Ns) {
         $out = Join-Path $state.tmp 'verify.out'
         $err = Join-Path $state.tmp 'verify.err'
         try {
             # One argument string, quoted here: Windows PowerShell joins an
             # array of arguments without quoting paths that hold spaces.
-            $arguments = "-Y verify -f `"$Allowed`" -I $Namespace -n $Namespace -s `"$Signature`""
+            $arguments = "-Y verify -f `"$Allowed`" -I $Ns -n $Ns -s `"$Signature`""
             $p = Start-Process -FilePath $KeyGen -ArgumentList $arguments -NoNewWindow -Wait -PassThru `
                 -RedirectStandardInput $Data -RedirectStandardOutput $out -RedirectStandardError $err
             # Anything but a clear 0, including no exit code at all, fails.
@@ -201,6 +215,81 @@
         return $null
     }
 
+    # The highest index serial this install accepted, from the receipt, or
+    # 0. Advisory like the rest of the receipt: it can only make the
+    # rollback check stricter or looser, never let an unsigned index
+    # through.
+    function Get-SerialSeen([string]$Receipt) {
+        try {
+            if (Test-Path -LiteralPath $Receipt -PathType Leaf) {
+                $s = [string]([IO.File]::ReadAllText($Receipt) | ConvertFrom-Json).index_serial
+                if ($s -cmatch '^[1-9][0-9]{0,14}$') { return [long]$s }
+            }
+        } catch {
+        }
+        return [long]0
+    }
+
+    # Fetches and checks the signed release index, and returns its tag,
+    # serial and expiry. Refuses an index that is not signed by the release
+    # key in the `oska-index` namespace or is not in the index format
+    # (bad_index), one that has expired (stale_index), and one whose serial
+    # is lower than the receipt's (rollback_refused). Warns on stderr when
+    # fewer than 30 days remain. The same checks as install.sh's read_index.
+    function Read-Index([string]$Site, [string]$KeyGen, [long]$Seen) {
+        $url = "$Site/release-index.json"
+        $file = Join-Path $state.tmp 'release-index.json'
+        $sig = "$file.sig"
+        if (-not (Get-Url $url $file)) {
+            Stop-Install 'download_failed' "cannot download $url"
+        }
+        if (-not (Get-Url "$url.sig" $sig)) {
+            Stop-Install 'bad_index' "the release index at $url has no signature ($url.sig); nothing was installed"
+        }
+        $allowed = Join-Path $state.tmp 'allowed_index'
+        Write-Utf8 $allowed "$IndexNamespace namespaces=`"$IndexNamespace`" $ReleaseKey`n"
+        $problem = Get-SignatureProblem $KeyGen $allowed $sig $file $IndexNamespace
+        if ($problem) {
+            Stop-Install 'bad_index' "the release index at $url is not signed by the Oska release key as an index; nothing was installed ($problem)"
+        }
+
+        # Dates are read from the text: PowerShell 7's ConvertFrom-Json turns
+        # them into DateTime values.
+        $text = [IO.File]::ReadAllText($file)
+        $index = $null
+        $expires = ''
+        try {
+            $parsed = $text | ConvertFrom-Json
+            $serial = [string]$parsed.serial
+            $tag = [string]$parsed.latest.tag
+            if ([string]$parsed.schema -ceq '1' -and $serial -cmatch '^[1-9][0-9]{0,14}$' -and
+                $tag -cmatch '^v[0-9]+\.[0-9]+\.[0-9]+$' -and [string]$parsed.latest.version -ceq $tag.Substring(1) -and
+                $text -cmatch '"expires"\s*:\s*"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)"') {
+                $expires = $Matches[1]
+                $styles = [Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal
+                $at = [DateTime]::ParseExact($expires, "yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture, $styles)
+                $index = @{ tag = $tag; serial = [long]$serial; expires = $expires; at = $at }
+            }
+        } catch {
+            $index = $null
+        }
+        if (-not $index) {
+            Stop-Install 'bad_index' "the release index at $url is not in the release index format; nothing was installed"
+        }
+
+        $left = ($index.at - [DateTime]::UtcNow).TotalSeconds
+        if ($left -le 0) {
+            Stop-Install 'stale_index' "the release index at $url expired at $expires, so the latest release cannot be trusted; nothing was installed (a named release still installs with --version)"
+        }
+        if ($index.serial -lt $Seen) {
+            Stop-Install 'rollback_refused' "the release index at $url has serial $($index.serial), lower than serial $Seen, which this install already accepted; nothing was installed"
+        }
+        if ($left -lt 30 * 86400) {
+            [Console]::Error.WriteLine("install.ps1: warning: the release index expires at $expires, in fewer than 30 days; after that, installing the latest release fails until it is re-signed")
+        }
+        $index
+    }
+
     # A name no one can predict, for a staging directory or a temp file.
     function Get-RandomName([string]$Prefix) {
         $Prefix + [IO.Path]::GetRandomFileName().Replace('.', '')
@@ -238,6 +327,8 @@
                 Write-Host '  --version X        install release X (0.1.0 or v0.1.0) instead of the latest'
                 Write-Host '  --allow-downgrade  with --version, install X even if it is older than'
                 Write-Host '                     the installed oskac'
+                Write-Host '  --check            report the installed and the latest version, and'
+                Write-Host '                     install nothing'
                 Write-Host '  --json             print one JSON object on stdout, and nothing else'
                 Write-Host '  --help             print this help'
                 Write-Host ''
@@ -253,8 +344,11 @@
         if ($mode) {
             if ($requested) { Stop-Install 'usage' "--version cannot be used with $mode" }
             if ($allowDowngrade) { Stop-Install 'usage' "--allow-downgrade cannot be used with $mode" }
+        }
+        if ($mode -eq '--uninstall') {
             Stop-Install 'usage' "$mode is not available in this installer yet"
         }
+        $check = $mode -eq '--check'
         if ($allowDowngrade -and -not $requested) {
             Stop-Install 'usage' '--allow-downgrade needs --version naming the release to go back to'
         }
@@ -278,14 +372,17 @@
             }
         }
 
-        if ($env:OS -ne 'Windows_NT') {
-            Stop-Install 'unsupported_platform' "on Linux and macOS, use install.sh: curl -fsSL $DefaultSiteUrl/install.sh | sh"
-        }
-        $machine = $env:PROCESSOR_ARCHITEW6432
-        if (-not $machine) { $machine = $env:PROCESSOR_ARCHITECTURE }
-        # Windows on Arm runs the x86_64 build under emulation.
-        if ($machine -ne 'AMD64' -and $machine -ne 'ARM64') {
-            Stop-Install 'unsupported_platform' "there is no oskac build for $machine Windows"
+        # --check only reads, so it needs no platform build.
+        if (-not $check) {
+            if ($env:OS -ne 'Windows_NT') {
+                Stop-Install 'unsupported_platform' "on Linux and macOS, use install.sh: curl -fsSL $DefaultSiteUrl/install.sh | sh"
+            }
+            $machine = $env:PROCESSOR_ARCHITEW6432
+            if (-not $machine) { $machine = $env:PROCESSOR_ARCHITECTURE }
+            # Windows on Arm runs the x86_64 build under emulation.
+            if ($machine -ne 'AMD64' -and $machine -ne 'ARM64') {
+                Stop-Install 'unsupported_platform' "there is no oskac build for $machine Windows"
+            }
         }
         $platform = 'windows-x86_64'
 
@@ -299,26 +396,6 @@
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         }
 
-        $state.tmp = Join-Path ([IO.Path]::GetTempPath()) ('oska-install-' + [Guid]::NewGuid().ToString('N'))
-        [void](New-Item -ItemType Directory -Path $state.tmp)
-
-        if (-not $tag) {
-            $latest = Join-Path $state.tmp 'latest.json'
-            if (-not (Get-Url "$site/latest.json" $latest)) {
-                Stop-Install 'download_failed' "cannot download $site/latest.json"
-            }
-            try {
-                $tag = [string](Get-Content -Raw -LiteralPath $latest | ConvertFrom-Json).tag
-            } catch {
-                $tag = ''
-            }
-            # Whatever it names is checked against the signature below.
-            if (-not (Test-Tag $tag)) {
-                Stop-Install 'download_failed' "$site/latest.json does not name a release"
-            }
-        }
-        $version = $tag.Substring(1)
-
         $oskaHome = $env:OSKA_HOME
         if (-not $oskaHome) { $oskaHome = Join-Path $HOME '.oska' }
         # An absolute path, so .NET and PowerShell agree on where it is.
@@ -328,6 +405,81 @@
         $versionFile = Join-Path $oskaHome 'version'
         $receipt = Join-Path $oskaHome 'receipt.json'
         $previous = Get-PreviousVersion $target $receipt $versionFile
+
+        $state.tmp = Join-Path ([IO.Path]::GetTempPath()) ('oska-install-' + [Guid]::NewGuid().ToString('N'))
+        [void](New-Item -ItemType Directory -Path $state.tmp)
+
+        # The latest release, unless --version names one: from the signed
+        # index when this installer is pinned to require it, else from
+        # latest.json. With --version the index is not consulted, and the
+        # receipt keeps the serial it had.
+        $index = $null
+        $receiptSerial = Get-SerialSeen $receipt
+        if (-not $tag) {
+            if ($IndexRequired -ceq 'yes') {
+                $index = Read-Index $site $keygen.Path $receiptSerial
+                $tag = $index.tag
+                $receiptSerial = $index.serial
+            } else {
+                $latest = Join-Path $state.tmp 'latest.json'
+                if (-not (Get-Url "$site/latest.json" $latest)) {
+                    Stop-Install 'download_failed' "cannot download $site/latest.json"
+                }
+                try {
+                    $tag = [string](Get-Content -Raw -LiteralPath $latest | ConvertFrom-Json).tag
+                } catch {
+                    $tag = ''
+                }
+                # Whatever it names is checked against the signature below.
+                if (-not (Test-Tag $tag)) {
+                    Stop-Install 'download_failed' "$site/latest.json does not name a release"
+                }
+            }
+        }
+        $version = $tag.Substring(1)
+        $indexVerified = $null -ne $index
+        $indexSerial = $null
+        $indexExpires = $null
+        if ($indexVerified) {
+            $indexSerial = $index.serial
+            $indexExpires = $index.expires
+        }
+
+        # --check: report the installed and the latest version, and write
+        # nothing.
+        if ($check) {
+            $updateAvailable = (-not $previous) -or (Compare-Version $version $previous) -gt 0
+            if ($state.json) {
+                $result = [ordered]@{
+                    ok               = $true
+                    action           = 'checked'
+                    installed        = $previous
+                    latest           = $version
+                    tag              = $tag
+                    update_available = $updateAvailable
+                    index_verified   = $indexVerified
+                    index_serial     = $indexSerial
+                    index_expires    = $indexExpires
+                }
+                Write-Output (New-Object PSObject -Property $result | ConvertTo-Json -Compress)
+                return
+            }
+            if (-not $previous) {
+                Write-Host "oskac is not installed in $oskaHome. The latest release is $version."
+            } elseif ($updateAvailable) {
+                Write-Host "oskac $previous is installed; the latest release is $version. To update, run the installer again."
+            } elseif ($previous -eq $version) {
+                Write-Host "oskac $previous is installed, and it is the latest release."
+            } else {
+                Write-Host "oskac $previous is installed, which is newer than the latest release, $version."
+            }
+            if ($indexVerified) {
+                Write-Host "The latest release comes from the signed release index (serial $indexSerial, expires $indexExpires)."
+            } else {
+                Write-Host "The latest release comes from $site/latest.json, which is not signed."
+            }
+            return
+        }
 
         # The downgrade guard. An older release is installed only when it is
         # named with --version and --allow-downgrade, so a stale
@@ -360,7 +512,7 @@
         $allowed = Join-Path $state.tmp 'allowed_signers'
         Write-Utf8 $allowed "$Namespace namespaces=`"$Namespace`" $ReleaseKey`n"
         $sums = Join-Path $state.tmp 'SHA256SUMS'
-        $problem = Get-SignatureProblem $keygen.Path $allowed (Join-Path $state.tmp 'SHA256SUMS.sig') $sums
+        $problem = Get-SignatureProblem $keygen.Path $allowed (Join-Path $state.tmp 'SHA256SUMS.sig') $sums $Namespace
         if ($problem) {
             Stop-Install 'bad_signature' "SHA256SUMS for $tag is not signed by the Oska release key; nothing was installed ($problem)"
         }
@@ -457,7 +609,7 @@
             key_fingerprint = $fingerprint
             sha256          = $actual
             installer       = 'ps1'
-            index_serial    = 0
+            index_serial    = $receiptSerial
             files           = $files
         }
         try {
@@ -502,6 +654,8 @@
                 checksum_verified  = $true
                 signature_verified = $true
                 receipt            = $receipt
+                index_verified     = $indexVerified
+                index_serial       = $indexSerial
             }
             Write-Output (New-Object PSObject -Property $result | ConvertTo-Json -Compress)
             return

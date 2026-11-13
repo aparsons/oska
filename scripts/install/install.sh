@@ -8,6 +8,8 @@
 #   --version X        install release X (0.1.0 or v0.1.0) instead of the latest
 #   --allow-downgrade  with --version, install X even if it is older than
 #                      the installed oskac
+#   --check            report the installed and the latest version, and
+#                      install nothing
 #   --json             print one JSON object on stdout, and nothing else
 #   --help             print this help
 #
@@ -24,6 +26,13 @@
 # fails, or anything else goes wrong, it installs nothing and exits
 # non-zero. It never prompts.
 #
+# Without --version it installs the latest release. Once the site publishes
+# a signed release index, the installer is pinned to require it and takes
+# the latest release from release-index.json alone: signed by the release
+# key in the `oska-index` namespace, not expired, and with a serial no
+# lower than the last one this install accepted. Before that, it reads the
+# unsigned latest.json.
+#
 # Re-running it updates oskac in place. It never installs an older release
 # than the installed one unless asked with --version and --allow-downgrade.
 # It records what it installed in $OSKA_HOME/receipt.json, which is
@@ -35,6 +44,11 @@ set -u
 # (scripts/install/pin.sh). Signatures by any other key are refused.
 RELEASE_KEY='@OSKA_RELEASE_KEY@'
 NAMESPACE=oska-release
+# Whether the latest release must come from the signed release index, also
+# pinned when the site is built: `yes` once the site publishes a verified
+# index. Otherwise the installer reads the unsigned latest.json.
+INDEX_REQUIRED='@OSKA_INDEX_REQUIRED@'
+INDEX_NAMESPACE=oska-index
 DEFAULT_SITE_URL=https://oskalang.dev
 # The glibc of the Linux build runners (.github/workflows/release.yml).
 MIN_GLIBC=2.35
@@ -93,6 +107,8 @@ usage: curl -fsSL https://oskalang.dev/install.sh | sh -s -- [options]
   --version X        install release X (0.1.0 or v0.1.0) instead of the latest
   --allow-downgrade  with --version, install X even if it is older than
                      the installed oskac
+  --check            report the installed and the latest version, and
+                     install nothing
   --json             print one JSON object on stdout, and nothing else
   --help             print this help
 
@@ -200,7 +216,7 @@ write_receipt() {
     printf '  "key_fingerprint": %s,\n' "$(json_str "$fingerprint")"
     printf '  "sha256": %s,\n' "$(json_str "$actual")"
     printf '  "installer": "sh",\n'
-    printf '  "index_serial": 0,\n'
+    printf '  "index_serial": %s,\n' "$receipt_serial"
     printf '  "files": [\n'
     printf '    {"path": %s, "kind": "binary", "sha256": %s},\n' "$(json_str "$target")" "$(json_str "$actual")"
     printf '    {"path": %s, "kind": "record", "sha256": %s},\n' "$(json_str "$version_file")" "$(json_str "$(sha256 "$version_file")")"
@@ -275,6 +291,110 @@ previous_version() {
   fi
 }
 
+# The highest index serial this install accepted, from the receipt, or 0.
+# Advisory like the rest of the receipt: it can only make the rollback
+# check below stricter or looser, never let an unsigned index through.
+serial_seen() {
+  s=
+  if [ -f "$receipt" ]; then
+    s=$(json_value "$receipt" index_serial)
+  fi
+  case $s in
+    '' | *[!0-9]* | 0* | ????????????????*) echo 0 ;;
+    *) echo "$s" ;;
+  esac
+}
+
+# epoch_of <YYYY-MM-DDTHH:MM:SSZ>: seconds since the epoch. Computed here,
+# as GNU and BSD date parse dates differently.
+epoch_of() {
+  printf '%s\n' "$1" | LC_ALL=C awk -F '[-T:Z]' '{
+    y = $1 + 0; m = $2 + 0
+    if (m <= 2) { y--; m += 12 }
+    days = 365 * y + int(y / 4) - int(y / 100) + int(y / 400) + int((153 * (m - 3) + 2) / 5) + $3 - 719469
+    printf "%d\n", days * 86400 + $4 * 3600 + $5 * 60 + $6
+  }'
+}
+
+# Fetches and checks the signed release index, and sets tag, index_serial
+# and index_expires from it. Refuses an index that is not signed by the
+# release key in the `oska-index` namespace or is not in the index format
+# (bad_index), one that has expired (stale_index), and one whose serial is
+# lower than the receipt's (rollback_refused). Warns on stderr when fewer
+# than 30 days remain.
+read_index() {
+  index_url=$site/release-index.json
+  fetch "$index_url" "$tmp/release-index.json" ||
+    fail download_failed "cannot download $index_url"
+  fetch "$index_url.sig" "$tmp/release-index.json.sig" ||
+    fail bad_index "the release index at $index_url has no signature ($index_url.sig); nothing was installed"
+  printf '%s namespaces="%s" %s\n' "$INDEX_NAMESPACE" "$INDEX_NAMESPACE" "$RELEASE_KEY" >"$tmp/allowed_index"
+  ssh-keygen -Y verify -f "$tmp/allowed_index" -I "$INDEX_NAMESPACE" -n "$INDEX_NAMESPACE" \
+    -s "$tmp/release-index.json.sig" <"$tmp/release-index.json" >/dev/null 2>&1 ||
+    fail bad_index "the release index at $index_url is not signed by the Oska release key as an index (verifying needs OpenSSH 8.1 or newer); nothing was installed"
+
+  index_serial=$(json_value "$tmp/release-index.json" serial)
+  index_expires=$(json_value "$tmp/release-index.json" expires)
+  tag=$(json_value "$tmp/release-index.json" tag)
+  # A serial is a positive integer, short enough for shell arithmetic.
+  case $index_serial in
+    '' | *[!0-9]* | 0* | ????????????????*) index_serial= ;;
+  esac
+  if [ -z "$index_serial" ] || [ "$(json_value "$tmp/release-index.json" schema)" != 1 ] ||
+    ! printf '%s\n' "$index_expires" | grep -Eqx '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z' ||
+    ! printf '%s\n' "$tag" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+' ||
+    [ "$(json_value "$tmp/release-index.json" version)" != "${tag#v}" ]; then
+    fail bad_index "the release index at $index_url is not in the release index format; nothing was installed"
+  fi
+
+  left=$(($(epoch_of "$index_expires") - $(date -u +%s)))
+  [ "$left" -gt 0 ] ||
+    fail stale_index "the release index at $index_url expired at $index_expires, so the latest release cannot be trusted; nothing was installed (a named release still installs with --version)"
+  seen=$(serial_seen)
+  [ "$index_serial" -ge "$seen" ] ||
+    fail rollback_refused "the release index at $index_url has serial $index_serial, lower than serial $seen, which this install already accepted; nothing was installed"
+  if [ "$left" -lt $((30 * 86400)) ]; then
+    echo "install.sh: warning: the release index expires at $index_expires, in fewer than 30 days; after that, installing the latest release fails until it is re-signed" >&2
+  fi
+}
+
+# --check: report the installed and the latest version, and write nothing.
+report_check() {
+  if [ -z "$previous" ] || [ "$(semver_cmp "$version" "$previous")" -gt 0 ]; then
+    update_available=true
+  else
+    update_available=false
+  fi
+  if [ "$json" = 1 ]; then
+    if [ -n "$previous" ]; then installed_json=$(json_str "$previous"); else installed_json=null; fi
+    if [ "$index_verified" = true ]; then
+      serial_json=$index_serial
+      expires_json=$(json_str "$index_expires")
+    else
+      serial_json=null
+      expires_json=null
+    fi
+    printf '{"ok": true, "action": "checked", "installed": %s, "latest": %s, "tag": %s, "update_available": %s, "index_verified": %s, "index_serial": %s, "index_expires": %s}\n' \
+      "$installed_json" "$(json_str "$version")" "$(json_str "$tag")" "$update_available" \
+      "$index_verified" "$serial_json" "$expires_json"
+    return
+  fi
+  if [ -z "$previous" ]; then
+    echo "oskac is not installed in $home. The latest release is $version."
+  elif [ "$update_available" = true ]; then
+    echo "oskac $previous is installed; the latest release is $version. To update, run the installer again."
+  elif [ "$previous" = "$version" ]; then
+    echo "oskac $previous is installed, and it is the latest release."
+  else
+    echo "oskac $previous is installed, which is newer than the latest release, $version."
+  fi
+  if [ "$index_verified" = true ]; then
+    echo "The latest release comes from the signed release index (serial $index_serial, expires $index_expires)."
+  else
+    echo "The latest release comes from $site/latest.json, which is not signed."
+  fi
+}
+
 main() {
   requested=
   allow_downgrade=0
@@ -304,8 +424,8 @@ main() {
   if [ -n "$mode" ]; then
     [ -z "$requested" ] || fail usage "--version cannot be used with $mode"
     [ "$allow_downgrade" = 0 ] || fail usage "--allow-downgrade cannot be used with $mode"
-    fail usage "$mode is not available in this installer yet"
   fi
+  [ "$mode" != --uninstall ] || fail usage "$mode is not available in this installer yet"
   [ "$allow_downgrade" = 0 ] || [ -n "$requested" ] ||
     fail usage "--allow-downgrade needs --version naming the release to go back to"
 
@@ -329,27 +449,15 @@ main() {
     is_tag "$tag" || fail usage "'$requested' is not a version like 0.1.0"
   fi
 
-  detect_platform
+  # --check only reads, so it needs no platform build or checksum tool.
+  if [ "$mode" != --check ]; then
+    detect_platform
+  fi
   need curl
   need ssh-keygen "OpenSSH 8.1 or newer, to verify the release signature"
-  if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+  if [ "$mode" != --check ] && ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
     need openssl "or sha256sum or shasum, to check the SHA-256 checksum"
   fi
-
-  # An explicit template, so the directory is under $TMPDIR (or /tmp) on
-  # every mktemp; BSD and GNU differ on where a bare `mktemp -d` goes.
-  tmp=$(mktemp -d "${TMPDIR:-/tmp}/oska-install.XXXXXXXX") ||
-    fail install_failed "cannot create a temporary directory"
-
-  if [ -z "$requested" ]; then
-    fetch "$site/latest.json" "$tmp/latest.json" ||
-      fail download_failed "cannot download $site/latest.json"
-    # The release fields of latest.json are top-level, so the first "tag" is
-    # the release's. Whatever it names is checked against the signature.
-    tag=$(json_value "$tmp/latest.json" tag)
-    is_tag "$tag" || fail download_failed "$site/latest.json does not name a release"
-  fi
-  version=${tag#v}
 
   home=${OSKA_HOME:-$HOME/.oska}
   case $home in
@@ -361,6 +469,41 @@ main() {
   version_file=$home/version
   receipt=$home/receipt.json
   previous=$(previous_version)
+
+  # An explicit template, so the directory is under $TMPDIR (or /tmp) on
+  # every mktemp; BSD and GNU differ on where a bare `mktemp -d` goes.
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/oska-install.XXXXXXXX") ||
+    fail install_failed "cannot create a temporary directory"
+
+  # The latest release, unless --version names one: from the signed index
+  # when this installer is pinned to require it, else from latest.json.
+  # With --version the index is not consulted, and the receipt keeps the
+  # serial it had.
+  index_verified=false
+  index_serial=
+  index_expires=
+  receipt_serial=$(serial_seen)
+  if [ -z "$requested" ]; then
+    if [ "$INDEX_REQUIRED" = yes ]; then
+      read_index
+      index_verified=true
+      receipt_serial=$index_serial
+    else
+      fetch "$site/latest.json" "$tmp/latest.json" ||
+        fail download_failed "cannot download $site/latest.json"
+      # The release fields of latest.json are top-level, so the first "tag"
+      # is the release's. Whatever it names is checked against the
+      # signature.
+      tag=$(json_value "$tmp/latest.json" tag)
+      is_tag "$tag" || fail download_failed "$site/latest.json does not name a release"
+    fi
+  fi
+  version=${tag#v}
+
+  if [ "$mode" = --check ]; then
+    report_check
+    return
+  fi
 
   # The downgrade guard. An older release is installed only when it is
   # named with --version and --allow-downgrade, so a stale latest.json, an
@@ -449,10 +592,10 @@ main() {
     else
       previous_json=null
     fi
-    printf '{"ok": true, "action": %s, "version": %s, "tag": %s, "previous_version": %s, "platform": %s, "path": %s, "bin_dir": %s, "on_path": %s, "checksum_verified": true, "signature_verified": true, "receipt": %s}\n' \
+    printf '{"ok": true, "action": %s, "version": %s, "tag": %s, "previous_version": %s, "platform": %s, "path": %s, "bin_dir": %s, "on_path": %s, "checksum_verified": true, "signature_verified": true, "receipt": %s, "index_verified": %s, "index_serial": %s}\n' \
       "$(json_str "$action")" "$(json_str "$version")" "$(json_str "$tag")" "$previous_json" \
       "$(json_str "$platform")" "$(json_str "$target")" "$(json_str "$bin_dir")" "$on_path" \
-      "$(json_str "$receipt")"
+      "$(json_str "$receipt")" "$index_verified" "${index_serial:-null}"
     return
   fi
 
