@@ -144,7 +144,7 @@ On aarch64 Linux, `run` and `test` compile the program as `build` does and run t
 
 ## `oskac --version` and `oskac --help`
 
-`oskac --version` prints `oskac` and the version on one line, such as `oskac 0.2.0`, and `oskac --help` prints the text at the top of this page. Both also answer to the short forms `-V` and `-h`. With `--format=json`, `--version` prints a JSON object instead: `{"name":"oskac","version":"0.2.0"}`.
+`oskac --version` prints `oskac` and the version on one line, such as `oskac 0.3.0`, and `oskac --help` prints the text at the top of this page. Both also answer to the short forms `-V` and `-h`. With `--format=json`, `--version` prints a JSON object instead: `{"name":"oskac","version":"0.3.0"}`.
 
 ## Output formats
 
