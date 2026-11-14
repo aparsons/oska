@@ -1,0 +1,13 @@
+$ oskac fix app.osk
+exit: 1
+--- stdout
+--- stderr
+app.osk:3:14: error[E0340]: `Db` is in `std.sql`, which `use std.sql` imports as a module; write `sql.Db`, or import it with `use std.sql.{Db}` (bytes 26..28)
+    fix: write `sql.Db`
+error: refusing to write: the fixed program's authority is wider than before: `fn query` gains `NetConnect`; `fn query` is no longer pure; nothing was written
+--- file app.osk
+use std.sql
+
+fn query(db: Db) -> Int {
+    1
+}
