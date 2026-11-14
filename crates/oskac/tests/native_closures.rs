@@ -2,7 +2,10 @@
 //! backends through the differential harness (seam 1): closures capturing
 //! by value, `cap fn` values, named functions and methods used as values,
 //! lists of mixed function values, `List.map`, and calls through function
-//! values counting their depth (`P0021`) and checking `requires`.
+//! values counting their depth (`P0021`) and checking `requires`. Every
+//! target must compile these programs
+//! (`differential::assert_compiled_same`, #162): a refusal fails on every
+//! host, and each host builds them for the other targets too.
 
 #![cfg(all(
     target_os = "linux",
@@ -11,7 +14,7 @@
 
 mod differential;
 
-use differential::{assert_same, Case};
+use differential::{assert_compiled_same, Case};
 
 /// The helpers every program has. Interpolation takes only names, so a
 /// program prints through these.
@@ -32,7 +35,7 @@ fn program(items: &str, body: &str) -> String {
 /// Run the program on both backends, require the same outcome, and that
 /// it printed `stdout` and exited 0.
 fn assert_prints(name: &str, items: &str, body: &str, stdout: &str) {
-    let outcome = assert_same(&Case::file(name, &program(items, body)));
+    let outcome = assert_compiled_same(&Case::file(name, &program(items, body)));
     assert_eq!(outcome.stdout, stdout, "case `{name}`: {outcome:#?}");
     assert_eq!(outcome.exit_code, Some(0), "case `{name}`: {outcome:#?}");
 }
@@ -55,7 +58,7 @@ fn a_closure_captures_by_value() {
 /// Run the program on both backends, require the same outcome, and that
 /// it panicked (exit 101) with `stderr` after printing `stdout`.
 fn assert_panics(name: &str, src: &str, stdout: &str, stderr: &str) {
-    let outcome = assert_same(&Case::file(name, src));
+    let outcome = assert_compiled_same(&Case::file(name, src));
     assert_eq!(outcome.stdout, stdout, "case `{name}`: {outcome:#?}");
     assert_eq!(outcome.stderr, stderr, "case `{name}`: {outcome:#?}");
     assert_eq!(outcome.exit_code, Some(101), "case `{name}`: {outcome:#?}");
@@ -348,7 +351,7 @@ fn runaway_recursion_through_a_function_value_panics_with_p0021() {
     let items = "fn down(n: Int) -> Int {\n    let f = down\n    \
                  if n == 0 { 0 } else { 1 + f(n - 1) }\n}";
     let deep = program(items, "    num(io, down(2000))");
-    let outcome = assert_same(&Case::file("value_recursion", &deep));
+    let outcome = assert_compiled_same(&Case::file("value_recursion", &deep));
     assert_eq!(outcome.stdout, "2000\n", "{outcome:#?}");
     let runaway = program(items, "    num(io, down(1000000))");
     assert_panics(
