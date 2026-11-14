@@ -12,7 +12,7 @@
 # If not, every path found is printed, the directory is removed, and the exit
 # status is 1 even when the command passed. A failing command keeps its own
 # status, and its leftovers are still reported. The directory is removed on
-# interrupt too.
+# interrupt too, and the signal goes to the command's whole process group.
 
 set -euo pipefail
 
@@ -21,7 +21,13 @@ if [ "$#" -eq 0 ]; then
   exit 2
 fi
 
-private=$(mktemp -d "${TMPDIR:-/tmp}/oska-leakcheck.XXXXXX")
+# The command may change directory, so a relative TMPDIR must become absolute.
+base=${TMPDIR:-/tmp}
+case $base in
+  /*) ;;
+  *) base="$PWD/$base" ;;
+esac
+private=$(mktemp -d "$base/oska-leakcheck.XXXXXX")
 child=""
 
 cleanup() {
@@ -33,7 +39,9 @@ cleanup() {
 interrupted() {
   trap - EXIT
   if [ -n "$child" ]; then
-    kill -TERM "$child" 2>/dev/null || true
+    # The whole process group: the command's own children (cargo's test
+    # binaries) must not outlive the directory.
+    kill -TERM -- "-$child" 2>/dev/null || kill -TERM "$child" 2>/dev/null || true
     wait "$child" 2>/dev/null || true
   fi
   cleanup
@@ -44,10 +52,13 @@ trap cleanup EXIT
 trap interrupted INT TERM HUP
 
 # In the background so a signal reaches the trap at once, not after the
-# command finishes.
+# command finishes. Job control (`set -m`) puts the command in a process
+# group of its own, led by $child, so a signal can reach all of it.
 set +e
+set -m
 TMPDIR="$private" "$@" &
 child=$!
+set +m
 wait "$child"
 status=$?
 set -e
@@ -57,7 +68,9 @@ leftovers=$(find "$private" -mindepth 1 -maxdepth 1 -print | sort)
 if [ -n "$leftovers" ]; then
   {
     echo "temp-leak: the command left these in its temporary directory (removed now):"
-    printf '%s\n' "$leftovers" | sed "s|^$private/|  |"
+    while IFS= read -r path; do
+      printf '  %s\n' "${path#"$private"/}"
+    done <<<"$leftovers"
   } >&2
   if [ "$status" -eq 0 ]; then
     status=1

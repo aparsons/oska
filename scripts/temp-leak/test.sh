@@ -109,5 +109,66 @@ set -e
 if [ "$status" -ne 0 ]; then ok "an interrupted run exits non-zero"; else bad "an interrupted run exits non-zero" "exit status 0"; fi
 expect_nothing_left "an interrupted run removes its private directory" "$real"
 
+# The wrapped command's whole process group goes on a signal, not just the
+# command: cargo's test binaries are grandchildren, and one that outlived the
+# wrapper would write into the directory after it was removed.
+real=$(real_tmp)
+pidfile="$work/grandchild.pid"
+rm -f "$pidfile"
+set +e
+PIDFILE="$pidfile" TMPDIR="$real" "$wrapper" bash -c '
+  bash -c "echo \$\$ >\"\$PIDFILE\"; exec sleep 30" &
+  wait' >"$work/group.out" 2>&1 &
+pid=$!
+for _ in $(seq 1 50); do
+  [ -s "$pidfile" ] && break
+  sleep 0.1
+done
+grandchild=$(cat "$pidfile" 2>/dev/null)
+kill -TERM "$pid"
+wait "$pid"
+set -e
+if [ -z "$grandchild" ]; then
+  bad "a signal stops the command's grandchildren" "the grandchild never started"
+else
+  alive=no
+  for _ in $(seq 1 20); do
+    kill -0 "$grandchild" 2>/dev/null || { alive=gone; break; }
+    sleep 0.1
+  done
+  if [ "$alive" = gone ]; then
+    ok "a signal stops the command's grandchildren"
+  else
+    kill -KILL "$grandchild" 2>/dev/null || true
+    bad "a signal stops the command's grandchildren" "process $grandchild outlived the wrapper"
+  fi
+fi
+expect_nothing_left "a signal with a grandchild running removes the private directory" "$real"
+
+# A relative TMPDIR still gives the command an absolute one.
+real=$(real_tmp)
+mkdir "$real/rel"
+set +e
+out=$(cd "$real" && TMPDIR=rel "$wrapper" bash -c 'case $TMPDIR in /*) ;; *) echo "relative: $TMPDIR"; exit 9 ;; esac; echo hi >"$TMPDIR/leaked-rel"' 2>&1)
+status=$?
+set -e
+expect_status "a relative TMPDIR still fails a leak" 1
+expect_contains "a relative TMPDIR gives the command an absolute one" "  leaked-rel"
+case $out in *relative:*) bad "the command's TMPDIR is absolute" "$out" ;; *) ok "the command's TMPDIR is absolute" ;; esac
+expect_nothing_left "a relative TMPDIR is cleaned up" "$real/rel"
+
+# A TMPDIR with sed-special characters must not garble the report.
+real="$work/real.odd|dir&[x].*"
+mkdir "$real"
+run "$real" 'echo hi >"$TMPDIR/leaked-odd"'
+expect_status "a TMPDIR with special characters still fails a leak" 1
+if [ "$out" = "temp-leak: the command left these in its temporary directory (removed now):
+  leaked-odd" ]; then
+  ok "a TMPDIR with special characters gives a clean report"
+else
+  bad "a TMPDIR with special characters gives a clean report" "$out"
+fi
+expect_nothing_left "a TMPDIR with special characters is cleaned up" "$real"
+
 printf '%d passed, %d failed\n' "$passed" "$failures"
 [ "$failures" -eq 0 ]

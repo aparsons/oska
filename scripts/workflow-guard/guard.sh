@@ -38,7 +38,7 @@ scan() {
   awk -v max="$max" '
     function finish_job() {
       if (job == "") return
-      jobs++
+      job_count++
       if (uses) {
         print job "\tcalls a reusable workflow (uses: at job level), which cannot carry timeout-minutes; run the work as steps in a job"
       } else if (!found) {
@@ -91,12 +91,12 @@ scan() {
     }
     END {
       finish_job()
-      if (jobs == 0) print "-\thas no jobs under jobs:"
+      if (job_count == 0) print "-\thas no jobs under jobs:"
     }
   ' "$1"
 }
 
-jobs=0
+checked=0
 bad=0
 for file in "${files[@]}"; do
   while IFS=$'\t' read -r job problem; do
@@ -104,7 +104,7 @@ for file in "${files[@]}"; do
       printf '%s: %s: %s\n' "$file" "$job" "$problem" >&2
       bad=$((bad + 1))
     else
-      jobs=$((jobs + 1))
+      checked=$((checked + 1))
     fi
   done < <(scan "$file")
 done
@@ -114,4 +114,4 @@ if [ "$bad" -ne 0 ]; then
   exit 1
 fi
 
-printf 'workflow-guard: %s jobs in %s workflows all have timeout-minutes of 1 to %s\n' "$jobs" "${#files[@]}" "$max"
+printf 'workflow-guard: %s jobs in %s workflows all have timeout-minutes of 1 to %s\n' "$checked" "${#files[@]}" "$max"

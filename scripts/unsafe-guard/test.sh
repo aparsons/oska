@@ -192,6 +192,11 @@ printf 'name: CI\non: push\nenv:\n  RUSTFLAGS: --cap-lints=warn\njobs: {}\n' \
 expect_refused "RUSTFLAGS set in a workflow" "$dir" "a workflow (above) sets rustc flags"
 
 dir=$(workspace)
+printf 'name: CI\non: push\nenv:\n  RUSTFLAGS: --cap-lints=warn\njobs: {}\n' \
+  >"$dir/.github/workflows/ci.yaml"
+expect_refused "RUSTFLAGS set in a .yaml workflow" "$dir" "a workflow (above) sets rustc flags"
+
+dir=$(workspace)
 printf 'name: CI\non: push\nenv:\n  CARGO_ENCODED_RUSTFLAGS: -Aunsafe_code\njobs: {}\n' \
   >"$dir/.github/workflows/ci.yml"
 expect_refused "CARGO_ENCODED_RUSTFLAGS set in a workflow" "$dir" "a workflow (above) sets rustc flags"

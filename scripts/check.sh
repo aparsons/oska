@@ -61,7 +61,7 @@ scripts/intrinsic-guard/guard.sh
 
 step "only official actions, rust-toolchain pinned to a commit"
 toolchain_pin='dtolnay/rust-toolchain@[0-9a-f]{40}'
-bad_uses=$(grep -nE '^[[:space:]]*-?[[:space:]]*uses:' .github/workflows/*.yml |
+bad_uses=$(grep -rnE --include='*.yml' --include='*.yaml' '^[[:space:]]*-?[[:space:]]*uses:' .github/workflows |
   grep -vE "uses:[[:space:]]*(actions/[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+|$toolchain_pin)([[:space:]]|$)" || true)
 if [ -n "$bad_uses" ]; then
   printf '%s\n' "$bad_uses" >&2
@@ -107,7 +107,7 @@ bash scripts/rust-stable/test.sh
 
 step "shellcheck"
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck -S warning scripts/*.sh scripts/install/*.sh scripts/release/*.sh scripts/unsafe-guard/*.sh scripts/intrinsic-guard/*.sh scripts/workflow-guard/*.sh scripts/temp-leak/*.sh scripts/rust-stable/*.sh site/agent-setup/*.sh .githooks/pre-push
+  shellcheck -S warning scripts/*.sh scripts/*/*.sh site/agent-setup/*.sh .githooks/pre-push
 else
   echo "shellcheck not installed; skipped (CI runs it)"
 fi
