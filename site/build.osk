@@ -1950,23 +1950,23 @@ fn setup_listing(all: Site) -> List<Listing> {
     out.push(Listing(path: "agent-setup.md", label: "Agent setup prompt", note: "paste it into a coding agent, or tell the agent to read this file, to install Oska and set up a project"))
     out.push(Listing(path: "agent-setup.txt", label: "agent-setup.txt", note: "the same prompt, as plain text"))
     if has_asset(all, "AGENTS.template.md") {
-        out.push(Listing(path: "agent-setup/AGENTS.template.md", label: "AGENTS.md template", note: "the Oska section for a project's AGENTS.md: the agent loop and the machine-readable flags"))
+        out.push(Listing(path: "agent-setup/AGENTS.template.md", label: "AGENTS.md template", note: "the Oska section for a project's AGENTS.md: the agent loop with oskac fix and the authority baseline, and the machine-readable flags"))
     }
     if has_asset(all, "CLAUDE.template.md") {
         out.push(Listing(path: "agent-setup/CLAUDE.template.md", label: "CLAUDE.md template", note: "points Claude Code at AGENTS.md"))
     }
     if has_asset(all, "claude-settings.json") {
-        out.push(Listing(path: "agent-setup/claude-settings.json", label: "Claude Code hook settings", note: "opt-in: the hooks entry for .claude/settings.json that runs the hook script after an edit"))
+        out.push(Listing(path: "agent-setup/claude-settings.json", label: "Claude Code hook settings", note: "opt-in: the hooks entries for .claude/settings.json: oskac hook claude after an edit, and the Stop gate before the agent finishes"))
     }
     if has_asset(all, "oska-check.sh") {
-        out.push(Listing(path: "agent-setup/oska-check.sh", label: "Claude Code hook script", note: "opt-in: runs oskac check on a .osk file after an edit; reads only the edit notification"))
+        out.push(Listing(path: "agent-setup/oska-check.sh", label: "Claude Code hook script", note: "kept for projects that saved it earlier: a one-line call to oskac hook claude --event=post-edit"))
     }
     out
 }
 
 // The page of the prompt: what it is, the prompt, and the files.
 fn setup_page(all: Site) -> Page {
-    let intro = markup("<h1>Agent setup prompt</h1>\n<p>One prompt that sets up Oska for AI-driven development. Paste it into your coding agent. It runs the official installer and checks that the checksum and the signature verified, tries the toolchain, writes an <code>AGENTS.md</code> that holds the agent loop, and offers a hook and a CI step. It states each command before it runs it, never handles a secret, and shows a diff before it changes a file.</p>\n")
+    let intro = markup("<h1>Agent setup prompt</h1>\n<p>One prompt that sets up Oska for AI-driven development. Paste it into your coding agent. It runs the official installer and checks that the checksum and the signature verified, tries the toolchain, writes an <code>AGENTS.md</code> that holds the agent loop, and offers the hooks, an authority baseline and a CI step. It states each command before it runs it, never handles a secret, and shows a diff before it changes a file.</p>\n")
     var files = markup("<h2 id=\"files\">Files</h2>\n<ul>\n")
     for item in setup_listing(all) {
         let link = anchor_to("/{item.path}", html.text(item.label))

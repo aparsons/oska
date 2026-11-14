@@ -115,7 +115,14 @@ fn every_flag_the_agent_files_mention_exists_in_the_tool_they_are_for() {
             }
         }
     }
-    for flag in ["--json", "--version", "--format"] {
+    for flag in [
+        "--json",
+        "--version",
+        "--format",
+        "--baseline",
+        "--update-baseline",
+        "--event",
+    ] {
         assert!(checked.contains(flag), "the files should use {flag}");
     }
 }
@@ -174,7 +181,7 @@ fn every_oskac_command_the_agent_files_mention_exists() {
             }
         }
     }
-    for command in ["check", "run", "test", "explain"] {
+    for command in ["check", "run", "test", "explain", "fix", "hook"] {
         assert!(
             seen.contains(command),
             "the files should use oskac {command}"
@@ -222,6 +229,7 @@ fn the_prompt_has_the_agent_install_verify_configure_test_and_report() {
         "AGENTS.md",
         "CLAUDE.md",
         "`oskac test <file.osk>`",
+        "`oskac fix <file.osk>`",
         "run the installer again",
         "https://oskalang.dev/llms.txt",
     ] {
@@ -236,7 +244,7 @@ fn the_prompt_has_the_agent_install_verify_configure_test_and_report() {
             "## 1. Install",
             "## 2. Check the toolchain",
             "## 3. Configure the project",
-            "## 4. Run the tests in CI",
+            "## 4. Run the tests and the authority gate in CI",
             "## 5. Report",
         ]
     );
@@ -388,12 +396,15 @@ fn the_agents_template_has_the_loop_the_flags_and_the_pointers() {
     assert!(template.starts_with("## Working with Oska\n"));
     for line in [
         "oskac check <file.osk> --format=json",
-        "apply its `edits`",
+        "oskac fix <file.osk>",
+        "oskac fix <file.osk> --dry-run",
+        "oskac fix <file.osk> --placeholders",
         "oskac explain <code>",
         "oskac explain <code> --format=json",
         "oskac run <file.osk> -- args",
         "oskac test <file.osk>",
         "authority report",
+        "oskac check <file.osk> --baseline=authority.json",
         "oskac check <file.osk> --release",
         "https://oskalang.dev/llms.txt",
         "https://oskalang.dev/codes.json",
@@ -404,13 +415,20 @@ fn the_agents_template_has_the_loop_the_flags_and_the_pointers() {
             "AGENTS.template.md should say: {line}"
         );
     }
+    // The loop uses the tool: no hand-written fix loop, no hand-made diff.
+    for stale in ["apply its `edits`", "span.start", "compare this against"] {
+        assert!(
+            !template.contains(stale),
+            "AGENTS.template.md still says: {stale}"
+        );
+    }
     // The order of the loop: check, fix, run, test, authority.
     let order: Vec<usize> = [
         "1. Check",
         "2. Apply machine fixes",
         "4. Run",
         "5. Test",
-        "6. Read the authority",
+        "6. Compare the authority",
     ]
     .iter()
     .map(|step| {
@@ -420,6 +438,178 @@ fn the_agents_template_has_the_loop_the_flags_and_the_pointers() {
     })
     .collect();
     assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}");
+}
+
+/// The first code span or fenced line of `text` that contains `needle`.
+fn command_with(text: &str, needle: &str) -> String {
+    code_lines(text)
+        .into_iter()
+        .find(|line| line.contains(needle))
+        .unwrap_or_else(|| panic!("no code span with `{needle}`"))
+}
+
+/// The arguments of `command`, a line such as `oskac check <file.osk>
+/// --baseline=authority.json`, with the placeholder replaced by `file`.
+fn args_of(command: &str, file: &str) -> Vec<String> {
+    command
+        .split_whitespace()
+        .skip_while(|word| *word != "oskac")
+        .skip(1)
+        .map(|word| word.replace("<file.osk>", file).replace("<path>", file))
+        .collect()
+}
+
+fn run_in(dir: &Path, args: &[String]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_oskac"))
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("oskac should run")
+}
+
+#[test]
+fn the_agents_template_says_not_to_refresh_a_baseline_to_pass_the_gate() {
+    let template = setup_file("AGENTS.template.md");
+    assert!(
+        template.contains(
+            "Do not refresh a committed baseline to make the gate pass without telling the user why"
+        ),
+        "the rule that approving a widening is the user's decision"
+    );
+    assert!(template.contains("oskac check <file.osk> --update-baseline=authority.json"));
+    assert!(template.contains("exit code 3"));
+}
+
+#[test]
+fn the_template_names_the_baseline_commands_that_work_as_it_says() {
+    let template = setup_file("AGENTS.template.md");
+    let dir = scratch("template-baseline");
+    write_all(&dir, &[("app.osk", HELLO)]);
+    let write = args_of(&command_with(&template, "--update-baseline="), "app.osk");
+    let check = args_of(&command_with(&template, "--baseline="), "app.osk");
+    assert_eq!(run_in(&dir, &write).status.code(), Some(0));
+    assert!(dir.join("authority.json").exists());
+    assert_eq!(run_in(&dir, &check).status.code(), Some(0));
+    // A widening is exit code 3, as the template says.
+    write_all(
+        &dir,
+        &[(
+            "app.osk",
+            "fn main(io: Stdout, net: Net) -> Result<(), IoError> {\n    io.println(\"hi\")\n}\n",
+        )],
+    );
+    let widened = run_in(&dir, &check);
+    assert_eq!(widened.status.code(), Some(3), "{widened:?}");
+}
+
+#[test]
+fn the_fix_command_the_template_names_applies_the_certain_fixes_and_dry_run_writes_nothing() {
+    let template = setup_file("AGENTS.template.md");
+    let source = "struct Logger { out: Stdout }\n\nfn main() {}\n";
+    let dir = scratch("template-fix");
+    write_all(&dir, &[("app.osk", source)]);
+    let fix = args_of(&command_with(&template, "oskac fix <file.osk>"), "app.osk");
+    let mut dry = fix.clone();
+    dry.push("--dry-run".to_string());
+    assert_eq!(run_in(&dir, &dry).status.code(), Some(0));
+    assert_eq!(
+        read(&dir.join("app.osk")),
+        source,
+        "--dry-run writes nothing"
+    );
+    assert_eq!(run_in(&dir, &fix).status.code(), Some(0));
+    assert!(read(&dir.join("app.osk")).starts_with("cap struct Logger"));
+}
+
+#[test]
+fn the_prompt_offers_both_hooks_on_every_platform_and_installs_no_script() {
+    let prompt = setup_file("prompt.md");
+    for line in [
+        "**3c. The check-after-edit hook",
+        "**3d. The Stop gate",
+        "`oskac hook claude --event=post-edit`",
+        "`oskac hook claude --event=stop`",
+        "Ask me whether I want it, and do nothing if I do not say yes.",
+        "deliberately broken",
+        "`oskac` by name",
+    ] {
+        assert!(prompt.contains(line), "the prompt should say: {line}");
+    }
+    // The hook is no longer a shell script, so it is not limited to Unix.
+    for gone in [
+        "Linux and macOS only",
+        "POSIX",
+        "oska-check.sh",
+        ".claude/hooks",
+        "skip this step",
+    ] {
+        assert!(!prompt.contains(gone), "the prompt still says: {gone}");
+    }
+    // The two hooks are separate choices, in this order.
+    let post = prompt.find("**3c.").expect("3c");
+    let stop = prompt.find("**3d.").expect("3d");
+    assert!(post < stop);
+}
+
+#[test]
+fn the_prompt_names_each_hook_command_of_the_published_settings() {
+    let prompt = setup_file("prompt.md");
+    let settings = Json::parse(&setup_file("claude-settings.json"));
+    for event in ["PostToolUse", "Stop"] {
+        let (_, hook) = only_hook(&settings, event);
+        let command = string(hook.get("command"));
+        assert!(
+            prompt.contains(&format!("`{command}`")),
+            "the prompt should name `{command}`"
+        );
+    }
+    // Every `oskac hook` the agent files run is one the settings run, with
+    // targets added only for the Stop gate.
+    for name in AGENT_FILES {
+        for code in code_lines(&setup_file(name)) {
+            if let Some(at) = code.find("oskac hook claude --event=") {
+                let command = &code[at..];
+                assert!(
+                    command.starts_with("oskac hook claude --event=post-edit")
+                        || command.starts_with("oskac hook claude --event=stop"),
+                    "{name}: {command}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_prompt_only_enables_a_hook_when_oskac_is_on_the_path() {
+    let prompt = setup_file("prompt.md");
+    assert!(
+        prompt.contains("`on_path` is `true`"),
+        "a hook is enabled only then"
+    );
+    assert!(
+        prompt.contains("`on_path` is `false`") && prompt.contains("`bin_dir`"),
+        "otherwise it says to add `bin_dir` to `PATH` first"
+    );
+}
+
+#[test]
+fn the_prompt_offers_an_authority_baseline_and_a_ci_step_that_runs_it() {
+    let prompt = setup_file("prompt.md");
+    for line in [
+        "--update-baseline=authority.json",
+        "--baseline=authority.json",
+        "exit code 3",
+        "Do not refresh `authority.json` to make the gate pass",
+    ] {
+        assert!(prompt.contains(line), "the prompt should say: {line}");
+    }
+    // The commands are real: write the baseline, then the CI step passes.
+    let dir = scratch("prompt-baseline");
+    write_all(&dir, &[("app.osk", HELLO)]);
+    let write = args_of(&command_with(&prompt, "--update-baseline="), "app.osk");
+    let gate = args_of(&command_with(&prompt, "--baseline="), "app.osk");
+    assert_eq!(run_in(&dir, &write).status.code(), Some(0));
+    assert_eq!(run_in(&dir, &gate).status.code(), Some(0));
 }
 
 #[test]
