@@ -24,6 +24,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -54,6 +55,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       pages: write
       id-token: write
@@ -67,6 +69,8 @@ jobs:
   smoke:
     needs: deploy
     runs-on: ubuntu-latest
+    # Its curl retries can take minutes.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: https://oskalang.dev/ answers 200

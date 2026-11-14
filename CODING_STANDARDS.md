@@ -1,6 +1,6 @@
 # Coding standards
 
-Reviewers apply these rules to every diff. The mechanical rules are enforced by `scripts/check.sh` and don't appear here: rustfmt, clippy with `unwrap_used` denied, `unsafe_code` forbidden, no crate from outside the repo, and only official actions in workflows, with `dtolnay/rust-toolchain` pinned to a commit. Everything below needs judgement.
+Reviewers apply these rules to every diff. The mechanical rules are enforced by `scripts/check.sh` and don't appear here: rustfmt, clippy with `unwrap_used` denied, `unsafe_code` forbidden, no crate from outside the repo, and only official actions in workflows, with `dtolnay/rust-toolchain` pinned to a commit, and every workflow job with a `timeout-minutes` of 1 to 60. Everything below needs judgement.
 
 ## Language and runtime
 

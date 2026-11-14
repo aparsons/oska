@@ -8,11 +8,12 @@
 # Runs, stopping at the first failure:
 #   1. repo rules that are mechanical: no crate from outside this repo,
 #      `unsafe` only in crates/oska-sys, std.rt intrinsics only in
-#      std.rt's own source, and workflows use only official
-#      actions plus the SHA-pinned rust-toolchain;
+#      std.rt's own source, workflows use only official
+#      actions plus the SHA-pinned rust-toolchain, and every workflow job
+#      has a `timeout-minutes` of 1 to 60;
 #   2. cargo fmt, clippy with -D warnings, and cargo test;
-#   3. the installer, release script, unsafe guard, intrinsic guard and
-#      rust-stable tests;
+#   3. the installer, release script, unsafe guard, intrinsic guard,
+#      workflow guard and rust-stable tests;
 #   4. shellcheck on the shell scripts, when shellcheck is installed.
 
 set -euo pipefail
@@ -65,6 +66,11 @@ if [ -n "$bad_uses" ]; then
   fail "workflows may use only actions/* and dtolnay/rust-toolchain pinned to a full commit SHA"
 fi
 
+step "every workflow job has a timeout"
+# GitHub lets a job run 360 minutes unless it says otherwise. The guard fails
+# a job with no `timeout-minutes`, a non-literal value, or one above 60.
+scripts/workflow-guard/guard.sh
+
 step "cargo fmt"
 cargo fmt --all --check
 
@@ -86,12 +92,15 @@ bash scripts/unsafe-guard/test.sh
 step "intrinsic guard tests"
 bash scripts/intrinsic-guard/test.sh
 
+step "workflow guard tests"
+bash scripts/workflow-guard/test.sh
+
 step "rust-stable tests"
 bash scripts/rust-stable/test.sh
 
 step "shellcheck"
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck -S warning scripts/*.sh scripts/install/*.sh scripts/release/*.sh scripts/unsafe-guard/*.sh scripts/intrinsic-guard/*.sh scripts/rust-stable/*.sh site/agent-setup/*.sh .githooks/pre-push
+  shellcheck -S warning scripts/*.sh scripts/install/*.sh scripts/release/*.sh scripts/unsafe-guard/*.sh scripts/intrinsic-guard/*.sh scripts/workflow-guard/*.sh scripts/rust-stable/*.sh site/agent-setup/*.sh .githooks/pre-push
 else
   echo "shellcheck not installed; skipped (CI runs it)"
 fi

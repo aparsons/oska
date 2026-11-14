@@ -8,6 +8,13 @@ on:
 permissions:
   contents: read
 
+# A pull request's newer push cancels its older runs of this workflow. Every
+# other event gets a group of its own per commit, so a push to main or a branch
+# is never cancelled or replaced while it waits.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     # On arm64 the tests are also differential (spec #125): every runtime
@@ -18,6 +25,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
+    # Normally 3 to 5 minutes; a hung test (once a 64 KiB pipe deadlock on
+    # arm64) must turn red long before GitHub's six-hour default.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
