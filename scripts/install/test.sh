@@ -890,7 +890,7 @@ test_uninstall_refuses_a_receipt_it_cannot_read() {
   cp home/.oska/receipt.json good.json
   # Each receipt below would remove the version file if it were read
   # loosely; each must be refused instead.
-  local v="$PWD/home/.oska/version" sum bs='\' bad
+  local v="$PWD/home/.oska/version" sum bs="\\" bad
   sum=$(sha256 "$v")
   while IFS= read -r bad; do
     printf '%s\n' "$bad" >home/.oska/receipt.json
