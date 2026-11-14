@@ -10,9 +10,11 @@
 #      `unsafe` only in crates/oska-sys, std.rt intrinsics only in
 #      std.rt's own source, and workflows use only official
 #      actions plus the SHA-pinned rust-toolchain;
-#   2. cargo fmt, clippy with -D warnings, and cargo test;
-#   3. the installer, release script, unsafe guard, intrinsic guard and
-#      rust-stable tests;
+#   2. cargo fmt, clippy with -D warnings, and cargo test, which runs in a
+#      private temporary directory (scripts/temp-leak/run.sh) and fails,
+#      naming the paths, if a test leaves anything in it;
+#   3. the installer, release script, unsafe guard, intrinsic guard,
+#      temp-leak wrapper and rust-stable tests;
 #   4. shellcheck on the shell scripts, when shellcheck is installed.
 
 set -euo pipefail
@@ -71,8 +73,10 @@ cargo fmt --all --check
 step "cargo clippy"
 cargo clippy --all-targets -- -D warnings
 
-step "cargo test"
-cargo test --all
+step "cargo test (private temporary directory)"
+# A test that leaves a file or directory in the temporary directory fails the
+# check here, naming it, instead of slowly filling the shared /tmp.
+scripts/temp-leak/run.sh cargo test --all
 
 step "installer tests"
 bash scripts/install/test.sh
@@ -86,12 +90,15 @@ bash scripts/unsafe-guard/test.sh
 step "intrinsic guard tests"
 bash scripts/intrinsic-guard/test.sh
 
+step "temp-leak wrapper tests"
+bash scripts/temp-leak/test.sh
+
 step "rust-stable tests"
 bash scripts/rust-stable/test.sh
 
 step "shellcheck"
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck -S warning scripts/*.sh scripts/install/*.sh scripts/release/*.sh scripts/unsafe-guard/*.sh scripts/intrinsic-guard/*.sh scripts/rust-stable/*.sh site/agent-setup/*.sh .githooks/pre-push
+  shellcheck -S warning scripts/*.sh scripts/install/*.sh scripts/release/*.sh scripts/unsafe-guard/*.sh scripts/intrinsic-guard/*.sh scripts/temp-leak/*.sh scripts/rust-stable/*.sh site/agent-setup/*.sh .githooks/pre-push
 else
   echo "shellcheck not installed; skipped (CI runs it)"
 fi
