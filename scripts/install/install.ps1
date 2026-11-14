@@ -250,11 +250,77 @@
     }
 
     # A field of an object ConvertFrom-Json made, or $null if it has none.
+    # The name must match exactly: PowerShell would match it ignoring case.
     # The comma keeps an array an array: a function's output is unrolled.
     function Get-Field([object]$Object, [string]$Name) {
         $p = $Object.PSObject.Properties[$Name]
-        if ($p) { return , $p.Value }
+        if ($p -and $p.Name -ceq $Name) { return , $p.Value }
         return $null
+    }
+
+    # Whether $Text is exactly one JSON value (RFC 8259) in which no object
+    # repeats a key and no \u escape stands for anything but printable
+    # ASCII: the JSON install.sh's receipt reader accepts. ConvertFrom-Json
+    # is looser. It keeps one value of a repeated key without a word, and
+    # takes a trailing comma. Keys that differ only in case count as
+    # repeated here, since PowerShell cannot tell them apart.
+    function Test-StrictJson([string]$Text) {
+        $string = '"(?:[^"\\\x00-\x1f]|\\(?:["\\/bfnrt]|u00(?:[2-6][0-9a-fA-F]|7[0-9a-eA-E])))*"'
+        $number = '-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?'
+        $tokens = New-Object Collections.Generic.List[string]
+        $length = 0
+        foreach ($m in [regex]::Matches($Text, "\G(?:[ \t\r\n]+|(?<t>$string|$number|true|false|null|[{}\[\]:,]))")) {
+            $length += $m.Length
+            if ($m.Groups['t'].Success) { $tokens.Add($m.Groups['t'].Value) }
+        }
+        if ($length -ne $Text.Length) { return $false }
+        # '' marks the end, so no lookahead runs past it.
+        $tokens.Add('')
+        $escapes = @{ '"' = '"'; '\' = '\'; '/' = '/'; b = "`b"; f = "`f"; n = "`n"; r = "`r"; t = "`t" }
+        # The objects and arrays open at token $i, innermost on top.
+        $open = New-Object Collections.Generic.Stack[object]
+        $i = 0
+        while ($true) {
+            # A value starts at token $i, after its key in an object.
+            if ($open.Count -gt 0 -and $null -ne $open.Peek().names) {
+                $key = $tokens[$i]
+                if (-not $key.StartsWith('"') -or $tokens[$i + 1] -cne ':') { return $false }
+                $name = [regex]::Replace($key.Substring(1, $key.Length - 2), '\\(?:u(....)|(.))', {
+                        param($e)
+                        if ($e.Groups[1].Success) { return [string][char][Convert]::ToInt32($e.Groups[1].Value, 16) }
+                        return $escapes[$e.Groups[2].Value]
+                    })
+                if (-not $open.Peek().names.Add($name)) { return $false }
+                $i += 2
+            }
+            $t = $tokens[$i]
+            $i++
+            if ($t -ceq '{') {
+                $frame = @{ close = '}'; names = (New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)) }
+            } elseif ($t -ceq '[') {
+                $frame = @{ close = ']'; names = $null }
+            } elseif ('}]:,'.Contains($t)) {
+                # Not a value. '' is the end of the text.
+                return $false
+            } else {
+                $frame = $null
+            }
+            if ($null -ne $frame) {
+                if ($tokens[$i] -cne $frame.close) {
+                    $open.Push($frame)
+                    continue
+                }
+                $i++
+            }
+            # The value is complete, and so is every container it closes.
+            while ($open.Count -gt 0 -and $tokens[$i] -ceq $open.Peek().close) {
+                [void]$open.Pop()
+                $i++
+            }
+            if ($open.Count -eq 0) { return $i -eq $tokens.Count - 1 }
+            if ($tokens[$i] -cne ',') { return $false }
+            $i++
+        }
     }
 
     function Stop-Unsafe([string]$Message) {
@@ -286,16 +352,19 @@
         if (-not [IO.File]::Exists($receipt)) {
             Stop-Install 'not_installed' "there is no install receipt at $receipt, so nothing is known to have been installed there; nothing was removed"
         }
-        # Read strictly: anything but a schema 1 receipt whose files are
-        # objects with a string path and kind is refused, as install.sh
-        # refuses it.
+        # Read strictly: anything but strict JSON, a schema 1 receipt whose
+        # files are objects with a string path and kind, is refused, as
+        # install.sh refuses it.
         $files = $null
         try {
-            $data = [IO.File]::ReadAllText($receipt) | ConvertFrom-Json
-            $schema = Get-Field $data 'schema'
-            $list = Get-Field $data 'files'
-            if (($schema -is [int] -or $schema -is [long]) -and $schema -eq 1 -and $list -is [array]) {
-                $files = $list
+            $text = [IO.File]::ReadAllText($receipt)
+            if (Test-StrictJson $text) {
+                $data = $text | ConvertFrom-Json
+                $schema = Get-Field $data 'schema'
+                $list = Get-Field $data 'files'
+                if (($schema -is [int] -or $schema -is [long]) -and $schema -eq 1 -and $list -is [array]) {
+                    $files = $list
+                }
             }
         } catch {
             $files = $null
