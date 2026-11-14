@@ -1,0 +1,20 @@
+$ oskac fix count.osk --placeholders --format=json
+exit: 0
+--- stdout
+{
+  "applied": [
+    {"code":"E0253","message":"add arms for the missing patterns","path":"count.osk","applicability":"placeholders"}
+  ],
+  "files": ["count.osk"],
+  "diagnostics": [],
+  "rounds": 1,
+  "written": true
+}
+--- stderr
+--- file count.osk
+fn count(x: Option<Int>) -> Int {
+    match x {
+        Some(n) => n
+        None => todo()
+    }
+}
