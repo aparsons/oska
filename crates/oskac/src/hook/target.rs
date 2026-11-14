@@ -29,6 +29,14 @@ impl Shown {
             Some(relative) => relative.to_string_lossy().into_owned(),
             None => path.clone(),
         };
+        // Shown with `/` on every platform, as the checker's own paths
+        // are; discovery joins with `\` on Windows. On Unix `\` is an
+        // ordinary file-name character and stays.
+        let name = if cfg!(windows) {
+            name.replace('\\', "/")
+        } else {
+            name
+        };
         Shown { target, name }
     }
 }
