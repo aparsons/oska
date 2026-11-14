@@ -33,11 +33,15 @@ A type that is a capability or that contains one, directly or transitively. This
 For a function, the set of capabilities it can reach through its capability-bearing parameters. For a package, the union of the authority of its public functions, counted in built-in capability kinds. Which directory or file a capability is confined to is the caller's choice and is not part of a package's authority.
 
 **Widening**:
-A change after which a dependency's authority includes a capability kind it did not have, or a broader kind in place of a narrower one. A widening must be approved before the build accepts it.
+A change after which a function's, a program's or a dependency's authority includes a capability kind it did not have, or a broader kind in place of a narrower one. A widening must be approved before the build or the authority gate accepts it.
 _Avoid_: escalation, upgrade (for this concept)
 
+**Authority baseline**:
+A saved record of a program's authority report that later reports are compared with. It is committed with the program, and updating it is how a widening is approved.
+_Avoid_: authority snapshot, authority lockfile
+
 **Pure function**:
-A function with no capability-bearing parameters. It cannot perform effects, and it is deterministic.
+A function with no capability-bearing parameters and no parameter whose type is or holds a bounded type parameter, whose type argument could be capability-bearing. It cannot perform effects, and it is deterministic.
 
 **Pre-state value**:
 A value in a postcondition captured with `old(...)` when the function is entered, before a mutating method changes its receiver.
@@ -166,3 +170,9 @@ _Avoid_: system install, global install
 **Update checker**:
 The toolchain's own Oska program that fetches the signed release index and verifies releases for `oskac self check` and `oskac self update`. It is compiled when `oskac` is built and carried inside it, and it runs as a separate process holding only the network and file authority it needs.
 _Avoid_: updater daemon, auto-updater
+
+## Diagnostics
+
+**Fix applicability**:
+How safe a diagnostic's fix is to apply without a person reading it: `machine` when it is certainly right, `maybe` when it is a guess at what was meant, such as the closest name to an unknown one, and `placeholders` when the program checks afterwards but code is left to write, such as `todo()` arms. Each code's fix has one, recorded in the code catalog.
+_Avoid_: confidence, safety level

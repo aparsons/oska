@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 use oska_check::program::Program;
-use oska_syntax::{Diagnostic, Span};
+use oska_syntax::{Diagnostic, Severity, Span};
 
 use crate::{Flags, Places};
 
@@ -64,10 +64,9 @@ pub fn note_fallback(
         None => places.locate(refusal),
     };
     note.message = format!("running on the interpreter: {}", note.message);
+    note.severity = Severity::Note;
     if json {
-        let object = note.to_json();
-        let fields = object.strip_prefix('{').unwrap_or(&object);
-        eprintln!("{{\"severity\":\"note\",{fields}");
+        eprintln!("{}", note.to_json());
         return;
     }
     let text = format!("note: {} ({})", note.message, note.code);

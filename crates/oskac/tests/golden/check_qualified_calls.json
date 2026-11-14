@@ -8,8 +8,8 @@
     {"name":"main","authority":["Fs"],"via":[{"param":"fs","capabilities":["Fs"]}],"pure":false}
   ],
   "audit": [
-    {"kind":"assume_trusted","path":"crates/oskac/tests/fixtures/qualified_calls.osk","span":{"start":800,"end":821}},
-    {"kind":"assume_trusted","path":"crates/oskac/tests/fixtures/qualified_calls.osk","span":{"start":836,"end":864}}
+    {"function":"vouch","kind":"assume_trusted","path":"crates/oskac/tests/fixtures/qualified_calls.osk","span":{"start":800,"end":821}},
+    {"function":"vouch","kind":"assume_trusted","path":"crates/oskac/tests/fixtures/qualified_calls.osk","span":{"start":836,"end":864}}
   ],
   "attenuations": [
     {"function":"etc","method":"restrict_to","path":"crates/oskac/tests/fixtures/qualified_calls.osk","span":{"start":302,"end":334},"source":"FsRead","result":"DirRead","root":"/etc"},

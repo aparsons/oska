@@ -139,6 +139,8 @@ impl<'a> Decls<'a> {
                 decls.names.insert(key, decl);
             }
         }
+        // Where the module declares each name first.
+        let mut first: HashMap<&str, Span> = HashMap::new();
         for item in &module.items {
             let Some((name, span, decl)) = declaration(item, false) else {
                 continue;
@@ -150,14 +152,19 @@ impl<'a> Decls<'a> {
                     } else {
                         "earlier in this module"
                     };
-                    diagnostics.push(Diagnostic::new(
+                    let mut diagnostic = Diagnostic::new(
                         codes::DUPLICATE_NAME,
                         format!("`{name}` is already declared {place}"),
                         span,
-                    ));
+                    );
+                    if let Some(&at) = first.get(name) {
+                        diagnostic = diagnostic.with_related("first defined here", at);
+                    }
+                    diagnostics.push(diagnostic);
                 }
                 None => {
                     decls.names.insert(name.to_string(), decl);
+                    first.insert(name, span);
                 }
             }
         }

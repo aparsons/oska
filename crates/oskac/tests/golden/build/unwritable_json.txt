@@ -1,6 +1,6 @@
 $ oskac build hello.osk -o missing/dir/hello --format=json
 exit: 1
 --- stdout
-{"output":null,"diagnostics":[{"code":"E0391","message":"cannot write the executable `missing/dir/hello`: its directory does not exist; name another path with `-o`","span":{"start":0,"end":0}}]}
+{"output":null,"diagnostics":[{"code":"E0391","message":"cannot write the executable `missing/dir/hello`: its directory does not exist; name another path with `-o`","span":{"start":0,"end":0},"severity":"error","url":"https://oskalang.dev/codes/E0391","related":[],"suggestions":[]}]}
 --- stderr
 --- written

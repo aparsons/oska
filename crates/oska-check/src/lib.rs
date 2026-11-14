@@ -43,6 +43,7 @@ use oska_syntax::ast::Module;
 use oska_syntax::{json_escape, Diagnostic, Location, Span};
 
 mod authority;
+pub mod authority_diff;
 mod body;
 pub mod builtins;
 mod coherence;
@@ -194,6 +195,9 @@ pub struct CheckReport {
 /// exposes a secret. `body/audit.rs` decides which calls these are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditSite {
+    /// The function the call is in, named as in `functions`, or the test
+    /// it is in, as `test "<name>"`, as for an [`Attenuation`].
+    pub function: String,
     /// What the call does.
     pub kind: AuditKind,
     /// The whole call expression.
@@ -241,7 +245,8 @@ impl AuditSite {
     /// when the site names its file.
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"kind\":\"{}\",{}\"span\":{{\"start\":{},\"end\":{}}}}}",
+            "{{\"function\":\"{}\",\"kind\":\"{}\",{}\"span\":{{\"start\":{},\"end\":{}}}}}",
+            json_escape(&self.function),
             self.kind.as_str(),
             path_json(&self.location),
             self.span.start,
@@ -255,8 +260,9 @@ impl AuditSite {
 /// `body/attenuation.rs` decides which calls these are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attenuation {
-    /// The function the call is in, named as in `functions`. A closure's
-    /// attenuations belong to the function around it.
+    /// The function the call is in, named as in `functions`, or the test
+    /// it is in, as `test "<name>"`. A closure's attenuations belong to
+    /// the function around it.
     pub function: String,
     /// The method: `restrict_to`, `restrict_to_file`, `read_only` or
     /// `write_only`.
@@ -338,9 +344,11 @@ impl Attenuation {
 /// One function's entry in the authority report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionAuthority {
-    /// The function's name, or `Type.method` for a method. In a package,
-    /// `pkg.` and the module path come first, as in `pkg.util.text.shout`
-    /// (see `link::Modules::function_name`).
+    /// The function's name, `Type.method` for a method of an inherent
+    /// `impl`, or `<Type as Trait>.method` for one of `impl Trait for
+    /// Type`. In a package, `pkg.` and the module path come first, as in
+    /// `pkg.util.text.shout` (see `link::Modules::function_name` and
+    /// `trait_method_name`). No two functions share a name.
     pub name: String,
     /// Declared `pub`: part of its package's API.
     pub public: bool,
@@ -357,10 +365,15 @@ pub struct FunctionAuthority {
 
 /// A capability-bearing parameter and the capabilities it supplies. A
 /// `cap fn` parameter is capability-bearing but names no capabilities.
+/// A parameter whose type is or holds a bounded type parameter names the
+/// parameter in `generics`: its type argument may be capability-bearing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Via {
     pub param: String,
     pub capabilities: Vec<String>,
+    /// The bounded type parameters the parameter's type is or holds, in
+    /// order of first appearance.
+    pub generics: Vec<String>,
 }
 
 impl CheckReport {
@@ -369,6 +382,15 @@ impl CheckReport {
     /// audit site, or attenuation per line. Every array is present, even
     /// when empty.
     pub fn to_json(&self) -> String {
+        self.to_json_with(None)
+    }
+
+    /// [`CheckReport::to_json`], with `extra`, a key and its JSON value,
+    /// as the last key: `oskac check --baseline` adds `authority_diff`.
+    pub fn to_json_with(&self, extra: Option<(&str, &str)>) -> String {
+        let extra = extra.map_or_else(String::new, |(key, value)| {
+            format!(",\n  \"{}\": {value}", json_escape(key))
+        });
         let diagnostics: Vec<String> = self.diagnostics.iter().map(Diagnostic::to_json).collect();
         let functions: Vec<String> = self
             .functions
@@ -379,7 +401,7 @@ impl CheckReport {
         let attenuations: Vec<String> =
             self.attenuations.iter().map(Attenuation::to_json).collect();
         format!(
-            "{{\n  \"diagnostics\": {},\n  \"functions\": {},\n  \"audit\": {},\n  \"attenuations\": {}\n}}\n",
+            "{{\n  \"diagnostics\": {},\n  \"functions\": {},\n  \"audit\": {},\n  \"attenuations\": {}{extra}\n}}\n",
             json_lines(&diagnostics),
             json_lines(&functions),
             json_lines(&audit),
@@ -402,11 +424,16 @@ impl CheckReport {
             self.list_attenuations(&function.name, &mut listed, &mut out);
         }
         // A function the report has no line for, such as a trait's
-        // default method, still shows what it attenuates.
+        // default method, or a test, still shows what it attenuates. A
+        // test is already named `test "<name>"`, which no function can be.
         for i in 0..listed.len() {
             if !listed[i] {
                 let name = &self.attenuations[i].function;
-                out.push_str(&format!("fn {name}:\n"));
+                if name.starts_with("test \"") {
+                    out.push_str(&format!("{name}:\n"));
+                } else {
+                    out.push_str(&format!("fn {name}:\n"));
+                }
                 self.list_attenuations(name, &mut listed, &mut out);
             }
         }
@@ -444,10 +471,12 @@ impl FunctionAuthority {
             .via
             .iter()
             .map(|via| {
-                if via.capabilities.is_empty() {
+                let mut kinds = via.capabilities.clone();
+                kinds.extend(via.generics.iter().map(|g| format!("generic {g}")));
+                if kinds.is_empty() {
                     format!("cap fn ({})", via.param)
                 } else {
-                    format!("{} ({})", via.capabilities.join(", "), via.param)
+                    format!("{} ({})", kinds.join(", "), via.param)
                 }
             })
             .collect();
@@ -473,8 +502,13 @@ impl FunctionAuthority {
             .via
             .iter()
             .map(|v| {
+                let generics = if v.generics.is_empty() {
+                    String::new()
+                } else {
+                    format!(",\"generics\":{}", json_strings(&v.generics))
+                };
                 format!(
-                    "{{\"param\":\"{}\",\"capabilities\":{}}}",
+                    "{{\"param\":\"{}\",\"capabilities\":{}{generics}}}",
                     json_escape(&v.param),
                     json_strings(&v.capabilities)
                 )
@@ -605,7 +639,7 @@ fn check_source(
     let program = diagnostics
         .is_empty()
         .then(|| program::lower::module(src, module, &items, &resolutions, &typing));
-    let functions = authority::report(module, &decls, &modules);
+    let functions = authority::report(module, &decls, &items, &modules);
     // An intrinsic name is also an unknown name; E0209 says it better.
     let refused: Vec<_> = diagnostics
         .iter()

@@ -406,9 +406,9 @@ fn a_method_is_named_by_its_types_module() {
         lines,
         [
             "fn pkg.main.main: pure",
-            "fn pkg.geo.Point.to_string: pure",
+            "fn <pkg.geo.Point as Display>.to_string: pure",
             "fn pkg.geo.Point.x: pure",
-            "fn pkg.geo.Int.area: pure",
+            "fn <Int as pkg.geo.Area>.area: pure",
         ]
     );
 }

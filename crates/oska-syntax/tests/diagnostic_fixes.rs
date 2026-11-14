@@ -41,11 +41,13 @@ fn json_carries_the_fix_after_the_span() {
     assert!(
         json.ends_with(
             ",\"fix\":{\"message\":\"remove `pub`\",\"edits\":\
-             [{\"span\":{\"start\":0,\"end\":4},\"replacement\":\"\"}]}}"
+             [{\"span\":{\"start\":0,\"end\":4},\"replacement\":\"\"}],\
+             \"applicability\":\"machine\"},\"related\":[],\"suggestions\":[]}"
         ),
         "{json}"
     );
-    assert!(json[..fix_at].ends_with("\"span\":{\"start\":0,\"end\":3}"));
+    assert!(json[..fix_at].contains("\"span\":{\"start\":0,\"end\":3}"));
+    assert!(json[..fix_at].ends_with("\"url\":\"https://oskalang.dev/codes/E0151\""));
 }
 
 #[test]

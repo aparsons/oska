@@ -17,7 +17,7 @@ use crate::{Attenuation, AttenuationRoot};
 
 /// The attenuation methods, and whether each takes a root as its first
 /// argument.
-const METHODS: &[(&str, bool)] = &[
+pub(crate) const METHODS: &[(&str, bool)] = &[
     ("restrict_to", true),
     ("restrict_to_file", true),
     ("read_only", false),

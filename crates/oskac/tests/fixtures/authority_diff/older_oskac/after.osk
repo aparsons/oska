@@ -1,0 +1,15 @@
+// A baseline written by an older oskac, before #149, called `run` pure.
+// This oskac reports its bounded type parameter, so `run` widened and
+// became impure; the diff says which oskac wrote the baseline.
+
+trait Counter {
+    fn count(self) -> Int
+}
+
+fn run<T: Counter>(counter: T) -> Int {
+    counter.count()
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("hello")
+}

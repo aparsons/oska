@@ -66,7 +66,7 @@ use crate::suggest;
 use crate::ty::{self, Cap, Trust, Ty};
 use crate::{Attenuation, AuditSite};
 
-mod attenuation;
+pub(crate) mod attenuation;
 mod audit;
 mod calls;
 mod patterns;
@@ -95,7 +95,7 @@ pub struct Findings {
     pub assumed: Vec<crate::instantiation::Assumed>,
     pub instances: Vec<crate::instantiation::Instance>,
     /// The function whose body is being checked, named as the authority
-    /// report names it. Empty outside one.
+    /// report names it; a test is `test "<name>"`. Empty outside both.
     pub function: String,
     /// Which module each part of the source is in; none for a single
     /// file (`link.rs`).
@@ -120,14 +120,10 @@ pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mu
                 let lower = Lower::new(decls).with_generics(&imp.generics);
                 let target = lower.ty(&imp.target);
                 let lower = lower.with_self(target);
-                let type_name = authority::type_name(&imp.target);
                 for method in &imp.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        out.function = out.modules.function_name(
-                            method.span.start,
-                            Some(&type_name),
-                            &f.name.name,
-                        );
+                        out.function =
+                            authority::impl_method_name(&out.modules, items, item, imp, method, f);
                         function(src, f, lower.clone(), items, out);
                     }
                 }
@@ -166,7 +162,9 @@ pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mu
                 body.check(&c.value, &ty);
             }
             ItemKind::Test(test) => {
-                out.function.clear();
+                // The report names a test `test "<name>"` (#150).
+                let name = crate::items::literal_text(&test.name).unwrap_or_default();
+                out.function = format!("test {name:?}");
                 let mut body = Body::new(src, items, Lower::new(decls), Ty::Unit, out);
                 body.bind("t", Ty::named(ty::TEST_CONTEXT), Binding::Param);
                 // A test produces no value: its last expression is a

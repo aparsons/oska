@@ -120,6 +120,20 @@ impl Modules {
             None => ItemKey { module: here, name }.joined(),
         }
     }
+
+    /// The name the authority report gives the method `name` of `impl
+    /// trait_ref for type_key`: `<Type as Trait>.name`, as the checked
+    /// program names it ([`crate::program::trait_method`]). `trait_ref`
+    /// carries a generic trait's arguments, as in `From<IoError>`, so the
+    /// name is shared neither with an inherent method of the type nor with
+    /// the same method of another impl (#123). In a package the type and
+    /// the trait are named by their keys, and a prelude one plainly, as in
+    /// `<Int as pkg.geo.Area>.area`: the orphan rule makes one of the two
+    /// the package's own, so the name is the package's alone.
+    pub fn trait_method_name(&self, type_key: &str, trait_ref: &str, name: &str) -> String {
+        let name = ItemKey::parse(name).map_or(name, |key| key.name);
+        crate::program::trait_method(type_key, trait_ref, name)
+    }
 }
 
 /// The name an item of a package has in the joined module: `pkg.`, its
@@ -635,6 +649,10 @@ impl Linker {
                 &name.name,
                 name.span,
                 &candidates,
+            )
+            .with_related(
+                format!("the module `{PKG}.{module}` it looked in"),
+                Span::at(self.module_starts[target]),
             );
             self.diagnostics.push(diagnostic);
             return None;

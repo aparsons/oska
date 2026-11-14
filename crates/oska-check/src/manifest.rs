@@ -189,8 +189,8 @@ struct Parser<'a> {
     package: Option<Span>,
     name: Option<String>,
     version: Option<String>,
-    /// The keys of `[package]` seen so far.
-    keys_seen: Vec<String>,
+    /// The keys of `[package]` seen so far, and where each was written.
+    keys_seen: Vec<(String, Span)>,
 }
 
 impl Parser<'_> {
@@ -344,17 +344,20 @@ impl Parser<'_> {
     }
 
     fn table_named(&mut self, name: &str, span: Span) {
-        match name {
-            "package" if self.package.is_some() => self.error(
-                codes::MANIFEST_DUPLICATE,
-                "`[package]` is written twice",
-                span,
+        match (name, self.package) {
+            ("package", Some(first)) => self.push(
+                Diagnostic::new(
+                    codes::MANIFEST_DUPLICATE,
+                    "`[package]` is written twice",
+                    span,
+                )
+                .with_related("first written here", first),
             ),
-            "package" => {
+            ("package", None) => {
                 self.package = Some(span);
                 self.table = Table::Package;
             }
-            "dependencies" => self.error(
+            ("dependencies", _) => self.error(
                 codes::MANIFEST_DEPENDENCIES,
                 "`[dependencies]` is not supported yet: dependencies arrive in milestone 5",
                 span,
@@ -431,7 +434,7 @@ impl Parser<'_> {
             // The key was written, so it is not also reported missing.
             let key = &self.text[key_span.start..key_span.end];
             if self.table == Table::Package && ["name", "version"].contains(&key) {
-                self.keys_seen.push(key.to_string());
+                self.keys_seen.push((key.to_string(), key_span));
             }
             self.skip_line();
             return;
@@ -449,7 +452,7 @@ impl Parser<'_> {
             // The key was written, so it is not also reported missing.
             let key = &self.text[key_span.start..key_span.end];
             if self.table == Table::Package && ["name", "version"].contains(&key) {
-                self.keys_seen.push(key.to_string());
+                self.keys_seen.push((key.to_string(), key_span));
             }
             self.skip_line();
             return;
@@ -509,15 +512,18 @@ impl Parser<'_> {
                     self.push(d);
                     return;
                 }
-                if self.keys_seen.iter().any(|k| k == key) {
-                    self.error(
-                        codes::MANIFEST_DUPLICATE,
-                        format!("`{key}` is written twice in `[package]`"),
-                        key_span,
+                if let Some(&(_, first)) = self.keys_seen.iter().find(|(k, _)| k == key) {
+                    self.push(
+                        Diagnostic::new(
+                            codes::MANIFEST_DUPLICATE,
+                            format!("`{key}` is written twice in `[package]`"),
+                            key_span,
+                        )
+                        .with_related("first written here", first),
                     );
                     return;
                 }
-                self.keys_seen.push(key.to_string());
+                self.keys_seen.push((key.to_string(), key_span));
                 let Value::Str(text) = value else {
                     debug_assert!(matches!(value, Value::Strings));
                     self.error(
@@ -746,7 +752,7 @@ impl Parser<'_> {
             ),
             Some(at) => {
                 for key in ["name", "version"] {
-                    if !self.keys_seen.iter().any(|k| k == key) {
+                    if !self.keys_seen.iter().any(|(k, _)| k == key) {
                         self.error(
                             codes::MANIFEST_MISSING,
                             format!("`[package]` needs a `{key}`"),
@@ -763,10 +769,7 @@ impl Parser<'_> {
             _ => Err(self
                 .errors
                 .into_iter()
-                .map(|mut d| {
-                    d.location = Some(Box::new(lines.location(path, d.span.start)));
-                    d
-                })
+                .map(|d| d.locate_in(&lines, path))
                 .collect()),
         }
     }

@@ -170,16 +170,23 @@ impl<'p> Joined<'p> {
     /// The location of `local`, an offset into the file of the module at
     /// `index` in package order.
     fn location(&self, index: usize, local: usize) -> Location {
+        self.spanning(index, Span::at(local))
+    }
+
+    /// The location of `local`, a span in the file of the module at
+    /// `index` in package order.
+    fn spanning(&self, index: usize, local: Span) -> Location {
         let path = self.modules.get(index).map_or("", |(m, _)| m.path.as_str());
         match self.lines.get(index) {
-            Some(lines) => lines.location(path, local),
-            None => Location::new(path, "", local),
+            Some(lines) => lines.spanning(path, local),
+            None => Location::spanning(path, "", local),
         }
     }
 
     /// `diagnostic`, whose span is an offset into the joined text, in the
     /// file of its module: located, its span an offset into that file,
-    /// and a fix whose edits are in another file naming that file.
+    /// a fix whose edits are in another file naming that file, and each
+    /// related place located in the file it is in.
     fn locate(&self, mut d: Diagnostic) -> (usize, Diagnostic) {
         let (module, span, index) = self.local(d.span);
         d.span = span;
@@ -192,7 +199,12 @@ impl<'p> Joined<'p> {
                 }
             }
         }
-        d.location = Some(Box::new(self.location(index, span.start)));
+        d.location = Some(Box::new(self.spanning(index, span)));
+        for related in &mut d.related {
+            let (_, span, index) = self.local(related.span);
+            related.span = span;
+            related.location = Some(self.spanning(index, span));
+        }
         (index, d)
     }
 
