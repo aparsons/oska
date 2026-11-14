@@ -7,11 +7,11 @@
 //! The checker is a parameter, so the rules are the same whatever checks
 //! the program: `oskac fix` passes `oska_check::check_package`.
 
+use oska_check::authority_diff::{diff, AuthorityRecord};
 use oska_check::{CheckReport, Package, MANIFEST_PATH};
 use oska_syntax::{Applicability, Diagnostic, Span};
 
 use super::edits::{self, EditError};
-use crate::authority_diff;
 
 /// The most rounds one run makes. Each round applies one fix and checks
 /// the whole program again, so a faulty fix that keeps making new
@@ -167,7 +167,15 @@ pub fn fix(
         }
     }
     if let Some(baseline) = &baseline {
-        let widened = authority_diff::diff(baseline, &report).widenings();
+        // Two functions of one name could hide a widening: that refuses
+        // the run too.
+        let widened = match diff(
+            &AuthorityRecord::of(baseline),
+            &AuthorityRecord::of(&report),
+        ) {
+            Ok(difference) => difference.widenings(),
+            Err(message) => vec![message],
+        };
         if !widened.is_empty() {
             return refused(Refusal::Widening(widened), rounds);
         }

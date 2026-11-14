@@ -41,6 +41,7 @@ impl Body<'_, '_, '_> {
             .find(|a| a.type_name == type_name && a.method == method)
         {
             self.out.audit.push(AuditSite {
+                function: self.out.function.clone(),
                 kind: audited.kind,
                 span,
                 location: None,

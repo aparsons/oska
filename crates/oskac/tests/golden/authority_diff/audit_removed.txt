@@ -1,0 +1,6 @@
+exit: 0
+--- stdout
+fn shout: pure
+baseline: <baseline>
+  removed audit site fn shout: assume_trusted -1
+--- stderr

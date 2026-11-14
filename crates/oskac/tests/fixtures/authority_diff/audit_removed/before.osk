@@ -1,0 +1,5 @@
+// `shout` vouches for untrusted text.
+
+fn shout(name: Untrusted<String>) -> String {
+    name.assume_trusted()
+}

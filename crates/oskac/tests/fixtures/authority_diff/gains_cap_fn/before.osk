@@ -1,0 +1,9 @@
+// `report` already writes to stdout.
+
+fn report(io: Stdout) -> Result<(), IoError> {
+    io.println("done")
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    report(io)
+}

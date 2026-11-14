@@ -37,6 +37,47 @@ impl JsonValue {
             _ => None,
         }
     }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            JsonValue::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    pub fn as_array(&self) -> Option<&[JsonValue]> {
+        match self {
+            JsonValue::Array(items) => Some(items),
+            _ => None,
+        }
+    }
+
+    /// A number written as a non-negative integer that fits in a `u64`,
+    /// such as a count: not `-1`, `1.0` or `1e3`.
+    pub fn as_u64(&self) -> Option<u64> {
+        match self {
+            JsonValue::Number(text) if text.bytes().all(|b| b.is_ascii_digit()) => {
+                text.parse().ok()
+            }
+            _ => None,
+        }
+    }
+
+    /// The first key that one object, here or anywhere inside, gives more
+    /// than once. [`JsonValue::get`] reads the first, so a reader that must
+    /// not be misled by a second refuses such a value.
+    pub fn duplicate_key(&self) -> Option<&str> {
+        match self {
+            JsonValue::Object(members) => members
+                .iter()
+                .enumerate()
+                .find(|(i, (key, _))| members[..*i].iter().any(|(k, _)| k == key))
+                .map(|(_, (key, _))| key.as_str())
+                .or_else(|| members.iter().find_map(|(_, v)| v.duplicate_key())),
+            JsonValue::Array(items) => items.iter().find_map(JsonValue::duplicate_key),
+            _ => None,
+        }
+    }
 }
 
 /// `text` as JSON, or why it is not.
@@ -270,5 +311,32 @@ impl Reader<'_> {
                 other => out.push(other),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_json;
+
+    #[test]
+    fn counts_are_non_negative_integers() {
+        let count = |text: &str| parse_json(text).ok().and_then(|j| j.as_u64());
+        assert_eq!(count("12"), Some(12));
+        assert_eq!(count("-1"), None);
+        assert_eq!(count("1.0"), None);
+        assert_eq!(count("1e3"), None);
+    }
+
+    #[test]
+    fn a_key_given_twice_is_found_at_any_depth() {
+        let first = |text: &str| {
+            parse_json(text)
+                .expect("valid JSON")
+                .duplicate_key()
+                .map(str::to_string)
+        };
+        assert_eq!(first(r#"{"a":1,"b":2}"#), None);
+        assert_eq!(first(r#"{"a":1,"a":2}"#).as_deref(), Some("a"));
+        assert_eq!(first(r#"{"x":[{"k":1,"k":2}]}"#).as_deref(), Some("k"));
     }
 }

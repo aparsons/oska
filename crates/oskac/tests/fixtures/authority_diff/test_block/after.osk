@@ -1,0 +1,13 @@
+// A test narrows its stand-in filesystem and vouches for text: both are
+// reported, and neither fails the gate, since a test's stand-in
+// capabilities are not the program's authority.
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("hello")
+}
+
+test "reads a note" {
+    let notes = t.fs.read_only().restrict_to("notes")
+    let name: Untrusted<String> = "bob"
+    let vouched = name.assume_trusted()
+}

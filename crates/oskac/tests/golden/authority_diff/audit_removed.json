@@ -1,0 +1,27 @@
+exit: 0
+--- stdout
+{
+  "diagnostics": [],
+  "functions": [
+    {"name":"shout","authority":[],"via":[],"pure":true}
+  ],
+  "audit": [],
+  "attenuations": [],
+  "authority_diff": {
+    "baseline": "<baseline>",
+    "baseline_oskac": "<version>",
+    "widened": [],
+    "narrowed": [],
+    "became_impure": [],
+    "added": [],
+    "removed": [],
+    "new_audit_sites": [],
+    "removed_audit_sites": [
+      {"function":"shout","kind":"assume_trusted","count":1}
+    ],
+    "new_attenuations": [],
+    "removed_attenuations": [],
+    "fails": false
+  }
+}
+--- stderr

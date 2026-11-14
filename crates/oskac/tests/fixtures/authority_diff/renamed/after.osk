@@ -1,0 +1,12 @@
+// `load` renamed `read_notes`: the diff reports one function removed and
+// one added, never the same function renamed. The added function reaches
+// nothing the program did not, so it passes.
+
+fn read_notes(dir: DirRead) -> Result<Untrusted<String>, IoError> {
+    dir.read_to_string(Path.new("today.txt"))
+}
+
+fn main(fs: Fs, io: Stdout) -> Result<(), IoError> {
+    let text = read_notes(fs.restrict_to("notes").read_only())?
+    io.println("read")
+}

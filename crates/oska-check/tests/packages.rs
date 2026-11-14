@@ -84,7 +84,7 @@ fn the_json_report_carries_each_entry_s_path_before_its_span() {
         check_modules(&[("main", "fn main() {}\nfn f() -> Strng {}\n"), ("io", fs)]).to_json();
     for expected in [
         r#"{"code":"E0200","message":"unknown type `Strng`; did you mean `String`?","path":"src/main.osk","span":"#,
-        r#"{"kind":"assume_trusted","path":"src/io.osk","span":"#,
+        r#"{"function":"pkg.io.vouch","kind":"assume_trusted","path":"src/io.osk","span":"#,
         r#"{"function":"pkg.io.docs","method":"restrict_to","path":"src/io.osk","span":"#,
     ] {
         assert!(json.contains(expected), "no {expected} in {json}");
