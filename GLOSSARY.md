@@ -156,3 +156,13 @@ _Avoid_: syscall wrapper
 **Differential suite**:
 The tests that run every program of a corpus on both the interpreter and the native backend and fail on any difference in output, exit code, panic or files written.
 _Avoid_: parity tests, golden tests (for this suite)
+
+## Installation
+
+**Managed install**:
+An `oskac` that the installer put in place and recorded in its install receipt. Only a managed install updates or uninstalls itself; any other copy is left alone.
+_Avoid_: system install, global install
+
+**Update checker**:
+The toolchain's own Oska program that fetches the signed release index and verifies releases for `oskac self check` and `oskac self update`. It is compiled when `oskac` is built and carried inside it, and it runs as a separate process holding only the network and file authority it needs.
+_Avoid_: updater daemon, auto-updater

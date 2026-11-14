@@ -46,7 +46,7 @@ fi
 
 lint_overrides='RUSTFLAGS|RUSTC_WRAPPER|RUSTC_WORKSPACE_WRAPPER|cap-lints'
 if [ -d .github/workflows ]; then
-  overrides=$(grep -nE "$lint_overrides" .github/workflows/*.yml || true)
+  overrides=$(grep -rnE --include='*.yml' --include='*.yaml' "$lint_overrides" .github/workflows || true)
   if [ -n "$overrides" ]; then
     printf '%s\n' "$overrides" >&2
     problem "a workflow (above) sets rustc flags or a wrapper, which can lower lint levels"
