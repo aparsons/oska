@@ -226,6 +226,8 @@ Human-readable output: one line per applied fix on standard output, as ``app.osk
 - A test run that the interpreter refuses (`oskac test` exits with 2: the program uses something the interpreter cannot run yet) does not block. The gate exits with 0 and tells the user, in a `systemMessage` on standard output, and the agent is told nothing.
 - The settings give it a `timeout` in seconds, so that a slow suite cannot stall every turn.
 
+The published settings, `https://oskalang.dev/agent-setup/claude-settings.json`, run each command as `oskac` by name with arguments only: no script and no shell syntax, so the same line works in whichever shell Claude Code uses, on Linux, macOS and Windows. `oskac` must be on `PATH`. The old `.claude/hooks/oska-check.sh` fell back to `$OSKA_HOME/bin/oskac`; the command has no such fallback, so add the installer's `bin_dir` to `PATH` before you enable a hook. A project that saved the script earlier can keep it: the published copy is now one line that calls `oskac hook claude --event=post-edit`.
+
 | Exit code | Meaning |
 | --- | --- |
 | `0` | Nothing to report. For the Stop gate, also a test run the interpreter cannot run yet, told to the user only. |

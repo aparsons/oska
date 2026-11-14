@@ -5,12 +5,16 @@ This project is written in [Oska](https://oskalang.dev), a language where a func
 ### The loop
 
 1. Check: `oskac check <file.osk> --format=json`. Read `diagnostics`, and match on each `code`, not on the message.
-2. Apply machine fixes: if a diagnostic has a `fix`, apply its `edits` (the bytes `span.start` to `span.end` are replaced by `replacement`), then check again. Apply one fix at a time.
+2. Apply machine fixes: `oskac fix <file.osk>` applies every fix that is certain, checks again after each, writes each changed file once, and prints what it changed and which diagnostics remain. `oskac fix <file.osk> --dry-run` shows the diff and writes nothing. It never applies a fix whose `applicability` is `maybe`, and applies one that is `placeholders`, such as the `todo()` arms of `E0253`, only with `oskac fix <file.osk> --placeholders`: read what it did and fill them in. Do not apply fixes by hand with the bytes of their `edits`.
 3. Fix the rest by hand, one diagnostic at a time. `oskac explain <code>` explains a code offline, with an example and its fix. `oskac explain <code> --format=json` says the same as JSON.
 4. Run: `oskac run <file.osk> -- args`. On aarch64 Linux it compiles the program natively and runs it; elsewhere it uses the interpreter. Output, reports and exit codes are the same either way. If a native result looks wrong, compare with `oskac run --interpret` and report any difference as a bug.
 5. Test: `oskac test <file.osk>` (native or interpreted, as `run`). Add a test for every behavior you add.
-6. Read the authority report from `oskac check <file.osk> --format=json` (`functions` and `audit`). It says what each function can reach.
+6. Compare the authority: `oskac check <file.osk> --baseline=authority.json` compares what each function can reach with the project's committed baseline (see below), and lists the functions that gained a capability, the new audit sites, and the functions that stopped being pure. It exits with exit code 3 when authority widened. Without a baseline, save the report before you change anything (`oskac check <file.osk> --format=json > before.json`) and compare with `oskac check <file.osk> --baseline=before.json`. The authority report is in `functions` and `audit` of `oskac check <file.osk> --format=json`.
 7. Before you finish, `oskac check <file.osk> --release` must pass.
+
+### The authority baseline
+
+`authority.json` is a saved record of the program's authority, committed and reviewed like a lockfile. `oskac check <file.osk> --update-baseline=authority.json` writes it, and only when the program has no diagnostics. CI runs `oskac check <file.osk> --baseline=authority.json`. There is no flag that lets a widening pass: approving one is a reviewed change to `authority.json`.
 
 ### Layout
 
@@ -21,6 +25,7 @@ A program is one `.osk` file, or a package: an `oska.toml` (`[package]` with a `
 - Do not widen authority to make an error go away: do not add capabilities to `main`, and do not call `.assume_trusted()` or `.expose()` without saying why. Prefer a narrower capability, such as `fs.read_only()` or `fs.restrict_to("dir")`.
 - Anything from files, arguments, standard input, or the environment is `Untrusted`. Check it before you use it.
 - Never write a secret into a source file, a test, or a log.
+- Do not refresh a committed baseline to make the gate pass without telling the user why. Updating it is the approval of a wider authority, and that is the user's decision.
 - Say in your summary when the authority report changed.
 
 ### Where to read more

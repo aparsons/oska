@@ -337,7 +337,15 @@ fn every_console_and_help_block_shows_exactly_what_the_toolchain_prints() {
 #[test]
 fn shell_blocks_use_only_oskac_commands_and_flags_that_exist() {
     let help = oskac_help();
-    let commands: BTreeSet<&str> = ["lex", "parse", "check", "run", "test", "explain"].into();
+    // Every command `oskac --help` lists, so that a new one needs no edit here.
+    let commands: BTreeSet<String> = help
+        .lines()
+        .filter_map(|l| l.strip_prefix("    oskac "))
+        .filter_map(|l| l.split_whitespace().next())
+        .filter(|w| !w.starts_with('-'))
+        .map(str::to_string)
+        .collect();
+    assert!(commands.contains("fix") && commands.contains("hook"));
     for block in all_blocks().iter().filter(|b| b.language() == "sh") {
         if block.has("planned") {
             continue;
@@ -550,4 +558,67 @@ fn no_guide_still_waits_for_v0_1_0() {
             page.display()
         );
     }
+}
+
+#[test]
+fn the_agent_guide_teaches_fix_the_hooks_and_the_baseline_not_a_hand_written_loop() {
+    let guide = read(&repo_root().join("docs/guide/agent-guide.md"));
+    for claim in [
+        "`oskac fix file.osk`",
+        "oskac fix file.osk --dry-run",
+        "oskac fix file.osk --placeholders",
+        "`oskac check file.osk --baseline=authority.json`",
+        "`oskac check file.osk --update-baseline=authority.json`",
+        "exit code 3",
+        "`oskac hook claude --event=post-edit`",
+        "`oskac hook claude --event=stop`",
+        "`oskac` must be on `PATH`",
+        "Do not refresh a committed baseline to make the gate pass without telling the user why",
+        "`applicability`",
+    ] {
+        assert!(guide.contains(claim), "the agent guide should say: {claim}");
+    }
+    // The Python loop, and the pitfalls it needed spelled out, are gone: the
+    // tool applies fixes. The `fix` format stays documented, for tools that
+    // apply fixes themselves.
+    for stale in [
+        "```python",
+        "apply_machine_fixes",
+        "subprocess",
+        "POSIX shell script",
+        "Linux and macOS only",
+        "not available on Windows",
+        "compare this against the report from before",
+    ] {
+        assert!(
+            !guide.contains(stale),
+            "the agent guide still says: {stale}"
+        );
+    }
+    assert!(guide.contains("replaces the bytes `span.start` up to `span.end`"));
+    // Step 6 of the loop is the baseline.
+    let step6 = guide
+        .lines()
+        .find(|l| l.starts_with("6. "))
+        .expect("step 6 of the loop");
+    assert!(step6.contains("--baseline"), "{step6}");
+    // The loop's step 2 is the command.
+    let step2 = guide
+        .lines()
+        .find(|l| l.starts_with("2. "))
+        .expect("step 2 of the loop");
+    assert!(step2.contains("oskac fix"), "{step2}");
+}
+
+#[test]
+fn the_cli_reference_says_the_hooks_call_oskac_from_the_path() {
+    let reference = read(&repo_root().join("docs/guide/cli-reference.md"));
+    assert!(
+        reference.contains("`oskac` must be on `PATH`"),
+        "the hook settings call `oskac` by name"
+    );
+    assert!(
+        reference.contains("`$OSKA_HOME/bin/oskac`"),
+        "the old script's fallback is gone, and the reference says so"
+    );
 }
