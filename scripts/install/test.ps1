@@ -910,18 +910,29 @@ function Test-UninstallRefusesAReceiptItCannotRead {
     $vj = $v | ConvertTo-Json
     $sum = Get-Sha256 $v
     $entry = "{`"path`": $vj, `"kind`": `"record`", `"sha256`": `"$sum`"}"
-    $cases = @(
-        "{`"schema`": 1, `"files`": [$entry",
-        "{`"schema`": 2, `"files`": [$entry]}",
-        "{`"schema`": 1, `"file`": [$entry]}",
-        "{`"schema`": 1, `"files`": [{`"path`": `"C:\\Windows\\win.ini`", `"path`": $vj, `"kind`": `"record`", `"sha256`": `"$sum`"}]}",
-        "{`"schema`": 1, `"files`": [{`"path`": $($vj.TrimEnd('"'))\n`", `"kind`": `"record`", `"sha256`": `"$sum`"}]}",
-        "{`"schema`": 1, `"files`": [`"$($v.Replace('\', '\\'))`"]}"
-    )
-    foreach ($case in $cases) {
-        Write-Text 'home/.oska/receipt.json' $case
-        [void](Test-RefusedUnchanged 'unsafe_path' 1 @('--uninstall'))
+    $cases = [ordered]@{
+        'truncated JSON' = "{`"schema`": 1, `"files`": [$entry"
+        'schema 2' = "{`"schema`": 2, `"files`": [$entry]}"
+        'no files' = "{`"schema`": 1, `"file`": [$entry]}"
+        'a repeated key' = "{`"schema`": 1, `"files`": [{`"path`": `"C:\\Windows\\win.ini`", `"path`": $vj, `"kind`": `"record`", `"sha256`": `"$sum`"}]}"
+        'a newline in a path' = "{`"schema`": 1, `"files`": [{`"path`": $($vj.TrimEnd('"'))\n`", `"kind`": `"record`", `"sha256`": `"$sum`"}]}"
+        'a non-ASCII escape' = "{`"schema`": 1, `"files`": [{`"path`": $($vj.TrimEnd('"'))\u00e9`", `"kind`": `"record`", `"sha256`": `"$sum`"}]}"
+        'a bare string entry' = "{`"schema`": 1, `"files`": [`"$($v.Replace('\', '\\'))`"]}"
+        'Files for files' = "{`"schema`": 1, `"Files`": [$entry]}"
+        'Path for path' = "{`"schema`": 1, `"files`": [{`"Path`": $vj, `"kind`": `"record`", `"sha256`": `"$sum`"}]}"
+        'keys that differ only in case' = "{`"schema`": 1, `"files`": [{`"Path`": `"C:\\Windows\\win.ini`", `"path`": $vj, `"kind`": `"record`", `"sha256`": `"$sum`"}]}"
+        'a trailing comma' = "{`"schema`": 1, `"files`": [$entry,]}"
     }
+    $accepted = @()
+    foreach ($name in $cases.Keys) {
+        Write-Text 'home/.oska/receipt.json' $cases[$name]
+        try {
+            [void](Test-RefusedUnchanged 'unsafe_path' 1 @('--uninstall'))
+        } catch {
+            $accepted += "a receipt with $name ($($_.Exception.Message))"
+        }
+    }
+    Assert ($accepted.Count -eq 0) "not refused: $($accepted -join '; ')"
     Assert (Test-Path -LiteralPath $v) 'removed the version file'
     # An ASCII escape reads as what it stands for.
     $escape = '\' + 'u006e'
