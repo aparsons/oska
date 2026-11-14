@@ -131,7 +131,9 @@ impl AuthorityRecord {
     /// saved `oskac check --format=json` report: its `functions`, `audit`
     /// and `attenuations`. Every other key is ignored, except that a
     /// `format` other than [`FORMAT`] and a report with diagnostics, whose
-    /// authority is incomplete, are refused.
+    /// authority is incomplete, are refused. A baseline says its `format`
+    /// and a report has `diagnostics`; text with neither is refused too,
+    /// since nothing says how to read it.
     pub fn read(text: &str) -> Result<AuthorityRecord, String> {
         let json = parse_json(text)?;
         if !matches!(json, Json::Object(_)) {
@@ -142,12 +144,19 @@ impl AuthorityRecord {
         if let Some(key) = json.duplicate_key() {
             return Err(format!("the key `{key}` is given twice in one object"));
         }
-        if let Some(format) = json.get("format") {
-            if format.as_u64() != Some(FORMAT) {
+        match (json.get("format"), json.get("diagnostics")) {
+            (Some(format), _) if format.as_u64() != Some(FORMAT) => {
                 return Err(format!(
                     "unsupported baseline format (this oskac reads format {FORMAT})"
                 ));
             }
+            (None, None) => {
+                return Err(format!(
+                    "no `format`: a baseline says its format ({FORMAT}), and a saved \
+                     `oskac check --format=json` report has `diagnostics`"
+                ));
+            }
+            _ => {}
         }
         if let Some(diagnostics) = json.get("diagnostics") {
             match diagnostics.as_array() {

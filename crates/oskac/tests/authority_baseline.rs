@@ -219,6 +219,88 @@ fn the_baseline_is_sorted_span_free_and_the_same_bytes_everywhere() {
     assert_eq!(std::fs::read(&rewritten).ok(), Some(bytes));
 }
 
+/// A fresh, empty directory for case `name`.
+fn scratch_dir(name: &str) -> PathBuf {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("authority_baseline")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("should create the scratch directory");
+    dir
+}
+
+/// The names in `dir`, sorted.
+fn entries(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .expect("the directory")
+        .map(|e| {
+            e.expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// A symlink at `link` to the file `target`, or `false` where this OS or
+/// user may not make one (Windows without the privilege or developer mode).
+fn symlink_file(target: &Path, link: &Path) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(target, link);
+    #[cfg(not(any(unix, windows)))]
+    let made: std::io::Result<()> = Err(std::io::ErrorKind::Unsupported.into());
+    match made {
+        Ok(()) => true,
+        Err(err) => {
+            println!("skipped: cannot make a symlink here: {err}");
+            false
+        }
+    }
+}
+
+#[test]
+fn a_baseline_replaces_the_old_one_in_one_step_and_leaves_nothing_else() {
+    let dir = scratch_dir("replaced");
+    let baseline = dir.join("authority.json");
+    std::fs::write(&baseline, "an old baseline").expect("should write");
+    update_baseline(&format!("{FIXTURES}/gains_net/before.osk"), &baseline);
+    let written = std::fs::read_to_string(&baseline).expect("the baseline");
+    assert!(written.starts_with("{\n  \"format\": 1,"), "{written}");
+    assert_eq!(entries(&dir), ["authority.json"]);
+}
+
+#[test]
+fn a_baseline_is_never_written_through_a_symlink() {
+    let dir = scratch_dir("symlinked");
+    let target = dir.join("elsewhere.json");
+    std::fs::write(&target, "not yours").expect("should write");
+    let link = dir.join("authority.json");
+    if !symlink_file(&target, &link) {
+        return;
+    }
+    let flag = format!("--update-baseline={}", link.display());
+    let output = oskac(&["check", &format!("{FIXTURES}/gains_net/before.osk"), &flag]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("error: cannot write the baseline") && stderr.contains("symlink"),
+        "{stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("the target"),
+        "not yours"
+    );
+    assert!(std::fs::symlink_metadata(&link)
+        .expect("the link")
+        .file_type()
+        .is_symlink());
+    assert_eq!(entries(&dir), ["authority.json", "elsewhere.json"]);
+}
+
 #[test]
 fn an_unchanged_program_passes_and_says_so() {
     let baseline = scratch("valid_package.json");
@@ -306,6 +388,16 @@ fn a_baseline_that_cannot_be_read_fails_closed() {
         ("array", "[]"),
         ("no_functions", r#"{"audit": [], "attenuations": []}"#),
         ("no_audit", r#"{"functions": [], "attenuations": []}"#),
+        // Neither a baseline, which says its format, nor a saved report,
+        // which has `diagnostics`: nothing says how to read it.
+        (
+            "no_format",
+            r#"{"functions": [], "audit": [], "attenuations": []}"#,
+        ),
+        (
+            "format_null",
+            r#"{"format": null, "functions": [], "audit": [], "attenuations": []}"#,
+        ),
         (
             "format_2",
             r#"{"format": 2, "functions": [], "audit": [], "attenuations": []}"#,

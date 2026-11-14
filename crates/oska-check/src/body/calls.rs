@@ -639,10 +639,15 @@ impl Body<'_, '_, '_> {
             } else {
                 format!(": {trait_name}")
             };
-            diagnostic = diagnostic.with_fix(
-                format!("add the bound `{param}: {trait_name}`"),
-                vec![Edit::insert(site.end, text)],
-            );
+            // A bound on a type parameter is authority after #149: the
+            // function then reaches what its type argument can do. A fix
+            // that changes authority is never `machine`.
+            diagnostic = diagnostic
+                .with_fix(
+                    format!("add the bound `{param}: {trait_name}`"),
+                    vec![Edit::insert(site.end, text)],
+                )
+                .applicable(Applicability::Maybe);
         }
         self.out.diagnostics.push(diagnostic);
         None

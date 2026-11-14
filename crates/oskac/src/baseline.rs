@@ -14,6 +14,8 @@ use std::process::ExitCode;
 use oska_check::authority_diff::{diff, AuthorityRecord};
 use oska_check::CheckReport;
 
+use crate::package::{self, Files};
+
 /// The exit code of a check whose authority widened against its baseline.
 const WIDENED: u8 = 3;
 
@@ -52,9 +54,15 @@ pub(crate) fn check(report: &CheckReport, json: bool, path: &str, gate: Gate) ->
     }
 }
 
+/// Write the baseline of `report` to `file` as `oskac fix` writes a file:
+/// to a new file beside it, which then replaces it in one step, so a
+/// reader never sees half a baseline; and never through a symlink at
+/// `file`. The directories on the way are the user's choice, and followed.
 fn write(report: &CheckReport, file: &str) -> Result<(), String> {
     let text = AuthorityRecord::of(report).to_baseline(env!("CARGO_PKG_VERSION"))?;
-    std::fs::write(file, text).map_err(|err| err.to_string())
+    package::parent_and_name(file)
+        .and_then(|(parent, name)| Files::open(parent)?.replace(&[name], text.as_bytes()))
+        .map_err(|err| err.to_string())
 }
 
 /// Compare `report` with the baseline in `file`: the report gains the

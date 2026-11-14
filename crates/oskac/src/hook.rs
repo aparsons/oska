@@ -6,7 +6,7 @@
 //! the check found, and it returns a [`Verdict`]: what to print and the
 //! exit status. `claude` is only the adapter for Claude Code's input; a
 //! later plugin, another agent's hook format or an MCP tool would adapt
-//! its own input to the same [`Edit`] and call the same function.
+//! its own input to the same [`Edited`] and call the same function.
 //!
 //! A hook reads its input and the program's files. It writes no file,
 //! starts no program and opens no network connection, so enabling it
@@ -15,8 +15,13 @@
 //! The exit status is 0 for nothing to report, 2 to hand feedback back
 //! (Claude Code shows standard error to the agent; for the Stop gate, 2
 //! also blocks the agent from finishing), and 1 with one line for
-//! malformed input, an unreadable file or an unknown event: Claude Code
-//! treats 1 as non-blocking, so a broken hook never wedges an agent.
+//! malformed input or an unknown event, and, after an edit, a file that
+//! cannot be read: Claude Code treats 1 as non-blocking, so a broken hook
+//! never wedges an agent. The Stop gate blocks with 2 on a target it
+//! cannot read, so it never lets the agent finish on what it could not
+//! check. With `--format=json` the feedback is one JSON object instead of
+//! text, with each diagnostic in the shape `oskac check --format=json`
+//! gives it.
 
 mod claude;
 mod post_edit;
@@ -48,11 +53,19 @@ impl Event {
     }
 }
 
+/// How the feedback is written: as text, a line per diagnostic, or, with
+/// `--format=json`, as one JSON object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Format {
+    Text,
+    Json,
+}
+
 /// An edit of one file, as any agent's hook input says it: the file
 /// (absolute when the input gave the project's directory) and the
 /// project's directory, which the paths printed are written from.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Edit {
+struct Edited {
     file: PathBuf,
     cwd: Option<PathBuf>,
 }
@@ -115,18 +128,20 @@ impl Verdict {
     }
 }
 
-/// `oskac hook claude --event=<event> [targets...]`: read Claude Code's
-/// hook JSON from standard input, decide, and print what the verdict says:
-/// its text to standard error, and its note for the user to standard
-/// output. Only the Stop gate takes `targets`.
-pub fn run(event: Option<&str>, targets: &[&str]) -> ExitCode {
+/// `oskac hook claude --event=<event> [--format=json] [targets...]`: read
+/// Claude Code's hook JSON from standard input, decide, and print what the
+/// verdict says: its text to standard error, as JSON when `json` says so,
+/// and its note for the user to standard output. Only the Stop gate takes
+/// `targets`.
+pub fn run(event: Option<&str>, targets: &[&str], json: bool) -> ExitCode {
+    let format = if json { Format::Json } else { Format::Text };
     let verdict = match event {
         None => Verdict::failed("`oskac hook claude` needs --event=post-edit or --event=stop"),
         Some(name) => match Event::named(name) {
             Some(Event::PostEdit) if !targets.is_empty() => {
                 Verdict::failed("--event=post-edit takes no targets")
             }
-            Some(event) => on_event(event, targets),
+            Some(event) => on_event(event, targets, format),
             None => Verdict::failed(&format!(
                 "unknown hook event `{name}`; the events are post-edit and stop"
             )),
@@ -138,18 +153,18 @@ pub fn run(event: Option<&str>, targets: &[&str]) -> ExitCode {
     ExitCode::from(verdict.status)
 }
 
-fn on_event(event: Event, targets: &[&str]) -> Verdict {
+fn on_event(event: Event, targets: &[&str], format: Format) -> Verdict {
     let input = match read_input() {
         Ok(input) => input,
         Err(reason) => return Verdict::failed(&reason),
     };
     match event {
         Event::PostEdit => match claude::post_edit_input(&input) {
-            Ok(edit) => post_edit::verdict_for(&edit),
+            Ok(edited) => post_edit::verdict_for(&edited, format),
             Err(reason) => Verdict::failed(&reason),
         },
         Event::Stop => match claude::stop_input(&input) {
-            Ok(finish) => stop::verdict_for(&finish, targets),
+            Ok(finish) => stop::verdict_for(&finish, targets, format),
             Err(reason) => Verdict::failed(&reason),
         },
     }

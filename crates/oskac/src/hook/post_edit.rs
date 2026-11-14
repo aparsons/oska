@@ -11,20 +11,20 @@
 use std::path::Path;
 
 use oska_check::CheckOptions;
-use oska_syntax::{Applicability, Diagnostic};
+use oska_syntax::{json_escape, Applicability, Diagnostic};
 
-use super::target::{line, Shown, SHOWN};
-use super::{Edit, Verdict};
-use crate::package::{self, Loaded, Target};
+use super::target::{self, json_list, line, Shown, SHOWN};
+use super::{Edited, Format, Verdict};
+use crate::package::{self, Target};
 
-/// What the hook says about `edit`.
-pub fn verdict_for(edit: &Edit) -> Verdict {
-    let Some(target) = target_of(&edit.file) else {
+/// What the hook says about `edited`, written as `format` says.
+pub fn verdict_for(edited: &Edited, format: Format) -> Verdict {
+    let Some(target) = target_of(&edited.file) else {
         return Verdict::quiet();
     };
-    let target = Shown::new(target, edit.cwd.as_deref());
-    match check(&target) {
-        Ok(diagnostics) => verdict(&target.name, &diagnostics),
+    let shown = Shown::new(target, edited.cwd.as_deref());
+    match target::check(&shown, CheckOptions { release: false }) {
+        Ok(checked) => verdict(&shown.name, &checked.diagnostics(), format),
         Err(reason) => Verdict::failed(&reason),
     }
 }
@@ -44,64 +44,18 @@ fn target_of(file: &Path) -> Option<Target> {
     }
 }
 
-/// Every diagnostic of `oskac check` on the target, located, with its
-/// path written from the project's directory. An error says what could
-/// not be read.
-fn check(shown: &Shown) -> Result<Vec<Diagnostic>, String> {
-    let options = CheckOptions { release: false };
-    match &shown.target {
-        Target::File(path) => {
-            let src = std::fs::read_to_string(path)
-                .map_err(|e| format!("cannot read {}: {e}", shown.name))?;
-            let report = oska_check::check_file(&shown.name, &src, options);
-            Ok(report
-                .diagnostics
-                .into_iter()
-                .map(|d| match d.location {
-                    Some(_) => d,
-                    None => d.locate(&shown.name, &src),
-                })
-                .collect())
-        }
-        Target::Dir(dir) => {
-            let diagnostics = match package::load(dir, "check") {
-                Loaded::Package { package, refused } => {
-                    let mut report = oska_check::check_package(&package, options);
-                    report.diagnostics.splice(0..0, refused);
-                    report.diagnostics
-                }
-                Loaded::Refused(diagnostics) => diagnostics,
-                Loaded::Unreadable(message) => return Err(message),
-            };
-            Ok(diagnostics
-                .into_iter()
-                .map(|mut d| {
-                    if let Some(location) = &mut d.location {
-                        location.path = package::from_here(&shown.name, &location.path);
-                    }
-                    d
-                })
-                .collect())
-        }
-    }
-}
-
 /// What to print for the target `name`, and the exit status, given its
-/// diagnostics: nothing for none; otherwise one line each, at most
-/// [`SHOWN`], then `and N more`, then how many have a `machine` fix and
-/// the command that applies them.
-fn verdict(name: &str, diagnostics: &[Diagnostic]) -> Verdict {
+/// diagnostics: nothing for none. Otherwise, as text, one line each, at
+/// most [`SHOWN`], then `and N more`, then how many have a `machine` fix
+/// and the command that applies them; as JSON, one object saying the
+/// same, with each diagnostic in its full shape.
+fn verdict(name: &str, diagnostics: &[Diagnostic], format: Format) -> Verdict {
     if diagnostics.is_empty() {
         return Verdict::quiet();
     }
-    let mut out = String::new();
-    for diagnostic in diagnostics.iter().take(SHOWN) {
-        out.push_str(&line(name, diagnostic));
-        out.push('\n');
-    }
-    if diagnostics.len() > SHOWN {
-        out.push_str(&format!("and {} more\n", diagnostics.len() - SHOWN));
-    }
+    let more = diagnostics.len().saturating_sub(SHOWN);
+    // The fixes `oskac fix` applies: no fix that would widen authority is
+    // `machine`, so each one counted here is one it will apply.
     let machine = diagnostics
         .iter()
         .filter(|d| {
@@ -110,11 +64,38 @@ fn verdict(name: &str, diagnostics: &[Diagnostic]) -> Verdict {
                 .is_some_and(|fix| fix.applicability == Applicability::Machine)
         })
         .count();
-    if machine > 0 {
-        out.push_str(&format!(
-            "{machine} of {} diagnostics have a `machine` fix: run `oskac fix {name}`\n",
-            diagnostics.len()
-        ));
-    }
+    let command = format!("oskac fix {name}");
+    let out = match format {
+        Format::Json => {
+            let command = if machine > 0 {
+                format!("\"{}\"", json_escape(&command))
+            } else {
+                "null".to_string()
+            };
+            format!(
+                "{{\"event\":\"post-edit\",\"target\":\"{}\",\"diagnostics\":{},\"more\":{more},\
+                 \"machine_fixes\":{machine},\"fix_command\":{command}}}\n",
+                json_escape(name),
+                json_list(diagnostics)
+            )
+        }
+        Format::Text => {
+            let mut out = String::new();
+            for diagnostic in diagnostics.iter().take(SHOWN) {
+                out.push_str(&line(name, diagnostic));
+                out.push('\n');
+            }
+            if more > 0 {
+                out.push_str(&format!("and {more} more\n"));
+            }
+            if machine > 0 {
+                out.push_str(&format!(
+                    "{machine} of {} diagnostics have a `machine` fix: run `{command}`\n",
+                    diagnostics.len()
+                ));
+            }
+            out
+        }
+    };
     Verdict::feedback(out)
 }

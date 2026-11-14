@@ -353,8 +353,35 @@ impl Location {
     /// The location of `span` in `src`, the text of the file at `path`:
     /// where it starts, as [`Location::new`] gives it, and where it ends.
     pub fn spanning(path: impl Into<String>, src: &str, span: Span) -> Self {
-        let (line, column) = line_and_column(src, span.start);
-        let (end_line, end_column) = line_and_column(src, span.end.max(span.start));
+        Location::walked(path, src, span, |end| {
+            let before = &src[..end];
+            let line_start = before.rfind('\n').map_or(0, |at| at + 1);
+            (before.matches('\n').count() + 1, line_start)
+        })
+    }
+
+    /// The location of `span` in `src`: the 1-based line and column, in
+    /// characters, of where it starts and ends. An offset past the end
+    /// means the end; one inside a character means that character.
+    /// `line_of` gives the 1-based line a byte offset (on a character
+    /// boundary) is on and the offset that line starts at: this function
+    /// and [`LineIndex`] find lines their own ways, and share the rest.
+    fn walked(
+        path: impl Into<String>,
+        src: &str,
+        span: Span,
+        line_of: impl Fn(usize) -> (usize, usize),
+    ) -> Self {
+        let line_and_column = |offset: usize| {
+            let mut end = offset.min(src.len());
+            while !src.is_char_boundary(end) {
+                end -= 1;
+            }
+            let (line, line_start) = line_of(end);
+            (line, src[line_start..end].chars().count() + 1)
+        };
+        let (line, column) = line_and_column(span.start);
+        let (end_line, end_column) = line_and_column(span.end.max(span.start));
         Location {
             path: path.into(),
             line,
@@ -363,22 +390,6 @@ impl Location {
             end_column,
         }
     }
-}
-
-/// The 1-based line and column, in characters, of byte `offset` of `src`.
-/// An offset past the end means the end; one inside a character means
-/// that character.
-fn line_and_column(src: &str, offset: usize) -> (usize, usize) {
-    let mut end = offset.min(src.len());
-    while !src.is_char_boundary(end) {
-        end -= 1;
-    }
-    let before = &src[..end];
-    let line_start = before.rfind('\n').map_or(0, |at| at + 1);
-    (
-        before.matches('\n').count() + 1,
-        before[line_start..].chars().count() + 1,
-    )
 }
 
 /// Where each line of a text starts, so that locating many offsets in it
@@ -407,25 +418,10 @@ impl<'a> LineIndex<'a> {
 
     /// The location of `span`, as [`Location::spanning`] gives it.
     pub fn spanning(&self, path: impl Into<String>, span: Span) -> Location {
-        let (line, column) = self.line_and_column(span.start);
-        let (end_line, end_column) = self.line_and_column(span.end.max(span.start));
-        Location {
-            path: path.into(),
-            line,
-            column,
-            end_line,
-            end_column,
-        }
-    }
-
-    fn line_and_column(&self, offset: usize) -> (usize, usize) {
-        let mut end = offset.min(self.src.len());
-        while !self.src.is_char_boundary(end) {
-            end -= 1;
-        }
-        let line = self.starts.partition_point(|&start| start <= end);
-        let line_start = self.starts.get(line - 1).copied().unwrap_or(0);
-        (line, self.src[line_start..end].chars().count() + 1)
+        Location::walked(path, self.src, span, |end| {
+            let line = self.starts.partition_point(|&start| start <= end);
+            (line, self.starts.get(line - 1).copied().unwrap_or(0))
+        })
     }
 }
 

@@ -242,7 +242,7 @@ fn set_text(program: &mut Package, path: &str, text: String) {
 mod tests {
     use super::{fix, Options, Refusal, Stop, MAX_ROUNDS};
     use crate::fix::edits::EditError;
-    use oska_check::{CheckReport, Package};
+    use oska_check::{CheckOptions, CheckReport, Package};
     use oska_syntax::{Diagnostic, Edit, Span};
 
     /// A stand-in check that reports the first `;` of the file, with a
@@ -357,6 +357,71 @@ mod tests {
         ));
         assert!(outcome.applied.is_empty());
         assert_eq!(outcome.program.modules[0].source, "a;b;");
+    }
+
+    /// The authority-diff fixtures drive the no-widening refusal too: for
+    /// each case with a `before.osk` and an `after.osk`, a stand-in fix
+    /// that turns one into the other is refused exactly when
+    /// `oskac check --baseline` fails the gate on the pair (exit code 3 in
+    /// the case's golden file). No fix in the catalog widens authority
+    /// (`tests/machine_fixes.rs`), so this refusal is a backstop: these
+    /// fixes stand in for one that would.
+    #[test]
+    fn a_fix_is_refused_exactly_when_the_authority_diff_fixtures_fail_the_gate() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+        let fixtures = root.join("fixtures/authority_diff");
+        let mut cases: Vec<_> = std::fs::read_dir(&fixtures)
+            .expect("the fixtures")
+            .map(|entry| {
+                entry
+                    .expect("a case")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        cases.sort();
+        let mut compared = 0;
+        for case in cases {
+            let read = |name: &str| std::fs::read_to_string(fixtures.join(&case).join(name));
+            let (Ok(before), Ok(after)) = (read("before.osk"), read("after.osk")) else {
+                continue;
+            };
+            let golden = root.join(format!("golden/authority_diff/{case}.txt"));
+            let golden = std::fs::read_to_string(golden).expect("the case's golden file");
+            let fails = golden.starts_with("exit: 3\n");
+            // The real check, and, on the program before, a diagnostic whose
+            // `machine` fix rewrites it as the program after.
+            let check = |program: &Package| {
+                let mut report = oska_check::check_package(program, CheckOptions::default());
+                let module = &program.modules[0];
+                if module.source == before {
+                    let whole = Span {
+                        start: 0,
+                        end: before.len(),
+                    };
+                    let rewrite = Diagnostic::new("E0005", "a stand-in", Span { start: 0, end: 0 })
+                        .with_fix("rewrite it", vec![replace(whole.start, whole.end, &after)])
+                        .locate(&module.path, &module.source);
+                    report.diagnostics.push(rewrite);
+                }
+                report
+            };
+            let outcome = fix(program(&before), Options::default(), check);
+            assert_eq!(
+                matches!(outcome.refusal, Some(Refusal::Widening(_))),
+                fails,
+                "{case}: {:?}",
+                outcome.refusal
+            );
+            if fails {
+                assert_eq!(outcome.program.modules[0].source, before, "{case}");
+            } else {
+                assert_eq!(outcome.program.modules[0].source, after, "{case}");
+            }
+            compared += 1;
+        }
+        assert!(compared >= 10, "{compared} cases");
     }
 
     #[test]

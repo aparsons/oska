@@ -14,7 +14,7 @@ This project is written in [Oska](https://oskalang.dev), a language where a func
 
 ### The authority baseline
 
-`authority.json` is a saved record of the program's authority, committed and reviewed like a lockfile. `oskac check <file.osk> --update-baseline=authority.json` writes it, and only when the program has no diagnostics. CI runs `oskac check <file.osk> --baseline=authority.json`. There is no flag that lets a widening pass: approving one is a reviewed change to `authority.json`.
+`authority.json` is the program's authority baseline: a saved record of its authority, committed with it and reviewed in any change that edits it. `oskac check <file.osk> --update-baseline=authority.json` writes it, and only when the program has no diagnostics. CI runs `oskac check <file.osk> --baseline=authority.json`. There is no flag that lets a widening pass: approving one is a reviewed change to `authority.json`.
 
 ### Layout
 

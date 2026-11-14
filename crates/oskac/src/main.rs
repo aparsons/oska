@@ -60,10 +60,11 @@ USAGE:
                                            after each, and write each changed
                                            file once
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
-    oskac hook claude --event=post-edit    Check what Claude Code just edited,
+    oskac hook claude --event=post-edit [--format=json]
+                                           Check what Claude Code just edited,
                                            reading its hook input on standard
                                            input; exit 2 hands diagnostics back
-    oskac hook claude --event=stop [targets...]
+    oskac hook claude --event=stop [--format=json] [targets...]
                                            Run the release check and the tests
                                            before Claude Code may finish; exit
                                            2 blocks it with what failed
@@ -146,11 +147,14 @@ impl CommandLine {
                 // A baseline flag given twice is recorded with an empty
                 // file name, which `main` refuses as a usage error.
                 flag if flag.starts_with("--baseline=") => {
-                    line.baseline = once(&line.baseline, &flag["--baseline=".len()..]);
+                    line.baseline =
+                        value_unless_repeated(&line.baseline, &flag["--baseline=".len()..]);
                 }
                 flag if flag.starts_with("--update-baseline=") => {
-                    line.update_baseline =
-                        once(&line.update_baseline, &flag["--update-baseline=".len()..]);
+                    line.update_baseline = value_unless_repeated(
+                        &line.update_baseline,
+                        &flag["--update-baseline=".len()..],
+                    );
                 }
                 _ => line.positional.push(arg),
             }
@@ -161,7 +165,7 @@ impl CommandLine {
 
 /// The value of a flag that takes a file, `value`, or an empty one when
 /// the flag was given before (`previous`).
-fn once(previous: &Option<String>, value: &str) -> Option<String> {
+fn value_unless_repeated(previous: &Option<String>, value: &str) -> Option<String> {
     match previous {
         Some(_) => Some(String::new()),
         None => Some(value.to_string()),
@@ -225,7 +229,7 @@ fn main() -> ExitCode {
         }
         ["explain", code] => explain_code(code, flags),
         ["hook", "claude", targets @ ..] if line.program_args.is_empty() => {
-            hook::run(line.event.as_deref(), targets)
+            hook::run(line.event.as_deref(), targets, flags.json)
         }
         _ => {
             eprint!("{USAGE}");
@@ -611,11 +615,7 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
     let options = oska_check::CheckOptions {
         release: matches!(command, Command::Check(_)) && flags.release,
     };
-    let mut report = oska_check::check_package(&package, options);
-    if !refused.is_empty() {
-        report.diagnostics.splice(0..0, refused);
-        report.program = None;
-    }
+    let report = package::check(&package, &refused, options);
     if let Command::Check(gate) = command {
         let report = if json {
             report

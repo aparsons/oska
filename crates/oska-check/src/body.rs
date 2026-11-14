@@ -50,7 +50,7 @@ use oska_syntax::ast::{
     BinaryOp, Block, ClosureParam, Expr, ExprKind, FnDecl, Ident, ItemKind, Module, StmtKind,
     StrPart, Type, UnaryOp,
 };
-use oska_syntax::{Diagnostic, Edit, Span};
+use oska_syntax::{Applicability, Diagnostic, Edit, Span};
 
 use crate::authority::{self, capability_bearing};
 use crate::codes;
@@ -1634,10 +1634,14 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 } else {
                     format!(": {bound}")
                 };
-                diagnostic = diagnostic.with_fix(
-                    format!("add the bound `{p}: {bound}`"),
-                    vec![Edit::insert(site.end, text)],
-                );
+                // A bound widens the function's authority (#149), so the
+                // fix is never `machine`.
+                diagnostic = diagnostic
+                    .with_fix(
+                        format!("add the bound `{p}: {bound}`"),
+                        vec![Edit::insert(site.end, text)],
+                    )
+                    .applicable(Applicability::Maybe);
             }
         }
         self.out.diagnostics.push(diagnostic);

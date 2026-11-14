@@ -85,6 +85,9 @@ pub fn qualify(module: &StdModule, span: Span, name: &str) -> Diagnostic {
             replacement: format!("{prefix}."),
         }],
     )
+    // The export may be a capability, such as `sql.Db`: naming it gives
+    // the function its authority, so the fix is never `machine`.
+    .applicable(Applicability::Maybe)
 }
 
 /// `module.name`, where `module` does not export `name`, at `span`. The

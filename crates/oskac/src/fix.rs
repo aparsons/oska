@@ -76,24 +76,7 @@ fn read_file(path: &str) -> Read {
             return Read::Failed;
         }
     }
-    let as_path = Path::new(path);
-    let (Some(parent), Some(name)) = (as_path.parent(), as_path.file_name()) else {
-        eprintln!("error: cannot read {path}: it names no file");
-        return Read::Failed;
-    };
-    let parent = if parent.as_os_str().is_empty() {
-        Path::new(".")
-    } else {
-        parent
-    };
-    let name = name.to_string_lossy();
-    let read = Files::open(parent).and_then(|files| {
-        let bytes = files.read(&[&name])?;
-        let text = String::from_utf8(bytes)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        Ok((files, text))
-    });
-    match read {
+    match package::read_alone(path) {
         Ok((files, text)) => Read::Target(Box::new(Target {
             program: Package::single_file(path, &text),
             files,
@@ -164,14 +147,8 @@ fn fix_target(read: Read, flags: Flags) -> ExitCode {
         }
         Read::Failed => return ExitCode::FAILURE,
     };
-    let refused = target.refused.clone();
     let check = |program: &Package| -> CheckReport {
-        let mut report = oska_check::check_package(program, CheckOptions::default());
-        if !refused.is_empty() {
-            report.diagnostics.splice(0..0, refused.iter().cloned());
-            report.program = None;
-        }
-        report
+        package::check(program, &target.refused, CheckOptions::default())
     };
     let options = rounds::Options {
         placeholders: flags.placeholders,
@@ -194,9 +171,12 @@ fn fix_target(read: Read, flags: Flags) -> ExitCode {
     let changed = changed_files(&target.program, &outcome.program);
     report.files = changed
         .iter()
-        .map(|(path, old, new)| {
-            let shown = shown_path(dir, path, flags.json);
-            (path.to_string(), diff::unified(&shown, old, new))
+        .map(|file| {
+            let shown = shown_path(dir, file.path, flags.json);
+            (
+                file.path.to_string(),
+                diff::unified(&shown, file.old, file.new),
+            )
         })
         .collect();
     if !flags.dry_run && !changed.is_empty() {
@@ -241,19 +221,35 @@ fn fix_target(read: Read, flags: Flags) -> ExitCode {
     }
 }
 
-/// Each file of `fixed` whose text differs from `start`'s: its path, as
-/// the report names it, and both texts. The manifest comes first, then the
-/// modules in package order.
-fn changed_files<'p>(start: &'p Package, fixed: &'p Package) -> Vec<(&'p str, &'p str, &'p str)> {
+/// A file the fixes changed: its path, as the report names it, and its
+/// text before and after them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Changed<'p> {
+    path: &'p str,
+    old: &'p str,
+    new: &'p str,
+}
+
+/// Each file of `fixed` whose text differs from `start`'s. The manifest
+/// comes first, then the modules in package order.
+fn changed_files<'p>(start: &'p Package, fixed: &'p Package) -> Vec<Changed<'p>> {
     let mut changed = Vec::new();
     if let (Some(old), Some(new)) = (&start.manifest, &fixed.manifest) {
         if old != new {
-            changed.push((MANIFEST_PATH, old.as_str(), new.as_str()));
+            changed.push(Changed {
+                path: MANIFEST_PATH,
+                old,
+                new,
+            });
         }
     }
     for (old, new) in start.modules.iter().zip(&fixed.modules) {
         if old.source != new.source {
-            changed.push((old.path.as_str(), old.source.as_str(), new.source.as_str()));
+            changed.push(Changed {
+                path: &old.path,
+                old: &old.source,
+                new: &new.source,
+            });
         }
     }
     changed
@@ -262,19 +258,17 @@ fn changed_files<'p>(start: &'p Package, fixed: &'p Package) -> Vec<(&'p str, &'
 /// The names `path`, as the report names it, reaches beneath the
 /// directory of `files`: the file's own name for a single file, whose
 /// report path is as given on the command line.
-fn names_of(program: &Package, path: &str) -> Vec<String> {
+fn names_of<'p>(program: &Package, path: &'p str) -> Vec<&'p str> {
     if program.manifest.is_none() && program.modules.len() == 1 {
-        let name = Path::new(path)
-            .file_name()
-            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        return vec![name];
+        let name = Path::new(path).file_name().and_then(|n| n.to_str());
+        return vec![name.unwrap_or_default()];
     }
-    path.split('/').map(str::to_string).collect()
+    path.split('/').collect()
 }
 
-/// Write each of `changed`, a file of `start` and its new text, once,
+/// Write each of `changed`, a file of `start` with its new text, once,
 /// replacing it in one step: or nothing, saying which rule refused it.
-fn write(files: &Files, start: &Package, changed: &[(&str, &str, &str)]) -> Result<(), String> {
+fn write(files: &Files, start: &Package, changed: &[Changed]) -> Result<(), String> {
     // A file that changed since it was read: the fixes were made to text
     // that is no longer there, and writing would lose the change.
     let every_file = start
@@ -288,9 +282,7 @@ fn write(files: &Files, start: &Package, changed: &[(&str, &str, &str)]) -> Resu
                 .map(|m| (m.path.as_str(), m.source.as_str())),
         );
     for (path, text) in every_file {
-        let names = names_of(start, path);
-        let names: Vec<&str> = names.iter().map(String::as_str).collect();
-        match files.read(&names) {
+        match files.read(&names_of(start, path)) {
             Ok(bytes) if bytes == text.as_bytes() => {}
             Ok(_) => {
                 return Err(format!(
@@ -306,20 +298,19 @@ fn write(files: &Files, start: &Package, changed: &[(&str, &str, &str)]) -> Resu
         }
     }
     let mut staged = Vec::new();
-    for (path, _, new) in changed {
-        let names = names_of(start, path);
-        let names: Vec<&str> = names.iter().map(String::as_str).collect();
-        match files.stage(&names, new.as_bytes()) {
-            Ok(file) => staged.push(file),
+    for file in changed {
+        match files.stage(&names_of(start, file.path), file.new.as_bytes()) {
+            Ok(staged_file) => staged.push(staged_file),
             Err(err) => {
                 return Err(format!(
-                    "refusing to write `{path}`: {err}; nothing was written"
+                    "refusing to write `{}`: {err}; nothing was written",
+                    file.path
                 ));
             }
         }
     }
     let mut written = Vec::new();
-    for (file, (path, _, _)) in staged.into_iter().zip(changed) {
+    for (file, Changed { path, .. }) in staged.into_iter().zip(changed) {
         if let Err(err) = file.commit() {
             let before = if written.is_empty() {
                 "nothing was written".to_string()
@@ -467,10 +458,40 @@ fn json_lines(items: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::write;
+    use super::{write, Changed};
     use crate::package::Files;
-    use oska_check::Package;
-    use std::path::PathBuf;
+    use oska_check::{ModuleSource, Package};
+    use std::path::{Path, PathBuf};
+
+    /// `app.osk`, whose text the fixes took from `a;` to `a`.
+    const FIXED: Changed = Changed {
+        path: "app.osk",
+        old: "a;",
+        new: "a",
+    };
+
+    /// A symlink at `at` to `target`, or `false`, saying why, where this
+    /// OS or user may not make one: Windows without the privilege or
+    /// developer mode.
+    fn link(target: &Path, at: &Path) -> bool {
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(target, at);
+        #[cfg(windows)]
+        let made = if target.is_dir() {
+            std::os::windows::fs::symlink_dir(target, at)
+        } else {
+            std::os::windows::fs::symlink_file(target, at)
+        };
+        #[cfg(not(any(unix, windows)))]
+        let made: std::io::Result<()> = Err(std::io::ErrorKind::Unsupported.into());
+        match made {
+            Ok(()) => true,
+            Err(err) => {
+                println!("skipped: cannot make a symlink here: {err}");
+                false
+            }
+        }
+    }
 
     /// A fresh directory with `app.osk` holding `text`, removed on drop.
     struct Scratch(PathBuf);
@@ -515,7 +536,7 @@ mod tests {
         let dir = Scratch::new("written", "a;");
         let files = Files::open(&dir.0).expect("the directory");
         let start = Package::single_file("app.osk", "a;");
-        assert_eq!(write(&files, &start, &[("app.osk", "a;", "a")]), Ok(()));
+        assert_eq!(write(&files, &start, &[FIXED]), Ok(()));
         assert_eq!(dir.app(), "a");
         assert_eq!(dir.entries(), ["app.osk"]);
     }
@@ -525,7 +546,7 @@ mod tests {
         let dir = Scratch::new("changed", "a; // edited meanwhile");
         let files = Files::open(&dir.0).expect("the directory");
         let start = Package::single_file("app.osk", "a;");
-        let refused = write(&files, &start, &[("app.osk", "a;", "a")]);
+        let refused = write(&files, &start, &[FIXED]);
         assert!(
             refused
                 .as_ref()
@@ -536,15 +557,16 @@ mod tests {
         assert_eq!(dir.entries(), ["app.osk"]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_symlink_swapped_in_meanwhile_is_not_written_through() {
         let dir = Scratch::new("swapped", "a;");
         let files = Files::open(&dir.0).expect("the directory");
         let start = Package::single_file("app.osk", "a;");
         std::fs::rename(dir.0.join("app.osk"), dir.0.join("real.osk")).expect("a rename");
-        std::os::unix::fs::symlink("real.osk", dir.0.join("app.osk")).expect("a symlink");
-        let refused = write(&files, &start, &[("app.osk", "a;", "a")]);
+        if !link(&dir.0.join("real.osk"), &dir.0.join("app.osk")) {
+            return;
+        }
+        let refused = write(&files, &start, &[FIXED]);
         assert!(
             refused.as_ref().is_err_and(|e| e.contains("symlink")),
             "{refused:?}"
@@ -557,5 +579,39 @@ mod tests {
             .expect("the link")
             .file_type()
             .is_symlink());
+    }
+
+    #[test]
+    fn a_parent_directory_swapped_for_a_symlink_meanwhile_is_not_written_through() {
+        let dir = Scratch::new("parent", "");
+        std::fs::create_dir_all(dir.0.join("src")).expect("a directory");
+        std::fs::write(dir.0.join("oska.toml"), "m").expect("the manifest");
+        std::fs::write(dir.0.join("src/app.osk"), "a;").expect("the module");
+        let files = Files::open(&dir.0).expect("the directory");
+        let start = Package {
+            manifest: Some("m".to_string()),
+            modules: vec![ModuleSource {
+                module: "app".to_string(),
+                path: "src/app.osk".to_string(),
+                source: "a;".to_string(),
+            }],
+        };
+        std::fs::rename(dir.0.join("src"), dir.0.join("elsewhere")).expect("a rename");
+        if !link(&dir.0.join("elsewhere"), &dir.0.join("src")) {
+            return;
+        }
+        let changed = Changed {
+            path: "src/app.osk",
+            ..FIXED
+        };
+        let refused = write(&files, &start, &[changed]);
+        assert!(
+            refused.as_ref().is_err_and(|e| e.contains("symlink")),
+            "{refused:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.0.join("elsewhere/app.osk")).expect("the target"),
+            "a;"
+        );
     }
 }

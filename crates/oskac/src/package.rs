@@ -1,6 +1,6 @@
 //! Packages on disk: what a path given to `oskac check`, `run` or `test`
 //! names, the discovery of a package's modules, and the reading and
-//! replacing of its files that `oskac fix` does.
+//! replacing of its files that `oskac fix` and `--update-baseline` do.
 //!
 //! A package is a directory with an `oska.toml` and a `src/` directory.
 //! Every `.osk` file under `src/` is a module whose path is the file's
@@ -11,13 +11,18 @@
 //! every file is then opened beneath the package directory one component
 //! at a time with `O_NOFOLLOW` (`oska_sys::Dir`), so a symlink swapped in
 //! after the check makes the open fail instead of reading through it: a
-//! package's source is what is in its tree (ADR 0008). The rules about
-//! names and `main` are the checker's (`oska_check::check_package`);
-//! finding a symlink needs the file system, so it is found here.
+//! package's source is what is in its tree (ADR 0008). Elsewhere, so on
+//! Windows, every component is looked at before and after instead
+//! (`by_path`). The rules about names and `main` are the checker's
+//! (`oska_check::check_package`); finding a symlink needs the file
+//! system, so it is found here.
 
 use std::path::{Component, Path, PathBuf};
 
-use oska_check::{ModuleSource, Package, MANIFEST_PATH};
+#[cfg_attr(unix, allow(dead_code))]
+mod by_path;
+
+use oska_check::{CheckOptions, CheckReport, ModuleSource, Package, MANIFEST_PATH};
 use oska_syntax::Diagnostic;
 
 /// What a path argument names.
@@ -194,13 +199,20 @@ impl Walk<'_> {
 /// The files of a package, or the directory of a single file, read and
 /// replaced without following a symlink. On Unix, beneath a handle for
 /// the directory, with `O_NOFOLLOW` at every component (`oska_sys::Dir`).
-/// Elsewhere `oska-sys` offers nothing, and a `symlink_metadata` check
-/// before each read and write is all there is.
+/// Elsewhere `oska-sys` offers no handle, so each component from the
+/// directory down is looked at before and after, and refused when it is
+/// a symlink or a reparse point or when it changed (`by_path`).
 pub struct Files {
     #[cfg(unix)]
     root: oska_sys::Dir,
     #[cfg(not(unix))]
-    root: PathBuf,
+    root: by_path::ByPath,
+}
+
+/// The name of the new file written beside `name` before it replaces it:
+/// not `.osk`, so one left behind by a crash is no module.
+fn temp_name(name: &str) -> String {
+    format!(".{name}.oskac-fix")
 }
 
 impl Files {
@@ -210,7 +222,7 @@ impl Files {
         #[cfg(unix)]
         let root = oska_sys::Dir::open(root)?;
         #[cfg(not(unix))]
-        let root = root.to_path_buf();
+        let root = by_path::ByPath::open(root)?;
         Ok(Files { root })
     }
 
@@ -225,18 +237,15 @@ impl Files {
             Ok(bytes)
         }
         #[cfg(not(unix))]
-        {
-            let path = self.path(names);
-            refuse_symlink(&path)?;
-            std::fs::read(path)
-        }
+        self.root.read(names)
     }
 
     /// Get ready to replace the regular file reached by `names`, none of
-    /// them a symlink, with `bytes`: write them to a new file beside it,
-    /// with its permissions. [`Staged::commit`] then renames the new file
-    /// over the old one, in one step; dropping it uncommitted removes the
-    /// new file.
+    /// them a symlink, with `bytes`, or to create it when it is not there:
+    /// write them to a new file beside it, with its permissions.
+    /// [`Staged::commit`] then renames the new file over the old one, in
+    /// one step; dropping it uncommitted removes the new file.
+    #[cfg(unix)]
     pub fn stage(&self, names: &[&str], bytes: &[u8]) -> std::io::Result<Staged> {
         use std::io::Write;
         let Some((last, parents)) = names.split_last() else {
@@ -245,25 +254,14 @@ impl Files {
                 "no file name to write",
             ));
         };
-        // Not `.osk`, so a new file left behind by a crash is no module.
-        let temp = format!(".{last}.oskac-fix");
-        #[cfg(unix)]
-        let (dir, mut file, permissions) = {
-            let dir = self.root.open_dir(parents)?;
-            let permissions = dir.open_file(&[last])?.metadata()?.permissions();
-            let file = dir.create_file(&[&temp])?;
-            (dir, file, permissions)
+        let temp = temp_name(last);
+        let dir = self.root.open_dir(parents)?;
+        let permissions = match dir.open_file(&[last]) {
+            Ok(file) => Some(file.metadata()?.permissions()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => return Err(err),
         };
-        #[cfg(not(unix))]
-        let (dir, mut file, permissions) = {
-            let dir = self.path(parents);
-            let path = dir.join(last);
-            refuse_symlink(&path)?;
-            refuse_symlink(&dir.join(&temp))?;
-            let permissions = std::fs::metadata(&path)?.permissions();
-            let file = std::fs::File::create(dir.join(&temp))?;
-            (dir, file, permissions)
-        };
+        let mut file = dir.create_file(&[&temp])?;
         let staged = Staged {
             dir,
             temp,
@@ -271,37 +269,31 @@ impl Files {
             committed: false,
         };
         file.write_all(bytes)?;
-        file.set_permissions(permissions)?;
+        if let Some(permissions) = permissions {
+            file.set_permissions(permissions)?;
+        }
         file.sync_all()?;
         Ok(staged)
     }
 
-    /// The path `names` reach beneath the directory.
+    /// As on Unix, by path: each component is looked at before and after
+    /// the new file is written, and again before it replaces the old one.
     #[cfg(not(unix))]
-    fn path(&self, names: &[&str]) -> PathBuf {
-        names.iter().fold(self.root.clone(), |p, n| p.join(n))
+    pub fn stage(&self, names: &[&str], bytes: &[u8]) -> std::io::Result<Staged> {
+        self.root.stage(names, bytes).map(Staged)
     }
-}
 
-/// An error when `path` is a symlink, which is never read or written
-/// through.
-#[cfg(not(unix))]
-fn refuse_symlink(path: &Path) -> std::io::Result<()> {
-    match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_symlink() => Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            format!("`{}` is a symlink, which is never followed", path.display()),
-        )),
-        _ => Ok(()),
+    /// Replace, or create, the regular file reached by `names` with
+    /// `bytes`, in one step.
+    pub fn replace(&self, names: &[&str], bytes: &[u8]) -> std::io::Result<()> {
+        self.stage(names, bytes)?.commit()
     }
 }
 
 /// A file's new bytes, written beside it, waiting to replace it.
+#[cfg(unix)]
 pub struct Staged {
-    #[cfg(unix)]
     dir: oska_sys::Dir,
-    #[cfg(not(unix))]
-    dir: PathBuf,
     /// The new file's name, in `dir`.
     temp: String,
     /// The name of the file it replaces, in `dir`.
@@ -309,27 +301,81 @@ pub struct Staged {
     committed: bool,
 }
 
+#[cfg(unix)]
 impl Staged {
     /// Replace the file with the new one, in one step.
     pub fn commit(mut self) -> std::io::Result<()> {
-        #[cfg(unix)]
         self.dir.rename(self.temp.as_ref(), self.name.as_ref())?;
-        #[cfg(not(unix))]
-        std::fs::rename(self.dir.join(&self.temp), self.dir.join(&self.name))?;
         self.committed = true;
         Ok(())
     }
 }
 
+#[cfg(unix)]
 impl Drop for Staged {
     fn drop(&mut self) {
         if !self.committed {
-            #[cfg(unix)]
             let _ = self.dir.remove_file(self.temp.as_ref());
-            #[cfg(not(unix))]
-            let _ = std::fs::remove_file(self.dir.join(&self.temp));
         }
     }
+}
+
+/// A file's new bytes, written beside it, waiting to replace it.
+#[cfg(not(unix))]
+pub struct Staged(by_path::Staged);
+
+#[cfg(not(unix))]
+impl Staged {
+    /// Look at every component once more, then replace the file with the
+    /// new one, in one step.
+    pub fn commit(self) -> std::io::Result<()> {
+        self.0.commit()
+    }
+}
+
+/// The check of `package`, loaded with the symlinks `refused` found in
+/// it, which every check reports first: a package with one is not all
+/// there, so the check gives it no program to run.
+pub fn check(package: &Package, refused: &[Diagnostic], options: CheckOptions) -> CheckReport {
+    let mut report = oska_check::check_package(package, options);
+    if !refused.is_empty() {
+        report.diagnostics.splice(0..0, refused.iter().cloned());
+        report.program = None;
+    }
+    report
+}
+
+/// The directory a file's `path` is in, `.` when it names none, and the
+/// file's name.
+pub fn parent_and_name(path: &str) -> std::io::Result<(&Path, &str)> {
+    let as_path = Path::new(path);
+    let (Some(parent), Some(name)) = (as_path.parent(), as_path.file_name()) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "it names no file",
+        ));
+    };
+    let name = name.to_str().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "its name is not UTF-8")
+    })?;
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    Ok((parent, name))
+}
+
+/// The text of the single file at `path`, read as a package's files are,
+/// never through a symlink at it; and its directory, to replace the file
+/// later. The directories on the way are the user's choice, and followed.
+pub fn read_alone(path: &str) -> std::io::Result<(Files, String)> {
+    let (parent, name) = parent_and_name(path)?;
+    let files = Files::open(parent)?;
+    let bytes = files.read(&[name])?;
+    let text = String::from_utf8(bytes)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    Ok((files, text))
 }
 
 /// The nearest directory above `dir` with an `oska.toml`, written from

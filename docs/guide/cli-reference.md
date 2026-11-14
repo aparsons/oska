@@ -36,10 +36,11 @@ USAGE:
                                            after each, and write each changed
                                            file once
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
-    oskac hook claude --event=post-edit    Check what Claude Code just edited,
+    oskac hook claude --event=post-edit [--format=json]
+                                           Check what Claude Code just edited,
                                            reading its hook input on standard
                                            input; exit 2 hands diagnostics back
-    oskac hook claude --event=stop [targets...]
+    oskac hook claude --event=stop [--format=json] [targets...]
                                            Run the release check and the tests
                                            before Claude Code may finish; exit
                                            2 blocks it with what failed
@@ -106,7 +107,7 @@ The line `fn vouch: Stdout (io)` names each capability and the parameter that su
 
 ### Authority baseline
 
-An **authority baseline** is a saved record of a program's authority, meant to be committed and reviewed like a lockfile. `oskac check --update-baseline=authority.json` writes it, only when the program has no diagnostics. It holds `format` (1), the `oskac` version that wrote it, and the report without places: each function's `name`, `authority` and `pure`; audit sites counted per function and kind; and attenuations counted per function, method, kinds and root. A function's `authority` here also has `cap fn` for a `cap fn` parameter and `generic T` for a parameter of a bounded type parameter `T`. Everything is sorted, with no spans or paths, LF line endings and a final newline, so the file is the same on every platform and changes only when authority does.
+An **authority baseline** is a saved record of a program's authority, meant to be committed with the program and reviewed in any change that edits it. `oskac check --update-baseline=authority.json` writes it, only when the program has no diagnostics, as `oskac fix` writes a file: to a new file beside it that then replaces it in one step, and never through a symlink at that path. It holds `format` (1), the `oskac` version that wrote it, and the report without places: each function's `name`, `authority` and `pure`; audit sites counted per function and kind; and attenuations counted per function, method, kinds and root. A function's `authority` here also has `cap fn` for a `cap fn` parameter and `generic T` for a parameter of a bounded type parameter `T`. Everything is sorted, with no spans or paths, LF line endings and a final newline, so the file is the same on every platform and changes only when authority does.
 
 `oskac check --baseline=authority.json` compares the program's report with the baseline, which may also be a saved `oskac check --format=json` report of a program with no diagnostics. Functions are matched by name, so a rename is one function removed and one added. A built-in kind covers every kind it can be attenuated into: `Fs` covers `Dir`, `DirRead` and `FileRead`, among others. The gate fails, with exit code 3, when:
 
@@ -115,7 +116,7 @@ An **authority baseline** is a saved record of a program's authority, meant to b
 - a function or method has more audit sites of a kind than before (*new audit site*);
 - an added function reaches a kind that no entry of any function in the baseline covers.
 
-Narrowing, removals, attenuation changes, an added function within the program's existing authority, and anything in a test block are reported and never fail. There is no flag that lets a widening pass: approving one means updating the baseline in the same change, so the approval is a reviewed diff. With diagnostics, `check` exits with 1 and compares nothing, since a refused program's report is incomplete. An unreadable or malformed baseline, a `format` other than 1, a saved report with diagnostics, or two functions of one name in either report is an `error:` and exit code 1.
+Narrowing, removals, attenuation changes, an added function within the program's existing authority, and anything in a test block are reported and never fail. There is no flag that lets a widening pass: approving one means updating the baseline in the same change, so the approval is a reviewed diff. With diagnostics, `check` exits with 1 and compares nothing, since a refused program's report is incomplete. An unreadable or malformed baseline, a `format` other than 1, a file with neither a `format` nor the `diagnostics` of a saved report, a saved report with diagnostics, or two functions of one name in either report is an `error:` and exit code 1.
 
 In the human output a `baseline:` section follows the authority report, one line per change, those that fail the gate first, each marked with what it gained (`+`) or lost (`-`):
 
@@ -214,8 +215,9 @@ Human-readable output: one line per applied fix on standard output, as ``app.osk
 
 `oskac hook claude --event=post-edit` is the check-on-edit hook for Claude Code, so that the hook runs the same on Linux, macOS and Windows with no shell script. Claude Code's settings call it after an edit, and it reads the hook's JSON from standard input: `tool_input.file_path`, and `cwd` to resolve a relative path.
 
-- For a `.osk` file or an `oska.toml`, it checks what `oskac` finds for the file as `check` does, without `--release`: a module of a package is checked with its package, and any other file alone. Any other file is ignored, with no check.
+- For a `.osk` file or an `oska.toml`, it checks what `oskac` finds for the file as `check` does, without `--release`: a module of a package is checked with its package, and any other file alone. Any other file is ignored, with no check. A file is never read through a symlink: a `.osk` file that is one is refused with `E0411`, as a symlink in a package is.
 - With no diagnostic it prints nothing. With diagnostics it writes to standard error one line each, `path:line:column: error[CODE]: message`, at most 20, then `and N more`, then, when some have a `machine` fix, how many and the `oskac fix` command that applies them. Paths are written from `cwd`.
+- With `--format=json` it writes one JSON object on one line instead: `event` (`"post-edit"`), `target`, `diagnostics` (at most 20, each in the shape `check --format=json` gives it, with `line`, `column`, `severity`, `url` and `fix`), `more` (how many were left out), `machine_fixes`, and `fix_command` (the `oskac fix` command, or `null` when no diagnostic has a `machine` fix).
 - It reads its input and the program's files, writes no file, starts no program and opens no network connection.
 
 `oskac hook claude --event=stop [targets...]` is the Stop gate: Claude Code's settings call it when the agent tries to finish, and the agent cannot finish while the release check or a test fails. It reads `cwd` from the hook's JSON.
@@ -223,6 +225,8 @@ Human-readable output: one line per applied fix on standard output, as ``app.osk
 - The targets are the ones named, each a path from `cwd`, such as a package directory or a `.osk` file. With none, it takes the package in `cwd` if that is one; otherwise every package, and every `.osk` file outside a package's `src/`, beneath `cwd`, skipping hidden directories and following no symlink. Name the targets in the hook's settings when a project holds `.osk` files that are broken on purpose.
 - For each target it runs `oskac check --release` and, when that is clean, `oskac test` without `--integration`, on the interpreter and in-process: a test gets only stand-in capabilities, so the gate never touches the real file system, clock or network.
 - With any diagnostic or failed test it writes to standard error one line each (`path:line:column: error[CODE]: message`, and `test <name>: path:line:column: error[CODE]: message` for a test), at most 20 of each per target, then `and N more`, and exits with 2. It blocks on every attempt to finish.
+- A target it cannot check blocks too: a named target that is not there, a directory beneath `cwd` it cannot read, or a `.osk` file that is a symlink (`E0411`). Each is an `error:` line, every other target is still checked, and the gate exits with 2. It never lets the agent finish on what it could not check.
+- With `--format=json` it writes one JSON object on one line instead: `event` (`"stop"`), `targets` (each target that blocks, with `target`, `diagnostics` in the shape `check --format=json` gives them, `more`, `failed_tests`, each a `name` and its `failure` as a diagnostic, and `more_failed_tests`), and `errors` (what could not be read).
 - A test run that the interpreter refuses (`oskac test` exits with 2: the program uses something the interpreter cannot run yet) does not block. The gate exits with 0 and tells the user, in a `systemMessage` on standard output, and the agent is told nothing.
 - The settings give it a `timeout` in seconds, so that a slow suite cannot stall every turn.
 
@@ -231,8 +235,8 @@ The published settings, `https://oskalang.dev/agent-setup/claude-settings.json`,
 | Exit code | Meaning |
 | --- | --- |
 | `0` | Nothing to report. For the Stop gate, also a test run the interpreter cannot run yet, told to the user only. |
-| `2` | Diagnostics, handed back to the agent: Claude Code shows standard error to it. For the Stop gate, it blocks the agent from finishing. |
-| `1` | Malformed input, an unreadable file, or an unknown event: one `error:` line. Claude Code treats `1` as non-blocking. |
+| `2` | Diagnostics, handed back to the agent: Claude Code shows standard error to it. For the Stop gate, it blocks the agent from finishing, as does a target it cannot read. |
+| `1` | Malformed input, an unknown event, or, after an edit, a file that cannot be read: one `error:` line. Claude Code treats `1` as non-blocking. |
 
 ## Platform support
 

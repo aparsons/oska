@@ -286,10 +286,12 @@ fn dry_run_shows_the_change_the_real_run_makes() {
 }
 
 #[test]
-fn a_fix_that_would_widen_authority_writes_nothing() {
+fn a_fix_that_would_widen_authority_is_never_applied() {
     let dir = scratch("widening");
     // `E0340`'s fix qualifies `Db` as `sql.Db`, a capability: the function
-    // that names it then reaches `NetConnect`, which it did not before.
+    // that names it would then reach `NetConnect`, which it did not
+    // before. A fix that changes authority is `maybe`, so it is left for
+    // the agent to read; the no-widening refusal stays behind it.
     let source = "use std.sql\n\nfn query(db: Db) -> Int {\n    1\n}\n";
     write(&dir, &[("app.osk", source)]);
     let output = assert_golden("widening", &dir, &["fix", "app.osk"]);
@@ -297,29 +299,97 @@ fn a_fix_that_would_widen_authority_writes_nothing() {
     assert_eq!(read(&dir, "app.osk"), source);
     let json = oskac(&dir, &["fix", "app.osk", "--format=json"]);
     assert_eq!(json.status.code(), Some(1));
+    assert!(text(&json.stdout).contains("\"applied\": []"));
     assert!(text(&json.stdout).contains("\"written\": false"));
     assert_eq!(read(&dir, "app.osk"), source);
 }
 
-#[cfg(unix)]
+/// The programs of the authority-diff fixtures, each a path under
+/// `tests/fixtures/authority_diff/` and its text: the same fixtures drive
+/// `check --baseline` (`authority_baseline.rs`), `fix`'s no-widening
+/// refusal (`fix/rounds.rs`), and this.
+fn authority_fixtures() -> Vec<(String, String)> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/authority_diff");
+    let mut found = Vec::new();
+    for case in std::fs::read_dir(&root).expect("the fixtures") {
+        let case = case.expect("a case").path();
+        for program in ["before.osk", "after.osk"] {
+            let path = case.join(program);
+            if let Ok(source) = std::fs::read_to_string(&path) {
+                let name = path.strip_prefix(&root).expect("under the root");
+                found.push((name.to_string_lossy().replace('\\', "/"), source));
+            }
+        }
+    }
+    found.sort();
+    assert!(found.len() >= 20, "the fixtures: {found:?}");
+    found
+}
+
+#[test]
+fn a_machine_fix_to_a_program_of_any_authority_is_written() {
+    // The rule compares the fixed program with the program as it was, not
+    // with how much authority it has: each fixture, wide or narrow, takes
+    // a syntax fix and is written back as it was before the `;`.
+    for (name, source) in authority_fixtures() {
+        let dir = scratch(&format!("authority_{}", name.replace(['/', '.'], "_")));
+        let at = source
+            .find("\n    ")
+            .and_then(|start| source[start + 1..].find('\n').map(|end| start + 1 + end))
+            .unwrap_or_else(|| panic!("{name}: an indented line"));
+        let broken = format!("{};{}", &source[..at], &source[at..]);
+        write(&dir, &[("app.osk", &broken)]);
+        let output = oskac(&dir, &["fix", "app.osk"]);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{name}: {}",
+            text(&output.stderr)
+        );
+        assert_eq!(read(&dir, "app.osk"), source, "{name}");
+    }
+}
+
+/// A symlink at `dir/at` to the file `target`, a path from the link's
+/// directory, or `false`, saying why, where this OS or user may not make
+/// one: Windows without the privilege or developer mode.
+fn symlink_file(target: &Path, dir: &Path, at: &str) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, dir.join(at));
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(target, dir.join(at));
+    #[cfg(not(any(unix, windows)))]
+    let made: std::io::Result<()> = Err(std::io::ErrorKind::Unsupported.into());
+    match made {
+        Ok(()) => true,
+        Err(err) => {
+            println!("skipped: cannot make a symlink here: {err}");
+            false
+        }
+    }
+}
+
 #[test]
 fn a_symlinked_file_is_refused_and_its_target_is_untouched() {
     let dir = scratch("symlink_file");
     write(&dir, &[("real/app.osk", TWO_SEMICOLONS)]);
-    std::os::unix::fs::symlink("real/app.osk", dir.join("link.osk")).expect("a symlink");
+    if !symlink_file(&Path::new("real").join("app.osk"), &dir, "link.osk") {
+        return;
+    }
     let output = assert_golden("symlink_file", &dir, &["fix", "link.osk"]);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(read(&dir, "real/app.osk"), TWO_SEMICOLONS);
 }
 
-#[cfg(unix)]
 #[test]
 fn a_symlinked_module_is_refused_and_its_target_is_untouched() {
     let dir = scratch("symlink_module");
     write(&dir, PACKAGE);
     write(&dir, &[("outside/extra.osk", TWO_SEMICOLONS)]);
-    std::os::unix::fs::symlink("../../outside/extra.osk", dir.join("demo/src/extra.osk"))
-        .expect("a symlink");
+    let target = Path::new("..").join("..").join("outside").join("extra.osk");
+    if !symlink_file(&target, &dir, "demo/src/extra.osk") {
+        return;
+    }
     let output = assert_golden("symlink_module", &dir, &["fix", "demo"]);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(read(&dir, "outside/extra.osk"), TWO_SEMICOLONS);

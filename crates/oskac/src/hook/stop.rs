@@ -10,30 +10,29 @@
 //! process, each on stand-in capabilities and a fresh in-memory world: the
 //! gate touches no file, starts no program and reaches no real resource.
 //!
-//! Any diagnostic or failed test blocks, on every attempt. A test run that
-//! the interpreter refuses (`oskac test` exit status 2) does not: it is a
-//! limit of the toolchain, not of the program, so the gate lets the agent
-//! finish and tells the user.
+//! Any diagnostic or failed test blocks, on every attempt, and so does a
+//! target or directory that cannot be read: the gate never lets the agent
+//! through on what it could not check. A test run that the interpreter
+//! refuses (`oskac test` exit status 2) does not: it is a limit of the
+//! toolchain, not of the program, so the gate lets the agent finish and
+//! tells the user.
 
 use std::path::{Path, PathBuf};
 
 use oska_check::{CheckOptions, Locator};
 use oska_run::{codes, FakeHost, TestOptions, TestReport, TestStatus};
-use oska_syntax::Diagnostic;
+use oska_syntax::{json_escape, Diagnostic};
 
-use super::target::{line, one_line, Shown, SHOWN};
-use super::{Finish, Verdict};
-use crate::package::{self, Loaded, Target};
+use super::target::{self, json_list, line, one_line, Checked, Shown, SHOWN};
+use super::{Finish, Format, Verdict};
+use crate::package::{self, Target};
 
-/// What the gate says about the agent finishing.
-pub fn verdict_for(finish: &Finish, named: &[&str]) -> Verdict {
+/// What the gate says about the agent finishing, written as `format` says.
+pub fn verdict_for(finish: &Finish, named: &[&str], format: Format) -> Verdict {
     let root = finish.cwd.clone().unwrap_or_else(|| PathBuf::from("."));
-    let targets = match targets(&root, named, finish.cwd.is_some()) {
-        Ok(targets) => targets,
-        Err(reason) => return Verdict::failed(&reason),
-    };
-    let mut outcomes = Vec::new();
     let mut unreadable = Vec::new();
+    let targets = targets(&root, named, finish.cwd.is_some(), &mut unreadable);
+    let mut outcomes = Vec::new();
     for target in targets {
         let shown = Shown::new(target, Some(&root));
         match run(&shown) {
@@ -41,18 +40,19 @@ pub fn verdict_for(finish: &Finish, named: &[&str]) -> Verdict {
             Err(reason) => unreadable.push(reason),
         }
     }
-    verdict(&outcomes, &unreadable)
+    verdict(&outcomes, &unreadable, format)
 }
 
 // ---- Targets ----------------------------------------------------------------------------------
 
 /// The targets to run: `named`, each a path from `root` (the project's
 /// directory, when the input gave one), or what is found beneath `root`.
-fn targets(root: &Path, named: &[&str], rooted: bool) -> Result<Vec<Target>, String> {
+/// What could not be read while finding them is added to `unreadable`.
+fn targets(root: &Path, named: &[&str], rooted: bool, unreadable: &mut Vec<String>) -> Vec<Target> {
     if named.is_empty() {
-        return discover(root);
+        return discover(root, unreadable);
     }
-    Ok(named
+    named
         .iter()
         .map(|name| {
             let path = if rooted {
@@ -62,7 +62,7 @@ fn targets(root: &Path, named: &[&str], rooted: bool) -> Result<Vec<Target>, Str
             };
             package::target(Some(&path.to_string_lossy()))
         })
-        .collect())
+        .collect()
 }
 
 /// Whether `dir` is a package: it holds an `oska.toml` that is a regular
@@ -72,25 +72,33 @@ fn is_package(dir: &Path) -> bool {
 }
 
 /// The package in `root`, if it is one; otherwise every package and every
-/// `.osk` file outside a package's `src/` beneath it, in name order.
-fn discover(root: &Path) -> Result<Vec<Target>, String> {
+/// `.osk` file outside a package's `src/` beneath it, in name order. What
+/// cannot be read is added to `unreadable` and the walk goes on, so every
+/// other target is still checked, and the gate blocks.
+fn discover(root: &Path, unreadable: &mut Vec<String>) -> Vec<Target> {
     let mut found = Vec::new();
     if is_package(root) {
         found.push(Target::Dir(root.to_string_lossy().into_owned()));
     } else {
-        walk(root, &mut found)?;
+        walk(root, &mut found, unreadable);
     }
-    Ok(found)
+    found
 }
 
 /// Collect what is beneath `dir`, skipping hidden entries and symlinks,
 /// and the `src/` of a package, which its package covers.
-fn walk(dir: &Path, found: &mut Vec<Target>) -> Result<(), String> {
-    let mut names: Vec<_> = std::fs::read_dir(dir)
-        .map_err(|e| format!("cannot read {}: {e}", dir.display()))?
-        .map(|entry| entry.map(|e| e.file_name()))
-        .collect::<Result<_, _>>()
-        .map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+fn walk(dir: &Path, found: &mut Vec<Target>, unreadable: &mut Vec<String>) {
+    let cannot_read =
+        |path: &Path, e: std::io::Error| format!("cannot read {}: {e}", path.display());
+    let listed = std::fs::read_dir(dir).and_then(|entries| {
+        entries
+            .map(|entry| entry.map(|e| e.file_name()))
+            .collect::<Result<Vec<_>, _>>()
+    });
+    let mut names = match listed {
+        Ok(names) => names,
+        Err(e) => return unreadable.push(cannot_read(dir, e)),
+    };
     names.sort();
     let in_package = is_package(dir);
     for name in names {
@@ -98,21 +106,24 @@ fn walk(dir: &Path, found: &mut Vec<Target>) -> Result<(), String> {
             continue;
         }
         let path = dir.join(&name);
-        let kind = std::fs::symlink_metadata(&path)
-            .map_err(|e| format!("cannot read {}: {e}", path.display()))?
-            .file_type();
+        let kind = match std::fs::symlink_metadata(&path) {
+            Ok(meta) => meta.file_type(),
+            Err(e) => {
+                unreadable.push(cannot_read(&path, e));
+                continue;
+            }
+        };
         if kind.is_dir() {
             if is_package(&path) {
                 found.push(Target::Dir(path.to_string_lossy().into_owned()));
             }
             if !(in_package && name == "src") {
-                walk(&path, found)?;
+                walk(&path, found, unreadable);
             }
         } else if kind.is_file() && path.extension().is_some_and(|e| e == "osk") {
             found.push(Target::File(path.to_string_lossy().into_owned()));
         }
     }
-    Ok(())
 }
 
 // ---- Running a target -------------------------------------------------------------------------
@@ -132,6 +143,14 @@ struct Outcome {
 impl Outcome {
     fn blocks(&self) -> bool {
         !self.check.is_empty() || !self.failed.is_empty()
+    }
+
+    /// The outcome of a release check that reported `check`.
+    fn checked(check: Vec<Diagnostic>) -> Outcome {
+        Outcome {
+            check,
+            ..Outcome::default()
+        }
     }
 
     /// The outcome of `report`, whose failures are located already.
@@ -158,75 +177,37 @@ impl Outcome {
 /// Check the target for release and, when that is clean, run its tests.
 /// An error says what could not be read.
 fn run(shown: &Shown) -> Result<Outcome, String> {
-    let options = CheckOptions { release: true };
     let tests = TestOptions { integration: false };
     // Stand-ins only: the host given to a test run is used for an
     // `#[integration]` test, which does not run, and for nothing else.
     let mut host = FakeHost::new();
-    match &shown.target {
-        Target::File(path) => {
-            let src = std::fs::read_to_string(path)
-                .map_err(|e| format!("cannot read {}: {e}", shown.name))?;
-            let locate = |d: Diagnostic| match d.location {
-                Some(_) => d,
-                None => d.locate(&shown.name, &src),
-            };
-            let report = oska_check::check_file(&shown.name, &src, options);
-            if !report.diagnostics.is_empty() {
-                let check = report.diagnostics.into_iter().map(locate).collect();
-                return Ok(Outcome {
-                    check,
-                    ..Outcome::default()
-                });
-            }
-            let mut report = oska_run::test(&src, &mut host, tests);
+    match target::check(shown, CheckOptions { release: true })? {
+        Checked::Refused(check) => Ok(Outcome::checked(check)),
+        Checked::File { report, .. } if !report.diagnostics.is_empty() => {
+            Ok(Outcome::checked(report.diagnostics))
+        }
+        Checked::File { source, .. } => {
+            let locate = |d| target::locate(&shown.name, &source, d);
+            let mut report = oska_run::test(&source, &mut host, tests);
             for test in &mut report.tests {
                 test.failure = test.failure.take().map(locate);
             }
             report.diagnostics = report.diagnostics.into_iter().map(locate).collect();
             Ok(Outcome::tested(report))
         }
-        Target::Dir(dir) => {
-            let from_here = |mut d: Diagnostic| {
-                if let Some(location) = &mut d.location {
-                    location.path = package::from_here(&shown.name, &location.path);
-                }
-                d
-            };
-            let (package, refused) = match package::load(dir, "check") {
-                Loaded::Package { package, refused } => (package, refused),
-                Loaded::Refused(diagnostics) => {
-                    let check = diagnostics.into_iter().map(from_here).collect();
-                    return Ok(Outcome {
-                        check,
-                        ..Outcome::default()
-                    });
-                }
-                Loaded::Unreadable(message) => return Err(message),
-            };
-            let mut report = oska_check::check_package(&package, options);
-            report.diagnostics.splice(0..0, refused);
+        Checked::Package { package, report } => {
             let program = match report.program {
                 Some(program) if report.diagnostics.is_empty() => program,
-                _ => {
-                    let check = report.diagnostics.into_iter().map(from_here).collect();
-                    return Ok(Outcome {
-                        check,
-                        ..Outcome::default()
-                    });
-                }
+                _ => return Ok(Outcome::checked(report.diagnostics)),
             };
             let locator = Locator::new(&package);
+            let locate = |d| crate::from_here(&shown.name, locator.locate(d));
             let mut report = oska_run::test_program(&program, &mut host, tests);
             for test in &mut report.tests {
                 test.module = locator.module_of(test.span).map(str::to_string);
-                test.failure = test.failure.take().map(|d| from_here(locator.locate(d)));
+                test.failure = test.failure.take().map(locate);
             }
-            report.diagnostics = report
-                .diagnostics
-                .into_iter()
-                .map(|d| from_here(locator.locate(d)))
-                .collect();
+            report.diagnostics = report.diagnostics.into_iter().map(locate).collect();
             Ok(Outcome::tested(report))
         }
     }
@@ -235,41 +216,21 @@ fn run(shown: &Shown) -> Result<Outcome, String> {
 // ---- The verdict ------------------------------------------------------------------------------
 
 /// What to print, and the exit status, given each target's outcome, by
-/// the name it is shown by, and what could not be read. Any diagnostic or
-/// failed test blocks, with a line each (at most [`SHOWN`] of each kind
-/// per target, then a count). With none, a target that could not be read
-/// ends the hook with one line and a status that blocks nothing, and a
-/// target the interpreter cannot run is told to the user only.
-fn verdict(outcomes: &[(String, Outcome)], unreadable: &[String]) -> Verdict {
-    if outcomes.iter().any(|(_, outcome)| outcome.blocks()) {
-        let mut out = String::new();
-        for (name, outcome) in outcomes.iter().filter(|(_, o)| o.blocks()) {
-            for diagnostic in outcome.check.iter().take(SHOWN) {
-                out.push_str(&line(name, diagnostic));
-                out.push('\n');
-            }
-            if outcome.check.len() > SHOWN {
-                out.push_str(&format!("and {} more\n", outcome.check.len() - SHOWN));
-            }
-            for (label, failure) in outcome.failed.iter().take(SHOWN) {
-                out.push_str(&one_line(&format!("test {label}: {}", line(name, failure))));
-                out.push('\n');
-            }
-            if outcome.failed.len() > SHOWN {
-                out.push_str(&format!(
-                    "and {} more failed tests\n",
-                    outcome.failed.len() - SHOWN
-                ));
-            }
-        }
-        for reason in unreadable {
-            out.push_str(&format!("error: {}\n", one_line(reason)));
-        }
-        out.push_str("the release check or a test failed: fix it before you finish\n");
-        return Verdict::feedback(out);
-    }
-    if let Some(reason) = unreadable.first() {
-        return Verdict::failed(reason);
+/// the name it is shown by, and what could not be read. Any diagnostic,
+/// failed test, or target or directory that could not be read blocks,
+/// with what blocks, as text or JSON as `format` says: a gate that could
+/// not check everything has not shown that the work is done, so it never
+/// lets the agent through. With none, a target the interpreter cannot run
+/// is told to the user only.
+fn verdict(outcomes: &[(String, Outcome)], unreadable: &[String], format: Format) -> Verdict {
+    let failed = outcomes.iter().any(|(_, outcome)| outcome.blocks());
+    if failed || !unreadable.is_empty() {
+        let blocking: Vec<&(String, Outcome)> =
+            outcomes.iter().filter(|(_, o)| o.blocks()).collect();
+        return Verdict::feedback(match format {
+            Format::Text => blocked_text(&blocking, unreadable, failed),
+            Format::Json => blocked_json(&blocking, unreadable),
+        });
     }
     let unrunnable: Vec<String> = outcomes
         .iter()
@@ -287,4 +248,85 @@ fn verdict(outcomes: &[(String, Outcome)], unreadable: &[String]) -> Verdict {
         "oskac stop gate: tests not run, the interpreter cannot run them yet ({})",
         unrunnable.join("; ")
     ))
+}
+
+/// The blocking message as text: a line per diagnostic and failed test
+/// (at most [`SHOWN`] of each kind per target, then a count), a line per
+/// target that could not be read, and what to do.
+fn blocked_text(blocking: &[&(String, Outcome)], unreadable: &[String], failed: bool) -> String {
+    let mut out = String::new();
+    for (name, outcome) in blocking {
+        for diagnostic in outcome.check.iter().take(SHOWN) {
+            out.push_str(&line(name, diagnostic));
+            out.push('\n');
+        }
+        if outcome.check.len() > SHOWN {
+            out.push_str(&format!("and {} more\n", outcome.check.len() - SHOWN));
+        }
+        for (label, failure) in outcome.failed.iter().take(SHOWN) {
+            out.push_str(&one_line(&format!("test {label}: {}", line(name, failure))));
+            out.push('\n');
+        }
+        if outcome.failed.len() > SHOWN {
+            out.push_str(&format!(
+                "and {} more failed tests\n",
+                outcome.failed.len() - SHOWN
+            ));
+        }
+    }
+    for reason in unreadable {
+        out.push_str(&format!("error: {}\n", one_line(reason)));
+    }
+    if failed {
+        out.push_str("the release check or a test failed: fix it before you finish\n");
+    }
+    if !unreadable.is_empty() {
+        out.push_str(
+            "the stop gate could not check every target: make it readable, or name the \
+             targets in the hook's settings, before you finish\n",
+        );
+    }
+    out
+}
+
+/// The blocking message as one JSON object: each blocking target with its
+/// diagnostics and failed tests (at most [`SHOWN`] of each, then a count),
+/// each diagnostic in the shape `oskac check --format=json` gives it, and
+/// what could not be read.
+fn blocked_json(blocking: &[&(String, Outcome)], unreadable: &[String]) -> String {
+    let targets: Vec<String> = blocking
+        .iter()
+        .map(|(name, outcome)| {
+            let failed: Vec<String> = outcome
+                .failed
+                .iter()
+                .take(SHOWN)
+                .map(|(label, failure)| {
+                    format!(
+                        "{{\"name\":\"{}\",\"failure\":{}}}",
+                        json_escape(label),
+                        failure.to_json()
+                    )
+                })
+                .collect();
+            format!(
+                "{{\"target\":\"{}\",\"diagnostics\":{},\"more\":{},\"failed_tests\":[{}],\
+                 \"more_failed_tests\":{}}}",
+                json_escape(name),
+                json_list(&outcome.check),
+                outcome.check.len().saturating_sub(SHOWN),
+                failed.join(","),
+                outcome.failed.len().saturating_sub(SHOWN)
+            )
+        })
+        .collect();
+    let errors: Vec<String> = unreadable
+        .iter()
+        .map(|reason| format!("\"{}\"", json_escape(reason)))
+        .collect();
+    format!(
+        "{{\"event\":\"stop\",\"targets\":[{}],\"errors\":[{}]}}\n",
+        targets.join(","),
+        errors.join(",")
+    )
 }
