@@ -586,7 +586,7 @@ fn string(json: Option<&Json>) -> &str {
 }
 
 #[test]
-fn the_hook_settings_are_valid_json_that_calls_oskac_after_an_edit() {
+fn the_hook_settings_are_valid_json_that_calls_oskac_after_an_edit_and_when_the_agent_stops() {
     let settings = Json::parse(&setup_file("claude-settings.json"));
     let Json::Obj(top) = &settings else {
         panic!("the settings are an object");
@@ -599,31 +599,60 @@ fn the_hook_settings_are_valid_json_that_calls_oskac_after_an_edit() {
     let Some(Json::Obj(events)) = settings.get("hooks") else {
         panic!("a `hooks` object");
     };
-    assert_eq!(events.len(), 1, "one event");
-    let Some(Json::Arr(entries)) = settings.get("hooks").and_then(|h| h.get("PostToolUse")) else {
-        panic!("a PostToolUse list");
-    };
-    assert_eq!(entries.len(), 1);
+    assert_eq!(events.len(), 2, "PostToolUse and Stop");
+    let post = only_hook(&settings, "PostToolUse");
     // After an edit, never before: a hook that runs before cannot see the file.
-    assert_eq!(string(entries[0].get("matcher")), "Edit|Write|MultiEdit");
-    let Some(Json::Arr(hooks)) = entries[0].get("hooks") else {
-        panic!("a hooks list");
-    };
-    assert_eq!(hooks.len(), 1);
-    assert_eq!(string(hooks[0].get("type")), "command");
-    let command = string(hooks[0].get("command"));
     assert_eq!(
-        command, "oskac hook claude --event=post-edit",
+        string(post.0.get("matcher")),
+        "Edit|Write|MultiEdit",
+        "the edit tools"
+    );
+    assert_eq!(string(post.1.get("type")), "command");
+    assert_eq!(
+        string(post.1.get("command")),
+        "oskac hook claude --event=post-edit",
         "it calls `oskac` from PATH, with no script and no shell syntax"
+    );
+    assert!(post.1.get("timeout").is_none(), "the fast hook needs none");
+    let stop = only_hook(&settings, "Stop");
+    // A Stop entry has no matcher: it is for every attempt to finish.
+    assert!(stop.0.get("matcher").is_none());
+    assert_eq!(string(stop.1.get("type")), "command");
+    assert_eq!(
+        string(stop.1.get("command")),
+        "oskac hook claude --event=stop"
+    );
+    // A slow suite must not stall every turn indefinitely.
+    let Some(Json::Num(timeout)) = stop.1.get("timeout") else {
+        panic!("a numeric `timeout`, in seconds");
+    };
+    assert!(
+        (1..=600).contains(timeout),
+        "a timeout of {timeout} seconds"
     );
     // Arguments only, so the same line works in whichever shell Claude
     // Code uses, on every platform.
-    assert!(
-        command
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '-' || c == '='),
-        "shell syntax in `{command}`"
-    );
+    for command in [post.1, stop.1].map(|hook| string(hook.get("command"))) {
+        assert!(
+            command
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '-' || c == '='),
+            "shell syntax in `{command}`"
+        );
+    }
+}
+
+/// The one entry of `event`, and the one hook in it.
+fn only_hook<'j>(settings: &'j Json, event: &str) -> (&'j Json, &'j Json) {
+    let Some(Json::Arr(entries)) = settings.get("hooks").and_then(|h| h.get(event)) else {
+        panic!("a {event} list");
+    };
+    assert_eq!(entries.len(), 1, "{event}");
+    let Some(Json::Arr(hooks)) = entries[0].get("hooks") else {
+        panic!("a hooks list");
+    };
+    assert_eq!(hooks.len(), 1, "{event}");
+    (&entries[0], &hooks[0])
 }
 
 #[test]
@@ -631,7 +660,16 @@ fn the_hook_settings_grant_no_permission_and_change_nothing_but_hooks() {
     let settings = Json::parse(&setup_file("claude-settings.json"));
     let mut all = Vec::new();
     keys(&settings, &mut all);
-    let allowed: BTreeSet<&str> = ["hooks", "PostToolUse", "matcher", "type", "command"].into();
+    let allowed: BTreeSet<&str> = [
+        "hooks",
+        "PostToolUse",
+        "Stop",
+        "matcher",
+        "type",
+        "command",
+        "timeout",
+    ]
+    .into();
     for key in &all {
         assert!(allowed.contains(key.as_str()), "unexpected key `{key}`");
     }
@@ -1012,6 +1050,367 @@ fn an_unknown_or_missing_event_is_one_line_and_exit_status_1() {
         assert_eq!(hooked.code, Some(1), "{args:?}: {}", hooked.stderr);
         assert!(hooked.stderr.starts_with("error: "), "{args:?}");
         assert_eq!(hooked.lines().len(), 1, "{args:?}: {}", hooked.stderr);
+    }
+}
+
+// ---- The Stop gate -------------------------------------------------------------------------------
+
+/// `oskac hook claude --event=stop [targets...]`: Claude Code's Stop-hook
+/// JSON on standard input, run in `cwd`.
+fn stop(targets: &[&str], cwd: &Path) -> Hooked {
+    let mut args = vec!["hook", "claude", "--event=stop"];
+    args.extend_from_slice(targets);
+    hook(&args, &stop_input(cwd, false), cwd)
+}
+
+/// The JSON Claude Code gives a Stop hook in the project at `cwd`;
+/// `active` is whether the agent is already continuing after a block.
+fn stop_input(cwd: &Path, active: bool) -> String {
+    format!(
+        "{{\"session_id\":\"s\",\"cwd\":{},\"hook_event_name\":\"Stop\",\
+         \"stop_hook_active\":{active}}}",
+        json_string(&cwd.to_string_lossy())
+    )
+}
+
+/// A program that checks for release, with one test that passes.
+const PASSING: &str = "\
+fn double(n: Int) -> Int {
+    n * 2
+}
+
+test \"double doubles\" {
+    t.assert_eq(double(2), 4)
+}
+";
+
+/// A program that checks for release, with one test that passes and one
+/// that fails.
+const FAILING: &str = "\
+fn double(n: Int) -> Int {
+    n * 2
+}
+
+test \"double doubles\" {
+    t.assert_eq(double(2), 4)
+}
+
+test \"double is wrong here\" {
+    t.assert_eq(double(3), 7)
+}
+";
+
+/// A program that passes `oskac check` and its tests, and fails
+/// `oskac check --release`: it leaves a `todo()`.
+const UNFINISHED: &str = "\
+fn later() -> Int {
+    todo()
+}
+
+test \"nothing\" {
+    t.assert_eq(1, 1)
+}
+";
+
+/// A program that does not check.
+const BROKEN: &str = "fn main() { let x: Int = \"a\" }\n";
+
+#[test]
+fn the_stop_gate_is_quiet_and_exit_status_0_when_the_checks_and_the_tests_pass() {
+    let dir = scratch("stop-pass");
+    write_all(&dir, &[("app.osk", PASSING)]);
+    let hooked = stop(&[], &dir);
+    assert_eq!(
+        (hooked.code, hooked.stdout.as_str(), hooked.stderr.as_str()),
+        (Some(0), "", "")
+    );
+}
+
+#[test]
+fn the_stop_gate_blocks_with_exit_status_2_and_names_a_failed_test() {
+    let dir = scratch("stop-fail");
+    write_all(&dir, &[("app.osk", FAILING)]);
+    let hooked = stop(&[], &dir);
+    assert_eq!(hooked.code, Some(2), "{}", hooked.stderr);
+    assert_eq!(hooked.stdout, "");
+    let failure = hooked
+        .stderr
+        .lines()
+        .find(|l| l.contains("double is wrong here"))
+        .unwrap_or_else(|| panic!("the failed test is named: {}", hooked.stderr));
+    assert!(
+        failure.starts_with("test double is wrong here: app.osk:"),
+        "{failure}"
+    );
+    assert!(
+        failure.contains("error[P0011]: ") && failure.contains("actual 6, expected 7"),
+        "{failure}"
+    );
+    assert!(
+        !hooked.stderr.contains("double doubles"),
+        "a passing test is not mentioned: {}",
+        hooked.stderr
+    );
+    // On every attempt: Claude Code's `stop_hook_active` lets nothing through.
+    let again = hook(
+        &["hook", "claude", "--event=stop"],
+        &stop_input(&dir, true),
+        &dir,
+    );
+    assert_eq!(again.code, Some(2), "{}", again.stderr);
+    assert_eq!(again.stderr, hooked.stderr);
+}
+
+#[test]
+fn the_stop_gate_runs_the_release_check_and_blocks_on_a_todo() {
+    let dir = scratch("stop-release");
+    write_all(&dir, &[("app.osk", UNFINISHED)]);
+    let plain = Command::new(env!("CARGO_BIN_EXE_oskac"))
+        .args(["check", "app.osk"])
+        .current_dir(&dir)
+        .output()
+        .expect("oskac should run");
+    assert_eq!(plain.status.code(), Some(0), "the plain check is clean");
+    let hooked = stop(&[], &dir);
+    assert_eq!(hooked.code, Some(2), "{}", hooked.stderr);
+    assert!(
+        hooked
+            .stderr
+            .lines()
+            .any(|l| l.starts_with("app.osk:2:") && l.contains("todo()")),
+        "{}",
+        hooked.stderr
+    );
+}
+
+#[test]
+fn the_stop_gate_checks_a_package_and_names_its_files_from_the_project() {
+    let dir = scratch("stop-package");
+    write_all(
+        &dir,
+        &[
+            ("app/oska.toml", MANIFEST),
+            ("app/src/main.osk", "fn main() {}\n"),
+            ("app/src/util.osk", FAILING),
+        ],
+    );
+    let hooked = stop(&[], &dir);
+    assert_eq!(hooked.code, Some(2), "{}", hooked.stderr);
+    assert!(
+        hooked
+            .stderr
+            .contains("test util: double is wrong here: app/src/util.osk:"),
+        "{}",
+        hooked.stderr
+    );
+}
+
+#[test]
+fn the_stop_gate_with_no_targets_checks_the_package_of_the_project_directory() {
+    let dir = scratch("stop-root-package");
+    write_all(
+        &dir,
+        &[
+            ("oska.toml", MANIFEST),
+            ("src/main.osk", "fn main() {}\n"),
+            // Not the package's business: it is not under `src/`.
+            ("broken.osk", BROKEN),
+        ],
+    );
+    let hooked = stop(&[], &dir);
+    assert_eq!((hooked.code, hooked.stderr.as_str()), (Some(0), ""));
+    write_all(&dir, &[("src/util.osk", FAILING)]);
+    let hooked = stop(&[], &dir);
+    assert_eq!(hooked.code, Some(2), "{}", hooked.stderr);
+    assert!(
+        hooked
+            .stderr
+            .contains("test util: double is wrong here: src/util.osk:"),
+        "{}",
+        hooked.stderr
+    );
+}
+
+#[test]
+fn the_stop_gate_finds_every_package_and_standalone_file_beneath_the_project() {
+    let dir = scratch("stop-discover");
+    write_all(
+        &dir,
+        &[
+            ("one/oska.toml", MANIFEST),
+            ("one/src/main.osk", "fn main() {}\n"),
+            ("tools/two/oska.toml", MANIFEST),
+            ("tools/two/src/main.osk", "fn main() {}\n"),
+            ("tools/script.osk", PASSING),
+            ("top.osk", PASSING),
+        ],
+    );
+    assert_eq!(stop(&[], &dir).code, Some(0));
+    // Each one is found: break each in turn and the gate blocks, naming it.
+    for (file, broken) in [
+        ("one/src/main.osk", BROKEN),
+        ("tools/two/src/main.osk", BROKEN),
+        ("tools/script.osk", FAILING),
+        ("top.osk", FAILING),
+    ] {
+        let original = std::fs::read(dir.join(file)).expect("readable");
+        write_all(&dir, &[(file, broken)]);
+        let hooked = stop(&[], &dir);
+        assert_eq!(hooked.code, Some(2), "{file}: {}", hooked.stderr);
+        assert!(hooked.stderr.contains(file), "{file}: {}", hooked.stderr);
+        std::fs::write(dir.join(file), original).expect("should restore");
+    }
+}
+
+#[test]
+fn the_stop_gate_skips_hidden_directories_and_does_not_follow_symlinks() {
+    let dir = scratch("stop-skip");
+    write_all(
+        &dir,
+        &[
+            ("ok.osk", PASSING),
+            (".hidden/bad.osk", FAILING),
+            ("sub/.git/bad.osk", FAILING),
+        ],
+    );
+    let hooked = stop(&[], &dir);
+    assert_eq!((hooked.code, hooked.stderr.as_str()), (Some(0), ""));
+    #[cfg(unix)]
+    {
+        let outside = scratch("stop-skip-outside");
+        write_all(&outside, &[("bad.osk", FAILING)]);
+        std::os::unix::fs::symlink(&*outside, dir.join("link")).expect("should link");
+        std::os::unix::fs::symlink(outside.join("bad.osk"), dir.join("bad.osk"))
+            .expect("should link");
+        let hooked = stop(&[], &dir);
+        assert_eq!((hooked.code, hooked.stderr.as_str()), (Some(0), ""));
+    }
+}
+
+#[test]
+fn the_stop_gate_checks_only_the_named_targets_resolved_from_the_project() {
+    let dir = scratch("stop-named");
+    write_all(
+        &dir,
+        &[
+            ("good.osk", PASSING),
+            ("fixtures/broken.osk", BROKEN),
+            ("pkg/oska.toml", MANIFEST),
+            ("pkg/src/main.osk", "fn main() {}\n"),
+            ("pkg/src/util.osk", FAILING),
+        ],
+    );
+    // The broken fixture is not named, so it is not checked.
+    let hooked = stop(&["good.osk"], &dir);
+    assert_eq!((hooked.code, hooked.stderr.as_str()), (Some(0), ""));
+    // Run from elsewhere: a target is a path from the project's directory.
+    let elsewhere = scratch("stop-named-elsewhere");
+    let hooked = hook(
+        &["hook", "claude", "--event=stop", "good.osk"],
+        &stop_input(&dir, false),
+        &elsewhere,
+    );
+    assert_eq!((hooked.code, hooked.stderr.as_str()), (Some(0), ""));
+    // A named package, and a named file, are each checked.
+    let hooked = stop(&["good.osk", "pkg"], &dir);
+    assert_eq!(hooked.code, Some(2), "{}", hooked.stderr);
+    assert!(
+        hooked.stderr.contains("pkg/src/util.osk:"),
+        "{}",
+        hooked.stderr
+    );
+    let hooked = stop(&["fixtures/broken.osk"], &dir);
+    assert_eq!(hooked.code, Some(2), "{}", hooked.stderr);
+    assert!(
+        hooked.stderr.contains("fixtures/broken.osk:1:"),
+        "{}",
+        hooked.stderr
+    );
+    // A name that is not there is the hook's failure, not the program's.
+    let hooked = stop(&["missing.osk"], &dir);
+    assert_eq!(hooked.code, Some(1), "{}", hooked.stderr);
+    assert_eq!(hooked.lines().len(), 1, "{}", hooked.stderr);
+}
+
+#[test]
+fn the_stop_gate_does_not_run_integration_tests() {
+    let dir = scratch("stop-integration");
+    write_all(
+        &dir,
+        &[(
+            "app.osk",
+            "#[integration]\ntest \"fails on the real os\" {\n    t.assert(false)\n}\n\n\
+             test \"passes\" {\n    t.assert(true)\n}\n",
+        )],
+    );
+    let hooked = stop(&[], &dir);
+    assert_eq!((hooked.code, hooked.stderr.as_str()), (Some(0), ""));
+}
+
+/// A program with a test that uses something the interpreter cannot run
+/// yet (`E0380`): `oskac test` ends with status 2 on it.
+const UNRUNNABLE: &str = "\
+test \"uses a constructor as a value\" {
+    let mk = Some
+    let x: Option<Int> = mk(1)
+}
+";
+
+#[test]
+fn the_stop_gate_does_not_block_on_what_the_interpreter_cannot_run_and_tells_the_user() {
+    let dir = scratch("stop-unrunnable");
+    write_all(&dir, &[("app.osk", UNRUNNABLE)]);
+    let plain = Command::new(env!("CARGO_BIN_EXE_oskac"))
+        .args(["test", "--interpret", "app.osk"])
+        .current_dir(&dir)
+        .output()
+        .expect("oskac should run");
+    assert_eq!(plain.status.code(), Some(2), "{plain:?}");
+    let hooked = stop(&[], &dir);
+    assert_eq!(hooked.code, Some(0), "{}", hooked.stderr);
+    assert_eq!(hooked.stderr, "", "the agent is told nothing");
+    // The user is told, through Claude Code's user-visible message.
+    let output = Json::parse(&hooked.stdout);
+    let message = string(output.get("systemMessage"));
+    assert!(message.contains("app.osk"), "{message}");
+    assert!(message.contains("E0380"), "{message}");
+    // Another target that fails still blocks.
+    write_all(&dir, &[("other.osk", FAILING)]);
+    let hooked = stop(&[], &dir);
+    assert_eq!(hooked.code, Some(2), "{}", hooked.stderr);
+}
+
+#[test]
+fn the_stop_gate_writes_nothing_and_a_test_cannot_reach_the_real_filesystem() {
+    let dir = scratch("stop-readonly");
+    write_all(
+        &dir,
+        &[
+            ("app.osk", FAILING),
+            (
+                "writes.osk",
+                "test \"writes\" {\n    \
+                 let _ = t.fs.restrict_to(\"/\").write_only().write(Path.new(\"out.txt\"), \"x\")\n}\n",
+            ),
+        ],
+    );
+    let before = snapshot(&dir);
+    stop(&[], &dir);
+    assert_eq!(snapshot(&dir), before);
+    // The write test runs (and passes) on its own.
+    let alone = stop(&["writes.osk"], &dir);
+    assert_eq!((alone.code, alone.stderr.as_str()), (Some(0), ""));
+    assert_eq!(snapshot(&dir), before);
+}
+
+#[test]
+fn the_stop_gate_with_malformed_input_is_one_line_and_exit_status_1() {
+    let dir = scratch("stop-malformed");
+    for input in ["", "not json", "[]", "{\"cwd\":7}", "{} {}"] {
+        let hooked = hook(&["hook", "claude", "--event=stop"], input, &dir);
+        assert_eq!(hooked.code, Some(1), "{input}: {}", hooked.stderr);
+        assert!(hooked.stderr.starts_with("error: "), "{input}");
+        assert_eq!(hooked.lines().len(), 1, "{input}: {}", hooked.stderr);
     }
 }
 
