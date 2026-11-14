@@ -52,7 +52,8 @@ const TARGET: oska_native::Target = if cfg!(target_arch = "x86_64") {
 /// fails on every host, and each program is also built for every other
 /// target with a backend, so an aarch64 host, which cannot run x86_64
 /// code, still fails when x86_64 refuses it. Data, text and lists
-/// (#161); traits, `?`, contracts and closures (#162).
+/// (#161); traits, `?`, contracts and closures (#162); process
+/// capabilities and confined files (#163).
 const COMPILED_EVERYWHERE: &[&str] = &[
     "data",
     "text_toolkit",
@@ -61,6 +62,10 @@ const COMPILED_EVERYWHERE: &[&str] = &[
     "postconditions",
     "trait_contracts",
     "contract_review_fixes",
+    "capabilities",
+    "directory_capabilities",
+    "file_capabilities",
+    "whole_filesystem",
 ];
 
 /// How long one native process may run before the comparison gives up on
