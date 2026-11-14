@@ -3,13 +3,18 @@
 //! overridden methods, calls through trait bounds in generic code, the
 //! prelude's `Eq`, `Display`, `Hash` and `From`, `==`/`!=` on every `Eq`
 //! type, and `?` on `Result` and `Option`, with and without a `From`
-//! conversion.
+//! conversion. Every target must compile these programs
+//! (`differential::assert_compiled_same`, #162): a refusal fails on every
+//! host, and each host builds them for the other targets too.
 
-#![cfg(all(target_arch = "aarch64", target_os = "linux"))]
+#![cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 
 mod differential;
 
-use differential::{assert_same, Case};
+use differential::{assert_compiled_same, Case};
 
 /// A program of `items` whose `main` runs `body`, with `io: Stdout`,
 /// returning `Result<(), IoError>` so that the body can use `?`.
@@ -20,7 +25,7 @@ fn program(items: &str, body: &str) -> String {
 /// Run `src` on both backends, require the same outcome, and that it
 /// printed `stdout` and exited 0.
 fn assert_prints(name: &str, src: &str, stdout: &str) {
-    let outcome = assert_same(&Case::file(name, src));
+    let outcome = assert_compiled_same(&Case::file(name, src));
     assert_eq!(outcome.stdout, stdout, "case `{name}`: {outcome:#?}");
     assert_eq!(outcome.exit_code, Some(0), "case `{name}`: {outcome:#?}");
 }
@@ -320,7 +325,7 @@ fn main(io: Stdout) -> Result<(), AppError> {{
 }}
 "
         );
-        let outcome = assert_same(&Case::file(&format!("from_{text}"), &src));
+        let outcome = assert_compiled_same(&Case::file(&format!("from_{text}"), &src));
         assert_eq!(outcome.stdout, stdout, "{text}: {outcome:#?}");
         assert_eq!(outcome.stderr, stderr, "{text}: {outcome:#?}");
         assert_eq!(outcome.exit_code, Some(code), "{text}: {outcome:#?}");
@@ -452,7 +457,7 @@ fn main(io: Stdout) -> Result<(), IoError> {
     Ok(())
 }
 ";
-    let outcome = assert_same(&Case::file("failed_main", src));
+    let outcome = assert_compiled_same(&Case::file("failed_main", src));
     assert_eq!(outcome.stdout, "got 1\n", "{outcome:#?}");
     assert_eq!(outcome.stderr, "too big 5\n", "{outcome:#?}");
     assert_eq!(outcome.exit_code, Some(1), "{outcome:#?}");
@@ -539,7 +544,7 @@ fn main(io: Stdout) -> Result<(), IoError> {
     Ok(())
 }
 ";
-    let outcome = assert_same(&Case::file("todo", src));
+    let outcome = assert_compiled_same(&Case::file("todo", src));
     assert_eq!(outcome.stdout, "early\n", "{outcome:#?}");
     assert!(outcome.stderr.contains("error[P0003]"), "{outcome:#?}");
     assert_eq!(outcome.exit_code, Some(101), "{outcome:#?}");

@@ -10,9 +10,10 @@ permissions:
 
 jobs:
   test:
-    # On arm64 the tests are also differential (spec #125): every runtime
-    # test, example, guide program, CLI fixture and the site build runs as
-    # a native executable too, and must do what the interpreter does.
+    # On arm64 and x86_64 the tests are also differential (spec #125,
+    # #153): every runtime test, example, guide program, CLI fixture and
+    # the site build runs as a native executable for the host too, and
+    # must do what the interpreter does.
     strategy:
       fail-fast: false
       matrix:
@@ -23,10 +24,41 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt, clippy
-      # The differential suite is compiled only on aarch64 Linux: a label
-      # that moves to other hardware must fail, not skip it.
+      # The differential suite is compiled only where a backend runs: a
+      # label that moves to other hardware must fail, not skip it.
       - if: matrix.os == 'ubuntu-24.04-arm'
         run: test "$(uname -m)" = aarch64
+      - if: matrix.os == 'ubuntu-latest'
+        run: test "$(uname -m)" = x86_64
       # The same script contributors and agents run locally (and the
       # pre-push hook runs), so local and CI checks cannot drift apart.
       - run: scripts/check.sh
+
+  cross-build:
+    # Seam 3 of spec #153: every corpus program built for every target on
+    # an aarch64 host and on an x86_64 host. `cross-build-compare` requires
+    # the same bytes from both: the backend never reads the host.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - run: cargo build -p oskac
+      - run: scripts/cross-build/manifest.sh target/debug/oskac > "manifest-$(uname -m).txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cross-build-${{ matrix.os }}
+          path: manifest-*.txt
+
+  cross-build-compare:
+    needs: cross-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cross-build-*
+          merge-multiple: true
+      - run: diff manifest-aarch64.txt manifest-x86_64.txt

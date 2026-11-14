@@ -1,5 +1,6 @@
-//! The native backend: a checked program to a static aarch64 Linux
-//! executable, with no assembler, linker or C library (ADR 0011).
+//! The native backend: a checked program to a static executable for a
+//! target platform ([`Target`]), with no assembler, linker or C library
+//! (ADR 0011). `linux-aarch64` and `linux-x86_64` have backends so far.
 //!
 //! [`build`] runs the pipeline:
 //!
@@ -11,16 +12,19 @@
 //!    implemented. Anything the backend cannot compile yet is refused
 //!    here, with `E0390`.
 //!    `optimize.rs` then cleans up the code and inlines small functions.
-//! 2. `aarch64.rs`: register allocation (`regalloc.rs`), instruction
+//! 2. The target's code generator (`target.rs`): `aarch64.rs` or
+//!    `x86_64.rs`, with register allocation (`regalloc.rs`), instruction
 //!    selection and encoding.
-//! 3. `elf.rs`: the file.
+//! 3. `elf.rs`: the file, with the target's machine and page size.
 //!
 //! The crate reads only the checked program, never the syntax tree, has
-//! no `unsafe`, and its output depends on the program alone, never on the
-//! host.
+//! no `unsafe`, and its output depends on the program and the target
+//! alone, never on the host.
 
 use oska_check::program::Program;
 use oska_syntax::{Diagnostic, Span};
+
+pub use target::Target;
 
 mod aarch64;
 mod elf;
@@ -30,6 +34,8 @@ mod layout;
 mod lower;
 mod optimize;
 mod regalloc;
+mod target;
+mod x86_64;
 
 /// The codes the native backend reports.
 pub mod codes {
@@ -46,10 +52,20 @@ pub mod codes {
     /// program `oskac run` ran natively died of a signal only a fault
     /// raises. A fault in the native backend, never in the program.
     pub const PROCESS_FAULT: &str = "E0392";
+    /// `--target` names no supported platform.
+    pub const UNKNOWN_PLATFORM: &str = "E0393";
+    /// `--target` names a supported platform with no native backend yet.
+    pub const NO_BACKEND: &str = "E0394";
 
     /// The backend's own codes, in the order `docs/runtime.md` lists
     /// them. `E0371` is the interpreter's, shared.
-    pub const ALL: [&str; 3] = [UNSUPPORTED, UNWRITABLE_OUTPUT, PROCESS_FAULT];
+    pub const ALL: [&str; 5] = [
+        UNSUPPORTED,
+        UNWRITABLE_OUTPUT,
+        PROCESS_FAULT,
+        UNKNOWN_PLATFORM,
+        NO_BACKEND,
+    ];
 
     /// The `P`-codes native code panics with: the interpreter's.
     pub const PANICS: [&str; 16] = [
@@ -60,9 +76,6 @@ pub mod codes {
 
 /// The span of a refusal that is about no construct in particular.
 const NOWHERE: Span = Span { start: 0, end: 0 };
-
-/// The platform the executables run on.
-pub const TARGET: &str = "aarch64-linux";
 
 /// The `std` modules that have a runtime on some backend. A program that
 /// imports any other, such as `std.sql`, is refused, as the interpreter
@@ -81,15 +94,15 @@ pub type Locate<'a> = &'a dyn Fn(Diagnostic) -> Diagnostic;
 pub const MAX_CALL_DEPTH: u32 = lower::MAX_CALL_DEPTH;
 
 /// Compile `program`, which checked with no diagnostic, to an executable
-/// for [`TARGET`]: the file's bytes. `locate` places a panic site in the
+/// for `target`: the file's bytes. `locate` places a panic site in the
 /// source. A program the backend cannot compile yet is refused with the
 /// diagnostic that says why.
-pub fn build(program: &Program, locate: Locate) -> Result<Vec<u8>, Diagnostic> {
-    compile(program, locate, lower::Entry::Main)
+pub fn build(program: &Program, target: Target, locate: Locate) -> Result<Vec<u8>, Diagnostic> {
+    compile(program, target, locate, lower::Entry::Main)
 }
 
 /// Compile the `test` blocks of `program`, which checked with no
-/// diagnostic, to one **test executable** for [`TARGET`]: the file's
+/// diagnostic, to one **test executable** for `target`: the file's
 /// bytes. Its `main` is never run.
 ///
 /// The executable runs one test per process: the one whose index in
@@ -109,8 +122,8 @@ pub fn build(program: &Program, locate: Locate) -> Result<Vec<u8>, Diagnostic> {
 /// a..b)` and a newline, the span in the program, which
 /// [`test_failure`] reads back. The caller places it in the source, as it
 /// places the interpreter's.
-pub fn build_tests(program: &Program) -> Result<Vec<u8>, Diagnostic> {
-    compile(program, &|d| d, lower::Entry::Tests)
+pub fn build_tests(program: &Program, target: Target) -> Result<Vec<u8>, Diagnostic> {
+    compile(program, target, &|d| d, lower::Entry::Tests)
 }
 
 /// The panic a test executable's test reported on stdout ([`build_tests`]):
@@ -130,7 +143,12 @@ pub fn test_failure(stdout: &[u8]) -> Option<Diagnostic> {
     Some(Diagnostic::new(code, message, span))
 }
 
-fn compile(program: &Program, locate: Locate, entry: lower::Entry) -> Result<Vec<u8>, Diagnostic> {
+fn compile(
+    program: &Program,
+    target: Target,
+    locate: Locate,
+    entry: lower::Entry,
+) -> Result<Vec<u8>, Diagnostic> {
     if let Some(refusal) = unimplemented_module(program) {
         return Err(refusal);
     }
@@ -142,15 +160,20 @@ fn compile(program: &Program, locate: Locate, entry: lower::Entry) -> Result<Vec
             NOWHERE,
         ));
     };
-    let module = lower::program(program, &rt, locate, entry)?;
-    let text = aarch64::emit(&module).map_err(|why| {
+    let module = lower::program(program, &rt, locate, entry, target)?;
+    let text = target.emit(&module).map_err(|why| {
         Diagnostic::new(
             codes::UNSUPPORTED,
             format!("`oskac build` cannot compile this program yet: {why}"),
             NOWHERE,
         )
     })?;
-    Ok(elf::write(&text, &module.rodata, module.data_size))
+    Ok(elf::write(
+        &target.elf(),
+        text.as_ref(),
+        &module.rodata,
+        module.data_size,
+    ))
 }
 
 /// The refusal for the first import of a `std` module with no runtime.

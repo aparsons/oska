@@ -1,8 +1,8 @@
 //! The one list of runtime tests that are not differential (spec #125):
 //! the tests whose program the native backend does not run, each with
 //! the reason. Every helper in this module compares the interpreter with
-//! a native executable on aarch64 Linux (`native.rs`), except in the
-//! tests named here.
+//! a native executable on aarch64 and x86_64 Linux (`native.rs`), except
+//! in the tests named here.
 //!
 //! A test belongs here only when what it checks cannot happen on a real
 //! OS (the fake host's clock, generator or wording), or, marked `gap:`,

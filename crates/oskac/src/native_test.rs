@@ -34,10 +34,16 @@ pub enum Tested {
     Refused(Diagnostic),
 }
 
-/// Run the `test` blocks of the checked `program` natively, reporting a
-/// failure to write the executable as JSON with `json`.
-pub fn test_program(program: &Program, options: TestOptions, json: bool) -> Tested {
-    let bytes = match oska_native::build_tests(program) {
+/// Run the `test` blocks of the checked `program` natively, compiled for
+/// `target`, the host's, reporting a failure to write the executable as
+/// JSON with `json`.
+pub fn test_program(
+    program: &Program,
+    target: oska_native::Target,
+    options: TestOptions,
+    json: bool,
+) -> Tested {
+    let bytes = match oska_native::build_tests(program, target) {
         Ok(bytes) => bytes,
         Err(refusal) => return Tested::Refused(refusal),
     };

@@ -38,10 +38,13 @@ use oska_run::{FakeHost, TestOptions, TestStatus};
 /// prelude only (user code gets `E0132` instead), `E0360` needs a `std`
 /// module with a private name (none has one yet), `P0005` is a second
 /// line of defence behind the checker (`E0292`), `E0411` is a symlink,
-/// which a documentation example cannot write, and `E0391` is an output
-/// path, which is no part of a program, and `E0392` a fault in the
-/// native backend, which no program is meant to reach.
-const UNREACHABLE: [&str; 6] = ["E0170", "E0360", "E0391", "E0392", "E0411", "P0005"];
+/// which a documentation example cannot write, `E0391` is an output
+/// path and `E0393` and `E0394` a `--target`, which are no part of a
+/// program, and `E0392` a fault in the native backend, which no program
+/// is meant to reach.
+const UNREACHABLE: [&str; 8] = [
+    "E0170", "E0360", "E0391", "E0392", "E0393", "E0394", "E0411", "P0005",
+];
 
 /// How the meaning of a code with no example ends, after the reason why.
 /// `oskac explain` and the code's page both show the meaning.
@@ -247,7 +250,9 @@ fn codes_of(code: &str, example: &Example) -> BTreeSet<String> {
         let report = oska_check::check_module(src);
         found.extend(report.diagnostics.iter().map(|d| d.code.to_string()));
         if let Some(program) = &report.program {
-            if let Err(refusal) = oska_native::build(program, &|d| d) {
+            if let Err(refusal) =
+                oska_native::build(program, oska_native::Target::LinuxAarch64, &|d| d)
+            {
                 found.insert(refusal.code.to_string());
             }
         }

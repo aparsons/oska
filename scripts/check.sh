@@ -91,7 +91,7 @@ bash scripts/rust-stable/test.sh
 
 step "shellcheck"
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck -S warning scripts/*.sh scripts/install/*.sh scripts/release/*.sh scripts/unsafe-guard/*.sh scripts/intrinsic-guard/*.sh scripts/rust-stable/*.sh site/agent-setup/*.sh .githooks/pre-push
+  shellcheck -S warning scripts/*.sh scripts/install/*.sh scripts/release/*.sh scripts/unsafe-guard/*.sh scripts/intrinsic-guard/*.sh scripts/rust-stable/*.sh scripts/cross-build/*.sh site/agent-setup/*.sh .githooks/pre-push
 else
   echo "shellcheck not installed; skipped (CI runs it)"
 fi

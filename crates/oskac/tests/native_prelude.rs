@@ -9,7 +9,10 @@
 //! body-less function fails here until it has a native implementation and
 //! a row.
 
-#![cfg(all(target_arch = "aarch64", target_os = "linux"))]
+#![cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 
 mod differential;
 
@@ -977,8 +980,10 @@ fn every_call_calls_its_function_and_builds_natively() {
             "the program for `{name}` never calls it"
         );
         let built = match run {
-            Run::Tests => oska_native::build_tests(&program),
-            Run::Main | Run::WithInput(_) => oska_native::build(&program, &|d| d),
+            Run::Tests => oska_native::build_tests(&program, differential::host_target()),
+            Run::Main | Run::WithInput(_) => {
+                oska_native::build(&program, differential::host_target(), &|d| d)
+            }
         };
         if let Err(refusal) = built {
             panic!("`{name}` has no native implementation: {refusal:#?}");

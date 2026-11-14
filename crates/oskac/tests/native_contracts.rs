@@ -4,18 +4,23 @@
 //! interpreter's contract suites' (`oska-run/tests/preconditions.rs`,
 //! `postconditions.rs`, `trait_contracts.rs`, `contract_review_fixes.rs`)
 //! that need nothing the native backend lacks; the rest are refused
-//! cleanly (see the last test).
+//! cleanly (see the last test). Every target must compile these programs
+//! (`differential::assert_compiled_same`, #162): a refusal fails on every
+//! host, and each host builds them for the other targets too.
 
-#![cfg(all(target_arch = "aarch64", target_os = "linux"))]
+#![cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 
 mod differential;
 
-use differential::{assert_same, Case};
+use differential::{assert_compiled_same, Case};
 
 /// Run `src` on both backends and require the same outcome, a clean run
 /// that printed `stdout`.
 fn assert_prints(name: &str, src: &str, stdout: &str) {
-    let outcome = assert_same(&Case::file(name, src));
+    let outcome = assert_compiled_same(&Case::file(name, src));
     assert_eq!(outcome.stdout, stdout, "case `{name}`: {outcome:#?}");
     assert_eq!(outcome.exit_code, Some(0), "case `{name}`: {outcome:#?}");
 }
@@ -23,7 +28,7 @@ fn assert_prints(name: &str, src: &str, stdout: &str) {
 /// Run `src` on both backends and require the same outcome, a panic with
 /// `code` whose report contains `message` and whose stdout is `stdout`.
 fn assert_panics(name: &str, src: &str, code: &str, message: &str, stdout: &str) {
-    let outcome = assert_same(&Case::file(name, src));
+    let outcome = assert_compiled_same(&Case::file(name, src));
     assert_eq!(outcome.exit_code, Some(101), "case `{name}`: {outcome:#?}");
     assert!(
         outcome
@@ -1061,7 +1066,7 @@ fn a_call_through_a_function_value_checks_requires_at_that_call() {
         "precondition violated: `double` requires `x > 0`",
         "",
     );
-    let outcome = assert_same(&Case::file("requires_fn_value_span", &src));
+    let outcome = assert_compiled_same(&Case::file("requires_fn_value_span", &src));
     assert!(
         outcome.stderr.contains("main.osk:9:13:"),
         "the report names the call through the value: {outcome:#?}"

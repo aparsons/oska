@@ -7,10 +7,14 @@
 //! A corpus program is one `oskac build` compiles. One the checker
 //! refuses, or a library, is not a program and is left out; one the
 //! native backend refuses fails the test unless the interpreter refuses it
-//! too (a `std` module neither has a runtime for). The `test` blocks of
+//! too (a `std` module neither has a runtime for), or, on x86_64, is
+//! reported (`differential::refusal_reported`). The `test` blocks of
 //! the same corpus are compared by `native_tests.rs`.
 
-#![cfg(all(target_arch = "aarch64", target_os = "linux"))]
+#![cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 
 mod differential;
 /// The one skip list of the differential tests, shared with the
@@ -97,12 +101,15 @@ fn is_program(case: &Case, name: &str) -> bool {
         std::fs::write(&file, text).expect("should write the file");
     }
     let exe = dir.with_extension("exe");
-    let built = oskac(
-        &dir,
-        &["build", case.target(), "-o", &exe.to_string_lossy()],
-    );
-    let program = match built {
+    let built = Command::new(env!("CARGO_BIN_EXE_oskac"))
+        .args(["build", case.target(), "-o", &exe.to_string_lossy()])
+        .current_dir(&dir)
+        .output()
+        .expect("oskac should run");
+    let report = String::from_utf8_lossy(&built.stderr);
+    let program = match built.status.code() {
         Some(0) => true,
+        Some(2) if differential::refusal_reported(name, &report) => false,
         Some(2) => {
             let interpreted = oskac(&dir, &["run", "--interpret", case.target()]);
             assert_eq!(
@@ -361,7 +368,8 @@ fn building_the_site_generator_takes_well_under_a_second() {
         oska_check::check_file("site/build.osk", &src, oska_check::CheckOptions::default());
     let program = report.program.expect("the generator checks");
     let started = Instant::now();
-    let bytes = oska_native::build(&program, &|d| d).expect("the generator builds");
+    let bytes = oska_native::build(&program, differential::host_target(), &|d| d)
+        .expect("the generator builds");
     let took = started.elapsed();
     assert!(!bytes.is_empty());
     // A release build of `oskac` takes about 0.1 s on a Raspberry Pi 5,
