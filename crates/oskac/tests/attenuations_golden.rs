@@ -4,7 +4,8 @@
 //! `tests/fixtures/attenuations.osk` narrows capabilities every way the
 //! report distinguishes: a literal root, a narrower literal root, a root
 //! computed at runtime, narrowing with a `Path` built from untrusted text,
-//! `read_only`, `write_only`, and `restrict_to("/")`. (A module constant
+//! `read_only`, `write_only`, `restrict_to("/")`, and narrowing in a test
+//! block, listed under `test "<name>"` (#150). (A module constant
 //! as a root is covered in oska-check's tests: a body cannot name a
 //! constant yet, #83.)
 //!

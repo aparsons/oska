@@ -82,7 +82,7 @@ fn vouch: Stdout (io)
 main.osk:6:16: audit: assume_trusted (bytes 126..147)
 ```
 
-The line `fn vouch: Stdout (io)` names each capability and the parameter that supplies it. A `cap fn` parameter appears as `cap fn (name)`. A parse error is reported alone, with no authority lines. Terms are in the [glossary](../../GLOSSARY.md). The checker's behavior and its full code table are in the [checker notes](../checker.md).
+The line `fn vouch: Stdout (io)` names each capability and the parameter that supplies it. A `cap fn` parameter appears as `cap fn (name)`, and a parameter of a bounded type parameter `T` as `generic T (name)`. A parse error is reported alone, with no authority lines. Terms are in the [glossary](../../GLOSSARY.md). The checker's behavior and its full code table are in the [checker notes](../checker.md).
 
 ## `oskac run`
 
@@ -189,9 +189,9 @@ One object on standard output, produced even when there are diagnostics:
 ```
 
 - `diagnostics`, in source order.
-- `functions`: one entry per function and method, in source order. `name` is the function's name, `Type.method` for a method of an inherent `impl`, or `<Type as Trait>.method` for one of `impl Trait for Type`, with a generic trait's arguments, as in `<AppError as From<IoError>>.from`; in a package `pkg.` and the module path come first, as in `pkg.util.text.shout` or `pkg.main.main`, and a method is named by its type's module. No two entries share a name. `"pub":true` marks a function declared `pub`. `authority` lists the built-in capabilities it can reach, in order of first appearance. `via` lists each capability-bearing parameter and what it supplies, with a method's receiver as `self`. `pure` is `true` when no parameter, the receiver included, is capability-bearing.
+- `functions`: one entry per function and method, in source order. `name` is the function's name, `Type.method` for a method of an inherent `impl`, or `<Type as Trait>.method` for one of `impl Trait for Type`, with a generic trait's arguments, as in `<AppError as From<IoError>>.from`; in a package `pkg.` and the module path come first, as in `pkg.util.text.shout` or `pkg.main.main`, and a method is named by its type's module. No two entries share a name. `"pub":true` marks a function declared `pub`. `authority` lists the built-in capabilities it can reach, in order of first appearance. `via` lists each capability-bearing parameter and what it supplies, with a method's receiver as `self`; a parameter whose type is or holds a bounded type parameter is listed too, naming it in `generics`. `pure` is `true` when `via` is empty.
 - `audit`: every audit site, in source order. `kind` is `assume_trusted` for a trust assertion or `expose` for a secret exposure, and `span` covers the whole call.
-- `attenuations`: every call that narrows a capability, in source order. `function` is the function it is in, `method` is `restrict_to`, `restrict_to_file`, `read_only` or `write_only`, `source` and `result` are the capability kinds before and after, and `root` is the string the capability is restricted to, or `null` when the method takes no root or the root is computed at runtime. `span` covers the whole call.
+- `attenuations`: every call that narrows a capability, in source order. `function` is the function it is in (`test "<name>"` for a test block), `method` is `restrict_to`, `restrict_to_file`, `read_only` or `write_only`, `source` and `result` are the capability kinds before and after, and `root` is the string the capability is restricted to, or `null` when the method takes no root or the root is computed at runtime. `span` covers the whole call.
 
 A parse error is reported alone, with empty `functions`, `audit` and `attenuations`.
 

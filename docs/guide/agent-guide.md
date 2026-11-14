@@ -114,7 +114,7 @@ Before you finish a task, compare this against the report from before your chang
 - **A function's `authority` grew,** or a new capability appears in `main`'s signature. Is that the task, or a shortcut? Prefer passing a narrower capability, such as `fs.restrict_to("dir").read_only()`, to adding a wider one.
 - **A new `audit` entry appeared.** Every `assume_trusted` and `expose` weakens a guarantee. Use one only inside a validator that really checks the text, and say so in your summary.
 - **A new `attenuations` entry has a wider root than the task needs.** Each one names the function it is in, the capability it narrows from and to, and its `root`. A `root` of `"/"` is the whole filesystem, and `null` means the root is computed at runtime (or, for `read_only` and `write_only`, that there is none).
-- **A function that was `pure` is not.** It now has a capability-bearing parameter.
+- **A function that was `pure` is not.** It now has a capability-bearing parameter, or one of a bounded type parameter (`generic T`) that it can perform effects through.
 
 Never silence a diagnostic by weakening authority or trust: do not add capabilities to `main`, call `.assume_trusted()`, or call `.expose()` only to make a message go away. Ask first when the task seems to need it.
 
