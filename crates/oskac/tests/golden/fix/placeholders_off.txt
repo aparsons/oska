@@ -1,0 +1,12 @@
+$ oskac fix count.osk
+exit: 1
+--- stdout
+--- stderr
+count.osk:2:11: error[E0253]: `match` is not exhaustive: missing `None` (bytes 44..45)
+    fix (placeholders): add arms for the missing patterns
+--- file count.osk
+fn count(x: Option<Int>) -> Int {
+    match x {
+        Some(n) => n
+    }
+}

@@ -30,12 +30,17 @@ USAGE:
                                            Check a source file or package and,
                                            if it has no diagnostics, compile it
                                            to an aarch64 Linux executable
+    oskac fix [path] [--dry-run] [--placeholders] [--format=json]
+                                           Apply the machine fixes to a source
+                                           file or package, checking again
+                                           after each, and write each changed
+                                           file once
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ```
 
-`lex` and `parse` take exactly one source file, and `explain` a code. `check`, `run`, `test` and `build` take a source file, a package directory, or nothing, which means the package in the current directory. A package is a directory with an `oska.toml` (`[package]` with a `name` and a `version`) and its modules under `src/`; every `.osk` file there is a module, `main` is allowed only in `src/main.osk`, and a package without that file is a library, which `run` and `build` refuse. A directory without `oska.toml` is an error (`E0413`). A file inside a package is handled alone, with a hint to run the command on the package. A command line is parsed like this:
+`lex` and `parse` take exactly one source file, and `explain` a code. `check`, `run`, `test`, `build` and `fix` take a source file, a package directory, or nothing, which means the package in the current directory. A package is a directory with an `oska.toml` (`[package]` with a `name` and a `version`) and its modules under `src/`; every `.osk` file there is a module, `main` is allowed only in `src/main.osk`, and a package without that file is a library, which `run` and `build` refuse. A directory without `oska.toml` is an error (`E0413`). A file inside a package is handled alone, with a hint to run the command on the package. A command line is parsed like this:
 
 - A flag may come anywhere before `--`. Anything else is a positional argument.
 - Everything after `--` belongs to the program being run, and only `oskac run` uses it.
@@ -53,6 +58,8 @@ USAGE:
 | `--update-baseline=<file>` | `check` | Write the program's [authority baseline](#authority-baseline) to `<file>`, only when there are no diagnostics. Not with `--baseline`; any other command refuses it as a usage error. |
 | `--integration` | `test` | Also run the tests marked `#[integration]`, on the real operating system. |
 | `--interpret` | `run`, `test` | Run on the interpreter, on aarch64 Linux too, where the program is otherwise compiled and run natively. See [platform support](#platform-support). The other commands accept the flag and ignore it. |
+| `--dry-run` | `fix` | Print the diff the fixes would make, and write nothing. The other commands accept the flag and ignore it. |
+| `--placeholders` | `fix` | Also apply fixes whose applicability is `placeholders`, such as `E0253`'s `todo()` arms. The other commands accept the flag and ignore it. |
 
 ## `oskac lex`
 
@@ -176,6 +183,25 @@ See [debugging](debugging.md) for panics and the [runtime notes](../runtime.md) 
 
 See the [runtime notes](../runtime.md#native-builds) for the codes.
 
+## `oskac fix`
+
+`oskac fix [path] [--dry-run] [--placeholders] [--format=json]` applies the fixes that are safe to apply automatically to a file or package, as `check` takes them. It checks the program, applies the fix of the first diagnostic, in the order `check` reports them, whose applicability is `machine`, checks again, and repeats until no such fix is left. With `--placeholders` it applies `placeholders` fixes too, such as `match` arms whose body is `todo()`, which compile but are left to fill in. It never applies a `maybe` fix or a suggestion. It stops early when a fix leaves its own diagnostic in place, which it then undoes, or after 100 rounds.
+
+The fixes are made in memory. At the end, each changed file is written once, replacing the old file in one step. Nothing is written, and the command says which rule refused it in an `error:` line on standard error, when:
+
+- a fix edits a file that is not one of the checked program's, the file itself or the package's modules and manifest, or its edits overlap or fall outside the file;
+- a file is a symlink, or is reached through one: no file is read or written through a symlink;
+- a file changed on disk while `oskac fix` ran;
+- the fixed program's authority is wider than the starting program's, by the rules of the [authority baseline](#authority-baseline): a function gained a capability, a function stopped being pure, a new function reaches a capability no function did, or an audit site was added. The starting program is compared once every module parses, since a module that does not parse has no authority report.
+
+Human-readable output: one line per applied fix on standard output, as ``app.osk:2:24: fixed E0005: remove `;` ``, then with `--dry-run` a unified diff of each file, and the diagnostics that remain on standard error as `check` prints them.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | No diagnostic remains. |
+| `1` | Diagnostics remain, a file cannot be read, or writing was refused. |
+| `2` | Usage error. |
+
 ## Platform support
 
 | Host | `oskac run`, `oskac test` | `oskac build` |
@@ -253,6 +279,29 @@ A parse error is reported alone, with empty `functions`, `audit` and `attenuatio
 ### `run --format=json`
 
 The program's output is unchanged. Each diagnostic or panic is one JSON object per line on standard error.
+
+### `fix --format=json`
+
+One object on standard output:
+
+```json
+{
+  "applied": [
+    {"code":"E0005","message":"remove `;`","path":"src/main.osk","applicability":"machine"}
+  ],
+  "files": ["src/main.osk"],
+  "diagnostics": [],
+  "rounds": 1,
+  "written": true
+}
+```
+
+- `applied`: the fixes applied, in order, each with its diagnostic's `code`, the fix's `message`, the `path` of the file it edits, and its `applicability`. Empty when writing was refused.
+- `files`: the files written, or that `--dry-run` would write, with paths as `diagnostics` gives them.
+- `diagnostics`: what remains, in the full diagnostic shape: in the fixed program, or in the program on disk when writing was refused.
+- `rounds`: how many fixes were applied and checked, a fix that was undone included.
+- `written`: `true` when the files were written; `false` with `--dry-run`, or when nothing changed or writing was refused.
+- `diff`, only with `--dry-run`: one `{"path","diff"}` object per file in `files`, with its unified diff.
 
 ## Diagnostic codes
 

@@ -20,6 +20,7 @@ macro_rules! outln {
 mod baseline;
 mod build;
 mod explain;
+mod fix;
 mod native;
 mod native_test;
 mod package;
@@ -52,6 +53,11 @@ USAGE:
                                            Check a source file or package and,
                                            if it has no diagnostics, compile it
                                            to an aarch64 Linux executable
+    oskac fix [path] [--dry-run] [--placeholders] [--format=json]
+                                           Apply the machine fixes to a source
+                                           file or package, checking again
+                                           after each, and write each changed
+                                           file once
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
@@ -70,6 +76,11 @@ struct Flags {
     /// `--interpret`: `oskac run` and `oskac test` use the interpreter
     /// on a host with a native backend too (`native.rs`).
     interpret: bool,
+    /// `--dry-run`: `oskac fix` prints the diff it would write, and
+    /// writes nothing.
+    dry_run: bool,
+    /// `--placeholders`: `oskac fix` applies `placeholders` fixes too.
+    placeholders: bool,
 }
 
 /// A command line, parsed: the command and its operands, the flags, the
@@ -114,6 +125,8 @@ impl CommandLine {
                 "--release" => line.flags.release = true,
                 "--integration" => line.flags.integration = true,
                 "--interpret" => line.flags.interpret = true,
+                "--dry-run" => line.flags.dry_run = true,
+                "--placeholders" => line.flags.placeholders = true,
                 format if format.starts_with("--format=") => {
                     line.flags.json = format == "--format=json";
                 }
@@ -193,6 +206,9 @@ fn main() -> ExitCode {
         ["build", rest @ ..] if rest.len() <= 1 && line.program_args.is_empty() => {
             let command = Command::Build(line.output.as_deref());
             on_target(command, rest.first(), flags, &[])
+        }
+        ["fix", rest @ ..] if rest.len() <= 1 && line.program_args.is_empty() => {
+            fix::command(rest.first().copied(), flags)
         }
         ["explain", code] => explain_code(code, flags),
         _ => {
@@ -762,6 +778,8 @@ mod tests {
                 release: false,
                 integration: true,
                 interpret: false,
+                dry_run: false,
+                placeholders: false,
             }
         );
         assert!(line.program_args.is_empty());

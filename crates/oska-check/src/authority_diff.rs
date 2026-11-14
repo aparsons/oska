@@ -563,13 +563,50 @@ impl AuthorityDiff {
     /// audit site outside a test was added, or an added function reaches
     /// a kind no function in the baseline did.
     pub fn fails(&self) -> bool {
-        !self.widened.is_empty()
-            || !self.became_impure.is_empty()
-            || self
-                .new_audit_sites
+        !self.widenings().is_empty()
+    }
+
+    /// Each change that fails the gate, said in a few words, such as
+    /// "`fn q` gains `NetConnect`": empty when there is none. `oskac fix`
+    /// names these when it refuses to write.
+    pub fn widenings(&self) -> Vec<String> {
+        let list = |entries: &[String]| {
+            entries
                 .iter()
-                .any(|(k, _)| !is_test(&k.function))
-            || self.added.iter().any(|a| !a.new_kinds.is_empty())
+                .map(|e| format!("`{e}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let mut out = Vec::new();
+        for c in &self.widened {
+            out.push(format!(
+                "`{}` gains {}",
+                fn_name(&c.function),
+                list(&c.gained)
+            ));
+        }
+        for f in &self.became_impure {
+            out.push(format!("`{}` is no longer pure", fn_name(f)));
+        }
+        for a in self.added.iter().filter(|a| !a.new_kinds.is_empty()) {
+            out.push(format!(
+                "the new `{}` reaches {}, which no function did",
+                fn_name(&a.function.name),
+                list(&a.new_kinds)
+            ));
+        }
+        for (key, more) in &self.new_audit_sites {
+            if is_test(&key.function) {
+                continue;
+            }
+            let sites = if *more == 1 { "site" } else { "sites" };
+            out.push(format!(
+                "{more} new `{}` audit {sites} in `{}`",
+                key.kind,
+                fn_name(&key.function)
+            ));
+        }
+        out
     }
 
     /// Whether nothing changed.
@@ -850,7 +887,120 @@ fn attenuation_counts(items: &[(AttenuationKey, u64)]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::covers;
+    use super::{covers, diff, AuthorityRecord};
+    use crate::{AuditKind, AuditSite, CheckReport, FunctionAuthority};
+    use oska_syntax::Span;
+
+    fn function(name: &str, authority: &[&str]) -> FunctionAuthority {
+        FunctionAuthority {
+            name: name.to_string(),
+            public: false,
+            authority: authority.iter().map(|a| a.to_string()).collect(),
+            via: Vec::new(),
+            pure: authority.is_empty(),
+        }
+    }
+
+    fn report(functions: Vec<FunctionAuthority>, audit: &[(&str, AuditKind)]) -> CheckReport {
+        CheckReport {
+            functions,
+            audit: audit
+                .iter()
+                .map(|(function, kind)| AuditSite {
+                    function: function.to_string(),
+                    kind: *kind,
+                    span: Span::at(0),
+                    location: None,
+                })
+                .collect(),
+            ..CheckReport::default()
+        }
+    }
+
+    fn widenings(before: &CheckReport, after: &CheckReport) -> Vec<String> {
+        diff(&AuthorityRecord::of(before), &AuthorityRecord::of(after))
+            .expect("the names are unique")
+            .widenings()
+    }
+
+    #[test]
+    fn the_same_authority_is_no_widening() {
+        let before = report(vec![function("main", &["Stdout"])], &[]);
+        assert_eq!(widenings(&before, &before.clone()), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_function_that_gains_an_entry_or_becomes_impure_widens() {
+        let before = report(vec![function("main", &["Stdout"]), function("q", &[])], &[]);
+        let after = report(
+            vec![
+                function("main", &["Stdout", "Net"]),
+                function("q", &["Clock"]),
+            ],
+            &[],
+        );
+        assert_eq!(
+            widenings(&before, &after),
+            [
+                "`fn main` gains `Net`",
+                "`fn q` gains `Clock`",
+                "`fn q` is no longer pure"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_new_function_widens_only_with_a_kind_the_program_never_covered() {
+        let before = report(vec![function("main", &["Fs", "Stdout"])], &[]);
+        let after = report(
+            vec![
+                function("main", &["Fs", "Stdout"]),
+                function("helper", &["DirRead"]),
+                function("fetch", &["Net"]),
+            ],
+            &[],
+        );
+        assert_eq!(
+            widenings(&before, &after),
+            ["the new `fn fetch` reaches `Net`, which no function did"]
+        );
+    }
+
+    #[test]
+    fn narrowing_and_removal_are_not_widenings() {
+        let before = report(
+            vec![function("main", &["Stdout", "Fs"]), function("old", &[])],
+            &[],
+        );
+        let after = report(vec![function("main", &["Stdout", "DirRead"])], &[]);
+        assert_eq!(widenings(&before, &after), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_new_audit_site_widens_outside_a_test_and_a_removed_one_does_not() {
+        let one = report(vec![], &[("f", AuditKind::TrustAssertion)]);
+        let two = report(
+            vec![],
+            &[
+                ("f", AuditKind::TrustAssertion),
+                ("f", AuditKind::TrustAssertion),
+                ("test \"t\"", AuditKind::SecretExposure),
+            ],
+        );
+        assert_eq!(
+            widenings(&one, &two),
+            ["1 new `assume_trusted` audit site in `fn f`"]
+        );
+        assert_eq!(widenings(&two, &one), Vec::<String>::new());
+    }
+
+    #[test]
+    fn duplicate_names_are_an_error() {
+        let twice = report(vec![function("f", &[]), function("f", &["Net"])], &[]);
+        let once = report(vec![function("f", &[])], &[]);
+        assert!(diff(&AuthorityRecord::of(&once), &AuthorityRecord::of(&twice)).is_err());
+        assert!(diff(&AuthorityRecord::of(&twice), &AuthorityRecord::of(&once)).is_err());
+    }
 
     #[test]
     fn coverage_follows_attenuation_transitively() {
