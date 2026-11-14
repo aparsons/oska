@@ -33,6 +33,9 @@ USAGE:
                                            after each, and write each changed
                                            file once
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
+    oskac hook claude --event=post-edit    Check what Claude Code just edited,
+                                           reading its hook input on standard
+                                           input; exit 2 hands diagnostics back
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ```
@@ -52,6 +55,7 @@ USAGE:
 | `--format=json` | every command | Machine-readable output. See [output formats](#output-formats). |
 | `--release` | `check` | Reject `dbg(...)` (`E0216`) and `todo()` (`E0293`). The other commands accept the flag and ignore it. |
 | `--integration` | `test` | Also run the tests marked `#[integration]`, on the real operating system. |
+| `--event=post-edit` | `hook` | The event the hook handles. It is required; `post-edit` is the only event so far. |
 | `--interpret` | `run`, `test` | Run on the interpreter, on aarch64 Linux too, where the program is otherwise compiled and run natively. See [platform support](#platform-support). The other commands accept the flag and ignore it. |
 | `--dry-run` | `fix` | Print the diff the fixes would make, and write nothing. The other commands accept the flag and ignore it. |
 | `--placeholders` | `fix` | Also apply fixes whose applicability is `placeholders`, such as `E0253`'s `todo()` arms. The other commands accept the flag and ignore it. |
@@ -154,6 +158,20 @@ Human-readable output: one line per applied fix on standard output, as ``app.osk
 | `0` | No diagnostic remains. |
 | `1` | Diagnostics remain, a file cannot be read, or writing was refused. |
 | `2` | Usage error. |
+
+## `oskac hook`
+
+`oskac hook claude --event=post-edit` is the check-on-edit hook for Claude Code, so that the hook runs the same on Linux, macOS and Windows with no shell script. Claude Code's settings call it after an edit, and it reads the hook's JSON from standard input: `tool_input.file_path`, and `cwd` to resolve a relative path.
+
+- For a `.osk` file or an `oska.toml`, it checks what `oskac` finds for the file as `check` does, without `--release`: a module of a package is checked with its package, and any other file alone. Any other file is ignored, with no check.
+- With no diagnostic it prints nothing. With diagnostics it writes to standard error one line each, `path:line:column: error[CODE]: message`, at most 20, then `and N more`, then, when some have a `machine` fix, how many and the `oskac fix` command that applies them. Paths are written from `cwd`.
+- It reads its input and the program's files, writes no file, starts no program and opens no network connection.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Nothing to report. |
+| `2` | Diagnostics, handed back to the agent: Claude Code shows standard error to it. |
+| `1` | Malformed input, an unreadable file, or an unknown event: one `error:` line. Claude Code treats `1` as non-blocking. |
 
 ## Platform support
 

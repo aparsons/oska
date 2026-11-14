@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/oska-check.sh\""
+            "command": "oskac hook claude --event=post-edit"
           }
         ]
       }

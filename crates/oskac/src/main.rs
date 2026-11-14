@@ -21,6 +21,7 @@ mod authority_diff;
 mod build;
 mod explain;
 mod fix;
+mod hook;
 mod native;
 mod native_test;
 mod package;
@@ -56,6 +57,9 @@ USAGE:
                                            after each, and write each changed
                                            file once
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
+    oskac hook claude --event=post-edit    Check what Claude Code just edited,
+                                           reading its hook input on standard
+                                           input; exit 2 hands diagnostics back
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ";
@@ -88,6 +92,8 @@ struct CommandLine {
     positional: Vec<String>,
     flags: Flags,
     output: Option<String>,
+    /// The name `--event=` gives, for `oskac hook`.
+    event: Option<String>,
     program_args: Vec<String>,
 }
 
@@ -120,6 +126,9 @@ impl CommandLine {
                 "--interpret" => line.flags.interpret = true,
                 "--dry-run" => line.flags.dry_run = true,
                 "--placeholders" => line.flags.placeholders = true,
+                event if event.starts_with("--event=") => {
+                    line.event = Some(event["--event=".len()..].to_string());
+                }
                 format if format.starts_with("--format=") => {
                     line.flags.json = format == "--format=json";
                 }
@@ -169,6 +178,7 @@ fn main() -> ExitCode {
             fix::command(rest.first().copied(), flags)
         }
         ["explain", code] => explain_code(code, flags),
+        ["hook", "claude"] if line.program_args.is_empty() => hook::run(line.event.as_deref()),
         _ => {
             eprint!("{USAGE}");
             ExitCode::from(2)
