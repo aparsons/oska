@@ -1,0 +1,26 @@
+$ oskac fix demo
+exit: 1
+--- stdout
+demo/src/main.osk:4:29: fixed E0005: remove `;`
+demo/src/main.osk:1:15: fixed E0206: mark `shout` `pub(pkg)`
+--- stderr
+demo/src/extra.osk:1:1: error[E0411]: `src/extra.osk` is a symlink: a package's `oska.toml` and its source must be regular files and directories in its own tree (bytes 0..0)
+--- file demo/oska.toml
+[package]
+name = "demo"
+version = "0.1.0"
+--- file demo/src/main.osk
+use pkg.util.{shout}
+
+fn main(out: Stdout) -> Result<(), IoError> {
+    out.println(shout("hi"))
+}
+--- file demo/src/util.osk
+pub(pkg) fn shout(s: String) -> String {
+    "{s}!"
+}
+--- file outside/extra.osk
+fn main(out: Stdout) -> Result<(), IoError> {
+    let greeting = "hi";
+    out.println(greeting);
+}

@@ -1,0 +1,10 @@
+$ oskac fix link.osk
+exit: 1
+--- stdout
+--- stderr
+error: refusing to fix `link.osk`: it is a symlink, and `oskac fix` never writes through one; nothing was written
+--- file real/app.osk
+fn main(out: Stdout) -> Result<(), IoError> {
+    let greeting = "hi";
+    out.println(greeting);
+}

@@ -1,0 +1,10 @@
+$ oskac fix shout.osk
+exit: 1
+--- stdout
+--- stderr
+shout.osk:1:13: error[E0200]: unknown type `Strng`; did you mean `String`? (bytes 12..17)
+    fix (maybe): replace with `String`
+--- file shout.osk
+fn shout(s: Strng) -> String {
+    "{s}!"
+}
