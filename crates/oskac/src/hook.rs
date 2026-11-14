@@ -13,23 +13,28 @@
 //! gives the agent no new authority.
 //!
 //! The exit status is 0 for nothing to report, 2 to hand feedback back
-//! (Claude Code shows standard error to the agent), and 1 with one line
-//! for malformed input, an unreadable file or an unknown event: Claude
-//! Code treats 1 as non-blocking, so a broken hook never wedges an agent.
+//! (Claude Code shows standard error to the agent; for the Stop gate, 2
+//! also blocks the agent from finishing), and 1 with one line for
+//! malformed input, an unreadable file or an unknown event: Claude Code
+//! treats 1 as non-blocking, so a broken hook never wedges an agent.
 
 mod claude;
 mod post_edit;
+mod stop;
+mod target;
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// The events a hook is called for. A new event adds a variant, its
-/// logic beside [`post_edit`], and an arm in [`run`].
+/// logic beside [`post_edit`] and [`stop`], and an arm in [`run`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Event {
     /// After the agent edited a file.
     PostEdit,
+    /// When the agent tries to finish.
+    Stop,
 }
 
 impl Event {
@@ -37,6 +42,7 @@ impl Event {
     fn named(name: &str) -> Option<Event> {
         match name {
             "post-edit" => Some(Event::PostEdit),
+            "stop" => Some(Event::Stop),
             _ => None,
         }
     }
@@ -51,12 +57,23 @@ struct Edit {
     cwd: Option<PathBuf>,
 }
 
-/// What a hook does in the end: the text for standard error and the exit
-/// status.
+/// The project an agent is finishing work in, as any agent's hook input
+/// says it: its directory, which named targets are paths from and the
+/// paths printed are written from. Without one, the hook's own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Finish {
+    cwd: Option<PathBuf>,
+}
+
+/// What a hook does in the end: the text for standard error, the exit
+/// status, and a note for the user, which the agent is not shown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Verdict {
     stderr: String,
     status: u8,
+    /// A note for the user, on a hook that ends with 0: the agent's
+    /// adapter says it where the user, and not the agent, reads it.
+    notice: Option<String>,
 }
 
 impl Verdict {
@@ -65,48 +82,63 @@ impl Verdict {
         Verdict {
             stderr: String::new(),
             status: 0,
+            notice: None,
+        }
+    }
+
+    /// Nothing for the agent, and a note for the user.
+    fn noting(notice: String) -> Verdict {
+        Verdict {
+            notice: Some(notice),
+            ..Verdict::quiet()
         }
     }
 
     /// Feedback for the agent: Claude Code shows it, and for a Stop hook
     /// it blocks.
     fn feedback(stderr: String) -> Verdict {
-        Verdict { stderr, status: 2 }
+        Verdict {
+            stderr,
+            status: 2,
+            notice: None,
+        }
     }
 
     /// The hook could not do its work: one line, and a status that blocks
     /// nothing.
     fn failed(reason: &str) -> Verdict {
-        let one_line: String = reason
-            .chars()
-            .map(|c| if c.is_control() { ' ' } else { c })
-            .collect();
         Verdict {
-            stderr: format!("error: {one_line}\n"),
+            stderr: format!("error: {}\n", target::one_line(reason)),
             status: 1,
+            notice: None,
         }
     }
 }
 
-/// `oskac hook claude --event=<event>`: read Claude Code's hook JSON from
-/// standard input, decide, and print what the verdict says to standard
-/// error.
-pub fn run(event: Option<&str>) -> ExitCode {
+/// `oskac hook claude --event=<event> [targets...]`: read Claude Code's
+/// hook JSON from standard input, decide, and print what the verdict says:
+/// its text to standard error, and its note for the user to standard
+/// output. Only the Stop gate takes `targets`.
+pub fn run(event: Option<&str>, targets: &[&str]) -> ExitCode {
     let verdict = match event {
-        None => Verdict::failed("`oskac hook claude` needs --event=post-edit"),
+        None => Verdict::failed("`oskac hook claude` needs --event=post-edit or --event=stop"),
         Some(name) => match Event::named(name) {
-            Some(event) => on_event(event),
+            Some(Event::PostEdit) if !targets.is_empty() => {
+                Verdict::failed("--event=post-edit takes no targets")
+            }
+            Some(event) => on_event(event, targets),
             None => Verdict::failed(&format!(
-                "unknown hook event `{name}`; the event is post-edit"
+                "unknown hook event `{name}`; the events are post-edit and stop"
             )),
         },
     };
-    // A closed standard error leaves nothing to say it to.
+    // A closed standard error or output leaves nothing to say it to.
     let _ = std::io::stderr().write_all(verdict.stderr.as_bytes());
+    let _ = std::io::stdout().write_all(claude::output(&verdict).as_bytes());
     ExitCode::from(verdict.status)
 }
 
-fn on_event(event: Event) -> Verdict {
+fn on_event(event: Event, targets: &[&str]) -> Verdict {
     let input = match read_input() {
         Ok(input) => input,
         Err(reason) => return Verdict::failed(&reason),
@@ -114,6 +146,10 @@ fn on_event(event: Event) -> Verdict {
     match event {
         Event::PostEdit => match claude::post_edit_input(&input) {
             Ok(edit) => post_edit::verdict_for(&edit),
+            Err(reason) => Verdict::failed(&reason),
+        },
+        Event::Stop => match claude::stop_input(&input) {
+            Ok(finish) => stop::verdict_for(&finish, targets),
             Err(reason) => Verdict::failed(&reason),
         },
     }

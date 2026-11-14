@@ -39,6 +39,10 @@ USAGE:
     oskac hook claude --event=post-edit    Check what Claude Code just edited,
                                            reading its hook input on standard
                                            input; exit 2 hands diagnostics back
+    oskac hook claude --event=stop [targets...]
+                                           Run the release check and the tests
+                                           before Claude Code may finish; exit
+                                           2 blocks it with what failed
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ```
@@ -60,7 +64,7 @@ USAGE:
 | `--baseline=<file>` | `check` | Compare the program's authority with the [authority baseline](#authority-baseline) in `<file>`, and exit with 3 when it widened. Any other command refuses it as a usage error. |
 | `--update-baseline=<file>` | `check` | Write the program's [authority baseline](#authority-baseline) to `<file>`, only when there are no diagnostics. Not with `--baseline`; any other command refuses it as a usage error. |
 | `--integration` | `test` | Also run the tests marked `#[integration]`, on the real operating system. |
-| `--event=post-edit` | `hook` | The event the hook handles. It is required; `post-edit` is the only event so far. |
+| `--event=post-edit`, `--event=stop` | `hook` | The event the hook handles. It is required. |
 | `--interpret` | `run`, `test` | Run on the interpreter, on aarch64 Linux too, where the program is otherwise compiled and run natively. See [platform support](#platform-support). The other commands accept the flag and ignore it. |
 | `--dry-run` | `fix` | Print the diff the fixes would make, and write nothing. The other commands accept the flag and ignore it. |
 | `--placeholders` | `fix` | Also apply fixes whose applicability is `placeholders`, such as `E0253`'s `todo()` arms. The other commands accept the flag and ignore it. |
@@ -214,10 +218,18 @@ Human-readable output: one line per applied fix on standard output, as ``app.osk
 - With no diagnostic it prints nothing. With diagnostics it writes to standard error one line each, `path:line:column: error[CODE]: message`, at most 20, then `and N more`, then, when some have a `machine` fix, how many and the `oskac fix` command that applies them. Paths are written from `cwd`.
 - It reads its input and the program's files, writes no file, starts no program and opens no network connection.
 
+`oskac hook claude --event=stop [targets...]` is the Stop gate: Claude Code's settings call it when the agent tries to finish, and the agent cannot finish while the release check or a test fails. It reads `cwd` from the hook's JSON.
+
+- The targets are the ones named, each a path from `cwd`, such as a package directory or a `.osk` file. With none, it takes the package in `cwd` if that is one; otherwise every package, and every `.osk` file outside a package's `src/`, beneath `cwd`, skipping hidden directories and following no symlink. Name the targets in the hook's settings when a project holds `.osk` files that are broken on purpose.
+- For each target it runs `oskac check --release` and, when that is clean, `oskac test` without `--integration`, on the interpreter and in-process: a test gets only stand-in capabilities, so the gate never touches the real file system, clock or network.
+- With any diagnostic or failed test it writes to standard error one line each (`path:line:column: error[CODE]: message`, and `test <name>: path:line:column: error[CODE]: message` for a test), at most 20 of each per target, then `and N more`, and exits with 2. It blocks on every attempt to finish.
+- A test run that the interpreter refuses (`oskac test` exits with 2: the program uses something the interpreter cannot run yet) does not block. The gate exits with 0 and tells the user, in a `systemMessage` on standard output, and the agent is told nothing.
+- The settings give it a `timeout` in seconds, so that a slow suite cannot stall every turn.
+
 | Exit code | Meaning |
 | --- | --- |
-| `0` | Nothing to report. |
-| `2` | Diagnostics, handed back to the agent: Claude Code shows standard error to it. |
+| `0` | Nothing to report. For the Stop gate, also a test run the interpreter cannot run yet, told to the user only. |
+| `2` | Diagnostics, handed back to the agent: Claude Code shows standard error to it. For the Stop gate, it blocks the agent from finishing. |
 | `1` | Malformed input, an unreadable file, or an unknown event: one `error:` line. Claude Code treats `1` as non-blocking. |
 
 ## Platform support
