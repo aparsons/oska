@@ -409,7 +409,15 @@ pub fn from_here(dir: &str, path: &str) -> String {
     }
     // `/` on every platform: `path` already uses `/`, and joining with
     // the platform separator would print `forge\src/main.osk` on Windows.
+    // A directory found by walking (the Stop gate's discovery) is joined
+    // with `\` on Windows, so it is turned to `/` there too; on Unix `\`
+    // is an ordinary file-name character and stays.
     let dir = dir.to_string_lossy();
+    let dir = if cfg!(windows) {
+        dir.replace('\\', "/")
+    } else {
+        dir.into_owned()
+    };
     format!("{}/{path}", dir.trim_end_matches(['/', '\\']))
 }
 
