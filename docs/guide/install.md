@@ -43,11 +43,12 @@ What the installers do:
 - **They never prompt.** They are safe to run from a script, a CI job, or an AI agent.
 - **They install to `~/.oska/bin`.** Set `OSKA_HOME` to install into `$OSKA_HOME/bin` instead. They don't change your `PATH`; if `~/.oska/bin` is not on it, they print the line to add.
 - **They verify before they install.** The installer checks the SSH signature on `SHA256SUMS` (`ssh-keygen -Y verify`, so it needs OpenSSH 8.1 or newer) against the release key built into the installer. The signed file's first line, `# oska-release v0.3.0`, names the release, and it must be the one the installer asked for, so an old release cannot be served as a newer one. Then the installer checks the download's SHA-256 checksum against `SHA256SUMS`, and checks that the binary reports the expected version. If any check fails, nothing is installed and the installer exits with a non-zero status.
+- **They take the latest release from a signed index.** Without `--version`, the installer reads `release-index.json`, which names the latest release and is signed by the release key in its own namespace, `oska-index`. It refuses an index that is not signed by that key (`bad_index`), one that has expired (`stale_index`), and one older than the last index this install accepted (`rollback_refused`). It warns when the index expires within 30 days. `--version` does not read the index. Until the site publishes its first index, the installer reads the unsigned `latest.json` instead and reports `index_verified: false`.
 - **They download over HTTPS only.** They refuse a redirect to a plain `http://` URL.
 - **They never downgrade by accident.** If the release they would install is older than the installed `oskac`, they stop with `downgrade_refused` and install nothing. To go back to an older release, name it with `--version` and add `--allow-downgrade`.
 - **They record what they installed.** See [the install receipt](#the-install-receipt).
 - **They clean up after themselves.** If an install is interrupted, for example with Ctrl-C or because a CI job is cancelled, the installer removes its temporary and staging files before it exits.
-- **They take `--version`, `--allow-downgrade`, `--uninstall` and `--json`.** `--version` installs that release instead of the latest. `--allow-downgrade`, which needs `--version`, lets that release be older than the installed one. `--uninstall` removes what the installer installed (see [Uninstall](#uninstall)). `--json` prints one line of JSON on stdout and nothing else.
+- **They take `--version`, `--allow-downgrade`, `--check`, `--uninstall` and `--json`.** `--version` installs that release instead of the latest. `--allow-downgrade`, which needs `--version`, lets that release be older than the installed one. `--check` reports the installed and the latest version and installs nothing (see [Check for an update](#check-for-an-update)). `--uninstall` removes what the installer installed (see [Uninstall](#uninstall)). `--json` prints one line of JSON on stdout and nothing else.
 
 To pass options through the pipe:
 
@@ -64,7 +65,7 @@ curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.3.0 --json
 A successful `--json` run prints:
 
 ```json
-{"ok": true, "action": "installed", "version": "0.3.0", "tag": "v0.3.0", "previous_version": null, "platform": "linux-x86_64", "path": "/home/you/.oska/bin/oskac", "bin_dir": "/home/you/.oska/bin", "on_path": false, "checksum_verified": true, "signature_verified": true, "receipt": "/home/you/.oska/receipt.json"}
+{"ok": true, "action": "installed", "version": "0.3.0", "tag": "v0.3.0", "previous_version": null, "platform": "linux-x86_64", "path": "/home/you/.oska/bin/oskac", "bin_dir": "/home/you/.oska/bin", "on_path": false, "checksum_verified": true, "signature_verified": true, "receipt": "/home/you/.oska/receipt.json", "index_verified": true, "index_serial": 4}
 ```
 
 - `action` is one of:
@@ -75,6 +76,7 @@ A successful `--json` run prints:
 
   Versions are compared by [semver](https://semver.org) precedence, so `0.4.0-pre.1` is lower than `0.4.0` and higher than `0.3.0`.
 - `receipt` is the path of the [install receipt](#the-install-receipt).
+- `index_verified` is `true` when the release came from the verified, signed index, and `index_serial` is that index's serial. With `--version`, or before the site publishes an index, they are `false` and `null`.
 - `platform` is one of `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`, or `windows-x86_64`.
 - On Windows, `path` ends in `oskac.exe`.
 
@@ -93,6 +95,9 @@ A failed run prints `{"ok": false, "error": "<code>", "message": "..."}` and exi
 | `checksum_mismatch` | The binary does not match `SHA256SUMS`. |
 | `version_mismatch` | The signed `SHA256SUMS` is for another release than the one asked for, or the binary reports another version. |
 | `downgrade_refused` | The release to install is older than the installed `oskac`, and the run did not ask for a downgrade with both `--version` and `--allow-downgrade`. Nothing was installed. |
+| `bad_index` | The release index is not signed by the release key in the `oska-index` namespace, has no signature, or is not in the index format. |
+| `stale_index` | The release index has expired. A named release still installs with `--version`. |
+| `rollback_refused` | The release index's serial is lower than the one this install already accepted, recorded in the receipt. |
 | `install_failed` | The binary or the receipt could not be written into place. |
 | `not_installed` | `--uninstall` found no install receipt in the Oska home. Nothing was removed. |
 | `unsafe_path` | `--uninstall` found a receipt entry outside the places the installer writes, reached through a symlink, or containing `..`, or a receipt it cannot read. Nothing was removed. |
@@ -128,7 +133,7 @@ Each install writes `receipt.json` into the Oska home (`~/.oska`, or `OSKA_HOME`
 - `files` lists every file the installer wrote, with its SHA-256 where the content is the installer's own.
 - The installer also still writes the one-line `version` file, for one more release, so that tools that read it keep working.
 
-The receipt is advisory. The installer never trusts it to verify anything: every install checks the signature, the signed tag line, the checksum and the binary's version, whatever the receipt says. It only decides which version counts as installed, for the downgrade guard and `previous_version`, and what `--uninstall` may remove. When a receipt and a `version` file disagree, the receipt wins.
+The receipt is advisory. The installer never trusts it to verify anything: every install checks the signature, the signed tag line, the checksum and the binary's version, whatever the receipt says. It only decides which version counts as installed, for the downgrade guard and `previous_version`, what `--uninstall` may remove, and records in `index_serial` the highest release index serial accepted, so that an older index is refused. When a receipt and a `version` file disagree, the receipt wins.
 
 ### Verify the installation
 
@@ -147,6 +152,22 @@ curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.2.0 --allow-do
 ```
 
 There is no self-update command.
+
+### Check for an update
+
+`--check` reports the installed and the latest version, and installs and writes nothing:
+
+```sh
+curl -fsSL https://oskalang.dev/install.sh | sh -s -- --check --json
+```
+
+```json
+{"ok": true, "action": "checked", "installed": "0.3.0", "latest": "0.4.0", "tag": "v0.4.0", "update_available": true, "index_verified": true, "index_serial": 4, "index_expires": "2027-02-11T10:00:00Z"}
+```
+
+- `installed` is `null` when no `oskac` is installed.
+- `update_available` is `true` when the latest release is newer than the installed one, or nothing is installed. It exits 0 either way.
+- It takes the latest release from the signed index, with the same checks as an install, so it fails with `bad_index`, `stale_index` or `rollback_refused` as an install would. Before the site publishes an index, it reads `latest.json`, and `index_verified`, `index_serial` and `index_expires` are `false`, `null` and `null`.
 
 ### Uninstall
 

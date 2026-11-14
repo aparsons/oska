@@ -8,13 +8,18 @@
 #      tag (`# oska-release vX.Y.Z`);
 #   3. signs SHA256SUMS with the RELEASE_SIGNING_KEY secret
 #      (`ssh-keygen -Y sign -n oska-release`) and verifies the result against
-#      site/oska-release.pub;
-#   4. stores the files in a GitHub Release. Users install from oskalang.dev,
-#      whose installers verify the signature; the GitHub Release is the
-#      source the Pages workflow fetches from;
+#      site/oska-release.pub; then, with the same key, signs the next
+#      release index (scripts/release/sign-index.sh, namespace oska-index):
+#      the serial after the one https://oskalang.dev publishes, naming the
+#      newest stable release, expiring in 90 days;
+#   4. stores the files, and the index beside them, in a GitHub Release.
+#      Users install from oskalang.dev, whose installers verify the
+#      signatures; the GitHub Release is the source the Pages workflow
+#      fetches from;
 #   5. starts the Pages workflow on main, which fetches every release,
 #      verifies it again and publishes it at
-#      https://oskalang.dev/releases/vX.Y.Z/ with /latest.json.
+#      https://oskalang.dev/releases/vX.Y.Z/ with /latest.json, and
+#      publishes the highest-serial index as /release-index.json.
 #
 # A pull request is a dry run: the same builds, signed with a throwaway key,
 # verified and staged into a scratch site. Nothing is published, and it
@@ -168,12 +173,18 @@ jobs:
             >"$RUNNER_TEMP/allowed_signers"
           ssh-keygen -Y verify -f "$RUNNER_TEMP/allowed_signers" -I oska-release \
             -n oska-release -s "$dry/$TAG/SHA256SUMS.sig" <"$dry/$TAG/SHA256SUMS"
+          # As if no index were published yet: the live one is signed by
+          # the real key, which this run never sees.
+          scripts/release/sign-index.sh --tag "$TAG" "$key" "$key.pub" \
+            "file://$RUNNER_TEMP/no-site" "$dry/$TAG"
           mkdir "$RUNNER_TEMP/site"
           scripts/release/stage-site.sh "$dry" "$RUNNER_TEMP/site" "$key.pub"
           find "$RUNNER_TEMP/site" -type f | sort
-          if [ -f "$RUNNER_TEMP/site/latest.json" ]; then
-            jq . "$RUNNER_TEMP/site/latest.json"
-          fi
+          for f in latest.json release-index.json; do
+            if [ -f "$RUNNER_TEMP/site/$f" ]; then
+              jq . "$RUNNER_TEMP/site/$f"
+            fi
+          done
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'push'
         with:
@@ -215,6 +226,10 @@ jobs:
           trap 'rm -f "$key"' EXIT
           (umask 077 && printf '%s\n' "$RELEASE_SIGNING_KEY" >"$key")
           scripts/release/sign.sh "release/$TAG" "$key" site/oska-release.pub
+          # After sign.sh, whose check allows no file SHA256SUMS does not
+          # list. stage-site.sh takes the index out of the release again.
+          scripts/release/sign-index.sh --tag "$TAG" "$key" site/oska-release.pub \
+            https://oskalang.dev "release/$TAG"
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ needs.assemble.outputs.tag }}

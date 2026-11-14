@@ -174,7 +174,9 @@ test_installs_the_latest_release_and_reports_it_as_json() {
   "on_path": false,
   "checksum_verified": true,
   "signature_verified": true,
-  "receipt": "$PWD/home/.oska/receipt.json"
+  "receipt": "$PWD/home/.oska/receipt.json",
+  "index_verified": false,
+  "index_serial": null
 }
 JSON
   diff <(jq -S . expected.json) <(jq -S . out.json) || fail "JSON output differs"
@@ -930,6 +932,211 @@ test_uninstall_hints_at_the_path_and_explains_itself() {
   install --json >/dev/null
   PATH="$bin:$PATH" install --json --uninstall >out.json
   jq -r .path_hint out.json | grep -q "$bin is on your PATH" || fail "path_hint is $(jq .path_hint out.json)"
+}
+
+# ---- The signed release index and --check ------------------------------------
+
+# An RFC 3339 UTC time <days> days from now (negative: in the past).
+days_from_now() {
+  perl -MPOSIX -e 'print strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time + $ARGV[0] * 86400))' -- "$1"
+}
+
+# Publishes ./site/release-index.json naming release <version>, with serial
+# <serial>, expiring in <days> days (default 60), signed in <namespace>
+# (default oska-index) by <key> (default ./key), as
+# scripts/release/sign-index.sh writes it.
+index() {
+  local serial=$1 version=$2 days=${3:-60} namespace=${4:-oska-index} by=${5:-key}
+  release_key
+  mkdir -p site
+  cat >site/release-index.json <<JSON
+{
+  "schema": 1,
+  "serial": $serial,
+  "issued": "$(days_from_now -30)",
+  "expires": "$(days_from_now "$days")",
+  "latest": {
+    "tag": "v$version",
+    "version": "$version"
+  }
+}
+JSON
+  rm -f site/release-index.json.sig
+  ssh-keygen -q -Y sign -f "$by" -n "$namespace" site/release-index.json
+}
+
+# Pins the installers in ./pinned to ./key.pub and to require the index, as
+# stage-site.sh does once it publishes one.
+require_index() {
+  release_key
+  rm -rf pinned
+  "$here/pin.sh" key.pub pinned --require-index
+}
+
+# Releases 1.2.3 and 1.3.0, with latest.json still naming 1.2.3 and a
+# signed index (serial 7) naming 1.3.0.
+index_names_1_3_0() {
+  release 1.2.3
+  release 1.3.0
+  latest 1.2.3
+  index 7 1.3.0
+  require_index
+}
+
+test_installs_the_latest_release_the_signed_index_names() {
+  index_names_1_3_0
+  install --json >out.json
+  [ "$("$(installed)" --version)" = "oskac 1.3.0" ] || fail "did not install the index's 1.3.0"
+  [ "$(jq -r .version out.json)" = 1.3.0 ] || fail "version is $(jq -r .version out.json)"
+  [ "$(jq -r .index_verified out.json)" = true ] || fail "index_verified is not true"
+  [ "$(jq -r .index_serial out.json)" = 7 ] || fail "index_serial is $(jq -r .index_serial out.json)"
+  [ "$(jq -r .index_serial home/.oska/receipt.json)" = 7 ] || fail "the receipt does not record serial 7"
+}
+
+test_an_installer_not_pinned_to_require_the_index_reads_latest_json() {
+  index_names_1_3_0
+  rm -rf pinned
+  install --json >out.json
+  [ "$(jq -r .version out.json)" = 1.2.3 ] || fail "version is $(jq -r .version out.json)"
+  [ "$(jq -r .index_verified out.json)" = false ] || fail "index_verified is not false"
+  [ "$(jq -r .index_serial out.json)" = null ] || fail "index_serial is not null"
+}
+
+test_refuses_an_index_that_is_not_signed_by_the_release_key_as_an_index() {
+  index_names_1_3_0
+  install --json --version 1.2.3 >/dev/null
+  ssh-keygen -q -t ed25519 -N '' -C attacker -f attacker
+  local case
+  for case in unsigned another_key release_namespace not_an_index; do
+    index 7 1.3.0
+    case $case in
+      unsigned) rm site/release-index.json.sig ;;
+      another_key) index 7 1.3.0 60 oska-index attacker ;;
+      release_namespace) index 7 1.3.0 60 oska-release ;;
+      not_an_index)
+        printf '{"schema": 1, "serial": "seven", "latest": {"tag": "v1.3.0"}}\n' >site/release-index.json
+        rm site/release-index.json.sig
+        ssh-keygen -q -Y sign -f key -n oska-index site/release-index.json ;;
+    esac
+    assert_refused_unchanged bad_index 1 || fail "$case was not refused"
+    [ "$("$(installed)" --version)" = "oskac 1.2.3" ] || fail "$case: the installed oskac changed"
+  done
+}
+
+test_refuses_an_expired_index() {
+  index_names_1_3_0
+  install --json --version 1.2.3 >/dev/null
+  index 7 1.3.0 -1
+  assert_refused_unchanged stale_index 1
+  jq -r .message out.json | grep -q -- '--version' || fail "message does not point at --version"
+}
+
+test_refuses_an_index_with_a_lower_serial_than_one_already_accepted() {
+  index_names_1_3_0
+  install --json >/dev/null
+  # A genuine, unexpired, older index: the rollback (and freeze) attack.
+  index 6 1.2.3
+  assert_refused_unchanged rollback_refused 1
+  jq -r .message out.json | grep -q '6.*7' || fail "message does not name both serials: $(jq -r .message out.json)"
+  # The same serial again is fine.
+  index 7 1.3.0
+  install --json >out.json
+  [ "$(jq -r .action out.json)" = reinstalled ] || fail "serial 7 again is $(jq -r .action out.json)"
+}
+
+test_refuses_a_missing_index_when_it_is_required() {
+  index_names_1_3_0
+  rm site/release-index.json
+  install --json >out.json && fail "installed without the index"
+  [ "$(jq -r .error out.json)" = download_failed ] || fail "error is $(jq -r .error out.json)"
+  [ ! -e home/.oska ] || fail "created ~/.oska"
+}
+
+test_warns_when_fewer_than_30_days_remain_on_the_index() {
+  index_names_1_3_0
+  index 7 1.3.0 29
+  install --json >out.json 2>err.txt
+  [ "$(jq -r .version out.json)" = 1.3.0 ] || fail "did not install 1.3.0"
+  grep -q 'warning: .*release index expires' err.txt || fail "no warning: $(cat err.txt)"
+  index 7 1.3.0 31
+  install --json >out.json 2>err.txt
+  if grep -q warning err.txt; then fail "warned with 31 days left: $(cat err.txt)"; fi
+}
+
+# --version installs from the signed SHA256SUMS alone: an expired index
+# does not stop it, and the serial the receipt holds is kept.
+test_version_ignores_the_index_and_keeps_the_serial_seen() {
+  index_names_1_3_0
+  install --json >/dev/null
+  index 7 1.3.0 -1
+  install --json --allow-downgrade --version 1.2.3 >out.json || fail "refused: $(cat out.json)"
+  [ "$(jq -r .action out.json)" = downgraded ] || fail "action is $(jq -r .action out.json)"
+  [ "$(jq -r .index_verified out.json)" = false ] || fail "index_verified is not false"
+  [ "$(jq -r .index_serial home/.oska/receipt.json)" = 7 ] || fail "the receipt lost serial 7"
+}
+
+test_check_reports_an_update_and_writes_nothing() {
+  index_names_1_3_0
+  install --json --version 1.2.3 >/dev/null
+  snapshot >before.txt
+  install --json --check >out.json
+  snapshot >after.txt
+  diff before.txt after.txt || fail "--check changed the home"
+  cat >expected.json <<JSON
+{
+  "ok": true,
+  "action": "checked",
+  "installed": "1.2.3",
+  "latest": "1.3.0",
+  "tag": "v1.3.0",
+  "update_available": true,
+  "index_verified": true,
+  "index_serial": 7,
+  "index_expires": "$(jq -r .expires site/release-index.json)"
+}
+JSON
+  diff <(jq -S . expected.json) <(jq -S . out.json) || fail "JSON output differs"
+  [ "$(wc -l <out.json | tr -d ' ')" = 1 ] || fail "JSON output is not one line"
+  install --check >out.txt
+  grep -q 'oskac 1.2.3 is installed' out.txt || fail "no human summary: $(cat out.txt)"
+  grep -q '1.3.0' out.txt || fail "does not name 1.3.0: $(cat out.txt)"
+}
+
+test_check_reports_when_up_to_date_or_not_installed() {
+  index_names_1_3_0
+  install --json --check >out.json
+  [ "$(jq -r .installed out.json)" = null ] || fail "installed is not null"
+  [ "$(jq -r .update_available out.json)" = true ] || fail "nothing installed: update_available is not true"
+  [ ! -e home/.oska ] || fail "--check created ~/.oska"
+  install --json >/dev/null
+  install --json --check >out.json
+  [ "$(jq -r .installed out.json)" = 1.3.0 ] || fail "installed is $(jq -r .installed out.json)"
+  [ "$(jq -r .update_available out.json)" = false ] || fail "up to date: update_available is not false"
+  release 1.4.0-pre.1
+  install --json --version 1.4.0-pre.1 >/dev/null
+  install --json --check >out.json
+  [ "$(jq -r .update_available out.json)" = false ] || fail "a newer pre-release: update_available is not false"
+}
+
+test_check_refuses_an_index_it_cannot_trust() {
+  index_names_1_3_0
+  install --json >/dev/null
+  index 7 1.3.0 -1
+  assert_refused_unchanged stale_index 1 --check
+  index 6 1.3.0
+  assert_refused_unchanged rollback_refused 1 --check
+  index 7 1.3.0 60 oska-release
+  assert_refused_unchanged bad_index 1 --check
+}
+
+test_check_without_a_required_index_reads_latest_json() {
+  release 1.2.3
+  latest 1.2.3
+  install --json --check >out.json
+  [ "$(jq -r .latest out.json)" = 1.2.3 ] || fail "latest is $(jq -r .latest out.json)"
+  [ "$(jq -r .index_verified out.json)" = false ] || fail "index_verified is not false"
+  [ "$(jq -r .index_serial out.json)" = null ] || fail "index_serial is not null"
+  [ "$(jq -r .index_expires out.json)" = null ] || fail "index_expires is not null"
 }
 
 test_pin_refuses_a_key_that_is_not_one_ed25519_public_key() {
