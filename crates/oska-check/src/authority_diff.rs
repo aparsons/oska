@@ -29,8 +29,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use oska_syntax::ast::{ItemKind, TypeKind};
-use oska_syntax::json::Json;
 use oska_syntax::json_escape;
+use oska_syntax::{parse_json, JsonValue as Json};
 
 use crate::{builtins, json_lines, json_strings, prelude, CheckReport};
 
@@ -133,9 +133,14 @@ impl AuthorityRecord {
     /// `format` other than [`FORMAT`] and a report with diagnostics, whose
     /// authority is incomplete, are refused.
     pub fn read(text: &str) -> Result<AuthorityRecord, String> {
-        let json = Json::parse(text)?;
-        if !matches!(json, Json::Obj(_)) {
+        let json = parse_json(text)?;
+        if !matches!(json, Json::Object(_)) {
             return Err("expected a JSON object".to_string());
+        }
+        // The reader keeps the first of a repeated key; a second could
+        // hide a widening from a reviewer reading the file.
+        if let Some(key) = json.duplicate_key() {
+            return Err(format!("the key `{key}` is given twice in one object"));
         }
         if let Some(format) = json.get("format") {
             if format.as_u64() != Some(FORMAT) {

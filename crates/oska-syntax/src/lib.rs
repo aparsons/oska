@@ -9,10 +9,11 @@ use std::fmt;
 
 pub mod ast;
 mod export;
-pub mod json;
+mod json;
 mod parser;
 
 pub use export::{module_to_json, module_to_tree, AST_VERSION};
+pub use json::{parse_json, JsonValue};
 pub use parser::{
     parse_expr, parse_module, parse_module_at, parse_prelude, parse_stmts, parse_type,
 };
