@@ -84,6 +84,7 @@ jobs:
             runner: windows-latest
             machine: x86_64
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -125,6 +126,7 @@ jobs:
   assemble:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
@@ -188,6 +190,7 @@ jobs:
     needs: assemble
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: release
     outputs:
       tag: ${{ needs.assemble.outputs.tag }}
@@ -226,6 +229,7 @@ jobs:
     needs: sign
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: release
     permissions:
       # Create the GitHub Release.
