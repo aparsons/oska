@@ -95,7 +95,7 @@ pub struct Findings {
     pub assumed: Vec<crate::instantiation::Assumed>,
     pub instances: Vec<crate::instantiation::Instance>,
     /// The function whose body is being checked, named as the authority
-    /// report names it. Empty outside one.
+    /// report names it; a test is `test "<name>"`. Empty outside both.
     pub function: String,
     /// Which module each part of the source is in; none for a single
     /// file (`link.rs`).
@@ -162,7 +162,9 @@ pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mu
                 body.check(&c.value, &ty);
             }
             ItemKind::Test(test) => {
-                out.function.clear();
+                // The report names a test `test "<name>"` (#150).
+                let name = crate::items::literal_text(&test.name).unwrap_or_default();
+                out.function = format!("test {name:?}");
                 let mut body = Body::new(src, items, Lower::new(decls), Ty::Unit, out);
                 body.bind("t", Ty::named(ty::TEST_CONTEXT), Binding::Param);
                 // A test produces no value: its last expression is a

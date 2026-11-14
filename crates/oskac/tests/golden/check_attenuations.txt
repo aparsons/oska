@@ -22,3 +22,6 @@ fn everything: Fs (fs)
 fn main: Fs (fs)
   crates/oskac/tests/fixtures/attenuations.osk:51:16: Fs -> FsRead: read_only (bytes 1279..1293)
   crates/oskac/tests/fixtures/attenuations.osk:52:17: Fs -> FsWrite: write_only (bytes 1310..1325)
+test "reads a note":
+  crates/oskac/tests/fixtures/attenuations.osk:59:17: Fs -> FsRead: read_only (bytes 1484..1500)
+  crates/oskac/tests/fixtures/attenuations.osk:59:17: FsRead -> DirRead: restrict_to "notes" (bytes 1484..1521)
