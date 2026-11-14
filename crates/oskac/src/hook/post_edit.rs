@@ -13,11 +13,9 @@ use std::path::Path;
 use oska_check::CheckOptions;
 use oska_syntax::{Applicability, Diagnostic};
 
+use super::target::{line, Shown, SHOWN};
 use super::{Edit, Verdict};
 use crate::package::{self, Loaded, Target};
-
-/// The most diagnostics shown; the rest are counted.
-const SHOWN: usize = 20;
 
 /// What the hook says about `edit`.
 pub fn verdict_for(edit: &Edit) -> Verdict {
@@ -43,27 +41,6 @@ fn target_of(file: &Path) -> Option<Target> {
     match package::discover(&file.to_string_lossy()) {
         Target::File(_) if is_manifest => None,
         target => Some(target),
-    }
-}
-
-/// A target, with the name it is shown by: written from the project's
-/// directory when it is under it, as the checker's own paths are.
-struct Shown {
-    target: Target,
-    name: String,
-}
-
-impl Shown {
-    fn new(target: Target, cwd: Option<&Path>) -> Shown {
-        let path = match &target {
-            Target::File(path) | Target::Dir(path) => path,
-        };
-        let name = match cwd.and_then(|cwd| Path::new(path).strip_prefix(cwd).ok()) {
-            Some(relative) if relative.as_os_str().is_empty() => ".".to_string(),
-            Some(relative) => relative.to_string_lossy().into_owned(),
-            None => path.clone(),
-        };
-        Shown { target, name }
     }
 }
 
@@ -140,19 +117,4 @@ fn verdict(name: &str, diagnostics: &[Diagnostic]) -> Verdict {
         ));
     }
     Verdict::feedback(out)
-}
-
-/// `path:line:column: error[CODE]: message`, as `oskac check` prints a
-/// diagnostic, on one line. A diagnostic with no place is the target's.
-fn line(name: &str, diagnostic: &Diagnostic) -> String {
-    let place = match &diagnostic.location {
-        Some(location) => location.to_string(),
-        None => name.to_string(),
-    };
-    let message = diagnostic.message.replace('\n', " ");
-    format!(
-        "{place}: {}[{}]: {message}",
-        diagnostic.severity.name(),
-        diagnostic.code
-    )
 }

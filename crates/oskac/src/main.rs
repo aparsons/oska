@@ -60,6 +60,10 @@ USAGE:
     oskac hook claude --event=post-edit    Check what Claude Code just edited,
                                            reading its hook input on standard
                                            input; exit 2 hands diagnostics back
+    oskac hook claude --event=stop [targets...]
+                                           Run the release check and the tests
+                                           before Claude Code may finish; exit
+                                           2 blocks it with what failed
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ";
@@ -178,7 +182,9 @@ fn main() -> ExitCode {
             fix::command(rest.first().copied(), flags)
         }
         ["explain", code] => explain_code(code, flags),
-        ["hook", "claude"] if line.program_args.is_empty() => hook::run(line.event.as_deref()),
+        ["hook", "claude", targets @ ..] if line.program_args.is_empty() => {
+            hook::run(line.event.as_deref(), targets)
+        }
         _ => {
             eprint!("{USAGE}");
             ExitCode::from(2)
