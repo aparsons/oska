@@ -1,0 +1,6 @@
+// `shout` vouches for untrusted text: a new audit site, which fails the
+// gate although the function is still pure.
+
+fn shout(name: Untrusted<String>) -> String {
+    name.assume_trusted()
+}

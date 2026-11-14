@@ -1,0 +1,13 @@
+exit: 1
+--- stdout
+{
+  "diagnostics": [],
+  "functions": [
+    {"name":"show","authority":[],"via":[],"pure":true},
+    {"name":"main","authority":["Stdout"],"via":[{"param":"io","capabilities":["Stdout"]}],"pure":false}
+  ],
+  "audit": [],
+  "attenuations": []
+}
+--- stderr
+error: in the baseline, more than one function is named `show`, so the authority diff cannot tell them apart

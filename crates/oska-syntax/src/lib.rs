@@ -9,6 +9,7 @@ use std::fmt;
 
 pub mod ast;
 mod export;
+pub mod json;
 mod parser;
 
 pub use export::{module_to_json, module_to_tree, AST_VERSION};

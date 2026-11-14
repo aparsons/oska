@@ -1,0 +1,35 @@
+exit: 0
+--- stdout
+{
+  "diagnostics": [],
+  "functions": [
+    {"name":"main","authority":["Stdout"],"via":[{"param":"io","capabilities":["Stdout"]}],"pure":false}
+  ],
+  "audit": [
+    {"function":"test \"reads a note\"","kind":"assume_trusted","path":"crates/oskac/tests/fixtures/authority_diff/test_block/after.osk","span":{"start":394,"end":415}}
+  ],
+  "attenuations": [
+    {"function":"test \"reads a note\"","method":"read_only","path":"crates/oskac/tests/fixtures/authority_diff/test_block/after.osk","span":{"start":298,"end":314},"source":"Fs","result":"FsRead","root":null},
+    {"function":"test \"reads a note\"","method":"restrict_to","path":"crates/oskac/tests/fixtures/authority_diff/test_block/after.osk","span":{"start":298,"end":335},"source":"FsRead","result":"DirRead","root":"notes"}
+  ],
+  "authority_diff": {
+    "baseline": "<baseline>",
+    "baseline_oskac": "<version>",
+    "widened": [],
+    "narrowed": [],
+    "became_impure": [],
+    "added": [],
+    "removed": [],
+    "new_audit_sites": [
+      {"function":"test \"reads a note\"","kind":"assume_trusted","count":1}
+    ],
+    "removed_audit_sites": [],
+    "new_attenuations": [
+      {"function":"test \"reads a note\"","method":"read_only","source":"Fs","result":"FsRead","root":null,"count":1},
+      {"function":"test \"reads a note\"","method":"restrict_to","source":"FsRead","result":"DirRead","root":"notes","count":1}
+    ],
+    "removed_attenuations": [],
+    "fails": false
+  }
+}
+--- stderr

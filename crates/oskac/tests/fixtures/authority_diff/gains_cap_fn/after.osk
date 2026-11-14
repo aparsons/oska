@@ -1,0 +1,12 @@
+// `report`, already impure, also takes a `cap fn`, which may carry any
+// authority its caller gives it: a widening, though `report` was impure
+// before and its built-in kinds did not change.
+
+fn report(io: Stdout, then: cap fn() -> Int) -> Result<(), IoError> {
+    let n = then()
+    io.println("done")
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    report(io, || 1)
+}

@@ -33,8 +33,12 @@ A type that is a capability or that contains one, directly or transitively. This
 For a function, the set of capabilities it can reach through its capability-bearing parameters. For a package, the union of the authority of its public functions, counted in built-in capability kinds. Which directory or file a capability is confined to is the caller's choice and is not part of a package's authority.
 
 **Widening**:
-A change after which a dependency's authority includes a capability kind it did not have, or a broader kind in place of a narrower one. A widening must be approved before the build accepts it.
+A change after which a function's, a program's or a dependency's authority includes a capability kind it did not have, or a broader kind in place of a narrower one. A widening must be approved before the build or the authority gate accepts it.
 _Avoid_: escalation, upgrade (for this concept)
+
+**Authority baseline**:
+A saved record of a program's authority report that later reports are compared with. It is committed with the program, and updating it is how a widening is approved.
+_Avoid_: authority snapshot, authority lockfile
 
 **Pure function**:
 A function with no capability-bearing parameters and no parameter whose type is or holds a bounded type parameter, whose type argument could be capability-bearing. It cannot perform effects, and it is deterministic.

@@ -1,0 +1,5 @@
+// `main` gains the network: a widening.
+
+fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    io.println("hello")
+}

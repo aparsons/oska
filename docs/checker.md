@@ -49,7 +49,7 @@ A `test` body sees one built-in value, `t`, of the prelude type `TestContext`. I
     {"name":"add","authority":[],"via":[],"pure":true}
   ],
   "audit": [
-    {"kind":"assume_trusted","path":"prog.osk","span":{"start":412,"end":430}}
+    {"function":"count_lines","kind":"assume_trusted","path":"prog.osk","span":{"start":412,"end":430}}
   ],
   "attenuations": [
     {"function":"count_lines","method":"restrict_to","path":"prog.osk","span":{"start":150,"end":176},"source":"FsRead","result":"DirRead","root":"docs"}
@@ -67,6 +67,7 @@ A `test` body sees one built-in value, `t`, of the prelude type `TestContext`. I
     - A parameter whose type is or holds a bounded type parameter, such as `tools: T` or `all: List<T>` in `fn run<T: Toolset>`, is listed too, with the type parameters in `generics`: `{"param":"tools","capabilities":[],"generics":["T"]}`. Its type argument may be capability-bearing, and the bound gives the body methods to call on it, so the function can perform effects through it. The human report shows it as `generic T (tools)`. An impl's type parameters count for its methods, and a trait's `Self` counts for its default methods (`generic Self (self)`), since `Self` is bounded by the trait. An unbounded type parameter has no methods to call, so it is not listed. `generics` is absent when there are none.
   - `pure`: `true` when no parameter, the receiver included, is capability-bearing or holds a bounded type parameter.
 - **`audit`**: every **audit site**, in source order. It is always present, and is `[]` when there are none.
+  - `function`: the function the call is in, named as in `functions`, or the test it is in, as `test "<name>"`. A closure's audit sites belong to the function around it. The authority diff (`oskac check --baseline`) counts audit sites per function and kind.
   - `kind`: what the call does. `assume_trusted` is a **trust assertion**: `.assume_trusted()` turns untrusted text into trusted text, as a validator does. `expose` is a **secret exposure**: `.expose()` reads a `Secret`'s value.
   - `span`: the whole call expression, such as `s.assume_trusted()`.
 - **`attenuations`**: every call that narrows a capability, in source order. It is always present, and is `[]` when there are none. The entries come from the prelude's attenuation methods, so a new capability kind with such a method appears with no change to the checker.

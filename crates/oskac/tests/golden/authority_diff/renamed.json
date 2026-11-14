@@ -1,0 +1,33 @@
+exit: 0
+--- stdout
+{
+  "diagnostics": [],
+  "functions": [
+    {"name":"read_notes","authority":["DirRead"],"via":[{"param":"dir","capabilities":["DirRead"]}],"pure":false},
+    {"name":"main","authority":["Fs","Stdout"],"via":[{"param":"fs","capabilities":["Fs"]},{"param":"io","capabilities":["Stdout"]}],"pure":false}
+  ],
+  "audit": [],
+  "attenuations": [
+    {"function":"main","method":"restrict_to","path":"crates/oskac/tests/fixtures/authority_diff/renamed/after.osk","span":{"start":391,"end":414},"source":"Fs","result":"Dir","root":"notes"},
+    {"function":"main","method":"read_only","path":"crates/oskac/tests/fixtures/authority_diff/renamed/after.osk","span":{"start":391,"end":426},"source":"Dir","result":"DirRead","root":null}
+  ],
+  "authority_diff": {
+    "baseline": "<baseline>",
+    "baseline_oskac": "<version>",
+    "widened": [],
+    "narrowed": [],
+    "became_impure": [],
+    "added": [
+      {"function":"read_notes","authority":["DirRead"],"pure":false,"new_kinds":[]}
+    ],
+    "removed": [
+      {"function":"load","authority":["DirRead"],"pure":false}
+    ],
+    "new_audit_sites": [],
+    "removed_audit_sites": [],
+    "new_attenuations": [],
+    "removed_attenuations": [],
+    "fails": false
+  }
+}
+--- stderr

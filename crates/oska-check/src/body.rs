@@ -66,7 +66,7 @@ use crate::suggest;
 use crate::ty::{self, Cap, Trust, Ty};
 use crate::{Attenuation, AuditSite};
 
-mod attenuation;
+pub(crate) mod attenuation;
 mod audit;
 mod calls;
 mod patterns;

@@ -1,0 +1,10 @@
+exit: 0
+--- stdout
+fn read_notes: DirRead (dir)
+fn main: Fs (fs), Stdout (io)
+  crates/oskac/tests/fixtures/authority_diff/renamed/after.osk:10:27: Fs -> Dir: restrict_to "notes" (bytes 391..414)
+  crates/oskac/tests/fixtures/authority_diff/renamed/after.osk:10:27: Dir -> DirRead: read_only (bytes 391..426)
+baseline: <baseline>
+  added fn read_notes: DirRead
+  removed fn load: DirRead
+--- stderr

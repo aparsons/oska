@@ -9,10 +9,13 @@ USAGE:
     oskac lex <file.osk> [--format=json]   Print the tokens in a source file
     oskac parse <file.osk> [--format=json] Print the syntax tree of a source file
     oskac check [path] [--format=json] [--release]
+                [--baseline=<file> | --update-baseline=<file>]
                                            Type-check a source file, or a
                                            package directory (the current one
                                            with no path), and report each
-                                           function's authority
+                                           function's authority; compare it
+                                           with a saved baseline (exit code 3
+                                           when it widened), or write one
     oskac run [path] [--format=json] [--interpret] [-- args...]
                                            Check a source file or package and,
                                            if it has no diagnostics, run it:
@@ -46,6 +49,8 @@ USAGE:
 | --- | --- | --- |
 | `--format=json` | every command | Machine-readable output. See [output formats](#output-formats). |
 | `--release` | `check` | Reject `dbg(...)` (`E0216`) and `todo()` (`E0293`). The other commands accept the flag and ignore it. |
+| `--baseline=<file>` | `check` | Compare the program's authority with the [authority baseline](#authority-baseline) in `<file>`, and exit with 3 when it widened. Any other command refuses it as a usage error. |
+| `--update-baseline=<file>` | `check` | Write the program's [authority baseline](#authority-baseline) to `<file>`, only when there are no diagnostics. Not with `--baseline`; any other command refuses it as a usage error. |
 | `--integration` | `test` | Also run the tests marked `#[integration]`, on the real operating system. |
 | `--interpret` | `run`, `test` | Run on the interpreter, on aarch64 Linux too, where the program is otherwise compiled and run natively. See [platform support](#platform-support). The other commands accept the flag and ignore it. |
 
@@ -59,7 +64,7 @@ USAGE:
 
 ## `oskac check`
 
-`oskac check [path] [--format=json] [--release]` parses and type-checks one file, or every module of a package, against the prelude and reports each function's authority. Exit code 0 when there are no diagnostics, otherwise 1.
+`oskac check [path] [--format=json] [--release] [--baseline=<file> | --update-baseline=<file>]` parses and type-checks one file, or every module of a package, against the prelude and reports each function's authority. Exit code 0 when there are no diagnostics, otherwise 1; with `--baseline`, 3 when the program checks but its authority widened.
 
 Human-readable output:
 
@@ -83,6 +88,48 @@ main.osk:6:16: audit: assume_trusted (bytes 126..147)
 ```
 
 The line `fn vouch: Stdout (io)` names each capability and the parameter that supplies it. A `cap fn` parameter appears as `cap fn (name)`, and a parameter of a bounded type parameter `T` as `generic T (name)`. A parse error is reported alone, with no authority lines. Terms are in the [glossary](../../GLOSSARY.md). The checker's behavior and its full code table are in the [checker notes](../checker.md).
+
+### Authority baseline
+
+An **authority baseline** is a saved record of a program's authority, meant to be committed and reviewed like a lockfile. `oskac check --update-baseline=authority.json` writes it, only when the program has no diagnostics. It holds `format` (1), the `oskac` version that wrote it, and the report without places: each function's `name`, `authority` and `pure`; audit sites counted per function and kind; and attenuations counted per function, method, kinds and root. A function's `authority` here also has `cap fn` for a `cap fn` parameter and `generic T` for a parameter of a bounded type parameter `T`. Everything is sorted, with no spans or paths, LF line endings and a final newline, so the file is the same on every platform and changes only when authority does.
+
+`oskac check --baseline=authority.json` compares the program's report with the baseline, which may also be a saved `oskac check --format=json` report of a program with no diagnostics. Functions are matched by name, so a rename is one function removed and one added. A built-in kind covers every kind it can be attenuated into: `Fs` covers `Dir`, `DirRead` and `FileRead`, among others. The gate fails, with exit code 3, when:
+
+- a function's authority gained an entry that none of its old entries covers (*widened*);
+- a function that was pure is not (*became impure*);
+- a function or method has more audit sites of a kind than before (*new audit site*);
+- an added function reaches a kind that no entry of any function in the baseline covers.
+
+Narrowing, removals, attenuation changes, an added function within the program's existing authority, and anything in a test block are reported and never fail. There is no flag that lets a widening pass: approving one means updating the baseline in the same change, so the approval is a reviewed diff. With diagnostics, `check` exits with 1 and compares nothing, since a refused program's report is incomplete. An unreadable or malformed baseline, a `format` other than 1, a saved report with diagnostics, or two functions of one name in either report is an `error:` and exit code 1.
+
+In the human output a `baseline:` section follows the authority report, one line per change, those that fail the gate first, each marked with what it gained (`+`) or lost (`-`):
+
+```text
+baseline: authority.json
+  widened fn main: +Net
+  added fn notes: DirRead
+```
+
+With `--format=json`, the check object gains `authority_diff` as its last key:
+
+```json
+"authority_diff": {
+  "baseline": "authority.json",
+  "baseline_oskac": "0.3.0",
+  "widened": [{"function":"main","gained":["Net"]}],
+  "narrowed": [{"function":"notes","gained":["DirRead"],"lost":["Fs"]}],
+  "became_impure": [{"function":"total"}],
+  "added": [{"function":"fetch","authority":["NetConnect"],"pure":false,"new_kinds":["NetConnect"]}],
+  "removed": [{"function":"load","authority":["DirRead"],"pure":false}],
+  "new_audit_sites": [{"function":"shout","kind":"assume_trusted","count":1}],
+  "removed_audit_sites": [],
+  "new_attenuations": [{"function":"main","method":"read_only","source":"Dir","result":"DirRead","root":null,"count":1}],
+  "removed_attenuations": [],
+  "fails": true
+}
+```
+
+`baseline_oskac` is the version that wrote the baseline, or `null` for a saved report; when it differs from the running `oskac`, the human output says so, since a new release can change what the report records. `added` lists, in `new_kinds`, the entries no baseline function covers. Each `count` is how many sites were added or removed.
 
 ## `oskac run`
 
@@ -180,7 +227,7 @@ One object on standard output, produced even when there are diagnostics:
     {"name":"vouch","authority":["Stdout"],"via":[{"param":"io","capabilities":["Stdout"]}],"pure":false}
   ],
   "audit": [
-    {"kind":"assume_trusted","span":{"start":126,"end":147}}
+    {"function":"vouch","kind":"assume_trusted","span":{"start":126,"end":147}}
   ],
   "attenuations": [
     {"function":"main","method":"restrict_to","span":{"start":88,"end":112},"source":"FsRead","result":"DirRead","root":"docs"}
@@ -190,7 +237,7 @@ One object on standard output, produced even when there are diagnostics:
 
 - `diagnostics`, in source order.
 - `functions`: one entry per function and method, in source order. `name` is the function's name, `Type.method` for a method of an inherent `impl`, or `<Type as Trait>.method` for one of `impl Trait for Type`, with a generic trait's arguments, as in `<AppError as From<IoError>>.from`; in a package `pkg.` and the module path come first, as in `pkg.util.text.shout` or `pkg.main.main`, and a method is named by its type's module. No two entries share a name. `"pub":true` marks a function declared `pub`. `authority` lists the built-in capabilities it can reach, in order of first appearance. `via` lists each capability-bearing parameter and what it supplies, with a method's receiver as `self`; a parameter whose type is or holds a bounded type parameter is listed too, naming it in `generics`. `pure` is `true` when `via` is empty.
-- `audit`: every audit site, in source order. `kind` is `assume_trusted` for a trust assertion or `expose` for a secret exposure, and `span` covers the whole call.
+- `audit`: every audit site, in source order. `function` is the function it is in (`test "<name>"` for a test block), `kind` is `assume_trusted` for a trust assertion or `expose` for a secret exposure, and `span` covers the whole call.
 - `attenuations`: every call that narrows a capability, in source order. `function` is the function it is in (`test "<name>"` for a test block), `method` is `restrict_to`, `restrict_to_file`, `read_only` or `write_only`, `source` and `result` are the capability kinds before and after, and `root` is the string the capability is restricted to, or `null` when the method takes no root or the root is computed at runtime. `span` covers the whole call.
 
 A parse error is reported alone, with empty `functions`, `audit` and `attenuations`.

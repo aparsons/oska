@@ -1,0 +1,11 @@
+// A new helper takes a `DirRead`, which `main`'s `Fs` already covers:
+// the program reaches nothing new, so the gate passes.
+
+fn notes(dir: DirRead) -> Result<Untrusted<String>, IoError> {
+    dir.read_to_string(Path.new("today.txt"))
+}
+
+fn main(fs: Fs, io: Stdout) -> Result<(), IoError> {
+    let text = notes(fs.restrict_to("notes").read_only())?
+    io.println("read")
+}

@@ -17,6 +17,7 @@ macro_rules! outln {
     };
 }
 
+mod baseline;
 mod build;
 mod explain;
 mod native;
@@ -30,10 +31,13 @@ USAGE:
     oskac lex <file.osk> [--format=json]   Print the tokens in a source file
     oskac parse <file.osk> [--format=json] Print the syntax tree of a source file
     oskac check [path] [--format=json] [--release]
+                [--baseline=<file> | --update-baseline=<file>]
                                            Type-check a source file, or a
                                            package directory (the current one
                                            with no path), and report each
-                                           function's authority
+                                           function's authority; compare it
+                                           with a saved baseline (exit code 3
+                                           when it widened), or write one
     oskac run [path] [--format=json] [--interpret] [-- args...]
                                            Check a source file or package and,
                                            if it has no diagnostics, run it:
@@ -76,6 +80,10 @@ struct CommandLine {
     positional: Vec<String>,
     flags: Flags,
     output: Option<String>,
+    /// `--baseline=<file>`: `oskac check` compares authority with it.
+    baseline: Option<String>,
+    /// `--update-baseline=<file>`: `oskac check` writes it.
+    update_baseline: Option<String>,
     program_args: Vec<String>,
 }
 
@@ -109,6 +117,15 @@ impl CommandLine {
                 format if format.starts_with("--format=") => {
                     line.flags.json = format == "--format=json";
                 }
+                // A baseline flag given twice is recorded with an empty
+                // file name, which `main` refuses as a usage error.
+                flag if flag.starts_with("--baseline=") => {
+                    line.baseline = once(&line.baseline, &flag["--baseline=".len()..]);
+                }
+                flag if flag.starts_with("--update-baseline=") => {
+                    line.update_baseline =
+                        once(&line.update_baseline, &flag["--update-baseline=".len()..]);
+                }
                 _ => line.positional.push(arg),
             }
         }
@@ -116,10 +133,33 @@ impl CommandLine {
     }
 }
 
+/// The value of a flag that takes a file, `value`, or an empty one when
+/// the flag was given before (`previous`).
+fn once(previous: &Option<String>, value: &str) -> Option<String> {
+    match previous {
+        Some(_) => Some(String::new()),
+        None => Some(value.to_string()),
+    }
+}
+
 fn main() -> ExitCode {
     let line = CommandLine::parse(std::env::args().skip(1).collect());
     let flags = line.flags;
     let positional: Vec<&str> = line.positional.iter().map(String::as_str).collect();
+    let gate = match (line.baseline.as_deref(), line.update_baseline.as_deref()) {
+        (None, None) => None,
+        (Some(file), None) if !file.is_empty() => Some(baseline::Gate::Compare(file)),
+        (None, Some(file)) if !file.is_empty() => Some(baseline::Gate::Update(file)),
+        // Both, or an empty file name.
+        _ => {
+            eprint!("{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+    if gate.is_some() && positional.first() != Some(&"check") {
+        eprint!("{USAGE}");
+        return ExitCode::from(2);
+    }
     match positional.as_slice() {
         ["--version" | "-V"] => {
             if flags.json {
@@ -138,9 +178,12 @@ fn main() -> ExitCode {
         }
         ["lex", path] => lex_file(path, flags),
         ["parse", path] => parse_file(path, flags),
-        ["check", rest @ ..] if rest.len() <= 1 => {
-            on_target(Command::Check, rest.first(), flags, &line.program_args)
-        }
+        ["check", rest @ ..] if rest.len() <= 1 => on_target(
+            Command::Check(gate),
+            rest.first(),
+            flags,
+            &line.program_args,
+        ),
         ["run", rest @ ..] if rest.len() <= 1 => {
             on_target(Command::Run, rest.first(), flags, &line.program_args)
         }
@@ -215,7 +258,8 @@ fn parse_file(path: &str, Flags { json, .. }: Flags) -> ExitCode {
 /// The commands that take a source file or a package.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Command<'a> {
-    Check,
+    /// `oskac check`, with what it does with a baseline.
+    Check(Option<baseline::Gate<'a>>),
     Run,
     Test,
     /// `oskac build`, with the output path `-o` gives.
@@ -225,7 +269,7 @@ enum Command<'a> {
 impl Command<'_> {
     fn name(self) -> &'static str {
         match self {
-            Command::Check => "check",
+            Command::Check(_) => "check",
             Command::Run => "run",
             Command::Test => "test",
             Command::Build(_) => "build",
@@ -316,12 +360,30 @@ fn report_from_here(dir: &str, mut report: oska_check::CheckReport) -> oska_chec
 /// "functions": [...], "audit": [...], "attenuations": [...]}` with
 /// `--format=json`.
 /// The exit code is non-zero when there are diagnostics.
-fn check_file(path: &str, Flags { json, release, .. }: Flags) -> ExitCode {
+fn check_file(
+    path: &str,
+    Flags { json, release, .. }: Flags,
+    gate: Option<baseline::Gate>,
+) -> ExitCode {
     let Some(src) = read_source(path) else {
         return ExitCode::FAILURE;
     };
     let report = oska_check::check_file(path, &src, oska_check::CheckOptions { release });
-    print_report(&report, json, path)
+    finish_check(&report, json, path, gate)
+}
+
+/// Print a check report, then compare it with a baseline or write one
+/// when `gate` says so, and return the exit code.
+fn finish_check(
+    report: &oska_check::CheckReport,
+    json: bool,
+    path: &str,
+    gate: Option<baseline::Gate>,
+) -> ExitCode {
+    match gate {
+        Some(gate) => baseline::check(report, json, path, gate),
+        None => print_report(report, json, path),
+    }
 }
 
 /// Print a check report as `oskac check` does, and return its exit code.
@@ -485,7 +547,7 @@ fn on_target(command: Command, path: Option<&&str>, flags: Flags, args: &[String
     match package::target(path.copied()) {
         package::Target::File(file) => {
             let code = match command {
-                Command::Check => check_file(&file, flags),
+                Command::Check(gate) => check_file(&file, flags, gate),
                 Command::Run => run_file(&file, flags, args),
                 Command::Test => test_file(&file, flags),
                 Command::Build(output) => build::file(&file, flags, output),
@@ -515,20 +577,20 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
         return refuse(command, vec![oska_check::run_of_library(dir)], json, dir);
     }
     let options = oska_check::CheckOptions {
-        release: command == Command::Check && flags.release,
+        release: matches!(command, Command::Check(_)) && flags.release,
     };
     let mut report = oska_check::check_package(&package, options);
     if !refused.is_empty() {
         report.diagnostics.splice(0..0, refused);
         report.program = None;
     }
-    if command == Command::Check {
+    if let Command::Check(gate) = command {
         let report = if json {
             report
         } else {
             report_from_here(dir, report)
         };
-        return print_report(&report, json, dir);
+        return finish_check(&report, json, dir, gate);
     }
     let Some(program) = &report.program else {
         return refuse(command, report.diagnostics, json, dir);
@@ -593,12 +655,12 @@ fn refuse(command: Command, diagnostics: Vec<Diagnostic>, json: bool, dir: &str)
     };
     let places = Places::Located;
     match command {
-        Command::Check => {
+        Command::Check(gate) => {
             let report = oska_check::CheckReport {
                 diagnostics,
                 ..oska_check::CheckReport::default()
             };
-            print_report(&report, json, dir)
+            finish_check(&report, json, dir, gate)
         }
         Command::Run => {
             let outcome = oska_run::RunOutcome {
