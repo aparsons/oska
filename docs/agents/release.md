@@ -35,7 +35,7 @@ Nothing in the repo can check these settings, so verify them before a release.
    git tag -a vX.Y.Z -m "oska vX.Y.Z" && git push origin vX.Y.Z
    ```
    The push reports "Bypassed rule violations". That is the admin bypass of the tag ruleset working as intended.
-3. **Watch the tag's Release run** until build, assemble, sign and publish are all green. Nothing is published before `publish`. If an earlier job fails, delete the tag, fix the problem, and tag again.
+3. **Watch the tag's Release run** until build, assemble, sign and publish are all green. Nothing is published before `publish`. If an earlier job fails, delete the tag, fix the problem, and tag again. Every release job is bounded by `timeout-minutes` (build 20, the others 10), so a stuck one turns red by itself. A cancelled run is not a failed release: a superseded dry run on a pull request is cancelled on purpose, and a tag's run is never cancelled by a later push.
 4. **Watch the Pages run that `publish` dispatches.** Its smoke job must end with `ok: https://oskalang.dev installs oskac X.Y.Z, and it runs`.
    - The warning `no release is published` means the deploy ran before GitHub listed the new release ([#89](https://github.com/aparsons/oska/issues/89)).
    - Run `gh workflow run pages.yml --ref main` and check again.
