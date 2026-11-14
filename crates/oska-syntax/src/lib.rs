@@ -268,8 +268,13 @@ pub struct Diagnostic {
     pub code: &'static str,
     pub message: String,
     pub span: Span,
-    /// A machine-applicable fix, when the right edit is unambiguous. Its
-    /// edits are in the same file as `span`.
+    /// A fix, when the checker has one. Its edits are in the same file as
+    /// `span`. Its `applicability` says whether it is `machine` (certainly
+    /// right), `maybe` (a guess, such as the closest name), or
+    /// `placeholders` (leaves `todo()` to fill in); see `Fix.applicability`.
+    /// Only a `machine` fix is safe to apply without reading it. The table
+    /// in `docs/checker.md` (Diagnostic codes) lists each code's
+    /// applicability.
     ///
     /// `fix` and `location` are boxed because the parser returns
     /// `Result<_, Diagnostic>` everywhere: unboxed, they would make every
