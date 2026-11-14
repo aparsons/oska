@@ -19,6 +19,7 @@ macro_rules! outln {
 
 mod build;
 mod explain;
+mod hook;
 mod native;
 mod native_test;
 mod package;
@@ -49,6 +50,9 @@ USAGE:
                                            if it has no diagnostics, compile it
                                            to an aarch64 Linux executable
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
+    oskac hook claude --event=post-edit    Check what Claude Code just edited,
+                                           reading its hook input on standard
+                                           input; exit 2 hands diagnostics back
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ";
@@ -76,6 +80,8 @@ struct CommandLine {
     positional: Vec<String>,
     flags: Flags,
     output: Option<String>,
+    /// The name `--event=` gives, for `oskac hook`.
+    event: Option<String>,
     program_args: Vec<String>,
 }
 
@@ -106,6 +112,9 @@ impl CommandLine {
                 "--release" => line.flags.release = true,
                 "--integration" => line.flags.integration = true,
                 "--interpret" => line.flags.interpret = true,
+                event if event.starts_with("--event=") => {
+                    line.event = Some(event["--event=".len()..].to_string());
+                }
                 format if format.starts_with("--format=") => {
                     line.flags.json = format == "--format=json";
                 }
@@ -152,6 +161,7 @@ fn main() -> ExitCode {
             on_target(command, rest.first(), flags, &[])
         }
         ["explain", code] => explain_code(code, flags),
+        ["hook", "claude"] if line.program_args.is_empty() => hook::run(line.event.as_deref()),
         _ => {
             eprint!("{USAGE}");
             ExitCode::from(2)

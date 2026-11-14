@@ -265,16 +265,21 @@ pub fn from_here(dir: &str, path: &str) -> String {
     format!("{}/{path}", dir.trim_end_matches(['/', '\\']))
 }
 
-/// The package a source file belongs to: the nearest directory above it
-/// that has an `oska.toml` and holds the file under `src/`. It is as
-/// `file` is written, so `oskac check <dir>` works from where the file
-/// path does.
-pub fn package_containing(file: &str) -> Option<String> {
-    let file = Path::new(file);
-    file.ancestors().skip(1).find_map(|ancestor| {
+/// The package a path belongs to: the nearest directory above it that
+/// has a regular-file `oska.toml` (never a symlink) and holds the path
+/// under `src/`, or whose `oska.toml` is the path itself. It is as `path`
+/// is written, so `oskac check <dir>` works from where the path does.
+///
+/// This is the one rule for finding the package of a file: the hint after
+/// `oskac check <file>`, the check-on-edit hook, and any later tool that
+/// follows an edit use it.
+pub fn package_containing(path: &str) -> Option<String> {
+    let path = Path::new(path);
+    path.ancestors().skip(1).find_map(|ancestor| {
         let manifest = ancestor.join(MANIFEST_PATH);
-        let is_manifest = std::fs::symlink_metadata(manifest).is_ok_and(|m| m.is_file());
-        (is_manifest && file.strip_prefix(ancestor.join("src")).is_ok()).then(|| {
+        let is_manifest = std::fs::symlink_metadata(&manifest).is_ok_and(|m| m.is_file());
+        let belongs = path == manifest || path.strip_prefix(ancestor.join("src")).is_ok();
+        (is_manifest && belongs).then(|| {
             if ancestor.as_os_str().is_empty() {
                 ".".to_string()
             } else {
@@ -282,6 +287,15 @@ pub fn package_containing(file: &str) -> Option<String> {
             }
         })
     })
+}
+
+/// What a tool that follows an edit of `path` checks: its package, found
+/// as [`package_containing`] finds it, or the file alone.
+pub fn discover(path: &str) -> Target {
+    match package_containing(path) {
+        Some(dir) => Target::Dir(dir),
+        None => Target::File(path.to_string()),
+    }
 }
 
 #[cfg(test)]
