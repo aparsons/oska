@@ -6,10 +6,15 @@
 #
 #   & ([scriptblock]::Create((irm https://oskalang.dev/install.ps1))) --version 0.1.0 --json
 #
-# Options (`-Version` and `-Json` work too):
-#   --version X  install release X (0.1.0 or v0.1.0) instead of the latest
-#   --json       print one JSON object on stdout, and nothing else
-#   --help       print this help
+# Options (`-Version`, `-AllowDowngrade`, `-Check`, `-Uninstall` and `-Json` work too):
+#   --version X        install release X (0.1.0 or v0.1.0) instead of the latest
+#   --allow-downgrade  with --version, install X even if it is older than
+#                      the installed oskac
+#   --check            report the installed and the latest version, and
+#                      install nothing
+#   --uninstall        remove what the install receipt lists, and nothing else
+#   --json             print one JSON object on stdout, and nothing else
+#   --help             print this help
 #
 # Environment:
 #   OSKA_HOME      install into $env:OSKA_HOME\bin (default: ~\.oska)
@@ -23,8 +28,20 @@
 # newer one), that the binary's SHA-256 is the one SHA256SUMS lists, and
 # that the binary reports that version. If any check fails, or anything
 # else goes wrong, it installs nothing and fails: run as a file it exits
-# non-zero, under `iex` it throws. It never prompts. Re-running it updates
-# oskac in place.
+# non-zero, under `iex` it throws. It never prompts.
+#
+# Without --version it installs the latest release. Once the site publishes
+# a signed release index, the installer is pinned to require it and takes
+# the latest release from release-index.json alone: signed by the release
+# key in the `oska-index` namespace, not expired, and with a serial no
+# lower than the last one this install accepted. Before that, it reads the
+# unsigned latest.json.
+#
+# Re-running it updates oskac in place. It never installs an older release
+# than the installed one unless asked with --version and --allow-downgrade.
+# It records what it installed in $env:OSKA_HOME\receipt.json, which is
+# advisory: no check above reads it. --uninstall removes the files the
+# receipt lists, if they are unchanged, and downloads nothing.
 #
 # Works in Windows PowerShell 5.1 and PowerShell 7.
 
@@ -37,11 +54,16 @@
     # (scripts/install/pin.sh). Signatures by any other key are refused.
     $ReleaseKey = '@OSKA_RELEASE_KEY@'
     $Namespace = 'oska-release'
+    # Whether the latest release must come from the signed release index,
+    # also pinned when the site is built: `yes` once the site publishes a
+    # verified index. Otherwise the installer reads the unsigned latest.json.
+    $IndexRequired = '@OSKA_INDEX_REQUIRED@'
+    $IndexNamespace = 'oska-index'
     $DefaultSiteUrl = 'https://oskalang.dev'
 
     # Kept in a table, not in $script: variables, which `iex` would leave in
     # the user's session.
-    $state = @{ json = $false; tmp = $null }
+    $state = @{ json = $false; tmp = $null; stage = $null; receiptTmp = $null }
 
     function Stop-Install([string]$Code, [string]$Message) {
         $e = New-Object System.Exception $Message
@@ -107,13 +129,13 @@
     # encoding's BOM first) would give ssh-keygen the exact bytes; a file
     # handle from Start-Process -RedirectStandardInput does.
     # Returns '' if the signature verifies, otherwise why it does not.
-    function Get-SignatureProblem([string]$KeyGen, [string]$Allowed, [string]$Signature, [string]$Data) {
+    function Get-SignatureProblem([string]$KeyGen, [string]$Allowed, [string]$Signature, [string]$Data, [string]$Ns) {
         $out = Join-Path $state.tmp 'verify.out'
         $err = Join-Path $state.tmp 'verify.err'
         try {
             # One argument string, quoted here: Windows PowerShell joins an
             # array of arguments without quoting paths that hold spaces.
-            $arguments = "-Y verify -f `"$Allowed`" -I $Namespace -n $Namespace -s `"$Signature`""
+            $arguments = "-Y verify -f `"$Allowed`" -I $Ns -n $Ns -s `"$Signature`""
             $p = Start-Process -FilePath $KeyGen -ArgumentList $arguments -NoNewWindow -Wait -PassThru `
                 -RedirectStandardInput $Data -RedirectStandardOutput $out -RedirectStandardError $err
             # Anything but a clear 0, including no exit code at all, fails.
@@ -130,8 +152,367 @@
         [IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding $false))
     }
 
+    # Numbers of any length, compared as digit strings: -1, 0 or 1.
+    function Compare-Number([string]$X, [string]$Y) {
+        $X = $X.TrimStart('0')
+        $Y = $Y.TrimStart('0')
+        if ($X.Length -ne $Y.Length) {
+            if ($X.Length -lt $Y.Length) { return -1 }
+            return 1
+        }
+        return [Math]::Sign([string]::CompareOrdinal($X, $Y))
+    }
+
+    # -1, 0 or 1 as version $A sorts below, equal to or above $B by semver
+    # precedence, so 0.4.0-pre.1 sorts below 0.4.0 and above 0.3.0. Both
+    # must be versions as Test-Tag accepts them, without the v. The same
+    # order as install.sh's semver_cmp.
+    function Compare-Version([string]$A, [string]$B) {
+        $ap = ''
+        $bp = ''
+        $i = $A.IndexOf('-')
+        if ($i -ge 0) { $ap = $A.Substring($i + 1); $A = $A.Substring(0, $i) }
+        $i = $B.IndexOf('-')
+        if ($i -ge 0) { $bp = $B.Substring($i + 1); $B = $B.Substring(0, $i) }
+        $x = $A.Split('.')
+        $y = $B.Split('.')
+        for ($k = 0; $k -lt 3; $k++) {
+            $c = Compare-Number $x[$k] $y[$k]
+            if ($c -ne 0) { return $c }
+        }
+        # A release sorts above its pre-releases.
+        if (-not $ap -or -not $bp) { return ([int](-not $ap)) - ([int](-not $bp)) }
+        $p = $ap.Split('.')
+        $q = $bp.Split('.')
+        for ($k = 0; $k -lt [Math]::Min($p.Count, $q.Count); $k++) {
+            # Numeric identifiers by value and below the others, the others
+            # in ASCII order.
+            $pn = $p[$k] -cmatch '^[0-9]+$'
+            $qn = $q[$k] -cmatch '^[0-9]+$'
+            if ($pn -and $qn) { $c = Compare-Number $p[$k] $q[$k] }
+            elseif ($pn) { $c = -1 }
+            elseif ($qn) { $c = 1 }
+            else { $c = [Math]::Sign([string]::CompareOrdinal($p[$k], $q[$k])) }
+            if ($c -ne 0) { return $c }
+        }
+        return [Math]::Sign($p.Count - $q.Count)
+    }
+
+    # The version installed now, or $null. The receipt wins over the legacy
+    # version file; an install from before receipts has only the latter.
+    # Either is advisory: what is not a version counts as nothing installed.
+    function Get-PreviousVersion([string]$Target, [string]$Receipt, [string]$VersionFile) {
+        if (-not (Test-Path -LiteralPath $Target -PathType Leaf)) { return $null }
+        $v = ''
+        try {
+            if (Test-Path -LiteralPath $Receipt -PathType Leaf) {
+                $v = [string]([IO.File]::ReadAllText($Receipt) | ConvertFrom-Json).version
+            } elseif (Test-Path -LiteralPath $VersionFile -PathType Leaf) {
+                $v = [string]([IO.File]::ReadAllLines($VersionFile) | Select-Object -First 1)
+            }
+        } catch {
+            $v = ''
+        }
+        if ($v -and (Test-Tag "v$v")) { return $v }
+        return $null
+    }
+
+    # The Oska home and the paths the installer writes in it. Install and
+    # uninstall work them out the same way, so a receipt's paths match.
+    function Get-OskaPaths {
+        $oskaHome = $env:OSKA_HOME
+        if (-not $oskaHome) { $oskaHome = Join-Path $HOME '.oska' }
+        # An absolute path, so .NET and PowerShell agree on where it is.
+        $oskaHome = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($oskaHome)
+        # Without a trailing separator, which Join-Path would drop from the
+        # paths below but uninstall would keep in the home they must be in.
+        $trimmed = $oskaHome.TrimEnd('\', '/')
+        if ($trimmed -and -not $trimmed.EndsWith(':')) { $oskaHome = $trimmed }
+        $binDir = Join-Path $oskaHome 'bin'
+        @{
+            home        = $oskaHome
+            bin         = $binDir
+            target      = (Join-Path $binDir 'oskac.exe')
+            versionFile = (Join-Path $oskaHome 'version')
+            receipt     = (Join-Path $oskaHome 'receipt.json')
+        }
+    }
+
+    # Whether $Path is a symlink, a junction or any other reparse point. The
+    # link itself is looked at, never what it points to. A path that does
+    # not exist is not a link.
+    function Test-Link([string]$Path) {
+        try {
+            return [bool]([IO.File]::GetAttributes($Path) -band [IO.FileAttributes]::ReparsePoint)
+        } catch {
+            return $false
+        }
+    }
+
+    # A field of an object ConvertFrom-Json made, or $null if it has none.
+    # The comma keeps an array an array: a function's output is unrolled.
+    function Get-Field([object]$Object, [string]$Name) {
+        $p = $Object.PSObject.Properties[$Name]
+        if ($p) { return , $p.Value }
+        return $null
+    }
+
+    function Stop-Unsafe([string]$Message) {
+        Stop-Install 'unsafe_path' "$Message; nothing was removed"
+    }
+
+    # --uninstall: remove what the receipt lists, and nothing else. Every
+    # entry is checked before anything is removed, and one that is not a
+    # file this installer writes, in a place it writes, refuses the whole
+    # uninstall. A file that changed since it was installed is kept.
+    # Directories are removed only if empty, never recursively, and
+    # ~/.config/oska is never touched. The same contract as install.sh's.
+    function Uninstall-Oskac {
+        $paths = Get-OskaPaths
+        $oskaHome = $paths.home
+        $binDir = $paths.bin
+        $receipt = $paths.receipt
+        # ~\.config\oska. ~ is the user profile, as PowerShell's ~ is.
+        $userHome = $env:USERPROFILE
+        if (-not $userHome) { $userHome = $HOME }
+        $configDir = Join-Path (Join-Path $userHome '.config') 'oska'
+        $windows = $env:OS -eq 'Windows_NT'
+        if ($windows) { $cmp = [StringComparison]::OrdinalIgnoreCase } else { $cmp = [StringComparison]::Ordinal }
+        $sep = [string][IO.Path]::DirectorySeparatorChar
+
+        if ((Test-Link $oskaHome) -or (Test-Link $receipt)) {
+            Stop-Unsafe "$receipt is reached through a symlink"
+        }
+        if (-not [IO.File]::Exists($receipt)) {
+            Stop-Install 'not_installed' "there is no install receipt at $receipt, so nothing is known to have been installed there; nothing was removed"
+        }
+        # Read strictly: anything but a schema 1 receipt whose files are
+        # objects with a string path and kind is refused, as install.sh
+        # refuses it.
+        $files = $null
+        try {
+            $data = [IO.File]::ReadAllText($receipt) | ConvertFrom-Json
+            $schema = Get-Field $data 'schema'
+            $list = Get-Field $data 'files'
+            if (($schema -is [int] -or $schema -is [long]) -and $schema -eq 1 -and $list -is [array]) {
+                $files = $list
+            }
+        } catch {
+            $files = $null
+        }
+        if ($null -eq $files) {
+            Stop-Unsafe "cannot read the install receipt $receipt, so none of its paths is known to be safe"
+        }
+
+        $remove = New-Object Collections.Generic.List[string]
+        $removeReceipt = $false
+        $kept = New-Object Collections.Generic.List[string]
+        $keptWhy = New-Object Collections.Generic.List[string]
+        $keep = {
+            param($Path, $Why)
+            $kept.Add($Path)
+            $keptWhy.Add("  $Path ($Why)")
+        }
+        foreach ($e in $files) {
+            $path = $null
+            $kind = $null
+            $sum = $null
+            if ($e -is [Management.Automation.PSCustomObject]) {
+                $path = Get-Field $e 'path'
+                $kind = Get-Field $e 'kind'
+                $sum = Get-Field $e 'sha256'
+            }
+            if ($path -isnot [string] -or $kind -isnot [string] -or ($null -ne $sum -and $sum -isnot [string]) -or
+                ("$path$kind$sum" -match '[\x00-\x1f]')) {
+                Stop-Unsafe "cannot read the install receipt $receipt, so none of its paths is known to be safe"
+            }
+            if (@($path -split '[\\/]') -contains '..') {
+                Stop-Unsafe "the receipt lists $path, which climbs out with .."
+            }
+            if ($path.Equals($configDir, $cmp) -or $path.StartsWith($configDir + $sep, $cmp)) {
+                Stop-Unsafe "the receipt lists $path, in $configDir, which uninstall never touches"
+            }
+            if ($kind -cne 'binary' -and $kind -cne 'record') {
+                Stop-Unsafe "the receipt lists $path as a '$kind', which this installer does not remove"
+            }
+            if (-not $path.StartsWith($oskaHome + $sep, $cmp)) {
+                Stop-Unsafe "the receipt lists $path, which is outside the Oska home $oskaHome"
+            }
+            $parts = @($path.Substring($oskaHome.Length + 1) -split '[\\/]')
+            $dir = $oskaHome
+            if ($parts.Count -eq 2 -and $parts[0].Equals('bin', $cmp)) {
+                $dir = $binDir
+                $parts = @($parts[1])
+            }
+            if ($parts.Count -ne 1 -or $parts[0] -eq '' -or $parts[0] -eq '.' -or $parts[0].Contains(':')) {
+                Stop-Unsafe "the receipt lists $path, which is not directly in $oskaHome or $binDir"
+            }
+            if ((Test-Link $dir) -or (Test-Link $path)) {
+                Stop-Unsafe "the receipt lists $path, which is reached through a symlink"
+            }
+
+            if (-not [IO.File]::Exists($path)) {
+                if ([IO.Directory]::Exists($path)) { & $keep $path 'not a regular file' }
+            } elseif ($path.Equals($receipt, $cmp)) {
+                $removeReceipt = $true
+            } elseif (-not $sum) {
+                & $keep $path 'the receipt records no SHA-256 for it'
+            } elseif ((Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant() -cne $sum) {
+                & $keep $path 'changed since it was installed'
+            } else {
+                $remove.Add($path)
+            }
+        }
+
+        # Everything is checked; now remove. The receipt goes last, and
+        # stays if a file could not be removed, so a second run can finish
+        # the job.
+        $removed = New-Object Collections.Generic.List[string]
+        $failed = $false
+        foreach ($path in $remove) {
+            try {
+                [IO.File]::Delete($path)
+                $removed.Add($path)
+            } catch {
+                $failed = $true
+                & $keep $path 'could not be removed'
+            }
+        }
+        if ($removeReceipt) {
+            $gone = $false
+            if (-not $failed) {
+                try { [IO.File]::Delete($receipt); $gone = $true } catch { $gone = $false }
+            }
+            if ($gone) { $removed.Add($receipt) } else { & $keep $receipt 'kept while other files remain' }
+        }
+        foreach ($dir in @($binDir, $oskaHome)) {
+            if (-not [IO.Directory]::Exists($dir) -or (Test-Link $dir)) { continue }
+            try {
+                # Not recursive: it fails if anything is left in $dir.
+                [IO.Directory]::Delete($dir, $false)
+                $removed.Add($dir)
+            } catch {
+                & $keep $dir 'not empty'
+            }
+        }
+        if ([IO.Directory]::Exists($configDir) -or [IO.File]::Exists($configDir)) {
+            & $keep $configDir 'settings and credentials, which uninstall never touches'
+        }
+
+        $pathHint = $null
+        foreach ($d in ([string]$env:Path -split [IO.Path]::PathSeparator)) {
+            if ($d -and $d.TrimEnd('\', '/').Equals($binDir.TrimEnd('\', '/'), $cmp)) {
+                $pathHint = "$binDir is on your PATH; remove it from your user PATH"
+            }
+        }
+
+        if ($state.json) {
+            $result = [ordered]@{
+                ok        = $true
+                action    = 'uninstalled'
+                removed   = [string[]]$removed.ToArray()
+                kept      = [string[]]$kept.ToArray()
+                path_hint = $pathHint
+            }
+            Write-Output (New-Object PSObject -Property $result | ConvertTo-Json -Compress)
+            return
+        }
+        Write-Host "Uninstalled oskac from $oskaHome."
+        if ($removed.Count) {
+            Write-Host 'Removed:'
+            foreach ($path in $removed) { Write-Host "  $path" }
+        }
+        if ($kept.Count) {
+            Write-Host 'Kept:'
+            foreach ($line in $keptWhy) { Write-Host $line }
+        }
+        if ($pathHint) { Write-Host "$pathHint." }
+    }
+
+    # The highest index serial this install accepted, from the receipt, or
+    # 0. Advisory like the rest of the receipt: it can only make the
+    # rollback check stricter or looser, never let an unsigned index
+    # through.
+    function Get-SerialSeen([string]$Receipt) {
+        try {
+            if (Test-Path -LiteralPath $Receipt -PathType Leaf) {
+                $s = [string]([IO.File]::ReadAllText($Receipt) | ConvertFrom-Json).index_serial
+                if ($s -cmatch '^[1-9][0-9]{0,14}$') { return [long]$s }
+            }
+        } catch {
+        }
+        return [long]0
+    }
+
+    # Fetches and checks the signed release index, and returns its tag,
+    # serial and expiry. Refuses an index that is not signed by the release
+    # key in the `oska-index` namespace or is not in the index format
+    # (bad_index), one that has expired (stale_index), and one whose serial
+    # is lower than the receipt's (rollback_refused). Warns on stderr when
+    # fewer than 30 days remain. The same checks as install.sh's read_index.
+    function Read-Index([string]$Site, [string]$KeyGen, [long]$Seen) {
+        $url = "$Site/release-index.json"
+        $file = Join-Path $state.tmp 'release-index.json'
+        $sig = "$file.sig"
+        if (-not (Get-Url $url $file)) {
+            Stop-Install 'download_failed' "cannot download $url"
+        }
+        if (-not (Get-Url "$url.sig" $sig)) {
+            Stop-Install 'bad_index' "the release index at $url has no signature ($url.sig); nothing was installed"
+        }
+        $allowed = Join-Path $state.tmp 'allowed_index'
+        Write-Utf8 $allowed "$IndexNamespace namespaces=`"$IndexNamespace`" $ReleaseKey`n"
+        $problem = Get-SignatureProblem $KeyGen $allowed $sig $file $IndexNamespace
+        if ($problem) {
+            Stop-Install 'bad_index' "the release index at $url is not signed by the Oska release key as an index; nothing was installed ($problem)"
+        }
+
+        # Dates are read from the text: PowerShell 7's ConvertFrom-Json turns
+        # them into DateTime values.
+        $text = [IO.File]::ReadAllText($file)
+        $index = $null
+        $expires = ''
+        try {
+            $parsed = $text | ConvertFrom-Json
+            $serial = [string]$parsed.serial
+            $tag = [string]$parsed.latest.tag
+            if ([string]$parsed.schema -ceq '1' -and $serial -cmatch '^[1-9][0-9]{0,14}$' -and
+                $tag -cmatch '^v[0-9]+\.[0-9]+\.[0-9]+$' -and [string]$parsed.latest.version -ceq $tag.Substring(1) -and
+                $text -cmatch '"expires"\s*:\s*"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)"') {
+                $expires = $Matches[1]
+                $styles = [Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal
+                $at = [DateTime]::ParseExact($expires, "yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture, $styles)
+                $index = @{ tag = $tag; serial = [long]$serial; expires = $expires; at = $at }
+            }
+        } catch {
+            $index = $null
+        }
+        if (-not $index) {
+            Stop-Install 'bad_index' "the release index at $url is not in the release index format; nothing was installed"
+        }
+
+        $left = ($index.at - [DateTime]::UtcNow).TotalSeconds
+        if ($left -le 0) {
+            Stop-Install 'stale_index' "the release index at $url expired at $expires, so the latest release cannot be trusted; nothing was installed (a named release still installs with --version)"
+        }
+        if ($index.serial -lt $Seen) {
+            Stop-Install 'rollback_refused' "the release index at $url has serial $($index.serial), lower than serial $Seen, which this install already accepted; nothing was installed"
+        }
+        if ($left -lt 30 * 86400) {
+            [Console]::Error.WriteLine("install.ps1: warning: the release index expires at $expires, in fewer than 30 days; after that, installing the latest release fails until it is re-signed")
+        }
+        $index
+    }
+
+    # A name no one can predict, for a staging directory or a temp file.
+    function Get-RandomName([string]$Prefix) {
+        $Prefix + [IO.Path]::GetRandomFileName().Replace('.', '')
+    }
+
     function Install-Oskac([object[]]$Arguments) {
         $requested = ''
+        $allowDowngrade = $false
+        $mode = ''
         $i = 0
         while ($i -lt $Arguments.Count) {
             $a = [string]$Arguments[$i]
@@ -146,12 +527,25 @@
                 $requested = [string]$Arguments[$i]
             } elseif ($lower.StartsWith('--version=')) {
                 $requested = $a.Substring(10)
+            } elseif ($lower -eq '--allow-downgrade' -or $lower -eq '-allowdowngrade') {
+                $allowDowngrade = $true
+            } elseif ($lower -eq '--check' -or $lower -eq '-check' -or $lower -eq '--uninstall' -or $lower -eq '-uninstall') {
+                $m = '--' + $lower.TrimStart('-')
+                if ($mode -and $mode -ne $m) {
+                    Stop-Install 'usage' "$mode and $m cannot be used together; pick one"
+                }
+                $mode = $m
             } elseif ($lower -eq '--help' -or $lower -eq '-help' -or $lower -eq '-h') {
                 Write-Host 'Install oskac to ~\.oska\bin, verifying its checksum and release signature.'
                 Write-Host ''
-                Write-Host '  --version X  install release X (0.1.0 or v0.1.0) instead of the latest'
-                Write-Host '  --json       print one JSON object on stdout, and nothing else'
-                Write-Host '  --help       print this help'
+                Write-Host '  --version X        install release X (0.1.0 or v0.1.0) instead of the latest'
+                Write-Host '  --allow-downgrade  with --version, install X even if it is older than'
+                Write-Host '                     the installed oskac'
+                Write-Host '  --check            report the installed and the latest version, and'
+                Write-Host '                     install nothing'
+                Write-Host '  --uninstall        remove what the install receipt lists, and nothing else'
+                Write-Host '  --json             print one JSON object on stdout, and nothing else'
+                Write-Host '  --help             print this help'
                 Write-Host ''
                 Write-Host 'Environment: OSKA_HOME (default ~\.oska), OSKA_SITE_URL (https:// only).'
                 return
@@ -159,6 +553,20 @@
                 Stop-Install 'usage' "unknown option $a (try --help)"
             }
             $i++
+        }
+        # Install is the default mode; --check and --uninstall are the
+        # others. --version and --allow-downgrade belong to install alone.
+        if ($mode) {
+            if ($requested) { Stop-Install 'usage' "--version cannot be used with $mode" }
+            if ($allowDowngrade) { Stop-Install 'usage' "--allow-downgrade cannot be used with $mode" }
+            if ($mode -eq '--uninstall') {
+                Uninstall-Oskac
+                return
+            }
+        }
+        $check = $mode -eq '--check'
+        if ($allowDowngrade -and -not $requested) {
+            Stop-Install 'usage' '--allow-downgrade needs --version naming the release to go back to'
         }
 
         if (-not $ReleaseKey.StartsWith('ssh-ed25519 ')) {
@@ -180,14 +588,17 @@
             }
         }
 
-        if ($env:OS -ne 'Windows_NT') {
-            Stop-Install 'unsupported_platform' "on Linux and macOS, use install.sh: curl -fsSL $DefaultSiteUrl/install.sh | sh"
-        }
-        $machine = $env:PROCESSOR_ARCHITEW6432
-        if (-not $machine) { $machine = $env:PROCESSOR_ARCHITECTURE }
-        # Windows on Arm runs the x86_64 build under emulation.
-        if ($machine -ne 'AMD64' -and $machine -ne 'ARM64') {
-            Stop-Install 'unsupported_platform' "there is no oskac build for $machine Windows"
+        # --check only reads, so it needs no platform build.
+        if (-not $check) {
+            if ($env:OS -ne 'Windows_NT') {
+                Stop-Install 'unsupported_platform' "on Linux and macOS, use install.sh: curl -fsSL $DefaultSiteUrl/install.sh | sh"
+            }
+            $machine = $env:PROCESSOR_ARCHITEW6432
+            if (-not $machine) { $machine = $env:PROCESSOR_ARCHITECTURE }
+            # Windows on Arm runs the x86_64 build under emulation.
+            if ($machine -ne 'AMD64' -and $machine -ne 'ARM64') {
+                Stop-Install 'unsupported_platform' "there is no oskac build for $machine Windows"
+            }
         }
         $platform = 'windows-x86_64'
 
@@ -201,25 +612,107 @@
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         }
 
+        $paths = Get-OskaPaths
+        $oskaHome = $paths.home
+        $binDir = $paths.bin
+        $target = $paths.target
+        $versionFile = $paths.versionFile
+        $receipt = $paths.receipt
+        $previous = Get-PreviousVersion $target $receipt $versionFile
+
         $state.tmp = Join-Path ([IO.Path]::GetTempPath()) ('oska-install-' + [Guid]::NewGuid().ToString('N'))
         [void](New-Item -ItemType Directory -Path $state.tmp)
 
+        # The latest release, unless --version names one: from the signed
+        # index when this installer is pinned to require it, else from
+        # latest.json. With --version the index is not consulted, and the
+        # receipt keeps the serial it had.
+        $index = $null
+        $receiptSerial = Get-SerialSeen $receipt
         if (-not $tag) {
-            $latest = Join-Path $state.tmp 'latest.json'
-            if (-not (Get-Url "$site/latest.json" $latest)) {
-                Stop-Install 'download_failed' "cannot download $site/latest.json"
-            }
-            try {
-                $tag = [string](Get-Content -Raw -LiteralPath $latest | ConvertFrom-Json).tag
-            } catch {
-                $tag = ''
-            }
-            # Whatever it names is checked against the signature below.
-            if (-not (Test-Tag $tag)) {
-                Stop-Install 'download_failed' "$site/latest.json does not name a release"
+            if ($IndexRequired -ceq 'yes') {
+                $index = Read-Index $site $keygen.Path $receiptSerial
+                $tag = $index.tag
+                $receiptSerial = $index.serial
+            } else {
+                $latest = Join-Path $state.tmp 'latest.json'
+                if (-not (Get-Url "$site/latest.json" $latest)) {
+                    Stop-Install 'download_failed' "cannot download $site/latest.json"
+                }
+                try {
+                    $tag = [string](Get-Content -Raw -LiteralPath $latest | ConvertFrom-Json).tag
+                } catch {
+                    $tag = ''
+                }
+                # Whatever it names is checked against the signature below.
+                if (-not (Test-Tag $tag)) {
+                    Stop-Install 'download_failed' "$site/latest.json does not name a release"
+                }
             }
         }
         $version = $tag.Substring(1)
+        $indexVerified = $null -ne $index
+        $indexSerial = $null
+        $indexExpires = $null
+        if ($indexVerified) {
+            $indexSerial = $index.serial
+            $indexExpires = $index.expires
+        }
+
+        # --check: report the installed and the latest version, and write
+        # nothing.
+        if ($check) {
+            $updateAvailable = (-not $previous) -or (Compare-Version $version $previous) -gt 0
+            if ($state.json) {
+                $result = [ordered]@{
+                    ok               = $true
+                    action           = 'checked'
+                    installed        = $previous
+                    latest           = $version
+                    tag              = $tag
+                    update_available = $updateAvailable
+                    index_verified   = $indexVerified
+                    index_serial     = $indexSerial
+                    index_expires    = $indexExpires
+                }
+                Write-Output (New-Object PSObject -Property $result | ConvertTo-Json -Compress)
+                return
+            }
+            if (-not $previous) {
+                Write-Host "oskac is not installed in $oskaHome. The latest release is $version."
+            } elseif ($updateAvailable) {
+                Write-Host "oskac $previous is installed; the latest release is $version. To update, run the installer again."
+            } elseif ($previous -eq $version) {
+                Write-Host "oskac $previous is installed, and it is the latest release."
+            } else {
+                Write-Host "oskac $previous is installed, which is newer than the latest release, $version."
+            }
+            if ($indexVerified) {
+                Write-Host "The latest release comes from the signed release index (serial $indexSerial, expires $indexExpires)."
+            } else {
+                Write-Host "The latest release comes from $site/latest.json, which is not signed."
+            }
+            return
+        }
+
+        # The downgrade guard. An older release is installed only when it is
+        # named with --version and --allow-downgrade, so a stale
+        # latest.json, an old script or a re-run never moves an install back.
+        if ($previous -and (Compare-Version $version $previous) -lt 0) {
+            if (-not $requested) {
+                Stop-Install 'downgrade_refused' "oskac $previous is installed, which is newer than the latest release, $version; nothing was installed (to go back, pass --version $version --allow-downgrade)"
+            } elseif (-not $allowDowngrade) {
+                Stop-Install 'downgrade_refused' "oskac $previous is installed, which is newer than $version; nothing was installed (to downgrade, add --allow-downgrade)"
+            }
+        }
+
+        # A running oskac.exe cannot be overwritten, only renamed aside to
+        # oskac.exe.old, which a run cannot delete while it is running.
+        # Remove one left by an earlier run.
+        $old = "$target.old"
+        if (Test-Path -LiteralPath $old -PathType Leaf) {
+            Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
+        }
 
         $asset = "oskac-$platform.exe"
         $release = "$site/releases/$tag"
@@ -233,7 +726,7 @@
         $allowed = Join-Path $state.tmp 'allowed_signers'
         Write-Utf8 $allowed "$Namespace namespaces=`"$Namespace`" $ReleaseKey`n"
         $sums = Join-Path $state.tmp 'SHA256SUMS'
-        $problem = Get-SignatureProblem $keygen.Path $allowed (Join-Path $state.tmp 'SHA256SUMS.sig') $sums
+        $problem = Get-SignatureProblem $keygen.Path $allowed (Join-Path $state.tmp 'SHA256SUMS.sig') $sums $Namespace
         if ($problem) {
             Stop-Install 'bad_signature' "SHA256SUMS for $tag is not signed by the Oska release key; nothing was installed ($problem)"
         }
@@ -261,24 +754,32 @@
             Stop-Install 'checksum_mismatch' "$asset does not match its SHA-256 in SHA256SUMS; nothing was installed"
         }
 
-        $oskaHome = $env:OSKA_HOME
-        if (-not $oskaHome) { $oskaHome = Join-Path $HOME '.oska' }
-        # An absolute path, so .NET and PowerShell agree on where it is.
-        $oskaHome = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($oskaHome)
-        $binDir = Join-Path $oskaHome 'bin'
-        $target = Join-Path $binDir 'oskac.exe'
-        $receipt = Join-Path $oskaHome 'version'
-        $previous = $null
-        if ((Test-Path -LiteralPath $target -PathType Leaf) -and (Test-Path -LiteralPath $receipt -PathType Leaf)) {
-            $previous = ([IO.File]::ReadAllLines($receipt) | Select-Object -First 1)
+        $pub = Join-Path $state.tmp 'release.pub'
+        Write-Utf8 $pub "$ReleaseKey`n"
+        $fingerprint = ''
+        try {
+            $fingerprint = [string](@(& $keygen.Path -l -f $pub 2>$null) | Select-Object -First 1)
+            $fingerprint = ($fingerprint -split ' ')[1]
+        } catch {
+            $fingerprint = ''
+        }
+        if (-not ($fingerprint -and $fingerprint.StartsWith('SHA256:'))) {
+            Stop-Install 'install_failed' 'ssh-keygen cannot fingerprint the release key'
         }
 
-        $staged = Join-Path $binDir '.oskac.new.exe'
+        # Stage in a new directory under a name no one can predict, made next
+        # to the target so the final move stays on one volume. New-Item
+        # refuses a name that exists, so nothing planted in $binDir is ever
+        # written through.
         try {
             [void](New-Item -ItemType Directory -Force -Path $binDir)
-            Copy-Item -LiteralPath $downloaded -Destination $staged -Force
+            $stage = Join-Path $binDir (Get-RandomName '.oskac.')
+            [void](New-Item -ItemType Directory -Path $stage)
+            $state.stage = $stage
+            $staged = Join-Path $stage 'oskac.exe'
+            Copy-Item -LiteralPath $downloaded -Destination $staged
         } catch {
-            Stop-Install 'install_failed' "cannot write ${staged}: $($_.Exception.Message)"
+            Stop-Install 'install_failed' "cannot create a staging directory in ${binDir}: $($_.Exception.Message)"
         }
 
         $reported = ''
@@ -288,25 +789,66 @@
             $reported = ''
         }
         if ($reported -cne "oskac $version") {
-            Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
             Stop-Install 'version_mismatch' "the $tag binary reports '$reported', not 'oskac $version'; nothing was installed"
         }
 
         try {
             # A running oskac.exe cannot be overwritten, but it can be renamed.
-            $old = "$target.old"
             Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
             if (Test-Path -LiteralPath $target) { Move-Item -LiteralPath $target -Destination $old -Force }
             Move-Item -LiteralPath $staged -Destination $target -Force
             Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
-            Write-Utf8 $receipt "$version`n"
+            Write-Utf8 $versionFile "$version`n"
         } catch {
             Stop-Install 'install_failed' "cannot install to ${target}: $($_.Exception.Message)"
         }
 
+        # The install receipt: what this run installed. It is advisory.
+        # Verification never reads it; it only records what counts as
+        # installed, what an uninstall may remove and the highest index
+        # serial seen. Written to a new file beside it, then renamed into
+        # place.
+        $files = @(
+            [ordered]@{ path = $target; kind = 'binary'; sha256 = $actual },
+            [ordered]@{ path = $versionFile; kind = 'record'; sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $versionFile).Hash.ToLowerInvariant() },
+            [ordered]@{ path = $receipt; kind = 'record' }
+        )
+        $record = [ordered]@{
+            schema          = 1
+            version         = $version
+            tag             = $tag
+            platform        = $platform
+            installed_at    = [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture)
+            site            = $site
+            key_fingerprint = $fingerprint
+            sha256          = $actual
+            installer       = 'ps1'
+            index_serial    = $receiptSerial
+            files           = $files
+        }
+        try {
+            $state.receiptTmp = Join-Path $oskaHome (Get-RandomName '.receipt.')
+            Write-Utf8 $state.receiptTmp (($record | ConvertTo-Json -Depth 5) + "`n")
+            if (Test-Path -LiteralPath $receipt) {
+                # [NullString]: PowerShell would pass $null as '', which
+                # Replace takes as a backup file name.
+                [IO.File]::Replace($state.receiptTmp, $receipt, [NullString]::Value)
+            } else {
+                [IO.File]::Move($state.receiptTmp, $receipt)
+            }
+            $state.receiptTmp = $null
+        } catch {
+            Stop-Install 'install_failed' "cannot write ${receipt}: $($_.Exception.Message)"
+        }
+
         if (-not $previous) { $action = 'installed' }
-        elseif ($previous -eq $version) { $action = 'reinstalled' }
-        else { $action = 'updated' }
+        else {
+            switch (Compare-Version $version $previous) {
+                1 { $action = 'updated' }
+                0 { $action = 'reinstalled' }
+                default { $action = 'downgraded' }
+            }
+        }
         $onPath = $false
         foreach ($dir in ($env:Path -split ';')) {
             if ($dir -and $dir.TrimEnd('\') -ieq $binDir.TrimEnd('\')) { $onPath = $true }
@@ -325,6 +867,9 @@
                 on_path            = $onPath
                 checksum_verified  = $true
                 signature_verified = $true
+                receipt            = $receipt
+                index_verified     = $indexVerified
+                index_serial       = $indexSerial
             }
             Write-Output (New-Object PSObject -Property $result | ConvertTo-Json -Compress)
             return
@@ -334,6 +879,7 @@
             'installed' { Write-Host "Installed oskac $version to $target." }
             'reinstalled' { Write-Host "Reinstalled oskac $version to $target." }
             'updated' { Write-Host "Updated oskac $previous to $version in $target." }
+            'downgraded' { Write-Host "Downgraded oskac $previous to $version in $target." }
         }
         Write-Host 'The checksum and the release signature were verified.'
         if (-not $onPath) {
@@ -367,5 +913,7 @@
         throw "install.ps1: $message"
     } finally {
         if ($state.tmp) { Remove-Item -LiteralPath $state.tmp -Recurse -Force -ErrorAction SilentlyContinue }
+        if ($state.stage) { Remove-Item -LiteralPath $state.stage -Recurse -Force -ErrorAction SilentlyContinue }
+        if ($state.receiptTmp) { Remove-Item -LiteralPath $state.receiptTmp -Force -ErrorAction SilentlyContinue }
     }
 } @args

@@ -108,16 +108,67 @@ function Set-Latest([string]$Version) {
 "@)
 }
 
-# Writes pinned/install.ps1, pinned to key.pub as pin.sh pins it.
+# Writes pinned/install.ps1, pinned to key.pub as pin.sh pins it, and to
+# require the release index (yes) or not (no).
+function Write-Pinned([string]$RequireIndex) {
+    if (-not (Test-Path key)) { New-Key 'key' }
+    $parts = (Get-Content -Raw key.pub).Trim() -split ' '
+    $source = [IO.File]::ReadAllText("$here/install.ps1")
+    [void](New-Item -ItemType Directory -Force -Path pinned)
+    Write-Text 'pinned/install.ps1' $source.Replace('@OSKA_RELEASE_KEY@', "$($parts[0]) $($parts[1])").Replace('@OSKA_INDEX_REQUIRED@', $RequireIndex)
+}
+
 function Get-Pinned {
-    if (-not (Test-Path pinned/install.ps1)) {
-        if (-not (Test-Path key)) { New-Key 'key' }
-        $parts = (Get-Content -Raw key.pub).Trim() -split ' '
-        $source = [IO.File]::ReadAllText("$here/install.ps1")
-        [void](New-Item -ItemType Directory -Force -Path pinned)
-        Write-Text 'pinned/install.ps1' $source.Replace('@OSKA_RELEASE_KEY@', "$($parts[0]) $($parts[1])")
-    }
+    if (-not (Test-Path pinned/install.ps1)) { Write-Pinned 'no' }
     (Resolve-Path pinned/install.ps1).Path
+}
+
+# Pins the installer to require the index, as stage-site.sh does once it
+# publishes one.
+function Set-RequireIndex {
+    Write-Pinned 'yes'
+}
+
+# An RFC 3339 UTC time <Days> days from now (negative: in the past).
+function Get-DaysFromNow([int]$Days) {
+    [DateTime]::UtcNow.AddDays($Days).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture)
+}
+
+# Publishes site/release-index.json naming release <Version>, with serial
+# <Serial>, expiring in <Days> days, signed in <Namespace> by <Key>, as
+# scripts/release/sign-index.sh writes it.
+function New-Index([long]$Serial, [string]$Version, [int]$Days = 60, [string]$Namespace = 'oska-index', [string]$Key = 'key') {
+    if (-not (Test-Path key)) { New-Key 'key' }
+    [void](New-Item -ItemType Directory -Force -Path site)
+    Write-Text 'site/release-index.json' (@"
+{
+  "schema": 1,
+  "serial": $Serial,
+  "issued": "$(Get-DaysFromNow -30)",
+  "expires": "$(Get-DaysFromNow $Days)",
+  "latest": {
+    "tag": "v$Version",
+    "version": "$Version"
+  }
+}
+"@)
+    Remove-Item -LiteralPath 'site/release-index.json.sig' -ErrorAction SilentlyContinue
+    & ssh-keygen -q -Y sign -f $Key -n $Namespace site/release-index.json
+    Assert ($LASTEXITCODE -eq 0) 'ssh-keygen could not sign the index'
+}
+
+# Releases 1.2.3 and 1.3.0, with latest.json still naming 1.2.3 and a
+# signed index (serial 7) naming 1.3.0.
+function Use-IndexNaming130 {
+    New-Release '1.2.3'
+    New-Release '1.3.0'
+    Set-Latest '1.2.3'
+    New-Index 7 '1.3.0'
+    Set-RequireIndex
+}
+
+function Get-ReceiptSerial {
+    (Get-Content -Raw home/.oska/receipt.json | ConvertFrom-Json).index_serial
 }
 
 function Get-SiteUrl {
@@ -126,9 +177,9 @@ function Get-SiteUrl {
 
 # Runs an installer file under the PowerShell being tested. Returns its
 # stdout lines; the exit status is in $script:status.
-function Invoke-Installer([string[]]$Arguments, [string]$Installer = (Get-Pinned), [string]$Site = (Get-SiteUrl)) {
+function Invoke-Installer([string[]]$Arguments, [string]$Installer = (Get-Pinned), [string]$Site = (Get-SiteUrl), [string]$OskaHome = (Join-Path (Get-Location).Path 'home\.oska')) {
     $env:OSKA_SITE_URL = $Site
-    $env:OSKA_HOME = Join-Path (Get-Location).Path 'home\.oska'
+    $env:OSKA_HOME = $OskaHome
     $errFile = Join-Path (Get-Location).Path 'installer-stderr.txt'
     $out = & $script:shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Installer @Arguments 2>$errFile
     $script:status = $LASTEXITCODE
@@ -148,7 +199,242 @@ function Test-InstalledIs([string]$Version) {
     $installed = Get-Installed
     Assert (Test-Path $installed) "nothing installed at $installed"
     Assert ((Get-Sha256 $installed) -eq (Get-Sha256 "site/releases/v$Version/oskac-windows-x86_64.exe")) "the installed oskac is not $Version"
-    Assert ((Get-Content home/.oska/version) -eq $Version) "the receipt does not say $Version"
+    Assert ((Get-Content home/.oska/version) -eq $Version) "the version file does not say $Version"
+    $receipt = Get-Content -Raw home/.oska/receipt.json | ConvertFrom-Json
+    Assert ($receipt.version -eq $Version) "the receipt does not say $Version"
+}
+
+# Every path under home, with each file's SHA-256: compare two of these to
+# show a run changed nothing.
+function Get-Snapshot {
+    if (-not (Test-Path home)) { return '' }
+    $root = (Resolve-Path home).Path
+    $lines = Get-ChildItem -Recurse -Force -LiteralPath $root | Sort-Object FullName | ForEach-Object {
+        if ($_.PSIsContainer) { $_.FullName } else { "$($_.FullName) $(Get-Sha256 $_.FullName)" }
+    }
+    @($lines) -join "`n"
+}
+
+# Runs the installer with <Arguments>, which must refuse with <Code> and
+# exit status <Status>, as one line of JSON, and leave home exactly as it
+# was. Returns the JSON.
+function Test-RefusedUnchanged([string]$Code, [int]$Status, [string[]]$Arguments) {
+    $before = Get-Snapshot
+    $all = @('--json')
+    if ($Arguments) { $all += $Arguments }
+    $result = Read-Json (Invoke-Installer $all)
+    Assert ($script:status -eq $Status) "$($Arguments -join ' '): exited $script:status, not $Status"
+    Assert ($result.ok -eq $false) 'JSON does not say ok: false'
+    Assert ($result.error -eq $Code) "$($Arguments -join ' '): error is $($result.error), not $Code"
+    Assert ((Get-Snapshot) -eq $before) "$($Arguments -join ' '): the home changed"
+    $result
+}
+
+function Test-WritesAReceiptListingWhatItInstalled {
+    New-Release '1.2.3'
+    Set-Latest '1.2.3'
+    $result = Read-Json (Invoke-Installer @('--json'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    $oskaHome = Join-Path (Get-Location).Path 'home\.oska'
+    $path = Join-Path $oskaHome 'receipt.json'
+    Assert ($result.receipt -eq $path) "JSON receipt is $($result.receipt)"
+    $receipt = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json
+    $fingerprint = ((& ssh-keygen -l -f key.pub) -split ' ')[1]
+    $installed = Get-Installed
+    $expected = [ordered]@{
+        schema = 1; version = '1.2.3'; tag = 'v1.2.3'; platform = 'windows-x86_64'
+        site = (Get-SiteUrl).TrimEnd('/'); key_fingerprint = $fingerprint
+        sha256 = (Get-Sha256 $installed); installer = 'ps1'; index_serial = 0
+    }
+    foreach ($k in $expected.Keys) {
+        Assert ($receipt.$k -eq $expected[$k]) "receipt $k is '$($receipt.$k)', not '$($expected[$k])'"
+    }
+    # Read from the text: PowerShell 7's ConvertFrom-Json turns dates into
+    # DateTime values.
+    $text = [IO.File]::ReadAllText($path)
+    Assert ($text -cmatch '"installed_at":\s*"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"') "installed_at is not UTC RFC 3339 in: $text"
+    $files = @($receipt.files)
+    Assert ($files.Count -eq 3) "the receipt lists $($files.Count) files"
+    Assert ($files[0].path -eq $installed -and $files[0].kind -eq 'binary' -and $files[0].sha256 -eq (Get-Sha256 $installed)) 'files[0] is not the binary'
+    $versionFile = Join-Path $oskaHome 'version'
+    Assert ($files[1].path -eq $versionFile -and $files[1].kind -eq 'record' -and $files[1].sha256 -eq (Get-Sha256 $versionFile)) 'files[1] is not the version file'
+    Assert ($files[2].path -eq $path -and $files[2].kind -eq 'record') 'files[2] is not the receipt'
+    Assert ([IO.File]::ReadAllText($versionFile) -ceq "1.2.3`n") 'the version file is not 1.2.3'
+    $held = @(Get-ChildItem -Force home/.oska | Sort-Object Name | ForEach-Object { $_.Name })
+    Assert (($held -join ',') -eq 'bin,receipt.json,version') "the home holds $($held -join ',')"
+}
+
+# An install from before receipts has only the version file. The next run
+# takes the previous version from it and writes a receipt.
+function Test-UpdatesAnInstallThatHasOnlyAVersionFile {
+    New-Release '1.2.3'
+    New-Release '1.3.0'
+    Set-Latest '1.2.3'
+    [void](Invoke-Installer @('--json'))
+    Remove-Item home/.oska/receipt.json
+    Set-Latest '1.3.0'
+    $result = Read-Json (Invoke-Installer @('--json'))
+    Assert ($result.action -eq 'updated') "action is $($result.action)"
+    Assert ($result.previous_version -eq '1.2.3') "previous_version is $($result.previous_version)"
+    Test-InstalledIs '1.3.0'
+}
+
+function Test-TheReceiptWinsOverTheVersionFile {
+    New-Release '1.2.3'
+    New-Release '1.3.0'
+    Set-Latest '1.2.3'
+    [void](Invoke-Installer @('--json'))
+    Write-Text 'home/.oska/version' "9.9.9`n"
+    Set-Latest '1.3.0'
+    $result = Read-Json (Invoke-Installer @('--json'))
+    Assert ($result.action -eq 'updated') "action is $($result.action)"
+    Assert ($result.previous_version -eq '1.2.3') "previous_version is $($result.previous_version)"
+}
+
+# The receipt is advisory: one that vouches for a tampered binary changes
+# nothing about what is verified.
+function Test-ATamperedReceiptCannotVouchForATamperedBinary {
+    Install-Good
+    $asset = 'site/releases/v1.3.0/oskac-windows-x86_64.exe'
+    Add-Content -LiteralPath $asset -Value 'evil'
+    $evil = Get-Sha256 $asset
+    $text = [IO.File]::ReadAllText((Get-FullPath 'home/.oska/receipt.json'))
+    $text = $text.Replace('1.2.3', '1.3.0').Replace((Get-Sha256 (Get-Installed)), $evil)
+    Write-Text 'home/.oska/receipt.json' $text
+    [void](Test-RefusedUnchanged 'checksum_mismatch' 1 @('--version', '1.3.0'))
+    Assert ((Get-Sha256 (Get-Installed)) -eq (Get-Sha256 'site/releases/v1.2.3/oskac-windows-x86_64.exe')) 'the installed oskac changed'
+}
+
+function Test-RefusesToDowngradeToAnOlderLatestRelease {
+    New-Release '1.2.3'
+    New-Release '1.3.0'
+    Set-Latest '1.3.0'
+    [void](Invoke-Installer @('--json'))
+    Set-Latest '1.2.3'
+    $result = Test-RefusedUnchanged 'downgrade_refused' 1 @()
+    Assert ($result.message -like '*1.3.0*' -and $result.message -like '*1.2.3*') "message is $($result.message)"
+    Test-InstalledIs '1.3.0'
+}
+
+function Test-RefusesADowngradeNamedWithVersionAlone {
+    New-Release '1.2.3'
+    New-Release '1.3.0'
+    Set-Latest '1.3.0'
+    [void](Invoke-Installer @('--json'))
+    $result = Test-RefusedUnchanged 'downgrade_refused' 1 @('--version', '1.2.3')
+    Assert ($result.message -like '*--allow-downgrade*') "message is $($result.message)"
+}
+
+function Test-DowngradesWithVersionAndAllowDowngrade {
+    New-Release '1.2.3'
+    New-Release '1.3.0'
+    Set-Latest '1.3.0'
+    [void](Invoke-Installer @('--json'))
+    $result = Read-Json (Invoke-Installer @('--json', '--allow-downgrade', '--version', '1.2.3'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    Test-InstalledIs '1.2.3'
+    Assert ($result.action -eq 'downgraded') "action is $($result.action)"
+    Assert ($result.previous_version -eq '1.3.0') "previous_version is $($result.previous_version)"
+    [void](Invoke-Installer @('-Version', '1.3.0'))
+    $out = Invoke-Installer @('-Version', '1.2.3', '-AllowDowngrade')
+    Assert (($out -join "`n") -like "*Downgraded oskac 1.3.0 to 1.2.3 in $(Get-Installed)*") "no human summary in: $out"
+}
+
+function Test-AllowDowngradeWithoutVersionIsAUsageError {
+    New-Release '1.2.3'
+    Set-Latest '1.2.3'
+    [void](Invoke-Installer @('--json'))
+    [void](Test-RefusedUnchanged 'usage' 2 @('--allow-downgrade'))
+}
+
+# A pre-release installed with --version is newer than the latest release,
+# so a plain re-run keeps it rather than move back.
+function Test-APlainReRunKeepsANewerPreRelease {
+    New-Release '1.3.0'
+    New-Release '1.4.0-pre.1'
+    Set-Latest '1.3.0'
+    [void](Invoke-Installer @('--json', '--version', '1.4.0-pre.1'))
+    $result = Test-RefusedUnchanged 'downgrade_refused' 1 @()
+    Assert ($result.message -like '*1.4.0-pre.1 is installed, which is newer than the latest release, 1.3.0*') "message is $($result.message)"
+    New-Release '1.4.0'
+    Set-Latest '1.4.0'
+    $result = Read-Json (Invoke-Installer @('--json'))
+    Assert ($result.action -eq 'updated') "1.4.0-pre.1 to 1.4.0 is $($result.action)"
+}
+
+# Versions compare by semver precedence: numerically, part by part, with a
+# pre-release below its release.
+function Test-ComparesVersionsBySemverPrecedence {
+    $cases = @(
+        @('1.9.0', '1.10.0', 'updated'),
+        @('1.10.0', '1.9.0', 'downgraded'),
+        @('1.2.10', '1.2.9', 'downgraded'),
+        @('2.0.0', '10.0.0', 'updated'),
+        @('1.0.0-alpha', '1.0.0', 'updated'),
+        @('1.0.0', '1.0.0-rc.1', 'downgraded'),
+        @('1.0.0-alpha', '1.0.0-alpha.1', 'updated'),
+        @('1.0.0-alpha.1', '1.0.0-alpha.beta', 'updated'),
+        @('1.0.0-beta.11', '1.0.0-beta.2', 'downgraded'),
+        @('1.0.0-beta', '1.0.0-beta.2', 'updated'),
+        @('1.0.0-rc.1', '1.0.0-rc.1', 'reinstalled')
+    )
+    foreach ($case in $cases) {
+        if (Test-Path home) { Remove-Item -Recurse -Force home }
+        New-Release $case[0]
+        New-Release $case[1]
+        [void](Invoke-Installer @('--json', '--version', $case[0]))
+        $result = Read-Json (Invoke-Installer @('--json', '--allow-downgrade', '--version', $case[1]))
+        Assert ($script:status -eq 0) "$($case[0]) to $($case[1]) exited $script:status"
+        Assert ($result.action -eq $case[2]) "$($case[0]) to $($case[1]) is $($result.action), not $($case[2])"
+    }
+}
+
+# Install (the default), --check and --uninstall are modes, and one run is
+# in one of them. --version and --allow-downgrade belong to install.
+function Test-ModesAreMutuallyExclusive {
+    New-Release '1.2.3'
+    Set-Latest '1.2.3'
+    [void](Invoke-Installer @('--json'))
+    $cases = @(
+        @('--check', '--uninstall'),
+        @('--uninstall', '--check'),
+        @('--check', '--version', '1.2.3'),
+        @('--uninstall', '--version', '1.2.3'),
+        @('--check', '--allow-downgrade'),
+        @('--uninstall', '--version', '1.2.3', '--allow-downgrade')
+    )
+    foreach ($case in $cases) {
+        $result = Test-RefusedUnchanged 'usage' 2 $case
+        Assert ($result.message -like '*cannot be used*') "$($case -join ' '): message is $($result.message)"
+    }
+}
+
+# The staged binary goes into a new directory with a name no one can
+# predict: something planted at the old fixed name, .oskac.new.exe, is
+# neither used nor touched.
+function Test-StagesUnderANameNoOneCanPredict {
+    New-Release '1.2.3'
+    Set-Latest '1.2.3'
+    [void](New-Item -ItemType Directory -Force -Path 'home/.oska/bin/.oskac.new.exe')
+    Write-Text 'home/.oska/bin/.oskac.new.exe/planted' "planted`n"
+    [void](Invoke-Installer @('--json'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    Test-InstalledIs '1.2.3'
+    Assert ((Get-Content -Raw 'home/.oska/bin/.oskac.new.exe/planted') -eq "planted`n") 'the planted file changed'
+    $left = @(Get-ChildItem -Force home/.oska/bin | ForEach-Object { $_.Name })
+    Assert ($left.Count -eq 2 -and $left -contains '.oskac.new.exe' -and $left -contains 'oskac.exe') "bin holds $($left -join ',')"
+}
+
+# A run removes the oskac.exe.old an earlier run could not.
+function Test-RemovesALeftoverOldBinary {
+    New-Release '1.2.3'
+    Set-Latest '1.2.3'
+    [void](Invoke-Installer @('--json'))
+    Write-Text 'home/.oska/bin/oskac.exe.old' "old`n"
+    [void](Invoke-Installer @('--json'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    $left = @(Get-ChildItem -Force home/.oska/bin | ForEach-Object { $_.Name })
+    Assert (($left -join ',') -eq 'oskac.exe') "bin holds $($left -join ',')"
 }
 
 function Test-InstallsTheLatestReleaseAndReportsItAsJson {
@@ -162,6 +448,8 @@ function Test-InstallsTheLatestReleaseAndReportsItAsJson {
         platform = 'windows-x86_64'; path = (Get-Installed)
         bin_dir = (Join-Path (Get-Location).Path 'home\.oska\bin'); on_path = $false
         checksum_verified = $true; signature_verified = $true
+        receipt = (Join-Path (Get-Location).Path 'home\.oska\receipt.json')
+        index_verified = $false; index_serial = $null
     }
     $names = @($result.PSObject.Properties | ForEach-Object { $_.Name })
     Assert (($names -join ',') -eq (@($expected.Keys) -join ',')) "fields are $($names -join ',')"
@@ -211,13 +499,13 @@ function Install-Good {
 
 # The tampered 1.3.0 must be refused with <code> and leave 1.2.3 installed.
 function Test-Refused([string]$Code, [string]$Site = (Get-SiteUrl)) {
+    $before = Get-Snapshot
     $result = Read-Json (Invoke-Installer @('--json', '--version', '1.3.0') -Site $Site)
     Assert ($script:status -ne 0) 'installed a tampered release'
     Assert ($result.ok -eq $false) 'JSON does not say ok: false'
     Assert ($result.error -eq $Code) "error is $($result.error), not $Code"
     Test-InstalledIs '1.2.3'
-    $left = @(Get-ChildItem -Force home/.oska/bin | ForEach-Object { $_.Name })
-    Assert (($left -join ',') -eq 'oskac.exe') "bin holds $($left -join ',')"
+    Assert ((Get-Snapshot) -eq $before) 'the home changed'
 }
 
 function Test-RefusesATamperedBinary {
@@ -409,11 +697,423 @@ function Test-RunsUnderInvokeExpression {
     Assert (-not (Test-Path (Get-Installed))) 'installed a tampered binary under iex'
 }
 
+# ---- --uninstall -------------------------------------------------------------
+
+function Install-ForUninstall {
+    New-Release '1.2.3'
+    Set-Latest '1.2.3'
+    [void](Invoke-Installer @('--json'))
+    Test-InstalledIs '1.2.3'
+}
+
+# Every path under $Root, sorted, joined with spaces.
+function Get-Tree([string]$Root) {
+    $root = Get-FullPath $Root
+    $all = @($root) + @(Get-ChildItem -Recurse -Force -LiteralPath $root | ForEach-Object { $_.FullName })
+    (@($all | Sort-Object) -join ' ')
+}
+
+function Assert-List([object]$Actual, [string[]]$Expected, [string]$Name) {
+    $got = @($Actual) -join ' | '
+    Assert ($got -eq ($Expected -join ' | ')) "$Name is $got, not $($Expected -join ' | ')"
+}
+
+# Uninstall removes exactly the files the receipt lists, then bin\ and the
+# Oska home because they are left empty.
+function Test-UninstallRemovesWhatTheReceiptLists {
+    Install-ForUninstall
+    $oska = Get-FullPath 'home\.oska'
+    $result = Read-Json (Invoke-Installer @('--json', '--uninstall'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    $names = @($result.PSObject.Properties | ForEach-Object { $_.Name })
+    Assert (($names -join ',') -eq 'ok,action,removed,kept,path_hint') "fields are $($names -join ',')"
+    Assert ($result.ok -eq $true -and $result.action -eq 'uninstalled') "ok is $($result.ok), action is $($result.action)"
+    Assert-List $result.removed @("$oska\bin\oskac.exe", "$oska\version", "$oska\receipt.json", "$oska\bin", $oska) 'removed'
+    Assert-List $result.kept @() 'kept'
+    Assert ($null -eq $result.path_hint) "path_hint is $($result.path_hint)"
+    Assert (-not (Test-Path -LiteralPath $oska)) 'the Oska home is still there'
+}
+
+function Test-UninstallWithoutAReceiptIsNotInstalled {
+    [void](New-Item -ItemType Directory home)
+    [void](Test-RefusedUnchanged 'not_installed' 1 @('--uninstall'))
+    # An install from before receipts has only the version file: uninstall
+    # never guesses what to delete.
+    Install-ForUninstall
+    Remove-Item home/.oska/receipt.json
+    [void](Test-RefusedUnchanged 'not_installed' 1 @('--uninstall'))
+}
+
+# A file that changed since it was installed is kept and listed, and so is
+# the directory it keeps from being empty. The rest goes.
+function Test-UninstallKeepsAChangedFile {
+    Install-ForUninstall
+    $oska = Get-FullPath 'home\.oska'
+    Copy-Item -LiteralPath (Get-FakeOskac '9.9.9') -Destination "$oska\bin\oskac.exe" -Force
+    $mine = Get-Sha256 "$oska\bin\oskac.exe"
+    $result = Read-Json (Invoke-Installer @('--json', '--uninstall'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    Assert-List $result.removed @("$oska\version", "$oska\receipt.json") 'removed'
+    Assert-List $result.kept @("$oska\bin\oskac.exe", "$oska\bin", $oska) 'kept'
+    Assert ((Get-Sha256 "$oska\bin\oskac.exe") -eq $mine) 'the changed oskac.exe changed'
+    Assert ((Get-Tree 'home\.oska') -eq "$oska $oska\bin $oska\bin\oskac.exe") "left $(Get-Tree 'home\.oska')"
+}
+
+# Anything else in the Oska home is not the installer's: it stays, and so
+# does the home.
+function Test-UninstallKeepsAHomeWithOtherFilesInIt {
+    Install-ForUninstall
+    $oska = Get-FullPath 'home\.oska'
+    Write-Text 'home/.oska/notes.txt' "notes`n"
+    [void](New-Item -ItemType Directory 'home/.oska/bin/tools')
+    $result = Read-Json (Invoke-Installer @('--json', '--uninstall'))
+    Assert-List $result.kept @("$oska\bin", $oska) 'kept'
+    Assert ((Get-Tree 'home\.oska') -eq "$oska $oska\bin $oska\bin\tools $oska\notes.txt") "left $(Get-Tree 'home\.oska')"
+}
+
+# ~\.config\oska, under the user profile, is never touched.
+function Test-UninstallNeverTouchesTheConfigDirectory {
+    Install-ForUninstall
+    [void](New-Item -ItemType Directory -Force 'home/.config/oska')
+    Write-Text 'home/.config/oska/credentials.toml' "token`n"
+    $savedProfile = $env:USERPROFILE
+    try {
+        $env:USERPROFILE = Get-FullPath 'home'
+        $result = Read-Json (Invoke-Installer @('--json', '--uninstall'))
+    } finally {
+        $env:USERPROFILE = $savedProfile
+    }
+    Assert-List $result.kept @((Get-FullPath 'home\.config\oska')) 'kept'
+    Assert ((Get-Content -Raw 'home/.config/oska/credentials.toml') -eq "token`n") 'the config directory changed'
+    Assert (-not (Test-Path 'home/.oska')) 'the Oska home is still there'
+}
+
+# OSKA_HOME inside ~\.config\oska: the settings and credentials there are
+# never removed, even if the receipt lists them.
+function Test-UninstallRefusesToTouchTheConfigDirectoryAsAnOskaHome {
+    New-Release '1.2.3'
+    Set-Latest '1.2.3'
+    $oska = Get-FullPath 'home\.config\oska'
+    $savedProfile = $env:USERPROFILE
+    try {
+        $env:USERPROFILE = Get-FullPath 'home'
+        [void](Invoke-Installer @('--json') -OskaHome $oska)
+        Assert ($script:status -eq 0) "the install exited $script:status"
+        $before = Get-Tree 'home'
+        $result = Read-Json (Invoke-Installer @('--json', '--uninstall') -OskaHome $oska)
+    } finally {
+        $env:USERPROFILE = $savedProfile
+    }
+    Assert ($script:status -eq 1 -and $result.error -eq 'unsafe_path') "exited $script:status with $($result.error)"
+    Assert ((Get-Tree 'home') -eq $before) 'the home changed'
+}
+
+function Test-UninstallFindsTheInstallInACustomOskaHome {
+    New-Release '1.2.3'
+    Set-Latest '1.2.3'
+    $oska = Get-FullPath 'elsewhere'
+    [void](Invoke-Installer @('--json') -OskaHome $oska)
+    Assert ($script:status -eq 0) "the install exited $script:status"
+    # Without that OSKA_HOME, there is nothing at home\.oska to uninstall.
+    [void](New-Item -ItemType Directory home)
+    [void](Test-RefusedUnchanged 'not_installed' 1 @('--uninstall'))
+    Assert (Test-Path "$oska\bin\oskac.exe") 'uninstalled the custom home without its OSKA_HOME'
+    $result = Read-Json (Invoke-Installer @('--json', '--uninstall') -OskaHome $oska)
+    Assert-List $result.removed @("$oska\bin\oskac.exe", "$oska\version", "$oska\receipt.json", "$oska\bin", $oska) 'removed'
+    Assert (-not (Test-Path -LiteralPath $oska)) 'the custom Oska home is still there'
+}
+
+# Rewrites the receipt the install wrote with $Edit, a script block given
+# the parsed receipt and the Oska home, then expects --uninstall to refuse
+# with unsafe_path and to change nothing.
+function Assert-UninstallRefuses([scriptblock]$Edit) {
+    if (-not (Test-Path installed.json)) { Copy-Item -LiteralPath 'home/.oska/receipt.json' -Destination installed.json }
+    $receipt = Get-Content -Raw installed.json | ConvertFrom-Json
+    & $Edit $receipt (Get-FullPath 'home\.oska')
+    Write-Text 'home/.oska/receipt.json' ($receipt | ConvertTo-Json -Depth 5)
+    [void](Test-RefusedUnchanged 'unsafe_path' 1 @('--uninstall'))
+}
+
+# A planted receipt, or a hostile OSKA_HOME, must not steer a deletion: an
+# entry outside the places the installer writes refuses the whole
+# uninstall before anything is removed.
+function Test-UninstallRefusesAnEntryOutsideTheOskaHome {
+    Install-ForUninstall
+    Write-Text 'victim' "victim`n"
+    $victim = Get-FullPath 'victim'
+    $sum = Get-Sha256 $victim
+    Assert-UninstallRefuses { param($r, $h) $r.files += [pscustomobject]@{ path = $victim; kind = 'record'; sha256 = $sum } }
+    Assert-UninstallRefuses { param($r, $h) $r.files[1].path = "$h\sub\version" }
+    Assert-UninstallRefuses { param($r, $h) $r.files[1].path = 'version' }
+    Assert-UninstallRefuses { param($r, $h) $r.files[1].path = "$h\." }
+    Assert-UninstallRefuses { param($r, $h) $r.files[1].kind = 'hook_script' }
+    Assert ((Get-Content -Raw 'victim') -eq "victim`n") 'removed or changed the victim'
+}
+
+function Test-UninstallRefusesAPathThatClimbsOutWithDotDot {
+    Install-ForUninstall
+    Write-Text 'home/victim' "victim`n"
+    $sum = Get-Sha256 'home/victim'
+    Assert-UninstallRefuses { param($r, $h) $r.files[1].path = "$h\..\victim"; $r.files[1].sha256 = $sum }
+    Assert-UninstallRefuses { param($r, $h) $r.files[0].path = "$h\bin\..\version" }
+    # Directly in the home by name, yet a directory: refused, not kept.
+    Assert-UninstallRefuses { param($r, $h) $r.files[1].path = "$h\.." }
+    Assert-UninstallRefuses { param($r, $h) $r.files[1].path = "$h\bin\.." }
+    Assert (Test-Path 'home/victim') 'removed the victim'
+}
+
+# bin\ is a junction to a directory holding a file that matches the
+# receipt's digest: removing through the link would delete it.
+function Test-UninstallRefusesASymlinkInAPath {
+    Install-ForUninstall
+    [void](New-Item -ItemType Directory victim)
+    Move-Item -LiteralPath 'home/.oska/bin/oskac.exe' -Destination 'victim/oskac.exe'
+    Remove-Item 'home/.oska/bin'
+    [void](New-Item -ItemType Junction -Path 'home/.oska/bin' -Target (Get-FullPath 'victim'))
+    [void](Test-RefusedUnchanged 'unsafe_path' 1 @('--uninstall'))
+    Assert (Test-Path 'victim/oskac.exe') 'removed a file through the junction'
+    # Not recursive: removes the junction, never what it points to.
+    [IO.Directory]::Delete((Get-FullPath 'home/.oska/bin'), $false)
+    [void](New-Item -ItemType Directory 'home/.oska/bin')
+    [void](New-Item -ItemType SymbolicLink -Path 'home/.oska/bin/oskac.exe' -Target (Get-FullPath 'victim/oskac.exe'))
+    [void](Test-RefusedUnchanged 'unsafe_path' 1 @('--uninstall'))
+    Remove-Item 'home/.oska/bin/oskac.exe'
+    Move-Item -LiteralPath 'home/.oska/receipt.json' -Destination 'receipt.json'
+    [void](New-Item -ItemType SymbolicLink -Path 'home/.oska/receipt.json' -Target (Get-FullPath 'receipt.json'))
+    [void](Test-RefusedUnchanged 'unsafe_path' 1 @('--uninstall'))
+    Assert ((Test-Path 'victim/oskac.exe') -and (Test-Path 'receipt.json')) "removed a link's target"
+}
+
+# The Oska home itself is a junction, also named with a trailing separator.
+function Test-UninstallRefusesASymlinkedOskaHome {
+    New-Release '1.2.3'
+    Set-Latest '1.2.3'
+    [void](New-Item -ItemType Directory real)
+    [void](New-Item -ItemType Junction -Path link -Target (Get-FullPath 'real'))
+    $link = Get-FullPath 'link'
+    [void](Invoke-Installer @('--json') -OskaHome "$link\")
+    Assert ($script:status -eq 0) "the install exited $script:status"
+    foreach ($oska in @($link, "$link\")) {
+        $result = Read-Json (Invoke-Installer @('--json', '--uninstall') -OskaHome $oska)
+        Assert ($script:status -eq 1 -and $result.error -eq 'unsafe_path') "$oska`: exited $script:status with $($result.error)"
+    }
+    Assert (Test-Path 'real/bin/oskac.exe') 'removed a file through the junction'
+}
+
+# Each receipt below would remove the version file if it were read loosely;
+# each must be refused instead. (install.sh also refuses a \u escape
+# outside ASCII; ConvertFrom-Json cannot tell one from the character.)
+function Test-UninstallRefusesAReceiptItCannotRead {
+    Install-ForUninstall
+    $good = [IO.File]::ReadAllText((Get-FullPath 'home/.oska/receipt.json'))
+    $v = Get-FullPath 'home\.oska\version'
+    $vj = $v | ConvertTo-Json
+    $sum = Get-Sha256 $v
+    $entry = "{`"path`": $vj, `"kind`": `"record`", `"sha256`": `"$sum`"}"
+    $cases = @(
+        "{`"schema`": 1, `"files`": [$entry",
+        "{`"schema`": 2, `"files`": [$entry]}",
+        "{`"schema`": 1, `"file`": [$entry]}",
+        "{`"schema`": 1, `"files`": [{`"path`": `"C:\\Windows\\win.ini`", `"path`": $vj, `"kind`": `"record`", `"sha256`": `"$sum`"}]}",
+        "{`"schema`": 1, `"files`": [{`"path`": $($vj.TrimEnd('"'))\n`", `"kind`": `"record`", `"sha256`": `"$sum`"}]}",
+        "{`"schema`": 1, `"files`": [`"$($v.Replace('\', '\\'))`"]}"
+    )
+    foreach ($case in $cases) {
+        Write-Text 'home/.oska/receipt.json' $case
+        [void](Test-RefusedUnchanged 'unsafe_path' 1 @('--uninstall'))
+    }
+    Assert (Test-Path -LiteralPath $v) 'removed the version file'
+    # An ASCII escape reads as what it stands for.
+    $escape = '\' + 'u006e'
+    Write-Text 'home/.oska/receipt.json' $good.Replace('\\version"', "\\versio$escape`"")
+    $result = Read-Json (Invoke-Installer @('--json', '--uninstall'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    Assert (-not (Test-Path 'home/.oska')) "an escaped receipt did not uninstall: $script:stdout"
+}
+
+function Test-UninstallHintsAtThePathAndExplainsItself {
+    Install-ForUninstall
+    $bin = Get-FullPath 'home\.oska\bin'
+    $path = $env:Path
+    try {
+        $env:Path = "$bin;$path"
+        $out = (Invoke-Installer @('--uninstall')) -join "`n"
+        Assert ($script:status -eq 0) "exited $script:status"
+        Assert ($out -like "*Uninstalled oskac from $(Get-FullPath 'home\.oska').*") "no summary in: $out"
+        Assert ($out -like "*  $bin\oskac.exe*") "does not list what it removed: $out"
+        Assert ($out -like "*$bin is on your PATH*") "no PATH hint in: $out"
+        Install-ForUninstall
+        $result = Read-Json (Invoke-Installer @('--json', '--uninstall'))
+        Assert ($result.path_hint -like "$bin is on your PATH*") "path_hint is $($result.path_hint)"
+    } finally {
+        $env:Path = $path
+    }
+}
+
+# ---- The signed release index and --check ------------------------------------
+
+function Test-InstallsTheLatestReleaseTheSignedIndexNames {
+    Use-IndexNaming130
+    $result = Read-Json (Invoke-Installer @('--json'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    Test-InstalledIs '1.3.0'
+    Assert ($result.index_verified -eq $true) "index_verified is $($result.index_verified)"
+    Assert ($result.index_serial -eq 7) "index_serial is $($result.index_serial)"
+    Assert ((Get-ReceiptSerial) -eq 7) "the receipt records serial $(Get-ReceiptSerial)"
+}
+
+function Test-AnInstallerNotPinnedToRequireTheIndexReadsLatestJson {
+    Use-IndexNaming130
+    Write-Pinned 'no'
+    $result = Read-Json (Invoke-Installer @('--json'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    Test-InstalledIs '1.2.3'
+    Assert ($result.index_verified -eq $false) "index_verified is $($result.index_verified)"
+    Assert ($null -eq $result.index_serial) "index_serial is $($result.index_serial)"
+}
+
+function Test-RefusesAnIndexThatIsNotSignedByTheReleaseKeyAsAnIndex {
+    Use-IndexNaming130
+    [void](Invoke-Installer @('--json', '--version', '1.2.3'))
+    New-Key 'attacker'
+    foreach ($case in @('unsigned', 'another_key', 'release_namespace', 'not_an_index')) {
+        New-Index 7 '1.3.0'
+        switch ($case) {
+            'unsigned' { Remove-Item site/release-index.json.sig }
+            'another_key' { New-Index 7 '1.3.0' -Key 'attacker' }
+            'release_namespace' { New-Index 7 '1.3.0' -Namespace 'oska-release' }
+            'not_an_index' {
+                Write-Text 'site/release-index.json' "{`"schema`": 1, `"serial`": `"seven`", `"latest`": {`"tag`": `"v1.3.0`"}}`n"
+                Remove-Item site/release-index.json.sig
+                & ssh-keygen -q -Y sign -f key -n oska-index site/release-index.json
+            }
+        }
+        [void](Test-RefusedUnchanged 'bad_index' 1 @())
+        Test-InstalledIs '1.2.3'
+    }
+}
+
+function Test-RefusesAnExpiredIndex {
+    Use-IndexNaming130
+    [void](Invoke-Installer @('--json', '--version', '1.2.3'))
+    New-Index 7 '1.3.0' -Days -1
+    $result = Test-RefusedUnchanged 'stale_index' 1 @()
+    Assert ($result.message -like '*--version*') "message is $($result.message)"
+}
+
+function Test-RefusesAnIndexWithALowerSerialThanOneAlreadyAccepted {
+    Use-IndexNaming130
+    [void](Invoke-Installer @('--json'))
+    # A genuine, unexpired, older index: the rollback (and freeze) attack.
+    New-Index 6 '1.2.3'
+    $result = Test-RefusedUnchanged 'rollback_refused' 1 @()
+    Assert ($result.message -like '*6*7*') "message is $($result.message)"
+    New-Index 7 '1.3.0'
+    $result = Read-Json (Invoke-Installer @('--json'))
+    Assert ($result.action -eq 'reinstalled') "serial 7 again is $($result.action)"
+}
+
+function Test-RefusesAMissingIndexWhenItIsRequired {
+    Use-IndexNaming130
+    Remove-Item site/release-index.json
+    $result = Read-Json (Invoke-Installer @('--json'))
+    Assert ($script:status -eq 1) "exited $script:status"
+    Assert ($result.error -eq 'download_failed') "error is $($result.error)"
+    Assert (-not (Test-Path home)) 'created OSKA_HOME'
+}
+
+function Test-WarnsWhenFewerThan30DaysRemainOnTheIndex {
+    Use-IndexNaming130
+    New-Index 7 '1.3.0' -Days 29
+    $result = Read-Json (Invoke-Installer @('--json'))
+    Assert ($result.version -eq '1.3.0') "version is $($result.version)"
+    Assert ($script:stderr -like '*warning: *release index expires*') "no warning in: $script:stderr"
+    New-Index 7 '1.3.0' -Days 31
+    [void](Invoke-Installer @('--json'))
+    Assert (-not ($script:stderr -like '*warning*')) "warned with 31 days left: $script:stderr"
+}
+
+# --version installs from the signed SHA256SUMS alone: an expired index
+# does not stop it, and the serial the receipt holds is kept.
+function Test-VersionIgnoresTheIndexAndKeepsTheSerialSeen {
+    Use-IndexNaming130
+    [void](Invoke-Installer @('--json'))
+    New-Index 7 '1.3.0' -Days -1
+    $result = Read-Json (Invoke-Installer @('--json', '--allow-downgrade', '--version', '1.2.3'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    Assert ($result.action -eq 'downgraded') "action is $($result.action)"
+    Assert ($result.index_verified -eq $false) "index_verified is $($result.index_verified)"
+    Assert ((Get-ReceiptSerial) -eq 7) "the receipt records serial $(Get-ReceiptSerial)"
+}
+
+function Test-CheckReportsAnUpdateAndWritesNothing {
+    Use-IndexNaming130
+    [void](Invoke-Installer @('--json', '--version', '1.2.3'))
+    $before = Get-Snapshot
+    $result = Read-Json (Invoke-Installer @('--json', '--check'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    Assert ((Get-Snapshot) -eq $before) '--check changed the home'
+    $expected = [ordered]@{
+        ok = $true; action = 'checked'; installed = '1.2.3'; latest = '1.3.0'; tag = 'v1.3.0'
+        update_available = $true; index_verified = $true; index_serial = 7
+    }
+    $names = @($result.PSObject.Properties | ForEach-Object { $_.Name })
+    Assert (($names -join ',') -eq ((@($expected.Keys) + 'index_expires') -join ',')) "fields are $($names -join ',')"
+    foreach ($k in $expected.Keys) {
+        Assert ($result.$k -eq $expected[$k]) "$k is '$($result.$k)', not '$($expected[$k])'"
+    }
+    # Read from the text: PowerShell 7's ConvertFrom-Json turns dates into
+    # DateTime values.
+    $expires = [regex]::Match([IO.File]::ReadAllText((Get-FullPath 'site/release-index.json')), '"expires": "([^"]+)"').Groups[1].Value
+    Assert ($script:stdout -clike "*`"index_expires`":`"$expires`"*") "index_expires is not $expires in: $script:stdout"
+    $out = Invoke-Installer @('--check')
+    Assert ($script:status -eq 0) "exited $script:status"
+    Assert (($out -join "`n") -like '*oskac 1.2.3 is installed*1.3.0*') "no human summary in: $out"
+}
+
+function Test-CheckReportsWhenUpToDateOrNotInstalled {
+    Use-IndexNaming130
+    $result = Read-Json (Invoke-Installer @('--json', '--check'))
+    Assert ($null -eq $result.installed) "installed is $($result.installed)"
+    Assert ($result.update_available -eq $true) 'nothing installed: update_available is not true'
+    Assert (-not (Test-Path home)) '--check created OSKA_HOME'
+    [void](Invoke-Installer @('--json'))
+    $result = Read-Json (Invoke-Installer @('--json', '--check'))
+    Assert ($result.installed -eq '1.3.0') "installed is $($result.installed)"
+    Assert ($result.update_available -eq $false) 'up to date: update_available is not false'
+    New-Release '1.4.0-pre.1'
+    [void](Invoke-Installer @('--json', '--version', '1.4.0-pre.1'))
+    $result = Read-Json (Invoke-Installer @('--json', '--check'))
+    Assert ($result.update_available -eq $false) 'a newer pre-release: update_available is not false'
+}
+
+function Test-CheckRefusesAnIndexItCannotTrust {
+    Use-IndexNaming130
+    [void](Invoke-Installer @('--json'))
+    New-Index 7 '1.3.0' -Days -1
+    [void](Test-RefusedUnchanged 'stale_index' 1 @('--check'))
+    New-Index 6 '1.3.0'
+    [void](Test-RefusedUnchanged 'rollback_refused' 1 @('--check'))
+    New-Index 7 '1.3.0' -Namespace 'oska-release'
+    [void](Test-RefusedUnchanged 'bad_index' 1 @('--check'))
+}
+
+function Test-CheckWithoutARequiredIndexReadsLatestJson {
+    New-Release '1.2.3'
+    Set-Latest '1.2.3'
+    $result = Read-Json (Invoke-Installer @('--json', '--check'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    Assert ($result.latest -eq '1.2.3') "latest is $($result.latest)"
+    Assert ($result.index_verified -eq $false) "index_verified is $($result.index_verified)"
+    Assert ($null -eq $result.index_serial) "index_serial is $($result.index_serial)"
+    Assert ($null -eq $result.index_expires) "index_expires is $($result.index_expires)"
+}
+
 $shells = @('powershell', 'pwsh') | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue }
 Assert ($shells.Count -gt 0) 'no PowerShell to test with'
 # Only this file's tests: installed modules define Test-* functions too.
 $tests = Get-ChildItem function:Test-* |
-    Where-Object { $_.ScriptBlock.File -eq $PSCommandPath -and $_.Name -notin @('Test-InstalledIs', 'Test-Refused') } |
+    Where-Object { $_.ScriptBlock.File -eq $PSCommandPath -and $_.Name -notin @('Test-InstalledIs', 'Test-Refused', 'Test-RefusedUnchanged') } |
     Sort-Object Name
 $passes = 0
 $failures = 0

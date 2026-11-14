@@ -34,7 +34,10 @@ jobs:
       - run: ./target/release/oskac run site/build.osk
       # Releases are stored in GitHub Releases (see release.yml). Fetch them
       # all, verify each against the committed key, and publish them under
-      # _site/releases/<tag>/ with _site/latest.json and the key.
+      # _site/releases/<tag>/ with _site/latest.json and the key. A release
+      # may carry a signed release index: the highest serial that verifies
+      # is published as _site/release-index.json, and the installers are
+      # then pinned to require it (stage-site.sh).
       - name: Add signed releases
         env:
           GH_TOKEN: ${{ github.token }}

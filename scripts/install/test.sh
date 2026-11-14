@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Tests for the sh installer. Run from anywhere, on Linux or macOS:
 #
-#   scripts/install/test.sh
+#   scripts/install/test.sh [<pattern>]
+#
+# With <pattern>, only the tests whose names match it (grep -E) run.
 #
 # Each test builds a local release fixture in its own scratch directory: a
 # site tree laid out like https://oskalang.dev (releases/vX.Y.Z/ with fake
@@ -171,11 +173,90 @@ test_installs_the_latest_release_and_reports_it_as_json() {
   "bin_dir": "$PWD/home/.oska/bin",
   "on_path": false,
   "checksum_verified": true,
-  "signature_verified": true
+  "signature_verified": true,
+  "receipt": "$PWD/home/.oska/receipt.json",
+  "index_verified": false,
+  "index_serial": null
 }
 JSON
   diff <(jq -S . expected.json) <(jq -S . out.json) || fail "JSON output differs"
   [ "$(wc -l <out.json | tr -d ' ')" = 1 ] || fail "JSON output is not one line"
+}
+
+test_writes_a_receipt_listing_what_it_installed() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >out.json
+  local receipt="$PWD/home/.oska/receipt.json"
+  [ "$(jq -r .receipt out.json)" = "$receipt" ] || fail "JSON receipt is $(jq -r .receipt out.json)"
+  jq -e . "$receipt" >/dev/null || fail "the receipt is not JSON"
+  [ "$(jq -r .schema "$receipt")" = 1 ] || fail "schema is not 1"
+  [ "$(jq -r .version "$receipt")" = 1.2.3 ] || fail "version is not 1.2.3"
+  [ "$(jq -r .tag "$receipt")" = v1.2.3 ] || fail "tag is not v1.2.3"
+  [ "$(jq -r .platform "$receipt")" = "$(host_platform)" ] || fail "platform is wrong"
+  jq -r .installed_at "$receipt" | grep -Eqx '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z' ||
+    fail "installed_at is not UTC RFC 3339: $(jq -r .installed_at "$receipt")"
+  [ "$(jq -r .site "$receipt")" = "file://$PWD/site" ] || fail "site is $(jq -r .site "$receipt")"
+  [ "$(jq -r .key_fingerprint "$receipt")" = "$(ssh-keygen -l -f key.pub | awk '{print $2}')" ] ||
+    fail "key_fingerprint is $(jq -r .key_fingerprint "$receipt")"
+  [ "$(jq -r .sha256 "$receipt")" = "$(sha256 "$(installed)")" ] || fail "sha256 is not the binary's"
+  [ "$(jq -r .installer "$receipt")" = sh ] || fail "installer is not sh"
+  [ "$(jq -r .index_serial "$receipt")" = 0 ] || fail "index_serial is not 0"
+  # The legacy version file is still written, and listed.
+  [ "$(cat home/.oska/version)" = 1.2.3 ] || fail "the version file is not 1.2.3"
+  cat >expected.json <<JSON
+[
+  {"path": "$(installed)", "kind": "binary", "sha256": "$(sha256 "$(installed)")"},
+  {"path": "$PWD/home/.oska/version", "kind": "record", "sha256": "$(printf '1.2.3\n' | sha256 /dev/stdin)"},
+  {"path": "$receipt", "kind": "record"}
+]
+JSON
+  diff <(jq -S . expected.json) <(jq -S .files "$receipt") || fail "files differ"
+  local held
+  held=$(cd home/.oska && find . -mindepth 1 -maxdepth 1 | LC_ALL=C sort | tr '\n' ' ')
+  [ "$held" = "./bin ./receipt.json ./version " ] || fail "the home holds $held"
+}
+
+# An install from before receipts has only the version file. The next run
+# takes the previous version from it and writes a receipt.
+test_updates_an_install_that_has_only_a_version_file() {
+  release 1.2.3
+  release 1.3.0
+  latest 1.2.3
+  install --json >/dev/null
+  rm home/.oska/receipt.json
+  latest 1.3.0
+  install --json >out.json
+  [ "$(jq -r .action out.json)" = updated ] || fail "action is $(jq -r .action out.json)"
+  [ "$(jq -r .previous_version out.json)" = 1.2.3 ] || fail "previous_version is not 1.2.3"
+  [ "$(jq -r .version home/.oska/receipt.json)" = 1.3.0 ] || fail "no receipt for 1.3.0"
+}
+
+test_the_receipt_wins_over_the_version_file() {
+  release 1.2.3
+  release 1.3.0
+  latest 1.2.3
+  install --json >/dev/null
+  printf '9.9.9\n' >home/.oska/version
+  latest 1.3.0
+  install --json >out.json
+  [ "$(jq -r .action out.json)" = updated ] || fail "action is $(jq -r .action out.json)"
+  [ "$(jq -r .previous_version out.json)" = 1.2.3 ] || fail "previous_version is not the receipt's 1.2.3"
+}
+
+# The receipt is advisory: one that vouches for a tampered binary changes
+# nothing about what is verified.
+test_a_tampered_receipt_cannot_vouch_for_a_tampered_binary() {
+  with_good_install
+  local asset evil
+  asset=site/releases/v1.3.0/oskac-$(host_platform)
+  printf 'evil\n' >>"$asset"
+  evil=$(sha256 "$asset")
+  jq --arg h "$evil" '.version = "1.3.0" | .tag = "v1.3.0" | .sha256 = $h | .files[0].sha256 = $h' \
+    home/.oska/receipt.json >receipt.json
+  mv receipt.json home/.oska/receipt.json
+  assert_refused_unchanged checksum_mismatch 1 --version 1.3.0
+  [ "$("$(installed)" --version)" = "oskac 1.2.3" ] || fail "the installed oskac changed"
 }
 
 test_re_running_updates_in_place() {
@@ -194,6 +275,140 @@ test_re_running_updates_in_place() {
   [ "$(ls -A home/.oska/bin)" = oskac ] || fail "left files behind in bin: $(ls -A home/.oska/bin)"
 }
 
+# Every path under ./home, with each file's SHA-256: compare two of these to
+# show a run changed nothing.
+snapshot() {
+  local f
+  find home | LC_ALL=C sort | while IFS= read -r f; do
+    if [ -f "$f" ]; then
+      printf '%s %s\n' "$f" "$(sha256 "$f")"
+    else
+      printf '%s\n' "$f"
+    fi
+  done
+}
+
+# Runs the installer with <args>, which must refuse with <code> and exit
+# status <status>, as one line of JSON, and leave ./home exactly as it was.
+assert_refused_unchanged() {
+  local code=$1 status=$2 got=0
+  shift 2
+  snapshot >before.txt
+  install --json "$@" >out.json || got=$?
+  [ "$got" = "$status" ] || fail "exited $got, not $status"
+  [ "$(jq -r .ok out.json)" = false ] || fail "JSON does not say ok: false"
+  [ "$(jq -r .error out.json)" = "$code" ] || fail "error is $(jq -r .error out.json), not $code"
+  [ "$(wc -l <out.json | tr -d ' ')" = 1 ] || fail "JSON output is not one line"
+  snapshot >after.txt
+  diff before.txt after.txt || fail "the home changed"
+}
+
+test_refuses_to_downgrade_to_an_older_latest_release() {
+  release 1.2.3
+  release 1.3.0
+  latest 1.3.0
+  install --json >/dev/null
+  latest 1.2.3
+  assert_refused_unchanged downgrade_refused 1
+  jq -r .message out.json | grep -q '1\.3\.0' || fail "message does not name the installed version"
+  jq -r .message out.json | grep -q '1\.2\.3' || fail "message does not name the older version"
+  [ "$("$(installed)" --version)" = "oskac 1.3.0" ] || fail "the installed oskac changed"
+}
+
+test_refuses_a_downgrade_named_with_version_alone() {
+  release 1.2.3
+  release 1.3.0
+  latest 1.3.0
+  install --json >/dev/null
+  assert_refused_unchanged downgrade_refused 1 --version 1.2.3
+  jq -r .message out.json | grep -q -- '--allow-downgrade' || fail "message does not name --allow-downgrade"
+}
+
+test_downgrades_with_version_and_allow_downgrade() {
+  release 1.2.3
+  release 1.3.0
+  latest 1.3.0
+  install --json >/dev/null
+  install --json --allow-downgrade --version 1.2.3 >out.json
+  [ "$("$(installed)" --version)" = "oskac 1.2.3" ] || fail "did not downgrade to 1.2.3"
+  [ "$(jq -r .action out.json)" = downgraded ] || fail "action is $(jq -r .action out.json)"
+  [ "$(jq -r .previous_version out.json)" = 1.3.0 ] || fail "previous_version is not 1.3.0"
+  [ "$(jq -r .version home/.oska/receipt.json)" = 1.2.3 ] || fail "the receipt does not say 1.2.3"
+  install --version 1.3.0 >up.txt
+  install --version=1.2.3 --allow-downgrade >down.txt
+  grep -q "Downgraded oskac 1.3.0 to 1.2.3 in $(installed)" down.txt || fail "no human summary: $(cat down.txt)"
+}
+
+test_allow_downgrade_without_version_is_a_usage_error() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  assert_refused_unchanged usage 2 --allow-downgrade
+}
+
+# Install (the default), --check and --uninstall are modes, and one run is
+# in one of them. --version and --allow-downgrade belong to install.
+test_modes_are_mutually_exclusive() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  local args
+  while read -r args; do
+    # shellcheck disable=SC2086 # each line is a list of arguments
+    assert_refused_unchanged usage 2 $args
+    jq -r .message out.json | grep -q 'cannot be used' || fail "$args: message is $(jq -r .message out.json)"
+  done <<'CASES'
+--check --uninstall
+--uninstall --check
+--check --version 1.2.3
+--uninstall --version 1.2.3
+--check --allow-downgrade
+--uninstall --version 1.2.3 --allow-downgrade
+CASES
+}
+
+# A pre-release installed with --version is newer than the latest release,
+# so a plain re-run keeps it rather than move back.
+test_a_plain_re_run_keeps_a_newer_pre_release() {
+  release 1.3.0
+  release 1.4.0-pre.1
+  latest 1.3.0
+  install --json --version 1.4.0-pre.1 >/dev/null
+  assert_refused_unchanged downgrade_refused 1
+  jq -r .message out.json | grep -q '1\.4\.0-pre\.1 is installed, which is newer than the latest release, 1\.3\.0' ||
+    fail "message is $(jq -r .message out.json)"
+  release 1.4.0
+  latest 1.4.0
+  install --json >out.json
+  [ "$(jq -r .action out.json)" = updated ] || fail "1.4.0-pre.1 to 1.4.0 is $(jq -r .action out.json)"
+}
+
+# Versions compare by semver precedence: numerically, part by part, with a
+# pre-release below its release.
+test_compares_versions_by_semver_precedence() {
+  local from to action
+  while read -r from to action; do
+    rm -rf home site/latest.json
+    release "$from"
+    release "$to"
+    install --json --version "$from" >/dev/null
+    install --json --allow-downgrade --version "$to" >out.json || fail "$from to $to: $(cat out.json)"
+    [ "$(jq -r .action out.json)" = "$action" ] || fail "$from to $to is $(jq -r .action out.json), not $action"
+  done <<'CASES'
+1.9.0 1.10.0 updated
+1.10.0 1.9.0 downgraded
+1.2.10 1.2.9 downgraded
+2.0.0 10.0.0 updated
+1.0.0-alpha 1.0.0 updated
+1.0.0 1.0.0-rc.1 downgraded
+1.0.0-alpha 1.0.0-alpha.1 updated
+1.0.0-alpha.1 1.0.0-alpha.beta updated
+1.0.0-beta.11 1.0.0-beta.2 downgraded
+1.0.0-beta 1.0.0-beta.2 updated
+1.0.0-rc.1 1.0.0-rc.1 reinstalled
+CASES
+}
+
 test_version_installs_that_release_rather_than_the_latest() {
   release 1.2.3
   release 1.3.0
@@ -210,13 +425,14 @@ test_version_installs_that_release_rather_than_the_latest() {
 # installed.
 assert_refused() {
   local code=$1
+  snapshot >before.txt
   install --json --version 1.3.0 >out.json && fail "installed a tampered release"
   [ "$(jq -r .ok out.json)" = false ] || fail "JSON does not say ok: false"
   [ "$(jq -r .error out.json)" = "$code" ] || fail "error is $(jq -r .error out.json), not $code"
   [ "$(wc -l <out.json | tr -d ' ')" = 1 ] || fail "JSON output is not one line"
   [ "$("$(installed)" --version)" = "oskac 1.2.3" ] || fail "the installed oskac changed"
-  [ "$(cat home/.oska/version)" = 1.2.3 ] || fail "the receipt changed"
-  [ "$(ls -A home/.oska/bin)" = oskac ] || fail "left files behind in bin"
+  snapshot >after.txt
+  diff before.txt after.txt || fail "the home changed"
 }
 
 with_good_install() {
@@ -385,6 +601,51 @@ test_never_writes_through_a_symlink_planted_in_the_bin_directory() {
   [ -z "$(find home/.oska/bin -name '.oskac.*' -type d)" ] || fail "left a staging directory"
 }
 
+# Interrupted while it checks the staged binary (a slow fake that signals
+# when it starts), the installer removes its temp and staging directories,
+# leaves the old install as it was, and dies of the same signal.
+test_an_interrupted_install_leaves_nothing_behind() {
+  with_good_install
+  local dir=site/releases/v1.3.0 asset sig pid status waited
+  asset=oskac-$(host_platform)
+  printf '#!/bin/sh\n: >"%s/started"\nsleep 2\necho "oskac 1.3.0"\n' "$PWD" >"$dir/$asset"
+  awk -v f="$asset" -v h="$(sha256 "$dir/$asset")" '$2 == f {print h "  " f; next} {print}' \
+    "$dir/SHA256SUMS" >sums
+  mv sums "$dir/SHA256SUMS"
+  sign "$dir"
+  pinned
+  for sig in INT TERM HUP; do
+    rm -rf started tmp
+    mkdir tmp
+    snapshot >before.txt
+    # perl restores the default action for SIGINT, which a background job
+    # of a non-interactive shell would otherwise ignore.
+    HOME="$PWD/home" OSKA_SITE_URL="file://$PWD/site" TMPDIR="$PWD/tmp" \
+      perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV or die' sh -s -- --json --version 1.3.0 \
+      <pinned/install.sh >out.json &
+    pid=$!
+    # Wait until the installer is in the binary check: the fake writes
+    # `started` there, after the temp and staging directories exist. Give
+    # up if the installer ends first or never gets there.
+    waited=0
+    while [ ! -e started ]; do
+      kill -0 "$pid" 2>/dev/null || fail "$sig: the installer ended before it checked the binary: $(cat out.json)"
+      waited=$((waited + 1))
+      [ "$waited" -le 300 ] || fail "$sig: the installer never checked the binary"
+      sleep 0.1
+    done
+    [ -n "$(find home/.oska/bin -name '.oskac.*')" ] || fail "$sig: no staging directory to clean up"
+    [ -n "$(ls -A tmp)" ] || fail "$sig: no temp directory in $PWD/tmp to clean up"
+    kill -s "$sig" "$pid"
+    status=0
+    wait "$pid" || status=$?
+    [ "$status" = $((128 + $(kill -l "$sig"))) ] || fail "$sig: exited $status, not by the signal"
+    [ -z "$(ls -A tmp)" ] || fail "$sig: left $(ls -A tmp) in the temp directory"
+    snapshot >after.txt
+    diff before.txt after.txt || fail "$sig: the home changed"
+  done
+}
+
 # Makes the installer see Linux x86_64 with the C library <libc>: "glibc
 # X.Y", or "musl" (as on Alpine, where `getconf GNU_LIBC_VERSION` fails and
 # `ldd --version` names musl). Fakes uname, getconf and ldd in ./fakebin,
@@ -447,6 +708,437 @@ test_oska_home_moves_the_install() {
   [ "$("$PWD/elsewhere/bin/oskac" --version)" = "oskac 1.2.3" ] || fail "not installed under OSKA_HOME"
 }
 
+# ---- --uninstall ----------------------------------------------------------
+
+# Uninstall removes exactly the files the receipt lists, then bin/ and the
+# Oska home because they are left empty.
+test_uninstall_removes_what_the_receipt_lists() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  local oska="$PWD/home/.oska"
+  install --json --uninstall >out.json
+  cat >expected.json <<JSON
+{
+  "ok": true,
+  "action": "uninstalled",
+  "removed": ["$oska/bin/oskac", "$oska/version", "$oska/receipt.json", "$oska/bin", "$oska"],
+  "kept": [],
+  "path_hint": null
+}
+JSON
+  diff <(jq -S . expected.json) <(jq -S . out.json) || fail "JSON output differs"
+  [ "$(wc -l <out.json | tr -d ' ')" = 1 ] || fail "JSON output is not one line"
+  [ ! -e "$oska" ] || fail "the Oska home is still there: $(find "$oska")"
+  [ "$(ls -A home)" = "" ] || fail "home holds $(ls -A home)"
+}
+
+test_uninstall_without_a_receipt_is_not_installed() {
+  mkdir home
+  assert_refused_unchanged not_installed 1 --uninstall
+  # An install from before receipts has only the version file: uninstall
+  # never guesses what to delete.
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  rm home/.oska/receipt.json
+  assert_refused_unchanged not_installed 1 --uninstall
+}
+
+# A file that changed since it was installed is kept and listed, and so is
+# the directory it keeps from being empty. The rest goes.
+test_uninstall_keeps_a_changed_file() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  local oska="$PWD/home/.oska"
+  printf '#!/bin/sh\necho mine\n' >"$oska/bin/oskac"
+  install --json --uninstall >out.json
+  [ "$(jq -c .removed out.json)" = "[\"$oska/version\",\"$oska/receipt.json\"]" ] ||
+    fail "removed $(jq -c .removed out.json)"
+  [ "$(jq -c .kept out.json)" = "[\"$oska/bin/oskac\",\"$oska/bin\",\"$oska\"]" ] ||
+    fail "kept $(jq -c .kept out.json)"
+  [ "$(cat "$oska/bin/oskac")" = "$(printf '#!/bin/sh\necho mine')" ] || fail "the changed oskac changed"
+  [ "$(find "$oska" | LC_ALL=C sort | tr '\n' ' ')" = "$oska $oska/bin $oska/bin/oskac " ] ||
+    fail "left $(find "$oska")"
+}
+
+# Anything else in the Oska home is not the installer's: it stays, and so
+# does the home.
+test_uninstall_keeps_a_home_with_other_files_in_it() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  local oska="$PWD/home/.oska"
+  printf 'notes\n' >"$oska/notes.txt"
+  mkdir "$oska/bin/tools"
+  install --json --uninstall >out.json
+  [ "$(jq -c .kept out.json)" = "[\"$oska/bin\",\"$oska\"]" ] || fail "kept $(jq -c .kept out.json)"
+  [ "$(find "$oska" | LC_ALL=C sort | tr '\n' ' ')" = "$oska $oska/bin $oska/bin/tools $oska/notes.txt " ] ||
+    fail "left $(find "$oska")"
+}
+
+test_uninstall_never_touches_the_config_directory() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  mkdir -p home/.config/oska
+  printf 'token\n' >home/.config/oska/credentials.toml
+  install --json --uninstall >out.json
+  [ "$(jq -c .kept out.json)" = "[\"$PWD/home/.config/oska\"]" ] || fail "kept $(jq -c .kept out.json)"
+  [ "$(cat home/.config/oska/credentials.toml)" = token ] || fail "the config directory changed"
+  [ ! -e home/.oska ] || fail "the Oska home is still there"
+}
+
+test_uninstall_finds_the_install_in_a_custom_oska_home() {
+  release 1.2.3
+  latest 1.2.3
+  local oska="$PWD/elsewhere"
+  OSKA_HOME="$oska" install --json >/dev/null
+  # Without OSKA_HOME, there is nothing at ~/.oska to uninstall.
+  assert_refused_unchanged not_installed 1 --uninstall
+  [ -e "$oska/bin/oskac" ] || fail "uninstalled the custom home without OSKA_HOME"
+  OSKA_HOME="$oska" install --json --uninstall >out.json
+  [ "$(jq -r '.removed | join(" ")' out.json)" = "$oska/bin/oskac $oska/version $oska/receipt.json $oska/bin $oska" ] ||
+    fail "removed $(jq -c .removed out.json)"
+  [ ! -e "$oska" ] || fail "the custom Oska home is still there"
+}
+
+# Edits the receipt the install wrote with the jq filter <filter>, which may
+# use $home (the Oska home), then expects --uninstall to refuse with
+# unsafe_path and to leave everything as it was.
+assert_uninstall_refuses() {
+  [ -f installed.json ] || cp home/.oska/receipt.json installed.json
+  jq --arg home "$PWD/home/.oska" "$1" installed.json >home/.oska/receipt.json
+  assert_refused_unchanged unsafe_path 1 --uninstall
+}
+
+# A planted receipt, or a hostile OSKA_HOME, must not steer a deletion: an
+# entry outside the places the installer writes refuses the whole
+# uninstall before anything is removed.
+test_uninstall_refuses_an_entry_outside_the_oska_home() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  printf 'victim\n' >victim
+  local entry
+  entry="{\"path\": \"$PWD/victim\", \"kind\": \"record\", \"sha256\": \"$(sha256 victim)\"}"
+  assert_uninstall_refuses ".files += [$entry]"
+  assert_uninstall_refuses ".files[1].path = \$home + \"/sub/version\""
+  assert_uninstall_refuses ".files[1].path = \"version\""
+  assert_uninstall_refuses ".files[1].path = \$home + \"/.\""
+  assert_uninstall_refuses ".files[1].kind = \"hook_script\""
+  [ "$(cat victim)" = victim ] || fail "removed or changed the victim"
+}
+
+test_uninstall_refuses_a_path_that_climbs_out_with_dot_dot() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  printf 'victim\n' >home/victim
+  assert_uninstall_refuses ".files[1].path = \$home + \"/../victim\" | .files[1].sha256 = \"$(sha256 home/victim)\""
+  assert_uninstall_refuses ".files[0].path = \$home + \"/bin/../version\""
+  # Directly in the home by name, yet a directory: refused, not kept.
+  assert_uninstall_refuses ".files[1].path = \$home + \"/..\""
+  assert_uninstall_refuses ".files[1].path = \$home + \"/bin/..\""
+  [ -e home/victim ] || fail "removed the victim"
+}
+
+# bin/ is a symlink to a directory holding a file that matches the
+# receipt's digest: removing through the link would delete it.
+test_uninstall_refuses_a_symlink_in_a_path() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  mkdir victim
+  mv home/.oska/bin/oskac victim/oskac
+  rmdir home/.oska/bin
+  ln -s "$PWD/victim" home/.oska/bin
+  assert_refused_unchanged unsafe_path 1 --uninstall
+  [ -e victim/oskac ] || fail "removed a file through the symlinked bin directory"
+  # A symlinked file, and a symlinked receipt.
+  rm home/.oska/bin
+  mkdir home/.oska/bin
+  ln -s "$PWD/victim/oskac" home/.oska/bin/oskac
+  assert_refused_unchanged unsafe_path 1 --uninstall
+  rm home/.oska/bin/oskac
+  mv home/.oska/receipt.json receipt.json
+  ln -s "$PWD/receipt.json" home/.oska/receipt.json
+  assert_refused_unchanged unsafe_path 1 --uninstall
+  [ -e victim/oskac ] && [ -e receipt.json ] || fail "removed a symlink's target"
+}
+
+# The Oska home itself is a symlink, named with a trailing slash, through
+# which a test for a link would look.
+test_uninstall_refuses_a_symlinked_oska_home() {
+  release 1.2.3
+  latest 1.2.3
+  mkdir real
+  ln -s "$PWD/real" link
+  OSKA_HOME="$PWD/link/" install --json >/dev/null
+  local home
+  for home in "$PWD/link" "$PWD/link/" "$PWD/link//"; do
+    OSKA_HOME="$home" assert_refused_unchanged unsafe_path 1 --uninstall
+  done
+  [ -e real/bin/oskac ] || fail "removed a file through the symlinked Oska home"
+}
+
+test_uninstall_refuses_a_receipt_it_cannot_read() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  cp home/.oska/receipt.json good.json
+  # Each receipt below would remove the version file if it were read
+  # loosely; each must be refused instead.
+  local v="$PWD/home/.oska/version" sum bs="\\" bad
+  sum=$(sha256 "$v")
+  while IFS= read -r bad; do
+    printf '%s\n' "$bad" >home/.oska/receipt.json
+    assert_refused_unchanged unsafe_path 1 --uninstall
+  done <<CASES
+{"schema": 1, "files": [{"path": "$v", "kind": "record", "sha256": "$sum"}
+{"schema": 2, "files": [{"path": "$v", "kind": "record", "sha256": "$sum"}]}
+{"schema": 1, "file": [{"path": "$v", "kind": "record", "sha256": "$sum"}]}
+{"schema": 1, "files": [{"path": "/etc/hosts", "path": "$v", "kind": "record", "sha256": "$sum"}]}
+{"schema": 1, "files": [{"path": "$v${bs}n", "kind": "record", "sha256": "$sum"}]}
+{"schema": 1, "files": [{"path": "$v${bs}u00e9", "kind": "record", "sha256": "$sum"}]}
+CASES
+  [ -e "$v" ] || fail "removed the version file"
+  # ASCII escapes read as what they stand for, and any layout of the same
+  # JSON reads the same.
+  jq -c --arg v "${v%n}" '.files[1].path = $v + "@N@"' good.json | sed "s/@N@/${bs}${bs}u006e/" >home/.oska/receipt.json
+  install --json --uninstall >out.json
+  [ ! -e home/.oska ] || fail "a one-line receipt did not uninstall: $(cat out.json)"
+}
+
+# OSKA_HOME inside ~/.config/oska: the settings and credentials there are
+# never removed, even if the receipt lists them.
+test_uninstall_refuses_to_touch_the_config_directory_as_an_oska_home() {
+  release 1.2.3
+  latest 1.2.3
+  OSKA_HOME="$PWD/home/.config/oska" install --json >/dev/null
+  OSKA_HOME="$PWD/home/.config/oska" assert_refused_unchanged unsafe_path 1 --uninstall
+}
+
+test_uninstall_hints_at_the_path_and_explains_itself() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  local bin="$PWD/home/.oska/bin"
+  PATH="$bin:$PATH" install --uninstall >out.txt
+  grep -q "^Uninstalled oskac from $PWD/home/.oska.\$" out.txt || fail "no summary: $(cat out.txt)"
+  grep -qx "  $bin/oskac" out.txt || fail "does not list what it removed: $(cat out.txt)"
+  grep -q "$bin is on your PATH" out.txt || fail "no PATH hint: $(cat out.txt)"
+  install --json >/dev/null
+  PATH="$bin:$PATH" install --json --uninstall >out.json
+  jq -r .path_hint out.json | grep -q "$bin is on your PATH" || fail "path_hint is $(jq .path_hint out.json)"
+}
+
+# ---- The signed release index and --check ------------------------------------
+
+# An RFC 3339 UTC time <days> days from now (negative: in the past).
+days_from_now() {
+  perl -MPOSIX -e 'print strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time + $ARGV[0] * 86400))' -- "$1"
+}
+
+# Publishes ./site/release-index.json naming release <version>, with serial
+# <serial>, expiring in <days> days (default 60), signed in <namespace>
+# (default oska-index) by <key> (default ./key), as
+# scripts/release/sign-index.sh writes it.
+index() {
+  local serial=$1 version=$2 days=${3:-60} namespace=${4:-oska-index} by=${5:-key}
+  release_key
+  mkdir -p site
+  cat >site/release-index.json <<JSON
+{
+  "schema": 1,
+  "serial": $serial,
+  "issued": "$(days_from_now -30)",
+  "expires": "$(days_from_now "$days")",
+  "latest": {
+    "tag": "v$version",
+    "version": "$version"
+  }
+}
+JSON
+  rm -f site/release-index.json.sig
+  ssh-keygen -q -Y sign -f "$by" -n "$namespace" site/release-index.json
+}
+
+# Pins the installers in ./pinned to ./key.pub and to require the index, as
+# stage-site.sh does once it publishes one.
+require_index() {
+  release_key
+  rm -rf pinned
+  "$here/pin.sh" key.pub pinned --require-index
+}
+
+# Releases 1.2.3 and 1.3.0, with latest.json still naming 1.2.3 and a
+# signed index (serial 7) naming 1.3.0.
+index_names_1_3_0() {
+  release 1.2.3
+  release 1.3.0
+  latest 1.2.3
+  index 7 1.3.0
+  require_index
+}
+
+test_installs_the_latest_release_the_signed_index_names() {
+  index_names_1_3_0
+  install --json >out.json
+  [ "$("$(installed)" --version)" = "oskac 1.3.0" ] || fail "did not install the index's 1.3.0"
+  [ "$(jq -r .version out.json)" = 1.3.0 ] || fail "version is $(jq -r .version out.json)"
+  [ "$(jq -r .index_verified out.json)" = true ] || fail "index_verified is not true"
+  [ "$(jq -r .index_serial out.json)" = 7 ] || fail "index_serial is $(jq -r .index_serial out.json)"
+  [ "$(jq -r .index_serial home/.oska/receipt.json)" = 7 ] || fail "the receipt does not record serial 7"
+}
+
+test_an_installer_not_pinned_to_require_the_index_reads_latest_json() {
+  index_names_1_3_0
+  rm -rf pinned
+  install --json >out.json
+  [ "$(jq -r .version out.json)" = 1.2.3 ] || fail "version is $(jq -r .version out.json)"
+  [ "$(jq -r .index_verified out.json)" = false ] || fail "index_verified is not false"
+  [ "$(jq -r .index_serial out.json)" = null ] || fail "index_serial is not null"
+}
+
+test_refuses_an_index_that_is_not_signed_by_the_release_key_as_an_index() {
+  index_names_1_3_0
+  install --json --version 1.2.3 >/dev/null
+  ssh-keygen -q -t ed25519 -N '' -C attacker -f attacker
+  local case
+  for case in unsigned another_key release_namespace not_an_index; do
+    index 7 1.3.0
+    case $case in
+      unsigned) rm site/release-index.json.sig ;;
+      another_key) index 7 1.3.0 60 oska-index attacker ;;
+      release_namespace) index 7 1.3.0 60 oska-release ;;
+      not_an_index)
+        printf '{"schema": 1, "serial": "seven", "latest": {"tag": "v1.3.0"}}\n' >site/release-index.json
+        rm site/release-index.json.sig
+        ssh-keygen -q -Y sign -f key -n oska-index site/release-index.json ;;
+    esac
+    assert_refused_unchanged bad_index 1 || fail "$case was not refused"
+    [ "$("$(installed)" --version)" = "oskac 1.2.3" ] || fail "$case: the installed oskac changed"
+  done
+}
+
+test_refuses_an_expired_index() {
+  index_names_1_3_0
+  install --json --version 1.2.3 >/dev/null
+  index 7 1.3.0 -1
+  assert_refused_unchanged stale_index 1
+  jq -r .message out.json | grep -q -- '--version' || fail "message does not point at --version"
+}
+
+test_refuses_an_index_with_a_lower_serial_than_one_already_accepted() {
+  index_names_1_3_0
+  install --json >/dev/null
+  # A genuine, unexpired, older index: the rollback (and freeze) attack.
+  index 6 1.2.3
+  assert_refused_unchanged rollback_refused 1
+  jq -r .message out.json | grep -q '6.*7' || fail "message does not name both serials: $(jq -r .message out.json)"
+  # The same serial again is fine.
+  index 7 1.3.0
+  install --json >out.json
+  [ "$(jq -r .action out.json)" = reinstalled ] || fail "serial 7 again is $(jq -r .action out.json)"
+}
+
+test_refuses_a_missing_index_when_it_is_required() {
+  index_names_1_3_0
+  rm site/release-index.json
+  install --json >out.json && fail "installed without the index"
+  [ "$(jq -r .error out.json)" = download_failed ] || fail "error is $(jq -r .error out.json)"
+  [ ! -e home/.oska ] || fail "created ~/.oska"
+}
+
+test_warns_when_fewer_than_30_days_remain_on_the_index() {
+  index_names_1_3_0
+  index 7 1.3.0 29
+  install --json >out.json 2>err.txt
+  [ "$(jq -r .version out.json)" = 1.3.0 ] || fail "did not install 1.3.0"
+  grep -q 'warning: .*release index expires' err.txt || fail "no warning: $(cat err.txt)"
+  index 7 1.3.0 31
+  install --json >out.json 2>err.txt
+  if grep -q warning err.txt; then fail "warned with 31 days left: $(cat err.txt)"; fi
+}
+
+# --version installs from the signed SHA256SUMS alone: an expired index
+# does not stop it, and the serial the receipt holds is kept.
+test_version_ignores_the_index_and_keeps_the_serial_seen() {
+  index_names_1_3_0
+  install --json >/dev/null
+  index 7 1.3.0 -1
+  install --json --allow-downgrade --version 1.2.3 >out.json || fail "refused: $(cat out.json)"
+  [ "$(jq -r .action out.json)" = downgraded ] || fail "action is $(jq -r .action out.json)"
+  [ "$(jq -r .index_verified out.json)" = false ] || fail "index_verified is not false"
+  [ "$(jq -r .index_serial home/.oska/receipt.json)" = 7 ] || fail "the receipt lost serial 7"
+}
+
+test_check_reports_an_update_and_writes_nothing() {
+  index_names_1_3_0
+  install --json --version 1.2.3 >/dev/null
+  snapshot >before.txt
+  install --json --check >out.json
+  snapshot >after.txt
+  diff before.txt after.txt || fail "--check changed the home"
+  cat >expected.json <<JSON
+{
+  "ok": true,
+  "action": "checked",
+  "installed": "1.2.3",
+  "latest": "1.3.0",
+  "tag": "v1.3.0",
+  "update_available": true,
+  "index_verified": true,
+  "index_serial": 7,
+  "index_expires": "$(jq -r .expires site/release-index.json)"
+}
+JSON
+  diff <(jq -S . expected.json) <(jq -S . out.json) || fail "JSON output differs"
+  [ "$(wc -l <out.json | tr -d ' ')" = 1 ] || fail "JSON output is not one line"
+  install --check >out.txt
+  grep -q 'oskac 1.2.3 is installed' out.txt || fail "no human summary: $(cat out.txt)"
+  grep -q '1.3.0' out.txt || fail "does not name 1.3.0: $(cat out.txt)"
+}
+
+test_check_reports_when_up_to_date_or_not_installed() {
+  index_names_1_3_0
+  install --json --check >out.json
+  [ "$(jq -r .installed out.json)" = null ] || fail "installed is not null"
+  [ "$(jq -r .update_available out.json)" = true ] || fail "nothing installed: update_available is not true"
+  [ ! -e home/.oska ] || fail "--check created ~/.oska"
+  install --json >/dev/null
+  install --json --check >out.json
+  [ "$(jq -r .installed out.json)" = 1.3.0 ] || fail "installed is $(jq -r .installed out.json)"
+  [ "$(jq -r .update_available out.json)" = false ] || fail "up to date: update_available is not false"
+  release 1.4.0-pre.1
+  install --json --version 1.4.0-pre.1 >/dev/null
+  install --json --check >out.json
+  [ "$(jq -r .update_available out.json)" = false ] || fail "a newer pre-release: update_available is not false"
+}
+
+test_check_refuses_an_index_it_cannot_trust() {
+  index_names_1_3_0
+  install --json >/dev/null
+  index 7 1.3.0 -1
+  assert_refused_unchanged stale_index 1 --check
+  index 6 1.3.0
+  assert_refused_unchanged rollback_refused 1 --check
+  index 7 1.3.0 60 oska-release
+  assert_refused_unchanged bad_index 1 --check
+}
+
+test_check_without_a_required_index_reads_latest_json() {
+  release 1.2.3
+  latest 1.2.3
+  install --json --check >out.json
+  [ "$(jq -r .latest out.json)" = 1.2.3 ] || fail "latest is $(jq -r .latest out.json)"
+  [ "$(jq -r .index_verified out.json)" = false ] || fail "index_verified is not false"
+  [ "$(jq -r .index_serial out.json)" = null ] || fail "index_serial is not null"
+  [ "$(jq -r .index_expires out.json)" = null ] || fail "index_expires is not null"
+}
+
 test_pin_refuses_a_key_that_is_not_one_ed25519_public_key() {
   ssh-keygen -q -t ed25519 -N '' -f k
   if "$here/pin.sh" k out 2>err; then fail "pinned a private key"; fi
@@ -460,7 +1152,7 @@ test_pin_refuses_a_key_that_is_not_one_ed25519_public_key() {
   grep -qF "'$(awk '{print $1, $2}' k.pub)'" out/install.ps1 || fail "key not pinned in install.ps1"
 }
 
-for t in $(declare -F | awk '{print $3}' | grep '^test_'); do
+for t in $(declare -F | awk '{print $3}' | grep '^test_' | grep -E -- "${1:-.}"); do
   run_test "$t"
 done
 
