@@ -9,7 +9,9 @@
 //! # Calling convention
 //!
 //! The backend's own, in the System V style (nothing outside a program
-//! calls into it):
+//! calls into it but the kernel, which calls `std.rt`'s fault handler,
+//! `on_fault`, with the signal's number in `rdi`, as this convention
+//! passes its one argument, and which never returns):
 //!
 //! - arguments in `rdi`, `rsi`, `rdx`, `rcx`, `r8` and `r9`, in order,
 //!   the receiver first, and any past the sixth in a fixed area of the

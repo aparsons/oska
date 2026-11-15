@@ -119,8 +119,9 @@ pub fn rt_mem_platform() -> Platform
 //
 // The rest of what `std.rt` asks of the kernel is the same on every Linux
 // processor Oska supports: the other open flags, `mmap`'s flags and
-// protections, `struct sigaction`, `TCGETS`, `F_DUPFD_CLOEXEC`,
-// `AT_FDCWD`, `S_IFMT`, the `errno` values and `struct linux_dirent64`.
+// protections, `struct sigaction` and its flags, `stack_t`, the signals'
+// numbers, `TCGETS`, `F_DUPFD_CLOEXEC`, `AT_FDCWD`, `S_IFMT`, the `errno`
+// values and `struct linux_dirent64`.
 
 struct Platform {
     // `openat`'s flags `O_DIRECTORY` and `O_NOFOLLOW`.
@@ -1823,10 +1824,13 @@ fn handle_faults(handler: Int) {
     // struct sigaction: on the alternate stack (SA_ONSTACK, 0x08000000);
     // the default action restored as it starts (SA_RESETHAND, 0x80000000),
     // so a fault within it kills the process; the signal not blocked
-    // while it runs (SA_NODEFER, 0x40000000), so it can raise it again.
+    // while it runs (SA_NODEFER, 0x40000000), so it can raise it again;
+    // and a restorer given (SA_RESTORER, 0x04000000), without which x86_64
+    // will not run a handler. `on_fault` never returns, so the restorer,
+    // the address it would return to, is never used: 0.
     let action = alloc(40)
     rt_mem_store64(rt_mem_add(action, 8), handler)
-    rt_mem_store64(rt_mem_add(action, 16), 3355443200)
+    rt_mem_store64(rt_mem_add(action, 16), 3422552064)
     rt_mem_store64(rt_mem_add(action, 24), 0)
     rt_mem_store64(rt_mem_add(action, 32), 0)
     for signal in fault_signals() {

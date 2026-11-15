@@ -3,7 +3,10 @@
 //! `IoError`, as the interpreter's unbuffered write is, and a fault
 //! signal still shows what the program printed before its report.
 
-#![cfg(all(target_arch = "aarch64", target_os = "linux"))]
+#![cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 
 mod differential;
 
