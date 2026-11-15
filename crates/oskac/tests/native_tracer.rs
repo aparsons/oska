@@ -1,9 +1,13 @@
 //! The native tracer (ticket #128): the first programs `oskac build`
 //! compiles, run on both backends through the differential harness
-//! (seam 1). Native executables run only on aarch64 Linux, so these tests
-//! exist only there; `build_golden.rs` covers `oskac build` everywhere.
+//! (seam 1). Native executables run only on aarch64 and x86_64 Linux, so
+//! these tests exist only there; `build_golden.rs` covers `oskac build`
+//! everywhere.
 
-#![cfg(all(target_arch = "aarch64", target_os = "linux"))]
+#![cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 
 mod differential;
 
@@ -140,9 +144,15 @@ fn the_kernel_maps_each_segment_with_only_its_own_permissions() {
             - u64::from_str_radix(start, 16).expect("hex");
         let offset = u64::from_str_radix(offset, 16).expect("hex");
         // The file bytes this mapping shows lie within one segment (up to
-        // the page that ends it), and carry that segment's permissions.
+        // the page that ends it: the target's largest, 4 KiB on x86_64 and
+        // 64 KiB on aarch64), and carry that segment's permissions.
+        let page: u64 = if cfg!(target_arch = "x86_64") {
+            0x1000
+        } else {
+            0x1_0000
+        };
         let owner = segments.iter().find(|(at, size, _)| {
-            *at <= offset && offset + length <= (at + size).next_multiple_of(0x1_0000)
+            *at <= offset && offset + length <= (at + size).next_multiple_of(page)
         });
         match owner {
             Some((_, _, flags)) => assert_eq!(perms, *flags, "mapping `{line}`"),

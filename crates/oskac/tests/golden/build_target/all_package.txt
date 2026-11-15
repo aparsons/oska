@@ -1,0 +1,7 @@
+$ oskac build greeter --target all -o out
+exit: 0
+--- stdout
+--- stderr
+--- written
+out/greeter-linux-aarch64
+out/greeter-linux-x86_64

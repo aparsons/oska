@@ -7,7 +7,7 @@
 //! internals, the glossary, the decisions and the research.
 //!
 //! The generator runs through the interpreter on a [`FakeHost`], and
-//! natively on aarch64 Linux (`common`).
+//! natively on aarch64 and x86_64 Linux (`common`).
 
 mod common;
 

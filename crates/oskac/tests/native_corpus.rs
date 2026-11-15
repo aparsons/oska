@@ -6,11 +6,15 @@
 //!
 //! A corpus program is one `oskac build` compiles. One the checker
 //! refuses, or a library, is not a program and is left out; one the
-//! native backend refuses fails the test unless the interpreter refuses it
-//! too (a `std` module neither has a runtime for). The `test` blocks of
-//! the same corpus are compared by `native_tests.rs`.
+//! native backend refuses, for the host or any other target, fails the
+//! test unless the interpreter refuses it too (a `std` module neither has
+//! a runtime for). The `test` blocks of the same corpus are compared by
+//! `native_tests.rs`.
 
-#![cfg(all(target_arch = "aarch64", target_os = "linux"))]
+#![cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 
 mod differential;
 /// The one skip list of the differential tests, shared with the
@@ -83,9 +87,9 @@ fn oskac(dir: &Path, args: &[&str]) -> Option<i32> {
         .code()
 }
 
-/// Whether `case` is a program of the corpus: `oskac build` compiles it.
-/// A program the native backend refuses fails the test, unless the
-/// interpreter refuses it too.
+/// Whether `case` is a program of the corpus: `oskac build` compiles it,
+/// for every target with a backend. A program the native backend refuses
+/// for any target fails the test, unless the interpreter refuses it too.
 fn is_program(case: &Case, name: &str) -> bool {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join("corpus-probe")
@@ -97,22 +101,30 @@ fn is_program(case: &Case, name: &str) -> bool {
         std::fs::write(&file, text).expect("should write the file");
     }
     let exe = dir.with_extension("exe");
-    let built = oskac(
-        &dir,
-        &["build", case.target(), "-o", &exe.to_string_lossy()],
-    );
-    let program = match built {
-        Some(0) => true,
-        Some(2) => {
-            let interpreted = oskac(&dir, &["run", "--interpret", case.target()]);
-            assert_eq!(
-                interpreted,
-                Some(2),
-                "`{name}`: the native backend refuses a program the interpreter runs"
-            );
-            false
-        }
-        _ => false,
+    let built: Vec<(&str, Option<i32>)> = oska_native::Target::ALL
+        .iter()
+        .map(|target| {
+            let built = Command::new(env!("CARGO_BIN_EXE_oskac"))
+                .args(["build", case.target(), "--target", target.name(), "-o"])
+                .arg(&exe)
+                .current_dir(&dir)
+                .output()
+                .expect("oskac should run");
+            (target.name(), built.status.code())
+        })
+        .collect();
+    let program = if built.iter().all(|(_, code)| *code == Some(0)) {
+        true
+    } else if let Some((target, _)) = built.iter().find(|(_, code)| *code == Some(2)) {
+        let interpreted = oskac(&dir, &["run", "--interpret", case.target()]);
+        assert_eq!(
+            interpreted,
+            Some(2),
+            "`{name}`: the native backend refuses for {target} a program the interpreter runs"
+        );
+        false
+    } else {
+        false
     };
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_file(&exe);
@@ -384,7 +396,8 @@ fn building_the_site_generator_uses_little_cpu_time() {
     let program = report.program.expect("the generator checks");
     // The build runs on this thread, so its CPU time is this thread's.
     let started = thread_cpu_time();
-    let bytes = oska_native::build(&program, &|d| d).expect("the generator builds");
+    let bytes = oska_native::build(&program, differential::host_target(), &|d| d)
+        .expect("the generator builds");
     let used = thread_cpu_time() - started;
     assert!(!bytes.is_empty());
     // A release build of `oskac` takes about 0.1 s of CPU on a Raspberry

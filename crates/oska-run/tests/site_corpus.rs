@@ -11,7 +11,7 @@
 //! each entry of `codes.json` has a `url`.
 //!
 //! The generator runs through the interpreter on a [`FakeHost`], and
-//! natively on aarch64 Linux (`common`).
+//! natively on aarch64 and x86_64 Linux (`common`).
 
 mod common;
 

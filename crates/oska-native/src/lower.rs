@@ -81,7 +81,7 @@ use crate::intrinsics::{self, Check, Prelude, Runtime};
 use crate::ir::{self, Arith, BinOp, Cond, FnId, Inst, Label, Symbol, Temp, Width};
 use crate::layout::{self, Rodata};
 use crate::optimize;
-use crate::{codes, Locate, NOWHERE};
+use crate::{codes, Locate, Target, NOWHERE};
 
 /// How deeply calls of the program's functions may nest before it
 /// panics with `P0021`: the interpreter's limit (`oska_run`'s
@@ -215,12 +215,14 @@ pub fn program(
     rt: &Program,
     locate: Locate,
     kind: Entry,
+    target: Target,
 ) -> Result<ir::Module, Diagnostic> {
     let mut lowering = Lowering {
         user,
         rt,
         locate,
         kind,
+        target,
         ids: HashMap::new(),
         functions: Vec::new(),
         queue: Vec::new(),
@@ -258,7 +260,8 @@ pub fn program(
     optimize::module(&mut lowering.functions);
     lowering.size_stack(entry);
     // The most arguments any call passes, or any function takes, past
-    // those in registers: they share one area after the globals.
+    // those the target passes in registers: they share one area after
+    // the globals.
     let extra_args = lowering
         .functions
         .iter()
@@ -269,7 +272,7 @@ pub fn program(
             });
             calls.chain([function.params as usize])
         })
-        .map(|count| count.saturating_sub(ir::REGISTER_ARGS))
+        .map(|count| count.saturating_sub(target.register_args()))
         .max()
         .unwrap_or(0) as u32;
     Ok(ir::Module {
@@ -288,6 +291,9 @@ struct Lowering<'p> {
     /// What the executable runs: a test executable's `std.rt` reaches its
     /// test host (`rt_mem_test_host`), a program's never does.
     kind: Entry,
+    /// The target platform: its system-call numbers and `std.rt` table,
+    /// and how many arguments its calls pass in registers.
+    target: Target,
     /// Every function requested so far.
     ids: HashMap<Instance, FnId>,
     /// The lowered functions, by id; a requested one is a placeholder
@@ -1575,7 +1581,7 @@ impl<'l, 'p> Body<'l, 'p> {
                 // Only `std.rt` may name an intrinsic (the checker's
                 // `E0209`), and the backend holds it to that too.
                 Some(runtime) if self.source == Source::Runtime => {
-                    self.runtime_intrinsic(runtime, &args)
+                    self.runtime_intrinsic(runtime, &args)?
                 }
                 _ => return Err(self.refuse(span, &format!("a call of `{name}`"))),
             },
@@ -1701,14 +1707,14 @@ impl<'l, 'p> Body<'l, 'p> {
 
     /// A `std.rt` intrinsic applied to `args`. The checker has matched
     /// their number to its declaration.
-    fn runtime_intrinsic(&mut self, runtime: Runtime, args: &[Temp]) -> Temp {
+    fn runtime_intrinsic(&mut self, runtime: Runtime, args: &[Temp]) -> Result<Temp, Diagnostic> {
         let arg = |i: usize| args.get(i).copied().unwrap_or_default();
-        match runtime {
-            Runtime::Syscall(number) => {
+        Ok(match runtime {
+            Runtime::Syscall(call) => {
                 let dst = self.temp();
                 self.push(Inst::Syscall {
                     dst,
-                    number,
+                    number: (self.lowering.target.platform().syscall)(call),
                     args: args.to_vec(),
                 });
                 dst
@@ -1745,7 +1751,12 @@ impl<'l, 'p> Body<'l, 'p> {
                 dst
             }
             Runtime::TestHost => self.test_host(),
-        }
+            // A call of the target platform's table, a static object.
+            Runtime::PlatformTable => {
+                let table = self.lowering.target.platform().table;
+                self.call_runtime(table, Vec::new(), NOWHERE)?
+            }
+        })
     }
 
     /// Call `main` with its capabilities and, when it returns `Err(e)`,

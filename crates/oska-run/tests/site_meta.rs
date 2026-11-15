@@ -4,7 +4,7 @@
 //! expects of them.
 //!
 //! The generator runs through the interpreter on a [`FakeHost`], and
-//! natively on aarch64 Linux (`common`). Every page a test builds goes
+//! natively on aarch64 and x86_64 Linux (`common`). Every page a test builds goes
 //! through the same inertness check as in `site.rs`.
 
 mod common;
