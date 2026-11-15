@@ -29,6 +29,13 @@ impl Drop for Scratch {
     }
 }
 
+/// A path as `oskac` prints it: without the `\\?\` prefix of a Windows
+/// canonical path.
+fn shown(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    text.strip_prefix(r"\\?\").unwrap_or(&text).to_string()
+}
+
 fn text(bytes: &[u8]) -> String {
     String::from_utf8(bytes.to_vec()).expect("UTF-8")
 }
@@ -76,7 +83,8 @@ fn run(exe: &Path, home: &Path, args: &[&str]) -> Output {
         Command::new(exe)
             .args(args)
             .env("OSKA_HOME", home)
-            .env("HOME", home.parent().expect("parent")),
+            .env("HOME", home.parent().expect("parent"))
+            .env("USERPROFILE", home.parent().expect("parent")),
     )
 }
 
@@ -99,10 +107,7 @@ fn info_without_a_receipt_reports_null_and_no_match() {
     assert_eq!(info.get("version"), Some(&Json::Str(VERSION.to_string())));
     assert_eq!(info.get("receipt"), Some(&Json::Null));
     assert_eq!(info.get("receipt_matches"), Some(&Json::Bool(false)));
-    assert_eq!(
-        info.get("oska_home"),
-        Some(&Json::Str(home.to_string_lossy().into_owned()))
-    );
+    assert_eq!(info.get("oska_home"), Some(&Json::Str(shown(&home))));
     let platform = match info.get("platform") {
         Some(Json::Str(p)) => p.clone(),
         other => panic!("platform should be a string, got {other:?}"),
@@ -132,10 +137,7 @@ fn info_of_a_managed_install_reports_the_receipt_and_a_match() {
     // A field this oskac does not know is passed through.
     assert!(receipt.get("added_by_a_newer_installer").is_some());
     let exe = exe.canonicalize().expect("canonical exe");
-    assert_eq!(
-        info.get("executable"),
-        Some(&Json::Str(exe.to_string_lossy().into_owned()))
-    );
+    assert_eq!(info.get("executable"), Some(&Json::Str(shown(&exe))));
 
     let human = run(&exe, &home, &["self", "info"]);
     let human = text(&human.stdout);

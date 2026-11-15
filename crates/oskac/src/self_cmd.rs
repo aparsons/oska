@@ -68,8 +68,14 @@ fn executable() -> Option<PathBuf> {
     std::env::current_exe().and_then(|p| p.canonicalize()).ok()
 }
 
+/// A path for output. Windows canonical paths carry a `\\?\` prefix; it is
+/// dropped when a drive letter follows, as the path means the same without.
 fn display(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.to_string(),
+        _ => text.into_owned(),
+    }
 }
 
 fn is_symlink(path: &Path) -> bool {
