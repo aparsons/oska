@@ -6,8 +6,20 @@
 //!
 //! Each case runs in two identical temporary directories, so an
 //! integration test that writes files leaves the same tree on both sides.
+//!
+//! Every target must compile each case's tests (#164): a refusal fails on
+//! every host, and each host builds them for the other targets too, as it
+//! cannot run their code. The test executables below are built for the
+//! host and run on it, one process per test, on aarch64 and x86_64 Linux.
+//! On x86_64 Linux `oskac test` interprets until it is native by default
+//! there (#165), so its two sides are both the interpreter until then;
+//! oska-run's `testing` suite runs test blocks natively there, on the test
+//! host and with `--integration`.
 
-#![cfg(all(target_arch = "aarch64", target_os = "linux"))]
+#![cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -22,6 +34,13 @@ struct Outcome {
     tree: BTreeMap<String, String>,
 }
 
+/// The target platform the host builds test executables for: its own.
+const HOST: oska_native::Target = if cfg!(target_arch = "x86_64") {
+    oska_native::Target::LinuxX86_64
+} else {
+    oska_native::Target::LinuxAarch64
+};
+
 /// The flag sets every case runs with.
 const RUNS: [&[&str]; 4] = [
     &[],
@@ -31,9 +50,20 @@ const RUNS: [&[&str]; 4] = [
 ];
 
 /// Run `oskac test` on `target` among `files`, on both backends and with
-/// every flag set, and require the same outcomes. Returns the
-/// interpreter's outcome of the plain run.
+/// every flag set, and require the same outcomes, and that every target
+/// compiles its tests. Returns the interpreter's outcome of the plain run.
 fn assert_same_tests(name: &str, files: &[(&str, &str)], target: &str) -> Outcome {
+    // `oskac test` runs a program the backend refuses on the interpreter,
+    // so the outcomes would agree.
+    let program = checked(files, target);
+    for platform in oska_native::Target::ALL {
+        if let Err(refusal) = oska_native::build_tests(&program, platform) {
+            panic!(
+                "case `{name}`: the native backend refuses its tests for {}: {refusal:#?}",
+                platform.name()
+            );
+        }
+    }
     let mut first = None;
     for (run, flags) in RUNS.iter().enumerate() {
         let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
@@ -603,13 +633,6 @@ fn assert_same_corpus(name: &str, files: &[(String, String)], target: &str) {
         outcome.stdout.contains(" tests: "),
         "case `{name}` was refused: {outcome:#?}"
     );
-    // And a native one: `oskac test` runs a program the backend refuses
-    // on the interpreter.
-    assert!(
-        oska_native::build_tests(&checked(&files, target), oska_native::Target::LinuxAarch64)
-            .is_ok(),
-        "case `{name}`: the native backend refuses its tests"
-    );
 }
 
 /// The checked program `target` names among `files`: a source file, or
@@ -783,8 +806,7 @@ fn test_executable(name: &str, src: &str) -> PathBuf {
     let program = oska_check::check_module(src)
         .program
         .expect("the program should check");
-    let bytes = oska_native::build_tests(&program, oska_native::Target::LinuxAarch64)
-        .expect("the tests should build");
+    let bytes = oska_native::build_tests(&program, HOST).expect("the tests should build");
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("native_tests_exe");
     std::fs::create_dir_all(&dir).expect("should create the directory");
     let exe = dir.join(name);

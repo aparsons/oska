@@ -2,10 +2,7 @@
 //! through the differential harness (seam 1): `Stdout`, `Stderr`,
 //! `Stdin`, `Args`, `Env` and `Env.secret`, `Clock`, `Random`, `dbg` and
 //! `todo`. The clock and the generator are compared on properties that
-//! do not depend on the time or the seed. Every target must compile these
-//! programs (`differential::assert_compiled_same` and `build_compiled`,
-//! #163): a refusal fails on every host, and each host builds them for
-//! the other targets too.
+//! do not depend on the time or the seed.
 
 #![cfg(all(
     target_os = "linux",
@@ -14,13 +11,13 @@
 
 mod differential;
 
-use differential::{assert_compiled_same, build_compiled, Case};
+use differential::{assert_same, build_native, Case};
 use std::process::Command;
 
 /// Run `case` on both backends, require the same outcome, and that it
 /// printed `stdout`, wrote `stderr` and exited with `code`.
 fn assert_outcome(case: &Case, stdout: &str, stderr: &str, code: i32) {
-    let outcome = assert_compiled_same(case);
+    let outcome = assert_same(case);
     assert_eq!(outcome.stdout, stdout, "{outcome:#?}");
     assert_eq!(outcome.stderr, stderr, "{outcome:#?}");
     assert_eq!(outcome.exit_code, Some(code), "{outcome:#?}");
@@ -66,7 +63,7 @@ fn a_lot_of_output_goes_through_the_buffer_in_order() {
 }
 "#,
     );
-    let outcome = assert_compiled_same(&case);
+    let outcome = assert_same(&case);
     assert!(outcome.stdout.starts_with("line 0 of the output\n"));
     assert!(outcome.stdout.ends_with("\nafter\n"));
     assert!(outcome.stdout.len() > 200_000 + 30000 * 20);
@@ -76,7 +73,7 @@ fn a_lot_of_output_goes_through_the_buffer_in_order() {
 /// Standard output and error into one pipe, which is what a terminal
 /// shows: the buffered output must come out before a stderr line.
 fn interleaved(case: &Case) -> String {
-    let (exe, dir) = build_compiled(case);
+    let (exe, dir) = build_native(case);
     let output = Command::new("sh")
         .arg("-c")
         .arg(format!("{} 2>&1", exe.display()))
@@ -170,7 +167,7 @@ fn stdin_lines_are_read_as_the_interpreter_reads_them() {
         ("process_stdin_only_newline", "\n"),
     ] {
         let case = Case::file(name, ECHO).with_stdin(stdin);
-        let outcome = assert_compiled_same(&case);
+        let outcome = assert_same(&case);
         assert_eq!(outcome.exit_code, Some(0), "{name}: {outcome:#?}");
     }
 }
@@ -184,7 +181,7 @@ fn stdin_lines_longer_than_the_buffer_and_many_of_them() {
         ("process_stdin_many", many),
     ] {
         let case = Case::file(name, ECHO).with_stdin(&stdin);
-        let outcome = assert_compiled_same(&case);
+        let outcome = assert_same(&case);
         assert!(outcome.stdout.ends_with(" lines\n"), "{name}");
         assert_eq!(outcome.exit_code, Some(0), "{name}");
     }
@@ -237,7 +234,7 @@ fn arguments_after_the_program_path_arrive_unchanged() {
         ),
     ] {
         let case = Case::file(name, SHOW_ARGS).with_args(&args);
-        let outcome = assert_compiled_same(&case);
+        let outcome = assert_same(&case);
         assert!(outcome.stdout.contains("program path present"), "{name}");
         assert_eq!(outcome.exit_code, Some(0), "{name}");
     }
@@ -278,7 +275,7 @@ fn main(io: Stdout, env: Env) {
         .with_env("WITH_EQUALS", "a=b=c")
         .with_env("UNICODE", "日本語 é")
         .with_env("UNUSED_SECRET_TOKEN", "do not read me");
-    let outcome = assert_compiled_same(&case);
+    let outcome = assert_same(&case);
     assert!(outcome
         .stdout
         .contains("GREETING is set to:\nhello world\n"));
@@ -328,7 +325,7 @@ fn a_missing_secret_panics_with_p0020() {
     let _ = io.println(token.expose())
 }
 "#;
-    let outcome = assert_compiled_same(&Case::file("process_missing_secret", src));
+    let outcome = assert_same(&Case::file("process_missing_secret", src));
     assert_eq!(outcome.stdout, "start\n");
     assert!(
         outcome.stderr.contains(
@@ -395,7 +392,7 @@ fn random_is_seeded_differently_by_each_run() {
         "process_random_seed",
         "fn main(io: Stdout, random: Random) {\n    let n = random.next_int()\n    let _ = io.println(\"{n}\")\n}\n",
     );
-    let (exe, dir) = build_compiled(&case);
+    let (exe, dir) = build_native(&case);
     let draw = || {
         let output = Command::new(&exe)
             .current_dir(&dir)
@@ -440,7 +437,7 @@ fn random_is_splitmix64_from_some_seed() {
         "process_random_algorithm",
         "fn main(io: Stdout, random: Random) {\n    let a = random.next_int()\n    let b = random.next_int()\n    let _ = io.println(\"{a} {b}\")\n}\n",
     );
-    let (exe, dir) = build_compiled(&case);
+    let (exe, dir) = build_native(&case);
     let output = Command::new(&exe)
         .current_dir(&dir)
         .output()
@@ -540,7 +537,7 @@ fn main(io: Stdout) {
     let _ = io.println(s)
 }
 "#;
-    let outcome = assert_compiled_same(&Case::file("process_dbg", src));
+    let outcome = assert_same(&Case::file("process_dbg", src));
     assert!(
         outcome.stderr.starts_with("[dbg] 42\n[dbg] -7\n"),
         "{outcome:#?}"
@@ -557,7 +554,7 @@ fn dbg_redacts_a_secret() {
 }
 "#;
     let case = Case::file("process_dbg_secret", src).with_env("TOKEN", "hunter2");
-    let outcome = assert_compiled_same(&case);
+    let outcome = assert_same(&case);
     assert_eq!(outcome.stderr, "[dbg] <redacted>\n");
     assert_eq!(outcome.stdout, "hunter2\n");
 }
@@ -586,7 +583,7 @@ fn main(io: Stdout) {
     let _ = io.println("not reached")
 }
 "#;
-    let outcome = assert_compiled_same(&Case::file("process_todo", src));
+    let outcome = assert_same(&Case::file("process_todo", src));
     assert_eq!(outcome.stdout, "written\n");
     assert!(
         outcome
@@ -646,7 +643,7 @@ fn assert_same_bytes(
     use std::io::Write;
     use std::os::unix::ffi::OsStrExt;
     use std::process::Stdio;
-    let (exe, dir) = build_compiled(case);
+    let (exe, dir) = build_native(case);
     let run = |mut command: Command| -> Ran {
         command
             .current_dir(&dir)
@@ -741,7 +738,7 @@ fn an_argument_that_is_not_utf8_ends_the_program_with_101_on_both_backends() {
         "process_bad_args",
         "fn main(io: Stdout) {\n    let _ = io.println(\"hi\")\n}\n",
     );
-    let (native_exe, dir) = build_compiled(&case);
+    let (native_exe, dir) = build_native(&case);
     let arg = std::ffi::OsStr::from_bytes(b"a\xFFb");
     let native = Command::new(native_exe)
         .arg(arg)
@@ -828,7 +825,7 @@ fn dbg_escapes_invisible_and_format_characters_as_the_interpreter_does() {
         let _ = io.println(d)\n    \
         let _ = io.println(e)\n    \
         let _ = io.println(f)\n}\n";
-    let outcome = assert_compiled_same(&Case::file("process_dbg_unicode", src));
+    let outcome = assert_same(&Case::file("process_dbg_unicode", src));
     assert!(outcome.stderr.contains("\\u{200b}"), "{outcome:#?}");
     assert!(outcome.stderr.contains("\\u{301}"), "{outcome:#?}");
     assert_eq!(outcome.exit_code, Some(0));
@@ -864,7 +861,7 @@ fn closed_early(mut command: Command) -> (String, String, Option<i32>) {
 /// The interpreter under `oskac run --interpret`, `oskac run` natively
 /// and the executable `oskac build` made, each with its label.
 fn three_ways(case: &Case) -> Vec<(Command, &'static str)> {
-    let (exe, dir) = build_compiled(case);
+    let (exe, dir) = build_native(case);
     let mut interpreter = Command::new(env!("CARGO_BIN_EXE_oskac"));
     interpreter
         .current_dir(&dir)
@@ -1012,7 +1009,7 @@ fn a_native_program_killed_by_a_fault_signal_is_reported_as_e0392() {
         "fn main(io: Stdout, input: Stdin) {\n    let _ = io.println(\"ready\")\n    \
          let _ = input.read_line()\n}\n",
     );
-    let (_, dir) = build_compiled(&case);
+    let (_, dir) = build_native(&case);
     for (signal, number, fault) in [("SEGV", 11, true), ("BUS", 7, true), ("TERM", 15, false)] {
         use std::io::{BufRead, BufReader, Read};
         use std::process::Stdio;

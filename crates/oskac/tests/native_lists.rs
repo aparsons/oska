@@ -4,10 +4,7 @@
 //! over a list, list equality, `P0002`, copy-on-write aliasing, freed
 //! lists releasing their items, and the `String` methods that make or
 //! take a list (`split`, `lines`, `chars`, `join`). Also the text search
-//! and copy paths the native text speed-up rewrote. Every target must
-//! compile these programs (`differential::assert_compiled_same`, #161): a
-//! refusal fails on every host, and each host builds them for the other
-//! targets too.
+//! and copy paths the native text speed-up rewrote.
 
 #![cfg(all(
     target_os = "linux",
@@ -16,7 +13,7 @@
 
 mod differential;
 
-use differential::{assert_compiled_same, Case};
+use differential::{assert_same, Case};
 
 /// The helpers every program has. Interpolation takes only names, so a
 /// program prints through these.
@@ -41,7 +38,7 @@ fn program(items: &str, body: &str) -> String {
 /// Run the program on both backends, require the same outcome, and that
 /// it printed `stdout` and exited 0.
 fn assert_prints(name: &str, items: &str, body: &str, stdout: &str) {
-    let outcome = assert_compiled_same(&Case::file(name, &program(items, body)));
+    let outcome = assert_same(&Case::file(name, &program(items, body)));
     assert_eq!(outcome.stdout, stdout, "case `{name}`: {outcome:#?}");
     assert_eq!(outcome.exit_code, Some(0), "case `{name}`: {outcome:#?}");
 }
@@ -79,7 +76,7 @@ fn text_search_and_copy_handle_every_needle_and_piece_size() {
     num(io, shorter.byte_len())
     let same = many.replace("zz", "y")
     yes(io, same == many)"#;
-    let outcome = assert_compiled_same(&Case::file("text_search_sizes", &program("", body)));
+    let outcome = assert_same(&Case::file("text_search_sizes", &program("", body)));
     assert_eq!(outcome.exit_code, Some(0), "{outcome:#?}");
     assert!(
         outcome.stdout.starts_with("<>..<><>x<>\ntrue\nfalse\n"),
@@ -117,7 +114,7 @@ fn shuffle(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int) -> In
 /// it printed `stdout`, then panicked with a report containing `code` and
 /// `message`, exit 101.
 fn assert_panics(name: &str, items: &str, body: &str, stdout: &str, code: &str, message: &str) {
-    let outcome = assert_compiled_same(&Case::file(name, &program(items, body)));
+    let outcome = assert_same(&Case::file(name, &program(items, body)));
     assert_eq!(outcome.stdout, stdout, "case `{name}`: {outcome:#?}");
     assert!(
         outcome
@@ -451,7 +448,7 @@ fn dbg_shows_a_list_item_by_item() {
     built.push(None)
     let f = dbg(built)
     num(io, b.len() + d.len() + f.len())"#;
-    let outcome = assert_compiled_same(&Case::file("list_dbg", &program(items, body)));
+    let outcome = assert_same(&Case::file("list_dbg", &program(items, body)));
     assert_eq!(
         outcome.stderr,
         "[dbg] []\n[dbg] [1, -2, 3]\n[dbg] [\"a\", \"b\\\"c\"]\n[dbg] [[1], [], [2, 3]]\n\

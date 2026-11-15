@@ -3,7 +3,7 @@
 //! through the differential harness (seam 1): direct calls, calls
 //! through function values and closures, trait methods through a bound,
 //! mutating methods, contracts and `?`. Every target must compile these
-//! programs (`differential::assert_compiled_same`): a refusal fails on
+//! programs (`differential::assert_same`): a refusal fails on
 //! every host, and each host builds them for the other targets too.
 
 #![cfg(all(
@@ -13,7 +13,7 @@
 
 mod differential;
 
-use differential::{assert_compiled_same, Case};
+use differential::{assert_same, Case};
 
 /// The helper every program has. Interpolation takes only names, so a
 /// program prints through it.
@@ -36,7 +36,7 @@ fn program(items: &str, body: &str) -> String {
 /// Run the program on both backends, require the same outcome, and that
 /// it printed `stdout` and exited 0.
 fn assert_prints(name: &str, items: &str, body: &str, stdout: &str) {
-    let outcome = assert_compiled_same(&Case::file(name, &program(items, body)));
+    let outcome = assert_same(&Case::file(name, &program(items, body)));
     assert_eq!(outcome.stdout, stdout, "case `{name}`: {outcome:#?}");
     assert_eq!(outcome.exit_code, Some(0), "case `{name}`: {outcome:#?}");
 }
@@ -159,7 +159,7 @@ const SPREAD: &str = "fn spread(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, 
 /// outcome, and that it printed `stdout`, then panicked with `code` and
 /// `message`, exit 101.
 fn assert_spread_panics(name: &str, body: &str, stdout: &str, code: &str, message: &str) {
-    let outcome = assert_compiled_same(&Case::file(name, &program(SPREAD, body)));
+    let outcome = assert_same(&Case::file(name, &program(SPREAD, body)));
     assert_eq!(outcome.stdout, stdout, "case `{name}`: {outcome:#?}");
     assert!(
         outcome

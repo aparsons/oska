@@ -15,13 +15,11 @@
 //! sides, so a panic's location reads the same.
 //!
 //! It is compiled only where native executables run: aarch64 and x86_64
-//! Linux, each building for its own platform. On x86_64, whose backend
-//! is new (spec #153), a program the backend refuses (`E0390`) is
-//! reported on stderr and compared on the interpreter alone
-//! ([`REPORT_REFUSALS`]), until x86_64 Linux is native by default;
-//! [`assert_compiled_same`] instead fails on a refusal on every host, and
-//! builds the program for every other target too, as [`build_compiled`]
-//! and [`run_compiled_native`] do for a case run natively only.
+//! Linux, each running what it builds for its own platform. Every target
+//! with a backend must compile every case (spec #153): the host also
+//! builds it with `--target` for each other one, which it cannot run, so
+//! an aarch64 host still fails when x86_64 refuses a program, and a
+//! refusal (`E0390`) fails on every host.
 //!
 //! To add a differential test, write a `#[test]` that builds a [`Case`]
 //! and calls [`assert_same`], which also returns the outcome for any
@@ -163,51 +161,9 @@ pub fn host_target() -> oska_native::Target {
     }
 }
 
-/// Whether a program `oskac build` refuses with `E0390` is reported
-/// rather than failed: on x86_64 Linux, until it is native by default
-/// (spec #153's default-switch ticket).
-pub const REPORT_REFUSALS: bool = cfg!(target_arch = "x86_64");
-
-/// Whether `oskac build`'s refusal of the program `name`, which printed
-/// `report`, is one to report rather than fail ([`REPORT_REFUSALS`]):
-/// after saying so on stderr.
-pub fn refusal_reported(name: &str, report: &str) -> bool {
-    if !REPORT_REFUSALS || !report.contains("E0390") {
-        return false;
-    }
-    eprintln!(
-        "case `{name}`: the x86_64 backend cannot compile it yet, so only the \
-         interpreter ran it:\n{report}"
-    );
-    true
-}
-
-/// Run `case` on both backends and require the same outcome. Returns it:
-/// the interpreter's alone when the backend's refusal is reported
-/// ([`refusal_reported`]).
+/// Run `case` on both backends and require the same outcome, and build
+/// it for every other target ([`cross_build`]). Returns the outcome.
 pub fn assert_same(case: &Case) -> Outcome {
-    let root = case_root(case);
-    let interpreted = interpret(case, &root);
-    let native = match try_native(case, &root) {
-        Ok(native) => native,
-        Err(report) if refusal_reported(&case.name, &report) => return interpreted,
-        Err(report) => panic!("case `{}`: oskac build failed\n{report}", case.name),
-    };
-    assert!(
-        interpreted == native,
-        "case `{}`: the backends differ\n--- interpreter\n{interpreted:#?}\n--- native\n{native:#?}",
-        case.name
-    );
-    native
-}
-
-/// [`assert_same`] for a program every target must compile: `oskac
-/// build` refusing it (`E0390`) fails on every host, never falling back
-/// to the interpreter ([`REPORT_REFUSALS`]). The host runs its own
-/// target's executable, and builds it for every other target with a
-/// backend as well, so an aarch64 host, which cannot run x86_64 code,
-/// still fails when x86_64 refuses the program.
-pub fn assert_compiled_same(case: &Case) -> Outcome {
     let root = case_root(case);
     let interpreted = interpret(case, &root);
     let native = native(case, &root);
@@ -239,11 +195,14 @@ fn cross_build(case: &Case, root: &Path) {
     }
 }
 
-/// Run `case` on the interpreter and natively: the two outcomes.
+/// Run `case` on the interpreter and natively, and build it for every
+/// other target ([`cross_build`]): the two outcomes.
 pub fn run(case: &Case) -> (Outcome, Outcome) {
     let root = case_root(case);
     let interpreted = interpret(case, &root);
-    (interpreted, native(case, &root))
+    let native = native(case, &root);
+    cross_build(case, &root);
+    (interpreted, native)
 }
 
 /// Run `case` on the interpreter, in `root/interpreted`.
@@ -258,11 +217,13 @@ fn interpret(case: &Case, root: &Path) -> Outcome {
     outcome(interpreter, case, &interpreted_dir)
 }
 
-/// Run `case` natively only: for what the interpreter cannot show, such
-/// as its exact call-depth limit, which a debug build of it may not
-/// reach.
+/// Run `case` natively only, and build it for every other target
+/// ([`cross_build`]): for what the interpreter cannot show, such as its
+/// exact call-depth limit, which a debug build of it may not reach.
 pub fn run_native(case: &Case) -> Outcome {
-    native(case, &case_root(case))
+    let root = case_root(case);
+    cross_build(case, &root);
+    native(case, &root)
 }
 
 /// The directory `case` runs in, emptied.
@@ -274,45 +235,23 @@ fn case_root(case: &Case) -> PathBuf {
     root
 }
 
-/// Build `case` natively, without running it: the executable, and the
-/// directory to run it in, holding `case`'s files.
+/// Build `case` natively, without running it, and for every other
+/// target ([`cross_build`]): the executable, and the directory to run it
+/// in, holding `case`'s files.
 pub fn build_native(case: &Case) -> (PathBuf, PathBuf) {
     let root = case_root(case);
-    let native_dir = fresh_tree(&root.join("native"), case);
-    (build(case, &root, &native_dir), native_dir)
-}
-
-/// [`build_native`] for a program every target must compile, as
-/// [`assert_compiled_same`] requires: it is built for every other target
-/// with a backend as well, and a refusal fails on every host.
-pub fn build_compiled(case: &Case) -> (PathBuf, PathBuf) {
-    let root = case_root(case);
     cross_build(case, &root);
     let native_dir = fresh_tree(&root.join("native"), case);
     (build(case, &root, &native_dir), native_dir)
-}
-
-/// [`run_native`] for a program every target must compile, as
-/// [`build_compiled`] builds it.
-pub fn run_compiled_native(case: &Case) -> Outcome {
-    let root = case_root(case);
-    cross_build(case, &root);
-    native(case, &root)
 }
 
 /// Build `case` and run the executable in `root/native`.
 fn native(case: &Case, root: &Path) -> Outcome {
-    try_native(case, root)
-        .unwrap_or_else(|report| panic!("case `{}`: oskac build failed\n{report}", case.name))
-}
-
-/// [`native`], or what `oskac build` printed when it refused `case`.
-fn try_native(case: &Case, root: &Path) -> Result<Outcome, String> {
     let native_dir = fresh_tree(&root.join("native"), case);
-    let exe = try_build(root, &native_dir, case, None)?;
+    let exe = build(case, root, &native_dir);
     let mut program = Command::new(&exe);
     program.current_dir(&native_dir).args(&case.args);
-    Ok(outcome(program, case, &native_dir))
+    outcome(program, case, &native_dir)
 }
 
 /// Build `case`, from `native_dir`, to `root/bin/program`.
