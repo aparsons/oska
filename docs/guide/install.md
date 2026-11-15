@@ -192,4 +192,4 @@ Confirm that it works:
 oskac --version
 ```
 
-It prints `oskac` and the version on one line. A build from this checkout prints `oskac 0.3.0`. Then continue with the [quickstart](quickstart.md).
+It prints `oskac` and the version on one line. A build from this checkout prints `oskac 0.4.0`. Then continue with the [quickstart](quickstart.md).
