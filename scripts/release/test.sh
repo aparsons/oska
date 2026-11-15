@@ -723,6 +723,95 @@ test_fingerprint_of_agrees_with_ssh_keygen() {
     fail "fingerprint_of: $(fingerprint_of key.pub)"
 }
 
+# ---- The monthly re-sign (resign-index.yml) ----------------------------------
+
+# What resign-index.yml does once a month: sign-index.sh with no --tag over
+# the live index, the result attached to the release it names, then the Pages
+# build. An index that has already expired is re-signed as well, and the
+# installers install the latest release again.
+test_resigning_an_expired_index_lets_the_latest_install_again() {
+  working_builds 1.2.3
+  throwaway_key key
+  "$here/assemble.sh" v1.2.3 builds out
+  "$here/sign.sh" out/v1.2.3 key key.pub
+  hand_index out/v1.2.3 5 v1.2.3 2026-01-03T00:00:00Z
+  mkdir site
+  OSKA_SITE_URL="file://$PWD/site" "$here/stage-site.sh" out site key.pub >/dev/null
+  mkdir resigned
+  "$here/sign-index.sh" key key.pub "file://$PWD/site" resigned >/dev/null
+  [ "$(jq -r .serial resigned/release-index.json)" = 6 ] || fail "serial is not 6"
+  local tag
+  tag=$(jq -r .latest.tag resigned/release-index.json)
+  [ "$tag" = v1.2.3 ] || fail "latest moved to $tag"
+  cp resigned/release-index.json resigned/release-index.json.sig "out/$tag/"
+  rm -rf site
+  mkdir site
+  OSKA_SITE_URL="file://$PWD/site" "$here/stage-site.sh" out site key.pub >log
+  if grep -q 'expire' log; then fail "warned about the fresh index: $(cat log)"; fi
+  OSKA_HOME="$PWD/oska" OSKA_SITE_URL="file://$PWD/site" sh -s -- --json <site/install.sh >latest.json ||
+    fail "installing the latest failed: $(cat latest.json)"
+  [ "$(jq -r .index_verified latest.json)" = true ] || fail "the install did not verify the index: $(cat latest.json)"
+}
+
+# Prints each job of workflow $1 as "<job> <environment or -> <reads the key:
+# yes or no>", reading indentation as scripts/workflow-guard/guard.sh does.
+workflow_jobs() {
+  awk '
+    function finish() {
+      if (job != "") print job, (env == "" ? "-" : env), (key ? "yes" : "no")
+      job = ""
+    }
+    /^[[:space:]]*(#.*)?$/ { next }
+    {
+      ind = $0; sub(/[^ ].*$/, "", ind); ind = length(ind)
+    }
+    ind == 0 { finish(); in_jobs = ($0 ~ /^jobs:/); next }
+    !in_jobs { next }
+    job_indent == "" { job_indent = ind }
+    ind == job_indent {
+      finish()
+      job = $0; sub(/^[[:space:]]*/, "", job); sub(/:.*$/, "", job)
+      env = ""; key = 0; key_indent = ""
+      next
+    }
+    job != "" {
+      if (key_indent == "") key_indent = ind
+      if (ind == key_indent && $0 ~ /^[[:space:]]*environment:[[:space:]]*[^[:space:]]/) {
+        env = $0; sub(/^[[:space:]]*environment:[[:space:]]*/, "", env); sub(/[[:space:]]+#.*$/, "", env)
+      }
+      if ($0 ~ /secrets\.RELEASE_SIGNING_KEY/) key = 1
+    }
+    END { finish() }
+  ' "$1"
+}
+
+test_only_jobs_in_the_release_environment_read_the_signing_key() {
+  local workflows=$here/../../.github/workflows file job env key readers=0
+  for file in "$workflows"/*.yml; do
+    while read -r job env key; do
+      [ "$key" = yes ] || continue
+      readers=$((readers + 1))
+      [ "$env" = release ] || fail "$(basename "$file"): job $job reads RELEASE_SIGNING_KEY outside the release environment"
+    done < <(workflow_jobs "$file")
+  done
+  # release.yml's sign job and resign-index.yml's.
+  [ "$readers" = 2 ] || fail "$readers jobs read the key, not 2"
+}
+
+test_the_index_is_resigned_monthly_and_on_demand_from_main_only() {
+  local wf=$here/../../.github/workflows/resign-index.yml
+  [ -f "$wf" ] || fail "no resign-index.yml"
+  grep -Eq "^[[:space:]]+- cron: '[0-9]+ [0-9]+ [0-9]+ \* \*'" "$wf" || fail "no monthly schedule"
+  grep -q '^  workflow_dispatch:' "$wf" || fail "cannot be run on demand"
+  # It signs nothing for a ref other than main, which the release
+  # environment admits besides the v* tags.
+  [ "$(grep -c "if: github.ref == 'refs/heads/main'" "$wf")" -ge 1 ] || fail "does not refuse other refs"
+  # shellcheck disable=SC2016 # the workflow's own text, not expanded here
+  grep -q 'sign-index.sh "$key" site/oska-release.pub https://oskalang.dev' "$wf" ||
+    fail "does not re-sign the live index with no --tag"
+  grep -q 'gh workflow run pages.yml --ref main' "$wf" || fail "does not publish through pages.yml"
+}
+
 # ---- /.well-known/security.txt ----------------------------------------------
 
 # The value of the field $1 in ./site/.well-known/security.txt.
