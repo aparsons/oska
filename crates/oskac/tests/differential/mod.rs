@@ -14,7 +14,12 @@
 //! tree afterwards. The program is named by the same relative path on both
 //! sides, so a panic's location reads the same.
 //!
-//! It is compiled only where native executables run: aarch64 Linux.
+//! It is compiled only where native executables run: aarch64 and x86_64
+//! Linux, each running what it builds for its own platform. Every target
+//! with a backend must compile every case (spec #153): the host also
+//! builds it with `--target` for each other one, which it cannot run, so
+//! an aarch64 host still fails when x86_64 refuses a program, and a
+//! refusal (`E0390`) fails on every host.
 //!
 //! To add a differential test, write a `#[test]` that builds a [`Case`]
 //! and calls [`assert_same`], which also returns the outcome for any
@@ -146,20 +151,58 @@ pub struct Outcome {
     pub tree: BTreeMap<String, Option<String>>,
 }
 
-/// Run `case` on both backends and require the same outcome. Returns it.
+/// The target platform this host builds and runs native executables
+/// for: its own.
+pub fn host_target() -> oska_native::Target {
+    oska_native::Target::host().expect("this host runs native executables")
+}
+
+/// Run `case` on both backends and require the same outcome, and build
+/// it for every other target ([`cross_build`]). Returns the outcome.
 pub fn assert_same(case: &Case) -> Outcome {
-    let (interpreted, native) = run(case);
+    let root = case_root(case);
+    let interpreted = interpret(case, &root);
+    let native = native(case, &root);
     assert!(
         interpreted == native,
         "case `{}`: the backends differ\n--- interpreter\n{interpreted:#?}\n--- native\n{native:#?}",
         case.name
     );
+    cross_build(case, &root);
     native
 }
 
-/// Run `case` on the interpreter and natively: the two outcomes.
+/// Build `case` in `root` with `--target` for every target with a
+/// backend but the host's, and fail on a refusal: what a host that cannot
+/// run another target's code can check of it.
+fn cross_build(case: &Case, root: &Path) {
+    for target in oska_native::Target::ALL {
+        if target != host_target() {
+            let cross = root.join(target.name());
+            let dir = fresh_tree(&cross.join("tree"), case);
+            if let Err(report) = try_build(&cross, &dir, case, Some(target)) {
+                panic!(
+                    "case `{}`: oskac build --target {} failed\n{report}",
+                    case.name,
+                    target.name()
+                );
+            }
+        }
+    }
+}
+
+/// Run `case` on the interpreter and natively, and build it for every
+/// other target ([`cross_build`]): the two outcomes.
 pub fn run(case: &Case) -> (Outcome, Outcome) {
     let root = case_root(case);
+    let interpreted = interpret(case, &root);
+    let native = native(case, &root);
+    cross_build(case, &root);
+    (interpreted, native)
+}
+
+/// Run `case` on the interpreter, in `root/interpreted`.
+fn interpret(case: &Case, root: &Path) -> Outcome {
     let interpreted_dir = fresh_tree(&root.join("interpreted"), case);
     let mut interpreter = oskac(&interpreted_dir);
     interpreter
@@ -167,15 +210,16 @@ pub fn run(case: &Case) -> (Outcome, Outcome) {
         .arg(&case.target)
         .arg("--")
         .args(&case.args);
-    let interpreted = outcome(interpreter, case, &interpreted_dir);
-    (interpreted, native(case, &root))
+    outcome(interpreter, case, &interpreted_dir)
 }
 
-/// Run `case` natively only: for what the interpreter cannot show, such
-/// as its exact call-depth limit, which a debug build of it may not
-/// reach.
+/// Run `case` natively only, and build it for every other target
+/// ([`cross_build`]): for what the interpreter cannot show, such as its
+/// exact call-depth limit, which a debug build of it may not reach.
 pub fn run_native(case: &Case) -> Outcome {
-    native(case, &case_root(case))
+    let root = case_root(case);
+    cross_build(case, &root);
+    native(case, &root)
 }
 
 /// The directory `case` runs in, emptied.
@@ -187,10 +231,12 @@ fn case_root(case: &Case) -> PathBuf {
     root
 }
 
-/// Build `case` natively, without running it: the executable, and the
-/// directory to run it in, holding `case`'s files.
+/// Build `case` natively, without running it, and for every other
+/// target ([`cross_build`]): the executable, and the directory to run it
+/// in, holding `case`'s files.
 pub fn build_native(case: &Case) -> (PathBuf, PathBuf) {
     let root = case_root(case);
+    cross_build(case, &root);
     let native_dir = fresh_tree(&root.join("native"), case);
     (build(case, &root, &native_dir), native_dir)
 }
@@ -206,24 +252,35 @@ fn native(case: &Case, root: &Path) -> Outcome {
 
 /// Build `case`, from `native_dir`, to `root/bin/program`.
 fn build(case: &Case, root: &Path, native_dir: &Path) -> PathBuf {
+    try_build(root, native_dir, case, None)
+        .unwrap_or_else(|report| panic!("case `{}`: oskac build failed\n{report}", case.name))
+}
+
+/// [`build`], or what `oskac build` printed when it refused `case`: for
+/// `target`, or by default for the host's.
+fn try_build(
+    root: &Path,
+    native_dir: &Path,
+    case: &Case,
+    target: Option<oska_native::Target>,
+) -> Result<PathBuf, String> {
     let bin = root.join("bin");
     std::fs::create_dir_all(&bin).expect("should create the bin directory");
     let exe = bin.join("program");
-    let build = oskac(native_dir)
-        .arg("build")
-        .arg(&case.target)
-        .arg("-o")
-        .arg(&exe)
-        .output()
-        .expect("oskac build should run");
-    assert!(
-        build.status.success(),
-        "case `{}`: oskac build failed\n{}{}",
-        case.name,
-        String::from_utf8_lossy(&build.stdout),
-        String::from_utf8_lossy(&build.stderr)
-    );
-    exe
+    let mut build = oskac(native_dir);
+    build.arg("build").arg(&case.target).arg("-o").arg(&exe);
+    if let Some(target) = target {
+        build.args(["--target", target.name()]);
+    }
+    let build = build.output().expect("oskac build should run");
+    if !build.status.success() {
+        return Err(format!(
+            "{}{}",
+            String::from_utf8_lossy(&build.stdout),
+            String::from_utf8_lossy(&build.stderr)
+        ));
+    }
+    Ok(exe)
 }
 
 fn oskac(dir: &Path) -> Command {

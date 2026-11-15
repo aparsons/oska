@@ -2,8 +2,9 @@
 //! `site/check-links.osk`, on a [`FakeHost`], and the repository's own
 //! files as the generator reads them. The site tests share these.
 //!
-//! Every run is differential like any other helper here: on aarch64 Linux
-//! the program also runs natively on the same files and must do the same.
+//! Every run is differential like any other helper here: on aarch64 and
+//! x86_64 Linux the program also runs natively on the same files and must
+//! do the same.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

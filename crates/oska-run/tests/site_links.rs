@@ -11,7 +11,7 @@
 //! or a GitHub link to a file the repository does not track.
 //!
 //! Both run through the interpreter on a [`FakeHost`], and natively on
-//! aarch64 Linux (`common`).
+//! aarch64 and x86_64 Linux (`common`).
 
 mod common;
 

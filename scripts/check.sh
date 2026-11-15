@@ -15,7 +15,8 @@
 #      private temporary directory (scripts/temp-leak/run.sh) and fails,
 #      naming the paths, if a test leaves anything in it;
 #   3. the installer, release script, unsafe guard, intrinsic guard,
-#      workflow guard, temp-leak wrapper and rust-stable tests;
+#      workflow guard, temp-leak wrapper, rust-stable and cross-build
+#      manifest tests;
 #   4. shellcheck on the shell scripts, when shellcheck is installed.
 
 set -euo pipefail
@@ -104,6 +105,9 @@ bash scripts/temp-leak/test.sh
 
 step "rust-stable tests"
 bash scripts/rust-stable/test.sh
+
+step "cross-build manifest tests"
+bash scripts/cross-build/test.sh
 
 step "shellcheck"
 if command -v shellcheck >/dev/null 2>&1; then

@@ -340,7 +340,8 @@ fn every_console_and_help_block_shows_exactly_what_the_toolchain_prints() {
 #[test]
 fn shell_blocks_use_only_oskac_commands_and_flags_that_exist() {
     let help = oskac_help();
-    let commands: BTreeSet<&str> = ["lex", "parse", "check", "run", "test", "explain"].into();
+    let commands: BTreeSet<&str> =
+        ["lex", "parse", "check", "run", "test", "build", "explain"].into();
     for block in all_blocks().iter().filter(|b| b.language() == "sh") {
         if block.has("planned") {
             continue;
