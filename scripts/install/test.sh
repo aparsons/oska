@@ -1048,6 +1048,300 @@ test_uninstall_hints_at_the_path_and_explains_itself() {
   jq -r .path_hint out.json | grep -q "$bin is on your PATH" || fail "path_hint is $(jq .path_hint out.json)"
 }
 
+# ---- --add-to-path and --hook -------------------------------------------------
+
+MARK="# added by the Oska installer"
+
+# The published hook files, as the site serves them under /agent-setup/.
+agent_setup() {
+  mkdir -p site/agent-setup
+  cp "$here/../../site/agent-setup/oska-check.sh" "$here/../../site/agent-setup/claude-settings.json" site/agent-setup/
+}
+
+# The profile --add-to-path writes on this host for a login shell <shell>
+# (a path, or empty for none).
+profile_for() {
+  case "$1" in
+    */zsh) echo .zshrc ;;
+    */bash) if [ "$(uname -s)" = Darwin ]; then echo .bash_profile; else echo .bashrc; fi ;;
+    *) echo .profile ;;
+  esac
+}
+
+test_by_default_it_touches_nothing_outside_the_oska_home() {
+  release 1.2.3
+  latest 1.2.3
+  SHELL=/bin/zsh install --json >out.json
+  [ "$(ls -A home)" = .oska ] || fail "home holds $(ls -A home)"
+  [ "$(jq 'has("profile")' out.json)" = false ] || fail "JSON names a profile"
+  [ "$(jq -c '[.files[].kind] | unique' home/.oska/receipt.json)" = '["binary","record"]' ] || fail "receipt lists more than binary and records"
+}
+
+test_add_to_path_appends_one_marked_line_to_the_profile_of_the_login_shell() {
+  release 1.2.3
+  latest 1.2.3
+  local shell profile bin="$PWD/home/.oska/bin"
+  for shell in /bin/zsh /bin/bash /bin/dash ''; do
+    rm -rf home
+    profile=$(profile_for "$shell")
+    SHELL=$shell install --json --add-to-path >out.json
+    [ "$(jq -r .profile out.json)" = "$PWD/home/$profile" ] || fail "for '$shell' the profile is $(jq -r .profile out.json), not $profile"
+    [ "$(cat "home/$profile")" = "export PATH=\"$bin:\$PATH\" $MARK" ] || fail "the profile holds: $(cat "home/$profile")"
+    [ "$(ls -A home | LC_ALL=C sort | tr '\n' ' ')" = "$(printf '.oska\n%s\n' "$profile" | LC_ALL=C sort | tr '\n' ' ')" ] || fail "home holds $(ls -A home)"
+    [ "$(jq -r '.files[] | select(.kind == "profile_line") | .path' home/.oska/receipt.json)" = "$PWD/home/$profile" ] || fail "receipt names no profile"
+    [ "$(jq -r '.files[] | select(.kind == "profile_line") | .line' home/.oska/receipt.json)" = "export PATH=\"$bin:\$PATH\" $MARK" ] || fail "receipt carries the wrong line"
+  done
+}
+
+test_add_to_path_keeps_what_the_profile_already_holds() {
+  release 1.2.3
+  latest 1.2.3
+  mkdir home
+  printf 'alias ll=ls\nexport A=1' >home/.zshrc
+  SHELL=/bin/zsh install --json --add-to-path >out.json
+  [ "$(sed -n 1,2p home/.zshrc | tr '\n' ' ')" = 'alias ll=ls export A=1 ' ] || fail "the profile's own lines changed: $(cat home/.zshrc)"
+  [ "$(wc -l <home/.zshrc | tr -d ' ')" = 3 ] || fail "not one line added: $(cat home/.zshrc)"
+}
+
+test_add_to_path_writes_nothing_when_the_bin_directory_is_already_on_the_path() {
+  release 1.2.3
+  latest 1.2.3
+  PATH="$PWD/home/.oska/bin:$PATH" SHELL=/bin/zsh install --json --add-to-path >out.json
+  [ "$(ls -A home)" = .oska ] || fail "home holds $(ls -A home)"
+  [ "$(jq 'has("profile")' out.json)" = false ] || fail "JSON names a profile"
+}
+
+test_add_to_path_never_adds_the_line_twice_and_an_update_keeps_the_record() {
+  release 1.2.3
+  latest 1.2.3
+  SHELL=/bin/zsh install --json --add-to-path >/dev/null
+  SHELL=/bin/zsh install --json --add-to-path >out.json
+  [ "$(wc -l <home/.zshrc | tr -d ' ')" = 1 ] || fail "the line was added twice: $(cat home/.zshrc)"
+  [ "$(jq 'has("profile")' out.json)" = false ] || fail "JSON names a profile it did not change"
+  # An update without the flag still remembers what an earlier run added.
+  release 1.3.0
+  latest 1.3.0
+  install --json >/dev/null
+  [ "$(jq -r '[.files[] | select(.kind == "profile_line")] | length' home/.oska/receipt.json)" = 1 ] || fail "the update forgot the profile line"
+  install --json --uninstall >out.json
+  [ ! -s home/.zshrc ] || fail "the line is still there: $(cat home/.zshrc)"
+}
+
+test_add_to_path_refuses_a_profile_that_is_a_symlink() {
+  release 1.2.3
+  latest 1.2.3
+  mkdir home
+  printf 'x\n' >elsewhere
+  ln -s ../elsewhere home/.zshrc
+  SHELL=/bin/zsh assert_refused_unchanged install_failed 1 --add-to-path
+  [ "$(cat elsewhere)" = x ] || fail "wrote through the symlink"
+}
+
+test_uninstall_removes_the_profile_line_if_it_is_still_there() {
+  release 1.2.3
+  latest 1.2.3
+  mkdir home
+  printf 'alias ll=ls\n' >home/.zshrc
+  SHELL=/bin/zsh install --json --add-to-path >/dev/null
+  printf 'export B=2\n' >>home/.zshrc
+  PATH="$PWD/home/.oska/bin:$PATH" install --json --uninstall >out.json
+  [ "$(tr '\n' ' ' <home/.zshrc)" = 'alias ll=ls export B=2 ' ] || fail "the profile holds: $(cat home/.zshrc)"
+  [ "$(jq -r .path_hint out.json)" = null ] || fail "path_hint is $(jq -r .path_hint out.json)"
+  jq -e --arg p "$PWD/home/.zshrc" '.removed | map(startswith($p)) | any' out.json >/dev/null || fail "removed does not name the profile: $(jq -c .removed out.json)"
+  [ "$(jq -c .kept out.json)" = '[]' ] || fail "kept is $(jq -c .kept out.json)"
+  [ ! -e home/.oska ] || fail "the Oska home is still there"
+}
+
+test_uninstall_keeps_a_profile_whose_line_changed() {
+  release 1.2.3
+  latest 1.2.3
+  SHELL=/bin/zsh install --json --add-to-path >/dev/null
+  sed 's/^export/export X=1; export/' home/.zshrc >z
+  mv z home/.zshrc
+  local before
+  before=$(cat home/.zshrc)
+  install --json --uninstall >out.json
+  [ "$(cat home/.zshrc)" = "$before" ] || fail "the profile was edited"
+  [ "$(jq -r --arg p "$PWD/home/.zshrc" '.kept | index($p) != null' out.json)" = true ] || fail "kept is $(jq -c .kept out.json)"
+  jq -r .path_hint out.json | grep -q "$PWD/home/.zshrc" || fail "path_hint is $(jq -r .path_hint out.json)"
+  [ ! -e home/.oska ] || fail "the rest was not removed"
+}
+
+test_uninstall_refuses_a_profile_line_outside_the_home_directory() {
+  release 1.2.3
+  latest 1.2.3
+  SHELL=/bin/zsh install --json --add-to-path >/dev/null
+  printf 'alias victim=1\n' >victim
+  assert_uninstall_refuses '.files += [{"path": "'"$PWD"'/victim", "kind": "profile_line", "line": "alias victim=1 # added by the Oska installer"}]'
+  assert_uninstall_refuses '.files += [{"path": "'"$PWD"'/home/.config/oska/.profile", "kind": "profile_line", "line": "x # added by the Oska installer"}]'
+  assert_uninstall_refuses '.files += [{"path": "'"$PWD"'/home/.zshrc", "kind": "profile_line", "line": ""}]'
+  # Not the marked line the installer writes: it could be any line of the profile.
+  assert_uninstall_refuses '.files += [{"path": "'"$PWD"'/home/.zshrc", "kind": "profile_line", "line": "alias victim=1"}]'
+}
+
+test_hook_installs_the_script_and_the_settings_into_the_project() {
+  release 1.2.3
+  latest 1.2.3
+  agent_setup
+  mkdir proj
+  install --json --hook proj >out.json
+  local p="$PWD/proj"
+  cmp site/agent-setup/oska-check.sh proj/.claude/hooks/oska-check.sh || fail "the hook script differs"
+  cmp site/agent-setup/claude-settings.json proj/.claude/settings.json || fail "the settings differ"
+  [ "$(jq -r .hook_script out.json)" = "$p/.claude/hooks/oska-check.sh" ] || fail "hook_script is $(jq -r .hook_script out.json)"
+  [ "$(jq -r .hook_settings out.json)" = "$p/.claude/settings.json" ] || fail "hook_settings is $(jq -r .hook_settings out.json)"
+  [ "$(jq -r .settings_merge_needed out.json)" = false ] || fail "settings_merge_needed is not false"
+  cat >expected.json <<JSON
+[
+  {"path": "$p/.claude/hooks/oska-check.sh", "kind": "hook_script", "sha256": "$(sha256 site/agent-setup/oska-check.sh)", "project": "$p"},
+  {"path": "$p/.claude/settings.json", "kind": "hook_settings", "sha256": "$(sha256 site/agent-setup/claude-settings.json)", "project": "$p"}
+]
+JSON
+  diff <(jq -S . expected.json) <(jq -S '[.files[] | select(.kind | startswith("hook_"))]' home/.oska/receipt.json) || fail "receipt entries differ"
+  [ "$(ls -A home)" = .oska ] || fail "home holds $(ls -A home)"
+}
+
+test_hook_accepts_a_relative_project_directory_and_the_equals_form() {
+  release 1.2.3
+  latest 1.2.3
+  agent_setup
+  mkdir proj
+  install --json --hook=proj/ >out.json
+  [ -f proj/.claude/hooks/oska-check.sh ] || fail "no hook script"
+  [ "$(jq -r .hook_script out.json)" = "$PWD/proj/.claude/hooks/oska-check.sh" ] || fail "hook_script is $(jq -r .hook_script out.json)"
+}
+
+test_hook_leaves_existing_settings_alone_and_says_a_merge_is_needed() {
+  release 1.2.3
+  latest 1.2.3
+  agent_setup
+  mkdir -p proj/.claude
+  printf '{"permissions": {}}\n' >proj/.claude/settings.json
+  install --json --hook proj >out.json
+  [ "$(cat proj/.claude/settings.json)" = '{"permissions": {}}' ] || fail "the settings changed"
+  [ "$(jq -r .settings_merge_needed out.json)" = true ] || fail "settings_merge_needed is not true"
+  [ "$(jq -r .hook_settings out.json)" = null ] || fail "hook_settings is $(jq -r .hook_settings out.json)"
+  [ -f proj/.claude/hooks/oska-check.sh ] || fail "no hook script"
+  install --json --uninstall >out.json
+  [ ! -e proj/.claude/hooks/oska-check.sh ] || fail "the hook script is still there"
+  [ "$(cat proj/.claude/settings.json)" = '{"permissions": {}}' ] || fail "uninstall changed the settings"
+  [ "$(jq -r --arg p "$PWD/proj/.claude/settings.json" '.kept | index($p) != null' out.json)" = true ] || fail "kept is $(jq -c .kept out.json)"
+}
+
+test_hook_refuses_to_overwrite_a_different_script() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  agent_setup
+  mkdir -p proj/.claude/hooks
+  printf 'mine\n' >proj/.claude/hooks/oska-check.sh
+  assert_refused_unchanged install_failed 1 --hook proj
+  [ "$(cat proj/.claude/hooks/oska-check.sh)" = mine ] || fail "the script changed"
+  [ ! -e proj/.claude/settings.json ] || fail "wrote settings"
+}
+
+test_hook_with_an_identical_script_already_there_does_not_claim_it() {
+  release 1.2.3
+  latest 1.2.3
+  agent_setup
+  mkdir -p proj/.claude/hooks
+  cp site/agent-setup/oska-check.sh proj/.claude/hooks/oska-check.sh
+  install --json --hook proj >out.json
+  [ "$(jq -r '[.files[] | select(.kind == "hook_script")] | length' home/.oska/receipt.json)" = 0 ] || fail "the receipt claims a script it did not write"
+  install --json --uninstall >/dev/null
+  [ -f proj/.claude/hooks/oska-check.sh ] || fail "uninstall removed a script it did not write"
+}
+
+test_hook_fails_when_the_site_does_not_publish_it() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  mkdir proj
+  assert_refused_unchanged download_failed 1 --hook proj
+}
+
+test_hook_needs_a_project_directory_that_exists() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  assert_refused_unchanged usage 2 --hook nowhere
+  assert_refused_unchanged usage 2 --hook
+}
+
+test_add_to_path_and_hook_belong_to_install_alone() {
+  release 1.2.3
+  latest 1.2.3
+  install --json >/dev/null
+  mkdir proj
+  assert_refused_unchanged usage 2 --uninstall --add-to-path
+  assert_refused_unchanged usage 2 --check --hook proj
+}
+
+test_uninstall_removes_the_hook_script_and_the_settings_it_created() {
+  release 1.2.3
+  latest 1.2.3
+  agent_setup
+  mkdir proj
+  install --json --hook proj >/dev/null
+  install --json --uninstall >out.json
+  [ ! -e proj/.claude/hooks/oska-check.sh ] || fail "the hook script is still there"
+  [ ! -e proj/.claude/settings.json ] || fail "the settings are still there"
+  [ "$(jq -c .kept out.json)" = '[]' ] || fail "kept is $(jq -c .kept out.json)"
+  [ "$(jq -r --arg p "$PWD/proj/.claude/settings.json" '.removed | index($p) != null' out.json)" = true ] || fail "removed is $(jq -c .removed out.json)"
+}
+
+test_uninstall_keeps_settings_that_changed_since_the_install() {
+  release 1.2.3
+  latest 1.2.3
+  agent_setup
+  mkdir proj
+  install --json --hook proj >/dev/null
+  printf '{"permissions": {}}\n' >proj/.claude/settings.json
+  install --json --uninstall >out.json
+  [ "$(cat proj/.claude/settings.json)" = '{"permissions": {}}' ] || fail "the settings changed"
+  [ ! -e proj/.claude/hooks/oska-check.sh ] || fail "the unchanged script is still there"
+  [ "$(jq -r --arg p "$PWD/proj/.claude/settings.json" '.kept | index($p) != null' out.json)" = true ] || fail "kept is $(jq -c .kept out.json)"
+}
+
+test_a_re_run_keeps_the_hook_record() {
+  release 1.2.3
+  latest 1.2.3
+  agent_setup
+  mkdir proj
+  install --json --hook proj >/dev/null
+  install --json --hook proj >out.json
+  [ "$(jq -r .settings_merge_needed out.json)" = false ] || fail "settings_merge_needed is not false for settings it wrote"
+  install --json >/dev/null
+  install --json --uninstall >/dev/null
+  [ ! -e proj/.claude/hooks/oska-check.sh ] || fail "the hook script is still there"
+  [ ! -e proj/.claude/settings.json ] || fail "the settings are still there"
+}
+
+test_uninstall_refuses_hook_entries_outside_their_project() {
+  release 1.2.3
+  latest 1.2.3
+  agent_setup
+  mkdir proj
+  printf 'victim\n' >victim
+  install --json --hook proj >/dev/null
+  local p="$PWD/proj"
+  assert_uninstall_refuses '.files += [{"path": "'"$PWD"'/victim", "kind": "hook_script", "sha256": "x", "project": "'"$p"'"}]'
+  assert_uninstall_refuses '.files += [{"path": "'"$p"'/.claude/hooks/../../../victim", "kind": "hook_script", "sha256": "x", "project": "'"$p"'"}]'
+  assert_uninstall_refuses '.files += [{"path": "'"$p"'/other.sh", "kind": "hook_script", "sha256": "x", "project": "'"$p"'"}]'
+  assert_uninstall_refuses '.files += [{"path": "'"$p"'/.claude/settings.json", "kind": "hook_settings", "sha256": "x", "project": "relative"}]'
+}
+
+test_uninstall_refuses_a_hook_reached_through_a_symlink() {
+  release 1.2.3
+  latest 1.2.3
+  agent_setup
+  mkdir proj
+  install --json --hook proj >/dev/null
+  mv proj/.claude proj/real
+  ln -s real proj/.claude
+  assert_refused_unchanged unsafe_path 1 --uninstall
+}
+
 # ---- The signed release index and --check ------------------------------------
 
 # An RFC 3339 UTC time <days> days from now (negative: in the past).

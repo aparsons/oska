@@ -1066,6 +1066,135 @@ function Test-UninstallHintsAtThePathAndExplainsItself {
     }
 }
 
+# ---- --add-to-path and --hook -------------------------------------------------
+
+# Runs <Body> with the user PATH as it is now, and puts it back after: the
+# tests of --add-to-path write the real user PATH.
+function Use-UserPath([scriptblock]$Body) {
+    $saved = [Environment]::GetEnvironmentVariable('Path', 'User')
+    try {
+        & $Body
+    } finally {
+        [Environment]::SetEnvironmentVariable('Path', $saved, 'User')
+    }
+}
+
+function Get-UserPath { [Environment]::GetEnvironmentVariable('Path', 'User') }
+
+function Test-ByDefaultItLeavesTheUserPathAlone {
+    Use-UserPath {
+        $before = Get-UserPath
+        New-Release '1.2.3'
+        Set-Latest '1.2.3'
+        $result = Read-Json (Invoke-Installer @('--json'))
+        Assert ((Get-UserPath) -eq $before) 'the user PATH changed'
+        Assert ($null -eq $result.PSObject.Properties['user_path_entry']) 'JSON names a PATH entry'
+        $receipt = Get-Content -Raw home/.oska/receipt.json | ConvertFrom-Json
+        Assert (@($receipt.files | Where-Object { $_.kind -eq 'user_path_entry' }).Count -eq 0) 'the receipt records a PATH entry'
+    }
+}
+
+function Test-AddToPathAddsTheBinDirectoryToTheUserPathAndRecordsIt {
+    Use-UserPath {
+        $before = Get-UserPath
+        New-Release '1.2.3'
+        Set-Latest '1.2.3'
+        $bin = Get-FullPath 'home\.oska\bin'
+        $result = Read-Json (Invoke-Installer @('--json', '--add-to-path'))
+        Assert ($script:status -eq 0) "exited $script:status"
+        Assert ($result.user_path_entry -eq $bin) "user_path_entry is $($result.user_path_entry)"
+        $entries = @((Get-UserPath) -split ';')
+        Assert ($entries -contains $bin) "the user PATH is $(Get-UserPath)"
+        Assert (@($entries | Where-Object { $_ -eq $bin }).Count -eq 1) 'the entry is there more than once'
+        if ($before) { Assert ((Get-UserPath).StartsWith("$before;")) 'the user PATH lost its own entries' }
+        $receipt = Get-Content -Raw home/.oska/receipt.json | ConvertFrom-Json
+        $recorded = @($receipt.files | Where-Object { $_.kind -eq 'user_path_entry' })
+        Assert ($recorded.Count -eq 1 -and $recorded[0].path -eq $bin) 'the receipt does not record the entry'
+        # Again: no second entry, and the record stays, also for a run without the flag.
+        $result = Read-Json (Invoke-Installer @('--json', '--add-to-path'))
+        Assert ($null -eq $result.PSObject.Properties['user_path_entry']) 'a second run claims the entry'
+        [void](Invoke-Installer @('--json'))
+        Assert (@((Get-UserPath) -split ';' | Where-Object { $_ -eq $bin }).Count -eq 1) 'the entry is there more than once'
+        $receipt = Get-Content -Raw home/.oska/receipt.json | ConvertFrom-Json
+        Assert (@($receipt.files | Where-Object { $_.kind -eq 'user_path_entry' }).Count -eq 1) 'a re-run forgot the entry'
+    }
+}
+
+function Test-AddToPathNeverTouchesTheMachinePath {
+    Use-UserPath {
+        $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+        New-Release '1.2.3'
+        Set-Latest '1.2.3'
+        [void](Invoke-Installer @('--json', '--add-to-path'))
+        Assert (([Environment]::GetEnvironmentVariable('Path', 'Machine')) -eq $machine) 'the machine PATH changed'
+    }
+}
+
+function Test-UninstallRemovesTheUserPathEntryIfItIsStillThere {
+    Use-UserPath {
+        New-Release '1.2.3'
+        Set-Latest '1.2.3'
+        $bin = Get-FullPath 'home\.oska\bin'
+        [void](Invoke-Installer @('--json', '--add-to-path'))
+        $with = Get-UserPath
+        $result = Read-Json (Invoke-Installer @('--json', '--uninstall'))
+        Assert ($script:status -eq 0) "exited $script:status"
+        Assert (-not ((Get-UserPath) -split ';' -contains $bin)) 'the entry is still in the user PATH'
+        Assert ($null -eq $result.path_hint) "path_hint is $($result.path_hint)"
+        Assert (@($result.removed) -contains "$bin (from your user PATH)") "removed is $(@($result.removed) -join ' | ')"
+        Assert (@($result.kept).Count -eq 0) "kept is $(@($result.kept) -join ' | ')"
+        Assert ($with -ne (Get-UserPath)) 'the user PATH did not change'
+    }
+}
+
+function Test-UninstallKeepsAUserPathWhoseEntryIsGone {
+    Use-UserPath {
+        New-Release '1.2.3'
+        Set-Latest '1.2.3'
+        $bin = Get-FullPath 'home\.oska\bin'
+        [void](Invoke-Installer @('--json', '--add-to-path'))
+        $others = @((Get-UserPath) -split ';' | Where-Object { $_ -and $_ -ne $bin })
+        [Environment]::SetEnvironmentVariable('Path', ($others -join ';'), 'User')
+        $before = Get-UserPath
+        $result = Read-Json (Invoke-Installer @('--json', '--uninstall'))
+        Assert ((Get-UserPath) -eq $before) 'the user PATH changed'
+        Assert (@($result.kept) -contains $bin) "kept is $(@($result.kept) -join ' | ')"
+        Assert ($result.path_hint -like "*$bin*") "path_hint is $($result.path_hint)"
+    }
+}
+
+function Test-UninstallRefusesAUserPathEntryThatIsNotTheBinDirectory {
+    Use-UserPath {
+        New-Release '1.2.3'
+        Set-Latest '1.2.3'
+        [void](Invoke-Installer @('--json', '--add-to-path'))
+        $receiptPath = 'home/.oska/receipt.json'
+        $data = Get-Content -Raw $receiptPath | ConvertFrom-Json
+        foreach ($e in $data.files) { if ($e.kind -eq 'user_path_entry') { $e.path = 'C:\Windows' } }
+        Write-Text $receiptPath ($data | ConvertTo-Json -Depth 5)
+        $before = Get-UserPath
+        $result = Test-RefusedUnchanged 'unsafe_path' 1 @('--uninstall')
+        Assert ((Get-UserPath) -eq $before) 'the user PATH changed'
+    }
+}
+
+function Test-HookIsNotAvailableOnWindowsYet {
+    New-Release '1.2.3'
+    Set-Latest '1.2.3'
+    New-Item -ItemType Directory -Path proj | Out-Null
+    $result = Test-RefusedUnchanged 'unsupported_platform' 1 @('--hook', 'proj')
+    Assert ($result.message -like '*issues/87*') "message is $($result.message)"
+}
+
+function Test-AddToPathAndHookBelongToInstallAlone {
+    New-Release '1.2.3'
+    Set-Latest '1.2.3'
+    [void](Invoke-Installer @('--json'))
+    [void](Test-RefusedUnchanged 'usage' 2 @('--uninstall', '--add-to-path'))
+    [void](Test-RefusedUnchanged 'usage' 2 @('--check', '--hook', 'proj'))
+    [void](Test-RefusedUnchanged 'usage' 2 @('--hook'))
+}
+
 # ---- The signed release index and --check ------------------------------------
 
 function Test-InstallsTheLatestReleaseTheSignedIndexNames {

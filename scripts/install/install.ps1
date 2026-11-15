@@ -6,13 +6,17 @@
 #
 #   & ([scriptblock]::Create((irm https://oskalang.dev/install.ps1))) --version 0.1.0 --json
 #
-# Options (`-Version`, `-AllowDowngrade`, `-Check`, `-Uninstall` and `-Json` work too):
+# Options (`-Version`, `-AllowDowngrade`, `-Check`, `-Uninstall`, `-AddToPath` and `-Json` work too):
 #   --version X        install release X (0.1.0 or v0.1.0) instead of the latest
 #   --allow-downgrade  with --version, install X even if it is older than
 #                      the installed oskac
 #   --check            report the installed and the latest version, and
 #                      install nothing
 #   --uninstall        remove what the install receipt lists, and nothing else
+#   --add-to-path      also add the bin directory to your user PATH (never
+#                      the machine PATH)
+#   --hook <dir>       not available on Windows yet (issue #87): it fails
+#                      with unsupported_platform
 #   --json             print one JSON object on stdout, and nothing else
 #   --help             print this help
 #
@@ -42,6 +46,10 @@
 # It records what it installed in $env:OSKA_HOME\receipt.json, which is
 # advisory: no check above reads it. --uninstall removes the files the
 # receipt lists, if they are unchanged, and downloads nothing.
+#
+# By default nothing outside the Oska home is touched. --add-to-path is
+# opt-in, and the receipt records the entry it added to the user PATH, so
+# that --uninstall removes it, if it is still there.
 #
 # Works in Windows PowerShell 5.1 and PowerShell 7.
 
@@ -226,6 +234,28 @@
             versionFile = (Join-Path $oskaHome 'version')
             receipt     = (Join-Path $oskaHome 'receipt.json')
         }
+    }
+
+    # The entries of the user PATH (not the machine PATH, and not this
+    # session's), as the registry holds them. Wrap the call in @().
+    function Get-UserPathEntries {
+        $value = [Environment]::GetEnvironmentVariable('Path', 'User')
+        if (-not $value) { return }
+        $value -split ';' | Where-Object { $_ -ne '' }
+    }
+
+    # Whether the PATH entry $A is the directory $B: by name, ignoring case
+    # and a trailing separator, as Windows does.
+    function Test-SameEntry([string]$A, [string]$B) {
+        return $A.TrimEnd('\', '/').Equals($B.TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase)
+    }
+
+    # Whether the PATH entry $Entry is among the user PATH's, as written.
+    function Test-InUserPath([string]$Entry) {
+        foreach ($d in (Get-UserPathEntries)) {
+            if (Test-SameEntry $d $Entry) { return $true }
+        }
+        return $false
     }
 
     # Whether $Path is a symlink, a junction or any other reparse point. The
@@ -441,6 +471,7 @@
         [void]$acted.Add($binDir)
         $remove = New-Object Collections.Generic.List[string]
         $removeReceipt = $false
+        $pathEntry = $false
         $kept = New-Object Collections.Generic.List[string]
         $keptWhy = New-Object Collections.Generic.List[string]
         $keep = {
@@ -469,6 +500,14 @@
                 if ($segments[$k].Equals('.config', $cmp) -and $segments[$k + 1].Equals('oska', $cmp)) {
                     Stop-Unsafe "the receipt lists $path, in a .config\oska directory of settings and credentials, which uninstall never touches"
                 }
+            }
+            if ($kind -ceq 'user_path_entry') {
+                # The bin directory, as it went into the user PATH.
+                if (-not (Test-SameEntry $path $binDir)) {
+                    Stop-Unsafe "the receipt lists $path as an entry of the user PATH, which is not the bin directory $binDir"
+                }
+                $pathEntry = $true
+                continue
             }
             if ($kind -cne 'binary' -and $kind -cne 'record') {
                 Stop-Unsafe "the receipt lists $path as a '$kind', which this installer does not remove"
@@ -538,10 +577,36 @@
             & $keep $configDir 'settings and credentials, which uninstall never touches'
         }
 
+        # The user PATH entry --add-to-path added goes only if it is still
+        # there, as it was written; otherwise it is reported, and nothing
+        # is edited.
         $pathHint = $null
-        foreach ($d in ([string]$env:Path -split [IO.Path]::PathSeparator)) {
-            if ($d -and $d.TrimEnd('\', '/').Equals($binDir.TrimEnd('\', '/'), $cmp)) {
-                $pathHint = "$binDir is on your PATH; remove it from your user PATH"
+        $pathEdited = $false
+        if ($pathEntry) {
+            $entries = @(Get-UserPathEntries)
+            $left = @($entries | Where-Object { -not (Test-SameEntry $_ $binDir) })
+            $edited = $false
+            if ($left.Count -lt $entries.Count) {
+                try {
+                    [Environment]::SetEnvironmentVariable('Path', ($left -join ';'), 'User')
+                    $edited = $true
+                } catch {
+                    $edited = $false
+                }
+            }
+            if ($edited) {
+                $pathEdited = $true
+                $removed.Add("$binDir (from your user PATH)")
+            } else {
+                & $keep $binDir 'the entry the installer added is no longer in your user PATH, or could not be removed'
+                $pathHint = "remove $binDir from your user PATH, if it is still there"
+            }
+        }
+        if (-not $pathHint -and -not $pathEdited) {
+            foreach ($d in ([string]$env:Path -split [IO.Path]::PathSeparator)) {
+                if ($d -and $d.TrimEnd('\', '/').Equals($binDir.TrimEnd('\', '/'), $cmp)) {
+                    $pathHint = "$binDir is on your PATH; remove it from your user PATH"
+                }
             }
         }
 
@@ -678,6 +743,8 @@
     function Install-Oskac([object[]]$Arguments) {
         $requested = ''
         $allowDowngrade = $false
+        $addToPath = $false
+        $hookDir = $null
         $mode = ''
         $i = 0
         while ($i -lt $Arguments.Count) {
@@ -695,6 +762,17 @@
                 $requested = $a.Substring(10)
             } elseif ($lower -eq '--allow-downgrade' -or $lower -eq '-allowdowngrade') {
                 $allowDowngrade = $true
+            } elseif ($lower -eq '--add-to-path' -or $lower -eq '-addtopath') {
+                $addToPath = $true
+            } elseif ($lower -eq '--hook' -or $lower -eq '-hook') {
+                if ($i + 1 -ge $Arguments.Count -or -not [string]$Arguments[$i + 1]) {
+                    Stop-Install 'usage' '--hook needs a project directory, like --hook .'
+                }
+                $i++
+                $hookDir = [string]$Arguments[$i]
+            } elseif ($lower.StartsWith('--hook=')) {
+                $hookDir = $a.Substring(7)
+                if (-not $hookDir) { Stop-Install 'usage' '--hook needs a project directory, like --hook .' }
             } elseif ($lower -eq '--check' -or $lower -eq '-check' -or $lower -eq '--uninstall' -or $lower -eq '-uninstall') {
                 $m = '--' + $lower.TrimStart('-')
                 if ($mode -and $mode -ne $m) {
@@ -710,6 +788,8 @@
                 Write-Host '  --check            report the installed and the latest version, and'
                 Write-Host '                     install nothing'
                 Write-Host '  --uninstall        remove what the install receipt lists, and nothing else'
+                Write-Host '  --add-to-path      also add the bin directory to your user PATH'
+                Write-Host '  --hook <dir>       not available on Windows yet (issue #87)'
                 Write-Host '  --json             print one JSON object on stdout, and nothing else'
                 Write-Host '  --help             print this help'
                 Write-Host ''
@@ -725,12 +805,17 @@
         if ($mode) {
             if ($requested) { Stop-Install 'usage' "--version cannot be used with $mode" }
             if ($allowDowngrade) { Stop-Install 'usage' "--allow-downgrade cannot be used with $mode" }
+            if ($addToPath) { Stop-Install 'usage' "--add-to-path cannot be used with $mode" }
+            if ($hookDir) { Stop-Install 'usage' "--hook cannot be used with $mode" }
             if ($mode -eq '--uninstall') {
                 Uninstall-Oskac
                 return
             }
         }
         $check = $mode -eq '--check'
+        if ($hookDir) {
+            Stop-Install 'unsupported_platform' 'the agent hook is a POSIX shell script, so --hook works on Linux and macOS only; Windows support is tracked in https://github.com/aparsons/oska/issues/87'
+        }
         if ($allowDowngrade -and -not $requested) {
             Stop-Install 'usage' '--allow-downgrade needs --version naming the release to go back to'
         }
@@ -788,6 +873,16 @@
         $versionFile = $paths.versionFile
         $receipt = $paths.receipt
         $previous = Get-PreviousVersion $target $receipt $versionFile
+
+        # --add-to-path: the bin directory goes on the user PATH unless it
+        # is there already. Nothing is written until the receipt is.
+        $addEntry = $false
+        if ($addToPath) {
+            if ($binDir.Contains(';')) {
+                Stop-Install 'install_failed' "$binDir has a ; in it, which cannot go in the PATH; add it yourself"
+            }
+            $addEntry = -not (Test-InUserPath $binDir)
+        }
 
         $state.tmp = Join-Path ([IO.Path]::GetTempPath()) ('oska-install-' + [Guid]::NewGuid().ToString('N'))
         [void](New-Item -ItemType Directory -Path $state.tmp)
@@ -971,9 +1066,31 @@
             Write-Utf8 $state.versionTmp "$version`n"
             $files = @(
                 [ordered]@{ path = $target; kind = 'binary'; sha256 = $actual },
-                [ordered]@{ path = $versionFile; kind = 'record'; sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $state.versionTmp).Hash.ToLowerInvariant() },
-                [ordered]@{ path = $receipt; kind = 'record' }
+                [ordered]@{ path = $versionFile; kind = 'record'; sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $state.versionTmp).Hash.ToLowerInvariant() }
             )
+            # What an earlier run added to the user PATH stays recorded, so
+            # a re-run without the flag does not forget it.
+            $recordPath = $addEntry
+            $earlier = $null
+            if ([IO.File]::Exists($receipt) -and -not (Test-Link $receipt)) { $earlier = Read-StrictJson $receipt }
+            if ($null -ne $earlier) {
+                $earlierFiles = Get-Field $earlier 'files'
+                if ($earlierFiles -is [array]) {
+                    foreach ($e in $earlierFiles) {
+                        if ($e -isnot [Management.Automation.PSCustomObject]) { continue }
+                        $ek = Get-Field $e 'kind'
+                        $ep = Get-Field $e 'path'
+                        if ($ek -ceq 'user_path_entry' -and $ep -is [string] -and $ep) {
+                            $files += [ordered]@{ path = $ep; kind = 'user_path_entry' }
+                            if (Test-SameEntry $ep $binDir) { $recordPath = $false }
+                        }
+                    }
+                }
+            }
+            if ($recordPath) {
+                $files += [ordered]@{ path = $binDir; kind = 'user_path_entry' }
+            }
+            $files += [ordered]@{ path = $receipt; kind = 'record' }
             $record = [ordered]@{
                 schema          = 1
                 version         = $version
@@ -1010,6 +1127,10 @@
             Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
             Move-Into $state.receiptTmp $receipt
             $state.receiptTmp = $null
+            if ($addEntry) {
+                $now = @(Get-UserPathEntries)
+                [Environment]::SetEnvironmentVariable('Path', ((@($now) + $binDir) -join ';'), 'User')
+            }
         } catch {
             Stop-Install 'install_failed' "cannot install to ${target}: $($_.Exception.Message)"
         }
@@ -1044,6 +1165,7 @@
                 index_verified     = $indexVerified
                 index_serial       = $indexSerial
             }
+            if ($addEntry) { $result['user_path_entry'] = $binDir }
             Write-Output (New-Object PSObject -Property $result | ConvertTo-Json -Compress)
             return
         }
@@ -1055,7 +1177,13 @@
             'downgraded' { Write-Host "Downgraded oskac $previous to $version in $target." }
         }
         Write-Host 'The checksum and the release signature were verified.'
-        if (-not $onPath) {
+        if ($addEntry) {
+            Write-Host ''
+            Write-Host "Added $binDir to your user PATH; open a new terminal to use it."
+        } elseif ($addToPath) {
+            Write-Host ''
+            Write-Host "$binDir is already on your user PATH."
+        } elseif (-not $onPath) {
             Write-Host ''
             Write-Host "$binDir is not on your PATH. Add it for your user with:"
             Write-Host ''
