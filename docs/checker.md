@@ -773,11 +773,12 @@ test "setup" {
 | `E0360` | A name declared by an imported `std` module but not exported by it, written unqualified. Spans the name. No `std` module declares a private name yet: no program can reach this code, so it has no example. | None: the module keeps it private. |
 | `E0400` | `oska.toml` is malformed: a table header with no `]`, a key with no `=`, no value after `=`, a string that is not closed or has an unknown escape (`\u` and `\U` take exactly 4 and 8 hex digits), text after a value, a carriage return not followed by a line feed, a byte-order mark, or text that is not UTF-8. Spans the offending text; the manifest's path, line and column are in the report. A byte-order mark, or a bare carriage return, is reported alone. | Remove a byte-order mark. |
 | `E0401` | `oska.toml` uses TOML outside the strict subset (tables, single-line strings, arrays of strings, comments). The message names the feature: dotted keys, dates, multiline strings, inline tables, arrays of tables, quoted keys, integers, floats, booleans, or nested arrays. Spans the unsupported text. | None. |
-| `E0402` | An unknown key or table in `oska.toml`: milestone 1 accepts only `[package]`, with the keys `name` and `version`. A key outside any table is also unknown. Spans the key, or the table's name. | Replace the name with the single closest known name, when one is close enough. |
+| `E0402` | An unknown key or table in `oska.toml`: milestone 1 accepts only `[package]`, with the keys `name`, `version` and `oska`. A key outside any table is also unknown. Spans the key, or the table's name. | Replace the name with the single closest known name, when one is close enough. |
 | `E0403` | A `[dependencies]` table in `oska.toml`: dependencies arrive in milestone 5. Spans the table's name. | None. |
 | `E0404` | `oska.toml` has no `[package]` table (spans the start of the file), or `[package]` has no `name` or no `version` (spans the table's name). | None. |
-| `E0405` | A value in `[package]` of the wrong kind: `name` or `version` given as an array, a `name` that is not snake_case, or a `version` that is not semver (`MAJOR.MINOR.PATCH`, with an optional `-prerelease` and `+build`). Spans the value. | None. |
+| `E0405` | A value in `[package]` of the wrong kind: `name`, `version` or `oska` given as an array, a `name` that is not snake_case, or a `version` or `oska` that is not semver (`MAJOR.MINOR.PATCH`, with an optional `-prerelease` and `+build`). Spans the value. | None. |
 | `E0406` | A key written twice in `[package]`, or `[package]` written twice. Spans the second one's name. | None. |
+| `E0407` | `oska` in `[package]` names a newer `oskac` than the one running: the package needs that version or newer. `oska` is a minimum, never an exact pin, so a newer `oskac` always accepts it; versions are compared by semver precedence, pre-releases included, so `0.5.0-rc.1` is older than `0.5.0`. The message names both versions and how to install a newer `oskac`. Every command that reads the manifest (`check`, `run`, `test` and `build`) reports it, and reports nothing else: the manifest's other keys and the package's modules may be written for the newer toolchain, so none is checked. Spans the value. | None: install a newer `oskac`, or lower `oska` if the package does not need the newer one. |
 | `E0410` | A file or directory name of a module under `src/` that `use pkg.<path>` could not name, or that would read as something else: not snake_case, a keyword such as `fn` or `match`, hidden (starting with `.`), or, as the module path's first name, `pkg` or `std`, which start import paths, or `main`, the entry module. Spans the start of the file. | None: rename the file or directory. |
 | `E0411` | A symlinked `oska.toml`, or a symlinked file or directory under `src/`. A package's source is what is in its tree, so `oskac` follows no link, and opens each file without following one. A symlink cannot be written in a documentation example, so it has no example. | None: replace the link with the file or directory. |
 | `E0412` | `main` declared in a module other than `src/main.osk`. Spans the name. | None. |
@@ -2438,6 +2439,28 @@ fn main() {}
 [package]
 name = "demo"
 version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+#### `E0407`
+
+```oska error=E0407 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+oska = "999.0.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+```oska fixed=E0407 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+oska = "0.1.0"
 ==> src/main.osk <==
 fn main() {}
 ```

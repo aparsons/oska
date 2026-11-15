@@ -11,7 +11,11 @@
 //! basic (`"..."`) and literal (`'...'`) single-line strings, arrays of
 //! strings (which may span lines), and `#` comments. Anything else in
 //! TOML is `E0401`, naming the feature. Milestone 1 accepts only
-//! `[package]`, with a required `name` and `version`.
+//! `[package]`, with a required `name` and `version`, and an optional
+//! `oska`: the oldest `oskac` the package works with. It is manifest and
+//! tooling, never language (ADR 0014): it changes which `oskac` may check
+//! a package, not what a checked program means. It is a minimum, never an
+//! exact pin, so a newer `oskac` always accepts it.
 //!
 //! - `E0400`: malformed text.
 //! - `E0401`: valid TOML outside the subset.
@@ -21,6 +25,9 @@
 //! - `E0405`: a value of the wrong type, a name that is not snake_case,
 //!   or a version that is not semver.
 //! - `E0406`: a repeated key or table.
+//! - `E0407`: `oska` names a newer toolchain than the running `oskac`.
+
+use std::cmp::Ordering;
 
 use oska_syntax::{Diagnostic, Edit, LineIndex, Span};
 
@@ -33,12 +40,26 @@ pub struct Manifest {
     pub name: String,
     /// The package's version: semver, as written.
     pub version: String,
+    /// The oldest `oskac` the package works with: semver, as written.
+    pub oska: Option<String>,
 }
 
 /// Parse `text`, the manifest at `path`. A manifest with any error gives
 /// every error found, in the order they are found, followed by what is
 /// missing.
 pub fn parse_manifest(path: &str, text: &str) -> Result<Manifest, Vec<Diagnostic>> {
+    parse_manifest_for(path, text, env!("CARGO_PKG_VERSION"))
+}
+
+/// [`parse_manifest`] as the `oskac` of version `running` (semver): a
+/// package whose `oska` is newer than `running` is refused with `E0407`,
+/// and with nothing else, because the rest of its manifest, and its
+/// sources, may be written for the newer toolchain.
+pub fn parse_manifest_for(
+    path: &str,
+    text: &str,
+    running: &str,
+) -> Result<Manifest, Vec<Diagnostic>> {
     let malformed = text_errors(text);
     if !malformed.is_empty() {
         let lines = LineIndex::new(text);
@@ -59,6 +80,9 @@ pub fn parse_manifest(path: &str, text: &str) -> Result<Manifest, Vec<Diagnostic
         package: None,
         name: None,
         version: None,
+        oska: None,
+        running,
+        too_old: None,
         keys_seen: Vec::new(),
     };
     parser.run();
@@ -162,6 +186,58 @@ fn is_semver(version: &str) -> bool {
     core_ok && pre_ok && build_ok
 }
 
+/// Compare two semantic versions by precedence (semver 2.0.0, section 11):
+/// the core numerically, then a pre-release below its release, its
+/// identifiers one by one (numbers below words, and a shorter list below a
+/// longer one that starts with it). Build metadata is ignored. Both must
+/// be semver; the installers and `oskac self` compare the same way.
+pub fn compare_semver(a: &str, b: &str) -> Ordering {
+    let (core_a, pre_a) = split_precedence(a);
+    let (core_b, pre_b) = split_precedence(b);
+    let numbers =
+        |core: &str| -> Vec<u128> { core.split('.').map(|n| n.parse().unwrap_or(0)).collect() };
+    numbers(core_a)
+        .cmp(&numbers(core_b))
+        .then_with(|| match (pre_a, pre_b) {
+            (None, None) => Ordering::Equal,
+            (None, Some(_)) => Ordering::Greater,
+            (Some(_), None) => Ordering::Less,
+            (Some(a), Some(b)) => compare_pre_release(a, b),
+        })
+}
+
+/// A version without its build metadata, as its core and its pre-release.
+fn split_precedence(version: &str) -> (&str, Option<&str>) {
+    let version = version.split('+').next().unwrap_or(version);
+    match version.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (version, None),
+    }
+}
+
+fn compare_pre_release(a: &str, b: &str) -> Ordering {
+    let mut b_ids = b.split('.');
+    for id in a.split('.') {
+        let Some(other) = b_ids.next() else {
+            return Ordering::Greater;
+        };
+        let order = match (id.parse::<u128>(), other.parse::<u128>()) {
+            (Ok(x), Ok(y)) => x.cmp(&y),
+            (Ok(_), Err(_)) => Ordering::Less,
+            (Err(_), Ok(_)) => Ordering::Greater,
+            (Err(_), Err(_)) => id.cmp(other),
+        };
+        if order != Ordering::Equal {
+            return order;
+        }
+    }
+    if b_ids.next().is_some() {
+        Ordering::Less
+    } else {
+        Ordering::Equal
+    }
+}
+
 /// The table the parser is in.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Table {
@@ -189,6 +265,11 @@ struct Parser<'a> {
     package: Option<Span>,
     name: Option<String>,
     version: Option<String>,
+    oska: Option<String>,
+    /// The version of the `oskac` reading the manifest.
+    running: &'a str,
+    /// The `E0407`, when `oska` is newer than `running`.
+    too_old: Option<Diagnostic>,
     /// The keys of `[package]` seen so far.
     keys_seen: Vec<String>,
 }
@@ -496,15 +577,15 @@ impl Parser<'_> {
                 key_span,
             ),
             Table::Package => {
-                if !["name", "version"].contains(&key) {
+                if !["name", "version", "oska"].contains(&key) {
                     let d = suggest::unknown(
                         codes::MANIFEST_UNKNOWN,
                         format!(
-                            "unknown key `{key}` in `[package]`; the keys are `name` and `version`"
+                            "unknown key `{key}` in `[package]`; the keys are `name`, `version` and `oska`"
                         ),
                         key,
                         key_span,
-                        &["name", "version"],
+                        &["name", "version", "oska"],
                     );
                     self.push(d);
                     return;
@@ -539,16 +620,28 @@ impl Parser<'_> {
                             value_span,
                         );
                     }
-                } else if is_semver(&text) {
-                    self.version = Some(text);
-                } else {
+                } else if !is_semver(&text) {
                     self.error(
                         codes::MANIFEST_VALUE,
-                        format!(
-                            "`version` must be a semver version, such as `0.1.0`, not `{text}`"
-                        ),
+                        format!("`{key}` must be a semver version, such as `0.1.0`, not `{text}`"),
                         value_span,
                     );
+                } else if key == "version" {
+                    self.version = Some(text);
+                } else {
+                    if compare_semver(self.running, &text) == Ordering::Less {
+                        self.too_old = Some(Diagnostic::new(
+                            codes::MANIFEST_TOOLCHAIN,
+                            format!(
+                                "this package needs `oskac` {text} or newer, and this is `oskac` {}; \
+                                 install a newer `oskac` with `curl -fsSL https://oskalang.dev/install.sh | sh` \
+                                 (on Windows, see https://oskalang.dev)",
+                                self.running
+                            ),
+                            value_span,
+                        ));
+                    }
+                    self.oska = Some(text);
                 }
             }
         }
@@ -737,6 +830,9 @@ impl Parser<'_> {
     // ---- The end ------------------------------------------------------
 
     fn finish(mut self) -> Result<Manifest, Vec<Diagnostic>> {
+        if let Some(too_old) = self.too_old.take() {
+            self.errors = vec![too_old];
+        }
         let start = Span { start: 0, end: 0 };
         match self.package {
             None => self.error(
@@ -759,7 +855,11 @@ impl Parser<'_> {
         let lines = LineIndex::new(self.text);
         let path = self.path;
         match (self.name, self.version) {
-            (Some(name), Some(version)) if self.errors.is_empty() => Ok(Manifest { name, version }),
+            (Some(name), Some(version)) if self.errors.is_empty() => Ok(Manifest {
+                name,
+                version,
+                oska: self.oska,
+            }),
             _ => Err(self
                 .errors
                 .into_iter()

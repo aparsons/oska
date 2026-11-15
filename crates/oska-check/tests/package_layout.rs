@@ -58,6 +58,30 @@ fn manifest_errors_are_reported_with_the_manifests_path_before_the_modules() {
 }
 
 #[test]
+fn a_package_needing_a_newer_toolchain_is_refused_without_checking_its_modules() {
+    // The modules may use what only the newer toolchain knows, so none of
+    // their errors is reported (spec #191, ticket #204).
+    let manifest = "[package]\nname = \"demo\"\nversion = \"0.1.0\"\noska = \"999.0.0\"\n";
+    let report = check_package(
+        &package(
+            manifest,
+            &[
+                ("main", "fn main() {}\nfn f(x: Strin) {}\n"),
+                ("Bad_Name", ""),
+            ],
+        ),
+        CheckOptions::default(),
+    );
+    let found: Vec<(&str, &str)> = report
+        .diagnostics
+        .iter()
+        .map(|d| (path_of(d.location.as_deref()), d.code))
+        .collect();
+    assert_eq!(found, [("oska.toml", "E0407")]);
+    assert!(report.program.is_none());
+}
+
+#[test]
 fn a_file_name_that_is_not_snake_case_is_an_error_on_that_file() {
     assert_modules_errors(
         &[("main", MAIN), ("Bad_Name", "")],

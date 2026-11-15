@@ -28,6 +28,8 @@ crates/oskac/tests/fixtures/packages/manifest_dotted_key E0401
 crates/oskac/tests/fixtures/packages/manifest_inline_table E0401
 crates/oskac/tests/fixtures/packages/manifest_missing_name E0404
 crates/oskac/tests/fixtures/packages/manifest_multiline_string E0401
+crates/oskac/tests/fixtures/packages/manifest_needs_newer_oskac E0407
+crates/oskac/tests/fixtures/packages/manifest_needs_newer_oskac_library E0407
 crates/oskac/tests/fixtures/packages/manifest_not_utf8 E0400
 crates/oskac/tests/fixtures/packages/manifest_symlink E0411
 crates/oskac/tests/fixtures/packages/manifest_syntax E0400
