@@ -53,10 +53,10 @@ fn an_attenuation_in_a_trait_method_names_it_as_the_report_does() {
          impl Publish for Site {\n    fn out(self, write: FsWrite) -> DirWrite {\n        write.restrict_to(\"b\")\n    }\n}",
     );
     assert_eq!(names(&report), vec!["Site.out", "<Site as Publish>.out"]);
-    let functions: Vec<&str> = report
+    let functions: Vec<String> = report
         .attenuations
         .iter()
-        .map(|a| a.function.as_str())
+        .map(|a| a.function.to_string())
         .collect();
     assert_eq!(functions, vec!["Site.out", "<Site as Publish>.out"]);
 }
@@ -129,10 +129,10 @@ fn an_attenuation_in_an_instance_impl_names_it_as_the_report_does() {
         "<Site<String> as Publish>.out",
     ];
     assert_eq!(names(&report), expected);
-    let functions: Vec<&str> = report
+    let functions: Vec<String> = report
         .attenuations
         .iter()
-        .map(|a| a.function.as_str())
+        .map(|a| a.function.to_string())
         .collect();
     assert_eq!(functions, expected);
 }

@@ -91,6 +91,19 @@ impl Modules {
             .map_or(ENTRY_MODULE, |(module, _)| module.as_str())
     }
 
+    /// The line, counted from 1, of byte `offset` of `text` in the file of
+    /// the module it is in: `text` is the one the ranges are offsets
+    /// into, or a single file's.
+    pub fn line_at(&self, text: &str, offset: usize) -> usize {
+        let start = self
+            .ranges
+            .iter()
+            .find(|(_, span)| span.start <= offset && offset <= span.end)
+            .map_or(0, |(_, span)| span.start);
+        let before = text.get(start..offset).unwrap_or_default();
+        1 + before.bytes().filter(|&b| b == b'\n').count()
+    }
+
     /// The name the authority report gives a function or method declared
     /// at `offset`, whose type or trait, for a method, is `type_key`. In
     /// a single file, the name, or `Type.name` for a method. In a package,

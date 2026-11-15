@@ -122,6 +122,88 @@ pub struct Bound {
     pub args: Vec<Ty>,
 }
 
+impl Bound {
+    /// The bound's trait as written after `T:`, `Display`, or `From<Int>`
+    /// with a generic trait's arguments.
+    pub fn trait_text(&self) -> String {
+        format!("{}{}", self.trait_name, ty::args_text(&self.args))
+    }
+}
+
+impl FnSig {
+    /// The generic parameters with their bounds, as `<A, B: Display +
+    /// Eq>`, or nothing when there are none.
+    pub fn generics_text(&self) -> String {
+        if self.generics.is_empty() {
+            return String::new();
+        }
+        let params: Vec<String> = self
+            .generics
+            .iter()
+            .map(|name| {
+                let bounds: Vec<String> = self
+                    .bounds
+                    .iter()
+                    .filter(|b| &b.param == name)
+                    .map(Bound::trait_text)
+                    .collect();
+                if bounds.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{name}: {}", bounds.join(" + "))
+                }
+            })
+            .collect();
+        format!("<{}>", params.join(", "))
+    }
+
+    /// This signature written in an `impl` that has the generic
+    /// parameters `impl_generics`, as a stub: only the signature's own
+    /// generics are kept, with the bounds on them, and one that has the
+    /// name of an impl generic is renamed (`T` to `T2`), because in the
+    /// impl it would shadow the impl's own in the types `Self` and the
+    /// trait's arguments were replaced by.
+    pub fn in_impl_with(mut self, impl_generics: &[String]) -> FnSig {
+        let mut taken: Vec<String> = impl_generics.to_vec();
+        taken.extend(self.generics.iter().cloned());
+        let mut rename: Vec<(String, Ty)> = Vec::new();
+        let mut generics = Vec::new();
+        for name in &self.generics {
+            if !impl_generics.contains(name) {
+                generics.push(name.clone());
+                continue;
+            }
+            let fresh = (2..)
+                .map(|n| format!("{name}{n}"))
+                .find(|candidate| !taken.contains(candidate))
+                .expect("some numbered name is free");
+            taken.push(fresh.clone());
+            rename.push((name.clone(), Ty::Param(fresh.clone())));
+            generics.push(fresh);
+        }
+        let renamed = |param: &str| match rename.iter().find(|(from, _)| from == param) {
+            Some((_, Ty::Param(to))) => to.clone(),
+            _ => param.to_string(),
+        };
+        self.bounds = self
+            .bounds
+            .iter()
+            .filter(|b| self.generics.contains(&b.param))
+            .map(|b| Bound {
+                param: renamed(&b.param),
+                trait_name: b.trait_name.clone(),
+                args: b.args.iter().map(|a| a.substitute(&rename)).collect(),
+            })
+            .collect();
+        for (_, ty) in &mut self.params {
+            *ty = ty.substitute(&rename);
+        }
+        self.ret = self.ret.substitute(&rename);
+        self.generics = generics;
+        self
+    }
+}
+
 /// One generic parameter the module declares, by the span of its name,
 /// or a trait's `Self`, by the span of the trait's name. A body that
 /// assumes something of a type parameter records it under this key, and
@@ -252,11 +334,7 @@ impl ImplInfo {
     /// `Display`, or `From<IoError>` with a generic trait's arguments
     /// (see [`crate::program::trait_method`]).
     pub fn trait_ref(&self) -> String {
-        if self.trait_args.is_empty() {
-            return self.trait_name.clone();
-        }
-        let args: Vec<String> = self.trait_args.iter().map(Ty::to_string).collect();
-        format!("{}<{}>", self.trait_name, args.join(", "))
+        format!("{}{}", self.trait_name, ty::args_text(&self.trait_args))
     }
 
     /// The arguments of the impl's target, as `<Int>` for `Pair<Int>`, and
@@ -265,10 +343,7 @@ impl ImplInfo {
     /// are told apart (#265).
     pub fn target_args(&self) -> String {
         match &self.target {
-            Ty::Named(_, args, _) if !args.is_empty() => {
-                let args: Vec<String> = args.iter().map(Ty::to_string).collect();
-                format!("<{}>", args.join(", "))
-            }
+            Ty::Named(_, args, _) => ty::args_text(args),
             _ => String::new(),
         }
     }
@@ -557,6 +632,8 @@ impl Items {
                 ItemKind::Const(c) => {
                     if !in_prelude {
                         let ty = Lower::in_scope(decls, in_prelude).ty(&c.ty);
+                        // A second declaration is `E0202` (`coherence.rs`):
+                        // the first one's type stays.
                         self.const_types.entry(c.name.name.clone()).or_insert(ty);
                     }
                     if let (false, Some(text)) = (in_prelude, literal_text(&c.value)) {

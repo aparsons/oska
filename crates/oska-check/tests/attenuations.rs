@@ -26,7 +26,14 @@ fn attenuations(src: &str) -> Vec<Entry> {
         .into_iter()
         .map(|a| {
             let text = src[a.span.start..a.span.end].to_string();
-            (a.function, a.method, a.source, a.result, a.root, text)
+            (
+                a.function.to_string(),
+                a.method,
+                a.source,
+                a.result,
+                a.root,
+                text,
+            )
         })
         .collect()
 }

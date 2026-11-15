@@ -64,7 +64,7 @@ use crate::program::{self, Callee, Construct};
 use crate::resolve;
 use crate::suggest;
 use crate::ty::{self, Cap, Trust, Ty};
-use crate::{Attenuation, AuditSite};
+use crate::{Attenuation, AuditSite, FnOrTest, TestName};
 
 mod attenuation;
 mod audit;
@@ -94,9 +94,9 @@ pub struct Findings {
     /// instantiate type parameters, for `instantiation.rs`.
     pub assumed: Vec<crate::instantiation::Assumed>,
     pub instances: Vec<crate::instantiation::Instance>,
-    /// The function whose body is being checked, named as the authority
-    /// report names it; a test is `test "<name>"`. Empty outside both.
-    pub function: String,
+    /// The function or test whose body is being checked, named as the
+    /// authority report names it. Empty outside both.
+    pub function: FnOrTest,
     /// Which module each part of the source is in; none for a single
     /// file (`link.rs`).
     pub modules: crate::link::Modules,
@@ -111,9 +111,11 @@ pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mu
         out.module = out.modules.at(item.span.start).to_string();
         match &item.kind {
             ItemKind::Fn(f) => {
-                out.function = out
-                    .modules
-                    .function_name(item.span.start, None, &f.name.name);
+                out.function = FnOrTest::Fn(out.modules.function_name(
+                    item.span.start,
+                    None,
+                    &f.name.name,
+                ));
                 function(src, f, Lower::new(decls), items, out);
             }
             ItemKind::Impl(imp) => {
@@ -122,8 +124,14 @@ pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mu
                 let lower = lower.with_self(target);
                 for method in &imp.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        out.function =
-                            authority::impl_method_name(&out.modules, items, item, imp, method, f);
+                        out.function = FnOrTest::Fn(authority::impl_method_name(
+                            &out.modules,
+                            items,
+                            item,
+                            imp,
+                            method,
+                            f,
+                        ));
                         function(src, f, lower.clone(), items, out);
                     }
                 }
@@ -145,17 +153,17 @@ pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mu
                     });
                 for method in &t.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        out.function = out.modules.function_name(
+                        out.function = FnOrTest::Fn(out.modules.function_name(
                             method.span.start,
                             Some(&t.name.name),
                             &f.name.name,
-                        );
+                        ));
                         function(src, f, lower.clone(), items, out);
                     }
                 }
             }
             ItemKind::Const(c) => {
-                out.function.clear();
+                out.function = FnOrTest::default();
                 let lower = Lower::new(decls);
                 let ty = lower.ty(&c.ty);
                 let mut body = Body::new(src, items, lower, Ty::Unit, out);
@@ -163,9 +171,16 @@ pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mu
                 body.finish();
             }
             ItemKind::Test(test) => {
-                // The report names a test `test "<name>"` (#150).
-                let name = crate::items::literal_text(&test.name).unwrap_or_default();
-                out.function = format!("test {name:?}");
+                // The report names a test by its name (#150), or by its
+                // line when the name has no text.
+                out.function = FnOrTest::Test(
+                    match crate::items::literal_text(&test.name).filter(|name| !name.is_empty()) {
+                        Some(name) => TestName::Named(name),
+                        None => TestName::Unnamed {
+                            line: out.modules.line_at(src, item.span.start),
+                        },
+                    },
+                );
                 let mut body = Body::new(src, items, Lower::new(decls), Ty::Unit, out);
                 body.bind("t", Ty::named(ty::TEST_CONTEXT), Binding::Param);
                 // A test produces no value: its last expression is a

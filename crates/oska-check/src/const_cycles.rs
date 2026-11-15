@@ -14,7 +14,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use oska_syntax::ast::{ItemKind, Module};
-use oska_syntax::Diagnostic;
+use oska_syntax::{Diagnostic, Span};
 
 use crate::codes;
 use crate::program::lower::{Resolution, Resolutions};
@@ -30,21 +30,27 @@ pub fn module(module: &Module, resolutions: &Resolutions, diagnostics: &mut Vec<
             _ => None,
         })
         .collect();
+    // Every use of a constant, by where it is, found once: each
+    // constant's initializer then reads its own range of them.
+    let mut named: Vec<(Span, &str)> = resolutions
+        .iter()
+        .filter_map(|(span, resolution)| match resolution {
+            Resolution::Const(name) => Some((*span, name.as_str())),
+            _ => None,
+        })
+        .collect();
+    named.sort_unstable_by_key(|(span, _)| span.start);
     // Each constant's uses of constants, in source order, once each.
     let mut uses: HashMap<&str, Vec<&str>> = HashMap::new();
     for c in &consts {
-        let mut named: Vec<(usize, &str)> = resolutions
-            .iter()
-            .filter(|(span, _)| span.start >= c.value.span.start && span.end <= c.value.span.end)
-            .filter_map(|(span, resolution)| match resolution {
-                Resolution::Const(name) => Some((span.start, name.as_str())),
-                _ => None,
-            })
-            .collect();
-        named.sort_unstable();
+        let inside = c.value.span;
+        let first = named.partition_point(|(span, _)| span.start < inside.start);
         let mut edges: Vec<&str> = Vec::new();
-        for (_, name) in named {
-            if !edges.contains(&name) {
+        for &(span, name) in &named[first..] {
+            if span.start >= inside.end {
+                break;
+            }
+            if span.end <= inside.end && !edges.contains(&name) {
                 edges.push(name);
             }
         }

@@ -320,7 +320,10 @@ pub fn module(
                     contracts: Contracts::default(),
                     body: lowering.expr(&c.value),
                 };
-                program.functions.insert(name, function);
+                // `E0202` refuses a second declaration of the name, and no
+                // program is lowered with an error, so this is the first.
+                let earlier = program.functions.insert(name, function);
+                debug_assert!(earlier.is_none(), "a constant's name is declared once");
             }
             ItemKind::Test(test) => program.tests.push(super::Test {
                 name: test_name(&test.name),

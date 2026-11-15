@@ -258,9 +258,9 @@ impl AuditSite {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attenuation {
     /// The function the call is in, named as in `functions`, or the test
-    /// it is in, as `test "<name>"`. A closure's attenuations belong to
-    /// the function around it.
-    pub function: String,
+    /// it is in. A closure's attenuations belong to the function around
+    /// it.
+    pub function: FnOrTest,
     /// The method: `restrict_to`, `restrict_to_file`, `read_only` or
     /// `write_only`.
     pub method: String,
@@ -274,6 +274,85 @@ pub struct Attenuation {
     pub root: AttenuationRoot,
     /// The file the call is in, named by a package check.
     pub location: Option<Location>,
+}
+
+/// What an attenuation is in: a function, or a `test` block (#150).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FnOrTest {
+    /// A function or method, named as in the report's `functions`. The
+    /// empty name stands for none: a module constant's initializer.
+    Fn(String),
+    Test(TestName),
+}
+
+impl Default for FnOrTest {
+    fn default() -> FnOrTest {
+        FnOrTest::Fn(String::new())
+    }
+}
+
+/// How the report names a `test` block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TestName {
+    /// The name the test is written with.
+    Named(String),
+    /// A test written with no name text: told by its line (from 1) in
+    /// its file.
+    Unnamed { line: usize },
+}
+
+impl FnOrTest {
+    /// The name the JSON report's `function` carries: a function's own
+    /// name, `test "<name>"` for a test, with the name written as an Oska
+    /// string, or `test at line <n>` for a test with no name text.
+    pub fn label(&self) -> String {
+        match self {
+            FnOrTest::Fn(name) => name.clone(),
+            FnOrTest::Test(TestName::Named(name)) => format!("test {}", oska_string(name)),
+            FnOrTest::Test(TestName::Unnamed { line }) => format!("test at line {line}"),
+        }
+    }
+
+    /// What heads the function's attenuations in the human report: `fn
+    /// <name>`, or the test's label.
+    fn heading(&self) -> String {
+        match self {
+            FnOrTest::Fn(name) => format!("fn {name}"),
+            FnOrTest::Test(_) => self.label(),
+        }
+    }
+}
+
+impl std::fmt::Display for FnOrTest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label())
+    }
+}
+
+/// `text` as an Oska string literal. A quote, a backslash and a brace are
+/// escaped as Oska spells them, and so are a newline, a tab, a carriage
+/// return and NUL. Any other control character is written `\u{..}`, which
+/// Oska has no escape for, so that it cannot move or split a line of the
+/// report. Everything else, including text outside ASCII, is as written.
+fn oska_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' | '\\' | '{' | '}' => {
+                out.push('\\');
+                out.push(c);
+            }
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            '\0' => out.push_str("\\0"),
+            c if c.is_control() => out.push_str(&format!("\\u{{{:x}}}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// The root an attenuation narrows to.
@@ -327,7 +406,7 @@ impl Attenuation {
         );
         format!(
             "{{\"function\":\"{}\",\"method\":\"{}\",{}\"span\":{{\"start\":{},\"end\":{}}},\"source\":\"{}\",\"result\":\"{}\",\"root\":{root}}}",
-            json_escape(&self.function),
+            json_escape(&self.function.label()),
             json_escape(&self.method),
             path_json(&self.location),
             self.span.start,
@@ -409,20 +488,16 @@ impl CheckReport {
         for function in &self.functions {
             out.push_str(&function.to_human());
             out.push('\n');
-            self.list_attenuations(&function.name, &mut listed, &mut out);
+            let owner = FnOrTest::Fn(function.name.clone());
+            self.list_attenuations(&owner, &mut listed, &mut out);
         }
         // A function the report has no line for, such as a trait's
-        // default method, or a test, still shows what it attenuates. A
-        // test is already named `test "<name>"`, which no function can be.
+        // default method, or a test, still shows what it attenuates.
         for i in 0..listed.len() {
             if !listed[i] {
-                let name = &self.attenuations[i].function;
-                if name.starts_with("test \"") {
-                    out.push_str(&format!("{name}:\n"));
-                } else {
-                    out.push_str(&format!("fn {name}:\n"));
-                }
-                self.list_attenuations(name, &mut listed, &mut out);
+                let owner = &self.attenuations[i].function;
+                out.push_str(&format!("{}:\n", owner.heading()));
+                self.list_attenuations(owner, &mut listed, &mut out);
             }
         }
         for site in &self.audit {
@@ -436,11 +511,11 @@ impl CheckReport {
 }
 
 impl CheckReport {
-    /// Append the attenuations of the function `name` that are not yet
-    /// `listed`, one indented line each, and mark them listed.
-    fn list_attenuations(&self, name: &str, listed: &mut [bool], out: &mut String) {
+    /// Append the attenuations in `owner` that are not yet `listed`, one
+    /// indented line each, and mark them listed.
+    fn list_attenuations(&self, owner: &FnOrTest, listed: &mut [bool], out: &mut String) {
         for (i, attenuation) in self.attenuations.iter().enumerate() {
-            if !listed[i] && attenuation.function == name {
+            if !listed[i] && attenuation.function == *owner {
                 listed[i] = true;
                 out.push_str(&format!("  {}\n", attenuation.to_human()));
             }

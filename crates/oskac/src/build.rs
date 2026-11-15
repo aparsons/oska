@@ -169,7 +169,8 @@ pub fn refuse(diagnostics: &[Diagnostic], json: bool, code: ExitCode) -> ExitCod
 }
 
 /// Write the executable to `path`, executable by everyone, as a compiler's
-/// output is.
+/// output is. Nothing runs it here, and `oskac` starts no process on
+/// another thread, so no fork can hold its descriptor open (#270).
 fn write_executable(path: &str, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::write(path, bytes)?;
     #[cfg(unix)]
