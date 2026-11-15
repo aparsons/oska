@@ -10,6 +10,7 @@ Oska 0.1.0 (pre-alpha). These docs track `main`. Every page is also served as Ma
 - [Glossary](https://oskalang.dev/glossary.md): Terms of the security model.
 - [Oska design notes](https://oskalang.dev/design.md): Decisions are in adr/, terms in GLOSSARY.md, and the background in the research.
 - [Oska runtime](https://oskalang.dev/runtime.md): See the checker, which is not in this tree.
+- [Reference](https://oskalang.dev/reference.md): How Oska works inside, the words it uses, and the decisions and research behind it. To use Oska, start with the guides.
 
 ## Decisions
 

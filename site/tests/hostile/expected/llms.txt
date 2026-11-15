@@ -9,6 +9,7 @@ Oska 0.1.0 (pre-alpha). These docs track `main`. Every page is also served as Ma
 - [Oska](https://oskalang.dev/index.md): The design.
 - [Glossary](https://oskalang.dev/glossary.md): A value.
 - [Hostile <script>alert("title")</script> notes](https://oskalang.dev/design.md): Every construct here tries to get markup or script past the converter. None of it may survive as anything but text.
+- [Reference](https://oskalang.dev/reference.md): How Oska works inside, the words it uses, and the decisions and research behind it. To use Oska, start with the guides.
 
 ## Machine-readable
 

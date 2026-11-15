@@ -96,7 +96,7 @@ fn build(inputs: &BTreeMap<String, String>) -> Build {
 /// The files every repository the generator reads must have, as small as
 /// they can be. A test's own inputs replace them.
 const MINIMAL_REPO: &[(&str, &str)] = &[
-    ("README.md", "# Oska\n"),
+    ("docs/index.md", "# Oska\n"),
     ("GLOSSARY.md", "# Glossary\n"),
     ("docs/design.md", "# Design\n"),
     ("site/style.css", "body {}\n"),
@@ -481,9 +481,9 @@ fn the_stylesheet_and_the_cname_are_written() {
 }
 
 #[test]
-fn the_readme_becomes_the_home_page_and_the_glossary_its_own() {
+fn docs_index_becomes_the_home_page_and_the_glossary_its_own() {
     let site = build_ok(&[
-        ("README.md", "# Oska\n\nA *language*.\n"),
+        ("docs/index.md", "# Oska\n\nA *language*.\n"),
         ("GLOSSARY.md", "# Words\n\n**Capability**:\nA value.\n"),
     ]);
     assert!(site["index.html"].contains("<p>A <em>language</em>.</p>"));
@@ -563,7 +563,7 @@ fn relative_links_go_to_the_pages_published_from_their_targets() {
     let site = build_ok(&[
         (
             "docs/adr/0001-a.md",
-            "# A\n\n[design](../design.md#x) [b](0002-b.md) [up](../../README.md)\n",
+            "# A\n\n[design](../design.md#x) [b](0002-b.md) [up](../index.md)\n",
         ),
         ("docs/adr/0002-b.md", "# B\n"),
         (
@@ -644,7 +644,6 @@ fn the_generator_reaches_only_directories_and_files_it_attenuated_to_read_only_a
 fn main_narrows_reading_to_docs_and_the_files_it_names() {
     for narrowing in [
         "read.restrict_to(\"docs\")",
-        "read.restrict_to_file(\"README.md\")",
         "read.restrict_to_file(\"GLOSSARY.md\")",
         "read.restrict_to_file(\"site/style.css\")",
         "read.restrict_to_file(\"site/search.js\")",
@@ -658,6 +657,8 @@ fn main_narrows_reading_to_docs_and_the_files_it_names() {
         );
     }
     assert!(!BUILD.contains("read.restrict_to(\".\")"));
+    // The README is the repository's front page; the site does not read it.
+    assert!(!BUILD.contains("\"README.md\""));
 }
 
 #[test]
@@ -737,7 +738,7 @@ fn the_generator_s_report_lists_what_main_reads_and_writes() {
     let report = generator_authority();
     for line in [
         "  FsRead -> DirRead: restrict_to \"docs\" (bytes ",
-        "  FsRead -> FileRead: restrict_to_file \"README.md\" (bytes ",
+        "  FsRead -> FileRead: restrict_to_file \"GLOSSARY.md\" (bytes ",
         "  FsRead -> DirRead: restrict_to \"site/agent-setup\" (bytes ",
         "  FsWrite -> DirWrite: restrict_to \".\" (bytes ",
         "  DirWrite -> DirWrite: restrict_to \"_site\" (bytes ",
@@ -890,14 +891,14 @@ fn without_a_checker_doc_there_is_no_catalog() {
 fn agent_repo() -> Vec<(&'static str, &'static str)> {
     vec![
         (
-            "README.md",
-            "# Oska\n\nA language where authority is explicit.\n\nSee the [design](docs/design.md).\n",
+            "docs/index.md",
+            "# Oska\n\nA language where authority is explicit.\n\nSee the [design](design.md).\n",
         ),
         ("GLOSSARY.md", "# Words\n\n**Capability**: a value.\n"),
         (
             "docs/design.md",
             "# Design\n\nHow Oska works, and why.\n\n## Values\n\nText.\n\n\
-             [adr](adr/) [b](adr/0002-b.md#x) [up](../README.md) [out](https://example.com/a?b=1) \
+             [adr](adr/) [b](adr/0002-b.md#x) [up](index.md) [out](https://example.com/a?b=1) \
              [src](../crates/x.rs) [here](#values)\n\n```\n[a](adr/)\n```\n",
         ),
         (
@@ -1290,6 +1291,8 @@ fn llms_txt_indexes_the_markdown_copies_with_summaries() {
          - [Oska](https://oskalang.dev/index.md): A language where authority is explicit.\n\
          - [Glossary](https://oskalang.dev/glossary.md): Capability: a value.\n\
          - [Design](https://oskalang.dev/design.md): How Oska works, and why.\n\
+         - [Reference](https://oskalang.dev/reference.md): How Oska works inside, the words it uses, \
+         and the decisions and research behind it. To use Oska, start with the guides.\n\
          \n\
          ## Decisions\n\
          \n\
@@ -1624,7 +1627,6 @@ fn real_inputs() -> BTreeMap<String, String> {
         inputs.insert(format!("site/agent-setup/{path}"), text);
     }
     for file in [
-        "README.md",
         "SECURITY.md",
         "GLOSSARY.md",
         "Cargo.toml",

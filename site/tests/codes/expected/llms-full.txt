@@ -157,3 +157,15 @@ Division by zero, see [Tests](/runtime.md#tests). Spans the operation.
 **Machine-applicable fix:** none.
 
 Listed in the [runtime notes](/runtime.md). `oskac explain P0004` prints this entry offline.
+
+---
+
+Source: https://oskalang.dev/reference.html
+
+# Reference
+
+How Oska works inside, the words it uses, and the decisions and research behind it. To use Oska, start with the guides.
+
+- [Oska checker report](/checker.md)
+- [Oska runtime](/runtime.md)
+- [Glossary](/glossary.md)

@@ -39,6 +39,7 @@ Nothing in the repo can check these settings, so verify them before a release.
 4. **Watch the Pages run that `publish` dispatches.** Its smoke job must end with `ok: https://oskalang.dev installs oskac X.Y.Z, and it runs`.
    - The warning `no release is published` means the deploy ran before GitHub listed the new release ([#89](https://github.com/aparsons/oska/issues/89)).
    - Run `gh workflow run pages.yml --ref main` and check again.
+5. **Name the new release in the docs** in a normal PR: "The latest release is **vX.Y.Z**" in `docs/guide/install.md` and `docs/guide/index.md`, which `crates/oskac/tests/front_door.rs` holds to the same version, with an "Upgrading to vX.Y.Z" section in the install guide.
 
 ## Checking a published release
 

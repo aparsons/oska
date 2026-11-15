@@ -1,28 +1,6 @@
 # Install
 
-Oska is pre-alpha. The latest release is **v0.3.0**. You can install `oskac`, the compiler and runner, from a signed binary with a one-line installer, or build it from source.
-
-## Build from source
-
-You need a stable Rust toolchain, version 1.77 or newer, and a checkout of the repository:
-
-```sh
-cargo build --release -p oskac
-```
-
-The binary is `target/release/oskac`. Copy it somewhere on your `PATH`, or let Cargo install it into `~/.cargo/bin`:
-
-```sh
-cargo install --path crates/oskac
-```
-
-Confirm that it works:
-
-```sh
-oskac --version
-```
-
-It prints `oskac` and the version on one line. A build from this checkout prints `oskac 0.3.0`. Then continue with the [quickstart](quickstart.md).
+Oska is pre-alpha. The latest release is **v0.3.0**. You can install `oskac`, the compiler and runner, from a signed binary with a one-line installer, or [build it from source](#build-from-source).
 
 ## One-line installers
 
@@ -185,3 +163,25 @@ fn count(fs: FsRead, path: Path) -> Result<Int, IoError> {
 ## Set up an AI agent
 
 The site publishes a copy-and-paste prompt that has an AI coding agent install Oska, verify the toolchain, and configure your project. It is at the top of this page and at `https://oskalang.dev/agent-setup.md` as plain Markdown. The [agent guide](agent-guide.md) describes the loop the prompt sets up.
+
+## Build from source
+
+You need a stable Rust toolchain, version 1.77 or newer, and a checkout of the repository:
+
+```sh
+cargo build --release -p oskac
+```
+
+The binary is `target/release/oskac`. Copy it somewhere on your `PATH`, or let Cargo install it into `~/.cargo/bin`:
+
+```sh
+cargo install --path crates/oskac
+```
+
+Confirm that it works:
+
+```sh
+oskac --version
+```
+
+It prints `oskac` and the version on one line. A build from this checkout prints `oskac 0.3.0`. Then continue with the [quickstart](quickstart.md).

@@ -34,7 +34,7 @@ fn read(path: &str) -> String {
 
 /// The files every repository the generator reads must have.
 const MINIMAL_REPO: &[(&str, &str)] = &[
-    ("README.md", "# Oska\n"),
+    ("docs/index.md", "# Oska\n"),
     ("GLOSSARY.md", "# Glossary\n"),
     ("docs/design.md", "# Design\n"),
     ("docs/guide/install.md", "# Install\n"),

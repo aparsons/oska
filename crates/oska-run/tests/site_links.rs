@@ -31,7 +31,7 @@ const BLOB: &str = "https://github.com/aparsons/oska/blob/main/";
 
 /// The files every repository the generator reads must have.
 const MINIMAL_REPO: &[(&str, &str)] = &[
-    ("README.md", "# Oska\n"),
+    ("docs/index.md", "# Oska\n"),
     ("GLOSSARY.md", "# Glossary\n"),
     ("docs/design.md", "# Design\n"),
     ("site/style.css", "body {}\n"),
@@ -93,8 +93,8 @@ fn assert_build_fails(inputs: &[(&str, &str)], named: &[&str]) {
 fn a_link_to_an_unpublished_repository_file_goes_to_github_in_every_output() {
     let site = site_of(&[
         (
-            "README.md",
-            "# Oska\n\nApache-2.0. See [LICENSE](LICENSE) and [the shop](examples/shopping).\n",
+            "docs/index.md",
+            "# Oska\n\nApache-2.0. See [LICENSE](../LICENSE) and [the shop](../examples/shopping).\n",
         ),
         (
             "docs/design.md",
@@ -240,13 +240,13 @@ const FIXTURE_TRACKED: &[&str] = &["LICENSE", "README.md", "examples/shopping/sr
 fn fixture_site() -> BTreeMap<String, String> {
     site_of(&[
         (
-            "README.md",
-            "# Oska\n\nSee the [design](docs/design.md#values), the [LICENSE](LICENSE), \
-             [the shop](examples/shopping) and [the web](https://example.com/x).\n",
+            "docs/index.md",
+            "# Oska\n\nSee the [design](design.md#values), the [LICENSE](../LICENSE), \
+             [the shop](../examples/shopping) and [the web](https://example.com/x).\n",
         ),
         (
             "docs/design.md",
-            "# Design\n\n## Values\n\nBack [home](../README.md), [up](#values), \
+            "# Design\n\n## Values\n\nBack [home](index.md), [up](#values), \
              [a decision](adr/0001-a.md#why).\n",
         ),
         ("docs/adr/0001-a.md", "# A\n\n## Why\n\nBecause.\n"),
@@ -465,7 +465,6 @@ fn build_real_site() -> BTreeMap<String, String> {
         }
     }
     for file in [
-        "README.md",
         "SECURITY.md",
         "GLOSSARY.md",
         "Cargo.toml",

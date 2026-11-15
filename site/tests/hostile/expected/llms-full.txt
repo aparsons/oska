@@ -94,3 +94,14 @@ None of it may survive as anything but text.
 > <script>alert("quote")</script>
 
 1. <script>alert("ordered")</script>
+
+---
+
+Source: https://oskalang.dev/reference.html
+
+# Reference
+
+How Oska works inside, the words it uses, and the decisions and research behind it. To use Oska, start with the guides.
+
+- [Hostile <script>alert("title")</script> notes](/design.md)
+- [Glossary](/glossary.md)

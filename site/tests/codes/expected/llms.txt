@@ -10,6 +10,7 @@ Oska 0.1.0 (pre-alpha). These docs track `main`. Every page is also served as Ma
 - [Glossary](https://oskalang.dev/glossary.md)
 - [Oska checker report](https://oskalang.dev/checker.md)
 - [Oska runtime](https://oskalang.dev/runtime.md)
+- [Reference](https://oskalang.dev/reference.md): How Oska works inside, the words it uses, and the decisions and research behind it. To use Oska, start with the guides.
 
 ## Machine-readable
 
