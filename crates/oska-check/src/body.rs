@@ -854,24 +854,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             ExprKind::Bool(_) => Ty::bool(),
             ExprKind::Unit => Ty::Unit,
             ExprKind::Name(ident) => self.name(ident),
-            ExprKind::SelfValue => match &self.receiver {
-                Some(receiver) => {
-                    let ty = receiver.ty.clone();
-                    for frame in &mut self.closures {
-                        frame.captures.push(("self".to_string(), ty.clone()));
-                        frame.receiver = true;
-                    }
-                    ty
-                }
-                None => {
-                    self.error(
-                        codes::UNKNOWN_VALUE,
-                        "`self` is only available in a method with a `self` receiver",
-                        expr.span,
-                    );
-                    Ty::Error
-                }
-            },
+            ExprKind::SelfValue => self.self_value(expr.span),
             ExprKind::Field { base, name } => self.field_expr(expr.span, base, name),
             ExprKind::Call { callee, args } => self.call(expr, callee, args, expected),
             ExprKind::Unary { op, operand } => self.unary(expr, *op, operand, expected),
@@ -1029,12 +1012,39 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
     }
 
+    /// `self`, the receiver of the method being checked, and its type.
+    fn self_value(&mut self, span: Span) -> Ty {
+        match &self.receiver {
+            Some(receiver) => {
+                let ty = receiver.ty.clone();
+                for frame in &mut self.closures {
+                    frame.captures.push(("self".to_string(), ty.clone()));
+                    frame.receiver = true;
+                }
+                ty
+            }
+            None => {
+                self.error(
+                    codes::UNKNOWN_VALUE,
+                    "`self` is only available in a method with a `self` receiver",
+                    span,
+                );
+                Ty::Error
+            }
+        }
+    }
+
     /// An interpolation hole, `{name}` or `{name.field}`, and its type.
+    /// `self` may be the first segment, as it is anywhere else.
     fn hole(&mut self, path: &[Ident]) -> Ty {
         let Some((first, rest)) = path.split_first() else {
             return Ty::Error;
         };
-        let mut ty = self.name(first);
+        let mut ty = if first.name == "self" {
+            self.self_value(first.span)
+        } else {
+            self.name(first)
+        };
         self.typed(first.span, &ty);
         for field in rest {
             ty = self.field_of(ty, field);

@@ -112,7 +112,7 @@ test "deposit adds to the balance" {
 - **Closures:** `|x| expr` or `|x| { ... }`. A closure literal has no `cap` marker. Whether it is capability-bearing is inferred from what it captures, then checked against the parameter type it is passed to (`fn` or `cap fn`).
 - **Contracts:** contract clauses go between the return type and the body, one clause per line. `ensures |r| ...` binds the return value. `implies` binds more loosely than `||` and is right-associative.
 - **Attributes:** written `#[name]` or `#[name(args)]`, and allowed only on items. Attribute names come from a fixed set, currently only `#[integration]`, which is allowed only on `test` items. Unknown names are errors.
-- **String interpolation:** `{...}` inside a string may hold only a name or a field path, as in `{n}` or `{user.name}`. Compute anything else with `let` first.
+- **String interpolation:** `{...}` inside a string may hold only a name or a field path, as in `{n}` or `{user.name}`; inside a method the path may start with `self`, as in `{self.balance}`, and is checked like any other path (an untrusted field keeps the string untrusted, and a secret cannot be interpolated). Compute anything else with `let` first.
 - **Sink literals:** `sql"..."` and similar. They cannot contain `{}`.
 
 ## Type checking
