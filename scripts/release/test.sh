@@ -809,6 +809,9 @@ test_the_index_is_resigned_monthly_and_on_demand_from_main_only() {
   # shellcheck disable=SC2016 # the workflow's own text, not expanded here
   grep -q 'sign-index.sh "$key" site/oska-release.pub https://oskalang.dev' "$wf" ||
     fail "does not re-sign the live index with no --tag"
+  # Its wait ignores the dry run release.yml does on a pull request.
+  grep -q 'select(.event == "push" or .event == "workflow_dispatch")' "$wf" ||
+    fail "the wait counts runs that cannot publish"
   grep -q 'gh workflow run pages.yml --ref main' "$wf" || fail "does not publish through pages.yml"
 }
 

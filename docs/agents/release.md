@@ -18,7 +18,7 @@ pages.yml ─▶ downloads every release, verify.sh each against site/oska-relea
              once an index is published, to require it
 
 monthly (1st, 05:17 UTC) or by hand on main ─▶ resign-index.yml
-  sign       env "release": waits out any Release or Pages run, then
+  sign       env "release": waits out any publishing Release or Pages run, then
              sign-index.sh with no tag: the live index re-signed, serial + 1,
              same latest, 90 more days
   publish    replaces the index on the GitHub Release it names, then
@@ -54,7 +54,7 @@ On a pull request, `release.yml` does a dry run: the same builds, signed with a 
 Releases can be months apart, so `resign-index.yml` re-signs the index on the 1st of every month, unattended, with the release key. A live index is then never more than about a month old, and the 30-day warning never fires while the workflow works.
 
 - **The key now signs without a person present.** Besides a `v*` tag push, a scheduled or dispatched run on `main` reads `RELEASE_SIGNING_KEY`. It can sign only what `sign-index.sh` signs: the live index, verified first, with its serial + 1 and the same `latest`. It names no new release, and it refuses to sign over an index that does not verify. Only its `sign` job reads the key; the `publish` job, which uploads, has no access to it. `scripts/release/test.sh` fails if any job outside the `release` environment reads the key, or if a third job starts reading it.
-- **What it does.** It waits (up to 6 minutes) while a Release or Pages run is under way, since either could publish an index with the serial it is about to sign. Then it signs, replaces `release-index.json` and its signature on the GitHub Release that the index names (`gh release upload --clobber`), and dispatches `pages.yml`. With no index published yet it signs nothing and says so.
+- **What it does.** It waits (up to 6 minutes) while a Release or Pages run is under way (a pull request's dry run does not count, since it publishes nothing), since either could publish an index with the serial it is about to sign. Then it signs, replaces `release-index.json` and its signature on the GitHub Release that the index names (`gh release upload --clobber`), and dispatches `pages.yml`. With no index published yet it signs nothing and says so.
 - **Run it by hand** when an index expires within 30 days, or has expired, and the workflow has not run since: `gh workflow run resign-index.yml --ref main`. Any other ref is refused.
 
 **If the workflow fails,** the index keeps its current expiry, so there are about 60 days before installs fail. Read the failed run:
