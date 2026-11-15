@@ -1087,7 +1087,7 @@ test_add_to_path_appends_one_marked_line_to_the_profile_of_the_login_shell() {
     SHELL=$shell install --json --add-to-path >out.json
     [ "$(jq -r .profile out.json)" = "$PWD/home/$profile" ] || fail "for '$shell' the profile is $(jq -r .profile out.json), not $profile"
     [ "$(cat "home/$profile")" = "export PATH=\"$bin:\$PATH\" $MARK" ] || fail "the profile holds: $(cat "home/$profile")"
-    [ "$(ls -A home | LC_ALL=C sort | tr '\n' ' ')" = "$(printf '.oska\n%s\n' "$profile" | LC_ALL=C sort | tr '\n' ' ')" ] || fail "home holds $(ls -A home)"
+    [ "$(find home -mindepth 1 -maxdepth 1 | LC_ALL=C sort | tr '\n' ' ')" = "$(printf 'home/.oska\nhome/%s\n' "$profile" | LC_ALL=C sort | tr '\n' ' ')" ] || fail "home holds $(find home -mindepth 1 -maxdepth 1)"
     [ "$(jq -r '.files[] | select(.kind == "profile_line") | .path' home/.oska/receipt.json)" = "$PWD/home/$profile" ] || fail "receipt names no profile"
     [ "$(jq -r '.files[] | select(.kind == "profile_line") | .line' home/.oska/receipt.json)" = "export PATH=\"$bin:\$PATH\" $MARK" ] || fail "receipt carries the wrong line"
   done
