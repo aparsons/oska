@@ -534,14 +534,17 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
             return ExitCode::FAILURE;
         }
     };
-    if matches!(command, Command::Run | Command::Build(_)) && package.is_library() {
-        return refuse(command, vec![oska_check::run_of_library(dir)], json, dir);
-    }
     let options = oska_check::CheckOptions {
         release: command == Command::Check && flags.release,
     };
     let mut report = oska_check::check_package(&package, options);
-    if !refused.is_empty() {
+    // A package that needs a newer `oskac` (`E0407`) is refused first, from
+    // every command, even a `run` of a library.
+    let too_old = report.diagnostics.iter().any(|d| d.code == "E0407");
+    if !too_old && matches!(command, Command::Run | Command::Build(_)) && package.is_library() {
+        return refuse(command, vec![oska_check::run_of_library(dir)], json, dir);
+    }
+    if !refused.is_empty() && !too_old {
         report.diagnostics.splice(0..0, refused);
         report.program = None;
     }

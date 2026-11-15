@@ -66,7 +66,7 @@ mod traits;
 mod ty;
 mod usefulness;
 
-pub use manifest::{decode_manifest, parse_manifest, Manifest};
+pub use manifest::{compare_semver, decode_manifest, parse_manifest, parse_manifest_for, Manifest};
 pub use package::{
     check_file, check_package, not_a_package, run_of_library, symlink_refused, Locator,
     ModuleSource, Package, ENTRY_MODULE, MANIFEST_PATH,
@@ -162,6 +162,7 @@ pub(crate) mod codes {
     pub const MANIFEST_MISSING: &str = "E0404";
     pub const MANIFEST_VALUE: &str = "E0405";
     pub const MANIFEST_DUPLICATE: &str = "E0406";
+    pub const MANIFEST_TOOLCHAIN: &str = "E0407";
     pub const BAD_MODULE_NAME: &str = "E0410";
     pub const SYMLINK_IN_SOURCE: &str = "E0411";
     pub const MAIN_OUTSIDE_ENTRY: &str = "E0412";

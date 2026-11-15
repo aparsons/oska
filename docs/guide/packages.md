@@ -18,13 +18,16 @@ shopping/
       tax.osk
 ```
 
-`oska.toml` names the package. It has one table, `[package]`, with a `name` (snake_case) and a `version` (`MAJOR.MINOR.PATCH`):
+`oska.toml` names the package. It has one table, `[package]`, with a `name` (snake_case) and a `version` (`MAJOR.MINOR.PATCH`), and an optional `oska`, the oldest `oskac` the package works with:
 
 ```text
 [package]
 name = "shopping"
 version = "0.1.0"
+oska = "0.4.0"
 ```
+
+`oska` is a minimum, never an exact pin: a newer `oskac` always accepts it. An older `oskac` refuses the package, from `check`, `run`, `test` and `build`, with `E0407`, which names both versions and how to install a newer one. (An `oskac` that predates the key reports it as an unknown key, `E0402`.) Versions are compared by [semver](https://semver.org) precedence, so `0.5.0-rc.1` is older than `0.5.0`. The key is manifest and tooling, not language: it changes which `oskac` may check a package, never what a checked program means.
 
 Any other key or table is an error (`E0402`), and a `[dependencies]` table is `E0403`. The manifest is a strict subset of TOML: tables, single-line strings, arrays of strings and comments.
 

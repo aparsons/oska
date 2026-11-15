@@ -3,4 +3,4 @@ exit: 1
 --- stdout
 fn pkg.main.main: pure
 --- stderr
-crates/oskac/tests/fixtures/packages/manifest_unknown_key_no_fix/oska.toml:4:1: error[E0402]: unknown key `license` in `[package]`; the keys are `name` and `version` (bytes 42..49)
+crates/oskac/tests/fixtures/packages/manifest_unknown_key_no_fix/oska.toml:4:1: error[E0402]: unknown key `license` in `[package]`; the keys are `name`, `version` and `oska` (bytes 42..49)
