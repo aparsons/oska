@@ -439,16 +439,16 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
     }
 
-    /// Report misuse of `Untrusted<...>` in a type written in the body
-    /// (`E0320`). Signatures are checked with name resolution.
+    /// Resolve a type written in the body: an unknown name (`E0200`) and
+    /// misuse of `Untrusted<...>` (`E0320`), as in a signature.
     fn check_written(&mut self, written: &Type) {
-        let lower = &self.lower;
-        let known = |name: &str| {
-            lower.generics.iter().any(|g| g == name)
-                || name == ty::SELF
-                || lower.decls().get(name).is_some()
-        };
-        resolve::untrusted_not_text_within(written, &known, &mut self.out.diagnostics);
+        resolve::written_type(
+            written,
+            self.lower.decls(),
+            &self.lower.generics,
+            self.lower.self_ty.is_some() || self.lower.generics.iter().any(|g| g == ty::SELF),
+            &mut self.out.diagnostics,
+        );
     }
 
     fn decls(&self) -> &'d Decls<'a> {

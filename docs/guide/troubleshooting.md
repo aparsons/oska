@@ -38,10 +38,6 @@ The variable is not set. A secret has no stand-in value, so that a missing passw
 
 An interpolation hole that starts with `self` reports `E0221` in this release. Copy the field into a local with `let`, and interpolate the local.
 
-### A type misspelled in a `let` annotation is not reported
-
-In a signature, an unknown type is `E0200` with a "did you mean" fix. In a `let` annotation inside a body, this release does not report it. Do not rely on a clean check to confirm a type name in a body.
-
 ### A contract that is violated stops the program
 
 `requires` and `ensures` are evaluated on every call, in every build. A false `requires` panics with `P0006` at the call, and a false `ensures` panics with `P0007` at the clause. A program whose contracts were silently false in v0.1.0 now panics. Fix the caller for `P0006` and the function body for `P0007`, or correct the contract if it was wrong. For a failure you expect, such as bad user input, validate with an explicit `if` and return a `Result` instead, because a panic cannot be caught.
