@@ -31,9 +31,18 @@
 //
 // For crawlers and agents it also writes, from the pages it publishes: a
 // Markdown copy of each (`design.html` has `design.md`), `llms.txt`,
-// `llms-full.txt`, `sitemap.xml`, `robots.txt`, `search.json`, and
-// `latest.json`. Every page carries its canonical URL and a version banner,
-// and the home page carries schema.org JSON-LD.
+// `llms-full.txt`, `llms-research.txt`, `sitemap.xml`, `robots.txt`,
+// `search.json`, and `latest.json`. Every page carries its canonical URL
+// and a version banner, and the home page carries schema.org JSON-LD.
+//
+// The agent corpus is in tiers. `llms.txt` opens with the pages an agent
+// needs first, in order, and ends with an Optional section: the research,
+// which is proposals, and the internals most programs do not need.
+// `llms-full.txt` is ordered so that an agent that stops reading early has
+// the most useful text, and leaves out the per-code pages (which are in
+// `codes.json`) and the research (in `llms-research.txt`). A research page
+// says, in HTML and in its Markdown copy, that it holds proposals and not
+// documented behaviour.
 //
 // To add a page: write a function that returns a `Page`, with its Markdown
 // copy in `md`, and add it to `pages` in `build`. The outputs above then
@@ -178,6 +187,9 @@ fn build(sources: Sources, site: DirWrite) -> Result<(), IoError> {
     site.write(Path.new("latest.json"), latest_json(all.version))?
     site.write(Path.new("llms.txt"), llms_txt(all, pages))?
     site.write(Path.new("llms-full.txt"), llms_full(all, pages))?
+    if has_research(pages) {
+        site.write(Path.new("llms-research.txt"), llms_research(all, pages))?
+    }
     site.write(Path.new("search.json"), search_json(pages))?
     let style = sources.style.read_to_string()?
     site.write(Path.new("style.css"), style)?
@@ -397,7 +409,24 @@ fn doc_page(all: Site, doc: Doc) -> Page {
     if carries_prompt(all, doc) {
         return prompt_doc_page(all, doc, links)
     }
-    Page(path: doc.page, title: doc.title, body: markdown(doc.text, links), md: retarget(doc.text, links))
+    // A research page says first that it is not documentation.
+    let notice = research_notice(all)
+    let text = if doc.section == "research" { "{notice}\n{doc.text}" } else { doc.text }
+    Page(path: doc.page, title: doc.title, body: markdown(text, links), md: retarget(text, links))
+}
+
+// The notice at the top of every research page, as Markdown whose links
+// are relative to `docs/research/`: the research is proposals and
+// background, so a reader who wants what Oska does goes to the guides.
+fn research_notice(all: Site) -> Untrusted<String> {
+    let guide = if has_doc(all, "guide/what-works-today.html") { "[What works today](../guide/what-works-today.md) and the guides" } else { "the guides" }
+    let lead = research_notice_lead()
+    "> **{lead}** What Oska does today is in {guide}.\n"
+}
+
+// The notice's first sentence, which also heads `llms-research.txt`.
+fn research_notice_lead() -> String {
+    "Proposals and background, not documented behaviour."
 }
 
 // The 404 page: what GitHub Pages serves for an address with no page. It
@@ -434,6 +463,13 @@ fn section_page(all: Site, section: Section) -> Page {
         }
     }
     let page = "{section.dir}/index.html"
+    if section.dir == "research" {
+        let links = Links(site: all, dir: "docs/research")
+        let notice = research_notice(all)
+        let body = markdown(notice, links).concat(items).concat(markup("</ul>\n"))
+        let notice_md = retarget(notice, links)
+        return Page(path: page, title: section.title, body: body, md: "{notice_md}\n{md}")
+    }
     Page(path: page, title: section.title, body: items.concat(markup("</ul>\n")), md: md)
 }
 
@@ -500,7 +536,10 @@ fn latest_json(version: String) -> String {
 }
 
 // `llms.txt`: what an agent should read, in the shape llmstxt.org sets
-// out. Each page is linked at its Markdown copy, with a summary.
+// out. Each page is linked at its Markdown copy, with a summary. The
+// pages an agent needs first come first, in order, under "Start here";
+// then the other sections, each page once; and last an Optional section,
+// which llmstxt.org reserves for what a reader may skip.
 fn llms_txt(all: Site, pages: List<Page>) -> Untrusted<String> {
     let base = origin()
     let version = all.version
@@ -515,48 +554,244 @@ fn llms_txt(all: Site, pages: List<Page>) -> Untrusted<String> {
         out = "{out}> {home}\n\n"
     }
     let source = repository()
-    out = "{out}Oska {version} (pre-alpha). These docs track `main`. Every page is also served as Markdown: the same path with `.md`. All of them are in [llms-full.txt]({base}/llms-full.txt). The source code is at {source}. A program is one `.osk` file or a package: an `oska.toml` and modules under `src/`, with `src/main.osk` as the entry and `use pkg.a.b` importing `src/a/b.osk`; see [Packages and modules]({base}/guide/packages.md). `oskac build` compiles a program to a static aarch64 Linux executable on any host. On aarch64 Linux, `oskac run` and `oskac test` compile natively and run the executable, and `--interpret` selects the interpreter, which every other host uses; output, reports and exit codes are the same on both. See [Platform support]({base}/guide/cli-reference.md#platform-support).\n"
+    let omits = llms_full_omits(all, pages)
+    let in_full: Untrusted<String> = if omits == "" { "All of them are in [llms-full.txt]({base}/llms-full.txt)" } else { "Most of them are in [llms-full.txt]({base}/llms-full.txt), which leaves out {omits}" }
+    let without: Untrusted<String> = if omits == "" { "" } else { "; it leaves out {omits}" }
+    out = "{out}Oska {version} (pre-alpha). These docs track `main`. Every page is also served as Markdown: the same path with `.md`. {in_full}. The source code is at {source}. A program is one `.osk` file or a package: an `oska.toml` and modules under `src/`, with `src/main.osk` as the entry and `use pkg.a.b` importing `src/a/b.osk`; see [Packages and modules]({base}/guide/packages.md). `oskac build` compiles a program to a static aarch64 Linux executable on any host. On aarch64 Linux, `oskac run` and `oskac test` compile natively and run the executable, and `--interpret` selects the interpreter, which every other host uses; output, reports and exit codes are the same on both. See [Platform support]({base}/guide/cli-reference.md#platform-support).\n"
+    let start = start_here(all, pages)
+    out = "{out}{start}"
     let setup = if has_setup(all) { setup_group(all) } else { "" }
     out = "{out}{setup}"
+    // The guides, then the docs, then the other sections.
+    for section in all.sections {
+        if section.dir == "guide" {
+            let group = llms_group(section.title, section.dir, pages)
+            out = "{out}{group}"
+        }
+    }
     let docs = llms_group("Docs", "", pages)
     out = "{out}{docs}"
     for section in all.sections {
-        let group = llms_group(section.title, section.dir, pages)
-        out = "{out}{group}"
+        if section.dir != "guide" {
+            let group = llms_group(section.title, section.dir, pages)
+            out = "{out}{group}"
+        }
     }
-    let codes: Untrusted<String> = if has_catalog(all) { "- [codes.json]({base}/codes.json): every error code, with an example that fails with it and the fix\n" } else { "" }
-    "{out}\n## Machine-readable\n\n- [llms-full.txt]({base}/llms-full.txt): every page, as Markdown, in one file\n- [search.json]({base}/search.json): the search index\n- [sitemap.xml]({base}/sitemap.xml): the canonical URL of every page\n- [latest.json]({base}/latest.json): the current version and the installers\n{codes}"
+    let optional = optional_group(all, pages)
+    "{out}\n## Machine-readable\n\n- [llms-full.txt]({base}/llms-full.txt): the documentation, as Markdown, in one file{without}\n- [search.json]({base}/search.json): the search index\n- [sitemap.xml]({base}/sitemap.xml): the canonical URL of every page\n- [latest.json]({base}/latest.json): the current version and the installers\n{optional}"
+}
+
+// What `llms-full.txt` leaves out, as a noun phrase saying where it is: the
+// per-code pages, if the site has them (`codes.json` has them all), and the
+// research, if it has any (`llms-research.txt` has all of it). "" if it
+// leaves out nothing.
+fn llms_full_omits(all: Site, pages: List<Page>) -> Untrusted<String> {
+    let base = origin()
+    let codes = "the per-code pages (all in [codes.json]({base}/codes.json))"
+    let research = "the research, which is proposals and not documented behaviour (all in [llms-research.txt]({base}/llms-research.txt))"
+    if has_catalog(all) && has_research(pages) {
+        "{codes} and {research}"
+    } else if has_catalog(all) {
+        codes
+    } else if has_research(pages) {
+        research
+    } else {
+        ""
+    }
+}
+
+// The pages an agent should read first, in order: the setup prompt, the
+// quickstart, the tour, the capabilities and untrusted-data guides, the
+// agent guide, the error codes, and what works today. A page the site does
+// not have is left out. `codes.json` is the error codes, all in one file.
+fn start_pages() -> List<String> {
+    ["agent-setup.html", "guide/quickstart.html", "guide/language-tour.html", "guide/capabilities.html", "guide/untrusted-data.html", "guide/agent-guide.html", "codes.json", "guide/what-works-today.html"]
+}
+
+// The `## Start here` group of `llms.txt`, or nothing if no page of it
+// exists.
+fn start_here(all: Site, pages: List<Page>) -> Untrusted<String> {
+    let base = origin()
+    var entries: Untrusted<String> = ""
+    for path in start_pages() {
+        if path == "codes.json" {
+            if has_catalog(all) {
+                entries = "{entries}- [codes.json]({base}/codes.json): every error code, with an example that fails with it, the fix, and the URL of its page\n"
+            }
+        } else if path == "agent-setup.html" {
+            if has_setup(all) {
+                for item in setup_listing(all) {
+                    if item.path == "agent-setup.md" {
+                        entries = "{entries}- [{item.label}]({base}/{item.path}): {item.note}\n"
+                    }
+                }
+            }
+        } else {
+            for page in pages {
+                if page.path == path {
+                    let entry = llms_entry(page)
+                    entries = "{entries}{entry}"
+                }
+            }
+        }
+    }
+    if entries == "" { "" } else { "\n## Start here\n\n{entries}" }
+}
+
+// The line of `llms.txt` for `page`: its title, linked at its Markdown
+// copy, and its summary.
+fn llms_entry(page: Page) -> Untrusted<String> {
+    let base = origin()
+    let copy = md_url(url_of(page.path))
+    let summary = summary_of(page.md)
+    let note: Untrusted<String> = if summary == "" { "" } else { ": {summary}" }
+    "- [{page.title}]({base}{copy}){note}\n"
+}
+
+// Whether the page at `path` is listed under Start here or Optional, and
+// so not in its own section's group.
+fn listed_elsewhere(path: Untrusted<String>) -> Bool {
+    for early in start_pages() {
+        if early == path {
+            return true
+        }
+    }
+    path.starts_with("research/") || is_internal(path)
+}
+
+// The internals most programs do not need: the AST export and the runtime.
+fn is_internal(path: Untrusted<String>) -> Bool {
+    path == "ast.html" || path == "runtime.html"
+}
+
+// The `## Optional` group: what an agent can skip, the internals and the
+// research, which is labelled as proposals.
+fn optional_group(all: Site, pages: List<Page>) -> Untrusted<String> {
+    let base = origin()
+    var entries: Untrusted<String> = ""
+    for page in pages {
+        if is_internal(page.path) {
+            let entry = llms_entry(page)
+            entries = "{entries}{entry}"
+        }
+    }
+    if has_research(pages) {
+        for page in pages {
+            if page.path.starts_with("research/") && page.path != "research/index.html" {
+                let copy = md_url(url_of(page.path))
+                let summary = summary_of(page.md)
+                let note: Untrusted<String> = if summary == "" { "Proposal" } else { "Proposal: {summary}" }
+                entries = "{entries}- [{page.title}]({base}{copy}): {note}\n"
+            }
+        }
+        entries = "{entries}- [llms-research.txt]({base}/llms-research.txt): every research page, as Markdown, in one file; proposals, not documented behaviour\n"
+    }
+    if entries == "" {
+        return ""
+    }
+    "\n## Optional\n\nInternals most programs do not need, and research: proposals and background, not documented behaviour. Skip them unless you need them.\n\n{entries}"
+}
+
+// Whether the site has a research page.
+fn has_research(pages: List<Page>) -> Bool {
+    for page in pages {
+        if page.path.starts_with("research/") && page.path != "research/index.html" {
+            return true
+        }
+    }
+    false
 }
 
 // A heading and the pages in `dir` ("" for the top level), and in its
-// subdirectories, under it, or nothing if there are none.
+// subdirectories, under it, or nothing if there are none. A page listed
+// under Start here or Optional is not listed again.
 fn llms_group(title: Untrusted<String>, dir: Untrusted<String>, pages: List<Page>) -> Untrusted<String> {
-    let base = origin()
     var entries: Untrusted<String> = ""
     for page in pages {
         let parent = parent_of(page.path)
         let inside = parent == dir || (dir != "" && parent.starts_with("{dir}/"))
-        if inside && page.path != "agent-setup.html" {
-            let copy = md_url(url_of(page.path))
-            let summary = summary_of(page.md)
-            let note: Untrusted<String> = if summary == "" { "" } else { ": {summary}" }
-            entries = "{entries}- [{page.title}]({base}{copy}){note}\n"
+        if inside && page.path != "agent-setup.html" && !listed_elsewhere(page.path) {
+            let entry = llms_entry(page)
+            entries = "{entries}{entry}"
         }
     }
     if entries == "" { "" } else { "\n## {title}\n\n{entries}" }
 }
 
-// `llms-full.txt`: every page's Markdown, one after another.
+// How early `page` comes in `llms-full.txt`, from 0, so that an agent that
+// stops reading early has the most useful text: the setup prompt, the
+// guides, what works today, the glossary, the design notes, the checker
+// notes, the decisions, then the rest. The per-code pages and the research
+// are not in it.
+fn full_rank(page: Untrusted<String>) -> Int {
+    if page == "agent-setup.html" {
+        0
+    } else if page == "guide/what-works-today.html" {
+        2
+    } else if page.starts_with("guide/") {
+        1
+    } else if page == "glossary.html" {
+        3
+    } else if page == "design.html" {
+        4
+    } else if page == "checker.html" {
+        5
+    } else if page.starts_with("adr/") {
+        6
+    } else {
+        7
+    }
+}
+
+// Whether `llms-full.txt` leaves out the page at `path`.
+fn left_out_of_full(path: Untrusted<String>) -> Bool {
+    path.starts_with("codes/") || path.starts_with("research/")
+}
+
+// `llms-full.txt`: the documentation's Markdown, one page after another, in
+// the order of `full_rank`, without the pages `left_out_of_full` names; the
+// head says what is left out and where it is.
 fn llms_full(all: Site, pages: List<Page>) -> Untrusted<String> {
     let base = origin()
     let version = all.version
-    var out: Untrusted<String> = "# Oska: full documentation\n\nOska {version} (pre-alpha). Every page of {base} as Markdown, one after another, each after a line `Source:` that names it.\n"
-    for page in pages {
-        let url = canonical(page.path)
-        let copy: Untrusted<String> = if page.md.ends_with("\n") { page.md } else { "{page.md}\n" }
-        out = "{out}\n---\n\nSource: {url}\n\n{copy}"
+    let omits = llms_full_omits(all, pages)
+    let leaves: Untrusted<String> = if omits == "" { "" } else { " This file leaves out {omits}." }
+    var out: Untrusted<String> = "# Oska: full documentation\n\nOska {version} (pre-alpha). The pages of {base} as Markdown, one after another, in the order to read them, each after a line `Source:` that names it.{leaves}\n"
+    var rank = 0
+    while rank < 8 {
+        for page in pages {
+            if full_rank(page.path) == rank && !left_out_of_full(page.path) {
+                let block = source_block(page)
+                out = "{out}{block}"
+            }
+        }
+        rank = rank + 1
     }
     out
+}
+
+// `llms-research.txt`: the research, as `llms-full.txt` holds the other
+// pages, headed with what it is: proposals, not documented behaviour.
+fn llms_research(all: Site, pages: List<Page>) -> Untrusted<String> {
+    let base = origin()
+    let version = all.version
+    let lead = research_notice_lead()
+    var out: Untrusted<String> = "# Oska: research (proposals)\n\nOska {version} (pre-alpha). {lead} Each page is a research note about what Oska could do, and says \"should\" about features that may not exist. What Oska does today is in [llms-full.txt]({base}/llms-full.txt). The notes of {base}/research/ as Markdown, one after another, each after a line `Source:` that names it.\n"
+    for page in pages {
+        if page.path.starts_with("research/") && page.path != "research/index.html" {
+            let block = source_block(page)
+            out = "{out}{block}"
+        }
+    }
+    out
+}
+
+// One page in a file of many: a rule, the line `Source:` with its
+// canonical URL, and its Markdown, ending in a line break.
+fn source_block(page: Page) -> Untrusted<String> {
+    let url = canonical(page.path)
+    let copy: Untrusted<String> = if page.md.ends_with("\n") { page.md } else { "{page.md}\n" }
+    "\n---\n\nSource: {url}\n\n{copy}"
 }
 
 // `search.json`: for each page, its URL, title, headings, and the start
@@ -2112,18 +2347,33 @@ fn codes_index(all: Site, codes: List<Code>) -> Page {
     Page(path: "codes/index.html", title: "Error codes", body: body, md: md)
 }
 
-// The first sentence of `message`, without its full stop.
+// The first sentence of `message`, without its full stop. A sentence ends
+// at a full stop followed by a space, or at the end, that is not inside a
+// code span, which may hold ". ": E0103's is "A bare `{ ... }` block".
 fn summary(message: Untrusted<String>) -> Untrusted<String> {
-    let first = message.split(". ").at(0)
-    if first.ends_with(".") {
-        first.slice(0, first.len() - 1)
-    } else {
-        first
+    let cs = message.chars()
+    var i = 0
+    while i < cs.len() {
+        if cs.at(i) == "`" {
+            let width = run_length(cs, i, cs.len(), "`")
+            let close = find_run(cs, i + width, cs.len(), "`", width)
+            if close >= 0 {
+                i = close + width
+            } else {
+                i = i + width
+            }
+            continue
+        }
+        if cs.at(i) == "." && (i + 1 == cs.len() || cs.at(i + 1) == " ") {
+            return "".join(sub(cs, 0, i))
+        }
+        i = i + 1
     }
+    message
 }
 
 // `codes.json`: an array of the entries `oskac explain --format=json`
-// prints, one per line.
+// prints, each with the URL of its page added, one per line.
 fn codes_json(codes: List<Code>) -> Untrusted<String> {
     var entries: List<Untrusted<String>> = List.new()
     for code in codes {
@@ -2133,8 +2383,8 @@ fn codes_json(codes: List<Code>) -> Untrusted<String> {
     "[\n{all}\n]\n"
 }
 
-// One code as a JSON object, with the same fields in the same order as
-// `oskac explain --format=json`.
+// One code as a JSON object, with the fields of `oskac explain
+// --format=json` in the same order, and then its page's `url`.
 fn code_json(code: Code) -> Untrusted<String> {
     let name = catalog_json_string(code.code)
     let message = catalog_json_string(code.message)
@@ -2142,7 +2392,8 @@ fn code_json(code: Code) -> Untrusted<String> {
     let described = json_or_null(code.fix)
     let example = json_or_null(code.example)
     let fixed = json_or_null(code.fixed)
-    "\{\"code\":{name},\"message\":{message},\"machine_fix\":{machine},\"machine_fix_description\":{described},\"example\":{example},\"fix\":{fixed}\}"
+    let page = catalog_json_string(canonical("codes/{code.code}.html"))
+    "\{\"code\":{name},\"message\":{message},\"machine_fix\":{machine},\"machine_fix_description\":{described},\"example\":{example},\"fix\":{fixed},\"url\":{page}\}"
 }
 
 fn json_or_null(text: Untrusted<String>) -> Untrusted<String> {
@@ -2289,12 +2540,16 @@ fn authority_page(all: Site) -> Page {
     Page(path: "authority.html", title: title, body: head.concat(report), md: "# {title}\n\n{intro}\n\n```text\n{all.authority}```\n")
 }
 
-// The group of `llms.txt` that lists the prompt and its files.
+// The group of `llms.txt` that lists the files of the setup beside the
+// prompt, which Start here lists.
 fn setup_group(all: Site) -> Untrusted<String> {
     let base = origin()
     var entries: Untrusted<String> = ""
     for item in setup_listing(all) {
-        entries = "{entries}- [{item.label}]({base}/{item.path}): {item.note}\n"
+        // The prompt itself is the first entry of Start here.
+        if item.path != "agent-setup.md" {
+            entries = "{entries}- [{item.label}]({base}/{item.path}): {item.note}\n"
+        }
     }
     "\n## Set up an agent\n\n{entries}"
 }

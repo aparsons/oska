@@ -799,10 +799,10 @@ fn codes_site() -> BTreeMap<String, String> {
 #[test]
 fn codes_json_holds_each_code_with_its_examples_and_escapes_them() {
     let expected = r#"[
-{"code":"E0200","message":"Unknown name \"x\" with a \\\\ in it, as in `Strng`. See [the tour](#tour).","machine_fix":true,"machine_fix_description":"Replace the name with the closest one.","example":"fn f(x: Strng) {}\n","fix":"fn f(x: String) {}\n"},
-{"code":"E0201","message":"A trait <script>alert(1)</script> where a type is expected. Then more.","machine_fix":false,"machine_fix_description":null,"example":"fn show(x: Display) {\n    let note = \"<b>\\\"quoted\\\"</b>\"\n}\n\n","fix":null},
-{"code":"E0140","message":"An or-pattern such as `A | B`.","machine_fix":false,"machine_fix_description":null,"example":null,"fix":null},
-{"code":"P0004","message":"Division by zero, see [Tests](#tests). Spans the operation.","machine_fix":false,"machine_fix_description":null,"example":null,"fix":null}
+{"code":"E0200","message":"Unknown name \"x\" with a \\\\ in it, as in `Strng`. See [the tour](#tour).","machine_fix":true,"machine_fix_description":"Replace the name with the closest one.","example":"fn f(x: Strng) {}\n","fix":"fn f(x: String) {}\n","url":"https://oskalang.dev/codes/E0200.html"},
+{"code":"E0201","message":"A trait <script>alert(1)</script> where a type is expected. Then more.","machine_fix":false,"machine_fix_description":null,"example":"fn show(x: Display) {\n    let note = \"<b>\\\"quoted\\\"</b>\"\n}\n\n","fix":null,"url":"https://oskalang.dev/codes/E0201.html"},
+{"code":"E0140","message":"An or-pattern such as `A | B`.","machine_fix":false,"machine_fix_description":null,"example":null,"fix":null,"url":"https://oskalang.dev/codes/E0140.html"},
+{"code":"P0004","message":"Division by zero, see [Tests](#tests). Spans the operation.","machine_fix":false,"machine_fix_description":null,"example":null,"fix":null,"url":"https://oskalang.dev/codes/P0004.html"}
 ]
 "#;
     assert_eq!(codes_site()["codes.json"], expected);
@@ -1315,7 +1315,7 @@ fn llms_txt_indexes_the_markdown_copies_with_summaries() {
          \n\
          ## Machine-readable\n\
          \n\
-         - [llms-full.txt](https://oskalang.dev/llms-full.txt): every page, as Markdown, in one file\n\
+         - [llms-full.txt](https://oskalang.dev/llms-full.txt): the documentation, as Markdown, in one file\n\
          - [search.json](https://oskalang.dev/search.json): the search index\n\
          - [sitemap.xml](https://oskalang.dev/sitemap.xml): the canonical URL of every page\n\
          - [latest.json](https://oskalang.dev/latest.json): the current version and the installers\n"
@@ -1360,8 +1360,9 @@ fn llms_full_txt_holds_every_page_s_markdown() {
         full.starts_with(
             "# Oska: full documentation\n\
              \n\
-             Oska 1.2.3 (pre-alpha). Every page of https://oskalang.dev as Markdown, \
-             one after another, each after a line `Source:` that names it.\n"
+             Oska 1.2.3 (pre-alpha). The pages of https://oskalang.dev as Markdown, \
+             one after another, in the order to read them, each after a line `Source:` \
+             that names it.\n"
         ),
         "{full}"
     );
@@ -1687,9 +1688,13 @@ fn the_real_docs_build_every_agent_output_with_no_dead_link() {
         "https://oskalang.dev/install.sh"
     );
     assert_eq!(site["sitemap.xml"].matches("<loc>").count(), pages.len());
+    let in_full = pages
+        .iter()
+        .filter(|p| !p.starts_with("codes/") && !p.starts_with("research/"))
+        .count();
     assert_eq!(
         site["llms-full.txt"].matches("\nSource: https://").count(),
-        pages.len()
+        in_full
     );
     // Every link to a copy, from a copy or from llms.txt, goes somewhere.
     let site_path = |url: &str| -> String {
@@ -1748,7 +1753,7 @@ fn the_code_pages_are_in_the_outputs_agents_read() {
     assert!(site["sitemap.xml"].contains("<loc>https://oskalang.dev/codes/E0200.html</loc>"));
     assert!(site["sitemap.xml"].contains("<loc>https://oskalang.dev/codes/</loc>"));
     assert!(site["llms.txt"].contains("[codes.json](https://oskalang.dev/codes.json)"));
-    assert!(site["llms-full.txt"].contains("Source: https://oskalang.dev/codes/E0200.html"));
+    assert!(!site["llms-full.txt"].contains("Source: https://oskalang.dev/codes/"));
     assert!(site["search.json"].contains("\"url\": \"/codes/E0200.html\""));
     let copy = &site["codes/E0200.md"];
     assert!(copy.starts_with("# E0200\n\n"), "{copy}");

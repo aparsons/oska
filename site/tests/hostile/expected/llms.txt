@@ -13,7 +13,7 @@ Oska 0.1.0 (pre-alpha). These docs track `main`. Every page is also served as Ma
 
 ## Machine-readable
 
-- [llms-full.txt](https://oskalang.dev/llms-full.txt): every page, as Markdown, in one file
+- [llms-full.txt](https://oskalang.dev/llms-full.txt): the documentation, as Markdown, in one file
 - [search.json](https://oskalang.dev/search.json): the search index
 - [sitemap.xml](https://oskalang.dev/sitemap.xml): the canonical URL of every page
 - [latest.json](https://oskalang.dev/latest.json): the current version and the installers

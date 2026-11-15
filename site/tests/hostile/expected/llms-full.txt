@@ -1,14 +1,6 @@
 # Oska: full documentation
 
-Oska 0.1.0 (pre-alpha). Every page of https://oskalang.dev as Markdown, one after another, each after a line `Source:` that names it.
-
----
-
-Source: https://oskalang.dev/
-
-# Oska
-
-The [design](/design.md).
+Oska 0.1.0 (pre-alpha). The pages of https://oskalang.dev as Markdown, one after another, in the order to read them, each after a line `Source:` that names it.
 
 ---
 
@@ -94,6 +86,14 @@ None of it may survive as anything but text.
 > <script>alert("quote")</script>
 
 1. <script>alert("ordered")</script>
+
+---
+
+Source: https://oskalang.dev/
+
+# Oska
+
+The [design](/design.md).
 
 ---
 

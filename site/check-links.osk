@@ -4,7 +4,7 @@
 // site publishes. It fails, listing each, if any goes nowhere.
 //
 // It reads every HTML page, the Markdown copy of each, `llms.txt`,
-// `llms-full.txt` and `sitemap.xml`:
+// `llms-full.txt`, `llms-research.txt` and `sitemap.xml`:
 //
 // - A link on the site, relative or at https://oskalang.dev, must name a
 //   file the site has. Its fragment, if it has one, must be the `id` of an
@@ -106,7 +106,7 @@ fn walk(site: DirRead, dir: Untrusted<String>) -> Result<List<Untrusted<String>>
 // `.md` file that is not a copy, such as a template, is published as it
 // is, and its links are its readers' own.
 fn read_for_links(files: Untrusted<String>, path: Untrusted<String>) -> Bool {
-    if path.ends_with(".html") || path == "llms.txt" || path == "llms-full.txt" || path == "sitemap.xml" {
+    if path.ends_with(".html") || path == "llms.txt" || path == "llms-full.txt" || path == "llms-research.txt" || path == "sitemap.xml" {
         return true
     }
     path.ends_with(".md") && has(files, page_of(path))
@@ -328,7 +328,7 @@ fn problem_of(known: Known, from: Untrusted<String>, url: Untrusted<String>) -> 
         if !has(known.files, page) {
             return "the site has no {page}"
         }
-    } else if from == "llms.txt" || from == "llms-full.txt" {
+    } else if from == "llms.txt" || from == "llms-full.txt" || from == "llms-research.txt" {
         // A fragment alone, in a file of many pages, names no one page.
         return ""
     }

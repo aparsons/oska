@@ -1,28 +1,6 @@
 # Oska: full documentation
 
-Oska 0.1.0 (pre-alpha). Every page of https://oskalang.dev as Markdown, one after another, each after a line `Source:` that names it.
-
----
-
-Source: https://oskalang.dev/
-
-# Oska
-
-**A secure-by-default language.**
-
-> Status: pre-alpha. See [`docs/design.md`](/design.md) and the
-> decisions in [`docs/adr/`](/adr/index.md).
-
-## Repository layout
-
-| Path | Contents |
-|---|---|
-| `crates/oskac` | The `oskac` CLI |
-| `docs/` | Design notes |
-
-## License
-
-Apache-2.0. See [LICENSE](https://github.com/aparsons/oska/blob/main/LICENSE).
+Oska 0.1.0 (pre-alpha). The pages of https://oskalang.dev as Markdown, one after another, in the order to read them, each after a line `Source:` that names it. This file leaves out the research, which is proposals and not documented behaviour (all in [llms-research.txt](https://oskalang.dev/llms-research.txt)).
 
 ---
 
@@ -40,25 +18,6 @@ _Avoid_: permission, token
 
 **Attenuation**:
 Producing a narrower capability, as `fs.restrict_to("docs")` does. See the [design](/design.md#capabilities).
-
----
-
-Source: https://oskalang.dev/adr/0001-values.html
-
-# Value semantics
-
-Values are copied, not shared.
-
----
-
-Source: https://oskalang.dev/adr/0002-capabilities.html
-
-# Capabilities are the effect system
-
-## Decision
-
-A function's capability parameters are its effects. See the
-[design notes](/design.md#capabilities) and [ADR 0001](/adr/0001-values.md).
 
 ---
 
@@ -119,13 +78,53 @@ Headings at every level get an anchor.
 
 ---
 
-Source: https://oskalang.dev/research/2026-11-report.html
+Source: https://oskalang.dev/adr/0001-values.html
 
-# Research: a report
+# Value semantics
 
-## Summary
+Values are copied, not shared.
 
-Memory safety is the baseline ([CISA](https://www.cisa.gov/)).
+---
+
+Source: https://oskalang.dev/adr/0002-capabilities.html
+
+# Capabilities are the effect system
+
+## Decision
+
+A function's capability parameters are its effects. See the
+[design notes](/design.md#capabilities) and [ADR 0001](/adr/0001-values.md).
+
+---
+
+Source: https://oskalang.dev/adr/
+
+# Decisions
+
+- [Value semantics](/adr/0001-values.md)
+- [Capabilities are the effect system](/adr/0002-capabilities.md)
+
+---
+
+Source: https://oskalang.dev/
+
+# Oska
+
+**A secure-by-default language.**
+
+> Status: pre-alpha. See [`docs/design.md`](/design.md) and the
+> decisions in [`docs/adr/`](/adr/index.md).
+
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `crates/oskac` | The `oskac` CLI |
+| `docs/` | Design notes |
+
+## License
+
+Apache-2.0. See [LICENSE](https://github.com/aparsons/oska/blob/main/LICENSE).
 
 ---
 
@@ -148,20 +147,3 @@ How Oska works inside, the words it uses, and the decisions and research behind 
 - [Glossary](/glossary.md)
 - [Decisions](/adr/index.md)
 - [Research](/research/index.md)
-
----
-
-Source: https://oskalang.dev/adr/
-
-# Decisions
-
-- [Value semantics](/adr/0001-values.md)
-- [Capabilities are the effect system](/adr/0002-capabilities.md)
-
----
-
-Source: https://oskalang.dev/research/
-
-# Research
-
-- [Research: a report](/research/2026-11-report.md)

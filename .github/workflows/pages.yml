@@ -91,7 +91,7 @@ jobs:
           test "$status" = 200
       - name: the files agents and installers fetch are published
         run: |
-          for path in install.sh install.ps1 oska-release.pub llms.txt llms-full.txt \
+          for path in install.sh install.ps1 oska-release.pub llms.txt llms-full.txt llms-research.txt \
             sitemap.xml robots.txt latest.json codes.json search.json agent-setup.md \
             security.md favicon.svg; do
             curl --silent --show-error --fail --location --output /dev/null \
