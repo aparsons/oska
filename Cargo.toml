@@ -14,3 +14,19 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 unwrap_used = "warn"
+
+# Test steps are dominated by running the interpreter and compiler these
+# crates hold, so build them optimised in dev and test builds (`test`
+# inherits `dev`). Debug assertions and overflow checks stay on; release
+# builds are unaffected. Measured in docs/research/2026-11-development-throughput.md.
+[profile.dev.package.oska-run]
+opt-level = 1
+
+[profile.dev.package.oskac]
+opt-level = 1
+
+[profile.dev.package.oska-check]
+opt-level = 1
+
+[profile.dev.package.oska-native]
+opt-level = 1

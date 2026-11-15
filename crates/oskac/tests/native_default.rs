@@ -10,8 +10,9 @@
 //! the same. To regenerate them after an intended change, run
 //! `UPDATE_GOLDEN=1 cargo test -p oskac --test native_default` and review
 //! the diff. The tests for those two hosts below show that the default
-//! really is native, through what only the native backend can do in a
-//! debug build.
+//! really is native, through what only the native backend does: it writes
+//! its executable into the temporary directory, which the interpreter
+//! never touches.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -317,9 +318,10 @@ fn run_and_test_report_a_missing_temporary_directory_alike() {
     }
 }
 
-/// A recursion 40,000 calls deep: within the language's limit (50,000),
-/// which native code reaches, but beyond what a debug build of the
-/// interpreter reaches on its own stack before it panics with `P0021`.
+/// A recursion 40,000 calls deep, within the language's limit (50,000),
+/// which native code reaches. How deep the interpreter gets depends on
+/// the build profile (its frames are larger unoptimised), so nothing here
+/// relies on it failing.
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "aarch64", target_arch = "x86_64")
@@ -329,6 +331,13 @@ const DEEP: &str = "fn down(n: Int) -> Int {\n    if n == 0 {\n        return 0\
                     fn main(io: Stdout) -> Result<(), IoError> {\n    \
                     let d = down(40000)\n    io.println(\"{d}\")\n}\n\n\
                     test \"deep\" {\n    t.assert_eq(down(40000), 40000)\n}\n";
+
+/// A small program that prints a line.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
+const GREETS: &str = "fn main(io: Stdout) -> Result<(), IoError> {\n    io.println(\"hi\")\n}\n";
 
 #[cfg(all(
     target_os = "linux",
@@ -342,16 +351,47 @@ fn run_and_test_are_native_by_default_and_interpret_selects_the_interpreter() {
     assert_eq!(run.status.code(), Some(0));
     let test = oskac(&dir, &["test", "deep.osk"]);
     assert_eq!(test.status.code(), Some(0), "{test:?}");
-    if cfg!(debug_assertions) {
-        for command in ["run", "test"] {
-            let interpreted = oskac(&dir, &[command, "deep.osk", "--interpret"]);
-            assert!(
-                String::from_utf8_lossy(&interpreted.stderr).contains("P0021")
-                    || String::from_utf8_lossy(&interpreted.stdout).contains("P0021"),
-                "the debug interpreter cannot go this deep: {interpreted:?}"
-            );
-        }
+    // The selection, independent of how deep an interpreter can recurse in
+    // this build profile: a native run needs a temporary directory it can
+    // write its executable to, and `--interpret` does not.
+    let src = format!("{GREETS}\ntest \"passes\" {{\n    t.assert(true)\n}}\n");
+    let dir = workspace("selection", &[("greets.osk", &src)]);
+    let missing = dir.join("missing");
+    let in_missing = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_oskac"))
+            .args(args)
+            .current_dir(&dir)
+            .env("TMPDIR", &missing)
+            .output()
+            .expect("oskac should run")
+    };
+    for command in ["run", "test"] {
+        let native = in_missing(&[command, "greets.osk"]);
+        assert_eq!(
+            native.status.code(),
+            Some(1),
+            "{command} is native: {native:?}"
+        );
+        assert!(
+            String::from_utf8_lossy(&native.stderr).contains("E0391"),
+            "{command} is native: {native:?}"
+        );
+        let interpreted = in_missing(&[command, "greets.osk", "--interpret"]);
+        assert_eq!(
+            interpreted.status.code(),
+            Some(0),
+            "--interpret runs the interpreter: {interpreted:?}"
+        );
+        assert!(
+            !String::from_utf8_lossy(&interpreted.stderr).contains("E0391"),
+            "--interpret runs the interpreter: {interpreted:?}"
+        );
     }
+    assert_eq!(
+        String::from_utf8_lossy(&in_missing(&["run", "greets.osk", "--interpret"]).stdout),
+        "hi\n"
+    );
+    let dir = workspace("deep", &[("deep.osk", DEEP)]);
     let mut left = BTreeSet::new();
     entries(&dir.join("tmp"), "", &mut left);
     assert!(
