@@ -32,7 +32,8 @@
 #     publish (`sign`, `publish`) run in the environment `release`.
 #     Configure it in the repository settings:
 #       * Environments > `release` > Deployment branches and tags: "Selected
-#         branches and tags", with the single tag rule `v*` (no branches);
+#         branches and tags", with the tag rule `v*` and the branch rule
+#         `main`, which only resign-index.yml's monthly re-sign needs;
 #       * the secret RELEASE_SIGNING_KEY stored in the `release` environment,
 #         and the repository-level secret of that name deleted;
 #       * Rules > Rulesets: a tag ruleset targeting `v*` that restricts
