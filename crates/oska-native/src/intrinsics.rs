@@ -202,6 +202,9 @@ pub enum Sys {
     Ioctl,
     Getrandom,
     RtSigaction,
+    Sigaltstack,
+    Getpid,
+    Kill,
     ExitGroup,
 }
 
@@ -242,6 +245,9 @@ fn linux_aarch64_syscall(call: Sys) -> u16 {
         Sys::Ioctl => 29,
         Sys::Getrandom => 278,
         Sys::RtSigaction => 134,
+        Sys::Sigaltstack => 132,
+        Sys::Getpid => 172,
+        Sys::Kill => 129,
         Sys::ExitGroup => 94,
     }
 }
@@ -273,6 +279,9 @@ fn linux_x86_64_syscall(call: Sys) -> u16 {
         Sys::Ioctl => 16,
         Sys::Getrandom => 318,
         Sys::RtSigaction => 13,
+        Sys::Sigaltstack => 131,
+        Sys::Getpid => 39,
+        Sys::Kill => 62,
         Sys::ExitGroup => 231,
     }
 }
@@ -296,6 +305,9 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_sys_ioctl", Runtime::Syscall(Sys::Ioctl)),
     ("rt_sys_getrandom", Runtime::Syscall(Sys::Getrandom)),
     ("rt_sys_rt_sigaction", Runtime::Syscall(Sys::RtSigaction)),
+    ("rt_sys_sigaltstack", Runtime::Syscall(Sys::Sigaltstack)),
+    ("rt_sys_getpid", Runtime::Syscall(Sys::Getpid)),
+    ("rt_sys_kill", Runtime::Syscall(Sys::Kill)),
     ("rt_sys_exit_group", Runtime::Syscall(Sys::ExitGroup)),
     ("rt_mem_load8", Runtime::Load(Width::W8)),
     ("rt_mem_load16", Runtime::Load(Width::W16)),

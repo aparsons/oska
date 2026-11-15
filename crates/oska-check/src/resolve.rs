@@ -41,32 +41,6 @@ pub fn untrusted_not_text(ty: &Type, known: &dyn Fn(&str) -> bool) -> Option<Dia
     ))
 }
 
-/// Every `E0320` in the written type `ty`, at any depth.
-pub fn untrusted_not_text_within(
-    ty: &Type,
-    known: &dyn Fn(&str) -> bool,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    diagnostics.extend(untrusted_not_text(ty, known));
-    match &ty.kind {
-        TypeKind::Unit => {}
-        TypeKind::Path { args, .. } => {
-            for arg in args {
-                untrusted_not_text_within(arg, known, diagnostics);
-            }
-        }
-        TypeKind::Fn {
-            params,
-            return_type,
-            ..
-        } => {
-            for t in params.iter().chain(return_type.as_deref()) {
-                untrusted_not_text_within(t, known, diagnostics);
-            }
-        }
-    }
-}
-
 /// Report every unresolved or misused type and trait name in the user
 /// module `module`.
 pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
@@ -78,6 +52,28 @@ pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>)
 #[cfg(test)]
 pub fn prelude_module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>) {
     resolve(module, decls, true, diagnostics);
+}
+
+/// Report every unresolved or misused name in `ty`, a type written inside
+/// a function body (a `let` annotation, #84), with the generic parameters
+/// `generics` in scope and `Self` too when `self_in_scope`. This is the
+/// resolution a signature's types get, so `E0200` and its closest-name fix
+/// come from one place.
+pub fn written_type(
+    ty: &Type,
+    decls: &Decls,
+    generics: &[String],
+    self_in_scope: bool,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut resolver = Resolver {
+        decls,
+        diagnostics,
+        generics: generics.to_vec(),
+        self_in_scope,
+        see_all: false,
+    };
+    resolver.ty(ty);
 }
 
 fn resolve(module: &Module, decls: &Decls, see_all: bool, diagnostics: &mut Vec<Diagnostic>) {

@@ -64,9 +64,12 @@ fn a_native_program_killed_by_a_fault_signal_is_reported_as_e0392() {
             .expect("its stderr");
         let status = oskac.wait().expect("oskac should end");
         assert_eq!(status.code(), Some(128 + number), "SIG{signal}: {stderr}");
+        // A fault signal reaches the runtime's fault handler first, which
+        // reports it and raises it again (#143).
         let expected = if fault {
             format!(
-                "error[E0392]: the native program was killed by signal {number} (SIG{signal}): \
+                "error: the native program faulted with signal {number} (SIG{signal})\n\
+                 error[E0392]: the native program was killed by signal {number} (SIG{signal}): \
                  a fault in the native backend, not in the program; run it with `--interpret`\n"
             )
         } else {

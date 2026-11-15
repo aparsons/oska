@@ -11,6 +11,7 @@
 ))]
 
 mod differential;
+mod executable;
 
 use differential::{assert_same, run_native, Case};
 
@@ -505,12 +506,7 @@ fn spawning_on_a_finished_scope_panics_with_p0005_at_the_call() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("a directory");
     let exe = dir.join("program");
-    std::fs::write(&exe, image).expect("write the executable");
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755))
-            .expect("make it executable");
-    }
+    executable::write_executable(&exe, &image);
     let output = std::process::Command::new(&exe)
         .output()
         .expect("run the executable");

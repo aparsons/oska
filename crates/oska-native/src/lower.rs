@@ -393,7 +393,19 @@ impl<'p> Lowering<'p> {
         let size = body.constant(0);
         let sp = body.temp();
         body.push(Inst::EntrySp { dst: sp });
-        body.call_runtime("process_init", vec![sp], NOWHERE)?;
+        // `std.rt`'s fault handler, which the kernel calls with the
+        // signal's number as its one argument, as the backend's own
+        // calling convention passes it.
+        let on_fault = body.lowering.request(
+            Instance::Function {
+                source: Source::Runtime,
+                name: "on_fault".to_string(),
+                type_args: Vec::new(),
+            },
+            NOWHERE,
+        );
+        let handler = body.function_address(on_fault);
+        body.call_runtime("process_init", vec![sp, handler], NOWHERE)?;
         let stack = body.call_runtime("stack_new", vec![size], NOWHERE)?;
         body.push(Inst::CallOnStack {
             stack,

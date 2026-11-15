@@ -131,7 +131,7 @@ Before you finish a task, compare this against the report from before your chang
 - **A function's `authority` grew,** or a new capability appears in `main`'s signature. Is that the task, or a shortcut? Prefer passing a narrower capability, such as `fs.restrict_to("dir").read_only()`, to adding a wider one.
 - **A new `audit` entry appeared.** Every `assume_trusted` and `expose` weakens a guarantee. Use one only inside a validator that really checks the text, and say so in your summary.
 - **A new `attenuations` entry has a wider root than the task needs.** Each one names the function it is in, the capability it narrows from and to, and its `root`. A `root` of `"/"` is the whole filesystem, and `null` means the root is computed at runtime (or, for `read_only` and `write_only`, that there is none).
-- **A function that was `pure` is not.** It now has a capability-bearing parameter.
+- **A function that was `pure` is not.** It now has a capability-bearing parameter, or one of a bounded type parameter (`generic T`) that it can perform effects through.
 
 Never silence a diagnostic by weakening authority or trust: do not add capabilities to `main`, call `.assume_trusted()`, or call `.expose()` only to make a message go away. Ask first when the task seems to need it.
 
@@ -141,9 +141,9 @@ Never silence a diagnostic by weakening authority or trust: do not add capabilit
 - **Ignoring a `Result` is an error** (`E0240`). Write `let _ = f()` to discard one on purpose.
 - **Mutation** needs `var` on the binding, and `var self` on the method.
 - **Newlines end statements.** There is no `;`.
-- **Interpolation holds only a name or a field path.** Compute with `let` first.
+- **Interpolation holds only a name or a field path.** Compute with `let` first. In a method the path may start with `self`, as in `"{self.balance}"`.
 - **Contracts are enforced.** `requires` and `ensures` run on every call, in every build. `P0006` points at the call that broke a `requires`, so fix the caller. `P0007` points at the `ensures` clause, so fix the function. A trait method's contract is declared on the trait, not on its impls (`E0218`), and not on `main` (`E0219`).
-- **Known gaps in this release:** a module-level `const` cannot be referenced, a type misspelled in a `let` annotation is not reported, and `Net`, `std.sql`, and `std.proc` check but do not run. See [troubleshooting](troubleshooting.md#by-symptom).
+- **Known gaps in this release:** `Net`, `std.sql`, and `std.proc` check but do not run. See [troubleshooting](troubleshooting.md#by-symptom).
 - **Packages.** A program can be one file or a package: an `oska.toml` and modules under `src/`, imported with `use pkg.a.b`. Give `oskac` the package directory (or no path, in it). Items are private to their module until marked `pub(pkg)` or `pub`; `E0206`'s fix does it. There are no dependencies, re-exports or renaming yet. See [packages and modules](packages.md).
 - **`dbg` writes to standard error** and returns its argument.
 

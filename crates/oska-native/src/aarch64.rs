@@ -8,7 +8,10 @@
 //!
 //! # Calling convention
 //!
-//! The backend's own (nothing outside a program calls into it):
+//! The backend's own (nothing outside a program calls into it but the
+//! kernel, which calls `std.rt`'s fault handler, `on_fault`, with the
+//! signal's number in `x0`, as this convention passes its one argument,
+//! and which never returns):
 //!
 //! - arguments in `x0`–`x7`, in order, the receiver first, and any past
 //!   the eighth in a fixed area of the writable data

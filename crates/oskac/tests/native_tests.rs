@@ -17,6 +17,8 @@
     any(target_arch = "aarch64", target_arch = "x86_64")
 ))]
 
+mod executable;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -806,12 +808,48 @@ fn test_executable(name: &str, src: &str) -> PathBuf {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("native_tests_exe");
     std::fs::create_dir_all(&dir).expect("should create the directory");
     let exe = dir.join(name);
-    let _ = std::fs::remove_file(&exe);
-    std::fs::write(&exe, bytes).expect("should write the executable");
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755))
-        .expect("should make it executable");
+    executable::write_executable(&exe, &bytes);
     exe
+}
+
+/// Other threads fork all the time, as parallel tests do, while this one
+/// writes executables and runs them: none may fail with `ETXTBSY` (#270).
+#[test]
+fn an_executable_written_while_other_threads_fork_still_runs() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("native_tests_etxtbsy");
+    std::fs::create_dir_all(&dir).expect("should create the directory");
+    let forking = AtomicBool::new(true);
+    std::thread::scope(|scope| {
+        for _ in 0..3 {
+            scope.spawn(|| {
+                while forking.load(Ordering::Relaxed) {
+                    let _ = Command::new("true").status();
+                }
+            });
+        }
+        let writers: Vec<_> = (0..3)
+            .map(|n| {
+                let dir = &dir;
+                scope.spawn(move || {
+                    for round in 0..40 {
+                        let exe = dir.join(format!("script_{n}"));
+                        executable::write_executable(&exe, b"#!/bin/sh\nexit 7\n");
+                        let status = Command::new(&exe)
+                            .status()
+                            .unwrap_or_else(|e| panic!("round {round} should run: {e}"));
+                        assert_eq!(status.code(), Some(7));
+                    }
+                })
+            })
+            .collect();
+        let results: Vec<_> = writers.into_iter().map(|w| w.join()).collect();
+        forking.store(false, Ordering::Relaxed);
+        for result in results {
+            result.expect("a writer should not panic");
+        }
+    });
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 const TWO_TESTS: &str = r#"

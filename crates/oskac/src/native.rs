@@ -302,7 +302,9 @@ impl Executable {
             options.mode(0o700);
         }
         // The file is closed before it runs: a file open for writing
-        // cannot be executed.
+        // cannot be executed. Nor can a fork copy the descriptor while it is
+        // open and make the file busy (#270): `oskac` starts processes only
+        // from its main thread, one at a time, after this write.
         options.open(&exe.path)?.write_all(bytes)?;
         Ok(exe)
     }

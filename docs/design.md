@@ -105,14 +105,14 @@ test "deposit adds to the balance" {
 - **Ranges:** `a..b` is the only range syntax, and it excludes `b`.
 - **No `as` casts.** Conversions are explicit calls, such as `I32.from(x)`.
 - **Patterns:** `_`, literals, bindings, constructor patterns, and `if` guards. There are no or-patterns, range patterns, or `@` bindings in v0. A string pattern must be a plain literal, with no `{...}` interpolation.
-- **Constants:** module-level constants are declared with `const NAME: T = expr`.
+- **Constants:** module-level constants are declared with `const NAME: T = expr`. A constant is in scope in every function, method, test and later constant of its module, with its declared type; a body can name it like a local, and a local of the same name shadows it.
 
 ### Closures, contracts, and other forms
 
 - **Closures:** `|x| expr` or `|x| { ... }`. A closure literal has no `cap` marker. Whether it is capability-bearing is inferred from what it captures, then checked against the parameter type it is passed to (`fn` or `cap fn`).
 - **Contracts:** contract clauses go between the return type and the body, one clause per line. `ensures |r| ...` binds the return value. `implies` binds more loosely than `||` and is right-associative.
 - **Attributes:** written `#[name]` or `#[name(args)]`, and allowed only on items. Attribute names come from a fixed set, currently only `#[integration]`, which is allowed only on `test` items. Unknown names are errors.
-- **String interpolation:** `{...}` inside a string may hold only a name or a field path, as in `{n}` or `{user.name}`. Compute anything else with `let` first.
+- **String interpolation:** `{...}` inside a string may hold only a name or a field path, as in `{n}` or `{user.name}`; inside a method the path may start with `self`, as in `{self.balance}`, and is checked like any other path (an untrusted field keeps the string untrusted, and a secret cannot be interpolated). Compute anything else with `let` first.
 - **Sink literals:** `sql"..."` and similar. They cannot contain `{}`.
 
 ## Type checking

@@ -34,18 +34,6 @@ Since v0.2.0 these three capabilities only attenuate: `read_to_string`, `list_di
 
 The variable is not set. A secret has no stand-in value, so that a missing password can never become an empty one. Set the variable, or use `env.get`, which returns an `Option`.
 
-### A constant cannot be used
-
-A module-level `const NAME: T = expr` declares and checks, but referring to `NAME` reports `E0221` in this release. Pass the value as a parameter, or write it in a function body.
-
-### `{self.name}` inside a string is an unknown name
-
-An interpolation hole that starts with `self` reports `E0221` in this release. Copy the field into a local with `let`, and interpolate the local.
-
-### A type misspelled in a `let` annotation is not reported
-
-In a signature, an unknown type is `E0200` with a "did you mean" fix. In a `let` annotation inside a body, this release does not report it. Do not rely on a clean check to confirm a type name in a body.
-
 ### A contract that is violated stops the program
 
 `requires` and `ensures` are evaluated on every call, in every build. A false `requires` panics with `P0006` at the call, and a false `ensures` panics with `P0007` at the clause. A program whose contracts were silently false in v0.1.0 now panics. Fix the caller for `P0006` and the function body for `P0007`, or correct the contract if it was wrong. For a failure you expect, such as bad user input, validate with an explicit `if` and return a `Result` instead, because a panic cannot be caught.
@@ -136,7 +124,7 @@ fn main() {
 }
 ```
 
-`E0221`, an unknown name. The fix suggests the closest local, function, or variant. A capability you did not declare is this error, and so is a `const`.
+`E0221`, an unknown name. The fix suggests the closest local, function, constant, or variant. A capability you did not declare is this error.
 
 ```oska error=E0221
 fn main(io: Stdout) -> Result<(), IoError> {
