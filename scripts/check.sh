@@ -15,7 +15,8 @@
 #      private temporary directory (scripts/temp-leak/run.sh) and fails,
 #      naming the paths, if a test leaves anything in it;
 #   3. the installer, release script, unsafe guard, intrinsic guard,
-#      workflow guard, temp-leak wrapper, rust-stable and pass stamp tests;
+#      workflow guard, kill guard, temp-leak wrapper, rust-stable,
+#      cross-build manifest and pass stamp tests;
 #   4. shellcheck on the shell scripts, when shellcheck is installed;
 #   5. the pass stamp, written only when every step above passed and the tree
 #      did not change meanwhile, so the pre-push hook skips a repeat run on
@@ -102,6 +103,11 @@ bash scripts/unsafe-guard/test.sh
 step "intrinsic guard tests"
 bash scripts/intrinsic-guard/test.sh
 
+step "kill guard tests"
+# The Claude Code hook (.claude/settings.json) that refuses pkill -f, killall
+# and other kills by pattern, name or session.
+bash scripts/kill-guard/test.sh
+
 step "workflow guard tests"
 bash scripts/workflow-guard/test.sh
 
@@ -110,6 +116,9 @@ bash scripts/temp-leak/test.sh
 
 step "rust-stable tests"
 bash scripts/rust-stable/test.sh
+
+step "cross-build manifest tests"
+bash scripts/cross-build/test.sh
 
 step "pass stamp tests"
 bash scripts/pass-stamp/test.sh

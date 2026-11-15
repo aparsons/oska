@@ -5,8 +5,8 @@
 //! toolchain the way the CLI reference is held to `oskac --help`. Each row
 //! of its table has a probe here: a small program that uses the feature.
 //! The probe must check, run on the interpreter, and build natively
-//! exactly as the row says, and a refusal must carry the code the row
-//! names. A feature that starts or stops running fails this test until the
+//! exactly as the row says, for aarch64 and for x86_64 Linux, and a refusal
+//! must carry the code the row names. A feature that starts or stops running fails this test until the
 //! page says so.
 
 use std::path::{Path, PathBuf};
@@ -276,11 +276,20 @@ fn claim(cell: &str, at: &str) -> Option<Vec<String>> {
     Some(codes)
 }
 
-/// What the Platforms cell says, from the backends that run the feature.
-fn platforms(interpreter: bool, native: bool) -> &'static str {
-    match (interpreter, native) {
-        (true, true) => "Every host; native on aarch64 Linux",
-        (true, false) => "Every host, on the interpreter",
+/// The platforms `oskac build` writes executables for, by the name `--target`
+/// takes. A native cell holds only if the probe builds for every one.
+const TARGETS: [&str; 2] = ["linux-aarch64", "linux-x86_64"];
+
+/// What the Platforms cell says, from the backends that run the feature:
+/// whether the interpreter runs it, and whether the probe built for
+/// `TARGETS[0]` (aarch64 Linux) and `TARGETS[1]` (x86_64 Linux). A cell
+/// names a platform only if the probe built for it.
+fn platforms(interpreter: bool, built: [bool; 2]) -> &'static str {
+    match (interpreter, built) {
+        (true, [true, true]) => "Every host; native on aarch64 and x86_64 Linux",
+        (true, [true, false]) => "Every host; native on aarch64 Linux",
+        (true, [false, true]) => "Every host; native on x86_64 Linux",
+        (true, [false, false]) => "Every host, on the interpreter",
         (false, _) => "None yet: checks only",
     }
 }
@@ -341,9 +350,13 @@ fn bears_out(output: &Output, claim: &Option<Vec<String>>) -> Result<(), String>
     }
 }
 
-/// Whether this host runs `oskac run` and `oskac test` natively.
+/// Whether this host runs `oskac run` and `oskac test` natively: Linux on
+/// aarch64 or x86_64.
 fn native_host() -> bool {
-    cfg!(all(target_arch = "aarch64", target_os = "linux"))
+    cfg!(all(
+        any(target_arch = "aarch64", target_arch = "x86_64"),
+        target_os = "linux"
+    ))
 }
 
 #[test]
@@ -373,29 +386,39 @@ fn every_row_of_what_works_today_holds_on_the_toolchain() {
         if let Err(e) = bears_out(&ran, &interpreter) {
             problems.push(format!("{at}: Interpreter: {e}"));
         }
-        // `oskac build` compiles for aarch64 Linux on every host. A test
-        // file is compiled natively only by `oskac test` on aarch64 Linux,
-        // where a fallback to the interpreter says so with `E0390`.
-        let compiled = match probe {
+        // `oskac build` compiles for each of `TARGETS` on every host, and
+        // the platforms the probe really built for decide the Platforms
+        // cell. A test file is compiled natively only by `oskac test`, on
+        // the hosts that run natively, where a fallback to the interpreter
+        // says so with `E0390`; it cannot be built, so its native cell
+        // stands for both targets.
+        let mut built = [native.is_none(); 2];
+        match probe {
             Probe::Tests(_) if native_host() => {
                 let output = oskac(&dir, &["test", &target]);
                 let fell_back = text(&output.stderr).contains("E0390");
-                Some(if fell_back && native.is_none() {
+                let result = if fell_back && native.is_none() {
                     Err(format!("it said Yes, but: {}", text(&output.stderr)))
                 } else {
                     bears_out(&output, &native)
-                })
+                };
+                if let Err(e) = result {
+                    problems.push(format!("{at}: Native: {e}"));
+                }
             }
-            Probe::Tests(_) => None,
-            _ => Some(bears_out(
-                &oskac(&dir, &["build", &target, "-o", "probe-bin"]),
-                &native,
-            )),
-        };
-        if let Some(Err(e)) = compiled {
-            problems.push(format!("{at}: Native: {e}"));
+            Probe::Tests(_) => {}
+            _ => {
+                for (i, platform) in TARGETS.iter().enumerate() {
+                    let out = format!("probe-bin-{platform}");
+                    let output = oskac(&dir, &["build", &target, "--target", platform, "-o", &out]);
+                    built[i] = output.status.code() == Some(0);
+                    if let Err(e) = bears_out(&output, &native) {
+                        problems.push(format!("{at}: Native ({platform}): {e}"));
+                    }
+                }
+            }
         }
-        let expected = platforms(interpreter.is_none(), native.is_none());
+        let expected = platforms(interpreter.is_none(), built);
         if row.platforms != expected {
             problems.push(format!(
                 "{at}: Platforms says {:?}; from the backends it is {expected:?}",

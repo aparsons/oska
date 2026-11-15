@@ -1,5 +1,6 @@
-//! `oskac test` on aarch64 Linux: a program's `test` blocks run as native
-//! code (`--interpret` selects the interpreter; see `native.rs`).
+//! `oskac test` on aarch64 and x86_64 Linux: a program's `test` blocks
+//! run as native code for the host (`--interpret` selects the
+//! interpreter; see `native.rs`).
 //!
 //! The program's tests compile into one test executable
 //! (`oska_native::build_tests`), written to a private temporary
@@ -34,10 +35,16 @@ pub enum Tested {
     Refused(Diagnostic),
 }
 
-/// Run the `test` blocks of the checked `program` natively, reporting a
-/// failure to write the executable as JSON with `json`.
-pub fn test_program(program: &Program, options: TestOptions, json: bool) -> Tested {
-    let bytes = match oska_native::build_tests(program) {
+/// Run the `test` blocks of the checked `program` natively, compiled for
+/// `target`, the host's, reporting a failure to write the executable as
+/// JSON with `json`.
+pub fn test_program(
+    program: &Program,
+    target: oska_native::Target,
+    options: TestOptions,
+    json: bool,
+) -> Tested {
+    let bytes = match oska_native::build_tests(program, target) {
         Ok(bytes) => bytes,
         Err(refusal) => return Tested::Refused(refusal),
     };
