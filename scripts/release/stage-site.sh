@@ -10,8 +10,10 @@
 #     release's SHA256SUMS to be the name of its directory);
 #   - copies each to <site-dir>/releases/<tag>/;
 #   - publishes <public-key> as <site-dir>/oska-release.pub;
+#   - publishes the signed release index (see below);
 #   - publishes the installers as <site-dir>/install.sh and install.ps1,
-#     pinned to <public-key> (scripts/install/pin.sh);
+#     pinned to <public-key> (scripts/install/pin.sh), and pinned to
+#     require the index when it published one;
 #   - writes <site-dir>/latest.json for the newest release that is not a
 #     pre-release, merging into any latest.json the generator wrote (the
 #     release fields win). Its signing_key_fingerprint is the SHA256
@@ -20,6 +22,23 @@
 #
 # URLs in latest.json start with $OSKA_SITE_URL (default
 # https://oskalang.dev), so tests can stage a site served elsewhere.
+#
+# A release directory may also hold a signed release index,
+# release-index.json and release-index.json.sig, which the release run (or
+# the index refresh) attached to that GitHub Release. Each is taken out of
+# its release before the release is verified, so a release directory still
+# holds nothing SHA256SUMS does not list, and is verified with
+# verify-index.sh; one that does not verify stops the build, as a release
+# does. Of those, the index with the highest serial is published as
+# <site-dir>/release-index.json and .sig, if:
+#   - no other index has the same serial;
+#   - the release it names is one published here.
+# Otherwise the build stops. An index that has expired is still published,
+# with a GitHub Actions `::warning::` annotation, so the rest of the site
+# still deploys: the installers refuse it (stale_index), so installing the
+# latest release fails until it is re-signed, while a named release
+# (--version) still installs. When the published index expires within 30
+# days, it warns the same way.
 #
 # With no releases it only publishes the key and the installers, if there
 # is a key. Without a key it publishes no installers, as they could verify
@@ -92,16 +111,59 @@ if [ ! -f "$public" ]; then
   exit 0
 fi
 cp "$public" "$site/oska-release.pub"
-"$here/../install/pin.sh" "$public" "$site"
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/oska-stage-site.XXXXXXXX")
+trap 'rm -rf "$work"' EXIT
+mkdir "$work/releases" "$work/indexes"
 
 for tag in "${tags[@]}"; do
   [[ $tag =~ $any ]] || die "$releases/$tag is not named for a release tag"
-  "$here/verify.sh" "$releases/$tag" "$public"
   [ ! -e "$site/releases/$tag" ] || die "$site/releases/$tag already exists"
+  # Keep an index apart from the release files it travelled with.
+  cp -R "$releases/$tag" "$work/releases/$tag"
+  for f in release-index.json release-index.json.sig; do
+    if [ -e "$work/releases/$tag/$f" ]; then
+      mkdir -p "$work/indexes/$tag"
+      mv "$work/releases/$tag/$f" "$work/indexes/$tag/$f"
+    fi
+  done
+  "$here/verify.sh" "$work/releases/$tag" "$public"
   mkdir -p "$site/releases"
-  cp -R "$releases/$tag" "$site/releases/$tag"
+  mv "$work/releases/$tag" "$site/releases/$tag"
   release_page "$tag" >"$site/releases/$tag/index.html"
 done
+
+# The signed release index with the highest serial.
+best=
+best_serial=0
+for dir in "$work"/indexes/*; do
+  [ -d "$dir" ] || continue
+  from=$releases/$(basename "$dir")
+  fields=$("$here/verify-index.sh" "$dir" "$public") ||
+    die "the release index in $from does not verify"
+  read -r serial expires named <<<"$fields"
+  if [ "$serial" -gt "$best_serial" ]; then
+    best=$dir best_serial=$serial best_expires=$expires best_tag=$named best_from=$from
+  elif [ "$serial" -eq "$best_serial" ] && ! cmp -s "$dir/release-index.json" "$best/release-index.json"; then
+    die "the release indexes in $best_from and $from differ but both have serial $serial; sign a new one"
+  fi
+done
+require=()
+if [ -n "$best" ]; then
+  now=$(date -u +%s)
+  left=$(($(date -u -d "$best_expires" +%s) - now))
+  [ -d "$site/releases/$best_tag" ] ||
+    die "the release index in $best_from names $best_tag, which is not a published release"
+  if [ "$left" -le 0 ]; then
+    echo "::warning::the release index (serial $best_serial) has expired, at $best_expires; it is published, but installers refuse it (stale_index), so installing the latest release fails until it is re-signed (docs/agents/release.md)"
+  elif [ "$left" -lt $((30 * 86400)) ]; then
+    echo "::warning::the release index (serial $best_serial) expires at $best_expires, in under 30 days; installers refuse it after that, so re-sign it (docs/agents/release.md)"
+  fi
+  cp "$best/release-index.json" "$best/release-index.json.sig" "$site/"
+  require=(--require-index)
+  echo "stage-site.sh: published release index serial $best_serial, naming $best_tag, expiring $best_expires"
+fi
+"$here/../install/pin.sh" "$public" "$site" "${require[@]}"
 
 latest=$(printf '%s\n' "${tags[@]}" | grep -E "$stable" | sort -V | tail -n 1 || true)
 if [ -z "$latest" ]; then

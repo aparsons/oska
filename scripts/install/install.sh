@@ -5,9 +5,14 @@
 #   curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.1.0 --json
 #
 # Options:
-#   --version X  install release X (0.1.0 or v0.1.0) instead of the latest
-#   --json       print one JSON object on stdout, and nothing else
-#   --help       print this help
+#   --version X        install release X (0.1.0 or v0.1.0) instead of the latest
+#   --allow-downgrade  with --version, install X even if it is older than
+#                      the installed oskac
+#   --check            report the installed and the latest version, and
+#                      install nothing
+#   --uninstall        remove what the install receipt lists, and nothing else
+#   --json             print one JSON object on stdout, and nothing else
+#   --help             print this help
 #
 # Environment:
 #   OSKA_HOME      install into $OSKA_HOME/bin (default: ~/.oska)
@@ -21,7 +26,19 @@
 # SHA256SUMS lists, and that the binary reports that version. If any check
 # fails, or anything else goes wrong, it installs nothing and exits
 # non-zero. It never prompts.
-# Re-running it updates oskac in place.
+#
+# Without --version it installs the latest release. Once the site publishes
+# a signed release index, the installer is pinned to require it and takes
+# the latest release from release-index.json alone: signed by the release
+# key in the `oska-index` namespace, not expired, and with a serial no
+# lower than the last one this install accepted. Before that, it reads the
+# unsigned latest.json.
+#
+# Re-running it updates oskac in place. It never installs an older release
+# than the installed one unless asked with --version and --allow-downgrade.
+# It records what it installed in $OSKA_HOME/receipt.json, which is
+# advisory: no check above reads it. --uninstall removes the files the
+# receipt lists, if they are unchanged, and downloads nothing.
 
 set -u
 
@@ -29,6 +46,12 @@ set -u
 # (scripts/install/pin.sh). Signatures by any other key are refused.
 RELEASE_KEY='@OSKA_RELEASE_KEY@'
 NAMESPACE=oska-release
+# Whether the latest release must come from the signed release index, also
+# pinned when the site is built: `yes` once the site publishes a verified
+# index, `no` before, when the installer reads the unsigned latest.json.
+# Anything else, such as the unreplaced placeholder, is refused.
+INDEX_REQUIRED='@OSKA_INDEX_REQUIRED@'
+INDEX_NAMESPACE=oska-index
 DEFAULT_SITE_URL=https://oskalang.dev
 # The glibc of the Linux build runners (.github/workflows/release.yml).
 MIN_GLIBC=2.35
@@ -36,6 +59,11 @@ MIN_GLIBC=2.35
 json=0
 tmp=
 stage=
+version_tmp=
+receipt_tmp=
+# While the install is committed (see commit_install), a signal waits.
+committing=0
+pending=
 
 json_str() {
   tab=$(printf '\t')
@@ -49,6 +77,26 @@ cleanup() {
   if [ -n "$stage" ]; then
     rm -rf "$stage"
   fi
+  if [ -n "$version_tmp" ]; then
+    rm -f "$version_tmp"
+  fi
+  if [ -n "$receipt_tmp" ]; then
+    rm -f "$receipt_tmp"
+  fi
+}
+
+# on_signal <signal>: clean up, then die of that same signal, so whatever
+# ran the installer sees how it ended. While the install is committed, the
+# signal waits until it is, so an interruption never leaves the receipt
+# describing a binary that is not the one installed.
+on_signal() {
+  if [ "$committing" = 1 ]; then
+    pending=$1
+    return
+  fi
+  cleanup
+  trap - "$1" EXIT
+  kill -s "$1" $$
 }
 
 # fail <code> <message>: report the failure and exit non-zero. Usage errors
@@ -80,9 +128,14 @@ Install oskac to ~/.oska/bin, verifying its checksum and release signature.
 
 usage: curl -fsSL https://oskalang.dev/install.sh | sh -s -- [options]
 
-  --version X  install release X (0.1.0 or v0.1.0) instead of the latest
-  --json       print one JSON object on stdout, and nothing else
-  --help       print this help
+  --version X        install release X (0.1.0 or v0.1.0) instead of the latest
+  --allow-downgrade  with --version, install X even if it is older than
+                     the installed oskac
+  --check            report the installed and the latest version, and
+                     install nothing
+  --uninstall        remove what the install receipt lists, and nothing else
+  --json             print one JSON object on stdout, and nothing else
+  --help             print this help
 
 Environment: OSKA_HOME (default ~/.oska), OSKA_SITE_URL (https:// only).
 EOF
@@ -170,8 +223,629 @@ check_glibc() {
   fi
 }
 
+# The install receipt: what this run installed, as JSON in the Oska home.
+# It is advisory. Verification never reads it; it only records what counts
+# as installed, what an uninstall may remove and the highest index serial
+# seen. Written to a new file beside it, $receipt_tmp, which commit_install
+# renames into place. The version file is prepared the same way, first.
+prepare_records() {
+  version_tmp=$(mktemp "$home/.version.XXXXXXXX") ||
+    fail install_failed "cannot write a version file in $home"
+  { printf '%s\n' "$version" >"$version_tmp" && chmod 644 "$version_tmp"; } ||
+    fail install_failed "cannot write $version_tmp"
+  receipt_tmp=$(mktemp "$home/.receipt.XXXXXXXX") ||
+    fail install_failed "cannot write a receipt in $home"
+  {
+    printf '{\n'
+    printf '  "schema": 1,\n'
+    printf '  "version": %s,\n' "$(json_str "$version")"
+    printf '  "tag": %s,\n' "$(json_str "$tag")"
+    printf '  "platform": %s,\n' "$(json_str "$platform")"
+    printf '  "installed_at": %s,\n' "$(json_str "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+    printf '  "site": %s,\n' "$(json_str "$site")"
+    printf '  "key_fingerprint": %s,\n' "$(json_str "$fingerprint")"
+    printf '  "sha256": %s,\n' "$(json_str "$actual")"
+    printf '  "installer": "sh",\n'
+    printf '  "index_serial": %s,\n' "$receipt_serial"
+    printf '  "files": [\n'
+    printf '    {"path": %s, "kind": "binary", "sha256": %s},\n' "$(json_str "$target")" "$(json_str "$actual")"
+    printf '    {"path": %s, "kind": "record", "sha256": %s},\n' "$(json_str "$version_file")" "$(json_str "$(sha256 "$version_tmp")")"
+    printf '    {"path": %s, "kind": "record"}\n' "$(json_str "$receipt")"
+    printf '  ]\n'
+    printf '}\n'
+  } >"$receipt_tmp" || fail install_failed "cannot write $receipt_tmp"
+}
+
+# Moves the version file, the verified binary and then the receipt into
+# place, each an atomic rename, with signals held until all three are done
+# (see on_signal). Only SIGKILL, or a crash, can stop it in between, and
+# then the receipt left behind describes the binary that was replaced, by
+# its SHA-256, so previous_version does not believe it and reads the
+# version file, already the new one. An uninstall keeps the files it no
+# longer matches. Either way a re-run repairs it.
+commit_install() {
+  committing=1
+  mv -f "$version_tmp" "$version_file" || fail install_failed "cannot write $version_file"
+  version_tmp=
+  mv -f "$staged" "$target" || fail install_failed "cannot write $target"
+  mv -f "$receipt_tmp" "$receipt" || fail install_failed "cannot write $receipt"
+  receipt_tmp=
+  committing=0
+  if [ -n "$pending" ]; then
+    on_signal "$pending"
+  fi
+}
+
+# semver_cmp <a> <b>: prints -1, 0 or 1 as version <a> sorts below, equal
+# to or above <b> by semver precedence, so 0.4.0-pre.1 sorts below 0.4.0
+# and above 0.3.0. Both must be versions as is_tag accepts them, without
+# the v.
+semver_cmp() {
+  LC_ALL=C awk -v a="$1" -v b="$2" '
+    # Numbers of any length, compared as digit strings.
+    function num(x, y) {
+      sub(/^0+/, "", x); sub(/^0+/, "", y)
+      if (length(x) != length(y)) return length(x) < length(y) ? -1 : 1
+      if ((x "") == (y "")) return 0
+      return (x "") < (y "") ? -1 : 1
+    }
+    # Pre-release identifiers: numeric ones by value and below the others,
+    # the others in ASCII order.
+    function ident(x, y,    xn, yn) {
+      xn = x ~ /^[0-9]+$/; yn = y ~ /^[0-9]+$/
+      if (xn && yn) return num(x, y)
+      if (xn) return -1
+      if (yn) return 1
+      if ((x "") == (y "")) return 0
+      return (x "") < (y "") ? -1 : 1
+    }
+    BEGIN {
+      ap = ""; bp = ""
+      if (i = index(a, "-")) { ap = substr(a, i + 1); a = substr(a, 1, i - 1) }
+      if (i = index(b, "-")) { bp = substr(b, i + 1); b = substr(b, 1, i - 1) }
+      split(a, x, "."); split(b, y, ".")
+      for (k = 1; k <= 3; k++) if (c = num(x[k], y[k])) { print c; exit }
+      if (ap == "" || bp == "") { print (ap == "") - (bp == ""); exit }
+      n = split(ap, p, "."); m = split(bp, q, ".")
+      for (k = 1; k <= n && k <= m; k++) if (c = ident(p[k], q[k])) { print c; exit }
+      print (n > m) - (n < m)
+    }'
+}
+
+# json_value <file> <key>: the first value of "<key>" in the JSON file
+# <file>, if it is a string or a number. Enough for the unsigned
+# latest.json, whose release fields are top-level and whatever it names is
+# checked against the signature; the receipt and the index are read with
+# json_read.
+json_value() {
+  tr ',{}[]' '[\n*]' <"$1" |
+    sed -n 's/^[[:space:]]*"'"$2"'"[[:space:]]*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' |
+    head -n 1
+}
+
+# oska_paths <code>: the Oska home and the paths the installer writes in
+# it. Install and uninstall work them out the same way, so a receipt's
+# paths match. With neither OSKA_HOME nor HOME set there is no home, and
+# it fails with <code>.
+oska_paths() {
+  if [ -n "${OSKA_HOME:-}" ]; then
+    home=$OSKA_HOME
+  elif [ -n "${HOME:-}" ]; then
+    home=$HOME/.oska
+  else
+    fail "$1" "neither OSKA_HOME nor HOME is set, so there is no Oska home; set OSKA_HOME"
+  fi
+  case $home in
+    /*) ;;
+    *) home=$PWD/$home ;;
+  esac
+  # Without trailing slashes: `[ -L dir/ ]` looks through a symlinked dir.
+  while :; do
+    case $home in
+      ?*/) home=${home%/} ;;
+      *) break ;;
+    esac
+  done
+  bin_dir=$home/bin
+  target=$bin_dir/oskac
+  version_file=$home/version
+  receipt=$home/receipt.json
+}
+
+# json_read <mode> <file>: a strict JSON reader for the receipt and the
+# release index, rather than a pattern match, so a hand-edited file reads
+# as it would anywhere else. It fails, printing nothing, on anything it
+# cannot read for certain: malformed JSON, a repeated key, or a key with a
+# / in it. A control character or non-ASCII escape in a string reads as
+# \001, which no value it is checked for may hold. Modes:
+#
+#   fields  one line per string or number in an object, under its path from
+#           the top: "/latest/tag<TAB>s<string>" or "/serial<TAB>n<number>"
+#           (see json_get);
+#   files   one line per entry of a receipt's "files",
+#           "k<kind><TAB>s<sha256><TAB>p<path>", with an empty value for a
+#           missing or non-string one. It also fails on a schema other than
+#           1, no "files" array, or a \001 in an entry's value.
+json_read() {
+  LC_ALL=C awk -v mode="$1" '
+    function die() { exit 1 }
+    function ws() {
+      while (pos <= n && index(" \t\n\r", substr(s, pos, 1))) pos++
+    }
+    function peek() { ws(); return substr(s, pos, 1) }
+    # A string at pos. Escapes that make a control character, or one
+    # outside ASCII, become \001, which no entry may hold.
+    function str(   out, c, h, i, v) {
+      pos++
+      out = ""
+      while (1) {
+        if (pos > n) die()
+        c = substr(s, pos, 1)
+        if (c == "\"") { pos++; return out }
+        if (index(ctl, c)) die()
+        if (c != "\\") { out = out c; pos++; continue }
+        c = substr(s, pos + 1, 1)
+        pos += 2
+        if (c == "\"" || c == "\\" || c == "/") out = out c
+        else if (index("bfnrt", c)) out = out "\001"
+        else if (c == "u") {
+          h = tolower(substr(s, pos, 4))
+          if (h !~ /^[0-9a-f][0-9a-f][0-9a-f][0-9a-f]$/) die()
+          v = 0
+          for (i = 1; i <= 4; i++) v = v * 16 + index("0123456789abcdef", substr(h, i, 1)) - 1
+          out = out (v >= 32 && v < 127 ? sprintf("%c", v) : "\001")
+          pos += 4
+        } else die()
+      }
+    }
+    # A value at pos, under <at> (its path from the top, like /files/0).
+    # Leaves a string in sval and its type in vtype.
+    function value(at,   c, key, k, i) {
+      c = peek()
+      vtype = c
+      if (c == "\"") { sval = str(); return }
+      if (c == "{") {
+        pos++
+        if (peek() == "}") { pos++; vtype = "{"; return }
+        while (1) {
+          if (peek() != "\"") die()
+          key = str()
+          if (index(key, "/") || peek() != ":") die()
+          pos++
+          k = at "/" key
+          if (k in seen) die()
+          seen[k] = 1
+          value(k)
+          if (vtype == "\"") fields = fields k "\ts" sval "\n"
+          else if (vtype == "n") fields = fields k "\tn" sval "\n"
+          if (at == "" && key == "schema") schema = (vtype == "n" ? sval : "")
+          if (at ~ /^\/files\/[0-9]+$/ && vtype == "\"") {
+            if (key == "path") e_path = sval
+            else if (key == "kind") e_kind = sval
+            else if (key == "sha256") e_sha = sval
+          }
+          c = peek()
+          pos++
+          if (c == "}") break
+          if (c != ",") die()
+        }
+        vtype = "{"
+        return
+      }
+      if (c == "[") {
+        pos++
+        if (at == "/files") files = 1
+        if (peek() == "]") { pos++; vtype = "["; return }
+        for (i = 0; ; i++) {
+          if (at == "/files") {
+            if (peek() != "{") die()
+            e_path = ""; e_kind = ""; e_sha = ""
+          }
+          value(at "/" i)
+          if (at == "/files") {
+            if (index(e_kind e_sha e_path, "\001")) die()
+            lines = lines "k" e_kind "\ts" e_sha "\tp" e_path "\n"
+          }
+          c = peek()
+          pos++
+          if (c == "]") break
+          if (c != ",") die()
+        }
+        vtype = "["
+        return
+      }
+      if (match(substr(s, pos), /^-?[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?/)) {
+        sval = substr(s, pos, RLENGTH); pos += RLENGTH; vtype = "n"; return
+      }
+      if (match(substr(s, pos), /^(true|false|null)/)) { pos += RLENGTH; vtype = "l"; return }
+      die()
+    }
+    { s = s $0 "\n" }
+    END {
+      for (i = 1; i < 32; i++) if (i != 9 && i != 10 && i != 13) ctl = ctl sprintf("%c", i)
+      ctl = ctl "\t\n\r"
+      n = length(s)
+      pos = 1
+      if (peek() != "{") die()
+      value("")
+      ws()
+      if (pos <= n) die()
+      if (mode == "fields") { printf "%s", fields; exit }
+      if (!files || schema != "1") die()
+      printf "%s", lines
+    }' "$2"
+}
+
+# json_get <fields> <path> <type>: the value at <path> in what
+# `json_read fields` printed, if it is a string (type s) or a number (n).
+json_get() {
+  printf '%s\n' "$1" | awk -F '\t' -v p="$2" -v t="$3" \
+    '$1 == p && substr($2, 1, 1) == t { print substr($2, 2); exit }'
+}
+
+
+
+# json_list <lines>: the non-empty lines of <lines> as a JSON array.
+json_list() {
+  printf '['
+  printf '%s\n' "$1" | {
+    sep=
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      printf '%s%s' "$sep" "$(json_str "$line")"
+      sep=', '
+    done
+  }
+  printf ']'
+}
+
+# keep <path> <why>: uninstall leaves <path> in place, and says why.
+keep() {
+  kept="$kept$1
+"
+  kept_why="$kept_why  $1 ($2)
+"
+}
+
+unsafe() {
+  fail unsafe_path "$*; nothing was removed"
+}
+
+# no_symlink_above <path>: refuses the uninstall if any directory above
+# <path> is a symlink, unless root owns it. Only root can make a symlink
+# root owns, so such a one (macOS's /var and /tmp, say) is the system's;
+# one anyone else made could steer a deletion out of where it should be.
+# `find -user` looks at the link itself, as find does not follow links.
+no_symlink_above() {
+  above=$1
+  while :; do
+    above=${above%/*}
+    # Without trailing slashes, through which `[ -L ]` would look.
+    while :; do
+      case $above in
+        ?*/) above=${above%/} ;;
+        *) break ;;
+      esac
+    done
+    [ -n "$above" ] || return 0
+    if [ -L "$above" ] && [ -z "$(find "$above" -prune -user 0 2>/dev/null)" ]; then
+      unsafe "$1 is reached through the symlink $above"
+    fi
+  done
+}
+
+# --uninstall: remove what the receipt lists, and nothing else. Every entry
+# is checked before anything is removed, and one that is not a file this
+# installer writes, in a place it writes, refuses the whole uninstall.
+# A file that changed since it was installed is kept. Directories are
+# removed only if empty, never recursively, and ~/.config/oska is never
+# touched. Lists are one path a line: the receipt reader refuses a path
+# with a control character in it.
+uninstall() {
+  oska_paths not_installed
+  # ~/.config/oska, if there is a HOME to find it by. Any .config/oska
+  # directory is refused below, so it is refused without one too.
+  config_dir=
+  if [ -n "${HOME:-}" ]; then
+    config_dir=${HOME%/}/.config/oska
+  fi
+  if [ -L "$home" ] || [ -L "$receipt" ]; then
+    unsafe "$receipt is reached through a symlink"
+  fi
+  no_symlink_above "$home"
+  [ -f "$receipt" ] ||
+    fail not_installed "there is no install receipt at $receipt, so nothing is known to have been installed there; nothing was removed"
+  if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+    need openssl "or sha256sum or shasum, to check that a file is unchanged before removing it"
+  fi
+  entries=$(json_read files "$receipt") ||
+    unsafe "cannot read the install receipt $receipt, so none of its paths is known to be safe"
+
+  tab=$(printf '\t')
+  # The paths acted on so far, one a line. A path listed again is checked
+  # like any entry, and acted on, and reported, once. bin/ is handled with
+  # the home, after the files.
+  acted="
+$bin_dir
+"
+  remove=
+  remove_receipt=0
+  kept=
+  kept_why=
+  while IFS="$tab" read -r kind sum path; do
+    [ -n "$kind" ] || continue
+    # Each field carries a one-letter prefix, so none is empty and the
+    # tab separators never merge.
+    kind=${kind#k}
+    sum=${sum#s}
+    path=${path#p}
+    case $path in
+      /*) ;;
+      *) unsafe "the receipt lists '$path', which is not an absolute path" ;;
+    esac
+    case $path/ in
+      */../*) unsafe "the receipt lists $path, which climbs out with .." ;;
+    esac
+    case $path/ in
+      */.config/oska/*) unsafe "the receipt lists $path, in a .config/oska directory of settings and credentials, which uninstall never touches" ;;
+    esac
+    case $kind in
+      binary | record)
+        case $path in
+          "$home"/*) name=${path#"$home"/} ;;
+          *) unsafe "the receipt lists $path, which is outside the Oska home $home" ;;
+        esac
+        dir=$home
+        case $name in
+          bin/*)
+            name=${name#bin/}
+            dir=$bin_dir ;;
+        esac
+        case $name in
+          '' | . | */*) unsafe "the receipt lists $path, which is not directly in $home or $bin_dir" ;;
+        esac ;;
+      *) unsafe "the receipt lists $path as a '$kind', which this installer does not remove" ;;
+    esac
+    if [ -L "$dir" ] || [ -L "$path" ]; then
+      unsafe "the receipt lists $path, which is reached through a symlink"
+    fi
+    case $acted in
+      *"
+$path
+"*) continue ;;
+    esac
+    acted="$acted$path
+"
+
+    if [ ! -e "$path" ]; then
+      continue
+    elif [ ! -f "$path" ]; then
+      keep "$path" "not a regular file"
+    elif [ "$path" = "$receipt" ]; then
+      remove_receipt=1
+    elif [ -z "$sum" ]; then
+      keep "$path" "the receipt records no SHA-256 for it"
+    elif [ "$(sha256 "$path")" != "$sum" ]; then
+      keep "$path" "changed since it was installed"
+    else
+      remove="$remove$path
+"
+    fi
+  done <<EOF
+$entries
+EOF
+
+  # Everything is checked; now remove. The receipt goes last, and stays
+  # if a file could not be removed, so a second run can finish the job.
+  removed=
+  failed=0
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    if rm -f "$path" 2>/dev/null; then
+      removed="$removed$path
+"
+    else
+      failed=1
+      keep "$path" "could not be removed"
+    fi
+  done <<EOF
+$remove
+EOF
+  if [ "$remove_receipt" = 1 ]; then
+    if [ "$failed" = 0 ] && rm -f "$receipt" 2>/dev/null; then
+      removed="$removed$receipt
+"
+    else
+      keep "$receipt" "kept while other files remain"
+    fi
+  fi
+  for dir in "$bin_dir" "$home"; do
+    [ -d "$dir" ] && [ ! -L "$dir" ] || continue
+    if rmdir "$dir" 2>/dev/null; then
+      removed="$removed$dir
+"
+    else
+      keep "$dir" "not empty"
+    fi
+  done
+  if [ -n "$config_dir" ] && { [ -e "$config_dir" ] || [ -L "$config_dir" ]; }; then
+    keep "$config_dir" "settings and credentials, which uninstall never touches"
+  fi
+
+  path_hint=
+  case ":${PATH:-}:" in
+    *":$bin_dir:"*) path_hint="$bin_dir is on your PATH; remove it from the shell profile that adds it" ;;
+  esac
+
+  if [ "$json" = 1 ]; then
+    if [ -n "$path_hint" ]; then
+      hint_json=$(json_str "$path_hint")
+    else
+      hint_json=null
+    fi
+    printf '{"ok": true, "action": "uninstalled", "removed": %s, "kept": %s, "path_hint": %s}\n' \
+      "$(json_list "$removed")" "$(json_list "$kept")" "$hint_json"
+    return
+  fi
+  echo "Uninstalled oskac from $home."
+  if [ -n "$removed" ]; then
+    echo "Removed:"
+    printf '%s' "$removed" | sed 's/^/  /'
+  fi
+  if [ -n "$kept" ]; then
+    echo "Kept:"
+    printf '%s' "$kept_why"
+  fi
+  if [ -n "$path_hint" ]; then
+    echo "$path_hint."
+  fi
+}
+
+# Whether <serial> is a serial: a positive integer of at most 15 digits.
+# 999999999999999 is the largest, as verify-index.sh and sign-index.sh
+# agree, and small enough for shell arithmetic.
+is_serial() {
+  case $1 in
+    '' | *[!0-9]* | 0* | ????????????????*) return 1 ;;
+  esac
+}
+
+# The receipt's fields (json_read fields), or nothing if there is no
+# receipt or it cannot be read.
+receipt_fields() {
+  if [ -f "$receipt" ]; then
+    json_read fields "$receipt" || true
+  fi
+}
+
+# The version installed now, or nothing. The receipt wins over the legacy
+# version file, but only while it describes the installed binary: its
+# SHA-256 must be the binary's. One that does not (oskac was replaced by
+# hand, or an install was killed as it committed, see commit_install) is
+# not believed, and neither is one that cannot be read. An install from
+# before receipts has only the version file. Either is advisory: what is
+# not a version counts as nothing installed.
+previous_version() {
+  [ -f "$target" ] || return 0
+  fields=$(receipt_fields)
+  v=$(json_get "$fields" /version s)
+  recorded=$(json_get "$fields" /sha256 s)
+  if [ -z "$recorded" ] || [ "$(sha256 "$target" 2>/dev/null)" != "$recorded" ]; then
+    v=
+    if [ -f "$version_file" ]; then
+      v=$(head -n 1 "$version_file" | tr -d '\r')
+    fi
+  fi
+  if is_tag "v$v"; then
+    printf '%s\n' "$v"
+  fi
+}
+
+# The highest index serial this install accepted, from the receipt, or 0.
+# Advisory like the rest of the receipt: it can only make the rollback
+# check below stricter or looser, never let an unsigned index through.
+serial_seen() {
+  s=$(json_get "$(receipt_fields)" /index_serial n)
+  if is_serial "$s"; then
+    echo "$s"
+  else
+    echo 0
+  fi
+}
+
+# epoch_of <YYYY-MM-DDTHH:MM:SSZ>: seconds since the epoch. Computed here,
+# as GNU and BSD date parse dates differently.
+epoch_of() {
+  printf '%s\n' "$1" | LC_ALL=C awk -F '[-T:Z]' '{
+    y = $1 + 0; m = $2 + 0
+    if (m <= 2) { y--; m += 12 }
+    days = 365 * y + int(y / 4) - int(y / 100) + int(y / 400) + int((153 * (m - 3) + 2) / 5) + $3 - 719469
+    printf "%d\n", days * 86400 + $4 * 3600 + $5 * 60 + $6
+  }'
+}
+
+# Fetches and checks the signed release index, and sets tag, index_serial
+# and index_expires from it. Refuses an index that is not signed by the
+# release key in the `oska-index` namespace or is not in the index format
+# (bad_index), one that has expired (stale_index), and one whose serial is
+# lower than the receipt's (rollback_refused). Warns on stderr when fewer
+# than 30 days remain.
+read_index() {
+  index_url=$site/release-index.json
+  fetch "$index_url" "$tmp/release-index.json" ||
+    fail download_failed "cannot download $index_url"
+  fetch "$index_url.sig" "$tmp/release-index.json.sig" ||
+    fail bad_index "the release index at $index_url has no signature ($index_url.sig); nothing was installed"
+  printf '%s namespaces="%s" %s\n' "$INDEX_NAMESPACE" "$INDEX_NAMESPACE" "$RELEASE_KEY" >"$tmp/allowed_index"
+  ssh-keygen -Y verify -f "$tmp/allowed_index" -I "$INDEX_NAMESPACE" -n "$INDEX_NAMESPACE" \
+    -s "$tmp/release-index.json.sig" <"$tmp/release-index.json" >/dev/null 2>&1 ||
+    fail bad_index "the release index at $index_url is not signed by the Oska release key as an index (verifying needs OpenSSH 8.1 or newer); nothing was installed"
+
+  # Read as strictly as the receipt; a file that cannot be read has no
+  # fields, so it fails the format check.
+  fields=$(json_read fields "$tmp/release-index.json") || fields=
+  index_serial=$(json_get "$fields" /serial n)
+  index_expires=$(json_get "$fields" /expires s)
+  tag=$(json_get "$fields" /latest/tag s)
+  if ! is_serial "$index_serial" || [ "$(json_get "$fields" /schema n)" != 1 ] ||
+    ! printf '%s\n' "$index_expires" | grep -Eqx '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z' ||
+    ! printf '%s\n' "$tag" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+' ||
+    [ "$(json_get "$fields" /latest/version s)" != "${tag#v}" ]; then
+    fail bad_index "the release index at $index_url is not in the release index format; nothing was installed"
+  fi
+
+  left=$(($(epoch_of "$index_expires") - $(date -u +%s)))
+  [ "$left" -gt 0 ] ||
+    fail stale_index "the release index at $index_url expired at $index_expires, so the latest release cannot be trusted; nothing was installed (a named release still installs with --version)"
+  seen=$(serial_seen)
+  [ "$index_serial" -ge "$seen" ] ||
+    fail rollback_refused "the release index at $index_url has serial $index_serial, lower than serial $seen, which this install already accepted; nothing was installed"
+  if [ "$left" -lt $((30 * 86400)) ]; then
+    echo "install.sh: warning: the release index expires at $index_expires, in fewer than 30 days; after that, installing the latest release fails until it is re-signed" >&2
+  fi
+}
+
+# --check: report the installed and the latest version, and write nothing.
+report_check() {
+  if [ -z "$previous" ] || [ "$(semver_cmp "$version" "$previous")" -gt 0 ]; then
+    update_available=true
+  else
+    update_available=false
+  fi
+  if [ "$json" = 1 ]; then
+    if [ -n "$previous" ]; then installed_json=$(json_str "$previous"); else installed_json=null; fi
+    if [ "$index_verified" = true ]; then
+      serial_json=$index_serial
+      expires_json=$(json_str "$index_expires")
+    else
+      serial_json=null
+      expires_json=null
+    fi
+    printf '{"ok": true, "action": "checked", "installed": %s, "latest": %s, "tag": %s, "update_available": %s, "index_verified": %s, "index_serial": %s, "index_expires": %s}\n' \
+      "$installed_json" "$(json_str "$version")" "$(json_str "$tag")" "$update_available" \
+      "$index_verified" "$serial_json" "$expires_json"
+    return
+  fi
+  if [ -z "$previous" ]; then
+    echo "oskac is not installed in $home. The latest release is $version."
+  elif [ "$update_available" = true ]; then
+    echo "oskac $previous is installed; the latest release is $version. To update, run the installer again."
+  elif [ "$previous" = "$version" ]; then
+    echo "oskac $previous is installed, and it is the latest release."
+  else
+    echo "oskac $previous is installed, which is newer than the latest release, $version."
+  fi
+  if [ "$index_verified" = true ]; then
+    echo "The latest release comes from the signed release index (serial $index_serial, expires $index_expires)."
+  else
+    echo "The latest release comes from $site/latest.json, which is not signed."
+  fi
+}
+
 main() {
   requested=
+  allow_downgrade=0
+  mode=
   while [ $# -gt 0 ]; do
     case $1 in
       --json) json=1 ;;
@@ -180,6 +854,11 @@ main() {
         requested=$2
         shift ;;
       --version=*) requested=${1#--version=} ;;
+      --allow-downgrade) allow_downgrade=1 ;;
+      --check | --uninstall)
+        [ -z "$mode" ] || [ "$mode" = "$1" ] ||
+          fail usage "$mode and $1 cannot be used together; pick one"
+        mode=$1 ;;
       -h | --help)
         usage
         exit 0 ;;
@@ -187,10 +866,26 @@ main() {
     esac
     shift
   done
+  # Install is the default mode; --check and --uninstall are the others.
+  # --version and --allow-downgrade belong to install alone.
+  if [ -n "$mode" ]; then
+    [ -z "$requested" ] || fail usage "--version cannot be used with $mode"
+    [ "$allow_downgrade" = 0 ] || fail usage "--allow-downgrade cannot be used with $mode"
+    if [ "$mode" = --uninstall ]; then
+      uninstall
+      return
+    fi
+  fi
+  [ "$allow_downgrade" = 0 ] || [ -n "$requested" ] ||
+    fail usage "--allow-downgrade needs --version naming the release to go back to"
 
   case $RELEASE_KEY in
     ssh-ed25519\ *) ;;
     *) fail no_signing_key "this installer has no pinned release key; download it from $DEFAULT_SITE_URL/install.sh" ;;
+  esac
+  case $INDEX_REQUIRED in
+    yes | no) ;;
+    *) fail no_signing_key "this installer was not pinned to say whether the release index is required; download it from $DEFAULT_SITE_URL/install.sh" ;;
   esac
 
   site=${OSKA_SITE_URL:-$DEFAULT_SITE_URL}
@@ -208,27 +903,64 @@ main() {
     is_tag "$tag" || fail usage "'$requested' is not a version like 0.1.0"
   fi
 
-  detect_platform
+  # --check only reads, so it needs no platform build or checksum tool.
+  if [ "$mode" != --check ]; then
+    detect_platform
+  fi
   need curl
   need ssh-keygen "OpenSSH 8.1 or newer, to verify the release signature"
-  if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+  if [ "$mode" != --check ] && ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
     need openssl "or sha256sum or shasum, to check the SHA-256 checksum"
   fi
 
-  tmp=$(mktemp -d 2>/dev/null || mktemp -d -t oska-install) ||
+  oska_paths install_failed
+  previous=$(previous_version)
+
+  # An explicit template, so the directory is under $TMPDIR (or /tmp) on
+  # every mktemp; BSD and GNU differ on where a bare `mktemp -d` goes.
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/oska-install.XXXXXXXX") ||
     fail install_failed "cannot create a temporary directory"
 
+  # The latest release, unless --version names one: from the signed index
+  # when this installer is pinned to require it, else from latest.json.
+  # With --version the index is not consulted, and the receipt keeps the
+  # serial it had.
+  index_verified=false
+  index_serial=
+  index_expires=
+  receipt_serial=$(serial_seen)
   if [ -z "$requested" ]; then
-    fetch "$site/latest.json" "$tmp/latest.json" ||
-      fail download_failed "cannot download $site/latest.json"
-    # The release fields of latest.json are top-level, so the first "tag" is
-    # the release's. Whatever it names is checked against the signature.
-    tag=$(tr ',{}' '[\n*]' <"$tmp/latest.json" |
-      sed -n 's/^[[:space:]]*"tag"[[:space:]]*:[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' |
-      head -n 1)
-    is_tag "$tag" || fail download_failed "$site/latest.json does not name a release"
+    if [ "$INDEX_REQUIRED" = yes ]; then
+      read_index
+      index_verified=true
+      receipt_serial=$index_serial
+    else
+      fetch "$site/latest.json" "$tmp/latest.json" ||
+        fail download_failed "cannot download $site/latest.json"
+      # The release fields of latest.json are top-level, so the first "tag"
+      # is the release's. Whatever it names is checked against the
+      # signature.
+      tag=$(json_value "$tmp/latest.json" tag)
+      is_tag "$tag" || fail download_failed "$site/latest.json does not name a release"
+    fi
   fi
   version=${tag#v}
+
+  if [ "$mode" = --check ]; then
+    report_check
+    return
+  fi
+
+  # The downgrade guard. An older release is installed only when it is
+  # named with --version and --allow-downgrade, so a stale latest.json, an
+  # old script or a re-run never moves an install back.
+  if [ -n "$previous" ] && [ "$(semver_cmp "$version" "$previous")" -lt 0 ]; then
+    if [ -z "$requested" ]; then
+      fail downgrade_refused "oskac $previous is installed, which is newer than the latest release, $version; nothing was installed (to go back, pass --version $version --allow-downgrade)"
+    elif [ "$allow_downgrade" = 0 ]; then
+      fail downgrade_refused "oskac $previous is installed, which is newer than $version; nothing was installed (to downgrade, add --allow-downgrade)"
+    fi
+  fi
 
   asset=oskac-$platform
   release=$site/releases/$tag
@@ -261,14 +993,12 @@ main() {
   [ "$actual" = "$expected" ] ||
     fail checksum_mismatch "$asset does not match its SHA-256 in SHA256SUMS; nothing was installed"
 
-  home=${OSKA_HOME:-$HOME/.oska}
-  bin_dir=$home/bin
-  target=$bin_dir/oskac
-  receipt=$home/version
-  previous=
-  if [ -f "$target" ] && [ -f "$receipt" ]; then
-    previous=$(head -n 1 "$receipt")
-  fi
+  printf '%s\n' "$RELEASE_KEY" >"$tmp/release.pub"
+  fingerprint=$(ssh-keygen -l -f "$tmp/release.pub" 2>/dev/null | awk '{print $2}')
+  case $fingerprint in
+    SHA256:*) ;;
+    *) fail install_failed "ssh-keygen cannot fingerprint the release key" ;;
+  esac
 
   mkdir -p "$bin_dir" || fail install_failed "cannot create $bin_dir"
   # Stage in a new directory only this user can write to, made next to the
@@ -283,16 +1013,18 @@ main() {
   reported=$("$staged" --version 2>/dev/null | head -n 1 | tr -d '\r') || reported=
   [ "$reported" = "oskac $version" ] ||
     fail version_mismatch "the $tag binary reports '$reported', not 'oskac $version'; nothing was installed"
-  mv -f "$staged" "$target" || fail install_failed "cannot write $target"
-  printf '%s\n' "$version" >"$receipt" || fail install_failed "cannot write $receipt"
+  prepare_records
+  commit_install
   cleanup
 
   if [ -z "$previous" ]; then
     action=installed
-  elif [ "$previous" = "$version" ]; then
-    action=reinstalled
   else
-    action=updated
+    case $(semver_cmp "$version" "$previous") in
+      1) action=updated ;;
+      0) action=reinstalled ;;
+      *) action=downgraded ;;
+    esac
   fi
   case ":${PATH:-}:" in
     *":$bin_dir:"*) on_path=true ;;
@@ -305,9 +1037,10 @@ main() {
     else
       previous_json=null
     fi
-    printf '{"ok": true, "action": %s, "version": %s, "tag": %s, "previous_version": %s, "platform": %s, "path": %s, "bin_dir": %s, "on_path": %s, "checksum_verified": true, "signature_verified": true}\n' \
+    printf '{"ok": true, "action": %s, "version": %s, "tag": %s, "previous_version": %s, "platform": %s, "path": %s, "bin_dir": %s, "on_path": %s, "checksum_verified": true, "signature_verified": true, "receipt": %s, "index_verified": %s, "index_serial": %s}\n' \
       "$(json_str "$action")" "$(json_str "$version")" "$(json_str "$tag")" "$previous_json" \
-      "$(json_str "$platform")" "$(json_str "$target")" "$(json_str "$bin_dir")" "$on_path"
+      "$(json_str "$platform")" "$(json_str "$target")" "$(json_str "$bin_dir")" "$on_path" \
+      "$(json_str "$receipt")" "$index_verified" "${index_serial:-null}"
     return
   fi
 
@@ -315,6 +1048,7 @@ main() {
     installed) echo "Installed oskac $version to $target." ;;
     reinstalled) echo "Reinstalled oskac $version to $target." ;;
     updated) echo "Updated oskac $previous to $version in $target." ;;
+    downgraded) echo "Downgraded oskac $previous to $version in $target." ;;
   esac
   echo "The checksum and the release signature were verified."
   if [ "$on_path" = false ]; then
@@ -324,5 +1058,13 @@ main() {
     echo "  export PATH=\"$bin_dir:\$PATH\""
   fi
 }
+
+# Remove the temp and staging directories however the run ends. On a
+# signal, clean up, then die of that same signal (on_signal).
+trap cleanup EXIT
+for sig in HUP INT TERM; do
+  # shellcheck disable=SC2064 # $sig is expanded now
+  trap "on_signal $sig" "$sig"
+done
 
 main "$@"
