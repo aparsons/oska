@@ -72,6 +72,9 @@ pub enum Resolution {
     Try(Option<Callee>),
     /// A function named as a value. Recorded at the name.
     FnValue(Callee),
+    /// A module constant, by name: lowered as a call of the constant's
+    /// own function (#83). Recorded at the name.
+    Const(String),
     /// `==` or `!=` through this `Eq` implementation, on a type that is
     /// not built in. Recorded at the comparison.
     EqualityVia(Callee),
@@ -301,6 +304,23 @@ pub fn module(
                         lowering.function(&mut program, name, f, &impl_generics, contracts)
                     });
                 }
+            }
+            ItemKind::Const(c) => {
+                // A constant is a function of no parameters that its
+                // uses call (#83): the same value on every call, since
+                // its initializer is pure.
+                let name = c.name.name.clone();
+                let function = Function {
+                    name: name.clone(),
+                    generics: Vec::new(),
+                    self_ty: None,
+                    receiver: false,
+                    params: Vec::new(),
+                    ret: lowering.convert(items.const_types.get(&name), c.name.span),
+                    contracts: Contracts::default(),
+                    body: lowering.expr(&c.value),
+                };
+                program.functions.insert(name, function);
             }
             ItemKind::Test(test) => program.tests.push(super::Test {
                 name: test_name(&test.name),
@@ -765,6 +785,11 @@ impl Lowering<'_> {
             Some(Resolution::FnValue(callee)) => ExprKind::FnValue {
                 callee: callee.clone(),
                 type_args: self.type_args_at(ident.span),
+            },
+            Some(Resolution::Const(name)) => ExprKind::Call {
+                callee: Callee::Function(name.clone()),
+                type_args: Vec::new(),
+                args: Vec::new(),
             },
             Some(Resolution::Construct(ctor)) => ExprKind::Construct {
                 ctor: ctor.clone(),

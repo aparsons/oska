@@ -164,6 +164,7 @@ pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mu
                 let ty = lower.ty(&c.ty);
                 let mut body = Body::new(src, items, lower, Ty::Unit, out);
                 body.check(&c.value, &ty);
+                body.finish();
             }
             ItemKind::Test(test) => {
                 // The report names a test `test "<name>"` (#150).
@@ -1088,6 +1089,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             self.typed_args(ident.span, callable.instance.clone());
             return callable.into_fn_type();
         }
+        if let Some(ty) = self.items.const_types.get(name).cloned() {
+            self.record(ident.span, Resolution::Const(name.to_string()));
+            return ty;
+        }
         if let Some(enum_name) = self.items.bare_variants.get(name).cloned() {
             return self.variant_value(&enum_name, name, ident.span);
         }
@@ -1112,6 +1117,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 .map(String::as_str)
                 .filter(|f| self.decls().qualified_only(f).is_none()),
         );
+        candidates.extend(self.items.const_types.keys().map(String::as_str));
         candidates.extend(self.items.bare_variants.keys().map(String::as_str));
         let name = &ident.name;
         let diagnostic = suggest::unknown(
