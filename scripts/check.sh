@@ -17,8 +17,9 @@
 #   3. the installer, release script, unsafe guard, intrinsic guard,
 #      workflow guard, temp-leak wrapper, rust-stable and pass stamp tests;
 #   4. shellcheck on the shell scripts, when shellcheck is installed;
-#   5. the pass stamp, written only when every step above passed, so the
-#      pre-push hook skips a repeat run on the same tree.
+#   5. the pass stamp, written only when every step above passed and the tree
+#      did not change meanwhile, so the pre-push hook skips a repeat run on
+#      the same tree.
 
 set -euo pipefail
 
@@ -30,6 +31,9 @@ cd "$(dirname "$0")/.."
 # set core.bare=true here).
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
   GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
+
+# The tree being checked, for the pass stamp written at the very end.
+checked_tree=$(scripts/pass-stamp/stamp.sh tree 2>/dev/null || true)
 
 # Rust may be installed for interactive shells only.
 if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
@@ -117,7 +121,7 @@ else
   echo "shellcheck not installed; skipped (CI runs it)"
 fi
 
-# Every step passed: record the tree (see scripts/pass-stamp/stamp.sh).
-scripts/pass-stamp/stamp.sh write
+# Every step passed: stamp the tree checked, if it did not change meanwhile.
+scripts/pass-stamp/stamp.sh write "$checked_tree"
 
 printf '\nAll checks passed.\n'

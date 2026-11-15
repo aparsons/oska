@@ -2,10 +2,15 @@
 # The pass stamp: a record that scripts/check.sh passed on a tree, so the
 # pre-push hook does not repeat a check that just passed.
 #
-#   scripts/pass-stamp/stamp.sh write
-#       Records the tree of the working tree (tracked and untracked files,
+#   scripts/pass-stamp/stamp.sh tree
+#       Prints the tree of the working tree (tracked and untracked files,
 #       not ignored ones: what `git add -A` would commit). scripts/check.sh
-#       calls this once every step has passed.
+#       takes it before its first step.
+#   scripts/pass-stamp/stamp.sh write TREE
+#       Records TREE, the tree that was checked, once every step has passed,
+#       but only if the working tree is still exactly TREE. If it changed
+#       during the run, or TREE is empty, it writes no stamp and says so.
+#       It never fails: the stamp is an optimisation, not part of the check.
 #   scripts/pass-stamp/stamp.sh covers REMOTE [URL] < ref lines
 #       Reads a pre-push hook's ref lines (githooks(5)) and exits 0 when the
 #       push needs no check: the working tree is clean, and every commit
@@ -37,10 +42,21 @@ working_tree() {
 }
 
 write() {
-  local file tree
+  local checked=${1:-} file current
+  if [ -z "$checked" ]; then
+    echo "pass stamp: not written, the tree was not known when the check began"
+    return 0
+  fi
+  if ! current=$(cd "$(git rev-parse --show-toplevel)" && working_tree) 2>/dev/null; then
+    echo "pass stamp: not written, the working tree could not be read"
+    return 0
+  fi
+  if [ "$current" != "$checked" ]; then
+    echo "pass stamp: not written, files changed while the check ran"
+    return 0
+  fi
   file=$(stamp_file)
-  tree=$(cd "$(git rev-parse --show-toplevel)" && working_tree)
-  printf '%s\n' "$tree" >"$file.tmp"
+  printf '%s\n' "$checked" >"$file.tmp"
   mv "$file.tmp" "$file"
 }
 
@@ -69,13 +85,17 @@ covers() {
 }
 
 case ${1:-} in
-write) write ;;
+tree) (cd "$(git rev-parse --show-toplevel)" && working_tree) ;;
+write)
+  shift
+  write "$@"
+  ;;
 covers)
   shift
   covers "$@"
   ;;
 *)
-  printf 'usage: %s write | covers REMOTE [URL] < ref lines\n' "$0" >&2
+  printf 'usage: %s tree | write TREE | covers REMOTE [URL] < ref lines\n' "$0" >&2
   exit 2
   ;;
 esac

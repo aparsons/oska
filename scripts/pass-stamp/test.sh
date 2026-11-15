@@ -42,9 +42,11 @@ export GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid
 fake_check='#!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+checked_tree=$(scripts/pass-stamp/stamp.sh tree)
 echo ran >>"$FAKE_CHECK_LOG"
+if [ "${FAKE_CHECK_MODE:-pass}" = edit ]; then echo edit >>file; fi
 if [ "${FAKE_CHECK_MODE:-pass}" = fail ]; then exit 1; fi
-scripts/pass-stamp/stamp.sh write
+scripts/pass-stamp/stamp.sh write "$checked_tree"
 '
 
 # new_clone NAME: a bare remote and a clone of it, both under $work, with
@@ -180,6 +182,22 @@ else
 fi
 push origin main
 expect "after a failed check the next push runs the check" 0 1
+
+# --- an edit while the check runs: no stamp ---------------------------------
+new_clone edited-during
+commit_change two
+(cd "$clone" && FAKE_CHECK_MODE=edit FAKE_CHECK_LOG=$log scripts/check.sh) >/dev/null 2>&1
+if stamp_exists; then bad "a check during which a file changed writes no stamp" "stamp file exists"; else ok "a check during which a file changed writes no stamp"; fi
+(cd "$clone" && git checkout -q -- file)
+push origin main
+expect "after an edit during the check the next push runs the check" 0 1
+
+new_clone edited-then-committed
+commit_change two
+(cd "$clone" && FAKE_CHECK_MODE=edit FAKE_CHECK_LOG=$log scripts/check.sh) >/dev/null 2>&1
+(cd "$clone" && git commit -q -a -m edited)
+push origin main
+expect "the edited tree was never stamped: the push runs the check" 0 1
 
 # --- several commits ---------------------------------------------------------
 new_clone several
