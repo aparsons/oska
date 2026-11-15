@@ -32,6 +32,11 @@ USAGE:
                                            every platform with a backend into
                                            the -o directory
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
+    oskac self info [--format=json]        Report this installation: version,
+                                           platform, executable, Oska home and
+                                           install receipt
+    oskac self uninstall [--format=json]   Remove this managed install, as the
+                                           installer's uninstall does
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ```
@@ -150,6 +155,14 @@ On aarch64 and x86_64 Linux, `run` and `test` compile the program as `build` doe
 - The executable is written to a new private directory under the temporary directory (`TMPDIR`, else `/tmp`): a random name, created with mode `0700`, never reused, so no other user can replace or read it. It is removed as soon as the program has started, or for `test` once every test has run.
 - A program the native backend cannot compile yet (`E0390`) runs on the interpreter, after one line on stderr that says so and why, such as `app.osk:3:13: note: running on the interpreter: ... (E0390)` (with `--format=json`, one JSON object with `"severity":"note"`). It is a checked program that the interpreter runs, so the output is the same, only slower. `--interpret` prints no note. A program the interpreter cannot run either, such as one that imports a module with no runtime (`E0371`), gets no note: both refuse it, and the interpreter's refusal is reported.
 - If the executable cannot be written or started, for example because the temporary directory is mounted `noexec`, the command fails with `E0391`. Set `TMPDIR` to another directory or use `--interpret`.
+
+## `oskac self`
+
+`oskac self info [--format=json]` and `oskac self uninstall [--format=json]` ask `oskac` about its own installation and remove it, without the installer. They read the [install receipt](install.md#the-install-receipt) in the Oska home (`~/.oska`, or `OSKA_HOME`), and `oskac` makes no network connection to do it. Any other `self` command is a usage error (exit code 2).
+
+`self info` prints the version, the platform, the canonical path of the running executable, the Oska home and the receipt. With `--format=json` it prints one object: `version`, `platform`, `executable`, `oska_home` (`null` with no home), `receipt` (the receipt as parsed, with every field it has, or `null` when there is none or it cannot be read), `receipt_error` (why it cannot be read, else `null`) and `receipt_matches`. `receipt_matches` is `true` when the receipt's `version` is this `oskac`'s and it lists this executable as a `binary`, by path. It exits with 0.
+
+`self uninstall` applies the rules of the installer's [`--uninstall`](install.md#uninstall) in this process: it removes only what the receipt lists, only files directly in the Oska home or its `bin` directory, checks every entry before it removes anything, then removes `bin` and the Oska home if they are left empty, and never touches `~/.config/oska`. Only a managed install uninstalls itself, so the receipt must match this `oskac` as `self info` reports. It compares path and version; it does not yet compare a file's SHA-256, so a file changed since it was installed is not kept. With `--format=json` it prints `{"ok":true,"action":"uninstalled","removed":[...],"kept":[...],"path_hint":null}`. A refusal removes nothing and exits with 1, printing `{"ok":false,"error":"<code>","message":"..."}` with `--format=json`: `not_installed` (no receipt, or no Oska home), `unsafe_path` (an entry outside the places the installer writes, in a `.config/oska` directory, with `..`, or through a symlink, or a receipt it cannot read) or `not_managed` (the receipt is of another version, or does not list this executable). It does not edit your `PATH`; `path_hint` says what to remove.
 
 ## `oskac --version` and `oskac --help`
 

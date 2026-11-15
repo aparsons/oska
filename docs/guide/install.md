@@ -204,6 +204,8 @@ With `--json` it prints:
 - `kept` lists what it left in place: a file that changed, the `bin` directory or the Oska home if something else is in it, and `~/.config/oska` if it exists.
 - `path_hint` says what to remove from your `PATH`, or is `null` when the `bin` directory is not on it.
 
+`oskac self uninstall` does the same from the installed `oskac`, with no installer: see [`oskac self`](cli-reference.md#oskac-self). `oskac self info` reports the install and whether the receipt matches it.
+
 An install made before the installers wrote a receipt has none, so `--uninstall` stops with `not_installed`. Delete `~/.oska` by hand: it holds `bin/oskac` (`bin\oskac.exe` on Windows) and a `version` file.
 
 ## Upgrading to v0.4.0
