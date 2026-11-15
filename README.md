@@ -32,10 +32,11 @@ fn main(io: Stdout) -> Result<(), IoError> {
 oskac check hello.osk       # type-check and print each function's authority
 oskac run hello.osk         # check, then run
 oskac test hello.osk        # run the file's test blocks
-oskac build hello.osk       # compile to a static aarch64 Linux executable, ./hello
+oskac build hello.osk       # compile to a static Linux executable, ./hello
+oskac build hello.osk --target linux-x86_64   # or for another platform (--target all: every one)
 ```
 
-`oskac build` works on every host: it writes the machine code and the executable itself, with no assembler, linker or C library. On aarch64 Linux (a Raspberry Pi, an arm64 server), `oskac run` and `oskac test` compile the program natively and run it, and `--interpret` selects the interpreter. Every other host runs programs on the interpreter until it has a native backend of its own. Both backends print the same output, reports and exit codes. See [platform support](docs/guide/cli-reference.md#platform-support).
+`oskac build` works on every host and for `--target linux-aarch64` or `--target linux-x86_64` from either: it writes the machine code and the executable itself, with no assembler, linker or C library, and the same program gives the same bytes on every host. On aarch64 and x86_64 Linux (a Raspberry Pi, an arm64 or x86_64 server, most CI machines), `oskac run` and `oskac test` compile the program natively and run it, and `--interpret` selects the interpreter. Every other host runs programs on the interpreter until it has a native backend of its own. Both backends print the same output, reports and exit codes. See [platform support](docs/guide/cli-reference.md#platform-support).
 
 ## A package
 
@@ -61,7 +62,7 @@ Run `oskac check`, `oskac run` and `oskac test` in the package directory. Items 
 | `crates/oska-syntax` | Lexer (and, soon, parser and AST) |
 | `crates/oska-check` | Type checker and authority report (`oskac check`) |
 | `crates/oska-run` | Interpreter (`oskac run --interpret`, and `oskac run` on hosts with no native backend) and its test runner |
-| `crates/oska-native` | Native backend: aarch64 Linux executables (`oskac build`, and `oskac run` and `oskac test` on aarch64 Linux), with the runtime `std.rt` in Oska |
+| `crates/oska-native` | Native backend: aarch64 and x86_64 Linux executables (`oskac build`, and `oskac run` and `oskac test` on aarch64 and x86_64 Linux), with the runtime `std.rt` in Oska |
 | `crates/oska-sys` | The only crate with `unsafe`: the interpreter's confined filesystem calls |
 | `examples/` | Example `.osk` programs and a multi-module package |
 | `docs/guide/` | Task guides: [quickstart](docs/guide/quickstart.md), [language tour](docs/guide/language-tour.md), [CLI reference](docs/guide/cli-reference.md), [agent guide](docs/guide/agent-guide.md), and more |
