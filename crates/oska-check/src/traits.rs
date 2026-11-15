@@ -8,7 +8,7 @@ use oska_syntax::{Diagnostic, Edit, Span};
 
 use crate::codes;
 use crate::collect::Decls;
-use crate::items::{FnSig, Items, Lower, Receiver};
+use crate::items::{Bound, FnSig, Items, Lower, Receiver};
 use crate::ty::{Trust, Ty};
 
 pub fn module(
@@ -86,23 +86,70 @@ pub fn module(
                 format!("this `impl {trait_name}` is missing the required method(s) {listed}"),
                 trait_ref.span,
             );
-            // A stub can be written out unless a method has generics of
-            // its own, whose bounds the signature does not carry.
-            if missing.iter().all(|sig| sig.generics.is_empty()) {
-                let stubs: Vec<FnSig> = missing
-                    .iter()
-                    .map(|sig| info.method_for(sig, &target, &args, None))
-                    .collect();
-                if let Some(edit) = insert_stubs(src, item.span, &stubs) {
-                    diagnostic = diagnostic.with_fix(
-                        "add the missing method(s), with `todo()` bodies",
-                        vec![edit],
-                    );
-                }
+            // The stub copies each method's generic parameters and their
+            // bounds from the trait, so it compiles as written (#46).
+            let impl_generics: Vec<String> =
+                imp.generics.iter().map(|g| g.name.name.clone()).collect();
+            let stubs: Vec<FnSig> = missing
+                .iter()
+                .map(|sig| {
+                    stub_signature(info.method_for(sig, &target, &args, None), &impl_generics)
+                })
+                .collect();
+            if let Some(edit) = insert_stubs(src, item.span, &stubs) {
+                diagnostic = diagnostic.with_fix(
+                    "add the missing method(s), with `todo()` bodies",
+                    vec![edit],
+                );
             }
             diagnostics.push(diagnostic);
         }
     }
+}
+
+/// `sig` as a stub in an `impl` that has the generic parameters
+/// `impl_generics`: a method generic of the same name would shadow the
+/// impl's own in the types `Self` and the trait's arguments were replaced
+/// by, so it is renamed. Only the method's own generics are kept, with the
+/// bounds on them.
+fn stub_signature(mut sig: FnSig, impl_generics: &[String]) -> FnSig {
+    let mut taken: Vec<String> = impl_generics.to_vec();
+    taken.extend(sig.generics.iter().cloned());
+    let mut rename: Vec<(String, Ty)> = Vec::new();
+    let mut generics = Vec::new();
+    for name in &sig.generics {
+        if !impl_generics.contains(name) {
+            generics.push(name.clone());
+            continue;
+        }
+        let fresh = (2..)
+            .map(|n| format!("{name}{n}"))
+            .find(|candidate| !taken.contains(candidate))
+            .expect("some numbered name is free");
+        taken.push(fresh.clone());
+        rename.push((name.clone(), Ty::Param(fresh.clone())));
+        generics.push(fresh);
+    }
+    let renamed = |param: &str| match rename.iter().find(|(from, _)| from == param) {
+        Some((_, Ty::Param(to))) => to.clone(),
+        _ => param.to_string(),
+    };
+    sig.bounds = sig
+        .bounds
+        .iter()
+        .filter(|b| sig.generics.contains(&b.param))
+        .map(|b| Bound {
+            param: renamed(&b.param),
+            trait_name: b.trait_name.clone(),
+            args: b.args.iter().map(|a| a.substitute(&rename)).collect(),
+        })
+        .collect();
+    for (_, ty) in &mut sig.params {
+        *ty = ty.substitute(&rename);
+    }
+    sig.ret = sig.ret.substitute(&rename);
+    sig.generics = generics;
+    sig
 }
 
 /// An edit that adds a `todo()` stub for each of `sigs` before the
@@ -246,5 +293,43 @@ fn render(sig: &FnSig) -> String {
     } else {
         format!(" -> {}", sig.ret)
     };
-    format!("fn {}({}){ret}", sig.name, params.join(", "))
+    format!(
+        "fn {}{}({}){ret}",
+        sig.name,
+        render_generics(sig),
+        params.join(", ")
+    )
+}
+
+/// The generic parameters of `sig` with their bounds, as `<A, B: Display
+/// + Eq>`, or nothing when it has none.
+fn render_generics(sig: &FnSig) -> String {
+    if sig.generics.is_empty() {
+        return String::new();
+    }
+    let params: Vec<String> = sig
+        .generics
+        .iter()
+        .map(|name| {
+            let bounds: Vec<String> = sig
+                .bounds
+                .iter()
+                .filter(|b| &b.param == name)
+                .map(|b| {
+                    if b.args.is_empty() {
+                        b.trait_name.clone()
+                    } else {
+                        let args: Vec<String> = b.args.iter().map(Ty::to_string).collect();
+                        format!("{}<{}>", b.trait_name, args.join(", "))
+                    }
+                })
+                .collect();
+            if bounds.is_empty() {
+                name.clone()
+            } else {
+                format!("{name}: {}", bounds.join(" + "))
+            }
+        })
+        .collect();
+    format!("<{}>", params.join(", "))
 }
