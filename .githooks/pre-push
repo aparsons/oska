@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # Refuse a push unless every check passes. Enable once per clone with:
 #   git config core.hooksPath .githooks
-# Pushing a tag or deleting a branch also runs it; `git push --no-verify`
-# skips it in an emergency.
+# Pushing a tag or deleting a branch also goes through it. The check is
+# skipped, and nothing else, when scripts/check.sh already passed on exactly
+# the tree being pushed (scripts/pass-stamp/stamp.sh), so `--no-verify` is
+# not needed.
 set -euo pipefail
-exec "$(git rev-parse --show-toplevel)/scripts/check.sh"
+root=$(git rev-parse --show-toplevel)
+if "$root/scripts/pass-stamp/stamp.sh" covers "$@"; then
+  echo "pre-push: scripts/check.sh already passed on this tree; skipping"
+  exit 0
+fi
+exec "$root/scripts/check.sh"
