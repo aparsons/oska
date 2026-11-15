@@ -42,7 +42,7 @@ Nothing in the repo can check these settings, so verify them before a release.
 
 ## Checking a published release
 
-- `curl -fsS https://oskalang.dev/latest.json` reports `"version": "X.Y.Z"` and `"tag": "vX.Y.Z"`.
+- `curl -fsS https://oskalang.dev/latest.json` reports `"version": "X.Y.Z"`, `"tag": "vX.Y.Z"` and the key's `"signing_key_fingerprint"`.
 - `/releases/vX.Y.Z/` serves `SHA256SUMS`, `SHA256SUMS.sig` and the 5 binaries.
 - Verify the signature against the committed key:
   ```
@@ -65,6 +65,6 @@ Nothing in the repo can check these settings, so verify them before a release.
   3. Commit its public half as `site/oska-release.pub`. The Pages build then publishes it and re-pins the installers.
   4. Shred the plaintext.
   5. Make a new encrypted backup.
-  6. Announce the new fingerprint, and update it in this file.
+  6. Announce the new fingerprint, and update it in this file, `SECURITY.md` and `docs/guide/install.md`. `crates/oska-run/tests/security_policy.rs` fails until every copy matches the committed key. `latest.json`'s `signing_key_fingerprint` is computed from the key by `stage-site.sh`.
 
   Releases already published stay signed by the old key. `stage-site.sh` checks every GitHub Release against the current key and stops the whole Pages build on the first one that fails. So before committing the new public key, re-sign each old release's `SHA256SUMS` with the new key, or delete those GitHub Releases.
