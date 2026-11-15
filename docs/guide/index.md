@@ -1,6 +1,6 @@
 # Oska guides
 
-Task-oriented guides for the `oskac` toolchain. Oska is pre-alpha. The latest release is **v0.3.0**, and these pages track `main`, which can be ahead of it: the [install guide](install.md) lists what changed in each release. The programs and outputs on these pages are checked against the real toolchain by `cargo test`.
+Task-oriented guides for the `oskac` toolchain. Oska is pre-alpha. The latest release is **v0.4.0**, and these pages track `main`, which can be ahead of it: the [install guide](install.md) lists what changed in each release. The programs and outputs on these pages are checked against the real toolchain by `cargo test`.
 
 ## Start here
 
