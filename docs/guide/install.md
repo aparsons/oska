@@ -1,6 +1,6 @@
 # Install
 
-Oska is pre-alpha. The latest release is **v0.3.0**. You can install `oskac`, the compiler and runner, from a signed binary with a one-line installer, or build it from source.
+Oska is pre-alpha. The latest release is **v0.4.0**. You can install `oskac`, the compiler and runner, from a signed binary with a one-line installer, or build it from source.
 
 ## Build from source
 
@@ -101,6 +101,14 @@ Re-run the installer. It installs the latest release over the old one, and with 
 ### Uninstall
 
 Delete `~/.oska`, which holds `bin/oskac` and a `version` file recording what the installer put there.
+
+## Upgrading to v0.4.0
+
+v0.4.0 makes x86_64 Linux the second platform with a native backend, and lets `oskac build` target either Linux platform from any host. Programs keep their meaning; these are the changes you can see:
+
+- **`run`, `test` and `build` are native on x86_64 Linux**, as on aarch64 Linux. Before, `run` and `test` used the interpreter there, tens of times slower on program logic, and `build` could only write an aarch64 Linux executable. A program the native backend cannot compile yet still runs on the interpreter after the one-line `E0390` note, and `--interpret` still selects the interpreter. See [platform support](cli-reference.md#platform-support).
+- **`oskac build` writes an executable for the host's platform**, so on x86_64 Linux it writes an x86_64 executable, where v0.3.0 wrote an aarch64 one. To get the old output from an x86_64 Linux host, build with `--target linux-aarch64`. On macOS and Windows, which have no backend yet, the default is still `linux-aarch64`.
+- **`oskac build --target <platform>`** builds for `linux-aarch64` or `linux-x86_64` from any host, and `--target all` writes both, as `<name>-<platform>`, into the `-o` directory. An unknown platform is `E0393` and a platform with no backend yet (macOS in v0.5.0, Windows in v0.6.0) is `E0394`; both exit with 2 and write nothing. The same program built by the same `oskac` gives the same bytes on every host. See [`oskac build`](cli-reference.md#oskac-build).
 
 ## Upgrading to v0.3.0
 
