@@ -1,8 +1,11 @@
 name: CI
 
+# A push runs on main and on the ticket and review-fix branches, which are
+# merged into an integration branch before any pull request, so a pull
+# request's head is not tested twice (as windows.yml and confinement.yml).
 on:
   push:
-    branches: [main]
+    branches: [main, "ticket/**", "review-fixes-*"]
   pull_request:
 
 permissions:
