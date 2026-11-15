@@ -40,6 +40,7 @@ Things to notice:
 - `"best is {best}"` interpolates. A `{...}` hole holds only a name or a field path such as `{user.name}`. Compute anything else with `let` first.
 - Arguments can be labeled, as in `add(a: 3, b: 4)`. Labels are optional, and the checker verifies them against the parameter names.
 - `Int` is a 64-bit signed integer. Overflow is a **panic**, never a silent wrap.
+- A module-level `const NAME: T = expr` is in scope in every function, method, and test of the module, with the type it declares. A wrong-typed initializer is a type error, as for `let`.
 
 ## Structs, methods, and mutation
 
@@ -343,7 +344,6 @@ A `test "name" { ... }` item is a top-level test with the built-in value `t`. Se
 
 These are gaps in this release, so do not write programs that depend on them:
 
-- A module-level `const` declares and checks, but its name cannot be used yet: the checker reports `E0221` for any reference to it.
 - `Net`, `std.sql`, and `std.proc` check but do not run (`E0370`, `E0371`).
 - Packages have no dependencies yet, no re-exports and no renaming of imports. See [packages and modules](packages.md).
 - No formatter or package manager.

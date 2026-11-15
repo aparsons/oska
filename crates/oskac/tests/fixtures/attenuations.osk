@@ -10,6 +10,13 @@ fn output(write: FsWrite) -> DirWrite {
     write.restrict_to("_site")
 }
 
+// A root named by a module constant is the constant's text (#83).
+const SITE: String = "_site"
+
+fn built(write: FsWrite) -> DirWrite {
+    write.restrict_to(SITE)
+}
+
 // The root is only known when the program runs.
 fn named(read: FsRead, name: String) -> DirRead {
     read.restrict_to(name)

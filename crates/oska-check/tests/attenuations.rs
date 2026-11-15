@@ -68,8 +68,6 @@ fn a_literal_root_is_listed_with_its_text() {
 
 #[test]
 fn a_constant_root_is_listed_with_the_constants_text() {
-    // A module constant cannot be named in a body yet (#83, E0221), but
-    // the report still resolves it, so it is right the moment #83 lands.
     let src = "const SITE: String = \"_site\"\n\
                fn out(write: FsWrite) -> DirWrite {\n    write.restrict_to(SITE)\n}";
     assert_eq!(
