@@ -49,6 +49,8 @@ Next, the [quickstart](guide/quickstart.md) writes, checks, runs and tests a pro
 
 Not everything that checks runs yet. [What works today](guide/what-works-today.md) lists each feature: whether `oskac check` accepts it, whether it runs on the interpreter and natively, and on which platforms.
 
+`std.sql`, `std.proc` and the network capabilities (`Net`) check but do not run yet: `oskac check` enforces their rules, and `oskac run`, `oskac test` and `oskac build` refuse a program that uses them. [The table](guide/what-works-today.md) lists them with the code `oskac` refuses each with.
+
 ## Security
 
 To report a vulnerability, see the [security policy](../SECURITY.md). It also has the release key's fingerprint, to check the key the installers use.

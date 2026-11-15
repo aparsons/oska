@@ -457,6 +457,42 @@ fn the_home_page_and_the_readme_link_what_works_today_and_claim_no_logging_api()
     }
 }
 
+#[test]
+fn the_home_page_itself_says_which_features_check_but_do_not_run() {
+    let home = read("docs/index.md");
+    let sentence = home
+        .split(". ")
+        .find(|s| s.contains("check but do not run"))
+        .unwrap_or_else(|| panic!("docs/index.md should say what checks but does not run"));
+    // Every feature the table says checks but does not run is named,
+    // by the first code span of its row, so the home page cannot fall
+    // behind the table.
+    let mut named = 0;
+    for row in table_rows()
+        .iter()
+        .filter(|row| row.checks == "Yes" && row.interpreter.starts_with("No"))
+    {
+        let name = row
+            .feature
+            .split('`')
+            .nth(1)
+            .unwrap_or_else(|| panic!("{:?} has no code span", row.feature));
+        assert!(
+            sentence.contains(&format!("`{name}`")),
+            "docs/index.md does not say that `{name}` checks but does not run: {sentence}"
+        );
+        named += 1;
+    }
+    assert!(
+        named >= 3,
+        "the table lists {named} features that do not run"
+    );
+    assert!(
+        home.contains("](guide/what-works-today.md)"),
+        "docs/index.md should link the table"
+    );
+}
+
 /// The `## ` headings of a page, in order.
 fn sections(page: &str) -> Vec<String> {
     let mut fenced = false;
