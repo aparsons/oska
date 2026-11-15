@@ -4,9 +4,9 @@
 // Run `oskac check site/build.osk` for its authority report. `main` is
 // handed the filesystem read-only and write-only, and narrows each before
 // it reads or writes anything: reading to `docs/` and to the files the
-// site needs beside it (the README, the glossary, `Cargo.toml` for the
-// version, the stylesheet, and the search script), each restricted to on
-// its own, and writing to `_site/`, which it creates.
+// site needs beside it (the README, the security policy, the glossary,
+// `Cargo.toml` for the version, the stylesheet, and the search script),
+// each restricted to on its own, and writing to `_site/`, which it creates.
 //
 // Every page is built with `std.html`. Text from the repository is
 // untrusted, and goes into a page only through `html.text`, which escapes
@@ -41,6 +41,9 @@ use std.html
 cap struct Sources {
     docs: DirRead,
     readme: FileRead,
+    // `SECURITY.md`: the security policy, published as `security.html`.
+    // Without it there is no security page.
+    security: FileRead,
     glossary: FileRead,
     style: FileRead,
     manifest: FileRead,
@@ -57,6 +60,7 @@ fn main(read: FsRead, write: FsWrite) -> Result<(), IoError> {
     let sources = Sources(
         docs: read.restrict_to("docs"),
         readme: read.restrict_to_file("README.md"),
+        security: read.restrict_to_file("SECURITY.md"),
         glossary: read.restrict_to_file("GLOSSARY.md"),
         style: read.restrict_to_file("site/style.css"),
         manifest: read.restrict_to_file("Cargo.toml"),
@@ -176,12 +180,16 @@ fn has_doc(all: Site, page: Untrusted<String>) -> Bool {
     false
 }
 
-// The README, the glossary, and every `.md` file in `docs/` and in its
+// The README, the security policy if there is one, the glossary, and every `.md` file in `docs/` and in its
 // subdirectories one level down, except those `unpublished` names.
 fn gather(sources: Sources) -> Result<Site, IoError> {
     var docs: List<Doc> = List.new()
     let readme = sources.readme.read_to_string()?
     docs.push(new_doc("README.md", "index.html", "", readme))
+    match sources.security.read_to_string() {
+        Ok(policy) => docs.push(new_doc("SECURITY.md", "security.html", "", policy))
+        Err(_) => {}
+    }
     let glossary = sources.glossary.read_to_string()?
     var glossary_doc = new_doc("GLOSSARY.md", "glossary.html", "", glossary)
     glossary_doc.title = "Glossary"
@@ -729,6 +737,9 @@ fn navigation(all: Site, current: Untrusted<String>) -> html.Html {
     }
     if has_catalog(all) {
         items = items.concat(nav_item("codes/index.html", "Codes", current))
+    }
+    if has_doc(all, "security.html") {
+        items = items.concat(nav_item("security.html", "Security", current))
     }
     for section in all.sections {
         let page = "{section.dir}/index.html"
