@@ -15,9 +15,12 @@
 #      private temporary directory (scripts/temp-leak/run.sh) and fails,
 #      naming the paths, if a test leaves anything in it;
 #   3. the installer, release script, unsafe guard, intrinsic guard,
-#      workflow guard, kill guard, temp-leak wrapper, rust-stable and
-#      cross-build manifest tests;
-#   4. shellcheck on the shell scripts, when shellcheck is installed.
+#      workflow guard, kill guard, temp-leak wrapper, rust-stable,
+#      cross-build manifest and pass stamp tests;
+#   4. shellcheck on the shell scripts, when shellcheck is installed;
+#   5. the pass stamp, written only when every step above passed and the tree
+#      did not change meanwhile, so the pre-push hook skips a repeat run on
+#      the same tree.
 
 set -euo pipefail
 
@@ -29,6 +32,9 @@ cd "$(dirname "$0")/.."
 # set core.bare=true here).
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
   GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
+
+# The tree being checked, for the pass stamp written at the very end.
+checked_tree=$(scripts/pass-stamp/stamp.sh tree 2>/dev/null || true)
 
 # Rust may be installed for interactive shells only.
 if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
@@ -114,11 +120,17 @@ bash scripts/rust-stable/test.sh
 step "cross-build manifest tests"
 bash scripts/cross-build/test.sh
 
+step "pass stamp tests"
+bash scripts/pass-stamp/test.sh
+
 step "shellcheck"
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck -S warning scripts/*.sh scripts/*/*.sh site/agent-setup/*.sh .githooks/pre-push
 else
   echo "shellcheck not installed; skipped (CI runs it)"
 fi
+
+# Every step passed: stamp the tree checked, if it did not change meanwhile.
+scripts/pass-stamp/stamp.sh write "$checked_tree"
 
 printf '\nAll checks passed.\n'
