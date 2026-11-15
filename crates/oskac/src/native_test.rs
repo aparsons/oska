@@ -1,5 +1,6 @@
-//! `oskac test` on aarch64 Linux: a program's `test` blocks run as native
-//! code (`--interpret` selects the interpreter; see `native.rs`).
+//! `oskac test` on aarch64 and x86_64 Linux: a program's `test` blocks
+//! run as native code for the host (`--interpret` selects the
+//! interpreter; see `native.rs`).
 //!
 //! The program's tests compile into one test executable
 //! (`oska_native::build_tests`), written to a private temporary

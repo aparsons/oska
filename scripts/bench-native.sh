@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Benchmark the native backend against the interpreter, on the machine it
-# runs on: maintainer-run, on the Raspberry Pi 5 (aarch64 Linux), and not
-# part of scripts/check.sh. The results are recorded in docs/design.md
-# ("Native backend benchmark").
+# runs on, aarch64 or x86_64 Linux: maintainer-run on the Raspberry Pi 5
+# (aarch64), and on demand in CI (.github/workflows/bench.yml), which is
+# where the x86_64 figures come from. Not part of scripts/check.sh. The
+# results are recorded in docs/design.md ("Native backend benchmark").
 #
 #   scripts/bench-native.sh [runs]
 #
@@ -25,10 +26,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-if [ "$(uname -sm)" != "Linux aarch64" ]; then
-  echo "bench-native.sh: native executables run only on aarch64 Linux" >&2
+case "$(uname -sm)" in
+"Linux aarch64" | "Linux x86_64") ;;
+*)
+  echo "bench-native.sh: native executables run only on aarch64 and x86_64 Linux" >&2
   exit 1
-fi
+  ;;
+esac
 if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
   PATH="$HOME/.cargo/bin:$PATH"
 fi

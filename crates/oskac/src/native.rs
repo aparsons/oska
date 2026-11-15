@@ -1,7 +1,8 @@
-//! Native by default: on aarch64 Linux, `oskac run` and `oskac test`
-//! compile the checked program with the native backend (`oska-native`)
-//! and run the executable; `--interpret` selects the interpreter, and
-//! every other host keeps it until it has a backend of its own.
+//! Native by default: on aarch64 and x86_64 Linux, `oskac run` and
+//! `oskac test` compile the checked program for the host with the native
+//! backend (`oska-native`) and run the executable; `--interpret` selects
+//! the interpreter, and every other host keeps it until it has a backend
+//! of its own.
 //!
 //! The executable is written to a private temporary directory: a new
 //! directory with a random name under the temporary directory (`TMPDIR`),
@@ -29,9 +30,11 @@ use oska_syntax::{Diagnostic, Span};
 use crate::{Flags, Places};
 
 /// The target `oskac run` and `oskac test` compile for on this host,
-/// when they run natively here: aarch64 Linux.
+/// when they run natively here: aarch64 or x86_64 Linux.
 const NATIVE_HOST: Option<Target> = if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
     Some(Target::LinuxAarch64)
+} else if cfg!(all(target_arch = "x86_64", target_os = "linux")) {
+    Some(Target::LinuxX86_64)
 } else {
     None
 };

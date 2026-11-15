@@ -37,9 +37,9 @@ USAGE:
     oskac run [path] [--format=json] [--interpret] [-- args...]
                                            Check a source file or package and,
                                            if it has no diagnostics, run it:
-                                           natively on aarch64 Linux, on the
-                                           interpreter elsewhere or with
-                                           --interpret
+                                           natively on aarch64 and x86_64
+                                           Linux, on the interpreter elsewhere
+                                           or with --interpret
     oskac test [path] [--format=json] [--integration] [--interpret]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
