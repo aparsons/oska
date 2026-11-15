@@ -540,6 +540,29 @@ test_sign_index_after_a_rotation_continues_the_serial_of_the_old_key() {
   "$here/verify-index.sh" out key.pub >/dev/null || fail "the new index does not verify with the new key"
 }
 
+# The largest serial is 999999999999999 (15 digits), the same in
+# verify-index.sh, sign-index.sh and both installers.
+test_the_largest_serial_is_999999999999999_everywhere() {
+  throwaway_key key
+  hand_index top 999999999999999 v1.2.3
+  "$here/verify-index.sh" top key.pub >/dev/null || fail "verify-index.sh refuses serial 999999999999999"
+  hand_index over 1000000000000000 v1.2.3
+  if "$here/verify-index.sh" over key.pub >/dev/null 2>&1; then
+    fail "verify-index.sh accepts serial 1000000000000000"
+  fi
+  hand_index site 999999999999998 v1.2.3
+  mkdir out
+  "$here/sign-index.sh" key key.pub "file://$PWD/site" out >/dev/null
+  [ "$(jq -r .serial out/release-index.json)" = 999999999999999 ] || fail "did not sign serial 999999999999999"
+  rm -f out/*
+  hand_index site 999999999999999 v1.2.3
+  if "$here/sign-index.sh" key key.pub "file://$PWD/site" out >/dev/null 2>err; then
+    fail "signed a serial above 999999999999999"
+  fi
+  grep -q 'largest serial' err || fail "error does not say why: $(cat err)"
+  [ -z "$(ls -A out)" ] || fail "wrote $(ls -A out)"
+}
+
 test_sign_index_with_no_stable_release_signs_nothing() {
   throwaway_key key
   mkdir out
@@ -633,17 +656,44 @@ test_stage_site_refuses_an_index_that_does_not_verify() {
   done
 }
 
-test_stage_site_refuses_an_expired_index_but_not_an_expired_older_one() {
+# An expired index does not stop the Pages build, so the rest of the site
+# still deploys. It is published, loudly, and the installers stay pinned to
+# require it: they refuse it (stale_index), so only "install the latest"
+# fails, and a named release still installs.
+test_stage_site_publishes_an_expired_index_with_a_warning() {
+  working_builds 1.2.3
+  throwaway_key key
+  "$here/assemble.sh" v1.2.3 builds out
+  "$here/sign.sh" out/v1.2.3 key key.pub
+  hand_index out/v1.2.3 5 v1.2.3 2026-01-03T00:00:00Z
+  mkdir site
+  OSKA_SITE_URL="file://$PWD/site" "$here/stage-site.sh" out site key.pub >log ||
+    fail "the build stopped on an expired index: $(cat log)"
+  grep -q '^::warning::.*release index.*expired' log || fail "no warning annotation: $(cat log)"
+  cmp out/v1.2.3/release-index.json site/release-index.json || fail "did not publish the index"
+  [ "$(index_pin)" = yes ] || fail "installers are no longer pinned to require the index"
+  local status=0
+  OSKA_HOME="$PWD/oska" OSKA_SITE_URL="file://$PWD/site" sh -s -- --json <site/install.sh >latest.json || status=$?
+  [ "$status" = 1 ] && [ "$(jq -r .error latest.json)" = stale_index ] ||
+    fail "installing the latest did not fail with stale_index: $(cat latest.json)"
+  OSKA_HOME="$PWD/oska" OSKA_SITE_URL="file://$PWD/site" sh -s -- --json --version 1.2.3 <site/install.sh >named.json ||
+    fail "a named release did not install: $(cat named.json)"
+}
+
+# Still refused: an index that is tampered with, unsigned, or not the
+# highest serial (an older one is only ever superseded, never published).
+test_stage_site_publishes_the_highest_serial_even_when_older_ones_expired() {
   releases_with_indexes
   # v1.2.3's serial-4 index expired long ago; serial 5 supersedes it.
-  "$here/stage-site.sh" out site key.pub
+  "$here/stage-site.sh" out site key.pub >log
+  cmp out/v1.3.0/release-index.json site/release-index.json || fail "did not publish serial 5"
+  if grep -q 'expired' log; then fail "warned about a superseded index: $(cat log)"; fi
   rm -rf site
   mkdir site
-  hand_index out/v1.3.0 5 v1.3.0 2026-01-03T00:00:00Z
+  rm out/v1.2.3/release-index.json.sig
   if "$here/stage-site.sh" out site key.pub 2>err; then
-    fail "staged an expired index"
+    fail "staged a site with an unsigned index"
   fi
-  grep -q 'expired' err || fail "error does not say it expired: $(cat err)"
 }
 
 test_stage_site_warns_when_the_index_expires_within_30_days() {

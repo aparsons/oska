@@ -15,7 +15,9 @@
 #     --previous-key after a key rotation; one that does not verify stops
 #     the signing, as signing over it could lower the serial;
 #   - the new serial is the published serial + 1, or 1 if none is
-#     published (a 404 at an https:// URL, or no file at a file:// URL);
+#     published (a 404 at an https:// URL, or no file at a file:// URL),
+#     and never above 999999999999999, the largest serial verify-index.sh
+#     and the installers accept;
 #   - `latest` is the published index's, or --tag if that is a stable
 #     release (vX.Y.Z) newer than it, so it never moves back;
 #   - `issued` is now and `expires` is 90 days later.
@@ -121,6 +123,9 @@ if [ -z "$latest" ]; then
   echo "sign-index.sh: no stable release to name; no index signed"
   exit 0
 fi
+
+[ "$serial" -lt 999999999999999 ] ||
+  die "the published index has serial $serial, the largest serial there is; no index can follow it"
 
 now=$(date -u +%s)
 jq -n --argjson serial $((serial + 1)) \

@@ -63,7 +63,7 @@ A failed run prints `{"ok": false, "error": "<code>", "message": "..."}` and exi
 | `error` | Meaning |
 | --- | --- |
 | `usage` | An unknown option, a `--version` that is not a version, `--allow-downgrade` without `--version`, or options that cannot be used together, such as `--uninstall` with `--version`. |
-| `no_signing_key` | The installer has no release key built in. Download it again from oskalang.dev. |
+| `no_signing_key` | The installer was not pinned when the site was built: it has no release key built in, or no valid setting for whether the release index is required. Download it again from oskalang.dev. |
 | `insecure_url` | `OSKA_SITE_URL` is not an `https://` URL, or a download was redirected to one that is not. |
 | `unsupported_platform` | There is no build for this OS or CPU. |
 | `unsupported_libc` | Linux only: the C library is not glibc 2.35 or newer (for example musl, as on Alpine). |
@@ -76,9 +76,9 @@ A failed run prints `{"ok": false, "error": "<code>", "message": "..."}` and exi
 | `bad_index` | The release index is not signed by the release key in the `oska-index` namespace, has no signature, or is not in the index format. |
 | `stale_index` | The release index has expired. A named release still installs with `--version`. |
 | `rollback_refused` | The release index's serial is lower than the one this install already accepted, recorded in the receipt. |
-| `install_failed` | The binary or the receipt could not be written into place. |
-| `not_installed` | `--uninstall` found no install receipt in the Oska home. Nothing was removed. |
-| `unsafe_path` | `--uninstall` found a receipt entry outside the places the installer writes, reached through a symlink, or containing `..`, or a receipt it cannot read. Nothing was removed. |
+| `install_failed` | The binary or the receipt could not be written into place, or neither `OSKA_HOME` nor a home directory is set. |
+| `not_installed` | `--uninstall` found no install receipt in the Oska home, or there is no Oska home because neither `OSKA_HOME` nor a home directory is set. Nothing was removed. |
+| `unsafe_path` | `--uninstall` found a receipt entry outside the places the installer writes, in a `.config/oska` directory, reached through a symlink anywhere in its path, or containing `..`, or a receipt it cannot read. Nothing was removed. |
 
 The binaries are published on oskalang.dev, together with `SHA256SUMS` and its signature, for Linux x86_64 and aarch64, macOS x86_64 and aarch64, and Windows x86_64. The Linux binaries are built on Ubuntu 22.04 and need glibc 2.35 or newer. They do not run on an older glibc or on musl systems such as Alpine; there the installer stops with `unsupported_libc`, and you can build from source instead.
 
@@ -111,7 +111,7 @@ Each install writes `receipt.json` into the Oska home (`~/.oska`, or `OSKA_HOME`
 - `files` lists every file the installer wrote, with its SHA-256 where the content is the installer's own.
 - The installer also still writes the one-line `version` file, for one more release, so that tools that read it keep working.
 
-The receipt is advisory. The installer never trusts it to verify anything: every install checks the signature, the signed tag line, the checksum and the binary's version, whatever the receipt says. It only decides which version counts as installed, for the downgrade guard and `previous_version`, what `--uninstall` may remove, and records in `index_serial` the highest release index serial accepted, so that an older index is refused. When a receipt and a `version` file disagree, the receipt wins.
+The receipt is advisory. The installer never trusts it to verify anything: every install checks the signature, the signed tag line, the checksum and the binary's version, whatever the receipt says. It only decides which version counts as installed, for the downgrade guard and `previous_version`, what `--uninstall` may remove, and records in `index_serial` the highest release index serial accepted, so that an older index is refused. When a receipt and a `version` file disagree, the receipt wins, but only while it describes the installed `oskac`: its `sha256` must be the binary's. A receipt that does not, because `oskac` was replaced by hand or an install was killed as it moved the files into place, is not believed, and the `version` file says what is installed. The installer writes the receipt last, after the binary and the `version` file, each by renaming a finished file into place, and the sh installer holds off Ctrl-C and other catchable signals until all three are in place. A re-run repairs a receipt left behind.
 
 ### Verify a release by hand
 
@@ -188,9 +188,10 @@ curl -fsSL https://oskalang.dev/install.sh | sh -s -- --uninstall
 It downloads nothing, so a saved copy of the installer works offline. Set `OSKA_HOME` as you did to install, and it uninstalls from there.
 
 - **It removes only what the receipt lists**, and only files directly in the Oska home or its `bin` directory. Then it removes `bin` and the Oska home if they are left empty. It never removes a directory with anything in it.
-- **It checks everything before it removes anything.** An entry outside those places, a path through a symlink, or a path with `..` stops it with `unsafe_path`, and nothing is removed. With no receipt it stops with `not_installed`.
+- **It checks everything before it removes anything.** An entry outside those places, a path with `..`, or a path through a symlink stops it with `unsafe_path`, and nothing is removed. That covers a symlink or junction anywhere in the path, above the Oska home too. On Linux and macOS a symlink owned by root, such as macOS's `/var`, is allowed, as only an administrator can make one. With no receipt it stops with `not_installed`.
+- **It acts on each file once,** however many times the receipt lists it.
 - **It keeps a file that changed** since it was installed: one whose SHA-256 is no longer the one the receipt recorded.
-- **It never touches `~/.config/oska`,** which holds settings and credentials.
+- **It never touches `~/.config/oska`,** which holds settings and credentials, nor anything in any other `.config/oska` directory, so it is safe even when no home directory is set.
 - **It does not edit your `PATH`.** If the `bin` directory is on it, the installer says so, and you remove the line that adds it from your shell profile (on Windows, the entry from your user `PATH`).
 
 With `--json` it prints:

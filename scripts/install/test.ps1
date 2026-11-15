@@ -293,6 +293,27 @@ function Test-TheReceiptWinsOverTheVersionFile {
 
 # The receipt is advisory: one that vouches for a tampered binary changes
 # nothing about what is verified.
+# What a run stopped between moving oskac.exe into place and renaming the
+# receipt over the old one leaves: 1.3.0 installed, the version file
+# already saying so, and the receipt still describing 1.2.3. The receipt
+# records 1.2.3's SHA-256, so it is not believed.
+function Test-AReceiptLeftBehindByAStoppedInstallIsNotBelieved {
+    New-Release '1.2.3'
+    New-Release '1.3.0'
+    Set-Latest '1.2.3'
+    [void](Invoke-Installer @('--json'))
+    Copy-Item -LiteralPath home/.oska/receipt.json -Destination stale.json
+    [void](Invoke-Installer @('--json', '--version', '1.3.0'))
+    Assert ($script:status -eq 0) "the update exited $script:status"
+    Copy-Item -LiteralPath stale.json -Destination home/.oska/receipt.json -Force
+    $result = Read-Json (Invoke-Installer @('--json', '--check'))
+    Assert ($result.installed -eq '1.3.0') "--check reports $($result.installed) installed"
+    Set-Latest '1.3.0'
+    $result = Read-Json (Invoke-Installer @('--json'))
+    Assert ($result.action -eq 'reinstalled') "action is $($result.action)"
+    Test-InstalledIs '1.3.0'
+}
+
 function Test-ATamperedReceiptCannotVouchForATamperedBinary {
     Install-Good
     $asset = 'site/releases/v1.3.0/oskac-windows-x86_64.exe'
@@ -671,6 +692,23 @@ function Test-AnInstallerThatWasNeverPinnedInstallsNothing {
     Assert (-not (Test-Path home)) 'created OSKA_HOME'
 }
 
+# The index setting is pinned to exactly `yes` or `no`. Anything else, such
+# as the placeholder a half-pinned installer still holds, is refused rather
+# than read as `no`, which would take the latest release from the unsigned
+# latest.json.
+function Test-AnInstallerWithNoValidIndexSettingInstallsNothing {
+    Use-IndexNaming130
+    foreach ($setting in @('@OSKA_INDEX_REQUIRED@', '', 'Yes', 'yes ', 'true')) {
+        Write-Pinned $setting
+        foreach ($arguments in @(@('--json'), @('--json', '--check'), @('--json', '--version', '1.2.3'))) {
+            $result = Read-Json (Invoke-Installer $arguments)
+            Assert ($script:status -eq 1) "'$setting' $($arguments -join ' '): exited $script:status"
+            Assert ($result.error -eq 'no_signing_key') "'$setting' $($arguments -join ' '): error is $($result.error)"
+            Assert (-not (Test-Path home)) "'$setting' $($arguments -join ' '): created OSKA_HOME"
+        }
+    }
+}
+
 function Test-RejectsBadArgumentsWithExitStatus2 {
     $result = Read-Json (Invoke-Installer @('--json', '--frobnicate'))
     Assert ($script:status -eq 2) "unknown option exited $script:status"
@@ -808,6 +846,35 @@ function Test-UninstallRefusesToTouchTheConfigDirectoryAsAnOskaHome {
     Assert ((Get-Tree 'home') -eq $before) 'the home changed'
 }
 
+# With no user profile, OSKA_HOME still names the install, and uninstall
+# keeps its JSON contract. With no profile to find ~\.config\oska by, an
+# Oska home in any .config\oska directory is still refused.
+function Test-UninstallWithoutAUserProfileFollowsTheContract {
+    New-Release '1.2.3'
+    Set-Latest '1.2.3'
+    $oska = Get-FullPath 'elsewhere'
+    [void](Invoke-Installer @('--json') -OskaHome $oska)
+    Assert ($script:status -eq 0) "the install exited $script:status"
+    $config = Get-FullPath 'someone\.config\oska'
+    [void](Invoke-Installer @('--json') -OskaHome $config)
+    Assert ($script:status -eq 0) "the install into $config exited $script:status"
+    $savedProfile = $env:USERPROFILE
+    $savedHome = $env:HOME
+    try {
+        Remove-Item Env:USERPROFILE, Env:HOME -ErrorAction SilentlyContinue
+        $result = Read-Json (Invoke-Installer @('--json', '--uninstall') -OskaHome $oska)
+        $refused = Read-Json (Invoke-Installer @('--json', '--uninstall') -OskaHome $config)
+        $refusedStatus = $script:status
+    } finally {
+        $env:USERPROFILE = $savedProfile
+        $env:HOME = $savedHome
+    }
+    Assert ($result.ok -eq $true -and $result.action -eq 'uninstalled') "uninstall without a profile: $($result | ConvertTo-Json -Compress)"
+    Assert (-not (Test-Path -LiteralPath $oska)) 'the Oska home is still there'
+    Assert ($refusedStatus -eq 1 -and $refused.error -eq 'unsafe_path') "uninstalled from a .config\oska directory: $($refused | ConvertTo-Json -Compress)"
+    Assert (Test-Path "$config\bin\oskac.exe") 'removed oskac.exe from a .config\oska directory'
+}
+
 function Test-UninstallFindsTheInstallInACustomOskaHome {
     New-Release '1.2.3'
     Set-Latest '1.2.3'
@@ -821,6 +888,28 @@ function Test-UninstallFindsTheInstallInACustomOskaHome {
     $result = Read-Json (Invoke-Installer @('--json', '--uninstall') -OskaHome $oska)
     Assert-List $result.removed @("$oska\bin\oskac.exe", "$oska\version", "$oska\receipt.json", "$oska\bin", $oska) 'removed'
     Assert (-not (Test-Path -LiteralPath $oska)) 'the custom Oska home is still there'
+}
+
+# A file the receipt lists more than once, or the bin directory, which
+# uninstall handles after the files, is checked each time and reported once.
+function Test-UninstallReportsAPathListedTwiceOnce {
+    Install-ForUninstall
+    $oska = Get-FullPath 'home\.oska'
+    $receipt = Get-Content -Raw home/.oska/receipt.json | ConvertFrom-Json
+    $receipt.files = @($receipt.files) + @($receipt.files) + @([pscustomobject]@{ path = "$oska\bin"; kind = 'record' })
+    Write-Text 'home/.oska/receipt.json' ($receipt | ConvertTo-Json -Depth 5)
+    $result = Read-Json (Invoke-Installer @('--json', '--uninstall'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    Assert-List $result.removed @("$oska\bin\oskac.exe", "$oska\version", "$oska\receipt.json", "$oska\bin", $oska) 'removed'
+    Assert-List $result.kept @() 'kept'
+    # A changed file listed twice is kept, and listed, once.
+    [void](Invoke-Installer @('--json'))
+    Write-Text 'home/.oska/version' "mine`n"
+    $receipt = Get-Content -Raw home/.oska/receipt.json | ConvertFrom-Json
+    $receipt.files = @($receipt.files) + @($receipt.files)
+    Write-Text 'home/.oska/receipt.json' ($receipt | ConvertTo-Json -Depth 5)
+    $result = Read-Json (Invoke-Installer @('--json', '--uninstall'))
+    Assert-List $result.kept @("$oska\version", $oska) 'kept'
 }
 
 # Rewrites the receipt the install wrote with $Edit, a script block given
@@ -898,6 +987,22 @@ function Test-UninstallRefusesASymlinkedOskaHome {
         Assert ($script:status -eq 1 -and $result.error -eq 'unsafe_path') "$oska`: exited $script:status with $($result.error)"
     }
     Assert (Test-Path 'real/bin/oskac.exe') 'removed a file through the junction'
+}
+
+# A junction anywhere above the Oska home, not only the home itself, could
+# steer a deletion: refused.
+function Test-UninstallRefusesASymlinkAboveTheOskaHome {
+    New-Release '1.2.3'
+    Set-Latest '1.2.3'
+    [void](New-Item -ItemType Directory 'real/deeper')
+    [void](New-Item -ItemType Junction -Path link -Target (Get-FullPath 'real'))
+    $oska = Join-Path (Get-FullPath 'link') 'deeper\oska'
+    [void](Invoke-Installer @('--json') -OskaHome $oska)
+    Assert ($script:status -eq 0) "the install exited $script:status"
+    $result = Read-Json (Invoke-Installer @('--json', '--uninstall') -OskaHome $oska)
+    Assert ($script:status -eq 1 -and $result.error -eq 'unsafe_path') "exited $script:status with $($result.error)"
+    Assert ($result.message -like "*$(Get-FullPath 'link')*") "message does not name the junction: $($result.message)"
+    Assert (Test-Path 'real/deeper/oska/bin/oskac.exe') 'removed a file through the junction'
 }
 
 # Each receipt below would remove the version file if it were read loosely;
@@ -1022,6 +1127,44 @@ function Test-RefusesAnIndexWithALowerSerialThanOneAlreadyAccepted {
     New-Index 7 '1.3.0'
     $result = Read-Json (Invoke-Installer @('--json'))
     Assert ($result.action -eq 'reinstalled') "serial 7 again is $($result.action)"
+}
+
+# 999999999999999 is the largest serial, as verify-index.sh and
+# sign-index.sh agree.
+function Test-AcceptsSerialsUpTo999999999999999 {
+    Use-IndexNaming130
+    New-Index 1000000000000000 '1.3.0'
+    [void](Test-RefusedUnchanged 'bad_index' 1 @())
+    New-Index 999999999999999 '1.3.0'
+    $result = Read-Json (Invoke-Installer @('--json'))
+    Assert ($script:status -eq 0) "exited $script:status"
+    Assert ([string]$result.index_serial -eq '999999999999999') "index_serial is $($result.index_serial)"
+    Assert ([string](Get-ReceiptSerial) -eq '999999999999999') "the receipt serial is $(Get-ReceiptSerial)"
+    New-Index 999999999999998 '1.3.0'
+    [void](Test-RefusedUnchanged 'rollback_refused' 1 @())
+}
+
+# The index is read as strictly as the receipt: even signed, one that
+# could read two ways is refused, and a field is read only where the format
+# puts it, by its exact name.
+function Test-RefusesAnIndexThatIsNotStrictJson {
+    Use-IndexNaming130
+    $expires = Get-DaysFromNow 60
+    $cases = [ordered]@{
+        'a repeated key' = "{`"schema`": 1, `"serial`": 7, `"serial`": 9, `"expires`": `"$expires`", `"latest`": {`"tag`": `"v1.3.0`", `"version`": `"1.3.0`"}}"
+        'Serial for serial' = "{`"schema`": 1, `"Serial`": 7, `"expires`": `"$expires`", `"latest`": {`"tag`": `"v1.3.0`", `"version`": `"1.3.0`"}}"
+        'a serial in a string' = "{`"schema`": 1, `"serial`": `"7`", `"expires`": `"$expires`", `"latest`": {`"tag`": `"v1.3.0`", `"version`": `"1.3.0`"}}"
+        'a trailing comma' = "{`"schema`": 1, `"serial`": 7, `"expires`": `"$expires`", `"latest`": {`"tag`": `"v1.3.0`", `"version`": `"1.3.0`"},}"
+    }
+    foreach ($name in $cases.Keys) {
+        Write-Text 'site/release-index.json' $cases[$name]
+        Remove-Item -LiteralPath 'site/release-index.json.sig' -ErrorAction SilentlyContinue
+        & ssh-keygen -q -Y sign -f key -n oska-index site/release-index.json
+        Assert ($LASTEXITCODE -eq 0) 'ssh-keygen could not sign the index'
+        $result = Read-Json (Invoke-Installer @('--json'))
+        Assert ($script:status -eq 1 -and $result.error -eq 'bad_index') "$name`: exited $script:status with $($result.error)"
+        Assert (-not (Test-Path home)) "$name`: created OSKA_HOME"
+    }
 }
 
 function Test-RefusesAMissingIndexWhenItIsRequired {

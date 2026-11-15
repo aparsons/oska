@@ -7,11 +7,13 @@
 # <dir>/release-index.json by <public-key> in the `oska-index` namespace
 # (`ssh-keygen -Y verify`), and that the index has the schema-1 format:
 #
-#   {"schema": 1, "serial": <positive integer>,
+#   {"schema": 1, "serial": <integer from 1 to 999999999999999>,
 #    "issued": "<UTC RFC 3339>", "expires": "<UTC RFC 3339, after issued>",
 #    "latest": {"tag": "vX.Y.Z", "version": "X.Y.Z"}}
 #
-# with no other field. On success it prints one line,
+# with no other field. 999999999999999 (15 digits) is the largest serial:
+# sign-index.sh signs none above it, and the installers refuse one above it,
+# as it is small enough for their shell arithmetic. On success it prints one line,
 #
 #   <serial> <expires> <tag>
 #
@@ -49,7 +51,7 @@ jq -e --arg t "$time_re" '
   type == "object"
   and (keys == ["expires", "issued", "latest", "schema", "serial"])
   and .schema == 1
-  and (.serial | type == "number" and . >= 1 and . == floor and . < 9007199254740992)
+  and (.serial | type == "number" and . >= 1 and . == floor and . <= 999999999999999)
   and (.issued | type == "string" and test($t))
   and (.expires | type == "string" and test($t))
   and .expires > .issued

@@ -31,11 +31,14 @@
 # verify-index.sh; one that does not verify stops the build, as a release
 # does. Of those, the index with the highest serial is published as
 # <site-dir>/release-index.json and .sig, if:
-#   - it has not expired (an older, expired index is simply superseded);
 #   - no other index has the same serial;
 #   - the release it names is one published here.
-# Otherwise the build stops. When the published index expires within 30
-# days, it warns with a GitHub Actions `::warning::` annotation.
+# Otherwise the build stops. An index that has expired is still published,
+# with a GitHub Actions `::warning::` annotation, so the rest of the site
+# still deploys: the installers refuse it (stale_index), so installing the
+# latest release fails until it is re-signed, while a named release
+# (--version) still installs. When the published index expires within 30
+# days, it warns the same way.
 #
 # With no releases it only publishes the key and the installers, if there
 # is a key. Without a key it publishes no installers, as they could verify
@@ -149,11 +152,11 @@ require=()
 if [ -n "$best" ]; then
   now=$(date -u +%s)
   left=$(($(date -u -d "$best_expires" +%s) - now))
-  [ "$left" -gt 0 ] ||
-    die "the release index in $best_from (serial $best_serial) expired at $best_expires; re-sign it (docs/agents/release.md)"
   [ -d "$site/releases/$best_tag" ] ||
     die "the release index in $best_from names $best_tag, which is not a published release"
-  if [ "$left" -lt $((30 * 86400)) ]; then
+  if [ "$left" -le 0 ]; then
+    echo "::warning::the release index (serial $best_serial) has expired, at $best_expires; it is published, but installers refuse it (stale_index), so installing the latest release fails until it is re-signed (docs/agents/release.md)"
+  elif [ "$left" -lt $((30 * 86400)) ]; then
     echo "::warning::the release index (serial $best_serial) expires at $best_expires, in under 30 days; installers refuse it after that, so re-sign it (docs/agents/release.md)"
   fi
   cp "$best/release-index.json" "$best/release-index.json.sig" "$site/"
