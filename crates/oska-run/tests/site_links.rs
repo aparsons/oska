@@ -16,57 +16,25 @@
 mod common;
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
+use common::site::{
+    self, check_links, succeeded, tracked_files, CHECK, MINIMAL_REPO, PAGES_WORKFLOW,
+};
 use oska_run::{FakeHost, RunOutcome};
-
-/// The generator's source.
-const BUILD: &str = include_str!("../../../site/build.osk");
-
-/// The link checker's source.
-const CHECK: &str = include_str!("../../../site/check-links.osk");
 
 /// Where a file the site does not publish is linked: on GitHub, on `main`.
 const BLOB: &str = "https://github.com/aparsons/oska/blob/main/";
 
-/// The files every repository the generator reads must have.
-const MINIMAL_REPO: &[(&str, &str)] = &[
-    ("docs/index.md", "# Oska\n"),
-    ("GLOSSARY.md", "# Glossary\n"),
-    ("docs/design.md", "# Design\n"),
-    ("site/style.css", "body {}\n"),
-    ("site/search.js", "// search\n"),
-    ("site/favicon.svg", "<svg></svg>\n"),
-    (
-        "Cargo.toml",
-        "[workspace.package]\nversion = \"1.2.3\"\nlicense = \"Apache-2.0\"\n",
-    ),
-];
-
 /// Run the generator on [`MINIMAL_REPO`] with `inputs` added: how it
 /// ended, and the files it wrote under `_site/`.
 fn generate(inputs: &[(&str, &str)]) -> (RunOutcome, BTreeMap<String, String>) {
-    let files: BTreeMap<&str, &str> = MINIMAL_REPO.iter().chain(inputs).copied().collect();
-    let mut host = files.iter().fold(FakeHost::new(), |host, (path, text)| {
-        host.with_file(path, text)
-    });
-    let outcome = common::run_differential(&mut host, BUILD, &[]);
-    (outcome, host.files_under("_site"))
-}
-
-fn succeeded(outcome: &RunOutcome) -> bool {
-    outcome.exit_code == 0 && outcome.diagnostics.is_empty() && outcome.panic.is_none()
+    site::generate(MINIMAL_REPO, inputs)
 }
 
 /// The site the generator writes from [`MINIMAL_REPO`] and `inputs`,
 /// asserting that it succeeded.
 fn site_of(inputs: &[(&str, &str)]) -> BTreeMap<String, String> {
-    let (outcome, site) = generate(inputs);
-    assert!(
-        succeeded(&outcome),
-        "the generator should succeed: {outcome:#?}"
-    );
-    site
+    site::site_of(MINIMAL_REPO, inputs)
 }
 
 /// Assert that the generator refuses `inputs`, with a message that names
@@ -218,19 +186,6 @@ fn the_guide_examples_are_published_with_copies_and_linked_from_the_guides() {
 }
 
 // ---- The link checker ------------------------------------------------------------
-
-/// Run the link checker on `site`, as `_site/`, with `tracked` as the
-/// repository's tracked files.
-fn check_links(site: &BTreeMap<String, String>, tracked: &[&str]) -> RunOutcome {
-    let list: String = tracked.iter().map(|path| format!("{path}\n")).collect();
-    let mut host = site
-        .iter()
-        .fold(FakeHost::new(), |host, (path, text)| {
-            host.with_file(&format!("_site/{path}"), text)
-        })
-        .with_file("site/tracked.txt", &list);
-    common::run_differential(&mut host, CHECK, &[])
-}
 
 /// The files the fixture site's links to GitHub name.
 const FIXTURE_TRACKED: &[&str] = &["LICENSE", "README.md", "examples/shopping/src/main.osk"];
@@ -417,100 +372,23 @@ fn the_checker_reads_only_the_site_and_the_tracked_files() {
 
 // ---- The real site ---------------------------------------------------------------
 
-/// The repository root.
-fn root() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-/// Every file under `dir`, by its path relative to `dir`.
-fn read_tree(dir: &Path) -> BTreeMap<String, String> {
-    fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<String, String>) {
-        let entries =
-            std::fs::read_dir(dir).unwrap_or_else(|e| panic!("should list {}: {e}", dir.display()));
-        for entry in entries {
-            let path = entry.expect("a directory entry").path();
-            if path.is_dir() {
-                walk(root, &path, out);
-                continue;
-            }
-            let relative = path.strip_prefix(root).expect("under the root");
-            let name = relative
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-                .join("/");
-            let text = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("should read {}: {e}", path.display()));
-            out.insert(name, text);
-        }
-    }
-    let mut out = BTreeMap::new();
-    walk(dir, dir, &mut out);
-    out
-}
-
 /// The real site, as the Pages workflow builds it: the generator on the
 /// repository's own inputs, then the files `scripts/release/stage-site.sh`
 /// adds, here as stand-ins. It is built once, for every test that reads it.
 fn real_site() -> &'static BTreeMap<String, String> {
     static SITE: std::sync::OnceLock<BTreeMap<String, String>> = std::sync::OnceLock::new();
-    SITE.get_or_init(build_real_site)
-}
-
-fn build_real_site() -> BTreeMap<String, String> {
-    let root = root();
-    let mut inputs: Vec<(String, String)> = Vec::new();
-    for dir in ["docs", "site/agent-setup"] {
-        for (path, text) in read_tree(&root.join(dir)) {
-            inputs.push((format!("{dir}/{path}"), text));
+    SITE.get_or_init(|| {
+        let mut site = site::real_site();
+        for staged in ["install.sh", "install.ps1", "oska-release.pub"] {
+            site.insert(staged.to_string(), "staged\n".to_string());
         }
-    }
-    for file in [
-        "SECURITY.md",
-        "GLOSSARY.md",
-        "Cargo.toml",
-        "site/style.css",
-        "site/search.js",
-        "site/favicon.svg",
-    ] {
-        let text = std::fs::read_to_string(root.join(file)).expect("a repository file");
-        inputs.push((file.to_string(), text));
-    }
-    let authority = oska_check::check_module(BUILD).authority_to_human("site/build.osk");
-    inputs.push(("site/authority.txt".to_string(), authority));
-    let refs: Vec<(&str, &str)> = inputs
-        .iter()
-        .map(|(p, t)| (p.as_str(), t.as_str()))
-        .collect();
-    let mut site = site_of(&refs);
-    for staged in ["install.sh", "install.ps1", "oska-release.pub"] {
-        site.insert(staged.to_string(), "staged\n".to_string());
-    }
-    site
-}
-
-/// The repository's files, as `git ls-files` lists them, with files not
-/// yet added (but not ignored), so a link to a new file checks before it
-/// is committed. `None` if git cannot list them.
-fn tracked_files() -> Option<Vec<String>> {
-    let output = std::process::Command::new("git")
-        .args(["ls-files", "--cached", "--others", "--exclude-standard"])
-        .current_dir(root())
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8(output.stdout).ok()?;
-    Some(text.lines().map(str::to_string).collect())
+        site
+    })
 }
 
 #[test]
 fn every_link_in_the_real_site_goes_somewhere() {
-    let Some(tracked) = tracked_files() else {
-        eprintln!("skipped: git cannot list the repository's files");
-        return;
-    };
+    let tracked = tracked_files();
     let tracked: Vec<&str> = tracked.iter().map(String::as_str).collect();
     let outcome = check_links(real_site(), &tracked);
     assert!(
@@ -543,7 +421,7 @@ fn the_dead_targets_the_site_review_found_now_resolve() {
 
 #[test]
 fn the_pages_workflow_checks_every_link_after_staging_and_before_upload() {
-    let workflow = include_str!("../../../.github/workflows/pages.yml");
+    let workflow = PAGES_WORKFLOW;
     let at = |needle: &str| {
         workflow
             .find(needle)

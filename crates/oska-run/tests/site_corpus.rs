@@ -16,15 +16,8 @@
 mod common;
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
-use oska_run::{FakeHost, RunOutcome};
-
-/// The generator's source.
-const BUILD: &str = include_str!("../../../site/build.osk");
-
-/// The link checker's source.
-const CHECK: &str = include_str!("../../../site/check-links.osk");
+use common::site::{self, check_links, tracked_files};
 
 /// The notice a research page carries.
 const NOTICE: &str = "Proposals and background, not documented behaviour.";
@@ -100,42 +93,20 @@ const REPO: &[(&str, &str)] = &[
     ),
 ];
 
-/// Run the generator on `files`: how it ended, and the files it wrote
-/// under `_site/`.
-fn generate(files: &BTreeMap<&str, &str>) -> (RunOutcome, BTreeMap<String, String>) {
-    let mut host = files.iter().fold(FakeHost::new(), |host, (path, text)| {
-        host.with_file(path, text)
-    });
-    let outcome = common::run_differential(&mut host, BUILD, &[]);
-    (outcome, host.files_under("_site"))
-}
-
-/// The site the generator writes from `files`, asserting that it
-/// succeeded.
-fn site_from(files: &BTreeMap<&str, &str>) -> BTreeMap<String, String> {
-    let (outcome, site) = generate(files);
-    assert!(
-        outcome.exit_code == 0 && outcome.diagnostics.is_empty() && outcome.panic.is_none(),
-        "the generator should succeed: {outcome:#?}"
-    );
-    site
-}
-
 /// The site built from [`REPO`] with `inputs` added or put in place of its
 /// files.
 fn site_of(inputs: &[(&str, &str)]) -> BTreeMap<String, String> {
-    let files: BTreeMap<&str, &str> = REPO.iter().chain(inputs).copied().collect();
-    site_from(&files)
+    site::site_of(REPO, inputs)
 }
 
 /// The site built from [`REPO`] without the files at `left_out`.
 fn site_without(left_out: &[&str]) -> BTreeMap<String, String> {
-    let files: BTreeMap<&str, &str> = REPO
+    let files: Vec<(&str, &str)> = REPO
         .iter()
         .filter(|(path, _)| !left_out.contains(path))
         .copied()
         .collect();
-    site_from(&files)
+    site::site_of(&files, &[])
 }
 
 /// The text of the `## heading` group of `llms`, up to the next group.
@@ -546,15 +517,6 @@ fn each_code_in_codes_json_has_its_url() {
 
 // ---- The link checker --------------------------------------------------------------------
 
-/// The link checker on `site`: how it ended.
-fn check_links(site: &BTreeMap<String, String>, tracked: &[&str]) -> RunOutcome {
-    let mut host = site.iter().fold(FakeHost::new(), |host, (path, text)| {
-        host.with_file(&format!("_site/{path}"), text)
-    });
-    host = host.with_file("site/tracked.txt", &tracked.join("\n"));
-    common::run_differential(&mut host, CHECK, &[])
-}
-
 #[test]
 fn the_checker_passes_the_corpus_and_fails_on_a_dead_link_in_llms_research_txt() {
     let site = site_of(&[]);
@@ -579,64 +541,9 @@ fn the_checker_passes_the_corpus_and_fails_on_a_dead_link_in_llms_research_txt()
 
 // ---- The real docs -----------------------------------------------------------------------
 
-fn repository_root() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-/// The repository's own inputs to the generator, as it reads them, and
-/// what the Pages workflow writes just before the build.
-fn real_site() -> BTreeMap<String, String> {
-    let root = repository_root();
-    let mut files: Vec<(String, String)> = Vec::new();
-    fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
-        for entry in std::fs::read_dir(dir).expect("a directory") {
-            let path = entry.expect("an entry").path();
-            if path.is_dir() {
-                walk(root, &path, out);
-            } else {
-                let name = path
-                    .strip_prefix(root)
-                    .expect("under the root")
-                    .components()
-                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                    .collect::<Vec<_>>()
-                    .join("/");
-                let text = std::fs::read_to_string(&path).expect("a text file");
-                out.push((name, text));
-            }
-        }
-    }
-    walk(&root, &root.join("docs"), &mut files);
-    walk(&root, &root.join("site/agent-setup"), &mut files);
-    for file in [
-        "SECURITY.md",
-        "GLOSSARY.md",
-        "Cargo.toml",
-        "site/style.css",
-        "site/search.js",
-        "site/favicon.svg",
-    ] {
-        let text = std::fs::read_to_string(root.join(file)).expect("a repository file");
-        files.push((file.to_string(), text));
-    }
-    files.push((
-        "site/authority.txt".to_string(),
-        "fn main: FsRead (read), FsWrite (write)\n".to_string(),
-    ));
-    let mut host = files.iter().fold(FakeHost::new(), |host, (path, text)| {
-        host.with_file(path, text)
-    });
-    let outcome = common::run_differential(&mut host, BUILD, &[]);
-    assert!(
-        outcome.exit_code == 0 && outcome.diagnostics.is_empty() && outcome.panic.is_none(),
-        "the generator should succeed on the real docs: {outcome:#?}"
-    );
-    host.files_under("_site")
-}
-
 #[test]
 fn the_real_corpus_is_tiered_and_every_link_in_it_goes_somewhere() {
-    let site = real_site();
+    let site = site::real_site();
     let llms = &site["llms.txt"];
     let start = entry_urls(group(llms, "Start here"));
     assert_eq!(start.len(), 8, "{start:?}");
@@ -659,21 +566,7 @@ fn the_real_corpus_is_tiered_and_every_link_in_it_goes_somewhere() {
         assert_eq!(line.matches('`').count() % 2, 0, "{line}");
     }
     // The site, as built, passes the link checker.
-    let tracked: Vec<String> = std::process::Command::new("git")
-        .args(["ls-files"])
-        .current_dir(repository_root())
-        .output()
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
-    assert!(
-        !tracked.is_empty(),
-        "git ls-files should list the repository"
-    );
+    let tracked = tracked_files();
     let tracked: Vec<&str> = tracked.iter().map(String::as_str).collect();
     let outcome = check_links(&site, &tracked);
     assert_eq!(outcome.exit_code, 0, "{}", outcome.stderr);

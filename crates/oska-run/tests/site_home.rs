@@ -12,60 +12,13 @@
 mod common;
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
-use oska_run::{FakeHost, RunOutcome};
-
-/// The generator's source.
-const BUILD: &str = include_str!("../../../site/build.osk");
-
-/// The files every repository the generator reads must have.
-const MINIMAL_REPO: &[(&str, &str)] = &[
-    ("docs/index.md", "# Oska\n"),
-    ("GLOSSARY.md", "# Glossary\n"),
-    ("docs/design.md", "# Design\n"),
-    ("site/style.css", "body {}\n"),
-    ("site/search.js", "// search\n"),
-    (
-        "site/favicon.svg",
-        "<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n",
-    ),
-    (
-        "Cargo.toml",
-        "[workspace.package]\nversion = \"1.2.3\"\nlicense = \"Apache-2.0\"\n",
-    ),
-];
-
-/// Run the generator on [`MINIMAL_REPO`] with `inputs` added (or put in
-/// place of its files): how it ended, and the files it wrote under `_site/`.
-fn generate(inputs: &[(&str, &str)]) -> (RunOutcome, BTreeMap<String, String>) {
-    let files: BTreeMap<&str, &str> = MINIMAL_REPO.iter().chain(inputs).copied().collect();
-    let mut host = files.iter().fold(FakeHost::new(), |host, (path, text)| {
-        host.with_file(path, text)
-    });
-    let outcome = common::run_differential(&mut host, BUILD, &[]);
-    (outcome, host.files_under("_site"))
-}
+use common::site::{self, between, MINIMAL_REPO};
 
 /// The site the generator writes from [`MINIMAL_REPO`] and `inputs`,
 /// asserting that it succeeded.
 fn site_of(inputs: &[(&str, &str)]) -> BTreeMap<String, String> {
-    let (outcome, site) = generate(inputs);
-    assert!(
-        outcome.exit_code == 0 && outcome.diagnostics.is_empty() && outcome.panic.is_none(),
-        "the generator should succeed: {outcome:#?}"
-    );
-    site
-}
-
-/// The text of `page` between the first `open` and the next `close`.
-fn between<'a>(page: &'a str, open: &str, close: &str) -> &'a str {
-    let start = page.find(open).map(|at| at + open.len());
-    let start = start.unwrap_or_else(|| panic!("no {open} in {page}"));
-    let len = page[start..]
-        .find(close)
-        .unwrap_or_else(|| panic!("no {close} after {open} in {page}"));
-    &page[start..start + len]
+    site::site_of(MINIMAL_REPO, inputs)
 }
 
 /// Every `href` in `html`, in order.
@@ -151,10 +104,7 @@ fn without_a_home_page_the_build_fails_and_names_docs_index_md() {
         .filter(|(path, _)| *path != "docs/index.md")
         .chain([("README.md", "# Oska\n")])
         .collect();
-    let mut host = files.iter().fold(FakeHost::new(), |host, (path, text)| {
-        host.with_file(path, text)
-    });
-    let outcome = common::run_differential(&mut host, BUILD, &[]);
+    let (outcome, _) = site::generate(&files, &[]);
     assert_eq!(outcome.exit_code, 1, "the build should fail: {outcome:#?}");
     assert!(
         outcome.stderr.contains("docs/index.md"),
@@ -320,56 +270,9 @@ fn the_footer_links_the_research() {
 
 // ---- The real site ---------------------------------------------------------------------
 
-/// The real site, built from the repository's own inputs.
-fn real_site() -> BTreeMap<String, String> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut files: Vec<(String, String)> = Vec::new();
-    fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
-        for entry in std::fs::read_dir(dir).expect("a directory") {
-            let path = entry.expect("an entry").path();
-            if path.is_dir() {
-                walk(root, &path, out);
-            } else {
-                let name = path
-                    .strip_prefix(root)
-                    .expect("under the root")
-                    .components()
-                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                    .collect::<Vec<_>>()
-                    .join("/");
-                let text = std::fs::read_to_string(&path).expect("a text file");
-                out.push((name, text));
-            }
-        }
-    }
-    walk(&root, &root.join("docs"), &mut files);
-    walk(&root, &root.join("site/agent-setup"), &mut files);
-    for file in [
-        "SECURITY.md",
-        "GLOSSARY.md",
-        "Cargo.toml",
-        "site/style.css",
-        "site/search.js",
-        "site/favicon.svg",
-    ] {
-        let text = std::fs::read_to_string(root.join(file)).expect("a repository file");
-        files.push((file.to_string(), text));
-    }
-    // Only the repository's own files: no stand-in home page.
-    let mut host = files.iter().fold(FakeHost::new(), |host, (path, text)| {
-        host.with_file(path, text)
-    });
-    let outcome = common::run_differential(&mut host, BUILD, &[]);
-    assert!(
-        outcome.exit_code == 0 && outcome.diagnostics.is_empty() && outcome.panic.is_none(),
-        "the generator should succeed on the real docs: {outcome:#?}"
-    );
-    host.files_under("_site")
-}
-
 #[test]
 fn the_real_home_page_leads_with_install_the_prompt_and_the_quickstart() {
-    let site = real_site();
+    let site = site::real_site();
     let home = between(&site["index.html"], "<main id=\"main-content\">", "</main>");
     // In the order a newcomer needs them.
     let at = |needle: &str| {
@@ -406,7 +309,7 @@ fn the_real_home_page_leads_with_install_the_prompt_and_the_quickstart() {
 
 #[test]
 fn the_real_navigation_and_reference_page_reach_every_section() {
-    let site = real_site();
+    let site = site::real_site();
     let nav: Vec<String> = navigation(&site["index.html"])
         .into_iter()
         .map(|(_, label)| label)
@@ -448,7 +351,7 @@ fn the_real_navigation_and_reference_page_reach_every_section() {
 
 #[test]
 fn what_works_today_is_a_guide_listed_in_llms_txt() {
-    let site = real_site();
+    let site = site::real_site();
     assert!(site.contains_key("guide/what-works-today.html"));
     assert!(
         site["llms.txt"].contains("](https://oskalang.dev/guide/what-works-today.md)"),
