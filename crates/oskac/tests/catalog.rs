@@ -507,6 +507,7 @@ fn built_site() -> BTreeMap<String, String> {
         "GLOSSARY.md",
         "site/style.css",
         "site/search.js",
+        "site/favicon.svg",
         "Cargo.toml",
     ] {
         host = add(host, &root, relative);

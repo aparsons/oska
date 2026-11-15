@@ -36,6 +36,7 @@ const MINIMAL_REPO: &[(&str, &str)] = &[
     ("docs/design.md", "# Design\n"),
     ("site/style.css", "body {}\n"),
     ("site/search.js", "// search\n"),
+    ("site/favicon.svg", "<svg></svg>\n"),
     (
         "Cargo.toml",
         "[workspace.package]\nversion = \"1.2.3\"\nlicense = \"Apache-2.0\"\n",
@@ -471,6 +472,7 @@ fn build_real_site() -> BTreeMap<String, String> {
         "Cargo.toml",
         "site/style.css",
         "site/search.js",
+        "site/favicon.svg",
     ] {
         let text = std::fs::read_to_string(root.join(file)).expect("a repository file");
         inputs.push((file.to_string(), text));

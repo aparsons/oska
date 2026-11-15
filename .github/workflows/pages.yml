@@ -93,12 +93,22 @@ jobs:
         run: |
           for path in install.sh install.ps1 oska-release.pub llms.txt llms-full.txt \
             sitemap.xml robots.txt latest.json codes.json search.json agent-setup.md \
-            security.md; do
+            security.md favicon.svg; do
             curl --silent --show-error --fail --location --output /dev/null \
               --retry 6 --retry-delay 10 --retry-all-errors \
               "https://oskalang.dev/$path"
             echo "https://oskalang.dev/$path answers"
           done
+      # GitHub Pages serves 404.html, with status 404, for any address with
+      # no page.
+      - name: an unknown address gets the custom 404 page
+        run: |
+          status=$(curl --silent --show-error --output "$RUNNER_TEMP/not-found.html" \
+            --write-out '%{http_code}' --retry 6 --retry-delay 10 \
+            https://oskalang.dev/no-such-page-smoke-check) || true
+          echo "an unknown address answered ${status:-nothing}"
+          test "$status" = 404
+          grep -q 'Page not found' "$RUNNER_TEMP/not-found.html"
       # A missing, incomplete or expired security.txt fails the deploy.
       - name: security.txt is published and has not expired
         run: scripts/release/check-security-txt.sh https://oskalang.dev
