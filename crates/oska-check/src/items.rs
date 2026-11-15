@@ -388,6 +388,9 @@ pub struct Items {
     /// name, with that text. The authority report uses them to name an
     /// attenuation's root.
     pub consts: HashMap<String, String>,
+    /// The module's constants, by name, with their declared types. A body
+    /// names one like a local, and it takes this type (#83).
+    pub const_types: HashMap<String, Ty>,
     /// The structs and enums that **hold untrusted text**: one of their
     /// fields is untrusted text, or a type that holds it, at any depth.
     /// Their values turn into untrusted text (see
@@ -552,6 +555,10 @@ impl Items {
                     self.traits.entry(key).or_insert(info);
                 }
                 ItemKind::Const(c) => {
+                    if !in_prelude {
+                        let ty = Lower::in_scope(decls, in_prelude).ty(&c.ty);
+                        self.const_types.entry(c.name.name.clone()).or_insert(ty);
+                    }
                     if let (false, Some(text)) = (in_prelude, literal_text(&c.value)) {
                         self.consts.entry(c.name.name.clone()).or_insert(text);
                     }

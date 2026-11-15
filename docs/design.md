@@ -105,7 +105,7 @@ test "deposit adds to the balance" {
 - **Ranges:** `a..b` is the only range syntax, and it excludes `b`.
 - **No `as` casts.** Conversions are explicit calls, such as `I32.from(x)`.
 - **Patterns:** `_`, literals, bindings, constructor patterns, and `if` guards. There are no or-patterns, range patterns, or `@` bindings in v0. A string pattern must be a plain literal, with no `{...}` interpolation.
-- **Constants:** module-level constants are declared with `const NAME: T = expr`.
+- **Constants:** module-level constants are declared with `const NAME: T = expr`. A constant is in scope in every function, method, test and later constant of its module, with its declared type; a body can name it like a local, and a local of the same name shadows it.
 
 ### Closures, contracts, and other forms
 

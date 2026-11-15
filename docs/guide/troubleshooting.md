@@ -34,10 +34,6 @@ Since v0.2.0 these three capabilities only attenuate: `read_to_string`, `list_di
 
 The variable is not set. A secret has no stand-in value, so that a missing password can never become an empty one. Set the variable, or use `env.get`, which returns an `Option`.
 
-### A constant cannot be used
-
-A module-level `const NAME: T = expr` declares and checks, but referring to `NAME` reports `E0221` in this release. Pass the value as a parameter, or write it in a function body.
-
 ### `{self.name}` inside a string is an unknown name
 
 An interpolation hole that starts with `self` reports `E0221` in this release. Copy the field into a local with `let`, and interpolate the local.
@@ -136,7 +132,7 @@ fn main() {
 }
 ```
 
-`E0221`, an unknown name. The fix suggests the closest local, function, or variant. A capability you did not declare is this error, and so is a `const`.
+`E0221`, an unknown name. The fix suggests the closest local, function, constant, or variant. A capability you did not declare is this error.
 
 ```oska error=E0221
 fn main(io: Stdout) -> Result<(), IoError> {
