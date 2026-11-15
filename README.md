@@ -80,6 +80,8 @@ cargo run -p oskac -- lex examples/hello.osk
 cargo test
 ```
 
+`scripts/check.sh` runs every check a change must pass, the same ones CI's test job runs. Its `cargo test` step runs in a private temporary directory and fails, naming the paths, if a test leaves anything in it.
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
