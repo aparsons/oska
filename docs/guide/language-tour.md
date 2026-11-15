@@ -262,7 +262,7 @@ fn main(io: Stdout) -> Result<(), IoError> {
 hello dog Rex
 ```
 
-The `let` is needed because a `{...}` hole that starts with `self` is not resolved in this release (`E0221`): copy the field into a local first. `Bool` has no `Display`, so a `Bool` cannot be interpolated (`E0265`).
+Inside a method, a hole may start with `self`, as in `"{self.name}"`. `Bool` has no `Display`, so a `Bool` cannot be interpolated (`E0265`).
 
 ## Text
 

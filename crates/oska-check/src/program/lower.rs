@@ -916,7 +916,11 @@ impl Lowering<'_> {
     fn hole(&self, path: &[ast::Ident]) -> Option<Expr> {
         let (first, fields) = path.split_first()?;
         let mut value = Expr {
-            kind: self.local(first),
+            kind: if first.name == "self" {
+                ExprKind::SelfValue
+            } else {
+                self.local(first)
+            },
             ty: self.type_at(first.span),
             span: first.span,
         };
