@@ -15,8 +15,8 @@
 #      private temporary directory (scripts/temp-leak/run.sh) and fails,
 #      naming the paths, if a test leaves anything in it;
 #   3. the installer, release script, unsafe guard, intrinsic guard,
-#      workflow guard, temp-leak wrapper, rust-stable and cross-build
-#      manifest tests;
+#      workflow guard, kill guard, temp-leak wrapper, rust-stable and
+#      cross-build manifest tests;
 #   4. shellcheck on the shell scripts, when shellcheck is installed.
 
 set -euo pipefail
@@ -96,6 +96,11 @@ bash scripts/unsafe-guard/test.sh
 
 step "intrinsic guard tests"
 bash scripts/intrinsic-guard/test.sh
+
+step "kill guard tests"
+# The Claude Code hook (.claude/settings.json) that refuses pkill -f, killall
+# and other kills by pattern, name or session.
+bash scripts/kill-guard/test.sh
 
 step "workflow guard tests"
 bash scripts/workflow-guard/test.sh
