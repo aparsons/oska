@@ -223,6 +223,11 @@ fn the_prompt_has_the_agent_install_verify_configure_test_and_report() {
         "CLAUDE.md",
         "`oskac test <file.osk>`",
         "run the installer again",
+        "--check --json",
+        "--uninstall --json",
+        "`oskac self uninstall --format=json`",
+        "`oskac self info --format=json`",
+        "`downgrade_refused`",
         "https://oskalang.dev/llms.txt",
     ] {
         assert!(prompt.contains(step), "the prompt should say: {step}");
@@ -237,7 +242,8 @@ fn the_prompt_has_the_agent_install_verify_configure_test_and_report() {
             "## 2. Check the toolchain",
             "## 3. Configure the project",
             "## 4. Run the tests in CI",
-            "## 5. Report",
+            "## 5. Update, check or uninstall later",
+            "## 6. Report",
         ]
     );
 }
