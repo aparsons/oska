@@ -4,8 +4,8 @@
 # Installers refuse an index past its expiry (`stale_index`), 90 days after it
 # was signed. A release run signs a new one, but releases can be months apart.
 # On the 1st of each month, and when run by hand from main, this:
-#   1. waits (up to 6 minutes, then fails) while a Release or Pages run is
-#      under way, since either could publish an index with the serial this
+#   1. waits (up to 6 minutes, then fails) while a Release or Pages run that
+#      can publish (not a pull request's dry run) is under way, since either could publish an index with the serial this
 #      run is about to sign;
 #   2. re-signs the live index (scripts/release/sign-index.sh with no --tag)
 #      with the release key: the next serial, the same `latest`, issued now
@@ -57,12 +57,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          # busy: names the first Release or Pages run not yet finished.
+          # busy: names the first Release or Pages run not yet finished. Only
+          # a push or a dispatch can publish; release.yml also runs on
+          # pull_request, a dry run that publishes nothing.
           busy() {
             local wf status n
             for wf in release.yml pages.yml; do
               for status in queued in_progress waiting pending requested; do
-                n=$(gh run list --workflow "$wf" --status "$status" --json databaseId --jq length)
+                n=$(gh run list --workflow "$wf" --status "$status" --json event \
+                  --jq '[.[] | select(.event == "push" or .event == "workflow_dispatch")] | length')
                 if [ "$n" != 0 ]; then
                   echo "a $wf run is $status"
                   return 0
