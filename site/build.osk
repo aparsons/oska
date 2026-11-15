@@ -437,15 +437,15 @@ fn not_found_page(all: Site) -> Page {
     let lead = "There is no page at this address. The search box at the top of the page finds pages by their words, or start from one of these:"
     var items = empty()
     if has_doc(all, "guide/install.html") {
-        items = items.concat(wrap("<li>", anchor_to("/guide/install.html", html.text("Install")), "</li>\n"))
+        items = items.concat(html_item(anchor_to("/guide/install.html", html.text("Install"))))
     }
     for section in all.sections {
         if section.dir == "guide" {
-            items = items.concat(wrap("<li>", anchor_to("/guide/", html.text("Guides")), "</li>\n"))
+            items = items.concat(html_item(anchor_to("/guide/", html.text("Guides"))))
         }
     }
     let llms = anchor_to("/llms.txt", html.text("llms.txt")).concat(html.text(": the pages, for AI agents"))
-    items = items.concat(wrap("<li>", llms, "</li>\n"))
+    items = items.concat(html_item(llms))
     let body = markup("<h1 id=\"page-not-found\">Page not found</h1>\n<p>").concat(html.text(lead)).concat(markup("</p>\n<ul>\n")).concat(items).concat(markup("</ul>\n"))
     Page(path: "404.html", title: "Page not found", body: body, md: "# Page not found\n\n{lead}\n")
 }
@@ -457,7 +457,7 @@ fn section_page(all: Site, section: Section) -> Page {
     for doc in all.docs {
         if doc.section == section.dir {
             let link = anchor_to(url_of(doc.page), html.text(doc.title))
-            items = items.concat(wrap("<li>", link, "</li>\n"))
+            items = items.concat(html_item(link))
             let copy = md_url(url_of(doc.page))
             md = "{md}- [{doc.title}]({copy})\n"
         }
@@ -1033,7 +1033,8 @@ fn meta_tag(attribute: String, key: String, content: Untrusted<String>) -> html.
 }
 
 // The end of every page: where it is built from, and the research, which
-// is background and proposals, not a task.
+// is background and proposals, not a task. The repository link is escaped
+// like any other URL; `research` is a static literal.
 fn site_footer(all: Site) -> html.Html {
     let source = repository()
     var research = ""
@@ -1042,7 +1043,8 @@ fn site_footer(all: Site) -> html.Html {
             research = " Background and proposals: <a href=\"/research/\">Research</a>."
         }
     }
-    markup("<footer>\n<p>Built from the <a href=\"{source}\">Oska repository on GitHub</a> by <code>site/build.osk</code>, an Oska program. The docs track <code>main</code>.{research}</p>\n</footer>\n<script src=\"/search.js\"></script>\n</body>\n</html>\n")
+    let built_from = markup("<footer>\n<p>Built from the ").concat(anchor_to(source, html.text("Oska repository on GitHub")))
+    built_from.concat(markup(" by <code>site/build.osk</code>, an Oska program. The docs track <code>main</code>.{research}</p>\n</footer>\n<script src=\"/search.js\"></script>\n</body>\n</html>\n"))
 }
 
 // What a page says about itself in its `<head>`: its canonical URL, and
@@ -1144,7 +1146,7 @@ fn reference_page(all: Site) -> Page {
     for entry in entries {
         let url = url_of(entry.at(0))
         let title = entry.at(1)
-        items = items.concat(wrap("<li>", anchor_to(url, html.text(title)), "</li>\n"))
+        items = items.concat(html_item(anchor_to(url, html.text(title))))
         let copy = md_url(url)
         md = "{md}- [{title}]({copy})\n"
     }
@@ -1481,7 +1483,7 @@ fn list_item(lines: List<Untrusted<String>>, start: Int, links: Links) -> Render
             i = i + 1
         }
     }
-    Rendered(html: wrap("<li>", blocks(item, links, !loose), "</li>\n"), next: i)
+    Rendered(html: html_item(blocks(item, links, !loose)), next: i)
 }
 
 // The lines from `start` up to a blank line or another block, as one
@@ -2087,6 +2089,11 @@ fn empty() -> html.Html {
     markup("")
 }
 
+// One item of an HTML list: `inner` in `<li>`, then a line break.
+fn html_item(inner: html.Html) -> html.Html {
+    wrap("<li>", inner, "</li>\n")
+}
+
 // Markup written here in the generator, which it vouches for.
 fn markup(text: String) -> html.Html {
     html.Html.raw(html.TrustedHtml.new(text))
@@ -2340,7 +2347,7 @@ fn codes_index(all: Site, codes: List<Code>) -> Page {
         let first = summary(local_links(code))
         let link = anchor_to("/codes/{code.code}.html", html.text(code.code))
         let line = link.concat(html.text(": ")).concat(inline(first, links))
-        items = items.concat(wrap("<li>", line, "</li>\n"))
+        items = items.concat(html_item(line))
         md = "{md}- [{code.code}]({base}/codes/{code.code}.md): {first}\n"
     }
     let body = markdown(intro, links).concat(data).concat(wrap("<ul>\n", items, "</ul>\n"))
@@ -2523,7 +2530,7 @@ fn setup_page(all: Site) -> Page {
     var files = markup("<h2 id=\"files\">Files</h2>\n<ul>\n")
     for item in setup_listing(all) {
         let link = anchor_to("/{item.path}", html.text(item.label))
-        files = files.concat(wrap("<li>", link.concat(markup(": ")).concat(html.text(item.note)), "</li>\n"))
+        files = files.concat(html_item(link.concat(markup(": ")).concat(html.text(item.note))))
     }
     let body = intro.concat(setup_block(all)).concat(files).concat(markup("</ul>\n"))
     Page(path: "agent-setup.html", title: "Agent setup prompt", body: body, md: asset_text(all, "prompt.md"))
