@@ -11,6 +11,10 @@
 #   --check            report the installed and the latest version, and
 #                      install nothing
 #   --uninstall        remove what the install receipt lists, and nothing else
+#   --add-to-path      also add one marked line to a shell profile, so that
+#                      oskac is on your PATH (nothing else is edited)
+#   --hook <dir>       also install the Claude Code check-after-edit hook
+#                      into the project in <dir>
 #   --json             print one JSON object on stdout, and nothing else
 #   --help             print this help
 #
@@ -39,6 +43,11 @@
 # It records what it installed in $OSKA_HOME/receipt.json, which is
 # advisory: no check above reads it. --uninstall removes the files the
 # receipt lists, if they are unchanged, and downloads nothing.
+#
+# By default nothing outside the Oska home is touched. --add-to-path and
+# --hook are opt-in, and the receipt records what they wrote, so that
+# --uninstall can undo it: the profile line only if that exact line is
+# still there, the hook script and the settings file only if unchanged.
 
 set -u
 
@@ -52,11 +61,23 @@ NAMESPACE=oska-release
 # Anything else, such as the unreplaced placeholder, is refused.
 INDEX_REQUIRED='@OSKA_INDEX_REQUIRED@'
 INDEX_NAMESPACE=oska-index
+# The comment that ends the line --add-to-path writes, so that --uninstall
+# removes only a line it can tell is the installer's own.
+PROFILE_MARK='# added by the Oska installer'
 DEFAULT_SITE_URL=https://oskalang.dev
 # The glibc of the Linux build runners (.github/workflows/release.yml).
 MIN_GLIBC=2.35
 
 json=0
+add_to_path=0
+hook_dir=
+profile_new=
+profile_line=
+profile_seen=0
+script_write=0
+settings_write=0
+settings_existed=0
+settings_merge_needed=false
 tmp=
 stage=
 version_tmp=
@@ -134,6 +155,10 @@ usage: curl -fsSL https://oskalang.dev/install.sh | sh -s -- [options]
   --check            report the installed and the latest version, and
                      install nothing
   --uninstall        remove what the install receipt lists, and nothing else
+  --add-to-path      also add one marked line to a shell profile, so that
+                     oskac is on your PATH (nothing else is edited)
+  --hook <dir>       also install the Claude Code check-after-edit hook
+                     into the project in <dir>
   --json             print one JSON object on stdout, and nothing else
   --help             print this help
 
@@ -229,6 +254,7 @@ check_glibc() {
 # seen. Written to a new file beside it, $receipt_tmp, which commit_install
 # renames into place. The version file is prepared the same way, first.
 prepare_records() {
+  collect_extras
   version_tmp=$(mktemp "$home/.version.XXXXXXXX") ||
     fail install_failed "cannot write a version file in $home"
   { printf '%s\n' "$version" >"$version_tmp" && chmod 644 "$version_tmp"; } ||
@@ -250,10 +276,70 @@ prepare_records() {
     printf '  "files": [\n'
     printf '    {"path": %s, "kind": "binary", "sha256": %s},\n' "$(json_str "$target")" "$(json_str "$actual")"
     printf '    {"path": %s, "kind": "record", "sha256": %s},\n' "$(json_str "$version_file")" "$(json_str "$(sha256 "$version_tmp")")"
+    printf '%s' "$extras"
     printf '    {"path": %s, "kind": "record"}\n' "$(json_str "$receipt")"
     printf '  ]\n'
     printf '}\n'
   } >"$receipt_tmp" || fail install_failed "cannot write $receipt_tmp"
+}
+
+# add_extra <kind> <path> <sha256> <line> <project>: a receipt entry for
+# what --add-to-path or --hook wrote, as one more line of $extras, unless
+# it is there already: the entries of the receipt being replaced are added
+# first, so a re-run without the flags keeps what an earlier run did.
+add_extra() {
+  case "$extra_keys" in
+    *"
+$1 $2 $4
+"*) return ;;
+  esac
+  extra_keys="$extra_keys$1 $2 $4
+"
+  extras="$extras    {\"path\": $(json_str "$2"), \"kind\": $(json_str "$1")"
+  if [ -n "$3" ]; then
+    extras="$extras, \"sha256\": $(json_str "$3")"
+  fi
+  if [ -n "$4" ]; then
+    extras="$extras, \"line\": $(json_str "$4")"
+  fi
+  if [ -n "$5" ]; then
+    extras="$extras, \"project\": $(json_str "$5")"
+  fi
+  extras="$extras},
+"
+}
+
+# $extras: the receipt entries, after the binary and the version file, for
+# what an earlier run and this one wrote outside the Oska home.
+collect_extras() {
+  extras=
+  extra_keys="
+"
+  tab=$(printf '\t')
+  if [ -f "$receipt" ] && [ ! -L "$receipt" ]; then
+    previous_entries=$(json_read files "$receipt" 2>/dev/null) || previous_entries=
+    while IFS="$tab" read -r e_kind e_sum e_path e_line e_project; do
+      case ${e_kind#k} in
+        profile_line | hook_script | hook_settings)
+          add_extra "${e_kind#k}" "${e_path#p}" "${e_sum#s}" "${e_line#l}" "${e_project#j}" ;;
+      esac
+    done <<EOF
+$previous_entries
+EOF
+  fi
+  if [ -n "$profile_new" ]; then
+    add_extra profile_line "$profile_new" "" "$profile_line" ""
+  fi
+  if [ "$script_write" = 1 ]; then
+    add_extra hook_script "$hook_script" "$script_sum" "" "$hook_dir"
+  fi
+  if [ "$settings_write" = 1 ]; then
+    add_extra hook_settings "$hook_settings" "$settings_sum" "" "$hook_dir"
+  elif [ -n "$hook_dir" ] && [ "$settings_existed" = 1 ]; then
+    # Settings the installer did not create, so that --uninstall reports
+    # them: it never removes a file without a SHA-256 here.
+    add_extra hook_settings "$hook_settings" "" "" "$hook_dir"
+  fi
 }
 
 # Moves the version file, the verified binary and then the receipt into
@@ -270,9 +356,148 @@ commit_install() {
   mv -f "$staged" "$target" || fail install_failed "cannot write $target"
   mv -f "$receipt_tmp" "$receipt" || fail install_failed "cannot write $receipt"
   receipt_tmp=
+  write_extras
   committing=0
   if [ -n "$pending" ]; then
     on_signal "$pending"
+  fi
+}
+
+# plan_profile: for --add-to-path, the one profile to add a line to,
+# chosen from the login shell, and the line. Nothing is written yet. With
+# the bin directory on PATH already there is nothing to add.
+plan_profile() {
+  [ -n "${HOME:-}" ] ||
+    fail install_failed "--add-to-path needs HOME, to find your shell profile; add $bin_dir to your PATH yourself"
+  nl='
+'
+  case $bin_dir in
+    *[\"\$\`\\]* | *"$nl"*)
+      fail install_failed "$bin_dir has a character that cannot go in a profile line safely; add it to your PATH yourself" ;;
+  esac
+  case ":${PATH:-}:" in
+    *":$bin_dir:"*) return ;;
+  esac
+  login_shell=${SHELL:-}
+  case ${login_shell##*/} in
+    zsh) name=.zshrc ;;
+    bash)
+      if [ "$(uname -s)" = Darwin ]; then
+        name=.bash_profile
+      else
+        name=.bashrc
+      fi ;;
+    *) name=.profile ;;
+  esac
+  profile=${HOME%/}/$name
+  profile_line="export PATH=\"$bin_dir:\$PATH\" $PROFILE_MARK"
+  if [ -L "$profile" ] || { [ -e "$profile" ] && [ ! -f "$profile" ]; }; then
+    fail install_failed "$profile is not a regular file, so the installer will not edit it; add $bin_dir to your PATH yourself"
+  fi
+  if symlink_above "$profile"; then
+    fail install_failed "$profile is reached through the symlink $linked, which --uninstall would refuse; add $bin_dir to your PATH yourself"
+  fi
+  profile_seen=0
+  if [ -f "$profile" ] && grep -Fx -- "$profile_line" "$profile" >/dev/null 2>&1; then
+    # Already there (an earlier run's, recorded in the receipt, or yours):
+    # nothing is added, and nothing new is claimed.
+    profile_seen=1
+    return
+  fi
+  profile_new=$profile
+}
+
+# plan_hook: for --hook <dir>, where the script and the settings go. Nothing
+# is written yet.
+plan_hook() {
+  case $hook_dir in
+    /*) ;;
+    *) hook_dir=$PWD/$hook_dir ;;
+  esac
+  while :; do
+    case $hook_dir in
+      ?*/) hook_dir=${hook_dir%/} ;;
+      *) break ;;
+    esac
+  done
+  [ -d "$hook_dir" ] || fail usage "--hook needs a project directory that exists; $hook_dir is not one"
+  tab=$(printf '\t')
+  nl='
+'
+  case $hook_dir/ in
+    */../* | */./* | *"$tab"* | *"$nl"* | */.config/oska/*)
+      fail usage "--hook cannot use the directory $hook_dir: it has .., a tab or a newline in it, or is in ~/.config/oska" ;;
+  esac
+  hook_script=$hook_dir/.claude/hooks/oska-check.sh
+  hook_settings=$hook_dir/.claude/settings.json
+  if symlink_above "$hook_script"; then
+    fail install_failed "$hook_dir is reached through the symlink $linked, which --uninstall would refuse"
+  fi
+  for f in "$hook_dir/.claude" "$hook_dir/.claude/hooks" "$hook_script" "$hook_settings"; do
+    if [ -L "$f" ]; then
+      fail install_failed "$f is a symlink, so the installer will not write there"
+    fi
+  done
+}
+
+# fetch_hook: downloads the published hook script and settings, and decides
+# what to write. The script is never written over a different file, and the
+# settings only if there are none.
+fetch_hook() {
+  agent_setup=$site/agent-setup
+  fetch "$agent_setup/oska-check.sh" "$tmp/oska-check.sh" ||
+    fail download_failed "cannot download $agent_setup/oska-check.sh"
+  fetch "$agent_setup/claude-settings.json" "$tmp/claude-settings.json" ||
+    fail download_failed "cannot download $agent_setup/claude-settings.json"
+  [ "$(head -n 1 "$tmp/oska-check.sh" | tr -d '\r')" = '#!/bin/sh' ] ||
+    fail download_failed "$agent_setup/oska-check.sh is not the hook script"
+  grep -q '"PostToolUse"' "$tmp/claude-settings.json" ||
+    fail download_failed "$agent_setup/claude-settings.json is not the hook settings"
+  script_sum=$(sha256 "$tmp/oska-check.sh")
+  settings_sum=$(sha256 "$tmp/claude-settings.json")
+  script_write=1
+  if [ -e "$hook_script" ]; then
+    if [ ! -f "$hook_script" ] || [ "$(sha256 "$hook_script")" != "$script_sum" ]; then
+      fail install_failed "$hook_script already exists and is not the published hook; nothing was installed"
+    fi
+    script_write=0
+  fi
+  settings_write=1
+  settings_existed=0
+  settings_merge_needed=false
+  if [ -e "$hook_settings" ]; then
+    settings_write=0
+    settings_existed=1
+    if [ ! -f "$hook_settings" ]; then
+      fail install_failed "$hook_settings is not a regular file; nothing was installed"
+    fi
+    if [ "$(sha256 "$hook_settings")" != "$settings_sum" ] && ! grep -q 'oska-check.sh' "$hook_settings"; then
+      settings_merge_needed=true
+    fi
+  fi
+}
+
+# write_extras: what --add-to-path and --hook add outside the Oska home,
+# after the receipt that records it is in place.
+write_extras() {
+  if [ -n "$profile_new" ]; then
+    if [ -s "$profile_new" ] && [ -n "$(tail -c 1 "$profile_new")" ]; then
+      printf '\n' >>"$profile_new" || fail install_failed "cannot write $profile_new"
+    fi
+    printf '%s\n' "$profile_line" >>"$profile_new" || fail install_failed "cannot write $profile_new"
+  fi
+  if [ -n "$hook_dir" ]; then
+    mkdir -p "$hook_dir/.claude/hooks" || fail install_failed "cannot create $hook_dir/.claude/hooks"
+    # noclobber: a file that appeared meanwhile is never written over.
+    if [ "$script_write" = 1 ]; then
+      (set -C && cat "$tmp/oska-check.sh" >"$hook_script") 2>/dev/null ||
+        fail install_failed "cannot write $hook_script"
+      chmod 644 "$hook_script" 2>/dev/null || true
+    fi
+    if [ "$settings_write" = 1 ]; then
+      (set -C && cat "$tmp/claude-settings.json" >"$hook_settings") 2>/dev/null ||
+        fail install_failed "cannot write $hook_settings"
+    fi
   fi
 }
 
@@ -363,8 +588,8 @@ oska_paths() {
 #           the top: "/latest/tag<TAB>s<string>" or "/serial<TAB>n<number>"
 #           (see json_get);
 #   files   one line per entry of a receipt's "files",
-#           "k<kind><TAB>s<sha256><TAB>p<path>", with an empty value for a
-#           missing or non-string one. It also fails on a schema other than
+#           "k<kind><TAB>s<sha256><TAB>p<path><TAB>l<line><TAB>j<project>",
+#           with an empty value for a missing or non-string one. It also fails on a schema other than
 #           1, no "files" array, or a \001 in an entry's value.
 json_read() {
   LC_ALL=C awk -v mode="$1" '
@@ -423,6 +648,8 @@ json_read() {
             if (key == "path") e_path = sval
             else if (key == "kind") e_kind = sval
             else if (key == "sha256") e_sha = sval
+            else if (key == "line") e_line = sval
+            else if (key == "project") e_project = sval
           }
           c = peek()
           pos++
@@ -439,12 +666,12 @@ json_read() {
         for (i = 0; ; i++) {
           if (at == "/files") {
             if (peek() != "{") die()
-            e_path = ""; e_kind = ""; e_sha = ""
+            e_path = ""; e_kind = ""; e_sha = ""; e_line = ""; e_project = ""
           }
           value(at "/" i)
           if (at == "/files") {
-            if (index(e_kind e_sha e_path, "\001")) die()
-            lines = lines "k" e_kind "\ts" e_sha "\tp" e_path "\n"
+            if (index(e_kind e_sha e_path e_line e_project, "\001")) die()
+            lines = lines "k" e_kind "\ts" e_sha "\tp" e_path "\tl" e_line "\tj" e_project "\n"
           }
           c = peek()
           pos++
@@ -511,12 +738,12 @@ unsafe() {
   fail unsafe_path "$*; nothing was removed"
 }
 
-# no_symlink_above <path>: refuses the uninstall if any directory above
+# symlink_above <path>: succeeds, setting $linked, if any directory above
 # <path> is a symlink, unless root owns it. Only root can make a symlink
 # root owns, so such a one (macOS's /var and /tmp, say) is the system's;
 # one anyone else made could steer a deletion out of where it should be.
 # `find -user` looks at the link itself, as find does not follow links.
-no_symlink_above() {
+symlink_above() {
   above=$1
   while :; do
     above=${above%/*}
@@ -527,11 +754,19 @@ no_symlink_above() {
         *) break ;;
       esac
     done
-    [ -n "$above" ] || return 0
+    [ -n "$above" ] || return 1
     if [ -L "$above" ] && [ -z "$(find "$above" -prune -user 0 2>/dev/null)" ]; then
-      unsafe "$1 is reached through the symlink $above"
+      linked=$above
+      return 0
     fi
   done
+}
+
+# no_symlink_above <path>: refuses the uninstall if symlink_above does.
+no_symlink_above() {
+  if symlink_above "$1"; then
+    unsafe "$1 is reached through the symlink $linked"
+  fi
 }
 
 # --uninstall: remove what the receipt lists, and nothing else. Every entry
@@ -572,13 +807,17 @@ $bin_dir
   remove_receipt=0
   kept=
   kept_why=
-  while IFS="$tab" read -r kind sum path; do
+  unline=
+  profile_hint=
+  while IFS="$tab" read -r kind sum path line project; do
     [ -n "$kind" ] || continue
     # Each field carries a one-letter prefix, so none is empty and the
     # tab separators never merge.
     kind=${kind#k}
     sum=${sum#s}
     path=${path#p}
+    line=${line#l}
+    project=${project#j}
     case $path in
       /*) ;;
       *) unsafe "the receipt lists '$path', which is not an absolute path" ;;
@@ -604,6 +843,38 @@ $bin_dir
         case $name in
           '' | . | */*) unsafe "the receipt lists $path, which is not directly in $home or $bin_dir" ;;
         esac ;;
+      profile_line)
+        # Only the profile files --add-to-path picks from, directly in the
+        # user's home, and only the line it writes: marked, so that a
+        # receipt cannot name some other line of the profile.
+        [ -n "${HOME:-}" ] ||
+          unsafe "the receipt lists the profile $path, and there is no HOME to check it against"
+        case $path in
+          "${HOME%/}/.zshrc" | "${HOME%/}/.bashrc" | "${HOME%/}/.bash_profile" | "${HOME%/}/.profile") ;;
+          *) unsafe "the receipt lists the profile $path, which is not a shell profile directly in $HOME" ;;
+        esac
+        case $line in
+          "export PATH="*"$PROFILE_MARK") ;;
+          *) unsafe "the receipt lists a line of $path that is not the marked line the installer adds" ;;
+        esac
+        dir=${path%/*}
+        no_symlink_above "$path" ;;
+      hook_script | hook_settings)
+        # Under the project recorded with it, at the place --hook writes.
+        case $project in
+          /*) ;;
+          *) unsafe "the receipt lists $path with the project '$project', which is not an absolute path" ;;
+        esac
+        case $project/ in
+          */../* | */./*) unsafe "the receipt lists the project $project, which climbs out with .." ;;
+        esac
+        case $kind in
+          hook_script) [ "$path" = "${project%/}/.claude/hooks/oska-check.sh" ] ;;
+          *) [ "$path" = "${project%/}/.claude/settings.json" ] ;;
+        esac ||
+          unsafe "the receipt lists $path, which is not where --hook writes it in the project $project"
+        dir=${path%/*}
+        no_symlink_above "$path" ;;
       *) unsafe "the receipt lists $path as a '$kind', which this installer does not remove" ;;
     esac
     if [ -L "$dir" ] || [ -L "$path" ]; then
@@ -617,12 +888,28 @@ $path
     acted="$acted$path
 "
 
+    if [ "$kind" = profile_line ]; then
+      if [ ! -e "$path" ]; then
+        continue
+      elif [ ! -f "$path" ]; then
+        keep "$path" "not a regular file"
+      elif grep -Fx -- "$line" "$path" >/dev/null 2>&1; then
+        unline="$unline$path$tab$line
+"
+      else
+        keep "$path" "the line the installer added is no longer there as it was written"
+        profile_hint="remove the line the installer added, if it is still there, from $path: $line"
+      fi
+      continue
+    fi
     if [ ! -e "$path" ]; then
       continue
     elif [ ! -f "$path" ]; then
       keep "$path" "not a regular file"
     elif [ "$path" = "$receipt" ]; then
       remove_receipt=1
+    elif [ -z "$sum" ] && [ "$kind" = hook_settings ]; then
+      keep "$path" "settings the installer did not create; remove its oska-check hook by hand"
     elif [ -z "$sum" ]; then
       keep "$path" "the receipt records no SHA-256 for it"
     elif [ "$(sha256 "$path")" != "$sum" ]; then
@@ -651,6 +938,21 @@ EOF
   done <<EOF
 $remove
 EOF
+  # A profile line goes by rewriting the file without the lines that equal
+  # it, which keeps the file's own mode and owner.
+  while IFS="$tab" read -r path line; do
+    [ -n "$path" ] || continue
+    if edited=$(L=$line awk 'BEGIN { l = ENVIRON["L"] } $0 != l { print }' "$path" && echo x) &&
+      printf '%s' "${edited%x}" >"$path" 2>/dev/null; then
+      removed="$removed$path (the PATH line the installer added)
+"
+    else
+      failed=1
+      keep "$path" "could not be edited"
+    fi
+  done <<EOF
+$unline
+EOF
   if [ "$remove_receipt" = 1 ]; then
     if [ "$failed" = 0 ] && rm -f "$receipt" 2>/dev/null; then
       removed="$removed$receipt
@@ -672,10 +974,12 @@ EOF
     keep "$config_dir" "settings and credentials, which uninstall never touches"
   fi
 
-  path_hint=
-  case ":${PATH:-}:" in
-    *":$bin_dir:"*) path_hint="$bin_dir is on your PATH; remove it from the shell profile that adds it" ;;
-  esac
+  path_hint=$profile_hint
+  if [ -z "$path_hint" ] && [ -z "$unline" ]; then
+    case ":${PATH:-}:" in
+      *":$bin_dir:"*) path_hint="$bin_dir is on your PATH; remove it from the shell profile that adds it" ;;
+    esac
+  fi
 
   if [ "$json" = 1 ]; then
     if [ -n "$path_hint" ]; then
@@ -855,6 +1159,14 @@ main() {
         shift ;;
       --version=*) requested=${1#--version=} ;;
       --allow-downgrade) allow_downgrade=1 ;;
+      --add-to-path) add_to_path=1 ;;
+      --hook)
+        [ $# -ge 2 ] && [ -n "$2" ] || fail usage "--hook needs a project directory, like --hook ."
+        hook_dir=$2
+        shift ;;
+      --hook=*)
+        hook_dir=${1#--hook=}
+        [ -n "$hook_dir" ] || fail usage "--hook needs a project directory, like --hook ." ;;
       --check | --uninstall)
         [ -z "$mode" ] || [ "$mode" = "$1" ] ||
           fail usage "$mode and $1 cannot be used together; pick one"
@@ -871,6 +1183,8 @@ main() {
   if [ -n "$mode" ]; then
     [ -z "$requested" ] || fail usage "--version cannot be used with $mode"
     [ "$allow_downgrade" = 0 ] || fail usage "--allow-downgrade cannot be used with $mode"
+    [ "$add_to_path" = 0 ] || fail usage "--add-to-path cannot be used with $mode"
+    [ -z "$hook_dir" ] || fail usage "--hook cannot be used with $mode"
     if [ "$mode" = --uninstall ]; then
       uninstall
       return
@@ -920,6 +1234,14 @@ main() {
   # every mktemp; BSD and GNU differ on where a bare `mktemp -d` goes.
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/oska-install.XXXXXXXX") ||
     fail install_failed "cannot create a temporary directory"
+  if [ "$mode" != --check ]; then
+    if [ "$add_to_path" = 1 ]; then
+      plan_profile
+    fi
+    if [ -n "$hook_dir" ]; then
+      plan_hook
+    fi
+  fi
 
   # The latest release, unless --version names one: from the signed index
   # when this installer is pinned to require it, else from latest.json.
@@ -1000,6 +1322,9 @@ main() {
     *) fail install_failed "ssh-keygen cannot fingerprint the release key" ;;
   esac
 
+  if [ -n "$hook_dir" ]; then
+    fetch_hook
+  fi
   mkdir -p "$bin_dir" || fail install_failed "cannot create $bin_dir"
   # Stage in a new directory only this user can write to, made next to the
   # target so the final move is an atomic rename. mktemp picks a name no one
@@ -1031,16 +1356,31 @@ main() {
     *) on_path=false ;;
   esac
 
+  # What --add-to-path and --hook did, as extra JSON fields.
+  extra_json=
+  if [ -n "$profile_new" ]; then
+    extra_json=", \"profile\": $(json_str "$profile_new")"
+  fi
+  if [ -n "$hook_dir" ]; then
+    extra_json="$extra_json, \"hook_script\": $(json_str "$hook_script")"
+    if [ "$settings_write" = 1 ]; then
+      extra_json="$extra_json, \"hook_settings\": $(json_str "$hook_settings")"
+    else
+      extra_json="$extra_json, \"hook_settings\": null"
+    fi
+    extra_json="$extra_json, \"settings_merge_needed\": $settings_merge_needed"
+  fi
+
   if [ "$json" = 1 ]; then
     if [ -n "$previous" ]; then
       previous_json=$(json_str "$previous")
     else
       previous_json=null
     fi
-    printf '{"ok": true, "action": %s, "version": %s, "tag": %s, "previous_version": %s, "platform": %s, "path": %s, "bin_dir": %s, "on_path": %s, "checksum_verified": true, "signature_verified": true, "receipt": %s, "index_verified": %s, "index_serial": %s}\n' \
+    printf '{"ok": true, "action": %s, "version": %s, "tag": %s, "previous_version": %s, "platform": %s, "path": %s, "bin_dir": %s, "on_path": %s, "checksum_verified": true, "signature_verified": true, "receipt": %s, "index_verified": %s, "index_serial": %s%s}\n' \
       "$(json_str "$action")" "$(json_str "$version")" "$(json_str "$tag")" "$previous_json" \
       "$(json_str "$platform")" "$(json_str "$target")" "$(json_str "$bin_dir")" "$on_path" \
-      "$(json_str "$receipt")" "$index_verified" "${index_serial:-null}"
+      "$(json_str "$receipt")" "$index_verified" "${index_serial:-null}" "$extra_json"
     return
   fi
 
@@ -1051,7 +1391,25 @@ main() {
     downgraded) echo "Downgraded oskac $previous to $version in $target." ;;
   esac
   echo "The checksum and the release signature were verified."
-  if [ "$on_path" = false ]; then
+  if [ -n "$profile_new" ]; then
+    echo
+    echo "Added $bin_dir to your PATH in $profile_new; open a new shell to use it."
+    echo "  $profile_line"
+  elif [ "$add_to_path" = 1 ] && [ "$profile_seen" = 1 ]; then
+    echo
+    echo "$profile already puts $bin_dir on your PATH; open a new shell to use it."
+  fi
+  if [ -n "$hook_dir" ]; then
+    echo
+    echo "Installed the Claude Code hook script in $hook_script."
+    if [ "$settings_write" = 1 ]; then
+      echo "Created the project's Claude Code settings, $hook_settings."
+    elif [ "$settings_merge_needed" = true ]; then
+      echo "$hook_settings already exists, so it was left as it is: merge the hooks of"
+      echo "  $site/agent-setup/claude-settings.json into it to turn the hook on."
+    fi
+  fi
+  if [ "$on_path" = false ] && [ "$add_to_path" = 0 ]; then
     echo
     echo "$bin_dir is not on your PATH. Add it, for example in ~/.profile:"
     echo
