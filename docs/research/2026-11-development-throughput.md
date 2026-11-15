@@ -220,6 +220,130 @@ None of these has been run. Each needs the machine with a load average near 1 (`
 5. Should `ci.yml` run on `ticket/**` pushes, as `windows.yml` and `confinement.yml` do?
 6. Should the orchestrator hand off to a fresh session at each spec boundary, with the ledger and spec issue as the only carried state?
 
+## Part 5: measured at idle (2026-11-15)
+
+Ticket #285 of spec #280. Parts 1 to 3 had no idle Pi timings; this part has them. **Nothing here is adopted.** The recommendation at the end is for the maintainer to accept, change or reject.
+
+### Method
+
+- **Machine and state.** The Raspberry Pi 5 (4 cores) with no other build running: load average 1.1 to 1.2 before each run (`uptime` is recorded beside every run). Two runs began at 1.8 to 2.0 because the one-minute average still held my own previous run, with nothing else running, and for one run (four crates at 2 plus nextest) I was parsing logs in its first minute; their numbers agree with the neighbouring runs. `vcgencmd get_throttled` was `0x0` and the clock 2.4 GHz after the runs.
+- **Environment.** `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0` and `OSKA_BUILD_SLOTS=2`. Every run started with `cargo clean`, so compile time is included. One run per configuration on the Pi (n = 1) and one repeat of the baseline; two per configuration on CI.
+- **Base.** `e70c06a` (main when the work began). Main moved to `198a2d0` (PR #268, 82 more tests) halfway through. Every number below is on `e70c06a`, except where a row says otherwise. The first CI baseline and the first nextest Pi run had accidentally used `198a2d0`; I redid them on `e70c06a` and keep the older numbers only as extra samples.
+- **What is timed.** *Compile* is the time from the start of the `cargo test` step to cargo's `Finished test profile` line. *Run* is the rest of that step. *Test step* is both. The *whole check* adds the other 53 s of `check.sh` (guards, fmt, clippy, the script tests, shellcheck). For the `opt-level` variants one test fails (below), so `check.sh` stops there and I ran `cargo test --all --no-fail-fast` instead; their whole-check figure is the test step plus the baseline's 53 s, marked *est.*
+- **Variants** were scratch commits on `ticket/285-*` branches that are not merged and are deleted. The Cargo change is:
+
+```toml
+[profile.dev.package.oska-run]
+opt-level = 2        # and the same table for oskac, oska-check, oska-native
+```
+
+  `test` inherits `dev`, and the library crates that the test binaries link are built under `dev`, so the override goes under `dev`.
+- **CI** ran each variant's `check.sh` on a push to `ticket/285-*` (arm64 `ubuntu-24.04-arm` and x86_64 `ubuntu-latest`, `ci.yml`'s `test` job). The nextest variants add one step, `cargo install cargo-nextest --locked`, timed on its own.
+
+### The Pi at idle
+
+| Configuration | Compile | Run | Test step | Whole check | Test step vs baseline |
+| --- | --- | --- | --- | --- | --- |
+| **Baseline** (`check.sh` as is) | 72.7 s | 798.7 s | 871.4 s | **924 s** (15.4 min) | |
+| `oska-run` at `opt-level = 2` | 116.3 s | 480.8 s | 597.1 s | about 650 s *(est.)* | -31% |
+| `oska-run`, `oskac`, `oska-check`, `oska-native` at 2 | 180.1 s | 231.3 s | 411.4 s | about 464 s *(est.)* | -53% |
+| the same four at `opt-level = 1` | 119.8 s | 282.5 s | 402.3 s | about 455 s *(est.)* | -54% |
+| `cargo nextest run` (+ `cargo test --doc`) | 47.4 s | 581.8 s | 629.2 s | 681 s | -28% |
+| the four at 2, plus nextest | 161.4 s | 167.7 s | 329.1 s | about 382 s *(est.)* | -62% |
+
+- **The idle Pi takes 14.7 to 15.4 minutes, not "about 5".** Part 1's Summary quoted 5 minutes from session notes and was wrong. The idle Pi is slower than a GitHub arm64 runner (about 10 minutes for the same tree, below). Compile is 8% of the whole check; the test run is 86%.
+- **The test run leaves cores idle.** Load average during the baseline test run was 2 to 3 on 4 cores, because cargo runs the test binaries one after another and each binary's long tests occupy fewer than four threads. That is what nextest recovers (it keeps four tests running across all binaries: load 3.5 to 4.2).
+- **The baseline has one repeat on the Pi.** A check run the same way from a clean target at load 0.1, on the same tree plus an earlier draft of this document, took 884 s (compile 47.4 s, run 784.6 s, test step 832.0 s): 4% under the first 924 s. The test profile's compile time was 73 s in the first baseline and 47 s in the repeat and in the nextest run (a cold file cache is my guess). I did not repeat the other Pi variants, so treat differences under about 15% as noise, and the compile increments below as uncertain by up to 25 s.
+- Pi on `198a2d0` (2,033 tests) with nextest: whole check 707 s, test run 594 s. Consistent with the row above.
+
+**Each variant's slowest binaries (test run seconds, `cargo test`):**
+
+| Baseline | `oska-run` at 2 | four crates at 2 | four crates at 1 |
+| --- | --- | --- | --- |
+| `site` 162.1 | `site` 89.7 | `native_files` 41.9 | `site` 45.6 |
+| `site_corpus` 80.7 | `native_prelude` 48.2 | `site` 30.7 | `site_links` 30.4 |
+| `site_links` 68.2 | `native_corpus` 38.9 | `native_prelude` 18.9 | `site_corpus` 27.8 |
+| `site_home` 66.9 | `site_corpus` 34.1 | `native_corpus` 15.1 | `native_prelude` 20.4 |
+| `native_corpus` 56.0 | `site_links` 27.6 | `site_corpus` 14.8 | `native_corpus` 18.4 |
+| `native_prelude` 47.2 | `site_home` 23.2 | `site_links` 12.9 | `site_home` 17.1 |
+| `catalog` 46.4 | `native_ints` 22.8 | `site_home` 11.7 | `native_files` 12.4 |
+| `agent_setup` 46.0 | `native_files` 20.0 | `native_ints` 9.4 | `native_ints` 11.4 |
+| **top 8: 573.5 of 798.0 s (72%)** | 304.5 of 480.1 s (63%) | 155.3 of 230.7 s (67%) | 183.6 of 281.9 s (65%) |
+
+`native_files` is 26.6 s in the baseline and 41.9 s with the four crates optimised; I did not find out why.
+
+### Fast/slow split, on the Pi
+
+With the baseline's `target/` already built, I ran the eight slowest binaries (`site`, `site_corpus`, `site_links`, `site_home`, `native_corpus`, `native_prelude`, `catalog`, `agent_setup`) alone, then every other test target plus the library and binary unit tests, then the doctests.
+
+| Part | Test run (compiled) | Share |
+| --- | --- | --- |
+| The 8 slowest binaries | 582.5 s | 74% |
+| Every other test target, the unit tests and the doctests | 201.2 s | 26% |
+| Together | 783.7 s | (the full run took 798.7 s) |
+
+- A fast tier of "everything but the eight" would take about **924 - 582 = 342 s** for the whole check on the Pi (-63%). The slow tier is the eight binaries, 582 s.
+- After the `opt-level` change the eight shrink to 184 of 282 s (four crates at 1), so a split would save about 184 s of a 455 s check then (-40%), not 582 s of 924 s. The two options overlap; they are not additive.
+
+### The CI runners
+
+`check.sh` step, seconds, two samples each. "Test step" is compile plus run. Install is `cargo install cargo-nextest --locked`, a separate step.
+
+| Configuration | arm64 test step | arm64 whole check step | x86_64 test step | x86_64 whole check step |
+| --- | --- | --- | --- | --- |
+| **Baseline** `e70c06a` | 561, 554 | 597, 586 | 398, 336 | 429, 369 |
+| Baseline `198a2d0` (extra samples) | 580 | 618 | 650 | 696 |
+| `oska-run` at 2 | 393, 390 | 412, 408 | 454, 349 | 480, 369 |
+| four crates at 2 | 202, 209 | 220, 228 | 285, 214 | 324, 234 |
+| nextest | 412, 407 | 440, 433 | 484, 476 | 517, 508 |
+| nextest, install step added | | 598, 583 | | 762, 746 |
+| four crates at 2, plus nextest | 171, 182 | 184, 195 | 252, 148 | 267, 157 |
+| plus its install step | | 346, 360 | | 515, 313 |
+
+- Compile and run, baseline: arm64 29 to 31 s plus 525 to 530 s; x86_64 18 s plus 319 to 379 s. With the four crates at 2: arm64 91 to 95 s plus 111 to 114 s; x86_64 97 to 133 s plus 117 to 152 s. The compile cost of the override is 60 to 65 s on arm64 and 80 to 115 s on x86_64.
+- On arm64 the top 8 binaries are 73% of the baseline run (111, 54, 45, 43, 37, 36, 31, 31 s: the same eight as the Pi). With the four crates at 2, `site` falls from 111 s to 17 s.
+- **Noise on x86_64 is large.** Two runs of identical code finished in 336 and 398 s; `198a2d0` took 650 s. On arm64 the three baseline runs are within 7%. Any x86_64 comparison under about 25% is not a result; the arm64 and Pi numbers are steadier.
+- Overriding `oska-run` alone helps arm64 (-30%) but not x86_64 (349 and 454 s against 336 and 398). The Oska programs the tests run are compiled by `oskac` as well as interpreted; the debug compiler is where the rest of the time goes, as the dev-tooling research found (5.4 to 6.3 times slower than release).
+- For the `opt-level` variants the "whole check step" ends at the one failing test and so omits the 10 to 20 s of script tests and shellcheck that follow; compare the test-step columns.
+- Windows and confinement runs for two of these branches came out green and took 2.4 to 3.7 minutes; they were not part of the comparison.
+
+### What each option would change
+
+**1. A higher `opt-level` for the four crates (the largest effect).**
+
+- *CI:* nothing in `.github/workflows`. The change is in the root `Cargo.toml`. The unsafe guard, which refuses configs that could lower lints, accepted the profile table in every run.
+- *One test must change first.* `crates/oskac/tests/native_default.rs`, `run_and_test_are_native_by_default_and_interpret_selects_the_interpreter`, asserts that under `cfg!(debug_assertions)` the interpreter refuses recursion to depth 40,000 with `P0021`. With an optimised interpreter it succeeds (it prints `40000`) and the assertion fails. It is the only failing test, with `oska-run` alone or with all four crates, under `cargo test` and under nextest. *Inference:* the depth the interpreter reaches depends on its stack frame size, which optimisation changes. Choosing a new depth, or a better way to assert the limit, is a small ticket of its own.
+- *What `check.sh` verifies:* the same tests run, with debug assertions and overflow checks still on (`dev` keeps them; only `opt-level` changes). It runs the interpreter and compiler optimised instead of unoptimised. *Inference:* only a bug that depends on frame size or optimisation could differ, and the workspace forbids `unsafe` outside `oska-sys`.
+- *Cost:* longer compile. From a clean target: Pi +44 s (`oska-run` alone), +107 s (four crates at 2), +47 s (four crates at 1). **The inner loop pays it too.** With `CARGO_INCREMENTAL=0` (the lean environment) editing one of these crates recompiles the whole crate, so every `cargo test -p oskac` after an edit compiles `oskac` at the higher level. I did not time an edit-and-rebuild; the from-clean figures are the upper bound for the four together. Against the 47 s compile of the repeat, the three increments would be +69, +133 and +72 s.
+- Release builds and shipped binaries are unaffected.
+
+**2. `cargo nextest`.**
+
+- *Pi:* -26% on the whole check (924 to 681 s).
+- *CI:* it has to be installed. The workflow guard allows a `run:` step, so `cargo install cargo-nextest --locked` passes (the nextest branch's CI ran green), but it costs 150 to 165 s on arm64 and 156 to 248 s on x86_64 every job, which cancels the arm64 gain (597 to 598 s with the install) and makes x86_64 slower (369 to 429 s up to 746 to 762 s). On x86_64 the test run itself was slower with nextest (451 to 458 s against 319 to 379 s); I did not find out why. A cache (`actions/cache` is an official action, so the guard allows it) or a pinned prebuilt binary could remove the install cost; I measured neither.
+- *Policy:* `ci.yml` says local and CI run one script so they cannot drift. `check.sh` would need nextest everywhere, or a fallback to `cargo test`, which is two code paths. Nextest does not run doctests, so `check.sh` needs `cargo test --doc` as well (0.5 s on the Pi). The Part 3 stress test of #270 (`ETXTBSY`, 50 runs under each runner) was not run.
+- *On top of the `opt-level` change* it is worth about 20% on the Pi (411 to 329 s) and nothing measurable on CI (arm64 202 to 209 s against 171 to 182 s before the install; x86_64 within noise).
+
+**3. A fast/slow split.**
+
+- *CI:* none needed. CI could also run the eight in a separate parallel job; the wall-clock gain would be the shorter of the two jobs, up to about a quarter of the time (*inference*, not measured).
+- *Policy:* `CLAUDE.md` says "run `scripts/check.sh` before every commit" and the pre-push hook runs the same script. A two-tier check changes both: the commit tier, the push tier, what the pass stamp records (which tier passed), and what an agent may report as verified. The eight are the site-generator conformance tests and the native-code differential suites, so a diff that touches `site/`, docs or the compiler needs the slow tier.
+- *Effect:* -63% on the Pi now; about -40% after the `opt-level` change (*inference*: 184 s of 455 s).
+
+### Recommendation (for the maintainer; not adopted)
+
+1. **Adopt the `opt-level` override for `oska-run`, `oskac`, `oska-check` and `oska-native`, after fixing `native_default`'s depth assertion.** It is the only option that shrinks the bulk (-53% test step on the Pi, -63% on arm64) without a CI change, a policy change or a new tool. Start at `opt-level = 1`: on the Pi it gave the same test step as 2 (402 against 411 s) with 60 s less compile, which matters for the inner loop. I measured level 1 only on the Pi, so the adoption ticket should run it on CI once and fall back to 2, which is measured on both. Expected whole check: Pi about 924 to 455 s, CI arm64 about 590 to 230 s.
+2. **Do not adopt `oska-run` alone.** It gives -31% on the Pi, -30% on arm64 and nothing on x86_64.
+3. **Do not adopt nextest now.** On top of (1) it saves about 20% on the Pi and nothing on CI, costs an install on every CI job, and splits the local and CI commands. Revisit if, after (1), the Pi check is still the bottleneck; the install cost must be solved first (cache or pinned binary).
+4. **Do not split the check now.** After (1) the slow eight are 184 of 282 s on the Pi; the split would save about 184 s of 455 s and cost a two-tier policy in `CLAUDE.md`, the hook and the stamp. Re-measure after (1).
+5. **Correct the baseline in Part 1's Summary:** the idle Pi runs the check in about 15 minutes (884 to 924 s), the arm64 runner in about 10 and the x86_64 runner in 6 to 12.
+
+### Not measured
+
+- Pi repeats of the variants (n = 1 each); `opt-level` 1 on CI; the rebuild time after an edit under each override; `oska-syntax` and `oska-sys` at a higher level (the ticket named four crates).
+- The #270 stress test, nextest test groups, a cached or prebuilt nextest in CI, a parallel slow-tier job, `cargo build --tests --timings`, and Part 3's slot-cap experiment (that belongs to #283).
+- Windows and macOS test times.
+
 ## All sources fetched
 
 | Source | Quality | Topic |
