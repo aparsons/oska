@@ -27,6 +27,10 @@ const MINIMAL_REPO: &[(&str, &str)] = &[
     ("site/style.css", "body {}\n"),
     ("site/search.js", "// search\n"),
     (
+        "site/favicon.svg",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n",
+    ),
+    (
         "Cargo.toml",
         "[workspace.package]\nversion = \"1.2.3\"\nlicense = \"Apache-2.0\"\n",
     ),
@@ -258,7 +262,11 @@ fn a_navigation_entry_whose_page_is_not_published_is_left_out() {
 #[test]
 fn the_reference_page_holds_the_internals_glossary_decisions_and_research() {
     let site = site_of(FULL_REPO);
-    let page = between(&site["reference.html"], "<main>", "</main>");
+    let page = between(
+        &site["reference.html"],
+        "<main id=\"main-content\">",
+        "</main>",
+    );
     assert!(page.contains("<h1>Reference</h1>"), "{page}");
     let links = hrefs(page);
     for href in [
@@ -342,6 +350,7 @@ fn real_site() -> BTreeMap<String, String> {
         "Cargo.toml",
         "site/style.css",
         "site/search.js",
+        "site/favicon.svg",
     ] {
         let text = std::fs::read_to_string(root.join(file)).expect("a repository file");
         files.push((file.to_string(), text));
@@ -361,7 +370,7 @@ fn real_site() -> BTreeMap<String, String> {
 #[test]
 fn the_real_home_page_leads_with_install_the_prompt_and_the_quickstart() {
     let site = real_site();
-    let home = between(&site["index.html"], "<main>", "</main>");
+    let home = between(&site["index.html"], "<main id=\"main-content\">", "</main>");
     // In the order a newcomer needs them.
     let at = |needle: &str| {
         home.find(needle)
@@ -416,10 +425,14 @@ fn the_real_navigation_and_reference_page_reach_every_section() {
             "Reference"
         ]
     );
-    let reference = hrefs(between(&site["reference.html"], "<main>", "</main>"))
-        .into_iter()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
+    let reference = hrefs(between(
+        &site["reference.html"],
+        "<main id=\"main-content\">",
+        "</main>",
+    ))
+    .into_iter()
+    .map(str::to_string)
+    .collect::<Vec<_>>();
     for href in [
         "/ast.html",
         "/checker.html",

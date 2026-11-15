@@ -316,6 +316,7 @@ fn site_inputs() -> Vec<(String, String)> {
         "Cargo.toml",
         "site/style.css",
         "site/search.js",
+        "site/favicon.svg",
     ] {
         files.push((file.to_string(), read(&root.join(file))));
     }

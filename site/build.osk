@@ -5,8 +5,8 @@
 // handed the filesystem read-only and write-only, and narrows each before
 // it reads or writes anything: reading to `docs/` and to the files the
 // site needs beside it (the security policy, the glossary, `Cargo.toml`
-// for the version, the stylesheet, and the search script), each
-// restricted to on its own, and writing to `_site/`, which it creates.
+// for the version, the stylesheet, the search script and the favicon),
+// each restricted to on its own, and writing to `_site/`, which it creates.
 // The home page is `docs/index.md`; the README is the repository's front
 // page, for contributors, and the site does not read it.
 //
@@ -56,6 +56,8 @@ cap struct Sources {
     style: FileRead,
     manifest: FileRead,
     search: FileRead,
+    // `site/favicon.svg`: the icon every page links.
+    favicon: FileRead,
     // `site/agent-setup/`: the agent-setup prompt and its templates.
     setup: DirRead,
     // `site/authority.txt`: the authority report `oskac check
@@ -72,6 +74,7 @@ fn main(read: FsRead, write: FsWrite) -> Result<(), IoError> {
         style: read.restrict_to_file("site/style.css"),
         manifest: read.restrict_to_file("Cargo.toml"),
         search: read.restrict_to_file("site/search.js"),
+        favicon: read.restrict_to_file("site/favicon.svg"),
         setup: read.restrict_to("site/agent-setup"),
         authority: read.restrict_to_file("site/authority.txt"),
     )
@@ -180,6 +183,12 @@ fn build(sources: Sources, site: DirWrite) -> Result<(), IoError> {
     site.write(Path.new("style.css"), style)?
     let search = sources.search.read_to_string()?
     site.write(Path.new("search.js"), search)?
+    let favicon = sources.favicon.read_to_string()?
+    site.write(Path.new("favicon.svg"), favicon)?
+    // The 404 page is served at any path, so it is no page of the site's:
+    // it has no copy, and no entry in the sitemap, `llms.txt` or the search
+    // index.
+    site.write(Path.new("404.html"), layout(all, not_found_page(all)).render())?
     site.write(Path.new("CNAME"), cname())?
     if has_catalog(all) {
         site.write(Path.new("codes.json"), codes_json(codes))?
@@ -389,6 +398,27 @@ fn doc_page(all: Site, doc: Doc) -> Page {
         return prompt_doc_page(all, doc, links)
     }
     Page(path: doc.page, title: doc.title, body: markdown(doc.text, links), md: retarget(doc.text, links))
+}
+
+// The 404 page: what GitHub Pages serves for an address with no page. It
+// points to search and, with root-relative links, so that it works at any
+// path, to the install guide, the guides and `llms.txt`. A link is there
+// only if the site has its page.
+fn not_found_page(all: Site) -> Page {
+    let lead = "There is no page at this address. The search box at the top of the page finds pages by their words, or start from one of these:"
+    var items = empty()
+    if has_doc(all, "guide/install.html") {
+        items = items.concat(wrap("<li>", anchor_to("/guide/install.html", html.text("Install")), "</li>\n"))
+    }
+    for section in all.sections {
+        if section.dir == "guide" {
+            items = items.concat(wrap("<li>", anchor_to("/guide/", html.text("Guides")), "</li>\n"))
+        }
+    }
+    let llms = anchor_to("/llms.txt", html.text("llms.txt")).concat(html.text(": the pages, for AI agents"))
+    items = items.concat(wrap("<li>", llms, "</li>\n"))
+    let body = markup("<h1 id=\"page-not-found\">Page not found</h1>\n<p>").concat(html.text(lead)).concat(markup("</p>\n<ul>\n")).concat(items).concat(markup("</ul>\n"))
+    Page(path: "404.html", title: "Page not found", body: body, md: "# Page not found\n\n{lead}\n")
 }
 
 // A section's index: a list of its docs, by title.
@@ -725,14 +755,46 @@ fn font_stylesheet(package: String, file: String, integrity: String) -> html.Htm
 fn layout(all: Site, page: Page) -> html.Html {
     let policy = csp()
     let head = markup("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta http-equiv=\"Content-Security-Policy\" content=\"{policy}\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n")
-    let name = if page.path == "index.html" { page.title } else { "{page.title} · Oska" }
+    let name = title_of_page(page)
     let title = wrap("<title>", html.text(name), "</title>\n")
-    let style = markup("<link rel=\"stylesheet\" href=\"/style.css\">\n</head>\n<body>\n")
+    let style = markup("<link rel=\"icon\" href=\"/favicon.svg\" type=\"image/svg+xml\">\n<link rel=\"stylesheet\" href=\"/style.css\">\n</head>\n<body>\n<a class=\"skip-link\" href=\"#main-content\">Skip to content</a>\n")
     let header = wrap("<header>\n", navigation(all, page.path), "</header>\n")
-    let main = wrap("<main>\n", page.body, "</main>\n")
+    let main = wrap("<main id=\"main-content\">\n", page.body, "</main>\n")
     let footer = site_footer(all)
     let data = if page.path == "index.html" { structured_data(all.version) } else { empty() }
-    head.concat(title).concat(about(page)).concat(data).concat(fonts()).concat(style).concat(banner(all.version)).concat(header).concat(main).concat(footer)
+    head.concat(title).concat(description(page, name)).concat(about(page)).concat(data).concat(fonts()).concat(style).concat(banner(all.version)).concat(header).concat(main).concat(footer)
+}
+
+// What the home page's title says Oska is. It is the home page's title
+// whatever the page's own source is headed.
+fn home_title() -> String {
+    "Oska: an AI-first, secure-by-default programming language"
+}
+
+// The text of a page's `<title>` and of its `og:title`.
+fn title_of_page(page: Page) -> Untrusted<String> {
+    if page.path == "index.html" {
+        home_title()
+    } else {
+        "{page.title} · Oska"
+    }
+}
+
+// What a page says about itself to a search engine or a link preview: a
+// description (the page's own summary, or what Oska is for a page with no
+// paragraph) and Open Graph's title, description, URL and type. Every
+// value goes in through `html.text`. The 404 page has no URL of its own.
+fn description(page: Page, name: Untrusted<String>) -> html.Html {
+    let summary = summary_of(page.md)
+    let text: Untrusted<String> = if summary == "" { "Oska: an AI-first, secure-by-default programming language." } else { summary }
+    let kind = if page.path == "index.html" { "website" } else { "article" }
+    let url = if page.path == "404.html" { empty() } else { meta_tag("property", "og:url", canonical(page.path)) }
+    meta_tag("name", "description", text).concat(meta_tag("property", "og:title", name)).concat(meta_tag("property", "og:description", text)).concat(url).concat(meta_tag("property", "og:type", kind))
+}
+
+// `<meta {attribute}="{key}" content="{content}">`, the content escaped.
+fn meta_tag(attribute: String, key: String, content: Untrusted<String>) -> html.Html {
+    markup("<meta {attribute}=\"{key}\" content=\"").concat(html.text(content)).concat(markup("\">\n"))
 }
 
 // The end of every page: where it is built from, and the research, which
@@ -749,8 +811,12 @@ fn site_footer(all: Site) -> html.Html {
 }
 
 // What a page says about itself in its `<head>`: its canonical URL, and
-// where its Markdown copy is.
+// where its Markdown copy is. The 404 page, which is served at any path,
+// says neither.
 fn about(page: Page) -> html.Html {
+    if page.path == "404.html" {
+        return empty()
+    }
     let canonical_link = markup("<link rel=\"canonical\" href=\"").concat(html.text(canonical(page.path))).concat(markup("\">\n"))
     let copy = markup("<link rel=\"alternate\" type=\"text/markdown\" href=\"").concat(html.text(md_url(url_of(page.path)))).concat(markup("\">\n"))
     canonical_link.concat(copy)

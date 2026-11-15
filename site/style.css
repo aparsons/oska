@@ -10,6 +10,7 @@
   --background: #ffffff;
   --surface: #f4f5f7;
   --border: #dde1e6;
+  --input-border: #6b7480;
   --accent: #0b5cad;
   --code: #f4f5f7;
   color-scheme: light dark;
@@ -22,6 +23,7 @@
     --background: #14171a;
     --surface: #1d2125;
     --border: #30363d;
+    --input-border: #7d8590;
     --accent: #6cb4ff;
     --code: #1d2125;
   }
@@ -44,6 +46,29 @@ html {
 
 body {
   margin: 0;
+}
+
+/* A visible focus ring on everything a keyboard can reach. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The skip link is off screen until it has focus. */
+.skip-link {
+  position: absolute;
+  left: 0.5rem;
+  top: -4rem;
+  z-index: 2;
+  padding: 0.5rem 0.75rem;
+  color: var(--text);
+  background: var(--background);
+  border: 2px solid var(--accent);
+  border-radius: 6px;
+}
+
+.skip-link:focus {
+  top: 0.5rem;
 }
 
 header,
@@ -82,7 +107,7 @@ aside p {
   font: inherit;
   color: var(--text);
   background: var(--background);
-  border: 1px solid var(--border);
+  border: 1px solid var(--input-border);
   border-radius: 6px;
 }
 

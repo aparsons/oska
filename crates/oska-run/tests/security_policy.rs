@@ -40,6 +40,7 @@ const MINIMAL_REPO: &[(&str, &str)] = &[
     ("docs/guide/install.md", "# Install\n"),
     ("site/style.css", "body {}\n"),
     ("site/search.js", "// search\n"),
+    ("site/favicon.svg", "<svg></svg>\n"),
     (
         "Cargo.toml",
         "[workspace.package]\nversion = \"1.2.3\"\nlicense = \"Apache-2.0\"\n",
