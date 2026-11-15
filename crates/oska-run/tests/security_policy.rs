@@ -16,52 +16,24 @@
 mod common;
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 
-use oska_run::FakeHost;
-
-/// The generator's source.
-const BUILD: &str = include_str!("../../../site/build.osk");
-
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
+use common::site::{repository_root, site_of, BUILD, MINIMAL_REPO, PAGES_WORKFLOW};
 
 fn read(path: &str) -> String {
-    let file = repo_root().join(path);
+    let file = repository_root().join(path);
     std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()))
 }
 
-/// The files every repository the generator reads must have.
-const MINIMAL_REPO: &[(&str, &str)] = &[
-    ("docs/index.md", "# Oska\n"),
-    ("GLOSSARY.md", "# Glossary\n"),
-    ("docs/design.md", "# Design\n"),
-    ("docs/guide/install.md", "# Install\n"),
-    ("site/style.css", "body {}\n"),
-    ("site/search.js", "// search\n"),
-    ("site/favicon.svg", "<svg></svg>\n"),
-    (
-        "Cargo.toml",
-        "[workspace.package]\nversion = \"1.2.3\"\nlicense = \"Apache-2.0\"\n",
-    ),
-];
+/// What the install guide adds to [`MINIMAL_REPO`]: the policy links it.
+const INSTALL_GUIDE: (&str, &str) = ("docs/guide/install.md", "# Install\n");
 
-/// The generator, run on [`MINIMAL_REPO`] with `inputs` added: the files it
-/// wrote under `_site/`, once it succeeded.
+/// The generator, run on [`MINIMAL_REPO`] and the install guide with
+/// `inputs` added: the files it wrote under `_site/`, once it succeeded.
 fn build(inputs: &[(&str, &str)]) -> BTreeMap<String, String> {
-    let mut host = MINIMAL_REPO
-        .iter()
-        .chain(inputs)
-        .fold(FakeHost::new(), |host, (path, text)| {
-            host.with_file(path, text)
-        });
-    let outcome = common::run_differential(&mut host, BUILD, &[]);
-    assert!(
-        outcome.exit_code == 0 && outcome.diagnostics.is_empty() && outcome.panic.is_none(),
-        "the generator should succeed: {outcome:#?}"
-    );
-    host.files_under("_site")
+    let files: Vec<(&str, &str)> = std::iter::once(INSTALL_GUIDE)
+        .chain(inputs.iter().copied())
+        .collect();
+    site_of(MINIMAL_REPO, &files)
 }
 
 const POLICY: &str = "# Security policy\n\n\
@@ -335,7 +307,7 @@ fn fingerprints_in(text: &str) -> Vec<&str> {
 /// Every Markdown file under `dir`, relative to the repository root.
 fn markdown_under(dir: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let entries = std::fs::read_dir(repo_root().join(dir))
+    let entries = std::fs::read_dir(repository_root().join(dir))
         .unwrap_or_else(|e| panic!("cannot list {dir}: {e}"));
     for entry in entries {
         let name = entry
@@ -344,7 +316,7 @@ fn markdown_under(dir: &str) -> Vec<String> {
             .to_string_lossy()
             .into_owned();
         let path = format!("{dir}/{name}");
-        if repo_root().join(&path).is_dir() {
+        if repository_root().join(&path).is_dir() {
             out.extend(markdown_under(&path));
         } else if name.ends_with(".md") {
             out.push(path);
@@ -382,8 +354,6 @@ fn every_written_fingerprint_is_the_committed_release_key_s() {
 
 // ---- What the deploy adds -----------------------------------------------------------------
 
-const PAGES_WORKFLOW: &str = include_str!("../../../.github/workflows/pages.yml");
-
 /// The deploy writes security.txt into the built site before it uploads
 /// it, and the post-deploy check fails on a missing or expired one.
 #[test]
@@ -408,4 +378,41 @@ fn the_pages_workflow_writes_security_txt_and_checks_it_after_the_deploy() {
     );
     // The policy page it names is published, and checked for too.
     assert!(PAGES_WORKFLOW.contains(" security.md"));
+}
+
+/// `/.well-known/security.txt` is deployed only because the upload step
+/// keeps hidden files: `actions/upload-pages-artifact` v3 does, and v4 and
+/// later leave out every path that starts with a dot, with no option to
+/// keep them. If the step moves to a version that drops them, the deploy
+/// still succeeds, and the file is silently gone until the post-deploy
+/// check fails. Fail here instead, and say so in the workflow.
+#[test]
+fn the_pages_upload_keeps_hidden_files_so_security_txt_is_deployed() {
+    let at = PAGES_WORKFLOW
+        .find("uses: actions/upload-pages-artifact@")
+        .expect("pages.yml uploads the site with actions/upload-pages-artifact");
+    let step = &PAGES_WORKFLOW[at..];
+    let version = step["uses: actions/upload-pages-artifact@".len()..]
+        .split(|c: char| c.is_whitespace() || c == '#')
+        .next()
+        .unwrap_or("");
+    assert_eq!(
+        version, "v3",
+        "upload-pages-artifact@{version} may drop hidden files, which would drop \
+         /.well-known/security.txt; use v3, which keeps them, and keep this test \
+         in step if a later version offers an option that does"
+    );
+    // The reason is written where the version is chosen.
+    let line_start = PAGES_WORKFLOW[..at].rfind('\n').map_or(0, |n| n + 1);
+    let before = &PAGES_WORKFLOW[..line_start];
+    let comment = before
+        .lines()
+        .rev()
+        .take_while(|line| line.trim_start().starts_with('#') || line.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        comment.contains("security.txt") && comment.contains("hidden"),
+        "the upload step needs a comment saying it must keep hidden files for security.txt"
+    );
 }

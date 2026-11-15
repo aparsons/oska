@@ -56,6 +56,11 @@ jobs:
       # holds GitHub links against the list of tracked files.
       - run: git ls-files > site/tracked.txt
       - run: ./target/release/oskac run site/check-links.osk
+      # `/.well-known/security.txt` is a hidden path. `upload-pages-artifact`
+      # v3 includes hidden files; v4 and later drop them with no option to
+      # keep them, so security.txt would silently not be deployed. Stay on
+      # v3, and see `security_policy.rs`, which fails if this step would
+      # drop hidden files.
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
