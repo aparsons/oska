@@ -1,6 +1,6 @@
 # Install
 
-Oska is pre-alpha. The latest release is **v0.4.0**. You can install `oskac`, the compiler and runner, from a signed binary with a one-line installer, or build it from source.
+Oska is pre-alpha. The latest release is **v0.3.0**. You can install `oskac`, the compiler and runner, from a signed binary with a one-line installer, or build it from source.
 
 ## Build from source
 
