@@ -1106,7 +1106,11 @@ function Test-AddToPathAddsTheBinDirectoryToTheUserPathAndRecordsIt {
         $entries = @((Get-UserPath) -split ';')
         Assert ($entries -contains $bin) "the user PATH is $(Get-UserPath)"
         Assert (@($entries | Where-Object { $_ -eq $bin }).Count -eq 1) 'the entry is there more than once'
-        if ($before) { Assert ((Get-UserPath).StartsWith("$before;")) 'the user PATH lost its own entries' }
+        # The installer drops empty entries (a trailing ';'), so compare entries.
+        $was = @($before -split ';' | Where-Object { $_ })
+        $now = @($entries | Where-Object { $_ })
+        $head = @($now | Select-Object -First $was.Count)
+        Assert (($head -join '|') -ceq ($was -join '|')) "the user PATH lost its own entries: was [$before], now [$(Get-UserPath)]"
         $receipt = Get-Content -Raw home/.oska/receipt.json | ConvertFrom-Json
         $recorded = @($receipt.files | Where-Object { $_.kind -eq 'user_path_entry' })
         Assert ($recorded.Count -eq 1 -and $recorded[0].path -eq $bin) 'the receipt does not record the entry'
