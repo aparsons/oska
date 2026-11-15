@@ -8,12 +8,23 @@
 # Runs, stopping at the first failure:
 #   1. repo rules that are mechanical: no crate from outside this repo,
 #      `unsafe` only in crates/oska-sys, std.rt intrinsics only in
-#      std.rt's own source, and workflows use only official
-#      actions plus the SHA-pinned rust-toolchain;
-#   2. cargo fmt, clippy with -D warnings, and cargo test;
-#   3. the installer, release script, unsafe guard, intrinsic guard and
-#      rust-stable tests;
-#   4. shellcheck on the shell scripts, when shellcheck is installed.
+#      std.rt's own source, workflows use only official
+#      actions plus the SHA-pinned rust-toolchain, and every workflow job
+#      has a `timeout-minutes` of 1 to 60;
+#   2. cargo fmt, clippy with -D warnings, and cargo test, which runs in a
+#      private temporary directory (scripts/temp-leak/run.sh) and fails,
+#      naming the paths, if a test leaves anything in it;
+#   3. the installer, release script, unsafe guard, intrinsic guard,
+#      workflow guard, kill guard, temp-leak wrapper, rust-stable,
+#      cross-build manifest, build slot and pass stamp tests;
+#   4. shellcheck on the shell scripts, when shellcheck is installed;
+#   5. the pass stamp, written only when every step above passed and the tree
+#      did not change meanwhile, so the pre-push hook skips a repeat run on
+#      the same tree.
+#
+# OSKA_BUILD_SLOTS=N (unset by default: no limit) makes the run wait for one
+# of N machine-wide build slots before the build and test steps; see
+# scripts/build-slots/acquire.sh.
 
 set -euo pipefail
 
@@ -25,6 +36,9 @@ cd "$(dirname "$0")/.."
 # set core.bare=true here).
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
   GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
+
+# The tree being checked, for the pass stamp written at the very end.
+checked_tree=$(scripts/pass-stamp/stamp.sh tree 2>/dev/null || true)
 
 # Rust may be installed for interactive shells only.
 if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
@@ -58,12 +72,20 @@ scripts/intrinsic-guard/guard.sh
 
 step "only official actions, rust-toolchain pinned to a commit"
 toolchain_pin='dtolnay/rust-toolchain@[0-9a-f]{40}'
-bad_uses=$(grep -nE '^[[:space:]]*-?[[:space:]]*uses:' .github/workflows/*.yml |
+bad_uses=$(grep -rnE --include='*.yml' --include='*.yaml' '^[[:space:]]*-?[[:space:]]*uses:' .github/workflows |
   grep -vE "uses:[[:space:]]*(actions/[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+|$toolchain_pin)([[:space:]]|$)" || true)
 if [ -n "$bad_uses" ]; then
   printf '%s\n' "$bad_uses" >&2
   fail "workflows may use only actions/* and dtolnay/rust-toolchain pinned to a full commit SHA"
 fi
+
+step "every workflow job has a timeout"
+# GitHub lets a job run 360 minutes unless it says otherwise. The guard fails
+# a job with no `timeout-minutes`, a non-literal value, or one above 60.
+scripts/workflow-guard/guard.sh
+
+# Wait for a build slot when OSKA_BUILD_SLOTS is set; held until this run ends.
+. scripts/build-slots/acquire.sh
 
 step "cargo fmt"
 cargo fmt --all --check
@@ -71,8 +93,10 @@ cargo fmt --all --check
 step "cargo clippy"
 cargo clippy --all-targets -- -D warnings
 
-step "cargo test"
-cargo test --all
+step "cargo test (private temporary directory)"
+# A test that leaves a file or directory in the temporary directory fails the
+# check here, naming it, instead of slowly filling the shared /tmp.
+scripts/temp-leak/run.sh cargo test --all
 
 step "installer tests"
 bash scripts/install/test.sh
@@ -86,14 +110,37 @@ bash scripts/unsafe-guard/test.sh
 step "intrinsic guard tests"
 bash scripts/intrinsic-guard/test.sh
 
+step "kill guard tests"
+# The Claude Code hook (.claude/settings.json) that refuses pkill -f, killall
+# and other kills by pattern, name or session.
+bash scripts/kill-guard/test.sh
+
+step "workflow guard tests"
+bash scripts/workflow-guard/test.sh
+
+step "temp-leak wrapper tests"
+bash scripts/temp-leak/test.sh
+
 step "rust-stable tests"
 bash scripts/rust-stable/test.sh
 
+step "cross-build manifest tests"
+bash scripts/cross-build/test.sh
+
+step "build slot tests"
+bash scripts/build-slots/test.sh
+
+step "pass stamp tests"
+bash scripts/pass-stamp/test.sh
+
 step "shellcheck"
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck -S warning scripts/*.sh scripts/install/*.sh scripts/release/*.sh scripts/unsafe-guard/*.sh scripts/intrinsic-guard/*.sh scripts/rust-stable/*.sh site/agent-setup/*.sh .githooks/pre-push
+  shellcheck -S warning scripts/*.sh scripts/*/*.sh site/agent-setup/*.sh .githooks/pre-push
 else
   echo "shellcheck not installed; skipped (CI runs it)"
 fi
+
+# Every step passed: stamp the tree checked, if it did not change meanwhile.
+scripts/pass-stamp/stamp.sh write "$checked_tree"
 
 printf '\nAll checks passed.\n'

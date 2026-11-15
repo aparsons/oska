@@ -78,14 +78,15 @@ Nothing in the repo can check these settings, so verify them before a release.
    git tag -a vX.Y.Z -m "oska vX.Y.Z" && git push origin vX.Y.Z
    ```
    The push reports "Bypassed rule violations". That is the admin bypass of the tag ruleset working as intended.
-3. **Watch the tag's Release run** until build, assemble, sign and publish are all green. Nothing is published before `publish`. If an earlier job fails, delete the tag, fix the problem, and tag again.
+3. **Watch the tag's Release run** until build, assemble, sign and publish are all green. Nothing is published before `publish`. If an earlier job fails, delete the tag, fix the problem, and tag again. Every release job is bounded by `timeout-minutes` (build 20, the others 10), so a stuck one turns red by itself. A cancelled run is not a failed release: a superseded dry run on a pull request is cancelled on purpose, and a tag's run is never cancelled by a later push.
 4. **Watch the Pages run that `publish` dispatches.** Its smoke job must end with `ok: https://oskalang.dev installs oskac X.Y.Z, and it runs`. Once an index is published, the line before it must read `the install verified release index serial N, which names X.Y.Z`. Its build job logs `published release index serial N`. A `::warning::` that the index expires within 30 days means it must be re-signed now.
    - The warning `no release is published` means the deploy ran before GitHub listed the new release ([#89](https://github.com/aparsons/oska/issues/89)).
    - Run `gh workflow run pages.yml --ref main` and check again.
+5. **Name the new release in the docs** in a normal PR: "The latest release is **vX.Y.Z**" in `docs/guide/install.md` and `docs/guide/index.md`, which `crates/oskac/tests/front_door.rs` holds to the same version, with an "Upgrading to vX.Y.Z" section in the install guide.
 
 ## Checking a published release
 
-- `curl -fsS https://oskalang.dev/latest.json` reports `"version": "X.Y.Z"` and `"tag": "vX.Y.Z"`.
+- `curl -fsS https://oskalang.dev/latest.json` reports `"version": "X.Y.Z"`, `"tag": "vX.Y.Z"` and the key's `"signing_key_fingerprint"`.
 - `/releases/vX.Y.Z/` serves `SHA256SUMS`, `SHA256SUMS.sig` and the 5 binaries.
 - Verify the signature against the committed key:
   ```
@@ -109,7 +110,7 @@ Nothing in the repo can check these settings, so verify them before a release.
   3. Commit its public half as `site/oska-release.pub`. The Pages build then publishes it and re-pins the installers.
   4. Shred the plaintext.
   5. Make a new encrypted backup.
-  6. Announce the new fingerprint, and update it in this file.
+  6. Announce the new fingerprint, and update it in this file, `SECURITY.md` and `docs/guide/install.md`. `crates/oska-run/tests/security_policy.rs` fails until every copy matches the committed key. `latest.json`'s `signing_key_fingerprint` is computed from the key by `stage-site.sh`.
 
   Releases already published stay signed by the old key. `stage-site.sh` checks every GitHub Release against the current key and stops the whole Pages build on the first one that fails. So before committing the new public key, re-sign each old release's `SHA256SUMS` with the new key, or delete those GitHub Releases.
 

@@ -2,8 +2,9 @@
 //! declared:
 //!
 //! - a free function declared twice, or redeclaring a prelude function,
-//!   and a method declared twice for one type across its inherent `impl`
-//!   blocks (`E0202`, at the second);
+//!   a method declared twice for one type across its inherent `impl`
+//!   blocks, and a module constant that shares its name with another
+//!   constant, a function, or a type (`E0202`, at the second);
 //! - two `impl Trait for Type` that overlap, including one that overlaps a
 //!   prelude impl (`E0290`, at the second's trait);
 //! - an inherent `impl` for a prelude type (`E0291`): the orphan rule
@@ -30,6 +31,7 @@ pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>)
         })
         .collect();
     let prelude_functions = functions.clone();
+    let mut consts: HashSet<&str> = HashSet::new();
     let mut methods: HashSet<(String, &str)> = HashSet::new();
     let mut impls: Vec<TraitImpl> = decls
         .prelude_items()
@@ -49,6 +51,34 @@ pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>)
                         codes::DUPLICATE_NAME,
                         format!("the function `{name}` is already declared {place}"),
                         f.name.span,
+                    ));
+                } else if consts.contains(name) {
+                    diagnostics.push(Diagnostic::new(
+                        codes::DUPLICATE_NAME,
+                        format!("the function `{name}` has the name of a constant declared earlier in this module"),
+                        f.name.span,
+                    ));
+                }
+            }
+            ItemKind::Const(c) => {
+                // A constant lives beside the functions (a use of it is
+                // a call, lowered under its bare name), and beside the
+                // types, so its name is declared once among all three.
+                let name = c.name.name.as_str();
+                let clash = if !consts.insert(name) {
+                    Some("a constant declared earlier in this module")
+                } else if functions.contains(name) {
+                    Some("a function")
+                } else if decls.get(name).is_some() {
+                    Some("a type")
+                } else {
+                    None
+                };
+                if let Some(clash) = clash {
+                    diagnostics.push(Diagnostic::new(
+                        codes::DUPLICATE_NAME,
+                        format!("the constant `{name}` has the name of {clash}"),
+                        c.name.span,
                     ));
                 }
             }

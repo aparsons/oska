@@ -72,6 +72,9 @@ pub enum Resolution {
     Try(Option<Callee>),
     /// A function named as a value. Recorded at the name.
     FnValue(Callee),
+    /// A module constant, by name: lowered as a call of the constant's
+    /// own function (#83). Recorded at the name.
+    Const(String),
     /// `==` or `!=` through this `Eq` implementation, on a type that is
     /// not built in. Recorded at the comparison.
     EqualityVia(Callee),
@@ -301,6 +304,26 @@ pub fn module(
                         lowering.function(&mut program, name, f, &impl_generics, contracts)
                     });
                 }
+            }
+            ItemKind::Const(c) => {
+                // A constant is a function of no parameters that its
+                // uses call (#83): the same value on every call, since
+                // its initializer is pure.
+                let name = c.name.name.clone();
+                let function = Function {
+                    name: name.clone(),
+                    generics: Vec::new(),
+                    self_ty: None,
+                    receiver: false,
+                    params: Vec::new(),
+                    ret: lowering.convert(items.const_types.get(&name), c.name.span),
+                    contracts: Contracts::default(),
+                    body: lowering.expr(&c.value),
+                };
+                // `E0202` refuses a second declaration of the name, and no
+                // program is lowered with an error, so this is the first.
+                let earlier = program.functions.insert(name, function);
+                debug_assert!(earlier.is_none(), "a constant's name is declared once");
             }
             ItemKind::Test(test) => program.tests.push(super::Test {
                 name: test_name(&test.name),
@@ -766,6 +789,11 @@ impl Lowering<'_> {
                 callee: callee.clone(),
                 type_args: self.type_args_at(ident.span),
             },
+            Some(Resolution::Const(name)) => ExprKind::Call {
+                callee: Callee::Function(name.clone()),
+                type_args: Vec::new(),
+                args: Vec::new(),
+            },
             Some(Resolution::Construct(ctor)) => ExprKind::Construct {
                 ctor: ctor.clone(),
                 fields: Vec::new(),
@@ -891,7 +919,11 @@ impl Lowering<'_> {
     fn hole(&self, path: &[ast::Ident]) -> Option<Expr> {
         let (first, fields) = path.split_first()?;
         let mut value = Expr {
-            kind: self.local(first),
+            kind: if first.name == "self" {
+                ExprKind::SelfValue
+            } else {
+                self.local(first)
+            },
             ty: self.type_at(first.span),
             span: first.span,
         };

@@ -54,6 +54,11 @@ pub fn assert_errors(src: &str, expected: &[(&str, &str)]) {
 /// Assert that the first diagnostic with `code` carries a fix, and that
 /// applying the fix to `src` produces `expected`.
 pub fn assert_fix(src: &str, code: &str, expected: &str) {
+    assert_eq!(apply_fix(src, code), expected, "fix for {code} on {src:?}");
+}
+
+/// The source after applying the fix of the first `code` diagnostic.
+pub fn apply_fix(src: &str, code: &str) -> String {
     let report = check(src);
     let diagnostic = report
         .diagnostics
@@ -70,7 +75,7 @@ pub fn assert_fix(src: &str, code: &str, expected: &str) {
     for edit in edits {
         fixed.replace_range(edit.span.start..edit.span.end, &edit.replacement);
     }
-    assert_eq!(fixed, expected, "fix for {code} on {src:?}");
+    fixed
 }
 
 /// Assert the authority report for the function `name` (a method is named

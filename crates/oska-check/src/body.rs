@@ -64,7 +64,7 @@ use crate::program::{self, Callee, Construct};
 use crate::resolve;
 use crate::suggest;
 use crate::ty::{self, Cap, Trust, Ty};
-use crate::{Attenuation, AuditSite};
+use crate::{Attenuation, AuditSite, FnOrTest, TestName};
 
 mod attenuation;
 mod audit;
@@ -94,9 +94,9 @@ pub struct Findings {
     /// instantiate type parameters, for `instantiation.rs`.
     pub assumed: Vec<crate::instantiation::Assumed>,
     pub instances: Vec<crate::instantiation::Instance>,
-    /// The function whose body is being checked, named as the authority
-    /// report names it. Empty outside one.
-    pub function: String,
+    /// The function or test whose body is being checked, named as the
+    /// authority report names it. Empty outside both.
+    pub function: FnOrTest,
     /// Which module each part of the source is in; none for a single
     /// file (`link.rs`).
     pub modules: crate::link::Modules,
@@ -111,23 +111,27 @@ pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mu
         out.module = out.modules.at(item.span.start).to_string();
         match &item.kind {
             ItemKind::Fn(f) => {
-                out.function = out
-                    .modules
-                    .function_name(item.span.start, None, &f.name.name);
+                out.function = FnOrTest::Fn(out.modules.function_name(
+                    item.span.start,
+                    None,
+                    &f.name.name,
+                ));
                 function(src, f, Lower::new(decls), items, out);
             }
             ItemKind::Impl(imp) => {
                 let lower = Lower::new(decls).with_generics(&imp.generics);
                 let target = lower.ty(&imp.target);
                 let lower = lower.with_self(target);
-                let type_name = authority::type_name(&imp.target);
                 for method in &imp.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        out.function = out.modules.function_name(
-                            method.span.start,
-                            Some(&type_name),
-                            &f.name.name,
-                        );
+                        out.function = FnOrTest::Fn(authority::impl_method_name(
+                            &out.modules,
+                            items,
+                            item,
+                            imp,
+                            method,
+                            f,
+                        ));
                         function(src, f, lower.clone(), items, out);
                     }
                 }
@@ -149,24 +153,34 @@ pub fn module(src: &str, module: &Module, decls: &Decls, items: &Items, out: &mu
                     });
                 for method in &t.methods {
                     if let ItemKind::Fn(f) = &method.kind {
-                        out.function = out.modules.function_name(
+                        out.function = FnOrTest::Fn(out.modules.function_name(
                             method.span.start,
                             Some(&t.name.name),
                             &f.name.name,
-                        );
+                        ));
                         function(src, f, lower.clone(), items, out);
                     }
                 }
             }
             ItemKind::Const(c) => {
-                out.function.clear();
+                out.function = FnOrTest::default();
                 let lower = Lower::new(decls);
                 let ty = lower.ty(&c.ty);
                 let mut body = Body::new(src, items, lower, Ty::Unit, out);
                 body.check(&c.value, &ty);
+                body.finish();
             }
             ItemKind::Test(test) => {
-                out.function.clear();
+                // The report names a test by its name (#150), or by its
+                // line when the name has no text.
+                out.function = FnOrTest::Test(
+                    match crate::items::literal_text(&test.name).filter(|name| !name.is_empty()) {
+                        Some(name) => TestName::Named(name),
+                        None => TestName::Unnamed {
+                            line: out.modules.line_at(src, item.span.start),
+                        },
+                    },
+                );
                 let mut body = Body::new(src, items, Lower::new(decls), Ty::Unit, out);
                 body.bind("t", Ty::named(ty::TEST_CONTEXT), Binding::Param);
                 // A test produces no value: its last expression is a
@@ -440,16 +454,16 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
     }
 
-    /// Report misuse of `Untrusted<...>` in a type written in the body
-    /// (`E0320`). Signatures are checked with name resolution.
+    /// Resolve a type written in the body: an unknown name (`E0200`) and
+    /// misuse of `Untrusted<...>` (`E0320`), as in a signature.
     fn check_written(&mut self, written: &Type) {
-        let lower = &self.lower;
-        let known = |name: &str| {
-            lower.generics.iter().any(|g| g == name)
-                || name == ty::SELF
-                || lower.decls().get(name).is_some()
-        };
-        resolve::untrusted_not_text_within(written, &known, &mut self.out.diagnostics);
+        resolve::written_type(
+            written,
+            self.lower.decls(),
+            &self.lower.generics,
+            self.lower.self_ty.is_some() || self.lower.generics.iter().any(|g| g == ty::SELF),
+            &mut self.out.diagnostics,
+        );
     }
 
     fn decls(&self) -> &'d Decls<'a> {
@@ -855,24 +869,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             ExprKind::Bool(_) => Ty::bool(),
             ExprKind::Unit => Ty::Unit,
             ExprKind::Name(ident) => self.name(ident),
-            ExprKind::SelfValue => match &self.receiver {
-                Some(receiver) => {
-                    let ty = receiver.ty.clone();
-                    for frame in &mut self.closures {
-                        frame.captures.push(("self".to_string(), ty.clone()));
-                        frame.receiver = true;
-                    }
-                    ty
-                }
-                None => {
-                    self.error(
-                        codes::UNKNOWN_VALUE,
-                        "`self` is only available in a method with a `self` receiver",
-                        expr.span,
-                    );
-                    Ty::Error
-                }
-            },
+            ExprKind::SelfValue => self.self_value(expr.span),
             ExprKind::Field { base, name } => self.field_expr(expr.span, base, name),
             ExprKind::Call { callee, args } => self.call(expr, callee, args, expected),
             ExprKind::Unary { op, operand } => self.unary(expr, *op, operand, expected),
@@ -1030,12 +1027,39 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         }
     }
 
+    /// `self`, the receiver of the method being checked, and its type.
+    fn self_value(&mut self, span: Span) -> Ty {
+        match &self.receiver {
+            Some(receiver) => {
+                let ty = receiver.ty.clone();
+                for frame in &mut self.closures {
+                    frame.captures.push(("self".to_string(), ty.clone()));
+                    frame.receiver = true;
+                }
+                ty
+            }
+            None => {
+                self.error(
+                    codes::UNKNOWN_VALUE,
+                    "`self` is only available in a method with a `self` receiver",
+                    span,
+                );
+                Ty::Error
+            }
+        }
+    }
+
     /// An interpolation hole, `{name}` or `{name.field}`, and its type.
+    /// `self` may be the first segment, as it is anywhere else.
     fn hole(&mut self, path: &[Ident]) -> Ty {
         let Some((first, rest)) = path.split_first() else {
             return Ty::Error;
         };
-        let mut ty = self.name(first);
+        let mut ty = if first.name == "self" {
+            self.self_value(first.span)
+        } else {
+            self.name(first)
+        };
         self.typed(first.span, &ty);
         for field in rest {
             ty = self.field_of(ty, field);
@@ -1086,6 +1110,10 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             self.typed_args(ident.span, callable.instance.clone());
             return callable.into_fn_type();
         }
+        if let Some(ty) = self.items.const_types.get(name).cloned() {
+            self.record(ident.span, Resolution::Const(name.to_string()));
+            return ty;
+        }
         if let Some(enum_name) = self.items.bare_variants.get(name).cloned() {
             return self.variant_value(&enum_name, name, ident.span);
         }
@@ -1110,6 +1138,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 .map(String::as_str)
                 .filter(|f| self.decls().qualified_only(f).is_none()),
         );
+        candidates.extend(self.items.const_types.keys().map(String::as_str));
         candidates.extend(self.items.bare_variants.keys().map(String::as_str));
         let name = &ident.name;
         let diagnostic = suggest::unknown(

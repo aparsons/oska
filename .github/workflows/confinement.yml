@@ -32,6 +32,13 @@ on:
 permissions:
   contents: read
 
+# A pull request's newer push cancels its older runs of this workflow. Every
+# other event gets a group of its own per commit, so a push to main or a branch
+# is never cancelled or replaced while it waits.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     strategy:

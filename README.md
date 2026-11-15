@@ -12,7 +12,7 @@ Most code is increasingly written, reviewed, and refactored with the help of AI.
 
 - **Secure by default.** No ambient authority: a function can only touch the filesystem, network, environment, or clock if it is explicitly handed a capability to do so. Memory safety, no nulls, no implicit conversions, and checked arithmetic are the baseline, not opt-ins.
 - **AI-first.** The syntax is familiar, regular, and unambiguous, so it is easy for models to generate and for humans to verify. A function's capability parameters are its effects. Its `requires`/`ensures` contracts are part of the signature. A reviewer, human or model, can tell what a function *can* do without reading its body. There are no macros and no hidden control flow. Compiler diagnostics are available as structured JSON with suggested fixes.
-- **Injection-proof by construction.** Untrusted input is tracked by type. The standard library's SQL, HTML, process, and logging APIs cannot accept untrusted input where it would change what code or command runs.
+- **Injection-proof by construction.** Untrusted input is tracked by type. The checker refuses untrusted text where it would change what a query, a page, a command or a path means: in `std.sql`, `std.html` and `std.proc`, and in filesystem and network capabilities. `std.html` runs today; `std.sql`, `std.proc` and the network check but do not run yet. See [what works today](docs/guide/what-works-today.md).
 - **Auditable.** Every capability a program uses is declared at its entry point, so "what can this program do?" has a short, checkable answer.
 
 ## A taste
@@ -32,10 +32,11 @@ fn main(io: Stdout) -> Result<(), IoError> {
 oskac check hello.osk       # type-check and print each function's authority
 oskac run hello.osk         # check, then run
 oskac test hello.osk        # run the file's test blocks
-oskac build hello.osk       # compile to a static aarch64 Linux executable, ./hello
+oskac build hello.osk       # compile to a static Linux executable, ./hello
+oskac build hello.osk --target linux-x86_64   # or for another platform (--target all: every one)
 ```
 
-`oskac build` works on every host: it writes the machine code and the executable itself, with no assembler, linker or C library. On aarch64 Linux (a Raspberry Pi, an arm64 server), `oskac run` and `oskac test` compile the program natively and run it, and `--interpret` selects the interpreter. Every other host runs programs on the interpreter until it has a native backend of its own. Both backends print the same output, reports and exit codes. See [platform support](docs/guide/cli-reference.md#platform-support).
+`oskac build` works on every host and for `--target linux-aarch64` or `--target linux-x86_64` from either: it writes the machine code and the executable itself, with no assembler, linker or C library, and the same program gives the same bytes on every host. On aarch64 and x86_64 Linux (a Raspberry Pi, an arm64 or x86_64 server, most CI machines), `oskac run` and `oskac test` compile the program natively and run it, and `--interpret` selects the interpreter. Every other host runs programs on the interpreter until it has a native backend of its own. Both backends print the same output, reports and exit codes. See [platform support](docs/guide/cli-reference.md#platform-support).
 
 ## A package
 
@@ -61,7 +62,7 @@ Run `oskac check`, `oskac run` and `oskac test` in the package directory. Items 
 | `crates/oska-syntax` | Lexer (and, soon, parser and AST) |
 | `crates/oska-check` | Type checker and authority report (`oskac check`) |
 | `crates/oska-run` | Interpreter (`oskac run --interpret`, and `oskac run` on hosts with no native backend) and its test runner |
-| `crates/oska-native` | Native backend: aarch64 Linux executables (`oskac build`, and `oskac run` and `oskac test` on aarch64 Linux), with the runtime `std.rt` in Oska |
+| `crates/oska-native` | Native backend: aarch64 and x86_64 Linux executables (`oskac build`, and `oskac run` and `oskac test` on aarch64 and x86_64 Linux), with the runtime `std.rt` in Oska |
 | `crates/oska-sys` | The only crate with `unsafe`: the interpreter's confined filesystem calls |
 | `examples/` | Example `.osk` programs and a multi-module package |
 | `docs/guide/` | Task guides: [quickstart](docs/guide/quickstart.md), [language tour](docs/guide/language-tour.md), [CLI reference](docs/guide/cli-reference.md), [agent guide](docs/guide/agent-guide.md), and more |
@@ -79,6 +80,8 @@ cargo build
 cargo run -p oskac -- lex examples/hello.osk
 cargo test
 ```
+
+`scripts/check.sh` runs every check a change must pass, the same ones CI's test job runs. Its `cargo test` step runs in a private temporary directory and fails, naming the paths, if a test leaves anything in it.
 
 ## License
 

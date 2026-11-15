@@ -1,10 +1,13 @@
-//! The native half of every runtime test (spec #125): on aarch64 Linux,
-//! each program a helper in this module runs on the interpreter is also
-//! compiled by the native backend (`oska_native::build`, or
-//! `build_tests` for `test` blocks) and run as a real process, and the
-//! two must agree on stdout, stderr (a panic's report included), the exit
-//! code, and the filesystem afterwards. The interpreter is the oracle: a
-//! difference fails the test, as a bug in the native backend.
+//! The native half of every runtime test (spec #125): on aarch64 and
+//! x86_64 Linux, each program a helper in this module runs on the
+//! interpreter is also compiled by the native backend for the host
+//! ([`host_target`]; `oska_native::build`, or `build_tests` for `test` blocks)
+//! and run as a real process, and the two must agree on stdout, stderr (a
+//! panic's report included), the exit code, and the filesystem afterwards.
+//! The interpreter is the oracle: a difference fails the test, as a bug
+//! in the native backend. Every target with a backend must compile each
+//! program (spec #153): the host also builds it for each other one, which
+//! it cannot run ([`cross_build`]), and a refusal fails on every host.
 //!
 //! The [`FakeHost`](oska_run::FakeHost) a test set up is reproduced on
 //! the real OS: its stdin, its environment (and nothing else), its
@@ -36,6 +39,11 @@ use oska_syntax::Diagnostic;
 /// The name the executable is run by, as `args[0]`: the interpreter's
 /// program path.
 const PROGRAM: &str = super::PROGRAM_PATH;
+
+/// The target platform the host builds native executables for: its own.
+fn host_target() -> oska_native::Target {
+    oska_native::Target::host().expect("this host runs native executables")
+}
 
 /// How long one native process may run before the comparison gives up on
 /// it: far longer than any test program takes.
@@ -71,9 +79,11 @@ pub fn compare_program(
     if !outcome.diagnostics.is_empty() || skipped() {
         return;
     }
-    let bytes = oska_native::build(program, &|d| d).unwrap_or_else(|refusal| {
-        fail(src, &format!("the native backend refused it: {refusal:#?}"))
-    });
+    let bytes = match oska_native::build(program, host_target(), &|d| d) {
+        Ok(bytes) => bytes,
+        Err(refusal) => fail(src, &format!("the native backend refused it: {refusal:#?}")),
+    };
+    cross_build(src, |target| oska_native::build(program, target, &|d| d));
     let mut texts: Vec<&str> = args.iter().map(String::as_str).collect();
     texts.push(src);
     let Some(sandbox) = Sandbox::new(before, needs_filesystem(program), &texts) else {
@@ -122,9 +132,11 @@ pub fn compare_program_tests(
     if !report.diagnostics.is_empty() || skipped() {
         return;
     }
-    let bytes = oska_native::build_tests(program).unwrap_or_else(|refusal| {
-        fail(src, &format!("the native backend refused it: {refusal:#?}"))
-    });
+    let bytes = match oska_native::build_tests(program, host_target()) {
+        Ok(bytes) => bytes,
+        Err(refusal) => fail(src, &format!("the native backend refused it: {refusal:#?}")),
+    };
+    cross_build(src, |target| oska_native::build_tests(program, target));
     let integration = options.integration && program.tests.iter().any(|t| t.integration);
     let Some(sandbox) = Sandbox::new(before, integration, &[src]) else {
         return;
@@ -178,6 +190,25 @@ fn case() -> String {
         env!("CARGO_CRATE_NAME"),
         thread.name().unwrap_or("?")
     )
+}
+
+/// Build `src`'s program with `build` for every target but the host's,
+/// and fail on a refusal: what a host that cannot run another target's
+/// code can check of it.
+fn cross_build(src: &str, build: impl Fn(oska_native::Target) -> Result<Vec<u8>, Diagnostic>) {
+    for target in oska_native::Target::ALL {
+        if target != host_target() {
+            if let Err(refusal) = build(target) {
+                fail(
+                    src,
+                    &format!(
+                        "the native backend refused it for {}: {refusal:#?}",
+                        target.name()
+                    ),
+                );
+            }
+        }
+    }
 }
 
 fn fail(src: &str, what: &str) -> ! {

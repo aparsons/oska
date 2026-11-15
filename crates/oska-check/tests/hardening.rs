@@ -296,6 +296,7 @@ fn the_authority_report_escapes_its_strings() {
         via: vec![Via {
             param: "o\nut".to_string(),
             capabilities: vec!["Std\"out".to_string()],
+            generics: Vec::new(),
         }],
         pure: false,
     };

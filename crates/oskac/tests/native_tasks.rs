@@ -5,9 +5,13 @@
 //! outliving their scope, every way out of a block, and memory. The
 //! `std.html` programs are `tests/html.rs`'s, plus hostile input.
 
-#![cfg(all(target_arch = "aarch64", target_os = "linux"))]
+#![cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 
 mod differential;
+mod executable;
 
 use differential::{assert_same, run_native, Case};
 
@@ -488,17 +492,21 @@ fn spawning_on_a_finished_scope_panics_with_p0005_at_the_call() {
             body,
         },
     );
-    let image = oska_native::build(&program, &|d| d).expect("the program should build");
+    for target in oska_native::Target::ALL {
+        if target == differential::host_target() {
+            continue;
+        }
+        if let Err(refusal) = oska_native::build(&program, target, &|d| d) {
+            panic!("{} refuses it: {refusal:#?}", target.name());
+        }
+    }
+    let image = oska_native::build(&program, differential::host_target(), &|d| d)
+        .expect("the program should build");
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("tasks_p0005");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("a directory");
     let exe = dir.join("program");
-    std::fs::write(&exe, image).expect("write the executable");
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755))
-            .expect("make it executable");
-    }
+    executable::write_executable(&exe, &image);
     let output = std::process::Command::new(&exe)
         .output()
         .expect("run the executable");

@@ -294,7 +294,7 @@ impl Body<'_, '_, '_> {
     ) {
         for param in params {
             if let Some(key) = self.lower.key(&param) {
-                let reason = why(&param, &self.out.function);
+                let reason = why(&param, &self.out.function.label());
                 self.out.assumed.push(Assumed {
                     key,
                     assumption,

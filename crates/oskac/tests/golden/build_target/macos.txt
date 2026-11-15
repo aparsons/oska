@@ -1,0 +1,6 @@
+$ oskac build hello.osk --target macos-aarch64
+exit: 2
+--- stdout
+--- stderr
+error[E0394]: `oskac build` cannot build for `macos-aarch64` yet: its native backend comes in v0.5.0; it builds for `linux-aarch64` and `linux-x86_64` (bytes 0..0)
+--- written

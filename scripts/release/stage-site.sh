@@ -16,7 +16,9 @@
 #     require the index when it published one;
 #   - writes <site-dir>/latest.json for the newest release that is not a
 #     pre-release, merging into any latest.json the generator wrote (the
-#     release fields win).
+#     release fields win). Its signing_key_fingerprint is the SHA256
+#     fingerprint of <public-key>, as `ssh-keygen -l` prints it, which the
+#     install guide and SECURITY.md also print.
 #
 # URLs in latest.json start with $OSKA_SITE_URL (default
 # https://oskalang.dev), so tests can stage a site served elsewhere.
@@ -166,16 +168,23 @@ if [ -z "$latest" ]; then
   exit 0
 fi
 
+fingerprint=$(ssh-keygen -l -E sha256 -f "$public" | awk '{print $2}') ||
+  die "cannot read the fingerprint of $public"
+[[ $fingerprint =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]] ||
+  die "$public has no SHA256 fingerprint: '$fingerprint'"
+
 url="$base/releases/$latest"
 release_json=$(
   tail -n +2 "$releases/$latest/SHA256SUMS" | awk '{print $2}' |
-    jq -R -n --arg tag "$latest" --arg url "$url" --arg base "$base" '{
+    jq -R -n --arg tag "$latest" --arg url "$url" --arg base "$base" \
+      --arg fingerprint "$fingerprint" '{
       version: ($tag | ltrimstr("v")),
       tag: $tag,
       release_url: "\($url)/",
       checksums_url: "\($url)/SHA256SUMS",
       signature_url: "\($url)/SHA256SUMS.sig",
       signing_key_url: "\($base)/oska-release.pub",
+      signing_key_fingerprint: $fingerprint,
       signing_namespace: "oska-release",
       installers: {sh: "\($base)/install.sh", ps1: "\($base)/install.ps1"},
       binaries: ([inputs

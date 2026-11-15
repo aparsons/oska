@@ -1,0 +1,33 @@
+name: Native benchmark
+
+# scripts/bench-native.sh on GitHub's runners, on demand: the x86_64 Linux
+# figures in docs/design.md ("Native backend benchmark") come from here, as
+# the maintainer's Pi has no x86_64 machine beside it. It also runs on a pull
+# request that changes the script or this file, so a change to either shows
+# its figures before it merges. Never a required check: runner timings vary.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/bench-native.sh
+      - .github/workflows/bench.yml
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    # A release build and six workloads, five runs each on both backends: a
+    # few minutes.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - run: lscpu | grep -E '^(Model name|CPU\(s\)):' || true
+      - run: scripts/bench-native.sh | tee -a "$GITHUB_STEP_SUMMARY"

@@ -13,32 +13,33 @@
 //! - A cold block ([`Function::cold`]) reads the hot path's temporaries
 //!   exactly as they were at the one jump to it, so its reads count at
 //!   that jump. A temporary a cold block writes gets a slot.
-//! - An interval that spans a call gets a callee-saved register
-//!   ([`CALLEE_SAVED`]); one that does not may also get a caller-saved
-//!   one ([`CALLER_SAVED`]). When none is free, the interval used least
-//!   (each use weighted by how deeply it is nested in loops) goes to a
-//!   stack slot.
+//! - An interval that spans a call gets one of the target's callee-saved
+//!   registers ([`Registers::callee_saved`]); one that does not may also
+//!   get a caller-saved one ([`Registers::caller_saved`]). When none is
+//!   free, the interval used least (each use weighted by how deeply it is
+//!   nested in loops) goes to a stack slot.
 
 use crate::ir::{Function, Inst, Temp};
 
 /// Where a temporary lives for the whole function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Loc {
-    /// A register: one of [`CALLEE_SAVED`] or [`CALLER_SAVED`].
+    /// A register, by the target's number for it: one of its
+    /// [`Registers`].
     Reg(u32),
     /// A stack slot, at `[sp + 8 * slot]`.
     Slot(u32),
 }
 
-/// The registers that hold temporaries across calls, saved by the
-/// function that uses them.
-pub const CALLEE_SAVED: [u32; 9] = [19, 20, 21, 22, 23, 24, 25, 26, 27];
-
-/// The registers that hold temporaries between calls: arguments are put
-/// in place, and parameters taken, by parallel moves, so an argument
-/// register may hold one too. `x0` and `x1` do not: a call's results
-/// arrive there.
-pub const CALLER_SAVED: [u32; 11] = [12, 13, 14, 15, 2, 3, 4, 5, 6, 7, 8];
+/// The registers a target gives temporaries.
+#[derive(Debug, Clone, Copy)]
+pub struct Registers {
+    /// Those that hold temporaries across calls, saved by the function
+    /// that uses them.
+    pub callee_saved: &'static [u32],
+    /// Those that hold temporaries between calls, tried first.
+    pub caller_saved: &'static [u32],
+}
 
 /// The locations of a function's temporaries.
 #[derive(Debug)]
@@ -64,8 +65,9 @@ struct Interval {
     crosses_call: bool,
 }
 
-/// Choose a location for every temporary of `function`.
-pub fn allocate(function: &Function) -> Allocation {
+/// Choose a location for every temporary of `function` among
+/// `registers` and stack slots.
+pub fn allocate(function: &Function, registers: &Registers) -> Allocation {
     let intervals = intervals(function);
     let mut locs: Vec<Option<u32>> = vec![None; function.temps as usize];
 
@@ -89,9 +91,14 @@ pub fn allocate(function: &Function) -> Allocation {
         let taken =
             |register: u32, active: &[(Temp, u32)]| active.iter().any(|&(_, r)| r == register);
         let allowed: Vec<u32> = if here.crosses_call {
-            CALLEE_SAVED.to_vec()
+            registers.callee_saved.to_vec()
         } else {
-            CALLER_SAVED.iter().chain(&CALLEE_SAVED).copied().collect()
+            registers
+                .caller_saved
+                .iter()
+                .chain(registers.callee_saved)
+                .copied()
+                .collect()
         };
         if let Some(&register) = allowed.iter().find(|&&r| !taken(r, &active)) {
             locs[t as usize] = Some(register);
@@ -121,7 +128,7 @@ pub fn allocate(function: &Function) -> Allocation {
         .into_iter()
         .map(|loc| match loc {
             Some(register) => {
-                if CALLEE_SAVED.contains(&register) && !saved.contains(&register) {
+                if registers.callee_saved.contains(&register) && !saved.contains(&register) {
                     saved.push(register);
                 }
                 Loc::Reg(register)
