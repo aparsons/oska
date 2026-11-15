@@ -47,7 +47,9 @@ jobs:
   cross-build:
     # Seam 3 of spec #153: every corpus program built for every target on
     # an aarch64 host and on an x86_64 host. `cross-build-compare` requires
-    # the same bytes from both: the backend never reads the host.
+    # the same bytes from both: the backend never reads the host. A
+    # refusal that scripts/cross-build/refused.txt does not expect fails
+    # here, with oskac's error, so two hosts cannot agree by refusing.
     strategy:
       fail-fast: false
       matrix:
