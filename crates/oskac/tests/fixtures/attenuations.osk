@@ -54,6 +54,28 @@ fn main(fs: Fs) {
     let site = output(write)
 }
 
+// Impls of one trait for two instances of a generic type are named apart,
+// in the function list and in the attenuations (#265).
+trait Publish {
+    fn out(self, write: FsWrite) -> DirWrite
+}
+
+struct Site<T> {
+    name: T,
+}
+
+impl Publish for Site<Int> {
+    fn out(self, write: FsWrite) -> DirWrite {
+        write.restrict_to("numbered")
+    }
+}
+
+impl Publish for Site<String> {
+    fn out(self, write: FsWrite) -> DirWrite {
+        write.restrict_to("named")
+    }
+}
+
 // A test narrows too, and is listed under its name (#150).
 test "reads a note" {
     let notes = t.fs.read_only().restrict_to("notes")

@@ -11,7 +11,9 @@
     {"name":"reader","authority":["Dir"],"via":[{"param":"app","capabilities":["Dir"]}],"pure":false},
     {"name":"writer","authority":["Dir"],"via":[{"param":"app","capabilities":["Dir"]}],"pure":false},
     {"name":"everything","authority":["Fs"],"via":[{"param":"fs","capabilities":["Fs"]}],"pure":false},
-    {"name":"main","authority":["Fs"],"via":[{"param":"fs","capabilities":["Fs"]}],"pure":false}
+    {"name":"main","authority":["Fs"],"via":[{"param":"fs","capabilities":["Fs"]}],"pure":false},
+    {"name":"<Site<Int> as Publish>.out","authority":["FsWrite"],"via":[{"param":"write","capabilities":["FsWrite"]}],"pure":false},
+    {"name":"<Site<String> as Publish>.out","authority":["FsWrite"],"via":[{"param":"write","capabilities":["FsWrite"]}],"pure":false}
   ],
   "audit": [],
   "attenuations": [
@@ -28,7 +30,9 @@
     {"function":"everything","method":"restrict_to","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":1223,"end":1242},"source":"Fs","result":"Dir","root":"/"},
     {"function":"main","method":"read_only","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":1279,"end":1293},"source":"Fs","result":"FsRead","root":null},
     {"function":"main","method":"write_only","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":1310,"end":1325},"source":"Fs","result":"FsWrite","root":null},
-    {"function":"test \"reads a note\"","method":"read_only","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":1484,"end":1500},"source":"Fs","result":"FsRead","root":null},
-    {"function":"test \"reads a note\"","method":"restrict_to","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":1484,"end":1521},"source":"FsRead","result":"DirRead","root":"notes"}
+    {"function":"<Site<Int> as Publish>.out","method":"restrict_to","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":1698,"end":1727},"source":"FsWrite","result":"DirWrite","root":"numbered"},
+    {"function":"<Site<String> as Publish>.out","method":"restrict_to","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":1824,"end":1850},"source":"FsWrite","result":"DirWrite","root":"named"},
+    {"function":"test \"reads a note\"","method":"read_only","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":1958,"end":1974},"source":"Fs","result":"FsRead","root":null},
+    {"function":"test \"reads a note\"","method":"restrict_to","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":1958,"end":1995},"source":"FsRead","result":"DirRead","root":"notes"}
   ]
 }

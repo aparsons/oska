@@ -177,8 +177,10 @@ pub fn report(
 /// The name the authority report gives `method`, declared in the `impl`
 /// `item`: `Type.method` for an inherent impl and `<Type as
 /// Trait>.method` for `impl Trait for Type`, so that the two never share
-/// a name (#123). An attenuation's `function` names its method the same
-/// way.
+/// a name (#123). A generic type's arguments are part of `Type`, as in
+/// `<Pair<Int> as Show>.show`, so two impls of one trait for two
+/// instances of it are told apart too (#265). An attenuation's `function`
+/// names its method the same way.
 pub(crate) fn impl_method_name(
     modules: &Modules,
     items: &Items,
@@ -191,14 +193,13 @@ pub(crate) fn impl_method_name(
     let Some(trait_ref) = &imp.trait_ref else {
         return modules.function_name(method.span.start, Some(&target), &f.name.name);
     };
-    // The impl's arguments tell two impls of one generic trait apart. An
-    // impl the checker could not record has only its trait's name.
-    let trait_ref = items
-        .impls
-        .iter()
-        .find(|info| info.span == Some(item.span))
-        .map_or_else(|| type_name(trait_ref), ImplInfo::trait_ref);
-    modules.trait_method_name(&target, &trait_ref, &f.name.name)
+    // The impl's arguments tell two impls of one generic trait, or of one
+    // trait for two instances of a generic type, apart. An impl the
+    // checker could not record has only its names.
+    let info = items.impls.iter().find(|info| info.span == Some(item.span));
+    let trait_ref = info.map_or_else(|| type_name(trait_ref), ImplInfo::trait_ref);
+    let target_args = info.map(ImplInfo::target_args).unwrap_or_default();
+    modules.trait_method_name(&format!("{target}{target_args}"), &trait_ref, &f.name.name)
 }
 
 /// `lower` has the enclosing impl's generics and `Self` in scope.

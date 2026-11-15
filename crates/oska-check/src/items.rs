@@ -259,6 +259,20 @@ impl ImplInfo {
         format!("{}<{}>", self.trait_name, args.join(", "))
     }
 
+    /// The arguments of the impl's target, as `<Int>` for `Pair<Int>`, and
+    /// empty for a type that is not generic. The authority report names
+    /// the target with them, so that impls for two instances of one type
+    /// are told apart (#265).
+    pub fn target_args(&self) -> String {
+        match &self.target {
+            Ty::Named(_, args, _) if !args.is_empty() => {
+                let args: Vec<String> = args.iter().map(Ty::to_string).collect();
+                format!("<{}>", args.join(", "))
+            }
+            _ => String::new(),
+        }
+    }
+
     /// The checked program's name for the impl's `method`, such as
     /// `<AppError as From<IoError>>.from`.
     pub fn method_name(&self, method: &str) -> Option<String> {
