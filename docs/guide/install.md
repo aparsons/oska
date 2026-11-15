@@ -168,7 +168,7 @@ Re-run the installer. It installs the latest release over the old one, and with 
 curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.2.0 --allow-downgrade
 ```
 
-There is no self-update command.
+There is no self-update command: `oskac self` only reports on the install and uninstalls it (see [`oskac self`](cli-reference.md#oskac-self)). To see whether an update exists before you run the installer, use [`--check`](#check-for-an-update).
 
 ### Check for an update
 
@@ -221,6 +221,19 @@ With `--json` it prints:
 `oskac self uninstall` does the same from the installed `oskac`, with no installer: see [`oskac self`](cli-reference.md#oskac-self). `oskac self info` reports the install and whether the receipt matches it.
 
 An install made before the installers wrote a receipt has none, so `--uninstall` stops with `not_installed`. Delete `~/.oska` by hand: it holds `bin/oskac` (`bin\oskac.exe` on Windows) and a `version` file.
+
+### Require a minimum oskac version
+
+A package can name the oldest `oskac` it works with, with `oska` in the `[package]` table of `oska.toml`:
+
+```text
+[package]
+name = "shopping"
+version = "0.1.0"
+oska = "0.4.0"
+```
+
+An older `oskac` refuses the package with `E0407`, from `check`, `run`, `test` and `build`. The message names both versions and says to install a newer one: run the installer again (see [Update](#update)). The key is a minimum, never an exact pin, so a newer `oskac` always accepts it. See [packages and modules](packages.md#starting-a-package) for the key and [`E0407`](../checker.md#e0407).
 
 ## Upgrading to v0.4.0
 

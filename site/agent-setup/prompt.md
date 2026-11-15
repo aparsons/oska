@@ -62,12 +62,23 @@ Download each template below with `curl -fsSL` or your fetch tool and read it. A
 
 Look for the project's CI or task runner: `.github/workflows`, a `Makefile`, a `justfile`, or scripts in `package.json`. If there is one, propose a step that runs `oskac test <file.osk>` for each file that has tests, show me the diff, and apply it when I agree. A CI job needs `oskac` too: install it with the same installer, pinned with `--version` to the version you installed. If there is no CI or task runner, say so and add nothing.
 
-## 5. Report
+## 5. Update, check or uninstall later
+
+Do this only when I ask. Each command is the installer from step 1 with one more option, and each takes `--json`.
+
+- **Check for an update.** Run the installer with `--check --json`. It installs and writes nothing. It prints `installed`, `latest` and `update_available`. Tell me; do not update until I say so.
+- **Update.** Run the installer again, as in step 1. It installs the latest release over the old one, with the same checks, and its `action` is `updated`. The installer refuses to install an older release than the installed one (`downgrade_refused`). Do not add `--allow-downgrade` unless I ask for a named older release, with `--version`.
+- **Uninstall.** Run the installer with `--uninstall --json`.
+  Or, with no installer, run `oskac self uninstall --format=json`.
+  Either removes only what the install receipt lists, and keeps `~/.config/oska`. Show me `removed`, `kept` and `path_hint`, and tell me what `path_hint` says to remove from my `PATH` by hand. If it fails with `not_installed`, `unsafe_path` or `not_managed`, stop and tell me: do not delete `~/.oska` yourself.
+- **Find out what is installed.** Run `oskac self info --format=json`. It reads the receipt and makes no network connection.
+
+## 6. Report
 
 Tell me:
 
 - the `version` you installed, and its `path`;
 - each file you added or changed, and each one you left alone;
-- how to update: run the installer again. It installs the latest release over the old one, and there is no self-update command.
+- how to update: run the installer again, after `--check` if I want to know first. It installs the latest release over the old one, and there is no self-update command. To uninstall, run the installer with `--uninstall`.
 
 The documentation index for agents is https://oskalang.dev/llms.txt.
