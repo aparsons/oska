@@ -24,7 +24,7 @@ mod skips;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use differential::{assert_same, Case};
 
@@ -365,24 +365,47 @@ fn the_site_generator_builds_the_real_site_byte_for_byte() {
     }
 }
 
+/// CPU time this thread has used so far, user plus system, from
+/// `/proc/thread-self/stat` (this file is Linux-only, see the `cfg` at the
+/// top). Unlike wall-clock time it does not grow when other processes
+/// compete for the cores. The kernel counts it in ticks of 1/100 s
+/// (`USER_HZ`, 100 on every Linux target).
+fn thread_cpu_time() -> Duration {
+    let stat = std::fs::read_to_string("/proc/thread-self/stat").expect("read the thread's stat");
+    // The command name, in parentheses, may hold spaces: count the fields
+    // after it. They start at field 3 (the state); `utime` and `stime` are
+    // fields 14 and 15.
+    let after_name = &stat[stat.rfind(')').expect("the stat names the command") + 1..];
+    let fields: Vec<u64> = after_name
+        .split_whitespace()
+        .skip(11)
+        .take(2)
+        .map(|ticks| ticks.parse().expect("a tick count"))
+        .collect();
+    assert_eq!(fields.len(), 2, "the stat has utime and stime: {stat}");
+    Duration::from_millis((fields[0] + fields[1]) * 10)
+}
+
 #[test]
-fn building_the_site_generator_takes_well_under_a_second() {
+fn building_the_site_generator_uses_little_cpu_time() {
     let root = repo_root();
     let src = read(&root.join("site/build.osk"));
     let report =
         oska_check::check_file("site/build.osk", &src, oska_check::CheckOptions::default());
     let program = report.program.expect("the generator checks");
-    let started = Instant::now();
+    // The build runs on this thread, so its CPU time is this thread's.
+    let started = thread_cpu_time();
     let bytes = oska_native::build(&program, differential::host_target(), &|d| d)
         .expect("the generator builds");
-    let took = started.elapsed();
+    let used = thread_cpu_time() - started;
     assert!(!bytes.is_empty());
-    // A release build of `oskac` takes about 0.1 s on a Raspberry Pi 5,
-    // and this unoptimized test build about 0.6 s: the bound only
-    // catches a slowdown by a large factor.
+    // A release build of `oskac` takes about 0.1 s of CPU on a Raspberry
+    // Pi 5, and this unoptimized test build about 1 s: the bound only
+    // catches a slowdown by a large factor. It counts CPU time, not
+    // wall-clock time, so a busy machine cannot fail it (#271).
     assert!(
-        took < Duration::from_secs(5),
-        "building site/build.osk took {took:?}"
+        used < Duration::from_secs(5),
+        "building site/build.osk used {used:?} of CPU time"
     );
 }
 
