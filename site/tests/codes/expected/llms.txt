@@ -2,19 +2,28 @@
 
 > A language.
 
-Oska 0.1.0 (pre-alpha). These docs track `main`. Every page is also served as Markdown: the same path with `.md`. All of them are in [llms-full.txt](https://oskalang.dev/llms-full.txt). The source code is at https://github.com/aparsons/oska. A program is one `.osk` file or a package: an `oska.toml` and modules under `src/`, with `src/main.osk` as the entry and `use pkg.a.b` importing `src/a/b.osk`; see [Packages and modules](https://oskalang.dev/guide/packages.md). `oskac build` compiles a program to a static Linux executable on any host: `--target linux-aarch64` or `--target linux-x86_64` picks the platform, `--target all` writes both, and without `--target` it builds for the host. On aarch64 and x86_64 Linux, `oskac run` and `oskac test` compile natively and run the executable, and `--interpret` selects the interpreter, which every other host uses; output, reports and exit codes are the same on both. See [Platform support](https://oskalang.dev/guide/cli-reference.md#platform-support).
+Oska 0.1.0 (pre-alpha). These docs track `main`. Every page is also served as Markdown: the same path with `.md`. Most of them are in [llms-full.txt](https://oskalang.dev/llms-full.txt), which leaves out the per-code pages (all in [codes.json](https://oskalang.dev/codes.json)). The source code is at https://github.com/aparsons/oska. A program is one `.osk` file or a package: an `oska.toml` and modules under `src/`, with `src/main.osk` as the entry and `use pkg.a.b` importing `src/a/b.osk`; see [Packages and modules](https://oskalang.dev/guide/packages.md). `oskac build` compiles a program to a static Linux executable on any host: `--target linux-aarch64` or `--target linux-x86_64` picks the platform, `--target all` writes both, and without `--target` it builds for the host. On aarch64 and x86_64 Linux, `oskac run` and `oskac test` compile natively and run the executable, and `--interpret` selects the interpreter, which every other host uses; output, reports and exit codes are the same on both. See [Platform support](https://oskalang.dev/guide/cli-reference.md#platform-support).
+
+## Start here
+
+- [codes.json](https://oskalang.dev/codes.json): every error code, with an example that fails with it, the fix, and the URL of its page
 
 ## Docs
 
 - [Oska](https://oskalang.dev/index.md): A language.
 - [Glossary](https://oskalang.dev/glossary.md)
 - [Oska checker report](https://oskalang.dev/checker.md)
-- [Oska runtime](https://oskalang.dev/runtime.md)
+- [Reference](https://oskalang.dev/reference.md): How Oska works inside, the words it uses, and the decisions and research behind it. To use Oska, start with the guides.
 
 ## Machine-readable
 
-- [llms-full.txt](https://oskalang.dev/llms-full.txt): every page, as Markdown, in one file
+- [llms-full.txt](https://oskalang.dev/llms-full.txt): the documentation, as Markdown, in one file; it leaves out the per-code pages (all in [codes.json](https://oskalang.dev/codes.json))
 - [search.json](https://oskalang.dev/search.json): the search index
 - [sitemap.xml](https://oskalang.dev/sitemap.xml): the canonical URL of every page
 - [latest.json](https://oskalang.dev/latest.json): the current version and the installers
-- [codes.json](https://oskalang.dev/codes.json): every error code, with an example that fails with it and the fix
+
+## Optional
+
+Internals most programs do not need, and research: proposals and background, not documented behaviour. Skip them unless you need them.
+
+- [Oska runtime](https://oskalang.dev/runtime.md)

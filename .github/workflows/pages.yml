@@ -48,6 +48,19 @@ jobs:
               gh release download "$tag" --dir "$releases/$tag"
             done
           scripts/release/stage-site.sh "$releases" _site site/oska-release.pub
+      # /.well-known/security.txt (RFC 9116), expiring a year from this
+      # deploy. The generator has no clock, so it is written here.
+      - run: scripts/release/security-txt.sh _site
+      # Every link the site publishes must go somewhere: a page and anchor
+      # on the site, or a file the repository tracks on GitHub. The checker
+      # holds GitHub links against the list of tracked files.
+      - run: git ls-files > site/tracked.txt
+      - run: ./target/release/oskac run site/check-links.osk
+      # `/.well-known/security.txt` is a hidden path. `upload-pages-artifact`
+      # v3 includes hidden files; v4 and later drop them with no option to
+      # keep them, so security.txt would silently not be deployed. Stay on
+      # v3, and see `security_policy.rs`, which fails if this step would
+      # drop hidden files.
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
@@ -83,13 +96,27 @@ jobs:
           test "$status" = 200
       - name: the files agents and installers fetch are published
         run: |
-          for path in install.sh install.ps1 oska-release.pub llms.txt llms-full.txt \
-            sitemap.xml robots.txt latest.json codes.json search.json agent-setup.md; do
+          for path in install.sh install.ps1 oska-release.pub llms.txt llms-full.txt llms-research.txt \
+            sitemap.xml robots.txt latest.json codes.json search.json agent-setup.md \
+            security.md favicon.svg; do
             curl --silent --show-error --fail --location --output /dev/null \
               --retry 6 --retry-delay 10 --retry-all-errors \
               "https://oskalang.dev/$path"
             echo "https://oskalang.dev/$path answers"
           done
+      # GitHub Pages serves 404.html, with status 404, for any address with
+      # no page.
+      - name: an unknown address gets the custom 404 page
+        run: |
+          status=$(curl --silent --show-error --output "$RUNNER_TEMP/not-found.html" \
+            --write-out '%{http_code}' --retry 6 --retry-delay 10 \
+            https://oskalang.dev/no-such-page-smoke-check) || true
+          echo "an unknown address answered ${status:-nothing}"
+          test "$status" = 404
+          grep -q 'Page not found' "$RUNNER_TEMP/not-found.html"
+      # A missing, incomplete or expired security.txt fails the deploy.
+      - name: security.txt is published and has not expired
+        run: scripts/release/check-security-txt.sh https://oskalang.dev
       # Once a release is published, install it the way the guide says and
       # run it. With no release yet, this passes with a warning annotation.
       - name: the published one-line install works

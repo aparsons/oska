@@ -2,14 +2,14 @@
 
 > A secure-by-default language.
 
-Oska 0.1.0 (pre-alpha). These docs track `main`. Every page is also served as Markdown: the same path with `.md`. All of them are in [llms-full.txt](https://oskalang.dev/llms-full.txt). The source code is at https://github.com/aparsons/oska. A program is one `.osk` file or a package: an `oska.toml` and modules under `src/`, with `src/main.osk` as the entry and `use pkg.a.b` importing `src/a/b.osk`; see [Packages and modules](https://oskalang.dev/guide/packages.md). `oskac build` compiles a program to a static Linux executable on any host: `--target linux-aarch64` or `--target linux-x86_64` picks the platform, `--target all` writes both, and without `--target` it builds for the host. On aarch64 and x86_64 Linux, `oskac run` and `oskac test` compile natively and run the executable, and `--interpret` selects the interpreter, which every other host uses; output, reports and exit codes are the same on both. See [Platform support](https://oskalang.dev/guide/cli-reference.md#platform-support).
+Oska 0.1.0 (pre-alpha). These docs track `main`. Every page is also served as Markdown: the same path with `.md`. Most of them are in [llms-full.txt](https://oskalang.dev/llms-full.txt), which leaves out the research, which is proposals and not documented behaviour (all in [llms-research.txt](https://oskalang.dev/llms-research.txt)). The source code is at https://github.com/aparsons/oska. A program is one `.osk` file or a package: an `oska.toml` and modules under `src/`, with `src/main.osk` as the entry and `use pkg.a.b` importing `src/a/b.osk`; see [Packages and modules](https://oskalang.dev/guide/packages.md). `oskac build` compiles a program to a static Linux executable on any host: `--target linux-aarch64` or `--target linux-x86_64` picks the platform, `--target all` writes both, and without `--target` it builds for the host. On aarch64 and x86_64 Linux, `oskac run` and `oskac test` compile natively and run the executable, and `--interpret` selects the interpreter, which every other host uses; output, reports and exit codes are the same on both. See [Platform support](https://oskalang.dev/guide/cli-reference.md#platform-support).
 
 ## Docs
 
 - [Oska](https://oskalang.dev/index.md): A secure-by-default language.
 - [Glossary](https://oskalang.dev/glossary.md): Terms of the security model.
 - [Oska design notes](https://oskalang.dev/design.md): Decisions are in adr/, terms in GLOSSARY.md, and the background in the research.
-- [Oska runtime](https://oskalang.dev/runtime.md): See the checker, which is not in this tree.
+- [Reference](https://oskalang.dev/reference.md): How Oska works inside, the words it uses, and the decisions and research behind it. To use Oska, start with the guides.
 
 ## Decisions
 
@@ -17,14 +17,17 @@ Oska 0.1.0 (pre-alpha). These docs track `main`. Every page is also served as Ma
 - [Capabilities are the effect system](https://oskalang.dev/adr/0002-capabilities.md): A function's capability parameters are its effects. See the design notes and ADR 0001.
 - [Decisions](https://oskalang.dev/adr/index.md)
 
-## Research
-
-- [Research: a report](https://oskalang.dev/research/2026-11-report.md): Memory safety is the baseline (CISA).
-- [Research](https://oskalang.dev/research/index.md)
-
 ## Machine-readable
 
-- [llms-full.txt](https://oskalang.dev/llms-full.txt): every page, as Markdown, in one file
+- [llms-full.txt](https://oskalang.dev/llms-full.txt): the documentation, as Markdown, in one file; it leaves out the research, which is proposals and not documented behaviour (all in [llms-research.txt](https://oskalang.dev/llms-research.txt))
 - [search.json](https://oskalang.dev/search.json): the search index
 - [sitemap.xml](https://oskalang.dev/sitemap.xml): the canonical URL of every page
 - [latest.json](https://oskalang.dev/latest.json): the current version and the installers
+
+## Optional
+
+Internals most programs do not need, and research: proposals and background, not documented behaviour. Skip them unless you need them.
+
+- [Oska runtime](https://oskalang.dev/runtime.md): See the checker, which is not in this tree.
+- [Research: a report](https://oskalang.dev/research/2026-11-report.md): Proposal: Memory safety is the baseline (CISA).
+- [llms-research.txt](https://oskalang.dev/llms-research.txt): every research page, as Markdown, in one file; proposals, not documented behaviour

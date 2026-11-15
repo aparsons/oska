@@ -99,6 +99,16 @@ throwaway_key() {
   ssh-keygen -q -t ed25519 -N '' -C "$1" -f "$1"
 }
 
+# The SHA256 fingerprint of the OpenSSH public key in file $1, as
+# `ssh-keygen -l -E sha256` prints it, worked out without ssh-keygen: the
+# unpadded base64 of the SHA-256 of the key blob.
+fingerprint_of() {
+  local hex
+  hex=$(awk '{print $2}' "$1" | base64 -d | sha256sum | cut -c1-64)
+  # shellcheck disable=SC2059 # the format is the hex digest as \xHH escapes
+  printf "SHA256:%s\n" "$(printf "$(printf '%s' "$hex" | sed 's/../\\x&/g')" | base64 | tr -d '=\n')"
+}
+
 # Assembles and signs ./out/<tag> (default v1.2.3) with the key ./key,
 # making the fake binaries and the key if they are not there yet.
 signed_release() {
@@ -251,7 +261,11 @@ test_stage_site_publishes_releases_and_points_latest_at_the_newest() {
   }
 }
 JSON
-  diff <(jq -S . expected.json) <(jq -S . site/latest.json) || fail "latest.json differs"
+  # The key's fingerprint, which the install guide and SECURITY.md print, is
+  # in latest.json too, computed from the key.
+  jq --arg fingerprint "$(fingerprint_of key.pub)" '.signing_key_fingerprint = $fingerprint' \
+    expected.json >expected-with-key.json
+  diff <(jq -S . expected-with-key.json) <(jq -S . site/latest.json) || fail "latest.json differs"
   # release_url (and the release notes) link to a page, not a bare folder.
   page=site/releases/v1.10.0/index.html
   [ -f "$page" ] || fail "no page at the release's URL"
@@ -378,6 +392,96 @@ test_smoke_published_with_no_release_succeeds_unless_a_version_is_expected() {
   grep -q '^::warning::.*no release is published' smoke.out || fail "no GitHub warning annotation"
   if "$here/smoke-published.sh" "file://$PWD/site" 0.1.0; then
     fail "passed with no release but a version expected"
+  fi
+}
+
+test_fingerprint_of_agrees_with_ssh_keygen() {
+  throwaway_key key
+  [ "$(fingerprint_of key.pub)" = "$(ssh-keygen -l -E sha256 -f key.pub | awk '{print $2}')" ] ||
+    fail "fingerprint_of: $(fingerprint_of key.pub)"
+}
+
+# ---- /.well-known/security.txt ----------------------------------------------
+
+# The value of the field $1 in ./site/.well-known/security.txt.
+security_field() {
+  sed -n "s/^$1: //p" site/.well-known/security.txt
+}
+
+test_security_txt_points_at_private_reporting_and_expires_a_year_after_the_deploy() {
+  mkdir site
+  OSKA_SITE_URL=https://example.test "$here/security-txt.sh" site
+  [ "$(security_field Contact)" = https://github.com/aparsons/oska/security/advisories/new ] ||
+    fail "Contact: $(security_field Contact)"
+  [ "$(security_field Policy)" = https://example.test/security.html ] ||
+    fail "Policy: $(security_field Policy)"
+  [ "$(security_field Canonical)" = https://example.test/.well-known/security.txt ] ||
+    fail "Canonical: $(security_field Canonical)"
+  [ "$(security_field Preferred-Languages)" = en ] || fail "no Preferred-Languages: en"
+  expires=$(security_field Expires)
+  [[ $expires =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ||
+    fail "Expires is not an RFC 3339 UTC time: $expires"
+  days=$((($(date -u -d "$expires" +%s) - $(date -u +%s)) / 86400))
+  [ "$days" -ge 364 ] && [ "$days" -le 366 ] || fail "Expires is $days days away: $expires"
+  # Nothing else: every line is one of the fields above.
+  [ "$(wc -l <site/.well-known/security.txt)" = 5 ] || fail "$(cat site/.well-known/security.txt)"
+}
+
+test_security_txt_refuses_a_missing_site_directory() {
+  if "$here/security-txt.sh" missing 2>err; then
+    fail "wrote into a site that is not there"
+  fi
+}
+
+# The checker, on ./site served as a file:// URL, without retries.
+check_security_txt() {
+  OSKA_FETCH_RETRIES=0 "$here/check-security-txt.sh" "file://$PWD/site"
+}
+
+test_check_security_txt_accepts_what_the_deploy_writes() {
+  mkdir site
+  "$here/security-txt.sh" site
+  check_security_txt >check.out
+  grep -q '^ok: .*/.well-known/security.txt expires ' check.out || fail "no success line: $(cat check.out)"
+}
+
+test_check_security_txt_fails_when_it_is_missing() {
+  mkdir site
+  if check_security_txt 2>err; then
+    fail "passed with no security.txt"
+  fi
+  grep -q 'security.txt' err || fail "error does not name the file: $(cat err)"
+}
+
+test_check_security_txt_fails_without_each_required_field() {
+  mkdir site
+  "$here/security-txt.sh" site
+  cp site/.well-known/security.txt full.txt
+  for field in Contact Expires Policy Canonical Preferred-Languages; do
+    grep -v "^$field: " full.txt >site/.well-known/security.txt
+    if check_security_txt 2>err; then
+      fail "passed without $field"
+    fi
+    grep -q "$field" err || fail "error does not name $field: $(cat err)"
+  done
+}
+
+test_check_security_txt_fails_once_it_has_expired() {
+  mkdir site
+  "$here/security-txt.sh" site
+  sed -i 's/^Expires: .*/Expires: 2020-01-01T00:00:00Z/' site/.well-known/security.txt
+  if check_security_txt 2>err; then
+    fail "passed with an Expires in the past"
+  fi
+  grep -q 'expired' err || fail "error does not say it expired: $(cat err)"
+}
+
+test_check_security_txt_fails_on_an_expires_it_cannot_read() {
+  mkdir site
+  "$here/security-txt.sh" site
+  sed -i 's/^Expires: .*/Expires: next year/' site/.well-known/security.txt
+  if check_security_txt 2>err; then
+    fail "passed with an Expires that is not a time"
   fi
 }
 

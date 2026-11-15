@@ -25,7 +25,7 @@ A program is one `.osk` file, or a package: an `oska.toml` (`[package]` with a `
 
 ### Where to read more
 
-- Index for agents: https://oskalang.dev/llms.txt (all pages: https://oskalang.dev/llms-full.txt).
+- Index for agents: https://oskalang.dev/llms.txt (the documentation in one file: https://oskalang.dev/llms-full.txt).
 - Every error code, with an example and its fix: https://oskalang.dev/codes.json, or one code at https://oskalang.dev/codes/E0300.
 - Agent guide: https://oskalang.dev/guide/agent-guide.md.
 - Packages and modules: https://oskalang.dev/guide/packages.md.
