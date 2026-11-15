@@ -462,6 +462,7 @@ fn built_site() -> BTreeMap<String, String> {
         "GLOSSARY.md",
         "site/style.css",
         "site/search.js",
+        "site/favicon.svg",
         "site/agent-setup",
         "Cargo.toml",
     ] {

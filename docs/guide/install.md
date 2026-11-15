@@ -1,28 +1,6 @@
 # Install
 
-Oska is pre-alpha. The latest release is **v0.3.0**. You can install `oskac`, the compiler and runner, from a signed binary with a one-line installer, or build it from source.
-
-## Build from source
-
-You need a stable Rust toolchain, version 1.77 or newer, and a checkout of the repository:
-
-```sh
-cargo build --release -p oskac
-```
-
-The binary is `target/release/oskac`. Copy it somewhere on your `PATH`, or let Cargo install it into `~/.cargo/bin`:
-
-```sh
-cargo install --path crates/oskac
-```
-
-Confirm that it works:
-
-```sh
-oskac --version
-```
-
-It prints `oskac` and the version on one line. A build from this checkout prints `oskac 0.3.0`. Then continue with the [quickstart](quickstart.md).
+Oska is pre-alpha. The latest release is **v0.4.0**. You can install `oskac`, the compiler and runner, from a signed binary with a one-line installer, or [build it from source](#build-from-source).
 
 ## One-line installers
 
@@ -42,26 +20,26 @@ What the installers do:
 
 - **They never prompt.** They are safe to run from a script, a CI job, or an AI agent.
 - **They install to `~/.oska/bin`.** Set `OSKA_HOME` to install into `$OSKA_HOME/bin` instead. They don't change your `PATH`; if `~/.oska/bin` is not on it, they print the line to add.
-- **They verify before they install.** The installer checks the SSH signature on `SHA256SUMS` (`ssh-keygen -Y verify`, so it needs OpenSSH 8.1 or newer) against the release key built into the installer. The signed file's first line, `# oska-release v0.3.0`, names the release, and it must be the one the installer asked for, so an old release cannot be served as a newer one. Then the installer checks the download's SHA-256 checksum against `SHA256SUMS`, and checks that the binary reports the expected version. If any check fails, nothing is installed and the installer exits with a non-zero status.
+- **They verify before they install.** The installer checks the SSH signature on `SHA256SUMS` (`ssh-keygen -Y verify`, so it needs OpenSSH 8.1 or newer) against the release key built into the installer. The signed file's first line, `# oska-release v0.4.0`, names the release, and it must be the one the installer asked for, so an old release cannot be served as a newer one. Then the installer checks the download's SHA-256 checksum against `SHA256SUMS`, and checks that the binary reports the expected version. If any check fails, nothing is installed and the installer exits with a non-zero status.
 - **They download over HTTPS only.** They refuse a redirect to a plain `http://` URL.
 - **They take `--version` and `--json`.** `--version` installs that release instead of the latest. `--json` prints one line of JSON on stdout and nothing else.
 
 To pass options through the pipe:
 
 ```sh
-curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.3.0 --json
+curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.4.0 --json
 ```
 
 `iex` cannot pass options, so in PowerShell run the script as a script block:
 
 ```powershell
-& ([scriptblock]::Create((irm https://oskalang.dev/install.ps1))) --version 0.3.0 --json
+& ([scriptblock]::Create((irm https://oskalang.dev/install.ps1))) --version 0.4.0 --json
 ```
 
 A successful `--json` run prints:
 
 ```json
-{"ok": true, "action": "installed", "version": "0.3.0", "tag": "v0.3.0", "previous_version": null, "platform": "linux-x86_64", "path": "/home/you/.oska/bin/oskac", "bin_dir": "/home/you/.oska/bin", "on_path": false, "checksum_verified": true, "signature_verified": true}
+{"ok": true, "action": "installed", "version": "0.4.0", "tag": "v0.4.0", "previous_version": null, "platform": "linux-x86_64", "path": "/home/you/.oska/bin/oskac", "bin_dir": "/home/you/.oska/bin", "on_path": false, "checksum_verified": true, "signature_verified": true}
 ```
 
 - `action` is `installed`, `updated` (with the old version in `previous_version`), or `reinstalled`.
@@ -86,6 +64,32 @@ A failed run prints `{"ok": false, "error": "<code>", "message": "..."}` and exi
 
 The binaries are published on oskalang.dev, together with `SHA256SUMS` and its signature, for Linux x86_64 and aarch64, macOS x86_64 and aarch64, and Windows x86_64. The Linux binaries are built on Ubuntu 22.04 and need glibc 2.35 or newer. They do not run on an older glibc or on musl systems such as Alpine; there the installer stops with `unsupported_libc`, and you can build from source instead.
 
+### Verify a release by hand
+
+The installers check every download for you. To check a release without them, compare the release key with its fingerprint, then check the signature, then the checksums. The release key is at https://oskalang.dev/oska-release.pub, and its fingerprint is:
+
+```text
+SHA256:PjwTDycs560g1ktWC/gdznamSkzm4xH+OAdfntNaW4o
+```
+
+The same fingerprint is on the [security page](../../SECURITY.md#verifying-a-release). On Linux, for v0.4.0:
+
+```sh
+base=https://oskalang.dev/releases/v0.4.0
+curl -fsSL --remote-name-all "$base/SHA256SUMS" "$base/SHA256SUMS.sig" "$base/oskac-linux-x86_64"
+curl -fsSL https://oskalang.dev/oska-release.pub -o oska-release.pub
+ssh-keygen -l -E sha256 -f oska-release.pub
+printf 'oska-release %s\n' "$(cat oska-release.pub)" > allowed
+ssh-keygen -Y verify -f allowed -I oska-release -n oska-release -s SHA256SUMS.sig < SHA256SUMS
+head -n 1 SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS
+```
+
+1. `ssh-keygen -l` must print the fingerprint above. If it prints another, stop: the key is not the release key.
+2. `ssh-keygen -Y verify` must print `Good "oska-release" signature`.
+3. The first line of `SHA256SUMS` must be `# oska-release v0.4.0`, the release you asked for.
+4. `sha256sum` must print `OK` for the binary you downloaded. On macOS, use `shasum -a 256 --ignore-missing -c SHA256SUMS`.
+
 ### Verify the installation
 
 ```sh
@@ -101,6 +105,14 @@ Re-run the installer. It installs the latest release over the old one, and with 
 ### Uninstall
 
 Delete `~/.oska`, which holds `bin/oskac` and a `version` file recording what the installer put there.
+
+## Upgrading to v0.4.0
+
+v0.4.0 makes x86_64 Linux the second platform with a native backend, and lets `oskac build` target either Linux platform from any host. Programs keep their meaning; these are the changes you can see:
+
+- **`run`, `test` and `build` are native on x86_64 Linux**, as on aarch64 Linux. Before, `run` and `test` used the interpreter there, tens of times slower on program logic, and `build` could only write an aarch64 Linux executable. A program the native backend cannot compile yet still runs on the interpreter after the one-line `E0390` note, and `--interpret` still selects the interpreter. See [platform support](cli-reference.md#platform-support).
+- **`oskac build` writes an executable for the host's platform**, so on x86_64 Linux it writes an x86_64 executable, where v0.3.0 wrote an aarch64 one. To get the old output from an x86_64 Linux host, build with `--target linux-aarch64`. On macOS and Windows, which have no backend yet, the default is still `linux-aarch64`.
+- **`oskac build --target <platform>`** builds for `linux-aarch64` or `linux-x86_64` from any host, and `--target all` writes both, as `<name>-<platform>`, into the `-o` directory. An unknown platform is `E0393` and a platform with no backend yet (macOS in v0.5.0, Windows in v0.6.0) is `E0394`; both exit with 2 and write nothing. The same program built by the same `oskac` gives the same bytes on every host. See [`oskac build`](cli-reference.md#oskac-build).
 
 ## Upgrading to v0.3.0
 
@@ -159,3 +171,25 @@ fn count(fs: FsRead, path: Path) -> Result<Int, IoError> {
 ## Set up an AI agent
 
 The site publishes a copy-and-paste prompt that has an AI coding agent install Oska, verify the toolchain, and configure your project. It is at the top of this page and at `https://oskalang.dev/agent-setup.md` as plain Markdown. The [agent guide](agent-guide.md) describes the loop the prompt sets up.
+
+## Build from source
+
+You need a stable Rust toolchain, version 1.77 or newer, and a checkout of the repository:
+
+```sh
+cargo build --release -p oskac
+```
+
+The binary is `target/release/oskac`. Copy it somewhere on your `PATH`, or let Cargo install it into `~/.cargo/bin`:
+
+```sh
+cargo install --path crates/oskac
+```
+
+Confirm that it works:
+
+```sh
+oskac --version
+```
+
+It prints `oskac` and the version on one line. A build from this checkout prints `oskac 0.4.0`. Then continue with the [quickstart](quickstart.md).

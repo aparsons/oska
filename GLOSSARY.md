@@ -166,3 +166,9 @@ _Avoid_: system install, global install
 **Update checker**:
 The toolchain's own Oska program that fetches the signed release index and verifies releases for `oskac self check` and `oskac self update`. It is compiled when `oskac` is built and carried inside it, and it runs as a separate process holding only the network and file authority it needs.
 _Avoid_: updater daemon, auto-updater
+
+## Tooling
+
+**Language server**:
+The long-running `oskac lsp` process that editors and agents ask about Oska code over the editor protocol: errors, where a name is defined and used, and a value's type and authority.
+_Avoid_: LSP (the protocol, not the server), Claude LSP server (the server is the same for every editor; Claude Code reaches it through the plugin)
