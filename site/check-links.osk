@@ -1,0 +1,415 @@
+// The link checker for https://oskalang.dev: `oskac run site/check-links.osk`,
+// from the root of the repository, once `site/build.osk` has written
+// `_site/` and the release files are staged in it, checks every link the
+// site publishes. It fails, listing each, if any goes nowhere.
+//
+// It reads every HTML page, the Markdown copy of each, `llms.txt`,
+// `llms-full.txt` and `sitemap.xml`:
+//
+// - A link on the site, relative or at https://oskalang.dev, must name a
+//   file the site has. Its fragment, if it has one, must be the `id` of an
+//   element on the page, or, from or to a Markdown copy, on the page it is
+//   a copy of.
+// - A link to a file or directory of the repository on GitHub, under
+//   `blob/` or `tree/`, must name one that `site/tracked.txt` lists. That
+//   file is the repository's tracked files, one per line, as `git
+//   ls-files` prints them; the Pages workflow writes it before the check.
+// - Every other URL is out of scope: the checker reads no network.
+//
+// Run `oskac check site/check-links.osk` for its authority report. `main`
+// is handed the filesystem read-only, and narrows it to `_site/` and
+// `site/tracked.txt` before it reads anything.
+
+// What the checker may read: the built site and the list of tracked files.
+cap struct Inputs {
+    site: DirRead,
+    tracked: FileRead,
+}
+
+fn main(read: FsRead) -> Result<(), IoError> {
+    let inputs = Inputs(
+        site: read.restrict_to("_site"),
+        tracked: read.restrict_to_file("site/tracked.txt"),
+    )
+    check(inputs)
+}
+
+// One file the checker reads links from.
+struct Source {
+    path: Untrusted<String>,
+    text: Untrusted<String>,
+}
+
+// What a link is checked against. Each is a set: its items, one per line,
+// between line breaks, so `has` is one search.
+struct Known {
+    // Every file of the site, by its path under `_site/`.
+    files: Untrusted<String>,
+    // Every `id` of every page, as `page#id`.
+    anchors: Untrusted<String>,
+    // Every file the repository tracks.
+    tracked: Untrusted<String>,
+}
+
+fn check(inputs: Inputs) -> Result<(), IoError> {
+    let tracked = inputs.tracked.read_to_string()?
+    let paths = walk(inputs.site, "")?
+    let files = set_of(paths)
+    var sources: List<Source> = List.new()
+    for path in paths {
+        if read_for_links(files, path) {
+            let text = inputs.site.read_to_string(Path.from(path))?
+            sources.push(Source(path: path, text: text))
+        }
+    }
+    let known = Known(files: files, anchors: anchors_of(sources), tracked: set_of(tracked.lines()))
+    var found: List<Untrusted<String>> = List.new()
+    var checked = 0
+    for source in sources {
+        for url in urls_of(source, files) {
+            checked = checked + 1
+            let problem = problem_of(known, source.path, url)
+            if problem != "" {
+                found.push("{source.path}: {url}: {problem}")
+            }
+        }
+    }
+    if found.len() == 0 {
+        return Ok(())
+    }
+    let count = found.len()
+    let listed = "\n".join(found)
+    Err(IoError(message: "{count} of {checked} links go nowhere:\n{listed}"))
+}
+
+// Every file under `dir` of the site ("" for its root), by its path from
+// the root.
+fn walk(site: DirRead, dir: Untrusted<String>) -> Result<List<Untrusted<String>>, IoError> {
+    var out: List<Untrusted<String>> = List.new()
+    let at = if dir == "" { "." } else { dir }
+    for name in site.list_dir(Path.from(at))? {
+        let path = if dir == "" { name } else { "{dir}/{name}" }
+        match site.list_dir(Path.from(path)) {
+            Ok(_) => {
+                for inner in walk(site, path)? {
+                    out.push(inner)
+                }
+            }
+            Err(_) => out.push(path)
+        }
+    }
+    Ok(out)
+}
+
+// Whether the file at `path` is one the checker reads links from: a page,
+// a page's Markdown copy, or one of the files for agents and crawlers. A
+// `.md` file that is not a copy, such as a template, is published as it
+// is, and its links are its readers' own.
+fn read_for_links(files: Untrusted<String>, path: Untrusted<String>) -> Bool {
+    if path.ends_with(".html") || path == "llms.txt" || path == "llms-full.txt" || path == "sitemap.xml" {
+        return true
+    }
+    path.ends_with(".md") && has(files, page_of(path))
+}
+
+// The page a Markdown copy is a copy of: `adr/x.html` for `adr/x.md`.
+fn page_of(copy: Untrusted<String>) -> Untrusted<String> {
+    let stem = copy.slice(0, copy.len() - 3)
+    "{stem}.html"
+}
+
+// ---- Sets ------------------------------------------------------------------------
+
+fn set_of(items: List<Untrusted<String>>) -> Untrusted<String> {
+    let listed = "\n".join(items)
+    "\n{listed}\n"
+}
+
+fn has(set: Untrusted<String>, item: Untrusted<String>) -> Bool {
+    !item.contains("\n") && set.contains("\n{item}\n")
+}
+
+// ---- Where links are -----------------------------------------------------------
+
+// Every `id` on every page of `sources`, as `page#id`.
+fn anchors_of(sources: List<Source>) -> Untrusted<String> {
+    var out: List<Untrusted<String>> = List.new()
+    for source in sources {
+        if source.path.ends_with(".html") {
+            for id in attribute_values(source.text, "id") {
+                out.push("{source.path}#{id}")
+            }
+        }
+    }
+    set_of(out)
+}
+
+// Every URL `source` links to or loads.
+fn urls_of(source: Source, files: Untrusted<String>) -> List<Untrusted<String>> {
+    if source.path.ends_with(".html") {
+        var out = attribute_values(source.text, "href")
+        for url in attribute_values(source.text, "src") {
+            out.push(url)
+        }
+        return out
+    }
+    if source.path == "sitemap.xml" {
+        var out: List<Untrusted<String>> = List.new()
+        let parts = source.text.split("<loc>")
+        var i = 1
+        while i < parts.len() {
+            out.push(decoded(parts.at(i).split("</loc>").at(0)))
+            i = i + 1
+        }
+        return out
+    }
+    markdown_destinations(source.text)
+}
+
+// The value of every `name` attribute in `page`, decoded. The generator
+// writes every attribute double-quoted, after a space, and escapes every
+// quote in text, so ` name="` starts one and nothing else.
+fn attribute_values(page: Untrusted<String>, name: String) -> List<Untrusted<String>> {
+    var out: List<Untrusted<String>> = List.new()
+    let parts = page.split(" {name}=\"")
+    var i = 1
+    while i < parts.len() {
+        out.push(decoded(parts.at(i).split("\"").at(0)))
+        i = i + 1
+    }
+    out
+}
+
+// `text` with the character references `std.html` writes made the
+// characters they stand for.
+fn decoded(text: Untrusted<String>) -> Untrusted<String> {
+    text.replace("&quot;", "\"").replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+}
+
+// The destination of every link and image in `text`, Markdown, outside
+// code fences and code spans.
+fn markdown_destinations(text: Untrusted<String>) -> List<Untrusted<String>> {
+    var out: List<Untrusted<String>> = List.new()
+    var fence = ""
+    for line in text.lines() {
+        let trimmed = line.trim()
+        if fence != "" {
+            if trimmed.starts_with(fence) {
+                fence = ""
+            }
+            continue
+        }
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            fence = trimmed.slice(0, 3)
+            continue
+        }
+        if !line.contains("](") {
+            continue
+        }
+        let parts = without_code(line).split("](")
+        var i = 1
+        while i < parts.len() {
+            let destination = up_to_close(parts.at(i)).trim().split(" ").at(0)
+            if destination != "" {
+                out.push(destination)
+            }
+            i = i + 1
+        }
+    }
+    out
+}
+
+// `line` with each code span made one space.
+fn without_code(line: Untrusted<String>) -> Untrusted<String> {
+    let cs = line.chars()
+    var out: List<Untrusted<String>> = List.new()
+    var i = 0
+    while i < cs.len() {
+        if cs.at(i) == "`" {
+            let width = run_length(cs, i, "`")
+            let close = find_run(cs, i + width, "`", width)
+            if close >= 0 {
+                out.push(" ")
+                i = close + width
+                continue
+            }
+            i = i + width
+            continue
+        }
+        out.push(cs.at(i))
+        i = i + 1
+    }
+    "".join(out)
+}
+
+// How many of `c` stand in a row from `i`.
+fn run_length(cs: List<Untrusted<String>>, i: Int, c: String) -> Int {
+    var end = i
+    while end < cs.len() && cs.at(end) == c {
+        end = end + 1
+    }
+    end - i
+}
+
+// Where the next run of exactly `width` of `c` starts, from `start`, or
+// -1.
+fn find_run(cs: List<Untrusted<String>>, start: Int, c: String, width: Int) -> Int {
+    var i = start
+    while i < cs.len() {
+        if cs.at(i) == c {
+            let length = run_length(cs, i, c)
+            if length == width {
+                return i
+            }
+            i = i + length
+        } else {
+            i = i + 1
+        }
+    }
+    -1
+}
+
+// `text` up to the `)` that closes the `(` before it.
+fn up_to_close(text: Untrusted<String>) -> Untrusted<String> {
+    var depth = 0
+    var out: List<Untrusted<String>> = List.new()
+    for c in text.chars() {
+        if c == ")" {
+            if depth == 0 {
+                return "".join(out)
+            }
+            depth = depth - 1
+        } else if c == "(" {
+            depth = depth + 1
+        }
+        out.push(c)
+    }
+    "".join(out)
+}
+
+// ---- Whether a link goes somewhere --------------------------------------------
+
+fn origin() -> String {
+    "https://oskalang.dev"
+}
+
+// Where the repository's files are on GitHub, before `blob/` or `tree/`.
+fn repository() -> String {
+    "https://github.com/aparsons/oska/"
+}
+
+// What is wrong with the link to `url` in the file `from`, or "" if
+// nothing is.
+fn problem_of(known: Known, from: Untrusted<String>, url: Untrusted<String>) -> Untrusted<String> {
+    let base = origin()
+    var rest = url
+    if rest == base || rest.starts_with("{base}/") || rest.starts_with("{base}#") {
+        rest = rest.slice(base.len(), rest.len())
+        if rest == "" || rest.starts_with("#") {
+            rest = "/{rest}"
+        }
+    }
+    if rest.starts_with(repository()) {
+        return repository_problem(known, rest.slice(repository().len(), rest.len()))
+    }
+    if has_scheme(rest) || rest.starts_with("//") {
+        return ""
+    }
+    let parts = rest.split("#")
+    let fragment = if parts.len() > 1 { "#".join(sub(parts, 1, parts.len())) } else { "" }
+    let path = parts.at(0).split("?").at(0)
+    var page = from
+    if path != "" {
+        let found = site_path(from, path)
+        if !found.is_some() {
+            return "it leaves the site"
+        }
+        page = found.unwrap_or("")
+        if !has(known.files, page) {
+            return "the site has no {page}"
+        }
+    } else if from == "llms.txt" || from == "llms-full.txt" {
+        // A fragment alone, in a file of many pages, names no one page.
+        return ""
+    }
+    if fragment == "" {
+        return ""
+    }
+    let anchored = if page.ends_with(".md") { page_of(page) } else { page }
+    if !anchored.ends_with(".html") || !has(known.files, anchored) {
+        return ""
+    }
+    if has(known.anchors, "{anchored}#{fragment}") {
+        ""
+    } else {
+        "{anchored} has no anchor `{fragment}`"
+    }
+}
+
+// What is wrong with a link to `rest`, what follows the repository's URL
+// on GitHub, or "": a file or directory under `blob/REF/` or `tree/REF/`
+// must be one the repository tracks. Other pages of the repository, such
+// as its issues, are out of scope.
+fn repository_problem(known: Known, rest: Untrusted<String>) -> Untrusted<String> {
+    let segments = rest.split("#").at(0).split("?").at(0).split("/")
+    if segments.len() < 3 || (segments.at(0) != "blob" && segments.at(0) != "tree") {
+        return ""
+    }
+    let path = "/".join(sub(segments, 2, segments.len()))
+    if path == "" || has(known.tracked, path) || (!path.contains("\n") && known.tracked.contains("\n{path}/")) {
+        return ""
+    }
+    "the repository tracks no {path}"
+}
+
+// The file of the site that `path`, linked from the file `from`, names, or
+// `None` if it climbs out of the site. A directory names its `index.html`.
+fn site_path(from: Untrusted<String>, path: Untrusted<String>) -> Option<Untrusted<String>> {
+    var parts: List<Untrusted<String>> = List.new()
+    if !path.starts_with("/") {
+        let dir = from.split("/")
+        parts = sub(dir, 0, dir.len() - 1)
+    }
+    for segment in path.split("/") {
+        if segment == ".." {
+            if parts.len() == 0 {
+                return None
+            }
+            parts = sub(parts, 0, parts.len() - 1)
+        } else if segment != "" && segment != "." {
+            parts.push(segment)
+        }
+    }
+    let joined = "/".join(parts)
+    if path.ends_with("/") || parts.len() == 0 {
+        if joined == "" {
+            return Some("index.html")
+        }
+        return Some("{joined}/index.html")
+    }
+    Some(joined)
+}
+
+// Whether `url` starts with a scheme: a `:` before any `/`, `?`, or `#`.
+fn has_scheme(url: Untrusted<String>) -> Bool {
+    for c in url.chars() {
+        if c == ":" {
+            return true
+        }
+        if c == "/" || c == "?" || c == "#" {
+            return false
+        }
+    }
+    false
+}
+
+// The items of `items` from `from` up to `to`.
+fn sub(items: List<Untrusted<String>>, from: Int, to: Int) -> List<Untrusted<String>> {
+    var out: List<Untrusted<String>> = List.new()
+    var i = from
+    while i < to {
+        out.push(items.at(i))
+        i = i + 1
+    }
+    out
+}

@@ -14,6 +14,13 @@
 // literals. A link or image whose URL could do more than navigate, or
 // load from the site itself, is dropped, and its text kept.
 //
+// Every relative link is resolved once, and the page, its Markdown copy
+// and `llms-full.txt` all get the result: the page published from its
+// target, or, for a file the site does not publish, that file on GitHub,
+// on `main`. A link that leaves the repository, or has no destination,
+// fails the build, naming the doc and the link. `site/check-links.osk`
+// then checks every link in the built site.
+//
 // The Markdown it understands is the subset the docs use: ATX headings,
 // paragraphs, bullet and numbered lists nested by indentation, fenced
 // code, block quotes, and pipe tables; inline, links, images, code spans,
@@ -112,8 +119,21 @@ struct Site {
 // Every file of the site.
 fn build(sources: Sources, site: DirWrite) -> Result<(), IoError> {
     let all = gather(sources)?
+    let broken = broken_links(all)
+    if broken.len() > 0 {
+        let listed = "\n".join(broken)
+        return Err(IoError(message: "links that go nowhere:\n{listed}"))
+    }
     for section in all.sections {
         site.create_dir(Path.from(section.dir))?
+    }
+    // A section's subdirectory, such as `guide/examples`, once its
+    // section's directory is there.
+    for doc in all.docs {
+        let dir = parent_of(doc.page)
+        if dir.contains("/") {
+            site.create_dir(Path.from(dir))?
+        }
     }
     var pages: List<Page> = List.new()
     for doc in all.docs {
@@ -176,8 +196,9 @@ fn has_doc(all: Site, page: Untrusted<String>) -> Bool {
     false
 }
 
-// The README, the glossary, and every `.md` file in `docs/` and in its
-// subdirectories one level down, except those `unpublished` names.
+// The README, the glossary, and every `.md` file in `docs/`, in its
+// subdirectories (its sections), and in theirs, such as `guide/examples`,
+// except those `unpublished` names.
 fn gather(sources: Sources) -> Result<Site, IoError> {
     var docs: List<Doc> = List.new()
     let readme = sources.readme.read_to_string()?
@@ -200,10 +221,26 @@ fn gather(sources: Sources) -> Result<Site, IoError> {
             Ok(entries) => {
                 sections.push(Section(dir: name, title: section_title(name)))
                 for entry in entries {
-                    if entry.ends_with(".md") && !unpublished(entry) {
-                        let path = "{name}/{entry}"
+                    if unpublished(entry) {
+                        continue
+                    }
+                    let path = "{name}/{entry}"
+                    if entry.ends_with(".md") {
                         let text = sources.docs.read_to_string(Path.from(path))?
                         docs.push(new_doc("docs/{path}", html_name(path), name, text))
+                        continue
+                    }
+                    match sources.docs.list_dir(Path.from(path)) {
+                        Ok(inner) => {
+                            for file in inner {
+                                if file.ends_with(".md") && !unpublished(file) {
+                                    let nested = "{path}/{file}"
+                                    let text = sources.docs.read_to_string(Path.from(nested))?
+                                    docs.push(new_doc("docs/{nested}", html_name(nested), name, text))
+                                }
+                            }
+                        }
+                        Err(_) => {}
                     }
                 }
             }
@@ -455,13 +492,15 @@ fn llms_txt(all: Site, pages: List<Page>) -> Untrusted<String> {
     "{out}\n## Machine-readable\n\n- [llms-full.txt]({base}/llms-full.txt): every page, as Markdown, in one file\n- [search.json]({base}/search.json): the search index\n- [sitemap.xml]({base}/sitemap.xml): the canonical URL of every page\n- [latest.json]({base}/latest.json): the current version and the installers\n{codes}"
 }
 
-// A heading and the pages in `dir` ("" for the top level) under it, or
-// nothing if there are none.
+// A heading and the pages in `dir` ("" for the top level), and in its
+// subdirectories, under it, or nothing if there are none.
 fn llms_group(title: Untrusted<String>, dir: Untrusted<String>, pages: List<Page>) -> Untrusted<String> {
     let base = origin()
     var entries: Untrusted<String> = ""
     for page in pages {
-        if parent_of(page.path) == dir && page.path != "agent-setup.html" {
+        let parent = parent_of(page.path)
+        let inside = parent == dir || (dir != "" && parent.starts_with("{dir}/"))
+        if inside && page.path != "agent-setup.html" {
             let copy = md_url(url_of(page.path))
             let summary = summary_of(page.md)
             let note: Untrusted<String> = if summary == "" { "" } else { ": {summary}" }
@@ -1089,8 +1128,9 @@ fn paragraph(lines: List<Untrusted<String>>, start: Int, links: Links, tight: Bo
 
 // `text`, a doc's source, for its copy: the same, but with each relative
 // link to a published page pointing at that page's copy, so a reader that
-// follows links stays in Markdown. Fenced code is left alone, and so is a
-// link that goes nowhere.
+// follows links stays in Markdown, and each relative link to a file the
+// site does not publish pointing at it on GitHub, as the page's link does.
+// Code is left alone, and so are images and links that go nowhere.
 fn retarget(text: Untrusted<String>, links: Links) -> Untrusted<String> {
     let lines = text.lines()
     let fenced = fence_flags(lines)
@@ -1126,45 +1166,124 @@ fn fence_flags(lines: List<Untrusted<String>>) -> List<Bool> {
     flags
 }
 
-// `line` with the destination of each `[text](destination)` retargeted.
+// `line` with the destination of each link `[text](destination)` in it
+// retargeted.
 fn retarget_line(line: Untrusted<String>, links: Links) -> Untrusted<String> {
-    let cs = line.chars()
     var out: List<Untrusted<String>> = List.new()
-    var i = 0
-    while i < cs.len() {
-        if cs.at(i) == "]" && i + 1 < cs.len() && cs.at(i + 1) == "(" {
-            let end = matching(cs, i + 1, cs.len(), "(", ")")
-            if end > 0 {
-                let inside = "".join(sub(cs, i + 2, end))
-                out.push("](")
-                out.push(retarget_destination(inside, links))
-                out.push(")")
-                i = end + 1
-                continue
-            }
+    for piece in pieces(line) {
+        if piece.link {
+            let destination = retarget_destination(piece.inside, links)
+            out.push("[{piece.text}]({destination})")
+        } else {
+            out.push(piece.text)
         }
-        out.push(cs.at(i))
-        i = i + 1
     }
     "".join(out)
 }
 
+// A piece of a line of Markdown outside a code fence: a link, its text and
+// what is between its parentheses, or anything else, as written.
+struct Piece {
+    link: Bool,
+    text: Untrusted<String>,
+    inside: Untrusted<String>,
+}
+
+// `line` in pieces, each link a piece of its own. A link in a code span is
+// text, as the page shows it, and so is an image.
+fn pieces(line: Untrusted<String>) -> List<Piece> {
+    let cs = line.chars()
+    var out: List<Piece> = List.new()
+    var plain: List<Untrusted<String>> = List.new()
+    var i = 0
+    while i < cs.len() {
+        let c = cs.at(i)
+        if c == "\\" && i + 1 < cs.len() {
+            plain.push(c)
+            plain.push(cs.at(i + 1))
+            i = i + 2
+            continue
+        }
+        if c == "`" {
+            let width = run_length(cs, i, cs.len(), "`")
+            let close = find_run(cs, i + width, cs.len(), "`", width)
+            let end = if close < 0 { i + width } else { close + width }
+            for kept in sub(cs, i, end) {
+                plain.push(kept)
+            }
+            i = end
+            continue
+        }
+        let image = c == "!" && i + 1 < cs.len() && cs.at(i + 1) == "["
+        if c == "[" || image {
+            let open = if image { i + 1 } else { i }
+            let close = matching(cs, open, cs.len(), "[", "]")
+            if close > 0 && close + 1 < cs.len() && cs.at(close + 1) == "(" {
+                let end = matching(cs, close + 1, cs.len(), "(", ")")
+                if end > 0 {
+                    if image {
+                        for kept in sub(cs, i, end + 1) {
+                            plain.push(kept)
+                        }
+                    } else {
+                        out.push(Piece(link: false, text: "".join(plain), inside: ""))
+                        plain = List.new()
+                        let text = "".join(sub(cs, open + 1, close))
+                        let inside = "".join(sub(cs, close + 2, end))
+                        out.push(Piece(link: true, text: text, inside: inside))
+                    }
+                    i = end + 1
+                    continue
+                }
+            }
+        }
+        plain.push(c)
+        i = i + 1
+    }
+    out.push(Piece(link: false, text: "".join(plain), inside: ""))
+    out
+}
+
 // `inside`, what is between a link's parentheses, with its destination
-// made the copy's, if it goes to a published page.
+// made the copy's: a published page's copy, or a file on GitHub.
 fn retarget_destination(inside: Untrusted<String>, links: Links) -> Untrusted<String> {
     let destination = inside.split(" ").at(0)
     let title = inside.slice(destination.len(), inside.len())
-    match safe_href(destination, links) {
-        Some(href) => {
-            if href.starts_with("/") {
-                let copy = md_url(href)
-                "{copy}{title}"
-            } else {
-                inside
-            }
+    match target(destination, links) {
+        Target.Page(href) => {
+            let copy = md_url(href)
+            "{copy}{title}"
         }
-        None => inside
+        Target.Repository(href) => "{href}{title}"
+        _ => inside
     }
+}
+
+// Every link in the docs that goes nowhere, as `doc: [text](destination):
+// why`: one that leaves the repository, or has no destination.
+fn broken_links(all: Site) -> List<Untrusted<String>> {
+    var out: List<Untrusted<String>> = List.new()
+    for doc in all.docs {
+        let links = Links(site: all, dir: parent_of(doc.repo))
+        let lines = doc.text.lines()
+        let fenced = fence_flags(lines)
+        var i = 0
+        while i < lines.len() {
+            if !fenced.at(i) {
+                for piece in pieces(lines.at(i)) {
+                    if piece.link {
+                        let destination = piece.inside.trim().split(" ").at(0)
+                        match target(destination, links) {
+                            Target.Unresolvable(why) => out.push("{doc.repo}: [{piece.text}]({destination}): {why}")
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            i = i + 1
+        }
+    }
+    out
 }
 
 // ---- Markdown: inline ---------------------------------------------------------------
@@ -1367,35 +1486,87 @@ struct Links {
     dir: Untrusted<String>,
 }
 
-// Where a link to `url` may go, or `None`:
+// Where a link goes. Every output resolves a link the same way, through
+// `target`, so the page, its copy and `llms-full.txt` cannot disagree.
+enum Target {
+    // A page the site publishes, at its URL on the site.
+    Page(Untrusted<String>),
+    // A file or directory of the repository the site does not publish, at
+    // its URL on GitHub.
+    Repository(Untrusted<String>),
+    // A fragment of the same page, or a URL elsewhere, as written.
+    Elsewhere(Untrusted<String>),
+    // A URL that could do more than navigate, or a path from the site
+    // root: not a link at all, only its text.
+    Unsafe,
+    // A link that cannot go anywhere, and why: the build fails.
+    Unresolvable(String),
+}
+
+// Where a link to `url` goes:
 //
+// - No URL at all is unresolvable.
 // - A URL with a character outside the URL syntax, such as a space, a
-//   tab, a quote, or `<`, goes nowhere.
+//   tab, a quote, or `<`, is unsafe.
 // - `https:`, `http:`, and `mailto:` URLs, and fragments, go as written.
-// - Any other scheme, `javascript:` and `data:` among them, goes nowhere.
+// - Any other scheme, `javascript:` and `data:` among them, is unsafe.
 //   A scheme is told by a `:` before any `/`, `?`, or `#`, the way a
 //   browser tells one.
-// - A path from the site root, or `//` to another host, goes nowhere: a
-//   doc's links are relative, as the repository has them.
-// - A relative path is resolved against the doc's directory, and goes to
-//   the page published from that file or directory, with its fragment.
-//   One to anything the site does not publish goes nowhere.
-fn safe_href(url: Untrusted<String>, links: Links) -> Option<Untrusted<String>> {
-    if url == "" || !url_characters(url) {
-        return None
+// - A path from the site root, or `//` to another host, is unsafe: a
+//   doc's links are relative, as the repository has them. So is a
+//   relative path with a `&` in it.
+// - A relative path is resolved against the doc's directory. It goes to
+//   the page published from that file or directory, or else to the file
+//   on GitHub, on `main`, with its fragment. One that climbs out of the
+//   repository is unresolvable. Whether the file exists the generator
+//   cannot tell, as it reads only what it publishes: the link checker
+//   does.
+fn target(url: Untrusted<String>, links: Links) -> Target {
+    if url == "" {
+        return Target.Unresolvable("it has no destination")
+    }
+    if !url_characters(url) {
+        return Target.Unsafe
     }
     if url.starts_with("#") || url.starts_with("https://") || url.starts_with("http://") || url.starts_with("mailto:") {
-        return Some(url)
+        return Target.Elsewhere(url)
     }
-    if has_scheme(url) || url.starts_with("/") {
-        return None
+    // A `&` in a relative link could start a character reference, which a
+    // reader that decodes it, as CommonMark does, could read as a scheme:
+    // `javascript&#58;`.
+    if has_scheme(url) || url.starts_with("/") || url.contains("&") {
+        return Target.Unsafe
     }
     let parts = url.split("#")
     let path = parts.at(0)
     let fragment = if parts.len() > 1 { "#".join(sub(parts, 1, parts.len())) } else { "" }
-    let repo = resolve(links.dir, path)?
-    let page = published_url(links.site, repo)?
-    if fragment == "" { Some(page) } else { Some("{page}#{fragment}") }
+    let mark = if fragment == "" { "" } else { "#" }
+    let resolved = resolve(links.dir, path)
+    if !resolved.is_some() {
+        return Target.Unresolvable("it leaves the repository")
+    }
+    let repo = resolved.unwrap_or("")
+    match published_url(links.site, repo) {
+        Some(page) => Target.Page("{page}{mark}{fragment}")
+        None => {
+            let source = repository()
+            if repo == "" {
+                Target.Repository(source)
+            } else {
+                Target.Repository("{source}/blob/main/{repo}{mark}{fragment}")
+            }
+        }
+    }
+}
+
+// Where a link to `url` may go in a page, or `None` for none.
+fn safe_href(url: Untrusted<String>, links: Links) -> Option<Untrusted<String>> {
+    match target(url, links) {
+        Target.Page(href) => Some(href)
+        Target.Repository(href) => Some(href)
+        Target.Elsewhere(href) => Some(href)
+        _ => None
+    }
 }
 
 // Whether every character of `url` may appear in a URL as written:

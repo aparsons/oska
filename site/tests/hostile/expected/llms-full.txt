@@ -66,7 +66,7 @@ None of it may survive as anything but text.
 - [mail](mailto:someone@example.com)
 - [glossary](/glossary.md#capability)
 - [here](#raw-html)
-- [unpublished](../crates/oskac/src/main.rs)
+- [unpublished](https://github.com/aparsons/oska/blob/main/crates/oskac/src/main.rs)
 
 ## Entities
 

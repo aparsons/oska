@@ -568,13 +568,16 @@ fn relative_links_go_to_the_pages_published_from_their_targets() {
         ("docs/adr/0002-b.md", "# B\n"),
         (
             "docs/design.md",
-            "# D\n\n[adr](adr/) [out](../../etc/passwd) [src](../crates/x.rs)\n",
+            "# D\n\n[adr](adr/) [src](../crates/x.rs)\n",
         ),
     ]);
     assert!(site["adr/0001-a.html"].contains(
         "<a href=\"/design.html#x\">design</a> <a href=\"/adr/0002-b.html\">b</a> <a href=\"/\">up</a>"
     ));
-    assert!(site["design.html"].contains("<a href=\"/adr/\">adr</a> out src</p>"));
+    assert!(site["design.html"].contains(
+        "<a href=\"/adr/\">adr</a> \
+         <a href=\"https://github.com/aparsons/oska/blob/main/crates/x.rs\">src</a></p>"
+    ));
 }
 
 #[test]
@@ -947,7 +950,8 @@ fn links_in_a_copy_point_at_other_copies() {
     assert!(
         site["design.md"].contains(
             "[adr](/adr/index.md) [b](/adr/0002-b.md#x) [up](/index.md) \
-             [out](https://example.com/a?b=1) [src](../crates/x.rs) [here](#values)"
+             [out](https://example.com/a?b=1) \
+             [src](https://github.com/aparsons/oska/blob/main/crates/x.rs) [here](#values)"
         ),
         "{}",
         site["design.md"]

@@ -48,6 +48,11 @@ jobs:
               gh release download "$tag" --dir "$releases/$tag"
             done
           scripts/release/stage-site.sh "$releases" _site site/oska-release.pub
+      # Every link the site publishes must go somewhere: a page and anchor
+      # on the site, or a file the repository tracks on GitHub. The checker
+      # holds GitHub links against the list of tracked files.
+      - run: git ls-files > site/tracked.txt
+      - run: ./target/release/oskac run site/check-links.osk
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

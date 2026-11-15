@@ -22,7 +22,7 @@ Source: https://oskalang.dev/
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](https://github.com/aparsons/oska/blob/main/LICENSE).
 
 ---
 
@@ -133,7 +133,7 @@ Source: https://oskalang.dev/runtime.html
 
 # Oska runtime
 
-See the [checker](checker.md), which is not in this tree.
+See the [checker](https://github.com/aparsons/oska/blob/main/docs/checker.md), which is not in this tree.
 
 ---
 
