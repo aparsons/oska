@@ -34,24 +34,9 @@ use oska_syntax::{json_escape, Diagnostic, Span};
 
 use crate::{print_diagnostics, read_source, Flags, Places};
 
-/// The host's supported platform, by name, if it is one.
-const HOST: Option<&str> = if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
-    Some("linux-aarch64")
-} else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-    Some("linux-x86_64")
-} else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-    Some("macos-aarch64")
-} else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-    Some("macos-x86_64")
-} else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
-    Some("windows-x86_64")
-} else {
-    None
-};
-
-/// What `oskac build` builds for.
+/// What `oskac build` builds for: one target platform, or all of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Targets {
+pub enum TargetChoice {
     /// One target: one executable, at the output path.
     One(Target),
     /// `--target all`: every target with a backend, into the output
@@ -59,27 +44,26 @@ pub enum Targets {
     All,
 }
 
-impl Targets {
-    /// The targets `--target`'s value names, or with none, the host's
+impl TargetChoice {
+    /// The choice `--target`'s value names, or with none, the host's
     /// platform when it has a backend, else `linux-aarch64`.
-    pub fn named(platform: Option<&str>) -> Result<Targets, Diagnostic> {
+    pub fn named(platform: Option<&str>) -> Result<TargetChoice, Diagnostic> {
         match platform {
-            Some("all") => Ok(Targets::All),
-            Some(platform) => Target::named(platform).map(Targets::One),
-            None => Ok(Targets::One(
-                HOST.and_then(|host| Target::named(host).ok())
-                    .unwrap_or(Target::LinuxAarch64),
+            Some("all") => Ok(TargetChoice::All),
+            Some(platform) => Target::named(platform).map(TargetChoice::One),
+            None => Ok(TargetChoice::One(
+                Target::host().unwrap_or(Target::LinuxAarch64),
             )),
         }
     }
 }
 
 /// How `oskac build` was asked to build: the output `-o` names, and the
-/// targets.
+/// target platforms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Options<'a> {
     pub output: Option<&'a str>,
-    pub targets: Targets,
+    pub target: TargetChoice,
 }
 
 /// `oskac build` on the source file `path`.
@@ -131,9 +115,9 @@ fn compile(
     options: Options,
     json: bool,
 ) -> ExitCode {
-    let builds: Vec<(Target, String)> = match options.targets {
-        Targets::One(target) => vec![(target, options.output.unwrap_or(name).to_string())],
-        Targets::All => Target::ALL
+    let builds: Vec<(Target, String)> = match options.target {
+        TargetChoice::One(target) => vec![(target, options.output.unwrap_or(name).to_string())],
+        TargetChoice::All => Target::ALL
             .iter()
             .map(|target| {
                 let file = format!("{name}-{}", target.name());
@@ -162,9 +146,9 @@ fn compile(
             .iter()
             .map(|(path, _)| format!("\"{}\"", json_escape(path)))
             .collect();
-        match options.targets {
-            Targets::One(_) => outln!("{{\"output\":{},\"diagnostics\":[]}}", paths.concat()),
-            Targets::All => outln!("{{\"outputs\":[{}],\"diagnostics\":[]}}", paths.join(",")),
+        match options.target {
+            TargetChoice::One(_) => outln!("{{\"output\":{},\"diagnostics\":[]}}", paths.concat()),
+            TargetChoice::All => outln!("{{\"outputs\":[{}],\"diagnostics\":[]}}", paths.join(",")),
         }
     }
     ExitCode::SUCCESS

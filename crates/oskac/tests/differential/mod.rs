@@ -154,11 +154,7 @@ pub struct Outcome {
 /// The target platform this host builds and runs native executables
 /// for: its own.
 pub fn host_target() -> oska_native::Target {
-    if cfg!(target_arch = "x86_64") {
-        oska_native::Target::LinuxX86_64
-    } else {
-        oska_native::Target::LinuxAarch64
-    }
+    oska_native::Target::host().expect("this host runs native executables")
 }
 
 /// Run `case` on both backends and require the same outcome, and build

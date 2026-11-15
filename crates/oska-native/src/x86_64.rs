@@ -99,11 +99,7 @@ impl Code for Text {
     fn link(&self, layout: &Layout) -> Vec<u8> {
         let mut bytes = self.bytes.clone();
         for fixup in &self.fixups {
-            let target = match fixup.symbol {
-                Symbol::Rodata(at) => layout.rodata + u64::from(at),
-                Symbol::Data(at) => layout.data + u64::from(at),
-                Symbol::Function(start) => layout.code + start as u64,
-            };
+            let target = layout.address(fixup.symbol);
             // Relative to the end of the instruction, which the
             // displacement ends.
             let next = layout.code + fixup.at as u64 + 4;

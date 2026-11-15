@@ -166,13 +166,13 @@ fn main() -> ExitCode {
             on_target(Command::Test, rest.first(), flags, &line.program_args)
         }
         ["build", rest @ ..] if rest.len() <= 1 && line.program_args.is_empty() => {
-            let targets = match build::Targets::named(line.target.as_deref()) {
-                Ok(targets) => targets,
+            let target = match build::TargetChoice::named(line.target.as_deref()) {
+                Ok(target) => target,
                 Err(refusal) => return build::refuse(&[refusal], flags.json, ExitCode::from(2)),
             };
             let options = build::Options {
                 output: line.output.as_deref(),
-                targets,
+                target,
             };
             on_target(Command::Build(options), rest.first(), flags, &[])
         }
@@ -243,7 +243,7 @@ enum Command<'a> {
     Check,
     Run,
     Test,
-    /// `oskac build`, with the output path `-o` gives and its targets.
+    /// `oskac build`, with the output path `-o` gives and its target platforms.
     Build(build::Options<'a>),
 }
 

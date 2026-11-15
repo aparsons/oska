@@ -1,7 +1,7 @@
 //! The native half of every runtime test (spec #125): on aarch64 and
 //! x86_64 Linux, each program a helper in this module runs on the
 //! interpreter is also compiled by the native backend for the host
-//! ([`TARGET`]; `oska_native::build`, or `build_tests` for `test` blocks)
+//! ([`host_target`]; `oska_native::build`, or `build_tests` for `test` blocks)
 //! and run as a real process, and the two must agree on stdout, stderr (a
 //! panic's report included), the exit code, and the filesystem afterwards.
 //! The interpreter is the oracle: a difference fails the test, as a bug
@@ -41,11 +41,9 @@ use oska_syntax::Diagnostic;
 const PROGRAM: &str = super::PROGRAM_PATH;
 
 /// The target platform the host builds native executables for: its own.
-const TARGET: oska_native::Target = if cfg!(target_arch = "x86_64") {
-    oska_native::Target::LinuxX86_64
-} else {
-    oska_native::Target::LinuxAarch64
-};
+fn host_target() -> oska_native::Target {
+    oska_native::Target::host().expect("this host runs native executables")
+}
 
 /// How long one native process may run before the comparison gives up on
 /// it: far longer than any test program takes.
@@ -81,7 +79,7 @@ pub fn compare_program(
     if !outcome.diagnostics.is_empty() || skipped() {
         return;
     }
-    let bytes = match oska_native::build(program, TARGET, &|d| d) {
+    let bytes = match oska_native::build(program, host_target(), &|d| d) {
         Ok(bytes) => bytes,
         Err(refusal) => fail(src, &format!("the native backend refused it: {refusal:#?}")),
     };
@@ -134,7 +132,7 @@ pub fn compare_program_tests(
     if !report.diagnostics.is_empty() || skipped() {
         return;
     }
-    let bytes = match oska_native::build_tests(program, TARGET) {
+    let bytes = match oska_native::build_tests(program, host_target()) {
         Ok(bytes) => bytes,
         Err(refusal) => fail(src, &format!("the native backend refused it: {refusal:#?}")),
     };
@@ -199,7 +197,7 @@ fn case() -> String {
 /// code can check of it.
 fn cross_build(src: &str, build: impl Fn(oska_native::Target) -> Result<Vec<u8>, Diagnostic>) {
     for target in oska_native::Target::ALL {
-        if target != TARGET {
+        if target != host_target() {
             if let Err(refusal) = build(target) {
                 fail(
                     src,

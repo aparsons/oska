@@ -390,18 +390,13 @@ fn the_same_program_builds_to_the_same_bytes_wherever_it_is_built_from() {
         &[("a/hello.osk", HELLO), ("b/c/hello.osk", HELLO)],
     );
     // The path a program is named by is part of it (a panic reports it),
-    // so both builds name it alike, from different directories.
-    for cwd in ["a", "b/c"] {
-        let status = Command::new(env!("CARGO_BIN_EXE_oskac"))
-            .args(["build", "hello.osk", "-o", "out"])
-            .current_dir(dir.join(cwd))
-            .status()
-            .expect("oskac should run");
-        assert!(status.success());
+    // so both builds name it alike, from different directories, for each
+    // target.
+    for (platform, _, _) in TARGETS {
+        let a = build_for(&dir.join("a"), platform, platform);
+        let b = build_for(&dir.join("b/c"), platform, platform);
+        assert!(a == b, "{platform}: two builds of one program differ");
     }
-    let a = std::fs::read(dir.join("a/out")).expect("the first build");
-    let b = std::fs::read(dir.join("b/c/out")).expect("the second build");
-    assert!(a == b, "two builds of one program differ");
 }
 
 /// Every `PT_LOAD` segment of `elf`: (file offset, vaddr, file size,

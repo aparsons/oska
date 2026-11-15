@@ -67,8 +67,8 @@ pub struct Text {
     /// The instructions, each one word.
     pub words: Vec<u32>,
     /// The instructions that address data or code, for the file layout
-    /// to patch. A [`Symbol::Function`] here holds the index of the
-    /// function's first instruction in [`Text::words`], not its id.
+    /// to patch. A [`Symbol::Function`] here holds the offset in bytes
+    /// of the function's first instruction, not its id.
     pub fixups: Vec<Fixup>,
     /// The instruction the process starts at, by index.
     pub entry: usize,
@@ -86,11 +86,7 @@ impl Code for Text {
     fn link(&self, layout: &Layout) -> Vec<u8> {
         let mut words = self.words.clone();
         for fixup in &self.fixups {
-            let target = match fixup.symbol {
-                Symbol::Rodata(at) => layout.rodata + u64::from(at),
-                Symbol::Data(at) => layout.data + u64::from(at),
-                Symbol::Function(start) => layout.code + 4 * start as u64,
-            };
+            let target = layout.address(fixup.symbol);
             let pc = layout.code + 4 * fixup.at as u64;
             let adrp_at = &mut words[fixup.at];
             *adrp_at = adrp(*adrp_at & 0x1f, pc, target);
@@ -132,7 +128,7 @@ pub fn emit(module: &Module) -> Result<Text, String> {
     for fixup in &mut emitter.fixups {
         if let Symbol::Function(callee) = fixup.symbol {
             let start = starts.get(callee).copied().unwrap_or_default();
-            fixup.symbol = Symbol::Function(start);
+            fixup.symbol = Symbol::Function(4 * start);
         }
     }
     Ok(Text {

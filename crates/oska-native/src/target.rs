@@ -18,7 +18,7 @@
 use oska_syntax::Diagnostic;
 
 use crate::intrinsics::{self, Platform};
-use crate::ir::Module;
+use crate::ir::{Module, Symbol};
 use crate::{aarch64, codes, elf, x86_64, NOWHERE};
 
 /// A target platform the backend compiles for.
@@ -71,6 +71,17 @@ impl Target {
                 NOWHERE,
             )),
         }
+    }
+
+    /// The target for the host `oskac` itself runs on, when its platform
+    /// has a backend: what `oskac run` and `oskac test` compile for, and
+    /// `oskac build` without `--target`. Only the CLI asks; nothing that
+    /// compiles reads the host. A platform's name is the host's operating
+    /// system and architecture as Rust names them, so no target needs a
+    /// line here.
+    pub fn host() -> Option<Target> {
+        let host = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+        Target::ALL.into_iter().find(|target| target.name() == host)
     }
 
     /// The platform's name, as release assets name `oskac` builds.
@@ -141,6 +152,20 @@ pub struct Layout {
     pub rodata: u64,
     pub code: u64,
     pub data: u64,
+}
+
+impl Layout {
+    /// Where `symbol` is, as an address from the start of the loaded
+    /// file. A [`Symbol::Function`] holds the offset of the function's
+    /// first byte in the code, as every code generator's [`Code`] holds
+    /// it, not the function's id.
+    pub fn address(&self, symbol: Symbol) -> u64 {
+        match symbol {
+            Symbol::Rodata(at) => self.rodata + u64::from(at),
+            Symbol::Data(at) => self.data + u64::from(at),
+            Symbol::Function(start) => self.code + start as u64,
+        }
+    }
 }
 
 /// A module's machine code for one target, before the file's layout

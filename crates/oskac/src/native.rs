@@ -29,20 +29,10 @@ use oska_syntax::{Diagnostic, Span};
 
 use crate::{Flags, Places};
 
-/// The target `oskac run` and `oskac test` compile for on this host,
-/// when they run natively here: aarch64 or x86_64 Linux.
-const NATIVE_HOST: Option<Target> = if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
-    Some(Target::LinuxAarch64)
-} else if cfg!(all(target_arch = "x86_64", target_os = "linux")) {
-    Some(Target::LinuxX86_64)
-} else {
-    None
-};
-
 /// The target `oskac run` and `oskac test` compile for with `flags`:
-/// the host's, when it runs natively and `--interpret` is not given.
+/// the host's, when it has a backend and `--interpret` is not given.
 pub fn native_target(flags: Flags) -> Option<Target> {
-    NATIVE_HOST.filter(|_| !flags.interpret)
+    Target::host().filter(|_| !flags.interpret)
 }
 
 /// How a native `oskac run` went.
