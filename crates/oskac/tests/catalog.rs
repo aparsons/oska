@@ -507,6 +507,7 @@ fn built_site() -> BTreeMap<String, String> {
         "GLOSSARY.md",
         "site/style.css",
         "site/search.js",
+        "site/favicon.svg",
         "Cargo.toml",
     ] {
         host = add(host, &root, relative);
@@ -578,10 +579,20 @@ fn the_site_has_a_page_per_code_and_codes_json_matches_explain() {
         "codes.json should hold one entry per code"
     );
     for row in &catalog.rows {
+        // The entry `oskac explain` prints, with the URL of the code's
+        // page after its last field.
         let entry = stdout_of(&["explain", &row.code, "--format=json"]);
+        let fields = entry
+            .trim_end()
+            .strip_suffix('}')
+            .unwrap_or_else(|| panic!("an object: {entry}"));
+        let with_url = format!(
+            "{fields},\"url\":\"https://oskalang.dev/codes/{}.html\"}}",
+            row.code
+        );
         assert!(
-            codes_json.contains(entry.trim_end()),
-            "codes.json should hold the entry `oskac explain {} --format=json` prints:\n{entry}",
+            codes_json.contains(&with_url),
+            "codes.json should hold the entry `oskac explain {} --format=json` prints, with its url:\n{with_url}",
             row.code
         );
         let page = site

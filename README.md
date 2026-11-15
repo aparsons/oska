@@ -12,7 +12,7 @@ Most code is increasingly written, reviewed, and refactored with the help of AI.
 
 - **Secure by default.** No ambient authority: a function can only touch the filesystem, network, environment, or clock if it is explicitly handed a capability to do so. Memory safety, no nulls, no implicit conversions, and checked arithmetic are the baseline, not opt-ins.
 - **AI-first.** The syntax is familiar, regular, and unambiguous, so it is easy for models to generate and for humans to verify. A function's capability parameters are its effects. Its `requires`/`ensures` contracts are part of the signature. A reviewer, human or model, can tell what a function *can* do without reading its body. There are no macros and no hidden control flow. Compiler diagnostics are available as structured JSON with suggested fixes.
-- **Injection-proof by construction.** Untrusted input is tracked by type. The standard library's SQL, HTML, process, and logging APIs cannot accept untrusted input where it would change what code or command runs.
+- **Injection-proof by construction.** Untrusted input is tracked by type. The checker refuses untrusted text where it would change what a query, a page, a command or a path means: in `std.sql`, `std.html` and `std.proc`, and in filesystem and network capabilities. `std.html` runs today; `std.sql`, `std.proc` and the network check but do not run yet. See [what works today](docs/guide/what-works-today.md).
 - **Auditable.** Every capability a program uses is declared at its entry point, so "what can this program do?" has a short, checkable answer.
 
 ## A taste

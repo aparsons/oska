@@ -146,6 +146,6 @@ Put the loop in the project's instructions file, such as `AGENTS.md`:
 
 These are published on oskalang.dev and are produced from the same docs as the pages you read.
 
-- **`llms.txt` and Markdown copies:** `https://oskalang.dev/llms.txt` lists the pages and `https://oskalang.dev/llms-full.txt` holds all of them in one file. Every page also has a Markdown copy at the same address with `.md` in place of `.html`.
+- **`llms.txt` and Markdown copies:** `https://oskalang.dev/llms.txt` lists the pages, with the ones to read first under "Start here" and the ones you can skip under "Optional". `https://oskalang.dev/llms-full.txt` holds the documentation in one file, in reading order, without the per-code pages (those are in `https://oskalang.dev/codes.json`) and without the research, which is proposals and not documented behaviour (that is in `https://oskalang.dev/llms-research.txt`). Every page also has a Markdown copy at the same address with `.md` in place of `.html`.
 - **The installers' `--json` output** (see [install](install.md#one-line-installers)), so an agent can confirm that the checksum and signature verified.
 - **A copy-and-paste agent setup prompt** that installs Oska and configures a project with the loop above, at `https://oskalang.dev/agent-setup.md`. Along with it are an `AGENTS.md` template, a `CLAUDE.md` template, and an opt-in Claude Code hook that runs `oskac check --format=json` after an edit to a `.osk` file. The hook is a POSIX shell script, so it works on Linux and macOS only. It is not available on Windows yet.

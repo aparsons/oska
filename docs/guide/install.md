@@ -1,28 +1,6 @@
 # Install
 
-Oska is pre-alpha. The latest release is **v0.3.0**. You can install `oskac`, the compiler and runner, from a signed binary with a one-line installer, or build it from source.
-
-## Build from source
-
-You need a stable Rust toolchain, version 1.77 or newer, and a checkout of the repository:
-
-```sh
-cargo build --release -p oskac
-```
-
-The binary is `target/release/oskac`. Copy it somewhere on your `PATH`, or let Cargo install it into `~/.cargo/bin`:
-
-```sh
-cargo install --path crates/oskac
-```
-
-Confirm that it works:
-
-```sh
-oskac --version
-```
-
-It prints `oskac` and the version on one line. A build from this checkout prints `oskac 0.3.0`. Then continue with the [quickstart](quickstart.md).
+Oska is pre-alpha. The latest release is **v0.3.0**. You can install `oskac`, the compiler and runner, from a signed binary with a one-line installer, or [build it from source](#build-from-source).
 
 ## One-line installers
 
@@ -85,6 +63,32 @@ A failed run prints `{"ok": false, "error": "<code>", "message": "..."}` and exi
 | `install_failed` | The binary could not be written into place. |
 
 The binaries are published on oskalang.dev, together with `SHA256SUMS` and its signature, for Linux x86_64 and aarch64, macOS x86_64 and aarch64, and Windows x86_64. The Linux binaries are built on Ubuntu 22.04 and need glibc 2.35 or newer. They do not run on an older glibc or on musl systems such as Alpine; there the installer stops with `unsupported_libc`, and you can build from source instead.
+
+### Verify a release by hand
+
+The installers check every download for you. To check a release without them, compare the release key with its fingerprint, then check the signature, then the checksums. The release key is at https://oskalang.dev/oska-release.pub, and its fingerprint is:
+
+```text
+SHA256:PjwTDycs560g1ktWC/gdznamSkzm4xH+OAdfntNaW4o
+```
+
+The same fingerprint is on the [security page](../../SECURITY.md#verifying-a-release). On Linux, for v0.3.0:
+
+```sh
+base=https://oskalang.dev/releases/v0.3.0
+curl -fsSL --remote-name-all "$base/SHA256SUMS" "$base/SHA256SUMS.sig" "$base/oskac-linux-x86_64"
+curl -fsSL https://oskalang.dev/oska-release.pub -o oska-release.pub
+ssh-keygen -l -E sha256 -f oska-release.pub
+printf 'oska-release %s\n' "$(cat oska-release.pub)" > allowed
+ssh-keygen -Y verify -f allowed -I oska-release -n oska-release -s SHA256SUMS.sig < SHA256SUMS
+head -n 1 SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS
+```
+
+1. `ssh-keygen -l` must print the fingerprint above. If it prints another, stop: the key is not the release key.
+2. `ssh-keygen -Y verify` must print `Good "oska-release" signature`.
+3. The first line of `SHA256SUMS` must be `# oska-release v0.3.0`, the release you asked for.
+4. `sha256sum` must print `OK` for the binary you downloaded. On macOS, use `shasum -a 256 --ignore-missing -c SHA256SUMS`.
 
 ### Verify the installation
 
@@ -159,3 +163,25 @@ fn count(fs: FsRead, path: Path) -> Result<Int, IoError> {
 ## Set up an AI agent
 
 The site publishes a copy-and-paste prompt that has an AI coding agent install Oska, verify the toolchain, and configure your project. It is at the top of this page and at `https://oskalang.dev/agent-setup.md` as plain Markdown. The [agent guide](agent-guide.md) describes the loop the prompt sets up.
+
+## Build from source
+
+You need a stable Rust toolchain, version 1.77 or newer, and a checkout of the repository:
+
+```sh
+cargo build --release -p oskac
+```
+
+The binary is `target/release/oskac`. Copy it somewhere on your `PATH`, or let Cargo install it into `~/.cargo/bin`:
+
+```sh
+cargo install --path crates/oskac
+```
+
+Confirm that it works:
+
+```sh
+oskac --version
+```
+
+It prints `oskac` and the version on one line. A build from this checkout prints `oskac 0.3.0`. Then continue with the [quickstart](quickstart.md).

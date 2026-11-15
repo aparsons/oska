@@ -1,0 +1,15 @@
+# Oska: research (proposals)
+
+Oska 0.1.0 (pre-alpha). Proposals and background, not documented behaviour. Each page is a research note about what Oska could do, and says "should" about features that may not exist. What Oska does today is in [llms-full.txt](https://oskalang.dev/llms-full.txt). The notes of https://oskalang.dev/research/ as Markdown, one after another, each after a line `Source:` that names it.
+
+---
+
+Source: https://oskalang.dev/research/2026-11-report.html
+
+> **Proposals and background, not documented behaviour.** What Oska does today is in the guides.
+
+# Research: a report
+
+## Summary
+
+Memory safety is the baseline ([CISA](https://www.cisa.gov/)).
