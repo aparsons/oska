@@ -15,8 +15,10 @@
 #      private temporary directory (scripts/temp-leak/run.sh) and fails,
 #      naming the paths, if a test leaves anything in it;
 #   3. the installer, release script, unsafe guard, intrinsic guard,
-#      workflow guard, temp-leak wrapper and rust-stable tests;
-#   4. shellcheck on the shell scripts, when shellcheck is installed.
+#      workflow guard, temp-leak wrapper, rust-stable and pass stamp tests;
+#   4. shellcheck on the shell scripts, when shellcheck is installed;
+#   5. the pass stamp, written only when every step above passed, so the
+#      pre-push hook skips a repeat run on the same tree.
 
 set -euo pipefail
 
@@ -105,11 +107,17 @@ bash scripts/temp-leak/test.sh
 step "rust-stable tests"
 bash scripts/rust-stable/test.sh
 
+step "pass stamp tests"
+bash scripts/pass-stamp/test.sh
+
 step "shellcheck"
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck -S warning scripts/*.sh scripts/*/*.sh site/agent-setup/*.sh .githooks/pre-push
 else
   echo "shellcheck not installed; skipped (CI runs it)"
 fi
+
+# Every step passed: record the tree (see scripts/pass-stamp/stamp.sh).
+scripts/pass-stamp/stamp.sh write
 
 printf '\nAll checks passed.\n'
