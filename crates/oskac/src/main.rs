@@ -22,6 +22,8 @@ mod explain;
 mod native;
 mod native_test;
 mod package;
+mod self_cmd;
+mod self_json;
 
 const USAGE: &str = "\
 oskac - the Oska compiler
@@ -53,6 +55,11 @@ USAGE:
                                            every platform with a backend into
                                            the -o directory
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
+    oskac self info [--format=json]        Report this installation: version,
+                                           platform, executable, Oska home and
+                                           install receipt
+    oskac self uninstall [--format=json]   Remove this managed install, as the
+                                           installer's uninstall does
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ";
@@ -177,6 +184,8 @@ fn main() -> ExitCode {
             on_target(Command::Build(options), rest.first(), flags, &[])
         }
         ["explain", code] => explain_code(code, flags),
+        ["self", "info"] => self_cmd::info(flags.json),
+        ["self", "uninstall"] => self_cmd::uninstall(flags.json),
         _ => {
             eprint!("{USAGE}");
             ExitCode::from(2)
