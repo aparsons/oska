@@ -369,8 +369,8 @@ fn withdraw(acct: Account, amount: Int) -> Result<Account, Error>
 
 A program runs on one of two backends, which must agree byte for byte:
 
-- **The native backend** (`oska-native`): `oskac build` compiles a checked program to a static aarch64 Linux executable on any host, with no assembler, linker or C library ([ADR 0011](adr/0011-oska-generates-native-code-itself.md)). Its runtime is the Oska module `std.rt`, the only place system calls are allowed ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)). On aarch64 Linux, `oskac run` and `oskac test` compile with it and run the executable.
-- **The interpreter** (`oska-run`): `oskac run` and `oskac test` on every other host, and with `--interpret` on aarch64 Linux. A program the native backend cannot compile yet (`E0390`) runs here too.
+- **The native backend** (`oska-native`): `oskac build` compiles a checked program to a static aarch64 or x86_64 Linux executable on any host, with no assembler, linker or C library ([ADR 0011](adr/0011-oska-generates-native-code-itself.md)). Its runtime is the Oska module `std.rt`, the only place system calls are allowed ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)). On aarch64 and x86_64 Linux, `oskac run` and `oskac test` compile with it for the host and run the executable.
+- **The interpreter** (`oska-run`): `oskac run` and `oskac test` on every other host, and with `--interpret` on aarch64 and x86_64 Linux. A program the native backend cannot compile yet (`E0390`) runs here too.
 
 The **differential suite** runs every program of the corpus (the interpreter's runtime tests, the examples, the guide's programs, the CLI fixtures and the site generator) on both and fails on any difference in stdout, stderr, exit code, panic or the files left behind. See the [CLI reference](guide/cli-reference.md#platform-support) for which host uses which.
 
@@ -467,7 +467,7 @@ Once escape hatches exist, the following policy applies:
 
 ## Toolchain
 
-- **Execution:** a tree-walking interpreter came first. Oska now generates native code itself for aarch64 Linux, with no external toolchain ([ADR 0011](adr/0011-oska-generates-native-code-itself.md)), and runs natively by default there. The runtime is Oska code, and raw system calls are allowed only in `std.rt` ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)). The interpreter stays: on hosts with no backend yet, with `--interpret`, and as the oracle the differential suite holds the native backend to.
+- **Execution:** a tree-walking interpreter came first. Oska now generates native code itself for aarch64 and x86_64 Linux, with no external toolchain ([ADR 0011](adr/0011-oska-generates-native-code-itself.md)), and runs natively by default there. The runtime is Oska code, and raw system calls are allowed only in `std.rt` ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)). The interpreter stays: on hosts with no backend yet, with `--interpret`, and as the oracle the differential suite holds the native backend to.
 - **Milestones.** Each is its own spec and release:
   1. Multi-file packages: `pkg.` paths, `pub(pkg)`, and an `oska.toml` with no dependencies yet (#88).
   2. The aarch64 Linux native backend and the `std.rt` runtime (#125): `oskac build`, and native `run` and `test` on aarch64 Linux.

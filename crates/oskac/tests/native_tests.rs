@@ -1,6 +1,6 @@
 //! Native `test` blocks and the test host (ticket #139), run on both
 //! backends: `oskac test --interpret` and `oskac test`, native by default
-//! on aarch64 Linux (#141), must print the same
+//! on aarch64 Linux (#141) and x86_64 Linux (#165), must print the same
 //! report, text and JSON, with and without `--integration`, the same
 //! stderr, and exit with the same code.
 //!
@@ -11,10 +11,6 @@
 //! every host, and each host builds them for the other targets too, as it
 //! cannot run their code. The test executables below are built for the
 //! host and run on it, one process per test, on aarch64 and x86_64 Linux.
-//! On x86_64 Linux `oskac test` interprets until it is native by default
-//! there (#165), so its two sides are both the interpreter until then;
-//! oska-run's `testing` suite runs test blocks natively there, on the test
-//! host and with `--integration`.
 
 #![cfg(all(
     target_os = "linux",
