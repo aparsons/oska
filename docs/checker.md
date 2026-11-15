@@ -730,6 +730,7 @@ test "setup" {
 | `E0233` | A type that inference cannot work out, such as `let xs = List.new()` with no later use. | None. |
 | `E0234` | A type name used as a value, or a type that cannot be constructed. | None. |
 | `E0235` | `for` over a value that is not a `List` or a range of integers. | None. |
+| `E0236` | A module constant whose initializer names itself, directly (`const A: Int = A`) or through other constants (`A` names `B`, and `B` names `A`). A constant lowers to a function its uses call, so the cycle would call itself until the stack overflowed. The message names the cycle from the constant (`A -> B -> A`). Each constant on a cycle is reported, at its initializer. | None. |
 | `E0240` | An expression statement whose `Result` value is dropped. Discard one deliberately with `let _ = f()`. Spans the expression. | None. |
 | `E0241` | `?` on a value that is neither a `Result` nor an `Option`. Spans the `?` expression. | None. |
 | `E0242` | `?` on a `Result` whose error type is not the enclosing function's error type, with no `impl From` to convert it. Spans the `?` expression. | None. |
@@ -1451,6 +1452,18 @@ fn main() {
         let j = i
     }
 }
+```
+
+#### `E0236`
+
+```oska error=E0236
+const A: Int = B
+const B: Int = A
+```
+
+```oska fixed=E0236
+const A: Int = B
+const B: Int = 1
 ```
 
 #### `E0240`

@@ -47,6 +47,7 @@ mod body;
 pub mod builtins;
 mod coherence;
 mod collect;
+mod const_cycles;
 mod decl_rules;
 mod infer;
 mod instantiation;
@@ -113,6 +114,7 @@ pub(crate) mod codes {
     pub const CANNOT_INFER: &str = "E0233";
     pub const NOT_A_VALUE: &str = "E0234";
     pub const NOT_ITERABLE: &str = "E0235";
+    pub const CONST_CYCLE: &str = "E0236";
     pub const IGNORED_RESULT: &str = "E0240";
     pub const TRY_OPERAND: &str = "E0241";
     pub const TRY_ERROR_TYPE: &str = "E0242";
@@ -622,6 +624,7 @@ fn check_source(
         ..
     } = findings;
     instantiation::module(module, &decls, &items, assumed, instances, &mut diagnostics);
+    const_cycles::module(module, &resolutions, &mut diagnostics);
     let program = diagnostics
         .is_empty()
         .then(|| program::lower::module(src, module, &items, &resolutions, &typing));
