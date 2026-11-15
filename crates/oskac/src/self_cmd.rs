@@ -350,6 +350,22 @@ fn no_symlink_above(home: &Path) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// Remove a file. Windows will not delete a running executable but will
+/// rename it, so a file that cannot be deleted there is moved into the
+/// temporary directory under a name of its own, which empties its place.
+fn remove_file(path: &Path) -> bool {
+    if std::fs::remove_file(path).is_ok() {
+        return true;
+    }
+    cfg!(windows)
+        && executable().is_some_and(|exe| path.canonicalize().is_ok_and(|p| p == exe))
+        && std::fs::rename(
+            path,
+            std::env::temp_dir().join(format!("oskac-uninstalled-{}.exe", std::process::id())),
+        )
+        .is_ok()
+}
+
 /// Check everything, then remove. Returns the report, or why nothing was
 /// removed.
 fn uninstall_in(home: &Path) -> Result<(Outcome, Option<String>), Refusal> {
@@ -424,7 +440,7 @@ fn uninstall_in(home: &Path) -> Result<(Outcome, Option<String>), Refusal> {
     // a second run can finish the job.
     let mut failed = false;
     for path in remove {
-        if std::fs::remove_file(&path).is_ok() {
+        if remove_file(&path) {
             outcome.removed.push(display(&path));
         } else {
             failed = true;

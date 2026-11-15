@@ -289,7 +289,7 @@ fn uninstall_refuses_unsafe_entries_and_removes_nothing() {
         (
             format!(
                 "{{\"path\":\"{}\",\"kind\":\"record\",\"sha256\":\"cc\"}}",
-                outside.display()
+                outside.to_string_lossy().replace('\\', "\\\\")
             ),
             "outside the Oska home",
         ),
@@ -319,8 +319,10 @@ fn uninstall_refuses_unsafe_entries_and_removes_nothing() {
     for (n, (entry, why)) in cases.iter().enumerate() {
         let home = scratch.0.join(format!("h{n}")).join(".oska");
         let exe = install(&home, VERSION, "");
-        let home_text = home.to_string_lossy().replace('\\', "/");
-        add_entry(&home, &entry.replace("HOME", &home_text));
+        // JSON-escaped, with the platform's separators.
+        let sep = std::path::MAIN_SEPARATOR_STR.replace('\\', "\\\\");
+        let home_text = home.to_string_lossy().replace('\\', "\\\\");
+        add_entry(&home, &entry.replace('/', &sep).replace("HOME", &home_text));
         let output = run(&exe, &home, &["self", "uninstall", "--format=json"]);
         assert_eq!(output.status.code(), Some(1), "{why}");
         let refusal = json_of(&output);
