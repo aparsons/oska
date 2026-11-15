@@ -16,11 +16,15 @@
 #      naming the paths, if a test leaves anything in it;
 #   3. the installer, release script, unsafe guard, intrinsic guard,
 #      workflow guard, kill guard, temp-leak wrapper, rust-stable,
-#      cross-build manifest and pass stamp tests;
+#      cross-build manifest, build slot and pass stamp tests;
 #   4. shellcheck on the shell scripts, when shellcheck is installed;
 #   5. the pass stamp, written only when every step above passed and the tree
 #      did not change meanwhile, so the pre-push hook skips a repeat run on
 #      the same tree.
+#
+# OSKA_BUILD_SLOTS=N (unset by default: no limit) makes the run wait for one
+# of N machine-wide build slots before the build and test steps; see
+# scripts/build-slots/acquire.sh.
 
 set -euo pipefail
 
@@ -80,6 +84,9 @@ step "every workflow job has a timeout"
 # a job with no `timeout-minutes`, a non-literal value, or one above 60.
 scripts/workflow-guard/guard.sh
 
+# Wait for a build slot when OSKA_BUILD_SLOTS is set; held until this run ends.
+. scripts/build-slots/acquire.sh
+
 step "cargo fmt"
 cargo fmt --all --check
 
@@ -119,6 +126,9 @@ bash scripts/rust-stable/test.sh
 
 step "cross-build manifest tests"
 bash scripts/cross-build/test.sh
+
+step "build slot tests"
+bash scripts/build-slots/test.sh
 
 step "pass stamp tests"
 bash scripts/pass-stamp/test.sh
