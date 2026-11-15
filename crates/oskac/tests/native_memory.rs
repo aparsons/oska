@@ -4,13 +4,8 @@
 //! and copy-on-write, heap text, and panics with the interpreter's codes
 //! and locations.
 //!
-//! The differential cases here use [`compiled_same`], which fails when
-//! `oskac build` refuses the program on any host: memory and panics are
-//! what every other x86_64 ticket stands on, so x86_64 may not fall back
-//! to the interpreter for them, as the rest of the suite still may
-//! (`differential::REPORT_REFUSALS`). Call depth at the `P0021` boundary
-//! is `native_ints.rs`'s and `native_gaps.rs`'s, and deep drops in bounded
-//! stack `native_data.rs`'s; those build natively on every host already.
+//! Call depth at the `P0021` boundary is `native_ints.rs`'s and
+//! `native_gaps.rs`'s, and deep drops in bounded stack `native_data.rs`'s.
 
 #![cfg(all(
     target_os = "linux",
@@ -23,7 +18,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use differential::Case;
+use differential::{assert_same, Case};
 
 /// `read`'s system-call number on the host, which a process waiting on
 /// its stdin is blocked in.
@@ -145,18 +140,6 @@ fn main_runs_on_a_stack_of_its_own_above_a_guard_region_and_nothing_is_writable_
     assert_eq!(output.status.code(), Some(0));
 }
 
-/// Run `case` on both backends and require the same outcome: unlike
-/// `differential::assert_same`, a program `oskac build` refuses fails
-/// the test on every host. Returns the outcome.
-fn compiled_same(case: &Case) -> differential::Outcome {
-    let (interpreted, native) = differential::run(case);
-    assert!(
-        interpreted == native,
-        "the backends differ\n--- interpreter\n{interpreted:#?}\n--- native\n{native:#?}"
-    );
-    native
-}
-
 #[test]
 fn texts_on_each_side_of_every_size_class_and_large_ones_are_allocated_freed_and_reused() {
     // A text's block is a header word, its count and length, then its
@@ -200,7 +183,7 @@ fn main(io: Stdout) {
     check(io, 1)
 }
 "#;
-    let outcome = compiled_same(&Case::file("size_classes", src));
+    let outcome = assert_same(&Case::file("size_classes", src));
     let mut expected = String::new();
     let mut block = 32;
     while block <= 65536 {
@@ -280,7 +263,7 @@ fn main(io: Stdout) {
     let _ = io.println("{length} {tail} {twice}")
 }
 "#;
-    let outcome = compiled_same(&Case::file("shared_and_grown", src));
+    let outcome = assert_same(&Case::file("shared_and_grown", src));
     assert_eq!(
         outcome.stdout, "a a+ a++ 2 3 4 2 3 3\n2001 0 1000\n13890 2998,2999, 524288\n",
         "{outcome:#?}"
@@ -326,7 +309,7 @@ fn every_panic_a_program_can_reach_reports_the_interpreters_code_and_location() 
             "{items}\n\nfn main(io: Stdout, env: Env) {{\n    \
              let _ = io.println(\"before\")\n{body}\n}}\n"
         );
-        let outcome = compiled_same(&Case::file(&format!("panic_{code}"), &src));
+        let outcome = assert_same(&Case::file(&format!("panic_{code}"), &src));
         assert_eq!(outcome.stdout, "before\n", "{code}: {outcome:#?}");
         assert!(
             outcome.stderr.starts_with("main.osk:")

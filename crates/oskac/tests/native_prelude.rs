@@ -5,7 +5,8 @@
 //! program calls it by, a program that calls it. The tests require a call
 //! for every one but the [`EXEMPT`] (no backend has a runtime for them),
 //! that the program really calls that function, that the native backend
-//! compiles it, and that it runs the same on both backends. A new
+//! compiles it for every target, and that it runs the same on both
+//! backends. A new
 //! body-less function fails here until it has a native implementation and
 //! a row.
 
@@ -979,14 +980,17 @@ fn every_call_calls_its_function_and_builds_natively() {
             calls(&program, name),
             "the program for `{name}` never calls it"
         );
-        let built = match run {
-            Run::Tests => oska_native::build_tests(&program, differential::host_target()),
-            Run::Main | Run::WithInput(_) => {
-                oska_native::build(&program, differential::host_target(), &|d| d)
+        for target in oska_native::Target::ALL {
+            let built = match run {
+                Run::Tests => oska_native::build_tests(&program, target),
+                Run::Main | Run::WithInput(_) => oska_native::build(&program, target, &|d| d),
+            };
+            if let Err(refusal) = built {
+                panic!(
+                    "`{name}` has no native implementation for {}: {refusal:#?}",
+                    target.name()
+                );
             }
-        };
-        if let Err(refusal) = built {
-            panic!("`{name}` has no native implementation: {refusal:#?}");
         }
     }
 }

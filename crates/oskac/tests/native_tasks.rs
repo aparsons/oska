@@ -491,6 +491,14 @@ fn spawning_on_a_finished_scope_panics_with_p0005_at_the_call() {
             body,
         },
     );
+    for target in oska_native::Target::ALL {
+        if target == differential::host_target() {
+            continue;
+        }
+        if let Err(refusal) = oska_native::build(&program, target, &|d| d) {
+            panic!("{} refuses it: {refusal:#?}", target.name());
+        }
+    }
     let image = oska_native::build(&program, differential::host_target(), &|d| d)
         .expect("the program should build");
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("tasks_p0005");

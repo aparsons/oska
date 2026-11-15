@@ -5,10 +5,6 @@
 //! confinement suites (`oska-run/tests/confined_reads.rs`,
 //! `confined_writes.rs`, `directory_capabilities.rs`,
 //! `file_capabilities.rs`, `hard_links.rs`, `whole_filesystem.rs`).
-//! Every target must compile these programs
-//! (`differential::assert_compiled_same` and `build_compiled`, #163): a
-//! refusal fails on every host, and each host builds them for the other
-//! targets too.
 //!
 //! Every case starts from the same tree, relative to the working
 //! directory so both backends see the same paths:
@@ -30,7 +26,7 @@
 
 mod differential;
 
-use differential::{assert_compiled_same, Case, Outcome};
+use differential::{assert_same, Case, Outcome};
 use std::path::Path;
 
 /// The helpers every program has: what an operation gave, as one line.
@@ -90,7 +86,7 @@ fn tree(case: Case) -> Case {
 /// Run `case` on both backends, require the same outcome and a clean
 /// exit, and return what it printed.
 fn printed(case: &Case) -> String {
-    let outcome: Outcome = assert_compiled_same(case);
+    let outcome: Outcome = assert_same(case);
     assert_eq!(outcome.exit_code, Some(0), "{outcome:#?}");
     assert_eq!(outcome.stderr, "", "{outcome:#?}");
     outcome.stdout
@@ -353,7 +349,7 @@ fn a_write_creates_or_replaces_a_file_beneath_the_root() {
     io.println(done(out.write(Path.new("missing/new.txt"), "x")))?
     io.println(shown(read.restrict_to("root").read_to_string(Path.new("inside.txt"))))?"#,
     );
-    let outcome = assert_compiled_same(&case);
+    let outcome = assert_same(&case);
     assert_eq!(
         outcome.stdout,
         "done\ndone\ndone\ndone\n\
@@ -382,7 +378,7 @@ fn a_write_through_a_symlink_anywhere_creates_nothing() {
         ]),
     )
     .with_setup(plant_links);
-    let outcome = assert_compiled_same(&case);
+    let outcome = assert_same(&case);
     assert_all_refused(&outcome.stdout, 8, "symlink");
     assert_eq!(
         outcome.tree["outside/secret.txt"].as_deref(),
@@ -437,7 +433,7 @@ fn create_dir_makes_a_directory_keeps_one_and_refuses_symlinks() {
     }"#,
     )
     .with_setup(plant_links);
-    let outcome = assert_compiled_same(&case);
+    let outcome = assert_same(&case);
     let lines: Vec<&str> = outcome.stdout.lines().collect();
     assert_eq!(lines[..4], ["done", "done", "done", "done"], "{outcome:#?}");
     for line in &lines[4..10] {
@@ -471,7 +467,7 @@ fn list_dir_lists_sorted_by_bytes_and_never_follows() {
     io.println("{first} {second}")?"#,
     )
     .with_setup(plant_links);
-    let outcome = assert_compiled_same(&case);
+    let outcome = assert_same(&case);
     let lines: Vec<&str> = outcome.stdout.lines().collect();
     assert_eq!(
         lines[8],
@@ -507,7 +503,7 @@ fn a_symlinked_root_writes_creates_and_lists_nothing() {
         link(dir, "root-link", "root");
         link(dir, "outside-link", "outside");
     });
-    let outcome = assert_compiled_same(&case);
+    let outcome = assert_same(&case);
     assert_all_refused(&outcome.stdout, 12, "is a symlink");
     assert!(!outcome.tree.contains_key("root/new.txt"));
     assert!(!outcome.tree.contains_key("outside/new.txt"));
@@ -546,7 +542,7 @@ fn a_narrowing_from_untrusted_text_stays_beneath_the_root() {
         link(dir, "root/alias", "sub");
         link(dir, "root/gone", "../nothing-here");
     });
-    let outcome = assert_compiled_same(&case);
+    let outcome = assert_same(&case);
     let lines: Vec<&str> = outcome.stdout.lines().collect();
     assert_eq!(
         lines[..6],
@@ -585,7 +581,7 @@ fn file_capabilities_read_and_write_their_one_file() {
     io.println(shown(read.restrict_to_file("./root/./new.txt").read_to_string()))?
     io.println(shown(read.restrict_to_file("root/missing.txt").read_to_string()))?"#,
     );
-    let outcome = assert_compiled_same(&case);
+    let outcome = assert_same(&case);
     assert_eq!(
         outcome.stdout,
         "inside text\nnested text\ninside text\ndone\ndone\nshort\n\
@@ -630,7 +626,7 @@ fn a_file_capability_never_follows_a_symlinked_name_or_parent() {
         link(dir, "root/sub/out", "../../outside");
         link(dir, "root/alias", "sub");
     });
-    let outcome = assert_compiled_same(&case);
+    let outcome = assert_same(&case);
     assert_all_refused(&outcome.stdout, 20, "symlink");
     assert!(!outcome.tree.contains_key("outside/planted.txt"));
     assert_eq!(
@@ -665,7 +661,7 @@ fn a_broken_file_or_directory_root_fails_every_operation() {
         io.println(shown(beneath.restrict_to_file(Path.new(name)).read_to_string()))?
     }"#,
     );
-    let outcome = assert_compiled_same(&case);
+    let outcome = assert_same(&case);
     assert_all_refused(&outcome.stdout, 20, "");
     let lines: Vec<&str> = outcome.stdout.lines().collect();
     assert_eq!(
@@ -703,7 +699,7 @@ fn a_file_with_more_than_one_hard_link_is_never_read_or_emptied() {
         std::fs::hard_link(dir.join("outside/secret.txt"), dir.join("root/leak.txt"))
             .expect("create a hard link");
     });
-    let outcome = assert_compiled_same(&case);
+    let outcome = assert_same(&case);
     let refusal =
         "REFUSED: `leak.txt` has more than one hard link, and confined access never opens one\n";
     assert_eq!(
@@ -753,7 +749,7 @@ fn restrict_to_slash_reads_and_writes_a_real_file() {
     everything.write_only().write(Path.from("{at}/root/out.txt"), text)?
     io.println(listed(everything.read_only().list_dir(Path.from("{at}/root"))))?"#,
     );
-    let (exe, dir) = differential::build_compiled(&case);
+    let (exe, dir) = differential::build_native(&case);
     let relative = dir
         .strip_prefix("/")
         .expect("an absolute path")
@@ -782,10 +778,10 @@ fn restrict_to_slash_reads_and_writes_a_real_file() {
 /// goes on. Requires the same output from both, and returns it with the
 /// native run's directory.
 fn swapping(case: impl Fn(&str) -> Case, swap: fn(&Path)) -> (String, std::path::PathBuf) {
-    let (exe, native_dir) = differential::build_compiled(&case("native"));
+    let (exe, native_dir) = differential::build_native(&case("native"));
     let native = interact(std::process::Command::new(exe), &native_dir, swap);
     // A second tree for the interpreter, set up the same way.
-    let (_, interpreted_dir) = differential::build_compiled(&case("interpreted"));
+    let (_, interpreted_dir) = differential::build_native(&case("interpreted"));
     let mut oskac = std::process::Command::new(env!("CARGO_BIN_EXE_oskac"));
     oskac.args(["run", "--interpret", "main.osk"]);
     let interpreted = interact(oskac, &interpreted_dir, swap);
@@ -916,7 +912,7 @@ fn a_nul_byte_anywhere_in_a_path_is_refused() {
     io.println(shown(read.restrict_to_file("root/in\0side.txt").read_to_string()))?
     io.println(shown(read.restrict_to_file("ro\0ot/inside.txt").read_to_string()))?"#,
     );
-    let outcome = assert_compiled_same(&case);
+    let outcome = assert_same(&case);
     assert_all_refused(
         &outcome.stdout,
         11,
@@ -966,7 +962,7 @@ fn text_that_is_not_utf8_is_refused_and_large_files_round_trip() {
         let big: String = (0..100_000).map(|i| format!("line {i} é\n")).collect();
         std::fs::write(dir.join("root/big.txt"), big).expect("write");
     });
-    let outcome = assert_compiled_same(&case);
+    let outcome = assert_same(&case);
     assert_eq!(
         outcome.stdout,
         "REFUSED: stream did not contain valid UTF-8\n\n\
@@ -1084,7 +1080,7 @@ fn every_handle_a_capability_holds_is_close_on_exec_and_opened_without_following
     io.println(shown(same.read_to_string()))?
     io.println(shown(secret.read_to_string()))?"#,
     );
-    let (exe, dir) = differential::build_compiled(&case);
+    let (exe, dir) = differential::build_native(&case);
     let dir = std::fs::canonicalize(dir).expect("the case directory");
     let held: Vec<(String, u32)> = {
         use std::io::{BufRead, BufReader, Read, Write};
@@ -1195,7 +1191,7 @@ fn no_handle_is_left_open_on_any_path() {
         std::fs::hard_link(dir.join("outside/secret.txt"), dir.join("root/leak.txt"))
             .expect("create a hard link");
     });
-    let outcome = differential::run_compiled_native(&case);
+    let outcome = differential::run_native(&case);
     // The same descriptors open after the loop as before it. Inherited
     // ones (a git hook passes some on, a CI runner others, numbered above
     // 100) are in both listings, which sort by bytes ("142" before "2").
@@ -1222,7 +1218,7 @@ fn a_file_or_directory_without_permission_fails_with_the_systems_message() {
     let mut seen = Vec::new();
     for side in ["native", "interpreted"] {
         let case = tree(Case::file(&format!("files_permission_{side}"), &src));
-        let (exe, dir) = differential::build_compiled(&case);
+        let (exe, dir) = differential::build_native(&case);
         lock(&dir, 0o000);
         let mut command = match side {
             "native" => std::process::Command::new(exe),
