@@ -187,6 +187,13 @@ echo new >"$clone/untracked"
 push origin main
 expect "untracked file: the check runs" 0 1
 
+new_clone status-fails
+commit_change two
+run_check
+(cd "$clone" && echo garbage >"$(git rev-parse --git-path index)")
+push origin main
+expect "git status fails (a corrupt index): the check runs" 0 1
+
 # --- a failed check: no stamp, push refused ---------------------------------
 new_clone failing
 commit_change two

@@ -101,9 +101,11 @@ full_run_tree() {
 
 # Whether the pre-push on stdin needs no check.
 covers() {
-  local stamped local_sha tree
+  local stamped local_sha tree changes
   stamped=$(full_run_tree) || return 1
-  [ -z "$(git status --porcelain)" ] || return 1
+  # A failing git status must not read as a clean tree.
+  changes=$(git status --porcelain) || return 1
+  [ -z "$changes" ] || return 1
   while read -r _ local_sha _ _; do
     # A deletion pushes no tree.
     [ "$local_sha" != "$zero" ] || continue
