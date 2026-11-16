@@ -66,6 +66,11 @@ done
 # The real docs-test list, which reads the scratch crates.
 cp "$repo_root/scripts/docs-tests/list.sh" "$tree/scripts/docs-tests/list.sh"
 
+# rustup reports the Windows target installed, so the Windows step runs its
+# (stubbed) cargo check the same on a machine with or without the target.
+printf '#!/usr/bin/env bash\necho x86_64-pc-windows-gnu\n' >"$tree/bin/rustup"
+chmod +x "$tree/bin/rustup"
+
 # check ARGS...: runs the scratch check.sh. Sets `status`, `out` (stdout and
 # stderr) and `log` (what the stubs logged, one name per line).
 check() {
@@ -228,7 +233,7 @@ else
   bad "a docs, workflow and script change skips the cargo steps" "exit $status, log: $log"
 fi
 skips=$(printf '%s\n' "$out" | grep -c 'no cargo input differs from origin/main' || true)
-if [ "$skips" -eq 3 ]; then
+if [ "$skips" -eq 4 ]; then
   ok "each skipped cargo step says why"
 else
   bad "each skipped cargo step says why" "got: $out"
@@ -260,6 +265,7 @@ fi
 # --- only docs/ changed: just the tests that read docs/ run -----------------
 full_cargo='fmt --all --check
 clippy --all-targets -- -D warnings
+check -p oskac --tests --target x86_64-pc-windows-gnu
 test --all'
 for change in 'echo two >docs/index.md' 'echo new >docs/new.md' \
   'echo two >docs/index.md && git -c user.name=t -c user.email=t@e -c commit.gpgsign=false commit -qam d'; do
@@ -274,7 +280,8 @@ for change in 'echo two >docs/index.md' 'echo new >docs/new.md' \
   fi
 done
 if printf '%s\n' "$out" | grep -qx '  pkg-a reads_docs' &&
-  [ "$(printf '%s\n' "$out" | grep -c 'only docs/ differs from origin/main')" -eq 3 ]; then
+  [ "$(printf '%s\n' "$out" | grep -c 'only docs/ differs from origin/main')" -eq 4 ] &&
+  printf '%s\n' "$out" | grep -x -A1 '== oskac type-checks for Windows' | grep -q '^skipped: only docs/ differs'; then
   ok "each cargo step of a docs-only run says why it skipped or narrowed, and which tests run"
 else
   bad "each cargo step of a docs-only run says why it skipped or narrowed, and which tests run" "out: $out"

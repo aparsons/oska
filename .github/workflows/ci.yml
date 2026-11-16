@@ -37,6 +37,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt, clippy
+      # check.sh type-checks oskac for Windows (#323); only this job needs the
+      # target, so it is not in rust-toolchain.toml (every job would download it).
+      - run: rustup target add x86_64-pc-windows-gnu
       # The differential suite is compiled only where a backend runs: a
       # label that moves to other hardware must fail, not skip it.
       - if: matrix.os == 'ubuntu-24.04-arm'
