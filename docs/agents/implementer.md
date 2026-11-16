@@ -5,9 +5,15 @@ The fast inner loop for an agent implementing a ticket. The machine is shared an
 ## The loop
 
 1. `cargo fmt` first.
-2. While iterating, run only the changed crate's tests: `cargo test -p <crate>`, or one `--test <name>`. Do not run `scripts/check.sh` per edit.
-3. Run the full `scripts/check.sh` once, right before committing.
-4. Commit, then `git push`. Never `--no-verify`: see the pass stamp.
+2. While iterating, run only the changed crate's tests: `cargo test -p <crate>`, or one `--test <name>`. Do not run the full `scripts/check.sh` per edit.
+3. Push early: as soon as the ticket's tests exist, commit and push the ticket branch (`ticket/<number>-<slug>`), so CI (Windows and macOS included) runs alongside your local work. Push again as you go. Never `--no-verify`.
+4. Run the full `scripts/check.sh` once, right before the final commit, then push.
+
+## Fast check
+
+`scripts/check.sh --fast` runs `cargo fmt`, `cargo clippy`, `cargo test -p` for only the crates changed since the merge-base with `origin/main` and every crate that depends on them, in one `cargo test` (the full step's `cargo test --all` when that would be half the workspace or more, or when a cargo input outside the crates changed, such as `Cargo.toml`; a docs-only change runs just the tests that read `docs/`, as the full check does), and the test suites of only the `scripts/` directories changed (plus shellcheck when a shell script changed). When it cannot tell what changed (no `origin/main`, or a shallow clone) it runs every step. The rule: the fast tier is never slower than the full check for the same change; a step that would be belongs in the full check only. It ends by saying it is NOT the full check, and it never writes a pass stamp. Like the full check, it checks the working tree, not the commit a push sends: commit what you checked.
+
+The pre-push hook runs `--fast` for a push whose refs are all `ticket/**` branches. A push that includes anything else (`main`, `spec/**`, a tag, another branch) runs the full check. A fast pass does not make a ticket ready to merge: CI's full check on the ticket branch is the gate, and a ticket PR merges only when CI is green.
 
 ## Lean cargo environment
 
@@ -40,7 +46,7 @@ When every step of `scripts/check.sh` passes, it writes the run's tier and the t
 - the working tree is clean;
 - every ref the push does not delete has the stamped tree at its tip, whether or not it brings new commits. A rewind or an older commit pushed to a branch counts too. For a tag, it is the tree of the commit the tag points to, so a release tag never pushes an unchecked tree.
 
-A deletion adds no condition. Commits below a tip are not checked, so a multi-commit push (a merge of `origin/main` included) skips when its tip was checked. Otherwise the hook runs `scripts/check.sh` as before.
+A deletion adds no condition. Commits below a tip are not checked, so a multi-commit push (a merge of `origin/main` included) skips when its tip was checked. Otherwise the hook runs the check: `scripts/check.sh --fast` when every ref goes to a `ticket/**` branch (see Fast check), else the full `scripts/check.sh`.
 
 - Commit what you checked, then push with no edits in between. Any edit, or a merge that changes the tree, needs a new check.
 - Enable the hook once per clone: `git config core.hooksPath .githooks`.
@@ -48,7 +54,7 @@ A deletion adds no condition. Commits below a tip are not checked, so a multi-co
 
 ## Check steps
 
-`scripts/check.sh --list` prints the check's steps in order and runs nothing. Each step is one self-contained `if step "NAME"; then ... fi` block in `scripts/check.sh`; to add a step, add one block where it should run. Tag it after the name: `--fast` also puts it in the fast tier, `--no-slot` runs a cheap step without a build slot, and `--cargo` marks a cargo step, which skips (without a build slot) when no cargo input changed. A step whose tool is missing calls `skip_step "REASON"`; a skip the pass stamp cannot vouch for calls `skip_step --no-stamp "REASON"`, and that run writes no stamp. There is no other list to update. `scripts/check-steps/test.sh` proves that `--list` matches what a run prints and that every `scripts/*/test.sh` runs.
+`scripts/check.sh --list` prints the check's steps in order and runs nothing. Each step is one self-contained `if step "NAME"; then ... fi` block in `scripts/check.sh`; to add a step, add one block where it should run. Tag it after the name: `--fast` also puts it in the fast tier, `--fast-when PATTERN` puts it there when a changed path matches the shell pattern (a new `scripts/<dir>/test.sh` step needs `--fast-when 'scripts/<dir>/*'`; `scripts/check-steps/test.sh` fails without it), `--no-slot` runs a cheap step without a build slot, and `--cargo` marks a cargo step, which skips (without a build slot) when no cargo input changed. A step whose tool is missing calls `skip_step "REASON"`; a skip the pass stamp cannot vouch for calls `skip_step --no-stamp "REASON"`, and that run writes no stamp. There is no other list to update. `scripts/check-steps/test.sh` proves that `--list` matches what a run prints and that every `scripts/*/test.sh` runs.
 
 Outside CI, the cargo steps skip (and the run writes no stamp) when nothing that cargo reads differs from the merge-base with `origin/main`: for example a branch that changes only `CLAUDE.md`, scripts or workflows. Rust tests read all of `docs/`, `examples/`, `site/` and more; `cargo_input` in `scripts/check.sh` holds the list. When the only cargo inputs that changed are in `docs/`, the run skips fmt, clippy and the Windows type-check, and runs just the Rust tests that read `docs/`, printing which (`scripts/docs-tests/list.sh` finds them from the test source, so a new reader joins with no list to update). Its drift guard, `list.sh --check`, fails on any file in `crates/` that names `docs/` and does file I/O but that the list does not find; make the list see it, or add it with a reason to `scripts/docs-tests/not-readers.txt`. That run writes no stamp either, and CI runs everything. A `docs/` file a crate compiles in (`docs/checker.md`, `docs/runtime.md`, `docs/guide/install-receipt.md`), a deleted file, or any other input runs all of cargo. A Rust test that starts reading a new path outside `crates/` must keep that list right. `scripts/check-steps/test.sh` fails if a literal `include_str!` or `CARGO_MANIFEST_DIR` join in `crates/` reads a path that list calls a non-input.
 
