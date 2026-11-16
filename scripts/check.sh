@@ -231,9 +231,9 @@ cargo_plan() {
 # run_docs_tests: the --docs-tests step's block in docs mode. Says which
 # tests run and why, then runs them, one cargo test per package.
 run_docs_tests() {
-  local package
+  local package line
   printf 'narrowed: %s; running just the tests that read docs/ (found by scripts/docs-tests/list.sh); CI runs them all:\n' "$cargo_why"
-  sed 's/^/  /' <<<"$docs_tests"
+  while IFS= read -r line; do printf '  %s\n' "$line"; done <<<"$docs_tests"
   for package in $(cut -d' ' -f1 <<<"$docs_tests" | uniq); do
     # shellcheck disable=SC2046 # one --test per word
     scripts/temp-leak/run.sh cargo test -p "$package" \
