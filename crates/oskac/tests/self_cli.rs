@@ -314,7 +314,12 @@ fn uninstall_refuses_unsafe_entries_and_removes_nothing() {
         let home_text = home.to_string_lossy().replace('\\', "\\\\");
         add_entry(&home, &entry.replace('/', &sep).replace("HOME", &home_text));
         let output = run(&exe, &home, &["self", "uninstall", "--format=json"]);
-        assert_eq!(output.status.code(), Some(1), "{why}");
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{why}: {}",
+            text(&output.stdout)
+        );
         let refusal = json_of(&output);
         assert_eq!(
             refusal.get("error"),
@@ -450,6 +455,7 @@ const HOOK_SCRIPT: &str = include_str!("../../../site/agent-setup/oska-check.sh"
 const HOOK_SETTINGS: &str = include_str!("../../../site/agent-setup/claude-settings.json");
 /// The marker `install.sh --add-to-path` ends its profile line with.
 const PROFILE_MARK: &str = "# added by the Oska installer";
+const SEP: char = std::path::MAIN_SEPARATOR;
 
 /// `text` as a JSON string literal.
 fn q(text: &str) -> String {
@@ -619,16 +625,26 @@ fn uninstall_refuses_a_tampered_receipt_and_removes_nothing() {
             hook_entry("hook_settings", &settings, Some("dd"), Path::new("project")),
             "not an absolute path",
         ),
+        // Spelled out as text: on Windows, `join("..")` on a `\\?\` path
+        // takes the step, which would leave no `..` to refuse.
         (
             hook_entry(
                 "hook_settings",
-                &project
-                    .join("x")
-                    .join("..")
-                    .join(".claude")
-                    .join("settings.json"),
+                Path::new(&format!(
+                    "{}{SEP}x{SEP}..{SEP}.claude{SEP}settings.json",
+                    project.display()
+                )),
                 Some("dd"),
-                &project.join("x").join(".."),
+                Path::new(&format!("{}{SEP}x{SEP}..", project.display())),
+            ),
+            "climbs out",
+        ),
+        (
+            hook_entry(
+                "hook_settings",
+                &settings,
+                Some("dd"),
+                Path::new(&format!("{}{SEP}x{SEP}..", project.display())),
             ),
             "climbs out",
         ),
@@ -667,7 +683,12 @@ fn uninstall_refuses_a_tampered_receipt_and_removes_nothing() {
         );
         add_entry(&home, entry);
         let output = run(&exe, &home, &["self", "uninstall", "--format=json"]);
-        assert_eq!(output.status.code(), Some(1), "{why}");
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{why}: the receipt entry {entry} gave {}",
+            text(&output.stdout)
+        );
         let refusal = json_of(&output);
         assert_eq!(
             refusal.get("error"),

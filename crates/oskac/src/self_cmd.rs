@@ -403,16 +403,24 @@ fn checked_entry(entry: &Entry, places: &Places) -> Result<Plan, Refusal> {
             "the receipt lists '{listed}', which is not an absolute path"
         )));
     }
+    // The text is checked as well as the parsed path: on Windows, `Path`
+    // treats a `.` in a `\\?\` path as a name, not as a step.
     let parts: Vec<Component> = path.components().collect();
-    if parts.contains(&Component::ParentDir) {
+    if parts.contains(&Component::ParentDir) || has_dot_part(listed) {
         return Err(unsafe_path(format!(
             "the receipt lists {listed}, which climbs out with .."
         )));
     }
-    let in_config = parts.windows(2).any(|w| {
-        matches!(w[0], Component::Normal(a) if a == ".config")
-            && matches!(w[1], Component::Normal(b) if b == "oska")
-    });
+    // Windows names are case-insensitive, so `.Config\Oska` is the same
+    // directory there.
+    let named = |part: &Component, name: &str| match part {
+        Component::Normal(n) if cfg!(windows) => n.to_string_lossy().eq_ignore_ascii_case(name),
+        Component::Normal(n) => *n == name,
+        _ => false,
+    };
+    let in_config = parts
+        .windows(2)
+        .any(|w| named(&w[0], ".config") && named(&w[1], "oska"));
     if in_config {
         return Err(unsafe_path(format!(
             "the receipt lists {listed}, in a .config/oska directory of settings and credentials, which uninstall never touches"
