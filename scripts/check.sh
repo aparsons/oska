@@ -186,8 +186,10 @@ fail() {
   exit 1
 }
 
-# finish: after the last block. In a run, every step passed: stamp the tree
-# checked, if it did not change meanwhile.
+# finish: after the last block. In a run, every step passed: stamp the tier
+# and the tree checked, if the tree did not change meanwhile and no step was
+# skipped with --no-stamp (then there is no stamp at all). The pre-push hook
+# honours only a full run's stamp.
 finish() {
   if [ "$mode" = list ]; then
     exit 0
@@ -195,7 +197,7 @@ finish() {
   if [ -n "$unstamped" ]; then
     echo "pass stamp: not written, a step was skipped that the stamp cannot vouch for"
   else
-    scripts/pass-stamp/stamp.sh write "$checked_tree"
+    scripts/pass-stamp/stamp.sh write "$tier" "$checked_tree"
   fi
   printf '\nAll checks passed.\n'
 }
