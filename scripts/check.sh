@@ -23,7 +23,9 @@
 #   --fast      the step also belongs to the fast tier (every step runs in a
 #               full run)
 #   --no-slot   the step is cheap and runs without a build slot
-#   --cargo     a cargo step: skipped when cargo_skip says so (below)
+#   --cargo     a cargo step: skipped when cargo_plan says so (below)
+#   --docs-tests  with --cargo: when only docs/ changed, the step still runs,
+#               and its block runs just the tests that read docs/
 #
 # A step whose tool is missing calls `skip_step "REASON"` instead of failing;
 # the run still writes the pass stamp, since running again here cannot do
@@ -31,9 +33,11 @@
 # the stamp cannot vouch for: the run then writes no stamp.
 #
 # Outside CI, the --cargo steps skip (as with --no-stamp) when no cargo input
-# differs from the merge-base with origin/main; see cargo_skip below. A
-# skipped step prints its header and why, and waits for no build slot. CI
-# ($CI or $GITHUB_ACTIONS set) always runs them.
+# differs from the merge-base with origin/main; see cargo_plan below. When
+# the only cargo inputs that differ are in docs/, the --docs-tests step runs
+# just the tests that read docs/ and the other --cargo steps skip; that run
+# writes no stamp either. A skipped step prints its header and why, and waits
+# for no build slot. CI ($CI or $GITHUB_ACTIONS set) always runs them all.
 #
 # Everything a run does happens inside a step block or in `step` and
 # `finish` themselves, so --list can never run any of it.
@@ -77,7 +81,11 @@ started=      # set when the first step of a run starts
 checked_tree= # the tree being checked, for the pass stamp `finish` writes
 have_slot=    # set once the build slot is held; it is held until the run ends
 unstamped=    # set by `skip_step --no-stamp`: the run writes no pass stamp
-cargo_why=    # unset until cargo_skip decides; then why cargo skips, or "run"
+cargo_mode=   # unset until cargo_plan decides; then full, skip or docs
+cargo_why=    # why the cargo steps skip (skip) or narrow (docs)
+docs_tests=   # docs mode: the tests that read docs/, "PACKAGE TEST" per line
+cargo_changed= # set by cargo_plan when it can tell: the paths that differ from
+#                the merge-base with origin/main (changed and untracked), one per line
 
 # step NAME [--fast] [--no-slot]: opens a step's block,
 # `if step "NAME"; then ... fi`. In a run it prints the step's header and the
@@ -86,13 +94,14 @@ cargo_why=    # unset until cargo_skip decides; then why cargo skips, or "run"
 # tree for the pass stamp; the first step without --no-slot that is not
 # skipped waits for a build slot.
 step() {
-  local name=$1 fast='' slot=1 cargo=''
+  local name=$1 fast='' slot=1 cargo='' docs=''
   shift
   while [ $# -gt 0 ]; do
     case $1 in
       --fast) fast=1 ;;
       --no-slot) slot= ;;
       --cargo) cargo=1 ;;
+      --docs-tests) docs=1 ;;
       *)
         printf 'check.sh: step "%s": unknown option %s\n' "$name" "$1" >&2
         exit 2
@@ -100,6 +109,10 @@ step() {
     esac
     shift
   done
+  if [ -n "$docs" ] && [ -z "$cargo" ]; then
+    printf 'check.sh: step "%s": --docs-tests needs --cargo\n' "$name" >&2
+    exit 2
+  fi
   if [ "$tier" = fast ] && [ -z "$fast" ]; then
     return 1
   fi
@@ -111,10 +124,15 @@ step() {
     started=1
     checked_tree=$(scripts/pass-stamp/stamp.sh tree 2>/dev/null || true)
   fi
-  if [ -n "$cargo" ] && cargo_skip; then
-    printf '\n== %s\n' "$name"
-    skip_step --no-stamp "$cargo_why"
-    return 1
+  if [ -n "$cargo" ]; then
+    cargo_plan
+    if [ "$cargo_mode" = skip ] || { [ "$cargo_mode" = docs ] && [ -z "$docs" ]; }; then
+      printf '\n== %s\n' "$name"
+      skip_step --no-stamp "skipped: $cargo_why; CI runs it"
+      return 1
+    fi
+    # A narrowed run vouches for less than the stamp says.
+    if [ "$cargo_mode" = docs ]; then unstamped=1; fi
   fi
   if [ -n "$slot" ] && [ -z "$have_slot" ]; then
     have_slot=1
@@ -140,45 +158,87 @@ skip_step() {
 # guides, the release-key fingerprints, docs/agents/ included), examples/,
 # site/, README.md, GLOSSARY.md, SECURITY.md, .github/workflows/pages.yml,
 # scripts/install/, and `git ls-files`. scripts/temp-leak/ wraps cargo test,
-# and this file runs the cargo steps.
+# scripts/docs-tests/ picks the tests a docs/ change runs, and this file runs
+# the cargo steps.
 cargo_input() {
   case $1 in
-    .github/workflows/pages.yml | scripts/install/* | scripts/temp-leak/* | scripts/check.sh) return 0 ;;
+    .github/workflows/pages.yml | scripts/install/* | scripts/temp-leak/* | scripts/docs-tests/* | scripts/check.sh) return 0 ;;
     CLAUDE.md | CODING_STANDARDS.md | LICENSE | .gitignore) return 1 ;;
     .githooks/* | .claude/* | .github/* | scripts/*) return 1 ;;
   esac
   return 0
 }
 
-# cargo_skip: whether the cargo steps can skip, decided once per run; when
-# they can, cargo_why says why. They run in CI, and whenever this cannot
-# tell: no origin/main, no merge-base, or a shallow clone. The tree compared
-# is the working tree, untracked files included, as the pass stamp's is.
-# `git diff BASE` takes its paths from the index, so a file removed with
-# `git rm --cached` counts as deleted though it is still on disk.
-cargo_skip() {
-  if [ -z "$cargo_why" ]; then
-    cargo_why=run
-    local base deleted changed untracked path
-    if [ -z "${CI:-}${GITHUB_ACTIONS:-}" ] &&
-      [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = false ] &&
-      base=$(git merge-base HEAD refs/remotes/origin/main 2>/dev/null) &&
-      deleted=$(git diff --no-renames --name-only --diff-filter=D "$base" --) &&
-      changed=$(git diff --no-renames --name-only "$base" --) &&
-      untracked=$(git ls-files --others --exclude-standard) &&
-      # Rust tests read the tracked files' names, so a deletion is an input.
-      [ -z "$deleted" ]; then
-      cargo_why="skipped: no cargo input differs from origin/main (merge-base ${base:0:12}); CI runs it"
-      while IFS= read -r path; do
-        if [ -n "$path" ] && cargo_input "$path"; then
-          cargo_why=run
-          break
-        fi
-      done <<<"$changed
-$untracked"
+# cargo_plan: sets cargo_mode, once per run, to what the cargo steps do:
+#
+#   skip  no cargo input differs from the merge-base with origin/main
+#   docs  the only inputs that differ are in docs/, and none is compiled into
+#         a crate: just the tests that read docs/ run (docs_tests lists them)
+#   full  anything else, in CI, and whenever this cannot tell: no origin/main,
+#         no merge-base, a shallow clone, a docs-test list that fails or
+#         finds no test, or a drift guard (list.sh --check) that fails
+#
+# cargo_why says why for skip and docs; cargo_changed holds the paths
+# compared, for other steps to reuse. The tree compared is the working
+# tree, untracked files included, as the pass stamp's is. `git diff BASE`
+# takes its paths from the index, so a file removed with `git rm --cached`
+# counts as deleted though it is still on disk.
+cargo_plan() {
+  [ -z "$cargo_mode" ] || return 0
+  cargo_mode=full
+  local base deleted changed untracked path docs='' compiled
+  if [ -z "${CI:-}${GITHUB_ACTIONS:-}" ] &&
+    [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = false ] &&
+    base=$(git merge-base HEAD refs/remotes/origin/main 2>/dev/null) &&
+    deleted=$(git diff --no-renames --name-only --diff-filter=D "$base" --) &&
+    changed=$(git diff --no-renames --name-only "$base" --) &&
+    untracked=$(git ls-files --others --exclude-standard); then
+    cargo_changed=$(printf '%s\n%s\n' "$changed" "$untracked" | sed '/^$/d' | sort -u)
+    # Rust tests read the tracked files' names, so a deletion is an input.
+    [ -z "$deleted" ] || return 0
+    while IFS= read -r path; do
+      if [ -n "$path" ] && cargo_input "$path"; then
+        case $path in
+          docs/*) docs="$docs$path"$'\n' ;;
+          *) return 0 ;;
+        esac
+      fi
+    done <<<"$cargo_changed"
+    if [ -z "$docs" ]; then
+      cargo_mode=skip
+      cargo_why="no cargo input differs from origin/main (merge-base ${base:0:12})"
+      return 0
     fi
+    # A docs/ file compiled into a crate changes the build: all of cargo.
+    compiled=$(scripts/docs-tests/list.sh --compiled) || return 0
+    while IFS= read -r path; do
+      [ -n "$path" ] || continue
+      if [ "$compiled" = docs ] || grep -qxF "$path" <<<"$compiled"; then
+        return 0
+      fi
+    done <<<"$docs"
+    # A docs/ reader the list may miss: all of cargo, saying why.
+    if ! scripts/docs-tests/list.sh --check; then
+      echo "cargo: only docs/ differs, but the docs-test list may miss a reader (above); running all of cargo"
+      return 0
+    fi
+    docs_tests=$(scripts/docs-tests/list.sh) && [ -n "$docs_tests" ] || return 0
+    cargo_mode=docs
+    cargo_why="only docs/ differs from origin/main (merge-base ${base:0:12})"
   fi
-  [ "$cargo_why" != run ]
+}
+
+# run_docs_tests: the --docs-tests step's block in docs mode. Says which
+# tests run and why, then runs them, one cargo test per package.
+run_docs_tests() {
+  local package line
+  printf 'narrowed: %s; running just the tests that read docs/ (found by scripts/docs-tests/list.sh); CI runs them all:\n' "$cargo_why"
+  while IFS= read -r line; do printf '  %s\n' "$line"; done <<<"$docs_tests"
+  for package in $(cut -d' ' -f1 <<<"$docs_tests" | uniq); do
+    # shellcheck disable=SC2046 # one --test per word
+    scripts/temp-leak/run.sh cargo test -p "$package" \
+      $(sed -n "s/^$package /--test /p" <<<"$docs_tests")
+  done
 }
 
 fail() {
@@ -263,10 +323,14 @@ if step "oskac type-checks for Windows" --cargo; then
   fi
 fi
 
-if step "cargo test (private temporary directory)" --cargo; then
+if step "cargo test (private temporary directory)" --cargo --docs-tests; then
   # A test that leaves a file or directory in the temporary directory fails the
   # check here, naming it, instead of slowly filling the shared /tmp.
-  scripts/temp-leak/run.sh cargo test --all
+  if [ "$cargo_mode" = docs ]; then
+    run_docs_tests
+  else
+    scripts/temp-leak/run.sh cargo test --all
+  fi
 fi
 
 if step "installer tests"; then
@@ -313,6 +377,11 @@ fi
 
 if step "pass stamp tests"; then
   bash scripts/pass-stamp/test.sh
+fi
+
+if step "docs-test list tests"; then
+  # The Rust tests that read docs/, which a docs-only change runs.
+  bash scripts/docs-tests/test.sh
 fi
 
 if step "check step registry tests"; then

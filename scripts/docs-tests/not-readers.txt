@@ -1,0 +1,6 @@
+# Files in crates/ that name docs/ in a string and do file I/O, but do not
+# read the repository's docs/. scripts/docs-tests/list.sh --check accepts
+# them. One per line: PATH  REASON. Review the file before adding it.
+crates/oska-run/tests/directory_capabilities.rs  "docs" is a directory in a fake host or a temp_dir scratch tree it makes
+crates/oska-run/tests/file_capabilities.rs  "docs" is a directory in a fake host or a temp_dir scratch tree it makes
+crates/oska-run/tests/text_toolkit.rs  "docs" is a directory in a fake host or a temp_dir scratch tree it makes
