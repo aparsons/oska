@@ -108,7 +108,7 @@ Each install writes `receipt.json` into the Oska home (`~/.oska`, or `OSKA_HOME`
 }
 ```
 
-With `--add-to-path` or `--hook`, `files` also lists what they wrote outside the Oska home: a `profile_line` (the profile and the exact line), a `user_path_entry` (the exact `PATH` entry), a `hook_script` and a `hook_settings` (each with its SHA-256 and the `project` directory). A re-run without those options keeps the entries an earlier run recorded.
+With `--add-to-path` or `--hook`, `files` also lists what they wrote outside the Oska home: a `profile_line` (the profile and the exact line), a `user_path_entry` (the exact `PATH` entry), a `hook_script` and a `hook_settings` (each with its SHA-256 and the `project` directory). A re-run without those options keeps the entries an earlier run recorded. [The install receipt](install-receipt.md) defines every kind of entry, where each may be, and what each uninstaller does with it.
 
 - `key_fingerprint` is the fingerprint of the release key that vouched for the binary, and `sha256` is the binary's SHA-256, so you can tell whether it has changed since.
 - `installer` is `sh` or `ps1`.
@@ -218,7 +218,7 @@ With `--json` it prints:
 - `kept` lists what it left in place: a file that changed, the `bin` directory or the Oska home if something else is in it, and `~/.config/oska` if it exists.
 - `path_hint` says what to remove from your `PATH`, or is `null` when the `bin` directory is not on it.
 
-`oskac self uninstall` does the same from the installed `oskac`, with no installer, with the same refusals and error codes: see [`oskac self`](cli-reference.md#oskac-self). It leaves a PATH line or user `PATH` entry that `--add-to-path` added to the installer's `--uninstall`, and says so in `path_hint`. On Windows it lists the running `oskac.exe` under `pending`. `oskac self info` reports the install and whether the receipt matches it.
+`oskac self uninstall` does the same from the installed `oskac`, with no installer, with the same refusals and error codes: see [`oskac self`](cli-reference.md#oskac-self). [The install receipt](install-receipt.md) sets out, kind by kind, where it and the two installers differ. It leaves a PATH line or user `PATH` entry that `--add-to-path` added to the installer's `--uninstall`, and says so in `path_hint`. On Windows it lists the running `oskac.exe` under `pending`. `oskac self info` reports the install and whether the receipt matches it.
 
 An install made before the installers wrote a receipt has none, so `--uninstall` stops with `not_installed`. Delete `~/.oska` by hand: it holds `bin/oskac` (`bin\oskac.exe` on Windows) and a `version` file.
 

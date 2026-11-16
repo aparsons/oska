@@ -1,0 +1,49 @@
+{
+  "about": "The bin directory listed as an entry is not acted on as a file: it is removed with the Oska home, at the end, if empty.",
+  "expect": {
+    "sh": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@",
+        "@OSKA_HOME@"
+      ],
+      "kept": [],
+      "path_hint": false
+    },
+    "ps1": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@",
+        "@OSKA_HOME@"
+      ],
+      "kept": [],
+      "path_hint": false
+    },
+    "oskac_unix": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@",
+        "@OSKA_HOME@"
+      ],
+      "kept": [],
+      "path_hint": false
+    },
+    "oskac_windows": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@",
+        "@OSKA_HOME@"
+      ],
+      "kept": [],
+      "path_hint": false
+    }
+  }
+}

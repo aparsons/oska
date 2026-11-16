@@ -19,6 +19,7 @@ on:
       - site/**
       - docs/**
       - examples/**
+      - scripts/install/receipt-fixtures/**
       - Cargo.toml
       - Cargo.lock
       - .github/workflows/windows.yml
@@ -45,6 +46,7 @@ on:
       - site/**
       - docs/**
       - examples/**
+      - scripts/install/receipt-fixtures/**
       - Cargo.toml
       - Cargo.lock
       - .github/workflows/windows.yml

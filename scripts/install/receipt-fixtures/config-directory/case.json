@@ -1,0 +1,24 @@
+{
+  "about": "A path in a .config/oska directory (settings and credentials) refuses the whole uninstall.",
+  "setup": [
+    {
+      "name": "credentials",
+      "path": "@OSKA_HOME@/.config/oska/credentials",
+      "text": "token\n"
+    }
+  ],
+  "expect": {
+    "sh": {
+      "refused": "unsafe_path"
+    },
+    "ps1": {
+      "refused": "unsafe_path"
+    },
+    "oskac_unix": {
+      "refused": "unsafe_path"
+    },
+    "oskac_windows": {
+      "refused": "unsafe_path"
+    }
+  }
+}

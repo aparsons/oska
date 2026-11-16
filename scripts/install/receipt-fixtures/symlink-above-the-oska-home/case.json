@@ -1,0 +1,24 @@
+{
+  "about": "An Oska home reached through a symlink above it (not root's) refuses the whole uninstall.",
+  "oska_home": "@HOME@/via/.oska",
+  "link_first": [
+    {
+      "path": "@HOME@/via",
+      "link_to": "@HOME@/real"
+    }
+  ],
+  "expect": {
+    "sh": {
+      "refused": "unsafe_path"
+    },
+    "ps1": {
+      "refused": "unsafe_path"
+    },
+    "oskac_unix": {
+      "refused": "unsafe_path"
+    },
+    "oskac_windows": {
+      "refused": "unsafe_path"
+    }
+  }
+}

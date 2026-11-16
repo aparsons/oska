@@ -3,16 +3,19 @@
 //! install receipt (`receipt.json` in the Oska home) that the installers
 //! write, and neither makes a network connection.
 //!
-//! `uninstall` applies the installer's `--uninstall` rules in-process: every
-//! entry of the receipt is checked against the places the installer writes
-//! before anything is removed, and one that is not refuses the whole
-//! uninstall. It removes the `binary` and `record` entries (only when this
+//! `uninstall` applies the receipt rules of `docs/guide/install-receipt.md`
+//! in-process, as the shared fixtures in `scripts/install/receipt-fixtures`
+//! check (`tests/receipt_fixtures.rs`): every entry of the receipt is checked
+//! against the places this platform's installer writes its kind before
+//! anything is removed, and one that is not refuses the whole uninstall. It
+//! removes this `oskac`, the `version` file and the receipt (only when this
 //! `oskac` is the install the receipt records) and the `--hook` files (only
 //! when unchanged), and leaves the installer's PATH edits to the installer's
 //! own `--uninstall`, reporting them in `path_hint`. It never touches
 //! `~/.config/oska`. `oskac` computes no SHA-256: it identifies its install
-//! by path and version, and a hook file by comparing it with the published
-//! file built into it.
+//! by path and version, the `version` file by its text, and a hook file by
+//! comparing it with the published file built into it. Anything else it
+//! cannot show unchanged, it keeps.
 
 use crate::json::{quote, quote_option, Json};
 use std::collections::HashSet;
@@ -155,16 +158,45 @@ enum Kind {
     Unknown(String),
 }
 
+/// Every kind `oskac` knows, by the name receipts give it. The one place a
+/// name maps to a kind: a test checks these against the kinds
+/// `docs/guide/install-receipt.md` defines.
+const KINDS: [(&str, Kind); 6] = [
+    ("binary", Kind::Binary),
+    ("record", Kind::Record),
+    ("profile_line", Kind::ProfileLine),
+    ("user_path_entry", Kind::UserPathEntry),
+    ("hook_script", Kind::HookScript),
+    ("hook_settings", Kind::HookSettings),
+];
+
 impl Kind {
     fn named(name: &str) -> Kind {
-        match name {
-            "binary" => Kind::Binary,
-            "record" => Kind::Record,
-            "profile_line" => Kind::ProfileLine,
-            "user_path_entry" => Kind::UserPathEntry,
-            "hook_script" => Kind::HookScript,
-            "hook_settings" => Kind::HookSettings,
-            other => Kind::Unknown(other.to_string()),
+        KINDS
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map_or_else(|| Kind::Unknown(name.to_string()), |(_, k)| k.clone())
+    }
+
+    fn name(&self) -> &str {
+        match self {
+            Kind::Unknown(name) => name,
+            known => KINDS
+                .iter()
+                .find(|(_, k)| k == known)
+                .map_or("", |(n, _)| n),
+        }
+    }
+
+    /// Whether this platform's installer writes the kind: `install.ps1`
+    /// the user PATH entry, `install.sh` the profile line and the hook
+    /// files. A receipt that lists another is refused, as that installer's
+    /// own `--uninstall` refuses it.
+    fn written_here(&self) -> bool {
+        match self {
+            Kind::Binary | Kind::Record | Kind::Unknown(_) => true,
+            Kind::UserPathEntry => cfg!(windows),
+            Kind::ProfileLine | Kind::HookScript | Kind::HookSettings => !cfg!(windows),
         }
     }
 }
@@ -379,13 +411,19 @@ fn has_dot_part(text: &str) -> bool {
 fn checked_entry(entry: &Entry, places: &Places) -> Result<Plan, Refusal> {
     let listed = &entry.path;
     let path = Path::new(listed);
-    if [listed, &entry.line, &entry.project]
+    if [listed, &entry.line, &entry.project, &entry.sha256]
         .iter()
         .any(|text| text.chars().any(char::is_control))
     {
         return Err(unsafe_path(
             "the receipt lists a path with a control character in it".to_string(),
         ));
+    }
+    if !entry.kind.written_here() {
+        return Err(unsafe_path(format!(
+            "the receipt lists {listed} as a '{}', which the installer for this platform never writes",
+            entry.kind.name()
+        )));
     }
     if entry.kind == Kind::UserPathEntry {
         // The bin directory, as it went into the user PATH.
@@ -605,6 +643,79 @@ fn is_published(path: &Path, published: &str) -> bool {
     std::fs::read(path).is_ok_and(|bytes| bytes == published.as_bytes())
 }
 
+/// Whether `text` has a `\u` escape for anything but printable ASCII. The
+/// installers refuse a receipt with one, as they cannot tell it from a
+/// control character, so `oskac` does too.
+fn has_escape_outside_ascii(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'\\' {
+            i += 1;
+            continue;
+        }
+        if bytes.get(i + 1) == Some(&b'u') {
+            let code = text
+                .get(i + 2..i + 6)
+                .and_then(|hex| u32::from_str_radix(hex, 16).ok());
+            if !code.is_some_and(|c| (0x20..0x7f).contains(&c)) {
+                return true;
+            }
+        }
+        i += 2;
+    }
+    false
+}
+
+/// Whether an object anywhere in `value` has two keys that differ only in
+/// ASCII case. The parser refuses an exact repeat; PowerShell cannot tell
+/// these apart either, so `install.ps1` refuses them, and `oskac` does too.
+fn repeats_a_key_but_for_case(value: &Json) -> bool {
+    match value {
+        Json::Obj(fields) => {
+            fields.iter().enumerate().any(|(i, (key, _))| {
+                fields[..i]
+                    .iter()
+                    .any(|(earlier, _)| earlier.eq_ignore_ascii_case(key))
+            }) || fields.iter().any(|(_, v)| repeats_a_key_but_for_case(v))
+        }
+        Json::Arr(items) => items.iter().any(repeats_a_key_but_for_case),
+        _ => false,
+    }
+}
+
+/// Whether a `binary` or `record` entry with a SHA-256, other than the
+/// receipt, is still what the installer wrote, as far as `oskac` can tell
+/// without computing a SHA-256: a binary only if it is this `oskac`, and a
+/// record only if it is the `version` file holding the receipt's version.
+/// Anything else is kept, with why.
+fn unchanged_in_home(
+    entry: &Entry,
+    path: &Path,
+    receipt: &Json,
+    home: &Path,
+) -> Result<(), String> {
+    match entry.kind {
+        Kind::Binary => {
+            let this = executable().is_some_and(|exe| path.canonicalize().is_ok_and(|p| p == exe));
+            if this {
+                Ok(())
+            } else {
+                Err("a binary other than this oskac, which cannot tell it is unchanged without its SHA-256; the installer's --uninstall removes it".to_string())
+            }
+        }
+        _ if path == home.join("version") => {
+            let version = receipt.get("version").and_then(Json::as_str).unwrap_or_default();
+            if std::fs::read(path).is_ok_and(|text| text == format!("{version}\n").as_bytes()) {
+                Ok(())
+            } else {
+                Err("changed since it was installed".to_string())
+            }
+        }
+        _ => Err("a record other than the version file and the receipt, which oskac cannot tell is unchanged without its SHA-256; the installer's --uninstall removes it".to_string()),
+    }
+}
+
 /// Check everything, then remove. Returns the report, or why nothing was
 /// removed.
 fn uninstall_in(home: &Path) -> Result<(Outcome, Option<String>), Refusal> {
@@ -635,7 +746,22 @@ fn uninstall_in(home: &Path) -> Result<(Outcome, Option<String>), Refusal> {
             ),
         )
     };
-    let receipt = read_receipt(&receipt_path).map_err(cannot_read)?;
+    // Read as strictly as the installers read it.
+    let text = std::fs::read_to_string(&receipt_path).map_err(|e| cannot_read(e.to_string()))?;
+    if has_escape_outside_ascii(&text) {
+        return Err(cannot_read(
+            "it has a \\u escape for something other than printable ASCII".to_string(),
+        ));
+    }
+    let receipt = Json::parse(&text).map_err(cannot_read)?;
+    if repeats_a_key_but_for_case(&receipt) {
+        return Err(cannot_read(
+            "it has keys that differ only in case, which install.ps1 cannot tell apart".to_string(),
+        ));
+    }
+    if receipt.get("schema") != Some(&Json::Num("1".to_string())) {
+        return Err(cannot_read("its schema is not the integer 1".to_string()));
+    }
     let files = entries(&receipt).map_err(cannot_read)?;
     let user_home = user_home();
     let places = Places {
@@ -654,7 +780,8 @@ fn uninstall_in(home: &Path) -> Result<(Outcome, Option<String>), Refusal> {
     // records this oskac; otherwise they are skipped, and the rest goes.
     let managed = identity(&receipt, executable().as_deref());
     let mut outcome = Outcome::default();
-    let mut acted: HashSet<PathBuf> = HashSet::new();
+    // `bin` is handled with the Oska home, after the files.
+    let mut acted: HashSet<PathBuf> = HashSet::from([bin_dir.clone()]);
     let mut remove: Vec<PathBuf> = Vec::new();
     let mut remove_receipt = false;
     let mut path_edits: Vec<String> = Vec::new();
@@ -691,6 +818,12 @@ fn uninstall_in(home: &Path) -> Result<(Outcome, Option<String>), Refusal> {
                 format!("this oskac is not the install the receipt records: {why}"),
             ),
             (None, Ok(())) if path == receipt_path => remove_receipt = true,
+            (None, Ok(())) if !entry.sha256.is_empty() => {
+                match unchanged_in_home(entry, &path, &receipt, home) {
+                    Ok(()) => remove.push(path),
+                    Err(why) => outcome.keep(&path, why),
+                }
+            }
             (Some(_), _) if entry.sha256.is_empty() && entry.kind == Kind::HookSettings => {
                 outcome.keep(
                     &path,
@@ -837,4 +970,53 @@ pub(crate) fn uninstall(json: bool) -> ExitCode {
         outln!("{hint}.");
     }
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{has_escape_outside_ascii, Kind, KINDS};
+
+    /// The kinds the receipt doc's "Entry kinds" table defines.
+    fn documented_kinds() -> Vec<String> {
+        let doc = include_str!("../../../docs/guide/install-receipt.md");
+        let table = doc
+            .split("## Entry kinds")
+            .nth(1)
+            .and_then(|rest| rest.split("\n## ").next())
+            .expect("an Entry kinds section");
+        table
+            .lines()
+            .filter_map(|line| line.strip_prefix("| `"))
+            .filter_map(|rest| rest.split('`').next())
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn oskac_knows_exactly_the_documented_kinds() {
+        let known: Vec<String> = KINDS.iter().map(|(n, _)| n.to_string()).collect();
+        assert_eq!(known, documented_kinds());
+        for (name, kind) in KINDS {
+            assert_eq!(Kind::named(name), kind);
+            assert_eq!(kind.name(), name);
+        }
+        assert_eq!(Kind::named("directory"), Kind::Unknown("directory".into()));
+    }
+
+    #[test]
+    fn only_escapes_for_printable_ascii_are_read() {
+        // A JSON `\u` escape for `hex`, spelled out so that no tool reads it.
+        let u = |hex: &str| ["\"", "\\", "u", hex, "\""].concat();
+        let fine = [
+            "{\"a\":",
+            &u("0041"),
+            ",\"b\":\"\\\\",
+            "u00e9 \\n \\\" é\"}",
+        ]
+        .concat();
+        assert!(!has_escape_outside_ascii(&fine), "{fine}");
+        for bad in [u("00e9"), u("001f"), u("007f"), u("12")] {
+            assert!(has_escape_outside_ascii(&bad), "{bad}");
+        }
+    }
 }

@@ -81,3 +81,25 @@ pub fn set_home<'a>(command: &'a mut Command, home: &Path) -> &'a mut Command {
         .env("USERPROFILE", home)
         .env("XDG_CONFIG_HOME", home.join(".config"))
 }
+
+/// A path as `oskac` prints it: without the `\\?\` prefix of a Windows
+/// canonical path.
+pub fn shown(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    text.strip_prefix(r"\\?\").unwrap_or(&text).to_string()
+}
+
+/// Run `command`, trying again while the kernel says the executable is
+/// busy (`ETXTBSY`, 26): another test's `fork` can hold a fresh copy's
+/// write handle open for an instant after the copy is made.
+pub fn output_of(command: &mut Command) -> std::process::Output {
+    for _ in 0..50 {
+        match command.output() {
+            Err(e) if e.raw_os_error() == Some(26) => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            result => return result.expect("the command should run"),
+        }
+    }
+    command.output().expect("the command should run")
+}
