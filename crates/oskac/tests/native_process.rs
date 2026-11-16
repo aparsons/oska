@@ -923,13 +923,13 @@ fn a_closed_stdout_found_by_a_later_flush_is_quiet_too() {
         // here fails with a broken pipe only once no reader is left, so
         // the program is told to print only then.
         let gone = loop {
-            match probe.write(b"x") {
+            match probe.write(&[0; 4096]) {
                 Ok(_) => continue,
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(e) => break e.kind(),
             }
         };
-        assert_eq!(gone, std::io::ErrorKind::BrokenPipe);
+        assert_eq!(gone, std::io::ErrorKind::BrokenPipe, "{label}");
         let mut stdin = child.stdin.take().expect("stdin");
         stdin.write_all(b"go\n").expect("should write stdin");
         drop(stdin);
