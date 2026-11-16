@@ -14,7 +14,7 @@ The receipt is one JSON object. Uninstall reads these fields; any other field is
 
 A receipt is refused as a whole (`unsafe_path`, nothing removed) when uninstall cannot read it for certain:
 
-- it is not exactly one JSON value, or an object repeats a key (`install.ps1` also counts keys that differ only in case as repeated, as PowerShell cannot tell them apart);
+- it is not exactly one JSON value, or an object repeats a key, or has two keys that differ only in case (PowerShell cannot tell those apart; `install.ps1` folds any case, `install.sh` and `oskac` ASCII case);
 - it is not schema 1, or has no `files` array, or an entry is not an object with a string `path` and `kind`;
 - a value in a `files` entry holds a control character;
 - a `\u` escape anywhere in it stands for anything but printable ASCII (U+0020 to U+007E). A character outside ASCII written as itself is fine.
@@ -50,7 +50,7 @@ Each entry gets one outcome: **remove** it, **keep if changed** (remove it only 
 | `record`, the `version` file | keep if changed: its SHA-256 | keep if changed: its SHA-256 | keep if changed: it must hold the receipt's `version` and a newline |
 | `record`, any other | keep if changed: its SHA-256 | keep if changed: its SHA-256 | keep: `oskac` computes no SHA-256 to show it unchanged |
 | `profile_line` | remove the line, if it is still there exactly as written for this `bin` directory; else keep the file and say in `path_hint` | refuse | leave to the installer |
-| `user_path_entry` | refuse | remove the entry from the user `PATH` if it is there; else list the `bin` directory in `kept` and say in `path_hint` | leave to the installer |
+| `user_path_entry` | refuse | remove the entry from the user `PATH` if it is there; else say so in `path_hint`. The `bin` directory itself is handled with the Oska home, and listed once | leave to the installer |
 | `hook_script`, `hook_settings` | keep if changed: its SHA-256 | refuse | keep if changed: byte for byte the published file this `oskac` carries |
 | anything else | refuse | refuse | refuse |
 
@@ -70,7 +70,9 @@ Also, for every implementation:
 - `receipt.json`: the receipt, as text, so that a case can spell it in a way a JSON library would not write back (`1.0`, a `\u` escape).
 - `case.json`: what the case is about (`about`), what to put in place before the uninstall (`setup`, then `change`), and what each implementation must do (`expect`).
 
-Each harness makes a scratch user home and puts, before the setup, a `binary` at `@EXE@` (a copy of `oskac` for `oskac`, a stand-in for the installers) and the `version` file holding `@VERSION@` and a newline. It writes the receipt to `@OSKA_HOME@/receipt.json`, then applies `change`, then runs the uninstall with `OSKA_HOME` set to `@OSKA_HOME@` and the user's home to `@HOME@` (`test.ps1` leaves `USERPROFILE` as it is, as PowerShell writes its own files there).
+Each harness makes a scratch user home and puts, before the setup, a `binary` at `@EXE@` (a copy of `oskac` for `oskac`, a stand-in for the installers) and the `version` file holding `@VERSION@` and a newline. It writes the receipt to `@OSKA_HOME@/receipt.json`, then applies `change`, then runs the uninstall with `OSKA_HOME` set to `@OSKA_HOME@` and the user's home (`HOME`, and `USERPROFILE` on Windows) to `@HOME@`.
+
+A case may also have `oska_home`, where the Oska home is instead of `@HOME@/.oska` (`@OSKA_HOME@`, `@BIN@` and `@EXE@` follow it), and `link_first`: links made before anything else, each a `path` and a `link_to` directory, which is made first. The rest is then written through them.
 
 Placeholders, in `receipt.json` and in the paths and texts of `case.json`:
 
@@ -88,7 +90,7 @@ In a path, `/` stands for the platform's separator: on Windows each harness writ
 
 `expect` has an outcome for each of `sh`, `ps1`, `oskac_unix` and `oskac_windows`:
 
-- `{"refused": "unsafe_path"}`: the uninstall exits 1 with that error, and no file under the scratch home changed.
+- `{"refused": "unsafe_path"}`: the uninstall exits 1 with that error, and no file under the scratch home changed. With a `reason` too, its `message` contains that text. (PowerShell writes its own files under a scratch `USERPROFILE`, so `test.ps1` checks that every file there before is unchanged and nothing new is in `@OSKA_HOME@`.)
 - Otherwise it exits 0, and `removed` and `kept` are the lists it prints, in any order (for `oskac` on Windows, `pending` counts as removed). `path_hint` says whether its `path_hint` is a string, and `contents`, if there, maps a path to the text that file must hold afterwards. Every path it lists as removed is gone, and every file it does not list is still there.
 
-To add a kind, add it to the tables above and add fixtures that use it, with an outcome for every implementation. The tests fail until the kinds here, the kinds the fixtures use and the kinds each implementation writes and reads agree.
+To add a kind, add it to the tables above and add fixtures that use it, with an outcome for every implementation. The tests fail until they agree: the kinds in the table above, the kinds the fixtures use, the kinds `oskac` knows, and, for each installer, the kinds it writes and the rows the "Written by" column gives it.

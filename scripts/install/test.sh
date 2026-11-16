@@ -1093,11 +1093,22 @@ receipt_fixture() {
   expect=$(jq -c '.expect.sh' "$dir/case.json")
   local root="$PWD/$name"
   f_home=$root/home
-  f_oska=$f_home/.oska
+  f_oska=$(jq -r '.oska_home // "@HOME@/.oska"' "$dir/case.json")
+  f_oska=${f_oska//@HOME@/$f_home}
   f_bin=$f_oska/bin
   f_exe=$f_bin/oskac
   f_project=$f_home/project
   f_version=1.2.3
+  f_sums='{}'
+  # Links in place of a directory the rest is then written through.
+  while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    path=$(fj '.path | fill(false)' -r <<<"$item")
+    mkdir -p "$(fj '.link_to | fill(false)' -r <<<"$item")" "$(dirname "$path")"
+    ln -s "$(fj '.link_to | fill(false)' -r <<<"$item")" "$path"
+  done <<EOF
+$(jq -c '.link_first // [] | .[]' "$dir/case.json")
+EOF
   mkdir -p "$f_bin"
   printf '#!/bin/sh\necho "oskac %s"\n' "$f_version" >"$f_exe"
   printf '%s\n' "$f_version" >"$f_oska/version"
@@ -1138,6 +1149,8 @@ EOF
   if [ "$(jq -r '.refused // ""' <<<"$expect")" != "" ]; then
     if [ "$status" != 1 ] || [ "$(jq -r .error "$root.json")" != "$(jq -r .refused <<<"$expect")" ]; then
       echo "expected a refusal (exit $status): $(cat "$root.json")"
+    elif ! jq -e --arg r "$(jq -r '.reason // ""' <<<"$expect")" '.message | contains($r)' "$root.json" >/dev/null; then
+      echo "expected a refusal saying $(jq .reason <<<"$expect"): $(cat "$root.json")"
     elif ! tree_of "$root" | diff "$root.before" - >/dev/null; then
       echo "refused, but changed files"
     fi
@@ -1193,27 +1206,30 @@ test_uninstall_meets_every_receipt_fixture() {
   [ -z "$failed" ] || fail "$failed"
 }
 
-# The kinds the receipt doc defines: its "Entry kinds" table.
+# The kinds the receipt doc says <installer> writes: the rows of its
+# "Entry kinds" table written by "both installers" or by <installer>.
 documented_kinds() {
   # shellcheck disable=SC2016 # the backticks are in awk and sed patterns
-  awk '/^## Entry kinds/ { on = 1; next } /^## / { on = 0 } on && /^\| `/' "$here/../../docs/guide/install-receipt.md" |
+  awk -F '|' -v by="$1" '/^## Entry kinds/ { on = 1; next } /^## / { on = 0 }
+    on && /^\| `/ && (index($3, "both installers") || index($3, by))' "$here/../../docs/guide/install-receipt.md" |
     sed 's/^| `\([a-z_]*\)`.*/\1/' | LC_ALL=C sort
 }
 
-# Every kind install.sh writes is one the receipt doc defines, so a kind
-# added here alone fails; the fixtures then show what every uninstaller
-# does with it.
-test_every_kind_it_writes_is_documented() {
+# The kinds install.sh writes are exactly the kinds the receipt doc says it
+# writes, so a kind added on one side alone fails; the fixtures then show
+# what every uninstaller does with it.
+test_the_kinds_it_writes_are_the_documented_ones() {
   release 1.2.3
   latest 1.2.3
   agent_setup
   mkdir -p proj
   SHELL=/bin/bash install --json --add-to-path --hook proj >/dev/null
-  local written undocumented
+  local written documented
   written=$(jq -r '.files[].kind' home/.oska/receipt.json | LC_ALL=C sort -u)
-  [ "$(printf '%s\n' "$written" | wc -l | tr -d ' ')" = 5 ] || fail "wrote only the kinds $written"
-  undocumented=$(LC_ALL=C comm -23 <(printf '%s\n' "$written") <(documented_kinds))
-  [ -z "$undocumented" ] || fail "writes kinds docs/guide/install-receipt.md does not define: $undocumented"
+  documented=$(documented_kinds install.sh)
+  [ -n "$documented" ] || fail "docs/guide/install-receipt.md defines no kinds for install.sh"
+  [ "$written" = "$documented" ] ||
+    fail "writes the kinds $(tr "\n" " " <<<"$written"), but docs/guide/install-receipt.md says $(tr "\n" " " <<<"$documented")"
 }
 
 # ---- --add-to-path and --hook -------------------------------------------------

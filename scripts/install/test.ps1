@@ -1117,7 +1117,11 @@ function Get-FixtureTree([string]$Root) {
     $lines = Get-ChildItem -Recurse -Force -LiteralPath $Root | Sort-Object FullName | ForEach-Object {
         if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { "$($_.FullName) (link)" }
         elseif ($_.PSIsContainer) { $_.FullName }
-        else { "$($_.FullName) $(Get-Sha256 $_.FullName)" }
+        else {
+            # A file the shell holds open under a scratch profile may not
+            # be readable; it is still listed.
+            try { "$($_.FullName) $(Get-Sha256 $_.FullName)" } catch { "$($_.FullName) (unreadable)" }
+        }
     }
     @($lines) -join "`n"
 }
@@ -1131,11 +1135,21 @@ function Invoke-ReceiptFixture([string]$Dir) {
     $root = Join-Path (Get-Location).Path $name
     $userHome = Join-Path $root 'home'
     $oska = Join-Path $userHome '.oska'
+    $oskaTemplate = Get-Prop $case 'oska_home'
+    if ($oskaTemplate) { $oska = $oskaTemplate.Replace('/', '\').Replace('@HOME@', $userHome) }
     $bin = Join-Path $oska 'bin'
     $places = @{
         home = $userHome; oska = $oska; bin = $bin; exe = (Join-Path $bin 'oskac.exe')
         project = (Join-Path $userHome 'project'); version = '1.2.3'; sums = @{}
         names = @{ home = 'HOME'; oska = 'OSKA_HOME'; bin = 'BIN'; exe = 'EXE'; project = 'PROJECT'; version = 'VERSION' }
+    }
+    # Links in place of a directory the rest is then written through.
+    foreach ($item in (Get-List $case 'link_first')) {
+        $path = Format-Fixture (Get-Prop $item 'path') $places -Path
+        $target = Format-Fixture (Get-Prop $item 'link_to') $places -Path
+        [void](New-Item -ItemType Directory -Force -Path $target)
+        [void](New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path))
+        [void](New-Item -ItemType Junction -Path $path -Target $target)
     }
     [void](New-Item -ItemType Directory -Force -Path $bin)
     Write-Text $places.exe "fake oskac`n"
@@ -1172,10 +1186,16 @@ function Invoke-ReceiptFixture([string]$Dir) {
 
     $before = Get-FixtureTree $root
     $beforePaths = @(Get-ChildItem -Recurse -Force -LiteralPath $root | ForEach-Object { $_.FullName })
-    # USERPROFILE is left alone: the shell would write its own files under
-    # a scratch profile, and install.ps1 uses it only to find .config\oska,
-    # which it refuses anywhere.
-    $out = Invoke-Installer @('--json', '--uninstall') -OskaHome $oska
+    # The user profile is the scratch home, where install.ps1 looks for
+    # .config\oska. The shell writes its own files under it too, which the
+    # checks below allow for.
+    $savedProfile = $env:USERPROFILE
+    try {
+        $env:USERPROFILE = $userHome
+        $out = Invoke-Installer @('--json', '--uninstall') -OskaHome $oska
+    } finally {
+        $env:USERPROFILE = $savedProfile
+    }
     $status = $script:status
     if (@($out).Count -ne 1) { return "not one line of JSON (exit $status): $script:stdout $script:stderr" }
     $result = @($out)[0] | ConvertFrom-Json
@@ -1183,11 +1203,17 @@ function Invoke-ReceiptFixture([string]$Dir) {
     $refused = Get-Prop $expect 'refused'
     if ($null -ne $refused) {
         if ($status -ne 1 -or (Get-Prop $result 'error') -ne $refused) { return "expected a refusal (exit $status): $script:stdout" }
-        $after = Get-FixtureTree $root
-        if ($after -ne $before) {
-            $diff = Compare-Object ($before -split "`n") ($after -split "`n") | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" }
-            return "refused, but changed files: $($diff -join '; ')"
+        $reason = Get-Prop $expect 'reason'
+        if ($reason -and -not ([string](Get-Prop $result 'message')).Contains($reason)) {
+            return "expected a refusal saying '$reason': $script:stdout"
         }
+        # Every file there before is unchanged, and nothing new is in the
+        # Oska home. New files elsewhere are the shell's, in its profile.
+        $beforeLines = @($before -split "`n")
+        $afterLines = @((Get-FixtureTree $root) -split "`n")
+        $changed = @($beforeLines | Where-Object { $afterLines -cnotcontains $_ })
+        $changed += @($afterLines | Where-Object { $beforeLines -cnotcontains $_ -and $_.StartsWith($oska, [StringComparison]::OrdinalIgnoreCase) })
+        if ($changed.Count -gt 0) { return "refused, but changed files: $($changed -join '; ')" }
         return ''
     }
     if ($status -ne 0) { return "expected an uninstall (exit $status): $script:stdout" }
@@ -1206,7 +1232,9 @@ function Invoke-ReceiptFixture([string]$Dir) {
         if (Test-Path -LiteralPath $p) { $problems += "$p is reported removed and is still there" }
     }
     foreach ($p in $beforePaths) {
-        if (-not (Test-Path -LiteralPath $p) -and $removed -notcontains $p) { $problems += "$p is gone but not reported removed" }
+        if (-not (Test-Path -LiteralPath $p) -and $removed -notcontains $p -and $p -notlike "$userHome\AppData\*") {
+            $problems += "$p is gone but not reported removed"
+        }
     }
     $contents = Get-Prop $expect 'contents'
     if ($null -ne $contents) {
@@ -1230,10 +1258,11 @@ function Test-UninstallMeetsEveryReceiptFixture {
     }
 }
 
-# Every kind install.ps1 writes is one the receipt doc defines, so a kind
-# added here alone fails; the fixtures then show what every uninstaller
-# does with it.
-function Test-EveryKindItWritesIsDocumented {
+# The kinds install.ps1 writes are exactly the kinds the receipt doc says
+# it writes (the rows of its "Entry kinds" table written by "both
+# installers" or by install.ps1), so a kind added on one side alone fails;
+# the fixtures then show what every uninstaller does with it.
+function Test-TheKindsItWritesAreTheDocumentedOnes {
     Use-UserPath {
         New-Release '1.2.3'
         Set-Latest '1.2.3'
@@ -1242,14 +1271,15 @@ function Test-EveryKindItWritesIsDocumented {
         $doc = [IO.File]::ReadAllText((Join-Path $here '../../docs/guide/install-receipt.md'))
         $section = ($doc -split '## Entry kinds')[1]
         $section = ($section -split "`n## ")[0]
-        $documented = @([regex]::Matches($section, '(?m)^\| `([a-z_]+)`') | ForEach-Object { $_.Groups[1].Value })
-        Assert ($documented.Count -eq 6) "the doc defines the kinds $($documented -join ', ')"
+        $documented = @([regex]::Matches($section, '(?m)^\| `([a-z_]+)` \| ([^|]*)\|') |
+            Where-Object { $_.Groups[2].Value.Contains('both installers') -or $_.Groups[2].Value.Contains('install.ps1') } |
+            ForEach-Object { $_.Groups[1].Value })
+        Assert ($documented.Count -gt 0) 'docs/guide/install-receipt.md defines no kinds for install.ps1'
         $receipt = Get-Content -Raw home/.oska/receipt.json | ConvertFrom-Json
         $written = @($receipt.files | ForEach-Object { $_.kind } | Sort-Object -Unique)
-        Assert ($written.Count -eq 3) "wrote only the kinds $($written -join ', ')"
-        foreach ($kind in $written) {
-            Assert ($documented -ccontains $kind) "writes the kind $kind, which docs/guide/install-receipt.md does not define"
-        }
+        $documentedText = Get-SortedText $documented
+        $writtenText = Get-SortedText $written
+        Assert ($writtenText -ceq $documentedText) "writes the kinds [$writtenText], but docs/guide/install-receipt.md says [$documentedText]"
     }
 }
 
@@ -1338,7 +1368,7 @@ function Test-UninstallRemovesTheUserPathEntryIfItIsStillThere {
     }
 }
 
-function Test-UninstallKeepsAUserPathWhoseEntryIsGone {
+function Test-UninstallReportsAUserPathEntryThatIsGone {
     Use-UserPath {
         New-Release '1.2.3'
         Set-Latest '1.2.3'
@@ -1349,8 +1379,11 @@ function Test-UninstallKeepsAUserPathWhoseEntryIsGone {
         $before = Get-UserPath
         $result = Read-Json (Invoke-Installer @('--json', '--uninstall'))
         Assert ((Get-UserPath) -eq $before) 'the user PATH changed'
-        Assert (@($result.kept) -contains $bin) "kept is $(@($result.kept) -join ' | ')"
-        Assert ($result.path_hint -like "*$bin*") "path_hint is $($result.path_hint)"
+        # bin is handled with the home and listed once: here removed, as it
+        # was left empty; the gone entry is said in path_hint.
+        Assert (@($result.kept) -notcontains $bin) "kept is $(@($result.kept) -join ' | ')"
+        Assert (@($result.removed) -contains $bin) "removed is $(@($result.removed) -join ' | ')"
+        Assert ($result.path_hint -like "*no longer in your user PATH*$bin*") "path_hint is $($result.path_hint)"
     }
 }
 

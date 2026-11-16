@@ -667,6 +667,23 @@ fn has_escape_outside_ascii(text: &str) -> bool {
     false
 }
 
+/// Whether an object anywhere in `value` has two keys that differ only in
+/// ASCII case. The parser refuses an exact repeat; PowerShell cannot tell
+/// these apart either, so `install.ps1` refuses them, and `oskac` does too.
+fn repeats_a_key_but_for_case(value: &Json) -> bool {
+    match value {
+        Json::Obj(fields) => {
+            fields.iter().enumerate().any(|(i, (key, _))| {
+                fields[..i]
+                    .iter()
+                    .any(|(earlier, _)| earlier.eq_ignore_ascii_case(key))
+            }) || fields.iter().any(|(_, v)| repeats_a_key_but_for_case(v))
+        }
+        Json::Arr(items) => items.iter().any(repeats_a_key_but_for_case),
+        _ => false,
+    }
+}
+
 /// Whether a `binary` or `record` entry with a SHA-256, other than the
 /// receipt, is still what the installer wrote, as far as `oskac` can tell
 /// without computing a SHA-256: a binary only if it is this `oskac`, and a
@@ -737,6 +754,11 @@ fn uninstall_in(home: &Path) -> Result<(Outcome, Option<String>), Refusal> {
         ));
     }
     let receipt = Json::parse(&text).map_err(cannot_read)?;
+    if repeats_a_key_but_for_case(&receipt) {
+        return Err(cannot_read(
+            "it has keys that differ only in case, which install.ps1 cannot tell apart".to_string(),
+        ));
+    }
     if receipt.get("schema") != Some(&Json::Num("1".to_string())) {
         return Err(cannot_read("its schema is not the integer 1".to_string()));
     }

@@ -590,7 +590,8 @@ oska_paths() {
 #   files   one line per entry of a receipt's "files",
 #           "k<kind><TAB>s<sha256><TAB>p<path><TAB>l<line><TAB>j<project>",
 #           with an empty value for a missing or non-string one. It also fails on a schema other than
-#           1, no "files" array, a \001 in an entry's value, or a \u escape
+#           1, no "files" array, a \001 in an entry's value, keys that differ
+#           only in case, or a \u escape
 #           outside printable ASCII anywhere in the file.
 json_read() {
   LC_ALL=C awk -v mode="$1" '
@@ -642,8 +643,10 @@ json_read() {
           if (index(key, "/") || peek() != ":") die()
           pos++
           k = at "/" key
-          if (k in seen) die()
-          seen[k] = 1
+          # In a receipt, keys that differ only in case are repeats too,
+          # as install.ps1 cannot tell them apart.
+          if ((mode == "files" ? tolower(k) : k) in seen) die()
+          seen[mode == "files" ? tolower(k) : k] = 1
           value(k)
           if (vtype == "\"") fields = fields k "\ts" sval "\n"
           else if (vtype == "n") fields = fields k "\tn" sval "\n"

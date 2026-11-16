@@ -9,11 +9,11 @@
 
 mod common;
 
-use common::portable::{json_escape, set_home, Scratch};
+use common::portable::{json_escape, output_of, set_home, shown, Scratch};
 use common::Json;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Command;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -35,22 +35,24 @@ fn repo_file(path: &str) -> Vec<u8> {
     std::fs::read(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
 }
 
-/// A path as `oskac` prints it: without the `\\?\` prefix of a Windows
-/// canonical path.
-fn shown(path: &Path) -> PathBuf {
-    let text = path.to_string_lossy();
-    PathBuf::from(text.strip_prefix(r"\\?\").unwrap_or(&text).to_string())
-}
-
 /// The places a fixture's placeholders stand for.
 struct Places {
     values: Vec<(&'static str, String)>,
 }
 
 impl Places {
-    fn new(root: &Path) -> Places {
+    /// The places under `root`. `oska_home`, if given, is where the Oska
+    /// home is, as a template on `@HOME@`; it is `@HOME@/.oska` otherwise.
+    fn new(root: &Path, oska_home: Option<&str>) -> Places {
         let home = root.join("home");
-        let oska = home.join(".oska");
+        let oska = match oska_home {
+            Some(template) => PathBuf::from(
+                template
+                    .replace('/', std::path::MAIN_SEPARATOR_STR)
+                    .replace("@HOME@", &home.to_string_lossy()),
+            ),
+            None => home.join(".oska"),
+        };
         let bin = oska.join("bin");
         let exe = bin.join(if cfg!(windows) { "oskac.exe" } else { "oskac" });
         let text = |p: &Path| p.to_string_lossy().into_owned();
@@ -183,21 +185,6 @@ fn write(path: &Path, bytes: &[u8]) {
     std::fs::write(path, bytes).expect("write");
 }
 
-/// Run `command`, trying again while the kernel says the executable is
-/// busy: another test's `fork` can hold the copy's write handle open for an
-/// instant after the copy is made.
-fn output_of(command: &mut Command) -> Output {
-    for _ in 0..50 {
-        match command.output() {
-            Err(e) if e.raw_os_error() == Some(26) => {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-            result => return result.expect("oskac should run"),
-        }
-    }
-    command.output().expect("oskac should run")
-}
-
 /// Set a fixture up, run the uninstall, and check the outcome. Returns
 /// what was wrong, if anything.
 fn run_case(name: &str, dir: &Path) -> Result<(), String> {
@@ -211,12 +198,20 @@ fn run_case(name: &str, dir: &Path) -> Result<(), String> {
     };
     let template = std::fs::read_to_string(dir.join("receipt.json")).expect("receipt.json");
     let scratch = Scratch::new("oskac-receipt", name);
-    let root = shown(scratch.path());
-    let places = Places::new(&root);
+    let root = PathBuf::from(shown(scratch.path()));
+    let places = Places::new(&root, case.get("oska_home").map(string));
     let exe = places.get("@EXE@");
     let oska = places.get("@OSKA_HOME@");
     let home = places.get("@HOME@");
 
+    // Links in place of a directory the rest is then written through.
+    for item in items(case.get("link_first")) {
+        let path = PathBuf::from(places.path(string(item.get("path").expect("path"))));
+        let target = PathBuf::from(places.path(string(item.get("link_to").expect("link_to"))));
+        std::fs::create_dir_all(&target).expect("link target");
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+        link(&target, &path);
+    }
     std::fs::create_dir_all(places.get("@BIN@")).expect("bin");
     std::fs::copy(env!("CARGO_BIN_EXE_oskac"), &exe).expect("copy oskac");
     write(&oska.join("version"), format!("{VERSION}\n").as_bytes());
@@ -275,6 +270,12 @@ fn run_case(name: &str, dir: &Path) -> Result<(), String> {
     if let Some(code) = expect.get("refused") {
         if output.status.code() != Some(1) || result.get("error") != Some(code) {
             return Err(format!("expected a refusal with {code:?}: {}", said()));
+        }
+        if let Some(reason) = expect.get("reason") {
+            let message = result.get("message").map(string).unwrap_or_default();
+            if !message.contains(string(reason)) {
+                return Err(format!("expected a refusal saying {reason:?}: {}", said()));
+            }
         }
         if snapshot(&root) != before {
             return Err("refused, but changed files".to_string());
@@ -381,11 +382,15 @@ fn the_fixtures_cover_every_documented_kind_and_every_implementation() {
     let mut used = std::collections::BTreeSet::new();
     for name in fixture_names() {
         let dir = fixtures_dir().join(&name);
-        // Read as text: a receipt may be spelled in a way this test's JSON
-        // reader does not take, such as a schema of 1.0.
+        // A receipt this test's JSON reader does not take (a schema of
+        // 1.0) is about how a receipt is read, not about a kind.
         let receipt = std::fs::read_to_string(dir.join("receipt.json")).expect("receipt.json");
-        for part in receipt.split("\"kind\": \"").skip(1) {
-            used.insert(part.split('"').next().expect("a kind").to_string());
+        if let Ok(receipt) = std::panic::catch_unwind(|| Json::parse(&receipt)) {
+            for file in items(receipt.get("files")) {
+                if let Some(Json::Str(kind)) = file.get("kind") {
+                    used.insert(kind.clone());
+                }
+            }
         }
         let case = Json::parse(&std::fs::read_to_string(dir.join("case.json")).expect("case.json"));
         let Some(Json::Obj(expect)) = case.get("expect") else {

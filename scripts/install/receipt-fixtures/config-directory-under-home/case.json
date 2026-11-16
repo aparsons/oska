@@ -1,0 +1,28 @@
+{
+  "about": "A hook in the .config/oska directory of the user's home, where the settings and credentials are, refuses the whole uninstall. On Windows the kind alone refuses it.",
+  "setup": [
+    {
+      "name": "hook_script",
+      "path": "@HOME@/.config/oska/.claude/hooks/oska-check.sh",
+      "published": "hook_script"
+    }
+  ],
+  "expect": {
+    "sh": {
+      "refused": "unsafe_path",
+      "reason": ".config/oska"
+    },
+    "ps1": {
+      "refused": "unsafe_path",
+      "reason": "which this installer does not remove"
+    },
+    "oskac_unix": {
+      "refused": "unsafe_path",
+      "reason": ".config/oska"
+    },
+    "oskac_windows": {
+      "refused": "unsafe_path",
+      "reason": "which the installer for this platform never writes"
+    }
+  }
+}

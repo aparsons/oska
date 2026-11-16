@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::portable::{json_escape, json_path, set_home, Scratch};
+use common::portable::{json_escape, json_path, output_of, set_home, shown, Scratch};
 use common::Json;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -15,13 +15,6 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// A scratch directory for the test named `name`.
 fn new_scratch(name: &str) -> Scratch {
     Scratch::new("oskac-self", name)
-}
-
-/// A path as `oskac` prints it: without the `\\?\` prefix of a Windows
-/// canonical path.
-fn shown(path: &Path) -> String {
-    let text = path.to_string_lossy();
-    text.strip_prefix(r"\\?\").unwrap_or(&text).to_string()
 }
 
 fn text(bytes: &[u8]) -> String {
@@ -48,21 +41,6 @@ fn install(home: &Path, version: &str, extra: &str) -> PathBuf {
     );
     std::fs::write(home.join("receipt.json"), receipt).expect("receipt");
     exe
-}
-
-/// Run `command`, trying again while the kernel says the executable is
-/// busy: another test's `fork` can hold the copy's write handle open for an
-/// instant after the copy is made.
-fn output_of(command: &mut Command) -> Output {
-    for _ in 0..50 {
-        match command.output() {
-            Err(e) if e.raw_os_error() == Some(26) => {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-            result => return result.expect("oskac should run"),
-        }
-    }
-    command.output().expect("oskac should run")
 }
 
 fn run(exe: &Path, home: &Path, args: &[&str]) -> Output {

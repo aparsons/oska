@@ -34,7 +34,8 @@
       "path_hint": false
     },
     "ps1": {
-      "refused": "unsafe_path"
+      "refused": "unsafe_path",
+      "reason": "which this installer does not remove"
     },
     "oskac_unix": {
       "removed": [
@@ -51,7 +52,8 @@
       "path_hint": false
     },
     "oskac_windows": {
-      "refused": "unsafe_path"
+      "refused": "unsafe_path",
+      "reason": "which the installer for this platform never writes"
     }
   }
 }
