@@ -47,3 +47,9 @@ When every step of `scripts/check.sh` passes, it writes the tree hash it checked
 ## CI on ticket branches
 
 A push to `ticket/**` or `review-fixes-*` runs `ci.yml`, `windows.yml` and `confinement.yml`, so every platform verifies a ticket before the spec's pull request. Name ticket branches `ticket/<number>-<slug>`.
+
+## Reading CI failures
+
+- Find a failed job: `gh pr checks <pr> --json name,bucket,link` (bucket `fail` marks failures). The job id is the last number in the link.
+- Read its log: `gh api repos/aparsons/oska/actions/jobs/<id>/logs --allow-escape-sequences`. Find the failing step with `| grep -nE '##\[error\]|FAIL|panicked'` and read around those lines, not the whole log.
+- In your report, list everything not run locally: PowerShell, Windows and macOS, and say whether CI passed on each.
