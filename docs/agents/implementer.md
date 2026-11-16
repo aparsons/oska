@@ -71,6 +71,7 @@ The loop orchestrator reviews each ticket PR on two axes (Standards and Spec) wh
 - Fix review findings on the same branch (`ticket/<number>-<slug>`) and push. Do not open a second PR.
 - A ticket PR merges only when CI is green and every finding is fixed or deferred to a filed issue that links the PR.
 - The orchestrator files the issue for a deferred finding (you do, when told to). The issue links the PR.
+- Before merging a ticket PR, confirm that every workflow whose `paths` filter matches the PR's changed files reported checks (`gh pr checks <pr>` lists a check from each). A workflow with no checks counts as a failure, not a pass: GitHub creates no jobs for a workflow file it cannot parse (PR #329), and `scripts/check.sh` runs actionlint on the workflow files to catch that locally.
 
 ## Reading CI failures
 
