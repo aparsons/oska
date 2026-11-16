@@ -1066,6 +1066,191 @@ function Test-UninstallHintsAtThePathAndExplainsItself {
     }
 }
 
+# ---- The shared receipt fixtures ---------------------------------------------
+#
+# receipt-fixtures\ holds receipts and what each uninstaller must do with
+# them; test.sh and oskac's receipt_fixtures tests run the same ones. The
+# format is in docs/guide/install-receipt.md.
+
+# A field of an object ConvertFrom-Json made, or $null: under strict mode
+# a missing property is an error. The comma keeps an array an array.
+function Get-Prop([object]$Object, [string]$Name) {
+    $p = $Object.PSObject.Properties[$Name]
+    if ($p) { return , $p.Value }
+    return $null
+}
+
+# The array field $Name of $Object, or an empty array.
+function Get-List([object]$Object, [string]$Name) {
+    $v = Get-Prop $Object $Name
+    if ($null -eq $v) { return , @() }
+    return , @($v)
+}
+
+# $List as strings, sorted by ordinal, joined with ' | '.
+function Get-SortedText([object[]]$List) {
+    $a = [string[]]@($List | Where-Object { $null -ne $_ })
+    [Array]::Sort($a, [StringComparer]::Ordinal)
+    return ($a -join ' | ')
+}
+
+# $Template with the fixture's placeholders filled from $Places. As a
+# path (-Path), '/' becomes '\'; as the receipt (-Json), '\\' and the values
+# are JSON-escaped; as a text, neither.
+function Format-Fixture([string]$Template, [hashtable]$Places, [switch]$Path, [switch]$Json) {
+    $text = $Template
+    if ($Path) { $text = $text.Replace('/', '\') }
+    if ($Json) { $text = $text.Replace('/', '\\') }
+    foreach ($name in @('oska', 'project', 'home', 'bin', 'exe', 'version')) {
+        $value = [string]$Places[$name]
+        if ($Json) { $value = $value.Replace('\', '\\').Replace('"', '\"') }
+        $text = $text.Replace('@' + $Places.names[$name] + '@', $value)
+    }
+    foreach ($sum in $Places.sums.GetEnumerator()) {
+        $text = $text.Replace('@SHA:' + $sum.Key + '@', $sum.Value)
+    }
+    $text
+}
+
+# Every path under $Root, with a file's SHA-256, or a link marked.
+function Get-FixtureTree([string]$Root) {
+    $lines = Get-ChildItem -Recurse -Force -LiteralPath $Root | Sort-Object FullName | ForEach-Object {
+        if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { "$($_.FullName) (link)" }
+        elseif ($_.PSIsContainer) { $_.FullName }
+        else { "$($_.FullName) $(Get-Sha256 $_.FullName)" }
+    }
+    @($lines) -join "`n"
+}
+
+# Sets up the fixture in $Dir under .\<its name>, runs --uninstall, and
+# returns what is wrong, if anything.
+function Invoke-ReceiptFixture([string]$Dir) {
+    $name = Split-Path -Leaf $Dir
+    $case = [IO.File]::ReadAllText((Join-Path $Dir 'case.json')) | ConvertFrom-Json
+    $expect = Get-Prop (Get-Prop $case 'expect') 'ps1'
+    $root = Join-Path (Get-Location).Path $name
+    $userHome = Join-Path $root 'home'
+    $oska = Join-Path $userHome '.oska'
+    $bin = Join-Path $oska 'bin'
+    $places = @{
+        home = $userHome; oska = $oska; bin = $bin; exe = (Join-Path $bin 'oskac.exe')
+        project = (Join-Path $userHome 'project'); version = '1.2.3'; sums = @{}
+        names = @{ home = 'HOME'; oska = 'OSKA_HOME'; bin = 'BIN'; exe = 'EXE'; project = 'PROJECT'; version = 'VERSION' }
+    }
+    [void](New-Item -ItemType Directory -Force -Path $bin)
+    Write-Text $places.exe "fake oskac`n"
+    Write-Text (Join-Path $oska 'version') "$($places.version)`n"
+    $places.sums['exe'] = Get-Sha256 $places.exe
+    $places.sums['version'] = Get-Sha256 (Join-Path $oska 'version')
+    foreach ($item in (Get-List $case 'setup')) {
+        $path = Format-Fixture (Get-Prop $item 'path') $places -Path
+        [void](New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path))
+        $text = Get-Prop $item 'text'
+        $published = Get-Prop $item 'published'
+        $target = Get-Prop $item 'link_to'
+        if ($null -ne $text) {
+            Write-Text $path (Format-Fixture $text $places)
+        } elseif ($published -eq 'hook_script') {
+            Copy-Item -LiteralPath "$here/../../site/agent-setup/oska-check.sh" -Destination $path
+        } elseif ($published -eq 'hook_settings') {
+            Copy-Item -LiteralPath "$here/../../site/agent-setup/claude-settings.json" -Destination $path
+        } else {
+            $target = Format-Fixture $target $places -Path
+            if (Test-Path -LiteralPath $target -PathType Container) {
+                [void](New-Item -ItemType Junction -Path $path -Target $target)
+            } else {
+                [void](New-Item -ItemType SymbolicLink -Path $path -Target $target)
+            }
+        }
+        $setupName = Get-Prop $item 'name'
+        if ($setupName) { $places.sums[$setupName] = Get-Sha256 $path }
+    }
+    Write-Text (Join-Path $oska 'receipt.json') (Format-Fixture ([IO.File]::ReadAllText((Join-Path $Dir 'receipt.json'))) $places -Json)
+    foreach ($item in (Get-List $case 'change')) {
+        Write-Text (Format-Fixture (Get-Prop $item 'path') $places -Path) (Format-Fixture (Get-Prop $item 'text') $places)
+    }
+
+    $before = Get-FixtureTree $root
+    $beforePaths = @(Get-ChildItem -Recurse -Force -LiteralPath $root | ForEach-Object { $_.FullName })
+    $savedProfile = $env:USERPROFILE
+    try {
+        $env:USERPROFILE = $userHome
+        $out = Invoke-Installer @('--json', '--uninstall') -OskaHome $oska
+    } finally {
+        $env:USERPROFILE = $savedProfile
+    }
+    $status = $script:status
+    if (@($out).Count -ne 1) { return "not one line of JSON (exit $status): $script:stdout $script:stderr" }
+    $result = @($out)[0] | ConvertFrom-Json
+
+    $refused = Get-Prop $expect 'refused'
+    if ($null -ne $refused) {
+        if ($status -ne 1 -or (Get-Prop $result 'error') -ne $refused) { return "expected a refusal (exit $status): $script:stdout" }
+        if ((Get-FixtureTree $root) -ne $before) { return 'refused, but changed files' }
+        return ''
+    }
+    if ($status -ne 0) { return "expected an uninstall (exit $status): $script:stdout" }
+    $problems = @()
+    $removed = @(Get-List $result 'removed')
+    foreach ($list in @('removed', 'kept')) {
+        $got = Get-SortedText (Get-List $result $list)
+        $want = Get-SortedText @((Get-List $expect $list) | ForEach-Object { Format-Fixture $_ $places -Path })
+        if ($got -cne $want) { $problems += "$list is [$got], expected [$want]" }
+    }
+    if (($null -ne (Get-Prop $result 'path_hint')) -ne [bool](Get-Prop $expect 'path_hint')) {
+        $problems += "path_hint is $(Get-Prop $result 'path_hint')"
+    }
+    foreach ($p in $removed) {
+        if (Test-Path -LiteralPath $p) { $problems += "$p is reported removed and is still there" }
+    }
+    foreach ($p in $beforePaths) {
+        if (-not (Test-Path -LiteralPath $p) -and $removed -notcontains $p) { $problems += "$p is gone but not reported removed" }
+    }
+    $contents = Get-Prop $expect 'contents'
+    if ($null -ne $contents) {
+        foreach ($c in $contents.PSObject.Properties) {
+            $p = Format-Fixture $c.Name $places -Path
+            if ([IO.File]::ReadAllText($p) -cne (Format-Fixture $c.Value $places)) { $problems += "$p holds $([IO.File]::ReadAllText($p))" }
+        }
+    }
+    if ($problems.Count -gt 0) { return "$($problems -join '; '); output: $script:stdout" }
+    return ''
+}
+
+function Test-UninstallMeetsEveryReceiptFixture {
+    Use-UserPath {
+        $failed = @()
+        foreach ($dir in (Get-ChildItem -Directory -LiteralPath (Join-Path $here 'receipt-fixtures') | Sort-Object Name)) {
+            $why = Invoke-ReceiptFixture $dir.FullName
+            if ($why) { $failed += "$($dir.Name): $why" }
+        }
+        Assert ($failed.Count -eq 0) "$($failed.Count) fixtures failed:`n$($failed -join "`n")"
+    }
+}
+
+# Every kind install.ps1 writes is one the receipt doc defines, so a kind
+# added here alone fails; the fixtures then show what every uninstaller
+# does with it.
+function Test-EveryKindItWritesIsDocumented {
+    Use-UserPath {
+        New-Release '1.2.3'
+        Set-Latest '1.2.3'
+        [void](Invoke-Installer @('--json', '--add-to-path'))
+        Assert ($script:status -eq 0) "the install exited $script:status"
+        $doc = [IO.File]::ReadAllText((Join-Path $here '../../docs/guide/install-receipt.md'))
+        $section = ($doc -split '## Entry kinds')[1]
+        $section = ($section -split "`n## ")[0]
+        $documented = @([regex]::Matches($section, '(?m)^\| `([a-z_]+)`') | ForEach-Object { $_.Groups[1].Value })
+        Assert ($documented.Count -eq 6) "the doc defines the kinds $($documented -join ', ')"
+        $receipt = Get-Content -Raw home/.oska/receipt.json | ConvertFrom-Json
+        $written = @($receipt.files | ForEach-Object { $_.kind } | Sort-Object -Unique)
+        Assert ($written.Count -eq 3) "wrote only the kinds $($written -join ', ')"
+        foreach ($kind in $written) {
+            Assert ($documented -ccontains $kind) "writes the kind $kind, which docs/guide/install-receipt.md does not define"
+        }
+    }
+}
+
 # ---- --add-to-path and --hook -------------------------------------------------
 
 # Runs <Body> with the user PATH as it is now, and puts it back after: the

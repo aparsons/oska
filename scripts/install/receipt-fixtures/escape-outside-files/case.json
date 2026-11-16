@@ -1,0 +1,17 @@
+{
+  "about": "A \\u escape for anything but printable ASCII refuses the whole uninstall wherever it is, not only in an entry.",
+  "expect": {
+    "sh": {
+      "refused": "unsafe_path"
+    },
+    "ps1": {
+      "refused": "unsafe_path"
+    },
+    "oskac_unix": {
+      "refused": "unsafe_path"
+    },
+    "oskac_windows": {
+      "refused": "unsafe_path"
+    }
+  }
+}

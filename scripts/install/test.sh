@@ -1048,6 +1048,170 @@ test_uninstall_hints_at_the_path_and_explains_itself() {
   jq -r .path_hint out.json | grep -q "$bin is on your PATH" || fail "path_hint is $(jq .path_hint out.json)"
 }
 
+# ---- The shared receipt fixtures ---------------------------------------------
+#
+# receipt-fixtures/ holds receipts and what each uninstaller must do with
+# them; test.ps1 and oskac's receipt_fixtures tests run the same ones. The
+# format is in docs/guide/install-receipt.md.
+
+# The placeholders of a fixture as jq definitions: `fill(false)` fills a
+# path or a text, `fill(true)` the receipt, with JSON-escaped values.
+FILL='def fill($json):
+  def v($x): if $json then ($x | tojson | .[1:-1]) else $x end;
+  gsub("@OSKA_HOME@"; v($oska)) | gsub("@PROJECT@"; v($project))
+  | gsub("@HOME@"; v($home)) | gsub("@BIN@"; v($bin)) | gsub("@EXE@"; v($exe))
+  | gsub("@VERSION@"; v($version))
+  | reduce ($sums | to_entries[]) as $s (.; gsub("@SHA:" + $s.key + "@"; $s.value));'
+
+# fj <filter> <jq options...>: jq with the fixture's placeholders defined.
+fj() {
+  local filter=$1
+  shift
+  jq "$@" --arg home "$f_home" --arg oska "$f_oska" --arg bin "$f_bin" --arg exe "$f_exe" \
+    --arg project "$f_project" --arg version "$f_version" --argjson sums "$f_sums" "$FILL $filter"
+}
+
+# Every path under <dir>, with a file's SHA-256 or a link's target.
+tree_of() {
+  local f
+  find "$1" | LC_ALL=C sort | while IFS= read -r f; do
+    if [ -L "$f" ]; then
+      printf '%s -> %s\n' "$f" "$(readlink "$f")"
+    elif [ -f "$f" ]; then
+      printf '%s %s\n' "$f" "$(sha256 "$f")"
+    else
+      printf '%s\n' "$f"
+    fi
+  done
+}
+
+# receipt_fixture <dir>: sets up the fixture in <dir> under ./<its name>,
+# runs --uninstall, and prints what is wrong, if anything.
+receipt_fixture() {
+  local dir=$1 name=${1##*/} expect item path status=0 got want
+  expect=$(jq -c '.expect.sh' "$dir/case.json")
+  local root="$PWD/$name"
+  f_home=$root/home
+  f_oska=$f_home/.oska
+  f_bin=$f_oska/bin
+  f_exe=$f_bin/oskac
+  f_project=$f_home/project
+  f_version=1.2.3
+  mkdir -p "$f_bin"
+  printf '#!/bin/sh\necho "oskac %s"\n' "$f_version" >"$f_exe"
+  printf '%s\n' "$f_version" >"$f_oska/version"
+  f_sums=$(jq -cn --arg e "$(sha256 "$f_exe")" --arg v "$(sha256 "$f_oska/version")" '{exe: $e, version: $v}')
+  while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    path=$(fj '.path | fill(false)' -r <<<"$item")
+    mkdir -p "$(dirname "$path")"
+    case $(jq -r 'if .text then "text" elif .published then "published" else "link" end' <<<"$item") in
+      text) fj '.text | fill(false)' -j <<<"$item" >"$path" ;;
+      published)
+        case $(jq -r .published <<<"$item") in
+          hook_script) cp "$here/../../site/agent-setup/oska-check.sh" "$path" ;;
+          *) cp "$here/../../site/agent-setup/claude-settings.json" "$path" ;;
+        esac ;;
+      link) ln -s "$(fj '.link_to | fill(false)' -r <<<"$item")" "$path" ;;
+    esac
+    if [ "$(jq -r '.name // ""' <<<"$item")" != "" ]; then
+      f_sums=$(jq -c --arg k "$(jq -r .name <<<"$item")" --arg v "$(sha256 "$path")" '.[$k] = $v' <<<"$f_sums")
+    fi
+  done <<EOF
+$(jq -c '.setup // [] | .[]' "$dir/case.json")
+EOF
+  jq -Rs . "$dir/receipt.json" | fj 'fill(true)' -j >"$f_oska/receipt.json"
+  while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    fj '.text | fill(false)' -j <<<"$item" >"$(fj '.path | fill(false)' -r <<<"$item")"
+  done <<EOF
+$(jq -c '.change // [] | .[]' "$dir/case.json")
+EOF
+
+  tree_of "$root" >"$root.before"
+  HOME="$f_home" OSKA_HOME="$f_oska" sh -s -- --json --uninstall <pinned/install.sh >"$root.json" 2>"$root.err" || status=$?
+  if ! jq -e . "$root.json" >/dev/null 2>&1; then
+    echo "not one JSON object (exit $status): $(cat "$root.json" "$root.err")"
+    return
+  fi
+  if [ "$(jq -r '.refused // ""' <<<"$expect")" != "" ]; then
+    if [ "$status" != 1 ] || [ "$(jq -r .error "$root.json")" != "$(jq -r .refused <<<"$expect")" ]; then
+      echo "expected a refusal (exit $status): $(cat "$root.json")"
+    elif ! tree_of "$root" | diff "$root.before" - >/dev/null; then
+      echo "refused, but changed files"
+    fi
+    return
+  fi
+  if [ "$status" != 0 ]; then
+    echo "expected an uninstall (exit $status): $(cat "$root.json")"
+    return
+  fi
+  for list in removed kept; do
+    got=$(jq -c ".$list | sort" "$root.json")
+    want=$(fj "[.${list}[] | fill(false)] | sort" -c <<<"$expect")
+    [ "$got" = "$want" ] || echo "$list $got, expected $want"
+  done
+  [ "$(jq '.path_hint != null' "$root.json")" = "$(jq .path_hint <<<"$expect")" ] ||
+    echo "path_hint is $(jq .path_hint "$root.json")"
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    if [ -e "$path" ] || [ -L "$path" ]; then echo "$path is reported removed and is still there"; fi
+  done <<EOF
+$(jq -r '.removed[]' "$root.json")
+EOF
+  while IFS= read -r path; do
+    path=${path%% *}
+    [ -n "$path" ] || continue
+    if [ ! -e "$path" ] && [ ! -L "$path" ] && ! jq -e --arg p "$path" '.removed | index($p)' "$root.json" >/dev/null; then
+      echo "$path is gone but not reported removed"
+    fi
+  done <"$root.before"
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    fj '.contents[$k] | fill(false)' -j --arg k "$path" <<<"$expect" >"$root.want"
+    path=$(fj '$k | fill(false)' -nr --arg k "$path")
+    cmp -s "$root.want" "$path" || echo "$path holds $(cat "$path")"
+  done <<EOF
+$(jq -r '.contents // {} | keys[]' <<<"$expect")
+EOF
+}
+
+test_uninstall_meets_every_receipt_fixture() {
+  pinned
+  local dir problems failed=
+  for dir in "$here"/receipt-fixtures/*/; do
+    dir=${dir%/}
+    problems=$(receipt_fixture "$dir")
+    if [ -n "$problems" ]; then
+      failed="$failed${dir##*/}: $problems
+"
+    fi
+  done
+  [ -z "$failed" ] || fail "$failed"
+}
+
+# The kinds the receipt doc defines: its "Entry kinds" table.
+documented_kinds() {
+  awk '/^## Entry kinds/ { on = 1; next } /^## / { on = 0 } on && /^\| `/' "$here/../../docs/guide/install-receipt.md" |
+    sed 's/^| `\([a-z_]*\)`.*/\1/' | LC_ALL=C sort
+}
+
+# Every kind install.sh writes is one the receipt doc defines, so a kind
+# added here alone fails; the fixtures then show what every uninstaller
+# does with it.
+test_every_kind_it_writes_is_documented() {
+  release 1.2.3
+  latest 1.2.3
+  agent_setup
+  mkdir -p proj
+  SHELL=/bin/bash install --json --add-to-path --hook proj >/dev/null
+  local written undocumented
+  written=$(jq -r '.files[].kind' home/.oska/receipt.json | LC_ALL=C sort -u)
+  [ "$(printf '%s\n' "$written" | wc -l | tr -d ' ')" = 5 ] || fail "wrote only the kinds $written"
+  undocumented=$(LC_ALL=C comm -23 <(printf '%s\n' "$written") <(documented_kinds))
+  [ -z "$undocumented" ] || fail "writes kinds docs/guide/install-receipt.md does not define: $undocumented"
+}
+
 # ---- --add-to-path and --hook -------------------------------------------------
 
 MARK="# added by the Oska installer"

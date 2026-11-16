@@ -590,7 +590,8 @@ oska_paths() {
 #   files   one line per entry of a receipt's "files",
 #           "k<kind><TAB>s<sha256><TAB>p<path><TAB>l<line><TAB>j<project>",
 #           with an empty value for a missing or non-string one. It also fails on a schema other than
-#           1, no "files" array, or a \001 in an entry's value.
+#           1, no "files" array, a \001 in an entry's value, or a \u escape
+#           outside printable ASCII anywhere in the file.
 json_read() {
   LC_ALL=C awk -v mode="$1" '
     function die() { exit 1 }
@@ -618,6 +619,9 @@ json_read() {
           if (h !~ /^[0-9a-f][0-9a-f][0-9a-f][0-9a-f]$/) die()
           v = 0
           for (i = 1; i <= 4; i++) v = v * 16 + index("0123456789abcdef", substr(h, i, 1)) - 1
+          # A receipt is refused for one anywhere, as install.ps1 and
+          # oskac refuse it (docs/guide/install-receipt.md).
+          if ((v < 32 || v >= 127) && mode == "files") die()
           out = out (v >= 32 && v < 127 ? sprintf("%c", v) : "\001")
           pos += 4
         } else die()

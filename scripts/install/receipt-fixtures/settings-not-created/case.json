@@ -1,0 +1,43 @@
+{
+  "about": "Settings the installer found, not created (no SHA-256), are kept, with a hint to remove the hook by hand.",
+  "setup": [
+    {
+      "path": "@PROJECT@/.claude/settings.json",
+      "text": "{\"mine\": true}\n"
+    }
+  ],
+  "expect": {
+    "sh": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@",
+        "@OSKA_HOME@"
+      ],
+      "kept": [
+        "@PROJECT@/.claude/settings.json"
+      ],
+      "path_hint": false
+    },
+    "ps1": {
+      "refused": "unsafe_path"
+    },
+    "oskac_unix": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@",
+        "@OSKA_HOME@"
+      ],
+      "kept": [
+        "@PROJECT@/.claude/settings.json"
+      ],
+      "path_hint": false
+    },
+    "oskac_windows": {
+      "refused": "unsafe_path"
+    }
+  }
+}

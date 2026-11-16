@@ -1,0 +1,23 @@
+{
+  "about": "A profile line in a file that is not a shell profile directly in the home refuses the whole uninstall.",
+  "setup": [
+    {
+      "path": "@HOME@/notes.txt",
+      "text": "# mine\nexport PATH=\"@BIN@:$PATH\" # added by the Oska installer\n"
+    }
+  ],
+  "expect": {
+    "sh": {
+      "refused": "unsafe_path"
+    },
+    "ps1": {
+      "refused": "unsafe_path"
+    },
+    "oskac_unix": {
+      "refused": "unsafe_path"
+    },
+    "oskac_windows": {
+      "refused": "unsafe_path"
+    }
+  }
+}

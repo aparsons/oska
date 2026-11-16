@@ -1,0 +1,59 @@
+{
+  "about": "The version file changed since it was installed: it is kept, and so is the Oska home it keeps from being empty.",
+  "change": [
+    {
+      "path": "@OSKA_HOME@/version",
+      "text": "mine\n"
+    }
+  ],
+  "expect": {
+    "sh": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@"
+      ],
+      "kept": [
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@"
+      ],
+      "path_hint": false
+    },
+    "ps1": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@"
+      ],
+      "kept": [
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@"
+      ],
+      "path_hint": false
+    },
+    "oskac_unix": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@"
+      ],
+      "kept": [
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@"
+      ],
+      "path_hint": false
+    },
+    "oskac_windows": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@"
+      ],
+      "kept": [
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@"
+      ],
+      "path_hint": false
+    }
+  }
+}
