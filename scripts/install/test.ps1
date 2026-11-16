@@ -1172,13 +1172,10 @@ function Invoke-ReceiptFixture([string]$Dir) {
 
     $before = Get-FixtureTree $root
     $beforePaths = @(Get-ChildItem -Recurse -Force -LiteralPath $root | ForEach-Object { $_.FullName })
-    $savedProfile = $env:USERPROFILE
-    try {
-        $env:USERPROFILE = $userHome
-        $out = Invoke-Installer @('--json', '--uninstall') -OskaHome $oska
-    } finally {
-        $env:USERPROFILE = $savedProfile
-    }
+    # USERPROFILE is left alone: the shell would write its own files under
+    # a scratch profile, and install.ps1 uses it only to find .config\oska,
+    # which it refuses anywhere.
+    $out = Invoke-Installer @('--json', '--uninstall') -OskaHome $oska
     $status = $script:status
     if (@($out).Count -ne 1) { return "not one line of JSON (exit $status): $script:stdout $script:stderr" }
     $result = @($out)[0] | ConvertFrom-Json
@@ -1186,12 +1183,17 @@ function Invoke-ReceiptFixture([string]$Dir) {
     $refused = Get-Prop $expect 'refused'
     if ($null -ne $refused) {
         if ($status -ne 1 -or (Get-Prop $result 'error') -ne $refused) { return "expected a refusal (exit $status): $script:stdout" }
-        if ((Get-FixtureTree $root) -ne $before) { return 'refused, but changed files' }
+        $after = Get-FixtureTree $root
+        if ($after -ne $before) {
+            $diff = Compare-Object ($before -split "`n") ($after -split "`n") | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" }
+            return "refused, but changed files: $($diff -join '; ')"
+        }
         return ''
     }
     if ($status -ne 0) { return "expected an uninstall (exit $status): $script:stdout" }
     $problems = @()
-    $removed = @(Get-List $result 'removed')
+    # Not @(...): that would wrap the array Get-List returns in another.
+    $removed = Get-List $result 'removed'
     foreach ($list in @('removed', 'kept')) {
         $got = Get-SortedText (Get-List $result $list)
         $want = Get-SortedText @((Get-List $expect $list) | ForEach-Object { Format-Fixture $_ $places -Path })

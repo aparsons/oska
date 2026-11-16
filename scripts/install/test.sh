@@ -1056,6 +1056,7 @@ test_uninstall_hints_at_the_path_and_explains_itself() {
 
 # The placeholders of a fixture as jq definitions: `fill(false)` fills a
 # path or a text, `fill(true)` the receipt, with JSON-escaped values.
+# shellcheck disable=SC2016 # $json and $x are jq variables, not shell ones
 FILL='def fill($json):
   def v($x): if $json then ($x | tojson | .[1:-1]) else $x end;
   gsub("@OSKA_HOME@"; v($oska)) | gsub("@PROJECT@"; v($project))
@@ -1168,7 +1169,9 @@ EOF
   done <"$root.before"
   while IFS= read -r path; do
     [ -n "$path" ] || continue
+    # shellcheck disable=SC2016 # $k is a jq variable
     fj '.contents[$k] | fill(false)' -j --arg k "$path" <<<"$expect" >"$root.want"
+    # shellcheck disable=SC2016 # $k is a jq variable
     path=$(fj '$k | fill(false)' -nr --arg k "$path")
     cmp -s "$root.want" "$path" || echo "$path holds $(cat "$path")"
   done <<EOF
@@ -1192,6 +1195,7 @@ test_uninstall_meets_every_receipt_fixture() {
 
 # The kinds the receipt doc defines: its "Entry kinds" table.
 documented_kinds() {
+  # shellcheck disable=SC2016 # the backticks are in awk and sed patterns
   awk '/^## Entry kinds/ { on = 1; next } /^## / { on = 0 } on && /^\| `/' "$here/../../docs/guide/install-receipt.md" |
     sed 's/^| `\([a-z_]*\)`.*/\1/' | LC_ALL=C sort
 }

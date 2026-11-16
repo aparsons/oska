@@ -70,7 +70,7 @@ Also, for every implementation:
 - `receipt.json`: the receipt, as text, so that a case can spell it in a way a JSON library would not write back (`1.0`, a `\u` escape).
 - `case.json`: what the case is about (`about`), what to put in place before the uninstall (`setup`, then `change`), and what each implementation must do (`expect`).
 
-Each harness makes a scratch user home and puts, before the setup, a `binary` at `@EXE@` (a copy of `oskac` for `oskac`, a stand-in for the installers) and the `version` file holding `@VERSION@` and a newline. It writes the receipt to `@OSKA_HOME@/receipt.json`, then applies `change`, then runs the uninstall with `HOME` (and `USERPROFILE`) set to `@HOME@` and `OSKA_HOME` to `@OSKA_HOME@`.
+Each harness makes a scratch user home and puts, before the setup, a `binary` at `@EXE@` (a copy of `oskac` for `oskac`, a stand-in for the installers) and the `version` file holding `@VERSION@` and a newline. It writes the receipt to `@OSKA_HOME@/receipt.json`, then applies `change`, then runs the uninstall with `OSKA_HOME` set to `@OSKA_HOME@` and the user's home to `@HOME@` (`test.ps1` leaves `USERPROFILE` as it is, as PowerShell writes its own files there).
 
 Placeholders, in `receipt.json` and in the paths and texts of `case.json`:
 
