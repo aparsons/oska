@@ -28,14 +28,15 @@ bad() {
 }
 
 # The stub every called script and tool becomes: logs its directory/name
-# (cargo: `cargo SUBCOMMAND`, and its whole command line to $STUB_LOG.args),
-# and fails when that is STUB_FAIL. The temp-leak wrapper stub then runs the
-# command it wraps. `cargo metadata` prints $STUB_METADATA, if set, with
-# @ROOT@ as the directory it runs in.
+# (cargo: `cargo SUBCOMMAND`; its whole command line goes to $STUB_LOG.cargo,
+# and with a `cargo ` prefix to $STUB_LOG.args), and fails when that is
+# STUB_FAIL. The temp-leak wrapper stub then runs the command it wraps.
+# `cargo metadata` prints $STUB_METADATA, if set, with @ROOT@ as the
+# directory it runs in.
 # shellcheck disable=SC2016 # the stub script is written out, not expanded here
 stub='#!/usr/bin/env bash
 name=$(basename "$(dirname "$0")")/$(basename "$0")
-if [ "$name" = bin/cargo ]; then echo "cargo $*" >>"$STUB_LOG.args"; name="cargo $1"; fi
+if [ "$name" = bin/cargo ]; then echo "cargo $*" >>"$STUB_LOG.args"; echo "$*" >>"$STUB_LOG.cargo"; name="cargo $1"; fi
 echo "$name" >>"$STUB_LOG"
 if [ "$name" = "${STUB_FAIL:-}" ]; then exit 1; fi
 if [ "$name" = pass-stamp/stamp.sh ] && [ "${1:-}" = tree ]; then echo tree; fi
@@ -65,6 +66,9 @@ for tool in cargo shellcheck pwsh; do
   printf '%s' "$stub" >"$tree/bin/$tool"
   chmod +x "$tree/bin/$tool"
 done
+
+# The real docs-test list, which reads the scratch crates.
+cp "$repo_root/scripts/docs-tests/list.sh" "$tree/scripts/docs-tests/list.sh"
 
 # rustup reports the Windows target installed, so the Windows step runs its
 # (stubbed) cargo check the same on a machine with or without the target.
@@ -184,10 +188,16 @@ git_in() {
 }
 base="$work/base"
 cp -a "$tree" "$base"
-mkdir -p "$base/crates/a/src" "$base/docs" "$base/scripts/foo"
-for file in CLAUDE.md crates/a/src/lib.rs docs/index.md scripts/foo/run.sh .github/workflows/ci.yml; do
+mkdir -p "$base/crates/a/src" "$base/crates/a/tests" "$base/docs" "$base/scripts/foo"
+for file in CLAUDE.md crates/a/src/lib.rs docs/index.md docs/compiled.md scripts/foo/run.sh .github/workflows/ci.yml; do
   echo one >"$base/$file"
 done
+# Crate a's package is pkg-a. One test reads docs/, one does not, and the
+# crate itself compiles docs/compiled.md in.
+printf '[package]\nname = "pkg-a"\n' >"$base/crates/a/Cargo.toml"
+echo 'const D: &str = include_str!("../../../docs/index.md");' >"$base/crates/a/tests/reads_docs.rs"
+echo 'fn plain() {}' >"$base/crates/a/tests/plain.rs"
+echo 'const H: &str = include_str!("../../../docs/compiled.md");' >"$base/crates/a/src/help.rs"
 git_in "$base" init -q -b main
 git_in "$base" add -A
 git_in "$base" commit -q -m base
@@ -204,6 +214,7 @@ fresh_clone() {
 check_repo() {
   : >"$work/log"
   : >"$work/log.args"
+  : >"$work/log.cargo"
   set +e
   out=$(cd "$repo" && env -u CI -u GITHUB_ACTIONS PATH="$tree/bin:$PATH" STUB_LOG="$work/log" \
     STUB_METADATA="$work/metadata.json" \
@@ -211,6 +222,7 @@ check_repo() {
   status=$?
   set -e
   log=$(cat "$work/log")
+  cargo_log=$(cat "$work/log.cargo")
 }
 
 ran_cargo() { printf '%s\n' "$log" | grep -q '^cargo '; }
@@ -256,13 +268,50 @@ else
   bad "skipped cargo steps wait for no build slot; the next step takes it" "out: $out"
 fi
 
-# Each case: a change, and whether the cargo steps run.
+# --- only docs/ changed: just the tests that read docs/ run -----------------
+full_cargo='fmt --all --check
+clippy --all-targets -- -D warnings
+check -p oskac --tests --target x86_64-pc-windows-gnu
+test --all'
+for change in 'echo two >docs/index.md' 'echo new >docs/new.md' \
+  'echo two >docs/index.md && git -c user.name=t -c user.email=t@e -c commit.gpgsign=false commit -qam d'; do
+  fresh_clone
+  (cd "$repo" && eval "$change")
+  check_repo
+  name="only docs/ changed ($change)"
+  if [ "$status" -eq 0 ] && [ "$cargo_log" = "test -p pkg-a --test reads_docs" ]; then
+    ok "$name: runs just the tests that read docs/"
+  else
+    bad "$name: runs just the tests that read docs/" "exit $status, cargo: $cargo_log; out: $out"
+  fi
+done
+if printf '%s\n' "$out" | grep -qx '  pkg-a reads_docs' &&
+  [ "$(printf '%s\n' "$out" | grep -c 'only docs/ differs from origin/main')" -eq 4 ] &&
+  printf '%s\n' "$out" | grep -x -A1 '== oskac type-checks for Windows' | grep -q '^skipped: only docs/ differs'; then
+  ok "each cargo step of a docs-only run says why it skipped or narrowed, and which tests run"
+else
+  bad "each cargo step of a docs-only run says why it skipped or narrowed, and which tests run" "out: $out"
+fi
+if [ "$(printf '%s\n' "$log" | grep -cx pass-stamp/stamp.sh)" -eq 1 ] &&
+  printf '%s\n' "$out" | grep -q 'pass stamp: not written'; then
+  ok "a docs-only run writes no pass stamp"
+else
+  bad "a docs-only run writes no pass stamp" "log: $log; out: $out"
+fi
+headers=$(printf '%s\n' "$out" | sed -n 's/^== //p')
+if [ "$headers" = "$list" ]; then
+  ok "a docs-only run still prints every step"
+else
+  bad "a docs-only run still prints every step" "got: $headers"
+fi
+
+# Each case: a change, and whether all of the cargo steps run.
 cargo_case() {
   local name=$1 change=$2
   fresh_clone
   (cd "$repo" && eval "$change")
   check_repo
-  if [ "$status" -eq 0 ] && ran_cargo; then
+  if [ "$status" -eq 0 ] && [ "$cargo_log" = "$full_cargo" ]; then
     ok "$name runs the cargo steps"
   else
     bad "$name runs the cargo steps" "exit $status, out: $out"
@@ -271,7 +320,21 @@ cargo_case() {
 cargo_case "a committed crate change" 'echo two >crates/a/src/lib.rs && git -c user.name=t -c user.email=t@e -c commit.gpgsign=false commit -qam c'
 cargo_case "an uncommitted crate change" 'echo two >crates/a/src/lib.rs'
 cargo_case "a new untracked crate file" 'echo new >crates/a/src/new.rs'
-cargo_case "a docs/ change (Rust tests read docs/)" 'echo two >docs/index.md'
+cargo_case "a docs/ change with a crate change" 'echo two >docs/index.md && echo two >crates/a/src/lib.rs'
+cargo_case "a change to a docs/ file a crate compiles in" 'echo two >docs/compiled.md'
+cargo_case "a deleted docs/ file" 'git rm -q docs/index.md'
+cargo_case "a docs-test list change" 'echo "# two" >>scripts/docs-tests/list.sh'
+# A docs/ reader the list cannot see is in the base: the drift guard fails,
+# so a docs-only change runs all of cargo and says why.
+cargo_case "a docs/ change with an unclassified docs/ reader" \
+  'echo "fn f() { std::fs::read_to_string(format!(\"{}/docs/x\", other::root())); }" >crates/a/tests/hidden.rs &&
+   git add -A && git -c user.name=t -c user.email=t@e -c commit.gpgsign=false commit -qm hidden &&
+   git update-ref refs/remotes/origin/main HEAD && echo two >docs/index.md'
+if printf '%s\n' "$out" | grep -q 'crates/a/tests/hidden.rs'; then
+  ok "an unclassified docs/ reader is named"
+else
+  bad "an unclassified docs/ reader is named" "out: $out"
+fi
 cargo_case "a Cargo.toml change" 'echo two >Cargo.toml'
 cargo_case "a new rust-toolchain file" 'echo two >rust-toolchain.toml'
 cargo_case "a deleted script (Rust tests read the tracked files)" 'git rm -q scripts/foo/run.sh'
@@ -299,17 +362,19 @@ if ran_cargo; then ok "a shallow clone runs the cargo steps"; else bad "a shallo
 for ci in CI GITHUB_ACTIONS; do
   fresh_clone
   echo two >"$repo/CLAUDE.md"
+  echo two >"$repo/docs/index.md"
   : >"$work/log"
+  : >"$work/log.cargo"
   set +e
   out=$(cd "$repo" && env -u CI -u GITHUB_ACTIONS "$ci=true" PATH="$tree/bin:$PATH" STUB_LOG="$work/log" \
     scripts/check.sh 2>&1)
   status=$?
   set -e
-  log=$(cat "$work/log")
-  if [ "$status" -eq 0 ] && ran_cargo; then
-    ok "$ci=true runs the cargo steps"
+  cargo_log=$(cat "$work/log.cargo")
+  if [ "$status" -eq 0 ] && [ "$cargo_log" = "$full_cargo" ]; then
+    ok "$ci=true runs all of the cargo steps, even for a docs/ change"
   else
-    bad "$ci=true runs the cargo steps" "exit $status, out: $out"
+    bad "$ci=true runs all of the cargo steps, even for a docs/ change" "exit $status, cargo: $cargo_log"
   fi
 done
 
@@ -418,12 +483,22 @@ else
   bad "--fast tests every crate when cargo metadata fails" "exit $status, got: $cargo_test"
 fi
 
-fast_case "a docs change" 'echo two >docs/index.md'
+fast_case "a Cargo.toml change" 'echo two >Cargo.toml'
 if [ "$cargo_test" = "cargo test --all" ]; then
   ok "--fast tests every crate for a cargo input outside crates/"
 else
   bad "--fast tests every crate for a cargo input outside crates/" "got: $cargo_test"
 fi
+
+# Fast and docs mode compose: a docs-only change runs just the docs tests.
+fast_case "a docs change" 'echo two >docs/index.md'
+if [ "$status" -eq 0 ] && [ "$headers" = "cargo test (private temporary directory)," ] &&
+  [ "$cargo_test" = "cargo test -p pkg-a --test reads_docs" ]; then
+  ok "--fast on a docs-only change runs just the tests that read docs/"
+else
+  bad "--fast on a docs-only change runs just the tests that read docs/" "exit $status, headers: $headers, cargo: $cargo_test"
+fi
+no_stamp "--fast on a docs-only change"
 
 fast_case "a script change" 'echo "# two" >>scripts/kill-guard/test.sh'
 if [ "$status" -eq 0 ] && [ "$headers" = "kill guard tests,shellcheck," ] &&
@@ -509,7 +584,7 @@ if command -v cargo >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
       cd "$repo_root"
       eval "$(sed -n '/^cargo_input() {/,/^}/p; /^changes() {/,/^}/p; /^fast_crates() {/,/^}/p; /^fast_packages() {/,/^}/p' scripts/check.sh)"
       # shellcheck disable=SC2034 # read by the functions eval'd above
-      changes_why=known deleted='' changed=$2
+      changes_why=known deleted='' cargo_changed=$2
       "$1"
     )
   }
@@ -587,6 +662,17 @@ elif [ -z "$outside" ]; then
   ok "every literal repo-file read in crates/ ($seen) is a cargo input"
 else
   bad "every literal repo-file read in crates/ is a cargo input" "not inputs:$outside"
+fi
+
+# --- --docs-tests needs --cargo -----------------------------------------------
+cp "$tree/scripts/check.sh" "$work/check.sh.orig"
+sed -i 's/^if step "installer tests" /if step "installer tests" --docs-tests /' "$tree/scripts/check.sh"
+check --list
+cp "$work/check.sh.orig" "$tree/scripts/check.sh"
+if [ "$status" -eq 2 ] && grep -q -- '--docs-tests needs --cargo' <<<"$out"; then
+  ok "a step tagged --docs-tests without --cargo is a usage error"
+else
+  bad "a step tagged --docs-tests without --cargo is a usage error" "exit $status: $out"
 fi
 
 # --- an unknown argument is a usage error -----------------------------------
