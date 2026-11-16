@@ -50,4 +50,4 @@ A push to `ticket/**` or `review-fixes-*` runs `ci.yml`, `windows.yml` and `conf
 
 ## Windows on demand
 
-To re-test one crate or test on Windows after a push, dispatch the workflow: `gh workflow run windows.yml --ref <branch> -f crate=oskac -f filter=self_cli`. `crate` is `all` (default), `oska-run` or `oskac`; `filter` is an optional test name filter. Push and pull-request runs are unchanged.
+To re-test one crate or test on Windows after a push, dispatch the workflow: `gh workflow run windows.yml --ref <branch> -f crate=oskac -f test=self_cli`. `crate` is `all` (default), `oska-run` or `oskac`; `test` is an optional integration-test target (needs one crate); `filter` is an optional test name substring. A dispatch that runs no test fails. Push and pull-request runs are unchanged.
