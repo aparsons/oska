@@ -42,7 +42,7 @@ When every step of `scripts/check.sh` passes, it writes the tree hash it checked
 
 ## Check steps
 
-`scripts/check.sh --list` prints the check's steps in order and runs nothing. Each step is one self-contained `if step "NAME"; then ... fi` block in `scripts/check.sh`; to add a step, add one block where it should run. There is no other list to update, and `scripts/check-steps/test.sh` proves `--list` matches what a run prints.
+`scripts/check.sh --list` prints the check's steps in order and runs nothing. Each step is one self-contained `if step "NAME"; then ... fi` block in `scripts/check.sh`; to add a step, add one block where it should run. Tag it after the name: `--fast` also puts it in the fast tier, and `--no-slot` runs a cheap step without a build slot. A step whose tool is missing calls `skip_step "REASON"`. There is no other list to update. `scripts/check-steps/test.sh` proves that `--list` matches what a run prints and that every `scripts/*/test.sh` runs.
 
 ## Build slots
 

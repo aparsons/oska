@@ -7,9 +7,10 @@
 #   scripts/check.sh --list    print the step names, in order; run nothing
 #
 # The steps are the `if step "NAME"; then ... fi` blocks below, in the order
-# they run; each block's comment says what it checks. When every step passes,
-# the run writes the pass stamp, if the tree did not change meanwhile, so the
-# pre-push hook skips a repeat run on the same tree.
+# they run. A block's name and command say what it checks; its comment, if
+# any, says the rest. When every step passes, the run writes the pass stamp,
+# if the tree did not change meanwhile, so the pre-push hook skips a repeat
+# run on the same tree.
 #
 # To add a step, add one block where it should run, and nothing else:
 #
@@ -17,22 +18,39 @@
 #     bash scripts/my-thing/test.sh
 #   fi
 #
+# Options after the name tag the step:
+#
+#   --fast      the step also belongs to the fast tier (every step runs in a
+#               full run)
+#   --no-slot   the step is cheap and runs without a build slot
+#
+# A step whose tool is missing calls `skip_step "REASON"` instead of failing.
+#
+# Everything a run does happens inside a step block or in `step` and
+# `finish` themselves, so --list can never run any of it.
+#
 # OSKA_BUILD_SLOTS=N (unset by default: no limit) makes the run wait for one
-# of N machine-wide build slots before the build and test steps; see
+# of N machine-wide build slots before the first step that needs one; see
 # scripts/build-slots/acquire.sh.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-case "$*" in
-  "") mode=run ;;
-  --list) mode=list ;;
-  *)
-    echo "usage: scripts/check.sh [--list]" >&2
-    exit 2
-    ;;
-esac
+usage() {
+  echo "usage: scripts/check.sh [--list]" >&2
+  exit 2
+}
+
+mode=run  # run, or list: print the step names and run nothing
+tier=full # full, or fast: only steps tagged --fast
+while [ $# -gt 0 ]; do
+  case $1 in
+    --list) mode=list ;;
+    *) usage ;;
+  esac
+  shift
+done
 
 # A git hook (such as .githooks/pre-push) exports GIT_DIR and related
 # variables. Scripts that run git on their own scratch repositories must not
@@ -41,33 +59,74 @@ esac
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
   GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
 
-# The tree being checked, for the pass stamp written at the very end.
-checked_tree=
-if [ "$mode" = run ]; then
-  checked_tree=$(scripts/pass-stamp/stamp.sh tree 2>/dev/null || true)
-fi
-
 # Rust may be installed for interactive shells only.
 if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
   PATH="$HOME/.cargo/bin:$PATH"
 fi
 
-# step NAME: opens a step's block, `if step "NAME"; then ... fi`. In a run it
-# prints the step's header and the block runs; with --list it prints NAME and
-# the block is skipped. So the list is always the steps that run, in order.
+started=      # set when the first step of a run starts
+checked_tree= # the tree being checked, for the pass stamp `finish` writes
+have_slot=    # set once the build slot is held; it is held until the run ends
+
+# step NAME [--fast] [--no-slot]: opens a step's block,
+# `if step "NAME"; then ... fi`. In a run it prints the step's header and the
+# block runs; with --list it prints NAME and the block is skipped. So the list
+# is always the steps that run, in order. The first step of a run records the
+# tree for the pass stamp; the first step without --no-slot waits for a build
+# slot.
 step() {
-  if [ "$mode" = list ]; then
-    printf '%s\n' "$1"
+  local name=$1 fast='' slot=1
+  shift
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --fast) fast=1 ;;
+      --no-slot) slot= ;;
+      *)
+        printf 'check.sh: step "%s": unknown option %s\n' "$name" "$1" >&2
+        exit 2
+        ;;
+    esac
+    shift
+  done
+  if [ "$tier" = fast ] && [ -z "$fast" ]; then
     return 1
   fi
-  printf '\n== %s\n' "$1"
+  if [ "$mode" = list ]; then
+    printf '%s\n' "$name"
+    return 1
+  fi
+  if [ -z "$started" ]; then
+    started=1
+    checked_tree=$(scripts/pass-stamp/stamp.sh tree 2>/dev/null || true)
+  fi
+  if [ -n "$slot" ] && [ -z "$have_slot" ]; then
+    have_slot=1
+    . scripts/build-slots/acquire.sh
+  fi
+  printf '\n== %s\n' "$name"
 }
+
+# skip_step REASON: inside a step's block, says why the step did not run.
+skip_step() {
+  printf '%s\n' "$1"
+}
+
 fail() {
   printf 'check.sh: %s\n' "$1" >&2
   exit 1
 }
 
-if step "no external crates"; then
+# finish: after the last block. In a run, every step passed: stamp the tree
+# checked, if it did not change meanwhile.
+finish() {
+  if [ "$mode" = list ]; then
+    exit 0
+  fi
+  scripts/pass-stamp/stamp.sh write "$checked_tree"
+  printf '\nAll checks passed.\n'
+}
+
+if step "no external crates" --no-slot; then
   # Every package in the lock file comes from this workspace: a registry or git
   # crate gets a `source =` line.
   if grep -n '^source = ' Cargo.lock; then
@@ -75,7 +134,7 @@ if step "no external crates"; then
   fi
 fi
 
-if step "unsafe only in oska-sys"; then
+if step "unsafe only in oska-sys" --no-slot; then
   # The workspace forbids `unsafe_code`, and oska-sys alone may use it
   # (ADR 0009). The guard compiles every other crate with `unsafe_code`
   # forbidden on rustc's command line, refuses cargo configs and workflow
@@ -83,13 +142,13 @@ if step "unsafe only in oska-sys"; then
   scripts/unsafe-guard/guard.sh
 fi
 
-if step "std.rt intrinsics only in std.rt"; then
+if step "std.rt intrinsics only in std.rt" --no-slot; then
   # System-call and memory intrinsics (`rt_sys_*`, `rt_mem_*`) and `use std.rt`
   # may appear only in the toolchain's own std.rt source (ADR 0013).
   scripts/intrinsic-guard/guard.sh
 fi
 
-if step "only official actions, rust-toolchain pinned to a commit"; then
+if step "only official actions, rust-toolchain pinned to a commit" --no-slot; then
   toolchain_pin='dtolnay/rust-toolchain@[0-9a-f]{40}'
   bad_uses=$(grep -rnE --include='*.yml' --include='*.yaml' '^[[:space:]]*-?[[:space:]]*uses:' .github/workflows |
     grep -vE "uses:[[:space:]]*(actions/[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+|$toolchain_pin)([[:space:]]|$)" || true)
@@ -99,23 +158,17 @@ if step "only official actions, rust-toolchain pinned to a commit"; then
   fi
 fi
 
-if step "every workflow job has a timeout"; then
+if step "every workflow job has a timeout" --no-slot; then
   # GitHub lets a job run 360 minutes unless it says otherwise. The guard fails
   # a job with no `timeout-minutes`, a non-literal value, or one above 60.
   scripts/workflow-guard/guard.sh
 fi
 
-# Wait for a build slot when OSKA_BUILD_SLOTS is set; held until this run ends.
-# The steps above are cheap; the build and test steps below take the slot.
-if [ "$mode" = run ]; then
-  . scripts/build-slots/acquire.sh
-fi
-
-if step "cargo fmt"; then
+if step "cargo fmt" --fast; then
   cargo fmt --all --check
 fi
 
-if step "cargo clippy"; then
+if step "cargo clippy" --fast; then
   cargo clippy --all-targets -- -D warnings
 fi
 
@@ -180,15 +233,8 @@ if step "shellcheck"; then
   if command -v shellcheck >/dev/null 2>&1; then
     shellcheck -S warning scripts/*.sh scripts/*/*.sh site/agent-setup/*.sh .githooks/pre-push
   else
-    echo "shellcheck not installed; skipped (CI runs it)"
+    skip_step "shellcheck not installed; skipped (CI runs it)"
   fi
 fi
 
-if [ "$mode" = list ]; then
-  exit 0
-fi
-
-# Every step passed: stamp the tree checked, if it did not change meanwhile.
-scripts/pass-stamp/stamp.sh write "$checked_tree"
-
-printf '\nAll checks passed.\n'
+finish
