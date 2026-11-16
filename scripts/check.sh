@@ -242,14 +242,31 @@ changed_cargo_input() {
   return 1
 }
 
-# fast_crates: cargo test's package arguments in the fast tier: `-p NAME` for
-# each package with a changed file and each package that depends on one,
-# directly or not (dev-dependencies included), in workspace order. Package
-# names and directories come from `cargo metadata`, never from directory
-# names. It prints --all when it cannot narrow: a cargo input outside the
-# packages changed (Cargo.toml, docs/, ...), a file was deleted, or cargo
-# metadata or jq failed.
+# fast_crates: cargo test's package arguments in the fast tier. The fast
+# tier must never be slower than the full check for the same change, so when
+# the packages to test are half the workspace or more, it prints --all: the
+# full step's own command, in one invocation that shares its build. Otherwise
+# it prints fast_packages' `-p` list, again one invocation.
 fast_crates() {
+  local packages total picked
+  packages=$(fast_packages)
+  if [ "$packages" != --all ]; then
+    total=$(cargo metadata --no-deps --format-version 1 --offline 2>/dev/null | jq '.packages | length' 2>/dev/null) || total=0
+    picked=$(grep -o -- '-p ' <<<"$packages" | wc -l)
+    if [ $((picked * 2)) -ge "${total:-0}" ]; then
+      packages=--all
+    fi
+  fi
+  echo "$packages"
+}
+
+# fast_packages: `-p NAME` for each package with a changed file and each
+# package that depends on one, directly or not (dev-dependencies included),
+# in workspace order. Package names and directories come from `cargo
+# metadata`, never from directory names. It prints --all when it cannot
+# narrow: a cargo input outside the packages changed (Cargo.toml, docs/,
+# ...), a file was deleted, or cargo metadata or jq failed.
+fast_packages() {
   local graph path dir name deps dep found set=' ' grew=1 out=''
   if ! changes || [ -n "$deleted" ] ||
     ! graph=$(cargo metadata --no-deps --format-version 1 --offline 2>/dev/null |
@@ -406,7 +423,7 @@ fi
 if step "cargo test (private temporary directory)" --fast --cargo; then
   # A test that leaves a file or directory in the temporary directory fails the
   # check here, naming it, instead of slowly filling the shared /tmp. The fast
-  # tier tests only the changed crates (fast_crates).
+  # tier tests only the changed crates and their dependents (fast_crates).
   packages=--all
   if [ "$tier" = fast ]; then packages=$(fast_crates); fi
   # shellcheck disable=SC2086 # one word per package argument

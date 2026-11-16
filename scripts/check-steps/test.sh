@@ -315,7 +315,8 @@ done
 
 # --- --fast: fmt, clippy and the tests of what changed, never a stamp -----
 # The scratch workspace, as `cargo metadata --no-deps` describes it: a and b
-# stand alone; app (in crates/app-dir) depends on lib, and top on app.
+# stand alone; app (in crates/app-dir) depends on lib and core, top on app,
+# and c, d and e on core. So a change to core reaches six of the nine.
 pkg() { # NAME DIR DEPS...
   local name=$1 dir=$2 deps='' dep
   shift 2
@@ -324,9 +325,10 @@ pkg() { # NAME DIR DEPS...
   done
   printf '{"name":"%s","manifest_path":"@ROOT@/%s/Cargo.toml","dependencies":[%s]}' "$name" "$dir" "$deps"
 }
-printf '{"packages":[%s,%s,%s,%s,%s],"workspace_root":"@ROOT@"}\n' \
-  "$(pkg a crates/a)" "$(pkg b crates/b)" "$(pkg app crates/app-dir lib)" \
-  "$(pkg lib crates/lib)" "$(pkg top crates/top app)" >"$work/metadata.json"
+printf '{"packages":[%s,%s,%s,%s,%s,%s,%s,%s,%s],"workspace_root":"@ROOT@"}\n' \
+  "$(pkg a crates/a)" "$(pkg b crates/b)" "$(pkg c crates/c core)" "$(pkg d crates/d core)" \
+  "$(pkg e crates/e core)" "$(pkg app crates/app-dir lib core)" "$(pkg lib crates/lib)" \
+  "$(pkg top crates/top app)" "$(pkg core crates/core)" >"$work/metadata.json"
 
 # fast_case NAME CHANGE: runs `check.sh --fast` in a fresh clone after CHANGE.
 fast_case() {
@@ -388,6 +390,18 @@ if [ "$cargo_test" = "cargo test -p app -p top" ]; then
   ok "--fast names a crate by its package name, not its directory"
 else
   bad "--fast names a crate by its package name, not its directory" "got: $cargo_test"
+fi
+
+fast_case "a core crate change" 'mkdir -p crates/core && echo two >crates/core/lib.rs'
+if [ "$cargo_test" = "cargo test --all" ]; then
+  ok "--fast runs the full test command when half the workspace or more would be tested"
+else
+  bad "--fast runs the full test command when half the workspace or more would be tested" "got: $cargo_test"
+fi
+if [ "$(grep -c '^cargo test' "$work/log.args")" -eq 1 ]; then
+  ok "--fast runs cargo test once"
+else
+  bad "--fast runs cargo test once" "got: $(cat "$work/log.args")"
 fi
 
 fast_case "a file in no package" 'mkdir -p crates/loose && echo two >crates/loose/x.rs'
@@ -481,20 +495,22 @@ else
 fi
 
 # --- drift guard: the real workspace's crates and their dependents ----------
-# fast_crates on this repository, with real cargo metadata: each crate's
-# changed file maps to the package its own Cargo.toml names, and a change to
-# oska-syntax tests every crate that depends on it (known from the manifests).
+# fast_packages and fast_crates on this repository, with real cargo
+# metadata: each crate's changed file maps to the package its own Cargo.toml
+# names; a change to oska-syntax reaches every crate that depends on it
+# (known from the manifests), so it runs the full test command; a change to
+# oskac, which nothing depends on, tests oskac alone.
 if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
   PATH="$HOME/.cargo/bin:$PATH"
 fi
 if command -v cargo >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-  real_fast_crates() { # PATH: fast_crates when only PATH changed
+  real() { # FUNCTION PATH: FUNCTION's output when only PATH changed
     (
       cd "$repo_root"
-      eval "$(sed -n '/^cargo_input() {/,/^}/p; /^changes() {/,/^}/p; /^fast_crates() {/,/^}/p' scripts/check.sh)"
+      eval "$(sed -n '/^cargo_input() {/,/^}/p; /^changes() {/,/^}/p; /^fast_crates() {/,/^}/p; /^fast_packages() {/,/^}/p' scripts/check.sh)"
       # shellcheck disable=SC2034 # read by the functions eval'd above
-      changes_why=known deleted='' changed=$1
-      fast_crates
+      changes_why=known deleted='' changed=$2
+      "$1"
     )
   }
   sorted() { tr ' ' '\n' | grep -v '^-p$' | LC_ALL=C sort | tr '\n' ' '; }
@@ -502,7 +518,7 @@ if command -v cargo >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
   for manifest in "$repo_root"/crates/*/Cargo.toml; do
     dir=$(dirname "$manifest")
     name=$(sed -n 's/^name = "\(.*\)"$/\1/p' "$manifest" | head -n 1)
-    got=$(real_fast_crates "crates/$(basename "$dir")/src/x.rs")
+    got=$(real fast_packages "crates/$(basename "$dir")/src/x.rs")
     case " $got " in
       *" -p $name "*) ;;
       *) unmapped="$unmapped $(basename "$dir")->'$got'" ;;
@@ -513,11 +529,23 @@ if command -v cargo >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
   else
     bad "--fast maps each crates/ directory to its manifest's package name" "got:$unmapped"
   fi
-  got=$(real_fast_crates crates/oska-syntax/src/lib.rs | sorted)
+  got=$(real fast_packages crates/oska-syntax/src/lib.rs | sorted)
   if [ "$got" = "oska-check oska-native oska-run oska-syntax oskac " ]; then
-    ok "--fast on an oska-syntax change tests every crate that depends on it"
+    ok "--fast on an oska-syntax change reaches every crate that depends on it"
   else
-    bad "--fast on an oska-syntax change tests every crate that depends on it" "got: $got"
+    bad "--fast on an oska-syntax change reaches every crate that depends on it" "got: $got"
+  fi
+  got=$(real fast_crates crates/oska-check/src/lib.rs)
+  if [ "$got" = --all ]; then
+    ok "--fast on an oska-check change runs the full test command"
+  else
+    bad "--fast on an oska-check change runs the full test command" "got: $got"
+  fi
+  got=$(real fast_crates crates/oskac/src/main.rs)
+  if [ "$got" = "-p oskac" ]; then
+    ok "--fast on an oskac change tests oskac alone"
+  else
+    bad "--fast on an oskac change tests oskac alone" "got: $got"
   fi
 else
   ok "the real workspace's crate graph: skipped (no cargo or jq here; CI runs it)"
