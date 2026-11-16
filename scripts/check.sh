@@ -320,6 +320,30 @@ if step "check step registry tests"; then
   bash scripts/check-steps/test.sh
 fi
 
+if step "workflow validation" --no-slot; then
+  # GitHub makes no jobs and no checks for a workflow it cannot parse, so a
+  # broken file looks like a green PR (#329). CI must never skip this.
+  rc=0
+  bash scripts/actionlint/run.sh || rc=$?
+  if [ "$rc" -eq 3 ]; then
+    if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+      echo "actionlint is required in CI" >&2
+      exit 1
+    fi
+    skip_step "actionlint unavailable; skipped (CI runs it)"
+  elif [ "$rc" -ne 0 ]; then
+    exit "$rc"
+  fi
+fi
+
+if step "workflow validation tests" --no-slot; then
+  bash scripts/actionlint/test.sh
+fi
+
+if step "expected workflows tests" --no-slot; then
+  bash scripts/expected-workflows/test.sh
+fi
+
 if step "shellcheck"; then
   if command -v shellcheck >/dev/null 2>&1; then
     # Same files and severity as the installers workflow.
