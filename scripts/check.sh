@@ -231,9 +231,26 @@ fi
 
 if step "shellcheck"; then
   if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck -S warning scripts/*.sh scripts/*/*.sh site/agent-setup/*.sh .githooks/pre-push
+    # Same files and severity as the installers workflow.
+    scripts/shellcheck.sh
   else
     skip_step "shellcheck not installed; skipped (CI runs it)"
+  fi
+fi
+
+if step "powershell parse"; then
+  # Syntax-only parse of the installer scripts; only Windows CI runs them.
+  if command -v pwsh >/dev/null 2>&1; then
+    pwsh -NoProfile -NonInteractive -Command '
+      $bad = 0
+      foreach ($f in "scripts/install/install.ps1", "scripts/install/test.ps1") {
+        $errors = $null
+        [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$errors)
+        foreach ($e in $errors) { "${f}:$($e.Extent.StartLineNumber): $($e.Message)"; $bad++ }
+      }
+      if ($bad -gt 0) { exit 1 }'
+  else
+    skip_step "pwsh not installed; skipped (CI runs it)"
   fi
 fi
 

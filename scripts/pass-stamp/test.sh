@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016  # single quotes hold text on purpose: patterns, commands and scripts that must not expand here
 # Tests for the pass stamp: the real .githooks/pre-push and the real
 # stamp.sh, driven by real `git push`es from scratch clones to a scratch bare
 # remote. Each scratch clone has a fake scripts/check.sh that records that it

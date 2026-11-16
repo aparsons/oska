@@ -1396,7 +1396,7 @@ function Test-CheckWithoutARequiredIndexReadsLatestJson {
     Assert ($null -eq $result.index_expires) "index_expires is $($result.index_expires)"
 }
 
-$shells = @('powershell', 'pwsh') | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue }
+$shells = @(@('powershell', 'pwsh') | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue })
 Assert ($shells.Count -gt 0) 'no PowerShell to test with'
 # Only this file's tests: installed modules define Test-* functions too.
 $tests = Get-ChildItem function:Test-* |

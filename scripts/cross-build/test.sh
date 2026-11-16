@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016  # single quotes hold text on purpose: patterns, commands and scripts that must not expand here
 # Tests for manifest.sh: each case builds a scratch corpus with its own
 # list of the programs expected refused, and runs the script with a fake
 # `oskac` that refuses every program with `refused` in its name. A

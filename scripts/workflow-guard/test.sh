@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016  # single quotes hold text on purpose: patterns, commands and scripts that must not expand here
 # Tests for guard.sh: each case builds a scratch tree with workflow files under
 # .github/workflows and expects the guard to pass it, or to refuse it with a
 # message naming the file and the job.

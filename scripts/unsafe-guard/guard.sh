@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016  # single quotes hold text on purpose: patterns, commands and scripts that must not expand here
 # Prove that only crates/oska-sys uses `unsafe` (ADR 0009). check.sh runs
 # it on this repo; test.sh runs it on small workspaces that try each way
 # around it.

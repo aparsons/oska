@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016  # single quotes hold text on purpose: patterns, commands and scripts that must not expand here
 # Tests for scripts/check.sh's step registry: `--list` prints the steps in
 # the order a run prints their headers, so the list cannot drift from the
 # steps that run. Each case runs the real check.sh in a scratch tree where
