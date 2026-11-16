@@ -34,7 +34,7 @@ Other agents' checks run on this machine. `pkill -f`, `pkill` by name or session
 
 ## Pass stamp
 
-When every step of `scripts/check.sh` passes, it writes the tree hash it checked to `oska-check-passed` in the clone's git directory (never committed), but only if the working tree did not change during the run. The `.githooks/pre-push` hook skips its check when the working tree is clean and every pushed commit has the stamped tree. Otherwise it runs `scripts/check.sh` as before.
+When every step of `scripts/check.sh` passes, it writes the tree hash it checked to `oska-check-passed` in the clone's git directory (never committed), but only if the working tree did not change during the run. Each worktree has its own stamp. The `.githooks/pre-push` hook skips its check when the working tree is clean and the tip of every pushed ref with new commits has the stamped tree, so a multi-commit push (a merge of `origin/main` included) skips when its tip was checked. Otherwise it runs `scripts/check.sh` as before.
 
 - Commit what you checked, then push with no edits in between. Any edit, or a merge that changes the tree, needs a new check.
 - Enable the hook once per clone: `git config core.hooksPath .githooks`.

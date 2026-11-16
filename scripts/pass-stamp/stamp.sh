@@ -13,13 +13,15 @@
 #       It never fails: the stamp is an optimisation, not part of the check.
 #   scripts/pass-stamp/stamp.sh covers REMOTE [URL] < ref lines
 #       Reads a pre-push hook's ref lines (githooks(5)) and exits 0 when the
-#       push needs no check: the working tree is clean, and every commit
-#       being pushed has the stamped tree. Exits 1 otherwise, and on anything
-#       it cannot work out.
+#       push needs no check: the working tree is clean, and every ref that
+#       pushes new commits has the stamped tree at its tip. Commits below a
+#       tip are not checked: the check only ever runs on one tree, and CI
+#       tests the tip too. Exits 1 otherwise, and on anything it cannot work
+#       out.
 #
 # The stamp is one tree hash in a file inside the clone's git directory
-# (`git rev-parse --git-path oska-check-passed`). It is never committed, so
-# it cannot travel to another machine.
+# (`git rev-parse --git-path oska-check-passed`), so each worktree has its
+# own. It is never committed, so it cannot travel to another machine.
 
 set -euo pipefail
 
@@ -29,13 +31,17 @@ zero=0000000000000000000000000000000000000000
 stamp_file() { git rev-parse --git-path "$stamp_name"; }
 
 # Prints the tree hash of the working tree, using a scratch copy of the index
-# so the real one is untouched.
+# so the real one is untouched. The copy keeps the index's mtime (`cp -p`):
+# git rehashes a file whose index entry is as new as the index file ("racily
+# clean"), and a copy stamped with the current time would hide that, so an
+# edit of the same size made in the same instant as the last index write
+# would be missed.
 working_tree() {
   local index scratch tree
   index=$(git rev-parse --git-path index)
   scratch=$(mktemp)
   trap 'rm -f "$scratch"' RETURN
-  if [ -f "$index" ]; then cp "$index" "$scratch"; else rm -f "$scratch"; fi
+  if [ -f "$index" ]; then cp -p "$index" "$scratch"; else rm -f "$scratch"; fi
   GIT_INDEX_FILE=$scratch git add -A
   tree=$(GIT_INDEX_FILE=$scratch git write-tree)
   printf '%s\n' "$tree"
@@ -62,7 +68,7 @@ write() {
 
 # Whether the pre-push on stdin needs no check.
 covers() {
-  local remote=${1:-} file stamped local_sha remote_sha commits commit
+  local remote=${1:-} file stamped local_sha remote_sha commits
   file=$(stamp_file)
   [ -s "$file" ] || return 1
   stamped=$(cat "$file")
@@ -77,9 +83,9 @@ covers() {
       git cat-file -e "$remote_sha^{commit}" 2>/dev/null || return 1
       commits=$(git rev-list "$local_sha" "^$remote_sha") || return 1
     fi
-    for commit in $commits; do
-      [ "$(git rev-parse "$commit^{tree}")" = "$stamped" ] || return 1
-    done
+    # A ref with no new commits (a tag on a pushed commit, say) needs none.
+    [ -n "$commits" ] || continue
+    [ "$(git rev-parse "$local_sha^{tree}")" = "$stamped" ] || return 1
   done
   return 0
 }

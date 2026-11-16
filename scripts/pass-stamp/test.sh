@@ -140,6 +140,29 @@ run_check
 push origin main
 expect "checked before committing: the check is skipped" 0 0
 
+# --- racy git: an edit in the same instant as the last index write ----------
+# Git trusts an index entry whose size and mtime match the file, unless the
+# entry is as new as the index file itself ("racily clean"), when it rehashes.
+# Pinning every mtime to one instant makes that case certain here: `file`
+# changes to a same-size text with the mtime the index recorded. On a fast
+# machine it happens by chance, as on CI for the case above.
+new_clone racy
+(
+  cd "$clone"
+  t=@1700000000
+  touch -d "$t" file
+  git add file
+  git commit -q --allow-empty -m pinned
+  git push -q --no-verify origin main 2>/dev/null
+  touch -d "$t" "$(git rev-parse --git-path index)"
+  echo two >file
+  touch -d "$t" file
+)
+run_check
+(cd "$clone" && git add -A && git commit -q -m two)
+push origin main
+expect "checked a racily clean edit before committing: the check is skipped" 0 0
+
 # --- a different tree: runs -------------------------------------------------
 new_clone different
 commit_change two
@@ -206,7 +229,59 @@ commit_change three
 commit_change four
 run_check
 push origin main
-expect "several commits, only the tip stamped: the check runs" 0 1
+expect "several commits, the tip stamped: the check is skipped" 0 0
+
+new_clone several-tip-unstamped
+commit_change two
+run_check
+commit_change three
+commit_change four
+push origin main
+expect "several commits, an earlier one stamped but not the tip: the check runs" 0 1
+
+new_clone merged
+(cd "$clone" && git checkout -q -b topic)
+commit_change two
+(cd "$clone" && git push -q --no-verify origin topic 2>/dev/null)
+(
+  cd "$clone"
+  git checkout -q main
+  echo other >other
+  git add other
+  git commit -q -m other
+  git push -q --no-verify origin main 2>/dev/null
+  git checkout -q topic
+  git merge -q --no-edit main
+)
+commit_change three
+run_check
+push origin topic
+expect "a merge and a commit on top, the tip stamped: the check is skipped" 0 0
+
+new_clone worktree
+(cd "$clone" && git worktree add -q -b topic "$work/worktree-wt" 2>/dev/null)
+main_clone=$clone
+clone=$work/worktree-wt
+commit_change two
+commit_change three
+run_check
+push origin topic
+expect "a worktree, several commits, the tip stamped: the check is skipped" 0 0
+if (cd "$main_clone" && [ ! -e "$(git rev-parse --git-path oska-check-passed)" ]); then
+  ok "a worktree's stamp is its own"
+else
+  bad "a worktree's stamp is its own" "the main clone has a stamp"
+fi
+commit_change four
+push origin topic
+expect "a worktree, a new unchecked commit: the check runs" 0 1
+
+new_clone by-url
+commit_change two
+commit_change three
+run_check
+push "$remote" main
+expect "pushing to a URL, the tip stamped: the check is skipped" 0 0
 
 new_clone same-tree
 commit_change two
@@ -252,7 +327,7 @@ commit_change two
 commit_change three
 run_check
 push origin topic
-expect "new branch with an unstamped commit: the check runs" 0 1
+expect "new branch with two commits, the tip stamped: the check is skipped" 0 0
 
 new_clone new-branch-empty
 (cd "$clone" && git checkout -q -b topic)
