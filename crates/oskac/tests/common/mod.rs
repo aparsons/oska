@@ -2,6 +2,7 @@
 
 #![allow(dead_code)]
 
+pub mod portable;
 pub mod procfs;
 
 /// A minimal JSON reader, enough to walk the export. The crate has no
