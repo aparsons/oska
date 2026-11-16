@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2016  # single quotes hold text on purpose: patterns, commands and scripts that must not expand here
 # Tests for guard.sh: each case builds a scratch tree with workflow files under
 # .github/workflows and expects the guard to pass it, or to refuse it with a
 # message naming the file and the job.
@@ -112,6 +111,7 @@ else
 fi
 
 # A value that is not a whole number from 1 to 60.
+# shellcheck disable=SC2016 # a literal workflow expression the guard must refuse
 for bad in 0 61 -5 '${{ matrix.minutes }}' thirty 2.5 '"30"' 030 360; do
   dir=$(tree)
   workflow "$dir" ci.yml <<YAML

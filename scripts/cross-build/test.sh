@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2016  # single quotes hold text on purpose: patterns, commands and scripts that must not expand here
 # Tests for manifest.sh: each case builds a scratch corpus with its own
 # list of the programs expected refused, and runs the script with a fake
 # `oskac` that refuses every program with `refused` in its name. A
@@ -99,6 +98,7 @@ expect_pass "a package is built from its directory" "$dir" \
   "linux-aarch64 examples/pkg $(hash_of examples/pkg linux-aarch64)"
 
 dir=$(tree '' examples/refused.osk)
+# shellcheck disable=SC2016 # the backticks are literal error text
 expect_fail "a refusal the list does not expect fails, showing the error" "$dir" \
   "examples/refused.osk" \
   'error[E0390]: cannot compile `examples/refused.osk` for linux-x86_64 yet'

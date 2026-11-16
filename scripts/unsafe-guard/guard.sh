@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2016  # single quotes hold text on purpose: patterns, commands and scripts that must not expand here
 # Prove that only crates/oska-sys uses `unsafe` (ADR 0009). check.sh runs
 # it on this repo; test.sh runs it on small workspaces that try each way
 # around it.
@@ -61,6 +60,7 @@ if ! RUSTC_WORKSPACE_WRAPPER="$here/rustc.sh" \
   problem "a crate other than oska-sys does not compile with unsafe_code forbidden (above)"
 fi
 
+# shellcheck disable=SC2016 # the pattern is literal text; a backtick must not run
 unsafe_word='(^|[^[:alnum:]_`])unsafe([^[:alnum:]_`]|_code|$)'
 strip="s:/\\*([^*]|\\*+[^*/])*\\*+/::g; s/'([^'\\\\]|\\\\.[^']*)'//g; s/\"([^\"\\\\]|\\\\.)*\"//g; s://.*\$::"
 found=$(git ls-files -co --exclude-standard -- '*.rs' ':(exclude)crates/oska-sys/*' |

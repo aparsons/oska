@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2016  # single quotes hold text on purpose: patterns, commands and scripts that must not expand here
 # Tests for the pass stamp: the real .githooks/pre-push and the real
 # stamp.sh, driven by real `git push`es from scratch clones to a scratch bare
 # remote. Each scratch clone has a fake scripts/check.sh that records that it
@@ -40,6 +39,7 @@ export GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid
 
 # The fake check: records a run, fails on request, and writes the stamp as
 # the real check.sh does once every step has passed.
+# shellcheck disable=SC2016 # the fake check script is written out, not expanded here
 fake_check='#!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
