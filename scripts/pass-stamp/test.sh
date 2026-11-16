@@ -42,6 +42,7 @@ export GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid
 # the real check.sh does once every step has passed. FAKE_CHECK_TIER (full by
 # default) is the tier it stamps. Each run logs one line, `ran` and its
 # arguments. Like the real one, a --fast run writes no stamp.
+# shellcheck disable=SC2016 # the fake check script is written out, not expanded here
 fake_check='#!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."

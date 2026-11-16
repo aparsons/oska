@@ -30,12 +30,14 @@ esac
 private=$(mktemp -d "$base/oska-leakcheck.XXXXXX")
 child=""
 
+# shellcheck disable=SC2329  # run by the EXIT trap
 cleanup() {
   # A leaked read-only directory must not stop its removal.
   chmod -R u+rwx "$private" 2>/dev/null || true
   rm -rf "$private"
 }
 
+# shellcheck disable=SC2329  # run by the INT, TERM and HUP traps
 interrupted() {
   trap - EXIT
   if [ -n "$child" ]; then

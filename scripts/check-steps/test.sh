@@ -32,6 +32,7 @@ bad() {
 # and fails when that is STUB_FAIL. The temp-leak wrapper stub then runs the
 # command it wraps. `cargo metadata` prints $STUB_METADATA, if set, with
 # @ROOT@ as the directory it runs in.
+# shellcheck disable=SC2016 # the stub script is written out, not expanded here
 stub='#!/usr/bin/env bash
 name=$(basename "$(dirname "$0")")/$(basename "$0")
 if [ "$name" = bin/cargo ]; then echo "cargo $*" >>"$STUB_LOG.args"; name="cargo $1"; fi
@@ -60,10 +61,15 @@ grep -oE 'scripts/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+\.sh' "$repo_root/scripts/check.s
     printf '%s' "$stub" >"$tree/$path"
     chmod +x "$tree/$path"
   done
-for tool in cargo shellcheck; do
+for tool in cargo shellcheck pwsh; do
   printf '%s' "$stub" >"$tree/bin/$tool"
   chmod +x "$tree/bin/$tool"
 done
+
+# rustup reports the Windows target installed, so the Windows step runs its
+# (stubbed) cargo check the same on a machine with or without the target.
+printf '#!/usr/bin/env bash\necho x86_64-pc-windows-gnu\n' >"$tree/bin/rustup"
+chmod +x "$tree/bin/rustup"
 
 # check ARGS...: runs the scratch check.sh. Sets `status`, `out` (stdout and
 # stderr) and `log` (what the stubs logged, one name per line).
@@ -221,7 +227,7 @@ else
   bad "a docs, workflow and script change skips the cargo steps" "exit $status, log: $log"
 fi
 skips=$(printf '%s\n' "$out" | grep -c 'no cargo input differs from origin/main' || true)
-if [ "$skips" -eq 3 ]; then
+if [ "$skips" -eq 4 ]; then
   ok "each skipped cargo step says why"
 else
   bad "each skipped cargo step says why" "got: $out"
