@@ -41,14 +41,14 @@ exit 0
 '
 
 # The scratch tree: the real check.sh, a stub for every script it names, a
-# build-slot stub that logs being sourced, a Cargo.lock with no outside crate
+# build-slot stub that logs being sourced and prints "[build slot]", a Cargo.lock with no outside crate
 # and no workflows.
 tree="$work/tree"
 mkdir -p "$tree/scripts/build-slots" "$tree/.github/workflows" "$tree/bin"
 cp "$repo_root/scripts/check.sh" "$tree/scripts/check.sh"
 : >"$tree/Cargo.lock"
 # shellcheck disable=SC2016 # expands when check.sh sources it
-echo 'echo build-slots/acquire.sh >>"$STUB_LOG"' >"$tree/scripts/build-slots/acquire.sh"
+printf '%s\n' 'echo build-slots/acquire.sh >>"$STUB_LOG"' 'echo "[build slot]"' >"$tree/scripts/build-slots/acquire.sh"
 grep -oE 'scripts/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+\.sh' "$repo_root/scripts/check.sh" | sort -u |
   while read -r path; do
     [ "$path" = scripts/build-slots/acquire.sh ] && continue
@@ -226,6 +226,12 @@ if [ "$(printf '%s\n' "$log" | grep -cx pass-stamp/stamp.sh)" -eq 1 ] &&
 else
   bad "a run that skipped the cargo steps writes no pass stamp, and says so" "log: $log; out: $out"
 fi
+after_slot=$(printf '%s\n' "$out" | grep -x -A2 '\[build slot\]' | sed '/^$/d' | sed -n 2p)
+if [ "$(printf '%s\n' "$out" | grep -cx '\[build slot\]')" -eq 1 ] && [ "$after_slot" = "== installer tests" ]; then
+  ok "skipped cargo steps wait for no build slot; the next step takes it"
+else
+  bad "skipped cargo steps wait for no build slot; the next step takes it" "out: $out"
+fi
 
 # Each case: a change, and whether the cargo steps run.
 cargo_case() {
@@ -247,6 +253,9 @@ cargo_case "a Cargo.toml change" 'echo two >Cargo.toml'
 cargo_case "a new rust-toolchain file" 'echo two >rust-toolchain.toml'
 cargo_case "a deleted script (Rust tests read the tracked files)" 'git rm -q scripts/foo/run.sh'
 cargo_case "a change to check.sh" 'echo "# two" >>scripts/check.sh'
+cargo_case "a scripts/install/ change (Rust tests read it)" 'echo "# two" >>scripts/install/test.sh'
+cargo_case "a scripts/temp-leak/ change (it wraps cargo test)" 'echo "# two" >>scripts/temp-leak/run.sh'
+cargo_case "an index-only deletion (git rm --cached; Rust tests read the index)" 'git rm -q --cached scripts/foo/run.sh'
 cargo_case "a pages.yml change" 'echo two >.github/workflows/pages.yml'
 cargo_case "no origin/main" 'echo two >CLAUDE.md && git update-ref -d refs/remotes/origin/main'
 cargo_case "a detached HEAD without origin/main" 'git checkout -q --detach && git update-ref -d refs/remotes/origin/main'
@@ -280,6 +289,44 @@ for ci in CI GITHUB_ACTIONS; do
     bad "$ci=true runs the cargo steps" "exit $status, out: $out"
   fi
 done
+
+# --- drift guard: crates/ reads no repo file cargo_input calls a non-input --
+# Covers the paths written as literals: `include_str!`/`include_bytes!` (from
+# the file's directory) and `Path::new(env!("CARGO_MANIFEST_DIR")).join("..")`
+# on one line (from the crate's directory). A path built at run time (a root
+# joined to a variable, `git ls-files`) is not seen; cargo_input's comment
+# lists those.
+eval "$(sed -n '/^cargo_input() {/,/^}/p' "$repo_root/scripts/check.sh")"
+seen=0
+outside=
+while IFS=: read -r file kind path; do
+  case $kind in
+    include) from=$(dirname "$file") ;;
+    manifest) from=${file%%/src/*}; from=${from%%/tests/*}; from=${from%%/benches/*} ;;
+  esac
+  resolved=$(realpath -m --relative-to="$repo_root" "$repo_root/$from/$path")
+  seen=$((seen + 1))
+  case $resolved in
+    ..*) outside="$outside $file:$path(outside the repository)"; continue ;;
+  esac
+  # A directory read covers what is inside it.
+  if [ -d "$repo_root/$resolved" ]; then resolved="$resolved/x"; fi
+  cargo_input "$resolved" || outside="$outside $file:$resolved"
+done < <(
+  cd "$repo_root" &&
+    grep -rhoE --include='*.rs' -H 'include_(str|bytes)!\("[^"]+"\)' crates |
+    sed -E 's/^([^:]+):include_(str|bytes)!\("([^"]+)"\)$/\1:include:\3/'
+  cd "$repo_root" &&
+    grep -roE --include='*.rs' -H 'env!\("CARGO_MANIFEST_DIR"\)\)\.join\("[^"]+"\)' crates |
+    sed -E 's/^([^:]+):.*join\("([^"]+)"\)$/\1:manifest:\2/'
+)
+if [ "$seen" -lt 20 ]; then
+  bad "the drift guard finds the crates' repo-file reads" "found only $seen"
+elif [ -z "$outside" ]; then
+  ok "every literal repo-file read in crates/ ($seen) is a cargo input"
+else
+  bad "every literal repo-file read in crates/ is a cargo input" "not inputs:$outside"
+fi
 
 # --- an unknown argument is a usage error -----------------------------------
 check --bogus

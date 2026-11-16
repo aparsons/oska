@@ -23,15 +23,17 @@
 #   --fast      the step also belongs to the fast tier (every step runs in a
 #               full run)
 #   --no-slot   the step is cheap and runs without a build slot
+#   --cargo     a cargo step: skipped when cargo_skip says so (below)
 #
 # A step whose tool is missing calls `skip_step "REASON"` instead of failing;
 # the run still writes the pass stamp, since running again here cannot do
 # better and CI runs the step. `skip_step --no-stamp "REASON"` is for a skip
 # the stamp cannot vouch for: the run then writes no stamp.
 #
-# Outside CI, the cargo steps skip (--no-stamp) when no cargo input differs
-# from the merge-base with origin/main; see cargo_skip below. CI ($CI or
-# $GITHUB_ACTIONS set) always runs them.
+# Outside CI, the --cargo steps skip (as with --no-stamp) when no cargo input
+# differs from the merge-base with origin/main; see cargo_skip below. A
+# skipped step prints its header and why, and waits for no build slot. CI
+# ($CI or $GITHUB_ACTIONS set) always runs them.
 #
 # Everything a run does happens inside a step block or in `step` and
 # `finish` themselves, so --list can never run any of it.
@@ -81,15 +83,16 @@ cargo_why=    # unset until cargo_skip decides; then why cargo skips, or "run"
 # `if step "NAME"; then ... fi`. In a run it prints the step's header and the
 # block runs; with --list it prints NAME and the block is skipped. So the list
 # is always the steps that run, in order. The first step of a run records the
-# tree for the pass stamp; the first step without --no-slot waits for a build
-# slot.
+# tree for the pass stamp; the first step without --no-slot that is not
+# skipped waits for a build slot.
 step() {
-  local name=$1 fast='' slot=1
+  local name=$1 fast='' slot=1 cargo=''
   shift
   while [ $# -gt 0 ]; do
     case $1 in
       --fast) fast=1 ;;
       --no-slot) slot= ;;
+      --cargo) cargo=1 ;;
       *)
         printf 'check.sh: step "%s": unknown option %s\n' "$name" "$1" >&2
         exit 2
@@ -107,6 +110,11 @@ step() {
   if [ -z "$started" ]; then
     started=1
     checked_tree=$(scripts/pass-stamp/stamp.sh tree 2>/dev/null || true)
+  fi
+  if [ -n "$cargo" ] && cargo_skip; then
+    printf '\n== %s\n' "$name"
+    skip_step --no-stamp "$cargo_why"
+    return 1
   fi
   if [ -n "$slot" ] && [ -z "$have_slot" ]; then
     have_slot=1
@@ -146,6 +154,8 @@ cargo_input() {
 # they can, cargo_why says why. They run in CI, and whenever this cannot
 # tell: no origin/main, no merge-base, or a shallow clone. The tree compared
 # is the working tree, untracked files included, as the pass stamp's is.
+# `git diff BASE` takes its paths from the index, so a file removed with
+# `git rm --cached` counts as deleted though it is still on disk.
 cargo_skip() {
   if [ -z "$cargo_why" ]; then
     cargo_why=run
@@ -228,30 +238,18 @@ if step "every workflow job has a timeout" --no-slot; then
   scripts/workflow-guard/guard.sh
 fi
 
-if step "cargo fmt" --fast; then
-  if cargo_skip; then
-    skip_step --no-stamp "$cargo_why"
-  else
-    cargo fmt --all --check
-  fi
+if step "cargo fmt" --fast --cargo; then
+  cargo fmt --all --check
 fi
 
-if step "cargo clippy" --fast; then
-  if cargo_skip; then
-    skip_step --no-stamp "$cargo_why"
-  else
-    cargo clippy --all-targets -- -D warnings
-  fi
+if step "cargo clippy" --fast --cargo; then
+  cargo clippy --all-targets -- -D warnings
 fi
 
-if step "cargo test (private temporary directory)"; then
+if step "cargo test (private temporary directory)" --cargo; then
   # A test that leaves a file or directory in the temporary directory fails the
   # check here, naming it, instead of slowly filling the shared /tmp.
-  if cargo_skip; then
-    skip_step --no-stamp "$cargo_why"
-  else
-    scripts/temp-leak/run.sh cargo test --all
-  fi
+  scripts/temp-leak/run.sh cargo test --all
 fi
 
 if step "installer tests"; then
