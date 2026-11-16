@@ -50,6 +50,6 @@ A push to `ticket/**` or `review-fixes-*` runs `ci.yml`, `windows.yml` and `conf
 
 ## Reading CI failures
 
-- Find a failed job: `gh pr checks <pr>` gives the run and job ids.
-- Read its log: `gh api repos/aparsons/oska/actions/jobs/<id>/logs --allow-escape-sequences`. Read the failing step, not the whole log.
+- Find a failed job: `gh pr checks <pr> --json name,bucket,link` (bucket `fail` marks failures). The job id is the last number in the link.
+- Read its log: `gh api repos/aparsons/oska/actions/jobs/<id>/logs --allow-escape-sequences`. Find the failing step with `| grep -nE '##\[error\]|FAIL|panicked'` and read around those lines, not the whole log.
 - In your report, list everything not run locally: PowerShell, Windows and macOS, and say whether CI passed on each.
