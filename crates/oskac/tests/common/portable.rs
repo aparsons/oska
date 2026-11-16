@@ -6,12 +6,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The platform's path separator as text.
-pub const SEP: char = std::path::MAIN_SEPARATOR;
-
 /// A scratch directory, canonical and empty, removed on drop. The name is
 /// made unique per process; give each test its own `name`.
-pub struct Scratch(pub PathBuf);
+pub struct Scratch(PathBuf);
 
 impl Scratch {
     pub fn new(prefix: &str, name: &str) -> Scratch {
@@ -19,6 +16,26 @@ impl Scratch {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch dir");
         Scratch(dir.canonicalize().expect("canonical scratch dir"))
+    }
+}
+
+impl Scratch {
+    /// The directory.
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for Scratch {
+    fn as_ref(&self) -> &Path {
+        &self.0
     }
 }
 
@@ -50,7 +67,7 @@ pub fn json_path(path: &Path) -> String {
 pub fn literal_path(base: &Path, parts: &[&str]) -> PathBuf {
     let mut text = base.to_string_lossy().into_owned();
     for part in parts {
-        text.push(SEP);
+        text.push_str(std::path::MAIN_SEPARATOR_STR);
         text.push_str(part);
     }
     PathBuf::from(text)

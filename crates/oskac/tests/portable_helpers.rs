@@ -11,10 +11,10 @@ use std::process::Command;
 fn scratch_is_empty_canonical_and_removed_on_drop() {
     let path = {
         let scratch = Scratch::new("oskac-portable", "scratch");
-        assert!(scratch.0.is_dir());
-        assert_eq!(scratch.0, scratch.0.canonicalize().expect("io"));
-        assert_eq!(std::fs::read_dir(&scratch.0).expect("io").count(), 0);
-        scratch.0.clone()
+        assert!(scratch.path().is_dir());
+        assert_eq!(scratch.path(), scratch.path().canonicalize().expect("io"));
+        assert_eq!(std::fs::read_dir(scratch.path()).expect("io").count(), 0);
+        scratch.path().to_path_buf()
     };
     assert!(!path.exists());
 }
@@ -41,7 +41,10 @@ fn literal_path_keeps_dot_dot() {
     let base = Path::new(if cfg!(windows) { r"\\?\C:\p" } else { "/p" });
     let joined = literal_path(base, &["x", "..", ".claude"]);
     let text = joined.to_string_lossy().into_owned();
-    assert!(text.ends_with(&format!("x{SEP}..{SEP}.claude")), "{text}");
+    assert!(
+        text.ends_with(&format!("x{0}..{0}.claude", std::path::MAIN_SEPARATOR)),
+        "{text}"
+    );
     assert!(joined.components().any(|c| c.as_os_str() == ".."));
 }
 
@@ -49,16 +52,16 @@ fn literal_path_keeps_dot_dot() {
 fn set_home_sets_every_home_variable() {
     let scratch = Scratch::new("oskac-portable", "home");
     let mut command = Command::new("unused");
-    set_home(&mut command, &scratch.0);
+    set_home(&mut command, scratch.path());
     let envs: Vec<_> = command
         .get_envs()
         .map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(Path::new)))
         .collect();
     let get = |name: &str| envs.iter().find(|(k, _)| k == name).and_then(|(_, v)| *v);
-    assert_eq!(get("HOME"), Some(scratch.0.as_path()));
-    assert_eq!(get("USERPROFILE"), Some(scratch.0.as_path()));
+    assert_eq!(get("HOME"), Some(scratch.path()));
+    assert_eq!(get("USERPROFILE"), Some(scratch.path()));
     assert_eq!(
         get("XDG_CONFIG_HOME"),
-        Some(scratch.0.join(".config").as_path())
+        Some(scratch.path().join(".config").as_path())
     );
 }
