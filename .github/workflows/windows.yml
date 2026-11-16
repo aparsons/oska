@@ -32,11 +32,11 @@ on:
         options: [all, oska-run, oskac]
         default: all
       test:
-        description: Optional integration-test target of that crate (cargo test --test), e.g. self_cli
+        description: "Optional integration-test target of that crate (cargo test --test), e.g. self_cli"
         type: string
         default: ""
       filter:
-        description: Optional test name filter (letters, digits, _ : - . only, not first)
+        description: "Optional test name filter: letters, digits, and _ : - . (not first)"
         type: string
         default: ""
   pull_request:
