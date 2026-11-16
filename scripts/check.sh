@@ -186,8 +186,10 @@ fail() {
   exit 1
 }
 
-# finish: after the last block. In a run, every step passed: stamp the tree
-# checked, if it did not change meanwhile.
+# finish: after the last block. In a run, every step passed: stamp the tier
+# and the tree checked, if the tree did not change meanwhile and no step was
+# skipped with --no-stamp (then there is no stamp at all). The pre-push hook
+# honours only a full run's stamp.
 finish() {
   if [ "$mode" = list ]; then
     exit 0
@@ -195,7 +197,7 @@ finish() {
   if [ -n "$unstamped" ]; then
     echo "pass stamp: not written, a step was skipped that the stamp cannot vouch for"
   else
-    scripts/pass-stamp/stamp.sh write "$checked_tree"
+    scripts/pass-stamp/stamp.sh write "$tier" "$checked_tree"
   fi
   printf '\nAll checks passed.\n'
 }
@@ -244,6 +246,21 @@ fi
 
 if step "cargo clippy" --fast --cargo; then
   cargo clippy --all-targets -- -D warnings
+fi
+
+if step "oskac type-checks for Windows" --cargo; then
+  # `cfg(windows)` code is not compiled on Linux, so a type error in it shows
+  # up only on the Windows CI job. A check-only build needs no linker, and the
+  # workspace has no external crates. The target is a one-time local
+  # `rustup target add` (docs/agents/rust.md); the ci.yml test job adds it.
+  if rustup target list --installed 2>/dev/null | grep -qx 'x86_64-pc-windows-gnu'; then
+    cargo check -p oskac --tests --target x86_64-pc-windows-gnu
+  elif [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+    echo "check.sh: x86_64-pc-windows-gnu target missing in CI; the ci.yml test job must run 'rustup target add x86_64-pc-windows-gnu'" >&2
+    exit 1
+  else
+    skip_step "x86_64-pc-windows-gnu target not installed; skipped (run: rustup target add x86_64-pc-windows-gnu)"
+  fi
 fi
 
 if step "cargo test (private temporary directory)" --cargo; then

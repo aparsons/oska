@@ -36,6 +36,7 @@ if [ "$name" = bin/cargo ]; then name="cargo $1"; fi
 echo "$name" >>"$STUB_LOG"
 if [ "$name" = "${STUB_FAIL:-}" ]; then exit 1; fi
 if [ "$name" = pass-stamp/stamp.sh ] && [ "${1:-}" = tree ]; then echo tree; fi
+if [ "$name" = pass-stamp/stamp.sh ] && [ "${1:-}" = write ]; then echo "[stamp write $2 $3]"; fi
 if [ "$name" = temp-leak/run.sh ]; then exec "$@"; fi
 exit 0
 '
@@ -60,6 +61,11 @@ for tool in cargo shellcheck; do
   printf '%s' "$stub" >"$tree/bin/$tool"
   chmod +x "$tree/bin/$tool"
 done
+
+# rustup reports the Windows target installed, so the Windows step runs its
+# (stubbed) cargo check the same on a machine with or without the target.
+printf '#!/usr/bin/env bash\necho x86_64-pc-windows-gnu\n' >"$tree/bin/rustup"
+chmod +x "$tree/bin/rustup"
 
 # check ARGS...: runs the scratch check.sh. Sets `status`, `out` (stdout and
 # stderr) and `log` (what the stubs logged, one name per line).
@@ -121,6 +127,12 @@ if [ "$(printf '%s\n' "$log" | grep -cx pass-stamp/stamp.sh)" -eq 2 ] &&
   ok "a passing run writes the pass stamp last"
 else
   bad "a passing run writes the pass stamp last" "log: $log"
+fi
+if [ "$(printf '%s\n' "$out" | grep -c '^\[stamp write')" -eq 1 ] &&
+  printf '%s\n' "$out" | grep -qx '\[stamp write full tree\]'; then
+  ok "a full run stamps the full tier and the tree it checked"
+else
+  bad "a full run stamps the full tier and the tree it checked" "out: $out"
 fi
 slot_and_neighbours=$(printf '%s\n' "$log" | grep -x -B1 -A1 build-slots/acquire.sh | tr '\n' ,)
 if [ "$slot_and_neighbours" = "workflow-guard/guard.sh,build-slots/acquire.sh,cargo fmt," ]; then
@@ -209,7 +221,7 @@ else
   bad "a docs, workflow and script change skips the cargo steps" "exit $status, log: $log"
 fi
 skips=$(printf '%s\n' "$out" | grep -c 'no cargo input differs from origin/main' || true)
-if [ "$skips" -eq 3 ]; then
+if [ "$skips" -eq 4 ]; then
   ok "each skipped cargo step says why"
 else
   bad "each skipped cargo step says why" "got: $out"
@@ -225,6 +237,11 @@ if [ "$(printf '%s\n' "$log" | grep -cx pass-stamp/stamp.sh)" -eq 1 ] &&
   ok "a run that skipped the cargo steps writes no pass stamp, and says so"
 else
   bad "a run that skipped the cargo steps writes no pass stamp, and says so" "log: $log; out: $out"
+fi
+if printf '%s\n' "$out" | grep -q '^\[stamp write'; then
+  bad "a run that skipped the cargo steps never calls stamp.sh write" "out: $out"
+else
+  ok "a run that skipped the cargo steps never calls stamp.sh write"
 fi
 after_slot=$(printf '%s\n' "$out" | grep -x -A2 '\[build slot\]' | sed '/^$/d' | sed -n 2p)
 if [ "$(printf '%s\n' "$out" | grep -cx '\[build slot\]')" -eq 1 ] && [ "$after_slot" = "== installer tests" ]; then
