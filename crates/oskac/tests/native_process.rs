@@ -908,13 +908,28 @@ fn a_closed_stdout_found_by_a_later_flush_is_quiet_too() {
     for (mut command, label) in three_ways(&case) {
         use std::io::{Read, Write};
         use std::process::Stdio;
+        let (reader, writer) = std::io::pipe().expect("a pipe");
+        let mut probe = writer.try_clone().expect("a second write end");
         let mut child = command
             .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
+            .stdout(writer)
             .stderr(Stdio::piped())
             .spawn()
             .expect("the program should start");
-        drop(child.stdout.take());
+        drop(reader);
+        // Another test's thread may have spawned a process while `reader`
+        // was open: until that process execs, its copy of `reader` keeps
+        // the pipe open and the program's write would succeed. A write
+        // here fails with a broken pipe only once no reader is left, so
+        // the program is told to print only then.
+        let gone = loop {
+            match probe.write(&[0; 4096]) {
+                Ok(_) => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => break e.kind(),
+            }
+        };
+        assert_eq!(gone, std::io::ErrorKind::BrokenPipe, "{label}");
         let mut stdin = child.stdin.take().expect("stdin");
         stdin.write_all(b"go\n").expect("should write stdin");
         drop(stdin);
