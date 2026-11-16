@@ -160,6 +160,127 @@ else
   bad "a failing run does not write the stamp" "log: $log"
 fi
 
+# --- the cargo steps skip when no cargo input differs from origin/main ------
+# A scratch clone: the scratch tree committed, with origin/main at that
+# commit. Each case starts from a fresh copy and changes PATHS.
+git_in() {
+  git -C "$1" -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false "${@:2}"
+}
+base="$work/base"
+cp -a "$tree" "$base"
+mkdir -p "$base/crates/a/src" "$base/docs" "$base/scripts/foo"
+for file in CLAUDE.md crates/a/src/lib.rs docs/index.md scripts/foo/run.sh .github/workflows/ci.yml; do
+  echo one >"$base/$file"
+done
+git_in "$base" init -q -b main
+git_in "$base" add -A
+git_in "$base" commit -q -m base
+git_in "$base" update-ref refs/remotes/origin/main HEAD
+
+# fresh_clone: a copy of the base in $repo, as the tree the next run checks.
+fresh_clone() {
+  repo="$work/repo"
+  rm -rf "$repo"
+  cp -a "$base" "$repo"
+}
+
+# check_repo ARGS...: `check`, in $repo, outside CI.
+check_repo() {
+  : >"$work/log"
+  set +e
+  out=$(cd "$repo" && env -u CI -u GITHUB_ACTIONS PATH="$tree/bin:$PATH" STUB_LOG="$work/log" \
+    scripts/check.sh "$@" 2>&1)
+  status=$?
+  set -e
+  log=$(cat "$work/log")
+}
+
+ran_cargo() { printf '%s\n' "$log" | grep -q '^cargo '; }
+
+fresh_clone
+echo two >"$repo/CLAUDE.md"
+echo two >"$repo/.github/workflows/ci.yml"
+git_in "$repo" commit -qam docs
+echo two >"$repo/scripts/foo/run.sh"
+check_repo
+if [ "$status" -eq 0 ] && ! ran_cargo; then
+  ok "a docs, workflow and script change skips the cargo steps"
+else
+  bad "a docs, workflow and script change skips the cargo steps" "exit $status, log: $log"
+fi
+skips=$(printf '%s\n' "$out" | grep -c 'no cargo input differs from origin/main' || true)
+if [ "$skips" -eq 3 ]; then
+  ok "each skipped cargo step says why"
+else
+  bad "each skipped cargo step says why" "got: $out"
+fi
+headers=$(printf '%s\n' "$out" | sed -n 's/^== //p')
+if [ "$headers" = "$list" ]; then
+  ok "a skipping run still prints every step"
+else
+  bad "a skipping run still prints every step" "got: $headers"
+fi
+if [ "$(printf '%s\n' "$log" | grep -cx pass-stamp/stamp.sh)" -eq 1 ] &&
+  printf '%s\n' "$out" | grep -q 'pass stamp: not written'; then
+  ok "a run that skipped the cargo steps writes no pass stamp, and says so"
+else
+  bad "a run that skipped the cargo steps writes no pass stamp, and says so" "log: $log; out: $out"
+fi
+
+# Each case: a change, and whether the cargo steps run.
+cargo_case() {
+  local name=$1 change=$2
+  fresh_clone
+  (cd "$repo" && eval "$change")
+  check_repo
+  if [ "$status" -eq 0 ] && ran_cargo; then
+    ok "$name runs the cargo steps"
+  else
+    bad "$name runs the cargo steps" "exit $status, out: $out"
+  fi
+}
+cargo_case "a committed crate change" 'echo two >crates/a/src/lib.rs && git -c user.name=t -c user.email=t@e -c commit.gpgsign=false commit -qam c'
+cargo_case "an uncommitted crate change" 'echo two >crates/a/src/lib.rs'
+cargo_case "a new untracked crate file" 'echo new >crates/a/src/new.rs'
+cargo_case "a docs/ change (Rust tests read docs/)" 'echo two >docs/index.md'
+cargo_case "a Cargo.toml change" 'echo two >Cargo.toml'
+cargo_case "a new rust-toolchain file" 'echo two >rust-toolchain.toml'
+cargo_case "a deleted script (Rust tests read the tracked files)" 'git rm -q scripts/foo/run.sh'
+cargo_case "a change to check.sh" 'echo "# two" >>scripts/check.sh'
+cargo_case "a pages.yml change" 'echo two >.github/workflows/pages.yml'
+cargo_case "no origin/main" 'echo two >CLAUDE.md && git update-ref -d refs/remotes/origin/main'
+cargo_case "a detached HEAD without origin/main" 'git checkout -q --detach && git update-ref -d refs/remotes/origin/main'
+
+# A shallow clone cannot find the merge-base it needs.
+fresh_clone
+echo two >"$repo/README.md"
+git_in "$repo" add README.md
+git_in "$repo" commit -qm second
+rm -rf "$work/shallow"
+git clone -q --depth 1 "file://$repo" "$work/shallow"
+repo="$work/shallow"
+echo two >"$repo/CLAUDE.md"
+check_repo
+if ran_cargo; then ok "a shallow clone runs the cargo steps"; else bad "a shallow clone runs the cargo steps" "out: $out"; fi
+
+# CI always runs the full check.
+for ci in CI GITHUB_ACTIONS; do
+  fresh_clone
+  echo two >"$repo/CLAUDE.md"
+  : >"$work/log"
+  set +e
+  out=$(cd "$repo" && env -u CI -u GITHUB_ACTIONS "$ci=true" PATH="$tree/bin:$PATH" STUB_LOG="$work/log" \
+    scripts/check.sh 2>&1)
+  status=$?
+  set -e
+  log=$(cat "$work/log")
+  if [ "$status" -eq 0 ] && ran_cargo; then
+    ok "$ci=true runs the cargo steps"
+  else
+    bad "$ci=true runs the cargo steps" "exit $status, out: $out"
+  fi
+done
+
 # --- an unknown argument is a usage error -----------------------------------
 check --bogus
 if [ "$status" -eq 2 ] && [ -z "$log" ]; then

@@ -24,7 +24,14 @@
 #               full run)
 #   --no-slot   the step is cheap and runs without a build slot
 #
-# A step whose tool is missing calls `skip_step "REASON"` instead of failing.
+# A step whose tool is missing calls `skip_step "REASON"` instead of failing;
+# the run still writes the pass stamp, since running again here cannot do
+# better and CI runs the step. `skip_step --no-stamp "REASON"` is for a skip
+# the stamp cannot vouch for: the run then writes no stamp.
+#
+# Outside CI, the cargo steps skip (--no-stamp) when no cargo input differs
+# from the merge-base with origin/main; see cargo_skip below. CI ($CI or
+# $GITHUB_ACTIONS set) always runs them.
 #
 # Everything a run does happens inside a step block or in `step` and
 # `finish` themselves, so --list can never run any of it.
@@ -67,6 +74,8 @@ fi
 started=      # set when the first step of a run starts
 checked_tree= # the tree being checked, for the pass stamp `finish` writes
 have_slot=    # set once the build slot is held; it is held until the run ends
+unstamped=    # set by `skip_step --no-stamp`: the run writes no pass stamp
+cargo_why=    # unset until cargo_skip decides; then why cargo skips, or "run"
 
 # step NAME [--fast] [--no-slot]: opens a step's block,
 # `if step "NAME"; then ... fi`. In a run it prints the step's header and the
@@ -106,9 +115,60 @@ step() {
   printf '\n== %s\n' "$name"
 }
 
-# skip_step REASON: inside a step's block, says why the step did not run.
+# skip_step [--no-stamp] REASON: inside a step's block, says why the step did
+# not run. With --no-stamp, the run writes no pass stamp.
 skip_step() {
+  if [ "$1" = --no-stamp ]; then
+    unstamped=1
+    shift
+  fi
   printf '%s\n' "$1"
+}
+
+# cargo_input PATH: whether a change to PATH (from the repository root) can
+# change what cargo fmt, clippy or test do. Everything is an input except the
+# paths below, which nothing in Cargo.toml, crates/ or the Rust tests reads.
+# The Rust tests read far outside crates/: all of docs/ (the site build, the
+# guides, the release-key fingerprints, docs/agents/ included), examples/,
+# site/, README.md, GLOSSARY.md, SECURITY.md, .github/workflows/pages.yml,
+# scripts/install/, and `git ls-files`. scripts/temp-leak/ wraps cargo test,
+# and this file runs the cargo steps.
+cargo_input() {
+  case $1 in
+    .github/workflows/pages.yml | scripts/install/* | scripts/temp-leak/* | scripts/check.sh) return 0 ;;
+    CLAUDE.md | CODING_STANDARDS.md | LICENSE | .gitignore) return 1 ;;
+    .githooks/* | .claude/* | .github/* | scripts/*) return 1 ;;
+  esac
+  return 0
+}
+
+# cargo_skip: whether the cargo steps can skip, decided once per run; when
+# they can, cargo_why says why. They run in CI, and whenever this cannot
+# tell: no origin/main, no merge-base, or a shallow clone. The tree compared
+# is the working tree, untracked files included, as the pass stamp's is.
+cargo_skip() {
+  if [ -z "$cargo_why" ]; then
+    cargo_why=run
+    local base deleted changed untracked path
+    if [ -z "${CI:-}${GITHUB_ACTIONS:-}" ] &&
+      [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = false ] &&
+      base=$(git merge-base HEAD refs/remotes/origin/main 2>/dev/null) &&
+      deleted=$(git diff --no-renames --name-only --diff-filter=D "$base" --) &&
+      changed=$(git diff --no-renames --name-only "$base" --) &&
+      untracked=$(git ls-files --others --exclude-standard) &&
+      # Rust tests read the tracked files' names, so a deletion is an input.
+      [ -z "$deleted" ]; then
+      cargo_why="skipped: no cargo input differs from origin/main (merge-base ${base:0:12}); CI runs it"
+      while IFS= read -r path; do
+        if [ -n "$path" ] && cargo_input "$path"; then
+          cargo_why=run
+          break
+        fi
+      done <<<"$changed
+$untracked"
+    fi
+  fi
+  [ "$cargo_why" != run ]
 }
 
 fail() {
@@ -122,7 +182,11 @@ finish() {
   if [ "$mode" = list ]; then
     exit 0
   fi
-  scripts/pass-stamp/stamp.sh write "$checked_tree"
+  if [ -n "$unstamped" ]; then
+    echo "pass stamp: not written, a step was skipped that the stamp cannot vouch for"
+  else
+    scripts/pass-stamp/stamp.sh write "$checked_tree"
+  fi
   printf '\nAll checks passed.\n'
 }
 
@@ -165,17 +229,29 @@ if step "every workflow job has a timeout" --no-slot; then
 fi
 
 if step "cargo fmt" --fast; then
-  cargo fmt --all --check
+  if cargo_skip; then
+    skip_step --no-stamp "$cargo_why"
+  else
+    cargo fmt --all --check
+  fi
 fi
 
 if step "cargo clippy" --fast; then
-  cargo clippy --all-targets -- -D warnings
+  if cargo_skip; then
+    skip_step --no-stamp "$cargo_why"
+  else
+    cargo clippy --all-targets -- -D warnings
+  fi
 fi
 
 if step "cargo test (private temporary directory)"; then
   # A test that leaves a file or directory in the temporary directory fails the
   # check here, naming it, instead of slowly filling the shared /tmp.
-  scripts/temp-leak/run.sh cargo test --all
+  if cargo_skip; then
+    skip_step --no-stamp "$cargo_why"
+  else
+    scripts/temp-leak/run.sh cargo test --all
+  fi
 fi
 
 if step "installer tests"; then
