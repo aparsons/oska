@@ -42,7 +42,9 @@ When every step of `scripts/check.sh` passes, it writes the tree hash it checked
 
 ## Check steps
 
-`scripts/check.sh --list` prints the check's steps in order and runs nothing. Each step is one self-contained `if step "NAME"; then ... fi` block in `scripts/check.sh`; to add a step, add one block where it should run. Tag it after the name: `--fast` also puts it in the fast tier, and `--no-slot` runs a cheap step without a build slot. A step whose tool is missing calls `skip_step "REASON"`. There is no other list to update. `scripts/check-steps/test.sh` proves that `--list` matches what a run prints and that every `scripts/*/test.sh` runs.
+`scripts/check.sh --list` prints the check's steps in order and runs nothing. Each step is one self-contained `if step "NAME"; then ... fi` block in `scripts/check.sh`; to add a step, add one block where it should run. Tag it after the name: `--fast` also puts it in the fast tier, `--no-slot` runs a cheap step without a build slot, and `--cargo` marks a cargo step, which skips (without a build slot) when no cargo input changed. A step whose tool is missing calls `skip_step "REASON"`; a skip the pass stamp cannot vouch for calls `skip_step --no-stamp "REASON"`, and that run writes no stamp. There is no other list to update. `scripts/check-steps/test.sh` proves that `--list` matches what a run prints and that every `scripts/*/test.sh` runs.
+
+Outside CI, the cargo steps skip (and the run writes no stamp) when nothing that cargo reads differs from the merge-base with `origin/main`: for example a branch that changes only `CLAUDE.md`, scripts or workflows. Rust tests read all of `docs/`, `examples/`, `site/` and more, so a docs change still runs them; `cargo_input` in `scripts/check.sh` holds the list. A Rust test that starts reading a new path outside `crates/` must keep that list right. `scripts/check-steps/test.sh` fails if a literal `include_str!` or `CARGO_MANIFEST_DIR` join in `crates/` reads a path that list calls a non-input.
 
 ## Build slots
 
