@@ -47,6 +47,7 @@ esac
 
 # check.sh against a stub gh, reading the repo's real workflows.
 mkdir -p "$work/bin"
+# shellcheck disable=SC2016 # the stub gh expands its variables when it runs
 printf '%s\n' '#!/usr/bin/env bash' \
   'case "$1 $2" in' \
   '  "pr view") echo main ;;' \
