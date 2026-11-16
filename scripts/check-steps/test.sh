@@ -37,6 +37,7 @@ if [ "$name" = bin/cargo ]; then name="cargo $1" && echo "$*" >>"$STUB_LOG.cargo
 echo "$name" >>"$STUB_LOG"
 if [ "$name" = "${STUB_FAIL:-}" ]; then exit 1; fi
 if [ "$name" = pass-stamp/stamp.sh ] && [ "${1:-}" = tree ]; then echo tree; fi
+if [ "$name" = pass-stamp/stamp.sh ] && [ "${1:-}" = write ]; then echo "[stamp write $2 $3]"; fi
 if [ "$name" = temp-leak/run.sh ]; then exec "$@"; fi
 exit 0
 '
@@ -125,6 +126,12 @@ if [ "$(printf '%s\n' "$log" | grep -cx pass-stamp/stamp.sh)" -eq 2 ] &&
   ok "a passing run writes the pass stamp last"
 else
   bad "a passing run writes the pass stamp last" "log: $log"
+fi
+if [ "$(printf '%s\n' "$out" | grep -c '^\[stamp write')" -eq 1 ] &&
+  printf '%s\n' "$out" | grep -qx '\[stamp write full tree\]'; then
+  ok "a full run stamps the full tier and the tree it checked"
+else
+  bad "a full run stamps the full tier and the tree it checked" "out: $out"
 fi
 slot_and_neighbours=$(printf '%s\n' "$log" | grep -x -B1 -A1 build-slots/acquire.sh | tr '\n' ,)
 if [ "$slot_and_neighbours" = "workflow-guard/guard.sh,build-slots/acquire.sh,cargo fmt," ]; then
@@ -237,6 +244,11 @@ if [ "$(printf '%s\n' "$log" | grep -cx pass-stamp/stamp.sh)" -eq 1 ] &&
   ok "a run that skipped the cargo steps writes no pass stamp, and says so"
 else
   bad "a run that skipped the cargo steps writes no pass stamp, and says so" "log: $log; out: $out"
+fi
+if printf '%s\n' "$out" | grep -q '^\[stamp write'; then
+  bad "a run that skipped the cargo steps never calls stamp.sh write" "out: $out"
+else
+  ok "a run that skipped the cargo steps never calls stamp.sh write"
 fi
 after_slot=$(printf '%s\n' "$out" | grep -x -A2 '\[build slot\]' | sed '/^$/d' | sed -n 2p)
 if [ "$(printf '%s\n' "$out" | grep -cx '\[build slot\]')" -eq 1 ] && [ "$after_slot" = "== installer tests" ]; then

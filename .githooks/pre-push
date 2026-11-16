@@ -2,9 +2,14 @@
 # Refuse a push unless every check passes. Enable once per clone with:
 #   git config core.hooksPath .githooks
 # Pushing a tag or deleting a branch also goes through it. The check is
-# skipped, and nothing else, when scripts/check.sh already passed on exactly
-# the tree being pushed (scripts/pass-stamp/stamp.sh), so `--no-verify` is
-# not needed.
+# skipped, and nothing else, only when all of these hold
+# (scripts/pass-stamp/stamp.sh):
+#   - the pass stamp is from a full run of scripts/check.sh (never a fast one)
+#   - the working tree is clean
+#   - every ref the push does not delete has the stamped tree at its tip,
+#     whether or not it brings new commits (a rewind or an older commit counts
+#     too); for a tag, the tree of the commit it points to
+# A deletion adds no condition. So `--no-verify` is not needed.
 set -euo pipefail
 root=$(git rev-parse --show-toplevel)
 if "$root/scripts/pass-stamp/stamp.sh" covers "$@"; then
