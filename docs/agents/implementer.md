@@ -40,6 +40,10 @@ When every step of `scripts/check.sh` passes, it writes the tree hash it checked
 - Enable the hook once per clone: `git config core.hooksPath .githooks`.
 - Never `--no-verify`: the stamp makes it unnecessary.
 
+## Check steps
+
+`scripts/check.sh --list` prints the check's steps in order and runs nothing. Each step is one self-contained `if step "NAME"; then ... fi` block in `scripts/check.sh`; to add a step, add one block where it should run. Tag it after the name: `--fast` also puts it in the fast tier, and `--no-slot` runs a cheap step without a build slot. A step whose tool is missing calls `skip_step "REASON"`. There is no other list to update. `scripts/check-steps/test.sh` proves that `--list` matches what a run prints and that every `scripts/*/test.sh` runs.
+
 ## Build slots
 
 `OSKA_BUILD_SLOTS=N` makes `scripts/check.sh` wait for one of N machine-wide slots (lock files under `$XDG_RUNTIME_DIR`, else `$TMPDIR`, else `/tmp`) before its build and test steps. It prints one "waiting for a free build slot" line; that is not a hang. The kernel frees the slot when the check ends, however it ends. Unset means no limit (CI, other clones). On the Pi use `OSKA_BUILD_SLOTS=2`, exported with the lean environment. Only `scripts/check.sh` takes a slot; the cargo commands you run while iterating are not limited.
