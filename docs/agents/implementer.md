@@ -47,3 +47,7 @@ When every step of `scripts/check.sh` passes, it writes the tree hash it checked
 ## CI on ticket branches
 
 A push to `ticket/**` or `review-fixes-*` runs `ci.yml`, `windows.yml` and `confinement.yml`, so every platform verifies a ticket before the spec's pull request. Name ticket branches `ticket/<number>-<slug>`.
+
+## Windows on demand
+
+To re-test one crate or test on Windows after a push, dispatch the workflow: `gh workflow run windows.yml --ref <branch> -f crate=oskac -f filter=self_cli`. `crate` is `all` (default), `oska-run` or `oskac`; `filter` is an optional test name filter. Push and pull-request runs are unchanged.

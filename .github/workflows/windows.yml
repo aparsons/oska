@@ -22,6 +22,19 @@ on:
       - Cargo.toml
       - Cargo.lock
       - .github/workflows/windows.yml
+  # Run one crate, or one test, on demand:
+  # gh workflow run windows.yml --ref <branch> -f crate=oskac -f filter=self_cli
+  workflow_dispatch:
+    inputs:
+      crate:
+        description: Crate to test
+        type: choice
+        options: [all, oska-run, oskac]
+        default: all
+      filter:
+        description: Optional test name filter (letters, digits, _ : - . only)
+        type: string
+        default: ""
   pull_request:
     paths:
       - crates/**
@@ -52,4 +65,24 @@ jobs:
       - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - run: cargo test --locked --no-fail-fast -p oska-run -p oskac
+      # The inputs reach the shell only through env, and are checked first.
+      # Push and pull-request runs have no inputs and test both crates.
+      - name: Test
+        shell: bash
+        env:
+          CRATE: ${{ inputs.crate }}
+          FILTER: ${{ inputs.filter }}
+        run: |
+          case "$CRATE" in
+            ""|all) pkgs=(-p oska-run -p oskac) ;;
+            oska-run|oskac) pkgs=(-p "$CRATE") ;;
+            *) echo "bad crate" >&2; exit 1 ;;
+          esac
+          if [[ -n "$FILTER" && ! "$FILTER" =~ ^[A-Za-z0-9_:.-]+$ ]]; then
+            echo "bad filter" >&2; exit 1
+          fi
+          if [[ -n "$FILTER" ]]; then
+            cargo test --locked --no-fail-fast "${pkgs[@]}" -- "$FILTER"
+          else
+            cargo test --locked --no-fail-fast "${pkgs[@]}"
+          fi
