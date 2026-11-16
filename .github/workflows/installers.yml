@@ -12,12 +12,16 @@ on:
     paths:
       - scripts/install/**
       - scripts/release/**
+      - docs/guide/install-receipt.md
+      - site/agent-setup/**
       - scripts/shellcheck/**
       - .github/workflows/installers.yml
   pull_request:
     paths:
       - scripts/install/**
       - scripts/release/**
+      - docs/guide/install-receipt.md
+      - site/agent-setup/**
       - scripts/shellcheck/**
       - site/oska-release.pub
       - .github/workflows/installers.yml

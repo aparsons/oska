@@ -1,0 +1,51 @@
+{
+  "about": "The hook script and settings install.sh --hook wrote, unchanged: removed. No Windows installer writes them yet.",
+  "setup": [
+    {
+      "name": "hook_script",
+      "path": "@PROJECT@/.claude/hooks/oska-check.sh",
+      "published": "hook_script"
+    },
+    {
+      "name": "hook_settings",
+      "path": "@PROJECT@/.claude/settings.json",
+      "published": "hook_settings"
+    }
+  ],
+  "expect": {
+    "sh": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@",
+        "@OSKA_HOME@",
+        "@PROJECT@/.claude/hooks/oska-check.sh",
+        "@PROJECT@/.claude/settings.json"
+      ],
+      "kept": [],
+      "path_hint": false
+    },
+    "ps1": {
+      "refused": "unsafe_path",
+      "reason": "which this installer does not remove"
+    },
+    "oskac_unix": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@",
+        "@OSKA_HOME@",
+        "@PROJECT@/.claude/hooks/oska-check.sh",
+        "@PROJECT@/.claude/settings.json"
+      ],
+      "kept": [],
+      "path_hint": false
+    },
+    "oskac_windows": {
+      "refused": "unsafe_path",
+      "reason": "which the installer for this platform never writes"
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "about": "A hook project reached through a symlink (not root's) refuses the whole uninstall.",
+  "setup": [
+    {
+      "name": "hook_script",
+      "path": "@HOME@/real/.claude/hooks/oska-check.sh",
+      "published": "hook_script"
+    },
+    {
+      "path": "@HOME@/linked",
+      "link_to": "@HOME@/real"
+    }
+  ],
+  "expect": {
+    "sh": {
+      "refused": "unsafe_path"
+    },
+    "ps1": {
+      "refused": "unsafe_path"
+    },
+    "oskac_unix": {
+      "refused": "unsafe_path"
+    },
+    "oskac_windows": {
+      "refused": "unsafe_path"
+    }
+  }
+}

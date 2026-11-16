@@ -21,6 +21,7 @@ Task-oriented guides for the `oskac` toolchain. Oska is pre-alpha. The latest re
 - [Debugging: `dbg`, panics, and `--format=json`](debugging.md)
 - [Troubleshooting](troubleshooting.md): by symptom and by diagnostic code.
 - [CLI reference](cli-reference.md)
+- [The install receipt](install-receipt.md): what the installers record, and what each uninstaller does with it.
 - [Agent guide](agent-guide.md): the check, fix, run, test, and authority loop, with machine-readable output.
 
 ## Examples

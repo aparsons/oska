@@ -598,8 +598,9 @@
                 $pathEdited = $true
                 $removed.Add("$binDir (from your user PATH)")
             } else {
-                & $keep $binDir 'the entry the installer added is no longer in your user PATH, or could not be removed'
-                $pathHint = "remove $binDir from your user PATH, if it is still there"
+                # Said in the hint, not in kept: bin itself is handled with
+                # the home above, and listed once.
+                $pathHint = "the entry the installer added is no longer in your user PATH, or could not be removed; remove $binDir from your user PATH, if it is still there"
             }
         }
         if (-not $pathHint -and -not $pathEdited) {

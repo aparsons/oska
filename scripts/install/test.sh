@@ -1048,6 +1048,190 @@ test_uninstall_hints_at_the_path_and_explains_itself() {
   jq -r .path_hint out.json | grep -q "$bin is on your PATH" || fail "path_hint is $(jq .path_hint out.json)"
 }
 
+# ---- The shared receipt fixtures ---------------------------------------------
+#
+# receipt-fixtures/ holds receipts and what each uninstaller must do with
+# them; test.ps1 and oskac's receipt_fixtures tests run the same ones. The
+# format is in docs/guide/install-receipt.md.
+
+# The placeholders of a fixture as jq definitions: `fill(false)` fills a
+# path or a text, `fill(true)` the receipt, with JSON-escaped values.
+# shellcheck disable=SC2016 # $json and $x are jq variables, not shell ones
+FILL='def fill($json):
+  def v($x): if $json then ($x | tojson | .[1:-1]) else $x end;
+  gsub("@OSKA_HOME@"; v($oska)) | gsub("@PROJECT@"; v($project))
+  | gsub("@HOME@"; v($home)) | gsub("@BIN@"; v($bin)) | gsub("@EXE@"; v($exe))
+  | gsub("@VERSION@"; v($version))
+  | reduce ($sums | to_entries[]) as $s (.; gsub("@SHA:" + $s.key + "@"; $s.value));'
+
+# fj <filter> <jq options...>: jq with the fixture's placeholders defined.
+fj() {
+  local filter=$1
+  shift
+  jq "$@" --arg home "$f_home" --arg oska "$f_oska" --arg bin "$f_bin" --arg exe "$f_exe" \
+    --arg project "$f_project" --arg version "$f_version" --argjson sums "$f_sums" "$FILL $filter"
+}
+
+# Every path under <dir>, with a file's SHA-256 or a link's target.
+tree_of() {
+  local f
+  find "$1" | LC_ALL=C sort | while IFS= read -r f; do
+    if [ -L "$f" ]; then
+      printf '%s -> %s\n' "$f" "$(readlink "$f")"
+    elif [ -f "$f" ]; then
+      printf '%s %s\n' "$f" "$(sha256 "$f")"
+    else
+      printf '%s\n' "$f"
+    fi
+  done
+}
+
+# receipt_fixture <dir>: sets up the fixture in <dir> under ./<its name>,
+# runs --uninstall, and prints what is wrong, if anything.
+receipt_fixture() {
+  local dir=$1 name=${1##*/} expect item path status=0 got want
+  expect=$(jq -c '.expect.sh' "$dir/case.json")
+  local root="$PWD/$name"
+  f_home=$root/home
+  f_oska=$(jq -r '.oska_home // "@HOME@/.oska"' "$dir/case.json")
+  f_oska=${f_oska//@HOME@/$f_home}
+  f_bin=$f_oska/bin
+  f_exe=$f_bin/oskac
+  f_project=$f_home/project
+  f_version=1.2.3
+  f_sums='{}'
+  # Links in place of a directory the rest is then written through.
+  while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    path=$(fj '.path | fill(false)' -r <<<"$item")
+    mkdir -p "$(fj '.link_to | fill(false)' -r <<<"$item")" "$(dirname "$path")"
+    ln -s "$(fj '.link_to | fill(false)' -r <<<"$item")" "$path"
+  done <<EOF
+$(jq -c '.link_first // [] | .[]' "$dir/case.json")
+EOF
+  mkdir -p "$f_bin"
+  printf '#!/bin/sh\necho "oskac %s"\n' "$f_version" >"$f_exe"
+  printf '%s\n' "$f_version" >"$f_oska/version"
+  f_sums=$(jq -cn --arg e "$(sha256 "$f_exe")" --arg v "$(sha256 "$f_oska/version")" '{exe: $e, version: $v}')
+  while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    path=$(fj '.path | fill(false)' -r <<<"$item")
+    mkdir -p "$(dirname "$path")"
+    case $(jq -r 'if .text then "text" elif .published then "published" else "link" end' <<<"$item") in
+      text) fj '.text | fill(false)' -j <<<"$item" >"$path" ;;
+      published)
+        case $(jq -r .published <<<"$item") in
+          hook_script) cp "$here/../../site/agent-setup/oska-check.sh" "$path" ;;
+          *) cp "$here/../../site/agent-setup/claude-settings.json" "$path" ;;
+        esac ;;
+      link) ln -s "$(fj '.link_to | fill(false)' -r <<<"$item")" "$path" ;;
+    esac
+    if [ "$(jq -r '.name // ""' <<<"$item")" != "" ]; then
+      f_sums=$(jq -c --arg k "$(jq -r .name <<<"$item")" --arg v "$(sha256 "$path")" '.[$k] = $v' <<<"$f_sums")
+    fi
+  done <<EOF
+$(jq -c '.setup // [] | .[]' "$dir/case.json")
+EOF
+  jq -Rs . "$dir/receipt.json" | fj 'fill(true)' -j >"$f_oska/receipt.json"
+  while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    fj '.text | fill(false)' -j <<<"$item" >"$(fj '.path | fill(false)' -r <<<"$item")"
+  done <<EOF
+$(jq -c '.change // [] | .[]' "$dir/case.json")
+EOF
+
+  tree_of "$root" >"$root.before"
+  HOME="$f_home" OSKA_HOME="$f_oska" sh -s -- --json --uninstall <pinned/install.sh >"$root.json" 2>"$root.err" || status=$?
+  if ! jq -e . "$root.json" >/dev/null 2>&1; then
+    echo "not one JSON object (exit $status): $(cat "$root.json" "$root.err")"
+    return
+  fi
+  if [ "$(jq -r '.refused // ""' <<<"$expect")" != "" ]; then
+    if [ "$status" != 1 ] || [ "$(jq -r .error "$root.json")" != "$(jq -r .refused <<<"$expect")" ]; then
+      echo "expected a refusal (exit $status): $(cat "$root.json")"
+    elif ! jq -e --arg r "$(jq -r '.reason // ""' <<<"$expect")" '.message | contains($r)' "$root.json" >/dev/null; then
+      echo "expected a refusal saying $(jq .reason <<<"$expect"): $(cat "$root.json")"
+    elif ! tree_of "$root" | diff "$root.before" - >/dev/null; then
+      echo "refused, but changed files"
+    fi
+    return
+  fi
+  if [ "$status" != 0 ]; then
+    echo "expected an uninstall (exit $status): $(cat "$root.json")"
+    return
+  fi
+  for list in removed kept; do
+    got=$(jq -c ".$list | sort" "$root.json")
+    want=$(fj "[.${list}[] | fill(false)] | sort" -c <<<"$expect")
+    [ "$got" = "$want" ] || echo "$list $got, expected $want"
+  done
+  [ "$(jq '.path_hint != null' "$root.json")" = "$(jq .path_hint <<<"$expect")" ] ||
+    echo "path_hint is $(jq .path_hint "$root.json")"
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    if [ -e "$path" ] || [ -L "$path" ]; then echo "$path is reported removed and is still there"; fi
+  done <<EOF
+$(jq -r '.removed[]' "$root.json")
+EOF
+  while IFS= read -r path; do
+    path=${path%% *}
+    [ -n "$path" ] || continue
+    if [ ! -e "$path" ] && [ ! -L "$path" ] && ! jq -e --arg p "$path" '.removed | index($p)' "$root.json" >/dev/null; then
+      echo "$path is gone but not reported removed"
+    fi
+  done <"$root.before"
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    # shellcheck disable=SC2016 # $k is a jq variable
+    fj '.contents[$k] | fill(false)' -j --arg k "$path" <<<"$expect" >"$root.want"
+    # shellcheck disable=SC2016 # $k is a jq variable
+    path=$(fj '$k | fill(false)' -nr --arg k "$path")
+    cmp -s "$root.want" "$path" || echo "$path holds $(cat "$path")"
+  done <<EOF
+$(jq -r '.contents // {} | keys[]' <<<"$expect")
+EOF
+}
+
+test_uninstall_meets_every_receipt_fixture() {
+  pinned
+  local dir problems failed=
+  for dir in "$here"/receipt-fixtures/*/; do
+    dir=${dir%/}
+    problems=$(receipt_fixture "$dir")
+    if [ -n "$problems" ]; then
+      failed="$failed${dir##*/}: $problems
+"
+    fi
+  done
+  [ -z "$failed" ] || fail "$failed"
+}
+
+# The kinds the receipt doc says <installer> writes: the rows of its
+# "Entry kinds" table written by "both installers" or by <installer>.
+documented_kinds() {
+  # shellcheck disable=SC2016 # the backticks are in awk and sed patterns
+  awk -F '|' -v by="$1" '/^## Entry kinds/ { on = 1; next } /^## / { on = 0 }
+    on && /^\| `/ && (index($3, "both installers") || index($3, by))' "$here/../../docs/guide/install-receipt.md" |
+    sed 's/^| `\([a-z_]*\)`.*/\1/' | LC_ALL=C sort
+}
+
+# The kinds install.sh writes are exactly the kinds the receipt doc says it
+# writes, so a kind added on one side alone fails; the fixtures then show
+# what every uninstaller does with it.
+test_the_kinds_it_writes_are_the_documented_ones() {
+  release 1.2.3
+  latest 1.2.3
+  agent_setup
+  mkdir -p proj
+  SHELL=/bin/bash install --json --add-to-path --hook proj >/dev/null
+  local written documented
+  written=$(jq -r '.files[].kind' home/.oska/receipt.json | LC_ALL=C sort -u)
+  documented=$(documented_kinds install.sh)
+  [ -n "$documented" ] || fail "docs/guide/install-receipt.md defines no kinds for install.sh"
+  [ "$written" = "$documented" ] ||
+    fail "writes the kinds $(tr "\n" " " <<<"$written"), but docs/guide/install-receipt.md says $(tr "\n" " " <<<"$documented")"
+}
+
 # ---- --add-to-path and --hook -------------------------------------------------
 
 MARK="# added by the Oska installer"

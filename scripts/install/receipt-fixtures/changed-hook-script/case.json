@@ -1,0 +1,59 @@
+{
+  "about": "A hook script changed since it was installed is kept; the unchanged settings go.",
+  "setup": [
+    {
+      "name": "hook_script",
+      "path": "@PROJECT@/.claude/hooks/oska-check.sh",
+      "published": "hook_script"
+    },
+    {
+      "name": "hook_settings",
+      "path": "@PROJECT@/.claude/settings.json",
+      "published": "hook_settings"
+    }
+  ],
+  "change": [
+    {
+      "path": "@PROJECT@/.claude/hooks/oska-check.sh",
+      "text": "#!/bin/sh\necho mine\n"
+    }
+  ],
+  "expect": {
+    "sh": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@",
+        "@OSKA_HOME@",
+        "@PROJECT@/.claude/settings.json"
+      ],
+      "kept": [
+        "@PROJECT@/.claude/hooks/oska-check.sh"
+      ],
+      "path_hint": false
+    },
+    "ps1": {
+      "refused": "unsafe_path",
+      "reason": "which this installer does not remove"
+    },
+    "oskac_unix": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@",
+        "@OSKA_HOME@",
+        "@PROJECT@/.claude/settings.json"
+      ],
+      "kept": [
+        "@PROJECT@/.claude/hooks/oska-check.sh"
+      ],
+      "path_hint": false
+    },
+    "oskac_windows": {
+      "refused": "unsafe_path",
+      "reason": "which the installer for this platform never writes"
+    }
+  }
+}
