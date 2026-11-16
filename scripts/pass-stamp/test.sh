@@ -38,7 +38,8 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid
 export GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid
 
 # The fake check: records a run, fails on request, and writes the stamp as
-# the real check.sh does once every step has passed.
+# the real check.sh does once every step has passed. FAKE_CHECK_TIER (full by
+# default) is the tier it stamps.
 # shellcheck disable=SC2016 # the fake check script is written out, not expanded here
 fake_check='#!/usr/bin/env bash
 set -euo pipefail
@@ -47,7 +48,7 @@ checked_tree=$(scripts/pass-stamp/stamp.sh tree)
 echo ran >>"$FAKE_CHECK_LOG"
 if [ "${FAKE_CHECK_MODE:-pass}" = edit ]; then echo edit >>file; fi
 if [ "${FAKE_CHECK_MODE:-pass}" = fail ]; then exit 1; fi
-scripts/pass-stamp/stamp.sh write "$checked_tree"
+scripts/pass-stamp/stamp.sh write "${FAKE_CHECK_TIER:-full}" "$checked_tree"
 '
 
 # new_clone NAME: a bare remote and a clone of it, both under $work, with
@@ -141,6 +142,29 @@ run_check
 push origin main
 expect "checked before committing: the check is skipped" 0 0
 
+# --- racy git: an edit in the same instant as the last index write ----------
+# Git trusts an index entry whose size and mtime match the file, unless the
+# entry is as new as the index file itself ("racily clean"), when it rehashes.
+# Pinning every mtime to one instant makes that case certain here: `file`
+# changes to a same-size text with the mtime the index recorded. On a fast
+# machine it happens by chance, as on CI for the case above.
+new_clone racy
+(
+  cd "$clone"
+  t=@1700000000
+  touch -d "$t" file
+  git add file
+  git commit -q --allow-empty -m pinned
+  git push -q --no-verify origin main 2>/dev/null
+  touch -d "$t" "$(git rev-parse --git-path index)"
+  echo two >file
+  touch -d "$t" file
+)
+run_check
+(cd "$clone" && git add -A && git commit -q -m two)
+push origin main
+expect "checked a racily clean edit before committing: the check is skipped" 0 0
+
 # --- a different tree: runs -------------------------------------------------
 new_clone different
 commit_change two
@@ -163,6 +187,13 @@ run_check
 echo new >"$clone/untracked"
 push origin main
 expect "untracked file: the check runs" 0 1
+
+new_clone status-fails
+commit_change two
+run_check
+(cd "$clone" && echo garbage >"$(git rev-parse --git-path index)")
+push origin main
+expect "git status fails (a corrupt index): the check runs" 0 1
 
 # --- a failed check: no stamp, push refused ---------------------------------
 new_clone failing
@@ -207,7 +238,59 @@ commit_change three
 commit_change four
 run_check
 push origin main
-expect "several commits, only the tip stamped: the check runs" 0 1
+expect "several commits, the tip stamped: the check is skipped" 0 0
+
+new_clone several-tip-unstamped
+commit_change two
+run_check
+commit_change three
+commit_change four
+push origin main
+expect "several commits, an earlier one stamped but not the tip: the check runs" 0 1
+
+new_clone merged
+(cd "$clone" && git checkout -q -b topic)
+commit_change two
+(cd "$clone" && git push -q --no-verify origin topic 2>/dev/null)
+(
+  cd "$clone"
+  git checkout -q main
+  echo other >other
+  git add other
+  git commit -q -m other
+  git push -q --no-verify origin main 2>/dev/null
+  git checkout -q topic
+  git merge -q --no-edit main
+)
+commit_change three
+run_check
+push origin topic
+expect "a merge and a commit on top, the tip stamped: the check is skipped" 0 0
+
+new_clone worktree
+(cd "$clone" && git worktree add -q -b topic "$work/worktree-wt" 2>/dev/null)
+main_clone=$clone
+clone=$work/worktree-wt
+commit_change two
+commit_change three
+run_check
+push origin topic
+expect "a worktree, several commits, the tip stamped: the check is skipped" 0 0
+if (cd "$main_clone" && [ ! -e "$(git rev-parse --git-path oska-check-passed)" ]); then
+  ok "a worktree's stamp is its own"
+else
+  bad "a worktree's stamp is its own" "the main clone has a stamp"
+fi
+commit_change four
+push origin topic
+expect "a worktree, a new unchecked commit: the check runs" 0 1
+
+new_clone by-url
+commit_change two
+commit_change three
+run_check
+push "$remote" main
+expect "pushing to a URL, the tip stamped: the check is skipped" 0 0
 
 new_clone same-tree
 commit_change two
@@ -253,13 +336,98 @@ commit_change two
 commit_change three
 run_check
 push origin topic
-expect "new branch with an unstamped commit: the check runs" 0 1
+expect "new branch with two commits, the tip stamped: the check is skipped" 0 0
 
 new_clone new-branch-empty
 (cd "$clone" && git checkout -q -b topic)
 run_check
 push origin topic
 expect "new branch with no new commits, stamped: the check is skipped" 0 0
+
+# --- refs with no new commits still need the stamped tree at their tip ------
+new_clone old-commit
+commit_change two
+(cd "$clone" && git push -q --no-verify origin main 2>/dev/null)
+commit_change three
+run_check
+push origin HEAD~1:refs/heads/topic
+expect "an older, unchecked commit pushed to a new branch: the check runs" 0 1
+
+new_clone rewind
+commit_change two
+commit_change three
+run_check
+(cd "$clone" && git push -q --no-verify origin main 2>/dev/null)
+push -f origin HEAD~2:main
+expect "a forced rewind of main to an unchecked commit: the check runs" 0 1
+if [ "$(git --git-dir="$remote" log -1 --format=%s main)" = initial ]; then
+  ok "the rewind still pushes once the check passes"
+else
+  bad "the rewind still pushes once the check passes" "the remote main is not the rewound commit"
+fi
+
+new_clone rewind-checked
+commit_change two
+run_check
+commit_change three
+(cd "$clone" && git push -q --no-verify origin main 2>/dev/null)
+push -f origin HEAD~1:main
+expect "a forced rewind to the stamped tree: the check is skipped" 0 0
+
+# --- tags: the tagged commit's tree must be the stamped one ------------------
+new_clone tag-unchecked
+commit_change two
+(cd "$clone" && git push -q --no-verify origin main 2>/dev/null && git tag -a -m v1 v1 HEAD~1)
+run_check
+push origin v1
+expect "an annotated tag on an unchecked, pushed commit: the check runs" 0 1
+
+new_clone tag-light-unchecked
+commit_change two
+(cd "$clone" && git push -q --no-verify origin main 2>/dev/null && git tag v1 HEAD~1)
+run_check
+push origin v1
+expect "a lightweight tag on an unchecked, pushed commit: the check runs" 0 1
+
+new_clone tag-checked
+commit_change two
+run_check
+(cd "$clone" && git push -q --no-verify origin main 2>/dev/null && git tag -a -m v1 v1)
+push origin v1
+expect "an annotated tag on the stamped tree: the check is skipped" 0 0
+
+new_clone tag-with-branch
+commit_change two
+(cd "$clone" && git tag -a -m v1 v1 HEAD~1)
+run_check
+push origin main v1
+expect "a checked branch and a tag on an unchecked commit: the check runs" 0 1
+
+new_clone delete-with-push
+(cd "$clone" && git push -q --no-verify origin main:refs/heads/topic 2>/dev/null)
+commit_change two
+run_check
+push origin main :topic
+expect "a stamped push and a deletion together: the check is skipped" 0 0
+
+# --- only a full run's stamp counts ------------------------------------------
+new_clone fast-stamp
+commit_change two
+(cd "$clone" && FAKE_CHECK_TIER=fast FAKE_CHECK_LOG=$log scripts/check.sh) >/dev/null 2>&1
+if stamp_exists; then ok "a fast run writes a stamp"; else bad "a fast run writes a stamp" "no stamp file"; fi
+push origin main
+expect "a fast run's stamp on the pushed tree: the check runs" 0 1
+
+new_clone bare-hash-stamp
+commit_change two
+(cd "$clone" && git rev-parse 'HEAD^{tree}' >"$(git rev-parse --git-path oska-check-passed)")
+push origin main
+expect "a stamp with no tier (the old form): the check runs" 0 1
+
+new_clone unknown-tier
+commit_change two
+(cd "$clone" && scripts/pass-stamp/stamp.sh write partial "$(scripts/pass-stamp/stamp.sh tree)") >/dev/null
+if stamp_exists; then bad "an unknown tier writes no stamp" "stamp file exists"; else ok "an unknown tier writes no stamp"; fi
 
 printf '\n%d passed, %d failed\n' "$passed" "$failures"
 [ "$failures" -eq 0 ]
