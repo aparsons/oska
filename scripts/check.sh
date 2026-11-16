@@ -248,6 +248,21 @@ if step "cargo clippy" --fast --cargo; then
   cargo clippy --all-targets -- -D warnings
 fi
 
+if step "oskac type-checks for Windows" --cargo; then
+  # `cfg(windows)` code is not compiled on Linux, so a type error in it shows
+  # up only on the Windows CI job. A check-only build needs no linker, and the
+  # workspace has no external crates. The target is a one-time local
+  # `rustup target add` (docs/agents/rust.md); the ci.yml test job adds it.
+  if rustup target list --installed 2>/dev/null | grep -qx 'x86_64-pc-windows-gnu'; then
+    cargo check -p oskac --tests --target x86_64-pc-windows-gnu
+  elif [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+    echo "check.sh: x86_64-pc-windows-gnu target missing in CI; the ci.yml test job must run 'rustup target add x86_64-pc-windows-gnu'" >&2
+    exit 1
+  else
+    skip_step "x86_64-pc-windows-gnu target not installed; skipped (run: rustup target add x86_64-pc-windows-gnu)"
+  fi
+fi
+
 if step "cargo test (private temporary directory)" --cargo; then
   # A test that leaves a file or directory in the temporary directory fails the
   # check here, naming it, instead of slowly filling the shared /tmp.
@@ -331,9 +346,35 @@ fi
 
 if step "shellcheck"; then
   if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck -S warning scripts/*.sh scripts/*/*.sh site/agent-setup/*.sh .githooks/pre-push
+    # Same files and severity as the installers workflow.
+    scripts/shellcheck/run.sh
   else
+    if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+      echo "check.sh: shellcheck is not installed, and CI must run it" >&2
+      exit 1
+    fi
     skip_step "shellcheck not installed; skipped (CI runs it)"
+  fi
+fi
+
+if step "powershell parse"; then
+  # Syntax-only parse of the installer scripts; only Windows CI runs them.
+  if command -v pwsh >/dev/null 2>&1; then
+    # shellcheck disable=SC2016 # PowerShell variables, not shell ones
+    pwsh -NoProfile -NonInteractive -Command '
+      $bad = 0
+      foreach ($f in "scripts/install/install.ps1", "scripts/install/test.ps1") {
+        $errors = $null
+        [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$errors)
+        foreach ($e in $errors) { "${f}:$($e.Extent.StartLineNumber): $($e.Message)"; $bad++ }
+      }
+      if ($bad -gt 0) { exit 1 }'
+  else
+    if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+      echo "check.sh: pwsh is not installed, and CI must run it" >&2
+      exit 1
+    fi
+    skip_step "pwsh not installed; skipped (CI runs it)"
   fi
 fi
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016  # single quotes hold text on purpose: patterns, commands and scripts that must not expand here
 # Tests for guard.sh, the Claude Code PreToolUse hook that refuses broad kills.
 # Each case feeds the hook the JSON Claude Code sends for a Bash call and
 # expects exit 2 with the safe alternative on stderr (refused), or exit 0 with
