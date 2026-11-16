@@ -48,6 +48,12 @@ When every step of `scripts/check.sh` passes, it writes the tree hash it checked
 
 A push to `ticket/**` or `review-fixes-*` runs `ci.yml`, `windows.yml` and `confinement.yml`, so every platform verifies a ticket before the spec's pull request. Name ticket branches `ticket/<number>-<slug>`.
 
+## Reading CI failures
+
+- Find a failed job: `gh pr checks <pr> --json name,bucket,link` (bucket `fail` marks failures). The job id is the last number in the link.
+- Read its log: `gh api repos/aparsons/oska/actions/jobs/<id>/logs --allow-escape-sequences`. Find the failing step with `| grep -nE '##\[error\]|FAIL|panicked'` and read around those lines, not the whole log.
+- In your report, list everything not run locally: PowerShell, Windows and macOS, and say whether CI passed on each.
+
 ## Windows on demand
 
 To re-test one crate or test on Windows after a push, dispatch the workflow: `gh workflow run windows.yml --ref <branch> -f crate=oskac -f test=self_cli`. `crate` is `all` (default), `oska-run` or `oskac`; `test` is an optional integration-test target (needs one crate); `filter` is an optional test name substring. A dispatch that runs no test fails. Push and pull-request runs are unchanged.
