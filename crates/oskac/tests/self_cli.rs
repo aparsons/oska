@@ -193,7 +193,25 @@ fn uninstall_removes_what_the_receipt_lists_and_nothing_else() {
     let Some(Json::Arr(removed)) = done.get("removed") else {
         panic!("removed should be an array")
     };
-    assert_eq!(removed.len(), 5, "{removed:?}");
+    let Some(Json::Arr(pending)) = done.get("pending") else {
+        panic!("pending should be an array")
+    };
+    if cfg!(windows) {
+        // Windows cannot delete the running oskac.exe: it is moved aside
+        // and reported as pending, with where it went.
+        assert_eq!(removed.len(), 4, "{removed:?}");
+        assert_eq!(pending.len(), 1, "{pending:?}");
+        let exe = exe.canonicalize().unwrap_or(exe);
+        assert_eq!(pending[0].get("path"), Some(&Json::Str(shown(&exe))));
+        let Some(Json::Str(moved_to)) = pending[0].get("moved_to") else {
+            panic!("moved_to should be a string: {pending:?}")
+        };
+        assert!(Path::new(moved_to).exists(), "{moved_to}");
+        let _ = std::fs::remove_file(moved_to);
+    } else {
+        assert_eq!(removed.len(), 5, "{removed:?}");
+        assert!(pending.is_empty(), "{pending:?}");
+    }
     assert_eq!(done.get("kept"), Some(&Json::Arr(vec![])));
     assert_eq!(done.get("path_hint"), Some(&Json::Null));
     assert!(!home.exists(), "the empty Oska home should be removed");
@@ -238,36 +256,6 @@ fn uninstall_without_a_receipt_is_not_installed() {
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(text(&output.stdout), "");
     assert!(text(&output.stderr).starts_with("oskac self uninstall: there is no install receipt"));
-}
-
-#[test]
-fn uninstall_by_a_copy_the_receipt_does_not_record_is_refused() {
-    let scratch = Scratch::new("uninstall-unmanaged");
-    let home = scratch.0.join(".oska");
-    let exe = install(&home, VERSION, "");
-    // This test binary's oskac is not the one in the receipt.
-    let output = oskac(&home, &["self", "uninstall", "--format=json"]);
-    assert_eq!(output.status.code(), Some(1));
-    assert_eq!(
-        json_of(&output).get("error"),
-        Some(&Json::Str("not_managed".into()))
-    );
-    assert!(exe.exists(), "nothing should be removed");
-    assert!(home.join("receipt.json").exists());
-}
-
-#[test]
-fn uninstall_of_another_version_is_refused() {
-    let scratch = Scratch::new("uninstall-version");
-    let home = scratch.0.join(".oska");
-    let exe = install(&home, "0.0.1", "");
-    let output = run(&exe, &home, &["self", "uninstall", "--format=json"]);
-    assert_eq!(output.status.code(), Some(1));
-    assert_eq!(
-        json_of(&output).get("error"),
-        Some(&Json::Str("not_managed".into()))
-    );
-    assert!(exe.exists());
 }
 
 /// Rewrite the receipt of an installed home with one more entry.
@@ -326,7 +314,12 @@ fn uninstall_refuses_unsafe_entries_and_removes_nothing() {
         let home_text = home.to_string_lossy().replace('\\', "\\\\");
         add_entry(&home, &entry.replace('/', &sep).replace("HOME", &home_text));
         let output = run(&exe, &home, &["self", "uninstall", "--format=json"]);
-        assert_eq!(output.status.code(), Some(1), "{why}");
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{why}: {}",
+            text(&output.stdout)
+        );
         let refusal = json_of(&output);
         assert_eq!(
             refusal.get("error"),
@@ -415,6 +408,37 @@ fn uninstall_reports_the_path_hint_when_bin_is_on_the_path() {
 }
 
 #[test]
+fn unknown_self_commands_and_flags_are_json_usage_errors_with_format_json() {
+    let scratch = Scratch::new("usage-json");
+    for args in [
+        &["self", "--format=json"][..],
+        &["self", "update", "--format=json"],
+        &["self", "info", "--bogus", "--format=json"],
+        &[
+            "self",
+            "uninstall",
+            "--target",
+            "linux-x86_64",
+            "--format=json",
+        ],
+    ] {
+        let output = oskac(&scratch.0, args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        let error = json_of(&output);
+        assert_eq!(error.get("ok"), Some(&Json::Bool(false)), "{args:?}");
+        assert_eq!(
+            error.get("error"),
+            Some(&Json::Str("usage".into())),
+            "{args:?}"
+        );
+        let Some(Json::Str(message)) = error.get("message") else {
+            panic!("message should be a string: {error:?}")
+        };
+        assert!(message.contains("oskac self info"), "{args:?}: {message}");
+    }
+}
+
+#[test]
 fn unknown_self_commands_are_usage_errors() {
     let scratch = Scratch::new("usage");
     for args in [&["self"][..], &["self", "update"], &["self", "info", "x"]] {
@@ -422,4 +446,319 @@ fn unknown_self_commands_are_usage_errors() {
         assert_eq!(output.status.code(), Some(2), "{args:?}");
         assert!(text(&output.stderr).contains("oskac self info"), "{args:?}");
     }
+}
+
+// ---- Every kind of entry the installers write ------------------------------------------
+
+/// The hook script and settings `--hook` installs: the published files.
+const HOOK_SCRIPT: &str = include_str!("../../../site/agent-setup/oska-check.sh");
+const HOOK_SETTINGS: &str = include_str!("../../../site/agent-setup/claude-settings.json");
+/// The marker `install.sh --add-to-path` ends its profile line with.
+const PROFILE_MARK: &str = "# added by the Oska installer";
+const SEP: char = std::path::MAIN_SEPARATOR;
+
+/// `text` as a JSON string literal.
+fn q(text: &str) -> String {
+    format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn qp(path: &Path) -> String {
+    q(&path.to_string_lossy())
+}
+
+/// A project with the hook files `--hook` writes, with the given contents.
+/// Returns the project, the script and the settings.
+fn hooked_project(root: &Path, script: &str, settings: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let project = root.join("project");
+    let hooks = project.join(".claude").join("hooks");
+    std::fs::create_dir_all(&hooks).expect("hooks dir");
+    let script_path = hooks.join("oska-check.sh");
+    let settings_path = project.join(".claude").join("settings.json");
+    std::fs::write(&script_path, script).expect("hook script");
+    std::fs::write(&settings_path, settings).expect("hook settings");
+    (project, script_path, settings_path)
+}
+
+/// A receipt entry for a hook file, as `install.sh --hook` records it.
+fn hook_entry(kind: &str, path: &Path, sha256: Option<&str>, project: &Path) -> String {
+    let sum = sha256.map_or_else(String::new, |s| format!(",\"sha256\":{}", q(s)));
+    format!(
+        "{{\"path\":{},\"kind\":{}{sum},\"project\":{}}}",
+        qp(path),
+        q(kind),
+        qp(project)
+    )
+}
+
+fn strings(value: Option<&Json>) -> Vec<String> {
+    match value {
+        Some(Json::Arr(items)) => items
+            .iter()
+            .map(|item| match item {
+                Json::Str(s) => s.clone(),
+                other => panic!("expected a string, got {other:?}"),
+            })
+            .collect(),
+        other => panic!("expected an array, got {other:?}"),
+    }
+}
+
+#[test]
+fn uninstall_removes_the_hook_and_leaves_path_edits_to_the_installer() {
+    let scratch = Scratch::new("uninstall-kinds");
+    let home = scratch.0.join(".oska");
+    let exe = install(&home, VERSION, "");
+    let bin = home.join("bin");
+    let (project, script, settings) = hooked_project(&scratch.0, HOOK_SCRIPT, HOOK_SETTINGS);
+    let profile = scratch.0.join(".bashrc");
+    let line = format!("export PATH=\"{}:$PATH\" {PROFILE_MARK}", bin.display());
+    let profile_text = format!("# mine\n{line}\n");
+    std::fs::write(&profile, &profile_text).expect("profile");
+    add_entry(
+        &home,
+        &format!(
+            "{{\"path\":{},\"kind\":\"profile_line\",\"line\":{}}}",
+            qp(&profile),
+            q(&line)
+        ),
+    );
+    add_entry(
+        &home,
+        &hook_entry("hook_script", &script, Some("dd"), &project),
+    );
+    add_entry(
+        &home,
+        &hook_entry("hook_settings", &settings, Some("ee"), &project),
+    );
+    add_entry(
+        &home,
+        &format!("{{\"path\":{},\"kind\":\"user_path_entry\"}}", qp(&bin)),
+    );
+
+    let output = run(&exe, &home, &["self", "uninstall", "--format=json"]);
+    assert_eq!(text(&output.stderr), "");
+    assert_eq!(output.status.code(), Some(0));
+    let done = json_of(&output);
+    assert_eq!(done.get("ok"), Some(&Json::Bool(true)));
+    let removed = strings(done.get("removed"));
+    assert!(removed.contains(&shown(&script)), "{removed:?}");
+    assert!(removed.contains(&shown(&settings)), "{removed:?}");
+    assert!(!script.exists() && !settings.exists());
+    // The PATH edits are the installer's to undo: reported, not made.
+    assert_eq!(
+        std::fs::read_to_string(&profile).expect("profile"),
+        profile_text
+    );
+    let Some(Json::Str(hint)) = done.get("path_hint") else {
+        panic!("path_hint should be a string: {done:?}")
+    };
+    assert!(hint.contains(&shown(&profile)), "{hint}");
+    assert!(hint.contains(&line), "{hint}");
+    assert!(hint.contains("user PATH"), "{hint}");
+    assert!(hint.contains("--uninstall"), "{hint}");
+}
+
+#[test]
+fn uninstall_keeps_a_changed_hook_and_settings_it_did_not_create() {
+    let scratch = Scratch::new("uninstall-hook-keep");
+    let home = scratch.0.join(".oska");
+    let exe = install(&home, VERSION, "");
+    let (project, script, settings) =
+        hooked_project(&scratch.0, "#!/bin/sh\necho mine\n", "{\"mine\":true}\n");
+    add_entry(
+        &home,
+        &hook_entry("hook_script", &script, Some("dd"), &project),
+    );
+    add_entry(
+        &home,
+        &hook_entry("hook_settings", &settings, None, &project),
+    );
+    let output = run(&exe, &home, &["self", "uninstall", "--format=json"]);
+    assert_eq!(output.status.code(), Some(0));
+    let kept = strings(json_of(&output).get("kept"));
+    assert!(kept.contains(&shown(&script)), "{kept:?}");
+    assert!(kept.contains(&shown(&settings)), "{kept:?}");
+    assert!(script.exists() && settings.exists());
+
+    let home = scratch.0.join("b").join(".oska");
+    let exe = install(&home, VERSION, "");
+    add_entry(
+        &home,
+        &hook_entry("hook_script", &script, Some("dd"), &project),
+    );
+    add_entry(
+        &home,
+        &hook_entry("hook_settings", &settings, None, &project),
+    );
+    let human = text(&run(&exe, &home, &["self", "uninstall"]).stdout);
+    assert!(human.contains("changed since it was installed"), "{human}");
+    assert!(
+        human.contains("remove its oska-check hook by hand"),
+        "{human}"
+    );
+}
+
+#[test]
+fn uninstall_refuses_a_tampered_receipt_and_removes_nothing() {
+    let scratch = Scratch::new("uninstall-tampered");
+    let (project, script, settings) = hooked_project(&scratch.0, HOOK_SCRIPT, HOOK_SETTINGS);
+    let notes = scratch.0.join("notes.txt");
+    std::fs::write(&notes, "notes\n").expect("notes");
+    let profile = scratch.0.join(".profile");
+    std::fs::write(&profile, "# mine\n").expect("profile");
+    let marked = format!("export PATH=\"/x:$PATH\" {PROFILE_MARK}");
+    let cases = [
+        (
+            hook_entry(
+                "hook_script",
+                &project.join(".claude").join("hooks").join("other.sh"),
+                Some("dd"),
+                &project,
+            ),
+            "not where --hook writes it",
+        ),
+        (
+            hook_entry("hook_script", &notes, Some("dd"), &project),
+            "not where --hook writes it",
+        ),
+        (
+            hook_entry("hook_settings", &settings, Some("dd"), Path::new("project")),
+            "not an absolute path",
+        ),
+        // Spelled out as text: on Windows, `join("..")` on a `\\?\` path
+        // takes the step, which would leave no `..` to refuse.
+        (
+            hook_entry(
+                "hook_settings",
+                Path::new(&format!(
+                    "{}{SEP}x{SEP}..{SEP}.claude{SEP}settings.json",
+                    project.display()
+                )),
+                Some("dd"),
+                Path::new(&format!("{}{SEP}x{SEP}..", project.display())),
+            ),
+            "climbs out",
+        ),
+        (
+            hook_entry(
+                "hook_settings",
+                &settings,
+                Some("dd"),
+                Path::new(&format!("{}{SEP}x{SEP}..", project.display())),
+            ),
+            "climbs out",
+        ),
+        (
+            format!(
+                "{{\"path\":{},\"kind\":\"profile_line\",\"line\":{}}}",
+                qp(&notes),
+                q(&marked)
+            ),
+            "not a shell profile",
+        ),
+        (
+            format!(
+                "{{\"path\":{},\"kind\":\"profile_line\",\"line\":\"rm -rf ~\"}}",
+                qp(&profile)
+            ),
+            "not the marked line",
+        ),
+        (
+            format!(
+                "{{\"path\":{},\"kind\":\"user_path_entry\"}}",
+                qp(&scratch.0)
+            ),
+            "not the bin directory",
+        ),
+    ];
+    for (n, (entry, why)) in cases.iter().enumerate() {
+        // In the scratch directory, which is the user's home, beside the
+        // profile.
+        let home = scratch.0.join(format!(".oska{n}"));
+        let exe = install(&home, VERSION, "");
+        // A good entry first, so that a removal before the refusal shows.
+        add_entry(
+            &home,
+            &hook_entry("hook_script", &script, Some("dd"), &project),
+        );
+        add_entry(&home, entry);
+        let output = run(&exe, &home, &["self", "uninstall", "--format=json"]);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{why}: the receipt entry {entry} gave {}",
+            text(&output.stdout)
+        );
+        let refusal = json_of(&output);
+        assert_eq!(
+            refusal.get("error"),
+            Some(&Json::Str("unsafe_path".into())),
+            "{why}"
+        );
+        let Some(Json::Str(message)) = refusal.get("message") else {
+            panic!("message")
+        };
+        assert!(message.contains(why), "{why}: {message}");
+        assert!(
+            exe.exists() && script.exists() && settings.exists(),
+            "{why}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&profile).expect("profile"),
+            "# mine\n"
+        );
+    }
+}
+
+#[test]
+fn uninstall_by_another_oskac_keeps_the_binary_and_record_but_removes_the_hook() {
+    let scratch = Scratch::new("uninstall-unmanaged");
+    for (n, version) in [VERSION, "0.0.1"].into_iter().enumerate() {
+        let root = scratch.0.join(format!("r{n}"));
+        let home = root.join(".oska");
+        let exe = install(&home, version, "");
+        let (project, script, settings) = hooked_project(&root, HOOK_SCRIPT, HOOK_SETTINGS);
+        add_entry(
+            &home,
+            &hook_entry("hook_script", &script, Some("dd"), &project),
+        );
+        add_entry(
+            &home,
+            &hook_entry("hook_settings", &settings, Some("ee"), &project),
+        );
+        // The right version run from a copy the receipt does not list, and
+        // the listed copy of another version.
+        let output = if version == VERSION {
+            oskac(&home, &["self", "uninstall", "--format=json"])
+        } else {
+            run(&exe, &home, &["self", "uninstall", "--format=json"])
+        };
+        assert_eq!(output.status.code(), Some(0), "{version}");
+        let done = json_of(&output);
+        assert_eq!(done.get("ok"), Some(&Json::Bool(true)), "{version}");
+        let kept = strings(done.get("kept"));
+        assert!(kept.contains(&shown(&exe)), "{version}: {kept:?}");
+        assert!(
+            kept.contains(&shown(&home.join("receipt.json"))),
+            "{version}: {kept:?}"
+        );
+        assert!(exe.exists() && home.join("receipt.json").exists());
+        assert!(!script.exists() && !settings.exists(), "{version}");
+    }
+}
+
+#[test]
+fn info_says_it_checks_no_digest_and_reads_any_spelling_of_schema_1() {
+    let scratch = Scratch::new("info-schema");
+    let home = scratch.0.join(".oska");
+    let exe = install(&home, VERSION, "");
+    let path = home.join("receipt.json");
+    let receipt = std::fs::read_to_string(&path).expect("receipt");
+    std::fs::write(&path, receipt.replace("\"schema\":1,", "\"schema\":1.0,")).expect("receipt");
+    // The receipt is printed back with its 1.0, which this test's JSON
+    // reader does not take, so the fields are looked for in the text.
+    let info = text(&run(&exe, &home, &["self", "info", "--format=json"]).stdout);
+    assert!(info.contains("\"digest_checked\":false"), "{info}");
+    assert!(info.contains("\"receipt_matches\":true"), "{info}");
+    assert!(info.contains("\"schema\":1.0"), "{info}");
 }

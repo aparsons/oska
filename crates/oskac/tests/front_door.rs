@@ -547,6 +547,35 @@ fn the_install_guide_puts_the_installers_first_and_building_from_source_last() {
     );
 }
 
+/// The error codes a script stops with: the word after each `marker`.
+fn error_codes(script: &str, marker: &str) -> std::collections::BTreeSet<String> {
+    read(script)
+        .split(marker)
+        .skip(1)
+        .map(|rest| {
+            rest.trim_start_matches('\'')
+                .chars()
+                .take_while(|c| c.is_ascii_lowercase() || *c == '_')
+                .collect::<String>()
+        })
+        .filter(|code| !code.is_empty())
+        .collect()
+}
+
+#[test]
+fn the_install_guide_tables_every_error_code_the_installers_have() {
+    let guide = read("docs/guide/install.md");
+    let mut codes = error_codes("scripts/install/install.sh", "fail ");
+    codes.extend(error_codes("scripts/install/install.ps1", "Stop-Install '"));
+    assert!(codes.len() >= 17, "{codes:?}");
+    for code in codes {
+        assert!(
+            guide.contains(&format!("\n| `{code}` |")),
+            "the install guide's table has no row for {code}"
+        );
+    }
+}
+
 /// The release a page names as the latest: `vX.Y.Z` after `marker`.
 fn release_after(page: &str, marker: &str) -> String {
     let text = read(page);

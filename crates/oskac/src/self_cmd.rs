@@ -3,20 +3,34 @@
 //! install receipt (`receipt.json` in the Oska home) that the installers
 //! write, and neither makes a network connection.
 //!
-//! `uninstall` applies the installer's `--uninstall` rules in-process: it
-//! removes only what the receipt lists, only files directly in the Oska
-//! home or its `bin` directory, checks every entry before it removes
-//! anything, and never touches `~/.config/oska`. The running `oskac` is
-//! identified as the managed install by its path and version; comparing a
-//! file's SHA-256 to the receipt's waits for Oska's own crypto, so a file
-//! changed since it was installed is not yet kept.
+//! `uninstall` applies the installer's `--uninstall` rules in-process: every
+//! entry of the receipt is checked against the places the installer writes
+//! before anything is removed, and one that is not refuses the whole
+//! uninstall. It removes the `binary` and `record` entries (only when this
+//! `oskac` is the install the receipt records) and the `--hook` files (only
+//! when unchanged), and leaves the installer's PATH edits to the installer's
+//! own `--uninstall`, reporting them in `path_hint`. It never touches
+//! `~/.config/oska`. `oskac` computes no SHA-256: it identifies its install
+//! by path and version, and a hook file by comparing it with the published
+//! file built into it.
 
-use crate::self_json::{quote, Json};
+use crate::json::{quote, quote_option, Json};
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The files `install.sh --hook` installs, as this release publishes them.
+const HOOK_SCRIPT: &str = include_str!("../../../site/agent-setup/oska-check.sh");
+const HOOK_SETTINGS: &str = include_str!("../../../site/agent-setup/claude-settings.json");
+
+/// The marker comment `install.sh --add-to-path` ends its profile line with.
+const PROFILE_MARK: &str = "# added by the Oska installer";
+
+/// The shell profiles `install.sh --add-to-path` picks from, directly in
+/// the user's home.
+const PROFILES: [&str; 4] = [".zshrc", ".bashrc", ".bash_profile", ".profile"];
 
 /// The platform name release assets use, as the installers record it.
 fn platform() -> String {
@@ -105,15 +119,69 @@ fn fail(json: bool, command: &str, refusal: &Refusal) -> ExitCode {
     ExitCode::from(1)
 }
 
+/// An unknown `self` subcommand or flag: a usage error, exit code 2, as
+/// JSON under `--format=json`.
+pub(crate) fn usage(json: bool) -> ExitCode {
+    if json {
+        outln!(
+            "{{\"ok\":false,\"error\":\"usage\",\"message\":{}}}",
+            quote("the self commands are `oskac self info [--format=json]` and `oskac self uninstall [--format=json]`")
+        );
+    } else {
+        eprint!("{}", crate::USAGE);
+    }
+    ExitCode::from(2)
+}
+
+/// What a receipt entry is. Every kind an installer writes is here, so a
+/// new one is a match arm to add, not a string to miss.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Kind {
+    /// The `oskac` executable, in the Oska home's `bin`.
+    Binary,
+    /// A file the installer keeps about the install: the receipt itself
+    /// and the legacy `version` file.
+    Record,
+    /// The line `install.sh --add-to-path` added to a shell profile.
+    ProfileLine,
+    /// The user-PATH entry `install.ps1 --add-to-path` added.
+    UserPathEntry,
+    /// The hook script `install.sh --hook` wrote into a project.
+    HookScript,
+    /// The Claude Code settings `install.sh --hook` created in a project,
+    /// or found there (then with no SHA-256).
+    HookSettings,
+    /// A kind no installer this `oskac` knows writes.
+    Unknown(String),
+}
+
+impl Kind {
+    fn named(name: &str) -> Kind {
+        match name {
+            "binary" => Kind::Binary,
+            "record" => Kind::Record,
+            "profile_line" => Kind::ProfileLine,
+            "user_path_entry" => Kind::UserPathEntry,
+            "hook_script" => Kind::HookScript,
+            "hook_settings" => Kind::HookSettings,
+            other => Kind::Unknown(other.to_string()),
+        }
+    }
+}
+
 /// One `files` entry of a receipt.
 struct Entry {
-    kind: String,
+    kind: Kind,
     sha256: String,
     path: String,
+    /// A `profile_line`'s exact line.
+    line: String,
+    /// The project directory a hook entry was written into.
+    project: String,
 }
 
 fn entries(receipt: &Json) -> Result<Vec<Entry>, String> {
-    if receipt.get("schema") != Some(&Json::Num("1".to_string())) {
+    if receipt.get("schema").and_then(Json::as_f64) != Some(1.0) {
         return Err("its schema is not 1".to_string());
     }
     let Some(Json::Arr(files)) = receipt.get("files") else {
@@ -128,9 +196,11 @@ fn entries(receipt: &Json) -> Result<Vec<Entry>, String> {
     Ok(files
         .iter()
         .map(|file| Entry {
-            kind: text(file, "kind"),
+            kind: Kind::named(&text(file, "kind")),
             sha256: text(file, "sha256"),
             path: text(file, "path"),
+            line: text(file, "line"),
+            project: text(file, "project"),
         })
         .collect())
 }
@@ -155,7 +225,7 @@ fn identity(receipt: &Json, exe: Option<&Path>) -> Result<(), String> {
         return Err("this oskac's own path cannot be found".to_string());
     };
     let files = entries(receipt)?;
-    let listed = files.iter().filter(|e| e.kind == "binary").any(|e| {
+    let listed = files.iter().filter(|e| e.kind == Kind::Binary).any(|e| {
         let path = Path::new(&e.path);
         path.canonicalize().is_ok_and(|p| p == exe) || path == exe
     });
@@ -195,16 +265,14 @@ pub(crate) fn info(json: bool) -> ExitCode {
             receipt_json.clear();
             receipt.write(&mut receipt_json);
         }
-        let string_or_null =
-            |s: Option<String>| s.map_or_else(|| "null".to_string(), |s| quote(&s));
         outln!(
-            "{{\"version\":{},\"platform\":{},\"executable\":{},\"oska_home\":{},\"receipt\":{},\"receipt_error\":{},\"receipt_matches\":{}}}",
+            "{{\"version\":{},\"platform\":{},\"executable\":{},\"oska_home\":{},\"receipt\":{},\"receipt_error\":{},\"receipt_matches\":{},\"digest_checked\":false}}",
             quote(VERSION),
             quote(&platform()),
-            string_or_null(exe.as_deref().map(display)),
-            string_or_null(home.as_deref().map(display)),
+            quote_option(exe.as_deref().map(display).as_deref()),
+            quote_option(home.as_deref().map(display).as_deref()),
             receipt_json,
-            string_or_null(receipt_error),
+            quote_option(receipt_error.as_deref()),
             managed.is_ok()
         );
         return ExitCode::SUCCESS;
@@ -236,10 +304,17 @@ pub(crate) fn info(json: bool) -> ExitCode {
         (None, None) => outln!("receipt: none"),
     }
     match managed {
-        Ok(()) => outln!("managed install: yes, the receipt matches this oskac"),
+        Ok(()) => outln!("managed install: yes, the receipt matches this oskac by path and version (its SHA-256 is not checked)"),
         Err(why) => outln!("managed install: no ({why})"),
     }
     ExitCode::SUCCESS
+}
+
+/// A file Windows would not delete because it is this running `oskac`,
+/// moved aside instead: where it was, and where it went.
+struct Pending {
+    path: String,
+    moved_to: String,
 }
 
 /// What `uninstall` found and did, for the report.
@@ -247,55 +322,137 @@ pub(crate) fn info(json: bool) -> ExitCode {
 struct Outcome {
     removed: Vec<String>,
     /// A path kept, and why.
-    kept: Vec<(String, &'static str)>,
+    kept: Vec<(String, String)>,
+    pending: Vec<Pending>,
 }
 
 impl Outcome {
-    fn keep(&mut self, path: &Path, why: &'static str) {
-        self.kept.push((display(path), why));
+    fn keep(&mut self, path: &Path, why: impl Into<String>) {
+        self.kept.push((display(path), why.into()));
     }
 }
 
-/// An entry's path, checked: the path inside the Oska home it names, or
-/// the refusal.
-fn checked_entry(entry: &Entry, home: &Path) -> Result<PathBuf, Refusal> {
-    let unsafe_path = |why: String| refusal("unsafe_path", format!("{why}; nothing was removed"));
+/// What a checked entry asks of the uninstall.
+enum Plan {
+    /// A file directly in the Oska home or its `bin`.
+    InHome(PathBuf),
+    /// A `--hook` file, removed if it is still the published one.
+    Hook(PathBuf, &'static str),
+    /// A profile line, left to the installer's `--uninstall`.
+    Profile(PathBuf, String),
+    /// The user-PATH entry, left to the installer's `--uninstall`.
+    UserPath,
+}
+
+/// Where uninstall may act: the Oska home, its `bin`, and the user's home.
+struct Places<'a> {
+    home: &'a Path,
+    bin: &'a Path,
+    user_home: Option<&'a Path>,
+}
+
+fn unsafe_path(why: String) -> Refusal {
+    refusal("unsafe_path", format!("{why}; nothing was removed"))
+}
+
+/// Whether two PATH entries are the same directory, as the PowerShell
+/// installer compares them: trailing separators aside, and on Windows in
+/// any case.
+fn same_entry(a: &str, b: &str) -> bool {
+    let trim = |s: &str| s.trim_end_matches(['\\', '/']).to_string();
+    let (a, b) = (trim(a), trim(b));
+    if cfg!(windows) {
+        a.to_lowercase() == b.to_lowercase()
+    } else {
+        a == b
+    }
+}
+
+/// Whether `text`, split on either separator, has a `.` or `..` part.
+fn has_dot_part(text: &str) -> bool {
+    text.split(['/', '\\'])
+        .any(|part| part == "." || part == "..")
+}
+
+/// An entry, checked against where the installer writes its kind: what to
+/// do with it, or the refusal.
+fn checked_entry(entry: &Entry, places: &Places) -> Result<Plan, Refusal> {
     let listed = &entry.path;
     let path = Path::new(listed);
-    if listed.chars().any(char::is_control) {
+    if [listed, &entry.line, &entry.project]
+        .iter()
+        .any(|text| text.chars().any(char::is_control))
+    {
         return Err(unsafe_path(
             "the receipt lists a path with a control character in it".to_string(),
         ));
+    }
+    if entry.kind == Kind::UserPathEntry {
+        // The bin directory, as it went into the user PATH.
+        return if same_entry(listed, &places.bin.to_string_lossy()) {
+            Ok(Plan::UserPath)
+        } else {
+            Err(unsafe_path(format!(
+                "the receipt lists {listed} as an entry of the user PATH, which is not the bin directory {}",
+                display(places.bin)
+            )))
+        };
     }
     if !path.is_absolute() {
         return Err(unsafe_path(format!(
             "the receipt lists '{listed}', which is not an absolute path"
         )));
     }
+    // The text is checked as well as the parsed path: on Windows, `Path`
+    // treats a `.` in a `\\?\` path as a name, not as a step.
     let parts: Vec<Component> = path.components().collect();
-    if parts.contains(&Component::ParentDir) {
+    if parts.contains(&Component::ParentDir) || has_dot_part(listed) {
         return Err(unsafe_path(format!(
             "the receipt lists {listed}, which climbs out with .."
         )));
     }
-    let in_config = parts.windows(2).any(|w| {
-        matches!(w[0], Component::Normal(a) if a == ".config")
-            && matches!(w[1], Component::Normal(b) if b == "oska")
-    });
+    // Windows names are case-insensitive, so `.Config\Oska` is the same
+    // directory there.
+    let named = |part: &Component, name: &str| match part {
+        Component::Normal(n) if cfg!(windows) => n.to_string_lossy().eq_ignore_ascii_case(name),
+        Component::Normal(n) => *n == name,
+        _ => false,
+    };
+    let in_config = parts
+        .windows(2)
+        .any(|w| named(&w[0], ".config") && named(&w[1], "oska"));
     if in_config {
         return Err(unsafe_path(format!(
             "the receipt lists {listed}, in a .config/oska directory of settings and credentials, which uninstall never touches"
         )));
     }
-    if entry.kind != "binary" && entry.kind != "record" {
+    let plan = match &entry.kind {
+        Kind::Binary | Kind::Record => in_home(path, places)?,
+        Kind::ProfileLine => profile_line(path, &entry.line, places)?,
+        Kind::HookScript | Kind::HookSettings => hook_file(entry, path)?,
+        // Checked above, before the path rules, as it is not a file.
+        Kind::UserPathEntry => Plan::UserPath,
+        Kind::Unknown(kind) => {
+            return Err(unsafe_path(format!(
+                "the receipt lists {listed} as a '{kind}', which this installer does not remove"
+            )))
+        }
+    };
+    if is_symlink(path) {
         return Err(unsafe_path(format!(
-            "the receipt lists {listed} as a '{}', which this installer does not remove",
-            entry.kind
+            "the receipt lists {listed}, which is reached through a symlink"
         )));
     }
+    Ok(plan)
+}
+
+/// A `binary` or `record`: directly in the Oska home or its `bin`.
+fn in_home(path: &Path, places: &Places) -> Result<Plan, Refusal> {
+    let home = places.home;
     let Ok(rest) = path.strip_prefix(home) else {
         return Err(unsafe_path(format!(
-            "the receipt lists {listed}, which is outside the Oska home {}",
+            "the receipt lists {}, which is outside the Oska home {}",
+            path.display(),
             display(home)
         )));
     };
@@ -306,31 +463,94 @@ fn checked_entry(entry: &Entry, home: &Path) -> Result<PathBuf, Refusal> {
             _ => None,
         })
         .collect();
-    let bin = std::ffi::OsStr::new("bin");
     let dir = match names.as_slice() {
-        [_] => home.to_path_buf(),
-        [first, _] if *first == bin => home.join("bin"),
+        [_] => home,
+        [first, _] if *first == "bin" => places.bin,
         _ => {
+            let home = display(home);
             return Err(unsafe_path(format!(
-                "the receipt lists {listed}, which is not directly in {0} or {0}/bin",
-                display(home)
-            )))
+                "the receipt lists {}, which is not directly in {home} or {home}/bin",
+                path.display()
+            )));
         }
     };
-    if is_symlink(&dir) || is_symlink(path) {
+    if is_symlink(dir) {
         return Err(unsafe_path(format!(
-            "the receipt lists {listed}, which is reached through a symlink"
+            "the receipt lists {}, which is reached through a symlink",
+            path.display()
         )));
     }
-    Ok(path.to_path_buf())
+    Ok(Plan::InHome(path.to_path_buf()))
 }
 
-/// Refuse if a directory above `home` is a symlink, unless root owns it
+/// A `profile_line`: one of the profiles `--add-to-path` picks, directly in
+/// the user's home, and the marked line it writes, so that a receipt
+/// cannot name some other line or file.
+fn profile_line(path: &Path, line: &str, places: &Places) -> Result<Plan, Refusal> {
+    let listed = path.display();
+    let Some(user_home) = places.user_home else {
+        return Err(unsafe_path(format!(
+            "the receipt lists the profile {listed}, and there is no home directory to check it against"
+        )));
+    };
+    let is_profile = path.parent() == Some(user_home)
+        && path
+            .file_name()
+            .is_some_and(|name| PROFILES.iter().any(|p| name == *p));
+    if !is_profile {
+        return Err(unsafe_path(format!(
+            "the receipt lists the profile {listed}, which is not a shell profile directly in {}",
+            display(user_home)
+        )));
+    }
+    if !(line.starts_with("export PATH=") && line.ends_with(PROFILE_MARK)) {
+        return Err(unsafe_path(format!(
+            "the receipt lists a line of {listed} that is not the marked line the installer adds"
+        )));
+    }
+    no_symlink_above(path)?;
+    Ok(Plan::Profile(path.to_path_buf(), line.to_string()))
+}
+
+/// A `hook_script` or `hook_settings`: in the project recorded with it, at
+/// the place `--hook` writes it.
+fn hook_file(entry: &Entry, path: &Path) -> Result<Plan, Refusal> {
+    let listed = path.display();
+    let project = Path::new(&entry.project);
+    if !project.is_absolute() {
+        return Err(unsafe_path(format!(
+            "the receipt lists {listed} with the project '{}', which is not an absolute path",
+            entry.project
+        )));
+    }
+    if has_dot_part(&entry.project) {
+        return Err(unsafe_path(format!(
+            "the receipt lists the project {}, which climbs out with ..",
+            entry.project
+        )));
+    }
+    let claude = project.join(".claude");
+    let (place, published) = if entry.kind == Kind::HookScript {
+        (claude.join("hooks").join("oska-check.sh"), HOOK_SCRIPT)
+    } else {
+        (claude.join("settings.json"), HOOK_SETTINGS)
+    };
+    if path != place {
+        return Err(unsafe_path(format!(
+            "the receipt lists {listed}, which is not where --hook writes it in the project {}",
+            entry.project
+        )));
+    }
+    no_symlink_above(path)?;
+    Ok(Plan::Hook(path.to_path_buf(), published))
+}
+
+/// Refuse if a directory above `path` is a symlink, unless root owns it
 /// (on Unix): only root can make a symlink root owns, so such a one, like
 /// macOS's `/var`, is the system's. One anyone else made could steer a
 /// deletion out of where it should be.
-fn no_symlink_above(home: &Path) -> Result<(), Refusal> {
-    for above in home.ancestors().skip(1) {
+fn no_symlink_above(path: &Path) -> Result<(), Refusal> {
+    for above in path.ancestors().skip(1) {
         let Ok(meta) = std::fs::symlink_metadata(above) else {
             continue;
         };
@@ -344,32 +564,45 @@ fn no_symlink_above(home: &Path) -> Result<(), Refusal> {
                 continue;
             }
         }
-        return Err(refusal(
-            "unsafe_path",
-            format!(
-                "{} is reached through the symlink {}; nothing was removed",
-                display(home),
-                display(above)
-            ),
-        ));
+        return Err(unsafe_path(format!(
+            "{} is reached through the symlink {}",
+            display(path),
+            display(above)
+        )));
     }
     Ok(())
 }
 
+/// What became of a file uninstall removes.
+enum Removal {
+    Removed,
+    /// Windows would not delete the running `oskac`, so it was moved here.
+    Pending(PathBuf),
+    Failed,
+}
+
 /// Remove a file. Windows will not delete a running executable but will
-/// rename it, so a file that cannot be deleted there is moved into the
-/// temporary directory under a name of its own, which empties its place.
-fn remove_file(path: &Path) -> bool {
+/// rename it, so this `oskac` is moved into the temporary directory under
+/// a name of its own, which empties its place; it is reported as pending.
+fn remove_file(path: &Path) -> Removal {
     if std::fs::remove_file(path).is_ok() {
-        return true;
+        return Removal::Removed;
     }
-    cfg!(windows)
-        && executable().is_some_and(|exe| path.canonicalize().is_ok_and(|p| p == exe))
-        && std::fs::rename(
-            path,
-            std::env::temp_dir().join(format!("oskac-uninstalled-{}.exe", std::process::id())),
-        )
-        .is_ok()
+    if !cfg!(windows)
+        || !executable().is_some_and(|exe| path.canonicalize().is_ok_and(|p| p == exe))
+    {
+        return Removal::Failed;
+    }
+    let aside = std::env::temp_dir().join(format!("oskac-uninstalled-{}.exe", std::process::id()));
+    match std::fs::rename(path, &aside) {
+        Ok(()) => Removal::Pending(aside),
+        Err(_) => Removal::Failed,
+    }
+}
+
+/// Whether the file at `path` is byte for byte `published`.
+fn is_published(path: &Path, published: &str) -> bool {
+    std::fs::read(path).is_ok_and(|bytes| bytes == published.as_bytes())
 }
 
 /// Check everything, then remove. Returns the report, or why nothing was
@@ -378,13 +611,10 @@ fn uninstall_in(home: &Path) -> Result<(Outcome, Option<String>), Refusal> {
     let receipt_path = home.join("receipt.json");
     let bin_dir = home.join("bin");
     if is_symlink(home) || is_symlink(&receipt_path) {
-        return Err(refusal(
-            "unsafe_path",
-            format!(
-                "{} is reached through a symlink; nothing was removed",
-                display(&receipt_path)
-            ),
-        ));
+        return Err(unsafe_path(format!(
+            "{} is reached through a symlink",
+            display(&receipt_path)
+        )));
     }
     no_symlink_above(home)?;
     if !receipt_path.is_file() {
@@ -407,13 +637,44 @@ fn uninstall_in(home: &Path) -> Result<(Outcome, Option<String>), Refusal> {
     };
     let receipt = read_receipt(&receipt_path).map_err(cannot_read)?;
     let files = entries(&receipt).map_err(cannot_read)?;
+    let user_home = user_home();
+    let places = Places {
+        home,
+        bin: &bin_dir,
+        user_home: user_home.as_deref(),
+    };
 
+    // Every entry is checked before anything is removed.
+    let plans = files
+        .iter()
+        .map(|entry| Ok((checked_entry(entry, &places)?, entry)))
+        .collect::<Result<Vec<_>, Refusal>>()?;
+
+    // The binary and the records are this install's only when the receipt
+    // records this oskac; otherwise they are skipped, and the rest goes.
+    let managed = identity(&receipt, executable().as_deref());
     let mut outcome = Outcome::default();
     let mut acted: HashSet<PathBuf> = HashSet::new();
     let mut remove: Vec<PathBuf> = Vec::new();
     let mut remove_receipt = false;
-    for entry in &files {
-        let path = checked_entry(entry, home)?;
+    let mut path_edits: Vec<String> = Vec::new();
+    for (plan, entry) in plans {
+        let (path, published) = match plan {
+            Plan::Profile(profile, line) => {
+                path_edits.push(format!(
+                    "remove the line the installer added to {}, if it is still there: {line}",
+                    display(&profile)
+                ));
+                continue;
+            }
+            Plan::UserPath => {
+                path_edits.push(format!("remove {} from your user PATH", display(&bin_dir)));
+                continue;
+            }
+            Plan::InHome(path) => (path, None),
+            Plan::Hook(path, published) => (path, Some(published)),
+        };
+        // A path listed again is checked like any entry, and acted on once.
         if !acted.insert(path.clone()) {
             continue;
         }
@@ -422,35 +683,45 @@ fn uninstall_in(home: &Path) -> Result<(Outcome, Option<String>), Refusal> {
         };
         if !meta.is_file() {
             outcome.keep(&path, "not a regular file");
-        } else if path == receipt_path {
-            remove_receipt = true;
-        } else if entry.sha256.is_empty() {
-            outcome.keep(&path, "the receipt records no SHA-256 for it");
-        } else {
-            remove.push(path);
+            continue;
+        }
+        match (published, &managed) {
+            (None, Err(why)) => outcome.keep(
+                &path,
+                format!("this oskac is not the install the receipt records: {why}"),
+            ),
+            (None, Ok(())) if path == receipt_path => remove_receipt = true,
+            (Some(_), _) if entry.sha256.is_empty() && entry.kind == Kind::HookSettings => {
+                outcome.keep(
+                    &path,
+                    "settings the installer did not create; remove its oska-check hook by hand",
+                );
+            }
+            _ if entry.sha256.is_empty() => {
+                outcome.keep(&path, "the receipt records no SHA-256 for it");
+            }
+            (Some(published), _) if !is_published(&path, published) => outcome.keep(
+                &path,
+                "changed since it was installed, or not the published file this oskac knows",
+            ),
+            (Some(_), _) | (None, Ok(())) => remove.push(path),
         }
     }
-
-    // Only the install the receipt records may uninstall itself.
-    identity(&receipt, executable().as_deref()).map_err(|why| {
-        refusal(
-            "not_managed",
-            format!(
-                "this oskac is not the managed install the receipt at {} records ({why}); nothing was removed",
-                display(&receipt_path)
-            ),
-        )
-    })?;
 
     // The receipt goes last, and stays if a file could not be removed, so
     // a second run can finish the job.
     let mut failed = false;
     for path in remove {
-        if remove_file(&path) {
-            outcome.removed.push(display(&path));
-        } else {
-            failed = true;
-            outcome.keep(&path, "could not be removed");
+        match remove_file(&path) {
+            Removal::Removed => outcome.removed.push(display(&path)),
+            Removal::Pending(aside) => outcome.pending.push(Pending {
+                path: display(&path),
+                moved_to: display(&aside),
+            }),
+            Removal::Failed => {
+                failed = true;
+                outcome.keep(&path, "could not be removed");
+            }
         }
     }
     if remove_receipt {
@@ -470,7 +741,7 @@ fn uninstall_in(home: &Path) -> Result<(Outcome, Option<String>), Refusal> {
             outcome.keep(dir, "not empty");
         }
     }
-    if let Some(config) = user_home().map(|h| h.join(".config").join("oska")) {
+    if let Some(config) = user_home.map(|h| h.join(".config").join("oska")) {
         if std::fs::symlink_metadata(&config).is_ok() {
             outcome.keep(
                 &config,
@@ -478,14 +749,21 @@ fn uninstall_in(home: &Path) -> Result<(Outcome, Option<String>), Refusal> {
             );
         }
     }
-    let on_path = std::env::var_os("PATH")
-        .is_some_and(|path| std::env::split_paths(&path).any(|p| p == bin_dir));
-    let path_hint = on_path.then(|| {
-        format!(
-            "{} is on your PATH; remove it from the shell profile that adds it",
-            display(&bin_dir)
-        )
-    });
+    let path_hint = if path_edits.is_empty() {
+        let on_path = std::env::var_os("PATH")
+            .is_some_and(|path| std::env::split_paths(&path).any(|p| p == bin_dir));
+        on_path.then(|| {
+            format!(
+                "{} is on your PATH; remove it from the shell profile that adds it",
+                display(&bin_dir)
+            )
+        })
+    } else {
+        Some(format!(
+            "{}; or run the installer with --uninstall, which undoes the PATH changes it made",
+            path_edits.join("; ")
+        ))
+    };
     Ok((outcome, path_hint))
 }
 
@@ -511,11 +789,24 @@ pub(crate) fn uninstall(json: bool) -> ExitCode {
             let quoted: Vec<String> = items.into_iter().map(quote).collect();
             format!("[{}]", quoted.join(","))
         };
+        let pending: Vec<String> = outcome
+            .pending
+            .iter()
+            .map(|p| {
+                format!(
+                    "{{\"path\":{},\"moved_to\":{},\"note\":{}}}",
+                    quote(&p.path),
+                    quote(&p.moved_to),
+                    quote("Windows cannot delete a running program; delete moved_to once oskac has exited")
+                )
+            })
+            .collect();
         outln!(
-            "{{\"ok\":true,\"action\":\"uninstalled\",\"removed\":{},\"kept\":{},\"path_hint\":{}}}",
+            "{{\"ok\":true,\"action\":\"uninstalled\",\"removed\":{},\"kept\":{},\"pending\":[{}],\"path_hint\":{}}}",
             list(outcome.removed.iter().map(String::as_str).collect()),
             list(outcome.kept.iter().map(|(p, _)| p.as_str()).collect()),
-            path_hint.as_deref().map_or_else(|| "null".to_string(), quote)
+            pending.join(","),
+            quote_option(path_hint.as_deref())
         );
         return ExitCode::SUCCESS;
     }
@@ -524,6 +815,16 @@ pub(crate) fn uninstall(json: bool) -> ExitCode {
         outln!("Removed:");
         for path in &outcome.removed {
             outln!("  {path}");
+        }
+    }
+    if !outcome.pending.is_empty() {
+        outln!("Pending:");
+        for p in &outcome.pending {
+            outln!(
+                "  {} (Windows cannot delete a running program, so it was moved to {}; delete that file once oskac has exited)",
+                p.path,
+                p.moved_to
+            );
         }
     }
     if !outcome.kept.is_empty() {

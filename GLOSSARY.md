@@ -164,7 +164,7 @@ An `oskac` that the installer put in place and recorded in its install receipt. 
 _Avoid_: system install, global install
 
 **Update checker**:
-The toolchain's own Oska program that fetches the signed release index and verifies releases for the planned `oskac self check` and `oskac self update`, which do not exist yet: today `oskac self` has only `info` and `uninstall`. It is compiled when `oskac` is built and carried inside it, and it runs as a separate process holding only the network and file authority it needs.
+The toolchain's own Oska program that fetches the signed release index and verifies releases for `oskac self check` and `oskac self update`. It is compiled when `oskac` is built and carried inside it, and it runs as a separate process holding only the network and file authority it needs.
 _Avoid_: updater daemon, auto-updater
 
 ## Tooling
