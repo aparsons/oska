@@ -4,7 +4,15 @@
 # here means a green CI test job.
 #
 #   scripts/check.sh           run every step, stopping at the first failure
+#   scripts/check.sh --fast    the fast tier: fmt, clippy and the tests of
+#                              only what changed since the merge-base with
+#                              origin/main; never writes a pass stamp
 #   scripts/check.sh --list    print the step names, in order; run nothing
+#
+# --fast is the inner loop, and what the pre-push hook runs for a push to
+# ticket/** branches only. It ends by saying it is NOT the full check: CI
+# runs that. When it cannot tell what changed (no origin/main, no merge-base,
+# a shallow clone) it runs every step, and still writes no stamp.
 #
 # The steps are the `if step "NAME"; then ... fi` blocks below, in the order
 # they run. A block's name and command say what it checks; its comment, if
@@ -21,7 +29,12 @@
 # Options after the name tag the step:
 #
 #   --fast      the step also belongs to the fast tier (every step runs in a
-#               full run)
+#               full run); a --fast --cargo step runs there only when a cargo
+#               input changed
+#   --fast-when PATTERN
+#               the step belongs to the fast tier when a changed path matches
+#               the shell pattern PATTERN (repeatable): a script suite's own
+#               directory
 #   --no-slot   the step is cheap and runs without a build slot
 #   --cargo     a cargo step: skipped when cargo_skip says so (below)
 #
@@ -47,15 +60,20 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 usage() {
-  echo "usage: scripts/check.sh [--list]" >&2
+  echo "usage: scripts/check.sh [--fast] [--list]" >&2
   exit 2
 }
 
 mode=run  # run, or list: print the step names and run nothing
-tier=full # full, or fast: only steps tagged --fast
+tier=full # full, or fast: only steps tagged --fast or --fast-when
+fast_run= # set by --fast; stays set if the run falls back to every step
 while [ $# -gt 0 ]; do
   case $1 in
     --list) mode=list ;;
+    --fast)
+      tier=fast
+      fast_run=1
+      ;;
     *) usage ;;
   esac
   shift
@@ -73,24 +91,35 @@ if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
   PATH="$HOME/.cargo/bin:$PATH"
 fi
 
-started=      # set when the first step of a run starts
+started=      # set when the first step of a run that may stamp starts
 checked_tree= # the tree being checked, for the pass stamp `finish` writes
 have_slot=    # set once the build slot is held; it is held until the run ends
 unstamped=    # set by `skip_step --no-stamp`: the run writes no pass stamp
 cargo_why=    # unset until cargo_skip decides; then why cargo skips, or "run"
+changes_why=  # unset until `changes` runs; then "known", or why it cannot tell
+changed=      # once known: the paths changed since the merge-base, one a line
+deleted=      # once known: the paths among them that were deleted
+diff_base=    # once known: the merge-base with origin/main
+fast_decided= # set once a --fast run has decided whether it can be fast
 
-# step NAME [--fast] [--no-slot]: opens a step's block,
+# step NAME [--fast] [--fast-when PATTERN]... [--no-slot] [--cargo]: opens a
+# step's block,
 # `if step "NAME"; then ... fi`. In a run it prints the step's header and the
 # block runs; with --list it prints NAME and the block is skipped. So the list
 # is always the steps that run, in order. The first step of a run records the
 # tree for the pass stamp; the first step without --no-slot that is not
-# skipped waits for a build slot.
+# skipped waits for a build slot. In the fast tier a step runs only when its
+# tags say so (see the top of this file).
 step() {
-  local name=$1 fast='' slot=1 cargo=''
+  local name=$1 fast='' slot=1 cargo='' when=()
   shift
   while [ $# -gt 0 ]; do
     case $1 in
       --fast) fast=1 ;;
+      --fast-when)
+        when+=("${2:?}")
+        shift
+        ;;
       --no-slot) slot= ;;
       --cargo) cargo=1 ;;
       *)
@@ -100,18 +129,27 @@ step() {
     esac
     shift
   done
-  if [ "$tier" = fast ] && [ -z "$fast" ]; then
-    return 1
+  if [ -n "$fast_run" ] && [ -z "$fast_decided" ]; then
+    fast_decided=1
+    if ! changes; then
+      tier=full
+      printf 'check.sh --fast: cannot tell what changed (%s); running every step\n' "$changes_why" >&2
+    fi
+  fi
+  if [ "$tier" = fast ]; then
+    [ -n "$fast" ] || [ ${#when[@]} -gt 0 ] || return 1
+    if [ ${#when[@]} -gt 0 ]; then changed_match "${when[@]}" || return 1; fi
+    if [ -n "$cargo" ]; then changed_cargo_input || return 1; fi
   fi
   if [ "$mode" = list ]; then
     printf '%s\n' "$name"
     return 1
   fi
-  if [ -z "$started" ]; then
+  if [ -z "$started" ] && [ -z "$fast_run" ]; then
     started=1
     checked_tree=$(scripts/pass-stamp/stamp.sh tree 2>/dev/null || true)
   fi
-  if [ -n "$cargo" ] && cargo_skip; then
+  if [ -n "$cargo" ] && [ "$tier" = full ] && cargo_skip; then
     printf '\n== %s\n' "$name"
     skip_step --no-stamp "$cargo_why"
     return 1
@@ -150,32 +188,96 @@ cargo_input() {
   return 0
 }
 
-# cargo_skip: whether the cargo steps can skip, decided once per run; when
-# they can, cargo_why says why. They run in CI, and whenever this cannot
-# tell: no origin/main, no merge-base, or a shallow clone. The tree compared
-# is the working tree, untracked files included, as the pass stamp's is.
-# `git diff BASE` takes its paths from the index, so a file removed with
-# `git rm --cached` counts as deleted though it is still on disk.
+# changes: whether this can tell what changed since the merge-base with
+# origin/main, decided once per run; when it can, sets `changed` (every path
+# that differs, untracked files included), `deleted` and `diff_base`. It
+# cannot with no origin/main, no merge-base, or a shallow clone. The tree
+# compared is the working tree, untracked files included, as the pass
+# stamp's is. `git diff BASE` takes its paths from the index, so a file
+# removed with `git rm --cached` counts as deleted though it is still on disk.
+changes() {
+  if [ -z "$changes_why" ]; then
+    local untracked
+    changes_why="no merge-base with origin/main, or a shallow clone"
+    if [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = false ] &&
+      diff_base=$(git merge-base HEAD refs/remotes/origin/main 2>/dev/null) &&
+      deleted=$(git diff --no-renames --name-only --diff-filter=D "$diff_base" --) &&
+      changed=$(git diff --no-renames --name-only "$diff_base" --) &&
+      untracked=$(git ls-files --others --exclude-standard); then
+      changes_why=known
+      changed="$changed
+$untracked"
+    fi
+  fi
+  [ "$changes_why" = known ]
+}
+
+# changed_match PATTERN...: whether a changed path matches a shell pattern.
+changed_match() {
+  local path pattern
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    for pattern in "$@"; do
+      # shellcheck disable=SC2254 # PATTERN is a pattern
+      case $path in $pattern) return 0 ;; esac
+    done
+  done <<<"$changed"
+  return 1
+}
+
+# changed_cargo_input: whether a changed path is a cargo input. A deletion
+# always is: Rust tests read the tracked files' names.
+changed_cargo_input() {
+  local path
+  [ -z "$deleted" ] || return 0
+  while IFS= read -r path; do
+    if [ -n "$path" ] && cargo_input "$path"; then
+      return 0
+    fi
+  done <<<"$changed"
+  return 1
+}
+
+# fast_crates: cargo test's package arguments in the fast tier: `-p NAME` for
+# each crate under crates/ with a changed file, or --all when a cargo input
+# outside crates/ changed (Cargo.toml, docs/, ...) or a file was deleted.
+fast_crates() {
+  local path name crates=''
+  if ! changes || [ -n "$deleted" ]; then
+    echo --all
+    return
+  fi
+  while IFS= read -r path; do
+    if [ -z "$path" ] || ! cargo_input "$path"; then
+      continue
+    fi
+    case $path in
+      crates/*/*)
+        name=${path#crates/}
+        name=${name%%/*}
+        case "$crates " in
+          *" -p $name "*) ;;
+          *) crates="$crates -p $name" ;;
+        esac
+        ;;
+      *)
+        echo --all
+        return
+        ;;
+    esac
+  done <<<"$changed"
+  crates=${crates# }
+  echo "${crates:---all}"
+}
+
+# cargo_skip: whether the cargo steps of a full run can skip, decided once
+# per run; when they can, cargo_why says why. They run in CI, and whenever
+# `changes` cannot tell what changed.
 cargo_skip() {
   if [ -z "$cargo_why" ]; then
     cargo_why=run
-    local base deleted changed untracked path
-    if [ -z "${CI:-}${GITHUB_ACTIONS:-}" ] &&
-      [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = false ] &&
-      base=$(git merge-base HEAD refs/remotes/origin/main 2>/dev/null) &&
-      deleted=$(git diff --no-renames --name-only --diff-filter=D "$base" --) &&
-      changed=$(git diff --no-renames --name-only "$base" --) &&
-      untracked=$(git ls-files --others --exclude-standard) &&
-      # Rust tests read the tracked files' names, so a deletion is an input.
-      [ -z "$deleted" ]; then
-      cargo_why="skipped: no cargo input differs from origin/main (merge-base ${base:0:12}); CI runs it"
-      while IFS= read -r path; do
-        if [ -n "$path" ] && cargo_input "$path"; then
-          cargo_why=run
-          break
-        fi
-      done <<<"$changed
-$untracked"
+    if [ -z "${CI:-}${GITHUB_ACTIONS:-}" ] && changes && ! changed_cargo_input; then
+      cargo_why="skipped: no cargo input differs from origin/main (merge-base ${diff_base:0:12}); CI runs it"
     fi
   fi
   [ "$cargo_why" != run ]
@@ -189,9 +291,14 @@ fail() {
 # finish: after the last block. In a run, every step passed: stamp the tier
 # and the tree checked, if the tree did not change meanwhile and no step was
 # skipped with --no-stamp (then there is no stamp at all). The pre-push hook
-# honours only a full run's stamp.
+# honours only a full run's stamp. A --fast run never stamps, even when it
+# ran every step.
 finish() {
   if [ "$mode" = list ]; then
+    exit 0
+  fi
+  if [ -n "$fast_run" ] || [ "$tier" != full ]; then
+    printf '\nFast checks passed. This was NOT the full check: no pass stamp written; scripts/check.sh (and CI) runs every step.\n'
     exit 0
   fi
   if [ -n "$unstamped" ]; then
@@ -248,64 +355,68 @@ if step "cargo clippy" --fast --cargo; then
   cargo clippy --all-targets -- -D warnings
 fi
 
-if step "cargo test (private temporary directory)" --cargo; then
+if step "cargo test (private temporary directory)" --fast --cargo; then
   # A test that leaves a file or directory in the temporary directory fails the
-  # check here, naming it, instead of slowly filling the shared /tmp.
-  scripts/temp-leak/run.sh cargo test --all
+  # check here, naming it, instead of slowly filling the shared /tmp. The fast
+  # tier tests only the changed crates (fast_crates).
+  packages=--all
+  if [ "$tier" = fast ]; then packages=$(fast_crates); fi
+  # shellcheck disable=SC2086 # one word per package argument
+  scripts/temp-leak/run.sh cargo test $packages
 fi
 
-if step "installer tests"; then
+if step "installer tests" --fast-when 'scripts/install/*'; then
   bash scripts/install/test.sh
 fi
 
-if step "release script tests"; then
+if step "release script tests" --fast-when 'scripts/release/*'; then
   bash scripts/release/test.sh
 fi
 
-if step "unsafe guard tests"; then
+if step "unsafe guard tests" --fast-when 'scripts/unsafe-guard/*'; then
   bash scripts/unsafe-guard/test.sh
 fi
 
-if step "intrinsic guard tests"; then
+if step "intrinsic guard tests" --fast-when 'scripts/intrinsic-guard/*'; then
   bash scripts/intrinsic-guard/test.sh
 fi
 
-if step "kill guard tests"; then
+if step "kill guard tests" --fast-when 'scripts/kill-guard/*' --fast-when .claude/settings.json; then
   # The Claude Code hook (.claude/settings.json) that refuses pkill -f, killall
   # and other kills by pattern, name or session.
   bash scripts/kill-guard/test.sh
 fi
 
-if step "workflow guard tests"; then
+if step "workflow guard tests" --fast-when 'scripts/workflow-guard/*'; then
   bash scripts/workflow-guard/test.sh
 fi
 
-if step "temp-leak wrapper tests"; then
+if step "temp-leak wrapper tests" --fast-when 'scripts/temp-leak/*'; then
   bash scripts/temp-leak/test.sh
 fi
 
-if step "rust-stable tests"; then
+if step "rust-stable tests" --fast-when 'scripts/rust-stable/*'; then
   bash scripts/rust-stable/test.sh
 fi
 
-if step "cross-build manifest tests"; then
+if step "cross-build manifest tests" --fast-when 'scripts/cross-build/*'; then
   bash scripts/cross-build/test.sh
 fi
 
-if step "build slot tests"; then
+if step "build slot tests" --fast-when 'scripts/build-slots/*'; then
   bash scripts/build-slots/test.sh
 fi
 
-if step "pass stamp tests"; then
+if step "pass stamp tests" --fast-when 'scripts/pass-stamp/*' --fast-when '.githooks/*'; then
   bash scripts/pass-stamp/test.sh
 fi
 
-if step "check step registry tests"; then
+if step "check step registry tests" --fast-when 'scripts/check-steps/*' --fast-when scripts/check.sh; then
   # --list prints exactly the steps a run runs, in order (this file's blocks).
   bash scripts/check-steps/test.sh
 fi
 
-if step "shellcheck"; then
+if step "shellcheck" --fast-when '*.sh' --fast-when .githooks/pre-push; then
   if command -v shellcheck >/dev/null 2>&1; then
     shellcheck -S warning scripts/*.sh scripts/*/*.sh site/agent-setup/*.sh .githooks/pre-push
   else

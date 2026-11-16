@@ -2,9 +2,10 @@
 # Tests for the pass stamp: the real .githooks/pre-push and the real
 # stamp.sh, driven by real `git push`es from scratch clones to a scratch bare
 # remote. Each scratch clone has a fake scripts/check.sh that records that it
-# ran, fails when FAKE_CHECK_MODE=fail, and otherwise writes the stamp the
-# way the real check.sh does. The cases assert only on exit codes and on
-# whether the fake check ran. They never look at the clock.
+# ran (and with which arguments), fails when FAKE_CHECK_MODE=fail, and
+# otherwise writes the stamp the way the real check.sh does. The cases assert
+# only on exit codes and on how the fake check ran. They never look at the
+# clock.
 #
 #   scripts/pass-stamp/test.sh
 
@@ -39,14 +40,16 @@ export GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid
 
 # The fake check: records a run, fails on request, and writes the stamp as
 # the real check.sh does once every step has passed. FAKE_CHECK_TIER (full by
-# default) is the tier it stamps.
+# default) is the tier it stamps. Each run logs one line, `ran` and its
+# arguments. Like the real one, a --fast run writes no stamp.
 fake_check='#!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
 checked_tree=$(scripts/pass-stamp/stamp.sh tree)
-echo ran >>"$FAKE_CHECK_LOG"
+echo "ran${*:+ $*}" >>"$FAKE_CHECK_LOG"
 if [ "${FAKE_CHECK_MODE:-pass}" = edit ]; then echo edit >>file; fi
 if [ "${FAKE_CHECK_MODE:-pass}" = fail ]; then exit 1; fi
+if [ "${1:-}" = --fast ]; then exit 0; fi
 scripts/pass-stamp/stamp.sh write "${FAKE_CHECK_TIER:-full}" "$checked_tree"
 '
 
@@ -88,7 +91,8 @@ run_check() {
 }
 
 # push ARGS...: runs `git push ARGS` in the current clone with the real hook.
-# Sets `status` and `ran` (how many times the fake check ran).
+# Sets `status`, `ran` (how many times the fake check ran) and `how` (its
+# arguments, one line per run: empty for the full check).
 push() {
   : >"$log"
   set +e
@@ -96,6 +100,7 @@ push() {
   status=$?
   set -e
   ran=$(wc -l <"$log" | tr -d ' ')
+  how=$(sed 's/^ran *//' "$log")
 }
 
 expect() { # name expected_status expected_ran
@@ -427,6 +432,91 @@ new_clone unknown-tier
 commit_change two
 (cd "$clone" && scripts/pass-stamp/stamp.sh write partial "$(scripts/pass-stamp/stamp.sh tree)") >/dev/null
 if stamp_exists; then bad "an unknown tier writes no stamp" "stamp file exists"; else ok "an unknown tier writes no stamp"; fi
+
+# --- ticket/** branches get the fast check, every other ref the full one ---
+# The hook picks by the remote ref each line pushes to. Only a push whose
+# refs are all ticket/** branches runs `check.sh --fast`; CI runs the full
+# check on those branches before anything merges.
+expect_tier() { # name expected_status tier(full|fast)
+  local want=
+  [ "$3" = fast ] && want=--fast
+  if [ "$status" -ne "$2" ]; then
+    bad "$1" "push exit status $status, expected $2"
+  elif [ "$ran" -ne 1 ]; then
+    bad "$1" "check ran $ran time(s), expected 1"
+  elif [ "$how" != "$want" ]; then
+    bad "$1" "check ran with '$how', expected '$want'"
+  else
+    ok "$1"
+  fi
+}
+
+new_clone ticket
+(cd "$clone" && git checkout -q -b ticket/1-x)
+commit_change two
+push origin ticket/1-x
+expect_tier "a ticket/** branch: the fast check runs" 0 fast
+if [ "$(git --git-dir="$remote" rev-parse refs/heads/ticket/1-x)" = "$(cd "$clone" && git rev-parse HEAD)" ]; then
+  ok "the fast-checked ticket push pushes"
+else
+  bad "the fast-checked ticket push pushes" "the remote has no ticket/1-x at the tip"
+fi
+if stamp_exists; then bad "a fast hook run writes no stamp" "stamp file exists"; else ok "a fast hook run writes no stamp"; fi
+
+commit_change three
+(cd "$clone" && FAKE_CHECK_MODE=fail git push -q origin ticket/1-x) >/dev/null 2>&1 && st=0 || st=$?
+if [ "$st" -ne 0 ] && [ "$(git --git-dir="$remote" log -1 --format=%s ticket/1-x)" = two ]; then
+  ok "a failing fast check refuses the ticket push"
+else
+  bad "a failing fast check refuses the ticket push" "exit $st"
+fi
+
+push origin ticket/1-x:refs/heads/ticket/2-y ticket/1-x:refs/heads/ticket/3-z
+expect_tier "two ticket/** branches in one push: one fast check" 0 fast
+
+push origin ticket/1-x:refs/heads/ticket/sub/4-w
+expect_tier "a nested ticket/** branch: the fast check runs" 0 fast
+
+push origin --delete ticket/2-y
+expect_tier "deleting a ticket/** branch, no stamp: the fast check runs" 0 fast
+
+push origin ticket/1-x ticket/1-x:main
+expect_tier "a ticket/** branch and main together: the full check runs" 0 full
+
+new_clone ticket-to-main
+(cd "$clone" && git checkout -q -b ticket/1-x)
+commit_change two
+push origin ticket/1-x:main
+expect_tier "a local ticket/** branch pushed to main: the full check runs" 0 full
+
+new_clone other-refs
+commit_change two
+push origin main
+expect_tier "main: the full check runs" 0 full
+commit_change three
+push origin HEAD:refs/heads/spec/5-s
+expect_tier "a spec/** branch: the full check runs" 0 full
+commit_change four
+push origin HEAD:refs/heads/topic
+expect_tier "another branch: the full check runs" 0 full
+commit_change five
+push origin HEAD:refs/heads/tickets/6
+expect_tier "a branch that only starts with ticket: the full check runs" 0 full
+commit_change six
+(cd "$clone" && git tag -a -m ticket/7 ticket/7)
+push origin refs/tags/ticket/7
+expect_tier "a tag named ticket/**: the full check runs" 0 full
+commit_change seven
+(cd "$clone" && git tag v1)
+push origin v1
+expect_tier "a tag: the full check runs" 0 full
+
+new_clone ticket-stamped
+(cd "$clone" && git checkout -q -b ticket/1-x)
+commit_change two
+run_check
+push origin ticket/1-x
+expect "a ticket/** branch with a full stamp on its tip: the check is skipped" 0 0
 
 printf '\n%d passed, %d failed\n' "$passed" "$failures"
 [ "$failures" -eq 0 ]
