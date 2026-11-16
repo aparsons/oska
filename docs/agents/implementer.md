@@ -48,12 +48,28 @@ When every step of `scripts/check.sh` passes, it writes the tree hash it checked
 
 `OSKA_BUILD_SLOTS=N` makes `scripts/check.sh` wait for one of N machine-wide slots (lock files under `$XDG_RUNTIME_DIR`, else `$TMPDIR`, else `/tmp`) before its build and test steps. It prints one "waiting for a free build slot" line; that is not a hang. The kernel frees the slot when the check ends, however it ends. Unset means no limit (CI, other clones). On the Pi use `OSKA_BUILD_SLOTS=2`, exported with the lean environment. Only `scripts/check.sh` takes a slot; the cargo commands you run while iterating are not limited.
 
+## Portable tests
+
+Any test that builds paths, puts a path in JSON, or sets a home uses `crates/oskac/tests/common/portable.rs` (`Scratch`, `json_str`, `json_path`, `set_home`, `literal_path`), so it passes on Windows the first time. See `CODING_STANDARDS.md` (Tests).
+
 ## CI on ticket branches
 
 A push to `ticket/**` or `review-fixes-*` runs `ci.yml`, `windows.yml` and `confinement.yml`, so every platform verifies a ticket before the spec's pull request. Name ticket branches `ticket/<number>-<slug>`.
+
+## Review findings
+
+The loop orchestrator reviews each ticket PR on two axes (Standards and Spec) while its CI runs.
+
+- Fix review findings on the same branch (`ticket/<number>-<slug>`) and push. Do not open a second PR.
+- A ticket PR merges only when CI is green and every finding is fixed or deferred to a filed issue that links the PR.
+- The orchestrator files the issue for a deferred finding (you do, when told to). The issue links the PR.
 
 ## Reading CI failures
 
 - Find a failed job: `gh pr checks <pr> --json name,bucket,link` (bucket `fail` marks failures). The job id is the last number in the link.
 - Read its log: `gh api repos/aparsons/oska/actions/jobs/<id>/logs --allow-escape-sequences`. Find the failing step with `| grep -nE '##\[error\]|FAIL|panicked'` and read around those lines, not the whole log.
 - In your report, list everything not run locally: PowerShell, Windows and macOS, and say whether CI passed on each.
+
+## Windows on demand
+
+To re-test one crate or test on Windows after a push, dispatch the workflow: `gh workflow run windows.yml --ref <branch> -f crate=oskac -f test=self_cli`. `crate` is `all` (default), `oska-run` or `oskac`; `test` is an optional integration-test target (needs one crate); `filter` is an optional test name substring. A dispatch that runs no test fails. Push and pull-request runs are unchanged.
