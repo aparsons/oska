@@ -29,4 +29,5 @@ A program is one `.osk` file, or a package: an `oska.toml` (`[package]` with a `
 - Every error code, with an example and its fix: https://oskalang.dev/codes.json, or one code at https://oskalang.dev/codes/E0300.
 - Agent guide: https://oskalang.dev/guide/agent-guide.md.
 - Packages and modules: https://oskalang.dev/guide/packages.md.
-- To update Oska, run the installer again: https://oskalang.dev/install.sh or https://oskalang.dev/install.ps1.
+- How this `oskac` was installed: `oskac self info --format=json` (offline; it reads the install receipt).
+- Whether an update exists: run the installer with `--check --json` (it installs nothing). To update Oska, run the installer again: https://oskalang.dev/install.sh or https://oskalang.dev/install.ps1.

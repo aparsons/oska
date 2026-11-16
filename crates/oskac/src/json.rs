@@ -1,9 +1,10 @@
-//! A strict JSON reader and writer for the install receipt. The crate has
-//! no dependencies, so `oskac self` brings its own. The reader fails on
-//! anything it cannot read for certain: malformed JSON, a repeated key in
-//! an object, nesting past [`MAX_DEPTH`], or text after the value. It keeps
-//! every field it finds, so a receipt with fields this `oskac` does not
-//! know (a newer installer's) reads and prints unchanged.
+//! The crate's JSON: one writer for every JSON string `oskac` prints
+//! ([`quote`], [`quote_option`]), and a strict reader for the install
+//! receipt. The crate has no dependencies, so it brings its own. The
+//! reader fails on anything it cannot read for certain: malformed JSON, a
+//! repeated key in an object, nesting past [`MAX_DEPTH`], or text after
+//! the value. It keeps every field it finds, so a receipt with fields this
+//! `oskac` does not know (a newer installer's) reads and prints unchanged.
 
 const MAX_DEPTH: usize = 32;
 
@@ -42,6 +43,15 @@ impl Json {
     pub(crate) fn as_str(&self) -> Option<&str> {
         match self {
             Json::Str(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// A number's value, however it is spelled: `1`, `1.0` and `1e0` are
+    /// all 1.
+    pub(crate) fn as_f64(&self) -> Option<f64> {
+        match self {
+            Json::Num(n) => n.parse().ok(),
             _ => None,
         }
     }
@@ -86,7 +96,13 @@ pub(crate) fn quote(text: &str) -> String {
     out
 }
 
+/// `text` as a JSON string literal, or `null`.
+pub(crate) fn quote_option(text: Option<&str>) -> String {
+    text.map_or_else(|| "null".to_string(), quote)
+}
+
 fn write_str(text: &str, out: &mut String) {
+    use std::fmt::Write;
     out.push('"');
     for c in text.chars() {
         match c {
@@ -95,7 +111,9 @@ fn write_str(text: &str, out: &mut String) {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c if c < ' ' => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
             c => out.push(c),
         }
     }
@@ -317,6 +335,19 @@ mod tests {
             round_trip(r#" {"a": [1, -2.5e3, true, null], "z": {"k": "v\n\u00e9\ud83d\ude00"}} "#),
             "{\"a\":[1,-2.5e3,true,null],\"z\":{\"k\":\"v\\né😀\"}}"
         );
+    }
+
+    #[test]
+    fn strings_escape_quotes_backslashes_and_control_characters() {
+        assert_eq!(quote("a\"b\\c\nd\u{1}"), "\"a\\\"b\\\\c\\nd\\u0001\"");
+        assert_eq!(quote_option(None), "null");
+    }
+
+    #[test]
+    fn a_number_has_one_value_however_it_is_spelled() {
+        for one in ["1", "1.0", "1e0", "10e-1"] {
+            assert_eq!(Json::parse(one).ok().and_then(|n| n.as_f64()), Some(1.0));
+        }
     }
 
     #[test]

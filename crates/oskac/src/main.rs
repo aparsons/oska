@@ -19,11 +19,11 @@ macro_rules! outln {
 
 mod build;
 mod explain;
+mod json;
 mod native;
 mod native_test;
 mod package;
 mod self_cmd;
-mod self_json;
 
 const USAGE: &str = "\
 oskac - the Oska compiler
@@ -155,6 +155,16 @@ fn main() -> ExitCode {
             out!("{USAGE}");
             ExitCode::SUCCESS
         }
+        // `self` takes no operand, -o, --target or program arguments.
+        ["self", rest @ ..] => {
+            let bare =
+                line.output.is_none() && line.target.is_none() && line.program_args.is_empty();
+            match rest {
+                ["info"] if bare => self_cmd::info(flags.json),
+                ["uninstall"] if bare => self_cmd::uninstall(flags.json),
+                _ => self_cmd::usage(flags.json),
+            }
+        }
         // Only `build` has a target platform: `run` and `test` use the
         // host's.
         [command, ..] if line.target.is_some() && *command != "build" => {
@@ -184,8 +194,6 @@ fn main() -> ExitCode {
             on_target(Command::Build(options), rest.first(), flags, &[])
         }
         ["explain", code] => explain_code(code, flags),
-        ["self", "info"] => self_cmd::info(flags.json),
-        ["self", "uninstall"] => self_cmd::uninstall(flags.json),
         _ => {
             eprint!("{USAGE}");
             ExitCode::from(2)

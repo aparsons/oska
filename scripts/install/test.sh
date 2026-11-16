@@ -1167,6 +1167,24 @@ test_uninstall_keeps_a_profile_whose_line_changed() {
   [ ! -e home/.oska ] || fail "the rest was not removed"
 }
 
+# A receipt can name a marked line the installer would never write (for
+# another bin directory): that line is kept, even though it is present.
+test_uninstall_keeps_a_profile_line_that_is_not_the_one_the_installer_writes() {
+  release 1.2.3
+  latest 1.2.3
+  SHELL=/bin/zsh install --json --add-to-path >/dev/null
+  local other="export PATH=\"/elsewhere/bin:\$PATH\" $MARK"
+  printf '%s\n' "$other" >>home/.zshrc
+  jq --arg l "$other" '(.files[] | select(.kind == "profile_line") | .line) = $l' home/.oska/receipt.json >r.json
+  mv r.json home/.oska/receipt.json
+  local before
+  before=$(cat home/.zshrc)
+  install --json --uninstall >out.json
+  [ "$(cat home/.zshrc)" = "$before" ] || fail "the profile was edited: $(cat home/.zshrc)"
+  [ "$(jq -r --arg p "$PWD/home/.zshrc" '.kept | index($p) != null' out.json)" = true ] || fail "kept is $(jq -c .kept out.json)"
+  jq -r .path_hint out.json | grep -q "$PWD/home/.zshrc" || fail "path_hint is $(jq -r .path_hint out.json)"
+}
+
 test_uninstall_refuses_a_profile_line_outside_the_home_directory() {
   release 1.2.3
   latest 1.2.3

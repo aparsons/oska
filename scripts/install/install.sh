@@ -893,6 +893,10 @@ $path
         continue
       elif [ ! -f "$path" ]; then
         keep "$path" "not a regular file"
+      elif [ "$line" != "export PATH=\"$bin_dir:\$PATH\" $PROFILE_MARK" ]; then
+        # Marked, but not the line --add-to-path writes for this home.
+        keep "$path" "the receipt's line is not the one the installer adds for $bin_dir"
+        profile_hint="remove the line the installer added, if it is still there, from $path: $line"
       elif grep -Fx -- "$line" "$path" >/dev/null 2>&1; then
         unline="$unline$path$tab$line
 "
