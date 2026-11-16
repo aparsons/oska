@@ -48,6 +48,13 @@ When every step of `scripts/check.sh` passes, it writes the tree hash it checked
 
 A push to `ticket/**` or `review-fixes-*` runs `ci.yml`, `windows.yml` and `confinement.yml`, so every platform verifies a ticket before the spec's pull request. Name ticket branches `ticket/<number>-<slug>`.
 
+## Review findings
+
+The loop orchestrator reviews each ticket PR on two axes (Standards and Spec) while its CI runs.
+
+- Fix review findings on the same branch (`ticket/<number>-<slug>`) and push. Do not open a second PR.
+- A ticket PR merges only when CI is green and every finding is fixed or deferred to a filed issue that links the PR.
+
 ## Reading CI failures
 
 - Find a failed job: `gh pr checks <pr> --json name,bucket,link` (bucket `fail` marks failures). The job id is the last number in the link.
