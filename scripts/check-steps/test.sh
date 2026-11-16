@@ -57,7 +57,7 @@ grep -oE 'scripts/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+\.sh' "$repo_root/scripts/check.s
     printf '%s' "$stub" >"$tree/$path"
     chmod +x "$tree/$path"
   done
-for tool in cargo shellcheck; do
+for tool in cargo shellcheck pwsh; do
   printf '%s' "$stub" >"$tree/bin/$tool"
   chmod +x "$tree/bin/$tool"
 done

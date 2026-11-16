@@ -12,13 +12,13 @@ on:
     paths:
       - scripts/install/**
       - scripts/release/**
-      - scripts/shellcheck.sh
+      - scripts/shellcheck/run.sh
       - .github/workflows/installers.yml
   pull_request:
     paths:
       - scripts/install/**
       - scripts/release/**
-      - scripts/shellcheck.sh
+      - scripts/shellcheck/run.sh
       - site/oska-release.pub
       - .github/workflows/installers.yml
 
@@ -43,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - if: runner.os == 'Linux'
-        run: scripts/shellcheck.sh
+        run: scripts/shellcheck/run.sh
       - run: scripts/install/test.sh
 
   powershell:

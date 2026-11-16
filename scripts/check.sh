@@ -232,7 +232,7 @@ fi
 if step "shellcheck"; then
   if command -v shellcheck >/dev/null 2>&1; then
     # Same files and severity as the installers workflow.
-    scripts/shellcheck.sh
+    scripts/shellcheck/run.sh
   else
     skip_step "shellcheck not installed; skipped (CI runs it)"
   fi
@@ -241,6 +241,7 @@ fi
 if step "powershell parse"; then
   # Syntax-only parse of the installer scripts; only Windows CI runs them.
   if command -v pwsh >/dev/null 2>&1; then
+    # shellcheck disable=SC2016 # PowerShell variables, not shell ones
     pwsh -NoProfile -NonInteractive -Command '
       $bad = 0
       foreach ($f in "scripts/install/install.ps1", "scripts/install/test.ps1") {
