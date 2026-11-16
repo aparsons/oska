@@ -7,7 +7,8 @@
 # check (`scripts/check.sh --fast`), since CI runs the full check on every
 # ticket branch before it merges. Any other push (main, spec/**, tags, other
 # branches, or a ticket branch together with any of those) runs the full
-# check, which writes the pass stamp.
+# check, which writes the pass stamp. Both check the working tree, not the
+# pushed tip; a fast pass is not the merge gate (CI's full check is).
 #
 # The check is skipped, and nothing else, only when all of these hold
 # (scripts/pass-stamp/stamp.sh):

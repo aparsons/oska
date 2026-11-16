@@ -11,9 +11,9 @@ The fast inner loop for an agent implementing a ticket. The machine is shared an
 
 ## Fast check
 
-`scripts/check.sh --fast` runs `cargo fmt`, `cargo clippy`, `cargo test -p` for only the crates changed since the merge-base with `origin/main` (every crate when a cargo input outside `crates/` changed, such as `Cargo.toml` or `docs/`), and the test suites of only the `scripts/` directories changed (plus shellcheck when a shell script changed). When it cannot tell what changed (no `origin/main`, or a shallow clone) it runs every step. It ends by saying it is NOT the full check, and it never writes a pass stamp.
+`scripts/check.sh --fast` runs `cargo fmt`, `cargo clippy`, `cargo test -p` for only the crates changed since the merge-base with `origin/main` and every crate that depends on them (every crate when a cargo input outside the crates changed, such as `Cargo.toml` or `docs/`), and the test suites of only the `scripts/` directories changed (plus shellcheck when a shell script changed). When it cannot tell what changed (no `origin/main`, or a shallow clone) it runs every step. It ends by saying it is NOT the full check, and it never writes a pass stamp. Like the full check, it checks the working tree, not the commit a push sends: commit what you checked.
 
-The pre-push hook runs `--fast` for a push whose refs are all `ticket/**` branches. A push that includes anything else (`main`, `spec/**`, a tag, another branch) runs the full check. CI runs the full check on every ticket branch, and a ticket PR merges only when CI is green.
+The pre-push hook runs `--fast` for a push whose refs are all `ticket/**` branches. A push that includes anything else (`main`, `spec/**`, a tag, another branch) runs the full check. A fast pass does not make a ticket ready to merge: CI's full check on the ticket branch is the gate, and a ticket PR merges only when CI is green.
 
 ## Lean cargo environment
 

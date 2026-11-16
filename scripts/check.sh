@@ -6,13 +6,15 @@
 #   scripts/check.sh           run every step, stopping at the first failure
 #   scripts/check.sh --fast    the fast tier: fmt, clippy and the tests of
 #                              only what changed since the merge-base with
-#                              origin/main; never writes a pass stamp
+#                              origin/main (and the crates that depend on
+#                              it); never writes a pass stamp
 #   scripts/check.sh --list    print the step names, in order; run nothing
 #
 # --fast is the inner loop, and what the pre-push hook runs for a push to
 # ticket/** branches only. It ends by saying it is NOT the full check: CI
 # runs that. When it cannot tell what changed (no origin/main, no merge-base,
-# a shallow clone) it runs every step, and still writes no stamp.
+# a shallow clone) it runs every step, and still writes no stamp. Either
+# way it checks the working tree, not the commit a push sends.
 #
 # The steps are the `if step "NAME"; then ... fi` blocks below, in the order
 # they run. A block's name and command say what it checks; its comment, if
@@ -100,6 +102,7 @@ changes_why=  # unset until `changes` runs; then "known", or why it cannot tell
 changed=      # once known: the paths changed since the merge-base, one a line
 deleted=      # once known: the paths among them that were deleted
 diff_base=    # once known: the merge-base with origin/main
+ran_any=      # set once a step's block runs (or a skipped cargo step)
 fast_decided= # set once a --fast run has decided whether it can be fast
 
 # step NAME [--fast] [--fast-when PATTERN]... [--no-slot] [--cargo]: opens a
@@ -145,6 +148,7 @@ step() {
     printf '%s\n' "$name"
     return 1
   fi
+  ran_any=1
   if [ -z "$started" ] && [ -z "$fast_run" ]; then
     started=1
     checked_tree=$(scripts/pass-stamp/stamp.sh tree 2>/dev/null || true)
@@ -239,11 +243,20 @@ changed_cargo_input() {
 }
 
 # fast_crates: cargo test's package arguments in the fast tier: `-p NAME` for
-# each crate under crates/ with a changed file, or --all when a cargo input
-# outside crates/ changed (Cargo.toml, docs/, ...) or a file was deleted.
+# each package with a changed file and each package that depends on one,
+# directly or not (dev-dependencies included), in workspace order. Package
+# names and directories come from `cargo metadata`, never from directory
+# names. It prints --all when it cannot narrow: a cargo input outside the
+# packages changed (Cargo.toml, docs/, ...), a file was deleted, or cargo
+# metadata or jq failed.
 fast_crates() {
-  local path name crates=''
-  if ! changes || [ -n "$deleted" ]; then
+  local graph path dir name deps dep found set=' ' grew=1 out=''
+  if ! changes || [ -n "$deleted" ] ||
+    ! graph=$(cargo metadata --no-deps --format-version 1 --offline 2>/dev/null |
+      jq -r '.workspace_root as $root | .packages[] |
+        [(.manifest_path | ltrimstr($root + "/") | rtrimstr("/Cargo.toml")), .name,
+          ([.dependencies[] | select(.path != null) | .name] | join(" "))] | @tsv' 2>/dev/null) ||
+    [ -z "$graph" ]; then
     echo --all
     return
   fi
@@ -251,23 +264,39 @@ fast_crates() {
     if [ -z "$path" ] || ! cargo_input "$path"; then
       continue
     fi
-    case $path in
-      crates/*/*)
-        name=${path#crates/}
-        name=${name%%/*}
-        case "$crates " in
-          *" -p $name "*) ;;
-          *) crates="$crates -p $name" ;;
-        esac
-        ;;
-      *)
-        echo --all
-        return
-        ;;
-    esac
+    found=
+    while IFS=$'\t' read -r dir name deps; do
+      case $path in
+        "$dir"/*) found=$name ;;
+      esac
+    done <<<"$graph"
+    if [ -z "$found" ]; then
+      echo --all
+      return
+    fi
+    set="$set$found "
   done <<<"$changed"
-  crates=${crates# }
-  echo "${crates:---all}"
+  # Add every package that depends on one in the set, until none is added.
+  while [ -n "$grew" ]; do
+    grew=
+    while IFS=$'\t' read -r dir name deps; do
+      case $set in *" $name "*) continue ;; esac
+      for dep in $deps; do
+        case $set in
+          *" $dep "*)
+            set="$set$name "
+            grew=1
+            break
+            ;;
+        esac
+      done
+    done <<<"$graph"
+  done
+  while IFS=$'\t' read -r dir name deps; do
+    case $set in *" $name "*) out="$out -p $name" ;; esac
+  done <<<"$graph"
+  out=${out# }
+  echo "${out:---all}"
 }
 
 # cargo_skip: whether the cargo steps of a full run can skip, decided once
@@ -295,6 +324,10 @@ fail() {
 # ran every step.
 finish() {
   if [ "$mode" = list ]; then
+    exit 0
+  fi
+  if [ -n "$fast_run" ] && [ -z "$ran_any" ]; then
+    printf '\n--fast: no steps ran; nothing they check changed. This was NOT the full check: no pass stamp written; scripts/check.sh (and CI) runs every step.\n'
     exit 0
   fi
   if [ -n "$fast_run" ] || [ "$tier" != full ]; then

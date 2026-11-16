@@ -30,7 +30,8 @@ bad() {
 # The stub every called script and tool becomes: logs its directory/name
 # (cargo: `cargo SUBCOMMAND`, and its whole command line to $STUB_LOG.args),
 # and fails when that is STUB_FAIL. The temp-leak wrapper stub then runs the
-# command it wraps.
+# command it wraps. `cargo metadata` prints $STUB_METADATA, if set, with
+# @ROOT@ as the directory it runs in.
 stub='#!/usr/bin/env bash
 name=$(basename "$(dirname "$0")")/$(basename "$0")
 if [ "$name" = bin/cargo ]; then echo "cargo $*" >>"$STUB_LOG.args"; name="cargo $1"; fi
@@ -39,6 +40,7 @@ if [ "$name" = "${STUB_FAIL:-}" ]; then exit 1; fi
 if [ "$name" = pass-stamp/stamp.sh ] && [ "${1:-}" = tree ]; then echo tree; fi
 if [ "$name" = pass-stamp/stamp.sh ] && [ "${1:-}" = write ]; then echo "[stamp write $2 $3]"; fi
 if [ "$name" = temp-leak/run.sh ]; then exec "$@"; fi
+if [ "$name" = "cargo metadata" ] && [ -n "${STUB_METADATA:-}" ]; then sed "s|@ROOT@|$PWD|g" "$STUB_METADATA"; fi
 exit 0
 '
 
@@ -198,6 +200,7 @@ check_repo() {
   : >"$work/log.args"
   set +e
   out=$(cd "$repo" && env -u CI -u GITHUB_ACTIONS PATH="$tree/bin:$PATH" STUB_LOG="$work/log" \
+    STUB_METADATA="$work/metadata.json" \
     scripts/check.sh "$@" 2>&1)
   status=$?
   set -e
@@ -305,6 +308,20 @@ for ci in CI GITHUB_ACTIONS; do
 done
 
 # --- --fast: fmt, clippy and the tests of what changed, never a stamp -----
+# The scratch workspace, as `cargo metadata --no-deps` describes it: a and b
+# stand alone; app (in crates/app-dir) depends on lib, and top on app.
+pkg() { # NAME DIR DEPS...
+  local name=$1 dir=$2 deps='' dep
+  shift 2
+  for dep in "$@"; do
+    deps="$deps${deps:+,}{\"name\":\"$dep\",\"kind\":null,\"path\":\"@ROOT@/crates/$dep\"}"
+  done
+  printf '{"name":"%s","manifest_path":"@ROOT@/%s/Cargo.toml","dependencies":[%s]}' "$name" "$dir" "$deps"
+}
+printf '{"packages":[%s,%s,%s,%s,%s],"workspace_root":"@ROOT@"}\n' \
+  "$(pkg a crates/a)" "$(pkg b crates/b)" "$(pkg app crates/app-dir lib)" \
+  "$(pkg lib crates/lib)" "$(pkg top crates/top app)" >"$work/metadata.json"
+
 # fast_case NAME CHANGE: runs `check.sh --fast` in a fresh clone after CHANGE.
 fast_case() {
   fresh_clone
@@ -353,6 +370,34 @@ else
   bad "--fast tests each changed crate, committed or not" "got: $cargo_test"
 fi
 
+fast_case "a library crate change" 'mkdir -p crates/lib && echo two >crates/lib/lib.rs'
+if [ "$cargo_test" = "cargo test -p app -p lib -p top" ]; then
+  ok "--fast tests a changed crate's dependents, direct and indirect"
+else
+  bad "--fast tests a changed crate's dependents, direct and indirect" "got: $cargo_test"
+fi
+
+fast_case "a crate whose directory is not its name" 'mkdir -p crates/app-dir && echo two >crates/app-dir/main.rs'
+if [ "$cargo_test" = "cargo test -p app -p top" ]; then
+  ok "--fast names a crate by its package name, not its directory"
+else
+  bad "--fast names a crate by its package name, not its directory" "got: $cargo_test"
+fi
+
+fast_case "a file in no package" 'mkdir -p crates/loose && echo two >crates/loose/x.rs'
+if [ "$cargo_test" = "cargo test --all" ]; then
+  ok "--fast tests every crate when a changed file is in no package"
+else
+  bad "--fast tests every crate when a changed file is in no package" "got: $cargo_test"
+fi
+
+STUB_FAIL="cargo metadata" fast_case "no cargo metadata" 'echo two >crates/a/src/lib.rs'
+if [ "$status" -eq 0 ] && [ "$cargo_test" = "cargo test --all" ]; then
+  ok "--fast tests every crate when cargo metadata fails"
+else
+  bad "--fast tests every crate when cargo metadata fails" "exit $status, got: $cargo_test"
+fi
+
 fast_case "a docs change" 'echo two >docs/index.md'
 if [ "$cargo_test" = "cargo test --all" ]; then
   ok "--fast tests every crate for a cargo input outside crates/"
@@ -384,10 +429,11 @@ else
 fi
 
 fast_case "no change" ':'
-if [ "$status" -eq 0 ] && [ -z "$headers" ]; then
-  ok "--fast with nothing changed runs no step"
+if [ "$status" -eq 0 ] && [ -z "$headers" ] && printf '%s\n' "$out" | grep -q 'no steps ran' &&
+  ! printf '%s\n' "$out" | grep -q 'passed'; then
+  ok "--fast with nothing changed runs no step, and says so"
 else
-  bad "--fast with nothing changed runs no step" "exit $status, headers: $headers"
+  bad "--fast with nothing changed runs no step, and says so" "exit $status, out: $out"
 fi
 no_stamp "--fast with nothing changed"
 
@@ -426,6 +472,49 @@ if [ "$(printf '%s\n' "$log" | grep -cx pass-stamp/stamp.sh)" -eq 0 ]; then
   ok "--fast falling back never calls stamp.sh"
 else
   bad "--fast falling back never calls stamp.sh" "log: $log"
+fi
+
+# --- drift guard: the real workspace's crates and their dependents ----------
+# fast_crates on this repository, with real cargo metadata: each crate's
+# changed file maps to the package its own Cargo.toml names, and a change to
+# oska-syntax tests every crate that depends on it (known from the manifests).
+if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
+  PATH="$HOME/.cargo/bin:$PATH"
+fi
+if command -v cargo >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+  real_fast_crates() { # PATH: fast_crates when only PATH changed
+    (
+      cd "$repo_root"
+      eval "$(sed -n '/^cargo_input() {/,/^}/p; /^changes() {/,/^}/p; /^fast_crates() {/,/^}/p' scripts/check.sh)"
+      # shellcheck disable=SC2034 # read by the functions eval'd above
+      changes_why=known deleted='' changed=$1
+      fast_crates
+    )
+  }
+  sorted() { tr ' ' '\n' | grep -v '^-p$' | LC_ALL=C sort | tr '\n' ' '; }
+  unmapped=
+  for manifest in "$repo_root"/crates/*/Cargo.toml; do
+    dir=$(dirname "$manifest")
+    name=$(sed -n 's/^name = "\(.*\)"$/\1/p' "$manifest" | head -n 1)
+    got=$(real_fast_crates "crates/$(basename "$dir")/src/x.rs")
+    case " $got " in
+      *" -p $name "*) ;;
+      *) unmapped="$unmapped $(basename "$dir")->'$got'" ;;
+    esac
+  done
+  if [ -z "$unmapped" ]; then
+    ok "--fast maps each crates/ directory to its manifest's package name"
+  else
+    bad "--fast maps each crates/ directory to its manifest's package name" "got:$unmapped"
+  fi
+  got=$(real_fast_crates crates/oska-syntax/src/lib.rs | sorted)
+  if [ "$got" = "oska-check oska-native oska-run oska-syntax oskac " ]; then
+    ok "--fast on an oska-syntax change tests every crate that depends on it"
+  else
+    bad "--fast on an oska-syntax change tests every crate that depends on it" "got: $got"
+  fi
+else
+  ok "the real workspace's crate graph: skipped (no cargo or jq here; CI runs it)"
 fi
 
 # --- drift guard: crates/ reads no repo file cargo_input calls a non-input --
