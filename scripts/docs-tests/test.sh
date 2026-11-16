@@ -191,11 +191,14 @@ else
   bad "--check passes on this repository" "exit $status: $out"
 fi
 list --repo --compiled
+# docs/checker.md and docs/runtime.md: oskac explain; install-receipt.md:
+# self_cmd.rs's unit test.
 if [ "$out" = "docs/checker.md
+docs/guide/install-receipt.md
 docs/runtime.md" ]; then
-  ok "finds the docs/ files oskac compiles in (oskac explain)"
+  ok "finds the docs/ files oskac compiles in"
 else
-  bad "finds the docs/ files oskac compiles in (oskac explain)" "got: $out"
+  bad "finds the docs/ files oskac compiles in" "got: $out"
 fi
 
 printf '\n%d passed, %d failed\n' "$passed" "$failures"
