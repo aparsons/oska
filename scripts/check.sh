@@ -172,6 +172,18 @@ if step "cargo clippy" --fast; then
   cargo clippy --all-targets -- -D warnings
 fi
 
+if step "oskac type-checks for Windows"; then
+  # `cfg(windows)` code is not compiled on Linux, so a type error in it shows
+  # up only on the Windows CI job. A check-only build needs no linker, and the
+  # workspace has no external crates. rust-toolchain.toml lists the target, so
+  # rustup installs it; a toolchain without it skips.
+  if rustup target list --installed 2>/dev/null | grep -qx 'x86_64-pc-windows-gnu'; then
+    cargo check -p oskac --tests --target x86_64-pc-windows-gnu
+  else
+    skip_step "x86_64-pc-windows-gnu target not installed; skipped (rustup target add x86_64-pc-windows-gnu; CI runs it)"
+  fi
+fi
+
 if step "cargo test (private temporary directory)"; then
   # A test that leaves a file or directory in the temporary directory fails the
   # check here, naming it, instead of slowly filling the shared /tmp.
