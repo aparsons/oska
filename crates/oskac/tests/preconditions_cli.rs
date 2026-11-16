@@ -2,6 +2,9 @@
 //! ordinary panic, reported in the JSON shape of every panic, with exit
 //! code 101, and `--release` evaluates contracts too.
 
+mod common;
+
+use common::portable::json_escape;
 use std::path::Path;
 use std::process::Command;
 
@@ -35,7 +38,7 @@ fn a_broken_precondition_under_release_is_a_json_panic_exiting_101() {
         format!(
             "{{\"code\":\"P0006\",\"message\":\"precondition violated: `double` requires `x > 0`\",\
              \"path\":\"{}\",\"span\":{{\"start\":{start},\"end\":{end}}}}}\n",
-            path.to_string_lossy().replace('\\', "\\\\")
+            json_escape(&path.to_string_lossy())
         )
     );
 }

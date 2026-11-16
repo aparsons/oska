@@ -4,6 +4,9 @@
 
 #![cfg(unix)]
 
+mod common;
+
+use common::portable::Scratch;
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Command, Stdio};
 
@@ -34,8 +37,7 @@ fn closed_early(dir: &std::path::Path, args: &[&str]) -> (String, Option<i32>) {
 
 #[test]
 fn oskac_output_into_a_closed_pipe_ends_quietly_with_0() {
-    let dir = std::env::temp_dir().join(format!("oskac-closed-stdout-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("should create the directory");
+    let dir = Scratch::new("oskac", "closed-stdout");
     // Far more output than a pipe holds, in every form.
     let src: String = (0..4000)
         .map(|i| format!("fn f{i}(x: Int) -> Int {{\n    x + {i}\n}}\n\n"))

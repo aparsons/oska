@@ -2,6 +2,9 @@
 //! ordinary panic, reported in the JSON shape of every panic, with exit
 //! code 101, and `--release` evaluates contracts too.
 
+mod common;
+
+use common::portable::json_escape;
 use std::path::Path;
 use std::process::Command;
 
@@ -36,7 +39,7 @@ fn a_broken_postcondition_under_release_is_a_json_panic_exiting_101() {
             "{{\"code\":\"P0007\",\"message\":\"postcondition violated: `absolute` ensures \
              `r >= 0`, broken by the return at line 4, column 5\",\
              \"path\":\"{}\",\"span\":{{\"start\":{start},\"end\":{end}}}}}\n",
-            path.to_string_lossy().replace('\\', "\\\\")
+            json_escape(&path.to_string_lossy())
         )
     );
 }
