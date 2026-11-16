@@ -13,7 +13,7 @@
 #
 # actionlint is pinned by version and by the SHA-256 of each release tarball.
 # An actionlint already on PATH is used as is. Otherwise the pinned linux
-# release (amd64 or arm64) is downloaded once into the cache. Its own
+# release (amd64 or arm64) is downloaded once into the cache. Its
 # own lint passes for shell and Python are off: this checks the workflow's
 # structure and expressions, and the shellcheck step covers scripts.
 
