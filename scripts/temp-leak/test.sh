@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016  # single quotes hold text on purpose: patterns, commands and scripts that must not expand here
 # Tests for run.sh, the temp-leak wrapper. Each case runs the wrapper over a
 # small command and checks only what it prints, its exit status and what is
 # left in the temporary directory.
