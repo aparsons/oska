@@ -1,5 +1,5 @@
 {
-  "about": "A hook in the .config/oska directory of the user's home, where the settings and credentials are, refuses the whole uninstall. On Windows the kind alone refuses it.",
+  "about": "A hook in the .config/oska directory of the user's home, where the settings and credentials are, refuses the whole uninstall. oskac on Windows refuses it for its kind first.",
   "setup": [
     {
       "name": "hook_script",
@@ -14,7 +14,7 @@
     },
     "ps1": {
       "refused": "unsafe_path",
-      "reason": "which this installer does not remove"
+      "reason": "settings and credentials"
     },
     "oskac_unix": {
       "refused": "unsafe_path",
