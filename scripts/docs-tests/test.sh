@@ -56,6 +56,12 @@ fn f() { common::plain::helper(); }'
 file crates/kit-dir/tests/shared/mod.rs 'pub fn g() { git(["ls-files"]); read("docs/x.md"); }'
 file crates/kit-dir/tests/uses_shared.rs 'mod shared;
 fn f() { shared::g(); }'
+# Paths built with concat! or format!, the "docs" mid-string.
+file crates/kit-dir/tests/concat_include.rs 'const D: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/x.md"));'
+file crates/kit-dir/tests/concat_read.rs 'fn f() { std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/x.md")); }'
+file crates/kit-dir/tests/formatted.rs 'fn f() { let root = env!("CARGO_MANIFEST_DIR");
+  std::fs::read_to_string(format!("{}/../../docs/x.md", root)); }'
+file crates/kit-dir/src/concat.rs 'pub const C: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/c.md"));'
 
 # list ARGS...: runs list.sh on ROOT (default: the scratch tree). Sets
 # `status` and `out`.
@@ -73,7 +79,10 @@ list() {
 
 list
 if [ "$status" -eq 0 ]; then ok "list.sh exits 0"; else bad "list.sh exits 0" "exit $status: $out"; fi
-expected='kit includes
+expected='kit concat_include
+kit concat_read
+kit formatted
+kit includes
 kit uses_shared
 kit uses_site
 kit walks'
@@ -100,7 +109,8 @@ else
 fi
 
 list --compiled
-if [ "$status" -eq 0 ] && [ "$out" = docs/help.md ]; then
+if [ "$status" -eq 0 ] && [ "$out" = "docs/c.md
+docs/help.md" ]; then
   ok "--compiled lists the docs/ files a crate's own code includes"
 else
   bad "--compiled lists the docs/ files a crate's own code includes" "exit $status: $out"
@@ -113,6 +123,41 @@ if [ "$out" = docs ]; then
   ok "--compiled lists all of docs when a crate's code reads docs/ at run time"
 else
   bad "--compiled lists all of docs when a crate's code reads docs/ at run time" "got: $out"
+fi
+
+# --- --check: the drift guard -------------------------------------------------
+# Every crates/ file that names docs/ in a string and does file I/O must be
+# found by the list, or be on scripts/docs-tests/not-readers.txt with a reason.
+list --check
+if [ "$status" -eq 0 ]; then
+  ok "--check passes when every file that names docs/ and does I/O is found"
+else
+  bad "--check passes when every file that names docs/ and does I/O is found" "exit $status: $out"
+fi
+# A reader in a form the list does not see: its root comes from elsewhere.
+file crates/kit-dir/tests/hidden.rs 'mod common;
+fn f() { std::fs::read_to_string(format!("{}/docs/x.md", common::plain::root())); }'
+list --check
+if [ "$status" -eq 1 ] && grep -q 'crates/kit-dir/tests/hidden.rs' <<<"$out"; then
+  ok "--check fails, naming it, on a docs/ reader the list does not see"
+else
+  bad "--check fails, naming it, on a docs/ reader the list does not see" "exit $status: $out"
+fi
+file scripts/docs-tests/not-readers.txt '# PATH  REASON
+crates/kit-dir/tests/hidden.rs'
+list --check
+if [ "$status" -eq 1 ]; then
+  ok "--check refuses an allowlist entry with no reason"
+else
+  bad "--check refuses an allowlist entry with no reason" "exit $status: $out"
+fi
+file scripts/docs-tests/not-readers.txt '# PATH  REASON
+crates/kit-dir/tests/hidden.rs  reads a docs/ it makes in a scratch directory'
+list --check
+if [ "$status" -eq 0 ]; then
+  ok "--check accepts a file on the allowlist with a reason"
+else
+  bad "--check accepts a file on the allowlist with a reason" "exit $status: $out"
 fi
 
 list --bogus
@@ -139,6 +184,12 @@ for test in "oska-run file_capabilities" "oskac self_cli"; do
     ok "does not list $test"
   fi
 done
+list --repo --check
+if [ "$status" -eq 0 ]; then
+  ok "--check passes on this repository"
+else
+  bad "--check passes on this repository" "exit $status: $out"
+fi
 list --repo --compiled
 if [ "$out" = "docs/checker.md
 docs/runtime.md" ]; then

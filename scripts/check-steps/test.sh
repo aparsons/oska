@@ -299,6 +299,17 @@ cargo_case "a docs/ change with a crate change" 'echo two >docs/index.md && echo
 cargo_case "a change to a docs/ file a crate compiles in" 'echo two >docs/compiled.md'
 cargo_case "a deleted docs/ file" 'git rm -q docs/index.md'
 cargo_case "a docs-test list change" 'echo "# two" >>scripts/docs-tests/list.sh'
+# A docs/ reader the list cannot see is in the base: the drift guard fails,
+# so a docs-only change runs all of cargo and says why.
+cargo_case "a docs/ change with an unclassified docs/ reader" \
+  'echo "fn f() { std::fs::read_to_string(format!(\"{}/docs/x\", other::root())); }" >crates/a/tests/hidden.rs &&
+   git add -A && git -c user.name=t -c user.email=t@e -c commit.gpgsign=false commit -qm hidden &&
+   git update-ref refs/remotes/origin/main HEAD && echo two >docs/index.md'
+if printf '%s\n' "$out" | grep -q 'crates/a/tests/hidden.rs'; then
+  ok "an unclassified docs/ reader is named"
+else
+  bad "an unclassified docs/ reader is named" "out: $out"
+fi
 cargo_case "a Cargo.toml change" 'echo two >Cargo.toml'
 cargo_case "a new rust-toolchain file" 'echo two >rust-toolchain.toml'
 cargo_case "a deleted script (Rust tests read the tracked files)" 'git rm -q scripts/foo/run.sh'
@@ -378,6 +389,17 @@ elif [ -z "$outside" ]; then
   ok "every literal repo-file read in crates/ ($seen) is a cargo input"
 else
   bad "every literal repo-file read in crates/ is a cargo input" "not inputs:$outside"
+fi
+
+# --- --docs-tests needs --cargo -----------------------------------------------
+cp "$tree/scripts/check.sh" "$work/check.sh.orig"
+sed -i 's/^if step "installer tests"; then/if step "installer tests" --docs-tests; then/' "$tree/scripts/check.sh"
+check --list
+cp "$work/check.sh.orig" "$tree/scripts/check.sh"
+if [ "$status" -eq 2 ] && grep -q -- '--docs-tests needs --cargo' <<<"$out"; then
+  ok "a step tagged --docs-tests without --cargo is a usage error"
+else
+  bad "a step tagged --docs-tests without --cargo is a usage error" "exit $status: $out"
 fi
 
 # --- an unknown argument is a usage error -----------------------------------

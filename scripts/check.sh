@@ -84,6 +84,8 @@ unstamped=    # set by `skip_step --no-stamp`: the run writes no pass stamp
 cargo_mode=   # unset until cargo_plan decides; then full, skip or docs
 cargo_why=    # why the cargo steps skip (skip) or narrow (docs)
 docs_tests=   # docs mode: the tests that read docs/, "PACKAGE TEST" per line
+cargo_changed= # set by cargo_plan when it can tell: the paths that differ from
+#                the merge-base with origin/main (changed and untracked), one per line
 
 # step NAME [--fast] [--no-slot]: opens a step's block,
 # `if step "NAME"; then ... fi`. In a run it prints the step's header and the
@@ -107,6 +109,10 @@ step() {
     esac
     shift
   done
+  if [ -n "$docs" ] && [ -z "$cargo" ]; then
+    printf 'check.sh: step "%s": --docs-tests needs --cargo\n' "$name" >&2
+    exit 2
+  fi
   if [ "$tier" = fast ] && [ -z "$fast" ]; then
     return 1
   fi
@@ -169,9 +175,11 @@ cargo_input() {
 #   docs  the only inputs that differ are in docs/, and none is compiled into
 #         a crate: just the tests that read docs/ run (docs_tests lists them)
 #   full  anything else, in CI, and whenever this cannot tell: no origin/main,
-#         no merge-base, a shallow clone, or no docs-test list
+#         no merge-base, a shallow clone, a docs-test list that fails or
+#         finds no test, or a drift guard (list.sh --check) that fails
 #
-# cargo_why says why for skip and docs. The tree compared is the working
+# cargo_why says why for skip and docs; cargo_changed holds the paths
+# compared, for other steps to reuse. The tree compared is the working
 # tree, untracked files included, as the pass stamp's is. `git diff BASE`
 # takes its paths from the index, so a file removed with `git rm --cached`
 # counts as deleted though it is still on disk.
@@ -184,9 +192,10 @@ cargo_plan() {
     base=$(git merge-base HEAD refs/remotes/origin/main 2>/dev/null) &&
     deleted=$(git diff --no-renames --name-only --diff-filter=D "$base" --) &&
     changed=$(git diff --no-renames --name-only "$base" --) &&
-    untracked=$(git ls-files --others --exclude-standard) &&
+    untracked=$(git ls-files --others --exclude-standard); then
+    cargo_changed=$(printf '%s\n%s\n' "$changed" "$untracked" | sed '/^$/d' | sort -u)
     # Rust tests read the tracked files' names, so a deletion is an input.
-    [ -z "$deleted" ]; then
+    [ -z "$deleted" ] || return 0
     while IFS= read -r path; do
       if [ -n "$path" ] && cargo_input "$path"; then
         case $path in
@@ -194,8 +203,7 @@ cargo_plan() {
           *) return 0 ;;
         esac
       fi
-    done <<<"$changed
-$untracked"
+    done <<<"$cargo_changed"
     if [ -z "$docs" ]; then
       cargo_mode=skip
       cargo_why="no cargo input differs from origin/main (merge-base ${base:0:12})"
@@ -209,6 +217,11 @@ $untracked"
         return 0
       fi
     done <<<"$docs"
+    # A docs/ reader the list may miss: all of cargo, saying why.
+    if ! scripts/docs-tests/list.sh --check; then
+      echo "cargo: only docs/ differs, but the docs-test list may miss a reader (above); running all of cargo"
+      return 0
+    fi
     docs_tests=$(scripts/docs-tests/list.sh) && [ -n "$docs_tests" ] || return 0
     cargo_mode=docs
     cargo_why="only docs/ differs from origin/main (merge-base ${base:0:12})"
