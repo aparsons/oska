@@ -248,6 +248,21 @@ if step "cargo clippy" --fast --cargo; then
   cargo clippy --all-targets -- -D warnings
 fi
 
+if step "oskac type-checks for Windows" --cargo; then
+  # `cfg(windows)` code is not compiled on Linux, so a type error in it shows
+  # up only on the Windows CI job. A check-only build needs no linker, and the
+  # workspace has no external crates. The target is a one-time local
+  # `rustup target add` (docs/agents/rust.md); the ci.yml test job adds it.
+  if rustup target list --installed 2>/dev/null | grep -qx 'x86_64-pc-windows-gnu'; then
+    cargo check -p oskac --tests --target x86_64-pc-windows-gnu
+  elif [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+    echo "check.sh: x86_64-pc-windows-gnu target missing in CI; the ci.yml test job must run 'rustup target add x86_64-pc-windows-gnu'" >&2
+    exit 1
+  else
+    skip_step "x86_64-pc-windows-gnu target not installed; skipped (run: rustup target add x86_64-pc-windows-gnu)"
+  fi
+fi
+
 if step "cargo test (private temporary directory)" --cargo; then
   # A test that leaves a file or directory in the temporary directory fails the
   # check here, naming it, instead of slowly filling the shared /tmp.

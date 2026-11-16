@@ -62,6 +62,11 @@ for tool in cargo shellcheck; do
   chmod +x "$tree/bin/$tool"
 done
 
+# rustup reports the Windows target installed, so the Windows step runs its
+# (stubbed) cargo check the same on a machine with or without the target.
+printf '#!/usr/bin/env bash\necho x86_64-pc-windows-gnu\n' >"$tree/bin/rustup"
+chmod +x "$tree/bin/rustup"
+
 # check ARGS...: runs the scratch check.sh. Sets `status`, `out` (stdout and
 # stderr) and `log` (what the stubs logged, one name per line).
 check() {
@@ -216,7 +221,7 @@ else
   bad "a docs, workflow and script change skips the cargo steps" "exit $status, log: $log"
 fi
 skips=$(printf '%s\n' "$out" | grep -c 'no cargo input differs from origin/main' || true)
-if [ "$skips" -eq 3 ]; then
+if [ "$skips" -eq 4 ]; then
   ok "each skipped cargo step says why"
 else
   bad "each skipped cargo step says why" "got: $out"
