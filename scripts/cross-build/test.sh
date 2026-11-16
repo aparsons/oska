@@ -98,6 +98,7 @@ expect_pass "a package is built from its directory" "$dir" \
   "linux-aarch64 examples/pkg $(hash_of examples/pkg linux-aarch64)"
 
 dir=$(tree '' examples/refused.osk)
+# shellcheck disable=SC2016 # the backticks are literal error text
 expect_fail "a refusal the list does not expect fails, showing the error" "$dir" \
   "examples/refused.osk" \
   'error[E0390]: cannot compile `examples/refused.osk` for linux-x86_64 yet'

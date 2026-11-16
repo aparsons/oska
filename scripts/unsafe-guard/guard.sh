@@ -60,6 +60,7 @@ if ! RUSTC_WORKSPACE_WRAPPER="$here/rustc.sh" \
   problem "a crate other than oska-sys does not compile with unsafe_code forbidden (above)"
 fi
 
+# shellcheck disable=SC2016 # the pattern is literal text; a backtick must not run
 unsafe_word='(^|[^[:alnum:]_`])unsafe([^[:alnum:]_`]|_code|$)'
 strip="s:/\\*([^*]|\\*+[^*/])*\\*+/::g; s/'([^'\\\\]|\\\\.[^']*)'//g; s/\"([^\"\\\\]|\\\\.)*\"//g; s://.*\$::"
 found=$(git ls-files -co --exclude-standard -- '*.rs' ':(exclude)crates/oska-sys/*' |

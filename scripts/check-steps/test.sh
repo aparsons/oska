@@ -30,6 +30,7 @@ bad() {
 # The stub every called script and tool becomes: logs its directory/name
 # (cargo: `cargo SUBCOMMAND`), and fails when that is STUB_FAIL. The
 # temp-leak wrapper stub then runs the command it wraps.
+# shellcheck disable=SC2016 # the stub script is written out, not expanded here
 stub='#!/usr/bin/env bash
 name=$(basename "$(dirname "$0")")/$(basename "$0")
 if [ "$name" = bin/cargo ]; then name="cargo $1"; fi
@@ -57,7 +58,7 @@ grep -oE 'scripts/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+\.sh' "$repo_root/scripts/check.s
     printf '%s' "$stub" >"$tree/$path"
     chmod +x "$tree/$path"
   done
-for tool in cargo shellcheck; do
+for tool in cargo shellcheck pwsh; do
   printf '%s' "$stub" >"$tree/bin/$tool"
   chmod +x "$tree/bin/$tool"
 done

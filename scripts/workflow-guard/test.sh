@@ -111,6 +111,7 @@ else
 fi
 
 # A value that is not a whole number from 1 to 60.
+# shellcheck disable=SC2016 # a literal workflow expression the guard must refuse
 for bad in 0 61 -5 '${{ matrix.minutes }}' thirty 2.5 '"30"' 030 360; do
   dir=$(tree)
   workflow "$dir" ci.yml <<YAML
