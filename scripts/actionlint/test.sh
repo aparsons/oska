@@ -14,25 +14,6 @@ bad() {
   fail=1
 }
 
-# The real workflows must pass; exit 3 means no tool.
-rc=0
-bash scripts/actionlint/run.sh >"$work/real.out" 2>&1 || rc=$?
-if [ "$rc" -eq 3 ]; then
-  if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
-    cat "$work/real.out"
-    echo "FAIL actionlint unavailable in CI"
-    exit 1
-  fi
-  echo "skip: actionlint unavailable ($(cat "$work/real.out"))"
-  exit 0
-fi
-if [ "$rc" -eq 0 ]; then
-  ok "the repo's workflows pass"
-else
-  cat "$work/real.out"
-  bad "the repo's workflows pass"
-fi
-
 cat >"$work/good.yml" <<'YML'
 name: good
 on:
@@ -48,11 +29,20 @@ jobs:
     steps:
       - run: echo hi
 YML
-if bash scripts/actionlint/run.sh "$work/good.yml" >/dev/null 2>&1; then
-  ok "a valid workflow passes"
-else
-  bad "a valid workflow passes"
+# The first call also finds out whether actionlint is available (exit 3).
+# The repo's own workflows are checked by check.sh's "workflow validation".
+rc=0
+bash scripts/actionlint/run.sh "$work/good.yml" >"$work/good.out" 2>&1 || rc=$?
+if [ "$rc" -eq 3 ]; then
+  if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+    cat "$work/good.out"
+    echo "FAIL actionlint unavailable in CI"
+    exit 1
+  fi
+  echo "skip: actionlint unavailable ($(cat "$work/good.out"))"
+  exit 0
 fi
+if [ "$rc" -eq 0 ]; then ok "a valid workflow passes"; else cat "$work/good.out"; bad "a valid workflow passes"; fi
 
 # The #329 bug: an unquoted ": " inside an input description.
 sed 's/description: "a (b, _ : c)"/description: a (b, _ : c)/' "$work/good.yml" >"$work/bad.yml"

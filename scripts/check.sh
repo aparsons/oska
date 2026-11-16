@@ -325,6 +325,10 @@ if step "workflow validation tests" --no-slot; then
   bash scripts/actionlint/test.sh
 fi
 
+if step "expected workflows tests" --no-slot; then
+  bash scripts/expected-workflows/test.sh
+fi
+
 if step "shellcheck"; then
   if command -v shellcheck >/dev/null 2>&1; then
     shellcheck -S warning scripts/*.sh scripts/*/*.sh site/agent-setup/*.sh .githooks/pre-push

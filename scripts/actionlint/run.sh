@@ -12,10 +12,11 @@
 # into a skip locally and a failure in CI.
 #
 # actionlint is pinned by version and by the SHA-256 of each release tarball.
-# An actionlint already on PATH is used as is. Otherwise the pinned linux
-# release (amd64 or arm64) is downloaded once into the cache. Its
-# own lint passes for shell and Python are off: this checks the workflow's
-# structure and expressions, and the shellcheck step covers scripts.
+# An actionlint on PATH is used only if it reports the pinned version.
+# Otherwise the pinned linux release (amd64 or arm64) is downloaded once into
+# the cache, and its binary is re-hashed before every run. actionlint's own
+# shell and Python lint passes are off: this checks the workflow's structure
+# and expressions, and the shellcheck step covers scripts.
 
 set -euo pipefail
 
@@ -30,9 +31,15 @@ unavailable() {
   exit 3
 }
 
+# find_tool: sets $tool to a usable actionlint of the pinned version, or exits
+# 3. It sets a variable rather than printing, so a failure inside it cannot be
+# lost in a command substitution.
+tool=
 find_tool() {
-  if command -v actionlint >/dev/null 2>&1; then
-    command -v actionlint
+  local found
+  if found=$(command -v actionlint 2>/dev/null) &&
+    [ "$("$found" -version 2>/dev/null | head -n 1)" = "$version" ]; then
+    tool=$found
     return
   fi
   local arch want
@@ -42,30 +49,39 @@ find_tool() {
     *) unavailable "no pinned release for $(uname -s)/$(uname -m)" ;;
   esac
   local dir="${XDG_CACHE_HOME:-$HOME/.cache}/oska/actionlint-$version-$arch"
-  if [ ! -x "$dir/actionlint" ]; then
-    command -v curl >/dev/null 2>&1 || unavailable "curl not installed"
-    local tmp tar got
-    tmp=$(mktemp -d)
-    tar="$tmp/actionlint.tar.gz"
-    if ! curl -fsSL --retry 3 -o "$tar" \
-      "https://github.com/rhysd/actionlint/releases/download/v$version/actionlint_${version}_linux_$arch.tar.gz"; then
-      rm -rf "$tmp"
-      unavailable "download failed"
-    fi
-    got=$(sha256sum "$tar" | cut -d' ' -f1)
-    if [ "$got" != "$want" ]; then
-      rm -rf "$tmp"
-      unavailable "checksum mismatch for the $arch release (got $got)"
-    fi
-    mkdir -p "$dir"
-    tar -xzf "$tar" -C "$tmp" actionlint
-    mv "$tmp/actionlint" "$dir/actionlint"
-    rm -rf "$tmp"
+  # The cached binary is trusted only while it hashes to what was recorded
+  # when it was extracted from the verified tarball.
+  if [ -x "$dir/actionlint" ] && [ -f "$dir/actionlint.sha256" ] &&
+    [ "$(sha256sum "$dir/actionlint" | cut -d' ' -f1)" = "$(cat "$dir/actionlint.sha256")" ]; then
+    tool=$dir/actionlint
+    return
   fi
-  printf '%s\n' "$dir/actionlint"
+  command -v curl >/dev/null 2>&1 || unavailable "curl not installed"
+  local tmp tgz got
+  tmp=$(mktemp -d) || unavailable "mktemp failed"
+  tgz="$tmp/actionlint.tar.gz"
+  if ! curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "$tgz" \
+    "https://github.com/rhysd/actionlint/releases/download/v$version/actionlint_${version}_linux_$arch.tar.gz"; then
+    rm -rf "$tmp"
+    unavailable "download failed"
+  fi
+  got=$(sha256sum "$tgz" | cut -d' ' -f1)
+  if [ "$got" != "$want" ]; then
+    rm -rf "$tmp"
+    unavailable "checksum mismatch for the $arch release (got $got)"
+  fi
+  if ! tar -xzf "$tgz" -C "$tmp" actionlint ||
+    ! mkdir -p "$dir" ||
+    ! mv -f "$tmp/actionlint" "$dir/actionlint" ||
+    ! sha256sum "$dir/actionlint" | cut -d' ' -f1 >"$dir/actionlint.sha256"; then
+    rm -rf "$tmp"
+    unavailable "could not install the release into $dir"
+  fi
+  rm -rf "$tmp"
+  tool=$dir/actionlint
 }
 
-tool=$(find_tool)
+find_tool
 
 if [ $# -eq 0 ]; then
   for f in .github/workflows/*.yml .github/workflows/*.yaml; do
