@@ -54,6 +54,7 @@ The loop orchestrator reviews each ticket PR on two axes (Standards and Spec) wh
 
 - Fix review findings on the same branch (`ticket/<number>-<slug>`) and push. Do not open a second PR.
 - A ticket PR merges only when CI is green and every finding is fixed or deferred to a filed issue that links the PR.
+- The orchestrator files the issue for a deferred finding (you do, when told to). The issue links the PR.
 
 ## Reading CI failures
 
