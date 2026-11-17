@@ -7,10 +7,9 @@
 //! write that creates a new file is unaffected.
 //!
 //! The tests run Oska programs on [`oska_run::RealHost`] against a real
-//! temporary directory with real hard links (Unix only; Windows keeps its
-//! path-based checks).
+//! temporary directory with real hard links, on Unix and Windows.
 
-#![cfg(unix)]
+#![cfg(any(unix, windows))]
 
 mod common;
 
