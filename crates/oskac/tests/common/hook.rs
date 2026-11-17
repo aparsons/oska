@@ -3,38 +3,15 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+use super::portable::{json_str, Scratch};
 use std::process::{Command, Stdio};
 
-/// A new, empty directory for a test, under the system's temporary one,
-/// removed when the test ends, even when it fails: one test copies `oskac`
-/// in, and the copies filled `/tmp` when they were left behind.
+/// A new, empty, canonical directory for a test, removed when the test
+/// ends, even when it fails: one test copies `oskac` in, and the copies
+/// filled `/tmp` when they were left behind.
 pub fn scratch(name: &str) -> Scratch {
-    let dir = std::env::temp_dir().join(format!("oska-agent-setup-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("should create a scratch directory");
-    Scratch(dir)
-}
-
-/// A scratch directory, removed on drop.
-pub struct Scratch(pub PathBuf);
-
-impl std::ops::Deref for Scratch {
-    type Target = Path;
-    fn deref(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl AsRef<Path> for Scratch {
-    fn as_ref(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
+    Scratch::new("oska-agent-setup", name)
 }
 
 /// What a hook run left behind: its exit code, standard output and
@@ -82,11 +59,6 @@ pub fn hook(args: &[&str], input: &str, cwd: &Path) -> Hooked {
     }
 }
 
-/// `text` as a JSON string literal.
-pub fn json_string(text: &str) -> String {
-    format!("\"{}\"", oska_syntax::json_escape(text))
-}
-
 /// The JSON Claude Code gives a PostToolUse hook after an `Edit` of
 /// `file`, in the project at `cwd`.
 pub fn tool_call(file: &str, cwd: &Path) -> String {
@@ -94,8 +66,8 @@ pub fn tool_call(file: &str, cwd: &Path) -> String {
         "{{\"session_id\":\"s\",\"cwd\":{},\"hook_event_name\":\"PostToolUse\",\
          \"tool_name\":\"Edit\",\"tool_input\":{{\"file_path\":{},\
          \"old_string\":\"a\",\"new_string\":\"b\"}},\"tool_response\":{{\"success\":true}}}}",
-        json_string(&cwd.to_string_lossy()),
-        json_string(file)
+        json_str(&cwd.to_string_lossy()),
+        json_str(file)
     )
 }
 

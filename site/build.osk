@@ -2294,7 +2294,10 @@ fn code_page(all: Site, code: Code) -> Page {
     if code.fix == "" {
         parts.push("**Machine-applicable fix:** none.")
     } else {
-        parts.push("**Machine-applicable fix:** {code.fix}")
+        // Only a `machine` fix is certainly right (the glossary's Fix
+        // applicability); a `maybe` or `placeholders` fix is not machine-applicable.
+        let label = if code.applicability == "maybe" || code.applicability == "placeholders" { "Fix" } else { "Machine-applicable fix" }
+        parts.push("**{label}:** {code.fix}")
         if code.applicability != "" {
             parts.push("")
             parts.push("**Fix applicability:** `{code.applicability}`.")

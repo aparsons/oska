@@ -337,7 +337,7 @@ pub fn check(package: &Package, refused: &[Diagnostic], options: CheckOptions) -
     let mut report = oska_check::check_package(package, options);
     // A package that needs a newer `oskac` (`E0407`) is refused for that
     // alone, before the files the load refused.
-    let too_old = report.diagnostics.iter().any(|d| d.code == "E0407");
+    let too_old = oska_check::needs_newer_oskac(&report);
     if !refused.is_empty() && !too_old {
         report.diagnostics.splice(0..0, refused.iter().cloned());
         report.program = None;

@@ -9,15 +9,15 @@
 //! `UPDATE_GOLDEN=1 cargo test -p oskac --test fix_cli` and review the
 //! diff.
 
-use std::path::{Path, PathBuf};
+mod common;
+
+use common::portable::Scratch;
+use std::path::Path;
 use std::process::{Command, Output};
 
 /// A fresh directory for one case's files.
-fn scratch(name: &str) -> PathBuf {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("fix_cli_{name}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("should create the scratch directory");
-    dir
+fn scratch(name: &str) -> Scratch {
+    Scratch::new("fix_cli", name)
 }
 
 /// `files`, each a path relative to `dir` and its text, written there.
