@@ -165,18 +165,21 @@ fn an_attenuation_in_another_module_names_its_file_and_function() {
     let main = "use pkg.files\n\nfn main(read: FsRead) {\n    let _ = files.docs(read)\n}\n";
     let report = common::check_modules(&[("main", main), ("files", helper)]);
     assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
-    let entries: Vec<(&str, &str, &str)> = report
+    let entries: Vec<(String, &str, &str)> = report
         .attenuations
         .iter()
         .map(|a| {
             (
-                a.function.as_str(),
+                a.function.to_string(),
                 a.result.as_str(),
                 common::path_of(a.location.as_ref()),
             )
         })
         .collect();
-    assert_eq!(entries, [("pkg.files.docs", "DirRead", "src/files.osk")]);
+    assert_eq!(
+        entries,
+        [("pkg.files.docs".to_string(), "DirRead", "src/files.osk")]
+    );
     let docs = report
         .functions
         .iter()
@@ -406,9 +409,9 @@ fn a_method_is_named_by_its_types_module() {
         lines,
         [
             "fn pkg.main.main: pure",
-            "fn pkg.geo.Point.to_string: pure",
+            "fn <pkg.geo.Point as Display>.to_string: pure",
             "fn pkg.geo.Point.x: pure",
-            "fn pkg.geo.Int.area: pure",
+            "fn <Int as pkg.geo.Area>.area: pure",
         ]
     );
 }

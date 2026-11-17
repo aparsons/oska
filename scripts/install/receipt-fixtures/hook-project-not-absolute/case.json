@@ -1,0 +1,29 @@
+{
+  "about": "A hook project that is not an absolute path refuses the whole uninstall.",
+  "setup": [
+    {
+      "name": "hook_script",
+      "path": "@PROJECT@/.claude/hooks/oska-check.sh",
+      "published": "hook_script"
+    },
+    {
+      "name": "hook_settings",
+      "path": "@PROJECT@/.claude/settings.json",
+      "published": "hook_settings"
+    }
+  ],
+  "expect": {
+    "sh": {
+      "refused": "unsafe_path"
+    },
+    "ps1": {
+      "refused": "unsafe_path"
+    },
+    "oskac_unix": {
+      "refused": "unsafe_path"
+    },
+    "oskac_windows": {
+      "refused": "unsafe_path"
+    }
+  }
+}

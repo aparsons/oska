@@ -1,0 +1,64 @@
+{
+  "about": "A record with no SHA-256 (other than the receipt) cannot be shown unchanged: kept.",
+  "setup": [
+    {
+      "name": "notes",
+      "path": "@OSKA_HOME@/notes.txt",
+      "text": "notes\n"
+    }
+  ],
+  "expect": {
+    "sh": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@"
+      ],
+      "kept": [
+        "@OSKA_HOME@/notes.txt",
+        "@OSKA_HOME@"
+      ],
+      "path_hint": false
+    },
+    "ps1": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@"
+      ],
+      "kept": [
+        "@OSKA_HOME@/notes.txt",
+        "@OSKA_HOME@"
+      ],
+      "path_hint": false
+    },
+    "oskac_unix": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@"
+      ],
+      "kept": [
+        "@OSKA_HOME@/notes.txt",
+        "@OSKA_HOME@"
+      ],
+      "path_hint": false
+    },
+    "oskac_windows": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@"
+      ],
+      "kept": [
+        "@OSKA_HOME@/notes.txt",
+        "@OSKA_HOME@"
+      ],
+      "path_hint": false
+    }
+  }
+}

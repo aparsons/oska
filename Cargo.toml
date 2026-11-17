@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/oskac", "crates/oska-syntax", "crates/oska-check", "crates/oska-run", "crates/oska-native", "crates/oska-sys"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/aparsons/oska"
@@ -14,3 +14,19 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 unwrap_used = "warn"
+
+# Test steps are dominated by running the interpreter and compiler these
+# crates hold, so build them optimised in dev and test builds (`test`
+# inherits `dev`). Debug assertions and overflow checks stay on; release
+# builds are unaffected. Measured in docs/research/2026-11-development-throughput.md.
+[profile.dev.package.oska-run]
+opt-level = 1
+
+[profile.dev.package.oskac]
+opt-level = 1
+
+[profile.dev.package.oska-check]
+opt-level = 1
+
+[profile.dev.package.oska-native]
+opt-level = 1

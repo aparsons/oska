@@ -17,6 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+use common::portable::Scratch;
 use common::Json;
 use oska_run::FakeHost;
 
@@ -197,6 +198,13 @@ fn the_installer_fields_the_prompt_reads_are_fields_the_installers_print() {
         "path",
         "bin_dir",
         "on_path",
+        "action",
+        "previous_version",
+        "index_verified",
+        "update_available",
+        "removed",
+        "kept",
+        "path_hint",
     ] {
         assert!(
             prompt.contains(&format!("`{field}`")),
@@ -223,9 +231,34 @@ fn the_prompt_has_the_agent_install_verify_configure_test_and_report() {
         "CLAUDE.md",
         "`oskac test <file.osk>`",
         "run the installer again",
+        "--check --json",
+        "--uninstall --json",
+        "`oskac self uninstall --format=json`",
+        "`oskac self info --format=json`",
+        "`downgrade_refused`",
         "https://oskalang.dev/llms.txt",
+        // The update step stops as the install step does, and reports the
+        // action, a downgrade included.
+        "If `ok` is not `true`, stop",
+        "`index_verified` is not `true`, stop",
+        "`action`",
+        "`previous_version`",
+        "`downgraded`",
+        // The hook step may let the installer write the hook.
+        "--hook .",
+        // The project's minimum toolchain, with the diff first.
+        "oska = \"<version>\"",
+        // The report gives the update and uninstall commands.
+        "To update",
+        "To uninstall",
     ] {
         assert!(prompt.contains(step), "the prompt should say: {step}");
+    }
+    for stale in ["there is no self-update command", "not_managed"] {
+        assert!(
+            !prompt.contains(stale),
+            "the prompt should not say: {stale}"
+        );
     }
     // Each step is a heading, in order.
     let headings: Vec<&str> = prompt.lines().filter(|l| l.starts_with("## ")).collect();
@@ -237,7 +270,8 @@ fn the_prompt_has_the_agent_install_verify_configure_test_and_report() {
             "## 2. Check the toolchain",
             "## 3. Configure the project",
             "## 4. Run the tests in CI",
-            "## 5. Report",
+            "## 5. Update, check or uninstall later",
+            "## 6. Report",
         ]
     );
 }
@@ -348,36 +382,11 @@ fn the_example_program_in_the_prompt_checks_and_runs() {
     assert!(prompt.contains("`Hello from Oska!`"));
 }
 
-/// A new, empty directory for a test, under the system's temporary one,
-/// removed when the test ends, even when it fails: one test copies `oskac`
-/// in, and the copies filled `/tmp` when they were left behind.
+/// A new, empty directory for a test, removed when the test ends, even
+/// when it fails: one test copies `oskac` in, and the copies filled `/tmp`
+/// when they were left behind.
 fn scratch(name: &str) -> Scratch {
-    let dir = std::env::temp_dir().join(format!("oska-agent-setup-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("should create a scratch directory");
-    Scratch(dir)
-}
-
-/// A scratch directory, removed on drop.
-struct Scratch(PathBuf);
-
-impl std::ops::Deref for Scratch {
-    type Target = Path;
-    fn deref(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl AsRef<Path> for Scratch {
-    fn as_ref(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
+    Scratch::new("oska-agent-setup", name)
 }
 
 // ---- The templates -------------------------------------------------------------------------
@@ -398,6 +407,9 @@ fn the_agents_template_has_the_loop_the_flags_and_the_pointers() {
         "https://oskalang.dev/llms.txt",
         "https://oskalang.dev/codes.json",
         "https://oskalang.dev/codes/E0300",
+        // How this oskac was installed, and whether an update exists.
+        "oskac self info --format=json",
+        "--check --json",
     ] {
         assert!(
             template.contains(line),
@@ -462,6 +474,7 @@ fn built_site() -> BTreeMap<String, String> {
         "GLOSSARY.md",
         "site/style.css",
         "site/search.js",
+        "site/favicon.svg",
         "site/agent-setup",
         "Cargo.toml",
     ] {

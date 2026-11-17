@@ -37,7 +37,7 @@ A change after which a dependency's authority includes a capability kind it did 
 _Avoid_: escalation, upgrade (for this concept)
 
 **Pure function**:
-A function with no capability-bearing parameters. It cannot perform effects, and it is deterministic.
+A function with no capability-bearing parameters and no parameter whose type is or holds a bounded type parameter, whose type argument could be capability-bearing. It cannot perform effects, and it is deterministic.
 
 **Pre-state value**:
 A value in a postcondition captured with `old(...)` when the function is entered, before a mutating method changes its receiver.
@@ -156,3 +156,19 @@ _Avoid_: syscall wrapper
 **Differential suite**:
 The tests that run every program of a corpus on both the interpreter and the native backend and fail on any difference in output, exit code, panic or files written.
 _Avoid_: parity tests, golden tests (for this suite)
+
+## Installation
+
+**Managed install**:
+An `oskac` that the installer put in place and recorded in its install receipt. Only a managed install updates or uninstalls itself; any other copy is left alone.
+_Avoid_: system install, global install
+
+**Update checker**:
+The toolchain's own Oska program that fetches the signed release index and verifies releases for `oskac self check` and `oskac self update`. It is compiled when `oskac` is built and carried inside it, and it runs as a separate process holding only the network and file authority it needs.
+_Avoid_: updater daemon, auto-updater
+
+## Tooling
+
+**Language server**:
+The long-running `oskac lsp` process that editors and agents ask about Oska code over the editor protocol: errors, where a name is defined and used, and a value's type and authority.
+_Avoid_: LSP (the protocol, not the server), Claude LSP server (the server is the same for every editor; Claude Code reaches it through the plugin)

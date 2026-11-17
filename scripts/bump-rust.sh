@@ -33,7 +33,7 @@ command -v rustup >/dev/null 2>&1 || {
 
 rt=crates/oska-check/src/std/rt.osk
 
-rustup toolchain install "$version" --profile minimal -c rustfmt -c clippy
+rustup toolchain install "$version" --profile minimal -c rustfmt -c clippy -t x86_64-pc-windows-gnu
 
 sed -i -E "s/^channel = \".*\"/channel = \"$version\"/" rust-toolchain.toml
 grep -qx "channel = \"$version\"" rust-toolchain.toml || {

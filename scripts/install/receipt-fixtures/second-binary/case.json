@@ -1,0 +1,62 @@
+{
+  "about": "A second binary beside this oskac. The installers remove it if its SHA-256 matches; oskac removes only itself.",
+  "setup": [
+    {
+      "name": "other",
+      "path": "@BIN@/oskac-other",
+      "text": "another oskac\n"
+    }
+  ],
+  "expect": {
+    "sh": {
+      "removed": [
+        "@EXE@",
+        "@BIN@/oskac-other",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@",
+        "@OSKA_HOME@"
+      ],
+      "kept": [],
+      "path_hint": false
+    },
+    "ps1": {
+      "removed": [
+        "@EXE@",
+        "@BIN@/oskac-other",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@",
+        "@OSKA_HOME@"
+      ],
+      "kept": [],
+      "path_hint": false
+    },
+    "oskac_unix": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json"
+      ],
+      "kept": [
+        "@BIN@/oskac-other",
+        "@BIN@",
+        "@OSKA_HOME@"
+      ],
+      "path_hint": false
+    },
+    "oskac_windows": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json"
+      ],
+      "kept": [
+        "@BIN@/oskac-other",
+        "@BIN@",
+        "@OSKA_HOME@"
+      ],
+      "path_hint": false
+    }
+  }
+}

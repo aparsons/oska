@@ -1,14 +1,6 @@
 # Oska: full documentation
 
-Oska 0.1.0 (pre-alpha). Every page of https://oskalang.dev as Markdown, one after another, each after a line `Source:` that names it.
-
----
-
-Source: https://oskalang.dev/
-
-# Oska
-
-The [design](/design.md).
+Oska 0.1.0 (pre-alpha). The pages of https://oskalang.dev as Markdown, one after another, in the order to read them, each after a line `Source:` that names it.
 
 ---
 
@@ -66,7 +58,7 @@ None of it may survive as anything but text.
 - [mail](mailto:someone@example.com)
 - [glossary](/glossary.md#capability)
 - [here](#raw-html)
-- [unpublished](../crates/oskac/src/main.rs)
+- [unpublished](https://github.com/aparsons/oska/blob/main/crates/oskac/src/main.rs)
 
 ## Entities
 
@@ -94,3 +86,22 @@ None of it may survive as anything but text.
 > <script>alert("quote")</script>
 
 1. <script>alert("ordered")</script>
+
+---
+
+Source: https://oskalang.dev/
+
+# Oska
+
+The [design](/design.md).
+
+---
+
+Source: https://oskalang.dev/reference.html
+
+# Reference
+
+How Oska works inside, the words it uses, and the decisions and research behind it. To use Oska, start with the guides.
+
+- [Hostile <script>alert("title")</script> notes](/design.md)
+- [Glossary](/glossary.md)

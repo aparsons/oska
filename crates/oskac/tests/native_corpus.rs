@@ -6,11 +6,15 @@
 //!
 //! A corpus program is one `oskac build` compiles. One the checker
 //! refuses, or a library, is not a program and is left out; one the
-//! native backend refuses fails the test unless the interpreter refuses it
-//! too (a `std` module neither has a runtime for). The `test` blocks of
-//! the same corpus are compared by `native_tests.rs`.
+//! native backend refuses, for the host or any other target, fails the
+//! test unless the interpreter refuses it too (a `std` module neither has
+//! a runtime for). The `test` blocks of the same corpus are compared by
+//! `native_tests.rs`.
 
-#![cfg(all(target_arch = "aarch64", target_os = "linux"))]
+#![cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 
 mod differential;
 /// The one skip list of the differential tests, shared with the
@@ -20,7 +24,7 @@ mod skips;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use differential::{assert_same, Case};
 
@@ -83,9 +87,9 @@ fn oskac(dir: &Path, args: &[&str]) -> Option<i32> {
         .code()
 }
 
-/// Whether `case` is a program of the corpus: `oskac build` compiles it.
-/// A program the native backend refuses fails the test, unless the
-/// interpreter refuses it too.
+/// Whether `case` is a program of the corpus: `oskac build` compiles it,
+/// for every target with a backend. A program the native backend refuses
+/// for any target fails the test, unless the interpreter refuses it too.
 fn is_program(case: &Case, name: &str) -> bool {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join("corpus-probe")
@@ -97,22 +101,30 @@ fn is_program(case: &Case, name: &str) -> bool {
         std::fs::write(&file, text).expect("should write the file");
     }
     let exe = dir.with_extension("exe");
-    let built = oskac(
-        &dir,
-        &["build", case.target(), "-o", &exe.to_string_lossy()],
-    );
-    let program = match built {
-        Some(0) => true,
-        Some(2) => {
-            let interpreted = oskac(&dir, &["run", "--interpret", case.target()]);
-            assert_eq!(
-                interpreted,
-                Some(2),
-                "`{name}`: the native backend refuses a program the interpreter runs"
-            );
-            false
-        }
-        _ => false,
+    let built: Vec<(&str, Option<i32>)> = oska_native::Target::ALL
+        .iter()
+        .map(|target| {
+            let built = Command::new(env!("CARGO_BIN_EXE_oskac"))
+                .args(["build", case.target(), "--target", target.name(), "-o"])
+                .arg(&exe)
+                .current_dir(&dir)
+                .output()
+                .expect("oskac should run");
+            (target.name(), built.status.code())
+        })
+        .collect();
+    let program = if built.iter().all(|(_, code)| *code == Some(0)) {
+        true
+    } else if let Some((target, _)) = built.iter().find(|(_, code)| *code == Some(2)) {
+        let interpreted = oskac(&dir, &["run", "--interpret", case.target()]);
+        assert_eq!(
+            interpreted,
+            Some(2),
+            "`{name}`: the native backend refuses for {target} a program the interpreter runs"
+        );
+        false
+    } else {
+        false
     };
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_file(&exe);
@@ -316,6 +328,7 @@ fn site_inputs() -> Vec<(String, String)> {
         "Cargo.toml",
         "site/style.css",
         "site/search.js",
+        "site/favicon.svg",
     ] {
         files.push((file.to_string(), read(&root.join(file))));
     }
@@ -353,23 +366,47 @@ fn the_site_generator_builds_the_real_site_byte_for_byte() {
     }
 }
 
+/// CPU time this thread has used so far, user plus system, from
+/// `/proc/thread-self/stat` (this file is Linux-only, see the `cfg` at the
+/// top). Unlike wall-clock time it does not grow when other processes
+/// compete for the cores. The kernel counts it in ticks of 1/100 s
+/// (`USER_HZ`, 100 on every Linux target).
+fn thread_cpu_time() -> Duration {
+    let stat = std::fs::read_to_string("/proc/thread-self/stat").expect("read the thread's stat");
+    // The command name, in parentheses, may hold spaces: count the fields
+    // after it. They start at field 3 (the state); `utime` and `stime` are
+    // fields 14 and 15.
+    let after_name = &stat[stat.rfind(')').expect("the stat names the command") + 1..];
+    let fields: Vec<u64> = after_name
+        .split_whitespace()
+        .skip(11)
+        .take(2)
+        .map(|ticks| ticks.parse().expect("a tick count"))
+        .collect();
+    assert_eq!(fields.len(), 2, "the stat has utime and stime: {stat}");
+    Duration::from_millis((fields[0] + fields[1]) * 10)
+}
+
 #[test]
-fn building_the_site_generator_takes_well_under_a_second() {
+fn building_the_site_generator_uses_little_cpu_time() {
     let root = repo_root();
     let src = read(&root.join("site/build.osk"));
     let report =
         oska_check::check_file("site/build.osk", &src, oska_check::CheckOptions::default());
     let program = report.program.expect("the generator checks");
-    let started = Instant::now();
-    let bytes = oska_native::build(&program, &|d| d).expect("the generator builds");
-    let took = started.elapsed();
+    // The build runs on this thread, so its CPU time is this thread's.
+    let started = thread_cpu_time();
+    let bytes = oska_native::build(&program, differential::host_target(), &|d| d)
+        .expect("the generator builds");
+    let used = thread_cpu_time() - started;
     assert!(!bytes.is_empty());
-    // A release build of `oskac` takes about 0.1 s on a Raspberry Pi 5,
-    // and this unoptimized test build about 0.6 s: the bound only
-    // catches a slowdown by a large factor.
+    // A release build of `oskac` takes about 0.1 s of CPU on a Raspberry
+    // Pi 5, and this unoptimized test build about 1 s: the bound only
+    // catches a slowdown by a large factor. It counts CPU time, not
+    // wall-clock time, so a busy machine cannot fail it (#271).
     assert!(
-        took < Duration::from_secs(5),
-        "building site/build.osk took {took:?}"
+        used < Duration::from_secs(5),
+        "building site/build.osk used {used:?} of CPU time"
     );
 }
 

@@ -100,6 +100,20 @@ pub fn check_file(path: &str, source: &str, options: CheckOptions) -> CheckRepor
 /// exactly as [`check_module_with`] checks it, where `use pkg.…` is an
 /// error.
 pub fn check_package(package: &Package, options: CheckOptions) -> CheckReport {
+    let manifest_errors = package
+        .manifest
+        .as_deref()
+        .and_then(|text| parse_manifest(MANIFEST_PATH, text).err());
+    // A package that needs a newer `oskac` is refused before its modules
+    // are read: they may use what this `oskac` predates (`E0407`).
+    if let Some(errors) = &manifest_errors {
+        if errors.iter().any(|d| d.code == codes::MANIFEST_TOOLCHAIN) {
+            return CheckReport {
+                diagnostics: errors.clone(),
+                ..CheckReport::default()
+            };
+        }
+    }
     let mut report = match package.modules.as_slice() {
         [] => CheckReport::default(),
         [module] if package.manifest.is_none() => {
@@ -113,11 +127,9 @@ pub fn check_package(package: &Package, options: CheckOptions) -> CheckReport {
         }
         modules => check_joined(modules, options),
     };
-    if let Some(text) = &package.manifest {
-        if let Err(diagnostics) = parse_manifest(MANIFEST_PATH, text) {
-            report.diagnostics.splice(0..0, diagnostics);
-            report.program = None;
-        }
+    if let Some(diagnostics) = manifest_errors {
+        report.diagnostics.splice(0..0, diagnostics);
+        report.program = None;
     }
     report
 }

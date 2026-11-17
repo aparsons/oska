@@ -153,6 +153,74 @@ fn every_manifest_error_names_the_manifest_its_line_and_its_column() {
     ));
 }
 
+/// A package whose `oska` names a newer toolchain than this `oskac` is
+/// refused with `E0407` by every command that reads the manifest, and its
+/// modules are not checked (spec #191, ticket #204). The message names this
+/// build's version, so it is not a golden file: a release would change it.
+#[test]
+fn a_package_needing_a_newer_oskac_is_refused_by_every_command() {
+    let running = env!("CARGO_PKG_VERSION");
+    let refused = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_oskac"))
+            .args(args)
+            .current_dir(repo_root())
+            .output()
+            .expect("oskac should run");
+        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        (
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    };
+    let dir = fixture("manifest_needs_newer_oskac");
+    let library = fixture("manifest_needs_newer_oskac_library");
+    // The library is refused by `run` and `build` for being one, but the
+    // toolchain comes first.
+    for (command, dir) in [
+        ("check", &dir),
+        ("run", &dir),
+        ("test", &dir),
+        ("build", &dir),
+        ("run", &library),
+        ("build", &library),
+    ] {
+        let (stdout, stderr) = refused(&[command, dir]);
+        assert_eq!(stdout, "", "{command} {dir}");
+        assert_eq!(
+            stderr,
+            format!(
+                "{dir}/oska.toml:4:8: error[E0407]: this package needs `oskac` 999.0.0 or newer, \
+                 and this is `oskac` {running}; install a newer `oskac` with \
+                 `curl -fsSL https://oskalang.dev/install.sh | sh` \
+                 (on Windows, see https://oskalang.dev) (bytes 49..58)\n"
+            ),
+            "{command} {dir}"
+        );
+    }
+    let (json, _) = refused(&["check", &dir, "--format=json"]);
+    assert!(json.contains("\"code\":\"E0407\""), "{json}");
+    assert!(
+        json.contains("needs `oskac` 999.0.0 or newer") && json.contains(running),
+        "{json}"
+    );
+    assert!(
+        json.contains("\"functions\": []"),
+        "no module is checked: {json}"
+    );
+}
+
+/// `oska` is a minimum: an older minimum than this `oskac` is accepted.
+#[test]
+fn a_package_whose_minimum_oskac_is_older_checks_and_runs() {
+    let dir = fixture("manifest_oska_minimum");
+    for command in ["check", "run", "test"] {
+        assert_golden(&case(
+            &format!("manifest_oska_minimum_{command}"),
+            &[command, &dir],
+        ));
+    }
+}
+
 #[test]
 fn a_bad_name_a_misplaced_main_and_a_symlink_are_refused() {
     for name in ["bad_name", "main_elsewhere", "symlink"] {

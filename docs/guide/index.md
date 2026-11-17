@@ -1,6 +1,6 @@
 # Oska guides
 
-Task-oriented guides for the `oskac` toolchain. Oska is pre-alpha: these pages describe what the current build does, which is v0.1.0 or later. The programs and outputs on these pages are checked against the real toolchain by `cargo test`.
+Task-oriented guides for the `oskac` toolchain. Oska is pre-alpha. The latest release is **v0.4.0**, and these pages track `main`, which can be ahead of it: the [install guide](install.md) lists what changed in each release. The programs and outputs on these pages are checked against the real toolchain by `cargo test`.
 
 ## Start here
 
@@ -8,6 +8,7 @@ Task-oriented guides for the `oskac` toolchain. Oska is pre-alpha: these pages d
 2. [Quickstart](quickstart.md): write, check, run, and test a program.
 3. [Language tour](language-tour.md): the syntax and types in one sitting.
 4. [Packages and modules](packages.md): split a program into modules, with `oska.toml` and `use pkg.…`.
+5. [What works today](what-works-today.md): which features check, which run, and where.
 
 ## Concepts
 
@@ -20,6 +21,7 @@ Task-oriented guides for the `oskac` toolchain. Oska is pre-alpha: these pages d
 - [Debugging: `dbg`, panics, and `--format=json`](debugging.md)
 - [Troubleshooting](troubleshooting.md): by symptom and by diagnostic code.
 - [CLI reference](cli-reference.md)
+- [The install receipt](install-receipt.md): what the installers record, and what each uninstaller does with it.
 - [Agent guide](agent-guide.md): the check, fix, run, test, and authority loop, with machine-readable output.
 
 ## Examples

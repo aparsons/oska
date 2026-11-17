@@ -12,120 +12,23 @@
 //! Every page any test builds also goes through [`assert_inert`], which
 //! reads it the way a browser would and fails on anything that could run.
 //!
-//! Every build is differential (`common`): on aarch64 Linux the generator
-//! also runs natively on the same files, and must write the same site.
+//! Every build is differential (`common`): on aarch64 and x86_64 Linux the
+//! generator also runs natively on the same files, and must write the same
+//! site.
 
 mod common;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use oska_run::{FakeHost, RunOutcome};
-
-/// The generator's source.
-const BUILD: &str = include_str!("../../../site/build.osk");
-
-/// Where the generator writes, relative to the repository root.
-const OUTPUT: &str = "_site";
-
-/// The Content Security Policy every page carries: nothing runs but the
-/// site's own search script, which may read only the site's own files,
-/// and styles and fonts come only from the site and the two font packages,
-/// at their pinned versions, on the CDN.
-const CSP: &str = "default-src 'none'; script-src 'self'; connect-src 'self'; \
-    style-src 'self' https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/ \
-    https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/; \
-    font-src https://cdn.jsdelivr.net/npm/@fontsource/inter@5.3.0/ \
-    https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/; \
-    img-src 'self'; base-uri 'none'; form-action 'none'";
+use common::inert::{assert_site_inert, decode_references, tags_of, url_of};
+use common::site::{
+    agent_repo, assert_succeeded, between, build, build_ok, generator_authority, read_tree,
+    real_inputs, BUILD, CSP, MINIMAL_REPO, PAGES_WORKFLOW,
+};
 
 fn cases_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../site/tests")
-}
-
-/// Every file under `dir`, by its path relative to `dir`, with `/`
-/// between components.
-fn read_tree(dir: &Path) -> BTreeMap<String, String> {
-    fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<String, String>) {
-        let entries =
-            std::fs::read_dir(dir).unwrap_or_else(|e| panic!("should list {}: {e}", dir.display()));
-        for entry in entries {
-            let path = entry.expect("a directory entry").path();
-            if path.is_dir() {
-                walk(root, &path, out);
-                continue;
-            }
-            let relative = path.strip_prefix(root).expect("under the root");
-            let name = relative
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-                .join("/");
-            let text = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("should read {}: {e}", path.display()));
-            out.insert(name, text);
-        }
-    }
-    let mut out = BTreeMap::new();
-    if dir.is_dir() {
-        walk(dir, dir, &mut out);
-    }
-    out
-}
-
-/// What a run of the generator did: how it ended, and the files it left
-/// in `_site/`, by path relative to it.
-struct Build {
-    outcome: RunOutcome,
-    site: BTreeMap<String, String>,
-}
-
-/// Run the generator on a repository holding `inputs`, paths relative to
-/// its root, with no `_site/`.
-fn build(inputs: &BTreeMap<String, String>) -> Build {
-    let mut host = inputs.iter().fold(FakeHost::new(), |host, (path, text)| {
-        host.with_file(path, text)
-    });
-    let outcome = common::run_differential(&mut host, BUILD, &[]);
-    Build {
-        outcome,
-        site: host.files_under(OUTPUT),
-    }
-}
-
-/// The files every repository the generator reads must have, as small as
-/// they can be. A test's own inputs replace them.
-const MINIMAL_REPO: &[(&str, &str)] = &[
-    ("README.md", "# Oska\n"),
-    ("GLOSSARY.md", "# Glossary\n"),
-    ("docs/design.md", "# Design\n"),
-    ("site/style.css", "body {}\n"),
-    ("site/search.js", "// search\n"),
-    (
-        "Cargo.toml",
-        "[workspace.package]\nversion = \"1.2.3\"\nlicense = \"Apache-2.0\"\n",
-    ),
-];
-
-/// [`build`] on [`MINIMAL_REPO`] with `inputs` added, asserting that the
-/// generator succeeded and that every page it wrote is inert.
-fn build_ok(inputs: &[(&str, &str)]) -> BTreeMap<String, String> {
-    let inputs = MINIMAL_REPO
-        .iter()
-        .chain(inputs)
-        .map(|(path, text)| (path.to_string(), text.to_string()))
-        .collect();
-    let built = build(&inputs);
-    assert_succeeded(&built.outcome);
-    assert_site_inert(&built.site);
-    built.site
-}
-
-fn assert_succeeded(outcome: &RunOutcome) {
-    assert!(
-        outcome.exit_code == 0 && outcome.diagnostics.is_empty() && outcome.panic.is_none(),
-        "the generator should succeed: {outcome:#?}"
-    );
 }
 
 /// Assert that the generator, run on the case `name`'s `input/`, writes
@@ -134,13 +37,13 @@ fn assert_golden(name: &str) {
     let case = cases_dir().join(name);
     let inputs = read_tree(&case.join("input"));
     assert!(!inputs.is_empty(), "{} has no input files", case.display());
-    let built = build(&inputs);
-    assert_succeeded(&built.outcome);
-    assert_site_inert(&built.site);
+    let (outcome, site) = build(&inputs);
+    assert_succeeded(&outcome);
+    assert_site_inert(&site);
     let expected_dir = case.join("expected");
     if std::env::var_os("UPDATE_GOLDEN").is_some() {
         let _ = std::fs::remove_dir_all(&expected_dir);
-        for (path, text) in &built.site {
+        for (path, text) in &site {
             let file = expected_dir.join(path);
             let parent = file.parent().expect("a file has a parent");
             std::fs::create_dir_all(parent).expect("should create the expected directory");
@@ -148,185 +51,11 @@ fn assert_golden(name: &str) {
         }
     }
     assert_eq!(
-        built.site,
+        site,
         read_tree(&expected_dir),
         "`_site/` differs from {}; rerun with UPDATE_GOLDEN=1 if the change is intended",
         expected_dir.display()
     );
-}
-
-// ---- What a browser would make of a page -------------------------------------
-
-/// Every element the site may emit, with the attributes it may carry.
-/// Anything else in a page, an `<iframe>` or an `onerror=`, means text
-/// got out of its escaping.
-const ELEMENTS: &[(&str, &[&str])] = &[
-    ("html", &["lang"]),
-    ("head", &[]),
-    ("meta", &["charset", "name", "content", "http-equiv"]),
-    ("title", &[]),
-    ("link", &["rel", "href", "type", "integrity", "crossorigin"]),
-    ("script", &["type", "src"]),
-    ("aside", &["aria-label"]),
-    ("body", &[]),
-    ("header", &[]),
-    ("nav", &["aria-label"]),
-    ("main", &[]),
-    ("footer", &[]),
-    ("a", &["href", "aria-current"]),
-    ("h1", &["id"]),
-    ("h2", &["id"]),
-    ("h3", &["id"]),
-    ("h4", &["id"]),
-    ("h5", &["id"]),
-    ("h6", &["id"]),
-    ("p", &[]),
-    ("ul", &[]),
-    ("ol", &["start"]),
-    ("li", &[]),
-    ("pre", &["id"]),
-    ("section", &["class", "aria-labelledby"]),
-    ("button", &["type", "data-copy", "hidden"]),
-    ("code", &[]),
-    ("blockquote", &[]),
-    ("table", &[]),
-    ("thead", &[]),
-    ("tbody", &[]),
-    ("tr", &[]),
-    ("th", &[]),
-    ("td", &[]),
-    ("strong", &[]),
-    ("em", &[]),
-    ("img", &["src", "alt"]),
-];
-
-/// `text` with its character references decoded, as a browser decodes an
-/// attribute value: the named ones the escaper writes, and numeric ones.
-fn decode_references(text: &str) -> String {
-    let mut out = String::new();
-    let mut rest = text;
-    while let Some(at) = rest.find('&') {
-        out.push_str(&rest[..at]);
-        rest = &rest[at..];
-        let Some(end) = rest.find(';') else { break };
-        let name = &rest[1..end];
-        let decoded = match name {
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "quot" => Some('"'),
-            "apos" => Some('\''),
-            _ => name
-                .strip_prefix("#x")
-                .or_else(|| name.strip_prefix("#X"))
-                .and_then(|hex| u32::from_str_radix(hex, 16).ok())
-                .or_else(|| name.strip_prefix('#').and_then(|d| d.parse().ok()))
-                .and_then(char::from_u32),
-        };
-        match decoded {
-            Some(c) => {
-                out.push(c);
-                rest = &rest[end + 1..];
-            }
-            None => {
-                out.push('&');
-                rest = &rest[1..];
-            }
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
-/// Whether `url`, an attribute value as the browser decodes it, can only
-/// navigate or load: a relative URL, a fragment, or `https:`, `http:`, or
-/// `mailto:`. Browsers drop tabs and line breaks anywhere in a URL and
-/// ignore the case of its scheme, so they are dropped and ignored here.
-fn is_inert_url(url: &str) -> bool {
-    let url: String = url
-        .trim_matches(|c: char| c <= ' ')
-        .chars()
-        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
-        .collect::<String>()
-        .to_ascii_lowercase();
-    let scheme_end = url.find(':');
-    let path_start = url.find(['/', '?', '#']);
-    match (scheme_end, path_start) {
-        (None, _) => true,
-        (Some(colon), Some(slash)) if slash < colon => true,
-        _ => ["https:", "http:", "mailto:"]
-            .iter()
-            .any(|ok| url.starts_with(ok)),
-    }
-}
-
-/// Assert that `page`, an HTML page the generator wrote, holds nothing a
-/// browser would run: only the elements and attributes in [`ELEMENTS`],
-/// every attribute double-quoted, every URL inert, no comment, and the
-/// site's CSP before anything it governs.
-fn assert_inert(name: &str, page: &str) {
-    let rest = page
-        .strip_prefix("<!DOCTYPE html>\n")
-        .unwrap_or_else(|| panic!("{name} should start with a doctype:\n{page}"));
-    let mut rest = rest;
-    let mut seen_csp = false;
-    while let Some(open) = rest.find('<') {
-        rest = &rest[open + 1..];
-        let close = rest
-            .find('>')
-            .unwrap_or_else(|| panic!("{name}: a `<` that never closes:\n{page}"));
-        let tag = &rest[..close];
-        rest = &rest[close + 1..];
-        let tag = tag.strip_prefix('/').unwrap_or(tag);
-        let element: String = tag
-            .chars()
-            .take_while(|c| c.is_ascii_alphanumeric() || *c == '!' || *c == '-')
-            .collect();
-        let allowed = ELEMENTS
-            .iter()
-            .find(|(e, _)| *e == element)
-            .unwrap_or_else(|| panic!("{name}: element `<{tag}>` is not allowed:\n{page}"))
-            .1;
-        let mut attributes = tag[element.len()..].trim_start();
-        while !attributes.is_empty() {
-            let eq = attributes
-                .find("=\"")
-                .unwrap_or_else(|| panic!("{name}: `<{tag}>`: an unquoted attribute"));
-            let attribute = &attributes[..eq];
-            assert!(
-                allowed.contains(&attribute),
-                "{name}: `{attribute}` on `<{element}>` is not allowed: `<{tag}>`"
-            );
-            let value_and_rest = &attributes[eq + 2..];
-            let end = value_and_rest
-                .find('"')
-                .unwrap_or_else(|| panic!("{name}: `<{tag}>`: an attribute that never ends"));
-            let value = decode_references(&value_and_rest[..end]);
-            if attribute == "href" || attribute == "src" {
-                assert!(
-                    is_inert_url(&value),
-                    "{name}: `{attribute}=\"{value}\"` could run: `<{tag}>`"
-                );
-            }
-            if attribute == "http-equiv" {
-                assert_eq!(value, "Content-Security-Policy", "{name}");
-                seen_csp = true;
-            }
-            if element == "link" || element == "img" {
-                assert!(seen_csp, "{name}: `<{tag}>` comes before the CSP");
-            }
-            attributes = value_and_rest[end + 1..].trim_start();
-        }
-    }
-    assert!(seen_csp, "{name} has no CSP");
-}
-
-fn assert_site_inert(site: &BTreeMap<String, String>) {
-    for (name, text) in site {
-        if name.ends_with(".html") {
-            assert_inert(name, text);
-        }
-    }
 }
 
 // ---- The golden cases ----------------------------------------------------------
@@ -481,9 +210,9 @@ fn the_stylesheet_and_the_cname_are_written() {
 }
 
 #[test]
-fn the_readme_becomes_the_home_page_and_the_glossary_its_own() {
+fn docs_index_becomes_the_home_page_and_the_glossary_its_own() {
     let site = build_ok(&[
-        ("README.md", "# Oska\n\nA *language*.\n"),
+        ("docs/index.md", "# Oska\n\nA *language*.\n"),
         ("GLOSSARY.md", "# Words\n\n**Capability**:\nA value.\n"),
     ]);
     assert!(site["index.html"].contains("<p>A <em>language</em>.</p>"));
@@ -503,7 +232,8 @@ fn the_glossary_page_is_titled_glossary_whatever_its_heading() {
 fn rendered(markdown: &str) -> String {
     let site = build_ok(&[("docs/design.md", markdown)]);
     let page = &site["design.html"];
-    let start = page.find("<main>\n").expect("a main") + "<main>\n".len();
+    let open = "<main id=\"main-content\">\n";
+    let start = page.find(open).expect("a main") + open.len();
     let end = page.find("</main>").expect("a main end");
     page[start..end].to_string()
 }
@@ -563,18 +293,21 @@ fn relative_links_go_to_the_pages_published_from_their_targets() {
     let site = build_ok(&[
         (
             "docs/adr/0001-a.md",
-            "# A\n\n[design](../design.md#x) [b](0002-b.md) [up](../../README.md)\n",
+            "# A\n\n[design](../design.md#x) [b](0002-b.md) [up](../index.md)\n",
         ),
         ("docs/adr/0002-b.md", "# B\n"),
         (
             "docs/design.md",
-            "# D\n\n[adr](adr/) [out](../../etc/passwd) [src](../crates/x.rs)\n",
+            "# D\n\n[adr](adr/) [src](../crates/x.rs)\n",
         ),
     ]);
     assert!(site["adr/0001-a.html"].contains(
         "<a href=\"/design.html#x\">design</a> <a href=\"/adr/0002-b.html\">b</a> <a href=\"/\">up</a>"
     ));
-    assert!(site["design.html"].contains("<a href=\"/adr/\">adr</a> out src</p>"));
+    assert!(site["design.html"].contains(
+        "<a href=\"/adr/\">adr</a> \
+         <a href=\"https://github.com/aparsons/oska/blob/main/crates/x.rs\">src</a></p>"
+    ));
 }
 
 #[test]
@@ -609,9 +342,9 @@ fn a_rebuild_into_an_existing_site_succeeds() {
         .collect();
     inputs.insert("docs/adr/0001-a.md".to_string(), "# A\n".to_string());
     inputs.insert("_site/adr/stale.html".to_string(), "old".to_string());
-    let built = build(&inputs);
-    assert_succeeded(&built.outcome);
-    assert!(built.site.contains_key("adr/0001-a.html"));
+    let (outcome, site) = build(&inputs);
+    assert_succeeded(&outcome);
+    assert!(site.contains_key("adr/0001-a.html"));
 }
 
 #[test]
@@ -641,10 +374,10 @@ fn the_generator_reaches_only_directories_and_files_it_attenuated_to_read_only_a
 fn main_narrows_reading_to_docs_and_the_files_it_names() {
     for narrowing in [
         "read.restrict_to(\"docs\")",
-        "read.restrict_to_file(\"README.md\")",
         "read.restrict_to_file(\"GLOSSARY.md\")",
         "read.restrict_to_file(\"site/style.css\")",
         "read.restrict_to_file(\"site/search.js\")",
+        "read.restrict_to_file(\"site/favicon.svg\")",
         "read.restrict_to_file(\"Cargo.toml\")",
         "read.restrict_to_file(\"site/authority.txt\")",
         "restrict_to(Path.new(\"_site\"))",
@@ -655,6 +388,8 @@ fn main_narrows_reading_to_docs_and_the_files_it_names() {
         );
     }
     assert!(!BUILD.contains("read.restrict_to(\".\")"));
+    // The README is the repository's front page; the site does not read it.
+    assert!(!BUILD.contains("\"README.md\""));
 }
 
 #[test]
@@ -674,24 +409,6 @@ fn main_narrows_writing_before_it_writes_anything() {
 }
 
 // ---- The generator's own authority report ---------------------------------------------
-
-const PAGES_WORKFLOW: &str = include_str!("../../../.github/workflows/pages.yml");
-
-/// The authority report `oskac check site/build.osk` prints for the
-/// generator as it is now.
-fn generator_authority() -> String {
-    oska_check::check_module(BUILD).authority_to_human("site/build.osk")
-}
-
-/// The text of `page` between the first `open` and the next `close`.
-fn between<'a>(page: &'a str, open: &str, close: &str) -> &'a str {
-    let start = page.find(open).map(|at| at + open.len());
-    let start = start.unwrap_or_else(|| panic!("no {open} in {page}"));
-    let len = page[start..]
-        .find(close)
-        .unwrap_or_else(|| panic!("no {close} after {open} in {page}"));
-    &page[start..start + len]
-}
 
 #[test]
 fn an_authority_report_gets_a_page_with_its_text_escaped_and_a_markdown_copy() {
@@ -734,7 +451,8 @@ fn the_generator_s_report_lists_what_main_reads_and_writes() {
     let report = generator_authority();
     for line in [
         "  FsRead -> DirRead: restrict_to \"docs\" (bytes ",
-        "  FsRead -> FileRead: restrict_to_file \"README.md\" (bytes ",
+        "  FsRead -> FileRead: restrict_to_file \"GLOSSARY.md\" (bytes ",
+        "  FsRead -> FileRead: restrict_to_file \"site/favicon.svg\" (bytes ",
         "  FsRead -> DirRead: restrict_to \"site/agent-setup\" (bytes ",
         "  FsWrite -> DirWrite: restrict_to \".\" (bytes ",
         "  DirWrite -> DirWrite: restrict_to \"_site\" (bytes ",
@@ -776,19 +494,19 @@ fn the_pages_workflow_writes_the_report_with_the_real_checker_just_before_the_bu
 /// and `runtime.md` with hostile text in them.
 fn codes_site() -> BTreeMap<String, String> {
     let inputs = read_tree(&cases_dir().join("codes/input"));
-    let built = build(&inputs);
-    assert_succeeded(&built.outcome);
-    assert_site_inert(&built.site);
-    built.site
+    let (outcome, site) = build(&inputs);
+    assert_succeeded(&outcome);
+    assert_site_inert(&site);
+    site
 }
 
 #[test]
 fn codes_json_holds_each_code_with_its_examples_and_escapes_them() {
     let expected = r#"[
-{"code":"E0200","message":"Unknown name \"x\" with a \\\\ in it, as in `Strng`. See [the tour](#tour).","machine_fix":true,"machine_fix_description":"Replace the name with the closest one.","example":"fn f(x: Strng) {}\n","fix":"fn f(x: String) {}\n"},
-{"code":"E0201","message":"A trait <script>alert(1)</script> where a type is expected. Then more.","machine_fix":false,"machine_fix_description":null,"example":"fn show(x: Display) {\n    let note = \"<b>\\\"quoted\\\"</b>\"\n}\n\n","fix":null},
-{"code":"E0140","message":"An or-pattern such as `A | B`.","machine_fix":false,"machine_fix_description":null,"example":null,"fix":null},
-{"code":"P0004","message":"Division by zero, see [Tests](#tests). Spans the operation.","machine_fix":false,"machine_fix_description":null,"example":null,"fix":null}
+{"code":"E0200","message":"Unknown name \"x\" with a \\\\ in it, as in `Strng`. See [the tour](#tour).","machine_fix":true,"machine_fix_description":"Replace the name with the closest one.","example":"fn f(x: Strng) {}\n","fix":"fn f(x: String) {}\n","url":"https://oskalang.dev/codes/E0200.html"},
+{"code":"E0201","message":"A trait <script>alert(1)</script> where a type is expected. Then more.","machine_fix":false,"machine_fix_description":null,"example":"fn show(x: Display) {\n    let note = \"<b>\\\"quoted\\\"</b>\"\n}\n\n","fix":null,"url":"https://oskalang.dev/codes/E0201.html"},
+{"code":"E0140","message":"An or-pattern such as `A | B`.","machine_fix":false,"machine_fix_description":null,"example":null,"fix":null,"url":"https://oskalang.dev/codes/E0140.html"},
+{"code":"P0004","message":"Division by zero, see [Tests](#tests). Spans the operation.","machine_fix":false,"machine_fix_description":null,"example":null,"fix":null,"url":"https://oskalang.dev/codes/P0004.html"}
 ]
 "#;
     assert_eq!(codes_site()["codes.json"], expected);
@@ -882,29 +600,6 @@ fn without_a_checker_doc_there_is_no_catalog() {
 
 // ---- Markdown copies for agents ----------------------------------------------------
 
-/// The repository the agent outputs are tested on: a home page, a glossary,
-/// two docs, and a section of two.
-fn agent_repo() -> Vec<(&'static str, &'static str)> {
-    vec![
-        (
-            "README.md",
-            "# Oska\n\nA language where authority is explicit.\n\nSee the [design](docs/design.md).\n",
-        ),
-        ("GLOSSARY.md", "# Words\n\n**Capability**: a value.\n"),
-        (
-            "docs/design.md",
-            "# Design\n\nHow Oska works, and why.\n\n## Values\n\nText.\n\n\
-             [adr](adr/) [b](adr/0002-b.md#x) [up](../README.md) [out](https://example.com/a?b=1) \
-             [src](../crates/x.rs) [here](#values)\n\n```\n[a](adr/)\n```\n",
-        ),
-        (
-            "docs/adr/0001-a.md",
-            "# A decision\n\nWe chose A.\n\n[design](../design.md#values)\n",
-        ),
-        ("docs/adr/0002-b.md", "# Another\n\nWe chose B.\n"),
-    ]
-}
-
 /// The path of the Markdown copy of the page at `html`.
 fn twin(html: &str) -> String {
     format!("{}.md", html.strip_suffix(".html").expect("an html page"))
@@ -913,7 +608,10 @@ fn twin(html: &str) -> String {
 #[test]
 fn every_page_has_a_markdown_copy() {
     let site = build_ok(&agent_repo());
-    let pages: Vec<&String> = site.keys().filter(|k| k.ends_with(".html")).collect();
+    let pages: Vec<&String> = site
+        .keys()
+        .filter(|k| k.ends_with(".html") && *k != "404.html")
+        .collect();
     assert!(pages.len() >= 6, "{pages:?}");
     for page in pages {
         assert!(site.contains_key(&twin(page)), "{page} has no copy");
@@ -947,7 +645,8 @@ fn links_in_a_copy_point_at_other_copies() {
     assert!(
         site["design.md"].contains(
             "[adr](/adr/index.md) [b](/adr/0002-b.md#x) [up](/index.md) \
-             [out](https://example.com/a?b=1) [src](../crates/x.rs) [here](#values)"
+             [out](https://example.com/a?b=1) \
+             [src](https://github.com/aparsons/oska/blob/main/crates/x.rs) [here](#values)"
         ),
         "{}",
         site["design.md"]
@@ -1233,7 +932,7 @@ fn the_sitemap_lists_every_page_by_its_canonical_url() {
         .collect();
     let mut expected: Vec<String> = site
         .keys()
-        .filter(|k| k.ends_with(".html"))
+        .filter(|k| k.ends_with(".html") && *k != "404.html")
         .map(|k| format!("https://oskalang.dev{}", canonical_path(k)))
         .collect();
     listed.sort();
@@ -1279,13 +978,15 @@ fn llms_txt_indexes_the_markdown_copies_with_summaries() {
          Oska 1.2.3 (pre-alpha). These docs track `main`. Every page is also served as Markdown: \
          the same path with `.md`. All of them are in [llms-full.txt](https://oskalang.dev/llms-full.txt). \
          The source code is at https://github.com/aparsons/oska. A program is one `.osk` file or a package: an `oska.toml` and modules under `src/`, with `src/main.osk` as the entry and `use pkg.a.b` importing `src/a/b.osk`; see [Packages and modules](https://oskalang.dev/guide/packages.md). \
-         `oskac build` compiles a program to a static aarch64 Linux executable on any host. On aarch64 Linux, `oskac run` and `oskac test` compile natively and run the executable, and `--interpret` selects the interpreter, which every other host uses; output, reports and exit codes are the same on both. See [Platform support](https://oskalang.dev/guide/cli-reference.md#platform-support).\n\
+         `oskac build` compiles a program to a static Linux executable on any host: `--target linux-aarch64` or `--target linux-x86_64` picks the platform, `--target all` writes both, and without `--target` it builds for the host. On aarch64 and x86_64 Linux, `oskac run` and `oskac test` compile natively and run the executable, and `--interpret` selects the interpreter, which every other host uses; output, reports and exit codes are the same on both. See [Platform support](https://oskalang.dev/guide/cli-reference.md#platform-support).\n\
          \n\
          ## Docs\n\
          \n\
          - [Oska](https://oskalang.dev/index.md): A language where authority is explicit.\n\
          - [Glossary](https://oskalang.dev/glossary.md): Capability: a value.\n\
          - [Design](https://oskalang.dev/design.md): How Oska works, and why.\n\
+         - [Reference](https://oskalang.dev/reference.md): How Oska works inside, the words it uses, \
+         and the decisions and research behind it. To use Oska, start with the guides.\n\
          \n\
          ## Decisions\n\
          \n\
@@ -1295,7 +996,7 @@ fn llms_txt_indexes_the_markdown_copies_with_summaries() {
          \n\
          ## Machine-readable\n\
          \n\
-         - [llms-full.txt](https://oskalang.dev/llms-full.txt): every page, as Markdown, in one file\n\
+         - [llms-full.txt](https://oskalang.dev/llms-full.txt): the documentation, as Markdown, in one file\n\
          - [search.json](https://oskalang.dev/search.json): the search index\n\
          - [sitemap.xml](https://oskalang.dev/sitemap.xml): the canonical URL of every page\n\
          - [latest.json](https://oskalang.dev/latest.json): the current version and the installers\n"
@@ -1340,12 +1041,16 @@ fn llms_full_txt_holds_every_page_s_markdown() {
         full.starts_with(
             "# Oska: full documentation\n\
              \n\
-             Oska 1.2.3 (pre-alpha). Every page of https://oskalang.dev as Markdown, \
-             one after another, each after a line `Source:` that names it.\n"
+             Oska 1.2.3 (pre-alpha). The pages of https://oskalang.dev as Markdown, \
+             one after another, in the order to read them, each after a line `Source:` \
+             that names it.\n"
         ),
         "{full}"
     );
-    let pages: Vec<&String> = site.keys().filter(|k| k.ends_with(".html")).collect();
+    let pages: Vec<&String> = site
+        .keys()
+        .filter(|k| k.ends_with(".html") && *k != "404.html")
+        .collect();
     for page in &pages {
         let copy = &site[&twin(page)];
         let section = format!(
@@ -1364,7 +1069,10 @@ fn search_json_has_each_page_s_title_headings_and_text() {
     let site = build_ok(&agent_repo());
     let index = json(&site["search.json"]);
     let entries = index.array();
-    let pages = site.keys().filter(|k| k.ends_with(".html")).count();
+    let pages = site
+        .keys()
+        .filter(|k| k.ends_with(".html") && *k != "404.html")
+        .count();
     assert_eq!(entries.len(), pages);
     let design = entries
         .iter()
@@ -1426,7 +1134,10 @@ fn scripts_of(page: &str) -> Vec<(String, String)> {
 #[test]
 fn every_page_names_its_canonical_url_and_its_markdown_copy() {
     let site = build_ok(&agent_repo());
-    for (name, page) in site.iter().filter(|(n, _)| n.ends_with(".html")) {
+    for (name, page) in site
+        .iter()
+        .filter(|(n, _)| n.ends_with(".html") && *n != "404.html")
+    {
         let canonical = format!(
             "<link rel=\"canonical\" href=\"https://oskalang.dev{}\">\n",
             canonical_path(name)
@@ -1449,7 +1160,9 @@ fn every_page_carries_the_version_banner() {
                   </aside>\n";
     for (name, page) in site.iter().filter(|(n, _)| n.ends_with(".html")) {
         assert!(
-            page.contains(&format!("<body>\n{banner}<header>")),
+            page.contains(&format!(
+                "<body>\n<a class=\"skip-link\" href=\"#main-content\">Skip to content</a>\n{banner}<header>"
+            )),
             "{name}:\n{page}"
         );
     }
@@ -1609,38 +1322,15 @@ fn the_search_script_needs_every_word_and_ignores_case() {
 
 // ---- The real docs -----------------------------------------------------------------------
 
-/// The repository's own inputs to the generator, as it reads them.
-fn real_inputs() -> BTreeMap<String, String> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut inputs: BTreeMap<String, String> = read_tree(&root.join("docs"))
-        .into_iter()
-        .map(|(path, text)| (format!("docs/{path}"), text))
-        .collect();
-    for (path, text) in read_tree(&root.join("site/agent-setup")) {
-        inputs.insert(format!("site/agent-setup/{path}"), text);
-    }
-    for file in [
-        "README.md",
-        "GLOSSARY.md",
-        "Cargo.toml",
-        "site/style.css",
-        "site/search.js",
-    ] {
-        let text = std::fs::read_to_string(root.join(file)).expect("a repository file");
-        inputs.insert(file.to_string(), text);
-    }
-    // What pages.yml writes just before the build.
-    inputs.insert("site/authority.txt".to_string(), generator_authority());
-    inputs
-}
-
 #[test]
 fn the_real_docs_build_every_agent_output_with_no_dead_link() {
-    let built = build(&real_inputs());
-    assert_succeeded(&built.outcome);
-    let site = built.site;
+    let (outcome, site) = build(&real_inputs());
+    assert_succeeded(&outcome);
     assert_site_inert(&site);
-    let pages: Vec<&String> = site.keys().filter(|k| k.ends_with(".html")).collect();
+    let pages: Vec<&String> = site
+        .keys()
+        .filter(|k| k.ends_with(".html") && *k != "404.html")
+        .collect();
     assert!(pages.len() > 20, "{pages:?}");
     for page in &pages {
         assert!(site.contains_key(&twin(page)), "{page} has no copy");
@@ -1652,9 +1342,13 @@ fn the_real_docs_build_every_agent_output_with_no_dead_link() {
         "https://oskalang.dev/install.sh"
     );
     assert_eq!(site["sitemap.xml"].matches("<loc>").count(), pages.len());
+    let in_full = pages
+        .iter()
+        .filter(|p| !p.starts_with("codes/") && !p.starts_with("research/"))
+        .count();
     assert_eq!(
         site["llms-full.txt"].matches("\nSource: https://").count(),
-        pages.len()
+        in_full
     );
     // Every link to a copy, from a copy or from llms.txt, goes somewhere.
     let site_path = |url: &str| -> String {
@@ -1713,7 +1407,7 @@ fn the_code_pages_are_in_the_outputs_agents_read() {
     assert!(site["sitemap.xml"].contains("<loc>https://oskalang.dev/codes/E0200.html</loc>"));
     assert!(site["sitemap.xml"].contains("<loc>https://oskalang.dev/codes/</loc>"));
     assert!(site["llms.txt"].contains("[codes.json](https://oskalang.dev/codes.json)"));
-    assert!(site["llms-full.txt"].contains("Source: https://oskalang.dev/codes/E0200.html"));
+    assert!(!site["llms-full.txt"].contains("Source: https://oskalang.dev/codes/"));
     assert!(site["search.json"].contains("\"url\": \"/codes/E0200.html\""));
     let copy = &site["codes/E0200.md"];
     assert!(copy.starts_with("# E0200\n\n"), "{copy}");
@@ -1992,64 +1686,12 @@ fn the_script_says_so_when_the_clipboard_is_not_available() {
 // are the real-docs check of ticket #79. CI runs them with
 // `cargo test --all`.
 
-/// One start tag of a page: its element and its attributes, decoded.
-struct Tag {
-    element: String,
-    attributes: Vec<(String, String)>,
-}
-
-impl Tag {
-    fn attribute(&self, name: &str) -> Option<&str> {
-        self.attributes
-            .iter()
-            .find(|(n, _)| n == name)
-            .map(|(_, v)| v.as_str())
-    }
-}
-
-/// The start tags of `page`, in order. Pages have passed
-/// [`assert_inert`], so every attribute is double-quoted.
-fn tags_of(page: &str) -> Vec<Tag> {
-    let mut tags = Vec::new();
-    let mut rest = page;
-    while let Some(open) = rest.find('<') {
-        rest = &rest[open + 1..];
-        let close = rest.find('>').expect("a tag that closes");
-        let inside = &rest[..close];
-        rest = &rest[close + 1..];
-        if inside.starts_with('/') || inside.starts_with('!') {
-            continue;
-        }
-        let element: String = inside
-            .chars()
-            .take_while(|c| c.is_ascii_alphanumeric())
-            .collect();
-        let mut attributes = Vec::new();
-        let mut text = inside[element.len()..].trim_start();
-        while let Some(eq) = text.find("=\"") {
-            let value_and_rest = &text[eq + 2..];
-            let end = value_and_rest.find('"').expect("an attribute that ends");
-            attributes.push((
-                text[..eq].to_string(),
-                decode_references(&value_and_rest[..end]),
-            ));
-            text = value_and_rest[end + 1..].trim_start();
-        }
-        tags.push(Tag {
-            element,
-            attributes,
-        });
-    }
-    tags
-}
-
 /// The real site: the repository's docs through the generator. It lacks
 /// the files `scripts/release/stage-site.sh` adds ([`STAGED`]).
 fn real_site() -> BTreeMap<String, String> {
-    let built = build(&real_inputs());
-    assert_succeeded(&built.outcome);
-    assert_site_inert(&built.site);
-    built.site
+    let site = common::site::real_site();
+    assert_site_inert(&site);
+    site
 }
 
 /// Files `stage-site.sh` publishes after the generator has run.
@@ -2088,15 +1730,6 @@ fn resolve(site: &BTreeMap<String, String>, from: &str, target: &str) -> Option<
     }
     let published = site.contains_key(&path) || STAGED.contains(&path.as_str());
     published.then_some(path)
-}
-
-/// The URL a tag links to or loads, if it does.
-fn url_of(tag: &Tag) -> Option<&str> {
-    match tag.element.as_str() {
-        "a" | "link" => tag.attribute("href"),
-        "img" | "script" => tag.attribute("src"),
-        _ => None,
-    }
 }
 
 #[test]
@@ -2263,7 +1896,7 @@ fn every_real_page_reads_in_full_without_javascript() {
     }
     let unreachable: Vec<&String> = site
         .keys()
-        .filter(|k| k.ends_with(".html") && !reached.contains(*k))
+        .filter(|k| k.ends_with(".html") && *k != "404.html" && !reached.contains(*k))
         .collect();
     assert!(
         unreachable.is_empty(),

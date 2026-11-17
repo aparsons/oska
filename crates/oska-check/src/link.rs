@@ -91,6 +91,19 @@ impl Modules {
             .map_or(ENTRY_MODULE, |(module, _)| module.as_str())
     }
 
+    /// The line, counted from 1, of byte `offset` of `text` in the file of
+    /// the module it is in: `text` is the one the ranges are offsets
+    /// into, or a single file's.
+    pub fn line_at(&self, text: &str, offset: usize) -> usize {
+        let start = self
+            .ranges
+            .iter()
+            .find(|(_, span)| span.start <= offset && offset <= span.end)
+            .map_or(0, |(_, span)| span.start);
+        let before = text.get(start..offset).unwrap_or_default();
+        1 + before.bytes().filter(|&b| b == b'\n').count()
+    }
+
     /// The name the authority report gives a function or method declared
     /// at `offset`, whose type or trait, for a method, is `type_key`. In
     /// a single file, the name, or `Type.name` for a method. In a package,
@@ -119,6 +132,20 @@ impl Modules {
             }
             None => ItemKey { module: here, name }.joined(),
         }
+    }
+
+    /// The name the authority report gives the method `name` of `impl
+    /// trait_ref for type_key`: `<Type as Trait>.name`, as the checked
+    /// program names it ([`crate::program::trait_method`]). `trait_ref`
+    /// carries a generic trait's arguments, as in `From<IoError>`, so the
+    /// name is shared neither with an inherent method of the type nor with
+    /// the same method of another impl (#123). In a package the type and
+    /// the trait are named by their keys, and a prelude one plainly, as in
+    /// `<Int as pkg.geo.Area>.area`: the orphan rule makes one of the two
+    /// the package's own, so the name is the package's alone.
+    pub fn trait_method_name(&self, type_key: &str, trait_ref: &str, name: &str) -> String {
+        let name = ItemKey::parse(name).map_or(name, |key| key.name);
+        crate::program::trait_method(type_key, trait_ref, name)
     }
 }
 
