@@ -1,0 +1,7 @@
+// Describes webhook deliveries.
+
+// The line describing the delivery of `payload` to `url`:
+// `deliver <n> bytes to <url>`, where `<n>` is the payload's size in bytes.
+pub(pkg) fn delivery_line(url: Untrusted<String>, payload: Untrusted<String>) -> Untrusted<String> {
+    todo()
+}

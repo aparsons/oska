@@ -1,0 +1,11 @@
+// Prints how many lines `notes.txt` has.
+//
+//     oskac run
+
+use pkg.lines
+
+fn main(io: Stdout, fs: Fs) -> Result<(), IoError> {
+    let here = fs.restrict_to(".").read_only()
+    let count = lines.count_lines(here.read_to_string(Path.new("notes.txt"))?)
+    io.println("{count}")
+}

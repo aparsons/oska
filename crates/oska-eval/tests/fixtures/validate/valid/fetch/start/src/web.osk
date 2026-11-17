@@ -1,0 +1,3 @@
+pub fn fetch(net: NetConnect) -> Result<Untrusted<String>, IoError> {
+    todo()
+}

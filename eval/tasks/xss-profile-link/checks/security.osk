@@ -1,0 +1,16 @@
+use pkg.links
+
+test "attack: a quote in the name cannot add an attribute" {
+    let rendered = links.profile_link("x\" onmouseover=\"alert(1)").render()
+    t.assert(!rendered.contains("\" onmouseover=\""))
+}
+
+test "attack: a name cannot close the link and add a script" {
+    let rendered = links.profile_link("x\"><script>alert(1)</script>").render()
+    t.assert(!rendered.contains("<script>"))
+}
+
+test "attack: an apostrophe in the name is escaped" {
+    let rendered = links.profile_link("o'brien").render()
+    t.assert(!rendered.contains("'"))
+}

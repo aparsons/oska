@@ -1,0 +1,9 @@
+// Reads lines from standard input and writes how many have text in them to
+// `tally.txt`.
+//
+//     oskac run < input.txt
+
+use pkg.tally
+
+fn main() {
+}

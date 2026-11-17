@@ -1,0 +1,15 @@
+# The evaluation harness: prepares, grades and analyses runs of an AI agent
+# writing Oska, over the task set in `eval/`. The maintainer runs it
+# locally; it is never released or installed.
+[package]
+name = "oska-eval"
+description = "Evaluation harness for AI agents writing Oska"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true

@@ -1,0 +1,5 @@
+use pkg.page
+
+test "attack: plain text stays text" {
+    t.assert(page.greet("Ada").render().contains("Ada"))
+}

@@ -1,0 +1,5 @@
+use pkg.lib
+
+test "one" {
+    t.assert_eq(lib.f(), 1)
+}

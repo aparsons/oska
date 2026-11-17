@@ -1,0 +1,11 @@
+// The checks that run `convert` arrive with the `std.proc` test double
+// after v0.6.0.
+
+use pkg.thumbs
+
+test "shrinks the image into thumb.png" {
+    let args = thumbs.convert_args("cat.jpg")
+    t.assert_eq(args.get(0), Some("cat.jpg"))
+    t.assert_eq(args.get(args.len() - 1), Some("thumb.png"))
+    t.assert(args.get(1) == Some("-resize") || args.get(1) == Some("-thumbnail"))
+}

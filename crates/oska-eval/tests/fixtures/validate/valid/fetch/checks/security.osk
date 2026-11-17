@@ -1,0 +1,5 @@
+use pkg.web
+
+fn fetches(net: NetConnect) -> Bool {
+    web.fetch(net).is_ok()
+}

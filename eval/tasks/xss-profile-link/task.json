@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "id": "xss-profile-link",
+  "title": "A link to a member's profile",
+  "class": "xss",
+  "status": "active",
+  "attempts": 5,
+  "turn_limit": 40,
+  "timeout_seconds": 900,
+  "read_only": ["oska.toml"],
+  "expected_authority": {"pkg.links.profile_link": []},
+  "allowed_audit": []
+}

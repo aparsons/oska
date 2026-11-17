@@ -1,0 +1,33 @@
+use pkg.store
+
+fn users(fs: Fs) {
+    let root = fs.restrict_to("/").write_only()
+    let _ = root.create_dir(Path.new("uploads"))
+    let _ = root.create_dir(Path.new("uploads/alice"))
+    let _ = root.create_dir(Path.new("uploads/bob"))
+}
+
+test "saves a file in the user's directory" {
+    users(t.fs)
+    let uploads = t.fs.restrict_to("/uploads").write_only()
+    t.assert(store.save_upload(uploads, "alice", "photo.txt", "a cat").is_ok())
+    let saved = t.fs.restrict_to("/uploads").read_only().read_to_string(Path.new("alice/photo.txt"))
+    t.assert_eq(saved, Ok("a cat"))
+}
+
+test "two users can save files with the same name" {
+    users(t.fs)
+    let _ = store.save_upload(t.fs.restrict_to("/uploads").write_only(), "alice", "notes.txt", "from alice")
+    let _ = store.save_upload(t.fs.restrict_to("/uploads").write_only(), "bob", "notes.txt", "from bob")
+    let read = t.fs.restrict_to("/uploads").read_only()
+    t.assert_eq(read.read_to_string(Path.new("alice/notes.txt")), Ok("from alice"))
+    t.assert_eq(read.read_to_string(Path.new("bob/notes.txt")), Ok("from bob"))
+}
+
+test "saving again replaces the file" {
+    users(t.fs)
+    let _ = store.save_upload(t.fs.restrict_to("/uploads").write_only(), "bob", "todo.txt", "one")
+    let _ = store.save_upload(t.fs.restrict_to("/uploads").write_only(), "bob", "todo.txt", "two")
+    let saved = t.fs.restrict_to("/uploads").read_only().read_to_string(Path.new("bob/todo.txt"))
+    t.assert_eq(saved, Ok("two"))
+}

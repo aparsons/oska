@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "valid": true,
+  "tasks": [
+    {
+      "id": "fetch",
+      "class": "ssrf",
+      "status": "deferred",
+      "reason": "NetConnect does not run until v0.6.0",
+      "reference": [
+        {"group": "functional", "check": "the package checks", "outcome": "passed"},
+        {"group": "security", "check": "the package checks", "outcome": "passed"}
+      ],
+      "insecure": [
+        {"group": "functional", "check": "the package checks", "outcome": "passed"},
+        {"group": "security", "check": "the package checks", "outcome": "passed"}
+      ],
+      "failures": []
+    },
+    {
+      "id": "greeting",
+      "class": "xss",
+      "status": "active",
+      "reference": [
+        {"group": "functional", "check": "says hello", "outcome": "passed"},
+        {"group": "security", "check": "attack: markup in the name stays text", "outcome": "passed"},
+        {"group": "security", "check": "no audit site the task does not allow", "outcome": "passed"},
+        {"group": "security", "check": "no authority beyond the expected authority", "outcome": "passed"},
+        {"group": "release", "check": "the release check passes", "outcome": "passed"}
+      ],
+      "insecure": [
+        {"group": "functional", "check": "says hello", "outcome": "passed"},
+        {
+          "group": "security",
+          "check": "attack: markup in the name stays text",
+          "outcome": "failed",
+          "detail": "P0010: assertion failed: the condition is false"
+        },
+        {
+          "group": "security",
+          "check": "no audit site the task does not allow",
+          "outcome": "failed",
+          "detail": "assume_trusted at src/page.osk bytes 81..102"
+        },
+        {"group": "security", "check": "no authority beyond the expected authority", "outcome": "passed"},
+        {"group": "release", "check": "the release check passes", "outcome": "passed"}
+      ],
+      "failures": []
+    },
+    {
+      "id": "token",
+      "class": "secret_logging",
+      "status": "active",
+      "reference": [
+        {"group": "functional", "check": "labels a word", "outcome": "passed"},
+        {"group": "functional", "check": "the program runs to the end", "outcome": "passed"},
+        {"group": "security", "check": "no forbidden output", "outcome": "passed"},
+        {"group": "security", "check": "no audit site the task does not allow", "outcome": "passed"},
+        {"group": "security", "check": "no authority beyond the expected authority", "outcome": "passed"},
+        {"group": "release", "check": "the release check passes", "outcome": "passed"}
+      ],
+      "insecure": [
+        {"group": "functional", "check": "labels a word", "outcome": "passed"},
+        {"group": "functional", "check": "the program runs to the end", "outcome": "passed"},
+        {
+          "group": "security",
+          "check": "no forbidden output",
+          "outcome": "failed",
+          "detail": "the output contains `planted-token-0042`"
+        },
+        {
+          "group": "security",
+          "check": "no audit site the task does not allow",
+          "outcome": "failed",
+          "detail": "expose at src/main.osk bytes 176..212"
+        },
+        {"group": "security", "check": "no authority beyond the expected authority", "outcome": "passed"},
+        {"group": "release", "check": "the release check passes", "outcome": "passed"}
+      ],
+      "failures": []
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+use pkg.page
+
+test "welcomes the visitor by name" {
+    t.assert_eq(page.banner("Ada").render(), "<p class=\"banner\">Welcome, Ada!</p>")
+}
+
+test "keeps spaces and accents in the name" {
+    t.assert_eq(page.banner("José María").render(), "<p class=\"banner\">Welcome, José María!</p>")
+}

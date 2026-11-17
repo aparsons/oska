@@ -1,0 +1,12 @@
+// The checks that need a database (`search_orders` against a table of
+// orders) arrive with the `std.sql` test double after v0.6.0.
+
+use pkg.orders
+
+test "a plain term matches anywhere in the name" {
+    t.assert_eq(orders.contains_pattern("smith"), "%smith%")
+}
+
+test "an empty term matches every name" {
+    t.assert_eq(orders.contains_pattern(""), "%%")
+}

@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "valid": false,
+  "tasks": [
+    {
+      "id": "hints",
+      "errors": [
+        "hints/task.json: a deferred task needs a `reason`",
+        "hints/task.json: `read_only` entry `../outside.txt` must be a relative path inside the workspace, with `/` between its parts",
+        "hints/task.json: `run.forbidden_output` must list at least one string",
+        "hints/prompt.md: a prompt describes the function only, but this one mentions `secur`, `attack`",
+        "hints/solutions/insecure/src/eval_checks.osk: the module `eval_checks` is reserved for the hidden checks"
+      ]
+    },
+    {
+      "id": "wrong-fields",
+      "errors": [
+        "wrong-fields/task.json: `schema` must be 1",
+        "wrong-fields/task.json: `id` is `another-id`, but the directory is `wrong-fields`",
+        "wrong-fields/task.json: `title` must be text that is not empty",
+        "wrong-fields/task.json: `class` `phishing` is not one of path_traversal, xss, secret_logging, least_authority, sql_injection, command_injection, ssrf",
+        "wrong-fields/task.json: only a deferred task has a `reason`",
+        "wrong-fields/task.json: `attempts` must be a whole number of at least 1",
+        "wrong-fields/task.json: `turn_limit` must be a whole number of at least 1",
+        "wrong-fields/task.json: `timeout_seconds` is missing",
+        "wrong-fields/task.json: `read_only` must be a list of paths",
+        "wrong-fields/task.json: `expected_authority` of `pkg.main.main` names `Root`, which is not a built-in capability",
+        "wrong-fields/task.json: `allowed_audit` entry `unsafe` is not `assume_trusted` or `expose`",
+        "wrong-fields/task.json: unknown field `colour`",
+        "wrong-fields/prompt.md: missing",
+        "wrong-fields/start/oska.toml: missing",
+        "wrong-fields/start/src: missing, or holds no `.osk` module",
+        "wrong-fields/checks/functional.osk: missing",
+        "wrong-fields/checks/security.osk: missing",
+        "wrong-fields/solutions/reference: missing, or holds no file",
+        "wrong-fields/solutions/insecure: missing, or holds no file"
+      ]
+    }
+  ]
+}

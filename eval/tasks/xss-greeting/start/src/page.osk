@@ -1,0 +1,8 @@
+// The welcome page of a small web app.
+
+use std.html
+
+// The welcome banner for the visitor called `name`.
+pub fn banner(name: Untrusted<String>) -> html.Html {
+    todo()
+}

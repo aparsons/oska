@@ -1,0 +1,12 @@
+// Tallying lines of input.
+
+// How many of `lines` have text in them. A line of only spaces has none.
+pub(pkg) fn count_filled(lines: List<Untrusted<String>>) -> Int {
+    var count = 0
+    for line in lines {
+        if line.trim().len() > 0 {
+            count = count + 1
+        }
+    }
+    count
+}

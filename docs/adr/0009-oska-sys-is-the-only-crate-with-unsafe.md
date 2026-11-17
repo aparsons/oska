@@ -2,7 +2,7 @@
 
 ## Decision
 
-Every crate in the workspace forbids `unsafe` code, except one: `oska-sys`, an internal crate that confines filesystem access beneath a directory handle on Unix.
+Every crate in the workspace forbids `unsafe` code, except one: `oska-sys`, an internal crate that confines filesystem access beneath a directory handle on Unix and Windows.
 
 - **It adds no dependencies.** It declares the few C-library functions it needs itself, such as `openat`, and calls them through the C library that `std` already links.
 - **It exposes only a safe API.** The runtime opens a root, and opens directories and files beneath it, through a directory handle type. Nothing `unsafe` is public.
@@ -24,6 +24,6 @@ A directory or file capability must not be steerable outside its root, even by a
 
 ## Consequences
 
-- **Windows keeps path-based checks.** `oska-sys` is empty there, and a confined capability on Windows checks each component on the path instead. That narrows the race but does not close it, and the docs say so.
+- **Windows walks the same way.** At first `oska-sys` was empty on Windows, which kept path-based checks. [ADR 0014](0014-every-supported-platform-builds-and-runs-natively.md) closed that gap: `oska-sys` declares `ntdll`'s `NtCreateFile` itself and opens each component beneath its parent's handle, refusing reparse points (symlinks, junctions, mount points) and hard-linked files as on Unix.
 - **The platform values are hand-copied.** Flag and error numbers, such as `O_NOFOLLOW` and `ELOOP`, come from each platform's headers. They are declared only for the targets Oska releases for, and any other Unix target fails to compile. CI runs the escape tests on Linux and macOS.
 - **Every symlink beneath a root is refused,** including one that points inside the root, because the walk never follows one.

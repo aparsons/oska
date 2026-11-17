@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "id": "sql-injection-product-sort",
+  "title": "List products in a chosen order",
+  "class": "sql_injection",
+  "status": "deferred",
+  "reason": "`std.sql` checks but does not run yet (E0371): its sink and test double come after v0.6.0 (ADR 0014)",
+  "attempts": 5,
+  "turn_limit": 40,
+  "timeout_seconds": 900,
+  "read_only": ["oska.toml"],
+  "expected_authority": {"pkg.catalog.parse_sort": [], "pkg.catalog.list_products": ["NetConnect"]},
+  "allowed_audit": []
+}

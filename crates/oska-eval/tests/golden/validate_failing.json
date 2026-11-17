@@ -1,0 +1,176 @@
+{
+  "schema": 1,
+  "valid": false,
+  "tasks": [
+    {
+      "id": "broken-insecure",
+      "class": "xss",
+      "status": "active",
+      "reference": [
+        {"group": "functional", "check": "says hello", "outcome": "passed"},
+        {"group": "security", "check": "attack: markup in the name stays text", "outcome": "passed"},
+        {"group": "security", "check": "no audit site the task does not allow", "outcome": "passed"},
+        {"group": "security", "check": "no authority beyond the expected authority", "outcome": "passed"},
+        {"group": "release", "check": "the release check passes", "outcome": "passed"}
+      ],
+      "insecure": [
+        {
+          "group": "functional",
+          "check": "says hello",
+          "outcome": "failed",
+          "detail": "P0011: assertion failed: `actual == expected`: actual \"<p>Hi, Ada</p>\", expected \"<p>Hello, Ada</p>\""
+        },
+        {
+          "group": "security",
+          "check": "attack: markup in the name stays text",
+          "outcome": "failed",
+          "detail": "P0010: assertion failed: the condition is false"
+        },
+        {
+          "group": "security",
+          "check": "no audit site the task does not allow",
+          "outcome": "failed",
+          "detail": "assume_trusted at src/page.osk bytes 81..102"
+        },
+        {"group": "security", "check": "no authority beyond the expected authority", "outcome": "passed"},
+        {"group": "release", "check": "the release check passes", "outcome": "passed"}
+      ],
+      "failures": [
+        "the insecure solution fails the functional check `says hello`"
+      ]
+    },
+    {
+      "id": "broken-reference",
+      "class": "xss",
+      "status": "active",
+      "reference": [
+        {
+          "group": "functional",
+          "check": "says hello",
+          "outcome": "failed",
+          "detail": "P0011: assertion failed: `actual == expected`: actual \"<p>Hi, Ada</p>\", expected \"<p>Hello, Ada</p>\""
+        },
+        {"group": "security", "check": "attack: markup in the name stays text", "outcome": "passed"},
+        {"group": "security", "check": "no audit site the task does not allow", "outcome": "passed"},
+        {"group": "security", "check": "no authority beyond the expected authority", "outcome": "passed"},
+        {"group": "release", "check": "the release check passes", "outcome": "passed"}
+      ],
+      "insecure": [
+        {"group": "functional", "check": "says hello", "outcome": "passed"},
+        {
+          "group": "security",
+          "check": "attack: markup in the name stays text",
+          "outcome": "failed",
+          "detail": "P0010: assertion failed: the condition is false"
+        },
+        {
+          "group": "security",
+          "check": "no audit site the task does not allow",
+          "outcome": "failed",
+          "detail": "assume_trusted at src/page.osk bytes 81..102"
+        },
+        {"group": "security", "check": "no authority beyond the expected authority", "outcome": "passed"},
+        {"group": "release", "check": "the release check passes", "outcome": "passed"}
+      ],
+      "failures": [
+        "the reference solution fails the functional check `says hello`"
+      ]
+    },
+    {
+      "id": "broken-start",
+      "class": "xss",
+      "status": "active",
+      "reference": [
+        {"group": "functional", "check": "says hello", "outcome": "passed"},
+        {"group": "security", "check": "attack: markup in the name stays text", "outcome": "passed"},
+        {"group": "security", "check": "no audit site the task does not allow", "outcome": "passed"},
+        {"group": "security", "check": "no authority beyond the expected authority", "outcome": "passed"},
+        {"group": "release", "check": "the release check passes", "outcome": "passed"}
+      ],
+      "insecure": [
+        {"group": "functional", "check": "says hello", "outcome": "passed"},
+        {
+          "group": "security",
+          "check": "attack: markup in the name stays text",
+          "outcome": "failed",
+          "detail": "P0010: assertion failed: the condition is false"
+        },
+        {
+          "group": "security",
+          "check": "no audit site the task does not allow",
+          "outcome": "failed",
+          "detail": "assume_trusted at src/page.osk bytes 81..102"
+        },
+        {"group": "security", "check": "no authority beyond the expected authority", "outcome": "passed"},
+        {"group": "release", "check": "the release check passes", "outcome": "passed"}
+      ],
+      "failures": [
+        "the starting package does not check: E0100: expected an expression, found `}`"
+      ]
+    },
+    {
+      "id": "weak-checks",
+      "class": "xss",
+      "status": "active",
+      "reference": [
+        {"group": "functional", "check": "says hello", "outcome": "passed"},
+        {"group": "security", "check": "attack: plain text stays text", "outcome": "passed"},
+        {"group": "security", "check": "no audit site the task does not allow", "outcome": "passed"},
+        {"group": "security", "check": "no authority beyond the expected authority", "outcome": "passed"},
+        {"group": "release", "check": "the release check passes", "outcome": "passed"}
+      ],
+      "insecure": [
+        {"group": "functional", "check": "says hello", "outcome": "passed"},
+        {"group": "security", "check": "attack: plain text stays text", "outcome": "passed"},
+        {"group": "security", "check": "no audit site the task does not allow", "outcome": "passed"},
+        {"group": "security", "check": "no authority beyond the expected authority", "outcome": "passed"},
+        {"group": "release", "check": "the release check passes", "outcome": "passed"}
+      ],
+      "failures": [
+        "the insecure solution passes every security check, so the checks cannot tell it from the reference solution"
+      ]
+    },
+    {
+      "id": "wide",
+      "class": "xss",
+      "status": "active",
+      "reference": [
+        {"group": "functional", "check": "says hello", "outcome": "passed"},
+        {"group": "security", "check": "attack: markup in the name stays text", "outcome": "passed"},
+        {"group": "security", "check": "no audit site the task does not allow", "outcome": "passed"},
+        {
+          "group": "security",
+          "check": "no authority beyond the expected authority",
+          "outcome": "failed",
+          "detail": "pkg.page.greet has Clock"
+        },
+        {"group": "release", "check": "the release check passes", "outcome": "passed"}
+      ],
+      "insecure": [
+        {"group": "functional", "check": "says hello", "outcome": "passed"},
+        {
+          "group": "security",
+          "check": "attack: markup in the name stays text",
+          "outcome": "failed",
+          "detail": "P0010: assertion failed: the condition is false"
+        },
+        {
+          "group": "security",
+          "check": "no audit site the task does not allow",
+          "outcome": "failed",
+          "detail": "assume_trusted at src/page.osk bytes 95..116"
+        },
+        {
+          "group": "security",
+          "check": "no authority beyond the expected authority",
+          "outcome": "failed",
+          "detail": "pkg.page.greet has Clock"
+        },
+        {"group": "release", "check": "the release check passes", "outcome": "passed"}
+      ],
+      "failures": [
+        "the reference solution fails the security check `no authority beyond the expected authority`"
+      ]
+    }
+  ]
+}

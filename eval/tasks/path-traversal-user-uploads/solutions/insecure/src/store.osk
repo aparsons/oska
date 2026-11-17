@@ -1,0 +1,8 @@
+// Stores the files users upload. Each user has a directory, named after
+// the user, beneath the uploads directory.
+
+// Saves `contents` as the file `name` in `user`'s directory beneath
+// `uploads`. The user's directory already exists.
+pub fn save_upload(uploads: DirWrite, user: Untrusted<String>, name: Untrusted<String>, contents: Untrusted<String>) -> Result<(), IoError> {
+    uploads.write(Path.from("{user}/{name}"), contents)
+}
