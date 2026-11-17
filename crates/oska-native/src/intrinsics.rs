@@ -4,10 +4,11 @@
 //!
 //! A prelude intrinsic is implemented in Oska, by a function of `std.rt`
 //! that takes the same arguments (the receiver first), or, when that would
-//! be a single instruction, inline. A `std.rt` intrinsic is one system
-//! call (`svc #0`), one word operation, or a constant. What differs
-//! between target platforms is in one [`Platform`] per target: its
-//! system-call numbers here, and its table in `std.rt`.
+//! be a single instruction, inline. A `std.rt` intrinsic is one call of
+//! the operating system (on Linux, a system call), one word operation, or
+//! a constant. What differs between target platforms is in one
+//! [`Platform`] per target: how its operating system is called here, and
+//! its numbers, flags and structure layouts in its table in `std.rt`.
 //!
 //! To add a prelude intrinsic: write its runtime function in
 //! `oska-check/src/std/rt.osk` and add a [`Prelude::Runtime`] row to

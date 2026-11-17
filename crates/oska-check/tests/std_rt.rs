@@ -51,10 +51,7 @@ fn a_user_module_named_rt_is_not_the_toolchains() {
     assert_modules_errors(
         &[
             ("main", "use pkg.rt\n\nfn main() {}\n"),
-            (
-                "rt",
-                "pub(pkg) fn f() -> Int {\n    rt_sys_exit(0)\n}\n",
-            ),
+            ("rt", "pub(pkg) fn f() -> Int {\n    rt_sys_exit(0)\n}\n"),
         ],
         &[("src/rt.osk", "E0209", "rt_sys_exit")],
     );
