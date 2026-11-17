@@ -210,11 +210,11 @@ skip_step() {
 # guides, the release-key fingerprints, docs/agents/ included), examples/,
 # site/, README.md, GLOSSARY.md, SECURITY.md, .github/workflows/pages.yml,
 # scripts/install/, and `git ls-files`. scripts/temp-leak/ wraps cargo test,
-# scripts/docs-tests/ picks the tests a docs/ change runs, and this file runs
-# the cargo steps.
+# scripts/docs-tests/ picks the tests a docs/ change runs, scripts/eval-tasks/
+# validates the eval task set, and this file runs the cargo steps.
 cargo_input() {
   case $1 in
-    .github/workflows/pages.yml | scripts/install/* | scripts/temp-leak/* | scripts/docs-tests/* | scripts/check.sh) return 0 ;;
+    .github/workflows/pages.yml | scripts/install/* | scripts/temp-leak/* | scripts/docs-tests/* | scripts/eval-tasks/* | scripts/check.sh) return 0 ;;
     CLAUDE.md | CODING_STANDARDS.md | LICENSE | .gitignore) return 1 ;;
     .githooks/* | .claude/* | .github/* | scripts/*) return 1 ;;
   esac

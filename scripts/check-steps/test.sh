@@ -507,6 +507,13 @@ else
   bad "--fast on an eval task change validates the task set" "exit $status, headers: $headers"
 fi
 
+fast_case "an eval-tasks script change" 'mkdir -p scripts/eval-tasks && echo "# two" >>scripts/eval-tasks/run.sh'
+if [ "$status" -eq 0 ] && printf '%s\n' "$headers" | tr , '\n' | grep -qx 'eval task set'; then
+  ok "--fast on a change to the eval-tasks script validates the task set"
+else
+  bad "--fast on a change to the eval-tasks script validates the task set" "exit $status, headers: $headers"
+fi
+
 fast_case "a script change" 'echo "# two" >>scripts/kill-guard/test.sh'
 if [ "$status" -eq 0 ] && [ "$headers" = "kill guard tests,shellcheck," ] &&
   ! ran_cargo; then
