@@ -160,7 +160,8 @@ pub fn prelude(name: &str) -> Option<Prelude> {
 /// How a `std.rt` intrinsic is lowered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Runtime {
-    /// The Linux system call `Sys`, of the target platform's number.
+    /// The operating-system call `Sys`, as the target platform makes it
+    /// ([`Platform`]).
     Syscall(Sys),
     /// `load(addr)`.
     Load(Width),
@@ -182,7 +183,11 @@ pub enum Runtime {
     PlatformTable,
 }
 
-/// A system call, which the `std.rt` intrinsic of its name makes.
+/// An operating-system call, which the `std.rt` intrinsic of its name
+/// makes. Most are the POSIX calls of their names; [`Sys::ReadDir`],
+/// [`Sys::Random`], [`Sys::Sigaction`] and [`Sys::Exit`] are named for
+/// what they do, since Linux's calls for them (`getdents64`, `getrandom`,
+/// `rt_sigaction`, `exit_group`) are Linux's own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sys {
     Read,
@@ -190,7 +195,7 @@ pub enum Sys {
     Openat,
     Close,
     Mkdirat,
-    Getdents64,
+    ReadDir,
     Fstat,
     Ftruncate,
     Readlinkat,
@@ -200,29 +205,47 @@ pub enum Sys {
     Munmap,
     ClockGettime,
     Ioctl,
-    Getrandom,
-    RtSigaction,
+    Random,
+    Sigaction,
     Sigaltstack,
     Getpid,
     Kill,
-    ExitGroup,
+    Exit,
 }
 
-/// What the backend gives `std.rt` for a target platform.
+/// What the backend gives `std.rt` for a target platform: how its
+/// operating system is called, and which `std.rt` table holds its
+/// numbers, flags and structure layouts.
 #[derive(Debug, Clone, Copy)]
 pub struct Platform {
     /// The `std.rt` function giving the platform's table, which
-    /// `rt_mem_platform` gives: its open flags and `struct stat` layout.
+    /// `rt_mem_platform` gives.
     pub table: &'static str,
     /// Each system call's number.
     pub syscall: fn(Sys) -> u16,
+    /// The constant arguments a call takes after the intrinsic's own,
+    /// where the operating system's call takes more than the neutral form
+    /// passes.
+    pub then: fn(Sys) -> &'static [i64],
 }
 
 /// `linux-aarch64`.
 pub const LINUX_AARCH64: Platform = Platform {
     table: "linux_aarch64",
     syscall: linux_aarch64_syscall,
+    then: linux_then,
 };
+
+/// What Linux's calls take after a neutral intrinsic's arguments, on
+/// every processor: `getrandom`'s flags (none), and `rt_sigaction`'s old
+/// action (none kept) and the size of its signal mask in bytes.
+fn linux_then(call: Sys) -> &'static [i64] {
+    match call {
+        Sys::Random => &[0],
+        Sys::Sigaction => &[0, 8],
+        _ => &[],
+    }
+}
 
 /// `linux-aarch64`'s system-call numbers: the generic Linux table's
 /// (`asm-generic/unistd.h`).
@@ -233,7 +256,7 @@ fn linux_aarch64_syscall(call: Sys) -> u16 {
         Sys::Openat => 56,
         Sys::Close => 57,
         Sys::Mkdirat => 34,
-        Sys::Getdents64 => 61,
+        Sys::ReadDir => 61,
         Sys::Fstat => 80,
         Sys::Ftruncate => 46,
         Sys::Readlinkat => 78,
@@ -243,12 +266,12 @@ fn linux_aarch64_syscall(call: Sys) -> u16 {
         Sys::Munmap => 215,
         Sys::ClockGettime => 113,
         Sys::Ioctl => 29,
-        Sys::Getrandom => 278,
-        Sys::RtSigaction => 134,
+        Sys::Random => 278,
+        Sys::Sigaction => 134,
         Sys::Sigaltstack => 132,
         Sys::Getpid => 172,
         Sys::Kill => 129,
-        Sys::ExitGroup => 94,
+        Sys::Exit => 94,
     }
 }
 
@@ -256,6 +279,7 @@ fn linux_aarch64_syscall(call: Sys) -> u16 {
 pub const LINUX_X86_64: Platform = Platform {
     table: "linux_x86_64",
     syscall: linux_x86_64_syscall,
+    then: linux_then,
 };
 
 /// `linux-x86_64`'s system-call numbers (`arch/x86/entry/syscalls/
@@ -267,7 +291,7 @@ fn linux_x86_64_syscall(call: Sys) -> u16 {
         Sys::Openat => 257,
         Sys::Close => 3,
         Sys::Mkdirat => 258,
-        Sys::Getdents64 => 217,
+        Sys::ReadDir => 217,
         Sys::Fstat => 5,
         Sys::Ftruncate => 77,
         Sys::Readlinkat => 267,
@@ -277,12 +301,12 @@ fn linux_x86_64_syscall(call: Sys) -> u16 {
         Sys::Munmap => 11,
         Sys::ClockGettime => 228,
         Sys::Ioctl => 16,
-        Sys::Getrandom => 318,
-        Sys::RtSigaction => 13,
+        Sys::Random => 318,
+        Sys::Sigaction => 13,
         Sys::Sigaltstack => 131,
         Sys::Getpid => 39,
         Sys::Kill => 62,
-        Sys::ExitGroup => 231,
+        Sys::Exit => 231,
     }
 }
 
@@ -293,7 +317,7 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_sys_openat", Runtime::Syscall(Sys::Openat)),
     ("rt_sys_close", Runtime::Syscall(Sys::Close)),
     ("rt_sys_mkdirat", Runtime::Syscall(Sys::Mkdirat)),
-    ("rt_sys_getdents64", Runtime::Syscall(Sys::Getdents64)),
+    ("rt_sys_read_dir", Runtime::Syscall(Sys::ReadDir)),
     ("rt_sys_fstat", Runtime::Syscall(Sys::Fstat)),
     ("rt_sys_ftruncate", Runtime::Syscall(Sys::Ftruncate)),
     ("rt_sys_readlinkat", Runtime::Syscall(Sys::Readlinkat)),
@@ -303,12 +327,12 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_sys_munmap", Runtime::Syscall(Sys::Munmap)),
     ("rt_sys_clock_gettime", Runtime::Syscall(Sys::ClockGettime)),
     ("rt_sys_ioctl", Runtime::Syscall(Sys::Ioctl)),
-    ("rt_sys_getrandom", Runtime::Syscall(Sys::Getrandom)),
-    ("rt_sys_rt_sigaction", Runtime::Syscall(Sys::RtSigaction)),
+    ("rt_sys_random", Runtime::Syscall(Sys::Random)),
+    ("rt_sys_sigaction", Runtime::Syscall(Sys::Sigaction)),
     ("rt_sys_sigaltstack", Runtime::Syscall(Sys::Sigaltstack)),
     ("rt_sys_getpid", Runtime::Syscall(Sys::Getpid)),
     ("rt_sys_kill", Runtime::Syscall(Sys::Kill)),
-    ("rt_sys_exit_group", Runtime::Syscall(Sys::ExitGroup)),
+    ("rt_sys_exit", Runtime::Syscall(Sys::Exit)),
     ("rt_mem_load8", Runtime::Load(Width::W8)),
     ("rt_mem_load16", Runtime::Load(Width::W16)),
     ("rt_mem_load32", Runtime::Load(Width::W32)),
