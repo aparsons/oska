@@ -619,7 +619,7 @@ if command -v cargo >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
     bad "--fast maps each crates/ directory to its manifest's package name" "got:$unmapped"
   fi
   got=$(real fast_packages crates/oska-syntax/src/lib.rs | sorted)
-  if [ "$got" = "oska-check oska-native oska-run oska-syntax oskac " ]; then
+  if [ "$got" = "oska-check oska-eval oska-native oska-run oska-syntax oskac " ]; then
     ok "--fast on an oska-syntax change reaches every crate that depends on it"
   else
     bad "--fast on an oska-syntax change reaches every crate that depends on it" "got: $got"
