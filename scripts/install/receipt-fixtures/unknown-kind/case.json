@@ -1,0 +1,24 @@
+{
+  "about": "A kind no installer writes refuses the whole uninstall.",
+  "setup": [
+    {
+      "name": "notes",
+      "path": "@OSKA_HOME@/notes.txt",
+      "text": "notes\n"
+    }
+  ],
+  "expect": {
+    "sh": {
+      "refused": "unsafe_path"
+    },
+    "ps1": {
+      "refused": "unsafe_path"
+    },
+    "oskac_unix": {
+      "refused": "unsafe_path"
+    },
+    "oskac_windows": {
+      "refused": "unsafe_path"
+    }
+  }
+}

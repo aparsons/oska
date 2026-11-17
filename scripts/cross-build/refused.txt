@@ -1,0 +1,38 @@
+# The corpus programs scripts/cross-build/manifest.sh expects `oskac build`
+# to refuse, each with the code of the diagnostic it is refused with: the
+# CLI tests' fixtures that the checker or the package reader rejects on
+# purpose. Any other refusal, or one of these with another code, fails the
+# cross-build check.
+
+# Programs the checker rejects.
+crates/oskac/tests/fixtures/cap_fn_join_plain.osk E0270
+crates/oskac/tests/fixtures/contract_placement.osk E0218
+crates/oskac/tests/fixtures/qualified_removed.osk E0273
+
+# Packages whose layout is refused.
+crates/oskac/tests/fixtures/packages/bad_name E0410
+crates/oskac/tests/fixtures/packages/empty_src E0413
+crates/oskac/tests/fixtures/packages/hidden E0410
+crates/oskac/tests/fixtures/packages/keyword E0410
+crates/oskac/tests/fixtures/packages/library E0414
+crates/oskac/tests/fixtures/packages/main_elsewhere E0412
+crates/oskac/tests/fixtures/packages/nested_src_main E0414
+crates/oskac/tests/fixtures/packages/symlink E0411
+
+# Packages whose oska.toml is refused.
+crates/oskac/tests/fixtures/packages/manifest_bad_name E0405
+crates/oskac/tests/fixtures/packages/manifest_bad_version E0405
+crates/oskac/tests/fixtures/packages/manifest_date E0401
+crates/oskac/tests/fixtures/packages/manifest_dependencies E0403
+crates/oskac/tests/fixtures/packages/manifest_dotted_key E0401
+crates/oskac/tests/fixtures/packages/manifest_inline_table E0401
+crates/oskac/tests/fixtures/packages/manifest_missing_name E0404
+crates/oskac/tests/fixtures/packages/manifest_multiline_string E0401
+crates/oskac/tests/fixtures/packages/manifest_needs_newer_oskac E0407
+crates/oskac/tests/fixtures/packages/manifest_needs_newer_oskac_library E0407
+crates/oskac/tests/fixtures/packages/manifest_not_utf8 E0400
+crates/oskac/tests/fixtures/packages/manifest_symlink E0411
+crates/oskac/tests/fixtures/packages/manifest_syntax E0400
+crates/oskac/tests/fixtures/packages/manifest_unknown_key E0402
+crates/oskac/tests/fixtures/packages/manifest_unknown_key_no_fix E0402
+crates/oskac/tests/fixtures/packages/manifest_unknown_table E0402

@@ -6,7 +6,10 @@
 //! that need nothing the native backend lacks; the rest are refused
 //! cleanly (see the last test).
 
-#![cfg(all(target_arch = "aarch64", target_os = "linux"))]
+#![cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 
 mod differential;
 

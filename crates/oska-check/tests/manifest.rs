@@ -265,3 +265,150 @@ fn every_error_is_reported_not_just_the_first() {
         [("E0402", 2), ("E0405", 3), ("E0403", 4), ("E0404", 1)]
     );
 }
+
+// ---- The minimum toolchain: `oska` (spec #191, ticket #204) ---------------------
+
+/// `text` parsed as `running`, the version of the `oskac` reading it.
+fn parse_as(running: &str, text: &str) -> Result<Manifest, Vec<Diagnostic>> {
+    oska_check::parse_manifest_for("oska.toml", text, running)
+}
+
+fn needing(oska: &str) -> String {
+    format!("[package]\nname = \"demo\"\nversion = \"0.1.0\"\noska = \"{oska}\"\n")
+}
+
+#[test]
+fn a_minimum_toolchain_version_is_a_manifest_key_and_is_optional() {
+    let m = manifest("[package]\nname = \"demo\"\nversion = \"0.1.0\"\noska = \"0.1.0\"\n");
+    assert_eq!(m.oska.as_deref(), Some("0.1.0"));
+    let m = manifest("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n");
+    assert_eq!(m.oska, None);
+}
+
+#[test]
+fn a_toolchain_older_than_the_minimum_is_e0407_naming_both_versions() {
+    let text = needing("0.5.0");
+    let diagnostics = parse_as("0.4.0", &text).expect_err("0.4.0 is older than 0.5.0");
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    let d = &diagnostics[0];
+    let location = d.location.as_ref().expect("located");
+    assert_eq!(
+        (d.code, location.path.as_str(), location.line),
+        ("E0407", "oska.toml", 4)
+    );
+    assert_eq!(&text[d.span.start..d.span.end], "\"0.5.0\"");
+    assert!(
+        d.message.contains("0.5.0") && d.message.contains("0.4.0"),
+        "{}",
+        d.message
+    );
+    assert!(
+        d.message.contains("https://oskalang.dev/install.sh"),
+        "{}",
+        d.message
+    );
+    assert!(d.fix.is_none());
+}
+
+#[test]
+fn a_toolchain_at_or_above_the_minimum_reads_the_manifest() {
+    for (running, minimum) in [
+        ("0.5.0", "0.5.0"),
+        ("0.5.1", "0.5.0"),
+        ("1.0.0", "0.9.9"),
+        ("0.5.0", "0.5.0-rc.1"),
+        ("0.5.0-rc.2", "0.5.0-rc.1"),
+        ("0.5.0+build.7", "0.5.0+build.1"),
+        ("0.5.0", "0.5.0+build.1"),
+    ] {
+        let m = parse_as(running, &needing(minimum))
+            .unwrap_or_else(|d| panic!("{running} runs a package needing {minimum}: {d:#?}"));
+        assert_eq!(m.oska.as_deref(), Some(minimum));
+    }
+}
+
+#[test]
+fn the_minimum_is_compared_by_semver_precedence() {
+    for (running, minimum) in [
+        ("0.4.0", "0.5.0"),
+        ("0.9.0", "0.10.0"),
+        ("0.4.0-pre.1", "0.4.0"),
+        ("0.3.0", "0.4.0-pre.1"),
+        ("0.4.0-alpha", "0.4.0-alpha.1"),
+        ("0.4.0-alpha.1", "0.4.0-alpha.beta"),
+        ("0.4.0-alpha.2", "0.4.0-alpha.10"),
+        ("0.4.0-beta.2", "0.4.0-beta.11"),
+        ("0.4.0-rc.1", "0.4.0"),
+        ("1.2.3", "2.0.0"),
+    ] {
+        let diagnostics = parse_as(running, &needing(minimum))
+            .expect_err(&format!("{running} is older than {minimum}"));
+        assert_eq!(diagnostics[0].code, "E0407", "{running} < {minimum}");
+    }
+    // And a pre-release sorts above the release before it.
+    parse_as("0.4.0-pre.1", &needing("0.3.0")).expect("0.4.0-pre.1 is above 0.3.0");
+}
+
+#[test]
+fn the_running_toolchain_is_the_version_of_this_build() {
+    let version = env!("CARGO_PKG_VERSION");
+    manifest(&needing(version));
+    let (code, _, _, _, d) = error(&needing("999.0.0"));
+    assert_eq!(code, "E0407");
+    assert!(d.message.contains(version), "{}", d.message);
+}
+
+#[test]
+fn a_toolchain_that_is_too_old_reports_only_the_toolchain() {
+    // The rest of the manifest may be written for the newer toolchain, so
+    // its keys are not reported as unknown.
+    let text =
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\noska = \"9.0.0\"\nfuture = \"x\"\n";
+    let diagnostics = parse_as("0.4.0", text).expect_err("refused");
+    let codes: Vec<_> = diagnostics.iter().map(|d| d.code).collect();
+    assert_eq!(codes, ["E0407"]);
+}
+
+#[test]
+fn a_minimum_that_is_not_semver_or_not_a_string_is_e0405_like_version() {
+    for bad in ["1.0", "latest", ">=0.4.0", "", "v0.4.0"] {
+        let (code, line, column, _, d) = error(&needing(bad));
+        assert_eq!((code, line, column), ("E0405", 4, 8), "{bad:?}");
+        assert!(
+            d.message.contains("`oska` must be a semver version"),
+            "{}",
+            d.message
+        );
+    }
+    let (code, line, _, _, d) =
+        error("[package]\nname = \"demo\"\nversion = \"0.1.0\"\noska = [\"0.4.0\"]\n");
+    assert_eq!((code, line), ("E0405", 4));
+    assert!(
+        d.message.contains("`oska` must be a string"),
+        "{}",
+        d.message
+    );
+}
+
+#[test]
+fn the_minimum_written_twice_is_e0406() {
+    let text = format!("{}oska = \"0.2.0\"\n", needing("0.1.0"));
+    let (code, line, _, spanned, _) = error(&text);
+    assert_eq!((code, line, spanned.as_str()), ("E0406", 5, "oska"));
+}
+
+#[test]
+fn an_unknown_key_lists_the_minimum_among_the_keys_and_a_typo_of_it_has_a_fix() {
+    let (_, _, _, _, d) =
+        error("[package]\nname = \"demo\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\n");
+    assert!(
+        d.message.contains("`name`, `version` and `oska`"),
+        "{}",
+        d.message
+    );
+    let text = "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nosk = \"0.1.0\"\n";
+    let (code, _, _, spanned, d) = error(text);
+    assert_eq!((code, spanned.as_str()), ("E0402", "osk"));
+    assert!(d.message.ends_with("did you mean `oska`?"), "{}", d.message);
+    assert_eq!(d.fix.as_ref().expect("a fix").edits[0].replacement, "oska");
+}

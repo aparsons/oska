@@ -1,0 +1,49 @@
+{
+  "about": "What every install writes: the binary, the version file and the receipt. All of it goes, then bin and the Oska home, left empty.",
+  "expect": {
+    "sh": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@",
+        "@OSKA_HOME@"
+      ],
+      "kept": [],
+      "path_hint": false
+    },
+    "ps1": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@",
+        "@OSKA_HOME@"
+      ],
+      "kept": [],
+      "path_hint": false
+    },
+    "oskac_unix": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@",
+        "@OSKA_HOME@"
+      ],
+      "kept": [],
+      "path_hint": false
+    },
+    "oskac_windows": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@",
+        "@OSKA_HOME@"
+      ],
+      "kept": [],
+      "path_hint": false
+    }
+  }
+}

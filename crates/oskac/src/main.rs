@@ -19,9 +19,11 @@ macro_rules! outln {
 
 mod build;
 mod explain;
+mod json;
 mod native;
 mod native_test;
 mod package;
+mod self_cmd;
 
 const USAGE: &str = "\
 oskac - the Oska compiler
@@ -37,18 +39,27 @@ USAGE:
     oskac run [path] [--format=json] [--interpret] [-- args...]
                                            Check a source file or package and,
                                            if it has no diagnostics, run it:
-                                           natively on aarch64 Linux, on the
-                                           interpreter elsewhere or with
-                                           --interpret
+                                           natively on aarch64 and x86_64
+                                           Linux, on the interpreter elsewhere
+                                           or with --interpret
     oskac test [path] [--format=json] [--integration] [--interpret]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
                                            as `run` does
-    oskac build [path] [-o out] [--format=json]
+    oskac build [path] [-o out] [--target <platform>|all] [--format=json]
                                            Check a source file or package and,
                                            if it has no diagnostics, compile it
-                                           to an aarch64 Linux executable
+                                           to an executable for the platform
+                                           (by default the host's when it has a
+                                           backend, else linux-aarch64), or for
+                                           every platform with a backend into
+                                           the -o directory
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
+    oskac self info [--format=json]        Report this installation: version,
+                                           platform, executable, Oska home and
+                                           install receipt
+    oskac self uninstall [--format=json]   Remove this managed install, as the
+                                           installer's uninstall does
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ";
@@ -69,13 +80,14 @@ struct Flags {
 }
 
 /// A command line, parsed: the command and its operands, the flags, the
-/// output path `-o` gives, and the arguments after `--`, which belong to
-/// the program being run.
+/// output path `-o` gives, the target platform `--target` names, and the
+/// arguments after `--`, which belong to the program being run.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct CommandLine {
     positional: Vec<String>,
     flags: Flags,
     output: Option<String>,
+    target: Option<String>,
     program_args: Vec<String>,
 }
 
@@ -103,6 +115,13 @@ impl CommandLine {
                     // `-o` with no path: the usage error says what is wrong.
                     None => line.positional.push(arg),
                 },
+                "--target" => match args.next() {
+                    Some(target) => line.target = Some(target),
+                    None => line.positional.push(arg),
+                },
+                target if target.starts_with("--target=") => {
+                    line.target = target.strip_prefix("--target=").map(str::to_string);
+                }
                 "--release" => line.flags.release = true,
                 "--integration" => line.flags.integration = true,
                 "--interpret" => line.flags.interpret = true,
@@ -136,6 +155,22 @@ fn main() -> ExitCode {
             out!("{USAGE}");
             ExitCode::SUCCESS
         }
+        // `self` takes no operand, -o, --target or program arguments.
+        ["self", rest @ ..] => {
+            let bare =
+                line.output.is_none() && line.target.is_none() && line.program_args.is_empty();
+            match rest {
+                ["info"] if bare => self_cmd::info(flags.json),
+                ["uninstall"] if bare => self_cmd::uninstall(flags.json),
+                _ => self_cmd::usage(flags.json),
+            }
+        }
+        // Only `build` has a target platform: `run` and `test` use the
+        // host's.
+        [command, ..] if line.target.is_some() && *command != "build" => {
+            eprint!("{USAGE}");
+            ExitCode::from(2)
+        }
         ["lex", path] => lex_file(path, flags),
         ["parse", path] => parse_file(path, flags),
         ["check", rest @ ..] if rest.len() <= 1 => {
@@ -148,8 +183,15 @@ fn main() -> ExitCode {
             on_target(Command::Test, rest.first(), flags, &line.program_args)
         }
         ["build", rest @ ..] if rest.len() <= 1 && line.program_args.is_empty() => {
-            let command = Command::Build(line.output.as_deref());
-            on_target(command, rest.first(), flags, &[])
+            let target = match build::TargetChoice::named(line.target.as_deref()) {
+                Ok(target) => target,
+                Err(refusal) => return build::refuse(&[refusal], flags.json, ExitCode::from(2)),
+            };
+            let options = build::Options {
+                output: line.output.as_deref(),
+                target,
+            };
+            on_target(Command::Build(options), rest.first(), flags, &[])
         }
         ["explain", code] => explain_code(code, flags),
         _ => {
@@ -218,8 +260,8 @@ enum Command<'a> {
     Check,
     Run,
     Test,
-    /// `oskac build`, with the output path `-o` gives.
-    Build(Option<&'a str>),
+    /// `oskac build`, with the output path `-o` gives and its target platforms.
+    Build(build::Options<'a>),
 }
 
 impl Command<'_> {
@@ -366,7 +408,7 @@ fn run_file(path: &str, flags: Flags, args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     };
     let places = Places::File { path, src: &src };
-    if native::runs_natively(flags) {
+    if let Some(target) = native::native_target(flags) {
         let checked = oska_check::check_module(&src);
         if let Some(program) = checked
             .program
@@ -375,6 +417,7 @@ fn run_file(path: &str, flags: Flags, args: &[String]) -> ExitCode {
         {
             match native::run(
                 program,
+                target,
                 &places,
                 native::Invocation {
                     argv0: path,
@@ -430,14 +473,14 @@ fn test_file(path: &str, flags: Flags) -> ExitCode {
     };
     let options = oska_run::TestOptions { integration };
     let places = Places::File { path, src: &src };
-    if native::runs_natively(flags) {
+    if let Some(target) = native::native_target(flags) {
         let checked = oska_check::check_module(&src);
         if let Some(program) = checked
             .program
             .as_ref()
             .filter(|_| checked.diagnostics.is_empty())
         {
-            match native_test::test_program(program, options, json) {
+            match native_test::test_program(program, target, options, json) {
                 native_test::Tested::Report(report) => return finish_test(report, json, &places),
                 native_test::Tested::Ended(code) => return code,
                 native_test::Tested::Refused(refusal) => {
@@ -485,7 +528,7 @@ fn on_target(command: Command, path: Option<&&str>, flags: Flags, args: &[String
                 Command::Check => check_file(&file, flags),
                 Command::Run => run_file(&file, flags, args),
                 Command::Test => test_file(&file, flags),
-                Command::Build(output) => build::file(&file, flags, output),
+                Command::Build(options) => build::file(&file, flags, options),
             };
             hint_package(&file, command.name());
             code
@@ -508,14 +551,17 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
             return ExitCode::FAILURE;
         }
     };
-    if matches!(command, Command::Run | Command::Build(_)) && package.is_library() {
-        return refuse(command, vec![oska_check::run_of_library(dir)], json, dir);
-    }
     let options = oska_check::CheckOptions {
         release: command == Command::Check && flags.release,
     };
     let mut report = oska_check::check_package(&package, options);
-    if !refused.is_empty() {
+    // A package that needs a newer `oskac` (`E0407`) is refused first, from
+    // every command, even a `run` of a library.
+    let too_old = report.diagnostics.iter().any(|d| d.code == "E0407");
+    if !too_old && matches!(command, Command::Run | Command::Build(_)) && package.is_library() {
+        return refuse(command, vec![oska_check::run_of_library(dir)], json, dir);
+    }
+    if !refused.is_empty() && !too_old {
         report.diagnostics.splice(0..0, refused);
         report.program = None;
     }
@@ -535,14 +581,15 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
         dir,
         json,
     };
-    if let Command::Build(output) = command {
-        return build::package(program, &places, dir, output, json);
+    if let Command::Build(options) = command {
+        return build::package(program, &places, dir, options, json);
     }
     let mut host = oska_run::RealHost::new();
     if command == Command::Run {
-        if native::runs_natively(flags) {
+        if let Some(target) = native::native_target(flags) {
             match native::run(
                 program,
+                target,
                 &places,
                 native::Invocation {
                     argv0: dir,
@@ -564,8 +611,8 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
         let options = oska_run::TestOptions {
             integration: flags.integration,
         };
-        if native::runs_natively(flags) {
-            match native_test::test_program(program, options, json) {
+        if let Some(target) = native::native_target(flags) {
+            match native_test::test_program(program, target, options, json) {
                 native_test::Tested::Report(tests) => return finish_test(tests, json, &places),
                 native_test::Tested::Ended(code) => return code,
                 native_test::Tested::Refused(refusal) => {
@@ -719,6 +766,19 @@ mod tests {
         let line = parse(&["build", "f.osk", "-o"]);
         assert_eq!(line.positional, ["build", "f.osk", "-o"]);
         assert_eq!(line.output, None);
+    }
+
+    #[test]
+    fn target_takes_the_next_argument_or_the_text_after_an_equals_sign() {
+        let line = parse(&["build", "--target", "linux-aarch64", "f.osk"]);
+        assert_eq!(line.positional, ["build", "f.osk"]);
+        assert_eq!(line.target.as_deref(), Some("linux-aarch64"));
+        let line = parse(&["build", "f.osk", "--target=all"]);
+        assert_eq!(line.target.as_deref(), Some("all"));
+        // With nothing after it, `--target` is left positional: a usage error.
+        let line = parse(&["build", "f.osk", "--target"]);
+        assert_eq!(line.positional, ["build", "f.osk", "--target"]);
+        assert_eq!(line.target, None);
     }
 
     #[test]

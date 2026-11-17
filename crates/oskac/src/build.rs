@@ -1,26 +1,73 @@
 //! `oskac build`: check a source file or package and compile it with the
-//! native backend (`oska-native`) to an executable for aarch64 Linux,
-//! whatever the host.
+//! native backend (`oska-native`) to an executable for a target
+//! platform, whatever the host.
+//!
+//! `--target <platform>` names the target platform as release assets
+//! name `oskac` builds, such as `linux-aarch64`. Without it, the host's
+//! platform is built for when it has a backend, else `linux-aarch64`.
+//! An unknown name is refused with `E0393`, a supported platform with no
+//! backend yet with `E0394`, both before anything is read, with exit
+//! code 2, as a usage error.
 //!
 //! The output is the file's stem, or the package directory's name, in the
-//! current directory, unless `-o` names it. Success prints nothing, or
-//! `{"output": path, "diagnostics": []}` with `--format=json`. A refusal
-//! prints its diagnostics as `oskac check` does, or as `{"output": null,
-//! "diagnostics": [...]}`. The exit code is 1 for the checker's
-//! diagnostics and an unwritable output (`E0391`), and 2 for a program
-//! the backend cannot compile yet (`E0371`, `E0390`), as `oskac run`'s
-//! is for one the interpreter cannot run.
+//! current directory, unless `-o` names it. `--target all` builds for
+//! every target with a backend, into the directory `-o` names (the
+//! current one without it), one file each named `<name>-<platform>`. Every
+//! target is compiled before any file is written, so a refusal writes
+//! nothing.
+//!
+//! Success prints nothing, or `{"output": path, "diagnostics": []}` with
+//! `--format=json`; for `--target all`, `{"outputs": [path, ...],
+//! "diagnostics": []}`. A refusal prints its diagnostics as `oskac check`
+//! does, or as `{"output": null, "diagnostics": [...]}`. The exit code is
+//! 1 for the checker's diagnostics and an unwritable output (`E0391`), and
+//! 2 for a program the backend cannot compile yet (`E0371`, `E0390`), as
+//! `oskac run`'s is for one the interpreter cannot run, and for a
+//! `--target` it cannot build for.
 
 use std::path::Path;
 use std::process::ExitCode;
 
 use oska_check::program::Program;
+use oska_native::Target;
 use oska_syntax::{json_escape, Diagnostic, Span};
 
 use crate::{print_diagnostics, read_source, Flags, Places};
 
+/// What `oskac build` builds for: one target platform, or all of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetChoice {
+    /// One target: one executable, at the output path.
+    One(Target),
+    /// `--target all`: every target with a backend, into the output
+    /// directory.
+    All,
+}
+
+impl TargetChoice {
+    /// The choice `--target`'s value names, or with none, the host's
+    /// platform when it has a backend, else `linux-aarch64`.
+    pub fn named(platform: Option<&str>) -> Result<TargetChoice, Diagnostic> {
+        match platform {
+            Some("all") => Ok(TargetChoice::All),
+            Some(platform) => Target::named(platform).map(TargetChoice::One),
+            None => Ok(TargetChoice::One(
+                Target::host().unwrap_or(Target::LinuxAarch64),
+            )),
+        }
+    }
+}
+
+/// How `oskac build` was asked to build: the output `-o` names, and the
+/// target platforms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Options<'a> {
+    pub output: Option<&'a str>,
+    pub target: TargetChoice,
+}
+
 /// `oskac build` on the source file `path`.
-pub fn file(path: &str, Flags { json, .. }: Flags, output: Option<&str>) -> ExitCode {
+pub fn file(path: &str, Flags { json, .. }: Flags, options: Options) -> ExitCode {
     let Some(src) = read_source(path) else {
         return ExitCode::FAILURE;
     };
@@ -41,7 +88,7 @@ pub fn file(path: &str, Flags { json, .. }: Flags, output: Option<&str>) -> Exit
     let stem = Path::new(path)
         .file_stem()
         .map_or_else(|| path.to_string(), |s| s.to_string_lossy().into_owned());
-    compile(program, &places, output.unwrap_or(&stem), json)
+    compile(program, &places, &stem, options, json)
 }
 
 /// `oskac build` on the package in `dir`, which checked as `program`.
@@ -49,30 +96,60 @@ pub fn package(
     program: &Program,
     places: &Places,
     dir: &str,
-    output: Option<&str>,
+    options: Options,
     json: bool,
 ) -> ExitCode {
     let name = std::fs::canonicalize(dir)
         .ok()
         .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "main".to_string());
-    compile(program, places, output.unwrap_or(&name), json)
+    compile(program, places, &name, options, json)
 }
 
-/// Compile `program` and write it to `output`.
-fn compile(program: &Program, places: &Places, output: &str, json: bool) -> ExitCode {
-    let bytes = match oska_native::build(program, &|d| places.locate(d)) {
-        Ok(bytes) => bytes,
-        Err(refusal) => return refuse(&[places.locate(refusal)], json, ExitCode::from(2)),
+/// Compile `program`, named `name`, for each target `options` asks for,
+/// and write the executables.
+fn compile(
+    program: &Program,
+    places: &Places,
+    name: &str,
+    options: Options,
+    json: bool,
+) -> ExitCode {
+    let builds: Vec<(Target, String)> = match options.target {
+        TargetChoice::One(target) => vec![(target, options.output.unwrap_or(name).to_string())],
+        TargetChoice::All => Target::ALL
+            .iter()
+            .map(|target| {
+                let file = format!("{name}-{}", target.name());
+                let path = match options.output {
+                    Some(dir) => Path::new(dir).join(file).to_string_lossy().into_owned(),
+                    None => file,
+                };
+                (*target, path)
+            })
+            .collect(),
     };
-    if let Err(err) = write_executable(output, &bytes) {
-        return refuse(&[unwritable(output, &err)], json, ExitCode::FAILURE);
+    let mut executables = Vec::with_capacity(builds.len());
+    for (target, path) in builds {
+        match oska_native::build(program, target, &|d| places.locate(d)) {
+            Ok(bytes) => executables.push((path, bytes)),
+            Err(refusal) => return refuse(&[places.locate(refusal)], json, ExitCode::from(2)),
+        }
+    }
+    for (path, bytes) in &executables {
+        if let Err(err) = write_executable(path, bytes) {
+            return refuse(&[unwritable(path, &err)], json, ExitCode::FAILURE);
+        }
     }
     if json {
-        outln!(
-            "{{\"output\":\"{}\",\"diagnostics\":[]}}",
-            json_escape(output)
-        );
+        let paths: Vec<String> = executables
+            .iter()
+            .map(|(path, _)| format!("\"{}\"", json_escape(path)))
+            .collect();
+        match options.target {
+            TargetChoice::One(_) => outln!("{{\"output\":{},\"diagnostics\":[]}}", paths.concat()),
+            TargetChoice::All => outln!("{{\"outputs\":[{}],\"diagnostics\":[]}}", paths.join(",")),
+        }
     }
     ExitCode::SUCCESS
 }
@@ -92,7 +169,8 @@ pub fn refuse(diagnostics: &[Diagnostic], json: bool, code: ExitCode) -> ExitCod
 }
 
 /// Write the executable to `path`, executable by everyone, as a compiler's
-/// output is.
+/// output is. Nothing runs it here, and `oskac` starts no process on
+/// another thread, so no fork can hold its descriptor open (#270).
 fn write_executable(path: &str, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::write(path, bytes)?;
     #[cfg(unix)]

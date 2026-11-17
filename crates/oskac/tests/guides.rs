@@ -72,8 +72,11 @@ fn markdown_files(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// The guides, and the home page, which shows a program and its report.
 fn guide_pages() -> Vec<PathBuf> {
-    markdown_files(&repo_root().join("docs/guide"))
+    let mut pages = markdown_files(&repo_root().join("docs/guide"));
+    pages.push(repo_root().join("docs/index.md"));
+    pages
 }
 
 /// A fenced code block.
@@ -337,7 +340,8 @@ fn every_console_and_help_block_shows_exactly_what_the_toolchain_prints() {
 #[test]
 fn shell_blocks_use_only_oskac_commands_and_flags_that_exist() {
     let help = oskac_help();
-    let commands: BTreeSet<&str> = ["lex", "parse", "check", "run", "test", "explain"].into();
+    let commands: BTreeSet<&str> =
+        ["lex", "parse", "check", "run", "test", "build", "explain"].into();
     for block in all_blocks().iter().filter(|b| b.language() == "sh") {
         if block.has("planned") {
             continue;

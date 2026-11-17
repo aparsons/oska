@@ -6,7 +6,7 @@ The exit code is non-zero when there are diagnostics. Without `--format=json`, d
 
 Every diagnostic, attenuation and audit line starts with its **location**, `path:line:col`, which editors and terminals jump to: the path of the file it is in, then the 1-based line and column (in characters) where its span starts, such as `prog.osk:2:9: error[E0200]: ...`. For a single file the path is as given on the command line; in a package it starts from the current directory, the package directory as given followed by the file's path in the package, such as `shop/src/util/text.osk` for `oskac check shop` (JSON keeps the package-relative `src/util/text.osk`). The byte span follows, within that file.
 
-An **attenuation** is a call of one of the prelude's attenuation methods (`restrict_to`, `restrict_to_file`, `read_only`, `write_only`) on a built-in capability. The report lists each one under the function it is in (a closure's belong to the function around it), with the capability kind it narrows from and to, and its root:
+An **attenuation** is a call of one of the prelude's attenuation methods (`restrict_to`, `restrict_to_file`, `read_only`, `write_only`) on a built-in capability. The report lists each one under the function it is in (a closure's belong to the function around it; a test's under `test "<name>":`, with the name written as an Oska string, which is also its JSON `function`; a test with an empty name is `test at line <n>`), with the capability kind it narrows from and to, and its root:
 
 - `restrict_to "docs"` has a **literal root**: a string literal, a module constant holding one, or `Path.new` of either. Narrowing a directory capability gives the path relative to its own root, as written.
 - `restrict_to computed at runtime` has any other root: a variable, an interpolated string, `Path.from(untrusted)`. In JSON its `root` is `null`.
@@ -26,7 +26,7 @@ Untrusted-ness carries through every route. Prelude text operations are trust-po
 
 Contract clauses are type-checked here, and evaluated by the runtime on every call (`P0006`, `P0007`: see [the runtime reference](runtime.md)). `requires` and `ensures` conditions must be `Bool` (`E0281`), they see the parameters (and `self`), `ensures |r|` binds `r` to the return type, and a contract may call only pure functions (`E0280`). That covers what an operator dispatches to as well: `==` and `!=` call an `Eq` impl, an interpolation hole calls a `Display` impl, and a `?` inside a closure may call a `From` impl, so each is judged as a call with the operands' types. A `?` or `return` directly in a clause is an error (`E0282`), because a condition has no function to leave. A trait method's contract is checked even without a body, and it binds every impl of the method: a method of `impl Trait for Type` declares no contract of its own (`E0218`), and neither does `main` (`E0219`), which nothing calls.
 
-Inside a generic body a type parameter is never capability-bearing and never holds a `Scope`, because nothing is known about it. Three things rely on that, so each records what it **assumes of the type parameter**, and every instantiation of the parameter must keep it (`E0274`):
+Inside a generic body a type parameter is never capability-bearing and never holds a `Scope`, because nothing is known about it. (The authority report is the exception: it lists a parameter of a bounded type parameter as authority-carrying, `generic T (param)`, because the function can perform effects through it; see [Report](#report).) Three things rely on that, so each records what it **assumes of the type parameter**, and every instantiation of the parameter must keep it (`E0274`):
 
 - A contract that uses a value of type `T`, by calling a method on it, passing it on, comparing it, or interpolating it, assumes `T` is not capability-bearing: otherwise the contract could perform an effect.
 - A closure that captures a value of type `T` (or one holding a `T`, such as an `Option<T>` or a closure that captured one) and is used as a plain `fn`, by flowing into a plain `fn` slot or being called in a contract, assumes the same: otherwise a plain `fn` would carry authority. A closure used only where a `cap fn` is accepted, such as `spawn`'s task, assumes nothing.
@@ -60,11 +60,12 @@ A `test` body sees one built-in value, `t`, of the prelude type `TestContext`. I
 - **`path`**, on every diagnostic, audit site and attenuation: the file the entry is in. For a single file it is the path as given on the command line, such as `prog.osk`; in a package it is relative to the package, such as `src/util/text.osk`. The entry's `span`, and a fix's edits, are byte offsets within that file. Entries are listed file by file, and in source order within a file.
 - **`diagnostics`**, in source order. Each uses the same object as parser diagnostics (see [`ast.md`](ast.md)): `code`, `message`, `path`, `span` (byte offsets), and `fix` when the repair is unambiguous. A parse error is reported alone for its file, with that file's `functions`, `audit` and `attenuations` empty.
 - **`functions`**: one entry per function, `impl` method and trait default method, in source order. The report is produced even when there are diagnostics.
-  - `name`: the function's name, or `Type.method` for a method. In a package, `pkg.` and the module path come first, so functions of one name in two modules are told apart, and no name reads as a `std` one, even in a module named like a `std` module: `pkg.util.text.shout`, `pkg.main.main`, `pkg.html.text`. A method is named by its type's module, wherever its `impl` is: `pkg.shapes.Square.to_string` for an `impl shapes.Square` in `src/main.osk`. So no two modules' functions share a name; the module paths `pkg.…`, `std.…` and `main.…` are reserved (`E0410`), so no module can take another's names.
+  - `name`: the function's name, `Type.method` for a method of an inherent `impl`, or `<Type as Trait>.method` for a method of `impl Trait for Type`, so that an inherent method and a trait method of one name are told apart. A generic trait carries the impl's arguments, as in `<AppError as From<IoError>>.from`, so two impls of one trait are told apart too. A generic type carries its arguments, as in `<Pair<Int> as Show>.show` and `<Pair<String> as Show>.show`, so two impls of one trait for two instances of one type are told apart as well. In a package, `pkg.` and the module path come first, so functions of one name in two modules are told apart, and no name reads as a `std` one, even in a module named like a `std` module: `pkg.util.text.shout`, `pkg.main.main`, `pkg.html.text`. A method is named by its type's module, wherever its `impl` is: `pkg.shapes.Square.area` for an `impl shapes.Square` in `src/main.osk`. A trait method names the type and the trait by their keys, and a prelude one plainly: `<pkg.shapes.Square as Display>.to_string`, `<Int as pkg.geo.Area>.area`. So no two functions share a name; the module paths `pkg.…`, `std.…` and `main.…` are reserved (`E0410`), so no module can take another's names.
   - `pub`: `true` for a function or method declared `pub`, part of its package's API; absent otherwise. The human report starts its line with `pub `, as in `pub fn shapes.unit: pure`.
   - `authority`: the built-in capabilities the function can reach, in order of first appearance, without repeats. `cap` types are expanded through their fields, and type arguments are expanded, so `List<Stdout>` reaches `Stdout`. Each capability is reported by its own name: an attenuation to a directory shows as the directory capability it gives, such as `DirRead`.
   - `via`: each capability-bearing parameter and the capabilities it supplies, in parameter order. A method's receiver appears as `self`. A `cap fn` parameter is listed with no capabilities, because a closure's capabilities are not written in its type; it still makes the function impure.
-  - `pure`: `true` when no parameter, the receiver included, is capability-bearing.
+    - A parameter whose type is or holds a bounded type parameter, such as `tools: T` or `all: List<T>` in `fn run<T: Toolset>`, is listed too, with the type parameters in `generics`: `{"param":"tools","capabilities":[],"generics":["T"]}`. Its type argument may be capability-bearing, and the bound gives the body methods to call on it, so the function can perform effects through it. The human report shows it as `generic T (tools)`. An impl's type parameters count for its methods, and a trait's `Self` counts for its default methods (`generic Self (self)`), since `Self` is bounded by the trait. An unbounded type parameter has no methods to call, so it is not listed. `generics` is absent when there are none.
+  - `pure`: `true` when no parameter, the receiver included, is capability-bearing or holds a bounded type parameter.
 - **`audit`**: every **audit site**, in source order. It is always present, and is `[]` when there are none.
   - `kind`: what the call does. `assume_trusted` is a **trust assertion**: `.assume_trusted()` turns untrusted text into trusted text, as a validator does. `expose` is a **secret exposure**: `.expose()` reads a `Secret`'s value.
   - `span`: the whole call expression, such as `s.assume_trusted()`.
@@ -695,7 +696,7 @@ test "setup" {
 | --- | --- | --- |
 | `E0200` | Unknown type or trait name, or a qualified path such as `sql.Query` whose first segment is not a module bound by a plain `use`. | Replace the name with the single closest declared name, when one is close enough. |
 | `E0201` | A trait where a type is expected (`x: Display`), or a type where a trait is expected (`T: Int`). | None. |
-| `E0202` | A type or trait name declared twice in the module, or one that redeclares a prelude name; a free function declared twice, or one that redeclares a prelude function (`dbg`, `todo`); or a method or associated function declared twice for one type, across all of its inherent `impl` blocks. Spans the second declaration's name. | None. |
+| `E0202` | A type or trait name declared twice in the module, or one that redeclares a prelude name; a free function declared twice, or one that redeclares a prelude function (`dbg`, `todo`); or a method or associated function declared twice for one type, across all of its inherent `impl` blocks; or a module constant whose name is also another constant's, a function's or a type's. Spans the second declaration's name. | None. |
 | `E0203` | A `use pkg.…` in a single file: `pkg` paths name modules of a package, and a single file is not one. Spans the path. | None: make the program a package, with an `oska.toml` and its modules under `src/`. |
 | `E0204` | A `use pkg.…` of a module the package does not have, or a `use pkg` that names no module. Spans the path. | Replace the path with the single closest module path, when one is close enough. |
 | `E0205` | A name that the imported module does not declare, in a `use pkg.…` brace group or after its qualifier, as in `util.nmae`. Spans the name. | Replace the name with the single closest item of the module, when one is close enough. |
@@ -729,6 +730,7 @@ test "setup" {
 | `E0233` | A type that inference cannot work out, such as `let xs = List.new()` with no later use. | None. |
 | `E0234` | A type name used as a value, or a type that cannot be constructed. | None. |
 | `E0235` | `for` over a value that is not a `List` or a range of integers. | None. |
+| `E0236` | A module constant whose initializer names itself, directly (`const A: Int = A`) or through other constants (`A` names `B`, and `B` names `A`). A constant lowers to a function its uses call, so the cycle would call itself until the stack overflowed. The message names the cycle from the constant (`A -> B -> A`). Each constant on a cycle is reported, at its initializer. | None. |
 | `E0240` | An expression statement whose `Result` value is dropped. Discard one deliberately with `let _ = f()`. Spans the expression. | None. |
 | `E0241` | `?` on a value that is neither a `Result` nor an `Option`. Spans the `?` expression. | None. |
 | `E0242` | `?` on a `Result` whose error type is not the enclosing function's error type, with no `impl From` to convert it. Spans the `?` expression. | None. |
@@ -739,7 +741,7 @@ test "setup" {
 | `E0253` | A `match` that is not exhaustive, checked with the pattern-usefulness algorithm through nested constructor patterns. Guarded arms never count. `Int` and `String` matches need a `_` or binding arm. Spans the scrutinee; the message lists the missing patterns. | Add an arm for each missing pattern after the last arm, with `todo()` as its body. |
 | `E0254` | An unreachable arm: the earlier unguarded arms already match every value it does, as with any arm after a `_` or binding arm. Spans the arm's pattern. | None. |
 | `E0260` | A method called on a value of a generic parameter whose bounds provide no method of that name. A generic body is checked once, against its bounds only. Spans the method name. | Add the bound, when exactly one trait has the method. |
-| `E0261` | An `impl Trait for Type` that leaves out a required method (one without a default body). Spans the trait in the `impl`. | Insert a stub for each missing method before the `impl`'s closing brace, with the trait's signature (`Self` replaced) and `todo()` as its body. None when a missing method has generic parameters of its own. |
+| `E0261` | An `impl Trait for Type` that leaves out a required method (one without a default body). Spans the trait in the `impl`. | Insert a stub for each missing method before the `impl`'s closing brace, with the trait's signature (`Self` replaced) and `todo()` as its body. A method with generic parameters of its own gets them and their bounds from the trait, renamed only where one would shadow a generic of the `impl`. |
 | `E0262` | An `impl` method whose signature differs from the trait's, once `Self` and the trait's arguments are replaced. Receiver, parameter types, and return type must all match. Spans the method name. | None. |
 | `E0263` | An `impl Trait` method that the trait does not declare. Spans the method name. | None. |
 | `E0264` | A method call that two or more of the receiver's traits (or a parameter's bounds) provide, when the type's own `impl` does not. Spans the method name. Call it qualified instead: `Display.to_string(x)`. | None. |
@@ -771,11 +773,12 @@ test "setup" {
 | `E0360` | A name declared by an imported `std` module but not exported by it, written unqualified. Spans the name. No `std` module declares a private name yet: no program can reach this code, so it has no example. | None: the module keeps it private. |
 | `E0400` | `oska.toml` is malformed: a table header with no `]`, a key with no `=`, no value after `=`, a string that is not closed or has an unknown escape (`\u` and `\U` take exactly 4 and 8 hex digits), text after a value, a carriage return not followed by a line feed, a byte-order mark, or text that is not UTF-8. Spans the offending text; the manifest's path, line and column are in the report. A byte-order mark, or a bare carriage return, is reported alone. | Remove a byte-order mark. |
 | `E0401` | `oska.toml` uses TOML outside the strict subset (tables, single-line strings, arrays of strings, comments). The message names the feature: dotted keys, dates, multiline strings, inline tables, arrays of tables, quoted keys, integers, floats, booleans, or nested arrays. Spans the unsupported text. | None. |
-| `E0402` | An unknown key or table in `oska.toml`: milestone 1 accepts only `[package]`, with the keys `name` and `version`. A key outside any table is also unknown. Spans the key, or the table's name. | Replace the name with the single closest known name, when one is close enough. |
+| `E0402` | An unknown key or table in `oska.toml`: milestone 1 accepts only `[package]`, with the keys `name`, `version` and `oska`. A key outside any table is also unknown. Spans the key, or the table's name. | Replace the name with the single closest known name, when one is close enough. |
 | `E0403` | A `[dependencies]` table in `oska.toml`: dependencies arrive in milestone 5. Spans the table's name. | None. |
 | `E0404` | `oska.toml` has no `[package]` table (spans the start of the file), or `[package]` has no `name` or no `version` (spans the table's name). | None. |
-| `E0405` | A value in `[package]` of the wrong kind: `name` or `version` given as an array, a `name` that is not snake_case, or a `version` that is not semver (`MAJOR.MINOR.PATCH`, with an optional `-prerelease` and `+build`). Spans the value. | None. |
+| `E0405` | A value in `[package]` of the wrong kind: `name`, `version` or `oska` given as an array, a `name` that is not snake_case, or a `version` or `oska` that is not semver (`MAJOR.MINOR.PATCH`, with an optional `-prerelease` and `+build`). Spans the value. | None. |
 | `E0406` | A key written twice in `[package]`, or `[package]` written twice. Spans the second one's name. | None. |
+| `E0407` | `oska` in `[package]` names a newer `oskac` than the one running: the package needs that version or newer. `oska` is a minimum, never an exact pin, so a newer `oskac` always accepts it; versions are compared by semver precedence, pre-releases included, so `0.5.0-rc.1` is older than `0.5.0`. The message names both versions and how to install a newer `oskac`. Every command that reads the manifest (`check`, `run`, `test` and `build`) reports it, and reports nothing else: the manifest's other keys and the package's modules may be written for the newer toolchain, so none is checked. Spans the value. | None: install a newer `oskac`, or lower `oska` if the package does not need the newer one. |
 | `E0410` | A file or directory name of a module under `src/` that `use pkg.<path>` could not name, or that would read as something else: not snake_case, a keyword such as `fn` or `match`, hidden (starting with `.`), or, as the module path's first name, `pkg` or `std`, which start import paths, or `main`, the entry module. Spans the start of the file. | None: rename the file or directory. |
 | `E0411` | A symlinked `oska.toml`, or a symlinked file or directory under `src/`. A package's source is what is in its tree, so `oskac` follows no link, and opens each file without following one. A symlink cannot be written in a documentation example, so it has no example. | None: replace the link with the file or directory. |
 | `E0412` | `main` declared in a module other than `src/main.osk`. Spans the name. | None. |
@@ -1450,6 +1453,18 @@ fn main() {
         let j = i
     }
 }
+```
+
+#### `E0236`
+
+```oska error=E0236
+const A: Int = B
+const B: Int = A
+```
+
+```oska fixed=E0236
+const A: Int = B
+const B: Int = 1
 ```
 
 #### `E0240`
@@ -2424,6 +2439,28 @@ fn main() {}
 [package]
 name = "demo"
 version = "0.1.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+#### `E0407`
+
+```oska error=E0407 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+oska = "999.0.0"
+==> src/main.osk <==
+fn main() {}
+```
+
+```oska fixed=E0407 package
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+oska = "0.1.0"
 ==> src/main.osk <==
 fn main() {}
 ```

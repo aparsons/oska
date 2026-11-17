@@ -339,6 +339,16 @@ impl Ty {
     }
 }
 
+/// Type arguments as written after a name, `<Int, String>`, or nothing
+/// for none.
+pub fn args_text(args: &[Ty]) -> String {
+    if args.is_empty() {
+        return String::new();
+    }
+    let args: Vec<String> = args.iter().map(Ty::to_string).collect();
+    format!("<{}>", args.join(", "))
+}
+
 /// Renders a type as it would be written in Oska source. An unsolved
 /// inference variable is shown as `_`.
 impl fmt::Display for Ty {
@@ -348,17 +358,7 @@ impl fmt::Display for Ty {
                 if *trust == Trust::Untrusted {
                     write!(f, "{UNTRUSTED}<")?;
                 }
-                write!(f, "{name}")?;
-                if !args.is_empty() {
-                    write!(f, "<")?;
-                    for (i, arg) in args.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
-                        }
-                        write!(f, "{arg}")?;
-                    }
-                    write!(f, ">")?;
-                }
+                write!(f, "{name}{}", args_text(args))?;
                 if *trust == Trust::Untrusted {
                     write!(f, ">")?;
                 }

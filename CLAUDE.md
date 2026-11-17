@@ -10,6 +10,10 @@ Run `scripts/check.sh` before every commit; it is the whole CI test job. The pre
 
 ## Agent skills
 
+### Implementing a ticket
+
+Fast inner loop, lean cargo environment, build slots, pass stamp, kill guard, ticket CI: `docs/agents/implementer.md`.
+
 ### Issue tracker
 
 Issues are tracked in GitHub Issues on aparsons/oska (via `gh`). See `docs/agents/issue-tracker.md`.
