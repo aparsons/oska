@@ -14,7 +14,7 @@
 #   --add-to-path      also add one marked line to a shell profile, so that
 #                      oskac is on your PATH (nothing else is edited)
 #   --hook <dir>       also install the Claude Code check-after-edit hook
-#                      into the project in <dir>
+#                      (not the Stop gate) into the project in <dir>
 #   --json             print one JSON object on stdout, and nothing else
 #   --help             print this help
 #
@@ -47,7 +47,7 @@
 # By default nothing outside the Oska home is touched. --add-to-path and
 # --hook are opt-in, and the receipt records what they wrote, so that
 # --uninstall can undo it: the profile line only if that exact line is
-# still there, the hook script and the settings file only if unchanged.
+# still there, the hook settings file only if unchanged.
 
 set -u
 
@@ -74,7 +74,6 @@ hook_dir=
 profile_new=
 profile_line=
 profile_seen=0
-script_write=0
 settings_write=0
 settings_existed=0
 settings_merge_needed=false
@@ -158,7 +157,7 @@ usage: curl -fsSL https://oskalang.dev/install.sh | sh -s -- [options]
   --add-to-path      also add one marked line to a shell profile, so that
                      oskac is on your PATH (nothing else is edited)
   --hook <dir>       also install the Claude Code check-after-edit hook
-                     into the project in <dir>
+                     (not the Stop gate) into the project in <dir>
   --json             print one JSON object on stdout, and nothing else
   --help             print this help
 
@@ -330,9 +329,6 @@ EOF
   if [ -n "$profile_new" ]; then
     add_extra profile_line "$profile_new" "" "$profile_line" ""
   fi
-  if [ "$script_write" = 1 ]; then
-    add_extra hook_script "$hook_script" "$script_sum" "" "$hook_dir"
-  fi
   if [ "$settings_write" = 1 ]; then
     add_extra hook_settings "$hook_settings" "$settings_sum" "" "$hook_dir"
   elif [ -n "$hook_dir" ] && [ "$settings_existed" = 1 ]; then
@@ -407,8 +403,7 @@ plan_profile() {
   profile_new=$profile
 }
 
-# plan_hook: for --hook <dir>, where the script and the settings go. Nothing
-# is written yet.
+# plan_hook: for --hook <dir>, where the settings go. Nothing is written yet.
 plan_hook() {
   case $hook_dir in
     /*) ;;
@@ -428,40 +423,31 @@ plan_hook() {
     */../* | */./* | *"$tab"* | *"$nl"* | */.config/oska/*)
       fail usage "--hook cannot use the directory $hook_dir: it has .., a tab or a newline in it, or is in ~/.config/oska" ;;
   esac
-  hook_script=$hook_dir/.claude/hooks/oska-check.sh
   hook_settings=$hook_dir/.claude/settings.json
-  if symlink_above "$hook_script"; then
+  if symlink_above "$hook_settings"; then
     fail install_failed "$hook_dir is reached through the symlink $linked, which --uninstall would refuse"
   fi
-  for f in "$hook_dir/.claude" "$hook_dir/.claude/hooks" "$hook_script" "$hook_settings"; do
+  for f in "$hook_dir/.claude" "$hook_settings"; do
     if [ -L "$f" ]; then
       fail install_failed "$f is a symlink, so the installer will not write there"
     fi
   done
 }
 
-# fetch_hook: downloads the published hook script and settings, and decides
-# what to write. The script is never written over a different file, and the
-# settings only if there are none.
+# fetch_hook: downloads the published post-edit hook settings, and decides
+# what to write. They are the check-after-edit entry alone: --hook never
+# turns on the Stop gate, which the user chooses separately. The settings
+# are written only if the project has none; existing settings need a merge
+# unless they already run the post-edit hook. An entry for the old shell
+# script, .claude/hooks/oska-check.sh, does not count: the merge replaces it.
 fetch_hook() {
   agent_setup=$site/agent-setup
-  fetch "$agent_setup/oska-check.sh" "$tmp/oska-check.sh" ||
-    fail download_failed "cannot download $agent_setup/oska-check.sh"
-  fetch "$agent_setup/claude-settings.json" "$tmp/claude-settings.json" ||
-    fail download_failed "cannot download $agent_setup/claude-settings.json"
-  [ "$(head -n 1 "$tmp/oska-check.sh" | tr -d '\r')" = '#!/bin/sh' ] ||
-    fail download_failed "$agent_setup/oska-check.sh is not the hook script"
-  grep -q '"PostToolUse"' "$tmp/claude-settings.json" ||
-    fail download_failed "$agent_setup/claude-settings.json is not the hook settings"
-  script_sum=$(sha256 "$tmp/oska-check.sh")
-  settings_sum=$(sha256 "$tmp/claude-settings.json")
-  script_write=1
-  if [ -e "$hook_script" ]; then
-    if [ ! -f "$hook_script" ] || [ "$(sha256 "$hook_script")" != "$script_sum" ]; then
-      fail install_failed "$hook_script already exists and is not the published hook; nothing was installed"
-    fi
-    script_write=0
+  fetch "$agent_setup/claude-settings-post-edit.json" "$tmp/claude-settings.json" ||
+    fail download_failed "cannot download $agent_setup/claude-settings-post-edit.json"
+  if ! grep -q '"PostToolUse"' "$tmp/claude-settings.json" || grep -q '"Stop"' "$tmp/claude-settings.json"; then
+    fail download_failed "$agent_setup/claude-settings-post-edit.json is not the post-edit hook settings"
   fi
+  settings_sum=$(sha256 "$tmp/claude-settings.json")
   settings_write=1
   settings_existed=0
   settings_merge_needed=false
@@ -471,7 +457,7 @@ fetch_hook() {
     if [ ! -f "$hook_settings" ]; then
       fail install_failed "$hook_settings is not a regular file; nothing was installed"
     fi
-    if [ "$(sha256 "$hook_settings")" != "$settings_sum" ] && ! grep -q 'oska-check.sh' "$hook_settings"; then
+    if ! grep -q 'oskac hook claude --event=post-edit' "$hook_settings"; then
       settings_merge_needed=true
     fi
   fi
@@ -486,18 +472,11 @@ write_extras() {
     fi
     printf '%s\n' "$profile_line" >>"$profile_new" || fail install_failed "cannot write $profile_new"
   fi
-  if [ -n "$hook_dir" ]; then
-    mkdir -p "$hook_dir/.claude/hooks" || fail install_failed "cannot create $hook_dir/.claude/hooks"
+  if [ -n "$hook_dir" ] && [ "$settings_write" = 1 ]; then
+    mkdir -p "$hook_dir/.claude" || fail install_failed "cannot create $hook_dir/.claude"
     # noclobber: a file that appeared meanwhile is never written over.
-    if [ "$script_write" = 1 ]; then
-      (set -C && cat "$tmp/oska-check.sh" >"$hook_script") 2>/dev/null ||
-        fail install_failed "cannot write $hook_script"
-      chmod 644 "$hook_script" 2>/dev/null || true
-    fi
-    if [ "$settings_write" = 1 ]; then
-      (set -C && cat "$tmp/claude-settings.json" >"$hook_settings") 2>/dev/null ||
-        fail install_failed "cannot write $hook_settings"
-    fi
+    (set -C && cat "$tmp/claude-settings.json" >"$hook_settings") 2>/dev/null ||
+      fail install_failed "cannot write $hook_settings"
   fi
 }
 
@@ -920,7 +899,7 @@ $path
     elif [ "$path" = "$receipt" ]; then
       remove_receipt=1
     elif [ -z "$sum" ] && [ "$kind" = hook_settings ]; then
-      keep "$path" "settings the installer did not create; remove its oska-check hook by hand"
+      keep "$path" "settings the installer did not create; remove its oskac hook entries by hand"
     elif [ -z "$sum" ]; then
       keep "$path" "the receipt records no SHA-256 for it"
     elif [ "$(sha256 "$path")" != "$sum" ]; then
@@ -1373,7 +1352,6 @@ main() {
     extra_json=", \"profile\": $(json_str "$profile_new")"
   fi
   if [ -n "$hook_dir" ]; then
-    extra_json="$extra_json, \"hook_script\": $(json_str "$hook_script")"
     if [ "$settings_write" = 1 ]; then
       extra_json="$extra_json, \"hook_settings\": $(json_str "$hook_settings")"
     else
@@ -1412,12 +1390,15 @@ main() {
   fi
   if [ -n "$hook_dir" ]; then
     echo
-    echo "Installed the Claude Code hook script in $hook_script."
     if [ "$settings_write" = 1 ]; then
-      echo "Created the project's Claude Code settings, $hook_settings."
+      echo "Created the project's Claude Code settings, $hook_settings,"
+      echo "with the check-after-edit hook."
     elif [ "$settings_merge_needed" = true ]; then
-      echo "$hook_settings already exists, so it was left as it is: merge the hooks of"
-      echo "  $site/agent-setup/claude-settings.json into it to turn the hook on."
+      echo "$hook_settings already exists, so it was left as it is: merge the PostToolUse"
+      echo "entry of $site/agent-setup/claude-settings-post-edit.json into it to turn the"
+      echo "hook on, in place of any entry that runs .claude/hooks/oska-check.sh."
+    else
+      echo "$hook_settings already runs the check-after-edit hook."
     fi
   fi
   if [ "$on_path" = false ] && [ "$add_to_path" = 0 ]; then

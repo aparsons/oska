@@ -24,9 +24,12 @@ use std::process::ExitCode;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The files `install.sh --hook` installs, as this release publishes them.
+/// The files `install.sh --hook` installs, as this release publishes them:
+/// the settings with the post-edit hook alone, and the shell script that
+/// earlier installers wrote and receipts may still list.
 const HOOK_SCRIPT: &str = include_str!("../../../site/agent-setup/oska-check.sh");
-const HOOK_SETTINGS: &str = include_str!("../../../site/agent-setup/claude-settings.json");
+const HOOK_SETTINGS: &str =
+    include_str!("../../../site/agent-setup/claude-settings-post-edit.json");
 
 /// The marker comment `install.sh --add-to-path` ends its profile line with.
 const PROFILE_MARK: &str = "# added by the Oska installer";
@@ -827,7 +830,7 @@ fn uninstall_in(home: &Path) -> Result<(Outcome, Option<String>), Refusal> {
             (Some(_), _) if entry.sha256.is_empty() && entry.kind == Kind::HookSettings => {
                 outcome.keep(
                     &path,
-                    "settings the installer did not create; remove its oska-check hook by hand",
+                    "settings the installer did not create; remove its oskac hook entries by hand",
                 );
             }
             _ if entry.sha256.is_empty() => {

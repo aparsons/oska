@@ -29,7 +29,7 @@ Every entry is checked before anything is removed. An entry whose kind is not on
 | `record` | both installers | directly in the Oska home or its `bin` directory | except the receipt's own entry |
 | `profile_line` | `install.sh --add-to-path` | `.zshrc`, `.bashrc`, `.bash_profile` or `.profile` directly in `HOME`, with a `line` that starts `export PATH=` and ends `# added by the Oska installer` | never |
 | `user_path_entry` | `install.ps1 --add-to-path` | its `path` is the `bin` directory (any case, trailing separator aside) | never |
-| `hook_script` | `install.sh --hook` | `<project>/.claude/hooks/oska-check.sh` | always |
+| `hook_script` | earlier `--hook` runs, which wrote the old shell hook; no longer written | `<project>/.claude/hooks/oska-check.sh` | always |
 | `hook_settings` | `install.sh --hook` | `<project>/.claude/settings.json` | only when the installer created the file |
 
 For every kind:
@@ -37,7 +37,7 @@ For every kind:
 - `path` (other than a `user_path_entry`'s) is absolute, with no `.` or `..` part.
 - No path is in a `.config/oska` directory (settings and credentials, which uninstall never touches), and no path is reached through a symlink: not the entry, not the directory it is in, not the Oska home or any directory above it. On Linux and macOS a symlink owned by root, such as macOS's `/var`, is allowed, as only an administrator can make one.
 - A hook entry's `project` is absolute, with no `.` or `..` part.
-- A kind is accepted only on the platform whose installer writes it: on Windows a `profile_line` or hook entry is refused, and on Linux and macOS a `user_path_entry`. `install.ps1 --hook` is not available yet (issue #87).
+- A kind is accepted only on the platform whose installer writes it: on Windows a `profile_line` or hook entry is refused, and on Linux and macOS a `user_path_entry`. `install.ps1` has no `--hook`: on Windows the hook settings are merged by hand or by the agent-setup prompt, so no receipt records them.
 
 ## What uninstall does with each entry
 
@@ -51,12 +51,12 @@ Each entry gets one outcome: **remove** it, **keep if changed** (remove it only 
 | `record`, any other | keep if changed: its SHA-256 | keep if changed: its SHA-256 | keep: `oskac` computes no SHA-256 to show it unchanged |
 | `profile_line` | remove the line, if it is still there exactly as written for this `bin` directory; else keep the file and say in `path_hint` | refuse | leave to the installer |
 | `user_path_entry` | refuse | remove the entry from the user `PATH` if it is there; else say so in `path_hint`. The `bin` directory itself is handled with the Oska home, and listed once | leave to the installer |
-| `hook_script`, `hook_settings` | keep if changed: its SHA-256 | refuse | keep if changed: byte for byte the published file this `oskac` carries |
+| `hook_script`, `hook_settings` | keep if changed: its SHA-256 | refuse | keep if changed: byte for byte the published file this `oskac` carries (`oska-check.sh`, or `claude-settings-post-edit.json`) |
 | anything else | refuse | refuse | refuse |
 
 Also, for every implementation:
 
-- An entry with no `sha256`, other than the receipt's own entry, is kept: nothing shows it unchanged. `hook_settings` without one are settings the installer found rather than created, kept with a hint to remove the `oska-check.sh` hook from them by hand.
+- An entry with no `sha256`, other than the receipt's own entry, is kept: nothing shows it unchanged. `hook_settings` without one are settings the installer found rather than created, kept with a hint to remove the `oskac hook` entries from them by hand.
 - When the receipt does not record the running `oskac` (another version, or another copy), `oskac self uninstall` keeps every `binary` and `record` entry and goes on with the rest. The installers do not run `oskac`, and go by SHA-256 alone.
 - A path listed twice is checked each time and acted on, and reported, once. A listed path that does not exist is skipped; one that is a directory is kept, except `bin`, which is handled with the Oska home, at the end.
 - The receipt is removed last, and kept if any file could not be removed, so that a second run can finish.

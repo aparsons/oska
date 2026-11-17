@@ -56,7 +56,7 @@ A successful `--json` run prints:
 - `receipt` is the path of the [install receipt](#the-install-receipt).
 - `index_verified` is `true` when the release came from the verified, signed index, and `index_serial` is that index's serial. With `--version`, or before the site publishes an index, they are `false` and `null`.
 - With `--add-to-path`, `profile` (sh) is the profile file the installer added a line to, or `user_path_entry` (PowerShell) is the entry it added to your user `PATH`. Neither is there when nothing was changed.
-- With `--hook`, `hook_script` is the script's path, `hook_settings` is the settings file the installer created or `null`, and `settings_merge_needed` is `true` when the project already had settings that need the hook merged in.
+- With `--hook`, `hook_settings` is the settings file the installer created or `null`, and `settings_merge_needed` is `true` when the project already had settings that do not run the post-edit hook, so it needs merging in.
 - `platform` is one of `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`, or `windows-x86_64`.
 - On Windows, `path` ends in `oskac.exe`.
 
@@ -67,7 +67,7 @@ A failed run prints `{"ok": false, "error": "<code>", "message": "..."}` and exi
 | `usage` | An unknown option, a `--version` that is not a version, `--allow-downgrade` without `--version`, or options that cannot be used together, such as `--uninstall` with `--version`. |
 | `no_signing_key` | The installer was not pinned when the site was built: it has no release key built in, or no valid setting for whether the release index is required. Download it again from oskalang.dev. |
 | `insecure_url` | `OSKA_SITE_URL` is not an `https://` URL, or a download was redirected to one that is not. |
-| `unsupported_platform` | There is no build for this OS or CPU, or `--hook` was used with `install.ps1` (the hook is a shell script; see issue #87). |
+| `unsupported_platform` | There is no build for this OS or CPU, or `--hook` was used with `install.ps1`, which does not have it (the hook works on Windows: merge its settings as the agent-setup prompt does). |
 | `unsupported_libc` | Linux only: the C library is not glibc 2.35 or newer (for example musl, as on Alpine). |
 | `missing_tool` | `curl`, `ssh-keygen`, or a SHA-256 tool is missing. |
 | `download_failed` | A file could not be downloaded, for example because that version does not exist. |
@@ -108,7 +108,7 @@ Each install writes `receipt.json` into the Oska home (`~/.oska`, or `OSKA_HOME`
 }
 ```
 
-With `--add-to-path` or `--hook`, `files` also lists what they wrote outside the Oska home: a `profile_line` (the profile and the exact line), a `user_path_entry` (the exact `PATH` entry), a `hook_script` and a `hook_settings` (each with its SHA-256 and the `project` directory). A re-run without those options keeps the entries an earlier run recorded. [The install receipt](install-receipt.md) defines every kind of entry, where each may be, and what each uninstaller does with it.
+With `--add-to-path` or `--hook`, `files` also lists what they wrote outside the Oska home: a `profile_line` (the profile and the exact line), a `user_path_entry` (the exact `PATH` entry), a `hook_settings` (with its SHA-256, if the installer created it, and the `project` directory). A receipt from an earlier installer may also list a `hook_script`, the old shell hook, which `--uninstall` still removes if unchanged. A re-run without those options keeps the entries an earlier run recorded. [The install receipt](install-receipt.md) defines every kind of entry, where each may be, and what each uninstaller does with it.
 
 - `key_fingerprint` is the fingerprint of the release key that vouched for the binary, and `sha256` is the binary's SHA-256, so you can tell whether it has changed since.
 - `installer` is `sh` or `ps1`.
@@ -122,7 +122,7 @@ The receipt is advisory. The installer never trusts it to verify anything: every
 By default the installer touches nothing outside the Oska home. Two options change that, and only when you pass them. Uninstall undoes both.
 
 - **`--add-to-path`** puts `oskac` on your `PATH`. `install.sh` appends one line to one profile file in your home directory, chosen from your login shell (`$SHELL`): `~/.zshrc` for zsh, `~/.bashrc` for bash (`~/.bash_profile` on macOS), and `~/.profile` for anything else. The line is `export PATH="/home/you/.oska/bin:$PATH" # added by the Oska installer`. It writes nothing if the `bin` directory is on your `PATH` already or the profile already holds that exact line, and it refuses a profile that is a symlink. `install.ps1` adds the `bin` directory to your user `PATH`, never the machine `PATH`. Open a new shell to use it.
-- **`--hook <project dir>`** (`install.sh` only, until issue #87) installs the [Claude Code check-after-edit hook](https://oskalang.dev/agent-setup/oska-check.sh) into the project: the script as `.claude/hooks/oska-check.sh`, and `.claude/settings.json` from the [published settings](https://oskalang.dev/agent-setup/claude-settings.json), only if the project has none. It never overwrites a different script, and it never edits existing settings: it reports `settings_merge_needed: true`, and you or your agent merge the `hooks` key. It never touches `~/.claude`. With `install.ps1` it fails with `unsupported_platform`.
+- **`--hook <project dir>`** (`install.sh` only) installs the Claude Code check-after-edit hook into the project: it creates `.claude/settings.json` from the [post-edit settings](https://oskalang.dev/agent-setup/claude-settings-post-edit.json), a `PostToolUse` entry that runs `oskac hook claude --event=post-edit` (see [`oskac hook`](cli-reference.md)), only if the project has none. It never turns on the Stop gate, which is a separate choice: merge the `Stop` entry of the [published settings](https://oskalang.dev/agent-setup/claude-settings.json) for that. It writes no script, and it never edits existing settings: if they do not run the post-edit hook already, it reports `settings_merge_needed: true`, and you or your agent merge the `PostToolUse` entry, in place of any entry that runs the old `.claude/hooks/oska-check.sh`. It never touches `~/.claude`. With `install.ps1` it fails with `unsupported_platform`: on Windows, merge the settings by hand or with the agent-setup prompt.
 
 Both belong to install alone, so they cannot be combined with `--check` or `--uninstall`.
 
@@ -206,7 +206,7 @@ It downloads nothing, so a saved copy of the installer works offline. Set `OSKA_
 - **It keeps a file that changed** since it was installed: one whose SHA-256 is no longer the one the receipt recorded.
 - **It never touches `~/.config/oska`,** which holds settings and credentials, nor anything in any other `.config/oska` directory, so it is safe even when no home directory is set.
 - **It undoes `--add-to-path` only if nothing changed.** It removes the marked line from the profile only if that exact line is still there, and the entry from your user `PATH` (Windows) only if it is still there. Otherwise it edits nothing, lists the profile (or the `bin` directory) in `kept`, and says in `path_hint` what to remove. Without `--add-to-path` it does not edit your `PATH`: if the `bin` directory is on it, the installer says so, and you remove the line that adds it from your shell profile (on Windows, the entry from your user `PATH`).
-- **It undoes `--hook` the same way.** It removes the hook script and the settings file the installer created only if they are unchanged. Settings the installer did not create, or that you changed since, stay, and are listed in `kept`: remove the `oska-check.sh` hook from them by hand. It leaves the `.claude` directories.
+- **It undoes `--hook` the same way.** It removes the settings file the installer created, and the hook script an earlier installer wrote, only if they are unchanged. Settings the installer did not create, or that you changed since, stay, and are listed in `kept`: remove the `oskac hook` entries from them by hand. It leaves the `.claude` directories.
 
 With `--json` it prints:
 

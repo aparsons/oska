@@ -2530,6 +2530,9 @@ fn setup_listing(all: Site) -> List<Listing> {
     if has_asset(all, "claude-settings.json") {
         out.push(Listing(path: "agent-setup/claude-settings.json", label: "Claude Code hook settings", note: "opt-in: the hooks entries for .claude/settings.json: oskac hook claude after an edit, and the Stop gate before the agent finishes"))
     }
+    if has_asset(all, "claude-settings-post-edit.json") {
+        out.push(Listing(path: "agent-setup/claude-settings-post-edit.json", label: "Claude Code post-edit hook settings", note: "the check-after-edit entry alone, without the Stop gate: what install.sh --hook writes"))
+    }
     if has_asset(all, "oska-check.sh") {
         out.push(Listing(path: "agent-setup/oska-check.sh", label: "Claude Code hook script", note: "kept for projects that saved it earlier: a one-line call to oskac hook claude --event=post-edit"))
     }

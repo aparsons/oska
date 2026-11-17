@@ -1437,6 +1437,10 @@ const SETUP_FILES: &[(&str, &str)] = &[
     ),
     ("site/agent-setup/CLAUDE.template.md", "@AGENTS.md\n"),
     ("site/agent-setup/claude-settings.json", "{\"hooks\": {}}\n"),
+    (
+        "site/agent-setup/claude-settings-post-edit.json",
+        "{\"hooks\": {}}\n",
+    ),
     ("site/agent-setup/oska-check.sh", "#!/bin/sh\nexit 0\n"),
 ];
 
@@ -1499,6 +1503,7 @@ fn the_prompt_page_links_the_raw_prompt_and_every_file() {
         "/agent-setup/AGENTS.template.md",
         "/agent-setup/CLAUDE.template.md",
         "/agent-setup/claude-settings.json",
+        "/agent-setup/claude-settings-post-edit.json",
         "/agent-setup/oska-check.sh",
     ] {
         assert!(page.contains(&format!("href=\"{href}\"")), "{href}");
@@ -1578,6 +1583,7 @@ fn llms_txt_lists_the_prompt_near_the_top_and_once() {
         "- [AGENTS.md template](https://oskalang.dev/agent-setup/AGENTS.template.md): ",
         "- [CLAUDE.md template](https://oskalang.dev/agent-setup/CLAUDE.template.md): ",
         "- [Claude Code hook settings](https://oskalang.dev/agent-setup/claude-settings.json): ",
+        "- [Claude Code post-edit hook settings](https://oskalang.dev/agent-setup/claude-settings-post-edit.json): ",
         "- [Claude Code hook script](https://oskalang.dev/agent-setup/oska-check.sh): ",
     ] {
         assert!(llms.contains(line), "{line}\n{llms}");

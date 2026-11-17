@@ -5,7 +5,7 @@ Install Oska, the secure-by-default programming language from https://oskalang.d
 ## Rules for this task
 
 - Say what you are about to run before you run it.
-- Pipe nothing to a shell except the official installer from oskalang.dev, as steps 1, 3c and 5 run it (and, only if I approve it in step 4, the same installer in a CI file).
+- Pipe nothing to a shell except the official installer from oskalang.dev, as steps 1 and 5 run it (and, only if I approve it in step 4, the same installer in a CI file).
 - Never ask for, read, print, or handle secrets: tokens, keys, passwords, or the contents of `.env` files. Nothing here needs one.
 - Do not change an existing file until you have shown me the diff and I have agreed. Show me a new file's content before you create it.
 - Do not change any permission or approval setting, and do not touch user-level or global settings. Write only inside this project, into the install directory `~/.oska`, and into the temporary directory of step 2, which you delete afterwards.
@@ -57,9 +57,7 @@ Download each template below with `curl -fsSL` or your fetch tool and read it. A
 
 **3d. The Stop gate (optional, Claude Code only, a separate choice).** Ask me whether I want it, and do nothing if I do not say yes. It runs `oskac hook claude --event=stop` when the agent tries to finish. It runs the release check and then the tests, never the integration tests, and the agent cannot finish while one fails; it also stops the agent from finishing with a `todo()` or `dbg` left in. It is limited by a `timeout` in the settings. If I say yes, enable it only when `on_path` is `true`, and ask me whether the project has `.osk` files that are deliberately broken, such as test fixtures. If it has, add the paths of the programs the gate should check to its command, as in `oskac hook claude --event=stop app tools/check.osk`; with none, the gate finds the project's packages and standalone `.osk` files by itself.
 
-For either, show me the diff that merges the entries I agreed to from https://oskalang.dev/agent-setup/claude-settings.json into the project's `.claude/settings.json` (the `hooks` key only, only the `PostToolUse` entry for 3c and only the `Stop` entry for 3d; keep every other key), and apply it when I agree. Never edit `~/.claude/settings.json`.
-
-Or, if I agreed to both and prefer it, on Linux or macOS let the installer set them up, so that an uninstall removes them too: run `curl -fsSL https://oskalang.dev/install.sh | sh -s -- --hook . --json` in this project. It creates `.claude/settings.json` from the published settings only if the project has none; if it reports `settings_merge_needed: true`, merge the entries as above.
+For either, show me the diff that merges the entries I agreed to from https://oskalang.dev/agent-setup/claude-settings.json into the project's `.claude/settings.json` (the `hooks` key only, only the `PostToolUse` entry for 3c and only the `Stop` entry for 3d; keep every other key), and apply it when I agree. Merge each entry I agreed to that the settings do not already run, whatever other hooks they have. A project set up earlier may have a `PostToolUse` entry that runs `.claude/hooks/oska-check.sh`, the old shell hook. For 3c, replace that entry with the published one, so that the check does not run twice, and tell me that the script is no longer used and that I may delete it. It is not the Stop gate: for 3d, add the `Stop` entry all the same. If I declined 3c, leave the old entry as it is. Never edit `~/.claude/settings.json`.
 
 **3e. The minimum toolchain.** Only if the project has an `oska.toml`. Offer to record the version you installed as the oldest `oskac` the package supports: `oska = "<version>"` in its `[package]` table. Show me the diff, and apply it when I agree. If it already has an `oska` key, leave it unless it is lower and I agree.
 

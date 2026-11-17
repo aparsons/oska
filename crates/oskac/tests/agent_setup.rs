@@ -252,8 +252,6 @@ fn the_prompt_has_the_agent_install_verify_configure_test_and_report() {
         "`action`",
         "`previous_version`",
         "`downgraded`",
-        // The hook step may let the installer write the hook.
-        "--hook .",
         // The project's minimum toolchain, with the diff first.
         "oska = \"<version>\"",
         // The report gives the update and uninstall commands.
@@ -540,13 +538,16 @@ fn the_prompt_offers_both_hooks_on_every_platform_and_installs_no_script() {
     ] {
         assert!(prompt.contains(line), "the prompt should say: {line}");
     }
-    // The hook is no longer a shell script, so it is not limited to Unix.
+    // The hook is no longer a shell script, so it is not limited to Unix,
+    // and the agent merges the settings itself on every platform: the
+    // installer's `--hook` sets up the post-edit hook alone, not the gate.
     for gone in [
         "Linux and macOS only",
         "POSIX",
-        "oska-check.sh",
-        ".claude/hooks",
+        "agent-setup/oska-check.sh",
         "skip this step",
+        "--hook",
+        "settings_merge_needed",
     ] {
         assert!(!prompt.contains(gone), "the prompt still says: {gone}");
     }
@@ -554,6 +555,28 @@ fn the_prompt_offers_both_hooks_on_every_platform_and_installs_no_script() {
     let post = prompt.find("**3c.").expect("3c");
     let stop = prompt.find("**3d.").expect("3d");
     assert!(post < stop);
+}
+
+/// A project set up with the old shell hook has a `PostToolUse` entry that
+/// runs `.claude/hooks/oska-check.sh`. The prompt still merges each entry
+/// the user agrees to: the post-edit entry in place of the old one, and the
+/// Stop entry whether or not the old one is there.
+#[test]
+fn the_prompt_merges_each_agreed_entry_into_a_project_with_the_old_shell_hook() {
+    let prompt = setup_file("prompt.md");
+    for line in [
+        "Merge each entry I agreed to that the settings do not already run, whatever other hooks they have.",
+        "a `PostToolUse` entry that runs `.claude/hooks/oska-check.sh`, the old shell hook",
+        "For 3c, replace that entry with the published one",
+        "It is not the Stop gate: for 3d, add the `Stop` entry all the same.",
+        "If I declined 3c, leave the old entry as it is.",
+    ] {
+        assert!(prompt.contains(line), "the prompt should say: {line}");
+    }
+    // The old script is mentioned only as an entry to replace.
+    for line in prompt.lines().filter(|l| l.contains("oska-check.sh")) {
+        assert!(line.starts_with("For either, show me the diff"), "{line}");
+    }
 }
 
 #[test]
@@ -715,6 +738,7 @@ fn the_site_publishes_the_prompt_and_every_file_and_llms_txt_links_them() {
         "AGENTS.template.md",
         "CLAUDE.template.md",
         "claude-settings.json",
+        "claude-settings-post-edit.json",
         "oska-check.sh",
     ] {
         assert_eq!(
@@ -851,9 +875,35 @@ fn only_hook<'j>(settings: &'j Json, event: &str) -> (&'j Json, &'j Json) {
     (&entries[0], &hooks[0])
 }
 
+/// What `install.sh --hook` writes: the post-edit entry of the published
+/// settings alone, never the Stop gate, which is a separate choice.
+#[test]
+fn the_post_edit_settings_are_the_post_edit_entry_of_the_published_settings_alone() {
+    let full = Json::parse(&setup_file("claude-settings.json"));
+    let post_edit = Json::parse(&setup_file("claude-settings-post-edit.json"));
+    let entry = full
+        .get("hooks")
+        .and_then(|hooks| hooks.get("PostToolUse"))
+        .expect("a PostToolUse entry")
+        .clone();
+    assert_eq!(
+        post_edit,
+        Json::Obj(vec![(
+            "hooks".to_string(),
+            Json::Obj(vec![("PostToolUse".to_string(), entry)])
+        )])
+    );
+}
+
 #[test]
 fn the_hook_settings_grant_no_permission_and_change_nothing_but_hooks() {
-    let settings = Json::parse(&setup_file("claude-settings.json"));
+    for name in ["claude-settings.json", "claude-settings-post-edit.json"] {
+        settings_grant_no_permission(name);
+    }
+}
+
+fn settings_grant_no_permission(name: &str) {
+    let settings = Json::parse(&setup_file(name));
     let mut all = Vec::new();
     keys(&settings, &mut all);
     let allowed: BTreeSet<&str> = [
@@ -867,9 +917,12 @@ fn the_hook_settings_grant_no_permission_and_change_nothing_but_hooks() {
     ]
     .into();
     for key in &all {
-        assert!(allowed.contains(key.as_str()), "unexpected key `{key}`");
+        assert!(
+            allowed.contains(key.as_str()),
+            "{name}: unexpected key `{key}`"
+        );
     }
-    let text = setup_file("claude-settings.json");
+    let text = setup_file(name);
     for word in [
         "permissions",
         "allow",
@@ -883,7 +936,7 @@ fn the_hook_settings_grant_no_permission_and_change_nothing_but_hooks() {
         "curl",
         "wget",
     ] {
-        assert!(!text.contains(word), "the settings mention `{word}`");
+        assert!(!text.contains(word), "{name} mentions `{word}`");
     }
 }
 
