@@ -519,7 +519,7 @@ fn a_code_page_shows_its_meaning_example_and_fix_escaped() {
     for part in [
         "<title>E0200 · Oska</title>",
         "<h1 id=\"e0200\">E0200</h1>",
-        "<strong>Machine-applicable fix:</strong> Replace the name with the closest one.",
+        "<strong>Fix:</strong> Replace the name with the closest one.",
         "<strong>Fix applicability:</strong> <code>maybe</code>.",
         "<h2 id=\"example\">Example</h2>",
         "<pre><code>fn f(x: Strng) {}\n</code></pre>",
