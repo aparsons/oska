@@ -1,0 +1,20 @@
+// Fetches the avatar image a member links from their profile. Avatars are
+// served by `images.example.com` and `cdn.example.com`.
+
+// A host avatars may be fetched from.
+pub struct ImageHost { pub name: String }
+
+// A linked avatar URL that is not on an image host.
+pub struct NotAnImageHost { pub url: Untrusted<String> }
+
+// The image host of the avatar URL `url`, such as
+// `https://cdn.example.com/u/7.png`.
+pub fn image_host(url: Untrusted<String>) -> Result<ImageHost, NotAnImageHost> {
+    todo()
+}
+
+// Fetches the avatar at `url` from its host, on port 443: sends the URL's
+// path and returns the reply.
+pub fn fetch_avatar(net: NetConnect, url: Untrusted<String>) -> Result<Untrusted<String>, IoError> {
+    todo()
+}

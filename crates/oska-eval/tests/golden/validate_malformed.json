@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "valid": false,
+  "tasks": [
+    {
+      "id": "broken",
+      "errors": [
+        "broken/task.json:4:1: expected a key, found the end of the file"
+      ]
+    }
+  ]
+}

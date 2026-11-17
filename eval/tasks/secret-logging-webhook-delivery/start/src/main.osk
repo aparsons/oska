@@ -1,0 +1,8 @@
+// Prepares the delivery of a webhook payload.
+//
+//     oskac run -- <payload>
+
+use pkg.delivery
+
+fn main() {
+}

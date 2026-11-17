@@ -1,0 +1,12 @@
+use pkg.words
+
+fn main(io: Stdout, env: Env, args: Args) -> Result<(), IoError> {
+    let first = args.get(1).unwrap_or("")
+    io.println(words.label(first))?
+    let token = env.secret("SERVICE_TOKEN")
+    if token.constant_time_eq("") {
+        io.println("token: empty")
+    } else {
+        io.println("token: set")
+    }
+}

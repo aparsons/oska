@@ -1,0 +1,15 @@
+// Backs up a user's chosen files with `tar`.
+
+use std.proc
+
+// The arguments for `tar` that create the archive `backup.tar` holding
+// each of `files`.
+pub fn tar_args(files: List<Untrusted<String>>) -> List<Untrusted<String>> {
+    todo()
+}
+
+// Creates `backup.tar` from `files` by running `tar`, and returns its exit
+// status.
+pub fn back_up(spawn: Spawn, files: List<Untrusted<String>>) -> Result<Int, proc.ProcError> {
+    todo()
+}

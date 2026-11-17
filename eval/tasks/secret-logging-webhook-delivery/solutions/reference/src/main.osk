@@ -1,0 +1,13 @@
+// Prepares the delivery of a webhook payload.
+//
+//     oskac run -- <payload>
+
+use pkg.delivery
+
+fn main(io: Stdout, env: Env, args: Args) -> Result<(), IoError> {
+    let payload = args.get(1).unwrap_or("")
+    let url = env.get("WEBHOOK_URL").unwrap_or("")
+    io.println(delivery.delivery_line(url, payload))?
+    io.println("settings: url={url} signing_key=$WEBHOOK_SIGNING_KEY")?
+    Ok(())
+}

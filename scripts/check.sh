@@ -210,11 +210,11 @@ skip_step() {
 # guides, the release-key fingerprints, docs/agents/ included), examples/,
 # site/, README.md, GLOSSARY.md, SECURITY.md, .github/workflows/pages.yml,
 # scripts/install/, and `git ls-files`. scripts/temp-leak/ wraps cargo test,
-# scripts/docs-tests/ picks the tests a docs/ change runs, and this file runs
-# the cargo steps.
+# scripts/docs-tests/ picks the tests a docs/ change runs, scripts/eval-tasks/
+# validates the eval task set, and this file runs the cargo steps.
 cargo_input() {
   case $1 in
-    .github/workflows/pages.yml | scripts/install/* | scripts/temp-leak/* | scripts/docs-tests/* | scripts/check.sh) return 0 ;;
+    .github/workflows/pages.yml | scripts/install/* | scripts/temp-leak/* | scripts/docs-tests/* | scripts/eval-tasks/* | scripts/check.sh) return 0 ;;
     CLAUDE.md | CODING_STANDARDS.md | LICENSE | .gitignore) return 1 ;;
     .githooks/* | .claude/* | .github/* | scripts/*) return 1 ;;
   esac
@@ -512,6 +512,13 @@ if step "cargo test (private temporary directory)" --fast --cargo --docs-tests; 
   else
     scripts/temp-leak/run.sh cargo test --all
   fi
+fi
+
+if step "eval task set" --cargo --fast-when 'eval/*' --fast-when 'crates/oska-eval/*' --fast-when 'scripts/eval-tasks/*'; then
+  # The harness's `validate` over eval/tasks, with the oskac just built
+  # (offline). The fast tier runs it when the task set or the harness changed;
+  # a compiler change gets it from the full check and CI.
+  scripts/eval-tasks/run.sh
 fi
 
 if step "installer tests" --fast-when 'scripts/install/*'; then

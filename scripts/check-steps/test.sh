@@ -239,7 +239,7 @@ else
   bad "a docs, workflow and script change skips the cargo steps" "exit $status, log: $log"
 fi
 skips=$(printf '%s\n' "$out" | grep -c 'no cargo input differs from origin/main' || true)
-if [ "$skips" -eq 4 ]; then
+if [ "$skips" -eq 5 ]; then
   ok "each skipped cargo step says why"
 else
   bad "each skipped cargo step says why" "got: $out"
@@ -286,7 +286,7 @@ for change in 'echo two >docs/index.md' 'echo new >docs/new.md' \
   fi
 done
 if printf '%s\n' "$out" | grep -qx '  pkg-a reads_docs' &&
-  [ "$(printf '%s\n' "$out" | grep -c 'only docs/ differs from origin/main')" -eq 4 ] &&
+  [ "$(printf '%s\n' "$out" | grep -c 'only docs/ differs from origin/main')" -eq 5 ] &&
   printf '%s\n' "$out" | grep -x -A1 '== oskac type-checks for Windows' | grep -q '^skipped: only docs/ differs'; then
   ok "each cargo step of a docs-only run says why it skipped or narrowed, and which tests run"
 else
@@ -499,6 +499,20 @@ else
   bad "--fast on a docs-only change runs just the tests that read docs/" "exit $status, headers: $headers, cargo: $cargo_test"
 fi
 no_stamp "--fast on a docs-only change"
+
+fast_case "an eval task change" 'mkdir -p eval/tasks && echo two >eval/tasks/t.toml'
+if [ "$status" -eq 0 ] && printf '%s\n' "$headers" | tr , '\n' | grep -qx 'eval task set'; then
+  ok "--fast on an eval task change validates the task set"
+else
+  bad "--fast on an eval task change validates the task set" "exit $status, headers: $headers"
+fi
+
+fast_case "an eval-tasks script change" 'mkdir -p scripts/eval-tasks && echo "# two" >>scripts/eval-tasks/run.sh'
+if [ "$status" -eq 0 ] && printf '%s\n' "$headers" | tr , '\n' | grep -qx 'eval task set'; then
+  ok "--fast on a change to the eval-tasks script validates the task set"
+else
+  bad "--fast on a change to the eval-tasks script validates the task set" "exit $status, headers: $headers"
+fi
 
 fast_case "a script change" 'echo "# two" >>scripts/kill-guard/test.sh'
 if [ "$status" -eq 0 ] && [ "$headers" = "kill guard tests,shellcheck," ] &&

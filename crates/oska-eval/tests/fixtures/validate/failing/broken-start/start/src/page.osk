@@ -1,0 +1,5 @@
+use std.html
+
+pub fn greet(name: Untrusted<String>) -> html.Html {
+    todo(
+}

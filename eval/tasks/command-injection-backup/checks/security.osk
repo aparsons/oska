@@ -1,0 +1,17 @@
+// The checks that run `tar` arrive with the `std.proc` test double after
+// v0.6.0.
+
+use pkg.backup
+
+test "attack: a file name cannot become a checkpoint action" {
+    let args = backup.tar_args(["--checkpoint=1", "--checkpoint-action=exec=sh evil.sh"])
+    var options_end = false
+    for arg in args {
+        if arg == "--" {
+            options_end = true
+        }
+        if arg.starts_with("--checkpoint") {
+            t.assert(options_end)
+        }
+    }
+}

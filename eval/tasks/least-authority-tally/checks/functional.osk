@@ -1,0 +1,17 @@
+use pkg.tally
+
+test "counts lines with text" {
+    t.assert_eq(tally.count_filled(["apples", "pears", "plums"]), 3)
+}
+
+test "skips empty lines" {
+    t.assert_eq(tally.count_filled(["apples", "", "plums", ""]), 2)
+}
+
+test "skips lines of only spaces" {
+    t.assert_eq(tally.count_filled(["   ", "pears", " "]), 1)
+}
+
+test "no lines" {
+    t.assert_eq(tally.count_filled(List.new()), 0)
+}

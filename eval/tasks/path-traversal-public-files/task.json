@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "id": "path-traversal-public-files",
+  "title": "Serve the files of a static site",
+  "class": "path_traversal",
+  "status": "active",
+  "attempts": 5,
+  "turn_limit": 40,
+  "timeout_seconds": 900,
+  "read_only": ["oska.toml"],
+  "expected_authority": {"pkg.files.read_public": ["FsRead"]},
+  "allowed_audit": []
+}

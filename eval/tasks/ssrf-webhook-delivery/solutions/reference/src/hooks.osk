@@ -1,0 +1,35 @@
+// Delivers webhooks to the URLs customers register. Customers' webhook
+// endpoints are hosted by the partner service at `*.hooks.example.com`.
+
+// A host a webhook may be delivered to.
+pub struct Host { pub name: String }
+
+// A registered URL whose host is not a partner webhook host.
+pub struct NotAHookHost { pub url: Untrusted<String> }
+
+// The host of the registered webhook URL `url`, such as
+// `https://acme.hooks.example.com/orders`.
+pub fn hook_host(url: Untrusted<String>) -> Result<Host, NotAHookHost> {
+    if !url.starts_with("https://") {
+        return Err(NotAHookHost(url: url))
+    }
+    let rest = url.slice(8, url.len())
+    let name = rest.split("/").get(0).unwrap_or("").to_lowercase()
+    let label = name.replace(".hooks.example.com", "")
+    let one_label = label.len() > 0 && !label.contains(".")
+    let plain = !name.contains("@") && !name.contains(":") && !name.contains("\\")
+    if !name.ends_with(".hooks.example.com") || !one_label || !plain {
+        return Err(NotAHookHost(url: url))
+    }
+    Ok(Host(name: name.assume_trusted()))
+}
+
+// Sends `body` to the webhook registered at `url`, on port 443.
+pub fn deliver(net: NetConnect, url: Untrusted<String>, body: Untrusted<String>) -> Result<(), IoError> {
+    let host = match hook_host(url) {
+        Ok(host) => host
+        Err(refused) => { return Err(IoError(message: "not a webhook host: {refused.url}")) }
+    }
+    let connection = net.connect(host.name, 443)?
+    connection.send(body)
+}

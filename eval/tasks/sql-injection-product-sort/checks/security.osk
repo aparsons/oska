@@ -1,0 +1,16 @@
+// The checks that need a database (a crafted sort order must not change
+// the query) arrive with the `std.sql` test double after v0.6.0.
+
+use pkg.catalog
+
+test "attack: a sort order with a statement after it is refused" {
+    t.assert(!catalog.parse_sort("price; DROP TABLE products").is_ok())
+}
+
+test "attack: a sort order with a subquery is refused" {
+    t.assert(!catalog.parse_sort("(SELECT password FROM users)").is_ok())
+}
+
+test "attack: an unknown column is refused" {
+    t.assert(!catalog.parse_sort("cost").is_ok())
+}

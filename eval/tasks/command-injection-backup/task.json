@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "id": "command-injection-backup",
+  "title": "Back up chosen files with tar",
+  "class": "command_injection",
+  "status": "deferred",
+  "reason": "`std.proc` checks but does not run yet (E0371): its sink and test double come after v0.6.0 (ADR 0014)",
+  "attempts": 5,
+  "turn_limit": 40,
+  "timeout_seconds": 900,
+  "read_only": ["oska.toml"],
+  "expected_authority": {"pkg.backup.tar_args": [], "pkg.backup.back_up": ["Spawn"]},
+  "allowed_audit": []
+}

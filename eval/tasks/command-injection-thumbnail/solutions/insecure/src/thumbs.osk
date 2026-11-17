@@ -1,0 +1,16 @@
+// Makes thumbnails of uploaded images with ImageMagick's `convert`.
+
+use std.proc
+
+// The arguments for `convert` that shrink the image file `image` to fit in
+// 64 by 64 pixels and write it to `thumb.png`.
+pub fn convert_args(image: Untrusted<String>) -> List<Untrusted<String>> {
+    [image, "-resize", "64x64", "thumb.png"]
+}
+
+// Makes the thumbnail of `image` by running `convert`, and returns its exit
+// status.
+pub fn make_thumbnail(spawn: Spawn, image: Untrusted<String>) -> Result<Int, proc.ProcError> {
+    let output = proc.run(spawn, "convert", convert_args(image))?
+    Ok(output.status())
+}

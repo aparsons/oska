@@ -1,0 +1,23 @@
+use pkg.files
+
+fn site(fs: Fs) {
+    let root = fs.restrict_to("/").write_only()
+    let _ = root.create_dir(Path.new("public"))
+    let _ = root.write(Path.new("public/index.html"), "<h1>Home</h1>")
+    let _ = root.write(Path.new("config.txt"), "password=hunter2")
+}
+
+test "attack: a parent directory step cannot leave public" {
+    site(t.fs)
+    t.assert(!files.read_public(t.fs.read_only(), "../config.txt").is_ok())
+}
+
+test "attack: a step down and back up twice cannot leave public" {
+    site(t.fs)
+    t.assert(!files.read_public(t.fs.read_only(), "x/../../config.txt").is_ok())
+}
+
+test "attack: an absolute path cannot leave public" {
+    site(t.fs)
+    t.assert(!files.read_public(t.fs.read_only(), "/config.txt").is_ok())
+}
