@@ -289,6 +289,20 @@ pub fn literal(path: impl AsRef<std::ffi::OsStr>) -> String {
         .replace('\\', "\\\\")
 }
 
+/// A symlink at `at` to `target`. On Windows, a directory symlink when
+/// `target` is a directory, and a file symlink to anything else, a
+/// missing target included.
+pub fn symlink(target: &std::path::Path, at: &std::path::Path) {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, at);
+    #[cfg(windows)]
+    let made = match target.is_dir() {
+        true => std::os::windows::fs::symlink_dir(target, at),
+        false => std::os::windows::fs::symlink_file(target, at),
+    };
+    made.expect("create a symlink");
+}
+
 /// A fresh directory under the system temp dir, holding `root/` and
 /// `report/`, removed on drop. [`TempTree::saw`] runs a program on
 /// [`oska_run::RealHost`] with capabilities on `root`, and reads what it
