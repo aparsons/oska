@@ -1,0 +1,19 @@
+$ oskac fix app.osk --format=json
+exit: 0
+--- stdout
+{
+  "applied": [
+    {"code":"E0005","message":"remove `;`","path":"app.osk","applicability":"machine"},
+    {"code":"E0005","message":"remove `;`","path":"app.osk","applicability":"machine"}
+  ],
+  "files": ["app.osk"],
+  "diagnostics": [],
+  "rounds": 2,
+  "written": true
+}
+--- stderr
+--- file app.osk
+fn main(out: Stdout) -> Result<(), IoError> {
+    let greeting = "hi"
+    out.println(greeting)
+}

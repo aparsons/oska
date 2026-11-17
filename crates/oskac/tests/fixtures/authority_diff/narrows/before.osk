@@ -1,0 +1,10 @@
+// `notes` takes the whole filesystem.
+
+fn notes(fs: Fs) -> Result<Untrusted<String>, IoError> {
+    fs.restrict_to("notes").read_only().read_to_string(Path.new("today.txt"))
+}
+
+fn main(fs: Fs, io: Stdout) -> Result<(), IoError> {
+    let text = notes(fs)?
+    io.println("read")
+}

@@ -1,0 +1,5 @@
+// `shout` returns a literal.
+
+fn shout(name: Untrusted<String>) -> String {
+    "HEY"
+}

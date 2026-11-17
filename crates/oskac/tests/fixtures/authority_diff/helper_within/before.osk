@@ -1,0 +1,6 @@
+// `main` holds the whole filesystem and reads a file itself.
+
+fn main(fs: Fs, io: Stdout) -> Result<(), IoError> {
+    let text = fs.restrict_to("notes").read_only().read_to_string(Path.new("today.txt"))?
+    io.println("read")
+}

@@ -1,0 +1,10 @@
+// `total` is pure.
+
+fn total(a: Int, b: Int) -> Int {
+    a + b
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    let sum = total(1, 2)
+    io.println("{sum}")
+}

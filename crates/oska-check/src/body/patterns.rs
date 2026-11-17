@@ -10,7 +10,7 @@
 use oska_syntax::ast::{
     Expr, ExprKind, Ident, MatchArm, Pattern, PatternArg, PatternKind, StrPart,
 };
-use oska_syntax::{Diagnostic, Edit, Span};
+use oska_syntax::{Applicability, Diagnostic, Edit, Span};
 
 use super::{Binding, Body, Callable, Labels};
 use crate::codes;
@@ -108,7 +108,9 @@ impl Body<'_, '_, '_> {
             scrutinee.span,
         );
         if let Some(edit) = self.missing_arms(span, scrutinee, arms, &missing) {
-            diagnostic = diagnostic.with_fix("add arms for the missing patterns", vec![edit]);
+            diagnostic = diagnostic
+                .with_fix("add arms for the missing patterns", vec![edit])
+                .applicable(Applicability::Placeholders);
         }
         self.out.diagnostics.push(diagnostic);
     }
@@ -353,7 +355,9 @@ impl Body<'_, '_, '_> {
         let span = arg.label.as_ref().map_or(arg.span, |l| l.span);
         self.out.diagnostics.push(
             Diagnostic::new(codes::PATTERN_LABEL, message, span)
-                .with_fix("use the field's label", vec![edit]),
+                .with_fix("use the field's label", vec![edit])
+                // A label at the wrong field may say what was meant better than its place.
+                .applicable(Applicability::Maybe),
         );
     }
 

@@ -3,7 +3,7 @@ exit: 1
 --- stdout
 {
   "diagnostics": [
-    {"code":"E0410","message":"`.scratch` in `src/.scratch.osk` is hidden: every `.osk` file under `src/` is a module, so rename it or move it out of `src/`","path":"src/.scratch.osk","span":{"start":0,"end":0}}
+    {"code":"E0410","message":"`.scratch` in `src/.scratch.osk` is hidden: every `.osk` file under `src/` is a module, so rename it or move it out of `src/`","path":"src/.scratch.osk","span":{"start":0,"end":0},"line":1,"column":1,"end_line":1,"end_column":1,"severity":"error","url":"https://oskalang.dev/codes/E0410","related":[],"suggestions":[]}
   ],
   "functions": [
     {"name":"pkg..scratch.f","authority":[],"via":[],"pure":true},

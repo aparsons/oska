@@ -1,0 +1,6 @@
+// `shout` no longer vouches for anything: a removed audit site, reported
+// and passing.
+
+fn shout(name: Untrusted<String>) -> String {
+    "HEY"
+}

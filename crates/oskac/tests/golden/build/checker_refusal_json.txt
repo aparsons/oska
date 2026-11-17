@@ -1,6 +1,6 @@
 $ oskac build bad.osk --format=json
 exit: 1
 --- stdout
-{"output":null,"diagnostics":[{"code":"E0228","message":"`Stdout` has no method `printline`; did you mean `println`?","path":"bad.osk","span":{"start":52,"end":61},"fix":{"message":"replace with `println`","edits":[{"span":{"start":52,"end":61},"replacement":"println"}]}}]}
+{"output":null,"diagnostics":[{"code":"E0228","message":"`Stdout` has no method `printline`; did you mean `println`?","path":"bad.osk","span":{"start":52,"end":61},"line":2,"column":8,"end_line":2,"end_column":17,"severity":"error","url":"https://oskalang.dev/codes/E0228","fix":{"message":"replace with `println`","edits":[{"span":{"start":52,"end":61},"replacement":"println"}],"applicability":"maybe"},"related":[],"suggestions":[]}]}
 --- stderr
 --- written

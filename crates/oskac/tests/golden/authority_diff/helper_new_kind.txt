@@ -1,0 +1,8 @@
+exit: 3
+--- stdout
+fn fetch: NetConnect (net)
+fn main: Stdout (io)
+baseline: <baseline>
+  added fn fetch: NetConnect (new to the program: NetConnect)
+--- stderr
+error: authority widened against the baseline <baseline>: a function gained authority or became impure, an audit site was added, or the program reaches a new kind; approving this means updating the baseline, a change for the user to review

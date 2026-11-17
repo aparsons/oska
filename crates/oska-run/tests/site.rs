@@ -503,10 +503,10 @@ fn codes_site() -> BTreeMap<String, String> {
 #[test]
 fn codes_json_holds_each_code_with_its_examples_and_escapes_them() {
     let expected = r#"[
-{"code":"E0200","message":"Unknown name \"x\" with a \\\\ in it, as in `Strng`. See [the tour](#tour).","machine_fix":true,"machine_fix_description":"Replace the name with the closest one.","example":"fn f(x: Strng) {}\n","fix":"fn f(x: String) {}\n","url":"https://oskalang.dev/codes/E0200.html"},
-{"code":"E0201","message":"A trait <script>alert(1)</script> where a type is expected. Then more.","machine_fix":false,"machine_fix_description":null,"example":"fn show(x: Display) {\n    let note = \"<b>\\\"quoted\\\"</b>\"\n}\n\n","fix":null,"url":"https://oskalang.dev/codes/E0201.html"},
-{"code":"E0140","message":"An or-pattern such as `A | B`.","machine_fix":false,"machine_fix_description":null,"example":null,"fix":null,"url":"https://oskalang.dev/codes/E0140.html"},
-{"code":"P0004","message":"Division by zero, see [Tests](#tests). Spans the operation.","machine_fix":false,"machine_fix_description":null,"example":null,"fix":null,"url":"https://oskalang.dev/codes/P0004.html"}
+{"code":"E0200","message":"Unknown name \"x\" with a \\\\ in it, as in `Strng`. See [the tour](#tour).","machine_fix":true,"machine_fix_description":"Replace the name with the closest one.","fix_applicability":"maybe","example":"fn f(x: Strng) {}\n","fix":"fn f(x: String) {}\n","url":"https://oskalang.dev/codes/E0200.html"},
+{"code":"E0201","message":"A trait <script>alert(1)</script> where a type is expected. Then more.","machine_fix":false,"machine_fix_description":null,"fix_applicability":null,"example":"fn show(x: Display) {\n    let note = \"<b>\\\"quoted\\\"</b>\"\n}\n\n","fix":null,"url":"https://oskalang.dev/codes/E0201.html"},
+{"code":"E0140","message":"An or-pattern such as `A | B`.","machine_fix":false,"machine_fix_description":null,"fix_applicability":null,"example":null,"fix":null,"url":"https://oskalang.dev/codes/E0140.html"},
+{"code":"P0004","message":"Division by zero, see [Tests](#tests). Spans the operation.","machine_fix":false,"machine_fix_description":null,"fix_applicability":null,"example":null,"fix":null,"url":"https://oskalang.dev/codes/P0004.html"}
 ]
 "#;
     assert_eq!(codes_site()["codes.json"], expected);
@@ -520,6 +520,7 @@ fn a_code_page_shows_its_meaning_example_and_fix_escaped() {
         "<title>E0200 · Oska</title>",
         "<h1 id=\"e0200\">E0200</h1>",
         "<strong>Machine-applicable fix:</strong> Replace the name with the closest one.",
+        "<strong>Fix applicability:</strong> <code>maybe</code>.",
         "<h2 id=\"example\">Example</h2>",
         "<pre><code>fn f(x: Strng) {}\n</code></pre>",
         "<h2 id=\"fixed\">Fixed</h2>",
@@ -1436,6 +1437,10 @@ const SETUP_FILES: &[(&str, &str)] = &[
     ),
     ("site/agent-setup/CLAUDE.template.md", "@AGENTS.md\n"),
     ("site/agent-setup/claude-settings.json", "{\"hooks\": {}}\n"),
+    (
+        "site/agent-setup/claude-settings-post-edit.json",
+        "{\"hooks\": {}}\n",
+    ),
     ("site/agent-setup/oska-check.sh", "#!/bin/sh\nexit 0\n"),
 ];
 
@@ -1498,6 +1503,7 @@ fn the_prompt_page_links_the_raw_prompt_and_every_file() {
         "/agent-setup/AGENTS.template.md",
         "/agent-setup/CLAUDE.template.md",
         "/agent-setup/claude-settings.json",
+        "/agent-setup/claude-settings-post-edit.json",
         "/agent-setup/oska-check.sh",
     ] {
         assert!(page.contains(&format!("href=\"{href}\"")), "{href}");
@@ -1577,6 +1583,7 @@ fn llms_txt_lists_the_prompt_near_the_top_and_once() {
         "- [AGENTS.md template](https://oskalang.dev/agent-setup/AGENTS.template.md): ",
         "- [CLAUDE.md template](https://oskalang.dev/agent-setup/CLAUDE.template.md): ",
         "- [Claude Code hook settings](https://oskalang.dev/agent-setup/claude-settings.json): ",
+        "- [Claude Code post-edit hook settings](https://oskalang.dev/agent-setup/claude-settings-post-edit.json): ",
         "- [Claude Code hook script](https://oskalang.dev/agent-setup/oska-check.sh): ",
     ] {
         assert!(llms.contains(line), "{line}\n{llms}");

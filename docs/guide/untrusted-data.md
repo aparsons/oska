@@ -76,7 +76,7 @@ fn vouch: pure
 main.osk:2:5: audit: assume_trusted (bytes 50..71)
 ```
 
-With `--format=json` they are in the `audit` array as `{"kind":"assume_trusted","span":{...}}` or `{"kind":"expose",...}`. A change that adds an audit site is the part of a diff most worth reading.
+With `--format=json` they are in the `audit` array as `{"function":"vouch","kind":"assume_trusted","span":{...}}` or `{"function":"main","kind":"expose",...}`, each naming the function it is in. A change that adds an audit site is the part of a diff most worth reading, and `oskac check --baseline` fails on one (see the [CLI reference](cli-reference.md#authority-baseline)).
 
 ## Sinks
 

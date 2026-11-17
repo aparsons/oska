@@ -1,0 +1,10 @@
+// Checked against a baseline in which two functions are named `show`: the
+// diff refuses to guess which is which.
+
+fn show(n: Int) -> Int {
+    n
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("hello")
+}

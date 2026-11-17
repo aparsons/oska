@@ -275,7 +275,9 @@ fn the_json_report_lists_each_test_with_its_status_and_failure() {
         test_fake(src).to_json(),
         "{\"tests\":[{\"name\":\"ok\",\"status\":\"passed\",\"failure\":null},\
          {\"name\":\"bad\",\"status\":\"failed\",\"failure\":\
-         {\"code\":\"P0013\",\"message\":\"no\",\"span\":{\"start\":50,\"end\":62}}}],\
+         {\"code\":\"P0013\",\"message\":\"no\",\"span\":{\"start\":50,\"end\":62},\
+         \"severity\":\"error\",\"url\":\"https://oskalang.dev/codes/P0013\",\
+         \"related\":[],\"suggestions\":[]}}],\
          \"passed\":1,\"failed\":1,\"skipped\":0,\"diagnostics\":[]}"
     );
 }

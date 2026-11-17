@@ -2116,6 +2116,9 @@ struct Code {
     message: Untrusted<String>,
     // What its machine-applicable fix does.
     fix: Untrusted<String>,
+    // How safe that fix is to apply: `machine`, `maybe` or
+    // `placeholders`, as a diagnostic's fix says.
+    applicability: Untrusted<String>,
     // A program that fails with the code, and the same program fixed.
     example: Untrusted<String>,
     fixed: Untrusted<String>,
@@ -2239,9 +2242,9 @@ fn is_code(word: Untrusted<String>) -> Bool {
     true
 }
 
-// A table row `| `E0300` | meaning | fix |` as a code with no examples.
-// The runtime's tables have no fix column. A `|` inside a cell is written
-// `\|`.
+// A table row `| `E0300` | meaning | fix | applicability |` as a code
+// with no examples. The runtime's tables have no fix column and no
+// applicability. A `|` inside a cell is written `\|`.
 fn code_row(line: Untrusted<String>, source: Untrusted<String>) -> Option<Code> {
     if !line.starts_with("| `") || !line.ends_with(" |") {
         return None
@@ -2253,10 +2256,14 @@ fn code_row(line: Untrusted<String>, source: Untrusted<String>) -> Option<Code> 
     let cells = "` | ".join(sub(parts, 1, parts.len())).split(" | ")
     let message = cells.at(0).replace("\\|", "|")
     var fix = ""
+    var applicability = ""
     if cells.len() > 1 && !cells.at(1).starts_with("None") {
         fix = cells.at(1).replace("\\|", "|")
+        if cells.len() > 2 {
+            applicability = cells.at(2)
+        }
     }
-    Some(Code(code: parts.at(0), message: message, fix: fix, example: "", fixed: "", source: source))
+    Some(Code(code: parts.at(0), message: message, fix: fix, applicability: applicability, example: "", fixed: "", source: source))
 }
 
 // `row` with the examples `examples` holds for it.
@@ -2272,7 +2279,7 @@ fn with_examples(row: Code, examples: List<Example>) -> Code {
             }
         }
     }
-    Code(code: row.code, message: row.message, fix: row.fix, example: example, fixed: fixed, source: row.source)
+    Code(code: row.code, message: row.message, fix: row.fix, applicability: row.applicability, example: example, fixed: fixed, source: row.source)
 }
 
 // The page for one code.
@@ -2288,6 +2295,10 @@ fn code_page(all: Site, code: Code) -> Page {
         parts.push("**Machine-applicable fix:** none.")
     } else {
         parts.push("**Machine-applicable fix:** {code.fix}")
+        if code.applicability != "" {
+            parts.push("")
+            parts.push("**Fix applicability:** `{code.applicability}`.")
+        }
     }
     if code.example != "" {
         parts.push("")
@@ -2397,10 +2408,11 @@ fn code_json(code: Code) -> Untrusted<String> {
     let message = catalog_json_string(code.message)
     let machine = if code.fix == "" { "false" } else { "true" }
     let described = json_or_null(code.fix)
+    let applicability = json_or_null(code.applicability)
     let example = json_or_null(code.example)
     let fixed = json_or_null(code.fixed)
     let page = catalog_json_string(canonical("codes/{code.code}.html"))
-    "\{\"code\":{name},\"message\":{message},\"machine_fix\":{machine},\"machine_fix_description\":{described},\"example\":{example},\"fix\":{fixed},\"url\":{page}\}"
+    "\{\"code\":{name},\"message\":{message},\"machine_fix\":{machine},\"machine_fix_description\":{described},\"fix_applicability\":{applicability},\"example\":{example},\"fix\":{fixed},\"url\":{page}\}"
 }
 
 fn json_or_null(text: Untrusted<String>) -> Untrusted<String> {
@@ -2510,23 +2522,26 @@ fn setup_listing(all: Site) -> List<Listing> {
     out.push(Listing(path: "agent-setup.md", label: "Agent setup prompt", note: "paste it into a coding agent, or tell the agent to read this file, to install Oska and set up a project"))
     out.push(Listing(path: "agent-setup.txt", label: "agent-setup.txt", note: "the same prompt, as plain text"))
     if has_asset(all, "AGENTS.template.md") {
-        out.push(Listing(path: "agent-setup/AGENTS.template.md", label: "AGENTS.md template", note: "the Oska section for a project's AGENTS.md: the agent loop and the machine-readable flags"))
+        out.push(Listing(path: "agent-setup/AGENTS.template.md", label: "AGENTS.md template", note: "the Oska section for a project's AGENTS.md: the agent loop with oskac fix and the authority baseline, and the machine-readable flags"))
     }
     if has_asset(all, "CLAUDE.template.md") {
         out.push(Listing(path: "agent-setup/CLAUDE.template.md", label: "CLAUDE.md template", note: "points Claude Code at AGENTS.md"))
     }
     if has_asset(all, "claude-settings.json") {
-        out.push(Listing(path: "agent-setup/claude-settings.json", label: "Claude Code hook settings", note: "opt-in: the hooks entry for .claude/settings.json that runs the hook script after an edit"))
+        out.push(Listing(path: "agent-setup/claude-settings.json", label: "Claude Code hook settings", note: "opt-in: the hooks entries for .claude/settings.json: oskac hook claude after an edit, and the Stop gate before the agent finishes"))
+    }
+    if has_asset(all, "claude-settings-post-edit.json") {
+        out.push(Listing(path: "agent-setup/claude-settings-post-edit.json", label: "Claude Code post-edit hook settings", note: "the check-after-edit entry alone, without the Stop gate: what install.sh --hook writes"))
     }
     if has_asset(all, "oska-check.sh") {
-        out.push(Listing(path: "agent-setup/oska-check.sh", label: "Claude Code hook script", note: "opt-in: runs oskac check on a .osk file after an edit; reads only the edit notification"))
+        out.push(Listing(path: "agent-setup/oska-check.sh", label: "Claude Code hook script", note: "kept for projects that saved it earlier: a one-line call to oskac hook claude --event=post-edit"))
     }
     out
 }
 
 // The page of the prompt: what it is, the prompt, and the files.
 fn setup_page(all: Site) -> Page {
-    let intro = markup("<h1>Agent setup prompt</h1>\n<p>One prompt that sets up Oska for AI-driven development. Paste it into your coding agent. It runs the official installer and checks that the checksum and the signature verified, tries the toolchain, writes an <code>AGENTS.md</code> that holds the agent loop, and offers a hook and a CI step. It states each command before it runs it, never handles a secret, and shows a diff before it changes a file.</p>\n")
+    let intro = markup("<h1>Agent setup prompt</h1>\n<p>One prompt that sets up Oska for AI-driven development. Paste it into your coding agent. It runs the official installer and checks that the checksum and the signature verified, tries the toolchain, writes an <code>AGENTS.md</code> that holds the agent loop, and offers the hooks, an authority baseline and a CI step. It states each command before it runs it, never handles a secret, and shows a diff before it changes a file.</p>\n")
     var files = markup("<h2 id=\"files\">Files</h2>\n<ul>\n")
     for item in setup_listing(all) {
         let link = anchor_to("/{item.path}", html.text(item.label))

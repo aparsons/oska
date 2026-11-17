@@ -1122,7 +1122,7 @@ EOF
       published)
         case $(jq -r .published <<<"$item") in
           hook_script) cp "$here/../../site/agent-setup/oska-check.sh" "$path" ;;
-          *) cp "$here/../../site/agent-setup/claude-settings.json" "$path" ;;
+          *) cp "$here/../../site/agent-setup/claude-settings-post-edit.json" "$path" ;;
         esac ;;
       link) ln -s "$(fj '.link_to | fill(false)' -r <<<"$item")" "$path" ;;
     esac
@@ -1239,7 +1239,7 @@ MARK="# added by the Oska installer"
 # The published hook files, as the site serves them under /agent-setup/.
 agent_setup() {
   mkdir -p site/agent-setup
-  cp "$here/../../site/agent-setup/oska-check.sh" "$here/../../site/agent-setup/claude-settings.json" site/agent-setup/
+  cp "$here/../../site/agent-setup/claude-settings-post-edit.json" site/agent-setup/
 }
 
 # The profile --add-to-path writes on this host for a login shell <shell>
@@ -1381,26 +1381,37 @@ test_uninstall_refuses_a_profile_line_outside_the_home_directory() {
   assert_uninstall_refuses '.files += [{"path": "'"$PWD"'/home/.zshrc", "kind": "profile_line", "line": "alias victim=1"}]'
 }
 
-test_hook_installs_the_script_and_the_settings_into_the_project() {
+test_hook_installs_only_the_post_edit_settings_into_the_project() {
   release 1.2.3
   latest 1.2.3
   agent_setup
   mkdir proj
   install --json --hook proj >out.json
   local p="$PWD/proj"
-  cmp site/agent-setup/oska-check.sh proj/.claude/hooks/oska-check.sh || fail "the hook script differs"
-  cmp site/agent-setup/claude-settings.json proj/.claude/settings.json || fail "the settings differ"
-  [ "$(jq -r .hook_script out.json)" = "$p/.claude/hooks/oska-check.sh" ] || fail "hook_script is $(jq -r .hook_script out.json)"
+  cmp site/agent-setup/claude-settings-post-edit.json proj/.claude/settings.json || fail "the settings differ"
+  # The check-after-edit hook alone: the Stop gate is a separate choice.
+  [ "$(jq -c '.hooks | keys' proj/.claude/settings.json)" = '["PostToolUse"]' ] ||
+    fail "the settings turn on $(jq -c '.hooks | keys' proj/.claude/settings.json)"
+  # No shell script: the settings call oskac by name.
+  [ ! -e proj/.claude/hooks ] || fail "wrote $(ls -A proj/.claude/hooks)"
+  [ "$(jq -r 'has("hook_script")' out.json)" = false ] || fail "the JSON names a hook script"
   [ "$(jq -r .hook_settings out.json)" = "$p/.claude/settings.json" ] || fail "hook_settings is $(jq -r .hook_settings out.json)"
   [ "$(jq -r .settings_merge_needed out.json)" = false ] || fail "settings_merge_needed is not false"
   cat >expected.json <<JSON
 [
-  {"path": "$p/.claude/hooks/oska-check.sh", "kind": "hook_script", "sha256": "$(sha256 site/agent-setup/oska-check.sh)", "project": "$p"},
-  {"path": "$p/.claude/settings.json", "kind": "hook_settings", "sha256": "$(sha256 site/agent-setup/claude-settings.json)", "project": "$p"}
+  {"path": "$p/.claude/settings.json", "kind": "hook_settings", "sha256": "$(sha256 site/agent-setup/claude-settings-post-edit.json)", "project": "$p"}
 ]
 JSON
   diff <(jq -S . expected.json) <(jq -S '[.files[] | select(.kind | startswith("hook_"))]' home/.oska/receipt.json) || fail "receipt entries differ"
   [ "$(ls -A home)" = .oska ] || fail "home holds $(ls -A home)"
+}
+
+# What it writes is the post-edit entry of the full published settings, the
+# entry the agent-setup prompt merges for the check-after-edit hook.
+test_the_post_edit_settings_are_the_post_edit_entry_of_the_published_settings() {
+  diff <(jq -S . "$here/../../site/agent-setup/claude-settings-post-edit.json") \
+    <(jq -S '{hooks: {PostToolUse: .hooks.PostToolUse}}' "$here/../../site/agent-setup/claude-settings.json") ||
+    fail "claude-settings-post-edit.json is not the PostToolUse entry of claude-settings.json"
 }
 
 test_hook_accepts_a_relative_project_directory_and_the_equals_form() {
@@ -1409,8 +1420,8 @@ test_hook_accepts_a_relative_project_directory_and_the_equals_form() {
   agent_setup
   mkdir proj
   install --json --hook=proj/ >out.json
-  [ -f proj/.claude/hooks/oska-check.sh ] || fail "no hook script"
-  [ "$(jq -r .hook_script out.json)" = "$PWD/proj/.claude/hooks/oska-check.sh" ] || fail "hook_script is $(jq -r .hook_script out.json)"
+  [ -f proj/.claude/settings.json ] || fail "no hook settings"
+  [ "$(jq -r .hook_settings out.json)" = "$PWD/proj/.claude/settings.json" ] || fail "hook_settings is $(jq -r .hook_settings out.json)"
 }
 
 test_hook_leaves_existing_settings_alone_and_says_a_merge_is_needed() {
@@ -1423,35 +1434,42 @@ test_hook_leaves_existing_settings_alone_and_says_a_merge_is_needed() {
   [ "$(cat proj/.claude/settings.json)" = '{"permissions": {}}' ] || fail "the settings changed"
   [ "$(jq -r .settings_merge_needed out.json)" = true ] || fail "settings_merge_needed is not true"
   [ "$(jq -r .hook_settings out.json)" = null ] || fail "hook_settings is $(jq -r .hook_settings out.json)"
-  [ -f proj/.claude/hooks/oska-check.sh ] || fail "no hook script"
   install --json --uninstall >out.json
-  [ ! -e proj/.claude/hooks/oska-check.sh ] || fail "the hook script is still there"
   [ "$(cat proj/.claude/settings.json)" = '{"permissions": {}}' ] || fail "uninstall changed the settings"
   [ "$(jq -r --arg p "$PWD/proj/.claude/settings.json" '.kept | index($p) != null' out.json)" = true ] || fail "kept is $(jq -c .kept out.json)"
 }
 
-test_hook_refuses_to_overwrite_a_different_script() {
+# A project set up with the old shell hook: its settings run
+# .claude/hooks/oska-check.sh. That is not the post-edit hook the settings
+# call now, so a merge is needed, and the script is left as it is.
+test_hook_in_a_project_with_the_old_shell_hook_says_a_merge_is_needed() {
   release 1.2.3
   latest 1.2.3
-  install --json >/dev/null
   agent_setup
   mkdir -p proj/.claude/hooks
   printf 'mine\n' >proj/.claude/hooks/oska-check.sh
-  assert_refused_unchanged install_failed 1 --hook proj
+  cat >proj/.claude/settings.json <<'JSON'
+{"hooks": {"PostToolUse": [{"matcher": "Edit|Write|MultiEdit", "hooks": [{"type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/oska-check.sh"}]}]}}
+JSON
+  cp proj/.claude/settings.json before.json
+  install --json --hook proj >out.json
+  [ "$(jq -r .settings_merge_needed out.json)" = true ] || fail "settings_merge_needed is not true"
+  cmp before.json proj/.claude/settings.json || fail "the settings changed"
   [ "$(cat proj/.claude/hooks/oska-check.sh)" = mine ] || fail "the script changed"
-  [ ! -e proj/.claude/settings.json ] || fail "wrote settings"
+  [ "$(jq -r '[.files[] | select(.kind == "hook_script")] | length' home/.oska/receipt.json)" = 0 ] || fail "the receipt claims the script"
+  install --json --uninstall >/dev/null
+  [ "$(cat proj/.claude/hooks/oska-check.sh)" = mine ] || fail "uninstall changed the script"
 }
 
-test_hook_with_an_identical_script_already_there_does_not_claim_it() {
+test_hook_in_a_project_that_already_runs_it_needs_no_merge() {
   release 1.2.3
   latest 1.2.3
   agent_setup
-  mkdir -p proj/.claude/hooks
-  cp site/agent-setup/oska-check.sh proj/.claude/hooks/oska-check.sh
+  mkdir -p proj/.claude
+  cp "$here/../../site/agent-setup/claude-settings.json" proj/.claude/settings.json
   install --json --hook proj >out.json
-  [ "$(jq -r '[.files[] | select(.kind == "hook_script")] | length' home/.oska/receipt.json)" = 0 ] || fail "the receipt claims a script it did not write"
-  install --json --uninstall >/dev/null
-  [ -f proj/.claude/hooks/oska-check.sh ] || fail "uninstall removed a script it did not write"
+  [ "$(jq -r .settings_merge_needed out.json)" = false ] || fail "settings_merge_needed is not false"
+  cmp "$here/../../site/agent-setup/claude-settings.json" proj/.claude/settings.json || fail "the settings changed"
 }
 
 test_hook_fails_when_the_site_does_not_publish_it() {
@@ -1479,14 +1497,13 @@ test_add_to_path_and_hook_belong_to_install_alone() {
   assert_refused_unchanged usage 2 --check --hook proj
 }
 
-test_uninstall_removes_the_hook_script_and_the_settings_it_created() {
+test_uninstall_removes_the_settings_it_created() {
   release 1.2.3
   latest 1.2.3
   agent_setup
   mkdir proj
   install --json --hook proj >/dev/null
   install --json --uninstall >out.json
-  [ ! -e proj/.claude/hooks/oska-check.sh ] || fail "the hook script is still there"
   [ ! -e proj/.claude/settings.json ] || fail "the settings are still there"
   [ "$(jq -c .kept out.json)" = '[]' ] || fail "kept is $(jq -c .kept out.json)"
   [ "$(jq -r --arg p "$PWD/proj/.claude/settings.json" '.removed | index($p) != null' out.json)" = true ] || fail "removed is $(jq -c .removed out.json)"
@@ -1501,7 +1518,6 @@ test_uninstall_keeps_settings_that_changed_since_the_install() {
   printf '{"permissions": {}}\n' >proj/.claude/settings.json
   install --json --uninstall >out.json
   [ "$(cat proj/.claude/settings.json)" = '{"permissions": {}}' ] || fail "the settings changed"
-  [ ! -e proj/.claude/hooks/oska-check.sh ] || fail "the unchanged script is still there"
   [ "$(jq -r --arg p "$PWD/proj/.claude/settings.json" '.kept | index($p) != null' out.json)" = true ] || fail "kept is $(jq -c .kept out.json)"
 }
 
@@ -1515,7 +1531,6 @@ test_a_re_run_keeps_the_hook_record() {
   [ "$(jq -r .settings_merge_needed out.json)" = false ] || fail "settings_merge_needed is not false for settings it wrote"
   install --json >/dev/null
   install --json --uninstall >/dev/null
-  [ ! -e proj/.claude/hooks/oska-check.sh ] || fail "the hook script is still there"
   [ ! -e proj/.claude/settings.json ] || fail "the settings are still there"
 }
 

@@ -497,7 +497,7 @@ fn the_json_report_names_the_file_a_fix_edits_when_it_is_another() {
     .to_json();
     assert!(
         json.contains(
-            r#""fix":{"message":"mark `helper` `pub(pkg)`","path":"src/util.osk","edits":[{"span":{"start":0,"end":0},"replacement":"pub(pkg) "}]}"#
+            r#""fix":{"message":"mark `helper` `pub(pkg)`","path":"src/util.osk","edits":[{"span":{"start":0,"end":0},"replacement":"pub(pkg) "}],"applicability":"machine"}"#
         ),
         "{json}"
     );

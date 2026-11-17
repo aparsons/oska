@@ -1,0 +1,12 @@
+exit: 0
+--- stdout
+fn main: Stdout (io)
+test "reads a note":
+  crates/oskac/tests/fixtures/authority_diff/test_block/after.osk:10:17: Fs -> FsRead: read_only (bytes 298..314)
+  crates/oskac/tests/fixtures/authority_diff/test_block/after.osk:10:17: FsRead -> DirRead: restrict_to "notes" (bytes 298..335)
+crates/oskac/tests/fixtures/authority_diff/test_block/after.osk:12:19: audit: assume_trusted (bytes 394..415)
+baseline: <baseline>
+  new audit site test "reads a note": assume_trusted +1 (in a test: not counted)
+  new attenuation test "reads a note": Fs -> FsRead: read_only +1
+  new attenuation test "reads a note": FsRead -> DirRead: restrict_to "notes" +1
+--- stderr

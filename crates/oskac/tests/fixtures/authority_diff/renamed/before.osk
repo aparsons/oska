@@ -1,0 +1,10 @@
+// `load` reads the notes directory.
+
+fn load(dir: DirRead) -> Result<Untrusted<String>, IoError> {
+    dir.read_to_string(Path.new("today.txt"))
+}
+
+fn main(fs: Fs, io: Stdout) -> Result<(), IoError> {
+    let text = load(fs.restrict_to("notes").read_only())?
+    io.println("read")
+}

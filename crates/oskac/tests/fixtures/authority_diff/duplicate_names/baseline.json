@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "oskac": "0.3.0",
+  "functions": [
+    {"name":"main","authority":["Stdout"],"pure":false},
+    {"name":"show","authority":[],"pure":true},
+    {"name":"show","authority":["Net"],"pure":false}
+  ],
+  "audit": [],
+  "attenuations": []
+}

@@ -1,0 +1,11 @@
+// A new helper takes `NetConnect`, a kind no function in the baseline
+// had: the program as a whole reaches more, so the gate fails although
+// no existing function widened.
+
+fn fetch(net: NetConnect) -> Result<Connection, IoError> {
+    net.connect("example.com", 443)
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("hello")
+}

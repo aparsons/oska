@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "oskac": "0.0.1",
+  "functions": [
+    {"name":"main","authority":["Stdout"],"pure":false},
+    {"name":"run","authority":[],"pure":true}
+  ],
+  "audit": [],
+  "attenuations": []
+}

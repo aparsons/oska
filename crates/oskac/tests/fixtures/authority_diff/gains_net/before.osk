@@ -1,0 +1,5 @@
+// `main` writes to stdout.
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("hello")
+}

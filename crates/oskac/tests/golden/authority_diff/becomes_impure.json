@@ -1,0 +1,31 @@
+exit: 3
+--- stdout
+{
+  "diagnostics": [],
+  "functions": [
+    {"name":"total","authority":["Stdout"],"via":[{"param":"io","capabilities":["Stdout"]}],"pure":false},
+    {"name":"main","authority":["Stdout"],"via":[{"param":"io","capabilities":["Stdout"]}],"pure":false}
+  ],
+  "audit": [],
+  "attenuations": [],
+  "authority_diff": {
+    "baseline": "<baseline>",
+    "baseline_oskac": "<version>",
+    "widened": [
+      {"function":"total","gained":["Stdout"]}
+    ],
+    "narrowed": [],
+    "became_impure": [
+      {"function":"total"}
+    ],
+    "added": [],
+    "removed": [],
+    "new_audit_sites": [],
+    "removed_audit_sites": [],
+    "new_attenuations": [],
+    "removed_attenuations": [],
+    "fails": true
+  }
+}
+--- stderr
+error: authority widened against the baseline <baseline>: a function gained authority or became impure, an audit site was added, or the program reaches a new kind; approving this means updating the baseline, a change for the user to review

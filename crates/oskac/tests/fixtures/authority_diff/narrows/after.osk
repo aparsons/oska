@@ -1,0 +1,11 @@
+// `notes` takes only the directory it reads, as the guide advises:
+// `Fs` narrowed to `DirRead`, which passes the gate.
+
+fn notes(dir: DirRead) -> Result<Untrusted<String>, IoError> {
+    dir.read_to_string(Path.new("today.txt"))
+}
+
+fn main(fs: Fs, io: Stdout) -> Result<(), IoError> {
+    let text = notes(fs.restrict_to("notes").read_only())?
+    io.println("read")
+}

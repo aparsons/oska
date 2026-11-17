@@ -1,5 +1,5 @@
-//! [`Dir`] on Unix: `openat`, `mkdirat` and `fdopendir`, one component at
-//! a time, never following a symlink.
+//! [`Dir`] on Unix: `openat`, `mkdirat`, `renameat`, `unlinkat` and
+//! `fdopendir`, one component at a time, never following a symlink.
 
 use std::ffi::{CStr, CString, OsStr, OsString};
 use std::fs::File;
@@ -30,6 +30,20 @@ mod c {
 
         /// `int mkdirat(int dirfd, const char *path, mode_t mode)`.
         pub fn mkdirat(dirfd: c_int, path: *const c_char, mode: Mode) -> c_int;
+
+        /// `int renameat(int olddirfd, const char *oldpath, int newdirfd,
+        /// const char *newpath)`. Neither name is followed if it is a
+        /// symlink: a symlink is renamed, or replaced, itself.
+        pub fn renameat(
+            olddirfd: c_int,
+            oldpath: *const c_char,
+            newdirfd: c_int,
+            newpath: *const c_char,
+        ) -> c_int;
+
+        /// `int unlinkat(int dirfd, const char *path, int flags)`, which
+        /// removes a file, or a symlink itself, with `flags` 0.
+        pub fn unlinkat(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int;
 
         /// `DIR *fdopendir(int fd)`: on success the stream owns `fd`.
         /// Intel macOS keeps a 32-bit-inode `dirent` under the plain name,
@@ -258,6 +272,50 @@ impl Dir {
             }
             Err(error) => Err(refusal(error, &joined(names), "directory")),
         }
+    }
+
+    /// Rename the entry `from` of this directory to `to`, in the same
+    /// directory, replacing what `to` names in one step. Both are single
+    /// names, as for [`Dir::open_dir`]. Neither is followed: a symlink at
+    /// `to` is replaced itself, never written through.
+    pub fn rename(&self, from: &OsStr, to: &OsStr) -> io::Result<()> {
+        let from_name = plain_name(from)?;
+        let to_name = plain_name(to)?;
+        let fd = self.fd.as_raw_fd();
+        retried(|| {
+            // SAFETY: both names are NUL-terminated strings that outlive
+            // the call, and `fd` is the descriptor of this live `Dir`.
+            unsafe { c::renameat(fd, from_name.as_ptr(), fd, to_name.as_ptr()) }
+        })
+        .map(drop)
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!(
+                    "`{}` to `{}`: {error}",
+                    from.to_string_lossy(),
+                    to.to_string_lossy()
+                ),
+            )
+        })
+    }
+
+    /// Remove the file `name` of this directory, a single name as for
+    /// [`Dir::open_dir`]. A symlink is removed itself, never followed.
+    pub fn remove_file(&self, name: &OsStr) -> io::Result<()> {
+        let c_name = plain_name(name)?;
+        retried(|| {
+            // SAFETY: `c_name` is a NUL-terminated string that outlives
+            // the call, and `self.fd` the descriptor of this live `Dir`.
+            unsafe { c::unlinkat(self.fd.as_raw_fd(), c_name.as_ptr(), 0) }
+        })
+        .map(drop)
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("`{}`: {error}", name.to_string_lossy()),
+            )
+        })
     }
 
     /// The names of the entries of this directory, in the order the

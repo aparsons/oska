@@ -425,7 +425,8 @@ mod install_sh_kinds {
 
     /// The hook script and settings `--hook` installs: the published files.
     const HOOK_SCRIPT: &str = include_str!("../../../site/agent-setup/oska-check.sh");
-    const HOOK_SETTINGS: &str = include_str!("../../../site/agent-setup/claude-settings.json");
+    const HOOK_SETTINGS: &str =
+        include_str!("../../../site/agent-setup/claude-settings-post-edit.json");
     /// The marker `install.sh --add-to-path` ends its profile line with.
     const PROFILE_MARK: &str = "# added by the Oska installer";
 
@@ -555,7 +556,7 @@ mod install_sh_kinds {
         let human = text(&run(&exe, &home, &["self", "uninstall"]).stdout);
         assert!(human.contains("changed since it was installed"), "{human}");
         assert!(
-            human.contains("remove its oska-check hook by hand"),
+            human.contains("remove its oskac hook entries by hand"),
             "{human}"
         );
     }

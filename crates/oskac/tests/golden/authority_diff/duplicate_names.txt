@@ -1,0 +1,6 @@
+exit: 1
+--- stdout
+fn show: pure
+fn main: Stdout (io)
+--- stderr
+error: in the baseline, more than one function is named `show`, so the authority diff cannot tell them apart

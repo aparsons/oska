@@ -60,10 +60,29 @@ fn the_report_lists_audit_sites_with_their_kind_and_span() {
         r#"{
             "diagnostics": [],
             "functions": [{"name":"f","authority":[],"via":[],"pure":true}],
-            "audit": [{"kind":"assume_trusted","span":{"start":43,"end":61}}],
+            "audit": [{"function":"f","kind":"assume_trusted","span":{"start":43,"end":61}}],
             "attenuations": []
         }"#,
     );
+}
+
+#[test]
+fn each_audit_site_names_the_function_or_test_it_is_in() {
+    let report = common::check(&format!(
+        "{EMAIL}\n\
+         fn pick(a: Untrusted<String>) -> String {{\n\
+         \x20   let check = |s: Untrusted<String>| s.assume_trusted()\n\
+         \x20   check(a)\n\
+         }}\n\
+         test \"vouches\" {{\n\
+         \x20   let name: Untrusted<String> = \"bob\"\n\
+         \x20   let vouched = name.assume_trusted()\n\
+         }}"
+    ));
+    let functions: Vec<&str> = report.audit.iter().map(|s| s.function.as_str()).collect();
+    // A closure's audit site belongs to the function around it, as its
+    // attenuations do.
+    assert_eq!(functions, ["Email.parse", "pick", "test \"vouches\""]);
 }
 
 #[test]

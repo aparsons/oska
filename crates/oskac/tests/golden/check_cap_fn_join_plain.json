@@ -1,6 +1,6 @@
 {
   "diagnostics": [
-    {"code":"E0270","message":"expected `List<fn() -> Int>`, found `List<cap fn() -> Int>`: a `cap fn` can carry authority, so it cannot be used as a plain `fn`","path":"crates/oskac/tests/fixtures/cap_fn_join_plain.osk","span":{"start":435,"end":437}}
+    {"code":"E0270","message":"expected `List<fn() -> Int>`, found `List<cap fn() -> Int>`: a `cap fn` can carry authority, so it cannot be used as a plain `fn`","path":"crates/oskac/tests/fixtures/cap_fn_join_plain.osk","span":{"start":435,"end":437},"line":21,"column":26,"end_line":21,"end_column":28,"severity":"error","url":"https://oskalang.dev/codes/E0270","related":[],"suggestions":[]}
   ],
   "functions": [
     {"name":"answer","authority":[],"via":[],"pure":true},

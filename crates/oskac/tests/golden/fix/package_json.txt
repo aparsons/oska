@@ -1,0 +1,28 @@
+$ oskac fix demo --format=json
+exit: 0
+--- stdout
+{
+  "applied": [
+    {"code":"E0005","message":"remove `;`","path":"src/main.osk","applicability":"machine"},
+    {"code":"E0206","message":"mark `shout` `pub(pkg)`","path":"src/util.osk","applicability":"machine"}
+  ],
+  "files": ["src/main.osk","src/util.osk"],
+  "diagnostics": [],
+  "rounds": 2,
+  "written": true
+}
+--- stderr
+--- file demo/oska.toml
+[package]
+name = "demo"
+version = "0.1.0"
+--- file demo/src/main.osk
+use pkg.util.{shout}
+
+fn main(out: Stdout) -> Result<(), IoError> {
+    out.println(shout("hi"))
+}
+--- file demo/src/util.osk
+pub(pkg) fn shout(s: String) -> String {
+    "{s}!"
+}

@@ -15,8 +15,10 @@
 #   --uninstall        remove what the install receipt lists, and nothing else
 #   --add-to-path      also add the bin directory to your user PATH (never
 #                      the machine PATH)
-#   --hook <dir>       not available on Windows yet (issue #87): it fails
-#                      with unsupported_platform
+#   --hook <dir>       not available in install.ps1: it fails with
+#                      unsupported_platform. Merge the PostToolUse entry of
+#                      agent-setup/claude-settings.json into the project's
+#                      .claude/settings.json instead
 #   --json             print one JSON object on stdout, and nothing else
 #   --help             print this help
 #
@@ -790,7 +792,9 @@
                 Write-Host '                     install nothing'
                 Write-Host '  --uninstall        remove what the install receipt lists, and nothing else'
                 Write-Host '  --add-to-path      also add the bin directory to your user PATH'
-                Write-Host '  --hook <dir>       not available on Windows yet (issue #87)'
+                Write-Host '  --hook <dir>       not available in install.ps1: merge the PostToolUse entry'
+                Write-Host '                     of agent-setup/claude-settings.json into the project''s'
+                Write-Host '                     .claude/settings.json instead'
                 Write-Host '  --json             print one JSON object on stdout, and nothing else'
                 Write-Host '  --help             print this help'
                 Write-Host ''
@@ -815,7 +819,7 @@
         }
         $check = $mode -eq '--check'
         if ($hookDir) {
-            Stop-Install 'unsupported_platform' 'the agent hook is a POSIX shell script, so --hook works on Linux and macOS only; Windows support is tracked in https://github.com/aparsons/oska/issues/87'
+            Stop-Install 'unsupported_platform' "--hook is not available in install.ps1; the hook itself works on Windows: merge the PostToolUse entry of $DefaultSiteUrl/agent-setup/claude-settings.json into the project's .claude/settings.json, as the agent-setup prompt does"
         }
         if ($allowDowngrade -and -not $requested) {
             Stop-Install 'usage' '--allow-downgrade needs --version naming the release to go back to'

@@ -1167,7 +1167,7 @@ function Invoke-ReceiptFixture([string]$Dir) {
         } elseif ($published -eq 'hook_script') {
             Copy-Item -LiteralPath "$here/../../site/agent-setup/oska-check.sh" -Destination $path
         } elseif ($published -eq 'hook_settings') {
-            Copy-Item -LiteralPath "$here/../../site/agent-setup/claude-settings.json" -Destination $path
+            Copy-Item -LiteralPath "$here/../../site/agent-setup/claude-settings-post-edit.json" -Destination $path
         } else {
             $target = Format-Fixture $target $places -Path
             if (Test-Path -LiteralPath $target -PathType Container) {
@@ -1402,12 +1402,12 @@ function Test-UninstallRefusesAUserPathEntryThatIsNotTheBinDirectory {
     }
 }
 
-function Test-HookIsNotAvailableOnWindowsYet {
+function Test-HookIsNotAvailableInTheWindowsInstaller {
     New-Release '1.2.3'
     Set-Latest '1.2.3'
     New-Item -ItemType Directory -Path proj | Out-Null
     $result = Test-RefusedUnchanged 'unsupported_platform' 1 @('--hook', 'proj')
-    Assert ($result.message -like '*issues/87*') "message is $($result.message)"
+    Assert ($result.message -like '*agent-setup/claude-settings.json*') "message is $($result.message)"
 }
 
 function Test-AddToPathAndHookBelongToInstallAlone {

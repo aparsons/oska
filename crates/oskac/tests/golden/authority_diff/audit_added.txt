@@ -1,0 +1,8 @@
+exit: 3
+--- stdout
+fn shout: pure
+crates/oskac/tests/fixtures/authority_diff/audit_added/after.osk:5:5: audit: assume_trusted (bytes 169..190)
+baseline: <baseline>
+  new audit site fn shout: assume_trusted +1
+--- stderr
+error: authority widened against the baseline <baseline>: a function gained authority or became impure, an audit site was added, or the program reaches a new kind; approving this means updating the baseline, a change for the user to review

@@ -3,7 +3,7 @@
 //! (ADR 0005).
 
 use oska_syntax::ast::{
-    Fields, FnDecl, GenericParam, Ident, Item, ItemKind, Module, Type, TypeKind,
+    Fields, FnDecl, GenericParam, Ident, Item, ItemKind, Module, TraitDecl, Type, TypeKind,
 };
 use oska_syntax::{Diagnostic, Edit, Span};
 
@@ -11,6 +11,7 @@ use crate::authority::capability_bearing;
 use crate::codes;
 use crate::collect::{field_types, DeclKind, Decls};
 use crate::items::Lower;
+use crate::traits;
 use crate::ty::{self, SCOPE};
 
 /// Report every declaration-level error in `module`.
@@ -26,8 +27,11 @@ pub fn module(src: &str, module: &Module, decls: &Decls, diagnostics: &mut Vec<D
             }
         }
         if let ItemKind::Impl(imp) = &item.kind {
-            if imp.trait_ref.is_some() {
-                impl_contracts(&imp.methods, diagnostics);
+            if let Some(trait_ref) = &imp.trait_ref {
+                let declaration = Lower::new(decls)
+                    .bound(trait_ref)
+                    .and_then(|(name, _)| traits::declared_trait(module, &name));
+                impl_contracts(&imp.methods, declaration, diagnostics);
             }
         }
     }
@@ -48,14 +52,20 @@ fn clause_spans(f: &FnDecl) -> Vec<Span> {
 
 /// A method of `impl Trait for Type` is held to the contract its trait
 /// method declares, and has none of its own: the trait is the one place a
-/// method's contract lives (`E0218`).
-fn impl_contracts(methods: &[Item], diagnostics: &mut Vec<Diagnostic>) {
+/// method's contract lives (`E0218`). `declaration` is the trait's, when
+/// the module declares it, which the diagnostic points at.
+fn impl_contracts(
+    methods: &[Item],
+    declaration: Option<&TraitDecl>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     for method in methods {
         let ItemKind::Fn(f) = &method.kind else {
             continue;
         };
+        let declared = declaration.and_then(|t| traits::declared_method(t, &f.name.name));
         for span in clause_spans(f) {
-            diagnostics.push(Diagnostic::new(
+            let mut diagnostic = Diagnostic::new(
                 codes::IMPL_CONTRACT,
                 format!(
                     "`{}` implements a trait method, so its contract belongs on the trait's \
@@ -63,7 +73,11 @@ fn impl_contracts(methods: &[Item], diagnostics: &mut Vec<Diagnostic>) {
                     f.name.name
                 ),
                 span,
-            ));
+            );
+            if let Some(at) = declared {
+                diagnostic = diagnostic.with_related("declared here", at);
+            }
+            diagnostics.push(diagnostic);
         }
     }
 }

@@ -6,7 +6,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/oska-check.sh\""
+            "command": "oskac hook claude --event=post-edit"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "oskac hook claude --event=stop",
+            "timeout": 300
           }
         ]
       }

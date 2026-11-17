@@ -1,0 +1,13 @@
+exit: 0
+--- stdout
+fn notes: DirRead (dir)
+fn main: Fs (fs), Stdout (io)
+  crates/oskac/tests/fixtures/authority_diff/narrows/after.osk:9:22: Fs -> Dir: restrict_to "notes" (bytes 309..332)
+  crates/oskac/tests/fixtures/authority_diff/narrows/after.osk:9:22: Dir -> DirRead: read_only (bytes 309..344)
+baseline: <baseline>
+  narrowed fn notes: +DirRead, -Fs
+  new attenuation fn main: Dir -> DirRead: read_only +1
+  new attenuation fn main: Fs -> Dir: restrict_to "notes" +1
+  removed attenuation fn notes: Dir -> DirRead: read_only -1
+  removed attenuation fn notes: Fs -> Dir: restrict_to "notes" -1
+--- stderr

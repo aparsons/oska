@@ -1,0 +1,11 @@
+$ oskac fix app.osk
+exit: 0
+--- stdout
+app.osk:2:24: fixed E0005: remove `;`
+app.osk:3:26: fixed E0005: remove `;`
+--- stderr
+--- file app.osk
+fn main(out: Stdout) -> Result<(), IoError> {
+    let greeting = "hi"
+    out.println(greeting)
+}

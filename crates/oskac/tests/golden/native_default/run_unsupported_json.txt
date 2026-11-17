@@ -3,6 +3,6 @@ exit: 0
 --- stdout
 ran
 --- stderr
-{"severity":"note","code":"E0390","message":"running on the interpreter: `oskac build` cannot compile `dbg` of a `DirRead` yet","path":"unsupported.osk","span":{"start":69,"end":93}}
+{"code":"E0390","message":"running on the interpreter: `oskac build` cannot compile `dbg` of a `DirRead` yet","path":"unsupported.osk","span":{"start":69,"end":93},"line":2,"column":13,"end_line":2,"end_column":37,"severity":"note","url":"https://oskalang.dev/codes/E0390","related":[],"suggestions":[]}
 [dbg] <Dir(FsCap { root: Dir(RootHandle { .. }), access: Read })>
 --- written

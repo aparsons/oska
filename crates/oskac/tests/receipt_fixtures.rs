@@ -222,7 +222,7 @@ fn run_case(name: &str, dir: &Path) -> Result<(), String> {
         } else if let Some(which) = item.get("published") {
             let file = match string(which) {
                 "hook_script" => "site/agent-setup/oska-check.sh",
-                "hook_settings" => "site/agent-setup/claude-settings.json",
+                "hook_settings" => "site/agent-setup/claude-settings-post-edit.json",
                 other => panic!("no published file {other}"),
             };
             write(&path, &repo_file(file));

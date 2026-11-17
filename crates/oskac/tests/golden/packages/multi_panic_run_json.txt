@@ -2,4 +2,4 @@ $ oskac run crates/oskac/tests/fixtures/packages/multi_panic --format=json
 exit: 101
 --- stdout
 --- stderr
-{"code":"P0004","message":"division by zero: `100 / 0`","path":"src/util/text.osk","span":{"start":77,"end":87}}
+{"code":"P0004","message":"division by zero: `100 / 0`","path":"src/util/text.osk","span":{"start":77,"end":87},"line":3,"column":17,"end_line":3,"end_column":27,"severity":"error","url":"https://oskalang.dev/codes/P0004","related":[],"suggestions":[]}

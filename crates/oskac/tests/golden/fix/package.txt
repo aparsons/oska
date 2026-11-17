@@ -1,0 +1,20 @@
+$ oskac fix demo
+exit: 0
+--- stdout
+demo/src/main.osk:4:29: fixed E0005: remove `;`
+demo/src/main.osk:1:15: fixed E0206: mark `shout` `pub(pkg)`
+--- stderr
+--- file demo/oska.toml
+[package]
+name = "demo"
+version = "0.1.0"
+--- file demo/src/main.osk
+use pkg.util.{shout}
+
+fn main(out: Stdout) -> Result<(), IoError> {
+    out.println(shout("hi"))
+}
+--- file demo/src/util.osk
+pub(pkg) fn shout(s: String) -> String {
+    "{s}!"
+}

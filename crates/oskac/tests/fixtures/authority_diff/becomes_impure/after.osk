@@ -1,0 +1,11 @@
+// `total` takes `Stdout`: it is no longer pure, which fails the gate even
+// though `main` already had `Stdout`.
+
+fn total(a: Int, b: Int, io: Stdout) -> Int {
+    a + b
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    let sum = total(1, 2, io)
+    io.println("{sum}")
+}

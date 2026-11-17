@@ -1,5 +1,5 @@
 $ oskac test crates/oskac/tests/fixtures/packages/multi_failing_test --format=json
 exit: 1
 --- stdout
-{"tests":[{"name":"main adds up","module":"main","status":"passed","failure":null},{"name":"double","module":"math","status":"passed","failure":null},{"name":"shout","module":"util.text","status":"failed","failure":{"code":"P0011","message":"assertion failed: `actual == expected`: actual \"hi!\", expected \"hi?\"","path":"src/util/text.osk","span":{"start":80,"end":111}}}],"passed":2,"failed":1,"skipped":0,"diagnostics":[]}
+{"tests":[{"name":"main adds up","module":"main","status":"passed","failure":null},{"name":"double","module":"math","status":"passed","failure":null},{"name":"shout","module":"util.text","status":"failed","failure":{"code":"P0011","message":"assertion failed: `actual == expected`: actual \"hi!\", expected \"hi?\"","path":"src/util/text.osk","span":{"start":80,"end":111},"line":6,"column":5,"end_line":6,"end_column":36,"severity":"error","url":"https://oskalang.dev/codes/P0011","related":[],"suggestions":[]}}],"passed":2,"failed":1,"skipped":0,"diagnostics":[]}
 --- stderr

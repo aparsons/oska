@@ -43,6 +43,7 @@ use oska_syntax::ast::Module;
 use oska_syntax::{json_escape, Diagnostic, Location, Span};
 
 mod authority;
+pub mod authority_diff;
 mod body;
 pub mod builtins;
 mod coherence;
@@ -197,6 +198,9 @@ pub struct CheckReport {
 /// exposes a secret. `body/audit.rs` decides which calls these are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditSite {
+    /// The function the call is in, named as in `functions`, or the test
+    /// it is in, labelled as an [`Attenuation`]'s is ([`FnOrTest::label`]).
+    pub function: String,
     /// What the call does.
     pub kind: AuditKind,
     /// The whole call expression.
@@ -244,7 +248,8 @@ impl AuditSite {
     /// when the site names its file.
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"kind\":\"{}\",{}\"span\":{{\"start\":{},\"end\":{}}}}}",
+            "{{\"function\":\"{}\",\"kind\":\"{}\",{}\"span\":{{\"start\":{},\"end\":{}}}}}",
+            json_escape(&self.function),
             self.kind.as_str(),
             path_json(&self.location),
             self.span.start,
@@ -459,6 +464,15 @@ impl CheckReport {
     /// audit site, or attenuation per line. Every array is present, even
     /// when empty.
     pub fn to_json(&self) -> String {
+        self.to_json_with(None)
+    }
+
+    /// [`CheckReport::to_json`], with `extra`, a key and its JSON value,
+    /// as the last key: `oskac check --baseline` adds `authority_diff`.
+    pub fn to_json_with(&self, extra: Option<(&str, &str)>) -> String {
+        let extra = extra.map_or_else(String::new, |(key, value)| {
+            format!(",\n  \"{}\": {value}", json_escape(key))
+        });
         let diagnostics: Vec<String> = self.diagnostics.iter().map(Diagnostic::to_json).collect();
         let functions: Vec<String> = self
             .functions
@@ -469,7 +483,7 @@ impl CheckReport {
         let attenuations: Vec<String> =
             self.attenuations.iter().map(Attenuation::to_json).collect();
         format!(
-            "{{\n  \"diagnostics\": {},\n  \"functions\": {},\n  \"audit\": {},\n  \"attenuations\": {}\n}}\n",
+            "{{\n  \"diagnostics\": {},\n  \"functions\": {},\n  \"audit\": {},\n  \"attenuations\": {}{extra}\n}}\n",
             json_lines(&diagnostics),
             json_lines(&functions),
             json_lines(&audit),

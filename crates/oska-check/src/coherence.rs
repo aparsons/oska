@@ -11,10 +11,10 @@
 //!   covers inherent methods too, so user code cannot add a method to
 //!   `FsRead` or `Option`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use oska_syntax::ast::{ImplDecl, Item, ItemKind, Module};
-use oska_syntax::Diagnostic;
+use oska_syntax::{Diagnostic, Span};
 
 use crate::codes;
 use crate::collect::Decls;
@@ -31,8 +31,10 @@ pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>)
         })
         .collect();
     let prelude_functions = functions.clone();
+    // Where the module declares each function first.
+    let mut first_functions: HashMap<&str, Span> = HashMap::new();
     let mut consts: HashSet<&str> = HashSet::new();
-    let mut methods: HashSet<(String, &str)> = HashSet::new();
+    let mut methods: HashMap<(String, &str), Span> = HashMap::new();
     let mut impls: Vec<TraitImpl> = decls
         .prelude_items()
         .filter_map(|item| trait_impl(item, decls, true))
@@ -47,17 +49,24 @@ pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>)
                     } else {
                         "earlier in this module"
                     };
-                    diagnostics.push(Diagnostic::new(
+                    let mut diagnostic = Diagnostic::new(
                         codes::DUPLICATE_NAME,
                         format!("the function `{name}` is already declared {place}"),
                         f.name.span,
-                    ));
-                } else if consts.contains(name) {
-                    diagnostics.push(Diagnostic::new(
-                        codes::DUPLICATE_NAME,
-                        format!("the function `{name}` has the name of a constant declared earlier in this module"),
-                        f.name.span,
-                    ));
+                    );
+                    if let Some(&at) = first_functions.get(name) {
+                        diagnostic = diagnostic.with_related("first defined here", at);
+                    }
+                    diagnostics.push(diagnostic);
+                } else {
+                    first_functions.insert(name, f.name.span);
+                    if consts.contains(name) {
+                        diagnostics.push(Diagnostic::new(
+                            codes::DUPLICATE_NAME,
+                            format!("the function `{name}` has the name of a constant declared earlier in this module"),
+                            f.name.span,
+                        ));
+                    }
                 }
             }
             ItemKind::Const(c) => {
@@ -118,7 +127,7 @@ pub fn module(module: &Module, decls: &Decls, diagnostics: &mut Vec<Diagnostic>)
 fn inherent<'m>(
     imp: &'m ImplDecl,
     decls: &Decls,
-    methods: &mut HashSet<(String, &'m str)>,
+    methods: &mut HashMap<(String, &'m str), Span>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let target = Lower::new(decls)
@@ -142,15 +151,22 @@ fn inherent<'m>(
         let ItemKind::Fn(f) = &method.kind else {
             continue;
         };
-        if !methods.insert((type_name.to_string(), f.name.name.as_str())) {
-            diagnostics.push(Diagnostic::new(
-                codes::DUPLICATE_NAME,
-                format!(
-                    "`{type_name}` already has a method or associated function `{}`",
-                    f.name.name
-                ),
-                f.name.span,
-            ));
+        let key = (type_name.to_string(), f.name.name.as_str());
+        match methods.get(&key) {
+            Some(&first) => diagnostics.push(
+                Diagnostic::new(
+                    codes::DUPLICATE_NAME,
+                    format!(
+                        "`{type_name}` already has a method or associated function `{}`",
+                        f.name.name
+                    ),
+                    f.name.span,
+                )
+                .with_related("first defined here", first),
+            ),
+            None => {
+                methods.insert(key, f.name.span);
+            }
         }
     }
 }

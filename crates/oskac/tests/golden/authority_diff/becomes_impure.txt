@@ -1,0 +1,9 @@
+exit: 3
+--- stdout
+fn total: Stdout (io)
+fn main: Stdout (io)
+baseline: <baseline>
+  widened fn total: +Stdout
+  became impure fn total
+--- stderr
+error: authority widened against the baseline <baseline>: a function gained authority or became impure, an audit site was added, or the program reaches a new kind; approving this means updating the baseline, a change for the user to review

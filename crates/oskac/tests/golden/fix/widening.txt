@@ -1,0 +1,12 @@
+$ oskac fix app.osk
+exit: 1
+--- stdout
+--- stderr
+app.osk:3:14: error[E0340]: `Db` is in `std.sql`, which `use std.sql` imports as a module; write `sql.Db`, or import it with `use std.sql.{Db}` (bytes 26..28)
+    fix (maybe): write `sql.Db`
+--- file app.osk
+use std.sql
+
+fn query(db: Db) -> Int {
+    1
+}

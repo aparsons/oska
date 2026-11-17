@@ -1,0 +1,10 @@
+exit: 3
+--- stdout
+fn run: generic T (counter)
+fn main: Stdout (io)
+baseline: <baseline>
+  widened fn run: +generic T
+  became impure fn run
+  note: the baseline was written by oskac 0.0.1 and this is oskac <version>; a change in the authority report between releases shows here too (see the release notes)
+--- stderr
+error: authority widened against the baseline <baseline>: a function gained authority or became impure, an audit site was added, or the program reaches a new kind; approving this means updating the baseline, a change for the user to review

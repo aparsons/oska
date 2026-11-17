@@ -373,9 +373,14 @@ fn diagnostics_use_the_shared_envelope_with_their_fix() {
                 {"code": "E0200",
                  "message": "unknown type `Strng`; did you mean `String`?",
                  "span": {"start": 8, "end": 13},
+                 "severity": "error",
+                 "url": "https://oskalang.dev/codes/E0200",
                  "fix": {"message": "replace with `String`",
                          "edits": [{"span": {"start": 8, "end": 13},
-                                    "replacement": "String"}]}}
+                                    "replacement": "String"}],
+                         "applicability": "maybe"},
+                 "related": [],
+                 "suggestions": []}
             ],
             "functions": [
                 {"name": "f", "authority": [], "via": [], "pure": true}

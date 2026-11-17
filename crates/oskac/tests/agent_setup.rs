@@ -15,9 +15,9 @@ mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 
-use common::portable::Scratch;
+use common::hook::{scratch, write_all, HELLO};
 use common::Json;
 use oska_run::FakeHost;
 
@@ -116,7 +116,14 @@ fn every_flag_the_agent_files_mention_exists_in_the_tool_they_are_for() {
             }
         }
     }
-    for flag in ["--json", "--version", "--format"] {
+    for flag in [
+        "--json",
+        "--version",
+        "--format",
+        "--baseline",
+        "--update-baseline",
+        "--event",
+    ] {
         assert!(checked.contains(flag), "the files should use {flag}");
     }
 }
@@ -175,7 +182,7 @@ fn every_oskac_command_the_agent_files_mention_exists() {
             }
         }
     }
-    for command in ["check", "run", "test", "explain"] {
+    for command in ["check", "run", "test", "explain", "fix", "hook"] {
         assert!(
             seen.contains(command),
             "the files should use oskac {command}"
@@ -230,6 +237,7 @@ fn the_prompt_has_the_agent_install_verify_configure_test_and_report() {
         "AGENTS.md",
         "CLAUDE.md",
         "`oskac test <file.osk>`",
+        "`oskac fix <file.osk>`",
         "run the installer again",
         "--check --json",
         "--uninstall --json",
@@ -244,8 +252,6 @@ fn the_prompt_has_the_agent_install_verify_configure_test_and_report() {
         "`action`",
         "`previous_version`",
         "`downgraded`",
-        // The hook step may let the installer write the hook.
-        "--hook .",
         // The project's minimum toolchain, with the diff first.
         "oska = \"<version>\"",
         // The report gives the update and uninstall commands.
@@ -269,7 +275,7 @@ fn the_prompt_has_the_agent_install_verify_configure_test_and_report() {
             "## 1. Install",
             "## 2. Check the toolchain",
             "## 3. Configure the project",
-            "## 4. Run the tests in CI",
+            "## 4. Run the tests and the authority gate in CI",
             "## 5. Update, check or uninstall later",
             "## 6. Report",
         ]
@@ -382,13 +388,6 @@ fn the_example_program_in_the_prompt_checks_and_runs() {
     assert!(prompt.contains("`Hello from Oska!`"));
 }
 
-/// A new, empty directory for a test, removed when the test ends, even
-/// when it fails: one test copies `oskac` in, and the copies filled `/tmp`
-/// when they were left behind.
-fn scratch(name: &str) -> Scratch {
-    Scratch::new("oska-agent-setup", name)
-}
-
 // ---- The templates -------------------------------------------------------------------------
 
 #[test]
@@ -397,12 +396,15 @@ fn the_agents_template_has_the_loop_the_flags_and_the_pointers() {
     assert!(template.starts_with("## Working with Oska\n"));
     for line in [
         "oskac check <file.osk> --format=json",
-        "apply its `edits`",
+        "oskac fix <file.osk>",
+        "oskac fix <file.osk> --dry-run",
+        "oskac fix <file.osk> --placeholders",
         "oskac explain <code>",
         "oskac explain <code> --format=json",
         "oskac run <file.osk> -- args",
         "oskac test <file.osk>",
         "authority report",
+        "oskac check <file.osk> --baseline=authority.json",
         "oskac check <file.osk> --release",
         "https://oskalang.dev/llms.txt",
         "https://oskalang.dev/codes.json",
@@ -416,13 +418,20 @@ fn the_agents_template_has_the_loop_the_flags_and_the_pointers() {
             "AGENTS.template.md should say: {line}"
         );
     }
+    // The loop uses the tool: no hand-written fix loop, no hand-made diff.
+    for stale in ["apply its `edits`", "span.start", "compare this against"] {
+        assert!(
+            !template.contains(stale),
+            "AGENTS.template.md still says: {stale}"
+        );
+    }
     // The order of the loop: check, fix, run, test, authority.
     let order: Vec<usize> = [
         "1. Check",
         "2. Apply machine fixes",
         "4. Run",
         "5. Test",
-        "6. Read the authority",
+        "6. Compare the authority",
     ]
     .iter()
     .map(|step| {
@@ -432,6 +441,203 @@ fn the_agents_template_has_the_loop_the_flags_and_the_pointers() {
     })
     .collect();
     assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}");
+}
+
+/// The first code span or fenced line of `text` that contains `needle`.
+fn command_with(text: &str, needle: &str) -> String {
+    code_lines(text)
+        .into_iter()
+        .find(|line| line.contains(needle))
+        .unwrap_or_else(|| panic!("no code span with `{needle}`"))
+}
+
+/// The arguments of `command`, a line such as `oskac check <file.osk>
+/// --baseline=authority.json`, with the placeholder replaced by `file`.
+fn args_of(command: &str, file: &str) -> Vec<String> {
+    command
+        .split_whitespace()
+        .skip_while(|word| *word != "oskac")
+        .skip(1)
+        .map(|word| word.replace("<file.osk>", file).replace("<path>", file))
+        .collect()
+}
+
+fn run_in(dir: &Path, args: &[String]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_oskac"))
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("oskac should run")
+}
+
+#[test]
+fn the_agents_template_says_not_to_refresh_a_baseline_to_pass_the_gate() {
+    let template = setup_file("AGENTS.template.md");
+    assert!(
+        template.contains(
+            "Do not refresh a committed baseline to make the gate pass without telling the user why"
+        ),
+        "the rule that approving a widening is the user's decision"
+    );
+    assert!(template.contains("oskac check <file.osk> --update-baseline=authority.json"));
+    assert!(template.contains("exit code 3"));
+}
+
+#[test]
+fn the_template_names_the_baseline_commands_that_work_as_it_says() {
+    let template = setup_file("AGENTS.template.md");
+    let dir = scratch("template-baseline");
+    write_all(&dir, &[("app.osk", HELLO)]);
+    let write = args_of(&command_with(&template, "--update-baseline="), "app.osk");
+    let check = args_of(&command_with(&template, "--baseline="), "app.osk");
+    assert_eq!(run_in(&dir, &write).status.code(), Some(0));
+    assert!(dir.join("authority.json").exists());
+    assert_eq!(run_in(&dir, &check).status.code(), Some(0));
+    // A widening is exit code 3, as the template says.
+    write_all(
+        &dir,
+        &[(
+            "app.osk",
+            "fn main(io: Stdout, net: Net) -> Result<(), IoError> {\n    io.println(\"hi\")\n}\n",
+        )],
+    );
+    let widened = run_in(&dir, &check);
+    assert_eq!(widened.status.code(), Some(3), "{widened:?}");
+}
+
+#[test]
+fn the_fix_command_the_template_names_applies_the_certain_fixes_and_dry_run_writes_nothing() {
+    let template = setup_file("AGENTS.template.md");
+    let source = "struct Logger { out: Stdout }\n\nfn main() {}\n";
+    let dir = scratch("template-fix");
+    write_all(&dir, &[("app.osk", source)]);
+    let fix = args_of(&command_with(&template, "oskac fix <file.osk>"), "app.osk");
+    let mut dry = fix.clone();
+    dry.push("--dry-run".to_string());
+    assert_eq!(run_in(&dir, &dry).status.code(), Some(0));
+    assert_eq!(
+        read(&dir.join("app.osk")),
+        source,
+        "--dry-run writes nothing"
+    );
+    assert_eq!(run_in(&dir, &fix).status.code(), Some(0));
+    assert!(read(&dir.join("app.osk")).starts_with("cap struct Logger"));
+}
+
+#[test]
+fn the_prompt_offers_both_hooks_on_every_platform_and_installs_no_script() {
+    let prompt = setup_file("prompt.md");
+    for line in [
+        "**3c. The check-after-edit hook",
+        "**3d. The Stop gate",
+        "`oskac hook claude --event=post-edit`",
+        "`oskac hook claude --event=stop`",
+        "Ask me whether I want it, and do nothing if I do not say yes.",
+        "deliberately broken",
+        "`oskac` by name",
+    ] {
+        assert!(prompt.contains(line), "the prompt should say: {line}");
+    }
+    // The hook is no longer a shell script, so it is not limited to Unix,
+    // and the agent merges the settings itself on every platform: the
+    // installer's `--hook` sets up the post-edit hook alone, not the gate.
+    for gone in [
+        "Linux and macOS only",
+        "POSIX",
+        "agent-setup/oska-check.sh",
+        "skip this step",
+        "--hook",
+        "settings_merge_needed",
+    ] {
+        assert!(!prompt.contains(gone), "the prompt still says: {gone}");
+    }
+    // The two hooks are separate choices, in this order.
+    let post = prompt.find("**3c.").expect("3c");
+    let stop = prompt.find("**3d.").expect("3d");
+    assert!(post < stop);
+}
+
+/// A project set up with the old shell hook has a `PostToolUse` entry that
+/// runs `.claude/hooks/oska-check.sh`. The prompt still merges each entry
+/// the user agrees to: the post-edit entry in place of the old one, and the
+/// Stop entry whether or not the old one is there.
+#[test]
+fn the_prompt_merges_each_agreed_entry_into_a_project_with_the_old_shell_hook() {
+    let prompt = setup_file("prompt.md");
+    for line in [
+        "Merge each entry I agreed to that the settings do not already run, whatever other hooks they have.",
+        "a `PostToolUse` entry that runs `.claude/hooks/oska-check.sh`, the old shell hook",
+        "For 3c, replace that entry with the published one",
+        "It is not the Stop gate: for 3d, add the `Stop` entry all the same.",
+        "If I declined 3c, leave the old entry as it is.",
+    ] {
+        assert!(prompt.contains(line), "the prompt should say: {line}");
+    }
+    // The old script is mentioned only as an entry to replace.
+    for line in prompt.lines().filter(|l| l.contains("oska-check.sh")) {
+        assert!(line.starts_with("For either, show me the diff"), "{line}");
+    }
+}
+
+#[test]
+fn the_prompt_names_each_hook_command_of_the_published_settings() {
+    let prompt = setup_file("prompt.md");
+    let settings = Json::parse(&setup_file("claude-settings.json"));
+    for event in ["PostToolUse", "Stop"] {
+        let (_, hook) = only_hook(&settings, event);
+        let command = string(hook.get("command"));
+        assert!(
+            prompt.contains(&format!("`{command}`")),
+            "the prompt should name `{command}`"
+        );
+    }
+    // Every `oskac hook` the agent files run is one the settings run, with
+    // targets added only for the Stop gate.
+    for name in AGENT_FILES {
+        for code in code_lines(&setup_file(name)) {
+            if let Some(at) = code.find("oskac hook claude --event=") {
+                let command = &code[at..];
+                assert!(
+                    command.starts_with("oskac hook claude --event=post-edit")
+                        || command.starts_with("oskac hook claude --event=stop"),
+                    "{name}: {command}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_prompt_only_enables_a_hook_when_oskac_is_on_the_path() {
+    let prompt = setup_file("prompt.md");
+    assert!(
+        prompt.contains("`on_path` is `true`"),
+        "a hook is enabled only then"
+    );
+    assert!(
+        prompt.contains("`on_path` is `false`") && prompt.contains("`bin_dir`"),
+        "otherwise it says to add `bin_dir` to `PATH` first"
+    );
+}
+
+#[test]
+fn the_prompt_offers_an_authority_baseline_and_a_ci_step_that_runs_it() {
+    let prompt = setup_file("prompt.md");
+    for line in [
+        "--update-baseline=authority.json",
+        "--baseline=authority.json",
+        "exit code 3",
+        "Do not refresh `authority.json` to make the gate pass",
+    ] {
+        assert!(prompt.contains(line), "the prompt should say: {line}");
+    }
+    // The commands are real: write the baseline, then the CI step passes.
+    let dir = scratch("prompt-baseline");
+    write_all(&dir, &[("app.osk", HELLO)]);
+    let write = args_of(&command_with(&prompt, "--update-baseline="), "app.osk");
+    let gate = args_of(&command_with(&prompt, "--baseline="), "app.osk");
+    assert_eq!(run_in(&dir, &write).status.code(), Some(0));
+    assert_eq!(run_in(&dir, &gate).status.code(), Some(0));
 }
 
 #[test]
@@ -532,6 +738,7 @@ fn the_site_publishes_the_prompt_and_every_file_and_llms_txt_links_them() {
         "AGENTS.template.md",
         "CLAUDE.template.md",
         "claude-settings.json",
+        "claude-settings-post-edit.json",
         "oska-check.sh",
     ] {
         assert_eq!(
@@ -599,7 +806,7 @@ fn string(json: Option<&Json>) -> &str {
 }
 
 #[test]
-fn the_hook_settings_are_valid_json_that_runs_the_script_after_an_osk_edit() {
+fn the_hook_settings_are_valid_json_that_calls_oskac_after_an_edit_and_when_the_agent_stops() {
     let settings = Json::parse(&setup_file("claude-settings.json"));
     let Json::Obj(top) = &settings else {
         panic!("the settings are an object");
@@ -612,35 +819,110 @@ fn the_hook_settings_are_valid_json_that_runs_the_script_after_an_osk_edit() {
     let Some(Json::Obj(events)) = settings.get("hooks") else {
         panic!("a `hooks` object");
     };
-    assert_eq!(events.len(), 1, "one event");
-    let Some(Json::Arr(entries)) = settings.get("hooks").and_then(|h| h.get("PostToolUse")) else {
-        panic!("a PostToolUse list");
-    };
-    assert_eq!(entries.len(), 1);
+    assert_eq!(events.len(), 2, "PostToolUse and Stop");
+    let post = only_hook(&settings, "PostToolUse");
     // After an edit, never before: a hook that runs before cannot see the file.
-    assert_eq!(string(entries[0].get("matcher")), "Edit|Write|MultiEdit");
+    assert_eq!(
+        string(post.0.get("matcher")),
+        "Edit|Write|MultiEdit",
+        "the edit tools"
+    );
+    assert_eq!(string(post.1.get("type")), "command");
+    assert_eq!(
+        string(post.1.get("command")),
+        "oskac hook claude --event=post-edit",
+        "it calls `oskac` from PATH, with no script and no shell syntax"
+    );
+    assert!(post.1.get("timeout").is_none(), "the fast hook needs none");
+    let stop = only_hook(&settings, "Stop");
+    // A Stop entry has no matcher: it is for every attempt to finish.
+    assert!(stop.0.get("matcher").is_none());
+    assert_eq!(string(stop.1.get("type")), "command");
+    assert_eq!(
+        string(stop.1.get("command")),
+        "oskac hook claude --event=stop"
+    );
+    // A slow suite must not stall every turn indefinitely.
+    let Some(Json::Num(timeout)) = stop.1.get("timeout") else {
+        panic!("a numeric `timeout`, in seconds");
+    };
+    assert!(
+        (1..=600).contains(timeout),
+        "a timeout of {timeout} seconds"
+    );
+    // Arguments only, so the same line works in whichever shell Claude
+    // Code uses, on every platform.
+    for command in [post.1, stop.1].map(|hook| string(hook.get("command"))) {
+        assert!(
+            command
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '-' || c == '='),
+            "shell syntax in `{command}`"
+        );
+    }
+}
+
+/// The one entry of `event`, and the one hook in it.
+fn only_hook<'j>(settings: &'j Json, event: &str) -> (&'j Json, &'j Json) {
+    let Some(Json::Arr(entries)) = settings.get("hooks").and_then(|h| h.get(event)) else {
+        panic!("a {event} list");
+    };
+    assert_eq!(entries.len(), 1, "{event}");
     let Some(Json::Arr(hooks)) = entries[0].get("hooks") else {
         panic!("a hooks list");
     };
-    assert_eq!(hooks.len(), 1);
-    assert_eq!(string(hooks[0].get("type")), "command");
-    let command = string(hooks[0].get("command"));
+    assert_eq!(hooks.len(), 1, "{event}");
+    (&entries[0], &hooks[0])
+}
+
+/// What `install.sh --hook` writes: the post-edit entry of the published
+/// settings alone, never the Stop gate, which is a separate choice.
+#[test]
+fn the_post_edit_settings_are_the_post_edit_entry_of_the_published_settings_alone() {
+    let full = Json::parse(&setup_file("claude-settings.json"));
+    let post_edit = Json::parse(&setup_file("claude-settings-post-edit.json"));
+    let entry = full
+        .get("hooks")
+        .and_then(|hooks| hooks.get("PostToolUse"))
+        .expect("a PostToolUse entry")
+        .clone();
     assert_eq!(
-        command, "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/oska-check.sh\"",
-        "it runs the project's own copy of the script"
+        post_edit,
+        Json::Obj(vec![(
+            "hooks".to_string(),
+            Json::Obj(vec![("PostToolUse".to_string(), entry)])
+        )])
     );
 }
 
 #[test]
 fn the_hook_settings_grant_no_permission_and_change_nothing_but_hooks() {
-    let settings = Json::parse(&setup_file("claude-settings.json"));
+    for name in ["claude-settings.json", "claude-settings-post-edit.json"] {
+        settings_grant_no_permission(name);
+    }
+}
+
+fn settings_grant_no_permission(name: &str) {
+    let settings = Json::parse(&setup_file(name));
     let mut all = Vec::new();
     keys(&settings, &mut all);
-    let allowed: BTreeSet<&str> = ["hooks", "PostToolUse", "matcher", "type", "command"].into();
+    let allowed: BTreeSet<&str> = [
+        "hooks",
+        "PostToolUse",
+        "Stop",
+        "matcher",
+        "type",
+        "command",
+        "timeout",
+    ]
+    .into();
     for key in &all {
-        assert!(allowed.contains(key.as_str()), "unexpected key `{key}`");
+        assert!(
+            allowed.contains(key.as_str()),
+            "{name}: unexpected key `{key}`"
+        );
     }
-    let text = setup_file("claude-settings.json");
+    let text = setup_file(name);
     for word in [
         "permissions",
         "allow",
@@ -654,152 +936,51 @@ fn the_hook_settings_grant_no_permission_and_change_nothing_but_hooks() {
         "curl",
         "wget",
     ] {
-        assert!(!text.contains(word), "the settings mention `{word}`");
+        assert!(!text.contains(word), "{name} mentions `{word}`");
     }
 }
 
-/// Run the hook script as Claude Code does: the tool-call JSON on standard
-/// input, `PATH` and `OSKA_HOME` as given. Returns the exit code and standard
-/// error.
-fn run_hook(input: &str, path: &str, oska_home: &Path) -> (Option<i32>, String) {
-    let mut child = Command::new("sh")
-        .arg(repo_root().join("site/agent-setup/oska-check.sh"))
-        .env_clear()
-        .env("PATH", path)
-        .env("HOME", oska_home)
-        .env("OSKA_HOME", oska_home)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("sh should run");
-    {
-        use std::io::Write;
-        let mut stdin = child.stdin.take().expect("a pipe");
-        stdin.write_all(input.as_bytes()).expect("should write");
-    }
-    let output = child.wait_with_output().expect("the hook should end");
-    assert_eq!(output.stdout, b"", "the hook prints nothing on stdout");
-    (
-        output.status.code(),
-        String::from_utf8_lossy(&output.stderr).to_string(),
-    )
-}
-
-/// `PATH` for a hook: the system's tools and the directory `oskac` is in.
-fn hook_path() -> String {
+/// The shell script, kept for a project that saved it earlier: one call
+/// to the same command. `sh` runs it on Unix only.
+#[cfg(unix)]
+#[test]
+fn the_published_script_is_a_one_line_call_to_the_hook() {
+    let script = setup_file("oska-check.sh");
+    assert!(script.starts_with("#!/bin/sh\n# "), "it keeps its header");
+    let code: Vec<&str> = script
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+        .collect();
+    assert_eq!(code, ["exec oskac hook claude --event=post-edit"]);
+    // And it does what the command does.
+    let dir = scratch("hook-script");
+    write_all(&dir, &[("bad.osk", "fn main() { let x: Int = \"a\" }\n")]);
     let oskac_dir = Path::new(env!("CARGO_BIN_EXE_oskac"))
         .parent()
         .expect("a directory")
         .to_string_lossy()
         .to_string();
-    format!("{oskac_dir}:/usr/bin:/bin")
-}
-
-fn tool_call(file: &Path) -> String {
-    format!(
-        "{{\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"Edit\",\"tool_input\":{{\"file_path\":\"{}\",\"old_string\":\"a\",\"new_string\":\"b\"}}}}",
-        file.display()
-    )
-}
-
-#[cfg(unix)]
-#[test]
-fn the_hook_is_quiet_for_an_osk_file_that_checks() {
-    let dir = scratch("hook-good");
-    let file = dir.join("ok.osk");
-    std::fs::write(
-        &file,
-        "fn main(io: Stdout) -> Result<(), IoError> {\n    io.println(\"hi\")\n}\n",
-    )
-    .expect("should write");
-    let (code, stderr) = run_hook(&tool_call(&file), &hook_path(), &dir);
-    assert_eq!((code, stderr.as_str()), (Some(0), ""));
-}
-
-#[cfg(unix)]
-#[test]
-fn the_hook_hands_a_diagnostic_back_with_exit_status_2() {
-    let dir = scratch("hook-bad");
-    let file = dir.join("bad.osk");
-    std::fs::write(&file, "fn main() { let x: Int = \"a\" }\n").expect("should write");
-    let (code, stderr) = run_hook(&tool_call(&file), &hook_path(), &dir);
-    assert_eq!(code, Some(2));
-    assert!(stderr.contains("\"code\":\"E0220\""), "{stderr}");
-}
-
-#[cfg(unix)]
-#[test]
-fn the_hook_checks_a_package_module_with_its_package() {
-    // Checked alone, `main.osk` of a package reports `E0203` and `E0221`
-    // for the modules it uses; with its package it has nothing to report.
-    let main = repo_root().join("examples/shopping/src/main.osk");
-    let dir = scratch("hook-package");
-    let (code, stderr) = run_hook(&tool_call(&main), &hook_path(), &dir);
-    assert_eq!((code, stderr.as_str()), (Some(0), ""));
-}
-
-#[cfg(unix)]
-#[test]
-fn the_hook_reports_an_error_in_another_module_of_the_package() {
-    let dir = scratch("hook-package-bad");
-    let src = dir.join("app/src");
-    std::fs::create_dir_all(&src).expect("should create");
-    std::fs::write(
-        dir.join("app/oska.toml"),
-        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
-    )
-    .expect("should write");
-    std::fs::write(
-        src.join("main.osk"),
-        "use pkg.util\n\nfn main(io: Stdout) -> Result<(), IoError> {\n    io.println(util.name())\n}\n",
-    )
-    .expect("should write");
-    std::fs::write(
-        src.join("util.osk"),
-        "pub(pkg) fn name() -> String {\n    let x: Int = \"a\"\n    \"n\"\n}\n",
-    )
-    .expect("should write");
-    let (code, stderr) = run_hook(&tool_call(&src.join("main.osk")), &hook_path(), &dir);
-    assert_eq!(code, Some(2), "{stderr}");
-    assert!(stderr.contains("\"code\":\"E0220\""), "{stderr}");
-    assert!(stderr.contains("util.osk"), "{stderr}");
-    assert!(!stderr.contains("E0203"), "{stderr}");
-}
-
-#[cfg(unix)]
-#[test]
-fn the_hook_ignores_a_file_that_is_not_osk_without_running_oskac() {
-    let dir = scratch("hook-other");
-    let file = dir.join("notes.md");
-    std::fs::write(&file, "text").expect("should write");
-    // No `oskac` on this PATH: running it would end in status 2.
-    let (code, stderr) = run_hook(&tool_call(&file), "/usr/bin:/bin", &dir);
-    assert_eq!((code, stderr.as_str()), (Some(0), ""));
-    let (code, _) = run_hook("{\"tool_input\":{}}", "/usr/bin:/bin", &dir);
-    assert_eq!(code, Some(0), "an edit with no file_path");
-}
-
-#[cfg(unix)]
-#[test]
-fn the_hook_prefers_the_installed_oskac_and_does_not_write_anything() {
-    let dir = scratch("hook-home");
-    let bin = dir.join("bin");
-    std::fs::create_dir_all(&bin).expect("should create");
-    std::fs::copy(env!("CARGO_BIN_EXE_oskac"), bin.join("oskac")).expect("should copy");
-    let file = dir.join("bad.osk");
-    std::fs::write(&file, "fn main() { let x: Int = \"a\" }\n").expect("should write");
-    // Not on PATH, but in $OSKA_HOME/bin.
-    let (code, stderr) = run_hook(&tool_call(&file), "/usr/bin:/bin", &dir);
-    assert_eq!(code, Some(2), "{stderr}");
-    assert!(stderr.contains("E0220"), "{stderr}");
-    let names: BTreeSet<String> = std::fs::read_dir(&dir)
-        .expect("readable")
-        .map(|e| e.expect("entry").file_name().to_string_lossy().to_string())
-        .collect();
-    assert_eq!(
-        names,
-        ["bad.osk", "bin"].iter().map(|s| s.to_string()).collect()
+    let mut child = Command::new("sh")
+        .arg(repo_root().join("site/agent-setup/oska-check.sh"))
+        .env("PATH", format!("{oskac_dir}:/usr/bin:/bin"))
+        .current_dir(&dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("sh should run");
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().expect("a pipe");
+        stdin
+            .write_all(common::hook::edit_of(&dir.join("bad.osk"), &dir).as_bytes())
+            .expect("should write");
+    }
+    let output = child.wait_with_output().expect("the script should end");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).starts_with("bad.osk:1:"),
+        "{output:?}"
     );
 }
 
