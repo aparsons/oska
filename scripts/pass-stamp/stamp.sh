@@ -65,6 +65,7 @@ say_dirty() {
   [ -n "$files" ] || return 0
   printf '  untracked or modified files:\n'
   printf '    %s\n' "$files"
+  # shellcheck disable=SC2016 # the text names the variable, it is not expanded
   printf '  If any is a check log or result file, move it outside the worktree (for example under %s), delete it, and check again.\n' '${TMPDIR:-/tmp}'
 }
 
