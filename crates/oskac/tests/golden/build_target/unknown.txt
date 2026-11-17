@@ -1,0 +1,6 @@
+$ oskac build hello.osk --target linux-arm64
+exit: 2
+--- stdout
+--- stderr
+error[E0393]: `linux-arm64` is not a target platform: `--target` takes `linux-aarch64`, `linux-x86_64`, `macos-aarch64`, `macos-x86_64` and `windows-x86_64`, or `all` (bytes 0..0)
+--- written

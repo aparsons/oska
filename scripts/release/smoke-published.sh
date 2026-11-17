@@ -13,7 +13,11 @@
 #   - the version it installed is <expected-version>, or, if none is given,
 #     the version latest.json names;
 #   - the installed binary runs and reports that version, in plain text and
-#     with --format=json.
+#     with --format=json;
+#   - when the served installer is pinned to require the signed release
+#     index (stage-site.sh pins it once it publishes one), the install
+#     reported index_verified true, and <site-url>/release-index.json
+#     names that same version.
 #
 # With no release published (latest.json has no "tag"), it says so with a
 # GitHub Actions `::warning::` annotation and succeeds when no
@@ -74,6 +78,16 @@ field() { printf '%s' "$result" | jq -r "$1" 2>/dev/null || die "not JSON: $resu
 [ "$(field .signature_verified)" = true ] || die "the signature was not verified"
 [ "$(field .version)" = "$expected" ] || die "installed $(field .version), not $expected"
 [ "$(field .tag)" = "v$expected" ] || die "installed tag $(field .tag), not v$expected"
+
+# A here-string, not a pipe: under pipefail, grep -q quitting at the first
+# match can make printf die of SIGPIPE and the test fail at random.
+if grep -qx "INDEX_REQUIRED='yes'" <<<"$installer"; then
+  [ "$(field .index_verified)" = true ] || die "the installer requires the release index, but index_verified is not true"
+  index=$(fetch "$site/release-index.json") || die "cannot fetch $site/release-index.json"
+  named=$(printf '%s' "$index" | jq -r '.latest.version // empty') || die "$site/release-index.json is not JSON"
+  [ "$named" = "$expected" ] || die "the release index names $named, not $expected"
+  echo "the install verified release index serial $(field .index_serial), which names $expected"
+fi
 
 binary=$(field .path)
 [ -x "$binary" ] || die "$binary is not an executable file"

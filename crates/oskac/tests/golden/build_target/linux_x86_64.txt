@@ -1,0 +1,6 @@
+$ oskac build hello.osk --target linux-x86_64
+exit: 0
+--- stdout
+--- stderr
+--- written
+hello

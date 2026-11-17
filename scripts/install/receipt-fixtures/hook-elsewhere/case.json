@@ -1,0 +1,24 @@
+{
+  "about": "A hook file that is not where --hook writes it in its project refuses the whole uninstall.",
+  "setup": [
+    {
+      "name": "victim",
+      "path": "@HOME@/victim",
+      "text": "victim\n"
+    }
+  ],
+  "expect": {
+    "sh": {
+      "refused": "unsafe_path"
+    },
+    "ps1": {
+      "refused": "unsafe_path"
+    },
+    "oskac_unix": {
+      "refused": "unsafe_path"
+    },
+    "oskac_windows": {
+      "refused": "unsafe_path"
+    }
+  }
+}

@@ -5,7 +5,7 @@ Install Oska, the secure-by-default programming language from https://oskalang.d
 ## Rules for this task
 
 - Say what you are about to run before you run it.
-- Pipe nothing to a shell except the official installer from oskalang.dev in step 1 (and, only if I approve it in step 4, the same installer in a CI file).
+- Pipe nothing to a shell except the official installer from oskalang.dev, as steps 1, 3c and 5 run it (and, only if I approve it in step 4, the same installer in a CI file).
 - Never ask for, read, print, or handle secrets: tokens, keys, passwords, or the contents of `.env` files. Nothing here needs one.
 - Do not change an existing file until you have shown me the diff and I have agreed. Show me a new file's content before you create it.
 - Do not change any permission or approval setting, and do not touch user-level or global settings. Write only inside this project, into the install directory `~/.oska`, and into the temporary directory of step 2, which you delete afterwards.
@@ -59,18 +59,37 @@ Download each template below with `curl -fsSL` or your fetch tool and read it. A
 
 For either, show me the diff that merges the entries I agreed to from https://oskalang.dev/agent-setup/claude-settings.json into the project's `.claude/settings.json` (the `hooks` key only, only the `PostToolUse` entry for 3c and only the `Stop` entry for 3d; keep every other key), and apply it when I agree. Never edit `~/.claude/settings.json`.
 
+Or, if I agreed to both and prefer it, on Linux or macOS let the installer set them up, so that an uninstall removes them too: run `curl -fsSL https://oskalang.dev/install.sh | sh -s -- --hook . --json` in this project. It creates `.claude/settings.json` from the published settings only if the project has none; if it reports `settings_merge_needed: true`, merge the entries as above.
+
+**3e. The minimum toolchain.** Only if the project has an `oska.toml`. Offer to record the version you installed as the oldest `oskac` the package supports: `oska = "<version>"` in its `[package]` table. Show me the diff, and apply it when I agree. If it already has an `oska` key, leave it unless it is lower and I agree.
+
 ## 4. Run the tests and the authority gate in CI
 
 Look for the project's CI or task runner: `.github/workflows`, a `Makefile`, a `justfile`, or scripts in `package.json`. If there is one, propose a step that runs `oskac test <file.osk>` for each file that has tests (or `oskac test` in a package's directory), show me the diff, and apply it when I agree. A CI job needs `oskac` too: install it with the same installer, pinned with `--version` to the version you installed. If there is no CI or task runner, say so and add nothing.
 
 Then offer an authority baseline, only if I agree. `oskac check <path> --update-baseline=authority.json` writes `authority.json`, a record of what each function of the program can reach, to be committed with the program and reviewed in any change that edits it. It writes it only when the program has no diagnostics. Show me the file before you create it. With it, propose a CI step that runs `oskac check <path> --baseline=authority.json`: it fails with exit code 3 when a change widened the authority, so no widening merges unnoticed, and approving one means updating `authority.json` in the same pull request. Do not refresh `authority.json` to make the gate pass without telling me why. If I do not agree, or there is no CI, create nothing.
 
-## 5. Report
+## 5. Update, check or uninstall later
+
+Do this only when I ask. Each command is the installer from step 1 with one more option, and each takes `--json`.
+
+- **Check for an update.** Run the installer with `--check --json`. It installs and writes nothing. It prints `installed`, `latest` and `update_available`. Tell me; do not update until I say so.
+- **Update.** Run the installer again, as in step 1. It installs the latest release over the old one, with the same checks. Read its JSON:
+  - If `ok` is not `true`, stop and tell me the `error` and the `message`. The installer refuses to install an older release than the installed one (`downgrade_refused`). Do not add `--allow-downgrade` unless I ask for a named older release, with `--version`.
+  - The signed release index is required once this install has accepted one: when the `receipt` from `oskac self info --format=json` (run it before updating) has an `index_serial` above 0. Then, if `index_verified` is not `true`, stop and tell me.
+  - Tell me the `action` (`updated`, `reinstalled` or `downgraded`) and the `previous_version`. Never report a `downgraded` as an update.
+- **Uninstall.** Run the installer with `--uninstall --json`.
+  Or, with no installer, run `oskac self uninstall --format=json`. It leaves a PATH line the installer added for the installer to remove, and on Windows lists the running `oskac.exe` under `pending`, with where it was moved and how to delete it.
+  Either removes only what the install receipt lists, and keeps `~/.config/oska`. Show me `removed`, `kept` and `path_hint`, and tell me what `path_hint` says to remove from my `PATH` by hand. If it fails with `not_installed` or `unsafe_path`, stop and tell me: do not delete `~/.oska` yourself.
+- **Find out what is installed.** Run `oskac self info --format=json`. It reads the receipt and makes no network connection.
+
+## 6. Report
 
 Tell me:
 
 - the `version` you installed, and its `path`;
 - each file you added or changed, and each one you left alone, with the hooks and the baseline I agreed to or declined;
-- how to update: run the installer again. It installs the latest release over the old one, and there is no self-update command.
+- the commands for later, as step 5 gives them. To check for an update, run the installer with `--check --json`. To update, run the installer again, as in step 1. To uninstall, run the installer with `--uninstall --json`.
+- that `oskac self info` reports how Oska is installed, and `oskac self uninstall` also uninstalls it.
 
 The documentation index for agents is https://oskalang.dev/llms.txt.

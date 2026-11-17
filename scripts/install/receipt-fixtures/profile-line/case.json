@@ -1,0 +1,49 @@
+{
+  "about": "The line install.sh --add-to-path added. install.sh removes it while it is there as written; oskac leaves it to the installer and says so in path_hint. No Windows installer writes one.",
+  "setup": [
+    {
+      "name": "profile",
+      "path": "@HOME@/.bashrc",
+      "text": "# mine\nexport PATH=\"@BIN@:$PATH\" # added by the Oska installer\n"
+    }
+  ],
+  "expect": {
+    "sh": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@",
+        "@OSKA_HOME@",
+        "@HOME@/.bashrc (the PATH line the installer added)"
+      ],
+      "kept": [],
+      "path_hint": false,
+      "contents": {
+        "@HOME@/.bashrc": "# mine\n"
+      }
+    },
+    "ps1": {
+      "refused": "unsafe_path",
+      "reason": "which this installer does not remove"
+    },
+    "oskac_unix": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@",
+        "@OSKA_HOME@"
+      ],
+      "kept": [],
+      "path_hint": true,
+      "contents": {
+        "@HOME@/.bashrc": "# mine\nexport PATH=\"@BIN@:$PATH\" # added by the Oska installer\n"
+      }
+    },
+    "oskac_windows": {
+      "refused": "unsafe_path",
+      "reason": "which the installer for this platform never writes"
+    }
+  }
+}

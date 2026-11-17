@@ -1,7 +1,41 @@
 #!/usr/bin/env bash
-# Refuse a push unless every check passes. Enable once per clone with:
+# Refuse a push unless the check passes. Enable once per clone with:
 #   git config core.hooksPath .githooks
-# Pushing a tag or deleting a branch also runs it; `git push --no-verify`
-# skips it in an emergency.
+# Pushing a tag or deleting a branch also goes through it.
+#
+# Which check: a push whose refs all go to ticket/** branches runs the fast
+# check (`scripts/check.sh --fast`), since CI runs the full check on every
+# ticket branch before it merges. Any other push (main, spec/**, tags, other
+# branches, or a ticket branch together with any of those) runs the full
+# check, which writes the pass stamp. Both check the working tree, not the
+# pushed tip; a fast pass is not the merge gate (CI's full check is).
+#
+# The check is skipped, and nothing else, only when all of these hold
+# (scripts/pass-stamp/stamp.sh):
+#   - the pass stamp is from a full run of scripts/check.sh (never a fast one)
+#   - the working tree is clean
+#   - every ref the push does not delete has the stamped tree at its tip,
+#     whether or not it brings new commits (a rewind or an older commit counts
+#     too); for a tag, the tree of the commit it points to
+# A deletion adds no condition. So `--no-verify` is not needed.
 set -euo pipefail
-exec "$(git rev-parse --show-toplevel)/scripts/check.sh"
+root=$(git rev-parse --show-toplevel)
+refs=$(cat)
+if "$root/scripts/pass-stamp/stamp.sh" covers "$@" <<<"$refs"; then
+  echo "pre-push: scripts/check.sh already passed on this tree; skipping"
+  exit 0
+fi
+# Each line: <local ref> <local sha> <remote ref> <remote sha> (githooks(5)).
+tier=
+while read -r _ _ remote_ref _; do
+  [ -n "$remote_ref" ] || continue
+  case $remote_ref in
+    refs/heads/ticket/?*) tier=${tier:-fast} ;;
+    *) tier=full ;;
+  esac
+done <<<"$refs"
+if [ "$tier" = fast ]; then
+  echo "pre-push: every ref is a ticket/** branch; running the fast check (CI runs the full one)"
+  exec "$root/scripts/check.sh" --fast
+fi
+exec "$root/scripts/check.sh"

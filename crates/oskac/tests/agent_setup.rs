@@ -205,6 +205,13 @@ fn the_installer_fields_the_prompt_reads_are_fields_the_installers_print() {
         "path",
         "bin_dir",
         "on_path",
+        "action",
+        "previous_version",
+        "index_verified",
+        "update_available",
+        "removed",
+        "kept",
+        "path_hint",
     ] {
         assert!(
             prompt.contains(&format!("`{field}`")),
@@ -232,9 +239,34 @@ fn the_prompt_has_the_agent_install_verify_configure_test_and_report() {
         "`oskac test <file.osk>`",
         "`oskac fix <file.osk>`",
         "run the installer again",
+        "--check --json",
+        "--uninstall --json",
+        "`oskac self uninstall --format=json`",
+        "`oskac self info --format=json`",
+        "`downgrade_refused`",
         "https://oskalang.dev/llms.txt",
+        // The update step stops as the install step does, and reports the
+        // action, a downgrade included.
+        "If `ok` is not `true`, stop",
+        "`index_verified` is not `true`, stop",
+        "`action`",
+        "`previous_version`",
+        "`downgraded`",
+        // The hook step may let the installer write the hook.
+        "--hook .",
+        // The project's minimum toolchain, with the diff first.
+        "oska = \"<version>\"",
+        // The report gives the update and uninstall commands.
+        "To update",
+        "To uninstall",
     ] {
         assert!(prompt.contains(step), "the prompt should say: {step}");
+    }
+    for stale in ["there is no self-update command", "not_managed"] {
+        assert!(
+            !prompt.contains(stale),
+            "the prompt should not say: {stale}"
+        );
     }
     // Each step is a heading, in order.
     let headings: Vec<&str> = prompt.lines().filter(|l| l.starts_with("## ")).collect();
@@ -246,7 +278,8 @@ fn the_prompt_has_the_agent_install_verify_configure_test_and_report() {
             "## 2. Check the toolchain",
             "## 3. Configure the project",
             "## 4. Run the tests and the authority gate in CI",
-            "## 5. Report",
+            "## 5. Update, check or uninstall later",
+            "## 6. Report",
         ]
     );
 }
@@ -378,6 +411,9 @@ fn the_agents_template_has_the_loop_the_flags_and_the_pointers() {
         "https://oskalang.dev/llms.txt",
         "https://oskalang.dev/codes.json",
         "https://oskalang.dev/codes/E0300",
+        // How this oskac was installed, and whether an update exists.
+        "oskac self info --format=json",
+        "--check --json",
     ] {
         assert!(
             template.contains(line),
@@ -621,6 +657,7 @@ fn built_site() -> BTreeMap<String, String> {
         "GLOSSARY.md",
         "site/style.css",
         "site/search.js",
+        "site/favicon.svg",
         "site/agent-setup",
         "Cargo.toml",
     ] {

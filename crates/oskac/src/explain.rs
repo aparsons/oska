@@ -9,6 +9,7 @@
 //! tests in `tests/catalog.rs` keep them in step with the codes the
 //! source defines.
 
+use crate::json::{quote, quote_option};
 use std::fmt::Write;
 
 /// The docs that hold the catalog, in the order their codes are listed.
@@ -224,52 +225,27 @@ fn indented(text: &str) -> String {
     out
 }
 
-/// `text` as a JSON string, quotes included.
-fn json_string(text: &str) -> String {
-    let mut out = String::from("\"");
-    for c in text.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c < ' ' => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
-fn json_option(text: &Option<String>) -> String {
-    text.as_deref()
-        .map_or_else(|| "null".to_string(), json_string)
-}
-
 /// The entry as one line of JSON, the same text the site's `codes.json`
 /// holds for the code.
 pub fn to_json(entry: &Entry) -> String {
     format!(
         "{{\"code\":{},\"message\":{},\"machine_fix\":{},\"machine_fix_description\":{},\"fix_applicability\":{},\"example\":{},\"fix\":{}}}",
-        json_string(&entry.code),
-        json_string(&entry.message),
+        quote(&entry.code),
+        quote(&entry.message),
         entry.machine_fix.is_some(),
-        json_option(&entry.machine_fix),
-        json_option(&entry.fix_applicability),
-        json_option(&entry.example),
-        json_option(&entry.fixed),
+        quote_option(entry.machine_fix.as_deref()),
+        quote_option(entry.fix_applicability.as_deref()),
+        quote_option(entry.example.as_deref()),
+        quote_option(entry.fixed.as_deref()),
     )
 }
 
 /// An unknown code as one line of JSON.
 pub fn unknown_to_json(code: &str, suggestion: Option<&Entry>) -> String {
-    let suggestion = suggestion.map_or_else(|| "null".to_string(), |e| json_string(&e.code));
     format!(
-        "{{\"error\":\"unknown code\",\"code\":{},\"suggestion\":{suggestion}}}",
-        json_string(code)
+        "{{\"error\":\"unknown code\",\"code\":{},\"suggestion\":{}}}",
+        quote(code),
+        quote_option(suggestion.map(|e| e.code.as_str()))
     )
 }
 
@@ -288,7 +264,7 @@ pub fn unknown_to_human(code: &str, suggestion: Option<&Entry>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{catalog, closest, distance, find, json_string, row_of};
+    use super::{catalog, closest, distance, find, row_of};
 
     #[test]
     fn the_distance_counts_single_character_edits() {
@@ -315,11 +291,6 @@ mod tests {
     fn an_escaped_pipe_in_a_cell_is_a_pipe() {
         let row = row_of("| `E0140` | An or-pattern such as `A \\| B`. | None. |").expect("a row");
         assert_eq!(row.message, "An or-pattern such as `A | B`.");
-    }
-
-    #[test]
-    fn json_strings_escape_quotes_backslashes_and_control_characters() {
-        assert_eq!(json_string("a\"b\\c\nd\u{1}"), "\"a\\\"b\\\\c\\nd\\u0001\"");
     }
 
     #[test]

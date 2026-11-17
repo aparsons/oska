@@ -53,10 +53,10 @@ fn an_attenuation_in_a_trait_method_names_it_as_the_report_does() {
          impl Publish for Site {\n    fn out(self, write: FsWrite) -> DirWrite {\n        write.restrict_to(\"b\")\n    }\n}",
     );
     assert_eq!(names(&report), vec!["Site.out", "<Site as Publish>.out"]);
-    let functions: Vec<&str> = report
+    let functions: Vec<String> = report
         .attenuations
         .iter()
-        .map(|a| a.function.as_str())
+        .map(|a| a.function.to_string())
         .collect();
     assert_eq!(functions, vec!["Site.out", "<Site as Publish>.out"]);
 }
@@ -88,6 +88,95 @@ fn in_a_package_a_trait_method_is_named_by_the_keys_of_its_type_and_trait() {
             "<pkg.shapes.Point as pkg.text.Describe>.describe",
             "pkg.main.main",
             "pkg.shapes.Point.describe",
+        ]
+    );
+}
+
+#[test]
+fn impls_of_one_trait_for_two_instances_of_a_generic_type_are_named_apart() {
+    let report = check(
+        "trait Show {\n    fn show(self) -> String\n}\n\
+         struct Pair<T> { a: T, b: T }\n\
+         impl Show for Pair<Int> {\n    fn show(self) -> String { \"ints\" }\n}\n\
+         impl Show for Pair<String> {\n    fn show(self) -> String { \"strings\" }\n}",
+    );
+    assert_eq!(
+        names(&report),
+        vec!["<Pair<Int> as Show>.show", "<Pair<String> as Show>.show"]
+    );
+}
+
+#[test]
+fn a_generic_impl_names_its_type_with_its_parameters() {
+    let report = check(
+        "trait Show {\n    fn show(self) -> String\n}\n\
+         struct Pair<T> { a: T, b: T }\n\
+         impl<T> Show for Pair<T> {\n    fn show(self) -> String { \"pair\" }\n}",
+    );
+    assert_eq!(names(&report), vec!["<Pair<T> as Show>.show"]);
+}
+
+#[test]
+fn an_attenuation_in_an_instance_impl_names_it_as_the_report_does() {
+    let report = check(
+        "trait Publish {\n    fn out(self, write: FsWrite) -> DirWrite\n}\n\
+         struct Site<T> { name: T }\n\
+         impl Publish for Site<Int> {\n    fn out(self, write: FsWrite) -> DirWrite {\n        write.restrict_to(\"a\")\n    }\n}\n\
+         impl Publish for Site<String> {\n    fn out(self, write: FsWrite) -> DirWrite {\n        write.restrict_to(\"b\")\n    }\n}",
+    );
+    let expected = vec![
+        "<Site<Int> as Publish>.out",
+        "<Site<String> as Publish>.out",
+    ];
+    assert_eq!(names(&report), expected);
+    let functions: Vec<String> = report
+        .attenuations
+        .iter()
+        .map(|a| a.function.to_string())
+        .collect();
+    assert_eq!(functions, expected);
+}
+
+#[test]
+fn a_generic_trait_for_an_instance_names_both_arguments() {
+    let report = check(
+        "struct Code<T> { n: T }\n\
+         impl From<Int> for Code<Int> {\n    fn from(n: Int) -> Code<Int> { Code(n: n) }\n}\n\
+         impl From<Int> for Code<Bool> {\n    fn from(n: Int) -> Code<Bool> { Code(n: true) }\n}",
+    );
+    assert_eq!(
+        names(&report),
+        vec![
+            "<Code<Int> as From<Int>>.from",
+            "<Code<Bool> as From<Int>>.from"
+        ]
+    );
+}
+
+#[test]
+fn in_a_package_the_instances_of_a_generic_type_are_named_by_keys() {
+    let report = check_modules(&[
+        (
+            "main",
+            "use pkg.shapes.{Pair}\nuse pkg.text.{Show}\n\
+             impl Show for Pair<Int> {\n    fn show(self) -> String { \"ints\" }\n}\n\
+             impl Show for Pair<String> {\n    fn show(self) -> String { \"strings\" }\n}\n\
+             fn main() { }",
+        ),
+        ("shapes", "pub(pkg) struct Pair<T> { a: T, b: T }"),
+        (
+            "text",
+            "pub(pkg) trait Show {\n    fn show(self) -> String\n}",
+        ),
+    ]);
+    let mut found = names(&report);
+    found.sort();
+    assert_eq!(
+        found,
+        vec![
+            "<pkg.shapes.Pair<Int> as pkg.text.Show>.show",
+            "<pkg.shapes.Pair<String> as pkg.text.Show>.show",
+            "pkg.main.main",
         ]
     );
 }

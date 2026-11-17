@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "version": "@VERSION@",
+  "installer": "sh\u00e9",
+  "installed_at": "2026-11-15T09:30:00Z",
+  "files": [
+    {"path": "@EXE@", "kind": "binary", "sha256": "@SHA:exe@"},
+    {"path": "@OSKA_HOME@/version", "kind": "record", "sha256": "@SHA:version@"},
+    {"path": "@OSKA_HOME@/receipt.json", "kind": "record"}
+  ]
+}

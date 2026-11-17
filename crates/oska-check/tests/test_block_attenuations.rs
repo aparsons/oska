@@ -11,10 +11,10 @@ fn an_attenuation_in_a_test_is_named_by_the_test() {
     let report = check(
         "test \"reads a note\" {\n    let notes = t.fs.read_only().restrict_to(\"notes\")\n}",
     );
-    let functions: Vec<&str> = report
+    let functions: Vec<String> = report
         .attenuations
         .iter()
-        .map(|a| a.function.as_str())
+        .map(|a| a.function.to_string())
         .collect();
     assert_eq!(
         functions,

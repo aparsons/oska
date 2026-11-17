@@ -1,7 +1,8 @@
-//! Native by default: on aarch64 Linux, `oskac run` and `oskac test`
-//! compile the checked program with the native backend (`oska-native`)
-//! and run the executable; `--interpret` selects the interpreter, and
-//! every other host keeps it until it has a backend of its own.
+//! Native by default: on aarch64 and x86_64 Linux, `oskac run` and
+//! `oskac test` compile the checked program for the host with the native
+//! backend (`oska-native`) and run the executable; `--interpret` selects
+//! the interpreter, and every other host keeps it until it has a backend
+//! of its own.
 //!
 //! The executable is written to a private temporary directory: a new
 //! directory with a random name under the temporary directory (`TMPDIR`),
@@ -23,16 +24,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 use oska_check::program::Program;
+use oska_native::Target;
 use oska_syntax::{Diagnostic, Severity, Span};
 
 use crate::{Flags, Places};
 
-/// Whether this host has a native backend: aarch64 Linux.
-pub const HOST_HAS_BACKEND: bool = cfg!(all(target_arch = "aarch64", target_os = "linux"));
-
-/// Whether `oskac run` and `oskac test` run natively with `flags`.
-pub fn runs_natively(flags: Flags) -> bool {
-    HOST_HAS_BACKEND && !flags.interpret
+/// The target `oskac run` and `oskac test` compile for with `flags`:
+/// the host's, when it has a backend and `--interpret` is not given.
+pub fn native_target(flags: Flags) -> Option<Target> {
+    Target::host().filter(|_| !flags.interpret)
 }
 
 /// How a native `oskac run` went.
@@ -87,18 +87,18 @@ pub struct Invocation<'a> {
     pub json: bool,
 }
 
-/// `oskac run`, natively: compile `program`, run it with the invocation's
-/// `argv0` as its path and `args` after it, and report a panic as the
-/// interpreter's run does, as JSON with `json`.
-pub fn run(program: &Program, places: &Places, invocation: Invocation) -> Run {
+/// `oskac run`, natively: compile `program` for `target`, the host's, run
+/// it with the invocation's `argv0` as its path and `args` after it, and
+/// report a panic as the interpreter's run does, as JSON with `json`.
+pub fn run(program: &Program, target: Target, places: &Places, invocation: Invocation) -> Run {
     let Invocation { argv0, args, json } = invocation;
     // A human report is placed in the source by the executable itself; a
     // JSON one is read back unplaced and placed here, as the
     // interpreter's panic is.
     let built = if json {
-        oska_native::build(program, &|d| d)
+        oska_native::build(program, target, &|d| d)
     } else {
-        oska_native::build(program, &|d| places.locate(d))
+        oska_native::build(program, target, &|d| places.locate(d))
     };
     let bytes = match built {
         Ok(bytes) => bytes,
@@ -214,7 +214,9 @@ fn ended(status: std::process::ExitStatus, json: bool) -> ExitCode {
 /// The Linux signals a native process may die of, by number: the name,
 /// and whether only a fault raises it. A program killed by any other
 /// (`SIGKILL`, `SIGPIPE`, `SIGTERM`) was killed from outside, as any
-/// process can be.
+/// process can be. The numbers are the same for every target with a
+/// backend: asm-generic/signal.h, which arm64 takes, and
+/// arch/x86/include/uapi/asm/signal.h agree on these.
 const SIGNALS: &[(i32, &str, bool)] = &[
     (4, "SIGILL", true),
     (5, "SIGTRAP", true),
@@ -299,7 +301,9 @@ impl Executable {
             options.mode(0o700);
         }
         // The file is closed before it runs: a file open for writing
-        // cannot be executed.
+        // cannot be executed. Nor can a fork copy the descriptor while it is
+        // open and make the file busy (#270): `oskac` starts processes only
+        // from its main thread, one at a time, after this write.
         options.open(&exe.path)?.write_all(bytes)?;
         Ok(exe)
     }

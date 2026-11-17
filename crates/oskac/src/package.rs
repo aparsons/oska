@@ -338,7 +338,10 @@ impl Staged {
 /// there, so the check gives it no program to run.
 pub fn check(package: &Package, refused: &[Diagnostic], options: CheckOptions) -> CheckReport {
     let mut report = oska_check::check_package(package, options);
-    if !refused.is_empty() {
+    // A package that needs a newer `oskac` (`E0407`) is refused for that
+    // alone, before the files the load refused.
+    let too_old = report.diagnostics.iter().any(|d| d.code == "E0407");
+    if !refused.is_empty() && !too_old {
         report.diagnostics.splice(0..0, refused.iter().cloned());
         report.program = None;
     }

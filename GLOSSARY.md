@@ -176,3 +176,9 @@ _Avoid_: updater daemon, auto-updater
 **Fix applicability**:
 How safe a diagnostic's fix is to apply without a person reading it: `machine` when it is certainly right, `maybe` when it is a guess at what was meant, such as the closest name to an unknown one, and `placeholders` when the program checks afterwards but code is left to write, such as `todo()` arms. Each code's fix has one, recorded in the code catalog.
 _Avoid_: confidence, safety level
+
+## Tooling
+
+**Language server**:
+The long-running `oskac lsp` process that editors and agents ask about Oska code over the editor protocol: errors, where a name is defined and used, and a value's type and authority.
+_Avoid_: LSP (the protocol, not the server), Claude LSP server (the server is the same for every editor; Claude Code reaches it through the plugin)

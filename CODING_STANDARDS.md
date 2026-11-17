@@ -1,6 +1,15 @@
 # Coding standards
 
-Reviewers apply these rules to every diff. The mechanical rules are enforced by `scripts/check.sh` and don't appear here: rustfmt, clippy with `unwrap_used` denied, `unsafe_code` forbidden, no crate from outside the repo, and only official actions in workflows, with `dtolnay/rust-toolchain` pinned to a commit. Everything below needs judgement.
+Reviewers apply these rules to every diff. The mechanical rules are enforced by `scripts/check.sh` and don't appear here:
+
+- rustfmt;
+- clippy with `unwrap_used` denied;
+- `unsafe_code` forbidden;
+- no crate from outside the repo;
+- only official actions in workflows, with `dtolnay/rust-toolchain` pinned to a commit;
+- a `timeout-minutes` of 1 to 60 on every workflow job.
+
+Everything below needs judgement.
 
 ## Language and runtime
 
@@ -28,4 +37,5 @@ Reviewers apply these rules to every diff. The mechanical rules are enforced by 
   - The CLI uses golden files under `crates/oskac/tests/golden/`.
   - Language additions use the existing `oska-check` and `oska-run` test helpers.
 - **Each piece of work adds its own integration test file** rather than growing a shared one.
+- **Tests that build a path, write a path into JSON, or set a home use `crates/oskac/tests/common/portable.rs`**: `Scratch`, `json_str`/`json_path`, `set_home` (`HOME`, `USERPROFILE`, `XDG_CONFIG_HOME`), and `literal_path` (keeps `..`; `join("..")` drops it on Windows `\\?\` paths). Do not hand-escape backslashes or set only `HOME`.
 - **No `#[ignore]`.** A test that needs a missing tool, such as `node`, says so and skips.

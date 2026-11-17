@@ -1,0 +1,11 @@
+fn main(io: Stdout) -> Result<(), IoError> {
+    io.println(greeting())
+}
+
+fn greeting() -> String {
+    "hello from a package"
+}
+
+test "greeting" {
+    t.assert_eq(greeting(), "hello from a package")
+}

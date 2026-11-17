@@ -2,8 +2,8 @@
 
 **A secure-by-default language.**
 
-> Status: pre-alpha. See [`docs/design.md`](docs/design.md) and the
-> decisions in [`docs/adr/`](docs/adr/).
+> Status: pre-alpha. See [`docs/design.md`](design.md) and the
+> decisions in [`docs/adr/`](adr/).
 
 ## Repository layout
 
@@ -14,4 +14,4 @@
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](../LICENSE).

@@ -1,0 +1,17 @@
+{
+  "about": "The schema is the JSON integer 1: 1.0 is another schema, and refuses the whole uninstall.",
+  "expect": {
+    "sh": {
+      "refused": "unsafe_path"
+    },
+    "ps1": {
+      "refused": "unsafe_path"
+    },
+    "oskac_unix": {
+      "refused": "unsafe_path"
+    },
+    "oskac_windows": {
+      "refused": "unsafe_path"
+    }
+  }
+}

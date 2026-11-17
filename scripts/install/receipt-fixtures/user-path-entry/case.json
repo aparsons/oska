@@ -1,0 +1,33 @@
+{
+  "about": "The user PATH entry install.ps1 --add-to-path added. install.ps1 removes it if it is still in the user PATH, and here it is not, so it says so in path_hint; oskac leaves it to the installer. Either way bin is handled with the Oska home, and listed once. No Unix installer writes one.",
+  "expect": {
+    "sh": {
+      "refused": "unsafe_path"
+    },
+    "ps1": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@",
+        "@OSKA_HOME@"
+      ],
+      "kept": [],
+      "path_hint": true
+    },
+    "oskac_unix": {
+      "refused": "unsafe_path"
+    },
+    "oskac_windows": {
+      "removed": [
+        "@EXE@",
+        "@OSKA_HOME@/version",
+        "@OSKA_HOME@/receipt.json",
+        "@BIN@",
+        "@OSKA_HOME@"
+      ],
+      "kept": [],
+      "path_hint": true
+    }
+  }
+}

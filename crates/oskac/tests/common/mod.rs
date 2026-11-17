@@ -3,6 +3,8 @@
 #![allow(dead_code)]
 
 pub mod hook;
+pub mod portable;
+pub mod procfs;
 
 /// A minimal JSON reader, enough to walk the export. The crate has no
 /// dependencies, so the test brings its own.

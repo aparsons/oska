@@ -98,21 +98,24 @@ pub fn module(
                 format!("this `impl {trait_name}` is missing the required method(s) {listed}"),
                 trait_ref.span,
             );
-            // A stub can be written out unless a method has generics of
-            // its own, whose bounds the signature does not carry.
-            if missing.iter().all(|sig| sig.generics.is_empty()) {
-                let stubs: Vec<FnSig> = missing
-                    .iter()
-                    .map(|sig| info.method_for(sig, &target, &args, None))
-                    .collect();
-                if let Some(edit) = insert_stubs(src, item.span, &stubs) {
-                    diagnostic = diagnostic
-                        .with_fix(
-                            "add the missing method(s), with `todo()` bodies",
-                            vec![edit],
-                        )
-                        .applicable(Applicability::Placeholders);
-                }
+            // The stub copies each method's generic parameters and their
+            // bounds from the trait, so it compiles as written (#46).
+            let impl_generics: Vec<String> =
+                imp.generics.iter().map(|g| g.name.name.clone()).collect();
+            let stubs: Vec<FnSig> = missing
+                .iter()
+                .map(|sig| {
+                    info.method_for(sig, &target, &args, None)
+                        .in_impl_with(&impl_generics)
+                })
+                .collect();
+            if let Some(edit) = insert_stubs(src, item.span, &stubs) {
+                diagnostic = diagnostic
+                    .with_fix(
+                        "add the missing method(s), with `todo()` bodies",
+                        vec![edit],
+                    )
+                    .applicable(Applicability::Placeholders);
             }
             diagnostics.push(diagnostic);
         }
@@ -277,5 +280,10 @@ fn render(sig: &FnSig) -> String {
     } else {
         format!(" -> {}", sig.ret)
     };
-    format!("fn {}({}){ret}", sig.name, params.join(", "))
+    format!(
+        "fn {}{}({}){ret}",
+        sig.name,
+        sig.generics_text(),
+        params.join(", ")
+    )
 }

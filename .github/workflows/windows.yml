@@ -19,21 +19,48 @@ on:
       - site/**
       - docs/**
       - examples/**
+      - scripts/install/receipt-fixtures/**
       - Cargo.toml
       - Cargo.lock
       - .github/workflows/windows.yml
+  # Run one crate, or one test, on demand:
+  # gh workflow run windows.yml --ref <branch> -f crate=oskac -f test=self_cli
+  workflow_dispatch:
+    inputs:
+      crate:
+        description: Crate to test
+        type: choice
+        options: [all, oska-run, oskac]
+        default: all
+      test:
+        description: "Optional integration-test target of that crate (cargo test --test), e.g. self_cli"
+        type: string
+        default: ""
+      filter:
+        description: "Optional test name filter: letters, digits, and _ : - . (not first)"
+        type: string
+        default: ""
   pull_request:
     paths:
       - crates/**
       - site/**
       - docs/**
       - examples/**
+      - scripts/install/receipt-fixtures/**
       - Cargo.toml
       - Cargo.lock
       - .github/workflows/windows.yml
 
 permissions:
   contents: read
+
+# A pull request's newer push cancels its older runs of this workflow. Every
+# other event gets a group of its own (per commit, or per run for a dispatch), so
+# a push to main or a branch, or a dispatch, is never cancelled or replaced while
+# it waits.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.event_name == 'workflow_dispatch' && github.run_id || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -45,4 +72,36 @@ jobs:
       - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - run: cargo test --locked --no-fail-fast -p oska-run -p oskac
+      # The inputs reach the shell only through env, and are checked first.
+      # Push and pull-request runs have no inputs and test both crates. A
+      # dispatch that selects a test or filter fails if it ran no test.
+      - name: Test
+        shell: bash
+        env:
+          CRATE: ${{ inputs.crate }}
+          TEST: ${{ inputs.test }}
+          FILTER: ${{ inputs.filter }}
+        run: |
+          set -o pipefail
+          word='^[A-Za-z0-9_][A-Za-z0-9_:.-]*$'
+          case "$CRATE" in
+            ""|all) pkgs=(-p oska-run -p oskac) ;;
+            oska-run|oskac) pkgs=(-p "$CRATE") ;;
+            *) echo "bad crate" >&2; exit 1 ;;
+          esac
+          args=()
+          if [[ -n "$TEST" ]]; then
+            if [[ ! "$TEST" =~ $word || "$CRATE" == "" || "$CRATE" == all ]]; then
+              echo "bad test (needs a single crate)" >&2; exit 1
+            fi
+            args+=(--test "$TEST")
+          fi
+          tail=()
+          if [[ -n "$FILTER" ]]; then
+            if [[ ! "$FILTER" =~ $word ]]; then echo "bad filter" >&2; exit 1; fi
+            tail=(-- "$FILTER")
+          fi
+          cargo test --locked --no-fail-fast "${pkgs[@]}" "${args[@]}" "${tail[@]}" | tee test.log
+          if [[ -n "$TEST$FILTER" ]] && ! grep -Eq '^running [1-9][0-9]* test' test.log; then
+            echo "no test ran: check the test and filter names" >&2; exit 1
+          fi

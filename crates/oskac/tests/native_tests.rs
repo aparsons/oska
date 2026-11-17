@@ -1,13 +1,23 @@
 //! Native `test` blocks and the test host (ticket #139), run on both
 //! backends: `oskac test --interpret` and `oskac test`, native by default
-//! on aarch64 Linux (#141), must print the same
+//! on aarch64 Linux (#141) and x86_64 Linux (#165), must print the same
 //! report, text and JSON, with and without `--integration`, the same
 //! stderr, and exit with the same code.
 //!
 //! Each case runs in two identical temporary directories, so an
 //! integration test that writes files leaves the same tree on both sides.
+//!
+//! Every target must compile each case's tests (#164): a refusal fails on
+//! every host, and each host builds them for the other targets too, as it
+//! cannot run their code. The test executables below are built for the
+//! host and run on it, one process per test, on aarch64 and x86_64 Linux.
 
-#![cfg(all(target_arch = "aarch64", target_os = "linux"))]
+#![cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
+
+mod executable;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -22,6 +32,13 @@ struct Outcome {
     tree: BTreeMap<String, String>,
 }
 
+/// The target platform the host builds test executables for: its own.
+const HOST: oska_native::Target = if cfg!(target_arch = "x86_64") {
+    oska_native::Target::LinuxX86_64
+} else {
+    oska_native::Target::LinuxAarch64
+};
+
 /// The flag sets every case runs with.
 const RUNS: [&[&str]; 4] = [
     &[],
@@ -31,9 +48,20 @@ const RUNS: [&[&str]; 4] = [
 ];
 
 /// Run `oskac test` on `target` among `files`, on both backends and with
-/// every flag set, and require the same outcomes. Returns the
-/// interpreter's outcome of the plain run.
+/// every flag set, and require the same outcomes, and that every target
+/// compiles its tests. Returns the interpreter's outcome of the plain run.
 fn assert_same_tests(name: &str, files: &[(&str, &str)], target: &str) -> Outcome {
+    // `oskac test` runs a program the backend refuses on the interpreter,
+    // so the outcomes would agree.
+    let program = checked(files, target);
+    for platform in oska_native::Target::ALL {
+        if let Err(refusal) = oska_native::build_tests(&program, platform) {
+            panic!(
+                "case `{name}`: the native backend refuses its tests for {}: {refusal:#?}",
+                platform.name()
+            );
+        }
+    }
     let mut first = None;
     for (run, flags) in RUNS.iter().enumerate() {
         let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
@@ -603,12 +631,6 @@ fn assert_same_corpus(name: &str, files: &[(String, String)], target: &str) {
         outcome.stdout.contains(" tests: "),
         "case `{name}` was refused: {outcome:#?}"
     );
-    // And a native one: `oskac test` runs a program the backend refuses
-    // on the interpreter.
-    assert!(
-        oska_native::build_tests(&checked(&files, target)).is_ok(),
-        "case `{name}`: the native backend refuses its tests"
-    );
 }
 
 /// The checked program `target` names among `files`: a source file, or
@@ -782,16 +804,52 @@ fn test_executable(name: &str, src: &str) -> PathBuf {
     let program = oska_check::check_module(src)
         .program
         .expect("the program should check");
-    let bytes = oska_native::build_tests(&program).expect("the tests should build");
+    let bytes = oska_native::build_tests(&program, HOST).expect("the tests should build");
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("native_tests_exe");
     std::fs::create_dir_all(&dir).expect("should create the directory");
     let exe = dir.join(name);
-    let _ = std::fs::remove_file(&exe);
-    std::fs::write(&exe, bytes).expect("should write the executable");
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755))
-        .expect("should make it executable");
+    executable::write_executable(&exe, &bytes);
     exe
+}
+
+/// Other threads fork all the time, as parallel tests do, while this one
+/// writes executables and runs them: none may fail with `ETXTBSY` (#270).
+#[test]
+fn an_executable_written_while_other_threads_fork_still_runs() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("native_tests_etxtbsy");
+    std::fs::create_dir_all(&dir).expect("should create the directory");
+    let forking = AtomicBool::new(true);
+    std::thread::scope(|scope| {
+        for _ in 0..3 {
+            scope.spawn(|| {
+                while forking.load(Ordering::Relaxed) {
+                    let _ = Command::new("true").status();
+                }
+            });
+        }
+        let writers: Vec<_> = (0..3)
+            .map(|n| {
+                let dir = &dir;
+                scope.spawn(move || {
+                    for round in 0..40 {
+                        let exe = dir.join(format!("script_{n}"));
+                        executable::write_executable(&exe, b"#!/bin/sh\nexit 7\n");
+                        let status = Command::new(&exe)
+                            .status()
+                            .unwrap_or_else(|e| panic!("round {round} should run: {e}"));
+                        assert_eq!(status.code(), Some(7));
+                    }
+                })
+            })
+            .collect();
+        let results: Vec<_> = writers.into_iter().map(|w| w.join()).collect();
+        forking.store(false, Ordering::Relaxed);
+        for result in results {
+            result.expect("a writer should not panic");
+        }
+    });
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 const TWO_TESTS: &str = r#"

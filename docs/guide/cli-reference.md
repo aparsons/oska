@@ -19,17 +19,21 @@ USAGE:
     oskac run [path] [--format=json] [--interpret] [-- args...]
                                            Check a source file or package and,
                                            if it has no diagnostics, run it:
-                                           natively on aarch64 Linux, on the
-                                           interpreter elsewhere or with
-                                           --interpret
+                                           natively on aarch64 and x86_64
+                                           Linux, on the interpreter elsewhere
+                                           or with --interpret
     oskac test [path] [--format=json] [--integration] [--interpret]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
                                            as `run` does
-    oskac build [path] [-o out] [--format=json]
+    oskac build [path] [-o out] [--target <platform>|all] [--format=json]
                                            Check a source file or package and,
                                            if it has no diagnostics, compile it
-                                           to an aarch64 Linux executable
+                                           to an executable for the platform
+                                           (by default the host's when it has a
+                                           backend, else linux-aarch64), or for
+                                           every platform with a backend into
+                                           the -o directory
     oskac fix [path] [--dry-run] [--placeholders] [--format=json]
                                            Apply the machine fixes to a source
                                            file or package, checking again
@@ -44,6 +48,11 @@ USAGE:
                                            Run the release check and the tests
                                            before Claude Code may finish; exit
                                            2 blocks it with what failed
+    oskac self info [--format=json]        Report this installation: version,
+                                           platform, executable, Oska home and
+                                           install receipt
+    oskac self uninstall [--format=json]   Remove this managed install, as the
+                                           installer's uninstall does
     oskac --version [--format=json]        Print the version
     oskac --help                           Print this help
 ```
@@ -52,6 +61,7 @@ USAGE:
 
 - A flag may come anywhere before `--`. Anything else is a positional argument.
 - Everything after `--` belongs to the program being run, and only `oskac run` uses it.
+- `--target <platform>`, or `--target=<platform>`, is for `oskac build` only: any other command given it prints the usage text to standard error and exits with 2.
 - Any `--format=` value other than `json` means the default, human-readable output.
 - An unknown flag is treated as a positional argument, so the command is not recognized. `oskac` then prints the usage text to standard error and exits with 2. Running `oskac` with no arguments does the same.
 - A file that cannot be read prints `error: cannot read <path>: <reason>` to standard error and exits with 1, even with `--format=json`.
@@ -66,7 +76,8 @@ USAGE:
 | `--update-baseline=<file>` | `check` | Write the program's [authority baseline](#authority-baseline) to `<file>`, only when there are no diagnostics. Not with `--baseline`; any other command refuses it as a usage error. |
 | `--integration` | `test` | Also run the tests marked `#[integration]`, on the real operating system. |
 | `--event=post-edit`, `--event=stop` | `hook` | The event the hook handles. It is required. |
-| `--interpret` | `run`, `test` | Run on the interpreter, on aarch64 Linux too, where the program is otherwise compiled and run natively. See [platform support](#platform-support). The other commands accept the flag and ignore it. |
+| `--interpret` | `run`, `test` | Run on the interpreter, on aarch64 and x86_64 Linux too, where the program is otherwise compiled and run natively. See [platform support](#platform-support). The other commands accept the flag and ignore it. |
+| `--target=<platform>` | `build` | Build for this platform, named as release assets name `oskac` builds (`linux-aarch64`, ...), or with `all` for every platform with a backend. Also written `--target <platform>`. Any other command given it is a usage error (exit code 2). See [`oskac build`](#oskac-build). |
 | `--dry-run` | `fix` | Print the diff the fixes would make, and write nothing. The other commands accept the flag and ignore it. |
 | `--placeholders` | `fix` | Also apply fixes whose applicability is `placeholders`, such as `E0253`'s `todo()` arms. The other commands accept the flag and ignore it. |
 
@@ -149,7 +160,7 @@ With `--format=json`, the check object gains `authority_diff` as its last key:
 
 ## `oskac run`
 
-`oskac run <file.osk> [--format=json] [--interpret] [-- args...]` checks the file and, when it has no diagnostics, runs `main` on the real operating system: compiled natively on aarch64 Linux, on the interpreter elsewhere or with `--interpret` (see [platform support](#platform-support)). `args.get(0)` in the program is the file's path, or the package directory as given, on either backend, and the arguments after `--` follow it unchanged.
+`oskac run <file.osk> [--format=json] [--interpret] [-- args...]` checks the file and, when it has no diagnostics, runs `main` on the real operating system: compiled natively on aarch64 and x86_64 Linux, on the interpreter elsewhere or with `--interpret` (see [platform support](#platform-support)). `args.get(0)` in the program is the file's path, or the package directory as given, on either backend, and the arguments after `--` follow it unchanged.
 
 - The program's own output goes to standard output and standard error as it runs.
 - A refused program's diagnostics, or the panic that stopped the program, go to standard error after that output: as `check` prints diagnostics, or as one JSON object per line with `--format=json`.
@@ -167,7 +178,7 @@ See [debugging](debugging.md) for panics and the [runtime notes](../runtime.md) 
 
 ## `oskac test`
 
-`oskac test <file.osk> [--format=json] [--integration] [--interpret]` checks the file and runs its `test` blocks in source order: natively on aarch64 Linux, one process per test, or on the interpreter, as `run` chooses. The report is the same either way. The report goes to standard output: one line per test, the failures, and a summary, or one JSON object with `--format=json`. A refused file's diagnostics go to standard error, or into the JSON report's `diagnostics`. See [testing](testing.md).
+`oskac test <file.osk> [--format=json] [--integration] [--interpret]` checks the file and runs its `test` blocks in source order: natively on aarch64 and x86_64 Linux, one process per test, or on the interpreter, as `run` chooses. The report is the same either way. The report goes to standard output: one line per test, the failures, and a summary, or one JSON object with `--format=json`. A refused file's diagnostics go to standard error, or into the JSON report's `diagnostics`. See [testing](testing.md).
 
 | Exit code | Meaning |
 | --- | --- |
@@ -177,9 +188,11 @@ See [debugging](debugging.md) for panics and the [runtime notes](../runtime.md) 
 
 ## `oskac build`
 
-`oskac build [path] [-o out] [--format=json]` checks a file or package as `check` does and, when it has no diagnostics, compiles it to a static executable for aarch64 Linux. Building works on every host and writes the same bytes on each. The executable is the file's stem, or the package directory's name, in the current directory; `-o out` names it instead.
+`oskac build [path] [-o out] [--target <platform>|all] [--format=json]` checks a file or package as `check` does and, when it has no diagnostics, compiles it to a static executable for a target platform. Building works on every host and writes the same bytes on each. The executable is the file's stem, or the package directory's name, in the current directory; `-o out` names it instead.
 
-- Success prints nothing, or `{"output":"<path>","diagnostics":[]}` with `--format=json`.
+- `--target` names the platform as release assets name `oskac` builds: `linux-aarch64`, `linux-x86_64`, `macos-aarch64`, `macos-x86_64` or `windows-x86_64`. `linux-aarch64` and `linux-x86_64` have backends so far; the others are refused with `E0394`, which names the release that adds them, and an unknown name with `E0393`, which lists the names. Without `--target`, the build is for the host's platform when it has a backend, else for `linux-aarch64`.
+- `--target all` writes one executable for each platform with a backend, named `<name>-<platform>` (such as `hello-linux-aarch64`), into the directory `-o` names, or the current one.
+- Success prints nothing, or `{"output":"<path>","diagnostics":[]}` with `--format=json` (`{"outputs":["<path>",...],"diagnostics":[]}` with `--target all`).
 - A refused program's diagnostics go to standard error as `check` prints them, or to standard output as `{"output":null,"diagnostics":[...]}` with `--format=json`.
 - The native backend compiles only part of the language so far. Anything else is refused with `E0390` before a file is written, never compiled wrongly; `oskac run` still runs the program, on the interpreter.
 - The executable needs nothing else to run: no `oskac`, no C library. Run directly, it reports a panic as `oskac run` does (human-readable only), and `args.get(0)` is the path it was run as, such as `./hello`, where `oskac run` reports the source file's path.
@@ -188,7 +201,7 @@ See [debugging](debugging.md) for panics and the [runtime notes](../runtime.md) 
 | --- | --- |
 | `0` | The executable was written. |
 | `1` | The checker refused the program, or the executable could not be written (`E0391`). |
-| `2` | The program uses something the native backend cannot compile yet (`E0371`, `E0390`). |
+| `2` | The program uses something the native backend cannot compile yet (`E0371`, `E0390`), or `--target` names a platform it cannot build for (`E0393`, `E0394`). |
 
 See the [runtime notes](../runtime.md#native-builds) for the codes.
 
@@ -243,17 +256,33 @@ The published settings, `https://oskalang.dev/agent-setup/claude-settings.json`,
 | Host | `oskac run`, `oskac test` | `oskac build` |
 | --- | --- | --- |
 | aarch64 Linux | Native: compiled, then run | aarch64 Linux executable |
-| Any other (x86_64 Linux, macOS, Windows) | Interpreter | aarch64 Linux executable |
+| x86_64 Linux | Native: compiled, then run | x86_64 Linux executable |
+| Any other (macOS, Windows) | Interpreter | aarch64 Linux executable |
 
-On aarch64 Linux, `run` and `test` compile the program as `build` does and run the executable, which is 45 to 85 times faster on program logic, such as loops, lists and calls (see the [benchmark](../design.md#native-backend-benchmark)). `--interpret` runs the interpreter instead, to compare the backends when a native result looks wrong. Every other host keeps the interpreter until it has a backend of its own. Either way the output, the reports and the exit codes are the same: the two backends are held to it by the differential suite.
+On aarch64 and x86_64 Linux, `run` and `test` compile the program as `build` does, for the host, and run the executable, which is 40 to 120 times faster on program logic, such as loops, lists and calls (see the [benchmark](../design.md#native-backend-benchmark)). `--interpret` runs the interpreter instead, to compare the backends when a native result looks wrong. Every other host keeps the interpreter until it has a backend of its own. Either way the output, the reports and the exit codes are the same: the two backends are held to it by the differential suite.
 
 - The executable is written to a new private directory under the temporary directory (`TMPDIR`, else `/tmp`): a random name, created with mode `0700`, never reused, so no other user can replace or read it. It is removed as soon as the program has started, or for `test` once every test has run.
 - A program the native backend cannot compile yet (`E0390`) runs on the interpreter, after one line on stderr that says so and why, such as `app.osk:3:13: note: running on the interpreter: ... (E0390)` (with `--format=json`, one JSON object with `"severity":"note"`). It is a checked program that the interpreter runs, so the output is the same, only slower. `--interpret` prints no note. A program the interpreter cannot run either, such as one that imports a module with no runtime (`E0371`), gets no note: both refuse it, and the interpreter's refusal is reported.
 - If the executable cannot be written or started, for example because the temporary directory is mounted `noexec`, the command fails with `E0391`. Set `TMPDIR` to another directory or use `--interpret`.
 
+## `oskac self`
+
+`oskac self info [--format=json]` and `oskac self uninstall [--format=json]` ask `oskac` about its own installation and remove it, without the installer. They read the [install receipt](install.md#the-install-receipt) in the Oska home (`~/.oska`, or `OSKA_HOME`), and `oskac` makes no network connection to do it. Any other `self` command or flag is a usage error (exit code 2); with `--format=json` it prints `{"ok":false,"error":"usage","message":"..."}`.
+
+`self info` prints the version, the platform, the canonical path of the running executable, the Oska home and the receipt. With `--format=json` it prints one object: `version`, `platform`, `executable`, `oska_home` (`null` with no home), `receipt` (the receipt as parsed, with every field it has, or `null` when there is none or it cannot be read), `receipt_error` (why it cannot be read, else `null`), `receipt_matches` and `digest_checked`. `receipt_matches` is `true` when the receipt's `version` is this `oskac`'s and it lists this executable as a `binary`, by path. `digest_checked` is always `false`: `oskac` computes no SHA-256, so it identifies its install by path and version only. It exits with 0.
+
+`self uninstall` applies the rules of the installer's [`--uninstall`](install.md#uninstall) in this process. [The install receipt](install-receipt.md) defines them, for every kind of entry and for each of the three uninstallers. It checks every entry of the receipt before it removes anything, against the places this platform's installer writes each kind, and refuses the whole uninstall if one is elsewhere, or of a kind that installer never writes. Then:
+
+- `binary` and `record` entries (files directly in the Oska home or its `bin` directory) are removed only when the receipt matches this `oskac`, as `self info` reports; otherwise they are skipped and listed in `kept`, and the rest of the uninstall goes ahead. As `oskac` checks no digest, it removes only what it can show unchanged otherwise: the running `oskac` itself, the `version` file while it holds the receipt's version, and the receipt. Any other `binary` or `record` is kept, for the installer's `--uninstall` to remove.
+- `hook_script` and `hook_settings` entries (what `install.sh --hook` wrote into a project) are removed only if they are byte for byte the published hook files this `oskac` carries; a changed file, or one from another release, is kept. Settings the installer did not create are kept, with a hint to remove the hook from them by hand.
+- `profile_line` and `user_path_entry` entries (what `--add-to-path` did) are left to the installer's `--uninstall`: `path_hint` says what to remove, or to run it.
+- On Windows the running `oskac.exe` cannot be deleted, so it is moved into the temporary directory and listed under `pending`, with the path it was moved to: delete that file once `oskac` has exited.
+
+Then it removes `bin` and the Oska home if they are left empty, and it never touches `~/.config/oska`. With `--format=json` it prints `{"ok":true,"action":"uninstalled","removed":[...],"kept":[...],"pending":[...],"path_hint":null}`, where each `pending` entry is `{"path":"...","moved_to":"...","note":"..."}`. A refusal removes nothing and exits with 1, printing `{"ok":false,"error":"<code>","message":"..."}` with `--format=json`: `not_installed` (no receipt, or no Oska home) or `unsafe_path` (an entry outside the places the installer writes its kind, of a kind this platform's installer does not write, in a `.config/oska` directory, with `..`, or through a symlink, or a receipt it cannot read).
+
 ## `oskac --version` and `oskac --help`
 
-`oskac --version` prints `oskac` and the version on one line, such as `oskac 0.3.0`, and `oskac --help` prints the text at the top of this page. Both also answer to the short forms `-V` and `-h`. With `--format=json`, `--version` prints a JSON object instead: `{"name":"oskac","version":"0.3.0"}`.
+`oskac --version` prints `oskac` and the version on one line, such as `oskac 0.4.0`, and `oskac --help` prints the text at the top of this page. Both also answer to the short forms `-V` and `-h`. With `--format=json`, `--version` prints a JSON object instead: `{"name":"oskac","version":"0.4.0"}`.
 
 ## Output formats
 
@@ -298,9 +327,9 @@ One object on standard output, produced even when there are diagnostics:
 ```
 
 - `diagnostics`, in source order.
-- `functions`: one entry per function and method, in source order. `name` is the function's name, `Type.method` for a method of an inherent `impl`, or `<Type as Trait>.method` for one of `impl Trait for Type`, with a generic trait's arguments, as in `<AppError as From<IoError>>.from`; in a package `pkg.` and the module path come first, as in `pkg.util.text.shout` or `pkg.main.main`, and a method is named by its type's module. No two entries share a name. `"pub":true` marks a function declared `pub`. `authority` lists the built-in capabilities it can reach, in order of first appearance. `via` lists each capability-bearing parameter and what it supplies, with a method's receiver as `self`; a parameter whose type is or holds a bounded type parameter is listed too, naming it in `generics`. `pure` is `true` when `via` is empty.
-- `audit`: every audit site, in source order. `function` is the function it is in (`test "<name>"` for a test block), `kind` is `assume_trusted` for a trust assertion or `expose` for a secret exposure, and `span` covers the whole call.
-- `attenuations`: every call that narrows a capability, in source order. `function` is the function it is in (`test "<name>"` for a test block), `method` is `restrict_to`, `restrict_to_file`, `read_only` or `write_only`, `source` and `result` are the capability kinds before and after, and `root` is the string the capability is restricted to, or `null` when the method takes no root or the root is computed at runtime. `span` covers the whole call.
+- `functions`: one entry per function and method, in source order. `name` is the function's name, `Type.method` for a method of an inherent `impl`, or `<Type as Trait>.method` for one of `impl Trait for Type`, with a generic trait's arguments, as in `<AppError as From<IoError>>.from`, and a generic type's arguments, as in `<Pair<Int> as Show>.show`; in a package `pkg.` and the module path come first, as in `pkg.util.text.shout` or `pkg.main.main`, and a method is named by its type's module. No two entries share a name. `"pub":true` marks a function declared `pub`. `authority` lists the built-in capabilities it can reach, in order of first appearance. `via` lists each capability-bearing parameter and what it supplies, with a method's receiver as `self`; a parameter whose type is or holds a bounded type parameter is listed too, naming it in `generics`. `pure` is `true` when `via` is empty.
+- `audit`: every audit site, in source order. `function` is the function it is in, named as for an attenuation, `kind` is `assume_trusted` for a trust assertion or `expose` for a secret exposure, and `span` covers the whole call.
+- `attenuations`: every call that narrows a capability, in source order. `function` is the function it is in (`test "<name>"` for a test block, with the name written as an Oska string, or `test at line <n>` when the name is empty), `method` is `restrict_to`, `restrict_to_file`, `read_only` or `write_only`, `source` and `result` are the capability kinds before and after, and `root` is the string the capability is restricted to, or `null` when the method takes no root or the root is computed at runtime. `span` covers the whole call.
 
 A parse error is reported alone, with empty `functions`, `audit` and `attenuations`.
 

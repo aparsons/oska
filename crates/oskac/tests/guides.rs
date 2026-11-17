@@ -72,8 +72,11 @@ fn markdown_files(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// The guides, and the home page, which shows a program and its report.
 fn guide_pages() -> Vec<PathBuf> {
-    markdown_files(&repo_root().join("docs/guide"))
+    let mut pages = markdown_files(&repo_root().join("docs/guide"));
+    pages.push(repo_root().join("docs/index.md"));
+    pages
 }
 
 /// A fenced code block.

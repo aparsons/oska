@@ -37,9 +37,10 @@ use crate::{builtins, json_lines, json_strings, prelude, CheckReport};
 /// The baseline file format this toolchain writes and reads.
 pub const FORMAT: u64 = 1;
 
-/// The prefix of a test's name, `test "<name>"`, where its audit sites
-/// and attenuations are listed. No function's name can start with it.
-const TEST_PREFIX: &str = "test \"";
+/// The prefixes of a test's name, `test "<name>"` or `test at line <n>`
+/// for a test with no name text, where its audit sites and attenuations
+/// are listed. No function's name can start with either.
+const TEST_PREFIXES: [&str; 2] = ["test \"", "test at line "];
 
 /// A report's authority, without places.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -111,7 +112,7 @@ impl AuthorityRecord {
         let mut attenuations = BTreeMap::new();
         for a in &report.attenuations {
             let key = AttenuationKey {
-                function: a.function.clone(),
+                function: a.function.label(),
                 method: a.method.clone(),
                 source: a.source.clone(),
                 result: a.result.clone(),
@@ -569,7 +570,9 @@ fn counted<K: Ord + Clone>(old: &BTreeMap<K, u64>, new: &BTreeMap<K, u64>) -> Co
 /// Whether `function` names a test block, whose entries never fail the
 /// gate.
 fn is_test(function: &str) -> bool {
-    function.starts_with(TEST_PREFIX)
+    TEST_PREFIXES
+        .iter()
+        .any(|prefix| function.starts_with(prefix))
 }
 
 impl AuthorityDiff {
