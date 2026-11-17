@@ -6,7 +6,7 @@
 //! Every scenario runs an Oska program twice, against the same layout:
 //!
 //! - on [`RealHost`] against a real temporary directory with real
-//!   symlinks, on Unix only: the escape tests. A symlink planted at a
+//!   symlinks, on Unix and Windows: the escape tests. A symlink planted at a
 //!   component stands for one swapped in there at any moment of the walk,
 //!   which refuses it either way, so the race is tested without timing.
 //! - on [`FakeHost`], on every OS: the same refusals, so API tests that
@@ -122,7 +122,7 @@ fn assert_refused(printed: &str, why: &str) {
 
 // ---- The real host: a temporary directory -----------------------------------
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod real {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -161,13 +161,27 @@ mod real {
     }
 
     impl World for Real {
+        /// As an Oska string literal holds it: a Windows path's `\` escaped.
         fn path(&self, at: &str) -> String {
-            self.base.join(at).display().to_string()
+            self.base
+                .join(at)
+                .display()
+                .to_string()
+                .replace('\\', "\\\\")
         }
 
         fn link(&mut self, at: &str, target: &str) {
-            std::os::unix::fs::symlink(self.base.join(target), self.base.join(at))
-                .expect("create a symlink");
+            let (target, at) = (self.base.join(target), self.base.join(at));
+            #[cfg(unix)]
+            let made = std::os::unix::fs::symlink(target, at);
+            // A directory symlink to a directory, and a file symlink to
+            // anything else, a missing target included.
+            #[cfg(windows)]
+            let made = match target.is_dir() {
+                true => std::os::windows::fs::symlink_dir(target, at),
+                false => std::os::windows::fs::symlink_file(target, at),
+            };
+            made.expect("create a symlink");
         }
 
         fn run(&mut self, src: &str) -> String {
@@ -362,7 +376,8 @@ mod fake {
     }
 }
 
-/// Each scenario, as a test on the fake host and, on Unix, the real one.
+/// Each scenario, as a test on the fake host and, on Unix and Windows, the
+/// real one.
 macro_rules! scenarios {
     ($($name:ident),* $(,)?) => {
         mod on_fake {
@@ -373,7 +388,7 @@ macro_rules! scenarios {
                 }
             )*
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         mod on_real {
             $(
                 #[test]
