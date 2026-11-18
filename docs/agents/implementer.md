@@ -25,8 +25,9 @@ export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
 
 ## Logs and waiting
 
+- Put logs and result files outside the worktree, e.g. `LOG=${TMPDIR:-/tmp}/check-t286.log RC=${TMPDIR:-/tmp}/check-t286.rc`. A file inside the worktree makes the tree dirty, so the check writes no pass stamp and the pre-push hook runs the whole check again.
 - Name every log and result file per ticket (`check-t286.log`), so parallel agents never overwrite each other's.
-- Run a long check detached and wait on a file or a PID, not on a process name: `setsid bash -c 'scripts/check.sh > LOG 2>&1; echo $? > RC' < /dev/null`, then wait until `RC` exists.
+- Run a long check detached and wait on a file or a PID, not on a process name: `setsid bash -c 'scripts/check.sh > "$LOG" 2>&1; echo $? > "$RC"' < /dev/null` (export `LOG` and `RC` first), then wait until `$RC` exists.
 - A `pgrep -f` wait loop matches its own command line and never ends. Do not use one.
 - Report once, when the work is done. No progress reports.
 

@@ -304,6 +304,31 @@ run_check
 push origin main
 expect "several commits all with the stamped tree: the check is skipped" 0 0
 
+# --- a dirty tree names its files and says to move logs out ------------------
+new_clone dirty-message
+commit_change two
+run_check
+echo log >"$clone/check-t1.log"
+dirty_out=$(cd "$clone" && scripts/pass-stamp/stamp.sh covers origin </dev/null 2>&1 || true)
+if grep -q 'check-t1.log' <<<"$dirty_out" && grep -q 'outside the worktree' <<<"$dirty_out"; then
+  ok "an ignored stamp names the untracked file and says to move logs outside"
+else
+  bad "an ignored stamp names the untracked file and says to move logs outside" "$dirty_out"
+fi
+if (cd "$clone" && scripts/pass-stamp/stamp.sh covers origin </dev/null) >/dev/null 2>&1; then
+  bad "a dirty tree still declines the stamp" "covers exited 0"
+else
+  ok "a dirty tree still declines the stamp"
+fi
+dirty_tree=$(cd "$clone" && scripts/pass-stamp/stamp.sh tree)
+echo more >"$clone/check-t2.log"
+write_out=$(cd "$clone" && scripts/pass-stamp/stamp.sh write full "$dirty_tree" 2>&1)
+if grep -q 'check-t2.log' <<<"$write_out" && grep -q 'outside the worktree' <<<"$write_out"; then
+  ok "a declined stamp write names the file and says to move logs outside"
+else
+  bad "a declined stamp write names the file and says to move logs outside" "$write_out"
+fi
+
 # --- a deleted branch --------------------------------------------------------
 # A deletion pushes no commits, so a stamped, clean tree covers it. Without a
 # stamp the hook runs the check as before.
