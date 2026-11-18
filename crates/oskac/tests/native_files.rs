@@ -973,6 +973,9 @@ fn text_that_is_not_utf8_is_refused_and_large_files_round_trip() {
     );
 }
 
+/// Linux only: APFS refuses a name that is not UTF-8 (`EILSEQ`), so
+/// macOS cannot make the tree.
+#[cfg(target_os = "linux")]
 #[test]
 fn an_entry_name_that_is_not_utf8_fails_the_listing_as_rust_shows_it() {
     let case = case(
@@ -1002,6 +1005,9 @@ fn an_entry_name_that_is_not_utf8_fails_the_listing_as_rust_shows_it() {
     }
 }
 
+/// Linux only: APFS refuses a name that is not UTF-8 (`EILSEQ`), so
+/// macOS cannot make the tree.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_root_is_named_by_its_canonical_path_shown_lossily() {
     // The root is reached through symlinks (absolute, relative, chained,
@@ -1269,6 +1275,10 @@ fn a_closure_keeps_the_directory_capability_it_captured() {
 
 // ---- Running out of memory --------------------------------------------------------
 
+/// Linux only: macOS overcommits memory without limit, as Linux does
+/// under `vm.overcommit_memory = 1` (below), so a terabyte reserves and
+/// the read goes on until the system kills the process.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_file_too_large_to_hold_is_an_io_error_not_the_end_of_the_process() {
     // A sparse file of 1 TiB: no memory holds it, so the interpreter's

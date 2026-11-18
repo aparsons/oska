@@ -2282,13 +2282,24 @@ fn write_text(fd: Int, text: String) -> Int {
     write_all(fd, rt_mem_add(object, 16), rt_mem_load64(rt_mem_add(object, 8)))
 }
 
+// At most the bytes one `read` or `write` moves: `count`, or Linux's own
+// limit (`MAX_RW_COUNT`) when it is more. macOS refuses a count over
+// `INT_MAX` with `EINVAL` rather than moving less, as Linux does, so every
+// platform asks for no more than Linux would move.
+fn io_count(count: Int) -> Int {
+    if count > 2147479552 {
+        return 2147479552
+    }
+    count
+}
+
 // Write the `count` bytes at `buf` to `fd`, however many writes it takes:
 // 0, or the negative `errno` of the write that failed.
 fn write_all(fd: Int, buf: Int, count: Int) -> Int {
     var at = buf
     var left = count
     while left > 0 {
-        let written = rt_sys_write(fd, at, left)
+        let written = rt_sys_write(fd, at, io_count(left))
         if written == -4 {
             continue
         }
@@ -3700,7 +3711,7 @@ fn read_all(fd: Int) -> Result<String, IoError> {
             object = larger
             capacity = rt_mem_shl(capacity, 1)
         }
-        let got = rt_sys_read(fd, rt_mem_add(text_data(object), length), capacity - length)
+        let got = rt_sys_read(fd, rt_mem_add(text_data(object), length), io_count(capacity - length))
         if got == -4 {
             continue
         }
