@@ -43,7 +43,7 @@ The second prints `{"outputs":["dist/app-linux-aarch64","dist/app-linux-x86_64"]
 `--target` is refused, with exit code 2 and nothing written, in two cases. Match on the `code`:
 
 - `E0393`: the name is not a platform. The message lists the valid names (`linux-aarch64`, `linux-x86_64`, `macos-aarch64`, `macos-x86_64`, `windows-x86_64`, and `all`). Fix the typo.
-- `E0394`: the platform is supported but has no native backend yet (macOS and Windows). The message names the release that adds it. Do not retry with another spelling; build for a Linux platform instead.
+- `E0394`: the platform is supported but has no native backend yet (`macos-x86_64` and Windows). The message names the release that adds it. Do not retry with another spelling; build for a Linux platform instead.
 
 Only `oskac build` takes `--target`: `run` and `test` always use the host's platform. See the [CLI reference](cli-reference.md#oskac-build).
 
