@@ -60,11 +60,15 @@ working_tree() {
 # and says where check logs belong. A message only: it changes no decision.
 # A log written into the worktree is the usual cause.
 say_dirty() {
-  local files
-  files=$(git status --porcelain 2>/dev/null | head -n 20) || return 0
+  local files count
+  files=$(git status --porcelain 2>/dev/null) || return 0
   [ -n "$files" ] || return 0
+  count=$(printf '%s\n' "$files" | wc -l)
   printf '  untracked or modified files:\n'
-  printf '    %s\n' "$files"
+  printf '%s\n' "$files" | head -n 20 | sed 's/^/    /'
+  if [ "$count" -gt 20 ]; then
+    printf '    ... and %d more (%d in all)\n' $((count - 20)) "$count"
+  fi
   # shellcheck disable=SC2016 # the text names the variable, it is not expanded
   printf '  If any is a check log or result file, move it outside the worktree (for example under %s), delete it, and check again.\n' '${TMPDIR:-/tmp}'
 }
