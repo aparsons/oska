@@ -1723,11 +1723,16 @@ impl<'l, 'p> Body<'l, 'p> {
         let arg = |i: usize| args.get(i).copied().unwrap_or_default();
         Ok(match runtime {
             Runtime::Syscall(call) => {
+                let platform = self.lowering.target.platform();
+                let mut args = args.to_vec();
+                for &value in (platform.then)(call) {
+                    args.push(self.constant(value));
+                }
                 let dst = self.temp();
                 self.push(Inst::Syscall {
                     dst,
-                    number: (self.lowering.target.platform().syscall)(call),
-                    args: args.to_vec(),
+                    number: (platform.syscall)(call),
+                    args,
                 });
                 dst
             }

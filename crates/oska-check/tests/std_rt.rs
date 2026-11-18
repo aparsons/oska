@@ -37,8 +37,8 @@ fn use_std_rt_in_a_package_module_is_refused() {
 #[test]
 fn naming_an_intrinsic_is_refused() {
     assert_errors(
-        "fn main() {\n    let n = rt_sys_getrandom(0, 0, 0)\n}",
-        &[("E0209", "rt_sys_getrandom")],
+        "fn main() {\n    let n = rt_sys_random(0, 0)\n}",
+        &[("E0209", "rt_sys_random")],
     );
     assert_errors(
         "fn rt_mem_load64(a: Int) -> Int {\n    a\n}",
@@ -51,12 +51,9 @@ fn a_user_module_named_rt_is_not_the_toolchains() {
     assert_modules_errors(
         &[
             ("main", "use pkg.rt\n\nfn main() {}\n"),
-            (
-                "rt",
-                "pub(pkg) fn f() -> Int {\n    rt_sys_exit_group(0)\n}\n",
-            ),
+            ("rt", "pub(pkg) fn f() -> Int {\n    rt_sys_exit(0)\n}\n"),
         ],
-        &[("src/rt.osk", "E0209", "rt_sys_exit_group")],
+        &[("src/rt.osk", "E0209", "rt_sys_exit")],
     );
 }
 
@@ -88,13 +85,14 @@ fn std_rt_declares_every_intrinsic_the_runtime_needs() {
         "rt_sys_openat",
         "rt_sys_close",
         "rt_sys_mkdirat",
-        "rt_sys_getdents64",
+        "rt_sys_read_dir",
         "rt_sys_fstat",
         "rt_sys_mmap",
         "rt_sys_munmap",
         "rt_sys_clock_gettime",
-        "rt_sys_getrandom",
-        "rt_sys_exit_group",
+        "rt_sys_random",
+        "rt_sys_sigaction",
+        "rt_sys_exit",
         "rt_mem_load8",
         "rt_mem_load16",
         "rt_mem_load32",
@@ -114,5 +112,21 @@ fn std_rt_declares_every_intrinsic_the_runtime_needs() {
     }
     for name in &names {
         assert!(name.starts_with("rt_sys_") || name.starts_with("rt_mem_"));
+    }
+}
+
+#[test]
+fn std_rt_names_no_linux_only_call_where_a_neutral_form_exists() {
+    // Reading a directory, random bytes, exit and signal setup are
+    // operating-system-neutral intrinsics (#168), so each operating
+    // system's table can give its own call behind them.
+    let names = oska_check::std_rt_intrinsics();
+    for linux_only in [
+        "rt_sys_getdents64",
+        "rt_sys_getrandom",
+        "rt_sys_exit_group",
+        "rt_sys_rt_sigaction",
+    ] {
+        assert!(!names.contains(&linux_only), "{linux_only} in {names:?}");
     }
 }
