@@ -655,13 +655,11 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
     let options = oska_check::CheckOptions {
         release: matches!(command, Command::Check(_)) && flags.release,
     };
-    let report = package::check(&package, &refused, options);
-    // A package that needs a newer `oskac` (`E0407`) is refused first, from
-    // every command, even a `run` of a library.
-    let too_old = oska_check::needs_newer_oskac(&report);
-    if !too_old && matches!(command, Command::Run | Command::Build(_)) && package.is_library() {
-        return refuse(command, vec![oska_check::run_of_library(dir)], json, dir);
-    }
+    let report = if matches!(command, Command::Run | Command::Build(_)) {
+        package::check_to_run(&package, &refused, dir, options)
+    } else {
+        package::check(&package, &refused, options)
+    };
     if let Command::Check(gate) = command {
         let report = if json {
             report

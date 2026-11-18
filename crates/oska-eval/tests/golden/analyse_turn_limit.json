@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "stop": "turn_limit",
+  "iterations": 1,
+  "iterations_to_clean": null,
+  "timeline": [
+    {
+      "iteration": 1,
+      "source": "command",
+      "codes": ["E0300"]
+    }
+  ],
+  "diagnostics": [
+    {
+      "code": "E0300",
+      "path": "src/main.osk",
+      "first_iteration": 1,
+      "resolved_iteration": null,
+      "iterations_present": 1,
+      "fix": null
+    }
+  ],
+  "fixes": {
+    "offered": 0,
+    "applied": 0,
+    "gone_next_check": 0,
+    "machine_offered": 0,
+    "machine_applied": 0,
+    "machine_gone_next_check": 0
+  },
+  "lookups": {
+    "explain": [],
+    "site": []
+  },
+  "escapes": [],
+  "usage": {"turns": 30, "input_tokens": 1200, "output_tokens": 340, "cost_usd": 0.0123},
+  "finished_despite_failing": null
+}

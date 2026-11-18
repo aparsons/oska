@@ -3,9 +3,9 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use super::portable::{json_str, Scratch};
-use std::process::{Command, Stdio};
 
 /// A new, empty, canonical directory for a test, removed when the test
 /// ends, even when it fails: one test copies `oskac` in, and the copies

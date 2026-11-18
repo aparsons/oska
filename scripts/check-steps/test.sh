@@ -250,16 +250,13 @@ if [ "$headers" = "$list" ]; then
 else
   bad "a skipping run still prints every step" "got: $headers"
 fi
-if [ "$(printf '%s\n' "$log" | grep -cx pass-stamp/stamp.sh)" -eq 1 ] &&
-  printf '%s\n' "$out" | grep -q 'pass stamp: not written'; then
-  ok "a run that skipped the cargo steps writes no pass stamp, and says so"
+# The skip is decided from the tree the stamp names, so the stamp vouches
+# for it (#360).
+if printf '%s\n' "$out" | grep -qx '\[stamp write full tree\]' &&
+  ! printf '%s\n' "$out" | grep -q 'pass stamp: not written'; then
+  ok "a run that skipped the cargo steps because no cargo input changed writes the full stamp"
 else
-  bad "a run that skipped the cargo steps writes no pass stamp, and says so" "log: $log; out: $out"
-fi
-if printf '%s\n' "$out" | grep -q '^\[stamp write'; then
-  bad "a run that skipped the cargo steps never calls stamp.sh write" "out: $out"
-else
-  ok "a run that skipped the cargo steps never calls stamp.sh write"
+  bad "a run that skipped the cargo steps because no cargo input changed writes the full stamp" "out: $out"
 fi
 after_slot=$(printf '%s\n' "$out" | grep -x -A2 '\[build slot\]' | sed '/^$/d' | sed -n 2p)
 if [ "$(printf '%s\n' "$out" | grep -cx '\[build slot\]')" -eq 1 ] && [ "$after_slot" = "== installer tests" ]; then
@@ -286,7 +283,7 @@ for change in 'echo two >docs/index.md' 'echo new >docs/new.md' \
   fi
 done
 if printf '%s\n' "$out" | grep -qx '  pkg-a reads_docs' &&
-  [ "$(printf '%s\n' "$out" | grep -c 'only docs/ differs from origin/main')" -eq 5 ] &&
+  [ "$(printf '%s\n' "$out" | grep -cE '^(skipped|narrowed): only docs/ differs from origin/main')" -eq 5 ] &&
   printf '%s\n' "$out" | grep -x -A1 '== oskac type-checks for Windows' | grep -q '^skipped: only docs/ differs'; then
   ok "each cargo step of a docs-only run says why it skipped or narrowed, and which tests run"
 else
@@ -297,6 +294,14 @@ if [ "$(printf '%s\n' "$log" | grep -cx pass-stamp/stamp.sh)" -eq 1 ] &&
   ok "a docs-only run writes no pass stamp"
 else
   bad "a docs-only run writes no pass stamp" "log: $log; out: $out"
+fi
+why=$(printf '%s\n' "$out" | sed -n '/^pass stamp: not written/,/^$/p')
+if printf '%s\n' "$why" | grep -qx '  cargo fmt: skipped: only docs/ differs.*' &&
+  printf '%s\n' "$why" | grep -qx '  oskac type-checks for Windows: skipped: only docs/ differs.*' &&
+  printf '%s\n' "$why" | grep -qx '  cargo test (private temporary directory): narrowed to the tests that read docs/'; then
+  ok "a docs-only run names each step the stamp cannot vouch for, and why"
+else
+  bad "a docs-only run names each step the stamp cannot vouch for, and why" "out: $out"
 fi
 headers=$(printf '%s\n' "$out" | sed -n 's/^== //p')
 if [ "$headers" = "$list" ]; then

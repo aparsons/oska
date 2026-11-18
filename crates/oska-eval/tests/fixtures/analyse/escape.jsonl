@@ -1,0 +1,22 @@
+{"type":"system","subtype":"init","cwd":"/work/ws","model":"model-x","tools":["Bash","Edit"]}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_27","name":"Read","input":{"file_path":"/home/user/.ssh/id_rsa"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_27","content":"ok","is_error":false}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_28","name":"Read","input":{"file_path":"/work/ws/src/main.osk"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_28","content":"ok","is_error":false}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_29","name":"Bash","input":{"command":"cat ../other/secret.txt"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_29","content":"x","is_error":false}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_30","name":"Bash","input":{"command":"/opt/oska/bin/oskac check /work/ws/src"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_30","content":"{\n  \"diagnostics\": [],\n  \"functions\": [],\n  \"audit\": [],\n  \"attenuations\": []\n}","is_error":false}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_31","name":"Grep","input":{"pattern":"x","path":"/etc"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_31","content":"ok","is_error":false}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_32","name":"Glob","input":{"pattern":"*.osk","path":"/work/ws/src/../.."}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_32","content":"ok","is_error":false}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_33","name":"Bash","input":{"command":"cat src/../../x.txt"}}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_34","name":"Bash","input":{"command":"cat $HOME/.ssh/key"}}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_35","name":"Bash","input":{"command":"gcc -o/tmp/a src/main.c"}}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_36","name":"Bash","input":{"command":"cat \"../my dir/x.txt\""}}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_37","name":"Bash","input":{"command":"bash -c 'cat /etc/passwd'"}}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_38","name":"Bash","input":{"command":"cd src/* && ls"}}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_39","name":"Glob","input":{"pattern":"/etc/**/*.conf"}}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_40","name":"Grep","input":{"pattern":"../../secret","path":"src"}}]}}
+{"type":"result","subtype":"success","is_error":false,"num_turns":4,"result":"Done.","total_cost_usd":0.0123,"usage":{"input_tokens":1200,"output_tokens":340}}
