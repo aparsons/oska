@@ -1005,6 +1005,34 @@ fn an_entry_name_that_is_not_utf8_fails_the_listing_as_rust_shows_it() {
     }
 }
 
+#[test]
+fn a_root_reached_through_chained_symlinks_and_dot_dot_is_its_real_directory() {
+    // The same roots as the test below (absolute, relative, chained, with
+    // `..`), to a directory with a UTF-8 name, so it runs on macOS too.
+    let case = case(
+        "chained_root",
+        r#"    io.println(listed(read.restrict_to("link/sub/..").list_dir(Path.new("."))))?
+    io.println(listed(read.restrict_to("chain/sub/..").list_dir(Path.new("."))))?
+    io.println(listed(read.restrict_to("./up/real/sub/..").list_dir(Path.new("."))))?"#,
+    )
+    .with_setup(|dir| {
+        std::fs::create_dir_all(dir.join("real/sub")).expect("mkdir");
+        std::fs::write(dir.join("real/file.txt"), "x").expect("write");
+        std::os::unix::fs::symlink(dir.join("real"), dir.join("link")).expect("symlink");
+        std::os::unix::fs::symlink("link", dir.join("chain")).expect("symlink");
+        std::fs::create_dir(dir.join("up")).expect("mkdir");
+        std::os::unix::fs::symlink("../real", dir.join("up/real")).expect("symlink");
+    });
+    // The absolute symlink differs between the two trees, so only what
+    // the programs printed is compared.
+    let (interpreted, native) = differential::run(&case);
+    assert_eq!(
+        interpreted.stdout, native.stdout,
+        "{interpreted:#?}\n{native:#?}"
+    );
+    assert_eq!(native.stdout, "file.txt,sub\n".repeat(3), "{native:#?}");
+}
+
 /// Linux only: APFS refuses a name that is not UTF-8 (`EILSEQ`), so
 /// macOS cannot make the tree.
 #[cfg(target_os = "linux")]
@@ -1181,58 +1209,6 @@ fn lock(dir: &Path, mode: u32) {
     }
     for path in [locked, secret] {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
-    }
-}
-
-/// The constant `field` of the `std.rt` platform table the function
-/// `table` gives.
-fn table_field(table: &str, field: &str) -> usize {
-    let source = oska_check::STD_RT_SOURCE;
-    let body = &source[source
-        .find(&format!("fn {table}() -> Platform {{"))
-        .expect("the table")..];
-    let head = format!("        {field}: ");
-    let start = body.find(&head).expect("the field") + head.len();
-    let end = start + body[start..].find(',').expect("its end");
-    body[start..end].parse().expect("a number")
-}
-
-#[test]
-fn each_platform_s_errno_table_is_oskas_wording_for_every_number() {
-    let source = oska_check::STD_RT_SOURCE;
-    let head = "fn system_errors() -> String {\n    \"";
-    let start = source.find(head).expect("the wordings") + head.len();
-    let end = start + source[start..].find('"').expect("their end");
-    let all: Vec<&str> = source[start..end].split('|').collect();
-    let tables = [
-        ("linux_aarch64", oska_sys::LINUX_ERRORS, 133),
-        ("linux_x86_64", oska_sys::LINUX_ERRORS, 133),
-        // `ELAST`, macOS's largest error number.
-        ("macos", oska_sys::MACOS_ERRORS, 106),
-    ];
-    // Linux's 133, then macOS's 106, and nothing else.
-    assert_eq!(all.len(), 133 + 106);
-    for (table, errors, length) in tables {
-        let at = table_field(table, "errors_at");
-        assert_eq!(table_field(table, "errors_count"), length, "{table}");
-        let wordings = &all[at..at + length];
-        for (index, wording) in wordings.iter().enumerate() {
-            let errno = index as i32 + 1;
-            let oska = oska_sys::system_wording(errors, errno);
-            let expected = if wording.is_empty() {
-                oska_sys::OTHER_WORDING
-            } else {
-                wording
-            };
-            assert_eq!(oska, expected, "{table}: errno {errno}");
-            assert!(!wording.contains("os error"), "{table}: errno {errno}");
-        }
-        for (code, _) in errors {
-            assert!(
-                (1..=length).contains(&(*code as usize)),
-                "{table}: {code} is outside its part"
-            );
-        }
     }
 }
 

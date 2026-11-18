@@ -2365,8 +2365,9 @@ fn errno_message(errno: Int) -> String {
 // own. First Linux's errors 1 to 133, then macOS's 1 to 106 (`ELAST`):
 // `oska-sys`'s tables (`LINUX_ERRORS`, `MACOS_ERRORS`) worded by their
 // kinds (`IO_KINDS`). Each platform's table says where its part is
-// (`errors_at`, `errors_count`), and a test (`native_files.rs`) checks
-// every number of every part against `oska-sys`.
+// (`errors_at`, `errors_count`), and a test (`oskac`'s
+// `std_rt_errors.rs`) checks every number of every part against
+// `oska-sys`.
 fn system_errors() -> String {
     "permission denied|not found||interrupted|||||||would block|out of memory|permission denied|||resource busy|already exists|cannot move across devices||not a directory|is a directory|invalid input|||||file too large|no space left on device|not seekable|read-only file system|too many links|broken pipe||||invalid file name||not supported|directory not empty||||||||||||||||||||||||||||||||||||||||||||||||||||||||not supported|||||||||||||||timed out||||||||||||quota exceeded||||||||||||permission denied|not found||interrupted||||||||out of memory|permission denied|||resource busy|already exists|cannot move across devices||not a directory|is a directory|invalid input|||||file too large|no space left on device|not seekable|read-only file system|too many links|broken pipe|||would block||||||||||not supported|||||||||||||||timed out|||invalid file name|||directory not empty|||quota exceeded|||||||||not supported||||||||||||||||||||||||not supported||||"
 }

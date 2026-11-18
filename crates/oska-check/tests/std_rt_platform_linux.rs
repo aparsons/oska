@@ -1,11 +1,12 @@
 //! The values every Linux table of `std.rt` holds whatever the processor
 //! (#168, #366): the open flags but `O_DIRECTORY` and `O_NOFOLLOW`,
 //! `AT_FDCWD`, `F_DUPFD_CLOEXEC`, `TCGETS` and `struct termios`, `mmap`'s
-//! flags, the directory records, `struct sigaction`, `stack_t`, `SIGBUS`,
-//! `ELOOP` and where its errors are worded. They are the generic UAPI headers' values, which arm64 and
+//! flags, the directory records, `struct sigaction`, `stack_t`, `SIGBUS`
+//! and `ELOOP`. They are the generic UAPI headers' values, which arm64 and
 //! x86 both take as they are, so a wrong entry fails here and not only on
 //! the platform's runner. The processor's own values are checked in
-//! `std_rt_platform.rs`.
+//! `std_rt_platform.rs`. Each table also says where Linux's errors are
+//! worded in `system_errors`, which `oskac`'s `std_rt_errors.rs` checks.
 
 mod common;
 
@@ -60,7 +61,7 @@ fn linux_shared() -> Vec<(&'static str, i128)> {
         ("sigbus", 7),
         ("e_loop", 40),
         // Linux's errors 1 to 133 are worded first in `system_errors`,
-        // which `oskac`'s `native_files.rs` checks against `oska-sys`.
+        // which `oskac`'s `std_rt_errors.rs` checks against `oska-sys`.
         ("errors_at", 0),
         ("errors_count", 133),
     ]
