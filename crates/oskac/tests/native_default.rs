@@ -1,5 +1,6 @@
-//! Native by default (spec #125, ticket #141; x86_64, #165): on aarch64
-//! and x86_64 Linux, `oskac run` and `oskac test` compile the program
+//! Native by default (spec #125, ticket #141; x86_64, #165; Apple silicon
+//! macOS, #172): on aarch64 and x86_64 Linux and on Apple silicon macOS,
+//! `oskac run` and `oskac test` compile the program
 //! natively for the host into a private temporary directory and run it
 //! there, and `--interpret` selects the interpreter. Every other host
 //! keeps the interpreter.
@@ -282,11 +283,14 @@ fn tests_the_native_backend_refuses_run_on_the_interpreter() {
     );
 }
 
-// ---- aarch64 and x86_64 Linux: the default is native ---------------------------
+// ---- aarch64 and x86_64 Linux and Apple silicon: the default is native ------
 
-#[cfg(all(
-    target_os = "linux",
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 #[test]
 fn run_and_test_report_a_missing_temporary_directory_alike() {
@@ -322,9 +326,12 @@ fn run_and_test_report_a_missing_temporary_directory_alike() {
 /// which native code reaches. How deep the interpreter gets depends on
 /// the build profile (its frames are larger unoptimised), so nothing here
 /// relies on it failing.
-#[cfg(all(
-    target_os = "linux",
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 const DEEP: &str = "fn down(n: Int) -> Int {\n    if n == 0 {\n        return 0\n    }\n    \
                     down(n - 1) + 1\n}\n\n\
@@ -333,15 +340,21 @@ const DEEP: &str = "fn down(n: Int) -> Int {\n    if n == 0 {\n        return 0\
                     test \"deep\" {\n    t.assert_eq(down(40000), 40000)\n}\n";
 
 /// A small program that prints a line.
-#[cfg(all(
-    target_os = "linux",
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 const GREETS: &str = "fn main(io: Stdout) -> Result<(), IoError> {\n    io.println(\"hi\")\n}\n";
 
-#[cfg(all(
-    target_os = "linux",
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 #[test]
 fn run_and_test_are_native_by_default_and_interpret_selects_the_interpreter() {

@@ -11,9 +11,12 @@
 //! a runtime for). The `test` blocks of the same corpus are compared by
 //! `native_tests.rs`.
 
-#![cfg(all(
-    target_os = "linux",
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 
 mod differential;
@@ -24,7 +27,6 @@ mod skips;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
 
 use differential::{assert_same, Case};
 
@@ -367,11 +369,11 @@ fn the_site_generator_builds_the_real_site_byte_for_byte() {
 }
 
 /// CPU time this thread has used so far, user plus system, from
-/// `/proc/thread-self/stat` (this file is Linux-only, see the `cfg` at the
-/// top). Unlike wall-clock time it does not grow when other processes
+/// `/proc/thread-self/stat`, so on Linux only. Unlike wall-clock time it does not grow when other processes
 /// compete for the cores. The kernel counts it in ticks of 1/100 s
 /// (`USER_HZ`, 100 on every Linux target).
-fn thread_cpu_time() -> Duration {
+#[cfg(target_os = "linux")]
+fn thread_cpu_time() -> std::time::Duration {
     let stat = std::fs::read_to_string("/proc/thread-self/stat").expect("read the thread's stat");
     // The command name, in parentheses, may hold spaces: count the fields
     // after it. They start at field 3 (the state); `utime` and `stime` are
@@ -384,9 +386,11 @@ fn thread_cpu_time() -> Duration {
         .map(|ticks| ticks.parse().expect("a tick count"))
         .collect();
     assert_eq!(fields.len(), 2, "the stat has utime and stime: {stat}");
-    Duration::from_millis((fields[0] + fields[1]) * 10)
+    std::time::Duration::from_millis((fields[0] + fields[1]) * 10)
 }
 
+/// Linux only: the thread's CPU time is read from `/proc`.
+#[cfg(target_os = "linux")]
 #[test]
 fn building_the_site_generator_uses_little_cpu_time() {
     let root = repo_root();
@@ -405,7 +409,7 @@ fn building_the_site_generator_uses_little_cpu_time() {
     // catches a slowdown by a large factor. It counts CPU time, not
     // wall-clock time, so a busy machine cannot fail it (#271).
     assert!(
-        used < Duration::from_secs(5),
+        used < std::time::Duration::from_secs(5),
         "building site/build.osk used {used:?} of CPU time"
     );
 }

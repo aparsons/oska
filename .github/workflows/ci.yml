@@ -54,30 +54,21 @@ jobs:
       - run: scripts/check.sh
 
   macos:
-    # Spec #154 (ticket #169): on Apple silicon, macOS executables built by
-    # `oskac build --target macos-aarch64` must load, pass macOS's own
-    # signature check (`codesign --verify --strict`) and print what the
-    # interpreter prints. `build_macos` runs them only on this runner; every
-    # other host checks their format byte by byte. Ticket #170 adds the
-    # differential tests of the runtime.
+    # Spec #154: on Apple silicon `oskac run` and `oskac test` are native
+    # by default (ticket #172), so the whole of `oskac`'s tests run here:
+    # the differential suite (every native_*.rs, the corpus and the site
+    # included) compares the macos-aarch64 executable with the
+    # interpreter, and `build_macos` checks that macOS accepts each
+    # executable's signature (`codesign --verify --strict`).
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       # The executables are run only on Apple silicon: a label that moves to
       # Intel must fail, not skip them.
       - run: test "$(uname -m)" = arm64
-      - run: cargo test -p oskac --test build_macos
-      # Tickets #170 and #171: the runtime through libSystem. The
-      # differential tests of memory, panics, the stack, process
-      # capabilities, faults and confined files run natively here, built
-      # with `--target macos-aarch64`.
-      - run: >-
-          cargo test -p oskac --no-fail-fast
-          --test native_memory --test native_ints
-          --test native_process --test native_faults
-          --test native_files
+      - run: cargo test -p oskac --no-fail-fast
 
   cross-build:
     # Seam 3 of spec #153: every corpus program built for every target on

@@ -871,17 +871,11 @@ fn three_ways(case: &Case) -> Vec<(Command, &'static str)> {
         .args(["run", "--interpret", case.target()]);
     let mut native = Command::new(env!("CARGO_BIN_EXE_oskac"));
     native.current_dir(&dir).args(["run", case.target()]);
-    let mut ways = vec![
+    vec![
         (interpreter, "the interpreter"),
         (native, "`oskac run` natively"),
         (Command::new(&exe), "the executable"),
-    ];
-    // On a Mac `oskac run` is the interpreter until the macOS runtime is
-    // complete (spec #154): the executable is the native way.
-    if cfg!(target_os = "macos") {
-        ways.remove(1);
-    }
-    ways
+    ]
 }
 
 #[test]

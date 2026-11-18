@@ -54,10 +54,13 @@ impl Target {
     ];
 
     /// The targets `oskac run` and `oskac test` compile for when they are
-    /// the host's: Linux's. macOS's backend runs small programs only
-    /// until its runtime is complete (spec #154), so on a Mac they still
-    /// run the interpreter.
-    const HOSTS: [Target; 2] = [Target::LinuxAarch64, Target::LinuxX86_64];
+    /// the host's. An Intel Mac still runs the interpreter until its
+    /// backend comes (spec #154's #173).
+    const HOSTS: [Target; 3] = [
+        Target::LinuxAarch64,
+        Target::LinuxX86_64,
+        Target::MacosAarch64,
+    ];
 
     /// The target for the supported platform named `platform`. An
     /// unknown name is refused with `E0393`, listing the names; a

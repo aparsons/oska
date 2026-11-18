@@ -16,9 +16,7 @@
 //!
 //! It is compiled only where native executables run: aarch64 and x86_64
 //! Linux, and Apple silicon macOS, each running what it builds for its own
-//! platform. On a Mac, `oskac run` stays on the interpreter until the
-//! macOS runtime is complete (spec #154), so the harness names its target
-//! itself: [`host_target`]. Every target
+//! platform. Every target
 //! with a backend must compile every case (spec #153): the host also
 //! builds it with `--target` for each other one, which it cannot run, so
 //! an aarch64 host still fails when x86_64 refuses a program, and a
@@ -155,12 +153,8 @@ pub struct Outcome {
 }
 
 /// The target platform this host builds and runs native executables
-/// for: its own. On an Apple silicon Mac, which `oskac run` does not
-/// compile for yet (spec #154), `macos-aarch64`.
+/// for: its own.
 pub fn host_target() -> oska_native::Target {
-    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        return oska_native::Target::MacosAarch64;
-    }
     oska_native::Target::host().expect("this host runs native executables")
 }
 

@@ -200,16 +200,13 @@ fn the_target_may_be_written_with_an_equals_sign() {
 #[test]
 fn without_a_target_the_host_platform_is_built_for_when_it_has_a_backend() {
     let dir = workspace("default", &[("hello.osk", HELLO)]);
-    // macOS builds, but is not yet the default on a Mac: its runtime runs
-    // small programs only until spec #154's parity ticket (#172).
     let host_builds = host_platform().is_some_and(|host| {
-        !host.starts_with("macos-")
-            && oskac(
-                &dir,
-                &["build", "hello.osk", "--target", host, "-o", "host"],
-            )
-            .status
-            .success()
+        oskac(
+            &dir,
+            &["build", "hello.osk", "--target", host, "-o", "host"],
+        )
+        .status
+        .success()
     });
     let expected = match host_platform() {
         Some(host) if host_builds => host,
@@ -231,6 +228,9 @@ fn without_a_target_the_host_platform_is_built_for_when_it_has_a_backend() {
     }
     if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
         assert_eq!(expected, "linux-x86_64");
+    }
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        assert_eq!(expected, "macos-aarch64");
     }
 }
 

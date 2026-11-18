@@ -1,4 +1,5 @@
-//! Native by default: on aarch64 and x86_64 Linux, `oskac run` and
+//! Native by default: on aarch64 and x86_64 Linux and Apple silicon
+//! macOS, `oskac run` and
 //! `oskac test` compile the checked program for the host with the native
 //! backend (`oska-native`) and run the executable; `--interpret` selects
 //! the interpreter, and every other host keeps it until it has a backend
@@ -222,17 +223,18 @@ fn ended(status: std::process::ExitStatus, json: bool) -> ExitCode {
     ExitCode::FAILURE
 }
 
-/// The Linux signals a native process may die of, by number: the name,
+/// The host's signals a native process may die of, by number: the name,
 /// and whether only a fault raises it. A program killed by any other
 /// (`SIGKILL`, `SIGPIPE`, `SIGTERM`) was killed from outside, as any
-/// process can be. The numbers are the same for every target with a
-/// backend: asm-generic/signal.h, which arm64 takes, and
-/// arch/x86/include/uapi/asm/signal.h agree on these.
+/// process can be. The numbers are the same on every host with a backend
+/// (asm-generic/signal.h, which arm64 takes,
+/// arch/x86/include/uapi/asm/signal.h and macOS's sys/signal.h agree on
+/// them) but `SIGBUS`'s ([`SIGBUS`]).
 const SIGNALS: &[(i32, &str, bool)] = &[
     (4, "SIGILL", true),
     (5, "SIGTRAP", true),
     (6, "SIGABRT", true),
-    (7, "SIGBUS", true),
+    (SIGBUS, "SIGBUS", true),
     (8, "SIGFPE", true),
     (9, "SIGKILL", false),
     (11, "SIGSEGV", true),
@@ -240,7 +242,11 @@ const SIGNALS: &[(i32, &str, bool)] = &[
     (15, "SIGTERM", false),
 ];
 
-/// The name of the Linux signal `number`, when [`SIGNALS`] has it.
+/// `SIGBUS`'s number on the host: 10 on macOS, 7 on Linux. A stack
+/// overflow on macOS is a `SIGBUS`.
+const SIGBUS: i32 = if cfg!(target_os = "macos") { 10 } else { 7 };
+
+/// The name of the host's signal `number`, when [`SIGNALS`] has it.
 pub fn signal_name(number: i32) -> Option<&'static str> {
     SIGNALS
         .iter()
@@ -248,7 +254,7 @@ pub fn signal_name(number: i32) -> Option<&'static str> {
         .map(|(_, name, _)| *name)
 }
 
-/// The name of the Linux signal `number`, for the ones a faulty program
+/// The name of the host's signal `number`, for the ones a faulty program
 /// dies of; `None` for one sent from outside.
 pub fn fault_signal(number: i32) -> Option<&'static str> {
     SIGNALS
