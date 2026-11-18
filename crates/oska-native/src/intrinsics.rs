@@ -865,7 +865,17 @@ mod tests {
     #[test]
     fn macos_makes_each_call_as_the_libsystem_function_declares_it() {
         use Fails::*;
-        let rows: &[(&str, &str, u8, u8, bool, Fails, &[i64])] = &[
+        /// (intrinsic, symbol, arguments, fixed, wide, fails, then).
+        type Row = (
+            &'static str,
+            &'static str,
+            u8,
+            u8,
+            bool,
+            Fails,
+            &'static [i64],
+        );
+        let rows: &[Row] = &[
             ("rt_sys_read", "_read", 3, 3, true, MinusOne, &[]),
             ("rt_sys_write", "_write", 3, 3, true, MinusOne, &[]),
             // openat(fd, path, flags, ...): the mode is variadic.
