@@ -73,7 +73,7 @@ jobs:
       # of memory, panics, the stack, process capabilities and faults run
       # natively here, built with `--target macos-aarch64`.
       - run: >-
-          cargo test -p oskac
+          cargo test -p oskac --no-fail-fast
           --test native_memory --test native_ints
           --test native_process --test native_faults
 
