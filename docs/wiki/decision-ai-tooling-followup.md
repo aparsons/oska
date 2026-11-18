@@ -22,3 +22,5 @@ Related: [goal-drain-backlog](goal-drain-backlog.md).
 - Q11: methods whose signature a trait fixes are exempt from A5; there is no `_name` escape hatch.
 - Q12: the E0102 fix is `machine` when the hoisted expression calls only pure functions, otherwise `maybe`.
 - GLOSSARY.md gained "Unused authority" and "Release check" (uncommitted on 2026-11-18; to ship with the spec).
+
+Lint note (2026-11-18, `origin/main@fd7696a`): the GLOSSARY.md entries "Unused authority" and "Release check" are committed (PR #379, with ADR 0016), so "uncommitted" above is superseded; ADR 0016 is the number chosen for Q5. Spec #367 has tickets #368 to #376, scheduled after the eval harness per [handoff-2026-11-18](handoff-2026-11-18.md).

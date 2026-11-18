@@ -5,3 +5,5 @@ On 2026-11-17 both implementers (#351 → PR #352, #350 → PR #353) independent
 On 2026-11-17 the coordinator dispatched an environment fix (see the ledger in [goal-drain-backlog](goal-drain-backlog.md)).
 
 Lint note (2026-11-17): the `fc411f9` claim about implementer.md was not re-verified at `bb8b9ac`; whether the environment fix merged is unconfirmed (no matching merged PR in the last 20 on 2026-11-17). Related: [problem-pi-cpu](problem-pi-cpu.md), [problem-push-guidance](problem-push-guidance.md).
+
+Lint note (2026-11-18, `origin/main@fd7696a`): the environment fix is PR #357 (merged 2026-11-18), and docs/agents/implementer.md now says to put logs outside the worktree (`${TMPDIR:-/tmp}`). The "unconfirmed" note above is superseded. See also [handoff-2026-11-18](handoff-2026-11-18.md).

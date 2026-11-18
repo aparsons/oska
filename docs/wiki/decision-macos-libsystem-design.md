@@ -21,3 +21,5 @@ Programs built for `macos-aarch64` ran on macos-latest, passed `codesign --verif
 - `argc`/`argv` arrive in `x0`/`x1`;
 - the ad-hoc signature is accepted.
 Not yet confirmed: the Mac's cross-build byte comparison (the job failed earlier on a test race, not on the format).
+
+Lint note (2026-11-18, `origin/main@fd7696a`): #381 was closed on 2026-11-18 as a duplicate of #389 (merged 2026-11-18), both for #169. The "Confirmed on a real Mac" results came from #381's CI run and are not re-verified against #389. "dyld's minimum load commands are unverified" is superseded by that run. #170 merged as PR #398; #171 is PR #401 (open). See [problem-duplicate-dispatch](problem-duplicate-dispatch.md).

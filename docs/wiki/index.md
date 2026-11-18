@@ -28,3 +28,8 @@ A dated historical record kept by the coordinating agent. Pages never describe t
 - [Conflicting push guidance](problem-push-guidance.md): `--no-verify` advice that contradicted itself (resolved 2026-11-17).
 
 Lint 2026-11-17: all 7 pages are listed above. The "Open"/"Queued" wording in linked pages is dated and superseded by notes on those pages. Related research not yet summarised here: `docs/research/2026-11-oska-text-tools.md`, `docs/research/agent-scripting-python-vs-oska.md` (untracked as of 2026-11-17).
+
+## Lint 2026-11-18 (`origin/main@fd7696a`)
+- Orphan fixed: [problem-duplicate-dispatch](problem-duplicate-dispatch.md) (2026-11-18) was missing from the problem list above. [handoff-2026-11-18](handoff-2026-11-18.md) and [forecast-2026-11-18](forecast-2026-11-18.md) are listed above.
+- Superseded: "all 7 pages are listed above" (2026-11-17); at `fd7696a` there are 17 pages including this index.
+- Superseded: the two research notes called untracked on 2026-11-17 are tracked at `fd7696a` (`docs/research/2026-11-oska-text-tools.md`, `docs/research/2026-11-agent-scripting-python-vs-oska.md`); still not summarised here.

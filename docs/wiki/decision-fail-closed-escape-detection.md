@@ -5,3 +5,5 @@ On 2026-11-18 the second review of PR #380 (#215, `oska-eval analyse`) still fou
 The same principle should apply to `grade` (PR #384): refuse symlinks rather than resolve them.
 
 Related: [goal-drain-backlog](goal-drain-backlog.md).
+
+Lint note (2026-11-18, `origin/main@fd7696a`): PR #384 (#214, `grade`) merged 2026-11-18 after two fix rounds in grading confinement, so the "should apply" line above was acted on. PR #380 merged 2026-11-18; its follow-ups are #388 (open). See [handoff-2026-11-18](handoff-2026-11-18.md).
