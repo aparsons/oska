@@ -94,11 +94,12 @@ fn field(bytes: &[u8], at: usize, size: usize) -> u64 {
 
 #[test]
 fn the_kernel_maps_each_segment_with_only_its_own_permissions() {
-    use std::io::Write;
+    use std::io::{BufRead, BufReader, Read, Write};
     use std::process::{Command, Stdio};
-    // A program that waits on stdin, so its mappings can be read while it
-    // runs.
+    // A program that says it is running, then waits on stdin, so its
+    // mappings can be read while it runs.
     let src = "fn main(io: Stdout, input: Stdin) -> Result<(), IoError> {\n    \
+               io.println(\"ready\")?\n    \
                let _ = input.read_line()?\n    io.println(\"done\")\n}\n";
     let (exe, dir) = differential::build_native(&Case::file("maps", src));
     let elf = std::fs::read(&exe).expect("the executable");
@@ -123,18 +124,19 @@ fn the_kernel_maps_each_segment_with_only_its_own_permissions() {
         .stdout(Stdio::piped())
         .spawn()
         .expect("the program should start");
-    // Wait until the kernel has loaded it (its maps name the executable).
+    // Wait until the program runs its own code. `spawn` can return while
+    // the kernel is still inside `execve`, mapping the segments one at a
+    // time (for this ET_DYN image, first the whole span with the first
+    // segment's permissions), so maps read then can show a half-loaded
+    // image (#344). A line the program printed means the loading is done.
+    let mut stdout = BufReader::new(child.stdout.take().expect("stdout"));
+    let mut ready = String::new();
+    stdout.read_line(&mut ready).expect("should read");
+    assert_eq!(ready, "ready\n");
     let path = std::fs::canonicalize(&exe).expect("a canonical path");
     let path = path.to_str().expect("a UTF-8 path");
-    let maps_file = format!("/proc/{}/maps", child.id());
-    let mut maps = String::new();
-    for _ in 0..200 {
-        maps = std::fs::read_to_string(&maps_file).unwrap_or_default();
-        if maps.contains(path) {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    let maps =
+        std::fs::read_to_string(format!("/proc/{}/maps", child.id())).expect("the program's maps");
     let mut seen = 0;
     for line in maps.lines().filter(|l| l.ends_with(path)) {
         let parts: Vec<&str> = line.split_whitespace().collect();
@@ -166,7 +168,9 @@ fn the_kernel_maps_each_segment_with_only_its_own_permissions() {
         .expect("stdin")
         .write_all(b"go\n")
         .expect("should write");
-    let output = child.wait_with_output().expect("the program should end");
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "done\n");
+    let mut rest = String::new();
+    stdout.read_to_string(&mut rest).expect("should read");
+    assert!(child.wait().expect("the program should end").success());
+    assert_eq!(rest, "done\n");
     assert!(seen >= 2, "the executable's mappings:\n{maps}");
 }
