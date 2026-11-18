@@ -214,7 +214,9 @@ The fixes are made in memory. At the end, each changed file is written once, rep
 - a fix edits a file that is not one of the checked program's, the file itself or the package's modules and manifest, or its edits overlap or fall outside the file;
 - a file is a symlink, or is reached through one: no file is read or written through a symlink;
 - a file changed on disk while `oskac fix` ran;
-- the fixed program's authority is wider than the starting program's, by the rules of the [authority baseline](#authority-baseline): a function gained a capability, a function stopped being pure, a new function reaches a capability no function did, or an audit site was added. The starting program is compared once every module parses, since a module that does not parse has no authority report.
+- the fixed program's authority is wider than the starting program's, by the rules of the [authority baseline](#authority-baseline): a function gained a capability, a function stopped being pure, a new function reaches a capability no function did, or an audit site was added. The starting program is compared once every module parses, since a module that does not parse has no authority report. So a fix applied before every module parses is never checked for widening, by this rule or any other: only the fixes after that point, and the program they leave, are compared with the starting authority.
+
+Two short windows remain in the write. A file is re-read to see whether it changed on disk, then replaced in a later step, so an edit made in between is lost. On Windows the file is looked at by path and then renamed, so a change between those two steps is not caught either. Neither window is closed; a file you edit while `oskac fix` runs may lose the edit.
 
 Human-readable output: one line per applied fix on standard output, as ``app.osk:2:24: fixed E0005: remove `;` ``, then with `--dry-run` a unified diff of each file, and the diagnostics that remain on standard error as `check` prints them.
 

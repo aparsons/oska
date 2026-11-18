@@ -5,8 +5,8 @@
 //! not its JSON report: the harness cannot trust a result, so it stops with
 //! bad input rather than guess.
 
-use crate::json::Json;
 use crate::task::{Run, CHECKS_MODULE};
+use oska_syntax::{parse_json, JsonValue};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -64,11 +64,11 @@ impl Oskac<'_> {
             .map_err(|e| format!("cannot run `{} {what}`: {e}", self.path))
     }
 
-    fn json(&self, dir: &Path, args: &[&str]) -> Result<Json, String> {
+    fn json(&self, dir: &Path, args: &[&str]) -> Result<JsonValue, String> {
         let what = args.join(" ");
         let output = self.output(self.command(dir, args), &what)?;
         let stdout = String::from_utf8_lossy(&output.stdout);
-        Json::parse(&stdout).map_err(|e| {
+        parse_json(&stdout).map_err(|e| {
             format!(
                 "`oskac {what}` did not print its JSON report ({e}); it wrote: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
@@ -83,22 +83,22 @@ impl Oskac<'_> {
         let mut tests = Vec::new();
         for test in report
             .get("tests")
-            .and_then(Json::as_array)
+            .and_then(JsonValue::as_array)
             .ok_or_else(malformed)?
         {
-            if test.get("module").and_then(Json::as_str) != Some(CHECKS_MODULE) {
+            if test.get("module").and_then(JsonValue::as_str) != Some(CHECKS_MODULE) {
                 continue;
             }
             let name = test
                 .get("name")
-                .and_then(Json::as_str)
+                .and_then(JsonValue::as_str)
                 .ok_or_else(malformed)?;
-            let failure = match test.get("status").and_then(Json::as_str) {
+            let failure = match test.get("status").and_then(JsonValue::as_str) {
                 Some("passed") => None,
                 Some(_) => Some(test.get("failure").map_or_else(
                     || "did not pass".to_string(),
                     |failure| match failure {
-                        Json::Null => "did not pass".to_string(),
+                        JsonValue::Null => "did not pass".to_string(),
                         failure => diagnostic(failure),
                     },
                 )),
@@ -119,16 +119,16 @@ impl Oskac<'_> {
         let mut functions = Vec::new();
         for function in report
             .get("functions")
-            .and_then(Json::as_array)
+            .and_then(JsonValue::as_array)
             .ok_or_else(malformed)?
         {
             let name = function
                 .get("name")
-                .and_then(Json::as_str)
+                .and_then(JsonValue::as_str)
                 .ok_or_else(malformed)?;
             let authority = function
                 .get("authority")
-                .and_then(Json::as_array)
+                .and_then(JsonValue::as_array)
                 .ok_or_else(malformed)?
                 .iter()
                 .map(|c| c.as_str().map(str::to_string))
@@ -139,12 +139,12 @@ impl Oskac<'_> {
         let mut audit = Vec::new();
         for site in report
             .get("audit")
-            .and_then(Json::as_array)
+            .and_then(JsonValue::as_array)
             .ok_or_else(malformed)?
         {
             let kind = site
                 .get("kind")
-                .and_then(Json::as_str)
+                .and_then(JsonValue::as_str)
                 .ok_or_else(malformed)?;
             audit.push((kind.to_string(), place(site)));
         }
@@ -199,7 +199,7 @@ impl ProgramRun {
 }
 
 /// A report's diagnostics, each as `CODE: message`.
-fn diagnostics(report: &Json) -> Option<Vec<String>> {
+fn diagnostics(report: &JsonValue) -> Option<Vec<String>> {
     Some(
         report
             .get("diagnostics")?
@@ -210,19 +210,22 @@ fn diagnostics(report: &Json) -> Option<Vec<String>> {
     )
 }
 
-fn diagnostic(found: &Json) -> String {
-    let code = found.get("code").and_then(Json::as_str).unwrap_or("?");
-    let message = found.get("message").and_then(Json::as_str).unwrap_or("");
+fn diagnostic(found: &JsonValue) -> String {
+    let code = found.get("code").and_then(JsonValue::as_str).unwrap_or("?");
+    let message = found
+        .get("message")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("");
     format!("{code}: {message}")
 }
 
 /// Where a report entry is: `path bytes start..end`.
-fn place(entry: &Json) -> String {
-    let path = entry.get("path").and_then(Json::as_str).unwrap_or("?");
+fn place(entry: &JsonValue) -> String {
+    let path = entry.get("path").and_then(JsonValue::as_str).unwrap_or("?");
     let span = entry.get("span");
     let at = |key: &str| {
         span.and_then(|s| s.get(key))
-            .and_then(Json::as_u64)
+            .and_then(JsonValue::as_u64)
             .map_or_else(|| "?".to_string(), |n| n.to_string())
     };
     format!("{path} bytes {}..{}", at("start"), at("end"))

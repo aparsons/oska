@@ -9,11 +9,13 @@
 //! Every task's starting package must check.
 
 use crate::grader::Oskac;
-use crate::json::Json;
 use crate::task::{self, Task};
 use crate::workspace::Workspace;
+use oska_syntax::JsonValue;
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 /// One check of one solution, and how it came out.
 struct Check {
@@ -42,13 +44,13 @@ impl Check {
         }
     }
 
-    fn json(&self) -> Json {
+    fn json(&self) -> JsonValue {
         let mut fields = vec![
-            field("group", Json::Str(self.group.to_string())),
-            field("check", Json::Str(self.name.clone())),
+            field("group", JsonValue::Str(self.group.to_string())),
+            field("check", JsonValue::Str(self.name.clone())),
             field(
                 "outcome",
-                Json::Str(
+                JsonValue::Str(
                     if self.failure.is_some() {
                         "failed"
                     } else {
@@ -59,9 +61,9 @@ impl Check {
             ),
         ];
         if let Some(failure) = &self.failure {
-            fields.push(field("detail", Json::Str(failure.clone())));
+            fields.push(field("detail", JsonValue::Str(failure.clone())));
         }
-        Json::Obj(fields)
+        JsonValue::Object(fields)
     }
 }
 
@@ -76,42 +78,34 @@ pub fn run(oskac: &str, tasks: &str) -> ExitCode {
     let entries = match task::load_set(Path::new(tasks)) {
         Ok(entries) => entries,
         Err(message) => {
-            eprintln!("oska-eval: {message}");
+            // Bad input is reported the way every other kind is: a report
+            // on stdout, exit 2.
+            let report = JsonValue::Object(vec![
+                field("schema", JsonValue::Number("1".to_string())),
+                field("valid", JsonValue::Bool(false)),
+                field("errors", strings(&[message])),
+                field("tasks", JsonValue::Array(Vec::new())),
+            ]);
+            print!("{}", crate::json::pretty(&report));
             return ExitCode::from(2);
         }
     };
     let oskac = Oskac::new(oskac);
-    let results: Vec<Option<Result<Validated, String>>> = std::thread::scope(|scope| {
-        let running: Vec<_> = entries
-            .iter()
-            .map(|entry| {
-                let oskac = &oskac;
-                scope.spawn(move || entry.task.as_ref().ok().map(|task| validate(oskac, task)))
-            })
-            .collect();
-        running
-            .into_iter()
-            .map(|handle| {
-                handle
-                    .join()
-                    .unwrap_or_else(|_| Some(Err("validating this task panicked".to_string())))
-            })
-            .collect()
-    });
+    let results = validate_all(&oskac, &entries);
 
     let mut bad_input = false;
     let mut failed = false;
     let mut reports = Vec::new();
     for (entry, result) in entries.iter().zip(results) {
-        let mut fields = vec![field("id", Json::Str(entry.id.clone()))];
+        let mut fields = vec![field("id", JsonValue::Str(entry.id.clone()))];
         match (&entry.task, result) {
             (Ok(task), Some(Ok(validated))) => {
-                fields.push(field("class", Json::Str(task.class.clone())));
+                fields.push(field("class", JsonValue::Str(task.class.clone())));
                 match &task.deferred {
-                    None => fields.push(field("status", Json::Str("active".to_string()))),
+                    None => fields.push(field("status", JsonValue::Str("active".to_string()))),
                     Some(reason) => {
-                        fields.push(field("status", Json::Str("deferred".to_string())));
-                        fields.push(field("reason", Json::Str(reason.clone())));
+                        fields.push(field("status", JsonValue::Str("deferred".to_string())));
+                        fields.push(field("reason", JsonValue::Str(reason.clone())));
                     }
                 }
                 fields.push(field("reference", checks(&validated.reference)));
@@ -132,14 +126,14 @@ pub fn run(oskac: &str, tasks: &str) -> ExitCode {
             }
             (Ok(_), None) => {}
         }
-        reports.push(Json::Obj(fields));
+        reports.push(JsonValue::Object(fields));
     }
-    let report = Json::Obj(vec![
-        field("schema", Json::Num("1".to_string())),
-        field("valid", Json::Bool(!bad_input && !failed)),
-        field("tasks", Json::Arr(reports)),
+    let report = JsonValue::Object(vec![
+        field("schema", JsonValue::Number("1".to_string())),
+        field("valid", JsonValue::Bool(!bad_input && !failed)),
+        field("tasks", JsonValue::Array(reports)),
     ]);
-    print!("{}", report.pretty());
+    print!("{}", crate::json::pretty(&report));
     if bad_input {
         ExitCode::from(2)
     } else if failed {
@@ -147,6 +141,37 @@ pub fn run(oskac: &str, tasks: &str) -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
+}
+
+/// Validates every well-formed task, on at most `available_parallelism`
+/// threads (each task runs several `oskac` processes), and returns the
+/// outcomes in the entries' order.
+fn validate_all(oskac: &Oskac, entries: &[task::Entry]) -> Vec<Option<Result<Validated, String>>> {
+    let workers = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .min(entries.len().max(1));
+    let next = AtomicUsize::new(0);
+    let done = Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                let Some(entry) = entries.get(index) else {
+                    break;
+                };
+                let outcome = entry.task.as_ref().ok().map(|task| {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| validate(oskac, task)))
+                        .unwrap_or_else(|_| Err("validating this task panicked".to_string()))
+                });
+                if let Ok(mut done) = done.lock() {
+                    done.push((index, outcome));
+                }
+            });
+        }
+    });
+    let mut done = done.into_inner().unwrap_or_default();
+    done.sort_by_key(|(index, _)| *index);
+    done.into_iter().map(|(_, outcome)| outcome).collect()
 }
 
 fn validate(oskac: &Oskac, task: &Task) -> Result<Validated, String> {
@@ -317,14 +342,14 @@ fn widening(task: &Task, functions: &[(String, Vec<String>)]) -> Option<String> 
     (!found.is_empty()).then(|| found.join("; "))
 }
 
-fn field(key: &str, value: Json) -> (String, Json) {
+fn field(key: &str, value: JsonValue) -> (String, JsonValue) {
     (key.to_string(), value)
 }
 
-fn checks(checks: &[Check]) -> Json {
-    Json::Arr(checks.iter().map(Check::json).collect())
+fn checks(checks: &[Check]) -> JsonValue {
+    JsonValue::Array(checks.iter().map(Check::json).collect())
 }
 
-fn strings(items: &[String]) -> Json {
-    Json::Arr(items.iter().map(|s| Json::Str(s.clone())).collect())
+fn strings(items: &[String]) -> JsonValue {
+    JsonValue::Array(items.iter().map(|s| JsonValue::Str(s.clone())).collect())
 }

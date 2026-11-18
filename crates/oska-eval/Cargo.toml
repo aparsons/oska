@@ -11,5 +11,8 @@ repository.workspace = true
 rust-version.workspace = true
 publish = false
 
+[dependencies]
+oska-syntax = { path = "../oska-syntax" }
+
 [lints]
 workspace = true
