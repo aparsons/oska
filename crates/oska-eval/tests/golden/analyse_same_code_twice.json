@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "stop": "finished",
+  "iterations": 2,
+  "iterations_to_clean": null,
+  "timeline": [
+    {
+      "iteration": 1,
+      "source": "command",
+      "codes": ["E0005", "E0005"]
+    },
+    {
+      "iteration": 2,
+      "source": "command",
+      "codes": ["E0005"]
+    }
+  ],
+  "diagnostics": [
+    {
+      "code": "E0005",
+      "path": "src/main.osk",
+      "first_iteration": 1,
+      "resolved_iteration": null,
+      "iterations_present": 2,
+      "fix": {"applicability": "machine", "applied": true, "gone_next_check": false}
+    },
+    {
+      "code": "E0005",
+      "path": "src/main.osk",
+      "first_iteration": 1,
+      "resolved_iteration": 2,
+      "iterations_present": 1,
+      "fix": {"applicability": "machine", "applied": true, "gone_next_check": true}
+    }
+  ],
+  "fixes": {
+    "offered": 2,
+    "applied": 2,
+    "gone_next_check": 1,
+    "machine_offered": 2,
+    "machine_applied": 2,
+    "machine_gone_next_check": 1
+  },
+  "lookups": {
+    "explain": [],
+    "site": []
+  },
+  "escapes": [],
+  "usage": {"turns": 4, "input_tokens": 1200, "output_tokens": 340, "cost_usd": 0.0123},
+  "finished_despite_failing": null
+}

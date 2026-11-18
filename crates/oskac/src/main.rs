@@ -730,9 +730,9 @@ fn on_package(
         release: matches!(command, Command::Check(_)) && flags.release,
     };
     let cached = cache::Cached::new(store, cache::package_sources(dir, &package, &refused));
-    let check = || package::check(&package, &refused, options);
     if let Command::Check(gate) = command {
-        let here = |report| {
+        let check = || {
+            let report = package::check(&package, &refused, options);
             if json {
                 report
             } else {
@@ -740,21 +740,19 @@ fn on_package(
             }
         };
         return match gate {
-            Some(_) => finish_check(&here(check()), json, dir, gate),
+            Some(_) => finish_check(&check(), json, dir, gate),
             None => cached
                 .check(&check_flags(json, flags.release), || {
-                    render_report(&here(check()), json, dir)
+                    render_report(&check(), json, dir)
                 })
                 .emit(),
         };
     }
-    let report = check();
-    // A package that needs a newer `oskac` (`E0407`) is refused first, from
-    // every command, even a `run` of a library.
-    let too_old = oska_check::needs_newer_oskac(&report);
-    if !too_old && matches!(command, Command::Run | Command::Build(_)) && package.is_library() {
-        return refuse(command, vec![oska_check::run_of_library(dir)], json, dir);
-    }
+    let report = if matches!(command, Command::Run | Command::Build(_)) {
+        package::check_to_run(&package, &refused, dir, options)
+    } else {
+        package::check(&package, &refused, options)
+    };
     let Some(program) = &report.program else {
         return refuse(command, report.diagnostics, json, dir);
     };

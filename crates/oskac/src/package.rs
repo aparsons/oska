@@ -334,11 +334,40 @@ impl Staged {
 /// it, which every check reports first: a package with one is not all
 /// there, so the check gives it no program to run.
 pub fn check(package: &Package, refused: &[Diagnostic], options: CheckOptions) -> CheckReport {
+    check_with(package, refused, None, options)
+}
+
+/// The check of `package`, as [`check`] gives it, for `oskac run` or
+/// `oskac build` of the package in `dir`: a library, which has no
+/// `src/main.osk`, is refused for that alone, with no program.
+pub fn check_to_run(
+    package: &Package,
+    refused: &[Diagnostic],
+    dir: &str,
+    options: CheckOptions,
+) -> CheckReport {
+    check_with(package, refused, Some(dir), options)
+}
+
+/// The one place a package's refusals are ordered. `run_of` is the
+/// package's directory when the check is for a run.
+fn check_with(
+    package: &Package,
+    refused: &[Diagnostic],
+    run_of: Option<&str>,
+    options: CheckOptions,
+) -> CheckReport {
     let mut report = oska_check::check_package(package, options);
     // A package that needs a newer `oskac` (`E0407`) is refused for that
-    // alone, before the files the load refused.
-    let too_old = oska_check::needs_newer_oskac(&report);
-    if !refused.is_empty() && !too_old {
+    // alone, by every command: before a run of a library, and before the
+    // files the load refused.
+    if oska_check::needs_newer_oskac(&report) {
+        return report;
+    }
+    if let Some(dir) = run_of.filter(|_| package.is_library()) {
+        report.diagnostics = vec![oska_check::run_of_library(dir)];
+        report.program = None;
+    } else if !refused.is_empty() {
         report.diagnostics.splice(0..0, refused.iter().cloned());
         report.program = None;
     }
