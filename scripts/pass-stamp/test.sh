@@ -328,6 +328,15 @@ if grep -q 'check-t2.log' <<<"$write_out" && grep -q 'outside the worktree' <<<"
 else
   bad "a declined stamp write names the file and says to move logs outside" "$write_out"
 fi
+# Every listed file is indented alike, and a cut list says how many it left out.
+for i in $(seq 1 22); do echo log >"$clone/many-$i.log"; done
+many_out=$(cd "$clone" && scripts/pass-stamp/stamp.sh covers origin </dev/null 2>&1 || true)
+listed=$(grep -c '^    ?? ' <<<"$many_out" || true)
+if [ "$listed" -eq 20 ] && grep -qx '    \.\.\. and 4 more (24 in all)' <<<"$many_out"; then
+  ok "a long dirty list indents every file and says how many it cut"
+else
+  bad "a long dirty list indents every file and says how many it cut" "$many_out"
+fi
 
 # --- a deleted branch --------------------------------------------------------
 # A deletion pushes no commits, so a stamped, clean tree covers it. Without a

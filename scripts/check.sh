@@ -47,14 +47,18 @@
 # A step whose tool is missing calls `skip_step "REASON"` instead of failing;
 # the run still writes the pass stamp, since running again here cannot do
 # better and CI runs the step. `skip_step --no-stamp "REASON"` is for a skip
-# the stamp cannot vouch for: the run then writes no stamp.
+# the stamp cannot vouch for: the run then writes no stamp, and says which
+# steps and why.
 #
-# Outside CI, the --cargo steps skip (as with --no-stamp) when no cargo input
-# differs from the merge-base with origin/main; see cargo_plan below. When
-# the only cargo inputs that differ are in docs/, the --docs-tests step runs
-# just the tests that read docs/ and the other --cargo steps skip; that run
-# writes no stamp either. A skipped step prints its header and why, and waits
-# for no build slot. CI ($CI or $GITHUB_ACTIONS set) always runs them all.
+# Outside CI, the --cargo steps skip when no cargo input differs from the
+# merge-base with origin/main; see cargo_plan below. That skip is decided
+# from the tree the stamp names (its cargo inputs are main's), so the run
+# still writes the stamp. When the only cargo inputs that differ are in
+# docs/, the --docs-tests step runs just the tests that read docs/ and the
+# other --cargo steps skip (as with --no-stamp): that narrowing rests on the
+# docs-test list finding every reader, so the run writes no stamp. A skipped
+# step prints its header and why, and waits for no build slot. CI ($CI or
+# $GITHUB_ACTIONS set) always runs them all.
 #
 # Everything a run does happens inside a step block or in `step` and
 # `finish` themselves, so --list can never run any of it.
@@ -102,7 +106,9 @@ fi
 started=      # set when the first step of a run that may stamp starts
 checked_tree= # the tree being checked, for the pass stamp `finish` writes
 have_slot=    # set once the build slot is held; it is held until the run ends
-unstamped=    # set by `skip_step --no-stamp`: the run writes no pass stamp
+unstamped=    # set by `skip_step --no-stamp` or a docs-narrowed step: the
+#               run writes no pass stamp; "STEP: REASON" per line
+current_step= # the step whose block is running, for `skip_step --no-stamp`
 cargo_mode=   # unset until cargo_plan decides; then full, skip or docs
 cargo_why=    # why the cargo steps skip (skip) or narrow (docs)
 docs_tests=   # docs mode: the tests that read docs/, "PACKAGE TEST" per line
@@ -172,19 +178,28 @@ step() {
     return 1
   fi
   ran_any=1
+  current_step=$name
   if [ -z "$started" ] && [ -z "$fast_run" ]; then
     started=1
     checked_tree=$(scripts/pass-stamp/stamp.sh tree 2>/dev/null || true)
   fi
   if [ -n "$cargo" ]; then
     cargo_plan
-    if [ "$cargo_mode" = skip ] || { [ "$cargo_mode" = docs ] && [ -z "$docs" ]; }; then
+    # No cargo input changed: the stamp's tree vouches for the skip.
+    if [ "$cargo_mode" = skip ]; then
+      printf '\n== %s\n' "$name"
+      skip_step "skipped: $cargo_why; CI runs it"
+      return 1
+    fi
+    if [ "$cargo_mode" = docs ] && [ -z "$docs" ]; then
       printf '\n== %s\n' "$name"
       skip_step --no-stamp "skipped: $cargo_why; CI runs it"
       return 1
     fi
     # A narrowed run vouches for less than the stamp says.
-    if [ "$cargo_mode" = docs ]; then unstamped=1; fi
+    if [ "$cargo_mode" = docs ]; then
+      unstamped="$unstamped$name: narrowed to the tests that read docs/"$'\n'
+    fi
   fi
   if [ -n "$slot" ] && [ -z "$have_slot" ]; then
     have_slot=1
@@ -194,11 +209,12 @@ step() {
 }
 
 # skip_step [--no-stamp] REASON: inside a step's block, says why the step did
-# not run. With --no-stamp, the run writes no pass stamp.
+# not run. With --no-stamp, the run writes no pass stamp, and `finish` names
+# the step and REASON.
 skip_step() {
   if [ "$1" = --no-stamp ]; then
-    unstamped=1
     shift
+    unstamped="$unstamped$current_step: $1"$'\n'
   fi
   printf '%s\n' "$1"
 }
@@ -431,7 +447,8 @@ finish() {
     exit 0
   fi
   if [ -n "$unstamped" ]; then
-    echo "pass stamp: not written, a step was skipped that the stamp cannot vouch for"
+    echo "pass stamp: not written, the stamp cannot vouch for these steps:"
+    printf '%s' "$unstamped" | sed 's/^/  /'
   else
     scripts/pass-stamp/stamp.sh write "$tier" "$checked_tree"
   fi
