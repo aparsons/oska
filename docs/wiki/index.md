@@ -23,6 +23,7 @@ A dated historical record kept by the coordinating agent. Pages never describe t
 - [Refreshing every open PR after each merge serialises the Pi](problem-refresh-after-merge.md): about 35 Pi-minutes per PR per merge.
 - [Logs in the worktree defeat the pass stamp](problem-logs-in-worktree.md): two agents lost a check run to it on 2026-11-17.
 - [Pi CPU is the bottleneck](problem-pi-cpu.md): limits on concurrency.
+- [Duplicate dispatch across threads](problem-duplicate-dispatch.md): a ticket another thread's PR already closed, 2026-11-18.
 - [Conflicting push guidance](problem-push-guidance.md): `--no-verify` advice that contradicted itself (resolved 2026-11-17).
 
 Lint 2026-11-17: all 7 pages are listed above. The "Open"/"Queued" wording in linked pages is dated and superseded by notes on those pages. Related research not yet summarised here: `docs/research/2026-11-oska-text-tools.md`, `docs/research/agent-scripting-python-vs-oska.md` (untracked as of 2026-11-17).
