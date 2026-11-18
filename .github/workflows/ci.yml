@@ -55,8 +55,9 @@ jobs:
 
   cross-build:
     # Seam 3 of spec #153: every corpus program built for every target on
-    # an aarch64 host and on an x86_64 host. `cross-build-compare` requires
-    # the same bytes from both: the backend never reads the host. A
+    # an aarch64 host and on an x86_64 host (and, in the `macos` job, on an
+    # Apple silicon Mac). `cross-build-compare` requires the same bytes
+    # from all of them: the backend never reads the host. A
     # refusal that scripts/cross-build/refused.txt does not expect fails
     # here, with oskac's error, so two hosts cannot agree by refusing.
     strategy:
@@ -76,8 +77,33 @@ jobs:
           name: cross-build-${{ matrix.os }}
           path: manifest-*.txt
 
+  macos:
+    # Ticket #169 (spec #154): the first macOS executables. On Apple
+    # silicon, small programs built with `--target macos-aarch64` must pass
+    # macOS's own signature verification and do what the interpreter does
+    # (crates/oskac/tests/native_macos.rs). Every corpus program built here
+    # must give the bytes the Linux runners give, signature included, and
+    # macOS must accept every macOS executable's signature
+    # (scripts/cross-build/manifest.sh). The differential suite and native
+    # `oskac run` stay on Linux until macOS's runtime is at parity (#172).
+    runs-on: macos-latest
+    # A build, a few programs, and one compile per corpus program per
+    # target: a few minutes.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      # A label that moves to other hardware must fail, not skip the runs.
+      - run: test "$(uname -m)" = arm64
+      - run: cargo test --locked -p oskac --test native_macos
+      - run: scripts/cross-build/manifest.sh target/debug/oskac > "manifest-$(uname -m).txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cross-build-macos-latest
+          path: manifest-*.txt
+
   cross-build-compare:
-    needs: cross-build
+    needs: [cross-build, macos]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -86,3 +112,4 @@ jobs:
           pattern: cross-build-*
           merge-multiple: true
       - run: diff manifest-aarch64.txt manifest-x86_64.txt
+      - run: diff manifest-aarch64.txt manifest-arm64.txt

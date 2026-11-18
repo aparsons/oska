@@ -497,6 +497,33 @@ impl Emitter {
                 self.asm.syscall();
                 self.write(*dst, RAX);
             }
+            // The System V psABI's C call through the import's slot:
+            // fixed and variadic arguments alike in the argument
+            // registers, `al` an upper bound on the vector registers the
+            // variadic ones use (none), and an `int` result's top half
+            // unspecified, so sign-extended. `r11` is scratch in both
+            // conventions.
+            Inst::LibCall {
+                dst,
+                import,
+                args,
+                wide,
+                ..
+            } => {
+                self.arguments(args);
+                let at = self.asm.lea_rip(R11);
+                self.fixups.push(Fixup {
+                    at,
+                    symbol: Symbol::Import(*import),
+                });
+                self.asm.load(Size::Q, R11, offset(R11, 0));
+                self.asm.constant(RAX, 0);
+                self.asm.call_reg(R11);
+                if !*wide {
+                    self.asm.sign_extend(RAX, RAX, 32);
+                }
+                self.write(*dst, RAX);
+            }
             Inst::Arith {
                 op,
                 int,

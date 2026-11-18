@@ -7,9 +7,12 @@
 #
 # OSKAC is the `oskac` binary to build with. The corpus is the examples,
 # the CLI's fixture programs and packages, and the site generator. CI's
-# `cross-build` job runs this on an aarch64 runner and an x86_64 runner and
-# requires the two manifests to be identical: the backend's output depends
-# only on the program and the target, never on the host.
+# `cross-build` job runs this on an aarch64 and an x86_64 Linux runner,
+# and its `macos` job on an Apple silicon Mac, and requires the manifests
+# to be identical: the backend's output depends only on the program and
+# the target, never on the host. On a Mac, macOS must also accept the
+# signature of every macOS executable (`codesign --verify --strict`), or
+# the script fails.
 #
 # Two hosts that refused the same program would agree, so a refusal fails
 # the script unless refused.txt, beside this script, lists the program
@@ -30,7 +33,28 @@ root=$(cd "${2:-$(dirname "$0")/../..}" && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-targets=(linux-aarch64 linux-x86_64)
+targets=(linux-aarch64 linux-x86_64 macos-aarch64)
+
+# The SHA-256 of the file $1, in hex: `sha256sum` on Linux, `shasum` on
+# macOS, which may lack it.
+sha256() {
+  if command -v sha256sum >/dev/null; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
+# Whether macOS's own verification is run on each macOS executable: on a
+# Mac, where it must be (it fails closed without `codesign`).
+verify_signatures=false
+if [ "$(uname -s)" = Darwin ]; then
+  verify_signatures=true
+  if ! command -v codesign >/dev/null; then
+    echo "manifest.sh: codesign is missing: macOS executables cannot be verified" >&2
+    exit 1
+  fi
+fi
 
 list=scripts/cross-build/refused.txt
 if [ ! -f "$root/$list" ]; then
@@ -65,8 +89,13 @@ while IFS= read -r program; do
     # Built from the repository root, by its relative path, so a panic
     # site's path is the same on every host.
     if (cd "$root" && "$oskac" build "$program" --target "$target" -o "$out" >/dev/null 2>"$work/err"); then
-      hash=$(sha256sum "$out" | cut -d' ' -f1)
+      hash=$(sha256 "$out")
       count=$((count + 1))
+      if [ "$verify_signatures" = true ] && [[ "$target" == macos-* ]] &&
+        ! codesign --verify --strict "$out" 2>"$work/err"; then
+        errors+=("$target $program: macOS refuses its signature:
+$(cat "$work/err")")
+      fi
       if [ -n "$code" ]; then
         errors+=("$target $program built, but $list lists it as refused with $code: take it off the list")
       fi

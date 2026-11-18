@@ -1,6 +1,9 @@
-//! The native backend: a checked program to a static executable for a
-//! target platform ([`Target`]), with no assembler, linker or C library
-//! (ADR 0011). `linux-aarch64` and `linux-x86_64` have backends so far.
+//! The native backend: a checked program to an executable for a target
+//! platform ([`Target`]), with no assembler or linker (ADR 0011): a
+//! static one with no C library on Linux, and on macOS one that imports
+//! only from libSystem, the one library the platform supports calling
+//! the kernel through (ADR 0015). `linux-aarch64`, `linux-x86_64` and
+//! `macos-aarch64` have backends so far.
 //!
 //! [`build`] runs the pipeline:
 //!
@@ -15,7 +18,8 @@
 //! 2. The target's code generator (`target.rs`): `aarch64.rs` or
 //!    `x86_64.rs`, with register allocation (`regalloc.rs`), instruction
 //!    selection and encoding.
-//! 3. `elf.rs`: the file, with the target's machine and page size.
+//! 3. The file (`Target::file`): `elf.rs`, with the target's machine
+//!    and page size, or `macho.rs`, which also signs it.
 //!
 //! The crate reads only the checked program, never the syntax tree, has
 //! no `unsafe`, and its output depends on the program and the target
@@ -32,8 +36,10 @@ mod intrinsics;
 mod ir;
 mod layout;
 mod lower;
+mod macho;
 mod optimize;
 mod regalloc;
+mod sha256;
 mod target;
 mod x86_64;
 
@@ -168,12 +174,7 @@ fn compile(
             NOWHERE,
         )
     })?;
-    Ok(elf::write(
-        &target.elf(),
-        text.as_ref(),
-        &module.rodata,
-        module.data_size,
-    ))
+    Ok(target.file(text.as_ref(), &module.rodata, module.data_size))
 }
 
 /// The refusal for the first import of a `std` module with no runtime.

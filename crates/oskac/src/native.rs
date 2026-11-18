@@ -2,7 +2,8 @@
 //! `oskac test` compile the checked program for the host with the native
 //! backend (`oska-native`) and run the executable; `--interpret` selects
 //! the interpreter, and every other host keeps it until it has a backend
-//! of its own.
+//! of its own that runs programs there by default (macOS's does not yet:
+//! `oskac build --target macos-aarch64` builds for it, spec #154).
 //!
 //! The executable is written to a private temporary directory: a new
 //! directory with a random name under the temporary directory (`TMPDIR`),
@@ -30,9 +31,10 @@ use oska_syntax::{Diagnostic, Severity, Span};
 use crate::{Flags, Places};
 
 /// The target `oskac run` and `oskac test` compile for with `flags`:
-/// the host's, when it has a backend and `--interpret` is not given.
+/// the host's, when it has a backend that runs programs there by default
+/// and `--interpret` is not given.
 pub fn native_target(flags: Flags) -> Option<Target> {
-    Target::host().filter(|_| !flags.interpret)
+    Target::host().filter(|target| target.native_by_default() && !flags.interpret)
 }
 
 /// How a native `oskac run` went.

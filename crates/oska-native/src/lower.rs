@@ -77,7 +77,7 @@ use oska_check::program::{
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::{Diagnostic, Span};
 
-use crate::intrinsics::{self, Check, OsCall, Prelude, Runtime};
+use crate::intrinsics::{self, Check, Fails, Import, OsCall, Prelude, Runtime, Start};
 use crate::ir::{self, Arith, BinOp, Cond, FnId, Inst, Label, Symbol, Temp, Width};
 use crate::layout::{self, Rodata};
 use crate::optimize;
@@ -389,10 +389,25 @@ impl<'p> Lowering<'p> {
         body.push(Inst::Return(zero));
         self.functions[run] = body.finish("_main", 0, NOWHERE)?;
 
+        let start_kind = self.target.platform().start;
         let mut body = Body::new(self, Source::User, None);
+        // Called as `main(argc, argv, ...)`, `_start` has them as its
+        // first two parameters, temporaries 0 and 1.
+        let params = match start_kind {
+            Start::Stack => 0,
+            Start::Main => {
+                body.temp();
+                body.temp();
+                2
+            }
+        };
+        // The first instruction, which `size_stack` fills in.
         let size = body.constant(0);
-        let sp = body.temp();
-        body.push(Inst::EntrySp { dst: sp });
+        let sp = (start_kind == Start::Stack).then(|| {
+            let sp = body.temp();
+            body.push(Inst::EntrySp { dst: sp });
+            sp
+        });
         // `std.rt`'s fault handler, which the kernel calls with the
         // signal's number as its one argument, as the backend's own
         // calling convention passes it.
@@ -405,10 +420,16 @@ impl<'p> Lowering<'p> {
             NOWHERE,
         );
         let handler = body.function_address(on_fault);
-        // The kernel's initial stack holds argc, then the argv pointers.
-        let argc = body.load(sp, 0);
-        let eight = body.constant(i64::from(layout::WORD));
-        let argv = body.binary_op(BinOp::Add, sp, eight);
+        let (argc, argv) = match sp {
+            // The kernel's initial stack holds argc, then the argv
+            // pointers.
+            Some(sp) => {
+                let argc = body.load(sp, 0);
+                let eight = body.constant(i64::from(layout::WORD));
+                (argc, body.binary_op(BinOp::Add, sp, eight))
+            }
+            None => (0, 1),
+        };
         body.call_runtime("process_init", vec![argc, argv, handler], NOWHERE)?;
         let stack = body.call_runtime("stack_new", vec![size], NOWHERE)?;
         body.push(Inst::CallOnStack {
@@ -417,7 +438,7 @@ impl<'p> Lowering<'p> {
             callee: run,
         });
         body.push(Inst::Return(size));
-        self.functions[start] = body.finish("_start", 0, NOWHERE)?;
+        self.functions[start] = body.finish("_start", params, NOWHERE)?;
         Ok(start)
     }
 
@@ -1736,6 +1757,7 @@ impl<'l, 'p> Body<'l, 'p> {
                     self.push(Inst::Syscall { dst, number, args });
                     dst
                 }
+                OsCall::Library(import) => self.library_call(import, args)?,
                 OsCall::Same => self.copy(arg(0)),
             },
             Runtime::Load(width) => {
@@ -1776,6 +1798,105 @@ impl<'l, 'p> Body<'l, 'p> {
                 self.call_runtime(table, Vec::new(), NOWHERE)?
             }
         })
+    }
+
+    /// The call of the library function `import` with the intrinsic's
+    /// `args`, its result made `std.rt`'s (ADR 0015): what the function
+    /// returned, or, when it says it failed ([`Fails`]), `-errno`, read
+    /// before any other call can change it.
+    fn library_call(&mut self, import: Import, args: &[Temp]) -> Result<Temp, Diagnostic> {
+        let slot = self.import_slot(import.symbol)?;
+        let mut args = args.to_vec();
+        for &value in import.then {
+            args.push(self.constant(value));
+        }
+        args.truncate(usize::from(import.fixed + import.variadic));
+        let dst = self.temp();
+        // `errno` is cleared first where only it tells a failure from
+        // the end of what the function gives.
+        let cleared = if import.fails == Fails::NullKeepsErrno {
+            let at = self.errno_address()?;
+            let zero = self.constant(0);
+            self.push(Inst::Store {
+                width: Width::W32,
+                base: at,
+                offset: 0,
+                src: zero,
+            });
+            Some(at)
+        } else {
+            None
+        };
+        self.push(Inst::LibCall {
+            dst,
+            import: slot,
+            args,
+            fixed: import.fixed,
+            wide: import.wide,
+        });
+        let failed = match import.fails {
+            Fails::Never => return Ok(dst),
+            Fails::MinusOne => -1,
+            Fails::Null | Fails::NullKeepsErrno => 0,
+        };
+        let done = self.label();
+        self.push(Inst::BranchImm {
+            cond: Cond::Ne,
+            lhs: dst,
+            imm: failed,
+            target: done,
+        });
+        let at = match cleared {
+            Some(at) => at,
+            None => self.errno_address()?,
+        };
+        let code = self.temp();
+        self.push(Inst::Load {
+            width: Width::W32,
+            dst: code,
+            base: at,
+            offset: 0,
+        });
+        let zero = self.constant(0);
+        let negated = self.binary_op(BinOp::Sub, zero, code);
+        self.push(Inst::Copy { dst, src: negated });
+        self.push(Inst::Label(done));
+        Ok(dst)
+    }
+
+    /// The address of the calling thread's `errno`, from the platform's
+    /// function for it. The address stays the thread's, so it is taken
+    /// before the call it reads `errno` after.
+    fn errno_address(&mut self) -> Result<Temp, Diagnostic> {
+        let platform = self.lowering.target.platform();
+        let Some(symbol) = platform.errno else {
+            return Err(self.refuse(NOWHERE, "a library call on a platform with no `errno`"));
+        };
+        let slot = self.import_slot(symbol)?;
+        let dst = self.temp();
+        self.push(Inst::LibCall {
+            dst,
+            import: slot,
+            args: Vec::new(),
+            fixed: 0,
+            wide: true,
+        });
+        Ok(dst)
+    }
+
+    /// The slot of the target platform's import `symbol`.
+    fn import_slot(&self, symbol: &str) -> Result<u16, Diagnostic> {
+        let imports = self.lowering.target.platform().imports;
+        imports
+            .iter()
+            .position(|s| *s == symbol)
+            .and_then(|at| u16::try_from(at).ok())
+            .ok_or_else(|| {
+                self.refuse(
+                    NOWHERE,
+                    &format!("a call of `{symbol}`, which the platform does not import"),
+                )
+            })
     }
 
     /// Call `main` with its capabilities and, when it returns `Err(e)`,

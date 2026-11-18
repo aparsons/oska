@@ -19,7 +19,7 @@ use oska_syntax::Diagnostic;
 
 use crate::intrinsics::{self, Platform};
 use crate::ir::{Module, Symbol};
-use crate::{aarch64, codes, elf, x86_64, NOWHERE};
+use crate::{aarch64, codes, elf, macho, x86_64, NOWHERE};
 
 /// A target platform the backend compiles for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -29,6 +29,10 @@ pub enum Target {
     /// Linux on x86_64: the same, with x86_64's instructions, system-call
     /// numbers and `std.rt` table.
     LinuxX86_64,
+    /// macOS on Apple silicon: a Mach-O that the dynamic loader starts,
+    /// which calls the kernel through libSystem and is ad-hoc signed
+    /// (`macho.rs`).
+    MacosAarch64,
 }
 
 /// Every supported platform, by name, in the order messages list them:
@@ -36,7 +40,7 @@ pub enum Target {
 const PLATFORMS: [(&str, Result<Target, &str>); 5] = [
     ("linux-aarch64", Ok(Target::LinuxAarch64)),
     ("linux-x86_64", Ok(Target::LinuxX86_64)),
-    ("macos-aarch64", Err("v0.5.0")),
+    ("macos-aarch64", Ok(Target::MacosAarch64)),
     ("macos-x86_64", Err("v0.5.0")),
     ("windows-x86_64", Err("v0.6.0")),
 ];
@@ -44,7 +48,11 @@ const PLATFORMS: [(&str, Result<Target, &str>); 5] = [
 impl Target {
     /// Every target the backend compiles for, in the order `oskac build
     /// --target all` builds them.
-    pub const ALL: [Target; 2] = [Target::LinuxAarch64, Target::LinuxX86_64];
+    pub const ALL: [Target; 3] = [
+        Target::LinuxAarch64,
+        Target::LinuxX86_64,
+        Target::MacosAarch64,
+    ];
 
     /// The target for the supported platform named `platform`. An
     /// unknown name is refused with `E0393`, listing the names; a
@@ -74,8 +82,9 @@ impl Target {
     }
 
     /// The target for the host `oskac` itself runs on, when its platform
-    /// has a backend: what `oskac run` and `oskac test` compile for, and
-    /// `oskac build` without `--target`. Only the CLI asks; nothing that
+    /// has a backend: what `oskac build` builds for without `--target`,
+    /// and, when [`Target::native_by_default`], what `oskac run` and
+    /// `oskac test` compile for. Only the CLI asks; nothing that
     /// compiles reads the host. A platform's name is the host's operating
     /// system and architecture as Rust names them, so no target needs a
     /// line here.
@@ -84,20 +93,33 @@ impl Target {
         Target::ALL.into_iter().find(|target| target.name() == host)
     }
 
+    /// Whether `oskac run` and `oskac test` run programs natively on this
+    /// target's own host. Not yet on macOS, whose runtime is not yet
+    /// at parity with the interpreter's (spec #154, ticket #172): there
+    /// they keep the interpreter, and `oskac build` builds for it.
+    pub fn native_by_default(self) -> bool {
+        match self {
+            Target::LinuxAarch64 | Target::LinuxX86_64 => true,
+            Target::MacosAarch64 => false,
+        }
+    }
+
     /// The platform's name, as release assets name `oskac` builds.
     pub fn name(self) -> &'static str {
         match self {
             Target::LinuxAarch64 => "linux-aarch64",
             Target::LinuxX86_64 => "linux-x86_64",
+            Target::MacosAarch64 => "macos-aarch64",
         }
     }
 
-    /// What the backend gives `std.rt` for this target: its system-call
-    /// numbers and its table.
+    /// What the backend gives `std.rt` for this target: how it calls the
+    /// operating system, and its table.
     pub(crate) fn platform(self) -> Platform {
         match self {
             Target::LinuxAarch64 => intrinsics::LINUX_AARCH64,
             Target::LinuxX86_64 => intrinsics::LINUX_X86_64,
+            Target::MacosAarch64 => intrinsics::MACOS_AARCH64,
         }
     }
 
@@ -105,7 +127,7 @@ impl Target {
     /// the module's extra arguments' area.
     pub(crate) fn register_args(self) -> usize {
         match self {
-            Target::LinuxAarch64 => aarch64::REGISTER_ARGS,
+            Target::LinuxAarch64 | Target::MacosAarch64 => aarch64::REGISTER_ARGS,
             Target::LinuxX86_64 => x86_64::REGISTER_ARGS,
         }
     }
@@ -114,24 +136,44 @@ impl Target {
     /// only when the code is too large for the target's branches.
     pub(crate) fn emit(self, module: &Module) -> Result<Box<dyn Code>, String> {
         match self {
-            Target::LinuxAarch64 => Ok(Box::new(aarch64::emit(module)?)),
+            Target::LinuxAarch64 | Target::MacosAarch64 => Ok(Box::new(aarch64::emit(module)?)),
             Target::LinuxX86_64 => Ok(Box::new(x86_64::emit(module)?)),
         }
     }
 
-    /// What the executable's ELF header and segments say for this target.
-    pub(crate) fn elf(self) -> elf::Machine {
+    /// The executable file for this target, holding `text`, `rodata` and
+    /// `data_size` bytes of zeroed writable data.
+    pub(crate) fn file(self, text: &dyn Code, rodata: &[u8], data_size: u32) -> Vec<u8> {
         match self {
             // 64 KiB: the largest page an aarch64 Linux kernel uses.
-            Target::LinuxAarch64 => elf::Machine {
-                e_machine: elf::EM_AARCH64,
-                page: 0x1_0000,
-            },
+            Target::LinuxAarch64 => elf::write(
+                &elf::Machine {
+                    e_machine: elf::EM_AARCH64,
+                    page: 0x1_0000,
+                },
+                text,
+                rodata,
+                data_size,
+            ),
             // 4 KiB: x86_64 Linux's only base page.
-            Target::LinuxX86_64 => elf::Machine {
-                e_machine: elf::EM_X86_64,
-                page: 0x1000,
-            },
+            Target::LinuxX86_64 => elf::write(
+                &elf::Machine {
+                    e_machine: elf::EM_X86_64,
+                    page: 0x1000,
+                },
+                text,
+                rodata,
+                data_size,
+            ),
+            Target::MacosAarch64 => macho::write(
+                &macho::Machine {
+                    cputype: macho::CPU_TYPE_ARM64,
+                },
+                text,
+                rodata,
+                data_size,
+                self.platform().imports,
+            ),
         }
     }
 }
@@ -152,6 +194,9 @@ pub struct Layout {
     pub rodata: u64,
     pub code: u64,
     pub data: u64,
+    /// The slots of the platform's imports, 8 bytes each, in the order
+    /// of its list ([`Symbol::Import`]): on a platform with none, 0.
+    pub got: u64,
 }
 
 impl Layout {
@@ -164,6 +209,7 @@ impl Layout {
             Symbol::Rodata(at) => self.rodata + u64::from(at),
             Symbol::Data(at) => self.data + u64::from(at),
             Symbol::Function(start) => self.code + start as u64,
+            Symbol::Import(index) => self.got + 8 * u64::from(index),
         }
     }
 }

@@ -71,6 +71,10 @@ pub enum Symbol {
     /// The code of a function: where a function value's code pointer
     /// points ([`Inst::CallIndirect`]).
     Function(FnId),
+    /// The slot, filled when the program is loaded, that holds the
+    /// address of the platform's library function with this index in its
+    /// list of imports ([`Inst::LibCall`]).
+    Import(u16),
 }
 
 /// An integer type, as checked arithmetic sees it: its width in bits and
@@ -256,6 +260,20 @@ pub enum Inst {
         number: u16,
         args: Vec<Temp>,
     },
+    /// `dst =` the library function whose address is in the slot of
+    /// import `import` ([`Symbol::Import`]), called with `args` by the
+    /// platform's C calling convention: the first `fixed` as its fixed
+    /// arguments, the rest (at most one) as variadic ones. When not
+    /// `wide`, the function returns a C `int`, which is sign-extended
+    /// from 32 bits. The function's raw result: the lowering turns a
+    /// failure into a negative `errno` (ADR 0015).
+    LibCall {
+        dst: Temp,
+        import: u16,
+        args: Vec<Temp>,
+        fixed: u8,
+        wide: bool,
+    },
     /// `dst = lhs op rhs` when the result fits `int`; otherwise jump to
     /// `overflow`, leaving `dst` unspecified.
     Arith {
@@ -359,6 +377,7 @@ impl Inst {
             | Inst::Call { dst, .. }
             | Inst::CallIndirect { dst, .. }
             | Inst::Syscall { dst, .. }
+            | Inst::LibCall { dst, .. }
             | Inst::Arith { dst, .. }
             | Inst::Second { dst }
             | Inst::EntrySp { dst } => Some(*dst),
@@ -404,7 +423,9 @@ impl Inst {
                 each(base);
                 each(src);
             }
-            Inst::Call { dst, args, .. } | Inst::Syscall { dst, args, .. } => {
+            Inst::Call { dst, args, .. }
+            | Inst::Syscall { dst, args, .. }
+            | Inst::LibCall { dst, args, .. } => {
                 each(dst);
                 args.iter_mut().for_each(each);
             }
@@ -438,7 +459,9 @@ impl Inst {
             | Inst::ArithImm { lhs, .. } => vec![*lhs],
             Inst::Load { base, .. } => vec![*base],
             Inst::Store { base, src, .. } => vec![*base, *src],
-            Inst::Call { args, .. } | Inst::Syscall { args, .. } => args.clone(),
+            Inst::Call { args, .. } | Inst::Syscall { args, .. } | Inst::LibCall { args, .. } => {
+                args.clone()
+            }
             Inst::CallIndirect { target, args, .. } => std::iter::once(*target)
                 .chain(args.iter().copied())
                 .collect(),

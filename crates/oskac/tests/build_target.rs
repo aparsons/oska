@@ -179,6 +179,21 @@ fn linux_x86_64_names_an_x86_64_linux_executable() {
     assert_eq!(field(&elf, 18, 2), EM_X86_64);
 }
 
+/// Every host builds for Apple silicon Macs (ticket #169): a Mach-O
+/// executable, `MH_MAGIC_64` and `CPU_TYPE_ARM64`. `oska-native`'s
+/// format tests read the rest of it.
+#[test]
+fn macos_aarch64_names_an_arm64_mach_o_executable() {
+    let dir = assert_golden(
+        "macos_aarch64",
+        &[("hello.osk", HELLO)],
+        &["build", "hello.osk", "--target", "macos-aarch64"],
+    );
+    let macho = read(&dir, "hello");
+    assert_eq!(field(&macho, 0, 4), 0xfeed_facf);
+    assert_eq!(field(&macho, 4, 4), 0x0100_000c);
+}
+
 #[test]
 fn the_target_may_be_written_with_an_equals_sign() {
     let dir = workspace("equals", &[("hello.osk", HELLO)]);
@@ -240,7 +255,7 @@ fn all_writes_one_executable_per_platform_with_a_backend_into_the_output_directo
         &[("hello.osk", HELLO), ("dist/.keep", "")],
         &["build", "hello.osk", "--target", "all", "-o", "dist"],
     );
-    for platform in ["linux-aarch64", "linux-x86_64"] {
+    for platform in ["linux-aarch64", "linux-x86_64", "macos-aarch64"] {
         let alone = oskac(
             &dir,
             &["build", "hello.osk", "--target", platform, "-o", "alone"],
@@ -346,7 +361,7 @@ fn a_supported_platform_with_no_backend_yet_is_refused_naming_its_release() {
     assert_golden(
         "macos",
         &[("hello.osk", HELLO)],
-        &["build", "hello.osk", "--target", "macos-aarch64"],
+        &["build", "hello.osk", "--target", "macos-x86_64"],
     );
     assert_golden(
         "windows_json",

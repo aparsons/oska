@@ -552,6 +552,13 @@ impl Emitter {
                 self.put(SVC_0);
                 self.write(*dst, X0);
             }
+            Inst::LibCall {
+                dst,
+                import,
+                args,
+                fixed,
+                wide,
+            } => self.library_call(*dst, *import, args, usize::from(*fixed), *wide),
             Inst::Arith {
                 op,
                 int,
@@ -622,6 +629,42 @@ impl Emitter {
             // Placed by `function`.
             Inst::Label(_) => {}
         }
+    }
+
+    /// `dst =` the library function in import slot `import`, called by
+    /// Apple's arm64 C convention: `args[..fixed]` in `x0` on, and the
+    /// variadic argument, if any, in an 8-byte stack slot at `[sp]`, in
+    /// 16 bytes so `sp` stays aligned; the function's address is loaded
+    /// from its slot into `x16`, scratch in both conventions. An `int`
+    /// result (`!wide`) leaves `x0`'s top half unspecified (AAPCS64), so
+    /// it is sign-extended.
+    fn library_call(&mut self, dst: Temp, import: u16, args: &[Temp], fixed: usize, wide: bool) {
+        let fixed = fixed.min(args.len());
+        // Read before the moves into the argument registers, which may
+        // hold it; `x9` is none of theirs.
+        let variadic = args.get(fixed).map(|&arg| self.read_into(X9, arg));
+        self.arguments(&args[..fixed]);
+        if variadic.is_some() {
+            // `str x9, [sp, #-16]!`
+            self.put(0xf81f_0fe9);
+        }
+        self.fixups.push(Fixup {
+            at: self.words.len(),
+            symbol: Symbol::Import(import),
+        });
+        self.put(ADRP | X16);
+        self.put(add_imm(X16, X16, 0, false));
+        // `ldr x16, [x16]`, then `blr x16`.
+        self.put(0xf940_0210);
+        self.put(BLR | (X16 << 5));
+        if variadic.is_some() {
+            self.put(add_imm(SP, SP, 16, false));
+        }
+        if !wide {
+            // `sxtw x0, w0`
+            self.put(bitfield(SBFM, X0, X0, 0, 31));
+        }
+        self.write(dst, X0);
     }
 
     /// Store (or, when not `store`, load) the callee-saved registers the
