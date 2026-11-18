@@ -164,9 +164,17 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, String> {
     out
 }
 
+/// A fixture's symlink, owned by an ordinary user. Uninstall trusts a
+/// symlink root owns (it is the system's), so when the tests run as root
+/// the link is handed to `nobody` (65534): it must still be refused.
 #[cfg(unix)]
 fn link(target: &Path, link: &Path) {
+    use std::os::unix::fs::MetadataExt;
     std::os::unix::fs::symlink(target, link).expect("symlink");
+    let meta = std::fs::symlink_metadata(link).expect("symlink metadata");
+    if meta.uid() == 0 {
+        std::os::unix::fs::lchown(link, Some(65534), Some(65534)).expect("lchown the symlink");
+    }
 }
 
 #[cfg(windows)]

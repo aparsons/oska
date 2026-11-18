@@ -982,12 +982,10 @@ test_uninstall_refuses_a_symlinked_oska_home() {
 # steer a deletion: refused. A root-owned symlink, which only the
 # administrator could have made (macOS's /var, say), is not.
 test_uninstall_refuses_a_symlink_above_the_oska_home() {
-  # As root, every symlink the test makes is root's.
-  [ "$(id -u)" != 0 ] || return 0
   release 1.2.3
   latest 1.2.3
   mkdir -p real/deeper
-  ln -s "$PWD/real" link
+  user_link "$PWD/real" link
   local home
   OSKA_HOME="$PWD/link/deeper/oska" install --json >/dev/null
   for home in "$PWD/link/deeper/oska" "$PWD/link//deeper/./oska"; do
@@ -1086,6 +1084,14 @@ tree_of() {
   done
 }
 
+# user_link <target> <path>: `ln -s`, owned by an ordinary user. Uninstall
+# trusts a symlink root owns (it is the system's), so as root the link is
+# handed to nobody (65534), and a test that expects a refusal still gets one.
+user_link() {
+  ln -s "$1" "$2"
+  if [ "$(id -u)" = 0 ]; then chown -h 65534:65534 "$2"; fi
+}
+
 # receipt_fixture <dir>: sets up the fixture in <dir> under ./<its name>,
 # runs --uninstall, and prints what is wrong, if anything.
 receipt_fixture() {
@@ -1105,7 +1111,7 @@ receipt_fixture() {
     [ -n "$item" ] || continue
     path=$(fj '.path | fill(false)' -r <<<"$item")
     mkdir -p "$(fj '.link_to | fill(false)' -r <<<"$item")" "$(dirname "$path")"
-    ln -s "$(fj '.link_to | fill(false)' -r <<<"$item")" "$path"
+    user_link "$(fj '.link_to | fill(false)' -r <<<"$item")" "$path"
   done <<EOF
 $(jq -c '.link_first // [] | .[]' "$dir/case.json")
 EOF
@@ -1124,7 +1130,7 @@ EOF
           hook_script) cp "$here/../../site/agent-setup/oska-check.sh" "$path" ;;
           *) cp "$here/../../site/agent-setup/claude-settings-post-edit.json" "$path" ;;
         esac ;;
-      link) ln -s "$(fj '.link_to | fill(false)' -r <<<"$item")" "$path" ;;
+      link) user_link "$(fj '.link_to | fill(false)' -r <<<"$item")" "$path" ;;
     esac
     if [ "$(jq -r '.name // ""' <<<"$item")" != "" ]; then
       f_sums=$(jq -c --arg k "$(jq -r .name <<<"$item")" --arg v "$(sha256 "$path")" '.[$k] = $v' <<<"$f_sums")
