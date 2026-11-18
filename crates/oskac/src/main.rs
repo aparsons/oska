@@ -19,6 +19,7 @@ macro_rules! outln {
 
 mod baseline;
 mod build;
+mod cache;
 mod explain;
 mod fix;
 mod hook;
@@ -27,6 +28,7 @@ mod native;
 mod native_test;
 mod package;
 mod self_cmd;
+mod sha256;
 
 const USAGE: &str = "\
 oskac - the Oska compiler
@@ -34,7 +36,7 @@ oskac - the Oska compiler
 USAGE:
     oskac lex <file.osk> [--format=json]   Print the tokens in a source file
     oskac parse <file.osk> [--format=json] Print the syntax tree of a source file
-    oskac check [path] [--format=json] [--release]
+    oskac check [path] [--format=json] [--release] [--no-cache]
                 [--baseline=<file> | --update-baseline=<file>]
                                            Type-check a source file, or a
                                            package directory (the current one
@@ -42,17 +44,17 @@ USAGE:
                                            function's authority; compare it
                                            with a saved baseline (exit code 3
                                            when it widened), or write one
-    oskac run [path] [--format=json] [--interpret] [-- args...]
+    oskac run [path] [--format=json] [--interpret] [--no-cache] [-- args...]
                                            Check a source file or package and,
                                            if it has no diagnostics, run it:
                                            natively on aarch64 and x86_64
                                            Linux, on the interpreter elsewhere
                                            or with --interpret
-    oskac test [path] [--format=json] [--integration] [--interpret]
+    oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
                                            as `run` does
-    oskac build [path] [-o out] [--target <platform>|all] [--format=json]
+    oskac build [path] [-o out] [--target <platform>|all] [--format=json] [--no-cache]
                                            Check a source file or package and,
                                            if it has no diagnostics, compile it
                                            to an executable for the platform
@@ -74,6 +76,11 @@ USAGE:
                                            Run the release check and the tests
                                            before Claude Code may finish; exit
                                            2 blocks it with what failed
+    oskac cache info [--format=json]       Report the build cache, which check,
+                                           run, test and build reuse unchanged
+                                           results from: its folder, entries,
+                                           size, limit, hits and misses
+    oskac cache clean [--format=json]      Empty the build cache
     oskac self info [--format=json]        Report this installation: version,
                                            platform, executable, Oska home and
                                            install receipt
@@ -101,6 +108,9 @@ struct Flags {
     dry_run: bool,
     /// `--placeholders`: `oskac fix` applies `placeholders` fixes too.
     placeholders: bool,
+    /// `--no-cache`: `oskac check`, `run`, `test` and `build` neither
+    /// read nor write the build cache (`cache.rs`).
+    no_cache: bool,
 }
 
 /// A command line, parsed: the command and its operands, the flags, the
@@ -157,6 +167,7 @@ impl CommandLine {
                 "--interpret" => line.flags.interpret = true,
                 "--dry-run" => line.flags.dry_run = true,
                 "--placeholders" => line.flags.placeholders = true,
+                "--no-cache" => line.flags.no_cache = true,
                 event if event.starts_with("--event=") => {
                     line.event = Some(event["--event=".len()..].to_string());
                 }
@@ -209,6 +220,15 @@ fn main() -> ExitCode {
         eprint!("{USAGE}");
         return ExitCode::from(2);
     }
+    if flags.no_cache
+        && !matches!(
+            positional.first(),
+            Some(&("check" | "run" | "test" | "build"))
+        )
+    {
+        eprint!("{USAGE}");
+        return ExitCode::from(2);
+    }
     match positional.as_slice() {
         ["--version" | "-V"] => {
             if flags.json {
@@ -233,6 +253,16 @@ fn main() -> ExitCode {
                 ["info"] if bare => self_cmd::info(flags.json),
                 ["uninstall"] if bare => self_cmd::uninstall(flags.json),
                 _ => self_cmd::usage(flags.json),
+            }
+        }
+        // `cache` takes no operand, -o, --target or program arguments.
+        ["cache", rest @ ..] => {
+            let bare =
+                line.output.is_none() && line.target.is_none() && line.program_args.is_empty();
+            match rest {
+                ["info"] if bare => cache::info(flags.json),
+                ["clean"] if bare => cache::clean(flags.json),
+                _ => cache::usage(),
             }
         }
         // Only `build` has a target platform: `run` and `test` use the
@@ -438,16 +468,34 @@ fn report_from_here(dir: &str, mut report: oska_check::CheckReport) -> oska_chec
 /// "functions": [...], "audit": [...], "attenuations": [...]}` with
 /// `--format=json`.
 /// The exit code is non-zero when there are diagnostics.
+/// A result with no diagnostics is reused from the build cache, `store`,
+/// when its inputs are unchanged; with a baseline it is always checked.
 fn check_file(
     path: &str,
     Flags { json, release, .. }: Flags,
     gate: Option<baseline::Gate>,
+    store: Option<&cache::Store>,
 ) -> ExitCode {
     let Some(src) = read_source(path) else {
         return ExitCode::FAILURE;
     };
-    let report = oska_check::check_file(path, &src, oska_check::CheckOptions { release });
-    finish_check(&report, json, path, gate)
+    let check = || oska_check::check_file(path, &src, oska_check::CheckOptions { release });
+    match gate {
+        Some(_) => finish_check(&check(), json, path, gate),
+        None => cache::Cached::new(store, cache::file_sources(path, &src))
+            .check(&check_flags(json, release), || {
+                render_report(&check(), json, path)
+            })
+            .emit(),
+    }
+}
+
+/// The flags that change what `oskac check` prints, for its cache key.
+fn check_flags(json: bool, release: bool) -> [&'static [u8]; 2] {
+    [
+        if json { b"json" } else { b"text" },
+        if release { b"release" } else { b"debug" },
+    ]
 }
 
 /// Print a check report, then compare it with a baseline or write one
@@ -467,34 +515,49 @@ fn finish_check(
 /// Print a check report as `oskac check` does, and return its exit code.
 /// `path` names the unlocated entries' file in the human report.
 fn print_report(report: &oska_check::CheckReport, json: bool, path: &str) -> ExitCode {
-    if json {
-        out!("{}", report.to_json());
+    render_report(report, json, path).emit()
+}
+
+/// What [`print_report`] prints, and the exit code.
+fn render_report(report: &oska_check::CheckReport, json: bool, path: &str) -> cache::Printed {
+    let (stdout, stderr) = if json {
+        (report.to_json(), String::new())
     } else {
-        print_diagnostics(&report.diagnostics);
-        out!("{}", report.authority_to_human(path));
-    }
-    if report.diagnostics.is_empty() {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
+        (
+            report.authority_to_human(path),
+            diagnostics_text(&report.diagnostics),
+        )
+    };
+    cache::Printed {
+        stdout,
+        stderr,
+        code: u8::from(!report.diagnostics.is_empty()),
     }
 }
 
 /// Print diagnostics to stderr, each after its location,
 /// `path:line:col`, and with its fix, as `oskac check` does.
 fn print_diagnostics(diagnostics: &[Diagnostic]) {
+    eprint!("{}", diagnostics_text(diagnostics));
+}
+
+/// What [`print_diagnostics`] prints.
+fn diagnostics_text(diagnostics: &[Diagnostic]) -> String {
+    use std::fmt::Write;
+    let mut text = String::new();
     for diagnostic in diagnostics {
-        match &diagnostic.location {
-            Some(location) => eprintln!("{location}: {diagnostic}"),
-            None => eprintln!("{diagnostic}"),
-        }
+        let _ = match &diagnostic.location {
+            Some(location) => writeln!(text, "{location}: {diagnostic}"),
+            None => writeln!(text, "{diagnostic}"),
+        };
         if let Some(fix) = &diagnostic.fix {
-            match fix.applicability {
-                Applicability::Machine => eprintln!("    fix: {}", fix.message),
-                other => eprintln!("    fix ({}): {}", other.name(), fix.message),
-            }
+            let _ = match fix.applicability {
+                Applicability::Machine => writeln!(text, "    fix: {}", fix.message),
+                other => writeln!(text, "    fix ({}): {}", other.name(), fix.message),
+            };
         }
     }
+    text
 }
 
 /// `oskac run`: check the program and, if the check reports no
@@ -503,11 +566,12 @@ fn print_diagnostics(diagnostics: &[Diagnostic]) {
 /// stderr as `oskac check` prints diagnostics, or one JSON object per
 /// line with `--format=json`. The exit code is the program's: 101 after
 /// a panic (see `docs/runtime.md`).
-fn run_file(path: &str, flags: Flags, args: &[String]) -> ExitCode {
+fn run_file(path: &str, flags: Flags, args: &[String], store: Option<&cache::Store>) -> ExitCode {
     let json = flags.json;
     let Some(src) = read_source(path) else {
         return ExitCode::FAILURE;
     };
+    let cached = cache::Cached::new(store, cache::file_sources(path, &src));
     let places = Places::File { path, src: &src };
     if let Some(target) = native::native_target(flags) {
         let checked = oska_check::check_module(&src);
@@ -525,6 +589,7 @@ fn run_file(path: &str, flags: Flags, args: &[String]) -> ExitCode {
                     args,
                     json,
                 },
+                &cached,
             ) {
                 native::Run::Ran(code) => return code,
                 native::Run::Refused(refusal) => {
@@ -565,13 +630,14 @@ fn finish_run(outcome: oska_run::RunOutcome, json: bool, places: &Places) -> Exi
 /// object with `--format=json`. A refused file's diagnostics go to stderr
 /// as `oskac check` prints them, or into the JSON report. The exit code
 /// is 1 when a test failed (see `docs/runtime.md`).
-fn test_file(path: &str, flags: Flags) -> ExitCode {
+fn test_file(path: &str, flags: Flags, store: Option<&cache::Store>) -> ExitCode {
     let Flags {
         json, integration, ..
     } = flags;
     let Some(src) = read_source(path) else {
         return ExitCode::FAILURE;
     };
+    let cached = cache::Cached::new(store, cache::file_sources(path, &src));
     let options = oska_run::TestOptions { integration };
     let places = Places::File { path, src: &src };
     if let Some(target) = native::native_target(flags) {
@@ -581,7 +647,7 @@ fn test_file(path: &str, flags: Flags) -> ExitCode {
             .as_ref()
             .filter(|_| checked.diagnostics.is_empty())
         {
-            match native_test::test_program(program, target, options, json) {
+            match native_test::test_program(program, target, options, json, &cached) {
                 native_test::Tested::Report(report) => return finish_test(report, json, &places),
                 native_test::Tested::Ended(code) => return code,
                 native_test::Tested::Refused(refusal) => {
@@ -623,24 +689,32 @@ fn finish_test(mut report: oska_run::TestReport, json: bool, places: &Places) ->
 /// current one with no path), or a file, which keeps its single-file
 /// behaviour, with a hint when it is part of a package.
 fn on_target(command: Command, path: Option<&&str>, flags: Flags, args: &[String]) -> ExitCode {
+    let store = cache::for_command(flags.no_cache);
+    let store = store.as_ref();
     match package::target(path.copied()) {
         package::Target::File(file) => {
             let code = match command {
-                Command::Check(gate) => check_file(&file, flags, gate),
-                Command::Run => run_file(&file, flags, args),
-                Command::Test => test_file(&file, flags),
-                Command::Build(options) => build::file(&file, flags, options),
+                Command::Check(gate) => check_file(&file, flags, gate, store),
+                Command::Run => run_file(&file, flags, args, store),
+                Command::Test => test_file(&file, flags, store),
+                Command::Build(options) => build::file(&file, flags, options, store),
             };
             hint_package(&file, command.name());
             code
         }
-        package::Target::Dir(dir) => on_package(command, &dir, flags, args),
+        package::Target::Dir(dir) => on_package(command, &dir, flags, args, store),
     }
 }
 
 /// `command` on the package in `dir`. `oskac run` refuses a library, a
 /// package without `src/main.osk`.
-fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> ExitCode {
+fn on_package(
+    command: Command,
+    dir: &str,
+    flags: Flags,
+    args: &[String],
+    store: Option<&cache::Store>,
+) -> ExitCode {
     let json = flags.json;
     let (package, refused) = match package::load(dir, command.name()) {
         package::Loaded::Package { package, refused } => (package, refused),
@@ -655,21 +729,30 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
     let options = oska_check::CheckOptions {
         release: matches!(command, Command::Check(_)) && flags.release,
     };
-    let report = package::check(&package, &refused, options);
-    // A package that needs a newer `oskac` (`E0407`) is refused first, from
-    // every command, even a `run` of a library.
-    let too_old = oska_check::needs_newer_oskac(&report);
-    if !too_old && matches!(command, Command::Run | Command::Build(_)) && package.is_library() {
-        return refuse(command, vec![oska_check::run_of_library(dir)], json, dir);
-    }
+    let cached = cache::Cached::new(store, cache::package_sources(dir, &package, &refused));
     if let Command::Check(gate) = command {
-        let report = if json {
-            report
-        } else {
-            report_from_here(dir, report)
+        let check = || {
+            let report = package::check(&package, &refused, options);
+            if json {
+                report
+            } else {
+                report_from_here(dir, report)
+            }
         };
-        return finish_check(&report, json, dir, gate);
+        return match gate {
+            Some(_) => finish_check(&check(), json, dir, gate),
+            None => cached
+                .check(&check_flags(json, flags.release), || {
+                    render_report(&check(), json, dir)
+                })
+                .emit(),
+        };
     }
+    let report = if matches!(command, Command::Run | Command::Build(_)) {
+        package::check_to_run(&package, &refused, dir, options)
+    } else {
+        package::check(&package, &refused, options)
+    };
     let Some(program) = &report.program else {
         return refuse(command, report.diagnostics, json, dir);
     };
@@ -679,7 +762,7 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
         json,
     };
     if let Command::Build(options) = command {
-        return build::package(program, &places, dir, options, json);
+        return build::package(program, &places, dir, options, json, &cached);
     }
     let mut host = oska_run::RealHost::new();
     if command == Command::Run {
@@ -693,6 +776,7 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
                     args,
                     json,
                 },
+                &cached,
             ) {
                 native::Run::Ran(code) => return code,
                 native::Run::Refused(refusal) => {
@@ -709,7 +793,7 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
             integration: flags.integration,
         };
         if let Some(target) = native::native_target(flags) {
-            match native_test::test_program(program, target, options, json) {
+            match native_test::test_program(program, target, options, json, &cached) {
                 native_test::Tested::Report(tests) => return finish_test(tests, json, &places),
                 native_test::Tested::Ended(code) => return code,
                 native_test::Tested::Refused(refusal) => {
@@ -832,7 +916,13 @@ mod tests {
 
     #[test]
     fn flags_come_anywhere_before_the_program_arguments() {
-        let line = parse(&["--integration", "test", "f.osk", "--format=json"]);
+        let line = parse(&[
+            "--integration",
+            "test",
+            "f.osk",
+            "--format=json",
+            "--no-cache",
+        ]);
         assert_eq!(line.positional, ["test", "f.osk"]);
         assert_eq!(
             line.flags,
@@ -843,6 +933,7 @@ mod tests {
                 interpret: false,
                 dry_run: false,
                 placeholders: false,
+                no_cache: true,
             }
         );
         assert!(line.program_args.is_empty());

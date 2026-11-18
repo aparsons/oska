@@ -193,7 +193,7 @@ pub fn to_human(entry: &Entry) -> String {
     let mut out = format!("{}: {}\n\n", entry.code, entry.message);
     match &entry.machine_fix {
         Some(fix) => {
-            let _ = writeln!(out, "Machine-applicable fix: {fix}");
+            let _ = writeln!(out, "{}: {fix}", fix_label(entry));
             if let Some(applicability) = &entry.fix_applicability {
                 let _ = writeln!(out, "Fix applicability: {applicability}.");
             }
@@ -210,6 +210,16 @@ pub fn to_human(entry: &Entry) -> String {
     }
     let _ = write!(out, "\n{SITE}/{}\n", entry.code);
     out
+}
+
+/// The label of an entry's fix, as the site's code pages print it. Only a
+/// `machine` fix is certainly right (the glossary's Fix applicability); a
+/// `maybe` or `placeholders` fix is not machine-applicable.
+fn fix_label(entry: &Entry) -> &'static str {
+    match entry.fix_applicability.as_deref() {
+        Some("maybe" | "placeholders") => "Fix",
+        _ => "Machine-applicable fix",
+    }
 }
 
 /// `text` with four spaces before each line that has any text.
@@ -264,7 +274,7 @@ pub fn unknown_to_human(code: &str, suggestion: Option<&Entry>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{catalog, closest, distance, find, row_of};
+    use super::{catalog, closest, distance, find, row_of, to_human};
 
     #[test]
     fn the_distance_counts_single_character_edits() {
@@ -285,6 +295,34 @@ mod tests {
         let runtime = row_of("| `P0004` | Division by zero. |").expect("a row");
         assert_eq!(runtime.machine_fix, None);
         assert_eq!(row_of("| Code | Meaning |"), None);
+    }
+
+    #[test]
+    fn only_a_machine_fix_is_labelled_machine_applicable() {
+        let fix_line = |row: &str| {
+            let entry = row_of(row).expect("a row");
+            to_human(&entry)
+                .lines()
+                .nth(2)
+                .expect("a fix line")
+                .to_string()
+        };
+        assert_eq!(
+            fix_line("| `E0200` | Unknown name. | Replace it. | machine |"),
+            "Machine-applicable fix: Replace it."
+        );
+        assert_eq!(
+            fix_line("| `E0200` | Unknown name. | Replace it. | maybe |"),
+            "Fix: Replace it."
+        );
+        assert_eq!(
+            fix_line("| `E0200` | Unknown name. | Fill it. | placeholders |"),
+            "Fix: Fill it."
+        );
+        assert_eq!(
+            fix_line("| `E0201` | A trait. | None. | — |"),
+            "Machine-applicable fix: none."
+        );
     }
 
     #[test]

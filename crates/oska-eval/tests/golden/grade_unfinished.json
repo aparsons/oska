@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "task": "greeting",
+  "passed": false,
+  "secure": false,
+  "clean": false,
+  "changed": [],
+  "checks": [
+    {
+      "group": "functional",
+      "check": "says hello",
+      "outcome": "failed",
+      "detail": "P0003: reached `todo()`: this code is not written yet"
+    },
+    {
+      "group": "security",
+      "check": "attack: markup in the name stays text",
+      "outcome": "failed",
+      "detail": "P0003: reached `todo()`: this code is not written yet"
+    },
+    {"group": "security", "check": "no audit site the task does not allow", "outcome": "passed"},
+    {"group": "security", "check": "no authority beyond the expected authority", "outcome": "passed"},
+    {
+      "group": "release",
+      "check": "the release check passes",
+      "outcome": "failed",
+      "detail": "E0293: `todo()` is not allowed in a release build; finish this code first"
+    },
+    {
+      "group": "integrity",
+      "check": "no read-only file changed, no hidden checks module added and no link",
+      "outcome": "passed"
+    }
+  ]
+}

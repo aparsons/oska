@@ -80,8 +80,44 @@ impl JsonValue {
     }
 }
 
+/// Why a text is not JSON, and the byte where the reader found it out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsonError {
+    /// What is wrong, without the place.
+    pub message: String,
+    /// The byte offset into the text.
+    pub at: usize,
+}
+
+impl JsonError {
+    /// The line and column of [`JsonError::at`] in `text`, both from 1, the
+    /// column in characters: where a person looks.
+    pub fn line_column(&self, text: &str) -> (usize, usize) {
+        let mut end = self.at.min(text.len());
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        let before = &text[..end];
+        let line = before.matches('\n').count() + 1;
+        let column = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+        (line, column)
+    }
+}
+
+impl std::fmt::Display for JsonError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} at byte {}", self.message, self.at)
+    }
+}
+
 /// `text` as JSON, or why it is not.
 pub fn parse_json(text: &str) -> Result<JsonValue, String> {
+    parse_json_at(text).map_err(|e| e.to_string())
+}
+
+/// `text` as JSON, or why it is not and where, for a reader that reports
+/// the place in its own terms.
+pub fn parse_json_at(text: &str) -> Result<JsonValue, JsonError> {
     let mut reader = Reader {
         text: text.as_bytes(),
         at: 0,
@@ -91,7 +127,7 @@ pub fn parse_json(text: &str) -> Result<JsonValue, String> {
     if reader.at == text.len() {
         Ok(value)
     } else {
-        Err(format!("trailing text at byte {}", reader.at))
+        Err(reader.fail("trailing text".to_string()))
     }
 }
 
@@ -101,6 +137,13 @@ struct Reader<'a> {
 }
 
 impl Reader<'_> {
+    fn fail(&self, message: String) -> JsonError {
+        JsonError {
+            message,
+            at: self.at,
+        }
+    }
+
     fn peek(&self) -> Option<u8> {
         self.text.get(self.at).copied()
     }
@@ -111,32 +154,31 @@ impl Reader<'_> {
         }
     }
 
-    fn eat(&mut self, byte: u8) -> Result<(), String> {
+    fn eat(&mut self, byte: u8) -> Result<(), JsonError> {
         self.skip_space();
         if self.peek() == Some(byte) {
             self.at += 1;
             Ok(())
         } else {
-            Err(format!("expected `{}` at byte {}", byte as char, self.at))
+            Err(self.fail(format!("expected `{}`", byte as char)))
         }
     }
 
-    fn word(&mut self, word: &str, value: JsonValue) -> Result<JsonValue, String> {
+    fn word(&mut self, word: &str, value: JsonValue) -> Result<JsonValue, JsonError> {
         if self.text[self.at..].starts_with(word.as_bytes()) {
             self.at += word.len();
             Ok(value)
         } else {
-            Err(format!("unexpected input at byte {}", self.at))
+            Err(self.fail("unexpected input".to_string()))
         }
     }
 
-    fn value(&mut self, depth: usize) -> Result<JsonValue, String> {
+    fn value(&mut self, depth: usize) -> Result<JsonValue, JsonError> {
         self.skip_space();
         match self.peek() {
-            Some(b'{' | b'[') if depth >= MAX_DEPTH => Err(format!(
-                "nesting deeper than {MAX_DEPTH} at byte {}",
-                self.at
-            )),
+            Some(b'{' | b'[') if depth >= MAX_DEPTH => {
+                Err(self.fail(format!("nesting deeper than {MAX_DEPTH}")))
+            }
             Some(b'{') => self.object(depth),
             Some(b'[') => self.array(depth),
             Some(b'"') => Ok(JsonValue::Str(self.string()?)),
@@ -144,12 +186,12 @@ impl Reader<'_> {
             Some(b'f') => self.word("false", JsonValue::Bool(false)),
             Some(b'n') => self.word("null", JsonValue::Null),
             Some(b'-' | b'0'..=b'9') => self.number(),
-            Some(_) => Err(format!("unexpected input at byte {}", self.at)),
-            None => Err("unexpected end of text".to_string()),
+            Some(_) => Err(self.fail("unexpected input".to_string())),
+            None => Err(self.fail("unexpected end of text".to_string())),
         }
     }
 
-    fn object(&mut self, depth: usize) -> Result<JsonValue, String> {
+    fn object(&mut self, depth: usize) -> Result<JsonValue, JsonError> {
         self.at += 1;
         let mut members = Vec::new();
         self.skip_space();
@@ -169,12 +211,12 @@ impl Reader<'_> {
                     self.at += 1;
                     return Ok(JsonValue::Object(members));
                 }
-                _ => return Err(format!("expected `,` or `}}` at byte {}", self.at)),
+                _ => return Err(self.fail("expected `,` or `}`".to_string())),
             }
         }
     }
 
-    fn array(&mut self, depth: usize) -> Result<JsonValue, String> {
+    fn array(&mut self, depth: usize) -> Result<JsonValue, JsonError> {
         self.at += 1;
         let mut items = Vec::new();
         self.skip_space();
@@ -191,14 +233,14 @@ impl Reader<'_> {
                     self.at += 1;
                     return Ok(JsonValue::Array(items));
                 }
-                _ => return Err(format!("expected `,` or `]` at byte {}", self.at)),
+                _ => return Err(self.fail("expected `,` or `]`".to_string())),
             }
         }
     }
 
     /// A number as RFC 8259 writes it: `-`, an integer part with no
     /// leading zero, then an optional fraction and exponent.
-    fn number(&mut self) -> Result<JsonValue, String> {
+    fn number(&mut self) -> Result<JsonValue, JsonError> {
         let start = self.at;
         if self.peek() == Some(b'-') {
             self.at += 1;
@@ -206,7 +248,12 @@ impl Reader<'_> {
         match self.peek() {
             Some(b'0') => self.at += 1,
             Some(b'1'..=b'9') => self.digits(),
-            _ => return Err(format!("bad number at byte {start}")),
+            _ => {
+                return Err(JsonError {
+                    message: "bad number".to_string(),
+                    at: start,
+                })
+            }
         }
         if self.peek() == Some(b'.') {
             self.at += 1;
@@ -231,67 +278,86 @@ impl Reader<'_> {
         }
     }
 
-    fn some_digits(&mut self, number_start: usize) -> Result<(), String> {
+    fn some_digits(&mut self, number_start: usize) -> Result<(), JsonError> {
         let before = self.at;
         self.digits();
         if self.at == before {
-            Err(format!("bad number at byte {number_start}"))
+            Err(JsonError {
+                message: "bad number".to_string(),
+                at: number_start,
+            })
         } else {
             Ok(())
         }
     }
 
     /// Four hex digits after `\u`.
-    fn hex4(&mut self) -> Result<u32, String> {
+    fn hex4(&mut self) -> Result<u32, JsonError> {
         let value = self
             .text
             .get(self.at..self.at + 4)
             .filter(|h| h.iter().all(u8::is_ascii_hexdigit))
             .and_then(|h| std::str::from_utf8(h).ok())
             .and_then(|h| u32::from_str_radix(h, 16).ok())
-            .ok_or_else(|| format!("bad \\u escape at byte {}", self.at))?;
+            .ok_or_else(|| self.fail("bad \\u escape".to_string()))?;
         self.at += 4;
         Ok(value)
     }
 
     /// The character a `\u` escape names, with the pair of escapes a
     /// character past U+FFFF is written as.
-    fn unicode_escape(&mut self) -> Result<char, String> {
+    fn unicode_escape(&mut self) -> Result<char, JsonError> {
         let at = self.at;
         let first = self.hex4()?;
         let code = match first {
             0xD800..=0xDBFF => {
                 if !self.text[self.at..].starts_with(b"\\u") {
-                    return Err(format!("a lone surrogate escape at byte {at}"));
+                    return Err(JsonError {
+                        message: "a lone surrogate escape".to_string(),
+                        at,
+                    });
                 }
                 self.at += 2;
                 let second = self.hex4()?;
                 if !(0xDC00..=0xDFFF).contains(&second) {
-                    return Err(format!("a lone surrogate escape at byte {at}"));
+                    return Err(JsonError {
+                        message: "a lone surrogate escape".to_string(),
+                        at,
+                    });
                 }
                 0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00)
             }
-            0xDC00..=0xDFFF => return Err(format!("a lone surrogate escape at byte {at}")),
+            0xDC00..=0xDFFF => {
+                return Err(JsonError {
+                    message: "a lone surrogate escape".to_string(),
+                    at,
+                })
+            }
             other => other,
         };
-        char::from_u32(code).ok_or_else(|| format!("bad \\u escape at byte {at}"))
+        char::from_u32(code).ok_or(JsonError {
+            message: "bad \\u escape".to_string(),
+            at,
+        })
     }
 
-    fn string(&mut self) -> Result<String, String> {
+    fn string(&mut self) -> Result<String, JsonError> {
         self.eat(b'"')?;
         let mut out: Vec<u8> = Vec::new();
         loop {
             let byte = self
                 .peek()
-                .ok_or_else(|| "a string that never ends".to_string())?;
+                .ok_or_else(|| self.fail("a string that never ends".to_string()))?;
             self.at += 1;
             match byte {
-                b'"' => return String::from_utf8(out).map_err(|e| e.to_string()),
-                0..=0x1f => return Err(format!("raw control byte {byte:#x} in a string")),
+                b'"' => return String::from_utf8(out).map_err(|e| self.fail(e.to_string())),
+                0..=0x1f => {
+                    return Err(self.fail(format!("raw control byte {byte:#x} in a string")))
+                }
                 b'\\' => {
                     let escape = self
                         .peek()
-                        .ok_or_else(|| "a dangling backslash".to_string())?;
+                        .ok_or_else(|| self.fail("a dangling backslash".to_string()))?;
                     self.at += 1;
                     let c = match escape {
                         b'"' => '"',
@@ -303,7 +369,7 @@ impl Reader<'_> {
                         b'r' => '\r',
                         b't' => '\t',
                         b'u' => self.unicode_escape()?,
-                        other => return Err(format!("bad escape `\\{}`", other as char)),
+                        other => return Err(self.fail(format!("bad escape `\\{}`", other as char))),
                     };
                     let mut buffer = [0; 4];
                     out.extend_from_slice(c.encode_utf8(&mut buffer).as_bytes());
@@ -316,7 +382,23 @@ impl Reader<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_json;
+    use super::{parse_json, parse_json_at};
+
+    #[test]
+    fn every_error_has_a_place_said_as_line_and_column() {
+        let text = "{\n  \"a\": 1,\n  \"é\" x\n}";
+        let error = parse_json_at(text).expect_err("not JSON");
+        assert_eq!(error.message, "expected `:`");
+        assert_eq!(error.line_column(text), (3, 7));
+        for bad in ["", "{\"a\": \"open", "[1,", "\"\\q\""] {
+            let error = parse_json_at(bad).expect_err("not JSON");
+            assert!(error.at <= bad.len(), "{bad:?}: {error}");
+        }
+        assert_eq!(
+            parse_json("[1 2]").expect_err("not JSON"),
+            "expected `,` or `]` at byte 3"
+        );
+    }
 
     #[test]
     fn counts_are_non_negative_integers() {

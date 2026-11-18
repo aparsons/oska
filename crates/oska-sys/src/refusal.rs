@@ -4,6 +4,16 @@
 //!
 //! Each function builds the error for one refusal. The platform modules
 //! decide when a refusal applies; only the words live here.
+//!
+//! An error that arises from one platform's own system calls keeps its
+//! words in that platform's module, as there are no words on the other
+//! to match: on Unix, a failed `rename` (only Unix has
+//! [`crate::Dir`]'s rename) and a path holding a NUL byte, which a C
+//! string cannot carry; on Windows, a name too long for `NtCreateFile`'s
+//! 16-bit length and a directory listing not laid out as documented. A
+//! refusal both platforms can meet belongs here. A NUL byte in a name is
+//! one exception still worded per platform: Windows refuses it as not a
+//! single name, before any system call.
 
 use std::ffi::OsStr;
 use std::io;

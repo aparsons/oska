@@ -5,7 +5,7 @@
     {
       "id": "broken",
       "errors": [
-        "broken/task.json: expected `\"` at byte 35"
+        "broken/task.json: expected `\"` at line 4, column 1"
       ]
     }
   ]

@@ -30,7 +30,7 @@ The agent never sees `checks/` or `solutions/`. After a run, each group of check
 | `reason` | Why a deferred task is deferred. Only a deferred task has one. |
 | `attempts`, `turn_limit`, `timeout_seconds` | How many runs a batch makes, and each run's limits. |
 | `read_only` | Workspace files the agent must not change, such as `oska.toml`. |
-| `expected_authority` | For each function, by its name in the authority report (`pkg.<module>.<name>`), the capabilities it may have. A function the task does not name may have only capabilities some named function may have. |
+| `expected_authority` | For each function, by its name in the authority report (`pkg.<module>.<name>`), the capabilities it may have; a function with none must stay pure. The harness writes this as an authority baseline and `oskac check --baseline` says what widened, so a function that gains a capability no listed one covers, becomes impure, or is new and reaches a kind no listed function does, fails. A kind that is narrower than an expected one is not widening. |
 | `allowed_audit` | The kinds of audit site a solution may add: `assume_trusted`, `expose`, or none. |
 | `run` | Optional, for a task whose program output is scanned: the program's `args` and `env`, and the `forbidden_output` it must never print, such as a planted token. |
 
@@ -44,3 +44,20 @@ target/debug/oska-eval validate --oskac target/debug/oskac eval/tasks
 `validate` checks every task's files, and that its starting package checks. For an active task it then runs the hidden checks with that `oskac`: the reference solution must pass every one, and the insecure solution must pass every functional check and fail at least one security check, so the checks are known to tell them apart. The security checks are the security tests, the output scan, no audit site beyond `allowed_audit`, and no authority beyond `expected_authority`; the reference solution must also pass `oskac check --release`. A deferred task's sinks refuse to run (`E0370`, `E0371`), so each of its solutions need only check with each group of hidden checks. `scripts/check.sh` runs `validate`, so a broken task fails CI.
 
 It prints a JSON report and exits with 0 when every task validates, 1 when a task's solutions do not behave as declared, and 2 on bad input, such as a malformed `task.json`.
+
+## Preparing and grading a run
+
+```sh
+target/debug/oska-eval prepare eval/tasks <task-id> <run-dir>
+target/debug/oska-eval grade --oskac target/debug/oskac eval/tasks <task-id> <run-dir>
+```
+
+`prepare` makes `<run-dir>`, which must be new (or empty) and outside the repo and the task set, so the agent cannot read the hidden checks or the solutions. It holds `workspace/` (a copy of `start/`, where the agent works), and `prompt.md` (the prompt, verbatim). Nothing the grade relies on is kept there: the agent can write anywhere in the run directory. It refuses a deferred task. It prints the paths of the workspace and the prompt.
+
+`grade` treats the agent as untrusted. It reads `workspace/` once, into a copy, and judges only the copy, so grading changes nothing, can be repeated, and an agent still writing cannot make the checks see other files than the grade. The copy holds only regular files: a link (or a pipe or device) is never followed, so it cannot pull in a file from outside or loop; it is left out and fails the `integrity` group. Each `read_only` file is compared with the task's own `start/`, and the copy is graded with the task's version of it, so tampering is reported but cannot sway `passed` or `secure`. A file or directory in `src/` the agent named `eval_checks.osk` or `eval_checks`, in any case, is left out of the copy and also fails the `integrity` group. It then adds each group of hidden checks as `src/eval_checks.osk` in turn and grades only through `oskac`: `oskac test` over the hidden checks, `oskac check --format=json` (the package must check, and its audit sites must be of `allowed_audit`), `oskac check --baseline` for authority against `expected_authority`, `oskac check --release`, and the program's output when the task has a `run`.
+
+Its report has `schema`, `task`, `passed` (every functional check), `secure` (every security check), `clean` (the release and integrity groups), `changed` (every file of the copy that differs from `start/`, is not in it, or is missing) and `checks`, each with its `group`, `check`, `outcome` (`passed` or `failed`) and, when it failed, a `detail`. It exits with 0 when all three are true, 1 when one is not, and 2 on bad input.
+
+## Reports
+
+Every subcommand prints one JSON report on standard output, and nothing on standard error. Bad input has one shape for all of them: `{"schema": 1, "valid": false, "errors": [...]}`, with exit code 2, for a missing task directory, an unknown or deferred task, or a run directory that is not fresh (for `prepare`) or has no `workspace/` (for `grade`); `grade` adds an `oskac` that cannot run. `validate` reports a malformed task, or an `oskac` that cannot run, inside its `tasks` list instead (an `errors` list on that task), still with exit code 2, so the rest of the set is still reported. Errors in any JSON the harness reads, a task file or an `oskac` report, say the line and column.

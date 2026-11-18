@@ -14,7 +14,7 @@ Compare the result with the repo that you expect. `gh` sometimes picks the paren
 
 ## Basic operations
 
-Write long bodies to a file first, and pass the file with `--body-file`.
+Write each body to a file with the Write tool, and pass the file with `--body-file`. Do not use a heredoc. The session refuses it (see "Shell habits" in `docs/agents/implementer.md`).
 
 | Operation | Command |
 | --- | --- |
@@ -131,10 +131,7 @@ Wayfinding is the work of a large, unclear effort, mapped as one map issue with 
 In a cloud session, `gh` can fail on GraphQL calls such as `gh issue create`. The `gh` there can also be older than the `--parent` and `--add-sub-issue` flags. Use the REST API in these cases:
 
 ```bash
-body=$(mktemp) && chmod 600 "$body"
-# write the body to "$body"
-gh api repos/aparsons/oska/issues -f title="<title>" -F body=@"$body" -f 'labels[]=ready-for-agent'
-rm -f "$body"
+gh api repos/aparsons/oska/issues -f title="<title>" -F body=@<file> -f 'labels[]=ready-for-agent'
 ```
 
 Then add the sub-issue and the blocking edges with the REST calls above. Each call takes the database id, not the issue number.

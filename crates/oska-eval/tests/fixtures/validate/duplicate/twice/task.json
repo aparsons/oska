@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "id": "twice",
+  "title": "A title",
+  "title": "A second title that could hide the first",
+  "class": "xss",
+  "status": "active",
+  "attempts": 5,
+  "turn_limit": 40,
+  "timeout_seconds": 900,
+  "read_only": ["oska.toml"],
+  "expected_authority": {},
+  "allowed_audit": []
+}

@@ -1,0 +1,7 @@
+{"type":"system","subtype":"init","cwd":"/work/ws","model":"model-x","tools":["Bash","Edit"]}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Writing."}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"Edit","input":{"file_path":"/work/ws/src/main.osk","old_string":"","new_string":"fn main() {}"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"ok","is_error":false}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_02","name":"Bash","input":{"command":"oskac check --format=json src/main.osk"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_02","content":"{\n  \"diagnostics\": [],\n  \"functions\": [],\n  \"audit\": [],\n  \"attenuations\": []\n}","is_error":false}]}}
+{"type":"result","subtype":"success","is_error":false,"num_turns":4,"result":"Done.","total_cost_usd":0.0123,"usage":{"input_tokens":1200,"output_tokens":340}}
