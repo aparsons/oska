@@ -4,10 +4,11 @@
 //!
 //! A prelude intrinsic is implemented in Oska, by a function of `std.rt`
 //! that takes the same arguments (the receiver first), or, when that would
-//! be a single instruction, inline. A `std.rt` intrinsic is one system
-//! call (`svc #0`), one word operation, or a constant. What differs
-//! between target platforms is in one [`Platform`] per target: its
-//! system-call numbers here, and its table in `std.rt`.
+//! be a single instruction, inline. A `std.rt` intrinsic is one call of
+//! the operating system (on Linux, a system call, or none where Linux
+//! needs none), one word operation, or a constant. What differs between target platforms is in one
+//! [`Platform`] per target: how its operating system is called here, and
+//! its numbers, flags and structure layouts in its table in `std.rt`.
 //!
 //! To add a prelude intrinsic: write its runtime function in
 //! `oska-check/src/std/rt.osk` and add a [`Prelude::Runtime`] row to
@@ -160,7 +161,8 @@ pub fn prelude(name: &str) -> Option<Prelude> {
 /// How a `std.rt` intrinsic is lowered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Runtime {
-    /// The Linux system call `Sys`, of the target platform's number.
+    /// The operating-system call `Sys`, as the target platform makes it
+    /// ([`Platform`]).
     Syscall(Sys),
     /// `load(addr)`.
     Load(Width),
@@ -182,7 +184,12 @@ pub enum Runtime {
     PlatformTable,
 }
 
-/// A system call, which the `std.rt` intrinsic of its name makes.
+/// An operating-system call, which the `std.rt` intrinsic of its name
+/// makes. Most are the POSIX calls of their names; the directory calls
+/// ([`Sys::OpenDir`], [`Sys::ReadDir`], [`Sys::CloseDir`]),
+/// [`Sys::Random`], [`Sys::Sigaction`] and [`Sys::Exit`] are named for
+/// what they do, since Linux's calls for them (`getdents64`, `getrandom`,
+/// `rt_sigaction`, `exit_group`) are Linux's own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sys {
     Read,
@@ -190,7 +197,9 @@ pub enum Sys {
     Openat,
     Close,
     Mkdirat,
-    Getdents64,
+    OpenDir,
+    ReadDir,
+    CloseDir,
     Fstat,
     Ftruncate,
     Readlinkat,
@@ -200,40 +209,77 @@ pub enum Sys {
     Munmap,
     ClockGettime,
     Ioctl,
-    Getrandom,
-    RtSigaction,
+    Random,
+    Sigaction,
     Sigaltstack,
     Getpid,
     Kill,
-    ExitGroup,
+    Exit,
 }
 
-/// What the backend gives `std.rt` for a target platform.
+/// What the backend gives `std.rt` for a target platform: how its
+/// operating system is called, and which `std.rt` table holds its
+/// numbers, flags and structure layouts.
 #[derive(Debug, Clone, Copy)]
 pub struct Platform {
     /// The `std.rt` function giving the platform's table, which
-    /// `rt_mem_platform` gives: its open flags and `struct stat` layout.
+    /// `rt_mem_platform` gives.
     pub table: &'static str,
-    /// Each system call's number.
-    pub syscall: fn(Sys) -> u16,
+    /// How the operating system makes each call.
+    pub call: fn(Sys) -> OsCall,
+}
+
+/// How an operating system makes one [`Sys`] call: one call of its
+/// interface, or none (ADR 0013).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OsCall {
+    /// The system call `number`, passed the intrinsic's arguments and then
+    /// `then`, the constant arguments the system call takes beyond the
+    /// intrinsic's.
+    Trap { number: u16, then: &'static [i64] },
+    /// No call: the result is the intrinsic's first argument.
+    Same,
 }
 
 /// `linux-aarch64`.
 pub const LINUX_AARCH64: Platform = Platform {
     table: "linux_aarch64",
-    syscall: linux_aarch64_syscall,
+    call: linux_aarch64_call,
 };
 
+/// The Linux system call `number` gives for `call` (none for `None`),
+/// with what it takes after a neutral intrinsic's arguments, on every
+/// processor: `getrandom`'s flags (none), and `rt_sigaction`'s old
+/// action (none kept) and the size of its signal mask in bytes.
+fn linux_call(call: Sys, number: fn(Sys) -> Option<u16>) -> OsCall {
+    let Some(number) = number(call) else {
+        return OsCall::Same;
+    };
+    let then: &'static [i64] = match call {
+        Sys::Random => &[0],
+        Sys::Sigaction => &[0, 8],
+        _ => &[],
+    };
+    OsCall::Trap { number, then }
+}
+
+fn linux_aarch64_call(call: Sys) -> OsCall {
+    linux_call(call, linux_aarch64_syscall)
+}
+
 /// `linux-aarch64`'s system-call numbers: the generic Linux table's
-/// (`asm-generic/unistd.h`).
-fn linux_aarch64_syscall(call: Sys) -> u16 {
-    match call {
+/// (`asm-generic/unistd.h`). A directory is listed through its file
+/// descriptor, so opening one for listing makes no call, and closing it
+/// is `close`.
+fn linux_aarch64_syscall(call: Sys) -> Option<u16> {
+    Some(match call {
+        Sys::OpenDir => return None,
         Sys::Read => 63,
         Sys::Write => 64,
         Sys::Openat => 56,
-        Sys::Close => 57,
+        Sys::Close | Sys::CloseDir => 57,
         Sys::Mkdirat => 34,
-        Sys::Getdents64 => 61,
+        Sys::ReadDir => 61,
         Sys::Fstat => 80,
         Sys::Ftruncate => 46,
         Sys::Readlinkat => 78,
@@ -243,31 +289,36 @@ fn linux_aarch64_syscall(call: Sys) -> u16 {
         Sys::Munmap => 215,
         Sys::ClockGettime => 113,
         Sys::Ioctl => 29,
-        Sys::Getrandom => 278,
-        Sys::RtSigaction => 134,
+        Sys::Random => 278,
+        Sys::Sigaction => 134,
         Sys::Sigaltstack => 132,
         Sys::Getpid => 172,
         Sys::Kill => 129,
-        Sys::ExitGroup => 94,
-    }
+        Sys::Exit => 94,
+    })
 }
 
 /// `linux-x86_64`.
 pub const LINUX_X86_64: Platform = Platform {
     table: "linux_x86_64",
-    syscall: linux_x86_64_syscall,
+    call: linux_x86_64_call,
 };
 
+fn linux_x86_64_call(call: Sys) -> OsCall {
+    linux_call(call, linux_x86_64_syscall)
+}
+
 /// `linux-x86_64`'s system-call numbers (`arch/x86/entry/syscalls/
-/// syscall_64.tbl`).
-fn linux_x86_64_syscall(call: Sys) -> u16 {
-    match call {
+/// syscall_64.tbl`), and the same directory calls as aarch64's.
+fn linux_x86_64_syscall(call: Sys) -> Option<u16> {
+    Some(match call {
+        Sys::OpenDir => return None,
         Sys::Read => 0,
         Sys::Write => 1,
         Sys::Openat => 257,
-        Sys::Close => 3,
+        Sys::Close | Sys::CloseDir => 3,
         Sys::Mkdirat => 258,
-        Sys::Getdents64 => 217,
+        Sys::ReadDir => 217,
         Sys::Fstat => 5,
         Sys::Ftruncate => 77,
         Sys::Readlinkat => 267,
@@ -277,13 +328,13 @@ fn linux_x86_64_syscall(call: Sys) -> u16 {
         Sys::Munmap => 11,
         Sys::ClockGettime => 228,
         Sys::Ioctl => 16,
-        Sys::Getrandom => 318,
-        Sys::RtSigaction => 13,
+        Sys::Random => 318,
+        Sys::Sigaction => 13,
         Sys::Sigaltstack => 131,
         Sys::Getpid => 39,
         Sys::Kill => 62,
-        Sys::ExitGroup => 231,
-    }
+        Sys::Exit => 231,
+    })
 }
 
 /// Every `std.rt` intrinsic, by name.
@@ -293,7 +344,9 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_sys_openat", Runtime::Syscall(Sys::Openat)),
     ("rt_sys_close", Runtime::Syscall(Sys::Close)),
     ("rt_sys_mkdirat", Runtime::Syscall(Sys::Mkdirat)),
-    ("rt_sys_getdents64", Runtime::Syscall(Sys::Getdents64)),
+    ("rt_sys_open_dir", Runtime::Syscall(Sys::OpenDir)),
+    ("rt_sys_read_dir", Runtime::Syscall(Sys::ReadDir)),
+    ("rt_sys_close_dir", Runtime::Syscall(Sys::CloseDir)),
     ("rt_sys_fstat", Runtime::Syscall(Sys::Fstat)),
     ("rt_sys_ftruncate", Runtime::Syscall(Sys::Ftruncate)),
     ("rt_sys_readlinkat", Runtime::Syscall(Sys::Readlinkat)),
@@ -303,12 +356,12 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_sys_munmap", Runtime::Syscall(Sys::Munmap)),
     ("rt_sys_clock_gettime", Runtime::Syscall(Sys::ClockGettime)),
     ("rt_sys_ioctl", Runtime::Syscall(Sys::Ioctl)),
-    ("rt_sys_getrandom", Runtime::Syscall(Sys::Getrandom)),
-    ("rt_sys_rt_sigaction", Runtime::Syscall(Sys::RtSigaction)),
+    ("rt_sys_random", Runtime::Syscall(Sys::Random)),
+    ("rt_sys_sigaction", Runtime::Syscall(Sys::Sigaction)),
     ("rt_sys_sigaltstack", Runtime::Syscall(Sys::Sigaltstack)),
     ("rt_sys_getpid", Runtime::Syscall(Sys::Getpid)),
     ("rt_sys_kill", Runtime::Syscall(Sys::Kill)),
-    ("rt_sys_exit_group", Runtime::Syscall(Sys::ExitGroup)),
+    ("rt_sys_exit", Runtime::Syscall(Sys::Exit)),
     ("rt_mem_load8", Runtime::Load(Width::W8)),
     ("rt_mem_load16", Runtime::Load(Width::W16)),
     ("rt_mem_load32", Runtime::Load(Width::W32)),
@@ -386,21 +439,174 @@ mod tests {
         }
     }
 
+    /// Each Linux call is the system call it was before the `Platform`
+    /// reshape (#366): the kernel's number on each processor, and the
+    /// same constant trailing arguments. Opening a directory for listing
+    /// makes no call, and closing it is `close`.
     #[test]
-    fn every_platform_gives_each_system_call_a_number_of_its_own() {
-        for platform in crate::Target::ALL.map(crate::Target::platform) {
-            let mut numbers: Vec<u16> = RUNTIME
-                .iter()
-                .filter_map(|(_, implementation)| match implementation {
-                    Runtime::Syscall(call) => Some((platform.syscall)(*call)),
-                    _ => None,
-                })
-                .collect();
-            let calls = numbers.len();
-            numbers.sort_unstable();
-            numbers.dedup();
-            assert_eq!(numbers.len(), calls, "`{}`", platform.table);
+    fn linux_makes_each_call_as_the_system_call_it_made_before() {
+        // (intrinsic, aarch64's number, x86_64's, trailing arguments)
+        let rows: &[(&str, u16, u16, &[i64])] = &[
+            ("rt_sys_read", 63, 0, &[]),
+            ("rt_sys_write", 64, 1, &[]),
+            ("rt_sys_openat", 56, 257, &[]),
+            ("rt_sys_close", 57, 3, &[]),
+            ("rt_sys_mkdirat", 34, 258, &[]),
+            ("rt_sys_read_dir", 61, 217, &[]),
+            ("rt_sys_close_dir", 57, 3, &[]),
+            ("rt_sys_fstat", 80, 5, &[]),
+            ("rt_sys_ftruncate", 46, 77, &[]),
+            ("rt_sys_readlinkat", 78, 267, &[]),
+            ("rt_sys_getcwd", 17, 79, &[]),
+            ("rt_sys_fcntl", 25, 72, &[]),
+            ("rt_sys_mmap", 222, 9, &[]),
+            ("rt_sys_munmap", 215, 11, &[]),
+            ("rt_sys_clock_gettime", 113, 228, &[]),
+            ("rt_sys_ioctl", 29, 16, &[]),
+            // getrandom(buf, len, flags): no flags.
+            ("rt_sys_random", 278, 318, &[0]),
+            // rt_sigaction(sig, act, old, size): no old action, an 8-byte
+            // signal mask.
+            ("rt_sys_sigaction", 134, 13, &[0, 8]),
+            ("rt_sys_sigaltstack", 132, 131, &[]),
+            ("rt_sys_getpid", 172, 39, &[]),
+            ("rt_sys_kill", 129, 62, &[]),
+            ("rt_sys_exit", 94, 231, &[]),
+        ];
+        for (name, implementation) in RUNTIME {
+            let Runtime::Syscall(call) = implementation else {
+                continue;
+            };
+            for platform in [LINUX_AARCH64, LINUX_X86_64] {
+                let expected = if *name == "rt_sys_open_dir" {
+                    OsCall::Same
+                } else {
+                    let (_, aarch64, x86_64, then) = rows
+                        .iter()
+                        .find(|row| row.0 == *name)
+                        .unwrap_or_else(|| panic!("`{name}` has no row"));
+                    let number = if platform.table == "linux_aarch64" {
+                        *aarch64
+                    } else {
+                        *x86_64
+                    };
+                    OsCall::Trap { number, then }
+                };
+                assert_eq!(
+                    (platform.call)(*call),
+                    expected,
+                    "`{name}` on `{}`",
+                    platform.table
+                );
+            }
         }
+    }
+
+    /// A program that reaches every system call `std.rt` makes: the
+    /// standard streams, the clock and randomness, and confined reads,
+    /// writes, listings and directories, whose paths are resolved against
+    /// the working directory.
+    const EVERY_CALL: &str = r#"fn main(io: Stdout, input: Stdin, fs: Fs, clock: Clock, random: Random) -> Result<(), IoError> {
+    let read = fs.read_only().restrict_to("root")
+    let write = fs.write_only().restrict_to("root")
+    let names = read.list_dir(Path.new("sub"))?
+    let text = read.read_to_string(Path.new("a.txt"))?
+    write.write(Path.new("b.txt"), "b")?
+    write.create_dir(Path.new("c"))?
+    let file = fs.write_only().restrict_to_file("root/d.txt")
+    file.write("d")?
+    io.println(clock.now_millis().to_string())?
+    io.println(random.next_int().to_string())?
+    let line = input.read_line()?
+    Ok(())
+}
+"#;
+
+    /// Every system call in `EVERY_CALL`'s executable for `target`: its
+    /// number and how many arguments it is passed.
+    fn system_calls(target: crate::Target) -> Vec<(u16, usize)> {
+        let report = oska_check::check_module(EVERY_CALL);
+        assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+        let program = report.program.expect("the program should check");
+        let rt = oska_check::check_toolchain_rt()
+            .program
+            .expect("std.rt should check");
+        let module =
+            crate::lower::program(&program, &rt, &|d| d, crate::lower::Entry::Main, target)
+                .expect("the program should lower");
+        let calls: std::collections::BTreeSet<(u16, usize)> = module
+            .functions
+            .iter()
+            .flat_map(|function| &function.insts)
+            .filter_map(|inst| match inst {
+                crate::ir::Inst::Syscall { number, args, .. } => Some((*number, args.len())),
+                _ => None,
+            })
+            .collect();
+        calls.into_iter().collect()
+    }
+
+    /// Linux executables make the system calls they made before the
+    /// `Platform` reshape (#366), each with as many arguments. The
+    /// numbers are the kernel's, from its tables, not the backend's.
+    #[test]
+    fn linux_executables_make_the_same_system_calls() {
+        // getcwd, fcntl, ioctl, mkdirat, ftruncate, openat, close,
+        // getdents64, read, write, readlinkat, fstat, exit_group,
+        // clock_gettime, kill, sigaltstack, rt_sigaction, getpid, munmap,
+        // mmap, getrandom: `asm-generic/unistd.h`.
+        let aarch64: &[(u16, usize)] = &[
+            (17, 2),
+            (25, 3),
+            (29, 3),
+            (34, 3),
+            (46, 2),
+            (56, 4),
+            (57, 1),
+            (61, 3),
+            (63, 3),
+            (64, 3),
+            (78, 4),
+            (80, 2),
+            (94, 1),
+            (113, 2),
+            (129, 2),
+            (132, 2),
+            (134, 4),
+            (172, 0),
+            (215, 2),
+            (222, 6),
+            (278, 3),
+        ];
+        // read, write, close, fstat, mmap, munmap, rt_sigaction, ioctl,
+        // getpid, kill, fcntl, ftruncate, getcwd, sigaltstack, getdents64,
+        // clock_gettime, exit_group, openat, mkdirat, readlinkat,
+        // getrandom: `arch/x86/entry/syscalls/syscall_64.tbl`.
+        let x86_64: &[(u16, usize)] = &[
+            (0, 3),
+            (1, 3),
+            (3, 1),
+            (5, 2),
+            (9, 6),
+            (11, 2),
+            (13, 4),
+            (16, 3),
+            (39, 0),
+            (62, 2),
+            (72, 3),
+            (77, 2),
+            (79, 2),
+            (131, 2),
+            (217, 3),
+            (228, 2),
+            (231, 1),
+            (257, 4),
+            (258, 3),
+            (267, 4),
+            (318, 3),
+        ];
+        assert_eq!(system_calls(crate::Target::LinuxAarch64), aarch64);
+        assert_eq!(system_calls(crate::Target::LinuxX86_64), x86_64);
     }
 
     #[test]

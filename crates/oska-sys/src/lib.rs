@@ -29,10 +29,14 @@
 //! - Every foreign function is called only from a safe wrapper in this
 //!   crate. Nothing `unsafe` is public.
 
+mod refusal;
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
 mod windows;
+mod wording;
+
+pub use wording::{io_error_message, wording, IO_KINDS, OTHER_WORDING};
 
 #[cfg(unix)]
 pub use unix::Dir;
