@@ -1,51 +1,22 @@
-# Domain Docs
+# Domain docs
 
-How the engineering skills should consume this repo's domain documentation when exploring the codebase.
+This file tells skills how to use the domain docs of Oska. Oska has one context: `GLOSSARY.md` and `docs/adr/` at the repo root.
 
-## Before exploring, read these
+## Read before you explore
 
-- **`GLOSSARY.md`** at the repo root, or
-- **`GLOSSARY-MAP.md`** at the repo root if it exists: it points at one `GLOSSARY.md` per context. Read each one relevant to the topic.
-- **`docs/adr/`**: read ADRs that touch the area you're about to work in. In multi-context repos, also check `src/<context>/docs/adr/` for context-scoped decisions.
+Before you explore the code for a task, read:
 
-If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
+- `GLOSSARY.md` at the root. If `GLOSSARY-MAP.md` exists instead, read it. Then read each glossary that it lists for the area of the task.
+- The ADRs in `docs/adr/` that touch the area of the task. In a multi-context repo, also read the ADR folder of the context.
 
-## File structure
+An ADR (architecture decision record) is a short dated file that records one decision and its reason.
 
-Single-context repo (most repos):
+If a file or folder does not exist, continue silently. Do not report that it is missing. Do not propose to create it.
 
-```
-/
-├── GLOSSARY.md
-├── docs/adr/
-│   ├── 0001-event-sourced-orders.md
-│   └── 0002-postgres-for-write-model.md
-└── src/
-```
+## Use the glossary terms
 
-Multi-context repo (presence of `GLOSSARY-MAP.md` at the root):
+In all output, use the terms that the glossary defines: issue titles, proposals, test names, and commit messages. Do not use a synonym that the glossary rejects. If you need a concept that the glossary does not have, note it as a gap.
 
-```
-/
-├── GLOSSARY-MAP.md
-├── docs/adr/                          ← system-wide decisions
-└── src/
-    ├── ordering/
-    │   ├── GLOSSARY.md
-    │   └── docs/adr/                  ← context-specific decisions
-    └── billing/
-        ├── GLOSSARY.md
-        └── docs/adr/
-```
+## Report ADR conflicts
 
-## Use the glossary's vocabulary
-
-When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `GLOSSARY.md`. Don't drift to synonyms the glossary explicitly avoids.
-
-If the concept you need isn't in the glossary yet, that's a signal: either you're inventing language the project doesn't use (reconsider) or there's a real gap (note it for `/domain-modeling`).
-
-## Flag ADR conflicts
-
-If your output contradicts an existing ADR, surface it explicitly rather than silently overriding:
-
-> _Contradicts ADR-0007 (event-sourced orders), but worth reopening because…_
+If your output contradicts an ADR, say so explicitly. Name the ADR and give the reason to reopen it. Do not override the decision silently.

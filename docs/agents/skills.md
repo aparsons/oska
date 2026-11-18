@@ -8,7 +8,7 @@ On 2026-11-18 we wrote these skills clean room, after the skill set in [mattpoco
 
 - One agent read the upstream text and wrote a behaviour spec for each skill, in its own words, with added security rules.
 - Separate writer agents wrote the skills from those specs and this standard. They did not see the upstream text.
-- A word-sequence overlap check compared the result with upstream. The longest shared run was 16 words, and every shared run of 12 or more words is a command, a label name, or settings JSON.
+- A word-sequence overlap check compared the result with upstream. It also covers `docs/agents/issue-tracker.md`, `domain.md`, and `triage-labels.md`, which now come from the clean `setup-skills` seeds. The longest shared run was 16 words, and every shared run of 12 or more words is a command, a label name, or settings JSON.
 
 When you change a skill, write from the behaviour you want. Do not copy text from another skill collection.
 
