@@ -87,3 +87,21 @@ The PR #358 review found the `Platform` table cannot express libSystem calls. On
 - The Pi went idle, so #214 (with #355) and #215 started (Sonnet).
 - User chose to change agent habits over relaxing permissions; docs PR `docs/agent-shell-habits` is in progress, and all briefs now carry the habits.
 - 2026-11-18: PR #380 (#215) review: fix first. Blockers: transcript lines did not refuse duplicate keys, and escape detection could be bypassed. Also fixing two metrics that would mislead #216 (`helped` and `false claim` overstate). Fix dispatched (Sonnet).
+
+## Progress report, 2026-11-18 (third scheduled run)
+- Merged since the second report: #362 (#167), #364 (research notes), #365 (macOS design, ADR 0015), #377 (#366), #378 (research status), #379 (ADR 0016 plus glossary). 13 PRs merged in total since 2026-11-17.
+- Clean on the first try: 4 of 6 (#364, #377, #378, #379). #362 needed a conflict merge; #365 needed reviewer corrections (MH_NOUNDEFS, missing load commands).
+- In flight: #381 (#169; macOS CI pending, Opus review), #380 (#215; fix-first, blockers being fixed), #214, the shell-habits docs PR, the wiki PR.
+- Rework: #380 had 2 blockers; the spec agent's check failed on a full disk; the #169 agent reported before macOS CI finished.
+- Tests: 2,224 `#[test]` in crates/ on origin/main (baseline 2,214; much of the new coverage is in golden and `.osk` files this count misses).
+- Subagent tokens since the second report about 1.7M; cumulative about 3.3M; estimated cumulative cost $25–$100 at assumed list prices.
+- 2026-11-18: #380 (#215) merged after two fix rounds; escape detection fails closed. Follow-ups in #388.
+
+## Progress report, 2026-11-18 ~09:00 UTC (fourth scheduled run), and session end
+- Merged since the third report, across all threads: #380 (#215), #383 (#360), #384 (#214, #355), #386 (shell habits), #387 (#354), #389 (#169), #390 (#279), #393 (#359), #394 (wiki), #396 (agent skills), #397 (wiki), #398 (#170), #399 (#344), #400 (#363, #361), #402 (#361). That is 15. 28 PRs merged since 2026-11-17.
+- This session's own PRs since the third report: #380, #384, #386, #394. The rest came from parallel cloud project threads.
+- Rework: #380 and #384 each needed two fix rounds (blockers in escape detection, then in grading confinement). #381 (#169) duplicated #389 from the macOS thread, and the coordinator closed it on 2026-11-18 ([problem-duplicate-dispatch](problem-duplicate-dispatch.md)). That is a second instance: it was dispatched before the duplicate-dispatch check existed.
+- First-try merges among this session's PRs since the third report: 2 of 4 (#386, #394).
+- Tests: 2,338 `#[test]` in crates/ on `origin/main@19f430c` (2,224 at the third report).
+- Open at session end: #401 (#171, from the macOS project thread, CI green, owned by that thread). The session's last subagent tokens were in #384's fixes. Cumulative estimate about 3.8M subagent tokens, $30–$115 at assumed list prices.
+- 2026-11-18: the user asked to finish current work and wind down. Nothing was started after that. Restart point: [handoff-2026-11-18](handoff-2026-11-18.md).
