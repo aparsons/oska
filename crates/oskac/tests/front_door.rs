@@ -351,11 +351,14 @@ fn bears_out(output: &Output, claim: &Option<Vec<String>>) -> Result<(), String>
 }
 
 /// Whether this host runs `oskac run` and `oskac test` natively: Linux on
-/// aarch64 or x86_64.
+/// aarch64 or x86_64, and Apple silicon macOS.
 fn native_host() -> bool {
-    cfg!(all(
-        any(target_arch = "aarch64", target_arch = "x86_64"),
-        target_os = "linux"
+    cfg!(any(
+        all(
+            any(target_arch = "aarch64", target_arch = "x86_64"),
+            target_os = "linux"
+        ),
+        all(target_os = "macos", target_arch = "aarch64")
     ))
 }
 

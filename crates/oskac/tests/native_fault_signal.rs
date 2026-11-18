@@ -1,20 +1,42 @@
 //! A native program killed by a signal (spec #153, runtime parity):
 //! `oskac run` reports a signal that only a fault raises as the native
-//! backend's fault, `E0392`, on aarch64 and x86_64 Linux alike, and ends
-//! as the program did on any other.
+//! backend's fault, `E0392`, on aarch64 and x86_64 Linux and on Apple
+//! silicon macOS alike, and ends as the program did on any other.
 
-#![cfg(all(
-    target_os = "linux",
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 
+#[cfg(target_os = "linux")]
 mod common;
 mod differential;
 
+#[cfg(target_os = "linux")]
 use common::procfs::children;
 use differential::{build_native, Case};
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Command, Stdio};
+
+/// The processes whose parent is `pid`. macOS has no `/proc`, so there
+/// `pgrep` lists them.
+#[cfg(target_os = "macos")]
+fn children(pid: u32) -> Vec<u32> {
+    let listed = Command::new("pgrep")
+        .args(["-P", &pid.to_string()])
+        .output()
+        .expect("pgrep should run");
+    String::from_utf8_lossy(&listed.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse().ok())
+        .collect()
+}
+
+/// `SIGBUS`'s number on this host: 10 on macOS, 7 on Linux.
+const SIGBUS: i32 = if cfg!(target_os = "macos") { 10 } else { 7 };
 
 #[test]
 fn a_native_program_killed_by_a_fault_signal_is_reported_as_e0392() {
@@ -28,7 +50,11 @@ fn a_native_program_killed_by_a_fault_signal_is_reported_as_e0392() {
          let _ = input.read_line()\n}\n",
     );
     let (_, dir) = build_native(&case);
-    for (signal, number, fault) in [("SEGV", 11, true), ("BUS", 7, true), ("TERM", 15, false)] {
+    for (signal, number, fault) in [
+        ("SEGV", 11, true),
+        ("BUS", SIGBUS, true),
+        ("TERM", 15, false),
+    ] {
         let mut oskac = Command::new(env!("CARGO_BIN_EXE_oskac"))
             .args(["run", "main.osk"])
             .current_dir(&dir)

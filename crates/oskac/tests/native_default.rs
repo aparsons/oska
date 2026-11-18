@@ -6,11 +6,10 @@
 //! keeps the interpreter.
 //!
 //! The golden cases (`tests/golden/native_default/<case>.txt`) are the
-//! same on every host: on aarch64 and x86_64 Linux they show the native
-//! run, and elsewhere the interpreter's fallback, which must print exactly
-//! the same. To regenerate them after an intended change, run
+//! same on every host: on the native hosts they show the native run, and
+//! elsewhere the interpreter's fallback, which must print exactly the same. To regenerate them after an intended change, run
 //! `UPDATE_GOLDEN=1 cargo test -p oskac --test native_default` and review
-//! the diff. The tests for those two hosts below show that the default
+//! the diff. The tests for the native hosts below show that the default
 //! really is native, through what only the native backend does: it writes
 //! its executable into the temporary directory, which the interpreter
 //! never touches.

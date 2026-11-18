@@ -369,8 +369,8 @@ fn the_site_generator_builds_the_real_site_byte_for_byte() {
 }
 
 /// CPU time this thread has used so far, user plus system, from
-/// `/proc/thread-self/stat`, so on Linux only. Unlike wall-clock time it does not grow when other processes
-/// compete for the cores. The kernel counts it in ticks of 1/100 s
+/// `/proc/thread-self/stat`, so on Linux only. Unlike wall-clock time it
+/// does not grow when other processes compete for the cores. The kernel counts it in ticks of 1/100 s
 /// (`USER_HZ`, 100 on every Linux target).
 #[cfg(target_os = "linux")]
 fn thread_cpu_time() -> std::time::Duration {
