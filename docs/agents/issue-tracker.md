@@ -1,46 +1,137 @@
 # Issue tracker: GitHub
 
-Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
+Oska tracks issues in GitHub Issues on `aparsons/oska`. Use the `gh` CLI for each operation. Inside a clone, `gh` finds the repo from the git remote.
 
-## Conventions
+## Check the target repo first
 
-- **Create an issue**: `gh issue create --title "..." --body-file F`. Write the body to F with the Write tool; do not use a heredoc (see Shell habits in `docs/agents/implementer.md`).
-- **Read an issue**: `gh issue view <number> --json number,title,body,labels,comments`.
-- **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
-- **Make an issue a sub-issue of a parent**: `gh issue create --parent <parent> ...`, or `gh issue edit <parent> --add-sub-issue <child>` afterwards (`gh` 2.94+). Older `gh`: `gh api --method POST repos/<owner>/<repo>/issues/<parent>/sub_issues -F sub_issue_id=<child-db-id>` (database id, as in **Blocking** below). Without sub-issues, put `Part of #<parent>` at the top of the child body.
-- **Comment on an issue**: `gh issue comment <number> --body "..."`
-- **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
-- **Close**: `gh issue close <number> --comment "..."`
+Before the first create in a session, run:
 
-Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
+```bash
+gh repo view --json nameWithOwner --jq .nameWithOwner
+```
+
+Compare the result with the repo that you expect. `gh` sometimes picks the parent of a fork. If the result is wrong, add `--repo <owner>/<name>` to each command.
+
+## Basic operations
+
+Write each body to a file with the Write tool, and pass the file with `--body-file`. Do not use a heredoc. The session refuses it (see "Shell habits" in `docs/agents/implementer.md`).
+
+| Operation | Command |
+| --- | --- |
+| Create | `gh issue create --title "<title>" --body-file <file>` |
+| View | `gh issue view <n> --json number,title,body,state,labels,author,assignees,createdAt,updatedAt,comments` |
+| List | `gh issue list --state open --label "<label>" --limit 100 --json number,title,labels,author,createdAt,updatedAt` |
+| Comment | `gh issue comment <n> --body-file <file>` |
+| Add a label | `gh issue edit <n> --add-label "<label>"` |
+| Remove a label | `gh issue edit <n> --remove-label "<label>"` |
+| Create a label | `gh label create "<label>" --description "<meaning>"` |
+
+Use `--state closed` or `--state all` to list other states. Use `--label` more than one time to require all of the labels.
+
+**Close.** Post the reason as a comment first. Then close:
+
+```bash
+gh issue comment <n> --body-file <file>
+gh issue close <n> --reason "completed"     # or: --reason "not planned"
+```
+
+## Sub-issues
+
+Link a child issue to a parent:
+
+- At create time: `gh issue create --parent <parent> --title "<title>" --body-file <file>`.
+- Later: `gh issue edit <parent> --add-sub-issue <child>`.
+- If your `gh` has no such flag, use the REST API. It needs the child's database id, not its number:
+
+  ```bash
+  child_id=$(gh api repos/aparsons/oska/issues/<child> --jq .id)
+  gh api --method POST repos/aparsons/oska/issues/<parent>/sub_issues -F sub_issue_id="$child_id"
+  ```
+
+- If sub-issues are not available, put `Part of #<parent>` on the first line of the child body.
+
+## Blocking
+
+Record that one issue blocks another:
+
+- At create time: `gh issue create --blocked-by <blocker> ...`.
+- Later: `gh issue edit <n> --add-blocked-by <blocker>`.
+- If your `gh` has no such flag, use the REST API with the blocker's database id:
+
+  ```bash
+  blocker_id=$(gh api repos/aparsons/oska/issues/<blocker> --jq .id)
+  gh api --method POST repos/aparsons/oska/issues/<n>/dependencies/blocked_by -F issue_id="$blocker_id"
+  ```
+
+- If dependencies are not available, put `Blocked by: #<a>, #<b>` on the first line of the body.
+
+**Count open blockers:**
+
+```bash
+gh api repos/aparsons/oska/issues/<n> --jq .issue_dependencies_summary.blocked_by
+```
+
+This count includes only open blockers. With the text fallback, check each issue in the `Blocked by:` line with `gh issue view <m> --json state`. An issue is unblocked when it has no open blocker.
 
 ## Pull requests as a triage surface
 
-**PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_
+**Pull requests are a triage surface: no.**
 
-When set to `yes`, PRs run through the same labels and states as issues, using the `gh pr` equivalents:
+Change this line to `yes` if the repo treats external pull requests as requests for triage. The `triage` skill reads it. When it is `yes`, use these commands:
 
-- **Read a PR**: `gh pr view <number> --comments` and `gh pr diff <number>` for the diff.
-- **List external PRs for triage**: `gh api --paginate 'repos/{owner}/{repo}/pulls?state=open' --jq '.[] | select(.author_association | IN("OWNER","MEMBER","COLLABORATOR") | not) | {number, title, author: .user.login, author_association, labels: [.labels[].name]}'`.
-- **Comment / label / close**: `gh pr comment`, `gh pr edit --add-label`/`--remove-label`, `gh pr close`.
+| Operation | Command |
+| --- | --- |
+| View | `gh pr view <n> --json number,title,body,labels,author,authorAssociation,comments` |
+| Diff | `gh pr diff <n>` |
+| Comment | `gh pr comment <n> --body-file <file>` |
+| Labels | `gh pr edit <n> --add-label "<label>"` / `--remove-label "<label>"` |
+| Close | `gh pr comment <n> --body-file <file>`, then `gh pr close <n>` |
 
-GitHub shares one number space across issues and PRs, so a bare `#42` may be either: resolve with `gh pr view 42` and fall back to `gh issue view 42`.
+List open pull requests from external authors:
 
-## When a skill says "publish to the issue tracker"
+```bash
+gh api --paginate 'repos/aparsons/oska/pulls?state=open' \
+  --jq '.[] | select(.author_association as $a | ["OWNER","MEMBER","COLLABORATOR"] | index($a) | not)
+        | {number, title, author: .user.login, author_association}'
+```
 
-Create a GitHub issue.
+Issues and pull requests share one number space on GitHub. To resolve `#<n>`, try `gh pr view <n>` first, then `gh issue view <n>`.
 
-## When a skill says "fetch the relevant ticket"
+## Generic phrases
 
-Read it as in **Read an issue** above.
+| A skill says | Do this |
+| --- | --- |
+| "Publish to the tracker" | Create an issue. |
+| "Fetch the ticket" | View the issue. |
+| "Comment on the ticket" | Comment on the issue. |
+| "Close the ticket" | Comment with the reason, then close. |
+| "Apply the label for a role" | Look up the label in `docs/agents/triage-labels.md`, then add it. |
 
-## Wayfinding operations
+## Wayfinding
 
-Used by `/wayfinder`. The **map** is a single issue with **child** issues as tickets.
+Wayfinding is the work of a large, unclear effort, mapped as one map issue with child issues.
 
-- **Map**: a single issue labelled `wayfinder:map`, holding the Notes / Decisions-so-far / Fog body. `gh issue create --label wayfinder:map`.
-- **Child ticket**: an issue linked to the map as a GitHub sub-issue (see **Make an issue a sub-issue of a parent**). Where sub-issues aren't enabled, add the child to a task list in the map body and put `Part of #<map>` at the top of the child body. Labels: `wayfinder:<type>` (`research`/`prototype`/`grilling`/`task`). Once claimed, the ticket is assigned to the driving dev.
-- **Blocking**: GitHub's **native issue dependencies**, the canonical, UI-visible representation. Add an edge with `gh api --method POST repos/<owner>/<repo>/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`, where `<blocker-db-id>` is the blocker's numeric **database id** (`gh api repos/<owner>/<repo>/issues/<n> --jq .id`, _not_ the `#number` or `node_id`). GitHub reports `issue_dependencies_summary.blocked_by` (open blockers only, the live gate). Where dependencies aren't available, fall back to a `Blocked by: #<n>, #<n>` line at the top of the child body. A ticket is unblocked when every blocker is closed.
-- **Frontier query**: list the map's open children (`gh issue list --state open`, scoped to the map's sub-issues / task list), drop any with an open blocker (`issue_dependencies_summary.blocked_by > 0`, or an open issue in the `Blocked by` line) or an assignee; first in map order wins.
-- **Claim**: `gh issue edit <n> --add-assignee @me`, the session's first write.
-- **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.
+- **Map.** One issue with the label `wayfinder:map`. Its body holds the notes, the decisions so far, and the open areas.
+- **Child.** A sub-issue of the map. It has one label `wayfinder:<type>`, where the type is `research`, `prototype`, `grilling`, or `task`.
+- **Claim.** Assign the child to yourself: `gh issue edit <n> --add-assignee @me`. Make this the first write of the session.
+- **Frontier.** The open children of the map with no open blocker and no assignee. The first one in map order is next. List the children with `gh api repos/aparsons/oska/issues/<map>/sub_issues`.
+- **Resolve.** Comment with the answer, close the child, then add one line to the map body: a short summary and a link to the child.
+
+## Oska conventions
+
+- **Spec.** One issue with the title `Spec: <feature>` and the label `ready-for-agent`.
+- **Ticket.** A sub-issue of its spec, with the label `ready-for-agent`. Blocking edges are native dependencies. In the body, name each blocker by title only.
+- **Branches.** A spec builds on `spec/<n>-<slug>`. Each ticket builds on `ticket/<n>-<slug>` and merges into the spec branch.
+- **Review follow-ups.** File each deferred finding in one issue with the title `Follow-ups from the PR #<pr> review (#<spec>)`.
+- **Close after a merge.** When a ticket pull request merges, comment with the pull request link, then close the ticket with `--reason "completed"`. Close the spec only when its spec pull request merges into `main`.
+- **`wayfinder:*` labels.** They may not exist yet. Check with `gh label list --search wayfinder`. Ask the user before you create one.
+
+## Cloud sessions
+
+In a cloud session, `gh` can fail on GraphQL calls such as `gh issue create`. The `gh` there can also be older than the `--parent` and `--add-sub-issue` flags. Use the REST API in these cases:
+
+```bash
+gh api repos/aparsons/oska/issues -f title="<title>" -F body=@<file> -f 'labels[]=ready-for-agent'
+```
+
+Then add the sub-issue and the blocking edges with the REST calls above. Each call takes the database id, not the issue number.
