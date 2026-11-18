@@ -199,6 +199,10 @@ struct Platform {
     // `SIGBUS`'s number, and `ELOOP`'s.
     sigbus: Int,
     e_loop: Int,
+    // Where the platform's system errors are worded in `system_errors`:
+    // how many wordings come before its error 1, and how many it has.
+    errors_at: Int,
+    errors_count: Int,
 }
 
 // `linux-aarch64`: arm64's open flags and `struct stat`, and what every
@@ -232,6 +236,8 @@ fn linux_aarch64() -> Platform {
         stack_size: 16,
         sigbus: 7,
         e_loop: 40,
+        errors_at: 0,
+        errors_count: 133,
     )
 }
 
@@ -267,6 +273,8 @@ fn linux_x86_64() -> Platform {
         stack_size: 16,
         sigbus: 7,
         e_loop: 40,
+        errors_at: 0,
+        errors_count: 133,
     )
 }
 
@@ -307,6 +315,8 @@ fn macos() -> Platform {
         stack_size: 8,
         sigbus: 10,
         e_loop: 62,
+        errors_at: 133,
+        errors_count: 106,
     )
 }
 
@@ -2311,13 +2321,19 @@ fn io_error_text(message: String) -> IoError {
 // Oska's wording for the kind of failure the system error `errno` is:
 // `I/O error` for a number whose kind has no wording of its own.
 fn errno_message(errno: Int) -> String {
-    let object = rt_mem_text(errno_table())
+    let platform = rt_mem_platform()
+    if errno < 1 || errno > platform.errors_count {
+        return "I/O error"
+    }
+    let object = rt_mem_text(system_errors())
     let data = text_data(object)
     let length = text_length(object)
-    // The wording for `errno` starts after `errno - 1` separators.
+    // The wording for `errno` starts after `errors_at + errno - 1`
+    // separators.
+    let skip = platform.errors_at + errno
     var at = 0
     var n = 1
-    while n < errno && at < length {
+    while n < skip && at < length {
         if rt_mem_load8(rt_mem_add(data, at)) == 124 {
             n = n + 1
         }
@@ -2327,19 +2343,21 @@ fn errno_message(errno: Int) -> String {
     while end < length && rt_mem_load8(rt_mem_add(data, end)) != 124 {
         end = end + 1
     }
-    if errno < 1 || at >= length || end == at {
+    if at >= length || end == at {
         return "I/O error"
     }
     rt_mem_as_text(text_of(rt_mem_add(data, at), end - at))
 }
 
-// The wording of the kinds of the system errors 1 to 133 (Linux's
-// numbers), in order, separated by `|`; empty for a number whose kind
-// has no wording of its own. It is `oska-sys`'s Linux table
-// (`LINUX_ERRORS`) worded by its kinds (`IO_KINDS`), and a test
-// (`native_files.rs`) checks it against that for every number.
-fn errno_table() -> String {
-    "permission denied|not found||interrupted|||||||would block|out of memory|permission denied|||resource busy|already exists|cannot move across devices||not a directory|is a directory|invalid input|||||file too large|no space left on device|not seekable|read-only file system|too many links|broken pipe||||invalid file name||not supported|directory not empty||||||||||||||||||||||||||||||||||||||||||||||||||||||||not supported|||||||||||||||timed out||||||||||||quota exceeded|||||||||||"
+// The wording of the kinds of every platform's system errors, in order,
+// separated by `|`; empty for a number whose kind has no wording of its
+// own. First Linux's errors 1 to 133, then macOS's 1 to 106 (`ELAST`):
+// `oska-sys`'s tables (`LINUX_ERRORS`, `MACOS_ERRORS`) worded by their
+// kinds (`IO_KINDS`). Each platform's table says where its part is
+// (`errors_at`, `errors_count`), and a test (`native_files.rs`) checks
+// every number of every part against `oska-sys`.
+fn system_errors() -> String {
+    "permission denied|not found||interrupted|||||||would block|out of memory|permission denied|||resource busy|already exists|cannot move across devices||not a directory|is a directory|invalid input|||||file too large|no space left on device|not seekable|read-only file system|too many links|broken pipe||||invalid file name||not supported|directory not empty||||||||||||||||||||||||||||||||||||||||||||||||||||||||not supported|||||||||||||||timed out||||||||||||quota exceeded||||||||||||permission denied|not found||interrupted||||||||out of memory|permission denied|||resource busy|already exists|cannot move across devices||not a directory|is a directory|invalid input|||||file too large|no space left on device|not seekable|read-only file system|too many links|broken pipe|||would block||||||||||not supported|||||||||||||||timed out|||invalid file name|||directory not empty|||quota exceeded|||||||||not supported||||||||||||||||||||||||not supported||||"
 }
 
 // ---- Standard input --------------------------------------------------------
