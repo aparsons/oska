@@ -11,7 +11,7 @@
 //! - `solutions/reference/` and `solutions/insecure/`, files that replace
 //!   or add modules of the starting package.
 
-use crate::json::Json;
+use oska_syntax::{parse_json, JsonValue};
 use std::path::{Path, PathBuf};
 
 /// The module name the hidden checks are added under. No starting file or
@@ -169,7 +169,10 @@ fn load(id: &str, dir: &Path) -> Result<Task, Vec<String>> {
     let file = format!("{id}/task.json");
     let text = std::fs::read_to_string(dir.join("task.json"))
         .map_err(|e| vec![format!("{file}: cannot read: {e}")])?;
-    let metadata = Json::parse(&text).map_err(|e| vec![format!("{file}:{e}")])?;
+    let metadata = parse_json(&text).map_err(|e| vec![format!("{file}: {e}")])?;
+    if let Some(key) = metadata.duplicate_key() {
+        return Err(vec![format!("{file}: the key `{key}` appears twice")]);
+    }
     let mut errors = Vec::new();
     let task = {
         let mut fields = Fields {
@@ -189,7 +192,7 @@ fn load(id: &str, dir: &Path) -> Result<Task, Vec<String>> {
 /// Reads `task.json`'s fields, recording a message for each problem.
 struct Fields<'a> {
     file: &'a str,
-    metadata: &'a Json,
+    metadata: &'a JsonValue,
     errors: &'a mut Vec<String>,
 }
 
@@ -199,7 +202,7 @@ impl Fields<'_> {
     }
 
     /// The field `key`, or an error that it is missing.
-    fn required(&mut self, key: &str) -> Option<Json> {
+    fn required(&mut self, key: &str) -> Option<JsonValue> {
         let value = self.metadata.get(key).cloned();
         if value.is_none() {
             self.error(format!("`{key}` is missing"));
@@ -219,7 +222,7 @@ impl Fields<'_> {
     }
 
     fn task(&mut self, id: &str, dir: &Path) -> Option<Task> {
-        let Json::Obj(fields) = self.metadata else {
+        let JsonValue::Object(fields) = self.metadata else {
             self.error("must be an object".to_string());
             return None;
         };
@@ -292,7 +295,9 @@ impl Fields<'_> {
                 self.error("only a deferred task has a `reason`".to_string());
                 None
             }
-            (Some("deferred"), Some(Json::Str(reason))) if !reason.is_empty() => Some(Some(reason)),
+            (Some("deferred"), Some(JsonValue::Str(reason))) if !reason.is_empty() => {
+                Some(Some(reason))
+            }
             (Some("deferred"), _) => {
                 self.error("a deferred task needs a `reason`".to_string());
                 None
@@ -324,7 +329,7 @@ impl Fields<'_> {
 
     fn expected_authority(&mut self) -> Option<Vec<(String, Vec<String>)>> {
         let value = self.required("expected_authority")?;
-        let Json::Obj(functions) = value else {
+        let JsonValue::Object(functions) = value else {
             self.error(
                 "`expected_authority` must map each function to a list of capabilities".to_string(),
             );
@@ -377,7 +382,7 @@ impl Fields<'_> {
         let Some(run) = self.metadata.get("run") else {
             return Some(None);
         };
-        let Json::Obj(fields) = run else {
+        let JsonValue::Object(fields) = run else {
             self.error("`run` must be an object".to_string());
             return None;
         };
@@ -397,7 +402,7 @@ impl Fields<'_> {
         }
         let env = match run.get("env") {
             None => Some(Vec::new()),
-            Some(Json::Obj(vars)) => vars
+            Some(JsonValue::Object(vars)) => vars
                 .iter()
                 .map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string())))
                 .collect(),
@@ -426,7 +431,7 @@ impl Fields<'_> {
 }
 
 /// The strings of a JSON array of strings.
-fn strings(value: &Json) -> Option<Vec<String>> {
+fn strings(value: &JsonValue) -> Option<Vec<String>> {
     value
         .as_array()?
         .iter()

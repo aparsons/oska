@@ -30,23 +30,30 @@ pub fn harness(args: &[&str]) -> Outcome {
     }
 }
 
-/// The `oskac` this workspace builds, found in the nearest directory above
-/// this test binary that holds one. `cargo test` builds it before running
-/// any test, because `oskac`'s own tests need it; on its own, this crate's
-/// tests need `cargo build -p oskac` first.
+/// The `oskac` this workspace builds, built fresh (once per test binary), so
+/// `cargo test -p oska-eval` alone never uses a stale one or finds none. It
+/// is found in the nearest directory above this test binary that holds one.
 pub fn oskac() -> String {
+    static BUILT: std::sync::Once = std::sync::Once::new();
     let test = std::env::current_exe().expect("the test should know its path");
+    BUILT.call_once(|| {
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let mut build = Command::new(cargo);
+        build
+            .args(["build", "--quiet", "-p", "oskac"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"));
+        if test.components().any(|c| c.as_os_str() == "release") {
+            build.arg("--release");
+        }
+        let status = build.status().expect("cargo should start");
+        assert!(status.success(), "cargo build -p oskac failed");
+    });
     let name = format!("oskac{}", std::env::consts::EXE_SUFFIX);
     let oskac = test
         .ancestors()
         .map(|dir| dir.join(&name))
         .find(|candidate| candidate.is_file())
-        .unwrap_or_else(|| {
-            panic!(
-                "no oskac above {}: run `cargo build -p oskac` first",
-                test.display()
-            )
-        });
+        .unwrap_or_else(|| panic!("no oskac above {}", test.display()));
     oskac
         .to_str()
         .expect("the path should be UTF-8")
