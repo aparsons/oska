@@ -23,6 +23,16 @@ Export it for every cargo command (otherwise builds waste CPU and disk on debug 
 export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
 ```
 
+## Shell habits
+
+The session's permission check refuses some command shapes, which stalls an unattended run.
+
+- Write scripts, file contents and PR, issue and commit bodies with the Write tool, then pass the file: `gh pr create --body-file F`, `gh issue create --body-file F`, `git commit -F F`, `python3 F`. A heredoc is refused.
+- Run one git command per call, never `a && git b`. A compound command that contains git is refused.
+- Never use `git -c` or `git config`. Hooks and identity are already configured, and both are refused.
+- A command line containing the word `eval` is refused, including `cargo test -p oska-eval`. Write the command to a script file with the Write tool and run `bash F`.
+- Run a long check in the background and wait on it (see Logs and waiting). A foreground call is cut off after about 180s.
+
 ## Logs and waiting
 
 - Put logs and result files outside the worktree, e.g. `LOG=${TMPDIR:-/tmp}/check-t286.log RC=${TMPDIR:-/tmp}/check-t286.rc`. A file inside the worktree makes the tree dirty, so the check writes no pass stamp and the pre-push hook runs the whole check again.
@@ -41,7 +51,7 @@ Other agents' checks run on this machine. `pkill -f`, `pkill` by name or session
 
 ## Pass stamp
 
-When every step of `scripts/check.sh` passes, it writes the run's tier and the tree it checked to `oska-check-passed` in the clone's git directory (never committed), but only if the working tree did not change during the run and no step was skipped with `skip_step --no-stamp` (then it writes no stamp at all). Each worktree has its own stamp. The `.githooks/pre-push` hook skips its check only when all of these hold:
+When every step of `scripts/check.sh` passes, it writes the run's tier and the tree it checked to `oska-check-passed` in the clone's git directory (never committed), but only if the working tree did not change during the run and no step was skipped with `skip_step --no-stamp` (then it writes no stamp at all). Every run that writes no stamp says why: the files that changed, or each step the stamp cannot vouch for and its reason. Each worktree has its own stamp. The `.githooks/pre-push` hook skips its check only when all of these hold:
 
 - the stamp is from a full run (a fast run's stamp is never honoured);
 - the working tree is clean;
@@ -57,7 +67,7 @@ A deletion adds no condition. Commits below a tip are not checked, so a multi-co
 
 `scripts/check.sh --list` prints the check's steps in order and runs nothing. Each step is one self-contained `if step "NAME"; then ... fi` block in `scripts/check.sh`; to add a step, add one block where it should run. Tag it after the name: `--fast` also puts it in the fast tier, `--fast-when PATTERN` puts it there when a changed path matches the shell pattern (a new `scripts/<dir>/test.sh` step needs `--fast-when 'scripts/<dir>/*'`; `scripts/check-steps/test.sh` fails without it), `--no-slot` runs a cheap step without a build slot, and `--cargo` marks a cargo step, which skips (without a build slot) when no cargo input changed. A step whose tool is missing calls `skip_step "REASON"`; a skip the pass stamp cannot vouch for calls `skip_step --no-stamp "REASON"`, and that run writes no stamp. There is no other list to update. `scripts/check-steps/test.sh` proves that `--list` matches what a run prints and that every `scripts/*/test.sh` runs.
 
-Outside CI, the cargo steps skip (and the run writes no stamp) when nothing that cargo reads differs from the merge-base with `origin/main`: for example a branch that changes only `CLAUDE.md`, scripts or workflows. Rust tests read all of `docs/`, `examples/`, `site/` and more; `cargo_input` in `scripts/check.sh` holds the list. When the only cargo inputs that changed are in `docs/`, the run skips fmt, clippy and the Windows type-check, and runs just the Rust tests that read `docs/`, printing which (`scripts/docs-tests/list.sh` finds them from the test source, so a new reader joins with no list to update). Its drift guard, `list.sh --check`, fails on any file in `crates/` that names `docs/` and does file I/O but that the list does not find; make the list see it, or add it with a reason to `scripts/docs-tests/not-readers.txt`. That run writes no stamp either, and CI runs everything. A `docs/` file a crate compiles in (`docs/checker.md`, `docs/runtime.md`, `docs/guide/install-receipt.md`), a deleted file, or any other input runs all of cargo. A Rust test that starts reading a new path outside `crates/` must keep that list right. `scripts/check-steps/test.sh` fails if a literal `include_str!` or `CARGO_MANIFEST_DIR` join in `crates/` reads a path that list calls a non-input.
+Outside CI, the cargo steps skip when nothing that cargo reads differs from the merge-base with `origin/main`: for example a branch that changes only `CLAUDE.md`, scripts or workflows. That skip is decided from the checked tree itself, so the run still writes the pass stamp. Rust tests read all of `docs/`, `examples/`, `site/` and more; `cargo_input` in `scripts/check.sh` holds the list. When the only cargo inputs that changed are in `docs/`, the run skips fmt, clippy and the Windows type-check, and runs just the Rust tests that read `docs/`, printing which (`scripts/docs-tests/list.sh` finds them from the test source, so a new reader joins with no list to update). Its drift guard, `list.sh --check`, fails on any file in `crates/` that names `docs/` and does file I/O but that the list does not find; make the list see it, or add it with a reason to `scripts/docs-tests/not-readers.txt`. That narrowed run writes no stamp (it rests on the list finding every reader), and CI runs everything. A `docs/` file a crate compiles in (`docs/checker.md`, `docs/runtime.md`, `docs/guide/install-receipt.md`), a deleted file, or any other input runs all of cargo. A Rust test that starts reading a new path outside `crates/` must keep that list right. `scripts/check-steps/test.sh` fails if a literal `include_str!` or `CARGO_MANIFEST_DIR` join in `crates/` reads a path that list calls a non-input.
 
 ## Build slots
 

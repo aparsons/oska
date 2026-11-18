@@ -190,12 +190,12 @@ See [debugging](debugging.md) for panics and the [runtime notes](../runtime.md) 
 
 `oskac build [path] [-o out] [--target <platform>|all] [--format=json]` checks a file or package as `check` does and, when it has no diagnostics, compiles it to a static executable for a target platform. Building works on every host and writes the same bytes on each. The executable is the file's stem, or the package directory's name, in the current directory; `-o out` names it instead.
 
-- `--target` names the platform as release assets name `oskac` builds: `linux-aarch64`, `linux-x86_64`, `macos-aarch64`, `macos-x86_64` or `windows-x86_64`. `linux-aarch64` and `linux-x86_64` have backends so far; the others are refused with `E0394`, which names the release that adds them, and an unknown name with `E0393`, which lists the names. Without `--target`, the build is for the host's platform when it has a backend, else for `linux-aarch64`.
+- `--target` names the platform as release assets name `oskac` builds: `linux-aarch64`, `linux-x86_64`, `macos-aarch64`, `macos-x86_64` or `windows-x86_64`. `linux-aarch64`, `linux-x86_64` and `macos-aarch64` have backends so far (`macos-aarch64`'s runs small programs only until the rest of v0.5.0); the others are refused with `E0394`, which names the release that adds them, and an unknown name with `E0393`, which lists the names. Without `--target`, the build is for the host's platform when it has a backend, else for `linux-aarch64`.
 - `--target all` writes one executable for each platform with a backend, named `<name>-<platform>` (such as `hello-linux-aarch64`), into the directory `-o` names, or the current one.
 - Success prints nothing, or `{"output":"<path>","diagnostics":[]}` with `--format=json` (`{"outputs":["<path>",...],"diagnostics":[]}` with `--target all`).
 - A refused program's diagnostics go to standard error as `check` prints them, or to standard output as `{"output":null,"diagnostics":[...]}` with `--format=json`.
 - The native backend compiles only part of the language so far. Anything else is refused with `E0390` before a file is written, never compiled wrongly; `oskac run` still runs the program, on the interpreter.
-- The executable needs nothing else to run: no `oskac`, no C library. Run directly, it reports a panic as `oskac run` does (human-readable only), and `args.get(0)` is the path it was run as, such as `./hello`, where `oskac run` reports the source file's path.
+- The executable needs nothing else to run: no `oskac`, and on Linux no C library (a macOS executable uses only `libSystem`, which every Mac has). Run directly, it reports a panic as `oskac run` does (human-readable only), and `args.get(0)` is the path it was run as, such as `./hello`, where `oskac run` reports the source file's path.
 
 | Exit code | Meaning |
 | --- | --- |

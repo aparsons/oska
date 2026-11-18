@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "errors": [
+    "tests/fixtures/analyse/malformed.jsonl: line 2 is not JSON: expected `\"` at byte 20"
+  ]
+}

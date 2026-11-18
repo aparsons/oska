@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","cwd":"/work/ws","model":"model-x","tools":["Bash"]}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"ls src","command":"cat /etc/passwd"}}]}}

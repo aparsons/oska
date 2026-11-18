@@ -70,6 +70,7 @@ pub fn write(machine: &Machine, text: &dyn Code, rodata: &[u8], data_size: u32) 
         rodata: RODATA,
         code: code.vaddr,
         data: data.vaddr,
+        got: 0,
     });
 
     let mut file = Vec::new();

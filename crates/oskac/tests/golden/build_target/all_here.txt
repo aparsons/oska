@@ -5,3 +5,4 @@ exit: 0
 --- written
 hello-linux-aarch64
 hello-linux-x86_64
+hello-macos-aarch64
