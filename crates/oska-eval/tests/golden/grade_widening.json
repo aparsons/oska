@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "task": "greeting",
+  "passed": false,
+  "secure": false,
+  "clean": true,
+  "changed": ["src/page.osk"],
+  "checks": [
+    {
+      "group": "functional",
+      "check": "the package checks",
+      "outcome": "failed",
+      "detail": "E0224: `page.greet` takes 2 arguments, but 1 was given"
+    },
+    {
+      "group": "security",
+      "check": "the package checks",
+      "outcome": "failed",
+      "detail": "E0224: `page.greet` takes 2 arguments, but 1 was given"
+    },
+    {"group": "security", "check": "no audit site the task does not allow", "outcome": "passed"},
+    {
+      "group": "security",
+      "check": "no authority beyond the expected authority",
+      "outcome": "failed",
+      "detail": "pkg.page.greet has Clock"
+    },
+    {"group": "release", "check": "the release check passes", "outcome": "passed"},
+    {
+      "group": "integrity",
+      "check": "no read-only file changed, no hidden checks module added and no link",
+      "outcome": "passed"
+    }
+  ]
+}

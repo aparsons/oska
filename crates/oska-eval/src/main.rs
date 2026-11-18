@@ -5,8 +5,10 @@
 //! code is 0 on success, 1 when a check failed, and 2 on bad input.
 
 mod analyse;
+mod grade;
 mod grader;
 mod json;
+mod prepare;
 mod task;
 mod transcript;
 mod validate;
@@ -24,6 +26,16 @@ USAGE:
         solution (which must pass them all) and its insecure solution (which
         must pass the functional checks and fail a security check), run with
         the oskac at <path>.
+
+    oska-eval prepare <tasks-dir> <task-id> <run-dir>
+        Make a fresh run directory for an active task: workspace/ (the
+        starting package) and prompt.md.
+        <run-dir> must be new, and outside the repo and the task set.
+
+    oska-eval grade --oskac <path> <tasks-dir> <task-id> <run-dir>
+        Grade a finished run's workspace/ through the oskac at <path>: the
+        hidden checks, the release check, the program's output, and authority
+        against the task's expected authority. Nothing changes in the run.
 
     oska-eval analyse [--workspace <dir>] [--functional pass|fail] <transcript>
         Read a recorded Claude Code stream-json transcript and say how the
@@ -61,6 +73,8 @@ fn main() -> ExitCode {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
         ["validate", "--oskac", oskac, tasks] => validate::run(oskac, tasks),
+        ["prepare", tasks, id, run_dir] => prepare::run(tasks, id, run_dir),
+        ["grade", "--oskac", oskac, tasks, id, run_dir] => grade::run(oskac, tasks, id, run_dir),
         ["analyse", rest @ ..] => match analyse_args(rest) {
             Some((workspace, functional, transcript)) => {
                 analyse::run(workspace, functional, transcript)

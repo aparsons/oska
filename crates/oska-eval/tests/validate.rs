@@ -22,6 +22,31 @@ fn a_task_file_that_is_not_json_is_bad_input() {
 }
 
 #[test]
+fn a_key_given_twice_in_a_task_file_is_refused() {
+    let outcome = validate("duplicate");
+    assert_eq!(outcome.code, 2, "{}{}", outcome.stdout, outcome.stderr);
+    assert!(
+        outcome
+            .stdout
+            .contains("twice/task.json: the key `title` appears twice"),
+        "{}",
+        outcome.stdout
+    );
+}
+
+/// The reader's own wording says where in bytes; the harness says line and
+/// column, which is where a person looks.
+#[test]
+fn a_json_error_says_its_line_and_column() {
+    let outcome = validate("malformed");
+    assert!(
+        outcome.stdout.contains(" at line ") && !outcome.stdout.contains("at byte"),
+        "{}",
+        outcome.stdout
+    );
+}
+
+#[test]
 fn every_problem_with_a_tasks_files_is_listed() {
     let outcome = validate("format");
     assert_eq!(outcome.code, 2, "{}{}", outcome.stdout, outcome.stderr);

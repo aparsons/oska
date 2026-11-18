@@ -6,7 +6,7 @@
 //! bad input rather than guess.
 
 use crate::task::{Run, CHECKS_MODULE};
-use oska_syntax::{parse_json, JsonValue};
+use oska_syntax::JsonValue;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -31,8 +31,6 @@ pub struct TestRun {
 /// What `oskac check --format=json` reported.
 pub struct CheckReport {
     pub diagnostics: Vec<String>,
-    /// Each function's name and authority.
-    pub functions: Vec<(String, Vec<String>)>,
     /// Each audit site's kind, and where it is.
     pub audit: Vec<(String, String)>,
 }
@@ -68,7 +66,7 @@ impl Oskac<'_> {
         let what = args.join(" ");
         let output = self.output(self.command(dir, args), &what)?;
         let stdout = String::from_utf8_lossy(&output.stdout);
-        parse_json(&stdout).map_err(|e| {
+        crate::json::read(&stdout).map_err(|e| {
             format!(
                 "`oskac {what}` did not print its JSON report ({e}); it wrote: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
@@ -116,26 +114,6 @@ impl Oskac<'_> {
     pub fn check(&self, dir: &Path) -> Result<CheckReport, String> {
         let report = self.json(dir, &["check", ".", "--format=json"])?;
         let malformed = || "`oskac check` printed a report this harness cannot read".to_string();
-        let mut functions = Vec::new();
-        for function in report
-            .get("functions")
-            .and_then(JsonValue::as_array)
-            .ok_or_else(malformed)?
-        {
-            let name = function
-                .get("name")
-                .and_then(JsonValue::as_str)
-                .ok_or_else(malformed)?;
-            let authority = function
-                .get("authority")
-                .and_then(JsonValue::as_array)
-                .ok_or_else(malformed)?
-                .iter()
-                .map(|c| c.as_str().map(str::to_string))
-                .collect::<Option<Vec<_>>>()
-                .ok_or_else(malformed)?;
-            functions.push((name.to_string(), authority));
-        }
         let mut audit = Vec::new();
         for site in report
             .get("audit")
@@ -150,9 +128,72 @@ impl Oskac<'_> {
         }
         Ok(CheckReport {
             diagnostics: diagnostics(&report).ok_or_else(malformed)?,
-            functions,
             audit,
         })
+    }
+
+    /// How the package's authority widened against the authority baseline
+    /// in `baseline`, as `oskac check --baseline` reports it: one line for
+    /// each function that gained authority, became impure or is new and
+    /// reaches a kind no baseline function does. Empty when it did not
+    /// widen. Audit sites are not included. The package must check.
+    pub fn widenings(&self, dir: &Path, baseline: &Path) -> Result<Vec<String>, String> {
+        let file = baseline.to_string_lossy();
+        let report = self.json(
+            dir,
+            &["check", ".", &format!("--baseline={file}"), "--format=json"],
+        )?;
+        let malformed =
+            || "`oskac check --baseline` printed a report this harness cannot read".to_string();
+        let diff = report.get("authority_diff").ok_or_else(malformed)?;
+        let list = |key: &str| {
+            diff.get(key)
+                .and_then(JsonValue::as_array)
+                .ok_or_else(malformed)
+        };
+        let text = |entry: &JsonValue, key: &str| {
+            entry
+                .get(key)
+                .and_then(JsonValue::as_str)
+                .map(str::to_string)
+                .ok_or_else(malformed)
+        };
+        let names = |entry: &JsonValue, key: &str| {
+            entry
+                .get(key)
+                .and_then(JsonValue::as_array)
+                .ok_or_else(malformed)?
+                .iter()
+                .map(|n| n.as_str().map(str::to_string).ok_or_else(malformed))
+                .collect::<Result<Vec<_>, _>>()
+        };
+        let mut found = Vec::new();
+        let mut widened = Vec::new();
+        for change in list("widened")? {
+            let function = text(change, "function")?;
+            found.push(format!(
+                "{function} has {}",
+                names(change, "gained")?.join(", ")
+            ));
+            widened.push(function);
+        }
+        for entry in list("became_impure")? {
+            let function = text(entry, "function")?;
+            if !widened.contains(&function) {
+                found.push(format!("{function} is no longer pure"));
+            }
+        }
+        for added in list("added")? {
+            let kinds = names(added, "new_kinds")?;
+            if !kinds.is_empty() {
+                found.push(format!(
+                    "{} is new and reaches {}",
+                    text(added, "function")?,
+                    kinds.join(", ")
+                ));
+            }
+        }
+        Ok(found)
     }
 
     /// The release check: `None` if it passes, or its first diagnostic.
