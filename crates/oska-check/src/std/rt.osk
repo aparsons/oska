@@ -3,24 +3,29 @@
 // system-call or memory intrinsic. No user code can import it (`E0209`).
 //
 // An intrinsic is a body-less function whose name starts with `rt_sys_`
-// (one Linux system call, whose number the backend gives for the target
-// platform) or `rt_mem_` (one memory or word
+// (one call of the operating system, which the backend makes as the
+// target platform's operating system has it made: on Linux, the system
+// call of the target's number) or `rt_mem_` (one memory or word
 // operation). Both prefixes are reserved: `scripts/intrinsic-guard/guard.sh`
 // fails the build if any other `.osk` file names such an identifier, and
 // the checker reports `E0209` for it. The interpreter has no
 // implementation of them.
 //
 // Every argument and result is an `Int` (a 64-bit word). A system call
-// returns the kernel's raw result: a negative value is `-errno`.
+// returns the operating system's raw result: a negative value is `-errno`.
 
 // ---- System calls ----------------------------------------------------------
+//
+// Most are the POSIX calls of their names, which every Unix Oska targets
+// has. Where Linux's own call has no counterpart elsewhere, the intrinsic
+// is named for what it does, and each operating system gives the call
+// behind it (see "Platforms").
 
 pub fn rt_sys_read(fd: Int, buf: Int, count: Int) -> Int
 pub fn rt_sys_write(fd: Int, buf: Int, count: Int) -> Int
 pub fn rt_sys_openat(dirfd: Int, path: Int, flags: Int, mode: Int) -> Int
 pub fn rt_sys_close(fd: Int) -> Int
 pub fn rt_sys_mkdirat(dirfd: Int, path: Int, mode: Int) -> Int
-pub fn rt_sys_getdents64(fd: Int, buf: Int, count: Int) -> Int
 pub fn rt_sys_fstat(fd: Int, buf: Int) -> Int
 pub fn rt_sys_ftruncate(fd: Int, length: Int) -> Int
 pub fn rt_sys_readlinkat(dirfd: Int, path: Int, buf: Int, size: Int) -> Int
@@ -30,13 +35,23 @@ pub fn rt_sys_mmap(addr: Int, length: Int, prot: Int, flags: Int, fd: Int, offse
 pub fn rt_sys_munmap(addr: Int, length: Int) -> Int
 pub fn rt_sys_clock_gettime(clock: Int, tp: Int) -> Int
 pub fn rt_sys_ioctl(fd: Int, request: Int, arg: Int) -> Int
-pub fn rt_sys_getrandom(buf: Int, length: Int, flags: Int) -> Int
-pub fn rt_sys_rt_sigaction(signal: Int, action: Int, old: Int, size: Int) -> Int
 pub fn rt_sys_sigaltstack(stack: Int, old: Int) -> Int
 pub fn rt_sys_getpid() -> Int
 pub fn rt_sys_kill(pid: Int, signal: Int) -> Int
-// Ends the process; does not return.
-pub fn rt_sys_exit_group(status: Int) -> Int
+// Read the next entries of the directory open at `fd` into the `count`
+// bytes at `buf`, as records laid out as the platform's table says
+// (`dirent_length`, `dirent_name`): the bytes read, 0 at the end. Linux's
+// `getdents64`.
+pub fn rt_sys_read_dir(fd: Int, buf: Int, count: Int) -> Int
+// Fill the `length` bytes at `buf` from the operating system's random
+// source: the bytes filled. Linux's `getrandom` with no flags.
+pub fn rt_sys_random(buf: Int, length: Int) -> Int
+// Make the `struct sigaction` at `action`, laid out as the platform's
+// table says (`sigaction_bytes`, `sigaction_flags`), the action of
+// `signal`. Linux's `rt_sigaction`, keeping no old action.
+pub fn rt_sys_sigaction(signal: Int, action: Int) -> Int
+// Ends the process with `status`; does not return. Linux's `exit_group`.
+pub fn rt_sys_exit(status: Int) -> Int
 
 // ---- Memory and words ------------------------------------------------------
 
@@ -111,52 +126,115 @@ pub fn rt_mem_platform() -> Platform
 
 // ---- Platforms -------------------------------------------------------------
 //
-// What `std.rt` reads that differs between target platforms is in one
-// table per platform, and nowhere else: no function holds such a value,
-// or asks which platform it runs on. A system call's number is the
-// backend's, which lowers each `rt_sys_` intrinsic with the target's.
-// Adding a platform is adding its table here and its numbers there.
+// Each operating system's numbers, flags and structure layouts that
+// `std.rt` reads are in its table, and nowhere else: no function holds
+// such a value, or asks which platform it runs on. Which call is behind
+// each `rt_sys_` intrinsic (on Linux, the system call's number, and the
+// arguments the kernel takes beyond the intrinsic's) is the backend's,
+// which lowers it with the target's. Adding an operating system is adding
+// its table here and its calls there; where its processors differ, as
+// Linux's open flags and `struct stat` do, each processor has a table.
 //
-// The rest of what `std.rt` asks of the kernel is the same on every Linux
-// processor Oska supports: the other open flags, `mmap`'s flags and
-// protections, `struct sigaction` and its flags, `stack_t`, the signals'
-// numbers, `TCGETS`, `F_DUPFD_CLOEXEC`, `AT_FDCWD`, `S_IFMT`, the `errno`
-// values and `struct linux_dirent64`.
+// Outside the tables are only the values every Unix Oska targets shares:
+// `O_RDONLY`, `mmap`'s protections and `MAP_FIXED`, `SIG_IGN`, the size
+// of `stack_t`, `CLOCK_REALTIME`, `S_IFMT` and the file types, the
+// signals' numbers but `SIGBUS`, and the `errno` values `std.rt` tests for
+// but `ELOOP`. The two exceptions are Linux's and differ on macOS, whose
+// runtime brings them here with its table.
 
 struct Platform {
-    // `openat`'s flags `O_DIRECTORY` and `O_NOFOLLOW`.
+    // `openat`'s flags `O_DIRECTORY` and `O_NOFOLLOW`, `O_WRONLY`,
+    // `O_CREAT`, `O_NONBLOCK` and `O_CLOEXEC`, and `AT_FDCWD`.
     o_directory: Int,
     o_nofollow: Int,
+    o_wronly: Int,
+    o_creat: Int,
+    o_nonblock: Int,
+    o_cloexec: Int,
+    at_fdcwd: Int,
+    // `fcntl`'s `F_DUPFD_CLOEXEC`.
+    f_dupfd_cloexec: Int,
+    // The `ioctl` request that succeeds only on a terminal: Linux's
+    // `TCGETS`.
+    tty_request: Int,
+    // `mmap`'s flags `MAP_PRIVATE | MAP_ANONYMOUS`, and `MAP_NORESERVE`.
+    map_private_anonymous: Int,
+    map_noreserve: Int,
     // `struct stat`: its size in bytes, and the offsets of `st_mode`,
     // `st_nlink` (whose low 32 bits are read) and `st_size`.
     stat_bytes: Int,
     stat_mode: Int,
     stat_nlink: Int,
     stat_size: Int,
+    // The records `rt_sys_read_dir` gives: the offsets of the record's
+    // length (16 bits) and of its NUL-terminated name.
+    dirent_length: Int,
+    dirent_name: Int,
+    // The `struct sigaction` `rt_sys_sigaction` takes: its size in bytes
+    // (a multiple of 8), the offset of its flags (whose low 32 bits are
+    // written), and the flags of a fault signal's action. The handler is
+    // at 0, and every other field is zero.
+    sigaction_bytes: Int,
+    sigaction_flags: Int,
+    sa_fault_flags: Int,
+    // `stack_t`: the offset of `ss_size` (`ss_sp` is at 0).
+    stack_size: Int,
 }
 
-// `linux-aarch64`: arm64's flags and `struct stat`.
+// `linux-aarch64`: arm64's open flags and `struct stat`, and what every
+// Linux processor shares.
 fn linux_aarch64() -> Platform {
     Platform(
         o_directory: 16384,
         o_nofollow: 32768,
+        o_wronly: 1,
+        o_creat: 64,
+        o_nonblock: 2048,
+        o_cloexec: 524288,
+        at_fdcwd: -100,
+        f_dupfd_cloexec: 1030,
+        tty_request: 21505,
+        map_private_anonymous: 34,
+        map_noreserve: 16384,
         stat_bytes: 128,
         stat_mode: 16,
         stat_nlink: 20,
         stat_size: 48,
+        dirent_length: 16,
+        dirent_name: 19,
+        sigaction_bytes: 32,
+        sigaction_flags: 8,
+        sa_fault_flags: 3422552064,
+        stack_size: 16,
     )
 }
 
-// `linux-x86_64`: x86_64's flags (the generic ones) and its own
-// `struct stat`, which puts `st_nlink` before `st_mode`.
+// `linux-x86_64`: x86_64's open flags (the generic ones) and its own
+// `struct stat`, which puts `st_nlink` before `st_mode`, and what every
+// Linux processor shares.
 fn linux_x86_64() -> Platform {
     Platform(
         o_directory: 65536,
         o_nofollow: 131072,
+        o_wronly: 1,
+        o_creat: 64,
+        o_nonblock: 2048,
+        o_cloexec: 524288,
+        at_fdcwd: -100,
+        f_dupfd_cloexec: 1030,
+        tty_request: 21505,
+        map_private_anonymous: 34,
+        map_noreserve: 16384,
         stat_bytes: 144,
         stat_mode: 24,
         stat_nlink: 16,
         stat_size: 48,
+        dirent_length: 16,
+        dirent_name: 19,
+        sigaction_bytes: 32,
+        sigaction_flags: 8,
+        sa_fault_flags: 3422552064,
+        stack_size: 16,
     )
 }
 
@@ -223,11 +301,11 @@ fn chunk_size() -> Int {
 // `mmap`'s flags: shared with no file, private, anonymous; and without
 // reserving swap for it.
 fn private_anonymous() -> Int {
-    34
+    rt_mem_platform().map_private_anonymous
 }
 
 fn no_reserve() -> Int {
-    16384
+    rt_mem_platform().map_noreserve
 }
 
 // Map `length` bytes of fresh zeroed memory with protection `prot` and
@@ -1768,14 +1846,8 @@ pub fn stack_new(size: Int) -> Int {
 // an `IoError` the program sees ("Broken pipe (os error 32)"). And make
 // `on_fault`, the code at `handler`, the handler of every fault signal.
 pub fn process_init(sp: Int, handler: Int) {
-    // struct sigaction: handler SIG_IGN (1), flags, restorer, mask.
-    let action = alloc(40)
-    rt_mem_store64(rt_mem_add(action, 8), 1)
-    rt_mem_store64(rt_mem_add(action, 16), 0)
-    rt_mem_store64(rt_mem_add(action, 24), 0)
-    rt_mem_store64(rt_mem_add(action, 32), 0)
-    let _ = rt_sys_rt_sigaction(sigpipe(), rt_mem_add(action, 8), 0, 8)
-    free(action)
+    // `SIG_IGN` (1), with no flags.
+    set_action(sigpipe(), 1, 0)
     handle_faults(handler)
     let argc = rt_mem_load64(sp)
     let argv = rt_mem_add(sp, 8)
@@ -1839,58 +1911,47 @@ fn fault_signals() -> List<Int> {
     [sigill(), sigtrap(), sigabrt(), sigbus(), sigfpe(), sigsegv()]
 }
 
-// `struct sigaction`'s flags: the handler runs on the alternate stack;
-// the default action is restored as it starts, so a fault within it kills
-// the process; the signal is not blocked while it runs, so it can raise it
-// again; and a restorer is given, without which x86_64 will not run a
-// handler.
-fn sa_onstack() -> Int {
-    134217728
-}
-
-fn sa_resethand() -> Int {
-    2147483648
-}
-
-fn sa_nodefer() -> Int {
-    1073741824
-}
-
-fn sa_restorer() -> Int {
-    67108864
-}
-
-// The flags of a fault signal's action.
-fn fault_action_flags() -> Int {
-    rt_mem_or(
-        rt_mem_or(sa_onstack(), sa_resethand()),
-        rt_mem_or(sa_nodefer(), sa_restorer()),
-    )
+// Make the code at `handler` (or `SIG_IGN`, 1) the action of `signal`,
+// with the flags `flags`, through a `struct sigaction` laid out as the
+// platform's table says: every field zero but the handler and the flags.
+fn set_action(signal: Int, handler: Int, flags: Int) {
+    let platform = rt_mem_platform()
+    let object = alloc(rt_mem_add(platform.sigaction_bytes, 8))
+    let action = rt_mem_add(object, 8)
+    var at = 0
+    while at < platform.sigaction_bytes {
+        rt_mem_store64(rt_mem_add(action, at), 0)
+        at = at + 8
+    }
+    rt_mem_store64(action, handler)
+    rt_mem_store32(rt_mem_add(action, platform.sigaction_flags), flags)
+    let _ = rt_sys_sigaction(signal, action)
+    free(object)
 }
 
 // Make the code at `handler`, `on_fault`, the handler of every fault
-// signal, on a stack of its own.
+// signal, on a stack of its own. The table's flags for it: the handler
+// runs on the alternate stack; the default action is restored as it
+// starts, so a fault within it kills the process; the signal is not
+// blocked while it runs, so it can raise it again; and, on Linux, a
+// restorer is given, without which x86_64 will not run a handler. Since
+// `on_fault` never returns, the restorer, the address it would return
+// to, is never used: 0.
 fn handle_faults(handler: Int) {
-    // stack_t: the stack's lowest address, flags (0), its size.
+    // stack_t, 24 bytes: the stack's lowest address at 0, its size where
+    // the table says, its flags 0.
     let size = 65536
-    let stack = alloc(32)
-    rt_mem_store64(rt_mem_add(stack, 8), map(0, size, 3, private_anonymous()))
+    let object = alloc(32)
+    let stack = rt_mem_add(object, 8)
+    rt_mem_store64(stack, map(0, size, 3, private_anonymous()))
+    rt_mem_store64(rt_mem_add(stack, 8), 0)
     rt_mem_store64(rt_mem_add(stack, 16), 0)
-    rt_mem_store64(rt_mem_add(stack, 24), size)
-    let _ = rt_sys_sigaltstack(rt_mem_add(stack, 8), 0)
-    free(stack)
-    // struct sigaction: handler, flags, restorer, mask. `on_fault` never
-    // returns, so the restorer, the address it would return to, is never
-    // used: 0.
-    let action = alloc(40)
-    rt_mem_store64(rt_mem_add(action, 8), handler)
-    rt_mem_store64(rt_mem_add(action, 16), fault_action_flags())
-    rt_mem_store64(rt_mem_add(action, 24), 0)
-    rt_mem_store64(rt_mem_add(action, 32), 0)
+    rt_mem_store64(rt_mem_add(stack, rt_mem_platform().stack_size), size)
+    let _ = rt_sys_sigaltstack(stack, 0)
+    free(object)
     for signal in fault_signals() {
-        let _ = rt_sys_rt_sigaction(signal, rt_mem_add(action, 8), 0, 8)
+        set_action(signal, handler, rt_mem_platform().sa_fault_flags)
     }
-    free(action)
 }
 
 // The handler of the fault signal `signal`, which the kernel calls on the
@@ -1907,7 +1968,7 @@ pub fn on_fault(signal: Int) {
     }
     let _ = write_text(2, fault_report(signal))
     let _ = rt_sys_kill(rt_sys_getpid(), signal)
-    let _ = rt_sys_exit_group(128 + signal)
+    let _ = rt_sys_exit(128 + signal)
 }
 
 // The report of the fault signal `signal`: static text, so writing it
@@ -1950,10 +2011,10 @@ pub fn exit(status: Int) {
     if flushed < 0 {
         let _ = print_error_line(os_error(-flushed))
         if status == 0 {
-            let _ = rt_sys_exit_group(1)
+            let _ = rt_sys_exit(1)
         }
     }
-    let _ = rt_sys_exit_group(status)
+    let _ = rt_sys_exit(status)
 }
 
 // `main` returned an error whose text is `message`: it goes to stderr on a
@@ -1980,7 +2041,7 @@ pub fn main_failed(message: String) {
 fn write_stdout(buf: Int, count: Int) -> Int {
     let written = write_all(1, buf, count)
     if written == -32 {
-        let _ = rt_sys_exit_group(0)
+        let _ = rt_sys_exit(0)
     }
     written
 }
@@ -1997,7 +2058,7 @@ fn stdout_buffer() -> Int {
         rt_mem_store64(global(13), buf)
         // `ioctl(1, TCGETS, termios)` succeeds only on a terminal.
         let termios = alloc(64)
-        let tty = rt_sys_ioctl(1, 21505, rt_mem_add(termios, 8))
+        let tty = rt_sys_ioctl(1, rt_mem_platform().tty_request, rt_mem_add(termios, 8))
         free(termios)
         rt_mem_store64(global(15), if tty == 0 { 2 } else { 1 })
     }
@@ -2462,12 +2523,13 @@ pub fn clock_now_millis(clock: Clock) -> Int {
 }
 
 // `Random.next_int`: SplitMix64, as the interpreter's, seeded on first use
-// from `getrandom` (from the clock if that fails). From 0 up to, but
+// from the operating system's random source (from the clock if that
+// fails). From 0 up to, but
 // excluding, 2^63.
 pub fn random_next_int(random: Random) -> Int {
     if rt_mem_load64(global(21)) == 0 {
         let object = alloc(24)
-        let got = rt_sys_getrandom(rt_mem_add(object, 8), 8, 0)
+        let got = rt_sys_random(rt_mem_add(object, 8), 8)
         var seed = rt_mem_load64(rt_mem_add(object, 8))
         if got != 8 {
             let _ = rt_sys_clock_gettime(0, rt_mem_add(object, 8))
@@ -2857,22 +2919,21 @@ fn close(fd: Int) {
     let _ = rt_sys_close(fd)
 }
 
-// `openat`'s flags. `O_DIRECTORY` and `O_NOFOLLOW` are the platform's;
-// `O_RDONLY` is 0, and the rest are the same on every Linux processor.
+// `openat`'s flags, the platform's. `O_RDONLY` is 0.
 fn o_wronly() -> Int {
-    1
+    rt_mem_platform().o_wronly
 }
 
 fn o_creat() -> Int {
-    64
+    rt_mem_platform().o_creat
 }
 
 fn o_nonblock() -> Int {
-    2048
+    rt_mem_platform().o_nonblock
 }
 
 fn o_cloexec() -> Int {
-    524288
+    rt_mem_platform().o_cloexec
 }
 
 // A directory to walk beneath: `O_RDONLY | O_DIRECTORY | O_NOFOLLOW |
@@ -2902,7 +2963,7 @@ fn file_write_flags() -> Int {
 }
 
 fn at_cwd() -> Int {
-    -100
+    rt_mem_platform().at_fdcwd
 }
 
 // Not an `errno`: what `open_name` gives, negated, for a name holding a
@@ -3379,7 +3440,7 @@ fn open_dir(root: Int, names: List<String>) -> Result<Int, IoError> {
     let count = names.len()
     if count == 0 {
         // `F_DUPFD_CLOEXEC`, from 3 up, as Rust's `try_clone`.
-        let fd = rt_sys_fcntl(root, 1030, 3)
+        let fd = rt_sys_fcntl(root, rt_mem_platform().f_dupfd_cloexec, 3)
         if fd < 0 {
             return Err(io_error(0 - fd))
         }
@@ -3588,12 +3649,13 @@ fn entries(dir: Int, shown: String) -> Result<List<String>, IoError> {
     let buffer = alloc(32768)
     let data = rt_mem_add(buffer, 8)
     var list = list_new(8)
+    let platform = rt_mem_platform()
     // The index of the first name that is not UTF-8, and the `errno` of a
     // failed read.
     var invalid = -1
     var failed = 0
     while true {
-        var got = rt_sys_getdents64(fd, data, 32760)
+        var got = rt_sys_read_dir(fd, data, 32760)
         if got == -4 {
             continue
         }
@@ -3611,10 +3673,10 @@ fn entries(dir: Int, shown: String) -> Result<List<String>, IoError> {
         }
         var at = 0
         while at < got {
-            // A `struct linux_dirent64`: the record's length at 16, the
-            // NUL-terminated name at 19.
+            // A record: its length and NUL-terminated name where the
+            // platform's table says.
             let entry = rt_mem_add(data, at)
-            let name = rt_mem_add(entry, 19)
+            let name = rt_mem_add(entry, platform.dirent_name)
             var length = 0
             while rt_mem_load8(rt_mem_add(name, length)) != 0 {
                 length = length + 1
@@ -3627,7 +3689,7 @@ fn entries(dir: Int, shown: String) -> Result<List<String>, IoError> {
                 }
                 list = list_add(list, text_of(name, length))
             }
-            at = at + rt_mem_load16(rt_mem_add(entry, 16))
+            at = at + rt_mem_load16(rt_mem_add(entry, platform.dirent_length))
         }
     }
     free(buffer)

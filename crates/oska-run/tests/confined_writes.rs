@@ -12,6 +12,8 @@
 //! - on [`FakeHost`], on every OS: the same refusals, so API tests that
 //!   use the fake host behave as the real one does.
 
+mod common;
+
 use std::path::Path;
 
 use oska_run::{run, FakeHost, Host};
@@ -171,17 +173,7 @@ mod real {
         }
 
         fn link(&mut self, at: &str, target: &str) {
-            let (target, at) = (self.base.join(target), self.base.join(at));
-            #[cfg(unix)]
-            let made = std::os::unix::fs::symlink(target, at);
-            // A directory symlink to a directory, and a file symlink to
-            // anything else, a missing target included.
-            #[cfg(windows)]
-            let made = match target.is_dir() {
-                true => std::os::windows::fs::symlink_dir(target, at),
-                false => std::os::windows::fs::symlink_file(target, at),
-            };
-            made.expect("create a symlink");
+            common::symlink(&self.base.join(target), &self.base.join(at));
         }
 
         fn run(&mut self, src: &str) -> String {

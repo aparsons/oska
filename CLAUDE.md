@@ -22,6 +22,10 @@ Issues are tracked in GitHub Issues on aparsons/oska (via `gh`). See `docs/agent
 
 Default vocabulary: needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix. See `docs/agents/triage-labels.md`.
 
+### Coordinator history
+
+The chief-of-staff wiki, a dated record of goals, decisions and recurring problems (never the present state): `docs/wiki/index.md`.
+
 ### Domain docs
 
 Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.

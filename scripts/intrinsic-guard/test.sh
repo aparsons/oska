@@ -66,7 +66,7 @@ printf 'fn f() {\n    rt_mem_load8(0)\n}\n' >"$dir/vendor/src/f.osk"
 expect_refused "an intrinsic in a plain subdirectory without .git" "$dir" "vendor/src/f.osk:2:"
 
 dir=$(tree)
-printf 'fn main() {\n    rt_sys_exit_group(0)\n}\n' >"$dir/app/src/main.osk"
+printf 'fn main() {\n    rt_sys_exit(0)\n}\n' >"$dir/app/src/main.osk"
 expect_refused "a system-call intrinsic in user code" "$dir" "app/src/main.osk:2:"
 
 dir=$(tree)
