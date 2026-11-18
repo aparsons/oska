@@ -289,9 +289,10 @@ impl Dir {
             io::Error::new(
                 error.kind(),
                 format!(
-                    "`{}` to `{}`: {error}",
+                    "`{}` to `{}`: {}",
                     from.to_string_lossy(),
-                    to.to_string_lossy()
+                    to.to_string_lossy(),
+                    crate::io_error_message(&error)
                 ),
             )
         })

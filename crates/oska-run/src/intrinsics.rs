@@ -135,7 +135,7 @@ fn text(args: &[Value], index: usize) -> &str {
 fn io_result<T>(result: io::Result<T>, ok: impl FnOnce(T) -> Value) -> Value {
     match result {
         Ok(value) => Value::ok(ok(value)),
-        Err(err) => Value::err(Value::io_error(&err.to_string())),
+        Err(err) => Value::err(Value::io_error(&oska_sys::io_error_message(&err))),
     }
 }
 
@@ -452,7 +452,10 @@ fn attenuated_root(fs: &FsCap, opened: io::Result<RootHandle>, at: &str) -> Root
     match opened {
         Ok(root) => Root::Dir(root),
         Err(_) if matches!(fs.root, Root::Nowhere(_)) => fs.root.clone(),
-        Err(error) => Root::Nowhere(Rc::from(format!("cannot restrict to `{at}`: {error}"))),
+        Err(error) => Root::Nowhere(Rc::from(format!(
+            "cannot restrict to `{at}`: {}",
+            oska_sys::io_error_message(&error)
+        ))),
     }
 }
 

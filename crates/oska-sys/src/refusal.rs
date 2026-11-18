@@ -17,9 +17,13 @@ pub(crate) fn joined<N: AsRef<OsStr>>(names: &[N]) -> String {
         .join("/")
 }
 
-/// `error`, from an operation on `path`, with the path named.
+/// `error`, from an operation on `path`, with the path named and the
+/// OS error in Oska's own words ([`crate::io_error_message`]).
 pub(crate) fn at(path: &str, error: io::Error) -> io::Error {
-    io::Error::new(error.kind(), format!("`{path}`: {error}"))
+    io::Error::new(
+        error.kind(),
+        format!("`{path}`: {}", crate::io_error_message(&error)),
+    )
 }
 
 /// The error for a symlink at `path`, or on Windows any reparse point.
