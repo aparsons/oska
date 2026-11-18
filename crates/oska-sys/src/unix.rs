@@ -72,6 +72,10 @@ mod c {
         #[cfg_attr(target_os = "linux", link_name = "__errno_location")]
         #[cfg_attr(target_os = "macos", link_name = "__error")]
         pub fn errno_location() -> *mut c_int;
+
+        /// `uid_t geteuid(void)`: the effective user ID, which never fails.
+        /// `uid_t` is 32 bits unsigned on every target this crate covers.
+        pub fn geteuid() -> u32;
     }
 
     pub const O_RDONLY: c_int = 0;
@@ -161,6 +165,14 @@ mod c {
     /// The mode of a new file and a new directory, before the umask.
     pub const FILE_MODE: Mode = 0o666;
     pub const DIR_MODE: Mode = 0o777;
+}
+
+/// The effective user ID of this process: the owner `oskac` requires of
+/// a folder it trusts, such as the build cache's.
+pub fn effective_uid() -> u32 {
+    // SAFETY: `geteuid` takes nothing, touches no memory of ours and
+    // cannot fail.
+    unsafe { c::geteuid() }
 }
 
 /// An open directory: the root of a confined capability, or a directory

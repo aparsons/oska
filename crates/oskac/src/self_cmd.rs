@@ -12,7 +12,7 @@
 //! `oskac` is the install the receipt records) and the `--hook` files (only
 //! when unchanged), and leaves the installer's PATH edits to the installer's
 //! own `--uninstall`, reporting them in `path_hint`. It never touches
-//! `~/.config/oska`. `oskac` computes no SHA-256: it identifies its install
+//! `~/.config/oska`. `oskac` checks no SHA-256 here: it identifies its install
 //! by path and version, the `version` file by its text, and a hook file by
 //! comparing it with the published file built into it. Anything else it
 //! cannot show unchanged, it keeps.
@@ -53,18 +53,18 @@ fn platform() -> String {
     format!("{os}-{arch}")
 }
 
-fn env_path(name: &str) -> Option<PathBuf> {
+pub(crate) fn env_path(name: &str) -> Option<PathBuf> {
     std::env::var_os(name)
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
 }
 
-fn user_home() -> Option<PathBuf> {
+pub(crate) fn user_home() -> Option<PathBuf> {
     env_path(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
 }
 
 /// A path as the installer writes it: absolute, with no trailing separator.
-fn clean(path: PathBuf) -> PathBuf {
+pub(crate) fn clean(path: PathBuf) -> PathBuf {
     let absolute = if path.is_absolute() {
         path
     } else {

@@ -21,6 +21,7 @@ use oska_check::program::Program;
 use oska_run::{TestOptions, TestReport, TestResult, TestStatus};
 use oska_syntax::{Diagnostic, Span};
 
+use crate::cache::Cached;
 use crate::native::{self, Executable};
 
 /// How a native `oskac test` went.
@@ -38,13 +39,19 @@ pub enum Tested {
 /// Run the `test` blocks of the checked `program` natively, compiled for
 /// `target`, the host's, reporting a failure to write the executable as
 /// JSON with `json`.
+/// The test executable is reused from the build cache (`cached`) when the
+/// program's inputs are unchanged.
 pub fn test_program(
     program: &Program,
     target: oska_native::Target,
     options: TestOptions,
     json: bool,
+    cached: &Cached,
 ) -> Tested {
-    let bytes = match oska_native::build_tests(program, target) {
+    // The test executable reports unplaced, whatever the format.
+    let bytes = match cached.native("test", target, false, || {
+        oska_native::build_tests(program, target)
+    }) {
         Ok(bytes) => bytes,
         Err(refusal) => return Tested::Refused(refusal),
     };

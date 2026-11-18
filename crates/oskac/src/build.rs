@@ -32,6 +32,7 @@ use oska_check::program::Program;
 use oska_native::Target;
 use oska_syntax::{json_escape, Diagnostic, Span};
 
+use crate::cache::{self, Cached};
 use crate::{print_diagnostics, read_source, Flags, Places};
 
 /// What `oskac build` builds for: one target platform, or all of them.
@@ -67,10 +68,16 @@ pub struct Options<'a> {
 }
 
 /// `oskac build` on the source file `path`.
-pub fn file(path: &str, Flags { json, .. }: Flags, options: Options) -> ExitCode {
+pub fn file(
+    path: &str,
+    Flags { json, .. }: Flags,
+    options: Options,
+    store: Option<&cache::Store>,
+) -> ExitCode {
     let Some(src) = read_source(path) else {
         return ExitCode::FAILURE;
     };
+    let cached = Cached::new(store, cache::file_sources(path, &src));
     let report = oska_check::check_file(path, &src, oska_check::CheckOptions::default());
     let places = Places::File { path, src: &src };
     let Some(program) = report
@@ -88,7 +95,7 @@ pub fn file(path: &str, Flags { json, .. }: Flags, options: Options) -> ExitCode
     let stem = Path::new(path)
         .file_stem()
         .map_or_else(|| path.to_string(), |s| s.to_string_lossy().into_owned());
-    compile(program, &places, &stem, options, json)
+    compile(program, &places, &stem, options, json, &cached)
 }
 
 /// `oskac build` on the package in `dir`, which checked as `program`.
@@ -98,22 +105,25 @@ pub fn package(
     dir: &str,
     options: Options,
     json: bool,
+    cached: &Cached,
 ) -> ExitCode {
     let name = std::fs::canonicalize(dir)
         .ok()
         .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "main".to_string());
-    compile(program, places, &name, options, json)
+    compile(program, places, &name, options, json, cached)
 }
 
 /// Compile `program`, named `name`, for each target `options` asks for,
-/// and write the executables.
+/// and write the executables. An executable whose inputs are unchanged is
+/// reused from the build cache (`cached`).
 fn compile(
     program: &Program,
     places: &Places,
     name: &str,
     options: Options,
     json: bool,
+    cached: &Cached,
 ) -> ExitCode {
     let builds: Vec<(Target, String)> = match options.target {
         TargetChoice::One(target) => vec![(target, options.output.unwrap_or(name).to_string())],
@@ -131,7 +141,9 @@ fn compile(
     };
     let mut executables = Vec::with_capacity(builds.len());
     for (target, path) in builds {
-        match oska_native::build(program, target, &|d| places.locate(d)) {
+        match cached.native("build", target, json, || {
+            oska_native::build(program, target, &|d| places.locate(d))
+        }) {
             Ok(bytes) => executables.push((path, bytes)),
             Err(refusal) => return refuse(&[places.locate(refusal)], json, ExitCode::from(2)),
         }
