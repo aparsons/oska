@@ -15,13 +15,19 @@
 //! outside/secret.txt      "outside text"
 //! ```
 //!
+//! They run on aarch64 and x86_64 Linux and on Apple silicon macOS
+//! (ticket #171).
+//!
 //! Symlinks, hard links and FIFOs are planted by a setup function; the
 //! harness records a symlink by its target and never follows one, so a
 //! write through one that escaped would show in the tree.
 
-#![cfg(all(
-    target_os = "linux",
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 
 mod differential;
@@ -722,14 +728,14 @@ fn the_whole_filesystem_is_still_confined_by_the_path_rules() {
         r#"    let everything = fs.restrict_to("/")
     io.println(shown(everything.read_only().read_to_string(Path.new("../up.txt"))))?
     io.println(shown(everything.read_only().read_to_string(Path.new("/etc/hostname"))))?
-    io.println(shown(everything.read_only().read_to_string(Path.new("proc"))))?
-    io.println(shown(fs.restrict_to("/proc/..").read_only().read_to_string(Path.new("."))))?"#,
+    io.println(shown(everything.read_only().read_to_string(Path.new("dev"))))?
+    io.println(shown(fs.restrict_to("/dev/..").read_only().read_to_string(Path.new("."))))?"#,
     );
     assert_eq!(
         printed(&case),
         "REFUSED: `../up.txt` leads outside the capability's root\n\
          REFUSED: `/etc/hostname` is absolute; a directory capability takes paths relative to its root\n\
-         REFUSED: `proc` is not a regular file\n\
+         REFUSED: `dev` is not a regular file\n\
          REFUSED: `.` names the directory capability's root itself, not a file\n"
     );
 }
@@ -967,6 +973,9 @@ fn text_that_is_not_utf8_is_refused_and_large_files_round_trip() {
     );
 }
 
+/// Linux only: APFS refuses a name that is not UTF-8 (`EILSEQ`), so
+/// macOS cannot make the tree.
+#[cfg(target_os = "linux")]
 #[test]
 fn an_entry_name_that_is_not_utf8_fails_the_listing_as_rust_shows_it() {
     let case = case(
@@ -996,6 +1005,37 @@ fn an_entry_name_that_is_not_utf8_fails_the_listing_as_rust_shows_it() {
     }
 }
 
+#[test]
+fn a_root_reached_through_chained_symlinks_and_dot_dot_is_its_real_directory() {
+    // The same roots as the test below (absolute, relative, chained, with
+    // `..`), to a directory with a UTF-8 name, so it runs on macOS too.
+    let case = case(
+        "chained_root",
+        r#"    io.println(listed(read.restrict_to("link/sub/..").list_dir(Path.new("."))))?
+    io.println(listed(read.restrict_to("chain/sub/..").list_dir(Path.new("."))))?
+    io.println(listed(read.restrict_to("./up/real/sub/..").list_dir(Path.new("."))))?"#,
+    )
+    .with_setup(|dir| {
+        std::fs::create_dir_all(dir.join("real/sub")).expect("mkdir");
+        std::fs::write(dir.join("real/file.txt"), "x").expect("write");
+        std::os::unix::fs::symlink(dir.join("real"), dir.join("link")).expect("symlink");
+        std::os::unix::fs::symlink("link", dir.join("chain")).expect("symlink");
+        std::fs::create_dir(dir.join("up")).expect("mkdir");
+        std::os::unix::fs::symlink("../real", dir.join("up/real")).expect("symlink");
+    });
+    // The absolute symlink differs between the two trees, so only what
+    // the programs printed is compared.
+    let (interpreted, native) = differential::run(&case);
+    assert_eq!(
+        interpreted.stdout, native.stdout,
+        "{interpreted:#?}\n{native:#?}"
+    );
+    assert_eq!(native.stdout, "file.txt,sub\n".repeat(3), "{native:#?}");
+}
+
+/// Linux only: APFS refuses a name that is not UTF-8 (`EILSEQ`), so
+/// macOS cannot make the tree.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_root_is_named_by_its_canonical_path_shown_lossily() {
     // The root is reached through symlinks (absolute, relative, chained,
@@ -1040,12 +1080,19 @@ fn a_root_is_named_by_its_canonical_path_shown_lossily() {
     }
 }
 
+/// The directory listing the process's own open descriptors.
+const FD_DIR: &str = if cfg!(target_os = "macos") {
+    "/dev/fd"
+} else {
+    "/proc/self/fd"
+};
+
 #[test]
 fn no_handle_is_left_open_on_any_path() {
     // Natively only: the program counts its own open descriptors.
     let src = program(
-        r#"    let root = fs.restrict_to("root")
-    io.println(listed(read.restrict_to("/proc/self/fd").list_dir(Path.new("."))))?
+        &r#"    let root = fs.restrict_to("root")
+    io.println(listed(read.restrict_to("{FD_DIR}").list_dir(Path.new("."))))?
     var i = 0
     // Past the usual limit of 1024 open descriptors, so one leaked on
     // any path fails the run.
@@ -1077,7 +1124,8 @@ fn no_handle_is_left_open_on_any_path() {
         let _ = held.dirs.at(1).read_to_string(Path.new("nested.txt"))
         i = i + 1
     }
-    io.println(listed(read.restrict_to("/proc/self/fd").list_dir(Path.new("."))))?"#,
+    io.println(listed(read.restrict_to("{FD_DIR}").list_dir(Path.new("."))))?"#
+            .replace("{FD_DIR}", FD_DIR),
     );
     let src = format!("{src}{READER}\ncap struct Held {{ dirs: List<DirRead>, file: FileRead }}\n");
     let case = tree(Case::file("files_handles", &src)).with_setup(|dir| {
@@ -1164,27 +1212,6 @@ fn lock(dir: &Path, mode: u32) {
     }
 }
 
-#[test]
-fn the_errno_table_is_oskas_wording_for_every_number() {
-    let source = oska_check::STD_RT_SOURCE;
-    let head = "fn errno_table() -> String {\n    \"";
-    let start = source.find(head).expect("the table") + head.len();
-    let end = start + source[start..].find('"').expect("its end");
-    let table: Vec<&str> = source[start..end].split('|').collect();
-    assert_eq!(table.len(), 133);
-    for (index, wording) in table.iter().enumerate() {
-        let errno = index as i32 + 1;
-        let oska = oska_sys::system_wording(oska_sys::LINUX_ERRORS, errno);
-        let expected = if wording.is_empty() {
-            oska_sys::OTHER_WORDING
-        } else {
-            wording
-        };
-        assert_eq!(oska, expected, "errno {errno}");
-        assert!(!wording.contains("os error"), "errno {errno}");
-    }
-}
-
 // ---- Captured by closures ------------------------------------------------------
 
 /// A function that makes a closure capturing a `DirRead`, which outlives
@@ -1224,6 +1251,10 @@ fn a_closure_keeps_the_directory_capability_it_captured() {
 
 // ---- Running out of memory --------------------------------------------------------
 
+/// Linux only: macOS overcommits memory without limit, as Linux does
+/// under `vm.overcommit_memory = 1` (below), so a terabyte reserves and
+/// the read goes on until the system kills the process.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_file_too_large_to_hold_is_an_io_error_not_the_end_of_the_process() {
     // A sparse file of 1 TiB: no memory holds it, so the interpreter's

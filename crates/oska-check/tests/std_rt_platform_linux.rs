@@ -5,7 +5,8 @@
 //! and `ELOOP`. They are the generic UAPI headers' values, which arm64 and
 //! x86 both take as they are, so a wrong entry fails here and not only on
 //! the platform's runner. The processor's own values are checked in
-//! `std_rt_platform.rs`.
+//! `std_rt_platform.rs`. Each table also says where Linux's errors are
+//! worded in `system_errors`, which `oskac`'s `std_rt_errors.rs` checks.
 
 mod common;
 
@@ -59,6 +60,10 @@ fn linux_shared() -> Vec<(&'static str, i128)> {
         // asm-generic/signal.h: SIGBUS; asm-generic/errno.h: ELOOP.
         ("sigbus", 7),
         ("e_loop", 40),
+        // Linux's errors 1 to 133 are worded first in `system_errors`,
+        // which `oskac`'s `std_rt_errors.rs` checks against `oska-sys`.
+        ("errors_at", 0),
+        ("errors_count", 133),
     ]
 }
 
