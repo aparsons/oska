@@ -103,10 +103,12 @@ fn main(io: Stdout) -> Result<(), IoError> {
     },
 ];
 
-/// A new, empty directory for `name`.
-fn workspace(name: &str) -> PathBuf {
+/// A new, empty directory for `name` in the test `test`: each test has
+/// its own, since tests run in parallel.
+fn workspace(test: &str, name: &str) -> PathBuf {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join("native_macos")
+        .join(test)
         .join(name);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("should create the case directory");
@@ -131,9 +133,9 @@ fn outcome(output: &Output) -> (String, String, Option<i32>) {
 }
 
 /// Build `program` for `macos-aarch64` in a fresh directory: the
-/// directory, and the executable's path.
-fn build(program: &Program) -> (PathBuf, PathBuf) {
-    let dir = workspace(program.name);
+/// directory, under the test `test`'s, and the executable's path.
+fn build(test: &str, program: &Program) -> (PathBuf, PathBuf) {
+    let dir = workspace(test, program.name);
     let source = format!("{}.osk", program.name);
     std::fs::write(dir.join(&source), program.src).expect("should write the program");
     let built = oskac(
@@ -162,7 +164,7 @@ fn build(program: &Program) -> (PathBuf, PathBuf) {
 #[test]
 fn small_programs_build_for_macos_aarch64_on_every_host() {
     for program in PROGRAMS {
-        build(program);
+        build("build", program);
     }
 }
 
@@ -175,7 +177,7 @@ fn small_programs_run_on_apple_silicon_as_the_interpreter_runs_them() {
         return;
     }
     for program in PROGRAMS {
-        let (dir, exe) = build(program);
+        let (dir, exe) = build("run", program);
         let verified = Command::new("codesign")
             .args(["--verify", "--strict", "--verbose=2"])
             .arg(&exe)
