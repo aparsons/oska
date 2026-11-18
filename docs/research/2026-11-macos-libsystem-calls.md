@@ -115,6 +115,7 @@ Three defects in `std.rt` would surface on macOS (found 2026-11-17, at `c4a5f89`
 - `LC_DYLD_CHAINED_FIXUPS` (`0x34|LC_REQ_DYLD`) points into `__LINKEDIT` at a `dyld_chained_fixups_header` (`fixup-chains.h:37-46`). Behind the header come the starts table, the imports table and the symbol strings.
 - With `imports_format = DYLD_CHAINED_IMPORT` (1), each import is 4 bytes: `lib_ordinal:8, weak_import:1, name_offset:23` (`fixup-chains.h:301-312`).
 - With `pointer_format = DYLD_CHAINED_PTR_64` (2), each pointer slot holds a `dyld_chained_ptr_64_bind { ordinal:24, addend:8, reserved:19, next:12, bind:1 }` (`fixup-chains.h:219-226`). `next` counts 4-byte strides, so consecutive 8-byte slots chain with `next = 2` and the last has `next = 0`.
+- **Implemented differently (#169, 2026-11-18):** the writer uses `pointer_format = DYLD_CHAINED_PTR_64_OFFSET` (6), not 2. ld64 writes 6 for arm64 executables from macOS 12, and the two formats differ only in how a rebase's target is encoded. A bind slot is the same `dyld_chained_ptr_64_bind` in both, and the file has only binds.
 - `SG_READ_ONLY` (`0x10`) marks a segment "made read-only after fixups" (`loader.h:404`). That is how `__DATA_CONST` keeps the bound pointers from being overwritten.
 - The header flags are `MH_NOUNDEFS | MH_DYLDLINK | MH_TWOLEVEL | MH_PIE` (`0x00200085`), as ld64 writes them for an ordinary executable (`loader.h:126-190`). `MH_NOUNDEFS` refers to static linking: every symbol is bound to a dylib, so it is set even though the file has imports. dyld `fd8d0c4` does not check the bit, so this is about matching ld64, not about loading. (Corrected in review on 2026-11-17. The draft said to leave the bit out.)
 - **What dyld `fd8d0c4` checks** (read in review, 2026-11-17, not run). Its enforcement epoch comes from the SDK version the file declares (`mach_o/Policy.cpp:40-44`):
@@ -123,6 +124,7 @@ Three defects in `std.rt` would surface on macOS (found 2026-11-17, at `c4a5f89`
   - It needs **`LC_UUID` in a main executable** once the declared SDK is new enough: the fall 2025 epoch in `Policy::enforceHasUUID` (`Policy.cpp:450-461`), or macOS SDK 14 in `MachOFile::enforceFormat` (`common/MachOFile.cpp:2700-2703`). Emit one, computed from the file's other bytes so builds stay identical on every host.
   - **Chained fixups.** ld64 uses them by default from deployment target macOS 12 on arm64 and macOS 13 for x86_64 executables (`Policy.cpp:142-170`). `LC_BUILD_VERSION`'s `minos` should be at least that.
 - **Still unverified:** whether dyld needs `LC_SYMTAB`, `LC_DYSYMTAB` or `LC_DYLD_EXPORTS_TRIE` in a main executable. ld64 emits all three. #169's first CI run settles it, and the answer doesn't change the import design.
+  - **Settled (#169, 2026-11-18):** dyld doesn't need any of the three. On `macos-latest`, executables with none of them loaded, bound their libSystem imports, passed `codesign --verify --strict` and ran (PR #381's `macos` job).
 
 ## 3. The design
 
