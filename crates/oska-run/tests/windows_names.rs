@@ -1,9 +1,10 @@
 //! Windows names beneath a directory or file capability (review fix F5 of
 //! #93). On Windows, a reserved device name such as `CON` or `nul.txt`
-//! opens a device in every directory, and a `:` in a name opens an
-//! alternate data stream of a file, so neither is a file beneath the
-//! root. Each is refused in any position of a path a capability walks,
-//! for reads, writes, `create_dir`, `list_dir` and narrowing.
+//! is one Windows' path functions may take for a device, and a `:` in a
+//! name opens an alternate data stream of a file, so neither is a plain
+//! file beneath the root. Each is refused in any position of a path a
+//! capability walks, for reads, writes, `create_dir`, `list_dir` and
+//! narrowing.
 //!
 //! The tests run Oska programs on [`oska_run::RealHost`] against a real
 //! temporary directory (Windows only: the names are ordinary elsewhere).

@@ -46,7 +46,7 @@ fn tree(test: &str) -> TempTree {
 /// walk must not follow: a symlink on Unix, a junction on Windows.
 fn link_dir(tree: &TempTree, at: &str, target: &str) {
     #[cfg(unix)]
-    std::os::unix::fs::symlink(tree.path(target), tree.path(at)).expect("create a symlink");
+    common::symlink(&tree.path(target), &tree.path(at));
     #[cfg(windows)]
     windows::junction(&tree.path(at), &tree.path(target));
 }
@@ -273,12 +273,7 @@ mod windows {
     /// A symlink at `at` beneath `tree` to `target` beneath it: a
     /// directory symlink when `target` is a directory.
     fn symlink(tree: &TempTree, at: &str, target: &str) {
-        let (at, target) = (tree.path(at), tree.path(target));
-        let made = match target.is_dir() {
-            true => std::os::windows::fs::symlink_dir(&target, &at),
-            false => std::os::windows::fs::symlink_file(&target, &at),
-        };
-        made.expect("create a symlink");
+        super::common::symlink(&tree.path(target), &tree.path(at));
     }
 
     /// A volume mount point: the volume holding the temp dir mounted at
