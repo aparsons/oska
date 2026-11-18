@@ -36,6 +36,10 @@ For a function, the set of capabilities it can reach through its capability-bear
 A change after which a function's, a program's or a dependency's authority includes a capability kind it did not have, or a broader kind in place of a narrower one. A widening must be approved before the build or the authority gate accepts it.
 _Avoid_: escalation, upgrade (for this concept)
 
+**Unused authority**:
+A capability-bearing parameter, or a field of a `cap struct`, that a function never uses, either directly or by passing it on. The function declares more authority than it exercises, so its authority report overstates what it does. The release check rejects it.
+_Avoid_: dead capability, over-privilege (for this concept)
+
 **Authority baseline**:
 A saved record of a program's authority report that later reports are compared with. It is committed with the program, and updating it is how a widening is approved.
 _Avoid_: authority snapshot, authority lockfile
@@ -172,6 +176,10 @@ The toolchain's own Oska program that fetches the signed release index and verif
 _Avoid_: updater daemon, auto-updater
 
 ## Diagnostics
+
+**Release check**:
+`oskac check --release`: the stricter check a program must pass before it ships. Besides every ordinary error, it rejects code that is fine while working but must not ship, such as `dbg`, `todo()` and unused authority.
+_Avoid_: lint, warning (Oska has neither)
 
 **Fix applicability**:
 How safe a diagnostic's fix is to apply without a person reading it: `machine` when it is certainly right, `maybe` when it is a guess at what was meant, such as the closest name to an unknown one, and `placeholders` when the program checks afterwards but code is left to write, such as `todo()` arms. Each code's fix has one, recorded in the code catalog.
