@@ -12,39 +12,41 @@ use std::io::{self, ErrorKind};
 /// What an `IoError` says for a failure whose kind is not in [`IO_KINDS`].
 pub const OTHER_WORDING: &str = "I/O error";
 
-/// The kinds of failure the runtime words itself, with the wording of
+/// The kinds of failure the runtime words itself, by the name of `io::ErrorKind`'s variant (naming
+/// it, not the variant, keeps the crate building on the oldest supported Rust), with the wording of
 /// each. No wording holds an operating-system error number.
-pub const IO_KINDS: &[(ErrorKind, &str)] = &[
-    (ErrorKind::NotFound, "not found"),
-    (ErrorKind::PermissionDenied, "permission denied"),
-    (ErrorKind::AlreadyExists, "already exists"),
-    (ErrorKind::NotADirectory, "not a directory"),
-    (ErrorKind::IsADirectory, "is a directory"),
-    (ErrorKind::DirectoryNotEmpty, "directory not empty"),
-    (ErrorKind::StorageFull, "no space left on device"),
-    (ErrorKind::BrokenPipe, "broken pipe"),
-    (ErrorKind::InvalidData, "invalid data"),
-    (ErrorKind::InvalidInput, "invalid input"),
-    (ErrorKind::InvalidFilename, "invalid file name"),
-    (ErrorKind::ReadOnlyFilesystem, "read-only file system"),
-    (ErrorKind::FileTooLarge, "file too large"),
-    (ErrorKind::ResourceBusy, "resource busy"),
-    (ErrorKind::QuotaExceeded, "quota exceeded"),
-    (ErrorKind::CrossesDevices, "cannot move across devices"),
-    (ErrorKind::TooManyLinks, "too many links"),
-    (ErrorKind::NotSeekable, "not seekable"),
-    (ErrorKind::OutOfMemory, "out of memory"),
-    (ErrorKind::Unsupported, "not supported"),
-    (ErrorKind::Interrupted, "interrupted"),
-    (ErrorKind::WouldBlock, "would block"),
-    (ErrorKind::TimedOut, "timed out"),
+pub const IO_KINDS: &[(&str, &str)] = &[
+    ("NotFound", "not found"),
+    ("PermissionDenied", "permission denied"),
+    ("AlreadyExists", "already exists"),
+    ("NotADirectory", "not a directory"),
+    ("IsADirectory", "is a directory"),
+    ("DirectoryNotEmpty", "directory not empty"),
+    ("StorageFull", "no space left on device"),
+    ("BrokenPipe", "broken pipe"),
+    ("InvalidData", "invalid data"),
+    ("InvalidInput", "invalid input"),
+    ("InvalidFilename", "invalid file name"),
+    ("ReadOnlyFilesystem", "read-only file system"),
+    ("FileTooLarge", "file too large"),
+    ("ResourceBusy", "resource busy"),
+    ("QuotaExceeded", "quota exceeded"),
+    ("CrossesDevices", "cannot move across devices"),
+    ("TooManyLinks", "too many links"),
+    ("NotSeekable", "not seekable"),
+    ("OutOfMemory", "out of memory"),
+    ("Unsupported", "not supported"),
+    ("Interrupted", "interrupted"),
+    ("WouldBlock", "would block"),
+    ("TimedOut", "timed out"),
 ];
 
 /// The wording for a failure of `kind`.
 pub fn wording(kind: ErrorKind) -> &'static str {
+    let name = format!("{kind:?}");
     IO_KINDS
         .iter()
-        .find(|(known, _)| *known == kind)
+        .find(|(known, _)| *known == name)
         .map_or(OTHER_WORDING, |(_, text)| text)
 }
 
