@@ -4,12 +4,9 @@
 //! `todo`. The clock and the generator are compared on properties that
 //! do not depend on the time or the seed.
 
-#![cfg(any(
-    all(
-        target_os = "linux",
-        any(target_arch = "aarch64", target_arch = "x86_64")
-    ),
-    all(target_os = "macos", target_arch = "aarch64")
+#![cfg(all(
+    any(target_os = "linux", target_os = "macos"),
+    any(target_arch = "aarch64", target_arch = "x86_64")
 ))]
 
 mod differential;

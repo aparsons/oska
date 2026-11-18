@@ -46,6 +46,9 @@ pub struct Machine {
 /// `CPU_TYPE_ARM64` and `CPU_SUBTYPE_ARM64_ALL`.
 pub const CPU_TYPE_ARM64: u32 = 0x0100_000c;
 pub const CPU_SUBTYPE_ARM64_ALL: u32 = 0;
+/// `CPU_TYPE_X86_64` and `CPU_SUBTYPE_X86_64_ALL`.
+pub const CPU_TYPE_X86_64: u32 = 0x0100_0007;
+pub const CPU_SUBTYPE_X86_64_ALL: u32 = 3;
 
 const MH_MAGIC_64: u32 = 0xfeed_facf;
 const MH_EXECUTE: u32 = 2;

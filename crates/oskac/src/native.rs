@@ -1,6 +1,5 @@
-//! Native by default: on aarch64 and x86_64 Linux and Apple silicon
-//! macOS, `oskac run` and
-//! `oskac test` compile the checked program for the host with the native
+//! Native by default: on aarch64 and x86_64 Linux and macOS, `oskac run`
+//! and `oskac test` compile the checked program for the host with the native
 //! backend (`oska-native`) and run the executable; `--interpret` selects
 //! the interpreter, and every other host keeps it until it has a backend
 //! of its own.

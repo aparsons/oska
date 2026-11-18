@@ -432,6 +432,20 @@ pub const MACOS_AARCH64: Platform = Platform {
     start: Start::Main,
 };
 
+/// `macos-x86_64`: the same calls and the same `std.rt` table as
+/// `macos-aarch64`, but `libSystem` on x86_64 still exports the
+/// functions that take or give a `struct stat` or a `struct dirent` in
+/// their old layouts under their plain names. The 64-bit-inode layouts,
+/// the only ones arm64 has, are their `$INODE64` variants, which C's
+/// headers select (`__DARWIN_INODE64`, `__DARWIN_ALIAS_I`).
+pub const MACOS_X86_64: Platform = Platform {
+    table: "macos",
+    call: macos_x86_64_call,
+    imports: &MACOS_X86_64_IMPORTS,
+    errno: 0,
+    start: Start::Main,
+};
+
 /// A function of `libSystem` that is not variadic and fails with -1, as
 /// most do: `args` arguments and an `int` result.
 const fn plain(symbol: &'static str, args: u8) -> Import {
@@ -472,14 +486,23 @@ const FDOPENDIR: Import = Import {
     fails: Fails::Null,
     ..plain("_fdopendir", 1)
 };
+const FDOPENDIR_INODE64: Import = Import {
+    symbol: "_fdopendir$INODE64",
+    ..FDOPENDIR
+};
 /// `readdir(dir)`: the next record, or `NULL` at the end and on failure.
 const READDIR: Import = Import {
     wide: true,
     fails: Fails::NullKeepsErrno,
     ..plain("_readdir", 1)
 };
+const READDIR_INODE64: Import = Import {
+    symbol: "_readdir$INODE64",
+    ..READDIR
+};
 const CLOSEDIR: Import = plain("_closedir", 1);
 const FSTAT: Import = plain("_fstat", 2);
+const FSTAT_INODE64: Import = plain("_fstat$INODE64", 2);
 const FTRUNCATE: Import = plain("_ftruncate", 2);
 const READLINKAT: Import = Import {
     wide: true,
@@ -559,6 +582,35 @@ const MACOS_IMPORTS: [&Import; 24] = [
     &EXIT,
 ];
 
+/// [`MACOS_IMPORTS`] with the `$INODE64` functions of x86_64's
+/// `libSystem` in place of the plain ones, in the same slots.
+const MACOS_X86_64_IMPORTS: [&Import; 24] = [
+    &ERROR,
+    &READ,
+    &WRITE,
+    &OPENAT,
+    &CLOSE,
+    &MKDIRAT,
+    &FDOPENDIR_INODE64,
+    &READDIR_INODE64,
+    &CLOSEDIR,
+    &FSTAT_INODE64,
+    &FTRUNCATE,
+    &READLINKAT,
+    &GETCWD,
+    &FCNTL,
+    &MMAP,
+    &MUNMAP,
+    &CLOCK_GETTIME,
+    &IOCTL,
+    &GETENTROPY,
+    &SIGACTION,
+    &SIGALTSTACK,
+    &GETPID,
+    &KILL,
+    &EXIT,
+];
+
 /// The `libSystem` function behind each call on macOS. A directory is
 /// listed through a `DIR *` that owns its descriptor (`fdopendir`,
 /// `readdir`, `closedir`), one record at a time.
@@ -588,6 +640,17 @@ fn macos_call(call: Sys) -> OsCall {
         Sys::Kill => &KILL,
         Sys::Exit => &EXIT,
     })
+}
+
+/// The `libSystem` function behind each call on x86_64 macOS: arm64's,
+/// but the `$INODE64` variant where there is one.
+fn macos_x86_64_call(call: Sys) -> OsCall {
+    match call {
+        Sys::OpenDir => OsCall::Library(&FDOPENDIR_INODE64),
+        Sys::ReadDir => OsCall::Library(&READDIR_INODE64),
+        Sys::Fstat => OsCall::Library(&FSTAT_INODE64),
+        _ => macos_call(call),
+    }
 }
 
 /// Every `std.rt` intrinsic, by name.
@@ -865,19 +928,21 @@ mod tests {
     /// Each macOS call is one `libSystem` function, made as Apple's
     /// headers declare it: (intrinsic, symbol, arguments it takes, fixed
     /// arguments, whole-word result, how it fails, trailing constants).
+    /// How macOS makes an intrinsic's call: (intrinsic, symbol, arguments,
+    /// fixed, wide, fails, then).
+    type Row = (
+        &'static str,
+        &'static str,
+        u8,
+        u8,
+        bool,
+        Fails,
+        &'static [i64],
+    );
+
     #[test]
     fn macos_makes_each_call_as_the_libsystem_function_declares_it() {
         use Fails::*;
-        /// (intrinsic, symbol, arguments, fixed, wide, fails, then).
-        type Row = (
-            &'static str,
-            &'static str,
-            u8,
-            u8,
-            bool,
-            Fails,
-            &'static [i64],
-        );
         let rows: &[Row] = &[
             ("rt_sys_read", "_read", 3, 3, true, MinusOne, &[]),
             ("rt_sys_write", "_write", 3, 3, true, MinusOne, &[]),
@@ -947,6 +1012,17 @@ mod tests {
             // _exit, not exit: no atexit handlers, as exit_group.
             ("rt_sys_exit", "__exit", 1, 1, false, Never, &[]),
         ];
+        // x86_64's `libSystem` gives the 64-bit-inode `struct stat` and
+        // `struct dirent`, arm64's only ones, under `$INODE64` names.
+        for (platform, inode64) in [(MACOS_AARCH64, ""), (MACOS_X86_64, "$INODE64")] {
+            macos_calls(&platform, inode64, rows);
+        }
+    }
+
+    /// Each row of `rows` is how `platform` makes its intrinsic's call,
+    /// with `inode64` after the symbol of a function that takes or gives
+    /// a `struct stat` or `struct dirent`.
+    fn macos_calls(platform: &Platform, inode64: &str, rows: &[Row]) {
         for (name, implementation) in RUNTIME {
             let Runtime::Syscall(call) = implementation else {
                 continue;
@@ -955,7 +1031,13 @@ mod tests {
                 .iter()
                 .find(|row| row.0 == *name)
                 .unwrap_or_else(|| panic!("`{name}` has no row"));
-            let OsCall::Library(import) = (MACOS_AARCH64.call)(*call) else {
+            let symbol = match *name {
+                "rt_sys_open_dir" | "rt_sys_read_dir" | "rt_sys_fstat" => {
+                    format!("{}{inode64}", row.1)
+                }
+                _ => row.1.to_string(),
+            };
+            let OsCall::Library(import) = (platform.call)(*call) else {
                 panic!("`{name}` is not a libSystem call on macOS");
             };
             assert_eq!(
@@ -967,23 +1049,23 @@ mod tests {
                     import.fails,
                     import.extra_args
                 ),
-                (row.1, row.2, row.3, row.4, row.5, row.6),
+                (symbol.as_str(), row.2, row.3, row.4, row.5, row.6),
                 "`{name}`"
             );
             assert!(
                 usize::from(import.args) + import.extra_args.len() >= usize::from(import.fixed),
                 "`{name}`"
             );
-            assert!(MACOS_AARCH64.slot(import).is_some(), "`{name}` is imported");
+            assert!(platform.slot(import).is_some(), "`{name}` is imported");
         }
-        let errno = MACOS_AARCH64.imports[usize::from(MACOS_AARCH64.errno)];
+        let errno = platform.imports[usize::from(platform.errno)];
         assert_eq!(errno.symbol, "___error");
         // Every import is some call's, or `__error`'s, and none twice.
-        assert_eq!(MACOS_AARCH64.imports.len(), rows.len() + 1);
-        let mut symbols: Vec<&str> = MACOS_AARCH64.imports.iter().map(|i| i.symbol).collect();
+        assert_eq!(platform.imports.len(), rows.len() + 1);
+        let mut symbols: Vec<&str> = platform.imports.iter().map(|i| i.symbol).collect();
         symbols.sort_unstable();
         symbols.dedup();
-        assert_eq!(symbols.len(), MACOS_AARCH64.imports.len());
+        assert_eq!(symbols.len(), platform.imports.len());
     }
 
     /// A macOS executable makes no system call of its own: every call is
@@ -995,27 +1077,27 @@ mod tests {
         let rt = oska_check::check_toolchain_rt()
             .program
             .expect("std.rt should check");
-        let module = crate::lower::program(
-            &program,
-            &rt,
-            &|d| d,
-            crate::lower::Entry::Main,
-            crate::Target::MacosAarch64,
-        )
-        .expect("the program should lower");
-        let mut imports = std::collections::BTreeSet::new();
-        for inst in module.functions.iter().flat_map(|f| &f.insts) {
-            match inst {
-                crate::ir::Inst::Syscall { .. } | crate::ir::Inst::EntrySp { .. } => {
-                    panic!("a macOS executable has {inst:?}")
+        for (target, platform) in [
+            (crate::Target::MacosAarch64, MACOS_AARCH64),
+            (crate::Target::MacosX86_64, MACOS_X86_64),
+        ] {
+            let module =
+                crate::lower::program(&program, &rt, &|d| d, crate::lower::Entry::Main, target)
+                    .expect("the program should lower");
+            let mut imports = std::collections::BTreeSet::new();
+            for inst in module.functions.iter().flat_map(|f| &f.insts) {
+                match inst {
+                    crate::ir::Inst::Syscall { .. } | crate::ir::Inst::EntrySp { .. } => {
+                        panic!("a {target:?} executable has {inst:?}")
+                    }
+                    crate::ir::Inst::LibCall { import, .. } => {
+                        imports.insert(*import);
+                    }
+                    _ => {}
                 }
-                crate::ir::Inst::LibCall { import, .. } => {
-                    imports.insert(*import);
-                }
-                _ => {}
             }
+            assert_eq!(imports.len(), platform.imports.len(), "{target:?}");
         }
-        assert_eq!(imports.len(), MACOS_AARCH64.imports.len());
     }
 
     #[test]

@@ -8,7 +8,7 @@
 # OSKAC is the `oskac` binary to build with. The corpus is the examples,
 # the CLI's fixture programs and packages, and the site generator. CI's
 # `cross-build` job runs this on aarch64 and x86_64 Linux runners and on an
-# Apple silicon Mac, and requires the manifests to be identical: the backend's output depends
+# Apple silicon and an Intel Mac, and requires the manifests to be identical: the backend's output depends
 # only on the program and the target, never on the host.
 #
 # Two hosts that refused the same program would agree, so a refusal fails
@@ -30,7 +30,7 @@ root=$(cd "${2:-$(dirname "$0")/../..}" && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-targets=(linux-aarch64 linux-x86_64 macos-aarch64)
+targets=(linux-aarch64 linux-x86_64 macos-aarch64 macos-x86_64)
 
 list=scripts/cross-build/refused.txt
 if [ ! -f "$root/$list" ]; then
