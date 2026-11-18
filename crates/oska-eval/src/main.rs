@@ -27,7 +27,7 @@ USAGE:
 
     oska-eval prepare <tasks-dir> <task-id> <run-dir>
         Make a fresh run directory for an active task: workspace/ (the
-        starting package), prompt.md and a snapshot of the starting files.
+        starting package) and prompt.md.
         <run-dir> must be new, and outside the repo and the task set.
 
     oska-eval grade --oskac <path> <tasks-dir> <task-id> <run-dir>

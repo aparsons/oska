@@ -192,7 +192,7 @@ fn solution_checks(oskac: &Oskac, task: &Task, name: &str) -> Result<Vec<Check>,
 mod tests {
     use super::map_parallel;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn results_come_back_in_the_items_order() {
@@ -206,19 +206,29 @@ mod tests {
         assert_eq!(doubled, (0..20).map(|n| n * 2).collect::<Vec<_>>());
     }
 
+    /// Each item waits, up to a deadline, until as many are running as the
+    /// cap allows, then stays a little longer, so threads past the cap would
+    /// be caught running too. Run serially, no item ever sees the others and
+    /// the most at once is 1; with no cap, it is more than 3. Only exactly
+    /// the cap passes.
     #[test]
-    fn no_more_than_the_cap_run_at_once() {
+    fn as_many_as_the_cap_run_at_once_and_no_more() {
+        const CAP: usize = 3;
         let running = AtomicUsize::new(0);
         let most = AtomicUsize::new(0);
         let items = [0; 12];
-        map_parallel(&items, 3, |_| {
+        map_parallel(&items, CAP, |_| {
             let now = running.fetch_add(1, Ordering::SeqCst) + 1;
             most.fetch_max(now, Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(10));
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while running.load(Ordering::SeqCst) < CAP && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            std::thread::sleep(Duration::from_millis(20));
+            most.fetch_max(running.load(Ordering::SeqCst), Ordering::SeqCst);
             running.fetch_sub(1, Ordering::SeqCst);
         });
-        let most = most.load(Ordering::SeqCst);
-        assert!((1..=3).contains(&most), "{most} ran at once");
+        assert_eq!(most.load(Ordering::SeqCst), CAP);
     }
 
     #[test]

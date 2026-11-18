@@ -11,7 +11,7 @@
 //! - `solutions/reference/` and `solutions/insecure/`, files that replace
 //!   or add modules of the starting package.
 
-use oska_syntax::{parse_json, JsonValue};
+use oska_syntax::JsonValue;
 use std::path::{Path, PathBuf};
 
 /// The module name the hidden checks are added under. No starting file or
@@ -188,8 +188,7 @@ fn load(id: &str, dir: &Path) -> Result<Task, Vec<String>> {
     let file = format!("{id}/task.json");
     let text = std::fs::read_to_string(dir.join("task.json"))
         .map_err(|e| vec![format!("{file}: cannot read: {e}")])?;
-    let metadata = parse_json(&text)
-        .map_err(|e| vec![format!("{file}: {}", crate::json::locate(&text, &e))])?;
+    let metadata = crate::json::read(&text).map_err(|e| vec![format!("{file}: {e}")])?;
     if let Some(key) = metadata.duplicate_key() {
         return Err(vec![format!("{file}: the key `{key}` appears twice")]);
     }
@@ -504,6 +503,13 @@ fn check_files(id: &str, dir: &Path, errors: &mut Vec<String>) {
             errors.push(format!("{id}/checks/{group}.osk: missing"));
         }
     }
+    for part in ["start", "solutions/reference", "solutions/insecure"] {
+        for other in tree(&dir.join(part)).others {
+            errors.push(format!(
+                "{id}/{part}/{other}: not a regular file or directory, and never followed"
+            ));
+        }
+    }
     let reserved = format!("{CHECKS_MODULE}.osk");
     for module in &modules {
         if *module == reserved {
@@ -534,25 +540,54 @@ fn check_files(id: &str, dir: &Path, errors: &mut Vec<String>) {
     }
 }
 
-/// Every file beneath `dir`, as a path relative to it with `/` between its
-/// parts, sorted. A missing directory has none.
-pub fn files(dir: &Path) -> Vec<String> {
-    let mut found = Vec::new();
-    walk(dir, "", &mut found);
-    found.sort();
-    found
+/// What is beneath a directory, found without following a link.
+#[derive(Default)]
+pub struct Tree {
+    /// Every regular file, as a path relative to the directory with `/`
+    /// between its parts, sorted.
+    pub files: Vec<String>,
+    /// Everything that is neither a directory nor a regular file (a link, a
+    /// pipe, a device), sorted, the same way; `.` when the directory itself
+    /// is one. Nothing here is followed or read: a link could reach outside
+    /// the directory, or round in a cycle.
+    pub others: Vec<String>,
 }
 
-fn walk(dir: &Path, prefix: &str, found: &mut Vec<String>) {
+/// What is beneath `dir`. A missing directory holds nothing.
+pub fn tree(dir: &Path) -> Tree {
+    let mut tree = Tree::default();
+    match std::fs::symlink_metadata(dir) {
+        Ok(meta) if meta.is_dir() => walk(dir, "", &mut tree),
+        Ok(_) => tree.others.push(".".to_string()),
+        Err(_) => {}
+    }
+    tree.files.sort();
+    tree.others.sort();
+    tree
+}
+
+/// Every regular file beneath `dir`, as [`Tree::files`] lists them.
+pub fn files(dir: &Path) -> Vec<String> {
+    tree(dir).files
+}
+
+fn walk(dir: &Path, prefix: &str, tree: &mut Tree) {
     let Ok(items) = list(dir) else {
         return;
     };
     for (name, path) in items {
         let relative = format!("{prefix}{name}");
-        if path.is_dir() {
-            walk(&path, &format!("{relative}/"), found);
+        // `symlink_metadata` describes a link itself, never what it names.
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        let kind = meta.file_type();
+        if kind.is_dir() {
+            walk(&path, &format!("{relative}/"), tree);
+        } else if kind.is_file() {
+            tree.files.push(relative);
         } else {
-            found.push(relative);
+            tree.others.push(relative);
         }
     }
 }

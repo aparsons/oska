@@ -211,29 +211,43 @@ struct Graded {
 fn grade(oskac: &str, tasks: &str, id: &str, run_dir: &Path) -> Result<Graded, String> {
     let task = task::load_active(Path::new(tasks), id)?;
     let oskac = Oskac::new(oskac);
-    let snapshot = crate::prepare::read_snapshot(run_dir)?;
     let agent = run_dir.join("workspace");
+    if std::fs::symlink_metadata(&agent).is_err() {
+        return Err(format!(
+            "no workspace in {}: prepare the run first",
+            run_dir.display()
+        ));
+    }
 
-    // Grading happens in a copy, so the hidden checks never enter the
-    // agent's workspace and grading twice gives the same grade.
+    // The agent is not trusted, and may still be writing. Its workspace is
+    // read once, into a copy, and only the copy is judged: every check
+    // below, tampering included, sees the same files the grade comes from.
+    // The hidden checks never enter the agent's workspace, and grading
+    // twice gives the same grade.
     let scratch = Workspace::new()?;
-    scratch.copy_in(&agent)?;
-    let current = task::files(&agent);
-    let planted = current
+    let refused = scratch.copy_in(&agent)?;
+    let start = task.start();
+    let changed = changes(&start, scratch.path());
+    let planted =
+        std::fs::symlink_metadata(scratch.path().join(crate::workspace::checks_file())).is_ok();
+
+    // A read-only file is judged against the task's own starting package,
+    // not a record the agent could rewrite, and graded as the task wrote it:
+    // tampering is reported, never graded on.
+    let tampered: Vec<&String> = task
+        .read_only
         .iter()
-        .any(|f| *f == crate::workspace::checks_file());
+        .filter(|path| changed.contains(*path))
+        .collect();
+    for path in &task.read_only {
+        scratch.restore(&start, path)?;
+    }
     scratch.set_checks(None)?;
 
-    let read_only = &task.read_only;
-    let changed = snapshot.changes(&agent);
-    let tampered: Vec<&String> = changed
-        .iter()
-        .filter(|path| read_only.contains(*path))
-        .collect();
     let mut all = checks(&oskac, &task, &scratch)?;
     let mut touched: Vec<String> = tampered
         .iter()
-        .map(|p| format!("{p} was changed"))
+        .map(|p| format!("{p} was changed (graded as the task wrote it)"))
         .collect();
     if planted {
         touched.push(format!(
@@ -241,9 +255,13 @@ fn grade(oskac: &str, tasks: &str, id: &str, run_dir: &Path) -> Result<Graded, S
             crate::workspace::checks_file()
         ));
     }
+    touched.extend(refused.iter().map(|p| {
+        let path = if p == "." { "workspace/" } else { p.as_str() };
+        format!("{path} is a link or not a regular file: never followed, and not graded")
+    }));
     all.push(Check::new(
         "integrity",
-        "no read-only file changed and no hidden checks module added",
+        "no read-only file changed, no hidden checks module added and no link",
         (!touched.is_empty()).then(|| touched.join("; ")),
     ));
 
@@ -264,4 +282,22 @@ fn grade(oskac: &str, tasks: &str, id: &str, run_dir: &Path) -> Result<Graded, S
         json,
         good: passed && secure && clean,
     })
+}
+
+/// The files of `dir` that differ from the task's starting package in
+/// `start`, are not in it, or are missing from `dir`, sorted.
+fn changes(start: &Path, dir: &Path) -> Vec<String> {
+    let before = task::files(start);
+    let now = task::files(dir);
+    let mut changed: Vec<String> = before
+        .iter()
+        .filter(|file| {
+            let was = std::fs::read(start.join(file)).ok();
+            was.is_none() || std::fs::read(dir.join(file)).ok() != was
+        })
+        .chain(now.iter().filter(|file| !before.contains(file)))
+        .cloned()
+        .collect();
+    changed.sort();
+    changed
 }

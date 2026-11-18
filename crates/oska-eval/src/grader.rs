@@ -6,7 +6,7 @@
 //! bad input rather than guess.
 
 use crate::task::{Run, CHECKS_MODULE};
-use oska_syntax::{parse_json, JsonValue};
+use oska_syntax::JsonValue;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -66,7 +66,7 @@ impl Oskac<'_> {
         let what = args.join(" ");
         let output = self.output(self.command(dir, args), &what)?;
         let stdout = String::from_utf8_lossy(&output.stdout);
-        parse_json(&stdout).map_err(|e| {
+        crate::json::read(&stdout).map_err(|e| {
             format!(
                 "`oskac {what}` did not print its JSON report ({e}); it wrote: {}",
                 String::from_utf8_lossy(&output.stderr).trim()

@@ -28,7 +28,7 @@
     },
     {
       "group": "integrity",
-      "check": "no read-only file changed and no hidden checks module added",
+      "check": "no read-only file changed, no hidden checks module added and no link",
       "outcome": "passed"
     }
   ]
