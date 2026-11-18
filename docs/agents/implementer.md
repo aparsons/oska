@@ -30,6 +30,7 @@ The session's permission check refuses some command shapes, which stalls an unat
 - Write scripts, file contents and PR, issue and commit bodies with the Write tool, then pass the file: `gh pr create --body-file F`, `gh issue create --body-file F`, `git commit -F F`, `python3 F`. A heredoc is refused.
 - Run one git command per call, never `a && git b`. A compound command that contains git is refused.
 - Never use `git -c` or `git config`. Hooks and identity are already configured, and both are refused.
+- A command line containing the word `eval` is refused, including `cargo test -p oska-eval`. Write the command to a script file with the Write tool and run `bash F`.
 - Run a long check in the background and wait on it (see Logs and waiting). A foreground call is cut off after about 180s.
 
 ## Logs and waiting
