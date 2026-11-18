@@ -69,13 +69,15 @@ jobs:
       # Intel must fail, not skip them.
       - run: test "$(uname -m)" = arm64
       - run: cargo test -p oskac --test build_macos
-      # Ticket #170: the runtime through libSystem. The differential tests
-      # of memory, panics, the stack, process capabilities and faults run
-      # natively here, built with `--target macos-aarch64`.
+      # Tickets #170 and #171: the runtime through libSystem. The
+      # differential tests of memory, panics, the stack, process
+      # capabilities, faults and confined files run natively here, built
+      # with `--target macos-aarch64`.
       - run: >-
           cargo test -p oskac --no-fail-fast
           --test native_memory --test native_ints
           --test native_process --test native_faults
+          --test native_files
 
   cross-build:
     # Seam 3 of spec #153: every corpus program built for every target on

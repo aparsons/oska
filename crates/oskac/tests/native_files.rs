@@ -15,13 +15,19 @@
 //! outside/secret.txt      "outside text"
 //! ```
 //!
+//! They run on aarch64 and x86_64 Linux and on Apple silicon macOS
+//! (ticket #171).
+//!
 //! Symlinks, hard links and FIFOs are planted by a setup function; the
 //! harness records a symlink by its target and never follows one, so a
 //! write through one that escaped would show in the tree.
 
-#![cfg(all(
-    target_os = "linux",
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 
 mod differential;
@@ -722,14 +728,14 @@ fn the_whole_filesystem_is_still_confined_by_the_path_rules() {
         r#"    let everything = fs.restrict_to("/")
     io.println(shown(everything.read_only().read_to_string(Path.new("../up.txt"))))?
     io.println(shown(everything.read_only().read_to_string(Path.new("/etc/hostname"))))?
-    io.println(shown(everything.read_only().read_to_string(Path.new("proc"))))?
-    io.println(shown(fs.restrict_to("/proc/..").read_only().read_to_string(Path.new("."))))?"#,
+    io.println(shown(everything.read_only().read_to_string(Path.new("dev"))))?
+    io.println(shown(fs.restrict_to("/dev/..").read_only().read_to_string(Path.new("."))))?"#,
     );
     assert_eq!(
         printed(&case),
         "REFUSED: `../up.txt` leads outside the capability's root\n\
          REFUSED: `/etc/hostname` is absolute; a directory capability takes paths relative to its root\n\
-         REFUSED: `proc` is not a regular file\n\
+         REFUSED: `dev` is not a regular file\n\
          REFUSED: `.` names the directory capability's root itself, not a file\n"
     );
 }
@@ -1040,12 +1046,19 @@ fn a_root_is_named_by_its_canonical_path_shown_lossily() {
     }
 }
 
+/// The directory listing the process's own open descriptors.
+const FD_DIR: &str = if cfg!(target_os = "macos") {
+    "/dev/fd"
+} else {
+    "/proc/self/fd"
+};
+
 #[test]
 fn no_handle_is_left_open_on_any_path() {
     // Natively only: the program counts its own open descriptors.
     let src = program(
-        r#"    let root = fs.restrict_to("root")
-    io.println(listed(read.restrict_to("/proc/self/fd").list_dir(Path.new("."))))?
+        &r#"    let root = fs.restrict_to("root")
+    io.println(listed(read.restrict_to("{FD_DIR}").list_dir(Path.new("."))))?
     var i = 0
     // Past the usual limit of 1024 open descriptors, so one leaked on
     // any path fails the run.
@@ -1077,7 +1090,8 @@ fn no_handle_is_left_open_on_any_path() {
         let _ = held.dirs.at(1).read_to_string(Path.new("nested.txt"))
         i = i + 1
     }
-    io.println(listed(read.restrict_to("/proc/self/fd").list_dir(Path.new("."))))?"#,
+    io.println(listed(read.restrict_to("{FD_DIR}").list_dir(Path.new("."))))?"#
+            .replace("{FD_DIR}", FD_DIR),
     );
     let src = format!("{src}{READER}\ncap struct Held {{ dirs: List<DirRead>, file: FileRead }}\n");
     let case = tree(Case::file("files_handles", &src)).with_setup(|dir| {
@@ -1164,6 +1178,7 @@ fn lock(dir: &Path, mode: u32) {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn the_errno_table_is_oskas_wording_for_every_number() {
     let source = oska_check::STD_RT_SOURCE;
