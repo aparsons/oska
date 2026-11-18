@@ -229,7 +229,7 @@ fn checker_diagnostics_in_a_package_refuse_the_build() {
 fn naming_a_std_rt_intrinsic_is_refused_by_the_checker() {
     // Written here, not as a fixture file: the intrinsic guard refuses any
     // `.osk` file outside std.rt that names one.
-    let intrinsic = ["rt", "sys", "exit_group"].join("_");
+    let intrinsic = ["rt", "sys", "exit"].join("_");
     let src = format!("fn main() {{\n    let _ = {intrinsic}(3)\n}}\n");
     assert_golden(
         "intrinsic_refusal",

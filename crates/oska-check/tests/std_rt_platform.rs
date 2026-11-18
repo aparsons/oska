@@ -1,10 +1,70 @@
-//! What `std.rt` reads that differs between target platforms (open flags,
-//! the layout of `struct stat`) is in one table per platform, which the
-//! constant intrinsic `rt_mem_platform()` gives (#158). The values below
-//! are the Linux UAPI headers' for each platform, so a wrong entry fails
-//! here and not only on the platform's runner.
+//! What `std.rt` reads that differs between operating systems or
+//! processors (open flags, `mmap` flags, `struct stat`, the directory
+//! records, `struct sigaction` and `stack_t`) is in one table per target
+//! platform, which the constant intrinsic `rt_mem_platform()` gives (#158,
+//! #168). The values below are the Linux UAPI headers' for each platform,
+//! so a wrong entry fails here and not only on the platform's runner.
 
 use oska_check::program::{ExprKind, Program, TypeDeclKind};
+
+/// What every Linux table holds after the processor's open flags,
+/// whatever the processor: the generic headers' values, which arm64 and
+/// x86 both take as they are.
+fn linux_common() -> Vec<(&'static str, i128)> {
+    vec![
+        // asm-generic/fcntl.h.
+        ("o_wronly", 0o1),
+        ("o_creat", 0o100),
+        ("o_nonblock", 0o4000),
+        ("o_cloexec", 0o2000000),
+        // linux/fcntl.h: AT_FDCWD, and F_DUPFD_CLOEXEC
+        // (F_LINUX_SPECIFIC_BASE + 6).
+        ("at_fdcwd", -100),
+        ("f_dupfd_cloexec", 1030),
+        // asm-generic/ioctls.h: TCGETS.
+        ("tty_request", 0x5401),
+        // asm-generic/mman-common.h and mman.h: MAP_PRIVATE |
+        // MAP_ANONYMOUS, and MAP_NORESERVE.
+        ("map_private_anonymous", 0x02 | 0x20),
+        ("map_noreserve", 0x4000),
+    ]
+}
+
+/// What every Linux table holds after `struct stat`.
+fn linux_common_records() -> Vec<(&'static str, i128)> {
+    vec![
+        // linux/dirent.h, `struct linux_dirent64`: d_ino, d_off (8 bytes
+        // each), d_reclen (2), d_type (1), d_name.
+        ("dirent_length", 16),
+        ("dirent_name", 19),
+        // The kernel's `struct sigaction`: sa_handler, sa_flags,
+        // sa_restorer, sa_mask (8 bytes each); a fault's flags are
+        // SA_ONSTACK | SA_RESETHAND | SA_NODEFER | SA_RESTORER
+        // (asm-generic/signal-defs.h, and SA_RESTORER from arm64's and
+        // x86's asm/signal.h).
+        ("sigaction_bytes", 32),
+        ("sigaction_flags", 8),
+        (
+            "sa_fault_flags",
+            0x0800_0000 | 0x8000_0000 | 0x4000_0000 | 0x0400_0000,
+        ),
+        // asm-generic/signal.h, `stack_t`: ss_sp, ss_flags (4 bytes and
+        // padding), ss_size.
+        ("stack_size", 16),
+    ]
+}
+
+/// A Linux table: the processor's open flags and `struct stat` among the
+/// values every Linux processor shares.
+fn linux(flags: [(&'static str, i128); 2], stat: [(&'static str, i128); 4]) -> Vec<(String, i128)> {
+    flags
+        .into_iter()
+        .chain(linux_common())
+        .chain(stat)
+        .chain(linux_common_records())
+        .map(|(field, value)| (field.to_string(), value))
+        .collect()
+}
 
 /// The table the `std.rt` function `name` gives, by field name.
 fn table(program: &Program, name: &str) -> Vec<(String, i128)> {
@@ -39,45 +99,47 @@ fn table(program: &Program, name: &str) -> Vec<(String, i128)> {
 }
 
 #[test]
-fn linux_aarch64s_table_holds_arm64s_flags_and_stat_layout() {
+fn linux_aarch64s_table_holds_linuxs_values_with_arm64s_flags_and_stat() {
     let report = oska_check::check_toolchain_rt();
     let program = report.program.expect("std.rt should check");
-    let expected: Vec<(String, i128)> = [
-        // asm-generic/fcntl.h, as arm64's asm/fcntl.h overrides it.
-        ("o_directory", 0o40000),
-        ("o_nofollow", 0o100000),
-        // asm-generic/stat.h: st_dev, st_ino (8 bytes each), st_mode,
-        // st_nlink (4 each), st_uid, st_gid, st_rdev, __pad1, st_size.
-        ("stat_bytes", 128),
-        ("stat_mode", 16),
-        ("stat_nlink", 20),
-        ("stat_size", 48),
-    ]
-    .into_iter()
-    .map(|(field, value)| (field.to_string(), value))
-    .collect();
+    let expected = linux(
+        [
+            // asm-generic/fcntl.h, as arm64's asm/fcntl.h overrides it.
+            ("o_directory", 0o40000),
+            ("o_nofollow", 0o100000),
+        ],
+        [
+            // asm-generic/stat.h: st_dev, st_ino (8 bytes each), st_mode,
+            // st_nlink (4 each), st_uid, st_gid, st_rdev, __pad1, st_size.
+            ("stat_bytes", 128),
+            ("stat_mode", 16),
+            ("stat_nlink", 20),
+            ("stat_size", 48),
+        ],
+    );
     assert_eq!(table(&program, "linux_aarch64"), expected);
 }
 
 #[test]
-fn linux_x86_64s_table_holds_x86_64s_flags_and_stat_layout() {
+fn linux_x86_64s_table_holds_linuxs_values_with_x86_64s_flags_and_stat() {
     let report = oska_check::check_toolchain_rt();
     let program = report.program.expect("std.rt should check");
-    let expected: Vec<(String, i128)> = [
-        // asm-generic/fcntl.h, which x86's asm/fcntl.h takes as it is.
-        ("o_directory", 0o200000),
-        ("o_nofollow", 0o400000),
-        // x86's asm/stat.h, `struct stat` for __x86_64__: st_dev, st_ino,
-        // st_nlink (8 bytes each), st_mode, st_uid, st_gid, __pad0 (4
-        // each), st_rdev, st_size; 144 bytes with the times and
-        // __unused[3].
-        ("stat_bytes", 144),
-        ("stat_mode", 24),
-        ("stat_nlink", 16),
-        ("stat_size", 48),
-    ]
-    .into_iter()
-    .map(|(field, value)| (field.to_string(), value))
-    .collect();
+    let expected = linux(
+        [
+            // asm-generic/fcntl.h, which x86's asm/fcntl.h takes as it is.
+            ("o_directory", 0o200000),
+            ("o_nofollow", 0o400000),
+        ],
+        [
+            // x86's asm/stat.h, `struct stat` for __x86_64__: st_dev, st_ino,
+            // st_nlink (8 bytes each), st_mode, st_uid, st_gid, __pad0 (4
+            // each), st_rdev, st_size; 144 bytes with the times and
+            // __unused[3].
+            ("stat_bytes", 144),
+            ("stat_mode", 24),
+            ("stat_nlink", 16),
+            ("stat_size", 48),
+        ],
+    );
     assert_eq!(table(&program, "linux_x86_64"), expected);
 }
