@@ -1,13 +1,12 @@
-//! The `stack_t` layout of `std.rt`'s macOS table (#361, #403), and the
-//! rule every table's `stack_t` keeps: `handle_faults` writes `ss_sp` at
-//! 0 and the two words the table names within a 24-byte `stack_t`, so a
-//! wrong entry fails here and not only on the platform's runner.
+//! `stack_t` in `std.rt`'s platform tables (#361, #403): macOS's layout
+//! (Linux's is checked in `std_rt_platform_linux.rs`), and the rule every
+//! table keeps: `handle_faults` writes `ss_sp` at 0 and the two words the
+//! table names within a 24-byte `stack_t`, so a wrong entry fails here
+//! and not only on the platform's runner.
 
 mod common;
 
-use common::platform::{fields_of, owned};
-
-const TABLES: [&str; 3] = ["linux_aarch64", "linux_x86_64", "macos"];
+use common::platform::{fields_of, owned, tables};
 
 #[test]
 fn the_macos_table_holds_xnus_stack_t_layout() {
@@ -19,7 +18,9 @@ fn the_macos_table_holds_xnus_stack_t_layout() {
 
 #[test]
 fn every_table_puts_ss_size_and_ss_flags_in_separate_words_after_ss_sp() {
-    for name in TABLES {
+    let tables = tables();
+    assert!(tables.len() >= 3, "std.rt gives too few tables: {tables:?}");
+    for name in &tables {
         let fields = fields_of(name, &["ss_size_at", "ss_flags_at"]);
         let offsets: Vec<i128> = fields.iter().map(|(_, at)| *at).collect();
         assert_eq!(offsets.len(), 2, "{name} lacks a `stack_t` field");
