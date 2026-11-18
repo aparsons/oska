@@ -1746,7 +1746,7 @@ impl<'l, 'p> Body<'l, 'p> {
         let platform = self.lowering.target.platform();
         let slot = platform.slot(import).unwrap_or_default();
         let mut args: Vec<Temp> = args.iter().copied().take(import.args.into()).collect();
-        for &value in import.then {
+        for &value in import.extra_args {
             args.push(self.constant(value));
         }
         // `errno`'s address, for a call that clears it first.
@@ -1827,9 +1827,9 @@ impl<'l, 'p> Body<'l, 'p> {
         let arg = |i: usize| args.get(i).copied().unwrap_or_default();
         Ok(match runtime {
             Runtime::Syscall(call) => match (self.lowering.target.platform().call)(call) {
-                OsCall::Trap { number, then } => {
+                OsCall::Trap { number, extra_args } => {
                     let mut args = args.to_vec();
-                    for &value in then {
+                    for &value in extra_args {
                         args.push(self.constant(value));
                     }
                     let dst = self.temp();
