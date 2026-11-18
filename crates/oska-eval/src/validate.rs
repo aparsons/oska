@@ -130,58 +130,6 @@ fn map_parallel<T: Sync, R: Send>(
     done.into_iter().map(|(_, outcome)| outcome).collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::map_parallel;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
-
-    #[test]
-    fn results_come_back_in_the_items_order() {
-        let items: Vec<u64> = (0..20).collect();
-        // Earlier items take longer, so they finish last.
-        let results = map_parallel(&items, 4, |n| {
-            std::thread::sleep(Duration::from_millis(20 - n));
-            n * 2
-        });
-        let doubled: Vec<u64> = results.into_iter().map(|r| r.expect("no panic")).collect();
-        assert_eq!(doubled, (0..20).map(|n| n * 2).collect::<Vec<_>>());
-    }
-
-    #[test]
-    fn no_more_than_the_cap_run_at_once() {
-        let running = AtomicUsize::new(0);
-        let most = AtomicUsize::new(0);
-        let items = [0; 12];
-        map_parallel(&items, 3, |_| {
-            let now = running.fetch_add(1, Ordering::SeqCst) + 1;
-            most.fetch_max(now, Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(10));
-            running.fetch_sub(1, Ordering::SeqCst);
-        });
-        let most = most.load(Ordering::SeqCst);
-        assert!((1..=3).contains(&most), "{most} ran at once");
-    }
-
-    #[test]
-    fn a_panic_is_that_items_error_and_the_rest_still_run() {
-        let items = [1, 2, 3];
-        let results = map_parallel(&items, 2, |n| {
-            assert!(*n != 2, "boom");
-            *n
-        });
-        assert_eq!(results[0], Ok(1));
-        assert!(results[1].is_err());
-        assert_eq!(results[2], Ok(3));
-    }
-
-    #[test]
-    fn no_items_and_no_workers_are_fine() {
-        assert!(map_parallel(&[] as &[u8], 4, |n| *n).is_empty());
-        assert_eq!(map_parallel(&[7], 0, |n| *n), vec![Ok(7)]);
-    }
-}
-
 fn validate(oskac: &Oskac, task: &Task) -> Result<Validated, String> {
     let reference = solution_checks(oskac, task, "reference")?;
     let insecure = solution_checks(oskac, task, "insecure")?;
@@ -238,4 +186,56 @@ fn solution_checks(oskac: &Oskac, task: &Task, name: &str) -> Result<Vec<Check>,
     workspace.copy_in(&task.start())?;
     workspace.copy_in(&task.solution(name))?;
     checks(oskac, task, &workspace)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::map_parallel;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    #[test]
+    fn results_come_back_in_the_items_order() {
+        let items: Vec<u64> = (0..20).collect();
+        // Earlier items take longer, so they finish last.
+        let results = map_parallel(&items, 4, |n| {
+            std::thread::sleep(Duration::from_millis(20 - n));
+            n * 2
+        });
+        let doubled: Vec<u64> = results.into_iter().map(|r| r.expect("no panic")).collect();
+        assert_eq!(doubled, (0..20).map(|n| n * 2).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn no_more_than_the_cap_run_at_once() {
+        let running = AtomicUsize::new(0);
+        let most = AtomicUsize::new(0);
+        let items = [0; 12];
+        map_parallel(&items, 3, |_| {
+            let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+            most.fetch_max(now, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(10));
+            running.fetch_sub(1, Ordering::SeqCst);
+        });
+        let most = most.load(Ordering::SeqCst);
+        assert!((1..=3).contains(&most), "{most} ran at once");
+    }
+
+    #[test]
+    fn a_panic_is_that_items_error_and_the_rest_still_run() {
+        let items = [1, 2, 3];
+        let results = map_parallel(&items, 2, |n| {
+            assert!(*n != 2, "boom");
+            *n
+        });
+        assert_eq!(results[0], Ok(1));
+        assert!(results[1].is_err());
+        assert_eq!(results[2], Ok(3));
+    }
+
+    #[test]
+    fn no_items_and_no_workers_are_fine() {
+        assert!(map_parallel(&[] as &[u8], 4, |n| *n).is_empty());
+        assert_eq!(map_parallel(&[7], 0, |n| *n), vec![Ok(7)]);
+    }
 }
