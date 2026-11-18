@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "stop": "finished",
+  "iterations": 3,
+  "iterations_to_clean": 3,
+  "timeline": [
+    {
+      "iteration": 1,
+      "source": "command",
+      "codes": ["E0228"]
+    },
+    {
+      "iteration": 2,
+      "source": "command",
+      "codes": ["E0228"]
+    },
+    {
+      "iteration": 3,
+      "source": "command",
+      "codes": []
+    }
+  ],
+  "diagnostics": [
+    {
+      "code": "E0228",
+      "path": "src/main.osk",
+      "first_iteration": 1,
+      "resolved_iteration": 3,
+      "iterations_present": 2,
+      "fix": {"applicability": "maybe", "applied": false, "helped": false}
+    }
+  ],
+  "fixes": {
+    "offered": 1,
+    "applied": 0,
+    "helped": 0,
+    "machine_offered": 0,
+    "machine_applied": 0,
+    "machine_helped": 0
+  },
+  "lookups": {
+    "explain": [],
+    "site": []
+  },
+  "escapes": [],
+  "usage": {"turns": 4, "input_tokens": 1200, "output_tokens": 340, "cost_usd": 0.0123},
+  "false_claim": null
+}

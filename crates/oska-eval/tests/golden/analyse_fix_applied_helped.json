@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "stop": "finished",
+  "iterations": 2,
+  "iterations_to_clean": 2,
+  "timeline": [
+    {
+      "iteration": 1,
+      "source": "command",
+      "codes": ["E0005"]
+    },
+    {
+      "iteration": 2,
+      "source": "command",
+      "codes": []
+    }
+  ],
+  "diagnostics": [
+    {
+      "code": "E0005",
+      "path": "src/main.osk",
+      "first_iteration": 1,
+      "resolved_iteration": 2,
+      "iterations_present": 1,
+      "fix": {"applicability": "machine", "applied": true, "helped": true}
+    }
+  ],
+  "fixes": {
+    "offered": 1,
+    "applied": 1,
+    "helped": 1,
+    "machine_offered": 1,
+    "machine_applied": 1,
+    "machine_helped": 1
+  },
+  "lookups": {
+    "explain": [],
+    "site": []
+  },
+  "escapes": [],
+  "usage": {"turns": 4, "input_tokens": 1200, "output_tokens": 340, "cost_usd": 0.0123},
+  "false_claim": null
+}
