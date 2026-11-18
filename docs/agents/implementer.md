@@ -23,6 +23,15 @@ Export it for every cargo command (otherwise builds waste CPU and disk on debug 
 export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
 ```
 
+## Shell habits
+
+The session's permission check refuses some command shapes, which stalls an unattended run.
+
+- Write scripts, file contents and PR, issue and commit bodies with the Write tool, then pass the file: `gh pr create --body-file F`, `gh issue create --body-file F`, `git commit -F F`, `python3 F`. A heredoc is refused.
+- Run one git command per call, never `a && git b`. A compound command that contains git is refused.
+- Never use `git -c` or `git config`. Hooks and identity are already configured, and both are refused.
+- Run a long check in the background and wait on it (see Logs and waiting). A foreground call is cut off after about 180s.
+
 ## Logs and waiting
 
 - Put logs and result files outside the worktree, e.g. `LOG=${TMPDIR:-/tmp}/check-t286.log RC=${TMPDIR:-/tmp}/check-t286.rc`. A file inside the worktree makes the tree dirty, so the check writes no pass stamp and the pre-push hook runs the whole check again.
