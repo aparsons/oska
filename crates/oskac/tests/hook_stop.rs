@@ -11,9 +11,8 @@ mod common;
 use std::path::Path;
 use std::process::Command;
 
-use common::hook::{
-    hook, json_string, scratch, snapshot, symlink_file, write_all, Hooked, MANIFEST,
-};
+use common::hook::{hook, scratch, snapshot, symlink_file, write_all, Hooked, MANIFEST};
+use common::portable::json_str;
 use common::Json;
 
 fn string(json: Option<&Json>) -> &str {
@@ -39,7 +38,7 @@ fn stop_input(cwd: &Path, active: bool) -> String {
     format!(
         "{{\"session_id\":\"s\",\"cwd\":{},\"hook_event_name\":\"Stop\",\
          \"stop_hook_active\":{active}}}",
-        json_string(&cwd.to_string_lossy())
+        json_str(&cwd.to_string_lossy())
     )
 }
 

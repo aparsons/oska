@@ -658,7 +658,7 @@ fn on_package(command: Command, dir: &str, flags: Flags, args: &[String]) -> Exi
     let report = package::check(&package, &refused, options);
     // A package that needs a newer `oskac` (`E0407`) is refused first, from
     // every command, even a `run` of a library.
-    let too_old = report.diagnostics.iter().any(|d| d.code == "E0407");
+    let too_old = oska_check::needs_newer_oskac(&report);
     if !too_old && matches!(command, Command::Run | Command::Build(_)) && package.is_library() {
         return refuse(command, vec![oska_check::run_of_library(dir)], json, dir);
     }

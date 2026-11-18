@@ -72,6 +72,16 @@ pub use package::{
     check_file, check_package, not_a_package, run_of_library, symlink_refused, Locator,
     ModuleSource, Package, ENTRY_MODULE, MANIFEST_PATH,
 };
+
+/// Whether `report` says the package needs a newer `oskac` (`E0407`). The
+/// one place that decides it: such a package is refused for that alone, by
+/// every command.
+pub fn needs_newer_oskac(report: &CheckReport) -> bool {
+    report
+        .diagnostics
+        .iter()
+        .any(|d| d.code == codes::MANIFEST_TOOLCHAIN)
+}
 pub use toolchain::{
     debug_escapes, declared_intrinsics as std_rt_intrinsics, is_intrinsic,
     RT_SOURCE as STD_RT_SOURCE,

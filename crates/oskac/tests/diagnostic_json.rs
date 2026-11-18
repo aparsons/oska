@@ -6,16 +6,14 @@
 
 mod common;
 
+use common::portable::Scratch;
 use common::Json;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
 
 /// A fresh directory for one test's files.
-fn scratch(name: &str) -> PathBuf {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("diagnostic_json_{name}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("should create the scratch directory");
-    dir
+fn scratch(name: &str) -> Scratch {
+    Scratch::new("diagnostic_json", name)
 }
 
 /// `files`, each a path relative to `dir` and its text, written there.
