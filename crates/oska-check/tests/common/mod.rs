@@ -6,6 +6,8 @@
 
 #![allow(dead_code)]
 
+pub mod platform;
+
 use oska_check::{check_module, check_package, CheckOptions, CheckReport, ModuleSource, Package};
 use oska_syntax::{Diagnostic, Location};
 

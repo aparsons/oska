@@ -10,6 +10,10 @@ Run `scripts/check.sh` before every commit; it is the whole CI test job. The pre
 
 ## Agent skills
 
+The skills in `.claude/skills/` are our own; start with `/skill-guide`. To write or change one: `docs/agents/skills.md`.
+
+Agents merge their own pull requests when the conditions in `docs/agents/merge-policy.md` hold.
+
 ### Implementing a ticket
 
 Fast inner loop, lean cargo environment, build slots, pass stamp, kill guard, ticket CI: `docs/agents/implementer.md`.

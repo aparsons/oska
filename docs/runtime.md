@@ -396,34 +396,34 @@ fn main() {
 ## Errors and traits
 
 - **`main` returning `Err(e)`.** The runtime prints `e.to_string()`, the `Display` text of `e`, and a newline to stderr, and exits with code 1.
-- **`IoError` wording.** On both backends and every platform, the message of an `IoError` that comes from the operating system is Oska's own wording for the kind of failure, never the system's text or its error number, so the same failure prints the same bytes everywhere ([ADR 0014](adr/0014-every-supported-platform-builds-and-runs-natively.md)). A path the failure concerns comes first, as in `` `data.txt`: not found ``. One table in `oska-sys` (`IO_KINDS`) holds the wordings; the interpreter reads it directly and `std.rt` carries the same table by system error number, and a test checks the two for every number. A failure of a kind not in the table says `I/O error`. The confinement refusals (a symlink, a hard link, an escaping or absolute path, a name that is not one component) keep their own wording, listed under [Capabilities](#capabilities).
+- **`IoError` wording.** On both backends and every platform, the message of an `IoError` that comes from the operating system is Oska's own wording for the kind of failure, never the system's text or its error number, so the same failure prints the same bytes everywhere ([ADR 0014](adr/0014-every-supported-platform-builds-and-runs-natively.md)). A path the failure concerns comes first, as in `` `data.txt`: not found ``. One table in `oska-sys` (`IO_KINDS`) holds the wordings by kind, and one table per operating system (`LINUX_ERRORS`, `MACOS_ERRORS`, `WINDOWS_ERRORS`) gives the kind of each system error code: the raw `errno` on Linux and macOS, the Win32 error code on Windows. The wording is keyed by that code, never by Rust's `io::ErrorKind`, whose mapping from a code changes between Rust versions, so it does not depend on the compiler that built the toolchain. The interpreter reads these tables directly and `std.rt` carries Linux's by error number, and a test checks the two for every number. A code in no table says `I/O error`. The confinement refusals (a symlink, a hard link, an escaping or absolute path, a name that is not one component) keep their own wording, listed under [Capabilities](#capabilities).
 
-  | Kind of failure | Wording |
-  | --- | --- |
-  | not found | `not found` |
-  | permission denied | `permission denied` |
-  | already exists | `already exists` |
-  | not a directory | `not a directory` |
-  | is a directory | `is a directory` |
-  | directory not empty | `directory not empty` |
-  | no space | `no space left on device` |
-  | broken pipe | `broken pipe` |
-  | invalid data | `invalid data` |
-  | invalid input | `invalid input` |
-  | invalid file name | `invalid file name` |
-  | read-only file system | `read-only file system` |
-  | file too large | `file too large` |
-  | resource busy | `resource busy` |
-  | quota exceeded | `quota exceeded` |
-  | across devices | `cannot move across devices` |
-  | too many links | `too many links` |
-  | not seekable | `not seekable` |
-  | out of memory | `out of memory` |
-  | not supported | `not supported` |
-  | interrupted | `interrupted` |
-  | would block | `would block` |
-  | timed out | `timed out` |
-  | any other | `I/O error` |
+  | Kind (`IO_KINDS`) | Wording | Linux and macOS `errno` | Windows code |
+  | --- | --- | --- | --- |
+  | `NotFound` | `not found` | `ENOENT` | `ERROR_FILE_NOT_FOUND`, `ERROR_PATH_NOT_FOUND`, `ERROR_INVALID_DRIVE`, `ERROR_BAD_NETPATH`, `ERROR_BAD_NET_NAME` |
+  | `PermissionDenied` | `permission denied` | `EACCES`, `EPERM` | `ERROR_ACCESS_DENIED` |
+  | `AlreadyExists` | `already exists` | `EEXIST` | `ERROR_FILE_EXISTS`, `ERROR_ALREADY_EXISTS` |
+  | `NotADirectory` | `not a directory` | `ENOTDIR` | `ERROR_DIRECTORY` |
+  | `IsADirectory` | `is a directory` | `EISDIR` | `ERROR_DIRECTORY_NOT_SUPPORTED` |
+  | `DirectoryNotEmpty` | `directory not empty` | `ENOTEMPTY` | `ERROR_DIR_NOT_EMPTY` |
+  | `StorageFull` | `no space left on device` | `ENOSPC` | `ERROR_DISK_FULL`, `ERROR_HANDLE_DISK_FULL` |
+  | `BrokenPipe` | `broken pipe` | `EPIPE` | `ERROR_BROKEN_PIPE`, `ERROR_NO_DATA` |
+  | `InvalidData` | `invalid data` | none | none |
+  | `InvalidInput` | `invalid input` | `EINVAL` | `ERROR_INVALID_PARAMETER` |
+  | `InvalidFilename` | `invalid file name` | `ENAMETOOLONG` | `ERROR_INVALID_NAME`, `ERROR_BAD_PATHNAME`, `ERROR_FILENAME_EXCED_RANGE` |
+  | `ReadOnlyFilesystem` | `read-only file system` | `EROFS` | `ERROR_WRITE_PROTECT` |
+  | `FileTooLarge` | `file too large` | `EFBIG` | `ERROR_FILE_TOO_LARGE` |
+  | `ResourceBusy` | `resource busy` | `EBUSY` | `ERROR_BUSY` |
+  | `QuotaExceeded` | `quota exceeded` | `EDQUOT` | `ERROR_DISK_QUOTA_EXCEEDED` |
+  | `CrossesDevices` | `cannot move across devices` | `EXDEV` | `ERROR_NOT_SAME_DEVICE` |
+  | `TooManyLinks` | `too many links` | `EMLINK` | `ERROR_TOO_MANY_LINKS` |
+  | `NotSeekable` | `not seekable` | `ESPIPE` | `ERROR_SEEK_ON_DEVICE` |
+  | `OutOfMemory` | `out of memory` | `ENOMEM` | `ERROR_NOT_ENOUGH_MEMORY`, `ERROR_OUTOFMEMORY` |
+  | `Unsupported` | `not supported` | `ENOSYS`, `ENOTSUP`, `EOPNOTSUPP` | `ERROR_CALL_NOT_IMPLEMENTED` |
+  | `Interrupted` | `interrupted` | `EINTR` | none |
+  | `WouldBlock` | `would block` | `EAGAIN` | none |
+  | `TimedOut` | `timed out` | `ETIMEDOUT` | `ERROR_SEM_TIMEOUT`, `WAIT_TIMEOUT`, `ERROR_TIMEOUT` |
+  | any other | `I/O error` | any other | any other |
 
   `invalid data` is not reachable from a system error number: the runtime raises it itself, for bytes that are not text (`stream did not contain valid UTF-8`, which names its own cause).
 - **`?`** returns `None` or `Err(e)` from the enclosing function or closure. When the function's error type differs, `e` is converted through the `From` impl the checker chose.
