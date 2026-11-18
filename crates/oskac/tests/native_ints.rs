@@ -4,9 +4,12 @@
 //! ranges, calls and recursion with the call-depth limit, and integer
 //! text (interpolation and `to_string`) on the runtime's heap.
 
-#![cfg(all(
-    target_os = "linux",
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 
 mod differential;
