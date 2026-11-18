@@ -318,7 +318,7 @@ impl Host for RealHost {
     fn open_root(&mut self, path: &Path) -> io::Result<RootHandle> {
         // Without a trailing `/` or `.`, which would follow a symlink in
         // the last component.
-        let path: PathBuf = separated(path).components().collect();
+        let path: PathBuf = with_backslashes(path).components().collect();
         let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
             // `/`, or a path ending in `..`: no symlink to refuse.
             let dir = oska_sys::Dir::open(&path)?;
@@ -340,15 +340,14 @@ impl Host for RealHost {
         if !narrows(root, names)? {
             return Ok(root.clone());
         }
-        windows_names(names)?;
-        let dir = root_dir(root)?.open_dir(names)?;
+        let dir = checked_names(root, names)?.open_dir(names)?;
         // Canonical as it stands: the walk met no symlink. Not
         // canonicalized again, which would follow one swapped in since.
         Ok(RootHandle::new(&joined(root, names), None, Some(dir)))
     }
 
     fn open_file_root(&mut self, path: &Path) -> io::Result<RootHandle> {
-        let (parent, name) = split_file_root(&separated(path))?;
+        let (parent, name) = split_file_root(&with_backslashes(path))?;
         let dir = oska_sys::Dir::open(&parent)?;
         let path = std::fs::canonicalize(&parent)?.join(&name);
         Ok(RootHandle::new(&path, Some(&name), Some(dir)))
@@ -356,8 +355,7 @@ impl Host for RealHost {
 
     fn open_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<RootHandle> {
         let (name, parents) = file_beneath(root, names)?;
-        windows_names(names)?;
-        let dir = root_dir(root)?.open_dir(parents)?;
+        let dir = checked_names(root, names)?.open_dir(parents)?;
         Ok(RootHandle::new(
             &joined(root, names),
             Some(OsStr::new(name)),
@@ -366,14 +364,10 @@ impl Host for RealHost {
     }
 
     fn read_file_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<String> {
-        let dir = root_dir(root)?;
         let mut file = match &root.file {
             Some(_) if !names.is_empty() => return Err(beneath_a_file(names)),
-            Some(name) => dir.open_file(&[name])?,
-            None => {
-                windows_names(names)?;
-                dir.open_file(names)?
-            }
+            Some(name) => root_dir(root)?.open_file(&[name])?,
+            None => checked_names(root, names)?.open_file(names)?,
         };
         let mut text = String::new();
         file.read_to_string(&mut text)?;
@@ -386,14 +380,10 @@ impl Host for RealHost {
         names: &[String],
         contents: &str,
     ) -> io::Result<()> {
-        let dir = root_dir(root)?;
         let mut file = match &root.file {
             Some(_) if !names.is_empty() => return Err(beneath_a_file(names)),
-            Some(name) => dir.create_file(&[name])?,
-            None => {
-                windows_names(names)?;
-                dir.create_file(names)?
-            }
+            Some(name) => root_dir(root)?.create_file(&[name])?,
+            None => checked_names(root, names)?.create_file(names)?,
         };
         file.write_all(contents.as_bytes())
     }
@@ -402,16 +392,14 @@ impl Host for RealHost {
         if root.is_file() {
             return Err(a_file_root(root));
         }
-        windows_names(names)?;
-        root_dir(root)?.create_dir(names)
+        checked_names(root, names)?.create_dir(names)
     }
 
     fn list_dir_beneath(&mut self, root: &RootHandle, names: &[String]) -> io::Result<Vec<String>> {
         if root.is_file() {
             return Err(a_file_root(root));
         }
-        windows_names(names)?;
-        let entries = root_dir(root)?.open_dir(names)?.entries()?;
+        let entries = checked_names(root, names)?.open_dir(names)?.entries()?;
         sorted_names(entries, &joined(root, names))
     }
 
@@ -424,7 +412,18 @@ impl Host for RealHost {
     }
 }
 
+/// The OS handle of `root`, to walk `names` beneath, once each name is
+/// known to be a file's own name on Windows (see [`windows_names`]). Every
+/// `RealHost` method that walks names beneath a root gets its handle
+/// here, so none can skip the check.
+fn checked_names<'r>(root: &'r RootHandle, names: &[String]) -> io::Result<&'r oska_sys::Dir> {
+    windows_names(names)?;
+    root_dir(root)
+}
+
 /// The OS handle of `root`, which only a root [`FakeHost`] opened lacks.
+/// Used alone only for a file root's own name, which came from trusted
+/// text; names walked beneath a root go through [`checked_names`].
 fn root_dir(root: &RootHandle) -> io::Result<&oska_sys::Dir> {
     root.os.as_deref().ok_or_else(|| {
         io::Error::new(
@@ -438,7 +437,7 @@ fn root_dir(root: &RootHandle) -> io::Result<&oska_sys::Dir> {
 /// one in every path but a verbatim one (`\\?\C:\...`, as
 /// `canonicalize` gives), where Windows would take it for part of a name,
 /// so there it becomes `\`. Elsewhere `path` is as it is.
-fn separated(path: &Path) -> PathBuf {
+fn with_backslashes(path: &Path) -> PathBuf {
     match path.to_str() {
         Some(text) if cfg!(windows) => PathBuf::from(text.replace('/', "\\")),
         _ => path.to_path_buf(),
@@ -465,11 +464,16 @@ fn windows_names(names: &[String]) -> io::Result<()> {
     Ok(())
 }
 
-/// Refuse `name` unless it is a file's own name on Windows. A reserved
-/// device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to
-/// `LPT9`, and `CONIN$`, `CONOUT$`), with or without an extension, opens
-/// that device in every directory, and a `:` opens an alternate data
-/// stream, so neither is a file beneath the root.
+/// Refuse `name` unless it is a file's own name on Windows. A `:` opens
+/// an alternate data stream, so it is not a file beneath the root. A
+/// reserved device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`,
+/// `LPT1` to `LPT9`, and `CONIN$`, `CONOUT$`), with or without an
+/// extension, is refused too. The walk's own open, relative to a
+/// directory handle, would reach a plain file by that name, but Windows'
+/// path functions, which other programs open files with, may take it for
+/// the device, so such a file could be written and never read back or
+/// removed by path. Refusing it keeps the names a program may use what
+/// they were before the walk opened names beneath a handle (#175).
 fn windows_file_name(name: &str) -> io::Result<()> {
     let refused = |what: &str| {
         Err(io::Error::new(
