@@ -38,7 +38,10 @@ mod unix;
 mod windows;
 mod wording;
 
-pub use wording::{io_error_message, wording, IO_KINDS, OTHER_WORDING};
+pub use wording::{
+    io_error_message, system_wording, wording, IO_KINDS, LINUX_ERRORS, MACOS_ERRORS, OTHER_WORDING,
+    WINDOWS_ERRORS,
+};
 
 #[cfg(unix)]
 pub use unix::{effective_uid, Dir};
