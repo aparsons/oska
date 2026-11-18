@@ -70,14 +70,15 @@ fn a_missing_task_directory_is_bad_input() {
         "tests/fixtures/validate/absent",
     ]);
     assert_eq!(outcome.code, 2);
-    assert!(outcome.stdout.is_empty(), "{}", outcome.stdout);
+    assert!(outcome.stderr.is_empty(), "{}", outcome.stderr);
     assert!(
         outcome
-            .stderr
+            .stdout
             .contains("cannot read tests/fixtures/validate/absent"),
         "{}",
-        outcome.stderr
+        outcome.stdout
     );
+    assert!(outcome.stdout.contains("\"valid\": false"));
 }
 
 #[test]
