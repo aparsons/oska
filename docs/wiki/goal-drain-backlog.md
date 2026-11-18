@@ -105,3 +105,8 @@ The PR #358 review found the `Platform` table cannot express libSystem calls. On
 - Tests: 2,338 `#[test]` in crates/ on `origin/main@19f430c` (2,224 at the third report).
 - Open at session end: #401 (#171, from the macOS project thread, CI green, owned by that thread). The session's last subagent tokens were in #384's fixes. Cumulative estimate about 3.8M subagent tokens, $30–$115 at assumed list prices.
 - 2026-11-18: the user asked to finish current work and wind down. Nothing was started after that. Restart point: [handoff-2026-11-18](handoff-2026-11-18.md).
+
+## Lint 2026-11-18 (`origin/main@fd7696a`)
+- The items "not re-checked" in the 2026-11-17 lint are now checked per `gh`: #349 closed 2026-11-18, #344 closed 2026-11-18 (PR #399); #313 and #314 are still open. The Queue's "Queued" labels remain superseded.
+- #404 (the guide test depends on `~/.cache/oska`'s permissions) is open and was filed after the session end note above.
+- Related: [forecast-2026-11-18](forecast-2026-11-18.md), [problem-duplicate-dispatch](problem-duplicate-dispatch.md), [problem-disk-fills](problem-disk-fills.md), [decision-fail-closed-escape-detection](decision-fail-closed-escape-detection.md).
