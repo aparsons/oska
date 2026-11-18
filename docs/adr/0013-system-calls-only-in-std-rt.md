@@ -9,6 +9,8 @@ These intrinsics exist only inside one module that ships with the toolchain, `st
 - **The checker** rejects, with its own error code, any import of `std.rt` and any use of an intrinsic outside it, in user code and dependency code alike.
 - **`scripts/check.sh`** checks that only `std.rt` uses them, in the same way the unsafe guard keeps `unsafe` inside `oska-sys` ([ADR 0009](0009-oska-sys-is-the-only-crate-with-unsafe.md)).
 
+[ADR 0015](0015-macos-intrinsics-are-libsystem-calls.md) amends this decision: a system-call intrinsic is one call of the operating system's interface, which on macOS is one libSystem function, and it lists what the backend may add around that call.
+
 ## Why
 
 A raw system call is **ambient authority**: code that can call `openat` bypasses every capability. Keeping all raw OS access in one small, toolchain-owned module gives reviewers a single place to check, and the same rule as `oska-sys`.
