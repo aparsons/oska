@@ -26,8 +26,13 @@ pub enum Call {
     Edit { path: String, changes: Vec<Change> },
     /// A fetch of a web page.
     Fetch(String),
-    /// Any other tool, with the file paths it was given.
-    Other { tool: String, paths: Vec<String> },
+    /// Any other tool, with the file paths it was given and, for Glob and
+    /// Grep, its search patterns.
+    Other {
+        tool: String,
+        paths: Vec<String>,
+        patterns: Vec<String>,
+    },
 }
 
 /// One thing that happened in a run, in order.
@@ -74,6 +79,14 @@ impl Call {
             Call::Edit { path, .. } => vec![path],
             Call::Other { paths, .. } => paths.iter().map(String::as_str).collect(),
             Call::Command(_) | Call::Fetch(_) => Vec::new(),
+        }
+    }
+
+    /// The search patterns of a Glob or Grep call.
+    pub fn patterns(&self) -> Vec<&str> {
+        match self {
+            Call::Other { patterns, .. } => patterns.iter().map(String::as_str).collect(),
+            _ => Vec::new(),
         }
     }
 
@@ -246,12 +259,16 @@ fn call(name: &str, input: &JsonValue) -> Call {
         },
         _ => Call::Other {
             tool: name.to_string(),
-            // Glob and Grep reach files through `pattern` too.
-            paths: ["file_path", "path", "notebook_path", "pattern"]
+            paths: ["file_path", "path", "notebook_path"]
                 .iter()
-                .filter(|key| **key != "pattern" || matches!(name, "Glob" | "Grep"))
                 .filter_map(|key| path(key))
                 .collect(),
+            // Glob and Grep reach files through `pattern` too.
+            patterns: if matches!(name, "Glob" | "Grep") {
+                path("pattern").into_iter().collect()
+            } else {
+                Vec::new()
+            },
         },
     }
 }

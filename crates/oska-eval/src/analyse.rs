@@ -35,12 +35,18 @@
 //! It reads text, never the file system. Symlinks are not resolved, so a
 //! link inside the workspace that points out is not seen. Shell words are
 //! normalised against the workspace, not against a directory an earlier
-//! `cd` moved to (which can only over-report). Variables other than `HOME`,
-//! command substitutions, `sh -c` and `eval` strings, and globs in the
-//! target of `cd` or `git -C` are reported as `unresolved`, never as
-//! inside. A script the agent wrote and then ran, and a path a program
-//! builds itself, are beyond it. A `Grep` pattern is a regular expression
-//! but is read as a path too, so it can over-report.
+//! `cd` moved to (which can only over-report). It fails closed: inside is
+//! the proven case, never the default. A shell word with an expansion
+//! character (`$`, a backtick, `{ } * ? [ ( ) ! < > | ; &`) is reported as
+//! `unresolved` unless it is a glob that plainly stays inside (`src/*.osk`);
+//! so are variables other than `HOME`, command substitutions, brace
+//! expansion, a glob component that can match `..` (`.*`, `[.][.]`), `sh -c`
+//! and `eval` strings, and any glob in the target of `cd` or `git -C`. A
+//! `Glob` or `Grep` pattern is unresolved when it has braces and names
+//! paths, or has a component that can match `..`. A script the agent wrote
+//! and then ran, and a path a program builds itself, are beyond it. A `Grep`
+//! pattern is a regular expression but is read as a path when it has a
+//! separator, so it can over-report.
 //!
 //! Diagnostics are read from `oskac check`'s JSON, from the hook's JSON, or
 //! from `oskac check`'s text; unknown fields are ignored.
@@ -180,10 +186,18 @@ fn analyse(
             Event::ToolCall { id, call } => {
                 calls.insert(id, call);
                 for path in call.paths() {
-                    if let Some(status) = verdict(path, &ws, false) {
+                    if let Some(status) = verdict(path, &ws, Kind::Path) {
                         push_unique(
                             &mut escapes,
                             (call.tool().to_string(), path.to_string(), status),
+                        );
+                    }
+                }
+                for pattern in call.patterns() {
+                    if let Some(status) = verdict(pattern, &ws, Kind::Pattern) {
+                        push_unique(
+                            &mut escapes,
+                            (call.tool().to_string(), pattern.to_string(), status),
                         );
                     }
                 }
@@ -808,6 +822,9 @@ fn command_escapes(command: &str, ws: &str) -> Vec<(String, Status)> {
             continue;
         };
         let args = &segment[start + 1..];
+        // Words before the program (`VAR=value`, wrappers) and the program
+        // itself are read like any other word.
+        let before = &segment[..=start];
         // Words taken as a directory the command moves to.
         let mut targets: Vec<usize> = Vec::new();
         if SHELLS.contains(&program) {
@@ -832,13 +849,18 @@ fn command_escapes(command: &str, ws: &str) -> Vec<(String, Status)> {
                 .map(|i| i + 1)
                 .collect();
         }
-        for (i, arg) in args.iter().enumerate() {
-            let strict = targets.contains(&i);
+        let words = before.iter().map(|w| (w, false)).chain(
+            args.iter()
+                .enumerate()
+                .map(|(i, w)| (w, targets.contains(&i))),
+        );
+        for (arg, strict) in words {
+            let kind = if strict { Kind::Target } else { Kind::Word };
             for value in path_values(arg) {
                 if skip_word(&value) {
                     continue;
                 }
-                if let Some(status) = verdict(&value, ws, strict) {
+                if let Some(status) = verdict(&value, ws, kind) {
                     push_unique(&mut found, (value, status));
                 }
             }
@@ -922,10 +944,30 @@ fn normalize(path: &str, base: &str) -> String {
     format!("/{}", parts.join("/"))
 }
 
-/// Whether `path` is outside the workspace, or cannot be told. `target`
-/// is a directory a command moves to, where a glob or a bare `-` is
-/// unresolved too. `None` for a word that is no path, or inside.
-fn verdict(path: &str, ws: &str, target: bool) -> Option<Status> {
+/// What a word is, which decides what it may hold and still be inside.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    /// A word of a shell command: the shell expands it.
+    Word,
+    /// A word that is the directory a command moves to (`cd`, `git -C`).
+    Target,
+    /// A path a tool was given: not expanded, but `$` and `~` are read.
+    Path,
+    /// A Glob or Grep pattern: a glob or a regular expression.
+    Pattern,
+}
+
+/// Characters a shell expands or acts on. A shell word that holds one is
+/// not inside unless it is a glob that plainly stays inside.
+const EXPANSION: [char; 14] = [
+    '$', '`', '{', '}', '*', '?', '[', '(', ')', '!', '<', '>', '|', ';',
+];
+
+/// Whether `path` is outside the workspace or cannot be told, and `None`
+/// only when it is no path or plainly inside. Inside is the proven case:
+/// anything with an expansion character is unresolved unless it is a glob
+/// whose every component is a name, `*` or `?` among other letters.
+fn verdict(path: &str, ws: &str, kind: Kind) -> Option<Status> {
     let after_home = |rest: &str| !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_');
     if path.starts_with('~')
         || path.strip_prefix("$HOME").is_some_and(after_home)
@@ -934,10 +976,35 @@ fn verdict(path: &str, ws: &str, target: bool) -> Option<Status> {
         return Some(Status::Outside);
     }
     let separator = path.contains(['/', '\\']);
-    if path.contains(['$', '`']) {
-        return (separator || target).then_some(Status::Unresolved);
+    let shell = matches!(kind, Kind::Word | Kind::Target);
+    let unresolved = match kind {
+        Kind::Word | Kind::Target => path.contains(EXPANSION) || path.contains('&'),
+        Kind::Path => path.contains(['$', '`']),
+        // A pattern's braces choose between paths, so they are read only
+        // where the pattern names paths.
+        Kind::Pattern => {
+            path.contains(['{', '}']) && (separator || path.contains("..") || path.contains('~'))
+        }
+    };
+    let glob_only =
+        |p: &str| !p.contains(['$', '`', '{', '}', '(', ')', '!', '<', '>', '|', ';', '&']);
+    if unresolved && !(shell && glob_only(path) && !path.contains(['{', '}'])) {
+        return Some(Status::Unresolved);
     }
-    if target && (path == "-" || path.contains(['*', '?', '[', '{'])) {
+    if kind == Kind::Target && (path == "-" || path.contains(['*', '?', '[', '{'])) {
+        return Some(Status::Unresolved);
+    }
+    if kind == Kind::Pattern && !separator && path != ".." {
+        return None;
+    }
+    // A component made of globs and dots can match `..`.
+    let reaches_up = |component: &str| {
+        let glob = component.contains(['*', '?']);
+        let literal: Vec<char> = component.chars().filter(|c| !"*?".contains(*c)).collect();
+        component.contains('[')
+            || (glob && !literal.is_empty() && literal.iter().all(|c| *c == '.'))
+    };
+    if kind != Kind::Path && path.split(['/', '\\']).any(reaches_up) {
         return Some(Status::Unresolved);
     }
     if separator || path == ".." {
@@ -1087,11 +1154,64 @@ mod tests {
 
     #[test]
     fn tool_inputs_use_the_same_rules() {
-        assert_eq!(verdict("a/../../x", WS, false), Some(Status::Outside));
-        assert_eq!(verdict("$HOME/x", WS, false), Some(Status::Outside));
-        assert_eq!(verdict("../**/*.osk", WS, false), Some(Status::Outside));
-        assert_eq!(verdict("/work/ws/**/*.osk", WS, false), None);
-        assert_eq!(verdict("src/*.osk", WS, false), None);
+        let path = |p| verdict(p, WS, Kind::Path);
+        let pattern = |p| verdict(p, WS, Kind::Pattern);
+        assert_eq!(path("a/../../x"), Some(Status::Outside));
+        assert_eq!(path("$HOME/x"), Some(Status::Outside));
+        assert_eq!(path("$DIR"), Some(Status::Unresolved));
+        assert_eq!(path("src"), None);
+        assert_eq!(pattern("../**/*.osk"), Some(Status::Outside));
+        assert_eq!(pattern("/work/ws/**/*.osk"), None);
+        assert_eq!(pattern("src/*.osk"), None);
+    }
+
+    #[test]
+    fn a_pattern_that_may_reach_above_the_workspace_is_unresolved() {
+        let pattern = |p| verdict(p, WS, Kind::Pattern);
+        assert_eq!(pattern("{/etc,src}/*"), Some(Status::Unresolved));
+        assert_eq!(pattern("{..,x}/y"), Some(Status::Unresolved));
+        assert_eq!(pattern(".*/x"), Some(Status::Unresolved));
+        assert_eq!(pattern("[.][.]/x"), Some(Status::Unresolved));
+        // A regular expression with braces or dots names no path.
+        assert_eq!(pattern("a{2}"), None);
+        assert_eq!(pattern("fn main"), None);
+        assert_eq!(pattern(".*"), None);
+    }
+
+    #[test]
+    fn ordinary_commands_in_the_workspace_are_inside() {
+        inside("cat src/main.osk");
+        inside("oskac check .");
+        inside("/opt/oska/bin/oskac check src");
+        inside("ls src/*.osk");
+        inside("cat ./a/../b.txt");
+        inside("grep -rn \"fn main\" src");
+        assert_eq!(verdict("fn main", WS, Kind::Pattern), None);
+        assert_eq!(verdict("src", WS, Kind::Path), None);
+    }
+
+    #[test]
+    fn a_bare_variable_or_substitution_is_unresolved() {
+        unresolved("cat $F", "$F");
+        unresolved("cat \"$(echo /etc/passwd)\"", "$(echo /etc/passwd");
+        unresolved("cat `pwd`", "`pwd");
+        unresolved("$PROG src", "$PROG");
+    }
+
+    #[test]
+    fn a_brace_expansion_is_unresolved() {
+        unresolved("cat {/etc/passwd,a}", "{/etc/passwd,a}");
+        unresolved("cat {..,x}/y", "{..,x}/y");
+        unresolved("ls --exclude={a,b} src", "{a,b}");
+    }
+
+    #[test]
+    fn a_glob_that_can_match_dot_dot_is_unresolved() {
+        unresolved("ls .*", ".*");
+        unresolved("cat .*/x", ".*/x");
+        unresolved("cat ..?/x", "..?/x");
+        unresolved("cat [.][.]/x", "[.][.]/x");
+        inside("cat .git*");
     }
 
     fn fix(span: Option<(u64, u64)>, replacement: &str) -> FixEdit {
