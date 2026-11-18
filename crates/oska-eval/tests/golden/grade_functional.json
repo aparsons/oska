@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "task": "greeting",
+  "passed": false,
+  "secure": true,
+  "clean": true,
+  "changed": ["src/page.osk"],
+  "checks": [
+    {
+      "group": "functional",
+      "check": "says hello",
+      "outcome": "failed",
+      "detail": "P0011: assertion failed: `actual == expected`: actual \"<p>Goodbye, Ada</p>\", expected \"<p>Hello, Ada</p>\""
+    },
+    {"group": "security", "check": "attack: markup in the name stays text", "outcome": "passed"},
+    {"group": "security", "check": "no audit site the task does not allow", "outcome": "passed"},
+    {"group": "security", "check": "no authority beyond the expected authority", "outcome": "passed"},
+    {"group": "release", "check": "the release check passes", "outcome": "passed"},
+    {
+      "group": "integrity",
+      "check": "no read-only file changed and no hidden checks module added",
+      "outcome": "passed"
+    }
+  ]
+}

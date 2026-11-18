@@ -30,34 +30,96 @@ pub fn harness(args: &[&str]) -> Outcome {
     }
 }
 
-/// The `oskac` this workspace builds, built fresh (once per test binary), so
-/// `cargo test -p oska-eval` alone never uses a stale one or finds none. It
-/// is found in the nearest directory above this test binary that holds one.
+/// The `oskac` the tests run: the one `OSKA_EVAL_OSKAC` names, or else this
+/// workspace's, built fresh (once per test binary) so `cargo test -p
+/// oska-eval` alone never uses a stale one or finds none. Cargo itself says
+/// where the build put it, so neither the profile nor the target directory
+/// is guessed from a path.
 pub fn oskac() -> String {
-    static BUILT: std::sync::Once = std::sync::Once::new();
-    let test = std::env::current_exe().expect("the test should know its path");
-    BUILT.call_once(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let mut build = Command::new(cargo);
-        build
-            .args(["build", "--quiet", "-p", "oskac"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"));
-        if test.components().any(|c| c.as_os_str() == "release") {
-            build.arg("--release");
+    static BUILT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    BUILT
+        .get_or_init(|| match std::env::var("OSKA_EVAL_OSKAC") {
+            Ok(path) => path,
+            Err(_) => build_oskac(),
+        })
+        .clone()
+}
+
+fn build_oskac() -> String {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let mut build = Command::new(cargo);
+    build
+        .args(["build", "--quiet", "-p", "oskac", "--message-format=json"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"));
+    // A test build without debug assertions is a release build.
+    if !cfg!(debug_assertions) {
+        build.arg("--release");
+    }
+    let output = build.output().expect("cargo should start");
+    assert!(
+        output.status.success(),
+        "cargo build -p oskac failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| oska_syntax::parse_json(line).ok())
+        .filter(|message| {
+            message.get("reason").and_then(|r| r.as_str()) == Some("compiler-artifact")
+                && message
+                    .get("target")
+                    .and_then(|t| t.get("name"))
+                    .and_then(|n| n.as_str())
+                    == Some("oskac")
+        })
+        .find_map(|message| {
+            message
+                .get("executable")
+                .and_then(|e| e.as_str())
+                .map(str::to_string)
+        })
+        .expect("cargo should report the oskac it built")
+}
+
+/// A directory in the system's temporary directory, removed when dropped.
+pub struct Scratch(PathBuf);
+
+impl Scratch {
+    pub fn new() -> Scratch {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("oska-eval-test-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("should create a scratch directory");
+        Scratch(dir)
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+
+    pub fn str(&self) -> &str {
+        self.0.to_str().expect("the path should be UTF-8")
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Copies every file beneath `from` to the same relative path beneath `to`.
+pub fn copy_tree(from: &Path, to: &Path) {
+    for entry in std::fs::read_dir(from).expect("should read the directory") {
+        let entry = entry.expect("should read the entry");
+        let target = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            std::fs::create_dir_all(&target).expect("should create the directory");
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).expect("should copy the file");
         }
-        let status = build.status().expect("cargo should start");
-        assert!(status.success(), "cargo build -p oskac failed");
-    });
-    let name = format!("oskac{}", std::env::consts::EXE_SUFFIX);
-    let oskac = test
-        .ancestors()
-        .map(|dir| dir.join(&name))
-        .find(|candidate| candidate.is_file())
-        .unwrap_or_else(|| panic!("no oskac above {}", test.display()));
-    oskac
-        .to_str()
-        .expect("the path should be UTF-8")
-        .to_string()
+    }
 }
 
 /// Compares `actual` with the golden file `tests/golden/<name>`, or rewrites

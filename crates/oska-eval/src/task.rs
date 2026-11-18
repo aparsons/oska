@@ -109,6 +109,8 @@ pub struct Task {
     pub class: String,
     /// `None` for an active task; the reason for a deferred one.
     pub deferred: Option<String>,
+    /// Workspace files the agent must not change.
+    pub read_only: Vec<String>,
     /// For each function the authority report names, the capabilities it
     /// may have.
     pub expected_authority: Vec<(String, Vec<String>)>,
@@ -153,6 +155,23 @@ pub fn load_set(tasks: &Path) -> Result<Vec<Entry>, String> {
     Ok(entries)
 }
 
+/// The active task `id` in `tasks`. A task that is missing, malformed or
+/// deferred is an error: there is nothing to run.
+pub fn load_active(tasks: &Path, id: &str) -> Result<Task, String> {
+    if id.is_empty() || id.contains(['/', '\\']) || id.starts_with('.') {
+        return Err(format!("`{id}` is not a task id"));
+    }
+    let dir = tasks.join(id);
+    if !dir.is_dir() {
+        return Err(format!("no task `{id}` in {}", tasks.display()));
+    }
+    let task = load(id, &dir).map_err(|errors| errors.join("; "))?;
+    match task.deferred {
+        Some(reason) => Err(format!("the task `{id}` is deferred: {reason}")),
+        None => Ok(task),
+    }
+}
+
 /// The names and paths in `dir`, sorted by name.
 fn list(dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
     let cannot = |e: std::io::Error| format!("cannot read {}: {e}", dir.display());
@@ -169,7 +188,8 @@ fn load(id: &str, dir: &Path) -> Result<Task, Vec<String>> {
     let file = format!("{id}/task.json");
     let text = std::fs::read_to_string(dir.join("task.json"))
         .map_err(|e| vec![format!("{file}: cannot read: {e}")])?;
-    let metadata = parse_json(&text).map_err(|e| vec![format!("{file}: {e}")])?;
+    let metadata = parse_json(&text)
+        .map_err(|e| vec![format!("{file}: {}", crate::json::locate(&text, &e))])?;
     if let Some(key) = metadata.duplicate_key() {
         return Err(vec![format!("{file}: the key `{key}` appears twice")]);
     }
@@ -250,7 +270,7 @@ impl Fields<'_> {
         self.count("attempts");
         self.count("turn_limit");
         self.count("timeout_seconds");
-        self.read_only();
+        let read_only = self.read_only();
         let expected_authority = self.expected_authority();
         let allowed_audit = self.allowed_audit();
         let run = self.run();
@@ -263,6 +283,7 @@ impl Fields<'_> {
             dir: dir.to_path_buf(),
             class: class?,
             deferred: deferred?,
+            read_only: read_only?,
             expected_authority: expected_authority?,
             allowed_audit: allowed_audit?,
             run: run?,
@@ -309,22 +330,23 @@ impl Fields<'_> {
         }
     }
 
-    fn read_only(&mut self) {
-        let Some(paths) = self.required("read_only") else {
-            return;
-        };
+    fn read_only(&mut self) -> Option<Vec<String>> {
+        let paths = self.required("read_only")?;
         let Some(paths) = strings(&paths) else {
             self.error("`read_only` must be a list of paths".to_string());
-            return;
+            return None;
         };
-        for path in paths {
-            if !is_relative(&path) {
+        let mut ok = true;
+        for path in &paths {
+            if !is_relative(path) {
                 self.error(format!(
                     "`read_only` entry `{path}` must be a relative path inside the workspace, \
                      with `/` between its parts"
                 ));
+                ok = false;
             }
         }
+        ok.then_some(paths)
     }
 
     fn expected_authority(&mut self) -> Option<Vec<(String, Vec<String>)>> {
