@@ -268,9 +268,12 @@ impl Platform {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OsCall {
     /// The system call `number`, passed the intrinsic's arguments and then
-    /// `then`, the constant arguments the system call takes beyond the
-    /// intrinsic's.
-    Trap { number: u16, then: &'static [i64] },
+    /// `extra_args`, the constant arguments the system call takes beyond
+    /// the intrinsic's.
+    Trap {
+        number: u16,
+        extra_args: &'static [i64],
+    },
     /// A function of the one library the platform links, called by the
     /// platform's C calling convention, with a failure turned into
     /// `-errno`.
@@ -289,8 +292,8 @@ pub struct Import {
     /// How many of the intrinsic's arguments it takes: the rest are
     /// dropped (`readdir` takes only the directory).
     pub args: u8,
-    /// How many arguments it declares before `...`, `then` included: the
-    /// rest are variadic. All of them when it is not variadic.
+    /// How many arguments it declares before `...`, `extra_args` included:
+    /// the rest are variadic. All of them when it is not variadic.
     pub fixed: u8,
     /// Whether its result is a whole word (a pointer, `ssize_t`); if not,
     /// it is a C `int`, whose 32 bits are sign-extended.
@@ -298,7 +301,7 @@ pub struct Import {
     /// How it says it failed.
     pub fails: Fails,
     /// The constant arguments it takes after the intrinsic's.
-    pub then: &'static [i64],
+    pub extra_args: &'static [i64],
 }
 
 /// How a library function says it failed, so the backend can give
@@ -334,12 +337,12 @@ fn linux_call(call: Sys, number: fn(Sys) -> Option<u16>) -> OsCall {
     let Some(number) = number(call) else {
         return OsCall::Same;
     };
-    let then: &'static [i64] = match call {
+    let extra_args: &'static [i64] = match call {
         Sys::Random => &[0],
         Sys::Sigaction => &[0, 8],
         _ => &[],
     };
-    OsCall::Trap { number, then }
+    OsCall::Trap { number, extra_args }
 }
 
 fn linux_aarch64_call(call: Sys) -> OsCall {
@@ -438,7 +441,7 @@ const fn plain(symbol: &'static str, args: u8) -> Import {
         fixed: args,
         wide: false,
         fails: Fails::MinusOne,
-        then: &[],
+        extra_args: &[],
     }
 }
 
@@ -510,7 +513,7 @@ const GETENTROPY: Import = plain("_getentropy", 2);
 /// `sigaction(signal, action, old)`: no old action kept.
 const SIGACTION: Import = Import {
     fixed: 3,
-    then: &[0],
+    extra_args: &[0],
     ..plain("_sigaction", 2)
 };
 const SIGALTSTACK: Import = plain("_sigaltstack", 2);
@@ -731,7 +734,7 @@ mod tests {
                 let expected = if *name == "rt_sys_open_dir" {
                     OsCall::Same
                 } else {
-                    let (_, aarch64, x86_64, then) = rows
+                    let (_, aarch64, x86_64, extra_args) = rows
                         .iter()
                         .find(|row| row.0 == *name)
                         .unwrap_or_else(|| panic!("`{name}` has no row"));
@@ -740,7 +743,7 @@ mod tests {
                     } else {
                         *x86_64
                     };
-                    OsCall::Trap { number, then }
+                    OsCall::Trap { number, extra_args }
                 };
                 assert_eq!(
                     (platform.call)(*call),
@@ -962,13 +965,13 @@ mod tests {
                     import.fixed,
                     import.wide,
                     import.fails,
-                    import.then
+                    import.extra_args
                 ),
                 (row.1, row.2, row.3, row.4, row.5, row.6),
                 "`{name}`"
             );
             assert!(
-                usize::from(import.args) + import.then.len() >= usize::from(import.fixed),
+                usize::from(import.args) + import.extra_args.len() >= usize::from(import.fixed),
                 "`{name}`"
             );
             assert!(MACOS_AARCH64.slot(import).is_some(), "`{name}` is imported");
