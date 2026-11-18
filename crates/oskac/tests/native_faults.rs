@@ -3,9 +3,12 @@
 //! `IoError`, as the interpreter's unbuffered write is, and a fault
 //! signal still shows what the program printed before its report.
 
-#![cfg(all(
-    target_os = "linux",
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 
 mod differential;
@@ -23,15 +26,23 @@ fn three_ways(case: &Case) -> Vec<(Command, &'static str)> {
         .args(["run", "--interpret", case.target()]);
     let mut native = Command::new(env!("CARGO_BIN_EXE_oskac"));
     native.current_dir(&dir).args(["run", case.target()]);
-    vec![
+    let mut ways = vec![
         (interpreter, "the interpreter"),
         (native, "`oskac run` natively"),
         (Command::new(&exe), "the executable"),
-    ]
+    ];
+    // On a Mac `oskac run` is the interpreter until the macOS runtime is
+    // complete (spec #154): the executable is the native way.
+    if cfg!(target_os = "macos") {
+        ways.remove(1);
+    }
+    ways
 }
 
 // ---- The flush at exit ------------------------------------------------------
 
+/// macOS has no `/dev/full`.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_failed_final_flush_is_an_io_error_on_both_backends() {
     // One short line stays in the native buffer until exit, where the
@@ -102,6 +113,7 @@ fn fault_report(number: i32, name: &str) -> String {
 
 /// `oskac run`'s report of a native program killed by SIGSEGV (`E0392`),
 /// as it was before the runtime reported faults itself.
+#[cfg(target_os = "linux")]
 const SEGV_E0392: &str = "error[E0392]: the native program was killed by signal 11 (SIGSEGV): \
                           a fault in the native backend, not in the program; run it with \
                           `--interpret`\n";
@@ -114,6 +126,44 @@ const OVERFLOW_ITEMS: &str = "enum Chain {\n    Link(Int, Chain),\n    End,\n}\n
      fn chain() -> Chain {\n    var c = Chain.End\n    var i = 0\n    \
      while i < 5000000 {\n        c = Chain.Link(i, c)\n        i = i + 1\n    }\n    c\n}\n";
 
+/// `SIGBUS`'s number: the one fault signal whose number differs.
+const SIGBUS: i32 = if cfg!(target_os = "macos") { 10 } else { 7 };
+
+/// The signal a stack overflow raises: an access to the guard region
+/// below `main`'s stack, which Linux reports as `SIGSEGV` and macOS, as
+/// a protection fault, as `SIGBUS`.
+const OVERFLOW_SIGNAL: (i32, &str) = if cfg!(target_os = "macos") {
+    (SIGBUS, "SIGBUS")
+} else {
+    (11, "SIGSEGV")
+};
+
+#[test]
+fn an_executable_that_overflows_its_stack_shows_its_output_then_the_fault_report() {
+    use std::os::unix::process::ExitStatusExt;
+    let src = format!(
+        "{OVERFLOW_ITEMS}\nfn main(io: Stdout) -> Result<(), IoError> {{\n    \
+         io.println(\"printed before the fault\")?\n    let c = dbg(chain())\n    Ok(())\n}}\n"
+    );
+    let (exe, dir) = build_native(&Case::file("fault_executable_overflow", &src));
+    let output = Command::new(&exe)
+        .current_dir(&dir)
+        .output()
+        .expect("the program should run");
+    let (number, name) = OVERFLOW_SIGNAL;
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "printed before the fault\n"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        fault_report(number, name)
+    );
+    assert_eq!(output.status.signal(), Some(number));
+}
+
+/// `oskac run` is native only on Linux until spec #154's #172.
+#[cfg(target_os = "linux")]
 #[test]
 fn output_printed_before_a_stack_overflow_shows_before_the_fault_report() {
     let src = format!(
@@ -138,6 +188,8 @@ fn output_printed_before_a_stack_overflow_shows_before_the_fault_report() {
     assert_eq!(output.status.code(), Some(128 + 11));
 }
 
+/// `oskac test` is native only on Linux until spec #154's #172.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_test_that_overflows_the_stack_is_still_reported_with_e0392() {
     let src = format!(
@@ -172,7 +224,7 @@ const FAULT_SIGNALS: [(i32, &str); 6] = [
     (4, "SIGILL"),
     (5, "SIGTRAP"),
     (6, "SIGABRT"),
-    (7, "SIGBUS"),
+    (SIGBUS, "SIGBUS"),
     (8, "SIGFPE"),
     (11, "SIGSEGV"),
 ];

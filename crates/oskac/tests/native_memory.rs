@@ -1,143 +1,154 @@
 //! Native memory and panics (ticket #160), on whichever of aarch64 and
-//! x86_64 Linux the tests run: where `main`'s stack is and what guards
-//! it, the allocator's size classes and large objects, reference counting
+//! x86_64 Linux and Apple silicon macOS the tests run (#170): where
+//! `main`'s stack is and what guards it (read from `/proc`, so on Linux
+//! only), the allocator's size classes and large objects, reference counting
 //! and copy-on-write, heap text, and panics with the interpreter's codes
 //! and locations.
 //!
 //! Call depth at the `P0021` boundary is `native_ints.rs`'s and
 //! `native_gaps.rs`'s, and deep drops in bounded stack `native_data.rs`'s.
 
-#![cfg(all(
-    target_os = "linux",
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 
 mod differential;
 
-use std::io::Write;
-use std::process::{Command, Stdio};
-use std::time::Duration;
-
 use differential::{assert_same, Case};
 
-/// `read`'s system-call number on the host, which a process waiting on
-/// its stdin is blocked in.
-const READ: u64 = if cfg!(target_arch = "x86_64") { 0 } else { 63 };
+/// Where `main`'s stack is, read from Linux's `/proc`.
+#[cfg(target_os = "linux")]
+mod stack {
+    use super::differential;
+    use super::Case;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
 
-/// One line of `/proc/<pid>/maps`.
-#[derive(Debug)]
-struct Mapping {
-    start: u64,
-    end: u64,
-    perms: String,
-    /// The file or pseudo-file it shows, such as `[stack]`; empty for
-    /// anonymous memory.
-    name: String,
-}
+    /// `read`'s system-call number on the host, which a process waiting on
+    /// its stdin is blocked in.
+    const READ: u64 = if cfg!(target_arch = "x86_64") { 0 } else { 63 };
 
-fn mappings(maps: &str) -> Vec<Mapping> {
-    maps.lines()
-        .map(|line| {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            let (start, end) = parts[0].split_once('-').expect("a range");
-            Mapping {
-                start: u64::from_str_radix(start, 16).expect("hex"),
-                end: u64::from_str_radix(end, 16).expect("hex"),
-                perms: parts[1].to_string(),
-                name: parts.get(5).copied().unwrap_or("").to_string(),
+    /// One line of `/proc/<pid>/maps`.
+    #[derive(Debug)]
+    struct Mapping {
+        start: u64,
+        end: u64,
+        perms: String,
+        /// The file or pseudo-file it shows, such as `[stack]`; empty for
+        /// anonymous memory.
+        name: String,
+    }
+
+    fn mappings(maps: &str) -> Vec<Mapping> {
+        maps.lines()
+            .map(|line| {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                let (start, end) = parts[0].split_once('-').expect("a range");
+                Mapping {
+                    start: u64::from_str_radix(start, 16).expect("hex"),
+                    end: u64::from_str_radix(end, 16).expect("hex"),
+                    perms: parts[1].to_string(),
+                    name: parts.get(5).copied().unwrap_or("").to_string(),
+                }
+            })
+            .collect()
+    }
+
+    /// The stack pointer of the process `pid` once it is blocked reading its
+    /// stdin, from `/proc/<pid>/syscall` (its last two fields are the stack
+    /// pointer and the program counter).
+    fn stack_pointer_in_read(pid: u32) -> u64 {
+        let file = format!("/proc/{pid}/syscall");
+        for _ in 0..500 {
+            let line = std::fs::read_to_string(&file).unwrap_or_default();
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.len() > 2 && fields[0].parse() == Ok(READ) {
+                let sp = fields[fields.len() - 2].trim_start_matches("0x");
+                return u64::from_str_radix(sp, 16).expect("a hex stack pointer");
             }
-        })
-        .collect()
-}
-
-/// The stack pointer of the process `pid` once it is blocked reading its
-/// stdin, from `/proc/<pid>/syscall` (its last two fields are the stack
-/// pointer and the program counter).
-fn stack_pointer_in_read(pid: u32) -> u64 {
-    let file = format!("/proc/{pid}/syscall");
-    for _ in 0..500 {
-        let line = std::fs::read_to_string(&file).unwrap_or_default();
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        if fields.len() > 2 && fields[0].parse() == Ok(READ) {
-            let sp = fields[fields.len() - 2].trim_start_matches("0x");
-            return u64::from_str_radix(sp, 16).expect("a hex stack pointer");
+            std::thread::sleep(Duration::from_millis(10));
         }
-        std::thread::sleep(Duration::from_millis(10));
+        panic!("the program never blocked reading stdin");
     }
-    panic!("the program never blocked reading stdin");
-}
 
-#[test]
-fn main_runs_on_a_stack_of_its_own_above_a_guard_region_and_nothing_is_writable_and_executable() {
-    // `main` waits on stdin, so where its stack is can be read while it
-    // runs.
-    let src = "fn main(io: Stdout, input: Stdin) -> Result<(), IoError> {\n    \
-               let _ = input.read_line()?\n    io.println(\"done\")\n}\n";
-    let (exe, dir) = differential::build_native(&Case::file("guarded_stack", src));
-    let mut child = Command::new(&exe)
-        .current_dir(&dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("the program should start");
-    let sp = stack_pointer_in_read(child.id());
-    let maps = std::fs::read_to_string(format!("/proc/{}/maps", child.id())).expect("its maps");
-    let all = mappings(&maps);
+    #[test]
+    fn main_runs_on_a_stack_of_its_own_above_a_guard_region_and_nothing_is_writable_and_executable()
+    {
+        // `main` waits on stdin, so where its stack is can be read while it
+        // runs.
+        let src = "fn main(io: Stdout, input: Stdin) -> Result<(), IoError> {\n    \
+                   let _ = input.read_line()?\n    io.println(\"done\")\n}\n";
+        let (exe, dir) = differential::build_native(&Case::file("guarded_stack", src));
+        let mut child = Command::new(&exe)
+            .current_dir(&dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("the program should start");
+        let sp = stack_pointer_in_read(child.id());
+        let maps = std::fs::read_to_string(format!("/proc/{}/maps", child.id())).expect("its maps");
+        let all = mappings(&maps);
 
-    let stack = all
-        .iter()
-        .find(|m| m.start <= sp && sp < m.end)
-        .unwrap_or_else(|| panic!("no mapping holds the stack pointer {sp:#x}:\n{maps}"));
-    assert_eq!(stack.perms, "rw-p", "the stack: {stack:x?}\n{maps}");
-    assert_eq!(
-        stack.name, "",
-        "main runs on the stack the runtime mapped, not the kernel's: {stack:x?}"
-    );
-    // Room for the 50,000 calls the language allows, each at least a
-    // return address and a saved frame pointer.
-    let calls = oska_native::MAX_CALL_DEPTH as u64;
-    assert!(
-        stack.end - stack.start >= calls * 16,
-        "a stack too small for {calls} calls: {stack:x?}"
-    );
-
-    let guard = all
-        .iter()
-        .find(|m| m.end == stack.start)
-        .unwrap_or_else(|| panic!("nothing is mapped right below the stack:\n{maps}"));
-    assert_eq!(
-        guard.perms, "---p",
-        "below the stack, memory no access may touch: {guard:x?}\n{maps}"
-    );
-    // At least a whole page of either target (64 KiB on aarch64).
-    assert!(
-        guard.end - guard.start >= 0x1_0000,
-        "a guard region of under 64 KiB: {guard:x?}"
-    );
-
-    for mapping in &all {
-        let perms = mapping.perms.as_bytes();
-        assert!(
-            !(perms[1] == b'w' && perms[2] == b'x'),
-            "writable and executable: {mapping:x?}\n{maps}"
+        let stack = all
+            .iter()
+            .find(|m| m.start <= sp && sp < m.end)
+            .unwrap_or_else(|| panic!("no mapping holds the stack pointer {sp:#x}:\n{maps}"));
+        assert_eq!(stack.perms, "rw-p", "the stack: {stack:x?}\n{maps}");
+        assert_eq!(
+            stack.name, "",
+            "main runs on the stack the runtime mapped, not the kernel's: {stack:x?}"
         );
-        if mapping.name == "[stack]" {
-            assert_eq!(
-                perms[2], b'-',
-                "the kernel's stack is executable: {mapping:x?}"
-            );
-        }
-    }
+        // Room for the 50,000 calls the language allows, each at least a
+        // return address and a saved frame pointer.
+        let calls = oska_native::MAX_CALL_DEPTH as u64;
+        assert!(
+            stack.end - stack.start >= calls * 16,
+            "a stack too small for {calls} calls: {stack:x?}"
+        );
 
-    child
-        .stdin
-        .take()
-        .expect("stdin")
-        .write_all(b"go\n")
-        .expect("should write");
-    let output = child.wait_with_output().expect("the program should end");
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "done\n");
-    assert_eq!(output.status.code(), Some(0));
+        let guard = all
+            .iter()
+            .find(|m| m.end == stack.start)
+            .unwrap_or_else(|| panic!("nothing is mapped right below the stack:\n{maps}"));
+        assert_eq!(
+            guard.perms, "---p",
+            "below the stack, memory no access may touch: {guard:x?}\n{maps}"
+        );
+        // At least a whole page of either target (64 KiB on aarch64).
+        assert!(
+            guard.end - guard.start >= 0x1_0000,
+            "a guard region of under 64 KiB: {guard:x?}"
+        );
+
+        for mapping in &all {
+            let perms = mapping.perms.as_bytes();
+            assert!(
+                !(perms[1] == b'w' && perms[2] == b'x'),
+                "writable and executable: {mapping:x?}\n{maps}"
+            );
+            if mapping.name == "[stack]" {
+                assert_eq!(
+                    perms[2], b'-',
+                    "the kernel's stack is executable: {mapping:x?}"
+                );
+            }
+        }
+
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(b"go\n")
+            .expect("should write");
+        let output = child.wait_with_output().expect("the program should end");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "done\n");
+        assert_eq!(output.status.code(), Some(0));
+    }
 }
 
 #[test]

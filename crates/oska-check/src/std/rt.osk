@@ -333,7 +333,9 @@ fn macos() -> Platform {
 //           for how many, 27 whether the outermost drop is running them;
 //   28      the one-byte texts of ASCII (see `text_of`), made on first use;
 //   29      the digits of a fault report's signal number (`on_fault`);
-//   30-31   free;
+//   30      the `struct sigaction` of the default action, which `on_fault`
+//           restores (`handle_faults`);
+//   31      free;
 //   32-38   the test host (see "The test host"): 32 which host a test runs
 //           on, 33 its stderr prefix, 34 whether stderr is at the start
 //           of a line, 35 the lines printed, 36 the fake files' paths, 37
@@ -2022,17 +2024,34 @@ fn handle_faults(handler: Int) {
     rt_mem_store64(rt_mem_add(stack, rt_mem_platform().stack_size), size)
     let _ = rt_sys_sigaltstack(stack, 0)
     free(object)
+    rt_mem_store64(global(30), default_action())
     for signal in fault_signals() {
         set_action(signal, handler, rt_mem_platform().sa_fault_flags)
     }
 }
 
+// A `struct sigaction`, laid out as the platform's table says, of the
+// default action (`SIG_DFL`, 0) with no flags, which is never freed: what
+// `on_fault` restores without allocating.
+fn default_action() -> Int {
+    let platform = rt_mem_platform()
+    let action = rt_mem_add(alloc(rt_mem_add(platform.sigaction_bytes, 8)), 8)
+    var at = 0
+    while at < platform.sigaction_bytes {
+        rt_mem_store64(rt_mem_add(action, at), 0)
+        at = at + 8
+    }
+    action
+}
+
 // The handler of the fault signal `signal`, which the kernel calls on the
-// stack `handle_faults` gave it, with the signal's default action already
-// restored. It allocates nothing, since the fault may have struck inside
-// the allocator: it writes what standard output holds (a write that fails
-// is ignored, a closed pipe included, so the signal still decides the
-// exit status) and the static report, then raises the signal again.
+// stack `handle_faults` gave it. It allocates nothing, since the fault may
+// have struck inside the allocator: it writes what standard output holds
+// (a write that fails is ignored, a closed pipe included, so the signal
+// still decides the exit status) and the static report, restores the
+// signal's default action, then raises the signal again. `SA_RESETHAND`
+// restored it already on Linux, but macOS ignores that flag for SIGILL and
+// SIGTRAP, which would run this handler again for ever.
 pub fn on_fault(signal: Int) {
     let used = rt_mem_load64(global(14))
     if used > 0 {
@@ -2042,6 +2061,7 @@ pub fn on_fault(signal: Int) {
     let _ = write_text(2, "error: the native program faulted with signal ")
     let _ = write_signal_number(signal)
     let _ = write_text(2, fault_name(signal))
+    let _ = rt_sys_sigaction(signal, rt_mem_load64(global(30)))
     let _ = rt_sys_kill(rt_sys_getpid(), signal)
     let _ = rt_sys_exit(128 + signal)
 }

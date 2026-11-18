@@ -58,7 +58,8 @@ jobs:
     # `oskac build --target macos-aarch64` must load, pass macOS's own
     # signature check (`codesign --verify --strict`) and print what the
     # interpreter prints. `build_macos` runs them only on this runner; every
-    # other host checks their format byte by byte.
+    # other host checks their format byte by byte. Ticket #170 adds the
+    # differential tests of the runtime.
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -68,6 +69,13 @@ jobs:
       # Intel must fail, not skip them.
       - run: test "$(uname -m)" = arm64
       - run: cargo test -p oskac --test build_macos
+      # Ticket #170: the runtime through libSystem. The differential tests
+      # of memory, panics, the stack, process capabilities and faults run
+      # natively here, built with `--target macos-aarch64`.
+      - run: >-
+          cargo test -p oskac --no-fail-fast
+          --test native_memory --test native_ints
+          --test native_process --test native_faults
 
   cross-build:
     # Seam 3 of spec #153: every corpus program built for every target on

@@ -4,9 +4,12 @@
 //! `todo`. The clock and the generator are compared on properties that
 //! do not depend on the time or the seed.
 
-#![cfg(all(
-    target_os = "linux",
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 
 mod differential;
@@ -868,11 +871,17 @@ fn three_ways(case: &Case) -> Vec<(Command, &'static str)> {
         .args(["run", "--interpret", case.target()]);
     let mut native = Command::new(env!("CARGO_BIN_EXE_oskac"));
     native.current_dir(&dir).args(["run", case.target()]);
-    vec![
+    let mut ways = vec![
         (interpreter, "the interpreter"),
         (native, "`oskac run` natively"),
         (Command::new(&exe), "the executable"),
-    ]
+    ];
+    // On a Mac `oskac run` is the interpreter until the macOS runtime is
+    // complete (spec #154): the executable is the native way.
+    if cfg!(target_os = "macos") {
+        ways.remove(1);
+    }
+    ways
 }
 
 #[test]
@@ -945,6 +954,8 @@ fn a_closed_stdout_found_by_a_later_flush_is_quiet_too() {
     }
 }
 
+/// macOS has no `/dev/full`.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_full_stdout_is_still_an_io_error() {
     // Only a closed pipe is quiet: any other failure to write stdout,

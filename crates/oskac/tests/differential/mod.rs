@@ -15,7 +15,10 @@
 //! sides, so a panic's location reads the same.
 //!
 //! It is compiled only where native executables run: aarch64 and x86_64
-//! Linux, each running what it builds for its own platform. Every target
+//! Linux, and Apple silicon macOS, each running what it builds for its own
+//! platform. On a Mac, `oskac run` stays on the interpreter until the
+//! macOS runtime is complete (spec #154), so the harness names its target
+//! itself: [`host_target`]. Every target
 //! with a backend must compile every case (spec #153): the host also
 //! builds it with `--target` for each other one, which it cannot run, so
 //! an aarch64 host still fails when x86_64 refuses a program, and a
@@ -152,8 +155,12 @@ pub struct Outcome {
 }
 
 /// The target platform this host builds and runs native executables
-/// for: its own.
+/// for: its own. On an Apple silicon Mac, which `oskac run` does not
+/// compile for yet (spec #154), `macos-aarch64`.
 pub fn host_target() -> oska_native::Target {
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        return oska_native::Target::MacosAarch64;
+    }
     oska_native::Target::host().expect("this host runs native executables")
 }
 
@@ -257,7 +264,7 @@ fn build(case: &Case, root: &Path, native_dir: &Path) -> PathBuf {
 }
 
 /// [`build`], or what `oskac build` printed when it refused `case`: for
-/// `target`, or by default for the host's.
+/// `target`, or by default for the host's ([`host_target`]).
 fn try_build(
     root: &Path,
     native_dir: &Path,
@@ -269,9 +276,8 @@ fn try_build(
     let exe = bin.join("program");
     let mut build = oskac(native_dir);
     build.arg("build").arg(&case.target).arg("-o").arg(&exe);
-    if let Some(target) = target {
-        build.args(["--target", target.name()]);
-    }
+    let target = target.unwrap_or_else(host_target);
+    build.args(["--target", target.name()]);
     let build = build.output().expect("oskac build should run");
     if !build.status.success() {
         return Err(format!(
