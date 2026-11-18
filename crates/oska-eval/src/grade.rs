@@ -228,8 +228,7 @@ fn grade(oskac: &str, tasks: &str, id: &str, run_dir: &Path) -> Result<Graded, S
     let refused = scratch.copy_in(&agent)?;
     let start = task.start();
     let changed = changes(&start, scratch.path());
-    let planted =
-        std::fs::symlink_metadata(scratch.path().join(crate::workspace::checks_file())).is_ok();
+    let planted = planted(scratch.path());
 
     // A read-only file is judged against the task's own starting package,
     // not a record the agent could rewrite, and graded as the task wrote it:
@@ -242,6 +241,9 @@ fn grade(oskac: &str, tasks: &str, id: &str, run_dir: &Path) -> Result<Graded, S
     for path in &task.read_only {
         scratch.restore(&start, path)?;
     }
+    for path in &planted {
+        scratch.remove(path)?;
+    }
     scratch.set_checks(None)?;
 
     let mut all = checks(&oskac, &task, &scratch)?;
@@ -249,12 +251,11 @@ fn grade(oskac: &str, tasks: &str, id: &str, run_dir: &Path) -> Result<Graded, S
         .iter()
         .map(|p| format!("{p} was changed (graded as the task wrote it)"))
         .collect();
-    if planted {
-        touched.push(format!(
-            "{} was added: the module is reserved for the hidden checks",
-            crate::workspace::checks_file()
-        ));
-    }
+    touched.extend(
+        planted
+            .iter()
+            .map(|p| format!("{p} was added: the module is reserved for the hidden checks")),
+    );
     touched.extend(refused.iter().map(|p| {
         let path = if p == "." { "workspace/" } else { p.as_str() };
         format!("{path} is a link or not a regular file: never followed, and not graded")
@@ -284,8 +285,31 @@ fn grade(oskac: &str, tasks: &str, id: &str, run_dir: &Path) -> Result<Graded, S
     })
 }
 
+/// What in `dir`'s `src/` takes the hidden checks' module name, a file or
+/// a directory, in any case: on a file system that ignores case, any of
+/// them is the module.
+fn planted(dir: &Path) -> Vec<String> {
+    let module = task::CHECKS_MODULE;
+    let file = format!("{module}.osk");
+    let mut found: Vec<String> = std::fs::read_dir(dir.join("src"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|item| item.file_name().to_string_lossy().into_owned())
+        .filter(|name| {
+            let name = name.to_lowercase();
+            name == module || name == file
+        })
+        .map(|name| format!("src/{name}"))
+        .collect();
+    found.sort();
+    found
+}
+
 /// The files of `dir` that differ from the task's starting package in
-/// `start`, are not in it, or are missing from `dir`, sorted.
+/// `start`, are not in it, or are missing from `dir`, sorted. A path must
+/// match in case too: on a file system that ignores case, a file renamed
+/// only in case still opens, but it is not the task's file.
 fn changes(start: &Path, dir: &Path) -> Vec<String> {
     let before = task::files(start);
     let now = task::files(dir);
@@ -293,7 +317,7 @@ fn changes(start: &Path, dir: &Path) -> Vec<String> {
         .iter()
         .filter(|file| {
             let was = std::fs::read(start.join(file)).ok();
-            was.is_none() || std::fs::read(dir.join(file)).ok() != was
+            !now.contains(file) || was.is_none() || std::fs::read(dir.join(file)).ok() != was
         })
         .chain(now.iter().filter(|file| !before.contains(file)))
         .cloned()

@@ -546,6 +546,8 @@ pub struct Tree {
     /// Every regular file, as a path relative to the directory with `/`
     /// between its parts, sorted.
     pub files: Vec<String>,
+    /// Every directory, the same way, so an empty one is kept too.
+    pub dirs: Vec<String>,
     /// Everything that is neither a directory nor a regular file (a link, a
     /// pipe, a device), sorted, the same way; `.` when the directory itself
     /// is one. Nothing here is followed or read: a link could reach outside
@@ -562,6 +564,7 @@ pub fn tree(dir: &Path) -> Tree {
         Err(_) => {}
     }
     tree.files.sort();
+    tree.dirs.sort();
     tree.others.sort();
     tree
 }
@@ -584,6 +587,7 @@ fn walk(dir: &Path, prefix: &str, tree: &mut Tree) {
         let kind = meta.file_type();
         if kind.is_dir() {
             walk(&path, &format!("{relative}/"), tree);
+            tree.dirs.push(relative);
         } else if kind.is_file() {
             tree.files.push(relative);
         } else {

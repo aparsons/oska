@@ -402,3 +402,137 @@ fn an_agent_still_writing_cannot_split_what_is_graded_from_what_is_checked() {
         );
     }
 }
+
+/// A pipe would make a copy that opens it wait for a writer forever.
+/// Grading ends, and reports it.
+#[cfg(unix)]
+#[test]
+fn a_pipe_in_the_workspace_does_not_hang_grading() {
+    let run = Prepared::new("greeting");
+    run.agent_writes(&solution("greeting", "reference"));
+    let made = std::process::Command::new("mkfifo")
+        .arg(run.workspace().join("src/pipe.osk"))
+        .status()
+        .expect("mkfifo should run");
+    assert!(made.success());
+    let outcome = run.grade("greeting");
+    assert_eq!(outcome.code, 1, "{}{}", outcome.stdout, outcome.stderr);
+    assert!(
+        outcome
+            .stdout
+            .contains("src/pipe.osk is a link or not a regular file"),
+        "{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("\"passed\": true"),
+        "{}",
+        outcome.stdout
+    );
+}
+
+/// A read-only file hard-linked to a file outside, then changed through the
+/// outside name: the copy sees the change, reports it, and grades the
+/// task's file. Grading writes nothing through the link.
+#[test]
+fn a_read_only_file_changed_through_a_hard_link_is_caught() {
+    let run = Prepared::new("greeting");
+    run.agent_writes(&solution("greeting", "reference"));
+    let outside = Scratch::new();
+    let alias = outside.path().join("manifest");
+    let toml = run.workspace().join("oska.toml");
+    std::fs::hard_link(&toml, &alias).expect("the agent's hard link");
+    std::fs::write(&alias, "not a manifest [[[").expect("the edit through it");
+    let outcome = run.grade("greeting");
+    assert_eq!(outcome.code, 1, "{}{}", outcome.stdout, outcome.stderr);
+    assert!(
+        outcome.stdout.contains("oska.toml was changed"),
+        "{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("\"passed\": true"),
+        "{}",
+        outcome.stdout
+    );
+    assert_eq!(
+        std::fs::read_to_string(&alias).expect("the outside name"),
+        "not a manifest [[["
+    );
+}
+
+/// A directory where a read-only file was: the file is restored over it.
+#[test]
+fn a_directory_in_a_read_only_files_place_is_cleared() {
+    let run = Prepared::new("greeting");
+    run.agent_writes(&solution("greeting", "reference"));
+    let toml = run.workspace().join("oska.toml");
+    std::fs::remove_file(&toml).expect("the manifest");
+    std::fs::create_dir(&toml).expect("a directory in its place");
+    std::fs::write(toml.join("x"), "x").expect("a file in it");
+    let outcome = run.grade("greeting");
+    assert_eq!(outcome.code, 1, "{}{}", outcome.stdout, outcome.stderr);
+    assert!(
+        outcome.stdout.contains("oska.toml was changed"),
+        "{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("\"passed\": true"),
+        "{}",
+        outcome.stdout
+    );
+}
+
+/// A read-only file renamed only in case still opens on a file system that
+/// ignores case, but it is not the task's file: it is caught everywhere.
+#[test]
+fn a_read_only_file_renamed_only_in_case_is_caught() {
+    let run = Prepared::new("greeting");
+    run.agent_writes(&solution("greeting", "reference"));
+    let workspace = run.workspace();
+    std::fs::rename(workspace.join("oska.toml"), workspace.join("OSKA.toml"))
+        .expect("the agent's rename");
+    let outcome = run.grade("greeting");
+    assert_eq!(outcome.code, 1, "{}{}", outcome.stdout, outcome.stderr);
+    assert!(
+        outcome.stdout.contains("oska.toml was changed"),
+        "{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("\"OSKA.toml\""),
+        "{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("\"passed\": true"),
+        "{}",
+        outcome.stdout
+    );
+}
+
+/// The hidden checks' name taken by a directory, or in another case.
+#[test]
+fn a_checks_module_planted_as_a_directory_or_in_another_case_is_caught() {
+    let run = Prepared::new("greeting");
+    run.agent_writes(&solution("greeting", "reference"));
+    let src = run.workspace().join("src");
+    std::fs::create_dir(src.join("eval_checks")).expect("a directory");
+    std::fs::write(src.join("eval_checks/more.osk"), "fn more() {}\n").expect("a module");
+    std::fs::write(src.join("Eval_Checks.osk"), "fn other() {}\n").expect("a module");
+    let outcome = run.grade("greeting");
+    assert_eq!(outcome.code, 1, "{}{}", outcome.stdout, outcome.stderr);
+    for planted in ["src/eval_checks was added", "src/Eval_Checks.osk was added"] {
+        assert!(
+            outcome.stdout.contains(planted),
+            "{planted}: {}",
+            outcome.stdout
+        );
+    }
+    assert!(
+        outcome.stdout.contains("\"passed\": true"),
+        "{}",
+        outcome.stdout
+    );
+}
