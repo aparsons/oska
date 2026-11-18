@@ -56,6 +56,19 @@ working_tree() {
   printf '%s\n' "$tree"
 }
 
+# Names the files that make the working tree differ from HEAD (at most 20),
+# and says where check logs belong. A message only: it changes no decision.
+# A log written into the worktree is the usual cause.
+say_dirty() {
+  local files
+  files=$(git status --porcelain 2>/dev/null | head -n 20) || return 0
+  [ -n "$files" ] || return 0
+  printf '  untracked or modified files:\n'
+  printf '    %s\n' "$files"
+  # shellcheck disable=SC2016 # the text names the variable, it is not expanded
+  printf '  If any is a check log or result file, move it outside the worktree (for example under %s), delete it, and check again.\n' '${TMPDIR:-/tmp}'
+}
+
 write() {
   local tier=${1:-} checked=${2:-} file current
   case $tier in
@@ -75,6 +88,7 @@ write() {
   fi
   if [ "$current" != "$checked" ]; then
     echo "pass stamp: not written, files changed while the check ran"
+    say_dirty
     return 0
   fi
   file=$(stamp_file)
@@ -105,7 +119,11 @@ covers() {
   stamped=$(full_run_tree) || return 1
   # A failing git status must not read as a clean tree.
   changes=$(git status --porcelain) || return 1
-  [ -z "$changes" ] || return 1
+  if [ -n "$changes" ]; then
+    echo "pre-push: ignoring the pass stamp, the working tree is not clean" >&2
+    say_dirty >&2
+    return 1
+  fi
   while read -r _ local_sha _ _; do
     # A deletion pushes no tree.
     [ "$local_sha" != "$zero" ] || continue

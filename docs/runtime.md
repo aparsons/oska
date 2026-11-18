@@ -449,7 +449,7 @@ fn main() {
   6. **A hard-linked file is refused**. A hard link is the same file under a second name, so one planted beneath the root, such as in an upload directory, could expose or overwrite a file outside it. A read or a write that opens an existing regular file with more than one link fails with an `IoError` (`` `name` has more than one hard link, and confined access never opens one ``), checked on the open handle before anything is read or the file is emptied. A write that creates a new file is unaffected.
   6. A file that is not a regular one, such as a FIFO or a device, is refused rather than read or written.
 
-  **Windows names.** Every name walked beneath the root is also refused on Windows when it is a reserved device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to `LPT9`, with or without an extension, as in `nul.txt`), which opens the device in every directory, or when it holds a `:`, which opens an alternate data stream.
+  **Windows names.** Every name walked beneath the root is also refused on Windows when it is a reserved device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to `LPT9`, with or without an extension, as in `nul.txt`), or when it holds a `:`, which opens an alternate data stream. The walk opens each name beneath its parent's handle, where a device name would reach a plain file, but Windows' path functions, which other programs open files with, may take that name for the device, so such a file could be written and never read back or removed by path. The refusal keeps the names a program may use the same as before the walk opened names beneath a handle.
 
 ## Scopes and tasks
 

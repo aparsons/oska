@@ -10,6 +10,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
+use crate::refusal;
+
 /// The C library's declarations this crate uses, with each platform's
 /// values from its own headers. Only the targets Oska releases for are
 /// covered, so a wrong value cannot slip in for an untested one.
@@ -178,19 +180,11 @@ impl Dir {
     /// [`Dir::open_file`].
     pub fn open(path: &Path) -> io::Result<Dir> {
         if path.as_os_str().is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "an empty path names no directory",
-            ));
+            return Err(refusal::empty_path());
         }
         let fd = c_string(path.as_os_str())
             .and_then(|path| open_at(c::AT_FDCWD, &path, c::DIRECTORY_FOLLOWING, 0))
-            .map_err(|error| {
-                io::Error::new(
-                    error.kind(),
-                    format!("`{}`: {}", path.display(), crate::io_error_message(&error)),
-                )
-            })?;
+            .map_err(|error| refusal::at(&path.display().to_string(), error))?;
         Ok(Dir { fd })
     }
 
@@ -209,7 +203,7 @@ impl Dir {
         };
         let parent = self.walk(parents)?;
         let fd = open_name(parent.as_ref().unwrap_or(self), last.as_ref(), c::DIRECTORY)
-            .map_err(|error| refusal(error, &joined(names), "directory"))?;
+            .map_err(|error| refused(error, &refusal::joined(names), "directory"))?;
         Ok(Dir { fd })
     }
 
@@ -217,10 +211,10 @@ impl Dir {
     /// for reading: every name before the last a directory, and none a
     /// symlink. Names are as for [`Dir::open_dir`]; there must be one.
     pub fn open_file<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<File> {
-        let (last, parents) = names.split_last().ok_or_else(no_name)?;
+        let (last, parents) = names.split_last().ok_or_else(refusal::no_name)?;
         let parent = self.walk(parents)?;
         let fd = open_name(parent.as_ref().unwrap_or(self), last.as_ref(), c::FILE_READ)
-            .map_err(|error| refusal(error, &joined(names), "file"))?;
+            .map_err(|error| refused(error, &refusal::joined(names), "file"))?;
         lone_file(File::from(fd), names)
     }
 
@@ -231,14 +225,14 @@ impl Dir {
     /// never goes through one. Names are as for [`Dir::open_dir`]; there
     /// must be one.
     pub fn create_file<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<File> {
-        let (last, parents) = names.split_last().ok_or_else(no_name)?;
+        let (last, parents) = names.split_last().ok_or_else(refusal::no_name)?;
         let parent = self.walk(parents)?;
         let fd = open_name(
             parent.as_ref().unwrap_or(self),
             last.as_ref(),
             c::FILE_WRITE,
         )
-        .map_err(|error| refusal(error, &joined(names), "file"))?;
+        .map_err(|error| refused(error, &refusal::joined(names), "file"))?;
         // Emptied only once it is known to be a regular file with one
         // link: never a device or a FIFO, or a file outside reached by a
         // hard link.
@@ -253,7 +247,7 @@ impl Dir {
     /// name before the last is a directory, and none is a symlink. Names
     /// are as for [`Dir::open_dir`]; there must be one.
     pub fn create_dir<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<()> {
-        let (last, parents) = names.split_last().ok_or_else(no_name)?;
+        let (last, parents) = names.split_last().ok_or_else(refusal::no_name)?;
         let walked = self.walk(parents)?;
         let parent = walked.as_ref().unwrap_or(self);
         let name = plain_name(last.as_ref())?;
@@ -271,9 +265,9 @@ impl Dir {
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 open_name(parent, last.as_ref(), c::DIRECTORY)
                     .map(drop)
-                    .map_err(|error| refusal(error, &joined(names), "directory"))
+                    .map_err(|error| refused(error, &refusal::joined(names), "directory"))
             }
-            Err(error) => Err(refusal(error, &joined(names), "directory")),
+            Err(error) => Err(refused(error, &refusal::joined(names), "directory")),
         }
     }
 
@@ -314,16 +308,7 @@ impl Dir {
             unsafe { c::unlinkat(self.fd.as_raw_fd(), c_name.as_ptr(), 0) }
         })
         .map(drop)
-        .map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!(
-                    "`{}`: {}",
-                    name.to_string_lossy(),
-                    crate::io_error_message(&error)
-                ),
-            )
-        })
+        .map_err(|error| refusal::at(&name.to_string_lossy(), error))
     }
 
     /// The names of the entries of this directory, in the order the
@@ -347,8 +332,9 @@ impl Dir {
     fn walk<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<Option<Dir>> {
         let mut at: Option<Dir> = None;
         for (walked, name) in names.iter().enumerate() {
-            let fd = open_name(at.as_ref().unwrap_or(self), name.as_ref(), c::DIRECTORY)
-                .map_err(|error| refusal(error, &joined(&names[..=walked]), "directory"))?;
+            let fd = open_name(at.as_ref().unwrap_or(self), name.as_ref(), c::DIRECTORY).map_err(
+                |error| refused(error, &refusal::joined(&names[..=walked]), "directory"),
+            )?;
             at = Some(Dir { fd });
         }
         Ok(at)
@@ -418,10 +404,7 @@ impl Drop for Stream {
 fn plain_name(name: &OsStr) -> io::Result<CString> {
     let bytes = name.as_bytes();
     if bytes.is_empty() || bytes == b"." || bytes == b".." || bytes.contains(&b'/') {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("`{}` is not a single file name", name.to_string_lossy()),
-        ));
+        return Err(refusal::not_a_single_name(name));
     }
     c_string(name)
 }
@@ -474,11 +457,6 @@ fn retried(mut call: impl FnMut() -> c_int) -> io::Result<c_int> {
     }
 }
 
-/// The error for a file operation given no name.
-fn no_name() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, "no file name to open")
-}
-
 /// `file`, opened by walking `names`, if it is a regular file with only
 /// that one name. A file with another hard link may be one outside the
 /// directory the walk began in, which a link planted beneath it would
@@ -487,50 +465,21 @@ fn no_name() -> io::Error {
 fn lone_file<N: AsRef<OsStr>>(file: File, names: &[N]) -> io::Result<File> {
     let metadata = file.metadata()?;
     if !metadata.is_file() {
-        return Err(not_a_file(names));
+        return Err(refusal::not_a_file(names));
     }
     if metadata.nlink() > 1 {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!(
-                "`{}` has more than one hard link, and confined access never opens one",
-                joined(names)
-            ),
-        ));
+        return Err(refusal::hard_linked(names));
     }
     Ok(file)
-}
-
-/// The error for the file `names` reach not being a regular file.
-fn not_a_file<N: AsRef<OsStr>>(names: &[N]) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::InvalidInput,
-        format!("`{}` is not a regular file", joined(names)),
-    )
 }
 
 /// `error` from opening `path` as a `kind`, with the path named, and a
 /// symlink said plainly: `openat` reports one met with `O_NOFOLLOW` as
 /// `ELOOP`, or as `ENOTDIR` when a directory was asked for.
-fn refusal(error: io::Error, path: &str, kind: &str) -> io::Error {
+fn refused(error: io::Error, path: &str, kind: &str) -> io::Error {
     match error.raw_os_error() {
-        Some(c::ELOOP) => io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!("`{path}` is a symlink, and confined access never follows one"),
-        ),
-        Some(c::ENOTDIR) if kind == "directory" => io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!("`{path}` is a symlink or not a directory, and confined access never follows a symlink"),
-        ),
-        _ => io::Error::new(error.kind(), format!("`{path}`: {}", crate::io_error_message(&error))),
+        Some(c::ELOOP) => refusal::symlink(path),
+        Some(c::ENOTDIR) if kind == "directory" => refusal::symlink_or_not_a_directory(path),
+        _ => refusal::at(path, error),
     }
-}
-
-/// `names` joined with `/`, for messages.
-fn joined<N: AsRef<OsStr>>(names: &[N]) -> String {
-    names
-        .iter()
-        .map(|name| name.as_ref().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
 }

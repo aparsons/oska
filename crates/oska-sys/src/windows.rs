@@ -18,6 +18,8 @@ use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
 
+use crate::refusal;
+
 /// The declarations from `ntdll` this crate uses, with their values from
 /// the Windows SDK's headers (`winternl.h`, `ntifs.h`, `winnt.h`), for
 /// x86_64 Windows, the one Windows target Oska releases for.
@@ -197,7 +199,7 @@ mod nt {
     pub const FILE_WRITE: u32 = FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES;
 
     /// The access a name is opened with only to see what it is.
-    pub const LOOK: u32 = FILE_READ_ATTRIBUTES | SYNCHRONIZE;
+    pub const ATTRIBUTES_ONLY: u32 = FILE_READ_ATTRIBUTES | SYNCHRONIZE;
 }
 
 /// An open directory: the root of a confined capability, or a directory
@@ -217,17 +219,9 @@ impl Dir {
     /// opens the parent with this, then the last name with
     /// [`Dir::open_dir`] or [`Dir::open_file`].
     pub fn open(path: &Path) -> io::Result<Dir> {
-        let named = |error: io::Error| {
-            io::Error::new(
-                error.kind(),
-                format!("`{}`: {}", path.display(), crate::io_error_message(&error)),
-            )
-        };
+        let named = |error: io::Error| refusal::at(&path.display().to_string(), error);
         if path.as_os_str().is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "an empty path names no directory",
-            ));
+            return Err(refusal::empty_path());
         }
         let file = std::fs::OpenOptions::new()
             .access_mode(nt::DIRECTORY)
@@ -265,7 +259,7 @@ impl Dir {
     /// reparse point. Names are as for [`Dir::open_dir`]; there must be
     /// one.
     pub fn open_file<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<File> {
-        let (last, parents) = names.split_last().ok_or_else(no_name)?;
+        let (last, parents) = names.split_last().ok_or_else(refusal::no_name)?;
         let parent = self.walk(parents)?;
         let (handle, info) = open_name(
             parent.as_ref().unwrap_or(self),
@@ -282,7 +276,7 @@ impl Dir {
     /// last included, so a write never goes through one. Names are as for
     /// [`Dir::open_dir`]; there must be one.
     pub fn create_file<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<File> {
-        let (last, parents) = names.split_last().ok_or_else(no_name)?;
+        let (last, parents) = names.split_last().ok_or_else(refusal::no_name)?;
         let parent = self.walk(parents)?;
         let (handle, info) = open_name(
             parent.as_ref().unwrap_or(self),
@@ -304,19 +298,19 @@ impl Dir {
     /// directory, and none is a reparse point. Names are as for
     /// [`Dir::open_dir`]; there must be one.
     pub fn create_dir<N: AsRef<OsStr>>(&self, names: &[N]) -> io::Result<()> {
-        let (last, parents) = names.split_last().ok_or_else(no_name)?;
+        let (last, parents) = names.split_last().ok_or_else(refusal::no_name)?;
         let walked = self.walk(parents)?;
         let parent = walked.as_ref().unwrap_or(self);
         // `FILE_CREATE` never follows a reparse point at the name: one
         // there, dangling or not, makes it fail as a name already taken.
         // What is there is kept if it is a directory and not a reparse
         // point.
-        match create_at(parent, &plain_name(last.as_ref())?, Open::NEW_DIRECTORY) {
+        match open_at(parent, &plain_name(last.as_ref())?, Open::NEW_DIRECTORY) {
             Ok(_) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 open_dir_name(parent, last.as_ref(), names).map(drop)
             }
-            Err(error) => Err(refusal(parent, last.as_ref(), error, names)),
+            Err(error) => Err(refused(parent, last.as_ref(), error, names)),
         }
     }
 
@@ -327,10 +321,12 @@ impl Dir {
         // A new handle of this directory, opened by the empty name beneath
         // it, so the listing starts at its beginning and moves no other
         // handle's place in it.
-        let listing = create_at(self, &[], Open::DIRECTORY)?;
+        let listing = open_at(self, &[], Open::DIRECTORY)?;
         // `u64`s, so the entries in it are aligned as `ntdll` writes them.
         let mut buffer = vec![0u64; 8192];
         let mut names = Vec::new();
+        // The bytes of the words a call filled, reused from call to call.
+        let mut filled = Vec::new();
         let length = byte_length(buffer.len() * 8)?;
         let mut restart = 1;
         loop {
@@ -363,9 +359,14 @@ impl Dir {
             if status.information == 0 {
                 return Ok(names);
             }
-            let bytes: Vec<u8> = buffer.iter().flat_map(|word| word.to_ne_bytes()).collect();
-            let filled = bytes.get(..status.information).ok_or_else(malformed)?;
-            for name in entry_names(filled)? {
+            // Only the bytes the call filled, not the whole buffer.
+            let words = buffer
+                .get(..status.information.div_ceil(8))
+                .ok_or_else(malformed)?;
+            filled.clear();
+            filled.extend(words.iter().flat_map(|word| word.to_ne_bytes()));
+            filled.truncate(status.information);
+            for name in entry_names(&filled)? {
                 if name != "." && name != ".." {
                     names.push(name);
                 }
@@ -388,7 +389,7 @@ impl Dir {
     }
 }
 
-/// How [`create_at`] opens a name: the access asked for, what to do when
+/// How [`open_at`] opens a name: the access asked for, what to do when
 /// it exists or not, and whether it must be a directory.
 #[derive(Clone, Copy)]
 struct Open {
@@ -429,8 +430,8 @@ impl Open {
     };
 
     /// Whatever is at a name, only to read its attributes.
-    const LOOK: Open = Open {
-        access: nt::LOOK,
+    const ATTRIBUTES_ONLY: Open = Open {
+        access: nt::ATTRIBUTES_ONLY,
         disposition: nt::FILE_OPEN,
         options: 0,
     };
@@ -463,7 +464,7 @@ fn open_dir_name<N: AsRef<OsStr>>(
 ) -> io::Result<OwnedHandle> {
     let (handle, info) = open_name(parent, name, Open::DIRECTORY, names)?;
     if !info.is_dir() {
-        return Err(not_a_directory(&joined(names)));
+        return Err(refusal::symlink_or_not_a_directory(&refusal::joined(names)));
     }
     Ok(handle)
 }
@@ -477,11 +478,11 @@ fn open_name<N: AsRef<OsStr>>(
     how: Open,
     names: &[N],
 ) -> io::Result<(OwnedHandle, Info)> {
-    let handle = create_at(parent, &plain_name(name)?, how)
-        .map_err(|error| refusal(parent, name, error, names))?;
+    let handle = open_at(parent, &plain_name(name)?, how)
+        .map_err(|error| refused(parent, name, error, names))?;
     let info = info(&handle)?;
     if info.is_reparse_point() {
-        return Err(reparse_point(&joined(names)));
+        return Err(refusal::symlink(&refusal::joined(names)));
     }
     Ok((handle, info))
 }
@@ -489,27 +490,25 @@ fn open_name<N: AsRef<OsStr>>(
 /// `error` from opening `name` beneath `parent`, with the walk so far,
 /// `names`, named: a reparse point there said plainly, as an open that
 /// asks for more than to look at it may fail for its own reasons.
-fn refusal<N: AsRef<OsStr>>(
+fn refused<N: AsRef<OsStr>>(
     parent: &Dir,
     name: &OsStr,
     error: io::Error,
     names: &[N],
 ) -> io::Error {
-    let path = joined(names);
-    let there = plain_name(name).and_then(|name| create_at(parent, &name, Open::LOOK));
+    let path = refusal::joined(names);
+    let there = plain_name(name).and_then(|name| open_at(parent, &name, Open::ATTRIBUTES_ONLY));
     match there.and_then(|handle| info(&handle)) {
-        Ok(info) if info.is_reparse_point() => reparse_point(&path),
-        _ => io::Error::new(
-            error.kind(),
-            format!("`{path}`: {}", crate::io_error_message(&error)),
-        ),
+        Ok(info) if info.is_reparse_point() => refusal::symlink(&path),
+        _ => refusal::at(&path, error),
     }
 }
 
-/// `NtCreateFile` for `name`, UTF-16, beneath `parent` as `how` asks,
-/// never following a reparse point, for synchronous I/O. The empty name
-/// opens `parent` itself again.
-fn create_at(parent: &Dir, name: &[u16], how: Open) -> io::Result<OwnedHandle> {
+/// Open `name`, UTF-16, beneath `parent` with `NtCreateFile`, as `how`
+/// asks: an existing name, or one created when `how` says so. Never
+/// follows a reparse point, and opens for synchronous I/O. The empty
+/// name opens `parent` itself again.
+fn open_at(parent: &Dir, name: &[u16], how: Open) -> io::Result<OwnedHandle> {
     let length = u16::try_from(name.len() * 2)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "a file name is too long"))?;
     let object_name = nt::UnicodeString {
@@ -651,17 +650,9 @@ fn plain_name(name: &OsStr) -> io::Result<Vec<u16>> {
     let wide: Vec<u16> = name.encode_wide().collect();
     let separator = |unit: &u16| matches!(*unit, 0 | 0x2F | 0x5C | 0x3A);
     if wide.is_empty() || name == "." || name == ".." || wide.iter().any(separator) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("`{}` is not a single file name", name.to_string_lossy()),
-        ));
+        return Err(refusal::not_a_single_name(name));
     }
     Ok(wide)
-}
-
-/// The error for a file operation given no name.
-fn no_name() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, "no file name to open")
 }
 
 /// `handle`, opened by walking `names` and described by `info`, as a
@@ -672,48 +663,10 @@ fn no_name() -> io::Error {
 /// swapped after it.
 fn lone_file<N: AsRef<OsStr>>(handle: OwnedHandle, info: Info, names: &[N]) -> io::Result<File> {
     if info.is_dir() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("`{}` is not a regular file", joined(names)),
-        ));
+        return Err(refusal::not_a_file(names));
     }
     if info.links > 1 {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!(
-                "`{}` has more than one hard link, and confined access never opens one",
-                joined(names)
-            ),
-        ));
+        return Err(refusal::hard_linked(names));
     }
     Ok(File::from(handle))
-}
-
-/// The error for a reparse point at `path`, worded as Unix words a
-/// symlink.
-fn reparse_point(path: &str) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::PermissionDenied,
-        format!("`{path}` is a symlink, and confined access never follows one"),
-    )
-}
-
-/// The error for something not a directory at `path` where the walk
-/// needs one, worded as Unix words it.
-fn not_a_directory(path: &str) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::PermissionDenied,
-        format!(
-            "`{path}` is a symlink or not a directory, and confined access never follows a symlink"
-        ),
-    )
-}
-
-/// `names` joined with `/`, for messages.
-fn joined<N: AsRef<OsStr>>(names: &[N]) -> String {
-    names
-        .iter()
-        .map(|name| name.as_ref().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
 }

@@ -29,6 +29,7 @@
 //! - Every foreign function is called only from a safe wrapper in this
 //!   crate. Nothing `unsafe` is public.
 
+mod refusal;
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
