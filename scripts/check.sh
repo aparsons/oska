@@ -560,6 +560,13 @@ if step "kill guard tests" --fast-when 'scripts/kill-guard/*' --fast-when .claud
   bash scripts/kill-guard/test.sh
 fi
 
+if step "skill lint" --no-slot --fast-when '.claude/skills/*' --fast-when 'scripts/skill-lint/*'; then
+  # The agent skills under .claude/skills/ against the mechanical rules of
+  # docs/agents/skills.md: frontmatter, size, a Security section, links,
+  # no remote assets, strict shell scripts.
+  bash scripts/skill-lint/test.sh
+fi
+
 if step "workflow guard tests" --fast-when 'scripts/workflow-guard/*'; then
   bash scripts/workflow-guard/test.sh
 fi

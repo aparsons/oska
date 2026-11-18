@@ -18,4 +18,5 @@ if [ "$have" != "$want" ]; then
   fi
 fi
 
-shellcheck scripts/*.sh scripts/*/*.sh site/agent-setup/*.sh .githooks/pre-push
+shopt -s nullglob
+shellcheck scripts/*.sh scripts/*/*.sh site/agent-setup/*.sh .githooks/pre-push .claude/skills/*/*.sh .claude/skills/*/scripts/*.sh
