@@ -250,7 +250,10 @@ fn intervals(function: &Function) -> Vec<Option<Interval>> {
         .filter(|(_, inst)| {
             matches!(
                 inst,
-                Inst::Call { .. } | Inst::CallIndirect { .. } | Inst::Syscall { .. }
+                Inst::Call { .. }
+                    | Inst::CallIndirect { .. }
+                    | Inst::Syscall { .. }
+                    | Inst::LibCall { .. }
             )
         })
         .map(|(i, _)| i + 1)

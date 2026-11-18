@@ -77,7 +77,7 @@ use oska_check::program::{
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::{Diagnostic, Span};
 
-use crate::intrinsics::{self, Check, OsCall, Prelude, Runtime};
+use crate::intrinsics::{self, Check, Fails, Import, OsCall, Prelude, Runtime, Start};
 use crate::ir::{self, Arith, BinOp, Cond, FnId, Inst, Label, Symbol, Temp, Width};
 use crate::layout::{self, Rodata};
 use crate::optimize;
@@ -389,10 +389,19 @@ impl<'p> Lowering<'p> {
         body.push(Inst::Return(zero));
         self.functions[run] = body.finish("_main", 0, NOWHERE)?;
 
+        let start_kind = self.target.platform().start;
         let mut body = Body::new(self, Source::User, None);
+        // On macOS, `_start` is called as `main(argc, argv)`: its
+        // parameters.
+        let params = match start_kind {
+            Start::Stack => 0,
+            Start::Main => {
+                body.temp();
+                body.temp();
+                2
+            }
+        };
         let size = body.constant(0);
-        let sp = body.temp();
-        body.push(Inst::EntrySp { dst: sp });
         // `std.rt`'s fault handler, which the kernel calls with the
         // signal's number as its one argument, as the backend's own
         // calling convention passes it.
@@ -405,10 +414,18 @@ impl<'p> Lowering<'p> {
             NOWHERE,
         );
         let handler = body.function_address(on_fault);
-        // The kernel's initial stack holds argc, then the argv pointers.
-        let argc = body.load(sp, 0);
-        let eight = body.constant(i64::from(layout::WORD));
-        let argv = body.binary_op(BinOp::Add, sp, eight);
+        let (argc, argv) = match start_kind {
+            // The kernel's initial stack holds argc, then the argv
+            // pointers.
+            Start::Stack => {
+                let sp = body.temp();
+                body.push(Inst::EntrySp { dst: sp });
+                let argc = body.load(sp, 0);
+                let eight = body.constant(i64::from(layout::WORD));
+                (argc, body.binary_op(BinOp::Add, sp, eight))
+            }
+            Start::Main => (0, 1),
+        };
         body.call_runtime("process_init", vec![argc, argv, handler], NOWHERE)?;
         let stack = body.call_runtime("stack_new", vec![size], NOWHERE)?;
         body.push(Inst::CallOnStack {
@@ -417,7 +434,7 @@ impl<'p> Lowering<'p> {
             callee: run,
         });
         body.push(Inst::Return(size));
-        self.functions[start] = body.finish("_start", 0, NOWHERE)?;
+        self.functions[start] = body.finish("_start", params, NOWHERE)?;
         Ok(start)
     }
 
@@ -1721,6 +1738,89 @@ impl<'l, 'p> Body<'l, 'p> {
         Ok(())
     }
 
+    /// A call of the platform library's function `import` with the
+    /// intrinsic's `args`, whose result is `std.rt`'s: the function's,
+    /// or `-errno` when it failed (ADR 0015). Nothing but the call and
+    /// the read of `errno` is added around it.
+    fn library_call(&mut self, import: &Import, args: &[Temp]) -> Temp {
+        let platform = self.lowering.target.platform();
+        let slot = platform.slot(import).unwrap_or_default();
+        let mut args: Vec<Temp> = args.iter().copied().take(import.args.into()).collect();
+        for &value in import.then {
+            args.push(self.constant(value));
+        }
+        // `errno`'s address, for a call that clears it first.
+        let errno = match import.fails {
+            Fails::NullKeepsErrno => {
+                let errno = self.errno_address();
+                let zero = self.constant(0);
+                self.push(Inst::Store {
+                    width: Width::W32,
+                    base: errno,
+                    offset: 0,
+                    src: zero,
+                });
+                Some(errno)
+            }
+            _ => None,
+        };
+        let dst = self.temp();
+        self.push(Inst::LibCall {
+            dst,
+            import: slot,
+            args,
+            fixed: import.fixed,
+            wide: import.wide,
+        });
+        let failed = match import.fails {
+            Fails::MinusOne => -1,
+            Fails::Null | Fails::NullKeepsErrno => 0,
+            Fails::Never => return dst,
+        };
+        let done = self.label();
+        let failure = self.constant(failed);
+        self.push(Inst::Branch {
+            cond: Cond::Ne,
+            lhs: dst,
+            rhs: failure,
+            target: done,
+        });
+        let errno = match errno {
+            Some(errno) => errno,
+            None => self.errno_address(),
+        };
+        let code = self.temp();
+        self.push(Inst::Load {
+            width: Width::W32,
+            dst: code,
+            base: errno,
+            offset: 0,
+        });
+        let zero = self.constant(0);
+        self.push(Inst::Binary {
+            op: BinOp::Sub,
+            dst,
+            lhs: zero,
+            rhs: code,
+        });
+        self.push(Inst::Label(done));
+        dst
+    }
+
+    /// The address of the thread's `errno`, from the platform library.
+    fn errno_address(&mut self) -> Temp {
+        let errno = self.lowering.target.platform().errno;
+        let dst = self.temp();
+        self.push(Inst::LibCall {
+            dst,
+            import: errno,
+            args: Vec::new(),
+            fixed: 0,
+            wide: true,
+        });
+        dst
+    }
+
     /// A `std.rt` intrinsic applied to `args`. The checker has matched
     /// their number to its declaration.
     fn runtime_intrinsic(&mut self, runtime: Runtime, args: &[Temp]) -> Result<Temp, Diagnostic> {
@@ -1736,6 +1836,7 @@ impl<'l, 'p> Body<'l, 'p> {
                     self.push(Inst::Syscall { dst, number, args });
                     dst
                 }
+                OsCall::Library(import) => self.library_call(import, args),
                 OsCall::Same => self.copy(arg(0)),
             },
             Runtime::Load(width) => {

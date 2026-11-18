@@ -132,7 +132,7 @@ The toolchain's way of running a checked program directly, with no executable. I
 _Avoid_: VM, evaluator
 
 **Native backend**:
-The part of the toolchain that compiles a checked program into a standalone executable for a platform, with no outside assembler, linker or C library. A program it cannot compile yet is refused, never compiled wrongly.
+The part of the toolchain that compiles a checked program into a standalone executable for a platform, with no outside assembler or linker. On Linux the executable uses no C library; on macOS it calls the system only through `libSystem`, the one library macOS supports calling the kernel through (ADR 0015). A program it cannot compile yet is refused, never compiled wrongly.
 _Avoid_: codegen, JIT
 
 **Supported platform**:

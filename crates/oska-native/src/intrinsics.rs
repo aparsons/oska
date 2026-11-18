@@ -218,8 +218,8 @@ pub enum Sys {
 }
 
 /// What the backend gives `std.rt` for a target platform: how its
-/// operating system is called, and which `std.rt` table holds its
-/// numbers, flags and structure layouts.
+/// operating system is called, which `std.rt` table holds its numbers,
+/// flags and structure layouts, and how its process starts.
 #[derive(Debug, Clone, Copy)]
 pub struct Platform {
     /// The `std.rt` function giving the platform's table, which
@@ -227,24 +227,103 @@ pub struct Platform {
     pub table: &'static str,
     /// How the operating system makes each call.
     pub call: fn(Sys) -> OsCall,
+    /// Every function the executable imports from the platform's one
+    /// library, in the order of its import table: none on Linux. Every
+    /// [`OsCall::Library`] the platform gives is one of them, and so is
+    /// [`Platform::errno`] (ADR 0015: the list is part of the reviewed
+    /// surface of the operating-system interface, like [`RUNTIME`]).
+    pub imports: &'static [&'static Import],
+    /// The function that gives the address of the thread's `errno`, by
+    /// its index in [`Platform::imports`], for a library call that fails.
+    pub errno: u16,
+    /// How the entry point finds the program's arguments.
+    pub start: Start,
+}
+
+/// How the operating system starts the process at the entry point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Start {
+    /// The kernel jumps to it, with `argc`, then the `argv` pointers, on
+    /// the stack (Linux).
+    Stack,
+    /// The dynamic loader calls it as C's `main(argc, argv)`, by the
+    /// platform's C calling convention (macOS's `LC_MAIN`).
+    Main,
+}
+
+impl Platform {
+    /// Where `import` is in [`Platform::imports`]: its slot in the
+    /// executable's import table.
+    pub fn slot(&self, import: &Import) -> Option<u16> {
+        let at = self
+            .imports
+            .iter()
+            .position(|i| i.symbol == import.symbol)?;
+        u16::try_from(at).ok()
+    }
 }
 
 /// How an operating system makes one [`Sys`] call: one call of its
-/// interface, or none (ADR 0013).
+/// interface, or none (ADR 0013, ADR 0015).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OsCall {
     /// The system call `number`, passed the intrinsic's arguments and then
     /// `then`, the constant arguments the system call takes beyond the
     /// intrinsic's.
     Trap { number: u16, then: &'static [i64] },
+    /// A function of the one library the platform links, called by the
+    /// platform's C calling convention, with a failure turned into
+    /// `-errno`.
+    Library(&'static Import),
     /// No call: the result is the intrinsic's first argument.
     Same,
+}
+
+/// A function the executable imports from the platform's library, and
+/// how a call of it is made and read (ADR 0015).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Import {
+    /// Its symbol, as the library exports it: C's name with a leading
+    /// `_`.
+    pub symbol: &'static str,
+    /// How many of the intrinsic's arguments it takes: the rest are
+    /// dropped (`readdir` takes only the directory).
+    pub args: u8,
+    /// How many arguments it declares before `...`, `then` included: the
+    /// rest are variadic. All of them when it is not variadic.
+    pub fixed: u8,
+    /// Whether its result is a whole word (a pointer, `ssize_t`); if not,
+    /// it is a C `int`, whose 32 bits are sign-extended.
+    pub wide: bool,
+    /// How it says it failed.
+    pub fails: Fails,
+    /// The constant arguments it takes after the intrinsic's.
+    pub then: &'static [i64],
+}
+
+/// How a library function says it failed, so the backend can give
+/// `std.rt` `-errno` in its place, as a Linux system call gives it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fails {
+    /// It returns -1 and sets `errno`.
+    MinusOne,
+    /// It returns `NULL` and sets `errno`.
+    Null,
+    /// It returns `NULL` both at the end and on failure, and sets `errno`
+    /// only on failure (`readdir`): `errno` is cleared before the call,
+    /// and a `NULL` with `errno` still 0 is the result 0.
+    NullKeepsErrno,
+    /// It cannot fail, or does not return.
+    Never,
 }
 
 /// `linux-aarch64`.
 pub const LINUX_AARCH64: Platform = Platform {
     table: "linux_aarch64",
     call: linux_aarch64_call,
+    imports: &[],
+    errno: 0,
+    start: Start::Stack,
 };
 
 /// The Linux system call `number` gives for `call` (none for `None`),
@@ -302,6 +381,9 @@ fn linux_aarch64_syscall(call: Sys) -> Option<u16> {
 pub const LINUX_X86_64: Platform = Platform {
     table: "linux_x86_64",
     call: linux_x86_64_call,
+    imports: &[],
+    errno: 0,
+    start: Start::Stack,
 };
 
 fn linux_x86_64_call(call: Sys) -> OsCall {
@@ -334,6 +416,174 @@ fn linux_x86_64_syscall(call: Sys) -> Option<u16> {
         Sys::Getpid => 39,
         Sys::Kill => 62,
         Sys::Exit => 231,
+    })
+}
+
+/// `macos-aarch64`: every call is a function of `libSystem`, through the
+/// dynamic loader (ADR 0011, ADR 0015).
+pub const MACOS_AARCH64: Platform = Platform {
+    table: "macos",
+    call: macos_call,
+    imports: &MACOS_IMPORTS,
+    errno: 0,
+    start: Start::Main,
+};
+
+/// A function of `libSystem` that is not variadic and fails with -1, as
+/// most do: `args` arguments and an `int` result.
+const fn plain(symbol: &'static str, args: u8) -> Import {
+    Import {
+        symbol,
+        args,
+        fixed: args,
+        wide: false,
+        fails: Fails::MinusOne,
+        then: &[],
+    }
+}
+
+/// `__error()`, the address of the thread's `errno`: no intrinsic's.
+const ERROR: Import = Import {
+    fails: Fails::Never,
+    wide: true,
+    ..plain("___error", 0)
+};
+const READ: Import = Import {
+    wide: true,
+    ..plain("_read", 3)
+};
+const WRITE: Import = Import {
+    wide: true,
+    ..plain("_write", 3)
+};
+/// `openat(fd, path, flags, ...)`: the mode is variadic.
+const OPENAT: Import = Import {
+    fixed: 3,
+    ..plain("_openat", 4)
+};
+const CLOSE: Import = plain("_close", 1);
+const MKDIRAT: Import = plain("_mkdirat", 3);
+/// `fdopendir(fd)`: a `DIR *`, or `NULL`.
+const FDOPENDIR: Import = Import {
+    wide: true,
+    fails: Fails::Null,
+    ..plain("_fdopendir", 1)
+};
+/// `readdir(dir)`: the next record, or `NULL` at the end and on failure.
+const READDIR: Import = Import {
+    wide: true,
+    fails: Fails::NullKeepsErrno,
+    ..plain("_readdir", 1)
+};
+const CLOSEDIR: Import = plain("_closedir", 1);
+const FSTAT: Import = plain("_fstat", 2);
+const FTRUNCATE: Import = plain("_ftruncate", 2);
+const READLINKAT: Import = Import {
+    wide: true,
+    ..plain("_readlinkat", 4)
+};
+/// `getcwd(buf, size)`: `buf`, or `NULL`.
+const GETCWD: Import = Import {
+    wide: true,
+    fails: Fails::Null,
+    ..plain("_getcwd", 2)
+};
+/// `fcntl(fd, command, ...)`: the argument is variadic.
+const FCNTL: Import = Import {
+    fixed: 2,
+    ..plain("_fcntl", 3)
+};
+/// `mmap`: an address, or `MAP_FAILED` (-1).
+const MMAP: Import = Import {
+    wide: true,
+    ..plain("_mmap", 6)
+};
+const MUNMAP: Import = plain("_munmap", 2);
+const CLOCK_GETTIME: Import = plain("_clock_gettime", 2);
+/// `ioctl(fd, request, ...)`: the argument is variadic.
+const IOCTL: Import = Import {
+    fixed: 2,
+    ..plain("_ioctl", 3)
+};
+/// `getentropy(buf, length)`: at most 256 bytes, all of them, or -1.
+const GETENTROPY: Import = plain("_getentropy", 2);
+/// `sigaction(signal, action, old)`: no old action kept.
+const SIGACTION: Import = Import {
+    fixed: 3,
+    then: &[0],
+    ..plain("_sigaction", 2)
+};
+const SIGALTSTACK: Import = plain("_sigaltstack", 2);
+const GETPID: Import = Import {
+    fails: Fails::Never,
+    ..plain("_getpid", 0)
+};
+const KILL: Import = plain("_kill", 2);
+/// `_exit(status)`, not `exit`: no `atexit` handlers run, as with Linux's
+/// `exit_group`.
+const EXIT: Import = Import {
+    fails: Fails::Never,
+    ..plain("__exit", 1)
+};
+
+/// Every function a macOS executable imports from `libSystem`: always
+/// all of them, whatever the program calls, so the import table depends
+/// on the target alone. [`ERROR`] is first ([`Platform::errno`]).
+const MACOS_IMPORTS: [&Import; 24] = [
+    &ERROR,
+    &READ,
+    &WRITE,
+    &OPENAT,
+    &CLOSE,
+    &MKDIRAT,
+    &FDOPENDIR,
+    &READDIR,
+    &CLOSEDIR,
+    &FSTAT,
+    &FTRUNCATE,
+    &READLINKAT,
+    &GETCWD,
+    &FCNTL,
+    &MMAP,
+    &MUNMAP,
+    &CLOCK_GETTIME,
+    &IOCTL,
+    &GETENTROPY,
+    &SIGACTION,
+    &SIGALTSTACK,
+    &GETPID,
+    &KILL,
+    &EXIT,
+];
+
+/// The `libSystem` function behind each call on macOS. A directory is
+/// listed through a `DIR *` that owns its descriptor (`fdopendir`,
+/// `readdir`, `closedir`), one record at a time.
+fn macos_call(call: Sys) -> OsCall {
+    OsCall::Library(match call {
+        Sys::Read => &READ,
+        Sys::Write => &WRITE,
+        Sys::Openat => &OPENAT,
+        Sys::Close => &CLOSE,
+        Sys::Mkdirat => &MKDIRAT,
+        Sys::OpenDir => &FDOPENDIR,
+        Sys::ReadDir => &READDIR,
+        Sys::CloseDir => &CLOSEDIR,
+        Sys::Fstat => &FSTAT,
+        Sys::Ftruncate => &FTRUNCATE,
+        Sys::Readlinkat => &READLINKAT,
+        Sys::Getcwd => &GETCWD,
+        Sys::Fcntl => &FCNTL,
+        Sys::Mmap => &MMAP,
+        Sys::Munmap => &MUNMAP,
+        Sys::ClockGettime => &CLOCK_GETTIME,
+        Sys::Ioctl => &IOCTL,
+        Sys::Random => &GETENTROPY,
+        Sys::Sigaction => &SIGACTION,
+        Sys::Sigaltstack => &SIGALTSTACK,
+        Sys::Getpid => &GETPID,
+        Sys::Kill => &KILL,
+        Sys::Exit => &EXIT,
     })
 }
 
@@ -607,6 +857,152 @@ mod tests {
         ];
         assert_eq!(system_calls(crate::Target::LinuxAarch64), aarch64);
         assert_eq!(system_calls(crate::Target::LinuxX86_64), x86_64);
+    }
+
+    /// Each macOS call is one `libSystem` function, made as Apple's
+    /// headers declare it: (intrinsic, symbol, arguments it takes, fixed
+    /// arguments, whole-word result, how it fails, trailing constants).
+    #[test]
+    fn macos_makes_each_call_as_the_libsystem_function_declares_it() {
+        use Fails::*;
+        let rows: &[(&str, &str, u8, u8, bool, Fails, &[i64])] = &[
+            ("rt_sys_read", "_read", 3, 3, true, MinusOne, &[]),
+            ("rt_sys_write", "_write", 3, 3, true, MinusOne, &[]),
+            // openat(fd, path, flags, ...): the mode is variadic.
+            ("rt_sys_openat", "_openat", 4, 3, false, MinusOne, &[]),
+            ("rt_sys_close", "_close", 1, 1, false, MinusOne, &[]),
+            ("rt_sys_mkdirat", "_mkdirat", 3, 3, false, MinusOne, &[]),
+            ("rt_sys_open_dir", "_fdopendir", 1, 1, true, Null, &[]),
+            // readdir(dir): one record, or NULL at the end or on failure.
+            (
+                "rt_sys_read_dir",
+                "_readdir",
+                1,
+                1,
+                true,
+                NullKeepsErrno,
+                &[],
+            ),
+            ("rt_sys_close_dir", "_closedir", 1, 1, false, MinusOne, &[]),
+            ("rt_sys_fstat", "_fstat", 2, 2, false, MinusOne, &[]),
+            ("rt_sys_ftruncate", "_ftruncate", 2, 2, false, MinusOne, &[]),
+            (
+                "rt_sys_readlinkat",
+                "_readlinkat",
+                4,
+                4,
+                true,
+                MinusOne,
+                &[],
+            ),
+            ("rt_sys_getcwd", "_getcwd", 2, 2, true, Null, &[]),
+            ("rt_sys_fcntl", "_fcntl", 3, 2, false, MinusOne, &[]),
+            ("rt_sys_mmap", "_mmap", 6, 6, true, MinusOne, &[]),
+            ("rt_sys_munmap", "_munmap", 2, 2, false, MinusOne, &[]),
+            (
+                "rt_sys_clock_gettime",
+                "_clock_gettime",
+                2,
+                2,
+                false,
+                MinusOne,
+                &[],
+            ),
+            ("rt_sys_ioctl", "_ioctl", 3, 2, false, MinusOne, &[]),
+            ("rt_sys_random", "_getentropy", 2, 2, false, MinusOne, &[]),
+            // sigaction(signal, action, old): no old action.
+            (
+                "rt_sys_sigaction",
+                "_sigaction",
+                2,
+                3,
+                false,
+                MinusOne,
+                &[0],
+            ),
+            (
+                "rt_sys_sigaltstack",
+                "_sigaltstack",
+                2,
+                2,
+                false,
+                MinusOne,
+                &[],
+            ),
+            ("rt_sys_getpid", "_getpid", 0, 0, false, Never, &[]),
+            ("rt_sys_kill", "_kill", 2, 2, false, MinusOne, &[]),
+            // _exit, not exit: no atexit handlers, as exit_group.
+            ("rt_sys_exit", "__exit", 1, 1, false, Never, &[]),
+        ];
+        for (name, implementation) in RUNTIME {
+            let Runtime::Syscall(call) = implementation else {
+                continue;
+            };
+            let row = rows
+                .iter()
+                .find(|row| row.0 == *name)
+                .unwrap_or_else(|| panic!("`{name}` has no row"));
+            let OsCall::Library(import) = (MACOS_AARCH64.call)(*call) else {
+                panic!("`{name}` is not a libSystem call on macOS");
+            };
+            assert_eq!(
+                (
+                    import.symbol,
+                    import.args,
+                    import.fixed,
+                    import.wide,
+                    import.fails,
+                    import.then
+                ),
+                (row.1, row.2, row.3, row.4, row.5, row.6),
+                "`{name}`"
+            );
+            assert!(
+                usize::from(import.args) + import.then.len() >= usize::from(import.fixed),
+                "`{name}`"
+            );
+            assert!(MACOS_AARCH64.slot(import).is_some(), "`{name}` is imported");
+        }
+        let errno = MACOS_AARCH64.imports[usize::from(MACOS_AARCH64.errno)];
+        assert_eq!(errno.symbol, "___error");
+        // Every import is some call's, or `__error`'s, and none twice.
+        assert_eq!(MACOS_AARCH64.imports.len(), rows.len() + 1);
+        let mut symbols: Vec<&str> = MACOS_AARCH64.imports.iter().map(|i| i.symbol).collect();
+        symbols.sort_unstable();
+        symbols.dedup();
+        assert_eq!(symbols.len(), MACOS_AARCH64.imports.len());
+    }
+
+    /// A macOS executable makes no system call of its own: every call is
+    /// a `libSystem` function, through the import table.
+    #[test]
+    fn macos_executables_call_only_libsystem() {
+        let report = oska_check::check_module(EVERY_CALL);
+        let program = report.program.expect("the program should check");
+        let rt = oska_check::check_toolchain_rt()
+            .program
+            .expect("std.rt should check");
+        let module = crate::lower::program(
+            &program,
+            &rt,
+            &|d| d,
+            crate::lower::Entry::Main,
+            crate::Target::MacosAarch64,
+        )
+        .expect("the program should lower");
+        let mut imports = std::collections::BTreeSet::new();
+        for inst in module.functions.iter().flat_map(|f| &f.insts) {
+            match inst {
+                crate::ir::Inst::Syscall { .. } | crate::ir::Inst::EntrySp { .. } => {
+                    panic!("a macOS executable has {inst:?}")
+                }
+                crate::ir::Inst::LibCall { import, .. } => {
+                    imports.insert(*import);
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(imports.len(), MACOS_AARCH64.imports.len());
     }
 
     #[test]
