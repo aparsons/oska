@@ -1,6 +1,6 @@
 # On macOS, a system-call intrinsic is one libSystem call
 
-- **Status:** Proposed (2026-11-17), for spec #154. Amends [ADR 0013](0013-system-calls-only-in-std-rt.md). The research behind it is [docs/research/2026-11-macos-libsystem-calls.md](../research/2026-11-macos-libsystem-calls.md).
+- **Status:** Accepted (2026-11-17), for spec #154. On 2026-11-17 the user accepted all six decisions the research recommends (its §4, Q1–Q6). Amends [ADR 0013](0013-system-calls-only-in-std-rt.md). The research behind it is [docs/research/2026-11-macos-libsystem-calls.md](../research/2026-11-macos-libsystem-calls.md).
 
 ## Decision
 
@@ -35,7 +35,7 @@ One result convention means `std.rt`'s error handling is written once, for every
 ## Considered options
 
 - **`std.rt` reads `errno` itself, through a new intrinsic.** Rejected: every error path in `std.rt` would test a different failure value on each operating system.
-- **Per-OS wrappers in the backend** that give macOS calls Linux's exact shape, such as copying `readdir`'s record into a buffer or measuring `getcwd`'s result. Rejected: this is the hidden surface ADR 0013 rejected. Where shapes differ, the intrinsic's contract is made neutral instead, and `std.rt` handles it.
+- **Per-operating-system wrappers in the backend** that give macOS calls Linux's exact shape, such as copying `readdir`'s record into a buffer or measuring `getcwd`'s result. Rejected: this is the hidden surface ADR 0013 rejected. Where shapes differ, the intrinsic's contract is made neutral instead, and `std.rt` handles it.
 - **Direct `svc`/`syscall` to the macOS kernel.** Rejected: Apple does not support it, and the numbers and conventions change between releases (ADR 0011).
 
 ## Consequences

@@ -1,7 +1,7 @@
 # Research: how `std.rt` calls into macOS's libSystem
 
 - **Date:** 2026-11-17
-- **Status:** design for review, ahead of #169 (spec #154). Nothing here is implemented.
+- **Status:** accepted 2026-11-17: the user accepted all six recommended decisions (§4), ahead of #169 (spec #154). Nothing here is implemented. An independent review on 2026-11-17 corrected §2's `MH_NOUNDEFS` claim and settled some **unverified** claims against dyld `fd8d0c4`, Libc `71bbe35`, Linux `20eef29` and the `getrandom(2)` man page.
 - **Question:** The review of PR #358 (#168) found that its `Platform` table can't express libSystem calls. What is the smallest shape that serves #169–#173 without changing what Linux executables do?
 - **Method:**
   - Read the Oska sources at `origin/main` `5e335fb` (2026-11-17) and at PR #358's head `c4a5f89` (branch `spec/154-t168-std-rt-os-tables`, 2026-11-17, not merged). Claims about Oska cite the file and line at one of those commits.
@@ -33,7 +33,7 @@ The design keeps one rule: **a system-call intrinsic is one call of the operatin
 3. **Calling convention.** A new IR instruction, `Inst::LibCall`, is a C call through the GOT slot. Each code generator places variadic arguments as its platform requires, and sign-extends `int` results. Oska's register model already treats every caller-saved register as dead across a `Syscall`, so register allocation does not change.
 4. **errno.** `lower.rs` expands a failing `Library` call into a `___error` call and a 32-bit load, then negates. `std.rt`'s error handling does not change.
 5. **The `std.rt` table** gains the values macOS needs, and four intrinsics change their contracts in ways Linux already meets.
-6. **ADR 0013** gets a sibling, draft [ADR 0015](../adr/0015-macos-intrinsics-are-libsystem-calls.md) (Proposed). It defines "one call of the operating system" for libSystem and says what the backend may add around that call.
+6. **ADR 0013** gets a sibling, [ADR 0015](../adr/0015-macos-intrinsics-are-libsystem-calls.md) (Accepted). It defines "one call of the operating system" for libSystem and says what the backend may add around that call.
 
 Linux keeps every system call it makes today, with the same arguments. Its `Platform` data moves into the new type with the same values.
 
@@ -105,7 +105,7 @@ Linux's `struct sigaction` (32 bytes) is the kernel's `rt_sigaction` layout. mac
 
 Three defects in `std.rt` would surface on macOS (found 2026-11-17, at `c4a5f89`):
 
-- `stdout_buffer` gives `TCGETS` a 56-byte buffer (`alloc(64)` minus the count word, `rt.osk:2060-2061`). That is enough for Linux's kernel termios (36 bytes, **unverified**), but macOS's `TIOCGETA` writes 72 bytes. That would corrupt the heap.
+- `stdout_buffer` gives `TCGETS` a 56-byte buffer (`alloc(64)` minus the count word, `rt.osk:2060-2061`). That is enough for Linux's kernel termios (36 bytes: four `unsigned int` flags, `c_line` and `c_cc[19]`, `include/uapi/asm-generic/termbits.h` at Linux `20eef29`; neither arm64 nor x86 overrides it), but macOS's `TIOCGETA` writes 72 bytes. That would corrupt the heap.
 - `lone_file` reads `st_nlink` with `rt_mem_load32` (`rt.osk:3493`). On macOS that is a u16 followed by the low bytes of `st_ino`, so every file would look hard-linked (the #171 finding).
 - `sigbus()` returns 7 (`rt.osk:1893`), and the fault report hard-codes `signal 7 (SIGBUS)` (`rt.osk:1987`).
 
@@ -116,8 +116,13 @@ Three defects in `std.rt` would surface on macOS (found 2026-11-17, at `c4a5f89`
 - With `imports_format = DYLD_CHAINED_IMPORT` (1), each import is 4 bytes: `lib_ordinal:8, weak_import:1, name_offset:23` (`fixup-chains.h:301-312`).
 - With `pointer_format = DYLD_CHAINED_PTR_64` (2), each pointer slot holds a `dyld_chained_ptr_64_bind { ordinal:24, addend:8, reserved:19, next:12, bind:1 }` (`fixup-chains.h:219-226`). `next` counts 4-byte strides, so consecutive 8-byte slots chain with `next = 2` and the last has `next = 0`.
 - `SG_READ_ONLY` (`0x10`) marks a segment "made read-only after fixups" (`loader.h:404`). That is how `__DATA_CONST` keeps the bound pointers from being overwritten.
-- The header flags are `MH_PIE | MH_DYLDLINK | MH_TWOLEVEL`, without `MH_NOUNDEFS`, since the file has undefined symbols (`loader.h:126-190`).
-- **Unverified:** whether dyld also requires `LC_DYLD_EXPORTS_TRIE`, `LC_SYMTAB`, `LC_DYSYMTAB` or `LC_UUID` in a main executable, and from which macOS version it accepts chained fixups in one. ld64 emits all of these; #169's first CI run settles it. Neither question changes the import design.
+- The header flags are `MH_NOUNDEFS | MH_DYLDLINK | MH_TWOLEVEL | MH_PIE` (`0x00200085`), as ld64 writes them for an ordinary executable (`loader.h:126-190`). `MH_NOUNDEFS` refers to static linking: every symbol is bound to a dylib, so it is set even though the file has imports. dyld `fd8d0c4` does not check the bit, so this is about matching ld64, not about loading. (Corrected in review on 2026-11-17. The draft said to leave the bit out.)
+- **What dyld `fd8d0c4` checks** (read in review, 2026-11-17, not run). Its enforcement epoch comes from the SDK version the file declares (`mach_o/Policy.cpp:40-44`):
+  - It needs a **platform load command**. `validMachOForArchAndPlatform` refuses a file that was not built for the process's platform (`common/MachOAnalyzer.cpp:293-296`, `mach_o/UnsafeHeader.cpp:1209-1225`). So the file needs `LC_BUILD_VERSION` with platform macOS. The draft did not list it.
+  - It needs **at least one `LC_LOAD_DYLIB`**, from the spring 2025 SDK epoch (`UnsafeHeader.cpp:749-757`, `Policy.cpp:440-443`). The design already has libSystem.
+  - It needs **`LC_UUID` in a main executable** once the declared SDK is new enough: the fall 2025 epoch in `Policy::enforceHasUUID` (`Policy.cpp:450-461`), or macOS SDK 14 in `MachOFile::enforceFormat` (`common/MachOFile.cpp:2700-2703`). Emit one, computed from the file's other bytes so builds stay identical on every host.
+  - **Chained fixups.** ld64 uses them by default from deployment target macOS 12 on arm64 and macOS 13 for x86_64 executables (`Policy.cpp:142-170`). `LC_BUILD_VERSION`'s `minos` should be at least that.
+- **Still unverified:** whether dyld needs `LC_SYMTAB`, `LC_DYSYMTAB` or `LC_DYLD_EXPORTS_TRIE` in a main executable. ld64 emits all three. #169's first CI run settles it, and the answer doesn't change the import design.
 
 ## 3. The design
 
@@ -166,7 +171,7 @@ The macOS rows (symbol for arm64 / `fixed` / result / failure):
 | Getcwd | `_getcwd` / 2 / 64 / `NULL` | contract change, 3.5 |
 | Fcntl, Ioctl | `_fcntl`, `_ioctl` / **2 of 3** / 32 / −1 | variadic third argument |
 | Mmap, Munmap | `_mmap` / 6 / 64 / −1 (`MAP_FAILED`); `_munmap` / 2 / 32 / −1 | |
-| ClockGettime | `_clock_gettime` / 2 / 32 / −1 | `CLOCK_REALTIME` is 0 on macOS: **unverified**, from Libc `time.h`, not fetched |
+| ClockGettime | `_clock_gettime` / 2 / 32 / −1 | `CLOCK_REALTIME` is 0 on macOS (Libc `71bbe35` `include/_time.h:211`, checked in review) |
 | Random | `_getentropy` / 2 / 32 / −1 | at most 256 bytes; `std.rt` asks for 8 |
 | Sigaction | `_sigaction` / 3 / 32 / −1, `then: [0]` | old action |
 | Sigaltstack, Kill | `_sigaltstack`, `_kill` / 2 / 32 / −1 | |
@@ -217,7 +222,7 @@ Placing the variadic argument in a register as well would be harmless, but the A
 
 **x86_64.** The code generator does the parallel move into `rdi, rsi, rdx, rcx, r8, r9`. Fixed and variadic arguments go in the same registers. Then it emits `xor eax, eax` before every library call: the vector-register count for variadics, and harmless otherwise. Then the GOT call, then `movsxd rax, eax` if `!wide`.
 
-Stack alignment holds without new work: frames are 16-byte multiples, so `sp` is 16-aligned at every call on both processors (§1).
+Stack alignment holds without new work: frames are 16-byte multiples, so `sp` is 16-aligned at every call on both processors (§1). On x86_64 that depends on how `_start` is entered. `LC_MAIN` enters it by a C call, so `rsp` is 8 mod 16, as at any function's entry, and `_start`'s calls are aligned. Linux's kernel entry is 0 mod 16, so `_start`'s calls on Linux are 8 off, which no system call notices. (Derived from `x86_64.rs`'s frame rule, not run on macOS.)
 
 **Entry.** dyld calls `LC_MAIN`'s entry as `main(argc, argv, envp, apple)`, by the C convention, on the main thread's stack. `_start` never returns, so clobbering callee-saved registers there is fine. It calls `_exit` through `std.rt`'s `exit`. What changes is how `_start` finds `argc` and `argv` (3.5).
 
@@ -257,7 +262,7 @@ The errno *values* that differ, `ELOOP` and anything the #167 `IoError` kind tab
 
 - `sigbus` (7 / 10). The fault report builds its `SIGBUS` line from it.
 - `e_loop` (40 / 62).
-- `termios_bytes` (36 / 72; Linux's is the kernel's `struct termios` that `TCGETS` fills, **unverified** against the UAPI header), the size of the buffer `stdout_buffer` gives the terminal `ioctl`. Allocating the larger size everywhere is the alternative.
+- `termios_bytes` (36 / 72; Linux's is the kernel's `struct termios` that `TCGETS` fills, §2), the size of the buffer `stdout_buffer` gives the terminal `ioctl`. Allocating the larger size everywhere is the alternative.
 - `stat_mode_bits` and `stat_nlink_bits` (32/32 on Linux, 16/16 on macOS), read through a `load_bits(at, bits)` helper.
 - `dirent_one_at_a_time` (false / true). On Linux, `rt_sys_read_dir`'s positive result is the number of record bytes it put at `buf`. On macOS it is the address of one record, whose length is at `dirent_length`. `list_dir` takes `(start, end)` from this flag and walks records as it does now.
 
@@ -272,7 +277,7 @@ The errno *values* that differ, `ELOOP` and anything the #167 `IoError` kind tab
 | `process_init(sp, handler)` | reads `argc`/`argv` at `sp` | `process_init(argc, argv, handler)` | `_start` loads them from `EntrySp` | `_start` takes `x0`/`x1` (`rdi`/`rsi`) |
 
 - **`getcwd`.** `working_directory` (`rt.osk:3218-3236`) already checks the first byte. It would find the length by scanning to the NUL, which is ≤ 4096 bytes into a buffer it owns.
-- **`random`.** `random_next_int` would test `got < 0` instead of `got != 8` (`rt.osk:2534`). Linux's `getrandom` fills requests of ≤ 256 bytes completely once the pool is ready (man page). **Unverified** here, since the man page was not fetched; it is the documented behaviour the current code already relies on.
+- **`random`.** `random_next_int` would test `got < 0` instead of `got != 8` (`rt.osk:2534`). Linux's `getrandom` fills requests of ≤ 256 bytes completely once the pool is ready. The man page says it "will return all of the bytes that have been requested" (`getrandom(2)`, man7.org, checked in review).
 - **Why `readdir`.**
   - `getdirentries` is unavailable with 64-bit inodes, and `__getdirentries64` is a private symbol.
   - `readdir_r` is deprecated in Libc's `dirent.h:130`.
@@ -282,7 +287,7 @@ Linux executables' **system calls** are unchanged, but their **bytes** change, b
 
 ### 3.6 What ADR 0013 needs to say
 
-ADR 0013 says intrinsics are lowered "directly to machine code". It also rejects "system-call wrappers [that] live inside the code generator", because they hide the surface in Rust. libSystem forces a little code around each call: the GOT load, variadic placement, sign extension and the `errno` read. Without a rule, that could grow into the wrappers 0013 rejected. Draft [ADR 0015](../adr/0015-macos-intrinsics-are-libsystem-calls.md) (Proposed) states the rule:
+ADR 0013 says intrinsics are lowered "directly to machine code". It also rejects "system-call wrappers [that] live inside the code generator", because they hide the surface in Rust. libSystem forces a little code around each call: the GOT load, variadic placement, sign extension and the `errno` read. Without a rule, that could grow into the wrappers 0013 rejected. [ADR 0015](../adr/0015-macos-intrinsics-are-libsystem-calls.md) (Accepted) states the rule:
 
 - A system-call intrinsic is **one call of the operating system's interface**: a system call by number (Linux), or one function of the one library the platform requires (libSystem on macOS; kernel32/ntdll on Windows, later).
 - Around that call the backend may add only:
@@ -323,15 +328,16 @@ Each question has options and a recommendation, most important first.
 - (b) No: the backend adapts macOS results to Linux's (`strlen` after `getcwd`, a copy loop after `readdir`). This keeps Linux's bytes, but it is the "wrappers in the code generator" ADR 0013 rejected.
 
 **Q6. Record the rule as a new ADR or as an edit to ADR 0013?**
-- (a) A new ADR 0015 that amends 0013 (drafted here, Proposed), with a one-line pointer added to 0013 when it is accepted. **Recommended:** it keeps 0013's history and matches how 0014 amended 0011.
+- (a) A new ADR 0015 that amends 0013 (drafted here, now Accepted), with a one-line pointer added to 0013 when it is accepted. **Recommended:** it keeps 0013's history and matches how 0014 amended 0011.
 - (b) Rewrite 0013's Decision section in place.
 
 ## 5. Risks
 
-- **dyld's minimum load commands are unverified** (§2). If dyld refuses a file without, say, `LC_SYMTAB`, `LC_DYSYMTAB` or `LC_UUID`, #169 adds empty ones. That costs bytes, not design.
-- **The x86_64 psABI and Linux `getrandom` claims were not re-read** at the source (§2, 3.5). Both are long-standing and match what the code does today.
+- **dyld's minimum load commands are only partly settled** (§2). dyld's source requires `LC_BUILD_VERSION`, `LC_LOAD_DYLIB`, and `LC_UUID` once the declared SDK is recent enough. `LC_SYMTAB`, `LC_DYSYMTAB` and `LC_DYLD_EXPORTS_TRIE` are still unverified; if dyld refuses a file without them, #169 adds empty ones. That costs bytes, not design.
+- **The x86_64 psABI claims were not re-read** at the source (§2): `al` bounds the vector registers, and an `int` result leaves the top of `rax` unspecified. Both are long-standing and matter only from #173.
 - **`$INODE64` is easy to get wrong silently.** On x86_64, a call to `_fstat` without the suffix links and runs, but fills the old 32-bit-inode `struct stat`, so every offset in the table is wrong. A format test should assert the three suffixed names on `macos-x86_64`, and #173's differential suite on `macos-15-intel` covers the behaviour.
 - **Sign extension is easy to miss.** An `int` result used unextended can look right on the CI runner and break under another libSystem build. The `wide` flag is per import, so a test can check that every `int`-returning row says `false`.
 - **Linux executables' bytes change once** (Q5a), without behaviour changes. Any test that pins a Linux executable's hash will need updating in the same PR.
 - **The `std.rt` table grows by six fields.** Each one is data, but `dirent_one_at_a_time` is a shape flag that `list_dir` branches on. That is the first table field that is a choice, not a number. ADR 0015 allows it because the branch is on data the table owns, not on which platform is running. Reviewers may prefer Q3(b) or a per-OS function to avoid it.
+- **The environment's address is unverified on macOS.** `process_init(argc, argv, handler)` assumes, as on Linux, that `envp` starts after `argv`'s `NULL`. dyld also passes `envp` as `main`'s third argument (`x2`/`rdx`). Passing that explicitly is safer if #170 finds the layout differs.
 - **Nothing here has run on a Mac.** The first `macos-latest` CI run in #169 is the first real test of the import path.
