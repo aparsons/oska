@@ -1,9 +1,10 @@
 //! What `std.rt` reads that differs between operating systems or
 //! processors (open flags, `mmap` flags, `struct stat`, the directory
-//! records, `struct sigaction` and `stack_t`) is in one table per target
-//! platform, which the constant intrinsic `rt_mem_platform()` gives (#158,
-//! #168). The values below are the Linux UAPI headers' for each platform,
-//! so a wrong entry fails here and not only on the platform's runner.
+//! records, `struct sigaction`, `stack_t`, `struct termios`, `SIGBUS` and
+//! `ELOOP`) is in one table per target platform, which the constant
+//! intrinsic `rt_mem_platform()` gives (#158, #168, #366). The values
+//! below are the Linux UAPI headers' for each platform, so a wrong entry
+//! fails here and not only on the platform's runner.
 
 use oska_check::program::{ExprKind, Program, TypeDeclKind};
 
@@ -23,6 +24,10 @@ fn linux_common() -> Vec<(&'static str, i128)> {
         ("f_dupfd_cloexec", 1030),
         // asm-generic/ioctls.h: TCGETS.
         ("tty_request", 0x5401),
+        // asm-generic/termbits.h, `struct termios`, which TCGETS fills:
+        // c_iflag, c_oflag, c_cflag, c_lflag (4 bytes each), c_line, and
+        // c_cc[NCCS], NCCS being 19.
+        ("termios_bytes", 4 * 4 + 1 + 19),
         // asm-generic/mman-common.h and mman.h: MAP_PRIVATE |
         // MAP_ANONYMOUS, and MAP_NORESERVE.
         ("map_private_anonymous", 0x02 | 0x20),
@@ -37,6 +42,8 @@ fn linux_common_records() -> Vec<(&'static str, i128)> {
         // each), d_reclen (2), d_type (1), d_name.
         ("dirent_length", 16),
         ("dirent_name", 19),
+        // getdents64 fills the buffer with records: false.
+        ("dirent_one_at_a_time", 0),
         // The kernel's `struct sigaction`: sa_handler, sa_flags,
         // sa_restorer, sa_mask (8 bytes each); a fault's flags are
         // SA_ONSTACK | SA_RESETHAND | SA_NODEFER | SA_RESTORER
@@ -51,12 +58,15 @@ fn linux_common_records() -> Vec<(&'static str, i128)> {
         // asm-generic/signal.h, `stack_t`: ss_sp, ss_flags (4 bytes and
         // padding), ss_size.
         ("stack_size", 16),
+        // asm-generic/signal.h: SIGBUS; asm-generic/errno.h: ELOOP.
+        ("sigbus", 7),
+        ("e_loop", 40),
     ]
 }
 
 /// A Linux table: the processor's open flags and `struct stat` among the
 /// values every Linux processor shares.
-fn linux(flags: [(&'static str, i128); 2], stat: [(&'static str, i128); 4]) -> Vec<(String, i128)> {
+fn linux(flags: [(&'static str, i128); 2], stat: [(&'static str, i128); 6]) -> Vec<(String, i128)> {
     flags
         .into_iter()
         .chain(linux_common())
@@ -93,6 +103,7 @@ fn table(program: &Program, name: &str) -> Vec<(String, i128)> {
         .zip(fields)
         .map(|(field, value)| match &value.kind {
             ExprKind::Int(n, _) => (field.name.clone().unwrap_or_default(), *n),
+            ExprKind::Bool(b) => (field.name.clone().unwrap_or_default(), i128::from(*b)),
             _ => panic!("`{name}`'s `{:?}` is not a constant", field.name),
         })
         .collect()
@@ -115,6 +126,9 @@ fn linux_aarch64s_table_holds_linuxs_values_with_arm64s_flags_and_stat() {
             ("stat_mode", 16),
             ("stat_nlink", 20),
             ("stat_size", 48),
+            // st_mode and st_nlink are `unsigned int`s.
+            ("stat_mode_bits", 32),
+            ("stat_nlink_bits", 32),
         ],
     );
     assert_eq!(table(&program, "linux_aarch64"), expected);
@@ -139,6 +153,9 @@ fn linux_x86_64s_table_holds_linuxs_values_with_x86_64s_flags_and_stat() {
             ("stat_mode", 24),
             ("stat_nlink", 16),
             ("stat_size", 48),
+            // st_mode is an `unsigned int`, st_nlink an `unsigned long`.
+            ("stat_mode_bits", 32),
+            ("stat_nlink_bits", 64),
         ],
     );
     assert_eq!(table(&program, "linux_x86_64"), expected);
