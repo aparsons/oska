@@ -7,3 +7,5 @@ On 2026-11-17 two user memories disagreed:
 Open: which one wins. On 2026-11-17 the coordinator briefed agents to push normally, because the pass stamp postdates the trial note.
 
 On 2026-11-17 the coordinator resolved it in favour of pushing normally and updated the `spec-191-pr-per-ticket-trial` memory, marking the old line superseded.
+
+Lint note (2026-11-17): the "Open:" line above described the state earlier on 2026-11-17 and is superseded by the resolution paragraph; there is no open question as of 2026-11-17.

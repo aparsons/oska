@@ -27,6 +27,7 @@ use oska_check::program::Program;
 use oska_native::Target;
 use oska_syntax::{Diagnostic, Severity, Span};
 
+use crate::cache::Cached;
 use crate::{Flags, Places};
 
 /// The target `oskac run` and `oskac test` compile for with `flags`:
@@ -90,16 +91,26 @@ pub struct Invocation<'a> {
 /// `oskac run`, natively: compile `program` for `target`, the host's, run
 /// it with the invocation's `argv0` as its path and `args` after it, and
 /// report a panic as the interpreter's run does, as JSON with `json`.
-pub fn run(program: &Program, target: Target, places: &Places, invocation: Invocation) -> Run {
+/// The executable is reused from the build cache (`cached`) when the
+/// program's inputs are unchanged.
+pub fn run(
+    program: &Program,
+    target: Target,
+    places: &Places,
+    invocation: Invocation,
+    cached: &Cached,
+) -> Run {
     let Invocation { argv0, args, json } = invocation;
     // A human report is placed in the source by the executable itself; a
     // JSON one is read back unplaced and placed here, as the
     // interpreter's panic is.
-    let built = if json {
-        oska_native::build(program, target, &|d| d)
-    } else {
-        oska_native::build(program, target, &|d| places.locate(d))
-    };
+    let built = cached.native("run", target, json, || {
+        if json {
+            oska_native::build(program, target, &|d| d)
+        } else {
+            oska_native::build(program, target, &|d| places.locate(d))
+        }
+    });
     let bytes = match built {
         Ok(bytes) => bytes,
         Err(refusal) => return Run::Refused(refusal),
@@ -345,7 +356,7 @@ fn private_dir() -> std::io::Result<PathBuf> {
 
 /// 64 random bits: the standard library's hash keys come from the
 /// operating system's random source, and differ for every map.
-fn random() -> u64 {
+pub(crate) fn random() -> u64 {
     use std::hash::{BuildHasher, Hasher};
     let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
     hasher.write_u32(std::process::id());
