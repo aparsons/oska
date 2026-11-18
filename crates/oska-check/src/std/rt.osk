@@ -2315,9 +2315,9 @@ fn errno_message(errno: Int) -> String {
 
 // The wording of the kinds of the system errors 1 to 133 (Linux's
 // numbers), in order, separated by `|`; empty for a number whose kind
-// has no wording of its own. It is `oska-sys`'s table (`IO_KINDS`) read
-// through Rust's kind for each number, and a test (`native_files.rs`)
-// checks it against that for every number.
+// has no wording of its own. It is `oska-sys`'s Linux table
+// (`LINUX_ERRORS`) worded by its kinds (`IO_KINDS`), and a test
+// (`native_files.rs`) checks it against that for every number.
 fn errno_table() -> String {
     "permission denied|not found||interrupted|||||||would block|out of memory|permission denied|||resource busy|already exists|cannot move across devices||not a directory|is a directory|invalid input|||||file too large|no space left on device|not seekable|read-only file system|too many links|broken pipe||||invalid file name||not supported|directory not empty||||||||||||||||||||||||||||||||||||||||||||||||||||||||not supported|||||||||||||||timed out||||||||||||quota exceeded|||||||||||"
 }

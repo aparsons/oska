@@ -1174,7 +1174,7 @@ fn the_errno_table_is_oskas_wording_for_every_number() {
     assert_eq!(table.len(), 133);
     for (index, wording) in table.iter().enumerate() {
         let errno = index as i32 + 1;
-        let oska = oska_sys::io_error_message(&std::io::Error::from_raw_os_error(errno));
+        let oska = oska_sys::system_wording(oska_sys::LINUX_ERRORS, errno);
         let expected = if wording.is_empty() {
             oska_sys::OTHER_WORDING
         } else {
