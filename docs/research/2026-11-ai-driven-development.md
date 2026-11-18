@@ -600,3 +600,33 @@ Just outside the top 10:
 | [arXiv 2310.06770](https://arxiv.org/abs/2310.06770) (ICLR 2024), [arXiv 2405.15793](https://arxiv.org/abs/2405.15793) (NeurIPS 2024) | primary | Agent–computer interfaces |
 | [arXiv 2308.05177](https://arxiv.org/abs/2308.05177) (ICSE 2025) | primary | Compiler-error repair |
 | [arXiv 2208.08227](https://arxiv.org/abs/2208.08227) (IEEE TSE 2023), [arXiv 2308.09895](https://arxiv.org/abs/2308.09895) (OOPSLA 2024) | primary | Low-resource languages |
+
+## Status as of 2026-11-18 (`2222739`)
+
+The note above was written 2026-11-12 at v0.3.0 and is left as written. This section records what has happened since. Terminology has moved on: "authority baseline" (not "authority diff"), "fix applicability" `machine`/`maybe`/`placeholders`, and severity `error`/`note` only.
+
+| ID | Status | Link |
+| --- | --- | --- |
+| A1 | Done | #194, #195, PR #267 |
+| A2 | Done | #193 |
+| A3 | Done (core) | #192; `related` covers definitions only, and the trust-error trail waits on #111 |
+| A4, A5, A6 | Not started | |
+| B1 | Done (file baseline) | #196, #123; `--baseline-ref` excluded |
+| B2, B3, B4 | Not started | |
+| C1, C3 | Not started | |
+| C2 | Specced | #275 |
+| C4 | Specced | #206, tickets #210–#212 |
+| D1 | Specced, partly done | #213 merged in PR #269; #207 and #214–#217 open |
+| D2 | Specced | #294 |
+| D3 | Not started | |
+| D4 | Done | #83, #84, #85 |
+| E1–E4 | Not started | |
+| F1–F5 | Not started | |
+| G1 | Not started | |
+| G2 | Specced | #12 |
+| G3 | Done | #204, #191; self update #258–#261 still open |
+
+### Open questions
+
+- Settled: 2 (`--placeholders` is opt-in, #185), 3 (a committed baseline file, GLOSSARY "Authority baseline"), 6 (#206).
+- Open: 1, 4 and 5. They are being decided in a follow-up on 2026-11-18.
