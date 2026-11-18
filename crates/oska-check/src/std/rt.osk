@@ -2013,15 +2013,16 @@ fn set_action(signal: Int, handler: Int, flags: Int) {
 // `on_fault` never returns, the restorer, the address it would return
 // to, is never used: 0.
 fn handle_faults(handler: Int) {
-    // stack_t, 24 bytes: the stack's lowest address at 0, its size where
-    // the table says, its flags 0.
+    // stack_t, 24 bytes: the stack's lowest address at 0, then its size in
+    // the word at 8 or 16 that the table says, and its flags, 0, in the
+    // other.
     let size = 65536
+    let size_at = rt_mem_platform().stack_size
     let object = alloc(32)
     let stack = rt_mem_add(object, 8)
     rt_mem_store64(stack, map(0, size, 3, private_anonymous()))
-    rt_mem_store64(rt_mem_add(stack, 8), 0)
-    rt_mem_store64(rt_mem_add(stack, 16), 0)
-    rt_mem_store64(rt_mem_add(stack, rt_mem_platform().stack_size), size)
+    rt_mem_store64(rt_mem_add(stack, 24 - size_at), 0)
+    rt_mem_store64(rt_mem_add(stack, size_at), size)
     let _ = rt_sys_sigaltstack(stack, 0)
     free(object)
     rt_mem_store64(global(30), default_action())
