@@ -18,6 +18,21 @@ pub const LINUX_PROCESSOR_FIELDS: [&str; 8] = [
     "stat_nlink_bits",
 ];
 
+/// The names of every `std.rt` function that gives a `Platform`: one
+/// table per target platform, sorted.
+pub fn tables() -> Vec<String> {
+    let report = oska_check::check_toolchain_rt();
+    let program: Program = report.program.expect("std.rt should check");
+    let mut names: Vec<String> = program
+        .functions
+        .iter()
+        .filter(|(_, function)| function.ret.to_string() == "Platform")
+        .map(|(name, _)| name.to_string())
+        .collect();
+    names.sort();
+    names
+}
+
 /// The table the `std.rt` function `name` gives, by field name.
 pub fn table(name: &str) -> Vec<(String, i128)> {
     let report = oska_check::check_toolchain_rt();

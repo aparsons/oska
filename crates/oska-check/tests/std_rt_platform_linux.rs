@@ -56,7 +56,8 @@ fn linux_shared() -> Vec<(&'static str, i128)> {
         ),
         // asm-generic/signal.h, `stack_t`: ss_sp, ss_flags (4 bytes and
         // padding), ss_size.
-        ("stack_size", 16),
+        ("ss_size_at", 16),
+        ("ss_flags_at", 8),
         // asm-generic/signal.h: SIGBUS; asm-generic/errno.h: ELOOP.
         ("sigbus", 7),
         ("e_loop", 40),

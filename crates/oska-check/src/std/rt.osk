@@ -194,8 +194,10 @@ struct Platform {
     sigaction_bytes: Int,
     sigaction_flags: Int,
     sa_fault_flags: Int,
-    // `stack_t`: the offset of `ss_size` (`ss_sp` is at 0).
-    stack_size: Int,
+    // `stack_t`, 24 bytes: the offsets of `ss_size` and `ss_flags`
+    // (`ss_sp` is at 0). `handle_faults` writes both.
+    ss_size_at: Int,
+    ss_flags_at: Int,
     // `SIGBUS`'s number, and `ELOOP`'s.
     sigbus: Int,
     e_loop: Int,
@@ -233,7 +235,8 @@ fn linux_aarch64() -> Platform {
         sigaction_bytes: 32,
         sigaction_flags: 8,
         sa_fault_flags: 3422552064,
-        stack_size: 16,
+        ss_size_at: 16,
+        ss_flags_at: 8,
         sigbus: 7,
         e_loop: 40,
         errors_at: 0,
@@ -270,7 +273,8 @@ fn linux_x86_64() -> Platform {
         sigaction_bytes: 32,
         sigaction_flags: 8,
         sa_fault_flags: 3422552064,
-        stack_size: 16,
+        ss_size_at: 16,
+        ss_flags_at: 8,
         sigbus: 7,
         e_loop: 40,
         errors_at: 0,
@@ -312,7 +316,8 @@ fn macos() -> Platform {
         sigaction_bytes: 16,
         sigaction_flags: 12,
         sa_fault_flags: 21,
-        stack_size: 8,
+        ss_size_at: 8,
+        ss_flags_at: 16,
         sigbus: 10,
         e_loop: 62,
         errors_at: 133,
@@ -2023,16 +2028,15 @@ fn set_action(signal: Int, handler: Int, flags: Int) {
 // `on_fault` never returns, the restorer, the address it would return
 // to, is never used: 0.
 fn handle_faults(handler: Int) {
-    // stack_t, 24 bytes: the stack's lowest address at 0, then its size in
-    // the word at 8 or 16 that the table says, and its flags, 0, in the
-    // other.
+    // stack_t, 24 bytes: the stack's lowest address at 0, and its size and
+    // its flags, 0, in the words the table says.
     let size = 65536
-    let size_at = rt_mem_platform().stack_size
+    let platform = rt_mem_platform()
     let object = alloc(32)
     let stack = rt_mem_add(object, 8)
     rt_mem_store64(stack, map(0, size, 3, private_anonymous()))
-    rt_mem_store64(rt_mem_add(stack, 24 - size_at), 0)
-    rt_mem_store64(rt_mem_add(stack, size_at), size)
+    rt_mem_store64(rt_mem_add(stack, platform.ss_flags_at), 0)
+    rt_mem_store64(rt_mem_add(stack, platform.ss_size_at), size)
     let _ = rt_sys_sigaltstack(stack, 0)
     free(object)
     rt_mem_store64(global(30), default_action())
