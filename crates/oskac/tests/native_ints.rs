@@ -380,35 +380,13 @@ fn heap_text_is_freed_when_its_count_drops_to_zero() {
     let case = Case::file("heap_text_freed", &src);
     let (exe, dir) = differential::build_native(&case);
     // At most 96 MiB: three million texts never freed would need more.
-    // Linux caps the address space; macOS cannot (`ulimit -v` fails), so
-    // there the peak resident memory `time -l` reports is bounded.
-    let limited = if cfg!(target_os = "macos") {
-        "/usr/bin/time -l \"$0\""
-    } else {
-        "ulimit -v 98304 && exec \"$0\""
-    };
-    let output = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(limited)
-        .arg(&exe)
-        .current_dir(&dir)
-        .output()
-        .expect("sh should run the program");
+    let output = differential::run_within_memory(&exe, &dir, 96);
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "label 2999999!\n",
         "{output:?}"
     );
     assert!(output.status.success(), "{output:?}");
-    if cfg!(target_os = "macos") {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let peak: u64 = stderr
-            .lines()
-            .find(|line| line.contains("maximum resident set size"))
-            .and_then(|line| line.split_whitespace().next()?.parse().ok())
-            .unwrap_or_else(|| panic!("no peak memory in `time -l`'s report: {stderr}"));
-        assert!(peak < 96 << 20, "peak resident memory {peak} bytes");
-    }
 }
 
 /// Each sized integer type, with its smallest and largest values.

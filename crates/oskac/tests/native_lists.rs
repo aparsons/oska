@@ -320,15 +320,7 @@ fn freed_lists_release_their_items() {
     num(io, total)"#;
     let case = Case::file("list_release", &program("", body));
     let (exe, dir) = differential::build_native(&case);
-    let output = std::process::Command::new("sh")
-        .args([
-            "-c",
-            "ulimit -v 524288 && exec \"$0\"",
-            exe.to_str().unwrap_or_default(),
-        ])
-        .current_dir(&dir)
-        .output()
-        .expect("the program should run");
+    let output = differential::run_within_memory(&exe, &dir, 512);
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "3003000\n",

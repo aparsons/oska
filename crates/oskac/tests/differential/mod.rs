@@ -232,6 +232,35 @@ fn case_root(case: &Case) -> PathBuf {
     root
 }
 
+/// Runs `exe` in `dir` and checks it never holds more than `mib` MiB.
+/// Linux caps the address space with `ulimit -v`; macOS cannot (`ulimit -v`
+/// fails there), so on macOS the peak resident memory `time -l` reports is
+/// checked after the run instead.
+pub fn run_within_memory(exe: &Path, dir: &Path, mib: u64) -> std::process::Output {
+    let script = if cfg!(target_os = "macos") {
+        "/usr/bin/time -l \"$0\"".to_string()
+    } else {
+        format!("ulimit -v {} && exec \"$0\"", mib * 1024)
+    };
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(script)
+        .arg(exe)
+        .current_dir(dir)
+        .output()
+        .expect("sh should run the program");
+    if cfg!(target_os = "macos") && output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let peak: u64 = stderr
+            .lines()
+            .find(|line| line.contains("maximum resident set size"))
+            .and_then(|line| line.split_whitespace().next()?.parse().ok())
+            .unwrap_or_else(|| panic!("no peak memory in `time -l`'s report: {stderr}"));
+        assert!(peak < mib << 20, "peak resident memory {peak} bytes");
+    }
+    output
+}
+
 /// Build `case` natively, without running it, and for every other
 /// target ([`cross_build`]): the executable, and the directory to run it
 /// in, holding `case`'s files.

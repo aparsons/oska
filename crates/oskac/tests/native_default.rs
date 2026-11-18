@@ -20,9 +20,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 /// Whether this host runs programs natively by default.
-const NATIVE_HOST: bool = cfg!(all(
-    target_os = "linux",
-    any(target_arch = "aarch64", target_arch = "x86_64")
+const NATIVE_HOST: bool = cfg!(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(target_os = "macos", target_arch = "aarch64")
 ));
 
 const MANIFEST: &str = "[package]\nname = \"greeter\"\nversion = \"0.1.0\"\n";
@@ -125,8 +128,7 @@ fn assert_golden(case: &str, files: &[(&str, &str)], args: &[&str]) {
         .unwrap_or_else(|e| panic!("{} should exist: {e}\n{actual}", golden.display()));
     // The one difference between hosts: only a host with a native backend
     // can refuse a program natively, and notes that it runs it on the
-    // interpreter instead. (Regenerate the goldens on aarch64 or x86_64
-    // Linux.)
+    // interpreter instead. (Regenerate the goldens on a native host.)
     let expected = if NATIVE_HOST {
         expected
     } else {
