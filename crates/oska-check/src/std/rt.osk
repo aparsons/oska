@@ -270,6 +270,46 @@ fn linux_x86_64() -> Platform {
     )
 }
 
+// `macos-aarch64` and `macos-x86_64`: xnu's and Libc's values, which the
+// two processors share (`sys/fcntl.h`, `sys/ttycom.h`, `sys/mman.h`,
+// `sys/stat.h` and `dirent.h` with 64-bit inodes, `sys/signal.h`,
+// `sys/errno.h`). `struct stat` has a 16-bit `st_mode` and `st_nlink`;
+// `readdir` gives one record at a time; `sigaction` takes the user's
+// 16-byte `struct sigaction` (handler, a 32-bit mask, `int` flags) and
+// needs no restorer; the fault flags are `SA_ONSTACK | SA_RESETHAND |
+// SA_NODEFER`.
+fn macos() -> Platform {
+    Platform(
+        o_directory: 1048576,
+        o_nofollow: 256,
+        o_wronly: 1,
+        o_creat: 512,
+        o_nonblock: 4,
+        o_cloexec: 16777216,
+        at_fdcwd: -2,
+        f_dupfd_cloexec: 67,
+        tty_request: 1078490131,
+        termios_bytes: 72,
+        map_private_anonymous: 4098,
+        map_noreserve: 64,
+        stat_bytes: 144,
+        stat_mode: 4,
+        stat_nlink: 6,
+        stat_size: 96,
+        stat_mode_bits: 16,
+        stat_nlink_bits: 16,
+        dirent_length: 16,
+        dirent_name: 21,
+        dirent_one_at_a_time: true,
+        sigaction_bytes: 16,
+        sigaction_flags: 12,
+        sa_fault_flags: 21,
+        stack_size: 8,
+        sigbus: 10,
+        e_loop: 62,
+    )
+}
+
 // ---- Memory ----------------------------------------------------------------
 //
 // The runtime's writable words, by index:

@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","cwd":"/work/ws","model":"model-x","tools":["Bash","Edit"]}
+{"type":"assistant",

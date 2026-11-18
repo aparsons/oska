@@ -32,8 +32,10 @@ mod intrinsics;
 mod ir;
 mod layout;
 mod lower;
+mod macho;
 mod optimize;
 mod regalloc;
+mod sha256;
 mod target;
 mod x86_64;
 
@@ -168,12 +170,7 @@ fn compile(
             NOWHERE,
         )
     })?;
-    Ok(elf::write(
-        &target.elf(),
-        text.as_ref(),
-        &module.rodata,
-        module.data_size,
-    ))
+    Ok(target.file(text.as_ref(), &module.rodata, module.data_size))
 }
 
 /// The refusal for the first import of a `std` module with no runtime.

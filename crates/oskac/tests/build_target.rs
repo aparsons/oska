@@ -200,13 +200,16 @@ fn the_target_may_be_written_with_an_equals_sign() {
 #[test]
 fn without_a_target_the_host_platform_is_built_for_when_it_has_a_backend() {
     let dir = workspace("default", &[("hello.osk", HELLO)]);
+    // macOS builds, but is not yet the default on a Mac: its runtime runs
+    // small programs only until spec #154's parity ticket (#172).
     let host_builds = host_platform().is_some_and(|host| {
-        oskac(
-            &dir,
-            &["build", "hello.osk", "--target", host, "-o", "host"],
-        )
-        .status
-        .success()
+        !host.starts_with("macos-")
+            && oskac(
+                &dir,
+                &["build", "hello.osk", "--target", host, "-o", "host"],
+            )
+            .status
+            .success()
     });
     let expected = match host_platform() {
         Some(host) if host_builds => host,
@@ -240,7 +243,7 @@ fn all_writes_one_executable_per_platform_with_a_backend_into_the_output_directo
         &[("hello.osk", HELLO), ("dist/.keep", "")],
         &["build", "hello.osk", "--target", "all", "-o", "dist"],
     );
-    for platform in ["linux-aarch64", "linux-x86_64"] {
+    for platform in ["linux-aarch64", "linux-x86_64", "macos-aarch64"] {
         let alone = oskac(
             &dir,
             &["build", "hello.osk", "--target", platform, "-o", "alone"],
@@ -346,7 +349,7 @@ fn a_supported_platform_with_no_backend_yet_is_refused_naming_its_release() {
     assert_golden(
         "macos",
         &[("hello.osk", HELLO)],
-        &["build", "hello.osk", "--target", "macos-aarch64"],
+        &["build", "hello.osk", "--target", "macos-x86_64"],
     );
     assert_golden(
         "windows_json",

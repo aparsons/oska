@@ -53,16 +53,33 @@ jobs:
       # pre-push hook runs), so local and CI checks cannot drift apart.
       - run: scripts/check.sh
 
+  macos:
+    # Spec #154 (ticket #169): on Apple silicon, macOS executables built by
+    # `oskac build --target macos-aarch64` must load, pass macOS's own
+    # signature check (`codesign --verify --strict`) and print what the
+    # interpreter prints. `build_macos` runs them only on this runner; every
+    # other host checks their format byte by byte.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      # The executables are run only on Apple silicon: a label that moves to
+      # Intel must fail, not skip them.
+      - run: test "$(uname -m)" = arm64
+      - run: cargo test -p oskac --test build_macos
+
   cross-build:
     # Seam 3 of spec #153: every corpus program built for every target on
-    # an aarch64 host and on an x86_64 host. `cross-build-compare` requires
-    # the same bytes from both: the backend never reads the host. A
-    # refusal that scripts/cross-build/refused.txt does not expect fails
-    # here, with oskac's error, so two hosts cannot agree by refusing.
+    # an aarch64 and an x86_64 Linux host and on an Apple silicon Mac.
+    # `cross-build-compare` requires the same bytes from all three: the
+    # backend never reads the host. A refusal that
+    # scripts/cross-build/refused.txt does not expect fails here, with
+    # oskac's error, so two hosts cannot agree by refusing.
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     runs-on: ${{ matrix.os }}
     # A build and one compile per corpus program per target: a few minutes.
     timeout-minutes: 20
@@ -85,4 +102,6 @@ jobs:
         with:
           pattern: cross-build-*
           merge-multiple: true
+      # `uname -m` names the Mac's processor `arm64`.
       - run: diff manifest-aarch64.txt manifest-x86_64.txt
+      - run: diff manifest-aarch64.txt manifest-arm64.txt

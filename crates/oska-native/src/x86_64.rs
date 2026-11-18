@@ -497,6 +497,31 @@ impl Emitter {
                 self.asm.syscall();
                 self.write(*dst, RAX);
             }
+            Inst::LibCall {
+                dst,
+                import,
+                args,
+                wide,
+                ..
+            } => {
+                // The System V convention passes variadic arguments as it
+                // passes the others.
+                self.arguments(args);
+                let at = self.asm.lea_rip(R11);
+                self.fixups.push(Fixup {
+                    at,
+                    symbol: Symbol::Import(*import),
+                });
+                self.asm.load(Size::Q, R11, offset(R11, 0));
+                // `al` bounds the vector registers a variadic call
+                // passes: none.
+                self.asm.alu(Alu::Xor, RAX, RAX);
+                self.asm.call_reg(R11);
+                if !*wide {
+                    self.asm.sign_extend(RAX, RAX, 32);
+                }
+                self.write(*dst, RAX);
+            }
             Inst::Arith {
                 op,
                 int,

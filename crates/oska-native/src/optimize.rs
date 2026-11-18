@@ -127,6 +127,7 @@ fn inlinable(f: &Function) -> Option<Inlining> {
             inst,
             Inst::CallIndirect { .. }
                 | Inst::Syscall { .. }
+                | Inst::LibCall { .. }
                 | Inst::CallOnStack { .. }
                 | Inst::ReturnPair { .. }
                 | Inst::Second { .. }
@@ -594,6 +595,7 @@ fn rename_def(inst: &mut Inst, to: Temp) {
         | Inst::Call { dst, .. }
         | Inst::CallIndirect { dst, .. }
         | Inst::Syscall { dst, .. }
+        | Inst::LibCall { dst, .. }
         | Inst::Arith { dst, .. }
         | Inst::Second { dst }
         | Inst::EntrySp { dst } => *dst = to,
@@ -626,7 +628,9 @@ fn rename_uses(inst: &mut Inst, from: Temp, to: Temp) {
             swap(base);
             swap(src);
         }
-        Inst::Call { args, .. } | Inst::Syscall { args, .. } => args.iter_mut().for_each(swap),
+        Inst::Call { args, .. } | Inst::Syscall { args, .. } | Inst::LibCall { args, .. } => {
+            args.iter_mut().for_each(swap)
+        }
         Inst::CallIndirect { target, args, .. } => {
             swap(target);
             args.iter_mut().for_each(swap);

@@ -14,8 +14,14 @@
 //! `UPDATE_GOLDEN=1 cargo test -p oskac --test authority_baseline` and
 //! review the diff.
 
+mod common;
+
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use common::portable::{json_escape, Scratch};
 
 const FIXTURES: &str = "crates/oskac/tests/fixtures/authority_diff";
 
@@ -31,13 +37,42 @@ fn oskac(args: &[&str]) -> Output {
         .expect("oskac should run")
 }
 
-/// A scratch file for case `name`, removed if a previous run left it.
-fn scratch(name: &str) -> PathBuf {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("authority_baseline");
-    std::fs::create_dir_all(&dir).expect("should create the scratch directory");
-    let path = dir.join(name);
-    let _ = std::fs::remove_file(&path);
-    path
+/// A fresh scratch directory. Each call gets its own, even for the same
+/// `name`: parallel tests may write the same case's baseline, and one
+/// test's directory must not be removed under another.
+fn scratch_dir(name: &str) -> Scratch {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    Scratch::new("oska-authority-baseline", &format!("{name}-{n}"))
+}
+
+/// A scratch file: its path, and the directory that holds it.
+struct ScratchFile {
+    path: PathBuf,
+    _dir: Scratch,
+}
+
+impl Deref for ScratchFile {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl AsRef<Path> for ScratchFile {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// A file named `name`, not yet written, in a scratch directory of its own
+/// that is removed when the file is dropped, even when the test fails.
+fn scratch(name: &str) -> ScratchFile {
+    let dir = scratch_dir(name);
+    ScratchFile {
+        path: dir.join(name),
+        _dir: dir,
+    }
 }
 
 /// Write the baseline of `program` (a path from the repository root) to
@@ -52,15 +87,16 @@ fn update_baseline(program: &str, to: &Path) {
     );
 }
 
-/// The baseline case `case` is compared with: its own `baseline.json`, or
-/// one written from its `before.osk`.
-fn baseline_of(case: &str) -> PathBuf {
+/// The baseline case `case` is compared with: a copy of its own
+/// `baseline.json`, or one written from its `before.osk`.
+fn baseline_of(case: &str) -> ScratchFile {
+    let path = scratch(&format!("{case}.json"));
     let own = root().join(FIXTURES).join(case).join("baseline.json");
     if own.exists() {
-        return own;
+        std::fs::copy(&own, &path).expect("should copy the case's baseline");
+    } else {
+        update_baseline(&format!("{FIXTURES}/{case}/before.osk"), &path);
     }
-    let path = scratch(&format!("{case}.json"));
-    update_baseline(&format!("{FIXTURES}/{case}/before.osk"), &path);
     path
 }
 
@@ -85,7 +121,7 @@ fn compare(case: &str, baseline: &Path, json: bool) -> String {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let escaped = baseline.display().to_string().replace('\\', "\\\\");
+    let escaped = json_escape(&baseline.display().to_string());
     shown
         .replace(&escaped, "<baseline>")
         .replace(&baseline.display().to_string(), "<baseline>")
@@ -180,8 +216,8 @@ fn duplicate_function_names_stop_the_diff_with_an_error() {
     assert_eq!(golden_case("duplicate_names"), "exit: 1");
 }
 
-/// Write `src` to a scratch file named `name` and return its path.
-fn source(name: &str, src: &str) -> PathBuf {
+/// Write `src` to a scratch file named `name` and return it.
+fn source(name: &str, src: &str) -> ScratchFile {
     let path = scratch(name);
     std::fs::write(&path, src).expect("should write the source file");
     path
@@ -217,16 +253,6 @@ fn the_baseline_is_sorted_span_free_and_the_same_bytes_everywhere() {
     let rewritten = scratch("moved.json");
     update_baseline(&text(&moved), &rewritten);
     assert_eq!(std::fs::read(&rewritten).ok(), Some(bytes));
-}
-
-/// A fresh, empty directory for case `name`.
-fn scratch_dir(name: &str) -> PathBuf {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("authority_baseline")
-        .join(name);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("should create the scratch directory");
-    dir
 }
 
 /// The names in `dir`, sorted.

@@ -552,6 +552,45 @@ impl Emitter {
                 self.put(SVC_0);
                 self.write(*dst, X0);
             }
+            Inst::LibCall {
+                dst,
+                import,
+                args,
+                fixed,
+                wide,
+            } => {
+                let (fixed, variadic) = args.split_at(usize::from(*fixed).min(args.len()));
+                // Apple's arm64 ABI passes a variadic argument in an
+                // 8-byte stack slot, never in a register. Read into `x9`
+                // before the moves into `x0`… can overwrite its register;
+                // the moves leave `x9` alone.
+                if let Some(&value) = variadic.first() {
+                    self.read_into(X9, value);
+                }
+                self.arguments(fixed);
+                if !variadic.is_empty() {
+                    // `str x9, [sp, #-16]!`: one slot, `sp` kept 16-aligned.
+                    self.put(0xf81f_0fe9);
+                }
+                // `adrp x16, slot; add x16, x16, :lo12:slot; ldr x16,
+                // [x16]; blr x16`: the dynamic loader bound the slot.
+                self.fixups.push(Fixup {
+                    at: self.words.len(),
+                    symbol: Symbol::Import(*import),
+                });
+                self.put(ADRP | X16);
+                self.put(add_imm(X16, X16, 0, false));
+                self.put(0xf940_0000 | X16 << 5 | X16);
+                self.put(BLR | (X16 << 5));
+                if !variadic.is_empty() {
+                    self.put(add_imm(SP, SP, 16, false));
+                }
+                if !*wide {
+                    // `sxtw x0, w0`: a C `int` leaves the top half unspecified.
+                    self.put(bitfield(SBFM, X0, X0, 0, 31));
+                }
+                self.write(*dst, X0);
+            }
             Inst::Arith {
                 op,
                 int,
