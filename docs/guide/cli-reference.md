@@ -8,7 +8,7 @@ oskac - the Oska compiler
 USAGE:
     oskac lex <file.osk> [--format=json]   Print the tokens in a source file
     oskac parse <file.osk> [--format=json] Print the syntax tree of a source file
-    oskac check [path] [--format=json] [--release]
+    oskac check [path] [--format=json] [--release] [--no-cache]
                 [--baseline=<file> | --update-baseline=<file>]
                                            Type-check a source file, or a
                                            package directory (the current one
@@ -16,17 +16,17 @@ USAGE:
                                            function's authority; compare it
                                            with a saved baseline (exit code 3
                                            when it widened), or write one
-    oskac run [path] [--format=json] [--interpret] [-- args...]
+    oskac run [path] [--format=json] [--interpret] [--no-cache] [-- args...]
                                            Check a source file or package and,
                                            if it has no diagnostics, run it:
                                            natively on aarch64 and x86_64
                                            Linux, on the interpreter elsewhere
                                            or with --interpret
-    oskac test [path] [--format=json] [--integration] [--interpret]
+    oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
                                            as `run` does
-    oskac build [path] [-o out] [--target <platform>|all] [--format=json]
+    oskac build [path] [-o out] [--target <platform>|all] [--format=json] [--no-cache]
                                            Check a source file or package and,
                                            if it has no diagnostics, compile it
                                            to an executable for the platform
@@ -48,6 +48,11 @@ USAGE:
                                            Run the release check and the tests
                                            before Claude Code may finish; exit
                                            2 blocks it with what failed
+    oskac cache info [--format=json]       Report the build cache, which check,
+                                           run, test and build reuse unchanged
+                                           results from: its folder, entries,
+                                           size, limit, hits and misses
+    oskac cache clean [--format=json]      Empty the build cache
     oskac self info [--format=json]        Report this installation: version,
                                            platform, executable, Oska home and
                                            install receipt
@@ -80,6 +85,7 @@ USAGE:
 | `--target=<platform>` | `build` | Build for this platform, named as release assets name `oskac` builds (`linux-aarch64`, ...), or with `all` for every platform with a backend. Also written `--target <platform>`. Any other command given it is a usage error (exit code 2). See [`oskac build`](#oskac-build). |
 | `--dry-run` | `fix` | Print the diff the fixes would make, and write nothing. The other commands accept the flag and ignore it. |
 | `--placeholders` | `fix` | Also apply fixes whose applicability is `placeholders`, such as `E0253`'s `todo()` arms. The other commands accept the flag and ignore it. |
+| `--no-cache` | `check`, `run`, `test`, `build` | Neither read nor write the [build cache](#oskac-cache). Any other command refuses it as a usage error (exit code 2). |
 
 ## `oskac lex`
 
@@ -271,7 +277,7 @@ On aarch64 and x86_64 Linux, `run` and `test` compile the program as `build` doe
 
 `oskac self info [--format=json]` and `oskac self uninstall [--format=json]` ask `oskac` about its own installation and remove it, without the installer. They read the [install receipt](install.md#the-install-receipt) in the Oska home (`~/.oska`, or `OSKA_HOME`), and `oskac` makes no network connection to do it. Any other `self` command or flag is a usage error (exit code 2); with `--format=json` it prints `{"ok":false,"error":"usage","message":"..."}`.
 
-`self info` prints the version, the platform, the canonical path of the running executable, the Oska home and the receipt. With `--format=json` it prints one object: `version`, `platform`, `executable`, `oska_home` (`null` with no home), `receipt` (the receipt as parsed, with every field it has, or `null` when there is none or it cannot be read), `receipt_error` (why it cannot be read, else `null`), `receipt_matches` and `digest_checked`. `receipt_matches` is `true` when the receipt's `version` is this `oskac`'s and it lists this executable as a `binary`, by path. `digest_checked` is always `false`: `oskac` computes no SHA-256, so it identifies its install by path and version only. It exits with 0.
+`self info` prints the version, the platform, the canonical path of the running executable, the Oska home and the receipt. With `--format=json` it prints one object: `version`, `platform`, `executable`, `oska_home` (`null` with no home), `receipt` (the receipt as parsed, with every field it has, or `null` when there is none or it cannot be read), `receipt_error` (why it cannot be read, else `null`), `receipt_matches` and `digest_checked`. `receipt_matches` is `true` when the receipt's `version` is this `oskac`'s and it lists this executable as a `binary`, by path. `digest_checked` is always `false`: `oskac` does not check the receipt's SHA-256 digests, so it identifies its install by path and version only. It exits with 0.
 
 `self uninstall` applies the rules of the installer's [`--uninstall`](install.md#uninstall) in this process. [The install receipt](install-receipt.md) defines them, for every kind of entry and for each of the three uninstallers. It checks every entry of the receipt before it removes anything, against the places this platform's installer writes each kind, and refuses the whole uninstall if one is elsewhere, or of a kind that installer never writes. Then:
 
@@ -281,6 +287,19 @@ On aarch64 and x86_64 Linux, `run` and `test` compile the program as `build` doe
 - On Windows the running `oskac.exe` cannot be deleted, so it is moved into the temporary directory and listed under `pending`, with the path it was moved to: delete that file once `oskac` has exited.
 
 Then it removes `bin` and the Oska home if they are left empty, and it never touches `~/.config/oska`. With `--format=json` it prints `{"ok":true,"action":"uninstalled","removed":[...],"kept":[...],"pending":[...],"path_hint":null}`, where each `pending` entry is `{"path":"...","moved_to":"...","note":"..."}`. A refusal removes nothing and exits with 1, printing `{"ok":false,"error":"<code>","message":"..."}` with `--format=json`: `not_installed` (no receipt, or no Oska home) or `unsafe_path` (an entry outside the places the installer writes its kind, of a kind this platform's installer does not write, in a `.config/oska` directory, with `..`, or through a symlink, or a receipt it cannot read).
+
+## `oskac cache`
+
+`oskac check`, `run`, `test` and `build` keep their results in a build cache, and reuse a result whose inputs are unchanged instead of checking or compiling again. A reused result is the same as a fresh one: the same output, byte for byte, the same diagnostics and authority report, with `--format=json` too, and the same exit code. The cache is on by default and prints nothing of its own.
+
+- **What is kept.** For `check`, what it printed and its exit code. For `run`, `test` and `build`, the executable the native backend built for each target; the check before it still runs. A refusal (`E0390`), a check with `--baseline` or `--update-baseline`, and a program run on the interpreter are not kept.
+- **What makes a miss.** Any change to a module, the manifest, the set of modules, the path the program was named by, the target, an output flag (`--format`, `--release`), or the `oskac` executable itself: the key includes the SHA-256 of the running `oskac`, so a development build never reuses another build's results.
+- **Where.** One cache per user, shared across projects and worktrees: `OSKA_CACHE_DIR` if set, else `$XDG_CACHE_HOME/oska` or `~/.cache/oska` on Linux, `~/Library/Caches/oska` on macOS, and `%LOCALAPPDATA%\oska\cache` on Windows.
+- **Integrity.** Each entry is written to a temporary file and renamed into place, so concurrent runs never see half an entry, and it carries the SHA-256 of its contents, checked on every read: a damaged entry is a miss, and is rebuilt. Symbolic links in the cache are never followed. On Linux and macOS a cache folder that is a symbolic link, is owned by another user, or is writable by its group or others is refused: `oskac` prints `warning: running without the build cache: <reason>` to standard error and carries on without it.
+- **Size.** At most 1 GiB, or `OSKA_CACHE_LIMIT` bytes; the least recently used entries are removed after each write.
+- **Off.** `--no-cache` on one command, or `OSKA_CACHE=off` for all of them.
+
+`oskac cache info [--format=json]` prints the cache folder, whether it is used (and why not), its entries, their size, the limit, and the hits and misses counted since it was last cleaned. With `--format=json` it prints `{"location":"...","used":true,"reason":null,"entries":3,"size":49709,"limit":1073741824,"hits":2,"misses":2}`. It makes nothing and exits with 0. `oskac cache clean [--format=json]` removes every entry and the counts, and prints `removed <n> entries (<bytes> bytes) from <folder>`, or `{"location":"...","removed":3,"bytes":49709}`; it leaves a refused folder alone and exits with 1. Any other `cache` command is a usage error (exit code 2).
 
 ## `oskac --version` and `oskac --help`
 

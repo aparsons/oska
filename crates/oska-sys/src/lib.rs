@@ -5,12 +5,14 @@
 //! takes no crates from outside the repo, so this crate declares the
 //! system functions it needs itself. On Unix they are the C library's
 //! `openat`, `mkdirat`, `renameat`, `unlinkat`, `fdopendir`, `readdir`
-//! and `closedir`, and the address of `errno`, which `std` already links.
+//! and `closedir`, the address of `errno`, and `geteuid`, which `std`
+//! already links.
 //! On Windows they are `ntdll`'s `NtCreateFile`, `NtQueryInformationFile`,
 //! `NtQueryDirectoryFile` and `RtlNtStatusToDosError`, which every
 //! Windows process has loaded. It adds no dependency.
 //!
-//! It offers one safe type, [`Dir`]: a handle for a directory, beneath
+//! It offers one safe type, [`Dir`], and on Unix the function `effective_uid`. A
+//! [`Dir`] is a handle for a directory, beneath
 //! which paths are opened one component at a time without following a
 //! symlink, or on Windows any other reparse point (a junction or a mount
 //! point), to read a file, write one, create a directory or list one, and
@@ -39,7 +41,7 @@ mod wording;
 pub use wording::{io_error_message, wording, IO_KINDS, OTHER_WORDING};
 
 #[cfg(unix)]
-pub use unix::Dir;
+pub use unix::{effective_uid, Dir};
 #[cfg(windows)]
 pub use windows::Dir;
 
