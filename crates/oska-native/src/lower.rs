@@ -77,7 +77,7 @@ use oska_check::program::{
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::{Diagnostic, Span};
 
-use crate::intrinsics::{self, Check, Prelude, Runtime};
+use crate::intrinsics::{self, Check, OsCall, Prelude, Runtime};
 use crate::ir::{self, Arith, BinOp, Cond, FnId, Inst, Label, Symbol, Temp, Width};
 use crate::layout::{self, Rodata};
 use crate::optimize;
@@ -405,7 +405,11 @@ impl<'p> Lowering<'p> {
             NOWHERE,
         );
         let handler = body.function_address(on_fault);
-        body.call_runtime("process_init", vec![sp, handler], NOWHERE)?;
+        // The kernel's initial stack holds argc, then the argv pointers.
+        let argc = body.load(sp, 0);
+        let eight = body.constant(i64::from(layout::WORD));
+        let argv = body.binary_op(BinOp::Add, sp, eight);
+        body.call_runtime("process_init", vec![argc, argv, handler], NOWHERE)?;
         let stack = body.call_runtime("stack_new", vec![size], NOWHERE)?;
         body.push(Inst::CallOnStack {
             stack,
@@ -1722,20 +1726,18 @@ impl<'l, 'p> Body<'l, 'p> {
     fn runtime_intrinsic(&mut self, runtime: Runtime, args: &[Temp]) -> Result<Temp, Diagnostic> {
         let arg = |i: usize| args.get(i).copied().unwrap_or_default();
         Ok(match runtime {
-            Runtime::Syscall(call) => {
-                let platform = self.lowering.target.platform();
-                let mut args = args.to_vec();
-                for &value in (platform.then)(call) {
-                    args.push(self.constant(value));
+            Runtime::Syscall(call) => match (self.lowering.target.platform().call)(call) {
+                OsCall::Trap { number, then } => {
+                    let mut args = args.to_vec();
+                    for &value in then {
+                        args.push(self.constant(value));
+                    }
+                    let dst = self.temp();
+                    self.push(Inst::Syscall { dst, number, args });
+                    dst
                 }
-                let dst = self.temp();
-                self.push(Inst::Syscall {
-                    dst,
-                    number: (platform.syscall)(call),
-                    args,
-                });
-                dst
-            }
+                OsCall::Same => self.copy(arg(0)),
+            },
             Runtime::Load(width) => {
                 let dst = self.temp();
                 self.push(Inst::Load {
