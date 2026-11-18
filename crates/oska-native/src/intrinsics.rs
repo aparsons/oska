@@ -412,6 +412,31 @@ mod tests {
     }
 
     #[test]
+    fn linux_passes_the_extra_trailing_arguments_only_to_random_and_sigaction() {
+        for platform in [LINUX_AARCH64, LINUX_X86_64] {
+            for (name, implementation) in RUNTIME {
+                let Runtime::Syscall(call) = implementation else {
+                    continue;
+                };
+                let expected: &[i64] = match *name {
+                    // getrandom(buf, len, flags): no flags.
+                    "rt_sys_random" => &[0],
+                    // rt_sigaction(sig, act, old, size): no old action, an
+                    // 8-byte signal mask.
+                    "rt_sys_sigaction" => &[0, 8],
+                    _ => &[],
+                };
+                assert_eq!(
+                    (platform.then)(*call),
+                    expected,
+                    "`{name}` on `{}`",
+                    platform.table
+                );
+            }
+        }
+    }
+
+    #[test]
     fn every_platform_gives_each_system_call_a_number_of_its_own() {
         for platform in crate::Target::ALL.map(crate::Target::platform) {
             let mut numbers: Vec<u16> = RUNTIME
