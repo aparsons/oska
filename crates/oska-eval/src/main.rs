@@ -28,10 +28,12 @@ USAGE:
     oska-eval analyse [--workspace <dir>] [--functional pass|fail] <transcript>
         Read a recorded Claude Code stream-json transcript and say how the
         agent worked: iterations, the diagnostic timeline, fixes offered,
-        applied and helped, `oskac explain` and site lookups, tool calls
-        outside the workspace (the one the transcript starts in, unless
-        --workspace names another), and, given the grade's functional
-        result, whether the final message was a false claim.
+        applied and gone at the next check, `oskac explain` and site
+        lookups, tool calls outside the workspace (the one the transcript
+        starts in, unless --workspace names another; words that cannot be
+        resolved from the text are \"unresolved, possibly outside\", and
+        symlinks are not followed), and, given the grade's functional
+        result, whether the run finished despite failing it.
 
 EXIT CODES:
     0  success    1  a check failed    2  bad input

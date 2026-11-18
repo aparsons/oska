@@ -22,13 +22,8 @@ pub enum Stop {
 pub enum Call {
     /// A shell command.
     Command(String),
-    /// An edit of one file: the text it replaced and the text it wrote. A
-    /// whole-file write has no removed text.
-    Edit {
-        path: String,
-        removed: String,
-        inserted: String,
-    },
+    /// An edit of one file, as one or more changes.
+    Edit { path: String, changes: Vec<Change> },
     /// A fetch of a web page.
     Fetch(String),
     /// Any other tool, with the file paths it was given.
@@ -62,6 +57,15 @@ pub enum Event {
     Final { text: String, stop: Stop },
 }
 
+/// One replacement inside an edit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Change {
+    /// The text it replaced; `None` for a whole-file write, where the
+    /// transcript does not show what was there.
+    pub removed: Option<String>,
+    pub inserted: String,
+}
+
 impl Call {
     /// The file paths the call names: what it reads, edits or searches.
     /// Shell commands are searched by the analysis, not here.
@@ -93,6 +97,11 @@ pub fn claude_stream_json(text: &str) -> Result<Vec<Event>, String> {
         }
         let number = index + 1;
         let value = parse_json(line).map_err(|e| format!("line {number} is not JSON: {e}"))?;
+        // `get` reads the first of two equal keys; a line must not be able
+        // to show one tool input to this reader and another to the agent.
+        if let Some(key) = value.duplicate_key() {
+            return Err(format!("line {number}: the key `{key}` appears twice"));
+        }
         if !matches!(value, JsonValue::Object(_)) {
             return Err(format!("line {number} is not a JSON object"));
         }
@@ -210,36 +219,37 @@ fn call(name: &str, input: &JsonValue) -> Call {
         "WebFetch" => Call::Fetch(string(input, "url").unwrap_or_default()),
         "Edit" => Call::Edit {
             path: path("file_path").unwrap_or_default(),
-            removed: string(input, "old_string").unwrap_or_default(),
-            inserted: string(input, "new_string").unwrap_or_default(),
+            changes: vec![Change {
+                removed: Some(string(input, "old_string").unwrap_or_default()),
+                inserted: string(input, "new_string").unwrap_or_default(),
+            }],
         },
         "Write" => Call::Edit {
             path: path("file_path").unwrap_or_default(),
-            removed: String::new(),
-            inserted: string(input, "content").unwrap_or_default(),
+            changes: vec![Change {
+                removed: None,
+                inserted: string(input, "content").unwrap_or_default(),
+            }],
         },
-        "MultiEdit" => {
-            let edits = input
+        "MultiEdit" => Call::Edit {
+            path: path("file_path").unwrap_or_default(),
+            changes: input
                 .get("edits")
                 .and_then(JsonValue::as_array)
-                .unwrap_or(&[]);
-            let joined = |key: &str| {
-                edits
-                    .iter()
-                    .filter_map(|e| string(e, key))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            };
-            Call::Edit {
-                path: path("file_path").unwrap_or_default(),
-                removed: joined("old_string"),
-                inserted: joined("new_string"),
-            }
-        }
+                .unwrap_or(&[])
+                .iter()
+                .map(|e| Change {
+                    removed: Some(string(e, "old_string").unwrap_or_default()),
+                    inserted: string(e, "new_string").unwrap_or_default(),
+                })
+                .collect(),
+        },
         _ => Call::Other {
             tool: name.to_string(),
-            paths: ["file_path", "path", "notebook_path"]
+            // Glob and Grep reach files through `pattern` too.
+            paths: ["file_path", "path", "notebook_path", "pattern"]
                 .iter()
+                .filter(|key| **key != "pattern" || matches!(name, "Glob" | "Grep"))
                 .filter_map(|key| path(key))
                 .collect(),
         },

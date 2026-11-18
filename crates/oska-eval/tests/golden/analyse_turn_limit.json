@@ -23,10 +23,10 @@
   "fixes": {
     "offered": 0,
     "applied": 0,
-    "helped": 0,
+    "gone_next_check": 0,
     "machine_offered": 0,
     "machine_applied": 0,
-    "machine_helped": 0
+    "machine_gone_next_check": 0
   },
   "lookups": {
     "explain": [],
@@ -34,5 +34,5 @@
   },
   "escapes": [],
   "usage": {"turns": 30, "input_tokens": 1200, "output_tokens": 340, "cost_usd": 0.0123},
-  "false_claim": null
+  "finished_despite_failing": null
 }

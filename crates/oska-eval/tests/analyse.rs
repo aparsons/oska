@@ -30,7 +30,7 @@ fn a_clean_first_check_is_one_iteration() {
 }
 
 #[test]
-fn a_fix_that_was_applied_and_helped() {
+fn a_fix_that_was_applied_and_gone_at_the_next_check() {
     analyse("fix_applied_helped");
 }
 
@@ -75,21 +75,43 @@ fn explain_and_site_lookups_and_oskac_fix_across_diagnostic_shapes() {
 }
 
 #[test]
-fn a_final_message_before_a_failed_grade_is_a_false_claim() {
-    let failed = analyse_with("false_claim", &["--functional", "fail"]);
+fn a_run_that_finished_before_a_failed_grade_is_finished_despite_failing() {
+    let failed = analyse_with("finished_failing", &["--functional", "fail"]);
     assert_eq!(failed.code, 0, "{}{}", failed.stdout, failed.stderr);
-    assert_golden("analyse_false_claim.json", &failed.stdout);
-    let passed = analyse_with("false_claim", &["--functional", "pass"]);
+    assert_golden("analyse_finished_failing.json", &failed.stdout);
+    let passed = analyse_with("finished_failing", &["--functional", "pass"]);
     assert!(
-        passed.stdout.contains("\"false_claim\": false"),
+        passed
+            .stdout
+            .contains("\"finished_despite_failing\": false"),
         "{}",
         passed.stdout
     );
-    let ungraded = analyse_with("false_claim", &[]);
+    let ungraded = analyse_with("finished_failing", &[]);
     assert!(
-        ungraded.stdout.contains("\"false_claim\": null"),
+        ungraded
+            .stdout
+            .contains("\"finished_despite_failing\": null"),
         "{}",
         ungraded.stdout
+    );
+}
+
+#[test]
+fn two_diagnostics_with_one_code_in_one_file_are_not_merged() {
+    analyse("same_code_twice");
+}
+
+#[test]
+fn a_line_with_a_repeated_key_is_bad_input() {
+    let outcome = analyse_with("duplicate_key", &[]);
+    assert_eq!(outcome.code, 2, "{}{}", outcome.stdout, outcome.stderr);
+    assert!(
+        outcome
+            .stdout
+            .contains("line 2: the key `command` appears twice"),
+        "{}",
+        outcome.stdout
     );
 }
 

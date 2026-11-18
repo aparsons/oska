@@ -27,16 +27,16 @@
       "first_iteration": 1,
       "resolved_iteration": 3,
       "iterations_present": 2,
-      "fix": {"applicability": "maybe", "applied": false, "helped": false}
+      "fix": {"applicability": "maybe", "applied": false, "gone_next_check": false}
     }
   ],
   "fixes": {
     "offered": 1,
     "applied": 0,
-    "helped": 0,
+    "gone_next_check": 0,
     "machine_offered": 0,
     "machine_applied": 0,
-    "machine_helped": 0
+    "machine_gone_next_check": 0
   },
   "lookups": {
     "explain": [],
@@ -44,5 +44,5 @@
   },
   "escapes": [],
   "usage": {"turns": 4, "input_tokens": 1200, "output_tokens": 340, "cost_usd": 0.0123},
-  "false_claim": null
+  "finished_despite_failing": null
 }
