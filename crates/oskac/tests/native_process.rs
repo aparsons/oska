@@ -963,7 +963,7 @@ fn a_full_stdout_is_still_an_io_error() {
             .expect("the program should run");
         assert_eq!(
             String::from_utf8_lossy(&output.stderr),
-            "No space left on device (os error 28)\n",
+            "no space left on device\n",
             "{label}"
         );
         assert_eq!(output.status.code(), Some(1), "{label}");

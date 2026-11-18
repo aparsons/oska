@@ -50,7 +50,7 @@ fn a_failed_final_flush_is_an_io_error_on_both_backends() {
             .expect("the program should run");
         assert_eq!(
             String::from_utf8_lossy(&output.stderr),
-            "No space left on device (os error 28)\n",
+            "no space left on device\n",
             "{label}"
         );
         assert_eq!(output.status.code(), Some(1), "{label}");

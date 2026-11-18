@@ -218,7 +218,10 @@ impl Dir {
     /// [`Dir::open_dir`] or [`Dir::open_file`].
     pub fn open(path: &Path) -> io::Result<Dir> {
         let named = |error: io::Error| {
-            io::Error::new(error.kind(), format!("`{}`: {error}", path.display()))
+            io::Error::new(
+                error.kind(),
+                format!("`{}`: {}", path.display(), crate::io_error_message(&error)),
+            )
         };
         if path.as_os_str().is_empty() {
             return Err(io::Error::new(
@@ -496,7 +499,10 @@ fn refusal<N: AsRef<OsStr>>(
     let there = plain_name(name).and_then(|name| create_at(parent, &name, Open::LOOK));
     match there.and_then(|handle| info(&handle)) {
         Ok(info) if info.is_reparse_point() => reparse_point(&path),
-        _ => io::Error::new(error.kind(), format!("`{path}`: {error}")),
+        _ => io::Error::new(
+            error.kind(),
+            format!("`{path}`: {}", crate::io_error_message(&error)),
+        ),
     }
 }
 

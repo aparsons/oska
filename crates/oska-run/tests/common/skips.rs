@@ -22,7 +22,7 @@ const FAKE_SEED: &str = "the fake host's generator has a fixed seed";
 
 /// The fake host words its filesystem errors itself (`no such file or
 /// directory: /x`); a real OS words them as `oska-sys` and the native
-/// runtime do (`` `x`: No such file or directory (os error 2) ``).
+/// runtime do (`` `x`: not found ``).
 const FAKE_WORDING: &str = "the fake host words filesystem errors its own way";
 
 /// A program that prints the real clock prints a different time on

@@ -33,6 +33,9 @@
 mod unix;
 #[cfg(windows)]
 mod windows;
+mod wording;
+
+pub use wording::{io_error_message, wording, IO_KINDS, OTHER_WORDING};
 
 #[cfg(unix)]
 pub use unix::Dir;

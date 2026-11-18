@@ -235,6 +235,26 @@ oska = "0.4.0"
 
 An older `oskac` refuses the package with `E0407`, from `check`, `run`, `test` and `build`. The message names both versions and says to install a newer one: run the installer again (see [Update](#update)). The key is a minimum, never an exact pin, so a newer `oskac` always accepts it. See [packages and modules](packages.md#starting-a-package) for the key and [`E0407`](../checker.md#e0407).
 
+## Upgrading to v0.5.0
+
+v0.5.0 words every `IoError` in Oska's own text. Programs keep their meaning; this is the change you can see:
+
+- **`IoError` messages no longer carry the operating system's text or error number.** The same failure now prints the same bytes on every platform and both backends. A path the failure concerns still comes first. If a test compares an error message, update its expected text from this table (the full table is in the [runtime reference](../runtime.md#errors-and-traits)):
+
+  | Before (Linux) | After |
+  | --- | --- |
+  | `` `x`: No such file or directory (os error 2) `` | `` `x`: not found `` |
+  | `` `x`: Permission denied (os error 13) `` | `` `x`: permission denied `` |
+  | `` `x`: Not a directory (os error 20) `` | `` `x`: not a directory `` |
+  | `` `x`: Is a directory (os error 21) `` | `` `x`: is a directory `` |
+  | `` `x`: File exists (os error 17) `` | `` `x`: already exists `` |
+  | `` `x`: Directory not empty (os error 39) `` | `` `x`: directory not empty `` |
+  | `No space left on device (os error 28)` | `no space left on device` |
+  | `Broken pipe (os error 32)` | `broken pipe` |
+  | any other system error, such as `` `x`: Input/output error (os error 5) `` | `` `x`: I/O error `` |
+
+  The messages that refuse confined access (a symlink, a hard link, a path that escapes its root) are unchanged.
+
 ## Upgrading to v0.4.0
 
 v0.4.0 makes x86_64 Linux the second platform with a native backend, and lets `oskac build` target either Linux platform from any host. Programs keep their meaning; these are the changes you can see:

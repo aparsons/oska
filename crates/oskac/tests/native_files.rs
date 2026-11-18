@@ -112,7 +112,7 @@ fn a_directory_capability_reads_files_beneath_its_root() {
     assert_eq!(
         printed(&case),
         "inside text\nnested text\nnested text\n\
-         REFUSED: `missing.txt`: No such file or directory (os error 2)\n"
+         REFUSED: `missing.txt`: not found\n"
     );
 }
 
@@ -245,7 +245,7 @@ fn a_root_is_trusted_text_but_its_last_component_is_never_a_symlink() {
     );
     assert_eq!(
         lines[14],
-        "REFUSED: cannot restrict to `missing`: `missing`: No such file or directory (os error 2)"
+        "REFUSED: cannot restrict to `missing`: `missing`: not found"
     );
     assert_eq!(
         lines[16],
@@ -254,13 +254,13 @@ fn a_root_is_trusted_text_but_its_last_component_is_never_a_symlink() {
     );
     assert_eq!(
         lines[18],
-        "REFUSED: cannot restrict to `root/inside.txt/x`: `root/inside.txt`: Not a directory (os error 20)"
+        "REFUSED: cannot restrict to `root/inside.txt/x`: `root/inside.txt`: not a directory"
     );
     assert_eq!(
         lines[20],
         "REFUSED: cannot restrict to ``: an empty path names no directory"
     );
-    assert!(lines[26].contains("No such file or directory"), "{seen}");
+    assert!(lines[26].contains("not found"), "{seen}");
     assert_eq!(lines[28], "nested text", "{seen}");
 }
 
@@ -291,8 +291,8 @@ fn a_fifo_is_refused_rather_than_waited_on_and_a_directory_is_no_file() {
         "REFUSED: `pipe` is not a regular file\n\
          REFUSED: `sub` is not a regular file\n\
          REFUSED: `pipe` is not a regular file\n\
-         REFUSED: `pipe`: No such device or address (os error 6)\n\
-         REFUSED: `sub`: Is a directory (os error 21)\n\
+         REFUSED: `pipe`: I/O error\n\
+         REFUSED: `sub`: is a directory\n\
          REFUSED: `pipe` is a symlink or not a directory, and confined access never follows a symlink\n\
          REFUSED: `inside.txt` is a symlink or not a directory, and confined access never follows a symlink\n\
          REFUSED: `pipe` is a symlink or not a directory, and confined access never follows a symlink\n"
@@ -353,7 +353,7 @@ fn a_write_creates_or_replaces_a_file_beneath_the_root() {
     assert_eq!(
         outcome.stdout,
         "done\ndone\ndone\ndone\n\
-         REFUSED: `missing`: No such file or directory (os error 2)\n\
+         REFUSED: `missing`: not found\n\
          again\n"
     );
     assert_eq!(outcome.tree["root/inside.txt"].as_deref(), Some("again"));
@@ -439,10 +439,7 @@ fn create_dir_makes_a_directory_keeps_one_and_refuses_symlinks() {
     for line in &lines[4..10] {
         assert!(line.contains("symlink"), "{outcome:#?}");
     }
-    assert_eq!(
-        lines[14],
-        "REFUSED: `missing`: No such file or directory (os error 2)"
-    );
+    assert_eq!(lines[14], "REFUSED: `missing`: not found");
     for made in ["root/new/", "root/sub/deeper/", "root/again/"] {
         assert!(outcome.tree.contains_key(made), "{outcome:#?}");
     }
@@ -585,7 +582,7 @@ fn file_capabilities_read_and_write_their_one_file() {
     assert_eq!(
         outcome.stdout,
         "inside text\nnested text\ninside text\ndone\ndone\nshort\n\
-         REFUSED: `missing.txt`: No such file or directory (os error 2)\n"
+         REFUSED: `missing.txt`: not found\n"
     );
     assert_eq!(outcome.tree["root/new.txt"].as_deref(), Some("short"));
 }
@@ -666,7 +663,7 @@ fn a_broken_file_or_directory_root_fails_every_operation() {
     let lines: Vec<&str> = outcome.stdout.lines().collect();
     assert_eq!(
         lines[0],
-        "REFUSED: cannot restrict to `root/nodir/x.txt`: `root/nodir`: No such file or directory (os error 2)"
+        "REFUSED: cannot restrict to `root/nodir/x.txt`: `root/nodir`: not found"
     );
     assert_eq!(lines[2], "REFUSED: `sub` is not a regular file");
     assert_eq!(
@@ -1137,18 +1134,18 @@ fn a_file_or_directory_without_permission_fails_with_the_systems_message() {
         seen.push(String::from_utf8_lossy(&output.stdout).into_owned());
     }
     assert_eq!(seen[0], seen[1], "the backends differ");
-    if !seen[0].contains("Permission denied") {
+    if !seen[0].contains("permission denied") {
         // Running as root, which no permission stops: nothing to compare.
         return;
     }
     assert_eq!(
         seen[0],
-        "REFUSED: `locked`: Permission denied (os error 13)\n\
-         REFUSED: `locked`: Permission denied (os error 13)\n\
-         REFUSED: cannot restrict to `root/locked`: `locked`: Permission denied (os error 13)\n\
-         REFUSED: `locked`: Permission denied (os error 13)\n\
-         REFUSED: `secret.txt`: Permission denied (os error 13)\n\
-         REFUSED: `secret.txt`: Permission denied (os error 13)\n"
+        "REFUSED: `locked`: permission denied\n\
+         REFUSED: `locked`: permission denied\n\
+         REFUSED: cannot restrict to `root/locked`: `locked`: permission denied\n\
+         REFUSED: `locked`: permission denied\n\
+         REFUSED: `secret.txt`: permission denied\n\
+         REFUSED: `secret.txt`: permission denied\n"
     );
 }
 
@@ -1168,22 +1165,23 @@ fn lock(dir: &Path, mode: u32) {
 }
 
 #[test]
-fn the_errno_table_is_rusts_for_every_number() {
+fn the_errno_table_is_oskas_wording_for_every_number() {
     let source = oska_check::STD_RT_SOURCE;
     let head = "fn errno_table() -> String {\n    \"";
     let start = source.find(head).expect("the table") + head.len();
     let end = start + source[start..].find('"').expect("its end");
     let table: Vec<&str> = source[start..end].split('|').collect();
     assert_eq!(table.len(), 133);
-    for (index, message) in table.iter().enumerate() {
+    for (index, wording) in table.iter().enumerate() {
         let errno = index as i32 + 1;
-        let rust = std::io::Error::from_raw_os_error(errno).to_string();
-        let expected = if message.is_empty() {
-            format!("Unknown error {errno} (os error {errno})")
+        let oska = oska_sys::io_error_message(&std::io::Error::from_raw_os_error(errno));
+        let expected = if wording.is_empty() {
+            oska_sys::OTHER_WORDING
         } else {
-            format!("{message} (os error {errno})")
+            wording
         };
-        assert_eq!(rust, expected, "errno {errno}");
+        assert_eq!(oska, expected, "errno {errno}");
+        assert!(!wording.contains("os error"), "errno {errno}");
     }
 }
 

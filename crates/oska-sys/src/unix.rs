@@ -186,7 +186,10 @@ impl Dir {
         let fd = c_string(path.as_os_str())
             .and_then(|path| open_at(c::AT_FDCWD, &path, c::DIRECTORY_FOLLOWING, 0))
             .map_err(|error| {
-                io::Error::new(error.kind(), format!("`{}`: {error}", path.display()))
+                io::Error::new(
+                    error.kind(),
+                    format!("`{}`: {}", path.display(), crate::io_error_message(&error)),
+                )
             })?;
         Ok(Dir { fd })
     }
@@ -292,9 +295,10 @@ impl Dir {
             io::Error::new(
                 error.kind(),
                 format!(
-                    "`{}` to `{}`: {error}",
+                    "`{}` to `{}`: {}",
                     from.to_string_lossy(),
-                    to.to_string_lossy()
+                    to.to_string_lossy(),
+                    crate::io_error_message(&error)
                 ),
             )
         })
@@ -313,7 +317,11 @@ impl Dir {
         .map_err(|error| {
             io::Error::new(
                 error.kind(),
-                format!("`{}`: {error}", name.to_string_lossy()),
+                format!(
+                    "`{}`: {}",
+                    name.to_string_lossy(),
+                    crate::io_error_message(&error)
+                ),
             )
         })
     }
@@ -514,7 +522,7 @@ fn refusal(error: io::Error, path: &str, kind: &str) -> io::Error {
             io::ErrorKind::PermissionDenied,
             format!("`{path}` is a symlink or not a directory, and confined access never follows a symlink"),
         ),
-        _ => io::Error::new(error.kind(), format!("`{path}`: {error}")),
+        _ => io::Error::new(error.kind(), format!("`{path}`: {}", crate::io_error_message(&error))),
     }
 }
 
