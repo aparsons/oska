@@ -3,8 +3,9 @@
 //!
 //! A batch config is a JSON file the maintainer writes, named by the
 //! batch's id (`<batch>.json`). It says which model runs, on which tasks,
-//! in which variants, the per-run cost estimate, and the budget the driver
-//! stops at. Each task's attempts, turn limit and timeout come from its
+//! in which variants (each switching the agent's access to the Oska site,
+//! the check-on-edit hook and `oskac fix`), the per-run estimate and cap,
+//! and the budget the driver stops at. Each task's attempts, turn limit and timeout come from its
 //! `task.json`, so a batch cannot run a task differently from how the task
 //! set declares it. The driver copies the config into the batch directory
 //! as `batch.json`, and `summarise` carries it into the summary.
@@ -27,10 +28,12 @@ const FIELDS: &[&str] = &[
     "variants",
     "budget_usd",
     "estimate_usd_per_run",
+    "cap_usd_per_run",
+    "estimate_tokens_per_run",
 ];
 
 /// The fields of a variant.
-const VARIANT_FIELDS: &[&str] = &["name", "web"];
+const VARIANT_FIELDS: &[&str] = &["name", "web", "hook", "fix"];
 
 /// A well-formed batch config.
 pub struct Config {
@@ -38,15 +41,22 @@ pub struct Config {
     pub variants: Vec<Variant>,
     pub budget: f64,
     pub estimate: f64,
+    /// The most one run may cost: the agent CLI stops a run there, and a
+    /// run whose cost is unknown counts as costing this much.
+    pub cap: f64,
+    pub tokens: u64,
     /// The config as JSON, its fields in the documented order.
     pub json: JsonValue,
 }
 
-/// One variant of a batch: its name, and whether the agent may fetch the
-/// Oska site.
+/// One variant of a batch: its name, whether the agent may fetch the Oska
+/// site, whether the check-on-edit hook runs after each edit, and whether
+/// the agent may run `oskac fix`.
 pub struct Variant {
     pub name: String,
     pub web: bool,
+    pub hook: bool,
+    pub fix: bool,
 }
 
 /// The batch config at `path`. It is checked on its own: whether its tasks
@@ -111,6 +121,15 @@ fn parse(value: &JsonValue) -> Result<Config, String> {
         .ok_or("`budget_usd` must be a number above 0")?;
     let estimate = amount(get("estimate_usd_per_run")?)
         .ok_or("`estimate_usd_per_run` must be a number of at least 0")?;
+    let cap = amount(get("cap_usd_per_run")?)
+        .filter(|c| *c > 0.0)
+        .ok_or("`cap_usd_per_run` must be a number above 0")?;
+    if cap < estimate {
+        return Err("`cap_usd_per_run` must be at least `estimate_usd_per_run`".to_string());
+    }
+    let tokens = get("estimate_tokens_per_run")?
+        .as_u64()
+        .ok_or("`estimate_tokens_per_run` must be a whole number")?;
 
     let json = JsonValue::Object(vec![
         field("schema", num(SCHEMA)),
@@ -125,6 +144,8 @@ fn parse(value: &JsonValue) -> Result<Config, String> {
                         JsonValue::Object(vec![
                             field("name", text(&v.name)),
                             field("web", JsonValue::Bool(v.web)),
+                            field("hook", JsonValue::Bool(v.hook)),
+                            field("fix", JsonValue::Bool(v.fix)),
                         ])
                     })
                     .collect(),
@@ -132,19 +153,25 @@ fn parse(value: &JsonValue) -> Result<Config, String> {
         ),
         field("budget_usd", decimal(budget)),
         field("estimate_usd_per_run", decimal(estimate)),
+        field("cap_usd_per_run", decimal(cap)),
+        field("estimate_tokens_per_run", num(tokens)),
     ]);
     Ok(Config {
         tasks,
         variants,
         budget,
         estimate,
+        cap,
+        tokens,
         json,
     })
 }
 
 fn variant(item: &JsonValue) -> Result<Variant, String> {
     let JsonValue::Object(fields) = item else {
-        return Err("each variant must be an object with `name` and `web`".to_string());
+        return Err(
+            "each variant must be an object with `name`, `web`, `hook` and `fix`".to_string(),
+        );
     };
     if let Some((key, _)) = fields
         .iter()
@@ -161,11 +188,17 @@ fn variant(item: &JsonValue) -> Result<Variant, String> {
         }
         None => return Err("each variant must have a `name`, as text".to_string()),
     };
-    let web = item
-        .get("web")
-        .and_then(JsonValue::as_bool)
-        .ok_or_else(|| format!("the variant `{name}` must say `web`: true or false"))?;
-    Ok(Variant { name, web })
+    let switch = |key: &str| {
+        item.get(key)
+            .and_then(JsonValue::as_bool)
+            .ok_or_else(|| format!("the variant `{name}` must say `{key}`: true or false"))
+    };
+    Ok(Variant {
+        web: switch("web")?,
+        hook: switch("hook")?,
+        fix: switch("fix")?,
+        name,
+    })
 }
 
 /// A non-negative, finite amount of US dollars.
@@ -221,6 +254,8 @@ fn plan(tasks: &Path, path: &Path) -> Result<(JsonValue, bool), String> {
                     field("task", text(task_id)),
                     field("variant", text(&variant.name)),
                     field("web", JsonValue::Bool(variant.web)),
+                    field("hook", JsonValue::Bool(variant.hook)),
+                    field("fix", JsonValue::Bool(variant.fix)),
                     field("attempt", num(attempt)),
                     field("turn_limit", num(task.turn_limit)),
                     field("timeout_seconds", num(task.timeout_seconds)),
@@ -244,7 +279,9 @@ fn plan(tasks: &Path, path: &Path) -> Result<(JsonValue, bool), String> {
                 field("runs", num(runs.len() as u64)),
                 field("turns_at_most", num(turns)),
                 field("seconds_at_most", num(seconds)),
+                field("tokens", num(config.tokens * runs.len() as u64)),
                 field("cost_usd", decimal(cost)),
+                field("cost_usd_at_most", decimal(config.cap * runs.len() as f64)),
                 field("budget_usd", decimal(config.budget)),
                 field("within_budget", JsonValue::Bool(within)),
             ]),

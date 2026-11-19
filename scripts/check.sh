@@ -227,10 +227,12 @@ skip_step() {
 # site/, README.md, GLOSSARY.md, SECURITY.md, .github/workflows/pages.yml,
 # scripts/install/, and `git ls-files`. scripts/temp-leak/ wraps cargo test,
 # scripts/docs-tests/ picks the tests a docs/ change runs, scripts/eval-tasks/
-# validates the eval task set, and this file runs the cargo steps.
+# validates the eval task set, the oska-eval tests scan
+# scripts/eval-batch/fixtures/ for home paths, and this file runs the cargo
+# steps.
 cargo_input() {
   case $1 in
-    .github/workflows/pages.yml | scripts/install/* | scripts/temp-leak/* | scripts/docs-tests/* | scripts/eval-tasks/* | scripts/check.sh) return 0 ;;
+    .github/workflows/pages.yml | scripts/install/* | scripts/temp-leak/* | scripts/docs-tests/* | scripts/eval-tasks/* | scripts/eval-batch/fixtures/* | scripts/check.sh) return 0 ;;
     CLAUDE.md | CODING_STANDARDS.md | LICENSE | .gitignore) return 1 ;;
     .githooks/* | .claude/* | .github/* | scripts/*) return 1 ;;
   esac
@@ -541,6 +543,8 @@ fi
 if step "eval batch driver tests" --fast-when 'scripts/eval-batch/*' --fast-when 'crates/oska-eval/*'; then
   # The live driver end to end with a stub `claude` on PATH: offline, no
   # model is called. The driver itself refuses to run live in CI.
+  # The step takes the build slot in `step` before this block, whether or
+  # not jq is here (scripts/check-steps/test.sh relies on it).
   if command -v jq >/dev/null 2>&1; then
     bash scripts/eval-batch/test.sh
   else

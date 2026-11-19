@@ -13,7 +13,8 @@ const TASKS: &str = "tests/fixtures/validate/valid";
 const CONFIG: &str = "tests/fixtures/plan/2026-11-20-hook.json";
 
 /// Two tasks, two variants, five attempts: 20 runs at an estimated 0.50
-/// US dollars each is 10.00, within the budget of 25. The batch is named
+/// US dollars and 60000 tokens each is 10.00 and 1200000 tokens, within
+/// the budget of 25; at the cap of 2.00 a run they could cost 40.00. The batch is named
 /// by the config file.
 #[test]
 fn a_plan_lists_every_run_and_estimates_its_cost() {
@@ -27,8 +28,11 @@ fn a_plan_lists_every_run_and_estimates_its_cost() {
         "\"turns_at_most\": 800,",
         "\"seconds_at_most\": 18000,",
         "\"cost_usd\": 10.0000,",
+        "\"cost_usd_at_most\": 40.0000,",
+        "\"tokens\": 1200000,",
         "\"within_budget\": true",
         "\"record\": \"token-no-web-5.json\"",
+        "\"hook\": true,",
     ] {
         assert!(plan.contains(expected), "no {expected} in {plan}");
     }
@@ -50,8 +54,9 @@ fn an_estimate_over_the_budget_fails_the_plan() {
         &scratch,
         "over",
         r#"{"schema": 1, "model": "example-model", "tasks": ["greeting"],
-            "variants": [{"name": "base", "web": true}],
-            "budget_usd": 2, "estimate_usd_per_run": 0.5}"#,
+            "variants": [{"name": "base", "web": true, "hook": false, "fix": true}],
+            "budget_usd": 2, "estimate_usd_per_run": 0.5, "cap_usd_per_run": 2,
+            "estimate_tokens_per_run": 50000}"#,
     );
     assert_eq!(outcome.code, 1, "{}", outcome.stdout);
     assert!(
@@ -69,10 +74,11 @@ fn a_malformed_config_or_an_unknown_or_deferred_task_is_bad_input() {
         format!(
             r#"{{"schema": 1, "model": "example-model", "tasks": {tasks},
                 "variants": {variants}, "budget_usd": 5,
-                "estimate_usd_per_run": 0.5{extra}}}"#
+                "estimate_usd_per_run": 0.5, "cap_usd_per_run": 2,
+                "estimate_tokens_per_run": 50000{extra}}}"#
         )
     };
-    let one = r#"[{"name": "base", "web": true}]"#;
+    let one = r#"[{"name": "base", "web": true, "hook": false, "fix": true}]"#;
     let cases = [
         ("unknown", base(r#"["nope"]"#, one, ""), "no task `nope`"),
         ("deferred", base(r#"["fetch"]"#, one, ""), "deferred"),
@@ -91,7 +97,7 @@ fn a_malformed_config_or_an_unknown_or_deferred_task_is_bad_input() {
             "variant-name",
             base(
                 r#"["greeting"]"#,
-                r#"[{"name": "a;touch x", "web": true}]"#,
+                r#"[{"name": "a;touch x", "web": true, "hook": false, "fix": true}]"#,
                 "",
             ),
             "variant `a;touch x`",
@@ -100,15 +106,19 @@ fn a_malformed_config_or_an_unknown_or_deferred_task_is_bad_input() {
             "variant-twice",
             base(
                 r#"["greeting"]"#,
-                r#"[{"name": "a", "web": true}, {"name": "a", "web": false}]"#,
+                r#"[{"name": "a", "web": true, "hook": false, "fix": true}, {"name": "a", "web": false, "hook": true, "fix": false}]"#,
                 "",
             ),
             "the variant `a` is listed twice",
         ),
         (
             "variant-field",
-            base(r#"["greeting"]"#, r#"[{"name": "a", "hook": true}]"#, ""),
-            "unknown field `hook`",
+            base(
+                r#"["greeting"]"#,
+                r#"[{"name": "a", "web": true, "hook": true, "fix": true, "extra": true}]"#,
+                "",
+            ),
+            "unknown field `extra`",
         ),
         (
             "unknown-field",
@@ -129,6 +139,21 @@ fn a_malformed_config_or_an_unknown_or_deferred_task_is_bad_input() {
             "model",
             base(r#"["greeting"]"#, one, "").replace("example-model", "a model"),
             "`model` must be text with no space",
+        ),
+        (
+            "variant-no-hook",
+            base(
+                r#"["greeting"]"#,
+                r#"[{"name": "a", "web": true, "fix": true}]"#,
+                "",
+            ),
+            "the variant `a` must say `hook`: true or false",
+        ),
+        (
+            "cap-below-estimate",
+            base(r#"["greeting"]"#, one, "")
+                .replace("\"cap_usd_per_run\": 2", "\"cap_usd_per_run\": 0.25"),
+            "`cap_usd_per_run` must be at least `estimate_usd_per_run`",
         ),
         ("not-json", "{".to_string(), "at line 1"),
     ];

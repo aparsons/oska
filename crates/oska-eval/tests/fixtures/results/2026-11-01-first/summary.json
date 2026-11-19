@@ -6,10 +6,12 @@
     "model": "example-model",
     "tasks": ["greeting"],
     "variants": [
-      {"name": "base", "web": false}
+      {"name": "base", "web": false, "hook": false, "fix": true}
     ],
     "budget_usd": 5.0000,
-    "estimate_usd_per_run": 0.2500
+    "estimate_usd_per_run": 0.2500,
+    "cap_usd_per_run": 2.0000,
+    "estimate_tokens_per_run": 50000
   },
   "started": "2026-11-01T09:00:00Z",
   "ended": "2026-11-01T09:59:00Z",

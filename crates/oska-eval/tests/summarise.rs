@@ -258,7 +258,7 @@ fn a_batch_without_its_config_or_with_runs_the_config_does_not_list_is_bad_input
     let cases = [
         (None, "batch.json"),
         (
-            Some(("\"hook\"", "\"other\"")),
+            Some(("\"name\": \"hook\"", "\"name\": \"other\"")),
             "the run of `files` in `hook` is of a variant the batch config does not list",
         ),
         (

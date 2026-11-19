@@ -8,6 +8,13 @@
 //! outside the repo and the task set, so the agent cannot read the hidden
 //! checks or the solutions. The hidden checks are added only when the run
 //! is graded.
+//!
+//! With `--setup <dir>` (the repo's `site/agent-setup/`), the workspace also
+//! gets the agent-setup files a real user's agent gets, `AGENTS.md` and
+//! `CLAUDE.md` from the published templates, and the run directory gets
+//! `claude-settings.json`, the Claude Code settings for the variant: the
+//! published check-on-edit hook with `--hook`, else none. The setup files
+//! are read-only for the agent: `grade --setup` treats them so.
 
 use crate::json::{field, pretty};
 use crate::task;
@@ -16,9 +23,47 @@ use oska_syntax::JsonValue;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-/// `oska-eval prepare <tasks-dir> <task-id> <run-dir>`.
-pub fn run(tasks: &str, id: &str, run_dir: &str) -> ExitCode {
-    match prepare(tasks, id, run_dir) {
+/// The agent-setup files a workspace gets with `--setup`, and the template
+/// each is written from.
+pub const SETUP_FILES: &[(&str, &str)] = &[
+    ("AGENTS.md", "AGENTS.template.md"),
+    ("CLAUDE.md", "CLAUDE.template.md"),
+];
+
+/// The settings file of a run, beside its workspace, and the template of
+/// the check-on-edit hook's settings.
+const SETTINGS: &str = "claude-settings.json";
+const HOOK_SETTINGS: &str = "claude-settings-post-edit.json";
+
+/// The agent-setup files in `setup`, as (workspace path, contents).
+pub fn setup_files(setup: &Path) -> Result<Vec<(&'static str, Vec<u8>)>, String> {
+    SETUP_FILES
+        .iter()
+        .map(|(file, template)| {
+            let path = setup.join(template);
+            std::fs::read(&path).map(|text| (*file, text)).map_err(|e| {
+                format!(
+                    "cannot read the agent-setup template {}: {e}",
+                    path.display()
+                )
+            })
+        })
+        .collect()
+}
+
+/// `oska-eval prepare <tasks-dir> <task-id> <run-dir> [--setup <dir> [--hook]]`.
+pub fn run(tasks: &str, id: &str, run_dir: &str, flags: &[&str]) -> ExitCode {
+    let options = match flags {
+        [] => Ok((None, false)),
+        ["--setup", setup] => Ok((Some(*setup), false)),
+        ["--setup", setup, "--hook"] | ["--hook", "--setup", setup] => Ok((Some(*setup), true)),
+        _ if flags.contains(&"--hook") && !flags.contains(&"--setup") => {
+            Err("`--hook` needs `--setup`".to_string())
+        }
+        _ => Err(format!("unknown flags: {}", flags.join(" "))),
+    };
+    let result = options.and_then(|(setup, hook)| prepare(tasks, id, run_dir, setup, hook));
+    match result {
         Ok(report) => {
             print!("{}", pretty(&report));
             ExitCode::SUCCESS
@@ -27,9 +72,29 @@ pub fn run(tasks: &str, id: &str, run_dir: &str) -> ExitCode {
     }
 }
 
-fn prepare(tasks: &str, id: &str, run_dir: &str) -> Result<JsonValue, String> {
+fn prepare(
+    tasks: &str,
+    id: &str,
+    run_dir: &str,
+    setup: Option<&str>,
+    hook: bool,
+) -> Result<JsonValue, String> {
     let task = task::load_active(Path::new(tasks), id)?;
     let run_dir = absolute(Path::new(run_dir))?;
+    let setup = match setup {
+        Some(dir) => {
+            let dir = Path::new(dir);
+            let settings = if hook {
+                let path = dir.join(HOOK_SETTINGS);
+                std::fs::read(&path)
+                    .map_err(|e| format!("cannot read the hook settings {}: {e}", path.display()))?
+            } else {
+                b"{}\n".to_vec()
+            };
+            Some((setup_files(dir)?, settings))
+        }
+        None => None,
+    };
     fresh(Path::new(tasks), &run_dir)?;
 
     let workspace = Workspace::kept(&run_dir.join("workspace"))?;
@@ -37,6 +102,16 @@ fn prepare(tasks: &str, id: &str, run_dir: &str) -> Result<JsonValue, String> {
     let prompt = task.dir.join("prompt.md");
     std::fs::copy(&prompt, run_dir.join("prompt.md"))
         .map_err(|e| format!("cannot copy {}: {e}", prompt.display()))?;
+    if let Some((files, settings)) = &setup {
+        for (file, text) in files {
+            let path = workspace.path().join(file);
+            std::fs::write(&path, text)
+                .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+        }
+        let path = run_dir.join(SETTINGS);
+        std::fs::write(&path, settings)
+            .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    }
 
     Ok(JsonValue::Object(vec![
         field("schema", JsonValue::Number("1".to_string())),

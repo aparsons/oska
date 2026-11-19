@@ -36,18 +36,25 @@ USAGE:
         Read a batch config (named <batch-id>.json) against the task set
         and list every run the batch will make (task, variant, attempt,
         and the task's turn limit and timeout), with the most turns and
-        time they may take and the estimated cost against the budget. It
+        time they may take, the estimated tokens and cost, and the most
+        they may cost at the per-run cap, against the budget. It
         exits with 1 when the estimate is over the budget. Nothing runs.
 
-    oska-eval prepare <tasks-dir> <task-id> <run-dir>
+    oska-eval prepare <tasks-dir> <task-id> <run-dir> [--setup <dir> [--hook]]
         Make a fresh run directory for an active task: workspace/ (the
         starting package) and prompt.md.
         <run-dir> must be new, and outside the repo and the task set.
+        With --setup (the repo's site/agent-setup), the workspace also
+        gets AGENTS.md and CLAUDE.md from the published templates, and
+        the run directory claude-settings.json: the check-on-edit hook
+        with --hook, else no settings.
 
-    oska-eval grade --oskac <path> <tasks-dir> <task-id> <run-dir>
+    oska-eval grade --oskac <path> [--setup <dir>] <tasks-dir> <task-id> <run-dir>
         Grade a finished run's workspace/ through the oskac at <path>: the
         hidden checks, the release check, the program's output, and authority
         against the task's expected authority. Nothing changes in the run.
+        With --setup, the agent-setup files prepare wrote are part of the
+        starting package, and read-only.
 
     oska-eval analyse [--workspace <dir>] [--functional pass|fail] <transcript>
         Read a recorded Claude Code stream-json transcript and say how the
@@ -110,8 +117,13 @@ fn main() -> ExitCode {
     match args.as_slice() {
         ["validate", "--oskac", oskac, tasks] => validate::run(oskac, tasks),
         ["plan", tasks, config] => batch::run(tasks, config),
-        ["prepare", tasks, id, run_dir] => prepare::run(tasks, id, run_dir),
-        ["grade", "--oskac", oskac, tasks, id, run_dir] => grade::run(oskac, tasks, id, run_dir),
+        ["prepare", tasks, id, run_dir, flags @ ..] => prepare::run(tasks, id, run_dir, flags),
+        ["grade", "--oskac", oskac, tasks, id, run_dir] => {
+            grade::run(oskac, None, tasks, id, run_dir)
+        }
+        ["grade", "--oskac", oskac, "--setup", setup, tasks, id, run_dir] => {
+            grade::run(oskac, Some(setup), tasks, id, run_dir)
+        }
         ["record", tasks, id, flags @ ..] => record::run(tasks, id, flags),
         ["summarise", batch] => summarise::run(batch),
         ["report", results] => report::run(results, None),

@@ -48,11 +48,13 @@ It prints a JSON report and exits with 0 when every task validates, 1 when a tas
 ## Preparing and grading a run
 
 ```sh
-target/debug/oska-eval prepare eval/tasks <task-id> <run-dir>
-target/debug/oska-eval grade --oskac target/debug/oskac eval/tasks <task-id> <run-dir>
+target/debug/oska-eval prepare eval/tasks <task-id> <run-dir> [--setup site/agent-setup [--hook]]
+target/debug/oska-eval grade --oskac target/debug/oskac [--setup site/agent-setup] eval/tasks <task-id> <run-dir>
 ```
 
 `prepare` makes `<run-dir>`, which must be new (or empty) and outside the repo and the task set, so the agent cannot read the hidden checks or the solutions. It holds `workspace/` (a copy of `start/`, where the agent works), and `prompt.md` (the prompt, verbatim). Nothing the grade relies on is kept there: the agent can write anywhere in the run directory. It refuses a deferred task. It prints the paths of the workspace and the prompt.
+
+With `--setup`, `prepare` also gives the agent what a real user's agent gets from the agent-setup prompt: `AGENTS.md` and `CLAUDE.md` in the workspace, written from the published templates in `site/agent-setup/`, and `claude-settings.json` in the run directory, the Claude Code settings for the variant: the published check-on-edit hook (`claude-settings-post-edit.json`) with `--hook`, else none (`{}`). `grade --setup` then counts `AGENTS.md` and `CLAUDE.md` as part of the starting package and as read-only: unchanged, they are not in `changed`; changed, they fail the `integrity` group, and `record` sets `read_only_changed`.
 
 `grade` treats the agent as untrusted. It reads `workspace/` once, into a copy, and judges only the copy, so grading changes nothing, can be repeated, and an agent still writing cannot make the checks see other files than the grade. The copy holds only regular files: a link (or a pipe or device) is never followed, so it cannot pull in a file from outside or loop; it is left out and fails the `integrity` group. Each `read_only` file is compared with the task's own `start/`, and the copy is graded with the task's version of it, so tampering is reported but cannot sway `passed` or `secure`. A file or directory in `src/` the agent named `eval_checks.osk` or `eval_checks`, in any case, is left out of the copy and also fails the `integrity` group. It then adds each group of hidden checks as `src/eval_checks.osk` in turn and grades only through `oskac`: `oskac test` over the hidden checks, `oskac check --format=json` (the package must check, and its audit sites must be of `allowed_audit`), `oskac check --baseline` for authority against `expected_authority`, `oskac check --release`, and the program's output when the task has a `run`.
 
@@ -76,9 +78,11 @@ A batch starts from a batch config: a JSON file named by the batch's id, such as
     "secret-logging-access-check", "secret-logging-webhook-delivery",
     "xss-greeting", "xss-profile-link"
   ],
-  "variants": [{"name": "web", "web": true}],
+  "variants": [{"name": "base", "web": true, "hook": false, "fix": true}],
   "budget_usd": 40,
-  "estimate_usd_per_run": 0.5
+  "estimate_usd_per_run": 0.5,
+  "cap_usd_per_run": 1,
+  "estimate_tokens_per_run": 300000
 }
 ```
 
@@ -87,9 +91,11 @@ A batch starts from a batch config: a JSON file named by the batch's id, such as
 | `schema` | The format version, `1`. |
 | `model` | The model the agent CLI runs (`claude --model`), as the CLI names it: text with no space. Replace the placeholder. |
 | `tasks` | The ids of the active tasks to run, each once. Each runs its `task.json`'s `attempts`, with its `turn_limit` and `timeout_seconds`. |
-| `variants` | Each variant's `name` (lower-case letters, digits, `-` and `_`) and `web`: whether the agent may fetch the Oska site's guide. Every task runs in every variant. |
+| `variants` | Each variant's `name` (lower-case letters, digits, `-` and `_`) and three switches, each `true` or `false`: `web` (the agent may fetch the Oska site's guide), `hook` (the published check-on-edit hook runs `oskac check` after each edit) and `fix` (the agent may run `oskac fix`). Every task runs in every variant, so a batch with `hook` on in one variant and off in another measures the hook. |
 | `budget_usd` | The most the batch may cost, in US dollars, as the agent CLI reports cost: no run starts once the batch's recorded runs reach it. |
 | `estimate_usd_per_run` | What one run is expected to cost, in US dollars, for the plan's estimate. |
+| `cap_usd_per_run` | The most one run may cost, in US dollars, at least the estimate: the agent CLI stops a run there (`--max-budget-usd`), and a run whose cost is unknown (it failed, or its usage could not be read) counts as costing this much against the budget. |
+| `estimate_tokens_per_run` | How many tokens, input and output, one run is expected to use, for the plan's estimate. |
 
 ### The plan
 
@@ -97,7 +103,7 @@ A batch starts from a batch config: a JSON file named by the batch's id, such as
 target/release/oska-eval plan eval/tasks 2026-11-20-first.json
 ```
 
-`plan` reads the config against the task set and prints every run the batch will make (task, variant, attempt, the task's turn limit and timeout, and the run record's file name) and an `estimate`: the `runs`, the most turns and seconds of agent time they may take (`turns_at_most`, `seconds_at_most`), the estimated `cost_usd` (runs times the estimate per run), the `budget_usd`, and whether it is `within_budget`. It exits with 1 when the estimate is over the budget, and 2 on a bad config: an unknown field, an unknown or deferred task, a variant named twice, or a file name that is not a batch id.
+`plan` reads the config against the task set and prints every run the batch will make (task, variant, attempt, the task's turn limit and timeout, and the run record's file name) and an `estimate`: the `runs`, the most turns and seconds of agent time they may take (`turns_at_most`, `seconds_at_most`), the estimated `tokens` and `cost_usd` (runs times each estimate per run), the `cost_usd_at_most` (runs times the cap), the `budget_usd`, and whether the estimate is `within_budget`. It exits with 1 when the estimate is over the budget, and 2 on a bad config: an unknown field, an unknown or deferred task, a variant named twice or missing a switch, a cap below the estimate, or a file name that is not a batch id.
 
 ### The driver
 
@@ -107,15 +113,23 @@ scripts/eval-batch/run.sh 2026-11-20-first.json          # the plan; nothing run
 scripts/eval-batch/run.sh 2026-11-20-first.json --live   # runs the batch
 ```
 
-`scripts/eval-batch/run.sh` needs `claude` (logged in), `jq`, `git`, `timeout` (`gtimeout` on macOS, from coreutils) and `sha256sum` or `shasum`, and the `oska-eval` and `oskac` that `--bin` names (`target/release` by default). Without `--live` it prints the plan and stops. With `--live` it prints the plan, refuses a plan over its budget, and asks for the batch id to be typed before it starts (`--yes` skips the question; the budget still holds). Then, for each run of the plan in order, it:
+`scripts/eval-batch/run.sh` needs `claude` (logged in), `jq`, `git`, `timeout` (`gtimeout` on macOS, from coreutils) and `sha256sum` or `shasum`, and the `oska-eval` and `oskac` that `--bin` names (`target/release` by default). Without `--live` it prints the plan and stops. With `--live` it prints the plan, refuses a plan over its budget, and asks for the batch id to be typed before it starts (`--yes` skips the question; the budget still holds). It also refuses a work directory inside the repo (links resolved) or whose path holds anything but letters, digits, `.`, `_`, `-` and `/`. Then, for each run of the plan in order, it:
 
 1. skips the run if its record is already in `eval/results/<batch>/runs/`, so a batch that stopped resumes where it stopped (only with the same config: a changed config needs a new batch id);
-2. stops starting runs once the costs the records report reach `budget_usd`; the summary lists the runs not made as `incomplete`;
-3. `prepare`s a fresh run directory under `--work` (default `~/.local/state/oska-eval/<batch>/`, outside the repo; a run directory left by an interrupted run is moved aside, kept, and the run made again);
-4. runs `claude -p` in the workspace, with the prompt on its standard input, the config's model, `--max-turns` at the task's turn limit, the task's timeout (a run cut off is recorded as `timeout`), `stream-json` output saved as `transcript.jsonl` beside the workspace, no MCP servers, and only these tools: `Read`, `Edit`, `Write`, `Glob`, `Grep`, `Bash(oskac:*)` with the `oskac` under test first on `PATH`, and, in a variant with `web`, `WebFetch` of `oskalang.dev`;
-5. `grade`s the workspace, `analyse`s the transcript and `record`s the run, with what the harness cannot see for itself: the agent CLI's version (`claude --version`), the `oskac` version and its commit (with `-dirty` when the repo has uncommitted changes outside `eval/results/` and `docs/evaluation.md`), and the task set's digest (the SHA-256 of every file's path and SHA-256 in `eval/tasks/`).
+2. once the batch's cost reaches `budget_usd`, records each run not yet made with the stop reason `budget`, and runs nothing more. The cost is what each record reports, or `cap_usd_per_run` for a run whose cost is unknown, never zero;
+3. `prepare`s a fresh run directory under `--work` (default `~/.local/state/oska-eval/<batch>/`; a run directory left by an interrupted run is moved aside, kept, and the run made again), with `--setup site/agent-setup`, and `--hook` in a variant with `hook`;
+4. runs `claude -p` in the workspace, with the prompt on its standard input, its `stream-json` output saved as `transcript.jsonl` beside the workspace, and the task's timeout (a run cut off is recorded as `timeout`). The flags pin what the agent gets:
+   - `--model` (the config's), `--max-turns` (the task's turn limit) and `--max-budget-usd` (the cap);
+   - `--restricted`: the maintainer's own user, project and local settings files are ignored, the file tools are confined to the workspace, and permission bypass is refused; `--settings` gives the variant's `claude-settings.json` (the hook, or nothing); `--strict-mcp-config` loads no MCP server; `--no-session-persistence` keeps nothing;
+   - `--permission-mode dontAsk` and `--permission-prompts none`: anything not allowed below is denied, never asked about;
+   - `--tools` `Read,Edit,Write,Glob,Grep,Bash`, and `WebFetch` in a variant with `web`;
+   - `--allowedTools`: `Read(//<workspace>/**)`, `Edit(//<workspace>/**)`, `Glob`, `Grep`, and in `Bash` only `oskac check`, `oskac test` and `oskac explain` (with the `oskac` under test first on `PATH`), plus `oskac fix` in a variant with `fix` and `WebFetch(domain:oskalang.dev)` in a variant with `web`;
+   - `--disallowedTools`: `oskac run`, `oskac build` and `WebSearch`, and `oskac fix` and `WebFetch` in the variants without them. `oskac run` and `oskac build` are left out although `AGENTS.md` mentions them: the agent's program would run with the maintainer's own authority, outside any sandbox, and `oskac test` exercises it as well;
+5. `grade`s the workspace (with `--setup`), `analyse`s the transcript and `record`s the run, with what the harness cannot see for itself: the agent CLI's version (`claude --version`), the `oskac` version and its commit (with `-dirty` when the repo has uncommitted changes outside `eval/results/` and `docs/evaluation.md`), and the task set's digest (the SHA-256 of every file's path and SHA-256 in `eval/tasks/`).
 
-At the end it writes the batch's `summary.json` and renders `docs/evaluation.md`. Any failed step, missing tool or unreadable file stops the batch with an error, and so does an agent CLI that exits with an error and no result (no login, no network): that says nothing about the agent, so it is not recorded. The agent's output is never run or expanded by the driver; it is only read by the harness. Claude Code still reads the maintainer's own settings, so those must not allow it more tools than the list above.
+At the end it writes the batch's `summary.json` and renders `docs/evaluation.md`. A missing tool, an unreadable file or a failed harness step stops the batch with an error. A run whose transcript cannot be read, or whose agent CLI exits with an error and no result (no login, no network), is recorded with the stop reason `error`, counted at the cap, and stops the batch, so a broken setup does not fail every run alike; fix the cause and run the batch again. A failed `record` leaves no partial record. The agent's output is never run or expanded by the driver; it is only read by the harness.
+
+The flags above are those `claude --help` lists for Claude Code 2.1.328, except `--max-turns`, which that help does not list; the driver is tested only with a stub, so check them against the installed CLI before the first batch (`claude --help`). What the flags cannot pin: Claude Code may still read the maintainer's own memory file (`~/.claude/CLAUDE.md`) and any `CLAUDE.md` in a directory above the work directory, so keep those empty or out of the way during a batch, and admin-managed (policy) settings still apply.
 
 Then commit `eval/results/<batch>/` (`batch.json`, `runs/` and `summary.json`) and `docs/evaluation.md` in a pull request. Transcripts and workspaces stay in the work directory and are never committed.
 
@@ -123,7 +137,7 @@ Then commit `eval/results/<batch>/` (`batch.json`, `runs/` and `summary.json`) a
 
 ### What a batch costs
 
-The cost of a run is what the agent CLI reports for it, which depends on the model's prices and on how many turns and tokens the agent uses; the harness does not know any price. So the estimate is the maintainer's: take it from an earlier batch (its summary's `usage.cost_usd` divided by `usage.runs_reported`), or, for a first batch, run a one-task batch first and use its cost. A batch's size is tasks times variants times attempts: the eight active tasks at their five attempts are 40 runs per variant. Each run is bounded by its task's turn limit (40 turns) and timeout (15 minutes), so 40 runs take at most 10 hours. The budget is the hard ceiling, checked before each run, so a batch can pass it by at most the cost of its last run.
+The cost of a run is what the agent CLI reports for it, which depends on the model's prices and on how many turns and tokens the agent uses; the harness does not know any price. So the estimate is the maintainer's: take it from an earlier batch (its summary's `usage.cost_usd` divided by `usage.runs_reported`), or, for a first batch, run a one-task batch first and use its cost. A batch's size is tasks times variants times attempts: the eight active tasks at their five attempts are 40 runs per variant. Each run is bounded by its task's turn limit (40 turns), its timeout (15 minutes) and the cap (`cap_usd_per_run`, which the agent CLI enforces), so 40 runs take at most 10 hours and cost at most 40 times the cap; the plan prints both. The budget is checked before each run, so a batch can pass it by at most one run's cap.
 
 ## Results
 
@@ -154,7 +168,7 @@ A **run record** is what `record` prints. It joins the run's grade and analysis 
 | `started`, `ended` | UTC times, such as `2026-11-20T10:00:00Z`. |
 | `stop` | `finished`, `turn_limit`, `timeout`, `budget` or `error`: `--stop` when given, else the analysis's (a transcript with no final message is `error`). |
 | `usage` | The analysis's `usage`, as the agent CLI reported it, or `null`. |
-| `flags` | `escape` (a tool call outside the workspace), `false_claim` (the run finished but failed the functional checks) and `read_only_changed` (a `read_only` file changed). |
+| `flags` | `escape` (a tool call outside the workspace), `false_claim` (the run finished but failed the functional checks) and `read_only_changed` (a `read_only` file or an agent-setup file, `AGENTS.md` or `CLAUDE.md`, changed). |
 | `grade` | The grade's `passed`, `secure`, `clean`, `changed` and `checks`, or `null`. |
 | `analysis` | The analysis's `iterations`, `iterations_to_clean`, `timeline`, `diagnostics`, `fixes`, `lookups` and `escapes`, or `null`. |
 

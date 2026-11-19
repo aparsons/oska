@@ -130,14 +130,18 @@ fi
 batch=$(jq -r .batch "$plan")
 model=$(jq -r .config.model "$plan")
 budget=$(jq -r .config.budget_usd "$plan")
+cap=$(jq -r .config.cap_usd_per_run "$plan")
 jq -r '
   "Batch \(.batch): \(.config.model) on \(.config.tasks | length) task(s) in \(.config.variants | length) variant(s)",
   "  runs:      \(.estimate.runs)",
   "  at most:   \(.estimate.turns_at_most) turns and \(.estimate.seconds_at_most) seconds of agent time",
-  "  estimate:  \(.estimate.cost_usd) US dollars (\(.config.estimate_usd_per_run) a run)",
+  "  estimate:  \(.estimate.cost_usd) US dollars (\(.config.estimate_usd_per_run) a run) and \(.estimate.tokens) tokens",
+  "  at worst:  \(.estimate.cost_usd_at_most) US dollars (the cap of \(.config.cap_usd_per_run) a run)",
   "  budget:    \(.estimate.budget_usd) US dollars; no run starts once the recorded cost reaches it",
   "  per task and variant:",
-  (.runs | group_by([.task, .variant])[] | "    \(.[0].task) in \(.[0].variant): \(length) run(s), \(.[0].turn_limit) turns and \(.[0].timeout_seconds) s each")
+  (.runs | group_by([.task, .variant])[] | "    \(.[0].task) in \(.[0].variant): \(length) run(s), \(.[0].turn_limit) turns and \(.[0].timeout_seconds) s each"),
+  "  variants:",
+  (.config.variants[] | "    \(.name): site \(.web), hook \(.hook), oskac fix \(.fix)")
 ' "$plan"
 if [ "$status" -eq 1 ]; then
   die "the estimate is over the budget: raise budget_usd or plan fewer runs"
@@ -169,6 +173,19 @@ elif command -v shasum >/dev/null 2>&1; then
 else
   die "sha256sum or shasum is needed to digest the task set"
 fi
+
+# The work directory holds each run's workspace: outside the repo, so the
+# agent cannot reach the hidden checks or the solutions (both paths with
+# links resolved), and a path the tool rules can name as it is.
+mkdir -p "$work"
+work=$(cd "$work" && pwd -P)
+case $work in
+  *[!A-Za-z0-9._/-]*) die "the work directory $work may hold only letters, digits, '.', '_', '-' and '/'; choose another with --work" ;;
+esac
+repo_real=$(cd "$repo" && pwd -P)
+case $work/ in
+  "$repo_real"/*) die "the work directory $work is inside the repo $repo_real: an agent there could read the hidden checks; choose another with --work" ;;
+esac
 
 if [ "$yes" != true ]; then
   printf 'This batch calls a paid model. Type the batch id (%s) to start it: ' "$batch"
@@ -212,22 +229,43 @@ mkdir -p "$pinned"
 cp "$oskac" "$pinned/oskac"
 oskac=$pinned/oskac
 
-# The total cost the batch's records report.
+# The batch's cost so far: what each record reports, or the per-run cap for
+# a run whose cost is unknown (it failed, or its usage could not be read),
+# so that an unknown is never counted as free. A run recorded as `budget`
+# never started, and cost nothing.
 spent() {
   local records=("$batch_dir"/runs/*.json)
   if [ ! -e "${records[0]}" ]; then
     echo 0
     return
   fi
-  jq -s 'map(.usage.cost_usd // 0) | add' "${records[@]}"
+  jq -s --argjson cap "$cap" \
+    'map(if .stop == "budget" then 0 else (.usage.cost_usd // $cap) end) | add' "${records[@]}"
 }
 
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
+# record ARGS...: writes the run record of the current run to $out, from
+# `oska-eval record` with the run's provenance and ARGS; a failure leaves no
+# partial record behind.
+record() {
+  if ! "$harness" record "$tasks" "$task" --attempt "$attempt" --variant "$variant" \
+    --model "$model" --agent claude-code --agent-version "$agent_version" \
+    --oskac-version "$oskac_version" --oskac-commit "$oskac_commit" \
+    --task-set "$digest" "$@" >"$out.partial"; then
+    local why
+    why=$(cat "$out.partial")
+    rm -f "$out.partial"
+    die "$label: oska-eval record failed: $why"
+  fi
+  mv "$out.partial" "$out"
+}
+
 total=$(jq '.runs | length' "$plan")
 n=0
 stopped=
-while IFS=$'\t' read -r task variant web attempt turn_limit timeout_seconds record <&3; do
+failed=
+while IFS=$'\t' read -r task variant web hook fix attempt turn_limit timeout_seconds record <&3; do
   n=$((n + 1))
   label="run $n/$total: $task in $variant, attempt $attempt"
   out=$batch_dir/runs/$record
@@ -235,9 +273,16 @@ while IFS=$'\t' read -r task variant web attempt turn_limit timeout_seconds reco
     echo "$label: recorded already"
     continue
   fi
-  if [ "$(jq -n --argjson spent "$(spent)" --argjson budget "$budget" '$spent >= $budget')" = true ]; then
+  if [ -z "$stopped" ] &&
+    [ "$(jq -n --argjson spent "$(spent)" --argjson budget "$budget" '$spent >= $budget')" = true ]; then
     stopped="the recorded cost, $(spent) US dollars, reached the budget of $budget"
-    break
+  fi
+  if [ -n "$stopped" ]; then
+    # Never dropped: a run the budget stopped is recorded as `budget`.
+    started=$(now)
+    record --started "$started" --ended "$started" --stop budget
+    echo "$label: not run (budget)"
+    continue
   fi
 
   run_dir=$work/$batch/$task/$variant/$attempt
@@ -246,22 +291,54 @@ while IFS=$'\t' read -r task variant web attempt turn_limit timeout_seconds reco
     mv "$run_dir" "$run_dir.interrupted-$(date -u +%Y%m%dT%H%M%SZ)-$$"
   fi
   mkdir -p "$(dirname "$run_dir")"
-  "$harness" prepare "$tasks" "$task" "$run_dir" >"$scratch/prepare.json" ||
+  setup=(--setup "$repo/site/agent-setup")
+  if [ "$hook" = true ]; then
+    setup+=(--hook)
+  fi
+  "$harness" prepare "$tasks" "$task" "$run_dir" "${setup[@]}" >"$scratch/prepare.json" ||
     die "$label: oska-eval prepare failed: $(cat "$scratch/prepare.json")"
 
-  tools="Read,Edit,Write,Glob,Grep,Bash(oskac:*)"
-  if [ "$web" = true ]; then
-    tools="$tools,WebFetch(domain:$site)"
+  # The agent's tools: reading and editing in its workspace only, the
+  # oskac subcommands the loop needs (not `run` or `build`: the agent's
+  # program would run with the maintainer's own authority), `oskac fix` and
+  # the Oska site only in the variants that allow them. --restricted ignores
+  # the maintainer's own settings files and confines the file tools to the
+  # workspace; dontAsk denies anything not allowed here.
+  workspace=$run_dir/workspace
+  tools=(Read Edit Write Glob Grep Bash)
+  allow=("Read(/$workspace/**)" "Edit(/$workspace/**)" Glob Grep
+    "Bash(oskac check)" "Bash(oskac check *)" "Bash(oskac test)" "Bash(oskac test *)"
+    "Bash(oskac explain *)")
+  deny=("Bash(oskac run *)" "Bash(oskac build *)" WebSearch)
+  if [ "$fix" = true ]; then
+    allow+=("Bash(oskac fix)" "Bash(oskac fix *)")
+  else
+    deny+=("Bash(oskac fix)" "Bash(oskac fix *)")
   fi
-  echo "$label: running the agent (at most $turn_limit turns, $timeout_seconds s)"
+  if [ "$web" = true ]; then
+    tools+=(WebFetch)
+    allow+=("WebFetch(domain:$site)")
+  else
+    deny+=(WebFetch)
+  fi
+
+  echo "$label: running the agent (at most $turn_limit turns, $timeout_seconds s, $cap US dollars)"
   started=$(now)
   set +e
   (
-    cd "$run_dir/workspace"
+    cd "$workspace"
     PATH="$pinned:$PATH" "$timeout" --kill-after=30 "$timeout_seconds" \
       claude -p --output-format stream-json --verbose \
-      --model "$model" --max-turns "$turn_limit" \
-      --allowedTools "$tools" --strict-mcp-config \
+      --model "$model" --max-turns "$turn_limit" --max-budget-usd "$cap" \
+      --restricted --strict-mcp-config --no-session-persistence \
+      --settings "$run_dir/claude-settings.json" \
+      --permission-mode dontAsk --permission-prompts none \
+      --tools "$(
+        IFS=,
+        echo "${tools[*]}"
+      )" \
+      --allowedTools "${allow[@]}" \
+      --disallowedTools "${deny[@]}" \
       <"$run_dir/prompt.md" >"$run_dir/transcript.jsonl" 2>"$run_dir/agent.stderr"
   )
   agent_status=$?
@@ -277,7 +354,8 @@ while IFS=$'\t' read -r task variant web attempt turn_limit timeout_seconds reco
   esac
 
   set +e
-  "$harness" grade --oskac "$oskac" "$tasks" "$task" "$run_dir" >"$run_dir/grade.json"
+  "$harness" grade --oskac "$oskac" --setup "$repo/site/agent-setup" "$tasks" "$task" "$run_dir" \
+    >"$run_dir/grade.json"
   status=$?
   set -e
   [ "$status" -le 1 ] || die "$label: oska-eval grade failed; see $run_dir/grade.json"
@@ -288,34 +366,35 @@ while IFS=$'\t' read -r task variant web attempt turn_limit timeout_seconds reco
 
   analysis=(--analysis "$run_dir/analysis.json")
   set +e
-  "$harness" analyse --workspace "$run_dir/workspace" --functional "$functional" \
+  "$harness" analyse --workspace "$workspace" --functional "$functional" \
     "$run_dir/transcript.jsonl" >"$run_dir/analysis.json"
   status=$?
   set -e
   if [ "$status" -ne 0 ]; then
-    # A run cut off by its timeout may leave no transcript to read; it is
-    # still recorded. Any other unreadable transcript stops the batch.
-    [ "$timed_out" = true ] ||
-      die "$label: oska-eval analyse failed (the agent exited with $agent_status); see $run_dir"
+    # A transcript that cannot be read: the run is still recorded, with no
+    # analysis (a timeout may leave none); any reason but the timeout is an
+    # error, and stops the batch.
     analysis=()
+    if [ "$timed_out" != true ]; then
+      stop=(--stop error)
+      failed="$label: oska-eval analyse could not read the transcript (the agent exited with $agent_status); see $run_dir"
+    fi
   elif [ "$timed_out" != true ] && [ "$agent_status" -ne 0 ] &&
     ! jq -e '.stop == "finished" or .stop == "turn_limit"' "$run_dir/analysis.json" >/dev/null; then
-    # The agent CLI failed without finishing a run (no login, no network, a
-    # flag it does not know): that says nothing about the agent, so the run
-    # is not recorded, and the batch stops before failing every run alike.
-    die "$label: the agent CLI exited with $agent_status and no result; see $run_dir/agent.stderr. Fix it and run the batch again to resume"
+    # The agent CLI failed without finishing (no login, no network, a flag
+    # it does not know). The run is recorded as an error, at the per-run
+    # cap, and the batch stops before failing every run alike.
+    stop=(--stop error)
+    failed="$label: the agent CLI exited with $agent_status and no result; see $run_dir/agent.stderr"
   fi
 
-  "$harness" record "$tasks" "$task" --attempt "$attempt" --variant "$variant" \
-    --model "$model" --agent claude-code --agent-version "$agent_version" \
-    --oskac-version "$oskac_version" --oskac-commit "$oskac_commit" \
-    --task-set "$digest" --started "$started" --ended "$ended" \
-    --workspace "$run_dir/workspace" --grade "$run_dir/grade.json" \
-    ${analysis[@]+"${analysis[@]}"} ${stop[@]+"${stop[@]}"} >"$out.partial" ||
-    die "$label: oska-eval record failed: $(cat "$out.partial")"
-  mv "$out.partial" "$out"
+  record --started "$started" --ended "$ended" --workspace "$workspace" \
+    --grade "$run_dir/grade.json" ${analysis[@]+"${analysis[@]}"} ${stop[@]+"${stop[@]}"}
   echo "$label: $(jq -r '"\(.stop); func \(.grade.passed // "-"); secure \(.grade.secure // "-"); cost \(.usage.cost_usd // "-") US dollars"' "$out")"
-done 3< <(jq -r '.runs[] | [.task, .variant, .web, .attempt, .turn_limit, .timeout_seconds, .record] | @tsv' "$plan")
+  if [ -n "$failed" ]; then
+    break
+  fi
+done 3< <(jq -r '.runs[] | [.task, .variant, .web, .hook, .fix, .attempt, .turn_limit, .timeout_seconds, .record] | @tsv' "$plan")
 
 "$harness" summarise "$batch_dir" >"$scratch/summary.json" ||
   die "oska-eval summarise failed: $(cat "$scratch/summary.json")"
@@ -323,9 +402,12 @@ mv "$scratch/summary.json" "$batch_dir/summary.json"
 "$harness" report "$results" --out "$report" >"$scratch/report.json" ||
   die "oska-eval report failed: $(cat "$scratch/report.json")"
 
-echo "Recorded cost: $(spent) US dollars of the $budget budget."
+echo "Recorded cost: $(spent) US dollars of the $budget budget (a run of unknown cost counts at the cap)."
+if [ -n "$failed" ]; then
+  die "$failed. The run is recorded as an error; fix the cause and run the batch again to resume"
+fi
 if [ -n "$stopped" ]; then
-  echo "Stopped early: $stopped. The summary lists the runs not made as incomplete."
+  echo "Stopped early: $stopped. The runs not made are recorded as stopped by the budget."
 fi
 echo "Results: $batch_dir (commit runs/, batch.json and summary.json, and $report)."
 echo "Transcripts and workspaces stay in $work/$batch and are never committed."

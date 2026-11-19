@@ -202,19 +202,19 @@ fn an_incomplete_batch_says_so_and_gives_no_rate_at_k() {
 }
 
 /// The latest batch states what it was allowed to spend and, for each
-/// variant, whether the agent could fetch the Oska site, from its batch
-/// config.
+/// variant, whether the agent could fetch the Oska site, had the
+/// check-on-edit hook and could run `oskac fix`, from its batch config.
 #[test]
 fn the_latest_batch_states_its_budget_and_each_variants_site_access() {
     let outcome = harness(&["report", RESULTS]);
     assert_eq!(outcome.code, 0, "{}{}", outcome.stdout, outcome.stderr);
     let page = &outcome.stdout;
     assert!(
-        page.contains("- **Variants**: base (site access), hook (site access)\n"),
+        page.contains("- **Variants**: base (site: yes, hook: no, fix: yes), hook (site: yes, hook: yes, fix: yes)\n"),
         "{page}"
     );
     assert!(
-        page.contains("- **Budget**: 20.00 US dollars, at an estimated 0.25 US dollars a run\n"),
+        page.contains("- **Budget**: 20.00 US dollars, at an estimated 0.25 and at most 2.00 US dollars a run\n"),
         "{page}"
     );
 }
