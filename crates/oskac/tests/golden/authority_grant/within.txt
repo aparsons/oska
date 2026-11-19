@@ -1,0 +1,6 @@
+exit: 0
+--- stdout
+fn main: Stdout (io)
+grant: <grant>
+  no change in authority
+--- stderr

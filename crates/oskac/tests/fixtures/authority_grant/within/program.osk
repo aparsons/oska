@@ -1,0 +1,5 @@
+// Exactly the grant's authority: it runs.
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("ran")
+}

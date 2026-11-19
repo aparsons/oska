@@ -1,0 +1,4 @@
+exit: 1
+--- stdout
+--- stderr
+error: in the grant, more than one function is named `show`, so the authority diff cannot tell them apart

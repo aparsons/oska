@@ -7,7 +7,7 @@
 use std::io::Read;
 use std::process::ExitCode;
 
-use crate::{baseline, cache, Flags};
+use crate::{authority_gate, cache, Flags};
 
 /// The operand that means standard input.
 pub const DASH: &str = "-";
@@ -17,8 +17,8 @@ pub const DASH: &str = "-";
 pub const PATH: &str = "<stdin>";
 
 /// `oskac check -`: check the module on standard input, with what to do
-/// with a baseline (`gate`).
-pub fn check(flags: Flags, gate: Option<baseline::Gate>) -> ExitCode {
+/// with a baseline or a grant (`gate`).
+pub fn check(flags: Flags, gate: Option<authority_gate::Gate>) -> ExitCode {
     let store = cache::for_command(flags.no_cache);
     let Some(src) = read() else {
         return ExitCode::FAILURE;
@@ -26,15 +26,15 @@ pub fn check(flags: Flags, gate: Option<baseline::Gate>) -> ExitCode {
     crate::check_source(PATH, &src, flags, gate, store.as_ref())
 }
 
-/// `oskac run -`: check and run the module on standard input, with
-/// `args` after `<stdin>`, a closed standard input of its own, and the
-/// run `limits`.
-pub fn run(flags: Flags, limits: oska_check::limits::Limits, args: &[String]) -> ExitCode {
+/// `oskac run -`: check the module on standard input and, within its
+/// grant (`run`), run it with `args` after `<stdin>`, a closed standard
+/// input of its own, and the run limits.
+pub fn run(flags: Flags, run: crate::RunOptions, args: &[String]) -> ExitCode {
     let store = cache::for_command(flags.no_cache);
     let Some(src) = read() else {
         return ExitCode::FAILURE;
     };
-    crate::run_source(PATH, &src, flags, limits, args, store.as_ref(), true)
+    crate::run_source(PATH, &src, flags, run, args, store.as_ref(), true)
 }
 
 /// All of standard input, as UTF-8 text. Text that cannot be read is the

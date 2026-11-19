@@ -1,0 +1,6 @@
+exit: 0
+--- stdout
+fn pkg.main.main: Stdout (io)
+grant: <grant>
+  no change in authority
+--- stderr
