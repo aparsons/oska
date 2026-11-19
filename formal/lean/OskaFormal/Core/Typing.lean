@@ -305,6 +305,52 @@ mutual
       Expr.capsWithinOpt A g && Expr.capsWithin A b && Expr.capsWithinArms A arms
 end
 
+mutual
+  /-- Whether no scope's or task's handle occurs anywhere in an
+  expression, the bodies of its closures and scopes included. Core IR has
+  no node for a handle, so a program as written passes; a closure's body
+  keeps passing once a run puts the values it captured in it, since it
+  captures no handle (`Typed.closure`). -/
+  def Expr.holdsNoHandle : Expr → Bool
+    | .scopeHandle | .taskHandle _ => false
+    | .unit | .int _ | .bool _ | .local_ _ | .str _ | .path _ | .cap _ _ | .ioError => true
+    | .neg e | .not e | .field e _ | .result _ e | .try_ e _ | .frame e => Expr.holdsNoHandle e
+    | .binary _ l r => Expr.holdsNoHandle l && Expr.holdsNoHandle r
+    | .call _ args | .builtin _ args => Expr.holdsNoHandleList args
+    | .construct _ _ fs => Expr.holdsNoHandleList fs
+    | .if_ c th el =>
+      Expr.holdsNoHandle c && Expr.holdsNoHandle th && Expr.holdsNoHandleOpt el
+    | .block ss val => Expr.holdsNoHandleStmts ss && Expr.holdsNoHandleOpt val
+    | .match_ sc arms => Expr.holdsNoHandle sc && Expr.holdsNoHandleArms arms
+    | .closure _ _ _ _ _ body => Expr.holdsNoHandle body
+    | .callValue c args => Expr.holdsNoHandle c && Expr.holdsNoHandleList args
+    | .var_ _ => true
+    | .mutCall _ _ args => Expr.holdsNoHandleList args
+    | .cell v e | .method _ v e => Expr.holdsNoHandle v && Expr.holdsNoHandle e
+    | .scope body => Expr.holdsNoHandle body
+    | .scopeRun ts body => Expr.holdsNoHandleList ts && Expr.holdsNoHandle body
+
+  def Expr.holdsNoHandleList : List Expr → Bool
+    | [] => true
+    | e :: es => Expr.holdsNoHandle e && Expr.holdsNoHandleList es
+
+  def Expr.holdsNoHandleOpt : Option Expr → Bool
+    | none => true
+    | some e => Expr.holdsNoHandle e
+
+  def Expr.holdsNoHandleStmts : List Stmt → Bool
+    | [] => true
+    | .let_ _ _ e :: ss => Expr.holdsNoHandle e && Expr.holdsNoHandleStmts ss
+    | .expr e :: ss => Expr.holdsNoHandle e && Expr.holdsNoHandleStmts ss
+    | .var_ _ e :: ss => Expr.holdsNoHandle e && Expr.holdsNoHandleStmts ss
+    | .assign _ e :: ss => Expr.holdsNoHandle e && Expr.holdsNoHandleStmts ss
+
+  def Expr.holdsNoHandleArms : List Arm → Bool
+    | [] => true
+    | .mk _ g b :: arms =>
+      Expr.holdsNoHandleOpt g && Expr.holdsNoHandle b && Expr.holdsNoHandleArms arms
+end
+
 /-- A field type that can hold no capability itself: neither a
 capability nor a function type, whose value may have captured one, nor
 a `Result` that holds either. The export refuses a `Result` that does
@@ -532,7 +578,9 @@ inductive Typed (P : Program) : Frame → List Ty → List Ty → Goal → Prop 
   No closure captures a handle, and none gives one: the checker keeps a
   closure that holds the scope's handle from leaving its block (`E0292`),
   and the export refuses any closure that captures a handle, or whose
-  type names one. -/
+  type names one. Its body holds no handle (`Expr.holdsNoHandle`), which
+  also keeps true once a run puts the captured values in it, so a
+  closure value carries no handle out of a scope. -/
   | closure {R : Frame} {Γ : List Ty} {M : List Ty} {ps : List Param} {h : Nat} {cs : List Nat} {cap : Bool} {ret : Ty}
       {body : Expr} :
       h ≤ Γ.length →
@@ -541,7 +589,7 @@ inductive Typed (P : Program) : Frame → List Ty → List Ty → Goal → Prop 
       (cap = false → body.capsWithin [] = true) →
       (∀ i t, i < h → body.reads i = true → lookup Γ i = some t → P.handleFree t = true) →
       P.handleFree ret = true →
-      Typed P ret (Γ.take h ++ bindingTypes ps) [] (.expr body ret) →
+      Typed P ret (Γ.take h ++ bindingTypes ps) [] (.expr body ret) → body.holdsNoHandle = true →
       Typed P R Γ M (.expr (.closure ps h cs cap ret body) (.fn cap (ps.map Param.type) ret))
   /-- A call of a function value with arguments of its parameter types
   has its result type. -/
@@ -663,7 +711,7 @@ inductive ValueTyped (P : Program) : VGoal → Prop where
       ValueTyped P (.one (.construct type variant fs) (.named type))
   | closure {ps : List Param} {cs : List Nat} {cap : Bool} {ret : Ty} {body : Expr} :
       (cap = false → body.capsWithin [] = true) → P.handleFree ret = true →
-      Typed P ret (bindingTypes ps) [] (.expr body ret) →
+      Typed P ret (bindingTypes ps) [] (.expr body ret) → body.holdsNoHandle = true →
       ValueTyped P (.one (.closure ps 0 cs cap ret body) (.fn cap (ps.map Param.type) ret))
   | scopeHandle : ValueTyped P (.one .scopeHandle .scope)
   | taskHandle {i : Nat} {u : Ty} : ValueTyped P (.one (.taskHandle i) (.task u))

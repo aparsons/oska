@@ -801,6 +801,12 @@ impl Core<'_> {
             Type::Named { name, args } if name == "Task" && args.len() == 1 => {
                 Ok(node("Task", vec![("result", self.ty(&args[0], span)?)]))
             }
+            // A `Scope` or `Task` with the wrong number of type arguments,
+            // which the checker never passes: refused as itself, not as a
+            // handle outside a `let`.
+            Type::Named { name, .. } if name == "Scope" || name == "Task" => {
+                refuse(format!("the type `{ty}`"), span)
+            }
             _ => self.ty(ty, span),
         }
     }

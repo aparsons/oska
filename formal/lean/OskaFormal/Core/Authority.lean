@@ -1126,7 +1126,7 @@ theorem closureProgram_sourceTyped : ProgramSourceTyped closureProgram := by
             (Typed.closure (by decide) nofun nofun
               (by intro i t _ _ hl; cases i <;> simp [lookup, bindingTypes, closureMain] at hl; subst hl; rfl) rfl
               (Typed.builtin BuiltinTyped.println
-              (Typed.argsCons (Typed.local_ rfl) (Typed.argsCons Typed.str Typed.argsNil))))
+              (Typed.argsCons (Typed.local_ rfl) (Typed.argsCons Typed.str Typed.argsNil))) rfl)
             Typed.argsNil))
           Typed.blockNone)
       · cases hf

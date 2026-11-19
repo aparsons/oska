@@ -6,7 +6,10 @@ import OskaFormal.Core.Semantics
 
 Type soundness of Oska Core, version 7, for a well-typed program `P`:
 
-- `progress`: a closed, well-typed expression is a value or takes a step.
+- `progress`: a closed, well-typed expression in no scope's block is a
+  value or takes a step, never to a spawn or a join (`progress_goal` is
+  the form for any frame, where a spawn or a join is a step the running
+  scope around it answers).
 - `preservation`: a step of a closed, well-typed expression leads to an
   expression of the same type, or to a panic (an `Int` overflow or a
   division by zero), or to an effect after which, for every answer the
@@ -18,15 +21,19 @@ Type soundness of Oska Core, version 7, for a well-typed program `P`:
   exhaustiveness check takes an arm with no guard for every value of the
   scrutinee's type, which is what progress needs of it.
 - `type_safety`: for a program as the checker hands it over
-  (`ProgramSourceTyped`), every expression a source-typed expression steps
-  to keeps its type and is a value or takes a step.
+  (`ProgramSourceTyped`), every expression a source-typed expression in
+  no scope's block steps to keeps its type and is a value or takes a step.
 - `scope_handle_cannot_escape`: a scope's block has a type that holds no
   scope's or task's handle, so neither handle is the scope's value; and
   `scope_value_outside`: the value a running scope ends with is typed
   outside it, where its tasks are not, so it names none of them. A `var`
-  holds no handle either (`var_holds_no_handle`). `Examples.lean` shows
-  that a block that returns its handle or a task, or stores the handle in
-  a `var`, does not type.
+  holds no handle either (`var_holds_no_handle`). At run time,
+  `scope_run_holds_no_handle`: the value a `scope` runs to holds no
+  handle anywhere, the bodies of its closures included. `Examples.lean`
+  shows that a block that returns its handle or a task, stores the handle
+  in a `var`, or captures it in a closure, does not type.
+- `spawn_needs_scope`, `join_needs_scope`: `spawn` and `join` type only in
+  the block of a scope.
 
 Value semantics of mutating methods, over whole runs, is in
 `ValueSemantics.lean`.
@@ -226,22 +233,8 @@ theorem args_transport_mem {R' : Frame} {Γ Δ M' : List Ty} :
         (ih (fun e' he' t' ht' => hall e' (List.mem_cons_of_mem _ he') t'
           (List.mem_cons_of_mem _ ht')) hr)
 
-/-- A list whose expressions each keep their type from `Γ` to `Δ` keeps
-its typing as an argument list. -/
-theorem args_transport {R' : Frame} {Γ Δ M' : List Ty} :
-    ∀ {es : List Expr} {ts : List Ty},
-      (∀ e ∈ es, ∀ t, Typed P R Γ M (.expr e t) → Typed P R' Δ M' (.expr e t)) →
-      Typed P R Γ M (.args es ts) → Typed P R' Δ M' (.args es ts) := by
-  intro es
-  induction es with
-  | nil => intro ts _ h; cases h; exact Typed.argsNil
-  | cons e es ih =>
-    intro ts hall h
-    cases h with
-    | argsCons he hr =>
-      exact Typed.argsCons (hall e List.mem_cons_self _ he)
-        (ih (fun e' he' => hall e' (List.mem_cons_of_mem _ he')) hr)
-
+/-- A frame that grows from one in a scope is in a scope: growing only
+adds tasks. -/
 theorem Frame.Grows.isSome {R R' : Frame} (h : R.Grows R') (hs : R.tasks.isSome = true) :
     R'.tasks.isSome = true := by
   obtain ⟨ts, hts⟩ := Option.isSome_iff_exists.mp hs
@@ -305,9 +298,9 @@ theorem value_typed {R' : Frame} {Γ Δ M' : List Ty} {v : Expr} {t : Ty} (hv : 
       · exact Or.inr (Or.inr (fieldCapFree_handleFree h (fieldsOf_capFree h hf t ht)))
   | closure =>
     cases h with
-    | closure _ _ hcaps _ hret hb =>
+    | closure _ _ hcaps _ hret hb hnh =>
       exact Typed.closure (Nat.zero_le _) (fun _ i _ hi => absurd hi (Nat.not_lt_zero i)) hcaps
-        (fun i _ hi => absurd hi (Nat.not_lt_zero i)) hret (by simpa using hb)
+        (fun i _ hi => absurd hi (Nat.not_lt_zero i)) hret (by simpa using hb) hnh
   | scopeHandle => cases h; exact Typed.scopeHandle
   | taskHandle i =>
     cases h with
@@ -363,8 +356,8 @@ theorem Typed.grow : ∀ {R : Frame} {Γ M : List Ty} {j : Goal}, Typed P R Γ M
   | blockExpr _ _ ihe ihs => intro _ hR; exact Typed.blockExpr (ihe hR) (ihs hR)
   | blockLetBind _ _ ihe ihs => intro _ hR; exact Typed.blockLetBind (ihe hR) (ihs hR)
   | blockLetDrop _ _ ihe ihs => intro _ hR; exact Typed.blockLetDrop (ihe hR) (ihs hR)
-  | closure hle hpure hcaps hh hret hb _ =>
-    intro _ _; exact Typed.closure hle hpure hcaps hh hret hb
+  | closure hle hpure hcaps hh hret hb hnh _ =>
+    intro _ _; exact Typed.closure hle hpure hcaps hh hret hb hnh
   | callValue _ _ ihc iha => intro _ hR; exact Typed.callValue (ihc hR) (iha hR)
   | var_ hl hf => intro _ _; exact Typed.var_ hl hf
   | blockVar hf _ _ ihe ihs => intro _ hR; exact Typed.blockVar hf (ihe hR) (ihs hR)
@@ -489,7 +482,8 @@ theorem value_valueTyped {v : Expr} {t : Ty} (hv : IsValue v) (h : Typed P R [] 
     | construct hf hargs => exact ValueTyped.construct hf (values_valueTyped ih hargs)
   | closure =>
     cases h with
-    | closure _ _ hcaps _ hret hb => exact ValueTyped.closure hcaps hret (by simpa using hb)
+    | closure _ _ hcaps _ hret hb hnh =>
+      exact ValueTyped.closure hcaps hret (by simpa using hb) hnh
   | _ => cases h <;> constructor
 
 /-- A value of a function type is a closure the run has closed, whose
@@ -555,6 +549,39 @@ theorem valueTyped_pure : ∀ {g : VGoal}, ValueTyped P g → match g with
     intro h
     simp only [Program.pureTy, Bool.and_eq_true] at h
     simpa [Expr.capsWithin] using ih h.2
+  | _ => intro _; rfl
+
+/-- A value of a type that holds no handle holds none anywhere: a closure
+by its typing, which keeps its body free of handles, a struct or variant
+by its fields, an `Ok` or `Err` by the value inside. -/
+theorem valueTyped_holdsNoHandle : ∀ {g : VGoal}, ValueTyped P g → match g with
+    | .one v t => P.handleFree t = true → v.holdsNoHandle = true
+    | .many vs ts => P.typesCapFree = true → (∀ t ∈ ts, t.fieldCapFree = true) →
+      Expr.holdsNoHandleList vs = true := by
+  intro g h
+  induction h with
+  | scopeHandle => intro h; simp [Program.handleFree] at h
+  | taskHandle => intro h; simp [Program.handleFree] at h
+  | closure _ _ _ hnh => intro _; exact hnh
+  | construct hf _ ih =>
+    intro hT
+    simp only [Program.handleFree] at hT
+    simpa [Expr.holdsNoHandle] using ih hT (fieldsOf_capFree hT hf)
+  | nil => intro _ _; rfl
+  | @cons v vs t ts _ _ ih₁ ih₂ =>
+    intro hT hts
+    have ht := hts t List.mem_cons_self
+    simp only [Expr.holdsNoHandleList, Bool.and_eq_true]
+    exact ⟨ih₁ (fieldCapFree_handleFree hT ht),
+      ih₂ hT fun t' h' => hts t' (List.mem_cons_of_mem _ h')⟩
+  | ok _ _ ih =>
+    intro h
+    simp only [Program.handleFree, Bool.and_eq_true] at h
+    simpa [Expr.holdsNoHandle] using ih h.1
+  | err _ _ ih =>
+    intro h
+    simp only [Program.handleFree, Bool.and_eq_true] at h
+    simpa [Expr.holdsNoHandle] using ih h.2
   | _ => intro _; rfl
 
 /-! ## The slots an expression reads -/
@@ -629,6 +656,32 @@ theorem capsWithin_subst_reads {A : List CapKind} {v : Expr} :
     simp_all [Expr.subst, Expr.substList, Expr.substOpt, Expr.substStmts, Expr.substArms,
       Expr.capsWithin, Expr.capsWithinList, Expr.capsWithinOpt, Expr.capsWithinStmts,
       Expr.capsWithinArms, Expr.reads, Expr.readsList, Expr.readsOpt, Expr.readsStmts,
+      Expr.readsArms]
+
+/-- Putting a value for slot 0 keeps an expression free of handles when
+the value holds none, or the expression does not read slot 0. -/
+theorem holdsNoHandle_subst_reads {v : Expr} :
+    ∀ e, e.holdsNoHandle = true → (e.reads 0 = true → v.holdsNoHandle = true) →
+      (Expr.subst v e).holdsNoHandle = true := by
+  intro e
+  induction e using Expr.subst.induct
+    (motive_2 := fun arms => Expr.holdsNoHandleArms arms = true →
+      (Expr.readsArms 0 arms = true → v.holdsNoHandle = true) →
+      Expr.holdsNoHandleArms (Expr.substArms v arms) = true)
+    (motive_3 := fun e => Expr.holdsNoHandleOpt e = true →
+      (Expr.readsOpt 0 e = true → v.holdsNoHandle = true) →
+      Expr.holdsNoHandleOpt (Expr.substOpt v e) = true)
+    (motive_4 := fun ss => Expr.holdsNoHandleStmts ss = true →
+      (Expr.readsStmts 0 ss = true → v.holdsNoHandle = true) →
+      Expr.holdsNoHandleStmts (Expr.substStmts v ss) = true)
+    (motive_5 := fun es => Expr.holdsNoHandleList es = true →
+      (Expr.readsList 0 es = true → v.holdsNoHandle = true) →
+      Expr.holdsNoHandleList (Expr.substList v es) = true)
+  all_goals
+    intros
+    simp_all [Expr.subst, Expr.substList, Expr.substOpt, Expr.substStmts, Expr.substArms,
+      Expr.holdsNoHandle, Expr.holdsNoHandleList, Expr.holdsNoHandleOpt, Expr.holdsNoHandleStmts,
+      Expr.holdsNoHandleArms, Expr.reads, Expr.readsList, Expr.readsOpt, Expr.readsStmts,
       Expr.readsArms]
 
 /-! ## Substitution -/
@@ -784,23 +837,25 @@ theorem typed_subst {R₀ : Frame} {M₀ : List Ty} {v : Expr} {u : Ty} (hv : Is
     subst hΓ
     exact Typed.armsConsGuard hp (ihg (Δ ++ _) rfl (rd hR)) (ihb (Δ ++ _) rfl (rd hR))
       (ihr Δ rfl (rd hR))
-  | @closure _ Γ M ps h cs cf ret body hle hpure hcaps hh hret hb ih =>
+  | @closure _ Γ M ps h cs cf ret body hle hpure hcaps hh hret hb hnh ih =>
     intro Δ hΓ _
     subst hΓ
     cases h with
     | zero =>
       show Typed P _ Δ M (.expr (.closure ps 0 cs cf ret body) _)
       exact Typed.closure (Nat.zero_le _) (fun _ i _ hi => absurd hi (Nat.not_lt_zero i)) hcaps
-        (fun i _ hi => absurd hi (Nat.not_lt_zero i)) hret (by simpa using hb)
+        (fun i _ hi => absurd hi (Nat.not_lt_zero i)) hret (by simpa using hb) hnh
     | succ h =>
       show Typed P _ Δ M (.expr (.closure ps h (shiftCaptures cs) cf ret (Expr.subst v body)) _)
       refine Typed.closure (by simpa using hle) (fun hc i t hi hr hl => ?_) (fun hc => ?_)
         (fun i t hi hr hl => ?_) hret
-        (ih (Δ.take h ++ bindingTypes ps) (by simp) fun _ => Or.inr (Or.inl rfl))
+        (ih (Δ.take h ++ bindingTypes ps) (by simp) fun _ => Or.inr (Or.inl rfl)) ?_
       · exact hpure hc (i + 1) t (by omega) (reads_subst hv body i hr) (by simpa [lookup] using hl)
       · refine capsWithin_subst_reads body (hcaps hc) fun hr => ?_
         exact valueTyped_pure (value_valueTyped hv hvt) (hpure hc 0 u (Nat.succ_pos _) hr rfl)
       · exact hh (i + 1) t (by omega) (reads_subst hv body i hr) (by simpa [lookup] using hl)
+      · refine holdsNoHandle_subst_reads body hnh fun hr => ?_
+        exact valueTyped_holdsNoHandle (value_valueTyped hv hvt) (hh 0 u (Nat.succ_pos _) hr rfl)
   | callValue _ _ ihc iha =>
     intro Δ hΓ hR; exact Typed.callValue (ihc Δ hΓ (rd hR)) (iha Δ hΓ (rd hR))
   | var_ hl hf => intro _ _ _; exact Typed.var_ hl hf
@@ -1948,12 +2003,6 @@ theorem progress_goal : ∀ {R : Frame} {Γ M : List Ty} {j : Goal}, Typed P R �
       · exact Or.inr ⟨_ :: vs, e, rest, o, rfl, AllValues.cons hv hvs, hs⟩
     · exact Or.inr ⟨[], _, _, o, rfl, AllValues.nil, hs⟩
 
-/-- **Progress.** A closed, well-typed expression of Oska Core is a value
-or takes a step: to an expression, a panic, an effect or a return. -/
-theorem progress {e : Expr} {t : Ty} (h : Typed P R [] M (.expr e t)) :
-    IsValue e ∨ ∃ o, Step P e o :=
-  progress_goal h rfl
-
 /-! ## Preservation -/
 
 /-- The outcome of a body's step, typed in its own function or closure,
@@ -2587,6 +2636,36 @@ theorem preservation (hP : ProgramTyped P) {e : Expr} {o : Outcome} (hs : Step P
       exact (ih he).inTask fun e' he' =>
         Typed.scopeRun ht hret reads_nil (tasks_append h₁ (Typed.tasksCons hu he' h₂)) hb
 
+/-! ## Progress outside a scope -/
+
+/-- A step's outcome that a run in no scope's block can go on from: no
+spawn and no join, which only a running scope answers. -/
+def Outcome.OutsideScope : Outcome → Prop
+  | .spawn _ _ | .join _ _ => False
+  | _ => True
+
+/-- **Progress.** A closed, well-typed expression of Oska Core, in no
+scope's block (`R.tasks = none`, as a function's body and the program's
+entry are), is a value or takes a step: to an expression, a panic, an
+effect or a return, never to a spawn or a join that nothing would answer.
+In a scope's block (`progress_goal`) it may also step to a spawn or a
+join, which the running scope around it answers. -/
+theorem progress (hP : ProgramTyped P) (hnone : R.tasks = none) {e : Expr} {t : Ty}
+    (h : Typed P R [] M (.expr e t)) :
+    IsValue e ∨ ∃ o, Step P e o ∧ o.OutsideScope := by
+  rcases progress_goal h rfl with hv | ⟨o, hs⟩
+  · exact Or.inl hv
+  · refine Or.inr ⟨o, hs, ?_⟩
+    have ho := preservation hP hs h
+    cases o with
+    | spawn c k =>
+      obtain ⟨_, _, _, hts, _⟩ := ho
+      simp [hnone] at hts
+    | join i k =>
+      obtain ⟨_, _, hts, _⟩ := ho
+      simp [hnone] at hts
+    | _ => trivial
+
 /-! ## Handles stay in their scope -/
 
 /-- **A scope's handle cannot escape its block.** A `scope`'s value has a
@@ -2634,21 +2713,39 @@ theorem join_needs_scope {Γ : List Ty} {args : List Expr} {t : Ty}
 
 /-! ## Type safety -/
 
+/-- Every expression a closed, well-typed expression steps to is typed
+at its type, whatever answers the host gives that the semantics allows. -/
+theorem steps_typed (hP : ProgramTyped P) {e e' : Expr} {t : Ty} {tr : List Request}
+    (he : Typed P R [] [] (.expr e t)) (hs : Steps P e tr e') : Typed P R [] [] (.expr e' t) := by
+  induction hs with
+  | refl => exact he
+  | next h _ ih => exact ih (preservation hP h he)
+  | perform h hr _ ih => exact ih (preservation hP h he _ hr)
+
+/-- **A scope's handle cannot escape at run time.** Whatever answers the
+host gives, the value a closed, well-typed `scope` runs to holds no
+scope's or task's handle anywhere, the bodies of its closures included:
+the scope's value has a type that holds no handle
+(`scope_handle_cannot_escape`), the type stays the value's as the run
+goes (`steps_typed`), and a value of such a type holds none
+(`valueTyped_holdsNoHandle`). -/
+theorem scope_run_holds_no_handle (hP : ProgramTyped P) {body v : Expr} {t : Ty}
+    {tr : List Request} (h : Typed P R [] [] (.expr (.scope body) t))
+    (hs : Steps P (.scope body) tr v) (hv : IsValue v) : v.holdsNoHandle = true :=
+  valueTyped_holdsNoHandle (value_valueTyped hv (steps_typed hP h hs))
+    (scope_handle_cannot_escape h)
+
 /-- **Type safety** of a program as the checker hands it over. In a
 program whose functions are source typed, every expression a closed,
-source-typed expression steps to is typed at its type, and is a value or
-takes a step (to an expression, a panic or an effect): a run never gets
-stuck, whatever answers the host gives that the semantics allows. -/
-theorem type_safety (hP : ProgramSourceTyped P) {e e' : Expr} {t : Ty} {tr : List Request}
-    (he : SourceTyped P R [] [] e t) (hs : Steps P e tr e') :
-    Typed P R [] [] (.expr e' t) ∧ (IsValue e' ∨ ∃ o, Step P e' o) := by
-  have typed : Typed P R [] [] (.expr e' t) := by
-    have := he.1
-    clear he
-    induction hs with
-    | refl => exact this
-    | next h _ ih => exact ih (preservation hP.typed h this)
-    | perform h hr _ ih => exact ih (preservation hP.typed h this _ hr)
-  exact ⟨typed, progress typed⟩
+source-typed expression in no scope's block (as a function's body and
+the program's entry are) steps to is typed at its type, and is a value or
+takes a step (to an expression, a panic, an effect or a return), never
+to a spawn or a join that nothing would answer: a run never gets stuck,
+whatever answers the host gives that the semantics allows. -/
+theorem type_safety (hP : ProgramSourceTyped P) (hnone : R.tasks = none) {e e' : Expr} {t : Ty}
+    {tr : List Request} (he : SourceTyped P R [] [] e t) (hs : Steps P e tr e') :
+    Typed P R [] [] (.expr e' t) ∧ (IsValue e' ∨ ∃ o, Step P e' o ∧ o.OutsideScope) := by
+  have typed := steps_typed hP.typed he.1 hs
+  exact ⟨typed, progress hP.typed hnone typed⟩
 
 end OskaFormal.Core

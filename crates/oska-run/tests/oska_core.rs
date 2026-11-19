@@ -1376,7 +1376,9 @@ fn main() {
 
 #[test]
 fn a_capability_passed_into_a_task_performs_its_effect_there() {
-    assert_runs(
+    let mut host = FakeHost::new();
+    let outcome = run_differential(
+        &mut host,
         r#"fn greet(io: Stdout, name: String) -> Int {
     let _ = io.println(name)
     1
@@ -1394,8 +1396,10 @@ fn main(io: Stdout, fs: Fs) {
 }
 "#,
         &[],
-        "task\ndone\n",
     );
+    assert_eq!(outcome.exit_code, 0, "{outcome:#?}");
+    assert_eq!(outcome.stdout, "task\ndone\n");
+    assert_eq!(host.file("out.txt"), Some("from a task"));
 }
 
 #[test]

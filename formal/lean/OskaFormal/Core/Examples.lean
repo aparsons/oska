@@ -1,6 +1,7 @@
 import OskaFormal.Core.Typing
 import OskaFormal.Core.Semantics
 import OskaFormal.Core.Eval
+import OskaFormal.Core.Soundness
 
 /-!
 # Oska Core: the panics, checked on examples
@@ -142,7 +143,7 @@ with `41` for its parameter. -/
 example (P : Program) (R : Frame) :
     Typed P R [] [] (.expr (.callValue (addOne 0) [.int 41]) .int) :=
   Typed.callValue (Typed.closure (Nat.le_refl _) (fun _ i _ hi => absurd hi (Nat.not_lt_zero i))
-      (fun _ => rfl) (fun i _ hi => absurd hi (Nat.not_lt_zero i)) rfl (Typed.binary BinOpTyped.add (Typed.local_ rfl) (Typed.int rfl)))
+      (fun _ => rfl) (fun i _ hi => absurd hi (Nat.not_lt_zero i)) rfl (Typed.binary BinOpTyped.add (Typed.local_ rfl) (Typed.int rfl)) rfl)
     (Typed.argsCons (Typed.int rfl) Typed.argsNil)
 
 example (P : Program) :
@@ -161,7 +162,7 @@ def addN : Function where
 
 example (P : Program) : Typed P addN.ret (bindingTypes addN.params) [] (.expr addN.body addN.ret) := by
   refine Typed.closure (by decide) (fun _ i t hi _ hl => ?_) (fun _ => rfl)
-    (fun i t hi _ hl => ?_) rfl (Typed.binary BinOpTyped.add (Typed.local_ rfl) (Typed.local_ rfl))
+    (fun i t hi _ hl => ?_) rfl (Typed.binary BinOpTyped.add (Typed.local_ rfl) (Typed.local_ rfl)) rfl
   all_goals
     cases i with
     | zero => simp [bindingTypes, addN, lookup] at hl; subst hl; rfl
@@ -418,7 +419,7 @@ example (P : Program) (M : List Ty) : Typed P Ty.int [] M (.expr spawnJoin .int)
     (Typed.block (Typed.blockLetBind
       (Typed.spawn rfl rfl (Typed.argsCons (Typed.local_ rfl) (Typed.argsCons
         (Typed.closure (by decide) (fun _ _ _ _ hr _ => by simp [Expr.reads] at hr) (fun _ => rfl)
-          (fun _ _ _ hr _ => by simp [Expr.reads] at hr) rfl (Typed.int (by decide)))
+          (fun _ _ _ hr _ => by simp [Expr.reads] at hr) rfl (Typed.int (by decide)) rfl)
         Typed.argsNil)))
       (Typed.blockSome (Typed.join rfl (Typed.argsCons (Typed.local_ rfl) Typed.argsNil)))))
 
@@ -487,22 +488,36 @@ example (P : Program) (R : Frame) (M : List Ty) (u t : Ty) :
           have := hh 0 .scope (by decide) rfl rfl
           simp [Program.handleFree] at this
 
-/-- `s.spawn(c)` and `t.join()` type only in the block of a scope: in a
-function's body, outside any scope, neither does, whatever it is called
-on. -/
-example (P : Program) (ret : Ty) (Γ M : List Ty) (args : List Expr) (t : Ty) :
-    ¬ Typed P ret Γ M (.expr (.builtin .spawn args) t) := by
+/-- `scope |s| { let _ = || { let _ = s; 1 }; () }`: the closure only
+reads the handle, and gives an `Int`, so the capture alone is what the
+typing refuses. -/
+example (P : Program) (R : Frame) (M : List Ty) (u t : Ty) :
+    ¬ Typed P R [] M (.expr (.scope (.block [.let_ false u
+      (.closure [] 1 [0] false .int (.block [.let_ false .scope (.local_ 0)] (some (.int 1))))]
+      none)) t) := by
+  obtain ⟨_, _⟩ := R
   intro h
   cases h with
-  | builtin hb _ => cases hb
-  | spawn hs _ _ => simp at hs
+  | scope _ _ _ hb =>
+    cases hb with
+    | block hb =>
+      cases hb with
+      | blockLetDrop he _ =>
+        cases he with
+        | closure _ _ _ hh _ _ =>
+          have := hh 0 .scope (by decide) rfl rfl
+          simp [Program.handleFree] at this
+
+/-- `s.spawn(c)` and `t.join()` type only in the block of a scope
+(`spawn_needs_scope`, `join_needs_scope`): in a function's body, outside
+any scope, neither does, whatever it is called on. -/
+example (P : Program) (ret : Ty) (Γ M : List Ty) (args : List Expr) (t : Ty) :
+    ¬ Typed P ret Γ M (.expr (.builtin .spawn args) t) :=
+  fun h => by simpa using spawn_needs_scope h
 
 example (P : Program) (ret : Ty) (Γ M : List Ty) (args : List Expr) (t : Ty) :
-    ¬ Typed P ret Γ M (.expr (.builtin .join args) t) := by
-  intro h
-  cases h with
-  | builtin hb _ => cases hb
-  | join hs _ => simp at hs
+    ¬ Typed P ret Γ M (.expr (.builtin .join args) t) :=
+  fun h => by simpa using join_needs_scope h
 
 /-- `io.println(text)`, on a `Stdout` capability. -/
 def printLine (text : String) : Expr := .builtin .println [.cap .stdout .anywhere, .str text]
