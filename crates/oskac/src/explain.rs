@@ -97,13 +97,30 @@ fn row_of(line: &str) -> Option<Entry> {
     })
 }
 
+/// The fence that opens or closes a block at `line`: the open block's
+/// own `fence` while one is open, else `~~~` or ```` ``` ````. A block
+/// fenced with `~~~` may hold a ```` ``` ```` fence, as `E0001`'s example
+/// does.
+fn fence_marker(in_block: bool, fence: &'static str, line: &str) -> &'static str {
+    if in_block {
+        fence
+    } else if line.starts_with("~~~") {
+        "~~~"
+    } else {
+        "```"
+    }
+}
+
 fn read_doc(doc: &str, entries: &mut Vec<Entry>) {
     let mut open: Option<Block> = None;
     let mut examples: Vec<(bool, String, String)> = Vec::new();
     let first_of_doc = entries.len();
+    let mut fence = "```";
     for line in doc.lines() {
-        match (&mut open, line.strip_prefix("```")) {
+        let marker = fence_marker(open.is_some(), fence, line);
+        match (&mut open, line.strip_prefix(marker)) {
             (None, Some(info)) => {
+                fence = marker;
                 open = Some(Block {
                     tag: tag_of(info),
                     body: String::new(),

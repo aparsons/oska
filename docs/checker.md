@@ -113,7 +113,7 @@ The lexer and the parser report these. A syntax error is the only diagnostic of 
 
 | Code | Meaning | Fix | Applicability |
 | --- | --- | --- | --- |
-| `E0001` | A character that starts no token, such as `$`. Spans the character. | None. | — |
+| `E0001` | A character that starts no token, such as `$` or a backtick. Spans the character. A module wrapped in a Markdown fence, as a model often writes code, is refused like any other: the check is about exactly the bytes that would run. | Remove the fence's opening line (three or more backticks, with or without an info string such as `oska`) and its closing line, when the fence wraps the whole module. A backtick anywhere else has none. | machine |
 | `E0002` | A string literal that is not closed before the end of the file. Spans the literal from its opening quote. | None. | — |
 | `E0003` | An invalid escape in a string: a backslash followed by anything but one of the escapes. Spans the backslash. | None. | — |
 | `E0004` | A `{` or `}` in a sink literal such as `sql"..."`, which never interpolates. Write `\{` or `\}` for a literal brace. | None. | — |
@@ -155,11 +155,15 @@ Each code has a program that fails with exactly that code and the same program f
 
 #### `E0001`
 
-```oska error=E0001
+A block that holds a fence is fenced with `~~~`.
+
+~~~oska error=E0001
+```oska
 fn main() {
-    let x = $
+    let x = 1
 }
 ```
+~~~
 
 ```oska fixed=E0001
 fn main() {

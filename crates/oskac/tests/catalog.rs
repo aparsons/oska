@@ -150,9 +150,17 @@ fn rows_of(doc: &str) -> Vec<Row> {
 fn examples_of(doc: &str, file: &str) -> Vec<Example> {
     let mut out = Vec::new();
     let mut open: Option<Example> = None;
+    // A block fenced with `~~~` may hold a ```` ``` ```` fence (`E0001`).
+    let mut fence = "```";
     for (index, line) in doc.lines().enumerate() {
-        match (&mut open, line.strip_prefix("```")) {
+        let marker = match &open {
+            Some(_) => fence,
+            None if line.starts_with("~~~") => "~~~",
+            None => "```",
+        };
+        match (&mut open, line.strip_prefix(marker)) {
             (None, Some(info)) => {
+                fence = marker;
                 let words: Vec<String> = info.split_whitespace().map(str::to_string).collect();
                 let tagged = words.iter().skip(1).find_map(|w| {
                     let (kind, code) = w.split_once('=')?;
