@@ -1,6 +1,6 @@
 $ oskac build hello.osk --target windows-x86_64
-exit: 2
+exit: 0
 --- stdout
 --- stderr
-error[E0394]: `oskac build` cannot build for `windows-x86_64` yet: its native backend comes in v0.6.0; it builds for `linux-aarch64`, `linux-x86_64`, `macos-aarch64` and `macos-x86_64` (bytes 0..0)
 --- written
+hello.exe
