@@ -8,16 +8,18 @@ oskac - the Oska compiler
 USAGE:
     oskac lex <file.osk> [--format=json]   Print the tokens in a source file
     oskac parse <file.osk> [--format=json] Print the syntax tree of a source file
-    oskac check [path] [--format=json] [--release] [--no-cache]
+    oskac check [path | -] [--format=json] [--release] [--no-cache]
                 [--baseline=<file> | --update-baseline=<file>]
-                                           Type-check a source file, or a
-                                           package directory (the current one
-                                           with no path), and report each
+                                           Type-check a source file, a package
+                                           directory (the current one with no
+                                           path), or one module on standard
+                                           input (-), and report each
                                            function's authority; compare it
                                            with a saved baseline (exit code 3
                                            when it widened), or write one
-    oskac run [path] [--format=json] [--interpret] [--no-cache] [-- args...]
-                                           Check a source file or package and,
+    oskac run [path | -] [--format=json] [--interpret] [--no-cache]
+              [-- args...]                 Check a source file, package or
+                                           module on standard input (-) and,
                                            if it has no diagnostics, run it:
                                            natively on aarch64 and x86_64
                                            Linux, on the interpreter elsewhere
@@ -97,7 +99,7 @@ USAGE:
 
 ## `oskac check`
 
-`oskac check [path] [--format=json] [--release] [--baseline=<file> | --update-baseline=<file>]` parses and type-checks one file, or every module of a package, against the prelude and reports each function's authority. Exit code 0 when there are no diagnostics, otherwise 1; with `--baseline`, 3 when the program checks but its authority widened.
+`oskac check [path | -] [--format=json] [--release] [--baseline=<file> | --update-baseline=<file>]` parses and type-checks one file, every module of a package, or one module read from [standard input](#source-from-standard-input), against the prelude and reports each function's authority. Exit code 0 when there are no diagnostics, otherwise 1; with `--baseline`, 3 when the program checks but its authority widened.
 
 Human-readable output:
 
@@ -166,7 +168,7 @@ With `--format=json`, the check object gains `authority_diff` as its last key:
 
 ## `oskac run`
 
-`oskac run <file.osk> [--format=json] [--interpret] [-- args...]` checks the file and, when it has no diagnostics, runs `main` on the real operating system: compiled natively on Linux and macOS, on the interpreter on Windows or with `--interpret` (see [platform support](#platform-support)). `args.get(0)` in the program is the file's path, or the package directory as given, on either backend, and the arguments after `--` follow it unchanged.
+`oskac run <file.osk | -> [--format=json] [--interpret] [-- args...]` checks the file, or the module read from [standard input](#source-from-standard-input), and, when it has no diagnostics, runs `main` on the real operating system: compiled natively on Linux and macOS, on the interpreter on Windows or with `--interpret` (see [platform support](#platform-support)). `args.get(0)` in the program is the file's path, or the package directory as given, on either backend, and the arguments after `--` follow it unchanged.
 
 - The program's own output goes to standard output and standard error as it runs.
 - A refused program's diagnostics, or the panic that stopped the program, go to standard error after that output: as `check` prints diagnostics, or as one JSON object per line with `--format=json`.
@@ -181,6 +183,15 @@ With `--format=json`, the check object gains `authority_diff` as its last key:
 | `128 + n` | A native program was killed by signal `n`, as a shell reports it, such as `143` for `SIGTERM`. A signal only a fault raises, such as `SIGSEGV`, is also reported as `E0392`. A closed pipe is not a signal on either backend: see exit code `0`. |
 
 See [debugging](debugging.md) for panics and the [runtime notes](../runtime.md) for every runtime code.
+
+### Source from standard input
+
+A bare `-` as the path makes `check` and `run` read one module from standard input to its end, as an embedder pipes a snippet: `oskac check - < snippet.osk`, `oskac run - -- a b < snippet.osk`. The result is what the same bytes in a file give, with `<stdin>` as the file's path in diagnostics, panics and the JSON `path`, so the output never names a temporary file.
+
+- An empty standard input is an empty module. Standard input that is not UTF-8 is the error a file that is not UTF-8 gives: `error: cannot read <stdin>: stream did not contain valid UTF-8`, exit code 1.
+- A program run with `run -` has `<stdin>` as `args.get(0)`, with the arguments after `--` following it. Its own standard input is closed: a read gets end of file at once, on either backend, since `oskac` has read the program from it.
+- The [build cache](#oskac-cache) keys the module by its bytes, as it keys a file, so a second `check -` of the same snippet is a hit with the same output.
+- `-` is a path only for `check` and `run`: `lex`, `parse`, `test`, `build` and `fix` refuse it as a usage error (exit code 2).
 
 ## `oskac test`
 

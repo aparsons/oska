@@ -255,6 +255,9 @@ fn joined(root: &RootHandle, names: &[String]) -> PathBuf {
 #[derive(Debug)]
 pub struct RealHost {
     random: SplitMix64,
+    /// Whether the program's standard input is closed: every read is
+    /// end of file at once (see [`RealHost::without_stdin`]).
+    stdin_closed: bool,
 }
 
 impl Default for RealHost {
@@ -272,7 +275,23 @@ impl RealHost {
         let seed = (nanos as u64) ^ ((nanos >> 64) as u64) ^ u64::from(std::process::id()) << 32;
         RealHost {
             random: SplitMix64::new(seed),
+            stdin_closed: false,
         }
+    }
+
+    /// A real host whose standard input is closed: every read is end of
+    /// file at once, as for a program `oskac run -` read from the
+    /// process's own standard input.
+    pub fn without_stdin() -> Self {
+        RealHost {
+            stdin_closed: true,
+            ..RealHost::new()
+        }
+    }
+
+    /// Whether the program's standard input is closed.
+    pub fn stdin_closed(&self) -> bool {
+        self.stdin_closed
     }
 }
 
@@ -293,6 +312,9 @@ impl Host for RealHost {
     }
 
     fn read_line(&mut self) -> io::Result<Option<String>> {
+        if self.stdin_closed {
+            return Ok(None);
+        }
         let mut line = String::new();
         if io::stdin().lock().read_line(&mut line)? == 0 {
             return Ok(None);
