@@ -933,6 +933,7 @@ mod access_tests {
             "main".to_string(),
             Function {
                 name: "main".to_string(),
+                span: Span::at(0),
                 generics: Vec::new(),
                 self_ty: None,
                 receiver: false,
@@ -940,8 +941,10 @@ mod access_tests {
                     name: "fs".to_string(),
                     ty: Type::Unit,
                     binds: true,
+                    annotation: None,
                 }],
                 ret: Type::Unit,
+                ret_annotation: None,
                 contracts: Contracts::default(),
                 body: call(method, args.collect()),
             },

@@ -1,0 +1,112 @@
+{
+  "core_ir_version": 1,
+  "functions": [
+    {
+      "name": "sign",
+      "params": [{"type": "Int", "binds": true}],
+      "ret": "Int",
+      "body": {
+        "kind": "Block",
+        "stmts": [],
+        "value": {
+          "kind": "If",
+          "cond": {
+            "kind": "Binary",
+            "op": "<",
+            "lhs": {"kind": "Local", "slot": 0},
+            "rhs": {"kind": "Int", "value": 0}
+          },
+          "then": {"kind": "Block", "stmts": [], "value": {"kind": "Int", "value": -1}},
+          "else": {
+            "kind": "If",
+            "cond": {
+              "kind": "Binary",
+              "op": "==",
+              "lhs": {"kind": "Local", "slot": 0},
+              "rhs": {"kind": "Int", "value": 0}
+            },
+            "then": {"kind": "Block", "stmts": [], "value": {"kind": "Int", "value": 0}},
+            "else": {"kind": "Block", "stmts": [], "value": {"kind": "Int", "value": 1}}
+          }
+        }
+      }
+    },
+    {
+      "name": "between",
+      "params": [
+        {"type": "Int", "binds": true},
+        {"type": "Int", "binds": true},
+        {"type": "Int", "binds": true},
+        {"type": "Bool", "binds": false}
+      ],
+      "ret": "Bool",
+      "body": {
+        "kind": "Block",
+        "stmts": [
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": "Bool",
+            "value": {
+              "kind": "Binary",
+              "op": "&&",
+              "lhs": {
+                "kind": "Binary",
+                "op": "<=",
+                "lhs": {"kind": "Local", "slot": 0},
+                "rhs": {"kind": "Local", "slot": 1}
+              },
+              "rhs": {
+                "kind": "Binary",
+                "op": "<=",
+                "lhs": {"kind": "Local", "slot": 1},
+                "rhs": {"kind": "Local", "slot": 2}
+              }
+            }
+          }
+        ],
+        "value": {
+          "kind": "Binary",
+          "op": "implies",
+          "lhs": {
+            "kind": "Not",
+            "operand": {
+              "kind": "Binary",
+              "op": "||",
+              "lhs": {"kind": "Local", "slot": 3},
+              "rhs": {"kind": "Bool", "value": false}
+            }
+          },
+          "rhs": {
+            "kind": "Binary",
+            "op": "!=",
+            "lhs": {"kind": "Local", "slot": 1},
+            "rhs": {"kind": "Local", "slot": 2}
+          }
+        }
+      }
+    },
+    {
+      "name": "nothing",
+      "params": [{"type": "Bool", "binds": true}],
+      "ret": "()",
+      "body": {
+        "kind": "Block",
+        "stmts": [],
+        "value": {
+          "kind": "If",
+          "cond": {"kind": "Local", "slot": 0},
+          "then": {
+            "kind": "Block",
+            "stmts": [],
+            "value": {
+              "kind": "Call",
+              "function": "sign",
+              "args": [{"kind": "Int", "value": 1}]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -26,8 +26,9 @@ use oska_syntax::ast::{
 use oska_syntax::Span;
 
 use super::{
-    Arm, Callee, Clause, Closure, Construct, Contracts, Ensures, Expr, ExprKind, Field, Function,
-    IntType, Param, Part, Pattern, Place, Program, Stmt, Type, TypeDecl, TypeDeclKind, Variant,
+    Arm, Callee, Clause, Closure, Construct, Contracts, Declaration, DeclarationKind, Ensures,
+    Expr, ExprKind, Field, Function, IntType, Param, Part, Pattern, Place, Program, Stmt, Type,
+    TypeDecl, TypeDeclKind, Variant,
 };
 use crate::items::{FieldsInfo, ImplInfo, Items};
 use crate::ty::{self, Ty};
@@ -181,6 +182,24 @@ fn type_decls(items: &Items) -> std::collections::BTreeMap<String, TypeDecl> {
     structs.chain(enums).collect()
 }
 
+/// What `item` declares, when it is a declaration other than a function,
+/// a `use` or a `test`, and its name as written (`src` holds an `impl`'s
+/// type).
+fn declaration(src: &str, item: &ItemKind) -> Option<(DeclarationKind, String)> {
+    match item {
+        ItemKind::Struct(s) => Some((DeclarationKind::Struct, s.name.name.clone())),
+        ItemKind::Enum(e) => Some((DeclarationKind::Enum, e.name.name.clone())),
+        ItemKind::Trait(t) => Some((DeclarationKind::Trait, t.name.name.clone())),
+        ItemKind::Const(c) => Some((DeclarationKind::Const, c.name.name.clone())),
+        ItemKind::Impl(imp) => {
+            let span = imp.target.span;
+            let name = src.get(span.start..span.end).unwrap_or_default();
+            Some((DeclarationKind::Impl, name.to_string()))
+        }
+        ItemKind::Fn(_) | ItemKind::Use(_) | ItemKind::Test(_) => None,
+    }
+}
+
 /// The generic parameters' names.
 fn names(generics: &[ast::GenericParam]) -> Vec<String> {
     generics.iter().map(|g| g.name.name.clone()).collect()
@@ -231,6 +250,13 @@ pub fn module(
         })
         .collect();
     for item in &module.items {
+        if let Some((kind, name)) = declaration(src, &item.kind) {
+            program.declarations.push(Declaration {
+                kind,
+                name,
+                span: item.span,
+            });
+        }
         match &item.kind {
             ItemKind::Fn(f) => {
                 let name = f.name.name.clone();
@@ -312,11 +338,13 @@ pub fn module(
                 let name = c.name.name.clone();
                 let function = Function {
                     name: name.clone(),
+                    span: c.name.span,
                     generics: Vec::new(),
                     self_ty: None,
                     receiver: false,
                     params: Vec::new(),
                     ret: lowering.convert(items.const_types.get(&name), c.name.span),
+                    ret_annotation: Some(c.ty.span),
                     contracts: Contracts::default(),
                     body: lowering.expr(&c.value),
                 };
@@ -457,10 +485,12 @@ impl Lowering<'_> {
                 name: p.name.name.clone(),
                 ty: self.convert(sig.and_then(|s| s.params.get(i)), p.name.span),
                 binds: p.name.name != "_",
+                annotation: Some(p.ty.span),
             })
             .collect();
         let function = Function {
             name: name.clone(),
+            span: f.name.span,
             generics: outer.iter().cloned().chain(names(&f.generics)).collect(),
             self_ty: sig
                 .and_then(|s| s.self_ty.as_ref())
@@ -468,6 +498,7 @@ impl Lowering<'_> {
             receiver: f.receiver.is_some(),
             params,
             ret: self.convert(sig.map(|s| &s.ret), f.name.span),
+            ret_annotation: f.return_type.as_ref().map(|ty| ty.span),
             contracts,
             body: self.block(body),
         };
@@ -531,15 +562,24 @@ impl Lowering<'_> {
     fn stmt(&self, stmt: &ast::Stmt) -> Stmt {
         match &stmt.kind {
             StmtKind::Expr(e) => Stmt::Expr(self.expr(e)),
-            StmtKind::Let { name, value, .. } => Stmt::Let {
+            StmtKind::Let {
+                mutable,
+                name,
+                ty,
+                value,
+            } => Stmt::Let {
                 binds: name.name != "_",
+                mutable: *mutable,
                 ty: self.type_at(name.span),
+                annotation: ty.as_ref().map(|ty| ty.span),
                 value: self.expr(value),
+                span: stmt.span,
             },
             StmtKind::Assign { target, value } => match self.place(target) {
                 Some(place) => Stmt::Assign {
                     place,
                     value: self.expr(value),
+                    span: stmt.span,
                 },
                 None => Stmt::Expr(Expr {
                     kind: self.unsupported(target.span, "an assignment to this place"),
@@ -556,11 +596,12 @@ impl Lowering<'_> {
                 value: value.as_ref().map(|v| self.expr(v)),
                 span: stmt.span,
             },
-            StmtKind::Break => Stmt::Break,
-            StmtKind::Continue => Stmt::Continue,
+            StmtKind::Break => Stmt::Break(stmt.span),
+            StmtKind::Continue => Stmt::Continue(stmt.span),
             StmtKind::While { cond, body } => Stmt::While {
                 cond: self.expr(cond),
                 body: self.block(body),
+                span: stmt.span,
             },
             StmtKind::For {
                 binding,
@@ -571,6 +612,7 @@ impl Lowering<'_> {
                 ty: self.type_at(binding.span),
                 iter: self.expr(iter),
                 body: self.block(body),
+                span: stmt.span,
             },
         }
     }
@@ -639,6 +681,7 @@ impl Lowering<'_> {
                                 name: p.name.name.clone(),
                                 ty: self.type_at(p.name.span),
                                 binds: p.name.name != "_",
+                                annotation: p.ty.as_ref().map(|ty| ty.span),
                             })
                             .collect(),
                         captures: captures.clone(),

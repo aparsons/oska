@@ -1,0 +1,70 @@
+{
+  "core_ir_version": 1,
+  "functions": [
+    {
+      "name": "add",
+      "params": [{"type": "Int", "binds": true}, {"type": "Int", "binds": true}],
+      "ret": "Int",
+      "body": {
+        "kind": "Block",
+        "stmts": [],
+        "value": {
+          "kind": "Binary",
+          "op": "+",
+          "lhs": {"kind": "Local", "slot": 0},
+          "rhs": {"kind": "Local", "slot": 1}
+        }
+      }
+    },
+    {
+      "name": "run",
+      "params": [],
+      "ret": "Int",
+      "body": {
+        "kind": "Block",
+        "stmts": [
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": "Int",
+            "value": {
+              "kind": "Call",
+              "function": "add",
+              "args": [{"kind": "Int", "value": 1}, {"kind": "Int", "value": -2}]
+            }
+          },
+          {
+            "kind": "Let",
+            "binds": false,
+            "type": "Int",
+            "value": {
+              "kind": "Binary",
+              "op": "*",
+              "lhs": {"kind": "Local", "slot": 0},
+              "rhs": {"kind": "Int", "value": 3}
+            }
+          }
+        ],
+        "value": {
+          "kind": "Binary",
+          "op": "%",
+          "lhs": {
+            "kind": "Binary",
+            "op": "/",
+            "lhs": {
+              "kind": "Neg",
+              "operand": {
+                "kind": "Binary",
+                "op": "-",
+                "lhs": {"kind": "Local", "slot": 0},
+                "rhs": {"kind": "Int", "value": 4}
+              }
+            },
+            "rhs": {"kind": "Int", "value": 2}
+          },
+          "rhs": {"kind": "Int", "value": 5}
+        }
+      }
+    }
+  ]
+}

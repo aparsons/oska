@@ -49,6 +49,7 @@ pub mod builtins;
 mod coherence;
 mod collect;
 mod const_cycles;
+pub mod core_ir;
 mod decl_rules;
 mod infer;
 mod instantiation;
