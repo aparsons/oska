@@ -60,9 +60,10 @@ clone() {
   git_quiet clone "$origin" "$1"
 }
 
-# cargo build in `dir`; prints what cargo printed.
+# cargo build -v in `dir`; prints what cargo printed. Verbose, so cargo
+# names each unit `Fresh` or `Compiling` whatever the user's settings.
 build() {
-  (cd "$1" && cargo build --offline 2>&1)
+  (cd "$1" && CARGO_TERM_QUIET=false cargo build -v --offline 2>&1)
 }
 
 # 1. No cached build: the script changes no time and writes the list.
@@ -93,8 +94,8 @@ if printf '%s' "$out" | grep -q 'cargo-cache: 6 of 6 tracked files unchanged'; t
 else
   bad "it counts the unchanged files" "$out"
 fi
-out=$(build "$same")
-if ! printf '%s' "$out" | grep -q 'Compiling'; then
+if out=$(build "$same") && printf '%s' "$out" | grep -q 'Fresh probe' &&
+  ! printf '%s' "$out" | grep -q 'Compiling'; then
   ok "an unchanged tree reuses the cached build"
 else
   bad "an unchanged tree reuses the cached build" "$out"
@@ -109,13 +110,12 @@ changed="$work/changed"
 clone "$changed"
 cp -Rp "$first/target" "$changed/target"
 (cd "$changed" && "$mtimes" >/dev/null 2>&1)
-out=$(build "$changed")
-if printf '%s' "$out" | grep -q 'Compiling probe'; then
+if out=$(build "$changed") && printf '%s' "$out" | grep -q 'Compiling probe'; then
   ok "a changed source builds again"
 else
   bad "a changed source builds again" "$out"
 fi
-number=$("$changed/target/debug/probe")
+number=$("$changed/target/debug/probe" 2>&1 || true)
 if [ "$number" = 2 ]; then
   ok "the build from a changed source runs the new code"
 else
@@ -136,6 +136,38 @@ if (cd "$changed" && git ls-files -s | LC_ALL=C sort | cmp -s - target/.cargo-ca
   ok "the list names the current tree"
 else
   bad "the list names the current tree" "$(cat "$changed/target/.cargo-cache-sources")"
+fi
+
+# 6. verify passes on the tree as checked out, and fails once a tracked
+# file changes: the cache must then not be saved.
+if out=$(cd "$changed" && "$mtimes" verify 2>&1); then
+  ok "verify passes on the tree as checked out"
+else
+  bad "verify passes on the tree as checked out" "$out"
+fi
+printf 'edited\n' >>"$changed/notes.txt"
+if out=$(cd "$changed" && "$mtimes" verify 2>&1); then
+  bad "verify fails once a tracked file changed" "$out"
+else
+  ok "verify fails once a tracked file changed"
+fi
+
+# 7. A symbolic link pointed at another file: cargo follows links, so no
+# file gets the old time.
+printf 'other\n' >"$origin/other.txt"
+ln -sfn other.txt "$origin/link.txt"
+git_quiet -C "$origin" add -A
+git_quiet -C "$origin" commit -m three
+relinked="$work/relinked"
+clone "$relinked"
+cp -Rp "$changed/target" "$relinked/target"
+out=$(cd "$relinked" && "$mtimes" 2>&1)
+old=$(cd "$relinked" && find . -path ./.git -prune -o -path ./target -prune -o -type f ! -newermt 2001-01-01 -print)
+if [ -z "$old" ] && printf '%s' "$out" | grep -q 'symbolic link changed'; then
+  ok "a changed symbolic link gives no file the old time"
+else
+  bad "a changed symbolic link gives no file the old time" "$out
+old: $old"
 fi
 
 printf '\n%d passed, %d failed\n' "$passed" "$failures"

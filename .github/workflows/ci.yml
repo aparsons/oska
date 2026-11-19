@@ -47,7 +47,8 @@ jobs:
       # build, so cargo never reuses a stale one. Only main saves: a pull
       # request reads main's cache and adds none of its own, which keeps
       # the repository under GitHub's 10 GB cache limit.
-      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - id: cargo-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             target
@@ -77,13 +78,18 @@ jobs:
       # The same script contributors and agents run locally (and the
       # pre-push hook runs), so local and CI checks cannot drift apart.
       - run: scripts/check.sh
+      # The saved list stands for the build only if no tracked file changed
+      # meanwhile and every cargo step ran on the tree as checked out (CI
+      # always runs them all).
+      - if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.head_ref == 'claude/project-thread-tp7oh0' # TEMPORARY: measure a cache hit on this PR
+        run: scripts/cargo-cache/mtimes.sh verify
       - if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.head_ref == 'claude/project-thread-tp7oh0' # TEMPORARY: measure a cache hit on this PR
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             target
             !target/tmp
-          key: cargo-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-${{ github.sha }}
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   macos:
     # Spec #154: on a Mac `oskac run` and `oskac test` are native by
@@ -119,7 +125,8 @@ jobs:
       # build, so cargo never reuses a stale one. Only main saves: a pull
       # request reads main's cache and adds none of its own, which keeps
       # the repository under GitHub's 10 GB cache limit.
-      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - id: cargo-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             target
@@ -128,13 +135,18 @@ jobs:
           restore-keys: cargo-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-
       - run: scripts/cargo-cache/mtimes.sh
       - run: cargo test -p oskac --no-fail-fast
+      # The saved list stands for the build only if no tracked file changed
+      # meanwhile and every cargo step ran on the tree as checked out (CI
+      # always runs them all).
+      - if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.head_ref == 'claude/project-thread-tp7oh0' # TEMPORARY: measure a cache hit on this PR
+        run: scripts/cargo-cache/mtimes.sh verify
       - if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.head_ref == 'claude/project-thread-tp7oh0' # TEMPORARY: measure a cache hit on this PR
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             target
             !target/tmp
-          key: cargo-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-${{ github.sha }}
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   cross-build:
     # Seam 3 of spec #153: every corpus program built for every target on

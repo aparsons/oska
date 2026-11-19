@@ -3,6 +3,7 @@
 # without ever letting it use a stale build.
 #
 #   scripts/cargo-cache/mtimes.sh [TARGET-DIR]
+#   scripts/cargo-cache/mtimes.sh verify [TARGET-DIR]
 #
 # Run it in the repository root after the cache is restored and before the
 # first cargo command. TARGET-DIR defaults to `target`.
@@ -24,19 +25,57 @@
 # it changes no time.
 #
 # Then it writes the list for the current tree, for the next run's cache.
+# The list stands for the build only if the job builds every unit with the
+# tree as checked out: CI runs every cargo step, and changes no tracked
+# file. `verify` checks the second before the cache is saved:
+#
+#   scripts/cargo-cache/mtimes.sh verify [TARGET-DIR]
+#
+# exits 1, saying why, if a tracked file changed since the checkout or the
+# list does not name the current tree.
 
 set -euo pipefail
 
+mode=stamp
+if [ "${1:-}" = verify ]; then
+  mode=verify
+  shift
+fi
 target=${1:-target}
 list="$target/.cargo-cache-sources"
+
+if [ "$mode" = verify ]; then
+  if ! git diff --quiet HEAD --; then
+    printf 'cargo-cache: a tracked file changed during the job; do not save the cache\n' >&2
+    exit 1
+  fi
+  if ! git -c core.quotePath=false ls-files -s | LC_ALL=C sort | cmp -s - "$list"; then
+    printf 'cargo-cache: %s does not name the current tree; do not save the cache\n' "$list" >&2
+    exit 1
+  fi
+  printf 'cargo-cache: the tree is as checked out; the cache may be saved\n'
+  exit 0
+fi
 
 current=$(mktemp)
 trap 'rm -f "$current" "$current.old"' EXIT
 
 git -c core.quotePath=false ls-files -s | LC_ALL=C sort >"$current"
 
+# A symbolic link that changed (or appeared, or went) could point a build
+# at another file with the old time; cargo follows links. Then no file
+# gets the old time.
+links_changed() {
+  ! cmp -s <(grep -E '^120000 ' "$current.old" || true) <(grep -E '^120000 ' "$current" || true)
+}
+
 if [ -f "$list" ]; then
   LC_ALL=C sort "$list" >"$current.old"
+fi
+
+if [ -f "$list" ] && links_changed; then
+  printf 'cargo-cache: a symbolic link changed; no file times changed\n'
+elif [ -f "$list" ]; then
   # Lines in both lists: same mode, blob ID and path. Only regular files:
   # `touch` follows a symbolic link, and would give its target, which may
   # have changed, the old time. `cut` keeps the path after the tab; a
@@ -46,7 +85,7 @@ if [ -f "$list" ]; then
     cut -f2- |
     { grep -v '^"' || true; } |
     tr '\n' '\0' |
-    xargs -0 sh -c '[ "$#" -eq 0 ] || touch -t 200001010000 "$@"' sh
+    xargs -0 sh -c '[ "$#" -eq 0 ] || touch -t 200001010000 -- "$@"' sh
   kept=$(LC_ALL=C comm -12 "$current.old" "$current" | wc -l | tr -d ' ')
   total=$(wc -l <"$current" | tr -d ' ')
   printf 'cargo-cache: %s of %s tracked files unchanged since the cached build\n' "$kept" "$total"
