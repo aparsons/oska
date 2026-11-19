@@ -137,7 +137,16 @@ fn a_junction_at_any_component_is_refused_and_nothing_escapes() {
         junction(dir, "root/alias", "root/sub");
         junction(dir, "root-link", "root");
     });
-    let outcome = same(&case);
+    // A junction's target is absolute, so the two runs' trees differ in
+    // it: what the programs printed is compared, and each tree checked.
+    let (interpreted, outcome) = differential::run(&case);
+    assert_eq!(
+        interpreted.stdout, outcome.stdout,
+        "{interpreted:#?}\n{outcome:#?}"
+    );
+    assert_eq!(interpreted.exit_code, Some(0), "{interpreted:#?}");
+    assert!(!interpreted.tree.contains_key("outside/planted.txt"));
+    assert!(!interpreted.tree.contains_key("outside/planted/"));
     let lines: Vec<&str> = outcome.stdout.lines().collect();
     assert_eq!(
         lines[..7],
@@ -206,7 +215,15 @@ fn a_device_name_or_a_stream_is_refused_in_every_operation() {
     {
         let at = 2 * (devices.len() + i);
         assert_eq!(lines[at], stream(name), "{outcome:#?}");
-        assert_eq!(lines[at + 1], stream(name), "{outcome:#?}");
+        // `a:b` is a drive to Rust's `Path`, so a write's last name is no
+        // file name at all.
+        let written = match *name {
+            "a:b" => "REFUSED: `sub/a:b` does not end in a file name; \
+                      a write, a new directory or a file needs one"
+                .to_string(),
+            _ => stream(name),
+        };
+        assert_eq!(lines[at + 1], written, "{outcome:#?}");
     }
     assert_eq!(lines[28], device("aux"));
     assert_eq!(lines[29], device("nul"));
