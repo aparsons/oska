@@ -14,6 +14,7 @@ Everything below needs judgement.
 ## Language and runtime
 
 - **Grow Oska rather than route around it.** When an Oska program in this repo, such as the site generator, needs something the language lacks, add it to the prelude and the runtime with checker and runtime tests. Follow the existing `DirRead.list_dir` and `DirWrite.create_dir` additions: the prelude, `Host`, `RealHost`, `FakeHost`, intrinsics, and the coverage test. A shell step that does the job instead is a violation.
+- **The parity gate: every change lands on all five platforms** ([ADR 0014](docs/adr/0014-every-supported-platform-builds-and-runs-natively.md)). A change that adds or changes what a program does (syntax, types, the prelude, `std`, capabilities, the runtime) is done only when it works natively, with the same output and the same security guarantees, on aarch64 and x86_64 Linux, aarch64 and x86_64 macOS, and x86_64 Windows, with the differential suite green on each platform's CI runner. A feature on some platforms only, or one that leaves the native backend refusing it (`E0390`), is a violation. The interpreter is the reference, behind `--interpret`, never a fallback.
 - **Use the glossary's words.** Docs and messages use the terms in `GLOSSARY.md`, never the ones it lists under _Avoid_.
 
 ## Site generator (`site/build.osk`)

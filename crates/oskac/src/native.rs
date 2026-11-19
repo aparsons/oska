@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use oska_check::program::Program;
 use oska_native::Target;
-use oska_syntax::{Diagnostic, Severity, Span};
+use oska_syntax::{Diagnostic, Span};
 
 use crate::cache::Cached;
 use crate::{Flags, Places};
@@ -44,41 +44,29 @@ pub fn native_target(flags: Flags) -> Option<Target> {
 pub enum Run {
     /// The program ran, or could not be started: the exit code to end with.
     Ran(ExitCode),
-    /// The backend refused the program, with this diagnostic: run it on
-    /// the interpreter, after [`note_fallback`].
+    /// The backend refused the program, with this diagnostic, which the
+    /// parity gate ([`gate`]) reports.
     Refused(Diagnostic),
 }
 
-/// Tell the user, on stderr, that the native backend refused the program
-/// with `refusal` and it runs on the interpreter: one line, in the
-/// diagnostics' style (`path:line:col: note: ...`), or one JSON object
-/// with `"severity":"note"`. Nothing when the interpreter refuses the
-/// program too (`interpreter_refusal`): nothing runs, and its refusal
-/// is the one reported.
-pub fn note_fallback(
+/// The parity gate (spec #155, ticket #181): every supported platform is
+/// native, so a program the native backend refuses with `refusal` is an
+/// error on each, never a silent run on the interpreter. Returns the
+/// refusal, located, for the caller to report; or `None` when the
+/// interpreter refuses the program too (`interpreter_refusal`), whose own
+/// refusal the interpreter then reports, as it always has.
+pub fn gate(
     refusal: Diagnostic,
     interpreter_refusal: Option<Diagnostic>,
     places: &Places,
-    json: bool,
-) {
+) -> Option<Diagnostic> {
     if interpreter_refusal.is_some() {
-        return;
+        return None;
     }
-    let mut note = match refusal.location {
+    Some(match refusal.location {
         Some(_) => refusal,
         None => places.locate(refusal),
-    };
-    note.message = format!("running on the interpreter: {}", note.message);
-    note.severity = Severity::Note;
-    if json {
-        eprintln!("{}", note.to_json());
-        return;
-    }
-    let text = format!("note: {} ({})", note.message, note.code);
-    match &note.location {
-        Some(location) => eprintln!("{location}: {text}"),
-        None => eprintln!("{text}"),
-    }
+    })
 }
 
 /// How `oskac run` was asked to run a program.

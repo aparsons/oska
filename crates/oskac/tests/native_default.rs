@@ -5,10 +5,15 @@
 //! interpreter; on x86_64 Windows too (#179). Every other host keeps the
 //! interpreter.
 //!
+//! The parity gate (spec #155, ticket #181): a program the native backend
+//! cannot compile yet (`E0390`) is an error for `run` and `test`, as for
+//! `build`, on every native host, with no run on the interpreter unless
+//! `--interpret` asks for one.
+//!
 //! The golden cases (`tests/golden/native_default/<case>.txt`) are the
-//! same on every host: on the native hosts they show the native run, and
-//! elsewhere the interpreter's fallback, which must print exactly the
-//! same. To regenerate them after an intended change, run
+//! same on every native host. Elsewhere the interpreter runs, and must
+//! print exactly what the native run prints; only the gate's cases are
+//! for native hosts alone. To regenerate them after an intended change, run
 //! `UPDATE_GOLDEN=1 cargo test -p oskac --test native_default` and review
 //! the diff. The tests for the native hosts below show that the default
 //! really is native, through what only the native backend does: it writes
@@ -144,18 +149,6 @@ fn assert_golden(case: &str, files: &[(&str, &str)], args: &[&str]) {
     }
     let expected = std::fs::read_to_string(&golden)
         .unwrap_or_else(|e| panic!("{} should exist: {e}\n{actual}", golden.display()));
-    // The one difference between hosts: only a host with a native backend
-    // can refuse a program natively, and notes that it runs it on the
-    // interpreter instead. (Regenerate the goldens on a native host.)
-    let expected = if NATIVE_HOST {
-        expected
-    } else {
-        expected
-            .lines()
-            .filter(|line| !line.contains("running on the interpreter: "))
-            .map(|line| format!("{line}\n"))
-            .collect()
-    };
     assert!(
         actual == expected,
         "{} differs; rerun with UPDATE_GOLDEN=1 if the change is intended\n--- actual\n{actual}\n--- expected\n{expected}",
@@ -241,7 +234,10 @@ fn a_panic_is_reported_as_the_interpreter_reports_it() {
 }
 
 #[test]
-fn a_program_the_native_backend_refuses_runs_on_the_interpreter() {
+fn a_program_the_native_backend_refuses_is_an_error() {
+    if !NATIVE_HOST {
+        return;
+    }
     let files = [("unsupported.osk", UNSUPPORTED)];
     assert_golden("run_unsupported", &files, &["run", "unsupported.osk"]);
     assert_golden(
@@ -257,7 +253,10 @@ fn a_program_the_native_backend_refuses_runs_on_the_interpreter() {
 }
 
 #[test]
-fn a_package_the_native_backend_refuses_runs_on_the_interpreter() {
+fn a_package_the_native_backend_refuses_is_an_error() {
+    if !NATIVE_HOST {
+        return;
+    }
     let files = [
         ("app/oska.toml", MANIFEST),
         ("app/src/main.osk", UNSUPPORTED),
@@ -293,13 +292,21 @@ fn tests_report_the_same_on_either_backend() {
 }
 
 #[test]
-fn tests_the_native_backend_refuses_run_on_the_interpreter() {
+fn tests_the_native_backend_refuses_are_an_error_and_interpret_runs_them() {
+    if !NATIVE_HOST {
+        return;
+    }
     let src = "test \"refused\" {\n    let d = dbg(t.fs.restrict_to(\"/\"))\n    \
                t.assert(true)\n}\n";
     assert_golden(
         "test_unsupported",
         &[("unsupported.osk", src)],
         &["test", "unsupported.osk"],
+    );
+    assert_golden(
+        "test_unsupported_interpret",
+        &[("unsupported.osk", src)],
+        &["test", "unsupported.osk", "--interpret"],
     );
 }
 
