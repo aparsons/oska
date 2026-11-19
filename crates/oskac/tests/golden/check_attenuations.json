@@ -36,5 +36,6 @@
     {"function":"<Site<String> as Publish>.out","method":"restrict_to","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":1991,"end":2017},"source":"FsWrite","result":"DirWrite","root":"named"},
     {"function":"test \"reads a note\"","method":"read_only","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":2125,"end":2141},"source":"Fs","result":"FsRead","root":null},
     {"function":"test \"reads a note\"","method":"restrict_to","path":"crates/oskac/tests/fixtures/attenuations.osk","span":{"start":2125,"end":2162},"source":"FsRead","result":"DirRead","root":"notes"}
-  ]
+  ],
+  "verdict": "ok"
 }

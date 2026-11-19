@@ -25,7 +25,8 @@ exit: 3
     "new_attenuations": [],
     "removed_attenuations": [],
     "fails": true
-  }
+  },
+  "verdict": "widened"
 }
 --- stderr
 error: authority widened against the baseline <baseline>: a function gained authority or became impure, an audit site was added, or the program reaches a new kind; approving this means updating the baseline, a change for the user to review

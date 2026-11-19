@@ -131,7 +131,8 @@ struct Logger { out: Stdout }
   ],
   "functions": [],
   "audit": [],
-  "attenuations": []
+  "attenuations": [],
+  "verdict": "diagnostics"
 }
 ```
 

@@ -15,5 +15,6 @@
     {"function":"etc","method":"restrict_to","path":"crates/oskac/tests/fixtures/qualified_calls.osk","span":{"start":302,"end":334},"source":"FsRead","result":"DirRead","root":"/etc"},
     {"function":"reader","method":"read_only","path":"crates/oskac/tests/fixtures/qualified_calls.osk","span":{"start":417,"end":433},"source":"Fs","result":"FsRead","root":null},
     {"function":"narrowed","method":"restrict_to","path":"crates/oskac/tests/fixtures/qualified_calls.osk","span":{"start":564,"end":582},"source":"FsRead","result":"DirRead","root":null}
-  ]
+  ],
+  "verdict": "ok"
 }
