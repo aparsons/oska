@@ -25,7 +25,7 @@ mod skips;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use differential::{assert_same, Case};
+use differential::{assert_same, in_parallel, Case};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -143,17 +143,24 @@ fn assert_same_if_program(case: &Case, label: &str) -> bool {
     true
 }
 
+/// [`assert_same_if_program`] on every case, each with its label, the
+/// cases spread over the host's cores: how many were programs.
+fn programs_run_the_same(cases: &[(Case, String)]) -> usize {
+    in_parallel(cases, |(case, label)| assert_same_if_program(case, label))
+        .into_iter()
+        .filter(|&program| program)
+        .count()
+}
+
 #[test]
 fn every_example_runs_the_same() {
     let examples = repo_root().join("examples");
-    let mut count = 0;
+    let mut cases = Vec::new();
     for path in entries(&examples, |p| p.extension().is_some_and(|e| e == "osk")) {
         let name = name_of(&path);
         let src = read(&path);
         let case = Case::file_at(&format!("example-{name}"), &name, &src);
-        if assert_same_if_program(&case, &format!("example-{name}")) {
-            count += 1;
-        }
+        cases.push((case, format!("example-{name}")));
     }
     // `capabilities.osk` counts the lines of the file it is given, and
     // refuses a missing one and no argument at all.
@@ -176,33 +183,29 @@ fn every_example_runs_the_same() {
         let mut files = Vec::new();
         files_under(&dir, &format!("{name}/"), &mut files);
         let case = Case::package_at(&format!("example-{name}"), &name, files);
-        if assert_same_if_program(&case, &format!("example-{name}")) {
-            count += 1;
-        }
+        cases.push((case, format!("example-{name}")));
     }
+    let count = programs_run_the_same(&cases);
     assert!(count >= 3, "{count} example programs");
 }
 
 #[test]
 fn every_cli_fixture_program_runs_the_same() {
     let fixtures = repo_root().join("crates/oskac/tests/fixtures");
-    let mut count = 0;
+    let mut cases = Vec::new();
     for path in entries(&fixtures, |p| p.extension().is_some_and(|e| e == "osk")) {
         let name = name_of(&path);
         let case = Case::file_at(&format!("fixture-{name}"), &name, &read(&path));
-        if assert_same_if_program(&case, &format!("fixture-{name}")) {
-            count += 1;
-        }
+        cases.push((case, format!("fixture-{name}")));
     }
     for dir in entries(&fixtures.join("packages"), |p| p.is_dir()) {
         let name = name_of(&dir);
         let mut files = Vec::new();
         files_under(&dir, &format!("{name}/"), &mut files);
         let case = Case::package_at(&format!("fixture-package-{name}"), &name, files);
-        if assert_same_if_program(&case, &format!("fixture-package-{name}")) {
-            count += 1;
-        }
+        cases.push((case, format!("fixture-package-{name}")));
     }
+    let count = programs_run_the_same(&cases);
     assert!(count >= 8, "{count} fixture programs");
 }
 
@@ -230,14 +233,19 @@ fn guide_programs() -> Vec<GuideProgram> {
         }
     }
     pages.sort();
+    let guide = repo_root().join("docs/guide");
     let mut programs: Vec<GuideProgram> = Vec::new();
     for page in pages {
         let text = read(&page);
+        // The page's path under `docs/guide`, without `.md` and with `-`
+        // for `/`: `examples/capabilities.md` and `capabilities.md` must
+        // name their programs apart, as their cases run side by side.
         let stem = page
-            .file_stem()
-            .expect("a stem")
+            .strip_prefix(&guide)
+            .expect("a page under docs/guide")
+            .with_extension("")
             .to_string_lossy()
-            .into_owned();
+            .replace(['/', '\\'], "-");
         // The open block's info string and text.
         let mut block: Option<(String, String)> = None;
         let mut index = 0;
@@ -294,7 +302,7 @@ fn guide_programs() -> Vec<GuideProgram> {
 
 #[test]
 fn every_guide_program_runs_the_same() {
-    let mut count = 0;
+    let mut cases = Vec::new();
     for program in guide_programs() {
         let args: Vec<&str> = program.args.iter().map(String::as_str).collect();
         let case = Case::file_at(
@@ -303,10 +311,9 @@ fn every_guide_program_runs_the_same() {
             &program.src,
         )
         .with_args(&args);
-        if assert_same_if_program(&case, &format!("guide-{}", program.name)) {
-            count += 1;
-        }
+        cases.push((case, format!("guide-{}", program.name)));
     }
+    let count = programs_run_the_same(&cases);
     assert!(count >= 20, "{count} guide programs");
 }
 
@@ -434,6 +441,12 @@ fn corpus_labels() -> Vec<String> {
 #[test]
 fn the_skip_list_names_only_programs_of_the_corpus() {
     let labels = corpus_labels();
+    let unique: std::collections::BTreeSet<&String> = labels.iter().collect();
+    assert_eq!(
+        unique.len(),
+        labels.len(),
+        "two programs of the corpus share a label, so their cases would share directories"
+    );
     for (case, reason) in skips::SKIPS {
         let Some(label) = case.strip_prefix("native_corpus::") else {
             continue;

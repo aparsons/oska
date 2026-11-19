@@ -14,7 +14,7 @@
 
 mod differential;
 
-use differential::{assert_same, Case};
+use differential::{assert_same, in_parallel, Case};
 
 /// A program whose `main` runs `body`, after the items `items`, with
 /// `io: Stdout`. (`?` is a later ticket's, so bodies print with
@@ -433,6 +433,7 @@ fn sized_integers_compute_within_their_range() {
 
 #[test]
 fn sized_integer_overflow_panics_with_the_interpreters_message() {
+    let mut all = Vec::new();
     for (ty, min, max) in SIZED {
         let signed = min != "0";
         let mut cases = vec![
@@ -459,25 +460,28 @@ fn sized_integer_overflow_panics_with_the_interpreters_message() {
             cases.push(("neg", "-lo", format!("`-{min}` overflows `{ty}` (")));
         }
         for (what, expr, message) in cases {
-            let src = program(
-                &format!(
-                    "fn least() -> {ty} {{\n    {min}\n}}\n\n\
-                     fn most() -> {ty} {{\n    {max}\n}}"
-                ),
-                &format!(
-                    "    let lo = least()\n    let hi = most()\n    \
-                     let zero: {ty} = 0\n    let one: {ty} = 1\n    let two: {ty} = 2\n    \
-                     let r = {expr}\n    let _ = io.println(\"unreachable\")"
-                ),
-            );
-            let outcome = assert_same(&Case::file(&format!("sized_{ty}_{what}"), &src));
-            assert!(
-                outcome.stderr.contains(&message),
-                "`{ty}` {what}: {outcome:#?}, expected {message}"
-            );
-            assert_eq!(outcome.exit_code, Some(101), "`{ty}` {what}: {outcome:#?}");
+            all.push((ty, what, expr, message, min, max));
         }
     }
+    in_parallel(&all, |(ty, what, expr, message, min, max)| {
+        let src = program(
+            &format!(
+                "fn least() -> {ty} {{\n    {min}\n}}\n\n\
+                 fn most() -> {ty} {{\n    {max}\n}}"
+            ),
+            &format!(
+                "    let lo = least()\n    let hi = most()\n    \
+                 let zero: {ty} = 0\n    let one: {ty} = 1\n    let two: {ty} = 2\n    \
+                 let r = {expr}\n    let _ = io.println(\"unreachable\")"
+            ),
+        );
+        let outcome = assert_same(&Case::file(&format!("sized_{ty}_{what}"), &src));
+        assert!(
+            outcome.stderr.contains(message.as_str()),
+            "`{ty}` {what}: {outcome:#?}, expected {message}"
+        );
+        assert_eq!(outcome.exit_code, Some(101), "`{ty}` {what}: {outcome:#?}");
+    });
 }
 
 #[test]
