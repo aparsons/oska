@@ -17,7 +17,7 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use common::site::{self, check_links, tracked_files};
+use common::site::{self, check_links, entry_urls, llms_group as group};
 
 /// The notice a research page carries.
 const NOTICE: &str = "Proposals and background, not documented behaviour.";
@@ -107,28 +107,6 @@ fn site_without(left_out: &[&str]) -> BTreeMap<String, String> {
         .copied()
         .collect();
     site::site_of(&files, &[])
-}
-
-/// The text of the `## heading` group of `llms`, up to the next group.
-fn group<'a>(llms: &'a str, heading: &str) -> &'a str {
-    let open = format!("\n## {heading}\n");
-    let start = llms
-        .find(&open)
-        .unwrap_or_else(|| panic!("no group {heading} in:\n{llms}"))
-        + open.len();
-    let rest = &llms[start..];
-    &rest[..rest.find("\n## ").unwrap_or(rest.len())]
-}
-
-/// The URL of every entry in `text`, in order, without the origin.
-fn entry_urls(text: &str) -> Vec<String> {
-    text.lines()
-        .filter(|l| l.starts_with("- ["))
-        .map(|l| {
-            let rest = l.split("](https://oskalang.dev/").nth(1).expect("a URL");
-            rest.split(')').next().expect("a close").to_string()
-        })
-        .collect()
 }
 
 /// The `Source:` URL of every page in `full`, in order, without the origin.
@@ -537,37 +515,4 @@ fn the_checker_passes_the_corpus_and_fails_on_a_dead_link_in_llms_research_txt()
         "{}",
         outcome.stderr
     );
-}
-
-// ---- The real docs -----------------------------------------------------------------------
-
-#[test]
-fn the_real_corpus_is_tiered_and_every_link_in_it_goes_somewhere() {
-    let site = site::real_site();
-    let llms = &site["llms.txt"];
-    let start = entry_urls(group(llms, "Start here"));
-    assert_eq!(start.len(), 8, "{start:?}");
-    assert_eq!(start[0], "agent-setup.md");
-    assert_eq!(start[start.len() - 1], "guide/what-works-today.md");
-    for url in entry_urls(llms) {
-        assert!(site.contains_key(&url), "llms.txt lists /{url}");
-    }
-    assert!(group(llms, "Optional").contains("research/"), "{llms}");
-    assert!(site.contains_key("llms-research.txt"));
-    let full = &site["llms-full.txt"];
-    assert!(!full.contains("Source: https://oskalang.dev/research/"));
-    assert!(!full.contains("Source: https://oskalang.dev/codes/"));
-    // Every code's summary in the index is a whole sentence: no line cut
-    // off in the middle of a code span.
-    for line in site["codes/index.md"]
-        .lines()
-        .filter(|l| l.starts_with("- ["))
-    {
-        assert_eq!(line.matches('`').count() % 2, 0, "{line}");
-    }
-    // The site, as built, passes the link checker.
-    let tracked = tracked_files();
-    let tracked: Vec<&str> = tracked.iter().map(String::as_str).collect();
-    let outcome = check_links(&site, &tracked);
-    assert_eq!(outcome.exit_code, 0, "{}", outcome.stderr);
 }

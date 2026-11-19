@@ -23,7 +23,8 @@ use std::path::{Path, PathBuf};
 
 use common::inert::{assert_site_inert, decode_references, tags_of, url_of};
 use common::site::{
-    agent_repo, assert_succeeded, between, build, build_ok, generator_authority, read_tree, BUILD,
+    agent_repo, assert_succeeded, between, build, build_ok, check_links, entry_urls,
+    generator_authority, hrefs, llms_group, navigation, read_tree, succeeded, tracked_files, BUILD,
     CSP, MINIMAL_REPO, PAGES_WORKFLOW,
 };
 
@@ -1932,4 +1933,182 @@ fn every_real_page_and_the_agent_outputs_link_to_the_source_repository() {
         llms.contains(&format!("The source code is at {repo}.")),
         "llms.txt should name the repository"
     );
+}
+
+// ---- The real site: the home page and the navigation (#188) ------------------------
+//
+// Every test that reads the real site is in this file, so the generator
+// runs on the real docs once for all of them (`common::site::real_site`
+// builds once per test binary).
+
+#[test]
+fn the_real_home_page_leads_with_install_the_prompt_and_the_quickstart() {
+    let site = real_site();
+    let home = between(&site["index.html"], "<main id=\"main-content\">", "</main>");
+    // In the order a newcomer needs them.
+    let at = |needle: &str| {
+        home.find(needle)
+            .unwrap_or_else(|| panic!("the home page has no {needle:?}:\n{home}"))
+    };
+    let order = [
+        at("curl -fsSL https://oskalang.dev/install.sh | sh"),
+        at("irm https://oskalang.dev/install.ps1 | iex"),
+        at("<section class=\"agent-setup\""),
+        at("<code>oskac check"),
+        at("href=\"/guide/quickstart.html\""),
+        at("href=\"/guide/what-works-today.html\""),
+        at("href=\"/security.html\""),
+    ];
+    assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}\n{home}");
+    assert!(home.contains("href=\"/guide/install.html\""), "{home}");
+    // No link from the home page to itself, and no contributor material.
+    for href in hrefs(home) {
+        assert!(
+            ![
+                "/",
+                "/index.html",
+                "https://oskalang.dev",
+                "https://oskalang.dev/"
+            ]
+            .contains(&href),
+            "the home page links to itself: {href}"
+        );
+    }
+    assert!(!home.contains("cargo build"), "{home}");
+    assert!(!home.contains("Repository layout"), "{home}");
+}
+
+#[test]
+fn the_real_navigation_and_reference_page_reach_every_section() {
+    let site = real_site();
+    let nav: Vec<String> = navigation(&site["index.html"])
+        .into_iter()
+        .map(|(_, label)| label)
+        .collect();
+    assert_eq!(
+        nav,
+        [
+            "Oska",
+            "Install",
+            "Quickstart",
+            "Tour",
+            "Guides",
+            "Agent setup",
+            "Codes",
+            "Security",
+            "Reference"
+        ]
+    );
+    let reference = hrefs(between(
+        &site["reference.html"],
+        "<main id=\"main-content\">",
+        "</main>",
+    ))
+    .into_iter()
+    .map(str::to_string)
+    .collect::<Vec<_>>();
+    for href in [
+        "/ast.html",
+        "/checker.html",
+        "/design.html",
+        "/runtime.html",
+        "/glossary.html",
+        "/adr/",
+        "/research/",
+    ] {
+        assert!(reference.iter().any(|h| h == href), "{href}: {reference:?}");
+    }
+}
+
+#[test]
+fn what_works_today_is_a_guide_listed_in_llms_txt() {
+    let site = real_site();
+    assert!(site.contains_key("guide/what-works-today.html"));
+    assert!(
+        site["llms.txt"].contains("](https://oskalang.dev/guide/what-works-today.md)"),
+        "{}",
+        site["llms.txt"]
+    );
+}
+
+// ---- The real site: the corpus for agents --------------------------------------------
+
+#[test]
+fn the_real_corpus_is_tiered_and_every_link_in_it_goes_somewhere() {
+    let site = real_site();
+    let llms = &site["llms.txt"];
+    let start = entry_urls(llms_group(llms, "Start here"));
+    assert_eq!(start.len(), 8, "{start:?}");
+    assert_eq!(start[0], "agent-setup.md");
+    assert_eq!(start[start.len() - 1], "guide/what-works-today.md");
+    for url in entry_urls(llms) {
+        assert!(site.contains_key(&url), "llms.txt lists /{url}");
+    }
+    assert!(llms_group(llms, "Optional").contains("research/"), "{llms}");
+    assert!(site.contains_key("llms-research.txt"));
+    let full = &site["llms-full.txt"];
+    assert!(!full.contains("Source: https://oskalang.dev/research/"));
+    assert!(!full.contains("Source: https://oskalang.dev/codes/"));
+    // Every code's summary in the index is a whole sentence: no line cut
+    // off in the middle of a code span.
+    for line in site["codes/index.md"]
+        .lines()
+        .filter(|l| l.starts_with("- ["))
+    {
+        assert_eq!(line.matches('`').count() % 2, 0, "{line}");
+    }
+    // The site, as built, passes the link checker.
+    let tracked = tracked_files();
+    let tracked: Vec<&str> = tracked.iter().map(String::as_str).collect();
+    let outcome = check_links(&site, &tracked);
+    assert_eq!(outcome.exit_code, 0, "{}", outcome.stderr);
+}
+
+// ---- The real site: links, as the Pages workflow checks them ---------------------------
+
+/// The real site, as the Pages workflow builds it: the generator on the
+/// repository's own inputs, then the files `scripts/release/stage-site.sh`
+/// adds, here as stand-ins. It is made once, for every test that reads it.
+fn real_site_staged() -> &'static BTreeMap<String, String> {
+    static SITE: std::sync::OnceLock<BTreeMap<String, String>> = std::sync::OnceLock::new();
+    SITE.get_or_init(|| {
+        let mut site = real_site();
+        for staged in ["install.sh", "install.ps1", "oska-release.pub"] {
+            site.insert(staged.to_string(), "staged\n".to_string());
+        }
+        site
+    })
+}
+
+#[test]
+fn every_link_in_the_real_site_goes_somewhere() {
+    let tracked = tracked_files();
+    let tracked: Vec<&str> = tracked.iter().map(String::as_str).collect();
+    let outcome = check_links(real_site_staged(), &tracked);
+    assert!(
+        succeeded(&outcome),
+        "links in the real site go nowhere:\n{}",
+        outcome.stderr
+    );
+}
+
+#[test]
+fn the_dead_targets_the_site_review_found_now_resolve() {
+    let site = real_site_staged();
+    assert!(site.contains_key("guide/examples/hello.html"));
+    assert!(site.contains_key("guide/examples/capabilities.md"));
+    for link in [
+        "[hello](/guide/examples/hello.md)",
+        "[capabilities](/guide/examples/capabilities.md)",
+    ] {
+        assert!(
+            site["guide/index.md"].contains(link),
+            "no {link} in the guide index"
+        );
+    }
+    for copy in site.keys().filter(|k| k.ends_with(".md")) {
+        for dead in ["](LICENSE)", "](examples/shopping)", "](../../examples/"] {
+            assert!(!site[copy].contains(dead), "{copy} still has {dead}");
+        }
+    }
 }

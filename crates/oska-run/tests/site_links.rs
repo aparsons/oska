@@ -17,9 +17,7 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use common::site::{
-    self, check_links, succeeded, tracked_files, CHECK, MINIMAL_REPO, PAGES_WORKFLOW,
-};
+use common::site::{self, check_links, succeeded, CHECK, MINIMAL_REPO, PAGES_WORKFLOW};
 use oska_run::{FakeHost, RunOutcome};
 
 /// Where a file the site does not publish is linked: on GitHub, on `main`.
@@ -371,54 +369,6 @@ fn the_checker_reads_only_the_site_and_the_tracked_files() {
 }
 
 // ---- The real site ---------------------------------------------------------------
-
-/// The real site, as the Pages workflow builds it: the generator on the
-/// repository's own inputs, then the files `scripts/release/stage-site.sh`
-/// adds, here as stand-ins. It is made once, for every test that reads it
-/// (`site::real_site` builds the site itself once per test binary).
-fn real_site() -> &'static BTreeMap<String, String> {
-    static SITE: std::sync::OnceLock<BTreeMap<String, String>> = std::sync::OnceLock::new();
-    SITE.get_or_init(|| {
-        let mut site = site::real_site();
-        for staged in ["install.sh", "install.ps1", "oska-release.pub"] {
-            site.insert(staged.to_string(), "staged\n".to_string());
-        }
-        site
-    })
-}
-
-#[test]
-fn every_link_in_the_real_site_goes_somewhere() {
-    let tracked = tracked_files();
-    let tracked: Vec<&str> = tracked.iter().map(String::as_str).collect();
-    let outcome = check_links(real_site(), &tracked);
-    assert!(
-        succeeded(&outcome),
-        "links in the real site go nowhere:\n{}",
-        outcome.stderr
-    );
-}
-
-#[test]
-fn the_dead_targets_the_site_review_found_now_resolve() {
-    let site = real_site();
-    assert!(site.contains_key("guide/examples/hello.html"));
-    assert!(site.contains_key("guide/examples/capabilities.md"));
-    for link in [
-        "[hello](/guide/examples/hello.md)",
-        "[capabilities](/guide/examples/capabilities.md)",
-    ] {
-        assert!(
-            site["guide/index.md"].contains(link),
-            "no {link} in the guide index"
-        );
-    }
-    for copy in site.keys().filter(|k| k.ends_with(".md")) {
-        for dead in ["](LICENSE)", "](examples/shopping)", "](../../examples/"] {
-            assert!(!site[copy].contains(dead), "{copy} still has {dead}");
-        }
-    }
-}
 
 #[test]
 fn the_pages_workflow_checks_every_link_after_staging_and_before_upload() {
