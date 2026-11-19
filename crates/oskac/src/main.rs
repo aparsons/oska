@@ -21,6 +21,7 @@ mod baseline;
 mod build;
 mod cache;
 mod explain;
+mod fence;
 mod fix;
 mod hook;
 mod json;

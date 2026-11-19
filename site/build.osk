@@ -2180,11 +2180,13 @@ fn doc_codes(text: Untrusted<String>, source: Untrusted<String>) -> List<Code> {
     var rows: List<Code> = List.new()
     var examples: List<Example> = List.new()
     var in_block = false
+    // A block fenced with `~~~` may hold a ``` fence, as `E0001`'s example does.
+    var fence = "```"
     var tag = Tag(is_error: false, code: "")
     var body: List<Untrusted<String>> = List.new()
     for line in text.lines() {
         if in_block {
-            if line.starts_with("```") && line.slice(3, line.len()).trim() == "" {
+            if line.starts_with(fence) && line.slice(3, line.len()).trim() == "" {
                 if tag.code != "" {
                     examples.push(Example(is_error: tag.is_error, code: tag.code, body: "".join(body)))
                 }
@@ -2194,8 +2196,9 @@ fn doc_codes(text: Untrusted<String>, source: Untrusted<String>) -> List<Code> {
             }
             continue
         }
-        if line.starts_with("```") {
+        if line.starts_with("```") || line.starts_with("~~~") {
             in_block = true
+            fence = if line.starts_with("~~~") { "~~~" } else { "```" }
             body = List.new()
             tag = fence_tag(line.slice(3, line.len()))
             continue
@@ -2309,9 +2312,10 @@ fn code_page(all: Site, code: Code) -> Page {
         parts.push("")
         parts.push("This program fails with `{code.code}`.")
         parts.push("")
-        parts.push("```oska")
+        let fence = fence_for(code.example)
+        parts.push("{fence}oska")
         parts.push(chomp(code.example))
-        parts.push("```")
+        parts.push(fence)
     }
     if code.fixed != "" {
         parts.push("")
@@ -2319,9 +2323,10 @@ fn code_page(all: Site, code: Code) -> Page {
         parts.push("")
         parts.push("The same program, fixed.")
         parts.push("")
-        parts.push("```oska")
+        let fence = fence_for(code.fixed)
+        parts.push("{fence}oska")
         parts.push(chomp(code.fixed))
-        parts.push("```")
+        parts.push(fence)
     }
     parts.push("")
     let label = if code.source == "checker.md" { "checker notes" } else { "runtime notes" }
@@ -2337,6 +2342,12 @@ fn code_page(all: Site, code: Code) -> Page {
 // in `runtime.md` is `[Tests](runtime.md#tests)` on a page of the catalog.
 fn local_links(code: Code) -> Untrusted<String> {
     code.message.replace("](#", "]({code.source}#")
+}
+
+// The fence for a block that holds `body`: `~~~` when it holds a ``` fence
+// of its own, as `E0001`'s example does, else ```.
+fn fence_for(body: Untrusted<String>) -> Untrusted<String> {
+    if body.contains("```") { "~~~" } else { "```" }
 }
 
 // `text` without the line break that ends it.

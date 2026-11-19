@@ -104,7 +104,7 @@ fn small(n: Int) -> Bool {
 }
 ```
 
-`E0001`, a character that is not part of the language, such as `$`. `E0002`, an unterminated string.
+`E0001`, a character that is not part of the language, such as `$` or a backtick. A module wrapped in a Markdown fence gets `E0001` too, with a `machine` fix: `oskac fix` removes the fence's two lines. `E0002`, an unterminated string.
 
 ### Names and types: `E020x` and `E022x`
 
