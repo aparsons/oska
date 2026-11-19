@@ -153,12 +153,8 @@ pub struct Outcome {
 }
 
 /// The target platform this host builds and runs native executables
-/// for: its own. Windows is not yet a host `oskac run` goes native on
-/// (#179), but its executables run here, so the suite builds for it.
+/// for: its own.
 pub fn host_target() -> oska_native::Target {
-    if cfg!(all(windows, target_arch = "x86_64")) {
-        return oska_native::Target::WindowsX86_64;
-    }
     oska_native::Target::host().expect("this host runs native executables")
 }
 

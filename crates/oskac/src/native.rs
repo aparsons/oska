@@ -1,5 +1,5 @@
-//! Native by default: on aarch64 and x86_64 Linux and macOS, `oskac run`
-//! and `oskac test` compile the checked program for the host with the native
+//! Native by default: on aarch64 and x86_64 Linux and macOS and on x86_64
+//! Windows (#179), `oskac run` and `oskac test` compile the checked program for the host with the native
 //! backend (`oska-native`) and run the executable; `--interpret` selects
 //! the interpreter, and every other host keeps it until it has a backend
 //! of its own.
@@ -7,9 +7,11 @@
 //! The executable is written to a private temporary directory: a new
 //! directory with a random name under the temporary directory (`TMPDIR`),
 //! created with mode 0700 and never reused, so no other user can name,
-//! replace or read what runs. The file in it is created new, mode 0700,
+//! replace or read what runs (on Windows, under the user's own temporary
+//! directory). The file in it is created new, mode 0700,
 //! and both are removed afterwards: for `oskac run` as soon as the
-//! program has started, for `oskac test` once every test has run.
+//! program has started (on Windows, which keeps a running program's
+//! file, once it ends), for `oskac test` once every test has run.
 //!
 //! A program the backend refuses (`E0390`) runs on the interpreter
 //! instead, after one note on stderr that says so and why
@@ -135,8 +137,15 @@ pub fn run(
         Ok(child) => child,
         Err(err) => return Run::Ran(fail(&cannot("run", &err), json)),
     };
-    // The program has started: its file is no longer needed.
-    drop(exe);
+    // The program has started: its file is no longer needed. Windows
+    // keeps a running program's file, so there it goes once it ends.
+    let exe = match cfg!(windows) {
+        true => Some(exe),
+        false => {
+            drop(exe);
+            None
+        }
+    };
     let panic = match child.stderr.take() {
         Some(stderr) => forward_stderr(stderr),
         None => None,
@@ -145,6 +154,7 @@ pub fn run(
         Ok(status) => status,
         Err(err) => return Run::Ran(fail(&cannot("run", &err), json)),
     };
+    drop(exe);
     if let Some(report) = panic {
         match oska_native::test_failure(&report).filter(|_| status.code() == Some(101)) {
             Some(panic) => {
@@ -199,6 +209,22 @@ fn forward_stderr(mut stderr: impl Read) -> Option<Vec<u8>> {
 /// interpreter would not have died of it.
 fn ended(status: std::process::ExitStatus, json: bool) -> ExitCode {
     if let Some(code) = status.code() {
+        if let Some(exception) = windows_exception(code) {
+            let fault = Diagnostic::new(
+                oska_native::codes::PROCESS_FAULT,
+                format!(
+                    "the native program faulted with exception {exception:#010X}: a fault in the \
+                     native backend, not in the program; run it with `--interpret`"
+                ),
+                Span { start: 0, end: 0 },
+            );
+            report(&fault, json);
+        }
+        // A Windows process's code is 32 bits, which `ExitCode` cannot
+        // carry: `oskac` ends with the program's own.
+        if cfg!(windows) && u8::try_from(code).is_err() {
+            std::process::exit(code);
+        }
         return ExitCode::from(u8::try_from(code).unwrap_or(u8::MAX));
     }
     #[cfg(unix)]
@@ -220,6 +246,18 @@ fn ended(status: std::process::ExitStatus, json: bool) -> ExitCode {
         }
     }
     ExitCode::FAILURE
+}
+
+/// The exception a Windows process that ended with `code` died of: a
+/// status whose severity is an error (`0xC...`, such as
+/// `STATUS_ACCESS_VIOLATION` or `STATUS_STACK_OVERFLOW`), or a
+/// breakpoint, as Windows ends a process an exception was not handled
+/// in. `None` elsewhere, and for a code a program can exit with
+/// (`ExitProcess` takes any, but Oska's take 0 to 255).
+pub fn windows_exception(code: i32) -> Option<u32> {
+    let code = code as u32;
+    let fault = code & 0xC000_0000 == 0xC000_0000 || code == 0x8000_0003;
+    (cfg!(windows) && fault).then_some(code)
 }
 
 /// The host's signals a native process may die of, by number: the name,
@@ -306,7 +344,8 @@ impl Executable {
     pub fn create(bytes: &[u8]) -> std::io::Result<Executable> {
         let dir = private_dir()?;
         let exe = Executable {
-            path: dir.join("program"),
+            // Windows runs a file by its extension.
+            path: dir.join(format!("program{}", std::env::consts::EXE_SUFFIX)),
             dir,
         };
         let mut options = std::fs::OpenOptions::new();

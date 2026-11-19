@@ -1,11 +1,16 @@
 //! What a native program's buffered stdout does when the program cannot
 //! end normally (ticket #143): a failed flush at exit is the program's
 //! `IoError`, as the interpreter's unbuffered write is, and a fault
-//! signal still shows what the program printed before its report.
+//! signal still shows what the program printed before its report. On
+//! Windows, which has no signals, a stack overflow is an exception the
+//! process ends with (#179).
 
-#![cfg(all(
-    any(target_os = "linux", target_os = "macos"),
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        any(target_os = "linux", target_os = "macos"),
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(windows, target_arch = "x86_64")
 ))]
 
 mod differential;
@@ -98,12 +103,14 @@ fn a_closed_pipe_found_by_the_final_flush_stays_quiet() {
 
 /// The report the runtime writes to stderr when the process dies of the
 /// fault signal `number`, `name`.
+#[cfg(unix)]
 fn fault_report(number: i32, name: &str) -> String {
     format!("error: the native program faulted with signal {number} ({name})\n")
 }
 
 /// `oskac run`'s report (`E0392`) of a native program killed by the
 /// fault signal `number`, `name`.
+#[cfg(unix)]
 fn run_e0392(number: i32, name: &str) -> String {
     format!(
         "error[E0392]: the native program was killed by signal {number} ({name}): a fault in \
@@ -120,20 +127,86 @@ const OVERFLOW_ITEMS: &str = "enum Chain {\n    Link(Int, Chain),\n    End,\n}\n
      while i < 5000000 {\n        c = Chain.Link(i, c)\n        i = i + 1\n    }\n    c\n}\n";
 
 /// `SIGBUS`'s number: the one fault signal whose number differs.
+#[cfg(unix)]
 const SIGBUS: i32 = if cfg!(target_os = "macos") { 10 } else { 7 };
 
 /// The signal a stack overflow raises: an access to the guard region
 /// below `main`'s stack, which Linux reports as `SIGSEGV` and macOS, as
 /// a protection fault, as `SIGBUS`.
+#[cfg(unix)]
 const OVERFLOW_SIGNAL: (i32, &str) = if cfg!(target_os = "macos") {
     (SIGBUS, "SIGBUS")
 } else {
     (11, "SIGSEGV")
 };
 
+/// `STATUS_STACK_OVERFLOW`: the exception a stack overflow raises on
+/// Windows, and the code the process ends with.
+#[cfg(windows)]
+const STACK_OVERFLOW: u32 = 0xC000_00FD;
+
+/// What the runtime writes to stderr when a stack overflow ends the
+/// process: the signal's report, or on Windows the exception's.
+fn overflow_report() -> String {
+    #[cfg(unix)]
+    let (number, name) = OVERFLOW_SIGNAL;
+    #[cfg(unix)]
+    return fault_report(number, name);
+    #[cfg(windows)]
+    format!("error: the native program faulted with exception {STACK_OVERFLOW:#010X}\n")
+}
+
+/// `oskac run`'s report (`E0392`) of a native program a stack overflow
+/// ended.
+fn overflow_run_e0392() -> String {
+    #[cfg(unix)]
+    let (number, name) = OVERFLOW_SIGNAL;
+    #[cfg(unix)]
+    return run_e0392(number, name);
+    #[cfg(windows)]
+    format!(
+        "error[E0392]: the native program faulted with exception {STACK_OVERFLOW:#010X}: a fault \
+         in the native backend, not in the program; run it with `--interpret`\n"
+    )
+}
+
+/// How `oskac test` says a stack overflow ended a test process.
+fn overflow_ending() -> String {
+    #[cfg(unix)]
+    let (number, name) = OVERFLOW_SIGNAL;
+    #[cfg(unix)]
+    return format!("was killed by signal {number} ({name})");
+    #[cfg(windows)]
+    format!("faulted with exception {STACK_OVERFLOW:#010X}")
+}
+
+/// Whether `status` is a process's that a stack overflow ended.
+fn overflowed(status: std::process::ExitStatus) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal() == Some(OVERFLOW_SIGNAL.0)
+    }
+    #[cfg(windows)]
+    {
+        status.code() == Some(STACK_OVERFLOW as i32)
+    }
+}
+
+/// The code `oskac run` ends with after a stack overflow ended the
+/// program: the shell's `128 + n` after a signal, or on Windows the
+/// program's own.
+fn overflow_run_code() -> i32 {
+    #[cfg(unix)]
+    return 128 + OVERFLOW_SIGNAL.0;
+    #[cfg(windows)]
+    {
+        STACK_OVERFLOW as i32
+    }
+}
+
 #[test]
 fn an_executable_that_overflows_its_stack_shows_its_output_then_the_fault_report() {
-    use std::os::unix::process::ExitStatusExt;
     let src = format!(
         "{OVERFLOW_ITEMS}\nfn main(io: Stdout) -> Result<(), IoError> {{\n    \
          io.println(\"printed before the fault\")?\n    let c = dbg(chain())\n    Ok(())\n}}\n"
@@ -143,16 +216,12 @@ fn an_executable_that_overflows_its_stack_shows_its_output_then_the_fault_report
         .current_dir(&dir)
         .output()
         .expect("the program should run");
-    let (number, name) = OVERFLOW_SIGNAL;
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "printed before the fault\n"
     );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        fault_report(number, name)
-    );
-    assert_eq!(output.status.signal(), Some(number));
+    assert_eq!(String::from_utf8_lossy(&output.stderr), overflow_report());
+    assert!(overflowed(output.status), "{output:?}");
 }
 
 #[test]
@@ -172,12 +241,11 @@ fn output_printed_before_a_stack_overflow_shows_before_the_fault_report() {
         String::from_utf8_lossy(&output.stdout),
         "printed before the fault\n"
     );
-    let (number, name) = OVERFLOW_SIGNAL;
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
-        format!("{}{}", fault_report(number, name), run_e0392(number, name))
+        format!("{}{}", overflow_report(), overflow_run_e0392())
     );
-    assert_eq!(output.status.code(), Some(128 + number));
+    assert_eq!(output.status.code(), Some(overflow_run_code()));
 }
 
 #[test]
@@ -192,25 +260,23 @@ fn a_test_that_overflows_the_stack_is_still_reported_with_e0392() {
         .args(["test", case.target()])
         .output()
         .expect("oskac test should run");
-    let (number, name) = OVERFLOW_SIGNAL;
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains(&format!(
-            "error[E0392]: the native test process was killed by signal {number} ({name}): a \
-             fault in the native backend, not in the test; run the test with `--interpret`"
+            "error[E0392]: the native test process {}: a fault in the native backend, not in \
+             the test; run the test with `--interpret`",
+            overflow_ending()
         )),
         "{stdout}"
     );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        fault_report(number, name)
-    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), overflow_report());
     assert_eq!(output.status.code(), Some(1));
 }
 
 /// The fault signals: each is sent to a native program that printed a
 /// line, then waits in a loop. Sent from outside, it reaches the same
 /// handler a fault does.
+#[cfg(unix)]
 const FAULT_SIGNALS: [(i32, &str); 6] = [
     (4, "SIGILL"),
     (5, "SIGTRAP"),
@@ -220,6 +286,9 @@ const FAULT_SIGNALS: [(i32, &str); 6] = [
     (11, "SIGSEGV"),
 ];
 
+/// Unix only: nothing outside a Windows process can raise an exception
+/// in it.
+#[cfg(unix)]
 #[test]
 fn every_fault_signal_shows_the_output_then_a_report_and_kills_the_program() {
     use std::os::unix::process::ExitStatusExt;
