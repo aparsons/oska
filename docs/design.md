@@ -417,6 +417,23 @@ Recorded on 2026-11-15, `oskac` 0.3.0, by `bench.yml` on GitHub's runners (4 vCP
 
 The x86_64 runner is an Intel Xeon 6973P-C, the arm64 one a Neoverse N2. The x86_64 backend lands where the aarch64 one does: within a few milliseconds of it natively on every workload, and the speedups differ mostly because the interpreter is faster on the Xeon. Native times this short are whole milliseconds, so recursion's 118x against 83x is 4 ms against 6 ms, not a real gap.
 
+#### macOS
+
+Recorded on 2026-11-19, `oskac` 0.4.0, by `bench.yml` on GitHub's macOS runners for the two macOS backends (#173) ([Apple silicon run](https://github.com/aparsons/oska/actions/runs/44430250794/job/135245488259), [Intel run](https://github.com/aparsons/oska/actions/runs/44430250794/job/135245488815)). The Apple silicon runner is a virtual M1 with 3 cores, the Intel one an i7-8700B with 4:
+
+| Workload | Apple silicon interpreter | Apple silicon native | Apple silicon speedup | Intel interpreter | Intel native | Intel speedup |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| loop | 465 ms | 9 ms | 52x | 1537 ms | 43 ms | 36x |
+| text | 153 ms | 8 ms | 19x | 315 ms | 9 ms | 35x |
+| bulk text | 19 ms | 15 ms | 1.3x | 30 ms | 44 ms | 0.7x |
+| lists | 516 ms | 10 ms | 52x | 1131 ms | 31 ms | 37x |
+| recursion | 480 ms | 7 ms | 69x | 1212 ms | 9 ms | 135x |
+| site | 3605 ms | 158 ms | 23x | 9260 ms | 373 ms | 25x |
+
+- **Program logic** is native's on macOS as on Linux: 36 to 135 times faster than the interpreter on both Macs.
+- **Bulk text on the Intel Mac** is the one workload where native is slower than the interpreter, 44 ms against 30. The interpreter does `replace` and `trim` in Rust, so it is already as fast as the machine allows, and the native runtime's byte loops are slower than Rust's on this older processor. It is the workload already expected to be about 1x.
+- **The Intel runner is slow overall.** Its interpreter takes two to three times as long as on the Linux x86_64 runner, so compare the speedups, not the times, between machines. The macOS figures include each call into `libSystem`, where Linux makes the system call directly. The site, which writes many files, still lands within the Linux runners' 18x to 24x.
+
 ### Values
 
 - Values are reference-counted. Mutating a `var` copies the value first if it is shared ([ADR 0001](adr/0001-value-semantics-with-reference-counting.md)).
