@@ -1,0 +1,11 @@
+// The grant lists only `main`, with `Stdout`. The snippet adds a helper
+// that reaches `NetConnect`, a kind no grant entry covers: the program
+// goes past its grant although `main` did not widen.
+
+fn fetch(net: NetConnect) -> Result<Connection, IoError> {
+    net.connect("example.com", 443)
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("ran")
+}

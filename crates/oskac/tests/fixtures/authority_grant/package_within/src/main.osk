@@ -1,0 +1,5 @@
+// A package within its grant, which names its functions by module.
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("ran")
+}
