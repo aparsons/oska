@@ -1,0 +1,6 @@
+// The snippet does not check: nothing is compared with the grant, which
+// is never read, and nothing runs.
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    io.println(missing)
+}

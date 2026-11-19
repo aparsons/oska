@@ -1,5 +1,4 @@
 exit: 3
 --- stdout
 --- stderr
-{"authority_diff":{"grant": "<grant>","grant_oskac": null,"widened": [],"narrowed": [],"became_impure": [],"added": [{"function":"fetch","authority":["NetConnect"],"pure":false,"new_kinds":["NetConnect"]}],"removed": [],"new_audit_sites": [],"removed_audit_sites": [],"new_attenuations": [],"removed_attenuations": [],"fails": true},"verdict":"widened"}
-error: authority goes past the grant <grant>: a function gained authority or became impure, an audit site was added, or the program reaches a new kind; a grant is set by whoever runs the code, and oskac never updates it; the program was not run
+{"authority_diff":{"grant": "<grant>","grant_oskac": null,"widened": [],"narrowed": [],"became_impure": [],"added": [{"function":"fetch","authority":["NetConnect"],"pure":false,"new_kinds":["NetConnect"]}],"removed": [],"new_audit_sites": [],"removed_audit_sites": [],"new_attenuations": [],"removed_attenuations": [],"fails": true},"verdict":"widened","error":"authority goes past the grant <grant>: a function gained authority or became impure, an audit site was added, or the program reaches a new kind; a grant is set by whoever runs the code, and oskac never updates it; the program was not run"}

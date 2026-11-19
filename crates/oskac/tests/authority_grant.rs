@@ -134,16 +134,22 @@ impl Case {
         }
     }
 
-    /// One of the grant's own cases.
+    /// One of the grant's own cases: its `program.osk`, or the case
+    /// directory as a package when it has an `oska.toml`.
     fn own(case: &str) -> Case {
         let dir = scratch_dir(case);
         let grant = dir.join("grant.json");
-        std::fs::copy(root().join(FIXTURES).join(case).join("grant.json"), &grant)
-            .expect("should copy the case's grant");
+        let fixture = root().join(FIXTURES).join(case);
+        std::fs::copy(fixture.join("grant.json"), &grant).expect("should copy the case's grant");
+        let program = if fixture.join("oska.toml").exists() {
+            format!("{FIXTURES}/{case}")
+        } else {
+            format!("{FIXTURES}/{case}/program.osk")
+        };
         Case {
             dir,
             grant,
-            program: format!("{FIXTURES}/{case}/program.osk"),
+            program,
         }
     }
 
@@ -270,6 +276,11 @@ fn run_refuses_a_program_past_its_grant_and_runs_nothing() {
     );
     let json = case.on("run", &["--format=json"]);
     assert_golden(&json, "run_main_only_helper_new_kind.json");
+    // One JSON object on one line, the error inside it.
+    let (_, stderr) = parts(&json);
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert!(stderr.starts_with("{\"authority_diff\":{"), "{stderr}");
+    assert!(stderr.ends_with("\"verdict\":\"widened\",\"error\":\"authority goes past the grant <grant>: a function gained authority or became impure, an audit site was added, or the program reaches a new kind; a grant is set by whoever runs the code, and oskac never updates it; the program was not run\"}\n"), "{stderr}");
     assert!(
         json.starts_with("exit: 3\n--- stdout\n--- stderr\n"),
         "{json}"
@@ -309,31 +320,86 @@ fn run_dash_with_a_grant_checks_the_snippet_on_stdin_against_it() {
 }
 
 #[test]
-fn run_with_a_grant_refuses_a_package_past_it() {
-    let case = Case::own("main_only_helper_new_kind");
-    let package = scratch_dir("package");
-    std::fs::create_dir_all(package.join("src")).expect("should make the package");
-    std::fs::write(
-        package.join("oska.toml"),
-        "[package]\nname = \"snippet\"\nversion = \"0.1.0\"\n",
-    )
-    .expect("should write the manifest");
-    std::fs::copy(root().join(&case.program), package.join("src/main.osk"))
-        .expect("should copy the program");
-    let flag = case.flag();
-    let dir = package.path().display().to_string();
-    let output = oskac(&case.dir, &["run", &dir, &flag]);
-    let shown = shown(&output, &case.grant);
+fn check_and_run_with_a_grant_refuse_a_package_past_it() {
+    let case = Case::own("package_past");
+    assert_eq!(case.golden_check("package_past"), "exit: 3");
+    for run in [case.on("run", &[]), case.on("run", &["--interpret"])] {
+        assert!(
+            run.starts_with("exit: 3\n--- stdout\n--- stderr\n"),
+            "{run}"
+        );
+        // A package's functions are named by module, as in its report.
+        assert!(run.contains("added fn pkg.main.fetch: NetConnect"), "{run}");
+    }
+}
+
+#[test]
+fn check_and_run_with_a_grant_pass_a_package_within_it() {
+    let case = Case::own("package_within");
+    assert_eq!(case.golden_check("package_within"), "exit: 0");
+    for run in [case.on("run", &[]), case.on("run", &["--interpret"])] {
+        assert_eq!(run, "exit: 0\n--- stdout\nran\n--- stderr\n");
+    }
+}
+
+#[test]
+fn an_unchanged_program_is_within_its_grant_and_says_so() {
+    let case = Case::own("within");
+    assert_eq!(case.golden_check("within"), "exit: 0");
+    let shown = case.on("check", &[]);
+    let (stdout, _) = parts(&shown);
     assert!(
-        shown.starts_with("exit: 3\n--- stdout\n--- stderr\n"),
-        "{shown}"
+        stdout.ends_with("grant: <grant>\n  no change in authority\n"),
+        "{stdout}"
     );
-    // A package's functions are named by module, as in its baseline.
-    assert!(
-        shown.contains("added fn pkg.main.fetch: NetConnect"),
-        "{shown}"
+}
+
+#[test]
+fn a_saved_check_report_serves_as_the_grant() {
+    let case = Case::own("within");
+    let dir = case.dir.path().to_path_buf();
+    let report = oskac(&dir, &["check", &case.program, "--format=json"]);
+    assert!(report.status.success());
+    std::fs::write(&case.grant, &report.stdout).expect("should save the report");
+    let checked = case.on("check", &["--format=json"]);
+    assert!(checked.starts_with("exit: 0\n"), "{checked}");
+    // A report says nothing of which oskac wrote it.
+    assert!(checked.contains("\"grant_oskac\": null,"), "{checked}");
+    assert_eq!(
+        case.on("run", &[]),
+        "exit: 0\n--- stdout\nran\n--- stderr\n"
     );
-    assert!(!shown.contains("--- stdout\nran"), "{shown}");
+
+    // A snippet past what the saved report allows is refused.
+    let past = Case::own("main_only_helper_new_kind");
+    std::fs::write(&past.grant, &report.stdout).expect("should save the report");
+    assert!(past.on("check", &[]).starts_with("exit: 3\n"));
+    assert!(past
+        .on("run", &[])
+        .starts_with("exit: 3\n--- stdout\n--- stderr\n"));
+}
+
+/// Security (fail closed): a program with diagnostics is never run, and
+/// its grant is never read, on `check` or on `run`, on either backend.
+#[test]
+fn a_program_with_diagnostics_is_compared_with_nothing_and_never_runs() {
+    let case = Case::own("diagnostics");
+    // Even a grant that cannot be read is never reached.
+    std::fs::remove_file(&case.grant).expect("should remove the grant");
+    assert_eq!(case.golden_check("diagnostics"), "exit: 1");
+    let run = case.on("run", &[]);
+    assert_golden(&run, "run_diagnostics.txt");
+    assert_eq!(case.on("run", &["--interpret"]), run);
+    let json = case.on("run", &["--format=json"]);
+    assert_golden(&json, "run_diagnostics.json");
+    for shown in [&run, &json] {
+        let (stdout, stderr) = parts(shown);
+        assert!(shown.starts_with("exit: 1\n"), "{shown}");
+        assert_eq!(stdout, "");
+        assert!(stderr.contains("E0"), "{shown}");
+        // The grant, which does not exist, was never read.
+        assert!(!stderr.contains("<grant>"), "{shown}");
+    }
 }
 
 /// Security: a snippet that vouches for text it did not write fails a

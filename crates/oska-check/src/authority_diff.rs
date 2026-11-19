@@ -458,12 +458,13 @@ fn capability_name(kind: &TypeKind) -> Option<&str> {
 
 // ---- The diff --------------------------------------------------------------------
 
-/// How the current record differs from the baseline. Every list is
-/// sorted by function name.
+/// How the current record differs from the record it is compared with,
+/// a baseline or a grant. Every list is sorted by function name.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AuthorityDiff {
-    /// The `oskac` version that wrote the baseline, when it says.
-    pub baseline_oskac: Option<String>,
+    /// The `oskac` version that wrote the baseline or grant compared
+    /// with, when it says.
+    pub against_oskac: Option<String>,
     /// Functions whose authority gained entries no old entry covers.
     pub widened: Vec<Change>,
     /// Functions that lost entries, or gained only entries an old one
@@ -506,16 +507,16 @@ pub fn diff(
     diff_against(Against::Baseline, baseline, current)
 }
 
-/// [`diff`], with `baseline` read as what `against` names, for its
-/// errors' words.
+/// Compare `current` with `against`, a baseline or a grant as `kind`
+/// says, by [`diff`]'s rules; `kind` only words the errors.
 pub fn diff_against(
-    against: Against,
-    baseline: &AuthorityRecord,
+    kind: Against,
+    against: &AuthorityRecord,
     current: &AuthorityRecord,
 ) -> Result<AuthorityDiff, String> {
-    unique_names(baseline).map_err(|e| format!("in the {}, {e}", against.word()))?;
+    unique_names(against).map_err(|e| format!("in the {}, {e}", kind.word()))?;
     unique_names(current)?;
-    let old: BTreeMap<&str, &FunctionRecord> = baseline
+    let old: BTreeMap<&str, &FunctionRecord> = against
         .functions
         .iter()
         .map(|f| (f.name.as_str(), f))
@@ -525,9 +526,9 @@ pub fn diff_against(
         .iter()
         .map(|f| (f.name.as_str(), f))
         .collect();
-    let reach = baseline.reach();
+    let reach = against.reach();
     let mut out = AuthorityDiff {
-        baseline_oskac: baseline.oskac.clone(),
+        against_oskac: against.oskac.clone(),
         ..AuthorityDiff::default()
     };
     for (name, now) in &new {
@@ -576,9 +577,9 @@ pub fn diff_against(
         .filter(|(name, _)| !new.contains_key(*name))
         .map(|(_, f)| (*f).clone())
         .collect();
-    (out.new_audit_sites, out.removed_audit_sites) = counted(&baseline.audit, &current.audit);
+    (out.new_audit_sites, out.removed_audit_sites) = counted(&against.audit, &current.audit);
     (out.new_attenuations, out.removed_attenuations) =
-        counted(&baseline.attenuations, &current.attenuations);
+        counted(&against.attenuations, &current.attenuations);
     Ok(out)
 }
 
@@ -747,7 +748,7 @@ impl AuthorityDiff {
         ];
         let word = against.word();
         let mut out = format!("{{\n    \"{word}\": \"{}\",\n", json_escape(file));
-        match &self.baseline_oskac {
+        match &self.against_oskac {
             Some(version) => out.push_str(&format!(
                 "    \"{word}_oskac\": \"{}\",\n",
                 json_escape(version)
@@ -852,7 +853,7 @@ impl AuthorityDiff {
             ));
         }
         if let Some(version) = self
-            .baseline_oskac
+            .against_oskac
             .as_deref()
             .filter(|v| *v != oskac_version)
         {

@@ -189,7 +189,7 @@ An **authority grant** ([glossary](../../GLOSSARY.md)) is the most authority an 
 
 The output is the baseline's, with `grant` in place of `baseline`: a `grant:` section in the human output, and `"grant": "<file>"` and `grant_oskac` in place of `baseline` and `baseline_oskac` in the JSON `authority_diff`.
 
-`oskac run --grant=<file>` checks the program against the grant before it runs anything, on either backend, and for a file, a package or a module on [standard input](#source-from-standard-input) (`oskac run - --grant=grant.json`). A program past its grant is not run: the exit code is 3, and the diff goes to standard error, as the human `grant:` section, or with `--format=json` as one line, `{"authority_diff":{...},"verdict":"widened"}`, followed by the `error:` line.
+`oskac run --grant=<file>` checks the program against the grant before it runs anything, on either backend, and for a file, a package or a module on [standard input](#source-from-standard-input) (`oskac run - --grant=grant.json`). The program is checked once, and that check decides both the comparison and what runs. A program past its grant is not run: the exit code is 3, and standard error has the human `grant:` section followed by the `error:` line, or with `--format=json` one JSON object on one line, `{"authority_diff":{...},"verdict":"widened","error":"..."}`, with the error's text in `error`.
 
 ## `oskac run`
 
@@ -407,7 +407,7 @@ A parse error is reported alone, with empty `functions`, `audit` and `attenuatio
 
 ### `run --format=json`
 
-The program's output is unchanged. Each diagnostic or panic is one JSON object per line on standard error. A program refused for going past its `--grant` prints its diff the same way, as one `{"authority_diff":{...},"verdict":"widened"}` line (see [authority grant](#authority-grant)).
+The program's output is unchanged. Each diagnostic or panic is one JSON object per line on standard error. A program refused for going past its `--grant` prints its diff and its error the same way, as one `{"authority_diff":{...},"verdict":"widened","error":"..."}` line (see [authority grant](#authority-grant)).
 
 ### `fix --format=json`
 

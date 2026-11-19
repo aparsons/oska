@@ -1,0 +1,8 @@
+{
+  "format": 1,
+  "functions": [
+    {"name":"pkg.main.main","authority":["Stdout"],"pure":false}
+  ],
+  "audit": [],
+  "attenuations": []
+}
