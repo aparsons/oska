@@ -103,3 +103,30 @@ pub fn output_of(command: &mut Command) -> std::process::Output {
     }
     command.output().expect("the command should run")
 }
+
+/// [`output_of`], with `input` written to the command's standard input,
+/// which is then closed. A command that exits before it reads all of
+/// `input` is not an error.
+pub fn output_with_input(command: &mut Command, input: &[u8]) -> std::process::Output {
+    use std::io::Write;
+    use std::process::Stdio;
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for _ in 0..50 {
+        match command.spawn() {
+            Err(e) if e.raw_os_error() == Some(26) => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            result => {
+                let mut child = result.expect("the command should start");
+                let mut stdin = child.stdin.take().expect("a stdin pipe");
+                let _ = stdin.write_all(input);
+                drop(stdin);
+                return child.wait_with_output().expect("the command should finish");
+            }
+        }
+    }
+    panic!("the executable stayed busy");
+}

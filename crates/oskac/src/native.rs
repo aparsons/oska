@@ -86,6 +86,8 @@ pub struct Invocation<'a> {
     pub args: &'a [String],
     /// Whether reports are JSON (`--format=json`).
     pub json: bool,
+    /// Whether the program's standard input is closed (`oskac run -`).
+    pub stdin_closed: bool,
 }
 
 /// `oskac run`, natively: compile `program` for `target`, the host's, run
@@ -100,7 +102,12 @@ pub fn run(
     invocation: Invocation,
     cached: &Cached,
 ) -> Run {
-    let Invocation { argv0, args, json } = invocation;
+    let Invocation {
+        argv0,
+        args,
+        json,
+        stdin_closed,
+    } = invocation;
     // A human report is placed in the source by the executable itself; a
     // JSON one is read back unplaced and placed here, as the
     // interpreter's panic is.
@@ -130,6 +137,9 @@ pub fn run(
     let _ = argv0;
     if json {
         command.stderr(Stdio::piped());
+    }
+    if stdin_closed {
+        command.stdin(Stdio::null());
     }
     let mut child = match command.spawn() {
         Ok(child) => child,
