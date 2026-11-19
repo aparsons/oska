@@ -16,15 +16,20 @@
 //! ```
 //!
 //! They run on aarch64 and x86_64 Linux and macOS (tickets #171,
-//! #173).
+//! #173), and on x86_64 Windows (#178), where a symlink is a Windows
+//! symlink and the tests that need a FIFO, a mode, `/` or `/proc` are
+//! left out.
 //!
 //! Symlinks, hard links and FIFOs are planted by a setup function; the
 //! harness records a symlink by its target and never follows one, so a
 //! write through one that escaped would show in the tree.
 
-#![cfg(all(
-    any(target_os = "linux", target_os = "macos"),
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        any(target_os = "linux", target_os = "macos"),
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(windows, target_arch = "x86_64")
 ))]
 
 mod differential;
@@ -95,9 +100,46 @@ fn printed(case: &Case) -> String {
     outcome.stdout
 }
 
-/// A symlink at `dir/at` to `target`.
-fn link(dir: &Path, at: &str, target: &str) {
-    std::os::unix::fs::symlink(target, dir.join(at)).expect("create a symlink");
+/// A symlink at `dir/at` to `target`, which is relative to the link's
+/// directory or absolute. On Windows it is a directory symlink when
+/// `target` is a directory, and its `/`s are backslashes.
+fn link(dir: &Path, at: &str, target: impl AsRef<Path>) {
+    let target = target.as_ref();
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, dir.join(at));
+    #[cfg(windows)]
+    let made = {
+        let at = dir.join(at);
+        let target = std::path::PathBuf::from(target.to_string_lossy().replace('/', "\\"));
+        let resolved = at.parent().expect("a parent").join(&target);
+        match resolved.is_dir() {
+            true => std::os::windows::fs::symlink_dir(&target, &at),
+            false => std::os::windows::fs::symlink_file(&target, &at),
+        }
+    };
+    made.expect("create a symlink");
+}
+
+/// `path`, a root's trusted path shown in a message, as this platform
+/// shows it: with `\\` for `/` on Windows.
+fn native(path: &str) -> String {
+    match cfg!(windows) {
+        true => path.replace('/', "\\"),
+        false => path.to_string(),
+    }
+}
+
+/// `expected` as this platform words it. Linux and macOS cannot tell a
+/// symlink met where a directory is needed from anything else that is
+/// not a directory; Windows can, and says it is a symlink.
+fn worded(expected: &str) -> String {
+    match cfg!(windows) {
+        true => expected.replace(
+            "is a symlink or not a directory, and confined access never follows a symlink",
+            "is a symlink, and confined access never follows one",
+        ),
+        false => expected.to_string(),
+    }
 }
 
 // ---- Reading ------------------------------------------------------------------
@@ -162,6 +204,7 @@ fn a_symlink_at_any_component_is_refused_dangling_or_pointing_inside() {
     );
     assert_eq!(
         seen,
+        worded(
         "REFUSED: `out` is a symlink or not a directory, and confined access never follows a symlink\n\
          REFUSED: `sub/out` is a symlink or not a directory, and confined access never follows a symlink\n\
          REFUSED: `sub/escape.txt` is a symlink, and confined access never follows one\n\
@@ -170,6 +213,7 @@ fn a_symlink_at_any_component_is_refused_dangling_or_pointing_inside() {
          REFUSED: `alias.txt` is a symlink, and confined access never follows one\n\
          REFUSED: `alias` is a symlink or not a directory, and confined access never follows a symlink\n\
          REFUSED: `relative.txt` is a symlink, and confined access never follows one\n"
+        )
     );
 }
 
@@ -257,7 +301,10 @@ fn a_root_is_trusted_text_but_its_last_component_is_never_a_symlink() {
     );
     assert_eq!(
         lines[18],
-        "REFUSED: cannot restrict to `root/inside.txt/x`: `root/inside.txt`: not a directory"
+        format!(
+            "REFUSED: cannot restrict to `root/inside.txt/x`: `{}`: not a directory",
+            native("root/inside.txt")
+        )
     );
     assert_eq!(
         lines[20],
@@ -267,6 +314,7 @@ fn a_root_is_trusted_text_but_its_last_component_is_never_a_symlink() {
     assert_eq!(lines[28], "nested text", "{seen}");
 }
 
+#[cfg(unix)]
 #[test]
 fn a_fifo_is_refused_rather_than_waited_on_and_a_directory_is_no_file() {
     let case = case(
@@ -666,7 +714,10 @@ fn a_broken_file_or_directory_root_fails_every_operation() {
     let lines: Vec<&str> = outcome.stdout.lines().collect();
     assert_eq!(
         lines[0],
-        "REFUSED: cannot restrict to `root/nodir/x.txt`: `root/nodir`: not found"
+        format!(
+            "REFUSED: cannot restrict to `root/nodir/x.txt`: `{}`: not found",
+            native("root/nodir")
+        )
     );
     assert_eq!(lines[2], "REFUSED: `sub` is not a regular file");
     assert_eq!(
@@ -718,6 +769,7 @@ fn a_file_with_more_than_one_hard_link_is_never_read_or_emptied() {
 
 // ---- The whole filesystem (`whole_filesystem.rs`) ------------------------------
 
+#[cfg(unix)]
 #[test]
 fn the_whole_filesystem_is_still_confined_by_the_path_rules() {
     let case = case(
@@ -737,6 +789,7 @@ fn the_whole_filesystem_is_still_confined_by_the_path_rules() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn restrict_to_slash_reads_and_writes_a_real_file() {
     // Natively only: the path from `/` names the case's own directory,
@@ -857,6 +910,9 @@ fn a_file_swapped_for_a_symlink_after_the_capability_was_made_is_refused() {
     assert!(!dir.join("outside/new").exists());
 }
 
+/// Not on Windows, which refuses to move a directory while a handle is
+/// open on anything in it, as `sub` is here.
+#[cfg(unix)]
 #[test]
 fn a_capability_whose_root_was_swapped_for_a_symlink_keeps_its_own_directory() {
     let case = |side: &str| {
@@ -913,6 +969,22 @@ fn a_nul_byte_anywhere_in_a_path_is_refused() {
     io.println(shown(read.restrict_to_file("ro\0ot/inside.txt").read_to_string()))?"#,
     );
     let outcome = assert_same(&case);
+    if cfg!(windows) {
+        // Windows refuses a name holding NUL as no single file name, and
+        // a root's path holding one in Rust's words.
+        assert_all_refused(&outcome.stdout, 11, "");
+        let lines: Vec<&str> = outcome.stdout.lines().collect();
+        assert_eq!(
+            lines[0],
+            "REFUSED: `in\0side.txt` is not a single file name"
+        );
+        assert_eq!(
+            lines[10],
+            "REFUSED: cannot restrict to `ro\0ot/inside.txt`: `ro\0ot`: \
+             strings passed to WinAPI cannot contain NULs"
+        );
+        return;
+    }
     assert_all_refused(
         &outcome.stdout,
         11,
@@ -1015,10 +1087,10 @@ fn a_root_reached_through_chained_symlinks_and_dot_dot_is_its_real_directory() {
     .with_setup(|dir| {
         std::fs::create_dir_all(dir.join("real/sub")).expect("mkdir");
         std::fs::write(dir.join("real/file.txt"), "x").expect("write");
-        std::os::unix::fs::symlink(dir.join("real"), dir.join("link")).expect("symlink");
-        std::os::unix::fs::symlink("link", dir.join("chain")).expect("symlink");
+        link(dir, "link", dir.join("real"));
+        link(dir, "chain", "link");
         std::fs::create_dir(dir.join("up")).expect("mkdir");
-        std::os::unix::fs::symlink("../real", dir.join("up/real")).expect("symlink");
+        link(dir, "up/real", "../real");
     });
     // The absolute symlink differs between the two trees, so only what
     // the programs printed is compared.
@@ -1078,12 +1150,14 @@ fn a_root_is_named_by_its_canonical_path_shown_lossily() {
 }
 
 /// The directory listing the process's own open descriptors.
+#[cfg(unix)]
 const FD_DIR: &str = if cfg!(target_os = "macos") {
     "/dev/fd"
 } else {
     "/proc/self/fd"
 };
 
+#[cfg(unix)]
 #[test]
 fn no_handle_is_left_open_on_any_path() {
     // Natively only: the program counts its own open descriptors.
@@ -1145,6 +1219,7 @@ fn no_handle_is_left_open_on_any_path() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn a_file_or_directory_without_permission_fails_with_the_systems_message() {
     let src = program(
@@ -1194,6 +1269,7 @@ fn a_file_or_directory_without_permission_fails_with_the_systems_message() {
     );
 }
 
+#[cfg(unix)]
 /// Set the mode of `root/locked` and `root/secret.txt` beneath `dir`,
 /// making them first.
 fn lock(dir: &Path, mode: u32) {
@@ -1238,11 +1314,13 @@ fn a_closure_keeps_the_directory_capability_it_captured() {
         .with_setup(|dir| link(dir, "root/sub/out", "../../outside"));
     assert_eq!(
         printed(&case),
-        "nested text\n\
-         REFUSED: `../inside.txt` leads outside the capability's root\n\
-         REFUSED: `out` is a symlink or not a directory, and confined access never follows a symlink\n\
-         nested text\nnested text\nnested text\n\
-         nested.txt,out\n"
+        worded(
+            "nested text\n\
+             REFUSED: `../inside.txt` leads outside the capability's root\n\
+             REFUSED: `out` is a symlink or not a directory, and confined access never follows a symlink\n\
+             nested text\nnested text\nnested text\n\
+             nested.txt,out\n"
+        )
     );
 }
 

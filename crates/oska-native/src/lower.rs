@@ -1812,6 +1812,7 @@ impl<'l, 'p> Body<'l, 'p> {
         let failed = match import.fails {
             Fails::MinusOne => -1,
             Fails::Null | Fails::NullKeepsErrno | Fails::Zero => 0,
+            Fails::Status => return self.status_error(dst),
             Fails::Never => return dst,
         };
         let done = self.label();
@@ -1848,6 +1849,41 @@ impl<'l, 'p> Body<'l, 'p> {
         });
         self.push(Inst::Label(done));
         dst
+    }
+
+    /// `status`, an `ntdll` function's `NTSTATUS`, as `std.rt` takes a
+    /// result: as it is unless negative, else `-RtlNtStatusToDosError`
+    /// of it (ADR 0020).
+    fn status_error(&mut self, status: Temp) -> Temp {
+        let platform = self.lowering.target.platform();
+        let slot = platform
+            .slot(&intrinsics::NT_STATUS_TO_ERROR)
+            .unwrap_or_default();
+        let done = self.label();
+        let zero = self.constant(0);
+        self.push(Inst::Branch {
+            cond: Cond::Ge,
+            lhs: status,
+            rhs: zero,
+            target: done,
+        });
+        let code = self.temp();
+        self.push(Inst::LibCall {
+            dst: code,
+            import: slot,
+            args: vec![status],
+            fixed: 1,
+            wide: false,
+        });
+        let zero = self.constant(0);
+        self.push(Inst::Binary {
+            op: BinOp::Sub,
+            dst: status,
+            lhs: zero,
+            rhs: code,
+        });
+        self.push(Inst::Label(done));
+        status
     }
 
     /// The address of the thread's `errno`, or on Windows its last
