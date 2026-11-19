@@ -227,7 +227,7 @@ while read -r broken good flag invariant; do
   else
     bad "$broken must fail TLC with $invariant violated" "its .cfg expects '$want'"
   fi
-  if grep -qE "^[[:space:]]*(INVARIANTS?[[:space:]]+)?$invariant[[:space:]]*\$" "$tla/$broken.cfg"; then
+  if grep -qE "^[[:space:]]*(INVARIANTS?[[:space:]]+)?${invariant}[[:space:]]*\$" "$tla/$broken.cfg"; then
     ok "$broken.cfg checks $invariant"
   else
     bad "$broken.cfg checks $invariant" "$invariant is not listed as an invariant"
