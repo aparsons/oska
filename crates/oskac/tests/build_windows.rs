@@ -469,11 +469,12 @@ const ARGS: [&str; 4] = [
 fn small_programs_run_on_windows_as_on_the_interpreter() {
     for (name, src) in PROGRAMS {
         let dir = workspace(&format!("run_{name}"), &[("main.osk", src)]);
-        let mut run = vec!["run", "--interpret", "main.osk"];
+        let mut run = vec!["run", "--interpret", "main.osk", "--"];
         run.extend(ARGS);
         let interpreted = oskac(&dir, &run);
+        // 2 is a usage error: the program never ran.
         assert!(
-            interpreted.status.code().is_some(),
+            interpreted.status.code().is_some_and(|code| code != 2),
             "{name}: the interpreter: {interpreted:?}"
         );
         let built = oskac(
