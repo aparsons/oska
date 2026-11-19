@@ -1,0 +1,6 @@
+$ oskac build greeter
+exit: 0
+--- stdout
+--- stderr
+--- written
+greeter.exe

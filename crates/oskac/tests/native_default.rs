@@ -2,7 +2,8 @@
 //! and #173): on aarch64 and x86_64 Linux and macOS, `oskac run` and
 //! `oskac test` compile the program natively for the host into a private
 //! temporary directory and run it there, and `--interpret` selects the
-//! interpreter. Every other host keeps the interpreter.
+//! interpreter; on x86_64 Windows too (#179). Every other host keeps the
+//! interpreter.
 //!
 //! The golden cases (`tests/golden/native_default/<case>.txt`) are the
 //! same on every host: on the native hosts they show the native run, and
@@ -19,9 +20,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 /// Whether this host runs programs natively by default.
-const NATIVE_HOST: bool = cfg!(all(
-    any(target_os = "linux", target_os = "macos"),
-    any(target_arch = "aarch64", target_arch = "x86_64")
+const NATIVE_HOST: bool = cfg!(any(
+    all(
+        any(target_os = "linux", target_os = "macos"),
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(windows, target_arch = "x86_64")
 ));
 
 const MANIFEST: &str = "[package]\nname = \"greeter\"\nversion = \"0.1.0\"\n";
@@ -66,6 +70,22 @@ fn workspace(case: &str, files: &[(&str, &str)]) -> PathBuf {
     dir
 }
 
+/// On Windows, a native run's `args.get(0)` is its temporary executable,
+/// not the path the user named, as Rust cannot set it there (#475): the
+/// first line `[...\program.exe]` becomes `[<path>]`, the path after
+/// `run`, so the rest of the arguments still meet the golden.
+fn windows_argv0(stdout: &str, args: &[&str]) -> String {
+    let named = args.iter().skip_while(|a| **a != "run").nth(1);
+    match (cfg!(windows), named, stdout.split_once('\n')) {
+        (true, Some(named), Some((first, rest)))
+            if first.starts_with('[') && first.ends_with("\\program.exe]") =>
+        {
+            format!("[{named}]\n{rest}")
+        }
+        _ => stdout.to_string(),
+    }
+}
+
 /// Every entry under `dir`, by relative path, directories with a `/`.
 fn entries(dir: &Path, prefix: &str, out: &mut BTreeSet<String>) {
     for entry in std::fs::read_dir(dir).expect("should list the directory") {
@@ -87,6 +107,8 @@ fn oskac(dir: &Path, args: &[&str]) -> Output {
         .args(args)
         .current_dir(dir)
         .env("TMPDIR", dir.join("tmp"))
+        .env("TMP", dir.join("tmp"))
+        .env("TEMP", dir.join("tmp"))
         .output()
         .expect("oskac should run")
 }
@@ -109,7 +131,7 @@ fn assert_golden(case: &str, files: &[(&str, &str)], args: &[&str]) {
             .status
             .code()
             .map_or("signal".to_string(), |c| c.to_string()),
-        String::from_utf8_lossy(&output.stdout),
+        windows_argv0(&String::from_utf8_lossy(&output.stdout), args),
         without_handles(&String::from_utf8_lossy(&output.stderr)),
         written.iter().map(|w| format!("{w}\n")).collect::<String>(),
     );

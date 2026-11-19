@@ -813,6 +813,7 @@ fn test_executable(name: &str, src: &str) -> PathBuf {
 
 /// Other threads fork all the time, as parallel tests do, while this one
 /// writes executables and runs them: none may fail with `ETXTBSY` (#270).
+#[cfg(unix)]
 #[test]
 fn an_executable_written_while_other_threads_fork_still_runs() {
     use std::sync::atomic::{AtomicBool, Ordering};
