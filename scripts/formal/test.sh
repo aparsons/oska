@@ -2,7 +2,8 @@
 # Tests for the formal step (scripts/formal/run.sh) that need neither Lean nor
 # TLC: without the tools it skips (exit 3) outside CI and fails in CI; an
 # unfinished proof or a model with no .cfg fails before any tool is looked
-# for; a tla2tools.jar that is not the pinned one fails. Each case runs
+# for; a tla2tools.jar that is not the pinned one fails; a model broken on
+# purpose must fail TLC with the invariant it names. Each case runs
 # run.sh on a copy of formal/ with a PATH that holds only the basic
 # utilities it needs (and, where a case says so, stub tools), and an empty
 # cache, so the machine's own tools cannot leak in.
@@ -156,6 +157,61 @@ if [ "$rc" -eq 2 ]; then
 else
   bad "formal_scan_holes returns 2 when the scan fails" "returned $rc"
 fi
+
+# formal_tlc_verdict judges each TLC run. A model broken on purpose (an
+# expect-violation line in its .cfg) passes only when TLC finds that
+# invariant violated, so a model that cannot fail is caught. TLC exits 12
+# on a violated invariant.
+mkdir "$work/verdict"
+printf 'SPECIFICATION Spec\nINVARIANT Safe\n' >"$work/verdict/Good.cfg"
+printf '\\* expect-violation: Safe\nSPECIFICATION Spec\nINVARIANT Safe\n' >"$work/verdict/Bad.cfg"
+printf 'Model checking completed. No error has been found.\n' >"$work/verdict/pass.log"
+printf 'Error: Invariant Safe is violated.\n' >"$work/verdict/safe.log"
+printf 'Error: Invariant TypeOK is violated.\n' >"$work/verdict/other.log"
+printf 'Error: Parsing or semantic analysis failed.\n' >"$work/verdict/parse.log"
+# verdict CFG RC LOG WANT_STATUS PATTERN NAME
+verdict() {
+  status=0
+  out=$(formal_tlc_verdict M "$work/verdict/$1" "$2" "$work/verdict/$3" 2>&1) || status=$?
+  if [ "$status" -eq "$4" ] && grep -q "$5" <<<"$out"; then
+    ok "$6"
+  else
+    bad "$6" "status $status: $out"
+  fi
+}
+verdict Good.cfg 0 pass.log 0 '' "a model that must pass passes when TLC passes it"
+verdict Good.cfg 12 safe.log 1 'TLC failed on M (exit 12)' "a model that must pass fails when TLC fails it"
+verdict Bad.cfg 0 pass.log 1 'cannot fail' "a model broken on purpose that TLC passes fails the step"
+verdict Bad.cfg 12 safe.log 0 'fails as it must' "a model broken on purpose passes when TLC finds its invariant violated"
+verdict Bad.cfg 12 other.log 1 'not by finding Safe violated' "a model broken on purpose fails when TLC finds another invariant violated"
+verdict Bad.cfg 255 parse.log 1 'not by finding Safe violated' "a model broken on purpose fails when TLC cannot parse it"
+
+# The real models: the counts model with a count update that is not atomic
+# must fail TLC with a value freed while in use (#432), and each model
+# broken on purpose checks the invariant it expects violated.
+want=$(formal_expected_violation "$repo_root/formal/tla/SharedCountsRacy.cfg" 2>/dev/null) || want=
+if [ "$want" = NoUseAfterFree ]; then
+  ok "SharedCountsRacy must fail TLC with NoUseAfterFree violated"
+else
+  bad "SharedCountsRacy must fail TLC with NoUseAfterFree violated" "its .cfg expects '${want}'"
+fi
+for model in SharedCounts ScopedTasks; do
+  want=$(formal_expected_violation "$repo_root/formal/tla/$model.cfg" 2>/dev/null) || want=error
+  if [ -z "$want" ]; then
+    ok "$model must pass TLC"
+  else
+    bad "$model must pass TLC" "its .cfg expects '$want' violated"
+  fi
+done
+for cfg in "$repo_root"/formal/tla/*.cfg; do
+  want=$(formal_expected_violation "$cfg")
+  [ -n "$want" ] || continue
+  if grep -qE "^[[:space:]]*$want[[:space:]]*\$" "$cfg"; then
+    ok "$(basename "$cfg") checks $want, the invariant it expects violated"
+  else
+    bad "$(basename "$cfg") checks $want" "$want is not listed as an invariant"
+  fi
+done
 
 # check.sh's formal block refuses a skip in CI itself. It runs here with
 # step and skip_step stubbed and a run.sh that exits 3 (tools missing).

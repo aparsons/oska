@@ -49,3 +49,41 @@ formal_toolchain_matches() {
   printf '%s says %s, scripts/formal/pins.sh pins v%s\n' "$1" "${toolchain:-nothing}" "$lean_version" >&2
   return 1
 }
+
+# A model broken on purpose says in its .cfg which invariant TLC must find
+# violated, on a line of its own:
+#
+#   \* expect-violation: NoUseAfterFree
+#
+# formal_expected_violation CFG: prints that invariant's name, or nothing for
+# a model that must pass.
+formal_expected_violation() {
+  sed -n 's/^\\\* expect-violation: *\([A-Za-z_][A-Za-z0-9_]*\) *$/\1/p' "$1"
+}
+
+# formal_tlc_verdict MODEL CFG RC LOG: judges TLC's run on MODEL, which
+# exited RC and wrote LOG. A model that must pass passes only with exit 0.
+# A model with an expect-violation line passes only when TLC failed by
+# finding that invariant violated: if TLC passes it, the model cannot fail
+# and proves nothing. Returns 0 when the run is as expected, else 1, and
+# says why on stderr either way.
+formal_tlc_verdict() {
+  local model=$1 cfg=$2 rc=$3 log=$4 expected
+  expected=$(formal_expected_violation "$cfg") || return 1
+  if [ -z "$expected" ]; then
+    [ "$rc" -eq 0 ] && return 0
+    printf 'formal: TLC failed on %s (exit %s)\n' "$model" "$rc" >&2
+    return 1
+  fi
+  if [ "$rc" -eq 0 ]; then
+    printf 'formal: TLC passed %s, but %s says TLC must find %s violated; a model that cannot fail proves nothing\n' \
+      "$model" "$cfg" "$expected" >&2
+    return 1
+  fi
+  if grep -q "^Error: Invariant $expected is violated" "$log"; then
+    printf 'formal: %s fails as it must: TLC found %s violated\n' "$model" "$expected" >&2
+    return 0
+  fi
+  printf 'formal: TLC failed on %s (exit %s), but not by finding %s violated\n' "$model" "$rc" "$expected" >&2
+  return 1
+}
