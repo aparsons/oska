@@ -998,21 +998,28 @@ fn every_call_calls_its_function_and_builds_natively() {
     }
 }
 
-/// Whether the call `name` is a file capability's: native Windows code
-/// reaches files only once its confinement is written (#178), so on
-/// Windows these wait for it.
-fn reaches_files(name: &str) -> bool {
+/// Whether the call `name`, or its program `src`, uses a file
+/// capability: native Windows code reaches files only once its
+/// confinement is written (#178), so on Windows these wait for it.
+fn reaches_files(name: &str, src: &str) -> bool {
     let (kind, _) = name.split_once('.').unwrap_or((name, ""));
-    matches!(
-        kind,
-        "Fs" | "FsRead" | "FsWrite" | "Dir" | "DirRead" | "DirWrite" | "FileRead" | "FileWrite"
-    )
+    let file_kinds = [
+        "Fs",
+        "FsRead",
+        "FsWrite",
+        "Dir",
+        "DirRead",
+        "DirWrite",
+        "FileRead",
+        "FileWrite",
+    ];
+    file_kinds.contains(&kind) || [": Fs", ": Dir", ": File"].iter().any(|t| src.contains(t))
 }
 
 #[test]
 fn every_call_runs_the_same_on_both_backends() {
     for (name, run, src) in CALLS {
-        if cfg!(windows) && reaches_files(name) {
+        if cfg!(windows) && reaches_files(name, src) {
             continue;
         }
         let case = Case::file(&format!("prelude-{name}"), &source(src)).with_args(&["given"]);
