@@ -54,33 +54,42 @@ jobs:
       - run: scripts/check.sh
 
   macos:
-    # Spec #154: on Apple silicon `oskac run` and `oskac test` are native
-    # by default (ticket #172), so the whole of `oskac`'s tests run here:
-    # the differential suite (every native_*.rs, the corpus and the site
-    # included) compares the macos-aarch64 executable with the
-    # interpreter, and `build_macos` checks that macOS accepts each
-    # executable's signature (`codesign --verify --strict`).
-    runs-on: macos-latest
+    # Spec #154: on a Mac `oskac run` and `oskac test` are native by
+    # default (tickets #172 and #173), so the whole of `oskac`'s tests run
+    # here, on Apple silicon and on Intel: the differential suite (every
+    # native_*.rs, the corpus and the site included) compares each
+    # host's macOS executable with the interpreter, and `build_macos`
+    # checks that macOS accepts each executable's signature (`codesign
+    # --verify --strict`).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+          - os: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      # The executables are run only on Apple silicon: a label that moves to
-      # Intel must fail, not skip them.
-      - run: test "$(uname -m)" = arm64
+      # Each runner runs its own processor's executables: a label that
+      # moves to the other processor must fail, not run the wrong ones.
+      - run: test "$(uname -m)" = "${{ matrix.arch }}"
       - run: cargo test -p oskac --no-fail-fast
 
   cross-build:
     # Seam 3 of spec #153: every corpus program built for every target on
-    # an aarch64 and an x86_64 Linux host and on an Apple silicon Mac.
-    # `cross-build-compare` requires the same bytes from all three: the
-    # backend never reads the host. A refusal that
+    # an aarch64 and an x86_64 Linux host and on an Apple silicon and an
+    # Intel Mac. `cross-build-compare` requires the same bytes from all
+    # four: the backend never reads the host. A refusal that
     # scripts/cross-build/refused.txt does not expect fails here, with
     # oskac's error, so two hosts cannot agree by refusing.
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel]
     runs-on: ${{ matrix.os }}
     # A build and one compile per corpus program per target: a few minutes.
     timeout-minutes: 20
@@ -88,7 +97,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - run: cargo build -p oskac
-      - run: scripts/cross-build/manifest.sh target/debug/oskac > "manifest-$(uname -m).txt"
+      - run: scripts/cross-build/manifest.sh target/debug/oskac > "manifest-${{ matrix.os }}.txt"
       - uses: actions/upload-artifact@v4
         with:
           name: cross-build-${{ matrix.os }}
@@ -103,6 +112,6 @@ jobs:
         with:
           pattern: cross-build-*
           merge-multiple: true
-      # `uname -m` names the Mac's processor `arm64`.
-      - run: diff manifest-aarch64.txt manifest-x86_64.txt
-      - run: diff manifest-aarch64.txt manifest-arm64.txt
+      - run: diff manifest-ubuntu-latest.txt manifest-ubuntu-24.04-arm.txt
+      - run: diff manifest-ubuntu-latest.txt manifest-macos-latest.txt
+      - run: diff manifest-ubuntu-latest.txt manifest-macos-15-intel.txt

@@ -6,3 +6,4 @@ exit: 0
 out/greeter-linux-aarch64
 out/greeter-linux-x86_64
 out/greeter-macos-aarch64
+out/greeter-macos-x86_64

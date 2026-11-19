@@ -232,6 +232,9 @@ fn without_a_target_the_host_platform_is_built_for_when_it_has_a_backend() {
     if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         assert_eq!(expected, "macos-aarch64");
     }
+    if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        assert_eq!(expected, "macos-x86_64");
+    }
 }
 
 // ---- Every target --------------------------------------------------------------
@@ -243,7 +246,12 @@ fn all_writes_one_executable_per_platform_with_a_backend_into_the_output_directo
         &[("hello.osk", HELLO), ("dist/.keep", "")],
         &["build", "hello.osk", "--target", "all", "-o", "dist"],
     );
-    for platform in ["linux-aarch64", "linux-x86_64", "macos-aarch64"] {
+    for platform in [
+        "linux-aarch64",
+        "linux-x86_64",
+        "macos-aarch64",
+        "macos-x86_64",
+    ] {
         let alone = oskac(
             &dir,
             &["build", "hello.osk", "--target", platform, "-o", "alone"],
@@ -347,9 +355,9 @@ fn an_unknown_platform_is_refused_before_the_program_is_read() {
 #[test]
 fn a_supported_platform_with_no_backend_yet_is_refused_naming_its_release() {
     assert_golden(
-        "macos",
+        "windows",
         &[("hello.osk", HELLO)],
-        &["build", "hello.osk", "--target", "macos-x86_64"],
+        &["build", "hello.osk", "--target", "windows-x86_64"],
     );
     assert_golden(
         "windows_json",

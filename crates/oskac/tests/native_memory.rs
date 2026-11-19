@@ -1,5 +1,5 @@
 //! Native memory and panics (ticket #160), on whichever of aarch64 and
-//! x86_64 Linux and Apple silicon macOS the tests run (#170): where
+//! x86_64 Linux and macOS the tests run (#170, #173): where
 //! `main`'s stack is and what guards it (read from `/proc`, so on Linux
 //! only), the allocator's size classes and large objects, reference counting
 //! and copy-on-write, heap text, and panics with the interpreter's codes
@@ -8,12 +8,9 @@
 //! Call depth at the `P0021` boundary is `native_ints.rs`'s and
 //! `native_gaps.rs`'s, and deep drops in bounded stack `native_data.rs`'s.
 
-#![cfg(any(
-    all(
-        target_os = "linux",
-        any(target_arch = "aarch64", target_arch = "x86_64")
-    ),
-    all(target_os = "macos", target_arch = "aarch64")
+#![cfg(all(
+    any(target_os = "linux", target_os = "macos"),
+    any(target_arch = "aarch64", target_arch = "x86_64")
 ))]
 
 mod differential;

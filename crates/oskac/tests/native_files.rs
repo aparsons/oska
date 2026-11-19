@@ -15,19 +15,16 @@
 //! outside/secret.txt      "outside text"
 //! ```
 //!
-//! They run on aarch64 and x86_64 Linux and on Apple silicon macOS
-//! (ticket #171).
+//! They run on aarch64 and x86_64 Linux and macOS (tickets #171,
+//! #173).
 //!
 //! Symlinks, hard links and FIFOs are planted by a setup function; the
 //! harness records a symlink by its target and never follows one, so a
 //! write through one that escaped would show in the tree.
 
-#![cfg(any(
-    all(
-        target_os = "linux",
-        any(target_arch = "aarch64", target_arch = "x86_64")
-    ),
-    all(target_os = "macos", target_arch = "aarch64")
+#![cfg(all(
+    any(target_os = "linux", target_os = "macos"),
+    any(target_arch = "aarch64", target_arch = "x86_64")
 ))]
 
 mod differential;

@@ -32,6 +32,8 @@ pub enum Target {
     /// macOS on aarch64 (Apple silicon): a Mach-O that `dyld` loads,
     /// calling the system through `libSystem`, ad-hoc signed.
     MacosAarch64,
+    /// macOS on x86_64 (Intel): the same, with x86_64's instructions.
+    MacosX86_64,
 }
 
 /// Every supported platform, by name, in the order messages list them:
@@ -40,26 +42,18 @@ const PLATFORMS: [(&str, Result<Target, &str>); 5] = [
     ("linux-aarch64", Ok(Target::LinuxAarch64)),
     ("linux-x86_64", Ok(Target::LinuxX86_64)),
     ("macos-aarch64", Ok(Target::MacosAarch64)),
-    ("macos-x86_64", Err("v0.5.0")),
+    ("macos-x86_64", Ok(Target::MacosX86_64)),
     ("windows-x86_64", Err("v0.6.0")),
 ];
 
 impl Target {
     /// Every target the backend compiles for, in the order `oskac build
     /// --target all` builds them.
-    pub const ALL: [Target; 3] = [
+    pub const ALL: [Target; 4] = [
         Target::LinuxAarch64,
         Target::LinuxX86_64,
         Target::MacosAarch64,
-    ];
-
-    /// The targets `oskac run` and `oskac test` compile for when they are
-    /// the host's. An Intel Mac still runs the interpreter until its
-    /// backend comes (spec #154's #173).
-    const HOSTS: [Target; 3] = [
-        Target::LinuxAarch64,
-        Target::LinuxX86_64,
-        Target::MacosAarch64,
+        Target::MacosX86_64,
     ];
 
     /// The target for the supported platform named `platform`. An
@@ -97,9 +91,7 @@ impl Target {
     /// line here.
     pub fn host() -> Option<Target> {
         let host = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
-        Target::HOSTS
-            .into_iter()
-            .find(|target| target.name() == host)
+        Target::ALL.into_iter().find(|target| target.name() == host)
     }
 
     /// The platform's name, as release assets name `oskac` builds.
@@ -108,6 +100,7 @@ impl Target {
             Target::LinuxAarch64 => "linux-aarch64",
             Target::LinuxX86_64 => "linux-x86_64",
             Target::MacosAarch64 => "macos-aarch64",
+            Target::MacosX86_64 => "macos-x86_64",
         }
     }
 
@@ -118,6 +111,7 @@ impl Target {
             Target::LinuxAarch64 => intrinsics::LINUX_AARCH64,
             Target::LinuxX86_64 => intrinsics::LINUX_X86_64,
             Target::MacosAarch64 => intrinsics::MACOS_AARCH64,
+            Target::MacosX86_64 => intrinsics::MACOS_X86_64,
         }
     }
 
@@ -126,7 +120,7 @@ impl Target {
     pub(crate) fn register_args(self) -> usize {
         match self {
             Target::LinuxAarch64 | Target::MacosAarch64 => aarch64::REGISTER_ARGS,
-            Target::LinuxX86_64 => x86_64::REGISTER_ARGS,
+            Target::LinuxX86_64 | Target::MacosX86_64 => x86_64::REGISTER_ARGS,
         }
     }
 
@@ -135,7 +129,7 @@ impl Target {
     pub(crate) fn emit(self, module: &Module) -> Result<Box<dyn Code>, String> {
         match self {
             Target::LinuxAarch64 | Target::MacosAarch64 => Ok(Box::new(aarch64::emit(module)?)),
-            Target::LinuxX86_64 => Ok(Box::new(x86_64::emit(module)?)),
+            Target::LinuxX86_64 | Target::MacosX86_64 => Ok(Box::new(x86_64::emit(module)?)),
         }
     }
 
@@ -150,9 +144,8 @@ impl Target {
             Target::LinuxAarch64 => elf(elf::EM_AARCH64, 0x1_0000),
             // 4 KiB: x86_64 Linux's only base page.
             Target::LinuxX86_64 => elf(elf::EM_X86_64, 0x1000),
-            Target::MacosAarch64 => {
-                let imports: Vec<&str> = self.platform().imports.iter().map(|i| i.symbol).collect();
-                let machine = macho::Machine {
+            Target::MacosAarch64 => self.macho(
+                &macho::Machine {
                     cputype: macho::CPU_TYPE_ARM64,
                     cpusubtype: macho::CPU_SUBTYPE_ARM64_ALL,
                     // 16 KiB: Apple silicon's page.
@@ -160,10 +153,38 @@ impl Target {
                     // macOS 12, the first whose `dyld` binds chained
                     // fixups in an arm64 executable.
                     minos: 0x000c_0000,
-                };
-                macho::write(&machine, text, rodata, data_size, &imports)
-            }
+                },
+                text,
+                rodata,
+                data_size,
+            ),
+            Target::MacosX86_64 => self.macho(
+                &macho::Machine {
+                    cputype: macho::CPU_TYPE_X86_64,
+                    cpusubtype: macho::CPU_SUBTYPE_X86_64_ALL,
+                    // 4 KiB: an Intel Mac's page.
+                    page: 0x1000,
+                    // macOS 12, as on Apple silicon, so both macOS
+                    // targets run on the same releases.
+                    minos: 0x000c_0000,
+                },
+                text,
+                rodata,
+                data_size,
+            ),
         }
+    }
+
+    /// A Mach-O for `machine`, importing this target's functions.
+    fn macho(
+        self,
+        machine: &macho::Machine,
+        text: &dyn Code,
+        rodata: &[u8],
+        data_size: u32,
+    ) -> Vec<u8> {
+        let imports: Vec<&str> = self.platform().imports.iter().map(|i| i.symbol).collect();
+        macho::write(machine, text, rodata, data_size, &imports)
     }
 }
 
