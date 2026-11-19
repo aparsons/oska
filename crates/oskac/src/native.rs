@@ -1,14 +1,15 @@
-//! Native by default: on aarch64 and x86_64 Linux and macOS and on x86_64
-//! Windows (#179), `oskac run` and `oskac test` compile the checked program for the host with the native
-//! backend (`oska-native`) and run the executable; `--interpret` selects
-//! the interpreter, and every other host keeps it until it has a backend
-//! of its own.
+//! Native by default: on aarch64 and x86_64 Linux and macOS and on
+//! x86_64 Windows (#179), `oskac run` and `oskac test` compile the checked
+//! program for the host with the native backend (`oska-native`) and run
+//! the executable; `--interpret` selects the interpreter, and every other
+//! host keeps it until it has a backend of its own.
 //!
 //! The executable is written to a private temporary directory: a new
 //! directory with a random name under the temporary directory (`TMPDIR`),
 //! created with mode 0700 and never reused, so no other user can name,
-//! replace or read what runs (on Windows, under the user's own temporary
-//! directory). The file in it is created new, mode 0700,
+//! replace or read what runs. On Windows no mode is set: the directory is
+//! under the user's own temporary directory (`TEMP`), whose access it
+//! takes. The file in it is created new, mode 0700 on Unix,
 //! and both are removed afterwards: for `oskac run` as soon as the
 //! program has started (on Windows, which keeps a running program's
 //! file, once it ends), for `oskac test` once every test has run.
@@ -139,13 +140,10 @@ pub fn run(
     };
     // The program has started: its file is no longer needed. Windows
     // keeps a running program's file, so there it goes once it ends.
-    let exe = match cfg!(windows) {
-        true => Some(exe),
-        false => {
-            drop(exe);
-            None
-        }
-    };
+    let mut exe = Some(exe);
+    if cfg!(unix) {
+        exe = None;
+    }
     let panic = match child.stderr.take() {
         Some(stderr) => forward_stderr(stderr),
         None => None,
@@ -221,7 +219,9 @@ fn ended(status: std::process::ExitStatus, json: bool) -> ExitCode {
             report(&fault, json);
         }
         // A Windows process's code is 32 bits, which `ExitCode` cannot
-        // carry: `oskac` ends with the program's own.
+        // carry: `oskac` ends with the program's own, as a Windows shell
+        // shows it, where Unix shows `128 + n` after a signal. Nothing is
+        // left to drop: the executable went once the program ended.
         if cfg!(windows) && u8::try_from(code).is_err() {
             std::process::exit(code);
         }
@@ -252,11 +252,14 @@ fn ended(status: std::process::ExitStatus, json: bool) -> ExitCode {
 /// status whose severity is an error (`0xC...`, such as
 /// `STATUS_ACCESS_VIOLATION` or `STATUS_STACK_OVERFLOW`), or a
 /// breakpoint, as Windows ends a process an exception was not handled
-/// in. `None` elsewhere, and for a code a program can exit with
-/// (`ExitProcess` takes any, but Oska's take 0 to 255).
+/// in. `None` elsewhere, for a code a program can exit with (Oska's are
+/// 0 to 255), and for `STATUS_CONTROL_C_EXIT`, which Ctrl+C ends a
+/// process with from outside, as `SIGINT` does on Unix.
 pub fn windows_exception(code: i32) -> Option<u32> {
+    const STATUS_CONTROL_C_EXIT: u32 = 0xC000_013A;
     let code = code as u32;
-    let fault = code & 0xC000_0000 == 0xC000_0000 || code == 0x8000_0003;
+    let fault =
+        code & 0xC000_0000 == 0xC000_0000 && code != STATUS_CONTROL_C_EXIT || code == 0x8000_0003;
     (cfg!(windows) && fault).then_some(code)
 }
 
@@ -308,8 +311,10 @@ pub fn cannot(what: &str, err: &std::io::Error) -> Diagnostic {
         oska_native::codes::UNWRITABLE_OUTPUT,
         format!(
             "cannot {what} the native executable in the temporary directory `{}`: {err}; set \
-             `TMPDIR` to a directory you can run programs from, or use `--interpret`",
-            std::env::temp_dir().display()
+             `{}` to a directory you can run programs from, or use `--interpret`",
+            std::env::temp_dir().display(),
+            // The variable `temp_dir` reads first.
+            if cfg!(windows) { "TMP" } else { "TMPDIR" },
         ),
         Span { start: 0, end: 0 },
     )

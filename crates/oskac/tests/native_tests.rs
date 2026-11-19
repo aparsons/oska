@@ -10,7 +10,8 @@
 //! Every target must compile each case's tests (#164): a refusal fails on
 //! every host, and each host builds them for the other targets too, as it
 //! cannot run their code. The test executables below are built for the
-//! host and run on it, one process per test, on aarch64 and x86_64 Linux.
+//! host and run on it, one process per test, on aarch64 and x86_64 Linux
+//! and macOS, and on x86_64 Windows (#179).
 
 #![cfg(any(
     all(
