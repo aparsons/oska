@@ -365,6 +365,8 @@ def OutcomeWithin (A : List CapKind) : Outcome → Prop
   | .ret v => v.capsWithin A = true
   | .read _ _ k => ∀ r, r.capsWithin A = true → (k r).capsWithin A = true
   | .write _ _ w e => w.capsWithin A = true ∧ e.capsWithin A = true
+  | .spawn c k => c.capsWithin A = true ∧ ∀ r, r.capsWithin A = true → (k r).capsWithin A = true
+  | .join _ k => ∀ r, r.capsWithin A = true → (k r).capsWithin A = true
 
 theorem OutcomeWithin.map {A : List CapKind} {o : Outcome} {f : Expr → Expr}
     (h : OutcomeWithin A o) (hf : ∀ x, x.capsWithin A = true → (f x).capsWithin A = true) :
@@ -376,6 +378,17 @@ theorem OutcomeWithin.map {A : List CapKind} {o : Outcome} {f : Expr → Expr}
   | ret v => exact h
   | read _ _ k => exact fun r hr => hf _ (h r hr)
   | write _ _ w e => exact ⟨h.1, hf _ h.2⟩
+  | spawn c k => exact ⟨h.1, fun r hr => hf _ (h.2 r hr)⟩
+  | join _ k => exact fun r hr => hf _ (h r hr)
+
+/-- A task's step, put back with `f`, keeps a run within `A` when `f`
+does: a return gives the task's result. -/
+theorem OutcomeWithin.inTask {A : List CapKind} {o : Outcome} {f : Expr → Expr}
+    (h : OutcomeWithin A o) (hf : ∀ x, x.capsWithin A = true → (f x).capsWithin A = true) :
+    OutcomeWithin A (o.inTask f) := by
+  cases o with
+  | ret v => exact hf v h
+  | _ => exact h.map hf
 
 theorem OutcomeWithin.inFrame {A : List CapKind} {o : Outcome} (h : OutcomeWithin A o) :
     OutcomeWithin A o.inFrame := by
@@ -403,6 +416,8 @@ theorem OutcomeWithin.under {A : List CapKind} {o : Outcome} {v : Expr}
     cases i with
     | zero => exact hwrap _ e (capsWithin_setAt h.1 is hv) h.2
     | succ i => exact ⟨h.1, hwrap v e hv h.2⟩
+  | spawn c k => exact ⟨h.1, fun r hr => hwrap v _ hv (h.2 r hr)⟩
+  | join _ k => exact fun r hr => hwrap v _ hv (h r hr)
 
 /-- No body of the program holds a capability value. -/
 def ProgramCapFree (P : Program) : Prop :=
@@ -555,6 +570,45 @@ theorem step_within {P : Program} (hP : ProgramCapFree P) {A : List CapKind} (hA
     simp only [Expr.capsWithin] at he
     have h := capsWithin_instantiate he (capsWithin_mono (fun _ h => by simp at h) _ (hP _ _ hf)) hi
     exact fun r hr => by simp [Expr.capsWithin, hr, h]
+  | scope =>
+    simp only [Expr.capsWithin] at he
+    have h := capsWithin_subst (v := .scopeHandle) rfl _ he
+    simp [OutcomeWithin, Expr.capsWithin, Expr.capsWithinList, h]
+  | spawn _ =>
+    simp only [Expr.capsWithin, Expr.capsWithinList, Bool.and_eq_true] at he
+    exact ⟨he.2.1, fun r hr => hr⟩
+  | join => exact fun r hr => hr
+  | scopeBody _ _ ih =>
+    simp only [Expr.capsWithin, Bool.and_eq_true] at he
+    exact (ih he.2).map fun _ h => by simp [Expr.capsWithin, h, he.1]
+  | scopeSpawn _ ih =>
+    simp only [Expr.capsWithin, Bool.and_eq_true] at he
+    have h := ih he.2
+    show Expr.capsWithin A (.scopeRun _ _) = true
+    simp [Expr.capsWithin, capsWithinList_append, Expr.capsWithinList, he.1, h.1,
+      h.2 _ (rfl : (Expr.taskHandle _).capsWithin A = true)]
+  | @scopeJoin ts _ i _ _ _ ih =>
+    simp only [Expr.capsWithin, Bool.and_eq_true] at he
+    have hg : (ts.getD i .unit).capsWithin A = true := by
+      rw [List.getD_eq_getElem?_getD]
+      cases hi : ts[i]? with
+      | none => rfl
+      | some v => exact capsWithinList_get he.1 hi
+    have h := ih he.2 _ hg
+    show Expr.capsWithin A (.scopeRun _ _) = true
+    rw [List.getD_eq_getElem?_getD] at h
+    simp [Expr.capsWithin, he.1, h]
+  | scopeRet _ _ ih =>
+    simp only [Expr.capsWithin, Bool.and_eq_true] at he
+    exact ih he.2
+  | scopeValue _ _ =>
+    simp only [Expr.capsWithin, Bool.and_eq_true] at he
+    exact he.2
+  | scopeTaskValue _ _ _ ih | scopeTaskRet _ _ _ _ ih | scopeTaskJoin _ _ _ _ _ ih =>
+    simp only [Expr.capsWithin, capsWithinList_append, Expr.capsWithinList,
+      Bool.and_eq_true] at he
+    exact (ih he.1.2.1).inTask fun _ h => by
+      simp [Expr.capsWithin, capsWithinList_append, Expr.capsWithinList, h, he.1.1, he.1.2.2, he.2]
 
 /-- An answer the semantics allows an effect on a capability of a kind in
 `A` holds only capabilities of kinds in `A`. -/
@@ -734,6 +788,9 @@ mutual
     | .var_ _ => []
     | .mutCall _ _ args => Expr.capsList args
     | .cell v e | .method _ v e => Expr.caps v ++ Expr.caps e
+    | .scope body => Expr.caps body
+    | .scopeHandle | .taskHandle _ => []
+    | .scopeRun ts body => Expr.capsList ts ++ Expr.caps body
 
   def Expr.capsList : List Expr → List CapKind
     | [] => []
@@ -1065,9 +1122,11 @@ theorem closureProgram_sourceTyped : ProgramSourceTyped closureProgram := by
       · cases hf
         refine ⟨?_, rfl, rfl⟩
         exact Typed.block (Typed.blockLetDrop
-          (Typed.call (f := apply) rfl (Typed.argsCons
-            (Typed.closure (by decide) nofun nofun (Typed.builtin BuiltinTyped.println
-              (Typed.argsCons (Typed.local_ rfl) (Typed.argsCons Typed.str Typed.argsNil))))
+          (Typed.call (f := apply) rfl rfl (Typed.argsCons
+            (Typed.closure (by decide) nofun nofun
+              (by intro i t _ _ hl; cases i <;> simp [lookup, bindingTypes, closureMain] at hl; subst hl; rfl) rfl
+              (Typed.builtin BuiltinTyped.println
+              (Typed.argsCons (Typed.local_ rfl) (Typed.argsCons Typed.str Typed.argsNil))) rfl)
             Typed.argsNil))
           Typed.blockNone)
       · cases hf

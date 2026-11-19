@@ -22,10 +22,12 @@ namespace OskaFormal.Core
 mutual
   /-- Whether an expression is a value: `()`, an integer, a boolean, text,
   a path, a capability, an `IoError`, an `Ok` or `Err` of a value, a
-  struct or variant whose fields are values, or a closure of height 0. -/
+  struct or variant whose fields are values, a closure of height 0, or a
+  scope's or a task's handle. -/
   def Expr.isValue : Expr → Bool
     | .unit | .int _ | .bool _ => true
     | .str _ | .path _ | .cap _ _ | .ioError => true
+    | .scopeHandle | .taskHandle _ => true
     | .result _ v => Expr.isValue v
     | .construct _ _ fs => Expr.allValues fs
     | .closure _ 0 _ _ _ _ => true
@@ -46,6 +48,8 @@ mutual
     | .path _, _ => IsValue.path _
     | .cap _ _, _ => IsValue.cap _ _
     | .ioError, _ => IsValue.ioError
+    | .scopeHandle, _ => IsValue.scopeHandle
+    | .taskHandle _, _ => IsValue.taskHandle _
     | .result _ v, h => IsValue.result _ (Expr.isValue_sound (e := v) (by simpa [Expr.isValue] using h))
     | .construct _ _ fs, h =>
       IsValue.construct (Expr.allValues_sound (es := fs) (by simpa [Expr.isValue] using h)).forall
@@ -54,7 +58,7 @@ mutual
     | .local_ _, h | .neg _, h | .not _, h | .binary _ _ _, h | .call _ _, h | .if_ _ _ _, h
     | .block _ _, h | .field _ _, h | .match_ _ _, h | .builtin _ _, h | .callValue _ _, h
     | .try_ _ _, h | .frame _, h | .var_ _, h | .mutCall _ _ _, h | .cell _ _, h
-    | .method _ _ _, h => by simp [Expr.isValue] at h
+    | .method _ _ _, h | .scope _, h | .scopeRun _ _, h => by simp [Expr.isValue] at h
 
   theorem Expr.allValues_sound : ∀ {es : List Expr}, Expr.allValues es = true → AllValues es
     | [], _ => AllValues.nil
@@ -68,6 +72,7 @@ theorem Expr.isValue_complete {e : Expr} (h : IsValue e) : e.isValue = true := b
   | unit => rfl
   | int _ => rfl
   | bool _ | str _ | path _ | cap _ _ | ioError | closure _ _ _ _ _ => rfl
+  | scopeHandle | taskHandle _ => rfl
   | result _ _ ih => simpa [Expr.isValue] using ih
   | @construct _ _ fs hfs ih =>
     simp only [Expr.isValue]
@@ -122,9 +127,19 @@ def stepMutCall (P : Program) (name : String) (pl : Place) (vs : List Expr) : Op
     | none => none
   | none => none
 
-/-- The step a built-in call takes once its arguments `vs` are values: an
-effect on a capability of its receiver's kind, or a pure call's value. -/
+/-- The step of `spawn` or `join` once its arguments `vs` are values: ask
+the nearest scope to queue a call of the closure, or for the result of
+the task. -/
+def stepTask : Builtin → List Expr → Option Outcome
+  | .spawn, [.scopeHandle, c] => some (.spawn c fun x => x)
+  | .join, [.taskHandle i] => some (.join i fun x => x)
+  | _, _ => none
+
+/-- The step a built-in call takes once its arguments `vs` are values: a
+spawn or a join, an effect on a capability of its receiver's kind, or a
+pure call's value. -/
 def stepBuiltin (op : Builtin) (vs : List Expr) : Option Outcome :=
+  (stepTask op vs).or <|
   match op.receiver, vs with
   | some k, .cap k' r :: rest =>
     if k' = k then some (.perform ⟨op, k, r, rest⟩ fun x => x) else none
@@ -165,6 +180,29 @@ def stepMatch (v : Expr) : List Arm → Option Outcome
     | some bs, none => some (.next (Expr.substAll bs body))
     | some bs, some g =>
       some (.next (.if_ (Expr.substAll bs g) (Expr.substAll bs body) (some (.match_ v rest))))
+
+/-- The step of a running scope with the tasks `ts` and the block `body`,
+given the block's step `ob` and the step `ots` of its oldest unfinished
+task: the block's own step, which the scope passes on, or answers when it
+spawns or joins; the block's value or return once every task has
+finished; and otherwise, while the block has its value, returns, or joins
+a task that has not finished, a step of the oldest unfinished task. -/
+def stepScope (ts : List Expr) (body : Expr) (ob : Option Outcome)
+    (ots : Option (List Expr × Outcome × List Expr)) : Option Outcome :=
+  let task : Option Outcome :=
+    ots.map fun (vs, o, rest) => o.inTask fun e' => .scopeRun (vs ++ e' :: rest) body
+  if body.isValue then
+    if Expr.allValues ts then some (.next body) else task
+  else
+    match ob with
+    | some (.spawn c k) =>
+      some (.next (.scopeRun (ts ++ [.callValue c []]) (k (.taskHandle ts.length))))
+    | some (.join i k) =>
+      if Expr.allValues (ts.take (i + 1)) then some (.next (.scopeRun ts (k (ts.getD i .unit))))
+      else task
+    | some (.ret v) => if Expr.allValues ts then some (.ret v) else task
+    | some o => some (o.map (.scopeRun ts))
+    | none => none
 
 mutual
   /-- One step of a closed expression in program `P`, as a function: the
@@ -238,6 +276,9 @@ mutual
     | .method pl v e =>
       if e.isValue then some (.write pl.var pl.fields v e)
       else (step P e).map (Outcome.inMethod pl v)
+    | .scope body => some (.next (.scopeRun [] (Expr.subst .scopeHandle body)))
+    | .scopeHandle | .taskHandle _ => none
+    | .scopeRun ts body => stepScope ts body (step P body) (stepArgs P ts)
 
   /-- The step of the first argument of a list that is not a value: the
   values before it, its outcome, and the arguments after it. `none` when
@@ -306,9 +347,23 @@ theorem stepMatch_sound {P : Program} {v : Expr} {arms : List Arm} {o : Outcome}
     · next hm => exact Step.matchArm hv hm
     · next hm => exact Step.matchGuard hv hm
 
+theorem stepTask_sound {P : Program} {op : Builtin} {vs : List Expr} {o : Outcome}
+    (hvs : AllValues vs) (h : stepTask op vs = some o) : Step P (.builtin op vs) o := by
+  unfold stepTask at h
+  split at h <;> cases h
+  · cases hvs with | cons _ hvs => cases hvs with | cons hc _ => exact Step.spawn hc
+  · exact Step.join
+
 theorem stepBuiltin_sound {P : Program} {op : Builtin} {vs : List Expr} {o : Outcome}
     (hvs : AllValues vs) (h : stepBuiltin op vs = some o) : Step P (.builtin op vs) o := by
   unfold stepBuiltin at h
+  cases ht : stepTask op vs with
+  | some o' =>
+    rw [ht] at h
+    cases h
+    exact stepTask_sound hvs ht
+  | none =>
+  rw [ht, Option.none_or] at h
   split at h
   · next k k' r rest hk =>
     split at h
@@ -350,6 +405,60 @@ theorem stepMutCall_sound {P : Program} {name : String} {pl : Place} {vs : List 
       exact Step.mutCall hf hu hvs hi
     · cases h
   · cases h
+
+theorem stepScope_task {P : Program} {ts : List Expr} {body : Expr} {o : Outcome}
+    {ots : Option (List Expr × Outcome × List Expr)}
+    (hts : ∀ vs o rest, ots = some (vs, o, rest) → ∃ e, ts = vs ++ e :: rest ∧ AllValues vs ∧ Step P e o)
+    (h : (ots.map fun (vs, o, rest) => o.inTask fun e' => Expr.scopeRun (vs ++ e' :: rest) body) = some o) :
+    ∃ vs e rest o', ts = vs ++ e :: rest ∧ AllValues vs ∧ Step P e o' ∧
+      o = o'.inTask fun e' => .scopeRun (vs ++ e' :: rest) body := by
+  obtain ⟨⟨vs, o', rest⟩, hs, rfl⟩ := map_eq_some_inv h
+  obtain ⟨e, rfl, hvs, he⟩ := hts _ _ _ hs
+  exact ⟨vs, e, rest, o', rfl, hvs, he, rfl⟩
+
+theorem stepScope_sound {P : Program} {ts : List Expr} {body : Expr} {o : Outcome}
+    {ob : Option Outcome} {ots : Option (List Expr × Outcome × List Expr)}
+    (hb : ∀ o, ob = some o → Step P body o)
+    (hts : ∀ vs o rest, ots = some (vs, o, rest) → ∃ e, ts = vs ++ e :: rest ∧ AllValues vs ∧ Step P e o)
+    (h : stepScope ts body ob ots = some o) : Step P (.scopeRun ts body) o := by
+  unfold stepScope at h
+  by_cases hv : body.isValue = true
+  · simp only [hv, ite_true] at h
+    by_cases hall : Expr.allValues ts = true
+    · simp only [hall, ite_true, Option.some.injEq] at h
+      subst h
+      exact Step.scopeValue (Expr.isValue_iff.mp hv) (Expr.allValues_iff.mp hall)
+    · simp only [hall, Bool.false_eq_true, ite_false] at h
+      obtain ⟨vs, e, rest, o', rfl, hvs, he, rfl⟩ := stepScope_task hts h
+      exact Step.scopeTaskValue (Expr.isValue_iff.mp hv) hvs he
+  · simp only [hv, Bool.false_eq_true, ite_false] at h
+    cases hob : ob with
+    | none => rw [hob] at h; cases h
+    | some ob' =>
+      rw [hob] at h
+      have hs := hb _ hob
+      cases ob' with
+      | spawn c k => cases h; exact Step.scopeSpawn hs
+      | join i k =>
+        simp only at h
+        by_cases hj : Expr.allValues (ts.take (i + 1)) = true
+        · simp only [hj, ite_true, Option.some.injEq] at h
+          subst h
+          exact Step.scopeJoin hs (Expr.allValues_iff.mp hj)
+        · simp only [hj, Bool.false_eq_true, ite_false] at h
+          obtain ⟨vs, e, rest, o', rfl, hvs, he, rfl⟩ := stepScope_task hts h
+          exact Step.scopeTaskJoin hs (fun h' => hj (Expr.allValues_iff.mpr h')) hvs he
+      | ret v =>
+        simp only at h
+        by_cases hall : Expr.allValues ts = true
+        · simp only [hall, ite_true, Option.some.injEq] at h
+          subst h
+          exact Step.scopeRet hs (Expr.allValues_iff.mp hall)
+        · simp only [hall, Bool.false_eq_true, ite_false] at h
+          obtain ⟨vs, e, rest, o', rfl, hvs, he, rfl⟩ := stepScope_task hts h
+          exact Step.scopeTaskRet hs hvs he
+      | next _ | panic _ | perform _ _ | read _ _ _ | write _ _ _ _ =>
+        cases h; exact Step.scopeBody hs rfl
 
 /-- **Soundness of `step`.** Every step `step` takes is a step of the
 semantics. -/
@@ -547,6 +656,13 @@ theorem step_sound {P : Program} : ∀ {e : Expr} {o : Outcome}, step P e = some
     simp only [step, he, ite_false, Bool.false_eq_true] at h
     obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
     exact Step.methodBody (ih hs)
+  next body => intro o h; simp [step] at h; subst h; exact Step.scope
+  next => intro o h; simp [step] at h
+  next => intro o h; simp [step] at h
+  next ts body ihb ihts =>
+    intro o h
+    simp only [step] at h
+    exact stepScope_sound (fun _ h => ihb h) ihts h
   next vs o rest h => simp [stepArgs] at h
   next e es he ih vs o rest h =>
     simp only [stepArgs, he, ite_true] at h
@@ -625,6 +741,14 @@ theorem stepArgs_mid {P : Program} {vs rest : List Expr} {e : Expr} {o : Outcome
   | nil => simp [stepArgs, he, hs]
   | cons hv _ ih => simp [stepArgs, Expr.isValue_iff.mpr hv, ih]
 
+theorem allValues_mid_false {vs rest : List Expr} {e : Expr} (he : e.isValue = false) :
+    Expr.allValues (vs ++ e :: rest) = false := by
+  cases h : Expr.allValues (vs ++ e :: rest)
+  · rfl
+  · have := Expr.isValue_iff.mpr (AllValues.mid (Expr.allValues_iff.mp h))
+    rw [he] at this
+    cases this
+
 /-- A pure built-in call is no effect: it has no receiver. -/
 theorem evalPure_receiver {op : Builtin} {vs : List Expr} {v : Expr}
     (h : evalPure op vs = some v) : op.receiver = none := by
@@ -686,12 +810,16 @@ theorem step_complete {P : Program} {e : Expr} {o : Outcome} (h : Step P e o) :
   | matchArm hv hm => simp [step, Expr.isValue_iff.mpr hv, stepMatch, hm]
   | matchGuard hv hm => simp [step, Expr.isValue_iff.mpr hv, stepMatch, hm]
   | builtinArg hvs hs ih => simp [step, stepArgs_mid hvs hs.not_value ih]
-  | builtinPure hvs he =>
-    simp [step, stepArgs_values hvs, Expr.allValues_iff.mpr hvs, stepBuiltin,
+  | @builtinPure op vs v hvs he =>
+    have ht : stepTask op vs = none := by
+      unfold stepTask; split <;> simp_all [evalPure]
+    simp [step, stepArgs_values hvs, Expr.allValues_iff.mpr hvs, stepBuiltin, ht,
       evalPure_receiver he, he]
   | @builtinEffect op k r vs hk hvs =>
     have hall := AllValues.cons (IsValue.cap k r) hvs
-    simp [step, stepArgs_values hall, Expr.allValues_iff.mpr hall, stepBuiltin, hk]
+    have ht : stepTask op (.cap k r :: vs) = none := by
+      unfold stepTask; split <;> simp_all [Builtin.receiver]
+    simp [step, stepArgs_values hall, Expr.allValues_iff.mpr hall, stepBuiltin, ht, hk]
   | callValueCallee hs ih => simp [step, hs.not_value, ih]
   | callValueArg hc hvs hs ih =>
     simp [step, Expr.isValue_iff.mpr hc, stepArgs_mid hvs hs.not_value ih]
@@ -715,6 +843,32 @@ theorem step_complete {P : Program} {e : Expr} {o : Outcome} (h : Step P e o) :
     simp [step, stepArgs_values hvs, Expr.allValues_iff.mpr hvs, stepMutCall, hf, hr, hi]
   | methodBody hs ih => simp [step, hs.not_value, ih]
   | methodValue hv => simp [step, Expr.isValue_iff.mpr hv]
+  | scope => rfl
+  | spawn hc =>
+    have hall := AllValues.cons IsValue.scopeHandle (AllValues.cons hc AllValues.nil)
+    simp [step, stepArgs_values hall, Expr.allValues_iff.mpr hall, stepBuiltin, stepTask]
+  | @join i =>
+    have hall := AllValues.cons (IsValue.taskHandle i) AllValues.nil
+    simp [step, stepArgs_values hall, Expr.allValues_iff.mpr hall, stepBuiltin, stepTask]
+  | @scopeBody _ _ o hs hp ih =>
+    cases o <;> simp [Outcome.passes] at hp <;> simp [step, stepScope, hs.not_value, ih]
+  | scopeSpawn hs ih => simp [step, stepScope, hs.not_value, ih]
+  | scopeJoin hs hj ih => simp [step, stepScope, hs.not_value, ih, Expr.allValues_iff.mpr hj]
+  | scopeRet hs hall ih => simp [step, stepScope, hs.not_value, ih, Expr.allValues_iff.mpr hall]
+  | scopeValue hv hall =>
+    simp [step, stepScope, Expr.isValue_iff.mpr hv, Expr.allValues_iff.mpr hall]
+  | scopeTaskValue hv hvs hs ih =>
+    simp [step, stepScope, Expr.isValue_iff.mpr hv, allValues_mid_false hs.not_value,
+      stepArgs_mid hvs hs.not_value ih]
+  | scopeTaskRet hb hvs hs ihb ih =>
+    simp [step, stepScope, hb.not_value, ihb, allValues_mid_false hs.not_value,
+      stepArgs_mid hvs hs.not_value ih]
+  | @scopeTaskJoin vs rest e body i k o hb hn hvs hs ihb ih =>
+    have hj : Expr.allValues ((vs ++ e :: rest).take (i + 1)) = false := by
+      cases h : Expr.allValues _
+      · rfl
+      · exact absurd (Expr.allValues_iff.mp h) hn
+    simp [step, stepScope, hb.not_value, ihb, hj, stepArgs_mid hvs hs.not_value ih]
 
 /-- The capabilities `main` receives: for each parameter, the capability
 its type names, rooted anywhere, as the runtime grants them
@@ -738,8 +892,9 @@ inductive RunResult where
   well-typed program progress rules this out. -/
   | stuck (e : Expr)
   /-- A step read or wrote a var that no cell holds: a `var` read
-  outside its block. In a well-typed program, which starts with no var in
-  scope, preservation rules this out. -/
+  outside its block; or spawned or joined in no scope. In a well-typed
+  program, which starts with no var in scope and in no scope,
+  preservation rules this out. -/
   | unbound (e : Expr)
   /-- The fuel ran out before the run ended. -/
   | outOfFuel
@@ -758,6 +913,7 @@ def run (P : Program) : Nat → Host → Expr → RunResult × Host
       | some (.perform req k) => run P fuel (h.perform req).2 (k (h.perform req).1)
       | some (.ret v) => (.returned v, h)
       | some (.read _ _ _) | some (.write _ _ _ _) => (.unbound e, h)
+      | some (.spawn _ _) | some (.join _ _) => (.unbound e, h)
       | none => (.stuck e, h)
 
 /-- Every effect a step performs is on a capability of its receiver's
@@ -781,6 +937,8 @@ theorem Step.wellFormed {P : Program} {e : Expr} {o : Outcome} (h : Step P e o) 
     intro o f h; cases o <;> simp_all [Outcome.map, Outcome.WellFormed]
   have inFrame : ∀ {o : Outcome}, o.WellFormed → o.inFrame.WellFormed := by
     intro o h; cases o <;> simp_all [Outcome.inFrame, Outcome.map, Outcome.WellFormed]
+  have inTask : ∀ {o : Outcome} {f : Expr → Expr}, o.WellFormed → (o.inTask f).WellFormed := by
+    intro o f h; cases o <;> simp_all [Outcome.inTask, Outcome.map, Outcome.WellFormed]
   have under : ∀ {o : Outcome} {v : Expr} {wrap : Expr → Expr → Expr} {onRet : Expr → Outcome},
       (∀ r, (onRet r).WellFormed) → o.WellFormed → (o.under v wrap onRet).WellFormed := by
     intro o v wrap onRet hr h
@@ -795,7 +953,14 @@ theorem Step.wellFormed {P : Program} {e : Expr} {o : Outcome} (h : Step P e o) 
   have inMethod : ∀ {o : Outcome} {pl : Place} {v : Expr}, o.WellFormed →
       (o.inMethod pl v).WellFormed :=
     fun h => under (fun _ => trivial) h
-  induction h <;> first | trivial | (exact map ‹_›) | (exact inFrame ‹_›) | assumption |
+  induction h with
+  | scopeTaskValue _ _ _ ih => exact inTask ih
+  | scopeTaskRet _ _ _ _ ih => exact inTask ih
+  | scopeTaskJoin _ _ _ _ _ ih => exact inTask ih
+  | scopeBody _ _ ih => exact map ih
+  | scope | spawn _ | join | scopeSpawn _ _ | scopeJoin _ _ _ | scopeRet _ _ _ | scopeValue _ _ =>
+    trivial
+  | _ => first | trivial | (exact map ‹_›) | (exact inFrame ‹_›) | assumption |
     exact intResult_wellFormed _ | exact evalBinary_wellFormed ‹_› | (exact inCell ‹_›) |
     (exact inMethod ‹_›)
 
@@ -865,6 +1030,12 @@ theorem run_sound {P : Program} : ∀ {fuel : Nat} {h : Host} {e : Expr},
           refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;>
             simp only [run, hn, Bool.false_eq_true, ite_false, hs] at hr <;> simp at hr
         | write i is w n =>
+          refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;>
+            simp only [run, hn, Bool.false_eq_true, ite_false, hs] at hr <;> simp at hr
+        | spawn c k =>
+          refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;>
+            simp only [run, hn, Bool.false_eq_true, ite_false, hs] at hr <;> simp at hr
+        | join i k =>
           refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;>
             simp only [run, hn, Bool.false_eq_true, ite_false, hs] at hr <;> simp at hr
         | perform req k =>

@@ -1,5 +1,5 @@
 {
-  "core_ir_version": 6,
+  "core_ir_version": 7,
   "types": [
     {"kind": "Struct", "name": "Counter", "fields": ["Int"]},
     {"kind": "Struct", "name": "Pair", "fields": ["Counter", "Counter"]}

@@ -3,8 +3,8 @@ import OskaFormal.Core.Syntax
 /-!
 # Oska Core: small-step semantics
 
-A small-step semantics of Oska Core, version 6, matching the interpreter
-(`crates/oska-run`) and the rules core IR version 6 states:
+A small-step semantics of Oska Core, version 7, matching the interpreter
+(`crates/oska-run`) and the rules core IR version 7 states:
 
 - Evaluation is left to right: an operator's `lhs` before its `rhs`, a
   call's arguments in order before the call, a block's statements in
@@ -77,6 +77,23 @@ A small-step semantics of Oska Core, version 6, matching the interpreter
   so, and `Eval.lean`'s fake host is one. A run's **trace** is the list
   of its requests (`Steps`).
 
+- A `scope` block puts its handle for its next slot and runs in a
+  `scopeRun`, which holds its tasks, in spawn order, as the interpreter's
+  `crates/oska-run/src/tasks.rs` does: tasks run one at a time, in the
+  order they were spawned, and each runs to its end before the next
+  starts. `spawn`, once its arguments are values, steps to the outcome
+  `spawn`, which every enclosing expression passes on until the nearest
+  `scopeRun`: that scope queues the call of the closure as its next task
+  and answers with the task's handle. Nothing of the task runs yet.
+  `join` steps to the outcome `join`, which the scope answers with the
+  task's result once the task and every task before it have finished;
+  until then the scope runs its oldest unfinished task, a step at a
+  time, and the block waits. The block also waits, and the scope runs
+  its tasks, when the block has its value or returns with `?`: a scope
+  does not end before its tasks have. A panic, in the block or in a task,
+  ends the run at once, so the tasks still queued never run. A task runs
+  as a body of its own, as a `frame` would: its `?` returns from it.
+
 The interpreter's limit on call depth, which stops runaway recursion with
 a panic, is a resource limit and is not part of the semantics.
 -/
@@ -123,6 +140,10 @@ mutual
     | .mutCall f pl args => .mutCall f pl (Expr.substList v args)
     | .cell w body => .cell (Expr.subst v w) (Expr.subst v body)
     | .method pl w body => .method pl (Expr.subst v w) (Expr.subst v body)
+    | .scope body => .scope (Expr.subst v body)
+    | .scopeHandle => .scopeHandle
+    | .taskHandle i => .taskHandle i
+    | .scopeRun ts body => .scopeRun (Expr.substList v ts) (Expr.subst v body)
 
   /-- `Expr.subst` on each expression of a list. -/
   def Expr.substList (v : Expr) : List Expr → List Expr
@@ -228,8 +249,11 @@ def Request.Allows (req : Request) (r : Expr) : Prop :=
 `req`, after which the run goes on with `k r` for the host's answer `r`,
 a return of the value `v` from the function or closure the step is in
 (`?` on an `Err`), a read of the field at `path` of var `var`, after
-which the run goes on with `k` of it, or a write of `value` there, after
-which it goes on with `next`. -/
+which the run goes on with `k` of it, a write of `value` there, after
+which it goes on with `next`, a spawn of the closure `task` on the
+nearest scope, after which the run goes on with `k` of the task's
+handle, or a join of that scope's task `task`, after which it goes on
+with `k` of the task's result. -/
 inductive Outcome where
   | next (e : Expr)
   | panic (kind : PanicKind)
@@ -237,9 +261,11 @@ inductive Outcome where
   | ret (v : Expr)
   | read (var : Nat) (path : List Nat) (k : Expr → Expr)
   | write (var : Nat) (path : List Nat) (value : Expr) (next : Expr)
+  | spawn (task : Expr) (k : Expr → Expr)
+  | join (task : Nat) (k : Expr → Expr)
 
 /-- `f` applied to the next expression, or to what follows an effect, a
-read or a write; a panic or a return left as it is. -/
+read, a write, a spawn or a join; a panic or a return left as it is. -/
 def Outcome.map (f : Expr → Expr) : Outcome → Outcome
   | .next e => .next (f e)
   | .panic k => .panic k
@@ -247,6 +273,8 @@ def Outcome.map (f : Expr → Expr) : Outcome → Outcome
   | .ret v => .ret v
   | .read i is k => .read i is fun r => f (k r)
   | .write i is w e => .write i is w (f e)
+  | .spawn c k => .spawn c fun r => f (k r)
+  | .join i k => .join i fun r => f (k r)
 
 /-- A step of a body in a `frame`: a return gives its value, and any other
 outcome stays in the frame. -/
@@ -269,6 +297,8 @@ def Outcome.under (v : Expr) (wrap : Expr → Expr → Expr) (onRet : Expr → O
   | .read (i + 1) is k => .read i is fun r => wrap v (k r)
   | .write 0 is w e => .next (wrap (v.setAt is w) e)
   | .write (i + 1) is w e => .write i is w (wrap v e)
+  | .spawn c k => .spawn c fun r => wrap v (k r)
+  | .join i k => .join i fun r => wrap v (k r)
 
 /-- A step of the rest of a block in the `cell` of its `var`, which holds
 `v`: a return leaves the cell. -/
@@ -280,6 +310,19 @@ return ends the body with its value, as a `frame` does, and the receiver
 is still written back. -/
 def Outcome.inMethod (pl : Place) (v : Expr) : Outcome → Outcome :=
   Outcome.under v (.method pl) fun r => .next (.method pl v r)
+
+/-- Whether a running scope passes its block's outcome on as it is: all
+but a return, which waits for the scope's tasks, and a spawn or a join,
+which the scope answers. -/
+def Outcome.passes : Outcome → Bool
+  | .ret _ | .spawn _ _ | .join _ _ => false
+  | _ => true
+
+/-- A step of a scope's task, run as a body of its own, put back with
+`f`: its return gives its result, as a `frame`'s does. -/
+def Outcome.inTask (f : Expr → Expr) : Outcome → Outcome
+  | .ret v => .next (f v)
+  | o => o.map f
 
 /-- A pure built-in call applied to its arguments' values: `Path.from`
 and `Path.new` make a path, `is_ok` and `unwrap_or` read a `Result`, and
@@ -474,6 +517,47 @@ inductive Step (P : Program) : Expr → Outcome → Prop where
   call gives the body's value. -/
   | methodValue {pl : Place} {v w : Expr} :
       IsValue w → Step P (.method pl v w) (.write pl.var pl.fields v w)
+  /-- A `scope` block starts with its handle for its slot and no task. -/
+  | scope {body : Expr} : Step P (.scope body) (.next (.scopeRun [] (Expr.subst .scopeHandle body)))
+  /-- `spawn` asks the nearest scope to queue a call of the closure. -/
+  | spawn {c : Expr} : IsValue c → Step P (.builtin .spawn [.scopeHandle, c]) (.spawn c fun x => x)
+  /-- `join` asks the nearest scope for the result of its task `i`. -/
+  | join {i : Nat} : Step P (.builtin .join [.taskHandle i]) (.join i fun x => x)
+  /-- A step of the block that the scope passes on. -/
+  | scopeBody {ts : List Expr} {body : Expr} {o : Outcome} :
+      Step P body o → o.passes = true → Step P (.scopeRun ts body) (o.map (.scopeRun ts))
+  /-- A spawn queues a call of the closure as the scope's last task, which
+  has not started, and the block goes on with its handle. -/
+  | scopeSpawn {ts : List Expr} {body c : Expr} {k : Expr → Expr} :
+      Step P body (.spawn c k) →
+      Step P (.scopeRun ts body)
+        (.next (.scopeRun (ts ++ [.callValue c []]) (k (.taskHandle ts.length))))
+  /-- A join of task `i`, once it and every task before it have finished,
+  gives its result. -/
+  | scopeJoin {ts : List Expr} {body : Expr} {i : Nat} {k : Expr → Expr} :
+      Step P body (.join i k) → AllValues (ts.take (i + 1)) →
+      Step P (.scopeRun ts body) (.next (.scopeRun ts (k (ts.getD i .unit))))
+  /-- A return leaves the scope once every task has finished. -/
+  | scopeRet {ts : List Expr} {body v : Expr} :
+      Step P body (.ret v) → AllValues ts → Step P (.scopeRun ts body) (.ret v)
+  /-- The scope ends with its block's value once every task has
+  finished. -/
+  | scopeValue {ts : List Expr} {v : Expr} :
+      IsValue v → AllValues ts → Step P (.scopeRun ts v) (.next v)
+  /-- While the block has its value, its oldest unfinished task runs. -/
+  | scopeTaskValue {vs rest : List Expr} {e body : Expr} {o : Outcome} :
+      IsValue body → AllValues vs → Step P e o →
+      Step P (.scopeRun (vs ++ e :: rest) body) (o.inTask fun e' => .scopeRun (vs ++ e' :: rest) body)
+  /-- While the block returns, its oldest unfinished task runs. -/
+  | scopeTaskRet {vs rest : List Expr} {e body v : Expr} {o : Outcome} :
+      Step P body (.ret v) → AllValues vs → Step P e o →
+      Step P (.scopeRun (vs ++ e :: rest) body) (o.inTask fun e' => .scopeRun (vs ++ e' :: rest) body)
+  /-- While the block joins a task that has not finished, or one before
+  it has not, the oldest unfinished task runs. -/
+  | scopeTaskJoin {vs rest : List Expr} {e body : Expr} {i : Nat} {k : Expr → Expr} {o : Outcome} :
+      Step P body (.join i k) → ¬ AllValues ((vs ++ e :: rest).take (i + 1)) → AllValues vs →
+      Step P e o →
+      Step P (.scopeRun (vs ++ e :: rest) body) (o.inTask fun e' => .scopeRun (vs ++ e' :: rest) body)
 
 /-- A value takes no step. -/
 theorem value_no_step {P : Program} {v : Expr} {o : Outcome} (hv : IsValue v) :

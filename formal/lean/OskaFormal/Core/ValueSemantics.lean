@@ -203,7 +203,7 @@ call's value `w` or with the call done; and `c`, in fewer and fewer of the
 cells as they end. -/
 def CallState (X : Expr) : Prop :=
   X = Expr.cells s (.block [.expr (.mutCall name pl vs)] (some c)) ∨
-  (∃ r b t, X = Expr.cells s (.block [.expr (.method pl r b)] (some c)) ∧
+  (∃ (r b : Expr) (t : Ty), X = Expr.cells s (.block [.expr (.method pl r b)] (some c)) ∧
     IsValue r ∧ Typed P t [] [u] (.expr r u) ∧ Typed P t [] [u] (.expr b t) ∧
     ∀ r' w, ReceiverRun P r b r' w → ReceiverRun P r₀ body r' w) ∨
   (∃ r' w, ReceiverRun P r₀ body r' w ∧ IsValue w ∧
@@ -288,29 +288,31 @@ theorem callState_step (hP : ProgramTyped P) {pl : Place} {name : String} {vs : 
         | ret v =>
           show CallOutcome _ _ _ _ _ _ _ _ _ ((Outcome.next _).inCells s)
           rw [inCells_next]
-          refine state r v hr hrt (value_typed ho.1 ho.2) fun r'' w h => ?_
+          refine state r v hr hrt (value_typed_here ho.1 ho.2) fun r'' w h => ?_
           obtain ⟨rfl, rfl⟩ := h.of_value ho.1
           exact .ret hb
         | read i is k =>
-          obtain ⟨w', hw', hk⟩ := ho
+          obtain ⟨w', hw', _, hk⟩ := ho
           cases i with
           | zero =>
             show CallOutcome _ _ _ _ _ _ _ _ _ ((Outcome.next _).inCells s)
             rw [inCells_next]
             rw [placeTy_zero] at hw'
             obtain ⟨hgv, hgt⟩ := getAt_typed is hr hrt hw'
-            exact state r _ hr hrt (hk _ hgv (value_typed hgv hgt)) fun _ _ h => .read hb h
+            exact state r _ hr hrt (hk _ hgv (value_typed_here hgv hgt)) fun _ _ h => .read hb h
           | succ i => simp [placeTy_succ, placeTy_nil] at hw'
         | write i is x b' =>
-          obtain ⟨u', hu', hx, hxt, hb'⟩ := ho
+          obtain ⟨u', hu', _, hx, hxt, hb'⟩ := ho
           cases i with
           | zero =>
             show CallOutcome _ _ _ _ _ _ _ _ _ ((Outcome.next _).inCells s)
             rw [inCells_next]
             rw [placeTy_zero] at hu'
-            obtain ⟨hsv, hst⟩ := setAt_typed is hr hrt hu' hx (value_typed hx hxt)
+            obtain ⟨hsv, hst⟩ := setAt_typed is hr hrt hu' hx (value_typed_here hx hxt)
             exact state _ b' hsv hst hb' fun _ _ h => .write hb h
           | succ i => simp [placeTy_succ, placeTy_nil] at hu'
+        | spawn _ _ => obtain ⟨_, _, _, hts, _⟩ := ho; cases hts
+        | join _ _ => obtain ⟨_, _, hts, _⟩ := ho; cases hts
   · -- Written back: the call's value is dropped.
     obtain ⟨o', hs', rfl⟩ := step_cells_inv _ hs block_not_value
     cases hs' with
@@ -384,12 +386,12 @@ theorem mutating_call_changes_only_its_receiver (hP : ProgramTyped P) {pl : Plac
     cases hb with
     | blockExpr hm _ =>
       cases hm with
-      | @mutCall _ _ _ _ f _ u _ hf hr hpl hargs =>
+      | @mutCall _ _ _ _ f _ u _ hf hr hpl _ _ hargs =>
         obtain ⟨body, hi⟩ := instantiate_some _ hargs
         have hb := hP _ _ hf
         rw [hr] at hb
         have hbody : Typed P f.ret [] [u] (.expr body f.ret) :=
-          typed_instantiate _ hb hargs hvs hi
+          typed_instantiate (R := ⟨_, none⟩) rfl _ hb hargs hvs hi
         unfold Program.placeTy at hpl
         cases hT : OskaFormal.Core.lookup Ms pl.var with
         | none => rw [hT] at hpl; cases hpl
@@ -397,7 +399,7 @@ theorem mutating_call_changes_only_its_receiver (hP : ProgramTyped P) {pl : Plac
           rw [hT] at hpl
           obtain ⟨hlt, hv, hvt⟩ := hs.lookup hT
           obtain ⟨hgv, hgt⟩ := getAt_typed pl.fields hv hvt hpl
-          have hY := callState_steps hP hc hvs hlt hf hi ⟨hgv, value_typed hgv hgt⟩ hbody hrun
+          have hY := callState_steps hP hc hvs hlt hf hi ⟨hgv, value_typed hgv hgt (Or.inr (Or.inl rfl))⟩ hbody hrun
             (Or.inl rfl)
           rcases hY with h | ⟨_, _, _, h, _⟩ | ⟨_, _, _, _, h⟩ | ⟨_, _, _, h⟩ |
             ⟨r', w', k, hrun', h⟩

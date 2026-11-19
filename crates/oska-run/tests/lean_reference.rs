@@ -45,7 +45,7 @@ const RUN_TIMEOUT: Duration = Duration::from_secs(120);
 /// The fewest runtime test programs the comparison must cover, as many as
 /// it covered when it was written. Raise it as Oska Core grows, so that a
 /// regression that makes the export refuse nearly everything fails.
-const MIN_COVERED: usize = 40;
+const MIN_COVERED: usize = 45;
 
 /// The program path a run gets as `args[0]`.
 const PROGRAM_PATH: &str = "prog.osk";
@@ -717,12 +717,17 @@ fn the_corpus_reads_every_kind_of_string_literal() {
     );
 }
 
-/// Core IR that is not version 6, each with what the refusal must name.
-const MALFORMED: [(&str, &str, &str); 33] = [
+/// Core IR that is not version 7, each with what the refusal must name.
+const MALFORMED: [(&str, &str, &str); 41] = [
     (
         "a wrong version",
-        r#"{"core_ir_version": 7, "types": [], "functions": []}"#,
-        "core_ir_version 7",
+        r#"{"core_ir_version": 8, "types": [], "functions": []}"#,
+        "core_ir_version 8",
+    ),
+    (
+        "version 6",
+        r#"{"core_ir_version": 6, "types": [], "functions": []}"#,
+        "core_ir_version 6",
     ),
     (
         "version 5",
@@ -751,138 +756,173 @@ const MALFORMED: [(&str, &str, &str); 33] = [
     ),
     (
         "an unknown node",
-        r#"{"core_ir_version": 6, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Loop"}}]}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Loop"}}]}"#,
         "unknown expression kind `Loop`",
     ),
     (
         "an Int out of range",
-        r#"{"core_ir_version": 6, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Let", "binds": false, "type": "Int", "value": {"kind": "Int", "value": 9223372036854775808}}]}}]}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Let", "binds": false, "type": "Int", "value": {"kind": "Int", "value": 9223372036854775808}}]}}]}"#,
         "outside Int",
     ),
     (
         "an arity mismatch",
-        r#"{"core_ir_version": 6, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Call", "function": "main", "args": [{"kind": "Unit"}]}}]}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Call", "function": "main", "args": [{"kind": "Unit"}]}}]}"#,
         "with 1 argument(s), but it has 0 parameter(s)",
     ),
     (
         "trailing junk",
-        r#"{"core_ir_version": 6, "types": [], "functions": []} junk"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": []} junk"#,
         "not JSON",
     ),
     (
         "an unknown field",
-        r#"{"core_ir_version": 6, "types": [], "functions": [], "extra": 1}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [], "extra": 1}"#,
         "unknown field `extra`",
     ),
     (
         "an undeclared variant",
-        r#"{"core_ir_version": 6, "types": [{"kind": "Enum", "name": "Light", "variants": [{"name": "Red", "fields": []}]}], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Expr", "value": {"kind": "Construct", "type": "Light", "variant": "Blue", "fields": []}}]}}]}"#,
+        r#"{"core_ir_version": 7, "types": [{"kind": "Enum", "name": "Light", "variants": [{"name": "Red", "fields": []}]}], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Expr", "value": {"kind": "Construct", "type": "Light", "variant": "Blue", "fields": []}}]}}]}"#,
         "the enum `Light` has no variant `Blue`",
     ),
     (
         "a pattern with too many fields",
-        r#"{"core_ir_version": 6, "types": [{"kind": "Struct", "name": "P", "fields": ["Int"]}], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Match", "scrutinee": {"kind": "Unit"}, "arms": [{"pattern": {"kind": "Construct", "type": "P", "fields": [{"kind": "Wildcard"}, {"kind": "Wildcard"}]}, "body": {"kind": "Unit"}}]}}]}"#,
+        r#"{"core_ir_version": 7, "types": [{"kind": "Struct", "name": "P", "fields": ["Int"]}], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Match", "scrutinee": {"kind": "Unit"}, "arms": [{"pattern": {"kind": "Construct", "type": "P", "fields": [{"kind": "Wildcard"}, {"kind": "Wildcard"}]}, "body": {"kind": "Unit"}}]}}]}"#,
         "a constructor of `P` with 2 field(s), but it has 1",
     ),
     (
         "an unknown built-in",
-        r#"{"core_ir_version": 6, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Builtin", "name": "Stdin.read_line", "args": []}}]}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Builtin", "name": "Stdin.read_line", "args": []}}]}"#,
         "unknown built-in `Stdin.read_line`",
     ),
     (
         "a capability field",
-        r#"{"core_ir_version": 6, "types": [{"kind": "Struct", "name": "Logger", "fields": ["Stdout"]}], "functions": []}"#,
+        r#"{"core_ir_version": 7, "types": [{"kind": "Struct", "name": "Logger", "fields": ["Stdout"]}], "functions": []}"#,
         "a field is a capability",
     ),
     (
         "a function field",
-        r#"{"core_ir_version": 6, "types": [{"kind": "Struct", "name": "Hook", "fields": [{"kind": "Fn", "cap": false, "params": [], "ret": "()"}]}], "functions": []}"#,
+        r#"{"core_ir_version": 7, "types": [{"kind": "Struct", "name": "Hook", "fields": [{"kind": "Fn", "cap": false, "params": [], "ret": "()"}]}], "functions": []}"#,
         "a field is a function",
     ),
     (
         "a capture at the closure's height",
-        r#"{"core_ir_version": 6, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Expr", "value": {"kind": "Closure", "params": [], "captures": [0], "height": 0, "cap": false, "ret": "()", "body": {"kind": "Unit"}}}]}}]}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Expr", "value": {"kind": "Closure", "params": [], "captures": [0], "height": 0, "cap": false, "ret": "()", "body": {"kind": "Unit"}}}]}}]}"#,
         "slot 0 is not below the closure's height 0",
     ),
     (
         "captures out of order",
-        r#"{"core_ir_version": 6, "types": [], "functions": [{"name": "main", "params": [{"type": "Int", "binds": true}, {"type": "Int", "binds": true}], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Expr", "value": {"kind": "Closure", "params": [], "captures": [1, 0], "height": 2, "cap": false, "ret": "Int", "body": {"kind": "Binary", "op": "+", "lhs": {"kind": "Local", "slot": 0}, "rhs": {"kind": "Local", "slot": 1}}}}]}}]}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [{"type": "Int", "binds": true}, {"type": "Int", "binds": true}], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Expr", "value": {"kind": "Closure", "params": [], "captures": [1, 0], "height": 2, "cap": false, "ret": "Int", "body": {"kind": "Binary", "op": "+", "lhs": {"kind": "Local", "slot": 0}, "rhs": {"kind": "Local", "slot": 1}}}}]}}]}"#,
         "is not in strictly ascending order",
     ),
     (
         "a read slot left out of the captures",
-        r#"{"core_ir_version": 6, "types": [], "functions": [{"name": "main", "params": [{"type": "Int", "binds": true}], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Expr", "value": {"kind": "Closure", "params": [], "captures": [], "height": 1, "cap": false, "ret": "Int", "body": {"kind": "Local", "slot": 0}}}]}}]}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [{"type": "Int", "binds": true}], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Expr", "value": {"kind": "Closure", "params": [], "captures": [], "height": 1, "cap": false, "ret": "Int", "body": {"kind": "Local", "slot": 0}}}]}}]}"#,
         "the body reads slot 0, which the closure does not capture",
     ),
     (
         "a type named IoError",
-        r#"{"core_ir_version": 6, "types": [{"kind": "Struct", "name": "IoError", "fields": []}], "functions": []}"#,
+        r#"{"core_ir_version": 7, "types": [{"kind": "Struct", "name": "IoError", "fields": []}], "functions": []}"#,
         "a type is named `IoError`",
     ),
     (
         "an unknown type kind",
-        r#"{"core_ir_version": 6, "types": [{"kind": "Struct", "name": "P", "fields": [{"kind": "Option", "some": "Int"}]}], "functions": []}"#,
+        r#"{"core_ir_version": 7, "types": [{"kind": "Struct", "name": "P", "fields": [{"kind": "Option", "some": "Int"}]}], "functions": []}"#,
         "unknown type kind `Option`",
     ),
     (
         "a Result that holds a capability",
-        r#"{"core_ir_version": 6, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Let", "binds": false, "type": {"kind": "Result", "ok": "Int", "err": "Stdout"}, "value": {"kind": "Unit"}}]}}]}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Let", "binds": false, "type": {"kind": "Result", "ok": "Int", "err": "Stdout"}, "value": {"kind": "Unit"}}]}}]}"#,
         "a `Result` that holds a capability or a function",
     ),
     (
         "a Result that holds a function, inside another",
-        r#"{"core_ir_version": 6, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Let", "binds": false, "type": {"kind": "Result", "ok": {"kind": "Result", "ok": {"kind": "Fn", "cap": false, "params": [], "ret": "()"}, "err": "Int"}, "err": "Int"}, "value": {"kind": "Unit"}}]}}]}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Let", "binds": false, "type": {"kind": "Result", "ok": {"kind": "Result", "ok": {"kind": "Fn", "cap": false, "params": [], "ret": "()"}, "err": "Int"}, "err": "Int"}, "value": {"kind": "Unit"}}]}}]}"#,
         "a `Result` that holds a capability or a function",
     ),
     (
         "an Err pattern on a type that is not a Result",
-        r#"{"core_ir_version": 6, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Match", "scrutinee": {"kind": "Int", "value": 1}, "arms": [{"pattern": {"kind": "Err", "type": "Int", "value": {"kind": "Wildcard"}}, "body": {"kind": "Unit"}}]}}]}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Match", "scrutinee": {"kind": "Int", "value": 1}, "arms": [{"pattern": {"kind": "Err", "type": "Int", "value": {"kind": "Wildcard"}}, "body": {"kind": "Unit"}}]}}]}"#,
         "an `Err` pattern on a type that is not a `Result`",
     ),
     (
         "a ? that converts with an undefined function",
-        r#"{"core_ir_version": 6, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Try", "operand": {"kind": "Ok", "value": {"kind": "Unit"}}, "convert": "<AppError as From<Int>>.from"}}]}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Try", "operand": {"kind": "Ok", "value": {"kind": "Unit"}}, "convert": "<AppError as From<Int>>.from"}}]}"#,
         "`?` converts with `<AppError as From<Int>>.from`, which the program does not define",
     ),
     (
         "a ? that converts with a function of two parameters",
-        r#"{"core_ir_version": 6, "types": [], "functions": [{"name": "two", "params": [{"type": "Int", "binds": true}, {"type": "Int", "binds": true}], "ret": "Int", "body": {"kind": "Local", "slot": 0}}, {"name": "main", "params": [], "ret": "()", "body": {"kind": "Try", "operand": {"kind": "Ok", "value": {"kind": "Unit"}}, "convert": "two"}}]}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "two", "params": [{"type": "Int", "binds": true}, {"type": "Int", "binds": true}], "ret": "Int", "body": {"kind": "Local", "slot": 0}}, {"name": "main", "params": [], "ret": "()", "body": {"kind": "Try", "operand": {"kind": "Ok", "value": {"kind": "Unit"}}, "convert": "two"}}]}"#,
         "`?` converts with `two`, which takes 2 parameter(s), not 1",
     ),
     (
         "a mutating call of a function with no receiver",
-        r#"{"core_ir_version": 6, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "MutatingCall", "function": "main", "receiver": {"var": 0, "fields": []}, "args": []}}]}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "MutatingCall", "function": "main", "receiver": {"var": 0, "fields": []}, "args": []}}]}"#,
         "a mutating call of `main`, which takes no `var self`",
     ),
     (
         "a mutating call of a function the program does not define",
-        r#"{"core_ir_version": 6, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "MutatingCall", "function": "absent", "receiver": {"var": 0, "fields": []}, "args": []}}]}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "MutatingCall", "function": "absent", "receiver": {"var": 0, "fields": []}, "args": []}}]}"#,
         "a mutating call of `absent`, which the program does not define",
     ),
     (
         "a mutating call with an argument too many",
-        r#"{"core_ir_version": 6, "types": [{"kind": "Struct", "name": "Counter", "fields": ["Int"]}], "functions": [{"name": "Counter.bump", "receiver": "Counter", "params": [], "ret": "()", "body": {"kind": "Unit"}}, {"name": "main", "params": [], "ret": "()", "body": {"kind": "MutatingCall", "function": "Counter.bump", "receiver": {"var": 0, "fields": []}, "args": [{"kind": "Unit"}]}}]}"#,
+        r#"{"core_ir_version": 7, "types": [{"kind": "Struct", "name": "Counter", "fields": ["Int"]}], "functions": [{"name": "Counter.bump", "receiver": "Counter", "params": [], "ret": "()", "body": {"kind": "Unit"}}, {"name": "main", "params": [], "ret": "()", "body": {"kind": "MutatingCall", "function": "Counter.bump", "receiver": {"var": 0, "fields": []}, "args": [{"kind": "Unit"}]}}]}"#,
         "a mutating call of `Counter.bump` with 1 argument(s), but it has 0 parameter(s)",
     ),
     (
         "a call of a mutating method without its receiver",
-        r#"{"core_ir_version": 6, "types": [{"kind": "Struct", "name": "Counter", "fields": ["Int"]}], "functions": [{"name": "Counter.bump", "receiver": "Counter", "params": [], "ret": "()", "body": {"kind": "Unit"}}, {"name": "main", "params": [], "ret": "()", "body": {"kind": "Call", "function": "Counter.bump", "args": []}}]}"#,
+        r#"{"core_ir_version": 7, "types": [{"kind": "Struct", "name": "Counter", "fields": ["Int"]}], "functions": [{"name": "Counter.bump", "receiver": "Counter", "params": [], "ret": "()", "body": {"kind": "Unit"}}, {"name": "main", "params": [], "ret": "()", "body": {"kind": "Call", "function": "Counter.bump", "args": []}}]}"#,
         "a call of `Counter.bump` with 0 argument(s), but it has 1 parameter(s)",
     ),
     (
         "a receiver that is not a declared struct or enum",
-        r#"{"core_ir_version": 6, "types": [], "functions": [{"name": "f", "receiver": "Int", "params": [], "ret": "()", "body": {"kind": "Unit"}}]}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "f", "receiver": "Int", "params": [], "ret": "()", "body": {"kind": "Unit"}}]}"#,
         "the receiver of `f` is not a struct or enum the program declares",
     ),
     (
         "a place with no fields",
-        r#"{"core_ir_version": 6, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Assign", "place": {"var": 0}, "value": {"kind": "Unit"}}]}}]}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Assign", "place": {"var": 0}, "value": {"kind": "Unit"}}]}}]}"#,
         "missing field `fields`",
     ),
     (
         "a var that is negative",
-        r#"{"core_ir_version": 6, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Var", "var": -1}}]}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Var", "var": -1}}]}"#,
         "expected a slot, 0 or more",
+    ),
+    (
+        "a task type without its result",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Let", "binds": false, "type": {"kind": "Task"}, "value": {"kind": "Unit"}}]}}]}"#,
+        "missing field `result`",
+    ),
+    (
+        "a scope with a field it does not have",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Scope", "body": {"kind": "Unit"}, "handle": 0}}]}"#,
+        "unknown field `handle`",
+    ),
+    (
+        "a scope without its block",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Scope"}}]}"#,
+        "missing field `body`",
+    ),
+    (
+        "a struct with a scope's handle as a field",
+        r#"{"core_ir_version": 7, "types": [{"kind": "Struct", "name": "Holder", "fields": ["Scope"]}], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Unit"}}]}"#,
+        "a field is a scope's or a task's handle",
+    ),
+    (
+        "a Result that holds a task",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Let", "binds": false, "type": {"kind": "Result", "ok": {"kind": "Task", "result": "Int"}, "err": "()"}, "value": {"kind": "Unit"}}]}}]}"#,
+        "a `Result` that holds a scope's or a task's handle",
+    ),
+    (
+        "a type named Task",
+        r#"{"core_ir_version": 7, "types": [{"kind": "Struct", "name": "Task", "fields": []}], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Unit"}}]}"#,
+        "the name of a built-in type",
+    ),
+    (
+        "a join of no task",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Builtin", "name": "Task.join", "args": []}}]}"#,
+        "a call of the built-in `Task.join` with 0 argument(s)",
     ),
 ];
 
@@ -896,7 +936,7 @@ fn the_lean_reference_refuses_malformed_core_ir_with_exit_2() {
         assert_eq!(run.code, Some(2), "{what}: the exit code, with {run:?}");
         assert_eq!(run.stdout, "", "{what}: nothing on stdout");
         assert!(
-            run.stderr.starts_with("error: not core IR version 6: ")
+            run.stderr.starts_with("error: not core IR version 7: ")
                 && run.stderr.contains(message),
             "{what}: stderr should name {message:?}: {:?}",
             run.stderr
@@ -912,14 +952,14 @@ fn the_lean_reference_refuses_a_mutating_main_and_an_unbound_var() {
     let Some(exe) = reference_or_skip("lean_reference (vars)") else {
         return;
     };
-    let mutating_main = r#"{"core_ir_version": 6, "types": [{"kind": "Struct", "name": "Counter", "fields": ["Int"]}], "functions": [{"name": "main", "receiver": "Counter", "params": [], "ret": "()", "body": {"kind": "Unit"}}]}"#;
+    let mutating_main = r#"{"core_ir_version": 7, "types": [{"kind": "Struct", "name": "Counter", "fields": ["Int"]}], "functions": [{"name": "main", "receiver": "Counter", "params": [], "ret": "()", "body": {"kind": "Unit"}}]}"#;
     let run = run_exe(exe, mutating_main).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(run.code, Some(2), "{run:?}");
     assert_eq!(
         run.stderr,
         "error: no program to run: `main` is a mutating method\n"
     );
-    let unbound = r#"{"core_ir_version": 6, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Assign", "place": {"var": 0, "fields": []}, "value": {"kind": "Unit"}}]}}]}"#;
+    let unbound = r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Assign", "place": {"var": 0, "fields": []}, "value": {"kind": "Unit"}}]}}]}"#;
     let run = run_exe(exe, unbound).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(run.code, Some(3), "{run:?}");
     assert_eq!(run.stdout, "");
