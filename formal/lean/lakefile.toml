@@ -2,7 +2,14 @@
 # docs/agents/formal.md says how to keep it in step with the checker and the
 # interpreter. No dependencies, so no lake-manifest.json is committed.
 name = "oska_formal"
-defaultTargets = ["OskaFormal"]
+defaultTargets = ["OskaFormal", "oska_core"]
 
 [[lean_lib]]
 name = "OskaFormal"
+
+# The Lean reference: runs a program's core IR with Oska Core's executable
+# semantics. crates/oska-run/tests/lean_reference.rs builds it and checks
+# the interpreter against it.
+[[lean_exe]]
+name = "oska_core"
+root = "OskaReference"

@@ -523,6 +523,12 @@ if step "cargo test (private temporary directory)" --fast --cargo --docs-tests; 
   # check here, naming it, instead of slowly filling the shared /tmp.
   # The fast tier tests only the changed crates and their dependents
   # (fast_crates).
+  # In CI, where the formal step needs Lean, the differential test against
+  # the Lean reference (oska-run's lean_reference) fails without Lean
+  # rather than skipping (ADR 0018).
+  if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+    export OSKA_LEAN_REFERENCE=required
+  fi
   if [ "$cargo_mode" = docs ]; then
     run_docs_tests
   elif [ "$tier" = fast ]; then
