@@ -22,7 +22,7 @@ mod differential;
 
 use std::ops::ControlFlow;
 
-use differential::{assert_same, Case};
+use differential::{assert_same, in_parallel, Case};
 use oska_check::program::{walk, Callee, Program, Visit};
 use oska_syntax::ast::{Item, ItemKind, Module, TypeKind};
 
@@ -977,7 +977,7 @@ fn calls(program: &Program, name: &str) -> bool {
 
 #[test]
 fn every_call_calls_its_function_and_builds_natively() {
-    for (name, run, src) in CALLS {
+    in_parallel(CALLS, |(name, run, src)| {
         let program = checked(name, &source(src));
         assert!(
             calls(&program, name),
@@ -995,18 +995,18 @@ fn every_call_calls_its_function_and_builds_natively() {
                 );
             }
         }
-    }
+    });
 }
 
 #[test]
 fn every_call_runs_the_same_on_both_backends() {
-    for (name, run, src) in CALLS {
+    in_parallel(CALLS, |(name, run, src)| {
         let case = Case::file(&format!("prelude-{name}"), &source(src)).with_args(&["given"]);
         let case = match run {
-            Run::Tests => continue,
+            Run::Tests => return,
             Run::Main => case,
             Run::WithInput(stdin) => case.with_stdin(stdin).with_env("NAME", "from env"),
         };
         assert_same(&case);
-    }
+    });
 }

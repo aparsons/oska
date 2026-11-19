@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "task": "files",
+  "class": "path_traversal",
+  "attempt": 3,
+  "attempts": 3,
+  "variant": "base",
+  "model": "example-model",
+  "agent": {
+    "name": "claude-code",
+    "version": "2.0.0"
+  },
+  "oskac": {
+    "version": "0.4.0",
+    "commit": "4bb471f"
+  },
+  "task_set_digest": "3f2a9c0d",
+  "started": "2026-11-20T12:20:00Z",
+  "ended": "2026-11-20T12:59:00Z",
+  "stop": "timeout",
+  "usage": {
+    "turns": 10,
+    "input_tokens": 1000,
+    "output_tokens": 200,
+    "cost_usd": 0.1
+  },
+  "flags": {
+    "escape": false,
+    "false_claim": false,
+    "read_only_changed": false
+  },
+  "grade": null,
+  "analysis": {
+    "iterations": 2,
+    "iterations_to_clean": null,
+    "timeline": [],
+    "diagnostics": [
+      {
+        "code": "E0371",
+        "path": "src/main.osk",
+        "first_iteration": 1,
+        "resolved_iteration": null,
+        "iterations_present": 2,
+        "fix": null
+      }
+    ],
+    "fixes": {},
+    "lookups": {
+      "explain": [],
+      "site": []
+    },
+    "escapes": []
+  }
+}

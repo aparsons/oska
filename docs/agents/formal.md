@@ -4,6 +4,8 @@ Oska Core's Lean model (ADR 0018) lives in `formal/lean/`, and the TLA+ models o
 
 ## Keep the Lean model in step
 
+Oska Core's model is in `formal/lean/OskaFormal/Core/`. `Syntax.lean` covers exactly the core IR version that `crates/oska-check/src/core_ir.rs` exports. `Typing.lean` holds the typing rules, `Semantics.lean` the small-step semantics with the interpreter's panics, and `Soundness.lean` the proofs of progress and preservation. A new core IR version extends all four.
+
 - A change to how a construct of Oska Core is typed or run (the checker or the interpreter) updates the Lean model in the same pull request. Do not defer it to a follow-up issue.
 - When the change touches Oska Core and the Lean model does not need to change, say why in the pull request's Summary.
 - No `sorry`, `admit`, `axiom` or `native_decide` anywhere in a `.lean` file. Comments count too: the step matches each as a whole word in the file's text, before it looks for Lean, so `admittedly` passes and `-- remove this sorry` fails. The build runs with warnings as errors. An unfinished proof may not merge, even with an issue (ADR 0018).

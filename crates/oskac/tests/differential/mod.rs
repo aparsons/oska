@@ -162,6 +162,42 @@ pub fn host_target() -> oska_native::Target {
     oska_native::Target::host().expect("this host runs native executables")
 }
 
+/// `each` applied to every item, in order, with the items spread over
+/// as many threads as the host has cores.
+///
+/// A test that goes through many cases one after another uses one core:
+/// on the Intel Mac CI runner that made one test of `native_prelude` take
+/// over a minute. Cases do not share state: each runs in directories
+/// named after it, and [`Case`] names are unique. A case that fails
+/// prints its own message; the other threads run the remaining cases, and
+/// then the test fails.
+pub fn in_parallel<T: Sync, R: Send>(items: &[T], each: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    let next = AtomicUsize::new(0);
+    let results: Mutex<Vec<Option<R>>> = Mutex::new(items.iter().map(|_| None).collect());
+    let threads = std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .min(items.len());
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                let Some(item) = items.get(index) else { break };
+                let result = each(item);
+                results.lock().expect("no thread panics holding the lock")[index] = Some(result);
+            });
+        }
+    });
+    results
+        .into_inner()
+        .expect("no thread panics holding the lock")
+        .into_iter()
+        .map(|result| result.expect("every item was run"))
+        .collect()
+}
+
 /// Run `case` on both backends and require the same outcome, and build
 /// it for every other target ([`cross_build`]). Returns the outcome.
 pub fn assert_same(case: &Case) -> Outcome {

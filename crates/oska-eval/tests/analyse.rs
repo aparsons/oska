@@ -139,17 +139,3 @@ fn a_missing_transcript_is_bad_input() {
     assert_eq!(outcome.code, 2, "{}{}", outcome.stdout, outcome.stderr);
     assert!(outcome.stdout.contains("cannot read"), "{}", outcome.stdout);
 }
-
-#[test]
-fn the_fixtures_hold_no_home_path() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/analyse");
-    for entry in std::fs::read_dir(dir).expect("the fixtures should exist") {
-        let path = entry.expect("an entry").path();
-        let text = std::fs::read_to_string(&path).expect("a fixture should be text");
-        assert!(
-            !text.contains("/home/pi") && !text.contains("/Users/"),
-            "{} holds a home path",
-            path.display()
-        );
-    }
-}

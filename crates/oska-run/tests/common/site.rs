@@ -255,3 +255,48 @@ pub fn check_links(site: &BTreeMap<String, String>, tracked: &[&str]) -> RunOutc
         .with_file("site/tracked.txt", &list);
     run_differential(&mut host, CHECK, &[])
 }
+
+// ---- Reading pages and the agent corpus ----------------------------------------------
+
+/// Every `href` in `html`, in order.
+pub fn hrefs(html: &str) -> Vec<&str> {
+    html.split("href=\"")
+        .skip(1)
+        .filter_map(|rest| rest.split('"').next())
+        .collect()
+}
+
+/// The links of a page's navigation, as `(href, label)`, in order.
+pub fn navigation(page: &str) -> Vec<(String, String)> {
+    let nav = between(page, "<nav aria-label=\"Site\">", "</nav>");
+    nav.split("<a href=\"")
+        .skip(1)
+        .map(|rest| {
+            let href = rest.split('"').next().unwrap_or("").to_string();
+            let label = between(rest, ">", "</a>").to_string();
+            (href, label)
+        })
+        .collect()
+}
+
+/// The text of the `## heading` group of `llms`, up to the next group.
+pub fn llms_group<'a>(llms: &'a str, heading: &str) -> &'a str {
+    let open = format!("\n## {heading}\n");
+    let start = llms
+        .find(&open)
+        .unwrap_or_else(|| panic!("no group {heading} in:\n{llms}"))
+        + open.len();
+    let rest = &llms[start..];
+    &rest[..rest.find("\n## ").unwrap_or(rest.len())]
+}
+
+/// The URL of every entry in `text`, in order, without the origin.
+pub fn entry_urls(text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|l| l.starts_with("- ["))
+        .map(|l| {
+            let rest = l.split("](https://oskalang.dev/").nth(1).expect("a URL");
+            rest.split(')').next().expect("a close").to_string()
+        })
+        .collect()
+}
