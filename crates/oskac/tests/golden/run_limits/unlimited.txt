@@ -1,0 +1,15 @@
+x
+xxx
+xxxxx
+xxxxxxx
+xxxxxxxxx
+xxxxxxxxxxx
+--- stderr
+xx
+xxxx
+xxxxxx
+xxxxxxxx
+xxxxxxxxxx
+xxxxxxxxxxxx
+[dbg] 12
+the last words of a program that failed

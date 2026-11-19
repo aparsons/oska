@@ -27,13 +27,14 @@ pub fn check(flags: Flags, gate: Option<baseline::Gate>) -> ExitCode {
 }
 
 /// `oskac run -`: check and run the module on standard input, with
-/// `args` after `<stdin>` and a closed standard input of its own.
-pub fn run(flags: Flags, args: &[String]) -> ExitCode {
+/// `args` after `<stdin>`, a closed standard input of its own, and the
+/// run `limits`.
+pub fn run(flags: Flags, limits: oska_check::limits::Limits, args: &[String]) -> ExitCode {
     let store = cache::for_command(flags.no_cache);
     let Some(src) = read() else {
         return ExitCode::FAILURE;
     };
-    crate::run_source(PATH, &src, flags, args, store.as_ref(), true)
+    crate::run_source(PATH, &src, flags, limits, args, store.as_ref(), true)
 }
 
 /// All of standard input, as UTF-8 text. Text that cannot be read is the

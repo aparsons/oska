@@ -1,0 +1,1 @@
+main.osk:4:17: error[P0041]: output limit reached: this write would take standard output and standard error past 1048576 bytes (`--max-output=1048576`) (bytes 69..91)

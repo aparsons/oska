@@ -9,6 +9,10 @@
 //! - as a native executable written by `oskac build` outside the
 //!   directory, so that it does not show up in the tree.
 //!
+//! A case with run flags ([`Case::with_run_flags`], such as a run limit,
+//! which only `oskac run` takes) runs natively as `oskac run` with them
+//! instead, and on the interpreter with them too.
+//!
 //! [`assert_same`] then requires byte-identical stdout and stderr (a
 //! panic report included), the same exit code, and the same directory
 //! tree afterwards. The program is named by the same relative path on both
@@ -49,6 +53,8 @@ pub struct Case {
     /// Run on each starting tree after its files are written: for what
     /// files alone cannot set up, such as symlinks and hard links.
     setup: Option<fn(&Path)>,
+    /// Flags for `oskac run` on both backends, such as `--max-output=64`.
+    run_flags: Vec<String>,
 }
 
 impl Case {
@@ -62,6 +68,7 @@ impl Case {
             stdin: String::new(),
             env: Vec::new(),
             setup: None,
+            run_flags: Vec::new(),
         }
     }
 
@@ -89,6 +96,7 @@ impl Case {
             stdin: String::new(),
             env: Vec::new(),
             setup: None,
+            run_flags: Vec::new(),
         }
     }
 
@@ -131,6 +139,12 @@ impl Case {
 
     pub fn with_stdin(mut self, stdin: &str) -> Case {
         self.stdin = stdin.to_string();
+        self
+    }
+
+    /// Run the program with `oskac run` and `flags` on both backends.
+    pub fn with_run_flags(mut self, flags: &[&str]) -> Case {
+        self.run_flags = flags.iter().map(|f| f.to_string()).collect();
         self
     }
 
@@ -208,6 +222,7 @@ fn interpret(case: &Case, root: &Path) -> Outcome {
     let mut interpreter = oskac(&interpreted_dir);
     interpreter
         .args(["run", "--interpret"])
+        .args(&case.run_flags)
         .arg(&case.target)
         .arg("--")
         .args(&case.args);
@@ -274,6 +289,14 @@ pub fn build_native(case: &Case) -> (PathBuf, PathBuf) {
 /// Build `case` and run the executable in `root/native`.
 fn native(case: &Case, root: &Path) -> Outcome {
     let native_dir = fresh_tree(&root.join("native"), case);
+    if !case.run_flags.is_empty() {
+        let mut run = oskac(&native_dir);
+        run.arg("run")
+            .args(&case.run_flags)
+            .args(["--no-cache", &case.target, "--"])
+            .args(&case.args);
+        return outcome(run, case, &native_dir);
+    }
     let exe = build(case, root, &native_dir);
     let mut program = Command::new(&exe);
     program.current_dir(&native_dir).args(&case.args);

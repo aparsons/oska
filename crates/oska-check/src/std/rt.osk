@@ -469,7 +469,8 @@ fn broken_pipe(result: Int) -> Bool {
 //   29      the digits of a fault report's signal number (`on_fault`);
 //   30      the `struct sigaction` of the default action, which `on_fault`
 //           restores (`handle_faults`);
-//   31      free;
+//   31      the bytes the program has written to stdout and stderr, under
+//           `--max-output` (`output_allows`);
 //   32-38   the test host (see "The test host"): 32 which host a test runs
 //           on, 33 its stderr prefix, 34 whether stderr is at the start
 //           of a line, 35 the lines printed, 36 the fake files' paths, 37
@@ -2391,6 +2392,45 @@ fn stdout_put_line(object: Int) -> Int {
     0
 }
 
+// ---- Run limits ------------------------------------------------------------
+//
+// `oskac run --max-output=<limit>` builds the program so that each write
+// it makes to stdout or stderr (`println`, `dbg`, `main`'s error) first
+// asks `output_allows`. A program built without the flag never calls it.
+
+// Whether the program may write `text` and `extra` bytes more without
+// taking its output past `limit` bytes: if so they are counted, and if
+// not nothing is, for the generated code to panic (`P0041`) before the
+// write.
+pub fn output_allows(text: String, extra: Int, limit: Int) -> Bool {
+    let wanted = text_length(rt_mem_text(text)) + extra
+    let written = rt_mem_load64(global(31))
+    if wanted > limit - written {
+        return false
+    }
+    rt_mem_store64(global(31), written + wanted)
+    true
+}
+
+// `text`, program-made text a panic report quotes, cut to the bytes
+// `--max-output=limit` has left: all of it when it fits, else as many of
+// its first bytes as fit, ending where a character ends, then `...`. The
+// interpreter cuts alike (`oska_check::limits::cut_quoted`).
+fn cut_quoted(text: String, limit: Int) -> String {
+    let left = limit - rt_mem_load64(global(31))
+    let object = rt_mem_text(text)
+    if text_length(object) <= left {
+        return text
+    }
+    var end = left
+    // A continuation byte (10xxxxxx) is inside a character.
+    while end > 0 && rt_mem_and(rt_mem_load8(rt_mem_add(text_data(object), end)), 192) == 128 {
+        end = end - 1
+    }
+    let cut = text_part(text, object, 0, end)
+    "{cut}..."
+}
+
 // `Stdout.println`.
 pub fn stdout_println(io: Stdout, line: String) -> Result<(), IoError> {
     if testing() {
@@ -2818,6 +2858,17 @@ pub fn panic_missing_secret(start: String, end: String, env: Env, name: String) 
 
 pub fn missing_secret_message(head: String, env: Env, name: String) -> String {
     "{head}the secret `{name}` is not set in the environment"
+}
+
+// Panic (`P0020`) under `--max-output=limit`: the name cut to what the
+// limit has left (`cut_quoted`).
+pub fn panic_missing_secret_cut(start: String, end: String, env: Env, name: String, limit: Int) {
+    panic_message(start, end, missing_secret_cut_message("", env, name, limit))
+}
+
+pub fn missing_secret_cut_message(head: String, env: Env, name: String, limit: Int) -> String {
+    let shown = cut_quoted(name, limit)
+    "{head}the secret `{shown}` is not set in the environment"
 }
 
 // `Secret.constant_time_eq`.

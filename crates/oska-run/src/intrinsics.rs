@@ -11,20 +11,21 @@ use std::path::Path;
 use std::rc::Rc;
 
 use oska_check::builtins;
+use oska_check::limits;
 use oska_syntax::Span;
 
 use crate::confine::{self, Intent};
 use crate::data;
 use crate::host::{Host, RootHandle};
 use crate::html;
-use crate::interp::Interpreter;
+use crate::interp::{Interpreter, Stream};
 use crate::panics::{codes, Panic};
 use crate::tasks;
 use crate::testing;
 use crate::traits;
 use crate::value::{Access, Capability, FsCap, Root, Value};
 
-use Intrinsic::Plain;
+use Intrinsic::{HigherOrder, Plain};
 
 /// A body-less prelude function's runtime implementation. Each gets the
 /// arguments, the receiver first for a method, and the call's span, for
@@ -61,7 +62,7 @@ pub const INTRINSICS: Table = &[
     ("DirWrite.restrict_to_file", Plain(dir_restrict_to_file)),
     ("DirWrite.write", Plain(fs_write)),
     ("Env.get", Plain(env_get)),
-    ("Env.secret", Plain(env_secret)),
+    ("Env.secret", HigherOrder(env_secret)),
     ("FileRead.read_to_string", Plain(file_read_to_string)),
     ("FileWrite.write", Plain(file_write)),
     ("Fs.read_only", Plain(fs_read_only)),
@@ -86,12 +87,12 @@ pub const INTRINSICS: Table = &[
         Plain(secret_constant_time_eq_secret),
     ),
     ("Secret.expose", Plain(secret_expose)),
-    ("Stderr.println", Plain(stderr_println)),
+    ("Stderr.println", HigherOrder(stderr_println)),
     ("Stdin.read_line", Plain(stdin_read_line)),
-    ("Stdout.println", Plain(stdout_println)),
+    ("Stdout.println", HigherOrder(stdout_println)),
     ("String.assume_trusted", Plain(string_assume_trusted)),
     ("String.to_string", Plain(string_to_string)),
-    ("dbg", Plain(dbg)),
+    ("dbg", HigherOrder(dbg)),
     ("todo", Plain(todo)),
 ];
 
@@ -141,16 +142,29 @@ fn io_result<T>(result: io::Result<T>, ok: impl FnOnce(T) -> Value) -> Value {
 
 // ---- Standard streams --------------------------------------------------
 
+// The program's writes to stdout and stderr go through the interpreter,
+// which counts them against `--max-output` (`Interpreter::write_output`).
+
 /// `Stdout.println(self, line)`: the line and a newline.
-fn stdout_println(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn stdout_println(
+    interp: &mut Interpreter<'_, '_>,
+    args: Vec<Value>,
+    span: Span,
+) -> Result<Value, Panic> {
     let line = format!("{}\n", text(&args, 1));
-    Ok(io_result(host.write_stdout(&line), |()| Value::Unit))
+    let written = interp.write_output(Stream::Stdout, &line, span)?;
+    Ok(io_result(written, |()| Value::Unit))
 }
 
 /// `Stderr.println(self, line)`: the line and a newline.
-fn stderr_println(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn stderr_println(
+    interp: &mut Interpreter<'_, '_>,
+    args: Vec<Value>,
+    span: Span,
+) -> Result<Value, Panic> {
     let line = format!("{}\n", text(&args, 1));
-    Ok(io_result(host.write_stderr(&line), |()| Value::Unit))
+    let written = interp.write_output(Stream::Stderr, &line, span)?;
+    Ok(io_result(written, |()| Value::Unit))
 }
 
 /// `Stdin.read_line(self)`: the next line, or `None` at end of input.
@@ -162,14 +176,14 @@ fn stdin_read_line(host: &mut dyn Host, _: Vec<Value>, _: Span) -> Result<Value,
 
 /// `dbg(value)`: print `value` to stderr for debugging, and return it. A
 /// `Secret` prints as `<redacted>`, wherever it is.
-fn dbg(host: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn dbg(interp: &mut Interpreter<'_, '_>, mut args: Vec<Value>, span: Span) -> Result<Value, Panic> {
     let value = args.swap_remove(0);
     let mut line = String::from("[dbg] ");
     debug(&value, &mut line);
     line.push('\n');
     // `dbg` is for debugging: a stderr that cannot be written loses the
     // line, not the program.
-    let _ = host.write_stderr(&line);
+    let _ = interp.write_output(Stream::Stderr, &line, span)?;
     Ok(value)
 }
 
@@ -287,15 +301,28 @@ fn env_get(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Pani
 /// has no room for a missing secret, and running on with a stand-in, say
 /// an empty one, could let an empty password through, so a missing one
 /// panics.
-fn env_secret(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+///
+/// The report quotes the name, which the program made: under
+/// `--max-output` it quotes no more of it than the limit has left.
+fn env_secret(
+    interp: &mut Interpreter<'_, '_>,
+    args: Vec<Value>,
+    span: Span,
+) -> Result<Value, Panic> {
     let name = text(&args, 1);
-    match host.env_var(name) {
+    match interp.host().env_var(name) {
         Some(value) => Ok(Value::secret(Value::str(&value))),
-        None => Err(Panic::new(
-            codes::MISSING_SECRET,
-            format!("the secret `{name}` is not set in the environment"),
-            span,
-        )),
+        None => {
+            let name = match interp.output_left() {
+                Some(left) => limits::cut_quoted(name, left),
+                None => name.into(),
+            };
+            Err(Panic::new(
+                codes::MISSING_SECRET,
+                format!("the secret `{name}` is not set in the environment"),
+                span,
+            ))
+        }
     }
 }
 
