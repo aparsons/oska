@@ -640,7 +640,7 @@ fn a_difference_or_a_refused_core_ir_fails_with_a_stubbed_reference() {
             "{what}: should differ, got {verdict:?}"
         );
     }
-    let refuses = |_: &str| Err("exit status: 2 with error: not core IR version 6".to_string());
+    let refuses = |_: &str| Err("exit status: 2 with error: not core IR version 7".to_string());
     assert!(matches!(
         verdict(DIVIDES_BY_ZERO, &refuses, &|_| {}),
         Verdict::Differs(_)
