@@ -5,6 +5,7 @@ import OskaFormal.Core.Syntax
 import OskaFormal.Core.Typing
 import OskaFormal.Core.Semantics
 import OskaFormal.Core.Soundness
+import OskaFormal.Core.ValueSemantics
 import OskaFormal.Core.Host
 import OskaFormal.Core.Eval
 import OskaFormal.Core.Authority

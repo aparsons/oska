@@ -981,6 +981,21 @@ fn methods_vars_and_assignment_export_to_the_golden_form() {
 }
 
 #[test]
+fn an_inherent_impl_of_a_type_outside_the_core_is_refused_with_its_type() {
+    // The `impl` comes first in the source, so it is the first refusal,
+    // before the generic struct's own.
+    let src = "impl<T> Wrap<T> {\n\
+               \x20   fn get(self) -> T { self.v }\n\
+               }\n\
+               struct Wrap<T> { v: T }\n";
+    assert_refused(
+        src,
+        "the `impl` of `Wrap<T>`",
+        "impl<T> Wrap<T> {\n    fn get(self) -> T { self.v }\n}",
+    );
+}
+
+#[test]
 fn a_closure_that_reads_a_var_or_self_is_refused() {
     assert_refused(
         "fn f() -> Int {\n\
@@ -1039,4 +1054,15 @@ fn the_places_the_lean_typing_rejects_the_checker_rejects() {
         core_ir::export(&program(&accepted))
             .unwrap_or_else(|refusal| panic!("{accepted:?} should export, refused: {refusal}"));
     }
+    // The `Call` form passes the receiver as a copy, so it needs no
+    // `var`: the checker accepts it on a `let`, and the Lean typing
+    // types it (`Typed.call` against `Function.argTypes`).
+    let copy = main("let", "Counter.bump(a)");
+    assert!(checks(&copy), "the checker should accept {copy:?}");
+    let json = core_ir::export(&program(&copy))
+        .unwrap_or_else(|refusal| panic!("{copy:?} should export, refused: {refusal}"));
+    assert!(
+        json.contains("\"kind\": \"Call\"") && !json.contains("MutatingCall"),
+        "the export should be a plain call:\n{json}"
+    );
 }

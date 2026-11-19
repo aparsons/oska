@@ -20,11 +20,9 @@ Type soundness of Oska Core, version 6, for a well-typed program `P`:
 - `type_safety`: for a program as the checker hands it over
   (`ProgramSourceTyped`), every expression a source-typed expression steps
   to keeps its type and is a value or takes a step.
-- `method_writes_only_receiver`: value semantics of a mutating method. A
-  step of a running mutating call reads no var of its caller and writes
-  only its receiver's value back to the call's place, at its end; and a
-  `cell` takes a write of its own var, passing any other on with its own
-  value unchanged (`Outcome.inCell_write_zero`, `Outcome.inCell_write_succ`).
+
+Value semantics of mutating methods, over whole runs, is in
+`ValueSemantics.lean`.
 -/
 
 namespace OskaFormal.Core
@@ -1368,7 +1366,7 @@ theorem typed_enter {R' : Ty} {M' : List Ty} {f : Function} {vs : List Expr} {e 
     (hargs : Typed P R' [] M' (.args vs f.argTypes)) (hvs : AllValues vs)
     (he : f.enter vs = some e) : Typed P R [] [] (.expr e t) := by
   unfold Function.enter at he
-  unfold Function.argTypes at hargs
+  rw [Function.argTypes_eq] at hargs
   cases hr : f.receiver with
   | none =>
     rw [hr] at he hb hargs
@@ -1387,7 +1385,7 @@ it takes, so a call can enter it. -/
 theorem enter_some {Γ : List Ty} {f : Function} {vs : List Expr}
     (hargs : Typed P R Γ M (.args vs f.argTypes)) : ∃ e, f.enter vs = some e := by
   unfold Function.enter
-  unfold Function.argTypes at hargs
+  rw [Function.argTypes_eq] at hargs
   cases hr : f.receiver with
   | none =>
     rw [hr] at hargs
@@ -1643,41 +1641,56 @@ theorem OutcomeTyped.inFrame {o : Outcome} {t : Ty} (h : OutcomeTyped P t [] o t
   | read i is k => obtain ⟨_, hu, _⟩ := h; simp [placeTy_nil] at hu
   | write i is w e => obtain ⟨_, hu, _⟩ := h; simp [placeTy_nil] at hu
 
-/-- The outcome of a step of the rest of a block, typed with its var
-holding a value of the var's type, is typed in the block's cell: the cell
-answers a read or a write of its var with the value it holds, and keeps
-the type of what it holds. -/
-theorem OutcomeTyped.inCell {o : Outcome} {v : Expr} {u t : Ty}
-    (h : OutcomeTyped P R (u :: M) o t) (hv : IsValue v) (hvt : Typed P R [] M (.expr v u)) :
-    OutcomeTyped P R M (o.inCell v) t := by
-  have hcell : ∀ {v e}, IsValue v → Typed P R [] M (.expr v u) →
-      Typed P R [] (u :: M) (.expr e t) → Typed P R [] M (.expr (.cell v e) t) :=
-    fun hv hvt he => Typed.cell hv hvt he
+/-- The outcome of a step of a body that holds var 0, typed with that var
+of type `u` and the vars `Mi` beyond it, in a function or closure whose
+result type is `Ri`, is typed once its binder (`wrap`, holding `v`)
+answers it: the binder answers a read or a write of var 0 with the value
+it holds and keeps its type, and passes one of var `i + 1` on as one of
+var `i`, which `hpass` places in `M`. -/
+theorem OutcomeTyped.under {o : Outcome} {v : Expr} {u t Ri : Ty} {Mi : List Ty}
+    {wrap : Expr → Expr → Expr} {onRet : Expr → Outcome}
+    (h : OutcomeTyped P Ri (u :: Mi) o t) (hv : IsValue v) (hvt : Typed P R [] M (.expr v u))
+    (hwrap : ∀ {v e}, IsValue v → Typed P R [] M (.expr v u) →
+      Typed P Ri [] (u :: Mi) (.expr e t) → Typed P R [] M (.expr (wrap v e) t))
+    (hret : ∀ {r}, IsValue r → Typed P Ri [] (u :: Mi) (.expr r Ri) →
+      OutcomeTyped P R M (onRet r) t)
+    (hpass : ∀ {i is u'}, P.placeTy Mi ⟨i, is⟩ = some u' → P.placeTy M ⟨i, is⟩ = some u') :
+    OutcomeTyped P R M (o.under v wrap onRet) t := by
   cases o with
-  | next e => exact hcell hv hvt h
+  | next e => exact hwrap hv hvt h
   | panic _ => trivial
-  | perform req k => exact fun r hr => hcell hv hvt (h r hr)
-  | ret r => exact ⟨h.1, value_typed h.1 h.2⟩
+  | perform req k => exact fun r hr => hwrap hv hvt (h r hr)
+  | ret r => exact hret h.1 h.2
   | read i is k =>
     obtain ⟨w, hw, hk⟩ := h
     cases i with
     | zero =>
       rw [placeTy_zero] at hw
       obtain ⟨hgv, hgt⟩ := getAt_typed is hv hvt hw
-      exact hcell hv hvt (hk _ hgv (value_typed hgv hgt))
+      exact hwrap hv hvt (hk _ hgv (value_typed hgv hgt))
     | succ i =>
       rw [placeTy_succ] at hw
-      exact ⟨w, hw, fun r hr hrt => hcell hv hvt (hk r hr (value_typed hr hrt))⟩
+      exact ⟨w, hpass hw, fun r hr hrt => hwrap hv hvt (hk r hr (value_typed hr hrt))⟩
   | write i is w e =>
     obtain ⟨u', hu', hw, hwt, he⟩ := h
     cases i with
     | zero =>
       rw [placeTy_zero] at hu'
       obtain ⟨hsv, hst⟩ := setAt_typed is hv hvt hu' hw (value_typed hw hwt)
-      exact hcell hsv hst he
+      exact hwrap hsv hst he
     | succ i =>
       rw [placeTy_succ] at hu'
-      exact ⟨u', hu', hw, value_typed hw hwt, hcell hv hvt he⟩
+      exact ⟨u', hpass hu', hw, value_typed hw hwt, hwrap hv hvt he⟩
+
+/-- The outcome of a step of the rest of a block, typed with its var
+holding a value of the var's type, is typed in the block's cell: the cell
+answers a read or a write of its var with the value it holds, and keeps
+the type of what it holds. -/
+theorem OutcomeTyped.inCell {o : Outcome} {v : Expr} {u t : Ty}
+    (h : OutcomeTyped P R (u :: M) o t) (hv : IsValue v) (hvt : Typed P R [] M (.expr v u)) :
+    OutcomeTyped P R M (o.inCell v) t :=
+  h.under hv hvt (fun hv hvt he => Typed.cell hv hvt he)
+    (fun hr hrt => ⟨hr, value_typed hr hrt⟩) id
 
 /-- The outcome of a step of a mutating method's body, typed with its
 receiver as its one var, is typed in the running call: the call answers a
@@ -1685,31 +1698,10 @@ read or a write of its receiver with the value it holds, and a return
 ends the body. -/
 theorem OutcomeTyped.inMethod {o : Outcome} {pl : Place} {v : Expr} {u t : Ty}
     (h : OutcomeTyped P t [u] o t) (hpl : P.placeTy M pl = some u) (hv : IsValue v)
-    (hvt : Typed P R [] M (.expr v u)) : OutcomeTyped P R M (o.inMethod pl v) t := by
-  have hm : ∀ {v e}, IsValue v → Typed P R [] M (.expr v u) →
-      Typed P t [] [u] (.expr e t) → Typed P R [] M (.expr (.method pl v e) t) :=
-    fun hv hvt he => Typed.method hpl hv hvt he
-  cases o with
-  | next e => exact hm hv hvt h
-  | panic _ => trivial
-  | perform req k => exact fun r hr => hm hv hvt (h r hr)
-  | ret r => exact hm hv hvt (value_typed h.1 h.2)
-  | read i is k =>
-    obtain ⟨w, hw, hk⟩ := h
-    cases i with
-    | zero =>
-      rw [placeTy_zero] at hw
-      obtain ⟨hgv, hgt⟩ := getAt_typed is hv hvt hw
-      exact hm hv hvt (hk _ hgv (value_typed hgv hgt))
-    | succ i => simp [placeTy_succ, placeTy_nil] at hw
-  | write i is w e =>
-    obtain ⟨u', hu', hw, hwt, he⟩ := h
-    cases i with
-    | zero =>
-      rw [placeTy_zero] at hu'
-      obtain ⟨hsv, hst⟩ := setAt_typed is hv hvt hu' hw (value_typed hw hwt)
-      exact hm hsv hst he
-    | succ i => simp [placeTy_succ, placeTy_nil] at hu'
+    (hvt : Typed P R [] M (.expr v u)) : OutcomeTyped P R M (o.inMethod pl v) t :=
+  h.under hv hvt (fun hv hvt he => Typed.method hpl hv hvt he)
+    (fun hr hrt => Typed.method hpl hv hvt (value_typed hr hrt))
+    (fun hu => by simp [placeTy_nil] at hu)
 
 /-- **Preservation.** In a well-typed program, a step of a closed
 expression of type `t`, in a function or closure whose result type is
@@ -2039,62 +2031,6 @@ theorem preservation (hP : ProgramTyped P) {e : Expr} {o : Outcome} (hs : Step P
     intro R t M ht
     cases ht with
     | method hpl hv hvt he => exact ⟨_, hpl, hv, value_typed hv hvt, value_typed hw he⟩
-
-/-! ## Value semantics
-
-A `var` lives in the `cell` its block runs in, and nowhere else: a `let`
-that copies it took its value when it bound, so a later write cannot reach
-the copy. A mutating method sees its receiver as its only var. -/
-
-/-- A cell takes a write of its own var into its value, and nothing else
-of the write goes on. -/
-theorem Outcome.inCell_write_zero {v w e : Expr} {is : List Nat} :
-    Outcome.inCell v (.write 0 is w e) = .next (.cell (v.setAt is w) e) := rfl
-
-/-- A cell passes a write of an outer var on, with its own value as it
-was: a write changes one var only. -/
-theorem Outcome.inCell_write_succ {v w e : Expr} {i : Nat} {is : List Nat} :
-    Outcome.inCell v (.write (i + 1) is w e) = .write i is w (.cell v e) := rfl
-
-/-- **A mutating method changes only its receiver.** A step of a
-well-typed running mutating call `method pl v e` reads no var of its
-caller, and the only write it makes is its last: the receiver's value `v`
-written back to the call's place `pl`. Its body sees its receiver as its
-only var, so whatever it writes stays in `v` until then. -/
-theorem method_writes_only_receiver (hP : ProgramTyped P) {pl : Place} {v e : Expr}
-    {o : Outcome} {t : Ty} (ht : Typed P R [] M (.expr (.method pl v e) t))
-    (hs : Step P (.method pl v e) o) :
-    (∀ i is k, o ≠ .read i is k) ∧
-      ∀ i is w n, o = .write i is w n → i = pl.var ∧ is = pl.fields ∧ w = v := by
-  cases hs with
-  | methodValue _ =>
-    refine ⟨fun _ _ _ h => (nomatch h), fun _ _ _ _ h => ?_⟩
-    cases h
-    exact ⟨rfl, rfl, rfl⟩
-  | @methodBody _ _ _ o' hb =>
-    cases ht with
-    | method _ _ _ he =>
-      have ho := preservation hP hb he
-      have done : ∀ e', (∀ i is k, Outcome.next e' ≠ .read i is k) ∧
-          ∀ i is w n, Outcome.next e' = .write i is w n → i = pl.var ∧ is = pl.fields ∧ w = v :=
-        fun _ => ⟨fun _ _ _ h => (nomatch h), fun _ _ _ _ h => nomatch h⟩
-      cases o' with
-      | next _ => exact done _
-      | panic _ => exact ⟨fun _ _ _ h => (nomatch h), fun _ _ _ _ h => nomatch h⟩
-      | perform _ _ => exact ⟨fun _ _ _ h => (nomatch h), fun _ _ _ _ h => nomatch h⟩
-      | ret _ => exact done _
-      | read i is k =>
-        cases i with
-        | zero => exact done _
-        | succ i =>
-          obtain ⟨_, hu, _⟩ := ho
-          simp [Program.placeTy, lookup] at hu
-      | write i is w n =>
-        cases i with
-        | zero => exact done _
-        | succ i =>
-          obtain ⟨_, hu, _⟩ := ho
-          simp [Program.placeTy, lookup] at hu
 
 /-! ## Type safety -/
 

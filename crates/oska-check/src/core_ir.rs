@@ -10,39 +10,40 @@
 //!
 //! # Version 6
 //!
-//! Oska Core version 6 has functions, `let`, `var` and assignment, `if`, `Int` and `Bool` with
-//! their operators, `()`, the value of a block or `if` with no value, and
-//! the module's own structs and enums without generics, with their
-//! construction, field access and `match`. It has text (`String`, trusted
-//! or not, as literals), `Path`, and the capabilities `Stdout`, `Fs`,
-//! `FsRead`, `FsWrite`, `Dir`, `DirRead` and `DirWrite`, as opaque values
-//! that only `main` receives, with the built-in calls in [`BUILTINS`]:
-//! writing a line to stdout, reading and writing a file and creating a
-//! directory under a directory capability, attenuation, and `is_ok` and
-//! `unwrap_or` on a `Result`. It has closures, which capture by value the
-//! slots they read, function types, and calls of a function value. It has
-//! `Result<T, E>` whose `T` and `E` hold no capability or function, with
-//! `Ok`, `Err`, their patterns, and `?`, which may convert the error with
-//! the `from` of an `impl From<X> for T` the checker chose; that `impl` is
+//! Oska Core version 6 has functions, `let`, `var` and assignment,
+//! `if`, `Int` and `Bool` with their operators, `()`, the value of a
+//! block or `if` with no value, and the module's own structs and enums
+//! without generics, with their construction, field access and `match`.
+//! It has text (`String`, trusted or not, as literals), `Path`, and the
+//! capabilities `Stdout`, `Fs`, `FsRead`, `FsWrite`, `Dir`, `DirRead`
+//! and `DirWrite`, as opaque values that only `main` receives, with the
+//! built-in calls in [`BUILTINS`]: writing a line to stdout, reading
+//! and writing a file and creating a directory under a directory
+//! capability, attenuation, and `is_ok` and `unwrap_or` on a `Result`.
+//! It has closures, which capture by value the slots they read,
+//! function types, and calls of a function value. It has `Result<T, E>`
+//! whose `T` and `E` hold no capability or function, with `Ok`, `Err`,
+//! their patterns, and `?`, which may convert the error with the `from`
+//! of an `impl From<X> for T` the checker chose; that `impl` is
 //! exported as its `from`, a function named as the checker names it,
-//! `<T as From<X>>.from`. It has the methods and associated functions of
-//! an inherent `impl` of those structs and enums, named `T.name` as the
-//! checker names them, and mutating methods (`var self`), with value
-//! semantics. An `IoError` is opaque: its field is outside.
+//! `<T as From<X>>.from`. It has the methods and associated functions
+//! of an inherent `impl` of those structs and enums, named `T.name` as
+//! the checker names them, and mutating methods (`var self`), with
+//! value semantics. An `IoError` is opaque: its field is outside.
 //! [`export`] refuses any other program, naming the first construct
 //! outside it in source order, with its span. It fails closed: a trait,
-//! any other `impl` or `const` is refused even when nothing uses it, and
-//! so are a generic
-//! struct or enum, one with a field whose type is outside Oska Core
-//! (refused at its declaration), a `use`, a `test` block, a generic
-//! function, a contract, a prelude type such as `Option` (and `?` on one),
-//! and any type the checker left unsolved. It also refuses any other
-//! built-in call (a mutating one such as `List.push` included), `==` and
-//! `!=` on anything but `Int`, `Bool` and `()`, a struct or enum with a
-//! capability or function field, a function used as a value, a closure
-//! that reads `self` or a `var`, and a `main` that returns anything but
-//! `()` or takes anything but `Stdout`, `Fs`, `FsRead` or `FsWrite`, the
-//! capabilities the runtime grants.
+//! any other `impl` or `const` is refused even when nothing uses it,
+//! and so are a generic struct or enum, one with a field whose type is
+//! outside Oska Core (refused at its declaration), a `use`, a `test`
+//! block, a generic function, a contract, a prelude type such as
+//! `Option` (and `?` on one), and any type the checker left unsolved.
+//! It also refuses any other built-in call (a mutating one such as
+//! `List.push` included), `==` and `!=` on anything but `Int`, `Bool`
+//! and `()`, a struct or enum with a capability or function field, a
+//! function used as a value, a closure that reads `self` or a `var`,
+//! and a `main` that returns anything but `()` or takes anything but
+//! `Stdout`, `Fs`, `FsRead` or `FsWrite`, the capabilities the runtime
+//! grants.
 //!
 //! The text is pretty-printed JSON: two-space indentation, a value that
 //! fits in 80 columns on one line, and a final newline. Every node is an
@@ -143,17 +144,18 @@
 //!   body ends, by its value or a `?`, the receiver's value is written
 //!   back to the place. A `Call` of a mutating method passes the receiver
 //!   first, as a copy, and drops its final value.
-//! - A `Closure` is written where `height` slots are in scope, and sees no var. Its body
-//!   numbers slots as the enclosing function does there, then its
-//!   parameters from `height` on, then its own locals. `captures` lists,
-//!   in ascending order, the slots below `height` its body reads, a
-//!   closure inside it included. Evaluating it makes a function value of
-//!   type `fn(params) -> ret` that holds the values of those slots, by
-//!   value. `CallValue` evaluates `callee`, then `args` left to right, then
-//!   runs the closure's body with what it captured at their slots and the
-//!   arguments at its parameters'. `cap` is true for a `cap fn`: a plain
-//!   `fn` (a closure's own `cap` included) captures no capability-bearing
-//!   value, which the checker guarantees.
+//! - A `Closure` is written where `height` slots are in scope, and sees
+//!   no var. Its body numbers slots as the enclosing function does
+//!   there, then its parameters from `height` on, then its own locals.
+//!   `captures` lists, in ascending order, the slots below `height` its
+//!   body reads, a closure inside it included. Evaluating it makes a
+//!   function value of type `fn(params) -> ret` that holds the values
+//!   of those slots, by value. `CallValue` evaluates `callee`, then
+//!   `args` left to right, then runs the closure's body with what it
+//!   captured at their slots and the arguments at its parameters'.
+//!   `cap` is true for a `cap fn`: a plain `fn` (a closure's own `cap`
+//!   included) captures no capability-bearing value, which the checker
+//!   guarantees.
 //! - `Int` is a signed 64-bit integer. A literal is written in decimal,
 //!   negative when the source writes `-` before it. `Neg` and the
 //!   arithmetic operators panic when the result does not fit, and `/`
@@ -392,15 +394,16 @@ impl Scope {
         }
     }
 
-    /// The core IR expression that reads `binding`, if it can.
-    fn read(&self, binding: Binding) -> Option<Json> {
+    /// The core IR expression that reads `binding`, which
+    /// [`Core::binding`] gave, and so is never [`Binding::Outer`].
+    fn read(&self, binding: Binding) -> Json {
         match binding {
-            Binding::Slot(n) => Some(node("Local", vec![("slot", Json::Int(n as i128))])),
-            Binding::Var(level) => Some(node(
+            Binding::Slot(n) => node("Local", vec![("slot", Json::Int(n as i128))]),
+            Binding::Var(level) => node(
                 "Var",
                 vec![("var", Json::Int((self.vars - 1 - level) as i128))],
-            )),
-            Binding::Outer => None,
+            ),
+            Binding::Outer => unreachable!("Core::binding refuses a var of an enclosing function"),
         }
     }
 }
@@ -766,11 +769,7 @@ impl Core<'_> {
             ExprKind::Bool(value) => node("Bool", vec![("value", Json::Bool(*value))]),
             ExprKind::Local(slot) => {
                 let binding = self.binding(*slot, span)?;
-                let read = self.scope.borrow().read(binding);
-                match read {
-                    Some(json) => json,
-                    None => return refuse("a closure that captures a `var`", span),
-                }
+                self.scope.borrow().read(binding)
             }
             ExprKind::Neg { int, .. } | ExprKind::Binary { int: Some(int), .. }
                 if *int != IntType::Int =>
@@ -851,8 +850,8 @@ impl Core<'_> {
             ExprKind::Interpolated(_) => return refuse("an interpolated string", span),
             ExprKind::SelfValue => {
                 let scope = self.scope.borrow();
-                match scope.receiver.and_then(|binding| scope.read(binding)) {
-                    Some(json) => json,
+                match scope.receiver {
+                    Some(binding) => scope.read(binding),
                     None => return refuse("`self`", span),
                 }
             }
@@ -914,8 +913,9 @@ impl Core<'_> {
                     .iter()
                     .map(|&slot| match self.binding(slot, span)? {
                         Binding::Slot(n) => Ok(Json::Int(n as i128)),
-                        Binding::Var(_) | Binding::Outer => {
-                            refuse("a closure that captures a `var`", span)
+                        Binding::Var(_) => refuse("a closure that captures a `var`", span),
+                        Binding::Outer => {
+                            unreachable!("Core::binding refuses a var of an enclosing function")
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;

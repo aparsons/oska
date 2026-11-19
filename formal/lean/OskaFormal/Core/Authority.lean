@@ -60,15 +60,6 @@ namespace OskaFormal.Core
 
 /-! ## Authority -/
 
-/-- The parameters a `Call` of `f` passes an argument for: a mutating
-method's receiver first, then its parameters. -/
-def Function.allParams (f : Function) : List Param :=
-  (f.receiver.map fun t => ({ type := t, binds := true } : Param)).toList ++ f.params
-
-theorem Function.allParams_types (f : Function) : f.allParams.map Param.type = f.argTypes := by
-  unfold Function.allParams Function.argTypes
-  cases f.receiver <;> simp
-
 /-- The capability kinds a function's parameters (its receiver
 included) name: what the checker's authority report lists for it. -/
 def paramKinds (f : Function) : List CapKind :=

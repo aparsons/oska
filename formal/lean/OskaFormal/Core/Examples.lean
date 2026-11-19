@@ -298,7 +298,7 @@ example (Γ : List Ty) (t : Ty) :
     | some hf hps _ =>
       simp [appError, Program.find?, findFunction, gErr] at hf
       subst hf
-      simp [Function.argTypes] at hps
+      simp [Function.argTypes_eq] at hps
 
 /-- With the conversion the checker chose, the same `?` types... -/
 example (Γ : List Ty) :

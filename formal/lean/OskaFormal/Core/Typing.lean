@@ -16,7 +16,9 @@ method, and a closure's body none of the function it is written in. A
 place is typed through its var and the struct fields of its path, so an
 assignment, or a mutating call, types only on a var in scope: never on a
 `let`, a parameter or a pattern's binding, which the checker rejects
-(`E0229`, `E0230`).
+(`E0229`, `E0230`). A `Call` of a mutating method passes its receiver as
+its first argument, a copy: `Counter.bump(a)` on a `let` types, as the
+checker accepts it, and changes no var of the caller.
 
 Each judgment also carries the result type `R` of the function or closure
 the expression is in: the type a `?` returns at. `?` types only where `R`

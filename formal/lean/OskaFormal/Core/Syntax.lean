@@ -442,10 +442,20 @@ structure Function where
   ret : Ty
   body : Expr
 
-/-- The types of the arguments a `Call` of `f` passes: the receiver's
-first, for a mutating method, then one per parameter. -/
+/-- The parameters a `Call` of `f` passes an argument for: a mutating
+method's receiver first, then its parameters. -/
+def Function.allParams (f : Function) : List Param :=
+  (f.receiver.map fun t => ({ type := t, binds := true } : Param)).toList ++ f.params
+
+/-- The types of the arguments a `Call` of `f` passes, one per parameter
+of `allParams`. -/
 def Function.argTypes (f : Function) : List Ty :=
-  f.receiver.toList ++ f.params.map Param.type
+  f.allParams.map Param.type
+
+theorem Function.argTypes_eq (f : Function) :
+    f.argTypes = f.receiver.toList ++ f.params.map Param.type := by
+  unfold Function.argTypes Function.allParams
+  cases f.receiver <;> simp
 
 /-- A struct or enum declaration, as core IR's `typedecl`: a struct's
 field types, or an enum's variants with their field types, in
