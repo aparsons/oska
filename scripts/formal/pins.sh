@@ -1,6 +1,6 @@
 # shellcheck shell=bash disable=SC2034 # read by the scripts that source this file
 # The pinned versions and checksums of the formal step's tools (ADRs 0018,
-# 0019), sourced by install.sh and run.sh. To move a pin, change it here and,
+# 0019), and the checks run.sh, install.sh and test.sh share, which source it. To move a pin, change it here and,
 # for Lean, in formal/lean/lean-toolchain too (test.sh fails if they differ).
 #
 # Lean: the GitHub release assets of leanprover/lean4. Each SHA-256 is the
@@ -19,3 +19,33 @@ tla_sha256=936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
 # Where install.sh puts the tools by default, and where run.sh looks for
 # them when they are not on PATH (Lean) or named by OSKA_TLA2TOOLS (TLC).
 formal_cache=${XDG_CACHE_HOME:-$HOME/.cache}/oska/formal
+
+# The words that leave a proof unfinished or unchecked, matched as whole
+# words anywhere in a .lean file, comments included: `sorry` and `admit`
+# (an unfinished proof), `axiom` (a claim assumed, not proved) and
+# `native_decide` (a proof that trusts compiled code).
+formal_holes_re='sorry|admit|axiom|native_decide'
+
+# formal_scan_holes DIR: prints each line of a .lean file under DIR (Lake's
+# .lake excluded) that holds one of those words. Returns 0 when there is
+# none, 1 when there is one, and 2 when the scan itself failed (an
+# unreadable or missing DIR): a failed scan never passes.
+formal_scan_holes() {
+  local rc=0
+  grep -rnwE --include='*.lean' --exclude-dir=.lake "$formal_holes_re" "$1" || rc=$?
+  case $rc in
+    0) return 1 ;;
+    1) return 0 ;;
+    *) return 2 ;;
+  esac
+}
+
+# formal_toolchain_matches FILE: whether the lean-toolchain FILE names the
+# pinned Lean; if not, says so on stderr.
+formal_toolchain_matches() {
+  local toolchain
+  toolchain=$(tr -d '[:space:]' <"$1") || return 1
+  [ "$toolchain" = "leanprover/lean4:v$lean_version" ] && return 0
+  printf '%s says %s, scripts/formal/pins.sh pins v%s\n' "$1" "${toolchain:-nothing}" "$lean_version" >&2
+  return 1
+}

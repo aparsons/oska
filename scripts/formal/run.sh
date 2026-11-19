@@ -9,8 +9,10 @@
 # check.sh reports as a skip. With CI or GITHUB_ACTIONS set a missing tool
 # exits 1 instead, so the gate cannot pass by skipping.
 #
-# Before it looks for any tool, it fails on an unfinished proof: the word
-# `sorry` or `admit` anywhere in a .lean file, comments included. The build
+# Before it looks for any tool, it fails on an unfinished proof: the whole
+# word `sorry`, `admit`, `axiom` or `native_decide` anywhere in a .lean file,
+# comments included (formal_scan_holes in pins.sh); a scan that cannot run
+# fails too. The build
 # then runs with warnings as errors, so a `sorry` that a macro brings in
 # fails too. It also fails on a .tla file with no .cfg beside it.
 #
@@ -41,10 +43,13 @@ fail() {
 # --- checks that need no tool ---------------------------------------------
 
 [ -f "$lean_dir/lakefile.toml" ] || fail "$lean_dir/lakefile.toml not found"
-if unfinished=$(grep -rnwE --include='*.lean' --exclude-dir=.lake 'sorry|admit' "$lean_dir"); then
-  printf '%s\n' "$unfinished" >&2
-  fail "unfinished proof (sorry or admit) above; no proof may be left unfinished (ADR 0018)"
-fi
+rc=0
+formal_scan_holes "$lean_dir" >&2 || rc=$?
+case $rc in
+  0) ;;
+  1) fail "unfinished proof (sorry, admit, axiom or native_decide) above; no proof may be left unfinished (ADR 0018)" ;;
+  *) fail "the unfinished-proof scan failed on $lean_dir" ;;
+esac
 
 models=()
 for spec in "$tla_dir"/*.tla; do

@@ -605,17 +605,22 @@ if step "formal" --fast-when 'formal/*' --fast-when 'scripts/formal/*'; then
   # Builds the Lean proofs of Oska Core and runs TLC on every TLA+ model
   # (ADRs 0018, 0019; docs/agents/formal.md). An unfinished proof (`sorry`)
   # fails. A missing Lean or TLC skips here, but fails in CI, where the test
-  # job installs the pinned ones (run.sh exits 1 there, not 3).
+  # job installs the pinned ones. run.sh exits 1 there, not 3, and this block
+  # refuses a skip in CI too, so neither alone can let the gate pass.
   rc=0
   scripts/formal/run.sh || rc=$?
   if [ "$rc" -eq 3 ]; then
+    if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+      echo "check.sh: Lean or TLC is not installed, and CI must run the formal step" >&2
+      exit 1
+    fi
     skip_step "Lean or TLC not installed; skipped (CI runs it; scripts/formal/install.sh installs them)"
   elif [ "$rc" -ne 0 ]; then
     exit "$rc"
   fi
 fi
 
-if step "formal step tests" --no-slot --fast-when 'scripts/formal/*'; then
+if step "formal step tests" --no-slot --fast-when 'formal/*' --fast-when 'scripts/formal/*'; then
   bash scripts/formal/test.sh
 fi
 

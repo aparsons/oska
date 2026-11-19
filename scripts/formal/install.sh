@@ -5,7 +5,8 @@
 # checksum and refused on a mismatch. TLC also needs a Java 11 or newer on
 # PATH, which this does not install.
 #
-#   scripts/formal/install.sh [DIR]   default: ~/.cache/oska/formal
+#   scripts/formal/install.sh [DIR]   default: $XDG_CACHE_HOME/oska/formal
+#                                     ($XDG_CACHE_HOME unset: ~/.cache)
 #
 # run.sh finds both there with no setup. CI puts DIR/lean/bin on PATH and
 # names the jar in OSKA_TLA2TOOLS.
@@ -27,9 +28,9 @@ die() {
 }
 
 # The toolchain file and the pin must name the same Lean.
-toolchain=$(tr -d '[:space:]' <"$here/../../formal/lean/lean-toolchain")
-[ "$toolchain" = "leanprover/lean4:v$lean_version" ] ||
-  die "formal/lean/lean-toolchain says $toolchain, pins.sh pins v$lean_version"
+# OSKA_FORMAL_DIR names another directory in place of formal/, for the tests.
+formal_toolchain_matches "${OSKA_FORMAL_DIR:-$here/../../formal}/lean/lean-toolchain" ||
+  die "refusing to install a Lean the project does not name"
 
 case "$(uname -s)/$(uname -m)" in
   Linux/x86_64) asset=lean-$lean_version-linux.tar.zst want=$lean_sha256_x86_64 ;;

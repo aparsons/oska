@@ -68,7 +68,7 @@ for var in CI=true GITHUB_ACTIONS=true; do
   fi
 done
 
-for word in sorry admit; do
+for word in sorry admit axiom native_decide; do
   dir=$(fixture "$word")
   printf 'theorem unfinished : 1 + 1 = 2 := by\n  %s\n' "$word" >"$dir/lean/OskaFormal/Unfinished.lean"
   run "$dir"
@@ -90,10 +90,10 @@ fi
 
 # A word that only contains it is not an unfinished proof.
 dir=$(fixture sorrowful)
-printf -- '-- sorryless and admittedly fine\n' >>"$dir/lean/OskaFormal/Basic.lean"
+printf -- '-- sorryless, admittedly, axioms and native_decided are fine\n' >>"$dir/lean/OskaFormal/Basic.lean"
 run "$dir"
 if [ "$status" -eq 3 ]; then
-  ok "a word that only contains sorry or admit passes the scan"
+  ok "a word that only contains sorry, admit, axiom or native_decide passes the scan"
 else
   bad "a word containing sorry passes the scan" "exit $status: $out"
 fi
@@ -133,22 +133,115 @@ else
 fi
 rm -f "$work/bin/lake" "$work/bin/lean" "$work/bin/java"
 
-# The toolchain file and the pin name the same Lean.
-# shellcheck source=scripts/formal/pins.sh
-. "$here/pins.sh"
-toolchain=$(tr -d '[:space:]' <"$repo_root/formal/lean/lean-toolchain")
-if [ "$toolchain" = "leanprover/lean4:v$lean_version" ]; then
-  ok "formal/lean/lean-toolchain matches the pinned Lean $lean_version"
+# A scan that fails (grep exits 2) fails the step; it never counts as clean.
+dir=$(fixture grepfail)
+mv "$work/bin/grep" "$work/grep.real"
+printf '#!/usr/bin/env bash\nexit 2\n' >"$work/bin/grep"
+chmod +x "$work/bin/grep"
+run "$dir"
+rm -f "$work/bin/grep"
+mv "$work/grep.real" "$work/bin/grep"
+if [ "$status" -eq 1 ] && grep -q 'scan failed' <<<"$out"; then
+  ok "a failed unfinished-proof scan fails the step"
 else
-  bad "lean-toolchain matches the pin" "$toolchain, pinned v$lean_version"
+  bad "a failed unfinished-proof scan fails the step" "exit $status: $out"
 fi
 
-# The real formal/ has no unfinished proof (checked without tools here; the
-# formal step checks it with them).
-if grep -rnwE --include='*.lean' --exclude-dir=.lake 'sorry|admit' "$repo_root/formal/lean"; then
-  bad "formal/lean has no sorry or admit" "above"
+# shellcheck source=scripts/formal/pins.sh
+. "$here/pins.sh"
+rc=0
+formal_scan_holes "$work/no-such-dir" >/dev/null 2>&1 || rc=$?
+if [ "$rc" -eq 2 ]; then
+  ok "formal_scan_holes returns 2 when the scan fails"
 else
-  ok "formal/lean has no sorry or admit"
+  bad "formal_scan_holes returns 2 when the scan fails" "returned $rc"
 fi
+
+# check.sh's formal block refuses a skip in CI itself. It runs here with
+# step and skip_step stubbed and a run.sh that exits 3 (tools missing).
+block=$(sed -n '/^if step "formal" /,/^fi$/p' "$repo_root/scripts/check.sh")
+mkdir -p "$work/checkblock/scripts/formal"
+printf '#!/usr/bin/env bash\nexit 3\n' >"$work/checkblock/scripts/formal/run.sh"
+chmod +x "$work/checkblock/scripts/formal/run.sh"
+# check_block [VAR=VALUE...]: sets `status` and `out`.
+check_block() {
+  status=0
+  out=$(cd "$work/checkblock" && env -u CI -u GITHUB_ACTIONS "$@" bash -c '
+    set -euo pipefail
+    step() { return 0; }
+    skip_step() { echo "skip_step: $*"; }
+    '"$block" 2>&1) || status=$?
+}
+check_block
+if [ -n "$block" ] && [ "$status" -eq 0 ] && grep -q '^skip_step: ' <<<"$out"; then
+  ok "check.sh's formal block skips a missing tool outside CI"
+else
+  bad "check.sh's formal block skips outside CI" "exit $status: $out"
+fi
+for var in CI=true GITHUB_ACTIONS=true; do
+  check_block "$var"
+  if [ "$status" -ne 0 ] && ! grep -q '^skip_step: ' <<<"$out"; then
+    ok "check.sh's formal block refuses to skip with $var"
+  else
+    bad "check.sh's formal block refuses to skip with $var" "exit $status: $out"
+  fi
+done
+
+# install.sh refuses a download whose SHA-256 differs and installs nothing,
+# and refuses a lean-toolchain that differs from the pin before it
+# downloads. A stub curl serves bogus bytes, so this runs offline.
+mkdir "$work/ibin"
+# shellcheck disable=SC2016 # written out, expanded when the stub runs
+printf '%s\n' '#!/usr/bin/env bash' 'echo "curl $*" >>"$CURL_LOG"' \
+  'while [ $# -gt 0 ]; do if [ "$1" = -o ]; then echo bogus >"$2"; shift; fi; shift; done' >"$work/ibin/curl"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$work/ibin/zstd"
+chmod +x "$work/ibin/curl" "$work/ibin/zstd"
+# install DIR FORMAL_DIR: sets `status` and `out`.
+install_run() {
+  status=0
+  out=$(PATH="$work/ibin:$PATH" CURL_LOG="$work/curl.log" OSKA_FORMAL_DIR="$2" \
+    bash "$repo_root/scripts/formal/install.sh" "$1" 2>&1) || status=$?
+}
+: >"$work/curl.log"
+install_run "$work/inst1" "$clean"
+if [ "$status" -ne 0 ] && grep -q 'does not match its pinned SHA-256' <<<"$out" &&
+  [ ! -e "$work/inst1" ] && [ -s "$work/curl.log" ]; then
+  ok "install.sh refuses a download whose SHA-256 differs and installs nothing"
+else
+  bad "install.sh refuses a bad download" "exit $status: $out"
+fi
+dir=$(fixture badpin)
+echo 'leanprover/lean4:v4.0.0' >"$dir/lean/lean-toolchain"
+: >"$work/curl.log"
+install_run "$work/inst2" "$dir"
+if [ "$status" -ne 0 ] && grep -q 'v4.0.0' <<<"$out" && [ ! -s "$work/curl.log" ] && [ ! -e "$work/inst2" ]; then
+  ok "install.sh refuses a lean-toolchain that differs from the pin, before downloading"
+else
+  bad "install.sh refuses a lean-toolchain that differs from the pin" "exit $status: $out"
+fi
+
+# The step also refuses such a toolchain (formal_toolchain_matches).
+if ! formal_toolchain_matches "$dir/lean/lean-toolchain" 2>/dev/null; then
+  ok "formal_toolchain_matches refuses a toolchain that differs from the pin"
+else
+  bad "formal_toolchain_matches refuses a toolchain that differs from the pin" "it matched"
+fi
+
+# The real toolchain file and the pin name the same Lean.
+if formal_toolchain_matches "$repo_root/formal/lean/lean-toolchain"; then
+  ok "formal/lean/lean-toolchain matches the pinned Lean $lean_version"
+else
+  bad "lean-toolchain matches the pin" "above"
+fi
+
+# The real formal/ has no proof hole (checked without tools here; the formal
+# step checks it with them). A failed scan is a failure.
+rc=0
+formal_scan_holes "$repo_root/formal/lean" || rc=$?
+case $rc in
+  0) ok "formal/lean has no sorry, admit, axiom or native_decide" ;;
+  1) bad "formal/lean has no proof hole" "above" ;;
+  *) bad "formal/lean has no proof hole" "the scan failed" ;;
+esac
 
 exit $((failures > 0))
