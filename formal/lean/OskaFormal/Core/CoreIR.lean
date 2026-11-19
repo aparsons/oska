@@ -653,11 +653,14 @@ def shapeTypes : String :=
     "\"type\": \"Int\", \"value\": {\"kind\": \"CallValue\", \"callee\": {\"kind\": " ++
     "\"Local\", \"slot\": 1}, \"args\": [{\"kind\": \"Int\", \"value\": 7}]}}]}"))
   fun | .panic .divisionByZero => true | _ => false
--- `fn half(n: Int) -> Result<Int, Int> { if n % 2 == 0 { Ok(n / 2) } else { Err(n) } }`, a
--- conversion `fn wrap(e: Int) -> Int { e / 0 }`, and `fn f() -> Result<Int, Int> { let x = half(3)?;
--- Ok(x) }`: the `?` returns `Err(3)` from `f` through `wrap`, which divides by zero.
+-- `struct Wrapped { code: Int }`, `fn half(n: Int) -> Result<Int, Int> { if n % 2 == 0 {
+-- Ok(n / 2) } else { Err(n) } }`, `impl From<Int> for Wrapped { fn from(code: Int) -> Wrapped {
+-- Wrapped(code: code / 0) } }`, exported as the function `<Wrapped as From<Int>>.from`, and
+-- `fn f() -> Result<Int, Wrapped> { let x = half(3)?; Ok(x) }`: the `?` converts `3` before it
+-- returns, and the conversion divides by zero. The reader checks only that a conversion is a
+-- function of the program with one parameter; the checker typed it, as `ConvTyped` states.
 #guard runsTo
-  (withFunctions "" ("{\"name\": \"half\", \"params\": [{\"type\": \"Int\", \"binds\": true}], " ++
+  (withFunctions "{\"kind\": \"Struct\", \"name\": \"Wrapped\", \"fields\": [\"Int\"]}" ("{\"name\": \"half\", \"params\": [{\"type\": \"Int\", \"binds\": true}], " ++
     "\"ret\": {\"kind\": \"Result\", \"ok\": \"Int\", \"err\": \"Int\"}, \"body\": " ++
     "{\"kind\": \"If\", \"cond\": {\"kind\": \"Binary\", \"op\": \"==\", \"lhs\": " ++
     "{\"kind\": \"Binary\", \"op\": \"%\", \"lhs\": {\"kind\": \"Local\", \"slot\": 0}, " ++
@@ -665,17 +668,18 @@ def shapeTypes : String :=
     "\"then\": {\"kind\": \"Ok\", \"value\": {\"kind\": \"Binary\", \"op\": \"/\", " ++
     "\"lhs\": {\"kind\": \"Local\", \"slot\": 0}, \"rhs\": {\"kind\": \"Int\", \"value\": 2}}}, " ++
     "\"else\": {\"kind\": \"Err\", \"value\": {\"kind\": \"Local\", \"slot\": 0}}}}, " ++
-    "{\"name\": \"wrap\", \"params\": [{\"type\": \"Int\", \"binds\": true}], \"ret\": \"Int\", " ++
-    "\"body\": {\"kind\": \"Binary\", \"op\": \"/\", \"lhs\": {\"kind\": \"Local\", \"slot\": 0}, " ++
-    "\"rhs\": {\"kind\": \"Int\", \"value\": 0}}}, " ++
+    "{\"name\": \"<Wrapped as From<Int>>.from\", \"params\": [{\"type\": \"Int\", " ++
+    "\"binds\": true}], \"ret\": \"Wrapped\", \"body\": {\"kind\": \"Construct\", " ++
+    "\"type\": \"Wrapped\", \"fields\": [{\"kind\": \"Binary\", \"op\": \"/\", " ++
+    "\"lhs\": {\"kind\": \"Local\", \"slot\": 0}, \"rhs\": {\"kind\": \"Int\", \"value\": 0}}]}}, " ++
     "{\"name\": \"f\", \"params\": [], \"ret\": {\"kind\": \"Result\", \"ok\": \"Int\", " ++
-    "\"err\": \"Int\"}, \"body\": {\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Let\", " ++
+    "\"err\": \"Wrapped\"}, \"body\": {\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Let\", " ++
     "\"binds\": true, \"type\": \"Int\", \"value\": {\"kind\": \"Try\", \"operand\": " ++
     "{\"kind\": \"Call\", \"function\": \"half\", \"args\": [{\"kind\": \"Int\", \"value\": 3}]}, " ++
-    "\"convert\": \"wrap\"}}], \"value\": {\"kind\": \"Ok\", \"value\": {\"kind\": \"Local\", " ++
+    "\"convert\": \"<Wrapped as From<Int>>.from\"}}], \"value\": {\"kind\": \"Ok\", \"value\": {\"kind\": \"Local\", " ++
     "\"slot\": 0}}}}")
     ("{\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Let\", \"binds\": false, \"type\": " ++
-    "{\"kind\": \"Result\", \"ok\": \"Int\", \"err\": \"Int\"}, \"value\": {\"kind\": \"Call\", " ++
+    "{\"kind\": \"Result\", \"ok\": \"Int\", \"err\": \"Wrapped\"}, \"value\": {\"kind\": \"Call\", " ++
     "\"function\": \"f\", \"args\": []}}]}"))
   fun | .panic .divisionByZero => true | _ => false
 

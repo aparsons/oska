@@ -26,10 +26,10 @@
 //! the `from` of an `impl From<X> for T` the checker chose; that `impl` is
 //! exported as its `from`, a function named as the checker names it,
 //! `<T as From<X>>.from`. An `IoError` is opaque: its field is outside.
-//! [`export`]
-//! refuses any other program, naming the first construct outside it in
-//! source order, with its span. It fails closed: a trait, any other `impl`
-//! or `const` is refused even when nothing uses it, and so are a generic
+//! [`export`] refuses any other program, naming the first construct
+//! outside it in source order, with its span. It fails closed: a trait,
+//! any other `impl` or `const` is refused even when nothing uses it, and
+//! so are a generic
 //! struct or enum, one with a field whose type is outside Oska Core
 //! (refused at its declaration), `var` (even one never assigned), a `use`,
 //! a `test` block, a generic function, a method, a contract, a prelude type
@@ -327,7 +327,9 @@ struct Core<'a> {
 /// Whether `f` is the `from` of an `impl From<X> for T` whose `T` is not
 /// generic, as the checker names it, `<T as From<X>>.from`: the
 /// conversion a `?` may make, which the export writes as a function of
-/// that name.
+/// that name. The checker builds the name with
+/// [`crate::program::trait_method`], called from `ImplInfo::method_name`
+/// in `items.rs`.
 fn is_from_conversion(f: &Function) -> bool {
     match &f.self_ty {
         Some(Type::Named { name, args }) if args.is_empty() && !f.receiver => {
@@ -337,11 +339,11 @@ fn is_from_conversion(f: &Function) -> bool {
     }
 }
 
-/// Whether a value of type `ty` holds no capability and no function,
-/// however deep in a `Result`: what a `Result`'s payloads must be.
+/// Whether `ty`, a payload of a `Result`, is neither a capability nor a
+/// function. A `Result` payload is itself checked when it is exported, so
+/// this need not look inside one.
 fn holds_no_capability(ty: &Type) -> bool {
     match ty {
-        Type::Named { name, args } if name == "Result" => args.iter().all(holds_no_capability),
         Type::Named { name, .. } => !CAPABILITIES.contains(&name.as_str()),
         Type::Fn { .. } => false,
         _ => true,
@@ -516,8 +518,9 @@ impl Core<'_> {
                 let [ok, err] = args.as_slice() else {
                     return refuse(format!("the type `{ty}`"), span);
                 };
+                let payloads_ok = holds_no_capability(ok) && holds_no_capability(err);
                 let (ok, err) = (self.ty(ok, span)?, self.ty(err, span)?);
-                if !holds_no_capability(ty) {
+                if !payloads_ok {
                     return refuse(
                         format!(
                             "the type `{ty}`, a `Result` that holds a capability or a function"
@@ -734,8 +737,10 @@ impl Core<'_> {
                 type_args,
             } => {
                 // `?` on a `Result`, converting its error with the `from`
-                // the checker chose, if any; `?` on an `Option` is outside
-                // Oska Core.
+                // the checker chose, if any. `?` on an `Option` is outside
+                // Oska Core. A program from source cannot reach this guard:
+                // such a `?` needs an `Option` result type, refused before
+                // the body. It is kept to fail closed.
                 if !matches!(&operand.ty, Type::Named { name, .. } if name == "Result") {
                     return refuse(format!("`?` on `{}`", operand.ty), span);
                 }
@@ -772,9 +777,9 @@ impl Core<'_> {
         Ok(parts)
     }
 
-    /// A `match` arm of Oska Core on a value of type `ty`, or the refusal of the first construct in
-    /// it that is not. A pattern has no span of its own: one outside Oska
-    /// Core is refused at the `match`, `span`.
+    /// A `match` arm of Oska Core on a value of type `ty`, or the refusal
+    /// of the first construct in it that is not. A pattern has no span of
+    /// its own: one outside Oska Core is refused at the `match`, `span`.
     fn arm(&self, arm: &Arm, ty: &Type, span: Span) -> Result<Json, Refusal> {
         let mut fields = vec![("pattern", self.pattern(&arm.pattern, ty, span)?)];
         if let Some(guard) = &arm.guard {

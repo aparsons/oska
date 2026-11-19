@@ -701,8 +701,7 @@ theorem steps_receiver {P : Program} {e e' : Expr} {tr : List Request} (hs : Ste
     | tail _ hreq => exact ih req hreq
 
 /-- **Authority safety of the Lean reference.** However a run of the
-Lean reference on its fake host ends, in a value, a panic, stuck or a
-return, it
+Lean reference on its fake host ends, in a value, a panic or stuck, it
 took steps of the semantics whose every effect has a kind in `f`'s
 authority, or below a kind in `A` that the function values among the
 arguments hold. -/
@@ -716,19 +715,14 @@ theorem authority_safety_reference {P : Program} (hP : ProgramSourceTyped P) {na
       ∃ tr e', Steps P (.call name vs) tr e' ∧ Step P e' (.panic k) ∧
         ∀ eff ∈ tr, eff.kind ∈ callAuthority f A) ∧
     (∀ {e'}, run P fuel h (.call name vs) = (.stuck e', h') →
-      ∃ tr, Steps P (.call name vs) tr e' ∧ ∀ eff ∈ tr, eff.kind ∈ callAuthority f A) ∧
-    (∀ {v}, run P fuel h (.call name vs) = (.returned v, h') →
-      ∃ tr e', Steps P (.call name vs) tr e' ∧ Step P e' (.ret v) ∧
-        ∀ eff ∈ tr, eff.kind ∈ callAuthority f A) := by
-  refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩
+      ∃ tr, Steps P (.call name vs) tr e' ∧ ∀ eff ∈ tr, eff.kind ∈ callAuthority f A) := by
+  refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_⟩
   · obtain ⟨tr, hs, _⟩ := run_sound.1 hr
     exact ⟨tr, hs, authority_safety hP hf hargs hfn hs⟩
   · obtain ⟨tr, e', hs, hp⟩ := run_sound.2.1 hr
     exact ⟨tr, e', hs, hp, authority_safety hP hf hargs hfn hs⟩
   · obtain ⟨tr, hs, _⟩ := run_sound.2.2.1 hr
     exact ⟨tr, hs, authority_safety hP hf hargs hfn hs⟩
-  · obtain ⟨tr, e', hs, hp⟩ := run_sound.2.2.2 hr
-    exact ⟨tr, e', hs, hp, authority_safety hP hf hargs hfn hs⟩
 
 /-! ## Attenuation never widens -/
 

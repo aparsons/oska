@@ -666,6 +666,8 @@ fn results_and_the_question_mark_export_to_the_golden_form() {
 
 #[test]
 fn a_question_mark_on_an_option_is_refused() {
+    // From source, the `Option` result type such a `?` needs is refused
+    // first.
     assert_refused(
         "fn first(o: Option<Int>) -> Option<Int> {\n\
          \x20   let n = o?\n\
@@ -673,6 +675,39 @@ fn a_question_mark_on_an_option_is_refused() {
          }\n",
         "the type `Option<Int>`",
         "Option<Int>",
+    );
+    // The export's own guard, reached by a `?` whose operand is an
+    // `Option` in a function that returns a `Result`, which the checker
+    // never builds.
+    let src = "fn g() -> Result<Int, Int> { Ok(1) }\n\
+               fn f() -> Result<Int, Int> {\n\
+               \x20   Ok(g()?)\n\
+               }\n";
+    let mut program = program(src);
+    let body = &mut program
+        .functions
+        .get_mut("f")
+        .unwrap_or_else(|| panic!("no `f`"))
+        .body;
+    let ExprKind::Block {
+        value: Some(value), ..
+    } = &mut body.kind
+    else {
+        panic!("{body:?}")
+    };
+    let ExprKind::Construct { fields, .. } = &mut value.kind else {
+        panic!("{value:?}")
+    };
+    let ExprKind::Try { operand, .. } = &mut fields[0].kind else {
+        panic!("{:?}", fields[0])
+    };
+    operand.ty = Type::Named {
+        name: "Option".to_string(),
+        args: vec![Type::Int(IntType::Int)],
+    };
+    assert_eq!(
+        refusal_of(src, &program),
+        ("`?` on `Option<Int>`".to_string(), "g()?".to_string())
     );
 }
 
