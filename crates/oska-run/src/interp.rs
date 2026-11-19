@@ -24,6 +24,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use oska_check::builtins::{self, TraitMethod};
+use oska_check::limits::{Limit, Limits};
 use oska_check::program::{
     self, Arm, Callee, Clause, Expr, ExprKind, Function, Part, Pattern, Place, Program, Stmt,
 };
@@ -116,6 +117,18 @@ pub struct Interpreter<'p, 'h> {
     pub(crate) tasks: Tasks,
     /// How many calls of functions and closures are running.
     depth: usize,
+    /// The run limits (spec #446), none by default.
+    limits: Limits,
+    /// The bytes the program has written to stdout and stderr so far,
+    /// counted against `--max-output`.
+    output_written: u64,
+}
+
+/// A standard stream the program writes to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stream {
+    Stdout,
+    Stderr,
 }
 
 impl<'p, 'h> Interpreter<'p, 'h> {
@@ -125,7 +138,41 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             host,
             tasks: Tasks::default(),
             depth: 0,
+            limits: Limits::NONE,
+            output_written: 0,
         }
+    }
+
+    /// This interpreter, under the run `limits`.
+    pub fn with_limits(mut self, limits: Limits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    /// Write `text`, which the program writes, to `stream`. Under
+    /// `--max-output`, a write that would take stdout and stderr together
+    /// past the limit writes nothing and panics with `P0041` at `span`.
+    pub(crate) fn write_output(
+        &mut self,
+        stream: Stream,
+        text: &str,
+        span: Span,
+    ) -> Result<std::io::Result<()>, Panic> {
+        if let Some(limit) = self.limits.max_output {
+            let bytes = u64::try_from(text.len()).unwrap_or(u64::MAX);
+            if bytes > limit - self.output_written {
+                return Err(Panic::new(
+                    Limit::Output.code(),
+                    Limit::Output.message(limit),
+                    span,
+                ));
+            }
+            self.output_written += bytes;
+        }
+        Ok(match stream {
+            Stream::Stdout => self.host.write_stdout(text),
+            Stream::Stderr => self.host.write_stderr(text),
+        })
     }
 
     /// Enter a call of a function or closure, made at `span`: a panic

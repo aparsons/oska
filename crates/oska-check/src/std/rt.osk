@@ -469,7 +469,8 @@ fn broken_pipe(result: Int) -> Bool {
 //   29      the digits of a fault report's signal number (`on_fault`);
 //   30      the `struct sigaction` of the default action, which `on_fault`
 //           restores (`handle_faults`);
-//   31      free;
+//   31      the bytes the program has written to stdout and stderr, under
+//           `--max-output` (`output_allows`);
 //   32-38   the test host (see "The test host"): 32 which host a test runs
 //           on, 33 its stderr prefix, 34 whether stderr is at the start
 //           of a line, 35 the lines printed, 36 the fake files' paths, 37
@@ -2389,6 +2390,26 @@ fn stdout_put_line(object: Int) -> Int {
         return flush_stdout()
     }
     0
+}
+
+// ---- Run limits ------------------------------------------------------------
+//
+// `oskac run --max-output=<limit>` builds the program so that each write
+// it makes to stdout or stderr (`println`, `dbg`, `main`'s error) first
+// asks `output_allows`. A program built without the flag never calls it.
+
+// Whether the program may write `text` and `extra` bytes more without
+// taking its output past `limit` bytes: if so they are counted, and if
+// not nothing is, for the generated code to panic (`P0041`) before the
+// write.
+pub fn output_allows(text: String, extra: Int, limit: Int) -> Bool {
+    let wanted = text_length(rt_mem_text(text)) + extra
+    let written = rt_mem_load64(global(31))
+    if wanted > limit - written {
+        return false
+    }
+    rt_mem_store64(global(31), written + wanted)
+    true
 }
 
 // `Stdout.println`.

@@ -44,12 +44,16 @@ USAGE:
                                            function's authority; compare it
                                            with a saved baseline (exit code 3
                                            when it widened), or write one
-    oskac run [path] [--format=json] [--interpret] [--no-cache] [-- args...]
+    oskac run [path] [--format=json] [--interpret] [--no-cache]
+              [--max-output=<bytes>] [-- args...]
                                            Check a source file or package and,
                                            if it has no diagnostics, run it:
                                            natively on aarch64 and x86_64
                                            Linux, on the interpreter elsewhere
-                                           or with --interpret
+                                           or with --interpret; stop it with
+                                           P0041 before it writes more than
+                                           the bytes --max-output gives to
+                                           stdout and stderr together
     oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
@@ -128,6 +132,11 @@ struct CommandLine {
     /// The name `--event=` gives, for `oskac hook`.
     event: Option<String>,
     target: Option<String>,
+    /// The run limits (`--max-output=<bytes>`), which only `oskac run`
+    /// takes.
+    limits: oska_check::limits::Limits,
+    /// Why a limit flag is malformed or repeated: a usage error.
+    limit_error: Option<String>,
     program_args: Vec<String>,
 }
 
@@ -149,6 +158,12 @@ impl CommandLine {
         };
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
+            if let Some(taken) = line.limits.take_flag(&arg) {
+                if let Err(error) = taken {
+                    line.limit_error.get_or_insert(error);
+                }
+                continue;
+            }
             match arg.as_str() {
                 "-o" => match args.next() {
                     Some(output) => line.output = Some(output),
@@ -206,6 +221,15 @@ fn main() -> ExitCode {
     let line = CommandLine::parse(std::env::args().skip(1).collect());
     let flags = line.flags;
     let positional: Vec<&str> = line.positional.iter().map(String::as_str).collect();
+    if let Some(error) = &line.limit_error {
+        eprintln!("error: {error}");
+        return ExitCode::from(2);
+    }
+    // Only `run` takes a limit: `check` is never mistaken for a run.
+    if !line.limits.is_empty() && positional.first() != Some(&"run") {
+        eprint!("{USAGE}");
+        return ExitCode::from(2);
+    }
     let gate = match (line.baseline.as_deref(), line.update_baseline.as_deref()) {
         (None, None) => None,
         (Some(file), None) if !file.is_empty() => Some(baseline::Gate::Compare(file)),
@@ -279,9 +303,12 @@ fn main() -> ExitCode {
             flags,
             &line.program_args,
         ),
-        ["run", rest @ ..] if rest.len() <= 1 => {
-            on_target(Command::Run, rest.first(), flags, &line.program_args)
-        }
+        ["run", rest @ ..] if rest.len() <= 1 => on_target(
+            Command::Run(line.limits),
+            rest.first(),
+            flags,
+            &line.program_args,
+        ),
         ["test", rest @ ..] if rest.len() <= 1 => {
             on_target(Command::Test, rest.first(), flags, &line.program_args)
         }
@@ -368,7 +395,8 @@ fn parse_file(path: &str, Flags { json, .. }: Flags) -> ExitCode {
 enum Command<'a> {
     /// `oskac check`, with what it does with a baseline.
     Check(Option<baseline::Gate<'a>>),
-    Run,
+    /// `oskac run`, under its limits.
+    Run(oska_check::limits::Limits),
     Test,
     /// `oskac build`, with the output path `-o` gives and its target platforms.
     Build(build::Options<'a>),
@@ -378,7 +406,7 @@ impl Command<'_> {
     fn name(self) -> &'static str {
         match self {
             Command::Check(_) => "check",
-            Command::Run => "run",
+            Command::Run(_) => "run",
             Command::Test => "test",
             Command::Build(_) => "build",
         }
@@ -566,7 +594,13 @@ fn diagnostics_text(diagnostics: &[Diagnostic]) -> String {
 /// stderr as `oskac check` prints diagnostics, or one JSON object per
 /// line with `--format=json`. The exit code is the program's: 101 after
 /// a panic (see `docs/runtime.md`).
-fn run_file(path: &str, flags: Flags, args: &[String], store: Option<&cache::Store>) -> ExitCode {
+fn run_file(
+    path: &str,
+    flags: Flags,
+    limits: oska_check::limits::Limits,
+    args: &[String],
+    store: Option<&cache::Store>,
+) -> ExitCode {
     let json = flags.json;
     let Some(src) = read_source(path) else {
         return ExitCode::FAILURE;
@@ -588,6 +622,7 @@ fn run_file(path: &str, flags: Flags, args: &[String], store: Option<&cache::Sto
                     argv0: path,
                     args,
                     json,
+                    limits,
                 },
                 &cached,
             ) {
@@ -600,7 +635,7 @@ fn run_file(path: &str, flags: Flags, args: &[String], store: Option<&cache::Sto
     }
     let mut argv = vec![path.to_string()];
     argv.extend_from_slice(args);
-    let outcome = oska_run::run(&src, &mut oska_run::RealHost::new(), &argv);
+    let outcome = oska_run::run_with_limits(&src, &mut oska_run::RealHost::new(), &argv, limits);
     finish_run(outcome, json, &places)
 }
 
@@ -695,7 +730,7 @@ fn on_target(command: Command, path: Option<&&str>, flags: Flags, args: &[String
         package::Target::File(file) => {
             let code = match command {
                 Command::Check(gate) => check_file(&file, flags, gate, store),
-                Command::Run => run_file(&file, flags, args, store),
+                Command::Run(limits) => run_file(&file, flags, limits, args, store),
                 Command::Test => test_file(&file, flags, store),
                 Command::Build(options) => build::file(&file, flags, options, store),
             };
@@ -748,7 +783,7 @@ fn on_package(
                 .emit(),
         };
     }
-    let report = if matches!(command, Command::Run | Command::Build(_)) {
+    let report = if matches!(command, Command::Run(_) | Command::Build(_)) {
         package::check_to_run(&package, &refused, dir, options)
     } else {
         package::check(&package, &refused, options)
@@ -765,7 +800,7 @@ fn on_package(
         return build::package(program, &places, dir, options, json, &cached);
     }
     let mut host = oska_run::RealHost::new();
-    if command == Command::Run {
+    if let Command::Run(limits) = command {
         if let Some(target) = native::native_target(flags) {
             match native::run(
                 program,
@@ -775,6 +810,7 @@ fn on_package(
                     argv0: dir,
                     args,
                     json,
+                    limits,
                 },
                 &cached,
             ) {
@@ -786,7 +822,7 @@ fn on_package(
         }
         let mut argv = vec![dir.to_string()];
         argv.extend_from_slice(args);
-        let outcome = oska_run::run_program(program, &mut host, &argv);
+        let outcome = oska_run::run_program_with_limits(program, &mut host, &argv, limits);
         finish_run(outcome, json, &places)
     } else {
         let options = oska_run::TestOptions {
@@ -825,7 +861,7 @@ fn refuse(command: Command, diagnostics: Vec<Diagnostic>, json: bool, dir: &str)
             };
             finish_check(&report, json, dir, gate)
         }
-        Command::Run => {
+        Command::Run(_) => {
             let outcome = oska_run::RunOutcome {
                 stdout: String::new(),
                 stderr: String::new(),

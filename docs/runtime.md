@@ -138,6 +138,7 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0035` | `String.slice` was given indices out of bounds: a start or end below 0 or past the text's length in characters, or a start past the end. Spans the call. Indices count characters (Unicode code points), not bytes. |
 | `P0036` | `String.repeat` was given a negative count. Spans the call. |
 | `P0037` | `String.repeat` would build a text over 256 MiB, so the interpreter panics instead of running out of memory. Spans the call. |
+| `P0041` | Output limit reached: the program was run with `oskac run --max-output=<bytes>`, and this write would take what it wrote to standard output and standard error together past that many bytes. The write that would pass the limit writes nothing, so no byte past it reaches either stream. The message names the limit and its value. Every write the program makes counts: `println` on `Stdout` and `Stderr`, `dbg`'s line, and the text of the error `main` returns; the panic report itself does not. Spans the call that writes, or `main`'s body for its error. Without the flag a program has no output limit. See [Run limits](#run-limits). |
 
 ### Panic examples
 
@@ -392,6 +393,38 @@ fn main() {
     let small = "ab".repeat(3000)
 }
 ```
+
+#### `P0041`
+
+```oska error=P0041 max-output=16
+fn main(io: Stdout) {
+    while true {
+        let _ = io.println("again")
+    }
+}
+```
+
+```oska fixed=P0041 max-output=16
+fn main(io: Stdout) {
+    var i = 0
+    while i < 2 {
+        let _ = io.println("again")
+        i = i + 1
+    }
+}
+```
+
+## Run limits
+
+`oskac run` takes **run limits**, which an embedder (a program that runs code a model wrote) puts on one run. Each stops the program when it is reached with a panic of its own and exit code 101, reported as any panic is, natively and on the interpreter alike.
+
+| Flag | Limit | Panic |
+| --- | --- | --- |
+| `--max-output=<bytes>` | The bytes the program writes to standard output and standard error together. | `P0041` |
+
+- A limit is a whole number above 0. A value of 0, a negative number, or anything that is not a number is a usage error (exit code 2), never "no limit". So is a limit given twice, and a limit on any command but `run`.
+- A run with no limit flag behaves and performs exactly as before: the native executable is the one `oskac build` writes, byte for byte. A limit is opt-in.
+- Natively, the limit is built into the executable `oskac run` makes for that run (the build cache keeps it apart from the one without), and counted in `std.rt` behind the system calls that exist ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)). The two backends stop at the same write, with the same output.
 
 ## Errors and traits
 

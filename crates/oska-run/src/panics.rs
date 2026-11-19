@@ -60,6 +60,9 @@ pub mod codes {
     /// `String.repeat` would build a text longer than the interpreter
     /// allows.
     pub const TEXT_TOO_LONG: &str = "P0037";
+    /// The program would have written more than `--max-output` bytes to
+    /// stdout and stderr together (`oska_check::limits`).
+    pub const OUTPUT_LIMIT: &str = oska_check::limits::codes::OUTPUT_LIMIT;
 
     /// Every code, in the order `docs/runtime.md` lists them.
     pub const ALL: &[&str] = &[
@@ -82,6 +85,7 @@ pub mod codes {
         SLICE_OUT_OF_BOUNDS,
         NEGATIVE_REPEAT,
         TEXT_TOO_LONG,
+        OUTPUT_LIMIT,
     ];
 }
 

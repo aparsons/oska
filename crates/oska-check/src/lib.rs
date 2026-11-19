@@ -54,6 +54,7 @@ mod decl_rules;
 mod infer;
 mod instantiation;
 mod items;
+pub mod limits;
 mod link;
 mod manifest;
 mod package;

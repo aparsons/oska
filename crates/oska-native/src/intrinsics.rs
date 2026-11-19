@@ -1120,9 +1120,15 @@ mod tests {
         let rt = oska_check::check_toolchain_rt()
             .program
             .expect("std.rt should check");
-        let module =
-            crate::lower::program(&program, &rt, &|d| d, crate::lower::Entry::Main, target)
-                .expect("the program should lower");
+        let module = crate::lower::program(
+            &program,
+            &rt,
+            &|d| d,
+            crate::lower::Entry::Main,
+            target,
+            oska_check::limits::Limits::NONE,
+        )
+        .expect("the program should lower");
         let calls: std::collections::BTreeSet<(u16, usize)> = module
             .functions
             .iter()
@@ -1358,9 +1364,15 @@ mod tests {
             (crate::Target::MacosAarch64, MACOS_AARCH64),
             (crate::Target::MacosX86_64, MACOS_X86_64),
         ] {
-            let module =
-                crate::lower::program(&program, &rt, &|d| d, crate::lower::Entry::Main, target)
-                    .expect("the program should lower");
+            let module = crate::lower::program(
+                &program,
+                &rt,
+                &|d| d,
+                crate::lower::Entry::Main,
+                target,
+                oska_check::limits::Limits::NONE,
+            )
+            .expect("the program should lower");
             let mut imports = std::collections::BTreeSet::new();
             for inst in module.functions.iter().flat_map(|f| &f.insts) {
                 match inst {
@@ -1588,6 +1600,7 @@ mod tests {
             &|d| d,
             crate::lower::Entry::Main,
             crate::Target::WindowsX86_64,
+            oska_check::limits::Limits::NONE,
         )
         .expect("the program should lower");
         assert!(module.callback.is_some());

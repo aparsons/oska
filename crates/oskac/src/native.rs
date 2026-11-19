@@ -86,6 +86,9 @@ pub struct Invocation<'a> {
     pub args: &'a [String],
     /// Whether reports are JSON (`--format=json`).
     pub json: bool,
+    /// The run limits, which the executable is built with: none builds
+    /// the same executable as `oskac build`.
+    pub limits: oska_check::limits::Limits,
 }
 
 /// `oskac run`, natively: compile `program` for `target`, the host's, run
@@ -100,15 +103,20 @@ pub fn run(
     invocation: Invocation,
     cached: &Cached,
 ) -> Run {
-    let Invocation { argv0, args, json } = invocation;
+    let Invocation {
+        argv0,
+        args,
+        json,
+        limits,
+    } = invocation;
     // A human report is placed in the source by the executable itself; a
     // JSON one is read back unplaced and placed here, as the
     // interpreter's panic is.
-    let built = cached.native("run", target, json, || {
+    let built = cached.native("run", target, json, &limits.flags(), || {
         if json {
-            oska_native::build(program, target, &|d| d)
+            oska_native::build_limited(program, target, &|d| d, limits)
         } else {
-            oska_native::build(program, target, &|d| places.locate(d))
+            oska_native::build_limited(program, target, &|d| places.locate(d), limits)
         }
     });
     let bytes = match built {
