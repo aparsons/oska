@@ -2592,7 +2592,9 @@ impl<'l, 'p> Body<'l, 'p> {
                 let value = self.expr(expr)?;
                 self.consume(value)?;
             }
-            Stmt::Let { binds, ty, value } => {
+            Stmt::Let {
+                binds, ty, value, ..
+            } => {
                 let value = self.expr(value)?;
                 if *binds {
                     // The local takes over the value's reference.
@@ -2605,7 +2607,7 @@ impl<'l, 'p> Body<'l, 'p> {
                     self.consume(value)?;
                 }
             }
-            Stmt::Assign { place, value } => self.assign(place, value)?,
+            Stmt::Assign { place, value, .. } => self.assign(place, value)?,
             Stmt::Return { value, span } => {
                 let value = match value {
                     Some(value) => self.expr(value)?,
@@ -2613,20 +2615,20 @@ impl<'l, 'p> Body<'l, 'p> {
                 };
                 self.return_value(value, *span)?;
             }
-            Stmt::Break | Stmt::Continue => {
+            Stmt::Break(_) | Stmt::Continue(_) => {
                 let Some(&innermost) = self.loops.last() else {
                     return Err(self.refuse(NOWHERE, "`break` outside a loop"));
                 };
                 self.release_slots(innermost.height)?;
                 self.release_held(Some(self.loops.len()))?;
-                let target = if matches!(stmt, Stmt::Break) {
+                let target = if matches!(stmt, Stmt::Break(_)) {
                     innermost.exit
                 } else {
                     innermost.next
                 };
                 self.push(Inst::Jump(target));
             }
-            Stmt::While { cond, body } => {
+            Stmt::While { cond, body, .. } => {
                 let (next, exit) = (self.label(), self.label());
                 self.push(Inst::Label(next));
                 self.branch_unless(cond, exit)?;
@@ -2639,6 +2641,7 @@ impl<'l, 'p> Body<'l, 'p> {
                 ty,
                 iter,
                 body,
+                ..
             } => {
                 if let Some(text) = self.chars_of(iter) {
                     self.for_chars(*binds, ty, text, body)?;

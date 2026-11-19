@@ -6,10 +6,12 @@
 //! `UPDATE_GOLDEN=1`, and only for an intentional change, which is a new
 //! core IR version.
 
+use std::ops::ControlFlow;
 use std::path::PathBuf;
 
 use oska_check::core_ir::{self, Refusal, CORE_IR_VERSION};
-use oska_check::program::Program;
+use oska_check::program::{walk, Expr, ExprKind, IntType, Program, Stmt, Visit};
+use oska_syntax::Span;
 
 fn program(src: &str) -> Program {
     let report = oska_check::check_module(src);
@@ -39,7 +41,13 @@ fn assert_golden(name: &str, src: &str) {
 
 /// The refusal of `src`, with the source text its span covers.
 fn refusal(src: &str) -> (String, String) {
-    match core_ir::export(&program(src)) {
+    refusal_of(src, &program(src))
+}
+
+/// The refusal of `program`, checked from `src` and perhaps changed
+/// since, with the source text its span covers.
+fn refusal_of(src: &str, program: &Program) -> (String, String) {
+    match core_ir::export(program) {
         Ok(json) => panic!("{src} should be refused, exported:\n{json}"),
         Err(Refusal { construct, span }) => (construct, src[span.start..span.end].to_string()),
     }
@@ -130,7 +138,7 @@ fn the_export_carries_its_version_and_is_json() {
 }
 
 #[test]
-fn a_struct_is_refused_at_its_first_use() {
+fn a_struct_is_refused_at_its_declaration() {
     assert_refused(
         "struct Point { x: Int }\n\
          fn origin() -> Int {\n\
@@ -138,7 +146,41 @@ fn a_struct_is_refused_at_its_first_use() {
          \x20   0\n\
          }\n",
         "the struct `Point`",
-        "Point(x: 0)",
+        "struct Point { x: Int }",
+    );
+}
+
+#[test]
+fn a_declaration_nothing_uses_is_refused() {
+    assert_refused(
+        "fn f() -> Int { 1 }\n\
+         struct Unused { x: Int }\n",
+        "the struct `Unused`",
+        "struct Unused { x: Int }",
+    );
+    assert_refused(
+        "enum Light { Red, Green }\n\
+         fn f() -> Int { 1 }\n",
+        "the enum `Light`",
+        "enum Light { Red, Green }",
+    );
+    assert_refused(
+        "trait Named {\n\
+         \x20   fn name(self) -> Int { 1 }\n\
+         }\n\
+         fn f() -> Int { 1 }\n",
+        "the trait `Named`",
+        "trait Named {\n    fn name(self) -> Int { 1 }\n}",
+    );
+}
+
+#[test]
+fn a_constant_is_refused() {
+    assert_refused(
+        "const LIMIT: Int = 3\n\
+         fn f() -> Int { LIMIT }\n",
+        "the constant `LIMIT`",
+        "const LIMIT: Int = 3",
     );
 }
 
@@ -158,7 +200,18 @@ fn a_capability_is_refused_naming_its_type() {
          \x20   stdout.println(\"hi\")\n\
          }\n",
         "the type `Stdout`",
-        "main",
+        "Stdout",
+    );
+}
+
+#[test]
+fn a_return_type_outside_the_core_is_refused_at_the_type() {
+    assert_refused(
+        "fn f() -> String {\n\
+         \x20   \"hi\"\n\
+         }\n",
+        "the type `String`",
+        "String",
     );
 }
 
@@ -175,22 +228,27 @@ fn a_built_in_call_is_refused_at_the_call() {
 }
 
 #[test]
-fn a_method_is_refused_at_its_name() {
-    assert_refused(
-        "struct Counter { n: Int }\n\
-         impl Counter {\n\
-         \x20   fn zero() -> Int { 0 }\n\
-         }\n",
-        "the associated function `Counter.zero`",
-        "zero",
+fn an_impl_block_is_refused_with_its_type() {
+    let src = "struct Counter { n: Int }\n\
+               impl Counter {\n\
+               \x20   fn get(self) -> Int { 0 }\n\
+               }\n";
+    assert_refused(src, "the struct `Counter`", "struct Counter { n: Int }");
+    // Without the struct's declaration, the impl is the first refusal.
+    let mut program = program(src);
+    program.declarations.remove(0);
+    assert_eq!(
+        refusal_of(src, &program),
+        (
+            "the `impl` of `Counter`".to_string(),
+            "impl Counter {\n    fn get(self) -> Int { 0 }\n}".to_string()
+        )
     );
-    assert_refused(
-        "struct Counter { n: Int }\n\
-         impl Counter {\n\
-         \x20   fn get(self) -> Int { 0 }\n\
-         }\n",
-        "the method `Counter.get`",
-        "get",
+    // Without either, its method is.
+    program.declarations.clear();
+    assert_eq!(
+        refusal_of(src, &program),
+        ("the method `Counter.get`".to_string(), "get".to_string())
     );
 }
 
@@ -220,27 +278,101 @@ fn a_string_is_refused() {
 }
 
 #[test]
-fn a_sized_integer_is_refused() {
+fn a_let_annotation_outside_the_core_is_refused_at_the_annotation() {
     assert_refused(
         "fn f() -> Int {\n\
          \x20   let b: U8 = 7\n\
          \x20   1\n\
          }\n",
-        "the integer type `U8`",
-        "7",
+        "the type `U8`",
+        "U8",
+    );
+    // The annotation comes before the value in the source.
+    assert_refused(
+        "fn f() -> Int {\n\
+         \x20   let s: String = \"hi\"\n\
+         \x20   1\n\
+         }\n",
+        "the type `String`",
+        "String",
+    );
+}
+
+/// Give `-n + 7`, the body of `f`, these integer types: the checker
+/// never does for a program in Oska Core, so this is what a program that
+/// slipped past it would look like.
+fn set_int_types(program: &mut Program, sum: Option<IntType>, neg: IntType) {
+    let body = &mut program
+        .functions
+        .get_mut("f")
+        .unwrap_or_else(|| panic!("no `f`"))
+        .body;
+    let ExprKind::Block {
+        value: Some(value), ..
+    } = &mut body.kind
+    else {
+        panic!("{body:?}")
+    };
+    let ExprKind::Binary { lhs, int, .. } = &mut value.kind else {
+        panic!("{value:?}")
+    };
+    *int = sum;
+    let ExprKind::Neg { int, .. } = &mut lhs.kind else {
+        panic!("{lhs:?}")
+    };
+    *int = neg;
+}
+
+#[test]
+fn sized_integer_operations_are_refused() {
+    let src = "fn f(n: Int) -> Int {\n\
+               \x20   -n + 7\n\
+               }\n";
+    let mut program = program(src);
+    set_int_types(&mut program, Some(IntType::U8), IntType::Int);
+    assert_eq!(
+        refusal_of(src, &program),
+        ("the integer type `U8`".to_string(), "-n + 7".to_string())
+    );
+    set_int_types(&mut program, Some(IntType::Int), IntType::I32);
+    assert_eq!(
+        refusal_of(src, &program),
+        ("the integer type `I32`".to_string(), "-n".to_string())
     );
 }
 
 #[test]
-fn a_loop_and_assignment_are_refused() {
+fn an_unsolved_type_is_refused() {
+    let src = "fn f() -> Int { 1 }\n";
+    let mut program = program(src);
+    program.unsolved.push(Span { start: 16, end: 17 });
+    assert_eq!(
+        refusal_of(src, &program),
+        (
+            "a type the checker left unsolved".to_string(),
+            "1".to_string()
+        )
+    );
+}
+
+#[test]
+fn var_and_loops_are_refused_at_their_statement() {
     assert_refused(
         "fn f() -> Int {\n\
          \x20   var n = 0\n\
          \x20   n = 1\n\
          \x20   n\n\
          }\n",
-        "an assignment",
-        "1",
+        "a `var` binding",
+        "var n = 0",
+    );
+    assert_refused(
+        "fn f() -> Int {\n\
+         \x20   var n = 0\n\
+         \x20   n\n\
+         }\n",
+        "a `var` binding",
+        "var n = 0",
     );
     assert_refused(
         "fn f(go: Bool) -> Int {\n\
@@ -250,8 +382,47 @@ fn a_loop_and_assignment_are_refused() {
          \x20   1\n\
          }\n",
         "a `while` loop",
-        "go",
+        "while go {\n        break\n    }",
     );
+    assert_refused(
+        "fn f() -> Int {\n\
+         \x20   for i in 0..3 {\n\
+         \x20       continue\n\
+         \x20   }\n\
+         \x20   1\n\
+         }\n",
+        "a `for` loop",
+        "for i in 0..3 {\n        continue\n    }",
+    );
+}
+
+#[test]
+fn break_and_continue_carry_their_keyword_span() {
+    let src = "fn f(go: Bool) -> Int {\n\
+               \x20   while go {\n\
+               \x20       if go { break }\n\
+               \x20       continue\n\
+               \x20   }\n\
+               \x20   1\n\
+               }\n";
+    let program = program(src);
+    let mut found = Vec::new();
+    let _ = walk(&program.functions["f"].body, &mut |visit| {
+        if let Visit::Expr(Expr {
+            kind: ExprKind::Block { stmts, .. },
+            ..
+        }) = visit
+        {
+            for stmt in stmts {
+                if let Stmt::Break(span) | Stmt::Continue(span) = stmt {
+                    found.push(&src[span.start..span.end]);
+                }
+            }
+        }
+        ControlFlow::<()>::Continue(())
+    });
+    found.sort_unstable();
+    assert_eq!(found, ["break", "continue"]);
 }
 
 #[test]

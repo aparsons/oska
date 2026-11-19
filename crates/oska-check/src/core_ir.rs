@@ -13,7 +13,11 @@
 //! Oska Core version 1 has functions, `let`, `if`, `Int` and `Bool` with
 //! their operators, and `()`, the value of a block or `if` with no value.
 //! [`export`] refuses any other program, naming the first construct
-//! outside it in source order, with its span.
+//! outside it in source order, with its span. It fails closed: a struct,
+//! enum, trait, `impl` or `const` is refused even when nothing uses it,
+//! and so are `var` (even one never assigned), a `use`, a `test` block,
+//! a generic function, a method, a contract, and any type the checker
+//! left unsolved.
 //!
 //! The text is pretty-printed JSON: two-space indentation, a value that
 //! fits in 80 columns on one line, and a final newline. Every node is an
@@ -40,8 +44,7 @@
 //! ```
 //!
 //! - `functions` are in source order. `NAME` is a function's name, which
-//!   a `Call` uses to reach it. A constant is a function with no
-//!   parameters, as the checked program has it.
+//!   a `Call` uses to reach it.
 //! - Slots number a function's locals from 0, in the order they are
 //!   bound: the parameters that bind, then each `let` that binds, as it
 //!   runs. A `let` is in scope until the end of its block. A parameter
@@ -73,7 +76,9 @@ use std::fmt;
 
 use oska_syntax::{json_escape, Span};
 
-use crate::program::{Callee, Expr, ExprKind, Function, IntType, Param, Program, Stmt, Type};
+use crate::program::{
+    Callee, DeclarationKind, Expr, ExprKind, Function, IntType, Param, Program, Stmt, Type,
+};
 
 /// The version of the core IR [`export`] writes.
 pub const CORE_IR_VERSION: u64 = 1;
@@ -83,9 +88,9 @@ pub const CORE_IR_VERSION: u64 = 1;
 pub struct Refusal {
     /// The construct, such as "the struct `Point`" or "a `while` loop".
     pub construct: String,
-    /// Where it is in the source. A construct of a function's signature,
-    /// such as a parameter's type, is located at the function's name; a
-    /// statement with no span of its own at its first expression.
+    /// The construct's own span: a declaration's whole item, a type as
+    /// written, a statement's whole statement, an expression's. A generic
+    /// function or a method, refused as a whole, is located at its name.
     pub span: Span,
 }
 
@@ -102,6 +107,10 @@ impl fmt::Display for Refusal {
 /// The core IR of `program`, or the refusal of its first construct
 /// outside Oska Core, in source order.
 pub fn export(program: &Program) -> Result<String, Refusal> {
+    // A type nobody solved has no meaning in Oska Core, wherever it is.
+    if let Some(span) = program.unsolved.iter().min_by_key(|s| s.start) {
+        return refuse("a type the checker left unsolved", *span);
+    }
     let mut functions: Vec<&Function> = program.functions.values().collect();
     functions.sort_by_key(|f| f.span.start);
     let mut refusals: Vec<Refusal> = Vec::new();
@@ -112,6 +121,16 @@ pub fn export(program: &Program) -> Result<String, Refusal> {
             Err(refusal) => refusals.push(refusal),
         }
     }
+    refusals.extend(program.declarations.iter().map(|d| Refusal {
+        construct: match d.kind {
+            DeclarationKind::Struct => format!("the struct `{}`", d.name),
+            DeclarationKind::Enum => format!("the enum `{}`", d.name),
+            DeclarationKind::Trait => format!("the trait `{}`", d.name),
+            DeclarationKind::Impl => format!("the `impl` of `{}`", d.name),
+            DeclarationKind::Const => format!("the constant `{}`", d.name),
+        },
+        span: d.span,
+    }));
     refusals.extend(program.imports.iter().map(|(module, span)| Refusal {
         construct: format!("the import of `{module}`"),
         span: *span,
@@ -152,6 +171,18 @@ fn function(f: &Function) -> Result<Json, Refusal> {
     if !f.generics.is_empty() {
         return refuse(format!("the generic function `{}`", f.name), f.span);
     }
+    // In source order: the parameters, the result type, the contracts.
+    let params = f
+        .params
+        .iter()
+        .map(|p: &Param| {
+            Ok(Json::Obj(vec![
+                ("type", ty(&p.ty, p.annotation.unwrap_or(f.span))?),
+                ("binds", Json::Bool(p.binds)),
+            ]))
+        })
+        .collect::<Result<Vec<_>, Refusal>>()?;
+    let ret = ty(&f.ret, f.ret_annotation.unwrap_or(f.span))?;
     if let Some(clause) = f
         .contracts
         .requires
@@ -161,17 +192,6 @@ fn function(f: &Function) -> Result<Json, Refusal> {
     {
         return refuse("a contract", clause.span);
     }
-    let params = f
-        .params
-        .iter()
-        .map(|p: &Param| {
-            Ok(Json::Obj(vec![
-                ("type", ty(&p.ty, f.span)?),
-                ("binds", Json::Bool(p.binds)),
-            ]))
-        })
-        .collect::<Result<Vec<_>, Refusal>>()?;
-    let ret = ty(&f.ret, f.span)?;
     Ok(Json::Obj(vec![
         ("name", Json::Str(f.name.clone())),
         ("params", Json::Arr(params)),
@@ -217,6 +237,11 @@ fn expr(e: &Expr) -> Result<Json, Refusal> {
         ExprKind::Int(_, int) => return refuse(format!("the integer type `{}`", int.name()), span),
         ExprKind::Bool(value) => node("Bool", vec![("value", Json::Bool(*value))]),
         ExprKind::Local(slot) => node("Local", vec![("slot", Json::Int(*slot as i128))]),
+        ExprKind::Neg { int, .. } | ExprKind::Binary { int: Some(int), .. }
+            if *int != IntType::Int =>
+        {
+            return refuse(format!("the integer type `{}`", int.name()), span)
+        }
         ExprKind::Neg { operand, .. } => node("Neg", vec![("operand", expr(operand)?)]),
         ExprKind::Not(operand) => node("Not", vec![("operand", expr(operand)?)]),
         ExprKind::Binary { op, lhs, rhs, .. } => node(
@@ -259,10 +284,7 @@ fn expr(e: &Expr) -> Result<Json, Refusal> {
             node("If", fields)
         }
         ExprKind::Block { stmts, value } => {
-            let stmts = stmts
-                .iter()
-                .map(|s| stmt(s, span))
-                .collect::<Result<Vec<_>, _>>()?;
+            let stmts = stmts.iter().map(stmt).collect::<Result<Vec<_>, _>>()?;
             let mut fields = vec![("stmts", Json::Arr(stmts))];
             if let Some(value) = value {
                 fields.push(("value", expr(value)?));
@@ -292,30 +314,51 @@ fn expr(e: &Expr) -> Result<Json, Refusal> {
     })
 }
 
-/// A statement of Oska Core in the block at `block`, or the refusal of
-/// the first construct in it that is not. A statement with no span of
-/// its own is located at its first expression.
-fn stmt(s: &Stmt, block: Span) -> Result<Json, Refusal> {
+/// A statement of Oska Core, or the refusal of the first construct in
+/// it that is not.
+fn stmt(s: &Stmt) -> Result<Json, Refusal> {
     Ok(match s {
         Stmt::Expr(value) => node("Expr", vec![("value", expr(value)?)]),
-        Stmt::Let { binds, ty, value } => {
-            let value_json = expr(value)?;
+        Stmt::Let {
+            mutable: true,
+            span,
+            ..
+        } => return refuse("a `var` binding", *span),
+        Stmt::Let {
+            binds,
+            mutable: false,
+            ty,
+            annotation,
+            value,
+            ..
+        } => {
+            // A written type comes before the value; an inferred one is
+            // the value's.
+            let (ty, value) = match annotation {
+                Some(annotation) => {
+                    let ty = self::ty(ty, *annotation)?;
+                    (ty, expr(value)?)
+                }
+                None => {
+                    let json = expr(value)?;
+                    (self::ty(ty, value.span)?, json)
+                }
+            };
             node(
                 "Let",
                 vec![
                     ("binds", Json::Bool(*binds)),
-                    ("type", self::ty(ty, value.span)?),
-                    ("value", value_json),
+                    ("type", ty),
+                    ("value", value),
                 ],
             )
         }
-        Stmt::Assign { value, .. } => return refuse("an assignment", value.span),
+        Stmt::Assign { span, .. } => return refuse("an assignment", *span),
         Stmt::Return { span, .. } => return refuse("`return`", *span),
-        Stmt::While { cond, .. } => return refuse("a `while` loop", cond.span),
-        Stmt::For { iter, .. } => return refuse("a `for` loop", iter.span),
-        // Only inside a loop, which is refused first.
-        Stmt::Break => return refuse("`break`", block),
-        Stmt::Continue => return refuse("`continue`", block),
+        Stmt::While { span, .. } => return refuse("a `while` loop", *span),
+        Stmt::For { span, .. } => return refuse("a `for` loop", *span),
+        Stmt::Break(span) => return refuse("`break`", *span),
+        Stmt::Continue(span) => return refuse("`continue`", *span),
     })
 }
 

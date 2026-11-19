@@ -228,6 +228,9 @@ mod tests {
             ExprKind::Block {
                 stmts: vec![Stmt::Let {
                     binds: true,
+                    mutable: false,
+                    annotation: None,
+                    span: Span::at(0),
                     ty: Type::Named {
                         name: "Scope".to_string(),
                         args: Vec::new(),
@@ -242,12 +245,13 @@ mod tests {
             "main".to_string(),
             Function {
                 name: "main".to_string(),
-                span: Span { start: 0, end: 0 },
+                span: Span::at(0),
                 generics: Vec::new(),
                 self_ty: None,
                 receiver: false,
                 params: Vec::new(),
                 ret: Type::Unit,
+                ret_annotation: None,
                 contracts: Contracts::default(),
                 body,
             },
