@@ -1,10 +1,10 @@
-//! The step limit (spec #446, ticket #452): `oskac run --interpret
-//! --max-steps=<n>` stops a program after `n` steps (ADR 0021) with
-//! `P0038` and exit code 101. The fixtures in
-//! `tests/fixtures/run_limits/steps/` each say, on their first line, how
-//! many steps they take, and why. A malformed value, the flag on any
-//! command but `run`, and the flag on a native run are usage errors (exit
-//! code 2): native code does not count steps yet (#454).
+//! The step limit (spec #446, ticket #452): `oskac run --max-steps=<n>`
+//! stops a program after `n` steps (ADR 0021) with `P0038` and exit code
+//! 101. Native code stops at the same step (`run_limits_steps_native.rs`,
+//! ticket #454). The fixtures in `tests/fixtures/run_limits/steps/` each say,
+//! on their first line, how many steps they take, and why. A malformed
+//! value and the flag on any command but `run` are usage errors (exit
+//! code 2).
 //!
 //! The expected output is in `tests/golden/run_limits/`. To regenerate it
 //! after an intended change, run `UPDATE_GOLDEN=1 cargo test -p oskac
@@ -15,7 +15,10 @@ mod common;
 use std::path::Path;
 
 use common::portable::Scratch;
-use common::run_limits::{assert_golden, oskac_in, oskac_with_stdin, program, transcript, HELLO};
+use common::run_limits::{
+    assert_golden, oskac_in, oskac_with_stdin, program, step_fixtures, steps_written_in,
+    transcript, HELLO,
+};
 
 /// Loops without end, and takes no other step.
 const LOOPS_FOREVER: &str = "fn main() {\n    while true {}\n}\n";
@@ -35,37 +38,6 @@ fn a_program_that_loops_without_end_stops_at_the_step_limit_with_p0038() {
     );
 }
 
-/// The step fixtures, `tests/fixtures/run_limits/steps/*.osk`: each name
-/// and source, sorted by name.
-fn step_fixtures() -> Vec<(String, String)> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run_limits/steps");
-    let mut fixtures: Vec<(String, String)> = std::fs::read_dir(&dir)
-        .expect("the step fixtures")
-        .map(|entry| {
-            let path = entry.expect("an entry").path();
-            let name = path
-                .file_stem()
-                .expect("a name")
-                .to_string_lossy()
-                .into_owned();
-            let src = std::fs::read_to_string(&path).expect("a fixture");
-            (name, src)
-        })
-        .collect();
-    fixtures.sort();
-    fixtures
-}
-
-/// The steps a fixture says it takes, on its first line: `// Steps: N.`
-fn steps_written_in(name: &str, src: &str) -> u64 {
-    src.lines()
-        .next()
-        .and_then(|line| line.strip_prefix("// Steps: "))
-        .and_then(|rest| rest.split('.').next())
-        .and_then(|n| n.parse().ok())
-        .unwrap_or_else(|| panic!("{name}.osk should start with `// Steps: N.`"))
-}
-
 /// Each fixture takes exactly the steps it says (ADR 0021): with that
 /// many it runs to the end as it does without a limit, and with one fewer
 /// it stops with `P0038` before printing.
@@ -79,13 +51,17 @@ fn each_fixture_takes_the_steps_it_says() {
             "closure",
             "contracts",
             "eq",
+            "fn_values",
+            "for_chars",
+            "for_list",
             "loop",
             "main_error",
             "recursion",
             "std_module",
             "tasks",
             "trait_method",
-            "try_convert"
+            "try_convert",
+            "while_continue"
         ]
     );
     for (name, src) in &fixtures {
@@ -109,7 +85,7 @@ fn each_fixture_takes_the_steps_it_says() {
         assert_eq!(output.status.code(), Some(101), "{name} {short}: {stderr}");
         assert!(output.stdout.is_empty(), "{name} {short}: {output:?}");
         let message = format!(
-            "error[P0038]: step limit reached: the program would take more than {} steps",
+            "error[P0038]: step limit reached: the program would take more than {} step",
             steps - 1
         );
         assert!(stderr.contains(&message), "{name} {short}: {stderr}");
@@ -184,33 +160,6 @@ fn explain_p0038_explains_the_step_limit() {
     );
 }
 
-/// Native code does not count steps yet (#454): where `oskac run` would
-/// run the program natively, `--max-steps` without `--interpret` is a
-/// usage error that says to add it, and nothing runs. Where it runs the
-/// interpreter (Windows), the flag works.
-#[test]
-fn max_steps_on_a_native_run_is_a_usage_error() {
-    let dir = program("steps_native", LOOPS_FOREVER);
-    let output = oskac_in(&dir, &["run", "--max-steps=10", "main.osk"]);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let native = cfg!(all(
-        any(target_os = "linux", target_os = "macos"),
-        any(target_arch = "aarch64", target_arch = "x86_64")
-    ));
-    if native {
-        assert_eq!(output.status.code(), Some(2), "{stderr}");
-        assert_eq!(
-            stderr,
-            "error: --max-steps works only on the interpreter for now: add --interpret to \
-             run the program there\n"
-        );
-    } else {
-        assert_eq!(output.status.code(), Some(101), "{stderr}");
-        assert!(stderr.contains("error[P0038]"), "{stderr}");
-    }
-    assert!(output.stdout.is_empty());
-}
-
 /// `oskac run -` (#447) takes the step limit too.
 #[test]
 fn a_program_on_standard_input_runs_under_the_step_limit() {
@@ -220,8 +169,22 @@ fn a_program_on_standard_input_runs_under_the_step_limit() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(101), "{stderr}");
     assert!(
-        stderr
-            .starts_with("<stdin>:2:5: error[P0038]: step limit reached: the program would take more than 7 steps"),
+        stderr.starts_with(
+            "<stdin>:2:5: error[P0038]: step limit reached: the program would take more \
+             than 7 steps"
+        ),
+        "{stderr}"
+    );
+}
+
+/// The step limit's message reads right for a limit of one step.
+#[test]
+fn a_limit_of_one_step_is_worded_in_the_singular() {
+    let dir = program("steps_one", LOOPS_FOREVER);
+    let output = oskac_in(&dir, &["run", "--interpret", "--max-steps=1", "main.osk"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("would take more than 1 step, its calls"),
         "{stderr}"
     );
 }
@@ -229,7 +192,7 @@ fn a_program_on_standard_input_runs_under_the_step_limit() {
 /// The `Display` of the error `main` returns is a step, taken after
 /// `main` has returned: a limit it passes stops the program there, with
 /// `P0038` spanning `main`'s body and the error not printed. Native code
-/// counts it the same (#454).
+/// counts it the same (`run_limits_steps_native.rs`).
 #[test]
 fn the_display_of_mains_error_is_a_step_after_main_returns() {
     let src = std::fs::read_to_string(
