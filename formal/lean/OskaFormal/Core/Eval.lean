@@ -12,18 +12,19 @@ fuel). There is no second copy of the semantics to drift: `step_sound`
 proves that every step `step` takes is a `Step`, and `step_complete` that
 `step` takes every `Step` there is, so `step P e = some o` exactly when
 `Step P e o`. `run_sound` lifts that to whole runs: a value `run` returns
-is one `Step`s reach, and so is a panic.
+is one `Step`s reach, and so is a panic, and a return.
 -/
 
 namespace OskaFormal.Core
 
 mutual
   /-- Whether an expression is a value: `()`, an integer, a boolean, text,
-  a path, a capability, a `Result`, a struct or variant whose fields are
-  values, or a closure of height 0. -/
+  a path, a capability, an `IoError`, an `Ok` or `Err` of a value, a
+  struct or variant whose fields are values, or a closure of height 0. -/
   def Expr.isValue : Expr → Bool
     | .unit | .int _ | .bool _ => true
-    | .str _ | .path _ | .cap _ _ | .okUnit | .okStr _ | .err => true
+    | .str _ | .path _ | .cap _ _ | .ioError => true
+    | .result _ v => Expr.isValue v
     | .construct _ _ fs => Expr.allValues fs
     | .closure _ 0 _ _ _ _ => true
     | _ => false
@@ -34,42 +35,37 @@ mutual
     | e :: es => e.isValue && Expr.allValues es
 end
 
-theorem Expr.isValue_sound : ∀ {e : Expr}, e.isValue = true → IsValue e := by
-  intro e
-  induction e using Expr.isValue.induct
-    (motive_2 := fun es => Expr.allValues es = true → AllValues es) with
-  | case1 => intro _; exact IsValue.unit
-  | case2 => intro _; exact IsValue.int _
-  | case3 => intro _; exact IsValue.bool _
-  | case4 => intro _; exact IsValue.str _
-  | case5 => intro _; exact IsValue.path _
-  | case6 => intro _; exact IsValue.cap _ _
-  | case7 => intro _; exact IsValue.okUnit
-  | case8 => intro _; exact IsValue.okStr _
-  | case9 => intro _; exact IsValue.err
-  | case10 _ _ fs ih =>
-    intro h
-    simp only [Expr.isValue] at h
-    exact IsValue.construct (ih h).forall
-  | case11 => intro _; exact IsValue.closure _ _ _ _ _
-  | case12 e h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 =>
-    intro h
-    cases e with
-    | closure ps ht cs cf ret body =>
-      cases ht with
-      | zero => exact (h11 _ _ _ _ _ rfl).elim
-      | succ _ => simp [Expr.isValue] at h
-    | _ => simp_all [Expr.isValue]
-  | case13 => exact AllValues.nil
-  | case14 e es ih₁ ih₂ h =>
-    simp only [Expr.allValues, Bool.and_eq_true] at h
-    exact AllValues.cons (ih₁ h.1) (ih₂ h.2)
+mutual
+  theorem Expr.isValue_sound : ∀ {e : Expr}, e.isValue = true → IsValue e
+    | .unit, _ => IsValue.unit
+    | .int _, _ => IsValue.int _
+    | .bool _, _ => IsValue.bool _
+    | .str _, _ => IsValue.str _
+    | .path _, _ => IsValue.path _
+    | .cap _ _, _ => IsValue.cap _ _
+    | .ioError, _ => IsValue.ioError
+    | .result _ v, h => IsValue.result _ (Expr.isValue_sound (e := v) (by simpa [Expr.isValue] using h))
+    | .construct _ _ fs, h =>
+      IsValue.construct (Expr.allValues_sound (es := fs) (by simpa [Expr.isValue] using h)).forall
+    | .closure _ 0 _ _ _ _, _ => IsValue.closure _ _ _ _ _
+    | .closure _ (_ + 1) _ _ _ _, h => by simp [Expr.isValue] at h
+    | .local_ _, h | .neg _, h | .not _, h | .binary _ _ _, h | .call _ _, h | .if_ _ _ _, h
+    | .block _ _, h | .field _ _, h | .match_ _ _, h | .builtin _ _, h | .callValue _ _, h
+    | .try_ _ _, h | .frame _, h => by simp [Expr.isValue] at h
+
+  theorem Expr.allValues_sound : ∀ {es : List Expr}, Expr.allValues es = true → AllValues es
+    | [], _ => AllValues.nil
+    | e :: es, h => by
+      simp only [Expr.allValues, Bool.and_eq_true] at h
+      exact AllValues.cons (Expr.isValue_sound (e := e) h.1) (Expr.allValues_sound (es := es) h.2)
+end
 
 theorem Expr.isValue_complete {e : Expr} (h : IsValue e) : e.isValue = true := by
   induction h with
   | unit => rfl
   | int _ => rfl
-  | bool _ | str _ | path _ | cap _ _ | okUnit | okStr _ | err | closure _ _ _ _ _ => rfl
+  | bool _ | str _ | path _ | cap _ _ | ioError | closure _ _ _ _ _ => rfl
+  | result _ _ ih => simpa [Expr.isValue] using ih
   | @construct _ _ fs hfs ih =>
     simp only [Expr.isValue]
     clear hfs
@@ -109,7 +105,7 @@ def stepLogical : BinOp → Expr → Expr → Option Outcome
 body of the function it names, with the arguments put for its slots. -/
 def stepCall (P : Program) (name : String) (vs : List Expr) : Option Outcome :=
   match P.find? name with
-  | some f => (instantiate f.params vs f.body).map .next
+  | some f => (instantiate f.params vs f.body).map fun e => .next (.frame e)
   | none => none
 
 /-- The step a built-in call takes once its arguments `vs` are values: an
@@ -126,7 +122,16 @@ arguments `vs` are values: into the closure's body, with the arguments put
 for its parameters' slots, as `Step.callValue` (and a call of a function,
 `stepCall`) puts them, with `instantiate`. -/
 def stepCallValue : Expr → List Expr → Option Outcome
-  | .closure ps 0 _ _ _ body, vs => (instantiate ps vs body).map .next
+  | .closure ps 0 _ _ _ body, vs => (instantiate ps vs body).map fun e => .next (.frame e)
+  | _, _ => none
+
+/-- The step of `e?` once `e` is a value: the value inside an `Ok`; the
+return of an `Err`; or, with a conversion `f`, an `Err` of `f` applied to
+the error, which then returns. -/
+def stepTry : Expr → Option String → Option Outcome
+  | .result true v, _ => some (.next v)
+  | .result false v, none => some (.ret (.result false v))
+  | .result false v, some f => some (.next (.try_ (.result false (.call f [v])) none))
   | _, _ => none
 
 /-- The step of a field access once its base is the value `b`: to the
@@ -153,7 +158,7 @@ mutual
   value, or a stuck expression). -/
   def step (P : Program) : Expr → Option Outcome
     | .unit | .int _ | .bool _ | .local_ _ => none
-    | .str _ | .path _ | .cap _ _ | .okUnit | .okStr _ | .err => none
+    | .str _ | .path _ | .cap _ _ | .ioError => none
     | .closure _ _ _ _ _ _ => none
     | .neg e =>
       match e with
@@ -201,6 +206,13 @@ mutual
         | some (vs, o, rest) => some (o.map fun e' => .callValue c (vs ++ e' :: rest))
         | none => if Expr.allValues args then stepCallValue c args else none
       else (step P c).map (·.map fun c' => .callValue c' args)
+    | .result b e => (step P e).map (·.map (.result b))
+    | .try_ e c =>
+      if e.isValue then stepTry e c
+      else (step P e).map (·.map fun e' => .try_ e' c)
+    | .frame e =>
+      if e.isValue then some (.next e)
+      else (step P e).map Outcome.inFrame
 
   /-- The step of the first argument of a list that is not a value: the
   values before it, its outcome, and the arguments after it. `none` when
@@ -279,6 +291,14 @@ theorem stepBuiltin_sound {P : Program} {op : Builtin} {vs : List Expr} {o : Out
   · obtain ⟨v, hv, rfl⟩ := map_eq_some_inv h
     exact Step.builtinPure hvs hv
 
+theorem stepTry_sound {P : Program} {e : Expr} {c : Option String} {o : Outcome} (he : IsValue e)
+    (h : stepTry e c = some o) : Step P (.try_ e c) o := by
+  unfold stepTry at h
+  split at h <;> cases h
+  · cases he with | result _ hv => exact Step.tryOk hv
+  · cases he with | result _ hv => exact Step.tryErr hv
+  · cases he with | result _ hv => exact Step.tryConvert hv
+
 theorem stepCallValue_sound {P : Program} {c : Expr} {vs : List Expr} {o : Outcome}
     (hvs : AllValues vs) (h : stepCallValue c vs = some o) : Step P (.callValue c vs) o := by
   unfold stepCallValue at h
@@ -295,8 +315,6 @@ theorem step_sound {P : Program} : ∀ {e : Expr} {o : Outcome}, step P e = some
     (motive_2 := fun ss val => ∀ o, stepBlock P ss val = some o → Step P (.block ss val) o)
     (motive_3 := fun es => ∀ vs o rest, stepArgs P es = some (vs, o, rest) →
       ∃ e, es = vs ++ e :: rest ∧ AllValues vs ∧ Step P e o)
-  next => intro o h; simp [step] at h
-  next => intro o h; simp [step] at h
   next => intro o h; simp [step] at h
   next => intro o h; simp [step] at h
   next => intro o h; simp [step] at h
@@ -427,6 +445,30 @@ theorem step_sound {P : Program} : ∀ {e : Expr} {o : Outcome}, step P e = some
     simp only [step, hc, ite_false, Bool.false_eq_true] at h
     obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
     exact Step.callValueCallee (ih hs)
+  next b e ih =>
+    intro o h
+    simp only [step] at h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
+    exact Step.resultArg (ih hs)
+  next e c he =>
+    intro o h
+    simp only [step, he, ite_true] at h
+    exact stepTry_sound (Expr.isValue_iff.mp he) h
+  next e c he ih =>
+    intro o h
+    simp only [step, he, ite_false, Bool.false_eq_true] at h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
+    exact Step.tryArg (ih hs)
+  next e he =>
+    intro o h
+    simp only [step, he, ite_true, Option.some.injEq] at h
+    subst h
+    exact Step.frameValue (Expr.isValue_iff.mp he)
+  next e he ih =>
+    intro o h
+    simp only [step, he, ite_false, Bool.false_eq_true] at h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
+    exact Step.frame (ih hs)
   next vs o rest h => simp [stepArgs] at h
   next e es he ih vs o rest h =>
     simp only [stepArgs, he, ite_true] at h
@@ -561,6 +603,12 @@ theorem step_complete {P : Program} {e : Expr} {o : Outcome} (h : Step P e o) :
     simp [step, Expr.isValue_iff.mpr hc, stepArgs_mid hvs hs.not_value ih]
   | callValue hvs hi =>
     simp [step, Expr.isValue, stepArgs_values hvs, Expr.allValues_iff.mpr hvs, stepCallValue, hi]
+  | resultArg _ ih => simp [step, ih]
+  | tryArg hs ih => simp [step, hs.not_value, ih]
+  | tryOk hv | tryErr hv | tryConvert hv =>
+    simp [step, stepTry, Expr.isValue, Expr.isValue_iff.mpr hv]
+  | frame hs ih => simp [step, hs.not_value, ih]
+  | frameValue hv => simp [step, Expr.isValue_iff.mpr hv]
 
 /-- The capabilities `main` receives: for each parameter, the capability
 its type names, rooted anywhere, as the runtime grants them
@@ -576,6 +624,10 @@ inductive RunResult where
   | value (v : Expr)
   /-- A step panicked. -/
   | panic (kind : PanicKind)
+  /-- A step returned `v` from outside any function (`?` on an `Err`
+  where no call is running). A run from a call never ends so: the call
+  runs its body in a `frame`, which takes the return. -/
+  | returned (v : Expr)
   /-- The expression reached is not a value and takes no step. In a
   well-typed program progress rules this out. -/
   | stuck (e : Expr)
@@ -594,6 +646,7 @@ def run (P : Program) : Nat → Host → Expr → RunResult × Host
       | some (.next e') => run P fuel h e'
       | some (.panic k) => (.panic k, h)
       | some (.perform req k) => run P fuel (h.perform req).2 (k (h.perform req).1)
+      | some (.ret v) => (.returned v, h)
       | none => (.stuck e, h)
 
 /-- Every effect a step performs is on a capability of its receiver's
@@ -615,39 +668,44 @@ theorem Step.wellFormed {P : Program} {e : Expr} {o : Outcome} (h : Step P e o) 
     o.WellFormed := by
   have map : ∀ {o : Outcome} {f : Expr → Expr}, o.WellFormed → (o.map f).WellFormed := by
     intro o f h; cases o <;> simp_all [Outcome.map, Outcome.WellFormed]
-  induction h <;> first | trivial | (exact map ‹_›) | assumption | exact intResult_wellFormed _ |
-    exact evalBinary_wellFormed ‹_›
+  have inFrame : ∀ {o : Outcome}, o.WellFormed → o.inFrame.WellFormed := by
+    intro o h; cases o <;> simp_all [Outcome.inFrame, Outcome.map, Outcome.WellFormed]
+  induction h <;> first | trivial | (exact map ‹_›) | (exact inFrame ‹_›) | assumption |
+    exact intResult_wellFormed _ | exact evalBinary_wellFormed ‹_›
 
 /-- **Soundness of `run`.** A value the Lean reference reaches is one the
 semantics reaches, with the trace of the effects the fake host answered;
 a panic it reports is a step of the semantics from an expression the
-semantics reaches, and an expression it reports stuck is one the
-semantics reaches and that takes no step of the semantics. -/
+semantics reaches, and so is a return; and an expression it reports
+stuck is one the semantics reaches and that takes no step of the
+semantics. -/
 theorem run_sound {P : Program} : ∀ {fuel : Nat} {h : Host} {e : Expr},
     (∀ {v h'}, run P fuel h e = (.value v, h') → ∃ tr, Steps P e tr v ∧ IsValue v) ∧
     (∀ {k h'}, run P fuel h e = (.panic k, h') →
       ∃ tr e', Steps P e tr e' ∧ Step P e' (.panic k)) ∧
     (∀ {e' h'}, run P fuel h e = (.stuck e', h') →
-      ∃ tr, Steps P e tr e' ∧ ¬ IsValue e' ∧ ∀ o, ¬ Step P e' o) := by
+      ∃ tr, Steps P e tr e' ∧ ¬ IsValue e' ∧ ∀ o, ¬ Step P e' o) ∧
+    (∀ {v h'}, run P fuel h e = (.returned v, h') →
+      ∃ tr e', Steps P e tr e' ∧ Step P e' (.ret v)) := by
   intro fuel
   induction fuel with
   | zero =>
     intro h e
-    refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;> simp only [run] at hr <;>
+    refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;> simp only [run] at hr <;>
       split at hr <;> simp at hr
     obtain ⟨rfl, -⟩ := hr
     exact ⟨[], Steps.refl _, Expr.isValue_iff.mp ‹_›⟩
   | succ fuel ih =>
     intro h e
     by_cases hv : e.isValue = true
-    · refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;> simp only [run, hv, ite_true] at hr <;>
-        simp at hr
+    · refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;>
+        simp only [run, hv, ite_true] at hr <;> simp at hr
       obtain ⟨rfl, -⟩ := hr
       exact ⟨[], Steps.refl _, Expr.isValue_iff.mp hv⟩
     · have hn : e.isValue = false := by simpa using hv
       cases hs : step P e with
       | none =>
-        refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;>
+        refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;>
           simp only [run, hn, Bool.false_eq_true, ite_false, hs] at hr <;> simp at hr
         obtain ⟨rfl, -⟩ := hr
         refine ⟨[], Steps.refl _, fun h => by simp [Expr.isValue_iff.mpr h] at hn, fun o ho => ?_⟩
@@ -656,31 +714,40 @@ theorem run_sound {P : Program} : ∀ {fuel : Nat} {h : Host} {e : Expr},
         cases o with
         | next e' =>
           have h1 := step_sound hs
-          obtain ⟨iv, ip, is⟩ := ih (h := h) (e := e')
+          obtain ⟨iv, ip, is, ir⟩ := ih (h := h) (e := e')
           simp only [run, hn, Bool.false_eq_true, ite_false, hs]
-          refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_⟩
+          refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩
           · obtain ⟨tr, h2, h3⟩ := iv hr
             exact ⟨tr, Steps.next h1 h2, h3⟩
           · obtain ⟨tr, x, h2, h3⟩ := ip hr
             exact ⟨tr, x, Steps.next h1 h2, h3⟩
           · obtain ⟨tr, h2, h3⟩ := is hr
             exact ⟨tr, Steps.next h1 h2, h3⟩
+          · obtain ⟨tr, x, h2, h3⟩ := ir hr
+            exact ⟨tr, x, Steps.next h1 h2, h3⟩
         | panic k =>
-          refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;>
+          refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;>
+            simp only [run, hn, Bool.false_eq_true, ite_false, hs] at hr <;> simp at hr
+          obtain ⟨rfl, -⟩ := hr
+          exact ⟨[], e, Steps.refl _, step_sound hs⟩
+        | ret v =>
+          refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;>
             simp only [run, hn, Bool.false_eq_true, ite_false, hs] at hr <;> simp at hr
           obtain ⟨rfl, -⟩ := hr
           exact ⟨[], e, Steps.refl _, step_sound hs⟩
         | perform req k =>
           have h1 := step_sound hs
           have hal := Host.perform_allows h h1.wellFormed
-          obtain ⟨iv, ip, is⟩ := ih (h := (h.perform req).2) (e := k (h.perform req).1)
+          obtain ⟨iv, ip, is, ir⟩ := ih (h := (h.perform req).2) (e := k (h.perform req).1)
           simp only [run, hn, Bool.false_eq_true, ite_false, hs]
-          refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_⟩
+          refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩
           · obtain ⟨tr, h2, h3⟩ := iv hr
             exact ⟨_, Steps.perform h1 hal h2, h3⟩
           · obtain ⟨tr, x, h2, h3⟩ := ip hr
             exact ⟨_, x, Steps.perform h1 hal h2, h3⟩
           · obtain ⟨tr, h2, h3⟩ := is hr
             exact ⟨_, Steps.perform h1 hal h2, h3⟩
+          · obtain ⟨tr, x, h2, h3⟩ := ir hr
+            exact ⟨_, x, Steps.perform h1 hal h2, h3⟩
 
 end OskaFormal.Core

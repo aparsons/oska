@@ -1,0 +1,350 @@
+{
+  "core_ir_version": 5,
+  "types": [{"kind": "Struct", "name": "AppError", "fields": ["Int"]}],
+  "functions": [
+    {
+      "name": "<AppError as From<Int>>.from",
+      "params": [{"type": "Int", "binds": true}],
+      "ret": "AppError",
+      "body": {
+        "kind": "Block",
+        "stmts": [],
+        "value": {
+          "kind": "Construct",
+          "type": "AppError",
+          "fields": [{"kind": "Local", "slot": 0}]
+        }
+      }
+    },
+    {
+      "name": "half",
+      "params": [{"type": "Int", "binds": true}],
+      "ret": {"kind": "Result", "ok": "Int", "err": "Int"},
+      "body": {
+        "kind": "Block",
+        "stmts": [],
+        "value": {
+          "kind": "If",
+          "cond": {
+            "kind": "Binary",
+            "op": "==",
+            "lhs": {
+              "kind": "Binary",
+              "op": "%",
+              "lhs": {"kind": "Local", "slot": 0},
+              "rhs": {"kind": "Int", "value": 2}
+            },
+            "rhs": {"kind": "Int", "value": 0}
+          },
+          "then": {
+            "kind": "Block",
+            "stmts": [],
+            "value": {
+              "kind": "Ok",
+              "value": {
+                "kind": "Binary",
+                "op": "/",
+                "lhs": {"kind": "Local", "slot": 0},
+                "rhs": {"kind": "Int", "value": 2}
+              }
+            }
+          },
+          "else": {
+            "kind": "Block",
+            "stmts": [],
+            "value": {"kind": "Err", "value": {"kind": "Local", "slot": 0}}
+          }
+        }
+      }
+    },
+    {
+      "name": "quarter",
+      "params": [{"type": "Int", "binds": true}],
+      "ret": {"kind": "Result", "ok": "Int", "err": "AppError"},
+      "body": {
+        "kind": "Block",
+        "stmts": [
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": "Int",
+            "value": {
+              "kind": "Try",
+              "operand": {
+                "kind": "Call",
+                "function": "half",
+                "args": [{"kind": "Local", "slot": 0}]
+              },
+              "convert": "<AppError as From<Int>>.from"
+            }
+          }
+        ],
+        "value": {
+          "kind": "Ok",
+          "value": {
+            "kind": "Try",
+            "operand": {
+              "kind": "Call",
+              "function": "half",
+              "args": [{"kind": "Local", "slot": 1}]
+            },
+            "convert": "<AppError as From<Int>>.from"
+          }
+        }
+      }
+    },
+    {
+      "name": "code",
+      "params": [
+        {
+          "type": {"kind": "Result", "ok": "Int", "err": "AppError"},
+          "binds": true
+        }
+      ],
+      "ret": "Int",
+      "body": {
+        "kind": "Block",
+        "stmts": [],
+        "value": {
+          "kind": "Match",
+          "scrutinee": {"kind": "Local", "slot": 0},
+          "arms": [
+            {
+              "pattern": {
+                "kind": "Ok",
+                "type": {"kind": "Result", "ok": "Int", "err": "AppError"},
+                "value": {"kind": "Bind", "type": "Int"}
+              },
+              "body": {"kind": "Local", "slot": 1}
+            },
+            {
+              "pattern": {
+                "kind": "Err",
+                "type": {"kind": "Result", "ok": "Int", "err": "AppError"},
+                "value": {
+                  "kind": "Construct",
+                  "type": "AppError",
+                  "fields": [{"kind": "Bind", "type": "Int"}]
+                }
+              },
+              "body": {
+                "kind": "Binary",
+                "op": "-",
+                "lhs": {"kind": "Int", "value": 0},
+                "rhs": {"kind": "Local", "slot": 1}
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "run",
+      "params": [],
+      "ret": "Int",
+      "body": {
+        "kind": "Block",
+        "stmts": [
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": {
+              "kind": "Fn",
+              "cap": false,
+              "params": ["Int"],
+              "ret": {"kind": "Result", "ok": "Int", "err": "Int"}
+            },
+            "value": {
+              "kind": "Closure",
+              "params": [{"type": "Int", "binds": true}],
+              "captures": [],
+              "height": 0,
+              "cap": false,
+              "ret": {"kind": "Result", "ok": "Int", "err": "Int"},
+              "body": {
+                "kind": "Block",
+                "stmts": [
+                  {
+                    "kind": "Let",
+                    "binds": true,
+                    "type": "Int",
+                    "value": {
+                      "kind": "Try",
+                      "operand": {
+                        "kind": "Call",
+                        "function": "half",
+                        "args": [
+                          {
+                            "kind": "Try",
+                            "operand": {
+                              "kind": "Call",
+                              "function": "half",
+                              "args": [{"kind": "Local", "slot": 0}]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ],
+                "value": {
+                  "kind": "Call",
+                  "function": "half",
+                  "args": [{"kind": "Local", "slot": 1}]
+                }
+              }
+            }
+          },
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": {
+              "kind": "Result",
+              "ok": {"kind": "Result", "ok": "Int", "err": "Int"},
+              "err": "Bool"
+            },
+            "value": {
+              "kind": "Ok",
+              "value": {
+                "kind": "CallValue",
+                "callee": {"kind": "Local", "slot": 0},
+                "args": [{"kind": "Int", "value": 8}]
+              }
+            }
+          },
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": "Int",
+            "value": {
+              "kind": "Match",
+              "scrutinee": {"kind": "Local", "slot": 1},
+              "arms": [
+                {
+                  "pattern": {
+                    "kind": "Ok",
+                    "type": {
+                      "kind": "Result",
+                      "ok": {"kind": "Result", "ok": "Int", "err": "Int"},
+                      "err": "Bool"
+                    },
+                    "value": {
+                      "kind": "Ok",
+                      "type": {"kind": "Result", "ok": "Int", "err": "Int"},
+                      "value": {"kind": "Bind", "type": "Int"}
+                    }
+                  },
+                  "body": {"kind": "Local", "slot": 2}
+                },
+                {
+                  "pattern": {
+                    "kind": "Ok",
+                    "type": {
+                      "kind": "Result",
+                      "ok": {"kind": "Result", "ok": "Int", "err": "Int"},
+                      "err": "Bool"
+                    },
+                    "value": {
+                      "kind": "Err",
+                      "type": {"kind": "Result", "ok": "Int", "err": "Int"},
+                      "value": {"kind": "Wildcard"}
+                    }
+                  },
+                  "body": {"kind": "Int", "value": -1}
+                },
+                {
+                  "pattern": {
+                    "kind": "Err",
+                    "type": {
+                      "kind": "Result",
+                      "ok": {"kind": "Result", "ok": "Int", "err": "Int"},
+                      "err": "Bool"
+                    },
+                    "value": {"kind": "Wildcard"}
+                  },
+                  "body": {"kind": "Int", "value": -2}
+                }
+              ]
+            }
+          },
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": "Int",
+            "value": {
+              "kind": "If",
+              "cond": {
+                "kind": "Builtin",
+                "name": "Result.is_ok",
+                "args": [
+                  {
+                    "kind": "Call",
+                    "function": "quarter",
+                    "args": [{"kind": "Int", "value": 12}]
+                  }
+                ]
+              },
+              "then": {
+                "kind": "Block",
+                "stmts": [],
+                "value": {"kind": "Int", "value": 1}
+              },
+              "else": {
+                "kind": "Block",
+                "stmts": [],
+                "value": {"kind": "Int", "value": 0}
+              }
+            }
+          }
+        ],
+        "value": {
+          "kind": "Binary",
+          "op": "+",
+          "lhs": {
+            "kind": "Binary",
+            "op": "+",
+            "lhs": {
+              "kind": "Binary",
+              "op": "+",
+              "lhs": {
+                "kind": "Call",
+                "function": "code",
+                "args": [
+                  {
+                    "kind": "Call",
+                    "function": "quarter",
+                    "args": [{"kind": "Int", "value": 12}]
+                  }
+                ]
+              },
+              "rhs": {
+                "kind": "Call",
+                "function": "code",
+                "args": [
+                  {
+                    "kind": "Call",
+                    "function": "quarter",
+                    "args": [{"kind": "Int", "value": 6}]
+                  }
+                ]
+              }
+            },
+            "rhs": {"kind": "Local", "slot": 2}
+          },
+          "rhs": {
+            "kind": "Builtin",
+            "name": "Result.unwrap_or",
+            "args": [
+              {
+                "kind": "CallValue",
+                "callee": {"kind": "Local", "slot": 0},
+                "args": [{"kind": "Int", "value": 4}]
+              },
+              {"kind": "Local", "slot": 3}
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

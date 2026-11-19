@@ -1,20 +1,24 @@
 import Lean.Data.Json
 import OskaFormal.Core.Eval
+import OskaFormal.Core.Typing
 
 /-!
 # Oska Core: reading core IR
 
-The Lean reference reads a program of Oska Core as core IR version 4, the
+The Lean reference reads a program of Oska Core as core IR version 5, the
 JSON form `crates/oska-check/src/core_ir.rs` exports, into the syntax of
 `Syntax.lean`, and runs its `main` with `run` (`Eval.lean`).
 
-The reader refuses anything that is not core IR version 4, naming what is
-wrong and where: a version other than 4 (versions 1 to 3 included), an
+The reader refuses anything that is not core IR version 5, naming what is
+wrong and where: a version other than 5 (versions 1 to 4 included), an
 unknown `kind`, operator, type or built-in, a field missing, unknown
 or of the wrong JSON type, an `Int` literal outside `-2^63 ..= 2^63 - 1`,
 two functions or two types of one name, a type named `Int`, `Bool` or
-`()` or of a built-in type (`String`, `Path`, a capability), a field of a
-struct or variant that is a capability or a function, a closure whose
+`()` or of a built-in type (`String`, `Path`, `IoError`, `Result`, a
+capability), a field of a struct or variant that is a capability or a
+function, a `Result` type that holds either, an `Ok` or `Err` pattern
+whose type is not a `Result`, a `?` whose conversion is not a function
+of the program with one parameter, a closure whose
 `captures` are not, in strictly ascending order, exactly the slots below
 its height that its body reads (a closure inside it included: what the
 interpreter captures, so the two runs cannot drift), two variants of one name in an
@@ -88,30 +92,40 @@ def capKind : String → Option CapKind
 
 /-- The names of the built-in types, which no declared type may take. -/
 def builtinTypes : List String :=
-  ["Int", "Bool", "()", "String", "Path", "Stdout", "Fs", "FsRead", "FsWrite", "Dir", "DirRead",
-    "DirWrite"]
+  ["Int", "Bool", "()", "String", "Path", "IoError", "Result", "Stdout", "Fs", "FsRead", "FsWrite",
+    "Dir", "DirRead", "DirWrite"]
 
-/-- A type: `Int`, `Bool`, `()`, `String`, `Path`, a capability, the
-`Result` of an effect, one of the struct and enum names `types`, or a
-function type, `{"kind": "Fn", "cap": BOOL, "params": [type...], "ret": type}`. -/
+/-- A type: `Int`, `Bool`, `()`, `String`, `Path`, `IoError`, a
+capability, one of the struct and enum names `types`, a function type,
+`{"kind": "Fn", "cap": BOOL, "params": [type...], "ret": type}`, or a
+`Result` that holds no capability or function,
+`{"kind": "Result", "ok": type, "err": type}`. -/
 partial def ty (types : List String) (path : String) (j : Json) : Read Ty := do
   if let .obj _ := j then
-    let _ ← fields path j ["kind", "cap", "params", "ret"]
     let kind ← str s!"{path}.kind" (← field path j "kind")
-    if kind ≠ "Fn" then throw s!"{path}: unknown type kind `{kind}`"
-    let cap ← bool s!"{path}.cap" (← field path j "cap")
-    let items ← arr s!"{path}.params" (← field path j "params")
-    let ps ← (items.zip (List.range items.length)).mapM fun (p, i) =>
-      ty types s!"{path}.params[{i}]" p
-    return .fn cap ps (← ty types s!"{path}.ret" (← field path j "ret"))
+    match kind with
+    | "Fn" =>
+      let _ ← fields path j ["kind", "cap", "params", "ret"]
+      let cap ← bool s!"{path}.cap" (← field path j "cap")
+      let items ← arr s!"{path}.params" (← field path j "params")
+      let ps ← (items.zip (List.range items.length)).mapM fun (p, i) =>
+        ty types s!"{path}.params[{i}]" p
+      return .fn cap ps (← ty types s!"{path}.ret" (← field path j "ret"))
+    | "Result" =>
+      let _ ← fields path j ["kind", "ok", "err"]
+      let t := Ty.result (← ty types s!"{path}.ok" (← field path j "ok"))
+        (← ty types s!"{path}.err" (← field path j "err"))
+      if !t.fieldCapFree then
+        throw s!"{path}: a `Result` that holds a capability or a function; Oska Core has none"
+      return t
+    | k => throw s!"{path}: unknown type kind `{k}`"
   match ← str path j with
   | "Int" => .ok .int
   | "Bool" => .ok .bool
   | "()" => .ok .unit
   | "String" => .ok .string
   | "Path" => .ok .path
-  | "Result<(), IoError>" => .ok (.result .unit)
-  | "Result<String, IoError>" => .ok (.result .string)
+  | "IoError" => .ok .ioError
   | t =>
     match capKind t with
     | some k => .ok (.cap k)
@@ -209,6 +223,13 @@ partial def pattern (ctx : Ctx) (path : String) (j : Json) : Read Pattern := do
       (pattern ctx)
     ctor ctx path type v ps.length
     .ok (.construct type v ps)
+  | "Ok" | "Err" =>
+    let _ ← fields path j ["kind", "type", "value"]
+    let t ← ty (ctx.types.map TypeDecl.name) s!"{path}.type" (← field path j "type")
+    let .result ok err := t
+      | .error s!"{path}.type: an `{kind}` pattern on a type that is not a `Result`"
+    let p ← pattern ctx s!"{path}.value" (← field path j "value")
+    .ok (.result (kind == "Ok") ok err p)
   | k => .error s!"{path}: unknown pattern kind `{k}`"
 
 /-- A parameter of a function or closure. -/
@@ -318,6 +339,22 @@ mutual
       let callee ← sub "callee"
       let args ← list (at_ "args") (← arr (at_ "args") (← field path j "args")) (expr ctx)
       .ok (.callValue callee args)
+    | "Ok" | "Err" =>
+      let _ ← fields path j ["kind", "value"]
+      .ok (.result (kind == "Ok") (← sub "value"))
+    | "Try" =>
+      let keys ← fields path j ["kind", "operand", "convert"]
+      let operand ← sub "operand"
+      let conv ← if keys.contains "convert" then do
+          let name ← str (at_ "convert") (← field path j "convert")
+          match ctx.arities.lookup name with
+          | none =>
+            throw s!"{at_ "convert"}: `?` converts with `{name}`, which the program does not define"
+          | some 1 => pure (some name)
+          | some n =>
+            throw s!"{at_ "convert"}: `?` converts with `{name}`, which takes {n} parameter(s), not 1"
+        else pure none
+      .ok (.try_ operand conv)
     | k => .error s!"{path}: unknown expression kind `{k}`"
 
   /-- A statement of core IR. -/
@@ -378,7 +415,7 @@ def typeDecl (types : List String) (path : String) (j : Json) : Read TypeDecl :=
   | k => .error s!"{path}: unknown type declaration kind `{k}`"
 
 /-- The version of core IR this reader reads. -/
-def version : Int := 4
+def version : Int := 5
 
 /-- A program of Oska Core, read from the text of its core IR. -/
 def program (text : String) : Read Program := do
@@ -441,10 +478,16 @@ def runsTo (text : String) (outcome : RunResult → Bool) : Bool :=
   | .ok (P, e) => outcome (run P 1000 {} e).1
   | .error _ => false
 
-/-- Core IR version 4 with these `types` and a `main` with this body. -/
+/-- Core IR version 5 with these `types` and a `main` with this body. -/
 def withMain (types body : String) : String :=
-  "{\"core_ir_version\": 4, \"types\": [" ++ types ++ "], \"functions\": [{\"name\": \"main\", " ++
+  "{\"core_ir_version\": 5, \"types\": [" ++ types ++ "], \"functions\": [{\"name\": \"main\", " ++
     "\"params\": [], \"ret\": \"()\", \"body\": " ++ body ++ "}]}"
+
+/-- Core IR version 5 with these `types`, these other functions, and a
+`main` with this body. -/
+def withFunctions (types functions body : String) : String :=
+  "{\"core_ir_version\": 5, \"types\": [" ++ types ++ "], \"functions\": [" ++ functions ++
+    ", {\"name\": \"main\", \"params\": [], \"ret\": \"()\", \"body\": " ++ body ++ "}]}"
 
 /-- `enum Shape { Dot, Square(Int) }` and `struct Pair { a: Int, b: Bool }`. -/
 def shapeTypes : String :=
@@ -452,14 +495,15 @@ def shapeTypes : String :=
     "{\"name\": \"Square\", \"fields\": [\"Int\"]}]}, " ++
     "{\"kind\": \"Struct\", \"name\": \"Pair\", \"fields\": [\"Int\", \"Bool\"]}"
 
-#guard refuses "{\"core_ir_version\": 5, \"types\": [], \"functions\": []}" "core_ir_version 5"
--- Versions 1 to 3 are refused by their version.
+#guard refuses "{\"core_ir_version\": 6, \"types\": [], \"functions\": []}" "core_ir_version 6"
+-- Versions 1 to 4 are refused by their version.
 #guard refuses "{\"core_ir_version\": 1, \"functions\": []}" "core_ir_version 1"
 #guard refuses "{\"core_ir_version\": 2, \"types\": [], \"functions\": []}" "core_ir_version 2"
 #guard refuses "{\"core_ir_version\": 3, \"types\": [], \"functions\": []}" "core_ir_version 3"
-#guard refuses "{\"core_ir_version\": 4, \"functions\": []}" "missing field `types`"
-#guard refuses "{\"core_ir_version\": 4, \"types\": [], \"functions\": []} junk" "not JSON"
-#guard refuses "{\"core_ir_version\": 4, \"types\": [], \"functions\": [], \"x\": 1}"
+#guard refuses "{\"core_ir_version\": 4, \"types\": [], \"functions\": []}" "core_ir_version 4"
+#guard refuses "{\"core_ir_version\": 5, \"functions\": []}" "missing field `types`"
+#guard refuses "{\"core_ir_version\": 5, \"types\": [], \"functions\": []} junk" "not JSON"
+#guard refuses "{\"core_ir_version\": 5, \"types\": [], \"functions\": [], \"x\": 1}"
   "unknown field `x`"
 #guard refuses (withMain "" "{\"kind\": \"Loop\"}") "unknown expression kind `Loop`"
 #guard refuses (withMain "" "{\"kind\": \"Int\", \"value\": 9223372036854775808}") "outside Int"
@@ -547,6 +591,30 @@ def shapeTypes : String :=
 #guard refuses (withMain "" ("{\"kind\": \"Builtin\", \"name\": \"Path.from\", \"args\": [" ++
     "{\"kind\": \"Str\", \"value\": \"a\"}, {\"kind\": \"Str\", \"value\": \"b\"}]}"))
   "with 2 argument(s), but it has 1 parameter(s)"
+-- `Result` types, `Ok` and `Err` patterns and `?`.
+#guard refuses (withMain "{\"kind\": \"Struct\", \"name\": \"IoError\", \"fields\": []}"
+    "{\"kind\": \"Unit\"}")
+  "a type is named `IoError`"
+#guard refuses (withMain "" ("{\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Let\", " ++
+    "\"binds\": false, \"type\": {\"kind\": \"Result\", \"ok\": \"Stdout\", \"err\": \"()\"}, " ++
+    "\"value\": {\"kind\": \"Unit\"}}]}"))
+  "a `Result` that holds a capability or a function"
+#guard refuses (withMain "" ("{\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Let\", " ++
+    "\"binds\": false, \"type\": {\"kind\": \"Result\", \"ok\": \"Int\"}, " ++
+    "\"value\": {\"kind\": \"Unit\"}}]}"))
+  "missing field `err`"
+#guard refuses (withMain "" ("{\"kind\": \"Match\", \"scrutinee\": {\"kind\": \"Unit\"}, " ++
+    "\"arms\": [{\"pattern\": {\"kind\": \"Ok\", \"type\": \"Int\", " ++
+    "\"value\": {\"kind\": \"Wildcard\"}}, \"body\": {\"kind\": \"Unit\"}}]}"))
+  "an `Ok` pattern on a type that is not a `Result`"
+#guard refuses (withMain "" ("{\"kind\": \"Try\", \"operand\": {\"kind\": \"Unit\"}, " ++
+    "\"convert\": \"absent\"}"))
+  "`?` converts with `absent`, which the program does not define"
+#guard refuses (withFunctions "" ("{\"name\": \"two\", \"params\": [{\"type\": \"Int\", " ++
+    "\"binds\": true}, {\"type\": \"Int\", \"binds\": true}], \"ret\": \"Int\", " ++
+    "\"body\": {\"kind\": \"Local\", \"slot\": 0}}")
+    "{\"kind\": \"Try\", \"operand\": {\"kind\": \"Unit\"}, \"convert\": \"two\"}")
+  "`?` converts with `two`, which takes 2 parameter(s), not 1"
 #guard runsTo (withMain "" "{\"kind\": \"Block\", \"stmts\": []}")
   fun | .value .unit => true | _ => false
 #guard runsTo
@@ -584,6 +652,35 @@ def shapeTypes : String :=
     "{\"kind\": \"Local\", \"slot\": 0}}}}}, {\"kind\": \"Let\", \"binds\": false, " ++
     "\"type\": \"Int\", \"value\": {\"kind\": \"CallValue\", \"callee\": {\"kind\": " ++
     "\"Local\", \"slot\": 1}, \"args\": [{\"kind\": \"Int\", \"value\": 7}]}}]}"))
+  fun | .panic .divisionByZero => true | _ => false
+-- `struct Wrapped { code: Int }`, `fn half(n: Int) -> Result<Int, Int> { if n % 2 == 0 {
+-- Ok(n / 2) } else { Err(n) } }`, `impl From<Int> for Wrapped { fn from(code: Int) -> Wrapped {
+-- Wrapped(code: code / 0) } }`, exported as the function `<Wrapped as From<Int>>.from`, and
+-- `fn f() -> Result<Int, Wrapped> { let x = half(3)?; Ok(x) }`: the `?` converts `3` before it
+-- returns, and the conversion divides by zero. The reader checks only that a conversion is a
+-- function of the program with one parameter; the checker typed it, as `ConvTyped` states.
+#guard runsTo
+  (withFunctions "{\"kind\": \"Struct\", \"name\": \"Wrapped\", \"fields\": [\"Int\"]}" ("{\"name\": \"half\", \"params\": [{\"type\": \"Int\", \"binds\": true}], " ++
+    "\"ret\": {\"kind\": \"Result\", \"ok\": \"Int\", \"err\": \"Int\"}, \"body\": " ++
+    "{\"kind\": \"If\", \"cond\": {\"kind\": \"Binary\", \"op\": \"==\", \"lhs\": " ++
+    "{\"kind\": \"Binary\", \"op\": \"%\", \"lhs\": {\"kind\": \"Local\", \"slot\": 0}, " ++
+    "\"rhs\": {\"kind\": \"Int\", \"value\": 2}}, \"rhs\": {\"kind\": \"Int\", \"value\": 0}}, " ++
+    "\"then\": {\"kind\": \"Ok\", \"value\": {\"kind\": \"Binary\", \"op\": \"/\", " ++
+    "\"lhs\": {\"kind\": \"Local\", \"slot\": 0}, \"rhs\": {\"kind\": \"Int\", \"value\": 2}}}, " ++
+    "\"else\": {\"kind\": \"Err\", \"value\": {\"kind\": \"Local\", \"slot\": 0}}}}, " ++
+    "{\"name\": \"<Wrapped as From<Int>>.from\", \"params\": [{\"type\": \"Int\", " ++
+    "\"binds\": true}], \"ret\": \"Wrapped\", \"body\": {\"kind\": \"Construct\", " ++
+    "\"type\": \"Wrapped\", \"fields\": [{\"kind\": \"Binary\", \"op\": \"/\", " ++
+    "\"lhs\": {\"kind\": \"Local\", \"slot\": 0}, \"rhs\": {\"kind\": \"Int\", \"value\": 0}}]}}, " ++
+    "{\"name\": \"f\", \"params\": [], \"ret\": {\"kind\": \"Result\", \"ok\": \"Int\", " ++
+    "\"err\": \"Wrapped\"}, \"body\": {\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Let\", " ++
+    "\"binds\": true, \"type\": \"Int\", \"value\": {\"kind\": \"Try\", \"operand\": " ++
+    "{\"kind\": \"Call\", \"function\": \"half\", \"args\": [{\"kind\": \"Int\", \"value\": 3}]}, " ++
+    "\"convert\": \"<Wrapped as From<Int>>.from\"}}], \"value\": {\"kind\": \"Ok\", \"value\": {\"kind\": \"Local\", " ++
+    "\"slot\": 0}}}}")
+    ("{\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Let\", \"binds\": false, \"type\": " ++
+    "{\"kind\": \"Result\", \"ok\": \"Int\", \"err\": \"Wrapped\"}, \"value\": {\"kind\": \"Call\", " ++
+    "\"function\": \"f\", \"args\": []}}]}"))
   fun | .panic .divisionByZero => true | _ => false
 
 end OskaFormal.Core.CoreIR

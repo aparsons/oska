@@ -1,5 +1,6 @@
 import OskaFormal.Core.Typing
 import OskaFormal.Core.Semantics
+import OskaFormal.Core.Eval
 
 /-!
 # Oska Core: the panics, checked on examples
@@ -8,12 +9,15 @@ import OskaFormal.Core.Semantics
 (`crates/oska-run/src/ops.rs`): on a result outside `-2^63 ..= 2^63 - 1`,
 and on a divisor of 0, which is checked before overflow.
 
-The closure examples at the end type programs the checker rejects, and
-show the typing rejects them too: a closure called with the wrong number
-of arguments or an argument of the wrong type, a value called that is not
-a function, and a closure that escapes its function at a type it does not
-have. `crates/oska-check/tests/core_ir.rs` checks that the checker
-rejects the same programs.
+The closure examples type programs the checker rejects, and show the
+typing rejects them too: a closure called with the wrong number of
+arguments or an argument of the wrong type, a value called that is not a
+function, and a closure that escapes its function at a type it does not
+have. So do the `Result` examples at the end: `?` in a function that does
+not return a `Result` (`E0243`), and `?` on an error of another type with
+no conversion (`E0242`), beside the same `?` through the conversion the
+checker chose, which types and runs. `crates/oska-check/tests/core_ir.rs`
+checks that the checker rejects the same programs.
 -/
 
 namespace OskaFormal.Core
@@ -42,8 +46,8 @@ def oneParam : Function :=
 /-- A program of `oneParam` alone. -/
 def oneParamProgram : Program := { types := [], functions := [oneParam] }
 
-/-- A call with the right arity steps into the body. -/
-example : Step oneParamProgram (.call "f" [.int 1]) (.next (.int 1)) :=
+/-- A call with the right arity steps into the body, in a frame. -/
+example : Step oneParamProgram (.call "f" [.int 1]) (.next (.frame (.int 1))) :=
   Step.call rfl (AllValues.cons (IsValue.int 1) AllValues.nil) rfl
 
 /-- A call of `f` with no argument, or with two, takes no step. -/
@@ -97,7 +101,7 @@ theorem covers_int_literal (P : Program) : ∀ fuel, covers P fuel [[.int 3]] [.
 
 /-- `match 3 { 3 => 1 }` is not source typed in any program: its one arm
 does not cover every `Int`, though it covers the scrutinee. -/
-example (P : Program) : ¬ SourceTyped P [] (.match_ (.int 3) [.mk (.int 3) none (.int 1)]) .int := by
+example (P : Program) : ¬ SourceTyped P .int [] (.match_ (.int 3) [.mk (.int 3) none (.int 1)]) .int := by
   intro ⟨_, h⟩
   simp [Expr.staticMatches, exhaustiveArms, unguarded, Pattern.headType, covers_int_literal] at h
 
@@ -128,14 +132,14 @@ def addOne (h : Nat) : Expr :=
 /-- `let g = |x: Int| x + 1` in an empty function, then `g(41)`: the
 closure has height 0, so it is a value, and the call steps into its body
 with `41` for its parameter. -/
-example (P : Program) :
-    Typed P [] (.expr (.callValue (addOne 0) [.int 41]) .int) :=
+example (P : Program) (R : Ty) :
+    Typed P R [] (.expr (.callValue (addOne 0) [.int 41]) .int) :=
   Typed.callValue (Typed.closure (Nat.le_refl _) (fun _ i _ hi => absurd hi (Nat.not_lt_zero i))
       (fun _ => rfl) (Typed.binary BinOpTyped.add (Typed.local_ rfl) (Typed.int rfl)))
     (Typed.argsCons (Typed.int rfl) Typed.argsNil)
 
 example (P : Program) :
-    Step P (.callValue (addOne 0) [.int 41]) (.next (.binary .add (.int 41) (.int 1))) :=
+    Step P (.callValue (addOne 0) [.int 41]) (.next (.frame (.binary .add (.int 41) (.int 1)))) :=
   Step.callValue (.cons (.int 41) .nil) rfl
 
 /-- `fn add(n: Int) -> fn(Int) -> Int { |x: Int| x + n }`: a closure
@@ -148,7 +152,7 @@ def addN : Function where
   body := .closure [{ type := .int, binds := true }] 1 [0] false .int
     (.binary .add (.local_ 1) (.local_ 0))
 
-example (P : Program) : Typed P (bindingTypes addN.params) (.expr addN.body addN.ret) := by
+example (P : Program) : Typed P addN.ret (bindingTypes addN.params) (.expr addN.body addN.ret) := by
   refine Typed.closure (by decide) (fun _ i t hi _ hl => ?_) (fun _ => rfl)
     (Typed.binary BinOpTyped.add (Typed.local_ rfl) (Typed.local_ rfl))
   cases i with
@@ -158,14 +162,14 @@ example (P : Program) : Typed P (bindingTypes addN.params) (.expr addN.body addN
 /-- A call of `add(2)` puts `2` in the closure's body, which is then a
 value: what it captured travels with it. -/
 example : Step { types := [], functions := [addN] } (.call "add" [.int 2])
-    (.next (.closure [{ type := .int, binds := true }] 0 [] false .int
-      (.binary .add (.local_ 0) (.int 2)))) :=
+    (.next (.frame (.closure [{ type := .int, binds := true }] 0 [] false .int
+      (.binary .add (.local_ 0) (.int 2))))) :=
   Step.call rfl (.cons (.int 2) .nil) rfl
 
 /-- `g(1, 2)` with `g = |x: Int| x + 1`: the checker rejects a call of
 the wrong arity, and so does the typing. -/
-example (P : Program) (Γ : List Ty) (h : Nat) (t : Ty) :
-    ¬ Typed P Γ (.expr (.callValue (addOne h) [.int 1, .int 2]) t) := by
+example (P : Program) (R : Ty) (Γ : List Ty) (h : Nat) (t : Ty) :
+    ¬ Typed P R Γ (.expr (.callValue (addOne h) [.int 1, .int 2]) t) := by
   intro ht
   cases ht with
   | callValue hc hargs =>
@@ -175,8 +179,8 @@ example (P : Program) (Γ : List Ty) (h : Nat) (t : Ty) :
       | argsCons _ hr => cases hr
 
 /-- `g(true)`: an argument of the wrong type. -/
-example (P : Program) (Γ : List Ty) (h : Nat) (t : Ty) :
-    ¬ Typed P Γ (.expr (.callValue (addOne h) [.bool true]) t) := by
+example (P : Program) (R : Ty) (Γ : List Ty) (h : Nat) (t : Ty) :
+    ¬ Typed P R Γ (.expr (.callValue (addOne h) [.bool true]) t) := by
   intro ht
   cases ht with
   | callValue hc hargs =>
@@ -187,8 +191,8 @@ example (P : Program) (Γ : List Ty) (h : Nat) (t : Ty) :
 
 /-- `let n = 1` then `n(2)`: a value that is not a function is not
 called. -/
-example (P : Program) (Γ : List Ty) (t : Ty) :
-    ¬ Typed P Γ (.expr (.callValue (.int 1) [.int 2]) t) := by
+example (P : Program) (R : Ty) (Γ : List Ty) (t : Ty) :
+    ¬ Typed P R Γ (.expr (.callValue (.int 1) [.int 2]) t) := by
   intro ht
   cases ht with
   | callValue hc _ => cases hc
@@ -203,7 +207,8 @@ def makeWrong (ret : Ty) : Function where
     (.binary .add (.local_ 0) (.int 1))
 
 example (P : Program) (ret : Ty) :
-    ¬ Typed P (bindingTypes (makeWrong ret).params) (.expr (makeWrong ret).body (makeWrong ret).ret) := by
+    ¬ Typed P (makeWrong ret).ret (bindingTypes (makeWrong ret).params)
+      (.expr (makeWrong ret).body (makeWrong ret).ret) := by
   intro ht
   cases ht with
   | closure _ _ _ hb =>
@@ -223,13 +228,95 @@ example (ret : Ty) : ¬ ProgramTyped { types := [], functions := [makeWrong ret]
 a closure that captures `Stdout` does not escape as a plain `fn`, which
 the checker rejects (`E0270`); `Authority.lean`'s
 `capturing_closure_not_plain` shows the same where it is written. -/
-example (P : Program) :
-    ¬ Typed P [.cap .stdout] (.expr (.closure [] 1 [0] false (.result .unit)
-      (.builtin .println [.local_ 0, .str "hi"])) (.fn false [] (.result .unit))) := by
+example (P : Program) (R : Ty) :
+    ¬ Typed P R [.cap .stdout] (.expr (.closure [] 1 [0] false (.result .unit .ioError)
+      (.builtin .println [.local_ 0, .str "hi"])) (.fn false [] (.result .unit .ioError))) := by
   intro h
   cases h with
   | closure _ hpure _ _ =>
     have := hpure rfl 0 (.cap .stdout) (by decide) (by decide) rfl
     simp [Program.pureTy] at this
+
+/-! ## `Result` and `?` -/
+
+/-- A call has the result type of the function it calls. -/
+theorem call_typed_ret {P : Program} {R : Ty} {Γ : List Ty} {name : String} {args : List Expr}
+    {t : Ty} (h : Typed P R Γ (.expr (.call name args) t)) : ∃ f, P.find? name = some f ∧ t = f.ret := by
+  cases h with
+  | call hf _ => exact ⟨_, hf, rfl⟩
+
+/-- The name the checker gives `From`'s `from` for `AppError`, from `Int`. -/
+def appErrorFrom : String := "<AppError as From<Int>>.from"
+
+/-- `fn g() -> Result<Int, Int> { Err(1) }`. -/
+def gErr : Function :=
+  { name := "g", params := [], ret := .result .int .int, body := .result false (.int 1) }
+
+/-- `struct AppError { code: Int }`, `gErr`, and
+`impl From<Int> for AppError { fn from(value: Int) -> AppError { AppError { code: value } } }`,
+whose `from` the export names `appErrorFrom`. -/
+def appError : Program :=
+  { types := [.struct_ "AppError" [.int]],
+    functions := [gErr,
+      { name := appErrorFrom, params := [{ type := .int, binds := true }], ret := .named "AppError",
+        body := .construct "AppError" none [.local_ 0] }] }
+
+/-- `fn f() -> Int { g()? }`: `?` where the function does not return a
+`Result` (`E0243`). No `?` types in a function or closure whose result
+type is not a `Result`, whatever it is on and however it converts. -/
+example (P : Program) (R : Ty) (hR : ∀ t u, R ≠ .result t u) (Γ : List Ty) (e : Expr)
+    (c : Option String) (t : Ty) : ¬ Typed P R Γ (.expr (.try_ e c) t) := by
+  intro h
+  cases h
+  exact hR _ _ rfl
+
+/-- `fn f() -> Result<Int, AppError> { let x = g()?; Ok(x) }` with no
+`From` conversion: `g`'s error, an `Int`, is not an `AppError`
+(`E0242`). -/
+example (Γ : List Ty) (t : Ty) :
+    ¬ Typed appError (.result .int (.named "AppError")) Γ (.expr (.try_ (.call "g" []) none) t) := by
+  intro h
+  cases h with
+  | try_ _ he hc =>
+    cases hc
+    obtain ⟨f, hf, ht⟩ := call_typed_ret he
+    simp [appError, Program.find?, findFunction, gErr] at hf
+    subst hf
+    simp at ht
+
+/-- Nor does a conversion of another type stand in for it: `g()?` through
+a function that gives an `Int`, not an `AppError`. -/
+example (Γ : List Ty) (t : Ty) :
+    ¬ Typed appError (.result .int (.named "AppError")) Γ (.expr (.try_ (.call "g" []) (some "g")) t) := by
+  intro h
+  cases h with
+  | try_ _ _ hc =>
+    cases hc with
+    | some hf hps _ =>
+      simp [appError, Program.find?, findFunction, gErr] at hf
+      subst hf
+      simp at hps
+
+/-- With the conversion the checker chose, the same `?` types... -/
+example (Γ : List Ty) :
+    Typed appError (.result .int (.named "AppError")) Γ
+      (.expr (.try_ (.call "g" []) (some appErrorFrom)) .int) :=
+  Typed.try_ rfl (Typed.call (f := gErr) rfl Typed.argsNil) (ConvTyped.some rfl rfl rfl)
+
+/-- `fn f() -> Result<Int, AppError> { let x = g()?; Ok(x + 1) }`, with
+the conversion. -/
+def fTry : Function :=
+  { name := "f", params := [], ret := .result .int (.named "AppError"),
+    body := .block [.let_ true .int (.try_ (.call "g" []) (some appErrorFrom))]
+      (some (.result true (.binary .add (.local_ 0) (.int 1)))) }
+
+/-- ...and runs: `f` returns `g`'s error through it, without reaching
+`Ok(x + 1)`. -/
+example :
+    (match (run { appError with functions := appError.functions ++ [fTry] } 50 {}
+        (.call "f" [])).1 with
+      | .value (.result false (.construct "AppError" none [.int 1])) => true
+      | _ => false) = true := by
+  decide
 
 end OskaFormal.Core

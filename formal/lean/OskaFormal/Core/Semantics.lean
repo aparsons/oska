@@ -3,8 +3,8 @@ import OskaFormal.Core.Syntax
 /-!
 # Oska Core: small-step semantics
 
-A small-step semantics of Oska Core, version 4, matching the interpreter
-(`crates/oska-run`) and the rules core IR version 4 states:
+A small-step semantics of Oska Core, version 5, matching the interpreter
+(`crates/oska-run`) and the rules core IR version 5 states:
 
 - Evaluation is left to right: an operator's `lhs` before its `rhs`, a
   call's arguments in order before the call, a block's statements in
@@ -29,6 +29,15 @@ A small-step semantics of Oska Core, version 4, matching the interpreter
   of a function value evaluates the callee, then its arguments left to
   right, then puts the arguments for the closure's parameters' slots in
   its body, as a call of a function does (`instantiate`).
+- A call, of a function or of a function value, runs the body in a
+  `frame`, which gives the body's value once it has one.
+- `Ok(e)` and `Err(e)` evaluate `e`. `e?` evaluates `e`: on `Ok(v)` it
+  gives `v`, and on `Err(v)` the step **returns** `Err(v)` (the outcome
+  `ret`), which every enclosing expression passes on as it does a panic,
+  until the nearest `frame`, which steps to it: the function or closure
+  `e?` is in returns it. When the checker chose a `From` conversion `f`,
+  `Err(v)?` first steps to `Err(f(v))?`, so the conversion runs (and may
+  panic) before the return, as in the interpreter (`try_expr`).
 - A `match` evaluates its scrutinee, then tries its arms in order. An arm
   whose pattern does not match the value is skipped. One whose pattern
   matches puts the values it binds for their slots in its guard and body;
@@ -69,9 +78,10 @@ mutual
     | .str s => .str s
     | .path s => .path s
     | .cap k r => .cap k r
-    | .okUnit => .okUnit
-    | .okStr s => .okStr s
-    | .err => .err
+    | .ioError => .ioError
+    | .result b e => .result b (Expr.subst v e)
+    | .try_ e c => .try_ (Expr.subst v e) c
+    | .frame e => .frame (Expr.subst v e)
     | .local_ 0 => v
     | .local_ (i + 1) => .local_ i
     | .neg e => .neg (Expr.subst v e)
@@ -154,25 +164,35 @@ kind it gives whose root reaches no path the receiver's does not, so
 attenuation never widens. -/
 def Request.Allows (req : Request) (r : Expr) : Prop :=
   match req.op with
-  | .println | .write | .createDir => r = .okUnit ∨ r = .err
-  | .readToString => r = .err ∨ ∃ s, r = .okStr s
+  | .println | .write | .createDir => r = .okUnit ∨ r = .ioErr
+  | .readToString => r = .ioErr ∨ ∃ s, r = .okStr s
   | .restrictTo _ =>
     ∃ a k' root', req.kind.restrictTo = some (a, k') ∧ r = .cap k' root' ∧ root'.Within req.root
   | _ => False
 
-/-- What one step leads to: the next expression, a panic, or an effect
-`req`, after which the run goes on with `k r` for the host's answer `r`. -/
+/-- What one step leads to: the next expression, a panic, an effect
+`req`, after which the run goes on with `k r` for the host's answer `r`,
+or a return of the value `v` from the function or closure the step is in
+(`?` on an `Err`). -/
 inductive Outcome where
   | next (e : Expr)
   | panic (kind : PanicKind)
   | perform (req : Request) (k : Expr → Expr)
+  | ret (v : Expr)
 
 /-- `f` applied to the next expression, or to what follows an effect, a
-panic left as it is. -/
+panic or a return left as it is. -/
 def Outcome.map (f : Expr → Expr) : Outcome → Outcome
   | .next e => .next (f e)
   | .panic k => .panic k
   | .perform req k => .perform req fun r => f (k r)
+  | .ret v => .ret v
+
+/-- A step of a body in a `frame`: a return gives its value, and any other
+outcome stays in the frame. -/
+def Outcome.inFrame : Outcome → Outcome
+  | .ret v => .next v
+  | o => o.map .frame
 
 /-- A pure built-in call applied to its arguments' values: `Path.from`
 and `Path.new` make a path, `is_ok` and `unwrap_or` read a `Result`, and
@@ -181,11 +201,9 @@ with the same root. `none` for an effect, or for arguments of the wrong
 kind. -/
 def evalPure : Builtin → List Expr → Option Expr
   | .pathFrom, [.str s] | .pathNew, [.str s] => some (.path s)
-  | .isOk, [.okUnit] | .isOk, [.okStr _] => some (.bool true)
-  | .isOk, [.err] => some (.bool false)
-  | .unwrapOr, [.okUnit, _] => some .unit
-  | .unwrapOr, [.okStr s, _] => some (.str s)
-  | .unwrapOr, [.err, d] => some d
+  | .isOk, [.result b _] => some (.bool b)
+  | .unwrapOr, [.result true v, _] => some v
+  | .unwrapOr, [.result false _, d] => some d
   | .readOnly k, [.cap k' r] => if k' = k then k.readOnly.map (.cap · r) else none
   | .writeOnly k, [.cap k' r] => if k' = k then k.writeOnly.map (.cap · r) else none
   | _, _ => none
@@ -250,7 +268,7 @@ inductive Step (P : Program) : Expr → Outcome → Prop where
       Step P (.call name (vs ++ e :: rest)) (o.map fun e' => .call name (vs ++ e' :: rest))
   | call {name : String} {f : Function} {vs : List Expr} {body : Expr} :
       P.find? name = some f → AllValues vs → instantiate f.params vs f.body = some body →
-      Step P (.call name vs) (.next body)
+      Step P (.call name vs) (.next (.frame body))
   | ifCond {c th : Expr} {el : Option Expr} {o : Outcome} :
       Step P c o → Step P (.if_ c th el) (o.map fun c' => .if_ c' th el)
   | ifTrue {th el : Expr} : Step P (.if_ (.bool true) th (some el)) (.next th)
@@ -314,7 +332,24 @@ inductive Step (P : Program) : Expr → Outcome → Prop where
   | callValue {ps : List Param} {cs : List Nat} {cap : Bool} {ret : Ty} {body : Expr}
       {vs : List Expr} {e : Expr} :
       AllValues vs → instantiate ps vs body = some e →
-      Step P (.callValue (.closure ps 0 cs cap ret body) vs) (.next e)
+      Step P (.callValue (.closure ps 0 cs cap ret body) vs) (.next (.frame e))
+  | resultArg {b : Bool} {e : Expr} {o : Outcome} :
+      Step P e o → Step P (.result b e) (o.map (.result b))
+  | tryArg {e : Expr} {c : Option String} {o : Outcome} :
+      Step P e o → Step P (.try_ e c) (o.map fun e' => .try_ e' c)
+  | tryOk {v : Expr} {c : Option String} :
+      IsValue v → Step P (.try_ (.result true v) c) (.next v)
+  /-- `Err(v)?` returns `Err(v)` from the function or closure it is in. -/
+  | tryErr {v : Expr} :
+      IsValue v → Step P (.try_ (.result false v) none) (.ret (.result false v))
+  /-- With a conversion, the error goes through it first. -/
+  | tryConvert {v : Expr} {f : String} :
+      IsValue v → Step P (.try_ (.result false v) (some f))
+        (.next (.try_ (.result false (.call f [v])) none))
+  | frame {e : Expr} {o : Outcome} :
+      Step P e o → Step P (.frame e) o.inFrame
+  | frameValue {v : Expr} :
+      IsValue v → Step P (.frame v) (.next v)
 
 /-- A value takes no step. -/
 theorem value_no_step {P : Program} {v : Expr} {o : Outcome} (hv : IsValue v) :
@@ -323,6 +358,10 @@ theorem value_no_step {P : Program} {v : Expr} {o : Outcome} (hv : IsValue v) :
   | unit => intro h; cases h
   | int => intro h; cases h
   | bool => intro h; cases h
+  | result _ _ ih =>
+    intro h
+    cases h with
+    | resultArg hs => exact ih hs
   | construct _ ih =>
     intro h
     cases h with
@@ -339,12 +378,14 @@ theorem AllValues.mid {vs rest : List Expr} {e : Expr} :
 function's body, so a call of the wrong arity takes no step. -/
 theorem call_step {P : Program} {name : String} {vs : List Expr} {o : Outcome}
     (hvs : AllValues vs) (h : Step P (.call name vs) o) :
-    ∃ f e, P.find? name = some f ∧ instantiate f.params vs f.body = some e ∧ o = .next e := by
+    ∃ f e, P.find? name = some f ∧ instantiate f.params vs f.body = some e ∧
+      o = .next (.frame e) := by
   cases h with
   | callArg _ hs => exact absurd hs (value_no_step (AllValues.mid hvs))
   | call hf _ hi => exact ⟨_, _, hf, hi, rfl⟩
 
-/-- Zero or more steps of the semantics, none of them a panic, and the
+/-- Zero or more steps of the semantics, none of them a panic or a
+return, and the
 **trace** of their effects, in order: `Steps P e tr e'` when `e` runs to
 `e'` performing the effects `tr`, each with an answer the semantics
 allows. -/

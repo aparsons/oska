@@ -8,9 +8,9 @@
 //! tests, not a published format, and no CLI command prints it. The
 //! goldens of `tests/core_ir.rs` pin it.
 //!
-//! # Version 4
+//! # Version 5
 //!
-//! Oska Core version 4 has functions, `let`, `if`, `Int` and `Bool` with
+//! Oska Core version 5 has functions, `let`, `if`, `Int` and `Bool` with
 //! their operators, `()`, the value of a block or `if` with no value, and
 //! the module's own structs and enums without generics, with their
 //! construction, field access and `match`. It has text (`String`, trusted
@@ -19,22 +19,28 @@
 //! that only `main` receives, with the built-in calls in [`BUILTINS`]:
 //! writing a line to stdout, reading and writing a file and creating a
 //! directory under a directory capability, attenuation, and `is_ok` and
-//! `unwrap_or` on the `Result` an effect gives. It has closures, which
-//! capture by value the slots they read, function types, and calls of a
-//! function value. [`export`] refuses any other
-//! program, naming the first construct outside it in source order, with
-//! its span. It fails closed: a trait, `impl` or `const` is refused even
-//! when nothing uses it, and so are a generic struct or enum, one with a
-//! field whose type is outside Oska Core (refused at its declaration),
-//! `var` (even one never assigned), a `use`, a `test` block, a generic
-//! function, a method, a contract, a prelude type such as `Option`, and
-//! any type the checker left unsolved. It also refuses any other built-in
-//! call, `==` and `!=` on anything but `Int`, `Bool` and `()`, a struct or
-//! enum with a capability or function field, a function used as a value, a
-//! closure that reads `self` (a guard that cannot fire while methods are
-//! refused, kept to fail closed), and a `main` that returns anything but
-//! `()` or takes anything but `Stdout`, `Fs`, `FsRead` or `FsWrite`, the
-//! capabilities the runtime grants.
+//! `unwrap_or` on a `Result`. It has closures, which capture by value the
+//! slots they read, function types, and calls of a function value. It has
+//! `Result<T, E>` whose `T` and `E` hold no capability or function, with
+//! `Ok`, `Err`, their patterns, and `?`, which may convert the error with
+//! the `from` of an `impl From<X> for T` the checker chose; that `impl` is
+//! exported as its `from`, a function named as the checker names it,
+//! `<T as From<X>>.from`. An `IoError` is opaque: its field is outside.
+//! [`export`] refuses any other program, naming the first construct
+//! outside it in source order, with its span. It fails closed: a trait,
+//! any other `impl` or `const` is refused even when nothing uses it, and
+//! so are a generic
+//! struct or enum, one with a field whose type is outside Oska Core
+//! (refused at its declaration), `var` (even one never assigned), a `use`,
+//! a `test` block, a generic function, a method, a contract, a prelude type
+//! such as `Option` (and `?` on one), and any type the checker left
+//! unsolved. It also refuses any other built-in call, `==` and `!=` on
+//! anything but `Int`, `Bool` and `()`, a struct or enum with a capability
+//! or function field, a function used as a value, a closure that reads
+//! `self` (a guard that cannot fire while methods are refused, kept to fail
+//! closed), and a `main` that returns anything but `()` or takes anything
+//! but `Stdout`, `Fs`, `FsRead` or `FsWrite`, the capabilities the runtime
+//! grants.
 //!
 //! The text is pretty-printed JSON: two-space indentation, a value that
 //! fits in 80 columns on one line, and a final newline. Every node is an
@@ -42,16 +48,17 @@
 //! when absent, never written as `null`.
 //!
 //! ```text
-//! program  = {"core_ir_version": 4, "types": [typedecl...],
+//! program  = {"core_ir_version": 5, "types": [typedecl...],
 //!             "functions": [function...]}
 //! typedecl = {"kind": "Struct", "name": NAME, "fields": [type...]}
 //!          | {"kind": "Enum", "name": NAME, "variants": [variant...]}
 //! variant  = {"name": NAME, "fields": [type...]}
 //! function = {"name": NAME, "params": [param...], "ret": type, "body": expr}
 //! param    = {"type": type, "binds": BOOL}
-//! type     = "Int" | "Bool" | "()" | "String" | "Path" | CAPABILITY
-//!          | "Result<(), IoError>" | "Result<String, IoError>" | NAME
+//! type     = "Int" | "Bool" | "()" | "String" | "Path" | "IoError"
+//!          | CAPABILITY | NAME
 //!          | {"kind": "Fn", "cap": BOOL, "params": [type...], "ret": type}
+//!          | {"kind": "Result", "ok": type, "err": type}
 //! expr     = {"kind": "Unit"}
 //!          | {"kind": "Int", "value": INTEGER}
 //!          | {"kind": "Bool", "value": BOOL}
@@ -71,6 +78,9 @@
 //!          | {"kind": "Closure", "params": [param...], "captures": [N...],
 //!             "height": N, "cap": BOOL, "ret": type, "body": expr}
 //!          | {"kind": "CallValue", "callee": expr, "args": [expr...]}
+//!          | {"kind": "Ok", "value": expr}
+//!          | {"kind": "Err", "value": expr}
+//!          | {"kind": "Try", "operand": expr, "convert"?: NAME}
 //! stmt     = {"kind": "Let", "binds": BOOL, "type": type, "value": expr}
 //!          | {"kind": "Expr", "value": expr}
 //! arm      = {"pattern": pattern, "guard"?: expr, "body": expr}
@@ -81,13 +91,16 @@
 //!          | {"kind": "Bool", "value": BOOL}
 //!          | {"kind": "Construct", "type": NAME, "variant"?: NAME,
 //!             "fields": [pattern...]}
+//!          | {"kind": "Ok", "type": type, "value": pattern}
+//!          | {"kind": "Err", "type": type, "value": pattern}
 //! ```
 //!
 //! - `CAPABILITY` is `"Stdout"`, `"Fs"`, `"FsRead"`, `"FsWrite"`,
 //!   `"Dir"`, `"DirRead"` or `"DirWrite"`, and `BUILTIN` one of
 //!   [`BUILTINS`], the checker's name for a body-less prelude function. A
 //!   method's receiver is its first argument. No field of a struct or
-//!   enum is a capability or a function.
+//!   enum is a capability or a function, and no payload of a `Result`
+//!   type holds one, however deep.
 //! - `types` are the module's structs and enums, and `functions` its
 //!   functions, each in source order. A `NAME` in a `type` is one of
 //!   `types`; a `Call` reaches a function by its `NAME`.
@@ -145,6 +158,12 @@
 //!   `read_only` and `write_only` keep the root and narrow the access,
 //!   and `read_to_string`, `write` and `create_dir` act beneath the
 //!   capability's root, refusing a path that leaves it with an `Err`.
+//! - `Ok` and `Err` build a `Result`, and their patterns, which carry the
+//!   `Result` type matched, match its variant whose payload matches
+//!   `value`. `Try` evaluates `operand`, a `Result`: `Ok(v)` gives `v`;
+//!   `Err(e)` calls the function `convert` on `e`, when there is one, and
+//!   then returns `Err` of the result from the innermost function or
+//!   closure, whose result type is a `Result`.
 //! - `main` takes only capabilities the runtime grants: `Stdout`, and
 //!   `Fs`, `FsRead` or `FsWrite`, which reach anywhere until attenuated.
 //!
@@ -166,7 +185,7 @@ use crate::program::{
 };
 
 /// The version of the core IR [`export`] writes.
-pub const CORE_IR_VERSION: u64 = 4;
+pub const CORE_IR_VERSION: u64 = 5;
 
 /// The built-in calls of Oska Core, by the checker's qualified name: the
 /// effects on a capability, attenuation, `Path` and the `Result` of an
@@ -232,6 +251,7 @@ pub fn export(program: &Program) -> Result<String, Refusal> {
     // program in Oska Core can name. One with a field outside Oska Core
     // is refused below, at its declaration.
     let core = Core {
+        program,
         types: program
             .declarations
             .iter()
@@ -249,7 +269,8 @@ pub fn export(program: &Program) -> Result<String, Refusal> {
     let mut types = Vec::new();
     for declaration in &program.declarations {
         match core.declaration(program, declaration) {
-            Ok(json) => types.push(json),
+            Ok(Some(json)) => types.push(json),
+            Ok(None) => {}
             Err(refusal) => refusals.push(refusal),
         }
     }
@@ -298,19 +319,58 @@ fn node(kind: &'static str, mut fields: Vec<(&'static str, Json)>) -> Json {
 
 /// What the export checks a program's types against: the names of the
 /// module's structs and enums that are in Oska Core.
-struct Core {
+struct Core<'a> {
+    program: &'a Program,
     types: BTreeSet<String>,
 }
 
-impl Core {
+/// Whether `f` is the `from` of an `impl From<X> for T` whose `T` is not
+/// generic, as the checker names it, `<T as From<X>>.from`: the
+/// conversion a `?` may make, which the export writes as a function of
+/// that name. The checker builds the name with
+/// [`crate::program::trait_method`], called from `ImplInfo::method_name`
+/// in `items.rs`.
+fn is_from_conversion(f: &Function) -> bool {
+    match &f.self_ty {
+        Some(Type::Named { name, args }) if args.is_empty() && !f.receiver => {
+            f.name.starts_with(&format!("<{name} as From<")) && f.name.ends_with(">>.from")
+        }
+        _ => false,
+    }
+}
+
+/// Whether `ty`, a payload of a `Result`, is neither a capability nor a
+/// function. A `Result` payload is itself checked when it is exported, so
+/// this need not look inside one.
+fn holds_no_capability(ty: &Type) -> bool {
+    match ty {
+        Type::Named { name, .. } => !CAPABILITIES.contains(&name.as_str()),
+        Type::Fn { .. } => false,
+        _ => true,
+    }
+}
+
+impl Core<'_> {
     /// The core IR of a struct or enum declaration, or the refusal of a
     /// declaration outside Oska Core.
-    fn declaration(&self, program: &Program, d: &Declaration) -> Result<Json, Refusal> {
+    fn declaration(&self, program: &Program, d: &Declaration) -> Result<Option<Json>, Refusal> {
         let kind = match d.kind {
             DeclarationKind::Struct => "struct",
             DeclarationKind::Enum => "enum",
             DeclarationKind::Trait => return refuse(format!("the trait `{}`", d.name), d.span),
-            DeclarationKind::Impl => return refuse(format!("the `impl` of `{}`", d.name), d.span),
+            // An `impl From<X> for T` is its one `from`, exported as a
+            // function; any other `impl` is refused.
+            DeclarationKind::Impl => {
+                let mut functions = program
+                    .functions
+                    .values()
+                    .filter(|f| d.span.start <= f.span.start && f.span.end <= d.span.end)
+                    .peekable();
+                if functions.peek().is_some() && functions.all(is_from_conversion) {
+                    return Ok(None);
+                }
+                return refuse(format!("the `impl` of `{}`", d.name), d.span);
+            }
             DeclarationKind::Const => return refuse(format!("the constant `{}`", d.name), d.span),
         };
         let Some(decl) = program.types.get(&d.name) else {
@@ -329,7 +389,7 @@ impl Core {
                     .collect::<Result<_, _>>()?,
             ))
         };
-        Ok(match &decl.kind {
+        Ok(Some(match &decl.kind {
             TypeDeclKind::Struct(fs) => node(
                 "Struct",
                 vec![("name", Json::Str(d.name.clone())), ("fields", fields(fs)?)],
@@ -354,11 +414,11 @@ impl Core {
                     ),
                 ],
             ),
-        })
+        }))
     }
 
     fn function(&self, f: &Function) -> Result<Json, Refusal> {
-        if f.self_ty.is_some() {
+        if f.self_ty.is_some() && !is_from_conversion(f) {
             let kind = if f.receiver {
                 "method"
             } else {
@@ -453,17 +513,23 @@ impl Core {
             {
                 name
             }
-            Type::Named { name, args } if name == "Result" => match args.as_slice() {
-                [Type::Unit, Type::Named {
-                    name: e,
-                    args: none,
-                }] if e == "IoError" && none.is_empty() => "Result<(), IoError>",
-                [Type::String, Type::Named {
-                    name: e,
-                    args: none,
-                }] if e == "IoError" && none.is_empty() => "Result<String, IoError>",
-                _ => return refuse(format!("the type `{ty}`"), span),
-            },
+            Type::Named { name, args } if args.is_empty() && name == "IoError" => name,
+            Type::Named { name, args } if name == "Result" => {
+                let [ok, err] = args.as_slice() else {
+                    return refuse(format!("the type `{ty}`"), span);
+                };
+                let payloads_ok = holds_no_capability(ok) && holds_no_capability(err);
+                let (ok, err) = (self.ty(ok, span)?, self.ty(err, span)?);
+                if !payloads_ok {
+                    return refuse(
+                        format!(
+                            "the type `{ty}`, a `Result` that holds a capability or a function"
+                        ),
+                        span,
+                    );
+                }
+                return Ok(node("Result", vec![("ok", ok), ("err", err)]));
+            }
             Type::Int(_) | Type::Named { .. } | Type::Fn { .. } | Type::Param(_) | Type::Never => {
                 return refuse(format!("the type `{ty}`"), span)
             }
@@ -585,6 +651,16 @@ impl Core {
             ExprKind::Interpolated(_) => return refuse("an interpolated string", span),
             ExprKind::SelfValue => return refuse("`self`", span),
             ExprKind::List(_) => return refuse("a list", span),
+            ExprKind::Construct { ctor, fields } if ctor.ty == "Result" => {
+                // `Ok(v)` or `Err(v)`, of a `Result` type of Oska Core.
+                self.ty(&e.ty, span)?;
+                let kind = match (ctor.variant.as_deref(), fields.as_slice()) {
+                    (Some("Ok"), [_]) => "Ok",
+                    (Some("Err"), [_]) => "Err",
+                    _ => return refuse(format!("the constructor `{}`", e.ty), span),
+                };
+                node(kind, vec![("value", self.expr(&fields[0])?)])
+            }
             ExprKind::Construct { ctor, fields } => {
                 let mut parts = self.ctor(ctor, span)?;
                 parts.push(("fields", self.exprs(fields)?));
@@ -592,8 +668,12 @@ impl Core {
             }
             ExprKind::Field { base, index } => {
                 let json = self.expr(base)?;
-                // Only a struct of Oska Core has fields to read.
-                self.ty(&base.ty, base.span)?;
+                // Only a struct of the module has fields to read: an
+                // `IoError`'s are outside Oska Core.
+                if !matches!(&base.ty, Type::Named { name, .. } if self.types.contains(name)) {
+                    self.ty(&base.ty, base.span)?;
+                    return refuse(format!("a field of `{}`", base.ty), span);
+                }
                 node(
                     "Field",
                     vec![("base", json), ("index", Json::Int(*index as i128))],
@@ -604,7 +684,7 @@ impl Core {
                 self.ty(&scrutinee.ty, scrutinee.span)?;
                 let arms = arms
                     .iter()
-                    .map(|arm| self.arm(arm, span))
+                    .map(|arm| self.arm(arm, &scrutinee.ty, span))
                     .collect::<Result<Vec<_>, _>>()?;
                 node(
                     "Match",
@@ -651,7 +731,29 @@ impl Core {
             ),
             ExprKind::MutatingCall { .. } => return refuse("a mutating method call", span),
             ExprKind::Range { .. } => return refuse("a range", span),
-            ExprKind::Try { .. } => return refuse("`?`", span),
+            ExprKind::Try {
+                operand,
+                convert,
+                type_args,
+            } => {
+                // `?` on a `Result`, converting its error with the `from`
+                // the checker chose, if any. `?` on an `Option` is outside
+                // Oska Core. A program from source cannot reach this guard:
+                // such a `?` needs an `Option` result type, refused before
+                // the body. It is kept to fail closed.
+                if !matches!(&operand.ty, Type::Named { name, .. } if name == "Result") {
+                    return refuse(format!("`?` on `{}`", operand.ty), span);
+                }
+                let mut fields = vec![("operand", self.expr(operand)?)];
+                match convert {
+                    None => {}
+                    Some(Callee::Function(name)) if type_args.is_empty() => {
+                        fields.push(("convert", Json::Str(name.clone())));
+                    }
+                    Some(_) => return refuse("a `?` that converts with a generic function", span),
+                }
+                node("Try", fields)
+            }
             ExprKind::FnValue { .. } => return refuse("a function used as a value", span),
             ExprKind::Scope(_) => return refuse("`scope`", span),
             ExprKind::Unsupported(what) => return refuse(what.clone(), span),
@@ -675,11 +777,11 @@ impl Core {
         Ok(parts)
     }
 
-    /// A `match` arm of Oska Core, or the refusal of the first construct in
-    /// it that is not. A pattern has no span of its own: one outside Oska
-    /// Core is refused at the `match`, `span`.
-    fn arm(&self, arm: &Arm, span: Span) -> Result<Json, Refusal> {
-        let mut fields = vec![("pattern", self.pattern(&arm.pattern, span)?)];
+    /// A `match` arm of Oska Core on a value of type `ty`, or the refusal
+    /// of the first construct in it that is not. A pattern has no span of
+    /// its own: one outside Oska Core is refused at the `match`, `span`.
+    fn arm(&self, arm: &Arm, ty: &Type, span: Span) -> Result<Json, Refusal> {
+        let mut fields = vec![("pattern", self.pattern(&arm.pattern, ty, span)?)];
         if let Some(guard) = &arm.guard {
             fields.push(("guard", self.expr(guard)?));
         }
@@ -687,8 +789,9 @@ impl Core {
         Ok(Json::Obj(fields))
     }
 
-    /// A pattern of Oska Core, or the refusal of one that is not.
-    fn pattern(&self, pattern: &Pattern, span: Span) -> Result<Json, Refusal> {
+    /// A pattern of Oska Core on a value of type `ty`, or the refusal of
+    /// one that is not. An `Ok` or `Err` pattern carries its `Result` type.
+    fn pattern(&self, pattern: &Pattern, ty: &Type, span: Span) -> Result<Json, Refusal> {
         Ok(match pattern {
             Pattern::Wildcard => node("Wildcard", Vec::new()),
             Pattern::Bind(ty) => node("Bind", vec![("type", self.ty(ty, span)?)]),
@@ -702,16 +805,60 @@ impl Core {
                     return refuse("this literal pattern", literal.span);
                 }
             },
+            Pattern::Construct { ctor, fields } if ctor.ty == "Result" => {
+                let json = self.ty(ty, span)?;
+                let (kind, payload) = match (ctor.variant.as_deref(), ty, fields.as_slice()) {
+                    (Some("Ok"), Type::Named { args, .. }, [_]) if args.len() == 2 => {
+                        ("Ok", &args[0])
+                    }
+                    (Some("Err"), Type::Named { args, .. }, [_]) if args.len() == 2 => {
+                        ("Err", &args[1])
+                    }
+                    _ => return refuse(format!("a pattern on `{ty}`"), span),
+                };
+                node(
+                    kind,
+                    vec![
+                        ("type", json),
+                        ("value", self.pattern(&fields[0], payload, span)?),
+                    ],
+                )
+            }
             Pattern::Construct { ctor, fields } => {
                 let mut parts = self.ctor(ctor, span)?;
+                let types = self.field_types(ctor);
+                // The checker matches every field; fail closed if not.
+                if types.len() != fields.len() {
+                    return refuse(format!("a pattern on `{ty}`"), span);
+                }
                 let fields = fields
                     .iter()
-                    .map(|p| self.pattern(p, span))
+                    .zip(&types)
+                    .map(|(p, field)| self.pattern(p, field, span))
                     .collect::<Result<Vec<_>, _>>()?;
                 parts.push(("fields", Json::Arr(fields)));
                 node("Construct", parts)
             }
         })
+    }
+
+    /// The types of the fields of a struct or variant of the module, in
+    /// declaration order: none for one it does not declare.
+    fn field_types(&self, ctor: &Construct) -> Vec<Type> {
+        let fields = match (
+            self.program.types.get(&ctor.ty).map(|d| &d.kind),
+            &ctor.variant,
+        ) {
+            (Some(TypeDeclKind::Struct(fields)), None) => fields,
+            (Some(TypeDeclKind::Enum(variants)), Some(variant)) => {
+                match variants.iter().find(|v| &v.name == variant) {
+                    Some(v) => &v.fields,
+                    None => return Vec::new(),
+                }
+            }
+            _ => return Vec::new(),
+        };
+        fields.iter().map(|f| f.ty.clone()).collect()
     }
 
     /// A statement of Oska Core, or the refusal of the first construct in

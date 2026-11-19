@@ -1,5 +1,5 @@
 {
-  "core_ir_version": 4,
+  "core_ir_version": 5,
   "types": [],
   "functions": [
     {
@@ -12,7 +12,7 @@
           {
             "kind": "Let",
             "binds": false,
-            "type": "Result<(), IoError>",
+            "type": {"kind": "Result", "ok": "()", "err": "IoError"},
             "value": {
               "kind": "Builtin",
               "name": "Stdout.println",
@@ -42,7 +42,7 @@
           {
             "kind": "Let",
             "binds": true,
-            "type": "Result<(), IoError>",
+            "type": {"kind": "Result", "ok": "()", "err": "IoError"},
             "value": {
               "kind": "Builtin",
               "name": "DirWrite.create_dir",
@@ -80,7 +80,7 @@
           {
             "kind": "Let",
             "binds": true,
-            "type": "Result<(), IoError>",
+            "type": {"kind": "Result", "ok": "()", "err": "IoError"},
             "value": {
               "kind": "Builtin",
               "name": "DirWrite.write",

@@ -151,13 +151,13 @@ fn structs_enums_and_match_export_to_the_golden_form() {
 
 #[test]
 fn the_export_carries_its_version_and_is_json() {
-    assert_eq!(CORE_IR_VERSION, 4);
+    assert_eq!(CORE_IR_VERSION, 5);
     let json = core_ir::export(&program("fn one() -> Int { 1 }\n"))
         .unwrap_or_else(|refusal| panic!("should export, refused: {refusal}"));
     let value = oska_syntax::parse_json(&json).unwrap_or_else(|e| panic!("{e}: {json}"));
     assert_eq!(
         value.get("core_ir_version").and_then(|v| v.as_u64()),
-        Some(4)
+        Some(5)
     );
     assert_eq!(
         value
@@ -618,6 +618,149 @@ fn closures_and_calls_of_function_values_export_to_the_golden_form() {
     );
 }
 
+/// The program of the `results` golden: `Result`, `Ok`, `Err` and their
+/// patterns, `?` with and without a `From` conversion, in a function and
+/// in a closure, and `is_ok` and `unwrap_or` on a `Result` of the module's
+/// own types.
+const RESULTS: &str = "struct AppError { code: Int }\n\
+     \n\
+     impl From<Int> for AppError {\n\
+     \x20   fn from(code: Int) -> AppError { AppError(code: code) }\n\
+     }\n\
+     \n\
+     fn half(n: Int) -> Result<Int, Int> {\n\
+     \x20   if n % 2 == 0 { Ok(n / 2) } else { Err(n) }\n\
+     }\n\
+     \n\
+     fn quarter(n: Int) -> Result<Int, AppError> {\n\
+     \x20   let h = half(n)?\n\
+     \x20   Ok(half(h)?)\n\
+     }\n\
+     \n\
+     fn code(r: Result<Int, AppError>) -> Int {\n\
+     \x20   match r {\n\
+     \x20       Ok(n) => n\n\
+     \x20       Err(AppError(code: c)) => 0 - c\n\
+     \x20   }\n\
+     }\n\
+     \n\
+     fn run() -> Int {\n\
+     \x20   let eighth = |n: Int| {\n\
+     \x20       let q = half(half(n)?)?\n\
+     \x20       half(q)\n\
+     \x20   }\n\
+     \x20   let nested: Result<Result<Int, Int>, Bool> = Ok(eighth(8))\n\
+     \x20   let inner = match nested {\n\
+     \x20       Ok(Ok(n)) => n\n\
+     \x20       Ok(Err(_)) => -1\n\
+     \x20       Err(_) => -2\n\
+     \x20   }\n\
+     \x20   let fine = if quarter(12).is_ok() { 1 } else { 0 }\n\
+     \x20   code(quarter(12)) + code(quarter(6)) + inner + eighth(4).unwrap_or(fine)\n\
+     }\n";
+
+#[test]
+fn results_and_the_question_mark_export_to_the_golden_form() {
+    assert_golden("results", RESULTS);
+}
+
+#[test]
+fn a_question_mark_on_an_option_is_refused() {
+    // From source, the `Option` result type such a `?` needs is refused
+    // first.
+    assert_refused(
+        "fn first(o: Option<Int>) -> Option<Int> {\n\
+         \x20   let n = o?\n\
+         \x20   Some(n)\n\
+         }\n",
+        "the type `Option<Int>`",
+        "Option<Int>",
+    );
+    // The export's own guard, reached by a `?` whose operand is an
+    // `Option` in a function that returns a `Result`, which the checker
+    // never builds.
+    let src = "fn g() -> Result<Int, Int> { Ok(1) }\n\
+               fn f() -> Result<Int, Int> {\n\
+               \x20   Ok(g()?)\n\
+               }\n";
+    let mut program = program(src);
+    let body = &mut program
+        .functions
+        .get_mut("f")
+        .unwrap_or_else(|| panic!("no `f`"))
+        .body;
+    let ExprKind::Block {
+        value: Some(value), ..
+    } = &mut body.kind
+    else {
+        panic!("{body:?}")
+    };
+    let ExprKind::Construct { fields, .. } = &mut value.kind else {
+        panic!("{value:?}")
+    };
+    let ExprKind::Try { operand, .. } = &mut fields[0].kind else {
+        panic!("{:?}", fields[0])
+    };
+    operand.ty = Type::Named {
+        name: "Option".to_string(),
+        args: vec![Type::Int(IntType::Int)],
+    };
+    assert_eq!(
+        refusal_of(src, &program),
+        ("`?` on `Option<Int>`".to_string(), "g()?".to_string())
+    );
+}
+
+#[test]
+fn a_result_that_holds_a_capability_or_function_is_refused() {
+    assert_refused(
+        "fn f(io: Stdout) -> Int {\n\
+         \x20   let r: Result<Stdout, Int> = Ok(io)\n\
+         \x20   1\n\
+         }\n",
+        "the type `Result<Stdout, Int>`, a `Result` that holds a capability or a function",
+        "Result<Stdout, Int>",
+    );
+    assert_refused(
+        "fn f() -> Int {\n\
+         \x20   let r: Result<Int, Result<Int, fn() -> Int>> = Ok(1)\n\
+         \x20   1\n\
+         }\n",
+        "the type `Result<Int, fn() -> Int>`, a `Result` that holds a capability or a function",
+        "Result<Int, Result<Int, fn() -> Int>>",
+    );
+}
+
+#[test]
+fn a_field_of_an_io_error_is_refused() {
+    assert_refused(
+        "fn f(io: Stdout) -> Int {\n\
+         \x20   match io.println(\"hi\") {\n\
+         \x20       Ok(_) => 0\n\
+         \x20       Err(e) => {\n\
+         \x20           let m = e.message\n\
+         \x20           1\n\
+         \x20       }\n\
+         \x20   }\n\
+         }\n",
+        "a field of `IoError`",
+        "e.message",
+    );
+}
+
+#[test]
+fn an_impl_of_another_trait_than_from_is_refused() {
+    let src = "struct AppError { code: Int }\n\
+               impl Display for AppError {\n\
+               \x20   fn to_string(self) -> String { \"app\" }\n\
+               }\n";
+    assert_refused(
+        src,
+        "the `impl` of `AppError`",
+        "impl Display for AppError {\n    fn to_string(self) -> String { \"app\" }\n}",
+    );
+}
+
 #[test]
 fn a_function_used_as_a_value_is_refused() {
     assert_refused(
@@ -678,6 +821,39 @@ fn the_closures_the_lean_typing_rejects_the_checker_rejects() {
         core_ir::export(&program(accepted))
             .unwrap_or_else(|refusal| panic!("{accepted:?} should export, refused: {refusal}"));
     }
+}
+
+/// The programs `formal/lean/OskaFormal/Core/Examples.lean` shows the Lean
+/// typing of Oska Core rejects for `?`: one in a function whose result
+/// type is not a `Result` (`E0243`), and one whose error type is not the
+/// function's, with no `From` conversion between them (`E0242`). With the
+/// conversion the checker accepts the second, and the export names the
+/// `from` it chose, as the Lean example does.
+#[test]
+fn the_question_marks_the_lean_typing_rejects_the_checker_rejects() {
+    let g = "fn g() -> Result<Int, Int> { Err(1) }\n";
+    let not_result = format!("{g}fn f() -> Int {{\n    g()?\n}}\n");
+    let result = format!("{g}fn f() -> Result<Int, Int> {{\n    Ok(g()?)\n}}\n");
+    let app = "struct AppError { code: Int }\n";
+    let from = "impl From<Int> for AppError {\n\
+                \x20   fn from(value: Int) -> AppError { AppError(code: value) }\n\
+                }\n";
+    let f = "fn f() -> Result<Int, AppError> {\n    let x = g()?\n    Ok(x)\n}\n";
+    let unconverted = format!("{g}{app}{f}");
+    let converted = format!("{g}{app}{from}{f}");
+    for (rejected, accepted) in [(&not_result, &result), (&unconverted, &converted)] {
+        assert!(!checks(rejected), "the checker should reject {rejected:?}");
+        assert!(checks(accepted), "the checker should accept {accepted:?}");
+        core_ir::export(&program(accepted))
+            .unwrap_or_else(|refusal| panic!("{accepted:?} should export, refused: {refusal}"));
+    }
+    let json = core_ir::export(&program(&converted))
+        .unwrap_or_else(|refusal| panic!("should export, refused: {refusal}"));
+    assert!(
+        json.contains("\"convert\": \"<AppError as From<Int>>.from\"")
+            && json.contains("\"name\": \"<AppError as From<Int>>.from\""),
+        "the export should name and define the conversion:\n{json}"
+    );
 }
 
 #[test]

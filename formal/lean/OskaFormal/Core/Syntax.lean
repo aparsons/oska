@@ -1,20 +1,23 @@
 /-!
 # Oska Core: syntax
 
-The syntax of Oska Core, version 4 (ADR 0018): exactly the fragment that
-core IR version 4 exports (`crates/oska-check/src/core_ir.rs`). It has
+The syntax of Oska Core, version 5 (ADR 0018): exactly the fragment that
+core IR version 5 exports (`crates/oska-check/src/core_ir.rs`). It has
 functions, `let`, `if`, `Int` and `Bool` with their operators, `()`,
 structs and enums without generics, field access, and `match`; and
 capabilities: text, `Path`, the capabilities `Stdout`, `Fs`, `FsRead`,
 `FsWrite`, `Dir`, `DirRead` and `DirWrite` as opaque values only `main`
 receives, the built-in calls that write a line to stdout, read and write
 a file and create a directory under a directory capability, and
-attenuate one capability to a narrower one, and the `Result` of an
-effect with `is_ok` and `unwrap_or`; and closures, which capture by
+attenuate one capability to a narrower one; closures, which capture by
 value the slots they read, with function types and calls of a function
-value. Each Lean constructor is one core IR node, with the same fields;
-the values a run makes (a capability, a path, a result) have no core IR
-node, so a program as written holds none.
+value; and `Result`: `Ok` and `Err`, `match` on them, `is_ok` and
+`unwrap_or`, and `?`, which returns an `Err` from the function (or
+closure) it is in, through the `From` conversion the checker chose, if
+any. Each Lean constructor is one core IR node, with the same fields;
+the values a run makes (a capability, a path, an `IoError`) and the
+frame a call runs its body in have no core IR node, so a program as
+written holds none.
 
 - A local is a *slot*: the function's locals are numbered from 0 in the
   order they are bound, the parameters that bind first, then each `let`
@@ -61,9 +64,10 @@ def CapKind.granted : CapKind → Bool
 
 /-- The types of Oska Core: core IR's `"Int"`, `"Bool"`, `"()"`,
 `"String"` (text, trusted or not: trust is checked statically and has no
-runtime effect), `"Path"`, a capability kind, `"Result<(), IoError>"` and
-`"Result<String, IoError>"` (`result unit` and `result string`), a
-struct or enum the program declares, by name, and a function type
+runtime effect), `"Path"`, `"IoError"` (the error an effect gives, an
+opaque value: no program of Oska Core reads its message), a capability
+kind, `Result<ok, err>` (core IR's `{"kind": "Result", ...}`), a struct
+or enum the program declares, by name, and a function type
 `fn(params) -> ret`, or `cap fn(params) -> ret` when `cap`, core IR's
 `{"kind": "Fn", ...}`: a closure's type. A plain `fn` captures no
 capability-bearing value (`Typing.lean`); a `cap fn` may, and reaches
@@ -74,8 +78,9 @@ inductive Ty where
   | unit
   | string
   | path
+  | ioError
   | cap (kind : CapKind)
-  | result (ok : Ty)
+  | result (ok err : Ty)
   | named (name : String)
   | fn (cap : Bool) (params : List Ty) (ret : Ty)
   deriving Repr
@@ -89,8 +94,9 @@ mutual
     | .int, .unit => isFalse nofun
     | .int, .string => isFalse nofun
     | .int, .path => isFalse nofun
+    | .int, .ioError => isFalse nofun
     | .int, .cap _ => isFalse nofun
-    | .int, .result _ => isFalse nofun
+    | .int, .result _ _ => isFalse nofun
     | .int, .named _ => isFalse nofun
     | .int, .fn _ _ _ => isFalse nofun
     | .bool, .int => isFalse nofun
@@ -98,8 +104,9 @@ mutual
     | .bool, .unit => isFalse nofun
     | .bool, .string => isFalse nofun
     | .bool, .path => isFalse nofun
+    | .bool, .ioError => isFalse nofun
     | .bool, .cap _ => isFalse nofun
-    | .bool, .result _ => isFalse nofun
+    | .bool, .result _ _ => isFalse nofun
     | .bool, .named _ => isFalse nofun
     | .bool, .fn _ _ _ => isFalse nofun
     | .unit, .int => isFalse nofun
@@ -107,8 +114,9 @@ mutual
     | .unit, .unit => isTrue rfl
     | .unit, .string => isFalse nofun
     | .unit, .path => isFalse nofun
+    | .unit, .ioError => isFalse nofun
     | .unit, .cap _ => isFalse nofun
-    | .unit, .result _ => isFalse nofun
+    | .unit, .result _ _ => isFalse nofun
     | .unit, .named _ => isFalse nofun
     | .unit, .fn _ _ _ => isFalse nofun
     | .string, .int => isFalse nofun
@@ -116,8 +124,9 @@ mutual
     | .string, .unit => isFalse nofun
     | .string, .string => isTrue rfl
     | .string, .path => isFalse nofun
+    | .string, .ioError => isFalse nofun
     | .string, .cap _ => isFalse nofun
-    | .string, .result _ => isFalse nofun
+    | .string, .result _ _ => isFalse nofun
     | .string, .named _ => isFalse nofun
     | .string, .fn _ _ _ => isFalse nofun
     | .path, .int => isFalse nofun
@@ -125,38 +134,53 @@ mutual
     | .path, .unit => isFalse nofun
     | .path, .string => isFalse nofun
     | .path, .path => isTrue rfl
+    | .path, .ioError => isFalse nofun
     | .path, .cap _ => isFalse nofun
-    | .path, .result _ => isFalse nofun
+    | .path, .result _ _ => isFalse nofun
     | .path, .named _ => isFalse nofun
     | .path, .fn _ _ _ => isFalse nofun
+    | .ioError, .int => isFalse nofun
+    | .ioError, .bool => isFalse nofun
+    | .ioError, .unit => isFalse nofun
+    | .ioError, .string => isFalse nofun
+    | .ioError, .path => isFalse nofun
+    | .ioError, .ioError => isTrue rfl
+    | .ioError, .cap _ => isFalse nofun
+    | .ioError, .result _ _ => isFalse nofun
+    | .ioError, .named _ => isFalse nofun
+    | .ioError, .fn _ _ _ => isFalse nofun
     | .cap _, .int => isFalse nofun
     | .cap _, .bool => isFalse nofun
     | .cap _, .unit => isFalse nofun
     | .cap _, .string => isFalse nofun
     | .cap _, .path => isFalse nofun
+    | .cap _, .ioError => isFalse nofun
     | .cap x, .cap y => if h : x = y then isTrue (h ▸ rfl) else isFalse fun e => by cases e; exact h rfl
-    | .cap _, .result _ => isFalse nofun
+    | .cap _, .result _ _ => isFalse nofun
     | .cap _, .named _ => isFalse nofun
     | .cap _, .fn _ _ _ => isFalse nofun
-    | .result _, .int => isFalse nofun
-    | .result _, .bool => isFalse nofun
-    | .result _, .unit => isFalse nofun
-    | .result _, .string => isFalse nofun
-    | .result _, .path => isFalse nofun
-    | .result _, .cap _ => isFalse nofun
-    | .result x, .result y =>
-      match Ty.decEq x y with
-      | isTrue h => isTrue (h ▸ rfl)
-      | isFalse h => isFalse fun e => by cases e; exact h rfl
-    | .result _, .named _ => isFalse nofun
-    | .result _, .fn _ _ _ => isFalse nofun
+    | .result _ _, .int => isFalse nofun
+    | .result _ _, .bool => isFalse nofun
+    | .result _ _, .unit => isFalse nofun
+    | .result _ _, .string => isFalse nofun
+    | .result _ _, .path => isFalse nofun
+    | .result _ _, .ioError => isFalse nofun
+    | .result _ _, .cap _ => isFalse nofun
+    | .result o e, .result o' e' =>
+      match Ty.decEq o o', Ty.decEq e e' with
+      | isTrue h₁, isTrue h₂ => isTrue (h₁ ▸ h₂ ▸ rfl)
+      | isFalse h, _ => isFalse fun x => by cases x; exact h rfl
+      | _, isFalse h => isFalse fun x => by cases x; exact h rfl
+    | .result _ _, .named _ => isFalse nofun
+    | .result _ _, .fn _ _ _ => isFalse nofun
     | .named _, .int => isFalse nofun
     | .named _, .bool => isFalse nofun
     | .named _, .unit => isFalse nofun
     | .named _, .string => isFalse nofun
     | .named _, .path => isFalse nofun
+    | .named _, .ioError => isFalse nofun
     | .named _, .cap _ => isFalse nofun
-    | .named _, .result _ => isFalse nofun
+    | .named _, .result _ _ => isFalse nofun
     | .named x, .named y => if h : x = y then isTrue (h ▸ rfl) else isFalse fun e => by cases e; exact h rfl
     | .named _, .fn _ _ _ => isFalse nofun
     | .fn _ _ _, .int => isFalse nofun
@@ -164,8 +188,9 @@ mutual
     | .fn _ _ _, .unit => isFalse nofun
     | .fn _ _ _, .string => isFalse nofun
     | .fn _ _ _, .path => isFalse nofun
+    | .fn _ _ _, .ioError => isFalse nofun
     | .fn _ _ _, .cap _ => isFalse nofun
-    | .fn _ _ _, .result _ => isFalse nofun
+    | .fn _ _ _, .result _ _ => isFalse nofun
     | .fn _ _ _, .named _ => isFalse nofun
     | .fn c ps r, .fn d qs u =>
       if hc : c = d then
@@ -174,6 +199,7 @@ mutual
         | isFalse h, _ => isFalse fun e => by cases e; exact h rfl
         | _, isFalse h => isFalse fun e => by cases e; exact h rfl
       else isFalse fun e => by cases e; exact hc rfl
+
 
   def Ty.decEqList : (a b : List Ty) → Decidable (a = b)
     | [], [] => isTrue rfl
@@ -225,7 +251,8 @@ is its first argument.
 - `write`: `DirWrite.write(path, contents)`.
 - `createDir`: `DirWrite.create_dir(path)`.
 - `pathFrom`, `pathNew`: `Path.from(text)`, `Path.new(text)`.
-- `isOk`, `unwrapOr`: `Result.is_ok()`, `Result.unwrap_or(default)`. -/
+- `isOk`, `unwrapOr`: `Result.is_ok()`, `Result.unwrap_or(default)`, on
+  any `Result`. -/
 inductive Builtin where
   | println
   | restrictTo (k : CapKind)
@@ -306,7 +333,9 @@ inductive BinOp where
 
 /-- A pattern of a `match` arm: core IR's `pattern`. A literal pattern is
 an `Int`, a `Bool` or `()`; a constructor pattern names a struct, or an
-enum and its variant, and has a pattern for each field. -/
+enum and its variant, and has a pattern for each field. `result true ok
+err p` is core IR's `Ok` pattern on a `Result<ok, err>`, and `result
+false ok err p` its `Err` pattern: `p` matches the value inside. -/
 inductive Pattern where
   | wildcard
   | bind (type : Ty)
@@ -314,6 +343,7 @@ inductive Pattern where
   | int (value : Int)
   | bool (value : Bool)
   | construct (type : String) (variant : Option String) (fields : List Pattern)
+  | result (isOk : Bool) (ok err : Ty) (value : Pattern)
 
 /-- A parameter of a function or closure: its type, and whether it binds
 a slot. -/
@@ -333,15 +363,23 @@ mutual
   value for each slot below `height` in its body as the slot is bound
   (`Semantics.lean`), so a closure the run reaches has height 0 and its
   body holds the values it captured. `callValue` calls a function value
-  with arguments. -/
+  with arguments.
+
+  `result true e` is core IR's `Ok`, and `result false e` its `Err`.
+  `try_ e convert` is `e?`: the value inside an `Ok`; on an `Err`, the
+  function returns it, its error put through the function `convert`
+  first when the checker chose a `From` conversion. A call runs the
+  callee's body in a `frame`, which such a return ends; core IR has no
+  node for it. -/
   inductive Expr where
     | unit
     | str (value : String)
     | path (text : String)
     | cap (kind : CapKind) (root : CapRoot)
-    | okUnit
-    | okStr (value : String)
-    | err
+    | ioError
+    | result (isOk : Bool) (value : Expr)
+    | try_ (operand : Expr) (convert : Option String)
+    | frame (body : Expr)
     | int (value : Int)
     | bool (value : Bool)
     | local_ (slot : Nat)
@@ -429,11 +467,20 @@ def intMax : Int := 2 ^ 63 - 1
 /-- Whether `n` is an `Int` of Oska: whether it fits in 64 signed bits. -/
 def fits (n : Int) : Bool := decide (intMin ≤ n) && decide (n ≤ intMax)
 
+/-- `Ok(())`, the answer to an effect that succeeded. -/
+abbrev Expr.okUnit : Expr := .result true .unit
+
+/-- `Ok(text)`, the answer to a read that succeeded. -/
+abbrev Expr.okStr (s : String) : Expr := .result true (.str s)
+
+/-- `Err(e)` for an `IoError` `e`, the answer to an effect that failed. -/
+abbrev Expr.ioErr : Expr := .result false .ioError
+
 /-- The values of Oska Core: `()`, an integer, a boolean, text, a path, a
-capability, the `Ok` or `Err` of an effect's `Result`, a struct or enum
+capability, an `IoError`, an `Ok` or `Err` of a value, a struct or enum
 variant whose fields are values, and a closure of height 0, whose body
-holds the values it captured. An `Err` carries no message: no program of
-Oska Core can read one. -/
+holds the values it captured. An `IoError` carries no message: no
+program of Oska Core can read one. -/
 inductive IsValue : Expr → Prop where
   | unit : IsValue .unit
   | int (n : Int) : IsValue (.int n)
@@ -441,9 +488,8 @@ inductive IsValue : Expr → Prop where
   | str (s : String) : IsValue (.str s)
   | path (s : String) : IsValue (.path s)
   | cap (k : CapKind) (r : CapRoot) : IsValue (.cap k r)
-  | okUnit : IsValue .okUnit
-  | okStr (s : String) : IsValue (.okStr s)
-  | err : IsValue .err
+  | ioError : IsValue .ioError
+  | result (b : Bool) {v : Expr} : IsValue v → IsValue (.result b v)
   | construct {type : String} {variant : Option String} {fields : List Expr} :
       (∀ e ∈ fields, IsValue e) → IsValue (.construct type variant fields)
   | closure (ps : List Param) (cs : List Nat) (cap : Bool) (ret : Ty) (body : Expr) :
@@ -474,7 +520,8 @@ mutual
   (`crates/oska-run/src/interp.rs`): a wildcard matches anything, a name
   matches anything and binds it, a literal matches an equal value, and a
   constructor pattern matches a value of its variant whose fields match
-  its patterns, from the first. -/
+  its patterns, from the first, and an `Ok` or `Err` pattern an `Ok` or
+  `Err` whose value matches its pattern. -/
   def matchPat : Pattern → Expr → Option (List Expr)
     | .wildcard, _ => some []
     | .bind _, v => some [v]
@@ -483,6 +530,7 @@ mutual
     | .bool b, .bool c => if b = c then some [] else none
     | .construct _ variant ps, .construct _ variant' vs =>
       if variant = variant' then matchPats ps vs else none
+    | .result b _ _ p, .result b' v => if b = b' then matchPat p v else none
     | _, _ => none
 
   /-- `matchPat` on each field: the bindings of all, in order. -/
@@ -503,8 +551,8 @@ mutual
   height `h` captures is the slots below `h` its body reads. -/
   def Expr.reads (i : Nat) : Expr → Bool
     | .local_ j => decide (i = j)
-    | .unit | .int _ | .bool _ | .str _ | .path _ | .cap _ _ | .okUnit | .okStr _ | .err => false
-    | .neg e | .not e | .field e _ => Expr.reads i e
+    | .unit | .int _ | .bool _ | .str _ | .path _ | .cap _ _ | .ioError => false
+    | .neg e | .not e | .field e _ | .result _ e | .try_ e _ | .frame e => Expr.reads i e
     | .binary _ l r => Expr.reads i l || Expr.reads i r
     | .call _ args | .builtin _ args => Expr.readsList i args
     | .construct _ _ fs => Expr.readsList i fs

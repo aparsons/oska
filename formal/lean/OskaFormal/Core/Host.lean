@@ -116,9 +116,9 @@ def read (h : Host) (root : CapRoot) (s : String) : Expr :=
     | some q =>
       match h.files.lookup q with
       | some text => .okStr text
-      | none => .err
-    | none => .err
-  | _, _ => .err
+      | none => .ioErr
+    | none => .ioErr
+  | _, _ => .ioErr
 
 /-- The host with the file at `q` holding `text`. -/
 def putFile (h : Host) (q : List String) (text : String) : Host :=
@@ -131,9 +131,9 @@ def write (h : Host) (root : CapRoot) (s text : String) : Expr × Host :=
   | .beneath p, some (n :: ns) =>
     match h.walk p (n :: ns) with
     | some q =>
-      if h.isDir q.dropLast && !h.isDir q then (.okUnit, h.putFile q text) else (.err, h)
-    | none => (.err, h)
-  | _, _ => (.err, h)
+      if h.isDir q.dropLast && !h.isDir q then (.okUnit, h.putFile q text) else (.ioErr, h)
+    | none => (.ioErr, h)
+  | _, _ => (.ioErr, h)
 
 /-- Create the directory at `s` beneath `root`, in a directory that
 exists; one already there is kept (`fs_create_dir`, `FakeHost::put_dir`). -/
@@ -142,12 +142,12 @@ def createDir (h : Host) (root : CapRoot) (s : String) : Expr × Host :=
   | .beneath p, some (n :: ns) =>
     match h.walk p (n :: ns) with
     | some q =>
-      if h.hasFile q then (.err, h)
+      if h.hasFile q then (.ioErr, h)
       else if h.isDir q then (.okUnit, h)
       else if h.isDir q.dropLast then (.okUnit, { h with dirs := h.dirs ++ [q] })
-      else (.err, h)
-    | none => (.err, h)
-  | _, _ => (.err, h)
+      else (.ioErr, h)
+    | none => (.ioErr, h)
+  | _, _ => (.ioErr, h)
 
 /-- The text a `String` or a `Path` argument holds. -/
 def textOf : List Expr → Option String
@@ -160,27 +160,27 @@ def perform (h : Host) (req : Request) : Expr × Host :=
   | .println =>
     match req.args with
     | [.str s] => (.okUnit, { h with stdout := h.stdout ++ s ++ "\n" })
-    | _ => (.err, h)
+    | _ => (.ioErr, h)
   | .restrictTo _ =>
     match req.kind.restrictTo with
     | some (_, k') =>
       (.cap k' (match textOf req.args with
         | some s => h.restrictTo req.root s
         | none => .nowhere), h)
-    | none => (.err, h)
+    | none => (.ioErr, h)
   | .readToString =>
     match req.args with
     | [.path s] => (h.read req.root s, h)
-    | _ => (.err, h)
+    | _ => (.ioErr, h)
   | .write =>
     match req.args with
     | [.path s, .str text] => h.write req.root s text
-    | _ => (.err, h)
+    | _ => (.ioErr, h)
   | .createDir =>
     match req.args with
     | [.path s] => h.createDir req.root s
-    | _ => (.err, h)
-  | _ => (.err, h)
+    | _ => (.ioErr, h)
+  | _ => (.ioErr, h)
 
 /-! ## The host's answers are the semantics' -/
 
@@ -283,7 +283,7 @@ theorem createDir_beneath (h : Host) (root : CapRoot) (s : String) :
   · exact Or.inl hm
 
 theorem read_allowed (h : Host) (root : CapRoot) (s : String) :
-    h.read root s = .err ∨ ∃ t, h.read root s = .okStr t := by
+    h.read root s = .ioErr ∨ ∃ t, h.read root s = .okStr t := by
   unfold read
   split
   · split
@@ -294,7 +294,7 @@ theorem read_allowed (h : Host) (root : CapRoot) (s : String) :
   · exact Or.inl rfl
 
 theorem write_allowed (h : Host) (root : CapRoot) (s t : String) :
-    (h.write root s t).1 = .okUnit ∨ (h.write root s t).1 = .err := by
+    (h.write root s t).1 = .okUnit ∨ (h.write root s t).1 = .ioErr := by
   unfold write
   split
   · split
@@ -305,7 +305,7 @@ theorem write_allowed (h : Host) (root : CapRoot) (s t : String) :
   · exact Or.inr rfl
 
 theorem createDir_allowed (h : Host) (root : CapRoot) (s : String) :
-    (h.createDir root s).1 = .okUnit ∨ (h.createDir root s).1 = .err := by
+    (h.createDir root s).1 = .okUnit ∨ (h.createDir root s).1 = .ioErr := by
   unfold createDir
   split
   · split
