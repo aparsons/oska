@@ -40,4 +40,5 @@ Windows has no file descriptors, no `mmap`, no signals and no `errno`, and most 
 - `oska-native`'s `Import` names its DLL, and `Platform` says how its error function is read (an address, or the value). `Fails` gains `Zero`. `OsCall` gains `Absent`.
 - The x86_64 code generator gets the Windows call form, and a page probe for large frames on Windows.
 - The `std.rt` table gains `windows`, `e_intr`, `e_pipe` and `e_pipe_alt`, and `system_errors()` gains a Windows part from `oska-sys`'s `WINDOWS_ERRORS`. Linux and macOS keep today's values and make the same calls.
-- The PE writer emits a minimal `.reloc`, so that the loader may randomize the image's address.
+- The PE writer emits a minimal `.reloc`, so that the loader may randomize the image's address. Whether the loader does so is **unverified** until a Windows test compares addresses across runs.
+- The IAT sits in writable `.data`. Making it read-only after binding needs the load-config directory, which a later ticket can add.

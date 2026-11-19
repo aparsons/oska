@@ -10,7 +10,7 @@
     - `MicrosoftDocs/cpp-docs` `docs/build/x64-calling-convention.md`, `x64-software-conventions.md`, `stack-usage.md`, `docs/c-language/parsing-c-command-line-arguments.md`.
     - `MicrosoftDocs/sdk-api` (`sdk-api-src/content/`): `WriteFile`, `ReadFile`, `VirtualAlloc`, `VirtualFree`, `ExitProcess`, `GetCommandLineW`, `GetEnvironmentStringsW`, `AddVectoredExceptionHandler`, `SetThreadStackGuarantee`, `GetSystemTimePreciseAsFileTime`, `GetLastError`, `RtlGenRandom`, `BCryptGenRandom`, `NtCreateFile`, `GetFileType`.
     - `MicrosoftDocs/Console-Docs`: `GetStdHandle`, `GetConsoleMode`, `WriteConsole`, `SetConsoleOutputCP`.
-  - No Windows machine was available, so nothing was run on Windows. Claims that no fetched source settles are marked **unverified**. The Windows CI runner settles them.
+  - No Windows machine was available, so nothing was run on Windows. Claims that no fetched source settles are marked **unverified**. The Windows CI runner settles them. The GitHub API is blocked in the session that wrote this, so each source is pinned by the date it was fetched, 2026-11-19, not by a commit.
 
 ## Summary
 
@@ -29,14 +29,14 @@ Linux and macOS executables make the same calls as today. Their tables gain the 
 ## 1. What exists today
 
 - **Intrinsics.** `std.rt` declares 23 `rt_sys_` intrinsics, all POSIX-shaped (`rt.osk`, "System calls"). `oska-native` maps each to an `OsCall` per platform: `Trap` (Linux), `Library` (macOS) or `Same` (`intrinsics.rs`, `Platform.call`).
-- **Where `std.rt` calls them.** In about 25 call sites, all in leaf functions: `map` and `stack_new` (`mmap`), `free` and `stdin_fill` (`munmap`), `write_all` (`write`), `stdin_fill` and `read_all` (`read`), `process_init`, `set_action`, `handle_faults` and `on_fault` (signals), `stdout_buffer` (`ioctl`), `exit`, `clock_now_millis`, `random_next_int`, and the confinement functions (`open_name`, `make_dir`, `lone_file`, `read_all`, `write_beneath`, `working_directory`, `link_target`, `open_dir`, `entries`).
+- **Where `std.rt` calls them.** In about 36 call sites, all in leaf functions: `map`, `try_alloc` and `stack_new` (`mmap`), `free`, `drop_later` and `stdin_fill` (`munmap`), `write_all` (`write`), `stdin_fill` and `read_all` (`read`), `process_init`, `set_action`, `handle_faults` and `on_fault` (signals), `stdout_buffer` (`ioctl`), `exit`, `clock_now_millis`, `random_next_int`, and the confinement functions (`open_name`, `make_dir`, `lone_file`, `read_all`, `write_beneath`, `working_directory`, `link_target`, `open_dir`, `entries`).
 - **Library calls.** `Inst::LibCall` calls through an import-table slot. `lower.rs`'s `library_call` turns `-1` or `NULL` into `-errno` by calling the platform's `errno` function (`___error`), which gives the address of `errno`.
 - **Platform table.** `"No function holds such a value, or asks which platform it runs on"` (`rt.osk`, "Platforms"). Every difference is a value in `Platform`.
 - **Entry.** `_start` calls `process_init(argc, argv, on_fault)`, then `stack_new(size)`, then `_main` on that stack (`Inst::CallOnStack`) (`lower.rs`, `Lowering::entry`). `process_init` reads `envp` after `argv`'s null, and refuses an argument that is not UTF-8.
 - **x86_64 code.** The backend's own convention passes arguments in `rdi, rsi, rdx, rcx, r8, r9`. `rbx`, `r12`–`r14` hold temporaries across calls, `r15` counts call depth, and `rbp` is the frame pointer. Stack slots are at `[rsp + 8 * slot]`. All addressing is `rip`-relative, so code needs no relocation (`x86_64.rs`, module comment). `LibCall` uses the System V convention (`x86_64.rs`, `Inst::LibCall`).
 - **Errors.** `std.rt` words a system error through `system_errors()`, a `|`-separated list with one part per operating system (`rt.osk`, `errno_message`). `oska-sys` holds `WINDOWS_ERRORS`, the Win32 codes of each `IoError` kind (`wording.rs`).
 - **Windows confinement in the interpreter.** `oska-sys/src/windows.rs` walks beneath a directory handle with `NtCreateFile` and `FILE_OPEN_REPARSE_POINT`, and refuses reparse points and files with more than one link (#175). `std.rt` will do the same in #178.
-- **CI.** `windows.yml` runs `cargo test` for `oska-run` and `oskac` on `windows-latest` on every push to `main`, `ticket/**` and every pull request that changes `crates/`. A `#[cfg(windows)]` test in `oskac` runs there with no workflow change.
+- **CI.** `windows.yml` runs `cargo test` for `oska-run` and `oskac` on `windows-latest` on pushes to `main`, `ticket/**` and `review-fixes-*`, and on pull requests, when the change touches `crates/`, `site/`, `docs/`, `examples/` or the other paths its filter names. A `#[cfg(windows)]` test in `oskac` runs there with no workflow change.
 
 ## 2. What Windows requires (primary sources)
 
@@ -89,7 +89,7 @@ What this means for Oska:
 Other facts:
 
 - `WriteFile` to a pipe whose reader has gone fails with `ERROR_NO_DATA` (232) or `ERROR_BROKEN_PIPE` (109). `oska-sys` words both as "broken pipe" (`WINDOWS_ERRORS`). **Unverified** which one a closed anonymous pipe gives; `std.rt` treats both as a closed pipe.
-- Win32 error 4 is `ERROR_TOO_MANY_OPEN_FILES`, not `EINTR`, and 32 is `ERROR_SHARING_VIOLATION`, not `EPIPE`. `std.rt` tests `== -4` (retry) and `== -32` (closed stdout) in shared code (`write_all`, `write_stdout`, `stdin_fill`, `entries`). Those numbers must move into the table, or a Windows write that fails with error 4 would retry for ever.
+- Win32 error 4 is `ERROR_TOO_MANY_OPEN_FILES`, not `EINTR`, and 32 is `ERROR_SHARING_VIOLATION`, not `EPIPE`. `std.rt` tests `== -4` (retry) and `== -32` (closed stdout) in shared code (`write_all`, `write_stdout`, `stdin_fill`, `entries`, `open_name`, `read_all`, `write_beneath`, `make_dir`). Those numbers must move into the table, or a Windows write that fails with error 4 would retry for ever.
 - A console decodes `WriteFile`'s bytes in its output code page, which is often not UTF-8. `WriteConsoleW` takes UTF-16 and shows any text correctly. `SetConsoleOutputCP` changes the console's code page for every process attached to it, and the change outlives the program.
 - `GetCommandLineW` gives the whole command line as one UTF-16 string. The C runtime splits it by the rules in parsing-c-command-line-arguments.md (backslashes before a quote, `""` inside quotes, the program name split differently). `CommandLineToArgvW` is in shell32, which the spec does not allow.
 - Windows has no `SIGPIPE`, so nothing needs to be ignored at start.
@@ -132,14 +132,15 @@ The rest of `std.rt` stays shared. In particular:
 - **Handles in place of descriptors.** A Windows handle is a word, so it fits wherever `std.rt` keeps a descriptor. `process_init` stores the three standard handles from `GetStdHandle` in writable words, and the Windows `write_all` maps the descriptors 0, 1 and 2 to them. Real handles are multiples of 4, so they never collide with 0, 1 and 2 (**unverified**, from Windows' handle-table layout; not in a fetched source).
 - **Arguments and environment.** On Windows, `process_init` gets no `argc`/`argv`. It reads `GetCommandLineW()` and `GetEnvironmentStringsW()`, converts them from UTF-16 to UTF-8 in Oska, splits the command line by the C runtime's rules, and builds the same `argv`/`envp` arrays of C strings that Linux's kernel gives. `args_get`, `env_lookup` and the UTF-8 checks then work unchanged. An unpaired surrogate is invalid text, refused as a non-UTF-8 argument is today (exit 101), and an environment variable with one has no value, as `std::env::var` behaves.
 - **Memory.** The Windows `map` is `VirtualAlloc(0, length, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)`; `free` of a large object is `VirtualFree(addr, 0, MEM_RELEASE)`. Every `munmap` in `std.rt` already unmaps a whole mapping from its base.
-- **Standard output.** On Windows, `stdout_buffer` asks `GetConsoleMode` in place of `ioctl(TCGETS)`. When stdout is a console, a write converts UTF-8 to UTF-16 in Oska and calls `WriteConsoleW`. Otherwise `WriteFile` writes the bytes as they are, with no newline translation.
+- **Standard output.** On Windows, `stdout_buffer` asks `GetConsoleMode` in place of `ioctl(TCGETS)`. When stdout is a console, a write converts UTF-8 to UTF-16 in Oska and calls `WriteConsoleW`. Otherwise `WriteFile` writes the bytes as they are, with no newline translation. Console output then matches the interpreter, since Rust's standard library also writes to a console with `WriteConsoleW`; files and pipes are byte-exact. Console input is read with `ReadConsoleW` and converted to UTF-8 the same way (#177). Paths are printed with `/` as on Unix: `std.rt` rewrites `\` in #177 and #178.
+- **Confinement (#178).** `std.rt` mirrors `oska-sys/src/windows.rs`: it opens each name relative to the parent directory's handle with `NtCreateFile` and `FILE_OPEN_REPARSE_POINT`, refuses reparse points and files whose link count is above 1, sorts directory listings, and truncates with `NtSetInformationFile`.
 - **Clock and random.** The Windows `clock_now_millis` converts a `FILETIME` (100 ns since 1601) to Unix milliseconds. `random_next_int` reads its seed from `ProcessPrng`.
 
 ### 3.3 Errors
 
 - A kernel32 function that fails with `FALSE` or `NULL` gives `-GetLastError()`. A new `Fails::Zero` covers `BOOL` and `NULL` results, and `Platform` names its error function with how to read it: an address to load from (`___error`) or the value itself (`GetLastError`).
 - ntdll functions give an `NTSTATUS`. Its intrinsics (#178) give `-RtlNtStatusToDosError(status)` when the status is negative. That is a second import, `RtlNtStatusToDosError`, read the same way.
-- The table gains `e_intr` and `e_pipe`, and a second broken-pipe code `e_pipe_alt`, which replace the literals `-4` and `-32` in shared code. Linux and macOS keep 4 and 32; Windows has no interrupted call (0, which no failure gives) and uses 232 and 109.
+- The table gains `e_intr` and `e_pipe`, and a second broken-pipe code `e_pipe_alt`, which replace the literals `-4` and `-32` in shared code. Linux and macOS keep 4 and 32; Windows has no interrupted call and uses 232 and 109. An `e_intr` of 0 means "none": `interrupted()` is false when `e_intr` is 0, because a success also returns 0.
 - `system_errors()` gains a Windows part. Win32 codes go up to 1460 (`ERROR_TIMEOUT`), so the part is generated from `WINDOWS_ERRORS` as the others are, and `std_rt_errors.rs` checks it against `oska-sys`. **Open:** a 1460-entry part adds about 1.5 KB of read-only text to every executable on every platform. A sparse form (code and wording pairs) is an alternative for #177.
 
 ### 3.4 The stack
@@ -155,9 +156,9 @@ On Linux and macOS, `_start` maps a stack with a guard and switches to it (`stac
 ### 3.5 Faults
 
 - `process_init` calls `AddVectoredExceptionHandler(1, entry)`. `entry` is a small function the backend generates, like `_start`. It takes `EXCEPTION_POINTERS *` in `rcx`, moves it to the backend's first argument register, and calls `std.rt`'s `on_exception(pointers)`.
-- `on_exception` reads the exception code (the first field of `EXCEPTION_RECORD`). For a fault code (access violation 0xC0000005, illegal instruction 0xC000001D, breakpoint 0x80000003, integer divide by zero 0xC0000094, stack overflow 0xC00000FD, and the other `STATUS_*` codes with severity "error"), it writes what stdout holds and a report naming the exception, as `on_fault` does for a signal. It then ends the process with `ExitProcess(code)`, so the exit status is the exception code, as Windows gives a crashed process.
+- `on_exception` reads the exception code (the first field of `EXCEPTION_RECORD`). For a fault code (access violation 0xC0000005, illegal instruction 0xC000001D, breakpoint 0x80000003, integer divide by zero 0xC0000094, stack overflow 0xC00000FD, and the other `STATUS_*` codes with severity "error", that is 0xC0000000 and above, plus 0x80000003 and 0x80000004), it writes what stdout holds and a report naming the exception, as `on_fault` does for a signal. It then ends the process with `ExitProcess(code)`, so the exit status is the exception code, as Windows gives a faulted process. For any other code it returns 0 (`EXCEPTION_CONTINUE_SEARCH`).
 - For any other code (a debugger's or another DLL's first-chance exception), it returns `EXCEPTION_CONTINUE_SEARCH` (0). The generated entry saves and restores `rsi` and `rdi` around the call, since Windows expects them kept. Oska uses no `XMM` register, so nothing else needs saving.
-- `oskac` reports a native process that exits with an `NTSTATUS` error code (0xC0000000 and above) as `E0392`, as it reports a fault signal on Unix. `P0021` is unchanged: the generated code counts calls and panics before the stack runs out.
+- `oskac` reports a native process that exits with an `NTSTATUS` error code (0xC0000000 and above, plus 0x80000003 and 0x80000004) as `E0392`, as it reports a fault signal on Unix. `P0021` is unchanged: the generated code counts calls and panics before the stack runs out.
 
 ### 3.6 The PE writer (`pe.rs`)
 
@@ -180,7 +181,7 @@ On Linux and macOS, `_start` maps a stack with a guard and switches to it (`stac
 
 **Q3. The stack.** (a) **The thread's own stack, sized by `SizeOfStackReserve`, with page probes for frames over 4 KiB.** *Recommended*: no reliance on undocumented TEB fields. (b) Map a stack as on Linux and update the TEB's stack bounds when switching. Writes undocumented structures.
 
-**Q4. Faults.** (a) **A vectored exception handler through a generated entry; exit with the exception code; `oskac` reports codes ≥ 0xC0000000 as `E0392`.** *Recommended.* (b) `SetUnhandledExceptionFilter`. It runs only after Windows unwinds frames, which needs unwind data (`.pdata`) that Oska does not write.
+**Q4. Faults.** (a) **A vectored exception handler through a generated entry; exit with the exception code; `oskac` reports codes ≥ 0xC0000000, and 0x80000003 and 0x80000004, as `E0392`.** *Recommended.* (b) `SetUnhandledExceptionFilter`. It runs only after Windows unwinds frames, which needs unwind data (`.pdata`) that Oska does not write.
 
 **Q5. Random bytes.** (a) **`ProcessPrng` from `bcryptprimitives.dll`: a third DLL, which the spec allows "if kernel32 and ntdll offer none".** They don't document one. It cannot fail ("Always returns TRUE"), and Rust's standard library uses it (**unverified**: from memory of Rust's `library/std/src/sys/pal/windows/rand.rs`, not fetched). *Recommended.* (b) `RtlGenRandom` (advapi32 `SystemFunction036`): its page says it "may be altered or unavailable in subsequent versions". (c) `BCryptGenRandom(NULL, buf, n, BCRYPT_USE_SYSTEM_PREFERRED_RNG)` (bcrypt.dll): one call with constant arguments, but it gives an `NTSTATUS` that can fail.
 
