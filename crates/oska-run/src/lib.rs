@@ -55,6 +55,12 @@ mod testing;
 mod traits;
 mod value;
 
+/// The allocator of every program that runs the interpreter: the
+/// system's, which counts the interpreter thread's heap bytes under
+/// `--max-memory` (`P0040`), and only then (`oska_sys::memory`).
+#[global_allocator]
+static ALLOCATOR: oska_sys::memory::Counting = oska_sys::memory::Counting;
+
 pub use host::{FakeHost, FakeWorld, Host, Output, RealHost, RootHandle, FAKE_SEED};
 pub use interp::MAX_CALL_DEPTH;
 pub use oska_check::limits::Limits;

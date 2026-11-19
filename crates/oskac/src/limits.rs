@@ -1,4 +1,5 @@
-//! The run limits' flags (spec #446): `oskac run --max-output=<bytes>`,
+//! The run limits' flags (spec #446): `oskac run --max-output=<bytes>`
+//! and `--max-memory=<bytes>`,
 //! read into the [`Limits`] both backends take (`oska_check::limits`,
 //! which holds their codes and messages).
 //!
@@ -11,18 +12,19 @@ use oska_check::limits::{Limit, Limits};
 fn flag(limit: Limit) -> &'static str {
     match limit {
         Limit::Output => "--max-output",
+        Limit::Memory => "--max-memory",
     }
 }
 
 /// What `limit`'s value counts, for a malformed value's error.
 fn unit(limit: Limit) -> &'static str {
     match limit {
-        Limit::Output => "bytes",
+        Limit::Output | Limit::Memory => "bytes",
     }
 }
 
 /// Read the command-line argument `arg` into `limits` if it is a limit
-/// flag, `--max-output=<n>`: `None` when it is not one; otherwise the
+/// flag, such as `--max-output=<n>`: `None` when it is not one; otherwise the
 /// error that makes it a usage error, if any: a value that is not a whole
 /// number above 0 (up to the largest 64-bit signed integer), or a limit
 /// given twice.

@@ -16,16 +16,20 @@ pub enum Limit {
     /// `--max-output=<bytes>`: the bytes the program may write to
     /// standard output and standard error together.
     Output,
+    /// `--max-memory=<bytes>`: the bytes the program's live values may
+    /// take, net of frees, counted by each backend's own allocator.
+    Memory,
 }
 
 impl Limit {
     /// Every limit, in the order the usage and the docs list them.
-    pub const ALL: [Limit; 1] = [Limit::Output];
+    pub const ALL: [Limit; 2] = [Limit::Output, Limit::Memory];
 
     /// The panic code a program stops with when it reaches the limit.
     pub fn code(self) -> &'static str {
         match self {
             Limit::Output => codes::OUTPUT_LIMIT,
+            Limit::Memory => codes::MEMORY_LIMIT,
         }
     }
 
@@ -36,6 +40,10 @@ impl Limit {
                 "output limit reached: this write would take standard output and standard \
                  error past {value} bytes (`--max-output={value}`)"
             ),
+            Limit::Memory => format!(
+                "memory limit reached: the program's values take more than {value} bytes \
+                 (`--max-memory={value}`)"
+            ),
         }
     }
 }
@@ -45,6 +53,8 @@ pub mod codes {
     /// The program would have written more than `--max-output` bytes to
     /// standard output and standard error together.
     pub const OUTPUT_LIMIT: &str = "P0041";
+    /// The program's live values took more than `--max-memory` bytes.
+    pub const MEMORY_LIMIT: &str = "P0040";
 }
 
 /// The limits one run is under: `None` for each limit not given, else a
@@ -55,11 +65,16 @@ pub mod codes {
 pub struct Limits {
     /// [`Limit::Output`].
     pub max_output: Option<u64>,
+    /// [`Limit::Memory`].
+    pub max_memory: Option<u64>,
 }
 
 impl Limits {
     /// No limit at all.
-    pub const NONE: Limits = Limits { max_output: None };
+    pub const NONE: Limits = Limits {
+        max_output: None,
+        max_memory: None,
+    };
 
     /// Whether no limit is given.
     pub fn is_empty(&self) -> bool {
@@ -70,6 +85,7 @@ impl Limits {
     pub fn get(&self, limit: Limit) -> Option<u64> {
         match limit {
             Limit::Output => self.max_output,
+            Limit::Memory => self.max_memory,
         }
     }
 
@@ -77,6 +93,7 @@ impl Limits {
     pub fn get_mut(&mut self, limit: Limit) -> &mut Option<u64> {
         match limit {
             Limit::Output => &mut self.max_output,
+            Limit::Memory => &mut self.max_memory,
         }
     }
 }

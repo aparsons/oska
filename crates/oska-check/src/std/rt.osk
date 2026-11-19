@@ -5138,3 +5138,69 @@ pub fn on_exception(pointers: Int) -> Int {
     let _ = rt_sys_exit_process(code)
     0
 }
+
+// ---- Memory limit ----------------------------------------------------------
+//
+// (At the end of the file, so that the byte offsets of the code before
+// it, which `std.rt`'s panic reports name, are the same as without it.)
+//
+// Two words of the runtime's writable data, which the list under "Memory"
+// leaves free: 39, the bytes the program may still allocate under
+// `--max-memory`; 49, the report of its panic (`P0040`), or 0 before
+// `memory_limit_start`.
+//
+// `oskac run --max-memory=<limit>` builds the program so that each call of
+// `alloc`, `try_alloc` and `free`, in the generated code and in `std.rt`
+// alike, calls `counted_alloc`, `counted_try_alloc` or `counted_free` in
+// its place; theirs alone are not redirected. They count each block's
+// bytes, header included, against the limit, and give them back when it
+// is freed. A program built without the flag never calls them.
+
+// Start counting: `limit` bytes are left, and `report` is the panic's
+// (`P0040`). Before this, nothing is checked.
+pub fn memory_limit_start(limit: Int, report: String) {
+    rt_mem_store64(global(39), limit)
+    rt_mem_store64(global(49), rt_mem_text(report))
+}
+
+// The bytes of the block of the object at `object`, header included.
+fn block_bytes(object: Int) -> Int {
+    let class = rt_mem_load64(rt_mem_sub(object, 8))
+    if class < 0 {
+        return rt_mem_sub(0, class)
+    }
+    rt_mem_shl(16, class)
+}
+
+// Count `bytes` more against the limit: past it, panic with its report.
+fn spend_memory(bytes: Int) {
+    let left = rt_mem_sub(rt_mem_load64(global(39)), bytes)
+    let report = rt_mem_load64(global(49))
+    if left < 0 && report != 0 {
+        // Whatever the report's own writes need is not counted again.
+        rt_mem_store64(global(39), 4611686018427387904)
+        panic(rt_mem_as_text(report))
+    }
+    rt_mem_store64(global(39), left)
+}
+
+pub fn counted_alloc(size: Int) -> Int {
+    let object = alloc(size)
+    spend_memory(block_bytes(object))
+    object
+}
+
+// `try_alloc`'s blocks of a size class come from `alloc`, which its own
+// call counts (`counted_alloc`); a mapping of its own is counted here.
+pub fn counted_try_alloc(size: Int) -> Int {
+    let object = try_alloc(size)
+    if object != 0 && rt_mem_load64(rt_mem_sub(object, 8)) < 0 {
+        spend_memory(block_bytes(object))
+    }
+    object
+}
+
+pub fn counted_free(object: Int) {
+    rt_mem_store64(global(39), rt_mem_add(rt_mem_load64(global(39)), block_bytes(object)))
+    free(object)
+}

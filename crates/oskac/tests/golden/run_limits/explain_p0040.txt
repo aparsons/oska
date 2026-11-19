@@ -1,0 +1,25 @@
+P0040: Memory limit reached: the program was run with `oskac run --max-memory=<bytes>`, and its values (text, lists, records, closures) took more than that many bytes, net of what it freed. It is a resource bound, like a timeout: each backend counts with its own allocator, so the two may stop at different points. The interpreter counts every heap byte its thread holds while the program runs, and checks at each call and each loop back-edge, so it spans the call or loop body where it noticed. Native code counts each block its runtime allocates, header included, and stops at the allocation that passes the limit, so it spans `main`'s body. The message names the limit and its value. Without the flag a program has no memory limit. See [Run limits](#run-limits).
+
+Machine-applicable fix: none.
+
+Example, which fails with P0040:
+
+    fn main() {
+        var items: List<String> = []
+        while true {
+            items.push("one more line")
+        }
+    }
+
+Fixed:
+
+    fn main() {
+        var items: List<String> = []
+        var i = 0
+        while i < 100 {
+            items.push("one more line")
+            i = i + 1
+        }
+    }
+
+https://oskalang.dev/codes/P0040

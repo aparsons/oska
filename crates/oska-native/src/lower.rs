@@ -93,6 +93,15 @@ pub const MAX_CALL_DEPTH: u32 = 50_000;
 /// below the deepest frame, and for the entry point's.
 const STACK_RESERVE: u64 = 8 << 20;
 
+/// `std.rt`'s allocator functions, each with the one that calls it and
+/// counts the bytes against `--max-memory` (`P0040`): under the limit,
+/// every request of the first is one of the second.
+const COUNTED_MEMORY: [(&str, &str); 3] = [
+    ("alloc", "counted_alloc"),
+    ("try_alloc", "counted_try_alloc"),
+    ("free", "counted_free"),
+];
+
 /// The words of the runtime's writable data, at `rt_mem_globals()`.
 pub const GLOBALS: u32 = 50;
 
@@ -226,6 +235,7 @@ pub fn program(
         kind,
         target,
         limits,
+        uncounted: false,
         ids: HashMap::new(),
         functions: Vec::new(),
         queue: Vec::new(),
@@ -238,6 +248,11 @@ pub fn program(
     };
     let entry = lowering.entry()?;
     while let Some((instance, id, origin)) = lowering.queue.pop() {
+        lowering.uncounted = matches!(
+            &instance,
+            Instance::Function { source: Source::Runtime, name, .. }
+                if COUNTED_MEMORY.iter().any(|(_, counted)| counted == name)
+        );
         lowering.functions[id] = lowering.function(&instance, origin)?;
         if matches!(
             instance,
@@ -305,6 +320,10 @@ struct Lowering<'p> {
     /// The run limits the program is built under (`oskac run`): none for
     /// `oskac build` and test executables.
     limits: Limits,
+    /// Whether the function being lowered is one of `std.rt`'s counting
+    /// allocator functions ([`COUNTED_MEMORY`]), whose own calls of the
+    /// allocator are not redirected.
+    uncounted: bool,
     /// Every function requested so far.
     ids: HashMap<Instance, FnId>,
     /// The lowered functions, by id; a requested one is a placeholder
@@ -339,6 +358,7 @@ impl<'p> Lowering<'p> {
     /// The id of `instance`, lowered later if it is new. `origin` is the
     /// user code that reached it.
     fn request(&mut self, instance: Instance, origin: Span) -> FnId {
+        let instance = self.counted(instance);
         if let Some(&id) = self.ids.get(&instance) {
             return id;
         }
@@ -346,6 +366,35 @@ impl<'p> Lowering<'p> {
         self.ids.insert(instance.clone(), id);
         self.queue.push((instance, id, origin));
         id
+    }
+
+    /// `instance`, or under `--max-memory` for one of `std.rt`'s allocator
+    /// functions, its counting one ([`COUNTED_MEMORY`]): every call of the
+    /// allocator, in the generated code and in `std.rt` alike, and every
+    /// function value's drop by `free`, counts. Without the limit nothing
+    /// changes.
+    fn counted(&self, instance: Instance) -> Instance {
+        if self.limits.max_memory.is_none() || self.uncounted {
+            return instance;
+        }
+        match instance {
+            Instance::Function {
+                source: Source::Runtime,
+                name,
+                type_args,
+            } => {
+                let name = match COUNTED_MEMORY.iter().find(|(raw, _)| *raw == name) {
+                    Some((_, counted)) => counted.to_string(),
+                    None => name,
+                };
+                Instance::Function {
+                    source: Source::Runtime,
+                    name,
+                    type_args,
+                }
+            }
+            other => other,
+        }
     }
 
     /// The index of `code` in [`Lowering::closures`], added if it is new.
@@ -1985,6 +2034,15 @@ impl<'l, 'p> Body<'l, 'p> {
     /// the interpreter, the call of `main` is not counted.
     fn call_main(&mut self, main: &Function) -> Result<(), Diagnostic> {
         let span = main.body.span;
+        // Under `--max-memory`, the limit and its report, which spans
+        // `main`'s body: the runtime cannot tell which code allocated.
+        if let Some(limit) = self.lowering.limits.max_memory {
+            let (before, after) = self.report(Limit::Memory.code(), span);
+            let report = self.text(&format!("{before}{}{after}", Limit::Memory.message(limit)));
+            // `Limits` holds at most `i64::MAX`.
+            let limit = self.constant(i64::try_from(limit).unwrap_or(i64::MAX));
+            self.call_runtime("memory_limit_start", vec![limit, report], NOWHERE)?;
+        }
         let mut args = Vec::new();
         for param in &main.params {
             if !is_stateless_input(&param.ty) {

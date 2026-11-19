@@ -138,6 +138,7 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0035` | `String.slice` was given indices out of bounds: a start or end below 0 or past the text's length in characters, or a start past the end. Spans the call. Indices count characters (Unicode code points), not bytes. |
 | `P0036` | `String.repeat` was given a negative count. Spans the call. |
 | `P0037` | `String.repeat` would build a text over 256 MiB, so the interpreter panics instead of running out of memory. Spans the call. |
+| `P0040` | Memory limit reached: the program was run with `oskac run --max-memory=<bytes>`, and its values (text, lists, records, closures) took more than that many bytes, net of what it freed. It is a resource bound, like a timeout: each backend counts with its own allocator, so the two may stop at different points. The interpreter counts every heap byte its thread holds while the program runs, and checks at each call and each loop back-edge, so it spans the call or loop body where it noticed. Native code counts each block its runtime allocates, header included, and stops at the allocation that passes the limit, so it spans `main`'s body. The message names the limit and its value. Without the flag a program has no memory limit. See [Run limits](#run-limits). |
 | `P0041` | Output limit reached: the program was run with `oskac run --max-output=<bytes>`, and this write would take what it wrote to standard output and standard error together past that many bytes. The write that would pass the limit writes nothing, so no byte past it reaches either stream. The message names the limit and its value. Every write the program makes counts: `println` on `Stdout` and `Stderr`, `dbg`'s line, and the text of the error `main` returns. The panic report itself does not, but a report that quotes text the program made, as `P0020` quotes the secret's name, quotes no more of it than the limit has left, cut where a character ends and followed by `...`. Spans the call that writes, or `main`'s body for its error. Without the flag a program has no output limit. See [Run limits](#run-limits). |
 
 ### Panic examples
@@ -394,6 +395,28 @@ fn main() {
 }
 ```
 
+#### `P0040`
+
+```oska error=P0040 max-memory=1048576
+fn main() {
+    var items: List<String> = []
+    while true {
+        items.push("one more line")
+    }
+}
+```
+
+```oska fixed=P0040 max-memory=1048576
+fn main() {
+    var items: List<String> = []
+    var i = 0
+    while i < 100 {
+        items.push("one more line")
+        i = i + 1
+    }
+}
+```
+
 #### `P0041`
 
 ```oska error=P0041 max-output=16
@@ -421,10 +444,12 @@ fn main(io: Stdout) {
 | Flag | Limit | Panic |
 | --- | --- | --- |
 | `--max-output=<bytes>` | The bytes the program writes to standard output and standard error together. | `P0041` |
+| `--max-memory=<bytes>` | The bytes the program's values take, net of what it frees, counted by each backend's own allocator. | `P0040` |
 
 - A limit is a whole number above 0. A value of 0, a negative number, or anything that is not a number is a usage error (exit code 2), never "no limit". So is a limit given twice, and a limit on any command but `run`.
 - A run with no limit flag behaves and performs exactly as before: the native executable is the one `oskac build` writes, byte for byte. A limit is opt-in.
 - Natively, the limit is built into the executable `oskac run` makes for that run (the build cache keeps it apart from the one without), and counted in `std.rt` behind the system calls that exist ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)). The two backends stop at the same write, with the same output.
+- `--max-memory` is a resource bound, not a parity promise: each backend counts with its own allocator, so the two may stop at different points, and the report's span differs (see `P0040`). Natively, every allocation and free of the runtime is counted (`std.rt`'s `counted_alloc` and `counted_free`); on the interpreter, the heap bytes of the thread the program runs on, net of frees. Either way the run stops before it holds much more than the limit.
 
 ## Errors and traits
 

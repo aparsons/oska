@@ -143,10 +143,33 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         }
     }
 
-    /// This interpreter, under the run `limits`.
+    /// This interpreter, under the run `limits`. Under `--max-memory`
+    /// this thread's heap bytes are counted from here on.
     pub fn with_limits(mut self, limits: Limits) -> Self {
         self.limits = limits;
+        if limits.max_memory.is_some() {
+            oska_sys::memory::count_this_thread();
+        }
         self
+    }
+
+    /// Under `--max-memory`, a panic with `P0040` at `span` once the heap
+    /// bytes this thread holds, net of frees, pass the limit. The
+    /// interpreter asks at each call and each loop back-edge, so a program
+    /// that allocates without end stops within a step of passing it.
+    #[inline]
+    fn check_memory(&self, span: Span) -> Result<(), Panic> {
+        let Some(limit) = self.limits.max_memory else {
+            return Ok(());
+        };
+        if u64::try_from(oska_sys::memory::counted()).unwrap_or(0) > limit {
+            return Err(Panic::new(
+                Limit::Memory.code(),
+                Limit::Memory.message(limit),
+                span,
+            ));
+        }
+        Ok(())
     }
 
     /// The host the program runs on.
@@ -190,6 +213,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     /// with `P0021` when calls already nest [`MAX_CALL_DEPTH`] deep. Each
     /// successful entry is paired with [`Interpreter::leave`].
     fn enter(&mut self, span: Span) -> Result<(), Panic> {
+        self.check_memory(span)?;
         if self.depth >= MAX_CALL_DEPTH || stack_exhausted() {
             return Err(Panic::new(
                 codes::CALL_DEPTH_EXCEEDED,
@@ -802,6 +826,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     /// Run one iteration of a loop's body. Returns whether the loop goes
     /// on: `false` after a `break`.
     fn loop_body(&mut self, body: &Expr, frame: &mut Frame) -> Result<bool, Unwind> {
+        self.check_memory(body.span)?;
         match self.eval(body, frame) {
             Ok(_) | Err(Unwind::Continue) => Ok(true),
             Err(Unwind::Break) => Ok(false),

@@ -29,8 +29,17 @@
 //!   `// SAFETY:` comment stating the invariant it relies on (clippy's
 //!   `undocumented_unsafe_blocks` and `multiple_unsafe_ops_per_block`).
 //! - Every foreign function is called only from a safe wrapper in this
-//!   crate. Nothing `unsafe` is public.
+//!   crate. Nothing `unsafe` is public but the [`GlobalAlloc`] trait's
+//!   own methods on [`memory::Counting`], which only another crate's
+//!   `unsafe` could call, and every other crate forbids it.
+//!
+//! It also holds [`memory`]: the system allocator with a count of each
+//! thread's heap bytes beside it, for the interpreter's `--max-memory`
+//! run limit (spec #446), since an allocator is `unsafe` to write.
+//!
+//! [`GlobalAlloc`]: std::alloc::GlobalAlloc
 
+pub mod memory;
 mod refusal;
 #[cfg(unix)]
 mod unix;

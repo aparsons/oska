@@ -50,7 +50,7 @@ USAGE:
                                            with a saved baseline (exit code 3
                                            when it widened), or write one
     oskac run [path | -] [--format=json] [--interpret] [--no-cache]
-              [--max-output=<bytes>] [-- args...]
+              [--max-output=<bytes>] [--max-memory=<bytes>] [-- args...]
                                            Check a source file, package or
                                            module on standard input (-) and,
                                            if it has no diagnostics, run it:
@@ -59,7 +59,9 @@ USAGE:
                                            or with --interpret; stop it with
                                            P0041 before it writes more than
                                            the bytes --max-output gives to
-                                           stdout and stderr together
+                                           stdout and stderr together, and
+                                           with P0040 once its values take
+                                           more than --max-memory bytes
     oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
@@ -138,7 +140,7 @@ struct CommandLine {
     /// The name `--event=` gives, for `oskac hook`.
     event: Option<String>,
     target: Option<String>,
-    /// The run limits (`--max-output=<bytes>`), which only `oskac run`
+    /// The run limits (`--max-output=<bytes>`, `--max-memory=<bytes>`), which only `oskac run`
     /// takes.
     limits: oska_check::limits::Limits,
     /// Why a limit flag is malformed or repeated: a usage error.
