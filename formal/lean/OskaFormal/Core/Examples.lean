@@ -27,4 +27,28 @@ example : intResult (-intMax) = .next (.int (-intMax)) := rfl
 /-- `-intMin` overflows: `Neg` of the smallest `Int` panics. -/
 example (P : Program) : Step P (.neg (.int intMin)) (.panic .overflow) := Step.neg
 
+/-- `fun f(x: Int) -> Int { x }`. -/
+def oneParam : Function :=
+  { name := "f", params := [{ type := .int, binds := true }], ret := .int, body := .local_ 0 }
+
+/-- A call with the right arity steps into the body. -/
+example : Step [oneParam] (.call "f" [.int 1]) (.next (.int 1)) :=
+  Step.call rfl (AllValues.cons (IsValue.int 1) AllValues.nil) rfl
+
+/-- A call of `f` with no argument, or with two, takes no step. -/
+example (o : Outcome) : ¬ Step [oneParam] (.call "f" []) o := by
+  intro h
+  obtain ⟨f, e, hf, hi, _⟩ := call_step AllValues.nil h
+  simp [Program.find?, oneParam] at hf
+  cases hf
+  cases hi
+
+example (o : Outcome) : ¬ Step [oneParam] (.call "f" [.int 1, .int 2]) o := by
+  intro h
+  have hvs := AllValues.cons (IsValue.int 1) (AllValues.cons (IsValue.int 2) AllValues.nil)
+  obtain ⟨f, e, hf, hi, _⟩ := call_step hvs h
+  simp [Program.find?, oneParam] at hf
+  cases hf
+  cases hi
+
 end OskaFormal.Core

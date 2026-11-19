@@ -61,12 +61,14 @@ mutual
 end
 
 /-- A function's body with its arguments' values put for the slots its
-parameters bind; the value of a parameter that binds no slot is dropped. -/
-def instantiate : List Param → List Expr → Expr → Expr
-  | [], _, body => body
-  | _ :: _, [], body => body
+parameters bind; the value of a parameter that binds no slot is dropped.
+`none` when the number of arguments is not the number of parameters, so a
+call of the wrong arity takes no step. -/
+def instantiate : List Param → List Expr → Expr → Option Expr
+  | [], [], body => some body
   | p :: ps, v :: vs, body =>
     if p.binds then instantiate ps vs (Expr.subst v body) else instantiate ps vs body
+  | _, _, _ => none
 
 /-- Why a running program panics. -/
 inductive PanicKind where
@@ -145,9 +147,9 @@ inductive Step (P : Program) : Expr → Outcome → Prop where
   | callArg {name : String} {vs rest : List Expr} {e : Expr} {o : Outcome} :
       AllValues vs → Step P e o →
       Step P (.call name (vs ++ e :: rest)) (o.map fun e' => .call name (vs ++ e' :: rest))
-  | call {name : String} {f : Function} {vs : List Expr} :
-      P.find? name = some f → AllValues vs →
-      Step P (.call name vs) (.next (instantiate f.params vs f.body))
+  | call {name : String} {f : Function} {vs : List Expr} {body : Expr} :
+      P.find? name = some f → AllValues vs → instantiate f.params vs f.body = some body →
+      Step P (.call name vs) (.next body)
   | ifCond {c th : Expr} {el : Option Expr} {o : Outcome} :
       Step P c o → Step P (.if_ c th el) (o.map fun c' => .if_ c' th el)
   | ifTrue {th el : Expr} : Step P (.if_ (.bool true) th (some el)) (.next th)
@@ -170,5 +172,26 @@ inductive Step (P : Program) : Expr → Outcome → Prop where
         (.next (.block (Expr.substStmts v ss) (Expr.substOpt v val)))
   | blockLetDrop {t : Ty} {v : Expr} {ss : List Stmt} {val : Option Expr} :
       IsValue v → Step P (.block (.let_ false t v :: ss) val) (.next (.block ss val))
+
+/-- A value takes no step. -/
+theorem value_no_step {P : Program} {v : Expr} {o : Outcome} (hv : IsValue v) :
+    ¬ Step P v o := by
+  intro h
+  cases hv <;> cases h
+
+theorem AllValues.mid {vs rest : List Expr} {e : Expr} :
+    AllValues (vs ++ e :: rest) → IsValue e := by
+  induction vs with
+  | nil => intro h; cases h with | cons he _ => exact he
+  | cons _ _ ih => intro h; cases h with | cons _ hs => exact ih hs
+
+/-- A call whose arguments are all values steps only into the called
+function's body, so a call of the wrong arity takes no step. -/
+theorem call_step {P : Program} {name : String} {vs : List Expr} {o : Outcome}
+    (hvs : AllValues vs) (h : Step P (.call name vs) o) :
+    ∃ f e, P.find? name = some f ∧ instantiate f.params vs f.body = some e ∧ o = .next e := by
+  cases h with
+  | callArg _ hs => exact absurd hs (value_no_step (AllValues.mid hvs))
+  | call hf _ hi => exact ⟨_, _, hf, hi, rfl⟩
 
 end OskaFormal.Core

@@ -72,6 +72,9 @@ inductive Typed (P : Program) : List Ty → Goal → Prop where
   | ifElse {Γ : List Ty} {c th el : Expr} {t : Ty} :
       Typed P Γ (.expr c .bool) → Typed P Γ (.expr th t) → Typed P Γ (.expr el t) →
       Typed P Γ (.expr (.if_ c th (some el)) t)
+  /-- An `if` with no `else` has type `()` whatever the type of `then`,
+  whose value is dropped. The checker (`crates/oska-check/src/body.rs`)
+  types it the same way. -/
   | ifNoElse {Γ : List Ty} {c th : Expr} {t : Ty} :
       Typed P Γ (.expr c .bool) → Typed P Γ (.expr th t) →
       Typed P Γ (.expr (.if_ c th none) .unit)

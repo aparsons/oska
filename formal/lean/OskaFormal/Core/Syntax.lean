@@ -66,7 +66,9 @@ structure Function where
 /-- A program of Oska Core: its functions, in source order. -/
 abbrev Program := List Function
 
-/-- The function a `Call` of `name` reaches: the first of that name. -/
+/-- The function a `Call` of `name` reaches: the first of that name. The
+checker refuses two functions of one name, so in a checked program it is
+the only one. -/
 def Program.find? : Program → String → Option Function
   | [], _ => none
   | f :: fs, name => if f.name = name then some f else Program.find? fs name

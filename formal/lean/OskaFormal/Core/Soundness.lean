@@ -104,18 +104,20 @@ theorem typed_subst {v : Expr} {u : Ty} (hv : IsValue v) (hvt : Typed P [] (.exp
 /-- A function's body, with closed values of its parameters' types put for
 the slots they bind, is closed and has the body's type. -/
 theorem typed_instantiate :
-    ∀ (ps : List Param) {vs : List Expr} {body : Expr} {t : Ty},
+    ∀ (ps : List Param) {vs : List Expr} {body e : Expr} {t : Ty},
       Typed P (bindingTypes ps) (.expr body t) →
       Typed P [] (.args vs (ps.map Param.type)) → AllValues vs →
-      Typed P [] (.expr (instantiate ps vs body) t) := by
+      instantiate ps vs body = some e → Typed P [] (.expr e t) := by
   intro ps
   induction ps with
   | nil =>
-    intro vs body t hb hargs _
+    intro vs body e t hb hargs _ hi
     cases hargs
+    simp only [instantiate, Option.some.injEq] at hi
+    subst hi
     exact hb
   | cons p ps ih =>
-    intro vs body t hb hargs hvals
+    intro vs body e t hb hargs hvals hi
     cases hargs with
     | argsCons hv hrest =>
       cases hvals with
@@ -123,12 +125,35 @@ theorem typed_instantiate :
         cases hbinds : p.binds with
         | true =>
           simp only [bindingTypes, hbinds] at hb
-          simp only [instantiate, hbinds]
-          exact ih (typed_subst hval hv hb _ rfl) hrest hvals
+          simp only [instantiate, hbinds] at hi
+          exact ih (typed_subst hval hv hb _ rfl) hrest hvals hi
         | false =>
           simp only [bindingTypes, hbinds] at hb
-          simp only [instantiate, hbinds]
-          exact ih hb hrest hvals
+          simp only [instantiate, hbinds] at hi
+          exact ih hb hrest hvals hi
+
+/-- Arguments typed against a function's parameters are as many as its
+parameters, so the call can put them in. -/
+theorem instantiate_some :
+    ∀ (ps : List Param) {Γ : List Ty} {vs : List Expr} {body : Expr},
+      Typed P Γ (.args vs (ps.map Param.type)) → ∃ e, instantiate ps vs body = some e := by
+  intro ps
+  induction ps with
+  | nil =>
+    intro Γ vs body hargs
+    cases hargs
+    exact ⟨body, rfl⟩
+  | cons p ps ih =>
+    intro Γ vs body hargs
+    cases hargs with
+    | argsCons _ hrest =>
+      cases hbinds : p.binds with
+      | true =>
+        simp only [instantiate, hbinds]
+        exact ih hrest
+      | false =>
+        simp only [instantiate, hbinds]
+        exact ih hrest
 
 /-! ## Argument lists -/
 
@@ -220,13 +245,13 @@ theorem evalBinary_some {op : BinOp} {a t : Ty} {l r : Expr}
 /-- What progress says about a closed judgment: an expression is a value
 or steps, an argument list is all values or has a first argument that is
 not a value and steps, and a block steps. -/
-def Progress (P : Program) : Goal → Prop
+def ProgressFor (P : Program) : Goal → Prop
   | .expr e _ => IsValue e ∨ ∃ o, Step P e o
   | .args es _ =>
     AllValues es ∨ ∃ vs e rest o, es = vs ++ e :: rest ∧ AllValues vs ∧ Step P e o
   | .block ss val _ => ∃ o, Step P (.block ss val) o
 
-theorem progress_goal : ∀ {Γ : List Ty} {j : Goal}, Typed P Γ j → Γ = [] → Progress P j := by
+theorem progress_goal : ∀ {Γ : List Ty} {j : Goal}, Typed P Γ j → Γ = [] → ProgressFor P j := by
   intro Γ j h
   induction h with
   | unit => intro _; exact Or.inl IsValue.unit
@@ -279,11 +304,12 @@ theorem progress_goal : ∀ {Γ : List Ty} {j : Goal}, Typed P Γ j → Γ = [] 
           · exact Or.inr ⟨_, Step.impliesTrue⟩
         | _ => simp [BinOp.isLogical] at hlog
     · exact Or.inr ⟨_, Step.binaryLhs hs⟩
-  | call hf _ ih =>
+  | call hf hargs ih =>
     intro hΓ
     subst hΓ
     rcases ih rfl with hall | ⟨vs, e, rest, o, rfl, hvs, hs⟩
-    · exact Or.inr ⟨_, Step.call hf hall⟩
+    · obtain ⟨_, hi⟩ := instantiate_some _ hargs
+      exact Or.inr ⟨_, Step.call hf hall hi⟩
     · exact Or.inr ⟨_, Step.callArg hvs hs⟩
   | ifElse hc _ _ ihc _ _ =>
     intro hΓ
@@ -388,13 +414,13 @@ theorem preservation (hP : ProgramTyped P) {e : Expr} {o : Outcome} (hs : Step P
       refine (ih he).map fun _ h => Typed.call hf ?_
       rw [hts]
       exact args_append _ h₁ (Typed.argsCons h h₂)
-  | call hf hvs =>
+  | call hf hvs hi =>
     intro t ht
     cases ht with
     | call hf' hargs =>
       rw [hf] at hf'
       cases hf'
-      exact typed_instantiate _ (hP _ _ hf) hargs hvs
+      exact typed_instantiate _ (hP _ _ hf) hargs hvs hi
   | ifCond _ ih =>
     intro t ht
     cases ht with
