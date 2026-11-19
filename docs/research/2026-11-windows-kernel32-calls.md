@@ -186,7 +186,7 @@ On Linux and macOS, `_start` maps a stack with a guard and switches to it (`stac
 
 **Q6. Console output.** (a) **`WriteConsoleW` with UTF-16 converted in Oska when stdout or stderr is a console, `WriteFile` with the exact bytes otherwise.** *Recommended*: correct text on any code page, and byte-exact output to files and pipes. (b) `SetConsoleOutputCP(65001)` at start. Changes the user's console for every process after the program ends.
 
-**Q7. The record.** (a) **A new ADR 0018, "On Windows, a system-call intrinsic is one kernel32 or ntdll call", which amends ADR 0015 for Windows** (several libraries, `GetLastError` as a value, and the `windows` field). *Recommended*, as ADR 0015 amended ADR 0013. (b) Edit ADR 0015.
+**Q7. The record.** (a) **A new ADR 0020, "On Windows, a system-call intrinsic is one kernel32 or ntdll call", which amends ADR 0015 for Windows** (several libraries, `GetLastError` as a value, and the `windows` field). *Recommended*, as ADR 0015 amended ADR 0013. (b) Edit ADR 0015.
 
 **Q8. How #176 is cut.** (a) **#176: the PE writer, the Windows `LibCall` convention, the Windows bodies for the standard streams, memory, arguments, exit and faults, and a `#[cfg(windows)]` test in `oskac` that runs small programs on `windows-latest` and compares them with the interpreter. #177: environment, stdin, clock, random, the console path, and the differential suite. #178: confinement.** *Recommended*: small programs need start-up, memory, stdout and exit, and nothing else works without them.
 
