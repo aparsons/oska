@@ -1,9 +1,9 @@
-//! Programs in Oska Core (ADR 0018, #425): functions, `let`, `if`, `Int`
-//! and `Bool`, each a whole literal, so that `lean_reference.rs` also runs
-//! them on the Lean reference and compares. A program in Oska Core cannot
-//! print, so each one shows what it computed by how it ends: `check`
-//! panics with `P0004` on a false condition, and a run that returns
-//! cleanly passed every check.
+//! Programs in Oska Core (ADR 0018, #425, #426): functions, `let`, `if`,
+//! `Int` and `Bool`, structs, enums and `match`, each a whole literal, so
+//! that `lean_reference.rs` also runs them on the Lean reference and
+//! compares. A program in Oska Core cannot print, so each one shows what
+//! it computed by how it ends: `check` panics with `P0004` on a false
+//! condition, and a run that returns cleanly passed every check.
 //!
 //! Each program repeats its preamble (`fail`, `check`) instead of
 //! building it with `format!`: `lean_reference.rs` collects only whole
@@ -296,5 +296,299 @@ fn main() {
 ",
         "P0004",
         "1 / zero",
+    );
+}
+
+// ---- Structs, enums and `match` (#426) -----------------------------------
+
+#[test]
+fn structs_are_built_and_their_fields_read() {
+    assert_runs(
+        "fn fail() {
+    let zero = 0
+    let _ = 1 / zero
+}
+
+fn check(ok: Bool) {
+    if !ok {
+        fail()
+    }
+}
+
+struct Point { x: Int, y: Int }
+
+struct Segment { from: Point, to: Point, solid: Bool }
+
+fn length2(s: Segment) -> Int {
+    let dx = s.to.x - s.from.x
+    let dy = s.to.y - s.from.y
+    dx * dx + dy * dy
+}
+
+fn origin() -> Point {
+    Point(x: 0, y: 0)
+}
+
+fn main() {
+    let p = Point(x: 3, y: 4)
+    check(p.x == 3 && p.y == 4)
+    let s = Segment(from: origin(), to: p, solid: true)
+    check(length2(s) == 25)
+    check(s.solid && s.from.x == 0 && s.to.y == 4)
+    let q = p
+    check(q.x + q.y == 7)
+}
+",
+        &[],
+        "",
+    );
+}
+
+#[test]
+fn match_takes_the_first_arm_whose_pattern_and_guard_hold() {
+    assert_runs(
+        "fn fail() {
+    let zero = 0
+    let _ = 1 / zero
+}
+
+fn check(ok: Bool) {
+    if !ok {
+        fail()
+    }
+}
+
+enum Shape {
+    Dot,
+    Square(Int),
+    Rect { w: Int, h: Int },
+}
+
+fn area(s: Shape) -> Int {
+    match s {
+        Shape.Dot => 0
+        Shape.Square(n) => n * n
+        Shape.Rect(w: w, h: h) => w * h
+    }
+}
+
+fn describe(s: Shape) -> Int {
+    match s {
+        Shape.Square(n) if n > 100 => 3
+        Shape.Square(n) if n > 10 => 2
+        Shape.Square(_) => 1
+        Shape.Rect(w: 0, h: _) => 0
+        Shape.Rect(w: _, h: 0) => 0
+        _ => -1
+    }
+}
+
+fn main() {
+    check(area(Shape.Dot) == 0)
+    check(area(Shape.Square(5)) == 25)
+    check(area(Shape.Rect(w: 2, h: 7)) == 14)
+    check(describe(Shape.Square(500)) == 3)
+    check(describe(Shape.Square(50)) == 2)
+    check(describe(Shape.Square(5)) == 1)
+    check(describe(Shape.Rect(w: 0, h: 9)) == 0)
+    check(describe(Shape.Rect(w: 9, h: 0)) == 0)
+    check(describe(Shape.Rect(w: 9, h: 9)) == -1)
+    check(describe(Shape.Dot) == -1)
+}
+",
+        &[],
+        "",
+    );
+}
+
+#[test]
+fn match_on_literals_nested_patterns_and_bindings() {
+    assert_runs(
+        "fn fail() {
+    let zero = 0
+    let _ = 1 / zero
+}
+
+fn check(ok: Bool) {
+    if !ok {
+        fail()
+    }
+}
+
+struct Point { x: Int, y: Int }
+
+enum Tagged {
+    At(Point),
+    Flag(Bool),
+    Nothing,
+}
+
+fn sign(n: Int) -> Int {
+    match n {
+        0 => 0
+        -1 => -1
+        other => if other > 0 { 1 } else { -2 }
+    }
+}
+
+fn flip(b: Bool) -> Bool {
+    match b {
+        true => false
+        false => true
+    }
+}
+
+fn on_axis(t: Tagged) -> Bool {
+    match t {
+        Tagged.At(Point(x: 0, y: _)) => true
+        Tagged.At(Point(x: _, y: 0)) => true
+        Tagged.At(p) => p.x == p.y
+        Tagged.Flag(b) => b
+        Tagged.Nothing => false
+    }
+}
+
+fn unit() -> Int {
+    match () {
+        () => 7
+    }
+}
+
+fn main() {
+    check(sign(0) == 0 && sign(-1) == -1 && sign(9) == 1 && sign(-9) == -2)
+    check(flip(false) && !flip(true))
+    check(on_axis(Tagged.At(Point(x: 0, y: 3))))
+    check(on_axis(Tagged.At(Point(x: 3, y: 0))))
+    check(on_axis(Tagged.At(Point(x: 2, y: 2))))
+    check(!on_axis(Tagged.At(Point(x: 1, y: 2))))
+    check(on_axis(Tagged.Flag(true)) && !on_axis(Tagged.Flag(false)))
+    check(!on_axis(Tagged.Nothing))
+    check(unit() == 7)
+}
+",
+        &[],
+        "",
+    );
+}
+
+#[test]
+fn a_recursive_enum_is_built_and_folded() {
+    assert_runs(
+        "fn fail() {
+    let zero = 0
+    let _ = 1 / zero
+}
+
+fn check(ok: Bool) {
+    if !ok {
+        fail()
+    }
+}
+
+enum Ints {
+    Empty,
+    Cons(Int, Ints),
+}
+
+fn range(from: Int, to: Int) -> Ints {
+    if from >= to {
+        Ints.Empty
+    } else {
+        Ints.Cons(from, range(from + 1, to))
+    }
+}
+
+fn sum(xs: Ints) -> Int {
+    match xs {
+        Ints.Empty => 0
+        Ints.Cons(x, rest) => x + sum(rest)
+    }
+}
+
+fn evens(xs: Ints) -> Int {
+    match xs {
+        Ints.Empty => 0
+        Ints.Cons(x, rest) if x % 2 == 0 => 1 + evens(rest)
+        Ints.Cons(_, rest) => evens(rest)
+    }
+}
+
+fn main() {
+    let xs = range(0, 100)
+    check(sum(xs) == 4950)
+    check(evens(xs) == 50)
+    check(sum(Ints.Empty) == 0)
+}
+",
+        &[],
+        "",
+    );
+}
+
+#[test]
+fn a_guard_that_panics_panics_before_any_later_arm() {
+    assert_panics(
+        "fn main() {
+    let zero = 0
+    let n = match 5 {
+        x if x / zero == 0 => 1
+        _ => 2
+    }
+}
+",
+        "P0004",
+        "x / zero",
+    );
+}
+
+/// The checker takes a struct's labels only in declaration order
+/// (`E0225`), so the order written is the declaration order, and the
+/// fields are built in it, left to right.
+#[test]
+fn fields_are_built_left_to_right_in_declaration_order() {
+    assert_panics(
+        "struct Pair { a: Int, b: Int }
+
+fn overflow() -> Int {
+    let max = 9223372036854775807
+    max + 1
+}
+
+fn divide() -> Int {
+    let zero = 0
+    1 / zero
+}
+
+fn main() {
+    let p = Pair(a: divide(), b: overflow())
+}
+",
+        "P0004",
+        "1 / zero",
+    );
+}
+
+#[test]
+fn an_arm_body_that_overflows_panics_with_p0001() {
+    assert_panics(
+        "enum Op {
+    Double(Int),
+    Keep(Int),
+}
+
+fn apply(op: Op) -> Int {
+    match op {
+        Op.Double(n) => n * 2
+        Op.Keep(n) => n
+    }
+}
+
+fn main() {
+    let big = apply(Op.Keep(9223372036854775807))
+    let bigger = apply(Op.Double(big))
+}
+",
+        "P0001",
+        "n * 2",
     );
 }

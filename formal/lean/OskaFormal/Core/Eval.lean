@@ -16,22 +16,55 @@ is one `Step`s reach, and so is a panic.
 
 namespace OskaFormal.Core
 
-/-- Whether an expression is a value: `()`, an integer or a boolean. -/
-def Expr.isValue : Expr → Bool
-  | .unit | .int _ | .bool _ => true
-  | _ => false
+mutual
+  /-- Whether an expression is a value: `()`, an integer, a boolean, or a
+  struct or variant whose fields are values. -/
+  def Expr.isValue : Expr → Bool
+    | .unit | .int _ | .bool _ => true
+    | .construct _ _ fs => Expr.allValues fs
+    | _ => false
 
-theorem Expr.isValue_iff {e : Expr} : e.isValue = true ↔ IsValue e := by
-  constructor
-  · intro h
-    cases e <;> simp [Expr.isValue] at h <;> constructor
-  · intro h
-    cases h <;> rfl
+  /-- Whether every expression of a list is a value. -/
+  def Expr.allValues : List Expr → Bool
+    | [] => true
+    | e :: es => e.isValue && Expr.allValues es
+end
 
-/-- Whether every expression of a list is a value. -/
-def Expr.allValues : List Expr → Bool
-  | [] => true
-  | e :: es => e.isValue && Expr.allValues es
+theorem Expr.isValue_sound : ∀ {e : Expr}, e.isValue = true → IsValue e := by
+  intro e
+  induction e using Expr.isValue.induct
+    (motive_2 := fun es => Expr.allValues es = true → AllValues es) with
+  | case1 => intro _; exact IsValue.unit
+  | case2 => intro _; exact IsValue.int _
+  | case3 => intro _; exact IsValue.bool _
+  | case4 _ _ fs ih =>
+    intro h
+    simp only [Expr.isValue] at h
+    exact IsValue.construct (ih h).forall
+  | case5 e h1 h2 h3 h4 =>
+    intro h
+    cases e <;> simp_all [Expr.isValue]
+  | case6 => exact AllValues.nil
+  | case7 e es ih₁ ih₂ h =>
+    simp only [Expr.allValues, Bool.and_eq_true] at h
+    exact AllValues.cons (ih₁ h.1) (ih₂ h.2)
+
+theorem Expr.isValue_complete {e : Expr} (h : IsValue e) : e.isValue = true := by
+  induction h with
+  | unit => rfl
+  | int _ => rfl
+  | bool _ => rfl
+  | @construct _ _ fs hfs ih =>
+    simp only [Expr.isValue]
+    clear hfs
+    induction fs with
+    | nil => rfl
+    | cons e es ihs =>
+      simp only [Expr.allValues, Bool.and_eq_true]
+      exact ⟨ih e List.mem_cons_self, ihs fun e' he' => ih e' (List.mem_cons_of_mem _ he')⟩
+
+theorem Expr.isValue_iff {e : Expr} : e.isValue = true ↔ IsValue e :=
+  ⟨Expr.isValue_sound, Expr.isValue_complete⟩
 
 theorem Expr.allValues_iff {es : List Expr} : Expr.allValues es = true ↔ AllValues es := by
   induction es with
@@ -62,6 +95,24 @@ def stepCall (P : Program) (name : String) (vs : List Expr) : Option Outcome :=
   match P.find? name with
   | some f => (instantiate f.params vs f.body).map .next
   | none => none
+
+/-- The step of a field access once its base is the value `b`: to the
+field, when `b` is a struct. -/
+def stepField : Expr → Nat → Option Outcome
+  | .construct _ none fs, i => (fs[i]?).map .next
+  | _, _ => none
+
+/-- The step of a `match` once its scrutinee is the value `v`: skip the
+first arm when `v` does not match its pattern, else take its body, or
+test its guard first. -/
+def stepMatch (v : Expr) : List Arm → Option Outcome
+  | [] => none
+  | .mk p g body :: rest =>
+    match matchPat p v, g with
+    | none, _ => some (.next (.match_ v rest))
+    | some bs, none => some (.next (Expr.substAll bs body))
+    | some bs, some g =>
+      some (.next (.if_ (Expr.substAll bs g) (Expr.substAll bs body) (some (.match_ v rest))))
 
 mutual
   /-- One step of a closed expression in program `P`, as a function: the
@@ -95,6 +146,16 @@ mutual
       | .bool false, none => some (.next .unit)
       | c, el => (step P c).map (·.map fun c' => .if_ c' th el)
     | .block ss val => stepBlock P ss val
+    | .construct t var fs =>
+      match stepArgs P fs with
+      | some (vs, o, rest) => some (o.map fun e' => .construct t var (vs ++ e' :: rest))
+      | none => none
+    | .field b i =>
+      if b.isValue then stepField b i
+      else (step P b).map (·.map fun b' => .field b' i)
+    | .match_ sc arms =>
+      if sc.isValue then stepMatch sc arms
+      else (step P sc).map (·.map fun sc' => .match_ sc' arms)
 
   /-- The step of the first argument of a list that is not a value: the
   values before it, its outcome, and the arguments after it. `none` when
@@ -135,6 +196,27 @@ private theorem map_eq_some_inv {α β : Type} {f : α → β} {x : Option α} {
   cases x with
   | none => cases h
   | some a => exact ⟨a, rfl, Option.some.inj h⟩
+
+theorem stepField_sound {P : Program} {b : Expr} {i : Nat} {o : Outcome} (hb : IsValue b)
+    (h : stepField b i = some o) : Step P (.field b i) o := by
+  unfold stepField at h
+  split at h
+  · obtain ⟨v, hv, rfl⟩ := map_eq_some_inv h
+    cases hb with
+    | construct hfs => exact Step.field (AllValues.of_forall hfs) hv
+  · cases h
+
+theorem stepMatch_sound {P : Program} {v : Expr} {arms : List Arm} {o : Outcome} (hv : IsValue v)
+    (h : stepMatch v arms = some o) : Step P (.match_ v arms) o := by
+  cases arms with
+  | nil => cases h
+  | cons arm rest =>
+    obtain ⟨p, g, body⟩ := arm
+    simp only [stepMatch] at h
+    split at h <;> cases h
+    · next hm => exact Step.matchSkip hv hm
+    · next hm => exact Step.matchArm hv hm
+    · next hm => exact Step.matchGuard hv hm
 
 /-- **Soundness of `step`.** Every step `step` takes is a step of the
 semantics. -/
@@ -211,6 +293,33 @@ theorem step_sound {P : Program} : ∀ {e : Expr} {o : Outcome}, step P e = some
     intro o h
     rw [step] at h
     exact ih _ h
+  next t var fs vs o' rest hargs ih =>
+    intro o h
+    simp only [step, hargs, Option.some.injEq] at h
+    subst h
+    obtain ⟨e, rfl, hvs, hs⟩ := ih _ _ _ hargs
+    exact Step.constructArg hvs hs
+  next t var fs hnone _ =>
+    intro o h
+    simp [step, hnone] at h
+  next b i hb =>
+    intro o h
+    simp only [step, hb, ite_true] at h
+    exact stepField_sound (Expr.isValue_iff.mp hb) h
+  next b i hb ih =>
+    intro o h
+    simp only [step, hb, ite_false, Bool.false_eq_true] at h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
+    exact Step.fieldBase (ih hs)
+  next sc arms hsc =>
+    intro o h
+    simp only [step, hsc, ite_true] at h
+    exact stepMatch_sound (Expr.isValue_iff.mp hsc) h
+  next sc arms hsc ih =>
+    intro o h
+    simp only [step, hsc, ite_false, Bool.false_eq_true] at h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
+    exact Step.matchScrutinee (ih hs)
   next vs o rest h => simp [stepArgs] at h
   next e es he ih vs o rest h =>
     simp only [stepArgs, he, ite_true] at h
@@ -318,12 +427,16 @@ theorem step_complete {P : Program} {e : Expr} {o : Outcome} (h : Step P e o) :
   | blockLetArg hs ih => simp [step, stepBlock, hs.not_value, ih]
   | blockLetBind hv => simp [step, stepBlock, Expr.isValue_iff.mpr hv]
   | blockLetDrop hv => simp [step, stepBlock, Expr.isValue_iff.mpr hv]
-
-/-- Zero or more steps of the semantics that each lead to a next
-expression. -/
-inductive Steps (P : Program) : Expr → Expr → Prop where
-  | refl (e : Expr) : Steps P e e
-  | next {e e' e'' : Expr} : Step P e (.next e') → Steps P e' e'' → Steps P e e''
+  | constructArg hvs hs ih => simp [step, stepArgs_mid hvs hs.not_value ih]
+  | fieldBase hs ih => simp [step, hs.not_value, ih]
+  | @field type fs _ _ hvs he =>
+    have hv : (Expr.construct type none fs).isValue = true :=
+      Expr.isValue_iff.mpr (IsValue.construct hvs.forall)
+    simp [step, hv, stepField, he]
+  | matchScrutinee hs ih => simp [step, hs.not_value, ih]
+  | matchSkip hv hm => simp [step, Expr.isValue_iff.mpr hv, stepMatch, hm]
+  | matchArm hv hm => simp [step, Expr.isValue_iff.mpr hv, stepMatch, hm]
+  | matchGuard hv hm => simp [step, Expr.isValue_iff.mpr hv, stepMatch, hm]
 
 /-- How a run of the Lean reference ends. -/
 inductive RunResult where
