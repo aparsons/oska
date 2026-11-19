@@ -48,6 +48,10 @@ _Avoid_: dead capability, over-privilege (for this concept)
 A saved record of a program's authority report that later reports are compared with. It is committed with the program, and updating it is how a widening is approved.
 _Avoid_: authority snapshot, authority lockfile
 
+**Authority grant**:
+The most authority an embedder allows one piece of code to have for one run. Unlike an authority baseline, it is set by the embedder, is not committed with the code, and cannot be updated by the code's author: code whose authority goes past it is refused, never approved.
+_Avoid_: grant file, sandbox policy, allowlist (for this concept)
+
 **Pure function**:
 A function with no capability-bearing parameters and no parameter whose type is or holds a bounded type parameter, whose type argument could be capability-bearing. It cannot perform effects, and it is deterministic.
 
@@ -151,7 +155,11 @@ _Avoid_: OS
 The rule that a feature is done only when it works natively, with the same output and the same security guarantees, on every supported platform. Where operating systems differ, Oska defines the result: its own error wording, `/` in paths, no newline translation and its own exit codes.
 
 **Host**:
-The supported platform `oskac` itself is running on.
+The supported platform `oskac` itself is running on. Unlike an embedder, it is a platform, not a program.
+
+**Embedder**:
+A program outside Oska that runs code a model wrote, in a sandbox it controls, and supplies the tools that code may call, as code-mode agents do. Oska meets an embedder as a tool provider, as the language of the model's code, or as a checker of that code.
+_Avoid_: host, code-mode host, MCP host (for this concept), agent harness
 
 **Target platform**:
 The supported platform an executable is built for. Any host can build for any target platform, and the same program built by the same `oskac` gives the same bytes on every host.
