@@ -601,6 +601,10 @@ if step "cross-build manifest tests" --fast-when 'scripts/cross-build/*'; then
   bash scripts/cross-build/test.sh
 fi
 
+if step "cargo cache tests" --fast-when 'scripts/cargo-cache/*'; then
+  bash scripts/cargo-cache/test.sh
+fi
+
 if step "build slot tests" --fast-when 'scripts/build-slots/*'; then
   bash scripts/build-slots/test.sh
 fi
