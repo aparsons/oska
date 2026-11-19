@@ -3,19 +3,24 @@
 (* parallel-tasks.md beside it is the design this model checks, in its     *)
 (* section "Channels and select".                                          *)
 (*                                                                         *)
-(* The scheduler is ScopedTasks': a fixed pool of workers runs ready      *)
-(* tasks, and a task that waits parks, giving its worker back. The task    *)
-(* tree is fixed to keep TLC fast: `main` opens one scope and spawns the   *)
-(* other tasks into it at the start, and its last step ends the scope,     *)
-(* which waits for them. ScopedTasks checks spawn, join and scopes in      *)
-(* general; this model adds the waits that channels bring.                 *)
+(* The scheduler is a copy of ScopedTasks' (Schedule, parking, the end of *)
+(* a scope that waits for its tasks): a fixed pool of workers runs ready   *)
+(* tasks, and a task that waits parks, giving its worker back. It is a     *)
+(* copy, not EXTENDS ScopedTasks, because ScopedTasks' open set of scopes, *)
+(* spawns and joins times channels would not finish in CI. A change to    *)
+(* ScopedTasks' scheduler must be mirrored here. The task tree is fixed:  *)
+(* `main` opens one scope and spawns the other tasks into it at the start, *)
+(* and its last step ends the scope, which waits for them. ScopedTasks     *)
+(* checks spawn, join and scopes in general; this model adds the waits    *)
+(* that channels bring.                                                    *)
 (*                                                                         *)
 (* Every program up to the bound is in the state space: every task holds   *)
 (* every channel, and a running task may at any step send on, receive      *)
 (* from or close any channel, `select` over any two or more channels, or   *)
-(* end. Channel c has capacity c - 1, so channel 1 is a rendezvous and     *)
-(* channel 2 buffers one message. Each message sent is a new id, so TLC    *)
-(* can tell where every message is.                                        *)
+(* end. Channel 1 is a rendezvous and channel 2 holds BufferSize         *)
+(* messages: 1 in Channels.cfg, 2 in ChannelsBuffer2.cfg, which together   *)
+(* reach a full buffer with a parked sender and a buffer of two. Each      *)
+(* message sent is a new id, so TLC can tell where every message is.       *)
 (*                                                                         *)
 (* A channel operation is one atomic step, as under the channel's lock. A  *)
 (* `select` is two steps: it scans its arms and picks a ready one, then it *)
@@ -30,7 +35,8 @@ EXTENDS Naturals, Sequences, FiniteSets
 
 CONSTANTS
   MaxTasks,     \* task ids 0 .. MaxTasks-1; task 0 is `main`
-  NumChannels,  \* channel ids 1 .. NumChannels; channel c holds c - 1
+  NumChannels,  \* channel ids 1 .. NumChannels
+  BufferSize,   \* channel 1 is a rendezvous; the others hold BufferSize
   MaxMsgs,      \* the most sends in one run; message ids 1 .. MaxMsgs
   Workers,      \* the scheduler's workers (OS threads)
   LockArms,     \* TRUE: a select holds its arms' locks from scan to take
@@ -41,7 +47,7 @@ Tasks == 0 .. MaxTasks - 1
 Chans == 1 .. NumChannels
 Msgs == 1 .. MaxMsgs
 None == 0 - 1  \* no task, channel or message
-Capacity(c) == c - 1
+Capacity(c) == IF c = 1 THEN 0 ELSE BufferSize
 
 \* The states of a task. A task parked in "recv", "send" or "select" waits
 \* on the channels in on[t]; `main` parked in "closing" waits for the
@@ -62,11 +68,12 @@ VARIABLES
   chanOf,    \* chanOf[m]: the channel m was sent on
   closedAt,  \* closedAt[c]: how many messages were sent when c closed
   got,       \* got[m]: how many times a task received m
+  lastGot,   \* lastGot[c]: the newest message received from c (0 for none)
   returned,  \* returned[m]: m's send failed, and the sender kept m
   deadlock   \* the runtime found every task parked, and stopped the program
 
 vars == <<st, on, hold, pick, ended, buf, closed, lock, sent, chanOf,
-          closedAt, got, returned, deadlock>>
+          closedAt, got, lastGot, returned, deadlock>>
 
 TypeOK ==
   /\ st \in [Tasks -> States]
@@ -81,6 +88,7 @@ TypeOK ==
   /\ chanOf \in [Msgs -> Chans \cup {None}]
   /\ closedAt \in [Chans -> 0 .. MaxMsgs \cup {None}]
   /\ got \in [Msgs -> 0 .. MaxTasks]
+  /\ lastGot \in [Chans -> 0 .. MaxMsgs]
   /\ returned \in [Msgs -> BOOLEAN]
   /\ deadlock \in BOOLEAN
 
@@ -97,6 +105,7 @@ Init ==
   /\ chanOf = [m \in Msgs |-> None]
   /\ closedAt = [c \in Chans |-> None]
   /\ got = [m \in Msgs |-> 0]
+  /\ lastGot = [c \in Chans |-> 0]
   /\ returned = [m \in Msgs |-> FALSE]
   /\ deadlock = FALSE
 
@@ -124,7 +133,7 @@ Schedule(t) ==
   /\ st[t] = "ready"
   /\ st' = [st EXCEPT ![t] = "running"]
   /\ UNCHANGED <<on, hold, pick, ended, buf, closed, lock, sent, chanOf,
-                 closedAt, got, returned, deadlock>>
+                 closedAt, got, lastGot, returned, deadlock>>
 
 \* --- channel operations -----------------------------------------------------
 
@@ -136,6 +145,7 @@ TakeMsg(t, c) ==
   LET s == IF SendersOn(c) = {} THEN None ELSE Oldest(c)
       m == IF Len(buf[c]) > 0 THEN Head(buf[c]) ELSE hold[s]
   IN /\ got' = [got EXCEPT ![m] = @ + 1]
+     /\ lastGot' = [lastGot EXCEPT ![c] = m]
      /\ buf' = [buf EXCEPT ![c] =
           IF Len(@) = 0 THEN @
           ELSE IF s = None THEN Tail(@) ELSE Append(Tail(@), hold[s])]
@@ -156,21 +166,22 @@ Send(t, c) ==
        /\ chanOf' = [chanOf EXCEPT ![m] = c]
        /\ CASE closed[c] ->
                  /\ returned' = [returned EXCEPT ![m] = TRUE]
-                 /\ UNCHANGED <<st, on, hold, buf, got>>
+                 /\ UNCHANGED <<st, on, hold, buf, got, lastGot>>
             [] ReceiversOn(c) # {} ->
                  \E u \in ReceiversOn(c) :
                    /\ got' = [got EXCEPT ![m] = 1]
+                   /\ lastGot' = [lastGot EXCEPT ![c] = m]
                    /\ st' = [st EXCEPT ![u] = "ready"]
                    /\ on' = [on EXCEPT ![u] = {}]
                    /\ UNCHANGED <<hold, buf, returned>>
             [] Len(buf[c]) < Capacity(c) ->
                  /\ buf' = [buf EXCEPT ![c] = Append(@, m)]
-                 /\ UNCHANGED <<st, on, hold, got, returned>>
+                 /\ UNCHANGED <<st, on, hold, got, lastGot, returned>>
             [] OTHER ->
                  /\ st' = [st EXCEPT ![t] = "send"]
                  /\ on' = [on EXCEPT ![t] = {c}]
                  /\ hold' = [hold EXCEPT ![t] = m]
-                 /\ UNCHANGED <<buf, got, returned>>
+                 /\ UNCHANGED <<buf, got, lastGot, returned>>
   /\ UNCHANGED <<pick, ended, closed, lock, closedAt, deadlock>>
 
 \* `rx.recv()`: Some(the oldest message), else None when the channel is
@@ -183,11 +194,11 @@ Recv(t, c) ==
             /\ UNCHANGED <<ended>>
        [] closed[c] ->
             /\ ended' = [ended EXCEPT ![t] = @ \cup {c}]
-            /\ UNCHANGED <<st, on, hold, buf, got>>
+            /\ UNCHANGED <<st, on, hold, buf, got, lastGot>>
        [] OTHER ->
             /\ st' = [st EXCEPT ![t] = "recv"]
             /\ on' = [on EXCEPT ![t] = {c}]
-            /\ UNCHANGED <<hold, buf, got, ended>>
+            /\ UNCHANGED <<hold, buf, got, lastGot, ended>>
   /\ UNCHANGED <<pick, closed, lock, sent, chanOf, closedAt, returned,
                  deadlock>>
 
@@ -218,7 +229,7 @@ Close(t, c) ==
         /\ st' = [u \in Tasks |-> IF u \in wake THEN "ready" ELSE st[u]]
         /\ on' = [u \in Tasks |-> IF u \in wake THEN {} ELSE on[u]]
         /\ hold' = [u \in Tasks |-> IF u \in senders THEN None ELSE hold[u]]
-  /\ UNCHANGED <<pick, lock, sent, chanOf, got, deadlock>>
+  /\ UNCHANGED <<pick, lock, sent, chanOf, got, lastGot, deadlock>>
 
 \* `select` over arms A, first step: scan the arms. With LockArms it takes
 \* all their locks first. It picks an arm with a message; if none has one
@@ -242,19 +253,21 @@ Scan(t, A) ==
                       /\ on' = [on EXCEPT ![t] = A]
                       /\ UNCHANGED ended
             /\ UNCHANGED <<pick, lock>>
-  /\ UNCHANGED <<hold, buf, closed, sent, chanOf, closedAt, got, returned,
-                 deadlock>>
+  /\ UNCHANGED <<hold, buf, closed, sent, chanOf, closedAt, got, lastGot,
+                 returned, deadlock>>
 
 \* `select`, second step: take the picked arm's message and release the
 \* locks. Only without LockArms can the arm have lost its message since
-\* the scan (SelectChoosesReady is then violated); the take gets nothing.
+\* the scan (SelectChoosesReady is then violated). The ELSE branch below,
+\* a take that gets nothing, exists only so that state is reachable in
+\* ChannelsRacySelect; with LockArms it never runs.
 SelectTake(t) ==
   /\ Running(t)
   /\ pick[t] # None
   /\ LET c == pick[t] IN
        IF HasMsg(c)
          THEN TakeMsg(t, c)
-         ELSE UNCHANGED <<st, on, hold, buf, got>>
+         ELSE UNCHANGED <<st, on, hold, buf, got, lastGot>>
   /\ pick' = [pick EXCEPT ![t] = None]
   /\ lock' = [a \in Chans |-> IF lock[a] = t THEN None ELSE lock[a]]
   /\ UNCHANGED <<ended, closed, sent, chanOf, closedAt, returned, deadlock>>
@@ -265,7 +278,7 @@ Return(t) ==
   /\ t # Main
   /\ st' = [st EXCEPT ![t] = "done"]
   /\ UNCHANGED <<on, hold, pick, ended, buf, closed, lock, sent, chanOf,
-                 closedAt, got, returned, deadlock>>
+                 closedAt, got, lastGot, returned, deadlock>>
 
 \* `main`'s scope block ends, then `main` returns: at once if every other
 \* task has ended, else it parks until they have.
@@ -274,13 +287,13 @@ EndMain ==
   /\ Idle(Main)
   /\ st' = [st EXCEPT ![Main] = IF OthersDone THEN "done" ELSE "closing"]
   /\ UNCHANGED <<on, hold, pick, ended, buf, closed, lock, sent, chanOf,
-                 closedAt, got, returned, deadlock>>
+                 closedAt, got, lastGot, returned, deadlock>>
 WakeMain ==
   /\ st[Main] = "closing"
   /\ OthersDone
   /\ st' = [st EXCEPT ![Main] = "done"]
   /\ UNCHANGED <<on, hold, pick, ended, buf, closed, lock, sent, chanOf,
-                 closedAt, got, returned, deadlock>>
+                 closedAt, got, lastGot, returned, deadlock>>
 
 \* Every task is parked or has ended, and `main` has not: no task can
 \* ever move again. The runtime sees this when it parks the last task, and
@@ -294,7 +307,7 @@ DetectDeadlock ==
   /\ AllParked
   /\ deadlock' = TRUE
   /\ UNCHANGED <<st, on, hold, pick, ended, buf, closed, lock, sent, chanOf,
-                 closedAt, got, returned>>
+                 closedAt, got, lastGot, returned>>
 
 \* The program has ended: `main` returned, or the runtime reported a
 \* deadlock. Nothing more happens.
@@ -352,6 +365,15 @@ FifoOrder ==
     /\ \A i, j \in 1 .. Len(buf[c]) : i < j => buf[c][i] < buf[c][j]
     /\ \A i \in 1 .. Len(buf[c]) : \A u \in SendersOn(c) : buf[c][i] < hold[u]
 
+\* Messages are received from a channel in the order they were sent on it:
+\* every message still waiting on c (buffered, or held by a parked sender)
+\* is newer than the newest one received from c. Message ids grow with
+\* each send, so this fails if a receive ever skips an older message.
+ReceivedInOrder ==
+  \A c \in Chans :
+    /\ \A i \in 1 .. Len(buf[c]) : buf[c][i] > lastGot[c]
+    /\ \A u \in SendersOn(c) : hold[u] > lastGot[c]
+
 \* A closed channel takes no message: every send that started after the
 \* close returned its message, and no sender stays parked on it.
 ClosedRefusesSends ==
@@ -392,9 +414,14 @@ WithinWorkers == Busy <= Workers
 DeadlockNeedsAChannel ==
   deadlock => \E t \in Tasks : st[t] \in {"recv", "send", "select"}
 
-\* A deadlock is reported only when it is real: every task is parked
-\* (with ParkedOnlyWhileBlocked, none can move again).
-DeadlockIsReal == deadlock => AllParked
+\* A deadlock is reported only when it is real: no task can ever take a
+\* step again, whether a worker taking it, an operation, or `main` waking
+\* at its scope's end. This is stated with ENABLED, apart from the
+\* AllParked test the runtime uses to detect it.
+DeadlockIsReal ==
+  deadlock =>
+    /\ \A t \in Tasks : ~ENABLED Schedule(t) /\ ~ENABLED TaskStep(t)
+    /\ ~ENABLED WakeMain
 
 \* No program hangs unseen: it ends, or the runtime reports its deadlock.
 EndsOrReportsDeadlock == <>(st[Main] = "done" \/ deadlock)

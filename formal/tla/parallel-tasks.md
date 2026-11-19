@@ -10,11 +10,12 @@ Design notes for the parallel-execution milestone's spec (ADR 0019, issues #432 
 | `SharedCounts` | reference counts on values that tasks share, and the `var` write rule (ADR 0001) | 3 tasks that start out sharing a value, 3 value ids, 2 references per task per value, 2 writes | about 6 s (56,784 states) |
 | `SharedCountsRacy` | `SharedCounts` with a count update that is not atomic (broken on purpose) | as `SharedCounts` | fails in about 2 s: `NoUseAfterFree` violated after 8 steps |
 | `ScopedTasksLeakyScopes` | `ScopedTasks` without the scope-capture rule below (broken on purpose) | as `ScopedTasks` | fails in about 1 s: `SpawnOnlyIntoOpenScopes` violated after 5 steps |
-| `Channels` | `Sched` channels: send, receive, close, `select`, and the deadlocks they allow | `main` and 2 spawned tasks, 2 channels (capacity 0 and 1), 2 messages, 2 workers | about 36 s (172,310 states), 5 s of it on the temporal property |
+| `Channels` | `Sched` channels: send, receive, close, `select`, and the deadlocks they allow | `main` and 2 spawned tasks, 2 channels (a rendezvous, and one that holds 1 message), 2 messages, 2 workers | about 40 s (172,310 states; 38 s to 46 s measured), 5 s of it on the temporal property |
+| `ChannelsBuffer2` | `Channels` with a buffer of 2, so a buffer holds two messages and their order is checked | as `Channels`, but the second channel holds 2 messages | about 36 s (168,369 states) |
 | `ChannelsRacySelect` | `Channels` with a `select` that scans its arms without locking them (broken on purpose) | as `Channels` | fails in about 1 s: `SelectChoosesReady` violated in a 6-state trace |
 | `ChannelsLossyClose` | `Channels` with a close that drops buffered messages (broken on purpose) | as `Channels` | fails in about 1 s: `NoLostMessage` violated in a 4-state trace |
 
-Times are wall-clock on a 4-core Linux machine, with TLC's single worker as `scripts/formal/run.sh` runs it. The whole TLC part of the step takes about a minute and a half.
+Times are wall-clock on a 4-core Linux machine, with TLC's single worker as `scripts/formal/run.sh` runs it. The whole TLC part of the step takes about two and a half minutes.
 
 A model whose `.cfg` starts with `\* expect-violation: NAME` is broken on purpose. The step passes it only when TLC fails it by finding invariant `NAME` violated (`formal_tlc_verdict` in `scripts/formal/pins.sh`). So a change that makes `SharedCountsRacy` pass, which would mean the counts model can no longer fail, fails the step. `scripts/formal/test.sh` tests that rule without TLC.
 
@@ -32,16 +33,17 @@ The models check sequentially consistent interleavings: TLC runs one atomic step
 | `SpawnOnlyIntoOpenScopes` | ScopedTasks | invariant | an unfinished task holds only open scopes, so `spawn` never reaches a closed one (`P0005`) |
 | `WithinWorkers` | ScopedTasks | invariant | no more tasks run than there are workers |
 | `NoSelfJoin`, `NoWaitCycle` | ScopedTasks | invariant | no task holds its own handle; no cycle of joins and scope ends |
-| deadlock check | both | TLC's own (on) | no state but the end has no next step |
+| deadlock check | ScopedTasks, SharedCounts | TLC's own (on) | no state but the end has no next step |
 | `ProgramEnds` | ScopedTasks | temporal, under fairness | `main` returns, so (with `MainEndsLast`) every join returns and every scope's end stops waiting |
 | `NoLostMessage`, `NoDuplicateMessage` | Channels | invariant | every message sent is in exactly one place: buffered, held by its parked sender, received once, or returned to its sender by a failed send |
 | `FifoOrder` | Channels | invariant | a channel's buffer is oldest first, and its parked senders hold newer messages than it |
+| `ReceivedInOrder` | Channels | invariant | every message still waiting on a channel is newer than the newest one received from it, so receives follow send order |
 | `ClosedRefusesSends` | Channels | invariant | every send that starts after the close returns its message, and no sender stays parked on a closed channel |
 | `EndOnlyWhenDrained` | Channels | invariant | a receive returns `None`, and a `select` "all closed", only for channels that are closed and drained |
 | `SelectChoosesReady` | Channels | invariant | the arm a `select` picked still has a message when it takes it |
 | `ParkedOnlyWhileBlocked` | Channels | invariant | no lost wake-up: a task parked on a channel waits for something that has not happened yet |
 | `WithinWorkers` | Channels | invariant | as in ScopedTasks |
-| `DeadlockNeedsAChannel`, `DeadlockIsReal` | Channels | invariant | a reported deadlock has a task parked on a channel, and every task is parked |
+| `DeadlockNeedsAChannel`, `DeadlockIsReal` | Channels | invariant | a reported deadlock has a task parked on a channel, and no task can take any step again (stated with `ENABLED`, apart from the runtime's test) |
 | deadlock check | Channels | TLC's own (on) | every state but the end has a next step: a program that deadlocks reaches the runtime's report, never a silent hang |
 | `EndsOrReportsDeadlock` | Channels | temporal, under fairness | the program ends, or the runtime reports its deadlock |
 
@@ -130,20 +132,20 @@ These follow Rust's `Arc`, which uses the same scheme. They come from the C++/Ru
 
 - Every count update on a value that tasks may share is an atomic instruction. A value that never leaves its task could use plain counts, but telling the two apart is a design of its own (for example, biased reference counting). It would need its own model before it is built.
 - A task that panics finishes as far as waits go. The model treats it as returning, so joiners and the scope's owner wake. The spec must say what `join` returns from a task that panicked.
-- The two models are separate to keep TLC fast. `SharedCounts` lets any task share with any other at any time, which covers every way `ScopedTasks` passes values between tasks.
+- `ScopedTasks` and `SharedCounts` are separate to keep TLC fast. `SharedCounts` lets any task share with any other at any time, which covers every way `ScopedTasks` passes values between tasks.
 - The models do not check memory orderings, or programs beyond the bound.
 
 ## Channels and select
 
 `Sched` channels and `select` let tasks pass messages, and they are nondeterministic, so they need `Sched` (`docs/design.md`, Concurrency). `Channels` checks the semantics below. The surface syntax is not settled; `tx.send(v)`, `rx.recv()`, `tx.close()` and `select` here name operations, not final spellings.
 
-The model reuses `ScopedTasks`' scheduler (a fixed pool of workers; a task that waits parks and gives its worker back) but fixes the task tree to keep TLC fast: `main` opens one scope, spawns the other tasks into it at the start, and its last step ends the scope, which waits for them. `ScopedTasks` checks spawn, join and scopes in general. Within the bound every program is in the state space: every task holds every channel, and at any step a running task may send on, receive from or close any channel, `select` over both channels, or return. Each send makes a new message id, so TLC can follow every message.
+The model's scheduler is a copy of `ScopedTasks`' (a fixed pool of workers; a task that waits parks and gives its worker back), not an `EXTENDS`: `ScopedTasks`' open-ended scopes, spawns and joins together with channels would not finish in CI. A change to `ScopedTasks`' scheduler must be mirrored in `Channels`. The model fixes the task tree to keep TLC fast: `main` opens one scope, spawns the other tasks into it at the start, and its last step ends the scope, which waits for them. `ScopedTasks` checks spawn, join and scopes in general. Within the bound every program is in the state space: every task holds every channel, and at any step a running task may send on, receive from or close any channel, `select` over both channels, or return. Each send makes a new message id, so TLC can follow every message.
 
 ### Semantics
 
 | Operation | When | Result |
 | --- | --- | --- |
-| make a channel | capacity `n >= 0`, fixed at creation | `n = 0` is a rendezvous: a send returns only once a receiver has taken its message. The model checks capacities 0 and 1. There are no unbounded channels: a sender that never waits can use memory without bound. |
+| make a channel | capacity `n >= 0`, fixed at creation | `n = 0` is a rendezvous: a send returns only once a receiver has taken its message. `Channels` checks capacities 0 and 1, and `ChannelsBuffer2` capacities 0 and 2. There are no unbounded channels: a sender that never waits can use memory without bound. |
 | `tx.send(v)` | a receive or `select` is parked on the channel | hands `v` to one of them, which wakes with it; returns `Ok(())` |
 | | the buffer has room | buffers `v`; returns `Ok(())` |
 | | the buffer is full (always, at capacity 0) | parks until a receiver takes `v` (`Ok(())`) or the channel closes (`Err(v)`) |
@@ -152,12 +154,12 @@ The model reuses `ScopedTasks`' scheduler (a fixed pool of workers; a task that 
 | | the channel is open and empty | parks until a message comes (`Some`) or the channel closes (`None`) |
 | | the channel is closed and drained | `None`, every time |
 | `tx.close()` | open | closes it. Buffered messages stay, and receives get them before `None`. Parked senders wake with `Err(v)`. A parked receive wakes with `None`; a parked `select` wakes with "all closed" once every arm is drained. |
-| | already closed | does nothing, so two tasks may race to close |
+| | already closed | does nothing, so two tasks may race to close. The model does not check this case: its `Close` step is disabled on a closed channel, which is the same as doing nothing. |
 | `select` | some arm has a message | takes the oldest message of one such arm, as `recv` would |
 | | no arm has a message, every arm is closed and drained | returns "all closed" |
 | | otherwise | parks on all the arms; the first message sent on any of them wakes it with that message, and the last arm to drain wakes it with "all closed" |
 
-- **Order.** A channel is first in, first out (`FifoOrder`). A task's messages on one channel arrive in the order it sent them. Parked senders are served oldest first.
+- **Order.** A channel is first in, first out. Messages are received from a channel in the order their sends started, across all senders (`ReceivedInOrder`), so a task's messages on one channel arrive in the order it sent them. Its buffer is oldest first and parked senders are served oldest first (`FifoOrder`). Three ways to break the order each fail TLC: adding to the front of the buffer (`ChannelsBuffer2`), serving the newest parked sender first, and taking a parked sender's message before the buffer's head (`Channels`). A buffer of 1 cannot hold two messages and a buffer of 2 needs 3 messages to be full with a sender parked, so each takes the configuration named.
 - **No message is lost or duplicated** (`NoLostMessage`, `NoDuplicateMessage`): every message is, at every moment, in exactly one place: buffered, held by its parked sender, received by exactly one receive, or back with its sender after `Err(v)`. A message still buffered when the program drops the channel's last reference is dropped with it, as any value is; no receive was told it arrived.
 - **Closing** (`ClosedRefusesSends`, `EndOnlyWhenDrained`): every send that starts after the close fails with `Err(v)`; a closed channel keeps no parked sender; and `None` (or "all closed") means the channel is closed and every message it accepted has been received.
 - **`select` has receive arms only, at least two.** A send arm, a timeout (which needs `Clock`) and a default arm are not in this design; adding one extends `Channels` first (ADR 0019). The model lets `select` take any arm that has a message. The spec should pick among them uniformly at random, so no arm starves; TLC does not check that.
@@ -183,7 +185,7 @@ Every deadlock has a task parked on a channel (`DeadlockNeedsAChannel`).
 
 **How a program sees it: the runtime stops it with a deadlock panic.** The scheduler counts the tasks that are ready, running, or in a host call. When the last of them parks and `main` has not returned, every task is parked, and none can wake: a task wakes only by another task's step, and `ParkedOnlyWhileBlocked` says no wake is pending. The runtime then panics (exit 101, a new `P` code chosen with the implementation) and names each parked task and what it waits on. Like every panic, it cannot be caught.
 
-- **Exact.** The report comes only when every task is parked (`DeadlockIsReal`), and with `ParkedOnlyWhileBlocked` that state has no way out, so there is no false report. TLC's deadlock check finds no state without a next step but the end, and `EndsOrReportsDeadlock` holds under fairness, so a deadlocked program never hangs silently.
+- **Exact.** When the report comes, no task can take a step again: no worker can start a task, no operation is enabled, and `main` cannot wake (`DeadlockIsReal`, stated with `ENABLED`, apart from the runtime's all-parked test). So there is no false report, and `ParkedOnlyWhileBlocked` explains why the all-parked test suffices. TLC's deadlock check finds no state without a next step but the end, and `EndsOrReportsDeadlock` holds under fairness, so a deadlocked program never hangs silently.
 - **Partial deadlocks.** While any task runs, the runtime cannot know whether it will free the parked ones, so it reports nothing. Every task belongs to a scope whose owner waits for it, so a stuck task in time holds up its scope's owner, and so `main`. Once every other task has finished or parked, the deadlock is total and reported. A task that loops forever keeps it hidden, as in a sequential program.
 - **Host calls.** A task blocked in a host call (reading `Stdin`, a socket, sleeping on `Clock`) is not parked: a host event can wake it. The count must include it, or the runtime would report a deadlock that input could end. The model has no host calls.
 
@@ -194,3 +196,13 @@ Every deadlock has a task parked on a channel (`DeadlockNeedsAChannel`).
 - Joins between the tasks other than the scope's end; `ScopedTasks` checks those. A join waits as the scope's end does, so it adds no kind of deadlock beyond the third above.
 - The message values' reference counts. A send moves the sender's reference into the channel and a receive moves it out, so they are the moves `SharedCounts` already allows.
 - Programs beyond the bound. A one-off run at 3 messages (728,602 states, 82 s with 3 TLC workers) also passed.
+
+### Open questions for the maintainer
+
+The model makes these product choices. The milestone's spec must confirm each, or change it and the model with it.
+
+- **Bounded channels only.** Every channel has a capacity fixed at creation, `0` included. Unbounded channels are left out.
+- **A deadlock panic stops the whole program and names every parked task.** This differs from `docs/design.md` (its list of exceptions says "Panics stop the current task") and from a panic's single span. It needs a new `P` code, and the spec must say how the report shows more than one task.
+- **Who may close.** The model lets any task that holds the channel close it. The recommendation is that only the sending end may close it.
+- **Send on a closed channel returns `Err(v)`, and closing twice does nothing**, as Rust's `mpsc` does, not a panic as in Go.
+- **`select` fairness.** The notes recommend choosing uniformly at random among the ready arms. TLC does not check it: the model lets `select` take any ready arm.
