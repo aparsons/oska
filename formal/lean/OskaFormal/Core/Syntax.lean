@@ -1,11 +1,19 @@
 /-!
 # Oska Core: syntax
 
-The syntax of Oska Core, version 2 (ADR 0018): exactly the fragment that
-core IR version 2 exports (`crates/oska-check/src/core_ir.rs`). It has
+The syntax of Oska Core, version 3 (ADR 0018): exactly the fragment that
+core IR version 3 exports (`crates/oska-check/src/core_ir.rs`). It has
 functions, `let`, `if`, `Int` and `Bool` with their operators, `()`,
-structs and enums without generics, field access, and `match`. Each Lean
-constructor is one core IR node, with the same fields.
+structs and enums without generics, field access, and `match`; and
+capabilities: text, `Path`, the capabilities `Stdout`, `Fs`, `FsRead`,
+`FsWrite`, `Dir`, `DirRead` and `DirWrite` as opaque values only `main`
+receives, the built-in calls that write a line to stdout, read and write
+a file and create a directory under a directory capability, and
+attenuate one capability to a narrower one, and the `Result` of an
+effect with `is_ok` and `unwrap_or`. Each Lean constructor is one core IR
+node, with the same fields; the values a run makes (a capability, a
+path, a result) have no core IR node, so a program as written holds
+none.
 
 - A local is a *slot*: the function's locals are numbered from 0 in the
   order they are bound, the parameters that bind first, then each `let`
@@ -19,21 +27,146 @@ constructor is one core IR node, with the same fields.
 
 namespace OskaFormal.Core
 
-/-- The types of Oska Core: core IR's `"Int"`, `"Bool"` and `"()"`, and a
+/-- A built-in capability kind of Oska Core: core IR's `"Stdout"`, `"Fs"`,
+`"FsRead"`, `"FsWrite"`, `"Dir"`, `"DirRead"` and `"DirWrite"`. -/
+inductive CapKind where
+  | stdout
+  | fs | fsRead | fsWrite
+  | dir | dirRead | dirWrite
+  deriving DecidableEq, Repr
+
+/-- The kinds a capability of kind `k` can be attenuated to, `k` first:
+ADR 0008's order, `Fs` > `FsRead` > `DirRead` and likewise for writes,
+with `Fs` > `Dir` > `DirRead`, `DirWrite`. What a capability of kind `k`
+reaches is what one of these reaches. -/
+def CapKind.below : CapKind → List CapKind
+  | .stdout => [.stdout]
+  | .fs => [.fs, .fsRead, .fsWrite, .dir, .dirRead, .dirWrite]
+  | .fsRead => [.fsRead, .dirRead]
+  | .fsWrite => [.fsWrite, .dirWrite]
+  | .dir => [.dir, .dirRead, .dirWrite]
+  | .dirRead => [.dirRead]
+  | .dirWrite => [.dirWrite]
+
+/-- The capability kinds `main` may declare, which the runtime grants:
+`Stdout`, `Fs`, `FsRead` and `FsWrite`. A directory capability comes only
+from attenuation. -/
+def CapKind.granted : CapKind → Bool
+  | .stdout | .fs | .fsRead | .fsWrite => true
+  | _ => false
+
+/-- The types of Oska Core: core IR's `"Int"`, `"Bool"`, `"()"`,
+`"String"` (text, trusted or not: trust is checked statically and has no
+runtime effect), `"Path"`, a capability kind, `"Result<(), IoError>"` and
+`"Result<String, IoError>"` (`result unit` and `result string`), and a
 struct or enum the program declares, by name. -/
 inductive Ty where
   | int
   | bool
   | unit
+  | string
+  | path
+  | cap (kind : CapKind)
+  | result (ok : Ty)
   | named (name : String)
   deriving DecidableEq, Repr
 
 /-- The types `==` and `!=` compare: `Int`, `Bool` and `()`. The checker
 compares a struct or enum only through an `Eq` implementation, which is
-outside Oska Core. -/
+outside Oska Core, and the export refuses `==` on text. -/
 def Ty.isBase : Ty → Bool
   | .int | .bool | .unit => true
-  | .named _ => false
+  | _ => false
+
+/-- The capability kind of a capability type. -/
+def Ty.capKind? : Ty → Option CapKind
+  | .cap k => some k
+  | _ => none
+
+/-- A built-in call of Oska Core: core IR's `Builtin` names, the checker's
+qualified names of the prelude's body-less functions. A method's receiver
+is its first argument.
+
+- `println`: `Stdout.println(line)`.
+- `restrictTo k`: `K.restrict_to(dir)` on the capability kind `k`, `Fs`,
+  `FsRead`, `FsWrite` (with a `String`), `Dir`, `DirRead` or `DirWrite`
+  (with a `Path`): attenuation to a directory capability.
+- `readOnly k`, `writeOnly k`: `K.read_only()`, `K.write_only()` on `Fs`
+  and `Dir`.
+- `readToString`: `DirRead.read_to_string(path)`.
+- `write`: `DirWrite.write(path, contents)`.
+- `createDir`: `DirWrite.create_dir(path)`.
+- `pathFrom`, `pathNew`: `Path.from(text)`, `Path.new(text)`.
+- `isOk`, `unwrapOr`: `Result.is_ok()`, `Result.unwrap_or(default)`. -/
+inductive Builtin where
+  | println
+  | restrictTo (k : CapKind)
+  | readOnly (k : CapKind)
+  | writeOnly (k : CapKind)
+  | readToString
+  | write
+  | createDir
+  | pathFrom
+  | pathNew
+  | isOk
+  | unwrapOr
+  deriving DecidableEq, Repr
+
+/-- What `restrict_to` on a capability of kind `k` takes, and the kind it
+gives. -/
+def CapKind.restrictTo : CapKind → Option (Ty × CapKind)
+  | .fs => some (.string, .dir)
+  | .fsRead => some (.string, .dirRead)
+  | .fsWrite => some (.string, .dirWrite)
+  | .dir => some (.path, .dir)
+  | .dirRead => some (.path, .dirRead)
+  | .dirWrite => some (.path, .dirWrite)
+  | .stdout => none
+
+/-- The kind `read_only()` gives on a capability of kind `k`. -/
+def CapKind.readOnly : CapKind → Option CapKind
+  | .fs => some .fsRead
+  | .dir => some .dirRead
+  | _ => none
+
+/-- The kind `write_only()` gives on a capability of kind `k`. -/
+def CapKind.writeOnly : CapKind → Option CapKind
+  | .fs => some .fsWrite
+  | .dir => some .dirWrite
+  | _ => none
+
+/-- The kind of capability an **effect** takes as its receiver: the
+built-in calls that ask the host for something. `read_only`,
+`write_only`, `Path` and `Result` are pure. -/
+def Builtin.receiver : Builtin → Option CapKind
+  | .println => some .stdout
+  | .restrictTo k => (k.restrictTo).map fun _ => k
+  | .readToString => some .dirRead
+  | .write => some .dirWrite
+  | .createDir => some .dirWrite
+  | _ => none
+
+/-- Where a filesystem capability reaches, as the interpreter's `Root`
+(`crates/oska-run/src/value.rs`): anywhere (the `Fs`, `FsRead` or
+`FsWrite` `main` receives; also `Stdout`'s, which has no root), beneath
+the directory at `path` (components from `/`), or nowhere (a root that
+could not be opened). -/
+inductive CapRoot where
+  | anywhere
+  | beneath (path : List String)
+  | nowhere
+  deriving DecidableEq, Repr
+
+/-- The paths a root reaches: every path, the paths beneath it (itself
+included), or none. -/
+def CapRoot.Reaches : CapRoot → List String → Prop
+  | .anywhere, _ => True
+  | .beneath p, q => p <+: q
+  | .nowhere, _ => False
+
+/-- `r'` reaches no path that `r` does not: it is no wider. -/
+def CapRoot.Within (r' r : CapRoot) : Prop :=
+  ∀ q, r'.Reaches q → r.Reaches q
 
 /-- A binary operator, as core IR writes it in `op`. -/
 inductive BinOp where
@@ -61,6 +194,12 @@ mutual
   variant. -/
   inductive Expr where
     | unit
+    | str (value : String)
+    | path (text : String)
+    | cap (kind : CapKind) (root : CapRoot)
+    | okUnit
+    | okStr (value : String)
+    | err
     | int (value : Int)
     | bool (value : Bool)
     | local_ (slot : Nat)
@@ -73,6 +212,7 @@ mutual
     | construct (type : String) (variant : Option String) (fields : List Expr)
     | field (base : Expr) (index : Nat)
     | match_ (scrutinee : Expr) (arms : List Arm)
+    | builtin (op : Builtin) (args : List Expr)
 
   /-- A statement of Oska Core: core IR's `Let` and `Expr`. -/
   inductive Stmt where
@@ -149,12 +289,20 @@ def intMax : Int := 2 ^ 63 - 1
 /-- Whether `n` is an `Int` of Oska: whether it fits in 64 signed bits. -/
 def fits (n : Int) : Bool := decide (intMin ≤ n) && decide (n ≤ intMax)
 
-/-- The values of Oska Core: `()`, an integer, a boolean, and a struct or
-enum variant whose fields are values. -/
+/-- The values of Oska Core: `()`, an integer, a boolean, text, a path, a
+capability, the `Ok` or `Err` of an effect's `Result`, and a struct or
+enum variant whose fields are values. An `Err` carries no message: no
+program of Oska Core can read one. -/
 inductive IsValue : Expr → Prop where
   | unit : IsValue .unit
   | int (n : Int) : IsValue (.int n)
   | bool (b : Bool) : IsValue (.bool b)
+  | str (s : String) : IsValue (.str s)
+  | path (s : String) : IsValue (.path s)
+  | cap (k : CapKind) (r : CapRoot) : IsValue (.cap k r)
+  | okUnit : IsValue .okUnit
+  | okStr (s : String) : IsValue (.okStr s)
+  | err : IsValue .err
   | construct {type : String} {variant : Option String} {fields : List Expr} :
       (∀ e ∈ fields, IsValue e) → IsValue (.construct type variant fields)
 

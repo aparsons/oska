@@ -1,9 +1,10 @@
-//! Programs in Oska Core (ADR 0018, #425, #426): functions, `let`, `if`,
-//! `Int` and `Bool`, structs, enums and `match`, each a whole literal, so
-//! that `lean_reference.rs` also runs them on the Lean reference and
-//! compares. A program in Oska Core cannot print, so each one shows what
-//! it computed by how it ends: `check` panics with `P0004` on a false
-//! condition, and a run that returns cleanly passed every check.
+//! Programs in Oska Core (ADR 0018, #425, #426, #430): functions, `let`,
+//! `if`, `Int` and `Bool`, structs, enums and `match`, and capabilities
+//! with their effects, each a whole literal, so that `lean_reference.rs`
+//! also runs them on the Lean reference and compares. A program without
+//! capabilities shows what it computed by how it ends: `check` panics
+//! with `P0004` on a false condition, and a run that returns cleanly
+//! passed every check. One with capabilities prints, and writes files.
 //!
 //! Each program repeats its preamble (`fail`, `check`) instead of
 //! building it with `format!`: `lean_reference.rs` collects only whole
@@ -12,7 +13,8 @@
 
 mod common;
 
-use common::{assert_panics, assert_runs};
+use common::{assert_panics, assert_runs, run_differential};
+use oska_run::FakeHost;
 
 #[test]
 fn integer_arithmetic_rounds_toward_zero_and_compares() {
@@ -590,5 +592,142 @@ fn main() {
 ",
         "P0001",
         "n * 2",
+    );
+}
+
+// ---- Capabilities ------------------------------------------------------
+
+#[test]
+fn main_prints_through_the_stdout_it_receives() {
+    assert_runs(
+        r#"fn say(io: Stdout, line: Untrusted<String>) {
+    let _ = io.println(line)
+}
+
+fn main(io: Stdout) {
+    say(io, "hello")
+    let _ = io.println("a \"quoted\" line\twith a tab and a \\")
+    let _ = io.println("")
+}
+"#,
+        &[],
+        "hello\na \"quoted\" line\twith a tab and a \\\n\n",
+    );
+}
+
+#[test]
+fn a_directory_capability_writes_reads_and_creates_directories_beneath_its_root() {
+    let mut host = FakeHost::new();
+    let outcome = run_differential(
+        &mut host,
+        r#"fn save(dir: DirWrite, name: Untrusted<String>, text: Untrusted<String>) -> Bool {
+    dir.write(Path.from(name), text).is_ok()
+}
+
+fn main(io: Stdout, fs: Fs) {
+    let root = fs.restrict_to(".")
+    let out = root.write_only()
+    let made = out.create_dir(Path.from("box"))
+    let again = out.create_dir(Path.new("box"))
+    let first = save(out, "box/a.txt", "first")
+    let second = save(out, "box/a.txt", "second")
+    let top = save(out.restrict_to(Path.from("box")), "../top.txt", "top")
+    let deep = save(out, "box/missing/a.txt", "deep")
+    let ok = made.is_ok() && again.is_ok() && first && second && !top && !deep
+    if ok {
+        let _ = io.println("saved")
+    }
+    let read = root.read_only()
+    let _ = io.println(read.read_to_string(Path.from("box/a.txt")).unwrap_or("missing"))
+    let _ = io.println(read.read_to_string(Path.from("box/b.txt")).unwrap_or("missing"))
+    let _ = io.println(read.read_to_string(Path.from("box")).unwrap_or("not a file"))
+}
+"#,
+        &[],
+    );
+    assert_eq!(outcome.exit_code, 0, "{outcome:#?}");
+    assert_eq!(outcome.stdout, "saved\nsecond\nmissing\nnot a file\n");
+    assert_eq!(host.file("box/a.txt"), Some("second"));
+    assert_eq!(host.file("top.txt"), None);
+}
+
+#[test]
+fn a_confined_capability_refuses_a_path_outside_its_root() {
+    let mut host = FakeHost::new();
+    let outcome = run_differential(
+        &mut host,
+        r#"fn report(io: Stdout, ok: Bool, what: Untrusted<String>) {
+    if ok {
+        let _ = io.println(what)
+    } else {
+        let _ = io.println("refused")
+    }
+}
+
+fn main(io: Stdout, write: FsWrite) {
+    let root = write.restrict_to(".")
+    let _ = root.create_dir(Path.from("box"))
+    let boxed = root.restrict_to(Path.from("box"))
+    report(io, boxed.write(Path.from("inside.txt"), "kept").is_ok(), "inside")
+    report(io, boxed.write(Path.from("../escape.txt"), "leaked").is_ok(), "escaped")
+    report(io, boxed.write(Path.from("/escape.txt"), "leaked").is_ok(), "escaped")
+    report(io, boxed.write(Path.from("sub/../../escape.txt"), "leaked").is_ok(), "escaped")
+    report(io, boxed.create_dir(Path.from("../out")).is_ok(), "escaped")
+    let above = boxed.restrict_to(Path.from(".."))
+    report(io, above.write(Path.from("escape.txt"), "leaked").is_ok(), "escaped")
+    let same = boxed.restrict_to(Path.from("."))
+    report(io, same.write(Path.from("again.txt"), "kept").is_ok(), "inside again")
+}
+"#,
+        &[],
+    );
+    assert_eq!(outcome.exit_code, 0, "{outcome:#?}");
+    assert_eq!(
+        outcome.stdout,
+        "inside\nrefused\nrefused\nrefused\nrefused\nrefused\ninside again\n"
+    );
+    assert_eq!(host.file("box/inside.txt"), Some("kept"));
+    assert_eq!(host.file("box/again.txt"), Some("kept"));
+    assert_eq!(host.file("escape.txt"), None);
+}
+
+#[test]
+fn a_narrowed_read_capability_reads_only_beneath_its_root() {
+    assert_runs(
+        r#"fn main(io: Stdout, fs: Fs) {
+    let root = fs.restrict_to(".")
+    let _ = root.write_only().write(Path.from("secret.txt"), "secret")
+    let _ = root.write_only().create_dir(Path.from("notes"))
+    let _ = root.write_only().write(Path.from("notes/readme.txt"), "readme")
+    let notes = root.read_only().restrict_to(Path.from("notes"))
+    let _ = io.println(notes.read_to_string(Path.from("readme.txt")).unwrap_or("refused"))
+    let _ = io.println(notes.read_to_string(Path.from("../secret.txt")).unwrap_or("refused"))
+    let _ = io.println(notes.read_to_string(Path.from("sub/../readme.txt")).unwrap_or("refused"))
+    let _ = io.println(notes.read_to_string(Path.from("")).unwrap_or("refused"))
+    let missing = fs.read_only().restrict_to("nowhere")
+    let _ = io.println(missing.read_to_string(Path.from("x")).unwrap_or("refused"))
+    let file = fs.restrict_to("secret.txt")
+    let _ = io.println(file.read_only().read_to_string(Path.from("x")).unwrap_or("refused"))
+}
+"#,
+        &[],
+        "readme\nrefused\nreadme\nrefused\nrefused\nrefused\n",
+    );
+}
+
+#[test]
+fn files_written_before_a_panic_are_kept() {
+    assert_panics(
+        r#"fn main(io: Stdout, fs: FsWrite) {
+    let out = fs.restrict_to(".")
+    let _ = out.write(Path.from("before.txt"), "written")
+    let _ = io.println("before")
+    let zero = 0
+    let _ = 1 / zero
+    let _ = io.println("after")
+}
+"#,
+        "P0004",
+        "1 / zero",
     );
 }
