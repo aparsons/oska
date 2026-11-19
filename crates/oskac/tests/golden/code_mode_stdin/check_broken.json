@@ -9,6 +9,7 @@ exit: 1
     {"name":"main","authority":[],"via":[],"pure":true}
   ],
   "audit": [],
-  "attenuations": []
+  "attenuations": [],
+  "verdict": "diagnostics"
 }
 --- stderr

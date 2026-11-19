@@ -8,6 +8,7 @@ exit: 0
     {"name":"pkg.main.greeting","authority":[],"via":[],"pure":true}
   ],
   "audit": [],
-  "attenuations": []
+  "attenuations": [],
+  "verdict": "ok"
 }
 --- stderr

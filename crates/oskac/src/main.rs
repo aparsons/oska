@@ -30,6 +30,7 @@ mod package;
 mod self_cmd;
 mod sha256;
 mod stdin;
+mod verdict;
 
 const USAGE: &str = "\
 oskac - the Oska compiler
@@ -541,8 +542,9 @@ fn print_report(report: &oska_check::CheckReport, json: bool, path: &str) -> Exi
 
 /// What [`print_report`] prints, and the exit code.
 fn render_report(report: &oska_check::CheckReport, json: bool, path: &str) -> cache::Printed {
+    let verdict = verdict::Verdict::of(report, None);
     let (stdout, stderr) = if json {
-        (report.to_json(), String::new())
+        (verdict::check_json(report, None, verdict), String::new())
     } else {
         (
             report.authority_to_human(path),
@@ -552,7 +554,7 @@ fn render_report(report: &oska_check::CheckReport, json: bool, path: &str) -> ca
     cache::Printed {
         stdout,
         stderr,
-        code: u8::from(!report.diagnostics.is_empty()),
+        code: verdict.exit_code(),
     }
 }
 

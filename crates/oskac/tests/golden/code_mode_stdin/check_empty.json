@@ -4,6 +4,7 @@ exit: 0
   "diagnostics": [],
   "functions": [],
   "audit": [],
-  "attenuations": []
+  "attenuations": [],
+  "verdict": "ok"
 }
 --- stderr

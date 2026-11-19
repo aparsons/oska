@@ -101,6 +101,8 @@ USAGE:
 
 `oskac check [path | -] [--format=json] [--release] [--baseline=<file> | --update-baseline=<file>]` parses and type-checks one file, every module of a package, or one module read from [standard input](#source-from-standard-input), against the prelude and reports each function's authority. Exit code 0 when there are no diagnostics, otherwise 1; with `--baseline`, 3 when the program checks but its authority widened.
 
+With `--format=json` the check object ends with `verdict`, which says what the exit code says, so a caller branches on one value: `ok` (exit code 0), `diagnostics` (1) or `widened` (3, every way the [authority baseline](#authority-baseline) comparison fails). See [output formats](#output-formats).
+
 Human-readable output:
 
 - Diagnostics go to standard error, one per line, as `file.osk:1:8: error[E0210]: message (bytes 7..13)`: the file, then the line and column where the span starts. A diagnostic with a fix is followed by an indented `fix: ...` line.
@@ -135,7 +137,7 @@ An **authority baseline** is a saved record of a program's authority, meant to b
 - a function or method has more audit sites of a kind than before (*new audit site*);
 - an added function reaches a kind that no entry of any function in the baseline covers.
 
-Narrowing, removals, attenuation changes, an added function within the program's existing authority, and anything in a test block are reported and never fail. There is no flag that lets a widening pass: approving one means updating the baseline in the same change, so the approval is a reviewed diff. With diagnostics, `check` exits with 1 and compares nothing, since a refused program's report is incomplete. An unreadable or malformed baseline, a `format` other than 1, a file with neither a `format` nor the `diagnostics` of a saved report, a saved report with diagnostics, or two functions of one name in either report is an `error:` and exit code 1.
+Narrowing, removals, attenuation changes, an added function within the program's existing authority, and anything in a test block are reported and never fail. There is no flag that lets a widening pass: approving one means updating the baseline in the same change, so the approval is a reviewed diff. With diagnostics, `check` exits with 1 and compares nothing, since a refused program's report is incomplete. An unreadable or malformed baseline, a `format` other than 1, a file with neither a `format` nor the `diagnostics` of a saved report, a saved report with diagnostics, or two functions of one name in either report is an `error:` and exit code 1. So is a baseline that `--update-baseline` cannot write. Then nothing was compared, so with `--format=json` no check object is printed: standard output is empty and there is no `verdict`.
 
 In the human output a `baseline:` section follows the authority report, one line per change, those that fail the gate first, each marked with what it gained (`+`) or lost (`-`):
 
@@ -145,7 +147,7 @@ baseline: authority.json
   added fn notes: DirRead
 ```
 
-With `--format=json`, the check object gains `authority_diff` as its last key:
+With `--format=json`, the check object gains `authority_diff`, just before `verdict`, which stays last:
 
 ```json
 "authority_diff": {
@@ -163,6 +165,8 @@ With `--format=json`, the check object gains `authority_diff` as its last key:
   "fails": true
 }
 ```
+
+`verdict` is `widened` exactly when `fails` is `true`.
 
 `baseline_oskac` is the version that wrote the baseline, or `null` for a saved report; when it differs from the running `oskac`, the human output says so, since a new release can change what the report records. `added` lists, in `new_kinds`, the entries no baseline function covers. Each `count` is how many sites were added or removed.
 
@@ -357,7 +361,8 @@ One object on standard output, produced even when there are diagnostics:
   ],
   "attenuations": [
     {"function":"main","method":"restrict_to","span":{"start":88,"end":112},"source":"FsRead","result":"DirRead","root":"docs"}
-  ]
+  ],
+  "verdict": "ok"
 }
 ```
 
@@ -365,6 +370,7 @@ One object on standard output, produced even when there are diagnostics:
 - `functions`: one entry per function and method, in source order. `name` is the function's name, `Type.method` for a method of an inherent `impl`, or `<Type as Trait>.method` for one of `impl Trait for Type`, with a generic trait's arguments, as in `<AppError as From<IoError>>.from`, and a generic type's arguments, as in `<Pair<Int> as Show>.show`; in a package `pkg.` and the module path come first, as in `pkg.util.text.shout` or `pkg.main.main`, and a method is named by its type's module. No two entries share a name. `"pub":true` marks a function declared `pub`. `authority` lists the built-in capabilities it can reach, in order of first appearance. `via` lists each capability-bearing parameter and what it supplies, with a method's receiver as `self`; a parameter whose type is or holds a bounded type parameter is listed too, naming it in `generics`. `pure` is `true` when `via` is empty.
 - `audit`: every audit site, in source order. `function` is the function it is in, named as for an attenuation, `kind` is `assume_trusted` for a trust assertion or `expose` for a secret exposure, and `span` covers the whole call.
 - `attenuations`: every call that narrows a capability, in source order. `function` is the function it is in (`test "<name>"` for a test block, with the name written as an Oska string, or `test at line <n>` when the name is empty), `method` is `restrict_to`, `restrict_to_file`, `read_only` or `write_only`, `source` and `result` are the capability kinds before and after, and `root` is the string the capability is restricted to, or `null` when the method takes no root or the root is computed at runtime. `span` covers the whole call.
+- `verdict`: always the last key. `ok` with exit code 0, `diagnostics` with exit code 1, or `widened` with exit code 3 when the program checks but a comparison of its authority with `--baseline` fails (a function widened or became impure, a new audit site, or a new kind). With `--baseline`, `authority_diff` comes just before it. An `error:` that stops the check, such as an unreadable file or baseline, prints no check object.
 
 A parse error is reported alone, with empty `functions`, `audit` and `attenuations`.
 

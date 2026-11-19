@@ -1,0 +1,11 @@
+exit: 1
+--- stdout
+{
+  "diagnostics": [
+    {"code":"E0101","message":"expected `)`, found `}`","path":"crates/oskac/tests/fixtures/check_verdict/parse_error.osk","span":{"start":68,"end":69},"line":3,"column":1,"end_line":3,"end_column":2,"severity":"error","url":"https://oskalang.dev/codes/E0101","related":[],"suggestions":[]}
+  ],
+  "functions": [],
+  "audit": [],
+  "attenuations": [],
+  "verdict": "diagnostics"
+}
