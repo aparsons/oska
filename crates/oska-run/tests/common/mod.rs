@@ -19,6 +19,7 @@ pub mod inert;
     any(target_arch = "aarch64", target_arch = "x86_64")
 ))]
 mod native;
+pub mod process;
 pub mod site;
 pub mod skips;
 

@@ -4,6 +4,11 @@
 //! print, so each one shows what it computed by how it ends: `check`
 //! panics with `P0004` on a false condition, and a run that returns
 //! cleanly passed every check.
+//!
+//! Each program repeats its preamble (`fail`, `check`) instead of
+//! building it with `format!`: `lean_reference.rs` collects only whole
+//! string literals, so a program assembled at run time would not be
+//! compared with the Lean reference.
 
 mod common;
 

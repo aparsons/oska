@@ -130,7 +130,7 @@ theorem stepLogical_sound {P : Program} {op : BinOp} {l r : Expr} {o : Outcome}
   · exact Step.impliesFalse
   · exact Step.impliesTrue
 
-theorem Option.map_some' {α β : Type} {f : α → β} {x : Option α} {b : β}
+private theorem map_eq_some_inv {α β : Type} {f : α → β} {x : Option α} {b : β}
     (h : x.map f = some b) : ∃ a, x = some a ∧ f a = b := by
   cases x with
   | none => cases h
@@ -152,14 +152,14 @@ theorem step_sound {P : Program} : ∀ {e : Expr} {o : Outcome}, step P e = some
   next e hne ih =>
     intro o h
     rw [step] at h
-    · obtain ⟨o', hs, rfl⟩ := Option.map_some' h
+    · obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
       exact Step.negArg (ih hs)
     · exact hne
   next b => intro o h; simp [step] at h; subst h; exact Step.not
   next e hne ih =>
     intro o h
     rw [step] at h
-    · obtain ⟨o', hs, rfl⟩ := Option.map_some' h
+    · obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
       exact Step.notArg (ih hs)
     · exact hne
   next op l r hl hop =>
@@ -173,12 +173,12 @@ theorem step_sound {P : Program} : ∀ {e : Expr} {o : Outcome}, step P e = some
   next op l r hl hop hr ih =>
     intro o h
     simp only [step, hl, hop, hr, ite_true, ite_false, Bool.false_eq_true] at h
-    obtain ⟨o', hs, rfl⟩ := Option.map_some' h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
     exact Step.binaryRhs (by simpa using hop) (Expr.isValue_iff.mp hl) (ih hs)
   next op l r hl ih =>
     intro o h
     simp only [step, hl, ite_false, Bool.false_eq_true] at h
-    obtain ⟨o', hs, rfl⟩ := Option.map_some' h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
     exact Step.binaryLhs (ih hs)
   next name args vs o' rest hargs ih =>
     intro o h
@@ -191,7 +191,7 @@ theorem step_sound {P : Program} : ∀ {e : Expr} {o : Outcome}, step P e = some
     simp only [step, hnone, hall, ite_true, stepCall] at h
     split at h
     · next f hf =>
-      obtain ⟨body, hi, rfl⟩ := Option.map_some' h
+      obtain ⟨body, hi, rfl⟩ := map_eq_some_inv h
       exact Step.call hf (Expr.allValues_iff.mp hall) hi
     · cases h
   next name args hnone hall _ =>
@@ -204,7 +204,7 @@ theorem step_sound {P : Program} : ∀ {e : Expr} {o : Outcome}, step P e = some
   next th c el h₁ h₂ h₃ h₄ ih =>
     intro o h
     rw [step] at h
-    · obtain ⟨o', hs, rfl⟩ := Option.map_some' h
+    · obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
       exact Step.ifCond (ih hs)
     all_goals assumption
   next ss val ih =>
@@ -214,14 +214,14 @@ theorem step_sound {P : Program} : ∀ {e : Expr} {o : Outcome}, step P e = some
   next vs o rest h => simp [stepArgs] at h
   next e es he ih vs o rest h =>
     simp only [stepArgs, he, ite_true] at h
-    obtain ⟨⟨vs', o', rest'⟩, hs, heq⟩ := Option.map_some' h
+    obtain ⟨⟨vs', o', rest'⟩, hs, heq⟩ := map_eq_some_inv h
     simp only [Prod.mk.injEq] at heq
     obtain ⟨rfl, rfl, rfl⟩ := heq
     obtain ⟨x, rfl, hvs, hx⟩ := ih _ _ _ hs
     exact ⟨x, rfl, AllValues.cons (Expr.isValue_iff.mp he) hvs, hx⟩
   next e es he ih vs o rest h =>
     simp only [stepArgs, he, ite_false, Bool.false_eq_true] at h
-    obtain ⟨o', hs, heq⟩ := Option.map_some' h
+    obtain ⟨o', hs, heq⟩ := map_eq_some_inv h
     simp only [Prod.mk.injEq] at heq
     obtain ⟨rfl, rfl, rfl⟩ := heq
     exact ⟨e, rfl, AllValues.nil, ih hs⟩
@@ -233,7 +233,7 @@ theorem step_sound {P : Program} : ∀ {e : Expr} {o : Outcome}, step P e = some
     exact Step.blockExpr (Expr.isValue_iff.mp he)
   next e ss val he ih o h =>
     simp only [stepBlock, he, ite_false, Bool.false_eq_true] at h
-    obtain ⟨o', hs, rfl⟩ := Option.map_some' h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
     exact Step.blockExprArg (ih hs)
   next t e ss val he o h =>
     simp only [stepBlock, he, ite_true, Option.some.injEq] at h
@@ -247,7 +247,7 @@ theorem step_sound {P : Program} : ∀ {e : Expr} {o : Outcome}, step P e = some
     exact Step.blockLetDrop (Expr.isValue_iff.mp he)
   next b t e ss val he ih o h =>
     simp only [stepBlock, he, ite_false, Bool.false_eq_true] at h
-    obtain ⟨o', hs, rfl⟩ := Option.map_some' h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
     exact Step.blockLetArg (ih hs)
 
 /-- An expression that steps is not a value. -/

@@ -11,11 +11,13 @@ JSON form `crates/oska-check/src/core_ir.rs` exports, into the syntax of
 The reader refuses anything that is not core IR version 1, naming what is
 wrong and where: a version other than 1, an unknown `kind`, operator or
 type, a field missing, unknown or of the wrong JSON type, an `Int`
-literal outside `-2^63 ..= 2^63 - 1`, two functions of one name, a call
-of a function the program does not have or with as many arguments as it
-has parameters, and a program whose `main` is missing, takes parameters
-or does not return `()`. It does not type the program: the checker typed
-it before the export, and a run that gets stuck says so.
+literal outside `-2^63 ..= 2^63 - 1`, two functions of one name, and a
+call of a function the program does not have, or with a different number
+of arguments than that function has parameters. `entry` then refuses a
+program whose `main` is missing, takes parameters or does not return
+`()`. The reader does not type the program: the checker typed it before
+the export, and a run that gets stuck says so. The checks at the end of
+this file run the reader on good and bad core IR.
 
 The reader is a parser, not part of the semantics, so it is `partial`
 and carries no proof.
@@ -201,5 +203,48 @@ def entry (P : Program) : Read Expr :=
     if !f.params.isEmpty then .error "`main` takes parameters; in Oska Core it takes none"
     else if f.ret ≠ .unit then .error "`main` does not return `()`"
     else .ok (.call "main" [])
+
+/-- Whether reading `text` fails with a message that contains `part`. -/
+def refuses (text part : String) : Bool :=
+  match program text with
+  | .error e => (e.splitOn part).length > 1
+  | .ok _ => false
+
+/-- Whether `text` reads as a program whose `main` the Lean reference
+runs to `outcome`, within 1000 steps. -/
+def runsTo (text : String) (outcome : RunResult → Bool) : Bool :=
+  match program text >>= fun P => (entry P).map (P, ·) with
+  | .ok (P, e) => outcome (run P 1000 e)
+  | .error _ => false
+
+#guard refuses "{\"core_ir_version\": 2, \"functions\": []}" "core_ir_version 2"
+#guard refuses "{\"core_ir_version\": 1, \"functions\": []} junk" "not JSON"
+#guard refuses "{\"core_ir_version\": 1, \"functions\": [], \"x\": 1}" "unknown field `x`"
+#guard refuses
+  "{\"core_ir_version\": 1, \"functions\": [{\"name\": \"main\", \"params\": [], \"ret\": \"()\",
+    \"body\": {\"kind\": \"Loop\"}}]}"
+  "unknown expression kind `Loop`"
+#guard refuses
+  "{\"core_ir_version\": 1, \"functions\": [{\"name\": \"main\", \"params\": [], \"ret\": \"()\",
+    \"body\": {\"kind\": \"Int\", \"value\": 9223372036854775808}}]}"
+  "outside Int"
+#guard refuses
+  "{\"core_ir_version\": 1, \"functions\": [{\"name\": \"main\", \"params\": [], \"ret\": \"()\",
+    \"body\": {\"kind\": \"Call\", \"function\": \"main\", \"args\": [{\"kind\": \"Unit\"}]}}]}"
+  "with 1 argument(s), but it has 0 parameter(s)"
+#guard refuses
+  "{\"core_ir_version\": 1, \"functions\": [{\"name\": \"main\", \"params\": [], \"ret\": \"()\",
+    \"body\": {\"kind\": \"Call\", \"function\": \"absent\", \"args\": []}}]}"
+  "does not define"
+#guard runsTo
+  "{\"core_ir_version\": 1, \"functions\": [{\"name\": \"main\", \"params\": [], \"ret\": \"()\",
+    \"body\": {\"kind\": \"Block\", \"stmts\": []}}]}"
+  fun | .value .unit => true | _ => false
+#guard runsTo
+  "{\"core_ir_version\": 1, \"functions\": [{\"name\": \"main\", \"params\": [], \"ret\": \"()\",
+    \"body\": {\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Let\", \"binds\": false, \"type\": \"Int\",
+    \"value\": {\"kind\": \"Binary\", \"op\": \"/\", \"lhs\": {\"kind\": \"Int\", \"value\": 1},
+    \"rhs\": {\"kind\": \"Int\", \"value\": 0}}}]}}]}"
+  fun | .panic .divisionByZero => true | _ => false
 
 end OskaFormal.Core.CoreIR

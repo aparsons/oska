@@ -19,14 +19,31 @@
 //! is `required`: `scripts/check.sh` sets that in CI, where the formal
 //! step installs Lean, so the gate cannot pass by skipping.
 
+mod common;
+
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::OnceLock;
+use std::time::Duration;
 
+use common::process::{run_bounded, Finished};
 use oska_check::core_ir;
 use oska_run::{FakeHost, RunOutcome};
+
+/// How long `lake build oska_core` may take: a first build compiles and
+/// links the Lean reference, well under this.
+const BUILD_TIMEOUT: Duration = Duration::from_secs(900);
+
+/// How long the Lean reference may run one program: far longer than any
+/// takes. Running past it is a difference, never agreement.
+const RUN_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The fewest runtime test programs the comparison must cover, as many as
+/// it covered when it was written. Raise it as Oska Core grows, so that a
+/// regression that makes the export refuse nearly everything fails.
+const MIN_COVERED: usize = 11;
 
 /// The program path a run gets as `args[0]`.
 const PROGRAM_PATH: &str = "prog.osk";
@@ -139,18 +156,20 @@ fn reference() -> &'static Result<PathBuf, String> {
                 .iter()
                 .flat_map(std::env::split_paths),
         );
-        let built = Command::new(&lake)
+        let mut build = Command::new(&lake);
+        build
             .args(["build", "oska_core"])
             .current_dir(&project)
-            .env("PATH", std::env::join_paths(path).expect("PATH joins"))
-            .output()
-            .unwrap_or_else(|e| panic!("cannot run {}: {e}", lake.display()));
+            .env("PATH", std::env::join_paths(path).expect("PATH joins"));
+        let built = run_bounded(build, "", BUILD_TIMEOUT).unwrap_or_else(|_| {
+            panic!("`lake build oska_core` ran for more than {BUILD_TIMEOUT:?}")
+        });
         assert!(
-            built.status.success(),
+            built.code == Some(0),
             "`lake build oska_core` failed in {}:\n{}{}",
             project.display(),
-            String::from_utf8_lossy(&built.stdout),
-            String::from_utf8_lossy(&built.stderr)
+            built.stdout,
+            built.stderr
         );
         let exe = if cfg!(windows) {
             "oska_core.exe"
@@ -182,32 +201,23 @@ fn required() -> bool {
     std::env::var("OSKA_LEAN_REFERENCE").is_ok_and(|v| v == "required")
 }
 
+/// Run the Lean reference `exe` on `input`, at most [`RUN_TIMEOUT`].
+fn run_exe(exe: &Path, input: &str) -> Result<Finished, String> {
+    run_bounded(Command::new(exe), input, RUN_TIMEOUT)
+        .map_err(|_| format!("the Lean reference ran for more than {RUN_TIMEOUT:?}"))
+}
+
 /// Run the core IR `ir` on the Lean reference `exe`: what it printed, or
-/// why it ran nothing (its exit code and what it said on stderr).
+/// why it ran nothing (its exit code and what it said on stderr, or that
+/// it ran out of time).
 fn run_reference(exe: &Path, ir: &str) -> Result<String, String> {
-    let mut child = Command::new(exe)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap_or_else(|e| panic!("cannot run {}: {e}", exe.display()));
-    child
-        .stdin
-        .take()
-        .expect("piped stdin")
-        .write_all(ir.as_bytes())
-        .expect("write the core IR to the Lean reference");
-    let output = child
-        .wait_with_output()
-        .expect("wait for the Lean reference");
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    if output.status.success() {
-        Ok(stdout)
+    let run = run_exe(exe, ir)?;
+    if run.code == Some(0) {
+        Ok(run.stdout)
     } else {
         Err(format!(
-            "{} with {stdout}{}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
+            "exit {:?} with {}{}",
+            run.code, run.stdout, run.stderr
         ))
     }
 }
@@ -420,11 +430,14 @@ fn every_runtime_test_program_in_oska_core_agrees_with_the_lean_reference() {
         return;
     };
     let lean = |ir: &str| run_reference(exe, ir);
-    let (mut covered, mut refused) = (0, 0);
+    let (mut covered, mut refused, mut not_checked) = (0, 0, 0);
     let mut differences = Vec::new();
     for (file, src) in runtime_test_programs() {
         match verdict(&src, &lean, &|_| {}) {
-            Verdict::NotChecked => {}
+            // A literal that holds `fn main` but does not check: a
+            // fragment, a `format!` template, or a program the checker
+            // refuses on purpose.
+            Verdict::NotChecked => not_checked += 1,
             Verdict::Refused => refused += 1,
             Verdict::Agreed => covered += 1,
             Verdict::Differs(difference) => {
@@ -434,7 +447,8 @@ fn every_runtime_test_program_in_oska_core_agrees_with_the_lean_reference() {
         }
     }
     say(&format!(
-        "{test}: {covered} runtime test program(s) covered, {refused} refused by the core IR export"
+        "{test}: {covered} runtime test program(s) covered, {refused} refused by the core IR export, \
+         {not_checked} literal(s) with `fn main` that do not check"
     ));
     assert!(
         differences.is_empty(),
@@ -443,8 +457,9 @@ fn every_runtime_test_program_in_oska_core_agrees_with_the_lean_reference() {
         differences.join("\n\n")
     );
     assert!(
-        covered > 0,
-        "no runtime test program is in Oska Core: the corpus or the export is broken"
+        covered >= MIN_COVERED,
+        "only {covered} runtime test program(s) are in Oska Core, fewer than {MIN_COVERED}: \
+         the corpus or the export is broken"
     );
 }
 
@@ -553,4 +568,56 @@ fn the_corpus_reads_every_kind_of_string_literal() {
             "by".to_string(),
         ]
     );
+}
+
+/// Core IR that is not version 1, each with what the refusal must name.
+const MALFORMED: [(&str, &str, &str); 6] = [
+    (
+        "a wrong version",
+        r#"{"core_ir_version": 2, "functions": []}"#,
+        "core_ir_version 2",
+    ),
+    (
+        "an unknown node",
+        r#"{"core_ir_version": 1, "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Loop"}}]}"#,
+        "unknown expression kind `Loop`",
+    ),
+    (
+        "an Int out of range",
+        r#"{"core_ir_version": 1, "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Let", "binds": false, "type": "Int", "value": {"kind": "Int", "value": 9223372036854775808}}]}}]}"#,
+        "outside Int",
+    ),
+    (
+        "an arity mismatch",
+        r#"{"core_ir_version": 1, "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Call", "function": "main", "args": [{"kind": "Unit"}]}}]}"#,
+        "with 1 argument(s), but it has 0 parameter(s)",
+    ),
+    (
+        "trailing junk",
+        r#"{"core_ir_version": 1, "functions": []} junk"#,
+        "not JSON",
+    ),
+    (
+        "an unknown field",
+        r#"{"core_ir_version": 1, "functions": [], "extra": 1}"#,
+        "unknown field `extra`",
+    ),
+];
+
+#[test]
+fn the_lean_reference_refuses_malformed_core_ir_with_exit_2() {
+    let Some(exe) = reference_or_skip("lean_reference (malformed core IR)") else {
+        return;
+    };
+    for (what, ir, message) in MALFORMED {
+        let run = run_exe(exe, ir).unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert_eq!(run.code, Some(2), "{what}: the exit code, with {run:?}");
+        assert_eq!(run.stdout, "", "{what}: nothing on stdout");
+        assert!(
+            run.stderr.starts_with("error: not core IR version 1: ")
+                && run.stderr.contains(message),
+            "{what}: stderr should name {message:?}: {:?}",
+            run.stderr
+        );
+    }
 }
