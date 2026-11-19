@@ -1020,6 +1020,11 @@ impl<'l, 'p> Body<'l, 'p> {
         dst
     }
 
+    /// A run limit as a constant. `Limits` holds at most `i64::MAX`.
+    fn limit_constant(&mut self, limit: u64) -> Temp {
+        self.constant(i64::try_from(limit).unwrap_or(i64::MAX))
+    }
+
     fn copy(&mut self, src: Temp) -> Temp {
         let dst = self.temp();
         self.push(Inst::Copy { dst, src });
@@ -1837,8 +1842,7 @@ impl<'l, 'p> Body<'l, 'p> {
         };
         let over = self.panic_static(Limit::Output.code(), &Limit::Output.message(limit), span)?;
         let extra = self.constant(extra);
-        // `Limits` holds at most `i64::MAX`.
-        let limit = self.constant(i64::try_from(limit).unwrap_or(i64::MAX));
+        let limit = self.limit_constant(limit);
         let allowed = self.call_runtime("output_allows", vec![text, extra, limit], span)?;
         self.push(Inst::JumpIfZero {
             cond: allowed,
@@ -1855,8 +1859,7 @@ impl<'l, 'p> Body<'l, 'p> {
             return;
         };
         let counter = self.steps_counter();
-        // `Limits` holds at most `i64::MAX`.
-        let limit = self.constant(i64::try_from(limit).unwrap_or(i64::MAX));
+        let limit = self.limit_constant(limit);
         self.store(counter, 0, limit);
     }
 
@@ -1947,7 +1950,7 @@ impl<'l, 'p> Body<'l, 'p> {
                     }
                     Some(limit) => {
                         let mut with_limit = args.to_vec();
-                        with_limit.push(self.constant(i64::try_from(limit).unwrap_or(i64::MAX)));
+                        with_limit.push(self.limit_constant(limit));
                         self.panic_text(
                             panics::MISSING_SECRET,
                             "panic_missing_secret_cut",
@@ -2184,8 +2187,7 @@ impl<'l, 'p> Body<'l, 'p> {
         if let Some(limit) = self.lowering.limits.max_memory {
             let (before, after) = self.report(Limit::Memory.code(), span);
             let report = self.text(&format!("{before}{}{after}", Limit::Memory.message(limit)));
-            // `Limits` holds at most `i64::MAX`.
-            let limit = self.constant(i64::try_from(limit).unwrap_or(i64::MAX));
+            let limit = self.limit_constant(limit);
             self.call_runtime("memory_limit_start", vec![limit, report], NOWHERE)?;
         }
         let mut args = Vec::new();

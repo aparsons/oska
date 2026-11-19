@@ -27,8 +27,8 @@
 //! A block may add the word `release` (checked as `oskac check --release`),
 //! `tests` (run as `oskac test`, for the `P001x` codes that only a
 //! `test` block reaches), or a run limit such as `max-output=16`,
-//! `max-steps=1000` or `max-memory=1048576` (run as `oskac run` with that
-//! flag, for the limits' panics).
+//! `max-steps=1000`, `timeout=50` or `max-memory=1048576` (run as `oskac
+//! run` with that flag, for the limits' panics).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

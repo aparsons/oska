@@ -155,7 +155,7 @@ pub fn run(src: &str, host: &mut dyn Host, args: &[String]) -> RunOutcome {
 
 /// [`run`] under the run `limits` (spec #446): a program that reaches one
 /// panics with its code (`P0038` for `--max-steps`, `P0039` for
-/// `--timeout`, `P0041` for `--max-output`).
+/// `--timeout`, `P0040` for `--max-memory`, `P0041` for `--max-output`).
 pub fn run_with_limits(
     src: &str,
     host: &mut dyn Host,

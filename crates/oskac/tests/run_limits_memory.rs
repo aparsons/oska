@@ -2,7 +2,7 @@
 //! --max-memory=<bytes>` stops a program before its values take more than
 //! that many bytes, net of those it let go of, with `P0040` and exit code
 //! 101, on the interpreter and natively. It is a resource bound, not a
-//! parity promise: each backend counts with its own allocator, so the two
+//! parity promise: each backend counts in its own way, so the two
 //! may stop at different points, and the tests check only that each
 //! stops.
 //!

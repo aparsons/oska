@@ -8,15 +8,6 @@
 
 use oska_check::limits::{Limit, Limits};
 
-/// What `limit`'s value counts, for a malformed value's error.
-fn unit(limit: Limit) -> &'static str {
-    match limit {
-        Limit::Steps => "steps",
-        Limit::Time => "milliseconds",
-        Limit::Output | Limit::Memory => "bytes",
-    }
-}
-
 /// Read the command-line argument `arg` into `limits` if it is a limit
 /// flag, such as `--max-output=<n>`: `None` when it is not one; otherwise the
 /// error that makes it a usage error, if any: a value that is not a whole
@@ -38,7 +29,7 @@ pub fn take_flag(limits: &mut Limits, arg: &str) -> Option<Result<(), String>> {
         }
         None => Some(Err(format!(
             "{name} takes a whole number of {} above 0, not `{value}`",
-            unit(limit)
+            limit.unit()
         ))),
     }
 }

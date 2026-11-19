@@ -1,11 +1,11 @@
-//! Helpers shared by the run-limits tests (`run_limits.rs`,
-//! `run_limits_steps.rs`): running `oskac` in a scratch directory, and
-//! golden files under `tests/golden/run_limits/`.
+//! Helpers shared by the run-limits tests (every `run_limits*.rs` test
+//! file): running `oskac` in a scratch directory, and golden files under
+//! `tests/golden/run_limits/`.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 
-use super::portable::Scratch;
+use super::portable::{output_with_input, Scratch};
 
 /// What `oskac <args>` does, run in `dir`.
 pub fn oskac_in(dir: &Path, args: &[&str]) -> Output {
@@ -65,23 +65,12 @@ pub const HELLO: &str = "fn main(io: Stdout) {\n    let _ = io.println(\"hello\"
 /// What `oskac <args>` does, run in `dir` with `src` on its standard
 /// input, as `oskac run -` reads a program.
 pub fn oskac_with_stdin(dir: &Path, args: &[&str], src: &str) -> Output {
-    use std::io::Write;
-    let mut child = Command::new(env!("CARGO_BIN_EXE_oskac"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_oskac"));
+    command
         .args(args)
         .current_dir(dir)
-        .env_remove("OSKA_CACHE_DIR")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("oskac should start");
-    child
-        .stdin
-        .take()
-        .expect("a stdin")
-        .write_all(src.as_bytes())
-        .expect("should write the program");
-    child.wait_with_output().expect("oskac should finish")
+        .env_remove("OSKA_CACHE_DIR");
+    output_with_input(&mut command, src.as_bytes())
 }
 
 /// The step fixtures, `tests/fixtures/run_limits/steps/*.osk`: each name

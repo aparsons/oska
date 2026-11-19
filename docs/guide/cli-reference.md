@@ -211,7 +211,7 @@ The output is the baseline's, with `grant` in place of `baseline`: a `grant:` se
 - `--max-steps=<n>` stops the program, with the panic `P0038` and exit code 101, at the step past `<n>`: a call of a function, method or closure written in Oska, or a loop going back for its next iteration. It stops at the same step natively and on the interpreter. See [run limits](../runtime.md#run-limits).
 - `--timeout=<ms>` stops the program, with the panic `P0039` and exit code 101, once it has run for `<ms>` milliseconds of wall-clock time, waiting for input included, within a tolerance of 100 ms. A timeout is not deterministic: where the program stops differs from run to run. See [run limits](../runtime.md#run-limits).
 - `--max-output=<bytes>` stops the program, with the panic `P0041` and exit code 101, at the write that would take what it wrote to standard output and standard error together past that many bytes; that write writes nothing. See [run limits](../runtime.md#run-limits).
-- `--max-memory=<bytes>` stops the program, with the panic `P0040` and exit code 101, before its values take more than that many bytes, net of those it let go of. Each backend counts with its own allocator, so the two may stop at different points. See [run limits](../runtime.md#run-limits).
+- `--max-memory=<bytes>` stops the program, with the panic `P0040` and exit code 101, before its values take more than that many bytes, net of those it let go of. Each backend counts in its own way, so the two may stop at different points. See [run limits](../runtime.md#run-limits).
 
 | Exit code | Meaning |
 | --- | --- |

@@ -24,7 +24,8 @@ pub enum Limit {
     /// standard output and standard error together.
     Output,
     /// `--max-memory=<bytes>`: the bytes the program's live values may
-    /// take, net of frees, counted by each backend's own allocator.
+    /// take, net of frees: on the interpreter, the bytes it reckons for
+    /// each value; natively, the blocks `std.rt`'s allocator gives out.
     Memory,
 }
 
@@ -40,6 +41,15 @@ impl Limit {
             Limit::Time => "--timeout",
             Limit::Output => "--max-output",
             Limit::Memory => "--max-memory",
+        }
+    }
+
+    /// What the limit's value counts, for a malformed value's error.
+    pub fn unit(self) -> &'static str {
+        match self {
+            Limit::Steps => "steps",
+            Limit::Time => "milliseconds",
+            Limit::Output | Limit::Memory => "bytes",
         }
     }
 

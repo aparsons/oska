@@ -6243,9 +6243,6 @@ pub fn on_exception(pointers: Int) -> Int {
 
 // ---- Memory limit ----------------------------------------------------------
 //
-// (At the end of the file, so that the byte offsets of the code before
-// it, which `std.rt`'s panic reports name, are the same as without it.)
-//
 // `oskac run --max-memory=<limit>` builds the program so that each call of
 // `alloc`, `try_alloc` and `free`, in the generated code and in `std.rt`
 // alike, calls `counted_alloc`, `counted_try_alloc` or `counted_free` in
