@@ -110,7 +110,7 @@
 - The host can check the snippet *before* it runs. `oskac check` prints each function's authority, and `oskac check --baseline=<file>` exits with 3 when authority widened ([`docs/guide/cli-reference.md`](../guide/cli-reference.md)). The interpreter runs only programs the checker accepts ([ADR 0007](../adr/0007-interpreter-runs-the-checked-program.md)).
 - File access goes only through confined directory or file capabilities ([ADR 0008](../adr/0008-file-access-goes-through-confined-capabilities.md)), and a path that leaves the root is refused at run time ([agent scripting note](2026-11-agent-scripting-python-vs-oska.md)).
 - Text from outside is `Untrusted<String>` and cannot reach a structural position ([ADR 0006](../adr/0006-trust-is-a-flag-on-text.md)).
-- The interpreter starts with about 3 ms of CPU against Python's 21 ms ([agent scripting note](2026-11-agent-scripting-python-vs-oska.md)).
+- An empty `main` runs in the interpreter in about 4 to 5 ms, against 22 to 24 ms for `python3 -c pass` ([agent scripting note](2026-11-agent-scripting-python-vs-oska.md)).
 - **Inference:** Cloudflare builds a capability sandbox around untyped JavaScript at run time ([bindings docs](https://developers.cloudflare.com/dynamic-workers/usage/bindings/)). Oska would add a *static* answer to "what can this snippet do?", which a host could compare with a grant before it spends any sandbox time.
 
 **Gaps today.**
@@ -136,7 +136,7 @@
 - The release check rejects unused authority, so an agent cannot finish with a capability it did not need ([ADR 0016](../adr/0016-unused-authority-is-a-release-check-error.md), [#367](https://github.com/aparsons/oska/issues/367)).
 - A Claude Code plugin will run the post-edit check and the Stop gate ([#206](https://github.com/aparsons/oska/issues/206)).
 - **Inference:** a check-fix-recheck loop is the kind of fan-out work that PTC suits ([PTC docs](https://platform.claude.com/docs/en/agents-and-tools/tool-use/programmatic-tool-calling)). With `oskac` as code-callable tools, one code block could check, apply machine fixes and check again, and return only the remaining diagnostics to the model.
-- **Inference (from the agent scripting note):** a permission hook could approve `oskac run` when the authority report shows only `Fs` narrowed to the working tree and `Stdout`. Capabilities then act as the sandbox boundary for agent scripts ([agent scripting note](2026-11-agent-scripting-python-vs-oska.md)).
+- **Inference (from the agent scripting note):** a permission hook could approve `oskac run` when the authority report shows only `Fs` attenuated to the working tree and `Stdout`. Capabilities then act as the sandbox boundary for agent scripts ([agent scripting note](2026-11-agent-scripting-python-vs-oska.md)).
 
 **Gaps today.**
 

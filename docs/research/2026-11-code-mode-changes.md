@@ -246,8 +246,8 @@ Rank is by value per cost, then by what can start now. [ADR 0014](../adr/0014-ev
 **What Oska has today.**
 - `main` takes only built-in capabilities and program inputs (`E0211`) ([capabilities.md, line 36](../guide/capabilities.md)).
 - v0 has no FFI; WASM component imports come "later", typed with the capabilities they need ([design.md, lines 489–490](../design.md)). The mapping to WASI is an open question ([design.md, line 535](../design.md)).
-- Syscalls exist only in `std.rt` ([ADR 0013](../adr/0013-system-calls-only-in-std-rt.md)).
-- Inference: the model is already capability-shaped. A `cap struct` holds only narrowed capabilities ([#229, Implementation Decisions](https://github.com/aparsons/oska/issues/229)); a host binding is one more kind of narrowed capability.
+- System-call intrinsics exist only in `std.rt` ([ADR 0013](../adr/0013-system-calls-only-in-std-rt.md)).
+- Inference: the model is already capability-shaped. A `cap struct` holds only attenuated capabilities ([#229, Implementation Decisions](https://github.com/aparsons/oska/issues/229)); a host binding is one more kind of attenuated capability.
 
 **The change.** An ADR for a **host interface**: a package declares a body-less `cap struct` (for example `GithubTools`) with typed methods. `main` may take it. The host supplies its implementation at start, over one channel (stdin/stdout JSON-RPC for a process, an import for WASM). Every returned text is `Untrusted`. The authority report names it as its own kind.
 - Name: avoid "host capability", which #228 uses for a network capability confined to one host ([#228, story 1](https://github.com/aparsons/oska/issues/228)).
