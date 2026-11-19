@@ -16,7 +16,9 @@ reach (ADR 0008: `Fs` > `FsRead` > `DirRead`, and so on), so `authority`
 is the kinds those parameters name, each with every kind below it
 (`CapKind.below`). In Oska Core no struct or enum holds a capability or a
 function (the export refuses both), so a parameter is
-capability-bearing when its type is a capability or a `cap fn`. A plain
+capability-bearing when its type is a capability or a `cap fn`; a
+mutating method's receiver is a parameter too, its first
+(`Function.allParams`), and a struct or enum never bears one. A plain
 `fn` is not: its typing lets it capture no capability-bearing value. A
 `cap fn` may have captured capabilities, and its type, like the checker's
 authority report, does not say which. So a call's bound is `f`'s
@@ -58,10 +60,10 @@ namespace OskaFormal.Core
 
 /-! ## Authority -/
 
-/-- The capability kinds a function's parameters name: what the
-checker's authority report lists for it. -/
+/-- The capability kinds a function's parameters (its receiver
+included) name: what the checker's authority report lists for it. -/
 def paramKinds (f : Function) : List CapKind :=
-  f.params.filterMap fun p => p.type.capKind?
+  f.allParams.filterMap fun p => p.type.capKind?
 
 /-- **Authority** of a function: the capability kinds it can reach
 through its capability-bearing parameters, each kind they name with every
@@ -201,6 +203,73 @@ theorem capsWithin_instantiate {A : List CapKind} :
       · exact ih hvs.2 (capsWithin_subst hvs.1 _ hb) hi
       · exact ih hvs.2 hb hi
 
+theorem capsWithin_enter {A : List CapKind} {f : Function} {vs : List Expr} {e : Expr}
+    (hvs : Expr.capsWithinList A vs = true) (hb : f.body.capsWithin A = true)
+    (he : f.enter vs = some e) : e.capsWithin A = true := by
+  unfold Function.enter at he
+  split at he
+  · exact capsWithin_instantiate hvs hb he
+  · obtain ⟨b, hi, rfl⟩ := Option.map_eq_some_iff.mp he
+    simp only [Expr.capsWithinList, Bool.and_eq_true] at hvs
+    simp only [Expr.capsWithin, Bool.and_eq_true]
+    exact ⟨hvs.1, capsWithin_instantiate hvs.2 hb hi⟩
+  · cases he
+
+/-- The capabilities of a list with one expression replaced are those of
+the list and of the new one. -/
+theorem capsWithinList_set {A : List CapKind} {x : Expr} (hx : x.capsWithin A = true) :
+    ∀ {xs : List Expr} {i : Nat}, Expr.capsWithinList A xs = true →
+      Expr.capsWithinList A (xs.set i x) = true := by
+  intro xs
+  induction xs with
+  | nil => intro i _; rfl
+  | cons y ys ih =>
+    intro i h
+    simp only [Expr.capsWithinList, Bool.and_eq_true] at h
+    cases i with
+    | zero => simp [Expr.capsWithinList, hx, h.2]
+    | succ i => simp [Expr.capsWithinList, h.1, ih h.2]
+
+/-- A field of a value holds only what the value holds. -/
+theorem capsWithin_getAt {A : List CapKind} :
+    ∀ (is : List Nat) {v : Expr}, v.capsWithin A = true → (v.getAt is).capsWithin A = true := by
+  intro is
+  induction is with
+  | nil => intro v h; exact h
+  | cons i is ih =>
+    intro v h
+    cases v with
+    | construct t var fs =>
+      cases var with
+      | none =>
+        simp only [Expr.getAt]
+        apply ih
+        cases hf : fs[i]? with
+        | none => rfl
+        | some x => exact capsWithinList_get (by simpa [Expr.capsWithin] using h) hf
+      | some _ => simp [Expr.getAt, Expr.capsWithin]
+    | _ => simp [Expr.getAt, Expr.capsWithin]
+
+/-- A value with another put in a field holds only what the two hold. -/
+theorem capsWithin_setAt {A : List CapKind} {w : Expr} (hw : w.capsWithin A = true) :
+    ∀ (is : List Nat) {v : Expr}, v.capsWithin A = true → (v.setAt is w).capsWithin A = true := by
+  intro is
+  induction is with
+  | nil => intro v _; exact hw
+  | cons i is ih =>
+    intro v h
+    cases v with
+    | construct t var fs =>
+      cases var with
+      | none =>
+        simp only [Expr.setAt, Expr.capsWithin] at h ⊢
+        refine capsWithinList_set (ih ?_) h
+        cases hf : fs[i]? with
+        | none => rfl
+        | some x => exact capsWithinList_get h hf
+      | some _ => simpa [Expr.setAt] using h
+    | _ => simpa [Expr.setAt] using h
+
 /-- What a pattern binds is part of the value it matches. -/
 theorem capsWithin_matchPat {A : List CapKind} :
     ∀ (p : Pattern) (v : Expr) (bs : List Expr), v.capsWithin A = true →
@@ -294,6 +363,8 @@ def OutcomeWithin (A : List CapKind) : Outcome → Prop
   | .panic _ => True
   | .perform req k => req.kind ∈ A ∧ ∀ r, r.capsWithin A = true → (k r).capsWithin A = true
   | .ret v => v.capsWithin A = true
+  | .read _ _ k => ∀ r, r.capsWithin A = true → (k r).capsWithin A = true
+  | .write _ _ w e => w.capsWithin A = true ∧ e.capsWithin A = true
 
 theorem OutcomeWithin.map {A : List CapKind} {o : Outcome} {f : Expr → Expr}
     (h : OutcomeWithin A o) (hf : ∀ x, x.capsWithin A = true → (f x).capsWithin A = true) :
@@ -303,10 +374,35 @@ theorem OutcomeWithin.map {A : List CapKind} {o : Outcome} {f : Expr → Expr}
   | panic _ => trivial
   | perform req k => exact ⟨h.1, fun r hr => hf _ (h.2 r hr)⟩
   | ret v => exact h
+  | read _ _ k => exact fun r hr => hf _ (h r hr)
+  | write _ _ w e => exact ⟨h.1, hf _ h.2⟩
 
 theorem OutcomeWithin.inFrame {A : List CapKind} {o : Outcome} (h : OutcomeWithin A o) :
     OutcomeWithin A o.inFrame := by
   cases o <;> simp_all [OutcomeWithin, Outcome.inFrame, Outcome.map, Expr.capsWithin]
+
+/-- A binder of var 0 holding `v` keeps a step's outcome within `A` when
+`v` is: it answers a read with a field of `v`, and a write by putting
+the value written in `v`. -/
+theorem OutcomeWithin.under {A : List CapKind} {o : Outcome} {v : Expr}
+    {wrap : Expr → Expr → Expr} {onRet : Expr → Outcome} (h : OutcomeWithin A o)
+    (hv : v.capsWithin A = true)
+    (hwrap : ∀ v e, v.capsWithin A = true → e.capsWithin A = true → (wrap v e).capsWithin A = true)
+    (hret : ∀ r, r.capsWithin A = true → OutcomeWithin A (onRet r)) :
+    OutcomeWithin A (o.under v wrap onRet) := by
+  cases o with
+  | next e => exact hwrap v e hv h
+  | panic _ => trivial
+  | perform req k => exact ⟨h.1, fun r hr => hwrap v _ hv (h.2 r hr)⟩
+  | ret r => exact hret r h
+  | read i is k =>
+    cases i with
+    | zero => exact hwrap v _ hv (h _ (capsWithin_getAt is hv))
+    | succ i => exact fun r hr => hwrap v _ hv (h r hr)
+  | write i is w e =>
+    cases i with
+    | zero => exact hwrap _ e (capsWithin_setAt h.1 is hv) h.2
+    | succ i => exact ⟨h.1, hwrap v e hv h.2⟩
 
 /-- No body of the program holds a capability value. -/
 def ProgramCapFree (P : Program) : Prop :=
@@ -347,7 +443,7 @@ theorem step_within {P : Program} (hP : ProgramCapFree P) {A : List CapKind} (hA
       simp [Expr.capsWithin, capsWithinList_append, Expr.capsWithinList, h, he.1, he.2.2]
   | call hf _ hi =>
     simp only [Expr.capsWithin] at he
-    have h := capsWithin_instantiate he (capsWithin_mono (fun _ h => by simp at h) _ (hP _ _ hf)) hi
+    have h := capsWithin_enter he (capsWithin_mono (fun _ h => by simp at h) _ (hP _ _ hf)) hi
     simpa [OutcomeWithin, Expr.capsWithin] using h
   | ifCond _ ih =>
     simp only [Expr.capsWithin, Bool.and_eq_true] at he
@@ -429,6 +525,36 @@ theorem step_within {P : Program} (hP : ProgramCapFree P) {A : List CapKind} (hA
   | frame _ ih =>
     simp only [Expr.capsWithin] at he
     exact (ih he).inFrame
+  | var => exact fun r hr => hr
+  | blockVarArg _ ih | blockAssignArg _ ih =>
+    simp only [Expr.capsWithin, Expr.capsWithinStmts, Bool.and_eq_true] at he
+    exact (ih he.1.1).map fun _ h => by
+      simp [Expr.capsWithin, Expr.capsWithinStmts, h, he.1.2, he.2]
+  | blockVar _ | blockAssign _ =>
+    simp_all [Expr.capsWithin, Expr.capsWithinStmts, OutcomeWithin]
+  | cellBody _ ih =>
+    simp only [Expr.capsWithin, Bool.and_eq_true] at he
+    exact (ih he.2).under he.1 (fun _ _ h₁ h₂ => by simp [Expr.capsWithin, h₁, h₂])
+      fun _ h => h
+  | methodBody _ ih =>
+    simp only [Expr.capsWithin, Bool.and_eq_true] at he
+    exact (ih he.2).under he.1 (fun _ _ h₁ h₂ => by simp [Expr.capsWithin, h₁, h₂])
+      fun _ h => by simp [OutcomeWithin, Expr.capsWithin, h, he.1]
+  | cellValue _ =>
+    simp only [Expr.capsWithin, Bool.and_eq_true] at he
+    exact he.2
+  | methodValue _ =>
+    simp only [Expr.capsWithin, Bool.and_eq_true] at he
+    exact he
+  | mutCallArg _ _ ih =>
+    simp only [Expr.capsWithin, capsWithinList_append, Expr.capsWithinList,
+      Bool.and_eq_true] at he
+    exact (ih he.2.1).map fun _ h => by
+      simp [Expr.capsWithin, capsWithinList_append, Expr.capsWithinList, h, he.1, he.2.2]
+  | mutCall hf _ _ hi =>
+    simp only [Expr.capsWithin] at he
+    have h := capsWithin_instantiate he (capsWithin_mono (fun _ h => by simp at h) _ (hP _ _ hf)) hi
+    exact fun r hr => by simp [Expr.capsWithin, hr, h]
 
 /-- An answer the semantics allows an effect on a capability of a kind in
 `A` holds only capabilities of kinds in `A`. -/
@@ -579,8 +705,8 @@ is stated with `_hf` so that it reads as a fact about the function
 called. -/
 theorem authority_safety {P : Program} (hP : ProgramSourceTyped P) {name : String} {f : Function}
     (_hf : P.find? name = some f) {vs : List Expr}
-    (hargs : ValueTyped P (.many vs (f.params.map Param.type)))
-    {A : List CapKind} (hfn : FnArgsWithin A f.params vs)
+    (hargs : ValueTyped P (.many vs (f.allParams.map Param.type)))
+    {A : List CapKind} (hfn : FnArgsWithin A f.allParams vs)
     {e' : Expr} {tr : List Request} (hrun : Steps P (.call name vs) tr e') :
     ∀ eff ∈ tr, eff.kind ∈ callAuthority f A := by
   refine steps_within hP.capFree (callAuthority_closed f A) hrun
@@ -605,6 +731,9 @@ mutual
     | .match_ sc arms => Expr.caps sc ++ Expr.capsArms arms
     | .closure _ _ _ _ _ body => Expr.caps body
     | .callValue c args => Expr.caps c ++ Expr.capsList args
+    | .var_ _ => []
+    | .mutCall _ _ args => Expr.capsList args
+    | .cell v e | .method _ v e => Expr.caps v ++ Expr.caps e
 
   def Expr.capsList : List Expr → List CapKind
     | [] => []
@@ -618,6 +747,8 @@ mutual
     | [] => []
     | .let_ _ _ e :: ss => Expr.caps e ++ Expr.capsStmts ss
     | .expr e :: ss => Expr.caps e ++ Expr.capsStmts ss
+    | .var_ _ e :: ss => Expr.caps e ++ Expr.capsStmts ss
+    | .assign _ e :: ss => Expr.caps e ++ Expr.capsStmts ss
 
   def Expr.capsArms : List Arm → List CapKind
     | [] => []
@@ -672,16 +803,16 @@ every effect has a kind in `f`'s authority, or below a kind of a
 capability that a `cap fn` among the arguments holds. -/
 theorem authority_safety_ofArgs {P : Program} (hP : ProgramSourceTyped P) {name : String}
     {f : Function} (hf : P.find? name = some f) {vs : List Expr}
-    (hargs : ValueTyped P (.many vs (f.params.map Param.type)))
+    (hargs : ValueTyped P (.many vs (f.allParams.map Param.type)))
     {e' : Expr} {tr : List Request} (hrun : Steps P (.call name vs) tr e') :
-    ∀ eff ∈ tr, eff.kind ∈ authority f ++ (capFnKinds f.params vs).flatMap CapKind.below :=
-  authority_safety hP hf hargs (FnArgsWithin.of_capFnKinds f.params vs) hrun
+    ∀ eff ∈ tr, eff.kind ∈ authority f ++ (capFnKinds f.allParams vs).flatMap CapKind.below :=
+  authority_safety hP hf hargs (FnArgsWithin.of_capFnKinds f.allParams vs) hrun
 
 /-- **Authority safety** for a function with no `cap fn` parameter: every
 effect has a kind in its authority. -/
 theorem authority_safety_noCapFn {P : Program} (hP : ProgramSourceTyped P) {name : String}
-    {f : Function} (hf : P.find? name = some f) (hfo : ∀ p ∈ f.params, p.type.isCapFn = false)
-    {vs : List Expr} (hargs : ValueTyped P (.many vs (f.params.map Param.type)))
+    {f : Function} (hf : P.find? name = some f) (hfo : ∀ p ∈ f.allParams, p.type.isCapFn = false)
+    {vs : List Expr} (hargs : ValueTyped P (.many vs (f.allParams.map Param.type)))
     {e' : Expr} {tr : List Request} (hrun : Steps P (.call name vs) tr e') :
     ∀ eff ∈ tr, eff.kind ∈ authority f := by
   have := authority_safety hP hf hargs (A := []) (FnArgsWithin.of_noCapFn hfo) hrun
@@ -707,8 +838,8 @@ authority, or below a kind in `A` that the function values among the
 arguments hold. -/
 theorem authority_safety_reference {P : Program} (hP : ProgramSourceTyped P) {name : String}
     {f : Function} (hf : P.find? name = some f) {vs : List Expr}
-    (hargs : ValueTyped P (.many vs (f.params.map Param.type)))
-    {A : List CapKind} (hfn : FnArgsWithin A f.params vs) {fuel : Nat} {h h' : Host} :
+    (hargs : ValueTyped P (.many vs (f.allParams.map Param.type)))
+    {A : List CapKind} (hfn : FnArgsWithin A f.allParams vs) {fuel : Nat} {h h' : Host} :
     (∀ {v}, run P fuel h (.call name vs) = (.value v, h') →
       ∃ tr, Steps P (.call name vs) tr v ∧ ∀ eff ∈ tr, eff.kind ∈ callAuthority f A) ∧
     (∀ {k}, run P fuel h (.call name vs) = (.panic k, h') →
@@ -819,9 +950,9 @@ theorem quiet_never_prints {vs : List Expr} {tr : List Request} {e' : Expr}
     (hrun : Steps quietProgram (.call "quiet" vs) tr e') : ∀ eff ∈ tr, eff.kind ≠ .stdout := by
   intro eff heff hk
   have := authority_safety_noCapFn quietProgram_sourceTyped (f := quiet) rfl
-    (by simp [quiet, Ty.isCapFn]) hargs hrun eff heff
+    (by simp [quiet, Function.allParams, Ty.isCapFn]) hargs hrun eff heff
   rw [hk] at this
-  simp [authority, paramKinds, quiet, Ty.capKind?, CapKind.below] at this
+  simp [authority, paramKinds, Function.allParams, quiet, Ty.capKind?, CapKind.below] at this
 
 /-- `fn peek(r: FsRead) { let _ = r.restrict_to(".").read_to_string(Path.from("a.txt")) }`:
 it reads a file, and has no capability to write one. -/
@@ -858,9 +989,9 @@ theorem peek_never_writes {vs : List Expr} {tr : List Request} {e' : Expr}
     ∀ eff ∈ tr, eff.op ≠ .write ∧ eff.op ≠ .createDir := by
   intro eff heff
   have hk := authority_safety_noCapFn peekProgram_sourceTyped (f := peek) rfl
-    (by simp [peek, Ty.isCapFn]) hargs hrun eff heff
+    (by simp [peek, Function.allParams, Ty.isCapFn]) hargs hrun eff heff
   have hr := steps_receiver hrun eff heff
-  simp [authority, paramKinds, peek, Ty.capKind?, CapKind.below] at hk
+  simp [authority, paramKinds, Function.allParams, peek, Ty.capKind?, CapKind.below] at hk
   constructor <;> intro hop <;> rw [hop] at hr <;> simp [Builtin.receiver] at hr <;>
     rcases hk with hk | hk <;> rw [hk] at hr <;> cases hr
 
@@ -965,7 +1096,7 @@ example :
 /-- The closure that captures `Stdout` has no plain `fn` type: `main`
 could not pass it to `applyPure`. -/
 theorem capturing_closure_not_plain (P : Program) (R t : Ty) :
-    ¬ Typed P R [.cap .stdout] (.expr (printsHi false) t) := by
+    ¬ Typed P R [.cap .stdout] [] (.expr (printsHi false) t) := by
   intro h
   cases h with
   | closure _ hpure _ _ =>
@@ -988,11 +1119,11 @@ theorem applyPure_performs_nothing {g : Expr} {tr : List Request} {e' : Expr}
     (hg : ValueTyped closureProgram (.one g (.fn false [] (.result .unit .ioError))))
     (hrun : Steps closureProgram (.call "applyPure" [g]) tr e') : tr = [] := by
   have := authority_safety_noCapFn closureProgram_sourceTyped (f := applyPure) rfl
-    (by simp [applyPure, Ty.isCapFn]) (ValueTyped.cons hg ValueTyped.nil) hrun
+    (by simp [applyPure, Function.allParams, Ty.isCapFn]) (ValueTyped.cons hg ValueTyped.nil) hrun
   cases tr with
   | nil => rfl
   | cons eff _ =>
     have h := this eff List.mem_cons_self
-    simp [authority, paramKinds, applyPure, Ty.capKind?] at h
+    simp [authority, paramKinds, Function.allParams, applyPure, Ty.capKind?] at h
 
 end OskaFormal.Core

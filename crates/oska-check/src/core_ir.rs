@@ -8,38 +8,41 @@
 //! tests, not a published format, and no CLI command prints it. The
 //! goldens of `tests/core_ir.rs` pin it.
 //!
-//! # Version 5
+//! # Version 6
 //!
-//! Oska Core version 5 has functions, `let`, `if`, `Int` and `Bool` with
-//! their operators, `()`, the value of a block or `if` with no value, and
-//! the module's own structs and enums without generics, with their
-//! construction, field access and `match`. It has text (`String`, trusted
-//! or not, as literals), `Path`, and the capabilities `Stdout`, `Fs`,
-//! `FsRead`, `FsWrite`, `Dir`, `DirRead` and `DirWrite`, as opaque values
-//! that only `main` receives, with the built-in calls in [`BUILTINS`]:
-//! writing a line to stdout, reading and writing a file and creating a
-//! directory under a directory capability, attenuation, and `is_ok` and
-//! `unwrap_or` on a `Result`. It has closures, which capture by value the
-//! slots they read, function types, and calls of a function value. It has
-//! `Result<T, E>` whose `T` and `E` hold no capability or function, with
-//! `Ok`, `Err`, their patterns, and `?`, which may convert the error with
-//! the `from` of an `impl From<X> for T` the checker chose; that `impl` is
+//! Oska Core version 6 has functions, `let`, `var` and assignment,
+//! `if`, `Int` and `Bool` with their operators, `()`, the value of a
+//! block or `if` with no value, and the module's own structs and enums
+//! without generics, with their construction, field access and `match`.
+//! It has text (`String`, trusted or not, as literals), `Path`, and the
+//! capabilities `Stdout`, `Fs`, `FsRead`, `FsWrite`, `Dir`, `DirRead`
+//! and `DirWrite`, as opaque values that only `main` receives, with the
+//! built-in calls in [`BUILTINS`]: writing a line to stdout, reading
+//! and writing a file and creating a directory under a directory
+//! capability, attenuation, and `is_ok` and `unwrap_or` on a `Result`.
+//! It has closures, which capture by value the slots they read,
+//! function types, and calls of a function value. It has `Result<T, E>`
+//! whose `T` and `E` hold no capability or function, with `Ok`, `Err`,
+//! their patterns, and `?`, which may convert the error with the `from`
+//! of an `impl From<X> for T` the checker chose; that `impl` is
 //! exported as its `from`, a function named as the checker names it,
-//! `<T as From<X>>.from`. An `IoError` is opaque: its field is outside.
+//! `<T as From<X>>.from`. It has the methods and associated functions
+//! of an inherent `impl` of those structs and enums, named `T.name` as
+//! the checker names them, and mutating methods (`var self`), with
+//! value semantics. An `IoError` is opaque: its field is outside.
 //! [`export`] refuses any other program, naming the first construct
 //! outside it in source order, with its span. It fails closed: a trait,
-//! any other `impl` or `const` is refused even when nothing uses it, and
-//! so are a generic
-//! struct or enum, one with a field whose type is outside Oska Core
-//! (refused at its declaration), `var` (even one never assigned), a `use`,
-//! a `test` block, a generic function, a method, a contract, a prelude type
-//! such as `Option` (and `?` on one), and any type the checker left
-//! unsolved. It also refuses any other built-in call, `==` and `!=` on
-//! anything but `Int`, `Bool` and `()`, a struct or enum with a capability
-//! or function field, a function used as a value, a closure that reads
-//! `self` (a guard that cannot fire while methods are refused, kept to fail
-//! closed), and a `main` that returns anything but `()` or takes anything
-//! but `Stdout`, `Fs`, `FsRead` or `FsWrite`, the capabilities the runtime
+//! any other `impl` or `const` is refused even when nothing uses it,
+//! and so are a generic struct or enum, one with a field whose type is
+//! outside Oska Core (refused at its declaration), a `use`, a `test`
+//! block, a generic function, a contract, a prelude type such as
+//! `Option` (and `?` on one), and any type the checker left unsolved.
+//! It also refuses any other built-in call (a mutating one such as
+//! `List.push` included), `==` and `!=` on anything but `Int`, `Bool`
+//! and `()`, a struct or enum with a capability or function field, a
+//! function used as a value, a closure that reads `self` or a `var`,
+//! and a `main` that returns anything but `()` or takes anything but
+//! `Stdout`, `Fs`, `FsRead` or `FsWrite`, the capabilities the runtime
 //! grants.
 //!
 //! The text is pretty-printed JSON: two-space indentation, a value that
@@ -48,12 +51,13 @@
 //! when absent, never written as `null`.
 //!
 //! ```text
-//! program  = {"core_ir_version": 5, "types": [typedecl...],
+//! program  = {"core_ir_version": 6, "types": [typedecl...],
 //!             "functions": [function...]}
 //! typedecl = {"kind": "Struct", "name": NAME, "fields": [type...]}
 //!          | {"kind": "Enum", "name": NAME, "variants": [variant...]}
 //! variant  = {"name": NAME, "fields": [type...]}
-//! function = {"name": NAME, "params": [param...], "ret": type, "body": expr}
+//! function = {"name": NAME, "receiver"?: NAME, "params": [param...],
+//!             "ret": type, "body": expr}
 //! param    = {"type": type, "binds": BOOL}
 //! type     = "Int" | "Bool" | "()" | "String" | "Path" | "IoError"
 //!          | CAPABILITY | NAME
@@ -64,6 +68,7 @@
 //!          | {"kind": "Bool", "value": BOOL}
 //!          | {"kind": "Str", "value": STRING}
 //!          | {"kind": "Local", "slot": N}
+//!          | {"kind": "Var", "var": N}
 //!          | {"kind": "Neg", "operand": expr}
 //!          | {"kind": "Not", "operand": expr}
 //!          | {"kind": "Binary", "op": OP, "lhs": expr, "rhs": expr}
@@ -81,8 +86,13 @@
 //!          | {"kind": "Ok", "value": expr}
 //!          | {"kind": "Err", "value": expr}
 //!          | {"kind": "Try", "operand": expr, "convert"?: NAME}
+//!          | {"kind": "MutatingCall", "function": NAME, "receiver": place,
+//!             "args": [expr...]}
 //! stmt     = {"kind": "Let", "binds": BOOL, "type": type, "value": expr}
+//!          | {"kind": "Var", "type": type, "value": expr}
+//!          | {"kind": "Assign", "place": place, "value": expr}
 //!          | {"kind": "Expr", "value": expr}
+//! place    = {"var": N, "fields": [N...]}
 //! arm      = {"pattern": pattern, "guard"?: expr, "body": expr}
 //! pattern  = {"kind": "Wildcard"}
 //!          | {"kind": "Bind", "type": type}
@@ -116,18 +126,36 @@
 //!   `let` is in scope until the end of its block, and a pattern's slots
 //!   in its arm's guard and body. A parameter or `let` named `_` has
 //!   `"binds": false` and takes no slot: its value is evaluated and
-//!   dropped.
-//! - A `Closure` is written where `height` slots are in scope. Its body
-//!   numbers slots as the enclosing function does there, then its
-//!   parameters from `height` on, then its own locals. `captures` lists,
-//!   in ascending order, the slots below `height` its body reads, a
-//!   closure inside it included. Evaluating it makes a function value of
-//!   type `fn(params) -> ret` that holds the values of those slots, by
-//!   value. `CallValue` evaluates `callee`, then `args` left to right, then
-//!   runs the closure's body with what it captured at their slots and the
-//!   arguments at its parameters'. `cap` is true for a `cap fn`: a plain
-//!   `fn` (a closure's own `cap` included) captures no capability-bearing
-//!   value, which the checker guarantees.
+//!   dropped. A slot's value never changes.
+//! - A `var` takes no slot: `Var` binds a var, which the rest of its
+//!   block reads with `Var` and changes with `Assign` or `MutatingCall`.
+//!   Vars are numbered innermost first: the latest `Var` in scope is var
+//!   0, the one before it var 1, and so on. A `var _` is a `Let` that does
+//!   not bind. A function or closure sees only its own vars, and a `Let`
+//!   copies a var's value: a later change to the var does not reach it.
+//! - A `place` is var `var`, or a field within it: `fields` lists the
+//!   field indices from the var inwards. `Assign` evaluates `value`, then
+//!   writes it at `place`.
+//! - A method takes `self` as its first parameter, slot 0, and a `Call`
+//!   of it passes the receiver as its first argument. A mutating method
+//!   has `receiver`, the struct or enum `var self` is, and its body has
+//!   it as its outermost var. `MutatingCall` evaluates `args`, then reads
+//!   `receiver` and runs `function` with it as its receiver; when the
+//!   body ends, by its value or a `?`, the receiver's value is written
+//!   back to the place. A `Call` of a mutating method passes the receiver
+//!   first, as a copy, and drops its final value.
+//! - A `Closure` is written where `height` slots are in scope, and sees
+//!   no var. Its body numbers slots as the enclosing function does
+//!   there, then its parameters from `height` on, then its own locals.
+//!   `captures` lists, in ascending order, the slots below `height` its
+//!   body reads, a closure inside it included. Evaluating it makes a
+//!   function value of type `fn(params) -> ret` that holds the values
+//!   of those slots, by value. `CallValue` evaluates `callee`, then
+//!   `args` left to right, then runs the closure's body with what it
+//!   captured at their slots and the arguments at its parameters'.
+//!   `cap` is true for a `cap fn`: a plain `fn` (a closure's own `cap`
+//!   included) captures no capability-bearing value, which the checker
+//!   guarantees.
 //! - `Int` is a signed 64-bit integer. A literal is written in decimal,
 //!   negative when the source writes `-` before it. `Neg` and the
 //!   arithmetic operators panic when the result does not fit, and `/`
@@ -174,6 +202,7 @@
 //! `UPDATE_GOLDEN=1`, and update the Lean model in the same pull request
 //! (ADR 0018).
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fmt;
 
@@ -181,11 +210,11 @@ use oska_syntax::{json_escape, Span};
 
 use crate::program::{
     Arm, Callee, Construct, Declaration, DeclarationKind, Expr, ExprKind, Function, IntType, Param,
-    Pattern, Program, Stmt, Type, TypeDeclKind,
+    Pattern, Place, Program, Stmt, Type, TypeDeclKind,
 };
 
 /// The version of the core IR [`export`] writes.
-pub const CORE_IR_VERSION: u64 = 5;
+pub const CORE_IR_VERSION: u64 = 6;
 
 /// The built-in calls of Oska Core, by the checker's qualified name: the
 /// effects on a capability, attenuation, `Path` and the `Result` of an
@@ -252,6 +281,7 @@ pub fn export(program: &Program) -> Result<String, Refusal> {
     // is refused below, at its declaration.
     let core = Core {
         program,
+        scope: RefCell::default(),
         types: program
             .declarations
             .iter()
@@ -318,10 +348,64 @@ fn node(kind: &'static str, mut fields: Vec<(&'static str, Json)>) -> Json {
 }
 
 /// What the export checks a program's types against: the names of the
-/// module's structs and enums that are in Oska Core.
+/// module's structs and enums that are in Oska Core; and the bindings in
+/// scope where it is.
 struct Core<'a> {
     program: &'a Program,
     types: BTreeSet<String>,
+    scope: RefCell<Scope>,
+}
+
+/// What a binding of the checker, which numbers `let`s and `var`s alike
+/// as slots, is in core IR, where a `var` takes no slot.
+#[derive(Debug, Clone, Copy)]
+enum Binding {
+    /// A parameter, `let` or pattern binding: this slot.
+    Slot(usize),
+    /// The `n`th var of the function or closure being exported, counted
+    /// from its outermost, 0; a mutating method's receiver is its var 0.
+    Var(usize),
+    /// A var of the function around a closure, which the closure's body
+    /// cannot see.
+    Outer,
+}
+
+/// The bindings in scope in the function or closure being exported.
+#[derive(Debug, Default)]
+struct Scope {
+    /// By the checker's slot.
+    bindings: Vec<Binding>,
+    /// The core IR slots in scope.
+    slots: usize,
+    /// The vars of this function or closure in scope.
+    vars: usize,
+    /// What `self` is: slot 0 in a method, var 0 in a mutating method.
+    receiver: Option<Binding>,
+}
+
+impl Scope {
+    /// A scope with `receiver` as `self`, and nothing else yet.
+    fn new(receiver: Option<Binding>) -> Self {
+        Scope {
+            bindings: Vec::new(),
+            slots: usize::from(matches!(receiver, Some(Binding::Slot(_)))),
+            vars: usize::from(matches!(receiver, Some(Binding::Var(_)))),
+            receiver,
+        }
+    }
+
+    /// The core IR expression that reads `binding`, which
+    /// [`Core::binding`] gave, and so is never [`Binding::Outer`].
+    fn read(&self, binding: Binding) -> Json {
+        match binding {
+            Binding::Slot(n) => node("Local", vec![("slot", Json::Int(n as i128))]),
+            Binding::Var(level) => node(
+                "Var",
+                vec![("var", Json::Int((self.vars - 1 - level) as i128))],
+            ),
+            Binding::Outer => unreachable!("Core::binding refuses a var of an enclosing function"),
+        }
+    }
 }
 
 /// Whether `f` is the `from` of an `impl From<X> for T` whose `T` is not
@@ -351,6 +435,20 @@ fn holds_no_capability(ty: &Type) -> bool {
 }
 
 impl Core<'_> {
+    /// Whether `f` is a method or associated function of an inherent
+    /// `impl` of a struct or enum of Oska Core, which the checker names
+    /// `T.name`; a trait's are named `<T as Trait>.name`.
+    fn is_inherent(&self, f: &Function) -> bool {
+        match &f.self_ty {
+            Some(Type::Named { name, args }) if args.is_empty() && self.types.contains(name) => f
+                .name
+                .strip_prefix(name.as_str())
+                .and_then(|rest| rest.strip_prefix('.'))
+                .is_some_and(|method| method.chars().all(|c| c.is_alphanumeric() || c == '_')),
+            _ => false,
+        }
+    }
+
     /// The core IR of a struct or enum declaration, or the refusal of a
     /// declaration outside Oska Core.
     fn declaration(&self, program: &Program, d: &Declaration) -> Result<Option<Json>, Refusal> {
@@ -359,14 +457,18 @@ impl Core<'_> {
             DeclarationKind::Enum => "enum",
             DeclarationKind::Trait => return refuse(format!("the trait `{}`", d.name), d.span),
             // An `impl From<X> for T` is its one `from`, exported as a
-            // function; any other `impl` is refused.
+            // function, and an inherent `impl` of a struct or enum of Oska
+            // Core its methods and associated functions; any other `impl`
+            // is refused.
             DeclarationKind::Impl => {
                 let mut functions = program
                     .functions
                     .values()
                     .filter(|f| d.span.start <= f.span.start && f.span.end <= d.span.end)
                     .peekable();
-                if functions.peek().is_some() && functions.all(is_from_conversion) {
+                if functions.peek().is_some()
+                    && functions.all(|f| is_from_conversion(f) || self.is_inherent(f))
+                {
                     return Ok(None);
                 }
                 return refuse(format!("the `impl` of `{}`", d.name), d.span);
@@ -418,7 +520,7 @@ impl Core<'_> {
     }
 
     fn function(&self, f: &Function) -> Result<Json, Refusal> {
-        if f.self_ty.is_some() && !is_from_conversion(f) {
+        if f.self_ty.is_some() && !is_from_conversion(f) && !self.is_inherent(f) {
             let kind = if f.receiver {
                 "method"
             } else {
@@ -429,8 +531,25 @@ impl Core<'_> {
         if !f.generics.is_empty() {
             return refuse(format!("the generic function `{}`", f.name), f.span);
         }
+        // A method takes `self` as its first parameter, slot 0, and a
+        // mutating method as its receiver, var 0 of its body.
+        let receiver = match &f.self_ty {
+            Some(ty) if f.receiver => Some(self.ty(ty, f.span)?),
+            _ => None,
+        };
+        *self.scope.borrow_mut() = Scope::new(match (&receiver, f.mutating) {
+            (None, _) => None,
+            (Some(_), false) => Some(Binding::Slot(0)),
+            (Some(_), true) => Some(Binding::Var(0)),
+        });
         // In source order: the parameters, the result type, the contracts.
-        let params = self.params(&f.params, f.span)?;
+        let mut params = self.params(&f.params, f.span)?;
+        if let (Some(ty), false, Json::Arr(params)) = (&receiver, f.mutating, &mut params) {
+            params.insert(
+                0,
+                Json::Obj(vec![("type", ty.clone()), ("binds", Json::Bool(true))]),
+            );
+        }
         let ret_span = f.ret_annotation.unwrap_or(f.span);
         let ret = self.ty(&f.ret, ret_span)?;
         if f.name == "main" {
@@ -458,28 +577,105 @@ impl Core<'_> {
         {
             return refuse("a contract", clause.span);
         }
-        Ok(Json::Obj(vec![
-            ("name", Json::Str(f.name.clone())),
+        let mut fields = vec![("name", Json::Str(f.name.clone()))];
+        if let (Some(ty), true) = (receiver, f.mutating) {
+            fields.push(("receiver", ty));
+        }
+        fields.extend([
             ("params", params),
             ("ret", ret),
             ("body", self.expr(&f.body)?),
-        ]))
+        ]);
+        Ok(Json::Obj(fields))
     }
 
     /// The parameters of a function or closure, each refused at its
-    /// annotation, or at `span` when it has none.
+    /// annotation, or at `span` when it has none. Each that binds takes
+    /// the next slot.
     fn params(&self, params: &[Param], span: Span) -> Result<Json, Refusal> {
         Ok(Json::Arr(
             params
                 .iter()
                 .map(|p| {
+                    let ty = self.ty(&p.ty, p.annotation.unwrap_or(span))?;
+                    if p.binds {
+                        self.bind_slots(1);
+                    }
                     Ok(Json::Obj(vec![
-                        ("type", self.ty(&p.ty, p.annotation.unwrap_or(span))?),
+                        ("type", ty),
                         ("binds", Json::Bool(p.binds)),
                     ]))
                 })
                 .collect::<Result<_, Refusal>>()?,
         ))
+    }
+
+    /// Bind the checker's next `n` slots as core IR slots.
+    fn bind_slots(&self, n: usize) {
+        let mut scope = self.scope.borrow_mut();
+        for _ in 0..n {
+            let slot = scope.slots;
+            scope.bindings.push(Binding::Slot(slot));
+            scope.slots += 1;
+        }
+    }
+
+    /// Bind the checker's next slot as the next var.
+    fn bind_var(&self) {
+        let mut scope = self.scope.borrow_mut();
+        let level = scope.vars;
+        scope.bindings.push(Binding::Var(level));
+        scope.vars += 1;
+    }
+
+    /// Run `f`, then leave the bindings it made: a block's, or an arm's.
+    fn scoped<T>(&self, f: impl FnOnce() -> T) -> T {
+        let (bindings, slots, vars) = {
+            let scope = self.scope.borrow();
+            (scope.bindings.len(), scope.slots, scope.vars)
+        };
+        let result = f();
+        let mut scope = self.scope.borrow_mut();
+        scope.bindings.truncate(bindings);
+        scope.slots = slots;
+        scope.vars = vars;
+        result
+    }
+
+    /// The binding of the checker's `slot`, refused at `span` when the
+    /// export cannot read it.
+    fn binding(&self, slot: usize, span: Span) -> Result<Binding, Refusal> {
+        match self.scope.borrow().bindings.get(slot) {
+            Some(Binding::Outer) => refuse("a closure that captures a `var`", span),
+            Some(binding) => Ok(*binding),
+            None => refuse("a local the export cannot number", span),
+        }
+    }
+
+    /// A place of core IR: a var and the fields within it. Only a `var` is
+    /// a place (`E0229`, `E0230`); fail closed if not.
+    fn place(&self, place: &Place, span: Span) -> Result<Json, Refusal> {
+        let mut fields = Vec::new();
+        let mut at = place;
+        let root = loop {
+            match at {
+                Place::Field { base, index } => {
+                    fields.push(Json::Int(*index as i128));
+                    at = base;
+                }
+                Place::Local(slot) => break Some(self.binding(*slot, span)?),
+                Place::SelfValue => break self.scope.borrow().receiver,
+            }
+        };
+        let Some(Binding::Var(level)) = root else {
+            return refuse("a place that is not a `var`", span);
+        };
+        fields.reverse();
+        let var = self.scope.borrow().vars - 1 - level;
+        Ok(Json::Obj(vec![
+            ("var", Json::Int(var as i128)),
+            ("fields", Json::Arr(fields)),
+        ]))
     }
 
     /// A type of Oska Core, or the refusal of another, at `span`.
@@ -571,7 +767,10 @@ impl Core<'_> {
                 return refuse(format!("the integer type `{}`", int.name()), span)
             }
             ExprKind::Bool(value) => node("Bool", vec![("value", Json::Bool(*value))]),
-            ExprKind::Local(slot) => node("Local", vec![("slot", Json::Int(*slot as i128))]),
+            ExprKind::Local(slot) => {
+                let binding = self.binding(*slot, span)?;
+                self.scope.borrow().read(binding)
+            }
             ExprKind::Neg { int, .. } | ExprKind::Binary { int: Some(int), .. }
                 if *int != IntType::Int =>
             {
@@ -636,7 +835,7 @@ impl Core<'_> {
                 }
                 node("If", fields)
             }
-            ExprKind::Block { stmts, value } => {
+            ExprKind::Block { stmts, value } => self.scoped(|| {
                 let stmts = stmts
                     .iter()
                     .map(|s| self.stmt(s))
@@ -645,11 +844,17 @@ impl Core<'_> {
                 if let Some(value) = value {
                     fields.push(("value", self.expr(value)?));
                 }
-                node("Block", fields)
-            }
+                Ok(node("Block", fields))
+            })?,
             ExprKind::Str(value) => node("Str", vec![("value", Json::Str(value.clone()))]),
             ExprKind::Interpolated(_) => return refuse("an interpolated string", span),
-            ExprKind::SelfValue => return refuse("`self`", span),
+            ExprKind::SelfValue => {
+                let scope = self.scope.borrow();
+                match scope.receiver {
+                    Some(binding) => scope.read(binding),
+                    None => return refuse("`self`", span),
+                }
+            }
             ExprKind::List(_) => return refuse("a list", span),
             ExprKind::Construct { ctor, fields } if ctor.ty == "Result" => {
                 // `Ok(v)` or `Err(v)`, of a `Result` type of Oska Core.
@@ -692,8 +897,6 @@ impl Core<'_> {
                 )
             }
             ExprKind::Closure(closure) => {
-                // Unreachable while methods are refused, since only a
-                // method's closure can read `self`; kept to fail closed.
                 if closure.captures_self {
                     return refuse("a closure that reads `self`", span);
                 }
@@ -703,25 +906,56 @@ impl Core<'_> {
                     return refuse(format!("a closure of type `{}`", e.ty), span);
                 };
                 let ret = self.ty(ret, span)?;
-                let params = self.params(&closure.params, span)?;
+                // A closure captures slots, by value, and sees no var: a
+                // `var` it reads is refused.
+                let captures = closure
+                    .captures
+                    .iter()
+                    .map(|&slot| match self.binding(slot, span)? {
+                        Binding::Slot(n) => Ok(Json::Int(n as i128)),
+                        Binding::Var(_) => refuse("a closure that captures a `var`", span),
+                        Binding::Outer => {
+                            unreachable!("Core::binding refuses a var of an enclosing function")
+                        }
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let height = {
+                    let scope = self.scope.borrow();
+                    if scope.bindings.len() != closure.height {
+                        return refuse("a closure the export cannot number", span);
+                    }
+                    scope.slots
+                };
+                let inner = Scope {
+                    bindings: self
+                        .scope
+                        .borrow()
+                        .bindings
+                        .iter()
+                        .map(|b| match b {
+                            Binding::Slot(n) => Binding::Slot(*n),
+                            Binding::Var(_) | Binding::Outer => Binding::Outer,
+                        })
+                        .collect(),
+                    slots: height,
+                    vars: 0,
+                    receiver: None,
+                };
+                let outer = self.scope.replace(inner);
+                let body = self
+                    .params(&closure.params, span)
+                    .and_then(|params| Ok((params, self.expr(&closure.body)?)));
+                self.scope.replace(outer);
+                let (params, body) = body?;
                 node(
                     "Closure",
                     vec![
                         ("params", params),
-                        (
-                            "captures",
-                            Json::Arr(
-                                closure
-                                    .captures
-                                    .iter()
-                                    .map(|&slot| Json::Int(slot as i128))
-                                    .collect(),
-                            ),
-                        ),
-                        ("height", Json::Int(closure.height as i128)),
+                        ("captures", Json::Arr(captures)),
+                        ("height", Json::Int(height as i128)),
                         ("cap", Json::Bool(*cap)),
                         ("ret", ret),
-                        ("body", self.expr(&closure.body)?),
+                        ("body", body),
                     ],
                 )
             }
@@ -729,7 +963,28 @@ impl Core<'_> {
                 "CallValue",
                 vec![("callee", self.expr(callee)?), ("args", self.exprs(args)?)],
             ),
-            ExprKind::MutatingCall { .. } => return refuse("a mutating method call", span),
+            ExprKind::MutatingCall {
+                callee,
+                type_args,
+                receiver,
+                args,
+            } => match callee {
+                Callee::Function(name) if type_args.is_empty() => node(
+                    "MutatingCall",
+                    vec![
+                        ("function", Json::Str(name.clone())),
+                        ("receiver", self.place(receiver, span)?),
+                        ("args", self.exprs(args)?),
+                    ],
+                ),
+                Callee::Function(name) => {
+                    return refuse(format!("a call of the generic function `{name}`"), span)
+                }
+                Callee::Intrinsic(name) => return refuse(format!("the built-in `{name}`"), span),
+                Callee::Trait { trait_name, method } => {
+                    return refuse(format!("the trait method `{trait_name}.{method}`"), span)
+                }
+            },
             ExprKind::Range { .. } => return refuse("a range", span),
             ExprKind::Try {
                 operand,
@@ -781,12 +1036,15 @@ impl Core<'_> {
     /// of the first construct in it that is not. A pattern has no span of
     /// its own: one outside Oska Core is refused at the `match`, `span`.
     fn arm(&self, arm: &Arm, ty: &Type, span: Span) -> Result<Json, Refusal> {
-        let mut fields = vec![("pattern", self.pattern(&arm.pattern, ty, span)?)];
-        if let Some(guard) = &arm.guard {
-            fields.push(("guard", self.expr(guard)?));
-        }
-        fields.push(("body", self.expr(&arm.body)?));
-        Ok(Json::Obj(fields))
+        self.scoped(|| {
+            let mut fields = vec![("pattern", self.pattern(&arm.pattern, ty, span)?)];
+            self.bind_slots(binds(&arm.pattern));
+            if let Some(guard) = &arm.guard {
+                fields.push(("guard", self.expr(guard)?));
+            }
+            fields.push(("body", self.expr(&arm.body)?));
+            Ok(Json::Obj(fields))
+        })
     }
 
     /// A pattern of Oska Core on a value of type `ty`, or the refusal of
@@ -867,13 +1125,8 @@ impl Core<'_> {
         Ok(match s {
             Stmt::Expr(value) => node("Expr", vec![("value", self.expr(value)?)]),
             Stmt::Let {
-                mutable: true,
-                span,
-                ..
-            } => return refuse("a `var` binding", *span),
-            Stmt::Let {
                 binds,
-                mutable: false,
+                mutable,
                 ty,
                 annotation,
                 value,
@@ -891,6 +1144,15 @@ impl Core<'_> {
                         (self.ty(ty, value.span)?, json)
                     }
                 };
+                // A `var` takes no slot, but the next var; one named `_`
+                // is a `let` that drops its value.
+                if *mutable && *binds {
+                    self.bind_var();
+                    return Ok(node("Var", vec![("type", ty), ("value", value)]));
+                }
+                if *binds {
+                    self.bind_slots(1);
+                }
                 node(
                     "Let",
                     vec![
@@ -900,7 +1162,13 @@ impl Core<'_> {
                     ],
                 )
             }
-            Stmt::Assign { span, .. } => return refuse("an assignment", *span),
+            Stmt::Assign { place, value, span } => node(
+                "Assign",
+                vec![
+                    ("place", self.place(place, *span)?),
+                    ("value", self.expr(value)?),
+                ],
+            ),
             Stmt::Return { span, .. } => return refuse("`return`", *span),
             Stmt::While { span, .. } => return refuse("a `while` loop", *span),
             Stmt::For { span, .. } => return refuse("a `for` loop", *span),
@@ -910,8 +1178,18 @@ impl Core<'_> {
     }
 }
 
+/// How many slots `pattern` binds: one for each `Bind`.
+fn binds(pattern: &Pattern) -> usize {
+    match pattern {
+        Pattern::Bind(_) => 1,
+        Pattern::Wildcard | Pattern::Literal(_) => 0,
+        Pattern::Construct { fields, .. } => fields.iter().map(binds).sum(),
+    }
+}
+
 /// A JSON value, written by hand so the crate stays dependency-free.
 /// Object fields keep their insertion order.
+#[derive(Debug, Clone)]
 enum Json {
     Bool(bool),
     Int(i128),

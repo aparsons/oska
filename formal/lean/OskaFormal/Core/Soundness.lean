@@ -4,7 +4,7 @@ import OskaFormal.Core.Semantics
 /-!
 # Oska Core: progress and preservation
 
-Type soundness of Oska Core, version 5, for a well-typed program `P`:
+Type soundness of Oska Core, version 6, for a well-typed program `P`:
 
 - `progress`: a closed, well-typed expression is a value or takes a step.
 - `preservation`: a step of a closed, well-typed expression leads to an
@@ -20,38 +20,54 @@ Type soundness of Oska Core, version 5, for a well-typed program `P`:
 - `type_safety`: for a program as the checker hands it over
   (`ProgramSourceTyped`), every expression a source-typed expression steps
   to keeps its type and is a value or takes a step.
+
+Value semantics of mutating methods, over whole runs, is in
+`ValueSemantics.lean`.
 -/
 
 namespace OskaFormal.Core
 
-variable {P : Program} {R : Ty}
+variable {P : Program} {R : Ty} {M : List Ty}
 
 /-- A step's outcome is well typed at `t`, in a function or closure whose
-result type is `R`: a closed expression of type `t`, a panic, an effect
-after which the run goes on at type `t` for every answer the semantics
-allows, or a return of a value of type `R`. -/
-def OutcomeTyped (P : Program) (R : Ty) : Outcome → Ty → Prop
-  | .next e, t => Typed P R [] (.expr e t)
+result type is `R`, with the vars `M`: a closed expression of type `t`, a
+panic, an effect after which the run goes on at type `t` for every answer
+the semantics allows, a return of a value of type `R`, a read of a place
+of `M` after which the run goes on at type `t` for every value of the
+place's type, or a write to a place of `M` of a value of its type, after
+which the run goes on at type `t`. -/
+def OutcomeTyped (P : Program) (R : Ty) (M : List Ty) : Outcome → Ty → Prop
+  | .next e, t => Typed P R [] M (.expr e t)
   | .panic _, _ => True
-  | .perform req k, t => ∀ r, req.Allows r → Typed P R [] (.expr (k r) t)
-  | .ret v, _ => IsValue v ∧ Typed P R [] (.expr v R)
+  | .perform req k, t => ∀ r, req.Allows r → Typed P R [] M (.expr (k r) t)
+  | .ret v, _ => IsValue v ∧ Typed P R [] M (.expr v R)
+  | .read i is k, t => ∃ u, P.placeTy M ⟨i, is⟩ = some u ∧
+      ∀ w, IsValue w → Typed P R [] M (.expr w u) → Typed P R [] M (.expr (k w) t)
+  | .write i is w e, t => ∃ u, P.placeTy M ⟨i, is⟩ = some u ∧ IsValue w ∧
+      Typed P R [] M (.expr w u) ∧ Typed P R [] M (.expr e t)
 
 theorem OutcomeTyped.map {o : Outcome} {t u : Ty} {f : Expr → Expr}
-    (h : OutcomeTyped P R o t)
-    (hf : ∀ e, Typed P R [] (.expr e t) → Typed P R [] (.expr (f e) u)) :
-    OutcomeTyped P R (o.map f) u := by
+    (h : OutcomeTyped P R M o t)
+    (hf : ∀ e, Typed P R [] M (.expr e t) → Typed P R [] M (.expr (f e) u)) :
+    OutcomeTyped P R M (o.map f) u := by
   cases o with
   | next e => exact hf e h
   | panic _ => trivial
   | perform req k => exact fun r hr => hf _ (h r hr)
   | ret v => exact h
+  | read i is k =>
+    obtain ⟨w, hw, hk⟩ := h
+    exact ⟨w, hw, fun r hr hrt => hf _ (hk r hr hrt)⟩
+  | write i is w e =>
+    obtain ⟨u, hu, hw, hwt, he⟩ := h
+    exact ⟨u, hu, hw, hwt, hf _ he⟩
 
 /-! ## Argument lists -/
 
 theorem args_split {Γ : List Ty} {e : Expr} {rest : List Expr} :
-    ∀ (vs : List Expr) {ts : List Ty}, Typed P R Γ (.args (vs ++ e :: rest) ts) →
-      ∃ ts₁ t ts₂, ts = ts₁ ++ t :: ts₂ ∧ Typed P R Γ (.args vs ts₁) ∧
-        Typed P R Γ (.expr e t) ∧ Typed P R Γ (.args rest ts₂) := by
+    ∀ (vs : List Expr) {ts : List Ty}, Typed P R Γ M (.args (vs ++ e :: rest) ts) →
+      ∃ ts₁ t ts₂, ts = ts₁ ++ t :: ts₂ ∧ Typed P R Γ M (.args vs ts₁) ∧
+        Typed P R Γ M (.expr e t) ∧ Typed P R Γ M (.args rest ts₂) := by
   intro vs
   induction vs with
   | nil =>
@@ -69,8 +85,8 @@ theorem args_split {Γ : List Ty} {e : Expr} {rest : List Expr} :
       exact ⟨_ :: ts₁, t, ts₂, rfl, Typed.argsCons hv h₁, he, h₂⟩
 
 theorem args_append {Γ : List Ty} {ws : List Expr} {ts₂ : List Ty} :
-    ∀ (vs : List Expr) {ts₁ : List Ty}, Typed P R Γ (.args vs ts₁) →
-      Typed P R Γ (.args ws ts₂) → Typed P R Γ (.args (vs ++ ws) (ts₁ ++ ts₂)) := by
+    ∀ (vs : List Expr) {ts₁ : List Ty}, Typed P R Γ M (.args vs ts₁) →
+      Typed P R Γ M (.args ws ts₂) → Typed P R Γ M (.args (vs ++ ws) (ts₁ ++ ts₂)) := by
   intro vs
   induction vs with
   | nil => intro ts₁ h₁ h₂; cases h₁; exact h₂
@@ -82,8 +98,8 @@ theorem args_append {Γ : List Ty} {ws : List Expr} {ts₂ : List Ty} :
 /-- An argument list typed against `ts` has an expression of type `t` at
 each index where `ts` has `t`. -/
 theorem args_get {Γ : List Ty} :
-    ∀ {es : List Expr} {ts : List Ty} {i : Nat} {t : Ty}, Typed P R Γ (.args es ts) →
-      ts[i]? = some t → ∃ e, es[i]? = some e ∧ Typed P R Γ (.expr e t) := by
+    ∀ {es : List Expr} {ts : List Ty} {i : Nat} {t : Ty}, Typed P R Γ M (.args es ts) →
+      ts[i]? = some t → ∃ e, es[i]? = some e ∧ Typed P R Γ M (.expr e t) := by
   intro es
   induction es with
   | nil => intro ts i t h hi; cases h; simp at hi
@@ -105,9 +121,10 @@ theorem AllValues.append {vs ws : List Expr} (h₁ : AllValues vs) (h₂ : AllVa
 
 /-- A list whose expressions each keep their type from `Γ` to `Δ` keeps
 its typing as an argument list. -/
-theorem args_transport {R' : Ty} {Γ Δ : List Ty} :
-    ∀ {es : List Expr} {ts : List Ty}, (∀ e ∈ es, ∀ t, Typed P R Γ (.expr e t) → Typed P R' Δ (.expr e t)) →
-      Typed P R Γ (.args es ts) → Typed P R' Δ (.args es ts) := by
+theorem args_transport {R' : Ty} {Γ Δ M' : List Ty} :
+    ∀ {es : List Expr} {ts : List Ty},
+      (∀ e ∈ es, ∀ t, Typed P R Γ M (.expr e t) → Typed P R' Δ M' (.expr e t)) →
+      Typed P R Γ M (.args es ts) → Typed P R' Δ M' (.args es ts) := by
   intro es
   induction es with
   | nil => intro ts _ h; cases h; exact Typed.argsNil
@@ -118,10 +135,10 @@ theorem args_transport {R' : Ty} {Γ Δ : List Ty} :
       exact Typed.argsCons (hall e List.mem_cons_self _ he)
         (ih (fun e' he' => hall e' (List.mem_cons_of_mem _ he')) hr)
 
-/-- A value has its type in every context, and in a function or closure of
-any result type. -/
-theorem value_typed {R' : Ty} {Γ Δ : List Ty} {v : Expr} {t : Ty} (hv : IsValue v)
-    (h : Typed P R Γ (.expr v t)) : Typed P R' Δ (.expr v t) := by
+/-- A value has its type in every context, with any vars, and in a
+function or closure of any result type. -/
+theorem value_typed {R' : Ty} {Γ Δ M' : List Ty} {v : Expr} {t : Ty} (hv : IsValue v)
+    (h : Typed P R Γ M (.expr v t)) : Typed P R' Δ M' (.expr v t) := by
   induction hv generalizing t with
   | unit => cases h; exact Typed.unit
   | int _ => cases h with | int hf => exact Typed.int hf
@@ -141,7 +158,7 @@ theorem value_typed {R' : Ty} {Γ Δ : List Ty} {v : Expr} {t : Ty} (hv : IsValu
   | _ => cases h <;> constructor
 
 theorem canonical_int {Γ : List Ty} {v : Expr} (hv : IsValue v)
-    (h : Typed P R Γ (.expr v .int)) : ∃ n, v = .int n := by
+    (h : Typed P R Γ M (.expr v .int)) : ∃ n, v = .int n := by
   cases hv with
   | unit => cases h
   | int n => exact ⟨n, rfl⟩
@@ -150,7 +167,7 @@ theorem canonical_int {Γ : List Ty} {v : Expr} (hv : IsValue v)
   | _ => cases h
 
 theorem canonical_bool {Γ : List Ty} {v : Expr} (hv : IsValue v)
-    (h : Typed P R Γ (.expr v .bool)) : ∃ b, v = .bool b := by
+    (h : Typed P R Γ M (.expr v .bool)) : ∃ b, v = .bool b := by
   cases hv with
   | unit => cases h
   | int _ => cases h
@@ -161,9 +178,9 @@ theorem canonical_bool {Γ : List Ty} {v : Expr} (hv : IsValue v)
 /-- A value of a struct or enum type is a struct or variant of it, whose
 fields are values of its field types. -/
 theorem canonical_named {Γ : List Ty} {v : Expr} {type : String} (hv : IsValue v)
-    (h : Typed P R Γ (.expr v (.named type))) :
+    (h : Typed P R Γ M (.expr v (.named type))) :
     ∃ variant fs fts, v = .construct type variant fs ∧ P.fieldsOf type variant = some fts ∧
-      Typed P R Γ (.args fs fts) ∧ AllValues fs := by
+      Typed P R Γ M (.args fs fts) ∧ AllValues fs := by
   cases hv with
   | unit => cases h
   | int _ => cases h
@@ -176,9 +193,9 @@ theorem canonical_named {Γ : List Ty} {v : Expr} {type : String} (hv : IsValue 
 /-- A value of a `Result` type is an `Ok` of a value of its `Ok` type or
 an `Err` of a value of its `Err` type. -/
 theorem canonical_result {Γ : List Ty} {v : Expr} {t u : Ty} (hv : IsValue v)
-    (h : Typed P R Γ (.expr v (.result t u))) :
-    (∃ w, v = .result true w ∧ IsValue w ∧ Typed P R Γ (.expr w t)) ∨
-      (∃ w, v = .result false w ∧ IsValue w ∧ Typed P R Γ (.expr w u)) := by
+    (h : Typed P R Γ M (.expr v (.result t u))) :
+    (∃ w, v = .result true w ∧ IsValue w ∧ Typed P R Γ M (.expr w t)) ∨
+      (∃ w, v = .result false w ∧ IsValue w ∧ Typed P R Γ M (.expr w u)) := by
   cases hv with
   | result _ hw =>
     cases h with
@@ -203,8 +220,8 @@ theorem fieldsOf_struct {type : String} {variant : Option String} {fts fts' : Li
     | enum_ _ _ => simp [hd] at h
 
 theorem values_valueTyped : ∀ {fs : List Expr} {fts : List Ty},
-    (∀ e ∈ fs, ∀ {t : Ty}, Typed P R [] (.expr e t) → ValueTyped P (.one e t)) →
-    Typed P R [] (.args fs fts) → ValueTyped P (.many fs fts) := by
+    (∀ e ∈ fs, ∀ {t : Ty}, Typed P R [] M (.expr e t) → ValueTyped P (.one e t)) →
+    Typed P R [] M (.args fs fts) → ValueTyped P (.many fs fts) := by
   intro fs
   induction fs with
   | nil => intro fts _ h; cases h; exact ValueTyped.nil
@@ -216,7 +233,7 @@ theorem values_valueTyped : ∀ {fs : List Expr} {fts : List Ty},
         (ihs (fun e' he' => ih e' (List.mem_cons_of_mem _ he')) hr)
 
 /-- A closed value of type `t` has type `t` as a value. -/
-theorem value_valueTyped {v : Expr} {t : Ty} (hv : IsValue v) (h : Typed P R [] (.expr v t)) :
+theorem value_valueTyped {v : Expr} {t : Ty} (hv : IsValue v) (h : Typed P R [] M (.expr v t)) :
     ValueTyped P (.one v t) := by
   induction hv generalizing t with
   | unit => cases h; exact ValueTyped.unit
@@ -237,9 +254,9 @@ theorem value_valueTyped {v : Expr} {t : Ty} (hv : IsValue v) (h : Typed P R [] 
 /-- A value of a function type is a closure the run has closed, whose
 body has the function's result type in the context of its parameters. -/
 theorem canonical_fn {Γ : List Ty} {v : Expr} {cf : Bool} {ts : List Ty} {t : Ty}
-    (hv : IsValue v) (h : Typed P R Γ (.expr v (.fn cf ts t))) :
+    (hv : IsValue v) (h : Typed P R Γ M (.expr v (.fn cf ts t))) :
     ∃ ps cs body, v = .closure ps 0 cs cf t body ∧ ts = ps.map Param.type ∧
-      Typed P t (bindingTypes ps) (.expr body t) := by
+      Typed P t (bindingTypes ps) [] (.expr body t) := by
   cases hv with
   | unit => cases h
   | int _ => cases h
@@ -482,9 +499,11 @@ theorem exhaustiveArms_substArms {w : Expr} {arms : List Arm} :
 
 /-- Putting a closed value of type `u` for slot 0 keeps a judgment in a
 context whose slot 0 has type `u`, with that slot removed. -/
-theorem typed_subst {R₀ : Ty} {v : Expr} {u : Ty} (hv : IsValue v) (hvt : Typed P R₀ [] (.expr v u)) :
-    ∀ {R : Ty} {Γ : List Ty} {j : Goal}, Typed P R Γ j → ∀ Δ, Γ = u :: Δ → Typed P R Δ (j.subst v) := by
-  intro R Γ j h
+theorem typed_subst {R₀ : Ty} {M₀ : List Ty} {v : Expr} {u : Ty} (hv : IsValue v)
+    (hvt : Typed P R₀ [] M₀ (.expr v u)) :
+    ∀ {R : Ty} {Γ M : List Ty} {j : Goal}, Typed P R Γ M j → ∀ Δ, Γ = u :: Δ →
+      Typed P R Δ M (j.subst v) := by
+  intro R Γ M j h
   induction h with
   | unit => intro _ _; exact Typed.unit
   | int hf => intro _ _; exact Typed.int hf
@@ -498,7 +517,7 @@ theorem typed_subst {R₀ : Ty} {v : Expr} {u : Ty} (hv : IsValue v) (hvt : Type
   | try_ hf _ hc ih => intro Δ hΓ; exact Typed.try_ hf (ih Δ hΓ) hc
   | frame _ ih => intro Δ hΓ; exact Typed.frame (ih Δ hΓ)
   | builtin hb _ ih => intro Δ hΓ; exact Typed.builtin hb (ih Δ hΓ)
-  | @local_ _ Γ i t hl =>
+  | @local_ _ Γ _ i t hl =>
     intro Δ hΓ
     subst hΓ
     cases i with
@@ -529,7 +548,7 @@ theorem typed_subst {R₀ : Ty} {v : Expr} {u : Ty} (hv : IsValue v) (hvt : Type
   | blockLetDrop _ _ ihe ihs => intro Δ hΓ; exact Typed.blockLetDrop (ihe Δ hΓ) (ihs Δ hΓ)
   | construct hf _ ih => intro Δ hΓ; exact Typed.construct hf (ih Δ hΓ)
   | field hf hi _ ih => intro Δ hΓ; exact Typed.field hf hi (ih Δ hΓ)
-  | @match_ _ Γ sc arms u' t _ _ hc ihs iharms =>
+  | @match_ _ Γ _ sc arms u' t _ _ hc ihs iharms =>
     intro Δ hΓ
     refine Typed.match_ (ihs Δ hΓ) (iharms Δ hΓ) ?_
     rcases hc with he | ⟨hsv, hcov⟩
@@ -547,30 +566,44 @@ theorem typed_subst {R₀ : Ty} {v : Expr} {u : Ty} (hv : IsValue v) (hvt : Type
     intro Δ hΓ
     subst hΓ
     exact Typed.armsConsGuard hp (ihg (Δ ++ _) rfl) (ihb (Δ ++ _) rfl) (ihr Δ rfl)
-  | @closure _ Γ ps h cs cf ret body hle hpure hcaps hb ih =>
+  | @closure _ Γ M ps h cs cf ret body hle hpure hcaps hb ih =>
     intro Δ hΓ
     subst hΓ
     cases h with
     | zero =>
-      show Typed P _ Δ (.expr (.closure ps 0 cs cf ret body) _)
+      show Typed P _ Δ M (.expr (.closure ps 0 cs cf ret body) _)
       exact Typed.closure (Nat.zero_le _) (fun _ i _ hi => absurd hi (Nat.not_lt_zero i)) hcaps
         (by simpa using hb)
     | succ h =>
-      show Typed P _ Δ (.expr (.closure ps h (shiftCaptures cs) cf ret (Expr.subst v body)) _)
+      show Typed P _ Δ M (.expr (.closure ps h (shiftCaptures cs) cf ret (Expr.subst v body)) _)
       refine Typed.closure (by simpa using hle) (fun hc i t hi hr hl => ?_) (fun hc => ?_)
         (ih (Δ.take h ++ bindingTypes ps) (by simp))
       · exact hpure hc (i + 1) t (by omega) (reads_subst hv body i hr) (by simpa [lookup] using hl)
       · refine capsWithin_subst_reads body (hcaps hc) fun hr => ?_
         exact valueTyped_pure (value_valueTyped hv hvt) (hpure hc 0 u (Nat.succ_pos _) hr rfl)
   | callValue _ _ ihc iha => intro Δ hΓ; exact Typed.callValue (ihc Δ hΓ) (iha Δ hΓ)
+  | var_ hl => intro _ _; exact Typed.var_ hl
+  | blockVar _ _ ihe ihs => intro Δ hΓ; exact Typed.blockVar (ihe Δ hΓ) (ihs Δ hΓ)
+  | blockAssign hpl _ _ ihe ihs => intro Δ hΓ; exact Typed.blockAssign hpl (ihe Δ hΓ) (ihs Δ hΓ)
+  | mutCall hf hr hpl _ ih => intro Δ hΓ; exact Typed.mutCall hf hr hpl (ih Δ hΓ)
+  | @cell _ _ _ w e _ _ hw hwt _ _ ihe =>
+    intro Δ hΓ
+    show Typed P _ Δ _ (.expr (.cell (Expr.subst v w) (Expr.subst v e)) _)
+    rw [subst_value hw]
+    exact Typed.cell hw (value_typed hw hwt) (ihe Δ hΓ)
+  | @method _ _ _ pl w e _ _ hpl hw hwt _ _ ihe =>
+    intro Δ hΓ
+    show Typed P _ Δ _ (.expr (.method pl (Expr.subst v w) (Expr.subst v e)) _)
+    rw [subst_value hw]
+    exact Typed.method hpl hw (value_typed hw hwt) (ihe Δ hΓ)
 
 /-- A function's body, with closed values of its parameters' types put for
 the slots they bind, is closed and has the body's type. -/
-theorem typed_instantiate {R' : Ty} :
+theorem typed_instantiate {R' : Ty} {M' : List Ty} :
     ∀ (ps : List Param) {vs : List Expr} {body e : Expr} {t : Ty},
-      Typed P R (bindingTypes ps) (.expr body t) →
-      Typed P R' [] (.args vs (ps.map Param.type)) → AllValues vs →
-      instantiate ps vs body = some e → Typed P R [] (.expr e t) := by
+      Typed P R (bindingTypes ps) M (.expr body t) →
+      Typed P R' [] M' (.args vs (ps.map Param.type)) → AllValues vs →
+      instantiate ps vs body = some e → Typed P R [] M (.expr e t) := by
   intro ps
   induction ps with
   | nil =>
@@ -599,7 +632,7 @@ theorem typed_instantiate {R' : Ty} :
 parameters, so the call can put them in. -/
 theorem instantiate_some :
     ∀ (ps : List Param) {Γ : List Ty} {vs : List Expr} {body : Expr},
-      Typed P R Γ (.args vs (ps.map Param.type)) → ∃ e, instantiate ps vs body = some e := by
+      Typed P R Γ M (.args vs (ps.map Param.type)) → ∃ e, instantiate ps vs body = some e := by
   intro ps
   induction ps with
   | nil =>
@@ -620,10 +653,10 @@ theorem instantiate_some :
 
 /-- A body with closed values of its bindings' types put for its first
 slots is closed and keeps its type. -/
-theorem typed_substAll {R' : Ty} :
+theorem typed_substAll {R' : Ty} {M' : List Ty} :
     ∀ (bs : List Expr) {bts : List Ty} {e : Expr} {t : Ty},
-      Typed P R bts (.expr e t) → Typed P R' [] (.args bs bts) → AllValues bs →
-      Typed P R [] (.expr (Expr.substAll bs e) t) := by
+      Typed P R bts M (.expr e t) → Typed P R' [] M' (.args bs bts) → AllValues bs →
+      Typed P R [] M (.expr (Expr.substAll bs e) t) := by
   intro bs
   induction bs with
   | nil => intro bts e t he hargs _; cases hargs; exact he
@@ -639,13 +672,13 @@ theorem typed_substAll {R' : Ty} :
 /-- What a pattern typing says about matching: a closed value of the
 pattern's type that matches it binds closed values of the types of its
 bindings. -/
-def MatchFor (P : Program) (R : Ty) : PGoal → Prop
-  | .one p u bts => ∀ {v bs}, IsValue v → Typed P R [] (.expr v u) → matchPat p v = some bs →
-      Typed P R [] (.args bs bts) ∧ AllValues bs
-  | .many ps ts bts => ∀ {vs bs}, AllValues vs → Typed P R [] (.args vs ts) →
-      matchPats ps vs = some bs → Typed P R [] (.args bs bts) ∧ AllValues bs
+def MatchFor (P : Program) (R : Ty) (M : List Ty) : PGoal → Prop
+  | .one p u bts => ∀ {v bs}, IsValue v → Typed P R [] M (.expr v u) → matchPat p v = some bs →
+      Typed P R [] M (.args bs bts) ∧ AllValues bs
+  | .many ps ts bts => ∀ {vs bs}, AllValues vs → Typed P R [] M (.args vs ts) →
+      matchPats ps vs = some bs → Typed P R [] M (.args bs bts) ∧ AllValues bs
 
-theorem matchPat_typed : ∀ {g : PGoal}, PatTyped P g → MatchFor P R g := by
+theorem matchPat_typed : ∀ {g : PGoal}, PatTyped P g → MatchFor P R M g := by
   intro g h
   induction h with
   | wildcard =>
@@ -973,7 +1006,7 @@ theorem mem_unguarded : ∀ {arms : List Arm} {p : Pattern}, p ∈ unguarded arm
 
 /-- The patterns of typed arms match values of the scrutinee's type. -/
 theorem unguarded_typed {Γ : List Ty} {u t : Ty} : ∀ {arms : List Arm} {p : Pattern},
-    Typed P R Γ (.arms arms u t) → p ∈ unguarded arms → ∃ bs, PatTyped P (.one p u bs) := by
+    Typed P R Γ M (.arms arms u t) → p ∈ unguarded arms → ∃ bs, PatTyped P (.one p u bs) := by
   intro arms
   induction arms with
   | nil => intro p _ h; simp [unguarded] at h
@@ -998,7 +1031,7 @@ theorem headType_none {p : Pattern} (h : p.headType = none) : p.isCatchAll = tru
 `exhaustiveArms`, every value of the scrutinee's type matches an arm with
 no guard: the premise the runtime rule asks of a value scrutinee. -/
 theorem exhaustiveArms_sound {Γ : List Ty} {arms : List Arm} {u t : Ty} {v : Expr}
-    (he : exhaustiveArms P arms = true) (ht : Typed P R Γ (.arms arms u t))
+    (he : exhaustiveArms P arms = true) (ht : Typed P R Γ M (.arms arms u t))
     (hv : ValueTyped P (.one v u)) : Covered arms v := by
   dsimp only [exhaustiveArms] at he
   split at he
@@ -1026,12 +1059,12 @@ theorem exhaustiveArms_sound {Γ : List Ty} {arms : List Arm} {u t : Ty} {v : Ex
 for it: by static exhaustiveness, or by the runtime premise. -/
 theorem match_covered {s : Expr} {arms : List Arm} {u t : Ty}
     (hc : exhaustiveArms P arms = true ∨ (IsValue s ∧ Covered arms s)) (hs : IsValue s)
-    (hst : Typed P R [] (.expr s u)) (harms : Typed P R [] (.arms arms u t)) : Covered arms s :=
+    (hst : Typed P R [] M (.expr s u)) (harms : Typed P R [] M (.arms arms u t)) : Covered arms s :=
   hc.elim (fun he => exhaustiveArms_sound he harms (value_valueTyped hs hst)) (·.2)
 
 /-! ## Operators -/
 
-theorem intResult_typed {n : Int} : OutcomeTyped P R (intResult n) .int := by
+theorem intResult_typed {n : Int} : OutcomeTyped P R M (intResult n) .int := by
   unfold intResult
   cases hf : fits n with
   | true => exact Typed.int hf
@@ -1041,8 +1074,8 @@ theorem intResult_typed {n : Int} : OutcomeTyped P R (intResult n) .int := by
 operand type, gives a result of its result type, or panics. -/
 theorem evalBinary_typed {op : BinOp} {a t : Ty} {l r : Expr} {o : Outcome}
     (hop : BinOpTyped op a t) (hl : IsValue l) (hr : IsValue r)
-    (htl : Typed P R [] (.expr l a)) (htr : Typed P R [] (.expr r a))
-    (h : evalBinary op l r = some o) : OutcomeTyped P R o t := by
+    (htl : Typed P R [] M (.expr l a)) (htr : Typed P R [] M (.expr r a))
+    (h : evalBinary op l r = some o) : OutcomeTyped P R M o t := by
   cases hop with
   | eq _ _ => simp only [evalBinary, Option.some.injEq] at h; subst h; exact Typed.bool
   | ne _ _ => simp only [evalBinary, Option.some.injEq] at h; subst h; exact Typed.bool
@@ -1068,7 +1101,7 @@ theorem evalBinary_typed {op : BinOp} {a t : Ty} {l r : Expr} {o : Outcome}
 operand type. -/
 theorem evalBinary_some {op : BinOp} {a t : Ty} {l r : Expr}
     (hop : BinOpTyped op a t) (hlog : op.isLogical = false) (hl : IsValue l) (hr : IsValue r)
-    (htl : Typed P R [] (.expr l a)) (htr : Typed P R [] (.expr r a)) :
+    (htl : Typed P R [] M (.expr l a)) (htr : Typed P R [] M (.expr r a)) :
     ∃ o, evalBinary op l r = some o := by
   cases hop with
   | eq _ _ => exact ⟨_, rfl⟩
@@ -1084,17 +1117,17 @@ theorem evalBinary_some {op : BinOp} {a t : Ty} {l r : Expr}
 /-! ## Built-in calls -/
 
 theorem canonical_cap {Γ : List Ty} {v : Expr} {k : CapKind} (hv : IsValue v)
-    (h : Typed P R Γ (.expr v (.cap k))) : ∃ r, v = .cap k r := by
+    (h : Typed P R Γ M (.expr v (.cap k))) : ∃ r, v = .cap k r := by
   cases hv <;> cases h; exact ⟨_, rfl⟩
 
 theorem canonical_str {Γ : List Ty} {v : Expr} (hv : IsValue v)
-    (h : Typed P R Γ (.expr v .string)) : ∃ s, v = .str s := by
+    (h : Typed P R Γ M (.expr v .string)) : ∃ s, v = .str s := by
   cases hv <;> cases h; exact ⟨_, rfl⟩
 
 /-- A built-in call whose arguments are values of its types is an effect
 on a capability of its receiver's kind, or a pure call with a value. -/
 theorem builtin_progress {op : Builtin} {ts : List Ty} {t : Ty} {vs : List Expr}
-    (hb : BuiltinTyped op ts t) (hargs : Typed P R [] (.args vs ts)) (hvs : AllValues vs) :
+    (hb : BuiltinTyped op ts t) (hargs : Typed P R [] M (.args vs ts)) (hvs : AllValues vs) :
     ∃ o, Step P (.builtin op vs) o := by
   cases hb with
   | println | readToString | createDir | write =>
@@ -1150,8 +1183,8 @@ theorem builtin_progress {op : Builtin} {ts : List Ty} {t : Ty} {vs : List Expr}
 /-- A pure built-in call on values of its types gives a value of its
 result type. -/
 theorem evalPure_typed {op : Builtin} {ts : List Ty} {t : Ty} {vs : List Expr} {v : Expr}
-    (hb : BuiltinTyped op ts t) (hargs : Typed P R [] (.args vs ts)) (hvs : AllValues vs)
-    (h : evalPure op vs = some v) : Typed P R [] (.expr v t) := by
+    (hb : BuiltinTyped op ts t) (hargs : Typed P R [] M (.args vs ts)) (hvs : AllValues vs)
+    (h : evalPure op vs = some v) : Typed P R [] M (.expr v t) := by
   cases hb with
   | println | readToString | createDir | write | restrictTo _ =>
     cases hargs with
@@ -1205,7 +1238,7 @@ theorem evalPure_typed {op : Builtin} {ts : List Ty} {t : Ty} {vs : List Expr} {
 result type. -/
 theorem allows_typed {op : Builtin} {k : CapKind} {root : CapRoot} {ts : List Ty} {t : Ty}
     {vs : List Expr} {r : Expr} (hb : BuiltinTyped op (.cap k :: ts) t)
-    (hr : Request.Allows ⟨op, k, root, vs⟩ r) : Typed P R [] (.expr r t) := by
+    (hr : Request.Allows ⟨op, k, root, vs⟩ r) : Typed P R [] M (.expr r t) := by
   cases hb with
   | println | write | createDir =>
     rcases hr with rfl | rfl
@@ -1222,6 +1255,148 @@ theorem allows_typed {op : Builtin} {k : CapKind} {root : CapRoot} {ts : List Ty
     exact Typed.cap
   | readOnly _ | writeOnly _ => exact absurd hr id
 
+/-! ## Places and calls -/
+
+/-- An argument list keeps its typing when one argument is replaced by an
+expression of the same type. -/
+theorem args_set {Γ : List Ty} :
+    ∀ {es : List Expr} {ts : List Ty} {i : Nat} {t : Ty} {e : Expr},
+      Typed P R Γ M (.args es ts) → ts[i]? = some t → Typed P R Γ M (.expr e t) →
+      Typed P R Γ M (.args (es.set i e) ts) := by
+  intro es
+  induction es with
+  | nil => intro ts i t e h _ _; cases h; exact Typed.argsNil
+  | cons x xs ih =>
+    intro ts i t e h hi he
+    cases h with
+    | argsCons hx hr =>
+      cases i with
+      | zero =>
+        simp only [List.getElem?_cons_zero, Option.some.injEq] at hi
+        subst hi
+        exact Typed.argsCons he hr
+      | succ i => exact Typed.argsCons hx (ih hr (by simpa using hi) he)
+
+/-- The field at a path of a value, which the value's type has, is a value
+of the path's type. -/
+theorem getAt_typed {Γ : List Ty} :
+    ∀ (is : List Nat) {v : Expr} {u t : Ty}, IsValue v → Typed P R Γ M (.expr v u) →
+      P.pathTy u is = some t → IsValue (v.getAt is) ∧ Typed P R Γ M (.expr (v.getAt is) t) := by
+  intro is
+  induction is with
+  | nil =>
+    intro v u t hv h hp
+    simp only [Program.pathTy, Option.some.injEq] at hp
+    subst hp
+    exact ⟨hv, h⟩
+  | cons i is ih =>
+    intro v u t hv h hp
+    cases u with
+    | named n =>
+      simp only [Program.pathTy] at hp
+      split at hp
+      · next fts hf =>
+        split at hp
+        · next t' hi =>
+          obtain ⟨variant, fs, fts', rfl, hf', hargs, hvals⟩ := canonical_named hv h
+          obtain ⟨rfl, rfl⟩ := fieldsOf_struct hf hf'
+          obtain ⟨e, he, hte⟩ := args_get hargs hi
+          have hev : IsValue e := hvals.forall e (List.mem_of_getElem? he)
+          simp only [Expr.getAt, he, Option.getD_some]
+          exact ih hev hte hp
+        · cases hp
+      · cases hp
+    | _ => simp [Program.pathTy] at hp
+
+/-- A value with a value of a path's type put at the path is a value of
+its type. -/
+theorem setAt_typed {Γ : List Ty} :
+    ∀ (is : List Nat) {v w : Expr} {u t : Ty}, IsValue v → Typed P R Γ M (.expr v u) →
+      P.pathTy u is = some t → IsValue w → Typed P R Γ M (.expr w t) →
+      IsValue (v.setAt is w) ∧ Typed P R Γ M (.expr (v.setAt is w) u) := by
+  intro is
+  induction is with
+  | nil =>
+    intro v w u t _ _ hp hw hwt
+    simp only [Program.pathTy, Option.some.injEq] at hp
+    subst hp
+    exact ⟨hw, hwt⟩
+  | cons i is ih =>
+    intro v w u t hv h hp hw hwt
+    cases u with
+    | named n =>
+      simp only [Program.pathTy] at hp
+      split at hp
+      · next fts hf =>
+        split at hp
+        · next t' hi =>
+          obtain ⟨variant, fs, fts', rfl, hf', hargs, hvals⟩ := canonical_named hv h
+          obtain ⟨rfl, rfl⟩ := fieldsOf_struct hf hf'
+          obtain ⟨e, he, hte⟩ := args_get hargs hi
+          have hev : IsValue e := hvals.forall e (List.mem_of_getElem? he)
+          obtain ⟨hv', ht'⟩ := ih hev hte hp hw hwt
+          simp only [Expr.setAt, he, Option.getD_some]
+          refine ⟨IsValue.construct fun x hx => ?_, Typed.construct hf (args_set hargs hi ht')⟩
+          rcases List.mem_or_eq_of_mem_set hx with hx | rfl
+          · exact hvals.forall x hx
+          · exact hv'
+        · cases hp
+      · cases hp
+    | _ => simp [Program.pathTy] at hp
+
+/-- The type of a place of var `i + 1` under one more var is that of the
+place of var `i`. -/
+theorem placeTy_succ {u : Ty} {i : Nat} {is : List Nat} :
+    P.placeTy (u :: M) ⟨i + 1, is⟩ = P.placeTy M ⟨i, is⟩ := by
+  simp [Program.placeTy, lookup]
+
+/-- The type of a place of var 0 is that of its path in the var's type. -/
+theorem placeTy_zero {u : Ty} {is : List Nat} :
+    P.placeTy (u :: M) ⟨0, is⟩ = P.pathTy u is := by
+  simp [Program.placeTy, lookup]
+
+/-- No place is typed with no var in scope. -/
+theorem placeTy_nil {pl : Place} : P.placeTy [] pl = none := by
+  simp [Program.placeTy, lookup]
+
+/-- The body a call runs, with closed values of the argument types put
+in, is closed, sees no var, and has the body's type. -/
+theorem typed_enter {R' : Ty} {M' : List Ty} {f : Function} {vs : List Expr} {e : Expr} {t : Ty}
+    (hb : Typed P R (bindingTypes f.params) f.receiver.toList (.expr f.body t))
+    (hargs : Typed P R' [] M' (.args vs f.argTypes)) (hvs : AllValues vs)
+    (he : f.enter vs = some e) : Typed P R [] [] (.expr e t) := by
+  unfold Function.enter at he
+  rw [Function.argTypes_eq] at hargs
+  cases hr : f.receiver with
+  | none =>
+    rw [hr] at he hb hargs
+    exact typed_instantiate _ hb hargs hvs he
+  | some u =>
+    rw [hr] at he hb hargs
+    cases hargs with
+    | argsCons hrt hrest =>
+      cases hvs with
+      | cons hrv hvs =>
+        obtain ⟨b, hi, rfl⟩ := Option.map_eq_some_iff.mp he
+        exact Typed.cell hrv (value_typed hrv hrt) (typed_instantiate _ hb hrest hvs hi)
+
+/-- Arguments typed against a function's argument types are as many as
+it takes, so a call can enter it. -/
+theorem enter_some {Γ : List Ty} {f : Function} {vs : List Expr}
+    (hargs : Typed P R Γ M (.args vs f.argTypes)) : ∃ e, f.enter vs = some e := by
+  unfold Function.enter
+  rw [Function.argTypes_eq] at hargs
+  cases hr : f.receiver with
+  | none =>
+    rw [hr] at hargs
+    exact instantiate_some _ hargs
+  | some u =>
+    rw [hr] at hargs
+    cases hargs with
+    | argsCons _ hrest =>
+      obtain ⟨b, hb⟩ := instantiate_some (body := f.body) _ hrest
+      simp [hb]
+
 /-! ## Progress -/
 
 /-- What progress says about a closed judgment: an expression is a value
@@ -1234,9 +1409,9 @@ def ProgressFor (P : Program) : Goal → Prop
   | .block ss val _ => ∃ o, Step P (.block ss val) o
   | .arms _ _ _ => True
 
-theorem progress_goal : ∀ {R : Ty} {Γ : List Ty} {j : Goal}, Typed P R Γ j → Γ = [] →
+theorem progress_goal : ∀ {R : Ty} {Γ M : List Ty} {j : Goal}, Typed P R Γ M j → Γ = [] →
     ProgressFor P j := by
-  intro R Γ j h
+  intro R Γ M j h
   induction h with
   | unit => intro _; exact Or.inl IsValue.unit
   | int _ => intro _; exact Or.inl (IsValue.int _)
@@ -1289,7 +1464,7 @@ theorem progress_goal : ∀ {R : Ty} {Γ : List Ty} {j : Goal}, Typed P R Γ j �
     · obtain ⟨b, rfl⟩ := canonical_bool hv he
       exact Or.inr ⟨_, Step.not⟩
     · exact Or.inr ⟨_, Step.notArg hs⟩
-  | @binary _ Γ op l r a t hop hl hr ihl ihr =>
+  | @binary _ Γ _ op l r a t hop hl hr ihl ihr =>
     intro hΓ
     subst hΓ
     rcases ihl rfl with hlv | ⟨o, hs⟩
@@ -1322,7 +1497,7 @@ theorem progress_goal : ∀ {R : Ty} {Γ : List Ty} {j : Goal}, Typed P R Γ j �
     intro hΓ
     subst hΓ
     rcases ih rfl with hall | ⟨vs, e, rest, o, rfl, hvs, hs⟩
-    · obtain ⟨_, hi⟩ := instantiate_some _ hargs
+    · obtain ⟨_, hi⟩ := enter_some hargs
       exact Or.inr ⟨_, Step.call hf hall hi⟩
     · exact Or.inr ⟨_, Step.callArg hvs hs⟩
   | ifElse hc _ _ ihc _ _ =>
@@ -1383,7 +1558,7 @@ theorem progress_goal : ∀ {R : Ty} {Γ : List Ty} {j : Goal}, Typed P R Γ j �
       obtain ⟨e, he, _⟩ := args_get hargs hi
       exact Or.inr ⟨_, Step.field hvals he⟩
     · exact Or.inr ⟨_, Step.fieldBase hs⟩
-  | @match_ _ _ _ arms _ _ hs harms hc ih _ =>
+  | @match_ _ _ _ _ arms _ _ hs harms hc ih _ =>
     intro hΓ
     subst hΓ
     rcases ih rfl with hv | ⟨o, hstep⟩
@@ -1399,7 +1574,7 @@ theorem progress_goal : ∀ {R : Ty} {Γ : List Ty} {j : Goal}, Typed P R Γ j �
           | none => exact Or.inr ⟨_, Step.matchArm hv hm⟩
           | some g => exact Or.inr ⟨_, Step.matchGuard hv hm⟩
     · exact Or.inr ⟨_, Step.matchScrutinee hstep⟩
-  | @closure _ _ ps h cs cf ret body hle _ _ _ _ =>
+  | @closure _ _ _ ps h cs cf ret body hle _ _ _ _ =>
     intro hΓ
     subst hΓ
     have : h = 0 := by simpa using hle
@@ -1418,10 +1593,37 @@ theorem progress_goal : ∀ {R : Ty} {Γ : List Ty} {j : Goal}, Typed P R Γ j �
   | armsNil => intro _; trivial
   | armsCons _ _ _ _ _ => intro _; trivial
   | armsConsGuard _ _ _ _ _ _ _ => intro _; trivial
+  | var_ _ => intro _; exact Or.inr ⟨_, Step.var⟩
+  | blockVar _ _ ihe _ =>
+    intro hΓ
+    rcases ihe hΓ with hv | ⟨o, hs⟩
+    · exact ⟨_, Step.blockVar hv⟩
+    · exact ⟨_, Step.blockVarArg hs⟩
+  | blockAssign _ _ _ ihe _ =>
+    intro hΓ
+    rcases ihe hΓ with hv | ⟨o, hs⟩
+    · exact ⟨_, Step.blockAssign hv⟩
+    · exact ⟨_, Step.blockAssignArg hs⟩
+  | mutCall hf hr _ hargs ih =>
+    intro hΓ
+    rcases ih hΓ with hall | ⟨vs, e, rest, o, rfl, hvs, hs⟩
+    · obtain ⟨_, hi⟩ := instantiate_some _ hargs
+      exact Or.inr ⟨_, Step.mutCall hf hr hall hi⟩
+    · exact Or.inr ⟨_, Step.mutCallArg hvs hs⟩
+  | cell _ _ _ _ ihe =>
+    intro hΓ
+    rcases ihe hΓ with hv | ⟨o, hs⟩
+    · exact Or.inr ⟨_, Step.cellValue hv⟩
+    · exact Or.inr ⟨_, Step.cellBody hs⟩
+  | method _ _ _ _ _ ihe =>
+    intro hΓ
+    rcases ihe hΓ with hv | ⟨o, hs⟩
+    · exact Or.inr ⟨_, Step.methodValue hv⟩
+    · exact Or.inr ⟨_, Step.methodBody hs⟩
 
 /-- **Progress.** A closed, well-typed expression of Oska Core is a value
 or takes a step: to an expression, a panic, an effect or a return. -/
-theorem progress {e : Expr} {t : Ty} (h : Typed P R [] (.expr e t)) :
+theorem progress {e : Expr} {t : Ty} (h : Typed P R [] M (.expr e t)) :
     IsValue e ∨ ∃ o, Step P e o :=
   progress_goal h rfl
 
@@ -1429,59 +1631,123 @@ theorem progress {e : Expr} {t : Ty} (h : Typed P R [] (.expr e t)) :
 
 /-- The outcome of a body's step, typed in its own function or closure, is
 typed in its frame: a return gives the value it returns. -/
-theorem OutcomeTyped.inFrame {o : Outcome} {t : Ty} (h : OutcomeTyped P t o t) :
-    OutcomeTyped P R o.inFrame t := by
+theorem OutcomeTyped.inFrame {o : Outcome} {t : Ty} (h : OutcomeTyped P t [] o t) :
+    OutcomeTyped P R M o.inFrame t := by
   cases o with
   | next e => exact Typed.frame h
   | panic _ => trivial
   | perform req k => exact fun r hr => Typed.frame (h r hr)
   | ret v => exact value_typed h.1 h.2
+  | read i is k => obtain ⟨_, hu, _⟩ := h; simp [placeTy_nil] at hu
+  | write i is w e => obtain ⟨_, hu, _⟩ := h; simp [placeTy_nil] at hu
+
+/-- The outcome of a step of a body that holds var 0, typed with that var
+of type `u` and the vars `Mi` beyond it, in a function or closure whose
+result type is `Ri`, is typed once its binder (`wrap`, holding `v`)
+answers it: the binder answers a read or a write of var 0 with the value
+it holds and keeps its type, and passes one of var `i + 1` on as one of
+var `i`, which `hpass` places in `M`. -/
+theorem OutcomeTyped.under {o : Outcome} {v : Expr} {u t Ri : Ty} {Mi : List Ty}
+    {wrap : Expr → Expr → Expr} {onRet : Expr → Outcome}
+    (h : OutcomeTyped P Ri (u :: Mi) o t) (hv : IsValue v) (hvt : Typed P R [] M (.expr v u))
+    (hwrap : ∀ {v e}, IsValue v → Typed P R [] M (.expr v u) →
+      Typed P Ri [] (u :: Mi) (.expr e t) → Typed P R [] M (.expr (wrap v e) t))
+    (hret : ∀ {r}, IsValue r → Typed P Ri [] (u :: Mi) (.expr r Ri) →
+      OutcomeTyped P R M (onRet r) t)
+    (hpass : ∀ {i is u'}, P.placeTy Mi ⟨i, is⟩ = some u' → P.placeTy M ⟨i, is⟩ = some u') :
+    OutcomeTyped P R M (o.under v wrap onRet) t := by
+  cases o with
+  | next e => exact hwrap hv hvt h
+  | panic _ => trivial
+  | perform req k => exact fun r hr => hwrap hv hvt (h r hr)
+  | ret r => exact hret h.1 h.2
+  | read i is k =>
+    obtain ⟨w, hw, hk⟩ := h
+    cases i with
+    | zero =>
+      rw [placeTy_zero] at hw
+      obtain ⟨hgv, hgt⟩ := getAt_typed is hv hvt hw
+      exact hwrap hv hvt (hk _ hgv (value_typed hgv hgt))
+    | succ i =>
+      rw [placeTy_succ] at hw
+      exact ⟨w, hpass hw, fun r hr hrt => hwrap hv hvt (hk r hr (value_typed hr hrt))⟩
+  | write i is w e =>
+    obtain ⟨u', hu', hw, hwt, he⟩ := h
+    cases i with
+    | zero =>
+      rw [placeTy_zero] at hu'
+      obtain ⟨hsv, hst⟩ := setAt_typed is hv hvt hu' hw (value_typed hw hwt)
+      exact hwrap hsv hst he
+    | succ i =>
+      rw [placeTy_succ] at hu'
+      exact ⟨u', hpass hu', hw, value_typed hw hwt, hwrap hv hvt he⟩
+
+/-- The outcome of a step of the rest of a block, typed with its var
+holding a value of the var's type, is typed in the block's cell: the cell
+answers a read or a write of its var with the value it holds, and keeps
+the type of what it holds. -/
+theorem OutcomeTyped.inCell {o : Outcome} {v : Expr} {u t : Ty}
+    (h : OutcomeTyped P R (u :: M) o t) (hv : IsValue v) (hvt : Typed P R [] M (.expr v u)) :
+    OutcomeTyped P R M (o.inCell v) t :=
+  h.under hv hvt (fun hv hvt he => Typed.cell hv hvt he)
+    (fun hr hrt => ⟨hr, value_typed hr hrt⟩) id
+
+/-- The outcome of a step of a mutating method's body, typed with its
+receiver as its one var, is typed in the running call: the call answers a
+read or a write of its receiver with the value it holds, and a return
+ends the body. -/
+theorem OutcomeTyped.inMethod {o : Outcome} {pl : Place} {v : Expr} {u t : Ty}
+    (h : OutcomeTyped P t [u] o t) (hpl : P.placeTy M pl = some u) (hv : IsValue v)
+    (hvt : Typed P R [] M (.expr v u)) : OutcomeTyped P R M (o.inMethod pl v) t :=
+  h.under hv hvt (fun hv hvt he => Typed.method hpl hv hvt he)
+    (fun hr hrt => Typed.method hpl hv hvt (value_typed hr hrt))
+    (fun hu => by simp [placeTy_nil] at hu)
 
 /-- **Preservation.** In a well-typed program, a step of a closed
 expression of type `t`, in a function or closure whose result type is
 `R`, leads to a closed expression of type `t`, a panic, an effect after
 which the run goes on at type `t`, or a return of a value of type `R`. -/
 theorem preservation (hP : ProgramTyped P) {e : Expr} {o : Outcome} (hs : Step P e o) :
-    ∀ {R t : Ty}, Typed P R [] (.expr e t) → OutcomeTyped P R o t := by
+    ∀ {R t : Ty} {M : List Ty}, Typed P R [] M (.expr e t) → OutcomeTyped P R M o t := by
   induction hs with
   | negArg _ ih =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | neg he => exact (ih he).map fun _ h => Typed.neg h
   | neg =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | neg _ => exact intResult_typed
   | notArg _ ih =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | not he => exact (ih he).map fun _ h => Typed.not h
   | not =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | not _ => exact Typed.bool
   | binaryLhs _ ih =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | binary hop hl hr => exact (ih hl).map fun _ h => Typed.binary hop h hr
   | binaryRhs _ _ _ ih =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | binary hop hl hr => exact (ih hr).map fun _ h => Typed.binary hop hl h
   | binary hl hr he =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | binary hop htl htr => exact evalBinary_typed hop hl hr htl htr he
   | andFalse | orTrue | impliesFalse =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | binary hop _ _ => cases hop; exact Typed.bool
   | andTrue | orFalse | impliesTrue =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | binary hop _ hr => cases hop; exact hr
   | callArg _ _ ih =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | call hf hargs =>
       obtain ⟨ts₁, _, ts₂, hts, h₁, he, h₂⟩ := args_split _ hargs
@@ -1489,57 +1755,57 @@ theorem preservation (hP : ProgramTyped P) {e : Expr} {o : Outcome} (hs : Step P
       rw [hts]
       exact args_append _ h₁ (Typed.argsCons h h₂)
   | call hf hvs hi =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | call hf' hargs =>
       rw [hf] at hf'
       cases hf'
-      exact Typed.frame (typed_instantiate _ (hP _ _ hf) hargs hvs hi)
+      exact Typed.frame (typed_enter (hP _ _ hf) hargs hvs hi)
   | ifCond _ ih =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | ifElse hc hth hel => exact (ih hc).map fun _ h => Typed.ifElse h hth hel
     | ifNoElse hc hth => exact (ih hc).map fun _ h => Typed.ifNoElse h hth
   | ifTrue =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | ifElse _ hth _ => exact hth
   | ifFalse =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | ifElse _ _ hel => exact hel
   | ifTrueNoElse =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | ifNoElse _ hth => exact Typed.block (Typed.blockExpr hth Typed.blockNone)
   | ifFalseNoElse =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | ifNoElse _ _ => exact Typed.unit
   | blockNone =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | block hb => cases hb; exact Typed.unit
   | blockSome =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | block hb =>
       cases hb with
       | blockSome he => exact he
   | blockExprArg _ ih =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | block hb =>
       cases hb with
       | blockExpr he hrest => exact (ih he).map fun _ h => Typed.block (Typed.blockExpr h hrest)
   | blockExpr _ =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | block hb =>
       cases hb with
       | blockExpr _ hrest => exact Typed.block hrest
   | blockLetArg _ ih =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | block hb =>
       cases hb with
@@ -1548,19 +1814,19 @@ theorem preservation (hP : ProgramTyped P) {e : Expr} {o : Outcome} (hs : Step P
       | blockLetDrop he hrest =>
         exact (ih he).map fun _ h => Typed.block (Typed.blockLetDrop h hrest)
   | blockLetBind hv =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | block hb =>
       cases hb with
       | blockLetBind he hrest => exact Typed.block (typed_subst hv he hrest [] rfl)
   | blockLetDrop _ =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | block hb =>
       cases hb with
       | blockLetDrop _ hrest => exact Typed.block hrest
   | constructArg _ _ ih =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | construct hf hargs =>
       obtain ⟨ts₁, _, ts₂, hts, h₁, he, h₂⟩ := args_split _ hargs
@@ -1568,11 +1834,11 @@ theorem preservation (hP : ProgramTyped P) {e : Expr} {o : Outcome} (hs : Step P
       rw [hts]
       exact args_append _ h₁ (Typed.argsCons h h₂)
   | fieldBase _ ih =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | field hf hi hb => exact (ih hb).map fun _ h => Typed.field hf hi h
   | field _ he =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | field hf hi hb =>
       cases hb with
@@ -1584,7 +1850,7 @@ theorem preservation (hP : ProgramTyped P) {e : Expr} {o : Outcome} (hs : Step P
         cases he'
         exact hte
   | builtinArg _ _ ih =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | builtin hb hargs =>
       obtain ⟨ts₁, _, ts₂, hts, h₁, he, h₂⟩ := args_split _ hargs
@@ -1592,11 +1858,11 @@ theorem preservation (hP : ProgramTyped P) {e : Expr} {o : Outcome} (hs : Step P
       rw [hts]
       exact args_append _ h₁ (Typed.argsCons h h₂)
   | builtinPure hvs he =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | builtin hb hargs => exact evalPure_typed hb hargs hvs he
   | builtinEffect _ _ =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | builtin hb hargs =>
       cases hargs with
@@ -1604,23 +1870,23 @@ theorem preservation (hP : ProgramTyped P) {e : Expr} {o : Outcome} (hs : Step P
         cases h₁
         exact fun r hr => allows_typed hb hr
   | matchScrutinee hstep ih =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | match_ hs harms hc =>
       exact (ih hs).map fun _ h =>
         Typed.match_ h harms (hc.elim Or.inl fun ⟨hv, _⟩ => absurd hstep (value_no_step hv))
   | @matchSkip _ _ _ _ rest hv hm =>
-    intro R t ht
+    intro R t M ht
     cases ht with
-    | @match_ _ _ _ _ u _ hs harms hc =>
+    | @match_ _ _ _ _ _ u _ hs harms hc =>
       have hcov := match_covered hc hv hs harms
-      have hrest : Typed P R [] (.arms rest u t) := by
+      have hrest : Typed P R [] M (.arms rest u t) := by
         cases harms with
         | armsCons _ _ hr => exact hr
         | armsConsGuard _ _ _ hr => exact hr
       exact Typed.match_ hs hrest (Or.inr ⟨hv, covered_skip hcov hm⟩)
   | matchArm hv hm =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | match_ hs harms hc =>
       cases harms with
@@ -1628,7 +1894,7 @@ theorem preservation (hP : ProgramTyped P) {e : Expr} {o : Outcome} (hs : Step P
         obtain ⟨hargs, hvals⟩ := matchPat_typed hp hv hs hm
         exact typed_substAll _ (by simpa using hbody) hargs hvals
   | matchGuard hv hm =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | match_ hs harms hc =>
       have hcov := match_covered hc hv hs harms
@@ -1639,11 +1905,11 @@ theorem preservation (hP : ProgramTyped P) {e : Expr} {o : Outcome} (hs : Step P
           (typed_substAll _ (by simpa using hbody) hargs hvals) ?_
         exact Typed.match_ hs hrest (Or.inr ⟨hv, covered_guard hcov⟩)
   | callValueCallee _ ih =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | callValue hc hargs => exact (ih hc).map fun _ h => Typed.callValue h hargs
   | callValueArg _ _ _ ih =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | callValue hc hargs =>
       obtain ⟨ts₁, _, ts₂, hts, h₁, he, h₂⟩ := args_split _ hargs
@@ -1651,36 +1917,36 @@ theorem preservation (hP : ProgramTyped P) {e : Expr} {o : Outcome} (hs : Step P
       rw [hts]
       exact args_append _ h₁ (Typed.argsCons h h₂)
   | callValue hvs hi =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | callValue hc hargs =>
       obtain ⟨ps, cs, body, heq, rfl, hb⟩ := canonical_fn (IsValue.closure _ _ _ _ _) hc
       cases heq
       exact Typed.frame (typed_instantiate _ hb hargs hvs hi)
   | resultArg _ ih =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | ok hf he => exact (ih he).map fun _ h => Typed.ok hf h
     | err hf he => exact (ih he).map fun _ h => Typed.err hf h
   | tryArg _ ih =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | try_ hf he hc => exact (ih he).map fun _ h => Typed.try_ hf h hc
   | tryOk _ =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | try_ _ he _ =>
       cases he with
       | ok _ hw => exact hw
   | tryErr hv =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | try_ hf he hc =>
       cases hc
       cases he with
       | err _ hw => exact ⟨IsValue.result _ hv, Typed.err hf hw⟩
   | tryConvert hv =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | try_ hf he hc =>
       cases hc with
@@ -1694,13 +1960,77 @@ theorem preservation (hP : ProgramTyped P) {e : Expr} {o : Outcome} (hs : Step P
           · rw [hps]
             exact Typed.argsCons hw Typed.argsNil
   | frame _ ih =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | frame he => exact (ih he).inFrame
   | frameValue hv =>
-    intro R t ht
+    intro R t M ht
     cases ht with
     | frame he => exact value_typed hv he
+  | var =>
+    intro R t M ht
+    cases ht with
+    | var_ hl => exact ⟨t, by simp [Program.placeTy, hl, Program.pathTy], fun w _ hw => hw⟩
+  | blockVarArg _ ih =>
+    intro R t M ht
+    cases ht with
+    | block hb =>
+      cases hb with
+      | blockVar he hrest => exact (ih he).map fun _ h => Typed.block (Typed.blockVar h hrest)
+  | blockVar hv =>
+    intro R t M ht
+    cases ht with
+    | block hb =>
+      cases hb with
+      | blockVar he hrest => exact Typed.cell hv (value_typed hv he) (Typed.block hrest)
+  | blockAssignArg _ ih =>
+    intro R t M ht
+    cases ht with
+    | block hb =>
+      cases hb with
+      | blockAssign hpl he hrest =>
+        exact (ih he).map fun _ h => Typed.block (Typed.blockAssign hpl h hrest)
+  | blockAssign hv =>
+    intro R t M ht
+    cases ht with
+    | block hb =>
+      cases hb with
+      | blockAssign hpl he hrest => exact ⟨_, hpl, hv, he, Typed.block hrest⟩
+  | cellBody _ ih =>
+    intro R t M ht
+    cases ht with
+    | cell hv hvt he => exact (ih he).inCell hv (value_typed hv hvt)
+  | cellValue hw =>
+    intro R t M ht
+    cases ht with
+    | cell _ _ he => exact value_typed hw he
+  | mutCallArg _ _ ih =>
+    intro R t M ht
+    cases ht with
+    | mutCall hf hr hpl hargs =>
+      obtain ⟨ts₁, _, ts₂, hts, h₁, he, h₂⟩ := args_split _ hargs
+      refine (ih he).map fun _ h => Typed.mutCall hf hr hpl ?_
+      rw [hts]
+      exact args_append _ h₁ (Typed.argsCons h h₂)
+  | mutCall hf hr hvs hi =>
+    intro R t M ht
+    cases ht with
+    | mutCall hf' hr' hpl hargs =>
+      rw [hf] at hf'
+      cases hf'
+      rw [hr] at hr'
+      cases hr'
+      have hb := hP _ _ hf
+      rw [hr] at hb
+      exact ⟨_, hpl, fun w hw hwt => Typed.method hpl hw hwt (typed_instantiate _ hb hargs hvs hi)⟩
+  | methodBody _ ih =>
+    intro R t M ht
+    cases ht with
+    | method hpl hv hvt he => exact (ih he).inMethod hpl hv (value_typed hv hvt)
+  | methodValue hw =>
+    intro R t M ht
+    cases ht with
+    | method hpl hv hvt he => exact ⟨_, hpl, hv, value_typed hv hvt, value_typed hw he⟩
 
 /-! ## Type safety -/
 
@@ -1710,9 +2040,9 @@ source-typed expression steps to is typed at its type, and is a value or
 takes a step (to an expression, a panic or an effect): a run never gets
 stuck, whatever answers the host gives that the semantics allows. -/
 theorem type_safety (hP : ProgramSourceTyped P) {e e' : Expr} {t : Ty} {tr : List Request}
-    (he : SourceTyped P R [] e t) (hs : Steps P e tr e') :
-    Typed P R [] (.expr e' t) ∧ (IsValue e' ∨ ∃ o, Step P e' o) := by
-  have typed : Typed P R [] (.expr e' t) := by
+    (he : SourceTyped P R [] [] e t) (hs : Steps P e tr e') :
+    Typed P R [] [] (.expr e' t) ∧ (IsValue e' ∨ ∃ o, Step P e' o) := by
+  have typed : Typed P R [] [] (.expr e' t) := by
     have := he.1
     clear he
     induction hs with

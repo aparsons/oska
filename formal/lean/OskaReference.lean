@@ -26,8 +26,9 @@ any other control character as `\u{HEX}`, then `"`.
 
 It exits with 0 once it has printed that. It prints nothing on standard
 output, says what is wrong on standard error and exits with 2 when the
-input is not core IR version 5 (or the arguments are wrong), with 3 when
-the run gets stuck (or a `?` returns from outside any function), and with
+input is not core IR version 6 (or the arguments are wrong), with 3 when
+the run gets stuck (or a `?` returns from outside any function, or a
+`var` is read or written outside any binding of it), and with
 4 when it runs out of fuel, N steps (by default 100000000).
 -/
 
@@ -118,6 +119,9 @@ def main (args : List String) : IO UInt32 := do
         return 3
       | (.returned _, _) =>
         stderr.putStrLn "error: the run is stuck: a `?` returned from outside any function"
+        return 3
+      | (.unbound _, _) =>
+        stderr.putStrLn "error: the run is stuck: a `var` is read or written outside any binding of it"
         return 3
       | (.outOfFuel, _) =>
         stderr.putStrLn s!"error: the run did not end within {fuel} steps (--fuel)"

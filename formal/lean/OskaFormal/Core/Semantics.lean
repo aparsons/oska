@@ -3,8 +3,8 @@ import OskaFormal.Core.Syntax
 /-!
 # Oska Core: small-step semantics
 
-A small-step semantics of Oska Core, version 5, matching the interpreter
-(`crates/oska-run`) and the rules core IR version 5 states:
+A small-step semantics of Oska Core, version 6, matching the interpreter
+(`crates/oska-run`) and the rules core IR version 6 states:
 
 - Evaluation is left to right: an operator's `lhs` before its `rhs`, a
   call's arguments in order before the call, a block's statements in
@@ -44,6 +44,27 @@ A small-step semantics of Oska Core, version 5, matching the interpreter
   without a guard it steps to its body, and with one to
   `if guard { body } else { the match of the rest }`, so a false guard
   goes on to the next arm, as in the interpreter.
+- A `var` binding evaluates its value, then runs the rest of its block in
+  a `cell` holding it: the var. Reading var `i` (`var_ i`) steps to the
+  outcome `read`, and an assignment, once its value is a value, to the
+  outcome `write`; each enclosing expression passes them on as it does
+  an effect, until the cell of var `i` answers: a read with the value
+  the cell holds (the field its path names), a write by putting the new
+  value at its path in the cell's own value and nowhere else. Every
+  other value is left as it is: a `let`, an argument or a field holds a
+  value, which never changes, so a change through a `var` is never seen
+  through another binding (ADR 0001's value semantics, which the
+  interpreter keeps by copying a shared value before it writes it).
+- A mutating call `mutCall f place args` evaluates its arguments, then
+  reads the receiver at `place` and runs `f`'s body with them in a
+  `method` node, where the receiver is var 0, the body's own. When the
+  body has its value (or returns with `?`), the node writes the
+  receiver's final value back to `place` and gives the body's value: the
+  interpreter's `mutating_call_expr`, which takes the receiver out of its
+  place and puts it back. A body sees no var of its caller, so the call
+  changes its receiver and nothing else. A `Call` of a mutating method
+  (on a temporary) runs its body with the receiver in a cell, whose final
+  value is dropped.
 
 - A built-in call evaluates its arguments left to right. A pure one
   (`Path`, `Result`, `read_only`, `write_only`) then steps to its value.
@@ -98,6 +119,10 @@ mutual
     | .closure ps (h + 1) cs cf ret body =>
       .closure ps h (shiftCaptures cs) cf ret (Expr.subst v body)
     | .callValue c args => .callValue (Expr.subst v c) (Expr.substList v args)
+    | .var_ i => .var_ i
+    | .mutCall f pl args => .mutCall f pl (Expr.substList v args)
+    | .cell w body => .cell (Expr.subst v w) (Expr.subst v body)
+    | .method pl w body => .method pl (Expr.subst v w) (Expr.subst v body)
 
   /-- `Expr.subst` on each expression of a list. -/
   def Expr.substList (v : Expr) : List Expr → List Expr
@@ -114,6 +139,8 @@ mutual
     | [] => []
     | .let_ b t e :: ss => .let_ b t (Expr.subst v e) :: Expr.substStmts v ss
     | .expr e :: ss => .expr (Expr.subst v e) :: Expr.substStmts v ss
+    | .var_ t e :: ss => .var_ t (Expr.subst v e) :: Expr.substStmts v ss
+    | .assign pl e :: ss => .assign pl (Expr.subst v e) :: Expr.substStmts v ss
 
   /-- `Expr.subst` on each arm's guard and body. A pattern holds no
   expression. -/
@@ -137,6 +164,33 @@ def instantiate : List Param → List Expr → Expr → Option Expr
   | p :: ps, v :: vs, body =>
     if p.binds then instantiate ps vs (Expr.subst v body) else instantiate ps vs body
   | _, _, _ => none
+
+/-- The body a call of `f` with the arguments `vs` runs: `instantiate`d,
+and for a mutating method (called on a temporary) in a cell holding the
+receiver, its first argument, whose final value is dropped. `none` for
+the wrong number of arguments. -/
+def Function.enter (f : Function) (vs : List Expr) : Option Expr :=
+  match f.receiver, vs with
+  | none, vs => instantiate f.params vs f.body
+  | some _, r :: vs => (instantiate f.params vs f.body).map (.cell r)
+  | some _, [] => none
+
+/-- The field at `path` in the value `v`, outermost first: `v` for the
+empty path. `()` where `v` has no such field, which a typed place never
+asks for. -/
+def Expr.getAt : Expr → List Nat → Expr
+  | v, [] => v
+  | .construct _ none fs, i :: is => Expr.getAt (fs[i]?.getD .unit) is
+  | _, _ :: _ => .unit
+
+/-- The value `v` with `w` put at `path`, outermost first, and nothing
+else changed: `w` for the empty path. `v` as it is where it has no such
+field, which a typed place never asks for. -/
+def Expr.setAt : Expr → List Nat → Expr → Expr
+  | _, [], w => w
+  | .construct t none fs, i :: is, w =>
+    .construct t none (fs.set i (Expr.setAt (fs[i]?.getD .unit) is w))
+  | v, _ :: _, _ => v
 
 /-- Why a running program panics. -/
 inductive PanicKind where
@@ -172,27 +226,60 @@ def Request.Allows (req : Request) (r : Expr) : Prop :=
 
 /-- What one step leads to: the next expression, a panic, an effect
 `req`, after which the run goes on with `k r` for the host's answer `r`,
-or a return of the value `v` from the function or closure the step is in
-(`?` on an `Err`). -/
+a return of the value `v` from the function or closure the step is in
+(`?` on an `Err`), a read of the field at `path` of var `var`, after
+which the run goes on with `k` of it, or a write of `value` there, after
+which it goes on with `next`. -/
 inductive Outcome where
   | next (e : Expr)
   | panic (kind : PanicKind)
   | perform (req : Request) (k : Expr → Expr)
   | ret (v : Expr)
+  | read (var : Nat) (path : List Nat) (k : Expr → Expr)
+  | write (var : Nat) (path : List Nat) (value : Expr) (next : Expr)
 
 /-- `f` applied to the next expression, or to what follows an effect, a
-panic or a return left as it is. -/
+read or a write; a panic or a return left as it is. -/
 def Outcome.map (f : Expr → Expr) : Outcome → Outcome
   | .next e => .next (f e)
   | .panic k => .panic k
   | .perform req k => .perform req fun r => f (k r)
   | .ret v => .ret v
+  | .read i is k => .read i is fun r => f (k r)
+  | .write i is w e => .write i is w (f e)
 
 /-- A step of a body in a `frame`: a return gives its value, and any other
 outcome stays in the frame. -/
 def Outcome.inFrame : Outcome → Outcome
   | .ret v => .next v
   | o => o.map .frame
+
+/-- A step of a body that holds var 0, whose value is `v`, wrapped back
+with `wrap`: the binder answers a read of var 0 with the field of `v` it
+asks for, and takes a write of var 0 into its own value; it passes a
+read or write of var `i + 1` on as one of var `i`, and a return to
+`onRet`. -/
+def Outcome.under (v : Expr) (wrap : Expr → Expr → Expr) (onRet : Expr → Outcome) :
+    Outcome → Outcome
+  | .next e => .next (wrap v e)
+  | .panic k => .panic k
+  | .perform req k => .perform req fun r => wrap v (k r)
+  | .ret r => onRet r
+  | .read 0 is k => .next (wrap v (k (v.getAt is)))
+  | .read (i + 1) is k => .read i is fun r => wrap v (k r)
+  | .write 0 is w e => .next (wrap (v.setAt is w) e)
+  | .write (i + 1) is w e => .write i is w (wrap v e)
+
+/-- A step of the rest of a block in the `cell` of its `var`, which holds
+`v`: a return leaves the cell. -/
+def Outcome.inCell (v : Expr) : Outcome → Outcome :=
+  Outcome.under v .cell .ret
+
+/-- A step of a mutating method's body, whose receiver holds `v`: a
+return ends the body with its value, as a `frame` does, and the receiver
+is still written back. -/
+def Outcome.inMethod (pl : Place) (v : Expr) : Outcome → Outcome :=
+  Outcome.under v (.method pl) fun r => .next (.method pl v r)
 
 /-- A pure built-in call applied to its arguments' values: `Path.from`
 and `Path.new` make a path, `is_ok` and `unwrap_or` read a `Result`, and
@@ -267,7 +354,7 @@ inductive Step (P : Program) : Expr → Outcome → Prop where
       AllValues vs → Step P e o →
       Step P (.call name (vs ++ e :: rest)) (o.map fun e' => .call name (vs ++ e' :: rest))
   | call {name : String} {f : Function} {vs : List Expr} {body : Expr} :
-      P.find? name = some f → AllValues vs → instantiate f.params vs f.body = some body →
+      P.find? name = some f → AllValues vs → f.enter vs = some body →
       Step P (.call name vs) (.next (.frame body))
   | ifCond {c th : Expr} {el : Option Expr} {o : Outcome} :
       Step P c o → Step P (.if_ c th el) (o.map fun c' => .if_ c' th el)
@@ -350,6 +437,43 @@ inductive Step (P : Program) : Expr → Outcome → Prop where
       Step P e o → Step P (.frame e) o.inFrame
   | frameValue {v : Expr} :
       IsValue v → Step P (.frame v) (.next v)
+  /-- Reading a var asks the cell that holds it. -/
+  | var {i : Nat} : Step P (.var_ i) (.read i [] fun x => x)
+  | blockVarArg {t : Ty} {e : Expr} {ss : List Stmt} {val : Option Expr} {o : Outcome} :
+      Step P e o →
+      Step P (.block (.var_ t e :: ss) val) (o.map fun e' => .block (.var_ t e' :: ss) val)
+  /-- A `var` binding runs the rest of its block in a cell holding its
+  value. -/
+  | blockVar {t : Ty} {v : Expr} {ss : List Stmt} {val : Option Expr} :
+      IsValue v → Step P (.block (.var_ t v :: ss) val) (.next (.cell v (.block ss val)))
+  | blockAssignArg {pl : Place} {e : Expr} {ss : List Stmt} {val : Option Expr} {o : Outcome} :
+      Step P e o →
+      Step P (.block (.assign pl e :: ss) val) (o.map fun e' => .block (.assign pl e' :: ss) val)
+  /-- An assignment writes its value at its place. -/
+  | blockAssign {pl : Place} {v : Expr} {ss : List Stmt} {val : Option Expr} :
+      IsValue v →
+      Step P (.block (.assign pl v :: ss) val) (.write pl.var pl.fields v (.block ss val))
+  | cellBody {v e : Expr} {o : Outcome} :
+      Step P e o → Step P (.cell v e) (o.inCell v)
+  /-- The block ends, and its var with it. -/
+  | cellValue {v w : Expr} :
+      IsValue w → Step P (.cell v w) (.next w)
+  | mutCallArg {name : String} {pl : Place} {vs rest : List Expr} {e : Expr} {o : Outcome} :
+      AllValues vs → Step P e o →
+      Step P (.mutCall name pl (vs ++ e :: rest))
+        (o.map fun e' => .mutCall name pl (vs ++ e' :: rest))
+  /-- Once its arguments are values, a mutating call reads its receiver
+  and runs the method's body with it. -/
+  | mutCall {name : String} {pl : Place} {f : Function} {u : Ty} {vs : List Expr} {body : Expr} :
+      P.find? name = some f → f.receiver = some u → AllValues vs →
+      instantiate f.params vs f.body = some body →
+      Step P (.mutCall name pl vs) (.read pl.var pl.fields fun r => .method pl r body)
+  | methodBody {pl : Place} {v e : Expr} {o : Outcome} :
+      Step P e o → Step P (.method pl v e) (o.inMethod pl v)
+  /-- The body ends: the receiver is written back to its place, and the
+  call gives the body's value. -/
+  | methodValue {pl : Place} {v w : Expr} :
+      IsValue w → Step P (.method pl v w) (.write pl.var pl.fields v w)
 
 /-- A value takes no step. -/
 theorem value_no_step {P : Program} {v : Expr} {o : Outcome} (hv : IsValue v) :
@@ -378,14 +502,14 @@ theorem AllValues.mid {vs rest : List Expr} {e : Expr} :
 function's body, so a call of the wrong arity takes no step. -/
 theorem call_step {P : Program} {name : String} {vs : List Expr} {o : Outcome}
     (hvs : AllValues vs) (h : Step P (.call name vs) o) :
-    ∃ f e, P.find? name = some f ∧ instantiate f.params vs f.body = some e ∧
+    ∃ f e, P.find? name = some f ∧ f.enter vs = some e ∧
       o = .next (.frame e) := by
   cases h with
   | callArg _ hs => exact absurd hs (value_no_step (AllValues.mid hvs))
   | call hf _ hi => exact ⟨_, _, hf, hi, rfl⟩
 
-/-- Zero or more steps of the semantics, none of them a panic or a
-return, and the
+/-- Zero or more steps of the semantics, none of them a panic, a
+return, a read or a write, and the
 **trace** of their effects, in order: `Steps P e tr e'` when `e` runs to
 `e'` performing the effects `tr`, each with an answer the semantics
 allows. -/

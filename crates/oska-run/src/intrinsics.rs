@@ -937,6 +937,7 @@ mod access_tests {
                 generics: Vec::new(),
                 self_ty: None,
                 receiver: false,
+                mutating: false,
                 params: vec![Param {
                     name: "fs".to_string(),
                     ty: Type::Unit,

@@ -151,13 +151,13 @@ fn structs_enums_and_match_export_to_the_golden_form() {
 
 #[test]
 fn the_export_carries_its_version_and_is_json() {
-    assert_eq!(CORE_IR_VERSION, 5);
+    assert_eq!(CORE_IR_VERSION, 6);
     let json = core_ir::export(&program("fn one() -> Int { 1 }\n"))
         .unwrap_or_else(|refusal| panic!("should export, refused: {refusal}"));
     let value = oska_syntax::parse_json(&json).unwrap_or_else(|e| panic!("{e}: {json}"));
     assert_eq!(
         value.get("core_ir_version").and_then(|v| v.as_u64()),
-        Some(5)
+        Some(6)
     );
     assert_eq!(
         value
@@ -389,25 +389,32 @@ fn a_built_in_call_is_refused_at_the_call() {
 }
 
 #[test]
-fn an_impl_block_is_refused_with_its_type() {
+fn a_trait_impl_is_refused_with_its_type() {
     let src = "struct Counter { n: Int }\n\
-               impl Counter {\n\
-               \x20   fn get(self) -> Int { 0 }\n\
+               impl Named for Counter {\n\
+               \x20   fn name(self) -> Int { 0 }\n\
+               }\n\
+               trait Named {\n\
+               \x20   fn name(self) -> Int\n\
                }\n";
-    // The struct is in Oska Core; its impl is not.
+    // The struct is in Oska Core; an `impl` of a trait for it is not,
+    // where an inherent `impl` is.
     assert_refused(
         src,
         "the `impl` of `Counter`",
-        "impl Counter {\n    fn get(self) -> Int { 0 }\n}",
+        "impl Named for Counter {\n    fn name(self) -> Int { 0 }\n}",
     );
-    // Without the impl's declaration, its method is the first refusal.
+    // Without the declarations, its method is the first refusal.
     let mut program = program(src);
     program
         .declarations
-        .retain(|d| d.kind != DeclarationKind::Impl);
+        .retain(|d| !matches!(d.kind, DeclarationKind::Impl | DeclarationKind::Trait));
     assert_eq!(
         refusal_of(src, &program),
-        ("the method `Counter.get`".to_string(), "get".to_string())
+        (
+            "the method `<Counter as Named>.name`".to_string(),
+            "name".to_string()
+        )
     );
 }
 
@@ -515,24 +522,7 @@ fn an_unsolved_type_is_refused() {
 }
 
 #[test]
-fn var_and_loops_are_refused_at_their_statement() {
-    assert_refused(
-        "fn f() -> Int {\n\
-         \x20   var n = 0\n\
-         \x20   n = 1\n\
-         \x20   n\n\
-         }\n",
-        "a `var` binding",
-        "var n = 0",
-    );
-    assert_refused(
-        "fn f() -> Int {\n\
-         \x20   var n = 0\n\
-         \x20   n\n\
-         }\n",
-        "a `var` binding",
-        "var n = 0",
-    );
+fn loops_are_refused_at_their_statement() {
     assert_refused(
         "fn f(go: Bool) -> Int {\n\
          \x20   while go {\n\
@@ -940,5 +930,139 @@ fn every_built_in_the_export_writes_is_one_the_lean_reader_reads() {
     assert!(
         extra.is_empty(),
         "the Lean reader reads these built-ins that `BUILTINS` lacks: {extra:?}"
+    );
+}
+
+/// The program of the `methods` golden: an inherent `impl` with an
+/// associated function, a method and mutating methods, one calling
+/// another on `self`; `var`s, assignment to a var and to a field within
+/// one, a mutating call on a var and on a field of one, a `let` copy of a
+/// var, a closure reading that copy, a mutating method called on a
+/// temporary, `var _`, and a `match` binding after the vars.
+const METHODS: &str = "struct Counter { n: Int }\n\
+     \n\
+     struct Pair { left: Counter, right: Counter }\n\
+     \n\
+     impl Counter {\n\
+     \x20   fn new(n: Int) -> Counter { Counter(n: n) }\n\
+     \x20   fn get(self) -> Int { self.n }\n\
+     \x20   fn bump(var self, by: Int) {\n\
+     \x20       self.n = self.n + by\n\
+     \x20   }\n\
+     \x20   fn bump_twice(var self) -> Int {\n\
+     \x20       var step = 1\n\
+     \x20       self.bump(step)\n\
+     \x20       step = step + 1\n\
+     \x20       self.bump(step)\n\
+     \x20       self.n\n\
+     \x20   }\n\
+     }\n\
+     \n\
+     fn run(_: Bool) -> Int {\n\
+     \x20   var a = Counter.new(0)\n\
+     \x20   let b = a\n\
+     \x20   a.bump(2)\n\
+     \x20   var p = Pair(left: a, right: b)\n\
+     \x20   let twice = p.left.bump_twice()\n\
+     \x20   p.right.n = 7\n\
+     \x20   let add = |x: Int| x + b.n\n\
+     \x20   Counter(n: 5).bump(1)\n\
+     \x20   var _ = 3\n\
+     \x20   let c = match a.n {\n\
+     \x20       0 => 0\n\
+     \x20       k => k + b.n\n\
+     \x20   }\n\
+     \x20   a.get() + b.get() + p.left.n + p.right.n + add(1) + twice + c\n\
+     }\n";
+
+#[test]
+fn methods_vars_and_assignment_export_to_the_golden_form() {
+    assert_golden("methods", METHODS);
+}
+
+#[test]
+fn an_inherent_impl_of_a_type_outside_the_core_is_refused_with_its_type() {
+    // The `impl` comes first in the source, so it is the first refusal,
+    // before the generic struct's own.
+    let src = "impl<T> Wrap<T> {\n\
+               \x20   fn get(self) -> T { self.v }\n\
+               }\n\
+               struct Wrap<T> { v: T }\n";
+    assert_refused(
+        src,
+        "the `impl` of `Wrap<T>`",
+        "impl<T> Wrap<T> {\n    fn get(self) -> T { self.v }\n}",
+    );
+}
+
+#[test]
+fn a_closure_that_reads_a_var_or_self_is_refused() {
+    assert_refused(
+        "fn f() -> Int {\n\
+         \x20   var n = 0\n\
+         \x20   let g = |x: Int| x + n\n\
+         \x20   n = 1\n\
+         \x20   g(n)\n\
+         }\n",
+        "a closure that captures a `var`",
+        "|x: Int| x + n",
+    );
+    assert_refused(
+        "struct Counter { n: Int }\n\
+         impl Counter {\n\
+         \x20   fn adder(self) -> fn(Int) -> Int {\n\
+         \x20       |x: Int| x + self.n\n\
+         \x20   }\n\
+         }\n",
+        "a closure that reads `self`",
+        "|x: Int| x + self.n",
+    );
+}
+
+/// The diagnostic codes the checker reports for `src`.
+fn codes(src: &str) -> Vec<&'static str> {
+    oska_check::check_module(src)
+        .diagnostics
+        .iter()
+        .map(|d| d.code)
+        .collect()
+}
+
+/// The programs `formal/lean/OskaFormal/Core/Examples.lean` shows the Lean
+/// typing of Oska Core rejects for vars: a mutating call on a `let`
+/// (`E0230`) and an assignment to a field of one (`E0229`), where only a
+/// var is a place. Each is beside the same on a `var`, which the checker
+/// accepts and the Lean typing types.
+#[test]
+fn the_places_the_lean_typing_rejects_the_checker_rejects() {
+    let counter = "struct Counter { n: Int }\n\
+                   impl Counter {\n\
+                   \x20   fn bump(var self) { self.n = self.n + 1 }\n\
+                   }\n";
+    let main = |binding: &str, stmt: &str| {
+        format!("{counter}fn main() {{\n    {binding} a = Counter(n: 0)\n    {stmt}\n}}\n")
+    };
+    for (stmt, code) in [("a.bump()", "E0230"), ("a.n = 1", "E0229")] {
+        let rejected = main("let", stmt);
+        let accepted = main("var", stmt);
+        assert_eq!(
+            codes(&rejected),
+            [code],
+            "the checker should reject {rejected:?}"
+        );
+        assert!(checks(&accepted), "the checker should accept {accepted:?}");
+        core_ir::export(&program(&accepted))
+            .unwrap_or_else(|refusal| panic!("{accepted:?} should export, refused: {refusal}"));
+    }
+    // The `Call` form passes the receiver as a copy, so it needs no
+    // `var`: the checker accepts it on a `let`, and the Lean typing
+    // types it (`Typed.call` against `Function.argTypes`).
+    let copy = main("let", "Counter.bump(a)");
+    assert!(checks(&copy), "the checker should accept {copy:?}");
+    let json = core_ir::export(&program(&copy))
+        .unwrap_or_else(|refusal| panic!("{copy:?} should export, refused: {refusal}"));
+    assert!(
+        json.contains("\"kind\": \"Call\"") && !json.contains("MutatingCall"),
+        "the export should be a plain call:\n{json}"
     );
 }
