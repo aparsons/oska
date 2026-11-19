@@ -1,7 +1,10 @@
 //! The **authority baseline** and the **authority diff**: what `oskac
 //! check --update-baseline` writes and `oskac check --baseline` compares,
 //! and the one comparison every tool uses to tell whether a change widened
-//! a program's authority (`oskac fix`'s no-widening rule included).
+//! a program's authority (`oskac fix`'s no-widening rule included). An
+//! **authority grant** (`oskac check --grant`, `oskac run --grant`) is a
+//! file in the baseline's format, compared by the same rules; only the
+//! words differ ([`Against`]).
 //!
 //! An [`AuthorityRecord`] is a report's authority without places: each
 //! function's authority and purity, and audit sites and attenuations
@@ -36,6 +39,28 @@ use crate::{builtins, json_lines, json_strings, prelude, CheckReport};
 
 /// The baseline file format this toolchain writes and reads.
 pub const FORMAT: u64 = 1;
+
+/// What a record is compared with: an **authority baseline**, or an
+/// **authority grant**, which has the baseline's format and is compared
+/// by the same rules. It decides only the words the diff is reported in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Against {
+    /// `oskac check --baseline`.
+    Baseline,
+    /// `oskac check --grant` and `oskac run --grant`.
+    Grant,
+}
+
+impl Against {
+    /// The word for it: `baseline` or `grant`, the diff's JSON key and
+    /// the human report's section name.
+    pub fn word(self) -> &'static str {
+        match self {
+            Against::Baseline => "baseline",
+            Against::Grant => "grant",
+        }
+    }
+}
 
 /// The prefixes of a test's name, `test "<name>"` or `test at line <n>`
 /// for a test with no name text, where its audit sites and attenuations
@@ -478,7 +503,17 @@ pub fn diff(
     baseline: &AuthorityRecord,
     current: &AuthorityRecord,
 ) -> Result<AuthorityDiff, String> {
-    unique_names(baseline).map_err(|e| format!("in the baseline, {e}"))?;
+    diff_against(Against::Baseline, baseline, current)
+}
+
+/// [`diff`], with `baseline` read as what `against` names, for its
+/// errors' words.
+pub fn diff_against(
+    against: Against,
+    baseline: &AuthorityRecord,
+    current: &AuthorityRecord,
+) -> Result<AuthorityDiff, String> {
+    unique_names(baseline).map_err(|e| format!("in the {}, {e}", against.word()))?;
     unique_names(current)?;
     let old: BTreeMap<&str, &FunctionRecord> = baseline
         .functions
@@ -640,8 +675,9 @@ impl AuthorityDiff {
     }
 
     /// The diff as the JSON value of `check`'s `authority_diff`, for the
-    /// baseline read from `baseline`.
-    pub fn to_json(&self, baseline: &str) -> String {
+    /// baseline or grant (`against`) read from `file`: its first two keys
+    /// are `baseline` and `baseline_oskac`, or `grant` and `grant_oskac`.
+    pub fn to_json(&self, against: Against, file: &str) -> String {
         let widened = |c: &Change| {
             format!(
                 "{{\"function\":\"{}\",\"gained\":{}}}",
@@ -709,13 +745,14 @@ impl AuthorityDiff {
                 attenuation_counts(&self.removed_attenuations),
             ),
         ];
-        let mut out = format!("{{\n    \"baseline\": \"{}\",\n", json_escape(baseline));
+        let word = against.word();
+        let mut out = format!("{{\n    \"{word}\": \"{}\",\n", json_escape(file));
         match &self.baseline_oskac {
             Some(version) => out.push_str(&format!(
-                "    \"baseline_oskac\": \"{}\",\n",
+                "    \"{word}_oskac\": \"{}\",\n",
                 json_escape(version)
             )),
-            None => out.push_str("    \"baseline_oskac\": null,\n"),
+            None => out.push_str(&format!("    \"{word}_oskac\": null,\n")),
         }
         for (key, items) in fields {
             let items: Vec<String> = items;
@@ -730,12 +767,13 @@ impl AuthorityDiff {
         out
     }
 
-    /// The `baseline:` section of the human report, for the baseline
-    /// read from `baseline`, running as `oskac` version `oskac_version`:
-    /// one line per change, those that fail the gate first, each marked
-    /// with what it gained (`+`) or lost (`-`).
-    pub fn to_human(&self, baseline: &str, oskac_version: &str) -> String {
-        let mut out = format!("baseline: {baseline}\n");
+    /// The `baseline:` (or `grant:`) section of the human report, for the
+    /// baseline or grant (`against`) read from `file`, running as `oskac`
+    /// version `oskac_version`: one line per change, those that fail the
+    /// gate first, each marked with what it gained (`+`) or lost (`-`).
+    pub fn to_human(&self, against: Against, file: &str, oskac_version: &str) -> String {
+        let word = against.word();
+        let mut out = format!("{word}: {file}\n");
         if self.is_empty() {
             out.push_str("  no change in authority\n");
             return out;
@@ -819,7 +857,7 @@ impl AuthorityDiff {
             .filter(|v| *v != oskac_version)
         {
             line(format!(
-                "note: the baseline was written by oskac {version} and this is oskac \
+                "note: the {word} was written by oskac {version} and this is oskac \
                  {oskac_version}; a change in the authority report between releases shows \
                  here too (see the release notes)"
             ));

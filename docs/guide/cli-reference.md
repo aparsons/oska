@@ -9,19 +9,21 @@ USAGE:
     oskac lex <file.osk> [--format=json]   Print the tokens in a source file
     oskac parse <file.osk> [--format=json] Print the syntax tree of a source file
     oskac check [path | -] [--format=json] [--release] [--no-cache]
-                [--baseline=<file> | --update-baseline=<file>]
+                [--baseline=<file> | --update-baseline=<file> | --grant=<file>]
                                            Type-check a source file, a package
                                            directory (the current one with no
                                            path), or one module on standard
                                            input (-), and report each
                                            function's authority; compare it
-                                           with a saved baseline (exit code 3
-                                           when it widened), or write one
+                                           with a saved baseline or an
+                                           authority grant (exit code 3 when
+                                           it goes past), or write a baseline
     oskac run [path | -] [--format=json] [--interpret] [--no-cache]
-              [--max-output=<bytes>] [-- args...]
+              [--grant=<file>] [--max-output=<bytes>] [-- args...]
                                            Check a source file, package or
                                            module on standard input (-) and,
-                                           if it has no diagnostics, run it:
+                                           if it has no diagnostics and stays
+                                           within the --grant, run it:
                                            natively on aarch64 and x86_64
                                            Linux, on the interpreter elsewhere
                                            or with --interpret; stop it with
@@ -85,6 +87,7 @@ USAGE:
 | `--release` | `check` | Reject `dbg(...)` (`E0216`) and `todo()` (`E0293`). The other commands accept the flag and ignore it. |
 | `--baseline=<file>` | `check` | Compare the program's authority with the [authority baseline](#authority-baseline) in `<file>`, and exit with 3 when it widened. Any other command refuses it as a usage error. |
 | `--update-baseline=<file>` | `check` | Write the program's [authority baseline](#authority-baseline) to `<file>`, only when there are no diagnostics. Not with `--baseline`; any other command refuses it as a usage error. |
+| `--grant=<file>` | `check`, `run` | Compare the program's authority with the [authority grant](#authority-grant) in `<file>`, and exit with 3 when it goes past it; `run` then runs nothing. Not with `--baseline` or `--update-baseline`; a repeated flag, an empty file name, or the flag on any other command is a usage error (exit code 2). |
 | `--integration` | `test` | Also run the tests marked `#[integration]`, on the real operating system. |
 | `--event=post-edit`, `--event=stop` | `hook` | The event the hook handles. It is required. |
 | `--interpret` | `run`, `test` | Run on the interpreter, on Linux and macOS too, where the program is otherwise compiled and run natively. See [platform support](#platform-support). The other commands accept the flag and ignore it. |
@@ -104,9 +107,9 @@ USAGE:
 
 ## `oskac check`
 
-`oskac check [path | -] [--format=json] [--release] [--baseline=<file> | --update-baseline=<file>]` parses and type-checks one file, every module of a package, or one module read from [standard input](#source-from-standard-input), against the prelude and reports each function's authority. Exit code 0 when there are no diagnostics, otherwise 1; with `--baseline`, 3 when the program checks but its authority widened.
+`oskac check [path | -] [--format=json] [--release] [--baseline=<file> | --update-baseline=<file> | --grant=<file>]` parses and type-checks one file, every module of a package, or one module read from [standard input](#source-from-standard-input), against the prelude and reports each function's authority. Exit code 0 when there are no diagnostics, otherwise 1; with `--baseline` or `--grant`, 3 when the program checks but its authority widened or goes past the grant.
 
-With `--format=json` the check object ends with `verdict`, which says what the exit code says, so a caller branches on one value: `ok` (exit code 0), `diagnostics` (1) or `widened` (3, every way the [authority baseline](#authority-baseline) comparison fails). See [output formats](#output-formats).
+With `--format=json` the check object ends with `verdict`, which says what the exit code says, so a caller branches on one value: `ok` (exit code 0), `diagnostics` (1) or `widened` (3, every way the [authority baseline](#authority-baseline) or [authority grant](#authority-grant) comparison fails). See [output formats](#output-formats).
 
 Human-readable output:
 
@@ -175,13 +178,26 @@ With `--format=json`, the check object gains `authority_diff`, just before `verd
 
 `baseline_oskac` is the version that wrote the baseline, or `null` for a saved report; when it differs from the running `oskac`, the human output says so, since a new release can change what the report records. `added` lists, in `new_kinds`, the entries no baseline function covers. Each `count` is how many sites were added or removed.
 
+### Authority grant
+
+An **authority grant** ([glossary](../../GLOSSARY.md)) is the most authority an embedder allows one piece of code, such as a snippet a model wrote, to have for one run. The embedder writes it; it is not committed with the code, and `oskac` never writes or updates it. `--grant=<file>` reads it on `check` and on `run`. A grant has the authority baseline's format (format 1), so an embedder can write one by hand or from a saved `oskac check --format=json` report, and it is compared by the [authority baseline](#authority-baseline)'s rules:
+
+- A grant that lists only `main` limits the whole program: an added function that reaches a kind no grant entry covers goes past it, as an added function does against a baseline, so the embedder need not know the snippet's other function names. In a package, functions are named by module (`pkg.main.main`), as in its report.
+- A new audit site that the grant does not list, such as an `assume_trusted` on text the code did not write, goes past it, although no function gains a capability.
+- A program that goes past its grant exits with 3 and `verdict` `widened`. There is no `--update-grant` and no flag that lets a program pass its grant: only the embedder changes it.
+- With diagnostics, nothing is compared and the exit code is 1. An unreadable or malformed grant is an `error:` with exit code 1, as for a baseline, and nothing runs.
+
+The output is the baseline's, with `grant` in place of `baseline`: a `grant:` section in the human output, and `"grant": "<file>"` and `grant_oskac` in place of `baseline` and `baseline_oskac` in the JSON `authority_diff`.
+
+`oskac run --grant=<file>` checks the program against the grant before it runs anything, on either backend, and for a file, a package or a module on [standard input](#source-from-standard-input) (`oskac run - --grant=grant.json`). A program past its grant is not run: the exit code is 3, and the diff goes to standard error, as the human `grant:` section, or with `--format=json` as one line, `{"authority_diff":{...},"verdict":"widened"}`, followed by the `error:` line.
+
 ## `oskac run`
 
-`oskac run <file.osk | -> [--format=json] [--interpret] [--max-output=<bytes>] [-- args...]` checks the file, or the module read from [standard input](#source-from-standard-input), and, when it has no diagnostics, runs `main` on the real operating system: compiled natively on Linux and macOS, on the interpreter on Windows or with `--interpret` (see [platform support](#platform-support)). `args.get(0)` in the program is the file's path, the package directory as given, or `<stdin>` for a module read from standard input, on either backend, and the arguments after `--` follow it unchanged.
+`oskac run <file.osk | -> [--format=json] [--interpret] [--grant=<file>] [--max-output=<bytes>] [-- args...]` checks the file, or the module read from [standard input](#source-from-standard-input), and, when it has no diagnostics and stays within its [authority grant](#authority-grant) if one is given, runs `main` on the real operating system: compiled natively on Linux and macOS, on the interpreter on Windows or with `--interpret` (see [platform support](#platform-support)). `args.get(0)` in the program is the file's path, the package directory as given, or `<stdin>` for a module read from standard input, on either backend, and the arguments after `--` follow it unchanged.
 
 - The program's own output goes to standard output and standard error as it runs.
 - A refused program's diagnostics, or the panic that stopped the program, go to standard error after that output: as `check` prints diagnostics, or as one JSON object per line with `--format=json`.
-- The exit code is the program's.
+- The exit code is the program's, or 3 when the program goes past its `--grant` and was not run.
 - `--max-output=<bytes>` stops the program, with the panic `P0041` and exit code 101, at the write that would take what it wrote to standard output and standard error together past that many bytes; that write writes nothing. See [run limits](../runtime.md#run-limits).
 
 | Exit code | Meaning |
@@ -189,6 +205,7 @@ With `--format=json`, the check object gains `authority_diff`, just before `verd
 | `0` | `main` returned `Ok` or `()`, or the reader of the program's standard output went away (a closed pipe, as in `oskac run app.osk \| head -1`): the program ends quietly at the write that finds out. On standard error, or with any other failure, such as a full disk, the write is an `IoError`. `oskac`'s own output ends the same way. |
 | `1` | The checker refused the program, or `main` returned `Err`. The runtime prints `e.to_string()` to standard error. |
 | `2` | The program uses something the interpreter cannot run yet (`E0370`, `E0371`, `E0380`). Nothing ran. |
+| `3` | The program's authority goes past its [authority grant](#authority-grant) (`--grant`). Nothing ran. |
 | `101` | The program panicked. |
 | `128 + n` | A native program was killed by signal `n`, as a shell reports it, such as `143` for `SIGTERM`. A signal only a fault raises, such as `SIGSEGV`, is also reported as `E0392`. A closed pipe is not a signal on either backend: see exit code `0`. |
 
@@ -316,7 +333,7 @@ Then it removes `bin` and the Oska home if they are left empty, and it never tou
 
 `oskac check`, `run`, `test` and `build` keep their results in a build cache, and reuse a result whose inputs are unchanged instead of checking or compiling again. A reused result is the same as a fresh one: the same output, byte for byte, the same diagnostics and authority report, with `--format=json` too, and the same exit code. The cache is on by default and prints nothing of its own.
 
-- **What is kept.** For `check`, what it printed and its exit code. For `run`, `test` and `build`, the executable the native backend built for each target; the check before it still runs. A refusal (`E0390`), a check with `--baseline` or `--update-baseline`, and a program run on the interpreter are not kept.
+- **What is kept.** For `check`, what it printed and its exit code. For `run`, `test` and `build`, the executable the native backend built for each target; the check before it still runs. A refusal (`E0390`), a check with `--baseline`, `--update-baseline` or `--grant`, and a program run on the interpreter are not kept.
 - **What makes a miss.** Any change to a module, the manifest, the set of modules, the path the program was named by, the target, an output flag (`--format`, `--release`), or the `oskac` executable itself: the key includes the SHA-256 of the running `oskac`, so a development build never reuses another build's results.
 - **Where.** One cache per user, shared across projects and worktrees: `OSKA_CACHE_DIR` if set, else `$XDG_CACHE_HOME/oska` or `~/.cache/oska` on Linux, `~/Library/Caches/oska` on macOS, and `%LOCALAPPDATA%\oska\cache` on Windows.
 - **Integrity.** Each entry is written to a temporary file and renamed into place, so concurrent runs never see half an entry, and it carries the SHA-256 of its contents, checked on every read: a damaged entry is a miss, and is rebuilt. Symbolic links in the cache are never followed. On Linux and macOS a cache folder that is a symbolic link, is owned by another user, or is writable by its group or others is refused: `oskac` prints `warning: running without the build cache: <reason>` to standard error and carries on without it.
@@ -376,7 +393,7 @@ One object on standard output, produced even when there are diagnostics:
 - `functions`: one entry per function and method, in source order. `name` is the function's name, `Type.method` for a method of an inherent `impl`, or `<Type as Trait>.method` for one of `impl Trait for Type`, with a generic trait's arguments, as in `<AppError as From<IoError>>.from`, and a generic type's arguments, as in `<Pair<Int> as Show>.show`; in a package `pkg.` and the module path come first, as in `pkg.util.text.shout` or `pkg.main.main`, and a method is named by its type's module. No two entries share a name. `"pub":true` marks a function declared `pub`. `authority` lists the built-in capabilities it can reach, in order of first appearance. `via` lists each capability-bearing parameter and what it supplies, with a method's receiver as `self`; a parameter whose type is or holds a bounded type parameter is listed too, naming it in `generics`. `pure` is `true` when `via` is empty.
 - `audit`: every audit site, in source order. `function` is the function it is in, named as for an attenuation, `kind` is `assume_trusted` for a trust assertion or `expose` for a secret exposure, and `span` covers the whole call.
 - `attenuations`: every call that narrows a capability, in source order. `function` is the function it is in (`test "<name>"` for a test block, with the name written as an Oska string, or `test at line <n>` when the name is empty), `method` is `restrict_to`, `restrict_to_file`, `read_only` or `write_only`, `source` and `result` are the capability kinds before and after, and `root` is the string the capability is restricted to, or `null` when the method takes no root or the root is computed at runtime. `span` covers the whole call.
-- `verdict`: always the last key. `ok` with exit code 0, `diagnostics` with exit code 1, or `widened` with exit code 3 when the program checks but a comparison of its authority with `--baseline` fails (a function widened or became impure, a new audit site, or a new kind). With `--baseline`, `authority_diff` comes just before it. An `error:` that stops the check, such as an unreadable file or baseline, prints no check object.
+- `verdict`: always the last key. `ok` with exit code 0, `diagnostics` with exit code 1, or `widened` with exit code 3 when the program checks but a comparison of its authority with `--baseline` or `--grant` fails (a function widened or became impure, a new audit site, or a new kind). With `--baseline` or `--grant`, `authority_diff` comes just before it. An `error:` that stops the check, such as an unreadable file, baseline or grant, prints no check object.
 
 A parse error is reported alone, with empty `functions`, `audit` and `attenuations`.
 
@@ -390,7 +407,7 @@ A parse error is reported alone, with empty `functions`, `audit` and `attenuatio
 
 ### `run --format=json`
 
-The program's output is unchanged. Each diagnostic or panic is one JSON object per line on standard error.
+The program's output is unchanged. Each diagnostic or panic is one JSON object per line on standard error. A program refused for going past its `--grant` prints its diff the same way, as one `{"authority_diff":{...},"verdict":"widened"}` line (see [authority grant](#authority-grant)).
 
 ### `fix --format=json`
 

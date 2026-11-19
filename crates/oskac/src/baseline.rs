@@ -1,31 +1,36 @@
 //! `oskac check --update-baseline=<file>` and `--baseline=<file>`: write
 //! a program's **authority baseline**, or compare its authority report
 //! with one and fail when authority widened (`oska_check::authority_diff`
-//! owns the comparison).
+//! owns the comparison). `--grant=<file>`, on `check` and `run`, compares
+//! with an **authority grant** the same way: only the words differ, and a
+//! grant is never written.
 //!
 //! Exit codes, which [`Verdict`] decides with the JSON `verdict`: 1 for
 //! diagnostics (no diff is computed: a refused program's report is
 //! incomplete); 3 when the program checks but the gate fails; 0
-//! otherwise. An unreadable or malformed baseline, or a baseline that
-//! cannot be written, is an `error:` and exit code 1, with no verdict and,
-//! with `--format=json`, no check object. There is no flag that lets a widening
-//! pass: approving one means updating the baseline in the same change.
+//! otherwise. An unreadable or malformed baseline or grant, or a baseline
+//! that cannot be written, is an `error:` and exit code 1, with no verdict
+//! and, with `--format=json`, no check object. There is no flag that lets
+//! a widening pass: approving one means updating the baseline in the same
+//! change, and a grant only its embedder changes.
 
 use std::process::ExitCode;
 
-use oska_check::authority_diff::{diff, AuthorityRecord};
+use oska_check::authority_diff::{diff_against, Against, AuthorityDiff, AuthorityRecord};
 use oska_check::CheckReport;
 
 use crate::package::{self, Files};
 use crate::verdict::{check_json, Verdict};
 
-/// What `oskac check` does with a baseline.
+/// What `oskac check` does with a baseline or a grant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Gate<'a> {
     /// `--baseline=<file>`: compare with it.
     Compare(&'a str),
     /// `--update-baseline=<file>`: write it.
     Update(&'a str),
+    /// `--grant=<file>`: compare with it, as with a baseline.
+    Grant(&'a str),
 }
 
 /// Print `report` as `oskac check` does, then apply `gate`, and return
@@ -53,7 +58,8 @@ pub(crate) fn check(report: &CheckReport, json: bool, path: &str, gate: Gate) ->
                 ExitCode::FAILURE
             }
         },
-        Gate::Compare(file) => compare(report, json, path, file),
+        Gate::Compare(file) => compare(report, json, path, Against::Baseline, file),
+        Gate::Grant(file) => compare(report, json, path, Against::Grant, file),
     }
 }
 
@@ -68,16 +74,84 @@ fn write(report: &CheckReport, file: &str) -> Result<(), String> {
         .map_err(|err| err.to_string())
 }
 
-/// Compare `report` with the baseline in `file`: the report gains the
-/// diff, and the exit code is 3 when the gate fails.
-fn compare(report: &CheckReport, json: bool, path: &str, file: &str) -> ExitCode {
-    let compared = std::fs::read_to_string(file)
-        .map_err(|err| format!("cannot read the baseline {file}: {err}"))
+/// Compare `report`, which has no diagnostics, with the baseline or
+/// grant (`against`) in `file`; an error when the file cannot be read or
+/// the diff cannot be made.
+fn compared(report: &CheckReport, against: Against, file: &str) -> Result<AuthorityDiff, String> {
+    let word = against.word();
+    std::fs::read_to_string(file)
+        .map_err(|err| format!("cannot read the {word} {file}: {err}"))
         .and_then(|text| {
-            AuthorityRecord::read(&text).map_err(|err| format!("the baseline {file}: {err}"))
+            AuthorityRecord::read(&text).map_err(|err| format!("the {word} {file}: {err}"))
         })
-        .and_then(|baseline| diff(&baseline, &AuthorityRecord::of(report)));
-    let difference = match compared {
+        .and_then(|record| diff_against(against, &record, &AuthorityRecord::of(report)))
+}
+
+/// The `error:` line for a program whose authority goes past `against`
+/// in `file`.
+fn widened_error(against: Against, file: &str) -> String {
+    let what = "a function gained authority or became impure, an audit site was added, or \
+                the program reaches a new kind";
+    match against {
+        Against::Baseline => format!(
+            "error: authority widened against the baseline {file}: {what}; approving this \
+             means updating the baseline, a change for the user to review"
+        ),
+        Against::Grant => format!(
+            "error: authority goes past the grant {file}: {what}; a grant is set by whoever \
+             runs the code, and oskac never updates it"
+        ),
+    }
+}
+
+/// `oskac run --grant=<file>`: compare `report`, the checked program
+/// about to run, with the grant in `file`. `None` when it may run: within
+/// the grant, or with diagnostics, which the run reports as it does
+/// without a grant (nothing is compared). Otherwise the exit code that
+/// ends the run before it starts: 1 for a grant that cannot be read or
+/// compared, 3, with the diff on standard error, for a program past it.
+pub(crate) fn refuse_run(report: &CheckReport, json: bool, file: &str) -> Option<ExitCode> {
+    if !report.diagnostics.is_empty() {
+        return None;
+    }
+    let difference = match compared(report, Against::Grant, file) {
+        Ok(difference) => difference,
+        Err(message) => {
+            eprintln!("error: {message}");
+            return Some(ExitCode::FAILURE);
+        }
+    };
+    let verdict = Verdict::of(report, Some(&difference));
+    if verdict != Verdict::Widened {
+        return None;
+    }
+    if json {
+        // One JSON object per line, as `run --format=json` prints every
+        // object on standard error: the diff's layout is only line breaks
+        // and indents, since its strings escape every line break.
+        let value = difference.to_json(Against::Grant, file);
+        let line: String = value.lines().map(str::trim_start).collect();
+        eprintln!(
+            "{{\"authority_diff\":{line},\"verdict\":\"{}\"}}",
+            verdict.name()
+        );
+    } else {
+        eprint!(
+            "{}",
+            difference.to_human(Against::Grant, file, env!("CARGO_PKG_VERSION"))
+        );
+    }
+    eprintln!(
+        "{}; the program was not run",
+        widened_error(Against::Grant, file)
+    );
+    Some(ExitCode::from(verdict.exit_code()))
+}
+
+/// Compare `report` with the baseline or grant (`against`) in `file`: the
+/// report gains the diff, and the exit code is 3 when the gate fails.
+fn compare(report: &CheckReport, json: bool, path: &str, against: Against, file: &str) -> ExitCode {
+    let difference = match compared(report, against, file) {
         Ok(difference) => difference,
         Err(message) => {
             // Nothing was compared, so there is no verdict, and with
@@ -92,19 +166,17 @@ fn compare(report: &CheckReport, json: bool, path: &str, file: &str) -> ExitCode
     };
     let verdict = Verdict::of(report, Some(&difference));
     if json {
-        let value = difference.to_json(file);
+        let value = difference.to_json(against, file);
         out!("{}", check_json(report, Some(&value), verdict));
     } else {
         let _ = crate::print_report(report, json, path);
-        out!("{}", difference.to_human(file, env!("CARGO_PKG_VERSION")));
+        out!(
+            "{}",
+            difference.to_human(against, file, env!("CARGO_PKG_VERSION"))
+        );
     }
     if verdict == Verdict::Widened {
-        eprintln!(
-            "error: authority widened against the baseline {file}: a function gained \
-             authority or became impure, an audit site was added, or the program reaches a \
-             new kind; approving this means updating the baseline, a change for the user \
-             to review"
-        );
+        eprintln!("{}", widened_error(against, file));
     }
     ExitCode::from(verdict.exit_code())
 }

@@ -41,19 +41,21 @@ USAGE:
     oskac lex <file.osk> [--format=json]   Print the tokens in a source file
     oskac parse <file.osk> [--format=json] Print the syntax tree of a source file
     oskac check [path | -] [--format=json] [--release] [--no-cache]
-                [--baseline=<file> | --update-baseline=<file>]
+                [--baseline=<file> | --update-baseline=<file> | --grant=<file>]
                                            Type-check a source file, a package
                                            directory (the current one with no
                                            path), or one module on standard
                                            input (-), and report each
                                            function's authority; compare it
-                                           with a saved baseline (exit code 3
-                                           when it widened), or write one
+                                           with a saved baseline or an
+                                           authority grant (exit code 3 when
+                                           it goes past), or write a baseline
     oskac run [path | -] [--format=json] [--interpret] [--no-cache]
-              [--max-output=<bytes>] [-- args...]
+              [--grant=<file>] [--max-output=<bytes>] [-- args...]
                                            Check a source file, package or
                                            module on standard input (-) and,
-                                           if it has no diagnostics, run it:
+                                           if it has no diagnostics and stays
+                                           within the --grant, run it:
                                            natively on aarch64 and x86_64
                                            Linux, on the interpreter elsewhere
                                            or with --interpret; stop it with
@@ -135,6 +137,9 @@ struct CommandLine {
     baseline: Option<String>,
     /// `--update-baseline=<file>`: `oskac check` writes it.
     update_baseline: Option<String>,
+    /// `--grant=<file>`: `oskac check` and `oskac run` compare authority
+    /// with it.
+    grant: Option<String>,
     /// The name `--event=` gives, for `oskac hook`.
     event: Option<String>,
     target: Option<String>,
@@ -201,6 +206,9 @@ impl CommandLine {
                     line.baseline =
                         value_unless_repeated(&line.baseline, &flag["--baseline=".len()..]);
                 }
+                flag if flag.starts_with("--grant=") => {
+                    line.grant = value_unless_repeated(&line.grant, &flag["--grant=".len()..]);
+                }
                 flag if flag.starts_with("--update-baseline=") => {
                     line.update_baseline = value_unless_repeated(
                         &line.update_baseline,
@@ -236,20 +244,36 @@ fn main() -> ExitCode {
         eprint!("{USAGE}");
         return ExitCode::from(2);
     }
-    let gate = match (line.baseline.as_deref(), line.update_baseline.as_deref()) {
-        (None, None) => None,
-        (Some(file), None) if !file.is_empty() => Some(baseline::Gate::Compare(file)),
-        (None, Some(file)) if !file.is_empty() => Some(baseline::Gate::Update(file)),
-        // Both, or an empty file name.
+    let gate = match (
+        line.baseline.as_deref(),
+        line.update_baseline.as_deref(),
+        line.grant.as_deref(),
+    ) {
+        (None, None, None) => None,
+        (Some(file), None, None) if !file.is_empty() => Some(baseline::Gate::Compare(file)),
+        (None, Some(file), None) if !file.is_empty() => Some(baseline::Gate::Update(file)),
+        (None, None, Some(file)) if !file.is_empty() => Some(baseline::Gate::Grant(file)),
+        // More than one, or an empty file name.
         _ => {
             eprint!("{USAGE}");
             return ExitCode::from(2);
         }
     };
-    if gate.is_some() && positional.first() != Some(&"check") {
+    // Only `check` takes a baseline; `check` and `run` take a grant.
+    let takes_gate = match gate {
+        None => true,
+        Some(baseline::Gate::Grant(_)) => matches!(positional.first(), Some(&("check" | "run"))),
+        Some(_) => positional.first() == Some(&"check"),
+    };
+    if !takes_gate {
         eprint!("{USAGE}");
         return ExitCode::from(2);
     }
+    // The grant `run` compares with, before it runs anything.
+    let grant = match gate {
+        Some(baseline::Gate::Grant(file)) => Some(file),
+        _ => None,
+    };
     if flags.no_cache
         && !matches!(
             positional.first(),
@@ -307,7 +331,7 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
         ["check", stdin::DASH] => stdin::check(flags, gate),
-        ["run", stdin::DASH] => stdin::run(flags, line.limits, &line.program_args),
+        ["run", stdin::DASH] => stdin::run(flags, line.limits, grant, &line.program_args),
         ["lex", path] => lex_file(path, flags),
         ["parse", path] => parse_file(path, flags),
         ["check", rest @ ..] if rest.len() <= 1 => on_target(
@@ -317,7 +341,7 @@ fn main() -> ExitCode {
             &line.program_args,
         ),
         ["run", rest @ ..] if rest.len() <= 1 => on_target(
-            Command::Run(line.limits),
+            Command::Run(line.limits, grant),
             rest.first(),
             flags,
             &line.program_args,
@@ -408,8 +432,9 @@ fn parse_file(path: &str, Flags { json, .. }: Flags) -> ExitCode {
 enum Command<'a> {
     /// `oskac check`, with what it does with a baseline.
     Check(Option<baseline::Gate<'a>>),
-    /// `oskac run`, under its limits.
-    Run(oska_check::limits::Limits),
+    /// `oskac run`, under its limits, within the grant in the file it
+    /// names, if any.
+    Run(oska_check::limits::Limits, Option<&'a str>),
     Test,
     /// `oskac build`, with the output path `-o` gives and its target platforms.
     Build(build::Options<'a>),
@@ -419,7 +444,7 @@ impl Command<'_> {
     fn name(self) -> &'static str {
         match self {
             Command::Check(_) => "check",
-            Command::Run(_) => "run",
+            Command::Run(..) => "run",
             Command::Test => "test",
             Command::Build(_) => "build",
         }
@@ -510,7 +535,7 @@ fn report_from_here(dir: &str, mut report: oska_check::CheckReport) -> oska_chec
 /// `--format=json`.
 /// The exit code is non-zero when there are diagnostics.
 /// A result with no diagnostics is reused from the build cache, `store`,
-/// when its inputs are unchanged; with a baseline it is always checked.
+/// when its inputs are unchanged; with a baseline or a grant it is always checked.
 fn check_file(
     path: &str,
     flags: Flags,
@@ -623,13 +648,27 @@ fn run_file(
     path: &str,
     flags: Flags,
     limits: oska_check::limits::Limits,
+    grant: Option<&str>,
     args: &[String],
     store: Option<&cache::Store>,
 ) -> ExitCode {
     let Some(src) = read_source(path) else {
         return ExitCode::FAILURE;
     };
+    if let Some(code) = refuse_past_grant(path, &src, flags.json, grant) {
+        return code;
+    }
     run_source(path, &src, flags, limits, args, store, false)
+}
+
+/// `oskac run --grant=<file>` on `src`, the text of the module `path`
+/// names: the exit code that ends the run before it starts when the
+/// program goes past the grant or the grant cannot be read, else `None`
+/// (also with no grant, and with diagnostics, which the run reports).
+fn refuse_past_grant(path: &str, src: &str, json: bool, grant: Option<&str>) -> Option<ExitCode> {
+    let file = grant?;
+    let report = oska_check::check_file(path, src, oska_check::CheckOptions { release: false });
+    baseline::refuse_run(&report, json, file)
 }
 
 /// [`run_file`] on `src`, the text of the module `path` names; with
@@ -776,7 +815,7 @@ fn on_target(command: Command, path: Option<&&str>, flags: Flags, args: &[String
         package::Target::File(file) => {
             let code = match command {
                 Command::Check(gate) => check_file(&file, flags, gate, store),
-                Command::Run(limits) => run_file(&file, flags, limits, args, store),
+                Command::Run(limits, grant) => run_file(&file, flags, limits, grant, args, store),
                 Command::Test => test_file(&file, flags, store),
                 Command::Build(options) => build::file(&file, flags, options, store),
             };
@@ -829,7 +868,7 @@ fn on_package(
                 .emit(),
         };
     }
-    let report = if matches!(command, Command::Run(_) | Command::Build(_)) {
+    let report = if matches!(command, Command::Run(..) | Command::Build(_)) {
         package::check_to_run(&package, &refused, dir, options)
     } else {
         package::check(&package, &refused, options)
@@ -846,7 +885,10 @@ fn on_package(
         return build::package(program, &places, dir, options, json, &cached);
     }
     let mut host = oska_run::RealHost::new();
-    if let Command::Run(limits) = command {
+    if let Command::Run(limits, grant) = command {
+        if let Some(code) = grant.and_then(|file| baseline::refuse_run(&report, json, file)) {
+            return code;
+        }
         if let Some(target) = native::native_target(flags) {
             match native::run(
                 program,
@@ -908,7 +950,7 @@ fn refuse(command: Command, diagnostics: Vec<Diagnostic>, json: bool, dir: &str)
             };
             finish_check(&report, json, dir, gate)
         }
-        Command::Run(_) => {
+        Command::Run(..) => {
             let outcome = oska_run::RunOutcome {
                 stdout: String::new(),
                 stderr: String::new(),

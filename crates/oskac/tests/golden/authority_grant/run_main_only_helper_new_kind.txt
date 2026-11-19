@@ -1,0 +1,6 @@
+exit: 3
+--- stdout
+--- stderr
+grant: <grant>
+  added fn fetch: NetConnect (new to the program: NetConnect)
+error: authority goes past the grant <grant>: a function gained authority or became impure, an audit site was added, or the program reaches a new kind; a grant is set by whoever runs the code, and oskac never updates it; the program was not run

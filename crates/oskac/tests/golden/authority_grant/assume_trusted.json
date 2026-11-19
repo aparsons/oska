@@ -1,0 +1,34 @@
+exit: 3
+--- stdout
+{
+  "diagnostics": [],
+  "functions": [
+    {"name":"vouch","authority":[],"via":[],"pure":true},
+    {"name":"main","authority":["Stdout"],"via":[{"param":"io","capabilities":["Stdout"]}],"pure":false}
+  ],
+  "audit": [
+    {"function":"vouch","kind":"assume_trusted","path":"crates/oskac/tests/fixtures/authority_grant/assume_trusted/program.osk","span":{"start":297,"end":318}}
+  ],
+  "attenuations": [],
+  "authority_diff": {
+    "grant": "<grant>",
+    "grant_oskac": null,
+    "widened": [],
+    "narrowed": [],
+    "became_impure": [],
+    "added": [
+      {"function":"vouch","authority":[],"pure":true,"new_kinds":[]}
+    ],
+    "removed": [],
+    "new_audit_sites": [
+      {"function":"vouch","kind":"assume_trusted","count":1}
+    ],
+    "removed_audit_sites": [],
+    "new_attenuations": [],
+    "removed_attenuations": [],
+    "fails": true
+  },
+  "verdict": "widened"
+}
+--- stderr
+error: authority goes past the grant <grant>: a function gained authority or became impure, an audit site was added, or the program reaches a new kind; a grant is set by whoever runs the code, and oskac never updates it

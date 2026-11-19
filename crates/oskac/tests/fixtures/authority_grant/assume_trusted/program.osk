@@ -1,0 +1,12 @@
+// An attack: the snippet vouches for text it did not write, as a model
+// would to pass a tool's output off as trusted. The grant lists no audit
+// site, so the new `assume_trusted` site goes past it, although no
+// function gains a capability.
+
+fn vouch(text: Untrusted<String>) -> String {
+    text.assume_trusted()
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    io.println("ran")
+}

@@ -1,0 +1,7 @@
+exit: 0
+--- stdout
+fn greet: Stdout (io)
+fn main: Stdout (io)
+grant: <grant>
+  added fn greet: Stdout
+--- stderr
