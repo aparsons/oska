@@ -6,9 +6,12 @@
 //! take a list (`split`, `lines`, `chars`, `join`). Also the text search
 //! and copy paths the native text speed-up rewrote.
 
-#![cfg(all(
-    target_os = "linux",
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 
 mod differential;
@@ -317,15 +320,7 @@ fn freed_lists_release_their_items() {
     num(io, total)"#;
     let case = Case::file("list_release", &program("", body));
     let (exe, dir) = differential::build_native(&case);
-    let output = std::process::Command::new("sh")
-        .args([
-            "-c",
-            "ulimit -v 524288 && exec \"$0\"",
-            exe.to_str().unwrap_or_default(),
-        ])
-        .current_dir(&dir)
-        .output()
-        .expect("the program should run");
+    let output = differential::run_within_memory(&exe, &dir, 512);
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "3003000\n",

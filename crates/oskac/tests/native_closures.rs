@@ -4,9 +4,12 @@
 //! lists of mixed function values, `List.map`, and calls through function
 //! values counting their depth (`P0021`) and checking `requires`.
 
-#![cfg(all(
-    target_os = "linux",
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 
 mod differential;

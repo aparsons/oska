@@ -12,9 +12,12 @@
 //! cannot run their code. The test executables below are built for the
 //! host and run on it, one process per test, on aarch64 and x86_64 Linux.
 
-#![cfg(all(
-    target_os = "linux",
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 
 mod executable;
@@ -31,13 +34,6 @@ struct Outcome {
     exit_code: Option<i32>,
     tree: BTreeMap<String, String>,
 }
-
-/// The target platform the host builds test executables for: its own.
-const HOST: oska_native::Target = if cfg!(target_arch = "x86_64") {
-    oska_native::Target::LinuxX86_64
-} else {
-    oska_native::Target::LinuxAarch64
-};
 
 /// The flag sets every case runs with.
 const RUNS: [&[&str]; 4] = [
@@ -804,7 +800,9 @@ fn test_executable(name: &str, src: &str) -> PathBuf {
     let program = oska_check::check_module(src)
         .program
         .expect("the program should check");
-    let bytes = oska_native::build_tests(&program, HOST).expect("the tests should build");
+    // The target platform the host builds test executables for: its own.
+    let host = oska_native::Target::host().expect("this host runs native executables");
+    let bytes = oska_native::build_tests(&program, host).expect("the tests should build");
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("native_tests_exe");
     std::fs::create_dir_all(&dir).expect("should create the directory");
     let exe = dir.join(name);

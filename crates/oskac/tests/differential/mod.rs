@@ -16,9 +16,7 @@
 //!
 //! It is compiled only where native executables run: aarch64 and x86_64
 //! Linux, and Apple silicon macOS, each running what it builds for its own
-//! platform. On a Mac, `oskac run` stays on the interpreter until the
-//! macOS runtime is complete (spec #154), so the harness names its target
-//! itself: [`host_target`]. Every target
+//! platform. Every target
 //! with a backend must compile every case (spec #153): the host also
 //! builds it with `--target` for each other one, which it cannot run, so
 //! an aarch64 host still fails when x86_64 refuses a program, and a
@@ -155,12 +153,8 @@ pub struct Outcome {
 }
 
 /// The target platform this host builds and runs native executables
-/// for: its own. On an Apple silicon Mac, which `oskac run` does not
-/// compile for yet (spec #154), `macos-aarch64`.
+/// for: its own.
 pub fn host_target() -> oska_native::Target {
-    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        return oska_native::Target::MacosAarch64;
-    }
     oska_native::Target::host().expect("this host runs native executables")
 }
 
@@ -236,6 +230,35 @@ fn case_root(case: &Case) -> PathBuf {
         .join(&case.name);
     let _ = std::fs::remove_dir_all(&root);
     root
+}
+
+/// Runs `exe` in `dir` and checks it never holds more than `mib` MiB.
+/// Linux caps the address space with `ulimit -v`; macOS cannot (`ulimit -v`
+/// fails there), so on macOS the peak resident memory `time -l` reports is
+/// checked after the run instead.
+pub fn run_within_memory(exe: &Path, dir: &Path, mib: u64) -> std::process::Output {
+    let script = if cfg!(target_os = "macos") {
+        "/usr/bin/time -l \"$0\"".to_string()
+    } else {
+        format!("ulimit -v {} && exec \"$0\"", mib * 1024)
+    };
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(script)
+        .arg(exe)
+        .current_dir(dir)
+        .output()
+        .expect("sh should run the program");
+    if cfg!(target_os = "macos") && output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let peak: u64 = stderr
+            .lines()
+            .find(|line| line.contains("maximum resident set size"))
+            .and_then(|line| line.split_whitespace().next()?.parse().ok())
+            .unwrap_or_else(|| panic!("no peak memory in `time -l`'s report: {stderr}"));
+        assert!(peak < mib << 20, "peak resident memory {peak} bytes");
+    }
+    output
 }
 
 /// Build `case` natively, without running it, and for every other

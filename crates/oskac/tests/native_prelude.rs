@@ -10,9 +10,12 @@
 //! body-less function fails here until it has a native implementation and
 //! a row.
 
-#![cfg(all(
-    target_os = "linux",
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 
 mod differential;

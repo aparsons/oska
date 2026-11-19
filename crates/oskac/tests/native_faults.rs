@@ -26,17 +26,11 @@ fn three_ways(case: &Case) -> Vec<(Command, &'static str)> {
         .args(["run", "--interpret", case.target()]);
     let mut native = Command::new(env!("CARGO_BIN_EXE_oskac"));
     native.current_dir(&dir).args(["run", case.target()]);
-    let mut ways = vec![
+    vec![
         (interpreter, "the interpreter"),
         (native, "`oskac run` natively"),
         (Command::new(&exe), "the executable"),
-    ];
-    // On a Mac `oskac run` is the interpreter until the macOS runtime is
-    // complete (spec #154): the executable is the native way.
-    if cfg!(target_os = "macos") {
-        ways.remove(1);
-    }
-    ways
+    ]
 }
 
 // ---- The flush at exit ------------------------------------------------------
@@ -111,12 +105,14 @@ fn fault_report(number: i32, name: &str) -> String {
     format!("error: the native program faulted with signal {number} ({name})\n")
 }
 
-/// `oskac run`'s report of a native program killed by SIGSEGV (`E0392`),
-/// as it was before the runtime reported faults itself.
-#[cfg(target_os = "linux")]
-const SEGV_E0392: &str = "error[E0392]: the native program was killed by signal 11 (SIGSEGV): \
-                          a fault in the native backend, not in the program; run it with \
-                          `--interpret`\n";
+/// `oskac run`'s report (`E0392`) of a native program killed by the
+/// fault signal `number`, `name`.
+fn run_e0392(number: i32, name: &str) -> String {
+    format!(
+        "error[E0392]: the native program was killed by signal {number} ({name}): a fault in \
+         the native backend, not in the program; run it with `--interpret`\n"
+    )
+}
 
 /// A program that prints, then overflows the native stack: `dbg` of a
 /// chain five million links deep recurses natively once per link, with no
@@ -162,8 +158,6 @@ fn an_executable_that_overflows_its_stack_shows_its_output_then_the_fault_report
     assert_eq!(output.status.signal(), Some(number));
 }
 
-/// `oskac run` is native only on Linux until spec #154's #172.
-#[cfg(target_os = "linux")]
 #[test]
 fn output_printed_before_a_stack_overflow_shows_before_the_fault_report() {
     let src = format!(
@@ -181,15 +175,14 @@ fn output_printed_before_a_stack_overflow_shows_before_the_fault_report() {
         String::from_utf8_lossy(&output.stdout),
         "printed before the fault\n"
     );
+    let (number, name) = OVERFLOW_SIGNAL;
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
-        format!("{}{SEGV_E0392}", fault_report(11, "SIGSEGV"))
+        format!("{}{}", fault_report(number, name), run_e0392(number, name))
     );
-    assert_eq!(output.status.code(), Some(128 + 11));
+    assert_eq!(output.status.code(), Some(128 + number));
 }
 
-/// `oskac test` is native only on Linux until spec #154's #172.
-#[cfg(target_os = "linux")]
 #[test]
 fn a_test_that_overflows_the_stack_is_still_reported_with_e0392() {
     let src = format!(
@@ -202,17 +195,18 @@ fn a_test_that_overflows_the_stack_is_still_reported_with_e0392() {
         .args(["test", case.target()])
         .output()
         .expect("oskac test should run");
+    let (number, name) = OVERFLOW_SIGNAL;
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains(
-            "error[E0392]: the native test process was killed by signal 11 (SIGSEGV): a fault \
-             in the native backend, not in the test; run the test with `--interpret`"
-        ),
+        stdout.contains(&format!(
+            "error[E0392]: the native test process was killed by signal {number} ({name}): a \
+             fault in the native backend, not in the test; run the test with `--interpret`"
+        )),
         "{stdout}"
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
-        fault_report(11, "SIGSEGV")
+        fault_report(number, name)
     );
     assert_eq!(output.status.code(), Some(1));
 }

@@ -4,9 +4,12 @@
 //! these tests exist only there; `build_golden.rs` covers `oskac build`
 //! everywhere.
 
-#![cfg(all(
-    target_os = "linux",
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 
 mod differential;
@@ -85,6 +88,7 @@ fn a_package_builds_and_runs_the_same() {
 }
 
 /// A little-endian field of `bytes`.
+#[cfg(target_os = "linux")]
 fn field(bytes: &[u8], at: usize, size: usize) -> u64 {
     bytes[at..at + size]
         .iter()
@@ -92,6 +96,8 @@ fn field(bytes: &[u8], at: usize, size: usize) -> u64 {
         .fold(0, |acc, &b| acc << 8 | u64::from(b))
 }
 
+/// Linux only: an ELF's segments, read from `/proc/<pid>/maps`.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_kernel_maps_each_segment_with_only_its_own_permissions() {
     use std::io::{BufRead, BufReader, Read, Write};
