@@ -3241,7 +3241,11 @@ fn main(io: Stdout) {
                     max_memory: Some(1 << 20),
                 };
                 let counted = lower(target, limits);
-                assert_eq!(counted.extra_args, (super::GLOBALS + 2) * layout::WORD, "{target:?}");
+                assert_eq!(
+                    counted.extra_args,
+                    (super::GLOBALS + 2) * layout::WORD,
+                    "{target:?}"
+                );
                 assert_eq!(
                     counted.data_size - counted.extra_args,
                     plain.data_size - plain.extra_args,
