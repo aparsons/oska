@@ -27,13 +27,14 @@
 //! A block may add the word `release` (checked as `oskac check --release`),
 //! `tests` (run as `oskac test`, for the `P001x` codes that only a
 //! `test` block reaches), or a run limit such as `max-output=16` or
-//! `max-steps=1000` (run as `oskac run --max-output=16`, for the limits'
-//! panics).
+//! `max-steps=1000` (run as `oskac run --max-output=16` or `--max-steps=1000`,
+//! for the limits' panics).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use oska_check::limits::Limit;
 use oska_run::{FakeHost, TestOptions, TestStatus};
 
 #[path = "../src/fence.rs"]
@@ -259,18 +260,17 @@ fn codes_of(code: &str, example: &Example) -> BTreeSet<String> {
         }
     } else if code.starts_with('P') || ["E0370", "E0371", "E0380"].contains(&code) {
         // A word such as `max-output=16` runs the example under that run
-        // limit, as `oskac run --max-output=16` does.
+        // limit, as `oskac run --max-output=16` does: each limit's flag
+        // without its `--`.
         let mut limits = oska_run::Limits::NONE;
         for word in &example.words {
-            let limit = if let Some(value) = word.strip_prefix("max-output=") {
-                Some((&mut limits.max_output, value))
-            } else {
-                word.strip_prefix("max-steps=")
-                    .map(|value| (&mut limits.max_steps, value))
-            };
-            if let Some((limit, value)) = limit {
+            for limit in Limit::ALL {
+                let name = limit.flag().trim_start_matches('-');
+                let Some(value) = word.strip_prefix(name).and_then(|w| w.strip_prefix('=')) else {
+                    continue;
+                };
                 let value = value.parse().ok().filter(|&v: &u64| v > 0);
-                *limit =
+                *limits.get_mut(limit) =
                     Some(value.unwrap_or_else(|| panic!("{}: a bad limit `{word}`", example.at)));
             }
         }

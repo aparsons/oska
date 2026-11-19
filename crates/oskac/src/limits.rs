@@ -1,20 +1,11 @@
 //! The run limits' flags (spec #446): `oskac run --max-steps=<n>` and
-//! `--max-output=<bytes>`,
-//! read into the [`Limits`] both backends take (`oska_check::limits`,
-//! which holds their codes and messages).
+//! `--max-output=<bytes>`, read into the [`Limits`] both backends take
+//! (`oska_check::limits`, which holds their codes and messages).
 //!
 //! A limit is a whole number above 0. A value of 0, a negative number or
 //! anything that is not a number is refused, never read as "no limit".
 
 use oska_check::limits::{Limit, Limits};
-
-/// The flag that sets `limit`, without its `=` and value.
-fn flag(limit: Limit) -> &'static str {
-    match limit {
-        Limit::Steps => "--max-steps",
-        Limit::Output => "--max-output",
-    }
-}
 
 /// What `limit`'s value counts, for a malformed value's error.
 fn unit(limit: Limit) -> &'static str {
@@ -31,10 +22,10 @@ fn unit(limit: Limit) -> &'static str {
 /// given twice.
 pub fn take_flag(limits: &mut Limits, arg: &str) -> Option<Result<(), String>> {
     let (limit, value) = Limit::ALL.iter().find_map(|&limit| {
-        let value = arg.strip_prefix(flag(limit))?.strip_prefix('=')?;
+        let value = arg.strip_prefix(limit.flag())?.strip_prefix('=')?;
         Some((limit, value))
     })?;
-    let name = flag(limit);
+    let name = limit.flag();
     if limits.get(limit).is_some() {
         return Some(Err(format!("{name} is given more than once")));
     }
@@ -55,7 +46,7 @@ pub fn take_flag(limits: &mut Limits, arg: &str) -> Option<Result<(), String>> {
 pub fn flags(limits: &Limits) -> Vec<String> {
     Limit::ALL
         .iter()
-        .filter_map(|&limit| Some(format!("{}={}", flag(limit), limits.get(limit)?)))
+        .filter_map(|&limit| Some(format!("{}={}", limit.flag(), limits.get(limit)?)))
         .collect()
 }
 

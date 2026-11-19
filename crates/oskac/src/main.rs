@@ -141,8 +141,7 @@ struct CommandLine {
     event: Option<String>,
     target: Option<String>,
     /// The run limits (`--max-steps=<n>`, `--max-output=<bytes>`), which
-    /// only `oskac run`
-    /// takes.
+    /// only `oskac run` takes.
     limits: oska_check::limits::Limits,
     /// Why a limit flag is malformed or repeated: a usage error.
     limit_error: Option<String>,

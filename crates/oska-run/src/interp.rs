@@ -122,9 +122,11 @@ pub struct Interpreter<'p, 'h> {
     /// The bytes the program has written to stdout and stderr so far,
     /// counted against `--max-output`.
     output_written: u64,
-    /// Under `--max-steps`, the steps the program may still take, counted
-    /// down from the limit by [`Interpreter::step`]; `None` without it.
-    steps_left: Option<u64>,
+    /// The steps the program may take before [`Interpreter::step`] takes
+    /// its slow path: under `--max-steps`, the steps left, counted down
+    /// from the limit; without it, `u64::MAX`, refilled if ever spent. One
+    /// decrement and compare per step, with or without a limit.
+    fuel: u64,
 }
 
 /// A standard stream the program writes to.
@@ -143,14 +145,14 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             depth: 0,
             limits: Limits::NONE,
             output_written: 0,
-            steps_left: None,
+            fuel: u64::MAX,
         }
     }
 
     /// This interpreter, under the run `limits`.
     pub fn with_limits(mut self, limits: Limits) -> Self {
         self.limits = limits;
-        self.steps_left = limits.max_steps;
+        self.fuel = limits.max_steps.unwrap_or(u64::MAX);
         self
     }
 
@@ -159,23 +161,39 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     /// step of the program passes through here, so this is the hook for
     /// whatever a run checks as it goes: under `--max-steps`, the step
     /// past the limit panics with `P0038` instead of being taken.
-    #[inline]
+    ///
+    /// The fast path only spends fuel; everything else is in
+    /// [`Interpreter::out_of_fuel`], so a check that needs no exact step
+    /// (a deadline) can be made there every so many steps by giving out
+    /// fuel in smaller amounts.
+    #[inline(always)]
     fn step(&mut self, span: Span) -> Result<(), Panic> {
-        if let Some(left) = &mut self.steps_left {
-            if *left == 0 {
-                return Err(self.out_of_steps(span));
+        match self.fuel.checked_sub(1) {
+            Some(fuel) => {
+                self.fuel = fuel;
+                Ok(())
             }
-            *left -= 1;
+            None => self.out_of_fuel(span),
         }
-        Ok(())
     }
 
-    /// The `P0038` panic at `span`, for the step past `--max-steps`.
+    /// The step at `span` when [`Interpreter::step`] has no fuel left:
+    /// under `--max-steps`, the step past the limit, a `P0038` panic;
+    /// without it, after `u64::MAX` steps, a refill.
     #[cold]
     #[inline(never)]
-    fn out_of_steps(&self, span: Span) -> Panic {
-        let limit = self.limits.max_steps.unwrap_or_default();
-        Panic::new(Limit::Steps.code(), Limit::Steps.message(limit), span)
+    fn out_of_fuel(&mut self, span: Span) -> Result<(), Panic> {
+        match self.limits.max_steps {
+            Some(limit) => Err(Panic::new(
+                Limit::Steps.code(),
+                Limit::Steps.message(limit),
+                span,
+            )),
+            None => {
+                self.fuel = u64::MAX - 1;
+                Ok(())
+            }
+        }
     }
 
     /// The host the program runs on.

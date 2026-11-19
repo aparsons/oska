@@ -1,12 +1,9 @@
-//! Run limits (spec #446): `oskac run --max-output=<bytes>` (ticket #450)
+//! Run limits (spec #446, ticket #450): `oskac run --max-output=<bytes>`
 //! stops a program before it writes more than that many bytes to standard
 //! output and standard error together, with `P0041` and exit code 101, on
-//! the interpreter and natively. `oskac run --interpret --max-steps=<n>`
-//! (ticket #452) stops a program after `n` steps (ADR 0021) with `P0038`
-//! and exit code 101; the fixtures in `tests/fixtures/run_limits/steps/`
-//! each say how many steps they take. A malformed limit, a limit on any
-//! command but `run`, and `--max-steps` on a native run are usage errors
-//! (exit code 2).
+//! the interpreter and natively. A malformed limit, and a limit on any
+//! command but `run`, is a usage error (exit code 2). The step limit's
+//! tests are in `run_limits_steps.rs`.
 //!
 //! The expected output is in `tests/golden/run_limits/`. To regenerate it
 //! after an intended change, run `UPDATE_GOLDEN=1 cargo test -p oskac
@@ -14,63 +11,10 @@
 
 mod common;
 
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::Path;
 
 use common::portable::Scratch;
-
-fn oskac_in(dir: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_oskac"))
-        .args(args)
-        .current_dir(dir)
-        .env_remove("OSKA_CACHE_DIR")
-        .output()
-        .expect("oskac should run")
-}
-
-fn golden_path(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/golden/run_limits")
-        .join(name)
-}
-
-/// Assert that `actual` is the content of the golden file `name`.
-fn assert_golden(name: &str, actual: &str) {
-    let golden = golden_path(name);
-    if std::env::var_os("UPDATE_GOLDEN").is_some() {
-        std::fs::create_dir_all(golden.parent().expect("a parent")).expect("the golden directory");
-        std::fs::write(&golden, actual).expect("should write the golden file");
-    }
-    let expected = std::fs::read_to_string(&golden)
-        .unwrap_or_else(|e| panic!("golden file {} should exist: {e}", golden.display()));
-    assert!(
-        actual == expected,
-        "output differs from {}; rerun with UPDATE_GOLDEN=1 if the change is intended\n{actual}",
-        golden.display()
-    );
-}
-
-/// What `oskac <args>` printed and its exit code, as one text: the
-/// command line, then stdout, stderr and the exit code.
-fn transcript(dir: &Path, args: &[&str]) -> String {
-    let output = oskac_in(dir, args);
-    format!(
-        "$ oskac {}\n--- stdout\n{}--- stderr\n{}--- exit {:?}\n\n",
-        args.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-        output.status.code()
-    )
-}
-
-/// A scratch directory holding `main.osk` with `src`.
-fn program(name: &str, src: &str) -> Scratch {
-    let dir = Scratch::new("run-limits", name);
-    std::fs::write(dir.join("main.osk"), src).expect("should write main.osk");
-    dir
-}
-
-const HELLO: &str = "fn main(io: Stdout) {\n    let _ = io.println(\"hello\")\n}\n";
+use common::run_limits::{assert_golden, oskac_in, oskac_with_stdin, program, transcript, HELLO};
 
 #[test]
 fn a_max_output_of_zero_a_negative_number_or_no_number_is_a_usage_error() {
@@ -550,26 +494,11 @@ fn main(io: Stdout) {
 /// has a backend.
 #[test]
 fn a_program_on_standard_input_runs_under_the_limit() {
-    use std::io::Write;
     let dir = Scratch::new("run-limits", "stdin");
     for backend in [&["--interpret"][..], &[]] {
         let mut args = vec!["run", "-", "--max-output=20"];
         args.extend_from_slice(backend);
-        let mut child = Command::new(env!("CARGO_BIN_EXE_oskac"))
-            .args(&args)
-            .current_dir(&*dir)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .expect("oskac should start");
-        child
-            .stdin
-            .take()
-            .expect("a stdin")
-            .write_all(ENDLESS.as_bytes())
-            .expect("should write the program");
-        let output = child.wait_with_output().expect("oskac should finish");
+        let output = oskac_with_stdin(&dir, &args, ENDLESS);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(101), "{args:?}: {stderr}");
         assert_eq!(String::from_utf8_lossy(&output.stdout), "line 0\nline 1\n");
@@ -578,212 +507,4 @@ fn a_program_on_standard_input_runs_under_the_limit() {
             "{args:?}: {stderr}"
         );
     }
-}
-
-// ---- Steps (ticket #452) -------------------------------------------------------
-
-/// Loops without end, and takes no other step.
-const LOOPS_FOREVER: &str = "fn main() {\n    while true {}\n}\n";
-
-#[test]
-fn a_program_that_loops_without_end_stops_at_the_step_limit_with_p0038() {
-    let dir = program("steps_endless", LOOPS_FOREVER);
-    let output = oskac_in(
-        &dir,
-        &["run", "--interpret", "--max-steps=1000000", "main.osk"],
-    );
-    assert_eq!(output.status.code(), Some(101));
-    assert!(output.stdout.is_empty());
-    assert_golden(
-        "steps_endless.txt",
-        &String::from_utf8_lossy(&output.stderr),
-    );
-}
-
-/// The step fixtures, `tests/fixtures/run_limits/steps/*.osk`: each name
-/// and source, sorted by name.
-fn step_fixtures() -> Vec<(String, String)> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run_limits/steps");
-    let mut fixtures: Vec<(String, String)> = std::fs::read_dir(&dir)
-        .expect("the step fixtures")
-        .map(|entry| {
-            let path = entry.expect("an entry").path();
-            let name = path
-                .file_stem()
-                .expect("a name")
-                .to_string_lossy()
-                .into_owned();
-            let src = std::fs::read_to_string(&path).expect("a fixture");
-            (name, src)
-        })
-        .collect();
-    fixtures.sort();
-    fixtures
-}
-
-/// The steps a fixture says it takes, on its first line: `// Steps: N.`
-fn steps_written_in(name: &str, src: &str) -> u64 {
-    src.lines()
-        .next()
-        .and_then(|line| line.strip_prefix("// Steps: "))
-        .and_then(|rest| rest.split('.').next())
-        .and_then(|n| n.parse().ok())
-        .unwrap_or_else(|| panic!("{name}.osk should start with `// Steps: N.`"))
-}
-
-/// Each fixture takes exactly the steps it says (ADR 0021): with that
-/// many it runs to the end, and with one fewer it stops with `P0038`
-/// before printing.
-#[test]
-fn each_fixture_takes_the_steps_it_says() {
-    let fixtures = step_fixtures();
-    let names: Vec<&str> = fixtures.iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(
-        names,
-        ["closure", "loop", "recursion", "std_module", "trait_method"]
-    );
-    for (name, src) in &fixtures {
-        let steps = steps_written_in(name, src);
-        let dir = program(&format!("steps_{name}"), src);
-        let unlimited = oskac_in(&dir, &["run", "--interpret", "main.osk"]);
-        assert_eq!(unlimited.status.code(), Some(0), "{name}: {unlimited:?}");
-        let enough = format!("--max-steps={steps}");
-        let output = oskac_in(&dir, &["run", "--interpret", &enough, "main.osk"]);
-        assert_eq!(output.status.code(), Some(0), "{name} {enough}: {output:?}");
-        assert_eq!(output.stdout, unlimited.stdout, "{name} {enough}");
-        let short = format!("--max-steps={}", steps - 1);
-        let output = oskac_in(&dir, &["run", "--interpret", &short, "main.osk"]);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(output.status.code(), Some(101), "{name} {short}: {stderr}");
-        assert!(output.stdout.is_empty(), "{name} {short}: {output:?}");
-        let message = format!(
-            "error[P0038]: step limit reached: the program has taken {} steps",
-            steps - 1
-        );
-        assert!(stderr.contains(&message), "{name} {short}: {stderr}");
-    }
-}
-
-#[test]
-fn a_max_steps_of_zero_a_negative_number_or_no_number_is_a_usage_error() {
-    let dir = program("malformed_steps", HELLO);
-    let mut all = String::new();
-    for value in ["0", "-1", "abc", "", "1.5", "99999999999999999999"] {
-        let flag = format!("--max-steps={value}");
-        let line = transcript(&dir, &["run", "--interpret", "main.osk", &flag]);
-        assert!(line.contains("--- exit Some(2)"), "{line}");
-        all.push_str(&line);
-    }
-    let line = transcript(
-        &dir,
-        &[
-            "run",
-            "--interpret",
-            "main.osk",
-            "--max-steps=5",
-            "--max-steps=5",
-        ],
-    );
-    assert!(line.contains("--- exit Some(2)"), "{line}");
-    all.push_str(&line);
-    assert_golden("malformed_steps.txt", &all);
-}
-
-#[test]
-fn max_steps_on_any_command_but_run_is_a_usage_error() {
-    let dir = program("other_commands_steps", HELLO);
-    for command in ["check", "test", "build", "fix"] {
-        let output = oskac_in(&dir, &[command, "main.osk", "--max-steps=64"]);
-        assert_eq!(output.status.code(), Some(2), "{command}: {output:?}");
-        assert!(
-            String::from_utf8_lossy(&output.stderr).starts_with("oskac "),
-            "{command}: the usage, {output:?}"
-        );
-    }
-}
-
-#[test]
-fn the_step_limit_report_is_one_json_object_with_format_json() {
-    let dir = program("steps_json", LOOPS_FOREVER);
-    let output = oskac_in(
-        &dir,
-        &[
-            "run",
-            "--interpret",
-            "--max-steps=3",
-            "--format=json",
-            "main.osk",
-        ],
-    );
-    assert_eq!(output.status.code(), Some(101));
-    assert_golden(
-        "steps_endless_json.txt",
-        &String::from_utf8_lossy(&output.stderr),
-    );
-}
-
-#[test]
-fn explain_p0038_explains_the_step_limit() {
-    let output = oskac_in(Path::new(env!("CARGO_MANIFEST_DIR")), &["explain", "P0038"]);
-    assert_eq!(output.status.code(), Some(0));
-    assert_golden(
-        "explain_p0038.txt",
-        &String::from_utf8_lossy(&output.stdout),
-    );
-}
-
-/// Native code does not count steps yet (#454): where `oskac run` would
-/// run the program natively, `--max-steps` without `--interpret` is a
-/// usage error that says to add it, and nothing runs. Where it runs the
-/// interpreter (Windows), the flag works.
-#[test]
-fn max_steps_on_a_native_run_is_a_usage_error() {
-    let dir = program("steps_native", LOOPS_FOREVER);
-    let output = oskac_in(&dir, &["run", "--max-steps=10", "main.osk"]);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let native = cfg!(all(
-        any(target_os = "linux", target_os = "macos"),
-        any(target_arch = "aarch64", target_arch = "x86_64")
-    ));
-    if native {
-        assert_eq!(output.status.code(), Some(2), "{stderr}");
-        assert_eq!(
-            stderr,
-            "error: --max-steps works only on the interpreter for now: add --interpret to \
-             run the program there\n"
-        );
-    } else {
-        assert_eq!(output.status.code(), Some(101), "{stderr}");
-        assert!(stderr.contains("error[P0038]"), "{stderr}");
-    }
-    assert!(output.stdout.is_empty());
-}
-
-/// `oskac run -` (#447) takes the step limit too.
-#[test]
-fn a_program_on_standard_input_runs_under_the_step_limit() {
-    use std::io::Write;
-    let dir = Scratch::new("run-limits", "steps_stdin");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_oskac"))
-        .args(["run", "-", "--interpret", "--max-steps=7"])
-        .current_dir(&*dir)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("oskac should start");
-    child
-        .stdin
-        .take()
-        .expect("a stdin")
-        .write_all(LOOPS_FOREVER.as_bytes())
-        .expect("should write the program");
-    let output = child.wait_with_output().expect("oskac should finish");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(output.status.code(), Some(101), "{stderr}");
-    assert!(
-        stderr
-            .starts_with("<stdin>:2:5: error[P0038]: step limit reached: the program has taken 7"),
-        "{stderr}"
-    );
 }
