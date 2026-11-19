@@ -223,6 +223,14 @@ pub enum Sys {
     GetConsoleMode,
     WriteConsole,
     ReadConsole,
+    CreateFile,
+    CloseHandle,
+    FinalPathName,
+    SetEndOfFile,
+    NtCreateFile,
+    NtQueryInformationFile,
+    NtQueryDirectoryFile,
+    NtStatusToError,
     VirtualAlloc,
     VirtualFree,
     ExitProcess,
@@ -727,6 +735,14 @@ fn windows_only(call: Sys) -> bool {
             | Sys::GetConsoleMode
             | Sys::WriteConsole
             | Sys::ReadConsole
+            | Sys::CreateFile
+            | Sys::CloseHandle
+            | Sys::FinalPathName
+            | Sys::SetEndOfFile
+            | Sys::NtCreateFile
+            | Sys::NtQueryInformationFile
+            | Sys::NtQueryDirectoryFile
+            | Sys::NtStatusToError
             | Sys::VirtualAlloc
             | Sys::VirtualFree
             | Sys::ExitProcess
@@ -755,6 +771,7 @@ pub const WINDOWS_X86_64: Platform = Platform {
 };
 
 const KERNEL32: &str = "KERNEL32.dll";
+const NTDLL: &str = "ntdll.dll";
 const BCRYPTPRIMITIVES: &str = "bcryptprimitives.dll";
 
 /// A function of `kernel32.dll` that takes `args` of the intrinsic's
@@ -808,6 +825,43 @@ const READ_CONSOLE: Import = Import {
     extra_args: &[0],
     ..win("ReadConsoleW", 4)
 };
+/// `CreateFileW(name, access, share, NULL, disposition, flags, NULL)`: a
+/// handle, or `INVALID_HANDLE_VALUE` (-1).
+const CREATE_FILE: Import = Import {
+    wide: true,
+    fails: Fails::MinusOne,
+    ..win("CreateFileW", 7)
+};
+/// `CloseHandle(h)`.
+const CLOSE_HANDLE: Import = win("CloseHandle", 1);
+/// `GetFinalPathNameByHandleW(h, buf, count, flags)`: the units written,
+/// or 0 on failure.
+const FINAL_PATH_NAME: Import = win("GetFinalPathNameByHandleW", 4);
+/// `SetEndOfFile(h)`: the file ends at the handle's position.
+const SET_END_OF_FILE: Import = win("SetEndOfFile", 1);
+/// An `ntdll` function: an `NTSTATUS`, negative for an error, which
+/// `std.rt` turns into a Win32 error with `RtlNtStatusToDosError`.
+const fn nt(symbol: &'static str, args: u8) -> Import {
+    Import {
+        library: NTDLL,
+        fails: Fails::Never,
+        ..win(symbol, args)
+    }
+}
+/// `NtCreateFile(&h, access, &attributes, &status, NULL, attributes,
+/// share, disposition, options, NULL, 0)`.
+const NT_CREATE_FILE: Import = Import {
+    fixed: 11,
+    extra_args: &[0, 0],
+    ..nt("NtCreateFile", 9)
+};
+/// `NtQueryInformationFile(h, &status, buf, length, class)`.
+const NT_QUERY_INFORMATION_FILE: Import = nt("NtQueryInformationFile", 5);
+/// `NtQueryDirectoryFile(h, NULL, NULL, NULL, &status, buf, length,
+/// class, single, NULL, restart)`.
+const NT_QUERY_DIRECTORY_FILE: Import = nt("NtQueryDirectoryFile", 11);
+/// `RtlNtStatusToDosError(status)`: the Win32 error for a status.
+const NT_STATUS_TO_ERROR: Import = nt("RtlNtStatusToDosError", 1);
 /// `VirtualAlloc(addr, size, type, protect)`: an address, or `NULL`.
 const VIRTUAL_ALLOC: Import = Import {
     wide: true,
@@ -858,7 +912,7 @@ const PROCESS_PRNG: Import = Import {
 /// Every function a Windows executable imports, `kernel32.dll`'s first:
 /// always all of them, so the import table depends on the target alone.
 /// [`GET_LAST_ERROR`] is first ([`Platform::errno`]).
-const WINDOWS_IMPORTS: [&Import; 16] = [
+const WINDOWS_IMPORTS: [&Import; 24] = [
     &GET_LAST_ERROR,
     &GET_STD_HANDLE,
     &WRITE_FILE,
@@ -874,6 +928,14 @@ const WINDOWS_IMPORTS: [&Import; 16] = [
     &ADD_EXCEPTION_HANDLER,
     &STACK_GUARANTEE,
     &SYSTEM_TIME,
+    &CREATE_FILE,
+    &CLOSE_HANDLE,
+    &FINAL_PATH_NAME,
+    &SET_END_OF_FILE,
+    &NT_CREATE_FILE,
+    &NT_QUERY_INFORMATION_FILE,
+    &NT_QUERY_DIRECTORY_FILE,
+    &NT_STATUS_TO_ERROR,
     &PROCESS_PRNG,
 ];
 
@@ -895,6 +957,14 @@ fn windows_call(call: Sys) -> OsCall {
         Sys::AddExceptionHandler => &ADD_EXCEPTION_HANDLER,
         Sys::StackGuarantee => &STACK_GUARANTEE,
         Sys::SystemTime => &SYSTEM_TIME,
+        Sys::CreateFile => &CREATE_FILE,
+        Sys::CloseHandle => &CLOSE_HANDLE,
+        Sys::FinalPathName => &FINAL_PATH_NAME,
+        Sys::SetEndOfFile => &SET_END_OF_FILE,
+        Sys::NtCreateFile => &NT_CREATE_FILE,
+        Sys::NtQueryInformationFile => &NT_QUERY_INFORMATION_FILE,
+        Sys::NtQueryDirectoryFile => &NT_QUERY_DIRECTORY_FILE,
+        Sys::NtStatusToError => &NT_STATUS_TO_ERROR,
         Sys::ProcessPrng => &PROCESS_PRNG,
         _ => return OsCall::Absent,
     })
@@ -945,6 +1015,29 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ),
     ("rt_sys_write_console", Runtime::Syscall(Sys::WriteConsole)),
     ("rt_sys_read_console", Runtime::Syscall(Sys::ReadConsole)),
+    ("rt_sys_create_file", Runtime::Syscall(Sys::CreateFile)),
+    ("rt_sys_close_handle", Runtime::Syscall(Sys::CloseHandle)),
+    (
+        "rt_sys_final_path_name",
+        Runtime::Syscall(Sys::FinalPathName),
+    ),
+    (
+        "rt_sys_set_end_of_file",
+        Runtime::Syscall(Sys::SetEndOfFile),
+    ),
+    ("rt_sys_nt_create_file", Runtime::Syscall(Sys::NtCreateFile)),
+    (
+        "rt_sys_nt_query_information_file",
+        Runtime::Syscall(Sys::NtQueryInformationFile),
+    ),
+    (
+        "rt_sys_nt_query_directory_file",
+        Runtime::Syscall(Sys::NtQueryDirectoryFile),
+    ),
+    (
+        "rt_sys_nt_status_to_error",
+        Runtime::Syscall(Sys::NtStatusToError),
+    ),
     ("rt_sys_virtual_alloc", Runtime::Syscall(Sys::VirtualAlloc)),
     ("rt_sys_virtual_free", Runtime::Syscall(Sys::VirtualFree)),
     ("rt_sys_exit_process", Runtime::Syscall(Sys::ExitProcess)),
@@ -1519,6 +1612,71 @@ mod tests {
                 "rt_sys_system_time",
                 K,
                 "GetSystemTimePreciseAsFileTime",
+                1,
+                false,
+                Never,
+                &[],
+            ),
+            (
+                "rt_sys_create_file",
+                K,
+                "CreateFileW",
+                7,
+                true,
+                MinusOne,
+                &[],
+            ),
+            ("rt_sys_close_handle", K, "CloseHandle", 1, false, Zero, &[]),
+            (
+                "rt_sys_final_path_name",
+                K,
+                "GetFinalPathNameByHandleW",
+                4,
+                false,
+                Zero,
+                &[],
+            ),
+            (
+                "rt_sys_set_end_of_file",
+                K,
+                "SetEndOfFile",
+                1,
+                false,
+                Zero,
+                &[],
+            ),
+            // NtCreateFile: no extended attributes.
+            (
+                "rt_sys_nt_create_file",
+                "ntdll.dll",
+                "NtCreateFile",
+                9,
+                false,
+                Never,
+                &[0, 0],
+            ),
+            (
+                "rt_sys_nt_query_information_file",
+                "ntdll.dll",
+                "NtQueryInformationFile",
+                5,
+                false,
+                Never,
+                &[],
+            ),
+            (
+                "rt_sys_nt_query_directory_file",
+                "ntdll.dll",
+                "NtQueryDirectoryFile",
+                11,
+                false,
+                Never,
+                &[],
+            ),
+            (
+                "rt_sys_nt_status_to_error",
+                "ntdll.dll",
+                "RtlNtStatusToDosError",
                 1,
                 false,
                 Never,

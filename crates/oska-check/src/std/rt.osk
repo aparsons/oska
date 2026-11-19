@@ -83,6 +83,28 @@ pub fn rt_sys_get_console_mode(handle: Int, mode: Int) -> Int
 pub fn rt_sys_write_console(handle: Int, units: Int, count: Int, done: Int) -> Int
 // `ReadConsoleW(handle, units, count, read, NULL)`: UTF-16 units.
 pub fn rt_sys_read_console(handle: Int, units: Int, count: Int, read: Int) -> Int
+// `CreateFileW(name, access, share, NULL, disposition, flags, NULL)`: a
+// handle, opening a path as any open by path does (`name` is UTF-16,
+// NUL-terminated).
+pub fn rt_sys_create_file(name: Int, access: Int, share: Int, security: Int, disposition: Int, flags: Int, template: Int) -> Int
+// `CloseHandle(handle)`.
+pub fn rt_sys_close_handle(handle: Int) -> Int
+// `GetFinalPathNameByHandleW(handle, units, count, flags)`: the units of
+// the path written, or the units it needs when more than `count`.
+pub fn rt_sys_final_path_name(handle: Int, units: Int, count: Int, flags: Int) -> Int
+// `SetEndOfFile(handle)`.
+pub fn rt_sys_set_end_of_file(handle: Int) -> Int
+// `NtCreateFile(handle, access, attributes, status, NULL, file_attributes,
+// share, disposition, options, NULL, 0)`: an `NTSTATUS`.
+pub fn rt_sys_nt_create_file(handle: Int, access: Int, attributes: Int, status: Int, size: Int, file_attributes: Int, share: Int, disposition: Int, options: Int) -> Int
+// `NtQueryInformationFile(handle, status, buf, length, class)`: an
+// `NTSTATUS`.
+pub fn rt_sys_nt_query_information_file(handle: Int, status: Int, buf: Int, length: Int, class: Int) -> Int
+// `NtQueryDirectoryFile(handle, NULL, NULL, NULL, status, buf, length,
+// class, single, NULL, restart)`: an `NTSTATUS`.
+pub fn rt_sys_nt_query_directory_file(handle: Int, event: Int, apc: Int, context: Int, status: Int, buf: Int, length: Int, class: Int, single: Int, name: Int, restart: Int) -> Int
+// `RtlNtStatusToDosError(status)`: the Win32 error.
+pub fn rt_sys_nt_status_to_error(status: Int) -> Int
 // `VirtualAlloc(addr, size, type, protect)`: the address.
 pub fn rt_sys_virtual_alloc(addr: Int, size: Int, kind: Int, protect: Int) -> Int
 // `VirtualFree(addr, 0, MEM_RELEASE)`: the whole mapping at `addr`.
@@ -418,7 +440,9 @@ fn windows_x86_64() -> Platform {
         ss_size_at: 0,
         ss_flags_at: 0,
         sigbus: 0,
-        e_loop: 0,
+        // No Win32 error: what `win_open_name` gives, negated, for a
+        // reparse point, which is refused as Unix refuses a symlink.
+        e_loop: 4097,
         errors_at: 0,
         errors_count: 0,
         windows: true,
@@ -3545,6 +3569,10 @@ pub fn root_drop(object: Int) {
 // Close `fd`. Like Rust's `OwnedFd`, never retried: the descriptor is gone
 // either way.
 fn close(fd: Int) {
+    if on_windows() {
+        let _ = rt_sys_close_handle(fd)
+        return
+    }
     let _ = rt_sys_close(fd)
 }
 
@@ -3564,6 +3592,11 @@ fn eloop() -> Int {
 }
 
 fn enotdir() -> Int {
+    if on_windows() {
+        // No Win32 error: what `win_open_name` gives, negated, for a name
+        // opened as a directory that is none.
+        return 4098
+    }
     20
 }
 
@@ -3578,6 +3611,9 @@ fn o_cloexec() -> Int {
 // A directory to walk beneath: `O_RDONLY | O_DIRECTORY | O_NOFOLLOW |
 // O_CLOEXEC`.
 fn directory_flags() -> Int {
+    if on_windows() {
+        return win_directory()
+    }
     let platform = rt_mem_platform()
     rt_mem_or(rt_mem_or(platform.o_directory, platform.o_nofollow), o_cloexec())
 }
@@ -3585,12 +3621,18 @@ fn directory_flags() -> Int {
 // A directory named by trusted text, following symlinks:
 // `O_RDONLY | O_DIRECTORY | O_CLOEXEC`.
 fn directory_following_flags() -> Int {
+    if on_windows() {
+        return win_following()
+    }
     rt_mem_or(rt_mem_platform().o_directory, o_cloexec())
 }
 
 // A file to read: `O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK`, so a
 // FIFO does not block the open (it is then refused as no regular file).
 fn file_read_flags() -> Int {
+    if on_windows() {
+        return win_file_read()
+    }
     rt_mem_or(rt_mem_platform().o_nofollow, rt_mem_or(o_cloexec(), o_nonblock()))
 }
 
@@ -3598,6 +3640,9 @@ fn file_read_flags() -> Int {
 // known to be a regular file with one link:
 // `O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK`.
 fn file_write_flags() -> Int {
+    if on_windows() {
+        return win_file_write()
+    }
     rt_mem_or(rt_mem_or(o_wronly(), o_creat()), file_read_flags())
 }
 
@@ -3633,6 +3678,9 @@ fn c_string(text: String) -> Int {
 // retried when a signal interrupts it: the new descriptor, or minus the
 // `errno` (`nul_in_name` for a name holding a NUL byte).
 fn open_name(dirfd: Int, name: String, flags: Int) -> Int {
+    if on_windows() {
+        return win_open_name(dirfd, name, flags)
+    }
     let path = c_string(name)
     if path == 0 {
         return 0 - nul_in_name()
@@ -3658,6 +3706,10 @@ fn os_error(errno: Int) -> String {
 // symlink said plainly, since `openat` reports one met with `O_NOFOLLOW`
 // as `ELOOP`, or as `ENOTDIR` when a directory was asked for.
 fn refusal(errno: Int, path: String, directory: Bool) -> IoError {
+    if errno == not_single_name() {
+        let name = last_name(path)
+        return io_error_text("`{name}` is not a single file name")
+    }
     if errno == eloop() {
         return io_error_text("`{path}` is a symlink, and confined access never follows one")
     }
@@ -3789,6 +3841,15 @@ fn or_here(parent: String) -> String {
 
 // `root`'s path joined with `names`, as Rust's `Path::join` joins them.
 fn path_beneath(root: String, names: List<String>) -> String {
+    // A real Windows root (`\\?\C:\...`) is joined as Rust's `Path::join`
+    // joins it there, with `\`.
+    if on_windows() && !root.starts_with("/") {
+        let rest = "\\".join(names)
+        if root.ends_with("\\") {
+            return "{root}{rest}"
+        }
+        return "{root}\\{rest}"
+    }
     let rest = "/".join(names)
     if root.ends_with("/") {
         return "{root}{rest}"
@@ -3812,7 +3873,8 @@ fn open_following(path: String) -> Result<Int, IoError> {
     let fd = open_name(at_cwd(), path, directory_following_flags())
     if fd < 0 {
         let why = os_error(0 - fd)
-        return Err(io_error_text("`{path}`: {why}"))
+        let shown = if on_windows() { win_backslashed(path) } else { path }
+        return Err(io_error_text("`{shown}`: {why}"))
     }
     Ok(fd)
 }
@@ -3832,6 +3894,17 @@ fn canonical(path: String) -> Result<String, IoError> {
 // its canonical path; or, when that cannot be found, the error, with `fd`
 // closed.
 fn named_root(fd: Int, path: String) -> Result<Root, IoError> {
+    if on_windows() {
+        // Rust's `fs::canonicalize` on Windows is the final path of the
+        // open handle; the last component was opened not following.
+        return match win_final_path(fd) {
+            Ok(shown) => Ok(directory_root(fd, shown))
+            Err(e) => {
+                close(fd)
+                Err(e)
+            }
+        }
+    }
     match canonical(path) {
         Ok(shown) => Ok(directory_root(fd, shown))
         Err(e) => {
@@ -4078,6 +4151,13 @@ fn walk(root: Int, names: List<String>, count: Int) -> Result<Int, IoError> {
 // symlink: a new handle, a copy of `root`'s when there are no names.
 fn open_dir(root: Int, names: List<String>) -> Result<Int, IoError> {
     let count = names.len()
+    if count == 0 && on_windows() {
+        let fd = win_open_name(root, ".", win_directory())
+        if fd < 0 {
+            return Err(io_error(0 - fd))
+        }
+        return Ok(fd)
+    }
     if count == 0 {
         // `F_DUPFD_CLOEXEC`, from 3 up, as Rust's `try_clone`.
         let fd = rt_sys_fcntl(root, rt_mem_platform().f_dupfd_cloexec, 3)
@@ -4136,6 +4216,9 @@ fn load_bits(at: Int, bits: Int) -> Int {
 // directory the walk began in, so it is refused. The check is on the open
 // handle, so the file cannot be swapped after it.
 fn lone_file(fd: Int, names: List<String>) -> Result<(), IoError> {
+    if on_windows() {
+        return win_lone_file(fd, names)
+    }
     // A `struct stat`, after the object's count.
     let platform = rt_mem_platform()
     let buffer = alloc(rt_mem_add(platform.stat_bytes, 8))
@@ -4175,14 +4258,21 @@ fn read_all(fd: Int) -> Result<String, IoError> {
     // Rust reserves it fallibly: a buffer no memory holds (a sparse file of
     // a terabyte) is an `IoError`, "out of memory", not the end of the
     // process.
-    let platform = rt_mem_platform()
-    let buffer = alloc(rt_mem_add(platform.stat_bytes, 8))
     var capacity = 64
-    if rt_sys_fstat(fd, rt_mem_add(buffer, 8)) >= 0 {
-        let size = rt_mem_add(buffer, rt_mem_add(platform.stat_size, 8))
-        capacity = rt_mem_add(capacity, rt_mem_load64(size))
+    if on_windows() {
+        let size = win_file_size(fd)
+        if size > 0 {
+            capacity = rt_mem_add(capacity, size)
+        }
+    } else {
+        let platform = rt_mem_platform()
+        let buffer = alloc(rt_mem_add(platform.stat_bytes, 8))
+        if rt_sys_fstat(fd, rt_mem_add(buffer, 8)) >= 0 {
+            let size = rt_mem_add(buffer, rt_mem_add(platform.stat_size, 8))
+            capacity = rt_mem_add(capacity, rt_mem_load64(size))
+        }
+        free(buffer)
     }
-    free(buffer)
     var object = text_try_new(capacity)
     if object == 0 {
         return Err(io_error_text("out of memory"))
@@ -4228,7 +4318,8 @@ fn read_all(fd: Int) -> Result<String, IoError> {
 // emptied only once it is known to be a regular one with one link.
 fn write_beneath(root: Int, names: List<String>, contents: String) -> Result<(), IoError> {
     let fd = open_file(root, names, file_write_flags())?
-    var emptied = rt_sys_ftruncate(fd, 0)
+    // On Windows the handle is at the file's start: it ends there.
+    var emptied = if on_windows() { rt_sys_set_end_of_file(fd) } else { rt_sys_ftruncate(fd, 0) }
     while interrupted(emptied) {
         emptied = rt_sys_ftruncate(fd, 0)
     }
@@ -4259,6 +4350,9 @@ fn create_dir_beneath(root: Int, names: List<String>) -> Result<(), IoError> {
 
 // Make the last of `names` in the directory `parent`, the rest's.
 fn make_dir(parent: Int, names: List<String>) -> Result<(), IoError> {
+    if on_windows() {
+        return win_make_dir(parent, names)
+    }
     let count = names.len()
     let name = names.at(count - 1)
     let path = c_string(name)
@@ -4293,6 +4387,9 @@ fn make_dir(parent: Int, names: List<String>) -> Result<(), IoError> {
 // sorted by their bytes; no entry is followed. Fails when a name is not
 // UTF-8, naming the directory as `shown`.
 fn entries(dir: Int, shown: String) -> Result<List<String>, IoError> {
+    if on_windows() {
+        return win_entries(dir, shown)
+    }
     // A new open file description of the directory, so the listing starts
     // at its beginning and moves no other handle's offset.
     let fd = open_name(dir, ".", directory_flags())
@@ -4593,8 +4690,11 @@ pub fn dir_restrict_to(root: Root, dir: Path) -> Root {
             if faking() {
                 return fake_restrict_beneath(root, raw, names)
             }
-            match open_dir(root.handle, names) {
-                Ok(fd) => directory_root(fd, path_beneath(root.path, names))
+            match win_check_names(names) {
+                Ok(_) => match open_dir(root.handle, names) {
+                    Ok(fd) => directory_root(fd, path_beneath(root.path, names))
+                    Err(e) => nowhere(raw, e.message.assume_trusted())
+                }
                 Err(e) => nowhere(raw, e.message.assume_trusted())
             }
         }
@@ -4612,8 +4712,11 @@ pub fn dir_restrict_to_file(root: Root, file: Path) -> Root {
     let raw = path_text(file)
     match names_to_create(raw) {
         Ok(names) if faking() => fake_restrict_to_file_beneath(root, raw, names)
-        Ok(names) => match open_dir(root.handle, all_but_last(names)) {
-            Ok(fd) => Root(handle: fd, path: "", file: Some(names.at(names.len() - 1)), why: None)
+        Ok(names) => match win_check_names(names) {
+            Ok(_) => match open_dir(root.handle, all_but_last(names)) {
+                Ok(fd) => Root(handle: fd, path: "", file: Some(names.at(names.len() - 1)), why: None)
+                Err(e) => nowhere(raw, e.message.assume_trusted())
+            }
             Err(e) => nowhere(raw, e.message.assume_trusted())
         }
         Err(e) => nowhere(raw, e.message.assume_trusted())
@@ -4649,6 +4752,7 @@ pub fn dir_read_to_string(root: Root, path: Path) -> Result<String, IoError> {
     if faking() {
         return fake_read(fake_walk(root.path, names)?)
     }
+    win_check_names(names)?
     read_beneath(root.handle, names)
 }
 
@@ -4659,6 +4763,7 @@ pub fn dir_list_dir(root: Root, path: Path) -> Result<List<String>, IoError> {
     if faking() {
         return fake_entries(fake_walk(root.path, names)?)
     }
+    win_check_names(names)?
     let fd = open_dir(root.handle, names)?
     let listed = entries(fd, path_beneath_or_at(root.path, names))
     close(fd)
@@ -4680,6 +4785,7 @@ pub fn dir_write(root: Root, path: Path, contents: String) -> Result<(), IoError
     if faking() {
         return fake_put_file(fake_walk(root.path, names)?, contents)
     }
+    win_check_names(names)?
     write_beneath(root.handle, names, contents)
 }
 
@@ -4690,6 +4796,7 @@ pub fn dir_create_dir(root: Root, path: Path) -> Result<(), IoError> {
     if faking() {
         return fake_put_dir(fake_walk(root.path, names)?)
     }
+    win_check_names(names)?
     create_dir_beneath(root.handle, names)
 }
 
@@ -5334,6 +5441,549 @@ fn win_now_millis() -> Int {
     let at = global(48)
     let _ = rt_sys_system_time(at)
     (rt_mem_load64(at) - 116444736000000000) / 10000
+}
+
+// ---- Windows files ---------------------------------------------------------
+//
+// Confinement on Windows, as `oska-sys/src/windows.rs` does it for the
+// interpreter, with the same refusals: each name is opened beneath its
+// parent's handle with `NtCreateFile` and `FILE_OPEN_REPARSE_POINT`, so a
+// reparse point (a symlink, a junction, a mount point) is opened itself and
+// then refused, in the words Unix uses for a symlink. A file with more
+// than one link is refused too. `open_name`'s `flags` are one of the kinds
+// below on Windows, and its negative results Win32 errors, or
+// `eloop()` (a reparse point), `enotdir()` (no directory) or
+// `not_single_name()`.
+
+// The kinds of open: a directory beneath a handle; a directory by trusted
+// path, following; a file to read; a file to write, created when missing.
+fn win_directory() -> Int {
+    1
+}
+
+fn win_following() -> Int {
+    2
+}
+
+fn win_file_read() -> Int {
+    3
+}
+
+fn win_file_write() -> Int {
+    4
+}
+
+// No Win32 error: what `win_open_name` gives, negated, for a name that is
+// not one plain component (empty, `.`, `..`, or holding `/`, `\`, `:` or
+// NUL), which Windows refuses before any call.
+fn not_single_name() -> Int {
+    4099
+}
+
+// The last component of the names `path` joins.
+fn last_name(path: String) -> String {
+    let length = text_length(rt_mem_text(path))
+    var at = length
+    while at > 0 && byte_at(path, at - 1) != 47 {
+        at = at - 1
+    }
+    bytes_of(path, at, length)
+}
+
+// `text` with each `/` a `\`, as a trusted path is opened on Windows.
+fn win_backslashed(text: String) -> String {
+    let object = rt_mem_text(text)
+    let length = text_length(object)
+    let copy = text_new(length)
+    copy_bytes(text_data(copy), text_data(object), length)
+    var i = 0
+    while i < length {
+        if rt_mem_load8(rt_mem_add(text_data(copy), i)) == 47 {
+            rt_mem_store8(rt_mem_add(text_data(copy), i), 92)
+        }
+        i = i + 1
+    }
+    rt_mem_as_text(copy)
+}
+
+// `text` in UTF-16, NUL-terminated: an object that the caller frees, its
+// number of units (without the NUL) at 8 and the units from 16.
+fn win_wide(text: String) -> Int {
+    let object = rt_mem_text(text)
+    let data = text_data(object)
+    let length = text_length(object)
+    // At most one unit a byte, and the NUL.
+    let wide = alloc(rt_mem_and(rt_mem_add(rt_mem_shl(length, 1), 25), -8))
+    let units = rt_mem_add(wide, 16)
+    var at = 0
+    var n = 0
+    while at < length {
+        let lead = rt_mem_add(data, at)
+        let cp = decode_at(lead)
+        at = at + sequence_length(rt_mem_load8(lead))
+        if cp >= 65536 {
+            let rest = cp - 65536
+            rt_mem_store16(rt_mem_add(units, rt_mem_shl(n, 1)), 55296 + rt_mem_shr(rest, 10))
+            rt_mem_store16(rt_mem_add(units, rt_mem_shl(n + 1, 1)), 56320 + rt_mem_and(rest, 1023))
+            n = n + 2
+        } else {
+            rt_mem_store16(rt_mem_add(units, rt_mem_shl(n, 1)), cp)
+            n = n + 1
+        }
+    }
+    rt_mem_store16(rt_mem_add(units, rt_mem_shl(n, 1)), 0)
+    rt_mem_store64(rt_mem_add(wide, 8), n)
+    wide
+}
+
+// The Win32 error for the `NTSTATUS` `status`, negated.
+fn win_status_error(status: Int) -> Int {
+    0 - rt_sys_nt_status_to_error(status)
+}
+
+// `NtCreateFile` of the `bytes` bytes of UTF-16 at `units` beneath the
+// directory `parent` (the empty name opens `parent` again), with `access`,
+// `disposition` and `options`, never following a reparse point, for
+// synchronous I/O, names matched as Windows matches them: the handle, or a
+// Win32 error, negated.
+fn win_nt_open(parent: Int, units: Int, bytes: Int, access: Int, disposition: Int, options: Int) -> Int {
+    // The new handle (8 bytes), an `IO_STATUS_BLOCK` (16), a
+    // `UNICODE_STRING` (16) and an `OBJECT_ATTRIBUTES` (48).
+    let block = alloc(96)
+    let handle = rt_mem_add(block, 8)
+    let status = rt_mem_add(block, 16)
+    let name = rt_mem_add(block, 32)
+    let attributes = rt_mem_add(block, 48)
+    rt_mem_store64(handle, 0)
+    rt_mem_store16(name, bytes)
+    rt_mem_store16(rt_mem_add(name, 2), bytes)
+    rt_mem_store32(rt_mem_add(name, 4), 0)
+    rt_mem_store64(rt_mem_add(name, 8), if bytes == 0 { 0 } else { units })
+    rt_mem_store64(attributes, 48)
+    rt_mem_store64(rt_mem_add(attributes, 8), parent)
+    rt_mem_store64(rt_mem_add(attributes, 16), name)
+    // `OBJ_CASE_INSENSITIVE`.
+    rt_mem_store64(rt_mem_add(attributes, 24), 64)
+    rt_mem_store64(rt_mem_add(attributes, 32), 0)
+    rt_mem_store64(rt_mem_add(attributes, 40), 0)
+    // `FILE_ATTRIBUTE_NORMAL`, share read, write and delete, and the
+    // options with `FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT`.
+    let result = rt_sys_nt_create_file(handle, access, attributes, status, 0, 128, 7, disposition, rt_mem_or(options, 2097184))
+    let opened = rt_mem_load64(handle)
+    free(block)
+    if result < 0 {
+        return win_status_error(result)
+    }
+    opened
+}
+
+// The attributes of what `handle` opened in the low 32 bits and its number
+// of links above them, or a Win32 error, negated.
+fn win_info(handle: Int) -> Int {
+    // An `IO_STATUS_BLOCK` (16 bytes), `FILE_BASIC_INFORMATION` (40) and
+    // `FILE_STANDARD_INFORMATION` (24).
+    let block = alloc(88)
+    let status = rt_mem_add(block, 8)
+    let basic = rt_mem_add(block, 24)
+    let standard = rt_mem_add(block, 64)
+    var result = rt_sys_nt_query_information_file(handle, status, basic, 40, 4)
+    if result >= 0 {
+        result = rt_sys_nt_query_information_file(handle, status, standard, 24, 5)
+    }
+    let attributes = rt_mem_load32(rt_mem_add(basic, 32))
+    let links = rt_mem_load32(rt_mem_add(standard, 16))
+    free(block)
+    if result < 0 {
+        return win_status_error(result)
+    }
+    rt_mem_or(attributes, rt_mem_shl(links, 32))
+}
+
+// Whether `info` (`win_info`) is a reparse point's, or a directory's.
+fn win_reparse_point(info: Int) -> Bool {
+    rt_mem_and(info, 1024) != 0
+}
+
+fn win_is_dir(info: Int) -> Bool {
+    rt_mem_and(info, 16) != 0
+}
+
+// The size of the file `handle` opened, or -1.
+fn win_file_size(handle: Int) -> Int {
+    let block = alloc(48)
+    let status = rt_mem_add(block, 8)
+    let standard = rt_mem_add(block, 24)
+    let result = rt_sys_nt_query_information_file(handle, status, standard, 24, 5)
+    let size = rt_mem_load64(rt_mem_add(standard, 8))
+    free(block)
+    if result < 0 {
+        return -1
+    }
+    size
+}
+
+// Whether `name` is one plain component.
+fn win_single_name(name: String) -> Bool {
+    let object = rt_mem_text(name)
+    let length = text_length(object)
+    if length == 0 || name == "." || name == ".." {
+        return false
+    }
+    var i = 0
+    while i < length {
+        let b = rt_mem_load8(rt_mem_add(text_data(object), i))
+        if b == 0 || b == 47 || b == 92 || b == 58 {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
+
+// Whether a reparse point is at the `bytes` bytes of UTF-16 at `units`
+// beneath `parent`: an open that asks for more than to look at it may
+// fail for its own reasons, so what is there is said plainly.
+fn win_reparse_point_at(parent: Int, units: Int, bytes: Int) -> Bool {
+    // Read attributes and synchronize; an existing name.
+    let there = win_nt_open(parent, units, bytes, 1048704, 1, 0)
+    if there < 0 {
+        return false
+    }
+    let info = win_info(there)
+    close(there)
+    info >= 0 && win_reparse_point(info)
+}
+
+// `open_name` on Windows: `name` beneath `dirfd` as the kind `kind` asks,
+// or, for `win_following`, the trusted path `name`. `.` opens `dirfd`
+// again. A reparse point is refused, and a name opened as a directory
+// that is none.
+fn win_open_name(dirfd: Int, name: String, kind: Int) -> Int {
+    if kind == win_following() {
+        return win_open_following(name)
+    }
+    var access = 1048737
+    var disposition = 1
+    if kind == win_file_read() {
+        // `FILE_GENERIC_READ`.
+        access = 1179785
+    } else if kind == win_file_write() {
+        // `FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES`, `FILE_OPEN_IF`.
+        access = 1180054
+        disposition = 3
+    }
+    var handle = 0
+    if name == "." {
+        handle = win_nt_open(dirfd, 0, 0, access, disposition, 0)
+    } else {
+        if !win_single_name(name) {
+            return 0 - not_single_name()
+        }
+        let wide = win_wide(name)
+        let units = rt_mem_add(wide, 16)
+        let bytes = rt_mem_shl(rt_mem_load64(rt_mem_add(wide, 8)), 1)
+        handle = win_nt_open(dirfd, units, bytes, access, disposition, 0)
+        if handle < 0 && win_reparse_point_at(dirfd, units, bytes) {
+            handle = 0 - eloop()
+        }
+        free(wide)
+        if handle < 0 {
+            return handle
+        }
+    }
+    if handle < 0 {
+        return handle
+    }
+    let info = win_info(handle)
+    if info < 0 {
+        close(handle)
+        return info
+    }
+    if win_reparse_point(info) {
+        close(handle)
+        return 0 - eloop()
+    }
+    if kind == win_directory() && !win_is_dir(info) {
+        close(handle)
+        return 0 - enotdir()
+    }
+    handle
+}
+
+// The directory at the trusted `path`, relative to the working directory
+// when it is not absolute, opened as any open by path opens it, following
+// reparse points: `CreateFileW` with `FILE_FLAG_BACKUP_SEMANTICS`. Its
+// handle, or a Win32 error, negated: `ERROR_DIRECTORY` for anything else.
+fn win_open_following(path: String) -> Int {
+    if c_string_free(path) {
+        return 0 - nul_in_name()
+    }
+    let wide = win_wide(win_backslashed(path))
+    // List, traverse, read attributes and synchronize; share read, write
+    // and delete; `OPEN_EXISTING`.
+    let handle = rt_sys_create_file(rt_mem_add(wide, 16), 1048737, 7, 0, 3, 33554432, 0)
+    free(wide)
+    if handle < 0 {
+        return handle
+    }
+    let info = win_info(handle)
+    if info < 0 {
+        close(handle)
+        return info
+    }
+    if !win_is_dir(info) {
+        close(handle)
+        return -267
+    }
+    handle
+}
+
+// Whether `text` holds a NUL byte.
+fn c_string_free(text: String) -> Bool {
+    let object = rt_mem_text(text)
+    let length = text_length(object)
+    var i = 0
+    while i < length {
+        if rt_mem_load8(rt_mem_add(text_data(object), i)) == 0 {
+            return true
+        }
+        i = i + 1
+    }
+    false
+}
+
+// The path of what `handle` opened, as Rust's `fs::canonicalize` gives it
+// on Windows (`\\?\C:\...`): `GetFinalPathNameByHandleW`, shown lossily.
+fn win_final_path(handle: Int) -> Result<String, IoError> {
+    // 32767 units, the longest path Windows has, and the NUL.
+    let buffer = alloc(65552)
+    let units = rt_mem_add(buffer, 8)
+    let n = rt_sys_final_path_name(handle, units, 32768, 0)
+    if n < 0 {
+        free(buffer)
+        return Err(io_error(0 - n))
+    }
+    if n > 32767 {
+        free(buffer)
+        // `ERROR_FILENAME_EXCED_RANGE`.
+        return Err(io_error(206))
+    }
+    let out = alloc(rt_mem_and(rt_mem_add(rt_mem_mul(n, 3), 15), -8))
+    let length = utf16_to_utf8(rt_mem_add(out, 8), units, n)
+    let text = text_from(rt_mem_add(out, 8), length)
+    free(out)
+    free(buffer)
+    Ok(utf8_lossy(text))
+}
+
+// `lone_file` on Windows: the open `handle`, reached by `names`, is a file
+// that is not a directory, with only that one name.
+fn win_lone_file(handle: Int, names: List<String>) -> Result<(), IoError> {
+    let info = win_info(handle)
+    if info < 0 {
+        return Err(io_error(0 - info))
+    }
+    let path = joined(names, names.len())
+    if win_is_dir(info) {
+        return Err(io_error_text("`{path}` is not a regular file"))
+    }
+    if rt_mem_shr(info, 32) > 1 {
+        return Err(io_error_text("`{path}` has more than one hard link, and confined access never opens one"))
+    }
+    Ok(())
+}
+
+// `make_dir` on Windows: `FILE_CREATE` never follows a reparse point at
+// the name; one there, dangling or not, makes it fail as a name taken.
+// What is there is kept if it is a directory and not a reparse point.
+fn win_make_dir(parent: Int, names: List<String>) -> Result<(), IoError> {
+    let count = names.len()
+    let name = names.at(count - 1)
+    let path = joined(names, count)
+    if !win_single_name(name) {
+        return Err(refusal(not_single_name(), path, true))
+    }
+    let wide = win_wide(name)
+    let units = rt_mem_add(wide, 16)
+    let bytes = rt_mem_shl(rt_mem_load64(rt_mem_add(wide, 8)), 1)
+    // `FILE_CREATE`, `FILE_DIRECTORY_FILE`.
+    let made = win_nt_open(parent, units, bytes, 1048737, 2, 1)
+    var there = false
+    if made < 0 && made != -183 && made != -80 {
+        there = win_reparse_point_at(parent, units, bytes)
+    }
+    free(wide)
+    if made >= 0 {
+        close(made)
+        return Ok(())
+    }
+    // `ERROR_ALREADY_EXISTS`, `ERROR_FILE_EXISTS`.
+    if made == -183 || made == -80 {
+        let fd = win_open_name(parent, name, win_directory())
+        if fd < 0 {
+            return Err(refusal(0 - fd, path, true))
+        }
+        close(fd)
+        return Ok(())
+    }
+    if there {
+        return Err(refusal(eloop(), path, true))
+    }
+    Err(refusal(0 - made, path, true))
+}
+
+// `entries` on Windows: `NtQueryDirectoryFile` of a new handle of `dir`,
+// so the listing starts at its beginning, with `FileNamesInformation`.
+fn win_entries(dir: Int, shown: String) -> Result<List<String>, IoError> {
+    let fd = win_open_name(dir, ".", win_directory())
+    if fd < 0 {
+        return Err(io_error(0 - fd))
+    }
+    // The entries a call writes, and an `IO_STATUS_BLOCK`.
+    let buffer = alloc(65560)
+    let status = rt_mem_add(buffer, 8)
+    let data = rt_mem_add(buffer, 24)
+    var list = list_new(8)
+    var invalid = -1
+    var failed = 0
+    var restart = 1
+    while true {
+        let result = rt_sys_nt_query_directory_file(fd, 0, 0, 0, status, data, 65536, 12, 0, 0, restart)
+        restart = 0
+        // `STATUS_NO_MORE_FILES`, `STATUS_NO_SUCH_FILE`: the end.
+        if result == -2147483642 || result == -1073741809 {
+            break
+        }
+        if result < 0 {
+            failed = 0 - win_status_error(result)
+            break
+        }
+        if rt_mem_load64(rt_mem_add(status, 8)) == 0 {
+            break
+        }
+        // Each entry: the offset of the next (0 for the last), its index,
+        // its name's length in bytes, and its name in UTF-16.
+        var at = data
+        while true {
+            let next = rt_mem_load32(at)
+            let units = rt_mem_shr(rt_mem_load32(rt_mem_add(at, 8)), 1)
+            let out = alloc(rt_mem_and(rt_mem_add(rt_mem_mul(units, 3), 15), -8))
+            let length = utf16_to_utf8(rt_mem_add(out, 8), rt_mem_add(at, 12), units)
+            let name = rt_mem_add(out, 8)
+            let dot = length == 1 && rt_mem_load8(name) == 46
+            let dot_dot = length == 2 && rt_mem_load16(name) == 11822
+            if !dot && !dot_dot {
+                if invalid < 0 && !utf8_valid(name, length) {
+                    invalid = rt_mem_load64(rt_mem_add(list, 8))
+                }
+                list = list_add(list, text_of(name, length))
+            }
+            free(out)
+            if next == 0 {
+                break
+            }
+            at = rt_mem_add(at, next)
+        }
+    }
+    free(buffer)
+    close(fd)
+    if invalid < 0 {
+        sort_texts(list)
+    }
+    let names = rt_mem_as_list(list)
+    if failed != 0 {
+        return Err(io_error(failed))
+    }
+    if invalid >= 0 {
+        let name = os_debug(names.at(invalid))
+        return Err(io_error_text("{name} in `{shown}` is not valid UTF-8"))
+    }
+    Ok(names)
+}
+
+// Refuse `names` unless each is a file's own name on Windows, as the
+// interpreter does before any walk: a `:` opens an alternate data stream,
+// and a reserved device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`,
+// `LPT1` to `LPT9`, `CONIN$`, `CONOUT$`), with or without an extension,
+// may be taken for the device by Windows' path functions. Elsewhere any
+// plain name is one.
+fn win_check_names(names: List<String>) -> Result<(), IoError> {
+    if !on_windows() {
+        return Ok(())
+    }
+    var i = 0
+    while i < names.len() {
+        let name = names.at(i)
+        let object = rt_mem_text(name)
+        let data = text_data(object)
+        let length = text_length(object)
+        var stem = 0
+        var colon = false
+        while stem < length && rt_mem_load8(rt_mem_add(data, stem)) != 46 {
+            stem = stem + 1
+        }
+        var k = 0
+        while k < length {
+            if rt_mem_load8(rt_mem_add(data, k)) == 58 {
+                colon = true
+            }
+            k = k + 1
+        }
+        if colon {
+            return Err(io_error_text("`{name}` holds a `:`, which names an alternate data stream on Windows, and confined access never opens one"))
+        }
+        // Windows ignores the extension, and spaces before it.
+        while stem > 0 && rt_mem_load8(rt_mem_add(data, stem - 1)) == 32 {
+            stem = stem - 1
+        }
+        if win_device_name(data, stem) {
+            return Err(io_error_text("`{name}` is a Windows device name, and confined access never opens one"))
+        }
+        i = i + 1
+    }
+    Ok(())
+}
+
+// Whether the `length` bytes at `data` are a device's name, ignoring ASCII
+// case.
+fn win_device_name(data: Int, length: Int) -> Bool {
+    if win_stem_is(data, length, "CON") || win_stem_is(data, length, "PRN") || win_stem_is(data, length, "AUX") || win_stem_is(data, length, "NUL") || win_stem_is(data, length, "CONIN$") || win_stem_is(data, length, "CONOUT$") {
+        return true
+    }
+    if length < 4 || !(win_stem_is(data, 3, "COM") || win_stem_is(data, 3, "LPT")) {
+        return false
+    }
+    let digit = rt_mem_load8(rt_mem_add(data, 3))
+    if length == 4 {
+        return digit >= 49 && digit <= 57
+    }
+    // `¹`, `²` and `³`, which Windows takes as digits.
+    if length == 5 && digit == 194 {
+        let second = rt_mem_load8(rt_mem_add(data, 4))
+        return second == 185 || second == 178 || second == 179
+    }
+    false
+}
+
+// Whether the `length` bytes at `data` are `word`, in capitals, ignoring
+// ASCII case.
+fn win_stem_is(data: Int, length: Int, word: String) -> Bool {
+    let object = rt_mem_text(word)
+    if text_length(object) != length {
+        return false
+    }
+    var i = 0
+    while i < length {
+        var b = rt_mem_load8(rt_mem_add(data, i))
+        if b >= 97 && b <= 122 {
+            b = b - 32
+        }
+        if b != rt_mem_load8(rt_mem_add(text_data(object), i)) {
+            return false
+        }
+        i = i + 1
+    }
+    true
 }
 
 // The vectored exception handler, which Windows calls with the address of
