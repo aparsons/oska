@@ -168,7 +168,7 @@ With `--format=json`, the check object gains `authority_diff` as its last key:
 
 ## `oskac run`
 
-`oskac run <file.osk | -> [--format=json] [--interpret] [-- args...]` checks the file, or the module read from [standard input](#source-from-standard-input), and, when it has no diagnostics, runs `main` on the real operating system: compiled natively on Linux and macOS, on the interpreter on Windows or with `--interpret` (see [platform support](#platform-support)). `args.get(0)` in the program is the file's path, or the package directory as given, on either backend, and the arguments after `--` follow it unchanged.
+`oskac run <file.osk | -> [--format=json] [--interpret] [-- args...]` checks the file, or the module read from [standard input](#source-from-standard-input), and, when it has no diagnostics, runs `main` on the real operating system: compiled natively on Linux and macOS, on the interpreter on Windows or with `--interpret` (see [platform support](#platform-support)). `args.get(0)` in the program is the file's path, the package directory as given, or `<stdin>` for a module read from standard input, on either backend, and the arguments after `--` follow it unchanged.
 
 - The program's own output goes to standard output and standard error as it runs.
 - A refused program's diagnostics, or the panic that stopped the program, go to standard error after that output: as `check` prints diagnostics, or as one JSON object per line with `--format=json`.

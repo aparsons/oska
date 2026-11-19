@@ -1,12 +1,13 @@
 //! A bare `-` as the path: `oskac check -` and `oskac run -` read one
 //! module from standard input, as an embedder pipes a snippet, and report
 //! it as the same bytes in a file named `<stdin>`. A program run from
-//! standard input gets a closed standard input of its own.
+//! standard input gets a closed standard input of its own. `main`
+//! refuses `-` for every other command.
 
 use std::io::Read;
 use std::process::ExitCode;
 
-use crate::{cache, Command, Flags};
+use crate::{baseline, cache, Flags};
 
 /// The operand that means standard input.
 pub const DASH: &str = "-";
@@ -15,32 +16,24 @@ pub const DASH: &str = "-";
 /// program's `args.get(0)`.
 pub const PATH: &str = "<stdin>";
 
-/// `command` on the module on standard input: `check` or `run`. `main`
-/// refuses `-` for every other command before it gets here.
-pub fn command(
-    command: Command,
-    flags: Flags,
-    args: &[String],
-    store: Option<&cache::Store>,
-) -> ExitCode {
+/// `oskac check -`: check the module on standard input, with what to do
+/// with a baseline (`gate`).
+pub fn check(flags: Flags, gate: Option<baseline::Gate>) -> ExitCode {
+    let store = cache::for_command(flags.no_cache);
     let Some(src) = read() else {
         return ExitCode::FAILURE;
     };
-    match command {
-        Command::Check(gate) => crate::check_source(PATH, &src, flags, gate, store),
-        Command::Run => crate::run_source(
-            PATH,
-            &src,
-            flags,
-            args,
-            store,
-            oska_run::RealHost::without_stdin(),
-        ),
-        Command::Test | Command::Build(_) => {
-            eprint!("{}", crate::USAGE);
-            ExitCode::from(2)
-        }
-    }
+    crate::check_source(PATH, &src, flags, gate, store.as_ref())
+}
+
+/// `oskac run -`: check and run the module on standard input, with
+/// `args` after `<stdin>` and a closed standard input of its own.
+pub fn run(flags: Flags, args: &[String]) -> ExitCode {
+    let store = cache::for_command(flags.no_cache);
+    let Some(src) = read() else {
+        return ExitCode::FAILURE;
+    };
+    crate::run_source(PATH, &src, flags, args, store.as_ref(), true)
 }
 
 /// All of standard input, as UTF-8 text. Text that cannot be read is the

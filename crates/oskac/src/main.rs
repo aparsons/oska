@@ -279,6 +279,8 @@ fn main() -> ExitCode {
             eprint!("{USAGE}");
             ExitCode::from(2)
         }
+        ["check", stdin::DASH] => stdin::check(flags, gate),
+        ["run", stdin::DASH] => stdin::run(flags, &line.program_args),
         ["lex", path] => lex_file(path, flags),
         ["parse", path] => parse_file(path, flags),
         ["check", rest @ ..] if rest.len() <= 1 => on_target(
@@ -589,18 +591,19 @@ fn run_file(path: &str, flags: Flags, args: &[String], store: Option<&cache::Sto
     let Some(src) = read_source(path) else {
         return ExitCode::FAILURE;
     };
-    run_source(path, &src, flags, args, store, oska_run::RealHost::new())
+    run_source(path, &src, flags, args, store, false)
 }
 
-/// [`run_file`] on `src`, the text of the module `path` names, on `host`;
-/// a native run's standard input is closed when the host's is.
+/// [`run_file`] on `src`, the text of the module `path` names; with
+/// `stdin_closed`, every read of the program's standard input is end of
+/// file at once.
 fn run_source(
     path: &str,
     src: &str,
     flags: Flags,
     args: &[String],
     store: Option<&cache::Store>,
-    mut host: oska_run::RealHost,
+    stdin_closed: bool,
 ) -> ExitCode {
     let json = flags.json;
     let cached = cache::Cached::new(store, cache::file_sources(path, src));
@@ -620,7 +623,7 @@ fn run_source(
                     argv0: path,
                     args,
                     json,
-                    stdin_closed: host.stdin_closed(),
+                    stdin_closed,
                 },
                 &cached,
             ) {
@@ -633,6 +636,11 @@ fn run_source(
     }
     let mut argv = vec![path.to_string()];
     argv.extend_from_slice(args);
+    let mut host = if stdin_closed {
+        oska_run::RealHost::without_stdin()
+    } else {
+        oska_run::RealHost::new()
+    };
     let outcome = oska_run::run(src, &mut host, &argv);
     finish_run(outcome, json, &places)
 }
@@ -724,9 +732,6 @@ fn finish_test(mut report: oska_run::TestReport, json: bool, places: &Places) ->
 fn on_target(command: Command, path: Option<&&str>, flags: Flags, args: &[String]) -> ExitCode {
     let store = cache::for_command(flags.no_cache);
     let store = store.as_ref();
-    if path == Some(&stdin::DASH) {
-        return stdin::command(command, flags, args, store);
-    }
     match package::target(path.copied()) {
         package::Target::File(file) => {
             let code = match command {

@@ -12,7 +12,6 @@
 
 mod common;
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -61,28 +60,7 @@ impl Case {
 
     /// Run `oskac args` with `input` on its standard input.
     fn piped(&self, args: &[&str], input: &[u8]) -> Output {
-        for _ in 0..50 {
-            let spawned = self
-                .command(args)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn();
-            let mut child = match spawned {
-                // The executable is busy (`ETXTBSY`): see `output_of`.
-                Err(e) if e.raw_os_error() == Some(26) => {
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                    continue;
-                }
-                result => result.expect("oskac should start"),
-            };
-            let mut stdin = child.stdin.take().expect("a stdin pipe");
-            // A command that refuses `-` may exit before it reads.
-            let _ = stdin.write_all(input);
-            drop(stdin);
-            return child.wait_with_output().expect("oskac should finish");
-        }
-        panic!("oskac stayed busy");
+        common::portable::output_with_input(&mut self.command(args), input)
     }
 
     /// Run `oskac args` on `input` written to `file` in the case folder.
@@ -188,13 +166,16 @@ fn check_dash_reports_diagnostics_as_a_file_named_stdin() {
 #[test]
 fn an_empty_stdin_is_checked_as_an_empty_module() {
     let case = Case::new("empty");
+    assert_checks_as_a_file(&case, &[], b"", "check_empty.txt");
     assert_checks_as_a_file(&case, &["--format=json"], b"", "check_empty.json");
 }
 
 #[test]
 fn stdin_that_is_not_utf8_is_the_error_a_file_that_is_not_gives() {
     let case = Case::new("not-utf8");
-    assert_checks_as_a_file(&case, &[], b"fn main() {}\n\xff\n", "check_not_utf8.txt");
+    let input = b"fn main() {}\n\xff\n";
+    assert_checks_as_a_file(&case, &[], input, "check_not_utf8.txt");
+    assert_checks_as_a_file(&case, &["--format=json"], input, "check_not_utf8.json");
 }
 
 #[test]

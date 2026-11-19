@@ -288,11 +288,6 @@ impl RealHost {
             ..RealHost::new()
         }
     }
-
-    /// Whether the program's standard input is closed.
-    pub fn stdin_closed(&self) -> bool {
-        self.stdin_closed
-    }
 }
 
 impl Host for RealHost {
