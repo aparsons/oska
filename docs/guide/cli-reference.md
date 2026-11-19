@@ -228,7 +228,7 @@ See the [runtime notes](../runtime.md#native-builds) for the codes.
 - `SHA256SUMS`, whose first line names the release, `# <name>-release v<X.Y.Z>`, followed by one `sha256sum` line, `<sha256>  <file>`, per executable, sorted by file name;
 - `SHA256SUMS.sig`, the signature `ssh-keygen -Y sign` writes with your key, in the namespace `<name>-release`.
 
-The first line puts the name and the version under the signature, so a signed release cannot be passed off as another one. `oskac` builds and hashes the release itself and runs your `ssh-keygen` to sign it, so a key with a passphrase asks for it as `ssh-keygen` does. The version and the key are checked before anything is built, and every platform is built before anything is written; if writing or signing fails, the directory is removed, so a failed release never leaves an unsigned one behind. How your users check a release, and how to add Authenticode or Apple notarization, is in [Releasing an application](releasing.md).
+The first line puts the name and the version under the signature, so a signed release cannot be passed off as another one. `oskac` builds and hashes the release itself and runs your `ssh-keygen` to sign it, so a key with a passphrase asks for it as `ssh-keygen` does. The name (the file's stem or the package directory's name) must be ASCII letters, digits, `.`, `-` and `_`, starting with a letter or digit. The version, the key and the name are checked before anything is built, and every platform is built before anything is written; the signature is checked with `ssh-keygen -Y check-novalidate` once written; if writing, signing or that check fails, the directory is removed, so a failed release never leaves an unsigned one behind. How your users check a release, and how to add Authenticode or Apple notarization, is in [Releasing an application](releasing.md).
 
 - Success prints nothing, or with `--format=json` one object: `{"directory":"<dir>","name":"<name>","version":"<X.Y.Z>","files":[{"path":"<dir>/<file>","sha256":"<hex>"},...],"checksums":"<dir>/SHA256SUMS","signature":"<dir>/SHA256SUMS.sig","namespace":"<name>-release","diagnostics":[]}`.
 - A refusal prints its diagnostics as `check` does, or `{"directory":null,"diagnostics":[...]}` with `--format=json`.
@@ -236,7 +236,7 @@ The first line puts the name and the version under the signature, so a signed re
 | Exit code | Meaning |
 | --- | --- |
 | `0` | The release was written and signed. |
-| `1` | The checker refused the program, the directory could not be written or already exists (`E0391`), or the key is missing, is not an SSH signing key, or could not sign (`E0396`). |
+| `1` | The checker refused the program, the directory could not be written or already exists (`E0391`), the key is missing, is not an SSH signing key, or could not sign (`E0396`), or the program's name cannot name a release (`E0397`). |
 | `2` | The version is missing or is not `X.Y.Z` (`E0395`), or the program uses something the native backend cannot compile yet (`E0371`, `E0390`). |
 
 ## `oskac fix`

@@ -41,9 +41,15 @@ pub struct Options<'a> {
     pub key: &'a str,
 }
 
-/// The first line of a private key in OpenSSH's own format, the one
-/// `ssh-keygen` writes and `ssh-keygen -Y sign` reads.
-const OPENSSH_PRIVATE_KEY: &str = "-----BEGIN OPENSSH PRIVATE KEY-----";
+/// Whether `bytes` start as a private key file that `ssh-keygen -Y sign`
+/// reads: OpenSSH's own format (`-----BEGIN OPENSSH PRIVATE KEY-----`),
+/// or PEM's (`-----BEGIN RSA PRIVATE KEY-----`, `... EC PRIVATE KEY`,
+/// `... PRIVATE KEY`).
+fn is_private_key(bytes: &[u8]) -> bool {
+    let first = bytes.split(|b| *b == b'\n').next().unwrap_or(&[]);
+    let first = first.strip_suffix(b"\r").unwrap_or(first);
+    first.starts_with(b"-----BEGIN ") && first.ends_with(b"PRIVATE KEY-----")
+}
 
 /// Check the version and the key, before anything is read or built:
 /// `options` from the command line, where `None` is a flag not given.
@@ -85,12 +91,13 @@ pub fn options<'a>(
         ));
     };
     match std::fs::read(key) {
-        Ok(bytes) if bytes.starts_with(OPENSSH_PRIVATE_KEY.as_bytes()) => {}
+        Ok(bytes) if is_private_key(&bytes) => {}
         Ok(_) => {
             return Err((
                 not_a_key(&format!(
-                    "`{key}` is not an SSH signing key: it is not a private key in OpenSSH's \
-                     format; make one with `ssh-keygen -t ed25519 -f <file>`"
+                    "`{key}` is not an SSH signing key: it is not a private key file (a public \
+                     key is not one); name the private half, or make a key with \
+                     `ssh-keygen -t ed25519 -f <file>`"
                 )),
                 ExitCode::FAILURE,
             ));
@@ -135,6 +142,19 @@ fn is_version(version: &str) -> bool {
         })
 }
 
+/// Whether `name`, a file's stem or a package directory's name, can name
+/// a release: ASCII letters, digits, `.`, `-` and `_`, starting with a
+/// letter or digit, so it is one word in `SHA256SUMS`, in the namespace
+/// and in every file name.
+fn is_release_name(name: &str) -> bool {
+    name.bytes()
+        .next()
+        .is_some_and(|b| b.is_ascii_alphanumeric())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+}
+
 /// Build `program`, named `name`, for every platform, and write, hash and
 /// sign the release.
 pub fn release(
@@ -145,6 +165,20 @@ pub fn release(
     json: bool,
     cached: &Cached,
 ) -> ExitCode {
+    if !is_release_name(name) {
+        return refuse(
+            &[refusal(
+                oska_native::codes::BAD_RELEASE_NAME,
+                format!(
+                    "cannot release `{name}`: a release's name goes into its file names and \
+                     its signature, so it is only ASCII letters, digits, `.`, `-` and `_`, \
+                     starting with a letter or digit; rename the file or the package directory"
+                ),
+            )],
+            json,
+            ExitCode::FAILURE,
+        );
+    }
     let mut executables = Vec::with_capacity(Target::ALL.len());
     for target in Target::ALL {
         match cached.native("build", target, json, || {
@@ -241,7 +275,7 @@ fn sign(dir: &str, key: &str, namespace: &str) -> Result<(), String> {
             _ => format!("cannot sign the release: cannot run `ssh-keygen`: {err}"),
         })?;
     if output.status.success() && Path::new(dir).join("SHA256SUMS.sig").is_file() {
-        return Ok(());
+        return check_signature(dir, namespace);
     }
     let said = String::from_utf8_lossy(&output.stderr);
     let said = said.trim();
@@ -250,6 +284,32 @@ fn sign(dir: &str, key: &str, namespace: &str) -> Result<(), String> {
     } else {
         format!("`ssh-keygen` could not sign with `{key}`: {said}")
     })
+}
+
+/// Check the signature just written, as `scripts/release/sign.sh` checks
+/// `oskac`'s own after signing: `ssh-keygen -Y check-novalidate` reads it
+/// back and checks it over `SHA256SUMS` in `namespace`. Anything else
+/// than a pass refuses the release.
+fn check_signature(dir: &str, namespace: &str) -> Result<(), String> {
+    let dir = Path::new(dir);
+    let sums = std::fs::File::open(dir.join("SHA256SUMS"))
+        .map_err(|err| format!("cannot check the signature: {}", reason(&err)))?;
+    let output = Command::new("ssh-keygen")
+        .args(["-Y", "check-novalidate", "-n", namespace, "-s"])
+        .arg(dir.join("SHA256SUMS.sig"))
+        .stdin(sums)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|err| format!("cannot check the signature: cannot run `ssh-keygen`: {err}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let said = String::from_utf8_lossy(&output.stderr);
+    Err(format!(
+        "the signature `ssh-keygen` wrote does not check: {}",
+        said.trim()
+    ))
 }
 
 /// Print a refusal's `diagnostics`, already located, and return `code`.
@@ -295,7 +355,48 @@ fn reason(err: &std::io::Error) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::is_version;
+    use super::{is_private_key, is_release_name, is_version};
+
+    #[test]
+    fn a_release_name_is_one_plain_word() {
+        for good in ["hello", "greeter", "my-app_2", "app.v2", "9lives"] {
+            assert!(is_release_name(good), "{good}");
+        }
+        for bad in [
+            "",
+            "-app",
+            ".app",
+            "_app",
+            "my app",
+            "a\nb",
+            "a/b",
+            "a\\b",
+            "caf\u{e9}",
+            "a:b",
+        ] {
+            assert!(!is_release_name(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_private_key_is_openssh_or_pem() {
+        for good in [
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nb3Blbg==\n",
+            "-----BEGIN RSA PRIVATE KEY-----\r\nMII=\r\n",
+            "-----BEGIN EC PRIVATE KEY-----\n",
+            "-----BEGIN PRIVATE KEY-----",
+        ] {
+            assert!(is_private_key(good.as_bytes()), "{good}");
+        }
+        for bad in [
+            "",
+            "ssh-ed25519 AAAAC3Nza dev",
+            "-----BEGIN PUBLIC KEY-----\n",
+            "-----BEGIN OPENSSH PRIVATE KEY",
+        ] {
+            assert!(!is_private_key(bad.as_bytes()), "{bad}");
+        }
+    }
 
     #[test]
     fn versions_are_x_y_z_with_an_optional_pre_release() {
