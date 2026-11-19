@@ -477,7 +477,12 @@ theorem args_within {P : Program} (hT : P.typesCapFree = true) :
 
 /-- **Authority safety.** In a program as the checker hands it over,
 every effect in the trace of any run of a call of `f` on arguments of
-its parameters' types has a capability kind in `f`'s authority. -/
+its parameters' types has a capability kind in `f`'s authority.
+
+The proof does not use `_hf`: the bound holds for any `f` whose
+parameter types the arguments have, whichever function `name` names. It
+is stated with `_hf` so that it reads as a fact about the function
+called. -/
 theorem authority_safety {P : Program} (hP : ProgramSourceTyped P) {name : String} {f : Function}
     (_hf : P.find? name = some f) {vs : List Expr}
     (hargs : ValueTyped P (.many vs (f.params.map Param.type)))
@@ -488,16 +493,40 @@ theorem authority_safety {P : Program} (hP : ProgramSourceTyped P) {name : Strin
   · exact List.mem_flatMap.mpr ⟨k, hk, CapKind.mem_below_self k⟩
   · simpa [Expr.capsWithin, paramKinds] using args_within hP.2 hargs
 
-/-- **Authority safety of the Lean reference.** A run of the Lean
-reference that ends in a value took steps of the semantics whose every
-effect has a kind in `f`'s authority. -/
+/-- Every effect in a run's trace is one a step performs, so its receiver
+has the kind the call takes. -/
+theorem steps_receiver {P : Program} {e e' : Expr} {tr : List Request} (hs : Steps P e tr e') :
+    ∀ req ∈ tr, req.op.receiver = some req.kind := by
+  induction hs with
+  | refl => intro req h; cases h
+  | next _ _ ih => exact ih
+  | perform h _ _ ih =>
+    intro req hreq
+    cases hreq with
+    | head => exact h.wellFormed
+    | tail _ hreq => exact ih req hreq
+
+/-- **Authority safety of the Lean reference.** However a run of the
+Lean reference on its fake host ends, in a value, a panic or stuck, it
+took steps of the semantics whose every effect has a kind in `f`'s
+authority. -/
 theorem authority_safety_reference {P : Program} (hP : ProgramSourceTyped P) {name : String}
     {f : Function} (hf : P.find? name = some f) {vs : List Expr}
-    (hargs : ValueTyped P (.many vs (f.params.map Param.type))) {fuel : Nat} {h h' : Host}
-    {v : Expr} (hr : run P fuel h (.call name vs) = (.value v, h')) :
-    ∃ tr, Steps P (.call name vs) tr v ∧ ∀ eff ∈ tr, eff.kind ∈ authority f := by
-  obtain ⟨tr, hs, _⟩ := run_sound.1 hr
-  exact ⟨tr, hs, authority_safety hP hf hargs hs⟩
+    (hargs : ValueTyped P (.many vs (f.params.map Param.type))) {fuel : Nat} {h h' : Host} :
+    (∀ {v}, run P fuel h (.call name vs) = (.value v, h') →
+      ∃ tr, Steps P (.call name vs) tr v ∧ ∀ eff ∈ tr, eff.kind ∈ authority f) ∧
+    (∀ {k}, run P fuel h (.call name vs) = (.panic k, h') →
+      ∃ tr e', Steps P (.call name vs) tr e' ∧ Step P e' (.panic k) ∧
+        ∀ eff ∈ tr, eff.kind ∈ authority f) ∧
+    (∀ {e'}, run P fuel h (.call name vs) = (.stuck e', h') →
+      ∃ tr, Steps P (.call name vs) tr e' ∧ ∀ eff ∈ tr, eff.kind ∈ authority f) := by
+  refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_⟩
+  · obtain ⟨tr, hs, _⟩ := run_sound.1 hr
+    exact ⟨tr, hs, authority_safety hP hf hargs hs⟩
+  · obtain ⟨tr, e', hs, hp⟩ := run_sound.2.1 hr
+    exact ⟨tr, e', hs, hp, authority_safety hP hf hargs hs⟩
+  · obtain ⟨tr, hs, _⟩ := run_sound.2.2 hr
+    exact ⟨tr, hs, authority_safety hP hf hargs hs⟩
 
 /-! ## Attenuation never widens -/
 
@@ -505,7 +534,13 @@ theorem authority_safety_reference {P : Program} (hP : ProgramSourceTyped P) {na
 capability of a kind below the receiver's with the same root; any answer
 the semantics allows `restrict_to` is a capability of a kind below the
 receiver's whose root reaches no path the receiver's does not; and the
-fake host's answer to `restrict_to` is one. -/
+fake host's answer to `restrict_to` is one.
+
+The second conjunct holds by the definition of `Request.Allows`, which
+admits for `restrict_to` only such a capability; the work is in the
+third, that the fake host keeps to it (`Host.restrictTo_within`), and in
+`fake_host_stays_beneath`, that its reads, writes and new directories
+stay beneath the capability's root. -/
 theorem attenuation_never_widens :
     (∀ {op : Builtin} {k k' : CapKind} {r r' : CapRoot},
       evalPure op [.cap k r] = some (.cap k' r') → k' ∈ k.below ∧ r' = r) ∧
@@ -540,6 +575,16 @@ theorem attenuation_never_widens :
       refine ⟨?_, hw⟩
       revert hk₂
       cases k <;> simp [CapKind.restrictTo, CapKind.below] <;> intros <;> subst_vars <;> simp
+
+/-- **The fake host stays beneath a capability's root.** A read reads a
+file the root reaches; a write changes or adds only a file the root
+reaches; `create_dir` adds only a directory the root reaches. -/
+theorem fake_host_stays_beneath (h : Host) (root : CapRoot) :
+    (∀ s t, h.read root s = .okStr t → ∃ q, root.Reaches q ∧ h.files.lookup q = some t) ∧
+    (∀ s t q x, (q, x) ∈ (h.write root s t).2.files → (q, x) ∈ h.files ∨ root.Reaches q) ∧
+    (∀ s q, q ∈ (h.createDir root s).2.dirs → q ∈ h.dirs ∨ root.Reaches q) :=
+  ⟨fun s _ hr => Host.read_beneath h root s hr, fun s t => Host.write_beneath h root s t,
+    fun s => Host.createDir_beneath h root s⟩
 
 /-! ## Authority safety is not vacuous -/
 
@@ -580,6 +625,46 @@ theorem quiet_never_prints {vs : List Expr} {tr : List Request} {e' : Expr}
   have := authority_safety quietProgram_sourceTyped (f := quiet) rfl hargs hrun eff heff
   rw [hk] at this
   simp [authority, paramKinds, quiet, Ty.capKind?, CapKind.below] at this
+
+/-- `fn peek(r: FsRead) { let _ = r.restrict_to(".").read_to_string(Path.from("a.txt")) }`:
+it reads a file, and has no capability to write one. -/
+def peek : Function where
+  name := "peek"
+  params := [{ type := .cap .fsRead, binds := true }]
+  ret := .unit
+  body := .block [.let_ false (.result .string) (.builtin .readToString
+    [.builtin (.restrictTo .fsRead) [.local_ 0, .str "."], .builtin .pathFrom [.str "a.txt"]])] none
+
+def peekProgram : Program := { types := [], functions := [peek] }
+
+theorem peekProgram_sourceTyped : ProgramSourceTyped peekProgram := by
+  refine ⟨fun name f hf => ?_, rfl⟩
+  simp only [peekProgram, Program.find?, findFunction] at hf
+  split at hf
+  · cases hf
+    refine ⟨?_, rfl, rfl⟩
+    exact Typed.block (Typed.blockLetDrop
+      (Typed.builtin BuiltinTyped.readToString
+        (Typed.argsCons (Typed.builtin (BuiltinTyped.restrictTo rfl)
+            (Typed.argsCons (Typed.local_ rfl) (Typed.argsCons Typed.str Typed.argsNil)))
+          (Typed.argsCons (Typed.builtin BuiltinTyped.pathFrom (Typed.argsCons Typed.str Typed.argsNil))
+            Typed.argsNil)))
+      Typed.blockNone)
+  · cases hf
+
+/-- A function whose only capability is `FsRead` never writes a file or
+makes a directory, in any run, on any arguments of its parameters' types
+and any answers the semantics allows. -/
+theorem peek_never_writes {vs : List Expr} {tr : List Request} {e' : Expr}
+    (hargs : ValueTyped peekProgram (.many vs [.cap .fsRead]))
+    (hrun : Steps peekProgram (.call "peek" vs) tr e') :
+    ∀ eff ∈ tr, eff.op ≠ .write ∧ eff.op ≠ .createDir := by
+  intro eff heff
+  have hk := authority_safety peekProgram_sourceTyped (f := peek) rfl hargs hrun eff heff
+  have hr := steps_receiver hrun eff heff
+  simp [authority, paramKinds, peek, Ty.capKind?, CapKind.below] at hk
+  constructor <;> intro hop <;> rw [hop] at hr <;> simp [Builtin.receiver] at hr <;>
+    rcases hk with hk | hk <;> rw [hk] at hr <;> cases hr
 
 /-- `fn greet(io: Stdout) { let _ = io.println("hi") }`. -/
 def greet : Function where

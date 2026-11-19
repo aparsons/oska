@@ -517,6 +517,57 @@ fn every_runtime_test_program_in_oska_core_agrees_with_the_lean_reference() {
     );
 }
 
+/// Runtime test programs that must be in Oska Core and agree with the
+/// Lean reference, each found by a line only it holds: the security
+/// cases, which a count of covered programs could lose without notice.
+const MUST_AGREE: [(&str, &str); 3] = [
+    (
+        "a_confined_capability_refuses_a_path_outside_its_root",
+        "boxed.write(Path.from(\"sub/../../escape.txt\"), \"leaked\")",
+    ),
+    (
+        "a_narrowed_read_capability_reads_only_beneath_its_root",
+        "notes.read_to_string(Path.from(\"../secret.txt\"))",
+    ),
+    (
+        "files_written_before_a_panic_are_kept",
+        "out.write(Path.from(\"before.txt\"), \"written\")",
+    ),
+];
+
+/// The one runtime test program that holds `line`.
+fn program_holding(line: &str) -> String {
+    let found: Vec<String> = runtime_test_programs()
+        .into_iter()
+        .map(|(_, src)| src)
+        .filter(|src| src.contains(line))
+        .collect();
+    assert_eq!(
+        found.len(),
+        1,
+        "exactly one runtime test program should hold {line:?}: {found:#?}"
+    );
+    found.into_iter().next().unwrap_or_default()
+}
+
+#[test]
+fn the_confinement_programs_agree_with_the_lean_reference() {
+    let test = "lean_reference must-agree";
+    let Some(exe) = reference_or_skip(test) else {
+        return;
+    };
+    let lean = |ir: &str| run_reference(exe, ir);
+    for (name, line) in MUST_AGREE {
+        let src = program_holding(line);
+        let verdict = verdict(&src, &lean, &|_| {});
+        assert!(
+            matches!(verdict, Verdict::Agreed),
+            "the program of {name} should be in Oska Core and agree with the Lean reference: \
+             {verdict:?}"
+        );
+    }
+}
+
 /// A program in Oska Core that panics: `10 / zero`.
 const DIVIDES_BY_ZERO: &str = "fn half(n: Int) -> Int {\n    n / 2\n}\n\nfn main() {\n    let zero = half(1)\n    let n = 10 / zero\n}\n";
 

@@ -226,6 +226,62 @@ theorem restrictTo_within (h : Host) (root : CapRoot) (s : String) :
       · next q' hw => exact rootAt_within (walk_prefix hw) q hq
       · exact hq.elim
 
+/-- A read on the fake host reads a file its capability's root reaches. -/
+theorem read_beneath (h : Host) (root : CapRoot) (s : String) {t : String}
+    (hr : h.read root s = .okStr t) : ∃ q, root.Reaches q ∧ h.files.lookup q = some t := by
+  unfold read at hr
+  split at hr
+  · next p n ns _ =>
+    split at hr
+    · next q hw =>
+      split at hr
+      · next text hl => cases hr; exact ⟨q, walk_prefix hw, hl⟩
+      · cases hr
+    · cases hr
+  · cases hr
+
+/-- A write on the fake host leaves every file it did not write as it
+was, and writes only a file its capability's root reaches. -/
+theorem write_beneath (h : Host) (root : CapRoot) (s t : String) :
+    ∀ q x, (q, x) ∈ (h.write root s t).2.files → (q, x) ∈ h.files ∨ root.Reaches q := by
+  intro q x hm
+  unfold write at hm
+  split at hm
+  · next p n ns _ =>
+    split at hm
+    · next q' hw =>
+      split at hm
+      · simp only [putFile, List.mem_append, List.mem_filter, List.mem_singleton] at hm
+        rcases hm with ⟨hm, -⟩ | hm
+        · exact Or.inl hm
+        · cases hm; exact Or.inr (walk_prefix hw)
+      · exact Or.inl hm
+    · exact Or.inl hm
+  · exact Or.inl hm
+
+/-- `create_dir` on the fake host makes only a directory its
+capability's root reaches. -/
+theorem createDir_beneath (h : Host) (root : CapRoot) (s : String) :
+    ∀ q ∈ (h.createDir root s).2.dirs, q ∈ h.dirs ∨ root.Reaches q := by
+  intro q hm
+  unfold createDir at hm
+  split at hm
+  · next p n ns _ =>
+    split at hm
+    · next q' hw =>
+      split at hm
+      · exact Or.inl hm
+      · split at hm
+        · exact Or.inl hm
+        · split at hm
+          · simp only [List.mem_append, List.mem_singleton] at hm
+            rcases hm with hm | hm
+            · exact Or.inl hm
+            · subst hm; exact Or.inr (walk_prefix hw)
+          · exact Or.inl hm
+    · exact Or.inl hm
+  · exact Or.inl hm
+
 theorem read_allowed (h : Host) (root : CapRoot) (s : String) :
     h.read root s = .err ∨ ∃ t, h.read root s = .okStr t := by
   unfold read

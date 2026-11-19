@@ -599,7 +599,9 @@ fn main() {
 
 #[test]
 fn main_prints_through_the_stdout_it_receives() {
-    assert_runs(
+    let mut host = FakeHost::new();
+    let outcome = run_differential(
+        &mut host,
         r#"fn say(io: Stdout, line: Untrusted<String>) {
     let _ = io.println(line)
 }
@@ -611,7 +613,20 @@ fn main(io: Stdout) {
 }
 "#,
         &[],
-        "hello\na \"quoted\" line\twith a tab and a \\\n\n",
+    );
+    assert_eq!(outcome.exit_code, 0, "{outcome:#?}");
+    assert_eq!(
+        outcome.stdout,
+        "hello\na \"quoted\" line\twith a tab and a \\\n\n"
+    );
+    let world = host.world();
+    assert!(
+        world.files.is_empty(),
+        "printing writes no file: {world:#?}"
+    );
+    assert!(
+        world.dirs.is_empty(),
+        "printing makes no directory: {world:#?}"
     );
 }
 
@@ -717,8 +732,8 @@ fn a_narrowed_read_capability_reads_only_beneath_its_root() {
 
 #[test]
 fn files_written_before_a_panic_are_kept() {
-    assert_panics(
-        r#"fn main(io: Stdout, fs: FsWrite) {
+    let mut host = FakeHost::new();
+    let src = r#"fn main(io: Stdout, fs: FsWrite) {
     let out = fs.restrict_to(".")
     let _ = out.write(Path.from("before.txt"), "written")
     let _ = io.println("before")
@@ -726,8 +741,14 @@ fn files_written_before_a_panic_are_kept() {
     let _ = 1 / zero
     let _ = io.println("after")
 }
-"#,
-        "P0004",
-        "1 / zero",
-    );
+"#;
+    let outcome = run_differential(&mut host, src, &[]);
+    let Some(panic) = &outcome.panic else {
+        panic!("{src:?} should panic with P0004: {outcome:#?}");
+    };
+    assert_eq!(panic.code, "P0004", "{panic:#?}");
+    assert_eq!(&src[panic.span.start..panic.span.end], "1 / zero");
+    assert_eq!(outcome.exit_code, 101, "a panic exits with code 101");
+    assert_eq!(outcome.stdout, "before\n");
+    assert_eq!(host.file("before.txt"), Some("written"));
 }

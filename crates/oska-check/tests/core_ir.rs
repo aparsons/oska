@@ -9,7 +9,7 @@
 use std::ops::ControlFlow;
 use std::path::PathBuf;
 
-use oska_check::core_ir::{self, Refusal, CORE_IR_VERSION};
+use oska_check::core_ir::{self, Refusal, BUILTINS, CORE_IR_VERSION};
 use oska_check::program::{
     walk, DeclarationKind, Expr, ExprKind, IntType, Pattern, Program, Stmt, Type, Visit,
 };
@@ -635,5 +635,57 @@ fn the_first_construct_in_source_order_is_named() {
          }\n",
         "an interpolated string",
         "\"first {n}\"",
+    );
+}
+
+/// The names the Lean reader's `builtin` table in
+/// `formal/lean/OskaFormal/Core/CoreIR.lean` reads: each `| "NAME" =>`
+/// arm between `def builtin` and its catch-all.
+fn lean_builtins() -> Vec<String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../formal/lean/OskaFormal/Core/CoreIR.lean");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let start = text
+        .find("\ndef builtin :")
+        .unwrap_or_else(|| panic!("{} has no `def builtin`", path.display()));
+    let mut names = Vec::new();
+    for line in text[start + 1..].lines().skip(1) {
+        let line = line.trim();
+        if line.starts_with("| _ =>") {
+            return names;
+        }
+        let name = line
+            .strip_prefix("| \"")
+            .and_then(|rest| rest.split_once('"'))
+            .map(|(name, _)| name.to_string())
+            .unwrap_or_else(|| panic!("unexpected line in the Lean `builtin` table: {line:?}"));
+        names.push(name);
+    }
+    panic!(
+        "the Lean `builtin` table in {} has no catch-all",
+        path.display()
+    )
+}
+
+#[test]
+fn every_built_in_the_export_writes_is_one_the_lean_reader_reads() {
+    let lean = lean_builtins();
+    let missing: Vec<&str> = BUILTINS
+        .iter()
+        .copied()
+        .filter(|name| !lean.iter().any(|l| l == name))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the Lean reader does not read these built-ins of `BUILTINS`: {missing:?}"
+    );
+    let extra: Vec<&String> = lean
+        .iter()
+        .filter(|name| !BUILTINS.contains(&name.as_str()))
+        .collect();
+    assert!(
+        extra.is_empty(),
+        "the Lean reader reads these built-ins that `BUILTINS` lacks: {extra:?}"
     );
 }
