@@ -1,14 +1,19 @@
 //! `oska-eval`: the evaluation harness for AI agents writing Oska. It is
 //! run by the maintainer, locally, and is never released or installed.
 //!
-//! Each subcommand reads files and writes JSON to standard output. The exit
-//! code is 0 on success, 1 when a check failed, and 2 on bad input.
+//! Each subcommand reads files and writes JSON to standard output (`report`
+//! writes its Markdown page there, unless given `--out`). The exit code is
+//! 0 on success, 1 when a check failed, and 2 on bad input.
 
 mod analyse;
+mod batch;
 mod grade;
 mod grader;
 mod json;
 mod prepare;
+mod record;
+mod report;
+mod summarise;
 mod task;
 mod transcript;
 mod validate;
@@ -27,15 +32,29 @@ USAGE:
         must pass the functional checks and fail a security check), run with
         the oskac at <path>.
 
-    oska-eval prepare <tasks-dir> <task-id> <run-dir>
+    oska-eval plan <tasks-dir> <config>
+        Read a batch config (named <batch-id>.json) against the task set
+        and list every run the batch will make (task, variant, attempt,
+        and the task's turn limit and timeout), with the most turns and
+        time they may take, the estimated tokens and cost, and the most
+        they may cost at the per-run cap, against the budget. It
+        exits with 1 when the estimate is over the budget. Nothing runs.
+
+    oska-eval prepare <tasks-dir> <task-id> <run-dir> [--setup <dir> [--hook]]
         Make a fresh run directory for an active task: workspace/ (the
         starting package) and prompt.md.
         <run-dir> must be new, and outside the repo and the task set.
+        With --setup (the repo's site/agent-setup), the workspace also
+        gets AGENTS.md and CLAUDE.md from the published templates, and
+        the run directory claude-settings.json: the check-on-edit hook
+        with --hook, else no settings.
 
-    oska-eval grade --oskac <path> <tasks-dir> <task-id> <run-dir>
+    oska-eval grade --oskac <path> [--setup <dir>] <tasks-dir> <task-id> <run-dir>
         Grade a finished run's workspace/ through the oskac at <path>: the
         hidden checks, the release check, the program's output, and authority
         against the task's expected authority. Nothing changes in the run.
+        With --setup, the agent-setup files prepare wrote are part of the
+        starting package, and read-only.
 
     oska-eval analyse [--workspace <dir>] [--functional pass|fail] <transcript>
         Read a recorded Claude Code stream-json transcript and say how the
@@ -46,6 +65,30 @@ USAGE:
         resolved from the text are \"unresolved, possibly outside\", and
         symlinks are not followed), and, given the grade's functional
         result, whether the run finished despite failing it.
+
+    oska-eval record <tasks-dir> <task-id> --attempt <n> --variant <name>
+            --model <name> --agent <name> --agent-version <version>
+            --oskac-version <version> --oskac-commit <commit>
+            --task-set <digest> --started <time> --ended <time>
+            [--stop timeout|budget|error] [--workspace <dir>]
+            [--grade <grade.json>] [--analysis <analysis.json>]
+        Join a run's grade and analysis, and what produced them, into its
+        run record. Times are UTC, such as 2026-11-20T10:00:00Z. The stop
+        reason is --stop when given, else the analysis's. The workspace
+        path and the home directory become <workspace> and ~.
+
+    oska-eval summarise <batch-dir>
+        Aggregate the run records in <batch-dir>/runs/ into the batch's
+        summary: what ran, how runs stopped, usage, security outcomes,
+        func@k and func-sec@k by class and variant, the diagnostic codes
+        and the lookups.
+
+    oska-eval report <results-dir> [--out <file>]
+        Render the Markdown page of results from the batches in
+        <results-dir> (the repo's is eval/results, and its page
+        docs/evaluation.md), each with runs/ and its summary.json, which
+        must be what its runs give. It prints the page, or with --out
+        writes it to <file> and prints where.
 
 EXIT CODES:
     0  success    1  a check failed    2  bad input
@@ -73,8 +116,18 @@ fn main() -> ExitCode {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
         ["validate", "--oskac", oskac, tasks] => validate::run(oskac, tasks),
-        ["prepare", tasks, id, run_dir] => prepare::run(tasks, id, run_dir),
-        ["grade", "--oskac", oskac, tasks, id, run_dir] => grade::run(oskac, tasks, id, run_dir),
+        ["plan", tasks, config] => batch::run(tasks, config),
+        ["prepare", tasks, id, run_dir, flags @ ..] => prepare::run(tasks, id, run_dir, flags),
+        ["grade", "--oskac", oskac, tasks, id, run_dir] => {
+            grade::run(oskac, None, tasks, id, run_dir)
+        }
+        ["grade", "--oskac", oskac, "--setup", setup, tasks, id, run_dir] => {
+            grade::run(oskac, Some(setup), tasks, id, run_dir)
+        }
+        ["record", tasks, id, flags @ ..] => record::run(tasks, id, flags),
+        ["summarise", batch] => summarise::run(batch),
+        ["report", results] => report::run(results, None),
+        ["report", results, "--out", out] => report::run(results, Some(out)),
         ["analyse", rest @ ..] => match analyse_args(rest) {
             Some((workspace, functional, transcript)) => {
                 analyse::run(workspace, functional, transcript)
