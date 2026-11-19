@@ -50,15 +50,34 @@ formal_toolchain_matches() {
   return 1
 }
 
-# A model broken on purpose says in its .cfg which invariant TLC must find
-# violated, on a line of its own:
+# A model broken on purpose says which invariant TLC must find violated, on
+# the first line of its .cfg and nowhere else:
 #
 #   \* expect-violation: NoUseAfterFree
 #
 # formal_expected_violation CFG: prints that invariant's name, or nothing for
-# a model that must pass.
+# a model that must pass (no line mentions expect-violation). Returns 1, and
+# says why on stderr, when the .cfg cannot be read, when more than one line
+# mentions expect-violation, or when the one that does is not the first line
+# or does not name exactly one identifier: a malformed expectation never
+# passes.
 formal_expected_violation() {
-  sed -n 's/^\\\* expect-violation: *\([A-Za-z_][A-Za-z0-9_]*\) *$/\1/p' "$1"
+  local cfg=$1 n=0 first
+  n=$(grep -c 'expect-violation' "$cfg") || [ "$n" = 0 ] || {
+    printf 'formal: cannot read %s\n' "$cfg" >&2
+    return 1
+  }
+  [ "$n" -eq 0 ] && return 0
+  if [ "$n" -gt 1 ]; then
+    printf 'formal: %s has %s lines that mention expect-violation; a model expects one invariant violated\n' "$cfg" "$n" >&2
+    return 1
+  fi
+  first=$(sed -n 1p "$cfg")
+  if ! grep -qE '^\\\* expect-violation: [A-Za-z_][A-Za-z0-9_]*$' <<<"$first"; then
+    printf 'formal: %s must start with exactly "\\* expect-violation: NAME", NAME one identifier\n' "$cfg" >&2
+    return 1
+  fi
+  printf '%s\n' "${first#*: }"
 }
 
 # formal_tlc_verdict MODEL CFG RC LOG: judges TLC's run on MODEL, which

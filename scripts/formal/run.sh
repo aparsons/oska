@@ -118,8 +118,8 @@ for model in "${models[@]}"; do
   rc=0
   (cd "$work/tla" &&
     java -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers 1 \
-      -metadir "$work/states/$model" -config "$model.cfg" "$model.tla") >"$work/tlc.out" 2>&1 || rc=$?
-  cat "$work/tlc.out"
+      -metadir "$work/states/$model" -config "$model.cfg" "$model.tla") 2>&1 |
+    tee "$work/tlc.out" || rc=$?
   formal_tlc_verdict "$model" "$tla_dir/$model.cfg" "$rc" "$work/tlc.out" || exit 1
 done
 echo "formal: Lean build and ${#models[@]} TLA+ model(s) passed"

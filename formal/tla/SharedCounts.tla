@@ -51,7 +51,9 @@ TypeOK ==
   /\ held \in [Tasks -> [Values -> 0 .. MaxRefs]]
   /\ content \in [Values -> 0 .. MaxWrites]
   /\ seen \in [Tasks -> [Values -> 0 .. MaxWrites]]
-  /\ pc \in [Tasks -> {"idle", "share", "drop", "check", "release"}]
+  /\ pc \in [Tasks -> {"idle", "share", "check", "release"}]
+  /\ reg \in [Tasks -> 0 .. Cardinality(Tasks) * MaxRefs]
+  /\ arg \in [Tasks -> Values \X Tasks]
   /\ writes \in 0 .. MaxWrites
 
 Init ==

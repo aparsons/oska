@@ -40,8 +40,8 @@ The models check sequentially consistent interleavings: TLC runs one atomic step
   - the end of a `scope` block while a task of that scope still runs.
 - A worker never runs a task inside another task. The task that finishes wakes the tasks that joined it, and the last task of a scope wakes the scope's owner.
 - Because waiting gives the worker back, a fixed pool cannot run out of workers while every task waits for a task that has no worker. If join blocked the OS thread instead, 2 workers each joining a task still in the queue would deadlock. The spec must keep "waiting parks", or grow the pool.
-- The scheduler must start every ready task eventually, even while other tasks keep taking the free workers (strong fairness in the model). A FIFO run queue gives that.
-- A join may also run the joined task itself on the joiner's worker when that task has not started, because the joiner would only wait for it. It must never run any other task there. `ScopedTasks` models parking, of which this is a special case.
+- The scheduler must start every ready task eventually, even while other tasks keep taking the free workers. The model asks for strong fairness on scheduling. At this bound weak fairness passes too (checked once by hand), so TLC cannot tell the two apart here. The spec should still ask for the strong form, which a FIFO run queue gives.
+- A join may also run the joined task itself on the joiner's worker when that task has not started, because the joiner would only wait for it. It must never run any other task there. Both the joiner and a free worker could then try to start that task, so starting it needs an atomic claim (for example, a compare-and-swap of its state from queued to running), and only the one that wins runs it. `ScopedTasks` models parking, and does not model this shortcut or its claim.
 
 ### Why join and scope order rule out #482
 
@@ -76,7 +76,7 @@ fn main() {
 }
 ```
 
-`docs/runtime.md` says no checked program can reach `P0005`, so today this is a bug of its own, apart from parallelism. With parallel tasks, the task could also try to spawn into `inner` while `inner`'s owner is about to close it. The spec needs the rule that `ScopedTasks` checks with `ConfineScopes`: **a closure spawned on scope `s` may hold only the handles of `s` and of the scopes whose blocks enclose `s`'s block.** The checker should enforce it (extending `E0292`). `P0005` then stays a second line of defence that no checked program reaches.
+`docs/runtime.md` says no checked program can reach `P0005`, so today this is a bug of its own, apart from parallelism ([#484](https://github.com/aparsons/oska/issues/484)). With parallel tasks, the task could also try to spawn into `inner` while `inner`'s owner is about to close it. The spec needs the rule that `ScopedTasks` checks with `ConfineScopes`: **a closure spawned on scope `s` may hold only the handles of `s` and of the scopes whose blocks enclose `s`'s block.** The checker should enforce it (extending `E0292`). `P0005` then stays a second line of defence that no checked program reaches.
 
 ## Reference counts across tasks
 

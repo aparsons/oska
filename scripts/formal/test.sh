@@ -26,7 +26,7 @@ bad() {
 
 # A PATH with the utilities run.sh uses and no lake, lean or java.
 mkdir "$work/bin"
-for tool in bash env dirname basename grep cut sha256sum mktemp rm cat cp mkdir sed; do
+for tool in bash env dirname basename grep cut sha256sum mktemp rm cat cp mkdir sed tee; do
   found=$(command -v "$tool") || {
     echo "formal/test.sh: $tool not found" >&2
     exit 1
@@ -186,32 +186,86 @@ verdict Bad.cfg 12 safe.log 0 'fails as it must' "a model broken on purpose pass
 verdict Bad.cfg 12 other.log 1 'not by finding Safe violated' "a model broken on purpose fails when TLC finds another invariant violated"
 verdict Bad.cfg 255 parse.log 1 'not by finding Safe violated' "a model broken on purpose fails when TLC cannot parse it"
 
-# The real models: the counts model with a count update that is not atomic
-# must fail TLC with a value freed while in use (#432), and each model
-# broken on purpose checks the invariant it expects violated.
-want=$(formal_expected_violation "$repo_root/formal/tla/SharedCountsRacy.cfg" 2>/dev/null) || want=
-if [ "$want" = NoUseAfterFree ]; then
-  ok "SharedCountsRacy must fail TLC with NoUseAfterFree violated"
-else
-  bad "SharedCountsRacy must fail TLC with NoUseAfterFree violated" "its .cfg expects '${want}'"
-fi
-for model in SharedCounts ScopedTasks; do
-  want=$(formal_expected_violation "$repo_root/formal/tla/$model.cfg" 2>/dev/null) || want=error
+# An expectation that is not exactly one invariant, on the .cfg's first
+# line, is refused: two lines would let a model that violates only one of
+# them pass.
+printf '\\* expect-violation: Safe\n\\* expect-violation: Other\nINVARIANT Safe\n' >"$work/verdict/Two.cfg"
+printf '\\* expect-violation: Safe Other\nINVARIANT Safe\n' >"$work/verdict/Words.cfg"
+printf '\\* expect-violation: Safe|Other\nINVARIANT Safe\n' >"$work/verdict/Alt.cfg"
+printf 'SPECIFICATION Spec\n\\* expect-violation: Safe\nINVARIANT Safe\n' >"$work/verdict/Late.cfg"
+for cfg in Two Words Alt Late; do
+  status=0
+  out=$(formal_expected_violation "$work/verdict/$cfg.cfg" 2>&1) || status=$?
+  if [ "$status" -eq 1 ] && grep -q "$cfg.cfg" <<<"$out"; then
+    ok "formal_expected_violation refuses $cfg.cfg"
+  else
+    bad "formal_expected_violation refuses $cfg.cfg" "status $status: $out"
+  fi
+done
+verdict Two.cfg 12 safe.log 1 'expect-violation' "a .cfg with two expect-violation lines fails even when TLC finds one of them violated"
+verdict Words.cfg 12 safe.log 1 'one identifier' "a .cfg whose expect-violation names two words fails"
+
+# The real models broken on purpose. Each is a model that must pass with
+# one flag flipped, at the same bound, and expects the invariant named here
+# violated: so the racy counts model fails because its counts are not
+# atomic, not because of some other change (#432). A new model broken on
+# purpose joins this list.
+#   BROKEN GOOD FLAG INVARIANT
+broken_models='SharedCountsRacy SharedCounts Atomic NoUseAfterFree
+ScopedTasksLeakyScopes ScopedTasks ConfineScopes SpawnOnlyIntoOpenScopes'
+tla=$repo_root/formal/tla
+# constants CFG [FLAG]: the CONSTANTS assignments of CFG, trimmed and sorted,
+# without FLAG's.
+constants() {
+  sed -n '/^CONSTANTS/,/^[A-Z]/{/^[[:space:]]/p;}' "$1" |
+    sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v "^${2:-}[[:space:]]*=" | sort
+}
+while read -r broken good flag invariant; do
+  want=$(formal_expected_violation "$tla/$broken.cfg") || want=
+  if [ "$want" = "$invariant" ]; then
+    ok "$broken must fail TLC with $invariant violated"
+  else
+    bad "$broken must fail TLC with $invariant violated" "its .cfg expects '$want'"
+  fi
+  if grep -qE "^[[:space:]]*(INVARIANTS?[[:space:]]+)?$invariant[[:space:]]*\$" "$tla/$broken.cfg"; then
+    ok "$broken.cfg checks $invariant"
+  else
+    bad "$broken.cfg checks $invariant" "$invariant is not listed as an invariant"
+  fi
+  if grep -qx "EXTENDS $good" "$tla/$broken.tla" &&
+    grep -qx "  $flag = TRUE" "$tla/$good.cfg" && grep -qx "  $flag = FALSE" "$tla/$broken.cfg" &&
+    [ -n "$(constants "$tla/$good.cfg" "$flag")" ] &&
+    [ "$(constants "$tla/$good.cfg" "$flag")" = "$(constants "$tla/$broken.cfg" "$flag")" ]; then
+    ok "$broken is $good with $flag = FALSE, at the same bound"
+  else
+    bad "$broken is $good with $flag = FALSE, at the same bound" \
+      "$(constants "$tla/$good.cfg") / $(constants "$tla/$broken.cfg")"
+  fi
+  want=$(formal_expected_violation "$tla/$good.cfg") || want=error
   if [ -z "$want" ]; then
-    ok "$model must pass TLC"
+    ok "$good must pass TLC"
   else
-    bad "$model must pass TLC" "its .cfg expects '$want' violated"
+    bad "$good must pass TLC" "its .cfg expects '$want' violated"
   fi
-done
-for cfg in "$repo_root"/formal/tla/*.cfg; do
-  want=$(formal_expected_violation "$cfg")
+done <<<"$broken_models"
+for cfg in "$tla"/*.cfg; do
+  want=$(formal_expected_violation "$cfg") || want=error
   [ -n "$want" ] || continue
-  if grep -qE "^[[:space:]]*$want[[:space:]]*\$" "$cfg"; then
-    ok "$(basename "$cfg") checks $want, the invariant it expects violated"
+  name=$(basename "$cfg" .cfg)
+  if grep -q "^$name " <<<"$broken_models"; then
+    ok "$name is a known model broken on purpose"
   else
-    bad "$(basename "$cfg") checks $want" "$want is not listed as an invariant"
+    bad "$name is a known model broken on purpose" "add it to broken_models in scripts/formal/test.sh"
   fi
 done
+
+# The single-line form of the invariant list counts too.
+printf '\\* expect-violation: Safe\nSPECIFICATION Spec\nINVARIANT Safe\n' >"$work/verdict/One.cfg"
+if grep -qE "^[[:space:]]*(INVARIANTS?[[:space:]]+)?Safe[[:space:]]*\$" "$work/verdict/One.cfg"; then
+  ok "a single-line INVARIANT NAME lists the invariant"
+else
+  bad "a single-line INVARIANT NAME lists the invariant" "not matched"
+fi
 
 # check.sh's formal block refuses a skip in CI itself. It runs here with
 # step and skip_step stubbed and a run.sh that exits 3 (tools missing).
