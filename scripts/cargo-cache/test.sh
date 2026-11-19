@@ -61,9 +61,10 @@ clone() {
 }
 
 # cargo build -v in `dir`; prints what cargo printed. Verbose, so cargo
-# names each unit `Fresh` or `Compiling` whatever the user's settings.
+# names each unit `Fresh` or `Compiling`, uncoloured, whatever the user's
+# settings (CI sets CARGO_TERM_COLOR=always).
 build() {
-  (cd "$1" && CARGO_TERM_QUIET=false cargo build -v --offline 2>&1)
+  (cd "$1" && CARGO_TERM_QUIET=false CARGO_TERM_COLOR=never cargo build -v --offline 2>&1)
 }
 
 # 1. No cached build: the script changes no time and writes the list.
