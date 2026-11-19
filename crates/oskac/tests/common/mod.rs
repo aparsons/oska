@@ -3,7 +3,6 @@
 #![allow(dead_code)]
 
 pub mod hook;
-pub mod memory;
 pub mod portable;
 pub mod procfs;
 pub mod run_limits;

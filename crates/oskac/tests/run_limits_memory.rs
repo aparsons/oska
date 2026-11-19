@@ -1,9 +1,10 @@
 //! The memory run limit (spec #446, ticket #453): `oskac run
-//! --max-memory=<bytes>` stops a program whose values take more than that
-//! many bytes, net of what it frees, with `P0040` and exit code 101, on
-//! the interpreter and natively. It is a resource bound, not a parity
-//! promise: each backend counts with its own allocator, so the two may
-//! stop at different points, and the tests check only that each stops.
+//! --max-memory=<bytes>` stops a program before its values take more than
+//! that many bytes, net of those it let go of, with `P0040` and exit code
+//! 101, on the interpreter and natively. It is a resource bound, not a
+//! parity promise: each backend counts with its own allocator, so the two
+//! may stop at different points, and the tests check only that each
+//! stops.
 //!
 //! The expected output is in `tests/golden/run_limits/`. To regenerate it
 //! after an intended change, run `UPDATE_GOLDEN=1 cargo test -p oskac
@@ -11,58 +12,16 @@
 
 mod common;
 
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::Path;
 
-use common::memory::oskac_within;
-use common::portable::Scratch;
-
-fn oskac_in(dir: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_oskac"))
-        .args(args)
-        .current_dir(dir)
-        .env_remove("OSKA_CACHE_DIR")
-        .output()
-        .expect("oskac should run")
-}
-
-fn golden_path(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/golden/run_limits")
-        .join(name)
-}
-
-/// Assert that `actual` is the content of the golden file `name`.
-fn assert_golden(name: &str, actual: &str) {
-    let golden = golden_path(name);
-    if std::env::var_os("UPDATE_GOLDEN").is_some() {
-        std::fs::create_dir_all(golden.parent().expect("a parent")).expect("the golden directory");
-        std::fs::write(&golden, actual).expect("should write the golden file");
-    }
-    let expected = std::fs::read_to_string(&golden)
-        .unwrap_or_else(|e| panic!("golden file {} should exist: {e}", golden.display()));
-    assert!(
-        actual == expected,
-        "output differs from {}; rerun with UPDATE_GOLDEN=1 if the change is intended\n{actual}",
-        golden.display()
-    );
-}
-
-/// A scratch directory holding `main.osk` with `src`.
-fn program(name: &str, src: &str) -> Scratch {
-    let dir = Scratch::new("run-limits-memory", name);
-    std::fs::write(dir.join("main.osk"), src).expect("should write main.osk");
-    dir
-}
+use common::run_limits::{assert_golden, oskac_in, oskac_with_stdin, program};
+use common::Json;
 
 /// The backends: the interpreter, and natively where the host has a
 /// backend (elsewhere `oskac run` interprets, which runs it twice).
 const BACKENDS: [&[&str]; 2] = [&["--interpret"], &[]];
 
-/// 64 MiB, the limit the ticket names.
-const LIMIT: &str = "--max-memory=67108864";
-
-/// Grows a list without end.
+/// Grows a list of texts without end.
 const GROWS: &str = r#"fn main() {
     var items: List<String> = []
     var i = 0
@@ -73,9 +32,39 @@ const GROWS: &str = r#"fn main() {
 }
 "#;
 
-/// Makes and lets go of texts, lists and closures, 200 MB of them in
-/// all, holding a few KiB at a time; then prints `done`.
-const CHURNS: &str = r#"fn main(io: Stdout) {
+/// Grows a list held in a struct's field without end, writing the struct
+/// as it goes.
+const GROWS_IN_A_FIELD: &str = r#"struct Bag {
+    items: List<String>,
+    count: Int
+}
+
+fn main() {
+    var bag = Bag(items: [], count: 0)
+    while true {
+        bag.items.push("item {bag.count}")
+        bag.count = bag.count + 1
+    }
+}
+"#;
+
+/// Makes one text of 200 MB at once.
+const ONE_HUGE_TEXT: &str = r#"fn main(io: Stdout) {
+    let huge = "x".repeat(200000000)
+    let n = huge.len()
+    let _ = io.println("made {n}")
+}
+"#;
+
+/// Makes and lets go of texts, lists, structs and closures, 200 MB of
+/// them in all, holding a few KiB at a time; then prints `done`.
+const CHURNS: &str = r#"struct Bag {
+    items: List<String>,
+    count: Int
+}
+
+fn main(io: Stdout) {
+    var bag = Bag(items: [], count: 0)
     var i = 0
     while i < 100000 {
         let line = "x".repeat(1000)
@@ -83,15 +72,26 @@ const CHURNS: &str = r#"fn main(io: Stdout) {
         items.push(line)
         items.push("{line}{i}")
         let count = |extra: Int| items.len() + extra
-        i = i + count(0) - 1
+        bag.items.push("item {i}")
+        let copy = bag
+        bag.count = copy.count + count(0) - 1
+        if bag.items.len() > 50 {
+            bag = Bag(items: [], count: bag.count)
+        }
+        i = i + 1
     }
-    let _ = io.println("done {i}")
+    let n = bag.count
+    let _ = io.println("done {n}")
 }
 "#;
 
+/// The report of a run stopped by a 64 MiB limit.
+const REPORT_64_MIB: &str = "error[P0040]: memory limit reached: the program's values take \
+     more than 67108864 bytes (`--max-memory=67108864`)";
+
 #[test]
 fn a_max_memory_of_zero_a_negative_number_or_no_number_is_a_usage_error() {
-    let dir = program("malformed", GROWS);
+    let dir = program("memory_malformed", GROWS);
     for value in ["0", "-1", "abc", "", "1.5", "+5", "99999999999999999999"] {
         let flag = format!("--max-memory={value}");
         let output = oskac_in(&dir, &["run", "main.osk", &flag]);
@@ -115,9 +115,9 @@ fn a_max_memory_of_zero_a_negative_number_or_no_number_is_a_usage_error() {
 
 #[test]
 fn max_memory_on_any_command_but_run_is_a_usage_error() {
-    let dir = program("other_commands", GROWS);
+    let dir = program("memory_other_commands", GROWS);
     for command in ["check", "test", "build", "fix"] {
-        let output = oskac_in(&dir, &[command, "main.osk", LIMIT]);
+        let output = oskac_in(&dir, &[command, "main.osk", "--max-memory=67108864"]);
         assert_eq!(output.status.code(), Some(2), "{command}");
         assert!(
             String::from_utf8_lossy(&output.stderr).contains("\nUSAGE:\n"),
@@ -126,65 +126,70 @@ fn max_memory_on_any_command_but_run_is_a_usage_error() {
     }
 }
 
-/// The address space (Linux) or resident memory (macOS) a run under a
-/// 64 MiB limit stays within: the interpreter's thread reserves a 256 MiB
-/// stack, and `oskac` itself and a native program's stack need some
-/// more, but a program that ran on past the limit would pass it.
-fn bound_mib(backend: &[&str]) -> u64 {
-    if backend.is_empty() {
-        256
-    } else {
-        512
+/// On every platform: a list that grows without end, directly or in a
+/// struct's field, stops with `P0040` on both backends. (Where the
+/// platform lets a test measure it, `both_backends` also shows the run
+/// stays near the limit; Windows has no such measure here.)
+#[test]
+fn a_list_that_grows_without_end_stops_with_p0040() {
+    for (name, src) in [
+        ("memory_grows", GROWS),
+        ("memory_grows_in_a_field", GROWS_IN_A_FIELD),
+    ] {
+        let dir = program(name, src);
+        for backend in BACKENDS {
+            let mut args = vec!["run", "--no-cache", "--max-memory=67108864", "main.osk"];
+            args.extend_from_slice(backend);
+            let output = oskac_in(&dir, &args);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(
+                output.status.code(),
+                Some(101),
+                "{name} {backend:?}: {stderr}"
+            );
+            assert!(output.stdout.is_empty());
+            assert!(
+                stderr.starts_with("main.osk:") && stderr.contains(REPORT_64_MIB),
+                "{name} {backend:?}: {stderr}"
+            );
+            assert_eq!(stderr.lines().count(), 1, "{name} {backend:?}: {stderr}");
+        }
     }
 }
 
+/// The interpreter checks a value before it makes it: one text over the
+/// limit is never built, and the report spans the call that would have
+/// made it. Natively the runtime checks each block before it allocates
+/// it.
 #[test]
-fn a_list_that_grows_without_end_stops_near_the_limit_with_p0040() {
-    let dir = program("grows", GROWS);
-    for backend in BACKENDS {
-        let mut args = vec!["run"];
-        args.extend_from_slice(backend);
-        args.extend([LIMIT, "main.osk"]);
-        let output = oskac_within(&dir, &args, bound_mib(backend));
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(output.status.code(), Some(101), "{backend:?}: {stderr}");
-        assert!(output.stdout.is_empty());
-        assert!(
-            stderr.contains(
-                "error[P0040]: memory limit reached: the program's values take more than \
-                 67108864 bytes (`--max-memory=67108864`)"
-            ),
-            "{backend:?}: {stderr}"
-        );
-        assert!(stderr.starts_with("main.osk:"), "{backend:?}: {stderr}");
-    }
-}
-
-/// The bound above means something: without the limit, the same run does
-/// not stay within it.
-#[cfg(target_os = "linux")]
-#[test]
-fn without_the_limit_the_list_grows_past_the_bound() {
-    let dir = program("grows_unlimited", GROWS);
-    for backend in BACKENDS {
-        let mut args = vec!["run"];
-        args.extend_from_slice(backend);
-        args.push("main.osk");
-        let output = oskac_within(&dir, &args, bound_mib(backend));
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_ne!(output.status.code(), Some(0), "{backend:?}");
-        assert!(!stderr.contains("P0040"), "{backend:?}: {stderr}");
-    }
+fn a_text_over_the_limit_is_never_made() {
+    let dir = program("memory_one_huge_text", ONE_HUGE_TEXT);
+    let output = oskac_in(
+        &dir,
+        &["run", "--interpret", "--max-memory=67108864", "main.osk"],
+    );
+    assert_eq!(output.status.code(), Some(101));
+    assert!(output.stdout.is_empty());
+    assert_golden(
+        "memory_one_huge_text.txt",
+        &String::from_utf8_lossy(&output.stderr),
+    );
+    let output = oskac_in(
+        &dir,
+        &["run", "--no-cache", "--max-memory=67108864", "main.osk"],
+    );
+    assert_eq!(output.status.code(), Some(101));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains(REPORT_64_MIB));
 }
 
 #[test]
 fn a_program_that_allocates_and_frees_under_the_limit_runs_to_the_end() {
-    let dir = program("churns", CHURNS);
+    let dir = program("memory_churns", CHURNS);
     for backend in BACKENDS {
-        let mut args = vec!["run"];
-        args.extend_from_slice(backend);
         // 1 MiB: far less than the 200 MB the program makes in all.
-        args.extend(["--max-memory=1048576", "main.osk"]);
+        let mut args = vec!["run", "--no-cache", "--max-memory=1048576", "main.osk"];
+        args.extend_from_slice(backend);
         let output = oskac_in(&dir, &args);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(0), "{backend:?}: {stderr}");
@@ -194,49 +199,33 @@ fn a_program_that_allocates_and_frees_under_the_limit_runs_to_the_end() {
 
 #[test]
 fn the_memory_limit_report_is_one_json_object_with_format_json() {
-    let dir = program("grows_json", GROWS);
+    let dir = program("memory_grows_json", GROWS);
     for backend in BACKENDS {
-        let mut args = vec!["run"];
+        let mut args = vec![
+            "run",
+            "--no-cache",
+            "--max-memory=1048576",
+            "--format=json",
+            "main.osk",
+        ];
         args.extend_from_slice(backend);
-        args.extend(["--max-memory=1048576", "--format=json", "main.osk"]);
         let output = oskac_in(&dir, &args);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(101), "{backend:?}: {stderr}");
         assert_eq!(stderr.lines().count(), 1, "{backend:?}: {stderr}");
-        let report = common::Json::parse(stderr.trim_end());
-        assert_eq!(
-            report.get("code"),
-            Some(&common::Json::Str("P0040".to_string()))
-        );
-        assert_eq!(
-            report.get("path"),
-            Some(&common::Json::Str("main.osk".to_string()))
-        );
+        let report = Json::parse(stderr.trim_end());
+        assert_eq!(report.get("code"), Some(&Json::Str("P0040".to_string())));
+        assert_eq!(report.get("path"), Some(&Json::Str("main.osk".to_string())));
     }
 }
 
 #[test]
 fn a_program_on_standard_input_runs_under_the_memory_limit() {
-    use std::io::Write;
-    let dir = Scratch::new("run-limits-memory", "stdin");
+    let dir = program("memory_stdin", "");
     for backend in BACKENDS {
-        let mut args = vec!["run", "-", "--max-memory=1048576"];
+        let mut args = vec!["run", "-", "--no-cache", "--max-memory=1048576"];
         args.extend_from_slice(backend);
-        let mut child = Command::new(env!("CARGO_BIN_EXE_oskac"))
-            .args(&args)
-            .current_dir(&*dir)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .expect("oskac should start");
-        child
-            .stdin
-            .take()
-            .expect("a stdin")
-            .write_all(GROWS.as_bytes())
-            .expect("should write the program");
-        let output = child.wait_with_output().expect("oskac should finish");
+        let output = oskac_with_stdin(&dir, &args, GROWS);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(101), "{args:?}: {stderr}");
         assert!(
@@ -266,16 +255,66 @@ fn explain_p0040_explains_the_memory_limit() {
 ))]
 mod differential;
 
-/// Each backend stops with `P0040` and exit code 101, where it may; a
-/// program under the limit gives the same output on both; and the limit
-/// changes nothing for a run without it.
+/// Where the host has a native backend (Linux and macOS): each backend
+/// stops with `P0040` and exit code 101, where it may, within a measured
+/// bound; a program under the limit gives the same output on both; and
+/// the limit changes nothing for a run without it.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos"),
     any(target_arch = "aarch64", target_arch = "x86_64")
 ))]
 mod both_backends {
-    use super::differential::{assert_same, run, Case};
-    use super::{program, CHURNS, GROWS};
+    use std::path::Path;
+
+    use super::differential::{assert_same, run, within_memory, Case};
+    use super::{program, CHURNS, GROWS, REPORT_64_MIB};
+
+    /// The memory (Linux: address space; macOS: peak resident memory) a
+    /// run under a 64 MiB limit stays within: the interpreter's thread
+    /// reserves a 256 MiB stack, and `oskac` itself and a native program's
+    /// stack need some more, but a program that ran on past the limit
+    /// would pass it.
+    fn bound_mib(backend: &[&str]) -> u64 {
+        if backend.is_empty() {
+            256
+        } else {
+            512
+        }
+    }
+
+    fn oskac_within(dir: &Path, args: &[&str], mib: u64) -> std::process::Output {
+        within_memory(Path::new(env!("CARGO_BIN_EXE_oskac")), args, dir, mib)
+    }
+
+    #[test]
+    fn a_list_that_grows_without_end_stops_near_the_limit() {
+        let dir = program("memory_grows_bounded", GROWS);
+        for backend in super::BACKENDS {
+            let mut args = vec!["run", "--no-cache", "--max-memory=67108864", "main.osk"];
+            args.extend_from_slice(backend);
+            let output = oskac_within(&dir, &args, bound_mib(backend));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(output.status.code(), Some(101), "{backend:?}: {stderr}");
+            assert!(stderr.contains(REPORT_64_MIB), "{backend:?}: {stderr}");
+        }
+    }
+
+    /// The bound means something: without the limit, the same run does
+    /// not stay within it. (Linux only: macOS measures after the run, which
+    /// here would not end.)
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn without_the_limit_the_list_grows_past_the_bound() {
+        let dir = program("memory_grows_unbounded", GROWS);
+        for backend in super::BACKENDS {
+            let mut args = vec!["run", "--no-cache", "main.osk"];
+            args.extend_from_slice(backend);
+            let output = oskac_within(&dir, &args, bound_mib(backend));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_ne!(output.status.code(), Some(0), "{backend:?}");
+            assert!(!stderr.contains("P0040"), "{backend:?}: {stderr}");
+        }
+    }
 
     #[test]
     fn each_backend_stops_a_growing_list_with_p0040() {

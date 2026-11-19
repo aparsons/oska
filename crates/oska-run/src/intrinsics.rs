@@ -19,6 +19,7 @@ use crate::data;
 use crate::host::{Host, RootHandle};
 use crate::html;
 use crate::interp::{Interpreter, Stream};
+use crate::memory;
 use crate::panics::{codes, Panic};
 use crate::tasks;
 use crate::testing;
@@ -140,6 +141,15 @@ fn io_result<T>(result: io::Result<T>, ok: impl FnOnce(T) -> Value) -> Value {
     }
 }
 
+/// [`io_result`] for a text read from outside, counted under
+/// `--max-memory` once read, at `span`.
+fn io_text(result: io::Result<String>, span: Span) -> Result<Value, Panic> {
+    match result {
+        Ok(text) => Ok(Value::ok(memory::text(&text, span)?)),
+        Err(err) => Ok(io_result(Err::<(), _>(err), |()| Value::Unit)),
+    }
+}
+
 // ---- Standard streams --------------------------------------------------
 
 // The program's writes to stdout and stderr go through the interpreter,
@@ -168,10 +178,14 @@ fn stderr_println(
 }
 
 /// `Stdin.read_line(self)`: the next line, or `None` at end of input.
-fn stdin_read_line(host: &mut dyn Host, _: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(io_result(host.read_line(), |line| {
-        Value::option(line.map(|l| Value::str(&l)))
-    }))
+fn stdin_read_line(host: &mut dyn Host, _: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    match host.read_line() {
+        Ok(line) => {
+            let line = line.map(|l| memory::text(&l, span)).transpose()?;
+            Ok(Value::ok(Value::option(line)))
+        }
+        Err(err) => Ok(io_result(Err::<(), _>(err), |()| Value::Unit)),
+    }
 }
 
 /// `dbg(value)`: print `value` to stderr for debugging, and return it. A
@@ -292,9 +306,10 @@ fn args_get(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic>
 }
 
 /// `Env.get(self, name)`: the variable, or `None` when it is not set.
-fn env_get(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn env_get(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
     let value = host.env_var(text(&args, 1));
-    Ok(Value::option(value.map(|v| Value::str(&v))))
+    let value = value.map(|v| memory::text(&v, span)).transpose()?;
+    Ok(Value::option(value))
 }
 
 /// `Env.secret(self, name)`: the variable, as a `Secret`. The signature
@@ -547,7 +562,7 @@ fn root_for(fs: &FsCap, intent: Intent) -> io::Result<&RootHandle> {
 
 /// `DirRead.read_to_string(self, path)`: the path is walked beneath the
 /// root's handle (`confine.rs`).
-fn fs_read_to_string(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn fs_read_to_string(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
     let raw = args[1].fields()[0].as_str();
     let result = root_for(fs_cap(&args[0]), Intent::Read).and_then(|root| {
         let names = confine::names(raw)?;
@@ -559,21 +574,28 @@ fn fs_read_to_string(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<V
         }
         host.read_file_beneath(root, &names)
     });
-    Ok(io_result(result, |text| Value::str(&text)))
+    io_text(result, span)
 }
 
 /// `DirRead.list_dir(self, path)`: the names of the entries of the
 /// directory, sorted. The path is walked beneath the root's handle, and
 /// `.` lists the root.
-fn fs_list_dir(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn fs_list_dir(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
     let raw = args[1].fields()[0].as_str();
     let result = root_for(fs_cap(&args[0]), Intent::Read).and_then(|root| {
         let names = confine::names(raw)?;
         host.list_dir_beneath(root, &names)
     });
-    Ok(io_result(result, |names| {
-        Value::List(Rc::new(names.iter().map(|n| Value::str(n)).collect()))
-    }))
+    match result {
+        Ok(names) => {
+            let names = names
+                .iter()
+                .map(|n| memory::text(n, span))
+                .collect::<Result<Vec<Value>, Panic>>()?;
+            Ok(Value::ok(memory::list(names, span)?))
+        }
+        Err(err) => Ok(io_result(Err::<(), _>(err), |()| Value::Unit)),
+    }
 }
 
 /// `DirWrite.write(self, path, contents)`: `path` ends in a plain name,
@@ -601,9 +623,9 @@ fn fs_create_dir(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value
 
 /// `FileRead.read_to_string(self)`: the file's text, opened by its name
 /// beneath the parent directory's handle (`confine.rs`).
-fn file_read_to_string(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn file_read_to_string(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
     let result = file_root(&args[0]).and_then(|root| host.read_file_beneath(root, &[]));
-    Ok(io_result(result, |text| Value::str(&text)))
+    io_text(result, span)
 }
 
 /// `FileWrite.write(self, contents)`: creates the file, or replaces what
@@ -685,8 +707,8 @@ fn todo(_: &mut dyn Host, _: Vec<Value>, span: Span) -> Result<Value, Panic> {
 }
 
 /// `Int.to_string(self)`: the integer in decimal.
-fn int_to_string(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(Value::str(&args[0].as_int().to_string()))
+fn int_to_string(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    memory::text(&args[0].as_int().to_string(), span)
 }
 
 /// `Untrusted<String>.assume_trusted(self)`: the text itself. Trust is a
