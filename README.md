@@ -32,11 +32,11 @@ fn main(io: Stdout) -> Result<(), IoError> {
 oskac check hello.osk       # type-check and print each function's authority
 oskac run hello.osk         # check, then run
 oskac test hello.osk        # run the file's test blocks
-oskac build hello.osk       # compile to a static Linux executable, ./hello
-oskac build hello.osk --target linux-x86_64   # or for another platform (--target all: every one)
+oskac build hello.osk       # compile to an executable for this machine, ./hello
+oskac build hello.osk --target macos-aarch64  # or for another platform (--target all: every one)
 ```
 
-`oskac build` works on every host and for `--target linux-aarch64` or `--target linux-x86_64` from either: it writes the machine code and the executable itself, with no assembler, linker or C library, and the same program gives the same bytes on every host. On aarch64 and x86_64 Linux (a Raspberry Pi, an arm64 or x86_64 server, most CI machines), `oskac run` and `oskac test` compile the program natively and run it, and `--interpret` selects the interpreter. Every other host runs programs on the interpreter until it has a native backend of its own. Both backends print the same output, reports and exit codes. See [platform support](docs/guide/cli-reference.md#platform-support).
+`oskac build` works on every host, for `--target linux-aarch64`, `linux-x86_64`, `macos-aarch64` or `macos-x86_64` from any of them: it writes the machine code and the executable itself, with no assembler or linker, and the same program gives the same bytes on every host. A Linux executable is static; a macOS one calls the system through `libSystem` and is ad-hoc signed ([signing for macOS](docs/guide/macos-signing.md)). On Linux and macOS, on aarch64 or x86_64, `oskac run` and `oskac test` compile the program natively and run it, and `--interpret` selects the interpreter. Windows runs programs on the interpreter until it has a native backend of its own. Both backends print the same output, reports and exit codes. See [platform support](docs/guide/cli-reference.md#platform-support).
 
 ## A package
 
