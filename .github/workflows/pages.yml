@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - run: cargo build --release --locked -p oskac
       # The generator publishes its own authority report, as the checker
@@ -64,7 +64,7 @@ jobs:
       # keep them, so security.txt would silently not be deployed. Stay on
       # v3, and see `security_policy.rs`, which fails if this step would
       # drop hidden files.
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: _site
 
@@ -80,7 +80,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
 
   smoke:
     needs: deploy
@@ -88,7 +88,7 @@ jobs:
     # Its curl retries can take minutes.
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: https://oskalang.dev/ answers 200
         run: |
           status=$(curl --silent --show-error --output /dev/null \

@@ -228,10 +228,72 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
     timeout-minutes: 10
 YAML
 expect_pass "a step that uses an action is not a reusable workflow" "$dir"
+
+# Action pins (#290). A pin is a full commit SHA with the version after it.
+sha=11d5960a326750d5838078e36cf38b85af677262
+
+# One step that uses `ref`: pin_tree REF, prints the tree.
+pin_tree() {
+  local dir
+  dir=$(tree)
+  workflow "$dir" ci.yml <<YAML
+name: CI
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: $1
+YAML
+  printf '%s\n' "$dir"
+}
+
+expect_refused "a tag pin" "$(pin_tree 'actions/checkout@v4')" \
+  ".github/workflows/ci.yml:9: uses: actions/checkout@v4 is not pinned"
+expect_refused "a full version tag pin" "$(pin_tree 'actions/checkout@v4.4.0 # v4.4.0')" \
+  ".github/workflows/ci.yml:9: uses: actions/checkout@v4.4.0 is not pinned"
+expect_refused "a branch pin" "$(pin_tree 'actions/checkout@main')" \
+  ".github/workflows/ci.yml:9: uses: actions/checkout@main is not pinned"
+expect_refused "a short SHA" "$(pin_tree 'actions/checkout@11d5960 # v4.4.0')" \
+  ".github/workflows/ci.yml:9: uses: actions/checkout@11d5960 is not pinned"
+expect_refused "an upper-case SHA" "$(pin_tree "actions/checkout@${sha^^} # v4.4.0")" \
+  "is not pinned"
+expect_refused "no ref" "$(pin_tree 'actions/checkout')" \
+  ".github/workflows/ci.yml:9: uses: actions/checkout is not pinned"
+expect_refused "a SHA with no version comment" "$(pin_tree "actions/checkout@$sha")" \
+  ".github/workflows/ci.yml:9: uses: actions/checkout@$sha has no version comment"
+expect_pass "a SHA pin with a version comment" "$(pin_tree "actions/checkout@$sha # v4.4.0")"
+expect_pass "a quoted SHA pin" "$(pin_tree "'actions/checkout@$sha' # v4.4.0")"
+expect_pass "an action in a subdirectory" "$(pin_tree "github/codeql-action/init@$sha # v3.0.0")"
+expect_pass "a local action" "$(pin_tree './.github/actions/setup')"
+
+dir=$(tree)
+workflow "$dir" ci.yml <<YAML
+name: CI
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@$sha # v4.4.0
+      - uses: actions/upload-artifact@v4
+YAML
+expect_refused "one tag pin among SHA pins names its line" "$dir" \
+  ".github/workflows/ci.yml:9: uses: actions/upload-artifact@v4 is not pinned"
+out=$("$guard" "$dir" 2>&1 || true)
+if grep -qF 'ci.yml:8:' <<<"$out"; then
+  printf 'FAIL the SHA pin beside a tag pin was reported\n%s\n' "$out" >&2
+  failures=$((failures + 1))
+else
+  passed=$((passed + 1))
+fi
 
 dir=$(tree)
 workflow "$dir" ci.yml <<'YAML'
