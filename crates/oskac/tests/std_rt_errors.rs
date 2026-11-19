@@ -55,3 +55,37 @@ fn each_platform_s_errno_table_is_oskas_wording_for_every_number() {
         }
     }
 }
+
+/// Windows' part is sparse, since Win32 codes run to 1460: every pair is
+/// `oska-sys`'s `WINDOWS_ERRORS` code worded by its kind, every code there
+/// has a pair, and the table's dense part is empty.
+#[test]
+fn windows_errors_are_oskas_wording_for_each_win32_code() {
+    let source = oska_check::STD_RT_SOURCE;
+    let head = "fn windows_errors() -> String {\n    \"";
+    let start = source.find(head).expect("the wordings") + head.len();
+    let end = start + source[start..].find('"').expect("their end");
+    let pairs: Vec<(i32, &str)> = source[start..end]
+        .split('|')
+        .map(|pair| {
+            let (code, wording) = pair.split_once('=').expect("code=wording");
+            (code.parse().expect("a code"), wording)
+        })
+        .collect();
+    let codes: Vec<i32> = oska_sys::WINDOWS_ERRORS
+        .iter()
+        .map(|(code, _)| *code)
+        .collect();
+    assert_eq!(
+        pairs.iter().map(|(code, _)| *code).collect::<Vec<_>>(),
+        codes
+    );
+    for (code, wording) in pairs {
+        assert_eq!(
+            oska_sys::system_wording(oska_sys::WINDOWS_ERRORS, code),
+            wording,
+            "Win32 error {code}"
+        );
+    }
+    assert_eq!(table_field("windows_x86_64", "errors_count"), 0);
+}

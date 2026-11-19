@@ -2530,6 +2530,9 @@ fn io_error_text(message: String) -> IoError {
 // Oska's wording for the kind of failure the system error `errno` is:
 // `I/O error` for a number whose kind has no wording of its own.
 fn errno_message(errno: Int) -> String {
+    if on_windows() {
+        return windows_error_message(errno)
+    }
     let platform = rt_mem_platform()
     if errno < 1 || errno > platform.errors_count {
         return "I/O error"
@@ -2568,6 +2571,40 @@ fn errno_message(errno: Int) -> String {
 // `oska-sys`.
 fn system_errors() -> String {
     "permission denied|not found||interrupted|||||||would block|out of memory|permission denied|||resource busy|already exists|cannot move across devices||not a directory|is a directory|invalid input|||||file too large|no space left on device|not seekable|read-only file system|too many links|broken pipe||||invalid file name||not supported|directory not empty||||||||||||||||||||||||||||||||||||||||||||||||||||||||not supported|||||||||||||||timed out||||||||||||quota exceeded||||||||||||permission denied|not found||interrupted||||||||out of memory|permission denied|||resource busy|already exists|cannot move across devices||not a directory|is a directory|invalid input|||||file too large|no space left on device|not seekable|read-only file system|too many links|broken pipe|||would block||||||||||not supported|||||||||||||||timed out|||invalid file name|||directory not empty|||quota exceeded|||||||||not supported||||||||||||||||||||||||not supported||||"
+}
+
+// Oska's wording for the kind of the Win32 error `code`, or `I/O error`.
+// Win32 codes run to 1460, so Windows' part is sparse: `code=wording`
+// pairs separated by `|`, from `oska-sys`'s `WINDOWS_ERRORS` worded by
+// their kinds, which `oskac`'s `std_rt_errors.rs` checks.
+fn windows_error_message(code: Int) -> String {
+    let object = rt_mem_text(windows_errors())
+    let data = text_data(object)
+    let length = text_length(object)
+    var at = 0
+    while at < length {
+        var n = 0
+        while rt_mem_load8(rt_mem_add(data, at)) != 61 {
+            n = n * 10 + rt_mem_load8(rt_mem_add(data, at)) - 48
+            at = at + 1
+        }
+        at = at + 1
+        var end = at
+        while end < length && rt_mem_load8(rt_mem_add(data, end)) != 124 {
+            end = end + 1
+        }
+        if n == code {
+            return rt_mem_as_text(text_of(rt_mem_add(data, at), end - at))
+        }
+        at = end + 1
+    }
+    "I/O error"
+}
+
+// Windows' system errors with a wording of their own, as
+// `windows_error_message` reads them.
+fn windows_errors() -> String {
+    "2=not found|3=not found|5=permission denied|8=out of memory|14=out of memory|15=not found|17=cannot move across devices|19=read-only file system|39=no space left on device|53=not found|67=not found|80=already exists|87=invalid input|109=broken pipe|112=no space left on device|120=not supported|121=timed out|123=invalid file name|132=not seekable|145=directory not empty|161=invalid file name|170=resource busy|183=already exists|206=invalid file name|223=file too large|232=broken pipe|258=timed out|267=not a directory|336=is a directory|1142=too many links|1295=quota exceeded|1460=timed out"
 }
 
 // ---- Standard input --------------------------------------------------------
