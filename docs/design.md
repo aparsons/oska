@@ -432,7 +432,7 @@ Recorded on 2026-11-19, `oskac` 0.4.0, by `bench.yml` on GitHub's macOS runners 
 
 - **Program logic** is native's on macOS as on Linux: 36 to 135 times faster than the interpreter on both Macs.
 - **Bulk text on the Intel Mac** is the one workload where native is slower than the interpreter, 44 ms against 30. The interpreter does `replace` and `trim` in Rust, so it is already as fast as the machine allows, and the native runtime's byte loops are slower than Rust's on this older processor. It is the workload already expected to be about 1x.
-- **The Intel runner is slow overall.** Its interpreter takes two to three times as long as on the Linux x86_64 runner, so compare the speedups, not the times, between machines. The macOS figures include each call into `libSystem`, where Linux makes the system call directly. The site, which writes many files, still lands within the Linux runners' 18x to 24x.
+- **The Intel runner is slow overall.** Its interpreter takes two to three times as long as on the Linux x86_64 runner, so compare the speedups, not the times, between machines. The macOS figures include each call into `libSystem`, where Linux makes the system call directly. The site, which writes many files, still lands at 23x and 25x, beside the Linux runners' 18x to 24x.
 
 ### Values
 
