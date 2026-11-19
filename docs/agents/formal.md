@@ -4,7 +4,9 @@ Oska Core's Lean model (ADR 0018) lives in `formal/lean/`, and the TLA+ models o
 
 ## Keep the Lean model in step
 
-Oska Core's model is in `formal/lean/OskaFormal/Core/`. `Syntax.lean` covers exactly the core IR version that `crates/oska-check/src/core_ir.rs` exports. `Typing.lean` holds the typing rules, `Semantics.lean` the small-step semantics with the interpreter's panics, and `Soundness.lean` the proofs of progress and preservation. A new core IR version extends all four.
+Oska Core's model is in `formal/lean/OskaFormal/Core/`. `Syntax.lean` covers exactly the core IR version that `crates/oska-check/src/core_ir.rs` exports. `Typing.lean` holds the typing rules, `Semantics.lean` the small-step semantics with the interpreter's panics, and `Soundness.lean` the proofs of progress and preservation. `Eval.lean` is the executable semantics: `step`, proved to take exactly the steps of `Semantics.lean` (`step_sound`, `step_complete`), and `run`, which repeats it within a fuel. `CoreIR.lean` reads core IR. A new core IR version extends all six.
+
+The Lean reference is the `oska_core` executable (`formal/lean/OskaReference.lean`): it reads core IR and prints how `main` ends (`result ()` and `exit 0`, or `panic CODE` and `exit 101`), and refuses input that is not core IR with exit 2. `cargo test -p oska-run --test lean_reference` builds it with `lake build oska_core`, runs every runtime test program that the export accepts on it and on the interpreter, fails on any difference, and prints how many programs it covered and how many the export refused. Without Lean it skips, except where `OSKA_LEAN_REFERENCE=required`, which `scripts/check.sh` sets in CI. To cover a construct, add a runtime test whose program is in Oska Core as a whole string literal (`crates/oska-run/tests/oska_core.rs`); a program built with `format!` is not collected.
 
 - A change to how a construct of Oska Core is typed or run (the checker or the interpreter) updates the Lean model in the same pull request. Do not defer it to a follow-up issue.
 - When the change touches Oska Core and the Lean model does not need to change, say why in the pull request's Summary.
