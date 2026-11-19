@@ -36,7 +36,7 @@ oskac run hello.osk
 Hello from Oska!
 ```
 
-`oskac run` checks the program first and refuses to run it if the check reports anything. On aarch64 and x86_64 Linux it then compiles the program to native code and runs that; on other hosts it runs it on the interpreter. Either way the output is the same. To get an executable you can copy to a Linux machine and run without `oskac`, use `oskac build hello.osk`, on any host: it writes `./hello` for your own platform, or for another one with `--target linux-x86_64` or `--target linux-aarch64`.
+`oskac run` checks the program first and refuses to run it if the check reports anything. On Linux and macOS it then compiles the program to native code and runs that; on Windows it runs it on the interpreter. Either way the output is the same. To get an executable you can copy to another machine and run without `oskac`, use `oskac build hello.osk`, on any host: it writes `./hello` for your own platform, or for another one with `--target`, such as `--target linux-x86_64` or `--target macos-aarch64`.
 
 ## 4. See the sandbox work
 

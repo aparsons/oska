@@ -81,7 +81,7 @@ USAGE:
 | `--update-baseline=<file>` | `check` | Write the program's [authority baseline](#authority-baseline) to `<file>`, only when there are no diagnostics. Not with `--baseline`; any other command refuses it as a usage error. |
 | `--integration` | `test` | Also run the tests marked `#[integration]`, on the real operating system. |
 | `--event=post-edit`, `--event=stop` | `hook` | The event the hook handles. It is required. |
-| `--interpret` | `run`, `test` | Run on the interpreter, on aarch64 and x86_64 Linux and macOS too, where the program is otherwise compiled and run natively. See [platform support](#platform-support). The other commands accept the flag and ignore it. |
+| `--interpret` | `run`, `test` | Run on the interpreter, on Linux and macOS too, where the program is otherwise compiled and run natively. See [platform support](#platform-support). The other commands accept the flag and ignore it. |
 | `--target=<platform>` | `build` | Build for this platform, named as release assets name `oskac` builds (`linux-aarch64`, ...), or with `all` for every platform with a backend. Also written `--target <platform>`. Any other command given it is a usage error (exit code 2). See [`oskac build`](#oskac-build). |
 | `--dry-run` | `fix` | Print the diff the fixes would make, and write nothing. The other commands accept the flag and ignore it. |
 | `--placeholders` | `fix` | Also apply fixes whose applicability is `placeholders`, such as `E0253`'s `todo()` arms. The other commands accept the flag and ignore it. |
@@ -166,7 +166,7 @@ With `--format=json`, the check object gains `authority_diff` as its last key:
 
 ## `oskac run`
 
-`oskac run <file.osk> [--format=json] [--interpret] [-- args...]` checks the file and, when it has no diagnostics, runs `main` on the real operating system: compiled natively on aarch64 and x86_64 Linux, on the interpreter elsewhere or with `--interpret` (see [platform support](#platform-support)). `args.get(0)` in the program is the file's path, or the package directory as given, on either backend, and the arguments after `--` follow it unchanged.
+`oskac run <file.osk> [--format=json] [--interpret] [-- args...]` checks the file and, when it has no diagnostics, runs `main` on the real operating system: compiled natively on Linux and macOS, on the interpreter on Windows or with `--interpret` (see [platform support](#platform-support)). `args.get(0)` in the program is the file's path, or the package directory as given, on either backend, and the arguments after `--` follow it unchanged.
 
 - The program's own output goes to standard output and standard error as it runs.
 - A refused program's diagnostics, or the panic that stopped the program, go to standard error after that output: as `check` prints diagnostics, or as one JSON object per line with `--format=json`.
@@ -184,7 +184,7 @@ See [debugging](debugging.md) for panics and the [runtime notes](../runtime.md) 
 
 ## `oskac test`
 
-`oskac test <file.osk> [--format=json] [--integration] [--interpret]` checks the file and runs its `test` blocks in source order: natively on aarch64 and x86_64 Linux, one process per test, or on the interpreter, as `run` chooses. The report is the same either way. The report goes to standard output: one line per test, the failures, and a summary, or one JSON object with `--format=json`. A refused file's diagnostics go to standard error, or into the JSON report's `diagnostics`. See [testing](testing.md).
+`oskac test <file.osk> [--format=json] [--integration] [--interpret]` checks the file and runs its `test` blocks in source order: natively on Linux and macOS, one process per test, or on the interpreter, as `run` chooses. The report is the same either way. The report goes to standard output: one line per test, the failures, and a summary, or one JSON object with `--format=json`. A refused file's diagnostics go to standard error, or into the JSON report's `diagnostics`. See [testing](testing.md).
 
 | Exit code | Meaning |
 | --- | --- |
@@ -269,11 +269,12 @@ The published settings, `https://oskalang.dev/agent-setup/claude-settings.json`,
 | Intel macOS | Native: compiled, then run | x86_64 macOS executable |
 | Any other (Windows) | Interpreter | aarch64 Linux executable |
 
-On aarch64 and x86_64 Linux and macOS, `run` and `test` compile the program as `build` does, for the host, and run the executable, which is 40 to 120 times faster on program logic, such as loops, lists and calls (see the [benchmark](../design.md#native-backend-benchmark)). `--interpret` runs the interpreter instead, to compare the backends when a native result looks wrong. Every other host keeps the interpreter until it has a backend of its own. Either way the output, the reports and the exit codes are the same: the two backends are held to it by the differential suite.
+On Linux and macOS, `run` and `test` compile the program as `build` does, for the host, and run the executable, which is 40 to 120 times faster on program logic, such as loops, lists and calls (see the [benchmark](../design.md#native-backend-benchmark)). `--interpret` runs the interpreter instead, to compare the backends when a native result looks wrong. Windows keeps the interpreter until it has a backend of its own. Either way the output, the reports and the exit codes are the same: the two backends are held to it by the differential suite.
 
 - The executable is written to a new private directory under the temporary directory (`TMPDIR`, else `/tmp`): a random name, created with mode `0700`, never reused, so no other user can replace or read it. It is removed as soon as the program has started, or for `test` once every test has run.
 - A program the native backend cannot compile yet (`E0390`) runs on the interpreter, after one line on stderr that says so and why, such as `app.osk:3:13: note: running on the interpreter: ... (E0390)` (with `--format=json`, one JSON object with `"severity":"note"`). It is a checked program that the interpreter runs, so the output is the same, only slower. `--interpret` prints no note. A program the interpreter cannot run either, such as one that imports a module with no runtime (`E0371`), gets no note: both refuse it, and the interpreter's refusal is reported.
 - If the executable cannot be written or started, for example because the temporary directory is mounted `noexec`, the command fails with `E0391`. Set `TMPDIR` to another directory or use `--interpret`.
+- A macOS executable is ad-hoc signed by `oskac`: it runs on a Mac, but Gatekeeper refuses it after a download. To distribute one, sign it with your Developer ID and notarize it: see [Signing and notarizing for macOS](macos-signing.md).
 
 ## `oskac self`
 

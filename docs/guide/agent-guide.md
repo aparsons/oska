@@ -7,7 +7,7 @@ How an AI coding agent, or any script, should drive `oskac`. Oska is built for t
 1. **Check.** `oskac check file.osk --format=json`. Read `diagnostics`.
 2. **Apply machine fixes.** `oskac fix file.osk` applies every fix that is certain and checks again, until none is left. Read what it printed.
 3. **Fix the rest by hand,** choosing by `code`, one diagnostic at a time, first one first.
-4. **Run.** `oskac run file.osk --format=json -- args...`. The exit code and standard error say how it ended. On aarch64 and x86_64 Linux the program runs natively, elsewhere on the interpreter, with the same output; if a native result looks wrong, run it again with `--interpret` and report any difference.
+4. **Run.** `oskac run file.osk --format=json -- args...`. The exit code and standard error say how it ended. On Linux and macOS the program runs natively, on Windows on the interpreter, with the same output; if a native result looks wrong, run it again with `--interpret` and report any difference.
 5. **Test.** `oskac test file.osk --format=json`. Write a test for every behavior you add.
 6. **Compare the authority.** `oskac check file.osk --baseline=authority.json` compares the program with the project's saved authority and exits with 3 when it widened. A change that widens authority, or adds an audit site, is not finished until you can say why.
 7. **Release check.** `oskac check file.osk --release` must pass: no `dbg(...)` and no `todo()` left.
@@ -31,7 +31,7 @@ Every diagnostic has the same shape: `code`, `message`, `span` with its `line` a
 
 ## Building for a platform
 
-`oskac build` writes a static executable that runs without `oskac`, on any host, for `linux-aarch64` or `linux-x86_64`. Without `--target` it builds for the host's platform when that has a backend (so on x86_64 Linux the result runs on the machine that built it), else for `linux-aarch64`. To build for another machine, name the platform with `--target <platform>`, using the same names as the installers, `latest.json` and the release assets. `--target all` writes one executable per platform, named `<name>-<platform>`, into the directory `-o` names:
+`oskac build` writes an executable that runs without `oskac`, on any host, for `linux-aarch64`, `linux-x86_64`, `macos-aarch64` or `macos-x86_64`. Without `--target` it builds for the host's platform when that has a backend (so on Linux and macOS the result runs on the machine that built it), else for `linux-aarch64`. A macOS executable is ad-hoc signed, which is enough to run it on a Mac but not to pass Gatekeeper after a download: see [Signing and notarizing for macOS](macos-signing.md). To build for another machine, name the platform with `--target <platform>`, using the same names as the installers, `latest.json` and the release assets. `--target all` writes one executable per platform, named `<name>-<platform>`, into the directory `-o` names:
 
 ```sh
 oskac build app.osk --target linux-x86_64 -o app-x86_64
@@ -43,7 +43,7 @@ The second prints `{"outputs":["dist/app-linux-aarch64","dist/app-linux-x86_64"]
 `--target` is refused, with exit code 2 and nothing written, in two cases. Match on the `code`:
 
 - `E0393`: the name is not a platform. The message lists the valid names (`linux-aarch64`, `linux-x86_64`, `macos-aarch64`, `macos-x86_64`, `windows-x86_64`, and `all`). Fix the typo.
-- `E0394`: the platform is supported but has no native backend yet (Windows). The message names the release that adds it. Do not retry with another spelling; build for a Linux platform instead.
+- `E0394`: the platform is supported but has no native backend yet (Windows). The message names the release that adds it. Do not retry with another spelling; build for a Linux or macOS platform instead.
 
 Only `oskac build` takes `--target`: `run` and `test` always use the host's platform. See the [CLI reference](cli-reference.md#oskac-build).
 
