@@ -1,9 +1,12 @@
 //! Divergences the full differential corpus (#140) found between the
 //! native backend and the interpreter, each fixed and kept fixed here.
 
-#![cfg(all(
-    any(target_os = "linux", target_os = "macos"),
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        any(target_os = "linux", target_os = "macos"),
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(windows, target_arch = "x86_64")
 ))]
 
 mod differential;

@@ -5,9 +5,12 @@
 //! text, with the interpreter's panics (`P0035`, `P0036`, `P0037`).
 //! (`String` methods that make or take a `List` are in `native_lists.rs`.)
 
-#![cfg(all(
-    any(target_os = "linux", target_os = "macos"),
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        any(target_os = "linux", target_os = "macos"),
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(windows, target_arch = "x86_64")
 ))]
 
 mod differential;

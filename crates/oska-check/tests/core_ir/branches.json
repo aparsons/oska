@@ -1,5 +1,6 @@
 {
-  "core_ir_version": 1,
+  "core_ir_version": 2,
+  "types": [],
   "functions": [
     {
       "name": "sign",

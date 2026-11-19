@@ -22,7 +22,7 @@ const PLATFORM: &str = "windows-x86_64";
 
 /// The functions every Windows executable imports, by DLL, in the order
 /// of the import table (ADR 0020: the list is reviewed surface).
-const IMPORTS: [(&str, &[&str]); 2] = [
+const IMPORTS: [(&str, &[&str]); 3] = [
     (
         "KERNEL32.dll",
         &[
@@ -32,6 +32,7 @@ const IMPORTS: [(&str, &[&str]); 2] = [
             "ReadFile",
             "GetConsoleMode",
             "WriteConsoleW",
+            "ReadConsoleW",
             "VirtualAlloc",
             "VirtualFree",
             "ExitProcess",
@@ -40,6 +41,19 @@ const IMPORTS: [(&str, &[&str]); 2] = [
             "AddVectoredExceptionHandler",
             "SetThreadStackGuarantee",
             "GetSystemTimePreciseAsFileTime",
+            "CreateFileW",
+            "CloseHandle",
+            "GetFinalPathNameByHandleW",
+            "SetEndOfFile",
+        ],
+    ),
+    (
+        "ntdll.dll",
+        &[
+            "NtCreateFile",
+            "NtQueryInformationFile",
+            "NtQueryDirectoryFile",
+            "RtlNtStatusToDosError",
         ],
     ),
     ("bcryptprimitives.dll", &["ProcessPrng"]),

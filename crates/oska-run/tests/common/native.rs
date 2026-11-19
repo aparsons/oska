@@ -27,10 +27,9 @@
 //! [`super::skips::SKIPS`], by test, each with its reason.
 
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use oska_check::program::{Program, Type};
 use oska_run::{FakeWorld, RunOutcome, TestOptions, TestReport, TestStatus};
@@ -535,42 +534,11 @@ fn unshare() -> Option<PathBuf> {
 
 /// Run `command` with `stdin`, and wait for it, at most [`TIMEOUT`]: its
 /// stdout, stderr and exit code.
-fn spawn(mut command: Command, stdin: &str) -> (String, String, Option<i32>) {
-    command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command.spawn().expect("the native executable should start");
-    let mut input = child.stdin.take().expect("a stdin pipe");
-    let stdin = stdin.to_string();
-    // A program that never reads its stdin may exit before it is written.
-    let writer = std::thread::spawn(move || {
-        let _ = input.write_all(stdin.as_bytes());
-    });
-    let read = |mut pipe: Box<dyn Read + Send>| {
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let _ = pipe.read_to_end(&mut bytes);
-            String::from_utf8_lossy(&bytes).into_owned()
-        })
-    };
-    let stdout = read(Box::new(child.stdout.take().expect("a stdout pipe")));
-    let stderr = read(Box::new(child.stderr.take().expect("a stderr pipe")));
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait().expect("should wait for the process") {
-            break status;
-        }
-        if started.elapsed() > TIMEOUT {
-            let _ = child.kill();
-            panic!("the native executable ran for more than {TIMEOUT:?}");
-        }
-        std::thread::sleep(Duration::from_millis(2));
-    };
-    let _ = writer.join();
-    let stdout = stdout.join().expect("the stdout reader");
-    let stderr = stderr.join().expect("the stderr reader");
-    (stdout, stderr, status.code())
+fn spawn(command: Command, stdin: &str) -> (String, String, Option<i32>) {
+    match super::process::run_bounded(command, stdin, TIMEOUT) {
+        Ok(run) => (run.stdout, run.stderr, run.code),
+        Err(_) => panic!("the native executable ran for more than {TIMEOUT:?}"),
+    }
 }
 
 /// Every entry under `dir`, by path relative to the root, never following

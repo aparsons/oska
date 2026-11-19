@@ -122,6 +122,13 @@ pub const GLOBALS: u32 = 50;
 /// the word is not there, so the writable data is what it always was.
 const STEPS_WORD: u32 = GLOBALS;
 
+/// Under `--max-memory`, the word after the step counter's holds the
+/// report of the panic (`P0040`) that `std.rt`'s memory limit stops the
+/// program with; without the flag the word is not there. It is a fixed
+/// word, 51, so that `std.rt` can name it whether or not the step counter
+/// is there too.
+const MEMORY_REPORT_WORD: u32 = GLOBALS + 1;
+
 /// What an executable runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Entry {
@@ -298,8 +305,14 @@ pub fn program(
     }
     optimize::module(&mut lowering.functions);
     let stack = lowering.size_stack(entry);
-    // The globals, and the step counter after them under `--max-steps`.
-    let globals = GLOBALS + u32::from(limits.max_steps.is_some());
+    // The globals, then the step counter under `--max-steps`, then the
+    // memory limit's report under `--max-memory` (which keeps the counter's
+    // word, unused without `--max-steps`, so that its own word is fixed).
+    let globals = if limits.max_memory.is_some() {
+        MEMORY_REPORT_WORD + 1
+    } else {
+        GLOBALS + u32::from(limits.max_steps.is_some())
+    };
     // The most arguments any call passes, or any function takes, past
     // those the target passes in registers: they share one area after
     // the globals.
@@ -2010,6 +2023,7 @@ impl<'l, 'p> Body<'l, 'p> {
         let failed = match import.fails {
             Fails::MinusOne => -1,
             Fails::Null | Fails::NullKeepsErrno | Fails::Zero => 0,
+            Fails::Status => return self.status_error(dst),
             Fails::Never => return dst,
         };
         let done = self.label();
@@ -2046,6 +2060,41 @@ impl<'l, 'p> Body<'l, 'p> {
         });
         self.push(Inst::Label(done));
         dst
+    }
+
+    /// `status`, an `ntdll` function's `NTSTATUS`, as `std.rt` takes a
+    /// result: as it is unless negative, else `-RtlNtStatusToDosError`
+    /// of it (ADR 0020).
+    fn status_error(&mut self, status: Temp) -> Temp {
+        let platform = self.lowering.target.platform();
+        let slot = platform
+            .slot(&intrinsics::NT_STATUS_TO_ERROR)
+            .unwrap_or_default();
+        let done = self.label();
+        let zero = self.constant(0);
+        self.push(Inst::Branch {
+            cond: Cond::Ge,
+            lhs: status,
+            rhs: zero,
+            target: done,
+        });
+        let code = self.temp();
+        self.push(Inst::LibCall {
+            dst: code,
+            import: slot,
+            args: vec![status],
+            fixed: 1,
+            wide: false,
+        });
+        let zero = self.constant(0);
+        self.push(Inst::Binary {
+            op: BinOp::Sub,
+            dst: status,
+            lhs: zero,
+            rhs: code,
+        });
+        self.push(Inst::Label(done));
+        status
     }
 
     /// The address of the thread's `errno`, or on Windows its last
@@ -3176,6 +3225,31 @@ fn main(io: Stdout) {
         max_output: None,
         max_memory: None,
     };
+
+    /// Under `--max-memory` the writable data holds the memory limit's
+    /// report in word 51, past the step counter's word, whether or not the
+    /// step counter is there; the call area is unchanged.
+    #[test]
+    fn max_memory_adds_its_report_word_after_the_step_counter() {
+        assert_eq!(super::MEMORY_REPORT_WORD, 51, "std.rt names word 51");
+        for target in Target::ALL {
+            let plain = lower(target, Limits::NONE);
+            for max_steps in [None, Some(1000)] {
+                let limits = Limits {
+                    max_steps,
+                    max_output: None,
+                    max_memory: Some(1 << 20),
+                };
+                let counted = lower(target, limits);
+                assert_eq!(counted.extra_args, (super::GLOBALS + 2) * layout::WORD, "{target:?}");
+                assert_eq!(
+                    counted.data_size - counted.extra_args,
+                    plain.data_size - plain.extra_args,
+                    "{target:?}: the same call area"
+                );
+            }
+        }
+    }
 
     /// Without `--max-steps` nothing counts steps: no code reads the
     /// counter, and the writable data is the globals and the call area as
