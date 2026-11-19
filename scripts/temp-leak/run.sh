@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs a command with a private temporary directory and fails if the command
-# leaves anything in it. check.sh runs `cargo test --all` through this, so a
+# leaves anything in it. check.sh runs the workspace tests through this, so a
 # test that leaks a file or directory fails the check at once, naming what it
 # left, instead of slowly filling the shared temporary directory.
 #

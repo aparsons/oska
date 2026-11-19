@@ -30,7 +30,8 @@ bad() {
 # The stub every called script and tool becomes: logs its directory/name
 # (cargo: `cargo SUBCOMMAND`; its whole command line goes to $STUB_LOG.cargo,
 # and with a `cargo ` prefix to $STUB_LOG.args), and fails when that is
-# STUB_FAIL. The temp-leak wrapper stub then runs the command it wraps.
+# STUB_FAIL. The temp-leak wrapper stub then runs the command it wraps, and
+# the parallel test runner stub runs `cargo test` with its arguments.
 # `cargo metadata` prints $STUB_METADATA, if set, with @ROOT@ as the
 # directory it runs in.
 # shellcheck disable=SC2016 # the stub script is written out, not expanded here
@@ -42,6 +43,7 @@ if [ "$name" = "${STUB_FAIL:-}" ]; then exit 1; fi
 if [ "$name" = pass-stamp/stamp.sh ] && [ "${1:-}" = tree ]; then echo tree; fi
 if [ "$name" = pass-stamp/stamp.sh ] && [ "${1:-}" = write ]; then echo "[stamp write $2 $3]"; fi
 if [ "$name" = temp-leak/run.sh ]; then exec "$@"; fi
+if [ "$name" = parallel-test/run.sh ]; then exec cargo test "$@"; fi
 if [ "$name" = "cargo metadata" ] && [ -n "${STUB_METADATA:-}" ]; then sed "s|@ROOT@|$PWD|g" "$STUB_METADATA"; fi
 exit 0
 '

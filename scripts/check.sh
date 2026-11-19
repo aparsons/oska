@@ -519,15 +519,17 @@ fi
 if step "cargo test (private temporary directory)" --fast --cargo --docs-tests; then
   # A test that leaves a file or directory in the temporary directory fails the
   # check here, naming it, instead of slowly filling the shared /tmp.
+  # scripts/parallel-test runs several test programs at a time; plain
+  # `cargo test` runs them one after another.
   # The fast tier tests only the changed crates and their dependents
   # (fast_crates).
   if [ "$cargo_mode" = docs ]; then
     run_docs_tests
   elif [ "$tier" = fast ]; then
     # shellcheck disable=SC2046 # one word per package argument
-    scripts/temp-leak/run.sh cargo test $(fast_crates)
+    scripts/temp-leak/run.sh scripts/parallel-test/run.sh $(fast_crates)
   else
-    scripts/temp-leak/run.sh cargo test --all
+    scripts/temp-leak/run.sh scripts/parallel-test/run.sh --all
   fi
 fi
 
@@ -573,6 +575,10 @@ fi
 
 if step "temp-leak wrapper tests" --fast-when 'scripts/temp-leak/*'; then
   bash scripts/temp-leak/test.sh
+fi
+
+if step "parallel test runner tests" --fast-when 'scripts/parallel-test/*'; then
+  bash scripts/parallel-test/test.sh
 fi
 
 if step "rust-stable tests" --fast-when 'scripts/rust-stable/*'; then
