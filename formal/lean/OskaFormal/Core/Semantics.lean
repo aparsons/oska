@@ -3,8 +3,8 @@ import OskaFormal.Core.Syntax
 /-!
 # Oska Core: small-step semantics
 
-A small-step semantics of Oska Core, version 2, matching the interpreter
-(`crates/oska-run`) and the rules core IR version 2 states:
+A small-step semantics of Oska Core, version 3, matching the interpreter
+(`crates/oska-run`) and the rules core IR version 3 states:
 
 - Evaluation is left to right: an operator's `lhs` before its `rhs`, a
   call's arguments in order before the call, a block's statements in
@@ -27,6 +27,17 @@ A small-step semantics of Oska Core, version 2, matching the interpreter
   `if guard { body } else { the match of the rest }`, so a false guard
   goes on to the next arm, as in the interpreter.
 
+- A built-in call evaluates its arguments left to right. A pure one
+  (`Path`, `Result`, `read_only`, `write_only`) then steps to its value.
+  An **effect**, a call on a capability that asks the host for something
+  (`println`, `restrict_to`, `read_to_string`, `write`, `create_dir`),
+  steps to `perform req k`: the request `req`, labelled with the kind of
+  its receiver, and the expression `k r` the run goes on with once the
+  host answers `r`. The semantics does not fix the host: it allows any
+  answer `req.Allows`, so its theorems hold on every host that answers
+  so, and `Eval.lean`'s fake host is one. A run's **trace** is the list
+  of its requests (`Steps`).
+
 The interpreter's limit on call depth, which stops runaway recursion with
 a panic, is a resource limit and is not part of the semantics.
 -/
@@ -40,6 +51,12 @@ mutual
     | .unit => .unit
     | .int n => .int n
     | .bool b => .bool b
+    | .str s => .str s
+    | .path s => .path s
+    | .cap k r => .cap k r
+    | .okUnit => .okUnit
+    | .okStr s => .okStr s
+    | .err => .err
     | .local_ 0 => v
     | .local_ (i + 1) => .local_ i
     | .neg e => .neg (Expr.subst v e)
@@ -51,6 +68,7 @@ mutual
     | .construct t var fs => .construct t var (Expr.substList v fs)
     | .field b i => .field (Expr.subst v b) i
     | .match_ s arms => .match_ (Expr.subst v s) (Expr.substArms v arms)
+    | .builtin op args => .builtin op (Expr.substList v args)
 
   /-- `Expr.subst` on each expression of a list. -/
   def Expr.substList (v : Expr) : List Expr → List Expr
@@ -100,15 +118,58 @@ inductive PanicKind where
   | divisionByZero
   deriving DecidableEq, Repr
 
-/-- What one step leads to: the next expression, or a panic. -/
+/-- An **effect**: what a built-in call on a capability asks the host
+for. `kind` is the kind of its receiver, the capability it uses, whose
+root is `root`; `args` are its other arguments' values. A run's trace is
+the list of its effects. -/
+structure Request where
+  op : Builtin
+  kind : CapKind
+  root : CapRoot
+  args : List Expr
+
+/-- The answers the semantics allows the host to give a request: `Ok(())`
+or an `Err` for a write to stdout, a write or a new directory; the text
+read or an `Err` for a read; and for `restrict_to`, a capability of the
+kind it gives whose root reaches no path the receiver's does not, so
+attenuation never widens. -/
+def Request.Allows (req : Request) (r : Expr) : Prop :=
+  match req.op with
+  | .println | .write | .createDir => r = .okUnit ∨ r = .err
+  | .readToString => r = .err ∨ ∃ s, r = .okStr s
+  | .restrictTo _ =>
+    ∃ a k' root', req.kind.restrictTo = some (a, k') ∧ r = .cap k' root' ∧ root'.Within req.root
+  | _ => False
+
+/-- What one step leads to: the next expression, a panic, or an effect
+`req`, after which the run goes on with `k r` for the host's answer `r`. -/
 inductive Outcome where
   | next (e : Expr)
   | panic (kind : PanicKind)
+  | perform (req : Request) (k : Expr → Expr)
 
-/-- `f` applied to the next expression, a panic left as it is. -/
+/-- `f` applied to the next expression, or to what follows an effect, a
+panic left as it is. -/
 def Outcome.map (f : Expr → Expr) : Outcome → Outcome
   | .next e => .next (f e)
   | .panic k => .panic k
+  | .perform req k => .perform req fun r => f (k r)
+
+/-- A pure built-in call applied to its arguments' values: `Path.from`
+and `Path.new` make a path, `is_ok` and `unwrap_or` read a `Result`, and
+`read_only` and `write_only` attenuate a capability to a narrower kind
+with the same root. `none` for an effect, or for arguments of the wrong
+kind. -/
+def evalPure : Builtin → List Expr → Option Expr
+  | .pathFrom, [.str s] | .pathNew, [.str s] => some (.path s)
+  | .isOk, [.okUnit] | .isOk, [.okStr _] => some (.bool true)
+  | .isOk, [.err] => some (.bool false)
+  | .unwrapOr, [.okUnit, _] => some .unit
+  | .unwrapOr, [.okStr s, _] => some (.str s)
+  | .unwrapOr, [.err, d] => some d
+  | .readOnly k, [.cap k' r] => if k' = k then k.readOnly.map (.cap · r) else none
+  | .writeOnly k, [.cap k' r] => if k' = k then k.writeOnly.map (.cap · r) else none
+  | _, _ => none
 
 /-- The integer `n` as a result: an overflow when it is not an `Int`. -/
 def intResult (n : Int) : Outcome :=
@@ -202,6 +263,16 @@ inductive Step (P : Program) : Expr → Outcome → Prop where
       Step P b o → Step P (.field b i) (o.map fun b' => .field b' i)
   | field {type : String} {fs : List Expr} {i : Nat} {v : Expr} :
       AllValues fs → fs[i]? = some v → Step P (.field (.construct type none fs) i) (.next v)
+  | builtinArg {op : Builtin} {vs rest : List Expr} {e : Expr} {o : Outcome} :
+      AllValues vs → Step P e o →
+      Step P (.builtin op (vs ++ e :: rest)) (o.map fun e' => .builtin op (vs ++ e' :: rest))
+  | builtinPure {op : Builtin} {vs : List Expr} {v : Expr} :
+      AllValues vs → evalPure op vs = some v → Step P (.builtin op vs) (.next v)
+  /-- An effect: a built-in call on a capability of its receiver's kind
+  asks the host, and the call's value is the answer. -/
+  | builtinEffect {op : Builtin} {k : CapKind} {r : CapRoot} {vs : List Expr} :
+      op.receiver = some k → AllValues vs →
+      Step P (.builtin op (.cap k r :: vs)) (.perform ⟨op, k, r, vs⟩ fun x => x)
   | matchScrutinee {s : Expr} {arms : List Arm} {o : Outcome} :
       Step P s o → Step P (.match_ s arms) (o.map fun s' => .match_ s' arms)
   | matchSkip {v : Expr} {p : Pattern} {g : Option Expr} {body : Expr} {rest : List Arm} :
@@ -226,6 +297,7 @@ theorem value_no_step {P : Program} {v : Expr} {o : Outcome} (hv : IsValue v) :
     intro h
     cases h with
     | constructArg _ hs => exact ih _ (List.mem_append_right _ List.mem_cons_self) hs
+  | _ => intro h; cases h
 
 theorem AllValues.mid {vs rest : List Expr} {e : Expr} :
     AllValues (vs ++ e :: rest) → IsValue e := by
@@ -242,10 +314,15 @@ theorem call_step {P : Program} {name : String} {vs : List Expr} {o : Outcome}
   | callArg _ hs => exact absurd hs (value_no_step (AllValues.mid hvs))
   | call hf _ hi => exact ⟨_, _, hf, hi, rfl⟩
 
-/-- Zero or more steps of the semantics that each lead to a next
-expression. -/
-inductive Steps (P : Program) : Expr → Expr → Prop where
-  | refl (e : Expr) : Steps P e e
-  | next {e e' e'' : Expr} : Step P e (.next e') → Steps P e' e'' → Steps P e e''
+/-- Zero or more steps of the semantics, none of them a panic, and the
+**trace** of their effects, in order: `Steps P e tr e'` when `e` runs to
+`e'` performing the effects `tr`, each with an answer the semantics
+allows. -/
+inductive Steps (P : Program) : Expr → List Request → Expr → Prop where
+  | refl (e : Expr) : Steps P e [] e
+  | next {e e' e'' : Expr} {tr : List Request} :
+      Step P e (.next e') → Steps P e' tr e'' → Steps P e tr e''
+  | perform {e e'' r : Expr} {req : Request} {k : Expr → Expr} {tr : List Request} :
+      Step P e (.perform req k) → req.Allows r → Steps P (k r) tr e'' → Steps P e (req :: tr) e''
 
 end OskaFormal.Core

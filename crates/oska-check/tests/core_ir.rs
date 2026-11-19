@@ -9,9 +9,9 @@
 use std::ops::ControlFlow;
 use std::path::PathBuf;
 
-use oska_check::core_ir::{self, Refusal, CORE_IR_VERSION};
+use oska_check::core_ir::{self, Refusal, BUILTINS, CORE_IR_VERSION};
 use oska_check::program::{
-    walk, DeclarationKind, Expr, ExprKind, IntType, Pattern, Program, Stmt, Visit,
+    walk, DeclarationKind, Expr, ExprKind, IntType, Pattern, Program, Stmt, Type, Visit,
 };
 use oska_syntax::Span;
 
@@ -151,13 +151,13 @@ fn structs_enums_and_match_export_to_the_golden_form() {
 
 #[test]
 fn the_export_carries_its_version_and_is_json() {
-    assert_eq!(CORE_IR_VERSION, 2);
+    assert_eq!(CORE_IR_VERSION, 3);
     let json = core_ir::export(&program("fn one() -> Int { 1 }\n"))
         .unwrap_or_else(|refusal| panic!("should export, refused: {refusal}"));
     let value = oska_syntax::parse_json(&json).unwrap_or_else(|e| panic!("{e}: {json}"));
     assert_eq!(
         value.get("core_ir_version").and_then(|v| v.as_u64()),
-        Some(2)
+        Some(3)
     );
     assert_eq!(
         value
@@ -178,10 +178,10 @@ fn the_export_carries_its_version_and_is_json() {
 #[test]
 fn a_struct_or_enum_outside_the_core_is_refused_at_its_declaration() {
     assert_refused(
-        "struct Named { name: String }\n\
+        "struct Named { name: U8 }\n\
          fn f() -> Int { 1 }\n",
-        "the type `String`",
-        "struct Named { name: String }",
+        "the type `U8`",
+        "struct Named { name: U8 }",
     );
     assert_refused(
         "fn f() -> Int { 1 }\n\
@@ -252,7 +252,7 @@ fn a_string_literal_pattern_is_refused() {
     literal.kind = ExprKind::Str("1".to_string());
     assert_eq!(
         refusal_of(src, &program),
-        ("a string".to_string(), "1".to_string())
+        ("this literal pattern".to_string(), "1".to_string())
     );
 }
 
@@ -288,24 +288,91 @@ fn a_generic_function_is_refused_at_its_name() {
 }
 
 #[test]
-fn a_capability_is_refused_naming_its_type() {
+fn a_main_the_runtime_would_not_run_as_written_is_refused() {
+    // `main` returning a `Result` prints its error, which Oska Core does
+    // not model.
     assert_refused(
         "fn main(stdout: Stdout) -> Result<(), IoError> {\n\
          \x20   stdout.println(\"hi\")\n\
          }\n",
-        "the type `Stdout`",
-        "Stdout",
+        "a `main` that returns `Result<(), IoError>`",
+        "Result<(), IoError>",
+    );
+    // Only attenuation makes a directory capability: the runtime never
+    // grants one to `main`. The checker refuses such a `main` (`E0217`);
+    // this is what one that slipped past it would look like.
+    let src = "fn main(io: Stdout) {\n\
+               \x20   let _ = io.println(\"hi\")\n\
+               }\n";
+    let mut program = program(src);
+    program
+        .functions
+        .get_mut("main")
+        .unwrap_or_else(|| panic!("no `main`"))
+        .params[0]
+        .ty = Type::Named {
+        name: "DirWrite".to_string(),
+        args: Vec::new(),
+    };
+    assert_eq!(
+        refusal_of(src, &program),
+        (
+            "a `main` that takes `DirWrite`".to_string(),
+            "Stdout".to_string()
+        )
     );
 }
 
 #[test]
-fn a_return_type_outside_the_core_is_refused_at_the_type() {
+fn a_capability_outside_the_core_is_refused_naming_its_type() {
     assert_refused(
-        "fn f() -> String {\n\
-         \x20   \"hi\"\n\
+        "fn main(stdin: Stdin) {\n\
+         \x20   let _ = stdin.read_line()\n\
          }\n",
-        "the type `String`",
-        "String",
+        "the type `Stdin`",
+        "Stdin",
+    );
+}
+
+#[test]
+fn a_capability_field_is_refused_at_its_declaration() {
+    assert_refused(
+        "cap struct Logger { out: Stdout }\n\
+         fn f() -> Int { 1 }\n",
+        "the capability field type `Stdout`",
+        "cap struct Logger { out: Stdout }",
+    );
+}
+
+#[test]
+fn equality_on_text_is_refused() {
+    assert_refused(
+        "fn same(a: String, b: String) -> Bool {\n\
+         \x20   a == b\n\
+         }\n",
+        "the operator `==` on `String`",
+        "a == b",
+    );
+}
+
+#[test]
+fn capabilities_and_their_effects_export_to_the_golden_form() {
+    assert_golden(
+        "capabilities",
+        "fn say(io: Stdout, line: Untrusted<String>) {\n\
+         \x20   let _ = io.println(line)\n\
+         }\n\
+         \n\
+         fn main(io: Stdout, fs: Fs) {\n\
+         \x20   let root = fs.restrict_to(\".\")\n\
+         \x20   let made = root.write_only().create_dir(Path.from(\"box\"))\n\
+         \x20   let boxed = root.restrict_to(Path.new(\"box\"))\n\
+         \x20   let wrote = boxed.write_only().write(Path.from(\"a.txt\"), \"hi\")\n\
+         \x20   let text = boxed.read_only().read_to_string(Path.from(\"a.txt\")).unwrap_or(\"none\")\n\
+         \x20   if made.is_ok() && wrote.is_ok() {\n\
+         \x20       say(io, text)\n\
+         \x20   }\n\
+         }\n",
     );
 }
 
@@ -358,14 +425,14 @@ fn a_contract_is_refused_at_its_clause() {
 }
 
 #[test]
-fn a_string_is_refused() {
+fn an_interpolated_string_is_refused() {
     assert_refused(
-        "fn f() -> Int {\n\
-         \x20   let s = \"hi\"\n\
+        "fn f(n: Int) -> Int {\n\
+         \x20   let s = \"n is {n}\"\n\
          \x20   1\n\
          }\n",
-        "a string",
-        "\"hi\"",
+        "an interpolated string",
+        "\"n is {n}\"",
     );
 }
 
@@ -382,11 +449,11 @@ fn a_let_annotation_outside_the_core_is_refused_at_the_annotation() {
     // The annotation comes before the value in the source.
     assert_refused(
         "fn f() -> Int {\n\
-         \x20   let s: String = \"hi\"\n\
+         \x20   let s: Option<Int> = None\n\
          \x20   1\n\
          }\n",
-        "the type `String`",
-        "String",
+        "the type `Option<Int>`",
+        "Option<Int>",
     );
 }
 
@@ -558,15 +625,67 @@ fn imports_and_tests_are_refused() {
 fn the_first_construct_in_source_order_is_named() {
     // `b` sorts after `a` by name but comes first in the source.
     assert_refused(
-        "fn b() -> Int {\n\
-         \x20   let s = \"first\"\n\
+        "fn b(n: Int) -> Int {\n\
+         \x20   let s = \"first {n}\"\n\
          \x20   1\n\
          }\n\
-         fn a() -> Int {\n\
-         \x20   let s = \"second\"\n\
+         fn a(n: Int) -> Int {\n\
+         \x20   let s = \"second {n}\"\n\
          \x20   2\n\
          }\n",
-        "a string",
-        "\"first\"",
+        "an interpolated string",
+        "\"first {n}\"",
+    );
+}
+
+/// The names the Lean reader's `builtin` table in
+/// `formal/lean/OskaFormal/Core/CoreIR.lean` reads: each `| "NAME" =>`
+/// arm between `def builtin` and its catch-all.
+fn lean_builtins() -> Vec<String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../formal/lean/OskaFormal/Core/CoreIR.lean");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let start = text
+        .find("\ndef builtin :")
+        .unwrap_or_else(|| panic!("{} has no `def builtin`", path.display()));
+    let mut names = Vec::new();
+    for line in text[start + 1..].lines().skip(1) {
+        let line = line.trim();
+        if line.starts_with("| _ =>") {
+            return names;
+        }
+        let name = line
+            .strip_prefix("| \"")
+            .and_then(|rest| rest.split_once('"'))
+            .map(|(name, _)| name.to_string())
+            .unwrap_or_else(|| panic!("unexpected line in the Lean `builtin` table: {line:?}"));
+        names.push(name);
+    }
+    panic!(
+        "the Lean `builtin` table in {} has no catch-all",
+        path.display()
+    )
+}
+
+#[test]
+fn every_built_in_the_export_writes_is_one_the_lean_reader_reads() {
+    let lean = lean_builtins();
+    let missing: Vec<&str> = BUILTINS
+        .iter()
+        .copied()
+        .filter(|name| !lean.iter().any(|l| l == name))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the Lean reader does not read these built-ins of `BUILTINS`: {missing:?}"
+    );
+    let extra: Vec<&String> = lean
+        .iter()
+        .filter(|name| !BUILTINS.contains(&name.as_str()))
+        .collect();
+    assert!(
+        extra.is_empty(),
+        "the Lean reader reads these built-ins that `BUILTINS` lacks: {extra:?}"
     );
 }

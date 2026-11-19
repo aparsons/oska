@@ -4,21 +4,24 @@ import OskaFormal.Core.Eval
 /-!
 # Oska Core: reading core IR
 
-The Lean reference reads a program of Oska Core as core IR version 2, the
+The Lean reference reads a program of Oska Core as core IR version 3, the
 JSON form `crates/oska-check/src/core_ir.rs` exports, into the syntax of
 `Syntax.lean`, and runs its `main` with `run` (`Eval.lean`).
 
-The reader refuses anything that is not core IR version 2, naming what is
-wrong and where: a version other than 2 (version 1 included: it has no
-`types`), an unknown `kind`, operator or type, a field missing, unknown
+The reader refuses anything that is not core IR version 3, naming what is
+wrong and where: a version other than 3 (versions 1 and 2 included), an
+unknown `kind`, operator, type or built-in, a field missing, unknown
 or of the wrong JSON type, an `Int` literal outside `-2^63 ..= 2^63 - 1`,
 two functions or two types of one name, a type named `Int`, `Bool` or
-`()`, two variants of one name in an enum, a call of a function the
-program does not have, or with a different number of arguments than that
-function has parameters, and a constructor (built or matched) of a struct or variant the program does
+`()` or of a built-in type (`String`, `Path`, a capability), a field of a
+struct or variant that is a capability, two variants of one name in an
+enum, a call of a function the program does not have or of a built-in,
+with a different number of arguments than it has parameters, and a
+constructor (built or matched) of a struct or variant the program does
 not declare, or with a different number of fields. `entry` then refuses a
-program whose `main` is missing, takes parameters or does not return
-`()`. The reader does not type the program: the checker typed it before
+program whose `main` is missing, takes a parameter that is not a
+capability the runtime grants (`Stdout`, `Fs`, `FsRead`, `FsWrite`), or
+does not return `()`. The reader does not type the program: the checker typed it before
 the export, and a run that gets stuck says so. The checks at the end of
 this file run the reader on good and bad core IR.
 
@@ -73,14 +76,56 @@ def nat (path : String) (j : Json) : Read Nat := do
   let n ← int path j
   if n < 0 then .error s!"{path}: expected a slot, 0 or more" else .ok n.toNat
 
-/-- A type: `Int`, `Bool`, `()`, or one of the struct and enum names
-`types`. -/
+/-- A capability kind, by the name of its type. -/
+def capKind : String → Option CapKind
+  | "Stdout" => some .stdout
+  | "Fs" => some .fs | "FsRead" => some .fsRead | "FsWrite" => some .fsWrite
+  | "Dir" => some .dir | "DirRead" => some .dirRead | "DirWrite" => some .dirWrite
+  | _ => none
+
+/-- The names of the built-in types, which no declared type may take. -/
+def builtinTypes : List String :=
+  ["Int", "Bool", "()", "String", "Path", "Stdout", "Fs", "FsRead", "FsWrite", "Dir", "DirRead",
+    "DirWrite"]
+
+/-- A type: `Int`, `Bool`, `()`, `String`, `Path`, a capability, the
+`Result` of an effect, or one of the struct and enum names `types`. -/
 def ty (types : List String) (path : String) (j : Json) : Read Ty := do
   match ← str path j with
   | "Int" => .ok .int
   | "Bool" => .ok .bool
   | "()" => .ok .unit
-  | t => if types.contains t then .ok (.named t) else .error s!"{path}: unknown type `{t}`"
+  | "String" => .ok .string
+  | "Path" => .ok .path
+  | "Result<(), IoError>" => .ok (.result .unit)
+  | "Result<String, IoError>" => .ok (.result .string)
+  | t =>
+    match capKind t with
+    | some k => .ok (.cap k)
+    | none => if types.contains t then .ok (.named t) else .error s!"{path}: unknown type `{t}`"
+
+/-- A built-in call, by its core IR name, and how many arguments it takes,
+its receiver included. -/
+def builtin : String → Option (Builtin × Nat)
+  | "Stdout.println" => some (.println, 2)
+  | "Fs.restrict_to" => some (.restrictTo .fs, 2)
+  | "FsRead.restrict_to" => some (.restrictTo .fsRead, 2)
+  | "FsWrite.restrict_to" => some (.restrictTo .fsWrite, 2)
+  | "Dir.restrict_to" => some (.restrictTo .dir, 2)
+  | "DirRead.restrict_to" => some (.restrictTo .dirRead, 2)
+  | "DirWrite.restrict_to" => some (.restrictTo .dirWrite, 2)
+  | "Fs.read_only" => some (.readOnly .fs, 1)
+  | "Fs.write_only" => some (.writeOnly .fs, 1)
+  | "Dir.read_only" => some (.readOnly .dir, 1)
+  | "Dir.write_only" => some (.writeOnly .dir, 1)
+  | "DirRead.read_to_string" => some (.readToString, 2)
+  | "DirWrite.write" => some (.write, 3)
+  | "DirWrite.create_dir" => some (.createDir, 2)
+  | "Path.from" => some (.pathFrom, 1)
+  | "Path.new" => some (.pathNew, 1)
+  | "Result.is_ok" => some (.isOk, 1)
+  | "Result.unwrap_or" => some (.unwrapOr, 2)
+  | _ => none
 
 def binOp (path : String) : String → Read BinOp
   | "+" => .ok .add | "-" => .ok .sub | "*" => .ok .mul | "/" => .ok .div | "%" => .ok .rem
@@ -171,6 +216,18 @@ mutual
     | "Bool" =>
       let _ ← fields path j ["kind", "value"]
       .ok (.bool (← bool (at_ "value") (← field path j "value")))
+    | "Str" =>
+      let _ ← fields path j ["kind", "value"]
+      .ok (.str (← str (at_ "value") (← field path j "value")))
+    | "Builtin" =>
+      let _ ← fields path j ["kind", "name", "args"]
+      let name ← str (at_ "name") (← field path j "name")
+      let args ← list (at_ "args") (← arr (at_ "args") (← field path j "args")) (expr ctx)
+      match builtin name with
+      | none => .error s!"{path}: unknown built-in `{name}`"
+      | some (op, n) =>
+        if args.length = n then .ok (.builtin op args)
+        else .error s!"{path}: a call of the built-in `{name}` with {args.length} argument(s), but it has {n} parameter(s)"
     | "Local" =>
       let _ ← fields path j ["kind", "slot"]
       .ok (.local_ (← nat (at_ "slot") (← field path j "slot")))
@@ -258,7 +315,10 @@ any of `types`. -/
 def typeDecl (types : List String) (path : String) (j : Json) : Read TypeDecl := do
   let kind ← str s!"{path}.kind" (← field path j "kind")
   let tys (path : String) (j : Json) : Read (List Ty) := do
-    list path (← arr path j) (ty types)
+    let ts ← list path (← arr path j) (ty types)
+    if ts.any (·.capKind?.isSome) then
+      throw s!"{path}: a field is a capability; no struct or enum of Oska Core holds one"
+    pure ts
   match kind with
   | "Struct" =>
     let _ ← fields path j ["kind", "name", "fields"]
@@ -278,7 +338,7 @@ def typeDecl (types : List String) (path : String) (j : Json) : Read TypeDecl :=
   | k => .error s!"{path}: unknown type declaration kind `{k}`"
 
 /-- The version of core IR this reader reads. -/
-def version : Int := 2
+def version : Int := 3
 
 /-- A program of Oska Core, read from the text of its core IR. -/
 def program (text : String) : Read Program := do
@@ -294,7 +354,7 @@ def program (text : String) : Read Program := do
   let typeNames ← list "types" ts fun path t => do str s!"{path}.name" (← field path t "name")
   if let some dup := duplicate typeNames then
     throw s!"types: two types are named `{dup}`"
-  if let some builtin := typeNames.find? (["Int", "Bool", "()"].contains ·) then
+  if let some builtin := typeNames.find? (builtinTypes.contains ·) then
     throw s!"types: a type is named `{builtin}`, the name of a built-in type"
   let types ← list "types" ts (typeDecl typeNames)
   let fs ← arr "functions" (← field "program" j "functions")
@@ -316,15 +376,17 @@ def program (text : String) : Read Program := do
   pure { types, functions }
 
 /-- The expression a run of program `P` starts from: a call of its `main`,
-which takes no parameters and returns `()`, as an Oska `main` in Oska
-Core does. -/
+which returns `()`, with the capability each parameter's type names,
+rooted anywhere, as the runtime grants them (`grants`): the root of
+authority. -/
 def entry (P : Program) : Read Expr :=
   match P.find? "main" with
   | none => .error "the program has no function `main`"
   | some f =>
-    if !f.params.isEmpty then .error "`main` takes parameters; in Oska Core it takes none"
+    if f.params.any (fun p => !(p.type.capKind?.map CapKind.granted).getD false) then
+      .error "`main` takes a parameter that is not a capability the runtime grants"
     else if f.ret ≠ .unit then .error "`main` does not return `()`"
-    else .ok (.call "main" [])
+    else .ok (.call "main" (grants f.params))
 
 /-- Whether reading `text` fails with a message that contains `part`. -/
 def refuses (text part : String) : Bool :=
@@ -336,12 +398,12 @@ def refuses (text part : String) : Bool :=
 runs to `outcome`, within 1000 steps. -/
 def runsTo (text : String) (outcome : RunResult → Bool) : Bool :=
   match program text >>= fun P => (entry P).map (P, ·) with
-  | .ok (P, e) => outcome (run P 1000 e)
+  | .ok (P, e) => outcome (run P 1000 {} e).1
   | .error _ => false
 
-/-- Core IR version 2 with these `types` and a `main` with this body. -/
+/-- Core IR version 3 with these `types` and a `main` with this body. -/
 def withMain (types body : String) : String :=
-  "{\"core_ir_version\": 2, \"types\": [" ++ types ++ "], \"functions\": [{\"name\": \"main\", " ++
+  "{\"core_ir_version\": 3, \"types\": [" ++ types ++ "], \"functions\": [{\"name\": \"main\", " ++
     "\"params\": [], \"ret\": \"()\", \"body\": " ++ body ++ "}]}"
 
 /-- `enum Shape { Dot, Square(Int) }` and `struct Pair { a: Int, b: Bool }`. -/
@@ -350,12 +412,13 @@ def shapeTypes : String :=
     "{\"name\": \"Square\", \"fields\": [\"Int\"]}]}, " ++
     "{\"kind\": \"Struct\", \"name\": \"Pair\", \"fields\": [\"Int\", \"Bool\"]}"
 
-#guard refuses "{\"core_ir_version\": 3, \"types\": [], \"functions\": []}" "core_ir_version 3"
--- Version 1, which has no `types`, is refused by its version.
+#guard refuses "{\"core_ir_version\": 4, \"types\": [], \"functions\": []}" "core_ir_version 4"
+-- Versions 1 and 2 are refused by their version.
 #guard refuses "{\"core_ir_version\": 1, \"functions\": []}" "core_ir_version 1"
-#guard refuses "{\"core_ir_version\": 2, \"functions\": []}" "missing field `types`"
-#guard refuses "{\"core_ir_version\": 2, \"types\": [], \"functions\": []} junk" "not JSON"
-#guard refuses "{\"core_ir_version\": 2, \"types\": [], \"functions\": [], \"x\": 1}"
+#guard refuses "{\"core_ir_version\": 2, \"types\": [], \"functions\": []}" "core_ir_version 2"
+#guard refuses "{\"core_ir_version\": 3, \"functions\": []}" "missing field `types`"
+#guard refuses "{\"core_ir_version\": 3, \"types\": [], \"functions\": []} junk" "not JSON"
+#guard refuses "{\"core_ir_version\": 3, \"types\": [], \"functions\": [], \"x\": 1}"
   "unknown field `x`"
 #guard refuses (withMain "" "{\"kind\": \"Loop\"}") "unknown expression kind `Loop`"
 #guard refuses (withMain "" "{\"kind\": \"Int\", \"value\": 9223372036854775808}") "outside Int"
@@ -383,9 +446,9 @@ def shapeTypes : String :=
 #guard refuses (withMain shapeTypes ("{\"kind\": \"Match\", \"scrutinee\": {\"kind\": \"Unit\"}, " ++
     "\"arms\": [{\"pattern\": {\"kind\": \"Range\"}, \"body\": {\"kind\": \"Unit\"}}]}"))
   "unknown pattern kind `Range`"
-#guard refuses (withMain "{\"kind\": \"Struct\", \"name\": \"A\", \"fields\": [\"String\"]}"
+#guard refuses (withMain "{\"kind\": \"Struct\", \"name\": \"A\", \"fields\": [\"U8\"]}"
     "{\"kind\": \"Unit\"}")
-  "unknown type `String`"
+  "unknown type `U8`"
 #guard refuses (withMain ("{\"kind\": \"Struct\", \"name\": \"A\", \"fields\": []}, " ++
     "{\"kind\": \"Struct\", \"name\": \"A\", \"fields\": []}") "{\"kind\": \"Unit\"}")
   "two types are named `A`"
@@ -395,6 +458,17 @@ def shapeTypes : String :=
 #guard refuses (withMain "{\"kind\": \"Enum\", \"name\": \"()\", \"variants\": []}"
     "{\"kind\": \"Unit\"}")
   "a type is named `()`"
+#guard refuses (withMain "{\"kind\": \"Struct\", \"name\": \"Path\", \"fields\": []}"
+    "{\"kind\": \"Unit\"}")
+  "a type is named `Path`"
+#guard refuses (withMain "{\"kind\": \"Struct\", \"name\": \"Holder\", \"fields\": [\"Stdout\"]}"
+    "{\"kind\": \"Unit\"}")
+  "a field is a capability"
+#guard refuses (withMain "" "{\"kind\": \"Builtin\", \"name\": \"Stdin.read_line\", \"args\": []}")
+  "unknown built-in `Stdin.read_line`"
+#guard refuses (withMain "" ("{\"kind\": \"Builtin\", \"name\": \"Path.from\", \"args\": [" ++
+    "{\"kind\": \"Str\", \"value\": \"a\"}, {\"kind\": \"Str\", \"value\": \"b\"}]}"))
+  "with 2 argument(s), but it has 1 parameter(s)"
 #guard runsTo (withMain "" "{\"kind\": \"Block\", \"stmts\": []}")
   fun | .value .unit => true | _ => false
 #guard runsTo

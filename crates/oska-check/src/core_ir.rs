@@ -8,19 +8,29 @@
 //! tests, not a published format, and no CLI command prints it. The
 //! goldens of `tests/core_ir.rs` pin it.
 //!
-//! # Version 2
+//! # Version 3
 //!
-//! Oska Core version 2 has functions, `let`, `if`, `Int` and `Bool` with
+//! Oska Core version 3 has functions, `let`, `if`, `Int` and `Bool` with
 //! their operators, `()`, the value of a block or `if` with no value, and
 //! the module's own structs and enums without generics, with their
-//! construction, field access and `match`. [`export`] refuses any other
+//! construction, field access and `match`. It has text (`String`, trusted
+//! or not, as literals), `Path`, and the capabilities `Stdout`, `Fs`,
+//! `FsRead`, `FsWrite`, `Dir`, `DirRead` and `DirWrite`, as opaque values
+//! that only `main` receives, with the built-in calls in [`BUILTINS`]:
+//! writing a line to stdout, reading and writing a file and creating a
+//! directory under a directory capability, attenuation, and `is_ok` and
+//! `unwrap_or` on the `Result` an effect gives. [`export`] refuses any other
 //! program, naming the first construct outside it in source order, with
 //! its span. It fails closed: a trait, `impl` or `const` is refused even
 //! when nothing uses it, and so are a generic struct or enum, one with a
 //! field whose type is outside Oska Core (refused at its declaration),
 //! `var` (even one never assigned), a `use`, a `test` block, a generic
 //! function, a method, a contract, a prelude type such as `Option`, and
-//! any type the checker left unsolved.
+//! any type the checker left unsolved. It also refuses any other built-in
+//! call, `==` and `!=` on anything but `Int`, `Bool` and `()`, a struct or
+//! enum with a capability field, and a `main` that returns anything but
+//! `()` or takes anything but `Stdout`, `Fs`, `FsRead` or `FsWrite`, the
+//! capabilities the runtime grants.
 //!
 //! The text is pretty-printed JSON: two-space indentation, a value that
 //! fits in 80 columns on one line, and a final newline. Every node is an
@@ -28,17 +38,19 @@
 //! when absent, never written as `null`.
 //!
 //! ```text
-//! program  = {"core_ir_version": 2, "types": [typedecl...],
+//! program  = {"core_ir_version": 3, "types": [typedecl...],
 //!             "functions": [function...]}
 //! typedecl = {"kind": "Struct", "name": NAME, "fields": [type...]}
 //!          | {"kind": "Enum", "name": NAME, "variants": [variant...]}
 //! variant  = {"name": NAME, "fields": [type...]}
 //! function = {"name": NAME, "params": [param...], "ret": type, "body": expr}
 //! param    = {"type": type, "binds": BOOL}
-//! type     = "Int" | "Bool" | "()" | NAME
+//! type     = "Int" | "Bool" | "()" | "String" | "Path" | CAPABILITY
+//!          | "Result<(), IoError>" | "Result<String, IoError>" | NAME
 //! expr     = {"kind": "Unit"}
 //!          | {"kind": "Int", "value": INTEGER}
 //!          | {"kind": "Bool", "value": BOOL}
+//!          | {"kind": "Str", "value": STRING}
 //!          | {"kind": "Local", "slot": N}
 //!          | {"kind": "Neg", "operand": expr}
 //!          | {"kind": "Not", "operand": expr}
@@ -50,6 +62,7 @@
 //!             "fields": [expr...]}
 //!          | {"kind": "Field", "base": expr, "index": N}
 //!          | {"kind": "Match", "scrutinee": expr, "arms": [arm...]}
+//!          | {"kind": "Builtin", "name": BUILTIN, "args": [expr...]}
 //! stmt     = {"kind": "Let", "binds": BOOL, "type": type, "value": expr}
 //!          | {"kind": "Expr", "value": expr}
 //! arm      = {"pattern": pattern, "guard"?: expr, "body": expr}
@@ -62,6 +75,11 @@
 //!             "fields": [pattern...]}
 //! ```
 //!
+//! - `CAPABILITY` is `"Stdout"`, `"Fs"`, `"FsRead"`, `"FsWrite"`,
+//!   `"Dir"`, `"DirRead"` or `"DirWrite"`, and `BUILTIN` one of
+//!   [`BUILTINS`], the checker's name for a body-less prelude function. A
+//!   method's receiver is its first argument. No field of a struct or
+//!   enum is a capability.
 //! - `types` are the module's structs and enums, and `functions` its
 //!   functions, each in source order. A `NAME` in a `type` is one of
 //!   `types`; a `Call` reaches a function by its `NAME`.
@@ -100,6 +118,16 @@
 //!   a literal an equal value; and a constructor pattern a value of its
 //!   variant (or struct) whose fields match its patterns. The checker has
 //!   made every `match` exhaustive.
+//! - `Builtin` evaluates its arguments left to right, then calls the
+//!   prelude function `name`, as the runtime implements it
+//!   (`crates/oska-run/src/intrinsics.rs`): `Stdout.println` writes the
+//!   line and a line break, `K.restrict_to` attenuates to the directory
+//!   it names (beneath the receiver's root, for a directory capability),
+//!   `read_only` and `write_only` keep the root and narrow the access,
+//!   and `read_to_string`, `write` and `create_dir` act beneath the
+//!   capability's root, refusing a path that leaves it with an `Err`.
+//! - `main` takes only capabilities the runtime grants: `Stdout`, and
+//!   `Fs`, `FsRead` or `FsWrite`, which reach anywhere until attenuated.
 //!
 //! # Adding a construct
 //!
@@ -119,7 +147,39 @@ use crate::program::{
 };
 
 /// The version of the core IR [`export`] writes.
-pub const CORE_IR_VERSION: u64 = 2;
+pub const CORE_IR_VERSION: u64 = 3;
+
+/// The built-in calls of Oska Core, by the checker's qualified name: the
+/// effects on a capability, attenuation, `Path` and the `Result` of an
+/// effect.
+pub const BUILTINS: &[&str] = &[
+    "Stdout.println",
+    "Fs.restrict_to",
+    "FsRead.restrict_to",
+    "FsWrite.restrict_to",
+    "Dir.restrict_to",
+    "DirRead.restrict_to",
+    "DirWrite.restrict_to",
+    "Fs.read_only",
+    "Fs.write_only",
+    "Dir.read_only",
+    "Dir.write_only",
+    "DirRead.read_to_string",
+    "DirWrite.write",
+    "DirWrite.create_dir",
+    "Path.from",
+    "Path.new",
+    "Result.is_ok",
+    "Result.unwrap_or",
+];
+
+/// The capabilities of Oska Core, by the name of their type.
+const CAPABILITIES: &[&str] = &[
+    "Stdout", "Fs", "FsRead", "FsWrite", "Dir", "DirRead", "DirWrite",
+];
+
+/// The capabilities `main` may take: the ones the runtime grants.
+const GRANTED: &[&str] = &["Stdout", "Fs", "FsRead", "FsWrite"];
 
 /// Why a program has no core IR: its first construct outside Oska Core.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,7 +306,7 @@ impl Core {
             Ok(Json::Arr(
                 fields
                     .iter()
-                    .map(|f| self.ty(&f.ty, d.span))
+                    .map(|f| self.field_ty(&f.ty, d.span))
                     .collect::<Result<_, _>>()?,
             ))
         };
@@ -301,7 +361,24 @@ impl Core {
                 ]))
             })
             .collect::<Result<Vec<_>, Refusal>>()?;
-        let ret = self.ty(&f.ret, f.ret_annotation.unwrap_or(f.span))?;
+        let ret_span = f.ret_annotation.unwrap_or(f.span);
+        let ret = self.ty(&f.ret, ret_span)?;
+        if f.name == "main" {
+            // The runtime grants `main` its capabilities (the root of
+            // authority), and nothing else.
+            if let Some(p) = f.params.iter().find(|p| {
+                !matches!(&p.ty, Type::Named { name, args }
+                    if args.is_empty() && GRANTED.contains(&name.as_str()))
+            }) {
+                return refuse(
+                    format!("a `main` that takes `{}`", p.ty),
+                    p.annotation.unwrap_or(f.span),
+                );
+            }
+            if f.ret != Type::Unit {
+                return refuse(format!("a `main` that returns `{}`", f.ret), ret_span);
+            }
+        }
         if let Some(clause) = f
             .contracts
             .requires
@@ -325,15 +402,37 @@ impl Core {
             Type::Unit => "()",
             Type::Bool => "Bool",
             Type::Int(IntType::Int) => "Int",
+            Type::String => "String",
             Type::Named { name, args } if args.is_empty() && self.types.contains(name) => name,
-            Type::Int(_)
-            | Type::String
-            | Type::Named { .. }
-            | Type::Fn { .. }
-            | Type::Param(_)
-            | Type::Never => return refuse(format!("the type `{ty}`"), span),
+            Type::Named { name, args }
+                if args.is_empty() && (name == "Path" || CAPABILITIES.contains(&name.as_str())) =>
+            {
+                name
+            }
+            Type::Named { name, args } if name == "Result" => match args.as_slice() {
+                [Type::Unit, Type::Named {
+                    name: e,
+                    args: none,
+                }] if e == "IoError" && none.is_empty() => "Result<(), IoError>",
+                [Type::String, Type::Named {
+                    name: e,
+                    args: none,
+                }] if e == "IoError" && none.is_empty() => "Result<String, IoError>",
+                _ => return refuse(format!("the type `{ty}`"), span),
+            },
+            Type::Int(_) | Type::Named { .. } | Type::Fn { .. } | Type::Param(_) | Type::Never => {
+                return refuse(format!("the type `{ty}`"), span)
+            }
         };
         Ok(Json::Str(name.to_string()))
+    }
+
+    /// The type of a struct or enum field, which is never a capability.
+    fn field_ty(&self, ty: &Type, span: Span) -> Result<Json, Refusal> {
+        if matches!(ty, Type::Named { name, .. } if CAPABILITIES.contains(&name.as_str())) {
+            return refuse(format!("the capability field type `{ty}`"), span);
+        }
+        self.ty(ty, span)
     }
 
     fn exprs(&self, items: &[Expr]) -> Result<Json, Refusal> {
@@ -366,6 +465,14 @@ impl Core {
             }
             ExprKind::Neg { operand, .. } => node("Neg", vec![("operand", self.expr(operand)?)]),
             ExprKind::Not(operand) => node("Not", vec![("operand", self.expr(operand)?)]),
+            ExprKind::Binary { op, lhs, .. }
+                if !matches!(lhs.ty, Type::Unit | Type::Bool | Type::Int(IntType::Int)) =>
+            {
+                return refuse(
+                    format!("the operator `{}` on `{}`", op.text(), lhs.ty),
+                    span,
+                )
+            }
             ExprKind::Binary { op, lhs, rhs, .. } => node(
                 "Binary",
                 vec![
@@ -389,6 +496,13 @@ impl Core {
                 Callee::Function(name) => {
                     return refuse(format!("a call of the generic function `{name}`"), span)
                 }
+                Callee::Intrinsic(name) if BUILTINS.contains(&name.as_str()) => node(
+                    "Builtin",
+                    vec![
+                        ("name", Json::Str(name.clone())),
+                        ("args", self.exprs(args)?),
+                    ],
+                ),
                 Callee::Intrinsic(name) => return refuse(format!("the built-in `{name}`"), span),
                 Callee::Trait { trait_name, method } => {
                     return refuse(format!("the trait method `{trait_name}.{method}`"), span)
@@ -419,7 +533,8 @@ impl Core {
                 }
                 node("Block", fields)
             }
-            ExprKind::Str(_) | ExprKind::Interpolated(_) => return refuse("a string", span),
+            ExprKind::Str(value) => node("Str", vec![("value", Json::Str(value.clone()))]),
+            ExprKind::Interpolated(_) => return refuse("an interpolated string", span),
             ExprKind::SelfValue => return refuse("`self`", span),
             ExprKind::List(_) => return refuse("a list", span),
             ExprKind::Construct { ctor, fields } => {
@@ -498,7 +613,7 @@ impl Core {
                     self.expr(literal)?
                 }
                 _ => {
-                    // The literal's own refusal, such as "a string".
+                    // The literal's own refusal, such as "an interpolated string".
                     self.expr(literal)?;
                     return refuse("this literal pattern", literal.span);
                 }

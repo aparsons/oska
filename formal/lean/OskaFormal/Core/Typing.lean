@@ -3,7 +3,7 @@ import OskaFormal.Core.Syntax
 /-!
 # Oska Core: typing
 
-The typing rules of Oska Core, version 2. A context lists the types of the
+The typing rules of Oska Core, version 3. A context lists the types of the
 slots in scope, slot 0 first; a `let` that binds adds its slot at the end,
 and it leaves scope with its block. A `match` arm's pattern adds its
 bindings' slots at the end, for its guard and body.
@@ -59,6 +59,25 @@ inductive BinOpTyped : BinOp → Ty → Ty → Prop where
   | or : BinOpTyped .or .bool .bool
   | implies : BinOpTyped .implies .bool .bool
 
+/-- The types a built-in call takes and gives: `BuiltinTyped op ts t` when
+`op` takes arguments of the types `ts`, its receiver first, and gives a
+`t`. The prelude declares these signatures (`crates/oska-check/src/
+prelude.osk`); text is `String`, trusted or not. -/
+inductive BuiltinTyped : Builtin → List Ty → Ty → Prop where
+  | println : BuiltinTyped .println [.cap .stdout, .string] (.result .unit)
+  | restrictTo {k k' : CapKind} {a : Ty} :
+      k.restrictTo = some (a, k') → BuiltinTyped (.restrictTo k) [.cap k, a] (.cap k')
+  | readOnly {k k' : CapKind} : k.readOnly = some k' → BuiltinTyped (.readOnly k) [.cap k] (.cap k')
+  | writeOnly {k k' : CapKind} :
+      k.writeOnly = some k' → BuiltinTyped (.writeOnly k) [.cap k] (.cap k')
+  | readToString : BuiltinTyped .readToString [.cap .dirRead, .path] (.result .string)
+  | write : BuiltinTyped .write [.cap .dirWrite, .path, .string] (.result .unit)
+  | createDir : BuiltinTyped .createDir [.cap .dirWrite, .path] (.result .unit)
+  | pathFrom : BuiltinTyped .pathFrom [.string] .path
+  | pathNew : BuiltinTyped .pathNew [.string] .path
+  | isOk {t : Ty} : BuiltinTyped .isOk [.result t] .bool
+  | unwrapOr {t : Ty} : BuiltinTyped .unwrapOr [.result t, t] t
+
 /-- What a value typing is about: a value and its type, or a list of
 values and their types. -/
 inductive VGoal where
@@ -72,6 +91,12 @@ inductive ValueTyped (P : Program) : VGoal → Prop where
   | unit : ValueTyped P (.one .unit .unit)
   | int {n : Int} : fits n = true → ValueTyped P (.one (.int n) .int)
   | bool {b : Bool} : ValueTyped P (.one (.bool b) .bool)
+  | str {s : String} : ValueTyped P (.one (.str s) .string)
+  | path {s : String} : ValueTyped P (.one (.path s) .path)
+  | cap {k : CapKind} {r : CapRoot} : ValueTyped P (.one (.cap k r) (.cap k))
+  | okUnit : ValueTyped P (.one .okUnit (.result .unit))
+  | okStr {s : String} : ValueTyped P (.one (.okStr s) (.result .string))
+  | err {t : Ty} : ValueTyped P (.one .err (.result t))
   | construct {type : String} {variant : Option String} {fs : List Expr} {fts : List Ty} :
       P.fieldsOf type variant = some fts → ValueTyped P (.many fs fts) →
       ValueTyped P (.one (.construct type variant fs) (.named type))
@@ -183,7 +208,7 @@ def covers (P : Program) : Nat → List Row → List Ty → Bool
       | .bool =>
         covers P fuel (specialize (.bool true) 0 rows) ts &&
           covers P fuel (specialize (.bool false) 0 rows) ts
-      | .int => false
+      | .int | .string | .path | .cap _ | .result _ => false
       | .named n =>
         match findType P.types n with
         | some (.struct_ _ fs) => covers P fuel (specialize (.ctor none) fs.length rows) (fs ++ ts)
@@ -230,6 +255,16 @@ inductive Typed (P : Program) : List Ty → Goal → Prop where
   | unit {Γ : List Ty} : Typed P Γ (.expr .unit .unit)
   | int {Γ : List Ty} {n : Int} : fits n = true → Typed P Γ (.expr (.int n) .int)
   | bool {Γ : List Ty} {b : Bool} : Typed P Γ (.expr (.bool b) .bool)
+  | str {Γ : List Ty} {s : String} : Typed P Γ (.expr (.str s) .string)
+  | path {Γ : List Ty} {s : String} : Typed P Γ (.expr (.path s) .path)
+  /-- A capability value, which only a run holds: `main`'s arguments and
+  what attenuation gives. -/
+  | cap {Γ : List Ty} {k : CapKind} {r : CapRoot} : Typed P Γ (.expr (.cap k r) (.cap k))
+  | okUnit {Γ : List Ty} : Typed P Γ (.expr .okUnit (.result .unit))
+  | okStr {Γ : List Ty} {s : String} : Typed P Γ (.expr (.okStr s) (.result .string))
+  | err {Γ : List Ty} {t : Ty} : Typed P Γ (.expr .err (.result t))
+  | builtin {Γ : List Ty} {op : Builtin} {args : List Expr} {ts : List Ty} {t : Ty} :
+      BuiltinTyped op ts t → Typed P Γ (.args args ts) → Typed P Γ (.expr (.builtin op args) t)
   | local_ {Γ : List Ty} {i : Nat} {t : Ty} :
       lookup Γ i = some t → Typed P Γ (.expr (.local_ i) t)
   | neg {Γ : List Ty} {e : Expr} :
@@ -304,9 +339,10 @@ mutual
   /-- Whether every `match` in an expression passes `exhaustiveArms`. -/
   def Expr.staticMatches (P : Program) : Expr → Bool
     | .unit | .int _ | .bool _ | .local_ _ => true
+    | .str _ | .path _ | .cap _ _ | .okUnit | .okStr _ | .err => true
     | .neg e | .not e | .field e _ => Expr.staticMatches P e
     | .binary _ l r => Expr.staticMatches P l && Expr.staticMatches P r
-    | .call _ args => Expr.staticMatchesList P args
+    | .call _ args | .builtin _ args => Expr.staticMatchesList P args
     | .construct _ _ fs => Expr.staticMatchesList P fs
     | .if_ c th el =>
       Expr.staticMatches P c && Expr.staticMatches P th && Expr.staticMatchesOpt P el
@@ -333,17 +369,65 @@ mutual
       Expr.staticMatchesOpt P g && Expr.staticMatches P b && Expr.staticMatchesArms P arms
 end
 
+mutual
+  /-- Whether every capability value in an expression has a kind in `A`.
+  A program as written holds none (core IR has no node for one), so its
+  bodies pass with `A = []`. -/
+  def Expr.capsWithin (A : List CapKind) : Expr → Bool
+    | .cap k _ => decide (k ∈ A)
+    | .unit | .int _ | .bool _ | .local_ _ | .str _ | .path _ | .okUnit | .okStr _ | .err => true
+    | .neg e | .not e | .field e _ => Expr.capsWithin A e
+    | .binary _ l r => Expr.capsWithin A l && Expr.capsWithin A r
+    | .call _ args | .builtin _ args => Expr.capsWithinList A args
+    | .construct _ _ fs => Expr.capsWithinList A fs
+    | .if_ c th el =>
+      Expr.capsWithin A c && Expr.capsWithin A th && Expr.capsWithinOpt A el
+    | .block ss val => Expr.capsWithinStmts A ss && Expr.capsWithinOpt A val
+    | .match_ sc arms => Expr.capsWithin A sc && Expr.capsWithinArms A arms
+
+  def Expr.capsWithinList (A : List CapKind) : List Expr → Bool
+    | [] => true
+    | e :: es => Expr.capsWithin A e && Expr.capsWithinList A es
+
+  def Expr.capsWithinOpt (A : List CapKind) : Option Expr → Bool
+    | none => true
+    | some e => Expr.capsWithin A e
+
+  def Expr.capsWithinStmts (A : List CapKind) : List Stmt → Bool
+    | [] => true
+    | .let_ _ _ e :: ss => Expr.capsWithin A e && Expr.capsWithinStmts A ss
+    | .expr e :: ss => Expr.capsWithin A e && Expr.capsWithinStmts A ss
+
+  def Expr.capsWithinArms (A : List CapKind) : List Arm → Bool
+    | [] => true
+    | .mk _ g b :: arms =>
+      Expr.capsWithinOpt A g && Expr.capsWithin A b && Expr.capsWithinArms A arms
+end
+
+/-- An expression that holds no capability value: one as written. -/
+def Expr.capFree (e : Expr) : Bool := e.capsWithin []
+
 /-- **Source typing.** An expression as the checker hands it over: typed,
-with every `match` exhaustive by the static check. -/
+with every `match` exhaustive by the static check, and holding no
+capability value, since no source form makes one. -/
 def SourceTyped (P : Program) (Γ : List Ty) (e : Expr) (t : Ty) : Prop :=
-  Typed P Γ (.expr e t) ∧ e.staticMatches P = true
+  Typed P Γ (.expr e t) ∧ e.staticMatches P = true ∧ e.capFree = true
+
+/-- No field of a struct or enum the program declares is a capability:
+the export refuses one, as the checker refuses a capability in a field
+of a type not declared `cap`. -/
+def Program.typesCapFree (P : Program) : Bool :=
+  P.types.all fun d => match d with
+    | .struct_ _ fs => fs.all fun t => t.capKind?.isNone
+    | .enum_ _ vs => vs.all fun v => v.2.all fun t => t.capKind?.isNone
 
 /-- A program as the checker hands it over: each function's body is
-source typed. -/
+source typed, and no declared type holds a capability. -/
 def ProgramSourceTyped (P : Program) : Prop :=
-  ∀ name f, P.find? name = some f → SourceTyped P (bindingTypes f.params) f.body f.ret
+  (∀ name f, P.find? name = some f → SourceTyped P (bindingTypes f.params) f.body f.ret) ∧
+    P.typesCapFree = true
 
 theorem ProgramSourceTyped.typed {P : Program} (h : ProgramSourceTyped P) : ProgramTyped P :=
-  fun name f hf => (h name f hf).1
+  fun name f hf => (h.1 name f hf).1
 
 end OskaFormal.Core
