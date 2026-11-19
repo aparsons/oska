@@ -10,6 +10,8 @@
   "tasks": ["files", "greeting"],
   "classes": ["path_traversal", "xss"],
   "variants": ["base", "hook"],
+  "attempts": 3,
+  "incomplete": [],
   "runs": {"total": 12, "finished": 8, "turn_limit": 1, "timeout": 1, "budget": 1, "error": 1},
   "usage": {
     "runs_reported": 10,
@@ -91,7 +93,10 @@
       "mean_iterations_to_resolve": 1.5000,
       "fix_offered": 3,
       "fix_applied": 2,
-      "fix_gone_next_check": 1
+      "fix_helped": 1,
+      "fix_offered_rate": 1.0000,
+      "fix_applied_rate": 0.6667,
+      "fix_helped_rate": 0.5000
     },
     {
       "code": "E0206",
@@ -102,7 +107,10 @@
       "mean_iterations_to_resolve": 1.0000,
       "fix_offered": 1,
       "fix_applied": 1,
-      "fix_gone_next_check": 1
+      "fix_helped": 1,
+      "fix_offered_rate": 0.5000,
+      "fix_applied_rate": 1.0000,
+      "fix_helped_rate": 1.0000
     },
     {
       "code": "E0371",
@@ -113,7 +121,78 @@
       "mean_iterations_to_resolve": null,
       "fix_offered": 0,
       "fix_applied": 0,
-      "fix_gone_next_check": 0
+      "fix_helped": 0,
+      "fix_offered_rate": 0.0000,
+      "fix_applied_rate": null,
+      "fix_helped_rate": null
+    }
+  ],
+  "codes_by_variant": [
+    {
+      "variant": "base",
+      "codes": [
+        {
+          "code": "E0300",
+          "occurrences": 3,
+          "runs": 3,
+          "iterations_present": 7,
+          "resolved": 2,
+          "mean_iterations_to_resolve": 1.5000,
+          "fix_offered": 3,
+          "fix_applied": 2,
+          "fix_helped": 1,
+          "fix_offered_rate": 1.0000,
+          "fix_applied_rate": 0.6667,
+          "fix_helped_rate": 0.5000
+        },
+        {
+          "code": "E0371",
+          "occurrences": 1,
+          "runs": 1,
+          "iterations_present": 2,
+          "resolved": 0,
+          "mean_iterations_to_resolve": null,
+          "fix_offered": 0,
+          "fix_applied": 0,
+          "fix_helped": 0,
+          "fix_offered_rate": 0.0000,
+          "fix_applied_rate": null,
+          "fix_helped_rate": null
+        },
+        {
+          "code": "E0206",
+          "occurrences": 1,
+          "runs": 1,
+          "iterations_present": 1,
+          "resolved": 1,
+          "mean_iterations_to_resolve": 1.0000,
+          "fix_offered": 0,
+          "fix_applied": 0,
+          "fix_helped": 0,
+          "fix_offered_rate": 0.0000,
+          "fix_applied_rate": null,
+          "fix_helped_rate": null
+        }
+      ]
+    },
+    {
+      "variant": "hook",
+      "codes": [
+        {
+          "code": "E0206",
+          "occurrences": 1,
+          "runs": 1,
+          "iterations_present": 1,
+          "resolved": 1,
+          "mean_iterations_to_resolve": 1.0000,
+          "fix_offered": 1,
+          "fix_applied": 1,
+          "fix_helped": 1,
+          "fix_offered_rate": 1.0000,
+          "fix_applied_rate": 1.0000,
+          "fix_helped_rate": 1.0000
+        }
+      ]
     }
   ],
   "lookups": {

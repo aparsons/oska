@@ -132,3 +132,95 @@ fn a_record_of_another_schema_or_no_runs_is_bad_input() {
     assert_eq!(outcome.code, 2, "{}", outcome.stdout);
     assert!(outcome.stdout.contains("schema 1"), "{}", outcome.stdout);
 }
+
+/// The row of `rows` whose `key` is `value`.
+fn row<'a>(rows: &'a [JsonValue], key: &str, value: &str) -> &'a JsonValue {
+    rows.iter()
+        .find(|r| r.get(key).and_then(JsonValue::as_str) == Some(value))
+        .unwrap_or_else(|| panic!("no row with {key} {value}"))
+}
+
+fn number(value: &JsonValue, key: &str) -> String {
+    match value.get(key) {
+        Some(JsonValue::Number(n)) => n.clone(),
+        Some(JsonValue::Null) => "null".to_string(),
+        other => panic!("{key} is {other:?}"),
+    }
+}
+
+/// `E0300` was seen 3 times, each with a fix: applied twice, and gone at
+/// the next check after one of those. `E0206` was seen twice, once with a
+/// fix, which was applied and helped.
+#[test]
+fn each_code_has_its_fix_rates_for_the_batch_and_for_each_variant() {
+    let summary = parse_json(&summarise("2026-11-20-hook")).expect("the summary is JSON");
+    let codes = summary
+        .get("codes")
+        .and_then(JsonValue::as_array)
+        .expect("codes");
+    let e0300 = row(codes, "code", "E0300");
+    let rates: Vec<String> = [
+        "fix_offered_rate",
+        "fix_applied_rate",
+        "fix_helped_rate",
+        "mean_iterations_to_resolve",
+    ]
+    .iter()
+    .map(|k| number(e0300, k))
+    .collect();
+    assert_eq!(rates, ["1.0000", "0.6667", "0.5000", "1.5000"]);
+    let e0206 = row(codes, "code", "E0206");
+    assert_eq!(number(e0206, "fix_offered_rate"), "0.5000");
+    assert_eq!(number(e0206, "fix_helped_rate"), "1.0000");
+
+    let by_variant = summary
+        .get("codes_by_variant")
+        .and_then(JsonValue::as_array)
+        .expect("codes by variant");
+    let names = |variant: &str| -> Vec<String> {
+        row(by_variant, "variant", variant)
+            .get("codes")
+            .and_then(JsonValue::as_array)
+            .expect("codes")
+            .iter()
+            .map(|c| {
+                c.get("code")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect()
+    };
+    assert_eq!(names("base"), ["E0300", "E0371", "E0206"]);
+    assert_eq!(names("hook"), ["E0206"]);
+}
+
+/// k is the attempts the records declare, 3, even though a task has only
+/// 2 runs: that task is listed as incomplete, and its rates at k = 3 are
+/// null rather than estimated at a smaller k.
+#[test]
+fn a_task_with_fewer_runs_than_attempts_is_incomplete_and_has_no_rate_at_k() {
+    let outcome = harness(&["summarise", "tests/fixtures/summarise/incomplete"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stdout);
+    let summary = parse_json(&outcome.stdout).expect("the summary is JSON");
+    assert!(
+        outcome.stdout.contains("\"k\": [1, 3]"),
+        "{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains(
+            "\"incomplete\": [\n    {\"task\": \"greeting\", \"variant\": \"base\", \"runs\": 2, \"attempts\": 3}\n  ]"
+        ),
+        "{}",
+        outcome.stdout
+    );
+    let rows = summary
+        .get("pass_rates")
+        .and_then(JsonValue::as_array)
+        .expect("pass rates");
+    let all = row(rows, "by", "all");
+    assert_eq!(number(all, "func@1"), "0.5000");
+    assert_eq!(number(all, "func@3"), "null");
+    assert_eq!(number(all, "func_sec@3"), "null");
+}

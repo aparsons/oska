@@ -6,6 +6,17 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// The environment that makes `home` the home directory on every platform:
+/// `HOME`, `USERPROFILE` and `XDG_CONFIG_HOME` (beneath it), as
+/// `oskac`'s tests' `set_home` sets them. Pass it to [`harness_env`].
+pub fn home_env(home: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("HOME", home.to_string()),
+        ("USERPROFILE", home.to_string()),
+        ("XDG_CONFIG_HOME", format!("{home}/.config")),
+    ]
+}
+
 /// What one run of `oska-eval` printed, and how it exited.
 pub struct Outcome {
     pub code: i32,

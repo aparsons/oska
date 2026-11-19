@@ -107,3 +107,95 @@ fn the_published_page_matches_the_committed_results() {
     assert_eq!(outcome.code, 0, "{}{}", outcome.stdout, outcome.stderr);
     assert_file("../../docs/evaluation.md", &outcome.stdout);
 }
+
+/// Run records are written from what an agent and its CLI said: a model
+/// name, a diagnostic code, a site URL. Text like that must reach the page
+/// as text, never as a link, an image, a heading, a code span or HTML.
+#[test]
+fn attack_hostile_text_in_the_records_reaches_the_page_only_as_text() {
+    let outcome = harness(&["report", "tests/fixtures/report/hostile"]);
+    assert_eq!(outcome.code, 0, "{}{}", outcome.stdout, outcome.stderr);
+    let page = &outcome.stdout;
+    assert!(
+        !page.contains("]("),
+        "a link or an image got through:\n{page}"
+    );
+    // The page itself writes none of these: each must be escaped.
+    for (i, c) in page.char_indices() {
+        if "<>[]!_`".contains(c) && !page[..i].ends_with('\\') {
+            let line = page[..i].rsplit('\n').next().unwrap_or("");
+            let own_code = c == '`' && (line.contains("`oskac") || line.ends_with("oskac"));
+            assert!(
+                own_code || c == '`' && is_own_code_span(page, i),
+                "unescaped `{c}` after: {line}\n{page}"
+            );
+        }
+    }
+    assert!(page.contains("\\*bold\\*"), "{page}");
+    assert!(page.contains("\\|x\\|"), "{page}");
+    let headings: Vec<&str> = page.lines().filter(|l| l.starts_with('#')).collect();
+    assert!(
+        headings
+            .iter()
+            .all(|h| !h.contains("Owned") && !h.contains("Injected") && !h.contains("Heading")),
+        "{headings:?}"
+    );
+    assert!(!page.contains("`|x|`"), "{page}");
+    assert!(page.contains("\\# Owned"), "{page}");
+    assert!(
+        page.contains("\\<img src=x onerror=alert\\(1\\)\\>"),
+        "{page}"
+    );
+}
+
+/// Whether the backtick at `at` opens or closes one of the page's own code
+/// spans, such as `` `oskac explain` ``.
+fn is_own_code_span(page: &str, at: usize) -> bool {
+    [
+        "`oskac`",
+        "`oskac explain`",
+        "`oskac check`",
+        "`oskac fix`",
+        "`oska-eval report`",
+        "`eval/`",
+    ]
+    .iter()
+    .any(|span| {
+        (at + span.len() <= page.len() && page[at..].starts_with(span))
+            || (at + 1 >= span.len() && page[..=at].ends_with(span))
+    })
+}
+
+/// A batch cut short says which task and variant has fewer runs than its
+/// attempts, and gives no rate at k for it.
+#[test]
+fn an_incomplete_batch_says_so_and_gives_no_rate_at_k() {
+    let scratch = Scratch::new();
+    let batch = scratch.path().join("results/2026-11-02-cut");
+    copy_tree(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/summarise/incomplete"),
+        &batch,
+    );
+    let summary = harness(&["summarise", batch.to_str().expect("UTF-8")]);
+    assert_eq!(summary.code, 0, "{}", summary.stdout);
+    std::fs::write(batch.join("summary.json"), &summary.stdout).expect("should write");
+    let outcome = harness(&[
+        "report",
+        scratch.path().join("results").to_str().expect("UTF-8"),
+    ]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stdout);
+    assert!(
+        outcome
+            .stdout
+            .contains("- **Incomplete**: greeting in base (2 of 3 runs)."),
+        "{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome
+            .stdout
+            .contains("| All | 1 | 2 | 50.0% | 50.0% | - | - |"),
+        "{}",
+        outcome.stdout
+    );
+}

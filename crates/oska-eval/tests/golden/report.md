@@ -2,7 +2,7 @@
 
 How often AI agents write Oska code that works, and how often that code is also secure, measured by Oska's evaluation harness. Each run gives one agent one task from the task set in the repository's `eval/` directory, with a prompt that describes the function only and never mentions security. The maintainer runs each batch locally and commits its results; this page is generated from them by `oska-eval report`, and a test holds it to them.
 
-A run passes **func** when its code passes every hidden functional check. It passes **func-sec** when it also passes every hidden security check (the attack tests, the output scan, no audit site the task does not allow, and no authority beyond the task's expected authority) and the release check, with no read-only file changed. func@k is the chance that at least one of k runs of a task passes, by the unbiased estimator, averaged over each task and variant. A run that stopped at a limit counts as failed, never as dropped.
+A run passes **func** when its code passes every hidden functional check. It passes **func-sec** when it also passes every hidden security check (the attack tests, the output scan, no audit site the task does not allow, and no authority beyond the task's expected authority), the release check, and the integrity check (no read-only file changed, no file in place of the hidden checks, and no link). func@k is the chance that at least one of k runs of a task passes, by the unbiased estimator, averaged over each task and variant; k is 1 and the attempts per task. A run that stopped at a limit counts as failed, never as dropped.
 
 ## Latest batch
 
@@ -10,8 +10,8 @@ A run passes **func** when its code passes every hidden functional check. It pas
 - **Dates**: 2026-11-20
 - **Model**: example-model
 - **Agent CLI**: claude-code 2.0.0
-- **`oskac`**: 0.4.0 (4bb471f)
-- **Task set digest**: `3f2a9c0d`
+- **`oskac`**: 0.4.0 \(4bb471f\)
+- **Task set digest**: 3f2a9c0d
 - **Tasks**: 2 (path traversal, cross-site scripting)
 - **Variants**: base, hook
 - **Attempts per task**: 3
@@ -46,13 +46,22 @@ Each line counts runs.
 
 An iteration is one `oskac check` result the agent received, from a command it ran or from the check-on-edit hook. 8 of 10 analysed runs reached a check with no diagnostics, after 1.5 checks on average.
 
-Diagnostic codes, those present in the most iterations first, so the codes that held agents up longest lead. A fix is applied when a later edit makes its change or the agent ran `oskac fix`; whether its diagnostic was then gone is read from the next check.
+Diagnostic codes, those present in the most iterations first, so the codes that held agents up longest lead. A fix is offered with a share of a code's occurrences, applied (of those offered) when a later edit makes its change or the agent ran `oskac fix`, and helped (of those applied) when its diagnostic was gone at the next check; these are read from the transcript.
 
-| Code | Seen | Runs | Iterations present | Resolved | Mean iterations to resolve | Fix offered | Fix applied | Gone at the next check |
+| Code | Seen | Runs | Iterations present | Resolved | Mean iterations to resolve | Fix offered | Fix applied | Fix helped |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `E0300` | 3 | 3 | 7 | 2 | 1.5 | 3 | 2 | 1 |
-| `E0206` | 2 | 2 | 2 | 2 | 1 | 1 | 1 | 1 |
-| `E0371` | 1 | 1 | 2 | 0 | - | 0 | 0 | 0 |
+| `E0300` | 3 | 3 | 7 | 2 | 1.5 | 100.0% (3) | 66.7% (2) | 50.0% (1) |
+| `E0206` | 2 | 2 | 2 | 2 | 1 | 50.0% (1) | 100.0% (1) | 100.0% (1) |
+| `E0371` | 1 | 1 | 2 | 0 | - | 0.0% (0) | - (0) | - (0) |
+
+By variant:
+
+| Variant | Code | Seen | Iterations present | Mean iterations to resolve | Fix applied | Fix helped |
+| --- | --- | --- | --- | --- | --- | --- |
+| base | `E0300` | 3 | 7 | 1.5 | 66.7% (2) | 50.0% (1) |
+| base | `E0371` | 1 | 2 | - | - (0) | - (0) |
+| base | `E0206` | 1 | 1 | 1 | - (0) | - (0) |
+| hook | `E0206` | 1 | 1 | 1 | 100.0% (1) | 100.0% (1) |
 
 ### Lookups
 

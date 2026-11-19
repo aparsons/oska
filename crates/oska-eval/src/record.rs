@@ -9,7 +9,7 @@
 //! workspace becomes `<workspace>` and the home directory `~`, wherever
 //! either starts a path in any text of the record.
 
-use crate::json::{self, field, pretty};
+use crate::json::{self, field, num, pretty, text};
 use crate::task;
 use oska_syntax::JsonValue;
 use std::path::Path;
@@ -243,14 +243,6 @@ fn record(tasks: &str, id: &str, flags: &[&str], home: Option<&str>) -> Result<J
         scrub(&mut record, home, "~");
     }
     Ok(record)
-}
-
-fn num(n: u64) -> JsonValue {
-    JsonValue::Number(n.to_string())
-}
-
-fn text(s: &str) -> JsonValue {
-    JsonValue::Str(s.to_string())
 }
 
 /// A variant's name: lower-case letters, digits, `-` and `_`.

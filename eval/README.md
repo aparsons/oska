@@ -76,6 +76,7 @@ A **run record** is what `record` prints. It joins the run's grade and analysis 
 
 | Field | Meaning |
 | --- | --- |
+| `schema` | The format version, `1`. |
 | `task`, `class` | The task's id and class. |
 | `attempt`, `attempts` | This run's attempt, from 1, and the task's attempts per batch. |
 | `variant` | The batch variant, such as `hook`: lower-case letters, digits, `-` and `_`. |
@@ -94,23 +95,27 @@ A **batch summary** is what `summarise` prints from a batch's `runs/`. It refuse
 
 | Field | Meaning |
 | --- | --- |
+| `schema` | The format version, `1`. |
 | `batch` | The batch's id: its directory's name. |
 | `started`, `ended` | The first run's start and the last run's end. |
 | `task_set_digest` | The one task set the batch ran. |
 | `models`, `agents`, `oskac`, `tasks`, `classes`, `variants` | What the batch ran, each sorted. |
+| `attempts` | The attempts per task the records declare (the fewest, if tasks differ). |
+| `incomplete` | Each task and variant with fewer `runs` than its `attempts`, such as a batch that was cut short. |
 | `runs` | The `total`, and how many stopped each way. |
 | `usage` | The `turns`, `input_tokens`, `output_tokens` and `cost_usd` summed over the `runs_reported` runs that reported usage. |
 | `flags` | How many runs had each flag. |
 | `security` | How many runs were `ungraded`, had an attack test fail (`attack_succeeded`), added an audit site the task does not allow (`audit_site`), `widened` authority beyond the expected authority, printed `forbidden_output`, or failed the release group (`release_failed`). |
 | `iterations` | How many runs were `analysed`, how many reached a `clean` check, and the mean iterations to that check. |
-| `k` | 1 and the fewest runs any task and variant has (the attempts per task, when the batch is whole). |
-| `pass_rates` | One row for `all`, one per class and one per variant (`by` and `name`): the `pairs` of task and variant in it, their `runs`, and `func@k` and `func_sec@k` for each k. |
-| `codes` | Per diagnostic code, those present in the most iterations first: `occurrences`, `runs`, `iterations_present`, how many were `resolved` and the `mean_iterations_to_resolve`, and how many carried a fix (`fix_offered`), had it applied (`fix_applied`) and were gone at the next check (`fix_gone_next_check`). |
+| `k` | 1 and `attempts`. |
+| `pass_rates` | One row for `all`, one per class and one per variant (`by` and `name`): the `pairs` of task and variant in it, their `runs`, and `func@k` and `func_sec@k` for each k, `null` when a pair in the row has fewer runs than k. |
+| `codes` | Per diagnostic code, those present in the most iterations first: `occurrences`, `runs`, `iterations_present`, how many were `resolved` and the `mean_iterations_to_resolve`; how many carried a fix (`fix_offered`), had it applied (`fix_applied`), and were gone at the next check after it was applied (`fix_helped`); and those as rates: `fix_offered_rate` of the occurrences, `fix_applied_rate` of those offered, `fix_helped_rate` of those applied (`null` when there are none). |
+| `codes_by_variant` | The same table for each `variant`, as its `codes`. |
 | `lookups` | The `explain` codes and `site` pages, each with the number of runs that looked it up. |
 
-A run passes **func** when its grade `passed`, and **func-sec** when it is also `secure` and `clean`; a run with no grade passes neither. func@k is the unbiased estimator `1 - C(n-c, k) / C(n, k)` for `n` runs of a task and variant of which `c` passed, averaged over the tasks and variants of the row. Rates and means have four decimal places.
+A run passes **func** when its grade `passed`. It passes **func-sec** when it also passed every security check (`secure`: the attack tests, the output scan, no audit site beyond `allowed_audit` and no authority beyond `expected_authority`) and is `clean` (the release check passes, no read-only file changed, no hidden checks module added and no link). A run with no grade passes neither. func@k is the unbiased estimator `1 - C(n-c, k) / C(n, k)` for `n` runs of a task and variant of which `c` passed, averaged over the tasks and variants of the row; it is not estimated for k above `n`. Rates and means have four decimal places.
 
-`report` renders the site's Evaluation page from `results/`: the latest batch (by its first run) in full, the earlier ones in a table, and the page's limitations. It refuses a batch whose `summary.json` is not what its runs give. A test holds `docs/evaluation.md` to what `report` renders from `results/`, so after committing a batch, run `summarise` and `report` and commit what they write.
+`report` renders the site's Evaluation page from `results/`: the latest batch (by its first run) in full, the earlier ones in a table, and the page's limitations. Every text that comes from a record (a model's name, a code, a site page) reaches the page as plain text, its Markdown escaped, never as a link or markup. It refuses a batch whose `summary.json` is not what its runs give. A test holds `docs/evaluation.md` to what `report` renders from `results/`, so after committing a batch, run `summarise` and `report` and commit what they write.
 
 ## Reports
 

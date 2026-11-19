@@ -10,6 +10,8 @@
   "tasks": ["greeting"],
   "classes": ["xss"],
   "variants": ["base"],
+  "attempts": 2,
+  "incomplete": [],
   "runs": {"total": 2, "finished": 2, "turn_limit": 0, "timeout": 0, "budget": 0, "error": 0},
   "usage": {"runs_reported": 2, "turns": 20, "input_tokens": 2000, "output_tokens": 400, "cost_usd": 0.2000},
   "flags": {"escape": 0, "false_claim": 0, "read_only_changed": 0},
@@ -56,6 +58,12 @@
     }
   ],
   "codes": [],
+  "codes_by_variant": [
+    {
+      "variant": "base",
+      "codes": []
+    }
+  ],
   "lookups": {
     "explain": [],
     "site": []

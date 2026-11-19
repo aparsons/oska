@@ -7,7 +7,7 @@
 
 mod common;
 
-use common::{assert_golden, harness_env, Outcome};
+use common::{assert_golden, harness_env, home_env, Outcome};
 
 const TASKS: &str = "tests/fixtures/validate/valid";
 
@@ -40,7 +40,12 @@ fn base() -> Vec<&'static str> {
     ]
 }
 
-/// `record` with the base flags and `extra`, with the home `/home/user`. A
+/// The home directory the fixture analyses name, as the recorded
+/// transcript wrote it. It is only text to `record`, which scrubs it from
+/// the record whatever the platform, so it is the same on Windows.
+const HOME: &str = "/home/user";
+
+/// `record` with the base flags and `extra`, with the home [`HOME`]. A
 /// flag in `extra` that the base flags have replaces its value there.
 fn record(extra: &[&str]) -> Outcome {
     let mut args = base();
@@ -50,10 +55,9 @@ fn record(extra: &[&str]) -> Outcome {
             _ => args.extend_from_slice(pair),
         }
     }
-    harness_env(
-        &args,
-        &[("HOME", "/home/user"), ("USERPROFILE", "/home/user")],
-    )
+    let env = home_env(HOME);
+    let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    harness_env(&args, &env)
 }
 
 fn fixture(name: &str) -> String {
@@ -75,7 +79,7 @@ fn a_finished_run_joins_its_grade_and_analysis_with_no_local_path() {
     assert_eq!(outcome.code, 0, "{}{}", outcome.stdout, outcome.stderr);
     assert_golden("record_escape.json", &outcome.stdout);
     assert!(!outcome.stdout.contains("/work/ws"), "{}", outcome.stdout);
-    assert!(!outcome.stdout.contains("/home/user"), "{}", outcome.stdout);
+    assert!(!outcome.stdout.contains(HOME), "{}", outcome.stdout);
 }
 
 #[test]

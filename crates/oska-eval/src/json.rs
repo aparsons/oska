@@ -11,6 +11,57 @@ pub fn field(key: &str, value: JsonValue) -> (String, JsonValue) {
     (key.to_string(), value)
 }
 
+/// A whole number.
+pub fn num(n: u64) -> JsonValue {
+    JsonValue::Number(n.to_string())
+}
+
+/// A string.
+pub fn text(s: &str) -> JsonValue {
+    JsonValue::Str(s.to_string())
+}
+
+/// A rate or a mean, to four places, so that reports compare as text.
+pub fn decimal(x: f64) -> JsonValue {
+    JsonValue::Number(format!("{x:.4}"))
+}
+
+// Reading a report the harness wrote itself, such as a summary, where a
+// missing field reads as empty.
+
+/// The text at `key`, or "".
+pub fn str_at(value: &JsonValue, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(JsonValue::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The number at `key` as written, or `None` (for null too).
+pub fn number_at(value: &JsonValue, key: &str) -> Option<String> {
+    match value.get(key) {
+        Some(JsonValue::Number(n)) => Some(n.clone()),
+        _ => None,
+    }
+}
+
+/// The list at `key`, or an empty one.
+pub fn array_at<'a>(value: &'a JsonValue, key: &str) -> &'a [JsonValue] {
+    value
+        .get(key)
+        .and_then(JsonValue::as_array)
+        .unwrap_or_default()
+}
+
+/// The texts in the list at `key`.
+pub fn strs_at(value: &JsonValue, key: &str) -> Vec<String> {
+    array_at(value, key)
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect()
+}
+
 pub fn strings(items: &[String]) -> JsonValue {
     JsonValue::Array(items.iter().map(|s| JsonValue::Str(s.clone())).collect())
 }

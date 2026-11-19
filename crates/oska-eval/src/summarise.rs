@@ -6,7 +6,8 @@
 //! builds and task-set digest, all read from the records), how its runs
 //! stopped and what they cost, the security outcomes, func@k and
 //! func-sec@k for the whole batch and by class and variant, a table of the
-//! diagnostic codes the agents saw, and their lookups.
+//! diagnostic codes the agents saw (for the batch and for each variant),
+//! and their lookups.
 //!
 //! A run passes functionally when its grade passed; it passes func-sec
 //! when its grade also passed every security check and is clean (the
@@ -14,12 +15,16 @@
 //! limit, or failed) passes neither: runs are never dropped.
 //!
 //! func@k and func-sec@k use the unbiased estimator (see [`pass_at_k`]),
-//! per task and variant, averaged over them. k is 1 and the fewest runs any
-//! task and variant of the batch has, which is the attempts per task when
-//! the batch is whole.
+//! per task and variant, averaged over them. k is 1 and the attempts per
+//! task the records declare (the fewest, if tasks differ). A task and
+//! variant with fewer runs than its attempts is listed as `incomplete`, and
+//! every rate at a k it has too few runs for is null rather than estimated
+//! from a smaller k.
 
-use crate::json::{self, field, pretty, strings};
+use crate::grade::{AUDIT_CHECK, AUTHORITY_CHECK, OUTPUT_CHECK};
+use crate::json::{self, decimal, field, num, pretty, strings, text};
 use crate::record::{is_name, is_utc_time, SCHEMA};
+use crate::task::is_class;
 use oska_syntax::JsonValue;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -42,13 +47,17 @@ pub fn run(batch: &str) -> ExitCode {
 /// The unbiased estimator of pass@k from `n` runs of which `c` passed:
 /// the chance that at least one of `k` runs drawn from the `n` without
 /// replacement passed, `1 - C(n-c, k) / C(n, k)`, computed as a product so
-/// that it never overflows. `k` must be at most `n`.
-pub fn pass_at_k(n: u64, c: u64, k: u64) -> f64 {
+/// that it never overflows. `None` when `k` is more than `n`: the runs
+/// cannot say.
+pub fn pass_at_k(n: u64, c: u64, k: u64) -> Option<f64> {
+    if k > n {
+        return None;
+    }
     if n - c < k {
-        return 1.0;
+        return Some(1.0);
     }
     let none: f64 = (n - c + 1..=n).map(|i| 1.0 - k as f64 / i as f64).product();
-    1.0 - none
+    Some(1.0 - none)
 }
 
 /// One run record, as far as the summary reads it.
@@ -56,6 +65,7 @@ struct Run {
     task: String,
     class: String,
     attempt: u64,
+    attempts: u64,
     variant: String,
     model: String,
     agent: String,
@@ -109,6 +119,16 @@ struct Diagnostic {
     fix: Option<(bool, bool)>,
 }
 
+/// The runs of one task in one variant.
+#[derive(Clone, Copy)]
+struct Pair<'a> {
+    class: &'a str,
+    attempts: u64,
+    runs: u64,
+    func: u64,
+    func_sec: u64,
+}
+
 pub fn summarise(batch: &Path) -> Result<JsonValue, String> {
     let id = batch
         .file_name()
@@ -142,27 +162,53 @@ pub fn summarise(batch: &Path) -> Result<JsonValue, String> {
     let ended = runs.iter().map(|r| r.ended.as_str()).max();
 
     // Per task and variant: the runs, and how many passed each way.
-    let mut pairs: BTreeMap<(&str, &str), (&str, u64, u64, u64)> = BTreeMap::new();
+    let mut pairs: BTreeMap<(&str, &str), Pair> = BTreeMap::new();
     for run in &runs {
-        let entry = pairs
-            .entry((&run.task, &run.variant))
-            .or_insert((&run.class, 0, 0, 0));
-        entry.1 += 1;
+        let pair = pairs.entry((&run.task, &run.variant)).or_insert(Pair {
+            class: &run.class,
+            attempts: run.attempts,
+            runs: 0,
+            func: 0,
+            func_sec: 0,
+        });
+        if pair.class != run.class || pair.attempts != run.attempts {
+            return Err(format!(
+                "the records of `{}` in `{}` disagree on its class or attempts",
+                run.task, run.variant
+            ));
+        }
+        pair.runs += 1;
         if let Some(grade) = &run.grade {
             if grade.passed {
-                entry.2 += 1;
+                pair.func += 1;
                 if grade.secure && grade.clean {
-                    entry.3 += 1;
+                    pair.func_sec += 1;
                 }
             }
         }
     }
-    let fewest = pairs.values().map(|p| p.1).min().unwrap_or(1);
-    let ks: Vec<u64> = if fewest > 1 { vec![1, fewest] } else { vec![1] };
+    let attempts = pairs.values().map(|p| p.attempts).min().unwrap_or(1);
+    let ks: Vec<u64> = if attempts > 1 {
+        vec![1, attempts]
+    } else {
+        vec![1]
+    };
+    let incomplete: Vec<JsonValue> = pairs
+        .iter()
+        .filter(|(_, p)| p.runs < p.attempts)
+        .map(|((task, variant), p)| {
+            JsonValue::Object(vec![
+                field("task", text(task)),
+                field("variant", text(variant)),
+                field("runs", num(p.runs)),
+                field("attempts", num(p.attempts)),
+            ])
+        })
+        .collect();
 
     let mut rows = vec![rate_row("all", "all", pairs.values().copied(), &ks)];
     for class in set(|r| &r.class) {
-        let of = pairs.values().filter(|p| p.0 == class).copied();
+        let of = pairs.values().filter(|p| p.class == class).copied();
         rows.push(rate_row("class", &class, of, &ks));
     }
     for variant in set(|r| &r.variant) {
@@ -185,6 +231,20 @@ pub fn summarise(batch: &Path) -> Result<JsonValue, String> {
         .iter()
         .filter_map(|a| a.iterations_to_clean)
         .collect();
+    let by_variant: Vec<JsonValue> = set(|r| &r.variant)
+        .iter()
+        .map(|variant| {
+            let of: Vec<&Analysis> = runs
+                .iter()
+                .filter(|r| &r.variant == variant)
+                .filter_map(|r| r.analysis.as_ref())
+                .collect();
+            JsonValue::Object(vec![
+                field("variant", text(variant)),
+                field("codes", codes(&of)),
+            ])
+        })
+        .collect();
 
     Ok(JsonValue::Object(vec![
         field("schema", num(SCHEMA)),
@@ -198,6 +258,8 @@ pub fn summarise(batch: &Path) -> Result<JsonValue, String> {
         field("tasks", strings(&set(|r| &r.task))),
         field("classes", strings(&set(|r| &r.class))),
         field("variants", strings(&set(|r| &r.variant))),
+        field("attempts", num(attempts)),
+        field("incomplete", JsonValue::Array(incomplete)),
         field("runs", JsonValue::Object(stops)),
         field(
             "usage",
@@ -235,17 +297,14 @@ pub fn summarise(batch: &Path) -> Result<JsonValue, String> {
                             .any(|(group, name)| group == "security" && name.starts_with("attack:"))
                     }),
                 ),
-                field(
-                    "audit_site",
-                    graded(&|g| g.failed("security", crate::grade::AUDIT_CHECK)),
-                ),
+                field("audit_site", graded(&|g| g.failed("security", AUDIT_CHECK))),
                 field(
                     "widened",
-                    graded(&|g| g.failed("security", crate::grade::AUTHORITY_CHECK)),
+                    graded(&|g| g.failed("security", AUTHORITY_CHECK)),
                 ),
                 field(
                     "forbidden_output",
-                    graded(&|g| g.failed("security", crate::grade::OUTPUT_CHECK)),
+                    graded(&|g| g.failed("security", OUTPUT_CHECK)),
                 ),
                 field(
                     "release_failed",
@@ -264,6 +323,7 @@ pub fn summarise(batch: &Path) -> Result<JsonValue, String> {
         field("k", JsonValue::Array(ks.iter().map(|k| num(*k)).collect())),
         field("pass_rates", JsonValue::Array(rows)),
         field("codes", codes(&analyses)),
+        field("codes_by_variant", JsonValue::Array(by_variant)),
         field(
             "lookups",
             JsonValue::Object(vec![
@@ -275,27 +335,36 @@ pub fn summarise(batch: &Path) -> Result<JsonValue, String> {
 }
 
 /// A row of `pass_rates`: the pairs of task and variant in it, their runs,
-/// and func@k and func-sec@k for each k, averaged over the pairs.
+/// and func@k and func-sec@k for each k, averaged over the pairs; null when
+/// a pair has fewer runs than k.
 fn rate_row<'a>(
     by: &str,
     name: &str,
-    pairs: impl Iterator<Item = (&'a str, u64, u64, u64)>,
+    pairs: impl Iterator<Item = Pair<'a>>,
     ks: &[u64],
 ) -> JsonValue {
-    let pairs: Vec<(u64, u64, u64)> = pairs.map(|(_, n, f, s)| (n, f, s)).collect();
+    let pairs: Vec<Pair> = pairs.collect();
     let mut fields = vec![
         field("by", text(by)),
         field("name", text(name)),
         field("pairs", num(pairs.len() as u64)),
-        field("runs", num(pairs.iter().map(|p| p.0).sum())),
+        field("runs", num(pairs.iter().map(|p| p.runs).sum())),
     ];
-    let average = |k: u64, passes: fn(&(u64, u64, u64)) -> u64| {
-        let total: f64 = pairs.iter().map(|p| pass_at_k(p.0, passes(p), k)).sum();
-        decimal(total / pairs.len().max(1) as f64)
+    let average = |k: u64, passes: fn(&Pair) -> u64| -> JsonValue {
+        let rates: Option<Vec<f64>> = pairs
+            .iter()
+            .map(|p| pass_at_k(p.runs, passes(p), k))
+            .collect();
+        match rates {
+            Some(rates) if !rates.is_empty() => {
+                decimal(rates.iter().sum::<f64>() / rates.len() as f64)
+            }
+            _ => JsonValue::Null,
+        }
     };
     for k in ks {
-        fields.push(field(&format!("func@{k}"), average(*k, |p| p.1)));
-        fields.push(field(&format!("func_sec@{k}"), average(*k, |p| p.2)));
+        fields.push(field(&format!("func@{k}"), average(*k, |p| p.func)));
+        fields.push(field(&format!("func_sec@{k}"), average(*k, |p| p.func_sec)));
     }
     JsonValue::Object(fields)
 }
@@ -303,8 +372,8 @@ fn rate_row<'a>(
 /// The diagnostic codes, those present in the most iterations first: how
 /// often each appeared, in how many runs, in how many iterations in all,
 /// how many went away and how many iterations that took on average, and
-/// how many carried a fix, had it applied, and were gone at the next
-/// check.
+/// how many carried a fix, had it applied, and were gone at the next check
+/// after it was applied (it helped), with those as rates.
 fn codes(analyses: &[&Analysis]) -> JsonValue {
     #[derive(Default)]
     struct Code {
@@ -314,7 +383,7 @@ fn codes(analyses: &[&Analysis]) -> JsonValue {
         resolved: Vec<u64>,
         offered: u64,
         applied: u64,
-        gone: u64,
+        helped: u64,
     }
     let mut table: BTreeMap<&str, Code> = BTreeMap::new();
     for analysis in analyses {
@@ -332,12 +401,19 @@ fn codes(analyses: &[&Analysis]) -> JsonValue {
             if let Some((applied, gone)) = d.fix {
                 code.offered += 1;
                 code.applied += u64::from(applied);
-                code.gone += u64::from(gone);
+                code.helped += u64::from(applied && gone);
             }
         }
     }
     let mut rows: Vec<(&str, Code)> = table.into_iter().collect();
     rows.sort_by(|a, b| b.1.present.cmp(&a.1.present).then(a.0.cmp(b.0)));
+    let rate = |part: u64, whole: u64| {
+        if whole == 0 {
+            JsonValue::Null
+        } else {
+            decimal(part as f64 / whole as f64)
+        }
+    };
     JsonValue::Array(
         rows.into_iter()
             .map(|(name, c)| {
@@ -350,7 +426,10 @@ fn codes(analyses: &[&Analysis]) -> JsonValue {
                     field("mean_iterations_to_resolve", mean(&c.resolved)),
                     field("fix_offered", num(c.offered)),
                     field("fix_applied", num(c.applied)),
-                    field("fix_gone_next_check", num(c.gone)),
+                    field("fix_helped", num(c.helped)),
+                    field("fix_offered_rate", rate(c.offered, c.occurrences)),
+                    field("fix_applied_rate", rate(c.applied, c.offered)),
+                    field("fix_helped_rate", rate(c.helped, c.applied)),
                 ])
             })
             .collect(),
@@ -377,19 +456,6 @@ fn lookups(analyses: &[&Analysis], of: fn(&Analysis) -> &Vec<String>, key: &str)
     )
 }
 
-fn num(n: u64) -> JsonValue {
-    JsonValue::Number(n.to_string())
-}
-
-fn text(s: &str) -> JsonValue {
-    JsonValue::Str(s.to_string())
-}
-
-/// A rate or a mean, to four places, so that summaries compare as text.
-fn decimal(x: f64) -> JsonValue {
-    JsonValue::Number(format!("{x:.4}"))
-}
-
 fn mean(values: &[u64]) -> JsonValue {
     if values.is_empty() {
         return JsonValue::Null;
@@ -399,14 +465,19 @@ fn mean(values: &[u64]) -> JsonValue {
 
 // Reading the run records.
 
+/// The `.json` files of `dir`, each a run record. An entry that cannot be
+/// read is an error, never skipped.
 fn read_runs(dir: &Path) -> Result<Vec<Run>, String> {
     let entries = std::fs::read_dir(dir)
         .map_err(|e| format!("no run records: cannot read {}: {e}", dir.display()))?;
-    let mut paths: Vec<_> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "json"))
-        .collect();
+    let mut paths = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+        let path = entry.path();
+        if path.extension().is_some_and(|x| x == "json") {
+            paths.push(path);
+        }
+    }
     paths.sort();
     if paths.is_empty() {
         return Err(format!("no run records in {}", dir.display()));
@@ -465,6 +536,10 @@ fn parse_run(value: &JsonValue) -> Result<Run, String> {
     if !is_name(&variant) {
         return Err(format!("`variant` `{variant}` is not a variant's name"));
     }
+    let class = get_str(value, "class")?;
+    if !is_class(&class) {
+        return Err(format!("`class` `{class}` is not a task class"));
+    }
     let started = get_str(value, "started")?;
     let ended = get_str(value, "ended")?;
     if !is_utc_time(&started) || !is_utc_time(&ended) {
@@ -477,13 +552,21 @@ fn parse_run(value: &JsonValue) -> Result<Run, String> {
             STOPS.join(", ")
         ));
     }
+    let attempt = get_u64(value, "attempt")?;
+    let attempts = get_u64(value, "attempts")?;
+    if attempt == 0 || attempt > attempts {
+        return Err(format!(
+            "attempt {attempt} is not one of the task's {attempts} attempts"
+        ));
+    }
     let agent = get(value, "agent")?;
     let oskac = get(value, "oskac")?;
     let flags = get(value, "flags")?;
     Ok(Run {
         task: get_str(value, "task")?,
-        class: get_str(value, "class")?,
-        attempt: get_u64(value, "attempt")?,
+        class,
+        attempt,
+        attempts,
         variant,
         model: get_str(value, "model")?,
         agent: format!("{} {}", get_str(agent, "name")?, get_str(agent, "version")?),
@@ -594,20 +677,25 @@ fn parse_analysis(value: &JsonValue) -> Result<Analysis, String> {
 mod tests {
     use super::pass_at_k;
 
-    fn rounded(x: f64) -> String {
-        format!("{x:.4}")
+    fn rounded(n: u64, c: u64, k: u64) -> String {
+        pass_at_k(n, c, k).map_or("none".to_string(), |x| format!("{x:.4}"))
     }
 
     /// Values worked out by hand from `1 - C(n-c, k) / C(n, k)`.
     #[test]
     fn the_estimator_matches_the_closed_form() {
-        assert_eq!(rounded(pass_at_k(5, 2, 1)), "0.4000");
+        assert_eq!(rounded(5, 2, 1), "0.4000");
         // 1 - C(3,2)/C(5,2) = 1 - 3/10
-        assert_eq!(rounded(pass_at_k(5, 2, 2)), "0.7000");
+        assert_eq!(rounded(5, 2, 2), "0.7000");
         // 1 - C(8,3)/C(10,3) = 1 - 56/120
-        assert_eq!(rounded(pass_at_k(10, 2, 3)), "0.5333");
-        assert_eq!(rounded(pass_at_k(5, 0, 5)), "0.0000");
-        assert_eq!(rounded(pass_at_k(5, 1, 5)), "1.0000");
-        assert_eq!(rounded(pass_at_k(3, 3, 1)), "1.0000");
+        assert_eq!(rounded(10, 2, 3), "0.5333");
+        assert_eq!(rounded(5, 0, 5), "0.0000");
+        assert_eq!(rounded(5, 1, 5), "1.0000");
+        assert_eq!(rounded(3, 3, 1), "1.0000");
+    }
+
+    #[test]
+    fn the_estimator_says_nothing_of_more_runs_than_there_are() {
+        assert_eq!(rounded(2, 1, 3), "none");
     }
 }
