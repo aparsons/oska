@@ -194,10 +194,17 @@ fn items_bytes(capacity: usize) -> u64 {
 }
 
 /// `text` as a text value, made at `span`.
+#[inline]
 pub(crate) fn text(text: &str, span: Span) -> Result<Value, Panic> {
-    if !metered() {
-        return Ok(Value::str(text));
+    if metered() {
+        return text_metered(text, span);
     }
+    Ok(Value::str(text))
+}
+
+#[cold]
+#[inline(never)]
+fn text_metered(text: &str, span: Span) -> Result<Value, Panic> {
     let bytes = text_bytes(text.len());
     charge(bytes, span)?;
     let text: Rc<str> = Rc::from(text);
@@ -208,14 +215,25 @@ pub(crate) fn text(text: &str, span: Span) -> Result<Value, Panic> {
 /// The text `make` builds, of `len` bytes, made at `span`: charged
 /// before `make` runs, so a text that would pass the limit is never
 /// built.
+#[inline]
 pub(crate) fn text_of_len(
     len: usize,
     span: Span,
     make: impl FnOnce() -> String,
 ) -> Result<Value, Panic> {
-    if !metered() {
-        return Ok(Value::str(&make()));
+    if metered() {
+        return text_of_len_metered(len, span, make);
     }
+    Ok(Value::str(&make()))
+}
+
+#[cold]
+#[inline(never)]
+fn text_of_len_metered(
+    len: usize,
+    span: Span,
+    make: impl FnOnce() -> String,
+) -> Result<Value, Panic> {
     charge(text_bytes(len), span)?;
     let made = make();
     let bytes = text_bytes(made.len());
@@ -225,10 +243,17 @@ pub(crate) fn text_of_len(
 }
 
 /// `items` as a list value, made at `span`.
+#[inline]
 pub(crate) fn list(items: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    if !metered() {
-        return Ok(Value::List(Rc::new(items)));
+    if metered() {
+        return list_metered(items, span);
     }
+    Ok(Value::List(Rc::new(items)))
+}
+
+#[cold]
+#[inline(never)]
+fn list_metered(items: Vec<Value>, span: Span) -> Result<Value, Panic> {
     let bytes = items_bytes(items.capacity());
     charge(bytes, span)?;
     let items = Rc::new(items);
@@ -237,10 +262,17 @@ pub(crate) fn list(items: Vec<Value>, span: Span) -> Result<Value, Panic> {
 }
 
 /// What `ctor` builds from `fields`, at `span`.
+#[inline]
 pub(crate) fn construct(ctor: &Construct, fields: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    if !metered() {
-        return Ok(Value::construct(ctor, fields));
+    if metered() {
+        return construct_metered(ctor, fields, span);
     }
+    Ok(Value::construct(ctor, fields))
+}
+
+#[cold]
+#[inline(never)]
+fn construct_metered(ctor: &Construct, fields: Vec<Value>, span: Span) -> Result<Value, Panic> {
     // The fields, and the type's and the variant's names.
     let names = ctor.ty.len() + ctor.variant.as_ref().map_or(0, String::len);
     let bytes = items_bytes(fields.capacity()) + 2 * RC + names as u64;
@@ -253,10 +285,17 @@ pub(crate) fn construct(ctor: &Construct, fields: Vec<Value>, span: Span) -> Res
 }
 
 /// `closure` as a function value, made at `span`.
+#[inline]
 pub(crate) fn closure(closure: ClosureValue, span: Span) -> Result<Value, Panic> {
-    if !metered() {
-        return Ok(Value::Closure(Rc::new(closure)));
+    if metered() {
+        return closure_metered(closure, span);
     }
+    Ok(Value::Closure(Rc::new(closure)))
+}
+
+#[cold]
+#[inline(never)]
+fn closure_metered(closure: ClosureValue, span: Span) -> Result<Value, Panic> {
     let bytes = ENTRY
         + RC
         + std::mem::size_of::<ClosureValue>() as u64
@@ -270,11 +309,18 @@ pub(crate) fn closure(closure: ClosureValue, span: Span) -> Result<Value, Panic>
 /// `item` added at the end of `items`, at `span`, copying them first when
 /// they are shared, as `List.push` does. Under the limit the growth is
 /// charged first.
+#[inline]
 pub(crate) fn push(items: &mut Rc<Vec<Value>>, item: Value, span: Span) -> Result<(), Panic> {
-    if !metered() {
-        Rc::make_mut(items).push(item);
-        return Ok(());
+    if metered() {
+        return push_metered(items, item, span);
     }
+    Rc::make_mut(items).push(item);
+    Ok(())
+}
+
+#[cold]
+#[inline(never)]
+fn push_metered(items: &mut Rc<Vec<Value>>, item: Value, span: Span) -> Result<(), Panic> {
     let len = items.len();
     let capacity = items.capacity();
     // The capacity `Vec` would grow to, which is reserved exactly.

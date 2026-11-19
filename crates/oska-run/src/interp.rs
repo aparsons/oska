@@ -608,11 +608,13 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         frame: &mut Frame,
     ) -> Result<Value, Unwind> {
         let args = self.eval_all(args, frame)?;
-        let before = memory_path(receiver, frame);
+        let before = metered_place(receiver).then(|| field_path(receiver, frame));
         let mut taken = std::mem::replace(place_mut(receiver, frame), Value::Unit);
         let value = self.call_mutating(callee, &mut taken, args, span);
         *place_mut(receiver, frame) = taken;
-        relocate_path(receiver, frame, &before);
+        if let Some(before) = before {
+            relocate_path(receiver, frame, &before);
+        }
         Ok(value?)
     }
 
@@ -788,9 +790,11 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 let value = self.eval(value, frame)?;
                 // The old value is dropped: a copy elsewhere keeps its own
                 // reference to it.
-                let before = memory_path(place, frame);
-                *place_mut(place, frame) = value;
-                relocate_path(place, frame, &before);
+                if metered_place(place) {
+                    assign_metered(place, value, frame);
+                } else {
+                    *place_mut(place, frame) = value;
+                }
             }
             Stmt::Return { value, span } => {
                 let value = match value {
@@ -1081,14 +1085,19 @@ fn place_mut<'f>(place: &Place, frame: &'f mut Frame) -> &'f mut Value {
     }
 }
 
-/// Under `--max-memory`, each struct's fields a write at `place` goes
-/// through, outermost first, with whether they are shared: what
-/// [`relocate_path`] needs after the write. Empty without the limit, or
-/// for a write to a local.
-fn memory_path(place: &Place, frame: &Frame) -> Vec<(usize, bool)> {
-    if !matches!(place, Place::Field { .. }) || !memory::metered() {
-        return Vec::new();
-    }
+/// Whether a write at `place` is one the meter follows: to a field, under
+/// `--max-memory`. A write to a local never is, with or without it.
+#[inline]
+fn metered_place(place: &Place) -> bool {
+    matches!(place, Place::Field { .. }) && memory::metered()
+}
+
+/// Each struct's fields a write at `place` goes through, outermost first,
+/// with whether they are shared: what [`relocate_path`] needs after the
+/// write.
+#[cold]
+#[inline(never)]
+fn field_path(place: &Place, frame: &Frame) -> Vec<(usize, bool)> {
     let mut lists = Vec::new();
     field_lists(place, frame, &mut lists);
     lists
@@ -1097,12 +1106,20 @@ fn memory_path(place: &Place, frame: &Frame) -> Vec<(usize, bool)> {
         .collect()
 }
 
+/// `*place = value` for a write the meter follows ([`metered_place`]).
+#[cold]
+#[inline(never)]
+fn assign_metered(place: &Place, value: Value, frame: &mut Frame) {
+    let before = field_path(place, frame);
+    *place_mut(place, frame) = value;
+    relocate_path(place, frame, &before);
+}
+
 /// After a write at `place`, which went through the fields `before` named
-/// ([`memory_path`]): the meter follows each that was copied or moved.
+/// ([`field_path`]): the meter follows each that was copied or moved.
+#[cold]
+#[inline(never)]
 fn relocate_path(place: &Place, frame: &Frame, before: &[(usize, bool)]) {
-    if before.is_empty() {
-        return;
-    }
     let mut lists = Vec::new();
     field_lists(place, frame, &mut lists);
     for (&(at, shared), fields) in before.iter().zip(lists) {
