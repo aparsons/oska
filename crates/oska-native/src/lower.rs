@@ -77,7 +77,7 @@ use oska_check::program::{
 use oska_syntax::ast::BinaryOp;
 use oska_syntax::{Diagnostic, Span};
 
-use crate::intrinsics::{self, Check, Fails, Import, OsCall, Prelude, Runtime, Start};
+use crate::intrinsics::{self, Check, ErrorRead, Fails, Import, OsCall, Prelude, Runtime, Start};
 use crate::ir::{self, Arith, BinOp, Cond, FnId, Inst, Label, Symbol, Temp, Width};
 use crate::layout::{self, Rodata};
 use crate::optimize;
@@ -93,7 +93,7 @@ pub const MAX_CALL_DEPTH: u32 = 50_000;
 const STACK_RESERVE: u64 = 8 << 20;
 
 /// The words of the runtime's writable data, at `rt_mem_globals()`.
-pub const GLOBALS: u32 = 45;
+pub const GLOBALS: u32 = 50;
 
 /// What an executable runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -231,6 +231,7 @@ pub fn program(
         between_functions: Vec::new(),
         closures: Vec::new(),
         closure_ids: HashMap::new(),
+        callback: None,
     };
     let entry = lowering.entry()?;
     while let Some((instance, id, origin)) = lowering.queue.pop() {
@@ -258,7 +259,7 @@ pub fn program(
         }
     }
     optimize::module(&mut lowering.functions);
-    lowering.size_stack(entry);
+    let stack = lowering.size_stack(entry);
     // The most arguments any call passes, or any function takes, past
     // those the target passes in registers: they share one area after
     // the globals.
@@ -281,10 +282,14 @@ pub fn program(
         rodata: lowering.rodata.into_bytes(),
         data_size: (GLOBALS + extra_args) * layout::WORD,
         extra_args: GLOBALS * layout::WORD,
+        callback: lowering.callback,
+        stack,
     })
 }
 
 struct Lowering<'p> {
+    /// [`ir::Module::callback`].
+    callback: Option<FnId>,
     user: &'p Program,
     rt: &'p Program,
     locate: Locate<'p>,
@@ -390,11 +395,26 @@ impl<'p> Lowering<'p> {
         self.functions[run] = body.finish("_main", 0, NOWHERE)?;
 
         let start_kind = self.target.platform().start;
+        // On Windows, the vectored exception handler's entry, which
+        // Windows calls with `EXCEPTION_POINTERS *` and which returns to
+        // it (ADR 0020): `std.rt`'s `on_exception`.
+        let callback = if start_kind == Start::Windows {
+            let callback = self.reserve("_on_exception".to_string());
+            let mut body = Body::new(self, Source::User, None);
+            let pointers = body.temp();
+            let result = body.call_runtime("on_exception", vec![pointers], NOWHERE)?;
+            body.push(Inst::Return(result));
+            self.functions[callback] = body.finish("_on_exception", 1, NOWHERE)?;
+            Some(callback)
+        } else {
+            None
+        };
+        self.callback = callback;
         let mut body = Body::new(self, Source::User, None);
         // On macOS, `_start` is called as `main(argc, argv)`: its
         // parameters.
         let params = match start_kind {
-            Start::Stack => 0,
+            Start::Stack | Start::Windows => 0,
             Start::Main => {
                 body.temp();
                 body.temp();
@@ -404,16 +424,21 @@ impl<'p> Lowering<'p> {
         let size = body.constant(0);
         // `std.rt`'s fault handler, which the kernel calls with the
         // signal's number as its one argument, as the backend's own
-        // calling convention passes it.
-        let on_fault = body.lowering.request(
-            Instance::Function {
-                source: Source::Runtime,
-                name: "on_fault".to_string(),
-                type_args: Vec::new(),
-            },
-            NOWHERE,
-        );
-        let handler = body.function_address(on_fault);
+        // calling convention passes it; on Windows, the entry above.
+        let handler = match callback {
+            Some(callback) => body.function_address(callback),
+            None => {
+                let on_fault = body.lowering.request(
+                    Instance::Function {
+                        source: Source::Runtime,
+                        name: "on_fault".to_string(),
+                        type_args: Vec::new(),
+                    },
+                    NOWHERE,
+                );
+                body.function_address(on_fault)
+            }
+        };
         let (argc, argv) = match start_kind {
             // The kernel's initial stack holds argc, then the argv
             // pointers.
@@ -425,9 +450,20 @@ impl<'p> Lowering<'p> {
                 (argc, body.binary_op(BinOp::Add, sp, eight))
             }
             Start::Main => (0, 1),
+            // `std.rt` reads the command line itself.
+            Start::Windows => {
+                let zero = body.constant(0);
+                (zero, zero)
+            }
         };
         body.call_runtime("process_init", vec![argc, argv, handler], NOWHERE)?;
-        let stack = body.call_runtime("stack_new", vec![size], NOWHERE)?;
+        // On Windows the program runs on the thread's own stack, which
+        // the executable's header reserves.
+        let stack = if start_kind == Start::Windows {
+            body.constant(0)
+        } else {
+            body.call_runtime("stack_new", vec![size], NOWHERE)?
+        };
         body.push(Inst::CallOnStack {
             stack,
             depth: MAX_CALL_DEPTH,
@@ -445,7 +481,7 @@ impl<'p> Lowering<'p> {
     /// [`STACK_RESERVE`]. A task recursing through `join` stacks a queue's
     /// and a runner's frame for every two counted calls, the function's
     /// and the closure's.
-    fn size_stack(&mut self, start: FnId) {
+    fn size_stack(&mut self, start: FnId) -> u64 {
         let largest = |ids: &[FnId]| {
             ids.iter()
                 .filter_map(|&id| self.functions.get(id))
@@ -460,6 +496,7 @@ impl<'p> Lowering<'p> {
         if let Some(Inst::Const { value, .. }) = self.functions[start].insts.first_mut() {
             *value = size as i64;
         }
+        size
     }
 
     /// Lower the function `instance` names.
@@ -1774,7 +1811,7 @@ impl<'l, 'p> Body<'l, 'p> {
         });
         let failed = match import.fails {
             Fails::MinusOne => -1,
-            Fails::Null | Fails::NullKeepsErrno => 0,
+            Fails::Null | Fails::NullKeepsErrno | Fails::Zero => 0,
             Fails::Never => return dst,
         };
         let done = self.label();
@@ -1789,13 +1826,19 @@ impl<'l, 'p> Body<'l, 'p> {
             Some(errno) => errno,
             None => self.errno_address(),
         };
-        let code = self.temp();
-        self.push(Inst::Load {
-            width: Width::W32,
-            dst: code,
-            base: errno,
-            offset: 0,
-        });
+        let code = match platform.error {
+            ErrorRead::Value => errno,
+            ErrorRead::Address => {
+                let code = self.temp();
+                self.push(Inst::Load {
+                    width: Width::W32,
+                    dst: code,
+                    base: errno,
+                    offset: 0,
+                });
+                code
+            }
+        };
         let zero = self.constant(0);
         self.push(Inst::Binary {
             op: BinOp::Sub,
@@ -1807,16 +1850,20 @@ impl<'l, 'p> Body<'l, 'p> {
         dst
     }
 
-    /// The address of the thread's `errno`, from the platform library.
+    /// The address of the thread's `errno`, or on Windows its last
+    /// error itself ([`ErrorRead`]), from the platform library.
     fn errno_address(&mut self) -> Temp {
-        let errno = self.lowering.target.platform().errno;
+        let platform = self.lowering.target.platform();
+        let import = platform.imports[usize::from(platform.errno)];
         let dst = self.temp();
         self.push(Inst::LibCall {
             dst,
-            import: errno,
+            import: platform
+                .slot_of(usize::from(platform.errno))
+                .unwrap_or_default(),
             args: Vec::new(),
             fixed: 0,
-            wide: true,
+            wide: import.wide,
         });
         dst
     }
@@ -1838,6 +1885,7 @@ impl<'l, 'p> Body<'l, 'p> {
                 }
                 OsCall::Library(import) => self.library_call(import, args),
                 OsCall::Same => self.copy(arg(0)),
+                OsCall::Absent => self.constant(self.lowering.target.platform().absent),
             },
             Runtime::Load(width) => {
                 let dst = self.temp();

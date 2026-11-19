@@ -7,3 +7,4 @@ dist/hello-linux-aarch64
 dist/hello-linux-x86_64
 dist/hello-macos-aarch64
 dist/hello-macos-x86_64
+dist/hello-windows-x86_64.exe

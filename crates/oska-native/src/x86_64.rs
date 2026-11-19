@@ -59,6 +59,13 @@ pub const REGISTER_ARGS: usize = 6;
 /// The argument registers, in order.
 const ARGS: [u8; REGISTER_ARGS] = [RDI, RSI, RDX, RCX, R8, R9];
 
+/// The Windows x64 convention's argument registers, for a library call
+/// on Windows.
+const WINDOWS_ARGS: [u8; 4] = [RCX, RDX, R8, R9];
+
+/// The page Windows commits a stack by.
+const PAGE: u32 = 0x1000;
+
 /// A system call's argument registers, in order.
 const SYSCALL_ARGS: [u8; 6] = [RDI, RSI, RDX, R10, R8, R9];
 
@@ -121,14 +128,16 @@ pub struct Fixup {
 
 /// Select and encode `module`'s instructions. Fails only when the code is
 /// too large for a branch to reach.
-pub fn emit(module: &Module) -> Result<Text, String> {
+pub fn emit(module: &Module, windows: bool) -> Result<Text, String> {
     let mut emitter = Emitter {
         extra_args: module.extra_args,
+        windows,
         ..Emitter::default()
     };
     let mut starts = Vec::with_capacity(module.functions.len());
-    for function in &module.functions {
+    for (id, function) in module.functions.iter().enumerate() {
         starts.push(emitter.asm.bytes.len());
+        emitter.callback = module.callback == Some(id);
         emitter.function(function)?;
     }
     for &(at, callee) in &emitter.calls {
@@ -170,6 +179,12 @@ struct Emitter {
     jumps: Vec<(usize, u32)>,
     /// [`Module::extra_args`].
     extra_args: u32,
+    /// Whether the code runs on Windows: library calls use the Windows
+    /// x64 convention, a frame larger than a page probes its pages, and
+    /// the program runs on the thread's own stack (ADR 0020).
+    windows: bool,
+    /// Whether the function being emitted is [`Module::callback`].
+    callback: bool,
 }
 
 impl Emitter {
@@ -178,8 +193,28 @@ impl Emitter {
         self.locs = allocation.locs;
         self.saved = allocation.saved.iter().map(|&r| r as u8).collect();
         let frame = (8 * (allocation.slots + self.saved.len() as u32)).next_multiple_of(16);
+        if self.callback {
+            // Windows calls it, and it returns to Windows: `rsi`, `rdi`
+            // and `r15` are Windows' to keep, and `r15` counts this
+            // call's own depth. Three pushes and 8 bytes keep the frame
+            // aligned as a call's.
+            self.asm.push(RSI);
+            self.asm.push(RDI);
+            self.asm.push(DEPTH);
+            self.asm.alu_imm(Alu::Sub, RSP, 8);
+        }
         self.asm.push(RBP);
         self.asm.mov(RBP, RSP);
+        if self.windows {
+            // Windows commits a stack one guard page at a time, so a
+            // frame larger than a page touches each of its pages, from
+            // the top, before `rsp` moves past them (MSVC's `__chkstk`).
+            let mut probe = PAGE;
+            while probe < frame {
+                self.asm.load(Size::Q, R11, offset(RSP, -(probe as i32)));
+                probe += PAGE;
+            }
+        }
         if frame != 0 {
             self.asm.alu_imm(Alu::Sub, RSP, frame as i32);
         }
@@ -190,13 +225,18 @@ impl Emitter {
         // one, whose move is the one to make: the last move into each
         // location stays.
         let mut params: Vec<(Loc, Loc)> = Vec::new();
-        for param in (0..function.params.min(REGISTER_ARGS as u32)).rev() {
+        let incoming: &[u8] = if self.callback { &WINDOWS_ARGS } else { &ARGS };
+        for param in (0..function.params.min(incoming.len() as u32)).rev() {
             let to = self.loc(param);
             if params.iter().all(|&(taken, _)| taken != to) {
-                params.push((to, reg(ARGS[param as usize])));
+                params.push((to, reg(incoming[param as usize])));
             }
         }
         self.parallel_move(params);
+        if self.callback {
+            self.asm
+                .constant(DEPTH, i64::from(crate::lower::MAX_CALL_DEPTH));
+        }
         // The parameters past the sixth, from where the caller stored
         // them. A parameter no code reads may share its location with a
         // later one, so they are loaded in order, after the registers.
@@ -353,6 +393,42 @@ impl Emitter {
         self.parallel_move(moves);
     }
 
+    /// A call of the import in slot `import` with `args` by the Windows
+    /// x64 convention: the first four in `rcx`, `rdx`, `r8` and `r9`, the
+    /// rest on the stack above the 32-byte shadow store the callee may
+    /// write, which this frame's stack slots must not be. The stack
+    /// arguments are stored first, below `rsp`, while every slot is
+    /// still where `rsp` says; then the registers; then `rsp` moves down
+    /// over them. A `BOOL`, `DWORD` or `int` result is 32 bits.
+    fn windows_call(&mut self, dst: Temp, import: u16, args: &[Temp], wide: bool) {
+        let on_stack = args.len().saturating_sub(WINDOWS_ARGS.len());
+        let space = ((32 + 8 * on_stack as u32).next_multiple_of(16)) as i32;
+        for (index, &arg) in args.iter().skip(WINDOWS_ARGS.len()).enumerate() {
+            let value = self.read(arg, R10);
+            self.asm
+                .store(Size::Q, offset(RSP, 32 + 8 * index as i32 - space), value);
+        }
+        let moves = args
+            .iter()
+            .zip(WINDOWS_ARGS)
+            .map(|(&arg, register)| (reg(register), self.loc(arg)))
+            .collect();
+        self.parallel_move(moves);
+        let at = self.asm.lea_rip(R11);
+        self.fixups.push(Fixup {
+            at,
+            symbol: Symbol::Import(import),
+        });
+        self.asm.load(Size::Q, R11, offset(R11, 0));
+        self.asm.alu_imm(Alu::Sub, RSP, space);
+        self.asm.call_reg(R11);
+        self.asm.alu_imm(Alu::Add, RSP, space);
+        if !wide {
+            self.asm.sign_extend(RAX, RAX, 32);
+        }
+        self.write(dst, RAX);
+    }
+
     /// `r11 =` the address of the extra arguments' area.
     fn extra_args_address(&mut self) {
         let at = self.asm.lea_rip(R11);
@@ -503,6 +579,13 @@ impl Emitter {
                 args,
                 wide,
                 ..
+            } if self.windows => self.windows_call(*dst, *import, args, *wide),
+            Inst::LibCall {
+                dst,
+                import,
+                args,
+                wide,
+                ..
             } => {
                 // The System V convention passes variadic arguments as it
                 // passes the others.
@@ -565,8 +648,12 @@ impl Emitter {
                 depth,
                 callee,
             } => {
-                let s = self.read(*stack, RAX);
-                self.asm.mov(RSP, s);
+                // On Windows the program stays on the thread's own stack,
+                // which the executable's header sizes (ADR 0020).
+                if !self.windows {
+                    let s = self.read(*stack, RAX);
+                    self.asm.mov(RSP, s);
+                }
                 self.asm.constant(DEPTH, i64::from(*depth));
                 let at = self.asm.call();
                 self.calls.push((at, *callee));
@@ -672,6 +759,12 @@ impl Emitter {
             self.asm.load(Size::Q, register, saved_at(i));
         }
         self.asm.leave();
+        if self.callback {
+            self.asm.alu_imm(Alu::Add, RSP, 8);
+            self.asm.pop(DEPTH);
+            self.asm.pop(RDI);
+            self.asm.pop(RSI);
+        }
         self.asm.ret();
     }
 

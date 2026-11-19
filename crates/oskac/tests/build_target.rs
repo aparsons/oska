@@ -135,7 +135,10 @@ fn field(bytes: &[u8], at: usize, size: usize) -> u64 {
 const EM_AARCH64: u64 = 183;
 const EM_X86_64: u64 = 62;
 
-/// The host's supported platform, named as release assets name it.
+/// The host's supported platform, named as release assets name it, when
+/// `oskac` builds for it by default. Windows is not one until every
+/// program runs natively there (#179): `oskac build` on Windows still
+/// writes `linux-aarch64`.
 fn host_platform() -> Option<&'static str> {
     if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
         Some("linux-aarch64")
@@ -145,8 +148,6 @@ fn host_platform() -> Option<&'static str> {
         Some("macos-aarch64")
     } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
         Some("macos-x86_64")
-    } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
-        Some("windows-x86_64")
     } else {
         None
     }
@@ -353,7 +354,7 @@ fn an_unknown_platform_is_refused_before_the_program_is_read() {
 /// A supported platform with no backend yet is not a typo: it has a code
 /// of its own, and the message names the release that adds it.
 #[test]
-fn a_supported_platform_with_no_backend_yet_is_refused_naming_its_release() {
+fn windows_x86_64_names_a_windows_executable_ending_in_exe() {
     assert_golden(
         "windows",
         &[("hello.osk", HELLO)],

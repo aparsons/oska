@@ -10,9 +10,10 @@
 //! code 2, as a usage error.
 //!
 //! The output is the file's stem, or the package directory's name, in the
-//! current directory, unless `-o` names it. `--target all` builds for
-//! every target with a backend, into the directory `-o` names (the
-//! current one without it), one file each named `<name>-<platform>`. Every
+//! current directory, with `.exe` for Windows, unless `-o` names it.
+//! `--target all` builds for every target with a backend, into the
+//! directory `-o` names (the current one without it), one file each named
+//! `<name>-<platform>`, with `.exe` for Windows. Every
 //! target is compiled before any file is written, so a refusal writes
 //! nothing.
 //!
@@ -126,11 +127,16 @@ fn compile(
     cached: &Cached,
 ) -> ExitCode {
     let builds: Vec<(Target, String)> = match options.target {
-        TargetChoice::One(target) => vec![(target, options.output.unwrap_or(name).to_string())],
+        TargetChoice::One(target) => vec![(
+            target,
+            options
+                .output
+                .map_or_else(|| format!("{name}{}", target.suffix()), str::to_string),
+        )],
         TargetChoice::All => Target::ALL
             .iter()
             .map(|target| {
-                let file = format!("{name}-{}", target.name());
+                let file = format!("{name}-{}{}", target.name(), target.suffix());
                 let path = match options.output {
                     Some(dir) => Path::new(dir).join(file).to_string_lossy().into_owned(),
                     None => file,

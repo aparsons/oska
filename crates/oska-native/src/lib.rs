@@ -34,6 +34,7 @@ mod layout;
 mod lower;
 mod macho;
 mod optimize;
+mod pe;
 mod regalloc;
 mod sha256;
 mod target;
@@ -170,7 +171,12 @@ fn compile(
             NOWHERE,
         )
     })?;
-    Ok(target.file(text.as_ref(), &module.rodata, module.data_size))
+    Ok(target.file(
+        text.as_ref(),
+        &module.rodata,
+        module.data_size,
+        module.stack,
+    ))
 }
 
 /// The refusal for the first import of a `std` module with no runtime.

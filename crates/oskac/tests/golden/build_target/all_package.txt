@@ -7,3 +7,4 @@ out/greeter-linux-aarch64
 out/greeter-linux-x86_64
 out/greeter-macos-aarch64
 out/greeter-macos-x86_64
+out/greeter-windows-x86_64.exe
