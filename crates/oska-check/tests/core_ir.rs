@@ -151,13 +151,13 @@ fn structs_enums_and_match_export_to_the_golden_form() {
 
 #[test]
 fn the_export_carries_its_version_and_is_json() {
-    assert_eq!(CORE_IR_VERSION, 6);
+    assert_eq!(CORE_IR_VERSION, 7);
     let json = core_ir::export(&program("fn one() -> Int { 1 }\n"))
         .unwrap_or_else(|refusal| panic!("should export, refused: {refusal}"));
     let value = oska_syntax::parse_json(&json).unwrap_or_else(|e| panic!("{e}: {json}"));
     assert_eq!(
         value.get("core_ir_version").and_then(|v| v.as_u64()),
-        Some(6)
+        Some(7)
     );
     assert_eq!(
         value
@@ -606,6 +606,106 @@ fn closures_and_calls_of_function_values_export_to_the_golden_form() {
          \x20   twice(add, 1) + add_ten(2) + nested(4, true) + twice(|x| x * 2, 5)\n\
          }\n",
     );
+}
+
+#[test]
+fn scopes_spawn_and_join_export_to_the_golden_form() {
+    assert_golden(
+        "scopes",
+        "fn main(io: Stdout) {\n\
+         \x20   let base = 10\n\
+         \x20   let total = scope |s| {\n\
+         \x20       let a = s.spawn(|| base + 1)\n\
+         \x20       let b: Task<Int> = s.spawn(|| {\n\
+         \x20           let _ = io.println(\"b\")\n\
+         \x20           base + 2\n\
+         \x20       })\n\
+         \x20       let alias = s\n\
+         \x20       let _ = alias.spawn(|| io.println(\"c\"))\n\
+         \x20       b.join() + a.join()\n\
+         \x20   }\n\
+         \x20   let _ = total\n\
+         }\n",
+    );
+}
+
+/// What the export refuses of `scope`, `spawn` and `join`: a handle
+/// anywhere but a `let` in its scope's block, a closure that captures
+/// one, a `scope` whose value is a task, and a `scope` in another's
+/// block. The checker accepts each.
+#[test]
+fn a_handle_outside_a_let_of_its_scope_is_refused() {
+    let cases = [
+        (
+            "fn f() -> Int {\n    let t = scope |s| {\n        s.spawn(|| 1)\n    }\n    t.join()\n}\n",
+            "a `scope` whose value, of type `Task<Int>`, outlives it",
+            "scope |s| {\n        s.spawn(|| 1)\n    }",
+        ),
+        (
+            "fn f() {\n    scope |s| {\n        var h = s\n    }\n}\n",
+            "the type `Scope` outside a `let`",
+            "s",
+        ),
+        (
+            "fn f() {\n    scope |s| {\n        let t = s.spawn(|| 1)\n        var u = t\n    }\n}\n",
+            "the type `Task<Int>` outside a `let`",
+            "t",
+        ),
+        (
+            "fn f() {\n    scope |s| {\n        let g = || {\n            let _ = s.spawn(|| 1)\n        }\n    }\n}\n",
+            "a closure that captures a scope's or a task's handle",
+            "|| {\n            let _ = s.spawn(|| 1)\n        }",
+        ),
+        (
+            "fn f(s: Scope) -> Int {\n    s.spawn(|| 1).join()\n}\n",
+            "the type `Scope` outside a `let`",
+            "Scope",
+        ),
+        (
+            "fn f(t: Task<Int>) -> Int {\n    t.join()\n}\n",
+            "the type `Task<Int>` outside a `let`",
+            "Task<Int>",
+        ),
+        (
+            "fn f() -> Int {\n    scope |s| {\n        scope |u| {\n            1\n        }\n    }\n}\n",
+            "a `scope` in the block of another `scope`",
+            "scope |u| {\n            1\n        }",
+        ),
+    ];
+    for (src, construct, text) in cases {
+        assert!(checks(src), "the checker should accept {src:?}");
+        assert_refused(src, construct, text);
+    }
+}
+
+/// The programs `formal/lean/OskaFormal/Core/Examples.lean` shows the Lean
+/// typing of Oska Core rejects for scopes, where the checker rejects them
+/// too (`E0292`): a scope whose value is its handle, and so a `spawn` on
+/// a handle outside its scope. Each is beside a variant the checker
+/// accepts and the export exports. The export refuses the others
+/// (`a_handle_outside_a_let_of_its_scope_is_refused`).
+#[test]
+fn the_scopes_the_lean_typing_rejects_the_checker_rejects() {
+    let pairs = [
+        (
+            "fn f() {\n    let h = scope |s| {\n        s\n    }\n}\n",
+            "fn f() {\n    let h = scope |s| {\n        1\n    }\n}\n",
+        ),
+        (
+            "fn f() -> Int {\n    let h = scope |s| {\n        s\n    }\n    h.spawn(|| 1).join()\n}\n",
+            "fn f() -> Int {\n    scope |s| {\n        s.spawn(|| 1).join()\n    }\n}\n",
+        ),
+    ];
+    for (rejected, accepted) in pairs {
+        assert!(
+            codes(rejected).contains(&"E0292"),
+            "the checker should reject {rejected:?} with E0292: {:?}",
+            codes(rejected)
+        );
+        assert!(checks(accepted), "the checker should accept {accepted:?}");
+        core_ir::export(&program(accepted))
+            .unwrap_or_else(|refusal| panic!("{accepted:?} should export, refused: {refusal}"));
+    }
 }
 
 /// The program of the `results` golden: `Result`, `Ok`, `Err` and their

@@ -1,8 +1,8 @@
 /-!
 # Oska Core: syntax
 
-The syntax of Oska Core, version 6 (ADR 0018): exactly the fragment that
-core IR version 6 exports (`crates/oska-check/src/core_ir.rs`). It has
+The syntax of Oska Core, version 7 (ADR 0018): exactly the fragment that
+core IR version 7 exports (`crates/oska-check/src/core_ir.rs`). It has
 functions, `let`, `if`, `Int` and `Bool` with their operators, `()`,
 structs and enums without generics, field access, and `match`; and
 capabilities: text, `Path`, the capabilities `Stdout`, `Fs`, `FsRead`,
@@ -16,11 +16,14 @@ value; and `Result`: `Ok` and `Err`, `match` on them, `is_ok` and
 closure) it is in, through the `From` conversion the checker chose, if
 any; and `var` bindings, assignment and **mutating methods** (`var
 self`), with value semantics (ADR 0001): a change through a `var` is
-never seen through another binding. Each Lean constructor is one core IR
-node, with the same fields; the values a run makes (a capability, a path,
-an `IoError`), the frame a call runs its body in, the cell that holds a
-`var` while its block runs and the running mutating call have no core IR
-node, so a program as written holds none.
+never seen through another binding; and **scopes**, `spawn` and `join`,
+with the sequential semantics of today's tasks (`docs/design.md`,
+"Concurrency in v0"). Each Lean constructor is one core IR node, with the
+same fields; the values a run makes (a capability, a path, an `IoError`,
+a scope's or a task's handle), the frame a call runs its body in, the
+cell that holds a `var` while its block runs, the running mutating call
+and the running scope have no core IR node, so a program as written holds
+none.
 
 - A local is a *slot*: the function's locals are numbered from 0 in the
   order they are bound, the parameters that bind first, then each `let`
@@ -41,6 +44,8 @@ node, so a program as written holds none.
   `intMin ..= intMax`, and arithmetic outside that range panics.
 - A struct's fields and an enum variant's fields are positional: core IR
   numbers them in declaration order.
+- A `scope` block's handle is its body's next slot, as a `let`'s is the
+  rest of its block's.
 -/
 
 namespace OskaFormal.Core
@@ -82,7 +87,10 @@ or enum the program declares, by name, and a function type
 `fn(params) -> ret`, or `cap fn(params) -> ret` when `cap`, core IR's
 `{"kind": "Fn", ...}`: a closure's type. A plain `fn` captures no
 capability-bearing value (`Typing.lean`); a `cap fn` may, and reaches
-what it captured (`Authority.lean`). -/
+what it captured (`Authority.lean`). `scope` is the type of a scope's
+handle, core IR's `"Scope"`, and `task result` the type of a task that
+gives a `result`, core IR's `{"kind": "Task", ...}`: the **handles**,
+which never leave the block of their scope (`Typing.lean`). -/
 inductive Ty where
   | int
   | bool
@@ -94,6 +102,8 @@ inductive Ty where
   | result (ok err : Ty)
   | named (name : String)
   | fn (cap : Bool) (params : List Ty) (ret : Ty)
+  | scope
+  | task (result : Ty)
   deriving Repr
 
 mutual
@@ -110,6 +120,8 @@ mutual
     | .int, .result _ _ => isFalse nofun
     | .int, .named _ => isFalse nofun
     | .int, .fn _ _ _ => isFalse nofun
+    | .int, .scope => isFalse nofun
+    | .int, .task _ => isFalse nofun
     | .bool, .int => isFalse nofun
     | .bool, .bool => isTrue rfl
     | .bool, .unit => isFalse nofun
@@ -120,6 +132,8 @@ mutual
     | .bool, .result _ _ => isFalse nofun
     | .bool, .named _ => isFalse nofun
     | .bool, .fn _ _ _ => isFalse nofun
+    | .bool, .scope => isFalse nofun
+    | .bool, .task _ => isFalse nofun
     | .unit, .int => isFalse nofun
     | .unit, .bool => isFalse nofun
     | .unit, .unit => isTrue rfl
@@ -130,6 +144,8 @@ mutual
     | .unit, .result _ _ => isFalse nofun
     | .unit, .named _ => isFalse nofun
     | .unit, .fn _ _ _ => isFalse nofun
+    | .unit, .scope => isFalse nofun
+    | .unit, .task _ => isFalse nofun
     | .string, .int => isFalse nofun
     | .string, .bool => isFalse nofun
     | .string, .unit => isFalse nofun
@@ -140,6 +156,8 @@ mutual
     | .string, .result _ _ => isFalse nofun
     | .string, .named _ => isFalse nofun
     | .string, .fn _ _ _ => isFalse nofun
+    | .string, .scope => isFalse nofun
+    | .string, .task _ => isFalse nofun
     | .path, .int => isFalse nofun
     | .path, .bool => isFalse nofun
     | .path, .unit => isFalse nofun
@@ -150,6 +168,8 @@ mutual
     | .path, .result _ _ => isFalse nofun
     | .path, .named _ => isFalse nofun
     | .path, .fn _ _ _ => isFalse nofun
+    | .path, .scope => isFalse nofun
+    | .path, .task _ => isFalse nofun
     | .ioError, .int => isFalse nofun
     | .ioError, .bool => isFalse nofun
     | .ioError, .unit => isFalse nofun
@@ -160,6 +180,8 @@ mutual
     | .ioError, .result _ _ => isFalse nofun
     | .ioError, .named _ => isFalse nofun
     | .ioError, .fn _ _ _ => isFalse nofun
+    | .ioError, .scope => isFalse nofun
+    | .ioError, .task _ => isFalse nofun
     | .cap _, .int => isFalse nofun
     | .cap _, .bool => isFalse nofun
     | .cap _, .unit => isFalse nofun
@@ -170,6 +192,8 @@ mutual
     | .cap _, .result _ _ => isFalse nofun
     | .cap _, .named _ => isFalse nofun
     | .cap _, .fn _ _ _ => isFalse nofun
+    | .cap _, .scope => isFalse nofun
+    | .cap _, .task _ => isFalse nofun
     | .result _ _, .int => isFalse nofun
     | .result _ _, .bool => isFalse nofun
     | .result _ _, .unit => isFalse nofun
@@ -184,6 +208,8 @@ mutual
       | _, isFalse h => isFalse fun x => by cases x; exact h rfl
     | .result _ _, .named _ => isFalse nofun
     | .result _ _, .fn _ _ _ => isFalse nofun
+    | .result _ _, .scope => isFalse nofun
+    | .result _ _, .task _ => isFalse nofun
     | .named _, .int => isFalse nofun
     | .named _, .bool => isFalse nofun
     | .named _, .unit => isFalse nofun
@@ -194,6 +220,8 @@ mutual
     | .named _, .result _ _ => isFalse nofun
     | .named x, .named y => if h : x = y then isTrue (h ▸ rfl) else isFalse fun e => by cases e; exact h rfl
     | .named _, .fn _ _ _ => isFalse nofun
+    | .named _, .scope => isFalse nofun
+    | .named _, .task _ => isFalse nofun
     | .fn _ _ _, .int => isFalse nofun
     | .fn _ _ _, .bool => isFalse nofun
     | .fn _ _ _, .unit => isFalse nofun
@@ -210,6 +238,35 @@ mutual
         | isFalse h, _ => isFalse fun e => by cases e; exact h rfl
         | _, isFalse h => isFalse fun e => by cases e; exact h rfl
       else isFalse fun e => by cases e; exact hc rfl
+    | .fn _ _ _, .scope => isFalse nofun
+    | .fn _ _ _, .task _ => isFalse nofun
+    | .scope, .int => isFalse nofun
+    | .scope, .bool => isFalse nofun
+    | .scope, .unit => isFalse nofun
+    | .scope, .string => isFalse nofun
+    | .scope, .path => isFalse nofun
+    | .scope, .ioError => isFalse nofun
+    | .scope, .cap _ => isFalse nofun
+    | .scope, .result _ _ => isFalse nofun
+    | .scope, .named _ => isFalse nofun
+    | .scope, .fn _ _ _ => isFalse nofun
+    | .scope, .scope => isTrue rfl
+    | .scope, .task _ => isFalse nofun
+    | .task _, .int => isFalse nofun
+    | .task _, .bool => isFalse nofun
+    | .task _, .unit => isFalse nofun
+    | .task _, .string => isFalse nofun
+    | .task _, .path => isFalse nofun
+    | .task _, .ioError => isFalse nofun
+    | .task _, .cap _ => isFalse nofun
+    | .task _, .result _ _ => isFalse nofun
+    | .task _, .named _ => isFalse nofun
+    | .task _, .fn _ _ _ => isFalse nofun
+    | .task _, .scope => isFalse nofun
+    | .task x, .task y =>
+      match Ty.decEq x y with
+      | isTrue h => isTrue (h ▸ rfl)
+      | isFalse h => isFalse fun e => by cases e; exact h rfl
 
 
   def Ty.decEqList : (a b : List Ty) → Decidable (a = b)
@@ -263,7 +320,11 @@ is its first argument.
 - `createDir`: `DirWrite.create_dir(path)`.
 - `pathFrom`, `pathNew`: `Path.from(text)`, `Path.new(text)`.
 - `isOk`, `unwrapOr`: `Result.is_ok()`, `Result.unwrap_or(default)`, on
-  any `Result`. -/
+  any `Result`.
+- `spawn`: `Scope.spawn(task)`, which queues the closure `task` on the
+  scope and gives its task's handle.
+- `join`: `Task.join()`, which gives the task's result, running the
+  tasks queued before it and it first. -/
 inductive Builtin where
   | println
   | restrictTo (k : CapKind)
@@ -276,6 +337,8 @@ inductive Builtin where
   | pathNew
   | isOk
   | unwrapOr
+  | spawn
+  | join
   deriving DecidableEq, Repr
 
 /-- What `restrict_to` on a capability of kind `k` takes, and the kind it
@@ -387,7 +450,15 @@ mutual
   function returns it, its error put through the function `convert`
   first when the checker chose a `From` conversion. A call runs the
   callee's body in a `frame`, which such a return ends; core IR has no
-  node for it. -/
+  node for it.
+
+  `scope body` is core IR's `Scope`: a `scope |s| { ... }` block, whose
+  `body` has the scope's handle as its next slot. A run puts the value
+  `scopeHandle` for that slot and runs the block in a `scopeRun`, which
+  holds the scope's tasks in spawn order: each is a call of the closure
+  it was spawned with, the running call, or the task's result. A spawn
+  gives the handle `taskHandle i` of the scope's task `i`, counted from
+  0. Core IR has no node for a handle or a running scope. -/
   inductive Expr where
     | unit
     | str (value : String)
@@ -417,6 +488,10 @@ mutual
     | mutCall (function : String) (receiver : Place) (args : List Expr)
     | cell (value body : Expr)
     | method (receiver : Place) (value body : Expr)
+    | scope (body : Expr)
+    | scopeHandle
+    | taskHandle (index : Nat)
+    | scopeRun (tasks : List Expr) (body : Expr)
 
   /-- A statement of Oska Core: core IR's `Let`, `Expr`, `Var` (a `var`
   binding, which takes no slot but makes var 0 of the rest of its block)
@@ -521,9 +596,9 @@ abbrev Expr.ioErr : Expr := .result false .ioError
 
 /-- The values of Oska Core: `()`, an integer, a boolean, text, a path, a
 capability, an `IoError`, an `Ok` or `Err` of a value, a struct or enum
-variant whose fields are values, and a closure of height 0, whose body
-holds the values it captured. An `IoError` carries no message: no
-program of Oska Core can read one. -/
+variant whose fields are values, a closure of height 0, whose body
+holds the values it captured, and the handles of a scope and of a task.
+An `IoError` carries no message: no program of Oska Core can read one. -/
 inductive IsValue : Expr → Prop where
   | unit : IsValue .unit
   | int (n : Int) : IsValue (.int n)
@@ -537,6 +612,8 @@ inductive IsValue : Expr → Prop where
       (∀ e ∈ fields, IsValue e) → IsValue (.construct type variant fields)
   | closure (ps : List Param) (cs : List Nat) (cap : Bool) (ret : Ty) (body : Expr) :
       IsValue (.closure ps 0 cs cap ret body)
+  | scopeHandle : IsValue .scopeHandle
+  | taskHandle (i : Nat) : IsValue (.taskHandle i)
 
 /-- Every expression of a list is a value. -/
 inductive AllValues : List Expr → Prop where
@@ -607,6 +684,9 @@ mutual
     | .var_ _ => false
     | .mutCall _ _ args => Expr.readsList i args
     | .cell v body | .method _ v body => Expr.reads i v || Expr.reads i body
+    | .scope body => Expr.reads i body
+    | .scopeHandle | .taskHandle _ => false
+    | .scopeRun ts body => Expr.readsList i ts || Expr.reads i body
 
   def Expr.readsList (i : Nat) : List Expr → Bool
     | [] => false

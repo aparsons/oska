@@ -5,18 +5,19 @@ import OskaFormal.Core.Typing
 /-!
 # Oska Core: reading core IR
 
-The Lean reference reads a program of Oska Core as core IR version 6, the
+The Lean reference reads a program of Oska Core as core IR version 7, the
 JSON form `crates/oska-check/src/core_ir.rs` exports, into the syntax of
 `Syntax.lean`, and runs its `main` with `run` (`Eval.lean`).
 
-The reader refuses anything that is not core IR version 6, naming what is
-wrong and where: a version other than 6 (versions 1 to 5 included), an
+The reader refuses anything that is not core IR version 7, naming what is
+wrong and where: a version other than 7 (versions 1 to 6 included), an
 unknown `kind`, operator, type or built-in, a field missing, unknown
 or of the wrong JSON type, an `Int` literal outside `-2^63 ..= 2^63 - 1`,
 two functions or two types of one name, a type named `Int`, `Bool` or
 `()` or of a built-in type (`String`, `Path`, `IoError`, `Result`, a
-capability), a field of a struct or variant that is a capability or a
-function, a `Result` type that holds either, an `Ok` or `Err` pattern
+capability, `Scope`, `Task`), a field of a struct or variant that is a
+capability, a function or a scope's or task's handle (`Scope`,
+`Task<T>`), a `Result` type that holds any of them, an `Ok` or `Err` pattern
 whose type is not a `Result`, a `?` whose conversion is not a function
 of the program with one parameter, a closure whose
 `captures` are not, in strictly ascending order, exactly the slots below
@@ -97,12 +98,20 @@ def capKind : String → Option CapKind
 /-- The names of the built-in types, which no declared type may take. -/
 def builtinTypes : List String :=
   ["Int", "Bool", "()", "String", "Path", "IoError", "Result", "Stdout", "Fs", "FsRead", "FsWrite",
-    "Dir", "DirRead", "DirWrite"]
+    "Dir", "DirRead", "DirWrite", "Scope", "Task"]
+
+/-- Whether a type is or holds a scope's or a task's handle. -/
+partial def holdsHandle : Ty → Bool
+  | .scope | .task _ => true
+  | .result ok err => holdsHandle ok || holdsHandle err
+  | .fn _ ps ret => ps.any holdsHandle || holdsHandle ret
+  | _ => false
 
 /-- A type: `Int`, `Bool`, `()`, `String`, `Path`, `IoError`, a
-capability, one of the struct and enum names `types`, a function type,
-`{"kind": "Fn", "cap": BOOL, "params": [type...], "ret": type}`, or a
-`Result` that holds no capability or function,
+capability, `Scope`, one of the struct and enum names `types`, a function
+type, `{"kind": "Fn", "cap": BOOL, "params": [type...], "ret": type}`, a
+task, `{"kind": "Task", "result": type}`, or a `Result` that holds no
+capability, function or handle,
 `{"kind": "Result", "ok": type, "err": type}`. -/
 partial def ty (types : List String) (path : String) (j : Json) : Read Ty := do
   if let .obj _ := j then
@@ -115,10 +124,15 @@ partial def ty (types : List String) (path : String) (j : Json) : Read Ty := do
       let ps ← (items.zip (List.range items.length)).mapM fun (p, i) =>
         ty types s!"{path}.params[{i}]" p
       return .fn cap ps (← ty types s!"{path}.ret" (← field path j "ret"))
+    | "Task" =>
+      let _ ← fields path j ["kind", "result"]
+      return .task (← ty types s!"{path}.result" (← field path j "result"))
     | "Result" =>
       let _ ← fields path j ["kind", "ok", "err"]
       let t := Ty.result (← ty types s!"{path}.ok" (← field path j "ok"))
         (← ty types s!"{path}.err" (← field path j "err"))
+      if holdsHandle t then
+        throw s!"{path}: a `Result` that holds a scope's or a task's handle; Oska Core has none"
       if !t.fieldCapFree then
         throw s!"{path}: a `Result` that holds a capability or a function; Oska Core has none"
       return t
@@ -130,6 +144,7 @@ partial def ty (types : List String) (path : String) (j : Json) : Read Ty := do
   | "String" => .ok .string
   | "Path" => .ok .path
   | "IoError" => .ok .ioError
+  | "Scope" => .ok .scope
   | t =>
     match capKind t with
     | some k => .ok (.cap k)
@@ -156,6 +171,8 @@ def builtin : String → Option (Builtin × Nat)
   | "Path.new" => some (.pathNew, 1)
   | "Result.is_ok" => some (.isOk, 1)
   | "Result.unwrap_or" => some (.unwrapOr, 2)
+  | "Scope.spawn" => some (.spawn, 2)
+  | "Task.join" => some (.join, 1)
   | _ => none
 
 def binOp (path : String) : String → Read BinOp
@@ -383,6 +400,9 @@ mutual
             throw s!"{at_ "convert"}: `?` converts with `{name}`, which takes {n} parameter(s), not 1"
         else pure none
       .ok (.try_ operand conv)
+    | "Scope" =>
+      let _ ← fields path j ["kind", "body"]
+      .ok (.scope (← sub "body"))
     | k => .error s!"{path}: unknown expression kind `{k}`"
 
   /-- A statement of core IR. -/
@@ -431,6 +451,8 @@ def typeDecl (types : List String) (path : String) (j : Json) : Read TypeDecl :=
       throw s!"{path}: a field is a capability; no struct or enum of Oska Core holds one"
     if ts.any (·.isFn) then
       throw s!"{path}: a field is a function; no struct or enum of Oska Core holds one"
+    if ts.any holdsHandle then
+      throw s!"{path}: a field is a scope's or a task's handle; no struct or enum of Oska Core holds one"
     pure ts
   match kind with
   | "Struct" =>
@@ -451,7 +473,7 @@ def typeDecl (types : List String) (path : String) (j : Json) : Read TypeDecl :=
   | k => .error s!"{path}: unknown type declaration kind `{k}`"
 
 /-- The version of core IR this reader reads. -/
-def version : Int := 6
+def version : Int := 7
 
 /-- A program of Oska Core, read from the text of its core IR. -/
 def program (text : String) : Read Program := do
@@ -524,15 +546,15 @@ def runsTo (text : String) (outcome : RunResult → Bool) : Bool :=
   | .ok (P, e) => outcome (run P 1000 {} e).1
   | .error _ => false
 
-/-- Core IR version 6 with these `types` and a `main` with this body. -/
+/-- Core IR version 7 with these `types` and a `main` with this body. -/
 def withMain (types body : String) : String :=
-  "{\"core_ir_version\": 6, \"types\": [" ++ types ++ "], \"functions\": [{\"name\": \"main\", " ++
+  "{\"core_ir_version\": 7, \"types\": [" ++ types ++ "], \"functions\": [{\"name\": \"main\", " ++
     "\"params\": [], \"ret\": \"()\", \"body\": " ++ body ++ "}]}"
 
-/-- Core IR version 6 with these `types`, these other functions, and a
+/-- Core IR version 7 with these `types`, these other functions, and a
 `main` with this body. -/
 def withFunctions (types functions body : String) : String :=
-  "{\"core_ir_version\": 6, \"types\": [" ++ types ++ "], \"functions\": [" ++ functions ++
+  "{\"core_ir_version\": 7, \"types\": [" ++ types ++ "], \"functions\": [" ++ functions ++
     ", {\"name\": \"main\", \"params\": [], \"ret\": \"()\", \"body\": " ++ body ++ "}]}"
 
 /-- `enum Shape { Dot, Square(Int) }` and `struct Pair { a: Int, b: Bool }`. -/
@@ -572,16 +594,17 @@ def counterMain : String :=
     "\"rhs\": {\"kind\": \"Field\", \"base\": {\"kind\": \"Local\", \"slot\": 0}, " ++
     "\"index\": 0}}, \"rhs\": {\"kind\": \"Int\", \"value\": 10}}}}]}"
 
-#guard refuses "{\"core_ir_version\": 7, \"types\": [], \"functions\": []}" "core_ir_version 7"
--- Versions 1 to 5 are refused by their version.
+#guard refuses "{\"core_ir_version\": 8, \"types\": [], \"functions\": []}" "core_ir_version 8"
+-- Versions 1 to 6 are refused by their version.
 #guard refuses "{\"core_ir_version\": 1, \"functions\": []}" "core_ir_version 1"
 #guard refuses "{\"core_ir_version\": 2, \"types\": [], \"functions\": []}" "core_ir_version 2"
 #guard refuses "{\"core_ir_version\": 3, \"types\": [], \"functions\": []}" "core_ir_version 3"
 #guard refuses "{\"core_ir_version\": 4, \"types\": [], \"functions\": []}" "core_ir_version 4"
 #guard refuses "{\"core_ir_version\": 5, \"types\": [], \"functions\": []}" "core_ir_version 5"
-#guard refuses "{\"core_ir_version\": 6, \"functions\": []}" "missing field `types`"
-#guard refuses "{\"core_ir_version\": 6, \"types\": [], \"functions\": []} junk" "not JSON"
-#guard refuses "{\"core_ir_version\": 6, \"types\": [], \"functions\": [], \"x\": 1}"
+#guard refuses "{\"core_ir_version\": 6, \"types\": [], \"functions\": []}" "core_ir_version 6"
+#guard refuses "{\"core_ir_version\": 7, \"functions\": []}" "missing field `types`"
+#guard refuses "{\"core_ir_version\": 7, \"types\": [], \"functions\": []} junk" "not JSON"
+#guard refuses "{\"core_ir_version\": 7, \"types\": [], \"functions\": [], \"x\": 1}"
   "unknown field `x`"
 #guard refuses (withMain "" "{\"kind\": \"Loop\"}") "unknown expression kind `Loop`"
 #guard refuses (withMain "" "{\"kind\": \"Int\", \"value\": 9223372036854775808}") "outside Int"
@@ -716,7 +739,7 @@ def counterMain : String :=
 #guard refuses (withMain "" ("{\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Assign\", " ++
     "\"place\": {\"var\": 0}, \"value\": {\"kind\": \"Unit\"}}]}"))
   "missing field `fields`"
-#guard (match program ("{\"core_ir_version\": 6, \"types\": [" ++ counterTypes ++
+#guard (match program ("{\"core_ir_version\": 7, \"types\": [" ++ counterTypes ++
     "], \"functions\": [{\"name\": \"main\", \"receiver\": \"Counter\", \"params\": [], " ++
     "\"ret\": \"()\", \"body\": {\"kind\": \"Unit\"}}]}") >>= entry with
   | .error e => e == "`main` is a mutating method"
@@ -796,5 +819,43 @@ def counterMain : String :=
     "{\"kind\": \"Result\", \"ok\": \"Int\", \"err\": \"Wrapped\"}, \"value\": {\"kind\": \"Call\", " ++
     "\"function\": \"f\", \"args\": []}}]}"))
   fun | .panic .divisionByZero => true | _ => false
+
+/-- `let _: Int = scope |s| { let t = s.spawn(|| task); t.join() }`. -/
+def scopeMain (task : String) : String :=
+  "{\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Let\", \"binds\": false, \"type\": \"Int\", " ++
+    "\"value\": {\"kind\": \"Scope\", \"body\": {\"kind\": \"Block\", \"stmts\": [{\"kind\": " ++
+    "\"Let\", \"binds\": true, \"type\": {\"kind\": \"Task\", \"result\": \"Int\"}, \"value\": " ++
+    "{\"kind\": \"Builtin\", \"name\": \"Scope.spawn\", \"args\": [{\"kind\": \"Local\", " ++
+    "\"slot\": 0}, {\"kind\": \"Closure\", \"params\": [], \"captures\": [], \"height\": 1, " ++
+    "\"cap\": false, \"ret\": \"Int\", \"body\": " ++ task ++ "}]}}], \"value\": {\"kind\": " ++
+    "\"Builtin\", \"name\": \"Task.join\", \"args\": [{\"kind\": \"Local\", \"slot\": 1}]}}}}]}"
+
+-- A scope that spawns a task and joins it runs; a task's panic is the scope's.
+#guard runsTo (withMain "" (scopeMain "{\"kind\": \"Int\", \"value\": 1}"))
+  fun | .value .unit => true | _ => false
+#guard runsTo (withMain "" (scopeMain ("{\"kind\": \"Binary\", \"op\": \"/\", " ++
+    "\"lhs\": {\"kind\": \"Int\", \"value\": 1}, \"rhs\": {\"kind\": \"Int\", \"value\": 0}}")))
+  fun | .panic .divisionByZero => true | _ => false
+#guard refuses (withMain "" (scopeMain "{\"kind\": \"Int\", \"value\": 1}" |>.replace
+    "{\"kind\": \"Task\", \"result\": \"Int\"}" "{\"kind\": \"Task\"}"))
+  "missing field `result`"
+#guard refuses (withMain "" "{\"kind\": \"Scope\", \"body\": {\"kind\": \"Unit\"}, \"handle\": 0}")
+  "unknown field `handle`"
+#guard refuses (withMain "" "{\"kind\": \"Scope\"}") "missing field `body`"
+#guard refuses (withMain "{\"kind\": \"Struct\", \"name\": \"Holder\", \"fields\": [\"Scope\"]}"
+    "{\"kind\": \"Unit\"}")
+  "a field is a scope's or a task's handle"
+#guard refuses (withMain ("{\"kind\": \"Enum\", \"name\": \"Holder\", \"variants\": [{\"name\": " ++
+    "\"A\", \"fields\": [{\"kind\": \"Task\", \"result\": \"Int\"}]}]}") "{\"kind\": \"Unit\"}")
+  "a field is a scope's or a task's handle"
+#guard refuses (withMain "" ("{\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Let\", " ++
+    "\"binds\": false, \"type\": {\"kind\": \"Result\", \"ok\": {\"kind\": \"Task\", " ++
+    "\"result\": \"Int\"}, \"err\": \"()\"}, \"value\": {\"kind\": \"Unit\"}}]}"))
+  "a `Result` that holds a scope's or a task's handle"
+#guard refuses (withMain "{\"kind\": \"Struct\", \"name\": \"Task\", \"fields\": []}"
+    "{\"kind\": \"Unit\"}")
+  "the name of a built-in type"
+#guard refuses (withMain "" "{\"kind\": \"Builtin\", \"name\": \"Task.join\", \"args\": []}")
+  "a call of the built-in `Task.join` with 0 argument(s), but it has 1 parameter(s)"
 
 end OskaFormal.Core.CoreIR

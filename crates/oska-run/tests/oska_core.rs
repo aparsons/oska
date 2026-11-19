@@ -1,7 +1,8 @@
-//! Programs in Oska Core (ADR 0018, #425, #426, #430, #428, #427, #429):
-//! functions, `let`, `if`, `Int` and `Bool`, structs, enums and `match`,
-//! capabilities with their effects, closures, `Result` with `?`, and
-//! `var`, assignment and methods, mutating ones included, each
+//! Programs in Oska Core (ADR 0018, #425, #426, #430, #428, #427, #429,
+//! #431): functions, `let`, `if`, `Int` and `Bool`, structs, enums and
+//! `match`, capabilities with their effects, closures, `Result` with `?`,
+//! `var`, assignment and methods, mutating ones included, and `scope`
+//! with `spawn` and `join`, each
 //! a whole literal, so that `lean_reference.rs` also runs them on the Lean
 //! reference and compares. A program without
 //! capabilities shows what it computed by how it ends: `check` panics
@@ -1306,5 +1307,133 @@ fn main() {
 ",
         "P0004",
         "self.n / by",
+    );
+}
+
+#[test]
+fn tasks_run_in_spawn_order_when_joined_and_when_the_block_ends() {
+    assert_runs(
+        r#"fn main(io: Stdout) {
+    scope |s| {
+        let a = s.spawn(|| io.println("a"))
+        let b = s.spawn(|| io.println("b"))
+        let c = s.spawn(|| io.println("c"))
+        let _ = io.println("block")
+        let _ = b.join()
+        let _ = io.println("joined b")
+        let _ = a.join()
+        let _ = io.println("joined a")
+        let _ = s.spawn(|| io.println("d"))
+        let _ = io.println("end")
+    }
+    let _ = io.println("after")
+}
+"#,
+        &[],
+        "block\na\nb\njoined b\njoined a\nend\nc\nd\nafter\n",
+    );
+}
+
+#[test]
+fn join_gives_each_task_its_result() {
+    assert_runs(
+        "fn fail() {
+    let zero = 0
+    let _ = 1 / zero
+}
+
+fn check(ok: Bool) {
+    if !ok {
+        fail()
+    }
+}
+
+fn square(n: Int) -> Int {
+    n * n
+}
+
+fn main() {
+    let base = 10
+    let total = scope |s| {
+        let a = s.spawn(|| square(3))
+        let b: Task<Int> = s.spawn(|| base + 1)
+        let first = b.join()
+        let again = b.join()
+        first * 100 + again + a.join()
+    }
+    check(total == 1100 + 11 + 9)
+    let none = scope |s| {
+        let _ = s.spawn(|| square(2))
+        7
+    }
+    check(none == 7)
+}
+",
+        &[],
+        "",
+    );
+}
+
+#[test]
+fn a_capability_passed_into_a_task_performs_its_effect_there() {
+    assert_runs(
+        r#"fn greet(io: Stdout, name: String) -> Int {
+    let _ = io.println(name)
+    1
+}
+
+fn main(io: Stdout, fs: Fs) {
+    let dir = fs.restrict_to(".").write_only()
+    let count = scope |s| {
+        let a = s.spawn(|| greet(io, "task"))
+        let w = s.spawn(|| dir.write(Path.from("out.txt"), "from a task"))
+        let _ = w.join()
+        a.join() + 1
+    }
+    let _ = io.println("done")
+}
+"#,
+        &[],
+        "task\ndone\n",
+    );
+}
+
+#[test]
+fn a_panic_in_a_task_ends_the_program() {
+    assert_panics(
+        "fn half(n: Int) -> Int {
+    n / 2
+}
+
+fn main() {
+    let total = scope |s| {
+        let a = s.spawn(|| 1)
+        let b = s.spawn(|| 10 / half(1))
+        a.join() + b.join()
+    }
+}
+",
+        "P0004",
+        "10 / half(1)",
+    );
+}
+
+#[test]
+fn a_panic_in_the_block_skips_the_tasks_still_queued() {
+    assert_panics(
+        r#"fn half(n: Int) -> Int {
+    n / 2
+}
+
+fn main(io: Stdout) {
+    scope |s| {
+        let _ = s.spawn(|| io.println("never"))
+        let _ = io.println("before")
+        let _ = 10 / half(1)
+    }
+}
+"#,
+        "P0004",
+        "10 / half(1)",
     );
 }

@@ -8,9 +8,9 @@
 //! tests, not a published format, and no CLI command prints it. The
 //! goldens of `tests/core_ir.rs` pin it.
 //!
-//! # Version 6
+//! # Version 7
 //!
-//! Oska Core version 6 has functions, `let`, `var` and assignment,
+//! Oska Core version 7 has functions, `let`, `var` and assignment,
 //! `if`, `Int` and `Bool` with their operators, `()`, the value of a
 //! block or `if` with no value, and the module's own structs and enums
 //! without generics, with their construction, field access and `match`.
@@ -29,7 +29,10 @@
 //! `<T as From<X>>.from`. It has the methods and associated functions
 //! of an inherent `impl` of those structs and enums, named `T.name` as
 //! the checker names them, and mutating methods (`var self`), with
-//! value semantics. An `IoError` is opaque: its field is outside.
+//! value semantics. An `IoError` is opaque: its field is outside. It
+//! has `scope` blocks, with `spawn` and `join` run as the interpreter
+//! runs them in v0, one task at a time in spawn order; a handle, the
+//! scope's or a task's, is held only in a `let` in its scope's block.
 //! [`export`] refuses any other program, naming the first construct
 //! outside it in source order, with its span. It fails closed: a trait,
 //! any other `impl` or `const` is refused even when nothing uses it,
@@ -41,7 +44,10 @@
 //! `List.push` included), `==` and `!=` on anything but `Int`, `Bool`
 //! and `()`, a struct or enum with a capability or function field, a
 //! function used as a value, a closure that reads `self` or a `var`,
-//! and a `main` that returns anything but `()` or takes anything but
+//! a closure that captures a handle, a `Scope` or `Task<T>` type
+//! anywhere but a `let`, a `scope` whose value holds a handle (a task
+//! that outlives its scope), a `scope` in the block of another, and a
+//! `main` that returns anything but `()` or takes anything but
 //! `Stdout`, `Fs`, `FsRead` or `FsWrite`, the capabilities the runtime
 //! grants.
 //!
@@ -51,7 +57,7 @@
 //! when absent, never written as `null`.
 //!
 //! ```text
-//! program  = {"core_ir_version": 6, "types": [typedecl...],
+//! program  = {"core_ir_version": 7, "types": [typedecl...],
 //!             "functions": [function...]}
 //! typedecl = {"kind": "Struct", "name": NAME, "fields": [type...]}
 //!          | {"kind": "Enum", "name": NAME, "variants": [variant...]}
@@ -63,6 +69,7 @@
 //!          | CAPABILITY | NAME
 //!          | {"kind": "Fn", "cap": BOOL, "params": [type...], "ret": type}
 //!          | {"kind": "Result", "ok": type, "err": type}
+//! lettype  = type | "Scope" | {"kind": "Task", "result": type}
 //! expr     = {"kind": "Unit"}
 //!          | {"kind": "Int", "value": INTEGER}
 //!          | {"kind": "Bool", "value": BOOL}
@@ -88,7 +95,8 @@
 //!          | {"kind": "Try", "operand": expr, "convert"?: NAME}
 //!          | {"kind": "MutatingCall", "function": NAME, "receiver": place,
 //!             "args": [expr...]}
-//! stmt     = {"kind": "Let", "binds": BOOL, "type": type, "value": expr}
+//!          | {"kind": "Scope", "body": expr}
+//! stmt     = {"kind": "Let", "binds": BOOL, "type": lettype, "value": expr}
 //!          | {"kind": "Var", "type": type, "value": expr}
 //!          | {"kind": "Assign", "place": place, "value": expr}
 //!          | {"kind": "Expr", "value": expr}
@@ -194,6 +202,19 @@
 //!   closure, whose result type is a `Result`.
 //! - `main` takes only capabilities the runtime grants: `Stdout`, and
 //!   `Fs`, `FsRead` or `FsWrite`, which reach anywhere until attenuated.
+//! - `Scope` evaluates `body` with the scope's handle in the next slot.
+//!   `Scope.spawn(s, task)` queues a call of `task`, a closure of no
+//!   parameter, on the scope and gives its task's handle, of type
+//!   `Task<T>` for the closure's result type `T`; nothing runs yet.
+//!   `Task.join(t)` runs the scope's queued tasks, oldest first, up to
+//!   and including `t`, and gives `t`'s result; a task that already ran
+//!   gives it at once. When `body` ends, by its value or a `?`, the tasks
+//!   still queued run in spawn order, then the scope gives `body`'s value
+//!   or passes the `?` on. A panic in `body` ends the scope at once, and
+//!   its queued tasks never run; a panic in a task is the scope's. A
+//!   handle is held only in a `Let` in its scope's body, outside any
+//!   closure, so `spawn` and `join` always reach the innermost running
+//!   scope, and the scope's value holds no handle.
 //!
 //! # Adding a construct
 //!
@@ -214,11 +235,11 @@ use crate::program::{
 };
 
 /// The version of the core IR [`export`] writes.
-pub const CORE_IR_VERSION: u64 = 6;
+pub const CORE_IR_VERSION: u64 = 7;
 
 /// The built-in calls of Oska Core, by the checker's qualified name: the
-/// effects on a capability, attenuation, `Path` and the `Result` of an
-/// effect.
+/// effects on a capability, attenuation, `Path`, the `Result` of an
+/// effect, and a scope's `spawn` and `join`.
 pub const BUILTINS: &[&str] = &[
     "Stdout.println",
     "Fs.restrict_to",
@@ -238,7 +259,12 @@ pub const BUILTINS: &[&str] = &[
     "Path.new",
     "Result.is_ok",
     "Result.unwrap_or",
+    "Scope.spawn",
+    "Task.join",
 ];
+
+/// The built-ins that reach the innermost running scope.
+const TASK_BUILTINS: &[&str] = &["Scope.spawn", "Task.join"];
 
 /// The capabilities of Oska Core, by the name of their type.
 const CAPABILITIES: &[&str] = &[
@@ -381,6 +407,10 @@ struct Scope {
     vars: usize,
     /// What `self` is: slot 0 in a method, var 0 in a mutating method.
     receiver: Option<Binding>,
+    /// The core IR slots that hold a scope's or a task's handle.
+    handles: BTreeSet<usize>,
+    /// How many `scope` blocks of this function or closure the export is in.
+    scopes: usize,
 }
 
 impl Scope {
@@ -391,6 +421,8 @@ impl Scope {
             slots: usize::from(matches!(receiver, Some(Binding::Slot(_)))),
             vars: usize::from(matches!(receiver, Some(Binding::Var(_)))),
             receiver,
+            handles: BTreeSet::new(),
+            scopes: 0,
         }
     }
 
@@ -419,6 +451,17 @@ fn is_from_conversion(f: &Function) -> bool {
         Some(Type::Named { name, args }) if args.is_empty() && !f.receiver => {
             f.name.starts_with(&format!("<{name} as From<")) && f.name.ends_with(">>.from")
         }
+        _ => false,
+    }
+}
+
+/// Whether `ty` is a scope's or a task's handle, or holds one.
+fn holds_handle(ty: &Type) -> bool {
+    match ty {
+        Type::Named { name, args } => {
+            name == "Scope" || name == "Task" || args.iter().any(holds_handle)
+        }
+        Type::Fn { params, ret, .. } => params.iter().any(holds_handle) || holds_handle(ret),
         _ => false,
     }
 }
@@ -628,17 +671,29 @@ impl Core<'_> {
         scope.vars += 1;
     }
 
-    /// Run `f`, then leave the bindings it made: a block's, or an arm's.
+    /// Bind the checker's next slot as a core IR slot that holds a
+    /// handle.
+    fn bind_handle(&self) {
+        self.bind_slots(1);
+        let mut scope = self.scope.borrow_mut();
+        let slot = scope.slots - 1;
+        scope.handles.insert(slot);
+    }
+
+    /// Run `f`, then leave the bindings it made: a block's, an arm's or
+    /// a `scope`'s.
     fn scoped<T>(&self, f: impl FnOnce() -> T) -> T {
-        let (bindings, slots, vars) = {
+        let (bindings, slots, vars, scopes) = {
             let scope = self.scope.borrow();
-            (scope.bindings.len(), scope.slots, scope.vars)
+            (scope.bindings.len(), scope.slots, scope.vars, scope.scopes)
         };
         let result = f();
         let mut scope = self.scope.borrow_mut();
         scope.bindings.truncate(bindings);
         scope.slots = slots;
         scope.vars = vars;
+        scope.scopes = scopes;
+        scope.handles.retain(|&slot| slot < slots);
         result
     }
 
@@ -710,6 +765,9 @@ impl Core<'_> {
                 name
             }
             Type::Named { name, args } if args.is_empty() && name == "IoError" => name,
+            Type::Named { name, .. } if name == "Scope" || name == "Task" => {
+                return refuse(format!("the type `{ty}` outside a `let`"), span)
+            }
             Type::Named { name, args } if name == "Result" => {
                 let [ok, err] = args.as_slice() else {
                     return refuse(format!("the type `{ty}`"), span);
@@ -731,6 +789,20 @@ impl Core<'_> {
             }
         };
         Ok(Json::Str(name.to_string()))
+    }
+
+    /// The type of a `let`: a type of Oska Core, or a scope's or a task's
+    /// handle, which only a `let` holds.
+    fn let_ty(&self, ty: &Type, span: Span) -> Result<Json, Refusal> {
+        match ty {
+            Type::Named { name, args } if name == "Scope" && args.is_empty() => {
+                Ok(Json::Str(name.clone()))
+            }
+            Type::Named { name, args } if name == "Task" && args.len() == 1 => {
+                Ok(node("Task", vec![("result", self.ty(&args[0], span)?)]))
+            }
+            _ => self.ty(ty, span),
+        }
     }
 
     /// The type of a struct or enum field, which is never a capability or
@@ -808,6 +880,15 @@ impl Core<'_> {
                 ),
                 Callee::Function(name) => {
                     return refuse(format!("a call of the generic function `{name}`"), span)
+                }
+                Callee::Intrinsic(name)
+                    if TASK_BUILTINS.contains(&name.as_str())
+                        && self.scope.borrow().scopes == 0 =>
+                {
+                    // A handle is held only in a `scope`'s block, so a
+                    // checked program cannot reach this guard. It is kept to
+                    // fail closed.
+                    return refuse(format!("the built-in `{name}` outside a `scope`"), span);
                 }
                 Callee::Intrinsic(name) if BUILTINS.contains(&name.as_str()) => node(
                     "Builtin",
@@ -912,6 +993,9 @@ impl Core<'_> {
                     .captures
                     .iter()
                     .map(|&slot| match self.binding(slot, span)? {
+                        Binding::Slot(n) if self.scope.borrow().handles.contains(&n) => {
+                            refuse("a closure that captures a scope's or a task's handle", span)
+                        }
                         Binding::Slot(n) => Ok(Json::Int(n as i128)),
                         Binding::Var(_) => refuse("a closure that captures a `var`", span),
                         Binding::Outer => {
@@ -940,6 +1024,8 @@ impl Core<'_> {
                     slots: height,
                     vars: 0,
                     receiver: None,
+                    handles: BTreeSet::new(),
+                    scopes: 0,
                 };
                 let outer = self.scope.replace(inner);
                 let body = self
@@ -1010,7 +1096,22 @@ impl Core<'_> {
                 node("Try", fields)
             }
             ExprKind::FnValue { .. } => return refuse("a function used as a value", span),
-            ExprKind::Scope(_) => return refuse("`scope`", span),
+            ExprKind::Scope(body) => {
+                if self.scope.borrow().scopes > 0 {
+                    return refuse("a `scope` in the block of another `scope`", span);
+                }
+                if holds_handle(&e.ty) {
+                    return refuse(
+                        format!("a `scope` whose value, of type `{}`, outlives it", e.ty),
+                        span,
+                    );
+                }
+                self.scoped(|| {
+                    self.bind_handle();
+                    self.scope.borrow_mut().scopes += 1;
+                    Ok(node("Scope", vec![("body", self.expr(body)?)]))
+                })?
+            }
             ExprKind::Unsupported(what) => return refuse(what.clone(), span),
         })
     }
@@ -1133,15 +1234,23 @@ impl Core<'_> {
                 ..
             } => {
                 // A written type comes before the value; an inferred one is
-                // the value's.
+                // the value's. Only a `let` holds a handle.
+                let handle = holds_handle(ty);
+                let of = |ty, span| {
+                    if *mutable {
+                        self.ty(ty, span)
+                    } else {
+                        self.let_ty(ty, span)
+                    }
+                };
                 let (ty, value) = match annotation {
                     Some(annotation) => {
-                        let ty = self.ty(ty, *annotation)?;
+                        let ty = of(ty, *annotation)?;
                         (ty, self.expr(value)?)
                     }
                     None => {
                         let json = self.expr(value)?;
-                        (self.ty(ty, value.span)?, json)
+                        (of(ty, value.span)?, json)
                     }
                 };
                 // A `var` takes no slot, but the next var; one named `_`
@@ -1150,7 +1259,9 @@ impl Core<'_> {
                     self.bind_var();
                     return Ok(node("Var", vec![("type", ty), ("value", value)]));
                 }
-                if *binds {
+                if *binds && handle {
+                    self.bind_handle();
+                } else if *binds {
                     self.bind_slots(1);
                 }
                 node(
