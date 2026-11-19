@@ -184,6 +184,9 @@ pub struct Function {
     /// before the parameters, and it takes no slot ([`ExprKind::SelfValue`]
     /// reads it).
     pub receiver: bool,
+    /// Whether the receiver is `var self`: a mutating method, which a
+    /// [`ExprKind::MutatingCall`] calls on a place.
+    pub mutating: bool,
     /// The parameters after the receiver, in order.
     pub params: Vec<Param>,
     /// The result type.

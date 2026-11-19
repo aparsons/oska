@@ -1,8 +1,8 @@
 /-!
 # Oska Core: syntax
 
-The syntax of Oska Core, version 5 (ADR 0018): exactly the fragment that
-core IR version 5 exports (`crates/oska-check/src/core_ir.rs`). It has
+The syntax of Oska Core, version 6 (ADR 0018): exactly the fragment that
+core IR version 6 exports (`crates/oska-check/src/core_ir.rs`). It has
 functions, `let`, `if`, `Int` and `Bool` with their operators, `()`,
 structs and enums without generics, field access, and `match`; and
 capabilities: text, `Path`, the capabilities `Stdout`, `Fs`, `FsRead`,
@@ -14,10 +14,13 @@ value the slots they read, with function types and calls of a function
 value; and `Result`: `Ok` and `Err`, `match` on them, `is_ok` and
 `unwrap_or`, and `?`, which returns an `Err` from the function (or
 closure) it is in, through the `From` conversion the checker chose, if
-any. Each Lean constructor is one core IR node, with the same fields;
-the values a run makes (a capability, a path, an `IoError`) and the
-frame a call runs its body in have no core IR node, so a program as
-written holds none.
+any; and `var` bindings, assignment and **mutating methods** (`var
+self`), with value semantics (ADR 0001): a change through a `var` is
+never seen through another binding. Each Lean constructor is one core IR
+node, with the same fields; the values a run makes (a capability, a path,
+an `IoError`), the frame a call runs its body in, the cell that holds a
+`var` while its block runs and the running mutating call have no core IR
+node, so a program as written holds none.
 
 - A local is a *slot*: the function's locals are numbered from 0 in the
   order they are bound, the parameters that bind first, then each `let`
@@ -26,6 +29,14 @@ written holds none.
 - A closure's body numbers slots as the enclosing function does where
   the closure is written: the `height` slots then in scope, then the
   closure's parameters from `height` on, then its own locals.
+- A `var` takes no slot: it is a *var*, numbered by how many `var`s of
+  the same function or closure are bound inside it, so the innermost var
+  in scope is var 0. A mutating method's receiver (`var self`) is the
+  outermost var of its body; a method that takes `self` has it as its
+  first parameter, slot 0. A closure's body sees no var of the function
+  it is written in (the export refuses a closure that captures one).
+- A *place*, what an assignment writes or a mutating call changes, is a
+  var and a path of struct fields in it, outermost first.
 - `Int` is a signed 64-bit integer: an `Int` value lies in
   `intMin ..= intMax`, and arithmetic outside that range panics.
 - A struct's fields and an enum variant's fields are positional: core IR
@@ -351,6 +362,12 @@ structure Param where
   type : Ty
   binds : Bool
 
+/-- A place: the var `var` and the path of struct fields `fields` in it,
+outermost first. Core IR's `{"var": N, "fields": [N...]}`. -/
+structure Place where
+  var : Nat
+  fields : List Nat
+
 mutual
   /-- An expression of Oska Core: one constructor per core IR `expr`
   kind. An `if` with no `else`, and a block with no value, hold `none`.
@@ -396,23 +413,39 @@ mutual
     | closure (params : List Param) (height : Nat) (captures : List Nat) (cap : Bool) (ret : Ty)
         (body : Expr)
     | callValue (callee : Expr) (args : List Expr)
+    | var_ (index : Nat)
+    | mutCall (function : String) (receiver : Place) (args : List Expr)
+    | cell (value body : Expr)
+    | method (receiver : Place) (value body : Expr)
 
-  /-- A statement of Oska Core: core IR's `Let` and `Expr`. -/
+  /-- A statement of Oska Core: core IR's `Let`, `Expr`, `Var` (a `var`
+  binding, which takes no slot but makes var 0 of the rest of its block)
+  and `Assign`. -/
   inductive Stmt where
     | let_ (binds : Bool) (type : Ty) (value : Expr)
     | expr (value : Expr)
+    | var_ (type : Ty) (value : Expr)
+    | assign (place : Place) (value : Expr)
 
   /-- A `match` arm: its pattern, its guard if it has one, and its body. -/
   inductive Arm where
     | mk (pattern : Pattern) (guard : Option Expr) (body : Expr)
 end
 
-/-- A function of Oska Core, as core IR's `function`. -/
+/-- A function of Oska Core, as core IR's `function`. A mutating method
+has the type of its receiver (`var self`) as `receiver`, the outermost
+var of its body; any other function has none. -/
 structure Function where
   name : String
+  receiver : Option Ty := none
   params : List Param
   ret : Ty
   body : Expr
+
+/-- The types of the arguments a `Call` of `f` passes: the receiver's
+first, for a mutating method, then one per parameter. -/
+def Function.argTypes (f : Function) : List Ty :=
+  f.receiver.toList ++ f.params.map Param.type
 
 /-- A struct or enum declaration, as core IR's `typedecl`: a struct's
 field types, or an enum's variants with their field types, in
@@ -561,6 +594,9 @@ mutual
     | .match_ sc arms => Expr.reads i sc || Expr.readsArms i arms
     | .closure _ h _ _ _ body => decide (i < h) && Expr.reads i body
     | .callValue c args => Expr.reads i c || Expr.readsList i args
+    | .var_ _ => false
+    | .mutCall _ _ args => Expr.readsList i args
+    | .cell v body | .method _ v body => Expr.reads i v || Expr.reads i body
 
   def Expr.readsList (i : Nat) : List Expr → Bool
     | [] => false
@@ -574,6 +610,8 @@ mutual
     | [] => false
     | .let_ _ _ e :: ss => Expr.reads i e || Expr.readsStmts i ss
     | .expr e :: ss => Expr.reads i e || Expr.readsStmts i ss
+    | .var_ _ e :: ss => Expr.reads i e || Expr.readsStmts i ss
+    | .assign _ e :: ss => Expr.reads i e || Expr.readsStmts i ss
 
   def Expr.readsArms (i : Nat) : List Arm → Bool
     | [] => false

@@ -1,0 +1,285 @@
+{
+  "core_ir_version": 6,
+  "types": [
+    {"kind": "Struct", "name": "Counter", "fields": ["Int"]},
+    {"kind": "Struct", "name": "Pair", "fields": ["Counter", "Counter"]}
+  ],
+  "functions": [
+    {
+      "name": "Counter.new",
+      "params": [{"type": "Int", "binds": true}],
+      "ret": "Counter",
+      "body": {
+        "kind": "Block",
+        "stmts": [],
+        "value": {
+          "kind": "Construct",
+          "type": "Counter",
+          "fields": [{"kind": "Local", "slot": 0}]
+        }
+      }
+    },
+    {
+      "name": "Counter.get",
+      "params": [{"type": "Counter", "binds": true}],
+      "ret": "Int",
+      "body": {
+        "kind": "Block",
+        "stmts": [],
+        "value": {"kind": "Field", "base": {"kind": "Local", "slot": 0}, "index": 0}
+      }
+    },
+    {
+      "name": "Counter.bump",
+      "receiver": "Counter",
+      "params": [{"type": "Int", "binds": true}],
+      "ret": "()",
+      "body": {
+        "kind": "Block",
+        "stmts": [
+          {
+            "kind": "Assign",
+            "place": {"var": 0, "fields": [0]},
+            "value": {
+              "kind": "Binary",
+              "op": "+",
+              "lhs": {"kind": "Field", "base": {"kind": "Var", "var": 0}, "index": 0},
+              "rhs": {"kind": "Local", "slot": 0}
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Counter.bump_twice",
+      "receiver": "Counter",
+      "params": [],
+      "ret": "Int",
+      "body": {
+        "kind": "Block",
+        "stmts": [
+          {"kind": "Var", "type": "Int", "value": {"kind": "Int", "value": 1}},
+          {
+            "kind": "Expr",
+            "value": {
+              "kind": "MutatingCall",
+              "function": "Counter.bump",
+              "receiver": {"var": 1, "fields": []},
+              "args": [{"kind": "Var", "var": 0}]
+            }
+          },
+          {
+            "kind": "Assign",
+            "place": {"var": 0, "fields": []},
+            "value": {
+              "kind": "Binary",
+              "op": "+",
+              "lhs": {"kind": "Var", "var": 0},
+              "rhs": {"kind": "Int", "value": 1}
+            }
+          },
+          {
+            "kind": "Expr",
+            "value": {
+              "kind": "MutatingCall",
+              "function": "Counter.bump",
+              "receiver": {"var": 1, "fields": []},
+              "args": [{"kind": "Var", "var": 0}]
+            }
+          }
+        ],
+        "value": {"kind": "Field", "base": {"kind": "Var", "var": 1}, "index": 0}
+      }
+    },
+    {
+      "name": "run",
+      "params": [{"type": "Bool", "binds": false}],
+      "ret": "Int",
+      "body": {
+        "kind": "Block",
+        "stmts": [
+          {
+            "kind": "Var",
+            "type": "Counter",
+            "value": {
+              "kind": "Call",
+              "function": "Counter.new",
+              "args": [{"kind": "Int", "value": 0}]
+            }
+          },
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": "Counter",
+            "value": {"kind": "Var", "var": 0}
+          },
+          {
+            "kind": "Expr",
+            "value": {
+              "kind": "MutatingCall",
+              "function": "Counter.bump",
+              "receiver": {"var": 0, "fields": []},
+              "args": [{"kind": "Int", "value": 2}]
+            }
+          },
+          {
+            "kind": "Var",
+            "type": "Pair",
+            "value": {
+              "kind": "Construct",
+              "type": "Pair",
+              "fields": [{"kind": "Var", "var": 0}, {"kind": "Local", "slot": 0}]
+            }
+          },
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": "Int",
+            "value": {
+              "kind": "MutatingCall",
+              "function": "Counter.bump_twice",
+              "receiver": {"var": 0, "fields": [0]},
+              "args": []
+            }
+          },
+          {
+            "kind": "Assign",
+            "place": {"var": 0, "fields": [1, 0]},
+            "value": {"kind": "Int", "value": 7}
+          },
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": {"kind": "Fn", "cap": false, "params": ["Int"], "ret": "Int"},
+            "value": {
+              "kind": "Closure",
+              "params": [{"type": "Int", "binds": true}],
+              "captures": [0],
+              "height": 2,
+              "cap": false,
+              "ret": "Int",
+              "body": {
+                "kind": "Binary",
+                "op": "+",
+                "lhs": {"kind": "Local", "slot": 2},
+                "rhs": {
+                  "kind": "Field",
+                  "base": {"kind": "Local", "slot": 0},
+                  "index": 0
+                }
+              }
+            }
+          },
+          {
+            "kind": "Expr",
+            "value": {
+              "kind": "Call",
+              "function": "Counter.bump",
+              "args": [
+                {
+                  "kind": "Construct",
+                  "type": "Counter",
+                  "fields": [{"kind": "Int", "value": 5}]
+                },
+                {"kind": "Int", "value": 1}
+              ]
+            }
+          },
+          {
+            "kind": "Let",
+            "binds": false,
+            "type": "Int",
+            "value": {"kind": "Int", "value": 3}
+          },
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": "Int",
+            "value": {
+              "kind": "Match",
+              "scrutinee": {"kind": "Field", "base": {"kind": "Var", "var": 1}, "index": 0},
+              "arms": [
+                {
+                  "pattern": {"kind": "Int", "value": 0},
+                  "body": {"kind": "Int", "value": 0}
+                },
+                {
+                  "pattern": {"kind": "Bind", "type": "Int"},
+                  "body": {
+                    "kind": "Binary",
+                    "op": "+",
+                    "lhs": {"kind": "Local", "slot": 3},
+                    "rhs": {
+                      "kind": "Field",
+                      "base": {"kind": "Local", "slot": 0},
+                      "index": 0
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "value": {
+          "kind": "Binary",
+          "op": "+",
+          "lhs": {
+            "kind": "Binary",
+            "op": "+",
+            "lhs": {
+              "kind": "Binary",
+              "op": "+",
+              "lhs": {
+                "kind": "Binary",
+                "op": "+",
+                "lhs": {
+                  "kind": "Binary",
+                  "op": "+",
+                  "lhs": {
+                    "kind": "Binary",
+                    "op": "+",
+                    "lhs": {
+                      "kind": "Call",
+                      "function": "Counter.get",
+                      "args": [{"kind": "Var", "var": 1}]
+                    },
+                    "rhs": {
+                      "kind": "Call",
+                      "function": "Counter.get",
+                      "args": [{"kind": "Local", "slot": 0}]
+                    }
+                  },
+                  "rhs": {
+                    "kind": "Field",
+                    "base": {
+                      "kind": "Field",
+                      "base": {"kind": "Var", "var": 0},
+                      "index": 0
+                    },
+                    "index": 0
+                  }
+                },
+                "rhs": {
+                  "kind": "Field",
+                  "base": {
+                    "kind": "Field",
+                    "base": {"kind": "Var", "var": 0},
+                    "index": 1
+                  },
+                  "index": 0
+                }
+              },
+              "rhs": {
+                "kind": "CallValue",
+                "callee": {"kind": "Local", "slot": 2},
+                "args": [{"kind": "Int", "value": 1}]
+              }
+            },
+            "rhs": {"kind": "Local", "slot": 1}
+          },
+          "rhs": {"kind": "Local", "slot": 3}
+        }
+      }
+    }
+  ]
+}

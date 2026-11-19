@@ -1,6 +1,7 @@
-//! Programs in Oska Core (ADR 0018, #425, #426, #430, #428, #427):
+//! Programs in Oska Core (ADR 0018, #425, #426, #430, #428, #427, #429):
 //! functions, `let`, `if`, `Int` and `Bool`, structs, enums and `match`,
-//! capabilities with their effects, closures, and `Result` with `?`, each
+//! capabilities with their effects, closures, `Result` with `?`, and
+//! `var`, assignment and methods, mutating ones included, each
 //! a whole literal, so that `lean_reference.rs` also runs them on the Lean
 //! reference and compares. A program without
 //! capabilities shows what it computed by how it ends: `check` panics
@@ -1124,4 +1125,186 @@ fn main(io: Stdout, fs: Fs) {
     assert_eq!(host.file("b.txt"), Some("hello"));
     assert_eq!(host.file("done.txt"), Some("done"));
     assert_eq!(host.file("c.txt"), None);
+}
+
+#[test]
+fn a_var_is_assigned_and_its_fields_changed() {
+    assert_runs(
+        "fn fail() {
+    let zero = 0
+    let _ = 1 / zero
+}
+
+fn check(ok: Bool) {
+    if !ok {
+        fail()
+    }
+}
+
+struct Point { x: Int, y: Int }
+
+struct Segment { from: Point, to: Point }
+
+fn main() {
+    var n = 1
+    n = n + 1
+    check(n == 2)
+    var s = Segment(from: Point(x: 0, y: 0), to: Point(x: 3, y: 4))
+    let before = s
+    s.to.y = s.to.y * 10
+    s.from = Point(x: 1, y: 1)
+    check(s.to.y == 40 && s.from.x == 1 && s.to.x == 3)
+    check(before.to.y == 4 && before.from.x == 0)
+    var _ = n
+    var m = n
+    m = m + 5
+    check(n == 2 && m == 7)
+    var inner = 0
+    let total = {
+        var acc = 10
+        acc = acc + n
+        inner = acc
+        acc
+    }
+    check(total == 12 && inner == 12)
+}
+",
+        &[],
+        "",
+    );
+}
+
+#[test]
+fn a_mutating_method_changes_its_receiver_and_no_copy_of_it() {
+    assert_runs(
+        "fn fail() {
+    let zero = 0
+    let _ = 1 / zero
+}
+
+fn check(ok: Bool) {
+    if !ok {
+        fail()
+    }
+}
+
+struct Counter { n: Int }
+
+struct Pair { left: Counter, right: Counter }
+
+impl Counter {
+    fn new() -> Counter { Counter(n: 0) }
+
+    fn get(self) -> Int { self.n }
+
+    fn bump(var self) {
+        self.n = self.n + 1
+    }
+
+    fn add(var self, by: Int) -> Int {
+        var step = by
+        self.n = self.n + step
+        step = step + 1
+        self.n
+    }
+
+    fn bump_twice(var self) {
+        self.bump()
+        self.bump()
+    }
+}
+
+fn bumped(c: Counter) -> Counter {
+    var copy = c
+    copy.bump()
+    copy
+}
+
+fn main() {
+    var a = Counter.new()
+    let b = a
+    a.bump()
+    check(a.get() == 1 && b.get() == 0)
+    check(a.add(5) == 6 && a.n == 6)
+    var p = Pair(left: a, right: b)
+    p.left.bump_twice()
+    p.right.bump()
+    check(p.left.n == 8 && p.right.n == 1)
+    check(a.n == 6 && b.n == 0)
+    let c = bumped(a)
+    check(c.n == 7 && a.n == 6)
+    let seen = |x: Int| x + b.n
+    a.bump()
+    check(seen(0) == 0 && a.n == 7)
+    Counter(n: 5).bump()
+    let t = Counter(n: 9)
+    check(t.get() == 9)
+}
+",
+        &[],
+        "",
+    );
+}
+
+#[test]
+fn a_question_mark_in_a_mutating_method_still_writes_its_receiver_back() {
+    assert_runs(
+        "fn fail() {
+    let zero = 0
+    let _ = 1 / zero
+}
+
+fn check(ok: Bool) {
+    if !ok {
+        fail()
+    }
+}
+
+struct Account { balance: Int, tries: Int }
+
+impl Account {
+    fn take(var self, amount: Int) -> Result<Int, Int> {
+        self.tries = self.tries + 1
+        let left = self.check_left(amount)?
+        self.balance = left
+        Ok(left)
+    }
+
+    fn check_left(self, amount: Int) -> Result<Int, Int> {
+        if amount <= self.balance { Ok(self.balance - amount) } else { Err(amount) }
+    }
+}
+
+fn main() {
+    var a = Account(balance: 10, tries: 0)
+    check(a.take(4).unwrap_or(-1) == 6)
+    check(!a.take(100).is_ok())
+    check(a.balance == 6 && a.tries == 2)
+}
+",
+        &[],
+        "",
+    );
+}
+
+#[test]
+fn a_panic_in_a_mutating_method_ends_the_program() {
+    assert_panics(
+        "struct Counter { n: Int }
+
+impl Counter {
+    fn divide(var self, by: Int) {
+        self.n = self.n / by
+    }
+}
+
+fn main() {
+    var c = Counter(n: 6)
+    c.divide(2)
+    c.divide(0)
+}
+",
+        "P0004",
+        "self.n / by",
+    );
 }

@@ -249,6 +249,7 @@ mod tests {
                 generics: Vec::new(),
                 self_ty: None,
                 receiver: false,
+                mutating: false,
                 params: Vec::new(),
                 ret: Type::Unit,
                 ret_annotation: None,

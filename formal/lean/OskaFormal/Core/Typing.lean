@@ -3,11 +3,20 @@ import OskaFormal.Core.Syntax
 /-!
 # Oska Core: typing
 
-The typing rules of Oska Core, version 5. A context lists the types of the
+The typing rules of Oska Core, version 6. A context lists the types of the
 slots in scope, slot 0 first; a `let` that binds adds its slot at the end,
 and it leaves scope with its block. A `match` arm's pattern adds its
 bindings' slots at the end, for its guard and body. A closure's body is
 typed in the context its `height` slots give, then its parameters' slots.
+
+A judgment also lists the types of the vars in scope, `M`, var 0 first:
+a `var` adds its var at the front for the rest of its block, and takes no
+slot. A function's body sees no var but its receiver, for a mutating
+method, and a closure's body none of the function it is written in. A
+place is typed through its var and the struct fields of its path, so an
+assignment, or a mutating call, types only on a var in scope: never on a
+`let`, a parameter or a pattern's binding, which the checker rejects
+(`E0229`, `E0230`).
 
 Each judgment also carries the result type `R` of the function or closure
 the expression is in: the type a `?` returns at. `?` types only where `R`
@@ -252,6 +261,9 @@ mutual
     | .match_ sc arms => Expr.capsWithin A sc && Expr.capsWithinArms A arms
     | .closure _ _ _ _ _ body => Expr.capsWithin A body
     | .callValue c args => Expr.capsWithin A c && Expr.capsWithinList A args
+    | .var_ _ => true
+    | .mutCall _ _ args => Expr.capsWithinList A args
+    | .cell v e | .method _ v e => Expr.capsWithin A v && Expr.capsWithin A e
 
   def Expr.capsWithinList (A : List CapKind) : List Expr → Bool
     | [] => true
@@ -265,6 +277,8 @@ mutual
     | [] => true
     | .let_ _ _ e :: ss => Expr.capsWithin A e && Expr.capsWithinStmts A ss
     | .expr e :: ss => Expr.capsWithin A e && Expr.capsWithinStmts A ss
+    | .var_ _ e :: ss => Expr.capsWithin A e && Expr.capsWithinStmts A ss
+    | .assign _ e :: ss => Expr.capsWithin A e && Expr.capsWithinStmts A ss
 
   def Expr.capsWithinArms (A : List CapKind) : List Arm → Bool
     | [] => true
@@ -300,6 +314,25 @@ def Program.pureTy (P : Program) : Ty → Bool
   | .result ok err => Program.pureTy P ok && Program.pureTy P err
   | _ => true
 
+/-- The type of the field at `path` of a value of type `t`, outermost
+first: `t` for the empty path. Only a struct has fields to follow. -/
+def Program.pathTy (P : Program) : Ty → List Nat → Option Ty
+  | t, [] => some t
+  | .named n, i :: is =>
+    match P.fieldsOf n none with
+    | some fts => match fts[i]? with
+      | some t => Program.pathTy P t is
+      | none => none
+    | none => none
+  | _, _ :: _ => none
+
+/-- The type of a place, when its var is in scope in `M` (the types of
+the vars, var 0 first) and its path follows struct fields. -/
+def Program.placeTy (P : Program) (M : List Ty) (pl : Place) : Option Ty :=
+  match lookup M pl.var with
+  | some t => P.pathTy t pl.fields
+  | none => none
+
 /-- What a typing judgment is about: an expression and its type, a list of
 arguments and their types, a block's statements and value and the block's
 type, or a `match`'s arms, the type of the value they match and the type
@@ -317,107 +350,108 @@ chose, `From`'s `from` of `e'` for `e`, which takes an `e` and gives an
 inductive ConvTyped (P : Program) : Option String → Ty → Ty → Prop where
   | none {e : Ty} : ConvTyped P none e e
   | some {name : String} {f : Function} {e e' : Ty} :
-      P.find? name = some f → f.params.map Param.type = [e] → f.ret = e' →
+      P.find? name = some f → f.argTypes = [e] → f.ret = e' →
       ConvTyped P (some name) e e'
 
 /-- The typing judgment of Oska Core, in program `P`, in a function or
-closure whose result type is `R`, and in context `Γ`. -/
-inductive Typed (P : Program) : Ty → List Ty → Goal → Prop where
-  | unit {R : Ty} {Γ : List Ty} : Typed P R Γ (.expr .unit .unit)
-  | int {R : Ty} {Γ : List Ty} {n : Int} : fits n = true → Typed P R Γ (.expr (.int n) .int)
-  | bool {R : Ty} {Γ : List Ty} {b : Bool} : Typed P R Γ (.expr (.bool b) .bool)
-  | str {R : Ty} {Γ : List Ty} {s : String} : Typed P R Γ (.expr (.str s) .string)
-  | path {R : Ty} {Γ : List Ty} {s : String} : Typed P R Γ (.expr (.path s) .path)
+closure whose result type is `R`, in context `Γ` (the types of the slots)
+and with the vars `M` (the types of the vars in scope, var 0 first). -/
+inductive Typed (P : Program) : Ty → List Ty → List Ty → Goal → Prop where
+  | unit {R : Ty} {Γ : List Ty} {M : List Ty} : Typed P R Γ M (.expr .unit .unit)
+  | int {R : Ty} {Γ : List Ty} {M : List Ty} {n : Int} : fits n = true → Typed P R Γ M (.expr (.int n) .int)
+  | bool {R : Ty} {Γ : List Ty} {M : List Ty} {b : Bool} : Typed P R Γ M (.expr (.bool b) .bool)
+  | str {R : Ty} {Γ : List Ty} {M : List Ty} {s : String} : Typed P R Γ M (.expr (.str s) .string)
+  | path {R : Ty} {Γ : List Ty} {M : List Ty} {s : String} : Typed P R Γ M (.expr (.path s) .path)
   /-- A capability value, which only a run holds: `main`'s arguments and
   what attenuation gives. -/
-  | cap {R : Ty} {Γ : List Ty} {k : CapKind} {r : CapRoot} : Typed P R Γ (.expr (.cap k r) (.cap k))
+  | cap {R : Ty} {Γ : List Ty} {M : List Ty} {k : CapKind} {r : CapRoot} : Typed P R Γ M (.expr (.cap k r) (.cap k))
   /-- The error an effect gives, which only a run holds. -/
-  | ioError {R : Ty} {Γ : List Ty} : Typed P R Γ (.expr .ioError .ioError)
+  | ioError {R : Ty} {Γ : List Ty} {M : List Ty} : Typed P R Γ M (.expr .ioError .ioError)
   /-- `Ok(e)` and `Err(e)` are `Result`s whose `Ok` or `Err` type is
   `e`'s, of a `Result` type that holds no capability or function, which
   the export refuses. -/
-  | ok {R : Ty} {Γ : List Ty} {e : Expr} {t u : Ty} :
-      (Ty.result t u).fieldCapFree = true → Typed P R Γ (.expr e t) →
-      Typed P R Γ (.expr (.result true e) (.result t u))
-  | err {R : Ty} {Γ : List Ty} {e : Expr} {t u : Ty} :
-      (Ty.result t u).fieldCapFree = true → Typed P R Γ (.expr e u) →
-      Typed P R Γ (.expr (.result false e) (.result t u))
+  | ok {R : Ty} {Γ : List Ty} {M : List Ty} {e : Expr} {t u : Ty} :
+      (Ty.result t u).fieldCapFree = true → Typed P R Γ M (.expr e t) →
+      Typed P R Γ M (.expr (.result true e) (.result t u))
+  | err {R : Ty} {Γ : List Ty} {M : List Ty} {e : Expr} {t u : Ty} :
+      (Ty.result t u).fieldCapFree = true → Typed P R Γ M (.expr e u) →
+      Typed P R Γ M (.expr (.result false e) (.result t u))
   /-- `e?` in a function or closure that returns a `Result<t', u'>`, on
   a `Result<t, u>` whose error passes on as a `u'` (`ConvTyped`), has
   the type `t`. -/
-  | try_ {Γ : List Ty} {e : Expr} {conv : Option String} {t u t' u' : Ty} :
-      (Ty.result t' u').fieldCapFree = true → Typed P (.result t' u') Γ (.expr e (.result t u)) →
-      ConvTyped P conv u u' → Typed P (.result t' u') Γ (.expr (.try_ e conv) t)
+  | try_ {Γ : List Ty} {M : List Ty} {e : Expr} {conv : Option String} {t u t' u' : Ty} :
+      (Ty.result t' u').fieldCapFree = true → Typed P (.result t' u') Γ M (.expr e (.result t u)) →
+      ConvTyped P conv u u' → Typed P (.result t' u') Γ M (.expr (.try_ e conv) t)
   /-- A body a call runs, whose `?` returns from it: the result type of
-  its function or closure is its own type. -/
-  | frame {R : Ty} {Γ : List Ty} {e : Expr} {t : Ty} :
-      Typed P t Γ (.expr e t) → Typed P R Γ (.expr (.frame e) t)
-  | builtin {R : Ty} {Γ : List Ty} {op : Builtin} {args : List Expr} {ts : List Ty} {t : Ty} :
-      BuiltinTyped op ts t → Typed P R Γ (.args args ts) → Typed P R Γ (.expr (.builtin op args) t)
-  | local_ {R : Ty} {Γ : List Ty} {i : Nat} {t : Ty} :
-      lookup Γ i = some t → Typed P R Γ (.expr (.local_ i) t)
-  | neg {R : Ty} {Γ : List Ty} {e : Expr} :
-      Typed P R Γ (.expr e .int) → Typed P R Γ (.expr (.neg e) .int)
-  | not {R : Ty} {Γ : List Ty} {e : Expr} :
-      Typed P R Γ (.expr e .bool) → Typed P R Γ (.expr (.not e) .bool)
-  | binary {R : Ty} {Γ : List Ty} {op : BinOp} {l r : Expr} {a t : Ty} :
-      BinOpTyped op a t → Typed P R Γ (.expr l a) → Typed P R Γ (.expr r a) →
-      Typed P R Γ (.expr (.binary op l r) t)
-  | call {R : Ty} {Γ : List Ty} {name : String} {f : Function} {args : List Expr} :
-      P.find? name = some f → Typed P R Γ (.args args (f.params.map Param.type)) →
-      Typed P R Γ (.expr (.call name args) f.ret)
-  | ifElse {R : Ty} {Γ : List Ty} {c th el : Expr} {t : Ty} :
-      Typed P R Γ (.expr c .bool) → Typed P R Γ (.expr th t) → Typed P R Γ (.expr el t) →
-      Typed P R Γ (.expr (.if_ c th (some el)) t)
+  its function or closure is its own type. It sees no var of its caller. -/
+  | frame {R : Ty} {Γ : List Ty} {M : List Ty} {e : Expr} {t : Ty} :
+      Typed P t Γ [] (.expr e t) → Typed P R Γ M (.expr (.frame e) t)
+  | builtin {R : Ty} {Γ : List Ty} {M : List Ty} {op : Builtin} {args : List Expr} {ts : List Ty} {t : Ty} :
+      BuiltinTyped op ts t → Typed P R Γ M (.args args ts) → Typed P R Γ M (.expr (.builtin op args) t)
+  | local_ {R : Ty} {Γ : List Ty} {M : List Ty} {i : Nat} {t : Ty} :
+      lookup Γ i = some t → Typed P R Γ M (.expr (.local_ i) t)
+  | neg {R : Ty} {Γ : List Ty} {M : List Ty} {e : Expr} :
+      Typed P R Γ M (.expr e .int) → Typed P R Γ M (.expr (.neg e) .int)
+  | not {R : Ty} {Γ : List Ty} {M : List Ty} {e : Expr} :
+      Typed P R Γ M (.expr e .bool) → Typed P R Γ M (.expr (.not e) .bool)
+  | binary {R : Ty} {Γ : List Ty} {M : List Ty} {op : BinOp} {l r : Expr} {a t : Ty} :
+      BinOpTyped op a t → Typed P R Γ M (.expr l a) → Typed P R Γ M (.expr r a) →
+      Typed P R Γ M (.expr (.binary op l r) t)
+  | call {R : Ty} {Γ : List Ty} {M : List Ty} {name : String} {f : Function} {args : List Expr} :
+      P.find? name = some f → Typed P R Γ M (.args args f.argTypes) →
+      Typed P R Γ M (.expr (.call name args) f.ret)
+  | ifElse {R : Ty} {Γ : List Ty} {M : List Ty} {c th el : Expr} {t : Ty} :
+      Typed P R Γ M (.expr c .bool) → Typed P R Γ M (.expr th t) → Typed P R Γ M (.expr el t) →
+      Typed P R Γ M (.expr (.if_ c th (some el)) t)
   /-- An `if` with no `else` has type `()` whatever the type of `then`,
   whose value is dropped. The checker (`crates/oska-check/src/body.rs`)
   types it the same way. -/
-  | ifNoElse {R : Ty} {Γ : List Ty} {c th : Expr} {t : Ty} :
-      Typed P R Γ (.expr c .bool) → Typed P R Γ (.expr th t) →
-      Typed P R Γ (.expr (.if_ c th none) .unit)
-  | block {R : Ty} {Γ : List Ty} {ss : List Stmt} {v : Option Expr} {t : Ty} :
-      Typed P R Γ (.block ss v t) → Typed P R Γ (.expr (.block ss v) t)
+  | ifNoElse {R : Ty} {Γ : List Ty} {M : List Ty} {c th : Expr} {t : Ty} :
+      Typed P R Γ M (.expr c .bool) → Typed P R Γ M (.expr th t) →
+      Typed P R Γ M (.expr (.if_ c th none) .unit)
+  | block {R : Ty} {Γ : List Ty} {M : List Ty} {ss : List Stmt} {v : Option Expr} {t : Ty} :
+      Typed P R Γ M (.block ss v t) → Typed P R Γ M (.expr (.block ss v) t)
   /-- A struct or enum variant has the type of its struct or enum. -/
-  | construct {R : Ty} {Γ : List Ty} {type : String} {variant : Option String} {fs : List Expr}
+  | construct {R : Ty} {Γ : List Ty} {M : List Ty} {type : String} {variant : Option String} {fs : List Expr}
       {fts : List Ty} :
-      P.fieldsOf type variant = some fts → Typed P R Γ (.args fs fts) →
-      Typed P R Γ (.expr (.construct type variant fs) (.named type))
-  | field {R : Ty} {Γ : List Ty} {b : Expr} {type : String} {fts : List Ty} {i : Nat} {t : Ty} :
-      P.fieldsOf type none = some fts → fts[i]? = some t → Typed P R Γ (.expr b (.named type)) →
-      Typed P R Γ (.expr (.field b i) t)
+      P.fieldsOf type variant = some fts → Typed P R Γ M (.args fs fts) →
+      Typed P R Γ M (.expr (.construct type variant fs) (.named type))
+  | field {R : Ty} {Γ : List Ty} {M : List Ty} {b : Expr} {type : String} {fts : List Ty} {i : Nat} {t : Ty} :
+      P.fieldsOf type none = some fts → fts[i]? = some t → Typed P R Γ M (.expr b (.named type)) →
+      Typed P R Γ M (.expr (.field b i) t)
   /-- A `match` whose arms match values of the scrutinee's type and have
   bodies of type `t`, and whose arms pass the static check
   `exhaustiveArms`, or, only once the scrutinee is a value (a state a run
   reaches after skipping arms), whose scrutinee matches an arm with no
   guard. `SourceTyped` rules the second out of a program as written. -/
-  | match_ {R : Ty} {Γ : List Ty} {s : Expr} {arms : List Arm} {u t : Ty} :
-      Typed P R Γ (.expr s u) → Typed P R Γ (.arms arms u t) →
+  | match_ {R : Ty} {Γ : List Ty} {M : List Ty} {s : Expr} {arms : List Arm} {u t : Ty} :
+      Typed P R Γ M (.expr s u) → Typed P R Γ M (.arms arms u t) →
       (exhaustiveArms P arms = true ∨ (IsValue s ∧ Covered arms s)) →
-      Typed P R Γ (.expr (.match_ s arms) t)
-  | armsNil {R : Ty} {Γ : List Ty} {u t : Ty} : Typed P R Γ (.arms [] u t)
-  | armsCons {R : Ty} {Γ : List Ty} {p : Pattern} {body : Expr} {rest : List Arm} {u t : Ty} {bs : List Ty} :
-      PatTyped P (.one p u bs) → Typed P R (Γ ++ bs) (.expr body t) → Typed P R Γ (.arms rest u t) →
-      Typed P R Γ (.arms (.mk p none body :: rest) u t)
-  | armsConsGuard {R : Ty} {Γ : List Ty} {p : Pattern} {g body : Expr} {rest : List Arm} {u t : Ty}
+      Typed P R Γ M (.expr (.match_ s arms) t)
+  | armsNil {R : Ty} {Γ : List Ty} {M : List Ty} {u t : Ty} : Typed P R Γ M (.arms [] u t)
+  | armsCons {R : Ty} {Γ : List Ty} {M : List Ty} {p : Pattern} {body : Expr} {rest : List Arm} {u t : Ty} {bs : List Ty} :
+      PatTyped P (.one p u bs) → Typed P R (Γ ++ bs) M (.expr body t) → Typed P R Γ M (.arms rest u t) →
+      Typed P R Γ M (.arms (.mk p none body :: rest) u t)
+  | armsConsGuard {R : Ty} {Γ : List Ty} {M : List Ty} {p : Pattern} {g body : Expr} {rest : List Arm} {u t : Ty}
       {bs : List Ty} :
-      PatTyped P (.one p u bs) → Typed P R (Γ ++ bs) (.expr g .bool) →
-      Typed P R (Γ ++ bs) (.expr body t) → Typed P R Γ (.arms rest u t) →
-      Typed P R Γ (.arms (.mk p (some g) body :: rest) u t)
-  | argsNil {R : Ty} {Γ : List Ty} : Typed P R Γ (.args [] [])
-  | argsCons {R : Ty} {Γ : List Ty} {e : Expr} {es : List Expr} {t : Ty} {ts : List Ty} :
-      Typed P R Γ (.expr e t) → Typed P R Γ (.args es ts) → Typed P R Γ (.args (e :: es) (t :: ts))
-  | blockNone {R : Ty} {Γ : List Ty} : Typed P R Γ (.block [] none .unit)
-  | blockSome {R : Ty} {Γ : List Ty} {e : Expr} {t : Ty} :
-      Typed P R Γ (.expr e t) → Typed P R Γ (.block [] (some e) t)
-  | blockExpr {R : Ty} {Γ : List Ty} {e : Expr} {u : Ty} {ss : List Stmt} {v : Option Expr} {t : Ty} :
-      Typed P R Γ (.expr e u) → Typed P R Γ (.block ss v t) →
-      Typed P R Γ (.block (.expr e :: ss) v t)
-  | blockLetBind {R : Ty} {Γ : List Ty} {e : Expr} {u : Ty} {ss : List Stmt} {v : Option Expr} {t : Ty} :
-      Typed P R Γ (.expr e u) → Typed P R (Γ ++ [u]) (.block ss v t) →
-      Typed P R Γ (.block (.let_ true u e :: ss) v t)
-  | blockLetDrop {R : Ty} {Γ : List Ty} {e : Expr} {u : Ty} {ss : List Stmt} {v : Option Expr} {t : Ty} :
-      Typed P R Γ (.expr e u) → Typed P R Γ (.block ss v t) →
-      Typed P R Γ (.block (.let_ false u e :: ss) v t)
+      PatTyped P (.one p u bs) → Typed P R (Γ ++ bs) M (.expr g .bool) →
+      Typed P R (Γ ++ bs) M (.expr body t) → Typed P R Γ M (.arms rest u t) →
+      Typed P R Γ M (.arms (.mk p (some g) body :: rest) u t)
+  | argsNil {R : Ty} {Γ : List Ty} {M : List Ty} : Typed P R Γ M (.args [] [])
+  | argsCons {R : Ty} {Γ : List Ty} {M : List Ty} {e : Expr} {es : List Expr} {t : Ty} {ts : List Ty} :
+      Typed P R Γ M (.expr e t) → Typed P R Γ M (.args es ts) → Typed P R Γ M (.args (e :: es) (t :: ts))
+  | blockNone {R : Ty} {Γ : List Ty} {M : List Ty} : Typed P R Γ M (.block [] none .unit)
+  | blockSome {R : Ty} {Γ : List Ty} {M : List Ty} {e : Expr} {t : Ty} :
+      Typed P R Γ M (.expr e t) → Typed P R Γ M (.block [] (some e) t)
+  | blockExpr {R : Ty} {Γ : List Ty} {M : List Ty} {e : Expr} {u : Ty} {ss : List Stmt} {v : Option Expr} {t : Ty} :
+      Typed P R Γ M (.expr e u) → Typed P R Γ M (.block ss v t) →
+      Typed P R Γ M (.block (.expr e :: ss) v t)
+  | blockLetBind {R : Ty} {Γ : List Ty} {M : List Ty} {e : Expr} {u : Ty} {ss : List Stmt} {v : Option Expr} {t : Ty} :
+      Typed P R Γ M (.expr e u) → Typed P R (Γ ++ [u]) M (.block ss v t) →
+      Typed P R Γ M (.block (.let_ true u e :: ss) v t)
+  | blockLetDrop {R : Ty} {Γ : List Ty} {M : List Ty} {e : Expr} {u : Ty} {ss : List Stmt} {v : Option Expr} {t : Ty} :
+      Typed P R Γ M (.expr e u) → Typed P R Γ M (.block ss v t) →
+      Typed P R Γ M (.block (.let_ false u e :: ss) v t)
   /-- A closure written where `h` slots are in scope has the function type
   of its parameters and result, when its body has its result type in the
   context of those slots and its parameters' slots, with that result type
@@ -429,19 +463,50 @@ inductive Typed (P : Program) : Ty → List Ty → Goal → Prop where
   the checker requires (`E0270`): each slot below `h` its body reads has a
   type whose values hold no capability, and its body holds no capability
   value, which keeps true once a run puts the captured values in it. -/
-  | closure {R : Ty} {Γ : List Ty} {ps : List Param} {h : Nat} {cs : List Nat} {cap : Bool} {ret : Ty}
+  | closure {R : Ty} {Γ : List Ty} {M : List Ty} {ps : List Param} {h : Nat} {cs : List Nat} {cap : Bool} {ret : Ty}
       {body : Expr} :
       h ≤ Γ.length →
       (cap = false → ∀ i t, i < h → body.reads i = true → lookup Γ i = some t →
         P.pureTy t = true) →
       (cap = false → body.capsWithin [] = true) →
-      Typed P ret (Γ.take h ++ bindingTypes ps) (.expr body ret) →
-      Typed P R Γ (.expr (.closure ps h cs cap ret body) (.fn cap (ps.map Param.type) ret))
+      Typed P ret (Γ.take h ++ bindingTypes ps) [] (.expr body ret) →
+      Typed P R Γ M (.expr (.closure ps h cs cap ret body) (.fn cap (ps.map Param.type) ret))
   /-- A call of a function value with arguments of its parameter types
   has its result type. -/
-  | callValue {R : Ty} {Γ : List Ty} {c : Expr} {args : List Expr} {cap : Bool} {ts : List Ty} {t : Ty} :
-      Typed P R Γ (.expr c (.fn cap ts t)) → Typed P R Γ (.args args ts) →
-      Typed P R Γ (.expr (.callValue c args) t)
+  | callValue {R : Ty} {Γ : List Ty} {M : List Ty} {c : Expr} {args : List Expr} {cap : Bool} {ts : List Ty} {t : Ty} :
+      Typed P R Γ M (.expr c (.fn cap ts t)) → Typed P R Γ M (.args args ts) →
+      Typed P R Γ M (.expr (.callValue c args) t)
+  /-- Var `i` has the type of its `var`. -/
+  | var_ {R : Ty} {Γ : List Ty} {M : List Ty} {i : Nat} {t : Ty} :
+      lookup M i = some t → Typed P R Γ M (.expr (.var_ i) t)
+  /-- A `var` takes no slot: the rest of its block has it as var 0. -/
+  | blockVar {R : Ty} {Γ : List Ty} {M : List Ty} {e : Expr} {u : Ty} {ss : List Stmt}
+      {v : Option Expr} {t : Ty} :
+      Typed P R Γ M (.expr e u) → Typed P R Γ (u :: M) (.block ss v t) →
+      Typed P R Γ M (.block (.var_ u e :: ss) v t)
+  /-- An assignment writes a value of its place's type. -/
+  | blockAssign {R : Ty} {Γ : List Ty} {M : List Ty} {pl : Place} {e : Expr} {u : Ty}
+      {ss : List Stmt} {v : Option Expr} {t : Ty} :
+      P.placeTy M pl = some u → Typed P R Γ M (.expr e u) → Typed P R Γ M (.block ss v t) →
+      Typed P R Γ M (.block (.assign pl e :: ss) v t)
+  /-- A mutating call: `f` takes `var self` of the type of the place,
+  which is a var in scope, and arguments of its parameters' types. The
+  checker allows a mutating method only on a `var` (`E0230`), and no
+  slot is a place. -/
+  | mutCall {R : Ty} {Γ : List Ty} {M : List Ty} {name : String} {f : Function} {pl : Place}
+      {u : Ty} {args : List Expr} :
+      P.find? name = some f → f.receiver = some u → P.placeTy M pl = some u →
+      Typed P R Γ M (.args args (f.params.map Param.type)) →
+      Typed P R Γ M (.expr (.mutCall name pl args) f.ret)
+  /-- The cell of a `var`, holding a value of its type. -/
+  | cell {R : Ty} {Γ : List Ty} {M : List Ty} {v e : Expr} {u t : Ty} :
+      IsValue v → Typed P R Γ M (.expr v u) → Typed P R Γ (u :: M) (.expr e t) →
+      Typed P R Γ M (.expr (.cell v e) t)
+  /-- A running mutating call: its body sees its receiver, var 0, and
+  no var of its caller, and its `?` returns from it, as a frame's. -/
+  | method {R : Ty} {Γ : List Ty} {M : List Ty} {pl : Place} {v e : Expr} {u t : Ty} :
+      P.placeTy M pl = some u → IsValue v → Typed P R Γ M (.expr v u) →
+      Typed P t Γ [u] (.expr e t) → Typed P R Γ M (.expr (.method pl v e) t)
 
 /-- What a value typing is about: a value and its type, or a list of
 values and their types. -/
@@ -473,17 +538,19 @@ inductive ValueTyped (P : Program) : VGoal → Prop where
       P.fieldsOf type variant = some fts → ValueTyped P (.many fs fts) →
       ValueTyped P (.one (.construct type variant fs) (.named type))
   | closure {ps : List Param} {cs : List Nat} {cap : Bool} {ret : Ty} {body : Expr} :
-      (cap = false → body.capsWithin [] = true) → Typed P ret (bindingTypes ps) (.expr body ret) →
+      (cap = false → body.capsWithin [] = true) → Typed P ret (bindingTypes ps) [] (.expr body ret) →
       ValueTyped P (.one (.closure ps 0 cs cap ret body) (.fn cap (ps.map Param.type) ret))
   | nil : ValueTyped P (.many [] [])
   | cons {v : Expr} {vs : List Expr} {t : Ty} {ts : List Ty} :
       ValueTyped P (.one v t) → ValueTyped P (.many vs ts) → ValueTyped P (.many (v :: vs) (t :: ts))
 
 /-- A program is well typed when each function's body has its result type,
-in a context of the slots its parameters bind, with that result type as
-the one its `?`s return at. -/
+in a context of the slots its parameters bind and with its receiver as
+its one var, for a mutating method, with that result type as the one its
+`?`s return at. -/
 def ProgramTyped (P : Program) : Prop :=
-  ∀ name f, P.find? name = some f → Typed P f.ret (bindingTypes f.params) (.expr f.body f.ret)
+  ∀ name f, P.find? name = some f →
+    Typed P f.ret (bindingTypes f.params) f.receiver.toList (.expr f.body f.ret)
 
 mutual
   /-- Whether every `match` in an expression passes `exhaustiveArms`. -/
@@ -501,6 +568,9 @@ mutual
       exhaustiveArms P arms && Expr.staticMatches P sc && Expr.staticMatchesArms P arms
     | .closure _ _ _ _ _ body => Expr.staticMatches P body
     | .callValue c args => Expr.staticMatches P c && Expr.staticMatchesList P args
+    | .var_ _ => true
+    | .mutCall _ _ args => Expr.staticMatchesList P args
+    | .cell v e | .method _ v e => Expr.staticMatches P v && Expr.staticMatches P e
 
   def Expr.staticMatchesList (P : Program) : List Expr → Bool
     | [] => true
@@ -514,6 +584,8 @@ mutual
     | [] => true
     | .let_ _ _ e :: ss => Expr.staticMatches P e && Expr.staticMatchesStmts P ss
     | .expr e :: ss => Expr.staticMatches P e && Expr.staticMatchesStmts P ss
+    | .var_ _ e :: ss => Expr.staticMatches P e && Expr.staticMatchesStmts P ss
+    | .assign _ e :: ss => Expr.staticMatches P e && Expr.staticMatchesStmts P ss
 
   def Expr.staticMatchesArms (P : Program) : List Arm → Bool
     | [] => true
@@ -528,13 +600,14 @@ def Expr.capFree (e : Expr) : Bool := e.capsWithin []
 /-- **Source typing.** An expression as the checker hands it over: typed,
 with every `match` exhaustive by the static check, and holding no
 capability value, since no source form makes one. -/
-def SourceTyped (P : Program) (R : Ty) (Γ : List Ty) (e : Expr) (t : Ty) : Prop :=
-  Typed P R Γ (.expr e t) ∧ e.staticMatches P = true ∧ e.capFree = true
+def SourceTyped (P : Program) (R : Ty) (Γ M : List Ty) (e : Expr) (t : Ty) : Prop :=
+  Typed P R Γ M (.expr e t) ∧ e.staticMatches P = true ∧ e.capFree = true
 
 /-- A program as the checker hands it over: each function's body is
 source typed, and no declared type holds a capability or a function. -/
 def ProgramSourceTyped (P : Program) : Prop :=
-  (∀ name f, P.find? name = some f → SourceTyped P f.ret (bindingTypes f.params) f.body f.ret) ∧
+  (∀ name f, P.find? name = some f →
+    SourceTyped P f.ret (bindingTypes f.params) f.receiver.toList f.body f.ret) ∧
     P.typesCapFree = true
 
 theorem ProgramSourceTyped.typed {P : Program} (h : ProgramSourceTyped P) : ProgramTyped P :=

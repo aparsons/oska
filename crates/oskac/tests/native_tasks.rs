@@ -494,6 +494,7 @@ fn spawning_on_a_finished_scope_panics_with_p0005_at_the_call() {
             generics: Vec::new(),
             self_ty: None,
             receiver: false,
+            mutating: false,
             params: Vec::new(),
             ret: Type::Unit,
             ret_annotation: None,

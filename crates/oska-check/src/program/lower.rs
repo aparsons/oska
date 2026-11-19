@@ -347,6 +347,7 @@ pub fn module(
                     generics: Vec::new(),
                     self_ty: None,
                     receiver: false,
+                    mutating: false,
                     params: Vec::new(),
                     ret: lowering.convert(items.const_types.get(&name), c.name.span),
                     ret_annotation: Some(c.ty.span),
@@ -501,6 +502,7 @@ impl Lowering<'_> {
                 .and_then(|s| s.self_ty.as_ref())
                 .map(|ty| self.convert(Some(ty), f.name.span)),
             receiver: f.receiver.is_some(),
+            mutating: f.receiver.as_ref().is_some_and(|r| r.mutable),
             params,
             ret: self.convert(sig.map(|s| &s.ret), f.name.span),
             ret_annotation: f.return_type.as_ref().map(|ty| ty.span),

@@ -12,7 +12,9 @@ fuel). There is no second copy of the semantics to drift: `step_sound`
 proves that every step `step` takes is a `Step`, and `step_complete` that
 `step` takes every `Step` there is, so `step P e = some o` exactly when
 `Step P e o`. `run_sound` lifts that to whole runs: a value `run` returns
-is one `Step`s reach, and so is a panic, and a return.
+is one `Step`s reach, and so is a panic, and a return. A read or write
+of a var no `cell` or running mutating call holds ends the run as
+`unbound`, which `preservation` rules out for a closed, typed expression.
 -/
 
 namespace OskaFormal.Core
@@ -51,7 +53,8 @@ mutual
     | .closure _ (_ + 1) _ _ _ _, h => by simp [Expr.isValue] at h
     | .local_ _, h | .neg _, h | .not _, h | .binary _ _ _, h | .call _ _, h | .if_ _ _ _, h
     | .block _ _, h | .field _ _, h | .match_ _ _, h | .builtin _ _, h | .callValue _ _, h
-    | .try_ _ _, h | .frame _, h => by simp [Expr.isValue] at h
+    | .try_ _ _, h | .frame _, h | .var_ _, h | .mutCall _ _ _, h | .cell _ _, h
+    | .method _ _ _, h => by simp [Expr.isValue] at h
 
   theorem Expr.allValues_sound : ∀ {es : List Expr}, Expr.allValues es = true → AllValues es
     | [], _ => AllValues.nil
@@ -105,7 +108,18 @@ def stepLogical : BinOp → Expr → Expr → Option Outcome
 body of the function it names, with the arguments put for its slots. -/
 def stepCall (P : Program) (name : String) (vs : List Expr) : Option Outcome :=
   match P.find? name with
-  | some f => (instantiate f.params vs f.body).map fun e => .next (.frame e)
+  | some f => (f.enter vs).map fun e => .next (.frame e)
+  | none => none
+
+/-- The step a mutating call takes once its arguments `vs` are values:
+read the receiver at `pl`, then run the method's body with it. -/
+def stepMutCall (P : Program) (name : String) (pl : Place) (vs : List Expr) : Option Outcome :=
+  match P.find? name with
+  | some f =>
+    match f.receiver with
+    | some _ =>
+      (instantiate f.params vs f.body).map fun body => .read pl.var pl.fields fun r => .method pl r body
+    | none => none
   | none => none
 
 /-- The step a built-in call takes once its arguments `vs` are values: an
@@ -213,6 +227,17 @@ mutual
     | .frame e =>
       if e.isValue then some (.next e)
       else (step P e).map Outcome.inFrame
+    | .var_ i => some (.read i [] fun x => x)
+    | .mutCall name pl args =>
+      match stepArgs P args with
+      | some (vs, o, rest) => some (o.map fun e' => .mutCall name pl (vs ++ e' :: rest))
+      | none => if Expr.allValues args then stepMutCall P name pl args else none
+    | .cell v e =>
+      if e.isValue then some (.next e)
+      else (step P e).map (Outcome.inCell v)
+    | .method pl v e =>
+      if e.isValue then some (.write pl.var pl.fields v e)
+      else (step P e).map (Outcome.inMethod pl v)
 
   /-- The step of the first argument of a list that is not a value: the
   values before it, its outcome, and the arguments after it. `none` when
@@ -235,6 +260,12 @@ mutual
         if b then some (.next (.block (Expr.substStmts e ss) (Expr.substOpt e val)))
         else some (.next (.block ss val))
       else (step P e).map (·.map fun e' => .block (.let_ b t e' :: ss) val)
+    | .var_ t e :: ss, val =>
+      if e.isValue then some (.next (.cell e (.block ss val)))
+      else (step P e).map (·.map fun e' => .block (.var_ t e' :: ss) val)
+    | .assign pl e :: ss, val =>
+      if e.isValue then some (.write pl.var pl.fields e (.block ss val))
+      else (step P e).map (·.map fun e' => .block (.assign pl e' :: ss) val)
 end
 
 theorem stepLogical_sound {P : Program} {op : BinOp} {l r : Expr} {o : Outcome}
@@ -305,6 +336,19 @@ theorem stepCallValue_sound {P : Program} {c : Expr} {vs : List Expr} {o : Outco
   split at h
   · obtain ⟨e, hi, rfl⟩ := map_eq_some_inv h
     exact Step.callValue hvs hi
+  · cases h
+
+theorem stepMutCall_sound {P : Program} {name : String} {pl : Place} {vs : List Expr}
+    {o : Outcome} (hvs : AllValues vs) (h : stepMutCall P name pl vs = some o) :
+    Step P (.mutCall name pl vs) o := by
+  unfold stepMutCall at h
+  split at h
+  · next f hf =>
+    split at h
+    · next u hu =>
+      obtain ⟨body, hi, rfl⟩ := map_eq_some_inv h
+      exact Step.mutCall hf hu hvs hi
+    · cases h
   · cases h
 
 /-- **Soundness of `step`.** Every step `step` takes is a step of the
@@ -469,6 +513,40 @@ theorem step_sound {P : Program} : ∀ {e : Expr} {o : Outcome}, step P e = some
     simp only [step, he, ite_false, Bool.false_eq_true] at h
     obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
     exact Step.frame (ih hs)
+  next i => intro o h; simp [step] at h; subst h; exact Step.var
+  next name pl args vs o' rest hargs ih =>
+    intro o h
+    simp only [step, hargs, Option.some.injEq] at h
+    subst h
+    obtain ⟨e, rfl, hvs, hs⟩ := ih _ _ _ hargs
+    exact Step.mutCallArg hvs hs
+  next name pl args hnone hall _ =>
+    intro o h
+    simp only [step, hnone, hall, ite_true] at h
+    exact stepMutCall_sound (Expr.allValues_iff.mp hall) h
+  next name pl args hnone hall _ =>
+    intro o h
+    simp [step, hnone, hall] at h
+  next v e he =>
+    intro o h
+    simp only [step, he, ite_true, Option.some.injEq] at h
+    subst h
+    exact Step.cellValue (Expr.isValue_iff.mp he)
+  next v e he ih =>
+    intro o h
+    simp only [step, he, ite_false, Bool.false_eq_true] at h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
+    exact Step.cellBody (ih hs)
+  next pl v e he =>
+    intro o h
+    simp only [step, he, ite_true, Option.some.injEq] at h
+    subst h
+    exact Step.methodValue (Expr.isValue_iff.mp he)
+  next pl v e he ih =>
+    intro o h
+    simp only [step, he, ite_false, Bool.false_eq_true] at h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
+    exact Step.methodBody (ih hs)
   next vs o rest h => simp [stepArgs] at h
   next e es he ih vs o rest h =>
     simp only [stepArgs, he, ite_true] at h
@@ -507,6 +585,22 @@ theorem step_sound {P : Program} : ∀ {e : Expr} {o : Outcome}, step P e = some
     simp only [stepBlock, he, ite_false, Bool.false_eq_true] at h
     obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
     exact Step.blockLetArg (ih hs)
+  next t e ss val he o h =>
+    simp only [stepBlock, he, ite_true, Option.some.injEq] at h
+    subst h
+    exact Step.blockVar (Expr.isValue_iff.mp he)
+  next t e ss val he ih o h =>
+    simp only [stepBlock, he, ite_false, Bool.false_eq_true] at h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
+    exact Step.blockVarArg (ih hs)
+  next pl e ss val he o h =>
+    simp only [stepBlock, he, ite_true, Option.some.injEq] at h
+    subst h
+    exact Step.blockAssign (Expr.isValue_iff.mp he)
+  next pl e ss val he ih o h =>
+    simp only [stepBlock, he, ite_false, Bool.false_eq_true] at h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
+    exact Step.blockAssignArg (ih hs)
 
 /-- An expression that steps is not a value. -/
 theorem Step.not_value {P : Program} {e : Expr} {o : Outcome} (h : Step P e o) :
@@ -609,6 +703,18 @@ theorem step_complete {P : Program} {e : Expr} {o : Outcome} (h : Step P e o) :
     simp [step, stepTry, Expr.isValue, Expr.isValue_iff.mpr hv]
   | frame hs ih => simp [step, hs.not_value, ih]
   | frameValue hv => simp [step, Expr.isValue_iff.mpr hv]
+  | var => rfl
+  | blockVarArg hs ih => simp [step, stepBlock, hs.not_value, ih]
+  | blockVar hv => simp [step, stepBlock, Expr.isValue_iff.mpr hv]
+  | blockAssignArg hs ih => simp [step, stepBlock, hs.not_value, ih]
+  | blockAssign hv => simp [step, stepBlock, Expr.isValue_iff.mpr hv]
+  | cellBody hs ih => simp [step, hs.not_value, ih]
+  | cellValue hv => simp [step, Expr.isValue_iff.mpr hv]
+  | mutCallArg hvs hs ih => simp [step, stepArgs_mid hvs hs.not_value ih]
+  | mutCall hf hr hvs hi =>
+    simp [step, stepArgs_values hvs, Expr.allValues_iff.mpr hvs, stepMutCall, hf, hr, hi]
+  | methodBody hs ih => simp [step, hs.not_value, ih]
+  | methodValue hv => simp [step, Expr.isValue_iff.mpr hv]
 
 /-- The capabilities `main` receives: for each parameter, the capability
 its type names, rooted anywhere, as the runtime grants them
@@ -631,6 +737,10 @@ inductive RunResult where
   /-- The expression reached is not a value and takes no step. In a
   well-typed program progress rules this out. -/
   | stuck (e : Expr)
+  /-- A step read or wrote a var that no cell holds: a `var` read
+  outside its block. In a well-typed program, which starts with no var in
+  scope, preservation rules this out. -/
+  | unbound (e : Expr)
   /-- The fuel ran out before the run ended. -/
   | outOfFuel
 
@@ -647,6 +757,7 @@ def run (P : Program) : Nat → Host → Expr → RunResult × Host
       | some (.panic k) => (.panic k, h)
       | some (.perform req k) => run P fuel (h.perform req).2 (k (h.perform req).1)
       | some (.ret v) => (.returned v, h)
+      | some (.read _ _ _) | some (.write _ _ _ _) => (.unbound e, h)
       | none => (.stuck e, h)
 
 /-- Every effect a step performs is on a capability of its receiver's
@@ -670,8 +781,23 @@ theorem Step.wellFormed {P : Program} {e : Expr} {o : Outcome} (h : Step P e o) 
     intro o f h; cases o <;> simp_all [Outcome.map, Outcome.WellFormed]
   have inFrame : ∀ {o : Outcome}, o.WellFormed → o.inFrame.WellFormed := by
     intro o h; cases o <;> simp_all [Outcome.inFrame, Outcome.map, Outcome.WellFormed]
+  have under : ∀ {o : Outcome} {v : Expr} {wrap : Expr → Expr → Expr} {onRet : Expr → Outcome},
+      (∀ r, (onRet r).WellFormed) → o.WellFormed → (o.under v wrap onRet).WellFormed := by
+    intro o v wrap onRet hr h
+    cases o with
+    | ret r => exact hr r
+    | perform req k => exact h
+    | read i _ _ => cases i <;> trivial
+    | write i _ _ _ => cases i <;> trivial
+    | _ => trivial
+  have inCell : ∀ {o : Outcome} {v : Expr}, o.WellFormed → (o.inCell v).WellFormed :=
+    fun h => under (fun _ => trivial) h
+  have inMethod : ∀ {o : Outcome} {pl : Place} {v : Expr}, o.WellFormed →
+      (o.inMethod pl v).WellFormed :=
+    fun h => under (fun _ => trivial) h
   induction h <;> first | trivial | (exact map ‹_›) | (exact inFrame ‹_›) | assumption |
-    exact intResult_wellFormed _ | exact evalBinary_wellFormed ‹_›
+    exact intResult_wellFormed _ | exact evalBinary_wellFormed ‹_› | (exact inCell ‹_›) |
+    (exact inMethod ‹_›)
 
 /-- **Soundness of `run`.** A value the Lean reference reaches is one the
 semantics reaches, with the trace of the effects the fake host answered;
@@ -735,6 +861,12 @@ theorem run_sound {P : Program} : ∀ {fuel : Nat} {h : Host} {e : Expr},
             simp only [run, hn, Bool.false_eq_true, ite_false, hs] at hr <;> simp at hr
           obtain ⟨rfl, -⟩ := hr
           exact ⟨[], e, Steps.refl _, step_sound hs⟩
+        | read i is k =>
+          refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;>
+            simp only [run, hn, Bool.false_eq_true, ite_false, hs] at hr <;> simp at hr
+        | write i is w n =>
+          refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;>
+            simp only [run, hn, Bool.false_eq_true, ite_false, hs] at hr <;> simp at hr
         | perform req k =>
           have h1 := step_sound hs
           have hal := Host.perform_allows h h1.wellFormed
