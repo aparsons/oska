@@ -1,0 +1,25 @@
+// Steps: 5. `for` over a list goes back once for each item whose body
+// ends without `break`, a `continue` included.
+//
+// - `for word in words`: the first 4 items go back, the second by
+//   `continue`, and the fifth breaks: 4.
+// - `count(words)`: 1.
+fn count(words: List<String>) -> Int {
+    words.len()
+}
+
+fn main(io: Stdout) {
+    let words = ["a", "bb", "ccc", "dddd", "stop", "never"]
+    var total = 0
+    for word in words {
+        if word == "stop" {
+            break
+        }
+        if word == "bb" {
+            continue
+        }
+        total = total + word.len()
+    }
+    let n = count(words)
+    let _ = io.println("{total} {n}")
+}

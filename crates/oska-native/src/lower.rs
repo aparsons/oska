@@ -64,10 +64,10 @@
 //! method or closure of the program, and each loop back-edge in it, is a
 //! step ([`Body::step`]): a counter after the runtime's globals counts
 //! down from the limit, and the step with none left panics with `P0038`
-//! at the interpreter's span. A call of a function value takes its step
-//! in the value's code, which hands the panic back to the caller as its
-//! status, since a prelude method used as a value is no step. Nothing in
-//! `std.rt` is a step. Without the flag none of this is generated, so the
+//! at the interpreter's span, before the call's depth is counted, as the
+//! interpreter's `enter` takes it. A call of a function value reads from
+//! the value whether it is a step (`layout::FN_NO_STEP`), since a prelude
+//! method used as a value is none. Nothing in `std.rt` is a step. Without the flag none of this is generated, so the
 //! executable is byte for byte the one `oskac build` writes.
 
 mod closures;
@@ -1818,36 +1818,21 @@ impl<'l, 'p> Body<'l, 'p> {
     /// call (ADR 0013). Without the flag nothing is generated, and
     /// nothing in `std.rt` is a step.
     fn step(&mut self, span: Span) -> Result<(), Diagnostic> {
-        let Some(limit) = self.lowering.limits.max_steps else {
+        let Some(limit) = self.step_limit() else {
             return Ok(());
         };
-        if self.source == Source::Runtime {
-            return Ok(());
-        }
         let over = self.panic_static(Limit::Steps.code(), &Limit::Steps.message(limit), span)?;
         self.spend_step(over);
         Ok(())
     }
 
-    /// [`Body::step`] at the start of a function value's code: the call of
-    /// a closure or of a named function used as a value, whose span only
-    /// the caller knows. With no step left, it returns the panic's status
-    /// for the caller to report at the call ([`Body::invoke`]).
-    fn step_into_value(&mut self) -> Result<(), Diagnostic> {
-        let Some(limit) = self.lowering.limits.max_steps else {
-            return Ok(());
-        };
-        if self.source == Source::Runtime {
-            return Ok(());
-        }
-        let status = format!(
-            "error[{}]: {}",
-            Limit::Steps.code(),
-            Limit::Steps.message(limit)
-        );
-        let over = self.defer_panic(|body| Ok(body.text(&status)))?;
-        self.spend_step(over);
-        Ok(())
+    /// The `--max-steps` limit this code counts steps under: none
+    /// without the flag, and none in `std.rt`, where nothing is a step.
+    pub(super) fn step_limit(&self) -> Option<u64> {
+        self.lowering
+            .limits
+            .max_steps
+            .filter(|_| self.source == Source::User)
     }
 
     /// Under `--max-steps`, `span`: where a function the backend generates
@@ -2846,7 +2831,7 @@ impl<'l, 'p> Body<'l, 'p> {
                 let head = self.label();
                 // Under `--max-steps`, the body and a `continue` go on
                 // to the back-edge's step; without it, to the condition.
-                let counted = self.lowering.limits.max_steps.is_some();
+                let counted = self.step_limit().is_some();
                 let next = if counted { self.label() } else { head };
                 let exit = self.label();
                 self.push(Inst::Label(head));

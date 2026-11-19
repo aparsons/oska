@@ -83,3 +83,79 @@ pub fn oskac_with_stdin(dir: &Path, args: &[&str], src: &str) -> Output {
         .expect("should write the program");
     child.wait_with_output().expect("oskac should finish")
 }
+
+/// The step fixtures, `tests/fixtures/run_limits/steps/*.osk`: each name
+/// and source, sorted by name.
+pub fn step_fixtures() -> Vec<(String, String)> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run_limits/steps");
+    let mut fixtures: Vec<(String, String)> = std::fs::read_dir(&dir)
+        .expect("the step fixtures")
+        .map(|entry| {
+            let path = entry.expect("an entry").path();
+            let name = path
+                .file_stem()
+                .expect("a name")
+                .to_string_lossy()
+                .into_owned();
+            let src = std::fs::read_to_string(&path).expect("a fixture");
+            (name, src)
+        })
+        .collect();
+    fixtures.sort();
+    fixtures
+}
+
+/// The steps a fixture says it takes, on its first line: `// Steps: N.`
+pub fn steps_written_in(name: &str, src: &str) -> u64 {
+    src.lines()
+        .next()
+        .and_then(|line| line.strip_prefix("// Steps: "))
+        .and_then(|rest| rest.split('.').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("{name}.osk should start with `// Steps: N.`"))
+}
+
+/// What `oskac <args>` does in `dir` with the build cache in `cache`.
+pub fn oskac_cached(dir: &Path, cache: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_oskac"))
+        .args(args)
+        .current_dir(dir)
+        .env("OSKA_CACHE_DIR", cache)
+        .env_remove("OSKA_CACHE")
+        .output()
+        .expect("oskac should run")
+}
+
+/// How many entries the build cache in `cache` holds, as `oskac cache
+/// info` reports them.
+pub fn cache_entries(dir: &Path, cache: &Path) -> u64 {
+    let output = oskac_cached(dir, cache, &["cache", "info", "--format=json"]);
+    assert!(output.status.success(), "{output:?}");
+    let json = String::from_utf8_lossy(&output.stdout);
+    json.split("\"entries\":")
+        .nth(1)
+        .and_then(|rest| rest.split([',', '}']).next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no entry count in {json}"))
+}
+
+/// The bytes of every file under the build cache `cache`, whatever its
+/// layout: an entry holding an executable ends with its bytes.
+pub fn cache_files(cache: &Path) -> Vec<Vec<u8>> {
+    let mut found = Vec::new();
+    let mut stack = vec![cache.to_path_buf()];
+    while let Some(at) = stack.pop() {
+        let Ok(listing) = std::fs::read_dir(&at) else {
+            continue;
+        };
+        for entry in listing {
+            let path = entry.expect("an entry").path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                found.push(std::fs::read(&path).expect("a cached file's bytes"));
+            }
+        }
+    }
+    found
+}
