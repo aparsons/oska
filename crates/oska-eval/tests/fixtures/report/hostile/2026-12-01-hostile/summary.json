@@ -1,0 +1,80 @@
+{
+  "schema": 1,
+  "batch": "2026-12-01-hostile",
+  "started": "2026-12-01T09:00:00Z",
+  "ended": "2026-12-01T09:59:00Z",
+  "task_set_digest": "*bold* _em_ ![i](x)",
+  "models": [
+    "[model](https://evil.example)\n# Heading"
+  ],
+  "agents": ["<script>alert(1)</script> 2.0.0"],
+  "oskac": ["0.4.0 (`|x|`)"],
+  "tasks": ["greeting"],
+  "classes": ["xss"],
+  "variants": ["base"],
+  "attempts": 1,
+  "incomplete": [],
+  "runs": {"total": 1, "finished": 1, "turn_limit": 0, "timeout": 0, "budget": 0, "error": 0},
+  "usage": {"runs_reported": 1, "turns": 10, "input_tokens": 1000, "output_tokens": 200, "cost_usd": 0.1000},
+  "flags": {"escape": 0, "false_claim": 0, "read_only_changed": 0},
+  "security": {
+    "ungraded": 0,
+    "attack_succeeded": 0,
+    "audit_site": 0,
+    "widened": 0,
+    "forbidden_output": 0,
+    "release_failed": 0
+  },
+  "iterations": {"analysed": 1, "clean": 0, "mean_to_clean": null},
+  "k": [1],
+  "pass_rates": [
+    {"by": "all", "name": "all", "pairs": 1, "runs": 1, "func@1": 1.0000, "func_sec@1": 1.0000},
+    {"by": "class", "name": "xss", "pairs": 1, "runs": 1, "func@1": 1.0000, "func_sec@1": 1.0000},
+    {"by": "variant", "name": "base", "pairs": 1, "runs": 1, "func@1": 1.0000, "func_sec@1": 1.0000}
+  ],
+  "codes": [
+    {
+      "code": "E0300`\n# Owned [x](https://evil.example)",
+      "occurrences": 1,
+      "runs": 1,
+      "iterations_present": 1,
+      "resolved": 0,
+      "mean_iterations_to_resolve": null,
+      "fix_offered": 0,
+      "fix_applied": 0,
+      "fix_helped": 0,
+      "fix_offered_rate": 0.0000,
+      "fix_applied_rate": null,
+      "fix_helped_rate": null
+    }
+  ],
+  "codes_by_variant": [
+    {
+      "variant": "base",
+      "codes": [
+        {
+          "code": "E0300`\n# Owned [x](https://evil.example)",
+          "occurrences": 1,
+          "runs": 1,
+          "iterations_present": 1,
+          "resolved": 0,
+          "mean_iterations_to_resolve": null,
+          "fix_offered": 0,
+          "fix_applied": 0,
+          "fix_helped": 0,
+          "fix_offered_rate": 0.0000,
+          "fix_applied_rate": null,
+          "fix_helped_rate": null
+        }
+      ]
+    }
+  ],
+  "lookups": {
+    "explain": [
+      {"code": "[click](javascript:alert(1))", "runs": 1}
+    ],
+    "site": [
+      {"url": "https://e.example/a)\n\n## Injected heading\n<img src=x onerror=alert(1)>", "runs": 1}
+    ]
+  }
+}

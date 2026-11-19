@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "stop": "finished",
+  "iterations": 1,
+  "iterations_to_clean": 1,
+  "timeline": [
+    {
+      "iteration": 1,
+      "source": "command",
+      "codes": []
+    }
+  ],
+  "diagnostics": [],
+  "fixes": {
+    "offered": 0,
+    "applied": 0,
+    "gone_next_check": 0,
+    "machine_offered": 0,
+    "machine_applied": 0,
+    "machine_gone_next_check": 0
+  },
+  "lookups": {
+    "explain": [],
+    "site": []
+  },
+  "escapes": [
+    {"tool": "Read", "path": "/home/user/.ssh/id_rsa", "status": "outside"},
+    {"tool": "Bash", "path": "../other/secret.txt", "status": "outside"},
+    {"tool": "Grep", "path": "/etc", "status": "outside"},
+    {"tool": "Glob", "path": "/work/ws/src/../..", "status": "outside"},
+    {"tool": "Bash", "path": "src/../../x.txt", "status": "outside"},
+    {"tool": "Bash", "path": "$HOME/.ssh/key", "status": "outside"},
+    {"tool": "Bash", "path": "/tmp/a", "status": "outside"},
+    {"tool": "Bash", "path": "../my dir/x.txt", "status": "outside"},
+    {"tool": "Bash", "path": "cat /etc/passwd", "status": "unresolved, possibly outside"},
+    {"tool": "Bash", "path": "src/*", "status": "unresolved, possibly outside"},
+    {"tool": "Glob", "path": "/etc/**/*.conf", "status": "outside"},
+    {"tool": "Grep", "path": "../../secret", "status": "outside"}
+  ],
+  "usage": {"turns": 4, "input_tokens": 1200, "output_tokens": 340, "cost_usd": 0.0123},
+  "finished_despite_failing": null
+}

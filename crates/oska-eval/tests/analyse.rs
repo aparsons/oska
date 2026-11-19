@@ -140,16 +140,37 @@ fn a_missing_transcript_is_bad_input() {
     assert!(outcome.stdout.contains("cannot read"), "{}", outcome.stdout);
 }
 
-#[test]
-fn the_fixtures_hold_no_home_path() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/analyse");
-    for entry in std::fs::read_dir(dir).expect("the fixtures should exist") {
+/// Every file beneath `dir`.
+fn files_under(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).expect("the directory should be readable") {
         let path = entry.expect("an entry").path();
-        let text = std::fs::read_to_string(&path).expect("a fixture should be text");
-        assert!(
-            !text.contains("/home/pi") && !text.contains("/Users/"),
-            "{} holds a home path",
-            path.display()
-        );
+        if path.is_dir() {
+            files_under(&path, out);
+        } else {
+            out.push(path);
+        }
+    }
+}
+
+/// No fixture, and no committed result, holds a real home path: recorded
+/// transcripts and results are scrubbed before they are committed.
+#[test]
+fn the_fixtures_and_the_committed_results_hold_no_home_path() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    files_under(&root.join("tests/fixtures"), &mut files);
+    files_under(&root.join("../../eval/results"), &mut files);
+    assert!(files.len() > 20, "the walk should find the fixtures");
+    for path in files {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for home in ["/home/pi", "/Users/", "C:\\Users", "C:/Users"] {
+            assert!(
+                !text.contains(home),
+                "{} holds a home path ({home})",
+                path.display()
+            );
+        }
     }
 }

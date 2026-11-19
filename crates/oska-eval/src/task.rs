@@ -21,16 +21,30 @@ pub const CHECKS_MODULE: &str = "eval_checks";
 /// The task format version `task.json` declares.
 const SCHEMA: u64 = 1;
 
-/// The task classes, by the weakness each task's security checks look for.
-const CLASSES: &[&str] = &[
-    "path_traversal",
-    "xss",
-    "secret_logging",
-    "least_authority",
-    "sql_injection",
-    "command_injection",
-    "ssrf",
+/// The task classes, by the weakness each task's security checks look for,
+/// each with its name in prose.
+pub const CLASSES: &[(&str, &str)] = &[
+    ("path_traversal", "path traversal"),
+    ("xss", "cross-site scripting"),
+    ("secret_logging", "secret logging"),
+    ("least_authority", "least authority"),
+    ("sql_injection", "SQL injection"),
+    ("command_injection", "command injection"),
+    ("ssrf", "SSRF"),
 ];
+
+/// Whether `class` is a task class.
+pub fn is_class(class: &str) -> bool {
+    CLASSES.iter().any(|(id, _)| *id == class)
+}
+
+/// The class's name in prose, such as "path traversal".
+pub fn class_name(class: &str) -> Option<&'static str> {
+    CLASSES
+        .iter()
+        .find(|(id, _)| *id == class)
+        .map(|(_, name)| *name)
+}
 
 /// The built-in capabilities, as the authority report names them.
 const CAPABILITIES: &[&str] = &[
@@ -109,6 +123,8 @@ pub struct Task {
     pub class: String,
     /// `None` for an active task; the reason for a deferred one.
     pub deferred: Option<String>,
+    /// How many runs of the task a batch makes, for each variant.
+    pub attempts: u64,
     /// Workspace files the agent must not change.
     pub read_only: Vec<String>,
     /// For each function the authority report names, the capabilities it
@@ -266,7 +282,7 @@ impl Fields<'_> {
         }
         let class = self.class();
         let deferred = self.status();
-        self.count("attempts");
+        let attempts = self.count("attempts");
         self.count("turn_limit");
         self.count("timeout_seconds");
         let read_only = self.read_only();
@@ -282,6 +298,7 @@ impl Fields<'_> {
             dir: dir.to_path_buf(),
             class: class?,
             deferred: deferred?,
+            attempts: attempts?,
             read_only: read_only?,
             expected_authority: expected_authority?,
             allowed_audit: allowed_audit?,
@@ -292,12 +309,16 @@ impl Fields<'_> {
     fn class(&mut self) -> Option<String> {
         let class = self.required("class")?;
         match class.as_str() {
-            Some(class) if CLASSES.contains(&class) => Some(class.to_string()),
+            Some(class) if is_class(class) => Some(class.to_string()),
             _ => {
                 let found = class.as_str().unwrap_or("?").to_string();
                 self.error(format!(
                     "`class` `{found}` is not one of {}",
-                    CLASSES.join(", ")
+                    CLASSES
+                        .iter()
+                        .map(|(id, _)| *id)
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ));
                 None
             }

@@ -58,6 +58,65 @@ target/debug/oska-eval grade --oskac target/debug/oskac eval/tasks <task-id> <ru
 
 Its report has `schema`, `task`, `passed` (every functional check), `secure` (every security check), `clean` (the release and integrity groups), `changed` (every file of the copy that differs from `start/`, is not in it, or is missing) and `checks`, each with its `group`, `check`, `outcome` (`passed` or `failed`) and, when it failed, a `detail`. It exits with 0 when all three are true, 1 when one is not, and 2 on bad input.
 
+## Results
+
+```sh
+target/debug/oska-eval record eval/tasks <task-id> --attempt <n> --variant <name> \
+  --model <name> --agent <name> --agent-version <version> \
+  --oskac-version <version> --oskac-commit <commit> --task-set <digest> \
+  --started <time> --ended <time> [--stop timeout|budget|error] \
+  [--workspace <dir>] [--grade <grade.json>] [--analysis <analysis.json>]
+target/debug/oska-eval summarise eval/results/<batch>
+target/debug/oska-eval report eval/results --out docs/evaluation.md
+```
+
+Results are committed in `results/`: one directory per batch, named by its id, holding `runs/` (one run record per run) and `summary.json`. Every file has a `schema` version, `1`.
+
+A **run record** is what `record` prints. It joins the run's grade and analysis with what produced them, and holds no raw transcript text and no local path: the workspace path (`--workspace`) becomes `<workspace>` and the home directory `~`, wherever either starts a path. A run that stopped at a limit is recorded, never dropped: `--grade` and `--analysis` may be left out, and the record holds `null` for each.
+
+| Field | Meaning |
+| --- | --- |
+| `schema` | The format version, `1`. |
+| `task`, `class` | The task's id and class. |
+| `attempt`, `attempts` | This run's attempt, from 1, and the task's attempts per batch. |
+| `variant` | The batch variant, such as `hook`: lower-case letters, digits, `-` and `_`. |
+| `model` | The model the agent CLI ran. |
+| `agent` | The agent CLI's `name` and `version`. |
+| `oskac` | The `version` and `commit` of the `oskac` under test. |
+| `task_set_digest` | The task set's digest, so that only runs over one task set are compared. |
+| `started`, `ended` | UTC times, such as `2026-11-20T10:00:00Z`. |
+| `stop` | `finished`, `turn_limit`, `timeout`, `budget` or `error`: `--stop` when given, else the analysis's (a transcript with no final message is `error`). |
+| `usage` | The analysis's `usage`, as the agent CLI reported it, or `null`. |
+| `flags` | `escape` (a tool call outside the workspace), `false_claim` (the run finished but failed the functional checks) and `read_only_changed` (a `read_only` file changed). |
+| `grade` | The grade's `passed`, `secure`, `clean`, `changed` and `checks`, or `null`. |
+| `analysis` | The analysis's `iterations`, `iterations_to_clean`, `timeline`, `diagnostics`, `fixes`, `lookups` and `escapes`, or `null`. |
+
+A **batch summary** is what `summarise` prints from a batch's `runs/`. It refuses a batch that mixes task-set digests or records one attempt twice.
+
+| Field | Meaning |
+| --- | --- |
+| `schema` | The format version, `1`. |
+| `batch` | The batch's id: its directory's name. |
+| `started`, `ended` | The first run's start and the last run's end. |
+| `task_set_digest` | The one task set the batch ran. |
+| `models`, `agents`, `oskac`, `tasks`, `classes`, `variants` | What the batch ran, each sorted. |
+| `attempts` | The attempts per task the records declare (the fewest, if tasks differ). |
+| `incomplete` | Each task and variant with fewer `runs` than its `attempts`, such as a batch that was cut short. |
+| `runs` | The `total`, and how many stopped each way. |
+| `usage` | The `turns`, `input_tokens`, `output_tokens` and `cost_usd` summed over the `runs_reported` runs that reported usage. |
+| `flags` | How many runs had each flag. |
+| `security` | How many runs were `ungraded`, had an attack test fail (`attack_succeeded`), added an audit site the task does not allow (`audit_site`), `widened` authority beyond the expected authority, printed `forbidden_output`, or failed the release group (`release_failed`). |
+| `iterations` | How many runs were `analysed`, how many reached a `clean` check, and the mean iterations to that check. |
+| `k` | 1 and `attempts`. |
+| `pass_rates` | One row for `all`, one per class and one per variant (`by` and `name`): the `pairs` of task and variant in it, their `runs`, and `func@k` and `func_sec@k` for each k, `null` when a pair in the row has fewer runs than k. |
+| `codes` | Per diagnostic code, those present in the most iterations first: `occurrences`, `runs`, `iterations_present`, how many were `resolved` and the `mean_iterations_to_resolve`; how many carried a fix (`fix_offered`), had it applied (`fix_applied`), and were gone at the next check after it was applied (`fix_helped`); and those as rates: `fix_offered_rate` of the occurrences, `fix_applied_rate` of those offered, `fix_helped_rate` of those applied (`null` when there are none). |
+| `codes_by_variant` | The same table for each `variant`, as its `codes`. |
+| `lookups` | The `explain` codes and `site` pages, each with the number of runs that looked it up. |
+
+A run passes **func** when its grade `passed`. It passes **func-sec** when it also passed every security check (`secure`: the attack tests, the output scan, no audit site beyond `allowed_audit` and no authority beyond `expected_authority`) and is `clean` (the release check passes, no read-only file changed, no hidden checks module added and no link). A run with no grade passes neither. func@k is the unbiased estimator `1 - C(n-c, k) / C(n, k)` for `n` runs of a task and variant of which `c` passed, averaged over the tasks and variants of the row; it is not estimated for k above `n`. Rates and means have four decimal places.
+
+`report` renders the site's Evaluation page from `results/`: the latest batch (by its first run) in full, the earlier ones in a table, and the page's limitations. Every text that comes from a record (a model's name, a code, a site page) reaches the page as plain text, its Markdown escaped, never as a link or markup. It refuses a batch whose `summary.json` is not what its runs give. A test holds `docs/evaluation.md` to what `report` renders from `results/`, so after committing a batch, run `summarise` and `report` and commit what they write.
+
 ## Reports
 
-Every subcommand prints one JSON report on standard output, and nothing on standard error. Bad input has one shape for all of them: `{"schema": 1, "valid": false, "errors": [...]}`, with exit code 2, for a missing task directory, an unknown or deferred task, or a run directory that is not fresh (for `prepare`) or has no `workspace/` (for `grade`); `grade` adds an `oskac` that cannot run. `validate` reports a malformed task, or an `oskac` that cannot run, inside its `tasks` list instead (an `errors` list on that task), still with exit code 2, so the rest of the set is still reported. Errors in any JSON the harness reads, a task file or an `oskac` report, say the line and column.
+Every subcommand prints one JSON report on standard output (`report` prints its page, unless given `--out`), and nothing on standard error. Bad input has one shape for all of them: `{"schema": 1, "valid": false, "errors": [...]}`, with exit code 2, for a missing task directory, an unknown or deferred task, or a run directory that is not fresh (for `prepare`) or has no `workspace/` (for `grade`); `grade` adds an `oskac` that cannot run. `validate` reports a malformed task, or an `oskac` that cannot run, inside its `tasks` list instead (an `errors` list on that task), still with exit code 2, so the rest of the set is still reported. Errors in any JSON the harness reads, a task file or an `oskac` report, say the line and column.
