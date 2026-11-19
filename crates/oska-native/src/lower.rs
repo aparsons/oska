@@ -3174,6 +3174,7 @@ fn main(io: Stdout) {
     const STEPS_ONLY: Limits = Limits {
         max_steps: Some(1000),
         max_output: None,
+        max_memory: None,
     };
 
     /// Without `--max-steps` nothing counts steps: no code reads the
