@@ -168,9 +168,9 @@ pub fn host_target() -> oska_native::Target {
 /// A test that goes through many cases one after another uses one core:
 /// on the Intel Mac CI runner that made one test of `native_prelude` take
 /// over a minute. Cases do not share state: each runs in directories
-/// named after it, and [`Case`] names are unique. A case that fails fails
-/// the test, with its own message; the other threads finish their cases
-/// first.
+/// named after it, and [`Case`] names are unique. A case that fails
+/// prints its own message; the other threads run the remaining cases, and
+/// then the test fails.
 pub fn in_parallel<T: Sync, R: Send>(items: &[T], each: impl Fn(&T) -> R + Sync) -> Vec<R> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;

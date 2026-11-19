@@ -233,14 +233,19 @@ fn guide_programs() -> Vec<GuideProgram> {
         }
     }
     pages.sort();
+    let guide = repo_root().join("docs/guide");
     let mut programs: Vec<GuideProgram> = Vec::new();
     for page in pages {
         let text = read(&page);
+        // The page's path under `docs/guide`, without `.md` and with `-`
+        // for `/`: `examples/capabilities.md` and `capabilities.md` must
+        // name their programs apart, as their cases run side by side.
         let stem = page
-            .file_stem()
-            .expect("a stem")
+            .strip_prefix(&guide)
+            .expect("a page under docs/guide")
+            .with_extension("")
             .to_string_lossy()
-            .into_owned();
+            .replace(['/', '\\'], "-");
         // The open block's info string and text.
         let mut block: Option<(String, String)> = None;
         let mut index = 0;
@@ -436,6 +441,12 @@ fn corpus_labels() -> Vec<String> {
 #[test]
 fn the_skip_list_names_only_programs_of_the_corpus() {
     let labels = corpus_labels();
+    let unique: std::collections::BTreeSet<&String> = labels.iter().collect();
+    assert_eq!(
+        unique.len(),
+        labels.len(),
+        "two programs of the corpus share a label, so their cases would share directories"
+    );
     for (case, reason) in skips::SKIPS {
         let Some(label) = case.strip_prefix("native_corpus::") else {
             continue;
