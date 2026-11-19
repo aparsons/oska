@@ -43,7 +43,7 @@ curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.5.0 --json
 A successful `--json` run prints:
 
 ```json
-{"ok": true, "action": "installed", "version": "0.5.0", "tag": "v0.5.0", "previous_version": null, "platform": "linux-x86_64", "path": "/home/you/.oska/bin/oskac", "bin_dir": "/home/you/.oska/bin", "on_path": false, "checksum_verified": true, "signature_verified": true, "receipt": "/home/you/.oska/receipt.json", "index_verified": true, "index_serial": 4}
+{"ok": true, "action": "installed", "version": "0.5.0", "tag": "v0.5.0", "previous_version": null, "platform": "linux-x86_64", "path": "/home/you/.oska/bin/oskac", "bin_dir": "/home/you/.oska/bin", "on_path": false, "checksum_verified": true, "signature_verified": true, "receipt": "/home/you/.oska/receipt.json", "index_verified": true, "index_serial": 5}
 ```
 
 - `action` is one of:
@@ -179,7 +179,7 @@ curl -fsSL https://oskalang.dev/install.sh | sh -s -- --check --json
 ```
 
 ```json
-{"ok": true, "action": "checked", "installed": "0.4.0", "latest": "0.5.0", "tag": "v0.5.0", "update_available": true, "index_verified": true, "index_serial": 4, "index_expires": "2027-02-11T10:00:00Z"}
+{"ok": true, "action": "checked", "installed": "0.4.0", "latest": "0.5.0", "tag": "v0.5.0", "update_available": true, "index_verified": true, "index_serial": 5, "index_expires": "2027-02-11T10:00:00Z"}
 ```
 
 - `installed` is `null` when no `oskac` is installed.
@@ -265,7 +265,7 @@ v0.4.0 makes x86_64 Linux the second platform with a native backend, and lets `o
 
 - **`run`, `test` and `build` are native on x86_64 Linux**, as on aarch64 Linux. Before, `run` and `test` used the interpreter there, tens of times slower on program logic, and `build` could only write an aarch64 Linux executable. A program the native backend cannot compile yet still runs on the interpreter after the one-line `E0390` note, and `--interpret` still selects the interpreter. See [platform support](cli-reference.md#platform-support).
 - **`oskac build` writes an executable for the host's platform**, so on x86_64 Linux it writes an x86_64 executable, where v0.3.0 wrote an aarch64 one. To get the old output from an x86_64 Linux host, build with `--target linux-aarch64`. On macOS and Windows, which have no backend yet, the default is still `linux-aarch64`.
-- **`oskac build --target <platform>`** builds for `linux-aarch64` or `linux-x86_64` from any host, and `--target all` writes both, as `<name>-<platform>`, into the `-o` directory. An unknown platform is `E0393` and a platform with no backend yet (macOS in v0.5.0, Windows in v0.6.0) is `E0394`; both exit with 2 and write nothing. The same program built by the same `oskac` gives the same bytes on every host. See [`oskac build`](cli-reference.md#oskac-build).
+- **`oskac build --target <platform>`** builds for `linux-aarch64` or `linux-x86_64` from any host, and `--target all` writes both, as `<name>-<platform>`, into the `-o` directory. An unknown platform is `E0393` and a platform with no backend yet (macOS until v0.5.0, Windows until v0.6.0) is `E0394`; both exit with 2 and write nothing. The same program built by the same `oskac` gives the same bytes on every host. See [`oskac build`](cli-reference.md#oskac-build).
 
 ## Upgrading to v0.3.0
 
