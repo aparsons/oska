@@ -478,7 +478,8 @@ fn broken_pipe(result: Int) -> Bool {
 //           their contents, 38 the fake directories;
 //   40-44   the free lists of size classes 8 to 12;
 //   45-47   on Windows, the handles of standard input, output and error;
-//   48      on Windows, the word a call puts its count in (`win_write`).
+//   48      on Windows, the word a call puts its count in (`win_write`);
+//   49      on Windows, the console area, or 0 (see "The Windows console").
 //
 // Every object the allocator gives out is preceded by a header word: its
 // block's size class, or for an object too large for any class, minus
@@ -2511,7 +2512,7 @@ fn win_read(fd: Int, buf: Int, count: Int) -> Int {
 // ---- The Windows console ---------------------------------------------------
 //
 // A console takes UTF-16, so text to and from one is converted here, and
-// files and pipes get the bytes as they are (ADR 0020, Q6). Word 49 is 0
+// files and pipes get the bytes as they are (ADR 0020; Q6 of its research). Word 49 is 0
 // when no standard stream is a console, and otherwise the console area,
 // mapped at start-up:
 //
@@ -2524,6 +2525,15 @@ fn win_read(fd: Int, buf: Int, count: Int) -> Int {
 // - at 64, the bytes of one write, at most `console_chunk()` and a
 //   held start; then their UTF-16 units; then the UTF-16 units of one
 //   read, and their UTF-8 bytes, the input bytes.
+
+// Where the unread converted input starts and ends: words 3 and 4.
+fn console_in_start() -> Int {
+    24
+}
+
+fn console_in_end() -> Int {
+    32
+}
 
 fn console_chunk() -> Int {
     8192
@@ -2545,10 +2555,11 @@ fn console_in_bytes() -> Int {
     32856
 }
 
-// The most UTF-16 units one console read asks for: their UTF-8 fits the
-// input bytes, at 3 bytes a unit.
+// The most UTF-16 units one console read asks for, one fewer than the
+// input units hold, for the second half of a pair a read cut: their UTF-8
+// fits the input bytes, at 3 bytes a unit.
 fn console_read_units() -> Int {
-    4096
+    4095
 }
 
 // Whether the standard stream `fd` is a console.
@@ -2665,7 +2676,12 @@ fn win_console_write(fd: Int, buf: Int, count: Int) -> Int {
             if ok < 0 {
                 return ok
             }
-            written = written + rt_mem_load32(done)
+            let wrote = rt_mem_load32(done)
+            if wrote == 0 {
+                // `ERROR_WRITE_FAULT`: the console took nothing.
+                return -29
+            }
+            written = written + wrote
         }
     }
     count
@@ -2678,8 +2694,8 @@ fn win_console_write(fd: Int, buf: Int, count: Int) -> Int {
 fn win_console_read(buf: Int, count: Int) -> Int {
     let area = rt_mem_load64(global(49))
     let input = rt_mem_add(area, console_in_bytes())
-    var start = rt_mem_load64(rt_mem_add(area, 24))
-    var end = rt_mem_load64(rt_mem_add(area, 32))
+    var start = rt_mem_load64(rt_mem_add(area, console_in_start()))
+    var end = rt_mem_load64(rt_mem_add(area, console_in_end()))
     if start == end {
         let units = rt_mem_add(area, console_in_units())
         let done = global(48)
@@ -2688,9 +2704,19 @@ fn win_console_read(buf: Int, count: Int) -> Int {
         if ok < 0 {
             return ok
         }
-        let n = rt_mem_load32(done)
+        var n = rt_mem_load32(done)
         if n == 0 || rt_mem_load16(units) == 26 {
             return 0
+        }
+        // A pair the read cut after its first half: read its second.
+        let last = rt_mem_load16(rt_mem_add(units, rt_mem_shl(n - 1, 1)))
+        if last >= 55296 && last < 56320 {
+            rt_mem_store64(done, 0)
+            let more = rt_sys_read_console(win_handle(0), rt_mem_add(units, rt_mem_shl(n, 1)), 1, done)
+            if more < 0 {
+                return more
+            }
+            n = n + rt_mem_load32(done)
         }
         start = 0
         end = utf16_to_utf8(input, units, n)
@@ -2700,8 +2726,8 @@ fn win_console_read(buf: Int, count: Int) -> Int {
         take = count
     }
     copy_bytes(buf, rt_mem_add(input, start), take)
-    rt_mem_store64(rt_mem_add(area, 24), start + take)
-    rt_mem_store64(rt_mem_add(area, 32), end)
+    rt_mem_store64(rt_mem_add(area, console_in_start()), start + take)
+    rt_mem_store64(rt_mem_add(area, console_in_end()), end)
     take
 }
 
