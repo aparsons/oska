@@ -6,7 +6,7 @@ Reviewers apply these rules to every diff. The mechanical rules are enforced by 
 - clippy with `unwrap_used` denied;
 - `unsafe_code` forbidden;
 - no crate from outside the repo;
-- only official actions in workflows, with `dtolnay/rust-toolchain` pinned to a commit;
+- only official actions and `dtolnay/rust-toolchain` in workflows, each pinned to a full commit SHA with its version in a trailing comment;
 - a `timeout-minutes` of 1 to 60 on every workflow job.
 
 Everything below needs judgement.

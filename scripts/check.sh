@@ -477,13 +477,13 @@ if step "std.rt intrinsics only in std.rt" --no-slot; then
   scripts/intrinsic-guard/guard.sh
 fi
 
-if step "only official actions, rust-toolchain pinned to a commit" --no-slot; then
-  toolchain_pin='dtolnay/rust-toolchain@[0-9a-f]{40}'
+if step "only official actions and rust-toolchain, pinned to a commit" --no-slot; then
+  sha_pin='@[0-9a-f]{40}'
   bad_uses=$(grep -rnE --include='*.yml' --include='*.yaml' '^[[:space:]]*-?[[:space:]]*uses:' .github/workflows |
-    grep -vE "uses:[[:space:]]*(actions/[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+|$toolchain_pin)([[:space:]]|$)" || true)
+    grep -vE "uses:[[:space:]]*(actions/[A-Za-z0-9_.-]+|dtolnay/rust-toolchain)$sha_pin([[:space:]]|$)" || true)
   if [ -n "$bad_uses" ]; then
     printf '%s\n' "$bad_uses" >&2
-    fail "workflows may use only actions/* and dtolnay/rust-toolchain pinned to a full commit SHA"
+    fail "workflows may use only actions/* and dtolnay/rust-toolchain, each pinned to a full commit SHA"
   fi
 fi
 

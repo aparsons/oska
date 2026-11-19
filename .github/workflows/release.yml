@@ -92,7 +92,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - run: cargo build --release --locked -p oskac
       - name: Name the binary for its target
@@ -122,7 +122,7 @@ jobs:
               exit 1
             fi
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.asset }}
           path: dist/${{ matrix.asset }}
@@ -136,8 +136,8 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: builds
           pattern: oskac-*
@@ -188,7 +188,7 @@ jobs:
               jq . "$RUNNER_TEMP/site/$f"
             fi
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: github.event_name == 'push'
         with:
           name: unsigned-${{ steps.tag.outputs.tag }}
@@ -209,8 +209,8 @@ jobs:
     env:
       TAG: ${{ needs.assemble.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: unsigned-${{ needs.assemble.outputs.tag }}
           path: release
@@ -234,7 +234,7 @@ jobs:
           # list. stage-site.sh takes the index out of the release again.
           scripts/release/sign-index.sh --tag "$TAG" "$key" site/oska-release.pub \
             https://oskalang.dev "release/$TAG"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-${{ needs.assemble.outputs.tag }}
           path: release/
@@ -257,7 +257,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       TAG: ${{ needs.sign.outputs.tag }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-${{ needs.sign.outputs.tag }}
           path: release
