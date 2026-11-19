@@ -30,6 +30,7 @@ mod native_test;
 mod package;
 mod self_cmd;
 mod sha256;
+mod stdin;
 mod verdict;
 
 const USAGE: &str = "\
@@ -38,17 +39,19 @@ oskac - the Oska compiler
 USAGE:
     oskac lex <file.osk> [--format=json]   Print the tokens in a source file
     oskac parse <file.osk> [--format=json] Print the syntax tree of a source file
-    oskac check [path] [--format=json] [--release] [--no-cache]
+    oskac check [path | -] [--format=json] [--release] [--no-cache]
                 [--baseline=<file> | --update-baseline=<file>]
-                                           Type-check a source file, or a
-                                           package directory (the current one
-                                           with no path), and report each
+                                           Type-check a source file, a package
+                                           directory (the current one with no
+                                           path), or one module on standard
+                                           input (-), and report each
                                            function's authority; compare it
                                            with a saved baseline (exit code 3
                                            when it widened), or write one
-    oskac run [path] [--format=json] [--interpret] [--no-cache]
+    oskac run [path | -] [--format=json] [--interpret] [--no-cache]
               [--max-output=<bytes>] [-- args...]
-                                           Check a source file or package and,
+                                           Check a source file, package or
+                                           module on standard input (-) and,
                                            if it has no diagnostics, run it:
                                            natively on aarch64 and x86_64
                                            Linux, on the interpreter elsewhere
@@ -297,6 +300,13 @@ fn main() -> ExitCode {
             eprint!("{USAGE}");
             ExitCode::from(2)
         }
+        // Only `check` and `run` read a module from standard input.
+        ["lex" | "parse" | "test" | "build" | "fix", stdin::DASH] => {
+            eprint!("{USAGE}");
+            ExitCode::from(2)
+        }
+        ["check", stdin::DASH] => stdin::check(flags, gate),
+        ["run", stdin::DASH] => stdin::run(flags, line.limits, &line.program_args),
         ["lex", path] => lex_file(path, flags),
         ["parse", path] => parse_file(path, flags),
         ["check", rest @ ..] if rest.len() <= 1 => on_target(
@@ -502,17 +512,28 @@ fn report_from_here(dir: &str, mut report: oska_check::CheckReport) -> oska_chec
 /// when its inputs are unchanged; with a baseline it is always checked.
 fn check_file(
     path: &str,
-    Flags { json, release, .. }: Flags,
+    flags: Flags,
     gate: Option<baseline::Gate>,
     store: Option<&cache::Store>,
 ) -> ExitCode {
     let Some(src) = read_source(path) else {
         return ExitCode::FAILURE;
     };
-    let check = || oska_check::check_file(path, &src, oska_check::CheckOptions { release });
+    check_source(path, &src, flags, gate, store)
+}
+
+/// [`check_file`] on `src`, the text of the module `path` names.
+fn check_source(
+    path: &str,
+    src: &str,
+    Flags { json, release, .. }: Flags,
+    gate: Option<baseline::Gate>,
+    store: Option<&cache::Store>,
+) -> ExitCode {
+    let check = || oska_check::check_file(path, src, oska_check::CheckOptions { release });
     match gate {
         Some(_) => finish_check(&check(), json, path, gate),
-        None => cache::Cached::new(store, cache::file_sources(path, &src))
+        None => cache::Cached::new(store, cache::file_sources(path, src))
             .check(&check_flags(json, release), || {
                 render_report(&check(), json, path)
             })
@@ -604,14 +625,29 @@ fn run_file(
     args: &[String],
     store: Option<&cache::Store>,
 ) -> ExitCode {
-    let json = flags.json;
     let Some(src) = read_source(path) else {
         return ExitCode::FAILURE;
     };
-    let cached = cache::Cached::new(store, cache::file_sources(path, &src));
-    let places = Places::File { path, src: &src };
+    run_source(path, &src, flags, limits, args, store, false)
+}
+
+/// [`run_file`] on `src`, the text of the module `path` names; with
+/// `stdin_closed`, every read of the program's standard input is end of
+/// file at once.
+fn run_source(
+    path: &str,
+    src: &str,
+    flags: Flags,
+    limits: oska_check::limits::Limits,
+    args: &[String],
+    store: Option<&cache::Store>,
+    stdin_closed: bool,
+) -> ExitCode {
+    let json = flags.json;
+    let cached = cache::Cached::new(store, cache::file_sources(path, src));
+    let places = Places::File { path, src };
     if let Some(target) = native::native_target(flags) {
-        let checked = oska_check::check_module(&src);
+        let checked = oska_check::check_module(src);
         if let Some(program) = checked
             .program
             .as_ref()
@@ -626,6 +662,7 @@ fn run_file(
                     args,
                     json,
                     limits,
+                    stdin_closed,
                 },
                 &cached,
             ) {
@@ -638,7 +675,12 @@ fn run_file(
     }
     let mut argv = vec![path.to_string()];
     argv.extend_from_slice(args);
-    let outcome = oska_run::run_with_limits(&src, &mut oska_run::RealHost::new(), &argv, limits);
+    let mut host = if stdin_closed {
+        oska_run::RealHost::without_stdin()
+    } else {
+        oska_run::RealHost::new()
+    };
+    let outcome = oska_run::run_with_limits(src, &mut host, &argv, limits);
     finish_run(outcome, json, &places)
 }
 
@@ -814,6 +856,7 @@ fn on_package(
                     args,
                     json,
                     limits,
+                    stdin_closed: false,
                 },
                 &cached,
             ) {

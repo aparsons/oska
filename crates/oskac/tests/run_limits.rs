@@ -540,3 +540,38 @@ fn main(io: Stdout) {
         assert_eq!(outcome.exit_code, Some(1));
     }
 }
+
+/// `oskac run -` reads the program from standard input (#447) and runs it
+/// under the limit too, on the interpreter and natively where the host
+/// has a backend.
+#[test]
+fn a_program_on_standard_input_runs_under_the_limit() {
+    use std::io::Write;
+    let dir = Scratch::new("run-limits", "stdin");
+    for backend in [&["--interpret"][..], &[]] {
+        let mut args = vec!["run", "-", "--max-output=20"];
+        args.extend_from_slice(backend);
+        let mut child = Command::new(env!("CARGO_BIN_EXE_oskac"))
+            .args(&args)
+            .current_dir(&*dir)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("oskac should start");
+        child
+            .stdin
+            .take()
+            .expect("a stdin")
+            .write_all(ENDLESS.as_bytes())
+            .expect("should write the program");
+        let output = child.wait_with_output().expect("oskac should finish");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(101), "{args:?}: {stderr}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "line 0\nline 1\n");
+        assert!(
+            stderr.starts_with("<stdin>:4:17: error[P0041]: "),
+            "{args:?}: {stderr}"
+        );
+    }
+}

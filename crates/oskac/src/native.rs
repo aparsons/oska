@@ -89,6 +89,8 @@ pub struct Invocation<'a> {
     /// The run limits, which the executable is built with: none builds
     /// the same executable as `oskac build`.
     pub limits: oska_check::limits::Limits,
+    /// Whether the program's standard input is closed (`oskac run -`).
+    pub stdin_closed: bool,
 }
 
 /// `oskac run`, natively: compile `program` for `target`, the host's, run
@@ -108,6 +110,7 @@ pub fn run(
         args,
         json,
         limits,
+        stdin_closed,
     } = invocation;
     // A human report is placed in the source by the executable itself; a
     // JSON one is read back unplaced and placed here, as the
@@ -138,6 +141,9 @@ pub fn run(
     let _ = argv0;
     if json {
         command.stderr(Stdio::piped());
+    }
+    if stdin_closed {
+        command.stdin(Stdio::null());
     }
     let mut child = match command.spawn() {
         Ok(child) => child,
