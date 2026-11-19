@@ -26,7 +26,7 @@ any other control character as `\u{HEX}`, then `"`.
 
 It exits with 0 once it has printed that. It prints nothing on standard
 output, says what is wrong on standard error and exits with 2 when the
-input is not core IR version 3 (or the arguments are wrong), with 3 when
+input is not core IR version 4 (or the arguments are wrong), with 3 when
 the run gets stuck, and with 4 when it runs out of fuel, N steps (by
 default 100000000).
 -/

@@ -600,9 +600,13 @@ pub enum Type {
         name: String,
         args: Vec<Type>,
     },
-    /// A function value, `fn(params) -> ret`: a closure, a `cap fn`, or a
-    /// function used as a value.
+    /// A function value, `fn(params) -> ret`, or `cap fn(params) -> ret`
+    /// when `cap`: a closure, a `cap fn`, or a function used as a value. A
+    /// plain `fn` carries no authority: the checker lets no closure that
+    /// captures a capability-bearing value be one. Backends do not read
+    /// `cap`; the core IR export does.
     Fn {
+        cap: bool,
         params: Vec<Type>,
         ret: Box<Type>,
     },
@@ -628,7 +632,8 @@ impl Type {
                 name: name.clone(),
                 args: args.iter().map(|a| a.substitute(subst)).collect(),
             },
-            Type::Fn { params, ret } => Type::Fn {
+            Type::Fn { cap, params, ret } => Type::Fn {
+                cap: *cap,
                 params: params.iter().map(|p| p.substitute(subst)).collect(),
                 ret: Box::new(ret.substitute(subst)),
             },
@@ -662,10 +667,11 @@ impl Type {
                     && args.iter().zip(actual_args).all(|(p, a)| p.bind(a, bound))
             }
             (
-                Type::Fn { params, ret },
+                Type::Fn { params, ret, .. },
                 Type::Fn {
                     params: actual_params,
                     ret: actual_ret,
+                    ..
                 },
             ) => {
                 params.len() == actual_params.len()
@@ -685,7 +691,9 @@ impl Type {
         match self {
             Type::Param(_) => false,
             Type::Named { args, .. } => args.iter().all(Type::is_concrete),
-            Type::Fn { params, ret } => params.iter().all(Type::is_concrete) && ret.is_concrete(),
+            Type::Fn { params, ret, .. } => {
+                params.iter().all(Type::is_concrete) && ret.is_concrete()
+            }
             Type::Unit | Type::Bool | Type::Int(_) | Type::String | Type::Never => true,
         }
     }
@@ -718,7 +726,10 @@ impl std::fmt::Display for Type {
                 }
                 Ok(())
             }
-            Type::Fn { params, ret } => {
+            Type::Fn { cap, params, ret } => {
+                if *cap {
+                    write!(f, "cap ")?;
+                }
                 write!(f, "fn(")?;
                 list(f, params)?;
                 write!(f, ")")?;
