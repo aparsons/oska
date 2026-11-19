@@ -1,0 +1,205 @@
+{
+  "schema": 1,
+  "batch": "2026-11-20-hook",
+  "config": {
+    "schema": 1,
+    "model": "example-model",
+    "tasks": ["token", "greeting"],
+    "variants": [
+      {"name": "web", "web": true},
+      {"name": "no-web", "web": false}
+    ],
+    "budget_usd": 25.0000,
+    "estimate_usd_per_run": 0.5000
+  },
+  "estimate": {
+    "runs": 20,
+    "turns_at_most": 800,
+    "seconds_at_most": 18000,
+    "cost_usd": 10.0000,
+    "budget_usd": 25.0000,
+    "within_budget": true
+  },
+  "runs": [
+    {
+      "task": "token",
+      "variant": "web",
+      "web": true,
+      "attempt": 1,
+      "turn_limit": 40,
+      "timeout_seconds": 900,
+      "record": "token-web-1.json"
+    },
+    {
+      "task": "token",
+      "variant": "web",
+      "web": true,
+      "attempt": 2,
+      "turn_limit": 40,
+      "timeout_seconds": 900,
+      "record": "token-web-2.json"
+    },
+    {
+      "task": "token",
+      "variant": "web",
+      "web": true,
+      "attempt": 3,
+      "turn_limit": 40,
+      "timeout_seconds": 900,
+      "record": "token-web-3.json"
+    },
+    {
+      "task": "token",
+      "variant": "web",
+      "web": true,
+      "attempt": 4,
+      "turn_limit": 40,
+      "timeout_seconds": 900,
+      "record": "token-web-4.json"
+    },
+    {
+      "task": "token",
+      "variant": "web",
+      "web": true,
+      "attempt": 5,
+      "turn_limit": 40,
+      "timeout_seconds": 900,
+      "record": "token-web-5.json"
+    },
+    {
+      "task": "token",
+      "variant": "no-web",
+      "web": false,
+      "attempt": 1,
+      "turn_limit": 40,
+      "timeout_seconds": 900,
+      "record": "token-no-web-1.json"
+    },
+    {
+      "task": "token",
+      "variant": "no-web",
+      "web": false,
+      "attempt": 2,
+      "turn_limit": 40,
+      "timeout_seconds": 900,
+      "record": "token-no-web-2.json"
+    },
+    {
+      "task": "token",
+      "variant": "no-web",
+      "web": false,
+      "attempt": 3,
+      "turn_limit": 40,
+      "timeout_seconds": 900,
+      "record": "token-no-web-3.json"
+    },
+    {
+      "task": "token",
+      "variant": "no-web",
+      "web": false,
+      "attempt": 4,
+      "turn_limit": 40,
+      "timeout_seconds": 900,
+      "record": "token-no-web-4.json"
+    },
+    {
+      "task": "token",
+      "variant": "no-web",
+      "web": false,
+      "attempt": 5,
+      "turn_limit": 40,
+      "timeout_seconds": 900,
+      "record": "token-no-web-5.json"
+    },
+    {
+      "task": "greeting",
+      "variant": "web",
+      "web": true,
+      "attempt": 1,
+      "turn_limit": 40,
+      "timeout_seconds": 900,
+      "record": "greeting-web-1.json"
+    },
+    {
+      "task": "greeting",
+      "variant": "web",
+      "web": true,
+      "attempt": 2,
+      "turn_limit": 40,
+      "timeout_seconds": 900,
+      "record": "greeting-web-2.json"
+    },
+    {
+      "task": "greeting",
+      "variant": "web",
+      "web": true,
+      "attempt": 3,
+      "turn_limit": 40,
+      "timeout_seconds": 900,
+      "record": "greeting-web-3.json"
+    },
+    {
+      "task": "greeting",
+      "variant": "web",
+      "web": true,
+      "attempt": 4,
+      "turn_limit": 40,
+      "timeout_seconds": 900,
+      "record": "greeting-web-4.json"
+    },
+    {
+      "task": "greeting",
+      "variant": "web",
+      "web": true,
+      "attempt": 5,
+      "turn_limit": 40,
+      "timeout_seconds": 900,
+      "record": "greeting-web-5.json"
+    },
+    {
+      "task": "greeting",
+      "variant": "no-web",
+      "web": false,
+      "attempt": 1,
+      "turn_limit": 40,
+      "timeout_seconds": 900,
+      "record": "greeting-no-web-1.json"
+    },
+    {
+      "task": "greeting",
+      "variant": "no-web",
+      "web": false,
+      "attempt": 2,
+      "turn_limit": 40,
+      "timeout_seconds": 900,
+      "record": "greeting-no-web-2.json"
+    },
+    {
+      "task": "greeting",
+      "variant": "no-web",
+      "web": false,
+      "attempt": 3,
+      "turn_limit": 40,
+      "timeout_seconds": 900,
+      "record": "greeting-no-web-3.json"
+    },
+    {
+      "task": "greeting",
+      "variant": "no-web",
+      "web": false,
+      "attempt": 4,
+      "turn_limit": 40,
+      "timeout_seconds": 900,
+      "record": "greeting-no-web-4.json"
+    },
+    {
+      "task": "greeting",
+      "variant": "no-web",
+      "web": false,
+      "attempt": 5,
+      "turn_limit": 40,
+      "timeout_seconds": 900,
+      "record": "greeting-no-web-5.json"
+    }
+  ]
+}

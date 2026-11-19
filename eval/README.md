@@ -1,6 +1,6 @@
 # Evaluation tasks
 
-The task set of the evaluation harness (`crates/oska-eval`): Oska tasks that an AI agent is given, one at a time, to measure how often it writes code that works and is secure. Only the maintainer runs agents on them, locally; nothing here calls a model.
+The task set of the evaluation harness (`crates/oska-eval`): Oska tasks that an AI agent is given, one at a time, to measure how often it writes code that works and is secure. Only the maintainer runs agents on them, locally, with the driver in `scripts/eval-batch/` (see [Running a batch](#running-a-batch)); nothing else here calls a model.
 
 ## A task
 
@@ -58,6 +58,73 @@ target/debug/oska-eval grade --oskac target/debug/oskac eval/tasks <task-id> <ru
 
 Its report has `schema`, `task`, `passed` (every functional check), `secure` (every security check), `clean` (the release and integrity groups), `changed` (every file of the copy that differs from `start/`, is not in it, or is missing) and `checks`, each with its `group`, `check`, `outcome` (`passed` or `failed`) and, when it failed, a `detail`. It exits with 0 when all three are true, 1 when one is not, and 2 on bad input.
 
+## Running a batch
+
+A **batch** is every run of a set of tasks, in one or more variants, by one model, and it costs money: each run is a paid session of an AI agent. Only the maintainer runs one, by hand, on their own machine, with their own agent CLI login. No workflow runs a batch, CI holds no credential for one, and the driver refuses to run live when `CI` or `GITHUB_ACTIONS` is set.
+
+### The batch config
+
+A batch starts from a batch config: a JSON file named by the batch's id, such as `2026-11-20-first.json` (lower-case letters, digits, `-` and `_`), kept wherever the maintainer likes. The driver copies it into the batch's results as `batch.json`, and the summary carries it as `config`.
+
+```json
+{
+  "schema": 1,
+  "model": "<model-id>",
+  "tasks": [
+    "least-authority-line-count", "least-authority-tally",
+    "path-traversal-public-files", "path-traversal-user-uploads",
+    "secret-logging-access-check", "secret-logging-webhook-delivery",
+    "xss-greeting", "xss-profile-link"
+  ],
+  "variants": [{"name": "web", "web": true}],
+  "budget_usd": 40,
+  "estimate_usd_per_run": 0.5
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `schema` | The format version, `1`. |
+| `model` | The model the agent CLI runs (`claude --model`), as the CLI names it: text with no space. Replace the placeholder. |
+| `tasks` | The ids of the active tasks to run, each once. Each runs its `task.json`'s `attempts`, with its `turn_limit` and `timeout_seconds`. |
+| `variants` | Each variant's `name` (lower-case letters, digits, `-` and `_`) and `web`: whether the agent may fetch the Oska site's guide. Every task runs in every variant. |
+| `budget_usd` | The most the batch may cost, in US dollars, as the agent CLI reports cost: no run starts once the batch's recorded runs reach it. |
+| `estimate_usd_per_run` | What one run is expected to cost, in US dollars, for the plan's estimate. |
+
+### The plan
+
+```sh
+target/release/oska-eval plan eval/tasks 2026-11-20-first.json
+```
+
+`plan` reads the config against the task set and prints every run the batch will make (task, variant, attempt, the task's turn limit and timeout, and the run record's file name) and an `estimate`: the `runs`, the most turns and seconds of agent time they may take (`turns_at_most`, `seconds_at_most`), the estimated `cost_usd` (runs times the estimate per run), the `budget_usd`, and whether it is `within_budget`. It exits with 1 when the estimate is over the budget, and 2 on a bad config: an unknown field, an unknown or deferred task, a variant named twice, or a file name that is not a batch id.
+
+### The driver
+
+```sh
+cargo build --release -p oskac -p oska-eval
+scripts/eval-batch/run.sh 2026-11-20-first.json          # the plan; nothing runs
+scripts/eval-batch/run.sh 2026-11-20-first.json --live   # runs the batch
+```
+
+`scripts/eval-batch/run.sh` needs `claude` (logged in), `jq`, `git`, `timeout` (`gtimeout` on macOS, from coreutils) and `sha256sum` or `shasum`, and the `oska-eval` and `oskac` that `--bin` names (`target/release` by default). Without `--live` it prints the plan and stops. With `--live` it prints the plan, refuses a plan over its budget, and asks for the batch id to be typed before it starts (`--yes` skips the question; the budget still holds). Then, for each run of the plan in order, it:
+
+1. skips the run if its record is already in `eval/results/<batch>/runs/`, so a batch that stopped resumes where it stopped (only with the same config: a changed config needs a new batch id);
+2. stops starting runs once the costs the records report reach `budget_usd`; the summary lists the runs not made as `incomplete`;
+3. `prepare`s a fresh run directory under `--work` (default `~/.local/state/oska-eval/<batch>/`, outside the repo; a run directory left by an interrupted run is moved aside, kept, and the run made again);
+4. runs `claude -p` in the workspace, with the prompt on its standard input, the config's model, `--max-turns` at the task's turn limit, the task's timeout (a run cut off is recorded as `timeout`), `stream-json` output saved as `transcript.jsonl` beside the workspace, no MCP servers, and only these tools: `Read`, `Edit`, `Write`, `Glob`, `Grep`, `Bash(oskac:*)` with the `oskac` under test first on `PATH`, and, in a variant with `web`, `WebFetch` of `oskalang.dev`;
+5. `grade`s the workspace, `analyse`s the transcript and `record`s the run, with what the harness cannot see for itself: the agent CLI's version (`claude --version`), the `oskac` version and its commit (with `-dirty` when the repo has uncommitted changes outside `eval/results/` and `docs/evaluation.md`), and the task set's digest (the SHA-256 of every file's path and SHA-256 in `eval/tasks/`).
+
+At the end it writes the batch's `summary.json` and renders `docs/evaluation.md`. Any failed step, missing tool or unreadable file stops the batch with an error, and so does an agent CLI that exits with an error and no result (no login, no network): that says nothing about the agent, so it is not recorded. The agent's output is never run or expanded by the driver; it is only read by the harness. Claude Code still reads the maintainer's own settings, so those must not allow it more tools than the list above.
+
+Then commit `eval/results/<batch>/` (`batch.json`, `runs/` and `summary.json`) and `docs/evaluation.md` in a pull request. Transcripts and workspaces stay in the work directory and are never committed.
+
+`scripts/eval-batch/test.sh` tests the driver end to end with no model: a stub `claude` on `PATH` (`stub-claude.sh`) replays a recorded transcript and leaves the task's reference solution in the workspace. `scripts/check.sh` runs it.
+
+### What a batch costs
+
+The cost of a run is what the agent CLI reports for it, which depends on the model's prices and on how many turns and tokens the agent uses; the harness does not know any price. So the estimate is the maintainer's: take it from an earlier batch (its summary's `usage.cost_usd` divided by `usage.runs_reported`), or, for a first batch, run a one-task batch first and use its cost. A batch's size is tasks times variants times attempts: the eight active tasks at their five attempts are 40 runs per variant. Each run is bounded by its task's turn limit (40 turns) and timeout (15 minutes), so 40 runs take at most 10 hours. The budget is the hard ceiling, checked before each run, so a batch can pass it by at most the cost of its last run.
+
 ## Results
 
 ```sh
@@ -70,7 +137,7 @@ target/debug/oska-eval summarise eval/results/<batch>
 target/debug/oska-eval report eval/results --out docs/evaluation.md
 ```
 
-Results are committed in `results/`: one directory per batch, named by its id, holding `runs/` (one run record per run) and `summary.json`. Every file has a `schema` version, `1`.
+Results are committed in `results/`: one directory per batch, named by its id, holding `batch.json` (its batch config), `runs/` (one run record per run) and `summary.json`. Every file has a `schema` version, `1`.
 
 A **run record** is what `record` prints. It joins the run's grade and analysis with what produced them, and holds no raw transcript text and no local path: the workspace path (`--workspace`) becomes `<workspace>` and the home directory `~`, wherever either starts a path. A run that stopped at a limit is recorded, never dropped: `--grade` and `--analysis` may be left out, and the record holds `null` for each.
 
@@ -91,12 +158,13 @@ A **run record** is what `record` prints. It joins the run's grade and analysis 
 | `grade` | The grade's `passed`, `secure`, `clean`, `changed` and `checks`, or `null`. |
 | `analysis` | The analysis's `iterations`, `iterations_to_clean`, `timeline`, `diagnostics`, `fixes`, `lookups` and `escapes`, or `null`. |
 
-A **batch summary** is what `summarise` prints from a batch's `runs/`. It refuses a batch that mixes task-set digests or records one attempt twice.
+A **batch summary** is what `summarise` prints from a batch's `runs/` and its `batch.json`. It refuses a batch that mixes task-set digests, records one attempt twice, has no `batch.json`, or has a run of a task or variant its config does not list.
 
 | Field | Meaning |
 | --- | --- |
 | `schema` | The format version, `1`. |
 | `batch` | The batch's id: its directory's name. |
+| `config` | The batch config the batch ran, from its `batch.json`, as `plan` reads it. |
 | `started`, `ended` | The first run's start and the last run's end. |
 | `task_set_digest` | The one task set the batch ran. |
 | `models`, `agents`, `oskac`, `tasks`, `classes`, `variants` | What the batch ran, each sorted. |

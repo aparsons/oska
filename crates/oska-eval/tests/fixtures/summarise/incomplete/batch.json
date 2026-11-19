@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "model": "example-model",
+  "tasks": ["greeting"],
+  "variants": [{"name": "base", "web": true}],
+  "budget_usd": 5,
+  "estimate_usd_per_run": 0.25
+}

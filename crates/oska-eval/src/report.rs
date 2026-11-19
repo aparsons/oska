@@ -160,6 +160,22 @@ fn latest_batch(page: &mut String, s: &JsonValue) {
     let usage = s.get("usage").unwrap_or(&JsonValue::Null);
     let cost = number(usage, "cost_usd");
     let cost = cost.parse::<f64>().map_or(cost, |c| format!("{c:.2}"));
+    let config = s.get("config").unwrap_or(&JsonValue::Null);
+    let dollars = |key: &str| {
+        let n = number(config, key);
+        n.parse::<f64>().map_or(n, |c| format!("{c:.2}"))
+    };
+    let (budget, estimate) = (dollars("budget_usd"), dollars("estimate_usd_per_run"));
+    let variants: Vec<String> = array_at(config, "variants")
+        .iter()
+        .map(|v| {
+            let access = match v.get("web").and_then(JsonValue::as_bool) {
+                Some(true) => "site access",
+                _ => "no site access",
+            };
+            format!("{} ({access})", plain(&str_at(v, "name")))
+        })
+        .collect();
 
     let _ = write!(
         page,
@@ -174,7 +190,8 @@ fn latest_batch(page: &mut String, s: &JsonValue) {
          - **Variants**: {}\n\
          - **Attempts per task**: {attempts}\n\
          - **Runs**: {}: {}\n\
-         - **Cost**: {cost} US dollars, as the agent CLI reported it\n",
+         - **Cost**: {cost} US dollars, as the agent CLI reported it\n\
+         - **Budget**: {budget} US dollars, at an estimated {estimate} US dollars a run\n",
         plain(&str_at(s, "batch")),
         plain(&dates(s)),
         plains(&strs_at(s, "models")),
@@ -187,7 +204,7 @@ fn latest_batch(page: &mut String, s: &JsonValue) {
             .map(|c| class_name(c).map_or_else(|| plain(c), str::to_string))
             .collect::<Vec<_>>()
             .join(", "),
-        plains(&strs_at(s, "variants")),
+        variants.join(", "),
         number(runs, "total"),
         stops.join(", "),
     );

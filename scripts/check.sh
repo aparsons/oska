@@ -538,6 +538,20 @@ if step "eval task set" --cargo --fast-when 'eval/*' --fast-when 'crates/oska-ev
   scripts/eval-tasks/run.sh
 fi
 
+if step "eval batch driver tests" --fast-when 'scripts/eval-batch/*' --fast-when 'crates/oska-eval/*'; then
+  # The live driver end to end with a stub `claude` on PATH: offline, no
+  # model is called. The driver itself refuses to run live in CI.
+  if command -v jq >/dev/null 2>&1; then
+    bash scripts/eval-batch/test.sh
+  else
+    if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+      echo "check.sh: jq is not installed, and CI must run the eval batch driver tests" >&2
+      exit 1
+    fi
+    skip_step "jq not installed; skipped (CI runs it)"
+  fi
+fi
+
 if step "installer tests" --fast-when 'scripts/install/*'; then
   bash scripts/install/test.sh
 fi

@@ -1,0 +1,6 @@
+{"type":"system","subtype":"init","cwd":"@WORKSPACE@","model":"test-model","tools":["Bash","Edit","Read"]}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"Read","input":{"file_path":"@WORKSPACE@/src/page.osk"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"fn banner() { todo() }","is_error":false}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_02","name":"Bash","input":{"command":"oskac check --format=json"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_02","content":"{\n  \"diagnostics\": [],\n  \"functions\": [],\n  \"audit\": [],\n  \"attenuations\": []\n}","is_error":false}]}}
+{"type":"result","subtype":"success","is_error":false,"num_turns":3,"result":"Done. $(touch pwned) `touch pwned2`","total_cost_usd":0.5,"usage":{"input_tokens":1000,"output_tokens":200}}

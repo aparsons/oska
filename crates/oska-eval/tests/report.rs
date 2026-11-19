@@ -172,6 +172,7 @@ fn is_own_code_span(page: &str, at: usize) -> bool {
 fn an_incomplete_batch_says_so_and_gives_no_rate_at_k() {
     let scratch = Scratch::new();
     let batch = scratch.path().join("results/2026-11-02-cut");
+    std::fs::create_dir_all(&batch).expect("should make the batch directory");
     copy_tree(
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/summarise/incomplete"),
         &batch,
@@ -197,5 +198,23 @@ fn an_incomplete_batch_says_so_and_gives_no_rate_at_k() {
             .contains("| All | 1 | 2 | 50.0% | 50.0% | - | - |"),
         "{}",
         outcome.stdout
+    );
+}
+
+/// The latest batch states what it was allowed to spend and, for each
+/// variant, whether the agent could fetch the Oska site, from its batch
+/// config.
+#[test]
+fn the_latest_batch_states_its_budget_and_each_variants_site_access() {
+    let outcome = harness(&["report", RESULTS]);
+    assert_eq!(outcome.code, 0, "{}{}", outcome.stdout, outcome.stderr);
+    let page = &outcome.stdout;
+    assert!(
+        page.contains("- **Variants**: base (site access), hook (site access)\n"),
+        "{page}"
+    );
+    assert!(
+        page.contains("- **Budget**: 20.00 US dollars, at an estimated 0.25 US dollars a run\n"),
+        "{page}"
     );
 }

@@ -259,7 +259,7 @@ else
   bad "a run that skipped the cargo steps because no cargo input changed writes the full stamp" "out: $out"
 fi
 after_slot=$(printf '%s\n' "$out" | grep -x -A2 '\[build slot\]' | sed '/^$/d' | sed -n 2p)
-if [ "$(printf '%s\n' "$out" | grep -cx '\[build slot\]')" -eq 1 ] && [ "$after_slot" = "== installer tests" ]; then
+if [ "$(printf '%s\n' "$out" | grep -cx '\[build slot\]')" -eq 1 ] && [ "$after_slot" = "== eval batch driver tests" ]; then
   ok "skipped cargo steps wait for no build slot; the next step takes it"
 else
   bad "skipped cargo steps wait for no build slot; the next step takes it" "out: $out"

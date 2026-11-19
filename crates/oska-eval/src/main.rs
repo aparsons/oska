@@ -6,6 +6,7 @@
 //! 0 on success, 1 when a check failed, and 2 on bad input.
 
 mod analyse;
+mod batch;
 mod grade;
 mod grader;
 mod json;
@@ -30,6 +31,13 @@ USAGE:
         solution (which must pass them all) and its insecure solution (which
         must pass the functional checks and fail a security check), run with
         the oskac at <path>.
+
+    oska-eval plan <tasks-dir> <config>
+        Read a batch config (named <batch-id>.json) against the task set
+        and list every run the batch will make (task, variant, attempt,
+        and the task's turn limit and timeout), with the most turns and
+        time they may take and the estimated cost against the budget. It
+        exits with 1 when the estimate is over the budget. Nothing runs.
 
     oska-eval prepare <tasks-dir> <task-id> <run-dir>
         Make a fresh run directory for an active task: workspace/ (the
@@ -101,6 +109,7 @@ fn main() -> ExitCode {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
         ["validate", "--oskac", oskac, tasks] => validate::run(oskac, tasks),
+        ["plan", tasks, config] => batch::run(tasks, config),
         ["prepare", tasks, id, run_dir] => prepare::run(tasks, id, run_dir),
         ["grade", "--oskac", oskac, tasks, id, run_dir] => grade::run(oskac, tasks, id, run_dir),
         ["record", tasks, id, flags @ ..] => record::run(tasks, id, flags),
