@@ -4,7 +4,7 @@ import OskaFormal.Core.Semantics
 /-!
 # Oska Core: progress and preservation
 
-Type soundness of Oska Core, version 3, for a well-typed program `P`:
+Type soundness of Oska Core, version 4, for a well-typed program `P`:
 
 - `progress`: a closed, well-typed expression is a value or takes a step.
 - `preservation`: a step of a closed, well-typed expression leads to an
@@ -121,6 +121,9 @@ theorem value_typed {Γ Δ : List Ty} {v : Expr} {t : Ty} (hv : IsValue v)
   | construct _ ih =>
     cases h with
     | construct hf hargs => exact Typed.construct hf (args_transport (fun e he t => ih e he) hargs)
+  | closure =>
+    cases h with
+    | closure _ hb => exact Typed.closure (Nat.zero_le _) (by simpa using hb)
   | _ => cases h <;> constructor
 
 theorem canonical_int {Γ : List Ty} {v : Expr} (hv : IsValue v)
@@ -195,7 +198,26 @@ theorem value_valueTyped {v : Expr} {t : Ty} (hv : IsValue v) (h : Typed P [] (.
   | @construct type variant fs _ ih =>
     cases h with
     | construct hf hargs => exact ValueTyped.construct hf (values_valueTyped ih hargs)
+  | closure =>
+    cases h with
+    | closure _ hb => exact ValueTyped.closure (by simpa using hb)
   | _ => cases h <;> constructor
+
+/-- A value of a function type is a closure the run has closed, whose
+body has the function's result type in the context of its parameters. -/
+theorem canonical_fn {Γ : List Ty} {v : Expr} {ts : List Ty} {t : Ty} (hv : IsValue v)
+    (h : Typed P Γ (.expr v (.fn ts t))) :
+    ∃ ps cs body, v = .closure ps 0 cs t body ∧ ts = ps.map Param.type ∧
+      Typed P (bindingTypes ps) (.expr body t) := by
+  cases hv with
+  | unit => cases h
+  | int _ => cases h
+  | bool _ => cases h
+  | construct _ => cases h
+  | closure ps cs ret body =>
+    cases h with
+    | closure _ hb => exact ⟨ps, cs, body, rfl, rfl, by simpa using hb⟩
+  | _ => cases h
 
 /-! ## Substitution -/
 
@@ -319,6 +341,17 @@ theorem typed_subst {v : Expr} {u : Ty} (hv : IsValue v) (hvt : Typed P [] (.exp
     intro Δ hΓ
     subst hΓ
     exact Typed.armsConsGuard hp (ihg (Δ ++ _) rfl) (ihb (Δ ++ _) rfl) (ihr Δ rfl)
+  | @closure Γ ps h cs ret body hle hb ih =>
+    intro Δ hΓ
+    subst hΓ
+    cases h with
+    | zero =>
+      show Typed P Δ (.expr (.closure ps 0 cs ret body) _)
+      exact Typed.closure (Nat.zero_le _) (by simpa using hb)
+    | succ h =>
+      show Typed P Δ (.expr (.closure ps h (shiftCaptures cs) ret (Expr.subst v body)) _)
+      exact Typed.closure (by simpa using hle) (ih (Δ.take h ++ bindingTypes ps) (by simp))
+  | callValue _ _ ihc iha => intro Δ hΓ; exact Typed.callValue (ihc Δ hΓ) (iha Δ hΓ)
 
 /-- A function's body, with closed values of its parameters' types put for
 the slots they bind, is closed and has the body's type. -/
@@ -659,7 +692,7 @@ theorem covers_sound : ∀ (fuel : Nat) {rows : List Row} {tys : List Ty} {vs : 
           obtain ⟨row, hrow, hm⟩ := ih hb hvs
           refine specialize_sound (xs := []) hrow rfl hm fun p ps hps _ => ?_
           cases p <;> simp_all [Head.args, matchPat] <;> (split at hps <;> simp_all)
-        | int | string | path | cap _ | result _ => simp at hc
+        | int | string | path | cap _ | result _ | fn _ _ => simp at hc
         | named n =>
           cases hv with
           | @construct _ variant fs fts hf hfs =>
@@ -1125,6 +1158,22 @@ theorem progress_goal : ∀ {Γ : List Ty} {j : Goal}, Typed P Γ j → Γ = [] 
           | none => exact Or.inr ⟨_, Step.matchArm hv hm⟩
           | some g => exact Or.inr ⟨_, Step.matchGuard hv hm⟩
     · exact Or.inr ⟨_, Step.matchScrutinee hstep⟩
+  | @closure _ ps h cs ret body hle _ _ =>
+    intro hΓ
+    subst hΓ
+    have : h = 0 := by simpa using hle
+    subst this
+    exact Or.inl (IsValue.closure _ _ _ _)
+  | callValue hc hargs ihc iha =>
+    intro hΓ
+    subst hΓ
+    rcases ihc rfl with hcv | ⟨o, hs⟩
+    · rcases iha rfl with hall | ⟨vs, e, rest, o, rfl, hvs, hs⟩
+      · obtain ⟨ps, cs, body, rfl, rfl, _⟩ := canonical_fn hcv hc
+        obtain ⟨_, hi⟩ := instantiate_some _ hargs
+        exact Or.inr ⟨_, Step.callValue hall hi⟩
+      · exact Or.inr ⟨_, Step.callValueArg hcv hvs hs⟩
+    · exact Or.inr ⟨_, Step.callValueCallee hs⟩
   | armsNil => intro _; trivial
   | armsCons _ _ _ _ _ => intro _; trivial
   | armsConsGuard _ _ _ _ _ _ _ => intro _; trivial
@@ -1337,6 +1386,25 @@ theorem preservation (hP : ProgramTyped P) {e : Expr} {o : Outcome} (hs : Step P
         refine Typed.ifElse (typed_substAll _ (by simpa using hg) hargs hvals)
           (typed_substAll _ (by simpa using hbody) hargs hvals) ?_
         exact Typed.match_ hs hrest (Or.inr ⟨hv, covered_guard hcov⟩)
+  | callValueCallee _ ih =>
+    intro t ht
+    cases ht with
+    | callValue hc hargs => exact (ih hc).map fun _ h => Typed.callValue h hargs
+  | callValueArg _ _ _ ih =>
+    intro t ht
+    cases ht with
+    | callValue hc hargs =>
+      obtain ⟨ts₁, _, ts₂, hts, h₁, he, h₂⟩ := args_split _ hargs
+      refine (ih he).map fun _ h => Typed.callValue hc ?_
+      rw [hts]
+      exact args_append _ h₁ (Typed.argsCons h h₂)
+  | callValue hvs hi =>
+    intro t ht
+    cases ht with
+    | callValue hc hargs =>
+      obtain ⟨ps, cs, body, heq, rfl, hb⟩ := canonical_fn (IsValue.closure _ _ _ _) hc
+      cases heq
+      exact typed_instantiate _ hb hargs hvs hi
 
 /-! ## Type safety -/
 

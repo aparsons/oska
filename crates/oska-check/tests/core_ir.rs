@@ -151,13 +151,13 @@ fn structs_enums_and_match_export_to_the_golden_form() {
 
 #[test]
 fn the_export_carries_its_version_and_is_json() {
-    assert_eq!(CORE_IR_VERSION, 3);
+    assert_eq!(CORE_IR_VERSION, 4);
     let json = core_ir::export(&program("fn one() -> Int { 1 }\n"))
         .unwrap_or_else(|refusal| panic!("should export, refused: {refusal}"));
     let value = oska_syntax::parse_json(&json).unwrap_or_else(|e| panic!("{e}: {json}"));
     assert_eq!(
         value.get("core_ir_version").and_then(|v| v.as_u64()),
-        Some(3)
+        Some(4)
     );
     assert_eq!(
         value
@@ -585,7 +585,7 @@ fn break_and_continue_carry_their_keyword_span() {
 }
 
 #[test]
-fn return_and_closures_are_refused() {
+fn return_is_refused() {
     assert_refused(
         "fn f() -> Int {\n\
          \x20   return 1\n\
@@ -593,14 +593,91 @@ fn return_and_closures_are_refused() {
         "`return`",
         "return 1",
     );
-    assert_refused(
-        "fn f() -> Int {\n\
-         \x20   let g = |x: Int| x\n\
-         \x20   1\n\
+}
+
+#[test]
+fn closures_and_calls_of_function_values_export_to_the_golden_form() {
+    assert_golden(
+        "closures",
+        "fn twice(f: fn(Int) -> Int, x: Int) -> Int {\n\
+         \x20   f(f(x))\n\
+         }\n\
+         fn adder(n: Int) -> fn(Int) -> Int {\n\
+         \x20   |x: Int| x + n\n\
+         }\n\
+         fn run(_: Bool) -> Int {\n\
+         \x20   let step = 3\n\
+         \x20   let add = |x: Int| x + step\n\
+         \x20   let nested = |a: Int, _: Bool| {\n\
+         \x20       let inner = |b: Int| a + b + step\n\
+         \x20       inner(a)\n\
+         \x20   }\n\
+         \x20   let add_ten = adder(10)\n\
+         \x20   twice(add, 1) + add_ten(2) + nested(4, true) + twice(|x| x * 2, 5)\n\
          }\n",
-        "a closure",
-        "|x: Int| x",
     );
+}
+
+#[test]
+fn a_function_used_as_a_value_is_refused() {
+    assert_refused(
+        "fn double(x: Int) -> Int { x * 2 }\n\
+         fn f() -> Int {\n\
+         \x20   let g = double\n\
+         \x20   g(1)\n\
+         }\n",
+        "a function used as a value",
+        "double",
+    );
+}
+
+#[test]
+fn a_function_field_is_refused_at_its_declaration() {
+    assert_refused(
+        "struct Holder { f: fn() -> Int }\n\
+         fn f() -> Int { 1 }\n",
+        "the function field type `fn() -> Int`",
+        "struct Holder { f: fn() -> Int }",
+    );
+}
+
+/// `checks` is whether `src` checks with no error.
+fn checks(src: &str) -> bool {
+    oska_check::check_module(src).program.is_some()
+}
+
+/// The programs `formal/lean/OskaFormal/Core/Examples.lean` shows the Lean
+/// typing of Oska Core rejects, one per example, are ones the checker
+/// rejects: a closure called with the wrong arity or argument type, a
+/// call of a value that is not a function, and a closure that escapes at
+/// a type it does not have. Each is beside a variant the checker accepts,
+/// so the rejection is for the reason named.
+#[test]
+fn the_closures_the_lean_typing_rejects_the_checker_rejects() {
+    let pairs = [
+        (
+            "fn f() -> Int {\n    let g = |x: Int| x + 1\n    g(1, 2)\n}\n",
+            "fn f() -> Int {\n    let g = |x: Int| x + 1\n    g(1)\n}\n",
+        ),
+        (
+            "fn f() -> Int {\n    let g = |x: Int| x + 1\n    g(true)\n}\n",
+            "fn f() -> Int {\n    let g = |x: Int| x + 1\n    g(2)\n}\n",
+        ),
+        (
+            "fn f() -> Int {\n    let n = 1\n    n(2)\n}\n",
+            "fn f() -> Int {\n    let n = |x: Int| x\n    n(2)\n}\n",
+        ),
+        (
+            "fn make() -> fn(Int) -> Bool {\n    |x: Int| x + 1\n}\n",
+            "fn make() -> fn(Int) -> Int {\n    |x: Int| x + 1\n}\n",
+        ),
+    ];
+    for (rejected, accepted) in pairs {
+        assert!(!checks(rejected), "the checker should reject {rejected:?}");
+        assert!(checks(accepted), "the checker should accept {accepted:?}");
+        core_ir::export(&program(accepted))
+            .unwrap_or_else(|refusal| panic!("{accepted:?} should export, refused: {refusal}"));
+    }
 }
 
 #[test]

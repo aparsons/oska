@@ -1,8 +1,8 @@
 /-!
 # Oska Core: syntax
 
-The syntax of Oska Core, version 3 (ADR 0018): exactly the fragment that
-core IR version 3 exports (`crates/oska-check/src/core_ir.rs`). It has
+The syntax of Oska Core, version 4 (ADR 0018): exactly the fragment that
+core IR version 4 exports (`crates/oska-check/src/core_ir.rs`). It has
 functions, `let`, `if`, `Int` and `Bool` with their operators, `()`,
 structs and enums without generics, field access, and `match`; and
 capabilities: text, `Path`, the capabilities `Stdout`, `Fs`, `FsRead`,
@@ -10,15 +10,19 @@ capabilities: text, `Path`, the capabilities `Stdout`, `Fs`, `FsRead`,
 receives, the built-in calls that write a line to stdout, read and write
 a file and create a directory under a directory capability, and
 attenuate one capability to a narrower one, and the `Result` of an
-effect with `is_ok` and `unwrap_or`. Each Lean constructor is one core IR
-node, with the same fields; the values a run makes (a capability, a
-path, a result) have no core IR node, so a program as written holds
-none.
+effect with `is_ok` and `unwrap_or`; and closures, which capture by
+value the slots they read, with function types and calls of a function
+value. Each Lean constructor is one core IR node, with the same fields;
+the values a run makes (a capability, a path, a result) have no core IR
+node, so a program as written holds none.
 
 - A local is a *slot*: the function's locals are numbered from 0 in the
   order they are bound, the parameters that bind first, then each `let`
   that binds, and each binding of a `match` arm's pattern, in source
   order. A parameter or `let` with `binds = false` takes no slot.
+- A closure's body numbers slots as the enclosing function does where
+  the closure is written: the `height` slots then in scope, then the
+  closure's parameters from `height` on, then its own locals.
 - `Int` is a signed 64-bit integer: an `Int` value lies in
   `intMin ..= intMax`, and arithmetic outside that range panics.
 - A struct's fields and an enum variant's fields are positional: core IR
@@ -58,8 +62,11 @@ def CapKind.granted : CapKind → Bool
 /-- The types of Oska Core: core IR's `"Int"`, `"Bool"`, `"()"`,
 `"String"` (text, trusted or not: trust is checked statically and has no
 runtime effect), `"Path"`, a capability kind, `"Result<(), IoError>"` and
-`"Result<String, IoError>"` (`result unit` and `result string`), and a
-struct or enum the program declares, by name. -/
+`"Result<String, IoError>"` (`result unit` and `result string`), a
+struct or enum the program declares, by name, and a function type
+`fn(params) -> ret`, core IR's `{"kind": "Fn", ...}`: a closure's type.
+Core IR does not tell a `fn` from a `cap fn`; what a function value can
+reach is the capabilities it captured (`Authority.lean`). -/
 inductive Ty where
   | int
   | bool
@@ -69,7 +76,114 @@ inductive Ty where
   | cap (kind : CapKind)
   | result (ok : Ty)
   | named (name : String)
-  deriving DecidableEq, Repr
+  | fn (params : List Ty) (ret : Ty)
+  deriving Repr
+
+mutual
+  /-- Equality of types is decidable. `deriving` does not reach a type
+  nested in a `List`, so it is written out. -/
+  def Ty.decEq : (a b : Ty) → Decidable (a = b)
+    | .int, .int => isTrue rfl
+    | .int, .bool => isFalse nofun
+    | .int, .unit => isFalse nofun
+    | .int, .string => isFalse nofun
+    | .int, .path => isFalse nofun
+    | .int, .cap _ => isFalse nofun
+    | .int, .result _ => isFalse nofun
+    | .int, .named _ => isFalse nofun
+    | .int, .fn _ _ => isFalse nofun
+    | .bool, .int => isFalse nofun
+    | .bool, .bool => isTrue rfl
+    | .bool, .unit => isFalse nofun
+    | .bool, .string => isFalse nofun
+    | .bool, .path => isFalse nofun
+    | .bool, .cap _ => isFalse nofun
+    | .bool, .result _ => isFalse nofun
+    | .bool, .named _ => isFalse nofun
+    | .bool, .fn _ _ => isFalse nofun
+    | .unit, .int => isFalse nofun
+    | .unit, .bool => isFalse nofun
+    | .unit, .unit => isTrue rfl
+    | .unit, .string => isFalse nofun
+    | .unit, .path => isFalse nofun
+    | .unit, .cap _ => isFalse nofun
+    | .unit, .result _ => isFalse nofun
+    | .unit, .named _ => isFalse nofun
+    | .unit, .fn _ _ => isFalse nofun
+    | .string, .int => isFalse nofun
+    | .string, .bool => isFalse nofun
+    | .string, .unit => isFalse nofun
+    | .string, .string => isTrue rfl
+    | .string, .path => isFalse nofun
+    | .string, .cap _ => isFalse nofun
+    | .string, .result _ => isFalse nofun
+    | .string, .named _ => isFalse nofun
+    | .string, .fn _ _ => isFalse nofun
+    | .path, .int => isFalse nofun
+    | .path, .bool => isFalse nofun
+    | .path, .unit => isFalse nofun
+    | .path, .string => isFalse nofun
+    | .path, .path => isTrue rfl
+    | .path, .cap _ => isFalse nofun
+    | .path, .result _ => isFalse nofun
+    | .path, .named _ => isFalse nofun
+    | .path, .fn _ _ => isFalse nofun
+    | .cap _, .int => isFalse nofun
+    | .cap _, .bool => isFalse nofun
+    | .cap _, .unit => isFalse nofun
+    | .cap _, .string => isFalse nofun
+    | .cap _, .path => isFalse nofun
+    | .cap x, .cap y => if h : x = y then isTrue (h ▸ rfl) else isFalse fun e => by cases e; exact h rfl
+    | .cap _, .result _ => isFalse nofun
+    | .cap _, .named _ => isFalse nofun
+    | .cap _, .fn _ _ => isFalse nofun
+    | .result _, .int => isFalse nofun
+    | .result _, .bool => isFalse nofun
+    | .result _, .unit => isFalse nofun
+    | .result _, .string => isFalse nofun
+    | .result _, .path => isFalse nofun
+    | .result _, .cap _ => isFalse nofun
+    | .result x, .result y =>
+      match Ty.decEq x y with
+      | isTrue h => isTrue (h ▸ rfl)
+      | isFalse h => isFalse fun e => by cases e; exact h rfl
+    | .result _, .named _ => isFalse nofun
+    | .result _, .fn _ _ => isFalse nofun
+    | .named _, .int => isFalse nofun
+    | .named _, .bool => isFalse nofun
+    | .named _, .unit => isFalse nofun
+    | .named _, .string => isFalse nofun
+    | .named _, .path => isFalse nofun
+    | .named _, .cap _ => isFalse nofun
+    | .named _, .result _ => isFalse nofun
+    | .named x, .named y => if h : x = y then isTrue (h ▸ rfl) else isFalse fun e => by cases e; exact h rfl
+    | .named _, .fn _ _ => isFalse nofun
+    | .fn _ _, .int => isFalse nofun
+    | .fn _ _, .bool => isFalse nofun
+    | .fn _ _, .unit => isFalse nofun
+    | .fn _ _, .string => isFalse nofun
+    | .fn _ _, .path => isFalse nofun
+    | .fn _ _, .cap _ => isFalse nofun
+    | .fn _ _, .result _ => isFalse nofun
+    | .fn _ _, .named _ => isFalse nofun
+    | .fn ps r, .fn qs u =>
+      match Ty.decEqList ps qs, Ty.decEq r u with
+      | isTrue h₁, isTrue h₂ => isTrue (h₁ ▸ h₂ ▸ rfl)
+      | isFalse h, _ => isFalse fun e => by cases e; exact h rfl
+      | _, isFalse h => isFalse fun e => by cases e; exact h rfl
+
+  def Ty.decEqList : (a b : List Ty) → Decidable (a = b)
+    | [], [] => isTrue rfl
+    | [], _ :: _ => isFalse nofun
+    | _ :: _, [] => isFalse nofun
+    | a :: as, b :: bs =>
+      match Ty.decEq a b, Ty.decEqList as bs with
+      | isTrue h₁, isTrue h₂ => isTrue (h₁ ▸ h₂ ▸ rfl)
+      | isFalse h, _ => isFalse fun e => by cases e; exact h rfl
+      | _, isFalse h => isFalse fun e => by cases e; exact h rfl
+end
+
+instance : DecidableEq Ty := Ty.decEq
 
 /-- The types `==` and `!=` compare: `Int`, `Bool` and `()`. The checker
 compares a struct or enum only through an `Eq` implementation, which is
@@ -82,6 +196,11 @@ def Ty.isBase : Ty → Bool
 def Ty.capKind? : Ty → Option CapKind
   | .cap k => some k
   | _ => none
+
+/-- Whether a type is a function type. -/
+def Ty.isFn : Ty → Bool
+  | .fn _ _ => true
+  | _ => false
 
 /-- A built-in call of Oska Core: core IR's `Builtin` names, the checker's
 qualified names of the prelude's body-less functions. A method's receiver
@@ -187,11 +306,24 @@ inductive Pattern where
   | bool (value : Bool)
   | construct (type : String) (variant : Option String) (fields : List Pattern)
 
+/-- A parameter of a function or closure: its type, and whether it binds
+a slot. -/
+structure Param where
+  type : Ty
+  binds : Bool
+
 mutual
   /-- An expression of Oska Core: one constructor per core IR `expr`
   kind. An `if` with no `else`, and a block with no value, hold `none`.
   A `construct` with no variant builds a struct; with one, an enum
-  variant. -/
+  variant.
+
+  A `closure` is written where `height` slots are in scope; `captures`
+  lists those its body reads, and `ret` is its result type. A run puts a
+  value for each slot below `height` in its body as the slot is bound
+  (`Semantics.lean`), so a closure the run reaches has height 0 and its
+  body holds the values it captured. `callValue` calls a function value
+  with arguments. -/
   inductive Expr where
     | unit
     | str (value : String)
@@ -213,6 +345,8 @@ mutual
     | field (base : Expr) (index : Nat)
     | match_ (scrutinee : Expr) (arms : List Arm)
     | builtin (op : Builtin) (args : List Expr)
+    | closure (params : List Param) (height : Nat) (captures : List Nat) (ret : Ty) (body : Expr)
+    | callValue (callee : Expr) (args : List Expr)
 
   /-- A statement of Oska Core: core IR's `Let` and `Expr`. -/
   inductive Stmt where
@@ -223,11 +357,6 @@ mutual
   inductive Arm where
     | mk (pattern : Pattern) (guard : Option Expr) (body : Expr)
 end
-
-/-- A parameter: its type, and whether it binds a slot. -/
-structure Param where
-  type : Ty
-  binds : Bool
 
 /-- A function of Oska Core, as core IR's `function`. -/
 structure Function where
@@ -290,9 +419,10 @@ def intMax : Int := 2 ^ 63 - 1
 def fits (n : Int) : Bool := decide (intMin ≤ n) && decide (n ≤ intMax)
 
 /-- The values of Oska Core: `()`, an integer, a boolean, text, a path, a
-capability, the `Ok` or `Err` of an effect's `Result`, and a struct or
-enum variant whose fields are values. An `Err` carries no message: no
-program of Oska Core can read one. -/
+capability, the `Ok` or `Err` of an effect's `Result`, a struct or enum
+variant whose fields are values, and a closure of height 0, whose body
+holds the values it captured. An `Err` carries no message: no program of
+Oska Core can read one. -/
 inductive IsValue : Expr → Prop where
   | unit : IsValue .unit
   | int (n : Int) : IsValue (.int n)
@@ -305,6 +435,8 @@ inductive IsValue : Expr → Prop where
   | err : IsValue .err
   | construct {type : String} {variant : Option String} {fields : List Expr} :
       (∀ e ∈ fields, IsValue e) → IsValue (.construct type variant fields)
+  | closure (ps : List Param) (cs : List Nat) (ret : Ty) (body : Expr) :
+      IsValue (.closure ps 0 cs ret body)
 
 /-- Every expression of a list is a value. -/
 inductive AllValues : List Expr → Prop where

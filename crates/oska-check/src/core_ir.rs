@@ -8,9 +8,9 @@
 //! tests, not a published format, and no CLI command prints it. The
 //! goldens of `tests/core_ir.rs` pin it.
 //!
-//! # Version 3
+//! # Version 4
 //!
-//! Oska Core version 3 has functions, `let`, `if`, `Int` and `Bool` with
+//! Oska Core version 4 has functions, `let`, `if`, `Int` and `Bool` with
 //! their operators, `()`, the value of a block or `if` with no value, and
 //! the module's own structs and enums without generics, with their
 //! construction, field access and `match`. It has text (`String`, trusted
@@ -19,7 +19,9 @@
 //! that only `main` receives, with the built-in calls in [`BUILTINS`]:
 //! writing a line to stdout, reading and writing a file and creating a
 //! directory under a directory capability, attenuation, and `is_ok` and
-//! `unwrap_or` on the `Result` an effect gives. [`export`] refuses any other
+//! `unwrap_or` on the `Result` an effect gives. It has closures, which
+//! capture by value the slots they read, function types, and calls of a
+//! function value. [`export`] refuses any other
 //! program, naming the first construct outside it in source order, with
 //! its span. It fails closed: a trait, `impl` or `const` is refused even
 //! when nothing uses it, and so are a generic struct or enum, one with a
@@ -28,7 +30,8 @@
 //! function, a method, a contract, a prelude type such as `Option`, and
 //! any type the checker left unsolved. It also refuses any other built-in
 //! call, `==` and `!=` on anything but `Int`, `Bool` and `()`, a struct or
-//! enum with a capability field, and a `main` that returns anything but
+//! enum with a capability or function field, a closure that reads `self`, a
+//! function used as a value, and a `main` that returns anything but
 //! `()` or takes anything but `Stdout`, `Fs`, `FsRead` or `FsWrite`, the
 //! capabilities the runtime grants.
 //!
@@ -38,7 +41,7 @@
 //! when absent, never written as `null`.
 //!
 //! ```text
-//! program  = {"core_ir_version": 3, "types": [typedecl...],
+//! program  = {"core_ir_version": 4, "types": [typedecl...],
 //!             "functions": [function...]}
 //! typedecl = {"kind": "Struct", "name": NAME, "fields": [type...]}
 //!          | {"kind": "Enum", "name": NAME, "variants": [variant...]}
@@ -47,6 +50,7 @@
 //! param    = {"type": type, "binds": BOOL}
 //! type     = "Int" | "Bool" | "()" | "String" | "Path" | CAPABILITY
 //!          | "Result<(), IoError>" | "Result<String, IoError>" | NAME
+//!          | {"kind": "Fn", "params": [type...], "ret": type}
 //! expr     = {"kind": "Unit"}
 //!          | {"kind": "Int", "value": INTEGER}
 //!          | {"kind": "Bool", "value": BOOL}
@@ -63,6 +67,9 @@
 //!          | {"kind": "Field", "base": expr, "index": N}
 //!          | {"kind": "Match", "scrutinee": expr, "arms": [arm...]}
 //!          | {"kind": "Builtin", "name": BUILTIN, "args": [expr...]}
+//!          | {"kind": "Closure", "params": [param...], "captures": [N...],
+//!             "height": N, "ret": type, "body": expr}
+//!          | {"kind": "CallValue", "callee": expr, "args": [expr...]}
 //! stmt     = {"kind": "Let", "binds": BOOL, "type": type, "value": expr}
 //!          | {"kind": "Expr", "value": expr}
 //! arm      = {"pattern": pattern, "guard"?: expr, "body": expr}
@@ -79,7 +86,7 @@
 //!   `"Dir"`, `"DirRead"` or `"DirWrite"`, and `BUILTIN` one of
 //!   [`BUILTINS`], the checker's name for a body-less prelude function. A
 //!   method's receiver is its first argument. No field of a struct or
-//!   enum is a capability.
+//!   enum is a capability or a function.
 //! - `types` are the module's structs and enums, and `functions` its
 //!   functions, each in source order. A `NAME` in a `type` is one of
 //!   `types`; a `Call` reaches a function by its `NAME`.
@@ -96,6 +103,16 @@
 //!   in its arm's guard and body. A parameter or `let` named `_` has
 //!   `"binds": false` and takes no slot: its value is evaluated and
 //!   dropped.
+//! - A `Closure` is written where `height` slots are in scope. Its body
+//!   numbers slots as the enclosing function does there, then its
+//!   parameters from `height` on, then its own locals. `captures` lists,
+//!   in ascending order, the slots below `height` its body reads, a
+//!   closure inside it included. Evaluating it makes a function value of
+//!   type `fn(params) -> ret` that holds the values of those slots, by
+//!   value. `CallValue` evaluates `callee`, then `args` left to right, then
+//!   runs the closure's body with what it captured at their slots and the
+//!   arguments at its parameters'. A `Fn` type does not say whether it is
+//!   a `cap fn`: what a function value reaches is what it captured.
 //! - `Int` is a signed 64-bit integer. A literal is written in decimal,
 //!   negative when the source writes `-` before it. `Neg` and the
 //!   arithmetic operators panic when the result does not fit, and `/`
@@ -147,7 +164,7 @@ use crate::program::{
 };
 
 /// The version of the core IR [`export`] writes.
-pub const CORE_IR_VERSION: u64 = 3;
+pub const CORE_IR_VERSION: u64 = 4;
 
 /// The built-in calls of Oska Core, by the checker's qualified name: the
 /// effects on a capability, attenuation, `Path` and the `Result` of an
@@ -351,16 +368,7 @@ impl Core {
             return refuse(format!("the generic function `{}`", f.name), f.span);
         }
         // In source order: the parameters, the result type, the contracts.
-        let params = f
-            .params
-            .iter()
-            .map(|p: &Param| {
-                Ok(Json::Obj(vec![
-                    ("type", self.ty(&p.ty, p.annotation.unwrap_or(f.span))?),
-                    ("binds", Json::Bool(p.binds)),
-                ]))
-            })
-            .collect::<Result<Vec<_>, Refusal>>()?;
+        let params = self.params(&f.params, f.span)?;
         let ret_span = f.ret_annotation.unwrap_or(f.span);
         let ret = self.ty(&f.ret, ret_span)?;
         if f.name == "main" {
@@ -390,14 +398,47 @@ impl Core {
         }
         Ok(Json::Obj(vec![
             ("name", Json::Str(f.name.clone())),
-            ("params", Json::Arr(params)),
+            ("params", params),
             ("ret", ret),
             ("body", self.expr(&f.body)?),
         ]))
     }
 
+    /// The parameters of a function or closure, each refused at its
+    /// annotation, or at `span` when it has none.
+    fn params(&self, params: &[Param], span: Span) -> Result<Json, Refusal> {
+        Ok(Json::Arr(
+            params
+                .iter()
+                .map(|p| {
+                    Ok(Json::Obj(vec![
+                        ("type", self.ty(&p.ty, p.annotation.unwrap_or(span))?),
+                        ("binds", Json::Bool(p.binds)),
+                    ]))
+                })
+                .collect::<Result<_, Refusal>>()?,
+        ))
+    }
+
     /// A type of Oska Core, or the refusal of another, at `span`.
     fn ty(&self, ty: &Type, span: Span) -> Result<Json, Refusal> {
+        if let Type::Fn { params, ret } = ty {
+            return Ok(node(
+                "Fn",
+                vec![
+                    (
+                        "params",
+                        Json::Arr(
+                            params
+                                .iter()
+                                .map(|p| self.ty(p, span))
+                                .collect::<Result<_, _>>()?,
+                        ),
+                    ),
+                    ("ret", self.ty(ret, span)?),
+                ],
+            ));
+        }
         let name = match ty {
             Type::Unit => "()",
             Type::Bool => "Bool",
@@ -427,10 +468,14 @@ impl Core {
         Ok(Json::Str(name.to_string()))
     }
 
-    /// The type of a struct or enum field, which is never a capability.
+    /// The type of a struct or enum field, which is never a capability or
+    /// a function, whose value may have captured one.
     fn field_ty(&self, ty: &Type, span: Span) -> Result<Json, Refusal> {
         if matches!(ty, Type::Named { name, .. } if CAPABILITIES.contains(&name.as_str())) {
             return refuse(format!("the capability field type `{ty}`"), span);
+        }
+        if matches!(ty, Type::Fn { .. }) {
+            return refuse(format!("the function field type `{ty}`"), span);
         }
         self.ty(ty, span)
     }
@@ -563,8 +608,41 @@ impl Core {
                     vec![("scrutinee", json), ("arms", Json::Arr(arms))],
                 )
             }
-            ExprKind::Closure(_) => return refuse("a closure", span),
-            ExprKind::CallValue { .. } => return refuse("a call of a function value", span),
+            ExprKind::Closure(closure) => {
+                if closure.captures_self {
+                    return refuse("a closure that reads `self`", span);
+                }
+                // The closure's type is not written: its result type is
+                // refused at the closure, before its parameters and body.
+                let Type::Fn { ret, .. } = &e.ty else {
+                    return refuse(format!("a closure of type `{}`", e.ty), span);
+                };
+                let ret = self.ty(ret, span)?;
+                let params = self.params(&closure.params, span)?;
+                node(
+                    "Closure",
+                    vec![
+                        ("params", params),
+                        (
+                            "captures",
+                            Json::Arr(
+                                closure
+                                    .captures
+                                    .iter()
+                                    .map(|&slot| Json::Int(slot as i128))
+                                    .collect(),
+                            ),
+                        ),
+                        ("height", Json::Int(closure.height as i128)),
+                        ("ret", ret),
+                        ("body", self.expr(&closure.body)?),
+                    ],
+                )
+            }
+            ExprKind::CallValue { callee, args } => node(
+                "CallValue",
+                vec![("callee", self.expr(callee)?), ("args", self.exprs(args)?)],
+            ),
             ExprKind::MutatingCall { .. } => return refuse("a mutating method call", span),
             ExprKind::Range { .. } => return refuse("a range", span),
             ExprKind::Try { .. } => return refuse("`?`", span),

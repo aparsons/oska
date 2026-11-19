@@ -5,8 +5,9 @@ import OskaFormal.Core.Host
 
 The Lean reference runs a program of Oska Core with `step`, a computable
 function defined from the same pieces as the `Step` relation of
-`Semantics.lean` (`Expr.subst`, `instantiate`, `evalBinary`, `intResult`),
-and `run`, which repeats it for at most a given number of steps (its
+`Semantics.lean` (`Expr.subst`, `instantiate`, `evalBinary`, `intResult`;
+a call of a closure goes into its body with `instantiate`, as a call of a
+function does), and `run`, which repeats it for at most a given number of steps (its
 fuel). There is no second copy of the semantics to drift: `step_sound`
 proves that every step `step` takes is a `Step`, and `step_complete` that
 `step` takes every `Step` there is, so `step P e = some o` exactly when
@@ -17,12 +18,14 @@ is one `Step`s reach, and so is a panic.
 namespace OskaFormal.Core
 
 mutual
-  /-- Whether an expression is a value: `()`, an integer, a boolean, or a
-  struct or variant whose fields are values. -/
+  /-- Whether an expression is a value: `()`, an integer, a boolean, text,
+  a path, a capability, a `Result`, a struct or variant whose fields are
+  values, or a closure of height 0. -/
   def Expr.isValue : Expr → Bool
     | .unit | .int _ | .bool _ => true
     | .str _ | .path _ | .cap _ _ | .okUnit | .okStr _ | .err => true
     | .construct _ _ fs => Expr.allValues fs
+    | .closure _ 0 _ _ _ => true
     | _ => false
 
   /-- Whether every expression of a list is a value. -/
@@ -48,11 +51,17 @@ theorem Expr.isValue_sound : ∀ {e : Expr}, e.isValue = true → IsValue e := b
     intro h
     simp only [Expr.isValue] at h
     exact IsValue.construct (ih h).forall
-  | case11 e h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 =>
+  | case11 => intro _; exact IsValue.closure _ _ _ _
+  | case12 e h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 =>
     intro h
-    cases e <;> simp_all [Expr.isValue]
-  | case12 => exact AllValues.nil
-  | case13 e es ih₁ ih₂ h =>
+    cases e with
+    | closure ps ht cs ret body =>
+      cases ht with
+      | zero => exact (h11 _ _ _ _ rfl).elim
+      | succ _ => simp [Expr.isValue] at h
+    | _ => simp_all [Expr.isValue]
+  | case13 => exact AllValues.nil
+  | case14 e es ih₁ ih₂ h =>
     simp only [Expr.allValues, Bool.and_eq_true] at h
     exact AllValues.cons (ih₁ h.1) (ih₂ h.2)
 
@@ -60,7 +69,7 @@ theorem Expr.isValue_complete {e : Expr} (h : IsValue e) : e.isValue = true := b
   induction h with
   | unit => rfl
   | int _ => rfl
-  | bool _ | str _ | path _ | cap _ _ | okUnit | okStr _ | err => rfl
+  | bool _ | str _ | path _ | cap _ _ | okUnit | okStr _ | err | closure _ _ _ _ => rfl
   | @construct _ _ fs hfs ih =>
     simp only [Expr.isValue]
     clear hfs
@@ -112,6 +121,14 @@ def stepBuiltin (op : Builtin) (vs : List Expr) : Option Outcome :=
   | some _, _ => none
   | none, vs => (evalPure op vs).map .next
 
+/-- The step a call of a function value takes once the callee `c` and the
+arguments `vs` are values: into the closure's body, with the arguments put
+for its parameters' slots, as `Step.callValue` (and a call of a function,
+`stepCall`) puts them, with `instantiate`. -/
+def stepCallValue : Expr → List Expr → Option Outcome
+  | .closure ps 0 _ _ body, vs => (instantiate ps vs body).map .next
+  | _, _ => none
+
 /-- The step of a field access once its base is the value `b`: to the
 field, when `b` is a struct. -/
 def stepField : Expr → Nat → Option Outcome
@@ -137,6 +154,7 @@ mutual
   def step (P : Program) : Expr → Option Outcome
     | .unit | .int _ | .bool _ | .local_ _ => none
     | .str _ | .path _ | .cap _ _ | .okUnit | .okStr _ | .err => none
+    | .closure _ _ _ _ _ => none
     | .neg e =>
       match e with
       | .int n => some (intResult (-n))
@@ -177,6 +195,12 @@ mutual
       match stepArgs P args with
       | some (vs, o, rest) => some (o.map fun e' => .builtin op (vs ++ e' :: rest))
       | none => if Expr.allValues args then stepBuiltin op args else none
+    | .callValue c args =>
+      if c.isValue then
+        match stepArgs P args with
+        | some (vs, o, rest) => some (o.map fun e' => .callValue c (vs ++ e' :: rest))
+        | none => if Expr.allValues args then stepCallValue c args else none
+      else (step P c).map (·.map fun c' => .callValue c' args)
 
   /-- The step of the first argument of a list that is not a value: the
   values before it, its outcome, and the arguments after it. `none` when
@@ -255,6 +279,14 @@ theorem stepBuiltin_sound {P : Program} {op : Builtin} {vs : List Expr} {o : Out
   · obtain ⟨v, hv, rfl⟩ := map_eq_some_inv h
     exact Step.builtinPure hvs hv
 
+theorem stepCallValue_sound {P : Program} {c : Expr} {vs : List Expr} {o : Outcome}
+    (hvs : AllValues vs) (h : stepCallValue c vs = some o) : Step P (.callValue c vs) o := by
+  unfold stepCallValue at h
+  split at h
+  · obtain ⟨e, hi, rfl⟩ := map_eq_some_inv h
+    exact Step.callValue hvs hi
+  · cases h
+
 /-- **Soundness of `step`.** Every step `step` takes is a step of the
 semantics. -/
 theorem step_sound {P : Program} : ∀ {e : Expr} {o : Outcome}, step P e = some o → Step P e o := by
@@ -263,6 +295,7 @@ theorem step_sound {P : Program} : ∀ {e : Expr} {o : Outcome}, step P e = some
     (motive_2 := fun ss val => ∀ o, stepBlock P ss val = some o → Step P (.block ss val) o)
     (motive_3 := fun es => ∀ vs o rest, stepArgs P es = some (vs, o, rest) →
       ∃ e, es = vs ++ e :: rest ∧ AllValues vs ∧ Step P e o)
+  next => intro o h; simp [step] at h
   next => intro o h; simp [step] at h
   next => intro o h; simp [step] at h
   next => intro o h; simp [step] at h
@@ -376,6 +409,24 @@ theorem step_sound {P : Program} : ∀ {e : Expr} {o : Outcome}, step P e = some
   next op args hnone hall _ =>
     intro o h
     simp [step, hnone, hall] at h
+  next c args hc vs o' rest hargs ih =>
+    intro o h
+    simp only [step, hc, ite_true, hargs, Option.some.injEq] at h
+    subst h
+    obtain ⟨e, rfl, hvs, hs⟩ := ih _ _ _ hargs
+    exact Step.callValueArg (Expr.isValue_iff.mp hc) hvs hs
+  next c args hc hnone hall _ =>
+    intro o h
+    simp only [step, hc, ite_true, hnone, hall] at h
+    exact stepCallValue_sound (Expr.allValues_iff.mp hall) h
+  next c args hc hnone hall _ =>
+    intro o h
+    simp [step, hc, hnone, hall] at h
+  next c args hc ih =>
+    intro o h
+    simp only [step, hc, ite_false, Bool.false_eq_true] at h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
+    exact Step.callValueCallee (ih hs)
   next vs o rest h => simp [stepArgs] at h
   next e es he ih vs o rest h =>
     simp only [stepArgs, he, ite_true] at h
@@ -505,6 +556,11 @@ theorem step_complete {P : Program} {e : Expr} {o : Outcome} (h : Step P e o) :
   | @builtinEffect op k r vs hk hvs =>
     have hall := AllValues.cons (IsValue.cap k r) hvs
     simp [step, stepArgs_values hall, Expr.allValues_iff.mpr hall, stepBuiltin, hk]
+  | callValueCallee hs ih => simp [step, hs.not_value, ih]
+  | callValueArg hc hvs hs ih =>
+    simp [step, Expr.isValue_iff.mpr hc, stepArgs_mid hvs hs.not_value ih]
+  | callValue hvs hi =>
+    simp [step, Expr.isValue, stepArgs_values hvs, Expr.allValues_iff.mpr hvs, stepCallValue, hi]
 
 /-- The capabilities `main` receives: for each parameter, the capability
 its type names, rooted anywhere, as the runtime grants them

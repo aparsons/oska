@@ -3,8 +3,8 @@ import OskaFormal.Core.Syntax
 /-!
 # Oska Core: small-step semantics
 
-A small-step semantics of Oska Core, version 3, matching the interpreter
-(`crates/oska-run`) and the rules core IR version 3 states:
+A small-step semantics of Oska Core, version 4, matching the interpreter
+(`crates/oska-run`) and the rules core IR version 4 states:
 
 - Evaluation is left to right: an operator's `lhs` before its `rhs`, a
   call's arguments in order before the call, a block's statements in
@@ -20,6 +20,15 @@ A small-step semantics of Oska Core, version 3, matching the interpreter
   its parameters' slots, and a binding `let` puts its value for its slot
   in the rest of its block. Slots count from the first in scope, so
   putting a value for slot 0 renumbers slot `i + 1` as slot `i`.
+- A closure captures by value: putting a value for a slot of the
+  enclosing function puts it in each closure written below it too, which
+  then has one slot fewer below its parameters (`height`). A closure is a
+  value once its height is 0, with each slot it captured put in its body
+  as the slot was bound. Values never change in Oska Core, so this is the
+  interpreter's capture when the closure is made (`ClosureValue`). A call
+  of a function value evaluates the callee, then its arguments left to
+  right, then puts the arguments for the closure's parameters' slots in
+  its body, as a call of a function does (`instantiate`).
 - A `match` evaluates its scrutinee, then tries its arms in order. An arm
   whose pattern does not match the value is skipped. One whose pattern
   matches puts the values it binds for their slots in its guard and body;
@@ -44,9 +53,15 @@ a panic, is a resource limit and is not part of the semantics.
 
 namespace OskaFormal.Core
 
+/-- What a closure captures once a value is put for slot 0: slot 0 no
+longer (its value is in the body), and slot `i + 1` as `i`. -/
+def shiftCaptures (cs : List Nat) : List Nat :=
+  cs.filterMap fun c => if c = 0 then none else some (c - 1)
+
 mutual
   /-- `e` with the closed value `v` put for slot 0, and each slot `i + 1`
-  renumbered as `i`. -/
+  renumbered as `i`. A closure of height 0 has no slot of the enclosing
+  function in scope, so it is left as it is. -/
   def Expr.subst (v : Expr) : Expr → Expr
     | .unit => .unit
     | .int n => .int n
@@ -69,6 +84,9 @@ mutual
     | .field b i => .field (Expr.subst v b) i
     | .match_ s arms => .match_ (Expr.subst v s) (Expr.substArms v arms)
     | .builtin op args => .builtin op (Expr.substList v args)
+    | .closure ps 0 cs ret body => .closure ps 0 cs ret body
+    | .closure ps (h + 1) cs ret body => .closure ps h (shiftCaptures cs) ret (Expr.subst v body)
+    | .callValue c args => .callValue (Expr.subst v c) (Expr.substList v args)
 
   /-- `Expr.subst` on each expression of a list. -/
   def Expr.substList (v : Expr) : List Expr → List Expr
@@ -99,10 +117,10 @@ def Expr.substAll : List Expr → Expr → Expr
   | [], e => e
   | v :: vs, e => Expr.substAll vs (Expr.subst v e)
 
-/-- A function's body with its arguments' values put for the slots its
-parameters bind; the value of a parameter that binds no slot is dropped.
-`none` when the number of arguments is not the number of parameters, so a
-call of the wrong arity takes no step. -/
+/-- A function's or closure's body with its arguments' values put for the
+slots its parameters bind; the value of a parameter that binds no slot is
+dropped. `none` when the number of arguments is not the number of
+parameters, so a call of the wrong arity takes no step. -/
 def instantiate : List Param → List Expr → Expr → Option Expr
   | [], [], body => some body
   | p :: ps, v :: vs, body =>
@@ -285,6 +303,17 @@ inductive Step (P : Program) : Expr → Outcome → Prop where
       IsValue v → matchPat p v = some bs →
       Step P (.match_ v (.mk p (some g) body :: rest))
         (.next (.if_ (Expr.substAll bs g) (Expr.substAll bs body) (some (.match_ v rest))))
+  | callValueCallee {c : Expr} {args : List Expr} {o : Outcome} :
+      Step P c o → Step P (.callValue c args) (o.map fun c' => .callValue c' args)
+  | callValueArg {c : Expr} {vs rest : List Expr} {e : Expr} {o : Outcome} :
+      IsValue c → AllValues vs → Step P e o →
+      Step P (.callValue c (vs ++ e :: rest)) (o.map fun e' => .callValue c (vs ++ e' :: rest))
+  /-- A call of a closure the run has closed steps into its body, with the
+  arguments put for its parameters' slots. -/
+  | callValue {ps : List Param} {cs : List Nat} {ret : Ty} {body : Expr} {vs : List Expr}
+      {e : Expr} :
+      AllValues vs → instantiate ps vs body = some e →
+      Step P (.callValue (.closure ps 0 cs ret body) vs) (.next e)
 
 /-- A value takes no step. -/
 theorem value_no_step {P : Program} {v : Expr} {o : Outcome} (hv : IsValue v) :

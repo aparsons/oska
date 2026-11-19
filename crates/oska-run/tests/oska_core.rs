@@ -1,6 +1,6 @@
-//! Programs in Oska Core (ADR 0018, #425, #426, #430): functions, `let`,
-//! `if`, `Int` and `Bool`, structs, enums and `match`, and capabilities
-//! with their effects, each a whole literal, so that `lean_reference.rs`
+//! Programs in Oska Core (ADR 0018, #425, #426, #430, #428): functions,
+//! `let`, `if`, `Int` and `Bool`, structs, enums and `match`, capabilities
+//! with their effects, and closures, each a whole literal, so that `lean_reference.rs`
 //! also runs them on the Lean reference and compares. A program without
 //! capabilities shows what it computed by how it ends: `check` panics
 //! with `P0004` on a false condition, and a run that returns cleanly
@@ -751,4 +751,190 @@ fn files_written_before_a_panic_are_kept() {
     assert_eq!(outcome.exit_code, 101, "a panic exits with code 101");
     assert_eq!(outcome.stdout, "before\n");
     assert_eq!(host.file("before.txt"), Some("written"));
+}
+
+// ---- Closures ----------------------------------------------------------
+
+#[test]
+fn closures_capture_the_values_they_read_and_are_called() {
+    assert_runs(
+        "enum Shape {
+    Dot,
+    Square(Int),
+}
+
+struct Pair { a: Int, b: Int }
+
+fn fail() {
+    let zero = 0
+    let _ = 1 / zero
+}
+
+fn check(ok: Bool) {
+    if !ok {
+        fail()
+    }
+}
+
+fn twice(f: fn(Int) -> Int, x: Int) -> Int {
+    f(f(x))
+}
+
+fn adder(n: Int) -> fn(Int) -> Int {
+    |x: Int| x + n
+}
+
+fn compose(f: fn(Int) -> Int, g: fn(Int) -> Int) -> fn(Int) -> Int {
+    |x: Int| g(f(x))
+}
+
+fn pick(double: Bool) -> fn(Int) -> Int {
+    if double {
+        |x: Int| x * 2
+    } else {
+        |x: Int| x + 1
+    }
+}
+
+fn main() {
+    let step = 3
+    let add = |x: Int| x + step
+    check(add(1) == 4)
+    check(twice(add, 10) == 16)
+    check(twice(|x| x * 2, 5) == 20)
+    let add_ten = adder(10)
+    let add_one = adder(1)
+    check(add_ten(2) == 12 && add_one(2) == 3)
+    check(compose(add_ten, pick(true))(1) == 22)
+    check(pick(false)(1) == 2)
+    let unused = 100
+    let nested = |a: Int, _: Bool| {
+        let inner = |b: Int| a + b + step
+        inner(a)
+    }
+    check(nested(4, true) == 11)
+    let pair = Pair(a: 5, b: 7)
+    let area = |s: Shape| match s {
+        Shape.Dot => pair.a
+        Shape.Square(n) if n > 0 => n * n + pair.b
+        Shape.Square(_) => 0
+    }
+    check(area(Shape.Dot) == 5 && area(Shape.Square(3)) == 16 && area(Shape.Square(-1)) == 0)
+    let constant = || unused + step
+    check(constant() == 103)
+}
+",
+        &[],
+        "",
+    );
+}
+
+#[test]
+fn a_closure_that_captured_stdout_prints_when_it_is_called() {
+    assert_runs(
+        r#"fn apply(f: cap fn() -> Result<(), IoError>) -> Result<(), IoError> {
+    f()
+}
+
+fn main(io: Stdout) {
+    let greet = |line: Untrusted<String>| io.println(line)
+    let _ = greet("first")
+    let again = || greet("second")
+    let _ = apply(again)
+    let _ = apply(|| io.println("third"))
+    let quiet = || 1 + 1
+    if quiet() == 2 {
+        let _ = io.println("done")
+    }
+}
+"#,
+        &[],
+        "first\nsecond\nthird\ndone\n",
+    );
+}
+
+#[test]
+fn a_closure_that_captured_a_directory_capability_writes_beneath_its_root() {
+    let mut host = FakeHost::new();
+    let outcome = run_differential(
+        &mut host,
+        r#"fn save_all(save: cap fn(Untrusted<String>) -> Bool) -> Bool {
+    save("a.txt") && save("../escape.txt")
+}
+
+fn main(io: Stdout, fs: FsWrite) {
+    let root = fs.restrict_to(".")
+    let _ = root.create_dir(Path.from("box"))
+    let boxed = root.restrict_to(Path.from("box"))
+    let save = |name: Untrusted<String>| boxed.write(Path.from(name), "saved").is_ok()
+    if save_all(save) {
+        let _ = io.println("all saved")
+    } else {
+        let _ = io.println("refused")
+    }
+}
+"#,
+        &[],
+    );
+    assert_eq!(outcome.exit_code, 0, "{outcome:#?}");
+    assert_eq!(outcome.stdout, "refused\n");
+    assert_eq!(host.file("box/a.txt"), Some("saved"));
+    assert_eq!(host.file("escape.txt"), None);
+}
+
+#[test]
+fn a_call_of_a_closure_runs_the_callee_then_its_arguments_left_to_right() {
+    assert_panics(
+        "fn overflow() -> Int {
+    let big = 9223372036854775807
+    big + 1
+}
+
+fn divide() -> Int {
+    let zero = 0
+    1 / zero
+}
+
+fn main() {
+    let pair = |a: Int, b: Int| a + b
+    let _ = pair(overflow(), divide())
+}
+",
+        "P0001",
+        "big + 1",
+    );
+    assert_panics(
+        "fn overflowing() -> fn(Int) -> Int {
+    let big = 9223372036854775807
+    let _ = big + 1
+    |x: Int| x
+}
+
+fn divide() -> Int {
+    let zero = 0
+    1 / zero
+}
+
+fn main() {
+    let _ = overflowing()(divide())
+}
+",
+        "P0001",
+        "big + 1",
+    );
+}
+
+#[test]
+fn a_closure_body_that_divides_by_zero_panics_with_p0004() {
+    assert_panics(
+        "fn main() {
+    let n = 7
+    let f = |x: Int| x / (x - n)
+    let ok = f(8)
+    let _ = f(7)
+}
+",
+        "P0004",
+        "x / (x - n)",
+    );
 }

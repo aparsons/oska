@@ -1,0 +1,187 @@
+{
+  "core_ir_version": 4,
+  "types": [],
+  "functions": [
+    {
+      "name": "twice",
+      "params": [
+        {"type": {"kind": "Fn", "params": ["Int"], "ret": "Int"}, "binds": true},
+        {"type": "Int", "binds": true}
+      ],
+      "ret": "Int",
+      "body": {
+        "kind": "Block",
+        "stmts": [],
+        "value": {
+          "kind": "CallValue",
+          "callee": {"kind": "Local", "slot": 0},
+          "args": [
+            {
+              "kind": "CallValue",
+              "callee": {"kind": "Local", "slot": 0},
+              "args": [{"kind": "Local", "slot": 1}]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "adder",
+      "params": [{"type": "Int", "binds": true}],
+      "ret": {"kind": "Fn", "params": ["Int"], "ret": "Int"},
+      "body": {
+        "kind": "Block",
+        "stmts": [],
+        "value": {
+          "kind": "Closure",
+          "params": [{"type": "Int", "binds": true}],
+          "captures": [0],
+          "height": 1,
+          "ret": "Int",
+          "body": {
+            "kind": "Binary",
+            "op": "+",
+            "lhs": {"kind": "Local", "slot": 1},
+            "rhs": {"kind": "Local", "slot": 0}
+          }
+        }
+      }
+    },
+    {
+      "name": "run",
+      "params": [{"type": "Bool", "binds": false}],
+      "ret": "Int",
+      "body": {
+        "kind": "Block",
+        "stmts": [
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": "Int",
+            "value": {"kind": "Int", "value": 3}
+          },
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": {"kind": "Fn", "params": ["Int"], "ret": "Int"},
+            "value": {
+              "kind": "Closure",
+              "params": [{"type": "Int", "binds": true}],
+              "captures": [0],
+              "height": 1,
+              "ret": "Int",
+              "body": {
+                "kind": "Binary",
+                "op": "+",
+                "lhs": {"kind": "Local", "slot": 1},
+                "rhs": {"kind": "Local", "slot": 0}
+              }
+            }
+          },
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": {"kind": "Fn", "params": ["Int", "Bool"], "ret": "Int"},
+            "value": {
+              "kind": "Closure",
+              "params": [{"type": "Int", "binds": true}, {"type": "Bool", "binds": false}],
+              "captures": [0],
+              "height": 2,
+              "ret": "Int",
+              "body": {
+                "kind": "Block",
+                "stmts": [
+                  {
+                    "kind": "Let",
+                    "binds": true,
+                    "type": {"kind": "Fn", "params": ["Int"], "ret": "Int"},
+                    "value": {
+                      "kind": "Closure",
+                      "params": [{"type": "Int", "binds": true}],
+                      "captures": [0, 2],
+                      "height": 3,
+                      "ret": "Int",
+                      "body": {
+                        "kind": "Binary",
+                        "op": "+",
+                        "lhs": {
+                          "kind": "Binary",
+                          "op": "+",
+                          "lhs": {"kind": "Local", "slot": 2},
+                          "rhs": {"kind": "Local", "slot": 3}
+                        },
+                        "rhs": {"kind": "Local", "slot": 0}
+                      }
+                    }
+                  }
+                ],
+                "value": {
+                  "kind": "CallValue",
+                  "callee": {"kind": "Local", "slot": 3},
+                  "args": [{"kind": "Local", "slot": 2}]
+                }
+              }
+            }
+          },
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": {"kind": "Fn", "params": ["Int"], "ret": "Int"},
+            "value": {
+              "kind": "Call",
+              "function": "adder",
+              "args": [{"kind": "Int", "value": 10}]
+            }
+          }
+        ],
+        "value": {
+          "kind": "Binary",
+          "op": "+",
+          "lhs": {
+            "kind": "Binary",
+            "op": "+",
+            "lhs": {
+              "kind": "Binary",
+              "op": "+",
+              "lhs": {
+                "kind": "Call",
+                "function": "twice",
+                "args": [{"kind": "Local", "slot": 1}, {"kind": "Int", "value": 1}]
+              },
+              "rhs": {
+                "kind": "CallValue",
+                "callee": {"kind": "Local", "slot": 3},
+                "args": [{"kind": "Int", "value": 2}]
+              }
+            },
+            "rhs": {
+              "kind": "CallValue",
+              "callee": {"kind": "Local", "slot": 2},
+              "args": [{"kind": "Int", "value": 4}, {"kind": "Bool", "value": true}]
+            }
+          },
+          "rhs": {
+            "kind": "Call",
+            "function": "twice",
+            "args": [
+              {
+                "kind": "Closure",
+                "params": [{"type": "Int", "binds": true}],
+                "captures": [],
+                "height": 4,
+                "ret": "Int",
+                "body": {
+                  "kind": "Binary",
+                  "op": "*",
+                  "lhs": {"kind": "Local", "slot": 4},
+                  "rhs": {"kind": "Int", "value": 2}
+                }
+              },
+              {"kind": "Int", "value": 5}
+            ]
+          }
+        }
+      }
+    }
+  ]
+}
