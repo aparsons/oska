@@ -120,6 +120,15 @@ fn link(dir: &Path, at: &str, target: impl AsRef<Path>) {
     made.expect("create a symlink");
 }
 
+/// `path`, a root's trusted path shown in a message, as this platform
+/// shows it: with `\\` for `/` on Windows.
+fn native(path: &str) -> String {
+    match cfg!(windows) {
+        true => path.replace('/', "\\"),
+        false => path.to_string(),
+    }
+}
+
 /// `expected` as this platform words it. Linux and macOS cannot tell a
 /// symlink met where a directory is needed from anything else that is
 /// not a directory; Windows can, and says it is a symlink.
@@ -292,7 +301,10 @@ fn a_root_is_trusted_text_but_its_last_component_is_never_a_symlink() {
     );
     assert_eq!(
         lines[18],
-        "REFUSED: cannot restrict to `root/inside.txt/x`: `root/inside.txt`: not a directory"
+        format!(
+            "REFUSED: cannot restrict to `root/inside.txt/x`: `{}`: not a directory",
+            native("root/inside.txt")
+        )
     );
     assert_eq!(
         lines[20],
@@ -702,7 +714,10 @@ fn a_broken_file_or_directory_root_fails_every_operation() {
     let lines: Vec<&str> = outcome.stdout.lines().collect();
     assert_eq!(
         lines[0],
-        "REFUSED: cannot restrict to `root/nodir/x.txt`: `root/nodir`: not found"
+        format!(
+            "REFUSED: cannot restrict to `root/nodir/x.txt`: `{}`: not found",
+            native("root/nodir")
+        )
     );
     assert_eq!(lines[2], "REFUSED: `sub` is not a regular file");
     assert_eq!(
@@ -895,6 +910,9 @@ fn a_file_swapped_for_a_symlink_after_the_capability_was_made_is_refused() {
     assert!(!dir.join("outside/new").exists());
 }
 
+/// Not on Windows, which refuses to move a directory while a handle is
+/// open on anything in it, as `sub` is here.
+#[cfg(unix)]
 #[test]
 fn a_capability_whose_root_was_swapped_for_a_symlink_keeps_its_own_directory() {
     let case = |side: &str| {
@@ -951,6 +969,22 @@ fn a_nul_byte_anywhere_in_a_path_is_refused() {
     io.println(shown(read.restrict_to_file("ro\0ot/inside.txt").read_to_string()))?"#,
     );
     let outcome = assert_same(&case);
+    if cfg!(windows) {
+        // Windows refuses a name holding NUL as no single file name, and
+        // a root's path holding one in Rust's words.
+        assert_all_refused(&outcome.stdout, 11, "");
+        let lines: Vec<&str> = outcome.stdout.lines().collect();
+        assert_eq!(
+            lines[0],
+            "REFUSED: `in\0side.txt` is not a single file name"
+        );
+        assert_eq!(
+            lines[10],
+            "REFUSED: cannot restrict to `ro\0ot/inside.txt`: `ro\0ot`: \
+             strings passed to WinAPI cannot contain NULs"
+        );
+        return;
+    }
     assert_all_refused(
         &outcome.stdout,
         11,

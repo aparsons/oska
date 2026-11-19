@@ -3694,6 +3694,11 @@ fn open_name(dirfd: Int, name: String, flags: Int) -> Int {
 // The text of the error a system call gave as `errno`, in Oska's words.
 fn os_error(errno: Int) -> String {
     if errno == nul_in_name() {
+        // On Windows only a root's trusted path meets it: Rust's own
+        // words, which the interpreter's `OpenOptions::open` gives.
+        if on_windows() {
+            return "strings passed to WinAPI cannot contain NULs"
+        }
         return "a path holds a NUL byte, which no file name may"
     }
     errno_message(errno)
