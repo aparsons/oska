@@ -8,5 +8,6 @@
     {"name":"main","authority":["Stdout"],"via":[{"param":"io","capabilities":["Stdout"]}],"pure":false}
   ],
   "audit": [],
-  "attenuations": []
+  "attenuations": [],
+  "verdict": "diagnostics"
 }

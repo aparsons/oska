@@ -3,10 +3,12 @@
 //! with one and fail when authority widened (`oska_check::authority_diff`
 //! owns the comparison).
 //!
-//! Exit codes: 1 for diagnostics (no diff is computed: a refused
-//! program's report is incomplete), an unreadable or malformed baseline,
-//! or a baseline that cannot be written; 3 when the program checks but
-//! the gate fails; 0 otherwise. There is no flag that lets a widening
+//! Exit codes, which [`Verdict`] decides with the JSON `verdict`: 1 for
+//! diagnostics (no diff is computed: a refused program's report is
+//! incomplete); 3 when the program checks but the gate fails; 0
+//! otherwise. An unreadable or malformed baseline, or a baseline that
+//! cannot be written, is an `error:` and exit code 1, with no verdict and,
+//! with `--format=json`, no check object. There is no flag that lets a widening
 //! pass: approving one means updating the baseline in the same change.
 
 use std::process::ExitCode;
@@ -15,9 +17,7 @@ use oska_check::authority_diff::{diff, AuthorityRecord};
 use oska_check::CheckReport;
 
 use crate::package::{self, Files};
-
-/// The exit code of a check whose authority widened against its baseline.
-const WIDENED: u8 = 3;
+use crate::verdict::{check_json, Verdict};
 
 /// What `oskac check` does with a baseline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,16 +40,19 @@ pub(crate) fn check(report: &CheckReport, json: bool, path: &str, gate: Gate) ->
         return code;
     }
     match gate {
-        Gate::Update(file) => {
-            let code = crate::print_report(report, json, path);
-            match write(report, file) {
-                Ok(()) => code,
-                Err(message) => {
-                    eprintln!("error: cannot write the baseline {file}: {message}");
-                    ExitCode::FAILURE
+        Gate::Update(file) => match write(report, file) {
+            Ok(()) => crate::print_report(report, json, path),
+            Err(message) => {
+                // As for a baseline that cannot be read: the error
+                // decides, so `--format=json` prints no check object,
+                // whose verdict would be `ok`.
+                if !json {
+                    let _ = crate::print_report(report, json, path);
                 }
+                eprintln!("error: cannot write the baseline {file}: {message}");
+                ExitCode::FAILURE
             }
-        }
+        },
         Gate::Compare(file) => compare(report, json, path, file),
     }
 }
@@ -77,29 +80,31 @@ fn compare(report: &CheckReport, json: bool, path: &str, file: &str) -> ExitCode
     let difference = match compared {
         Ok(difference) => difference,
         Err(message) => {
-            // The report has no diagnostics, so this exit code is 0: the
-            // unreadable baseline decides it.
-            let _ = crate::print_report(report, json, path);
+            // Nothing was compared, so there is no verdict, and with
+            // `--format=json` no check object: the error decides. The
+            // human report still lists the program's authority.
+            if !json {
+                let _ = crate::print_report(report, json, path);
+            }
             eprintln!("error: {message}");
             return ExitCode::FAILURE;
         }
     };
+    let verdict = Verdict::of(report, Some(&difference));
     if json {
         let value = difference.to_json(file);
-        out!("{}", report.to_json_with(Some(("authority_diff", &value))));
+        out!("{}", check_json(report, Some(&value), verdict));
     } else {
         let _ = crate::print_report(report, json, path);
         out!("{}", difference.to_human(file, env!("CARGO_PKG_VERSION")));
     }
-    if difference.fails() {
+    if verdict == Verdict::Widened {
         eprintln!(
             "error: authority widened against the baseline {file}: a function gained \
              authority or became impure, an audit site was added, or the program reaches a \
              new kind; approving this means updating the baseline, a change for the user \
              to review"
         );
-        ExitCode::from(WIDENED)
-    } else {
-        ExitCode::SUCCESS
     }
+    ExitCode::from(verdict.exit_code())
 }

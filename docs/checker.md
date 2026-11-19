@@ -53,7 +53,8 @@ A `test` body sees one built-in value, `t`, of the prelude type `TestContext`. I
   ],
   "attenuations": [
     {"function":"count_lines","method":"restrict_to","path":"prog.osk","span":{"start":150,"end":176},"source":"FsRead","result":"DirRead","root":"docs"}
-  ]
+  ],
+  "verdict": "ok"
 }
 ```
 
@@ -76,6 +77,7 @@ A `test` body sees one built-in value, `t`, of the prelude type `TestContext`. I
   - `source` and `result`: the capability kinds before and after, such as `FsRead` and `DirRead`.
   - `root`: the root as a string when it is a literal or a module constant, and `null` when it is computed at runtime or the method takes none (`read_only`, `write_only`). The human report tells the two apart.
   - `span`: the whole call expression, such as `read.restrict_to("docs")`.
+- **`verdict`**: always the last key, and the same answer as the exit code: `ok` (0), `diagnostics` (1), or `widened` (3), when the program checks but its authority goes past the baseline given with `--baseline` (a function widened or became impure, a new audit site, or a new kind). With `--baseline` the `authority_diff` comes just before it. See the [CLI reference](guide/cli-reference.md#authority-baseline).
 
 ## The prelude
 

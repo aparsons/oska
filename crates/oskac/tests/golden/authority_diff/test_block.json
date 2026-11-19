@@ -30,6 +30,7 @@ exit: 0
     ],
     "removed_attenuations": [],
     "fails": false
-  }
+  },
+  "verdict": "ok"
 }
 --- stderr
