@@ -222,6 +222,7 @@ pub enum Sys {
     ReadFile,
     GetConsoleMode,
     WriteConsole,
+    ReadConsole,
     VirtualAlloc,
     VirtualFree,
     ExitProcess,
@@ -725,6 +726,7 @@ fn windows_only(call: Sys) -> bool {
             | Sys::ReadFile
             | Sys::GetConsoleMode
             | Sys::WriteConsole
+            | Sys::ReadConsole
             | Sys::VirtualAlloc
             | Sys::VirtualFree
             | Sys::ExitProcess
@@ -800,6 +802,12 @@ const WRITE_CONSOLE: Import = Import {
     extra_args: &[0],
     ..win("WriteConsoleW", 4)
 };
+/// `ReadConsoleW(h, units, count, &read, NULL)`: UTF-16 units.
+const READ_CONSOLE: Import = Import {
+    fixed: 5,
+    extra_args: &[0],
+    ..win("ReadConsoleW", 4)
+};
 /// `VirtualAlloc(addr, size, type, protect)`: an address, or `NULL`.
 const VIRTUAL_ALLOC: Import = Import {
     wide: true,
@@ -850,13 +858,14 @@ const PROCESS_PRNG: Import = Import {
 /// Every function a Windows executable imports, `kernel32.dll`'s first:
 /// always all of them, so the import table depends on the target alone.
 /// [`GET_LAST_ERROR`] is first ([`Platform::errno`]).
-const WINDOWS_IMPORTS: [&Import; 15] = [
+const WINDOWS_IMPORTS: [&Import; 16] = [
     &GET_LAST_ERROR,
     &GET_STD_HANDLE,
     &WRITE_FILE,
     &READ_FILE,
     &GET_CONSOLE_MODE,
     &WRITE_CONSOLE,
+    &READ_CONSOLE,
     &VIRTUAL_ALLOC,
     &VIRTUAL_FREE,
     &EXIT_PROCESS,
@@ -877,6 +886,7 @@ fn windows_call(call: Sys) -> OsCall {
         Sys::ReadFile => &READ_FILE,
         Sys::GetConsoleMode => &GET_CONSOLE_MODE,
         Sys::WriteConsole => &WRITE_CONSOLE,
+        Sys::ReadConsole => &READ_CONSOLE,
         Sys::VirtualAlloc => &VIRTUAL_ALLOC,
         Sys::VirtualFree => &VIRTUAL_FREE,
         Sys::ExitProcess => &EXIT_PROCESS,
@@ -934,6 +944,7 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
         Runtime::Syscall(Sys::GetConsoleMode),
     ),
     ("rt_sys_write_console", Runtime::Syscall(Sys::WriteConsole)),
+    ("rt_sys_read_console", Runtime::Syscall(Sys::ReadConsole)),
     ("rt_sys_virtual_alloc", Runtime::Syscall(Sys::VirtualAlloc)),
     ("rt_sys_virtual_free", Runtime::Syscall(Sys::VirtualFree)),
     ("rt_sys_exit_process", Runtime::Syscall(Sys::ExitProcess)),
@@ -1426,6 +1437,15 @@ mod tests {
                 "rt_sys_write_console",
                 K,
                 "WriteConsoleW",
+                4,
+                false,
+                Zero,
+                &[0],
+            ),
+            (
+                "rt_sys_read_console",
+                K,
+                "ReadConsoleW",
                 4,
                 false,
                 Zero,
