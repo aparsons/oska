@@ -22,7 +22,7 @@ Two known gaps, kept on purpose. `confinement.yml` runs `cargo test -p oska-run`
 - A design for parallel tasks, `Sched` channels or `select` is modelled here, and TLC passes it, before an implementation ticket opens (ADR 0019).
 - Keep each model's state space small enough that TLC finishes in a minute or two in CI. State the bound and how long TLC takes in the `.cfg`.
 - A model broken on purpose, which shows that a property can fail, has `\* expect-violation: NAME` as the first line of its `.cfg`, with `NAME` one identifier, and lists invariant `NAME` (under `INVARIANT` or `INVARIANTS`). No other line may mention `expect-violation`. The step passes it only when TLC finds `NAME` violated, so a model that can no longer fail fails the step. It is a model that must pass with one flag set to `FALSE`, at the same bound: add it to `broken_models` in `scripts/formal/test.sh`, which checks that.
-- `ScopedTasks` (the scheduler and scopes) and `SharedCounts` (reference counts across tasks) model parallel tasks. Their design notes, bounds and findings are in `formal/tla/parallel-tasks.md`. A change to either keeps that file true.
+- `ScopedTasks` (the scheduler and scopes), `SharedCounts` (reference counts across tasks) and `Channels` (`Sched` channels and `select`) model parallel tasks. Their design notes, bounds and findings are in `formal/tla/parallel-tasks.md`. A change to any of them keeps that file true.
 
 ## Running the step
 

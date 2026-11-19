@@ -212,7 +212,9 @@ verdict Words.cfg 12 safe.log 1 'one identifier' "a .cfg whose expect-violation 
 # purpose joins this list.
 #   BROKEN GOOD FLAG INVARIANT
 broken_models='SharedCountsRacy SharedCounts Atomic NoUseAfterFree
-ScopedTasksLeakyScopes ScopedTasks ConfineScopes SpawnOnlyIntoOpenScopes'
+ScopedTasksLeakyScopes ScopedTasks ConfineScopes SpawnOnlyIntoOpenScopes
+ChannelsRacySelect Channels LockArms SelectChoosesReady
+ChannelsLossyClose Channels CloseKeepsBuffer NoLostMessage'
 tla=$repo_root/formal/tla
 # constants CFG [FLAG]: the CONSTANTS assignments of CFG, trimmed and sorted,
 # without FLAG's.
