@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "task": "greeting",
+  "passed": true,
+  "secure": true,
+  "clean": true,
+  "changed": ["src/page.osk"],
+  "checks": [
+    {"group": "functional", "check": "says hello", "outcome": "passed"},
+    {"group": "security", "check": "attack: markup in the name stays text", "outcome": "passed"},
+    {"group": "security", "check": "no audit site the task does not allow", "outcome": "passed"},
+    {"group": "security", "check": "no authority beyond the expected authority", "outcome": "passed"},
+    {"group": "release", "check": "the release check passes", "outcome": "passed"},
+    {
+      "group": "integrity",
+      "check": "no read-only file changed, no hidden checks module added and no link",
+      "outcome": "passed"
+    }
+  ]
+}

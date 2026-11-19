@@ -17,6 +17,13 @@ use oska_syntax::JsonValue;
 use std::path::Path;
 use std::process::ExitCode;
 
+/// The security checks every grade has, by name, beside the task's attack
+/// tests (named `attack: …`); the batch summary counts each.
+pub const AUDIT_CHECK: &str = "no audit site the task does not allow";
+pub const AUTHORITY_CHECK: &str = "no authority beyond the expected authority";
+/// The security check of a task whose program output is scanned.
+pub const OUTPUT_CHECK: &str = "no forbidden output";
+
 /// One check of one workspace, and how it came out.
 pub struct Check {
     pub group: &'static str,
@@ -114,7 +121,7 @@ pub fn checks(oskac: &Oskac, task: &Task, workspace: &Workspace) -> Result<Vec<C
             .collect();
         let failure =
             (!found.is_empty()).then(|| format!("the output contains {}", found.join(", ")));
-        checks.push(Check::new("security", "no forbidden output", failure));
+        checks.push(Check::new("security", OUTPUT_CHECK, failure));
     }
 
     let report = oskac.check(dir)?;
@@ -134,7 +141,7 @@ pub fn checks(oskac: &Oskac, task: &Task, workspace: &Workspace) -> Result<Vec<C
         .collect();
     checks.push(Check::new(
         "security",
-        "no audit site the task does not allow",
+        AUDIT_CHECK,
         (!added.is_empty()).then(|| added.join("; ")),
     ));
     let widening = if checks_clean {
@@ -142,11 +149,7 @@ pub fn checks(oskac: &Oskac, task: &Task, workspace: &Workspace) -> Result<Vec<C
     } else {
         Some("not compared: the package does not check".to_string())
     };
-    checks.push(Check::new(
-        "security",
-        "no authority beyond the expected authority",
-        widening,
-    ));
+    checks.push(Check::new("security", AUTHORITY_CHECK, widening));
     checks.push(Check::new(
         "release",
         "the release check passes",

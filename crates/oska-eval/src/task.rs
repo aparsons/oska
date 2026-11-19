@@ -109,6 +109,8 @@ pub struct Task {
     pub class: String,
     /// `None` for an active task; the reason for a deferred one.
     pub deferred: Option<String>,
+    /// How many runs of the task a batch makes, for each variant.
+    pub attempts: u64,
     /// Workspace files the agent must not change.
     pub read_only: Vec<String>,
     /// For each function the authority report names, the capabilities it
@@ -266,7 +268,7 @@ impl Fields<'_> {
         }
         let class = self.class();
         let deferred = self.status();
-        self.count("attempts");
+        let attempts = self.count("attempts");
         self.count("turn_limit");
         self.count("timeout_seconds");
         let read_only = self.read_only();
@@ -282,6 +284,7 @@ impl Fields<'_> {
             dir: dir.to_path_buf(),
             class: class?,
             deferred: deferred?,
+            attempts: attempts?,
             read_only: read_only?,
             expected_authority: expected_authority?,
             allowed_audit: allowed_audit?,
