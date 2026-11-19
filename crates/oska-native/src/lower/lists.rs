@@ -249,14 +249,16 @@ impl Body<'_, '_> {
         Ok(self.constant(0))
     }
 
-    /// `for x in list { body }`: each item in order, borrowed from the
-    /// list, which the loop holds (so a `push` in the body changes a copy).
+    /// `for x in list { body }`, the statement at `span`: each item in
+    /// order, borrowed from the list, which the loop holds (so a `push` in
+    /// the body changes a copy).
     pub(super) fn for_list(
         &mut self,
         binds: bool,
         ty: &Type,
         iter: &Expr,
         body: &Expr,
+        span: Span,
     ) -> Result<(), Diagnostic> {
         let list = self.expr(iter)?;
         let held = self.owned.remove(&list);
@@ -294,6 +296,7 @@ impl Body<'_, '_> {
             self.slots.pop();
         }
         self.push(Inst::Label(next));
+        self.step(span)?;
         let one = self.constant(1);
         self.push(Inst::Binary {
             op: BinOp::Add,
@@ -343,6 +346,7 @@ impl Body<'_, '_> {
         ty: &Type,
         text_expr: &Expr,
         body: &Expr,
+        span: Span,
     ) -> Result<(), Diagnostic> {
         let text = self.expr(text_expr)?;
         let loops = self.loops.len();
@@ -395,6 +399,7 @@ impl Body<'_, '_> {
             self.slots.pop();
         }
         self.push(Inst::Label(next));
+        self.step(span)?;
         let size = self.load(item, layout::TEXT_LEN);
         self.push(Inst::Binary {
             op: BinOp::Add,
@@ -450,8 +455,9 @@ impl Body<'_, '_> {
         item_ty: &Type,
         a: Temp,
         b: Temp,
+        span: Span,
     ) -> Result<Temp, Diagnostic> {
-        let instance = Instance::ListEq(self.source, item_ty.clone());
+        let instance = Instance::ListEq(self.source, item_ty.clone(), self.step_site(span));
         let id = self
             .lowering
             .request(instance, self.origin.unwrap_or(NOWHERE));
@@ -460,8 +466,13 @@ impl Body<'_, '_> {
 
     /// The body of [`Instance::ListEq`] for items of `item_ty`: whether
     /// its two parameters, lists, have the same length and equal items,
-    /// compared in order by `Eq`, as the interpreter's `List.eq` does.
-    pub(super) fn list_eq_function(&mut self, item_ty: &Type) -> Result<(), Diagnostic> {
+    /// compared in order by `Eq`, as the interpreter's `List.eq` does,
+    /// each at `span`.
+    pub(super) fn list_eq_function(
+        &mut self,
+        item_ty: &Type,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         let (a, b) = (self.temp(), self.temp());
         let (yes, no) = (self.label(), self.label());
         self.push(Inst::Branch {
@@ -490,7 +501,7 @@ impl Body<'_, '_> {
         });
         let x = self.item(a, at);
         let y = self.item(b, at);
-        let equal = self.equal(item_ty, x, y, NOWHERE)?;
+        let equal = self.equal(item_ty, x, y, span)?;
         self.push(Inst::JumpIfZero {
             cond: equal,
             target: no,

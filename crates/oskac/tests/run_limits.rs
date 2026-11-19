@@ -320,6 +320,7 @@ mod both_backends {
     use super::differential::{assert_same, Case};
     use super::{attack_every_write, attack_huge_secret, BOTH_STREAMS, ENDLESS, EVERY_WRITE};
     use super::{program, HELLO, HUGE_SECRET};
+    use crate::common::run_limits::{cache_entries, cache_files, oskac_cached};
 
     #[test]
     fn attack_no_byte_past_the_limit_reaches_either_stream_natively() {
@@ -349,58 +350,32 @@ mod both_backends {
         let dir = program("same_executable", HELLO);
         let cache = dir.join("cache");
         let with_cache = |args: &[&str]| {
-            let output = std::process::Command::new(env!("CARGO_BIN_EXE_oskac"))
-                .args(args)
-                .current_dir(&*dir)
-                .env("OSKA_CACHE_DIR", &cache)
-                .env_remove("OSKA_CACHE")
-                .output()
-                .expect("oskac should run");
+            let output = oskac_cached(&dir, &cache, args);
             assert!(output.status.success(), "{args:?}: {output:?}");
         };
         with_cache(&["build", "main.osk", "-o", "built"]);
         let built = std::fs::read(dir.join("built")).expect("the built executable");
-        let entries = || -> Vec<Vec<u8>> {
-            let mut found = Vec::new();
-            let mut stack = vec![cache.clone()];
-            while let Some(at) = stack.pop() {
-                for entry in std::fs::read_dir(&at).expect("a cache folder") {
-                    let path = entry.expect("an entry").path();
-                    if path.is_dir() {
-                        stack.push(path);
-                    } else {
-                        found.push(std::fs::read(&path).expect("an entry's bytes"));
-                    }
-                }
-            }
-            found
+        let holding_built = || {
+            cache_files(&cache)
+                .iter()
+                .filter(|e| e.ends_with(&built))
+                .count()
         };
-        let holding_built = |all: &[Vec<u8>]| all.iter().filter(|e| e.ends_with(&built)).count();
-        let before = entries();
-        assert_eq!(
-            holding_built(&before),
-            1,
-            "`oskac build` keeps its executable"
-        );
+        assert_eq!(holding_built(), 1, "`oskac build` keeps its executable");
         with_cache(&["run", "main.osk"]);
-        let after_run = entries();
+        let after_run = cache_entries(&dir, &cache);
         assert_eq!(
-            holding_built(&after_run),
+            holding_built(),
             2,
             "`oskac run` kept an executable byte-identical to `oskac build`'s"
         );
         with_cache(&["run", "--max-output=64", "main.osk"]);
-        let after_limited = entries();
         assert_eq!(
-            after_limited.len(),
-            after_run.len() + 1,
+            cache_entries(&dir, &cache),
+            after_run + 1,
             "a limited run is kept apart"
         );
-        assert_eq!(
-            holding_built(&after_limited),
-            2,
-            "and is another executable"
-        );
+        assert_eq!(holding_built(), 2, "and is another executable");
     }
 
     /// Writes through a closure, which a function takes as a `cap fn`,

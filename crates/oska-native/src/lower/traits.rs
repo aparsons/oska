@@ -190,10 +190,10 @@ impl Body<'_, '_> {
             }
             Type::Named { name, args } if name == builtins::LIST => {
                 let item = args.first().cloned().unwrap_or(Type::Unit);
-                self.list_equal(&item, a, b)
+                self.list_equal(&item, a, b, span)
             }
             Type::Named { name, .. } if name == builtins::OPTION || name == builtins::RESULT => {
-                let equal = Instance::Equal(self.source, ty.clone());
+                let equal = Instance::Equal(self.source, ty.clone(), self.step_site(span));
                 let id = self.lowering.request(equal, self.origin.unwrap_or(span));
                 self.call_id(id, vec![a, b], span)
             }

@@ -40,6 +40,12 @@
 //! so a thunk of one is [`Body::deferred`]: each panic in it returns the
 //! status `error[P....]: message`, which the caller reports at the call.
 //! A `requires` status has that form as well.
+//!
+//! Under `--max-steps`, a call of a function value is a step, taken at
+//! the call before its depth is counted, as the interpreter's `enter`
+//! takes it, unless the value's kind has [`layout::FN_NO_STEP`]: a thunk
+//! of an intrinsic, or a closure of `std.rt`, whose calls the interpreter
+//! does not count.
 
 use std::sync::Arc;
 
@@ -107,7 +113,8 @@ impl Body<'_, '_> {
         } else {
             self.free_id()
         };
-        let object = self.function_object(code_id, drop_id, true, &values)?;
+        let no_step = self.source == Source::Runtime;
+        let object = self.function_object(code_id, drop_id, true, no_step, &values)?;
         self.own(object, &expr.ty);
         Ok(object)
     }
@@ -150,7 +157,7 @@ impl Body<'_, '_> {
             .lowering
             .request(thunk, self.origin.unwrap_or(expr.span));
         let drop = self.free_id();
-        let object = self.function_object(code, drop, false, &[])?;
+        let object = self.function_object(code, drop, false, intrinsic, &[])?;
         self.own(object, &ty);
         Ok(object)
     }
@@ -167,12 +174,14 @@ impl Body<'_, '_> {
     }
 
     /// A new function value object running `code`, freed by `drop`, a
-    /// closure or not, that takes over the references of `captured`.
+    /// closure or not, whose call is a step unless `no_step` (under
+    /// `--max-steps`), that takes over the references of `captured`.
     fn function_object(
         &mut self,
         code: FnId,
         drop: FnId,
         closure: bool,
+        no_step: bool,
         captured: &[Temp],
     ) -> Result<Temp, Diagnostic> {
         let size = i64::from(layout::FN_CAPTURES) + 8 * captured.len() as i64;
@@ -181,7 +190,11 @@ impl Body<'_, '_> {
         self.store(object, layout::FN_CODE, code);
         let drop = self.function_address(drop);
         self.store(object, layout::FN_DROP, drop);
-        let kind = self.constant(i64::from(closure));
+        let mut kind = i64::from(closure);
+        if no_step && self.lowering.limits.max_steps.is_some() {
+            kind |= layout::FN_NO_STEP;
+        }
+        let kind = self.constant(kind);
         self.store(object, layout::FN_KIND, kind);
         for (index, &value) in captured.iter().enumerate() {
             self.store(object, layout::FN_CAPTURES + 8 * index as u32, value);
@@ -236,6 +249,7 @@ impl Body<'_, '_> {
             let what = format!("a call with more than {} arguments", ir::MAX_ARGS - 1);
             return Err(self.refuse(span, &what));
         }
+        self.step_into(function, span)?;
         let exhausted = self.panic_static(panics::CALL_DEPTH_EXCEEDED, panics::TOO_DEEP, span)?;
         self.push(Inst::Enter { exhausted });
         let target = self.load(function, layout::FN_CODE);
@@ -258,6 +272,28 @@ impl Body<'_, '_> {
             target: broken,
         });
         Ok(dst)
+    }
+
+    /// Under `--max-steps`, the step of a call of the function value
+    /// `function` at `span`, unless its kind says its call is no step.
+    fn step_into(&mut self, function: Temp, span: Span) -> Result<(), Diagnostic> {
+        if self.step_limit().is_none() {
+            return Ok(());
+        }
+        let kind = self.load(function, layout::FN_KIND);
+        let bit = self.constant(layout::FN_NO_STEP);
+        let no_step = self.binary_op(ir::BinOp::And, kind, bit);
+        let taken = self.label();
+        let zero = self.constant(0);
+        self.push(Inst::Branch {
+            cond: Cond::Ne,
+            lhs: no_step,
+            rhs: zero,
+            target: taken,
+        });
+        self.step(span)?;
+        self.push(Inst::Label(taken));
+        Ok(())
     }
 
     /// Release the function value `value` whose count was 1: free it

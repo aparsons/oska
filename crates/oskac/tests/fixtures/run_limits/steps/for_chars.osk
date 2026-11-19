@@ -1,0 +1,18 @@
+// Steps: 3. `for` over `.chars()` goes back once for each character
+// whose body ends without `break`; `chars` itself runs in the runtime.
+//
+// - `for c in "abcd".chars()`: `a`, `b` (by `continue`) and `c` go
+//   back, and `d` breaks: 3.
+fn main(io: Stdout) {
+    var seen = ""
+    for c in "abcd".chars() {
+        if c == "d" {
+            break
+        }
+        if c == "b" {
+            continue
+        }
+        seen = "{seen}{c}"
+    }
+    let _ = io.println(seen)
+}
