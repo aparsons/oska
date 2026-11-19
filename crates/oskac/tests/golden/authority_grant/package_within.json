@@ -1,0 +1,26 @@
+exit: 0
+--- stdout
+{
+  "diagnostics": [],
+  "functions": [
+    {"name":"pkg.main.main","authority":["Stdout"],"via":[{"param":"io","capabilities":["Stdout"]}],"pure":false}
+  ],
+  "audit": [],
+  "attenuations": [],
+  "authority_diff": {
+    "grant": "<grant>",
+    "grant_oskac": null,
+    "widened": [],
+    "narrowed": [],
+    "became_impure": [],
+    "added": [],
+    "removed": [],
+    "new_audit_sites": [],
+    "removed_audit_sites": [],
+    "new_attenuations": [],
+    "removed_attenuations": [],
+    "fails": false
+  },
+  "verdict": "ok"
+}
+--- stderr

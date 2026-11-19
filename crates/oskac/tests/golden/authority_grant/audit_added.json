@@ -1,0 +1,31 @@
+exit: 3
+--- stdout
+{
+  "diagnostics": [],
+  "functions": [
+    {"name":"shout","authority":[],"via":[],"pure":true}
+  ],
+  "audit": [
+    {"function":"shout","kind":"assume_trusted","path":"crates/oskac/tests/fixtures/authority_diff/audit_added/after.osk","span":{"start":169,"end":190}}
+  ],
+  "attenuations": [],
+  "authority_diff": {
+    "grant": "<grant>",
+    "grant_oskac": "<version>",
+    "widened": [],
+    "narrowed": [],
+    "became_impure": [],
+    "added": [],
+    "removed": [],
+    "new_audit_sites": [
+      {"function":"shout","kind":"assume_trusted","count":1}
+    ],
+    "removed_audit_sites": [],
+    "new_attenuations": [],
+    "removed_attenuations": [],
+    "fails": true
+  },
+  "verdict": "widened"
+}
+--- stderr
+error: authority goes past the grant <grant>: a function gained authority or became impure, an audit site was added, or the program reaches a new kind; a grant is set by whoever runs the code, and oskac never updates it

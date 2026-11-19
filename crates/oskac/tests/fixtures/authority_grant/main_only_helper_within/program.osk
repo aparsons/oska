@@ -1,0 +1,10 @@
+// The grant lists only `main`, with `Stdout`. The snippet adds a helper
+// that `main` passes its `Stdout` to: within the grant, so it runs.
+
+fn greet(io: Stdout, name: String) -> Result<(), IoError> {
+    io.println("hello, {name}")
+}
+
+fn main(io: Stdout) -> Result<(), IoError> {
+    greet(io, "grant")
+}

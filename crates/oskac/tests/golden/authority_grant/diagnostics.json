@@ -1,0 +1,14 @@
+exit: 1
+--- stdout
+{
+  "diagnostics": [
+    {"code":"E0221","message":"unknown name `missing`","path":"crates/oskac/tests/fixtures/authority_grant/diagnostics/program.osk","span":{"start":170,"end":177},"line":5,"column":16,"end_line":5,"end_column":23,"severity":"error","url":"https://oskalang.dev/codes/E0221","related":[],"suggestions":[]}
+  ],
+  "functions": [
+    {"name":"main","authority":["Stdout"],"via":[{"param":"io","capabilities":["Stdout"]}],"pure":false}
+  ],
+  "audit": [],
+  "attenuations": [],
+  "verdict": "diagnostics"
+}
+--- stderr
