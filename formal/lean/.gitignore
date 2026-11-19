@@ -1,0 +1,4 @@
+# Lake's build output, and the manifest it writes for a project with no
+# dependencies. Commit the manifest once the project has a dependency.
+/.lake/
+/lake-manifest.json

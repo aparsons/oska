@@ -1,0 +1,8 @@
+# The Lean model of Oska Core (ADR 0018). scripts/formal/run.sh builds it;
+# docs/agents/formal.md says how to keep it in step with the checker and the
+# interpreter. No dependencies, so no lake-manifest.json is committed.
+name = "oska_formal"
+defaultTargets = ["OskaFormal"]
+
+[[lean_lib]]
+name = "OskaFormal"
