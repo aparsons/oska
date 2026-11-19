@@ -601,6 +601,24 @@ if step "check step registry tests" --fast-when 'scripts/check-steps/*' --fast-w
   bash scripts/check-steps/test.sh
 fi
 
+if step "formal" --fast-when 'formal/*' --fast-when 'scripts/formal/*'; then
+  # Builds the Lean proofs of Oska Core and runs TLC on every TLA+ model
+  # (ADRs 0018, 0019; docs/agents/formal.md). An unfinished proof (`sorry`)
+  # fails. A missing Lean or TLC skips here, but fails in CI, where the test
+  # job installs the pinned ones (run.sh exits 1 there, not 3).
+  rc=0
+  scripts/formal/run.sh || rc=$?
+  if [ "$rc" -eq 3 ]; then
+    skip_step "Lean or TLC not installed; skipped (CI runs it; scripts/formal/install.sh installs them)"
+  elif [ "$rc" -ne 0 ]; then
+    exit "$rc"
+  fi
+fi
+
+if step "formal step tests" --no-slot --fast-when 'scripts/formal/*'; then
+  bash scripts/formal/test.sh
+fi
+
 if step "workflow validation" --no-slot --fast-when '.github/workflows/*' --fast-when 'scripts/actionlint/*'; then
   # GitHub makes no jobs and no checks for a workflow it cannot parse, so a
   # broken file looks like a green PR (#329). CI must never skip this.
