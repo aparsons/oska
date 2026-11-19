@@ -4,7 +4,8 @@
 # transcript and leaves a recorded final workspace behind, as a real run
 # would, so every step after the agent sees real files.
 #
-#   claude --version         prints a version
+#   claude --version         prints $STUB_VERSION (default 9.9.9) as
+#                            Claude Code does
 #   claude -p ... <prompt    appends its arguments, working directory and
 #                            prompt to $STUB_LOG; sleeps $STUB_SLEEP seconds
 #                            if set; copies $STUB_SOLUTION/ (if set) into the
@@ -14,7 +15,7 @@
 set -euo pipefail
 
 if [ "${1:-}" = --version ]; then
-  echo "9.9.9 (Claude Code)"
+  echo "${STUB_VERSION-9.9.9} (Claude Code)"
   exit 0
 fi
 

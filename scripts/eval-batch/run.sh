@@ -158,6 +158,36 @@ if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ]; then
   die "refusing a live batch in CI: only the maintainer runs one, locally"
 fi
 need claude "run the agent"
+# The flags that confine the agent (--restricted, --permission-prompts,
+# --max-budget-usd, --tools) were checked against Claude Code 2.1.328; an
+# older CLI may lack or ignore them, so it is refused.
+agent_version_at_least=2.1.328
+agent_version=$(claude --version | awk 'NR == 1 { print $1 }') ||
+  die "\`claude --version\` failed; the agent CLI must be Claude Code $agent_version_at_least or later"
+case $agent_version in
+  '' | *[!0-9.]* | .* | *. | *..* | *.*.*.*) agent_version_unread=true ;;
+  *.*.*) agent_version_unread=false ;;
+  *) agent_version_unread=true ;;
+esac
+[ "$agent_version_unread" = false ] ||
+  die "could not read the agent CLI's version from \`claude --version\` (got '$agent_version'); it must be at least $agent_version_at_least"
+# older A B: whether the version A (MAJOR.MINOR.PATCH) is older than B,
+# part by part as numbers.
+older() {
+  local a b i
+  IFS=. read -r -a a <<<"$1"
+  IFS=. read -r -a b <<<"$2"
+  for i in 0 1 2; do
+    if ((10#${a[i]} != 10#${b[i]})); then
+      ((10#${a[i]} < 10#${b[i]}))
+      return
+    fi
+  done
+  return 1
+}
+if older "$agent_version" "$agent_version_at_least"; then
+  die "the agent CLI is Claude Code $agent_version, older than $agent_version_at_least, the version whose flags this driver was checked against; update it"
+fi
 need git "record the oskac commit"
 if command -v timeout >/dev/null 2>&1; then
   timeout=timeout
@@ -195,7 +225,6 @@ if [ "$yes" != true ]; then
 fi
 
 # What produced the runs, which the harness cannot see for itself.
-agent_version=$(claude --version | awk 'NR == 1 { print $1 }')
 oskac_version=$("$oskac" --version | awk 'NR == 1 { print $2 }')
 oskac_commit=$(git -C "$repo" rev-parse HEAD)
 if [ -n "$(git -C "$repo" status --porcelain --untracked-files=no -- . ':(exclude)eval/results' ':(exclude)docs/evaluation.md')" ]; then
@@ -299,8 +328,9 @@ while IFS=$'\t' read -r task variant web hook fix attempt turn_limit timeout_sec
     die "$label: oska-eval prepare failed: $(cat "$scratch/prepare.json")"
 
   # The agent's tools: reading and editing in its workspace only, the
-  # oskac subcommands the loop needs (not `run` or `build`: the agent's
-  # program would run with the maintainer's own authority), `oskac fix` and
+  # oskac subcommands the loop needs (not `run` or `build`, nor `test` with
+  # `--integration` anywhere in its arguments: the agent's program would run
+  # on the real OS with the maintainer's own authority), `oskac fix` and
   # the Oska site only in the variants that allow them. --restricted ignores
   # the maintainer's own settings files and confines the file tools to the
   # workspace; dontAsk denies anything not allowed here.
@@ -309,7 +339,8 @@ while IFS=$'\t' read -r task variant web hook fix attempt turn_limit timeout_sec
   allow=("Read(/$workspace/**)" "Edit(/$workspace/**)" Glob Grep
     "Bash(oskac check)" "Bash(oskac check *)" "Bash(oskac test)" "Bash(oskac test *)"
     "Bash(oskac explain *)")
-  deny=("Bash(oskac run *)" "Bash(oskac build *)" WebSearch)
+  deny=("Bash(oskac run *)" "Bash(oskac build *)"
+    "Bash(oskac test --integration*)" "Bash(oskac test *--integration*)" WebSearch)
   if [ "$fix" = true ]; then
     allow+=("Bash(oskac fix)" "Bash(oskac fix *)")
   else

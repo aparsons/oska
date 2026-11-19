@@ -14,6 +14,7 @@ use crate::json::{self, decimal, field, num, pretty, text};
 use crate::record::is_name;
 use crate::task;
 use oska_syntax::JsonValue;
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -243,11 +244,23 @@ fn plan(tasks: &Path, path: &Path) -> Result<(JsonValue, bool), String> {
     let id = batch_id(path)?;
     let config = read(path)?;
     let mut runs = Vec::new();
+    // Each record's name, and the task and variant whose run it records:
+    // task ids and variant names may hold `-`, so two runs could share one.
+    let mut records: HashMap<String, (&str, &str)> = HashMap::new();
     let (mut turns, mut seconds) = (0, 0);
     for task_id in &config.tasks {
         let task = task::load_active(tasks, task_id)?;
         for variant in &config.variants {
             for attempt in 1..=task.attempts {
+                let record = format!("{task_id}-{}-{attempt}.json", variant.name);
+                if let Some((other_task, other_variant)) =
+                    records.insert(record.clone(), (task_id, &variant.name))
+                {
+                    return Err(format!(
+                        "the task `{task_id}` in the variant `{}` and the task `{other_task}` in the variant `{other_variant}` would share the run record `{record}`: rename a task or a variant",
+                        variant.name
+                    ));
+                }
                 turns += task.turn_limit;
                 seconds += task.timeout_seconds;
                 runs.push(JsonValue::Object(vec![
@@ -259,10 +272,7 @@ fn plan(tasks: &Path, path: &Path) -> Result<(JsonValue, bool), String> {
                     field("attempt", num(attempt)),
                     field("turn_limit", num(task.turn_limit)),
                     field("timeout_seconds", num(task.timeout_seconds)),
-                    field(
-                        "record",
-                        text(&format!("{task_id}-{}-{attempt}.json", variant.name)),
-                    ),
+                    field("record", text(&record)),
                 ]));
             }
         }

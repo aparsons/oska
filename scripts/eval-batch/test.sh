@@ -240,7 +240,8 @@ test_a_live_batch_runs_every_step_and_records_each_run() {
   flag_values 2 --allowedTools >allowed
   diff expected allowed || fail "offline: the allowlist is not exactly the scoped list"
   flag_values 2 --disallowedTools >denied
-  printf '%s\n' 'Bash(oskac run *)' 'Bash(oskac build *)' WebSearch 'Bash(oskac fix)' 'Bash(oskac fix *)' WebFetch >expected
+  printf '%s\n' 'Bash(oskac run *)' 'Bash(oskac build *)' 'Bash(oskac test --integration*)' \
+    'Bash(oskac test *--integration*)' WebSearch 'Bash(oskac fix)' 'Bash(oskac fix *)' WebFetch >expected
   diff expected denied || fail "offline: the deny list is wrong"
   # The variant's settings: the published check-on-edit hook, or none.
   [ "$(grep -x -A1 -- --settings args2 | tail -n 1)" = "$offline_run/claude-settings.json" ] || fail "no settings"
@@ -365,6 +366,47 @@ SH
   [ "$status" -eq 1 ] || fail "exit code $status, not 1"
   grep -q 'oska-eval record failed: {"errors": \["boom"\]}' out || fail "no reason: $(cat out)"
   [ -z "$(ls -A results/test-batch/runs)" ] || fail "something was left in runs/: $(ls -A results/test-batch/runs)"
+}
+
+# `oskac test --integration` runs the integration tests on the real OS
+# with the maintainer's own authority, so the agent's allowed
+# `oskac test *` must never reach it: the flag is denied wherever it
+# stands in the arguments, and as `--integration=...`, in every variant.
+test_attack_oskac_test_integration_is_denied_in_every_variant() {
+  setup 1 60 '[{"name": "base", "web": true, "hook": false, "fix": true}, {"name": "offline", "web": false, "hook": true, "fix": false}]'
+  drive --live --yes >out 2>&1 || fail "the batch failed: $(cat out)"
+  [ "$(calls)" = 2 ] || fail "$(calls) agent runs, not 2"
+  local call rule
+  for call in 1 2; do
+    flag_values "$call" --disallowedTools >denied
+    for rule in 'Bash(oskac test --integration*)' 'Bash(oskac test *--integration*)'; do
+      grep -qxF -- "$rule" denied || fail "call $call does not deny $rule: $(cat denied)"
+    done
+  done
+}
+
+# The driver's safety rests on flags (--restricted, --permission-prompts,
+# --max-budget-usd, --tools) checked against Claude Code 2.1.328: an older
+# CLI, or a version that cannot be read, is refused before anything runs.
+test_attack_an_agent_cli_older_than_2_1_328_is_refused() {
+  setup
+  local version status
+  for version in 2.1.327 2.0.999 1.99.999 2.1 x.y.z ''; do
+    status=0
+    STUB_VERSION=$version drive --live --yes >out 2>&1 || status=$?
+    [ "$status" -eq 1 ] || fail "$version: exit code $status, not 1"
+    grep -qE 'older than 2\.1\.328|could not read the agent CLI.s version' out ||
+      fail "$version: no reason: $(cat out)"
+  done
+  [ "$(calls)" = 0 ] || fail "the agent ran"
+  [ ! -e results ] || fail "results were written"
+  # Compared as numbers, part by part: 2.1.1000 is newer than 2.1.328.
+  for version in 2.1.328 2.1.1000 2.10.0; do
+    rm -rf results
+    STUB_VERSION=$version drive --live --yes >out 2>&1 || fail "$version was refused: $(cat out)"
+    [ "$(jq -r .agent.version "results/test-batch/runs/$task-base-1.json")" = "$version" ] ||
+      fail "$version: not recorded"
+  done
 }
 
 # The workspaces must be outside the repo, links resolved: an agent there

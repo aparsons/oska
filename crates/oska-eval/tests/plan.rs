@@ -191,3 +191,51 @@ fn attack_a_config_file_whose_name_is_not_a_batch_id_is_bad_input() {
     let outcome = harness(&["plan", TASKS, path.to_str().expect("UTF-8")]);
     assert_eq!(outcome.code, 2, "{}", outcome.stdout);
 }
+
+/// Each run's record is named `<task>-<variant>-<attempt>.json`, and task
+/// ids and variant names may hold `-`: the task `a-b` in the variant `c`
+/// and the task `a` in the variant `b-c` would share a record, and the
+/// driver would skip the second run as recorded. Such a config is bad
+/// input, naming both runs.
+#[test]
+fn a_config_whose_runs_would_share_a_record_is_bad_input() {
+    let scratch = Scratch::new();
+    let tasks = scratch.path().join("tasks");
+    let greeting = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(TASKS)
+        .join("greeting");
+    for id in ["a", "a-b"] {
+        let dir = tasks.join(id);
+        std::fs::create_dir_all(&dir).expect("should create the task");
+        common::copy_tree(&greeting, &dir);
+        let task = std::fs::read_to_string(dir.join("task.json")).expect("the task");
+        std::fs::write(
+            dir.join("task.json"),
+            task.replace("\"id\": \"greeting\"", &format!("\"id\": \"{id}\"")),
+        )
+        .expect("should write the task");
+    }
+    let path = scratch.path().join("collide.json");
+    std::fs::write(
+        &path,
+        r#"{"schema": 1, "model": "example-model", "tasks": ["a-b", "a"],
+            "variants": [{"name": "c", "web": true, "hook": false, "fix": true},
+                         {"name": "b-c", "web": false, "hook": false, "fix": true}],
+            "budget_usd": 100, "estimate_usd_per_run": 0.5, "cap_usd_per_run": 2,
+            "estimate_tokens_per_run": 50000}"#,
+    )
+    .expect("should write the config");
+    let outcome = harness(&[
+        "plan",
+        tasks.to_str().expect("UTF-8 path"),
+        path.to_str().expect("UTF-8 path"),
+    ]);
+    assert_eq!(outcome.code, 2, "{}", outcome.stdout);
+    assert!(
+        outcome.stdout.contains(
+            "the task `a` in the variant `b-c` and the task `a-b` in the variant `c` would share the run record `a-b-c-1.json`"
+        ),
+        "{}",
+        outcome.stdout
+    );
+}
