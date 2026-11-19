@@ -183,7 +183,7 @@ fn a_device_name_or_a_stream_is_refused_in_every_operation() {
     }
     io.println(done(root.write_only().create_dir(Path.new("aux"))))?
     io.println(listed(root.read_only().list_dir(Path.new("nul"))))?
-    io.println(done(write.restrict_to_file("root/CON").write("text")))?
+    io.println(done(root.write_only().restrict_to_file(Path.new("CON")).write("text")))?
     io.println(listed(root.read_only().restrict_to(Path.new("prn")).list_dir(Path.new("."))))?
     for name in ["console.txt", "com10", "nul_file"] {
         io.println(done(root.write_only().write(Path.new(name), name)))?
@@ -229,10 +229,7 @@ fn a_device_name_or_a_stream_is_refused_in_every_operation() {
     assert_eq!(lines[29], device("nul"));
     assert_eq!(
         lines[30],
-        format!(
-            "REFUSED: cannot restrict to `root/CON`: {}",
-            &device("CON")[9..]
-        )
+        format!("REFUSED: cannot restrict to `CON`: {}", &device("CON")[9..])
     );
     assert!(lines[31].contains(&device("prn")[9..]), "{outcome:#?}");
     assert_eq!(lines[32..35], ["done", "done", "done"]);
