@@ -391,14 +391,15 @@ fn the_pages_upload_keeps_hidden_files_so_security_txt_is_deployed() {
     let at = PAGES_WORKFLOW
         .find("uses: actions/upload-pages-artifact@")
         .expect("pages.yml uploads the site with actions/upload-pages-artifact");
-    let step = &PAGES_WORKFLOW[at..];
-    let version = step["uses: actions/upload-pages-artifact@".len()..]
-        .split(|c: char| c.is_whitespace() || c == '#')
-        .next()
-        .unwrap_or("");
-    assert_eq!(
-        version, "v3",
-        "upload-pages-artifact@{version} may drop hidden files, which would drop \
+    // The action is pinned by commit SHA, with its version in the trailing
+    // comment (`@<sha> # v3.0.1`, #290); the major version is in the comment.
+    let line = PAGES_WORKFLOW[at..].lines().next().unwrap_or("");
+    let version = line
+        .split_once('#')
+        .map_or("", |(_, comment)| comment.trim());
+    assert!(
+        version == "v3" || version.starts_with("v3."),
+        "upload-pages-artifact {version:?} may drop hidden files, which would drop \
          /.well-known/security.txt; use v3, which keeps them, and keep this test \
          in step if a later version offers an option that does"
     );
