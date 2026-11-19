@@ -264,10 +264,23 @@ fn a_changed_oskac_misses() {
     std::fs::copy(env!("CARGO_BIN_EXE_oskac"), &copy).expect("a copy of oskac");
     case.oskac = copy.clone();
     assert!(case.hit(&["check", "main.osk"]).1, "an identical copy hits");
-    // One more byte at the end: still runs, but is another build.
+    // One more byte at the end: still runs, but is another build. It is
+    // a new file, not the copy rewritten: macOS keeps the code signature
+    // of an executable it has run with its file, and kills the process
+    // when a file it has run changes in place.
     let mut bytes = std::fs::read(&copy).expect("the copy");
     bytes.push(0);
-    std::fs::write(&copy, bytes).expect("a changed copy");
+    let changed = case
+        .dir
+        .join(format!("oskac-changed{}", std::env::consts::EXE_SUFFIX));
+    std::fs::write(&changed, bytes).expect("a changed copy");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&changed, std::fs::Permissions::from_mode(0o755))
+            .expect("the changed copy is executable");
+    }
+    case.oskac = changed;
     let (output, hit) = case.hit(&["check", "main.osk"]);
     assert!(output.status.success(), "{}", text(&output.stderr));
     assert!(!hit, "a changed oskac misses");
