@@ -482,7 +482,14 @@ fn the_catalog_docs_hold_no_control_character_but_line_breaks_and_tabs() {
 
 /// The real generator, run on the real docs in a fake filesystem: what it
 /// writes under `_site/`.
-fn built_site() -> BTreeMap<String, String> {
+/// Built once per test program: a build takes seconds.
+fn built_site() -> &'static BTreeMap<String, String> {
+    static SITE: std::sync::OnceLock<BTreeMap<String, String>> = std::sync::OnceLock::new();
+    SITE.get_or_init(build_site)
+}
+
+/// [`built_site`], built anew.
+fn build_site() -> BTreeMap<String, String> {
     fn add(host: FakeHost, root: &Path, relative: &str) -> FakeHost {
         let path = root.join(relative);
         if path.is_dir() {
