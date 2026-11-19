@@ -1,7 +1,8 @@
-//! Programs in Oska Core (ADR 0018, #425, #426, #430, #428): functions,
-//! `let`, `if`, `Int` and `Bool`, structs, enums and `match`, capabilities
-//! with their effects, and closures, each a whole literal, so that `lean_reference.rs`
-//! also runs them on the Lean reference and compares. A program without
+//! Programs in Oska Core (ADR 0018, #425, #426, #430, #428, #427):
+//! functions, `let`, `if`, `Int` and `Bool`, structs, enums and `match`,
+//! capabilities with their effects, closures, and `Result` with `?`, each
+//! a whole literal, so that `lean_reference.rs` also runs them on the Lean
+//! reference and compares. A program without
 //! capabilities shows what it computed by how it ends: `check` panics
 //! with `P0004` on a false condition, and a run that returns cleanly
 //! passed every check. One with capabilities prints, and writes files.
@@ -937,4 +938,190 @@ fn a_closure_body_that_divides_by_zero_panics_with_p0004() {
         "P0004",
         "x / (x - n)",
     );
+}
+
+#[test]
+fn results_are_built_matched_and_passed_on_by_the_question_mark() {
+    assert_runs(
+        "fn fail() {
+    let zero = 0
+    let _ = 1 / zero
+}
+
+fn check(ok: Bool) {
+    if !ok {
+        fail()
+    }
+}
+
+struct AppError { code: Int }
+
+impl From<Int> for AppError {
+    fn from(code: Int) -> AppError { AppError(code: code + 100) }
+}
+
+fn half(n: Int) -> Result<Int, Int> {
+    if n % 2 == 0 { Ok(n / 2) } else { Err(n) }
+}
+
+fn quarter(n: Int) -> Result<Int, Int> {
+    let h = half(n)?
+    half(h)
+}
+
+fn app_quarter(n: Int) -> Result<Int, AppError> {
+    let h = half(n)?
+    Ok(half(h)?)
+}
+
+fn code(r: Result<Int, AppError>) -> Int {
+    match r {
+        Ok(n) => n
+        Err(AppError(code: c)) => 0 - c
+    }
+}
+
+fn failed_with(r: Result<Int, Int>, e: Int) -> Bool {
+    match r {
+        Ok(_) => false
+        Err(n) => n == e
+    }
+}
+
+fn main() {
+    check(quarter(12).unwrap_or(0) == 3)
+    check(quarter(6).unwrap_or(0) == 0)
+    check(quarter(7).is_ok() == false)
+    check(failed_with(quarter(6), 3))
+    check(failed_with(quarter(7), 7))
+    check(code(app_quarter(12)) == 3)
+    check(code(app_quarter(6)) == -103)
+    check(code(app_quarter(5)) == -105)
+    let nested: Result<Result<Int, Int>, Bool> = Ok(half(3))
+    check(match nested {
+        Ok(Ok(_)) => false
+        Ok(Err(n)) => n == 3
+        Err(_) => false
+    })
+}
+",
+        &[],
+        "",
+    );
+}
+
+#[test]
+fn a_question_mark_in_a_closure_returns_from_the_closure() {
+    assert_runs(
+        "fn fail() {
+    let zero = 0
+    let _ = 1 / zero
+}
+
+fn check(ok: Bool) {
+    if !ok {
+        fail()
+    }
+}
+
+fn half(n: Int) -> Result<Int, Int> {
+    if n % 2 == 0 { Ok(n / 2) } else { Err(n) }
+}
+
+fn apply(f: fn(Int) -> Result<Int, Int>, n: Int) -> Int {
+    let r = f(n)
+    match r {
+        Ok(v) => v
+        Err(e) => 1000 + e
+    }
+}
+
+fn main() {
+    let offset = 1
+    let eighth = |n: Int| {
+        let q = half(half(n)?)?
+        let r = half(q)?
+        Ok(r + offset)
+    }
+    check(apply(eighth, 16) == 3)
+    check(apply(eighth, 12) == 1003)
+    check(apply(eighth, 3) == 1003)
+    check(eighth(8).unwrap_or(0) == 2)
+}
+",
+        &[],
+        "",
+    );
+}
+
+#[test]
+fn a_question_mark_converts_the_error_before_it_returns() {
+    assert_panics(
+        "struct Wrapped { code: Int }
+
+impl From<Int> for Wrapped {
+    fn from(code: Int) -> Wrapped {
+        let zero = 0
+        Wrapped(code: code / zero)
+    }
+}
+
+fn half(n: Int) -> Result<Int, Int> {
+    if n % 2 == 0 { Ok(n / 2) } else { Err(n) }
+}
+
+fn quarter(n: Int) -> Result<Int, Wrapped> {
+    let h = half(n)?
+    Ok(half(h)?)
+}
+
+fn main() {
+    let fine = quarter(4)
+    let _ = quarter(6)
+}
+",
+        "P0004",
+        "code / zero",
+    );
+}
+
+#[test]
+fn an_io_error_is_passed_on_by_the_question_mark() {
+    let mut host = FakeHost::new();
+    let outcome = run_differential(
+        &mut host,
+        r#"fn copy(dir: DirWrite, read: DirRead, from: Untrusted<String>, to: Untrusted<String>) -> Result<(), IoError> {
+    let text = read.read_to_string(Path.from(from))?
+    dir.write(Path.from(to), text)?
+    dir.write(Path.from("done.txt"), "done")
+}
+
+fn report(io: Stdout, r: Result<(), IoError>) {
+    match r {
+        Ok(_) => {
+            let _ = io.println("copied")
+        }
+        Err(_) => {
+            let _ = io.println("refused")
+        }
+    }
+}
+
+fn main(io: Stdout, fs: Fs) {
+    let root = fs.restrict_to(".")
+    let dir = root.write_only()
+    let read = root.read_only()
+    let _ = dir.write(Path.from("a.txt"), "hello")
+    report(io, copy(dir, read, "a.txt", "b.txt"))
+    report(io, copy(dir, read, "missing.txt", "c.txt"))
+    report(io, copy(dir.restrict_to(Path.from("box")), read, "a.txt", "d.txt"))
+}
+"#,
+        &[],
+    );
+    assert_eq!(outcome.exit_code, 0, "{outcome:#?}");
+    assert_eq!(outcome.stdout, "copied\nrefused\nrefused\n");
+    assert_eq!(host.file("b.txt"), Some("hello"));
+    assert_eq!(host.file("done.txt"), Some("done"));
+    assert_eq!(host.file("c.txt"), None);
 }

@@ -221,12 +221,17 @@ theorem capsWithin_matchPat {A : List CapKind} :
     simp only [matchPat, ite_true] at hm
     exact ih bs (by simpa [Expr.capsWithin] using hv) hm
   · intro bs _ hm; simp_all [matchPat]
-  · rename_i t x h1 h2 h3 h4 h5 h6
+  · rename_i ih
+    intro bs hv hm
+    simp only [matchPat, ite_true] at hm
+    exact ih bs (by simpa [Expr.capsWithin] using hv) hm
+  · intro bs _ hm; simp_all [matchPat]
+  · rename_i t x h1 h2 h3 h4 h5 h6 h7
     intro bs _ hm
     cases t <;> cases x <;> first
       | (exfalso; first
           | exact h1 rfl | exact h2 _ rfl | exact h3 rfl rfl | exact h4 _ _ rfl rfl
-          | exact h5 _ _ rfl rfl | exact h6 _ _ _ _ _ _ rfl rfl)
+          | exact h5 _ _ rfl rfl | exact h6 _ _ _ _ _ _ rfl rfl | exact h7 _ _ _ _ _ _ rfl rfl)
       | simp_all [matchPat]
   · rename_i bs _ hm; simp [matchPats] at hm; subst hm; rfl
   · rename_i vs bs₁ bss hps hp ih₁ ih₂ bs hv hm
@@ -288,6 +293,7 @@ def OutcomeWithin (A : List CapKind) : Outcome → Prop
   | .next e => e.capsWithin A = true
   | .panic _ => True
   | .perform req k => req.kind ∈ A ∧ ∀ r, r.capsWithin A = true → (k r).capsWithin A = true
+  | .ret v => v.capsWithin A = true
 
 theorem OutcomeWithin.map {A : List CapKind} {o : Outcome} {f : Expr → Expr}
     (h : OutcomeWithin A o) (hf : ∀ x, x.capsWithin A = true → (f x).capsWithin A = true) :
@@ -296,6 +302,11 @@ theorem OutcomeWithin.map {A : List CapKind} {o : Outcome} {f : Expr → Expr}
   | next e => exact hf e h
   | panic _ => trivial
   | perform req k => exact ⟨h.1, fun r hr => hf _ (h.2 r hr)⟩
+  | ret v => exact h
+
+theorem OutcomeWithin.inFrame {A : List CapKind} {o : Outcome} (h : OutcomeWithin A o) :
+    OutcomeWithin A o.inFrame := by
+  cases o <;> simp_all [OutcomeWithin, Outcome.inFrame, Outcome.map, Expr.capsWithin]
 
 /-- No body of the program holds a capability value. -/
 def ProgramCapFree (P : Program) : Prop :=
@@ -336,8 +347,8 @@ theorem step_within {P : Program} (hP : ProgramCapFree P) {A : List CapKind} (hA
       simp [Expr.capsWithin, capsWithinList_append, Expr.capsWithinList, h, he.1, he.2.2]
   | call hf _ hi =>
     simp only [Expr.capsWithin] at he
-    exact capsWithin_instantiate he
-      (capsWithin_mono (fun _ h => by simp at h) _ (hP _ _ hf)) hi
+    have h := capsWithin_instantiate he (capsWithin_mono (fun _ h => by simp at h) _ (hP _ _ hf)) hi
+    simpa [OutcomeWithin, Expr.capsWithin] using h
   | ifCond _ ih =>
     simp only [Expr.capsWithin, Bool.and_eq_true] at he
     exact (ih he.1.1).map fun _ h => by simp [Expr.capsWithin, h, he.1.2, he.2]
@@ -406,7 +417,18 @@ theorem step_within {P : Program} (hP : ProgramCapFree P) {A : List CapKind} (hA
       simp [Expr.capsWithin, capsWithinList_append, Expr.capsWithinList, h, he.1, he.2.1, he.2.2.2]
   | callValue _ hi =>
     simp only [Expr.capsWithin, Bool.and_eq_true] at he
-    exact capsWithin_instantiate he.2 he.1 hi
+    have h := capsWithin_instantiate he.2 he.1 hi
+    simpa [OutcomeWithin, Expr.capsWithin] using h
+  | resultArg _ ih | tryArg _ ih =>
+    simp only [Expr.capsWithin] at he
+    exact (ih he).map fun _ h => by simpa [Expr.capsWithin] using h
+  | tryOk _ | tryErr _ | frameValue _ =>
+    simpa [OutcomeWithin, Expr.capsWithin] using he
+  | tryConvert _ =>
+    simpa [OutcomeWithin, Expr.capsWithin, Expr.capsWithinList] using he
+  | frame _ ih =>
+    simp only [Expr.capsWithin] at he
+    exact (ih he).inFrame
 
 /-- An answer the semantics allows an effect on a capability of a kind in
 `A` holds only capabilities of kinds in `A`. -/
@@ -443,6 +465,12 @@ theorem steps_within {P : Program} (hP : ProgramCapFree P) {A : List CapKind} (h
 
 /-! ## Authority safety -/
 
+/-- A field type is neither a capability nor a `cap fn`. -/
+theorem fieldCapFree_caps : ∀ {t : Ty}, t.fieldCapFree = true → t.isCapFn = false ∧ t.capKind? = none
+  | .cap _, h | .fn _ _ _, h => by simp [Ty.fieldCapFree] at h
+  | .int, _ | .bool, _ | .unit, _ | .string, _ | .path, _ | .ioError, _ | .result _ _, _
+  | .named _, _ => ⟨rfl, rfl⟩
+
 /-- A value of a type that is neither a capability nor a `cap fn` holds
 no capability, in a program whose structs and enums hold neither; a
 capability value has its type's kind. A `cap fn` holds what it captured,
@@ -465,14 +493,25 @@ theorem valueTyped_caps {P : Program} (hT : P.typesCapFree = true) :
   | nil => intro A _; rfl
   | @cons v vs t ts _ _ ih₁ ih₂ =>
     intro A hts
-    have ht := hts t List.mem_cons_self
-    simp only [Ty.fieldCapFree, Bool.and_eq_true, Option.isNone_iff_eq_none,
-      Bool.not_eq_true'] at ht
-    have hcf : t.isCapFn = false := by cases t <;> simp_all [Ty.isFn, Ty.isCapFn]
+    obtain ⟨hcf, hk⟩ := fieldCapFree_caps (hts t List.mem_cons_self)
     simp only [Expr.capsWithinList, Bool.and_eq_true]
     refine ⟨capsWithin_mono (fun _ h => ?_) _ (ih₁ hcf),
       ih₂ A fun t' h' => hts t' (List.mem_cons_of_mem _ h')⟩
-    simp [ht.1] at h
+    simp [hk] at h
+  | ok hf _ ih =>
+    intro _
+    simp only [Ty.fieldCapFree, Bool.and_eq_true] at hf
+    obtain ⟨hcf, hk⟩ := fieldCapFree_caps hf.1
+    have h := ih hcf
+    rw [hk] at h
+    simpa [Expr.capsWithin, Ty.capKind?] using h
+  | err hf _ ih =>
+    intro _
+    simp only [Ty.fieldCapFree, Bool.and_eq_true] at hf
+    obtain ⟨hcf, hk⟩ := fieldCapFree_caps hf.2
+    have h := ih hcf
+    rw [hk] at h
+    simpa [Expr.capsWithin, Ty.capKind?] using h
   | _ => intro _; simp [Expr.capsWithin]
 
 /-- The arguments `vs` a call passes for the parameters `ps` whose type is
@@ -556,8 +595,8 @@ mutual
   /-- The kinds of the capability values an expression holds. -/
   def Expr.caps : Expr → List CapKind
     | .cap k _ => [k]
-    | .unit | .int _ | .bool _ | .local_ _ | .str _ | .path _ | .okUnit | .okStr _ | .err => []
-    | .neg e | .not e | .field e _ => Expr.caps e
+    | .unit | .int _ | .bool _ | .local_ _ | .str _ | .path _ | .ioError => []
+    | .neg e | .not e | .field e _ | .result _ e | .try_ e _ | .frame e => Expr.caps e
     | .binary _ l r => Expr.caps l ++ Expr.caps r
     | .call _ args | .builtin _ args => Expr.capsList args
     | .construct _ _ fs => Expr.capsList fs
@@ -662,7 +701,8 @@ theorem steps_receiver {P : Program} {e e' : Expr} {tr : List Request} (hs : Ste
     | tail _ hreq => exact ih req hreq
 
 /-- **Authority safety of the Lean reference.** However a run of the
-Lean reference on its fake host ends, in a value, a panic or stuck, it
+Lean reference on its fake host ends, in a value, a panic, stuck or a
+return, it
 took steps of the semantics whose every effect has a kind in `f`'s
 authority, or below a kind in `A` that the function values among the
 arguments hold. -/
@@ -676,14 +716,19 @@ theorem authority_safety_reference {P : Program} (hP : ProgramSourceTyped P) {na
       ∃ tr e', Steps P (.call name vs) tr e' ∧ Step P e' (.panic k) ∧
         ∀ eff ∈ tr, eff.kind ∈ callAuthority f A) ∧
     (∀ {e'}, run P fuel h (.call name vs) = (.stuck e', h') →
-      ∃ tr, Steps P (.call name vs) tr e' ∧ ∀ eff ∈ tr, eff.kind ∈ callAuthority f A) := by
-  refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_⟩
+      ∃ tr, Steps P (.call name vs) tr e' ∧ ∀ eff ∈ tr, eff.kind ∈ callAuthority f A) ∧
+    (∀ {v}, run P fuel h (.call name vs) = (.returned v, h') →
+      ∃ tr e', Steps P (.call name vs) tr e' ∧ Step P e' (.ret v) ∧
+        ∀ eff ∈ tr, eff.kind ∈ callAuthority f A) := by
+  refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩
   · obtain ⟨tr, hs, _⟩ := run_sound.1 hr
     exact ⟨tr, hs, authority_safety hP hf hargs hfn hs⟩
   · obtain ⟨tr, e', hs, hp⟩ := run_sound.2.1 hr
     exact ⟨tr, e', hs, hp, authority_safety hP hf hargs hfn hs⟩
-  · obtain ⟨tr, hs, _⟩ := run_sound.2.2 hr
+  · obtain ⟨tr, hs, _⟩ := run_sound.2.2.1 hr
     exact ⟨tr, hs, authority_safety hP hf hargs hfn hs⟩
+  · obtain ⟨tr, e', hs, hp⟩ := run_sound.2.2.2 hr
+    exact ⟨tr, e', hs, hp, authority_safety hP hf hargs hfn hs⟩
 
 /-! ## Attenuation never widens -/
 
@@ -751,7 +796,7 @@ def quiet : Function where
   name := "quiet"
   params := [{ type := .cap .fsWrite, binds := true }]
   ret := .unit
-  body := .block [.let_ false (.result .unit) (.builtin .write
+  body := .block [.let_ false (.result .unit .ioError) (.builtin .write
     [.builtin (.restrictTo .fsWrite) [.local_ 0, .str "."], .builtin .pathFrom [.str "a.txt"],
       .str "x"])] none
 
@@ -790,7 +835,7 @@ def peek : Function where
   name := "peek"
   params := [{ type := .cap .fsRead, binds := true }]
   ret := .unit
-  body := .block [.let_ false (.result .string) (.builtin .readToString
+  body := .block [.let_ false (.result .string .ioError) (.builtin .readToString
     [.builtin (.restrictTo .fsRead) [.local_ 0, .str "."], .builtin .pathFrom [.str "a.txt"]])] none
 
 def peekProgram : Program := { types := [], functions := [peek] }
@@ -830,7 +875,7 @@ def greet : Function where
   name := "greet"
   params := [{ type := .cap .stdout, binds := true }]
   ret := .unit
-  body := .block [.let_ false (.result .unit) (.builtin .println [.local_ 0, .str "hi"])] none
+  body := .block [.let_ false (.result .unit .ioError) (.builtin .println [.local_ 0, .str "hi"])] none
 
 def greetProgram : Program := { types := [], functions := [greet] }
 
@@ -840,9 +885,10 @@ theorem greet_prints :
     ∃ tr e', Steps greetProgram (.call "greet" [.cap .stdout .anywhere]) tr e' ∧
       ∃ eff ∈ tr, eff.kind = .stdout :=
   ⟨_, _, Steps.next (Step.call rfl (AllValues.cons (IsValue.cap _ _) AllValues.nil) rfl)
-    (Steps.perform (Step.blockLetArg (Step.builtinEffect rfl
-        (AllValues.cons (IsValue.str _) AllValues.nil)))
-      (r := .okUnit) (Or.inl rfl) (Steps.refl _)),
+    (Steps.perform (req := ⟨.println, .stdout, .anywhere, [.str "hi"]⟩) (r := .okUnit)
+      (Step.frame (Step.blockLetArg (Step.builtinEffect rfl
+        (AllValues.cons (IsValue.str _) AllValues.nil))))
+      (Or.inl rfl) (Steps.refl _)),
     _, List.mem_cons_self, rfl⟩
 
 /-- And the Lean reference, on its fake host, prints `hi`. -/
@@ -855,29 +901,29 @@ example : (run greetProgram 10 {} (.call "greet" [.cap .stdout .anywhere])).2.st
 it has no capability of its own and calls the `cap fn` it is given. -/
 def apply : Function where
   name := "apply"
-  params := [{ type := .fn true [] (.result .unit), binds := true }]
-  ret := .result .unit
+  params := [{ type := .fn true [] (.result .unit .ioError), binds := true }]
+  ret := .result .unit .ioError
   body := .callValue (.local_ 0) []
 
 /-- `fn applyPure(f: fn() -> Result<(), IoError>) -> Result<(), IoError> { f() }`:
 the same with a plain `fn`. -/
 def applyPure : Function where
   name := "applyPure"
-  params := [{ type := .fn false [] (.result .unit), binds := true }]
-  ret := .result .unit
+  params := [{ type := .fn false [] (.result .unit .ioError), binds := true }]
+  ret := .result .unit .ioError
   body := .callValue (.local_ 0) []
 
 /-- `|| io.println("hi")`, written where one slot, `io`, is in scope, at
 a `cap fn` type when `cf`. -/
 def printsHi (cf : Bool) : Expr :=
-  .closure [] 1 [0] cf (.result .unit) (.builtin .println [.local_ 0, .str "hi"])
+  .closure [] 1 [0] cf (.result .unit .ioError) (.builtin .println [.local_ 0, .str "hi"])
 
 /-- `fn main(io: Stdout) { let _ = apply(|| io.println("hi")) }`. -/
 def closureMain : Function where
   name := "main"
   params := [{ type := .cap .stdout, binds := true }]
   ret := .unit
-  body := .block [.let_ false (.result .unit) (.call "apply" [printsHi true])] none
+  body := .block [.let_ false (.result .unit .ioError) (.call "apply" [printsHi true])] none
 
 def closureProgram : Program := { types := [], functions := [apply, applyPure, closureMain] }
 
@@ -908,12 +954,13 @@ theorem capturing_closure_prints :
     ∃ tr e', Steps closureProgram (.call "main" [.cap .stdout .anywhere]) tr e' ∧
       ∃ eff ∈ tr, eff.kind = .stdout :=
   ⟨_, _, Steps.next (Step.call rfl (AllValues.cons (IsValue.cap _ _) AllValues.nil) rfl)
-    (Steps.next (Step.blockLetArg (Step.call rfl
-        (AllValues.cons (IsValue.closure _ _ _ _ _) AllValues.nil) rfl))
-      (Steps.next (Step.blockLetArg (Step.callValue AllValues.nil rfl))
-        (Steps.perform (Step.blockLetArg (Step.builtinEffect (op := .println) rfl
-            (AllValues.cons (IsValue.str _) AllValues.nil)))
-          (r := .okUnit) (Or.inl rfl) (Steps.refl _)))),
+    (Steps.next (Step.frame (Step.blockLetArg (Step.call rfl
+        (AllValues.cons (IsValue.closure _ _ _ _ _) AllValues.nil) rfl)))
+      (Steps.next (Step.frame (Step.blockLetArg (Step.frame (Step.callValue AllValues.nil rfl))))
+        (Steps.perform (req := ⟨.println, .stdout, .anywhere, [.str "hi"]⟩) (r := .okUnit)
+          (Step.frame (Step.blockLetArg (Step.frame (Step.frame
+            (Step.builtinEffect (op := .println) rfl (AllValues.cons (IsValue.str _) AllValues.nil))))))
+          (Or.inl rfl) (Steps.refl _)))),
     _, List.mem_cons_self, rfl⟩
 
 /-- And the Lean reference, on its fake host, prints `hi`. -/
@@ -923,8 +970,8 @@ example :
 
 /-- The closure that captures `Stdout` has no plain `fn` type: `main`
 could not pass it to `applyPure`. -/
-theorem capturing_closure_not_plain (P : Program) (t : Ty) :
-    ¬ Typed P [.cap .stdout] (.expr (printsHi false) t) := by
+theorem capturing_closure_not_plain (P : Program) (R t : Ty) :
+    ¬ Typed P R [.cap .stdout] (.expr (printsHi false) t) := by
   intro h
   cases h with
   | closure _ hpure _ _ =>
@@ -934,7 +981,7 @@ theorem capturing_closure_not_plain (P : Program) (t : Ty) :
 /-- Nor does the closure a run makes of it, with `Stdout` in its body,
 have a plain `fn` type as a value. -/
 theorem captured_stdout_not_plain_value (P : Program) (t : Ty) :
-    ¬ ValueTyped P (.one (.closure [] 0 [] false (.result .unit)
+    ¬ ValueTyped P (.one (.closure [] 0 [] false (.result .unit .ioError)
       (.builtin .println [.cap .stdout .anywhere, .str "hi"])) t) := by
   intro h
   cases h with
@@ -944,7 +991,7 @@ theorem captured_stdout_not_plain_value (P : Program) (t : Ty) :
 type `applyPure` is given, any run of it performs no effect at all, on
 any answers the semantics allows. -/
 theorem applyPure_performs_nothing {g : Expr} {tr : List Request} {e' : Expr}
-    (hg : ValueTyped closureProgram (.one g (.fn false [] (.result .unit))))
+    (hg : ValueTyped closureProgram (.one g (.fn false [] (.result .unit .ioError))))
     (hrun : Steps closureProgram (.call "applyPure" [g]) tr e') : tr = [] := by
   have := authority_safety_noCapFn closureProgram_sourceTyped (f := applyPure) rfl
     (by simp [applyPure, Ty.isCapFn]) (ValueTyped.cons hg ValueTyped.nil) hrun
