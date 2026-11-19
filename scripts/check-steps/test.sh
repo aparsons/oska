@@ -584,6 +584,11 @@ else
   bad "--fast that cannot tell what changed runs the full check, and says why" "exit $status, out: $out"
 fi
 no_stamp "--fast falling back to the full check"
+if printf '%s\n' "$log" | grep -qxF parallel-test/run.sh; then
+  ok "the cargo test step runs the test programs through scripts/parallel-test"
+else
+  bad "the cargo test step runs the test programs through scripts/parallel-test" "log: $log"
+fi
 if [ "$(printf '%s\n' "$log" | grep -cx pass-stamp/stamp.sh)" -eq 0 ]; then
   ok "--fast falling back never calls stamp.sh"
 else

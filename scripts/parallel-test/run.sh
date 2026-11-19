@@ -10,15 +10,19 @@
 #    the programs from cargo's JSON messages.
 # 2. Runs them OSKA_TEST_JOBS at a time (default: the number of processors),
 #    each in its package's directory with CARGO and CARGO_MANIFEST_DIR set,
-#    as cargo runs them. The doc tests (`cargo test ARGS --doc`) run as one
-#    more job.
+#    as cargo runs them. The doc tests run as one more job, for the chosen
+#    packages that have a library (`cargo test --doc` refuses a package
+#    without one): ARGS without the package choice, then `-p` per package.
 # 3. Prints one line as each program ends, then every program's output in
 #    job order, so outputs do not mix. Every program runs even when one
 #    fails; the end names each failure, and the exit status is 1 if any
 #    failed.
 #
 # A test program must not depend on another one running before or after it:
-# cargo gives no order either.
+# cargo gives no order either. ARGS must not hold `--`: arguments for the
+# test programs themselves are not supported. A build that yields no test
+# program fails the run, so a change in cargo's messages cannot pass as an
+# empty run.
 
 set -euo pipefail
 
@@ -30,6 +34,12 @@ case $jobs in
     exit 2
     ;;
 esac
+for arg in "$@"; do
+  if [ "$arg" = -- ]; then
+    echo "parallel-test: arguments for the test programs (after --) are not supported" >&2
+    exit 2
+  fi
+done
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/oska-parallel-test.XXXXXX")
 trap 'rm -rf "$work"' EXIT
@@ -39,8 +49,11 @@ if ! "$cargo" test "$@" --no-run --message-format=json-render-diagnostics >"$wor
   echo "parallel-test: cargo test --no-run failed" >&2
   exit 1
 fi
-python3 -I - "$work/build.json" >"$work/programs" <<'PY'
+# "PROG<TAB>DIR<TAB>PROGRAM" per test program, then "DOC<TAB>PACKAGE" per
+# chosen package with a library.
+python3 -I - "$work/build.json" >"$work/found" <<'PY'
 import json, os, sys
+programs, docs = [], []
 for line in open(sys.argv[1], encoding="utf-8"):
     line = line.strip()
     if not line.startswith("{"):
@@ -49,32 +62,76 @@ for line in open(sys.argv[1], encoding="utf-8"):
     if msg.get("reason") != "compiler-artifact" or not msg.get("profile", {}).get("test"):
         continue
     exe = msg.get("executable")
-    if exe:
-        print(os.path.dirname(msg["manifest_path"]) + "\t" + exe)
+    if not exe:
+        continue
+    programs.append(os.path.dirname(msg["manifest_path"]) + "\t" + exe)
+    if set(msg.get("target", {}).get("kind", [])) & {"lib", "rlib", "dylib", "proc-macro"}:
+        # path+file:///a/b/name#1.0.0, or path+file:///a/b/dir#name@1.0.0
+        url, _, fragment = msg["package_id"].partition("#")
+        name = fragment.split("@")[0] if "@" in fragment else url.rstrip("/").rsplit("/", 1)[-1]
+        if name not in docs:
+            docs.append(name)
+for p in programs:
+    print("PROG\t" + p)
+for d in docs:
+    print("DOC\t" + d)
 PY
+grep '^PROG' "$work/found" | cut -f2- >"$work/programs" || true
 count=$(wc -l <"$work/programs" | tr -d ' ')
-echo "parallel-test: $count test programs and the doc tests, $jobs at a time"
+if [ "$count" -eq 0 ]; then
+  echo "parallel-test: cargo built no test program; nothing was tested" >&2
+  exit 1
+fi
+
+# The doc tests' arguments, NUL-separated: ARGS without the package choice,
+# --doc, then -p for each package with a library.
+: >"$work/doc-args"
+doc_job=
+if grep -q '^DOC' "$work/found"; then
+  doc_job=1
+  {
+    skip=
+    for arg in "$@"; do
+      if [ -n "$skip" ]; then
+        skip=
+        continue
+      fi
+      case $arg in
+        -p | --package) skip=1 ;;
+        --package=* | --all | --workspace) ;;
+        *) printf '%s\0' "$arg" ;;
+      esac
+    done
+    printf '%s\0' --doc
+    grep '^DOC' "$work/found" | cut -f2 | while IFS= read -r package; do
+      printf '%s\0' -p "$package"
+    done
+  } >"$work/doc-args"
+  echo "parallel-test: $count test programs and the doc tests, $jobs at a time"
+else
+  echo "parallel-test: $count test programs (no library, so no doc tests), $jobs at a time"
+fi
 
 # 2. One job per line: "N<TAB>DIR<TAB>PROGRAM", or "N<TAB>DOC" for the doc
 # tests. N numbers the output file, so outputs print in job order.
 {
   cat "$work/programs"
-  echo DOC
+  if [ -n "$doc_job" ]; then echo DOC; fi
 } | awk '{ printf "%04d\t%s\n", NR, $0 }' >"$work/jobs"
 mkdir "$work/out"
 
-# Runs one job with its whole output in a file, then prints one short line.
-# A failure is recorded as a file in $PARALLEL_WORK/failed.
+# run_one N: runs job N with its whole output in a file, then prints one
+# short line. A failure is recorded as a file in $PARALLEL_WORK/failed.N.
+# xargs passes only N: BSD xargs limits a replaced argument to 255 bytes.
 run_one() {
-  local line=$1 n rest dir exe name out status=0
-  n=${line%%$'\t'*}
-  rest=${line#*$'\t'}
+  local n=$1 rest dir exe name out status=0 doc_args=()
+  rest=$(grep "^$n"$'\t' "$PARALLEL_WORK/jobs" | cut -f2-)
   out="$PARALLEL_WORK/out/$n"
   if [ "$rest" = DOC ]; then
     name="doc tests"
+    while IFS= read -r -d '' a; do doc_args+=("$a"); done <"$PARALLEL_WORK/doc-args"
     printf '     Running %s\n' "$name" >"$out"
-    # shellcheck disable=SC2153 # set by the job's bash -c below
-    "$PARALLEL_CARGO" test ${PARALLEL_ARGS[@]+"${PARALLEL_ARGS[@]}"} --doc >>"$out" 2>&1 || status=$?
+    "$PARALLEL_CARGO" test "${doc_args[@]}" >>"$out" 2>&1 || status=$?
   else
     dir=${rest%%$'\t'*}
     exe=${rest#*$'\t'}
@@ -94,18 +151,10 @@ run_one() {
 export PARALLEL_WORK=$work
 PARALLEL_CARGO=$(command -v "$cargo")
 export PARALLEL_CARGO
-# Bash cannot export an array; each job reads the arguments from a file.
-: >"$work/args"
-if [ "$#" -gt 0 ]; then printf '%s\0' "$@" >"$work/args"; fi
 export -f run_one
 
 # shellcheck disable=SC2016 # the script runs in the job's own bash
-tr '\n' '\0' <"$work/jobs" | xargs -0 -P "$jobs" -I{} bash -c '
-  set -uo pipefail
-  PARALLEL_ARGS=()
-  while IFS= read -r -d "" a; do PARALLEL_ARGS+=("$a"); done <"$PARALLEL_WORK/args"
-  run_one "$1"
-' _ {}
+cut -f1 "$work/jobs" | xargs -P "$jobs" -I{} bash -c 'run_one "$1"' _ {}
 
 # Every program's output, in job order.
 echo
@@ -120,4 +169,8 @@ if [ -n "$failed" ]; then
   exit 1
 fi
 echo
-echo "parallel-test: all $count test programs and the doc tests passed"
+if [ -n "$doc_job" ]; then
+  echo "parallel-test: all $count test programs and the doc tests passed"
+else
+  echo "parallel-test: all $count test programs passed"
+fi
