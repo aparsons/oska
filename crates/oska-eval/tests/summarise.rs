@@ -224,3 +224,65 @@ fn a_task_with_fewer_runs_than_attempts_is_incomplete_and_has_no_rate_at_k() {
     assert_eq!(number(all, "func@3"), "null");
     assert_eq!(number(all, "func_sec@3"), "null");
 }
+
+/// The batch config the driver copied into the batch directory reaches the
+/// summary as it is, so the published results say what the batch was
+/// asked to run and what it was allowed to spend.
+#[test]
+fn the_summary_carries_the_batch_config() {
+    let summary = parse_json(&summarise("2026-11-20-hook")).expect("the summary is JSON");
+    let config = summary.get("config").expect("a config");
+    assert_eq!(
+        config.get("budget_usd"),
+        Some(&JsonValue::Number("20.0000".to_string()))
+    );
+    let variants = config
+        .get("variants")
+        .and_then(JsonValue::as_array)
+        .expect("variants");
+    assert_eq!(variants.len(), 2);
+    assert_eq!(
+        variants[1].get("name").and_then(JsonValue::as_str),
+        Some("hook")
+    );
+}
+
+/// A batch with no config, or whose runs are of a task or variant its
+/// config does not list, is bad input: the summary would misstate what ran.
+#[test]
+fn a_batch_without_its_config_or_with_runs_the_config_does_not_list_is_bad_input() {
+    let fixture = std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/results/2026-11-20-hook"
+    ));
+    let cases = [
+        (None, "batch.json"),
+        (
+            Some(("\"name\": \"hook\"", "\"name\": \"other\"")),
+            "the run of `files` in `hook` is of a variant the batch config does not list",
+        ),
+        (
+            Some(("\"files\"", "\"other\"")),
+            "the run of `files` in `base` is of a task the batch config does not list",
+        ),
+    ];
+    for (edit, message) in cases {
+        let scratch = Scratch::new();
+        copy_tree(fixture, scratch.path());
+        let config = scratch.path().join("batch.json");
+        match edit {
+            None => std::fs::remove_file(&config).expect("should remove"),
+            Some((from, to)) => {
+                let text = std::fs::read_to_string(&config).expect("a config");
+                std::fs::write(&config, text.replace(from, to)).expect("should write");
+            }
+        }
+        let outcome = harness(&["summarise", scratch.str()]);
+        assert_eq!(outcome.code, 2, "{}", outcome.stdout);
+        assert!(
+            outcome.stdout.contains(message),
+            "expected `{message}` in {}",
+            outcome.stdout
+        );
+    }
+}

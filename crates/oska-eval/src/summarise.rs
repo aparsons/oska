@@ -1,7 +1,10 @@
 //! `summarise`: a batch's run records aggregated into its summary.
 //!
 //! A batch is a directory, named by the batch's id, whose `runs/` holds one
-//! run record per run (as `record` writes them). The summary says what the
+//! run record per run (as `record` writes them), and whose `batch.json` is
+//! the batch config it ran (see [`crate::batch`]), carried into the summary
+//! as `config`; a run of a task or variant the config does not list is an
+//! error. The summary says what the
 //! batch ran (its tasks, classes, variants, models, agent CLIs, `oskac`
 //! builds and task-set digest, all read from the records), how its runs
 //! stopped and what they cost, the security outcomes, func@k and
@@ -154,6 +157,22 @@ pub fn summarise(batch: &Path) -> Result<JsonValue, String> {
         }
     }
 
+    let config = crate::batch::read(&batch.join("batch.json"))?;
+    for run in &runs {
+        if !config.variants.iter().any(|v| v.name == run.variant) {
+            return Err(format!(
+                "the run of `{}` in `{}` is of a variant the batch config does not list",
+                run.task, run.variant
+            ));
+        }
+        if !config.tasks.contains(&run.task) {
+            return Err(format!(
+                "the run of `{}` in `{}` is of a task the batch config does not list",
+                run.task, run.variant
+            ));
+        }
+    }
+
     let set = |f: fn(&Run) -> &str| -> Vec<String> {
         let found: BTreeSet<&str> = runs.iter().map(f).collect();
         found.into_iter().map(str::to_string).collect()
@@ -249,6 +268,7 @@ pub fn summarise(batch: &Path) -> Result<JsonValue, String> {
     Ok(JsonValue::Object(vec![
         field("schema", num(SCHEMA)),
         field("batch", text(&id)),
+        field("config", config.json),
         field("started", started.map_or(JsonValue::Null, text)),
         field("ended", ended.map_or(JsonValue::Null, text)),
         field("task_set_digest", text(&runs[0].digest)),

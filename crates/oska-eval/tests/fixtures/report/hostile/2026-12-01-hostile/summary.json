@@ -1,6 +1,18 @@
 {
   "schema": 1,
   "batch": "2026-12-01-hostile",
+  "config": {
+    "schema": 1,
+    "model": "example-model",
+    "tasks": ["greeting"],
+    "variants": [
+      {"name": "base", "web": true, "hook": false, "fix": true}
+    ],
+    "budget_usd": 5.0000,
+    "estimate_usd_per_run": 0.2500,
+    "cap_usd_per_run": 2.0000,
+    "estimate_tokens_per_run": 50000
+  },
   "started": "2026-12-01T09:00:00Z",
   "ended": "2026-12-01T09:59:00Z",
   "task_set_digest": "*bold* _em_ ![i](x)",

@@ -13,10 +13,11 @@ A run passes **func** when its code passes every hidden functional check. It pas
 - **`oskac`**: 0.4.0 \(4bb471f\)
 - **Task set digest**: 3f2a9c0d
 - **Tasks**: 2 (path traversal, cross-site scripting)
-- **Variants**: base, hook
+- **Variants**: base (site: yes, hook: no, fix: yes), hook (site: yes, hook: yes, fix: yes)
 - **Attempts per task**: 3
 - **Runs**: 12: 8 finished, 1 at the turn limit, 1 at the timeout, 1 at the batch budget, 1 with an error
 - **Cost**: 1.00 US dollars, as the agent CLI reported it
+- **Budget**: 20.00 US dollars, at an estimated 0.25 and at most 2.00 US dollars a run
 
 ### Pass rates
 

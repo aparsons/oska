@@ -125,6 +125,10 @@ pub struct Task {
     pub deferred: Option<String>,
     /// How many runs of the task a batch makes, for each variant.
     pub attempts: u64,
+    /// Each run's limit on the agent's turns.
+    pub turn_limit: u64,
+    /// Each run's limit on wall-clock time, in seconds.
+    pub timeout_seconds: u64,
     /// Workspace files the agent must not change.
     pub read_only: Vec<String>,
     /// For each function the authority report names, the capabilities it
@@ -283,8 +287,8 @@ impl Fields<'_> {
         let class = self.class();
         let deferred = self.status();
         let attempts = self.count("attempts");
-        self.count("turn_limit");
-        self.count("timeout_seconds");
+        let turn_limit = self.count("turn_limit");
+        let timeout_seconds = self.count("timeout_seconds");
         let read_only = self.read_only();
         let expected_authority = self.expected_authority();
         let allowed_audit = self.allowed_audit();
@@ -299,6 +303,8 @@ impl Fields<'_> {
             class: class?,
             deferred: deferred?,
             attempts: attempts?,
+            turn_limit: turn_limit?,
+            timeout_seconds: timeout_seconds?,
             read_only: read_only?,
             expected_authority: expected_authority?,
             allowed_audit: allowed_audit?,

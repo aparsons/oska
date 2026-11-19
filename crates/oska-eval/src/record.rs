@@ -184,10 +184,10 @@ fn record(tasks: &str, id: &str, flags: &[&str], home: Option<&str>) -> Result<J
         .and_then(|g| g.get("changed"))
         .and_then(JsonValue::as_array)
         .is_some_and(|changed| {
-            changed
-                .iter()
-                .filter_map(JsonValue::as_str)
-                .any(|path| task.read_only.iter().any(|r| r == path))
+            changed.iter().filter_map(JsonValue::as_str).any(|path| {
+                task.read_only.iter().any(|r| r == path)
+                    || crate::prepare::SETUP_FILES.iter().any(|(f, _)| *f == path)
+            })
         });
     let usage = analysis
         .as_ref()

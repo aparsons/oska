@@ -152,14 +152,16 @@ fn files_under(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-/// No fixture, and no committed result, holds a real home path: recorded
-/// transcripts and results are scrubbed before they are committed.
+/// No fixture (the harness's, and the driver's recorded transcripts), and
+/// no committed result, holds a real home path: recorded transcripts and
+/// results are scrubbed before they are committed.
 #[test]
 fn the_fixtures_and_the_committed_results_hold_no_home_path() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
     files_under(&root.join("tests/fixtures"), &mut files);
     files_under(&root.join("../../eval/results"), &mut files);
+    files_under(&root.join("../../scripts/eval-batch/fixtures"), &mut files);
     assert!(files.len() > 20, "the walk should find the fixtures");
     for path in files {
         let Ok(text) = std::fs::read_to_string(&path) else {
