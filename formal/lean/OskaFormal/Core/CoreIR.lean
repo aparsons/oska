@@ -14,8 +14,10 @@ unknown `kind`, operator, type or built-in, a field missing, unknown
 or of the wrong JSON type, an `Int` literal outside `-2^63 ..= 2^63 - 1`,
 two functions or two types of one name, a type named `Int`, `Bool` or
 `()` or of a built-in type (`String`, `Path`, a capability), a field of a
-struct or variant that is a capability or a function, a closure that
-captures a slot at or above its height, two variants of one name in an
+struct or variant that is a capability or a function, a closure whose
+`captures` are not, in strictly ascending order, exactly the slots below
+its height that its body reads (a closure inside it included: what the
+interpreter captures, so the two runs cannot drift), two variants of one name in an
 enum, a call of a function the program does not have or of a built-in,
 with a different number of arguments than it has parameters, and a
 constructor (built or matched) of a struct or variant the program does
@@ -91,16 +93,17 @@ def builtinTypes : List String :=
 
 /-- A type: `Int`, `Bool`, `()`, `String`, `Path`, a capability, the
 `Result` of an effect, one of the struct and enum names `types`, or a
-function type, `{"kind": "Fn", "params": [type...], "ret": type}`. -/
+function type, `{"kind": "Fn", "cap": BOOL, "params": [type...], "ret": type}`. -/
 partial def ty (types : List String) (path : String) (j : Json) : Read Ty := do
   if let .obj _ := j then
-    let _ ← fields path j ["kind", "params", "ret"]
+    let _ ← fields path j ["kind", "cap", "params", "ret"]
     let kind ← str s!"{path}.kind" (← field path j "kind")
     if kind ≠ "Fn" then throw s!"{path}: unknown type kind `{kind}`"
+    let cap ← bool s!"{path}.cap" (← field path j "cap")
     let items ← arr s!"{path}.params" (← field path j "params")
     let ps ← (items.zip (List.range items.length)).mapM fun (p, i) =>
       ty types s!"{path}.params[{i}]" p
-    return .fn ps (← ty types s!"{path}.ret" (← field path j "ret"))
+    return .fn cap ps (← ty types s!"{path}.ret" (← field path j "ret"))
   match ← str path j with
   | "Int" => .ok .int
   | "Bool" => .ok .bool
@@ -292,15 +295,24 @@ mutual
       let arms ← list (at_ "arms") (← arr (at_ "arms") (← field path j "arms")) (arm ctx)
       .ok (.match_ sc arms)
     | "Closure" =>
-      let _ ← fields path j ["kind", "params", "captures", "height", "ret", "body"]
+      let _ ← fields path j ["kind", "params", "captures", "height", "cap", "ret", "body"]
       let types := ctx.types.map TypeDecl.name
       let ps ← list (at_ "params") (← arr (at_ "params") (← field path j "params")) (param types)
       let height ← nat (at_ "height") (← field path j "height")
       let cs ← list (at_ "captures") (← arr (at_ "captures") (← field path j "captures")) nat
       if let some c := cs.find? (· ≥ height) then
         throw s!"{at_ "captures"}: slot {c} is not below the closure's height {height}"
+      if !(cs.zip cs.tail).all (fun (a, b) => a < b) then
+        throw s!"{at_ "captures"}: {cs} is not in strictly ascending order"
+      let cap ← bool (at_ "cap") (← field path j "cap")
       let ret ← ty types (at_ "ret") (← field path j "ret")
-      .ok (.closure ps height cs ret (← sub "body"))
+      let body ← sub "body"
+      let reads := (List.range height).filter (body.reads ·)
+      if let some i := reads.find? (!cs.contains ·) then
+        throw s!"{at_ "captures"}: the body reads slot {i}, which the closure does not capture"
+      if let some c := cs.find? (!reads.contains ·) then
+        throw s!"{at_ "captures"}: slot {c} is captured, but the body does not read it"
+      .ok (.closure ps height cs cap ret body)
     | "CallValue" =>
       let _ ← fields path j ["kind", "callee", "args"]
       let callee ← sub "callee"
@@ -494,14 +506,42 @@ def shapeTypes : String :=
     "{\"kind\": \"Unit\"}")
   "a field is a capability"
 #guard refuses (withMain ("{\"kind\": \"Struct\", \"name\": \"Holder\", \"fields\": [" ++
-    "{\"kind\": \"Fn\", \"params\": [], \"ret\": \"()\"}]}") "{\"kind\": \"Unit\"}")
+    "{\"kind\": \"Fn\", \"cap\": false, \"params\": [], \"ret\": \"()\"}]}") "{\"kind\": \"Unit\"}")
   "a field is a function"
 #guard refuses (withMain "" ("{\"kind\": \"Closure\", \"params\": [], \"captures\": [0], " ++
-    "\"height\": 0, \"ret\": \"()\", \"body\": {\"kind\": \"Unit\"}}"))
+    "\"height\": 0, \"cap\": false, \"ret\": \"()\", \"body\": {\"kind\": \"Unit\"}}"))
   "slot 0 is not below the closure's height 0"
 #guard refuses (withMain "" ("{\"kind\": \"Closure\", \"params\": [], \"captures\": [], " ++
-    "\"height\": 0, \"ret\": {\"kind\": \"Tuple\"}, \"body\": {\"kind\": \"Unit\"}}"))
+    "\"height\": 0, \"cap\": false, \"ret\": {\"kind\": \"Tuple\"}, \"body\": {\"kind\": \"Unit\"}}"))
   "unknown type kind `Tuple`"
+-- `let a = 1; let b = 2` then a closure at height 2 that reads both slots.
+#guard refuses (withMain "" ("{\"kind\": \"Block\", \"stmts\": [], \"value\": " ++
+    "{\"kind\": \"Closure\", \"params\": [], \"captures\": [1, 0], \"height\": 2, " ++
+    "\"cap\": false, \"ret\": \"Int\", \"body\": {\"kind\": \"Binary\", \"op\": \"+\", " ++
+    "\"lhs\": {\"kind\": \"Local\", \"slot\": 0}, \"rhs\": {\"kind\": \"Local\", \"slot\": 1}}}}"))
+  "is not in strictly ascending order"
+#guard refuses (withMain "" ("{\"kind\": \"Closure\", \"params\": [], \"captures\": [0, 0], " ++
+    "\"height\": 2, \"cap\": false, \"ret\": \"Int\", \"body\": {\"kind\": \"Local\", \"slot\": 0}}"))
+  "is not in strictly ascending order"
+#guard refuses (withMain "" ("{\"kind\": \"Closure\", \"params\": [], \"captures\": [0], " ++
+    "\"height\": 2, \"cap\": false, \"ret\": \"Int\", \"body\": {\"kind\": \"Binary\", " ++
+    "\"op\": \"+\", \"lhs\": {\"kind\": \"Local\", \"slot\": 0}, \"rhs\": " ++
+    "{\"kind\": \"Local\", \"slot\": 1}}}"))
+  "the body reads slot 1, which the closure does not capture"
+-- A read inside a closure nested in the body counts; the nested closure's own slot does not.
+#guard refuses (withMain "" ("{\"kind\": \"Closure\", \"params\": [], \"captures\": [], " ++
+    "\"height\": 1, \"cap\": false, \"ret\": {\"kind\": \"Fn\", \"cap\": false, " ++
+    "\"params\": [\"Int\"], \"ret\": \"Int\"}, \"body\": {\"kind\": \"Closure\", " ++
+    "\"params\": [{\"type\": \"Int\", \"binds\": true}], \"captures\": [0], \"height\": 1, " ++
+    "\"cap\": false, \"ret\": \"Int\", \"body\": {\"kind\": \"Binary\", \"op\": \"+\", " ++
+    "\"lhs\": {\"kind\": \"Local\", \"slot\": 0}, \"rhs\": {\"kind\": \"Local\", \"slot\": 1}}}}"))
+  "the body reads slot 0, which the closure does not capture"
+#guard refuses (withMain "" ("{\"kind\": \"Closure\", \"params\": [], \"captures\": [0, 1], " ++
+    "\"height\": 2, \"cap\": false, \"ret\": \"Int\", \"body\": {\"kind\": \"Local\", \"slot\": 1}}"))
+  "slot 0 is captured, but the body does not read it"
+#guard refuses (withMain "" ("{\"kind\": \"Closure\", \"params\": [], \"captures\": [], " ++
+    "\"height\": 0, \"ret\": \"()\", \"body\": {\"kind\": \"Unit\"}}"))
+  "missing field `cap`"
 #guard refuses (withMain "" "{\"kind\": \"Builtin\", \"name\": \"Stdin.read_line\", \"args\": []}")
   "unknown built-in `Stdin.read_line`"
 #guard refuses (withMain "" ("{\"kind\": \"Builtin\", \"name\": \"Path.from\", \"args\": [" ++
@@ -536,9 +576,9 @@ def shapeTypes : String :=
 #guard runsTo
   (withMain "" ("{\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Let\", \"binds\": true, " ++
     "\"type\": \"Int\", \"value\": {\"kind\": \"Int\", \"value\": 7}}, {\"kind\": \"Let\", " ++
-    "\"binds\": true, \"type\": {\"kind\": \"Fn\", \"params\": [\"Int\"], \"ret\": \"Int\"}, " ++
+    "\"binds\": true, \"type\": {\"kind\": \"Fn\", \"cap\": false, \"params\": [\"Int\"], \"ret\": \"Int\"}, " ++
     "\"value\": {\"kind\": \"Closure\", \"params\": [{\"type\": \"Int\", \"binds\": true}], " ++
-    "\"captures\": [0], \"height\": 1, \"ret\": \"Int\", \"body\": {\"kind\": \"Binary\", " ++
+    "\"captures\": [0], \"height\": 1, \"cap\": false, \"ret\": \"Int\", \"body\": {\"kind\": \"Binary\", " ++
     "\"op\": \"/\", \"lhs\": {\"kind\": \"Local\", \"slot\": 1}, \"rhs\": {\"kind\": " ++
     "\"Binary\", \"op\": \"-\", \"lhs\": {\"kind\": \"Local\", \"slot\": 1}, \"rhs\": " ++
     "{\"kind\": \"Local\", \"slot\": 0}}}}}, {\"kind\": \"Let\", \"binds\": false, " ++

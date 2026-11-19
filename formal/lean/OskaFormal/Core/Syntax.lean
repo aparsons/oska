@@ -64,9 +64,10 @@ def CapKind.granted : CapKind → Bool
 runtime effect), `"Path"`, a capability kind, `"Result<(), IoError>"` and
 `"Result<String, IoError>"` (`result unit` and `result string`), a
 struct or enum the program declares, by name, and a function type
-`fn(params) -> ret`, core IR's `{"kind": "Fn", ...}`: a closure's type.
-Core IR does not tell a `fn` from a `cap fn`; what a function value can
-reach is the capabilities it captured (`Authority.lean`). -/
+`fn(params) -> ret`, or `cap fn(params) -> ret` when `cap`, core IR's
+`{"kind": "Fn", ...}`: a closure's type. A plain `fn` captures no
+capability-bearing value (`Typing.lean`); a `cap fn` may, and reaches
+what it captured (`Authority.lean`). -/
 inductive Ty where
   | int
   | bool
@@ -76,7 +77,7 @@ inductive Ty where
   | cap (kind : CapKind)
   | result (ok : Ty)
   | named (name : String)
-  | fn (params : List Ty) (ret : Ty)
+  | fn (cap : Bool) (params : List Ty) (ret : Ty)
   deriving Repr
 
 mutual
@@ -91,7 +92,7 @@ mutual
     | .int, .cap _ => isFalse nofun
     | .int, .result _ => isFalse nofun
     | .int, .named _ => isFalse nofun
-    | .int, .fn _ _ => isFalse nofun
+    | .int, .fn _ _ _ => isFalse nofun
     | .bool, .int => isFalse nofun
     | .bool, .bool => isTrue rfl
     | .bool, .unit => isFalse nofun
@@ -100,7 +101,7 @@ mutual
     | .bool, .cap _ => isFalse nofun
     | .bool, .result _ => isFalse nofun
     | .bool, .named _ => isFalse nofun
-    | .bool, .fn _ _ => isFalse nofun
+    | .bool, .fn _ _ _ => isFalse nofun
     | .unit, .int => isFalse nofun
     | .unit, .bool => isFalse nofun
     | .unit, .unit => isTrue rfl
@@ -109,7 +110,7 @@ mutual
     | .unit, .cap _ => isFalse nofun
     | .unit, .result _ => isFalse nofun
     | .unit, .named _ => isFalse nofun
-    | .unit, .fn _ _ => isFalse nofun
+    | .unit, .fn _ _ _ => isFalse nofun
     | .string, .int => isFalse nofun
     | .string, .bool => isFalse nofun
     | .string, .unit => isFalse nofun
@@ -118,7 +119,7 @@ mutual
     | .string, .cap _ => isFalse nofun
     | .string, .result _ => isFalse nofun
     | .string, .named _ => isFalse nofun
-    | .string, .fn _ _ => isFalse nofun
+    | .string, .fn _ _ _ => isFalse nofun
     | .path, .int => isFalse nofun
     | .path, .bool => isFalse nofun
     | .path, .unit => isFalse nofun
@@ -127,7 +128,7 @@ mutual
     | .path, .cap _ => isFalse nofun
     | .path, .result _ => isFalse nofun
     | .path, .named _ => isFalse nofun
-    | .path, .fn _ _ => isFalse nofun
+    | .path, .fn _ _ _ => isFalse nofun
     | .cap _, .int => isFalse nofun
     | .cap _, .bool => isFalse nofun
     | .cap _, .unit => isFalse nofun
@@ -136,7 +137,7 @@ mutual
     | .cap x, .cap y => if h : x = y then isTrue (h ▸ rfl) else isFalse fun e => by cases e; exact h rfl
     | .cap _, .result _ => isFalse nofun
     | .cap _, .named _ => isFalse nofun
-    | .cap _, .fn _ _ => isFalse nofun
+    | .cap _, .fn _ _ _ => isFalse nofun
     | .result _, .int => isFalse nofun
     | .result _, .bool => isFalse nofun
     | .result _, .unit => isFalse nofun
@@ -148,7 +149,7 @@ mutual
       | isTrue h => isTrue (h ▸ rfl)
       | isFalse h => isFalse fun e => by cases e; exact h rfl
     | .result _, .named _ => isFalse nofun
-    | .result _, .fn _ _ => isFalse nofun
+    | .result _, .fn _ _ _ => isFalse nofun
     | .named _, .int => isFalse nofun
     | .named _, .bool => isFalse nofun
     | .named _, .unit => isFalse nofun
@@ -157,20 +158,22 @@ mutual
     | .named _, .cap _ => isFalse nofun
     | .named _, .result _ => isFalse nofun
     | .named x, .named y => if h : x = y then isTrue (h ▸ rfl) else isFalse fun e => by cases e; exact h rfl
-    | .named _, .fn _ _ => isFalse nofun
-    | .fn _ _, .int => isFalse nofun
-    | .fn _ _, .bool => isFalse nofun
-    | .fn _ _, .unit => isFalse nofun
-    | .fn _ _, .string => isFalse nofun
-    | .fn _ _, .path => isFalse nofun
-    | .fn _ _, .cap _ => isFalse nofun
-    | .fn _ _, .result _ => isFalse nofun
-    | .fn _ _, .named _ => isFalse nofun
-    | .fn ps r, .fn qs u =>
-      match Ty.decEqList ps qs, Ty.decEq r u with
-      | isTrue h₁, isTrue h₂ => isTrue (h₁ ▸ h₂ ▸ rfl)
-      | isFalse h, _ => isFalse fun e => by cases e; exact h rfl
-      | _, isFalse h => isFalse fun e => by cases e; exact h rfl
+    | .named _, .fn _ _ _ => isFalse nofun
+    | .fn _ _ _, .int => isFalse nofun
+    | .fn _ _ _, .bool => isFalse nofun
+    | .fn _ _ _, .unit => isFalse nofun
+    | .fn _ _ _, .string => isFalse nofun
+    | .fn _ _ _, .path => isFalse nofun
+    | .fn _ _ _, .cap _ => isFalse nofun
+    | .fn _ _ _, .result _ => isFalse nofun
+    | .fn _ _ _, .named _ => isFalse nofun
+    | .fn c ps r, .fn d qs u =>
+      if hc : c = d then
+        match Ty.decEqList ps qs, Ty.decEq r u with
+        | isTrue h₁, isTrue h₂ => isTrue (hc ▸ h₁ ▸ h₂ ▸ rfl)
+        | isFalse h, _ => isFalse fun e => by cases e; exact h rfl
+        | _, isFalse h => isFalse fun e => by cases e; exact h rfl
+      else isFalse fun e => by cases e; exact hc rfl
 
   def Ty.decEqList : (a b : List Ty) → Decidable (a = b)
     | [], [] => isTrue rfl
@@ -199,7 +202,13 @@ def Ty.capKind? : Ty → Option CapKind
 
 /-- Whether a type is a function type. -/
 def Ty.isFn : Ty → Bool
-  | .fn _ _ => true
+  | .fn _ _ _ => true
+  | _ => false
+
+/-- Whether a type is a `cap fn` type: a function value that may carry
+authority. -/
+def Ty.isCapFn : Ty → Bool
+  | .fn c _ _ => c
   | _ => false
 
 /-- A built-in call of Oska Core: core IR's `Builtin` names, the checker's
@@ -319,7 +328,8 @@ mutual
   variant.
 
   A `closure` is written where `height` slots are in scope; `captures`
-  lists those its body reads, and `ret` is its result type. A run puts a
+  lists those its body reads, `cap` whether its type is a `cap fn`, and
+  `ret` its result type. A run puts a
   value for each slot below `height` in its body as the slot is bound
   (`Semantics.lean`), so a closure the run reaches has height 0 and its
   body holds the values it captured. `callValue` calls a function value
@@ -345,7 +355,8 @@ mutual
     | field (base : Expr) (index : Nat)
     | match_ (scrutinee : Expr) (arms : List Arm)
     | builtin (op : Builtin) (args : List Expr)
-    | closure (params : List Param) (height : Nat) (captures : List Nat) (ret : Ty) (body : Expr)
+    | closure (params : List Param) (height : Nat) (captures : List Nat) (cap : Bool) (ret : Ty)
+        (body : Expr)
     | callValue (callee : Expr) (args : List Expr)
 
   /-- A statement of Oska Core: core IR's `Let` and `Expr`. -/
@@ -435,8 +446,8 @@ inductive IsValue : Expr → Prop where
   | err : IsValue .err
   | construct {type : String} {variant : Option String} {fields : List Expr} :
       (∀ e ∈ fields, IsValue e) → IsValue (.construct type variant fields)
-  | closure (ps : List Param) (cs : List Nat) (ret : Ty) (body : Expr) :
-      IsValue (.closure ps 0 cs ret body)
+  | closure (ps : List Param) (cs : List Nat) (cap : Bool) (ret : Ty) (body : Expr) :
+      IsValue (.closure ps 0 cs cap ret body)
 
 /-- Every expression of a list is a value. -/
 inductive AllValues : List Expr → Prop where
@@ -482,6 +493,43 @@ mutual
       | some bs, some bss => some (bs ++ bss)
       | _, _ => none
     | _, _ => none
+end
+
+mutual
+  /-- Whether `e` reads slot `i` of the context it is written in. Slots
+  count from the first in scope, so a `.local_ i` anywhere in `e` is that
+  slot, except inside a closure of height `h ≤ i`, where slot `i` is the
+  closure's own (a parameter or a local of its body). What a closure of
+  height `h` captures is the slots below `h` its body reads. -/
+  def Expr.reads (i : Nat) : Expr → Bool
+    | .local_ j => decide (i = j)
+    | .unit | .int _ | .bool _ | .str _ | .path _ | .cap _ _ | .okUnit | .okStr _ | .err => false
+    | .neg e | .not e | .field e _ => Expr.reads i e
+    | .binary _ l r => Expr.reads i l || Expr.reads i r
+    | .call _ args | .builtin _ args => Expr.readsList i args
+    | .construct _ _ fs => Expr.readsList i fs
+    | .if_ c th el => Expr.reads i c || Expr.reads i th || Expr.readsOpt i el
+    | .block ss val => Expr.readsStmts i ss || Expr.readsOpt i val
+    | .match_ sc arms => Expr.reads i sc || Expr.readsArms i arms
+    | .closure _ h _ _ _ body => decide (i < h) && Expr.reads i body
+    | .callValue c args => Expr.reads i c || Expr.readsList i args
+
+  def Expr.readsList (i : Nat) : List Expr → Bool
+    | [] => false
+    | e :: es => Expr.reads i e || Expr.readsList i es
+
+  def Expr.readsOpt (i : Nat) : Option Expr → Bool
+    | none => false
+    | some e => Expr.reads i e
+
+  def Expr.readsStmts (i : Nat) : List Stmt → Bool
+    | [] => false
+    | .let_ _ _ e :: ss => Expr.reads i e || Expr.readsStmts i ss
+    | .expr e :: ss => Expr.reads i e || Expr.readsStmts i ss
+
+  def Expr.readsArms (i : Nat) : List Arm → Bool
+    | [] => false
+    | .mk _ g b :: arms => Expr.readsOpt i g || Expr.reads i b || Expr.readsArms i arms
 end
 
 end OskaFormal.Core

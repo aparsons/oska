@@ -451,6 +451,7 @@ fn spawning_on_a_finished_scope_panics_with_p0005_at_the_call() {
                 },
                 Expr {
                     ty: Type::Fn {
+                        cap: true,
                         params: Vec::new(),
                         ret: Box::new(Type::Unit),
                     },

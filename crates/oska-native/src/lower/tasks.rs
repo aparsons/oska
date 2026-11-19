@@ -48,6 +48,7 @@ fn scope_type() -> Type {
 /// The type of the function value a task of result type `result` runs.
 fn code_type(result: &Type) -> Type {
     Type::Fn {
+        cap: true,
         params: Vec::new(),
         ret: Box::new(result.clone()),
     }

@@ -183,7 +183,7 @@ def covers (P : Program) : Nat → List Row → List Ty → Bool
       | .bool =>
         covers P fuel (specialize (.bool true) 0 rows) ts &&
           covers P fuel (specialize (.bool false) 0 rows) ts
-      | .int | .string | .path | .cap _ | .result _ | .fn _ _ => false
+      | .int | .string | .path | .cap _ | .result _ | .fn _ _ _ => false
       | .named n =>
         match findType P.types n with
         | some (.struct_ _ fs) => covers P fuel (specialize (.ctor none) fs.length rows) (fs ++ ts)
@@ -214,6 +214,66 @@ def exhaustiveArms (P : Program) (arms : List Arm) : Bool :=
   match ps.findSome? Pattern.headType with
   | none => !ps.isEmpty
   | some u => covers P ((Pattern.sizes ps + 1) * (P.maxArity + 2)) (ps.map ([·])) [u]
+
+mutual
+  /-- Whether every capability value in an expression has a kind in `A`.
+  A program as written holds none (core IR has no node for one), so its
+  bodies pass with `A = []`. A closure holds what its body holds: once a
+  run has put the values it captured in its body, they count. -/
+  def Expr.capsWithin (A : List CapKind) : Expr → Bool
+    | .cap k _ => decide (k ∈ A)
+    | .unit | .int _ | .bool _ | .local_ _ | .str _ | .path _ | .okUnit | .okStr _ | .err => true
+    | .neg e | .not e | .field e _ => Expr.capsWithin A e
+    | .binary _ l r => Expr.capsWithin A l && Expr.capsWithin A r
+    | .call _ args | .builtin _ args => Expr.capsWithinList A args
+    | .construct _ _ fs => Expr.capsWithinList A fs
+    | .if_ c th el =>
+      Expr.capsWithin A c && Expr.capsWithin A th && Expr.capsWithinOpt A el
+    | .block ss val => Expr.capsWithinStmts A ss && Expr.capsWithinOpt A val
+    | .match_ sc arms => Expr.capsWithin A sc && Expr.capsWithinArms A arms
+    | .closure _ _ _ _ _ body => Expr.capsWithin A body
+    | .callValue c args => Expr.capsWithin A c && Expr.capsWithinList A args
+
+  def Expr.capsWithinList (A : List CapKind) : List Expr → Bool
+    | [] => true
+    | e :: es => Expr.capsWithin A e && Expr.capsWithinList A es
+
+  def Expr.capsWithinOpt (A : List CapKind) : Option Expr → Bool
+    | none => true
+    | some e => Expr.capsWithin A e
+
+  def Expr.capsWithinStmts (A : List CapKind) : List Stmt → Bool
+    | [] => true
+    | .let_ _ _ e :: ss => Expr.capsWithin A e && Expr.capsWithinStmts A ss
+    | .expr e :: ss => Expr.capsWithin A e && Expr.capsWithinStmts A ss
+
+  def Expr.capsWithinArms (A : List CapKind) : List Arm → Bool
+    | [] => true
+    | .mk _ g b :: arms =>
+      Expr.capsWithinOpt A g && Expr.capsWithin A b && Expr.capsWithinArms A arms
+end
+
+/-- A field type that can hold no capability itself: neither a
+capability nor a function type, whose value may have captured one. -/
+def Ty.fieldCapFree (t : Ty) : Bool := t.capKind?.isNone && !t.isFn
+
+/-- No field of a struct or enum the program declares is a capability or
+a function: the export refuses both, as the checker refuses a capability
+or a `cap fn` in a field of a type not declared `cap`. -/
+def Program.typesCapFree (P : Program) : Bool :=
+  P.types.all fun d => match d with
+    | .struct_ _ fs => fs.all Ty.fieldCapFree
+    | .enum_ _ vs => vs.all fun v => v.2.all Ty.fieldCapFree
+
+/-- A type whose values hold no capability, in program `P`: not a
+capability, not a `cap fn`, and a struct or enum only when no declared
+type has a capability or function field (`Program.typesCapFree`, which a
+program as the checker hands it over satisfies). -/
+def Program.pureTy (P : Program) : Ty → Bool
+  | .cap _ => false
+  | .fn c _ _ => !c
+  | .named _ => P.typesCapFree
+  | _ => true
 
 /-- What a typing judgment is about: an expression and its type, a list of
 arguments and their types, a block's statements and value and the block's
@@ -308,14 +368,24 @@ inductive Typed (P : Program) : List Ty → Goal → Prop where
   of its parameters and result, when its body has its result type in the
   context of those slots and its parameters' slots. The checker sets `h`
   to the number of slots in scope; `h ≤ Γ.length` lets a closure that a
-  run has closed (`h = 0`) keep its type in any context. -/
-  | closure {Γ : List Ty} {ps : List Param} {h : Nat} {cs : List Nat} {ret : Ty} {body : Expr} :
-      h ≤ Γ.length → Typed P (Γ.take h ++ bindingTypes ps) (.expr body ret) →
-      Typed P Γ (.expr (.closure ps h cs ret body) (.fn (ps.map Param.type) ret))
+  run has closed (`h = 0`) keep its type in any context.
+
+  A plain `fn` (`cap = false`) captures no capability-bearing value, as
+  the checker requires (`E0270`): each slot below `h` its body reads has a
+  type whose values hold no capability, and its body holds no capability
+  value, which keeps true once a run puts the captured values in it. -/
+  | closure {Γ : List Ty} {ps : List Param} {h : Nat} {cs : List Nat} {cap : Bool} {ret : Ty}
+      {body : Expr} :
+      h ≤ Γ.length →
+      (cap = false → ∀ i t, i < h → body.reads i = true → lookup Γ i = some t →
+        P.pureTy t = true) →
+      (cap = false → body.capsWithin [] = true) →
+      Typed P (Γ.take h ++ bindingTypes ps) (.expr body ret) →
+      Typed P Γ (.expr (.closure ps h cs cap ret body) (.fn cap (ps.map Param.type) ret))
   /-- A call of a function value with arguments of its parameter types
   has its result type. -/
-  | callValue {Γ : List Ty} {c : Expr} {args : List Expr} {ts : List Ty} {t : Ty} :
-      Typed P Γ (.expr c (.fn ts t)) → Typed P Γ (.args args ts) →
+  | callValue {Γ : List Ty} {c : Expr} {args : List Expr} {cap : Bool} {ts : List Ty} {t : Ty} :
+      Typed P Γ (.expr c (.fn cap ts t)) → Typed P Γ (.args args ts) →
       Typed P Γ (.expr (.callValue c args) t)
 
 /-- What a value typing is about: a value and its type, or a list of
@@ -328,7 +398,7 @@ inductive VGoal where
 range, a boolean, `()`, text, a path, a capability, a `Result`, a struct
 or variant `P` declares whose fields have its field types, and a closure
 of height 0 whose body has its result type in the context of its
-parameters. -/
+parameters, and holds no capability when it is a plain `fn`. -/
 inductive ValueTyped (P : Program) : VGoal → Prop where
   | unit : ValueTyped P (.one .unit .unit)
   | int {n : Int} : fits n = true → ValueTyped P (.one (.int n) .int)
@@ -342,9 +412,9 @@ inductive ValueTyped (P : Program) : VGoal → Prop where
   | construct {type : String} {variant : Option String} {fs : List Expr} {fts : List Ty} :
       P.fieldsOf type variant = some fts → ValueTyped P (.many fs fts) →
       ValueTyped P (.one (.construct type variant fs) (.named type))
-  | closure {ps : List Param} {cs : List Nat} {ret : Ty} {body : Expr} :
-      Typed P (bindingTypes ps) (.expr body ret) →
-      ValueTyped P (.one (.closure ps 0 cs ret body) (.fn (ps.map Param.type) ret))
+  | closure {ps : List Param} {cs : List Nat} {cap : Bool} {ret : Ty} {body : Expr} :
+      (cap = false → body.capsWithin [] = true) → Typed P (bindingTypes ps) (.expr body ret) →
+      ValueTyped P (.one (.closure ps 0 cs cap ret body) (.fn cap (ps.map Param.type) ret))
   | nil : ValueTyped P (.many [] [])
   | cons {v : Expr} {vs : List Expr} {t : Ty} {ts : List Ty} :
       ValueTyped P (.one v t) → ValueTyped P (.many vs ts) → ValueTyped P (.many (v :: vs) (t :: ts))
@@ -368,7 +438,7 @@ mutual
     | .block ss val => Expr.staticMatchesStmts P ss && Expr.staticMatchesOpt P val
     | .match_ sc arms =>
       exhaustiveArms P arms && Expr.staticMatches P sc && Expr.staticMatchesArms P arms
-    | .closure _ _ _ _ body => Expr.staticMatches P body
+    | .closure _ _ _ _ _ body => Expr.staticMatches P body
     | .callValue c args => Expr.staticMatches P c && Expr.staticMatchesList P args
 
   def Expr.staticMatchesList (P : Program) : List Expr → Bool
@@ -390,43 +460,6 @@ mutual
       Expr.staticMatchesOpt P g && Expr.staticMatches P b && Expr.staticMatchesArms P arms
 end
 
-mutual
-  /-- Whether every capability value in an expression has a kind in `A`.
-  A program as written holds none (core IR has no node for one), so its
-  bodies pass with `A = []`. A closure holds what its body holds: once a
-  run has put the values it captured in its body, they count. -/
-  def Expr.capsWithin (A : List CapKind) : Expr → Bool
-    | .cap k _ => decide (k ∈ A)
-    | .unit | .int _ | .bool _ | .local_ _ | .str _ | .path _ | .okUnit | .okStr _ | .err => true
-    | .neg e | .not e | .field e _ => Expr.capsWithin A e
-    | .binary _ l r => Expr.capsWithin A l && Expr.capsWithin A r
-    | .call _ args | .builtin _ args => Expr.capsWithinList A args
-    | .construct _ _ fs => Expr.capsWithinList A fs
-    | .if_ c th el =>
-      Expr.capsWithin A c && Expr.capsWithin A th && Expr.capsWithinOpt A el
-    | .block ss val => Expr.capsWithinStmts A ss && Expr.capsWithinOpt A val
-    | .match_ sc arms => Expr.capsWithin A sc && Expr.capsWithinArms A arms
-    | .closure _ _ _ _ body => Expr.capsWithin A body
-    | .callValue c args => Expr.capsWithin A c && Expr.capsWithinList A args
-
-  def Expr.capsWithinList (A : List CapKind) : List Expr → Bool
-    | [] => true
-    | e :: es => Expr.capsWithin A e && Expr.capsWithinList A es
-
-  def Expr.capsWithinOpt (A : List CapKind) : Option Expr → Bool
-    | none => true
-    | some e => Expr.capsWithin A e
-
-  def Expr.capsWithinStmts (A : List CapKind) : List Stmt → Bool
-    | [] => true
-    | .let_ _ _ e :: ss => Expr.capsWithin A e && Expr.capsWithinStmts A ss
-    | .expr e :: ss => Expr.capsWithin A e && Expr.capsWithinStmts A ss
-
-  def Expr.capsWithinArms (A : List CapKind) : List Arm → Bool
-    | [] => true
-    | .mk _ g b :: arms =>
-      Expr.capsWithinOpt A g && Expr.capsWithin A b && Expr.capsWithinArms A arms
-end
 
 /-- An expression that holds no capability value: one as written. -/
 def Expr.capFree (e : Expr) : Bool := e.capsWithin []
@@ -436,18 +469,6 @@ with every `match` exhaustive by the static check, and holding no
 capability value, since no source form makes one. -/
 def SourceTyped (P : Program) (Γ : List Ty) (e : Expr) (t : Ty) : Prop :=
   Typed P Γ (.expr e t) ∧ e.staticMatches P = true ∧ e.capFree = true
-
-/-- A field type that can hold no capability itself: neither a
-capability nor a function type, whose value may have captured one. -/
-def Ty.fieldCapFree (t : Ty) : Bool := t.capKind?.isNone && !t.isFn
-
-/-- No field of a struct or enum the program declares is a capability or
-a function: the export refuses both, as the checker refuses a capability
-or a `cap fn` in a field of a type not declared `cap`. -/
-def Program.typesCapFree (P : Program) : Bool :=
-  P.types.all fun d => match d with
-    | .struct_ _ fs => fs.all Ty.fieldCapFree
-    | .enum_ _ vs => vs.all fun v => v.2.all Ty.fieldCapFree
 
 /-- A program as the checker hands it over: each function's body is
 source typed, and no declared type holds a capability or a function. -/

@@ -712,7 +712,7 @@ fn the_corpus_reads_every_kind_of_string_literal() {
 }
 
 /// Core IR that is not version 4, each with what the refusal must name.
-const MALFORMED: [(&str, &str, &str); 15] = [
+const MALFORMED: [(&str, &str, &str); 17] = [
     (
         "a wrong version",
         r#"{"core_ir_version": 5, "types": [], "functions": []}"#,
@@ -780,13 +780,23 @@ const MALFORMED: [(&str, &str, &str); 15] = [
     ),
     (
         "a function field",
-        r#"{"core_ir_version": 4, "types": [{"kind": "Struct", "name": "Hook", "fields": [{"kind": "Fn", "params": [], "ret": "()"}]}], "functions": []}"#,
+        r#"{"core_ir_version": 4, "types": [{"kind": "Struct", "name": "Hook", "fields": [{"kind": "Fn", "cap": false, "params": [], "ret": "()"}]}], "functions": []}"#,
         "a field is a function",
     ),
     (
         "a capture at the closure's height",
-        r#"{"core_ir_version": 4, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Expr", "value": {"kind": "Closure", "params": [], "captures": [0], "height": 0, "ret": "()", "body": {"kind": "Unit"}}}]}}]}"#,
+        r#"{"core_ir_version": 4, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Expr", "value": {"kind": "Closure", "params": [], "captures": [0], "height": 0, "cap": false, "ret": "()", "body": {"kind": "Unit"}}}]}}]}"#,
         "slot 0 is not below the closure's height 0",
+    ),
+    (
+        "captures out of order",
+        r#"{"core_ir_version": 4, "types": [], "functions": [{"name": "main", "params": [{"type": "Int", "binds": true}, {"type": "Int", "binds": true}], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Expr", "value": {"kind": "Closure", "params": [], "captures": [1, 0], "height": 2, "cap": false, "ret": "Int", "body": {"kind": "Binary", "op": "+", "lhs": {"kind": "Local", "slot": 0}, "rhs": {"kind": "Local", "slot": 1}}}}]}}]}"#,
+        "is not in strictly ascending order",
+    ),
+    (
+        "a read slot left out of the captures",
+        r#"{"core_ir_version": 4, "types": [], "functions": [{"name": "main", "params": [{"type": "Int", "binds": true}], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Expr", "value": {"kind": "Closure", "params": [], "captures": [], "height": 1, "cap": false, "ret": "Int", "body": {"kind": "Local", "slot": 0}}}]}}]}"#,
+        "the body reads slot 0, which the closure does not capture",
     ),
 ];
 

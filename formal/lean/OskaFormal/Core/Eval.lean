@@ -25,7 +25,7 @@ mutual
     | .unit | .int _ | .bool _ => true
     | .str _ | .path _ | .cap _ _ | .okUnit | .okStr _ | .err => true
     | .construct _ _ fs => Expr.allValues fs
-    | .closure _ 0 _ _ _ => true
+    | .closure _ 0 _ _ _ _ => true
     | _ => false
 
   /-- Whether every expression of a list is a value. -/
@@ -51,13 +51,13 @@ theorem Expr.isValue_sound : ∀ {e : Expr}, e.isValue = true → IsValue e := b
     intro h
     simp only [Expr.isValue] at h
     exact IsValue.construct (ih h).forall
-  | case11 => intro _; exact IsValue.closure _ _ _ _
+  | case11 => intro _; exact IsValue.closure _ _ _ _ _
   | case12 e h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 =>
     intro h
     cases e with
-    | closure ps ht cs ret body =>
+    | closure ps ht cs cf ret body =>
       cases ht with
-      | zero => exact (h11 _ _ _ _ rfl).elim
+      | zero => exact (h11 _ _ _ _ _ rfl).elim
       | succ _ => simp [Expr.isValue] at h
     | _ => simp_all [Expr.isValue]
   | case13 => exact AllValues.nil
@@ -69,7 +69,7 @@ theorem Expr.isValue_complete {e : Expr} (h : IsValue e) : e.isValue = true := b
   induction h with
   | unit => rfl
   | int _ => rfl
-  | bool _ | str _ | path _ | cap _ _ | okUnit | okStr _ | err | closure _ _ _ _ => rfl
+  | bool _ | str _ | path _ | cap _ _ | okUnit | okStr _ | err | closure _ _ _ _ _ => rfl
   | @construct _ _ fs hfs ih =>
     simp only [Expr.isValue]
     clear hfs
@@ -126,7 +126,7 @@ arguments `vs` are values: into the closure's body, with the arguments put
 for its parameters' slots, as `Step.callValue` (and a call of a function,
 `stepCall`) puts them, with `instantiate`. -/
 def stepCallValue : Expr → List Expr → Option Outcome
-  | .closure ps 0 _ _ body, vs => (instantiate ps vs body).map .next
+  | .closure ps 0 _ _ _ body, vs => (instantiate ps vs body).map .next
   | _, _ => none
 
 /-- The step of a field access once its base is the value `b`: to the
@@ -154,7 +154,7 @@ mutual
   def step (P : Program) : Expr → Option Outcome
     | .unit | .int _ | .bool _ | .local_ _ => none
     | .str _ | .path _ | .cap _ _ | .okUnit | .okStr _ | .err => none
-    | .closure _ _ _ _ _ => none
+    | .closure _ _ _ _ _ _ => none
     | .neg e =>
       match e with
       | .int n => some (intResult (-n))

@@ -5,7 +5,10 @@
     {
       "name": "twice",
       "params": [
-        {"type": {"kind": "Fn", "params": ["Int"], "ret": "Int"}, "binds": true},
+        {
+          "type": {"kind": "Fn", "cap": false, "params": ["Int"], "ret": "Int"},
+          "binds": true
+        },
         {"type": "Int", "binds": true}
       ],
       "ret": "Int",
@@ -28,7 +31,7 @@
     {
       "name": "adder",
       "params": [{"type": "Int", "binds": true}],
-      "ret": {"kind": "Fn", "params": ["Int"], "ret": "Int"},
+      "ret": {"kind": "Fn", "cap": false, "params": ["Int"], "ret": "Int"},
       "body": {
         "kind": "Block",
         "stmts": [],
@@ -37,6 +40,7 @@
           "params": [{"type": "Int", "binds": true}],
           "captures": [0],
           "height": 1,
+          "cap": false,
           "ret": "Int",
           "body": {
             "kind": "Binary",
@@ -63,12 +67,13 @@
           {
             "kind": "Let",
             "binds": true,
-            "type": {"kind": "Fn", "params": ["Int"], "ret": "Int"},
+            "type": {"kind": "Fn", "cap": false, "params": ["Int"], "ret": "Int"},
             "value": {
               "kind": "Closure",
               "params": [{"type": "Int", "binds": true}],
               "captures": [0],
               "height": 1,
+              "cap": false,
               "ret": "Int",
               "body": {
                 "kind": "Binary",
@@ -81,12 +86,18 @@
           {
             "kind": "Let",
             "binds": true,
-            "type": {"kind": "Fn", "params": ["Int", "Bool"], "ret": "Int"},
+            "type": {
+              "kind": "Fn",
+              "cap": false,
+              "params": ["Int", "Bool"],
+              "ret": "Int"
+            },
             "value": {
               "kind": "Closure",
               "params": [{"type": "Int", "binds": true}, {"type": "Bool", "binds": false}],
               "captures": [0],
               "height": 2,
+              "cap": false,
               "ret": "Int",
               "body": {
                 "kind": "Block",
@@ -94,12 +105,18 @@
                   {
                     "kind": "Let",
                     "binds": true,
-                    "type": {"kind": "Fn", "params": ["Int"], "ret": "Int"},
+                    "type": {
+                      "kind": "Fn",
+                      "cap": false,
+                      "params": ["Int"],
+                      "ret": "Int"
+                    },
                     "value": {
                       "kind": "Closure",
                       "params": [{"type": "Int", "binds": true}],
                       "captures": [0, 2],
                       "height": 3,
+                      "cap": false,
                       "ret": "Int",
                       "body": {
                         "kind": "Binary",
@@ -126,7 +143,7 @@
           {
             "kind": "Let",
             "binds": true,
-            "type": {"kind": "Fn", "params": ["Int"], "ret": "Int"},
+            "type": {"kind": "Fn", "cap": false, "params": ["Int"], "ret": "Int"},
             "value": {
               "kind": "Call",
               "function": "adder",
@@ -169,6 +186,7 @@
                 "params": [{"type": "Int", "binds": true}],
                 "captures": [],
                 "height": 4,
+                "cap": false,
                 "ret": "Int",
                 "body": {
                   "kind": "Binary",

@@ -30,8 +30,9 @@
 //! function, a method, a contract, a prelude type such as `Option`, and
 //! any type the checker left unsolved. It also refuses any other built-in
 //! call, `==` and `!=` on anything but `Int`, `Bool` and `()`, a struct or
-//! enum with a capability or function field, a closure that reads `self`, a
-//! function used as a value, and a `main` that returns anything but
+//! enum with a capability or function field, a function used as a value, a
+//! closure that reads `self` (a guard that cannot fire while methods are
+//! refused, kept to fail closed), and a `main` that returns anything but
 //! `()` or takes anything but `Stdout`, `Fs`, `FsRead` or `FsWrite`, the
 //! capabilities the runtime grants.
 //!
@@ -50,7 +51,7 @@
 //! param    = {"type": type, "binds": BOOL}
 //! type     = "Int" | "Bool" | "()" | "String" | "Path" | CAPABILITY
 //!          | "Result<(), IoError>" | "Result<String, IoError>" | NAME
-//!          | {"kind": "Fn", "params": [type...], "ret": type}
+//!          | {"kind": "Fn", "cap": BOOL, "params": [type...], "ret": type}
 //! expr     = {"kind": "Unit"}
 //!          | {"kind": "Int", "value": INTEGER}
 //!          | {"kind": "Bool", "value": BOOL}
@@ -68,7 +69,7 @@
 //!          | {"kind": "Match", "scrutinee": expr, "arms": [arm...]}
 //!          | {"kind": "Builtin", "name": BUILTIN, "args": [expr...]}
 //!          | {"kind": "Closure", "params": [param...], "captures": [N...],
-//!             "height": N, "ret": type, "body": expr}
+//!             "height": N, "cap": BOOL, "ret": type, "body": expr}
 //!          | {"kind": "CallValue", "callee": expr, "args": [expr...]}
 //! stmt     = {"kind": "Let", "binds": BOOL, "type": type, "value": expr}
 //!          | {"kind": "Expr", "value": expr}
@@ -111,8 +112,9 @@
 //!   type `fn(params) -> ret` that holds the values of those slots, by
 //!   value. `CallValue` evaluates `callee`, then `args` left to right, then
 //!   runs the closure's body with what it captured at their slots and the
-//!   arguments at its parameters'. A `Fn` type does not say whether it is
-//!   a `cap fn`: what a function value reaches is what it captured.
+//!   arguments at its parameters'. `cap` is true for a `cap fn`: a plain
+//!   `fn` (a closure's own `cap` included) captures no capability-bearing
+//!   value, which the checker guarantees.
 //! - `Int` is a signed 64-bit integer. A literal is written in decimal,
 //!   negative when the source writes `-` before it. `Neg` and the
 //!   arithmetic operators panic when the result does not fit, and `/`
@@ -422,10 +424,11 @@ impl Core {
 
     /// A type of Oska Core, or the refusal of another, at `span`.
     fn ty(&self, ty: &Type, span: Span) -> Result<Json, Refusal> {
-        if let Type::Fn { params, ret } = ty {
+        if let Type::Fn { cap, params, ret } = ty {
             return Ok(node(
                 "Fn",
                 vec![
+                    ("cap", Json::Bool(*cap)),
                     (
                         "params",
                         Json::Arr(
@@ -609,12 +612,14 @@ impl Core {
                 )
             }
             ExprKind::Closure(closure) => {
+                // Unreachable while methods are refused, since only a
+                // method's closure can read `self`; kept to fail closed.
                 if closure.captures_self {
                     return refuse("a closure that reads `self`", span);
                 }
                 // The closure's type is not written: its result type is
                 // refused at the closure, before its parameters and body.
-                let Type::Fn { ret, .. } = &e.ty else {
+                let Type::Fn { cap, ret, .. } = &e.ty else {
                     return refuse(format!("a closure of type `{}`", e.ty), span);
                 };
                 let ret = self.ty(ret, span)?;
@@ -634,6 +639,7 @@ impl Core {
                             ),
                         ),
                         ("height", Json::Int(closure.height as i128)),
+                        ("cap", Json::Bool(*cap)),
                         ("ret", ret),
                         ("body", self.expr(&closure.body)?),
                     ],

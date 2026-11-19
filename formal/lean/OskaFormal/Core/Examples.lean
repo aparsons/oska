@@ -121,17 +121,17 @@ example : exhaustiveArms shapes
 
 /-! ## Closures -/
 
-/-- `|x: Int| x + 1`, written where `h` slots are in scope. -/
+/-- `|x: Int| x + 1`, a plain `fn`, written where `h` slots are in scope. -/
 def addOne (h : Nat) : Expr :=
-  .closure [{ type := .int, binds := true }] h [] .int (.binary .add (.local_ h) (.int 1))
+  .closure [{ type := .int, binds := true }] h [] false .int (.binary .add (.local_ h) (.int 1))
 
 /-- `let g = |x: Int| x + 1` in an empty function, then `g(41)`: the
 closure has height 0, so it is a value, and the call steps into its body
 with `41` for its parameter. -/
 example (P : Program) :
     Typed P [] (.expr (.callValue (addOne 0) [.int 41]) .int) :=
-  Typed.callValue (Typed.closure (Nat.le_refl _)
-      (Typed.binary BinOpTyped.add (Typed.local_ rfl) (Typed.int rfl)))
+  Typed.callValue (Typed.closure (Nat.le_refl _) (fun _ i _ hi => absurd hi (Nat.not_lt_zero i))
+      (fun _ => rfl) (Typed.binary BinOpTyped.add (Typed.local_ rfl) (Typed.int rfl)))
     (Typed.argsCons (Typed.int rfl) Typed.argsNil)
 
 example (P : Program) :
@@ -139,22 +139,26 @@ example (P : Program) :
   Step.callValue (.cons (.int 41) .nil) rfl
 
 /-- `fn add(n: Int) -> fn(Int) -> Int { |x: Int| x + n }`: a closure
-escapes the function that made it, at its own type, with `n` (slot 0)
-captured; its parameter is slot 1. -/
+escapes the function that made it, at its own type, a plain `fn`, with
+`n` (slot 0, an `Int`) captured; its parameter is slot 1. -/
 def addN : Function where
   name := "add"
   params := [{ type := .int, binds := true }]
-  ret := .fn [.int] .int
-  body := .closure [{ type := .int, binds := true }] 1 [0] .int
+  ret := .fn false [.int] .int
+  body := .closure [{ type := .int, binds := true }] 1 [0] false .int
     (.binary .add (.local_ 1) (.local_ 0))
 
-example (P : Program) : Typed P (bindingTypes addN.params) (.expr addN.body addN.ret) :=
-  Typed.closure (by decide) (Typed.binary BinOpTyped.add (Typed.local_ rfl) (Typed.local_ rfl))
+example (P : Program) : Typed P (bindingTypes addN.params) (.expr addN.body addN.ret) := by
+  refine Typed.closure (by decide) (fun _ i t hi _ hl => ?_) (fun _ => rfl)
+    (Typed.binary BinOpTyped.add (Typed.local_ rfl) (Typed.local_ rfl))
+  cases i with
+  | zero => simp [bindingTypes, addN, lookup] at hl; subst hl; rfl
+  | succ i => omega
 
 /-- A call of `add(2)` puts `2` in the closure's body, which is then a
 value: what it captured travels with it. -/
 example : Step { types := [], functions := [addN] } (.call "add" [.int 2])
-    (.next (.closure [{ type := .int, binds := true }] 0 [] .int
+    (.next (.closure [{ type := .int, binds := true }] 0 [] false .int
       (.binary .add (.local_ 0) (.int 2)))) :=
   Step.call rfl (.cons (.int 2) .nil) rfl
 
@@ -166,7 +170,7 @@ example (P : Program) (Γ : List Ty) (h : Nat) (t : Ty) :
   cases ht with
   | callValue hc hargs =>
     cases hc with
-    | closure _ _ =>
+    | closure _ _ _ _ =>
       cases hargs with
       | argsCons _ hr => cases hr
 
@@ -177,7 +181,7 @@ example (P : Program) (Γ : List Ty) (h : Nat) (t : Ty) :
   cases ht with
   | callValue hc hargs =>
     cases hc with
-    | closure _ _ =>
+    | closure _ _ _ _ =>
       cases hargs with
       | argsCons hb _ => cases hb
 
@@ -194,14 +198,15 @@ escape at a type it does not have, whatever result type its node names. -/
 def makeWrong (ret : Ty) : Function where
   name := "make"
   params := []
-  ret := .fn [.int] .bool
-  body := .closure [{ type := .int, binds := true }] 0 [] ret (.binary .add (.local_ 0) (.int 1))
+  ret := .fn false [.int] .bool
+  body := .closure [{ type := .int, binds := true }] 0 [] false ret
+    (.binary .add (.local_ 0) (.int 1))
 
 example (P : Program) (ret : Ty) :
     ¬ Typed P (bindingTypes (makeWrong ret).params) (.expr (makeWrong ret).body (makeWrong ret).ret) := by
   intro ht
   cases ht with
-  | closure _ hb =>
+  | closure _ _ _ hb =>
     cases hb with
     | binary hop _ _ => cases hop
 
@@ -210,8 +215,21 @@ example (ret : Ty) : ¬ ProgramTyped { types := [], functions := [makeWrong ret]
   intro hP
   have ht := hP "make" (makeWrong ret) rfl
   cases ht with
-  | closure _ hb =>
+  | closure _ _ _ hb =>
     cases hb with
     | binary hop _ _ => cases hop
+
+/-- `fn run(io: Stdout) -> fn() -> Result<(), IoError> { || io.println("hi") }`:
+a closure that captures `Stdout` does not escape as a plain `fn`, which
+the checker rejects (`E0270`); `Authority.lean`'s
+`capturing_closure_not_plain` shows the same where it is written. -/
+example (P : Program) :
+    ¬ Typed P [.cap .stdout] (.expr (.closure [] 1 [0] false (.result .unit)
+      (.builtin .println [.local_ 0, .str "hi"])) (.fn false [] (.result .unit))) := by
+  intro h
+  cases h with
+  | closure _ hpure _ _ =>
+    have := hpure rfl 0 (.cap .stdout) (by decide) (by decide) rfl
+    simp [Program.pureTy] at this
 
 end OskaFormal.Core

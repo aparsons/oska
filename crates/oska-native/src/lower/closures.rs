@@ -403,7 +403,7 @@ impl Body<'_, '_> {
         ty: &Type,
         at: Span,
     ) -> Result<u32, Diagnostic> {
-        let Type::Fn { params, ret } = ty else {
+        let Type::Fn { params, ret, .. } = ty else {
             return Err(self.refuse(at, &format!("a function value of type `{ty}`")));
         };
         self.status = true;

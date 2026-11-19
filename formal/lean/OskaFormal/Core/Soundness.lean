@@ -123,7 +123,9 @@ theorem value_typed {Γ Δ : List Ty} {v : Expr} {t : Ty} (hv : IsValue v)
     | construct hf hargs => exact Typed.construct hf (args_transport (fun e he t => ih e he) hargs)
   | closure =>
     cases h with
-    | closure _ hb => exact Typed.closure (Nat.zero_le _) (by simpa using hb)
+    | closure _ _ hcaps hb =>
+      exact Typed.closure (Nat.zero_le _) (fun _ i _ hi => absurd hi (Nat.not_lt_zero i)) hcaps
+        (by simpa using hb)
   | _ => cases h <;> constructor
 
 theorem canonical_int {Γ : List Ty} {v : Expr} (hv : IsValue v)
@@ -200,24 +202,175 @@ theorem value_valueTyped {v : Expr} {t : Ty} (hv : IsValue v) (h : Typed P [] (.
     | construct hf hargs => exact ValueTyped.construct hf (values_valueTyped ih hargs)
   | closure =>
     cases h with
-    | closure _ hb => exact ValueTyped.closure (by simpa using hb)
+    | closure _ _ hcaps hb => exact ValueTyped.closure hcaps (by simpa using hb)
   | _ => cases h <;> constructor
 
 /-- A value of a function type is a closure the run has closed, whose
 body has the function's result type in the context of its parameters. -/
-theorem canonical_fn {Γ : List Ty} {v : Expr} {ts : List Ty} {t : Ty} (hv : IsValue v)
-    (h : Typed P Γ (.expr v (.fn ts t))) :
-    ∃ ps cs body, v = .closure ps 0 cs t body ∧ ts = ps.map Param.type ∧
+theorem canonical_fn {Γ : List Ty} {v : Expr} {cf : Bool} {ts : List Ty} {t : Ty}
+    (hv : IsValue v) (h : Typed P Γ (.expr v (.fn cf ts t))) :
+    ∃ ps cs body, v = .closure ps 0 cs cf t body ∧ ts = ps.map Param.type ∧
       Typed P (bindingTypes ps) (.expr body t) := by
   cases hv with
   | unit => cases h
   | int _ => cases h
   | bool _ => cases h
   | construct _ => cases h
-  | closure ps cs ret body =>
+  | closure ps cs _ ret body =>
     cases h with
-    | closure _ hb => exact ⟨ps, cs, body, rfl, rfl, by simpa using hb⟩
+    | closure _ _ _ hb => exact ⟨ps, cs, body, rfl, rfl, by simpa using hb⟩
   | _ => cases h
+
+/-! ## Capabilities a value holds -/
+
+theorem lookup_mem {α β : Type} [BEq α] [LawfulBEq α] :
+    ∀ {l : List (α × β)} {a : α} {b : β}, l.lookup a = some b → (a, b) ∈ l := by
+  intro l
+  induction l with
+  | nil => intro a b h; simp at h
+  | cons x l ih =>
+    intro a b h
+    obtain ⟨x₁, x₂⟩ := x
+    simp only [List.lookup] at h
+    split at h
+    · next hx =>
+      cases h
+      have := LawfulBEq.eq_of_beq hx
+      subst this
+      exact List.mem_cons_self
+    · exact List.mem_cons_of_mem _ (ih h)
+
+theorem findType_mem : ∀ {ds : List TypeDecl} {n : String} {d : TypeDecl},
+    findType ds n = some d → d ∈ ds := by
+  intro ds
+  induction ds with
+  | nil => intro n d h; simp [findType] at h
+  | cons d ds ih =>
+    intro n d' h
+    simp only [findType] at h
+    split at h
+    · cases h; exact List.mem_cons_self
+    · exact List.mem_cons_of_mem _ (ih h)
+
+/-- In a program whose structs and enums hold no capability or function,
+every field type of a struct or variant is such a type. -/
+theorem fieldsOf_capFree (hT : P.typesCapFree = true) {type : String} {variant : Option String}
+    {fts : List Ty} (hf : P.fieldsOf type variant = some fts) : ∀ t ∈ fts, t.fieldCapFree = true := by
+  intro t ht
+  unfold Program.fieldsOf at hf
+  unfold Program.typesCapFree at hT
+  rw [List.all_eq_true] at hT
+  split at hf
+  · next fs' hd =>
+    cases hf
+    have := hT _ (findType_mem hd)
+    simp only [List.all_eq_true] at this
+    exact this t ht
+  · next vs' v hd =>
+    have := hT _ (findType_mem hd)
+    simp only [List.all_eq_true] at this
+    exact this _ (lookup_mem hf) t ht
+  · cases hf
+
+/-- A value of a type whose values hold no capability holds none: a plain
+`fn` by its typing, a struct or variant by its fields. -/
+theorem valueTyped_pure : ∀ {g : VGoal}, ValueTyped P g → match g with
+    | .one v t => P.pureTy t = true → v.capsWithin [] = true
+    | .many vs ts => P.typesCapFree = true → (∀ t ∈ ts, t.fieldCapFree = true) →
+      Expr.capsWithinList [] vs = true := by
+  intro g h
+  induction h with
+  | cap => intro h; simp [Program.pureTy] at h
+  | @closure ps cs cf ret body hcaps _ =>
+    intro h
+    cases cf with
+    | false => exact hcaps rfl
+    | true => simp [Program.pureTy] at h
+  | construct hf _ ih =>
+    intro hT
+    simp only [Program.pureTy] at hT
+    simpa [Expr.capsWithin] using ih hT (fieldsOf_capFree hT hf)
+  | nil => intro _ _; rfl
+  | @cons v vs t ts _ _ ih₁ ih₂ =>
+    intro hT hts
+    have ht := hts t List.mem_cons_self
+    simp only [Expr.capsWithinList, Bool.and_eq_true]
+    refine ⟨ih₁ ?_, ih₂ hT fun t' h' => hts t' (List.mem_cons_of_mem _ h')⟩
+    cases t <;> simp_all [Program.pureTy, Ty.fieldCapFree, Ty.capKind?, Ty.isFn]
+  | _ => intro _; rfl
+
+/-! ## The slots an expression reads -/
+
+theorem readsList_values {i : Nat} :
+    ∀ {vs : List Expr}, (∀ e ∈ vs, IsValue e → e.reads i = false) → (∀ e ∈ vs, IsValue e) →
+      Expr.readsList i vs = false := by
+  intro vs
+  induction vs with
+  | nil => intro _ _; rfl
+  | cons e es ih =>
+    intro h hv
+    simp only [Expr.readsList, Bool.or_eq_false_iff]
+    exact ⟨h e List.mem_cons_self (hv e List.mem_cons_self),
+      ih (fun e' he' => h e' (List.mem_cons_of_mem _ he')) (fun e' he' => hv e' (List.mem_cons_of_mem _ he'))⟩
+
+/-- A value reads no slot: it is closed. -/
+theorem reads_value {v : Expr} (hv : IsValue v) : ∀ i, v.reads i = false := by
+  intro i
+  induction hv with
+  | construct hfs ih =>
+    simp only [Expr.reads]
+    exact readsList_values (fun e he _ => ih e he) hfs
+  | closure => simp [Expr.reads]
+  | _ => rfl
+
+/-- What an expression with a value put for slot 0 reads, it read one slot
+up. -/
+theorem reads_subst {v : Expr} (hv : IsValue v) :
+    ∀ e i, (Expr.subst v e).reads i = true → e.reads (i + 1) = true := by
+  intro e
+  induction e using Expr.subst.induct
+    (motive_2 := fun arms => ∀ i, Expr.readsArms i (Expr.substArms v arms) = true →
+      Expr.readsArms (i + 1) arms = true)
+    (motive_3 := fun e => ∀ i, Expr.readsOpt i (Expr.substOpt v e) = true →
+      Expr.readsOpt (i + 1) e = true)
+    (motive_4 := fun ss => ∀ i, Expr.readsStmts i (Expr.substStmts v ss) = true →
+      Expr.readsStmts (i + 1) ss = true)
+    (motive_5 := fun es => ∀ i, Expr.readsList i (Expr.substList v es) = true →
+      Expr.readsList (i + 1) es = true)
+  all_goals
+    intros
+    simp_all [Expr.subst, Expr.substList, Expr.substOpt, Expr.substStmts, Expr.substArms,
+      Expr.reads, Expr.readsList, Expr.readsOpt, Expr.readsStmts, Expr.readsArms, reads_value hv]
+  all_goals first
+    | omega
+    | (rcases ‹_ ∨ _› with h | h <;> (try rcases h with h | h) <;> simp_all)
+    | skip
+
+/-- Putting a value for slot 0 keeps an expression within `A` when the
+value is within `A`, or the expression does not read slot 0. -/
+theorem capsWithin_subst_reads {A : List CapKind} {v : Expr} :
+    ∀ e, e.capsWithin A = true → (e.reads 0 = true → v.capsWithin A = true) →
+      (Expr.subst v e).capsWithin A = true := by
+  intro e
+  induction e using Expr.subst.induct
+    (motive_2 := fun arms => Expr.capsWithinArms A arms = true →
+      (Expr.readsArms 0 arms = true → v.capsWithin A = true) →
+      Expr.capsWithinArms A (Expr.substArms v arms) = true)
+    (motive_3 := fun e => Expr.capsWithinOpt A e = true →
+      (Expr.readsOpt 0 e = true → v.capsWithin A = true) →
+      Expr.capsWithinOpt A (Expr.substOpt v e) = true)
+    (motive_4 := fun ss => Expr.capsWithinStmts A ss = true →
+      (Expr.readsStmts 0 ss = true → v.capsWithin A = true) →
+      Expr.capsWithinStmts A (Expr.substStmts v ss) = true)
+    (motive_5 := fun es => Expr.capsWithinList A es = true →
+      (Expr.readsList 0 es = true → v.capsWithin A = true) →
+      Expr.capsWithinList A (Expr.substList v es) = true)
+  all_goals
+    intros
+    simp_all [Expr.subst, Expr.substList, Expr.substOpt, Expr.substStmts, Expr.substArms,
+      Expr.capsWithin, Expr.capsWithinList, Expr.capsWithinOpt, Expr.capsWithinStmts,
+      Expr.capsWithinArms, Expr.reads, Expr.readsList, Expr.readsOpt, Expr.readsStmts,
+      Expr.readsArms]
 
 /-! ## Substitution -/
 
@@ -341,16 +494,21 @@ theorem typed_subst {v : Expr} {u : Ty} (hv : IsValue v) (hvt : Typed P [] (.exp
     intro Δ hΓ
     subst hΓ
     exact Typed.armsConsGuard hp (ihg (Δ ++ _) rfl) (ihb (Δ ++ _) rfl) (ihr Δ rfl)
-  | @closure Γ ps h cs ret body hle hb ih =>
+  | @closure Γ ps h cs cf ret body hle hpure hcaps hb ih =>
     intro Δ hΓ
     subst hΓ
     cases h with
     | zero =>
-      show Typed P Δ (.expr (.closure ps 0 cs ret body) _)
-      exact Typed.closure (Nat.zero_le _) (by simpa using hb)
+      show Typed P Δ (.expr (.closure ps 0 cs cf ret body) _)
+      exact Typed.closure (Nat.zero_le _) (fun _ i _ hi => absurd hi (Nat.not_lt_zero i)) hcaps
+        (by simpa using hb)
     | succ h =>
-      show Typed P Δ (.expr (.closure ps h (shiftCaptures cs) ret (Expr.subst v body)) _)
-      exact Typed.closure (by simpa using hle) (ih (Δ.take h ++ bindingTypes ps) (by simp))
+      show Typed P Δ (.expr (.closure ps h (shiftCaptures cs) cf ret (Expr.subst v body)) _)
+      refine Typed.closure (by simpa using hle) (fun hc i t hi hr hl => ?_) (fun hc => ?_)
+        (ih (Δ.take h ++ bindingTypes ps) (by simp))
+      · exact hpure hc (i + 1) t (by omega) (reads_subst hv body i hr) (by simpa [lookup] using hl)
+      · refine capsWithin_subst_reads body (hcaps hc) fun hr => ?_
+        exact valueTyped_pure (value_valueTyped hv hvt) (hpure hc 0 u (Nat.succ_pos _) hr rfl)
   | callValue _ _ ihc iha => intro Δ hΓ; exact Typed.callValue (ihc Δ hΓ) (iha Δ hΓ)
 
 /-- A function's body, with closed values of its parameters' types put for
@@ -633,23 +791,6 @@ theorem specialize_sound {h : Head} {k : Nat} {rows : List Row} {row : Row} {v :
     exact ⟨p :: rest, hmem, by simp [matchPats_cons, catchAll_matches hp, hr]⟩
   · obtain ⟨h₁, hr⟩ := matchPats_append (by rw [Head.args_length hps, hk]) hm
     exact ⟨p :: rest, hmem, by simp [matchPats_cons, hv p ps hps h₁, hr]⟩
-
-theorem lookup_mem {α β : Type} [BEq α] [LawfulBEq α] :
-    ∀ {l : List (α × β)} {a : α} {b : β}, l.lookup a = some b → (a, b) ∈ l := by
-  intro l
-  induction l with
-  | nil => intro a b h; simp at h
-  | cons x l ih =>
-    intro a b h
-    obtain ⟨x₁, x₂⟩ := x
-    simp only [List.lookup] at h
-    split at h
-    · next hx =>
-      cases h
-      have := LawfulBEq.eq_of_beq hx
-      subst this
-      exact List.mem_cons_self
-    · exact List.mem_cons_of_mem _ (ih h)
 
 /-- **Soundness of `covers`.** Rows that cover the types `tys` have a row
 that matches every list of values of those types. -/
@@ -1158,12 +1299,12 @@ theorem progress_goal : ∀ {Γ : List Ty} {j : Goal}, Typed P Γ j → Γ = [] 
           | none => exact Or.inr ⟨_, Step.matchArm hv hm⟩
           | some g => exact Or.inr ⟨_, Step.matchGuard hv hm⟩
     · exact Or.inr ⟨_, Step.matchScrutinee hstep⟩
-  | @closure _ ps h cs ret body hle _ _ =>
+  | @closure _ ps h cs cf ret body hle _ _ _ _ =>
     intro hΓ
     subst hΓ
     have : h = 0 := by simpa using hle
     subst this
-    exact Or.inl (IsValue.closure _ _ _ _)
+    exact Or.inl (IsValue.closure _ _ _ _ _)
   | callValue hc hargs ihc iha =>
     intro hΓ
     subst hΓ
@@ -1402,7 +1543,7 @@ theorem preservation (hP : ProgramTyped P) {e : Expr} {o : Outcome} (hs : Step P
     intro t ht
     cases ht with
     | callValue hc hargs =>
-      obtain ⟨ps, cs, body, heq, rfl, hb⟩ := canonical_fn (IsValue.closure _ _ _ _) hc
+      obtain ⟨ps, cs, body, heq, rfl, hb⟩ := canonical_fn (IsValue.closure _ _ _ _ _) hc
       cases heq
       exact typed_instantiate _ hb hargs hvs hi
 

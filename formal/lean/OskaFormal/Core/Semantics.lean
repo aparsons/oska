@@ -84,8 +84,9 @@ mutual
     | .field b i => .field (Expr.subst v b) i
     | .match_ s arms => .match_ (Expr.subst v s) (Expr.substArms v arms)
     | .builtin op args => .builtin op (Expr.substList v args)
-    | .closure ps 0 cs ret body => .closure ps 0 cs ret body
-    | .closure ps (h + 1) cs ret body => .closure ps h (shiftCaptures cs) ret (Expr.subst v body)
+    | .closure ps 0 cs cf ret body => .closure ps 0 cs cf ret body
+    | .closure ps (h + 1) cs cf ret body =>
+      .closure ps h (shiftCaptures cs) cf ret (Expr.subst v body)
     | .callValue c args => .callValue (Expr.subst v c) (Expr.substList v args)
 
   /-- `Expr.subst` on each expression of a list. -/
@@ -310,10 +311,10 @@ inductive Step (P : Program) : Expr → Outcome → Prop where
       Step P (.callValue c (vs ++ e :: rest)) (o.map fun e' => .callValue c (vs ++ e' :: rest))
   /-- A call of a closure the run has closed steps into its body, with the
   arguments put for its parameters' slots. -/
-  | callValue {ps : List Param} {cs : List Nat} {ret : Ty} {body : Expr} {vs : List Expr}
-      {e : Expr} :
+  | callValue {ps : List Param} {cs : List Nat} {cap : Bool} {ret : Ty} {body : Expr}
+      {vs : List Expr} {e : Expr} :
       AllValues vs → instantiate ps vs body = some e →
-      Step P (.callValue (.closure ps 0 cs ret body) vs) (.next e)
+      Step P (.callValue (.closure ps 0 cs cap ret body) vs) (.next e)
 
 /-- A value takes no step. -/
 theorem value_no_step {P : Program} {v : Expr} {o : Outcome} (hv : IsValue v) :
