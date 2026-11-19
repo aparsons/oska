@@ -1,37 +1,31 @@
-//! The run limits' flags (spec #446): `oskac run --max-output=<bytes>`,
-//! read into the [`Limits`] both backends take (`oska_check::limits`,
-//! which holds their codes and messages).
+//! The run limits' flags (spec #446): `oskac run --max-steps=<n>` and
+//! `--max-output=<bytes>`, read into the [`Limits`] both backends take
+//! (`oska_check::limits`, which holds their codes and messages).
 //!
 //! A limit is a whole number above 0. A value of 0, a negative number or
 //! anything that is not a number is refused, never read as "no limit".
 
 use oska_check::limits::{Limit, Limits};
 
-/// The flag that sets `limit`, without its `=` and value.
-fn flag(limit: Limit) -> &'static str {
-    match limit {
-        Limit::Output => "--max-output",
-    }
-}
-
 /// What `limit`'s value counts, for a malformed value's error.
 fn unit(limit: Limit) -> &'static str {
     match limit {
+        Limit::Steps => "steps",
         Limit::Output => "bytes",
     }
 }
 
 /// Read the command-line argument `arg` into `limits` if it is a limit
-/// flag, `--max-output=<n>`: `None` when it is not one; otherwise the
+/// flag, such as `--max-output=<n>`: `None` when it is not one; otherwise the
 /// error that makes it a usage error, if any: a value that is not a whole
 /// number above 0 (up to the largest 64-bit signed integer), or a limit
 /// given twice.
 pub fn take_flag(limits: &mut Limits, arg: &str) -> Option<Result<(), String>> {
     let (limit, value) = Limit::ALL.iter().find_map(|&limit| {
-        let value = arg.strip_prefix(flag(limit))?.strip_prefix('=')?;
+        let value = arg.strip_prefix(limit.flag())?.strip_prefix('=')?;
         Some((limit, value))
     })?;
-    let name = flag(limit);
+    let name = limit.flag();
     if limits.get(limit).is_some() {
         return Some(Err(format!("{name} is given more than once")));
     }
@@ -52,7 +46,7 @@ pub fn take_flag(limits: &mut Limits, arg: &str) -> Option<Result<(), String>> {
 pub fn flags(limits: &Limits) -> Vec<String> {
     Limit::ALL
         .iter()
-        .filter_map(|&limit| Some(format!("{}={}", flag(limit), limits.get(limit)?)))
+        .filter_map(|&limit| Some(format!("{}={}", limit.flag(), limits.get(limit)?)))
         .collect()
 }
 
@@ -88,5 +82,8 @@ mod tests {
         assert_eq!(limits.max_output, Some(7));
         assert!(take_flag(&mut limits, "--max-output=7").is_some_and(|r| r.is_err()));
         assert_eq!(flags(&limits), ["--max-output=7"]);
+        assert_eq!(take_flag(&mut limits, "--max-steps=9"), Some(Ok(())));
+        assert_eq!(limits.max_steps, Some(9));
+        assert_eq!(flags(&limits), ["--max-steps=9", "--max-output=7"]);
     }
 }

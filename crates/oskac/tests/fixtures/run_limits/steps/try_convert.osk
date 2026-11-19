@@ -1,0 +1,46 @@
+// Steps: 4. `?` on an error of another type converts it with `From`, a
+// call of a function written in Oska.
+//
+// - `read("x")`: 1.
+// - `parse("x")` from it: 1.
+// - `?` converts its `ParseError` with `AppError.from`: 1.
+// - `Display.to_string` of the error, to print it: 1.
+struct ParseError { text: String }
+
+enum AppError {
+    Parse(String),
+}
+
+impl From<ParseError> for AppError {
+    fn from(err: ParseError) -> AppError {
+        AppError.Parse(err.text)
+    }
+}
+
+impl Display for AppError {
+    fn to_string(self) -> String {
+        match self {
+            AppError.Parse(text) => "not a number: {text}"
+        }
+    }
+}
+
+fn parse(text: String) -> Result<Int, ParseError> {
+    match text.parse_int() {
+        Some(n) => Ok(n)
+        None => Err(ParseError(text: text))
+    }
+}
+
+fn read(text: String) -> Result<Int, AppError> {
+    let n = parse(text)?
+    Ok(n)
+}
+
+fn main(io: Stdout) {
+    let message = match read("x") {
+        Ok(n) => "{n}"
+        Err(e) => "{e}"
+    }
+    let _ = io.println(message)
+}

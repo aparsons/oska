@@ -122,6 +122,11 @@ pub struct Interpreter<'p, 'h> {
     /// The bytes the program has written to stdout and stderr so far,
     /// counted against `--max-output`.
     output_written: u64,
+    /// The steps the program may take before [`Interpreter::step`] takes
+    /// its slow path: under `--max-steps`, the steps left, counted down
+    /// from the limit; without it, `u64::MAX`, refilled if ever spent. One
+    /// decrement and compare per step, with or without a limit.
+    fuel: u64,
 }
 
 /// A standard stream the program writes to.
@@ -140,13 +145,55 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             depth: 0,
             limits: Limits::NONE,
             output_written: 0,
+            fuel: u64::MAX,
         }
     }
 
     /// This interpreter, under the run `limits`.
     pub fn with_limits(mut self, limits: Limits) -> Self {
         self.limits = limits;
+        self.fuel = limits.max_steps.unwrap_or(u64::MAX);
         self
+    }
+
+    /// Take one **step** (ADR 0021), at `span`: a call of a function,
+    /// method or closure written in Oska, or a loop's back-edge. Every
+    /// step of the program passes through here, so this is the hook for
+    /// whatever a run checks as it goes: under `--max-steps`, the step
+    /// past the limit panics with `P0038` instead of being taken.
+    ///
+    /// The fast path only spends fuel; everything else is in
+    /// [`Interpreter::out_of_fuel`], so a check that needs no exact step
+    /// (a deadline) can be made there every so many steps by giving out
+    /// fuel in smaller amounts.
+    #[inline(always)]
+    fn step(&mut self, span: Span) -> Result<(), Panic> {
+        match self.fuel.checked_sub(1) {
+            Some(fuel) => {
+                self.fuel = fuel;
+                Ok(())
+            }
+            None => self.out_of_fuel(span),
+        }
+    }
+
+    /// The step at `span` when [`Interpreter::step`] has no fuel left:
+    /// under `--max-steps`, the step past the limit, a `P0038` panic;
+    /// without it, after `u64::MAX` steps, a refill.
+    #[cold]
+    #[inline(never)]
+    fn out_of_fuel(&mut self, span: Span) -> Result<(), Panic> {
+        match self.limits.max_steps {
+            Some(limit) => Err(Panic::new(
+                Limit::Steps.code(),
+                Limit::Steps.message(limit),
+                span,
+            )),
+            None => {
+                self.fuel = u64::MAX - 1;
+                Ok(())
+            }
+        }
     }
 
     /// The host the program runs on.
@@ -186,10 +233,14 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         })
     }
 
-    /// Enter a call of a function or closure, made at `span`: a panic
-    /// with `P0021` when calls already nest [`MAX_CALL_DEPTH`] deep. Each
+    /// Enter a call of a function or closure, made at `span`: a step
+    /// ([`Interpreter::step`]), then a panic with `P0021` when calls
+    /// already nest [`MAX_CALL_DEPTH`] deep. Every call of a function,
+    /// method or closure written in Oska enters here, and nothing else
+    /// does (`main` is not called by the program, so it is no step). Each
     /// successful entry is paired with [`Interpreter::leave`].
     fn enter(&mut self, span: Span) -> Result<(), Panic> {
+        self.step(span)?;
         if self.depth >= MAX_CALL_DEPTH || stack_exhausted() {
             return Err(Panic::new(
                 codes::CALL_DEPTH_EXCEEDED,
@@ -736,32 +787,45 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             }
             Stmt::Break(_) => return Err(Unwind::Break),
             Stmt::Continue(_) => return Err(Unwind::Continue),
-            Stmt::While { cond, body, .. } => self.while_loop(cond, body, frame)?,
+            Stmt::While { cond, body, span } => self.while_loop(cond, body, *span, frame)?,
             Stmt::For {
-                binds, iter, body, ..
-            } => self.for_loop(*binds, iter, body, frame)?,
+                binds,
+                iter,
+                body,
+                span,
+                ..
+            } => self.for_loop(*binds, iter, body, *span, frame)?,
         }
         Ok(())
     }
 
+    /// `while`, the statement at `span`.
     #[inline(never)]
-    fn while_loop(&mut self, cond: &Expr, body: &Expr, frame: &mut Frame) -> Result<(), Unwind> {
+    fn while_loop(
+        &mut self,
+        cond: &Expr,
+        body: &Expr,
+        span: Span,
+        frame: &mut Frame,
+    ) -> Result<(), Unwind> {
         while self.eval(cond, frame)?.as_bool() {
-            if !self.loop_body(body, frame)? {
+            if !self.loop_body(body, span, frame)? {
                 break;
             }
         }
         Ok(())
     }
 
-    /// `for` over a range or a list. Iterating a list holds a reference
-    /// to it, so the body writing the `var` it came from changes a copy.
+    /// `for` over a range or a list, the statement at `span`. Iterating a
+    /// list holds a reference to it, so the body writing the `var` it
+    /// came from changes a copy.
     #[inline(never)]
     fn for_loop(
         &mut self,
         binds: bool,
         iter: &Expr,
         body: &Expr,
+        span: Span,
         frame: &mut Frame,
     ) -> Result<(), Unwind> {
         let iterated = match &iter.kind {
@@ -790,7 +854,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             if binds {
                 frame.slots.push(item);
             }
-            let go_on = self.loop_body(body, frame);
+            let go_on = self.loop_body(body, span, frame);
             frame.slots.truncate(height);
             if !go_on? {
                 break;
@@ -799,11 +863,17 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         Ok(())
     }
 
-    /// Run one iteration of a loop's body. Returns whether the loop goes
-    /// on: `false` after a `break`.
-    fn loop_body(&mut self, body: &Expr, frame: &mut Frame) -> Result<bool, Unwind> {
+    /// Run one iteration of the body of the loop at `span`. Returns
+    /// whether the loop goes on: `false` after a `break`. Going on, back
+    /// to the condition or the next item, is the loop's back-edge, a
+    /// step ([`Interpreter::step`]) spanning the loop: one for each
+    /// iteration that ends without `break`, the last one included.
+    fn loop_body(&mut self, body: &Expr, span: Span, frame: &mut Frame) -> Result<bool, Unwind> {
         match self.eval(body, frame) {
-            Ok(_) | Err(Unwind::Continue) => Ok(true),
+            Ok(_) | Err(Unwind::Continue) => {
+                self.step(span)?;
+                Ok(true)
+            }
             Err(Unwind::Break) => Ok(false),
             Err(other) => Err(other),
         }

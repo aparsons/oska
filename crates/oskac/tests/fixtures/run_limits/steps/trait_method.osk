@@ -1,0 +1,39 @@
+// Steps: 5. Methods written in Oska are steps, called directly, through
+// a trait bound, or by the runtime to display a value.
+//
+// - `area(sq)`: a call of `area` and of `Square.area` through the bound: 2.
+// - `sq.describe()`: the trait's default method, and `Square.area`
+//   from it: 2.
+// - `"{sq}"`: `Square`'s `Display.to_string`: 1.
+trait Shape {
+    fn area(self) -> Int
+    fn describe(self) -> String {
+        let a = self.area()
+        "area {a}"
+    }
+}
+
+struct Square { side: Int }
+
+impl Shape for Square {
+    fn area(self) -> Int {
+        self.side * self.side
+    }
+}
+
+impl Display for Square {
+    fn to_string(self) -> String {
+        "square"
+    }
+}
+
+fn area<T: Shape>(shape: T) -> Int {
+    shape.area()
+}
+
+fn main(io: Stdout) {
+    let sq = Square(side: 3)
+    let a = area(sq)
+    let d = sq.describe()
+    let _ = io.println("{sq} {a} {d}")
+}

@@ -1,0 +1,18 @@
+// Steps: 6. Closures written in Oska are steps wherever they are called,
+// also from the runtime's `List.map`, which is not.
+//
+// - `apply(add, 1)`: a call of `apply` and one of `add`: 2.
+// - `add(a)`: 1.
+// - `[1, 2, 3].map(...)`: the closure, 3 times; `map` itself is not: 3.
+fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+    f(x)
+}
+
+fn main(io: Stdout) {
+    let add = |n: Int| n + 1
+    let a = apply(add, 1)
+    let b = add(a)
+    let doubled = [1, 2, 3].map(|n: Int| n * 2)
+    let n = doubled.len()
+    let _ = io.println("{b} {n}")
+}
