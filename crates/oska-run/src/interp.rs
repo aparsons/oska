@@ -460,7 +460,8 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             ExprKind::Not(operand) => Ok(Value::Bool(!self.eval(operand, frame)?.as_bool())),
             ExprKind::Range { start, end } => {
                 let start = self.eval(start, frame)?;
-                Ok(Value::range(start, self.eval(end, frame)?))
+                let end = self.eval(end, frame)?;
+                Ok(memory::range(start, end, expr.span)?)
             }
             ExprKind::List(items) => {
                 let items = self.eval_all(items, frame)?;
@@ -1052,6 +1053,9 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         span: Span,
         frame: &mut Frame,
     ) -> Result<Value, Unwind> {
+        if memory::metered() {
+            return self.interpolated_metered(parts, span, frame);
+        }
         let mut text = String::new();
         for part in parts {
             match part {
@@ -1064,7 +1068,49 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 }
             }
         }
-        Ok(memory::text(&text, span)?)
+        Ok(Value::str(&text))
+    }
+
+    /// [`Interpreter::interpolated`] under `--max-memory`: each hole is
+    /// displayed first, and the whole text charged before it is built.
+    #[cold]
+    #[inline(never)]
+    fn interpolated_metered(
+        &mut self,
+        parts: &[Part],
+        span: Span,
+        frame: &mut Frame,
+    ) -> Result<Value, Unwind> {
+        let mut shown = Vec::with_capacity(parts.len());
+        for part in parts {
+            if let Part::Hole { value, display, .. } = part {
+                let at = value.span;
+                let value = self.eval(value, frame)?;
+                shown.push(self.call_callee(display, vec![value], at)?);
+            }
+        }
+        let len = parts
+            .iter()
+            .map(|part| match part {
+                Part::Text(t) => t.len(),
+                Part::Hole { .. } => 0,
+            })
+            .sum::<usize>()
+            + shown.iter().map(|s| s.as_str().len()).sum::<usize>();
+        let text = memory::text_of_len(len, span, || {
+            let mut text = String::with_capacity(len);
+            let mut holes = shown.iter();
+            for part in parts {
+                match part {
+                    Part::Text(t) => text.push_str(t),
+                    Part::Hole { .. } => {
+                        text.push_str(holes.next().map_or("", Value::as_str));
+                    }
+                }
+            }
+            text
+        })?;
+        Ok(text)
     }
 }
 

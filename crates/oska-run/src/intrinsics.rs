@@ -133,20 +133,30 @@ fn text(args: &[Value], index: usize) -> &str {
     }
 }
 
-/// An I/O result as an Oska `Result<T, IoError>`.
-fn io_result<T>(result: io::Result<T>, ok: impl FnOnce(T) -> Value) -> Value {
+/// `Ok(())` for a write or other operation that succeeded, else
+/// `Err(IoError)` with Oska's wording of the failure, made at `span`
+/// (counted under `--max-memory`).
+fn io_unit(result: io::Result<()>, span: Span) -> Result<Value, Panic> {
     match result {
-        Ok(value) => Value::ok(ok(value)),
-        Err(err) => Value::err(Value::io_error(&oska_sys::io_error_message(&err))),
+        Ok(()) => Ok(Value::ok(Value::Unit)),
+        Err(err) => io_failure(&err, span),
     }
 }
 
-/// [`io_result`] for a text read from outside, counted under
+/// `Err(IoError)` with Oska's wording of `err`, made at `span`.
+fn io_failure(err: &io::Error, span: Span) -> Result<Value, Panic> {
+    Ok(Value::err(memory::io_error(
+        &oska_sys::io_error_message(err),
+        span,
+    )?))
+}
+
+/// The text read from outside, or the failure, counted under
 /// `--max-memory` once read, at `span`.
 fn io_text(result: io::Result<String>, span: Span) -> Result<Value, Panic> {
     match result {
         Ok(text) => Ok(Value::ok(memory::text(&text, span)?)),
-        Err(err) => Ok(io_result(Err::<(), _>(err), |()| Value::Unit)),
+        Err(err) => io_failure(&err, span),
     }
 }
 
@@ -163,7 +173,7 @@ fn stdout_println(
 ) -> Result<Value, Panic> {
     let line = format!("{}\n", text(&args, 1));
     let written = interp.write_output(Stream::Stdout, &line, span)?;
-    Ok(io_result(written, |()| Value::Unit))
+    io_unit(written, span)
 }
 
 /// `Stderr.println(self, line)`: the line and a newline.
@@ -174,7 +184,7 @@ fn stderr_println(
 ) -> Result<Value, Panic> {
     let line = format!("{}\n", text(&args, 1));
     let written = interp.write_output(Stream::Stderr, &line, span)?;
-    Ok(io_result(written, |()| Value::Unit))
+    io_unit(written, span)
 }
 
 /// `Stdin.read_line(self)`: the next line, or `None` at end of input.
@@ -184,7 +194,7 @@ fn stdin_read_line(host: &mut dyn Host, _: Vec<Value>, span: Span) -> Result<Val
             let line = line.map(|l| memory::text(&l, span)).transpose()?;
             Ok(Value::ok(Value::option(line)))
         }
-        Err(err) => Ok(io_result(Err::<(), _>(err), |()| Value::Unit)),
+        Err(err) => io_failure(&err, span),
     }
 }
 
@@ -326,7 +336,7 @@ fn env_secret(
 ) -> Result<Value, Panic> {
     let name = text(&args, 1);
     match interp.host().env_var(name) {
-        Some(value) => Ok(Value::secret(Value::str(&value))),
+        Some(value) => memory::wrap(builtins::SECRET, memory::text(&value, span)?, span),
         None => {
             let name = match interp.output_left() {
                 Some(left) => limits::cut_quoted(name, left),
@@ -401,8 +411,8 @@ fn fs_cap(value: &Value) -> &FsCap {
 }
 
 /// `Path.new(raw)` and `Path.from(raw)`.
-fn path_new(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(Value::path(args.swap_remove(0)))
+fn path_new(_: &mut dyn Host, mut args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    memory::wrap(builtins::PATH, args.swap_remove(0), span)
 }
 
 /// `restrict_to(self, dir)` on `Fs`, `FsRead`, and `FsWrite`: the
@@ -594,31 +604,31 @@ fn fs_list_dir(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Valu
                 .collect::<Result<Vec<Value>, Panic>>()?;
             Ok(Value::ok(memory::list(names, span)?))
         }
-        Err(err) => Ok(io_result(Err::<(), _>(err), |()| Value::Unit)),
+        Err(err) => io_failure(&err, span),
     }
 }
 
 /// `DirWrite.write(self, path, contents)`: `path` ends in a plain name,
 /// and is walked beneath the root's handle.
-fn fs_write(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn fs_write(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
     let contents = text(&args, 2);
     let raw = args[1].fields()[0].as_str();
     let result = root_for(fs_cap(&args[0]), Intent::Write).and_then(|root| {
         let names = confine::names_to_create(raw)?;
         host.write_file_beneath(root, &names, contents)
     });
-    Ok(io_result(result, |()| Value::Unit))
+    io_unit(result, span)
 }
 
 /// `DirWrite.create_dir(self, path)`: confined like a write, so `path`
 /// ends in a plain name, and is walked beneath the root's handle.
-fn fs_create_dir(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn fs_create_dir(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
     let raw = args[1].fields()[0].as_str();
     let result = root_for(fs_cap(&args[0]), Intent::Write).and_then(|root| {
         let names = confine::names_to_create(raw)?;
         host.create_dir_beneath(root, &names)
     });
-    Ok(io_result(result, |()| Value::Unit))
+    io_unit(result, span)
 }
 
 /// `FileRead.read_to_string(self)`: the file's text, opened by its name
@@ -630,10 +640,10 @@ fn file_read_to_string(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Res
 
 /// `FileWrite.write(self, contents)`: creates the file, or replaces what
 /// it holds, opened by its name beneath the parent directory's handle.
-fn file_write(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn file_write(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
     let result =
         file_root(&args[0]).and_then(|root| host.write_file_beneath(root, &[], text(&args, 1)));
-    Ok(io_result(result, |()| Value::Unit))
+    io_unit(result, span)
 }
 
 /// The root of the file capability the checker guarantees `value` is, or

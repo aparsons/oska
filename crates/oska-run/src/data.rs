@@ -97,12 +97,13 @@ fn list_map(
     args: Vec<Value>,
     span: Span,
 ) -> Result<Value, Panic> {
-    let mapped = args[0]
-        .as_list()
-        .iter()
-        .map(|item| interp.call_value(&args[1], vec![item.clone()], span))
-        .collect::<Result<Vec<Value>, Panic>>()?;
-    memory::list(mapped, span)
+    let items = args[0].as_list();
+    memory::list_of_len(items.len(), span, || {
+        items
+            .iter()
+            .map(|item| interp.call_value(&args[1], vec![item.clone()], span))
+            .collect()
+    })
 }
 
 /// `String.len(self)`: the number of characters (Unicode code points).
@@ -144,12 +145,15 @@ fn string_to_lowercase(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result
 /// `String.split(self, separator)`: the pieces between occurrences of
 /// `separator`, empty ones included.
 fn string_split(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    let pieces = args[0]
-        .as_str()
-        .split(args[1].as_str())
-        .map(|piece| memory::text(piece, span))
-        .collect::<Result<Vec<Value>, Panic>>()?;
-    memory::list(pieces, span)
+    let pieces = || args[0].as_str().split(args[1].as_str());
+    let count = if memory::metered() {
+        pieces().count()
+    } else {
+        0
+    };
+    memory::list_of_len(count, span, || {
+        pieces().map(|piece| memory::text(piece, span)).collect()
+    })
 }
 
 /// `String.contains(self, needle)`: whether `needle` occurs in the text.
@@ -159,12 +163,15 @@ fn string_contains(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value,
 
 /// `String.lines(self)`: the lines, without their line endings.
 fn string_lines(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    let lines = args[0]
-        .as_str()
-        .lines()
-        .map(|line| memory::text(line, span))
-        .collect::<Result<Vec<Value>, Panic>>()?;
-    memory::list(lines, span)
+    let lines = || args[0].as_str().lines();
+    let count = if memory::metered() {
+        lines().count()
+    } else {
+        0
+    };
+    memory::list_of_len(count, span, || {
+        lines().map(|line| memory::text(line, span)).collect()
+    })
 }
 
 /// `String.starts_with(self, prefix)`.
@@ -206,12 +213,17 @@ fn string_join(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, 
 
 /// `String.chars(self)`: each character as a text of its own.
 fn string_chars(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    let chars = args[0]
-        .as_str()
-        .chars()
-        .map(|c| memory::text(c.encode_utf8(&mut [0; 4]), span))
-        .collect::<Result<Vec<Value>, Panic>>()?;
-    memory::list(chars, span)
+    let text = args[0].as_str();
+    let count = if memory::metered() {
+        text.chars().count()
+    } else {
+        0
+    };
+    memory::list_of_len(count, span, || {
+        text.chars()
+            .map(|c| memory::text(c.encode_utf8(&mut [0; 4]), span))
+            .collect()
+    })
 }
 
 /// `String.slice(self, start, end)`: the characters from `start` up to,

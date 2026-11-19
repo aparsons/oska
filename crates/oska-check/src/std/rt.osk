@@ -5151,11 +5151,12 @@ pub fn on_exception(pointers: Int) -> Int {
 // alike, calls `counted_alloc`, `counted_try_alloc` or `counted_free` in
 // its place; theirs alone are not redirected. Word 39 holds the bytes the
 // program may still allocate, and word 49 the report of the panic
-// (`P0040`), or 0 before `memory_limit_start`. Each block is counted,
-// header included, before it is allocated, and marked as counted (256
-// added to its header word, which no size class or mapping length uses);
-// freeing a marked block gives its bytes back, and freeing one allocated
-// before counting started gives nothing, so the bytes left never pass
+// (`P0040`), or 0 before `memory_limit_start`. Once counting has
+// started, each block is counted, header included, before it is
+// allocated, and marked as counted (256 added to its header word, which
+// no size class or mapping length uses); a block allocated before is
+// neither. Freeing a marked block gives its bytes back, and freeing an
+// unmarked one gives nothing, so the bytes left never pass
 // the limit and adding them back never overflows. A program built without
 // the flag never calls these.
 
@@ -5203,13 +5204,13 @@ fn block_bytes(object: Int) -> Int {
     rt_mem_shl(16, header)
 }
 
-// Count `bytes` more against the limit: past it, panic with its report.
+// Count `bytes` more against the limit, once counting has started: past
+// it, panic with its report.
 fn spend_memory(bytes: Int) {
     let left = rt_mem_sub(rt_mem_load64(global(39)), bytes)
-    let report = rt_mem_load64(global(49))
-    if left < 0 && report != 0 {
+    if left < 0 {
         rt_mem_store64(global(39), limit_reached())
-        panic(rt_mem_as_text(report))
+        panic(rt_mem_as_text(rt_mem_load64(global(49))))
     }
     rt_mem_store64(global(39), left)
 }
@@ -5220,7 +5221,16 @@ fn mark_counted(object: Int) {
     rt_mem_store64(at, rt_mem_or(rt_mem_load64(at), counted_mark()))
 }
 
+// Whether counting has started (`memory_limit_start`): until then a
+// block is neither counted nor marked.
+fn counting() -> Bool {
+    rt_mem_load64(global(49)) != 0
+}
+
 pub fn counted_alloc(size: Int) -> Int {
+    if !counting() {
+        return alloc(size)
+    }
     let expected = block_for(size)
     spend_memory(expected)
     let object = alloc(size)
@@ -5234,7 +5244,7 @@ pub fn counted_alloc(size: Int) -> Int {
 // own; the bytes are counted first, and given back when no memory holds
 // them.
 pub fn counted_try_alloc(size: Int) -> Int {
-    if size < 0 || size > 140737488355328 {
+    if !counting() || size < 0 || size > 140737488355328 {
         return try_alloc(size)
     }
     if rt_mem_add(size, 8) <= largest_block() {

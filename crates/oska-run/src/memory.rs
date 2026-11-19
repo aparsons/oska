@@ -4,7 +4,8 @@
 //! limit is made.
 //!
 //! **What counts.** Each text, list, struct or enum value the program
-//! builds, and each closure: its bytes as this module reckons them
+//! builds, each closure, and each struct the prelude makes for it (a
+//! `Range`, `Secret`, `Path`, `IoError`, or `std.html` markup): its bytes as this module reckons them
 //! ([`text_bytes`] and the like), which are the bytes the interpreter
 //! allocates for it, its record here included. A list that grows in
 //! place counts its new capacity. The small `Option` and `Result` values
@@ -20,7 +21,9 @@
 //! value ([`Held`]). A value dropped since is found when the meter is
 //! next swept: whenever a charge would pass the limit (so a panic is
 //! decided on the exact bytes held), and whenever the record has doubled
-//! since the last sweep (so it never grows without end).
+//! since the last sweep (so it never grows without end). A sweep that
+//! frees less than an eighth of the limit stops the program too
+//! ([`charge`]), so sweeps never run back to back.
 //!
 //! **No cost without the flag.** The meter is a thread-local, the
 //! interpreter's thread's, set only for a run under `--max-memory`
@@ -141,6 +144,13 @@ pub(crate) fn metered() -> bool {
 
 /// Charge `bytes` that the program is about to allocate at `span`:
 /// `P0040` instead when they would take what it holds past the limit.
+///
+/// A charge that would pass the limit first sweeps the record. If the
+/// bytes still do not fit, or the sweep freed less than an eighth of the
+/// limit, it is `P0040`: a program that holds nearly all of its limit
+/// and keeps allocating stops then, instead of sweeping its whole record
+/// again at every charge (each sweep is paid for by an eighth of the
+/// limit allocated since).
 fn charge(bytes: u64, span: Span) -> Result<(), Panic> {
     METER.with(|meter| {
         let mut meter = meter.borrow_mut();
@@ -151,8 +161,10 @@ fn charge(bytes: u64, span: Span) -> Result<(), Panic> {
             meter.sweep();
         }
         if meter.live.saturating_add(bytes) > meter.limit {
+            let before = meter.live;
             meter.sweep();
-            if meter.live.saturating_add(bytes) > meter.limit {
+            let freed = before.saturating_sub(meter.live);
+            if meter.live.saturating_add(bytes) > meter.limit || freed < meter.limit / SLACK {
                 return Err(Panic::new(
                     Limit::Memory.code(),
                     Limit::Memory.message(meter.limit),
@@ -173,6 +185,10 @@ fn record(held: Held, bytes: u64) {
         }
     });
 }
+
+/// A sweep that frees less than this part of the limit stops the
+/// program ([`charge`]).
+const SLACK: u64 = 8;
 
 /// The bytes of one [`Entry`], which each counted value also takes.
 const ENTRY: u64 = (std::mem::size_of::<Entry>() + 2 * std::mem::size_of::<usize>()) as u64;
@@ -261,6 +277,42 @@ fn list_metered(items: Vec<Value>, span: Span) -> Result<Value, Panic> {
     Ok(Value::List(items))
 }
 
+/// The list `make` builds, of `len` items, made at `span`. Under
+/// `--max-memory` its room is charged before `make` runs, so a list that
+/// would pass the limit is never built; its items are charged as they
+/// are made.
+#[inline]
+pub(crate) fn list_of_len(
+    len: usize,
+    span: Span,
+    make: impl FnOnce() -> Result<Vec<Value>, Panic>,
+) -> Result<Value, Panic> {
+    if metered() {
+        return list_of_len_metered(len, span, make);
+    }
+    Ok(Value::List(Rc::new(make()?)))
+}
+
+#[cold]
+#[inline(never)]
+fn list_of_len_metered(
+    len: usize,
+    span: Span,
+    make: impl FnOnce() -> Result<Vec<Value>, Panic>,
+) -> Result<Value, Panic> {
+    let charged = items_bytes(len);
+    charge(charged, span)?;
+    let items = Rc::new(make()?);
+    let bytes = items_bytes(items.capacity());
+    METER.with(|meter| {
+        if let Some(meter) = meter.borrow_mut().as_mut() {
+            meter.live = meter.live.saturating_add(bytes).saturating_sub(charged);
+            meter.record(Held::Items(Rc::downgrade(&items)), bytes);
+        }
+    });
+    Ok(Value::List(items))
+}
+
 /// What `ctor` builds from `fields`, at `span`.
 #[inline]
 pub(crate) fn construct(ctor: &Construct, fields: Vec<Value>, span: Span) -> Result<Value, Panic> {
@@ -282,6 +334,49 @@ fn construct_metered(ctor: &Construct, fields: Vec<Value>, span: Span) -> Result
         record(Held::Items(Rc::downgrade(fields)), bytes);
     }
     Ok(value)
+}
+
+/// A struct of the prelude's type `ty` holding `fields`, made at `span`:
+/// a `Range`, `Secret`, `Path`, `IoError`, or `std.html` markup.
+#[inline]
+pub(crate) fn structure(ty: &str, fields: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    if metered() {
+        return structure_metered(ty, fields, span);
+    }
+    Ok(Value::Struct {
+        ty: Rc::from(ty),
+        fields: Rc::new(fields),
+    })
+}
+
+#[cold]
+#[inline(never)]
+fn structure_metered(ty: &str, fields: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    let bytes = items_bytes(fields.capacity()) + RC + ty.len() as u64;
+    charge(bytes, span)?;
+    let fields = Rc::new(fields);
+    record(Held::Items(Rc::downgrade(&fields)), bytes);
+    Ok(Value::Struct {
+        ty: Rc::from(ty),
+        fields,
+    })
+}
+
+/// A `Secret` or `Path` (the prelude's type `ty`) wrapping `value`, made
+/// at `span`.
+pub(crate) fn wrap(ty: &str, value: Value, span: Span) -> Result<Value, Panic> {
+    structure(ty, vec![value], span)
+}
+
+/// An `IoError` with `message`, made at `span`.
+pub(crate) fn io_error(message: &str, span: Span) -> Result<Value, Panic> {
+    let message = text(message, span)?;
+    structure(oska_check::builtins::IO_ERROR, vec![message], span)
+}
+
+/// `start..end`, a `Range`, made at `span`.
+pub(crate) fn range(start: Value, end: Value, span: Span) -> Result<Value, Panic> {
+    structure(oska_check::builtins::RANGE, vec![start, end], span)
 }
 
 /// `closure` as a function value, made at `span`.
