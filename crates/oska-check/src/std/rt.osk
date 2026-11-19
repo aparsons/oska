@@ -81,6 +81,8 @@ pub fn rt_sys_read_file(handle: Int, buf: Int, count: Int, done: Int) -> Int
 pub fn rt_sys_get_console_mode(handle: Int, mode: Int) -> Int
 // `WriteConsoleW(handle, units, count, done, NULL)`: UTF-16 units.
 pub fn rt_sys_write_console(handle: Int, units: Int, count: Int, done: Int) -> Int
+// `ReadConsoleW(handle, units, count, read, NULL)`: UTF-16 units.
+pub fn rt_sys_read_console(handle: Int, units: Int, count: Int, read: Int) -> Int
 // `VirtualAlloc(addr, size, type, protect)`: the address.
 pub fn rt_sys_virtual_alloc(addr: Int, size: Int, kind: Int, protect: Int) -> Int
 // `VirtualFree(addr, 0, MEM_RELEASE)`: the whole mapping at `addr`.
@@ -476,7 +478,8 @@ fn broken_pipe(result: Int) -> Bool {
 //           their contents, 38 the fake directories;
 //   40-44   the free lists of size classes 8 to 12;
 //   45-47   on Windows, the handles of standard input, output and error;
-//   48      on Windows, the word a call puts its count in (`win_write`).
+//   48      on Windows, the word a call puts its count in (`win_write`);
+//   49      on Windows, the console area, or 0 (see "The Windows console").
 //
 // Every object the allocator gives out is preceded by a header word: its
 // block's size class, or for an object too large for any class, minus
@@ -2332,9 +2335,7 @@ fn stdout_buffer() -> Int {
         buf = map(0, stdout_buffer_size(), 3, private_anonymous())
         rt_mem_store64(global(13), buf)
         if on_windows() {
-            // `GetConsoleMode` succeeds only on a console.
-            let console = rt_sys_get_console_mode(win_handle(1), global(48))
-            rt_mem_store64(global(15), if console > 0 { 2 } else { 1 })
+            rt_mem_store64(global(15), if win_console(1) { 2 } else { 1 })
             return buf
         }
         // `ioctl(1, TCGETS, termios)` succeeds only on a terminal. The
@@ -2477,6 +2478,9 @@ fn write_all(fd: Int, buf: Int, count: Int) -> Int {
 // `fd`, where 0, 1 and 2 are the standard handles and any other is a
 // handle. The bytes written, or a negative error.
 fn win_write(fd: Int, buf: Int, count: Int) -> Int {
+    if win_console(fd) {
+        return win_console_write(fd, buf, count)
+    }
     let done = global(48)
     rt_mem_store64(done, 0)
     let ok = rt_sys_write_file(win_handle(fd), buf, count, done)
@@ -2490,6 +2494,9 @@ fn win_write(fd: Int, buf: Int, count: Int) -> Int {
 // `fd`. The bytes read, 0 at the end, or a negative error; a pipe whose
 // writer has gone (`ERROR_BROKEN_PIPE`) is the end.
 fn win_read(fd: Int, buf: Int, count: Int) -> Int {
+    if win_console(fd) {
+        return win_console_read(buf, count)
+    }
     let done = global(48)
     rt_mem_store64(done, 0)
     let ok = rt_sys_read_file(win_handle(fd), buf, count, done)
@@ -2500,6 +2507,228 @@ fn win_read(fd: Int, buf: Int, count: Int) -> Int {
         return ok
     }
     rt_mem_load32(done)
+}
+
+// ---- The Windows console ---------------------------------------------------
+//
+// A console takes UTF-16, so text to and from one is converted here, and
+// files and pipes get the bytes as they are (ADR 0020; Q6 of its research). Word 49 is 0
+// when no standard stream is a console, and otherwise the console area,
+// mapped at start-up:
+//
+// - word 0: which of stdin (1), stdout (2) and stderr (4) are consoles;
+// - words 1 and 2: for stdout and stderr, the start of a character a
+//   write split, kept until the next write (its bytes, then their count
+//   in the word's last byte);
+// - words 3 and 4: where the converted input not yet read starts and
+//   ends, within the input bytes;
+// - at 64, the bytes of one write, at most `console_chunk()` and a
+//   held start; then their UTF-16 units; then the UTF-16 units of one
+//   read, and their UTF-8 bytes, the input bytes.
+
+// Where the unread converted input starts and ends: words 3 and 4.
+fn console_in_start() -> Int {
+    24
+}
+
+fn console_in_end() -> Int {
+    32
+}
+
+fn console_chunk() -> Int {
+    8192
+}
+
+fn console_bytes() -> Int {
+    64
+}
+
+fn console_units() -> Int {
+    8264
+}
+
+fn console_in_units() -> Int {
+    24664
+}
+
+fn console_in_bytes() -> Int {
+    32856
+}
+
+// The most UTF-16 units one console read asks for, one fewer than the
+// input units hold, for the second half of a pair a read cut: their UTF-8
+// fits the input bytes, at 3 bytes a unit.
+fn console_read_units() -> Int {
+    4095
+}
+
+// Whether the standard stream `fd` is a console.
+fn win_console(fd: Int) -> Bool {
+    let area = rt_mem_load64(global(49))
+    if area == 0 || fd < 0 || fd > 2 {
+        return false
+    }
+    rt_mem_and(rt_mem_load64(area), rt_mem_shl(1, fd)) != 0
+}
+
+// Find which standard streams are consoles, and map the console area if
+// any is.
+fn win_find_consoles() {
+    var which = 0
+    var fd = 0
+    while fd <= 2 {
+        if rt_sys_get_console_mode(win_handle(fd), global(48)) > 0 {
+            which = rt_mem_or(which, rt_mem_shl(1, fd))
+        }
+        fd = fd + 1
+    }
+    if which == 0 {
+        rt_mem_store64(global(49), 0)
+        return
+    }
+    let area = map(0, 65536, 3, 0)
+    rt_mem_store64(area, which)
+    rt_mem_store64(global(49), area)
+}
+
+// The length of the UTF-8 sequence whose first byte is `b`: 1 for a byte
+// that cannot start one, which becomes U+FFFD.
+fn utf8_sequence_length(b: Int) -> Int {
+    if b >= 240 && b < 248 {
+        return 4
+    }
+    if b >= 224 && b < 240 {
+        return 3
+    }
+    if b >= 194 && b < 224 {
+        return 2
+    }
+    1
+}
+
+// Write the `count` bytes at `buf` to the console `fd` (1 or 2) as UTF-16
+// with `WriteConsoleW`: `count`, or a negative error. A character the
+// bytes end in the middle of is held for the next write.
+fn win_console_write(fd: Int, buf: Int, count: Int) -> Int {
+    let area = rt_mem_load64(global(49))
+    let held = rt_mem_add(area, rt_mem_shl(fd, 3))
+    let bytes = rt_mem_add(area, console_bytes())
+    let units = rt_mem_add(area, console_units())
+    var from = 0
+    while from < count {
+        // The held start, then the next chunk of `buf`.
+        var size = rt_mem_load8(rt_mem_add(held, 7))
+        var k = 0
+        while k < size {
+            rt_mem_store8(rt_mem_add(bytes, k), rt_mem_load8(rt_mem_add(held, k)))
+            k = k + 1
+        }
+        var take = count - from
+        if take > console_chunk() {
+            take = console_chunk()
+        }
+        copy_bytes(rt_mem_add(bytes, size), rt_mem_add(buf, from), take)
+        from = from + take
+        size = size + take
+        // Convert every whole character; hold a last one cut short.
+        var at = 0
+        var n = 0
+        rt_mem_store8(rt_mem_add(held, 7), 0)
+        while at < size {
+            let b = rt_mem_load8(rt_mem_add(bytes, at))
+            let length = utf8_sequence_length(b)
+            if at + length > size {
+                var h = 0
+                while at + h < size {
+                    rt_mem_store8(rt_mem_add(held, h), rt_mem_load8(rt_mem_add(bytes, at + h)))
+                    h = h + 1
+                }
+                rt_mem_store8(rt_mem_add(held, 7), h)
+                break
+            }
+            var cp = b
+            if length == 1 && b >= 128 {
+                cp = 65533
+            } else if length > 1 {
+                cp = rt_mem_and(b, rt_mem_shr(127, length))
+                var c = 1
+                while c < length {
+                    cp = rt_mem_or(rt_mem_shl(cp, 6), rt_mem_and(rt_mem_load8(rt_mem_add(bytes, at + c)), 63))
+                    c = c + 1
+                }
+            }
+            if cp >= 65536 {
+                let rest = cp - 65536
+                rt_mem_store16(rt_mem_add(units, rt_mem_shl(n, 1)), 55296 + rt_mem_shr(rest, 10))
+                rt_mem_store16(rt_mem_add(units, rt_mem_shl(n + 1, 1)), 56320 + rt_mem_and(rest, 1023))
+                n = n + 2
+            } else {
+                rt_mem_store16(rt_mem_add(units, rt_mem_shl(n, 1)), cp)
+                n = n + 1
+            }
+            at = at + length
+        }
+        var written = 0
+        while written < n {
+            let done = global(48)
+            rt_mem_store64(done, 0)
+            let ok = rt_sys_write_console(win_handle(fd), rt_mem_add(units, rt_mem_shl(written, 1)), n - written, done)
+            if ok < 0 {
+                return ok
+            }
+            let wrote = rt_mem_load32(done)
+            if wrote == 0 {
+                // `ERROR_WRITE_FAULT`: the console took nothing.
+                return -29
+            }
+            written = written + wrote
+        }
+    }
+    count
+}
+
+// Read from the console stdin into the `count` bytes at `buf`, as UTF-8
+// converted from what `ReadConsoleW` gives: the bytes read, 0 at the end
+// (a line that starts with Ctrl+Z, as Rust's standard library reads it),
+// or a negative error.
+fn win_console_read(buf: Int, count: Int) -> Int {
+    let area = rt_mem_load64(global(49))
+    let input = rt_mem_add(area, console_in_bytes())
+    var start = rt_mem_load64(rt_mem_add(area, console_in_start()))
+    var end = rt_mem_load64(rt_mem_add(area, console_in_end()))
+    if start == end {
+        let units = rt_mem_add(area, console_in_units())
+        let done = global(48)
+        rt_mem_store64(done, 0)
+        let ok = rt_sys_read_console(win_handle(0), units, console_read_units(), done)
+        if ok < 0 {
+            return ok
+        }
+        var n = rt_mem_load32(done)
+        if n == 0 || rt_mem_load16(units) == 26 {
+            return 0
+        }
+        // A pair the read cut after its first half: read its second.
+        let last = rt_mem_load16(rt_mem_add(units, rt_mem_shl(n - 1, 1)))
+        if last >= 55296 && last < 56320 {
+            rt_mem_store64(done, 0)
+            let more = rt_sys_read_console(win_handle(0), rt_mem_add(units, rt_mem_shl(n, 1)), 1, done)
+            if more < 0 {
+                return more
+            }
+            n = n + rt_mem_load32(done)
+        }
+        start = 0
+        end = utf16_to_utf8(input, units, n)
+    }
+    var take = end - start
+    if take > count {
+        take = count
+    }
+    copy_bytes(buf, rt_mem_add(input, start), take)
+    rt_mem_store64(rt_mem_add(area, console_in_start()), start + take)
+    rt_mem_store64(rt_mem_add(area, console_in_end()), end)
+    take
 }
 
 // The Windows handle behind the descriptor `fd`.
@@ -2530,6 +2759,9 @@ fn io_error_text(message: String) -> IoError {
 // Oska's wording for the kind of failure the system error `errno` is:
 // `I/O error` for a number whose kind has no wording of its own.
 fn errno_message(errno: Int) -> String {
+    if on_windows() {
+        return windows_error_message(errno)
+    }
     let platform = rt_mem_platform()
     if errno < 1 || errno > platform.errors_count {
         return "I/O error"
@@ -2568,6 +2800,40 @@ fn errno_message(errno: Int) -> String {
 // `oska-sys`.
 fn system_errors() -> String {
     "permission denied|not found||interrupted|||||||would block|out of memory|permission denied|||resource busy|already exists|cannot move across devices||not a directory|is a directory|invalid input|||||file too large|no space left on device|not seekable|read-only file system|too many links|broken pipe||||invalid file name||not supported|directory not empty||||||||||||||||||||||||||||||||||||||||||||||||||||||||not supported|||||||||||||||timed out||||||||||||quota exceeded||||||||||||permission denied|not found||interrupted||||||||out of memory|permission denied|||resource busy|already exists|cannot move across devices||not a directory|is a directory|invalid input|||||file too large|no space left on device|not seekable|read-only file system|too many links|broken pipe|||would block||||||||||not supported|||||||||||||||timed out|||invalid file name|||directory not empty|||quota exceeded|||||||||not supported||||||||||||||||||||||||not supported||||"
+}
+
+// Oska's wording for the kind of the Win32 error `code`, or `I/O error`.
+// Win32 codes run to 1460, so Windows' part is sparse: `code=wording`
+// pairs separated by `|`, from `oska-sys`'s `WINDOWS_ERRORS` worded by
+// their kinds, which `oskac`'s `std_rt_errors.rs` checks.
+fn windows_error_message(code: Int) -> String {
+    let object = rt_mem_text(windows_errors())
+    let data = text_data(object)
+    let length = text_length(object)
+    var at = 0
+    while at < length {
+        var n = 0
+        while rt_mem_load8(rt_mem_add(data, at)) != 61 {
+            n = n * 10 + rt_mem_load8(rt_mem_add(data, at)) - 48
+            at = at + 1
+        }
+        at = at + 1
+        var end = at
+        while end < length && rt_mem_load8(rt_mem_add(data, end)) != 124 {
+            end = end + 1
+        }
+        if n == code {
+            return rt_mem_as_text(text_of(rt_mem_add(data, at), end - at))
+        }
+        at = end + 1
+    }
+    "I/O error"
+}
+
+// Windows' system errors with a wording of their own, as
+// `windows_error_message` reads them.
+fn windows_errors() -> String {
+    "2=not found|3=not found|5=permission denied|8=out of memory|14=out of memory|15=not found|17=cannot move across devices|19=read-only file system|39=no space left on device|53=not found|67=not found|80=already exists|87=invalid input|109=broken pipe|112=no space left on device|120=not supported|121=timed out|123=invalid file name|132=not seekable|145=directory not empty|161=invalid file name|170=resource busy|183=already exists|206=invalid file name|223=file too large|232=broken pipe|258=timed out|267=not a directory|336=is a directory|1142=too many links|1295=quota exceeded|1460=timed out"
 }
 
 // ---- Standard input --------------------------------------------------------
@@ -2767,11 +3033,14 @@ fn env_lookup(name: String) -> Int {
         }
         i = i + 1
     }
+    // Windows' names ignore case, as `std::env::var` does there; here only
+    // ASCII letters' case, which covers the names programs use.
+    let fold = on_windows()
     var entries = rt_mem_load64(global(12))
     while rt_mem_load64(entries) != 0 {
         let entry = rt_mem_load64(entries)
         var j = 0
-        while j < length && rt_mem_load8(rt_mem_add(entry, j)) == rt_mem_load8(rt_mem_add(data, j)) {
+        while j < length && name_byte(rt_mem_load8(rt_mem_add(entry, j)), fold) == name_byte(rt_mem_load8(rt_mem_add(data, j)), fold) {
             j = j + 1
         }
         if j == length && rt_mem_load8(rt_mem_add(entry, j)) == 61 {
@@ -2784,6 +3053,15 @@ fn env_lookup(name: String) -> Int {
         entries = rt_mem_add(entries, 8)
     }
     0
+}
+
+// The byte `b` of a variable's name, as `env_lookup` compares it: an
+// ASCII capital as its small letter when `fold`.
+fn name_byte(b: Int, fold: Bool) -> Int {
+    if fold && b >= 65 && b <= 90 {
+        return b + 32
+    }
+    b
 }
 
 // `Env.get`.
@@ -4851,6 +5129,7 @@ fn win_process_init(handler: Int) {
     rt_mem_store64(global(45), win_std_handle(-10))
     rt_mem_store64(global(46), win_std_handle(-11))
     rt_mem_store64(global(47), win_std_handle(-12))
+    win_find_consoles()
     let _ = rt_sys_add_exception_handler(1, handler)
     rt_mem_store64(global(48), 65536)
     let _ = rt_sys_stack_guarantee(global(48))

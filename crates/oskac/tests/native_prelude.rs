@@ -10,9 +10,12 @@
 //! body-less function fails here until it has a native implementation and
 //! a row.
 
-#![cfg(all(
-    any(target_os = "linux", target_os = "macos"),
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        any(target_os = "linux", target_os = "macos"),
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(windows, target_arch = "x86_64")
 ))]
 
 mod differential;
@@ -995,9 +998,30 @@ fn every_call_calls_its_function_and_builds_natively() {
     }
 }
 
+/// Whether the call `name`, or its program `src`, uses a file
+/// capability: native Windows code reaches files only once its
+/// confinement is written (#178), so on Windows these wait for it.
+fn reaches_files(name: &str, src: &str) -> bool {
+    let (kind, _) = name.split_once('.').unwrap_or((name, ""));
+    let file_kinds = [
+        "Fs",
+        "FsRead",
+        "FsWrite",
+        "Dir",
+        "DirRead",
+        "DirWrite",
+        "FileRead",
+        "FileWrite",
+    ];
+    file_kinds.contains(&kind) || [": Fs", ": Dir", ": File"].iter().any(|t| src.contains(t))
+}
+
 #[test]
 fn every_call_runs_the_same_on_both_backends() {
     for (name, run, src) in CALLS {
+        if cfg!(windows) && reaches_files(name, src) {
+            continue;
+        }
         let case = Case::file(&format!("prelude-{name}"), &source(src)).with_args(&["given"]);
         let case = match run {
             Run::Tests => continue,

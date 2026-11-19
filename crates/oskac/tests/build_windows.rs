@@ -32,6 +32,7 @@ const IMPORTS: [(&str, &[&str]); 2] = [
             "ReadFile",
             "GetConsoleMode",
             "WriteConsoleW",
+            "ReadConsoleW",
             "VirtualAlloc",
             "VirtualFree",
             "ExitProcess",

@@ -153,8 +153,12 @@ pub struct Outcome {
 }
 
 /// The target platform this host builds and runs native executables
-/// for: its own.
+/// for: its own. Windows is not yet a host `oskac run` goes native on
+/// (#179), but its executables run here, so the suite builds for it.
 pub fn host_target() -> oska_native::Target {
+    if cfg!(all(windows, target_arch = "x86_64")) {
+        return oska_native::Target::WindowsX86_64;
+    }
     oska_native::Target::host().expect("this host runs native executables")
 }
 
@@ -296,10 +300,10 @@ fn try_build(
 ) -> Result<PathBuf, String> {
     let bin = root.join("bin");
     std::fs::create_dir_all(&bin).expect("should create the bin directory");
-    let exe = bin.join("program");
+    let target = target.unwrap_or_else(host_target);
+    let exe = bin.join(format!("program{}", target.suffix()));
     let mut build = oskac(native_dir);
     build.arg("build").arg(&case.target).arg("-o").arg(&exe);
-    let target = target.unwrap_or_else(host_target);
     build.args(["--target", target.name()]);
     let build = build.output().expect("oskac build should run");
     if !build.status.success() {

@@ -27,7 +27,10 @@ pub fn write_executable(path: &Path, bytes: &[u8]) {
         .expect("cp should run");
     assert!(copied.success(), "cp should copy the executable");
     let _ = std::fs::remove_file(&scratch);
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
-        .expect("should make it executable");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+            .expect("should make it executable");
+    }
 }
