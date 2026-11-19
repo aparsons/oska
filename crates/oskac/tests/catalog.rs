@@ -34,6 +34,11 @@ use std::process::Command;
 
 use oska_run::{FakeHost, TestOptions, TestStatus};
 
+#[path = "../src/fence.rs"]
+mod fence;
+
+use fence::{FenceLine, Fences};
+
 /// Codes no program can reach, so they have no example: `E0170` is for the
 /// prelude only (user code gets `E0132` instead), `E0360` needs a `std`
 /// module with a private name (none has one yet), `P0005` is a second
@@ -150,51 +155,37 @@ fn rows_of(doc: &str) -> Vec<Row> {
 fn examples_of(doc: &str, file: &str) -> Vec<Example> {
     let mut out = Vec::new();
     let mut open: Option<Example> = None;
-    // A block fenced with `~~~` may hold a ```` ``` ```` fence (`E0001`).
-    let mut fence = "```";
+    let mut fences = Fences::default();
     for (index, line) in doc.lines().enumerate() {
-        let marker = match &open {
-            Some(_) => fence,
-            None if line.starts_with("~~~") => "~~~",
-            None => "```",
-        };
-        match (&mut open, line.strip_prefix(marker)) {
-            (None, Some(info)) => {
-                fence = marker;
+        match fences.line(line) {
+            FenceLine::Opens(info) => {
                 let words: Vec<String> = info.split_whitespace().map(str::to_string).collect();
                 let tagged = words.iter().skip(1).find_map(|w| {
                     let (kind, code) = w.split_once('=')?;
                     (["error", "fixed"].contains(&kind) && is_code(code))
                         .then(|| (kind.to_string(), code.to_string()))
                 });
-                open = Some(match tagged {
-                    Some((kind, code)) => Example {
-                        code,
-                        kind,
-                        words,
-                        body: String::new(),
-                        at: format!("{file}:{}", index + 1),
-                    },
-                    // Some other block: read it, then drop it.
-                    None => Example {
-                        code: String::new(),
-                        kind: String::new(),
-                        words,
-                        body: String::new(),
-                        at: format!("{file}:{}", index + 1),
-                    },
+                let (kind, code) = tagged.unwrap_or_default();
+                // A block with no tag is read, then dropped.
+                open = Some(Example {
+                    code,
+                    kind,
+                    words,
+                    body: String::new(),
+                    at: format!("{file}:{}", index + 1),
                 });
             }
-            (Some(_), Some(rest)) if rest.trim().is_empty() => {
+            FenceLine::Closes => {
                 if let Some(done) = open.take().filter(|e| !e.code.is_empty()) {
                     out.push(done);
                 }
             }
-            (Some(block), _) => {
-                block.body.push_str(line);
-                block.body.push('\n');
+            FenceLine::Other => {
+                if let Some(block) = &mut open {
+                    block.body.push_str(line);
+                    block.body.push('\n');
+                }
             }
-            (None, None) => {}
         }
     }
     assert!(open.is_none(), "{file}: a code block is never closed");

@@ -155,8 +155,6 @@ Each code has a program that fails with exactly that code and the same program f
 
 #### `E0001`
 
-A block that holds a fence is fenced with `~~~`.
-
 ~~~oska error=E0001
 ```oska
 fn main() {
