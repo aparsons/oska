@@ -1,0 +1,5 @@
+exit: 1
+--- stdout
+--- stderr
+<stdin>:1:14: error[E0212]: `main` must return `()` or `Result<(), E>`, not `Int` (bytes 13..16)
+<stdin>:2:5: error[E0220]: expected `Int`, found `String` (bytes 23..35)

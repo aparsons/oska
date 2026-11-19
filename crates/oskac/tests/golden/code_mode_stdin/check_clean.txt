@@ -1,0 +1,4 @@
+exit: 0
+--- stdout
+fn main: Stdout (io), Stdin (input)
+--- stderr

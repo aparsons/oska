@@ -1,0 +1,15 @@
+exit: 1
+--- stdout
+{
+  "diagnostics": [
+    {"code":"E0212","message":"`main` must return `()` or `Result<(), E>`, not `Int`","path":"<stdin>","span":{"start":13,"end":16},"line":1,"column":14,"end_line":1,"end_column":17,"severity":"error","url":"https://oskalang.dev/codes/E0212","related":[],"suggestions":[]},
+    {"code":"E0220","message":"expected `Int`, found `String`","path":"<stdin>","span":{"start":23,"end":35},"line":2,"column":5,"end_line":2,"end_column":17,"severity":"error","url":"https://oskalang.dev/codes/E0220","related":[],"suggestions":[]}
+  ],
+  "functions": [
+    {"name":"main","authority":[],"via":[],"pure":true}
+  ],
+  "audit": [],
+  "attenuations": [],
+  "verdict": "diagnostics"
+}
+--- stderr
