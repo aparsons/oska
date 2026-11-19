@@ -12,10 +12,10 @@ The reader refuses anything that is not core IR version 2, naming what is
 wrong and where: a version other than 2 (version 1 included: it has no
 `types`), an unknown `kind`, operator or type, a field missing, unknown
 or of the wrong JSON type, an `Int` literal outside `-2^63 ..= 2^63 - 1`,
-two functions or two types of one name, two variants of one name in an
-enum, a call of a function the program does not have, or with a
-different number of arguments than that function has parameters, and a
-constructor (built or matched) of a struct or variant the program does
+two functions or two types of one name, a type named `Int`, `Bool` or
+`()`, two variants of one name in an enum, a call of a function the
+program does not have, or with a different number of arguments than that
+function has parameters, and a constructor (built or matched) of a struct or variant the program does
 not declare, or with a different number of fields. `entry` then refuses a
 program whose `main` is missing, takes parameters or does not return
 `()`. The reader does not type the program: the checker typed it before
@@ -294,6 +294,8 @@ def program (text : String) : Read Program := do
   let typeNames ← list "types" ts fun path t => do str s!"{path}.name" (← field path t "name")
   if let some dup := duplicate typeNames then
     throw s!"types: two types are named `{dup}`"
+  if let some builtin := typeNames.find? (["Int", "Bool", "()"].contains ·) then
+    throw s!"types: a type is named `{builtin}`, the name of a built-in type"
   let types ← list "types" ts (typeDecl typeNames)
   let fs ← arr "functions" (← field "program" j "functions")
   -- The names and arities first, so a call may reach a later function.
@@ -387,6 +389,12 @@ def shapeTypes : String :=
 #guard refuses (withMain ("{\"kind\": \"Struct\", \"name\": \"A\", \"fields\": []}, " ++
     "{\"kind\": \"Struct\", \"name\": \"A\", \"fields\": []}") "{\"kind\": \"Unit\"}")
   "two types are named `A`"
+#guard refuses (withMain "{\"kind\": \"Struct\", \"name\": \"Int\", \"fields\": []}"
+    "{\"kind\": \"Unit\"}")
+  "a type is named `Int`, the name of a built-in type"
+#guard refuses (withMain "{\"kind\": \"Enum\", \"name\": \"()\", \"variants\": []}"
+    "{\"kind\": \"Unit\"}")
+  "a type is named `()`"
 #guard runsTo (withMain "" "{\"kind\": \"Block\", \"stmts\": []}")
   fun | .value .unit => true | _ => false
 #guard runsTo

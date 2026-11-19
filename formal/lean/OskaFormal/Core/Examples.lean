@@ -1,3 +1,4 @@
+import OskaFormal.Core.Typing
 import OskaFormal.Core.Semantics
 
 /-!
@@ -76,5 +77,39 @@ example : shapes.fieldsOf "Pair" none = some [.int, .bool] := rfl
 example : shapes.fieldsOf "Pair" (some "Dot") = none := rfl
 example : shapes.fieldsOf "Shape" none = none := rfl
 example : shapes.fieldsOf "Shape" (some "Square") = some [.int] := rfl
+
+/-! ## Static exhaustiveness -/
+
+/-- An `Int` is never covered by its literals: `3` alone covers nothing. -/
+theorem covers_int_literal (P : Program) : ∀ fuel, covers P fuel [[.int 3]] [.int] = false := by
+  intro fuel
+  cases fuel with
+  | zero => rfl
+  | succ fuel =>
+    cases fuel <;> simp [covers, defaultRows, Pattern.isCatchAll]
+
+/-- `match 3 { 3 => 1 }` is not source typed in any program: its one arm
+does not cover every `Int`, though it covers the scrutinee. -/
+example (P : Program) : ¬ SourceTyped P [] (.match_ (.int 3) [.mk (.int 3) none (.int 1)]) .int := by
+  intro ⟨_, h⟩
+  simp [Expr.staticMatches, exhaustiveArms, unguarded, Pattern.headType, covers_int_literal] at h
+
+/-- With a catch-all arm after it, it is. -/
+example : exhaustiveArms shapes [.mk (.int 3) none (.int 1), .mk .wildcard none (.int 0)] = true := by
+  decide
+
+/-- A guarded arm does not count: `Square(n) if n > 0` leaves `Square`
+uncovered. -/
+example : exhaustiveArms shapes
+    [.mk (.construct "Shape" (some "Dot") []) none .unit,
+     .mk (.construct "Shape" (some "Square") [.bind .int]) (some (.bool true)) .unit] = false := by
+  decide
+
+/-- Every variant of `Shape` covers it, nested patterns and all. -/
+example : exhaustiveArms shapes
+    [.mk (.construct "Shape" (some "Dot") []) none .unit,
+     .mk (.construct "Shape" (some "Square") [.int 0]) none .unit,
+     .mk (.construct "Shape" (some "Square") [.bind .int]) none .unit] = true := by
+  decide
 
 end OskaFormal.Core

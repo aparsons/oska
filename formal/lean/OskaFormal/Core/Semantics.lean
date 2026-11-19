@@ -242,4 +242,10 @@ theorem call_step {P : Program} {name : String} {vs : List Expr} {o : Outcome}
   | callArg _ hs => exact absurd hs (value_no_step (AllValues.mid hvs))
   | call hf _ hi => exact ⟨_, _, hf, hi, rfl⟩
 
+/-- Zero or more steps of the semantics that each lead to a next
+expression. -/
+inductive Steps (P : Program) : Expr → Expr → Prop where
+  | refl (e : Expr) : Steps P e e
+  | next {e e' e'' : Expr} : Step P e (.next e') → Steps P e' e'' → Steps P e e''
+
 end OskaFormal.Core

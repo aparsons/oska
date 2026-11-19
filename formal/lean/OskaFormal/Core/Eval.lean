@@ -438,12 +438,6 @@ theorem step_complete {P : Program} {e : Expr} {o : Outcome} (h : Step P e o) :
   | matchArm hv hm => simp [step, Expr.isValue_iff.mpr hv, stepMatch, hm]
   | matchGuard hv hm => simp [step, Expr.isValue_iff.mpr hv, stepMatch, hm]
 
-/-- Zero or more steps of the semantics that each lead to a next
-expression. -/
-inductive Steps (P : Program) : Expr → Expr → Prop where
-  | refl (e : Expr) : Steps P e e
-  | next {e e' e'' : Expr} : Step P e (.next e') → Steps P e' e'' → Steps P e e''
-
 /-- How a run of the Lean reference ends. -/
 inductive RunResult where
   /-- The expression reached a value. -/

@@ -1,9 +1,9 @@
 //! Programs in Oska Core (ADR 0018, #425, #426): functions, `let`, `if`,
-//! `Int` and `Bool`, structs, enums and `match`, each a whole literal, so that `lean_reference.rs` also runs
-//! them on the Lean reference and compares. A program in Oska Core cannot
-//! print, so each one shows what it computed by how it ends: `check`
-//! panics with `P0004` on a false condition, and a run that returns
-//! cleanly passed every check.
+//! `Int` and `Bool`, structs, enums and `match`, each a whole literal, so
+//! that `lean_reference.rs` also runs them on the Lean reference and
+//! compares. A program in Oska Core cannot print, so each one shows what
+//! it computed by how it ends: `check` panics with `P0004` on a false
+//! condition, and a run that returns cleanly passed every check.
 //!
 //! Each program repeats its preamble (`fail`, `check`) instead of
 //! building it with `format!`: `lean_reference.rs` collects only whole
@@ -541,8 +541,11 @@ fn a_guard_that_panics_panics_before_any_later_arm() {
     );
 }
 
+/// The checker takes a struct's labels only in declaration order
+/// (`E0225`), so the order written is the declaration order, and the
+/// fields are built in it, left to right.
 #[test]
-fn fields_are_built_left_to_right() {
+fn fields_are_built_left_to_right_in_declaration_order() {
     assert_panics(
         "struct Pair { a: Int, b: Int }
 

@@ -13,9 +13,18 @@ one inductive judgment, `Typed`, indexed by a `Goal`, so that a proof about
 typing is one induction. Patterns (`PatTyped`) and values (`ValueTyped`)
 have judgments of their own, indexed the same way.
 
-A `match` is exhaustive: every value of the scrutinee's type matches an
-arm with no guard. The checker decides that (`crates/oska-check/src/
-usefulness.rs`); the typing rule states it of the values themselves.
+Exhaustiveness is checked statically, as the checker does
+(`crates/oska-check/src/usefulness.rs`): `exhaustiveArms` asks whether the
+patterns of the arms with no guard cover every value of the type their
+heads name (a wildcard or binding, every variant of an enum, the struct,
+both `Bool`s, `()`; never all of `Int`), field by field. A program as the
+checker hands it over is `SourceTyped`: `Typed`, with every `match` passing
+`exhaustiveArms`. `Typed` alone also types the states a run reaches, where
+a `match` whose scrutinee is already a value may have lost the arms it
+skipped: its rule takes either `exhaustiveArms` or, for a value scrutinee
+only, that this value matches an arm with no guard (`Covered`).
+`exhaustiveArms_sound` (`Soundness.lean`) proves that the static check
+gives the second, for every value of the scrutinee's type.
 -/
 
 namespace OskaFormal.Core
@@ -97,6 +106,115 @@ of `v` on `arms` takes an arm. -/
 def Covered (arms : List Arm) (v : Expr) : Prop :=
   ∃ p body, Arm.mk p none body ∈ arms ∧ (matchPat p v).isSome = true
 
+/-! ## Static exhaustiveness -/
+
+/-- A pattern that matches every value: `_` or a name. -/
+def Pattern.isCatchAll : Pattern → Bool
+  | .wildcard | .bind _ => true
+  | _ => false
+
+/-- The type a pattern's head shows; `none` for a catch-all. -/
+def Pattern.headType : Pattern → Option Ty
+  | .wildcard | .bind _ => none
+  | .unit => some .unit
+  | .int _ => some .int
+  | .bool _ => some .bool
+  | .construct type _ _ => some (.named type)
+
+mutual
+  /-- The number of nodes of a pattern. -/
+  def Pattern.size : Pattern → Nat
+    | .construct _ _ ps => 1 + Pattern.sizes ps
+    | _ => 1
+
+  def Pattern.sizes : List Pattern → Nat
+    | [] => 0
+    | p :: ps => p.size + Pattern.sizes ps
+end
+
+/-- A head of a pattern that a value's head is tested against: `()`, a
+boolean, or a struct (no variant) or enum variant. -/
+inductive Head where
+  | unit
+  | bool (b : Bool)
+  | ctor (variant : Option String)
+
+/-- The sub-patterns of `p` when its head is `h` with `k` fields; `none`
+when it is not. -/
+def Head.args : Head → Nat → Pattern → Option (List Pattern)
+  | .unit, 0, .unit => some []
+  | .bool b, 0, .bool c => if b = c then some [] else none
+  | .ctor v, k, .construct _ v' ps => if v = v' ∧ ps.length = k then some ps else none
+  | _, _, _ => none
+
+/-- A row of a pattern matrix: one pattern per column. -/
+abbrev Row := List Pattern
+
+/-- The rows whose first pattern is a catch-all, without it. -/
+def defaultRows : List Row → List Row
+  | [] => []
+  | [] :: rows => defaultRows rows
+  | (p :: rest) :: rows => if p.isCatchAll then rest :: defaultRows rows else defaultRows rows
+
+/-- The rows that can match a first value with head `h` and `k` fields,
+its fields' patterns put first: a catch-all as `k` wildcards. -/
+def specialize (h : Head) (k : Nat) : List Row → List Row
+  | [] => []
+  | [] :: rows => specialize h k rows
+  | (p :: rest) :: rows =>
+    if p.isCatchAll then (List.replicate k .wildcard ++ rest) :: specialize h k rows
+    else
+      match h.args k p with
+      | some ps => (ps ++ rest) :: specialize h k rows
+      | none => specialize h k rows
+
+/-- Whether the rows cover every list of values of the types `tys`, within
+`fuel` steps (running out answers `false`, never a wrong `true`). A column
+is covered by its catch-all rows alone, or else head by head: `()`, both
+`Bool`s, the struct, or every variant of the enum; never `Int` by its
+literals. -/
+def covers (P : Program) : Nat → List Row → List Ty → Bool
+  | 0, _, _ => false
+  | _ + 1, rows, [] => rows.any List.isEmpty
+  | fuel + 1, rows, t :: ts =>
+    covers P fuel (defaultRows rows) ts ||
+      match t with
+      | .unit => covers P fuel (specialize .unit 0 rows) ts
+      | .bool =>
+        covers P fuel (specialize (.bool true) 0 rows) ts &&
+          covers P fuel (specialize (.bool false) 0 rows) ts
+      | .int => false
+      | .named n =>
+        match findType P.types n with
+        | some (.struct_ _ fs) => covers P fuel (specialize (.ctor none) fs.length rows) (fs ++ ts)
+        | some (.enum_ _ vs) =>
+          vs.all fun (v, fs) => covers P fuel (specialize (.ctor (some v)) fs.length rows) (fs ++ ts)
+        | none => false
+
+/-- The patterns of the arms with no guard, in order. -/
+def unguarded : List Arm → List Pattern
+  | [] => []
+  | .mk p none _ :: arms => p :: unguarded arms
+  | .mk _ (some _) _ :: arms => unguarded arms
+
+/-- The most fields a declared struct or variant has. -/
+def Program.maxArity (P : Program) : Nat :=
+  P.types.foldl (fun m d => match d with
+    | .struct_ _ fs => max m fs.length
+    | .enum_ _ vs => vs.foldl (fun m v => max m v.2.length) m) 0
+
+/-- **Static exhaustiveness.** Whether the arms with no guard cover every
+value of the type their patterns' heads name, or, when no pattern has a
+head, whether there is an arm with no guard (whose pattern is then a
+catch-all). The fuel is enough for any match the checker accepts: each
+step drops a column or a constructor of the patterns, and a constructor
+adds at most `maxArity` columns. -/
+def exhaustiveArms (P : Program) (arms : List Arm) : Bool :=
+  let ps := unguarded arms
+  match ps.findSome? Pattern.headType with
+  | none => !ps.isEmpty
+  | some u => covers P ((Pattern.sizes ps + 1) * (P.maxArity + 2)) (ps.map ([·])) [u]
+
 /-- What a typing judgment is about: an expression and its type, a list of
 arguments and their types, a block's statements and value and the block's
 type, or a `match`'s arms, the type of the value they match and the type
@@ -144,12 +262,13 @@ inductive Typed (P : Program) : List Ty → Goal → Prop where
       P.fieldsOf type none = some fts → fts[i]? = some t → Typed P Γ (.expr b (.named type)) →
       Typed P Γ (.expr (.field b i) t)
   /-- A `match` whose arms match values of the scrutinee's type and have
-  bodies of type `t`, and that is exhaustive: every value of the
-  scrutinee's type, or the scrutinee itself once it is a value, matches
-  an arm with no guard. -/
+  bodies of type `t`, and whose arms pass the static check
+  `exhaustiveArms`, or, only once the scrutinee is a value (a state a run
+  reaches after skipping arms), whose scrutinee matches an arm with no
+  guard. `SourceTyped` rules the second out of a program as written. -/
   | match_ {Γ : List Ty} {s : Expr} {arms : List Arm} {u t : Ty} :
       Typed P Γ (.expr s u) → Typed P Γ (.arms arms u t) →
-      (∀ v, ValueTyped P (.one v u) → (IsValue s → s = v) → Covered arms v) →
+      (exhaustiveArms P arms = true ∨ (IsValue s ∧ Covered arms s)) →
       Typed P Γ (.expr (.match_ s arms) t)
   | armsNil {Γ : List Ty} {u t : Ty} : Typed P Γ (.arms [] u t)
   | armsCons {Γ : List Ty} {p : Pattern} {body : Expr} {rest : List Arm} {u t : Ty} {bs : List Ty} :
@@ -180,5 +299,51 @@ inductive Typed (P : Program) : List Ty → Goal → Prop where
 in a context of the slots its parameters bind. -/
 def ProgramTyped (P : Program) : Prop :=
   ∀ name f, P.find? name = some f → Typed P (bindingTypes f.params) (.expr f.body f.ret)
+
+mutual
+  /-- Whether every `match` in an expression passes `exhaustiveArms`. -/
+  def Expr.staticMatches (P : Program) : Expr → Bool
+    | .unit | .int _ | .bool _ | .local_ _ => true
+    | .neg e | .not e | .field e _ => Expr.staticMatches P e
+    | .binary _ l r => Expr.staticMatches P l && Expr.staticMatches P r
+    | .call _ args => Expr.staticMatchesList P args
+    | .construct _ _ fs => Expr.staticMatchesList P fs
+    | .if_ c th el =>
+      Expr.staticMatches P c && Expr.staticMatches P th && Expr.staticMatchesOpt P el
+    | .block ss val => Expr.staticMatchesStmts P ss && Expr.staticMatchesOpt P val
+    | .match_ sc arms =>
+      exhaustiveArms P arms && Expr.staticMatches P sc && Expr.staticMatchesArms P arms
+
+  def Expr.staticMatchesList (P : Program) : List Expr → Bool
+    | [] => true
+    | e :: es => Expr.staticMatches P e && Expr.staticMatchesList P es
+
+  def Expr.staticMatchesOpt (P : Program) : Option Expr → Bool
+    | none => true
+    | some e => Expr.staticMatches P e
+
+  def Expr.staticMatchesStmts (P : Program) : List Stmt → Bool
+    | [] => true
+    | .let_ _ _ e :: ss => Expr.staticMatches P e && Expr.staticMatchesStmts P ss
+    | .expr e :: ss => Expr.staticMatches P e && Expr.staticMatchesStmts P ss
+
+  def Expr.staticMatchesArms (P : Program) : List Arm → Bool
+    | [] => true
+    | .mk _ g b :: arms =>
+      Expr.staticMatchesOpt P g && Expr.staticMatches P b && Expr.staticMatchesArms P arms
+end
+
+/-- **Source typing.** An expression as the checker hands it over: typed,
+with every `match` exhaustive by the static check. -/
+def SourceTyped (P : Program) (Γ : List Ty) (e : Expr) (t : Ty) : Prop :=
+  Typed P Γ (.expr e t) ∧ e.staticMatches P = true
+
+/-- A program as the checker hands it over: each function's body is
+source typed. -/
+def ProgramSourceTyped (P : Program) : Prop :=
+  ∀ name f, P.find? name = some f → SourceTyped P (bindingTypes f.params) f.body f.ret
+
+theorem ProgramSourceTyped.typed {P : Program} (h : ProgramSourceTyped P) : ProgramTyped P :=
+  fun name f hf => (h name f hf).1
 
 end OskaFormal.Core

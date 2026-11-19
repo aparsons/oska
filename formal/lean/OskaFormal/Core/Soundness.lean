@@ -10,6 +10,12 @@ Type soundness of Oska Core, version 2, for a well-typed program `P`:
 - `preservation`: a step of a closed, well-typed expression leads to an
   expression of the same type, or to a panic (an `Int` overflow or a
   division by zero).
+- `exhaustiveArms_sound`: a `match` whose typed arms pass the static
+  exhaustiveness check takes an arm with no guard for every value of the
+  scrutinee's type, which is what progress needs of it.
+- `type_safety`: for a program as the checker hands it over
+  (`ProgramSourceTyped`), every expression a source-typed expression steps
+  to keeps its type and is a value or takes a step.
 -/
 
 namespace OskaFormal.Core
@@ -224,6 +230,21 @@ theorem covered_subst {w v : Expr} : ∀ {arms : List Arm}, Covered arms v →
       obtain ⟨p'', body'', hm', hp'⟩ := ih ⟨p, body, hm, hp⟩
       exact ⟨p'', body'', List.mem_cons_of_mem _ hm', hp'⟩
 
+/-- Putting a value for a slot leaves the patterns and guards' presence of
+the arms, so their static exhaustiveness, as they are. -/
+theorem unguarded_substArms {w : Expr} : ∀ {arms : List Arm},
+    unguarded (Expr.substArms w arms) = unguarded arms := by
+  intro arms
+  induction arms with
+  | nil => rfl
+  | cons arm arms ih =>
+    obtain ⟨p, g, b⟩ := arm
+    cases g <;> simp [Expr.substArms, Expr.substOpt, unguarded, ih]
+
+theorem exhaustiveArms_substArms {w : Expr} {arms : List Arm} :
+    exhaustiveArms P (Expr.substArms w arms) = exhaustiveArms P arms := by
+  simp [exhaustiveArms, unguarded_substArms]
+
 /-- Putting a closed value of type `u` for slot 0 keeps a judgment in a
 context whose slot 0 has type `u`, with that slot removed. -/
 theorem typed_subst {v : Expr} {u : Ty} (hv : IsValue v) (hvt : Typed P [] (.expr v u)) :
@@ -267,11 +288,12 @@ theorem typed_subst {v : Expr} {u : Ty} (hv : IsValue v) (hvt : Typed P [] (.exp
   | @match_ Γ sc arms u' t _ _ hc ihs iharms =>
     intro Δ hΓ
     refine Typed.match_ (ihs Δ hΓ) (iharms Δ hΓ) ?_
-    intro w hw hsw
-    refine covered_subst (hc w hw ?_)
-    intro hsv
-    rw [← subst_value (w := v) hsv]
-    exact hsw (by rw [subst_value hsv]; exact hsv)
+    rcases hc with he | ⟨hsv, hcov⟩
+    · exact Or.inl (by rw [exhaustiveArms_substArms]; exact he)
+    · right
+      show IsValue (Expr.subst v sc) ∧ Covered (Expr.substArms v arms) (Expr.subst v sc)
+      rw [subst_value hsv]
+      exact ⟨hsv, covered_subst hcov⟩
   | armsNil => intro _ _; exact Typed.armsNil
   | armsCons hp _ _ ihb ihr =>
     intro Δ hΓ
@@ -426,6 +448,306 @@ theorem covered_guard {p : Pattern} {g body v : Expr} {rest : List Arm}
   obtain ⟨p', body', hmem, hp⟩ := h
   cases hmem with
   | tail _ hmem => exact ⟨p', body', hmem, hp⟩
+
+/-! ## Static exhaustiveness -/
+
+theorem matchPats_cons {p : Pattern} {ps : List Pattern} {v : Expr} {vs : List Expr} :
+    (matchPats (p :: ps) (v :: vs)).isSome = ((matchPat p v).isSome && (matchPats ps vs).isSome) := by
+  cases h₁ : matchPat p v <;> cases h₂ : matchPats ps vs <;> simp [matchPats, h₁, h₂]
+
+theorem matchPats_append {qs : List Pattern} {ys : List Expr} :
+    ∀ {ps : List Pattern} {xs : List Expr}, ps.length = xs.length →
+      (matchPats (ps ++ qs) (xs ++ ys)).isSome = true →
+      (matchPats ps xs).isSome = true ∧ (matchPats qs ys).isSome = true := by
+  intro ps
+  induction ps with
+  | nil =>
+    intro xs hl h
+    cases xs with
+    | nil => exact ⟨by simp [matchPats], by simpa using h⟩
+    | cons _ _ => simp at hl
+  | cons p ps ih =>
+    intro xs hl h
+    cases xs with
+    | nil => simp at hl
+    | cons x xs =>
+      simp only [List.cons_append, matchPats_cons, Bool.and_eq_true] at h ⊢
+      obtain ⟨h₁, h₂⟩ := ih (by simpa using hl) h.2
+      exact ⟨⟨h.1, h₁⟩, h₂⟩
+
+theorem catchAll_matches {p : Pattern} {v : Expr} (hp : p.isCatchAll = true) :
+    (matchPat p v).isSome = true := by
+  cases p <;> simp_all [Pattern.isCatchAll, matchPat]
+
+theorem matchPats_wildcards : ∀ {xs : List Expr},
+    (matchPats (List.replicate xs.length .wildcard) xs).isSome = true := by
+  intro xs
+  induction xs with
+  | nil => simp [matchPats]
+  | cons x xs ih =>
+    simp only [List.length_cons, List.replicate_succ, matchPats_cons, Bool.and_eq_true]
+    exact ⟨catchAll_matches rfl, ih⟩
+
+theorem ValueTyped.many_length : ∀ {xs : List Expr} {ts : List Ty},
+    ValueTyped P (.many xs ts) → xs.length = ts.length := by
+  intro xs
+  induction xs with
+  | nil => intro ts h; cases h; rfl
+  | cons x xs ih => intro ts h; cases h with | cons _ hr => simp [ih hr]
+
+theorem ValueTyped.many_append {ys : List Expr} {us : List Ty} (hy : ValueTyped P (.many ys us)) :
+    ∀ {xs : List Expr} {ts : List Ty}, ValueTyped P (.many xs ts) →
+      ValueTyped P (.many (xs ++ ys) (ts ++ us)) := by
+  intro xs
+  induction xs with
+  | nil => intro ts h; cases h; exact hy
+  | cons x xs ih => intro ts h; cases h with | cons hx hr => exact ValueTyped.cons hx (ih hr)
+
+theorem mem_defaultRows : ∀ {rows : List Row} {row : Row}, row ∈ defaultRows rows →
+    ∃ p, p.isCatchAll = true ∧ (p :: row) ∈ rows := by
+  intro rows
+  induction rows with
+  | nil => intro row h; simp [defaultRows] at h
+  | cons r rows ih =>
+    intro row h
+    cases r with
+    | nil =>
+      obtain ⟨p, hp, hm⟩ := ih (by simpa [defaultRows] using h)
+      exact ⟨p, hp, List.mem_cons_of_mem _ hm⟩
+    | cons q rest =>
+      simp only [defaultRows] at h
+      split at h
+      · next hq =>
+        cases h with
+        | head => exact ⟨q, hq, List.mem_cons_self⟩
+        | tail _ h =>
+          obtain ⟨p, hp, hm⟩ := ih h
+          exact ⟨p, hp, List.mem_cons_of_mem _ hm⟩
+      · obtain ⟨p, hp, hm⟩ := ih h
+        exact ⟨p, hp, List.mem_cons_of_mem _ hm⟩
+
+theorem mem_specialize {h : Head} {k : Nat} : ∀ {rows : List Row} {row : Row},
+    row ∈ specialize h k rows → ∃ p rest, (p :: rest) ∈ rows ∧
+      ((p.isCatchAll = true ∧ row = List.replicate k .wildcard ++ rest) ∨
+        ∃ ps, h.args k p = some ps ∧ row = ps ++ rest) := by
+  intro rows
+  induction rows with
+  | nil => intro row hr; simp [specialize] at hr
+  | cons r rows ih =>
+    intro row hr
+    have lift : (∃ p rest, (p :: rest) ∈ rows ∧
+        ((p.isCatchAll = true ∧ row = List.replicate k .wildcard ++ rest) ∨
+          ∃ ps, h.args k p = some ps ∧ row = ps ++ rest)) →
+        ∃ p rest, (p :: rest) ∈ r :: rows ∧
+        ((p.isCatchAll = true ∧ row = List.replicate k .wildcard ++ rest) ∨
+          ∃ ps, h.args k p = some ps ∧ row = ps ++ rest) :=
+      fun ⟨p, rest, hm, hc⟩ => ⟨p, rest, List.mem_cons_of_mem _ hm, hc⟩
+    cases r with
+    | nil => exact lift (ih (by simpa [specialize] using hr))
+    | cons q rest =>
+      simp only [specialize] at hr
+      split at hr
+      · next hq =>
+        cases hr with
+        | head => exact ⟨q, rest, List.mem_cons_self, Or.inl ⟨hq, rfl⟩⟩
+        | tail _ hr => exact lift (ih hr)
+      · split at hr
+        · next ps hps =>
+          cases hr with
+          | head => exact ⟨q, rest, List.mem_cons_self, Or.inr ⟨ps, hps, rfl⟩⟩
+          | tail _ hr => exact lift (ih hr)
+        · exact lift (ih hr)
+
+theorem Head.args_length {h : Head} {k : Nat} {p : Pattern} {ps : List Pattern}
+    (hp : h.args k p = some ps) : ps.length = k := by
+  unfold Head.args at hp
+  split at hp
+  · cases hp; rfl
+  · split at hp <;> cases hp; rfl
+  · split at hp
+    · next hc => cases hp; exact hc.2
+    · cases hp
+  · cases hp
+
+/-- A row of the specialized rows that matches the fields `xs` and the
+rest `vs` gives a row of the rows that matches a value `v` with those
+fields, when each pattern with this head matches `v` once its sub-patterns
+match `xs`. -/
+theorem specialize_sound {h : Head} {k : Nat} {rows : List Row} {row : Row} {v : Expr}
+    {xs vs : List Expr} (hrow : row ∈ specialize h k rows) (hk : xs.length = k)
+    (hm : (matchPats row (xs ++ vs)).isSome = true)
+    (hv : ∀ p ps, h.args k p = some ps → (matchPats ps xs).isSome = true →
+      (matchPat p v).isSome = true) :
+    ∃ r ∈ rows, (matchPats r (v :: vs)).isSome = true := by
+  obtain ⟨p, rest, hmem, ⟨hp, rfl⟩ | ⟨ps, hps, rfl⟩⟩ := mem_specialize hrow
+  · obtain ⟨_, hr⟩ := matchPats_append (by simp [hk]) hm
+    exact ⟨p :: rest, hmem, by simp [matchPats_cons, catchAll_matches hp, hr]⟩
+  · obtain ⟨h₁, hr⟩ := matchPats_append (by rw [Head.args_length hps, hk]) hm
+    exact ⟨p :: rest, hmem, by simp [matchPats_cons, hv p ps hps h₁, hr]⟩
+
+theorem lookup_mem {α β : Type} [BEq α] [LawfulBEq α] :
+    ∀ {l : List (α × β)} {a : α} {b : β}, l.lookup a = some b → (a, b) ∈ l := by
+  intro l
+  induction l with
+  | nil => intro a b h; simp at h
+  | cons x l ih =>
+    intro a b h
+    obtain ⟨x₁, x₂⟩ := x
+    simp only [List.lookup] at h
+    split at h
+    · next hx =>
+      cases h
+      have := LawfulBEq.eq_of_beq hx
+      subst this
+      exact List.mem_cons_self
+    · exact List.mem_cons_of_mem _ (ih h)
+
+/-- **Soundness of `covers`.** Rows that cover the types `tys` have a row
+that matches every list of values of those types. -/
+theorem covers_sound : ∀ (fuel : Nat) {rows : List Row} {tys : List Ty} {vs : List Expr},
+    covers P fuel rows tys = true → ValueTyped P (.many vs tys) →
+    ∃ row ∈ rows, (matchPats row vs).isSome = true := by
+  intro fuel
+  induction fuel with
+  | zero => intro rows tys vs h; simp [covers] at h
+  | succ fuel ih =>
+    intro rows tys vs h hvs
+    cases tys with
+    | nil =>
+      cases hvs
+      simp only [covers, List.any_eq_true, List.isEmpty_iff] at h
+      obtain ⟨row, hrow, rfl⟩ := h
+      exact ⟨[], hrow, by simp [matchPats]⟩
+    | cons t ts =>
+      cases hvs with
+      | @cons v vs t ts hv hvs =>
+      simp only [covers, Bool.or_eq_true] at h
+      rcases h with hd | hc
+      · obtain ⟨row, hrow, hm⟩ := ih hd hvs
+        obtain ⟨p, hp, hmem⟩ := mem_defaultRows hrow
+        exact ⟨p :: row, hmem, by simp [matchPats_cons, catchAll_matches hp, hm]⟩
+      · cases t with
+        | unit =>
+          cases hv
+          obtain ⟨row, hrow, hm⟩ := ih hc hvs
+          refine specialize_sound (xs := []) hrow rfl hm fun p ps hps _ => ?_
+          cases p <;> simp_all [Head.args, matchPat]
+        | bool =>
+          cases hv with
+          | @bool b =>
+          simp only [Bool.and_eq_true] at hc
+          have hb : covers P fuel (specialize (.bool b) 0 rows) ts = true := by
+            cases b
+            · exact hc.2
+            · exact hc.1
+          obtain ⟨row, hrow, hm⟩ := ih hb hvs
+          refine specialize_sound (xs := []) hrow rfl hm fun p ps hps _ => ?_
+          cases p <;> simp_all [Head.args, matchPat] <;> (split at hps <;> simp_all)
+        | int => simp at hc
+        | named n =>
+          cases hv with
+          | @construct _ variant fs fts hf hfs =>
+          have hlen := ValueTyped.many_length hfs
+          have hk : covers P fuel (specialize (.ctor variant) fts.length rows) (fts ++ ts) = true := by
+            unfold Program.fieldsOf at hf
+            cases hd : findType P.types n with
+            | none => simp [hd] at hf
+            | some d =>
+              cases d with
+              | struct_ _ fs' =>
+                cases variant with
+                | none => simp [hd] at hf hc; subst hf; exact hc
+                | some _ => simp [hd] at hf
+              | enum_ _ vs' =>
+                cases variant with
+                | none => simp [hd] at hf
+                | some name =>
+                  simp only [hd] at hf hc
+                  rw [List.all_eq_true] at hc
+                  exact hc (name, fts) (lookup_mem hf)
+          obtain ⟨row, hrow, hm⟩ := ih hk (ValueTyped.many_append hvs hfs)
+          refine specialize_sound hrow hlen hm fun p ps hps hps' => ?_
+          cases p <;> simp [Head.args] at hps
+          obtain ⟨⟨rfl, _⟩, rfl⟩ := hps
+          simp [matchPat, hps']
+
+/-- The patterns of the arms with no guard come from such arms. -/
+theorem mem_unguarded : ∀ {arms : List Arm} {p : Pattern}, p ∈ unguarded arms →
+    ∃ body, Arm.mk p none body ∈ arms := by
+  intro arms
+  induction arms with
+  | nil => intro p h; simp [unguarded] at h
+  | cons arm arms ih =>
+    intro p h
+    obtain ⟨q, g, b⟩ := arm
+    cases g with
+    | none =>
+      simp only [unguarded, List.mem_cons] at h
+      rcases h with rfl | h
+      · exact ⟨b, List.mem_cons_self⟩
+      · obtain ⟨body, hm⟩ := ih h
+        exact ⟨body, List.mem_cons_of_mem _ hm⟩
+    | some _ =>
+      obtain ⟨body, hm⟩ := ih (by simpa [unguarded] using h)
+      exact ⟨body, List.mem_cons_of_mem _ hm⟩
+
+/-- The patterns of typed arms match values of the scrutinee's type. -/
+theorem unguarded_typed {Γ : List Ty} {u t : Ty} : ∀ {arms : List Arm} {p : Pattern},
+    Typed P Γ (.arms arms u t) → p ∈ unguarded arms → ∃ bs, PatTyped P (.one p u bs) := by
+  intro arms
+  induction arms with
+  | nil => intro p _ h; simp [unguarded] at h
+  | cons arm arms ih =>
+    intro p ht h
+    cases ht with
+    | armsCons hp _ hr =>
+      simp only [unguarded, List.mem_cons] at h
+      rcases h with rfl | h
+      · exact ⟨_, hp⟩
+      · exact ih hr h
+    | armsConsGuard _ _ _ hr => exact ih hr (by simpa [unguarded] using h)
+
+theorem headType_typed {p : Pattern} {u u' : Ty} {bs : List Ty} (hp : PatTyped P (.one p u bs))
+    (h : p.headType = some u') : u' = u := by
+  cases hp <;> simp_all [Pattern.headType]
+
+theorem headType_none {p : Pattern} (h : p.headType = none) : p.isCatchAll = true := by
+  cases p <;> simp_all [Pattern.headType, Pattern.isCatchAll]
+
+/-- **Static exhaustiveness gives coverage.** When typed arms pass
+`exhaustiveArms`, every value of the scrutinee's type matches an arm with
+no guard: the premise the runtime rule asks of a value scrutinee. -/
+theorem exhaustiveArms_sound {Γ : List Ty} {arms : List Arm} {u t : Ty} {v : Expr}
+    (he : exhaustiveArms P arms = true) (ht : Typed P Γ (.arms arms u t))
+    (hv : ValueTyped P (.one v u)) : Covered arms v := by
+  dsimp only [exhaustiveArms] at he
+  split at he
+  · next hnone =>
+    rw [List.findSome?_eq_none_iff] at hnone
+    cases hps : unguarded arms with
+    | nil => simp [hps] at he
+    | cons p ps =>
+      have hp : p ∈ unguarded arms := by rw [hps]; exact List.mem_cons_self
+      obtain ⟨body, hm⟩ := mem_unguarded hp
+      exact ⟨p, body, hm, catchAll_matches (headType_none (hnone p hp))⟩
+  · next u' hsome =>
+    obtain ⟨q, hq, hqt⟩ := List.exists_of_findSome?_eq_some hsome
+    obtain ⟨_, hqtyped⟩ := unguarded_typed ht hq
+    have hu := headType_typed hqtyped hqt
+    subst hu
+    obtain ⟨row, hrow, hm⟩ := covers_sound _ he (ValueTyped.cons hv ValueTyped.nil)
+    obtain ⟨p, hp, rfl⟩ := List.mem_map.mp hrow
+    obtain ⟨body, hmem⟩ := mem_unguarded hp
+    refine ⟨p, body, hmem, ?_⟩
+    simp only [matchPats_cons, Bool.and_eq_true] at hm
+    exact hm.1
+
+/-- A typed `match` whose scrutinee is a value takes an arm with no guard
+for it: by static exhaustiveness, or by the runtime premise. -/
+theorem match_covered {s : Expr} {arms : List Arm} {u t : Ty}
+    (hc : exhaustiveArms P arms = true ∨ (IsValue s ∧ Covered arms s)) (hs : IsValue s)
+    (hst : Typed P [] (.expr s u)) (harms : Typed P [] (.arms arms u t)) : Covered arms s :=
+  hc.elim (fun he => exhaustiveArms_sound he harms (value_valueTyped hs hst)) (·.2)
 
 /-! ## Operators -/
 
@@ -609,11 +931,11 @@ theorem progress_goal : ∀ {Γ : List Ty} {j : Goal}, Typed P Γ j → Γ = [] 
       obtain ⟨e, he, _⟩ := args_get hargs hi
       exact Or.inr ⟨_, Step.field hvals he⟩
     · exact Or.inr ⟨_, Step.fieldBase hs⟩
-  | @match_ _ _ arms _ _ hs _ hc ih _ =>
+  | @match_ _ _ arms _ _ hs harms hc ih _ =>
     intro hΓ
     subst hΓ
     rcases ih rfl with hv | ⟨o, hstep⟩
-    · obtain ⟨p, body, hmem, _⟩ := hc _ (value_valueTyped hv hs) (fun _ => rfl)
+    · obtain ⟨p, body, hmem, _⟩ := match_covered hc hv hs harms
       cases arms with
       | nil => cases hmem
       | cons arm rest =>
@@ -787,19 +1109,17 @@ theorem preservation (hP : ProgramTyped P) {e : Expr} {o : Outcome} (hs : Step P
     cases ht with
     | match_ hs harms hc =>
       exact (ih hs).map fun _ h =>
-        Typed.match_ h harms fun w hw _ => hc w hw fun hv => absurd hstep (value_no_step hv)
+        Typed.match_ h harms (hc.elim Or.inl fun ⟨hv, _⟩ => absurd hstep (value_no_step hv))
   | @matchSkip _ _ _ _ rest hv hm =>
     intro t ht
     cases ht with
     | @match_ _ _ _ u _ hs harms hc =>
+      have hcov := match_covered hc hv hs harms
       have hrest : Typed P [] (.arms rest u t) := by
         cases harms with
         | armsCons _ _ hr => exact hr
         | armsConsGuard _ _ _ hr => exact hr
-      refine Typed.match_ hs hrest fun w hw hvw => ?_
-      have hvw := hvw hv
-      subst hvw
-      exact covered_skip (hc _ hw fun _ => rfl) hm
+      exact Typed.match_ hs hrest (Or.inr ⟨hv, covered_skip hcov hm⟩)
   | matchArm hv hm =>
     intro t ht
     cases ht with
@@ -812,14 +1132,29 @@ theorem preservation (hP : ProgramTyped P) {e : Expr} {o : Outcome} (hs : Step P
     intro t ht
     cases ht with
     | match_ hs harms hc =>
+      have hcov := match_covered hc hv hs harms
       cases harms with
       | armsConsGuard hp hg hbody hrest =>
         obtain ⟨hargs, hvals⟩ := matchPat_typed hp hv hs hm
         refine Typed.ifElse (typed_substAll _ (by simpa using hg) hargs hvals)
           (typed_substAll _ (by simpa using hbody) hargs hvals) ?_
-        refine Typed.match_ hs hrest fun w hw hvw => ?_
-        have hvw := hvw hv
-        subst hvw
-        exact covered_guard (hc _ hw fun _ => rfl)
+        exact Typed.match_ hs hrest (Or.inr ⟨hv, covered_guard hcov⟩)
+
+/-! ## Type safety -/
+
+/-- **Type safety** of a program as the checker hands it over. In a
+program whose functions are source typed, every expression a closed,
+source-typed expression steps to is typed at its type, and is a value or
+takes a step (to an expression or a panic): a run never gets stuck. -/
+theorem type_safety (hP : ProgramSourceTyped P) {e e' : Expr} {t : Ty}
+    (he : SourceTyped P [] e t) (hs : Steps P e e') :
+    Typed P [] (.expr e' t) ∧ (IsValue e' ∨ ∃ o, Step P e' o) := by
+  have typed : Typed P [] (.expr e' t) := by
+    have := he.1
+    clear he
+    induction hs with
+    | refl => exact this
+    | next h _ ih => exact ih (preservation hP.typed h this)
+  exact ⟨typed, progress typed⟩
 
 end OskaFormal.Core
