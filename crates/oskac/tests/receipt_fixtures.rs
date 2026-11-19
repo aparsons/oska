@@ -138,9 +138,18 @@ fn items(value: Option<&Json>) -> &[Json] {
     }
 }
 
+/// What `snapshot` found at a path. A file keeps its raw bytes: a debug
+/// format of the 58 MB copied `oskac` took about a second per case.
+#[derive(PartialEq)]
+enum Entry {
+    Link(Option<PathBuf>),
+    Dir,
+    File(Option<Vec<u8>>),
+}
+
 /// Every path under `root`, with what is there: a file's bytes, a link's
 /// target, or a directory.
-fn snapshot(root: &Path) -> BTreeMap<PathBuf, String> {
+fn snapshot(root: &Path) -> BTreeMap<PathBuf, Entry> {
     let mut out = BTreeMap::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -151,12 +160,12 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, String> {
             let path = entry.path();
             let meta = std::fs::symlink_metadata(&path).expect("metadata");
             let what = if meta.file_type().is_symlink() {
-                format!("link to {:?}", std::fs::read_link(&path).ok())
+                Entry::Link(std::fs::read_link(&path).ok())
             } else if meta.is_dir() {
                 stack.push(path.clone());
-                "dir".to_string()
+                Entry::Dir
             } else {
-                format!("{:?}", std::fs::read(&path).ok())
+                Entry::File(std::fs::read(&path).ok())
             };
             out.insert(path, what);
         }

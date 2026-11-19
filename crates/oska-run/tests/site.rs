@@ -23,8 +23,8 @@ use std::path::{Path, PathBuf};
 
 use common::inert::{assert_site_inert, decode_references, tags_of, url_of};
 use common::site::{
-    agent_repo, assert_succeeded, between, build, build_ok, generator_authority, read_tree,
-    real_inputs, BUILD, CSP, MINIMAL_REPO, PAGES_WORKFLOW,
+    agent_repo, assert_succeeded, between, build, build_ok, generator_authority, read_tree, BUILD,
+    CSP, MINIMAL_REPO, PAGES_WORKFLOW,
 };
 
 fn cases_dir() -> PathBuf {
@@ -1325,9 +1325,7 @@ fn the_search_script_needs_every_word_and_ignores_case() {
 
 #[test]
 fn the_real_docs_build_every_agent_output_with_no_dead_link() {
-    let (outcome, site) = build(&real_inputs());
-    assert_succeeded(&outcome);
-    assert_site_inert(&site);
+    let site = real_site();
     let pages: Vec<&String> = site
         .keys()
         .filter(|k| k.ends_with(".html") && *k != "404.html")
