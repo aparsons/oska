@@ -26,8 +26,9 @@
 //!
 //! A block may add the word `release` (checked as `oskac check --release`),
 //! `tests` (run as `oskac test`, for the `P001x` codes that only a
-//! `test` block reaches), or a run limit such as `max-output=16` (run as
-//! `oskac run --max-output=16`, for the limits' panics).
+//! `test` block reaches), or a run limit such as `max-output=16` or
+//! `max-steps=1000` (run as `oskac run --max-output=16`, for the limits'
+//! panics).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -262,9 +263,15 @@ fn codes_of(code: &str, example: &Example) -> BTreeSet<String> {
         // limit, as `oskac run --max-output=16` does.
         let mut limits = oska_run::Limits::NONE;
         for word in &example.words {
-            if let Some(value) = word.strip_prefix("max-output=") {
+            let limit = if let Some(value) = word.strip_prefix("max-output=") {
+                Some((&mut limits.max_output, value))
+            } else {
+                word.strip_prefix("max-steps=")
+                    .map(|value| (&mut limits.max_steps, value))
+            };
+            if let Some((limit, value)) = limit {
                 let value = value.parse().ok().filter(|&v: &u64| v > 0);
-                limits.max_output =
+                *limit =
                     Some(value.unwrap_or_else(|| panic!("{}: a bad limit `{word}`", example.at)));
             }
         }

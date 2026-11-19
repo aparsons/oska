@@ -13,6 +13,10 @@
 /// One kind of run limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Limit {
+    /// `--max-steps=<n>`: the steps the program may take (ADR 0021): calls
+    /// of functions, methods and closures written in Oska, and loop
+    /// back-edges.
+    Steps,
     /// `--max-output=<bytes>`: the bytes the program may write to
     /// standard output and standard error together.
     Output,
@@ -20,11 +24,12 @@ pub enum Limit {
 
 impl Limit {
     /// Every limit, in the order the usage and the docs list them.
-    pub const ALL: [Limit; 1] = [Limit::Output];
+    pub const ALL: [Limit; 2] = [Limit::Steps, Limit::Output];
 
     /// The panic code a program stops with when it reaches the limit.
     pub fn code(self) -> &'static str {
         match self {
+            Limit::Steps => codes::STEP_LIMIT,
             Limit::Output => codes::OUTPUT_LIMIT,
         }
     }
@@ -32,6 +37,10 @@ impl Limit {
     /// The message of the panic at the limit `value`, on every backend.
     pub fn message(self, value: u64) -> String {
         match self {
+            Limit::Steps => format!(
+                "step limit reached: the program has taken {value} steps, its calls and loop \
+                 iterations (`--max-steps={value}`)"
+            ),
             Limit::Output => format!(
                 "output limit reached: this write would take standard output and standard \
                  error past {value} bytes (`--max-output={value}`)"
@@ -42,6 +51,8 @@ impl Limit {
 
 /// The panic codes of the run limits, each defined here only.
 pub mod codes {
+    /// The program would have taken more than `--max-steps` steps.
+    pub const STEP_LIMIT: &str = "P0038";
     /// The program would have written more than `--max-output` bytes to
     /// standard output and standard error together.
     pub const OUTPUT_LIMIT: &str = "P0041";
@@ -53,13 +64,18 @@ pub mod codes {
 /// existed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Limits {
+    /// [`Limit::Steps`].
+    pub max_steps: Option<u64>,
     /// [`Limit::Output`].
     pub max_output: Option<u64>,
 }
 
 impl Limits {
     /// No limit at all.
-    pub const NONE: Limits = Limits { max_output: None };
+    pub const NONE: Limits = Limits {
+        max_steps: None,
+        max_output: None,
+    };
 
     /// Whether no limit is given.
     pub fn is_empty(&self) -> bool {
@@ -69,6 +85,7 @@ impl Limits {
     /// The value of `limit`, when it is given.
     pub fn get(&self, limit: Limit) -> Option<u64> {
         match limit {
+            Limit::Steps => self.max_steps,
             Limit::Output => self.max_output,
         }
     }
@@ -76,6 +93,7 @@ impl Limits {
     /// The value of `limit`, to set.
     pub fn get_mut(&mut self, limit: Limit) -> &mut Option<u64> {
         match limit {
+            Limit::Steps => &mut self.max_steps,
             Limit::Output => &mut self.max_output,
         }
     }
