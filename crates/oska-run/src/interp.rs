@@ -149,6 +149,17 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         self
     }
 
+    /// The host the program runs on.
+    pub(crate) fn host(&mut self) -> &mut dyn Host {
+        self.host
+    }
+
+    /// Under `--max-output`, the bytes the program may still write.
+    pub(crate) fn output_left(&self) -> Option<u64> {
+        let limit = self.limits.max_output?;
+        Some(limit - self.output_written)
+    }
+
     /// Write `text`, which the program writes, to `stream`. Under
     /// `--max-output`, a write that would take stdout and stderr together
     /// past the limit writes nothing and panics with `P0041` at `span`.

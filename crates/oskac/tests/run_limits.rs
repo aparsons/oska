@@ -109,16 +109,13 @@ fn max_output_given_twice_is_a_usage_error() {
 #[test]
 fn max_output_on_any_command_but_run_is_a_usage_error() {
     let dir = program("other_commands", HELLO);
+    let mut all = String::new();
     for command in ["check", "test", "build", "fix"] {
-        let output = oskac_in(&dir, &[command, "main.osk", "--max-output=64"]);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(output.status.code(), Some(2), "{command}: {stderr}");
-        assert!(
-            stderr.starts_with("oskac - the Oska compiler\n\nUSAGE:\n"),
-            "{command}: the usage is printed: {stderr}"
-        );
-        assert!(output.stdout.is_empty(), "{command}");
+        let line = transcript(&dir, &[command, "main.osk", "--max-output=64"]);
+        assert!(line.contains("--- exit Some(2)"), "{line}");
+        all.push_str(&line);
     }
+    assert_golden("other_commands.txt", &all);
     // Nothing was built or fixed.
     let mut left: Vec<String> = std::fs::read_dir(&*dir)
         .expect("the directory")
@@ -231,22 +228,41 @@ fn bytes_on_standard_error_count_toward_the_same_limit() {
     );
 }
 
+/// Writes a line, then asks for a secret whose name is 100,000 bytes of
+/// program-made text that the environment does not set: the `P0020`
+/// report would quote it all.
+const HUGE_SECRET: &str = r#"fn main(out: Stdout, env: Env) {
+    let _ = out.println("before")
+    let name = "zé".repeat(50000)
+    let secret = env.secret(name)
+}
+"#;
+
+/// The program's bytes in `stderr` before the panic report, which
+/// starts with `main.osk:`, and the report.
+fn split_report(stderr: &str) -> (&str, &str) {
+    match stderr.find("main.osk:") {
+        Some(at) => (&stderr[..at], &stderr[at..]),
+        None => (stderr, ""),
+    }
+}
+
 /// Attack: whatever the limit, no byte past it reaches either stream,
 /// whether the program writes with `println` on stdout or stderr, `dbg`,
-/// or `main`'s error. Only the panic report follows.
-#[test]
-fn attack_no_byte_past_the_limit_reaches_either_stream() {
-    let dir = program("attack", EVERY_WRITE);
+/// or `main`'s error. Only the panic report follows. `backend` is
+/// `--interpret` or nothing.
+fn attack_every_write(name: &str, backend: &[&str]) {
+    let dir = program(name, EVERY_WRITE);
     // All the program writes: 90 bytes of lines, a 9-byte `dbg` line and
     // a 40-byte error line.
     for limit in 1..=140u64 {
         let flag = format!("--max-output={limit}");
-        let output = oskac_in(&dir, &["run", "--interpret", &flag, "main.osk"]);
+        let mut args = vec!["run"];
+        args.extend_from_slice(backend);
+        args.extend([flag.as_str(), "main.osk"]);
+        let output = oskac_in(&dir, &args);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let (written, report) = match stderr.find("main.osk:") {
-            Some(at) => (&stderr[..at], &stderr[at..]),
-            None => (&stderr[..], ""),
-        };
+        let (written, report) = split_report(&stderr);
         let total = output.stdout.len() as u64 + written.len() as u64;
         assert!(total <= limit, "limit {limit}: {total} bytes written");
         if limit < 139 {
@@ -258,6 +274,53 @@ fn attack_no_byte_past_the_limit_reaches_either_stream() {
             assert_eq!(total, 139, "limit {limit}");
         }
     }
+}
+
+/// Attack: a panic report that quotes text the program made (`P0020`
+/// names the secret) carries no more of it than the limit has left,
+/// cut where a character ends.
+fn attack_huge_secret(name: &str, backend: &[&str]) {
+    let dir = program(name, HUGE_SECRET);
+    for limit in [7u64, 8, 9, 10, 11, 12, 20, 64, 1000] {
+        let flag = format!("--max-output={limit}");
+        let mut args = vec!["run"];
+        args.extend_from_slice(backend);
+        args.extend([flag.as_str(), "main.osk"]);
+        let output = oskac_in(&dir, &args);
+        let stderr = String::from_utf8(output.stderr).expect("the report is whole UTF-8");
+        assert_eq!(output.status.code(), Some(101), "limit {limit}: {stderr}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "before\n");
+        let (written, report) = split_report(&stderr);
+        assert_eq!(written, "", "limit {limit}");
+        assert!(report.contains("error[P0020]"), "limit {limit}: {report}");
+        let quoted = report.bytes().filter(|&b| b == b'z' || b >= 0x80).count() as u64;
+        let left = limit - 7;
+        assert!(
+            quoted <= left,
+            "limit {limit}: the report quotes {quoted} bytes of the name, {left} were left"
+        );
+        // As much of the name as fits, whole characters only.
+        assert!(left - quoted < 3, "limit {limit}: {report}");
+    }
+}
+
+#[test]
+fn attack_no_byte_past_the_limit_reaches_either_stream() {
+    attack_every_write("attack", &["--interpret"]);
+}
+
+#[test]
+fn attack_a_panic_report_quotes_no_program_text_past_the_limit() {
+    attack_huge_secret("attack_secret", &["--interpret"]);
+}
+
+#[test]
+fn without_a_limit_a_panic_report_quotes_the_whole_name() {
+    let dir = program("whole_secret", HUGE_SECRET);
+    let output = oskac_in(&dir, &["run", "--interpret", "main.osk"]);
+    assert_eq!(output.status.code(), Some(101));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(stderr.bytes().filter(|&b| b == b'z').count(), 50000);
 }
 
 #[test]
@@ -307,7 +370,90 @@ mod differential;
 ))]
 mod both_backends {
     use super::differential::{assert_same, Case};
-    use super::{BOTH_STREAMS, ENDLESS, EVERY_WRITE};
+    use super::{attack_every_write, attack_huge_secret, BOTH_STREAMS, ENDLESS, EVERY_WRITE};
+    use super::{program, HELLO, HUGE_SECRET};
+
+    #[test]
+    fn attack_no_byte_past_the_limit_reaches_either_stream_natively() {
+        attack_every_write("attack_native", &[]);
+    }
+
+    #[test]
+    fn attack_a_panic_report_quotes_no_program_text_past_the_limit_natively() {
+        attack_huge_secret("attack_secret_native", &[]);
+    }
+
+    #[test]
+    fn a_cut_secret_name_is_the_same_on_both_backends() {
+        for limit in ["--max-output=9", "--max-output=10", "--max-output=30"] {
+            let name = format!("limit_secret_{}", &limit[13..]);
+            let case = Case::file(&name, HUGE_SECRET).with_run_flags(&[limit]);
+            assert_eq!(assert_same(&case).exit_code, Some(101));
+        }
+    }
+
+    /// Without a limit, the executable `oskac run` runs is the one `oskac
+    /// build` writes, byte for byte: both are kept in the build cache,
+    /// and one entry holds exactly the built file. With a limit it is
+    /// another executable.
+    #[test]
+    fn without_a_limit_oskac_run_runs_the_executable_oskac_build_writes() {
+        let dir = program("same_executable", HELLO);
+        let cache = dir.join("cache");
+        let with_cache = |args: &[&str]| {
+            let output = std::process::Command::new(env!("CARGO_BIN_EXE_oskac"))
+                .args(args)
+                .current_dir(&*dir)
+                .env("OSKA_CACHE_DIR", &cache)
+                .env_remove("OSKA_CACHE")
+                .output()
+                .expect("oskac should run");
+            assert!(output.status.success(), "{args:?}: {output:?}");
+        };
+        with_cache(&["build", "main.osk", "-o", "built"]);
+        let built = std::fs::read(dir.join("built")).expect("the built executable");
+        let entries = || -> Vec<Vec<u8>> {
+            let mut found = Vec::new();
+            let mut stack = vec![cache.clone()];
+            while let Some(at) = stack.pop() {
+                for entry in std::fs::read_dir(&at).expect("a cache folder") {
+                    let path = entry.expect("an entry").path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else {
+                        found.push(std::fs::read(&path).expect("an entry's bytes"));
+                    }
+                }
+            }
+            found
+        };
+        let holding_built = |all: &[Vec<u8>]| all.iter().filter(|e| e.ends_with(&built)).count();
+        let before = entries();
+        assert_eq!(
+            holding_built(&before),
+            1,
+            "`oskac build` keeps its executable"
+        );
+        with_cache(&["run", "main.osk"]);
+        let after_run = entries();
+        assert_eq!(
+            holding_built(&after_run),
+            2,
+            "`oskac run` kept an executable byte-identical to `oskac build`'s"
+        );
+        with_cache(&["run", "--max-output=64", "main.osk"]);
+        let after_limited = entries();
+        assert_eq!(
+            after_limited.len(),
+            after_run.len() + 1,
+            "a limited run is kept apart"
+        );
+        assert_eq!(
+            holding_built(&after_limited),
+            2,
+            "and is another executable"
+        );
+    }
 
     /// Writes through a closure, which a function takes as a `cap fn`,
     /// and with `dbg`, without end.

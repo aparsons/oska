@@ -11,6 +11,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use oska_check::builtins;
+use oska_check::limits;
 use oska_syntax::Span;
 
 use crate::confine::{self, Intent};
@@ -61,7 +62,7 @@ pub const INTRINSICS: Table = &[
     ("DirWrite.restrict_to_file", Plain(dir_restrict_to_file)),
     ("DirWrite.write", Plain(fs_write)),
     ("Env.get", Plain(env_get)),
-    ("Env.secret", Plain(env_secret)),
+    ("Env.secret", HigherOrder(env_secret)),
     ("FileRead.read_to_string", Plain(file_read_to_string)),
     ("FileWrite.write", Plain(file_write)),
     ("Fs.read_only", Plain(fs_read_only)),
@@ -300,15 +301,28 @@ fn env_get(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Pani
 /// has no room for a missing secret, and running on with a stand-in, say
 /// an empty one, could let an empty password through, so a missing one
 /// panics.
-fn env_secret(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+///
+/// The report quotes the name, which the program made: under
+/// `--max-output` it quotes no more of it than the limit has left.
+fn env_secret(
+    interp: &mut Interpreter<'_, '_>,
+    args: Vec<Value>,
+    span: Span,
+) -> Result<Value, Panic> {
     let name = text(&args, 1);
-    match host.env_var(name) {
+    match interp.host().env_var(name) {
         Some(value) => Ok(Value::secret(Value::str(&value))),
-        None => Err(Panic::new(
-            codes::MISSING_SECRET,
-            format!("the secret `{name}` is not set in the environment"),
-            span,
-        )),
+        None => {
+            let name = match interp.output_left() {
+                Some(left) => limits::cut_quoted(name, left),
+                None => name.into(),
+            };
+            Err(Panic::new(
+                codes::MISSING_SECRET,
+                format!("the secret `{name}` is not set in the environment"),
+                span,
+            ))
+        }
     }
 }
 

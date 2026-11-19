@@ -24,6 +24,7 @@ mod explain;
 mod fix;
 mod hook;
 mod json;
+mod limits;
 mod native;
 mod native_test;
 mod package;
@@ -158,7 +159,7 @@ impl CommandLine {
         };
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
-            if let Some(taken) = line.limits.take_flag(&arg) {
+            if let Some(taken) = limits::take_flag(&mut line.limits, &arg) {
                 if let Err(error) = taken {
                     line.limit_error.get_or_insert(error);
                 }

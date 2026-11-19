@@ -262,8 +262,10 @@ fn codes_of(code: &str, example: &Example) -> BTreeSet<String> {
         // limit, as `oskac run --max-output=16` does.
         let mut limits = oska_run::Limits::NONE;
         for word in &example.words {
-            if let Some(taken) = limits.take_flag(&format!("--{word}")) {
-                taken.unwrap_or_else(|e| panic!("{}: {e}", example.at));
+            if let Some(value) = word.strip_prefix("max-output=") {
+                let value = value.parse().ok().filter(|&v: &u64| v > 0);
+                limits.max_output =
+                    Some(value.unwrap_or_else(|| panic!("{}: a bad limit `{word}`", example.at)));
             }
         }
         let args = ["main.osk".to_string()];

@@ -1,0 +1,264 @@
+$ oskac check main.osk --max-output=64
+--- stdout
+--- stderr
+oskac - the Oska compiler
+
+USAGE:
+    oskac lex <file.osk> [--format=json]   Print the tokens in a source file
+    oskac parse <file.osk> [--format=json] Print the syntax tree of a source file
+    oskac check [path] [--format=json] [--release] [--no-cache]
+                [--baseline=<file> | --update-baseline=<file>]
+                                           Type-check a source file, or a
+                                           package directory (the current one
+                                           with no path), and report each
+                                           function's authority; compare it
+                                           with a saved baseline (exit code 3
+                                           when it widened), or write one
+    oskac run [path] [--format=json] [--interpret] [--no-cache]
+              [--max-output=<bytes>] [-- args...]
+                                           Check a source file or package and,
+                                           if it has no diagnostics, run it:
+                                           natively on aarch64 and x86_64
+                                           Linux, on the interpreter elsewhere
+                                           or with --interpret; stop it with
+                                           P0041 before it writes more than
+                                           the bytes --max-output gives to
+                                           stdout and stderr together
+    oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
+                                           Run the test blocks in a source file
+                                           or package, natively or interpreted
+                                           as `run` does
+    oskac build [path] [-o out] [--target <platform>|all] [--format=json] [--no-cache]
+                                           Check a source file or package and,
+                                           if it has no diagnostics, compile it
+                                           to an executable for the platform
+                                           (by default the host's when it has a
+                                           backend, else linux-aarch64), or for
+                                           every platform with a backend into
+                                           the -o directory
+    oskac fix [path] [--dry-run] [--placeholders] [--format=json]
+                                           Apply the machine fixes to a source
+                                           file or package, checking again
+                                           after each, and write each changed
+                                           file once
+    oskac explain <code> [--format=json]   Explain a diagnostic code, offline
+    oskac hook claude --event=post-edit [--format=json]
+                                           Check what Claude Code just edited,
+                                           reading its hook input on standard
+                                           input; exit 2 hands diagnostics back
+    oskac hook claude --event=stop [--format=json] [targets...]
+                                           Run the release check and the tests
+                                           before Claude Code may finish; exit
+                                           2 blocks it with what failed
+    oskac cache info [--format=json]       Report the build cache, which check,
+                                           run, test and build reuse unchanged
+                                           results from: its folder, entries,
+                                           size, limit, hits and misses
+    oskac cache clean [--format=json]      Empty the build cache
+    oskac self info [--format=json]        Report this installation: version,
+                                           platform, executable, Oska home and
+                                           install receipt
+    oskac self uninstall [--format=json]   Remove this managed install, as the
+                                           installer's uninstall does
+    oskac --version [--format=json]        Print the version
+    oskac --help                           Print this help
+--- exit Some(2)
+
+$ oskac test main.osk --max-output=64
+--- stdout
+--- stderr
+oskac - the Oska compiler
+
+USAGE:
+    oskac lex <file.osk> [--format=json]   Print the tokens in a source file
+    oskac parse <file.osk> [--format=json] Print the syntax tree of a source file
+    oskac check [path] [--format=json] [--release] [--no-cache]
+                [--baseline=<file> | --update-baseline=<file>]
+                                           Type-check a source file, or a
+                                           package directory (the current one
+                                           with no path), and report each
+                                           function's authority; compare it
+                                           with a saved baseline (exit code 3
+                                           when it widened), or write one
+    oskac run [path] [--format=json] [--interpret] [--no-cache]
+              [--max-output=<bytes>] [-- args...]
+                                           Check a source file or package and,
+                                           if it has no diagnostics, run it:
+                                           natively on aarch64 and x86_64
+                                           Linux, on the interpreter elsewhere
+                                           or with --interpret; stop it with
+                                           P0041 before it writes more than
+                                           the bytes --max-output gives to
+                                           stdout and stderr together
+    oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
+                                           Run the test blocks in a source file
+                                           or package, natively or interpreted
+                                           as `run` does
+    oskac build [path] [-o out] [--target <platform>|all] [--format=json] [--no-cache]
+                                           Check a source file or package and,
+                                           if it has no diagnostics, compile it
+                                           to an executable for the platform
+                                           (by default the host's when it has a
+                                           backend, else linux-aarch64), or for
+                                           every platform with a backend into
+                                           the -o directory
+    oskac fix [path] [--dry-run] [--placeholders] [--format=json]
+                                           Apply the machine fixes to a source
+                                           file or package, checking again
+                                           after each, and write each changed
+                                           file once
+    oskac explain <code> [--format=json]   Explain a diagnostic code, offline
+    oskac hook claude --event=post-edit [--format=json]
+                                           Check what Claude Code just edited,
+                                           reading its hook input on standard
+                                           input; exit 2 hands diagnostics back
+    oskac hook claude --event=stop [--format=json] [targets...]
+                                           Run the release check and the tests
+                                           before Claude Code may finish; exit
+                                           2 blocks it with what failed
+    oskac cache info [--format=json]       Report the build cache, which check,
+                                           run, test and build reuse unchanged
+                                           results from: its folder, entries,
+                                           size, limit, hits and misses
+    oskac cache clean [--format=json]      Empty the build cache
+    oskac self info [--format=json]        Report this installation: version,
+                                           platform, executable, Oska home and
+                                           install receipt
+    oskac self uninstall [--format=json]   Remove this managed install, as the
+                                           installer's uninstall does
+    oskac --version [--format=json]        Print the version
+    oskac --help                           Print this help
+--- exit Some(2)
+
+$ oskac build main.osk --max-output=64
+--- stdout
+--- stderr
+oskac - the Oska compiler
+
+USAGE:
+    oskac lex <file.osk> [--format=json]   Print the tokens in a source file
+    oskac parse <file.osk> [--format=json] Print the syntax tree of a source file
+    oskac check [path] [--format=json] [--release] [--no-cache]
+                [--baseline=<file> | --update-baseline=<file>]
+                                           Type-check a source file, or a
+                                           package directory (the current one
+                                           with no path), and report each
+                                           function's authority; compare it
+                                           with a saved baseline (exit code 3
+                                           when it widened), or write one
+    oskac run [path] [--format=json] [--interpret] [--no-cache]
+              [--max-output=<bytes>] [-- args...]
+                                           Check a source file or package and,
+                                           if it has no diagnostics, run it:
+                                           natively on aarch64 and x86_64
+                                           Linux, on the interpreter elsewhere
+                                           or with --interpret; stop it with
+                                           P0041 before it writes more than
+                                           the bytes --max-output gives to
+                                           stdout and stderr together
+    oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
+                                           Run the test blocks in a source file
+                                           or package, natively or interpreted
+                                           as `run` does
+    oskac build [path] [-o out] [--target <platform>|all] [--format=json] [--no-cache]
+                                           Check a source file or package and,
+                                           if it has no diagnostics, compile it
+                                           to an executable for the platform
+                                           (by default the host's when it has a
+                                           backend, else linux-aarch64), or for
+                                           every platform with a backend into
+                                           the -o directory
+    oskac fix [path] [--dry-run] [--placeholders] [--format=json]
+                                           Apply the machine fixes to a source
+                                           file or package, checking again
+                                           after each, and write each changed
+                                           file once
+    oskac explain <code> [--format=json]   Explain a diagnostic code, offline
+    oskac hook claude --event=post-edit [--format=json]
+                                           Check what Claude Code just edited,
+                                           reading its hook input on standard
+                                           input; exit 2 hands diagnostics back
+    oskac hook claude --event=stop [--format=json] [targets...]
+                                           Run the release check and the tests
+                                           before Claude Code may finish; exit
+                                           2 blocks it with what failed
+    oskac cache info [--format=json]       Report the build cache, which check,
+                                           run, test and build reuse unchanged
+                                           results from: its folder, entries,
+                                           size, limit, hits and misses
+    oskac cache clean [--format=json]      Empty the build cache
+    oskac self info [--format=json]        Report this installation: version,
+                                           platform, executable, Oska home and
+                                           install receipt
+    oskac self uninstall [--format=json]   Remove this managed install, as the
+                                           installer's uninstall does
+    oskac --version [--format=json]        Print the version
+    oskac --help                           Print this help
+--- exit Some(2)
+
+$ oskac fix main.osk --max-output=64
+--- stdout
+--- stderr
+oskac - the Oska compiler
+
+USAGE:
+    oskac lex <file.osk> [--format=json]   Print the tokens in a source file
+    oskac parse <file.osk> [--format=json] Print the syntax tree of a source file
+    oskac check [path] [--format=json] [--release] [--no-cache]
+                [--baseline=<file> | --update-baseline=<file>]
+                                           Type-check a source file, or a
+                                           package directory (the current one
+                                           with no path), and report each
+                                           function's authority; compare it
+                                           with a saved baseline (exit code 3
+                                           when it widened), or write one
+    oskac run [path] [--format=json] [--interpret] [--no-cache]
+              [--max-output=<bytes>] [-- args...]
+                                           Check a source file or package and,
+                                           if it has no diagnostics, run it:
+                                           natively on aarch64 and x86_64
+                                           Linux, on the interpreter elsewhere
+                                           or with --interpret; stop it with
+                                           P0041 before it writes more than
+                                           the bytes --max-output gives to
+                                           stdout and stderr together
+    oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
+                                           Run the test blocks in a source file
+                                           or package, natively or interpreted
+                                           as `run` does
+    oskac build [path] [-o out] [--target <platform>|all] [--format=json] [--no-cache]
+                                           Check a source file or package and,
+                                           if it has no diagnostics, compile it
+                                           to an executable for the platform
+                                           (by default the host's when it has a
+                                           backend, else linux-aarch64), or for
+                                           every platform with a backend into
+                                           the -o directory
+    oskac fix [path] [--dry-run] [--placeholders] [--format=json]
+                                           Apply the machine fixes to a source
+                                           file or package, checking again
+                                           after each, and write each changed
+                                           file once
+    oskac explain <code> [--format=json]   Explain a diagnostic code, offline
+    oskac hook claude --event=post-edit [--format=json]
+                                           Check what Claude Code just edited,
+                                           reading its hook input on standard
+                                           input; exit 2 hands diagnostics back
+    oskac hook claude --event=stop [--format=json] [targets...]
+                                           Run the release check and the tests
+                                           before Claude Code may finish; exit
+                                           2 blocks it with what failed
+    oskac cache info [--format=json]       Report the build cache, which check,
+                                           run, test and build reuse unchanged
+                                           results from: its folder, entries,
+                                           size, limit, hits and misses
+    oskac cache clean [--format=json]      Empty the build cache
+    oskac self info [--format=json]        Report this installation: version,
+                                           platform, executable, Oska home and
+                                           install receipt
+    oskac self uninstall [--format=json]   Remove this managed install, as the
+                                           installer's uninstall does
+    oskac --version [--format=json]        Print the version
+    oskac --help                           Print this help
+--- exit Some(2)
+

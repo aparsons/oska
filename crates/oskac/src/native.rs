@@ -112,7 +112,7 @@ pub fn run(
     // A human report is placed in the source by the executable itself; a
     // JSON one is read back unplaced and placed here, as the
     // interpreter's panic is.
-    let built = cached.native("run", target, json, &limits.flags(), || {
+    let built = cached.native("run", target, json, &crate::limits::flags(&limits), || {
         if json {
             oska_native::build_limited(program, target, &|d| d, limits)
         } else {

@@ -1677,12 +1677,14 @@ impl<'l, 'p> Body<'l, 'p> {
             }
             Callee::Intrinsic(name) => match intrinsics::prelude(name) {
                 Some(Prelude::Runtime(function)) => {
-                    if let ("Stdout.println" | "Stderr.println", Some(&line)) =
-                        (name.as_str(), args.get(1))
-                    {
-                        // The line and a newline.
-                        self.spend_output(line, 1, span)?;
-                    }
+                    self.call_runtime(function, args.clone(), span)?
+                }
+                Some(Prelude::WriteLine(function)) => {
+                    let Some(&line) = args.get(1) else {
+                        return Err(self.refuse(span, &format!("`{name}`")));
+                    };
+                    // The line and a newline.
+                    self.spend_output(line, 1, span)?;
                     self.call_runtime(function, args.clone(), span)?
                 }
                 // The argument is the result: its reference passes on.
@@ -1778,8 +1780,24 @@ impl<'l, 'p> Body<'l, 'p> {
                 });
             }
             Check::Secret => {
-                let label =
-                    self.panic_text(panics::MISSING_SECRET, "panic_missing_secret", args, span)?;
+                // The report quotes the name, which the program made:
+                // under `--max-output`, no more of it than the limit has
+                // left (`std.rt`'s `cut_quoted`).
+                let label = match self.lowering.limits.max_output {
+                    None => {
+                        self.panic_text(panics::MISSING_SECRET, "panic_missing_secret", args, span)?
+                    }
+                    Some(limit) => {
+                        let mut with_limit = args.to_vec();
+                        with_limit.push(self.constant(i64::try_from(limit).unwrap_or(i64::MAX)));
+                        self.panic_text(
+                            panics::MISSING_SECRET,
+                            "panic_missing_secret_cut",
+                            &with_limit,
+                            span,
+                        )?
+                    }
+                };
                 self.push(Inst::JumpIfZero {
                     cond: result,
                     target: label,

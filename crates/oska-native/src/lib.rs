@@ -73,8 +73,23 @@ pub mod codes {
 
     /// The `P`-codes native code panics with: the interpreter's.
     pub const PANICS: [&str; 17] = [
-        "P0001", "P0002", "P0003", "P0004", "P0005", "P0006", "P0007", "P0010", "P0011", "P0012",
-        "P0013", "P0020", "P0021", "P0035", "P0036", "P0037", "P0041",
+        "P0001",
+        "P0002",
+        "P0003",
+        "P0004",
+        "P0005",
+        "P0006",
+        "P0007",
+        "P0010",
+        "P0011",
+        "P0012",
+        "P0013",
+        "P0020",
+        "P0021",
+        "P0035",
+        "P0036",
+        "P0037",
+        oska_check::limits::codes::OUTPUT_LIMIT,
     ];
 }
 

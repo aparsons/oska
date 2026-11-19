@@ -2412,6 +2412,25 @@ pub fn output_allows(text: String, extra: Int, limit: Int) -> Bool {
     true
 }
 
+// `text`, program-made text a panic report quotes, cut to the bytes
+// `--max-output=limit` has left: all of it when it fits, else as many of
+// its first bytes as fit, ending where a character ends, then `...`. The
+// interpreter cuts alike (`oska_check::limits::cut_quoted`).
+fn cut_quoted(text: String, limit: Int) -> String {
+    let left = limit - rt_mem_load64(global(31))
+    let object = rt_mem_text(text)
+    if text_length(object) <= left {
+        return text
+    }
+    var end = left
+    // A continuation byte (10xxxxxx) is inside a character.
+    while end > 0 && rt_mem_and(rt_mem_load8(rt_mem_add(text_data(object), end)), 192) == 128 {
+        end = end - 1
+    }
+    let cut = text_part(text, object, 0, end)
+    "{cut}..."
+}
+
 // `Stdout.println`.
 pub fn stdout_println(io: Stdout, line: String) -> Result<(), IoError> {
     if testing() {
@@ -2839,6 +2858,17 @@ pub fn panic_missing_secret(start: String, end: String, env: Env, name: String) 
 
 pub fn missing_secret_message(head: String, env: Env, name: String) -> String {
     "{head}the secret `{name}` is not set in the environment"
+}
+
+// Panic (`P0020`) under `--max-output=limit`: the name cut to what the
+// limit has left (`cut_quoted`).
+pub fn panic_missing_secret_cut(start: String, end: String, env: Env, name: String, limit: Int) {
+    panic_message(start, end, missing_secret_cut_message("", env, name, limit))
+}
+
+pub fn missing_secret_cut_message(head: String, env: Env, name: String, limit: Int) -> String {
+    let shown = cut_quoted(name, limit)
+    "{head}the secret `{shown}` is not set in the environment"
 }
 
 // `Secret.constant_time_eq`.
