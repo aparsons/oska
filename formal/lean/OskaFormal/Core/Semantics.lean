@@ -3,12 +3,12 @@ import OskaFormal.Core.Syntax
 /-!
 # Oska Core: small-step semantics
 
-A small-step semantics of Oska Core, version 1, matching the interpreter
-(`crates/oska-run`) and the rules core IR version 1 states:
+A small-step semantics of Oska Core, version 2, matching the interpreter
+(`crates/oska-run`) and the rules core IR version 2 states:
 
 - Evaluation is left to right: an operator's `lhs` before its `rhs`, a
   call's arguments in order before the call, a block's statements in
-  order.
+  order, a struct or variant's fields in declaration order.
 - `Neg` and the arithmetic operators panic with an overflow when the
   result is not an `Int` (outside `-2^63 ..= 2^63 - 1`), and `/` and `%`
   panic with a division by zero when the divisor is 0, which is checked
@@ -20,6 +20,12 @@ A small-step semantics of Oska Core, version 1, matching the interpreter
   its parameters' slots, and a binding `let` puts its value for its slot
   in the rest of its block. Slots count from the first in scope, so
   putting a value for slot 0 renumbers slot `i + 1` as slot `i`.
+- A `match` evaluates its scrutinee, then tries its arms in order. An arm
+  whose pattern does not match the value is skipped. One whose pattern
+  matches puts the values it binds for their slots in its guard and body;
+  without a guard it steps to its body, and with one to
+  `if guard { body } else { the match of the rest }`, so a false guard
+  goes on to the next arm, as in the interpreter.
 
 The interpreter's limit on call depth, which stops runaway recursion with
 a panic, is a resource limit and is not part of the semantics.
@@ -42,6 +48,9 @@ mutual
     | .call name args => .call name (Expr.substList v args)
     | .if_ c th el => .if_ (Expr.subst v c) (Expr.subst v th) (Expr.substOpt v el)
     | .block ss val => .block (Expr.substStmts v ss) (Expr.substOpt v val)
+    | .construct t var fs => .construct t var (Expr.substList v fs)
+    | .field b i => .field (Expr.subst v b) i
+    | .match_ s arms => .match_ (Expr.subst v s) (Expr.substArms v arms)
 
   /-- `Expr.subst` on each expression of a list. -/
   def Expr.substList (v : Expr) : List Expr → List Expr
@@ -58,7 +67,19 @@ mutual
     | [] => []
     | .let_ b t e :: ss => .let_ b t (Expr.subst v e) :: Expr.substStmts v ss
     | .expr e :: ss => .expr (Expr.subst v e) :: Expr.substStmts v ss
+
+  /-- `Expr.subst` on each arm's guard and body. A pattern holds no
+  expression. -/
+  def Expr.substArms (v : Expr) : List Arm → List Arm
+    | [] => []
+    | .mk p g b :: arms => .mk p (Expr.substOpt v g) (Expr.subst v b) :: Expr.substArms v arms
 end
+
+/-- `e` with the closed values `vs` put for its first slots, slot 0
+first: a `match` arm's guard or body with the values its pattern binds. -/
+def Expr.substAll : List Expr → Expr → Expr
+  | [], e => e
+  | v :: vs, e => Expr.substAll vs (Expr.subst v e)
 
 /-- A function's body with its arguments' values put for the slots its
 parameters bind; the value of a parameter that binds no slot is dropped.
@@ -172,12 +193,39 @@ inductive Step (P : Program) : Expr → Outcome → Prop where
         (.next (.block (Expr.substStmts v ss) (Expr.substOpt v val)))
   | blockLetDrop {t : Ty} {v : Expr} {ss : List Stmt} {val : Option Expr} :
       IsValue v → Step P (.block (.let_ false t v :: ss) val) (.next (.block ss val))
+  | constructArg {type : String} {variant : Option String} {vs rest : List Expr} {e : Expr}
+      {o : Outcome} :
+      AllValues vs → Step P e o →
+      Step P (.construct type variant (vs ++ e :: rest))
+        (o.map fun e' => .construct type variant (vs ++ e' :: rest))
+  | fieldBase {b : Expr} {i : Nat} {o : Outcome} :
+      Step P b o → Step P (.field b i) (o.map fun b' => .field b' i)
+  | field {type : String} {fs : List Expr} {i : Nat} {v : Expr} :
+      AllValues fs → fs[i]? = some v → Step P (.field (.construct type none fs) i) (.next v)
+  | matchScrutinee {s : Expr} {arms : List Arm} {o : Outcome} :
+      Step P s o → Step P (.match_ s arms) (o.map fun s' => .match_ s' arms)
+  | matchSkip {v : Expr} {p : Pattern} {g : Option Expr} {body : Expr} {rest : List Arm} :
+      IsValue v → matchPat p v = none →
+      Step P (.match_ v (.mk p g body :: rest)) (.next (.match_ v rest))
+  | matchArm {v : Expr} {p : Pattern} {body : Expr} {rest : List Arm} {bs : List Expr} :
+      IsValue v → matchPat p v = some bs →
+      Step P (.match_ v (.mk p none body :: rest)) (.next (Expr.substAll bs body))
+  | matchGuard {v : Expr} {p : Pattern} {g body : Expr} {rest : List Arm} {bs : List Expr} :
+      IsValue v → matchPat p v = some bs →
+      Step P (.match_ v (.mk p (some g) body :: rest))
+        (.next (.if_ (Expr.substAll bs g) (Expr.substAll bs body) (some (.match_ v rest))))
 
 /-- A value takes no step. -/
 theorem value_no_step {P : Program} {v : Expr} {o : Outcome} (hv : IsValue v) :
     ¬ Step P v o := by
-  intro h
-  cases hv <;> cases h
+  induction hv generalizing o with
+  | unit => intro h; cases h
+  | int => intro h; cases h
+  | bool => intro h; cases h
+  | construct _ ih =>
+    intro h
+    cases h with
+    | constructArg _ hs => exact ih _ (List.mem_append_right _ List.mem_cons_self) hs
 
 theorem AllValues.mid {vs rest : List Expr} {e : Expr} :
     AllValues (vs ++ e :: rest) → IsValue e := by

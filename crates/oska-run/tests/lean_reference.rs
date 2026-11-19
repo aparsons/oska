@@ -43,7 +43,7 @@ const RUN_TIMEOUT: Duration = Duration::from_secs(120);
 /// The fewest runtime test programs the comparison must cover, as many as
 /// it covered when it was written. Raise it as Oska Core grows, so that a
 /// regression that makes the export refuse nearly everything fails.
-const MIN_COVERED: usize = 11;
+const MIN_COVERED: usize = 18;
 
 /// The program path a run gets as `args[0]`.
 const PROGRAM_PATH: &str = "prog.osk";
@@ -529,7 +529,7 @@ fn a_difference_or_a_refused_core_ir_fails_with_a_stubbed_reference() {
             "{what}: should differ, got {verdict:?}"
         );
     }
-    let refuses = |_: &str| Err("exit status: 2 with error: not core IR version 1".to_string());
+    let refuses = |_: &str| Err("exit status: 2 with error: not core IR version 2".to_string());
     assert!(matches!(
         verdict(DIVIDES_BY_ZERO, &refuses, &|_| {}),
         Verdict::Differs(_)
@@ -570,37 +570,52 @@ fn the_corpus_reads_every_kind_of_string_literal() {
     );
 }
 
-/// Core IR that is not version 1, each with what the refusal must name.
-const MALFORMED: [(&str, &str, &str); 6] = [
+/// Core IR that is not version 2, each with what the refusal must name.
+const MALFORMED: [(&str, &str, &str); 9] = [
     (
         "a wrong version",
-        r#"{"core_ir_version": 2, "functions": []}"#,
-        "core_ir_version 2",
+        r#"{"core_ir_version": 3, "types": [], "functions": []}"#,
+        "core_ir_version 3",
+    ),
+    (
+        "version 1",
+        r#"{"core_ir_version": 1, "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": []}}]}"#,
+        "core_ir_version 1",
     ),
     (
         "an unknown node",
-        r#"{"core_ir_version": 1, "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Loop"}}]}"#,
+        r#"{"core_ir_version": 2, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Loop"}}]}"#,
         "unknown expression kind `Loop`",
     ),
     (
         "an Int out of range",
-        r#"{"core_ir_version": 1, "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Let", "binds": false, "type": "Int", "value": {"kind": "Int", "value": 9223372036854775808}}]}}]}"#,
+        r#"{"core_ir_version": 2, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Let", "binds": false, "type": "Int", "value": {"kind": "Int", "value": 9223372036854775808}}]}}]}"#,
         "outside Int",
     ),
     (
         "an arity mismatch",
-        r#"{"core_ir_version": 1, "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Call", "function": "main", "args": [{"kind": "Unit"}]}}]}"#,
+        r#"{"core_ir_version": 2, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Call", "function": "main", "args": [{"kind": "Unit"}]}}]}"#,
         "with 1 argument(s), but it has 0 parameter(s)",
     ),
     (
         "trailing junk",
-        r#"{"core_ir_version": 1, "functions": []} junk"#,
+        r#"{"core_ir_version": 2, "types": [], "functions": []} junk"#,
         "not JSON",
     ),
     (
         "an unknown field",
-        r#"{"core_ir_version": 1, "functions": [], "extra": 1}"#,
+        r#"{"core_ir_version": 2, "types": [], "functions": [], "extra": 1}"#,
         "unknown field `extra`",
+    ),
+    (
+        "an undeclared variant",
+        r#"{"core_ir_version": 2, "types": [{"kind": "Enum", "name": "Light", "variants": [{"name": "Red", "fields": []}]}], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Expr", "value": {"kind": "Construct", "type": "Light", "variant": "Blue", "fields": []}}]}}]}"#,
+        "the enum `Light` has no variant `Blue`",
+    ),
+    (
+        "a pattern with too many fields",
+        r#"{"core_ir_version": 2, "types": [{"kind": "Struct", "name": "P", "fields": ["Int"]}], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Match", "scrutinee": {"kind": "Unit"}, "arms": [{"pattern": {"kind": "Construct", "type": "P", "fields": [{"kind": "Wildcard"}, {"kind": "Wildcard"}]}, "body": {"kind": "Unit"}}]}}]}"#,
+        "a constructor of `P` with 2 field(s), but it has 1",
     ),
 ];
 
@@ -614,7 +629,7 @@ fn the_lean_reference_refuses_malformed_core_ir_with_exit_2() {
         assert_eq!(run.code, Some(2), "{what}: the exit code, with {run:?}");
         assert_eq!(run.stdout, "", "{what}: nothing on stdout");
         assert!(
-            run.stderr.starts_with("error: not core IR version 1: ")
+            run.stderr.starts_with("error: not core IR version 2: ")
                 && run.stderr.contains(message),
             "{what}: stderr should name {message:?}: {:?}",
             run.stderr

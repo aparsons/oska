@@ -31,24 +31,50 @@ example (P : Program) : Step P (.neg (.int intMin)) (.panic .overflow) := Step.n
 def oneParam : Function :=
   { name := "f", params := [{ type := .int, binds := true }], ret := .int, body := .local_ 0 }
 
+/-- A program of `oneParam` alone. -/
+def oneParamProgram : Program := { types := [], functions := [oneParam] }
+
 /-- A call with the right arity steps into the body. -/
-example : Step [oneParam] (.call "f" [.int 1]) (.next (.int 1)) :=
+example : Step oneParamProgram (.call "f" [.int 1]) (.next (.int 1)) :=
   Step.call rfl (AllValues.cons (IsValue.int 1) AllValues.nil) rfl
 
 /-- A call of `f` with no argument, or with two, takes no step. -/
-example (o : Outcome) : ¬ Step [oneParam] (.call "f" []) o := by
+example (o : Outcome) : ¬ Step oneParamProgram (.call "f" []) o := by
   intro h
   obtain ⟨f, e, hf, hi, _⟩ := call_step AllValues.nil h
-  simp [Program.find?, oneParam] at hf
+  simp [oneParamProgram, Program.find?, findFunction, oneParam] at hf
   cases hf
   cases hi
 
-example (o : Outcome) : ¬ Step [oneParam] (.call "f" [.int 1, .int 2]) o := by
+example (o : Outcome) : ¬ Step oneParamProgram (.call "f" [.int 1, .int 2]) o := by
   intro h
   have hvs := AllValues.cons (IsValue.int 1) (AllValues.cons (IsValue.int 2) AllValues.nil)
   obtain ⟨f, e, hf, hi, _⟩ := call_step hvs h
-  simp [Program.find?, oneParam] at hf
+  simp [oneParamProgram, Program.find?, findFunction, oneParam] at hf
   cases hf
   cases hi
+
+/-- `enum Shape { Dot, Square(Int) }` and `struct Pair { a: Int, b: Bool }`. -/
+def shapes : Program :=
+  { types := [.enum_ "Shape" [("Dot", []), ("Square", [.int])], .struct_ "Pair" [.int, .bool]],
+    functions := [] }
+
+/-- A field access steps to the field. -/
+example : Step shapes (.field (.construct "Pair" none [.int 1, .bool true]) 1) (.next (.bool true)) :=
+  Step.field (.cons (.int 1) (.cons (.bool true) .nil)) rfl
+
+/-- A pattern of another variant does not match, and its arm is skipped. -/
+example : matchPat (.construct "Shape" (some "Dot") []) (.construct "Shape" (some "Square") [.int 3]) =
+    none := rfl
+
+/-- A pattern binds the fields it names, in order. -/
+example : matchPat (.construct "Shape" (some "Square") [.bind .int])
+    (.construct "Shape" (some "Square") [.int 3]) = some [.int 3] := rfl
+
+/-- A struct names no variant, and an enum's constructor names one. -/
+example : shapes.fieldsOf "Pair" none = some [.int, .bool] := rfl
+example : shapes.fieldsOf "Pair" (some "Dot") = none := rfl
+example : shapes.fieldsOf "Shape" none = none := rfl
+example : shapes.fieldsOf "Shape" (some "Square") = some [.int] := rfl
 
 end OskaFormal.Core

@@ -4,7 +4,7 @@ import OskaFormal.Core.Semantics
 /-!
 # Oska Core: progress and preservation
 
-Type soundness of Oska Core, version 1, for a well-typed program `P`:
+Type soundness of Oska Core, version 2, for a well-typed program `P`:
 
 - `progress`: a closed, well-typed expression is a value or takes a step.
 - `preservation`: a step of a closed, well-typed expression leads to an
@@ -30,15 +30,88 @@ theorem OutcomeTyped.map {o : Outcome} {t u : Ty} {f : Expr → Expr}
   | next e => exact hf e h
   | panic _ => trivial
 
+/-! ## Argument lists -/
+
+theorem args_split {Γ : List Ty} {e : Expr} {rest : List Expr} :
+    ∀ (vs : List Expr) {ts : List Ty}, Typed P Γ (.args (vs ++ e :: rest) ts) →
+      ∃ ts₁ t ts₂, ts = ts₁ ++ t :: ts₂ ∧ Typed P Γ (.args vs ts₁) ∧
+        Typed P Γ (.expr e t) ∧ Typed P Γ (.args rest ts₂) := by
+  intro vs
+  induction vs with
+  | nil =>
+    intro ts h
+    rw [List.nil_append] at h
+    cases h with
+    | argsCons he hr => exact ⟨[], _, _, rfl, Typed.argsNil, he, hr⟩
+  | cons v vs ih =>
+    intro ts h
+    rw [List.cons_append] at h
+    cases h with
+    | argsCons hv hr =>
+      obtain ⟨ts₁, t, ts₂, hts, h₁, he, h₂⟩ := ih hr
+      subst hts
+      exact ⟨_ :: ts₁, t, ts₂, rfl, Typed.argsCons hv h₁, he, h₂⟩
+
+theorem args_append {Γ : List Ty} {ws : List Expr} {ts₂ : List Ty} :
+    ∀ (vs : List Expr) {ts₁ : List Ty}, Typed P Γ (.args vs ts₁) →
+      Typed P Γ (.args ws ts₂) → Typed P Γ (.args (vs ++ ws) (ts₁ ++ ts₂)) := by
+  intro vs
+  induction vs with
+  | nil => intro ts₁ h₁ h₂; cases h₁; exact h₂
+  | cons v vs ih =>
+    intro ts₁ h₁ h₂
+    cases h₁ with
+    | argsCons hv hr => exact Typed.argsCons hv (ih hr h₂)
+
+/-- An argument list typed against `ts` has an expression of type `t` at
+each index where `ts` has `t`. -/
+theorem args_get {Γ : List Ty} :
+    ∀ {es : List Expr} {ts : List Ty} {i : Nat} {t : Ty}, Typed P Γ (.args es ts) →
+      ts[i]? = some t → ∃ e, es[i]? = some e ∧ Typed P Γ (.expr e t) := by
+  intro es
+  induction es with
+  | nil => intro ts i t h hi; cases h; simp at hi
+  | cons e es ih =>
+    intro ts i t h hi
+    cases h with
+    | argsCons he hr =>
+      cases i with
+      | zero => simp at hi; subst hi; exact ⟨e, rfl, he⟩
+      | succ i => simpa using ih hr (by simpa using hi)
+
+theorem AllValues.append {vs ws : List Expr} (h₁ : AllValues vs) (h₂ : AllValues ws) :
+    AllValues (vs ++ ws) := by
+  induction h₁ with
+  | nil => exact h₂
+  | cons hv _ ih => exact AllValues.cons hv ih
+
 /-! ## Values -/
+
+/-- A list whose expressions each keep their type from `Γ` to `Δ` keeps
+its typing as an argument list. -/
+theorem args_transport {Γ Δ : List Ty} :
+    ∀ {es : List Expr} {ts : List Ty}, (∀ e ∈ es, ∀ t, Typed P Γ (.expr e t) → Typed P Δ (.expr e t)) →
+      Typed P Γ (.args es ts) → Typed P Δ (.args es ts) := by
+  intro es
+  induction es with
+  | nil => intro ts _ h; cases h; exact Typed.argsNil
+  | cons e es ih =>
+    intro ts hall h
+    cases h with
+    | argsCons he hr =>
+      exact Typed.argsCons (hall e List.mem_cons_self _ he)
+        (ih (fun e' he' => hall e' (List.mem_cons_of_mem _ he')) hr)
 
 /-- A value has its type in every context. -/
 theorem value_typed {Γ Δ : List Ty} {v : Expr} {t : Ty} (hv : IsValue v)
     (h : Typed P Γ (.expr v t)) : Typed P Δ (.expr v t) := by
-  cases hv with
+  induction hv generalizing t with
   | unit => cases h; exact Typed.unit
   | int _ => cases h with | int hf => exact Typed.int hf
   | bool _ => cases h; exact Typed.bool
+  | construct _ ih =>
+    cases h with
+    | construct hf hargs => exact Typed.construct hf (args_transport (fun e he t => ih e he) hargs)
 
 theorem canonical_int {Γ : List Ty} {v : Expr} (hv : IsValue v)
     (h : Typed P Γ (.expr v .int)) : ∃ n, v = .int n := by
@@ -46,6 +119,7 @@ theorem canonical_int {Γ : List Ty} {v : Expr} (hv : IsValue v)
   | unit => cases h
   | int n => exact ⟨n, rfl⟩
   | bool _ => cases h
+  | construct _ => cases h
 
 theorem canonical_bool {Γ : List Ty} {v : Expr} (hv : IsValue v)
     (h : Typed P Γ (.expr v .bool)) : ∃ b, v = .bool b := by
@@ -53,6 +127,61 @@ theorem canonical_bool {Γ : List Ty} {v : Expr} (hv : IsValue v)
   | unit => cases h
   | int _ => cases h
   | bool b => exact ⟨b, rfl⟩
+  | construct _ => cases h
+
+/-- A value of a struct or enum type is a struct or variant of it, whose
+fields are values of its field types. -/
+theorem canonical_named {Γ : List Ty} {v : Expr} {type : String} (hv : IsValue v)
+    (h : Typed P Γ (.expr v (.named type))) :
+    ∃ variant fs fts, v = .construct type variant fs ∧ P.fieldsOf type variant = some fts ∧
+      Typed P Γ (.args fs fts) ∧ AllValues fs := by
+  cases hv with
+  | unit => cases h
+  | int _ => cases h
+  | bool _ => cases h
+  | construct hfs =>
+    cases h with
+    | construct hf hargs => exact ⟨_, _, _, rfl, hf, hargs, AllValues.of_forall hfs⟩
+
+/-- A name declares one type: when it is a struct, a constructor of it
+names no variant. -/
+theorem fieldsOf_struct {type : String} {variant : Option String} {fts fts' : List Ty}
+    (h : P.fieldsOf type none = some fts) (h' : P.fieldsOf type variant = some fts') :
+    variant = none ∧ fts' = fts := by
+  unfold Program.fieldsOf at h h'
+  cases hd : findType P.types type with
+  | none => simp [hd] at h
+  | some d =>
+    cases d with
+    | struct_ _ fs =>
+      cases variant with
+      | none => simp [hd] at h h'; exact ⟨rfl, h'.symm.trans h⟩
+      | some _ => simp [hd] at h'
+    | enum_ _ _ => simp [hd] at h
+
+theorem values_valueTyped : ∀ {fs : List Expr} {fts : List Ty},
+    (∀ e ∈ fs, ∀ {t : Ty}, Typed P [] (.expr e t) → ValueTyped P (.one e t)) →
+    Typed P [] (.args fs fts) → ValueTyped P (.many fs fts) := by
+  intro fs
+  induction fs with
+  | nil => intro fts _ h; cases h; exact ValueTyped.nil
+  | cons e es ihs =>
+    intro fts ih h
+    cases h with
+    | argsCons he hr =>
+      exact ValueTyped.cons (ih e List.mem_cons_self he)
+        (ihs (fun e' he' => ih e' (List.mem_cons_of_mem _ he')) hr)
+
+/-- A closed value of type `t` has type `t` as a value. -/
+theorem value_valueTyped {v : Expr} {t : Ty} (hv : IsValue v) (h : Typed P [] (.expr v t)) :
+    ValueTyped P (.one v t) := by
+  induction hv generalizing t with
+  | unit => cases h; exact ValueTyped.unit
+  | int _ => cases h with | int hf => exact ValueTyped.int hf
+  | bool _ => cases h; exact ValueTyped.bool
+  | @construct type variant fs _ ih =>
+    cases h with
+    | construct hf hargs => exact ValueTyped.construct hf (values_valueTyped ih hargs)
 
 /-! ## Substitution -/
 
@@ -61,6 +190,39 @@ def Goal.subst (v : Expr) : Goal → Goal
   | .expr e t => .expr (Expr.subst v e) t
   | .args es ts => .args (Expr.substList v es) ts
   | .block ss val t => .block (Expr.substStmts v ss) (Expr.substOpt v val) t
+  | .arms as u t => .arms (Expr.substArms v as) u t
+
+/-- A value is closed: putting a value for a slot leaves it as it is. -/
+theorem subst_value {w v : Expr} (hv : IsValue v) : Expr.subst w v = v := by
+  induction hv with
+  | unit => rfl
+  | int _ => rfl
+  | bool _ => rfl
+  | @construct type variant fs hfs ih =>
+    show Expr.construct type variant (Expr.substList w fs) = _
+    congr 1
+    clear type variant hfs
+    induction fs with
+    | nil => rfl
+    | cons e es ihs =>
+      show Expr.subst w e :: Expr.substList w es = e :: es
+      rw [ih e List.mem_cons_self, ihs (fun e' he' => ih e' (List.mem_cons_of_mem _ he'))]
+
+/-- Putting a value for a slot keeps an arm with no guard that a value
+matches. -/
+theorem covered_subst {w v : Expr} : ∀ {arms : List Arm}, Covered arms v →
+    Covered (Expr.substArms w arms) v := by
+  intro arms
+  induction arms with
+  | nil => intro ⟨_, _, hm, _⟩; cases hm
+  | cons arm arms ih =>
+    intro ⟨p, body, hm, hp⟩
+    obtain ⟨p', g', b'⟩ := arm
+    cases hm with
+    | head => exact ⟨p, Expr.subst w body, List.mem_cons_self, hp⟩
+    | tail _ hm =>
+      obtain ⟨p'', body'', hm', hp'⟩ := ih ⟨p, body, hm, hp⟩
+      exact ⟨p'', body'', List.mem_cons_of_mem _ hm', hp'⟩
 
 /-- Putting a closed value of type `u` for slot 0 keeps a judgment in a
 context whose slot 0 has type `u`, with that slot removed. -/
@@ -100,6 +262,25 @@ theorem typed_subst {v : Expr} {u : Ty} (hv : IsValue v) (hvt : Typed P [] (.exp
     subst hΓ
     exact Typed.blockLetBind (ihe Δ rfl) (ihs (Δ ++ [_]) rfl)
   | blockLetDrop _ _ ihe ihs => intro Δ hΓ; exact Typed.blockLetDrop (ihe Δ hΓ) (ihs Δ hΓ)
+  | construct hf _ ih => intro Δ hΓ; exact Typed.construct hf (ih Δ hΓ)
+  | field hf hi _ ih => intro Δ hΓ; exact Typed.field hf hi (ih Δ hΓ)
+  | @match_ Γ sc arms u' t _ _ hc ihs iharms =>
+    intro Δ hΓ
+    refine Typed.match_ (ihs Δ hΓ) (iharms Δ hΓ) ?_
+    intro w hw hsw
+    refine covered_subst (hc w hw ?_)
+    intro hsv
+    rw [← subst_value (w := v) hsv]
+    exact hsw (by rw [subst_value hsv]; exact hsv)
+  | armsNil => intro _ _; exact Typed.armsNil
+  | armsCons hp _ _ ihb ihr =>
+    intro Δ hΓ
+    subst hΓ
+    exact Typed.armsCons hp (ihb (Δ ++ _) rfl) (ihr Δ rfl)
+  | armsConsGuard hp _ _ _ ihg ihb ihr =>
+    intro Δ hΓ
+    subst hΓ
+    exact Typed.armsConsGuard hp (ihg (Δ ++ _) rfl) (ihb (Δ ++ _) rfl) (ihr Δ rfl)
 
 /-- A function's body, with closed values of its parameters' types put for
 the slots they bind, is closed and has the body's type. -/
@@ -155,38 +336,96 @@ theorem instantiate_some :
         simp only [instantiate, hbinds]
         exact ih hrest
 
-/-! ## Argument lists -/
+/-- A body with closed values of its bindings' types put for its first
+slots is closed and keeps its type. -/
+theorem typed_substAll :
+    ∀ (bs : List Expr) {bts : List Ty} {e : Expr} {t : Ty},
+      Typed P bts (.expr e t) → Typed P [] (.args bs bts) → AllValues bs →
+      Typed P [] (.expr (Expr.substAll bs e) t) := by
+  intro bs
+  induction bs with
+  | nil => intro bts e t he hargs _; cases hargs; exact he
+  | cons b bs ih =>
+    intro bts e t he hargs hvals
+    cases hargs with
+    | argsCons hb hrest =>
+      cases hvals with
+      | cons hv hvs => exact ih (typed_subst hv hb he _ rfl) hrest hvs
 
-theorem args_split {Γ : List Ty} {e : Expr} {rest : List Expr} :
-    ∀ (vs : List Expr) {ts : List Ty}, Typed P Γ (.args (vs ++ e :: rest) ts) →
-      ∃ ts₁ t ts₂, ts = ts₁ ++ t :: ts₂ ∧ Typed P Γ (.args vs ts₁) ∧
-        Typed P Γ (.expr e t) ∧ Typed P Γ (.args rest ts₂) := by
-  intro vs
-  induction vs with
+/-! ## Patterns -/
+
+/-- What a pattern typing says about matching: a closed value of the
+pattern's type that matches it binds closed values of the types of its
+bindings. -/
+def MatchFor (P : Program) : PGoal → Prop
+  | .one p u bts => ∀ {v bs}, IsValue v → Typed P [] (.expr v u) → matchPat p v = some bs →
+      Typed P [] (.args bs bts) ∧ AllValues bs
+  | .many ps ts bts => ∀ {vs bs}, AllValues vs → Typed P [] (.args vs ts) →
+      matchPats ps vs = some bs → Typed P [] (.args bs bts) ∧ AllValues bs
+
+theorem matchPat_typed : ∀ {g : PGoal}, PatTyped P g → MatchFor P g := by
+  intro g h
+  induction h with
+  | wildcard =>
+    intro v bs _ _ hm
+    simp [matchPat] at hm
+    subst hm
+    exact ⟨Typed.argsNil, AllValues.nil⟩
+  | bind =>
+    intro v bs hv ht hm
+    simp [matchPat] at hm
+    subst hm
+    exact ⟨Typed.argsCons ht Typed.argsNil, AllValues.cons hv AllValues.nil⟩
+  | unit | int | bool =>
+    intro v bs _ _ hm
+    cases v <;> simp [matchPat] at hm
+    all_goals (obtain ⟨_, rfl⟩ := hm; exact ⟨Typed.argsNil, AllValues.nil⟩)
+  | construct hf _ ih =>
+    intro v bs hv ht hm
+    obtain ⟨variant', fs, fts', rfl, hf', hargs, hvals⟩ := canonical_named hv ht
+    simp only [matchPat] at hm
+    split at hm
+    · next heq =>
+      subst heq
+      rw [hf] at hf'
+      cases hf'
+      exact ih hvals hargs hm
+    · cases hm
   | nil =>
-    intro ts h
-    rw [List.nil_append] at h
-    cases h with
-    | argsCons he hr => exact ⟨[], _, _, rfl, Typed.argsNil, he, hr⟩
-  | cons v vs ih =>
-    intro ts h
-    rw [List.cons_append] at h
-    cases h with
-    | argsCons hv hr =>
-      obtain ⟨ts₁, t, ts₂, hts, h₁, he, h₂⟩ := ih hr
-      subst hts
-      exact ⟨_ :: ts₁, t, ts₂, rfl, Typed.argsCons hv h₁, he, h₂⟩
+    intro vs bs _ ht hm
+    cases ht
+    simp [matchPats] at hm
+    subst hm
+    exact ⟨Typed.argsNil, AllValues.nil⟩
+  | cons _ _ ih₁ ih₂ =>
+    intro vs bs hvs ht hm
+    cases ht with
+    | argsCons he hr =>
+      cases hvs with
+      | cons hv hvs =>
+        simp only [matchPats] at hm
+        split at hm
+        · next bs₁ bs₂ h₁ h₂ =>
+          cases hm
+          obtain ⟨t₁, v₁⟩ := ih₁ hv he h₁
+          obtain ⟨t₂, v₂⟩ := ih₂ hvs hr h₂
+          exact ⟨args_append _ t₁ t₂, v₁.append v₂⟩
+        · cases hm
 
-theorem args_append {Γ : List Ty} {ws : List Expr} {ts₂ : List Ty} :
-    ∀ (vs : List Expr) {ts₁ : List Ty}, Typed P Γ (.args vs ts₁) →
-      Typed P Γ (.args ws ts₂) → Typed P Γ (.args (vs ++ ws) (ts₁ ++ ts₂)) := by
-  intro vs
-  induction vs with
-  | nil => intro ts₁ h₁ h₂; cases h₁; exact h₂
-  | cons v vs ih =>
-    intro ts₁ h₁ h₂
-    cases h₁ with
-    | argsCons hv hr => exact Typed.argsCons hv (ih hr h₂)
+/-- An arm that does not match a value is not the arm it takes. -/
+theorem covered_skip {p : Pattern} {g : Option Expr} {body v : Expr} {rest : List Arm}
+    (h : Covered (.mk p g body :: rest) v) (hm : matchPat p v = none) : Covered rest v := by
+  obtain ⟨p', body', hmem, hp⟩ := h
+  cases hmem with
+  | head => rw [hm] at hp; cases hp
+  | tail _ hmem => exact ⟨p', body', hmem, hp⟩
+
+/-- An arm with a guard is not the arm a value is sure to take. -/
+theorem covered_guard {p : Pattern} {g body v : Expr} {rest : List Arm}
+    (h : Covered (.mk p (some g) body :: rest) v) : Covered rest v := by
+  obtain ⟨p', body', hmem, hp⟩ := h
+  cases hmem with
+  | tail _ hmem => exact ⟨p', body', hmem, hp⟩
 
 /-! ## Operators -/
 
@@ -203,8 +442,8 @@ theorem evalBinary_typed {op : BinOp} {a t : Ty} {l r : Expr} {o : Outcome}
     (htl : Typed P [] (.expr l a)) (htr : Typed P [] (.expr r a))
     (h : evalBinary op l r = some o) : OutcomeTyped P o t := by
   cases hop with
-  | eq _ => simp only [evalBinary, Option.some.injEq] at h; subst h; exact Typed.bool
-  | ne _ => simp only [evalBinary, Option.some.injEq] at h; subst h; exact Typed.bool
+  | eq _ _ => simp only [evalBinary, Option.some.injEq] at h; subst h; exact Typed.bool
+  | ne _ _ => simp only [evalBinary, Option.some.injEq] at h; subst h; exact Typed.bool
   | and => cases h
   | or => cases h
   | implies => cases h
@@ -230,8 +469,8 @@ theorem evalBinary_some {op : BinOp} {a t : Ty} {l r : Expr}
     (htl : Typed P [] (.expr l a)) (htr : Typed P [] (.expr r a)) :
     ∃ o, evalBinary op l r = some o := by
   cases hop with
-  | eq _ => exact ⟨_, rfl⟩
-  | ne _ => exact ⟨_, rfl⟩
+  | eq _ _ => exact ⟨_, rfl⟩
+  | ne _ _ => exact ⟨_, rfl⟩
   | and => cases hlog
   | or => cases hlog
   | implies => cases hlog
@@ -250,6 +489,7 @@ def ProgressFor (P : Program) : Goal → Prop
   | .args es _ =>
     AllValues es ∨ ∃ vs e rest o, es = vs ++ e :: rest ∧ AllValues vs ∧ Step P e o
   | .block ss val _ => ∃ o, Step P (.block ss val) o
+  | .arms _ _ _ => True
 
 theorem progress_goal : ∀ {Γ : List Ty} {j : Goal}, Typed P Γ j → Γ = [] → ProgressFor P j := by
   intro Γ j h
@@ -355,6 +595,39 @@ theorem progress_goal : ∀ {Γ : List Ty} {j : Goal}, Typed P Γ j → Γ = [] 
     rcases ihe hΓ with hv | ⟨o, hs⟩
     · exact ⟨_, Step.blockLetDrop hv⟩
     · exact ⟨_, Step.blockLetArg hs⟩
+  | construct _ _ ih =>
+    intro hΓ
+    rcases ih hΓ with hall | ⟨vs, e, rest, o, rfl, hvs, hs⟩
+    · exact Or.inl (IsValue.construct hall.forall)
+    · exact Or.inr ⟨_, Step.constructArg hvs hs⟩
+  | field hf hi hb ih =>
+    intro hΓ
+    subst hΓ
+    rcases ih rfl with hv | ⟨o, hs⟩
+    · obtain ⟨variant, fs, fts', rfl, hf', hargs, hvals⟩ := canonical_named hv hb
+      obtain ⟨rfl, rfl⟩ := fieldsOf_struct hf hf'
+      obtain ⟨e, he, _⟩ := args_get hargs hi
+      exact Or.inr ⟨_, Step.field hvals he⟩
+    · exact Or.inr ⟨_, Step.fieldBase hs⟩
+  | @match_ _ _ arms _ _ hs _ hc ih _ =>
+    intro hΓ
+    subst hΓ
+    rcases ih rfl with hv | ⟨o, hstep⟩
+    · obtain ⟨p, body, hmem, _⟩ := hc _ (value_valueTyped hv hs) (fun _ => rfl)
+      cases arms with
+      | nil => cases hmem
+      | cons arm rest =>
+        obtain ⟨p, g, body⟩ := arm
+        cases hm : matchPat p _ with
+        | none => exact Or.inr ⟨_, Step.matchSkip hv hm⟩
+        | some bs =>
+          cases g with
+          | none => exact Or.inr ⟨_, Step.matchArm hv hm⟩
+          | some g => exact Or.inr ⟨_, Step.matchGuard hv hm⟩
+    · exact Or.inr ⟨_, Step.matchScrutinee hstep⟩
+  | armsNil => intro _; trivial
+  | armsCons _ _ _ _ _ => intro _; trivial
+  | armsConsGuard _ _ _ _ _ _ _ => intro _; trivial
 
 /-- **Progress.** A closed, well-typed expression of Oska Core is a value
 or takes a step, to an expression or to a panic. -/
@@ -485,5 +758,68 @@ theorem preservation (hP : ProgramTyped P) {e : Expr} {o : Outcome} (hs : Step P
     | block hb =>
       cases hb with
       | blockLetDrop _ hrest => exact Typed.block hrest
+  | constructArg _ _ ih =>
+    intro t ht
+    cases ht with
+    | construct hf hargs =>
+      obtain ⟨ts₁, _, ts₂, hts, h₁, he, h₂⟩ := args_split _ hargs
+      refine (ih he).map fun _ h => Typed.construct hf ?_
+      rw [hts]
+      exact args_append _ h₁ (Typed.argsCons h h₂)
+  | fieldBase _ ih =>
+    intro t ht
+    cases ht with
+    | field hf hi hb => exact (ih hb).map fun _ h => Typed.field hf hi h
+  | field _ he =>
+    intro t ht
+    cases ht with
+    | field hf hi hb =>
+      cases hb with
+      | construct hf' hargs =>
+        rw [hf] at hf'
+        cases hf'
+        obtain ⟨e, he', hte⟩ := args_get hargs hi
+        rw [he] at he'
+        cases he'
+        exact hte
+  | matchScrutinee hstep ih =>
+    intro t ht
+    cases ht with
+    | match_ hs harms hc =>
+      exact (ih hs).map fun _ h =>
+        Typed.match_ h harms fun w hw _ => hc w hw fun hv => absurd hstep (value_no_step hv)
+  | @matchSkip _ _ _ _ rest hv hm =>
+    intro t ht
+    cases ht with
+    | @match_ _ _ _ u _ hs harms hc =>
+      have hrest : Typed P [] (.arms rest u t) := by
+        cases harms with
+        | armsCons _ _ hr => exact hr
+        | armsConsGuard _ _ _ hr => exact hr
+      refine Typed.match_ hs hrest fun w hw hvw => ?_
+      have hvw := hvw hv
+      subst hvw
+      exact covered_skip (hc _ hw fun _ => rfl) hm
+  | matchArm hv hm =>
+    intro t ht
+    cases ht with
+    | match_ hs harms hc =>
+      cases harms with
+      | armsCons hp hbody _ =>
+        obtain ⟨hargs, hvals⟩ := matchPat_typed hp hv hs hm
+        exact typed_substAll _ (by simpa using hbody) hargs hvals
+  | matchGuard hv hm =>
+    intro t ht
+    cases ht with
+    | match_ hs harms hc =>
+      cases harms with
+      | armsConsGuard hp hg hbody hrest =>
+        obtain ⟨hargs, hvals⟩ := matchPat_typed hp hv hs hm
+        refine Typed.ifElse (typed_substAll _ (by simpa using hg) hargs hvals)
+          (typed_substAll _ (by simpa using hbody) hargs hvals) ?_
+        refine Typed.match_ hs hrest fun w hw hvw => ?_
+        have hvw := hvw hv
+        subst hvw
+        exact covered_guard (hc _ hw fun _ => rfl)
 
 end OskaFormal.Core
