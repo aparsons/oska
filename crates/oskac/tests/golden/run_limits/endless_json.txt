@@ -1,0 +1,1 @@
+{"code":"P0041","message":"output limit reached: this write would take standard output and standard error past 20 bytes (`--max-output=20`)","path":"main.osk","span":{"start":69,"end":91},"line":4,"column":17,"end_line":4,"end_column":39,"severity":"error","url":"https://oskalang.dev/codes/P0041","related":[],"suggestions":[]}

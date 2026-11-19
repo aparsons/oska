@@ -49,7 +49,7 @@ pub fn test_program(
     cached: &Cached,
 ) -> Tested {
     // The test executable reports unplaced, whatever the format.
-    let bytes = match cached.native("test", target, false, || {
+    let bytes = match cached.native("test", target, false, &[], || {
         oska_native::build_tests(program, target)
     }) {
         Ok(bytes) => bytes,

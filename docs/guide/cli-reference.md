@@ -18,12 +18,16 @@ USAGE:
                                            with a saved baseline (exit code 3
                                            when it widened), or write one
     oskac run [path | -] [--format=json] [--interpret] [--no-cache]
-              [-- args...]                 Check a source file, package or
+              [--max-output=<bytes>] [-- args...]
+                                           Check a source file, package or
                                            module on standard input (-) and,
                                            if it has no diagnostics, run it:
                                            natively on aarch64 and x86_64
                                            Linux, on the interpreter elsewhere
-                                           or with --interpret
+                                           or with --interpret; stop it with
+                                           P0041 before it writes more than
+                                           the bytes --max-output gives to
+                                           stdout and stderr together
     oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
@@ -87,6 +91,7 @@ USAGE:
 | `--target=<platform>` | `build` | Build for this platform, named as release assets name `oskac` builds (`linux-aarch64`, ...), or with `all` for every platform with a backend. Also written `--target <platform>`. Any other command given it is a usage error (exit code 2). See [`oskac build`](#oskac-build). |
 | `--dry-run` | `fix` | Print the diff the fixes would make, and write nothing. The other commands accept the flag and ignore it. |
 | `--placeholders` | `fix` | Also apply fixes whose applicability is `placeholders`, such as `E0253`'s `todo()` arms. The other commands accept the flag and ignore it. |
+| `--max-output=<bytes>` | `run` | Stop the program with `P0041` (exit code 101) before it writes more than `<bytes>` bytes to standard output and standard error together. The value is a whole number above 0; anything else, a repeated flag, or the flag on any other command is a usage error (exit code 2). See [run limits](../runtime.md#run-limits). |
 | `--no-cache` | `check`, `run`, `test`, `build` | Neither read nor write the [build cache](#oskac-cache). Any other command refuses it as a usage error (exit code 2). |
 
 ## `oskac lex`
@@ -172,11 +177,12 @@ With `--format=json`, the check object gains `authority_diff`, just before `verd
 
 ## `oskac run`
 
-`oskac run <file.osk | -> [--format=json] [--interpret] [-- args...]` checks the file, or the module read from [standard input](#source-from-standard-input), and, when it has no diagnostics, runs `main` on the real operating system: compiled natively on Linux and macOS, on the interpreter on Windows or with `--interpret` (see [platform support](#platform-support)). `args.get(0)` in the program is the file's path, the package directory as given, or `<stdin>` for a module read from standard input, on either backend, and the arguments after `--` follow it unchanged.
+`oskac run <file.osk | -> [--format=json] [--interpret] [--max-output=<bytes>] [-- args...]` checks the file, or the module read from [standard input](#source-from-standard-input), and, when it has no diagnostics, runs `main` on the real operating system: compiled natively on Linux and macOS, on the interpreter on Windows or with `--interpret` (see [platform support](#platform-support)). `args.get(0)` in the program is the file's path, the package directory as given, or `<stdin>` for a module read from standard input, on either backend, and the arguments after `--` follow it unchanged.
 
 - The program's own output goes to standard output and standard error as it runs.
 - A refused program's diagnostics, or the panic that stopped the program, go to standard error after that output: as `check` prints diagnostics, or as one JSON object per line with `--format=json`.
 - The exit code is the program's.
+- `--max-output=<bytes>` stops the program, with the panic `P0041` and exit code 101, at the write that would take what it wrote to standard output and standard error together past that many bytes; that write writes nothing. See [run limits](../runtime.md#run-limits).
 
 | Exit code | Meaning |
 | --- | --- |

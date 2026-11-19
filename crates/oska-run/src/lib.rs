@@ -57,12 +57,13 @@ mod value;
 
 pub use host::{FakeHost, FakeWorld, Host, Output, RealHost, RootHandle, FAKE_SEED};
 pub use interp::MAX_CALL_DEPTH;
+pub use oska_check::limits::Limits;
 pub use panics::codes;
 pub use testing::{
     test, test_program, test_refusal, TestOptions, TestReport, TestResult, TestStatus,
 };
 
-use interp::Interpreter;
+use interp::{Interpreter, Stream};
 use oska_check::builtins;
 use panics::Panic;
 use value::{Capability, Value};
@@ -148,7 +149,18 @@ pub(crate) fn on_interpreter_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
 /// `P0021`, so runaway recursion ends the program with a panic rather
 /// than crashing the process.
 pub fn run(src: &str, host: &mut dyn Host, args: &[String]) -> RunOutcome {
-    on_interpreter_stack(|| check_and_run(src, host, args))
+    run_with_limits(src, host, args, Limits::NONE)
+}
+
+/// [`run`] under the run `limits` (spec #446): a program that reaches one
+/// panics with its code (`P0041` for `--max-output`).
+pub fn run_with_limits(
+    src: &str,
+    host: &mut dyn Host,
+    args: &[String],
+    limits: Limits,
+) -> RunOutcome {
+    on_interpreter_stack(|| check_and_run(src, host, args, limits))
 }
 
 /// Run an already **checked program** on `host`, as [`run`] does after it
@@ -156,17 +168,27 @@ pub fn run(src: &str, host: &mut dyn Host, args: &[String]) -> RunOutcome {
 /// (`oska_check::check_package`) and passes its program here. `args` are
 /// the program's arguments, the program path first.
 pub fn run_program(program: &Program, host: &mut dyn Host, args: &[String]) -> RunOutcome {
-    on_interpreter_stack(|| run_checked(program, host, args))
+    run_program_with_limits(program, host, args, Limits::NONE)
 }
 
-fn check_and_run(src: &str, host: &mut dyn Host, args: &[String]) -> RunOutcome {
+/// [`run_program`] under the run `limits`, as [`run_with_limits`].
+pub fn run_program_with_limits(
+    program: &Program,
+    host: &mut dyn Host,
+    args: &[String],
+    limits: Limits,
+) -> RunOutcome {
+    on_interpreter_stack(|| run_checked(program, host, args, limits))
+}
+
+fn check_and_run(src: &str, host: &mut dyn Host, args: &[String], limits: Limits) -> RunOutcome {
     let report = oska_check::check_module(src);
     let Some(program) = report.program else {
         let mut outcome = RunOutcome::new(1, host);
         outcome.diagnostics = report.diagnostics;
         return outcome;
     };
-    run_checked(&program, host, args)
+    run_checked(&program, host, args, limits)
 }
 
 /// Why [`run_program`] would refuse to run `program` at all (`E0370`,
@@ -177,13 +199,18 @@ pub fn refusal(program: &Program) -> Option<Diagnostic> {
         .or_else(|| support::unsupported(program))
 }
 
-fn run_checked(program: &Program, host: &mut dyn Host, args: &[String]) -> RunOutcome {
+fn run_checked(
+    program: &Program,
+    host: &mut dyn Host,
+    args: &[String],
+    limits: Limits,
+) -> RunOutcome {
     if let Some(refusal) = refusal(program) {
         let mut outcome = RunOutcome::new(UNSUPPORTED_EXIT_CODE, host);
         outcome.diagnostics.push(refusal);
         return outcome;
     }
-    match run_main(program, host, args) {
+    match run_main(program, host, args, limits) {
         Ok(()) => RunOutcome::new(0, host),
         Err(Stop::Failed) => RunOutcome::new(1, host),
         Err(Stop::Panicked(panic)) => {
@@ -271,7 +298,12 @@ impl From<Panic> for Stop {
 /// Run `main`, granting each parameter the capability its type names, and
 /// `args` to an `Args` parameter. When it returns `Err(e)`, `e`'s
 /// `Display` text goes to stderr.
-fn run_main(program: &Program, host: &mut dyn Host, args: &[String]) -> Result<(), Stop> {
+fn run_main(
+    program: &Program,
+    host: &mut dyn Host,
+    args: &[String],
+    limits: Limits,
+) -> Result<(), Stop> {
     let Some(main) = program.functions.get("main") else {
         return Ok(());
     };
@@ -289,7 +321,7 @@ fn run_main(program: &Program, host: &mut dyn Host, args: &[String]) -> Result<(
             }
         })
         .collect();
-    let mut interpreter = Interpreter::new(program, host);
+    let mut interpreter = Interpreter::new(program, host).with_limits(limits);
     // Nothing in the program calls `main`: its body stands for the call.
     let value = interpreter.call(main, values, main.body.span)?;
     if !(value.type_tag() == builtins::RESULT && value.is_variant(builtins::ERR)) {
@@ -300,7 +332,9 @@ fn run_main(program: &Program, host: &mut dyn Host, args: &[String]) -> Result<(
     let span = main.body.span;
     let text = interpreter.call_trait(builtins::DISPLAY_TO_STRING, error, Vec::new(), span)?;
     // The program has failed either way: a stderr that cannot be written
-    // loses the message, not the exit code.
-    let _ = host.write_stderr(&format!("{}\n", text.as_str()));
+    // loses the message, not the exit code. The message is the program's
+    // own text, so it counts toward `--max-output`.
+    let line = format!("{}\n", text.as_str());
+    let _ = interpreter.write_output(Stream::Stderr, &line, span)?;
     Err(Stop::Failed)
 }

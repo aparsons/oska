@@ -71,6 +71,7 @@ mod traits;
 use std::collections::{BTreeMap, HashMap};
 
 use oska_check::builtins;
+use oska_check::limits::{Limit, Limits};
 use oska_check::program::{
     trait_method, Callee, Construct, Expr, ExprKind, Function, IntType, Part, Program, Stmt, Type,
 };
@@ -216,6 +217,7 @@ pub fn program(
     locate: Locate,
     kind: Entry,
     target: Target,
+    limits: Limits,
 ) -> Result<ir::Module, Diagnostic> {
     let mut lowering = Lowering {
         user,
@@ -223,6 +225,7 @@ pub fn program(
         locate,
         kind,
         target,
+        limits,
         ids: HashMap::new(),
         functions: Vec::new(),
         queue: Vec::new(),
@@ -299,6 +302,9 @@ struct Lowering<'p> {
     /// The target platform: its system-call numbers and `std.rt` table,
     /// and how many arguments its calls pass in registers.
     target: Target,
+    /// The run limits the program is built under (`oskac run`): none for
+    /// `oskac build` and test executables.
+    limits: Limits,
     /// Every function requested so far.
     ids: HashMap<Instance, FnId>,
     /// The lowered functions, by id; a requested one is a placeholder
@@ -1663,12 +1669,22 @@ impl<'l, 'p> Body<'l, 'p> {
                 };
                 let ty = self.ty(ty);
                 let text = self.debug_text(&ty, value, span)?;
+                // `[dbg] `, the text and a newline.
+                self.spend_output(text, 7, span)?;
                 self.call_runtime("dbg_write", vec![text], span)?;
                 self.release(text, &Type::String)?;
                 return Ok(value);
             }
             Callee::Intrinsic(name) => match intrinsics::prelude(name) {
                 Some(Prelude::Runtime(function)) => {
+                    self.call_runtime(function, args.clone(), span)?
+                }
+                Some(Prelude::WriteLine(function)) => {
+                    let Some(&line) = args.get(1) else {
+                        return Err(self.refuse(span, &format!("`{name}`")));
+                    };
+                    // The line and a newline.
+                    self.spend_output(line, 1, span)?;
                     self.call_runtime(function, args.clone(), span)?
                 }
                 // The argument is the result: its reference passes on.
@@ -1724,6 +1740,27 @@ impl<'l, 'p> Body<'l, 'p> {
         Some(function.self_ty.as_ref()?.substitute(&subst))
     }
 
+    /// Under `--max-output`, count the bytes of the text `text` and
+    /// `extra` more, which the program is about to write to stdout or
+    /// stderr, against the limit (`std.rt`'s `output_allows`): a write
+    /// that would pass it panics with `P0041` at `span` instead. Without
+    /// the limit nothing is generated.
+    fn spend_output(&mut self, text: Temp, extra: i64, span: Span) -> Result<(), Diagnostic> {
+        let Some(limit) = self.lowering.limits.max_output else {
+            return Ok(());
+        };
+        let over = self.panic_static(Limit::Output.code(), &Limit::Output.message(limit), span)?;
+        let extra = self.constant(extra);
+        // `Limits` holds at most `i64::MAX`.
+        let limit = self.constant(i64::try_from(limit).unwrap_or(i64::MAX));
+        let allowed = self.call_runtime("output_allows", vec![text, extra, limit], span)?;
+        self.push(Inst::JumpIfZero {
+            cond: allowed,
+            target: over,
+        });
+        Ok(())
+    }
+
     /// Panic after a [`Prelude::Checked`] call of `args` that gave `result`:
     /// the word 0 (and, for `Repeat`, -1) says the call was a bug.
     fn check(
@@ -1743,8 +1780,24 @@ impl<'l, 'p> Body<'l, 'p> {
                 });
             }
             Check::Secret => {
-                let label =
-                    self.panic_text(panics::MISSING_SECRET, "panic_missing_secret", args, span)?;
+                // The report quotes the name, which the program made:
+                // under `--max-output`, no more of it than the limit has
+                // left (`std.rt`'s `cut_quoted`).
+                let label = match self.lowering.limits.max_output {
+                    None => {
+                        self.panic_text(panics::MISSING_SECRET, "panic_missing_secret", args, span)?
+                    }
+                    Some(limit) => {
+                        let mut with_limit = args.to_vec();
+                        with_limit.push(self.constant(i64::try_from(limit).unwrap_or(i64::MAX)));
+                        self.panic_text(
+                            panics::MISSING_SECRET,
+                            "panic_missing_secret_cut",
+                            &with_limit,
+                            span,
+                        )?
+                    }
+                };
                 self.push(Inst::JumpIfZero {
                     cond: result,
                     target: label,
@@ -1955,6 +2008,8 @@ impl<'l, 'p> Body<'l, 'p> {
                 });
                 let error = self.load(result, layout::enum_field(0));
                 let text = self.display(&args[1], error, span)?;
+                // The text and a newline, which the program wrote.
+                self.spend_output(text, 1, span)?;
                 // `main_failed` exits, so the text is never released.
                 self.call_runtime("main_failed", vec![text], span)?;
                 self.push(Inst::Label(ok));

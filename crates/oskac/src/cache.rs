@@ -565,7 +565,8 @@ impl<'s> Cached<'s> {
     }
 
     /// The executable the native backend builds for `target`, for `oskac
-    /// <command>` (`run`, `test` or `build`), with `--format=json` or not:
+    /// <command>` (`run`, `test` or `build`), with `--format=json` or not
+    /// and, for `run`, under the `limits` given as flags:
     /// from the cache, or from `build`, which is then stored if it
     /// succeeds. A refusal is never stored.
     pub fn native(
@@ -573,10 +574,14 @@ impl<'s> Cached<'s> {
         command: &str,
         target: Target,
         json: bool,
+        limits: &[String],
         build: impl FnOnce() -> Result<Vec<u8>, Diagnostic>,
     ) -> Result<Vec<u8>, Diagnostic> {
         let format: &[u8] = if json { b"json" } else { b"text" };
-        let flags = [command.as_bytes(), target.name().as_bytes(), format];
+        let mut flags = vec![command.as_bytes(), target.name().as_bytes(), format];
+        // A run's limits are built into its executable; with none the key
+        // is the one it always was.
+        flags.extend(limits.iter().map(String::as_bytes));
         let Some((store, key)) = self.key("native", &flags) else {
             return build();
         };
