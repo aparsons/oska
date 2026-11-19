@@ -56,10 +56,6 @@ impl Target {
         Target::MacosX86_64,
     ];
 
-    /// The targets `oskac run` and `oskac test` compile for when they are
-    /// the host's: every target.
-    const HOSTS: [Target; 4] = Target::ALL;
-
     /// The target for the supported platform named `platform`. An
     /// unknown name is refused with `E0393`, listing the names; a
     /// supported platform with no backend yet with `E0394`, naming the
@@ -95,9 +91,7 @@ impl Target {
     /// line here.
     pub fn host() -> Option<Target> {
         let host = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
-        Target::HOSTS
-            .into_iter()
-            .find(|target| target.name() == host)
+        Target::ALL.into_iter().find(|target| target.name() == host)
     }
 
     /// The platform's name, as release assets name `oskac` builds.
@@ -180,9 +174,7 @@ impl Target {
             ),
         }
     }
-}
 
-impl Target {
     /// A Mach-O for `machine`, importing this target's functions.
     fn macho(
         self,

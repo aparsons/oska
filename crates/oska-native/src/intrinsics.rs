@@ -925,11 +925,9 @@ mod tests {
         assert_eq!(system_calls(crate::Target::LinuxX86_64), x86_64);
     }
 
-    /// Each macOS call is one `libSystem` function, made as Apple's
-    /// headers declare it: (intrinsic, symbol, arguments it takes, fixed
-    /// arguments, whole-word result, how it fails, trailing constants).
-    /// How macOS makes an intrinsic's call: (intrinsic, symbol, arguments,
-    /// fixed, wide, fails, then).
+    /// How macOS makes an intrinsic's call: (intrinsic, symbol, arguments
+    /// it takes, fixed arguments, whole-word result, how it fails,
+    /// trailing constants).
     type Row = (
         &'static str,
         &'static str,
@@ -940,6 +938,8 @@ mod tests {
         &'static [i64],
     );
 
+    /// Each macOS call is one `libSystem` function, made as Apple's
+    /// headers declare it.
     #[test]
     fn macos_makes_each_call_as_the_libsystem_function_declares_it() {
         use Fails::*;
