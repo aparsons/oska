@@ -1,7 +1,7 @@
 # Research: how `std.rt` calls Windows through kernel32 and ntdll
 
 - **Date:** 2026-11-19
-- **Status:** proposed, for #176 (spec #155). Nothing here is implemented. §4 lists the decisions for the user, each with a recommendation.
+- **Status:** accepted 2026-11-19: the user accepted all eight recommended decisions (§4), ahead of #176 (spec #155). Nothing here is implemented.
 - **Question:** ADR 0015 made a `std.rt` system-call intrinsic "one call of the operating system's interface" and said Windows follows the same rule with kernel32 and ntdll. What is the smallest shape that lets `std.rt` run small programs on Windows (#176), then all of them (#177–#179), without changing what Linux and macOS executables do?
 - **Method:**
   - Read the Oska sources at `origin/main` `704dc89` (2026-11-19). Claims about Oska cite the file and the function or line there.

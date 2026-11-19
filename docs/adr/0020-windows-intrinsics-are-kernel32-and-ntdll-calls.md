@@ -1,6 +1,6 @@
 # On Windows, a system-call intrinsic is one kernel32 or ntdll call
 
-- **Status:** Proposed (2026-11-19), for spec #155 (#176). Amends [ADR 0015](0015-macos-intrinsics-are-libsystem-calls.md) for Windows. The research behind it is [docs/research/2026-11-windows-kernel32-calls.md](../research/2026-11-windows-kernel32-calls.md), whose §4 lists the decisions (Q1–Q8).
+- **Status:** Accepted (2026-11-19), for spec #155 (#176). On 2026-11-19 the user accepted all eight decisions the research recommends (its §4, Q1–Q8). Amends [ADR 0015](0015-macos-intrinsics-are-libsystem-calls.md) for Windows. The research behind it is [docs/research/2026-11-windows-kernel32-calls.md](../research/2026-11-windows-kernel32-calls.md), whose §4 lists the decisions (Q1–Q8).
 
 ## Decision
 
