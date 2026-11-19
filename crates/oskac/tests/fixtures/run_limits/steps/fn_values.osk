@@ -1,0 +1,19 @@
+// Steps: 4. A named function used as a value is a step where it is
+// called, as a closure is; a prelude method used as a value runs in the
+// runtime, and is not, even with no step left.
+//
+// - `[1, 2, 3].map(double)`: `double`, 3 times: 3.
+// - `f(5)`, with `f` the value `double`: 1.
+// - `["a", "bb"].map(String.len)`, the last steps' worth: 0.
+fn double(n: Int) -> Int {
+    n * 2
+}
+
+fn main(io: Stdout) {
+    let doubled = [1, 2, 3].map(double)
+    let f = double
+    let ten = f(5)
+    let lens = ["a", "bb"].map(String.len)
+    let n = doubled.len() + lens.len()
+    let _ = io.println("{n} {ten}")
+}

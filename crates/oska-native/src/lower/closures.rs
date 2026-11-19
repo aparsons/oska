@@ -40,6 +40,13 @@
 //! so a thunk of one is [`Body::deferred`]: each panic in it returns the
 //! status `error[P....]: message`, which the caller reports at the call.
 //! A `requires` status has that form as well.
+//!
+//! Under `--max-steps`, the code of a closure or of a named function's
+//! thunk takes the call's step first ([`Body::step_into_value`]), and with
+//! no step left returns the `P0038` status; a thunk of an intrinsic takes
+//! none, as the interpreter takes none for an intrinsic's call. The depth
+//! is still counted at the call, so where one call would pass both the
+//! depth limit and the step limit, natively `P0021` comes first.
 
 use std::sync::Arc;
 
@@ -322,6 +329,8 @@ impl Body<'_, '_> {
         let object = self.temp();
         let params: Vec<Temp> = code.params.iter().map(|_| self.temp()).collect();
         let count = self.temps;
+        // A closure written in Oska is a step; one in `std.rt` is not.
+        self.step_into_value()?;
         // The slots below the parameters that it does not capture are
         // never read.
         let unread = self.constant(0);
@@ -432,6 +441,8 @@ impl Body<'_, '_> {
         let Some(function) = program.functions.get(name) else {
             return Err(self.refuse(at, &format!("a call of `{name}`")));
         };
+        // A step before its `requires`, as the interpreter takes it.
+        self.step_into_value()?;
         if !function.contracts.requires.is_empty() {
             let instance = Instance::Requires {
                 source: self.source,

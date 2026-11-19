@@ -27,10 +27,10 @@ USAGE:
                                            Linux, on the interpreter elsewhere
                                            or with --interpret; stop it with
                                            P0038 after the steps --max-steps
-                                           gives (interpreter only), or with
-                                           P0041 before it writes more than
-                                           the bytes --max-output gives to
-                                           stdout and stderr together
+                                           gives, or with P0041 before it
+                                           writes more than the bytes
+                                           --max-output gives to stdout and
+                                           stderr together
     oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
@@ -100,10 +100,10 @@ USAGE:
                                            Linux, on the interpreter elsewhere
                                            or with --interpret; stop it with
                                            P0038 after the steps --max-steps
-                                           gives (interpreter only), or with
-                                           P0041 before it writes more than
-                                           the bytes --max-output gives to
-                                           stdout and stderr together
+                                           gives, or with P0041 before it
+                                           writes more than the bytes
+                                           --max-output gives to stdout and
+                                           stderr together
     oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
@@ -173,10 +173,10 @@ USAGE:
                                            Linux, on the interpreter elsewhere
                                            or with --interpret; stop it with
                                            P0038 after the steps --max-steps
-                                           gives (interpreter only), or with
-                                           P0041 before it writes more than
-                                           the bytes --max-output gives to
-                                           stdout and stderr together
+                                           gives, or with P0041 before it
+                                           writes more than the bytes
+                                           --max-output gives to stdout and
+                                           stderr together
     oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
@@ -246,10 +246,10 @@ USAGE:
                                            Linux, on the interpreter elsewhere
                                            or with --interpret; stop it with
                                            P0038 after the steps --max-steps
-                                           gives (interpreter only), or with
-                                           P0041 before it writes more than
-                                           the bytes --max-output gives to
-                                           stdout and stderr together
+                                           gives, or with P0041 before it
+                                           writes more than the bytes
+                                           --max-output gives to stdout and
+                                           stderr together
     oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted

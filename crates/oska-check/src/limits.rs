@@ -47,8 +47,9 @@ impl Limit {
     pub fn message(self, value: u64) -> String {
         match self {
             Limit::Steps => format!(
-                "step limit reached: the program would take more than {value} steps, its calls \
-                 and loop back-edges (`--max-steps={value}`)"
+                "step limit reached: the program would take more than {value} {}, its calls \
+                 and loop back-edges (`--max-steps={value}`)",
+                if value == 1 { "step" } else { "steps" }
             ),
             Limit::Output => format!(
                 "output limit reached: this write would take standard output and standard \

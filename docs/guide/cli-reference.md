@@ -29,10 +29,10 @@ USAGE:
                                            Linux, on the interpreter elsewhere
                                            or with --interpret; stop it with
                                            P0038 after the steps --max-steps
-                                           gives (interpreter only), or with
-                                           P0041 before it writes more than
-                                           the bytes --max-output gives to
-                                           stdout and stderr together
+                                           gives, or with P0041 before it
+                                           writes more than the bytes
+                                           --max-output gives to stdout and
+                                           stderr together
     oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
@@ -97,7 +97,7 @@ USAGE:
 | `--target=<platform>` | `build` | Build for this platform, named as release assets name `oskac` builds (`linux-aarch64`, ...), or with `all` for every platform with a backend. Also written `--target <platform>`. Any other command given it is a usage error (exit code 2). See [`oskac build`](#oskac-build). |
 | `--dry-run` | `fix` | Print the diff the fixes would make, and write nothing. The other commands accept the flag and ignore it. |
 | `--placeholders` | `fix` | Also apply fixes whose applicability is `placeholders`, such as `E0253`'s `todo()` arms. The other commands accept the flag and ignore it. |
-| `--max-steps=<n>` | `run` | Stop the program with `P0038` (exit code 101) after `<n>` steps: calls of functions, methods and closures written in Oska, and loop back-edges ([ADR 0021](../adr/0021-a-step-limit-stops-at-the-same-step-on-every-backend.md)). Interpreter only for now: without `--interpret`, a run that would be native is a usage error (exit code 2); on Windows it works as it is. The value is a whole number above 0; anything else, a repeated flag, or the flag on any other command is a usage error (exit code 2). See [run limits](../runtime.md#run-limits). |
+| `--max-steps=<n>` | `run` | Stop the program with `P0038` (exit code 101) after `<n>` steps: calls of functions, methods and closures written in Oska, and loop back-edges ([ADR 0021](../adr/0021-a-step-limit-stops-at-the-same-step-on-every-backend.md)). Natively and on the interpreter alike, at the same step. The value is a whole number above 0; anything else, a repeated flag, or the flag on any other command is a usage error (exit code 2). See [run limits](../runtime.md#run-limits). |
 | `--max-output=<bytes>` | `run` | Stop the program with `P0041` (exit code 101) before it writes more than `<bytes>` bytes to standard output and standard error together. The value is a whole number above 0; anything else, a repeated flag, or the flag on any other command is a usage error (exit code 2). See [run limits](../runtime.md#run-limits). |
 | `--no-cache` | `check`, `run`, `test`, `build` | Neither read nor write the [build cache](#oskac-cache). Any other command refuses it as a usage error (exit code 2). |
 
@@ -202,7 +202,7 @@ The output is the baseline's, with `grant` in place of `baseline`: a `grant:` se
 - The program's own output goes to standard output and standard error as it runs.
 - A refused program's diagnostics, or the panic that stopped the program, go to standard error after that output: as `check` prints diagnostics, or as one JSON object per line with `--format=json`.
 - The exit code is the program's, or 3 when the program goes past its `--grant` and was not run.
-- `--max-steps=<n>` stops the program, with the panic `P0038` and exit code 101, at the step past `<n>`: a call of a function, method or closure written in Oska, or a loop going back for its next iteration. It needs `--interpret` where the run would otherwise be native (exit code 2 without it), until native code counts steps. See [run limits](../runtime.md#run-limits).
+- `--max-steps=<n>` stops the program, with the panic `P0038` and exit code 101, at the step past `<n>`: a call of a function, method or closure written in Oska, or a loop going back for its next iteration. It stops at the same step natively and on the interpreter. See [run limits](../runtime.md#run-limits).
 - `--max-output=<bytes>` stops the program, with the panic `P0041` and exit code 101, at the write that would take what it wrote to standard output and standard error together past that many bytes; that write writes nothing. See [run limits](../runtime.md#run-limits).
 
 | Exit code | Meaning |

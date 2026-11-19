@@ -72,8 +72,6 @@ pub mod codes {
     ];
 
     /// The `P`-codes native code panics with: the interpreter's.
-    /// `P0038` is listed though native code does not count steps yet
-    /// (#454): `oskac` refuses `--max-steps` on a native run until then.
     pub const PANICS: [&str; 18] = [
         "P0001",
         "P0002",
@@ -124,12 +122,11 @@ pub fn build(program: &Program, target: Target, locate: Locate) -> Result<Vec<u8
 }
 
 /// [`build`], for `oskac run` under the run `limits` (spec #446): the
-/// executable stops with a limit's panic (`P0041` for `--max-output`)
-/// when the program reaches it. The checks are in the generated code and
-/// `std.rt`, behind the intrinsics that exist (ADR 0013); with no limit
-/// the executable is [`build`]'s, byte for byte. Native code does not
-/// count steps yet (#454): `oskac` refuses `--max-steps` on a native run,
-/// so `limits.max_steps` is not built in.
+/// executable stops with a limit's panic (`P0038` for `--max-steps`,
+/// `P0041` for `--max-output`) when the program reaches it, at the same
+/// step or write as the interpreter. The checks are in the generated code
+/// and `std.rt`, behind the intrinsics that exist (ADR 0013); with no
+/// limit the executable is [`build`]'s, byte for byte.
 pub fn build_limited(
     program: &Program,
     target: Target,

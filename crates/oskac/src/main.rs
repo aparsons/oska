@@ -62,10 +62,10 @@ USAGE:
                                            Linux, on the interpreter elsewhere
                                            or with --interpret; stop it with
                                            P0038 after the steps --max-steps
-                                           gives (interpreter only), or with
-                                           P0041 before it writes more than
-                                           the bytes --max-output gives to
-                                           stdout and stderr together
+                                           gives, or with P0041 before it
+                                           writes more than the bytes
+                                           --max-output gives to stdout and
+                                           stderr together
     oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
@@ -246,15 +246,6 @@ fn main() -> ExitCode {
     // Only `run` takes a limit: `check` is never mistaken for a run.
     if !line.limits.is_empty() && positional.first() != Some(&"run") {
         eprint!("{USAGE}");
-        return ExitCode::from(2);
-    }
-    // Native code does not count steps yet (#454): a native run refuses
-    // `--max-steps` rather than run without it.
-    if line.limits.max_steps.is_some() && native::native_target(flags).is_some() {
-        eprintln!(
-            "error: --max-steps works only on the interpreter for now: add --interpret \
-             to run the program there"
-        );
         return ExitCode::from(2);
     }
     let gate = match (

@@ -57,6 +57,18 @@
 //! with a guard region below it. Every call of a program's function
 //! counts its depth ([`Inst::Enter`]) and panics with `P0021` at the
 //! interpreter's limit, so recursion never reaches the guard.
+//!
+//! # Steps
+//!
+//! Under `oskac run --max-steps` (ADR 0021), each call of a function,
+//! method or closure of the program, and each loop back-edge in it, is a
+//! step ([`Body::step`]): a counter after the runtime's globals counts
+//! down from the limit, and the step with none left panics with `P0038`
+//! at the interpreter's span. A call of a function value takes its step
+//! in the value's code, which hands the panic back to the caller as its
+//! status, since a prelude method used as a value is no step. Nothing in
+//! `std.rt` is a step. Without the flag none of this is generated, so the
+//! executable is byte for byte the one `oskac build` writes.
 
 mod closures;
 mod data;
@@ -95,6 +107,11 @@ const STACK_RESERVE: u64 = 8 << 20;
 
 /// The words of the runtime's writable data, at `rt_mem_globals()`.
 pub const GLOBALS: u32 = 50;
+
+/// Under `--max-steps`, the word after the runtime's globals holds the
+/// steps the program may still take ([`Body::step`]); without the flag
+/// the word is not there, so the writable data is what it always was.
+const STEPS_WORD: u32 = GLOBALS;
 
 /// What an executable runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,12 +179,15 @@ enum Instance {
     /// 1, holding a reference of its own to each field.
     Unshare(Source, Type),
     /// Whether two lists of items of this type are equal (`List.eq`).
-    ListEq(Source, Type),
+    /// Under `--max-steps`, one for each `==` that compares them, at the
+    /// span its calls of a user `Eq` are steps at ([`Body::step_site`]).
+    ListEq(Source, Type, Option<Span>),
     /// The text `dbg` shows a value of this struct or enum type as.
     Debug(Source, Type),
     /// Whether two values of this `Option` or `Result` type are equal,
-    /// through `Eq` for each field's type (`traits.rs`).
-    Equal(Source, Type),
+    /// through `Eq` for each field's type (`traits.rs`). Under
+    /// `--max-steps`, one for each `==`, as [`Instance::ListEq`].
+    Equal(Source, Type, Option<Span>),
     /// The check of a function's `requires` clauses, a function of the
     /// same parameters as it: gives 0 when they all hold, else the number
     /// (from 1) of the first that is false. The caller panics with it,
@@ -263,6 +283,8 @@ pub fn program(
     }
     optimize::module(&mut lowering.functions);
     let stack = lowering.size_stack(entry);
+    // The globals, and the step counter after them under `--max-steps`.
+    let globals = GLOBALS + u32::from(limits.max_steps.is_some());
     // The most arguments any call passes, or any function takes, past
     // those the target passes in registers: they share one area after
     // the globals.
@@ -283,8 +305,8 @@ pub fn program(
         functions: lowering.functions,
         entry,
         rodata: lowering.rodata.into_bytes(),
-        data_size: (GLOBALS + extra_args) * layout::WORD,
-        extra_args: GLOBALS * layout::WORD,
+        data_size: (globals + extra_args) * layout::WORD,
+        extra_args: globals * layout::WORD,
         callback: lowering.callback,
         stack,
     })
@@ -389,6 +411,7 @@ impl<'p> Lowering<'p> {
         let mut body = Body::new(self, Source::User, None);
         match kind {
             Entry::Main => {
+                body.start_steps();
                 if let Some(main) = user.functions.get("main") {
                     body.call_main(main)?;
                 }
@@ -533,15 +556,15 @@ impl<'p> Lowering<'p> {
                 body.unshare_function(ty)?;
                 return body.finish(&qualified(instance), 1, NOWHERE);
             }
-            Instance::ListEq(source, ty) => {
+            Instance::ListEq(source, ty, at) => {
                 let mut body = Body::new(self, *source, Some(origin));
-                body.list_eq_function(ty)?;
+                body.list_eq_function(ty, at.unwrap_or(NOWHERE))?;
                 return body.finish(&qualified(instance), 2, NOWHERE);
             }
-            Instance::Equal(source, ty) => {
+            Instance::Equal(source, ty, at) => {
                 let runtime_origin = (*source == Source::Runtime).then_some(origin);
                 let mut body = Body::new(self, *source, runtime_origin);
-                body.equal_function(ty, origin)?;
+                body.equal_function(ty, at.unwrap_or(origin))?;
                 return body.finish(&qualified(instance), 2, NOWHERE);
             }
             Instance::Closure(index) => {
@@ -688,9 +711,9 @@ fn qualified(instance: &Instance) -> String {
         }
         Instance::Drop(_, ty) => format!("drop<{ty}>"),
         Instance::Unshare(_, ty) => format!("unshare<{ty}>"),
-        Instance::ListEq(_, ty) => format!("list_eq<{ty}>"),
+        Instance::ListEq(_, ty, _) => format!("list_eq<{ty}>"),
         Instance::Debug(_, ty) => format!("debug<{ty}>"),
-        Instance::Equal(_, ty) => format!("eq<{ty}>"),
+        Instance::Equal(_, ty, _) => format!("eq<{ty}>"),
         Instance::Requires {
             source,
             name,
@@ -1606,6 +1629,7 @@ impl<'l, 'p> Body<'l, 'p> {
         if self.source == Source::Runtime {
             return self.call_function(Source::Runtime, name, type_args, args, span);
         }
+        self.step(span)?;
         let exhausted = self.panic_static(panics::CALL_DEPTH_EXCEEDED, panics::TOO_DEEP, span)?;
         self.push(Inst::Enter { exhausted });
         self.check_requires(name, &type_args, &args, span)?;
@@ -1759,6 +1783,93 @@ impl<'l, 'p> Body<'l, 'p> {
             target: over,
         });
         Ok(())
+    }
+
+    /// Under `--max-steps`, give the program its steps: the limit, in the
+    /// step counter, before `main` runs. Without the flag nothing is
+    /// generated.
+    fn start_steps(&mut self) {
+        let Some(limit) = self.lowering.limits.max_steps else {
+            return;
+        };
+        let counter = self.steps_counter();
+        // `Limits` holds at most `i64::MAX`.
+        let limit = self.constant(i64::try_from(limit).unwrap_or(i64::MAX));
+        self.store(counter, 0, limit);
+    }
+
+    /// The address of the step counter.
+    fn steps_counter(&mut self) -> Temp {
+        let dst = self.temp();
+        self.push(Inst::Addr {
+            dst,
+            symbol: Symbol::Data(STEPS_WORD * layout::WORD),
+        });
+        dst
+    }
+
+    /// Under `--max-steps`, take one **step** (ADR 0021) at `span`: a call
+    /// of a function, method or closure written in Oska, or a loop's
+    /// back-edge, as the interpreter's `Interpreter::step` counts them.
+    /// With no step left it panics with `P0038` at `span` instead. The
+    /// counter is a word in the writable data that only counts down, read
+    /// and written with the backend's plain loads and stores before
+    /// register allocation, so every target counts alike, with no system
+    /// call (ADR 0013). Without the flag nothing is generated, and
+    /// nothing in `std.rt` is a step.
+    fn step(&mut self, span: Span) -> Result<(), Diagnostic> {
+        let Some(limit) = self.lowering.limits.max_steps else {
+            return Ok(());
+        };
+        if self.source == Source::Runtime {
+            return Ok(());
+        }
+        let over = self.panic_static(Limit::Steps.code(), &Limit::Steps.message(limit), span)?;
+        self.spend_step(over);
+        Ok(())
+    }
+
+    /// [`Body::step`] at the start of a function value's code: the call of
+    /// a closure or of a named function used as a value, whose span only
+    /// the caller knows. With no step left, it returns the panic's status
+    /// for the caller to report at the call ([`Body::invoke`]).
+    fn step_into_value(&mut self) -> Result<(), Diagnostic> {
+        let Some(limit) = self.lowering.limits.max_steps else {
+            return Ok(());
+        };
+        if self.source == Source::Runtime {
+            return Ok(());
+        }
+        let status = format!(
+            "error[{}]: {}",
+            Limit::Steps.code(),
+            Limit::Steps.message(limit)
+        );
+        let over = self.defer_panic(|body| Ok(body.text(&status)))?;
+        self.spend_step(over);
+        Ok(())
+    }
+
+    /// Under `--max-steps`, `span`: where a function the backend generates
+    /// and shares between callers, such as the comparison of two lists,
+    /// takes the steps it calls the program's code for, so that each
+    /// caller gets its own copy that reports them at its own span, as the
+    /// interpreter does. `None` without the flag: one copy for all.
+    fn step_site(&self, span: Span) -> Option<Span> {
+        self.lowering.limits.max_steps.map(|_| span)
+    }
+
+    /// Count one step down, or jump to `over` when none is left.
+    fn spend_step(&mut self, over: Label) {
+        let counter = self.steps_counter();
+        let left = self.load(counter, 0);
+        self.push(Inst::JumpIfZero {
+            cond: left,
+            target: over,
+        });
+        let one = self.constant(1);
+        let left = self.binary_op(BinOp::Sub, left, one);
+        self.store(counter, 0, left);
     }
 
     /// Panic after a [`Prelude::Checked`] call of `args` that gave `result`:
@@ -2731,12 +2842,21 @@ impl<'l, 'p> Body<'l, 'p> {
                 };
                 self.push(Inst::Jump(target));
             }
-            Stmt::While { cond, body, .. } => {
-                let (next, exit) = (self.label(), self.label());
-                self.push(Inst::Label(next));
+            Stmt::While { cond, body, span } => {
+                let head = self.label();
+                // Under `--max-steps`, the body and a `continue` go on
+                // to the back-edge's step; without it, to the condition.
+                let counted = self.lowering.limits.max_steps.is_some();
+                let next = if counted { self.label() } else { head };
+                let exit = self.label();
+                self.push(Inst::Label(head));
                 self.branch_unless(cond, exit)?;
                 self.loop_body(next, exit, body)?;
-                self.push(Inst::Jump(next));
+                if counted {
+                    self.push(Inst::Label(next));
+                    self.step(*span)?;
+                }
+                self.push(Inst::Jump(head));
                 self.push(Inst::Label(exit));
             }
             Stmt::For {
@@ -2744,14 +2864,14 @@ impl<'l, 'p> Body<'l, 'p> {
                 ty,
                 iter,
                 body,
-                ..
+                span,
             } => {
                 if let Some(text) = self.chars_of(iter) {
-                    self.for_chars(*binds, ty, text, body)?;
+                    self.for_chars(*binds, ty, text, body, *span)?;
                 } else if layout::list_item(&self.ty(&iter.ty)).is_some() {
-                    self.for_list(*binds, ty, iter, body)?;
+                    self.for_list(*binds, ty, iter, body, *span)?;
                 } else {
-                    self.for_range(*binds, ty, iter, body)?;
+                    self.for_range(*binds, ty, iter, body, *span)?;
                 }
             }
         }
@@ -2772,15 +2892,17 @@ impl<'l, 'p> Body<'l, 'p> {
         Ok(())
     }
 
-    /// `for x in r { body }` over a range: each integer from its start
-    /// up to but excluding its end, both read once. A range written in
-    /// place, `start..end`, is never built: `start` is evaluated first.
+    /// `for x in r { body }`, the statement at `span`, over a range: each
+    /// integer from its start up to but excluding its end, both read
+    /// once. A range written in place, `start..end`, is never built:
+    /// `start` is evaluated first.
     fn for_range(
         &mut self,
         binds: bool,
         ty: &Type,
         iter: &Expr,
         body: &Expr,
+        span: Span,
     ) -> Result<(), Diagnostic> {
         let (first, end) = match &iter.kind {
             ExprKind::Range { start, end } => {
@@ -2819,6 +2941,7 @@ impl<'l, 'p> Body<'l, 'p> {
             self.slots.pop();
         }
         self.push(Inst::Label(next));
+        self.step(span)?;
         // `at` is below `end`, so one more never overflows.
         let one = self.constant(1);
         self.push(Inst::Binary {
@@ -2914,5 +3037,144 @@ fn describe(kind: &ExprKind) -> String {
         ExprKind::Match { .. } => "`match`".to_string(),
         ExprKind::Unsupported(what) => what.clone(),
         _ => "this expression".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod step_tests {
+    use oska_check::limits::Limits;
+
+    use crate::ir::{Inst, Module, Symbol};
+    use crate::{layout, Target};
+
+    /// Every kind of step: calls of functions, methods, closures, named
+    /// functions as values, a user `Eq` through lists and `Option`, a
+    /// `requires` clause, a task, and each kind of loop.
+    const STEPS: &str = r#"struct P { x: Int }
+
+impl Eq for P {
+    fn eq(self, other: P) -> Bool {
+        self.x == other.x
+    }
+}
+
+fn half(n: Int) -> Int
+    requires n % 2 == 0
+{
+    n / 2
+}
+
+fn main(io: Stdout) {
+    var i = 0
+    while i < 3 {
+        i = i + 1
+    }
+    for n in 0..2 {
+        i = i + half(n * 2)
+    }
+    for s in ["a", "b"] {
+        i = i + s.len()
+    }
+    for c in "xy".chars() {
+        i = i + c.len()
+    }
+    let same = [P(x: 1)] == [P(x: 1)] && Some(P(x: 2)) == Some(P(x: 2))
+    let doubled = [1, 2].map(|n: Int| n * 2).map(half)
+    let lens = ["a"].map(String.len)
+    let t = scope |s| {
+        let a = s.spawn(|| half(4))
+        a.join()
+    }
+    let d = doubled.len() + lens.len()
+    if same {
+        let _ = io.println("{i} {d} {t}")
+    }
+}
+"#;
+
+    fn lower(target: Target, limits: Limits) -> Module {
+        let report = oska_check::check_module(STEPS);
+        assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+        let program = report.program.expect("the program should check");
+        let rt = oska_check::check_toolchain_rt()
+            .program
+            .expect("std.rt should check");
+        super::program(&program, &rt, &|d| d, super::Entry::Main, target, limits)
+            .expect("the program should lower")
+    }
+
+    /// The instructions that reach the operating system: system calls,
+    /// with their numbers, and library calls, with their imports.
+    fn os_calls(module: &Module) -> std::collections::BTreeSet<(bool, u16)> {
+        module
+            .functions
+            .iter()
+            .flat_map(|f| &f.insts)
+            .filter_map(|inst| match inst {
+                Inst::Syscall { number, .. } => Some((true, *number)),
+                Inst::LibCall { import, .. } => Some((false, *import)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn counter_uses(module: &Module) -> usize {
+        let at = super::STEPS_WORD * layout::WORD;
+        module
+            .functions
+            .iter()
+            .flat_map(|f| &f.insts)
+            .filter(|inst| matches!(inst, Inst::Addr { symbol: Symbol::Data(d), .. } if *d == at))
+            .count()
+    }
+
+    const STEPS_ONLY: Limits = Limits {
+        max_steps: Some(1000),
+        max_output: None,
+    };
+
+    /// Without `--max-steps` nothing counts steps: no code reads the
+    /// counter, and the writable data is the globals and the call area as
+    /// it always was. With it, the counter is the word after the globals.
+    #[test]
+    fn without_max_steps_nothing_counts_steps() {
+        for target in Target::ALL {
+            let plain = lower(target, Limits::NONE);
+            assert_eq!(counter_uses(&plain), 0, "{target:?}");
+            assert_eq!(plain.extra_args, super::GLOBALS * layout::WORD);
+            let counted = lower(target, STEPS_ONLY);
+            assert!(counter_uses(&counted) > 0, "{target:?}");
+            assert_eq!(counted.extra_args, (super::GLOBALS + 1) * layout::WORD);
+            assert_eq!(
+                counted.data_size - counted.extra_args,
+                plain.data_size - plain.extra_args,
+                "{target:?}: the same call area"
+            );
+        }
+    }
+
+    /// The counter makes no system call and no library call of its own
+    /// (ADR 0013): the program under the limit reaches the operating
+    /// system exactly as without it.
+    #[test]
+    fn the_step_counter_reaches_the_operating_system_no_more() {
+        for target in Target::ALL {
+            assert_eq!(
+                os_calls(&lower(target, STEPS_ONLY)),
+                os_calls(&lower(target, Limits::NONE)),
+                "{target:?}"
+            );
+        }
+    }
+
+    /// Every target with a backend compiles the counter.
+    #[test]
+    fn every_target_builds_a_program_under_the_step_limit() {
+        let report = oska_check::check_module(STEPS);
+        let program = report.program.expect("the program should check");
+        for target in Target::ALL {
+            crate::build_limited(&program, target, &|d| d, STEPS_ONLY)
+                .unwrap_or_else(|d| panic!("{target:?}: {d:?}"));
+        }
     }
 }
