@@ -49,3 +49,60 @@ formal_toolchain_matches() {
   printf '%s says %s, scripts/formal/pins.sh pins v%s\n' "$1" "${toolchain:-nothing}" "$lean_version" >&2
   return 1
 }
+
+# A model broken on purpose says which invariant TLC must find violated, on
+# the first line of its .cfg and nowhere else:
+#
+#   \* expect-violation: NoUseAfterFree
+#
+# formal_expected_violation CFG: prints that invariant's name, or nothing for
+# a model that must pass (no line mentions expect-violation). Returns 1, and
+# says why on stderr, when the .cfg cannot be read, when more than one line
+# mentions expect-violation, or when the one that does is not the first line
+# or does not name exactly one identifier: a malformed expectation never
+# passes.
+formal_expected_violation() {
+  local cfg=$1 n=0 first
+  n=$(grep -c 'expect-violation' "$cfg") || [ "$n" = 0 ] || {
+    printf 'formal: cannot read %s\n' "$cfg" >&2
+    return 1
+  }
+  [ "$n" -eq 0 ] && return 0
+  if [ "$n" -gt 1 ]; then
+    printf 'formal: %s has %s lines that mention expect-violation; a model expects one invariant violated\n' "$cfg" "$n" >&2
+    return 1
+  fi
+  first=$(sed -n 1p "$cfg")
+  if ! grep -qE '^\\\* expect-violation: [A-Za-z_][A-Za-z0-9_]*$' <<<"$first"; then
+    printf 'formal: %s must start with exactly "\\* expect-violation: NAME", NAME one identifier\n' "$cfg" >&2
+    return 1
+  fi
+  printf '%s\n' "${first#*: }"
+}
+
+# formal_tlc_verdict MODEL CFG RC LOG: judges TLC's run on MODEL, which
+# exited RC and wrote LOG. A model that must pass passes only with exit 0.
+# A model with an expect-violation line passes only when TLC failed by
+# finding that invariant violated: if TLC passes it, the model cannot fail
+# and proves nothing. Returns 0 when the run is as expected, else 1, and
+# says why on stderr either way.
+formal_tlc_verdict() {
+  local model=$1 cfg=$2 rc=$3 log=$4 expected
+  expected=$(formal_expected_violation "$cfg") || return 1
+  if [ -z "$expected" ]; then
+    [ "$rc" -eq 0 ] && return 0
+    printf 'formal: TLC failed on %s (exit %s)\n' "$model" "$rc" >&2
+    return 1
+  fi
+  if [ "$rc" -eq 0 ]; then
+    printf 'formal: TLC passed %s, but %s says TLC must find %s violated; a model that cannot fail proves nothing\n' \
+      "$model" "$cfg" "$expected" >&2
+    return 1
+  fi
+  if grep -q "^Error: Invariant $expected is violated" "$log"; then
+    printf 'formal: %s fails as it must: TLC found %s violated\n' "$model" "$expected" >&2
+    return 0
+  fi
+  printf 'formal: TLC failed on %s (exit %s), but not by finding %s violated\n' "$model" "$rc" "$expected" >&2
+  return 1
+}

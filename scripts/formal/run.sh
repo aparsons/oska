@@ -14,7 +14,9 @@
 # comments included (formal_scan_holes in pins.sh); a scan that cannot run
 # fails too. The build
 # then runs with warnings as errors, so a `sorry` that a macro brings in
-# fails too. It also fails on a .tla file with no .cfg beside it.
+# fails too. It also fails on a .tla file with no .cfg beside it, and on a
+# model broken on purpose (an expect-violation line in its .cfg) that TLC
+# does not fail with that invariant violated.
 #
 # Tools: `lake` and `lean` from PATH, else from ~/.cache/oska/formal/lean/bin
 # (scripts/formal/install.sh puts them there); `java` from PATH; and the
@@ -108,13 +110,16 @@ fi
 
 # TLC writes its state and trace files beside the model, so each runs in a
 # copy outside the checkout.
+# A model whose .cfg has an expect-violation line is broken on purpose, and
+# must fail with that invariant violated (formal_tlc_verdict in pins.sh).
 cp -R "$tla_dir" "$work/tla"
 for model in "${models[@]}"; do
   echo "TLC $model ($tla_dir/$model.tla)"
   rc=0
   (cd "$work/tla" &&
     java -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers 1 \
-      -metadir "$work/states/$model" -config "$model.cfg" "$model.tla") || rc=$?
-  [ "$rc" -eq 0 ] || fail "TLC failed on $model (exit $rc)"
+      -metadir "$work/states/$model" -config "$model.cfg" "$model.tla") 2>&1 |
+    tee "$work/tlc.out" || rc=$?
+  formal_tlc_verdict "$model" "$tla_dir/$model.cfg" "$rc" "$work/tlc.out" || exit 1
 done
 echo "formal: Lean build and ${#models[@]} TLA+ model(s) passed"
