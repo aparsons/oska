@@ -77,9 +77,12 @@ fn a_lot_of_output_goes_through_the_buffer_in_order() {
 /// shows: the buffered output must come out before a stderr line.
 fn interleaved(case: &Case) -> String {
     let (exe, dir) = build_native(case);
+    // The path is the script's `$0`, not part of its text, so the shell
+    // never reads a Windows path's backslashes as escapes.
     let output = Command::new("sh")
         .arg("-c")
-        .arg(format!("{} 2>&1", exe.display()))
+        .arg("\"$0\" 2>&1")
+        .arg(&exe)
         .current_dir(dir)
         .env_clear()
         .output()

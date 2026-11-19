@@ -998,9 +998,23 @@ fn every_call_calls_its_function_and_builds_natively() {
     }
 }
 
+/// Whether the call `name` is a file capability's: native Windows code
+/// reaches files only once its confinement is written (#178), so on
+/// Windows these wait for it.
+fn reaches_files(name: &str) -> bool {
+    let (kind, _) = name.split_once('.').unwrap_or((name, ""));
+    matches!(
+        kind,
+        "Fs" | "FsRead" | "FsWrite" | "Dir" | "DirRead" | "DirWrite" | "FileRead" | "FileWrite"
+    )
+}
+
 #[test]
 fn every_call_runs_the_same_on_both_backends() {
     for (name, run, src) in CALLS {
+        if cfg!(windows) && reaches_files(name) {
+            continue;
+        }
         let case = Case::file(&format!("prelude-{name}"), &source(src)).with_args(&["given"]);
         let case = match run {
             Run::Tests => continue,
