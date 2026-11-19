@@ -190,3 +190,21 @@ _Avoid_: confidence, safety level
 **Language server**:
 The long-running `oskac lsp` process that editors and agents ask about Oska code over the editor protocol: errors, where a name is defined and used, and a value's type and authority.
 _Avoid_: LSP (the protocol, not the server), Claude LSP server (the server is the same for every editor; Claude Code reaches it through the plugin)
+
+## Compliance
+
+**Self-assessment**:
+A report in which the project judges itself against one outside standard, such as SLSA or ISO/IEC 5230, and cites a pinned commit or release for each claim. No third party performed or certified it.
+_Avoid_: audit, certification, attestation (for this report)
+
+**Finding**:
+A gap in a self-assessment that is rated High or Medium by likelihood times impact. Only findings lower a self-assessment's determination.
+_Avoid_: issue, defect, non-conformity (when the gap is rated Low)
+
+**Observation**:
+A gap rated Low, or advice where nothing is unmet, in a self-assessment. Unlike a finding, an observation does not lower the determination, even when it records an unmet requirement.
+_Avoid_: minor finding, note, suggestion
+
+**Determination**:
+A self-assessment's verdict: Conforms, Partially conforms or Does not conform, given beside the standard's own measure, such as an SLSA Build level or a Scorecard score. Only findings can move it below Conforms.
+_Avoid_: rating, score, grade (for the headline verdict)
