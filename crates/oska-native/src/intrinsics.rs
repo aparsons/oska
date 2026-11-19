@@ -230,7 +230,6 @@ pub enum Sys {
     NtCreateFile,
     NtQueryInformationFile,
     NtQueryDirectoryFile,
-    NtStatusToError,
     VirtualAlloc,
     VirtualFree,
     ExitProcess,
@@ -378,6 +377,10 @@ pub enum Fails {
     /// It returns 0 (`FALSE` or `NULL`) and the error function gives
     /// the error (Windows).
     Zero,
+    /// It returns an `NTSTATUS`, negative for an error, which
+    /// [`NT_STATUS_TO_ERROR`] turns into a Win32 error (Windows'
+    /// `ntdll`, ADR 0020).
+    Status,
     /// It cannot fail, or does not return.
     Never,
 }
@@ -742,7 +745,6 @@ fn windows_only(call: Sys) -> bool {
             | Sys::NtCreateFile
             | Sys::NtQueryInformationFile
             | Sys::NtQueryDirectoryFile
-            | Sys::NtStatusToError
             | Sys::VirtualAlloc
             | Sys::VirtualFree
             | Sys::ExitProcess
@@ -839,12 +841,12 @@ const CLOSE_HANDLE: Import = win("CloseHandle", 1);
 const FINAL_PATH_NAME: Import = win("GetFinalPathNameByHandleW", 4);
 /// `SetEndOfFile(h)`: the file ends at the handle's position.
 const SET_END_OF_FILE: Import = win("SetEndOfFile", 1);
-/// An `ntdll` function: an `NTSTATUS`, negative for an error, which
-/// `std.rt` turns into a Win32 error with `RtlNtStatusToDosError`.
+/// An `ntdll` function: an `NTSTATUS`, negative for an error, which the
+/// backend turns into a Win32 error ([`Fails::Status`]).
 const fn nt(symbol: &'static str, args: u8) -> Import {
     Import {
         library: NTDLL,
-        fails: Fails::Never,
+        fails: Fails::Status,
         ..win(symbol, args)
     }
 }
@@ -860,8 +862,13 @@ const NT_QUERY_INFORMATION_FILE: Import = nt("NtQueryInformationFile", 5);
 /// `NtQueryDirectoryFile(h, NULL, NULL, NULL, &status, buf, length,
 /// class, single, NULL, restart)`.
 const NT_QUERY_DIRECTORY_FILE: Import = nt("NtQueryDirectoryFile", 11);
-/// `RtlNtStatusToDosError(status)`: the Win32 error for a status.
-const NT_STATUS_TO_ERROR: Import = nt("RtlNtStatusToDosError", 1);
+/// `RtlNtStatusToDosError(status)`: the Win32 error for a status, which
+/// the backend calls after an `ntdll` function fails. No intrinsic.
+pub const NT_STATUS_TO_ERROR: Import = Import {
+    library: NTDLL,
+    fails: Fails::Never,
+    ..win("RtlNtStatusToDosError", 1)
+};
 /// `VirtualAlloc(addr, size, type, protect)`: an address, or `NULL`.
 const VIRTUAL_ALLOC: Import = Import {
     wide: true,
@@ -964,7 +971,6 @@ fn windows_call(call: Sys) -> OsCall {
         Sys::NtCreateFile => &NT_CREATE_FILE,
         Sys::NtQueryInformationFile => &NT_QUERY_INFORMATION_FILE,
         Sys::NtQueryDirectoryFile => &NT_QUERY_DIRECTORY_FILE,
-        Sys::NtStatusToError => &NT_STATUS_TO_ERROR,
         Sys::ProcessPrng => &PROCESS_PRNG,
         _ => return OsCall::Absent,
     })
@@ -1033,10 +1039,6 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     (
         "rt_sys_nt_query_directory_file",
         Runtime::Syscall(Sys::NtQueryDirectoryFile),
-    ),
-    (
-        "rt_sys_nt_status_to_error",
-        Runtime::Syscall(Sys::NtStatusToError),
     ),
     ("rt_sys_virtual_alloc", Runtime::Syscall(Sys::VirtualAlloc)),
     ("rt_sys_virtual_free", Runtime::Syscall(Sys::VirtualFree)),
@@ -1652,7 +1654,7 @@ mod tests {
                 "NtCreateFile",
                 9,
                 false,
-                Never,
+                Status,
                 &[0, 0],
             ),
             (
@@ -1661,7 +1663,7 @@ mod tests {
                 "NtQueryInformationFile",
                 5,
                 false,
-                Never,
+                Status,
                 &[],
             ),
             (
@@ -1670,16 +1672,7 @@ mod tests {
                 "NtQueryDirectoryFile",
                 11,
                 false,
-                Never,
-                &[],
-            ),
-            (
-                "rt_sys_nt_status_to_error",
-                "ntdll.dll",
-                "RtlNtStatusToDosError",
-                1,
-                false,
-                Never,
+                Status,
                 &[],
             ),
             // ProcessPrng: "Always returns TRUE".
@@ -1734,7 +1727,15 @@ mod tests {
             (error.symbol, platform.error),
             ("GetLastError", ErrorRead::Value)
         );
-        assert_eq!(platform.imports.len(), rows.len() + 1);
+        // `RtlNtStatusToDosError`, which the backend calls after an
+        // `ntdll` function fails, is the one other import no intrinsic
+        // names.
+        assert_eq!(
+            (NT_STATUS_TO_ERROR.library, NT_STATUS_TO_ERROR.symbol),
+            ("ntdll.dll", "RtlNtStatusToDosError")
+        );
+        assert!(platform.slot(&NT_STATUS_TO_ERROR).is_some());
+        assert_eq!(platform.imports.len(), rows.len() + 2);
         // Each library's imports are together, so each has one run of
         // slots in the import address table, ended by a null slot.
         let libraries: Vec<&str> = platform.imports.iter().map(|i| i.library).collect();

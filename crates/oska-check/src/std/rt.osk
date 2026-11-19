@@ -103,8 +103,6 @@ pub fn rt_sys_nt_query_information_file(handle: Int, status: Int, buf: Int, leng
 // `NtQueryDirectoryFile(handle, NULL, NULL, NULL, status, buf, length,
 // class, single, NULL, restart)`: an `NTSTATUS`.
 pub fn rt_sys_nt_query_directory_file(handle: Int, event: Int, apc: Int, context: Int, status: Int, buf: Int, length: Int, class: Int, single: Int, name: Int, restart: Int) -> Int
-// `RtlNtStatusToDosError(status)`: the Win32 error.
-pub fn rt_sys_nt_status_to_error(status: Int) -> Int
 // `VirtualAlloc(addr, size, type, protect)`: the address.
 pub fn rt_sys_virtual_alloc(addr: Int, size: Int, kind: Int, protect: Int) -> Int
 // `VirtualFree(addr, 0, MEM_RELEASE)`: the whole mapping at `addr`.
@@ -3710,6 +3708,9 @@ fn refusal(errno: Int, path: String, directory: Bool) -> IoError {
         let name = last_name(path)
         return io_error_text("`{name}` is not a single file name")
     }
+    if errno == name_too_long() {
+        return io_error_text("`{path}`: a file name is too long")
+    }
     if errno == eloop() {
         return io_error_text("`{path}` is a symlink, and confined access never follows one")
     }
@@ -3804,9 +3805,102 @@ fn components(path: String) -> List<String> {
     parts
 }
 
+// The components of a root's trusted `path`: on Windows as Rust's
+// `Path::components` gives them there (`win_components`), elsewhere as on
+// Unix (`components`).
+fn root_components(path: String) -> List<String> {
+    if on_windows() {
+        return win_components(path)
+    }
+    components(path)
+}
+
+// The components of the trusted path `path` as Rust's `Path::components`
+// gives them on Windows, where `/` separates as `\` does: a prefix first
+// (`C:`, `\\server\share` or `\\?\C:`), then `\` when the path is
+// absolute, `.` only as the first component of a relative one, then every
+// name and `..`; empty components and every other `.` dropped.
+fn win_components(path: String) -> List<String> {
+    let text = win_backslashed(path)
+    let length = text_length(rt_mem_text(text))
+    var parts: List<String> = []
+    var at = 0
+    if length >= 2 && byte_at(text, 0) == 92 && byte_at(text, 1) == 92 {
+        // A UNC or verbatim prefix: `\\` and the two pieces after it.
+        at = 2
+        var pieces = 0
+        while at < length {
+            if byte_at(text, at) == 92 {
+                pieces = pieces + 1
+                if pieces == 2 {
+                    break
+                }
+            }
+            at = at + 1
+        }
+        parts.push(bytes_of(text, 0, at))
+        parts.push("\\")
+    } else if length >= 2 && byte_at(text, 1) == 58 && ascii_letter(byte_at(text, 0)) {
+        parts.push(bytes_of(text, 0, 2))
+        at = 2
+        if at < length && byte_at(text, at) == 92 {
+            parts.push("\\")
+        }
+    } else if length >= 1 && byte_at(text, 0) == 92 {
+        parts.push("\\")
+    }
+    var first = parts.len() == 0
+    for piece in bytes_of(text, at, length).split("\\") {
+        if piece == "." && first {
+            parts.push(".")
+        } else if piece != "" && piece != "." {
+            parts.push(piece)
+        }
+        first = false
+    }
+    parts
+}
+
+// Whether `byte` is an ASCII letter, as a drive letter is.
+fn ascii_letter(byte: Int) -> Bool {
+    byte >= 65 && byte <= 90 || byte >= 97 && byte <= 122
+}
+
+// Whether the component `part` is a Windows prefix: a drive (`C:`), or a
+// UNC or verbatim one (`\\...`).
+fn win_prefix(part: String) -> Bool {
+    let length = text_length(rt_mem_text(part))
+    length == 2 && byte_at(part, 1) == 58 || length > 2 && byte_at(part, 0) == 92 && byte_at(part, 1) == 92
+}
+
+// The first `count` of the Windows components `parts` as one path again,
+// as Rust collects them into a `PathBuf` there.
+fn win_path_of(parts: List<String>, count: Int) -> String {
+    var out = ""
+    var apart = false
+    var i = 0
+    while i < count {
+        let part = parts.at(i)
+        if part == "\\" {
+            out = "{out}\\"
+            apart = false
+        } else if i == 0 && win_prefix(part) {
+            out = part
+        } else {
+            out = if apart { "{out}\\{part}" } else { "{out}{part}" }
+            apart = true
+        }
+        i = i + 1
+    }
+    out
+}
+
 // The first `count` of the components `parts` as one path again, as Rust
 // collects them into a `PathBuf`.
 fn path_of(parts: List<String>, count: Int) -> String {
+    if on_windows() {
+        return win_path_of(parts, count)
+    }
     if count > 0 && parts.at(0) == "/" {
         var rest: List<String> = []
         var i = 1
@@ -3825,6 +3919,9 @@ fn path_of(parts: List<String>, count: Int) -> String {
 fn file_name(parts: List<String>) -> Option<String> {
     let last = parts.at(parts.len() - 1)
     if last == "/" || last == "." || last == ".." {
+        return None
+    }
+    if on_windows() && (last == "\\" || parts.len() == 1 && win_prefix(last)) {
         return None
     }
     Some(last)
@@ -4631,7 +4728,7 @@ pub fn fs_restrict_to(fs: Int, dir: String) -> Root {
 fn open_root(dir: String) -> Result<Root, IoError> {
     // Without a trailing `/` or `.`, which would follow a symlink in the
     // last component.
-    let parts = components(dir)
+    let parts = root_components(dir)
     let path = path_of(parts, parts.len())
     match file_name(parts) {
         Some(name) => {
@@ -4661,7 +4758,7 @@ pub fn fs_restrict_to_file(fs: Int, file: String) -> Root {
     if faking() {
         return fake_restrict_to_file(file)
     }
-    let parts = components(file)
+    let parts = root_components(file)
     match file_name(parts) {
         Some(name) => match open_following(or_here(path_of(parts, parts.len() - 1))) {
             Ok(fd) => Root(handle: fd, path: "", file: Some(name), why: None)
@@ -5480,6 +5577,12 @@ fn not_single_name() -> Int {
     4099
 }
 
+// No Win32 error: what `win_nt_open` gives, negated, for a name whose
+// UTF-16 bytes do not fit a `UNICODE_STRING`'s 16-bit length.
+fn name_too_long() -> Int {
+    4100
+}
+
 // The last component of the names `path` joins.
 fn last_name(path: String) -> String {
     let length = text_length(rt_mem_text(path))
@@ -5537,9 +5640,6 @@ fn win_wide(text: String) -> Int {
 }
 
 // The Win32 error for the `NTSTATUS` `status`, negated.
-fn win_status_error(status: Int) -> Int {
-    0 - rt_sys_nt_status_to_error(status)
-}
 
 // `NtCreateFile` of the `bytes` bytes of UTF-16 at `units` beneath the
 // directory `parent` (the empty name opens `parent` again), with `access`,
@@ -5547,6 +5647,9 @@ fn win_status_error(status: Int) -> Int {
 // synchronous I/O, names matched as Windows matches them: the handle, or a
 // Win32 error, negated.
 fn win_nt_open(parent: Int, units: Int, bytes: Int, access: Int, disposition: Int, options: Int) -> Int {
+    if bytes > 65535 {
+        return 0 - name_too_long()
+    }
     // The new handle (8 bytes), an `IO_STATUS_BLOCK` (16), a
     // `UNICODE_STRING` (16) and an `OBJECT_ATTRIBUTES` (48).
     let block = alloc(96)
@@ -5572,7 +5675,7 @@ fn win_nt_open(parent: Int, units: Int, bytes: Int, access: Int, disposition: In
     let opened = rt_mem_load64(handle)
     free(block)
     if result < 0 {
-        return win_status_error(result)
+        return result
     }
     opened
 }
@@ -5594,7 +5697,7 @@ fn win_info(handle: Int) -> Int {
     let links = rt_mem_load32(rt_mem_add(standard, 16))
     free(block)
     if result < 0 {
-        return win_status_error(result)
+        return result
     }
     rt_mem_or(attributes, rt_mem_shl(links, 32))
 }
@@ -5850,12 +5953,13 @@ fn win_entries(dir: Int, shown: String) -> Result<List<String>, IoError> {
     while true {
         let result = rt_sys_nt_query_directory_file(fd, 0, 0, 0, status, data, 65536, 12, 0, 0, restart)
         restart = 0
-        // `STATUS_NO_MORE_FILES`, `STATUS_NO_SUCH_FILE`: the end.
-        if result == -2147483642 || result == -1073741809 {
+        // `STATUS_NO_MORE_FILES` and `STATUS_NO_SUCH_FILE`, as Win32
+        // errors: the end.
+        if result == -18 || result == -2 {
             break
         }
         if result < 0 {
-            failed = 0 - win_status_error(result)
+            failed = 0 - result
             break
         }
         if rt_mem_load64(rt_mem_add(status, 8)) == 0 {
