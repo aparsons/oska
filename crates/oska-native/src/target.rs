@@ -61,9 +61,9 @@ impl Target {
     ];
 
     /// The target for the supported platform named `platform`. An
-    /// unknown name is refused with `E0393`, listing the names; a
-    /// supported platform with no backend yet with `E0394`, naming the
-    /// release that adds it.
+    /// unknown name is refused with `E0393`, listing the names. A
+    /// supported platform with no backend would be refused with `E0394`,
+    /// naming the release that adds it; today every one has a backend.
     pub fn named(platform: &str) -> Result<Target, Diagnostic> {
         match PLATFORMS.iter().find(|(name, _)| *name == platform) {
             Some((_, Ok(target))) => Ok(*target),

@@ -5,9 +5,9 @@
 //! `--target <platform>` names the target platform as release assets
 //! name `oskac` builds, such as `linux-aarch64`. Without it, the host's
 //! platform is built for when it has a backend, else `linux-aarch64`.
-//! An unknown name is refused with `E0393`, a supported platform with no
-//! backend yet with `E0394`, both before anything is read, with exit
-//! code 2, as a usage error.
+//! An unknown name is refused with `E0393` before anything is read, with
+//! exit code 2, as a usage error. (`E0394`, a supported platform with no
+//! backend yet, is reserved: every supported platform has one.)
 //!
 //! The output is the file's stem, or the package directory's name, in the
 //! current directory, with `.exe` for Windows, unless `-o` names it.

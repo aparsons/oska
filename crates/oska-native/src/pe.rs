@@ -1,6 +1,7 @@
 //! The executable file for Windows: a PE32+ console executable for
-//! x86_64 that the Windows loader maps, importing functions from
-//! `kernel32.dll`, `ntdll.dll` and `bcryptprimitives.dll` only (ADR 0011,
+//! x86_64 that the Windows loader maps, importing functions only from
+//! the DLLs ADR 0020 allows: today `kernel32.dll` and
+//! `bcryptprimitives.dll`, and `ntdll.dll` once a call needs it (ADR 0011,
 //! ADR 0020). The format is Microsoft's, as
 //! `docs/research/2026-11-windows-kernel32-calls.md` cites it
 //! (`pe-format.md`).

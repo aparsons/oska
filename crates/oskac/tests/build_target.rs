@@ -351,8 +351,7 @@ fn an_unknown_platform_is_refused_before_the_program_is_read() {
     assert!(stderr.contains("E0393"), "{stderr}");
 }
 
-/// A supported platform with no backend yet is not a typo: it has a code
-/// of its own, and the message names the release that adds it.
+/// Windows has a backend (#176): the executable's name ends in `.exe`.
 #[test]
 fn windows_x86_64_names_a_windows_executable_ending_in_exe() {
     assert_golden(
