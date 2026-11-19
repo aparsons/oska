@@ -312,6 +312,7 @@ pub fn module(
                 let name = c.name.name.clone();
                 let function = Function {
                     name: name.clone(),
+                    span: c.name.span,
                     generics: Vec::new(),
                     self_ty: None,
                     receiver: false,
@@ -461,6 +462,7 @@ impl Lowering<'_> {
             .collect();
         let function = Function {
             name: name.clone(),
+            span: f.name.span,
             generics: outer.iter().cloned().chain(names(&f.generics)).collect(),
             self_ty: sig
                 .and_then(|s| s.self_ty.as_ref())

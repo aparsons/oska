@@ -483,6 +483,7 @@ fn spawning_on_a_finished_scope_panics_with_p0005_at_the_call() {
         "main".to_string(),
         Function {
             name: "main".to_string(),
+            span: Span { start: 0, end: 0 },
             generics: Vec::new(),
             self_ty: None,
             receiver: false,

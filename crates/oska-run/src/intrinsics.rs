@@ -933,6 +933,7 @@ mod access_tests {
             "main".to_string(),
             Function {
                 name: "main".to_string(),
+                span: Span { start: 0, end: 0 },
                 generics: Vec::new(),
                 self_ty: None,
                 receiver: false,

@@ -48,6 +48,8 @@
 //!    node or a call it cannot make, sees what it holds. A pass walks
 //!    each of a function's [`Function::code`], its contracts included.
 //! 5. Evaluate it in each backend: in `oska-run`, `interp.rs`.
+//! 6. Export or refuse it in the core IR (`core_ir.rs`, ADR 0018):
+//!    refuse it unless it joins Oska Core, in a new core IR version.
 
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
@@ -138,6 +140,9 @@ pub fn trait_method(type_name: &str, trait_name: &str, method: &str) -> String {
 pub struct Function {
     /// The qualified name, as [`Program::functions`] keys it.
     pub name: String,
+    /// The name as declared in the source, which orders the functions
+    /// as written and locates a refusal of the whole function.
+    pub span: Span,
     /// The generic parameters, in the order a call's `type_args` give
     /// them: for a method, its impl's first, then its own.
     pub generics: Vec<String>,
