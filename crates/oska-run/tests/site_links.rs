@@ -374,7 +374,8 @@ fn the_checker_reads_only_the_site_and_the_tracked_files() {
 
 /// The real site, as the Pages workflow builds it: the generator on the
 /// repository's own inputs, then the files `scripts/release/stage-site.sh`
-/// adds, here as stand-ins. It is built once, for every test that reads it.
+/// adds, here as stand-ins. It is made once, for every test that reads it
+/// (`site::real_site` builds the site itself once per test binary).
 fn real_site() -> &'static BTreeMap<String, String> {
     static SITE: std::sync::OnceLock<BTreeMap<String, String>> = std::sync::OnceLock::new();
     SITE.get_or_init(|| {
