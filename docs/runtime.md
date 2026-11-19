@@ -139,6 +139,7 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0036` | `String.repeat` was given a negative count. Spans the call. |
 | `P0037` | `String.repeat` would build a text over 256 MiB, so the interpreter panics instead of running out of memory. Spans the call. |
 | `P0038` | Step limit reached: the program was run with `oskac run --interpret --max-steps=<n>`, and has taken `n` steps. A **step** is one call of a function, method or closure written in Oska (a trait method, one the runtime calls such as a `Display` implementation in an interpolation, and a closure that `List.map` calls included), or one loop back-edge: a `while` or `for` loop going back for its next iteration, once for each iteration that ends without `break` ([ADR 0021](adr/0021-a-step-limit-stops-at-the-same-step-on-every-backend.md)). `main` is not called by the program, so it is no step, and neither is a call into the runtime, such as `println`, `List.map` itself or a `std` function the runtime implements. Every such call counts, whoever makes it: an `==` through a type's own `Eq`, a `?` that converts its error with `From`, a call in a `requires` or `ensures` clause, a spawned task, and the `Display` of the error `main` returns, which the runtime calls after `main` has returned (so the limit can stop the program there, before the error is printed, spanning `main`'s body). A `scope` block is no call. The step past the limit is not taken: the program panics instead. The message names the limit and its value. Spans the call, or the whole loop for a back-edge. Without the flag a program has no step limit. Native code does not count steps yet, so a native run refuses the flag (exit code 2): add `--interpret`. See [Run limits](#run-limits). |
+| `P0039` | Time limit reached: the program was run with `oskac run --timeout=<ms>`, and has run for that many milliseconds of wall-clock time, counted from when it starts (after the check and the build). Waiting counts: a program that waits for a line of standard input stops at the deadline too. It stops within 100 ms of the deadline (the **tolerance**) on a machine that is not overloaded. On the interpreter the program panics at the step it has reached (it looks at the clock every 1024 steps, and while it waits), spanning that call or loop, or the read it waits in. Natively, `oskac` stops its own child process, that process only, and prints the report itself, with no place in the source (`error[P0039]: ...`, or a JSON object with no `path`), and exits with 101, never with the signal's `128 + n`; a line the stopped program was writing is not reported as its panic, and what it had printed to standard output but not yet written out (native standard output is buffered when it is not a terminal) is lost. A timeout is not deterministic: where the program stops differs from run to run. The message names the limit and its value. Without the flag a program has no time limit. See [Run limits](#run-limits). |
 | `P0041` | Output limit reached: the program was run with `oskac run --max-output=<bytes>`, and this write would take what it wrote to standard output and standard error together past that many bytes. The write that would pass the limit writes nothing, so no byte past it reaches either stream. The message names the limit and its value. Every write the program makes counts: `println` on `Stdout` and `Stderr`, `dbg`'s line, and the text of the error `main` returns. The panic report itself does not, but a report that quotes text the program made, as `P0020` quotes the secret's name, quotes no more of it than the limit has left, cut where a character ends and followed by `...`. Spans the call that writes, or `main`'s body for its error. Without the flag a program has no output limit. See [Run limits](#run-limits). |
 
 ### Panic examples
@@ -415,6 +416,23 @@ fn main() {
 }
 ```
 
+#### `P0039`
+
+```oska error=P0039 timeout=50
+fn main() {
+    while true {}
+}
+```
+
+```oska fixed=P0039 timeout=60000
+fn main() {
+    var i = 0
+    while i < 100 {
+        i = i + 1
+    }
+}
+```
+
 #### `P0041`
 
 ```oska error=P0041 max-output=16
@@ -442,6 +460,7 @@ fn main(io: Stdout) {
 | Flag | Limit | Panic |
 | --- | --- | --- |
 | `--max-steps=<n>` | The steps the program takes: calls of functions, methods and closures written in Oska, and loop back-edges (see `P0038`). Interpreter only for now: a native run refuses it (exit code 2), so add `--interpret`; on Windows, which runs the interpreter, it works as it is. | `P0038` |
+| `--timeout=<ms>` | The wall-clock milliseconds the program runs, waiting included, within a tolerance of 100 ms (see `P0039`). Natively, `oskac` stops the program's process and reports the limit itself. | `P0039` |
 | `--max-output=<bytes>` | The bytes the program writes to standard output and standard error together. | `P0041` |
 
 - A limit is a whole number above 0. A value of 0, a negative number, or anything that is not a number is a usage error (exit code 2), never "no limit". So is a limit given twice, and a limit on any command but `run`.

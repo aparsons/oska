@@ -1,0 +1,2 @@
+error[P0039]: time limit reached: the program ran for 200 ms of wall-clock time, waiting included (`--timeout=200`)
+{"code":"P0039","message":"time limit reached: the program ran for 200 ms of wall-clock time, waiting included (`--timeout=200`)","span":{"start":0,"end":0},"severity":"error","url":"https://oskalang.dev/codes/P0039","related":[],"suggestions":[]}

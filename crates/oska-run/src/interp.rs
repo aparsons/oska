@@ -127,7 +127,27 @@ pub struct Interpreter<'p, 'h> {
     /// from the limit; without it, `u64::MAX`, refilled if ever spent. One
     /// decrement and compare per step, with or without a limit.
     fuel: u64,
+    /// Under `--timeout`, its deadline. Boxed, so that a run without it
+    /// keeps the interpreter as small as it was.
+    deadline: Option<Box<Deadline>>,
 }
+
+/// A run's `--timeout`, as the interpreter keeps it.
+struct Deadline {
+    /// The instant the program must stop by.
+    at: std::time::Instant,
+    /// Under `--max-steps` too, the steps left beyond
+    /// [`Interpreter::fuel`], which is then given out [`DEADLINE_EVERY`]
+    /// steps at a time, so the slow path can look at the clock. Otherwise
+    /// 0.
+    steps_held: u64,
+}
+
+/// Under `--timeout`, how many steps the interpreter takes between two
+/// looks at the clock: few enough that a step-bound loop stops within
+/// well under a millisecond of its deadline, many enough that the look
+/// costs nothing measurable.
+const DEADLINE_EVERY: u64 = 1024;
 
 /// A standard stream the program writes to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,6 +166,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             limits: Limits::NONE,
             output_written: 0,
             fuel: u64::MAX,
+            deadline: None,
         }
     }
 
@@ -153,6 +174,20 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     pub fn with_limits(mut self, limits: Limits) -> Self {
         self.limits = limits;
         self.fuel = limits.max_steps.unwrap_or(u64::MAX);
+        // A deadline past what the clock can count (on some hosts, a few
+        // hundred years) is never reached: no deadline.
+        let deadline = limits.timeout.and_then(|ms| {
+            std::time::Instant::now().checked_add(std::time::Duration::from_millis(ms))
+        });
+        if let Some(at) = deadline {
+            let steps = self.fuel;
+            self.fuel = steps.min(DEADLINE_EVERY);
+            let steps_held = match limits.max_steps {
+                Some(_) => steps - self.fuel,
+                None => 0,
+            };
+            self.deadline = Some(Box::new(Deadline { at, steps_held }));
+        }
         self
     }
 
@@ -160,12 +195,13 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     /// method or closure written in Oska, or a loop's back-edge. Every
     /// step of the program passes through here, so this is the hook for
     /// whatever a run checks as it goes: under `--max-steps`, the step
-    /// past the limit panics with `P0038` instead of being taken.
+    /// past the limit panics with `P0038` instead of being taken; under
+    /// `--timeout`, a step past the deadline panics with `P0039`.
     ///
     /// The fast path only spends fuel; everything else is in
-    /// [`Interpreter::out_of_fuel`], so a check that needs no exact step
-    /// (a deadline) can be made there every so many steps by giving out
-    /// fuel in smaller amounts.
+    /// [`Interpreter::out_of_fuel`]. Under `--timeout` the fuel is given
+    /// out [`DEADLINE_EVERY`] steps at a time, so the deadline is checked
+    /// there, and a run without it pays nothing for it.
     #[inline(always)]
     fn step(&mut self, span: Span) -> Result<(), Panic> {
         match self.fuel.checked_sub(1) {
@@ -178,11 +214,29 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     }
 
     /// The step at `span` when [`Interpreter::step`] has no fuel left:
-    /// under `--max-steps`, the step past the limit, a `P0038` panic;
-    /// without it, after `u64::MAX` steps, a refill.
+    /// under `--timeout`, a look at the clock, past the deadline a `P0039`
+    /// panic, else [`DEADLINE_EVERY`] steps more; under `--max-steps`,
+    /// with no steps held back, the step past the limit, a `P0038` panic;
+    /// without either, after `u64::MAX` steps, a refill.
     #[cold]
     #[inline(never)]
     fn out_of_fuel(&mut self, span: Span) -> Result<(), Panic> {
+        self.check_deadline(span)?;
+        if let Some(deadline) = &mut self.deadline {
+            let more = match self.limits.max_steps {
+                Some(_) => {
+                    let more = deadline.steps_held.min(DEADLINE_EVERY);
+                    deadline.steps_held -= more;
+                    more
+                }
+                None => DEADLINE_EVERY,
+            };
+            if more > 0 {
+                // This step spends one of them.
+                self.fuel = more - 1;
+                return Ok(());
+            }
+        }
         match self.limits.max_steps {
             Some(limit) => Err(Panic::new(
                 Limit::Steps.code(),
@@ -194,6 +248,39 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 Ok(())
             }
         }
+    }
+
+    /// Under `--timeout`, a `P0039` panic at `span` once the deadline has
+    /// passed.
+    fn check_deadline(&self, span: Span) -> Result<(), Panic> {
+        match &self.deadline {
+            Some(deadline) if std::time::Instant::now() >= deadline.at => {
+                Err(self.time_limit(span))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// The `P0039` panic at `span`: the program has run past `--timeout`.
+    fn time_limit(&self, span: Span) -> Panic {
+        let ms = self.limits.timeout.unwrap_or_default();
+        Panic::new(Limit::Time.code(), Limit::Time.message(ms), span)
+    }
+
+    /// Read a line from standard input for the call at `span`. Under
+    /// `--timeout` the wait ends at the deadline, with a `P0039` panic.
+    pub(crate) fn read_line(
+        &mut self,
+        span: Span,
+    ) -> Result<std::io::Result<Option<String>>, Panic> {
+        let Some(deadline) = self.deadline.as_ref().map(|d| d.at) else {
+            return Ok(self.host.read_line());
+        };
+        self.check_deadline(span)?;
+        // `None`: the deadline passed while the program waited.
+        self.host
+            .read_line_before(deadline)
+            .ok_or_else(|| self.time_limit(span))
     }
 
     /// The host the program runs on.

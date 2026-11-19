@@ -74,7 +74,9 @@ pub mod codes {
     /// The `P`-codes native code panics with: the interpreter's.
     /// `P0038` is listed though native code does not count steps yet
     /// (#454): `oskac` refuses `--max-steps` on a native run until then.
-    pub const PANICS: [&str; 18] = [
+    /// `P0039` is never the program's own: `oskac` stops a native program
+    /// at its `--timeout` and reports it.
+    pub const PANICS: [&str; 19] = [
         "P0001",
         "P0002",
         "P0003",
@@ -92,6 +94,7 @@ pub mod codes {
         "P0036",
         "P0037",
         oska_check::limits::codes::STEP_LIMIT,
+        oska_check::limits::codes::TIME_LIMIT,
         oska_check::limits::codes::OUTPUT_LIMIT,
     ];
 }

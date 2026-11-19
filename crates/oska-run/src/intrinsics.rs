@@ -88,7 +88,7 @@ pub const INTRINSICS: Table = &[
     ),
     ("Secret.expose", Plain(secret_expose)),
     ("Stderr.println", HigherOrder(stderr_println)),
-    ("Stdin.read_line", Plain(stdin_read_line)),
+    ("Stdin.read_line", HigherOrder(stdin_read_line)),
     ("Stdout.println", HigherOrder(stdout_println)),
     ("String.assume_trusted", Plain(string_assume_trusted)),
     ("String.to_string", Plain(string_to_string)),
@@ -168,8 +168,13 @@ fn stderr_println(
 }
 
 /// `Stdin.read_line(self)`: the next line, or `None` at end of input.
-fn stdin_read_line(host: &mut dyn Host, _: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(io_result(host.read_line(), |line| {
+/// Under `--timeout` the wait ends at the deadline (`P0039`).
+fn stdin_read_line(
+    interp: &mut Interpreter<'_, '_>,
+    _: Vec<Value>,
+    span: Span,
+) -> Result<Value, Panic> {
+    Ok(io_result(interp.read_line(span)?, |line| {
         Value::option(line.map(|l| Value::str(&l)))
     }))
 }

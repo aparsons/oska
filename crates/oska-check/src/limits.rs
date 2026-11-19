@@ -17,6 +17,9 @@ pub enum Limit {
     /// of functions, methods and closures written in Oska, and loop
     /// back-edges.
     Steps,
+    /// `--timeout=<ms>`: the wall-clock milliseconds the program may run,
+    /// waiting included.
+    Time,
     /// `--max-output=<bytes>`: the bytes the program may write to
     /// standard output and standard error together.
     Output,
@@ -24,13 +27,14 @@ pub enum Limit {
 
 impl Limit {
     /// Every limit, in the order the usage and the docs list them.
-    pub const ALL: [Limit; 2] = [Limit::Steps, Limit::Output];
+    pub const ALL: [Limit; 3] = [Limit::Steps, Limit::Time, Limit::Output];
 
     /// The `oskac run` flag that sets the limit, without its `=` and
     /// value.
     pub fn flag(self) -> &'static str {
         match self {
             Limit::Steps => "--max-steps",
+            Limit::Time => "--timeout",
             Limit::Output => "--max-output",
         }
     }
@@ -39,6 +43,7 @@ impl Limit {
     pub fn code(self) -> &'static str {
         match self {
             Limit::Steps => codes::STEP_LIMIT,
+            Limit::Time => codes::TIME_LIMIT,
             Limit::Output => codes::OUTPUT_LIMIT,
         }
     }
@@ -49,6 +54,10 @@ impl Limit {
             Limit::Steps => format!(
                 "step limit reached: the program would take more than {value} steps, its calls \
                  and loop back-edges (`--max-steps={value}`)"
+            ),
+            Limit::Time => format!(
+                "time limit reached: the program ran for {value} ms of wall-clock time, \
+                 waiting included (`--timeout={value}`)"
             ),
             Limit::Output => format!(
                 "output limit reached: this write would take standard output and standard \
@@ -62,6 +71,8 @@ impl Limit {
 pub mod codes {
     /// The program would have taken more than `--max-steps` steps.
     pub const STEP_LIMIT: &str = "P0038";
+    /// The program ran for longer than `--timeout` milliseconds.
+    pub const TIME_LIMIT: &str = "P0039";
     /// The program would have written more than `--max-output` bytes to
     /// standard output and standard error together.
     pub const OUTPUT_LIMIT: &str = "P0041";
@@ -75,6 +86,8 @@ pub mod codes {
 pub struct Limits {
     /// [`Limit::Steps`].
     pub max_steps: Option<u64>,
+    /// [`Limit::Time`], in milliseconds.
+    pub timeout: Option<u64>,
     /// [`Limit::Output`].
     pub max_output: Option<u64>,
 }
@@ -83,6 +96,7 @@ impl Limits {
     /// No limit at all.
     pub const NONE: Limits = Limits {
         max_steps: None,
+        timeout: None,
         max_output: None,
     };
 
@@ -95,6 +109,7 @@ impl Limits {
     pub fn get(&self, limit: Limit) -> Option<u64> {
         match limit {
             Limit::Steps => self.max_steps,
+            Limit::Time => self.timeout,
             Limit::Output => self.max_output,
         }
     }
@@ -103,6 +118,7 @@ impl Limits {
     pub fn get_mut(&mut self, limit: Limit) -> &mut Option<u64> {
         match limit {
             Limit::Steps => &mut self.max_steps,
+            Limit::Time => &mut self.timeout,
             Limit::Output => &mut self.max_output,
         }
     }

@@ -52,8 +52,8 @@ USAGE:
                                            authority grant (exit code 3 when
                                            it goes past), or write a baseline
     oskac run [path | -] [--format=json] [--interpret] [--no-cache]
-              [--grant=<file>] [--max-steps=<n>] [--max-output=<bytes>]
-              [-- args...]
+              [--grant=<file>] [--max-steps=<n>] [--timeout=<ms>]
+              [--max-output=<bytes>] [-- args...]
                                            Check a source file, package or
                                            module on standard input (-) and,
                                            if it has no diagnostics and stays
@@ -62,7 +62,9 @@ USAGE:
                                            Linux, on the interpreter elsewhere
                                            or with --interpret; stop it with
                                            P0038 after the steps --max-steps
-                                           gives (interpreter only), or with
+                                           gives (interpreter only), with
+                                           P0039 after the milliseconds
+                                           --timeout gives, or with
                                            P0041 before it writes more than
                                            the bytes --max-output gives to
                                            stdout and stderr together
@@ -147,7 +149,8 @@ struct CommandLine {
     /// The name `--event=` gives, for `oskac hook`.
     event: Option<String>,
     target: Option<String>,
-    /// The run limits (`--max-steps=<n>`, `--max-output=<bytes>`), which
+    /// The run limits (`--max-steps=<n>`, `--timeout=<ms>`,
+    /// `--max-output=<bytes>`), which
     /// only `oskac run` takes.
     limits: oska_check::limits::Limits,
     /// Why a limit flag is malformed or repeated: a usage error.

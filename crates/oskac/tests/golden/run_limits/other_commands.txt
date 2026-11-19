@@ -17,8 +17,8 @@ USAGE:
                                            authority grant (exit code 3 when
                                            it goes past), or write a baseline
     oskac run [path | -] [--format=json] [--interpret] [--no-cache]
-              [--grant=<file>] [--max-steps=<n>] [--max-output=<bytes>]
-              [-- args...]
+              [--grant=<file>] [--max-steps=<n>] [--timeout=<ms>]
+              [--max-output=<bytes>] [-- args...]
                                            Check a source file, package or
                                            module on standard input (-) and,
                                            if it has no diagnostics and stays
@@ -27,7 +27,9 @@ USAGE:
                                            Linux, on the interpreter elsewhere
                                            or with --interpret; stop it with
                                            P0038 after the steps --max-steps
-                                           gives (interpreter only), or with
+                                           gives (interpreter only), with
+                                           P0039 after the milliseconds
+                                           --timeout gives, or with
                                            P0041 before it writes more than
                                            the bytes --max-output gives to
                                            stdout and stderr together
@@ -90,8 +92,8 @@ USAGE:
                                            authority grant (exit code 3 when
                                            it goes past), or write a baseline
     oskac run [path | -] [--format=json] [--interpret] [--no-cache]
-              [--grant=<file>] [--max-steps=<n>] [--max-output=<bytes>]
-              [-- args...]
+              [--grant=<file>] [--max-steps=<n>] [--timeout=<ms>]
+              [--max-output=<bytes>] [-- args...]
                                            Check a source file, package or
                                            module on standard input (-) and,
                                            if it has no diagnostics and stays
@@ -100,7 +102,9 @@ USAGE:
                                            Linux, on the interpreter elsewhere
                                            or with --interpret; stop it with
                                            P0038 after the steps --max-steps
-                                           gives (interpreter only), or with
+                                           gives (interpreter only), with
+                                           P0039 after the milliseconds
+                                           --timeout gives, or with
                                            P0041 before it writes more than
                                            the bytes --max-output gives to
                                            stdout and stderr together
@@ -163,8 +167,8 @@ USAGE:
                                            authority grant (exit code 3 when
                                            it goes past), or write a baseline
     oskac run [path | -] [--format=json] [--interpret] [--no-cache]
-              [--grant=<file>] [--max-steps=<n>] [--max-output=<bytes>]
-              [-- args...]
+              [--grant=<file>] [--max-steps=<n>] [--timeout=<ms>]
+              [--max-output=<bytes>] [-- args...]
                                            Check a source file, package or
                                            module on standard input (-) and,
                                            if it has no diagnostics and stays
@@ -173,7 +177,9 @@ USAGE:
                                            Linux, on the interpreter elsewhere
                                            or with --interpret; stop it with
                                            P0038 after the steps --max-steps
-                                           gives (interpreter only), or with
+                                           gives (interpreter only), with
+                                           P0039 after the milliseconds
+                                           --timeout gives, or with
                                            P0041 before it writes more than
                                            the bytes --max-output gives to
                                            stdout and stderr together
@@ -236,8 +242,8 @@ USAGE:
                                            authority grant (exit code 3 when
                                            it goes past), or write a baseline
     oskac run [path | -] [--format=json] [--interpret] [--no-cache]
-              [--grant=<file>] [--max-steps=<n>] [--max-output=<bytes>]
-              [-- args...]
+              [--grant=<file>] [--max-steps=<n>] [--timeout=<ms>]
+              [--max-output=<bytes>] [-- args...]
                                            Check a source file, package or
                                            module on standard input (-) and,
                                            if it has no diagnostics and stays
@@ -246,7 +252,9 @@ USAGE:
                                            Linux, on the interpreter elsewhere
                                            or with --interpret; stop it with
                                            P0038 after the steps --max-steps
-                                           gives (interpreter only), or with
+                                           gives (interpreter only), with
+                                           P0039 after the milliseconds
+                                           --timeout gives, or with
                                            P0041 before it writes more than
                                            the bytes --max-output gives to
                                            stdout and stderr together

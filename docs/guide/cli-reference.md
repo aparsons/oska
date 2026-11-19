@@ -19,8 +19,8 @@ USAGE:
                                            authority grant (exit code 3 when
                                            it goes past), or write a baseline
     oskac run [path | -] [--format=json] [--interpret] [--no-cache]
-              [--grant=<file>] [--max-steps=<n>] [--max-output=<bytes>]
-              [-- args...]
+              [--grant=<file>] [--max-steps=<n>] [--timeout=<ms>]
+              [--max-output=<bytes>] [-- args...]
                                            Check a source file, package or
                                            module on standard input (-) and,
                                            if it has no diagnostics and stays
@@ -29,7 +29,9 @@ USAGE:
                                            Linux, on the interpreter elsewhere
                                            or with --interpret; stop it with
                                            P0038 after the steps --max-steps
-                                           gives (interpreter only), or with
+                                           gives (interpreter only), with
+                                           P0039 after the milliseconds
+                                           --timeout gives, or with
                                            P0041 before it writes more than
                                            the bytes --max-output gives to
                                            stdout and stderr together
@@ -98,6 +100,7 @@ USAGE:
 | `--dry-run` | `fix` | Print the diff the fixes would make, and write nothing. The other commands accept the flag and ignore it. |
 | `--placeholders` | `fix` | Also apply fixes whose applicability is `placeholders`, such as `E0253`'s `todo()` arms. The other commands accept the flag and ignore it. |
 | `--max-steps=<n>` | `run` | Stop the program with `P0038` (exit code 101) after `<n>` steps: calls of functions, methods and closures written in Oska, and loop back-edges ([ADR 0021](../adr/0021-a-step-limit-stops-at-the-same-step-on-every-backend.md)). Interpreter only for now: without `--interpret`, a run that would be native is a usage error (exit code 2); on Windows it works as it is. The value is a whole number above 0; anything else, a repeated flag, or the flag on any other command is a usage error (exit code 2). See [run limits](../runtime.md#run-limits). |
+| `--timeout=<ms>` | `run` | Stop the program with `P0039` (exit code 101) after `<ms>` milliseconds of wall-clock time, also while it waits for input, within a tolerance of 100 ms. Natively, `oskac` stops its own child process, only that one, and prints the report itself, with exit code 101, never `128 + n`. The value is a whole number above 0; anything else, a repeated flag, or the flag on any other command is a usage error (exit code 2). See [run limits](../runtime.md#run-limits). |
 | `--max-output=<bytes>` | `run` | Stop the program with `P0041` (exit code 101) before it writes more than `<bytes>` bytes to standard output and standard error together. The value is a whole number above 0; anything else, a repeated flag, or the flag on any other command is a usage error (exit code 2). See [run limits](../runtime.md#run-limits). |
 | `--no-cache` | `check`, `run`, `test`, `build` | Neither read nor write the [build cache](#oskac-cache). Any other command refuses it as a usage error (exit code 2). |
 
@@ -197,12 +200,13 @@ The output is the baseline's, with `grant` in place of `baseline`: a `grant:` se
 
 ## `oskac run`
 
-`oskac run <file.osk | -> [--format=json] [--interpret] [--grant=<file>] [--max-steps=<n>] [--max-output=<bytes>] [-- args...]` checks the file, or the module read from [standard input](#source-from-standard-input), and, when it has no diagnostics and stays within its [authority grant](#authority-grant) if one is given, runs `main` on the real operating system: compiled natively on Linux and macOS, on the interpreter on Windows or with `--interpret` (see [platform support](#platform-support)). `args.get(0)` in the program is the file's path, the package directory as given, or `<stdin>` for a module read from standard input, on either backend, and the arguments after `--` follow it unchanged.
+`oskac run <file.osk | -> [--format=json] [--interpret] [--grant=<file>] [--max-steps=<n>] [--timeout=<ms>] [--max-output=<bytes>] [-- args...]` checks the file, or the module read from [standard input](#source-from-standard-input), and, when it has no diagnostics and stays within its [authority grant](#authority-grant) if one is given, runs `main` on the real operating system: compiled natively on Linux and macOS, on the interpreter on Windows or with `--interpret` (see [platform support](#platform-support)). `args.get(0)` in the program is the file's path, the package directory as given, or `<stdin>` for a module read from standard input, on either backend, and the arguments after `--` follow it unchanged.
 
 - The program's own output goes to standard output and standard error as it runs.
 - A refused program's diagnostics, or the panic that stopped the program, go to standard error after that output: as `check` prints diagnostics, or as one JSON object per line with `--format=json`.
 - The exit code is the program's, or 3 when the program goes past its `--grant` and was not run.
 - `--max-steps=<n>` stops the program, with the panic `P0038` and exit code 101, at the step past `<n>`: a call of a function, method or closure written in Oska, or a loop going back for its next iteration. It needs `--interpret` where the run would otherwise be native (exit code 2 without it), until native code counts steps. See [run limits](../runtime.md#run-limits).
+- `--timeout=<ms>` stops the program, with the panic `P0039` and exit code 101, once it has run for `<ms>` milliseconds of wall-clock time, waiting for input included, within a tolerance of 100 ms. A timeout is not deterministic: where the program stops differs from run to run. See [run limits](../runtime.md#run-limits).
 - `--max-output=<bytes>` stops the program, with the panic `P0041` and exit code 101, at the write that would take what it wrote to standard output and standard error together past that many bytes; that write writes nothing. See [run limits](../runtime.md#run-limits).
 
 | Exit code | Meaning |

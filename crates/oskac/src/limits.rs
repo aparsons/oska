@@ -1,5 +1,5 @@
-//! The run limits' flags (spec #446): `oskac run --max-steps=<n>` and
-//! `--max-output=<bytes>`, read into the [`Limits`] both backends take
+//! The run limits' flags (spec #446): `oskac run --max-steps=<n>`,
+//! `--timeout=<ms>` and `--max-output=<bytes>`, read into the [`Limits`] both backends take
 //! (`oska_check::limits`, which holds their codes and messages).
 //!
 //! A limit is a whole number above 0. A value of 0, a negative number or
@@ -11,6 +11,7 @@ use oska_check::limits::{Limit, Limits};
 fn unit(limit: Limit) -> &'static str {
     match limit {
         Limit::Steps => "steps",
+        Limit::Time => "milliseconds",
         Limit::Output => "bytes",
     }
 }

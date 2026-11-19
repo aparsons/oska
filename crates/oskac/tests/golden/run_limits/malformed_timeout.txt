@@ -1,0 +1,54 @@
+$ oskac run main.osk --timeout=0
+--- stdout
+--- stderr
+error: --timeout takes a whole number of milliseconds above 0, not `0`
+--- exit Some(2)
+
+$ oskac run main.osk --timeout=-1
+--- stdout
+--- stderr
+error: --timeout takes a whole number of milliseconds above 0, not `-1`
+--- exit Some(2)
+
+$ oskac run main.osk --timeout=abc
+--- stdout
+--- stderr
+error: --timeout takes a whole number of milliseconds above 0, not `abc`
+--- exit Some(2)
+
+$ oskac run main.osk --timeout=
+--- stdout
+--- stderr
+error: --timeout takes a whole number of milliseconds above 0, not ``
+--- exit Some(2)
+
+$ oskac run main.osk --timeout=1.5
+--- stdout
+--- stderr
+error: --timeout takes a whole number of milliseconds above 0, not `1.5`
+--- exit Some(2)
+
+$ oskac run main.osk --timeout=+5
+--- stdout
+--- stderr
+error: --timeout takes a whole number of milliseconds above 0, not `+5`
+--- exit Some(2)
+
+$ oskac run main.osk --timeout=1s
+--- stdout
+--- stderr
+error: --timeout takes a whole number of milliseconds above 0, not `1s`
+--- exit Some(2)
+
+$ oskac run main.osk --timeout=99999999999999999999
+--- stdout
+--- stderr
+error: --timeout takes a whole number of milliseconds above 0, not `99999999999999999999`
+--- exit Some(2)
+
+$ oskac run main.osk --timeout=5 --timeout=5
+--- stdout
+--- stderr
+error: --timeout is given more than once
+--- exit Some(2)
+

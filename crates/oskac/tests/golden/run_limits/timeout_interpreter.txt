@@ -1,0 +1,2 @@
+main.osk:2:5: error[P0039]: time limit reached: the program ran for 200 ms of wall-clock time, waiting included (`--timeout=200`) (bytes 16..29)
+{"code":"P0039","message":"time limit reached: the program ran for 200 ms of wall-clock time, waiting included (`--timeout=200`)","path":"main.osk","span":{"start":16,"end":29},"line":2,"column":5,"end_line":2,"end_column":18,"severity":"error","url":"https://oskalang.dev/codes/P0039","related":[],"suggestions":[]}

@@ -19,7 +19,8 @@ use std::ffi::OsStr;
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::mpsc;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::prng::SplitMix64;
 
@@ -44,6 +45,14 @@ pub trait Host: Send {
     /// The next line of standard input, without its line break, or `None`
     /// at end of input.
     fn read_line(&mut self) -> io::Result<Option<String>>;
+
+    /// [`Host::read_line`], but waiting no later than `deadline`
+    /// (`--timeout`): `None` when the deadline passes first. A host whose
+    /// reads never wait, such as a fake one, reads at once.
+    fn read_line_before(&mut self, deadline: Instant) -> Option<io::Result<Option<String>>> {
+        let _ = deadline;
+        Some(self.read_line())
+    }
 
     /// The environment variable `name`, if it is set to valid UTF-8.
     fn env_var(&mut self, name: &str) -> Option<String>;
@@ -258,6 +267,10 @@ pub struct RealHost {
     /// Whether the program's standard input is closed: every read is
     /// end of file at once (see [`RealHost::without_stdin`]).
     stdin_closed: bool,
+    /// Under `--timeout`, once the program first reads: the lines a
+    /// thread of its own reads from standard input, so that a read can
+    /// stop waiting at the deadline ([`Host::read_line_before`]).
+    lines: Option<mpsc::Receiver<io::Result<Option<String>>>>,
 }
 
 impl Default for RealHost {
@@ -276,6 +289,7 @@ impl RealHost {
         RealHost {
             random: SplitMix64::new(seed),
             stdin_closed: false,
+            lines: None,
         }
     }
 
@@ -310,11 +324,37 @@ impl Host for RealHost {
         if self.stdin_closed {
             return Ok(None);
         }
-        let mut line = String::new();
-        if io::stdin().lock().read_line(&mut line)? == 0 {
-            return Ok(None);
+        if let Some(lines) = &self.lines {
+            return lines.recv().unwrap_or(Ok(None));
         }
-        Ok(Some(without_line_break(line)))
+        read_stdin_line()
+    }
+
+    /// The read happens on a thread of its own, which nothing can
+    /// interrupt portably; at the deadline the program stops, and the
+    /// thread ends with the process.
+    fn read_line_before(&mut self, deadline: Instant) -> Option<io::Result<Option<String>>> {
+        if self.stdin_closed {
+            return Some(Ok(None));
+        }
+        let lines = self.lines.get_or_insert_with(|| {
+            let (send, lines) = mpsc::channel();
+            std::thread::spawn(move || loop {
+                let line = read_stdin_line();
+                let more = matches!(line, Ok(Some(_)));
+                if send.send(line).is_err() || !more {
+                    break;
+                }
+            });
+            lines
+        });
+        let wait = deadline.saturating_duration_since(Instant::now());
+        match lines.recv_timeout(wait) {
+            Ok(line) => Some(line),
+            Err(mpsc::RecvTimeoutError::Timeout) => None,
+            // The reader has ended: end of input, as before.
+            Err(mpsc::RecvTimeoutError::Disconnected) => Some(Ok(None)),
+        }
     }
 
     fn env_var(&mut self, name: &str) -> Option<String> {
@@ -525,6 +565,16 @@ fn windows_file_name(name: &str) -> io::Result<()> {
 }
 
 /// `line` without its trailing `\n` or `\r\n`.
+/// The next line of the process's standard input, without its line
+/// break, or `None` at end of input.
+fn read_stdin_line() -> io::Result<Option<String>> {
+    let mut line = String::new();
+    if io::stdin().lock().read_line(&mut line)? == 0 {
+        return Ok(None);
+    }
+    Ok(Some(without_line_break(line)))
+}
+
 fn without_line_break(mut line: String) -> String {
     if line.ends_with('\n') {
         line.pop();
