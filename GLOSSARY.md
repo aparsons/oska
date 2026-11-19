@@ -32,6 +32,10 @@ A type that is a capability or that contains one, directly or transitively. This
 **Authority**:
 For a function, the set of capabilities it can reach through its capability-bearing parameters. For a package, the union of the authority of its public functions, counted in built-in capability kinds. Which directory or file a capability is confined to is the caller's choice and is not part of a package's authority.
 
+**Authority safety**:
+The property that running a function performs only effects of capability kinds in its authority. It is proved in Lean for Oska Core, together with progress and preservation.
+_Avoid_: capability safety, effect soundness
+
 **Widening**:
 A change after which a function's, a program's or a dependency's authority includes a capability kind it did not have, or a broader kind in place of a narrower one. A widening must be approved before the build or the authority gate accepts it.
 _Avoid_: escalation, upgrade (for this concept)
@@ -164,6 +168,14 @@ _Avoid_: syscall wrapper
 **Differential suite**:
 The tests that run every program of a corpus on both the interpreter and the native backend and fail on any difference in output, exit code, panic or files written.
 _Avoid_: parity tests, golden tests (for this suite)
+
+**Oska Core**:
+The formal calculus, written in Lean, that defines the typing and running of a subset of Oska without generics or traits. Its executable semantics is the reference that the interpreter is tested against for programs in that subset.
+_Avoid_: core language, kernel, mini-Oska
+
+**Core IR**:
+The versioned JSON form of a checked program that is in Oska Core, which the checker exports for the Lean reference to run. Unlike the checked program, its shape is stable, and a change to it is a new version.
+_Avoid_: checked program (for this export), core AST
 
 ## Installation
 
