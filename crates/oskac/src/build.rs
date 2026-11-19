@@ -34,7 +34,7 @@ use oska_native::Target;
 use oska_syntax::{json_escape, Diagnostic, Span};
 
 use crate::cache::{self, Cached};
-use crate::{print_diagnostics, read_source, Flags, Places};
+use crate::{print_diagnostics, read_source, release, Flags, Places};
 
 /// What `oskac build` builds for: one target platform, or all of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,11 +68,46 @@ pub struct Options<'a> {
     pub target: TargetChoice,
 }
 
-/// `oskac build` on the source file `path`.
+/// What to make of a program that checked: `oskac build`'s executables,
+/// or `oskac release`'s signed release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Goal<'a> {
+    Build(Options<'a>),
+    Release(release::Options<'a>),
+}
+
+impl Goal<'_> {
+    /// Make the goal of `program`, named `name`.
+    fn make(
+        self,
+        program: &Program,
+        places: &Places,
+        name: &str,
+        json: bool,
+        cached: &Cached,
+    ) -> ExitCode {
+        match self {
+            Goal::Build(options) => compile(program, places, name, options, json, cached),
+            Goal::Release(options) => {
+                release::release(program, places, name, options, json, cached)
+            }
+        }
+    }
+
+    /// Print a refusal of the program, as the goal's command prints one.
+    fn refuse(self, diagnostics: &[Diagnostic], json: bool, code: ExitCode) -> ExitCode {
+        match self {
+            Goal::Build(_) => refuse(diagnostics, json, code),
+            Goal::Release(_) => release::refuse(diagnostics, json, code),
+        }
+    }
+}
+
+/// `oskac build` or `oskac release` on the source file `path`.
 pub fn file(
     path: &str,
     Flags { json, .. }: Flags,
-    options: Options,
+    goal: Goal,
     store: Option<&cache::Store>,
 ) -> ExitCode {
     let Some(src) = read_source(path) else {
@@ -91,20 +126,21 @@ pub fn file(
             .into_iter()
             .map(|d| places.locate(d))
             .collect();
-        return refuse(&diagnostics, json, ExitCode::FAILURE);
+        return goal.refuse(&diagnostics, json, ExitCode::FAILURE);
     };
     let stem = Path::new(path)
         .file_stem()
         .map_or_else(|| path.to_string(), |s| s.to_string_lossy().into_owned());
-    compile(program, &places, &stem, options, json, &cached)
+    goal.make(program, &places, &stem, json, &cached)
 }
 
-/// `oskac build` on the package in `dir`, which checked as `program`.
+/// `oskac build` or `oskac release` on the package in `dir`, which
+/// checked as `program`.
 pub fn package(
     program: &Program,
     places: &Places,
     dir: &str,
-    options: Options,
+    goal: Goal,
     json: bool,
     cached: &Cached,
 ) -> ExitCode {
@@ -112,7 +148,7 @@ pub fn package(
         .ok()
         .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "main".to_string());
-    compile(program, places, &name, options, json, cached)
+    goal.make(program, places, &name, json, cached)
 }
 
 /// Compile `program`, named `name`, for each target `options` asks for,
@@ -189,7 +225,7 @@ pub fn refuse(diagnostics: &[Diagnostic], json: bool, code: ExitCode) -> ExitCod
 /// Write the executable to `path`, executable by everyone, as a compiler's
 /// output is. Nothing runs it here, and `oskac` starts no process on
 /// another thread, so no fork can hold its descriptor open (#270).
-fn write_executable(path: &str, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_executable(path: &str, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::write(path, bytes)?;
     #[cfg(unix)]
     {

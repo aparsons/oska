@@ -27,6 +27,7 @@ mod json;
 mod native;
 mod native_test;
 mod package;
+mod release;
 mod self_cmd;
 mod sha256;
 
@@ -62,6 +63,12 @@ USAGE:
                                            backend, else linux-aarch64), or for
                                            every platform with a backend into
                                            the -o directory
+    oskac release [path] --version <X.Y.Z> --key <ssh-key>
+                  [-o dir] [--format=json] [--no-cache]
+                                           Build a source file or package for
+                                           every platform into one directory
+                                           (by default <name>-v<X.Y.Z>), with
+                                           a SHA256SUMS signed by the SSH key
     oskac fix [path] [--dry-run] [--placeholders] [--format=json]
                                            Apply the machine fixes to a source
                                            file or package, checking again
@@ -128,6 +135,11 @@ struct CommandLine {
     /// The name `--event=` gives, for `oskac hook`.
     event: Option<String>,
     target: Option<String>,
+    /// `--version <X.Y.Z>`, for `oskac release`; for any other command
+    /// `--version` is the command that prints `oskac`'s own.
+    version: Option<String>,
+    /// `--key <file>`: the SSH signing key, for `oskac release`.
+    key: Option<String>,
     program_args: Vec<String>,
 }
 
@@ -159,6 +171,22 @@ impl CommandLine {
                     Some(target) => line.target = Some(target),
                     None => line.positional.push(arg),
                 },
+                "--version" if line.positional.first().is_some_and(|c| c == "release") => {
+                    match args.next() {
+                        Some(version) => line.version = Some(version),
+                        None => line.positional.push(arg),
+                    }
+                }
+                version if version.starts_with("--version=") => {
+                    line.version = Some(version["--version=".len()..].to_string());
+                }
+                "--key" => match args.next() {
+                    Some(key) => line.key = Some(key),
+                    None => line.positional.push(arg),
+                },
+                key if key.starts_with("--key=") => {
+                    line.key = Some(key["--key=".len()..].to_string());
+                }
                 target if target.starts_with("--target=") => {
                     line.target = target.strip_prefix("--target=").map(str::to_string);
                 }
@@ -223,9 +251,14 @@ fn main() -> ExitCode {
     if flags.no_cache
         && !matches!(
             positional.first(),
-            Some(&("check" | "run" | "test" | "build"))
+            Some(&("check" | "run" | "test" | "build" | "release"))
         )
     {
+        eprint!("{USAGE}");
+        return ExitCode::from(2);
+    }
+    // Only `release` has a version and a key.
+    if (line.version.is_some() || line.key.is_some()) && positional.first() != Some(&"release") {
         eprint!("{USAGE}");
         return ExitCode::from(2);
     }
@@ -295,6 +328,17 @@ fn main() -> ExitCode {
                 target,
             };
             on_target(Command::Build(options), rest.first(), flags, &[])
+        }
+        ["release", rest @ ..] if rest.len() <= 1 && line.program_args.is_empty() => {
+            let options = match release::options(
+                line.output.as_deref(),
+                line.version.as_deref(),
+                line.key.as_deref(),
+            ) {
+                Ok(options) => options,
+                Err((refusal, code)) => return release::refuse(&[refusal], flags.json, code),
+            };
+            on_target(Command::Release(options), rest.first(), flags, &[])
         }
         ["fix", rest @ ..] if rest.len() <= 1 && line.program_args.is_empty() => {
             fix::command(rest.first().copied(), flags)
@@ -372,6 +416,8 @@ enum Command<'a> {
     Test,
     /// `oskac build`, with the output path `-o` gives and its target platforms.
     Build(build::Options<'a>),
+    /// `oskac release`, with its output directory, version and key.
+    Release(release::Options<'a>),
 }
 
 impl Command<'_> {
@@ -381,6 +427,7 @@ impl Command<'_> {
             Command::Run => "run",
             Command::Test => "test",
             Command::Build(_) => "build",
+            Command::Release(_) => "release",
         }
     }
 }
@@ -697,7 +744,12 @@ fn on_target(command: Command, path: Option<&&str>, flags: Flags, args: &[String
                 Command::Check(gate) => check_file(&file, flags, gate, store),
                 Command::Run => run_file(&file, flags, args, store),
                 Command::Test => test_file(&file, flags, store),
-                Command::Build(options) => build::file(&file, flags, options, store),
+                Command::Build(options) => {
+                    build::file(&file, flags, build::Goal::Build(options), store)
+                }
+                Command::Release(options) => {
+                    build::file(&file, flags, build::Goal::Release(options), store)
+                }
             };
             hint_package(&file, command.name());
             code
@@ -748,7 +800,10 @@ fn on_package(
                 .emit(),
         };
     }
-    let report = if matches!(command, Command::Run | Command::Build(_)) {
+    let report = if matches!(
+        command,
+        Command::Run | Command::Build(_) | Command::Release(_)
+    ) {
         package::check_to_run(&package, &refused, dir, options)
     } else {
         package::check(&package, &refused, options)
@@ -761,8 +816,28 @@ fn on_package(
         dir,
         json,
     };
-    if let Command::Build(options) = command {
-        return build::package(program, &places, dir, options, json, &cached);
+    match command {
+        Command::Build(options) => {
+            return build::package(
+                program,
+                &places,
+                dir,
+                build::Goal::Build(options),
+                json,
+                &cached,
+            );
+        }
+        Command::Release(options) => {
+            return build::package(
+                program,
+                &places,
+                dir,
+                build::Goal::Release(options),
+                json,
+                &cached,
+            );
+        }
+        _ => {}
     }
     let mut host = oska_run::RealHost::new();
     if command == Command::Run {
@@ -843,6 +918,7 @@ fn refuse(command: Command, diagnostics: Vec<Diagnostic>, json: bool, dir: &str)
             finish_test(report, json, &places)
         }
         Command::Build(_) => build::refuse(&diagnostics, json, ExitCode::FAILURE),
+        Command::Release(_) => release::refuse(&diagnostics, json, ExitCode::FAILURE),
     }
 }
 

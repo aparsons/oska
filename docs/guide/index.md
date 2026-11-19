@@ -21,6 +21,7 @@ Task-oriented guides for the `oskac` toolchain. Oska is pre-alpha. The latest re
 - [Debugging: `dbg`, panics, and `--format=json`](debugging.md)
 - [Troubleshooting](troubleshooting.md): by symptom and by diagnostic code.
 - [CLI reference](cli-reference.md)
+- [Releasing an application](releasing.md): `oskac release`, how your users verify a release, and Authenticode and Apple notarization as your own steps.
 - [Signing and notarizing for macOS](macos-signing.md): what `oskac`'s ad-hoc signature does, and how to sign with a Developer ID and notarize.
 - [The install receipt](install-receipt.md): what the installers record, and what each uninstaller does with it.
 - [Agent guide](agent-guide.md): the check, fix, run, test, and authority loop, with machine-readable output.
