@@ -15,6 +15,12 @@
 //! Every build is differential (`common`): on aarch64 and x86_64 Linux the
 //! generator also runs natively on the same files, and must write the same
 //! site.
+//!
+//! Every test that reads the real site (the generator on the repository's
+//! own docs) is in this file, whatever ticket it belongs to: the build takes
+//! seconds, and `common::site::real_site` makes it once per test program.
+//! They are in the sections "The real docs", "Conformance of the real
+//! site" and "The real site: ...". A new real-site test goes here too.
 
 mod common;
 
@@ -1935,11 +1941,7 @@ fn every_real_page_and_the_agent_outputs_link_to_the_source_repository() {
     );
 }
 
-// ---- The real site: the home page and the navigation (#188) ------------------------
-//
-// Every test that reads the real site is in this file, so the generator
-// runs on the real docs once for all of them (`common::site::real_site`
-// builds once per test binary).
+// ---- The real site: the home page and the navigation (#188) -----------------------------
 
 #[test]
 fn the_real_home_page_leads_with_install_the_prompt_and_the_quickstart() {
@@ -2031,7 +2033,7 @@ fn what_works_today_is_a_guide_listed_in_llms_txt() {
     );
 }
 
-// ---- The real site: the corpus for agents --------------------------------------------
+// ---- The real site: the corpus for agents (#189) ----------------------------------------
 
 #[test]
 fn the_real_corpus_is_tiered_and_every_link_in_it_goes_somewhere() {
@@ -2064,7 +2066,7 @@ fn the_real_corpus_is_tiered_and_every_link_in_it_goes_somewhere() {
     assert_eq!(outcome.exit_code, 0, "{}", outcome.stderr);
 }
 
-// ---- The real site: links, as the Pages workflow checks them ---------------------------
+// ---- The real site: links, as the Pages workflow checks them (#186) ---------------------
 
 /// The real site, as the Pages workflow builds it: the generator on the
 /// repository's own inputs, then the files `scripts/release/stage-site.sh`
@@ -2073,7 +2075,7 @@ fn real_site_staged() -> &'static BTreeMap<String, String> {
     static SITE: std::sync::OnceLock<BTreeMap<String, String>> = std::sync::OnceLock::new();
     SITE.get_or_init(|| {
         let mut site = real_site();
-        for staged in ["install.sh", "install.ps1", "oska-release.pub"] {
+        for staged in STAGED {
             site.insert(staged.to_string(), "staged\n".to_string());
         }
         site

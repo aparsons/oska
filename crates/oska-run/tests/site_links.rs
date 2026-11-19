@@ -368,7 +368,7 @@ fn the_checker_reads_only_the_site_and_the_tracked_files() {
     assert_eq!(report.matches("  FsRead -> ").count(), 2, "{report}");
 }
 
-// ---- The real site ---------------------------------------------------------------
+// ---- The Pages workflow ----------------------------------------------------------
 
 #[test]
 fn the_pages_workflow_checks_every_link_after_staging_and_before_upload() {
