@@ -166,9 +166,9 @@ json.encode<T: json.Encode>(value: T) -> Result<String, json.Error>
 
 | Input | Behavior |
 |---|---|
-| Duplicate object name | Error. The check uses the decoded names, after escapes, so `"a"` and `"a"` are duplicates. |
+| Duplicate object name | Error. The check uses the decoded names, after escapes, so `"a"` and `"\u0061"` are duplicates. |
 | Invalid UTF-8 | Error. No replacement and no truncation. |
-| Escaped lone surrogate, e.g. `"\uD800"` | Error (I-JSON §2.1). Oska text is valid Unicode, so it cannot hold one anyway. |
+| Escaped lone surrogate, e.g. `"\uD800"` | Error (I-JSON §2.1). Oska strings are UTF-8 ([`docs/design.md`](../design.md)), so they cannot hold one anyway. |
 | Noncharacters, e.g. U+FFFF | Open question. I-JSON forbids them, RFC 8259 allows them. |
 | BOM at the start | Error, as in Python and yyjson. |
 | `NaN`, `Infinity`, comments, trailing commas, single quotes, unquoted names | Error. |
@@ -182,10 +182,10 @@ json.encode<T: json.Encode>(value: T) -> Result<String, json.Error>
 
 | Limit | Default | Reason |
 |---|---|---|
-| Nesting depth | 128 | The serde_json default. It also bounds recursive drop, equality and printing. |
-| Input size | 16 MiB | Python's advice to limit size. The exact value is an open question. |
-| String length, in bytes | the input size | Zig's `max_value_len` default for a slice. |
-| Number length, in characters | 100 | Far above any binary64 or 64-bit value. It stops big-number CPU attacks like CVE-2020-10735. |
+| Nesting depth | 128 | The serde_json default ([serde_json `de.rs`](https://github.com/serde-rs/json/blob/master/src/de.rs)). It also bounds recursive drop, equality and printing. |
+| Input size | 16 MiB | Python's advice to limit size ([Python `json` docs](https://docs.python.org/3/library/json.html)). The exact value is an open question. |
+| String length, in bytes | the input size | Inference: a separate cap adds nothing for a whole-input parse. Zig shows the same knob as `max_value_len` ([Zig `static.zig`](https://github.com/ziglang/zig/blob/master/lib/std/json/static.zig)). |
+| Number length, in characters | 100 | Far above any binary64 or 64-bit value. It stops big-number CPU attacks like CVE-2020-10735 ([CPython commit](https://mail.python.org/pipermail/python-checkins/2022-September/178585.html)). |
 | Members per object | 10 000 | Bounds duplicate checks and hashing. |
 | Total values | 1 000 000 | Bounds memory for small inputs with many tiny values. |
 
@@ -194,7 +194,7 @@ json.encode<T: json.Encode>(value: T) -> Result<String, json.Error>
 
 ### 6.4 Implementation
 
-- Write the parser in Oska, in `std`. The interpreter and the native backends then run the same code. This fits ADR 0011 and ADR 0012, which put such work in Oska and not in Rust.
+- Write the parser in Oska, in `std`. The interpreter and the native backends then run the same code. Inference: this follows the precedent of ADR 0011 (the runtime is in Oska) and ADR 0012 (TLS, git and crypto are in Oska). Neither ADR rules on `std` modules in general.
 - Parse iteratively with an explicit stack of at most `depth` frames, as RapidJSON's iterative mode does. Never recurse on input structure.
 - Parse numbers in two steps. First check the grammar and length and keep the text. Convert only on `as_int()` or on decode.
 - Validate UTF-8 once, over the whole input, before tokenizing, as simdjson's stage 1 does. Add an ASCII fast path first and SIMD later.
