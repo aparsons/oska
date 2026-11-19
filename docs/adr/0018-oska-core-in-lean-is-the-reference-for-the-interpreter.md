@@ -22,7 +22,7 @@ Proofs and the Lean differential test block merge. A change to how a construct o
 
 ## Consequences
 
-- The checker gains a core IR export, and a change to the core IR's shape is a new version.
-- `scripts/check.sh` gains a formal step. It skips where Lean is not installed, and Linux CI installs a pinned Lean.
+- The checker gains a core IR export, and a change to the core IR's shape is a new version. ADR 0007 still holds: every backend runs the checked program. The Lean reference is not a backend, and the core IR is the one stable form taken from the checked program for it.
+- `scripts/check.sh` gains a formal step. Like the shellcheck step, it skips where Lean is not installed, except in CI, where a missing Lean fails the step, so the gate cannot pass by skipping. Linux CI installs a pinned Lean.
 - A pull request that touches Oska Core's typing or running needs Lean work, which raises the cost of changing those parts of the language.
 - For programs in Oska Core, the interpreter is no longer the last word: a difference from the Lean reference is a bug in one of the two.

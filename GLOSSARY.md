@@ -33,7 +33,7 @@ A type that is a capability or that contains one, directly or transitively. This
 For a function, the set of capabilities it can reach through its capability-bearing parameters. For a package, the union of the authority of its public functions, counted in built-in capability kinds. Which directory or file a capability is confined to is the caller's choice and is not part of a package's authority.
 
 **Authority safety**:
-The property that running a function performs only effects of capability kinds in its authority. It is proved in Lean for Oska Core, together with progress and preservation.
+The property that running a function performs only effects of capability kinds in its authority. It is one of the three theorems stated for Oska Core, with progress and preservation (ADR 0018).
 _Avoid_: capability safety, effect soundness
 
 **Widening**:
@@ -136,7 +136,7 @@ A package named in the manifest. Only direct dependencies need authority approva
 ## Execution
 
 **Interpreter**:
-The toolchain's way of running a checked program directly, with no executable. It is the reference for what every program does.
+The toolchain's way of running a checked program directly, with no executable. It is the reference for what every program does, except that a program in Oska Core is judged by Oska Core's semantics (ADR 0018).
 _Avoid_: VM, evaluator
 
 **Native backend**:
@@ -170,11 +170,11 @@ The tests that run every program of a corpus on both the interpreter and the nat
 _Avoid_: parity tests, golden tests (for this suite)
 
 **Oska Core**:
-The formal calculus, written in Lean, that defines the typing and running of a subset of Oska without generics or traits. Its executable semantics is the reference that the interpreter is tested against for programs in that subset.
+The formal calculus that defines the typing and running of the subset of Oska without generics or traits. Its semantics is executable, and it is the reference that the interpreter is judged by for programs in that subset (ADR 0018).
 _Avoid_: core language, kernel, mini-Oska
 
 **Core IR**:
-The versioned JSON form of a checked program that is in Oska Core, which the checker exports for the Lean reference to run. Unlike the checked program, its shape is stable, and a change to it is a new version.
+The versioned form of a checked program in Oska Core that Oska Core's executable semantics reads. Unlike the checked program, which is internal to the toolchain, its shape is stable, and a change to it is a new version.
 _Avoid_: checked program (for this export), core AST
 
 ## Installation

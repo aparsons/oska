@@ -2,9 +2,9 @@
 
 ## Decision
 
-Before parallel tasks, `Sched` channels or `select` are implemented, their design is written as a TLA+ specification, and the TLC model checker must pass it. Implementation tickets open only after that. The specification covers the scheduler, channels and `select`, and the memory model: atomic reference counts and the rule that a `var` is changed in place only when its reference count is 1 (ADR 0001).
+Before parallel tasks, `Sched` channels or `select` are implemented, their design is written as a TLA+ specification, and the TLC model checker must pass it. Implementation tickets open only after that. The specification covers the scheduler, channels and `select`, and the memory model: how reference counts change when tasks share values, and the rule that a `var` is changed in place only when its reference count is 1 (ADR 0001). How counts are made safe across tasks, for example with atomic updates, is a design choice that the specification settles.
 
-The specifications live in the repository and run in the formal step of `scripts/check.sh`, with a pinned TLC that Linux CI installs.
+The specifications live in the repository and run in the formal step of `scripts/check.sh`, with a pinned TLC that Linux CI installs. As with Lean (ADR 0018), a missing TLC fails the step in CI.
 
 ## Why
 
