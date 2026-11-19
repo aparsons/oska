@@ -2,6 +2,8 @@
 
 - **Status:** Accepted (2026-11-17), for spec #154. On 2026-11-17 the user accepted all six decisions the research recommends (its §4, Q1–Q6). Amends [ADR 0013](0013-system-calls-only-in-std-rt.md). The research behind it is [docs/research/2026-11-macos-libsystem-calls.md](../research/2026-11-macos-libsystem-calls.md).
 
+[ADR 0020](0020-windows-intrinsics-are-kernel32-and-ntdll-calls.md) amends this decision for Windows: there, a system-call intrinsic is one kernel32 or ntdll function (or `ProcessPrng`), with the Windows x64 call form around it.
+
 ## Decision
 
 A system-call intrinsic in `std.rt` is **one call of the operating system's interface**:

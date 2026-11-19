@@ -37,6 +37,13 @@ pub struct Module {
     /// Where in the writable data the arguments of a call past those the
     /// target passes in registers go ([`MAX_ARGS`]).
     pub extra_args: u32,
+    /// The function the operating system calls and that returns to it,
+    /// by the operating system's own convention: on Windows, the
+    /// vectored exception handler's entry (ADR 0020). None elsewhere.
+    pub callback: Option<FnId>,
+    /// The bytes the program's stack needs, which `_start` maps on Linux
+    /// and macOS and Windows' executable header reserves.
+    pub stack: u64,
 }
 
 #[derive(Debug, Clone)]

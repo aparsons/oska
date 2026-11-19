@@ -48,6 +48,8 @@
 //!    node or a call it cannot make, sees what it holds. A pass walks
 //!    each of a function's [`Function::code`], its contracts included.
 //! 5. Evaluate it in each backend: in `oska-run`, `interp.rs`.
+//! 6. Export or refuse it in the core IR (`core_ir.rs`, ADR 0018):
+//!    refuse it unless it joins Oska Core, in a new core IR version.
 
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
@@ -89,6 +91,33 @@ pub struct Program {
     /// Empty for every program in the repository's corpus (examples,
     /// guide samples, CLI fixtures).
     pub unsolved: Vec<Span>,
+    /// Every struct, enum, trait, `impl` and `const` the module
+    /// declares, in source order. A backend needs nothing from this
+    /// list: what they declare reaches it as [`Program::types`] and
+    /// [`Program::functions`]. A pass that must know what the source
+    /// declares, such as the core IR's refusal of anything outside Oska
+    /// Core (`core_ir.rs`), reads it here.
+    pub declarations: Vec<Declaration>,
+}
+
+/// A declaration other than a function, a `use` or a `test`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Declaration {
+    pub kind: DeclarationKind,
+    /// The name as written; for an `impl`, its type as written, such as
+    /// `Point` or `Wrapper<T>`.
+    pub name: String,
+    /// The whole item, its attributes included.
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeclarationKind {
+    Struct,
+    Enum,
+    Trait,
+    Impl,
+    Const,
 }
 
 impl Program {
@@ -138,6 +167,9 @@ pub fn trait_method(type_name: &str, trait_name: &str, method: &str) -> String {
 pub struct Function {
     /// The qualified name, as [`Program::functions`] keys it.
     pub name: String,
+    /// The name as declared in the source, which orders the functions
+    /// as written and locates a refusal of the whole function.
+    pub span: Span,
     /// The generic parameters, in the order a call's `type_args` give
     /// them: for a method, its impl's first, then its own.
     pub generics: Vec<String>,
@@ -156,6 +188,9 @@ pub struct Function {
     pub params: Vec<Param>,
     /// The result type.
     pub ret: Type,
+    /// The result type as written; `None` when the declaration writes
+    /// none, so the result is `()`.
+    pub ret_annotation: Option<Span>,
     /// The contracts every call of it evaluates.
     pub contracts: Contracts,
     pub body: Expr,
@@ -241,6 +276,9 @@ pub struct Param {
     /// Whether the parameter takes a local slot. A parameter named `_`
     /// takes none: its argument is evaluated and dropped.
     pub binds: bool,
+    /// The type as written; `None` for a closure's parameter whose type
+    /// the checker inferred.
+    pub annotation: Option<Span>,
 }
 
 /// An expression, with its type and the span of the source it was
@@ -394,13 +432,22 @@ pub enum Stmt {
     /// next slot, of type `ty`. A binding named `_` takes no slot.
     Let {
         binds: bool,
+        /// Written `var`: an [`Stmt::Assign`] or a mutating method may
+        /// change it.
+        mutable: bool,
         ty: Type,
+        /// The type as written, `None` when the checker inferred it.
+        annotation: Option<Span>,
         value: Expr,
+        /// The whole statement.
+        span: Span,
     },
     /// `place = value`.
     Assign {
         place: Place,
         value: Expr,
+        /// The whole statement.
+        span: Span,
     },
     /// `return`, with `()` when no value is written.
     Return {
@@ -409,12 +456,16 @@ pub enum Stmt {
         /// return that broke it.
         span: Span,
     },
-    Break,
-    Continue,
+    /// `break`, with the keyword's span.
+    Break(Span),
+    /// `continue`, with the keyword's span.
+    Continue(Span),
     /// `while cond { body }`.
     While {
         cond: Expr,
         body: Expr,
+        /// The whole statement.
+        span: Span,
     },
     /// `for binding in iter { body }`, over a range or a `List`: each
     /// element, of type `ty`, is pushed as the next slot when `binds`,
@@ -424,6 +475,8 @@ pub enum Stmt {
         ty: Type,
         iter: Expr,
         body: Expr,
+        /// The whole statement.
+        span: Span,
     },
 }
 
@@ -960,8 +1013,8 @@ fn walk_stmt<'p, B>(
             Some(value) => walk(value, visit),
             None => ControlFlow::Continue(()),
         },
-        Stmt::Break | Stmt::Continue => ControlFlow::Continue(()),
-        Stmt::While { cond, body } => {
+        Stmt::Break(_) | Stmt::Continue(_) => ControlFlow::Continue(()),
+        Stmt::While { cond, body, .. } => {
             walk(cond, visit)?;
             walk(body, visit)
         }

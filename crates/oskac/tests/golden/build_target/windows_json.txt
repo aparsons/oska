@@ -1,6 +1,7 @@
 $ oskac build hello.osk --target windows-x86_64 --format=json
-exit: 2
+exit: 0
 --- stdout
-{"output":null,"diagnostics":[{"code":"E0394","message":"`oskac build` cannot build for `windows-x86_64` yet: its native backend comes in v0.6.0; it builds for `linux-aarch64`, `linux-x86_64`, `macos-aarch64` and `macos-x86_64`","span":{"start":0,"end":0},"severity":"error","url":"https://oskalang.dev/codes/E0394","related":[],"suggestions":[]}]}
+{"output":"hello.exe","diagnostics":[]}
 --- stderr
 --- written
+hello.exe

@@ -64,6 +64,43 @@ pub fn rt_sys_sigaction(signal: Int, action: Int) -> Int
 // Ends the process with `status`; does not return. Linux's `exit_group`.
 pub fn rt_sys_exit(status: Int) -> Int
 
+// Windows' own calls (ADR 0020): one function of `kernel32.dll` each (or
+// `bcryptprimitives.dll`'s `ProcessPrng`), with its own arguments in its
+// order, out-parameters included. A failure is `-GetLastError()`. No
+// other platform has them: there they make no call and fail, and `std.rt`
+// never reaches them (`on_windows`). Nor does Windows have the calls
+// above.
+//
+// `GetStdHandle(n)`.
+pub fn rt_sys_get_std_handle(n: Int) -> Int
+// `WriteFile(handle, buf, count, done, NULL)` and `ReadFile`: on success a
+// result >= 0, with the bytes moved in the 32-bit word at `done`.
+pub fn rt_sys_write_file(handle: Int, buf: Int, count: Int, done: Int) -> Int
+pub fn rt_sys_read_file(handle: Int, buf: Int, count: Int, done: Int) -> Int
+// `GetConsoleMode(handle, mode)`: succeeds only on a console.
+pub fn rt_sys_get_console_mode(handle: Int, mode: Int) -> Int
+// `WriteConsoleW(handle, units, count, done, NULL)`: UTF-16 units.
+pub fn rt_sys_write_console(handle: Int, units: Int, count: Int, done: Int) -> Int
+// `VirtualAlloc(addr, size, type, protect)`: the address.
+pub fn rt_sys_virtual_alloc(addr: Int, size: Int, kind: Int, protect: Int) -> Int
+// `VirtualFree(addr, 0, MEM_RELEASE)`: the whole mapping at `addr`.
+pub fn rt_sys_virtual_free(addr: Int) -> Int
+// `ExitProcess(code)`; does not return.
+pub fn rt_sys_exit_process(code: Int) -> Int
+// `GetCommandLineW()` and `GetEnvironmentStringsW()`: the addresses of the
+// command line, NUL-terminated UTF-16, and the environment block.
+pub fn rt_sys_command_line() -> Int
+pub fn rt_sys_environment() -> Int
+// `AddVectoredExceptionHandler(first, handler)`.
+pub fn rt_sys_add_exception_handler(first: Int, handler: Int) -> Int
+// `SetThreadStackGuarantee(size)`: `size` is the address of a 32-bit word.
+pub fn rt_sys_stack_guarantee(size: Int) -> Int
+// `GetSystemTimePreciseAsFileTime(time)`: 100-nanosecond intervals since
+// 1601, in the word at `time`.
+pub fn rt_sys_system_time(time: Int) -> Int
+// `ProcessPrng(buf, length)`: fills all `length` bytes.
+pub fn rt_sys_process_prng(buf: Int, length: Int) -> Int
+
 // ---- Memory and words ------------------------------------------------------
 
 // Loads of 8, 16, 32 and 64 bits at address `addr`, zero-extended into the
@@ -205,6 +242,15 @@ struct Platform {
     // how many wordings come before its error 1, and how many it has.
     errors_at: Int,
     errors_count: Int,
+    // Whether the platform is Windows, whose calls are its own (ADR
+    // 0020): the one value an operating-system leaf function tests.
+    windows: Bool,
+    // The errors of an interrupted call, which is made again (0: there
+    // is none), and of a write to a pipe whose reader has gone (and a
+    // second one, or 0).
+    e_intr: Int,
+    e_pipe: Int,
+    e_pipe_alt: Int,
 }
 
 // `linux-aarch64`: arm64's open flags and `struct stat`, and what every
@@ -241,6 +287,10 @@ fn linux_aarch64() -> Platform {
         e_loop: 40,
         errors_at: 0,
         errors_count: 133,
+        windows: false,
+        e_intr: 4,
+        e_pipe: 32,
+        e_pipe_alt: 0,
     )
 }
 
@@ -279,6 +329,10 @@ fn linux_x86_64() -> Platform {
         e_loop: 40,
         errors_at: 0,
         errors_count: 133,
+        windows: false,
+        e_intr: 4,
+        e_pipe: 32,
+        e_pipe_alt: 0,
     )
 }
 
@@ -322,7 +376,72 @@ fn macos() -> Platform {
         e_loop: 62,
         errors_at: 133,
         errors_count: 106,
+        windows: false,
+        e_intr: 4,
+        e_pipe: 32,
+        e_pipe_alt: 0,
     )
+}
+
+// `windows-x86_64`: none of the Unix values apply, since no POSIX call is
+// made. No call is interrupted; a closed pipe is `ERROR_NO_DATA` (232) or
+// `ERROR_BROKEN_PIPE` (109). Its errors are not worded yet: each is an
+// `I/O error`.
+fn windows_x86_64() -> Platform {
+    Platform(
+        o_directory: 0,
+        o_nofollow: 0,
+        o_wronly: 0,
+        o_creat: 0,
+        o_nonblock: 0,
+        o_cloexec: 0,
+        at_fdcwd: 0,
+        f_dupfd_cloexec: 0,
+        tty_request: 0,
+        termios_bytes: 0,
+        map_private_anonymous: 0,
+        map_noreserve: 0,
+        stat_bytes: 0,
+        stat_mode: 0,
+        stat_nlink: 0,
+        stat_size: 0,
+        stat_mode_bits: 0,
+        stat_nlink_bits: 0,
+        dirent_length: 0,
+        dirent_name: 0,
+        dirent_one_at_a_time: false,
+        sigaction_bytes: 0,
+        sigaction_flags: 0,
+        sa_fault_flags: 0,
+        ss_size_at: 0,
+        ss_flags_at: 0,
+        sigbus: 0,
+        e_loop: 0,
+        errors_at: 0,
+        errors_count: 0,
+        windows: true,
+        e_intr: 0,
+        e_pipe: 232,
+        e_pipe_alt: 109,
+    )
+}
+
+// Whether the target platform is Windows.
+fn on_windows() -> Bool {
+    rt_mem_platform().windows
+}
+
+// Whether a call's result `result` is the error of an interrupted call,
+// which is made again.
+fn interrupted(result: Int) -> Bool {
+    let e = rt_mem_platform().e_intr
+    e != 0 && result == 0 - e
+}
+
+// Whether a write's result `result` says the pipe's reader has gone.
+fn broken_pipe(result: Int) -> Bool {
+    let platform = rt_mem_platform()
+    result == 0 - platform.e_pipe || (platform.e_pipe_alt != 0 && result == 0 - platform.e_pipe_alt)
 }
 
 // ---- Memory ----------------------------------------------------------------
@@ -355,7 +474,9 @@ fn macos() -> Platform {
 //           on, 33 its stderr prefix, 34 whether stderr is at the start
 //           of a line, 35 the lines printed, 36 the fake files' paths, 37
 //           their contents, 38 the fake directories;
-//   40-44   the free lists of size classes 8 to 12.
+//   40-44   the free lists of size classes 8 to 12;
+//   45-47   on Windows, the handles of standard input, output and error;
+//   48      on Windows, the word a call puts its count in (`win_write`).
 //
 // Every object the allocator gives out is preceded by a header word: its
 // block's size class, or for an object too large for any class, minus
@@ -402,11 +523,21 @@ fn no_reserve() -> Int {
 // `mmap`'s `flags` (at `addr` when they say it is fixed): its address.
 // Running out of memory ends the process.
 fn map(addr: Int, length: Int, prot: Int, flags: Int) -> Int {
-    let at = rt_sys_mmap(addr, length, prot, flags, -1, 0)
+    let at = if on_windows() { win_alloc(length) } else { rt_sys_mmap(addr, length, prot, flags, -1, 0) }
     if at < 0 {
         out_of_memory()
     }
     at
+}
+
+// Fresh read-write memory of `length` bytes anywhere, on Windows: its
+// address, or a negative error. Windows asks for no other mapping. (The
+// functions that call the system keep its call in their own body, beside
+// this one's, so that the optimizer never inlines them: a Windows branch
+// must not make Linux's frames larger.)
+fn win_alloc(length: Int) -> Int {
+    // `MEM_COMMIT | MEM_RESERVE`, `PAGE_READWRITE`.
+    rt_sys_virtual_alloc(0, length, 12288, 4)
 }
 
 fn out_of_memory() {
@@ -465,7 +596,7 @@ fn try_alloc(size: Int) -> Int {
         return alloc(size)
     }
     let length = rt_mem_and(rt_mem_add(block, 65535), -65536)
-    let at = rt_sys_mmap(0, length, 3, private_anonymous(), -1, 0)
+    let at = if on_windows() { win_alloc(length) } else { rt_sys_mmap(0, length, 3, private_anonymous(), -1, 0) }
     if at < 0 {
         return 0
     }
@@ -497,7 +628,11 @@ pub fn free(object: Int) {
         // and faults in fresh memory far less often.
         let kept = rt_mem_load64(global(22))
         if kept != 0 {
-            let _ = rt_sys_munmap(kept, rt_mem_load64(global(23)))
+            if on_windows() {
+                let _ = rt_sys_virtual_free(kept)
+            } else {
+                let _ = rt_sys_munmap(kept, rt_mem_load64(global(23)))
+            }
         }
         rt_mem_store64(global(22), at)
         rt_mem_store64(global(23), rt_mem_sub(0, class))
@@ -615,7 +750,11 @@ pub fn drop_later(object: Int, code: Int) {
         let fresh = map(0, rt_mem_shl(bigger, 4), 3, private_anonymous())
         if pending != 0 {
             copy_bytes(fresh, pending, rt_mem_shl(count, 4))
-            let _ = rt_sys_munmap(pending, rt_mem_shl(capacity, 4))
+            if on_windows() {
+                let _ = rt_sys_virtual_free(pending)
+            } else {
+                let _ = rt_sys_munmap(pending, rt_mem_shl(capacity, 4))
+            }
         }
         pending = fresh
         rt_mem_store64(global(24), fresh)
@@ -1937,6 +2076,10 @@ pub fn stack_new(size: Int) -> Int {
 // an `IoError` the program sees ("broken pipe"). And make
 // `on_fault`, the code at `handler`, the handler of every fault signal.
 pub fn process_init(argc: Int, argv: Int, handler: Int) {
+    if on_windows() {
+        win_process_init(handler)
+        return
+    }
     // `SIG_IGN` (1), with no flags.
     set_action(sigpipe(), 1, 0)
     handle_faults(handler)
@@ -2132,14 +2275,18 @@ fn cstr_valid(at: Int) -> Bool {
 // unbuffered write would have been: the `IoError`'s message on stderr,
 // and the process ends with 1 rather than 0.
 pub fn exit(status: Int) {
+    var code = status
     let flushed = flush_stdout()
     if flushed < 0 {
         let _ = print_error_line(os_error(-flushed))
         if status == 0 {
-            let _ = rt_sys_exit(1)
+            code = 1
         }
     }
-    let _ = rt_sys_exit(status)
+    if on_windows() {
+        let _ = rt_sys_exit_process(code)
+    }
+    let _ = rt_sys_exit(code)
 }
 
 // `main` returned an error whose text is `message`: it goes to stderr on a
@@ -2165,7 +2312,10 @@ pub fn main_failed(message: String) {
 // of the write that failed. A closed pipe does not return.
 fn write_stdout(buf: Int, count: Int) -> Int {
     let written = write_all(1, buf, count)
-    if written == -32 {
+    if broken_pipe(written) {
+        if on_windows() {
+            let _ = rt_sys_exit_process(0)
+        }
         let _ = rt_sys_exit(0)
     }
     written
@@ -2181,6 +2331,12 @@ fn stdout_buffer() -> Int {
     if buf == 0 {
         buf = map(0, stdout_buffer_size(), 3, private_anonymous())
         rt_mem_store64(global(13), buf)
+        if on_windows() {
+            // `GetConsoleMode` succeeds only on a console.
+            let console = rt_sys_get_console_mode(win_handle(1), global(48))
+            rt_mem_store64(global(15), if console > 0 { 2 } else { 1 })
+            return buf
+        }
         // `ioctl(1, TCGETS, termios)` succeeds only on a terminal. The
         // `struct termios` it fills, after the object's count.
         let platform = rt_mem_platform()
@@ -2304,8 +2460,8 @@ fn write_all(fd: Int, buf: Int, count: Int) -> Int {
     var at = buf
     var left = count
     while left > 0 {
-        let written = rt_sys_write(fd, at, io_count(left))
-        if written == -4 {
+        let written = if on_windows() { win_write(fd, at, io_count(left)) } else { rt_sys_write(fd, at, io_count(left)) }
+        if interrupted(written) {
             continue
         }
         if written < 0 {
@@ -2315,6 +2471,43 @@ fn write_all(fd: Int, buf: Int, count: Int) -> Int {
         left = rt_mem_sub(left, written)
     }
     0
+}
+
+// `write` on Windows: one `WriteFile` of the `count` bytes at `buf` to
+// `fd`, where 0, 1 and 2 are the standard handles and any other is a
+// handle. The bytes written, or a negative error.
+fn win_write(fd: Int, buf: Int, count: Int) -> Int {
+    let done = global(48)
+    rt_mem_store64(done, 0)
+    let ok = rt_sys_write_file(win_handle(fd), buf, count, done)
+    if ok < 0 {
+        return ok
+    }
+    rt_mem_load32(done)
+}
+
+// `read` on Windows: one `ReadFile` into the `count` bytes at `buf` from
+// `fd`. The bytes read, 0 at the end, or a negative error; a pipe whose
+// writer has gone (`ERROR_BROKEN_PIPE`) is the end.
+fn win_read(fd: Int, buf: Int, count: Int) -> Int {
+    let done = global(48)
+    rt_mem_store64(done, 0)
+    let ok = rt_sys_read_file(win_handle(fd), buf, count, done)
+    if ok == -109 {
+        return 0
+    }
+    if ok < 0 {
+        return ok
+    }
+    rt_mem_load32(done)
+}
+
+// The Windows handle behind the descriptor `fd`.
+fn win_handle(fd: Int) -> Int {
+    if fd >= 0 && fd <= 2 {
+        return rt_mem_load64(global(45 + fd))
+    }
+    fd
 }
 
 // ---- I/O errors ------------------------------------------------------------
@@ -2454,15 +2647,19 @@ fn stdin_fill() -> Int {
     if end == capacity {
         let bigger = map(0, capacity * 2, 3, private_anonymous())
         copy_bytes(bigger, buf, end)
-        let _ = rt_sys_munmap(buf, capacity)
+        if on_windows() {
+            let _ = rt_sys_virtual_free(buf)
+        } else {
+            let _ = rt_sys_munmap(buf, capacity)
+        }
         buf = bigger
         capacity = capacity * 2
         rt_mem_store64(global(16), buf)
         rt_mem_store64(global(19), capacity)
     }
-    var read = rt_sys_read(0, rt_mem_add(buf, end), capacity - end)
-    while read == -4 {
-        read = rt_sys_read(0, rt_mem_add(buf, end), capacity - end)
+    var read = if on_windows() { win_read(0, rt_mem_add(buf, end), capacity - end) } else { rt_sys_read(0, rt_mem_add(buf, end), capacity - end) }
+    while interrupted(read) {
+        read = if on_windows() { win_read(0, rt_mem_add(buf, end), capacity - end) } else { rt_sys_read(0, rt_mem_add(buf, end), capacity - end) }
     }
     if read > 0 {
         rt_mem_store64(global(18), end + read)
@@ -2660,6 +2857,9 @@ pub fn clock_now_millis(clock: Clock) -> Int {
     if faking() {
         return 0
     }
+    if on_windows() {
+        return win_now_millis()
+    }
     let object = alloc(24)
     let _ = rt_sys_clock_gettime(0, rt_mem_add(object, 8))
     let seconds = rt_mem_load64(rt_mem_add(object, 8))
@@ -2675,9 +2875,14 @@ pub fn clock_now_millis(clock: Clock) -> Int {
 pub fn random_next_int(random: Random) -> Int {
     if rt_mem_load64(global(21)) == 0 {
         let object = alloc(24)
-        let got = rt_sys_random(rt_mem_add(object, 8), 8)
+        var got = 0
+        if on_windows() {
+            got = rt_sys_process_prng(rt_mem_add(object, 8), 8)
+        } else {
+            got = rt_sys_random(rt_mem_add(object, 8), 8)
+        }
         var seed = rt_mem_load64(rt_mem_add(object, 8))
-        if got < 0 {
+        if got < 0 && !on_windows() {
             let _ = rt_sys_clock_gettime(0, rt_mem_add(object, 8))
             let nanos = rt_mem_load64(rt_mem_add(object, 16))
             seed = rt_mem_xor(rt_mem_load64(rt_mem_add(object, 8)), rt_mem_shl(nanos, 20))
@@ -3155,7 +3360,7 @@ fn open_name(dirfd: Int, name: String, flags: Int) -> Int {
         return 0 - nul_in_name()
     }
     var fd = rt_sys_openat(dirfd, text_data(path), flags, 438)
-    while fd == -4 {
+    while interrupted(fd) {
         fd = rt_sys_openat(dirfd, text_data(path), flags, 438)
     }
     free(path)
@@ -3717,8 +3922,9 @@ fn read_all(fd: Int) -> Result<String, IoError> {
             object = larger
             capacity = rt_mem_shl(capacity, 1)
         }
-        let got = rt_sys_read(fd, rt_mem_add(text_data(object), length), io_count(capacity - length))
-        if got == -4 {
+        let into = rt_mem_add(text_data(object), length)
+        let got = if on_windows() { win_read(fd, into, io_count(capacity - length)) } else { rt_sys_read(fd, into, io_count(capacity - length)) }
+        if interrupted(got) {
             continue
         }
         if got < 0 {
@@ -3745,7 +3951,7 @@ fn read_all(fd: Int) -> Result<String, IoError> {
 fn write_beneath(root: Int, names: List<String>, contents: String) -> Result<(), IoError> {
     let fd = open_file(root, names, file_write_flags())?
     var emptied = rt_sys_ftruncate(fd, 0)
-    while emptied == -4 {
+    while interrupted(emptied) {
         emptied = rt_sys_ftruncate(fd, 0)
     }
     if emptied < 0 {
@@ -3782,7 +3988,7 @@ fn make_dir(parent: Int, names: List<String>) -> Result<(), IoError> {
         return Err(io_error_text(os_error(nul_in_name())))
     }
     var made = rt_sys_mkdirat(parent, text_data(path), 511)
-    while made == -4 {
+    while interrupted(made) {
         made = rt_sys_mkdirat(parent, text_data(path), 511)
     }
     free(path)
@@ -3831,7 +4037,7 @@ fn entries(dir: Int, shown: String) -> Result<List<String>, IoError> {
     var failed = 0
     while true {
         var got = rt_sys_read_dir(handle, data, 32760)
-        if got == -4 {
+        if interrupted(got) {
             continue
         }
         // The C library's `readdir` takes `ENOENT`, a directory removed
@@ -4627,4 +4833,257 @@ fn fake_entries(path: String) -> Result<List<String>, IoError> {
         last = name
     }
     Ok(names)
+}
+
+// ---- Windows ---------------------------------------------------------------
+//
+// What Windows does differently (ADR 0020). The process has no `argc` and
+// `argv`: `win_process_init` makes them, and `envp`, from the command line
+// and the environment block, converted from UTF-16 to UTF-8 here, so that
+// the rest of `std.rt` reads them as on Linux. Faults reach `on_exception`
+// through a vectored exception handler; there is no signal.
+
+// Start-up on Windows: the standard handles, the fault handler at
+// `handler` (the backend's entry to `on_exception`), stack for it after a
+// stack overflow, and the arguments and environment. An argument that is
+// not valid Unicode is refused as on Linux.
+fn win_process_init(handler: Int) {
+    rt_mem_store64(global(45), win_std_handle(-10))
+    rt_mem_store64(global(46), win_std_handle(-11))
+    rt_mem_store64(global(47), win_std_handle(-12))
+    let _ = rt_sys_add_exception_handler(1, handler)
+    rt_mem_store64(global(48), 65536)
+    let _ = rt_sys_stack_guarantee(global(48))
+    let argc = win_arguments()
+    let argv = rt_mem_load64(global(11))
+    win_environment()
+    var i = 0
+    while i < argc {
+        if !cstr_valid(rt_mem_load64(rt_mem_add(argv, rt_mem_shl(i, 3)))) {
+            let _ = write_text(report_fd(), "error: a command-line argument is not valid UTF-8\n")
+            exit(101)
+        }
+        i = i + 1
+    }
+}
+
+// The standard handle `n`, or 0 when there is none: a write to it fails.
+fn win_std_handle(n: Int) -> Int {
+    let handle = rt_sys_get_std_handle(n)
+    if handle < 0 {
+        return 0
+    }
+    handle
+}
+
+// The number of UTF-16 units before the NUL at `at`.
+fn utf16_length(at: Int) -> Int {
+    var n = 0
+    while rt_mem_load16(rt_mem_add(at, rt_mem_shl(n, 1))) != 0 {
+        n = n + 1
+    }
+    n
+}
+
+// Write the `count` UTF-16 units at `from` as UTF-8 at `to`, which has room
+// for 3 bytes a unit: the bytes written. An unpaired surrogate becomes the
+// byte 255, which no UTF-8 text has, so the text is refused as invalid.
+fn utf16_to_utf8(to: Int, from: Int, count: Int) -> Int {
+    var i = 0
+    var at = 0
+    while i < count {
+        let unit = rt_mem_load16(rt_mem_add(from, rt_mem_shl(i, 1)))
+        i = i + 1
+        if unit >= 55296 && unit < 57344 {
+            var paired = false
+            if unit < 56320 && i < count {
+                let low = rt_mem_load16(rt_mem_add(from, rt_mem_shl(i, 1)))
+                if low >= 56320 && low < 57344 {
+                    let cp = 65536 + rt_mem_shl(unit - 55296, 10) + (low - 56320)
+                    at = at + encode_at(rt_mem_add(to, at), cp)
+                    i = i + 1
+                    paired = true
+                }
+            }
+            if !paired {
+                rt_mem_store8(rt_mem_add(to, at), 255)
+                at = at + 1
+            }
+        } else {
+            at = at + encode_at(rt_mem_add(to, at), unit)
+        }
+    }
+    at
+}
+
+// Split the command line into `argv` as Microsoft's C runtime does
+// ("Parsing C command-line arguments"): the program's name up to a space
+// or tab, or between quotes; then arguments between spaces and tabs, where
+// quotes group, `""` inside quotes is a quote, and backslashes are literal
+// but before a quote, where each pair is one backslash and an odd one
+// makes the quote literal. It sets words 10 and 11, as Linux's start does:
+// the count.
+fn win_arguments() -> Int {
+    let line = rt_sys_command_line()
+    let units = utf16_length(line)
+    let text = map(0, rt_mem_add(rt_mem_mul(units, 3), 8), 3, 0)
+    let length = utf16_to_utf8(text, line, units)
+    // Each argument and its NUL fits in the text and one more byte per
+    // argument; there are at most `length / 2 + 2` of them.
+    let out = map(0, rt_mem_add(rt_mem_shl(length, 1), 8), 3, 0)
+    let argv = map(0, rt_mem_shl(length + 3, 3), 3, 0)
+    var argc = 0
+    var o = 0
+    var i = 0
+    // The program's name.
+    rt_mem_store64(argv, out)
+    var quoted = false
+    while i < length {
+        let c = rt_mem_load8(rt_mem_add(text, i))
+        if c == 34 {
+            quoted = !quoted
+        } else if !quoted && (c == 32 || c == 9) {
+            break
+        } else {
+            rt_mem_store8(rt_mem_add(out, o), c)
+            o = o + 1
+        }
+        i = i + 1
+    }
+    rt_mem_store8(rt_mem_add(out, o), 0)
+    o = o + 1
+    argc = 1
+    while true {
+        while i < length && (rt_mem_load8(rt_mem_add(text, i)) == 32 || rt_mem_load8(rt_mem_add(text, i)) == 9) {
+            i = i + 1
+        }
+        if i >= length {
+            break
+        }
+        rt_mem_store64(rt_mem_add(argv, rt_mem_shl(argc, 3)), rt_mem_add(out, o))
+        argc = argc + 1
+        quoted = false
+        while i < length {
+            let c = rt_mem_load8(rt_mem_add(text, i))
+            if !quoted && (c == 32 || c == 9) {
+                break
+            }
+            if c == 92 {
+                var slashes = 0
+                while i < length && rt_mem_load8(rt_mem_add(text, i)) == 92 {
+                    slashes = slashes + 1
+                    i = i + 1
+                }
+                let before_quote = i < length && rt_mem_load8(rt_mem_add(text, i)) == 34
+                var put = slashes
+                if before_quote {
+                    put = slashes / 2
+                }
+                var k = 0
+                while k < put {
+                    rt_mem_store8(rt_mem_add(out, o), 92)
+                    o = o + 1
+                    k = k + 1
+                }
+                if before_quote && slashes % 2 == 1 {
+                    rt_mem_store8(rt_mem_add(out, o), 34)
+                    o = o + 1
+                    i = i + 1
+                }
+                continue
+            }
+            if c == 34 {
+                if quoted && i + 1 < length && rt_mem_load8(rt_mem_add(text, i + 1)) == 34 {
+                    rt_mem_store8(rt_mem_add(out, o), 34)
+                    o = o + 1
+                    i = i + 2
+                    continue
+                }
+                quoted = !quoted
+                i = i + 1
+                continue
+            }
+            rt_mem_store8(rt_mem_add(out, o), c)
+            o = o + 1
+            i = i + 1
+        }
+        rt_mem_store8(rt_mem_add(out, o), 0)
+        o = o + 1
+    }
+    rt_mem_store64(rt_mem_add(argv, rt_mem_shl(argc, 3)), 0)
+    rt_mem_store64(global(10), argc)
+    rt_mem_store64(global(11), argv)
+    argc
+}
+
+// Make `envp` (word 12) from the environment block: its strings, each
+// `NAME=value` and NUL-terminated, after the last an empty one.
+fn win_environment() {
+    let block = rt_sys_environment()
+    var count = 0
+    var units = 0
+    if block > 0 {
+        var at = block
+        while rt_mem_load16(at) != 0 {
+            let n = utf16_length(at)
+            count = count + 1
+            units = units + n + 1
+            at = rt_mem_add(at, rt_mem_shl(n + 1, 1))
+        }
+    }
+    let envp = map(0, rt_mem_shl(count + 1, 3), 3, 0)
+    let out = map(0, rt_mem_add(rt_mem_mul(units, 3), 8), 3, 0)
+    var o = 0
+    var at = block
+    var k = 0
+    while k < count {
+        let n = utf16_length(at)
+        rt_mem_store64(rt_mem_add(envp, rt_mem_shl(k, 3)), rt_mem_add(out, o))
+        o = o + utf16_to_utf8(rt_mem_add(out, o), at, n)
+        rt_mem_store8(rt_mem_add(out, o), 0)
+        o = o + 1
+        at = rt_mem_add(at, rt_mem_shl(n + 1, 1))
+        k = k + 1
+    }
+    rt_mem_store64(rt_mem_add(envp, rt_mem_shl(count, 3)), 0)
+    rt_mem_store64(global(12), envp)
+}
+
+// The realtime clock in milliseconds since 1970, from Windows' time in
+// 100-nanosecond intervals since 1601.
+fn win_now_millis() -> Int {
+    let at = global(48)
+    let _ = rt_sys_system_time(at)
+    (rt_mem_load64(at) - 116444736000000000) / 10000
+}
+
+// The vectored exception handler, which Windows calls with the address of
+// an `EXCEPTION_POINTERS` for every exception in the process. A fault, an
+// exception whose code is an error (0xC0000000 and up) or a breakpoint
+// (0x80000003) or a single step (0x80000004), means a bug in the native
+// backend, as a fault signal does on Unix (`on_fault`): it writes what
+// standard output holds and a report naming the code, allocating nothing,
+// then ends the process with the code, as the fault would have. Any other
+// exception is someone else's: 0, `EXCEPTION_CONTINUE_SEARCH`.
+pub fn on_exception(pointers: Int) -> Int {
+    let code = rt_mem_load32(rt_mem_load64(pointers))
+    if code < 3221225472 && code != 2147483651 && code != 2147483652 {
+        return 0
+    }
+    let used = rt_mem_load64(global(14))
+    if used > 0 {
+        rt_mem_store64(global(14), 0)
+        let _ = write_all(1, rt_mem_load64(global(13)), used)
+    }
+    let _ = write_text(2, "error: the native program faulted with exception 0x")
+    let at = global(29)
+    var i = 0
+    while i < 8 {
+        rt_mem_store8(rt_mem_add(at, i), upper_hex_digit(rt_mem_and(rt_mem_shr(code, 28 - 4 * i), 15)))
+        i = i + 1
+    }
+    let _ = write_all(2, at, 8)
+    let _ = write_text(2, "\n")
+    let _ = rt_sys_exit_process(code)
+    0
 }

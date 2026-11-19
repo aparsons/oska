@@ -19,7 +19,7 @@ use oska_syntax::Diagnostic;
 
 use crate::intrinsics::{self, Platform};
 use crate::ir::{Module, Symbol};
-use crate::{aarch64, codes, elf, macho, x86_64, NOWHERE};
+use crate::{aarch64, codes, elf, macho, pe, x86_64, NOWHERE};
 
 /// A target platform the backend compiles for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -34,6 +34,9 @@ pub enum Target {
     MacosAarch64,
     /// macOS on x86_64 (Intel): the same, with x86_64's instructions.
     MacosX86_64,
+    /// Windows on x86_64: a PE32+ that the Windows loader loads, calling
+    /// the system through `kernel32.dll` (ADR 0020).
+    WindowsX86_64,
 }
 
 /// Every supported platform, by name, in the order messages list them:
@@ -43,23 +46,24 @@ const PLATFORMS: [(&str, Result<Target, &str>); 5] = [
     ("linux-x86_64", Ok(Target::LinuxX86_64)),
     ("macos-aarch64", Ok(Target::MacosAarch64)),
     ("macos-x86_64", Ok(Target::MacosX86_64)),
-    ("windows-x86_64", Err("v0.6.0")),
+    ("windows-x86_64", Ok(Target::WindowsX86_64)),
 ];
 
 impl Target {
     /// Every target the backend compiles for, in the order `oskac build
     /// --target all` builds them.
-    pub const ALL: [Target; 4] = [
+    pub const ALL: [Target; 5] = [
         Target::LinuxAarch64,
         Target::LinuxX86_64,
         Target::MacosAarch64,
         Target::MacosX86_64,
+        Target::WindowsX86_64,
     ];
 
     /// The target for the supported platform named `platform`. An
-    /// unknown name is refused with `E0393`, listing the names; a
-    /// supported platform with no backend yet with `E0394`, naming the
-    /// release that adds it.
+    /// unknown name is refused with `E0393`, listing the names. A
+    /// supported platform with no backend would be refused with `E0394`,
+    /// naming the release that adds it; today every one has a backend.
     pub fn named(platform: &str) -> Result<Target, Diagnostic> {
         match PLATFORMS.iter().find(|(name, _)| *name == platform) {
             Some((_, Ok(target))) => Ok(*target),
@@ -91,8 +95,21 @@ impl Target {
     /// line here.
     pub fn host() -> Option<Target> {
         let host = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
-        Target::ALL.into_iter().find(|target| target.name() == host)
+        Target::HOSTS
+            .into_iter()
+            .find(|target| target.name() == host)
     }
+
+    /// The targets `oskac run` and `oskac test` compile for on a host of
+    /// the same platform. Windows joins when every program runs natively
+    /// there (#179); until then a Windows host runs programs on the
+    /// interpreter, and `oskac build --target windows-x86_64` builds.
+    pub const HOSTS: [Target; 4] = [
+        Target::LinuxAarch64,
+        Target::LinuxX86_64,
+        Target::MacosAarch64,
+        Target::MacosX86_64,
+    ];
 
     /// The platform's name, as release assets name `oskac` builds.
     pub fn name(self) -> &'static str {
@@ -101,6 +118,16 @@ impl Target {
             Target::LinuxX86_64 => "linux-x86_64",
             Target::MacosAarch64 => "macos-aarch64",
             Target::MacosX86_64 => "macos-x86_64",
+            Target::WindowsX86_64 => "windows-x86_64",
+        }
+    }
+
+    /// What an executable's name ends with: `.exe` on Windows, which
+    /// runs a file by its extension, and nothing elsewhere.
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Target::WindowsX86_64 => ".exe",
+            _ => "",
         }
     }
 
@@ -112,6 +139,7 @@ impl Target {
             Target::LinuxX86_64 => intrinsics::LINUX_X86_64,
             Target::MacosAarch64 => intrinsics::MACOS_AARCH64,
             Target::MacosX86_64 => intrinsics::MACOS_X86_64,
+            Target::WindowsX86_64 => intrinsics::WINDOWS_X86_64,
         }
     }
 
@@ -120,7 +148,9 @@ impl Target {
     pub(crate) fn register_args(self) -> usize {
         match self {
             Target::LinuxAarch64 | Target::MacosAarch64 => aarch64::REGISTER_ARGS,
-            Target::LinuxX86_64 | Target::MacosX86_64 => x86_64::REGISTER_ARGS,
+            Target::LinuxX86_64 | Target::MacosX86_64 | Target::WindowsX86_64 => {
+                x86_64::REGISTER_ARGS
+            }
         }
     }
 
@@ -129,13 +159,21 @@ impl Target {
     pub(crate) fn emit(self, module: &Module) -> Result<Box<dyn Code>, String> {
         match self {
             Target::LinuxAarch64 | Target::MacosAarch64 => Ok(Box::new(aarch64::emit(module)?)),
-            Target::LinuxX86_64 | Target::MacosX86_64 => Ok(Box::new(x86_64::emit(module)?)),
+            Target::LinuxX86_64 | Target::MacosX86_64 => Ok(Box::new(x86_64::emit(module, false)?)),
+            Target::WindowsX86_64 => Ok(Box::new(x86_64::emit(module, true)?)),
         }
     }
 
     /// The executable file for this target, holding `text`, `rodata`
-    /// and `data_size` bytes of zeroed writable data.
-    pub(crate) fn file(self, text: &dyn Code, rodata: &[u8], data_size: u32) -> Vec<u8> {
+    /// and `data_size` bytes of zeroed writable data, for a program whose
+    /// stack needs `stack` bytes.
+    pub(crate) fn file(
+        self,
+        text: &dyn Code,
+        rodata: &[u8],
+        data_size: u32,
+        stack: u64,
+    ) -> Vec<u8> {
         let elf = |e_machine, page| {
             elf::write(&elf::Machine { e_machine, page }, text, rodata, data_size)
         };
@@ -172,6 +210,21 @@ impl Target {
                 rodata,
                 data_size,
             ),
+            Target::WindowsX86_64 => {
+                let imports: Vec<pe::Import> = self
+                    .platform()
+                    .imports
+                    .iter()
+                    .map(|i| pe::Import {
+                        library: i.library,
+                        name: i.symbol,
+                    })
+                    .collect();
+                // The program's stack, and 1 MiB for Windows' own use
+                // below it, in the 64 KiB the loader reserves by.
+                let reserve = (stack + (1 << 20)).next_multiple_of(1 << 16);
+                pe::write(text, rodata, data_size, &imports, reserve)
+            }
         }
     }
 

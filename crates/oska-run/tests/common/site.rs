@@ -205,11 +205,16 @@ pub fn real_inputs() -> BTreeMap<String, String> {
 }
 
 /// The real site: the generator on [`real_inputs`], asserting that it
-/// succeeded.
+/// succeeded. It is built once per test binary and cloned for each
+/// caller: a build takes seconds, and several tests read it.
 pub fn real_site() -> BTreeMap<String, String> {
-    let (outcome, site) = build(&real_inputs());
-    assert_succeeded(&outcome);
-    site
+    static SITE: std::sync::OnceLock<BTreeMap<String, String>> = std::sync::OnceLock::new();
+    SITE.get_or_init(|| {
+        let (outcome, site) = build(&real_inputs());
+        assert_succeeded(&outcome);
+        site
+    })
+    .clone()
 }
 
 /// The repository's tracked files, as the Pages workflow lists them:

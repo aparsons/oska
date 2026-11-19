@@ -65,6 +65,12 @@ fn linux_shared() -> Vec<(&'static str, i128)> {
         // which `oskac`'s `std_rt_errors.rs` checks against `oska-sys`.
         ("errors_at", 0),
         ("errors_count", 133),
+        // Not Windows (ADR 0020); asm-generic/errno-base.h: EINTR and
+        // EPIPE, with no second broken-pipe error.
+        ("windows", 0),
+        ("e_intr", 4),
+        ("e_pipe", 32),
+        ("e_pipe_alt", 0),
     ]
 }
 

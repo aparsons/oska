@@ -215,6 +215,22 @@ pub enum Sys {
     Getpid,
     Kill,
     Exit,
+    // Windows' own calls, one per kernel32 or bcryptprimitives function
+    // (ADR 0020): no other platform has them.
+    GetStdHandle,
+    WriteFile,
+    ReadFile,
+    GetConsoleMode,
+    WriteConsole,
+    VirtualAlloc,
+    VirtualFree,
+    ExitProcess,
+    CommandLine,
+    Environment,
+    AddExceptionHandler,
+    StackGuarantee,
+    SystemTime,
+    ProcessPrng,
 }
 
 /// What the backend gives `std.rt` for a target platform: how its
@@ -233,9 +249,14 @@ pub struct Platform {
     /// [`Platform::errno`] (ADR 0015: the list is part of the reviewed
     /// surface of the operating-system interface, like [`RUNTIME`]).
     pub imports: &'static [&'static Import],
-    /// The function that gives the address of the thread's `errno`, by
-    /// its index in [`Platform::imports`], for a library call that fails.
+    /// The function that gives the thread's error, by its index in
+    /// [`Platform::imports`], for a library call that fails, and how it
+    /// gives it.
     pub errno: u16,
+    pub error: ErrorRead,
+    /// The result of a call the platform does not have
+    /// ([`OsCall::Absent`]): its "not supported" error, negated.
+    pub absent: i64,
     /// How the entry point finds the program's arguments.
     pub start: Start,
 }
@@ -249,6 +270,19 @@ pub enum Start {
     /// The dynamic loader calls it as C's `main(argc, argv)`, by the
     /// platform's C calling convention (macOS's `LC_MAIN`).
     Main,
+    /// The loader calls it with nothing the program uses: `std.rt` reads
+    /// the command line and the environment itself, and the program runs
+    /// on the thread's own stack (Windows, ADR 0020).
+    Windows,
+}
+
+/// How a platform's error function gives a failed call's error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorRead {
+    /// The address of a 32-bit `errno` (macOS's `__error()`).
+    Address,
+    /// The error itself (Windows' `GetLastError()`).
+    Value,
 }
 
 impl Platform {
@@ -259,7 +293,18 @@ impl Platform {
             .imports
             .iter()
             .position(|i| i.symbol == import.symbol)?;
-        u16::try_from(at).ok()
+        self.slot_of(at)
+    }
+
+    /// The import table's slot of the `index`th import: its index, past
+    /// the null slot that ends each library's run before it (PE's import
+    /// address table; a Mach-O has one library and no such slot).
+    pub fn slot_of(&self, index: usize) -> Option<u16> {
+        let breaks = self.imports[..=index.min(self.imports.len().checked_sub(1)?)]
+            .windows(2)
+            .filter(|pair| pair[0].library != pair[1].library)
+            .count();
+        u16::try_from(index + breaks).ok()
     }
 }
 
@@ -280,14 +325,19 @@ pub enum OsCall {
     Library(&'static Import),
     /// No call: the result is the intrinsic's first argument.
     Same,
+    /// No call: the platform has no such call, and `std.rt` never makes
+    /// it there (ADR 0020). The result is [`Platform::absent`].
+    Absent,
 }
 
 /// A function the executable imports from the platform's library, and
 /// how a call of it is made and read (ADR 0015).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Import {
-    /// Its symbol, as the library exports it: C's name with a leading
-    /// `_`.
+    /// The library it comes from, as the executable names it.
+    pub library: &'static str,
+    /// Its symbol, as the library exports it: on macOS, C's name with a
+    /// leading `_`.
     pub symbol: &'static str,
     /// How many of the intrinsic's arguments it takes: the rest are
     /// dropped (`readdir` takes only the directory).
@@ -316,6 +366,9 @@ pub enum Fails {
     /// only on failure (`readdir`): `errno` is cleared before the call,
     /// and a `NULL` with `errno` still 0 is the result 0.
     NullKeepsErrno,
+    /// It returns 0 (`FALSE` or `NULL`) and the error function gives
+    /// the error (Windows).
+    Zero,
     /// It cannot fail, or does not return.
     Never,
 }
@@ -326,6 +379,8 @@ pub const LINUX_AARCH64: Platform = Platform {
     call: linux_aarch64_call,
     imports: &[],
     errno: 0,
+    error: ErrorRead::Address,
+    absent: -38,
     start: Start::Stack,
 };
 
@@ -334,6 +389,9 @@ pub const LINUX_AARCH64: Platform = Platform {
 /// processor: `getrandom`'s flags (none), and `rt_sigaction`'s old
 /// action (none kept) and the size of its signal mask in bytes.
 fn linux_call(call: Sys, number: fn(Sys) -> Option<u16>) -> OsCall {
+    if windows_only(call) {
+        return OsCall::Absent;
+    }
     let Some(number) = number(call) else {
         return OsCall::Same;
     };
@@ -377,6 +435,8 @@ fn linux_aarch64_syscall(call: Sys) -> Option<u16> {
         Sys::Getpid => 172,
         Sys::Kill => 129,
         Sys::Exit => 94,
+        // Windows' own: absent (`linux_call`).
+        _ => return None,
     })
 }
 
@@ -386,6 +446,8 @@ pub const LINUX_X86_64: Platform = Platform {
     call: linux_x86_64_call,
     imports: &[],
     errno: 0,
+    error: ErrorRead::Address,
+    absent: -38,
     start: Start::Stack,
 };
 
@@ -419,6 +481,7 @@ fn linux_x86_64_syscall(call: Sys) -> Option<u16> {
         Sys::Getpid => 39,
         Sys::Kill => 62,
         Sys::Exit => 231,
+        _ => return None,
     })
 }
 
@@ -429,6 +492,9 @@ pub const MACOS_AARCH64: Platform = Platform {
     call: macos_call,
     imports: &MACOS_IMPORTS,
     errno: 0,
+    error: ErrorRead::Address,
+    // `ENOSYS`.
+    absent: -78,
     start: Start::Main,
 };
 
@@ -443,6 +509,9 @@ pub const MACOS_X86_64: Platform = Platform {
     call: macos_x86_64_call,
     imports: &MACOS_X86_64_IMPORTS,
     errno: 0,
+    error: ErrorRead::Address,
+    // `ENOSYS`.
+    absent: -78,
     start: Start::Main,
 };
 
@@ -450,6 +519,7 @@ pub const MACOS_X86_64: Platform = Platform {
 /// most do: `args` arguments and an `int` result.
 const fn plain(symbol: &'static str, args: u8) -> Import {
     Import {
+        library: "/usr/lib/libSystem.B.dylib",
         symbol,
         args,
         fixed: args,
@@ -615,6 +685,9 @@ const MACOS_X86_64_IMPORTS: [&Import; 24] = [
 /// listed through a `DIR *` that owns its descriptor (`fdopendir`,
 /// `readdir`, `closedir`), one record at a time.
 fn macos_call(call: Sys) -> OsCall {
+    if windows_only(call) {
+        return OsCall::Absent;
+    }
     OsCall::Library(match call {
         Sys::Read => &READ,
         Sys::Write => &WRITE,
@@ -639,6 +712,181 @@ fn macos_call(call: Sys) -> OsCall {
         Sys::Getpid => &GETPID,
         Sys::Kill => &KILL,
         Sys::Exit => &EXIT,
+        _ => return OsCall::Absent,
+    })
+}
+
+/// Whether `call` is one of Windows' own, which no other platform has.
+fn windows_only(call: Sys) -> bool {
+    matches!(
+        call,
+        Sys::GetStdHandle
+            | Sys::WriteFile
+            | Sys::ReadFile
+            | Sys::GetConsoleMode
+            | Sys::WriteConsole
+            | Sys::VirtualAlloc
+            | Sys::VirtualFree
+            | Sys::ExitProcess
+            | Sys::CommandLine
+            | Sys::Environment
+            | Sys::AddExceptionHandler
+            | Sys::StackGuarantee
+            | Sys::SystemTime
+            | Sys::ProcessPrng
+    )
+}
+
+/// `windows-x86_64`: every call is a function of `kernel32.dll` or
+/// `bcryptprimitives.dll`, through the import table, by the Windows x64
+/// convention, and a failure is `-GetLastError()` (ADR 0020). The POSIX
+/// calls are absent.
+pub const WINDOWS_X86_64: Platform = Platform {
+    table: "windows_x86_64",
+    call: windows_call,
+    imports: &WINDOWS_IMPORTS,
+    errno: 0,
+    error: ErrorRead::Value,
+    // `ERROR_CALL_NOT_IMPLEMENTED`.
+    absent: -120,
+    start: Start::Windows,
+};
+
+const KERNEL32: &str = "KERNEL32.dll";
+const BCRYPTPRIMITIVES: &str = "bcryptprimitives.dll";
+
+/// A function of `kernel32.dll` that takes `args` of the intrinsic's
+/// arguments, gives a `BOOL` and fails with `FALSE`.
+const fn win(symbol: &'static str, args: u8) -> Import {
+    Import {
+        library: KERNEL32,
+        symbol,
+        args,
+        fixed: args,
+        wide: false,
+        fails: Fails::Zero,
+        extra_args: &[],
+    }
+}
+
+/// `GetLastError()`: the thread's last error, no intrinsic's.
+const GET_LAST_ERROR: Import = Import {
+    fails: Fails::Never,
+    ..win("GetLastError", 0)
+};
+/// `GetStdHandle(n)`: a handle, `INVALID_HANDLE_VALUE` (-1) on failure,
+/// or `NULL` when the process has none.
+const GET_STD_HANDLE: Import = Import {
+    wide: true,
+    fails: Fails::MinusOne,
+    ..win("GetStdHandle", 1)
+};
+/// `WriteFile(h, buf, count, &done, NULL)`, synchronous.
+const WRITE_FILE: Import = Import {
+    fixed: 5,
+    extra_args: &[0],
+    ..win("WriteFile", 4)
+};
+/// `ReadFile(h, buf, count, &done, NULL)`, synchronous.
+const READ_FILE: Import = Import {
+    fixed: 5,
+    extra_args: &[0],
+    ..win("ReadFile", 4)
+};
+const GET_CONSOLE_MODE: Import = win("GetConsoleMode", 2);
+/// `WriteConsoleW(h, text, count, &done, NULL)`: UTF-16 units.
+const WRITE_CONSOLE: Import = Import {
+    fixed: 5,
+    extra_args: &[0],
+    ..win("WriteConsoleW", 4)
+};
+/// `VirtualAlloc(addr, size, type, protect)`: an address, or `NULL`.
+const VIRTUAL_ALLOC: Import = Import {
+    wide: true,
+    ..win("VirtualAlloc", 4)
+};
+/// `VirtualFree(addr, 0, MEM_RELEASE)`: the whole mapping.
+const VIRTUAL_FREE: Import = Import {
+    fixed: 3,
+    extra_args: &[0, 0x8000],
+    ..win("VirtualFree", 1)
+};
+const EXIT_PROCESS: Import = Import {
+    fails: Fails::Never,
+    ..win("ExitProcess", 1)
+};
+/// `GetCommandLineW()`: the process's command line, which cannot fail.
+const GET_COMMAND_LINE: Import = Import {
+    wide: true,
+    fails: Fails::Never,
+    ..win("GetCommandLineW", 0)
+};
+/// `GetEnvironmentStringsW()`: the environment block, or `NULL`.
+const GET_ENVIRONMENT: Import = Import {
+    wide: true,
+    ..win("GetEnvironmentStringsW", 0)
+};
+/// `AddVectoredExceptionHandler(1, handler)`: the first handler called.
+const ADD_EXCEPTION_HANDLER: Import = Import {
+    wide: true,
+    fixed: 2,
+    extra_args: &[],
+    ..win("AddVectoredExceptionHandler", 2)
+};
+/// `SetThreadStackGuarantee(&size)`.
+const STACK_GUARANTEE: Import = win("SetThreadStackGuarantee", 1);
+/// `GetSystemTimePreciseAsFileTime(&time)`: no result, cannot fail.
+const SYSTEM_TIME: Import = Import {
+    fails: Fails::Never,
+    ..win("GetSystemTimePreciseAsFileTime", 1)
+};
+/// `ProcessPrng(buf, count)`: always `TRUE`.
+const PROCESS_PRNG: Import = Import {
+    library: BCRYPTPRIMITIVES,
+    fails: Fails::Never,
+    ..win("ProcessPrng", 2)
+};
+
+/// Every function a Windows executable imports, `kernel32.dll`'s first:
+/// always all of them, so the import table depends on the target alone.
+/// [`GET_LAST_ERROR`] is first ([`Platform::errno`]).
+const WINDOWS_IMPORTS: [&Import; 15] = [
+    &GET_LAST_ERROR,
+    &GET_STD_HANDLE,
+    &WRITE_FILE,
+    &READ_FILE,
+    &GET_CONSOLE_MODE,
+    &WRITE_CONSOLE,
+    &VIRTUAL_ALLOC,
+    &VIRTUAL_FREE,
+    &EXIT_PROCESS,
+    &GET_COMMAND_LINE,
+    &GET_ENVIRONMENT,
+    &ADD_EXCEPTION_HANDLER,
+    &STACK_GUARANTEE,
+    &SYSTEM_TIME,
+    &PROCESS_PRNG,
+];
+
+/// The function behind each of Windows' own calls; the POSIX calls are
+/// absent (ADR 0020).
+fn windows_call(call: Sys) -> OsCall {
+    OsCall::Library(match call {
+        Sys::GetStdHandle => &GET_STD_HANDLE,
+        Sys::WriteFile => &WRITE_FILE,
+        Sys::ReadFile => &READ_FILE,
+        Sys::GetConsoleMode => &GET_CONSOLE_MODE,
+        Sys::WriteConsole => &WRITE_CONSOLE,
+        Sys::VirtualAlloc => &VIRTUAL_ALLOC,
+        Sys::VirtualFree => &VIRTUAL_FREE,
+        Sys::ExitProcess => &EXIT_PROCESS,
+        Sys::CommandLine => &GET_COMMAND_LINE,
+        Sys::Environment => &GET_ENVIRONMENT,
+        Sys::AddExceptionHandler => &ADD_EXCEPTION_HANDLER,
+        Sys::StackGuarantee => &STACK_GUARANTEE,
+        Sys::SystemTime => &SYSTEM_TIME,
+        Sys::ProcessPrng => &PROCESS_PRNG,
+        _ => return OsCall::Absent,
     })
 }
 
@@ -678,6 +926,29 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_sys_getpid", Runtime::Syscall(Sys::Getpid)),
     ("rt_sys_kill", Runtime::Syscall(Sys::Kill)),
     ("rt_sys_exit", Runtime::Syscall(Sys::Exit)),
+    ("rt_sys_get_std_handle", Runtime::Syscall(Sys::GetStdHandle)),
+    ("rt_sys_write_file", Runtime::Syscall(Sys::WriteFile)),
+    ("rt_sys_read_file", Runtime::Syscall(Sys::ReadFile)),
+    (
+        "rt_sys_get_console_mode",
+        Runtime::Syscall(Sys::GetConsoleMode),
+    ),
+    ("rt_sys_write_console", Runtime::Syscall(Sys::WriteConsole)),
+    ("rt_sys_virtual_alloc", Runtime::Syscall(Sys::VirtualAlloc)),
+    ("rt_sys_virtual_free", Runtime::Syscall(Sys::VirtualFree)),
+    ("rt_sys_exit_process", Runtime::Syscall(Sys::ExitProcess)),
+    ("rt_sys_command_line", Runtime::Syscall(Sys::CommandLine)),
+    ("rt_sys_environment", Runtime::Syscall(Sys::Environment)),
+    (
+        "rt_sys_add_exception_handler",
+        Runtime::Syscall(Sys::AddExceptionHandler),
+    ),
+    (
+        "rt_sys_stack_guarantee",
+        Runtime::Syscall(Sys::StackGuarantee),
+    ),
+    ("rt_sys_system_time", Runtime::Syscall(Sys::SystemTime)),
+    ("rt_sys_process_prng", Runtime::Syscall(Sys::ProcessPrng)),
     ("rt_mem_load8", Runtime::Load(Width::W8)),
     ("rt_mem_load16", Runtime::Load(Width::W16)),
     ("rt_mem_load32", Runtime::Load(Width::W32)),
@@ -794,7 +1065,9 @@ mod tests {
                 continue;
             };
             for platform in [LINUX_AARCH64, LINUX_X86_64] {
-                let expected = if *name == "rt_sys_open_dir" {
+                let expected = if windows_only(*call) {
+                    OsCall::Absent
+                } else if *name == "rt_sys_open_dir" {
                     OsCall::Same
                 } else {
                     let (_, aarch64, x86_64, extra_args) = rows
@@ -1027,6 +1300,10 @@ mod tests {
             let Runtime::Syscall(call) = implementation else {
                 continue;
             };
+            if windows_only(*call) {
+                assert_eq!((platform.call)(*call), OsCall::Absent, "`{name}`");
+                continue;
+            }
             let row = rows
                 .iter()
                 .find(|row| row.0 == *name)
@@ -1097,6 +1374,231 @@ mod tests {
                 }
             }
             assert_eq!(imports.len(), platform.imports.len(), "{target:?}");
+        }
+    }
+
+    /// How Windows makes an intrinsic's call: (intrinsic, library,
+    /// symbol, arguments it takes, whole-word result, how it fails,
+    /// trailing constants).
+    type WindowsRow = (
+        &'static str,
+        &'static str,
+        &'static str,
+        u8,
+        bool,
+        Fails,
+        &'static [i64],
+    );
+
+    /// Each of Windows' own calls is one function of `kernel32.dll` (or
+    /// `bcryptprimitives.dll`), made as Microsoft's documentation
+    /// declares it, and every POSIX call is absent (ADR 0020):
+    /// (intrinsic, library, symbol, arguments it takes, whole-word
+    /// result, how it fails, trailing constants).
+    #[test]
+    fn windows_makes_each_call_as_kernel32_declares_it() {
+        use Fails::*;
+        const K: &str = "KERNEL32.dll";
+        let rows: &[WindowsRow] = &[
+            // GetStdHandle: INVALID_HANDLE_VALUE on failure.
+            (
+                "rt_sys_get_std_handle",
+                K,
+                "GetStdHandle",
+                1,
+                true,
+                MinusOne,
+                &[],
+            ),
+            // WriteFile and ReadFile: no OVERLAPPED.
+            ("rt_sys_write_file", K, "WriteFile", 4, false, Zero, &[0]),
+            ("rt_sys_read_file", K, "ReadFile", 4, false, Zero, &[0]),
+            (
+                "rt_sys_get_console_mode",
+                K,
+                "GetConsoleMode",
+                2,
+                false,
+                Zero,
+                &[],
+            ),
+            (
+                "rt_sys_write_console",
+                K,
+                "WriteConsoleW",
+                4,
+                false,
+                Zero,
+                &[0],
+            ),
+            (
+                "rt_sys_virtual_alloc",
+                K,
+                "VirtualAlloc",
+                4,
+                true,
+                Zero,
+                &[],
+            ),
+            // VirtualFree(addr, 0, MEM_RELEASE).
+            (
+                "rt_sys_virtual_free",
+                K,
+                "VirtualFree",
+                1,
+                false,
+                Zero,
+                &[0, 0x8000],
+            ),
+            (
+                "rt_sys_exit_process",
+                K,
+                "ExitProcess",
+                1,
+                false,
+                Never,
+                &[],
+            ),
+            (
+                "rt_sys_command_line",
+                K,
+                "GetCommandLineW",
+                0,
+                true,
+                Never,
+                &[],
+            ),
+            (
+                "rt_sys_environment",
+                K,
+                "GetEnvironmentStringsW",
+                0,
+                true,
+                Zero,
+                &[],
+            ),
+            (
+                "rt_sys_add_exception_handler",
+                K,
+                "AddVectoredExceptionHandler",
+                2,
+                true,
+                Zero,
+                &[],
+            ),
+            (
+                "rt_sys_stack_guarantee",
+                K,
+                "SetThreadStackGuarantee",
+                1,
+                false,
+                Zero,
+                &[],
+            ),
+            (
+                "rt_sys_system_time",
+                K,
+                "GetSystemTimePreciseAsFileTime",
+                1,
+                false,
+                Never,
+                &[],
+            ),
+            // ProcessPrng: "Always returns TRUE".
+            (
+                "rt_sys_process_prng",
+                "bcryptprimitives.dll",
+                "ProcessPrng",
+                2,
+                false,
+                Never,
+                &[],
+            ),
+        ];
+        let platform = WINDOWS_X86_64;
+        for (name, implementation) in RUNTIME {
+            let Runtime::Syscall(call) = implementation else {
+                continue;
+            };
+            if !windows_only(*call) {
+                assert_eq!((platform.call)(*call), OsCall::Absent, "`{name}`");
+                continue;
+            }
+            let row = rows
+                .iter()
+                .find(|row| row.0 == *name)
+                .unwrap_or_else(|| panic!("`{name}` has no row"));
+            let OsCall::Library(import) = (platform.call)(*call) else {
+                panic!("`{name}` is not a library call on Windows");
+            };
+            assert_eq!(
+                (
+                    import.library,
+                    import.symbol,
+                    import.args,
+                    import.wide,
+                    import.fails,
+                    import.extra_args
+                ),
+                (row.1, row.2, row.3, row.4, row.5, row.6),
+                "`{name}`"
+            );
+            // No Windows function is variadic.
+            assert_eq!(
+                usize::from(import.fixed),
+                usize::from(import.args) + import.extra_args.len(),
+                "`{name}`"
+            );
+            assert!(platform.slot(import).is_some(), "`{name}` is imported");
+        }
+        let error = platform.imports[usize::from(platform.errno)];
+        assert_eq!(
+            (error.symbol, platform.error),
+            ("GetLastError", ErrorRead::Value)
+        );
+        assert_eq!(platform.imports.len(), rows.len() + 1);
+        // Each library's imports are together, so each has one run of
+        // slots in the import address table, ended by a null slot.
+        let libraries: Vec<&str> = platform.imports.iter().map(|i| i.library).collect();
+        let mut runs = libraries.clone();
+        runs.dedup();
+        let mut distinct = runs.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(runs.len(), distinct.len());
+        let last = platform.imports.len() - 1;
+        assert_eq!(
+            platform.slot_of(last),
+            u16::try_from(last + runs.len() - 1).ok()
+        );
+    }
+
+    /// A Windows executable makes no system call and reaches every
+    /// import, the program's start through the fault handler's entry.
+    #[test]
+    fn windows_executables_call_only_their_imports() {
+        let report = oska_check::check_module(EVERY_CALL);
+        let program = report.program.expect("the program should check");
+        let rt = oska_check::check_toolchain_rt()
+            .program
+            .expect("std.rt should check");
+        let module = crate::lower::program(
+            &program,
+            &rt,
+            &|d| d,
+            crate::lower::Entry::Main,
+            crate::Target::WindowsX86_64,
+        )
+        .expect("the program should lower");
+        assert!(module.callback.is_some());
+        for inst in module.functions.iter().flat_map(|f| &f.insts) {
+            assert!(
+                !matches!(
+                    inst,
+                    crate::ir::Inst::Syscall { .. } | crate::ir::Inst::EntrySp { .. }
+                ),
+                "a Windows executable has {inst:?}"
+            );
         }
     }
 

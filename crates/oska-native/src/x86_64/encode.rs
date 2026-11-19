@@ -381,6 +381,12 @@ impl Asm {
         self.put(&[0x50 | (r & 7)]);
     }
 
+    /// `pop r`.
+    pub fn pop(&mut self, r: u8) {
+        self.prefix(false, 0, 0, r, false);
+        self.put(&[0x58 | (r & 7)]);
+    }
+
     /// `leave`: `mov rsp, rbp`, then `pop rbp`.
     pub fn leave(&mut self) {
         self.put(&[0xc9]);

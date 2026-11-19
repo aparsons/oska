@@ -30,7 +30,7 @@ root=$(cd "${2:-$(dirname "$0")/../..}" && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-targets=(linux-aarch64 linux-x86_64 macos-aarch64 macos-x86_64)
+targets=(linux-aarch64 linux-x86_64 macos-aarch64 macos-x86_64 windows-x86_64)
 
 list=scripts/cross-build/refused.txt
 if [ ! -f "$root/$list" ]; then

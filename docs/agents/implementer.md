@@ -73,6 +73,10 @@ Outside CI, the cargo steps skip when nothing that cargo reads differs from the 
 
 `OSKA_BUILD_SLOTS=N` makes `scripts/check.sh` wait for one of N machine-wide slots (lock files under `$XDG_RUNTIME_DIR`, else `$TMPDIR`, else `/tmp`) before its build and test steps. It prints one "waiting for a free build slot" line; that is not a hang. The kernel frees the slot when the check ends, however it ends. Unset means no limit (CI, other clones). On the Pi use `OSKA_BUILD_SLOTS=2`, exported with the lean environment. Only `scripts/check.sh` takes a slot; the cargo commands you run while iterating are not limited.
 
+## Oska Core and the formal models
+
+A ticket that changes how a construct of Oska Core is typed or run updates the Lean model in the same pull request, with no `sorry`. A ticket for parallel tasks, `Sched` channels or `select` needs its TLA+ model first. How, and how to run the `formal` step: `docs/agents/formal.md`.
+
 ## Portable tests
 
 Any test that builds paths, puts a path in JSON, or sets a home uses `crates/oskac/tests/common/portable.rs` (`Scratch`, `json_str`, `json_path`, `set_home`, `literal_path`), so it passes on Windows the first time. See `CODING_STANDARDS.md` (Tests).

@@ -663,7 +663,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                     frame.slots.push(value);
                 }
             }
-            Stmt::Assign { place, value } => {
+            Stmt::Assign { place, value, .. } => {
                 let value = self.eval(value, frame)?;
                 // The old value is dropped: a copy elsewhere keeps its own
                 // reference to it.
@@ -676,9 +676,9 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 };
                 return Err(Unwind::Return(value, *span));
             }
-            Stmt::Break => return Err(Unwind::Break),
-            Stmt::Continue => return Err(Unwind::Continue),
-            Stmt::While { cond, body } => self.while_loop(cond, body, frame)?,
+            Stmt::Break(_) => return Err(Unwind::Break),
+            Stmt::Continue(_) => return Err(Unwind::Continue),
+            Stmt::While { cond, body, .. } => self.while_loop(cond, body, frame)?,
             Stmt::For {
                 binds, iter, body, ..
             } => self.for_loop(*binds, iter, body, frame)?,
