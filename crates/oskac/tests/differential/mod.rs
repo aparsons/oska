@@ -167,9 +167,49 @@ pub struct Outcome {
 }
 
 /// The target platform this host builds and runs native executables
-/// for: its own.
+/// for: its own. Windows is not yet a host `oskac run` goes native on
+/// (#179), but its executables run here, so the suite builds for it.
 pub fn host_target() -> oska_native::Target {
+    if cfg!(all(windows, target_arch = "x86_64")) {
+        return oska_native::Target::WindowsX86_64;
+    }
     oska_native::Target::host().expect("this host runs native executables")
+}
+
+/// `each` applied to every item, in order, with the items spread over
+/// as many threads as the host has cores.
+///
+/// A test that goes through many cases one after another uses one core:
+/// on the Intel Mac CI runner that made one test of `native_prelude` take
+/// over a minute. Cases do not share state: each runs in directories
+/// named after it, and [`Case`] names are unique. A case that fails
+/// prints its own message; the other threads run the remaining cases, and
+/// then the test fails.
+pub fn in_parallel<T: Sync, R: Send>(items: &[T], each: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    let next = AtomicUsize::new(0);
+    let results: Mutex<Vec<Option<R>>> = Mutex::new(items.iter().map(|_| None).collect());
+    let threads = std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .min(items.len());
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                let Some(item) = items.get(index) else { break };
+                let result = each(item);
+                results.lock().expect("no thread panics holding the lock")[index] = Some(result);
+            });
+        }
+    });
+    results
+        .into_inner()
+        .expect("no thread panics holding the lock")
+        .into_iter()
+        .map(|result| result.expect("every item was run"))
+        .collect()
 }
 
 /// Run `case` on both backends and require the same outcome, and build
@@ -247,31 +287,44 @@ fn case_root(case: &Case) -> PathBuf {
     root
 }
 
-/// Runs `exe` in `dir` and checks it never holds more than `mib` MiB.
-/// Linux caps the address space with `ulimit -v`; macOS cannot (`ulimit -v`
-/// fails there), so on macOS the peak resident memory `time -l` reports is
-/// checked after the run instead.
+/// Runs `exe` in `dir` and checks it never holds more than `mib` MiB
+/// ([`within_memory`]).
 pub fn run_within_memory(exe: &Path, dir: &Path, mib: u64) -> std::process::Output {
+    within_memory(exe, &[], dir, mib)
+}
+
+/// Runs `program` with `args` in `dir` and checks it never holds more
+/// than `mib` MiB. Linux caps the address space with `ulimit -v`, so a
+/// run that needs more fails; macOS cannot (`ulimit -v` fails there), so
+/// on macOS the peak resident memory `time -l` reports is checked after
+/// the run instead, and its report follows the program's on stderr.
+pub fn within_memory(program: &Path, args: &[&str], dir: &Path, mib: u64) -> std::process::Output {
     let script = if cfg!(target_os = "macos") {
-        "/usr/bin/time -l \"$0\"".to_string()
+        "/usr/bin/time -l \"$0\" \"$@\"".to_string()
     } else {
-        format!("ulimit -v {} && exec \"$0\"", mib * 1024)
+        format!("ulimit -v {} && exec \"$0\" \"$@\"", mib * 1024)
     };
     let output = Command::new("sh")
         .arg("-c")
         .arg(script)
-        .arg(exe)
+        .arg(program)
+        .args(args)
         .current_dir(dir)
         .output()
         .expect("sh should run the program");
-    if cfg!(target_os = "macos") && output.status.success() {
+    if cfg!(target_os = "macos") {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let peak: u64 = stderr
+        let peak: Option<u64> = stderr
             .lines()
             .find(|line| line.contains("maximum resident set size"))
-            .and_then(|line| line.split_whitespace().next()?.parse().ok())
-            .unwrap_or_else(|| panic!("no peak memory in `time -l`'s report: {stderr}"));
-        assert!(peak < mib << 20, "peak resident memory {peak} bytes");
+            .and_then(|line| line.split_whitespace().next()?.parse().ok());
+        match peak {
+            Some(peak) => assert!(peak < mib << 20, "peak resident memory {peak} bytes"),
+            None => assert!(
+                !output.status.success(),
+                "no peak memory in `time -l`'s report: {stderr}"
+            ),
+        }
     }
     output
 }
@@ -319,10 +372,10 @@ fn try_build(
 ) -> Result<PathBuf, String> {
     let bin = root.join("bin");
     std::fs::create_dir_all(&bin).expect("should create the bin directory");
-    let exe = bin.join("program");
+    let target = target.unwrap_or_else(host_target);
+    let exe = bin.join(format!("program{}", target.suffix()));
     let mut build = oskac(native_dir);
     build.arg("build").arg(&case.target).arg("-o").arg(&exe);
-    let target = target.unwrap_or_else(host_target);
     build.args(["--target", target.name()]);
     let build = build.output().expect("oskac build should run");
     if !build.status.success() {

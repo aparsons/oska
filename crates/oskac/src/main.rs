@@ -53,7 +53,8 @@ USAGE:
                                            it goes past), or write a baseline
     oskac run [path | -] [--format=json] [--interpret] [--no-cache]
               [--grant=<file>] [--max-steps=<n>] [--timeout=<ms>]
-              [--max-output=<bytes>] [-- args...]
+              [--max-output=<bytes>] [--max-memory=<bytes>]
+              [-- args...]
                                            Check a source file, package or
                                            module on standard input (-) and,
                                            if it has no diagnostics and stays
@@ -66,7 +67,9 @@ USAGE:
                                            milliseconds --timeout gives, or
                                            with P0041 before it writes more
                                            than the bytes --max-output gives
-                                           to stdout and stderr together
+                                           to stdout and stderr together,
+                                           and with P0040 once its values
+                                           take more than --max-memory bytes
     oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
@@ -149,8 +152,8 @@ struct CommandLine {
     event: Option<String>,
     target: Option<String>,
     /// The run limits (`--max-steps=<n>`, `--timeout=<ms>`,
-    /// `--max-output=<bytes>`), which
-    /// only `oskac run` takes.
+    /// `--max-output=<bytes>`, `--max-memory=<bytes>`), which only `oskac
+    /// run` takes.
     limits: oska_check::limits::Limits,
     /// Why a limit flag is malformed or repeated: a usage error.
     limit_error: Option<String>,

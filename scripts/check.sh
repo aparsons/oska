@@ -227,10 +227,12 @@ skip_step() {
 # site/, README.md, GLOSSARY.md, SECURITY.md, .github/workflows/pages.yml,
 # scripts/install/, and `git ls-files`. scripts/temp-leak/ wraps cargo test,
 # scripts/docs-tests/ picks the tests a docs/ change runs, scripts/eval-tasks/
-# validates the eval task set, and this file runs the cargo steps.
+# validates the eval task set, the oska-eval tests scan
+# scripts/eval-batch/fixtures/ for home paths, and this file runs the cargo
+# steps.
 cargo_input() {
   case $1 in
-    .github/workflows/pages.yml | scripts/install/* | scripts/temp-leak/* | scripts/docs-tests/* | scripts/eval-tasks/* | scripts/check.sh) return 0 ;;
+    .github/workflows/pages.yml | scripts/install/* | scripts/temp-leak/* | scripts/docs-tests/* | scripts/eval-tasks/* | scripts/eval-batch/fixtures/* | scripts/check.sh) return 0 ;;
     CLAUDE.md | CODING_STANDARDS.md | LICENSE | .gitignore) return 1 ;;
     .githooks/* | .claude/* | .github/* | scripts/*) return 1 ;;
   esac
@@ -521,6 +523,12 @@ if step "cargo test (private temporary directory)" --fast --cargo --docs-tests; 
   # check here, naming it, instead of slowly filling the shared /tmp.
   # The fast tier tests only the changed crates and their dependents
   # (fast_crates).
+  # In CI, where the formal step needs Lean, the differential test against
+  # the Lean reference (oska-run's lean_reference) fails without Lean
+  # rather than skipping (ADR 0018).
+  if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+    export OSKA_LEAN_REFERENCE=required
+  fi
   if [ "$cargo_mode" = docs ]; then
     run_docs_tests
   elif [ "$tier" = fast ]; then
@@ -536,6 +544,22 @@ if step "eval task set" --cargo --fast-when 'eval/*' --fast-when 'crates/oska-ev
   # (offline). The fast tier runs it when the task set or the harness changed;
   # a compiler change gets it from the full check and CI.
   scripts/eval-tasks/run.sh
+fi
+
+if step "eval batch driver tests" --fast-when 'scripts/eval-batch/*' --fast-when 'crates/oska-eval/*'; then
+  # The live driver end to end with a stub `claude` on PATH: offline, no
+  # model is called. The driver itself refuses to run live in CI.
+  # The step takes the build slot in `step` before this block, whether or
+  # not jq is here (scripts/check-steps/test.sh relies on it).
+  if command -v jq >/dev/null 2>&1; then
+    bash scripts/eval-batch/test.sh
+  else
+    if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+      echo "check.sh: jq is not installed, and CI must run the eval batch driver tests" >&2
+      exit 1
+    fi
+    skip_step "jq not installed; skipped (CI runs it)"
+  fi
 fi
 
 if step "installer tests" --fast-when 'scripts/install/*'; then
@@ -599,6 +623,29 @@ fi
 if step "check step registry tests" --fast-when 'scripts/check-steps/*' --fast-when scripts/check.sh; then
   # --list prints exactly the steps a run runs, in order (this file's blocks).
   bash scripts/check-steps/test.sh
+fi
+
+if step "formal" --fast-when 'formal/*' --fast-when 'scripts/formal/*'; then
+  # Builds the Lean proofs of Oska Core and runs TLC on every TLA+ model
+  # (ADRs 0018, 0019; docs/agents/formal.md). An unfinished proof (`sorry`)
+  # fails. A missing Lean or TLC skips here, but fails in CI, where the test
+  # job installs the pinned ones. run.sh exits 1 there, not 3, and this block
+  # refuses a skip in CI too, so neither alone can let the gate pass.
+  rc=0
+  scripts/formal/run.sh || rc=$?
+  if [ "$rc" -eq 3 ]; then
+    if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+      echo "check.sh: Lean or TLC is not installed, and CI must run the formal step" >&2
+      exit 1
+    fi
+    skip_step "Lean or TLC not installed; skipped (CI runs it; scripts/formal/install.sh installs them)"
+  elif [ "$rc" -ne 0 ]; then
+    exit "$rc"
+  fi
+fi
+
+if step "formal step tests" --no-slot --fast-when 'formal/*' --fast-when 'scripts/formal/*'; then
+  bash scripts/formal/test.sh
 fi
 
 if step "workflow validation" --no-slot --fast-when '.github/workflows/*' --fast-when 'scripts/actionlint/*'; then

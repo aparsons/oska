@@ -1,0 +1,151 @@
+{
+  "core_ir_version": 2,
+  "types": [
+    {"kind": "Struct", "name": "Point", "fields": ["Int", "Int"]},
+    {
+      "kind": "Enum",
+      "name": "Shape",
+      "variants": [
+        {"name": "Dot", "fields": []},
+        {"name": "Square", "fields": ["Int"]},
+        {"name": "At", "fields": ["Point", "Bool"]}
+      ]
+    }
+  ],
+  "functions": [
+    {
+      "name": "size",
+      "params": [{"type": "Shape", "binds": true}],
+      "ret": "Int",
+      "body": {
+        "kind": "Block",
+        "stmts": [],
+        "value": {
+          "kind": "Match",
+          "scrutinee": {"kind": "Local", "slot": 0},
+          "arms": [
+            {
+              "pattern": {
+                "kind": "Construct",
+                "type": "Shape",
+                "variant": "Dot",
+                "fields": []
+              },
+              "body": {"kind": "Int", "value": 0}
+            },
+            {
+              "pattern": {
+                "kind": "Construct",
+                "type": "Shape",
+                "variant": "Square",
+                "fields": [{"kind": "Bind", "type": "Int"}]
+              },
+              "guard": {
+                "kind": "Binary",
+                "op": ">",
+                "lhs": {"kind": "Local", "slot": 1},
+                "rhs": {"kind": "Int", "value": 9}
+              },
+              "body": {"kind": "Local", "slot": 1}
+            },
+            {
+              "pattern": {
+                "kind": "Construct",
+                "type": "Shape",
+                "variant": "Square",
+                "fields": [{"kind": "Wildcard"}]
+              },
+              "body": {"kind": "Int", "value": -1}
+            },
+            {
+              "pattern": {
+                "kind": "Construct",
+                "type": "Shape",
+                "variant": "At",
+                "fields": [
+                  {
+                    "kind": "Construct",
+                    "type": "Point",
+                    "fields": [{"kind": "Int", "value": 0}, {"kind": "Wildcard"}]
+                  },
+                  {"kind": "Bool", "value": true}
+                ]
+              },
+              "body": {"kind": "Int", "value": 1}
+            },
+            {
+              "pattern": {
+                "kind": "Construct",
+                "type": "Shape",
+                "variant": "At",
+                "fields": [{"kind": "Bind", "type": "Point"}, {"kind": "Wildcard"}]
+              },
+              "body": {
+                "kind": "Binary",
+                "op": "+",
+                "lhs": {
+                  "kind": "Field",
+                  "base": {"kind": "Local", "slot": 1},
+                  "index": 0
+                },
+                "rhs": {
+                  "kind": "Field",
+                  "base": {"kind": "Local", "slot": 1},
+                  "index": 1
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "run",
+      "params": [],
+      "ret": "Int",
+      "body": {
+        "kind": "Block",
+        "stmts": [
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": "Point",
+            "value": {
+              "kind": "Construct",
+              "type": "Point",
+              "fields": [{"kind": "Int", "value": 1}, {"kind": "Int", "value": 2}]
+            }
+          }
+        ],
+        "value": {
+          "kind": "Binary",
+          "op": "+",
+          "lhs": {
+            "kind": "Call",
+            "function": "size",
+            "args": [
+              {
+                "kind": "Construct",
+                "type": "Shape",
+                "variant": "At",
+                "fields": [{"kind": "Local", "slot": 0}, {"kind": "Bool", "value": false}]
+              }
+            ]
+          },
+          "rhs": {
+            "kind": "Call",
+            "function": "size",
+            "args": [
+              {
+                "kind": "Construct",
+                "type": "Shape",
+                "variant": "Dot",
+                "fields": []
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

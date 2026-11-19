@@ -10,7 +10,9 @@ use std::ops::ControlFlow;
 use std::path::PathBuf;
 
 use oska_check::core_ir::{self, Refusal, CORE_IR_VERSION};
-use oska_check::program::{walk, Expr, ExprKind, IntType, Program, Stmt, Visit};
+use oska_check::program::{
+    walk, DeclarationKind, Expr, ExprKind, IntType, Pattern, Program, Stmt, Visit,
+};
 use oska_syntax::Span;
 
 fn program(src: &str) -> Program {
@@ -119,14 +121,50 @@ fn recursion_exports_to_the_golden_form() {
 }
 
 #[test]
+fn structs_enums_and_match_export_to_the_golden_form() {
+    assert_golden(
+        "data",
+        "struct Point { x: Int, y: Int }\n\
+         \n\
+         enum Shape {\n\
+         \x20   Dot,\n\
+         \x20   Square(Int),\n\
+         \x20   At { p: Point, big: Bool },\n\
+         }\n\
+         \n\
+         fn size(s: Shape) -> Int {\n\
+         \x20   match s {\n\
+         \x20       Shape.Dot => 0\n\
+         \x20       Shape.Square(n) if n > 9 => n\n\
+         \x20       Shape.Square(_) => -1\n\
+         \x20       Shape.At(p: Point(x: 0, y: _), big: true) => 1\n\
+         \x20       Shape.At(p: q, big: _) => q.x + q.y\n\
+         \x20   }\n\
+         }\n\
+         \n\
+         fn run() -> Int {\n\
+         \x20   let p = Point(x: 1, y: 2)\n\
+         \x20   size(Shape.At(p: p, big: false)) + size(Shape.Dot)\n\
+         }\n",
+    );
+}
+
+#[test]
 fn the_export_carries_its_version_and_is_json() {
-    assert_eq!(CORE_IR_VERSION, 1);
+    assert_eq!(CORE_IR_VERSION, 2);
     let json = core_ir::export(&program("fn one() -> Int { 1 }\n"))
         .unwrap_or_else(|refusal| panic!("should export, refused: {refusal}"));
     let value = oska_syntax::parse_json(&json).unwrap_or_else(|e| panic!("{e}: {json}"));
     assert_eq!(
         value.get("core_ir_version").and_then(|v| v.as_u64()),
-        Some(1)
+        Some(2)
+    );
+    assert_eq!(
+        value
+            .get("types")
+            .and_then(|f| f.as_array())
+            .map(<[_]>::len),
+        Some(0)
     );
     assert_eq!(
         value
@@ -138,32 +176,88 @@ fn the_export_carries_its_version_and_is_json() {
 }
 
 #[test]
-fn a_struct_is_refused_at_its_declaration() {
+fn a_struct_or_enum_outside_the_core_is_refused_at_its_declaration() {
     assert_refused(
-        "struct Point { x: Int }\n\
-         fn origin() -> Int {\n\
-         \x20   let p = Point(x: 0)\n\
-         \x20   0\n\
-         }\n",
-        "the struct `Point`",
-        "struct Point { x: Int }",
+        "struct Named { name: String }\n\
+         fn f() -> Int { 1 }\n",
+        "the type `String`",
+        "struct Named { name: String }",
+    );
+    assert_refused(
+        "fn f() -> Int { 1 }\n\
+         enum Maybe<T> { Nothing, Just(T) }\n",
+        "the generic enum `Maybe`",
+        "enum Maybe<T> { Nothing, Just(T) }",
+    );
+    assert_refused(
+        "struct Wrap<T> { inner: T }\n\
+         struct Uses { w: Wrap<Int> }\n",
+        "the generic struct `Wrap`",
+        "struct Wrap<T> { inner: T }",
     );
 }
 
 #[test]
-fn a_declaration_nothing_uses_is_refused() {
+fn a_prelude_type_is_refused() {
     assert_refused(
-        "fn f() -> Int { 1 }\n\
-         struct Unused { x: Int }\n",
-        "the struct `Unused`",
-        "struct Unused { x: Int }",
+        "fn f(o: Option<Int>) -> Int {\n\
+         \x20   match o {\n\
+         \x20       Some(n) => n\n\
+         \x20       None => 0\n\
+         \x20   }\n\
+         }\n",
+        "the type `Option<Int>`",
+        "Option<Int>",
     );
     assert_refused(
-        "enum Light { Red, Green }\n\
-         fn f() -> Int { 1 }\n",
-        "the enum `Light`",
-        "enum Light { Red, Green }",
+        "fn f() -> Int {\n\
+         \x20   match Some(1) {\n\
+         \x20       Some(n) => n\n\
+         \x20       None => 0\n\
+         \x20   }\n\
+         }\n",
+        "the enum variant `Option.Some`",
+        "Some(1)",
     );
+}
+
+#[test]
+fn a_string_literal_pattern_is_refused() {
+    let src = "fn f(n: Int) -> Int {\n\
+               \x20   match n {\n\
+               \x20       1 => 2\n\
+               \x20       _ => 0\n\
+               \x20   }\n\
+               }\n";
+    let mut program = program(src);
+    // The checker never puts a string literal in a pattern on an `Int`;
+    // this is what a program that slipped past it would look like.
+    let body = &mut program
+        .functions
+        .get_mut("f")
+        .unwrap_or_else(|| panic!("no `f`"))
+        .body;
+    let ExprKind::Block {
+        value: Some(value), ..
+    } = &mut body.kind
+    else {
+        panic!("{body:?}")
+    };
+    let ExprKind::Match { arms, .. } = &mut value.kind else {
+        panic!("{value:?}")
+    };
+    let Pattern::Literal(literal) = &mut arms[0].pattern else {
+        panic!("{:?}", arms[0].pattern)
+    };
+    literal.kind = ExprKind::Str("1".to_string());
+    assert_eq!(
+        refusal_of(src, &program),
+        ("a string".to_string(), "1".to_string())
+    );
+}
+
+#[test]
+fn a_trait_is_refused_even_when_nothing_uses_it() {
     assert_refused(
         "trait Named {\n\
          \x20   fn name(self) -> Int { 1 }\n\
@@ -233,19 +327,17 @@ fn an_impl_block_is_refused_with_its_type() {
                impl Counter {\n\
                \x20   fn get(self) -> Int { 0 }\n\
                }\n";
-    assert_refused(src, "the struct `Counter`", "struct Counter { n: Int }");
-    // Without the struct's declaration, the impl is the first refusal.
-    let mut program = program(src);
-    program.declarations.remove(0);
-    assert_eq!(
-        refusal_of(src, &program),
-        (
-            "the `impl` of `Counter`".to_string(),
-            "impl Counter {\n    fn get(self) -> Int { 0 }\n}".to_string()
-        )
+    // The struct is in Oska Core; its impl is not.
+    assert_refused(
+        src,
+        "the `impl` of `Counter`",
+        "impl Counter {\n    fn get(self) -> Int { 0 }\n}",
     );
-    // Without either, its method is.
-    program.declarations.clear();
+    // Without the impl's declaration, its method is the first refusal.
+    let mut program = program(src);
+    program
+        .declarations
+        .retain(|d| d.kind != DeclarationKind::Impl);
     assert_eq!(
         refusal_of(src, &program),
         ("the method `Counter.get`".to_string(), "get".to_string())
@@ -426,7 +518,7 @@ fn break_and_continue_carry_their_keyword_span() {
 }
 
 #[test]
-fn return_closures_and_match_are_refused() {
+fn return_and_closures_are_refused() {
     assert_refused(
         "fn f() -> Int {\n\
          \x20   return 1\n\
@@ -441,16 +533,6 @@ fn return_closures_and_match_are_refused() {
          }\n",
         "a closure",
         "|x: Int| x",
-    );
-    assert_refused(
-        "fn f(b: Bool) -> Int {\n\
-         \x20   match b {\n\
-         \x20       true => 1\n\
-         \x20       false => 0\n\
-         \x20   }\n\
-         }\n",
-        "`match`",
-        "match b {\n        true => 1\n        false => 0\n    }",
     );
 }
 

@@ -26,9 +26,9 @@
 //!
 //! A block may add the word `release` (checked as `oskac check --release`),
 //! `tests` (run as `oskac test`, for the `P001x` codes that only a
-//! `test` block reaches), or a run limit such as `max-output=16` or
-//! `max-steps=1000` (run as `oskac run --max-output=16` or `--max-steps=1000`,
-//! for the limits' panics).
+//! `test` block reaches), or a run limit such as `max-output=16`,
+//! `max-steps=1000` or `max-memory=1048576` (run as `oskac run` with that
+//! flag, for the limits' panics).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -500,7 +500,14 @@ fn the_catalog_docs_hold_no_control_character_but_line_breaks_and_tabs() {
 
 /// The real generator, run on the real docs in a fake filesystem: what it
 /// writes under `_site/`.
-fn built_site() -> BTreeMap<String, String> {
+/// Built once per test program: a build takes seconds.
+fn built_site() -> &'static BTreeMap<String, String> {
+    static SITE: std::sync::OnceLock<BTreeMap<String, String>> = std::sync::OnceLock::new();
+    SITE.get_or_init(build_site)
+}
+
+/// [`built_site`], built anew.
+fn build_site() -> BTreeMap<String, String> {
     fn add(host: FakeHost, root: &Path, relative: &str) -> FakeHost {
         let path = root.join(relative);
         if path.is_dir() {

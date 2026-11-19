@@ -8,9 +8,12 @@
 //! Call depth at the `P0021` boundary is `native_ints.rs`'s and
 //! `native_gaps.rs`'s, and deep drops in bounded stack `native_data.rs`'s.
 
-#![cfg(all(
-    any(target_os = "linux", target_os = "macos"),
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        any(target_os = "linux", target_os = "macos"),
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(windows, target_arch = "x86_64")
 ))]
 
 mod differential;

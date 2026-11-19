@@ -33,6 +33,7 @@ use oska_syntax::Span;
 
 use crate::host::Host;
 use crate::intrinsics::{self, Intrinsic};
+use crate::memory;
 use crate::ops;
 use crate::panics::{codes, Panic};
 use crate::tasks::Tasks;
@@ -533,8 +534,8 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     #[inline(never)]
     fn eval_other(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, Unwind> {
         match &expr.kind {
-            ExprKind::Str(text) => Ok(Value::str(text)),
-            ExprKind::Interpolated(parts) => self.interpolated(parts, frame),
+            ExprKind::Str(text) => Ok(memory::text(text, expr.span)?),
+            ExprKind::Interpolated(parts) => self.interpolated(parts, expr.span, frame),
             ExprKind::SelfValue => Ok(frame
                 .receiver
                 .clone()
@@ -546,15 +547,19 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             ExprKind::Not(operand) => Ok(Value::Bool(!self.eval(operand, frame)?.as_bool())),
             ExprKind::Range { start, end } => {
                 let start = self.eval(start, frame)?;
-                Ok(Value::range(start, self.eval(end, frame)?))
+                let end = self.eval(end, frame)?;
+                Ok(memory::range(start, end, expr.span)?)
             }
-            ExprKind::List(items) => Ok(Value::List(Rc::new(self.eval_all(items, frame)?))),
+            ExprKind::List(items) => {
+                let items = self.eval_all(items, frame)?;
+                Ok(memory::list(items, expr.span)?)
+            }
             ExprKind::Construct { ctor, fields } => {
                 let fields = self.eval_all(fields, frame)?;
-                Ok(Value::construct(ctor, fields))
+                Ok(memory::construct(ctor, fields, expr.span)?)
             }
             ExprKind::Field { base, index } => Ok(self.eval(base, frame)?.field(*index)),
-            ExprKind::Closure(code) => Ok(self.closure(code, frame)),
+            ExprKind::Closure(code) => Ok(self.closure(code, expr.span, frame)?),
             ExprKind::CallValue { callee, args } => {
                 self.call_value_expr(callee, args, expr.span, frame)
             }
@@ -627,13 +632,18 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     /// A closure value: `code`, with what it captures from `frame`: only
     /// the slots and receiver its body reads.
     #[inline(never)]
-    fn closure(&mut self, code: &Arc<program::Closure>, frame: &Frame) -> Value {
+    fn closure(
+        &mut self,
+        code: &Arc<program::Closure>,
+        span: Span,
+        frame: &Frame,
+    ) -> Result<Value, Panic> {
         debug_assert_eq!(
             frame.slots.len(),
             code.height,
             "the frame's slots match the checker's locals"
         );
-        Value::Closure(Rc::new(ClosureValue {
+        let closure = ClosureValue {
             code: Arc::clone(code),
             captured: code
                 .captures
@@ -641,7 +651,8 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 .map(|&slot| frame.slots[slot].clone())
                 .collect(),
             receiver: frame.receiver.clone().filter(|_| code.captures_self),
-        }))
+        };
+        memory::closure(closure, span)
     }
 
     /// A call of a function value, made at `span`.
@@ -685,9 +696,13 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         frame: &mut Frame,
     ) -> Result<Value, Unwind> {
         let args = self.eval_all(args, frame)?;
+        let before = metered_place(receiver).then(|| field_path(receiver, frame));
         let mut taken = std::mem::replace(place_mut(receiver, frame), Value::Unit);
         let value = self.call_mutating(callee, &mut taken, args, span);
         *place_mut(receiver, frame) = taken;
+        if let Some(before) = before {
+            relocate_path(receiver, frame, &before);
+        }
         Ok(value?)
     }
 
@@ -863,7 +878,11 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 let value = self.eval(value, frame)?;
                 // The old value is dropped: a copy elsewhere keeps its own
                 // reference to it.
-                *place_mut(place, frame) = value;
+                if metered_place(place) {
+                    assign_metered(place, value, frame);
+                } else {
+                    *place_mut(place, frame) = value;
+                }
             }
             Stmt::Return { value, span } => {
                 let value = match value {
@@ -1115,7 +1134,15 @@ impl<'p, 'h> Interpreter<'p, 'h> {
 
     /// An interpolated string: each hole displayed through the
     /// implementation the checker chose.
-    fn interpolated(&mut self, parts: &[Part], frame: &mut Frame) -> Result<Value, Unwind> {
+    fn interpolated(
+        &mut self,
+        parts: &[Part],
+        span: Span,
+        frame: &mut Frame,
+    ) -> Result<Value, Unwind> {
+        if memory::metered() {
+            return self.interpolated_metered(parts, span, frame);
+        }
         let mut text = String::new();
         for part in parts {
             match part {
@@ -1129,6 +1156,48 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             }
         }
         Ok(Value::str(&text))
+    }
+
+    /// [`Interpreter::interpolated`] under `--max-memory`: each hole is
+    /// displayed first, and the whole text charged before it is built.
+    #[cold]
+    #[inline(never)]
+    fn interpolated_metered(
+        &mut self,
+        parts: &[Part],
+        span: Span,
+        frame: &mut Frame,
+    ) -> Result<Value, Unwind> {
+        let mut shown = Vec::with_capacity(parts.len());
+        for part in parts {
+            if let Part::Hole { value, display, .. } = part {
+                let at = value.span;
+                let value = self.eval(value, frame)?;
+                shown.push(self.call_callee(display, vec![value], at)?);
+            }
+        }
+        let len = parts
+            .iter()
+            .map(|part| match part {
+                Part::Text(t) => t.len(),
+                Part::Hole { .. } => 0,
+            })
+            .sum::<usize>()
+            + shown.iter().map(|s| s.as_str().len()).sum::<usize>();
+        let text = memory::text_of_len(len, span, || {
+            let mut text = String::with_capacity(len);
+            let mut holes = shown.iter();
+            for part in parts {
+                match part {
+                    Part::Text(t) => text.push_str(t),
+                    Part::Hole { .. } => {
+                        text.push_str(holes.next().map_or("", Value::as_str));
+                    }
+                }
+            }
+            text
+        })?;
+        Ok(text)
     }
 }
 
@@ -1144,6 +1213,74 @@ fn place_mut<'f>(place: &Place, frame: &'f mut Frame) -> &'f mut Value {
             .expect("the checker allows `self` only in a method"),
         Place::Field { base, index } => match place_mut(base, frame) {
             Value::Struct { fields, .. } => &mut Rc::make_mut(fields)[*index],
+            other => unreachable!("the checker guarantees a struct, found {other:?}"),
+        },
+    }
+}
+
+/// Whether a write at `place` is one the meter follows: to a field, under
+/// `--max-memory`. A write to a local never is, with or without it.
+#[inline]
+fn metered_place(place: &Place) -> bool {
+    matches!(place, Place::Field { .. }) && memory::metered()
+}
+
+/// Each struct's fields a write at `place` goes through, outermost first,
+/// with whether they are shared: what [`relocate_path`] needs after the
+/// write.
+#[cold]
+#[inline(never)]
+fn field_path(place: &Place, frame: &Frame) -> Vec<(usize, bool)> {
+    let mut lists = Vec::new();
+    field_lists(place, frame, &mut lists);
+    lists
+        .iter()
+        .map(|fields| (Rc::as_ptr(fields) as usize, Rc::strong_count(fields) > 1))
+        .collect()
+}
+
+/// `*place = value` for a write the meter follows ([`metered_place`]).
+#[cold]
+#[inline(never)]
+fn assign_metered(place: &Place, value: Value, frame: &mut Frame) {
+    let before = field_path(place, frame);
+    *place_mut(place, frame) = value;
+    relocate_path(place, frame, &before);
+}
+
+/// After a write at `place`, which went through the fields `before` named
+/// ([`field_path`]): the meter follows each that was copied or moved.
+#[cold]
+#[inline(never)]
+fn relocate_path(place: &Place, frame: &Frame, before: &[(usize, bool)]) {
+    let mut lists = Vec::new();
+    field_lists(place, frame, &mut lists);
+    for (&(at, shared), fields) in before.iter().zip(lists) {
+        memory::relocated(at, shared, fields);
+    }
+}
+
+/// The fields of each struct a write at `place` goes through, outermost
+/// first.
+fn field_lists<'f>(place: &Place, frame: &'f Frame, out: &mut Vec<&'f Rc<Vec<Value>>>) {
+    if let Place::Field { base, .. } = place {
+        field_lists(base, frame, out);
+        if let Value::Struct { fields, .. } = place_ref(base, frame) {
+            out.push(fields);
+        }
+    }
+}
+
+/// The value at `place`, to read.
+fn place_ref<'f>(place: &Place, frame: &'f Frame) -> &'f Value {
+    match place {
+        Place::Local(slot) => &frame.slots[*slot],
+        Place::SelfValue => frame
+            .receiver
+            .as_ref()
+            .expect("the checker allows `self` only in a method"),
+        Place::Field { base, index } => match place_ref(base, frame) {
+            Value::Struct { fields, .. } => &fields[*index],
             other => unreachable!("the checker guarantees a struct, found {other:?}"),
         },
     }

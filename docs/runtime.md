@@ -140,6 +140,7 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0037` | `String.repeat` would build a text over 256 MiB, so the interpreter panics instead of running out of memory. Spans the call. |
 | `P0038` | Step limit reached: the program was run with `oskac run --max-steps=<n>`, and has taken `n` steps. A **step** is one call of a function, method or closure written in Oska (a trait method, one the runtime calls such as a `Display` implementation in an interpolation, and a closure that `List.map` calls included), or one loop back-edge: a `while` or `for` loop going back for its next iteration, once for each iteration that ends without `break` ([ADR 0021](adr/0021-a-step-limit-stops-at-the-same-step-on-every-backend.md)). `main` is not called by the program, so it is no step, and neither is a call into the runtime, such as `println`, `List.map` itself or a `std` function the runtime implements. Every such call counts, whoever makes it: an `==` through a type's own `Eq`, a `?` that converts its error with `From`, a call in a `requires` or `ensures` clause, a spawned task, and the `Display` of the error `main` returns, which the runtime calls after `main` has returned (so the limit can stop the program there, before the error is printed, spanning `main`'s body). A `scope` block is no call. The step past the limit is not taken: the program panics instead. The message names the limit and its value. Spans the call, or the whole loop for a back-edge. Without the flag a program has no step limit. Native code counts the same steps as the interpreter, so it stops at the same step. See [Run limits](#run-limits). |
 | `P0039` | Time limit reached: the program was run with `oskac run --timeout=<ms>`, and has run for that many milliseconds of wall-clock time, counted from when it starts (after the check and the build). Waiting counts: a program that waits for a line of standard input stops at the deadline too. It stops within 100 ms of the deadline (the **tolerance**) on a machine that is not overloaded. On the interpreter the program panics at the step it has reached (it looks at the clock every 1024 steps, and while it waits), spanning that call or loop, or the read it waits in. Natively, `oskac` stops its own child process, that process only, and prints the report itself, with no place in the source (`error[P0039]: ...`, or a JSON object with no `path`), and exits with 101, never with the signal's `128 + n`; a line the stopped program was writing is not reported as its panic, and what it had printed to standard output but not yet written out (native standard output is buffered when it is not a terminal) is lost. A timeout is not deterministic: where the program stops differs from run to run. The message names the limit and its value. Without the flag a program has no time limit. See [Run limits](#run-limits). |
+| `P0040` | Memory limit reached: the program was run with `oskac run --max-memory=<bytes>`, and the value it was about to make would take the bytes of its values (texts, lists, structs, enum values and closures), net of those it let go of, past that many. The value is not made. It is a resource bound, like a timeout: each backend counts with its own allocator, so the two may stop at different points. The message names the limit and its value. On the interpreter it spans the expression or call that makes the value; natively it spans `main`'s body, since the runtime's allocator does not know which code asked. Without the flag a program has no memory limit. See [Run limits](#run-limits) for what each backend counts. |
 | `P0041` | Output limit reached: the program was run with `oskac run --max-output=<bytes>`, and this write would take what it wrote to standard output and standard error together past that many bytes. The write that would pass the limit writes nothing, so no byte past it reaches either stream. The message names the limit and its value. Every write the program makes counts: `println` on `Stdout` and `Stderr`, `dbg`'s line, and the text of the error `main` returns. The panic report itself does not, but a report that quotes text the program made, as `P0020` quotes the secret's name, quotes no more of it than the limit has left, cut where a character ends and followed by `...`. Spans the call that writes, or `main`'s body for its error. Without the flag a program has no output limit. See [Run limits](#run-limits). |
 
 ### Panic examples
@@ -433,6 +434,28 @@ fn main() {
 }
 ```
 
+#### `P0040`
+
+```oska error=P0040 max-memory=1048576
+fn main() {
+    var items: List<String> = []
+    while true {
+        items.push("one more line")
+    }
+}
+```
+
+```oska fixed=P0040 max-memory=1048576
+fn main() {
+    var items: List<String> = []
+    var i = 0
+    while i < 100 {
+        items.push("one more line")
+        i = i + 1
+    }
+}
+```
+
 #### `P0041`
 
 ```oska error=P0041 max-output=16
@@ -462,11 +485,16 @@ fn main(io: Stdout) {
 | `--max-steps=<n>` | The steps the program takes: calls of functions, methods and closures written in Oska, and loop back-edges (see `P0038`). | `P0038` |
 | `--timeout=<ms>` | The wall-clock milliseconds the program runs, waiting included, within a tolerance of 100 ms (see `P0039`). Natively, `oskac` stops the program's process and reports the limit itself. | `P0039` |
 | `--max-output=<bytes>` | The bytes the program writes to standard output and standard error together. | `P0041` |
+| `--max-memory=<bytes>` | The bytes of the program's values, net of those it let go of, counted by each backend's own allocator (see below). | `P0040` |
 
 - A limit is a whole number above 0. A value of 0, a negative number, or anything that is not a number is a usage error (exit code 2), never "no limit". So is a limit given twice, and a limit on any command but `run`.
 - A run with no limit flag behaves and performs exactly as before: the native executable is the one `oskac build` writes, byte for byte. A limit is opt-in.
 - A step limit stops a program at the same step on every run and every platform ([ADR 0021](adr/0021-a-step-limit-stops-at-the-same-step-on-every-backend.md)), with the same output.
 - Natively, each limit is built into the executable `oskac run` makes for that run (the build cache keeps it apart from the one without, and `oskac build` takes no limit). The output limit is counted in `std.rt` behind the system calls that exist ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)). The step limit is a 64-bit counter in the runtime's writable data that the generated code counts down at each step, in the backend's shared code before register allocation, so every instruction set counts alike; it makes no system call. The two backends stop at the same write, and at the same step, with the same output.
+- `--max-memory` is a resource bound, not a parity promise: each backend counts with its own allocator, so the two may stop at different points, and the report's span differs (see `P0040`). Each checks before it allocates, with the bytes it is about to take, so a value that would pass the limit is never made.
+  - **The interpreter** counts each text, list, struct or enum value the program builds, each closure, and each struct the prelude makes for it (a `Range`, `Secret`, `Path` or `IoError`, and `std.html` markup): the bytes the interpreter allocates for it (its text, its list's capacity, its fields and names, and its own record of it), and a list that grows in place counts its new capacity. A value counts until nothing holds it. The small `Option` and `Result` values the prelude's functions return are not counted, though what they hold is, and neither is the interpreter's own working memory. It finds the values let go of when a value would pass the limit; if that frees less than an eighth of the limit, the program stops there too, since it holds nearly all of its limit and keeps allocating.
+  - **Native code** counts each block `std.rt`'s allocator gives out once the program starts, for its values and the runtime's own, header included (`std.rt`'s `counted_alloc` and `counted_free`). A block counts until it is freed; a block allocated before the program started is not counted, and gives nothing back when it is freed.
+  - Where the platform lets a test measure it, a test shows that the run stops before the process holds much more than the limit: an address-space cap on Linux, the peak resident memory on macOS. Windows has no such measure in the tests; there they check only that the run stops with `P0040`.
 
 ## Errors and traits
 

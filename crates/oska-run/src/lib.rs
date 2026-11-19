@@ -46,6 +46,7 @@ mod host;
 mod html;
 mod interp;
 mod intrinsics;
+mod memory;
 mod ops;
 mod panics;
 mod prng;
@@ -322,6 +323,9 @@ fn run_main(
             }
         })
         .collect();
+    // Under `--max-memory`, this thread's values are counted until the
+    // run ends (`memory.rs`).
+    let _metering = limits.max_memory.map(memory::Metering::start);
     let mut interpreter = Interpreter::new(program, host).with_limits(limits);
     // Nothing in the program calls `main`: its body stands for the call.
     let value = interpreter.call(main, values, main.body.span)?;

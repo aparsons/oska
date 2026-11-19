@@ -105,6 +105,15 @@ pub const MAX_CALL_DEPTH: u32 = 50_000;
 /// below the deepest frame, and for the entry point's.
 const STACK_RESERVE: u64 = 8 << 20;
 
+/// `std.rt`'s allocator functions, each with the one that calls it and
+/// counts the bytes against `--max-memory` (`P0040`): under the limit,
+/// every request of the first is one of the second.
+const COUNTED_MEMORY: [(&str, &str); 3] = [
+    ("alloc", "counted_alloc"),
+    ("try_alloc", "counted_try_alloc"),
+    ("free", "counted_free"),
+];
+
 /// The words of the runtime's writable data, at `rt_mem_globals()`.
 pub const GLOBALS: u32 = 50;
 
@@ -112,6 +121,13 @@ pub const GLOBALS: u32 = 50;
 /// steps the program may still take ([`Body::step`]); without the flag
 /// the word is not there, so the writable data is what it always was.
 const STEPS_WORD: u32 = GLOBALS;
+
+/// Under `--max-memory`, the word after the step counter's holds the
+/// report of the panic (`P0040`) that `std.rt`'s memory limit stops the
+/// program with; without the flag the word is not there. It is a fixed
+/// word, 51, so that `std.rt` can name it whether or not the step counter
+/// is there too.
+const MEMORY_REPORT_WORD: u32 = GLOBALS + 1;
 
 /// What an executable runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,6 +262,7 @@ pub fn program(
         kind,
         target,
         limits,
+        uncounted: false,
         ids: HashMap::new(),
         functions: Vec::new(),
         queue: Vec::new(),
@@ -258,6 +275,11 @@ pub fn program(
     };
     let entry = lowering.entry()?;
     while let Some((instance, id, origin)) = lowering.queue.pop() {
+        lowering.uncounted = matches!(
+            &instance,
+            Instance::Function { source: Source::Runtime, name, .. }
+                if COUNTED_MEMORY.iter().any(|(_, counted)| counted == name)
+        );
         lowering.functions[id] = lowering.function(&instance, origin)?;
         if matches!(
             instance,
@@ -283,8 +305,14 @@ pub fn program(
     }
     optimize::module(&mut lowering.functions);
     let stack = lowering.size_stack(entry);
-    // The globals, and the step counter after them under `--max-steps`.
-    let globals = GLOBALS + u32::from(limits.max_steps.is_some());
+    // The globals, then the step counter under `--max-steps`, then the
+    // memory limit's report under `--max-memory` (which keeps the counter's
+    // word, unused without `--max-steps`, so that its own word is fixed).
+    let globals = if limits.max_memory.is_some() {
+        MEMORY_REPORT_WORD + 1
+    } else {
+        GLOBALS + u32::from(limits.max_steps.is_some())
+    };
     // The most arguments any call passes, or any function takes, past
     // those the target passes in registers: they share one area after
     // the globals.
@@ -327,6 +355,10 @@ struct Lowering<'p> {
     /// The run limits the program is built under (`oskac run`): none for
     /// `oskac build` and test executables.
     limits: Limits,
+    /// Whether the function being lowered is one of `std.rt`'s counting
+    /// allocator functions ([`COUNTED_MEMORY`]), whose own calls of the
+    /// allocator are not redirected.
+    uncounted: bool,
     /// Every function requested so far.
     ids: HashMap<Instance, FnId>,
     /// The lowered functions, by id; a requested one is a placeholder
@@ -361,6 +393,7 @@ impl<'p> Lowering<'p> {
     /// The id of `instance`, lowered later if it is new. `origin` is the
     /// user code that reached it.
     fn request(&mut self, instance: Instance, origin: Span) -> FnId {
+        let instance = self.counted(instance);
         if let Some(&id) = self.ids.get(&instance) {
             return id;
         }
@@ -368,6 +401,35 @@ impl<'p> Lowering<'p> {
         self.ids.insert(instance.clone(), id);
         self.queue.push((instance, id, origin));
         id
+    }
+
+    /// `instance`, or under `--max-memory` for one of `std.rt`'s allocator
+    /// functions, its counting one ([`COUNTED_MEMORY`]): every call of the
+    /// allocator, in the generated code and in `std.rt` alike, and every
+    /// function value's drop by `free`, counts. Without the limit nothing
+    /// changes.
+    fn counted(&self, instance: Instance) -> Instance {
+        if self.limits.max_memory.is_none() || self.uncounted {
+            return instance;
+        }
+        match instance {
+            Instance::Function {
+                source: Source::Runtime,
+                name,
+                type_args,
+            } => {
+                let name = match COUNTED_MEMORY.iter().find(|(raw, _)| *raw == name) {
+                    Some((_, counted)) => counted.to_string(),
+                    None => name,
+                };
+                Instance::Function {
+                    source: Source::Runtime,
+                    name,
+                    type_args,
+                }
+            }
+            other => other,
+        }
     }
 
     /// The index of `code` in [`Lowering::closures`], added if it is new.
@@ -1961,6 +2023,7 @@ impl<'l, 'p> Body<'l, 'p> {
         let failed = match import.fails {
             Fails::MinusOne => -1,
             Fails::Null | Fails::NullKeepsErrno | Fails::Zero => 0,
+            Fails::Status => return self.status_error(dst),
             Fails::Never => return dst,
         };
         let done = self.label();
@@ -1997,6 +2060,41 @@ impl<'l, 'p> Body<'l, 'p> {
         });
         self.push(Inst::Label(done));
         dst
+    }
+
+    /// `status`, an `ntdll` function's `NTSTATUS`, as `std.rt` takes a
+    /// result: as it is unless negative, else `-RtlNtStatusToDosError`
+    /// of it (ADR 0020).
+    fn status_error(&mut self, status: Temp) -> Temp {
+        let platform = self.lowering.target.platform();
+        let slot = platform
+            .slot(&intrinsics::NT_STATUS_TO_ERROR)
+            .unwrap_or_default();
+        let done = self.label();
+        let zero = self.constant(0);
+        self.push(Inst::Branch {
+            cond: Cond::Ge,
+            lhs: status,
+            rhs: zero,
+            target: done,
+        });
+        let code = self.temp();
+        self.push(Inst::LibCall {
+            dst: code,
+            import: slot,
+            args: vec![status],
+            fixed: 1,
+            wide: false,
+        });
+        let zero = self.constant(0);
+        self.push(Inst::Binary {
+            op: BinOp::Sub,
+            dst: status,
+            lhs: zero,
+            rhs: code,
+        });
+        self.push(Inst::Label(done));
+        status
     }
 
     /// The address of the thread's `errno`, or on Windows its last
@@ -2081,6 +2179,15 @@ impl<'l, 'p> Body<'l, 'p> {
     /// the interpreter, the call of `main` is not counted.
     fn call_main(&mut self, main: &Function) -> Result<(), Diagnostic> {
         let span = main.body.span;
+        // Under `--max-memory`, the limit and its report, which spans
+        // `main`'s body: the runtime cannot tell which code allocated.
+        if let Some(limit) = self.lowering.limits.max_memory {
+            let (before, after) = self.report(Limit::Memory.code(), span);
+            let report = self.text(&format!("{before}{}{after}", Limit::Memory.message(limit)));
+            // `Limits` holds at most `i64::MAX`.
+            let limit = self.constant(i64::try_from(limit).unwrap_or(i64::MAX));
+            self.call_runtime("memory_limit_start", vec![limit, report], NOWHERE)?;
+        }
         let mut args = Vec::new();
         for param in &main.params {
             if !is_stateless_input(&param.ty) {
@@ -3117,6 +3224,35 @@ fn main(io: Stdout) {
         max_steps: Some(1000),
         ..Limits::NONE
     };
+
+    /// Under `--max-memory` the writable data holds the memory limit's
+    /// report in word 51, past the step counter's word, whether or not the
+    /// step counter is there; the call area is unchanged.
+    #[test]
+    fn max_memory_adds_its_report_word_after_the_step_counter() {
+        assert_eq!(super::MEMORY_REPORT_WORD, 51, "std.rt names word 51");
+        for target in Target::ALL {
+            let plain = lower(target, Limits::NONE);
+            for max_steps in [None, Some(1000)] {
+                let limits = Limits {
+                    max_steps,
+                    max_memory: Some(1 << 20),
+                    ..Limits::NONE
+                };
+                let counted = lower(target, limits);
+                assert_eq!(
+                    counted.extra_args,
+                    (super::GLOBALS + 2) * layout::WORD,
+                    "{target:?}"
+                );
+                assert_eq!(
+                    counted.data_size - counted.extra_args,
+                    plain.data_size - plain.extra_args,
+                    "{target:?}: the same call area"
+                );
+            }
+        }
+    }
 
     /// Without `--max-steps` nothing counts steps: no code reads the
     /// counter, and the writable data is the globals and the call area as

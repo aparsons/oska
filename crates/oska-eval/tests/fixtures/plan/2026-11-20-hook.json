@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "model": "example-model",
+  "tasks": ["token", "greeting"],
+  "variants": [
+    {"name": "web", "web": true, "hook": false, "fix": true},
+    {"name": "no-web", "web": false, "hook": true, "fix": false}
+  ],
+  "budget_usd": 25,
+  "estimate_usd_per_run": 0.5,
+  "cap_usd_per_run": 2,
+  "estimate_tokens_per_run": 60000
+}

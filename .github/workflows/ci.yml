@@ -49,6 +49,13 @@ jobs:
       # The pinned ShellCheck check.sh's shellcheck step verifies; runner
       # images ship different releases.
       - run: scripts/shellcheck/install.sh "$HOME/.local/bin" && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      # The pinned Lean and TLC check.sh's formal step runs (ADRs 0018,
+      # 0019), checked against their pinned checksums; the runner's Java runs
+      # TLC. Without them the step fails here, never skips.
+      - run: |
+          scripts/formal/install.sh "$HOME/.local/formal"
+          echo "$HOME/.local/formal/lean/bin" >> "$GITHUB_PATH"
+          echo "OSKA_TLA2TOOLS=$HOME/.local/formal/tla2tools.jar" >> "$GITHUB_ENV"
       # The same script contributors and agents run locally (and the
       # pre-push hook runs), so local and CI checks cannot drift apart.
       - run: scripts/check.sh

@@ -66,6 +66,9 @@ pub mod codes {
     /// The program ran for longer than `--timeout` milliseconds
     /// (`oska_check::limits`).
     pub const TIME_LIMIT: &str = oska_check::limits::codes::TIME_LIMIT;
+    /// The program's values took more than `--max-memory` bytes
+    /// (`oska_check::limits`).
+    pub const MEMORY_LIMIT: &str = oska_check::limits::codes::MEMORY_LIMIT;
     /// The program would have written more than `--max-output` bytes to
     /// stdout and stderr together (`oska_check::limits`).
     pub const OUTPUT_LIMIT: &str = oska_check::limits::codes::OUTPUT_LIMIT;
@@ -93,6 +96,7 @@ pub mod codes {
         TEXT_TOO_LONG,
         STEP_LIMIT,
         TIME_LIMIT,
+        MEMORY_LIMIT,
         OUTPUT_LIMIT,
     ];
 }

@@ -5,9 +5,12 @@
 //! outliving their scope, every way out of a block, and memory. The
 //! `std.html` programs are `tests/html.rs`'s, plus hostile input.
 
-#![cfg(all(
-    any(target_os = "linux", target_os = "macos"),
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        any(target_os = "linux", target_os = "macos"),
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(windows, target_arch = "x86_64")
 ))]
 
 mod differential;
@@ -510,7 +513,7 @@ fn spawning_on_a_finished_scope_panics_with_p0005_at_the_call() {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("tasks_p0005");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("a directory");
-    let exe = dir.join("program");
+    let exe = dir.join(format!("program{}", differential::host_target().suffix()));
     executable::write_executable(&exe, &image);
     let output = std::process::Command::new(&exe)
         .output()

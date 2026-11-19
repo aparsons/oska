@@ -6,6 +6,17 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// The environment that makes `home` the home directory on every platform:
+/// `HOME`, `USERPROFILE` and `XDG_CONFIG_HOME` (beneath it), as
+/// `oskac`'s tests' `set_home` sets them. Pass it to [`harness_env`].
+pub fn home_env(home: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("HOME", home.to_string()),
+        ("USERPROFILE", home.to_string()),
+        ("XDG_CONFIG_HOME", format!("{home}/.config")),
+    ]
+}
+
 /// What one run of `oska-eval` printed, and how it exited.
 pub struct Outcome {
     pub code: i32,
@@ -15,8 +26,15 @@ pub struct Outcome {
 
 /// Runs `oska-eval` with `args`, in the crate's directory.
 pub fn harness(args: &[&str]) -> Outcome {
+    harness_env(args, &[])
+}
+
+/// Runs `oska-eval` with `args`, in the crate's directory, with the
+/// environment variables `env` set too.
+pub fn harness_env(args: &[&str], env: &[(&str, &str)]) -> Outcome {
     let output = Command::new(env!("CARGO_BIN_EXE_oska-eval"))
         .args(args)
+        .envs(env.iter().copied())
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
         .expect("oska-eval should start");
@@ -125,9 +143,13 @@ pub fn copy_tree(from: &Path, to: &Path) {
 /// Compares `actual` with the golden file `tests/golden/<name>`, or rewrites
 /// it when `UPDATE_GOLDEN` is set.
 pub fn assert_golden(name: &str, actual: &str) {
-    let golden: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/golden")
-        .join(name);
+    assert_file(&format!("tests/golden/{name}"), actual);
+}
+
+/// Compares `actual` with the file at `relative` (from the crate's
+/// directory), or rewrites it when `UPDATE_GOLDEN` is set.
+pub fn assert_file(relative: &str, actual: &str) {
+    let golden: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
     if std::env::var_os("UPDATE_GOLDEN").is_some() {
         std::fs::write(&golden, actual).expect("should write the golden file");
     }

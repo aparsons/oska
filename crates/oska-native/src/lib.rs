@@ -74,7 +74,7 @@ pub mod codes {
     /// The `P`-codes native code panics with: the interpreter's.
     /// `P0039` is never the program's own: `oskac` stops a native program
     /// at its `--timeout` and reports it.
-    pub const PANICS: [&str; 19] = [
+    pub const PANICS: [&str; 20] = [
         "P0001",
         "P0002",
         "P0003",
@@ -93,6 +93,7 @@ pub mod codes {
         "P0037",
         oska_check::limits::codes::STEP_LIMIT,
         oska_check::limits::codes::TIME_LIMIT,
+        oska_check::limits::codes::MEMORY_LIMIT,
         oska_check::limits::codes::OUTPUT_LIMIT,
     ];
 }
@@ -126,10 +127,11 @@ pub fn build(program: &Program, target: Target, locate: Locate) -> Result<Vec<u8
 
 /// [`build`], for `oskac run` under the run `limits` (spec #446): the
 /// executable stops with a limit's panic (`P0038` for `--max-steps`,
-/// `P0041` for `--max-output`) when the program reaches it, at the same
-/// step or write as the interpreter. The checks are in the generated code
-/// and `std.rt`, behind the intrinsics that exist (ADR 0013); with no
-/// limit the executable is [`build`]'s, byte for byte.
+/// `P0041` for `--max-output`, `P0040` for `--max-memory`) when the
+/// program reaches it, at the same step or write as the interpreter.
+/// The checks are in the generated code and `std.rt`, behind the
+/// intrinsics that exist (ADR 0013); with no limit the executable is
+/// [`build`]'s, byte for byte.
 pub fn build_limited(
     program: &Program,
     target: Target,

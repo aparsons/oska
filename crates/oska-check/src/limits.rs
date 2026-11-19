@@ -23,11 +23,14 @@ pub enum Limit {
     /// `--max-output=<bytes>`: the bytes the program may write to
     /// standard output and standard error together.
     Output,
+    /// `--max-memory=<bytes>`: the bytes the program's live values may
+    /// take, net of frees, counted by each backend's own allocator.
+    Memory,
 }
 
 impl Limit {
     /// Every limit, in the order the usage and the docs list them.
-    pub const ALL: [Limit; 3] = [Limit::Steps, Limit::Time, Limit::Output];
+    pub const ALL: [Limit; 4] = [Limit::Steps, Limit::Time, Limit::Output, Limit::Memory];
 
     /// The `oskac run` flag that sets the limit, without its `=` and
     /// value.
@@ -36,6 +39,7 @@ impl Limit {
             Limit::Steps => "--max-steps",
             Limit::Time => "--timeout",
             Limit::Output => "--max-output",
+            Limit::Memory => "--max-memory",
         }
     }
 
@@ -45,6 +49,7 @@ impl Limit {
             Limit::Steps => codes::STEP_LIMIT,
             Limit::Time => codes::TIME_LIMIT,
             Limit::Output => codes::OUTPUT_LIMIT,
+            Limit::Memory => codes::MEMORY_LIMIT,
         }
     }
 
@@ -64,6 +69,10 @@ impl Limit {
                 "output limit reached: this write would take standard output and standard \
                  error past {value} bytes (`--max-output={value}`)"
             ),
+            Limit::Memory => format!(
+                "memory limit reached: the program's values take more than {value} bytes \
+                 (`--max-memory={value}`)"
+            ),
         }
     }
 }
@@ -77,6 +86,8 @@ pub mod codes {
     /// The program would have written more than `--max-output` bytes to
     /// standard output and standard error together.
     pub const OUTPUT_LIMIT: &str = "P0041";
+    /// The program's live values took more than `--max-memory` bytes.
+    pub const MEMORY_LIMIT: &str = "P0040";
 }
 
 /// The limits one run is under: `None` for each limit not given, else a
@@ -91,6 +102,8 @@ pub struct Limits {
     pub timeout: Option<u64>,
     /// [`Limit::Output`].
     pub max_output: Option<u64>,
+    /// [`Limit::Memory`].
+    pub max_memory: Option<u64>,
 }
 
 impl Limits {
@@ -99,6 +112,7 @@ impl Limits {
         max_steps: None,
         timeout: None,
         max_output: None,
+        max_memory: None,
     };
 
     /// Whether no limit is given.
@@ -112,6 +126,7 @@ impl Limits {
             Limit::Steps => self.max_steps,
             Limit::Time => self.timeout,
             Limit::Output => self.max_output,
+            Limit::Memory => self.max_memory,
         }
     }
 
@@ -121,6 +136,7 @@ impl Limits {
             Limit::Steps => &mut self.max_steps,
             Limit::Time => &mut self.timeout,
             Limit::Output => &mut self.max_output,
+            Limit::Memory => &mut self.max_memory,
         }
     }
 }

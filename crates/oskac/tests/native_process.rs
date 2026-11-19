@@ -4,9 +4,12 @@
 //! `todo`. The clock and the generator are compared on properties that
 //! do not depend on the time or the seed.
 
-#![cfg(all(
-    any(target_os = "linux", target_os = "macos"),
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        any(target_os = "linux", target_os = "macos"),
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(windows, target_arch = "x86_64")
 ))]
 
 mod differential;
@@ -74,9 +77,12 @@ fn a_lot_of_output_goes_through_the_buffer_in_order() {
 /// shows: the buffered output must come out before a stderr line.
 fn interleaved(case: &Case) -> String {
     let (exe, dir) = build_native(case);
+    // The path is the script's `$0`, not part of its text, so the shell
+    // never reads a Windows path's backslashes as escapes.
     let output = Command::new("sh")
         .arg("-c")
-        .arg(format!("{} 2>&1", exe.display()))
+        .arg("\"$0\" 2>&1")
+        .arg(&exe)
         .current_dir(dir)
         .env_clear()
         .output()
@@ -641,7 +647,6 @@ fn assert_same_bytes(
     env: &[(&str, &[u8])],
 ) -> (String, String, Option<i32>) {
     use std::io::Write;
-    use std::os::unix::ffi::OsStrExt;
     use std::process::Stdio;
     let (exe, dir) = build_native(case);
     let run = |mut command: Command| -> Ran {
@@ -652,7 +657,7 @@ fn assert_same_bytes(
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         for (name, value) in env {
-            command.env(name, std::ffi::OsStr::from_bytes(value));
+            command.env(name, os_text(value));
         }
         let mut child = command.spawn().expect("the program should start");
         // Written on its own thread, as in `differential::outcome`, so a
@@ -733,21 +738,20 @@ fn environment_values_that_are_not_utf8_are_not_set() {
 
 #[test]
 fn an_argument_that_is_not_utf8_ends_the_program_with_101_on_both_backends() {
-    use std::os::unix::ffi::OsStrExt;
     let case = Case::file(
         "process_bad_args",
         "fn main(io: Stdout) {\n    let _ = io.println(\"hi\")\n}\n",
     );
     let (native_exe, dir) = build_native(&case);
-    let arg = std::ffi::OsStr::from_bytes(b"a\xFFb");
+    let arg = os_text(b"a\xFFb");
     let native = Command::new(native_exe)
-        .arg(arg)
+        .arg(&arg)
         .current_dir(&dir)
         .output()
         .expect("runs");
     let interpreted = Command::new(env!("CARGO_BIN_EXE_oskac"))
         .args(["run", "--interpret", "main.osk", "--"])
-        .arg(arg)
+        .arg(&arg)
         .current_dir(&dir)
         .output()
         .expect("runs");
@@ -993,5 +997,28 @@ fn a_closed_stderr_pipe_is_still_an_io_error() {
         drop(child.stderr.take());
         let status = child.wait().expect("the program should end");
         assert_eq!(status.code(), Some(1), "{label}");
+    }
+}
+
+/// `bytes` as the system's text. On Windows, where that text is UTF-16,
+/// bytes that are not UTF-8 become an unpaired surrogate between the
+/// valid parts: text that is not Unicode, as the bytes are not on Unix.
+fn os_text(bytes: &[u8]) -> std::ffi::OsString {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        std::ffi::OsStr::from_bytes(bytes).to_os_string()
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        let mut units = Vec::new();
+        for chunk in bytes.utf8_chunks() {
+            units.extend(chunk.valid().encode_utf16());
+            if !chunk.invalid().is_empty() {
+                units.push(0xD800);
+            }
+        }
+        std::ffi::OsString::from_wide(&units)
     }
 }
