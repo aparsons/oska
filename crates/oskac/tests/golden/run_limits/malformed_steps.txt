@@ -1,0 +1,42 @@
+$ oskac run --interpret main.osk --max-steps=0
+--- stdout
+--- stderr
+error: --max-steps takes a whole number of steps above 0, not `0`
+--- exit Some(2)
+
+$ oskac run --interpret main.osk --max-steps=-1
+--- stdout
+--- stderr
+error: --max-steps takes a whole number of steps above 0, not `-1`
+--- exit Some(2)
+
+$ oskac run --interpret main.osk --max-steps=abc
+--- stdout
+--- stderr
+error: --max-steps takes a whole number of steps above 0, not `abc`
+--- exit Some(2)
+
+$ oskac run --interpret main.osk --max-steps=
+--- stdout
+--- stderr
+error: --max-steps takes a whole number of steps above 0, not ``
+--- exit Some(2)
+
+$ oskac run --interpret main.osk --max-steps=1.5
+--- stdout
+--- stderr
+error: --max-steps takes a whole number of steps above 0, not `1.5`
+--- exit Some(2)
+
+$ oskac run --interpret main.osk --max-steps=99999999999999999999
+--- stdout
+--- stderr
+error: --max-steps takes a whole number of steps above 0, not `99999999999999999999`
+--- exit Some(2)
+
+$ oskac run --interpret main.osk --max-steps=5 --max-steps=5
+--- stdout
+--- stderr
+error: --max-steps is given more than once
+--- exit Some(2)
+

@@ -72,7 +72,9 @@ pub mod codes {
     ];
 
     /// The `P`-codes native code panics with: the interpreter's.
-    pub const PANICS: [&str; 18] = [
+    /// `P0038` is listed though native code does not count steps yet
+    /// (#454): `oskac` refuses `--max-steps` on a native run until then.
+    pub const PANICS: [&str; 19] = [
         "P0001",
         "P0002",
         "P0003",
@@ -89,6 +91,7 @@ pub mod codes {
         "P0035",
         "P0036",
         "P0037",
+        oska_check::limits::codes::STEP_LIMIT,
         oska_check::limits::codes::MEMORY_LIMIT,
         oska_check::limits::codes::OUTPUT_LIMIT,
     ];
@@ -126,7 +129,9 @@ pub fn build(program: &Program, target: Target, locate: Locate) -> Result<Vec<u8
 /// `P0040` for `--max-memory`)
 /// when the program reaches it. The checks are in the generated code and
 /// `std.rt`, behind the intrinsics that exist (ADR 0013); with no limit
-/// the executable is [`build`]'s, byte for byte.
+/// the executable is [`build`]'s, byte for byte. Native code does not
+/// count steps yet (#454): `oskac` refuses `--max-steps` on a native run,
+/// so `limits.max_steps` is not built in.
 pub fn build_limited(
     program: &Program,
     target: Target,

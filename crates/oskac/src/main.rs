@@ -52,7 +52,8 @@ USAGE:
                                            authority grant (exit code 3 when
                                            it goes past), or write a baseline
     oskac run [path | -] [--format=json] [--interpret] [--no-cache]
-              [--grant=<file>] [--max-output=<bytes>] [--max-memory=<bytes>]
+              [--grant=<file>] [--max-steps=<n>] [--max-output=<bytes>]
+              [--max-memory=<bytes>]
               [-- args...]
                                            Check a source file, package or
                                            module on standard input (-) and,
@@ -61,6 +62,8 @@ USAGE:
                                            natively on aarch64 and x86_64
                                            Linux, on the interpreter elsewhere
                                            or with --interpret; stop it with
+                                           P0038 after the steps --max-steps
+                                           gives (interpreter only), or with
                                            P0041 before it writes more than
                                            the bytes --max-output gives to
                                            stdout and stderr together, and
@@ -147,8 +150,8 @@ struct CommandLine {
     /// The name `--event=` gives, for `oskac hook`.
     event: Option<String>,
     target: Option<String>,
-    /// The run limits (`--max-output=<bytes>`, `--max-memory=<bytes>`), which only `oskac run`
-    /// takes.
+    /// The run limits (`--max-steps=<n>`, `--max-output=<bytes>`,
+    /// `--max-memory=<bytes>`), which only `oskac run` takes.
     limits: oska_check::limits::Limits,
     /// Why a limit flag is malformed or repeated: a usage error.
     limit_error: Option<String>,
@@ -246,6 +249,15 @@ fn main() -> ExitCode {
     // Only `run` takes a limit: `check` is never mistaken for a run.
     if !line.limits.is_empty() && positional.first() != Some(&"run") {
         eprint!("{USAGE}");
+        return ExitCode::from(2);
+    }
+    // Native code does not count steps yet (#454): a native run refuses
+    // `--max-steps` rather than run without it.
+    if line.limits.max_steps.is_some() && native::native_target(flags).is_some() {
+        eprintln!(
+            "error: --max-steps works only on the interpreter for now: add --interpret \
+             to run the program there"
+        );
         return ExitCode::from(2);
     }
     let gate = match (

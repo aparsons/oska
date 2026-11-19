@@ -1,0 +1,26 @@
+// Steps: 11. Only loop back-edges: `main` is not a step, and `println`
+// and the interpolation of an `Int` run in the runtime.
+//
+// - The `while` loop runs its body 5 times and goes back each time: 5.
+// - The `for` loop runs its body 4 times; a `continue` goes back too: 4.
+// - The `while true` loop goes back twice, then breaks: 2.
+fn main(io: Stdout) {
+    var i = 0
+    while i < 5 {
+        i = i + 1
+    }
+    for n in 0..4 {
+        if n == 1 {
+            continue
+        }
+        i = i + n
+    }
+    var j = 0
+    while true {
+        j = j + 1
+        if j == 3 {
+            break
+        }
+    }
+    let _ = io.println("{i} {j}")
+}

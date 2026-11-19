@@ -6,6 +6,7 @@ pub mod hook;
 pub mod memory;
 pub mod portable;
 pub mod procfs;
+pub mod run_limits;
 
 /// A minimal JSON reader, enough to walk the export. The crate has no
 /// dependencies, so the test brings its own.

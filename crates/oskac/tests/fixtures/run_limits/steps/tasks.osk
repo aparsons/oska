@@ -1,0 +1,17 @@
+// Steps: 4. A spawned task is a closure the runtime calls: a step, and
+// the calls it makes are too. A `scope` block is not a call.
+//
+// - each of the 2 tasks: 1.
+// - `work` from each: 1.
+fn work(n: Int) -> Int {
+    n * 10
+}
+
+fn main(io: Stdout) {
+    let total = scope |s| {
+        let a = s.spawn(|| work(1))
+        let b = s.spawn(|| work(2))
+        a.join() + b.join()
+    }
+    let _ = io.println("{total}")
+}

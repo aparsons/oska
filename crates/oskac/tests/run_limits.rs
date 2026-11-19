@@ -2,7 +2,8 @@
 //! stops a program before it writes more than that many bytes to standard
 //! output and standard error together, with `P0041` and exit code 101, on
 //! the interpreter and natively. A malformed limit, and a limit on any
-//! command but `run`, is a usage error (exit code 2).
+//! command but `run`, is a usage error (exit code 2). The step limit's
+//! tests are in `run_limits_steps.rs`.
 //!
 //! The expected output is in `tests/golden/run_limits/`. To regenerate it
 //! after an intended change, run `UPDATE_GOLDEN=1 cargo test -p oskac
@@ -10,63 +11,10 @@
 
 mod common;
 
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::Path;
 
 use common::portable::Scratch;
-
-fn oskac_in(dir: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_oskac"))
-        .args(args)
-        .current_dir(dir)
-        .env_remove("OSKA_CACHE_DIR")
-        .output()
-        .expect("oskac should run")
-}
-
-fn golden_path(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/golden/run_limits")
-        .join(name)
-}
-
-/// Assert that `actual` is the content of the golden file `name`.
-fn assert_golden(name: &str, actual: &str) {
-    let golden = golden_path(name);
-    if std::env::var_os("UPDATE_GOLDEN").is_some() {
-        std::fs::create_dir_all(golden.parent().expect("a parent")).expect("the golden directory");
-        std::fs::write(&golden, actual).expect("should write the golden file");
-    }
-    let expected = std::fs::read_to_string(&golden)
-        .unwrap_or_else(|e| panic!("golden file {} should exist: {e}", golden.display()));
-    assert!(
-        actual == expected,
-        "output differs from {}; rerun with UPDATE_GOLDEN=1 if the change is intended\n{actual}",
-        golden.display()
-    );
-}
-
-/// What `oskac <args>` printed and its exit code, as one text: the
-/// command line, then stdout, stderr and the exit code.
-fn transcript(dir: &Path, args: &[&str]) -> String {
-    let output = oskac_in(dir, args);
-    format!(
-        "$ oskac {}\n--- stdout\n{}--- stderr\n{}--- exit {:?}\n\n",
-        args.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-        output.status.code()
-    )
-}
-
-/// A scratch directory holding `main.osk` with `src`.
-fn program(name: &str, src: &str) -> Scratch {
-    let dir = Scratch::new("run-limits", name);
-    std::fs::write(dir.join("main.osk"), src).expect("should write main.osk");
-    dir
-}
-
-const HELLO: &str = "fn main(io: Stdout) {\n    let _ = io.println(\"hello\")\n}\n";
+use common::run_limits::{assert_golden, oskac_in, oskac_with_stdin, program, transcript, HELLO};
 
 #[test]
 fn a_max_output_of_zero_a_negative_number_or_no_number_is_a_usage_error() {
@@ -546,26 +494,11 @@ fn main(io: Stdout) {
 /// has a backend.
 #[test]
 fn a_program_on_standard_input_runs_under_the_limit() {
-    use std::io::Write;
     let dir = Scratch::new("run-limits", "stdin");
     for backend in [&["--interpret"][..], &[]] {
         let mut args = vec!["run", "-", "--max-output=20"];
         args.extend_from_slice(backend);
-        let mut child = Command::new(env!("CARGO_BIN_EXE_oskac"))
-            .args(&args)
-            .current_dir(&*dir)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .expect("oskac should start");
-        child
-            .stdin
-            .take()
-            .expect("a stdin")
-            .write_all(ENDLESS.as_bytes())
-            .expect("should write the program");
-        let output = child.wait_with_output().expect("oskac should finish");
+        let output = oskac_with_stdin(&dir, &args, ENDLESS);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(101), "{args:?}: {stderr}");
         assert_eq!(String::from_utf8_lossy(&output.stdout), "line 0\nline 1\n");

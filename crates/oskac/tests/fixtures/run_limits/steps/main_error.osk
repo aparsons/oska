@@ -1,0 +1,23 @@
+// Steps: 2. When `main` returns `Err(e)`, the runtime displays `e` after
+// `main` has returned: `Display.to_string` written in Oska is a step, so
+// a step limit can stop the program there, with nothing printed.
+//
+// - `fail()`: 1.
+// - `Failed.to_string`, to print the error: 1.
+enum Failed {
+    Lost
+}
+
+impl Display for Failed {
+    fn to_string(self) -> String {
+        "lost"
+    }
+}
+
+fn fail() -> Result<(), Failed> {
+    Err(Failed.Lost)
+}
+
+fn main() -> Result<(), Failed> {
+    fail()
+}

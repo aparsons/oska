@@ -1,0 +1,25 @@
+// Steps: 4. `==` and `!=` on a type with its own `Eq` call its `eq`,
+// written in Oska, and so does comparing two lists of it, once for each
+// pair of items the runtime compares.
+//
+// - `p == q` and `p != q`: `Point.eq`, twice: 2.
+// - `[p, q] == [p, q]`: the runtime compares the lists, with `Point.eq`
+//   for each of the 2 pairs: 2.
+struct Point { x: Int, y: Int }
+
+impl Eq for Point {
+    fn eq(self, other: Point) -> Bool {
+        self.x == other.x
+    }
+}
+
+fn main(io: Stdout) {
+    let p = Point(x: 1, y: 2)
+    let q = Point(x: 1, y: 3)
+    let same = p == q
+    let differ = p != q
+    let lists = [p, q] == [p, q]
+    if same || !differ || !lists {
+        let _ = io.println("wrong")
+    }
+}
