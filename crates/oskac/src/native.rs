@@ -14,13 +14,12 @@
 //! program has started (on Windows, which keeps a running program's
 //! file, once it ends), for `oskac test` once every test has run.
 //!
-//! A program the backend refuses (`E0390`) runs on the interpreter
-//! instead, after one note on stderr that says so and why
-//! ([`note_fallback`]): it is a checked program the interpreter supports,
-//! so it runs, but a user timing it or relying on native speed must not
-//! be misled. A program the interpreter refuses too (`E0370`, `E0371`,
-//! `E0380`) goes to it with no note: nothing runs, and the interpreter's
-//! refusal says why.
+//! A program the backend refuses (`E0390`) is an error, as `oskac build`
+//! reports it, and nothing runs: the parity gate ([`gate`]), since every
+//! supported platform is native. `--interpret` runs it on the
+//! interpreter. A program the interpreter refuses too (`E0370`, `E0371`,
+//! `E0380`) goes to it: nothing runs, and the interpreter's refusal says
+//! why, as it always has.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};

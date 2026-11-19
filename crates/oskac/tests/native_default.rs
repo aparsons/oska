@@ -293,21 +293,22 @@ fn tests_report_the_same_on_either_backend() {
 
 #[test]
 fn tests_the_native_backend_refuses_are_an_error_and_interpret_runs_them() {
-    if !NATIVE_HOST {
-        return;
-    }
     let src = "test \"refused\" {\n    let d = dbg(t.fs.restrict_to(\"/\"))\n    \
                t.assert(true)\n}\n";
-    assert_golden(
-        "test_unsupported",
-        &[("unsupported.osk", src)],
-        &["test", "unsupported.osk"],
-    );
+    // `--interpret` runs them on every host; the gate refuses them on the
+    // native ones.
     assert_golden(
         "test_unsupported_interpret",
         &[("unsupported.osk", src)],
         &["test", "unsupported.osk", "--interpret"],
     );
+    if NATIVE_HOST {
+        assert_golden(
+            "test_unsupported",
+            &[("unsupported.osk", src)],
+            &["test", "unsupported.osk"],
+        );
+    }
 }
 
 // ---- aarch64 and x86_64 Linux and macOS: the default is native --------------

@@ -70,7 +70,10 @@ fn assert_gated(dir: &Path, target: &str) {
             // The test's own `dbg`, at its own place.
             let stderr = text(&output.stderr);
             assert!(
-                stderr.lines().count() == 1 && stderr.contains("error[E0390]: "),
+                stderr.lines().count() == 1
+                    && stderr.contains(
+                        ":7:13: error[E0390]: `oskac build` cannot compile `dbg` of a `Dir` yet"
+                    ),
                 "{command}: {stderr}"
             );
         }
