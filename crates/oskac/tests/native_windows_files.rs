@@ -9,6 +9,8 @@
 //!   (`a.txt:hidden`), which are no plain file beneath the root.
 //! - **A name too long** for `NtCreateFile`'s 16-bit length.
 //! - **A root named by a drive path** (`C:\...`), with `\` or `/`.
+//! - **A path beneath a root** read as Rust reads it on Windows: `\`
+//!   separates, and a drive or a leading `\` makes it absolute.
 //!
 //! Every case starts from the tree `native_files.rs` uses:
 //!
@@ -126,7 +128,7 @@ fn a_junction_at_any_component_is_refused_and_nothing_escapes() {
     io.println(done(root.write_only().create_dir(Path.new("out"))))?
     io.println(shown(root.read_only().read_to_string(Path.new("alias/nested.txt"))))?
     io.println(shown(root.read_only().restrict_to(Path.new("out")).read_to_string(Path.new("secret.txt"))))?
-    io.println(shown(read.restrict_to_file("root/out/secret.txt").read_to_string()))?
+    io.println(shown(read.restrict_to_file("root/out").read_to_string()))?
     io.println(shown(read.restrict_to("root-link").read_to_string(Path.new("inside.txt"))))?"#,
     )
     .with_setup(|dir| {
@@ -250,7 +252,7 @@ fn a_root_named_by_a_drive_path_is_opened_with_either_separator() {
     // the native one with it as an argument, and print no path.
     let case = case(
         "drive_root",
-        r#"    let at = args.get(1).unwrap_or("")
+        r#"    let at = args.get(1).unwrap_or("").assume_trusted()
     let root = read.restrict_to("{at}\\root")
     io.println(shown(root.read_to_string(Path.new("sub/nested.txt"))))?
     io.println(listed(root.list_dir(Path.new("."))))?
@@ -292,4 +294,29 @@ fn a_root_named_by_a_drive_path_is_opened_with_either_separator() {
         "{native:?}"
     );
     assert!(lines[4].contains("`root-link` is a symlink"), "{native:?}");
+}
+
+#[test]
+fn a_path_beneath_a_root_is_read_as_windows_reads_it() {
+    let case = case(
+        "separators",
+        r#"    let root = fs.restrict_to("root")
+    io.println(shown(root.read_only().read_to_string(Path.new("sub\\nested.txt"))))?
+    io.println(shown(root.read_only().read_to_string(Path.new("sub\\..\\inside.txt"))))?
+    io.println(shown(root.read_only().read_to_string(Path.new("\\inside.txt"))))?
+    io.println(shown(root.read_only().read_to_string(Path.new("C:inside.txt"))))?
+    io.println(shown(root.read_only().read_to_string(Path.new("..\\outside\\secret.txt"))))?
+    io.println(done(root.write_only().write(Path.new("sub\\"), "x")))?
+    io.println(done(root.write_only().write(Path.new("sub/a:b"), "x")))?"#,
+    );
+    let outcome = same(&case);
+    let lines: Vec<&str> = outcome.stdout.lines().collect();
+    assert_eq!(lines[..2], ["nested text", "inside text"], "{outcome:#?}");
+    for line in &lines[2..4] {
+        assert!(line.contains("is absolute"), "{outcome:#?}");
+    }
+    assert!(lines[4].contains("leads outside"), "{outcome:#?}");
+    for line in &lines[5..] {
+        assert!(line.contains("does not end in a file name"), "{outcome:#?}");
+    }
 }

@@ -3735,6 +3735,9 @@ fn confine_names(path: String) -> Result<List<String>, IoError> {
     if path == "" {
         return Err(io_error_text("an empty path names no file"))
     }
+    if on_windows() {
+        return win_confine_names(path)
+    }
     if path.starts_with("/") {
         return Err(io_error_text("`{path}` is absolute; a directory capability takes paths relative to its root"))
     }
@@ -3761,6 +3764,12 @@ fn confine_names(path: String) -> Result<List<String>, IoError> {
 // them.
 fn names_to_create(path: String) -> Result<List<String>, IoError> {
     let names = confine_names(path)?
+    if on_windows() {
+        if !win_ends_in_a_name(path) {
+            return Err(io_error_text("`{path}` does not end in a file name; a write, a new directory or a file needs one"))
+        }
+        return Ok(names)
+    }
     let parts = path.split("/")
     let last = parts.at(parts.len() - 1)
     if last == "" || last == "." || last == ".." {
@@ -3866,6 +3875,41 @@ fn win_components(path: String) -> List<String> {
     parts
 }
 
+// `confine_names` on Windows, where Rust's `Path::components` reads a
+// path: `\\` separates as `/` does, and a path starting with a prefix
+// (`C:`, `\\server\share`) or `\\` is absolute.
+fn win_confine_names(path: String) -> Result<List<String>, IoError> {
+    let parts = win_components(path)
+    if parts.len() > 0 && (parts.at(0) == "\\" || win_prefix(parts.at(0))) {
+        return Err(io_error_text("`{path}` is absolute; a directory capability takes paths relative to its root"))
+    }
+    var names: List<String> = []
+    for part in parts {
+        if part == "." {
+            continue
+        }
+        if part == ".." {
+            if names.len() == 0 {
+                return Err(io_error_text("`{path}` leads outside the capability's root"))
+            }
+            names = all_but_last(names)
+            continue
+        }
+        names.push(part)
+    }
+    Ok(names)
+}
+
+// Whether `path` as written ends in a plain name on Windows: not in `/`
+// or `\\`, `.` or `..`, and not in a name Rust reads as a drive (`a:b`).
+fn win_ends_in_a_name(path: String) -> Bool {
+    let pieces = win_backslashed(path).split("\\")
+    let last = pieces.at(pieces.len() - 1)
+    let length = text_length(rt_mem_text(last))
+    let drive = length >= 2 && byte_at(last, 1) == 58 && ascii_letter(byte_at(last, 0))
+    !(last == "" || last == "." || last == ".." || drive)
+}
+
 // Whether `byte` is an ASCII letter, as a drive letter is.
 fn ascii_letter(byte: Int) -> Bool {
     byte >= 65 && byte <= 90 || byte >= 97 && byte <= 122
@@ -3876,6 +3920,16 @@ fn ascii_letter(byte: Int) -> Bool {
 fn win_prefix(part: String) -> Bool {
     let length = text_length(rt_mem_text(part))
     length == 2 && byte_at(part, 1) == 58 || length > 2 && byte_at(part, 0) == 92 && byte_at(part, 1) == 92
+}
+
+// `path`, of the components `parts`, as a message shows it: on Windows
+// with `/` for `\\` unless it starts with a prefix, which is shown as it
+// is (the interpreter's `shown`).
+fn shown_root(parts: List<String>, path: String) -> String {
+    if on_windows() && !(parts.len() > 0 && win_prefix(parts.at(0))) {
+        return byte_swapped(path, 92, 47)
+    }
+    path
 }
 
 // The first `count` of the Windows components `parts` as one path again,
@@ -4770,7 +4824,7 @@ pub fn fs_restrict_to_file(fs: Int, file: String) -> Root {
             Err(e) => nowhere(file, e.message.assume_trusted())
         }
         None => {
-            let path = path_of(parts, parts.len())
+            let path = shown_root(parts, path_of(parts, parts.len()))
             nowhere(file, "`{path}` does not end in a file name")
         }
     }
@@ -5600,14 +5654,19 @@ fn last_name(path: String) -> String {
 
 // `text` with each `/` a `\`, as a trusted path is opened on Windows.
 fn win_backslashed(text: String) -> String {
+    byte_swapped(text, 47, 92)
+}
+
+// `text` with each byte `from` made `to`.
+fn byte_swapped(text: String, from: Int, to: Int) -> String {
     let object = rt_mem_text(text)
     let length = text_length(object)
     let copy = text_new(length)
     copy_bytes(text_data(copy), text_data(object), length)
     var i = 0
     while i < length {
-        if rt_mem_load8(rt_mem_add(text_data(copy), i)) == 47 {
-            rt_mem_store8(rt_mem_add(text_data(copy), i), 92)
+        if rt_mem_load8(rt_mem_add(text_data(copy), i)) == from {
+            rt_mem_store8(rt_mem_add(text_data(copy), i), to)
         }
         i = i + 1
     }
