@@ -9,7 +9,7 @@ The rules are checked by shared fixtures, in `scripts/install/receipt-fixtures` 
 The receipt is one JSON object. Uninstall reads these fields; any other field is kept and ignored.
 
 - `schema`: the JSON integer `1`. Anything else, `1.0` included, is another schema.
-- `version`: the version installed, such as `"0.4.0"`.
+- `version`: the version installed, such as `"0.5.0"`.
 - `files`: an array with one object per thing the installer wrote. Each has a `path` and a `kind`, both strings. The other fields depend on the kind: `sha256` (lowercase hex SHA-256 of the file as written), `line` (a profile line) and `project` (a `--hook` project directory).
 
 A receipt is refused as a whole (`unsafe_path`, nothing removed) when uninstall cannot read it for certain:

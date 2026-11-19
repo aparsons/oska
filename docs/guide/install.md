@@ -1,6 +1,6 @@
 # Install
 
-Oska is pre-alpha. The latest release is **v0.4.0**. You can install `oskac`, the compiler and runner, from a signed binary with a one-line installer, or [build it from source](#build-from-source).
+Oska is pre-alpha. The latest release is **v0.5.0**. You can install `oskac`, the compiler and runner, from a signed binary with a one-line installer, or [build it from source](#build-from-source).
 
 ## One-line installers
 
@@ -20,7 +20,7 @@ What the installers do:
 
 - **They never prompt.** They are safe to run from a script, a CI job, or an AI agent.
 - **They install to `~/.oska/bin`.** Set `OSKA_HOME` to install into `$OSKA_HOME/bin` instead. They don't change your `PATH`; if `~/.oska/bin` is not on it, they print the line to add.
-- **They verify before they install.** The installer checks the SSH signature on `SHA256SUMS` (`ssh-keygen -Y verify`, so it needs OpenSSH 8.1 or newer) against the release key built into the installer. The signed file's first line, `# oska-release v0.4.0`, names the release, and it must be the one the installer asked for, so an old release cannot be served as a newer one. Then the installer checks the download's SHA-256 checksum against `SHA256SUMS`, and checks that the binary reports the expected version. If any check fails, nothing is installed and the installer exits with a non-zero status.
+- **They verify before they install.** The installer checks the SSH signature on `SHA256SUMS` (`ssh-keygen -Y verify`, so it needs OpenSSH 8.1 or newer) against the release key built into the installer. The signed file's first line, `# oska-release v0.5.0`, names the release, and it must be the one the installer asked for, so an old release cannot be served as a newer one. Then the installer checks the download's SHA-256 checksum against `SHA256SUMS`, and checks that the binary reports the expected version. If any check fails, nothing is installed and the installer exits with a non-zero status.
 - **They take the latest release from a signed index.** Without `--version`, the installer reads `release-index.json`, which names the latest release and is signed by the release key in its own namespace, `oska-index`. It refuses an index that is not signed by that key (`bad_index`), one that has expired (`stale_index`), and one older than the last index this install accepted (`rollback_refused`). It warns when the index expires within 30 days. `--version` does not read the index. Until the site publishes its first index, the installer reads the unsigned `latest.json` instead and reports `index_verified: false`.
 - **They download over HTTPS only.** They refuse a redirect to a plain `http://` URL.
 - **They never downgrade by accident.** If the release they would install is older than the installed `oskac`, they stop with `downgrade_refused` and install nothing. To go back to an older release, name it with `--version` and add `--allow-downgrade`.
@@ -31,19 +31,19 @@ What the installers do:
 To pass options through the pipe:
 
 ```sh
-curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.4.0 --json
+curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.5.0 --json
 ```
 
 `iex` cannot pass options, so in PowerShell run the script as a script block:
 
 ```powershell
-& ([scriptblock]::Create((irm https://oskalang.dev/install.ps1))) --version 0.4.0 --json
+& ([scriptblock]::Create((irm https://oskalang.dev/install.ps1))) --version 0.5.0 --json
 ```
 
 A successful `--json` run prints:
 
 ```json
-{"ok": true, "action": "installed", "version": "0.4.0", "tag": "v0.4.0", "previous_version": null, "platform": "linux-x86_64", "path": "/home/you/.oska/bin/oskac", "bin_dir": "/home/you/.oska/bin", "on_path": false, "checksum_verified": true, "signature_verified": true, "receipt": "/home/you/.oska/receipt.json", "index_verified": true, "index_serial": 4}
+{"ok": true, "action": "installed", "version": "0.5.0", "tag": "v0.5.0", "previous_version": null, "platform": "linux-x86_64", "path": "/home/you/.oska/bin/oskac", "bin_dir": "/home/you/.oska/bin", "on_path": false, "checksum_verified": true, "signature_verified": true, "receipt": "/home/you/.oska/receipt.json", "index_verified": true, "index_serial": 4}
 ```
 
 - `action` is one of:
@@ -91,8 +91,8 @@ Each install writes `receipt.json` into the Oska home (`~/.oska`, or `OSKA_HOME`
 ```json
 {
   "schema": 1,
-  "version": "0.4.0",
-  "tag": "v0.4.0",
+  "version": "0.5.0",
+  "tag": "v0.5.0",
   "platform": "linux-x86_64",
   "installed_at": "2026-11-12T09:30:00Z",
   "site": "https://oskalang.dev",
@@ -134,10 +134,10 @@ The installers check every download for you. To check a release without them, co
 SHA256:PjwTDycs560g1ktWC/gdznamSkzm4xH+OAdfntNaW4o
 ```
 
-The same fingerprint is on the [security page](../../SECURITY.md#verifying-a-release). On Linux, for v0.4.0:
+The same fingerprint is on the [security page](../../SECURITY.md#verifying-a-release). On Linux, for v0.5.0:
 
 ```sh
-base=https://oskalang.dev/releases/v0.4.0
+base=https://oskalang.dev/releases/v0.5.0
 curl -fsSL --remote-name-all "$base/SHA256SUMS" "$base/SHA256SUMS.sig" "$base/oskac-linux-x86_64"
 curl -fsSL https://oskalang.dev/oska-release.pub -o oska-release.pub
 ssh-keygen -l -E sha256 -f oska-release.pub
@@ -149,7 +149,7 @@ sha256sum --ignore-missing -c SHA256SUMS
 
 1. `ssh-keygen -l` must print the fingerprint above. If it prints another, stop: the key is not the release key.
 2. `ssh-keygen -Y verify` must print `Good "oska-release" signature`.
-3. The first line of `SHA256SUMS` must be `# oska-release v0.4.0`, the release you asked for.
+3. The first line of `SHA256SUMS` must be `# oska-release v0.5.0`, the release you asked for.
 4. `sha256sum` must print `OK` for the binary you downloaded. On macOS, use `shasum -a 256 --ignore-missing -c SHA256SUMS`.
 
 ### Verify the installation
@@ -179,7 +179,7 @@ curl -fsSL https://oskalang.dev/install.sh | sh -s -- --check --json
 ```
 
 ```json
-{"ok": true, "action": "checked", "installed": "0.3.0", "latest": "0.4.0", "tag": "v0.4.0", "update_available": true, "index_verified": true, "index_serial": 4, "index_expires": "2027-02-11T10:00:00Z"}
+{"ok": true, "action": "checked", "installed": "0.4.0", "latest": "0.5.0", "tag": "v0.5.0", "update_available": true, "index_verified": true, "index_serial": 4, "index_expires": "2027-02-11T10:00:00Z"}
 ```
 
 - `installed` is `null` when no `oskac` is installed.
