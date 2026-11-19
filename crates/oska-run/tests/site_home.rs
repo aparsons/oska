@@ -13,33 +13,12 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use common::site::{self, between, MINIMAL_REPO};
+use common::site::{self, between, hrefs, navigation, MINIMAL_REPO};
 
 /// The site the generator writes from [`MINIMAL_REPO`] and `inputs`,
 /// asserting that it succeeded.
 fn site_of(inputs: &[(&str, &str)]) -> BTreeMap<String, String> {
     site::site_of(MINIMAL_REPO, inputs)
-}
-
-/// Every `href` in `html`, in order.
-fn hrefs(html: &str) -> Vec<&str> {
-    html.split("href=\"")
-        .skip(1)
-        .filter_map(|rest| rest.split('"').next())
-        .collect()
-}
-
-/// The links of a page's navigation, as `(href, label)`, in order.
-fn navigation(page: &str) -> Vec<(String, String)> {
-    let nav = between(page, "<nav aria-label=\"Site\">", "</nav>");
-    nav.split("<a href=\"")
-        .skip(1)
-        .map(|rest| {
-            let href = rest.split('"').next().unwrap_or("").to_string();
-            let label = between(rest, ">", "</a>").to_string();
-            (href, label)
-        })
-        .collect()
 }
 
 /// A repository with every page the navigation can link.
@@ -266,96 +245,4 @@ fn the_footer_links_the_research() {
     let bare = site_of(&[]);
     let footer = between(&bare["index.html"], "<footer>", "</footer>");
     assert!(!footer.contains("/research/"), "{footer}");
-}
-
-// ---- The real site ---------------------------------------------------------------------
-
-#[test]
-fn the_real_home_page_leads_with_install_the_prompt_and_the_quickstart() {
-    let site = site::real_site();
-    let home = between(&site["index.html"], "<main id=\"main-content\">", "</main>");
-    // In the order a newcomer needs them.
-    let at = |needle: &str| {
-        home.find(needle)
-            .unwrap_or_else(|| panic!("the home page has no {needle:?}:\n{home}"))
-    };
-    let order = [
-        at("curl -fsSL https://oskalang.dev/install.sh | sh"),
-        at("irm https://oskalang.dev/install.ps1 | iex"),
-        at("<section class=\"agent-setup\""),
-        at("<code>oskac check"),
-        at("href=\"/guide/quickstart.html\""),
-        at("href=\"/guide/what-works-today.html\""),
-        at("href=\"/security.html\""),
-    ];
-    assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}\n{home}");
-    assert!(home.contains("href=\"/guide/install.html\""), "{home}");
-    // No link from the home page to itself, and no contributor material.
-    for href in hrefs(home) {
-        assert!(
-            ![
-                "/",
-                "/index.html",
-                "https://oskalang.dev",
-                "https://oskalang.dev/"
-            ]
-            .contains(&href),
-            "the home page links to itself: {href}"
-        );
-    }
-    assert!(!home.contains("cargo build"), "{home}");
-    assert!(!home.contains("Repository layout"), "{home}");
-}
-
-#[test]
-fn the_real_navigation_and_reference_page_reach_every_section() {
-    let site = site::real_site();
-    let nav: Vec<String> = navigation(&site["index.html"])
-        .into_iter()
-        .map(|(_, label)| label)
-        .collect();
-    assert_eq!(
-        nav,
-        [
-            "Oska",
-            "Install",
-            "Quickstart",
-            "Tour",
-            "Guides",
-            "Agent setup",
-            "Codes",
-            "Security",
-            "Reference"
-        ]
-    );
-    let reference = hrefs(between(
-        &site["reference.html"],
-        "<main id=\"main-content\">",
-        "</main>",
-    ))
-    .into_iter()
-    .map(str::to_string)
-    .collect::<Vec<_>>();
-    for href in [
-        "/ast.html",
-        "/checker.html",
-        "/design.html",
-        "/runtime.html",
-        "/glossary.html",
-        "/adr/",
-        "/research/",
-    ] {
-        assert!(reference.iter().any(|h| h == href), "{href}: {reference:?}");
-    }
-}
-
-#[test]
-fn what_works_today_is_a_guide_listed_in_llms_txt() {
-    let site = site::real_site();
-    assert!(site.contains_key("guide/what-works-today.html"));
-    assert!(
-        site["llms.txt"].contains("](https://oskalang.dev/guide/what-works-today.md)"),
-        "{}",
-        site["llms.txt"]
-    );
 }
