@@ -1,6 +1,6 @@
 # Signing and notarizing for macOS
 
-`oskac build --target macos-aarch64` and `--target macos-x86_64` write a macOS executable that runs on a Mac without Apple's tools. To give it to other people as a download, sign it with your own Developer ID and have Apple notarize it. This page says what `oskac` signs, what that signature does and does not do, and how to do the rest with Apple's tools. Signing with a Developer ID and notarizing are your steps: `oskac` does neither.
+`oskac build --target macos-aarch64` and `--target macos-x86_64` write a macOS executable on any host, with no Apple tools, and it runs on a Mac. To give it to other people as a download, sign it with your own Developer ID and have Apple notarize it. This page says what `oskac` signs, what that signature does and does not do, and how to do the rest with Apple's tools. Signing with a Developer ID and notarizing are your steps: `oskac` does neither.
 
 ## What `oskac` signs
 
@@ -8,8 +8,8 @@ Every macOS executable `oskac` writes, for both processors, carries an **ad-hoc 
 
 An ad-hoc signature does these things:
 
-- **It lets the executable run on Apple silicon.** macOS on Apple silicon refuses to run code that has no signature at all. An ad-hoc signature is enough.
-- **It lets macOS notice a damaged or changed file.** The signature hashes every page of the file, so a file changed after `oskac` wrote it no longer matches, and macOS refuses to run it.
+- **It lets the executable run on Apple silicon.** macOS on Apple silicon refuses to run arm64 code that has no signature at all. An ad-hoc signature is enough.
+- **It lets macOS notice a damaged or changed file.** The signature hashes every page of the file, so a file changed after `oskac` wrote it no longer matches. On Apple silicon, macOS refuses to run it. An Intel Mac enforces them only in some cases, such as under the hardened runtime, so there a changed file may still run.
 
 It does not do these things:
 
@@ -61,7 +61,7 @@ If the result is `Invalid`, `xcrun notarytool log <submission-id> --keychain-pro
 
 ## Staple, or not
 
-`xcrun stapler staple` attaches the ticket to a file, so that Gatekeeper can check it offline. A ticket cannot be stapled to a bare executable, only to an app bundle, a disk image or an installer package. For a bare executable, Gatekeeper looks the ticket up online the first time it runs. To staple, put the signed executable in a disk image or an installer package, sign and notarize that, and staple it:
+`xcrun stapler staple` attaches the ticket to a file, so that Gatekeeper can check it offline. A ticket cannot be stapled to a bare executable. For one, Gatekeeper looks the ticket up online the first time it runs. To staple, put the signed executable in a disk image, then sign the disk image with `codesign` as above, notarize it, and staple it. An installer package works too, but it is signed with a separate Developer ID Installer certificate, by `productbuild` or `productsign`, not by `codesign`:
 
 ```sh
 xcrun stapler staple app.dmg

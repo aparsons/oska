@@ -32,7 +32,7 @@ fn main(io: Stdout) -> Result<(), IoError> {
 oskac check hello.osk       # type-check and print each function's authority
 oskac run hello.osk         # check, then run
 oskac test hello.osk        # run the file's test blocks
-oskac build hello.osk       # compile to an executable for this machine, ./hello
+oskac build hello.osk       # compile to a native executable, ./hello
 oskac build hello.osk --target macos-aarch64  # or for another platform (--target all: every one)
 ```
 
@@ -62,7 +62,7 @@ Run `oskac check`, `oskac run` and `oskac test` in the package directory. Items 
 | `crates/oska-syntax` | Lexer (and, soon, parser and AST) |
 | `crates/oska-check` | Type checker and authority report (`oskac check`) |
 | `crates/oska-run` | Interpreter (`oskac run --interpret`, and `oskac run` on hosts with no native backend) and its test runner |
-| `crates/oska-native` | Native backend: aarch64 and x86_64 Linux executables (`oskac build`, and `oskac run` and `oskac test` on aarch64 and x86_64 Linux), with the runtime `std.rt` in Oska |
+| `crates/oska-native` | Native backend: Linux and macOS executables for aarch64 and x86_64 (`oskac build`, and `oskac run` and `oskac test` on those hosts), with the runtime `std.rt` in Oska |
 | `crates/oska-sys` | The only crate with `unsafe`: the interpreter's confined filesystem calls |
 | `crates/oska-eval` | The evaluation harness for AI agents writing Oska; never released |
 | `eval/` | The harness's task set ([how a task is written](eval/README.md)) |
