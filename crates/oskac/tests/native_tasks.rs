@@ -5,12 +5,9 @@
 //! outliving their scope, every way out of a block, and memory. The
 //! `std.html` programs are `tests/html.rs`'s, plus hostile input.
 
-#![cfg(any(
-    all(
-        target_os = "linux",
-        any(target_arch = "aarch64", target_arch = "x86_64")
-    ),
-    all(target_os = "macos", target_arch = "aarch64")
+#![cfg(all(
+    any(target_os = "linux", target_os = "macos"),
+    any(target_arch = "aarch64", target_arch = "x86_64")
 ))]
 
 mod differential;

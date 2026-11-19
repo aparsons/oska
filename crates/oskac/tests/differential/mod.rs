@@ -15,7 +15,7 @@
 //! sides, so a panic's location reads the same.
 //!
 //! It is compiled only where native executables run: aarch64 and x86_64
-//! Linux, and Apple silicon macOS, each running what it builds for its own
+//! Linux and macOS, each running what it builds for its own
 //! platform. Every target
 //! with a backend must compile every case (spec #153): the host also
 //! builds it with `--target` for each other one, which it cannot run, so

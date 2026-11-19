@@ -1,14 +1,14 @@
-//! `oskac build --target macos-aarch64` (spec #154, ticket #169): the
-//! first macOS executables, a Mach-O that `dyld` loads, importing only
+//! `oskac build --target macos-aarch64` (spec #154, ticket #169) and
+//! `--target macos-x86_64` (#173): macOS executables, a Mach-O that `dyld` loads, importing only
 //! from `libSystem`, with an ad-hoc code signature `oskac` writes itself.
 //!
 //! Every host checks the file against Apple's formats (`mach-o/loader.h`,
 //! dyld's `mach-o/fixup-chains.h`, the code signature's `CodeDirectory`),
-//! byte by byte, so the writer is developed without a Mac. On an Apple
-//! silicon Mac the tests also run what they build, compare it with the
+//! byte by byte, so the writer is developed without a Mac. On a Mac the
+//! tests also run what they build for it, compare it with the
 //! interpreter, and ask macOS's own `codesign` to verify the signature.
 //!
-//! The case with golden output compares the exit code, stdout, stderr and
+//! The cases with golden output compare the exit code, stdout, stderr and
 //! the files the build left with `tests/golden/build_macos/<case>.txt`;
 //! regenerate it after an intended change with
 //! `UPDATE_GOLDEN=1 cargo test -p oskac --test build_macos` and review
@@ -44,16 +44,52 @@ fn oskac(dir: &Path, args: &[&str]) -> Output {
         .expect("oskac should run")
 }
 
-/// `hello.osk`'s macOS executable, built in a fresh directory for `case`.
-fn hello(case: &str) -> Vec<u8> {
-    let dir = workspace(case, &[("hello.osk", HELLO)]);
+/// A macOS target, and what its executables say about it.
+struct Mac {
+    platform: &'static str,
+    /// The header's `cputype` and `cpusubtype`.
+    cputype: u32,
+    cpusubtype: u32,
+    /// Its page: every segment starts on one.
+    page: u64,
+    /// The functions its executables import from `libSystem`, in the
+    /// order of the import table (ADR 0015: the list is reviewed surface).
+    imports: [&'static str; 24],
+    /// Whether this host runs its executables.
+    is_host: bool,
+}
+
+/// Both macOS targets.
+const MACS: [Mac; 2] = [
+    Mac {
+        platform: "macos-aarch64",
+        cputype: 0x0100_000c,
+        cpusubtype: 0,
+        page: 0x4000,
+        imports: IMPORTS,
+        is_host: cfg!(all(target_os = "macos", target_arch = "aarch64")),
+    },
+    Mac {
+        platform: "macos-x86_64",
+        cputype: 0x0100_0007,
+        cpusubtype: 3,
+        page: 0x1000,
+        imports: IMPORTS_X86_64,
+        is_host: cfg!(all(target_os = "macos", target_arch = "x86_64")),
+    },
+];
+
+/// `hello.osk`'s executable for `mac`, built in a fresh directory for
+/// `case`.
+fn hello(mac: &Mac, case: &str) -> Vec<u8> {
+    let dir = workspace(&format!("{}/{case}", mac.platform), &[("hello.osk", HELLO)]);
     let built = oskac(
         &dir,
         &[
             "build",
             "hello.osk",
             "--target",
-            "macos-aarch64",
+            mac.platform,
             "-o",
             "hello",
         ],
@@ -63,9 +99,16 @@ fn hello(case: &str) -> Vec<u8> {
 }
 
 #[test]
-fn macos_aarch64_names_a_macos_executable() {
-    let dir = workspace("macos_aarch64", &[("hello.osk", HELLO)]);
-    let args = ["build", "hello.osk", "--target", "macos-aarch64"];
+fn each_macos_platform_names_a_macos_executable() {
+    for mac in &MACS {
+        names_a_macos_executable(mac);
+    }
+}
+
+fn names_a_macos_executable(mac: &Mac) {
+    let case = mac.platform.replace('-', "_");
+    let dir = workspace(&case, &[("hello.osk", HELLO)]);
+    let args = ["build", "hello.osk", "--target", mac.platform];
     let mut before = BTreeSet::new();
     files_in(&dir, &mut before);
     let output = oskac(&dir, &args);
@@ -85,8 +128,9 @@ fn macos_aarch64_names_a_macos_executable() {
             .map(|w| format!("{w}\n"))
             .collect::<String>(),
     );
-    let golden =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/build_macos/macos_aarch64.txt");
+    let golden = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/golden/build_macos")
+        .join(format!("{case}.txt"));
     if std::env::var_os("UPDATE_GOLDEN").is_some() {
         std::fs::create_dir_all(golden.parent().expect("a parent")).expect("a golden directory");
         std::fs::write(&golden, &actual).expect("should write the golden file");
@@ -100,7 +144,7 @@ fn macos_aarch64_names_a_macos_executable() {
     );
     let file = std::fs::read(dir.join("hello")).expect("the executable should exist");
     assert_eq!(u32_at(&file, 0), MH_MAGIC_64);
-    assert_eq!(u32_at(&file, 4), CPU_TYPE_ARM64);
+    assert_eq!(u32_at(&file, 4), mac.cputype);
 }
 
 /// Every file name in `dir`.
@@ -114,7 +158,6 @@ fn files_in(dir: &Path, out: &mut BTreeSet<String>) {
 // ---- Reading the file ------------------------------------------------------------
 
 const MH_MAGIC_64: u32 = 0xfeed_facf;
-const CPU_TYPE_ARM64: u32 = 0x0100_000c;
 const MH_EXECUTE: u32 = 2;
 const MH_NOUNDEFS: u32 = 0x1;
 const MH_DYLDLINK: u32 = 0x4;
@@ -131,9 +174,6 @@ const LC_CODE_SIGNATURE: u32 = 0x1d;
 const LC_BUILD_VERSION: u32 = 0x32;
 const LC_MAIN: u32 = 0x8000_0028;
 const LC_DYLD_CHAINED_FIXUPS: u32 = 0x8000_0034;
-
-/// Apple silicon's page: every segment starts on one.
-const PAGE: u64 = 0x4000;
 
 fn u16_at(bytes: &[u8], at: usize) -> u16 {
     u16::from_le_bytes([bytes[at], bytes[at + 1]])
@@ -250,11 +290,17 @@ fn only(file: &[u8], cmd: u32) -> usize {
 // ---- The file's format -----------------------------------------------------------
 
 #[test]
-fn the_header_says_a_position_independent_arm64_executable_dyld_links() {
-    let file = hello("header");
+fn the_header_says_a_position_independent_executable_dyld_links() {
+    for mac in &MACS {
+        header(mac);
+    }
+}
+
+fn header(mac: &Mac) {
+    let file = hello(mac, "header");
     assert_eq!(u32_at(&file, 0), MH_MAGIC_64);
-    assert_eq!(u32_at(&file, 4), CPU_TYPE_ARM64);
-    assert_eq!(u32_at(&file, 8), 0, "CPU_SUBTYPE_ARM64_ALL");
+    assert_eq!(u32_at(&file, 4), mac.cputype);
+    assert_eq!(u32_at(&file, 8), mac.cpusubtype, "the CPU_SUBTYPE_*_ALL");
     assert_eq!(u32_at(&file, 12), MH_EXECUTE);
     assert_eq!(
         u32_at(&file, 24),
@@ -285,7 +331,14 @@ fn the_header_says_a_position_independent_arm64_executable_dyld_links() {
 
 #[test]
 fn code_is_never_writable_and_data_never_executable() {
-    let file = hello("segments");
+    for mac in &MACS {
+        segments_of(mac);
+    }
+}
+
+fn segments_of(mac: &Mac) {
+    let page = mac.page;
+    let file = hello(mac, "segments");
     let segments = segments(&file);
     let names: Vec<&str> = segments.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(
@@ -336,9 +389,9 @@ fn code_is_never_writable_and_data_never_executable() {
         );
     }
     for segment in &segments[1..] {
-        assert_eq!(segment.vmaddr % PAGE, 0, "{}", segment.name);
-        assert_eq!(segment.fileoff % PAGE, 0, "{}", segment.name);
-        assert_eq!(segment.vmsize % PAGE, 0, "{}", segment.name);
+        assert_eq!(segment.vmaddr % page, 0, "{}", segment.name);
+        assert_eq!(segment.fileoff % page, 0, "{}", segment.name);
+        assert_eq!(segment.vmsize % page, 0, "{}", segment.name);
         assert!(segment.filesize <= segment.vmsize, "{}", segment.name);
         for (name, addr, size, _) in &segment.sections {
             assert!(
@@ -367,14 +420,14 @@ fn code_is_never_writable_and_data_never_executable() {
     assert_eq!(code_addr - text.vmaddr, u64::from(*code_offset));
     assert!((u64::from(*code_offset)..u64::from(*code_offset) + code_size).contains(&entry));
     // macOS, from macOS 12, whose dyld binds an arm64 executable's
-    // chained fixups.
+    // chained fixups, on both processors.
     let build = only(&file, LC_BUILD_VERSION);
     assert_eq!(u32_at(&file, build + 8), 1, "PLATFORM_MACOS");
     assert!(u32_at(&file, build + 12) >= 0x000c_0000, "minos");
 }
 
-/// The functions every macOS executable imports from `libSystem`, in the
-/// order of its import table (ADR 0015: the list is reviewed surface).
+/// The functions every `macos-aarch64` executable imports from
+/// `libSystem`, in the order of its import table.
 const IMPORTS: [&str; 24] = [
     "___error",
     "_read",
@@ -402,9 +455,46 @@ const IMPORTS: [&str; 24] = [
     "__exit",
 ];
 
+/// [`IMPORTS`] for `macos-x86_64`: the same, but the functions that take
+/// or give a `struct stat` or `struct dirent` are their 64-bit-inode
+/// variants, which C's headers select on x86_64 and arm64 has alone.
+const IMPORTS_X86_64: [&str; 24] = [
+    "___error",
+    "_read",
+    "_write",
+    "_openat",
+    "_close",
+    "_mkdirat",
+    "_fdopendir$INODE64",
+    "_readdir$INODE64",
+    "_closedir",
+    "_fstat$INODE64",
+    "_ftruncate",
+    "_readlinkat",
+    "_getcwd",
+    "_fcntl",
+    "_mmap",
+    "_munmap",
+    "_clock_gettime",
+    "_ioctl",
+    "_getentropy",
+    "_sigaction",
+    "_sigaltstack",
+    "_getpid",
+    "_kill",
+    "__exit",
+];
+
 #[test]
 fn it_imports_only_libsystem_bound_by_chained_fixups() {
-    let file = hello("imports");
+    for mac in &MACS {
+        imports_of(mac);
+    }
+}
+
+fn imports_of(mac: &Mac) {
+    let page = mac.page;
+    let file = hello(mac, "imports");
     let dylinker = only(&file, LC_LOAD_DYLINKER);
     let at = u32_at(&file, dylinker + 8) as usize;
     assert_eq!(text_at(&file, dylinker + at, 64), "/usr/lib/dyld");
@@ -430,7 +520,7 @@ fn it_imports_only_libsystem_bound_by_chained_fixups() {
             text_at(blob, symbols + (import >> 9) as usize, 64)
         })
         .collect();
-    assert_eq!(names, IMPORTS);
+    assert_eq!(names, mac.imports);
 
     // Only __DATA_CONST, the third of five segments, has a chain: the
     // import table, from its first byte.
@@ -445,9 +535,9 @@ fn it_imports_only_libsystem_bound_by_chained_fixups() {
         .all(|(i, &o)| (i == 2) == (o != 0)));
     let in_segment = starts + offsets[2] as usize;
     let data_const = &segments[2];
-    let pages = data_const.vmsize / PAGE;
+    let pages = data_const.vmsize / page;
     assert_eq!(u32_at(blob, in_segment) as u64, 22 + 2 * pages, "size");
-    assert_eq!(u64::from(u16_at(blob, in_segment + 4)), PAGE);
+    assert_eq!(u64::from(u16_at(blob, in_segment + 4)), page);
     assert_eq!(u16_at(blob, in_segment + 6), 2, "DYLD_CHAINED_PTR_64");
     assert_eq!(
         u64_at(blob, in_segment + 8),
@@ -465,20 +555,30 @@ fn it_imports_only_libsystem_bound_by_chained_fixups() {
     // chained to the next (two 4-byte strides on), the last ending it.
     let (name, _, size, offset) = &data_const.sections[0];
     assert_eq!(name, "__got");
-    assert_eq!(*size, 8 * IMPORTS.len() as u64);
-    for i in 0..IMPORTS.len() {
+    assert_eq!(*size, 8 * mac.imports.len() as u64);
+    for i in 0..mac.imports.len() {
         let slot = u64_at(&file, *offset as usize + 8 * i);
         assert_eq!(slot >> 63, 1, "slot {i} binds");
         assert_eq!(slot & 0xff_ffff, i as u64, "slot {i}'s ordinal");
         assert_eq!(slot >> 24 & 0xff, 0, "slot {i}'s addend");
         let next = slot >> 51 & 0xfff;
-        assert_eq!(next, if i + 1 == IMPORTS.len() { 0 } else { 2 }, "slot {i}");
+        assert_eq!(
+            next,
+            if i + 1 == mac.imports.len() { 0 } else { 2 },
+            "slot {i}"
+        );
     }
 }
 
 #[test]
 fn the_ad_hoc_signature_hashes_every_page_before_it() {
-    let file = hello("signature");
+    for mac in &MACS {
+        signature_of(mac);
+    }
+}
+
+fn signature_of(mac: &Mac) {
+    let file = hello(mac, "signature");
     let command = only(&file, LC_CODE_SIGNATURE);
     let at = u32_at(&file, command + 8) as usize;
     let size = u32_at(&file, command + 12) as usize;
@@ -546,13 +646,19 @@ fn the_ad_hoc_signature_hashes_every_page_before_it() {
 
 #[test]
 fn the_same_program_builds_to_the_same_bytes_uuid_and_signature_included() {
-    let a = hello("same_a");
-    let b = hello("same_b");
+    for mac in &MACS {
+        same_bytes(mac);
+    }
+}
+
+fn same_bytes(mac: &Mac) {
+    let a = hello(mac, "same_a");
+    let b = hello(mac, "same_b");
     assert!(a == b, "two builds of one program differ");
     let uuid = only(&a, LC_UUID);
     assert_ne!(&a[uuid + 8..uuid + 24], &[0; 16], "the UUID is set");
     let other = workspace(
-        "other",
+        &format!("{}/other", mac.platform),
         &[(
             "hello.osk",
             "fn main(io: Stdout) -> Result<(), IoError> {\n    io.println(\"bye\")\n}\n",
@@ -564,7 +670,7 @@ fn the_same_program_builds_to_the_same_bytes_uuid_and_signature_included() {
             "build",
             "hello.osk",
             "--target",
-            "macos-aarch64",
+            mac.platform,
             "-o",
             "hello",
         ],
@@ -661,7 +767,7 @@ fn the_test_s_own_sha256_is_right() {
     );
 }
 
-// ---- On an Apple silicon Mac -----------------------------------------------------
+// ---- On a Mac --------------------------------------------------------------------
 
 /// Small programs: integers, calls, text, exit codes and stdout, a
 /// program's `Err`, and a panic with its location.
@@ -692,12 +798,22 @@ const PROGRAMS: [(&str, &str); 5] = [
     ),
 ];
 
-/// Each program, built for `macos-aarch64` and run, does what the
-/// interpreter does, byte for byte, and macOS accepts its signature.
+/// Each program, built for each macOS target and run on a Mac of its
+/// kind, does what the interpreter does, byte for byte, and macOS accepts
+/// its signature.
 #[test]
 fn small_programs_run_on_a_mac_as_on_the_interpreter() {
+    for mac in &MACS {
+        small_programs(mac);
+    }
+}
+
+fn small_programs(mac: &Mac) {
     for (name, src) in PROGRAMS {
-        let dir = workspace(&format!("run_{name}"), &[("main.osk", src)]);
+        let dir = workspace(
+            &format!("{}/run_{name}", mac.platform),
+            &[("main.osk", src)],
+        );
         let interpreted = oskac(&dir, &["run", "--interpret", "main.osk"]);
         assert!(
             interpreted.status.code().is_some(),
@@ -705,17 +821,10 @@ fn small_programs_run_on_a_mac_as_on_the_interpreter() {
         );
         let built = oskac(
             &dir,
-            &[
-                "build",
-                "main.osk",
-                "--target",
-                "macos-aarch64",
-                "-o",
-                "main",
-            ],
+            &["build", "main.osk", "--target", mac.platform, "-o", "main"],
         );
         assert!(built.status.success(), "{name}: {built:?}");
-        if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        if !mac.is_host {
             continue;
         }
         let verify = Command::new("codesign")

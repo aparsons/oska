@@ -12,12 +12,9 @@
 //! cannot run their code. The test executables below are built for the
 //! host and run on it, one process per test, on aarch64 and x86_64 Linux.
 
-#![cfg(any(
-    all(
-        target_os = "linux",
-        any(target_arch = "aarch64", target_arch = "x86_64")
-    ),
-    all(target_os = "macos", target_arch = "aarch64")
+#![cfg(all(
+    any(target_os = "linux", target_os = "macos"),
+    any(target_arch = "aarch64", target_arch = "x86_64")
 ))]
 
 mod executable;

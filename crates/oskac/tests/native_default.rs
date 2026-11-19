@@ -1,13 +1,13 @@
-//! Native by default (spec #125, ticket #141; x86_64, #165; Apple silicon
-//! macOS, #172): on aarch64 and x86_64 Linux and on Apple silicon macOS,
-//! `oskac run` and `oskac test` compile the program
-//! natively for the host into a private temporary directory and run it
-//! there, and `--interpret` selects the interpreter. Every other host
-//! keeps the interpreter.
+//! Native by default (spec #125, ticket #141; x86_64, #165; macOS, #172
+//! and #173): on aarch64 and x86_64 Linux and macOS, `oskac run` and
+//! `oskac test` compile the program natively for the host into a private
+//! temporary directory and run it there, and `--interpret` selects the
+//! interpreter. Every other host keeps the interpreter.
 //!
 //! The golden cases (`tests/golden/native_default/<case>.txt`) are the
 //! same on every host: on the native hosts they show the native run, and
-//! elsewhere the interpreter's fallback, which must print exactly the same. To regenerate them after an intended change, run
+//! elsewhere the interpreter's fallback, which must print exactly the
+//! same. To regenerate them after an intended change, run
 //! `UPDATE_GOLDEN=1 cargo test -p oskac --test native_default` and review
 //! the diff. The tests for the native hosts below show that the default
 //! really is native, through what only the native backend does: it writes
@@ -19,12 +19,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 /// Whether this host runs programs natively by default.
-const NATIVE_HOST: bool = cfg!(any(
-    all(
-        target_os = "linux",
-        any(target_arch = "aarch64", target_arch = "x86_64")
-    ),
-    all(target_os = "macos", target_arch = "aarch64")
+const NATIVE_HOST: bool = cfg!(all(
+    any(target_os = "linux", target_os = "macos"),
+    any(target_arch = "aarch64", target_arch = "x86_64")
 ));
 
 const MANIFEST: &str = "[package]\nname = \"greeter\"\nversion = \"0.1.0\"\n";
@@ -284,14 +281,11 @@ fn tests_the_native_backend_refuses_run_on_the_interpreter() {
     );
 }
 
-// ---- aarch64 and x86_64 Linux and Apple silicon: the default is native ------
+// ---- aarch64 and x86_64 Linux and macOS: the default is native --------------
 
-#[cfg(any(
-    all(
-        target_os = "linux",
-        any(target_arch = "aarch64", target_arch = "x86_64")
-    ),
-    all(target_os = "macos", target_arch = "aarch64")
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos"),
+    any(target_arch = "aarch64", target_arch = "x86_64")
 ))]
 #[test]
 fn run_and_test_report_a_missing_temporary_directory_alike() {
@@ -327,12 +321,9 @@ fn run_and_test_report_a_missing_temporary_directory_alike() {
 /// which native code reaches. How deep the interpreter gets depends on
 /// the build profile (its frames are larger unoptimised), so nothing here
 /// relies on it failing.
-#[cfg(any(
-    all(
-        target_os = "linux",
-        any(target_arch = "aarch64", target_arch = "x86_64")
-    ),
-    all(target_os = "macos", target_arch = "aarch64")
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos"),
+    any(target_arch = "aarch64", target_arch = "x86_64")
 ))]
 const DEEP: &str = "fn down(n: Int) -> Int {\n    if n == 0 {\n        return 0\n    }\n    \
                     down(n - 1) + 1\n}\n\n\
@@ -341,21 +332,15 @@ const DEEP: &str = "fn down(n: Int) -> Int {\n    if n == 0 {\n        return 0\
                     test \"deep\" {\n    t.assert_eq(down(40000), 40000)\n}\n";
 
 /// A small program that prints a line.
-#[cfg(any(
-    all(
-        target_os = "linux",
-        any(target_arch = "aarch64", target_arch = "x86_64")
-    ),
-    all(target_os = "macos", target_arch = "aarch64")
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos"),
+    any(target_arch = "aarch64", target_arch = "x86_64")
 ))]
 const GREETS: &str = "fn main(io: Stdout) -> Result<(), IoError> {\n    io.println(\"hi\")\n}\n";
 
-#[cfg(any(
-    all(
-        target_os = "linux",
-        any(target_arch = "aarch64", target_arch = "x86_64")
-    ),
-    all(target_os = "macos", target_arch = "aarch64")
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos"),
+    any(target_arch = "aarch64", target_arch = "x86_64")
 ))]
 #[test]
 fn run_and_test_are_native_by_default_and_interpret_selects_the_interpreter() {

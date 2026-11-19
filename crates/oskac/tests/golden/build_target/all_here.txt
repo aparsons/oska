@@ -6,3 +6,4 @@ exit: 0
 hello-linux-aarch64
 hello-linux-x86_64
 hello-macos-aarch64
+hello-macos-x86_64
