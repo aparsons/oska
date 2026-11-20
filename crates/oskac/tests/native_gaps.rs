@@ -422,9 +422,13 @@ fn assert_boundary(name: &str, program: &str, deepest: u32, (at, bytes): (&str, 
         ),
         "{over:#?}"
     );
-    // The frames: as many as a report lists, then the count of the rest.
+    // The frames: as many as a report lists, then the count of the rest,
+    // 50,000 calls and `main` in all.
     assert_eq!(over.stderr.lines().count(), 1 + 20 + 1, "{over:#?}");
-    assert!(over.stderr.ends_with(" more frames\n"), "{over:#?}");
+    assert!(
+        over.stderr.ends_with("    ... 49981 more frames\n"),
+        "{over:#?}"
+    );
     assert_eq!(over.exit_code, Some(101), "{over:#?}");
 }
 

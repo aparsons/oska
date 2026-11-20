@@ -354,12 +354,12 @@ fn runaway_recursion_through_a_function_value_panics_with_p0021() {
     let outcome = assert_same(&Case::file("value_recursion", &deep));
     assert_eq!(outcome.stdout, "2000\n", "{outcome:#?}");
     let runaway = program(items, "    num(io, down(1000000))");
-    // Calls through a value take more of the interpreter's stack than
-    // native code's: a debug build's interpreter runs out of it before
-    // 50,000 calls nest (`docs/runtime.md`, `P0021`), so the count of
-    // frames left out may differ. Every other byte is the same.
-    let (interpreted, native) =
-        differential::assert_same_but_depth(&Case::file("value_runaway", &runaway));
+    // `down(n)` nests `n + 1` calls under `main`.
+    let deepest = program(items, "    num(io, down(49999))");
+    let (interpreted, native) = differential::assert_same_at_depth_limit(
+        &Case::file("value_runaway", &runaway),
+        &Case::file("value_deepest", &deepest),
+    );
     for outcome in [&interpreted, &native] {
         assert_eq!(outcome.exit_code, Some(101), "{outcome:#?}");
     }

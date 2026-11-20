@@ -308,8 +308,8 @@ fn every_panic_a_program_can_reach_reports_the_interpreters_code_and_location() 
         ("P0020", "", "    let key = env.secret(\"OSKA_NOT_SET\")"),
         (
             "P0021",
-            "fn down(n: Int) -> Int {\n    1 + down(n + 1)\n}",
-            "    let d = down(0)",
+            "fn down(n: Int) -> Int {\n    if n == 0 { 0 } else { 1 + down(n - 1) }\n}",
+            "    let d = down(1000000)",
         ),
         ("P0035", "", "    let s = \"héllo\".slice(2, 9)"),
         ("P0036", "", "    let s = \"ab\".repeat(-1)"),
@@ -321,10 +321,11 @@ fn every_panic_a_program_can_reach_reports_the_interpreters_code_and_location() 
              let _ = io.println(\"before\")\n{body}\n}}\n"
         );
         let case = Case::file(&format!("panic_{code}"), &src);
-        // A debug build's interpreter may run out of its own stack before
-        // `P0021`'s 50,000 calls nest: the count of frames left out may differ.
         let outcome = if code == "P0021" {
-            differential::assert_same_but_depth(&case).1
+            // `down(n)` nests `n + 1` calls under `main`.
+            let deepest = src.replace("down(1000000)", "down(49999)");
+            differential::assert_same_at_depth_limit(&case, &Case::file("panic_deepest", &deepest))
+                .1
         } else {
             assert_same(&case)
         };

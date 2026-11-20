@@ -259,7 +259,7 @@ enum Instance {
 pub fn program(
     user: &Program,
     rt: &Program,
-    locate: Locate,
+    locate: &dyn Locate,
     kind: Entry,
     target: Target,
     limits: Limits,
@@ -272,7 +272,7 @@ pub fn program(
         target,
         limits,
         uncounted: false,
-        human: locate(Diagnostic::new("", "", NOWHERE)).location.is_some(),
+        human: locate.places(),
         frame: "main".to_string(),
         ids: HashMap::new(),
         functions: Vec::new(),
@@ -357,7 +357,7 @@ struct Lowering<'p> {
     callback: Option<FnId>,
     user: &'p Program,
     rt: &'p Program,
-    locate: Locate<'p>,
+    locate: &'p dyn Locate,
     /// What the executable runs: a test executable's `std.rt` reaches its
     /// test host (`rt_mem_test_host`), a program's never does.
     kind: Entry,
@@ -1484,7 +1484,7 @@ impl<'l, 'p> Body<'l, 'p> {
     fn report_around(&self, span: Span) -> (String, String) {
         let unlocated = Diagnostic::new("", "", span);
         let located = match self.source {
-            Source::User => (self.lowering.locate)(unlocated),
+            Source::User => self.lowering.locate.locate(unlocated),
             Source::Runtime => unlocated,
         };
         let before = match &located.location {
@@ -1507,12 +1507,7 @@ impl<'l, 'p> Body<'l, 'p> {
     fn frame_text(&self, span: Span) -> String {
         let frame = Frame::new(self.lowering.frame.clone(), span);
         let frame = match self.source {
-            Source::User => (self.lowering.locate)(
-                Diagnostic::new("", "", span).with_frames(vec![frame.clone()], 0),
-            )
-            .frames
-            .and_then(|frames| frames.frames.into_iter().next())
-            .unwrap_or(frame),
+            Source::User => self.lowering.locate.locate_frame(frame),
             Source::Runtime => frame,
         };
         if self.lowering.human {
@@ -1548,7 +1543,12 @@ impl<'l, 'p> Body<'l, 'p> {
     /// the interpreter's report does once `oskac` locates it.
     fn worded(&self, code: &'static str, message: &str, span: Span) -> String {
         match self.source {
-            Source::User => (self.lowering.locate)(Diagnostic::new(code, message, span)).message,
+            Source::User => {
+                self.lowering
+                    .locate
+                    .locate(Diagnostic::new(code, message, span))
+                    .message
+            }
             Source::Runtime => message.to_string(),
         }
     }
@@ -3321,8 +3321,15 @@ fn main(io: Stdout) {
         let rt = oska_check::check_toolchain_rt()
             .program
             .expect("std.rt should check");
-        super::program(&program, &rt, &|d| d, super::Entry::Main, target, limits)
-            .expect("the program should lower")
+        super::program(
+            &program,
+            &rt,
+            &crate::Unplaced,
+            super::Entry::Main,
+            target,
+            limits,
+        )
+        .expect("the program should lower")
     }
 
     /// The instructions that reach the operating system: system calls,
@@ -3424,7 +3431,7 @@ fn main(io: Stdout) {
         let report = oska_check::check_module(STEPS);
         let program = report.program.expect("the program should check");
         for target in Target::ALL {
-            crate::build_limited(&program, target, &|d| d, STEPS_ONLY)
+            crate::build_limited(&program, target, &crate::Unplaced, STEPS_ONLY)
                 .unwrap_or_else(|d| panic!("{target:?}: {d:?}"));
         }
     }

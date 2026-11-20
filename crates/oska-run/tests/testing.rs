@@ -288,7 +288,8 @@ fn the_json_report_lists_each_test_with_its_status_and_failure() {
          {\"code\":\"P0013\",\"message\":\"no\",\"span\":{\"start\":50,\"end\":62},\
          \"severity\":\"error\",\"url\":\"https://oskalang.dev/codes/P0013\",\
          \"related\":[],\"suggestions\":[],\
-         \"frames\":[{\"function\":\"test \\\"bad\\\"\",\"span\":{\"start\":50,\"end\":62}}],\
+         \"frames\":[{\"function\":\"test \\\"bad\\\"\",\"path\":null,\
+         \"span\":{\"start\":50,\"end\":62},\"line\":null,\"column\":null}],\
          \"frames_omitted\":0}}],\
          \"passed\":1,\"failed\":1,\"skipped\":0,\"diagnostics\":[]}"
     );

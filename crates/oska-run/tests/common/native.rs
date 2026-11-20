@@ -78,11 +78,13 @@ pub fn compare_program(
     if !outcome.diagnostics.is_empty() || skipped() {
         return;
     }
-    let bytes = match oska_native::build(program, host_target(), &|d| d) {
+    let bytes = match oska_native::build(program, host_target(), &oska_native::Unplaced) {
         Ok(bytes) => bytes,
         Err(refusal) => fail(src, &format!("the native backend refused it: {refusal:#?}")),
     };
-    cross_build(src, |target| oska_native::build(program, target, &|d| d));
+    cross_build(src, |target| {
+        oska_native::build(program, target, &oska_native::Unplaced)
+    });
     let mut texts: Vec<&str> = args.iter().map(String::as_str).collect();
     texts.push(src);
     let Some(sandbox) = Sandbox::new(before, needs_filesystem(program), &texts) else {

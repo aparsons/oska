@@ -1238,7 +1238,7 @@ mod tests {
         let module = crate::lower::program(
             &program,
             &rt,
-            &|d| d,
+            &crate::Unplaced,
             crate::lower::Entry::Main,
             target,
             oska_check::limits::Limits::NONE,
@@ -1482,7 +1482,7 @@ mod tests {
             let module = crate::lower::program(
                 &program,
                 &rt,
-                &|d| d,
+                &crate::Unplaced,
                 crate::lower::Entry::Main,
                 target,
                 oska_check::limits::Limits::NONE,
@@ -1785,7 +1785,7 @@ mod tests {
         let module = crate::lower::program(
             &program,
             &rt,
-            &|d| d,
+            &crate::Unplaced,
             crate::lower::Entry::Main,
             crate::Target::WindowsX86_64,
             oska_check::limits::Limits::NONE,

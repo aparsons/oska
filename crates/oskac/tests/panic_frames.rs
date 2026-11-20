@@ -19,7 +19,7 @@ use std::process::Command;
 
 use common::portable::Scratch;
 use common::Json;
-use differential::{assert_same, assert_same_but_depth, Case};
+use differential::{assert_same, assert_same_at_depth_limit, Case};
 
 /// A division by zero two calls below `main`.
 const TWO_DEEP: &str = "fn half(n: Int) -> Int {
@@ -57,16 +57,23 @@ fn main(stdout: Stdout) {
 }
 ";
 
-/// Recursion with no base case.
+/// Recursion as deep as its argument: `down(n)` nests `n + 1` calls
+/// under `main`.
 const RUNAWAY: &str = "fn down(n: Int) -> Int {
-    down(n + 1) + 1
+    if n == 0 { 0 } else { down(n - 1) + 1 }
 }
 
-fn main(stdout: Stdout) {
-    let x = down(0)
+fn main(stdout: Stdout, args: Args) {
+    let n = args.get(1).unwrap_or(\"0\").parse_int().unwrap_or(0)
+    let x = down(n)
     let _ = stdout.println(\"{x}\")
 }
 ";
+
+/// [`RUNAWAY`] nesting as many calls as the limit allows.
+fn deepest(name: &str) -> Case {
+    Case::file(name, RUNAWAY).with_args(&["49999"])
+}
 
 /// The `frames` of the one panic diagnostic on `stderr`, a JSON line, as
 /// `function@line:column` each, and its `frames_omitted`.
@@ -164,24 +171,23 @@ fn a_panic_three_calls_deep_names_the_closure_on_its_way() {
 
 #[test]
 fn a_deep_recursion_panic_reports_a_bounded_list_and_the_count_left_out() {
-    // A debug build's interpreter may run out of its own stack before
-    // 50,000 calls nest, so only the count left out may differ between
-    // the backends; native code's is exact.
-    let case = Case::file("frames_runaway_json", RUNAWAY).with_run_flags(&["--format=json"]);
-    let (interpreted, native) = assert_same_but_depth(&case);
-    for outcome in [&interpreted, &native] {
-        let (shown, omitted) = frames(&outcome.stderr);
-        assert_eq!(shown.len(), 20, "{outcome:#?}");
-        assert!(shown.iter().all(|f| f == "down@2:5"), "{shown:?}");
-        assert!(omitted > 0, "{outcome:#?}");
-    }
+    let case = Case::file("frames_runaway_json", RUNAWAY)
+        .with_args(&["1000000"])
+        .with_run_flags(&["--format=json"]);
+    let (_, native) = assert_same_at_depth_limit(&case, &deepest("frames_deepest_json"));
+    let (shown, omitted) = frames(&native.stderr);
+    assert_eq!(shown.len(), 20, "{native:#?}");
+    assert!(shown.iter().all(|f| f == "down@2:28"), "{shown:?}");
     // 50,000 calls of `down` nest, and `main` called the first: 50,001.
-    assert_eq!(frames(&native.stderr).1, 50_001 - 20, "{native:#?}");
-    let (_, human) = assert_same_but_depth(&Case::file("frames_runaway", RUNAWAY));
+    assert_eq!(omitted, 50_001 - 20, "{native:#?}");
+    let (_, human) = assert_same_at_depth_limit(
+        &Case::file("frames_runaway", RUNAWAY).with_args(&["1000000"]),
+        &deepest("frames_deepest"),
+    );
     assert!(
         human
             .stderr
-            .ends_with("    at down (main.osk:2:5)\n    ... 49981 more frames\n"),
+            .ends_with("    at down (main.osk:2:28)\n    ... 49981 more frames\n"),
         "{human:#?}"
     );
 }
@@ -196,10 +202,11 @@ test \"negative numbers are positive\" {
 }
 ";
 
-#[test]
-fn a_failed_assertion_inside_a_helper_reports_frames_back_to_the_test() {
-    let scratch = Scratch::new("panic_frames", "helper_test");
-    std::fs::write(scratch.path().join("main.osk"), HELPER_TEST).expect("write the test file");
+/// The frames of the failure of the one test in `src`, run by `oskac
+/// test --format=json`, which must fail it, the same on both backends.
+fn failed_test_frames(name: &str, src: &str) -> (Vec<String>, u64) {
+    let scratch = Scratch::new("panic_frames", name);
+    std::fs::write(scratch.path().join("main.osk"), src).expect("write the test file");
     let run = |extra: &[&str]| {
         let output = Command::new(env!("CARGO_BIN_EXE_oskac"))
             .current_dir(scratch.path())
@@ -207,7 +214,10 @@ fn a_failed_assertion_inside_a_helper_reports_frames_back_to_the_test() {
             .args(extra)
             .output()
             .expect("run oskac test");
-        String::from_utf8(output.stdout).expect("UTF-8")
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8");
+        // A failed test makes `oskac test` exit with 1.
+        assert_eq!(output.status.code(), Some(1), "{extra:?}: {stdout}");
+        stdout
     };
     let interpreted = run(&["--interpret"]);
     let native = run(&[]);
@@ -216,13 +226,34 @@ fn a_failed_assertion_inside_a_helper_reports_frames_back_to_the_test() {
     let Some(Json::Arr(tests)) = report.get("tests") else {
         panic!("no tests in {interpreted}");
     };
-    let failure = tests[0].get("failure").expect("the test failed");
+    frames_of(tests[0].get("failure").expect("the test failed"))
+}
+
+#[test]
+fn a_failed_assertion_inside_a_helper_reports_frames_back_to_the_test() {
     assert_eq!(
-        frames_of(failure),
+        failed_test_frames("helper_test", HELPER_TEST),
         (
             vec![
                 "check_positive@2:5".to_string(),
                 "test \"negative numbers are positive\"@6:5".to_string()
+            ],
+            0
+        )
+    );
+}
+
+#[test]
+fn a_test_named_with_the_bytes_a_native_report_separates_frames_by_keeps_its_frames() {
+    // `\x1f` and `\x1e` end the pieces of a native report's frames, and
+    // `\x1d` escapes them in a name.
+    let src = HELPER_TEST.replace("negative numbers are positive", "a\u{1f}b\u{1e}c\u{1d}d");
+    assert_eq!(
+        failed_test_frames("separator_name", &src),
+        (
+            vec![
+                "check_positive@2:5".to_string(),
+                "test \"a\u{1f}b\u{1e}c\u{1d}d\"@6:5".to_string()
             ],
             0
         )

@@ -23,7 +23,7 @@
 
 use oska_check::limits::Limits;
 use oska_check::program::Program;
-use oska_syntax::{Diagnostic, Frame, Span};
+use oska_syntax::{Diagnostic, Frame, Frames, Span};
 
 pub use target::Target;
 
@@ -117,11 +117,42 @@ const NOWHERE: Span = Span { start: 0, end: 0 };
 /// native backend has no runtime for yet is refused where it is made.
 const MODULES_WITH_A_RUNTIME: &[&str] = &["std.html"];
 
-/// How the caller places a diagnostic in its source: the diagnostic with
-/// its file, line and column, as `oskac` reports it. A native panic
-/// report names the place its span is, as the interpreter's does, so the
-/// executable carries what this gives for every panic site.
-pub type Locate<'a> = &'a dyn Fn(Diagnostic) -> Diagnostic;
+/// How the caller places a panic in its source, as `oskac` reports it. A
+/// native panic report names the place its span is, and its frames', as
+/// the interpreter's does, so the executable carries what this gives for
+/// every panic site and every call.
+pub trait Locate {
+    /// `diagnostic`, whose span is an offset into the program, with its
+    /// file, line and column, and its message worded as code there
+    /// words it.
+    fn locate(&self, diagnostic: Diagnostic) -> Diagnostic;
+
+    /// `frame`, whose span is an offset into the program, placed as
+    /// [`Locate::locate`] places a diagnostic's frames.
+    fn locate_frame(&self, frame: Frame) -> Frame;
+
+    /// Whether it places anything: a report is for a person then, and
+    /// otherwise for `oskac` to read back and place ([`test_failure`]).
+    fn places(&self) -> bool;
+}
+
+/// The [`Locate`] that places nothing: a report for `oskac` to read back
+/// ([`test_failure`]).
+pub struct Unplaced;
+
+impl Locate for Unplaced {
+    fn locate(&self, diagnostic: Diagnostic) -> Diagnostic {
+        diagnostic
+    }
+
+    fn locate_frame(&self, frame: Frame) -> Frame {
+        frame
+    }
+
+    fn places(&self) -> bool {
+        false
+    }
+}
 
 /// How deeply calls of the program's functions nest before it panics
 /// with `P0021`: the interpreter's limit.
@@ -131,7 +162,11 @@ pub const MAX_CALL_DEPTH: u32 = lower::MAX_CALL_DEPTH;
 /// for `target`: the file's bytes. `locate` places a panic site in the
 /// source. A program the backend cannot compile yet is refused with the
 /// diagnostic that says why.
-pub fn build(program: &Program, target: Target, locate: Locate) -> Result<Vec<u8>, Diagnostic> {
+pub fn build(
+    program: &Program,
+    target: Target,
+    locate: &dyn Locate,
+) -> Result<Vec<u8>, Diagnostic> {
     build_limited(program, target, locate, Limits::NONE)
 }
 
@@ -145,7 +180,7 @@ pub fn build(program: &Program, target: Target, locate: Locate) -> Result<Vec<u8
 pub fn build_limited(
     program: &Program,
     target: Target,
-    locate: Locate,
+    locate: &dyn Locate,
     limits: Limits,
 ) -> Result<Vec<u8>, Diagnostic> {
     compile(program, target, locate, lower::Entry::Main, limits)
@@ -173,7 +208,13 @@ pub fn build_limited(
 /// [`test_failure`] reads back. The caller places it in the source, as it
 /// places the interpreter's.
 pub fn build_tests(program: &Program, target: Target) -> Result<Vec<u8>, Diagnostic> {
-    compile(program, target, &|d| d, lower::Entry::Tests, Limits::NONE)
+    compile(
+        program,
+        target,
+        &Unplaced,
+        lower::Entry::Tests,
+        Limits::NONE,
+    )
 }
 
 /// The panic a test executable's test reported on stdout ([`build_tests`]),
@@ -194,25 +235,66 @@ pub fn test_failure(stdout: &[u8]) -> Option<Diagnostic> {
     let code = codes::PANICS.iter().find(|c| **c == code)?;
     let diagnostic = Diagnostic::new(code, message, span);
     Some(match frames {
-        Some((frames, omitted)) => diagnostic.with_frames(frames, omitted),
+        Some(frames) => diagnostic.with_frames(frames),
         None => diagnostic,
     })
 }
 
 /// A frame of a panic's call stack as a report for `oskac` to read back
-/// gives it: `\x1f`, the function, `\x1e`, then `start..end`.
+/// gives it: `\x1f`, the function [`escape_name`]d, `\x1e`, then
+/// `start..end`.
 pub fn encode_frame(frame: &Frame) -> String {
     format!(
         "\x1f{}\x1e{}..{}",
-        frame.function, frame.span.start, frame.span.end
+        escape_name(&frame.function),
+        frame.span.start,
+        frame.span.end
     )
 }
 
-/// `report` split into the report before its call stack, and its frames
-/// with the count left out, if it has any. The frames are the longest run
-/// of `\x1f`-led pieces at its end that read as frames, so a message
-/// holding a `\x1f` stays whole.
-fn split_frames(report: &str) -> (&str, Option<(Vec<Frame>, usize)>) {
+/// The byte that starts an escape in an encoded frame's function name.
+const NAME_ESCAPE: char = '\x1d';
+
+/// `name` with no `\x1f` or `\x1e` left, which end a frame's pieces: a
+/// test's name may hold them. Each is written as [`NAME_ESCAPE`] and a
+/// digit, as is [`NAME_ESCAPE`] itself, and [`unescape_name`] undoes it.
+fn escape_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        match c {
+            NAME_ESCAPE => out.push_str("\x1d0"),
+            '\x1e' => out.push_str("\x1d1"),
+            '\x1f' => out.push_str("\x1d2"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The name [`escape_name`] wrote as `escaped`; `None` for an escape it
+/// does not write.
+fn unescape_name(escaped: &str) -> Option<String> {
+    let mut out = String::with_capacity(escaped.len());
+    let mut chars = escaped.chars();
+    while let Some(c) = chars.next() {
+        out.push(match c {
+            NAME_ESCAPE => match chars.next()? {
+                '0' => NAME_ESCAPE,
+                '1' => '\x1e',
+                '2' => '\x1f',
+                _ => return None,
+            },
+            c => c,
+        });
+    }
+    Some(out)
+}
+
+/// `report` split into the report before its call stack, and its frames,
+/// if it has any. The frames are the longest run of `\x1f`-led pieces at
+/// its end that read as frames, so a message holding a `\x1f` stays
+/// whole.
+fn split_frames(report: &str) -> (&str, Option<Frames>) {
     let mut end = report.len();
     let mut frames = Vec::new();
     let mut omitted = 0;
@@ -230,7 +312,7 @@ fn split_frames(report: &str) -> (&str, Option<(Vec<Frame>, usize)>) {
             let Some((function, span)) = piece.split_once('\x1e') else {
                 break;
             };
-            let Some(span) = parse_span(span) else {
+            let (Some(function), Some(span)) = (unescape_name(function), parse_span(span)) else {
                 break;
             };
             frames.push(Frame::new(function, span));
@@ -241,7 +323,7 @@ fn split_frames(report: &str) -> (&str, Option<(Vec<Frame>, usize)>) {
         return (report, None);
     }
     frames.reverse();
-    (&report[..end], Some((frames, omitted)))
+    (&report[..end], Some(Frames { frames, omitted }))
 }
 
 /// `start..end`.
@@ -256,7 +338,7 @@ fn parse_span(text: &str) -> Option<Span> {
 fn compile(
     program: &Program,
     target: Target,
-    locate: Locate,
+    locate: &dyn Locate,
     entry: lower::Entry,
     limits: Limits,
 ) -> Result<Vec<u8>, Diagnostic> {

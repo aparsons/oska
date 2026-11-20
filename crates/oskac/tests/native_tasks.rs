@@ -506,12 +506,16 @@ fn spawning_on_a_finished_scope_panics_with_p0005_at_the_call() {
         if target == differential::host_target() {
             continue;
         }
-        if let Err(refusal) = oska_native::build(&program, target, &|d| d) {
+        if let Err(refusal) = oska_native::build(&program, target, &oska_native::Unplaced) {
             panic!("{} refuses it: {refusal:#?}", target.name());
         }
     }
-    let image = oska_native::build(&program, differential::host_target(), &|d| d)
-        .expect("the program should build");
+    let image = oska_native::build(
+        &program,
+        differential::host_target(),
+        &oska_native::Unplaced,
+    )
+    .expect("the program should build");
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("tasks_p0005");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("a directory");

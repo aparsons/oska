@@ -29,7 +29,7 @@ use oska_check::program::{
     self, Arm, Callee, Clause, Expr, ExprKind, Function, Part, Pattern, Place, Program, Stmt,
 };
 use oska_syntax::ast::BinaryOp;
-use oska_syntax::{Frame as StackFrame, Span, MAX_FRAMES};
+use oska_syntax::{Frame as StackFrame, Frames, Span, MAX_FRAMES};
 
 use crate::host::Host;
 use crate::intrinsics::{self, Intrinsic};
@@ -386,7 +386,14 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     /// The name of the frame running now: the innermost call's function,
     /// or the root's.
     pub(crate) fn current(&self) -> FrameName<'p> {
-        self.calls
+        self.innermost(&self.calls)
+    }
+
+    /// The name of the frame running when `calls`, the outermost of the
+    /// running calls, are all that run: the last one's function, or the
+    /// root's.
+    fn innermost(&self, calls: &[Call<'p>]) -> FrameName<'p> {
+        calls
             .last()
             .map_or_else(|| self.root.clone(), |call| call.callee.clone())
     }
@@ -417,9 +424,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             return panic;
         }
         let calls = &self.calls[..self.calls.len().saturating_sub(skip)];
-        let current = calls
-            .last()
-            .map_or_else(|| self.root.clone(), |call| call.callee.clone());
+        let current = self.innermost(calls);
         let mut frames = vec![StackFrame::new(current.as_str(), panic.span)];
         frames.extend(
             calls
@@ -429,7 +434,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 .map(|call| StackFrame::new(call.caller.as_str(), call.span)),
         );
         let omitted = calls.len() + 1 - frames.len();
-        panic.frames = Some((frames, omitted));
+        panic.frames = Some(Frames { frames, omitted });
         panic
     }
 

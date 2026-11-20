@@ -302,22 +302,27 @@ fn deep_but_bounded_recursion_runs() {
 
 #[test]
 fn runaway_recursion_panics_with_p0021_instead_of_crashing() {
-    // A debug build's interpreter may run out of its own stack before
-    // 50,000 calls nest, so only the count of frames left out may differ.
-    let (interpreted, native) = differential::assert_same_but_depth(&Case::file(
-        "runaway_recursion",
-        &recursing(1_000_000),
-    ));
-    for outcome in [&interpreted, &native] {
-        assert_eq!(outcome.stdout, "", "{outcome:#?}");
-        assert_eq!(
-            differential::without_frames(&outcome.stderr),
+    // `down(n)` nests `n + 1` calls under `main`.
+    let deepest = Case::file(
+        "runaway_deepest",
+        &recursing(oska_native::MAX_CALL_DEPTH - 1),
+    );
+    let (_, native) = differential::assert_same_at_depth_limit(
+        &Case::file("runaway_recursion", &recursing(1_000_000)),
+        &deepest,
+    );
+    assert_eq!(native.stdout, "", "{native:#?}");
+    let frame = "    at down (main.osk:2:32)\n";
+    assert_eq!(
+        native.stderr,
+        format!(
             "main.osk:2:32: error[P0021]: calls nest too deep: is this recursion missing its \
-             base case? (bytes 56..67)\n",
-            "{outcome:#?}"
-        );
-        assert_eq!(outcome.exit_code, Some(101), "{outcome:#?}");
-    }
+             base case? (bytes 56..67)\n{}    ... 49981 more frames\n",
+            frame.repeat(20)
+        ),
+        "{native:#?}"
+    );
+    assert_eq!(native.exit_code, Some(101), "{native:#?}");
 }
 
 /// The interpreter's limit is `oska_run`'s `MAX_CALL_DEPTH`, but a debug

@@ -68,7 +68,7 @@ main.osk:2:5: error[P0004]: division by zero: `10 / 0` (bytes 46..59)
 
 Output written before the panic stays written, so `computing` was printed. A panic has a stable `P`-code, a message, and the byte span of the expression that panicked. The process exits with code 101.
 
-Under the panic's line come its **frames**, the call stack that led to it, innermost first: the function that panicked, at the panic's place, then each function that called it, at the call. Here `ratio` panicked, and `main` called it on line 7, so a `P0004` deep in a helper shows which caller passed the bad value. A closure's frame is named `<closure in f>`, after the function it is written in, and a test's body `test "name"`. At most 20 frames are listed, then `    ... n more frames`, so runaway recursion (`P0021`) stays readable. `oskac test` lists the frames of a failed test too, back to the test's own line. Native code and the interpreter report the same frames.
+Under the panic's line come its **frames**, the call stack that led to it, innermost first: the function that panicked, at the panic's place, then each function that called it, at the call. Here `ratio` panicked, and `main` called it on line 7, so a `P0004` deep in a helper shows which caller passed the bad value. A closure's frame is named `<closure in f>`, after the function it is written in, and a test's body `test "name"`. At most 20 frames are listed, then `    ... n more frames`, so runaway recursion (`P0021`) stays readable. `oskac test` lists the frames of a failed test too, back to the test's own line. Native code and the interpreter report the same frames, except that an interpreter whose own stack runs out before 50,000 calls nest (`P0021`) counts fewer left out.
 
 | Code | Panic |
 | --- | --- |

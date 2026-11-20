@@ -986,7 +986,9 @@ fn every_call_calls_its_function_and_builds_natively() {
         for target in oska_native::Target::ALL {
             let built = match run {
                 Run::Tests => oska_native::build_tests(&program, target),
-                Run::Main | Run::WithInput(_) => oska_native::build(&program, target, &|d| d),
+                Run::Main | Run::WithInput(_) => {
+                    oska_native::build(&program, target, &oska_native::Unplaced)
+                }
             };
             if let Err(refusal) = built {
                 panic!(

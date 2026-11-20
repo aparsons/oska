@@ -342,6 +342,15 @@ impl Frame {
         }
     }
 
+    /// The frame placed in `src`, the text of the file at `path`, as
+    /// [`Diagnostic::locate`] places a diagnostic's frames.
+    pub fn locate(mut self, path: &str, src: &str) -> Self {
+        if self.location.is_none() {
+            self.location = Some(Location::spanning(path, src, self.span));
+        }
+        self
+    }
+
     /// The name of the frame of the body of the test `name`.
     pub fn test(name: &str) -> String {
         format!("test \"{name}\"")
@@ -351,30 +360,30 @@ impl Frame {
     /// `    at f (path:line:col)`.
     pub fn human(&self) -> String {
         match &self.location {
-            Some(location) => format!("    at {} ({location})\n", self.function),
+            Some(location) => format!("{FRAME_BEFORE}{} ({location})\n", self.function),
             None => format!(
-                "    at {} (bytes {}..{})\n",
+                "{FRAME_BEFORE}{} (bytes {}..{})\n",
                 self.function, self.span.start, self.span.end
             ),
         }
     }
 
-    /// `{function, path, span, line, column}`, without `path`, `line`
-    /// and `column` when it is not located.
+    /// `{function, path, span, line, column}`, with `path`, `line` and
+    /// `column` `null` when it is not located.
     fn to_json(&self) -> String {
-        let mut out = format!("{{\"function\":\"{}\"", json_escape(&self.function));
-        if let Some(location) = &self.location {
-            out.push_str(&format!(",\"path\":\"{}\"", json_escape(&location.path)));
-        }
-        out.push_str(&format!(",\"span\":{}", span_json(self.span)));
-        if let Some(location) = &self.location {
-            out.push_str(&format!(
-                ",\"line\":{},\"column\":{}",
-                location.line, location.column
-            ));
-        }
-        out.push('}');
-        out
+        let (path, line, column) = match &self.location {
+            Some(location) => (
+                format!("\"{}\"", json_escape(&location.path)),
+                location.line.to_string(),
+                location.column.to_string(),
+            ),
+            None => ("null".to_string(), "null".to_string(), "null".to_string()),
+        };
+        format!(
+            "{{\"function\":\"{}\",\"path\":{path},\"span\":{},\"line\":{line},\"column\":{column}}}",
+            json_escape(&self.function),
+            span_json(self.span)
+        )
     }
 }
 
@@ -388,6 +397,21 @@ impl Frames {
         format!("{OMITTED_BEFORE}{omitted}{OMITTED_AFTER}")
     }
 
+    /// The count of frames left out that `line`, of the human output,
+    /// gives, when it is [`Frames::omitted_human`]'s line.
+    pub fn omitted_in(line: &str) -> Option<usize> {
+        line.strip_prefix(OMITTED_BEFORE)?
+            .strip_suffix(OMITTED_AFTER.trim_end_matches('\n'))?
+            .parse()
+            .ok()
+    }
+
+    /// Whether `line`, of the human output, is one of the lines that
+    /// [`Frames::human`] lists under a panic's line.
+    pub fn is_human_line(line: &str) -> bool {
+        line.starts_with(FRAME_BEFORE) || Frames::omitted_in(line).is_some()
+    }
+
     /// The frames as the human output lists them under the panic's line.
     pub fn human(&self) -> String {
         let mut out: String = self.frames.iter().map(Frame::human).collect();
@@ -398,6 +422,8 @@ impl Frames {
     }
 }
 
+/// The human output's line for a frame, before its function.
+pub const FRAME_BEFORE: &str = "    at ";
 /// The human output's line for frames left out, before the count.
 pub const OMITTED_BEFORE: &str = "    ... ";
 /// The human output's line for frames left out, after the count.
@@ -650,10 +676,9 @@ impl Diagnostic {
         self
     }
 
-    /// Attach a panic's call stack: `frames`, innermost first, and how
-    /// many more were left out.
-    pub fn with_frames(mut self, frames: Vec<Frame>, omitted: usize) -> Self {
-        self.frames = Some(Box::new(Frames { frames, omitted }));
+    /// Attach a panic's call stack.
+    pub fn with_frames(mut self, frames: Frames) -> Self {
+        self.frames = Some(Box::new(frames));
         self
     }
 
@@ -1249,6 +1274,27 @@ mod tests {
         assert_eq!(
             err.locate("app.osk", "let x = $").to_json(),
             "{\"code\":\"E0001\",\"message\":\"unexpected character '$'\",\"path\":\"app.osk\",\"span\":{\"start\":8,\"end\":9},\"line\":1,\"column\":9,\"end_line\":1,\"end_column\":10,\"severity\":\"error\",\"url\":\"https://oskalang.dev/codes/E0001\",\"related\":[],\"suggestions\":[]}"
+        );
+    }
+
+    #[test]
+    fn a_frame_not_yet_located_has_every_field_with_null_for_its_place() {
+        let panic = Diagnostic::new("P0004", "division by zero", Span { start: 4, end: 9 })
+            .with_frames(Frames {
+                frames: vec![Frame::new("half", Span { start: 4, end: 9 })],
+                omitted: 0,
+            });
+        assert!(
+            panic.to_json().ends_with(
+                "\"frames\":[{\"function\":\"half\",\"path\":null,\"span\":{\"start\":4,\"end\":9},\"line\":null,\"column\":null}],\"frames_omitted\":0}"
+            ),
+            "{}",
+            panic.to_json()
+        );
+        assert!(
+            panic.locate("app.osk", "let half = 1").to_json().ends_with(
+                "\"frames\":[{\"function\":\"half\",\"path\":\"app.osk\",\"span\":{\"start\":4,\"end\":9},\"line\":1,\"column\":5}],\"frames_omitted\":0}"
+            )
         );
     }
 
