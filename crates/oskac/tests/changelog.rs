@@ -284,3 +284,60 @@ fn git_merges_the_changelog_with_the_union_driver() {
         ".gitattributes:\n{attributes}"
     );
 }
+
+/// Every `.md` file under `dir`.
+fn markdown_files(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot list {dir:?}: {e}")) {
+        let path = entry.expect("should read a directory entry").path();
+        if path.is_dir() {
+            out.extend(markdown_files(&path));
+        } else if path.extension().is_some_and(|e| e == "md") {
+            out.push(path);
+        }
+    }
+    out
+}
+
+/// The `CHANGELOG.md#unreleased` links in `text`: the version bump
+/// renames that heading, so such a link would break at the release.
+fn unreleased_links(text: &str) -> Vec<String> {
+    text.split("](")
+        .skip(1)
+        .filter_map(|rest| rest.split(')').next())
+        .filter(|target| {
+            target
+                .to_ascii_lowercase()
+                .contains("changelog.md#unreleased")
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn no_doc_links_the_unreleased_section() {
+    let mut found = Vec::new();
+    for page in markdown_files(&repo_root().join("docs")) {
+        let text = std::fs::read_to_string(&page)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", page.display()));
+        for link in unreleased_links(&text) {
+            found.push(format!("{}: {link}", page.display()));
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "link the changelog without `#unreleased`, which the version bump renames:\n{}",
+        found.join("\n")
+    );
+}
+
+#[test]
+fn a_link_to_the_unreleased_section_is_found() {
+    let text =
+        "See [the notes](../../CHANGELOG.md#unreleased) and [v0.2.0](../../CHANGELOG.md#v020).";
+    assert_eq!(unreleased_links(text), ["../../CHANGELOG.md#unreleased"]);
+    assert_eq!(
+        unreleased_links("See the [changelog](../../CHANGELOG.md)."),
+        Vec::<String>::new()
+    );
+}

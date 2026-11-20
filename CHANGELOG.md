@@ -4,7 +4,7 @@ Every release's notes, newest first. A change users can see adds its line under 
 
 ## Unreleased
 
-v0.7.0 is not released yet; `main` has these changes. It ships two Linux builds of `oskac`, so it runs on any Linux, and publishes a container image ([ADR 0022](docs/adr/0022-linux-oskac-ships-as-glibc-and-musl-builds.md)). These are the changes you can see:
+v0.7.0 ships two Linux builds of `oskac`, so it runs on any Linux, and publishes a container image ([ADR 0022](docs/adr/0022-linux-oskac-ships-as-glibc-and-musl-builds.md)). These are the changes you can see:
 
 - **The Linux release files are renamed.** `oskac-linux-x86_64` and `oskac-linux-aarch64` are gone. In their place each release has the glibc build, `oskac-linux-x86_64-gnu` and `oskac-linux-aarch64-gnu`, and the musl build, `oskac-linux-x86_64-musl` and `oskac-linux-aarch64-musl`. `latest.json` lists them under `linux-x86_64-gnu`, `linux-x86_64-musl`, `linux-aarch64-gnu` and `linux-aarch64-musl`, with no `linux-x86_64` or `linux-aarch64` key. The macOS and Windows files keep their names. A script that downloads a Linux file by name, or reads those keys, must change.
 - **Fetch the installer again.** A copy of `install.sh` saved before v0.7.0 asks for the old names, so it fails with `download_failed` on v0.7.0 and later. The one-line installer always fetches the current one. The installer from v0.7.0 on still installs v0.6.0 and earlier with `--version`, but on Linux only as the glibc build, the one build those releases have: where it does not find glibc 2.35 or newer, or with `OSKA_LIBC=musl`, it refuses them.
@@ -23,10 +23,6 @@ v0.6.0 adds the native backend for Windows, so all five supported platforms are 
 - **The parity gate: a program the native backend cannot compile yet is an error.** `oskac run` and `oskac test` refuse it with `E0390`, the same diagnostic `oskac build` prints, and exit code 2. Before, they ran it on the interpreter after a one-line note. If a program stops running after the upgrade, run it with `--interpret` and report the construct the message names. From this release on, a language change lands on all five platforms at once.
 - **Windows file access is confined race-free.** On both backends, each path is opened one component at a time beneath the capability's open root handle. A symlink, a junction or any other reparse point, a hard-linked file, or a reserved device name such as `CON` is refused, as on Linux and macOS. Before, Windows checked a path and then opened it, so a junction swapped in between could escape the root.
 - **`oskac release` builds an application for all five platforms** into one directory. It writes a `SHA256SUMS` that names the release and signs it with your SSH key, in the format `oskac`'s own releases use. The version, key and name refusals are `E0395`, `E0396` and `E0397`. See [Releasing an application](docs/guide/releasing.md).
-
-### Security fixes
-
-- **Windows file access is confined race-free.** A junction swapped in between a check and an open can no longer escape a capability's root. See the bullet above.
 
 ## v0.5.0
 
@@ -124,8 +120,12 @@ fn count(fs: FsRead, path: Path) -> Result<Int, IoError> {
 
 ### Security fixes
 
-- **Capabilities can no longer reach pure code.** In v0.1.0 a closure, a generic function or a `push` could carry a capability, a `Scope` or untrusted text where the checker should have refused it. These are now errors: `E0270`, `E0274`, `E0292` and `E0300`. See the bullet above.
-- **File access is confined.** On Linux and macOS each path is opened one component at a time beneath its root, so a symlink swapped in between a check and an open can no longer escape the root. Every symlink and every hard-linked file beneath a root is refused.
+v0.1.0 let a capability reach code that was meant to be pure. These are now errors (see the bullets above):
+
+- A closure that captured a value whose type was not known yet could carry `Stdout` into a pure function (`E0270`).
+- A generic function could hand a capability to a plain `fn` through a type parameter (`E0274`).
+- A `Scope` could escape its block through a generic capture (`E0274`, `E0292`).
+- `push` could add untrusted text to a `List<String>` (`E0300`).
 
 ## v0.1.0
 
