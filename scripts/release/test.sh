@@ -1003,9 +1003,9 @@ job_text() {
   ' "$1"
 }
 
-# Only the job that pushes the image may write packages, in every workflow,
-# and a workflow-wide permission would give it to every job.
-test_only_the_publish_job_can_write_packages() {
+# Only the two jobs that push the image may write packages, in every
+# workflow, and a workflow-wide permission would give it to every job.
+test_only_the_image_push_jobs_can_write_packages() {
   local workflows=$here/../../.github/workflows file found=
   for file in "$workflows"/*.yml; do
     if grep -Eq '^permissions:.*(packages|write-all)' "$file" ||
@@ -1017,39 +1017,74 @@ test_only_the_publish_job_can_write_packages() {
       found="$found $(basename "$file"):$job"
     done < <(jobs_matching "$file" 'packages:|write-all')
   done
-  [ "$found" = " release.yml:publish" ] || fail "jobs with packages access:$found"
+  [ "$found" = " release.yml:publish release.yml:tag-image" ] || fail "jobs with packages access:$found"
 }
 
-# The push runs in the publish job, after the sign job, from the signed
-# release, before the GitHub Release exists; and only push-image.sh pushes,
-# which refuses a digest the signature does not cover.
-test_the_image_is_pushed_only_after_signing_and_before_publishing() {
-  local wf=$here/../../.github/workflows/release.yml publish
+# The image is pushed by digest in the publish job, after the sign job,
+# from the signed release, before the GitHub Release exists. Its public
+# tags (vX.Y.Z, latest) come only in tag-image, which needs publish, so
+# only once the GitHub Release exists: a release that fails to publish
+# leaves no tag naming it. Only push-image.sh pushes, which refuses a
+# digest the signature does not cover.
+test_the_image_is_pushed_by_digest_before_publishing_and_tagged_after() {
+  local wf=$here/../../.github/workflows/release.yml publish tagjob
   publish=$(job_text "$wf" publish)
+  tagjob=$(job_text "$wf" tag-image)
+  [ -n "$tagjob" ] || fail "release.yml has no tag-image job"
   grep -q '^    needs: sign$' <<<"$publish" || fail "publish does not need sign"
-  grep -q '^    if: github.event_name == '"'push'"'$' <<<"$publish" || fail "publish runs on a pull request"
+  grep -q '^    needs: \[sign, publish\]$' <<<"$tagjob" || fail "tag-image does not need publish"
+  local job text
+  for job in publish tag-image; do
+    text=$(job_text "$wf" "$job")
+    grep -q '^    if: github.event_name == '"'push'"'$' <<<"$text" || fail "$job runs on a pull request"
+    grep -q '^          name: image-layout$' <<<"$text" || fail "$job does not push the layout assemble wrote"
+    # No package is installed in a job that holds write tokens.
+    if grep -Eq 'apt-get|apt install|pip install|npm install|curl' <<<"$text"; then
+      fail "$job installs software"
+    fi
+  done
   # shellcheck disable=SC2016 # the workflow's own text, not expanded here
-  grep -qF 'scripts/release/push-image.sh "release/$TAG" site/oska-release.pub image ghcr.io/aparsons/oskac' <<<"$publish" ||
-    fail "publish does not push with push-image.sh from the signed release"
-  grep -q '^          name: image-layout$' <<<"$publish" || fail "publish does not push the layout assemble wrote"
-  # No package is installed in a job that holds write tokens.
-  if grep -Eq 'apt-get|apt install|pip install|npm install|curl' <<<"$publish"; then
-    fail "publish installs software"
+  grep -qF 'scripts/release/push-image.sh digest "release/$TAG" site/oska-release.pub image ghcr.io/aparsons/oskac' <<<"$publish" ||
+    fail "publish does not push by digest with push-image.sh from the signed release"
+  # shellcheck disable=SC2016 # the workflow's own text, not expanded here
+  grep -qF 'scripts/release/push-image.sh tags "release/$TAG" site/oska-release.pub image ghcr.io/aparsons/oskac' <<<"$tagjob" ||
+    fail "tag-image does not tag with push-image.sh from the signed release"
+  if grep -q 'push-image.sh tags' <<<"$publish"; then
+    fail "publish tags the image, which may be before the GitHub Release exists"
+  fi
+  if grep -Eq 'push-image.sh digest|gh release create' <<<"$tagjob"; then
+    fail "tag-image does more than tag"
   fi
   local push create
-  push=$(grep -n 'push-image.sh' <<<"$publish" | head -n 1 | cut -d: -f1)
+  push=$(grep -n 'push-image.sh digest' <<<"$publish" | head -n 1 | cut -d: -f1)
   create=$(grep -n 'gh release create' <<<"$publish" | head -n 1 | cut -d: -f1)
   [ -n "$push" ] && [ -n "$create" ] && [ "$push" -lt "$create" ] ||
-    fail "the image is not pushed before the GitHub Release is created"
+    fail "the image is not pushed by digest before the GitHub Release is created"
   # No other job, in any workflow, runs skopeo copy or docker push.
   local file
   for file in "$here"/../../.github/workflows/*.yml; do
     while read -r job; do
       [ -n "$job" ] || continue
-      [ "$(basename "$file"):$job" = release.yml:publish ] ||
-        fail "$(basename "$file"):$job may push an image"
+      case "$(basename "$file"):$job" in
+        release.yml:publish | release.yml:tag-image) ;;
+        *) fail "$(basename "$file"):$job may push an image" ;;
+      esac
     done < <(jobs_matching "$file" 'push-image\.sh|skopeo (copy|login)[^#]*docker://|docker push|skopeo login')
   done
+}
+
+# CI's musl job checks that the build is static with the same tested
+# script as the release, not a copy of its own that could drift.
+test_ci_checks_the_musl_build_with_the_release_check() {
+  local musl
+  musl=$(job_text "$here/../../.github/workflows/ci.yml" musl)
+  [ -n "$musl" ] || fail "ci.yml has no musl job"
+  # shellcheck disable=SC2016 # the workflow's own text, not expanded here
+  grep -qF 'scripts/release/check-linux-build.sh musl "target/$TARGET/release/oskac"' <<<"$musl" ||
+    fail "the musl job does not run check-linux-build.sh musl"
+  if grep -Eq 'readelf|objdump' <<<"$musl"; then
+    fail "the musl job has its own static check"
+  fi
 }
 
 # The dry run, and the release, smoke-test both musl builds in alpine and

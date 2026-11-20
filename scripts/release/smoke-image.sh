@@ -13,6 +13,8 @@
 # /tmp), and `oskac build <example>`, then runs the executable it built in
 # the same place. Each must print exactly `Hello from Oska!`, as
 # examples/hello.osk does, and --version what the binary prints on the host.
+# Then `oskac test` on a one-test file this script writes, which also builds
+# natively in /tmp: its JSON report must say the one test passed.
 #
 # Needs Docker and skopeo. Any failure exits non-zero.
 
@@ -32,6 +34,8 @@ example=$3
 # alpine 3.22, pinned by the digest of its multi-processor index.
 ALPINE=alpine@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
 EXPECTED="Hello from Oska!"
+# `oskac test --format=json smoke_test.osk`, one line.
+EXPECTED_TEST='{"tests":[{"name":"oskac test runs here","status":"passed","failure":null}],"passed":1,"failed":0,"skipped":0,"diagnostics":[]}'
 
 command -v docker >/dev/null 2>&1 || die "docker is not installed"
 command -v skopeo >/dev/null 2>&1 || die "skopeo is not installed"
@@ -52,6 +56,11 @@ mkdir "$work/bin" "$work/w"
 cp "$binary" "$work/bin/oskac"
 chmod 755 "$work/bin/oskac"
 cp "$example" "$work/w/example.osk"
+cat >"$work/w/smoke_test.osk" <<'OSK'
+test "oskac test runs here" {
+    t.assert_eq(1 + 1, 2)
+}
+OSK
 # The image runs as user 65532, which must write the executable it builds.
 chmod 777 "$work/w"
 
@@ -74,6 +83,7 @@ expect "$EXPECTED" "${in_alpine[@]}" /b/oskac run --no-cache example.osk
 "${in_alpine[@]}" /b/oskac build --no-cache example.osk -o /w/built-in-alpine ||
   die "oskac build failed in alpine"
 expect "$EXPECTED" "${in_alpine[@]}" /w/built-in-alpine
+expect "$EXPECTED_TEST" "${in_alpine[@]}" /b/oskac test --no-cache --format=json smoke_test.osk
 
 # In the image: this processor's entry of the index, as `docker pull` of
 # the published tag would choose it.
@@ -87,5 +97,6 @@ expect "$EXPECTED" "${in_image[@]}" "$image" run --no-cache example.osk
 "${in_image[@]}" "$image" build --no-cache example.osk -o /w/built-in-image ||
   die "oskac build failed in the image"
 expect "$EXPECTED" "${in_image[@]}" --entrypoint /w/built-in-image "$image"
+expect "$EXPECTED_TEST" "${in_image[@]}" "$image" test --no-cache --format=json smoke_test.osk
 
-echo "ok: $version runs, builds and runs $example in alpine and in the image on linux/$arch"
+echo "ok: $version runs, builds and runs $example, and runs a test, in alpine and in the image on linux/$arch"

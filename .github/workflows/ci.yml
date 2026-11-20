@@ -115,20 +115,10 @@ jobs:
       - run: rustup target add "$TARGET"
       - run: cargo build --release --locked -p oskac --target "$TARGET"
       # Static: no dynamic loader (`PT_INTERP`) and no shared library
-      # (`DT_NEEDED`), so it runs on any Linux and in an empty root.
+      # (`DT_NEEDED`), so it runs on any Linux and in an empty root. The
+      # release's own check, tested by check-linux-build-test.sh.
       - name: The musl build is static
-        run: |
-          bin="target/$TARGET/release/oskac"
-          readelf -lW "$bin" > program-headers.txt
-          readelf -dW "$bin" > dynamic-section.txt
-          if grep -w INTERP program-headers.txt; then
-            echo "::error::$bin has a PT_INTERP entry (a dynamic loader)"
-            exit 1
-          fi
-          if grep -w NEEDED dynamic-section.txt; then
-            echo "::error::$bin has a DT_NEEDED entry (a shared library)"
-            exit 1
-          fi
+        run: scripts/release/check-linux-build.sh musl "target/$TARGET/release/oskac"
       # The confinement escape tests and the interpreter, then the native
       # backend's parity with the interpreter, all run by the musl build.
       - run: cargo test --locked --target "$TARGET" -p oska-sys -p oska-run

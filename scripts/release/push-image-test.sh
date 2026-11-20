@@ -117,12 +117,17 @@ FAKE
   chmod +x fakebin/skopeo
 }
 
-# Runs push-image.sh with the fake skopeo on release ./release/<tag> and
-# layout ./layout-<tag>.
-push() {
-  local tag=${1:-v1.2.3}
+# Runs push-image.sh's step $1 (digest or tags) with the fake skopeo on
+# release ./release/<tag> and layout ./layout-<tag>.
+push_step() {
+  local step=$1 tag=${2:-v1.2.3}
   PATH="$PWD/fakebin:$PATH" FAKE_REGISTRY="$PWD/registry" \
-    "$here/push-image.sh" "release/$tag" key.pub "layout-$tag" "$REPO"
+    "$here/push-image.sh" "$step" "release/$tag" key.pub "layout-$tag" "$REPO"
+}
+
+# The tags step, which does everything the digest step does and then tags.
+push() {
+  push_step tags "$@"
 }
 
 # What was pushed, in order, on one line: @sha256:<hex> or :<tag> each.
@@ -153,6 +158,38 @@ test_pushes_the_signed_digest_then_tags_it_and_latest() {
   [ "$(grep -c -- "^copy --all --preserve-digests oci:layout-v1.2.3 docker://$REPO" registry/calls)" = 3 ] ||
     fail "did not copy the layout with every image and its digests kept: $(cat registry/calls)"
   grep -qF "$REPO@$signed" out || fail "does not print the pullable reference: $(cat out)"
+}
+
+# The step before the GitHub Release exists: by digest only, read back,
+# and no public tag, so a failed release leaves no tag naming it.
+test_the_digest_step_pushes_by_digest_and_tags_nothing() {
+  signed_release v1.2.3
+  fake_skopeo
+  push_step digest v1.2.3 >out
+  local signed
+  signed=$(signed_digest)
+  [ "$(pushed)" = "@$signed" ] || fail "pushed $(pushed)"
+  [ "$(grep -c '^inspect --raw ' registry/calls)" = 1 ] || fail "did not read the push back: $(cat registry/calls)"
+  grep -qF "$REPO@$signed" out || fail "does not print the pullable reference: $(cat out)"
+}
+
+# The step must be named: the old four-argument call, or an unknown step,
+# pushes nothing rather than guessing whether to tag.
+test_refuses_a_missing_or_unknown_step() {
+  signed_release v1.2.3
+  fake_skopeo
+  if PATH="$PWD/fakebin:$PATH" FAKE_REGISTRY="$PWD/registry" \
+    "$here/push-image.sh" release/v1.2.3 key.pub layout-v1.2.3 "$REPO" 2>err; then
+    fail "pushed with no step named"
+  fi
+  grep -q usage err || fail "error does not give the usage: $(cat err)"
+  local step
+  for step in '' latest --tags 'digest tags'; do
+    if push_step "$step" v1.2.3 2>err; then
+      fail "pushed with the step '$step'"
+    fi
+  done
+  [ -z "$(pushed)" ] || fail "pushed $(pushed)"
 }
 
 test_a_pre_release_does_not_move_latest() {
@@ -328,7 +365,7 @@ test_refuses_a_bad_repository_or_missing_skopeo() {
   local bad
   for bad in '' 'ghcr.io/x/y:tag' 'ghcr.io/x/y@sha256:00' 'ghcr.io/X/y' '-ghcr.io/x' 'ghcr.io/x y'; do
     if PATH="$PWD/fakebin:$PATH" FAKE_REGISTRY="$PWD/registry" \
-      "$here/push-image.sh" release/v1.2.3 key.pub layout-v1.2.3 "$bad" 2>/dev/null; then
+      "$here/push-image.sh" tags release/v1.2.3 key.pub layout-v1.2.3 "$bad" 2>/dev/null; then
       fail "accepted the repository '$bad'"
     fi
   done
@@ -343,7 +380,7 @@ test_refuses_a_bad_repository_or_missing_skopeo() {
       ln -sf "$(command -v "$tool")" "nobin/$tool"
     fi
   done
-  if PATH="$PWD/nobin" "$here/push-image.sh" release/v1.2.3 key.pub layout-v1.2.3 "$REPO" 2>err; then
+  if PATH="$PWD/nobin" "$here/push-image.sh" tags release/v1.2.3 key.pub layout-v1.2.3 "$REPO" 2>err; then
     fail "passed with no skopeo"
   fi
   grep -q skopeo err || fail "error does not name skopeo: $(cat err)"

@@ -575,8 +575,17 @@ fi
 if step "release image tests" --fast-when 'scripts/release/*'; then
   # The oskac container image builder (scripts/release/image.sh): the same
   # fake binaries give the same OCI bytes, and the layout holds only /oskac
-  # and /tmp, run as user 65532.
-  bash scripts/release/image-test.sh
+  # and /tmp, run as user 65532. They read GNU tar's listing, and jq, as
+  # the release runners have them.
+  if grep -q 'GNU tar' <<<"$(tar --version 2>/dev/null || true)" && command -v jq >/dev/null 2>&1; then
+    bash scripts/release/image-test.sh
+  else
+    if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+      echo "check.sh: GNU tar or jq is not installed, and CI must run the release image tests" >&2
+      exit 1
+    fi
+    skip_step "GNU tar or jq not installed; skipped (CI runs it)"
+  fi
 fi
 
 if step "release image push tests" --fast-when 'scripts/release/*'; then

@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # Push a signed release's oskac container image to the registry (ADR 0022).
 #
-#   scripts/release/push-image.sh <release-dir> <public-key> <image-layout> <repository>
+#   scripts/release/push-image.sh digest|tags <release-dir> <public-key> <image-layout> <repository>
+#
+# The release runs it twice: `digest` before the GitHub Release is created
+# (steps 1 to 3), and `tags` only after it exists (steps 1 to 5; step 3
+# again pushes the same bytes). So a release that fails before it is
+# published leaves at most an untagged image, and no public tag names it.
 #
 # <release-dir> is a release as the sign job left it (vX.Y.Z/, with the
 # signed release index beside it), <image-layout> the OCI layout assemble.sh
@@ -20,7 +25,7 @@
 #      signed release index beside the release (verify-index.sh) names this
 #      tag as the latest, so latest never moves back to an older release or
 #      to a pre-release, as the index never does.
-# It prints `<repository>@sha256:<hex>`, the reference users pull by. Any
+# `digest` stops after step 3. It prints `<repository>@sha256:<hex>`, the reference users pull by. Any
 # failure exits non-zero, and a step that fails stops every later one.
 #
 # Needs bash 4.4 or newer, skopeo, jq, sha256sum and ssh-keygen.
@@ -36,11 +41,16 @@ die() {
   exit 1
 }
 
-[ $# -eq 4 ] || die "usage: push-image.sh <release-dir> <public-key> <image-layout> <repository>"
-release=$1
-public=$2
-layout=$3
-repo=$4
+usage="usage: push-image.sh digest|tags <release-dir> <public-key> <image-layout> <repository>"
+[ $# -eq 5 ] || die "$usage"
+case $1 in
+  digest | tags) step=$1 ;;
+  *) die "'$1' is not a step: $usage" ;;
+esac
+release=$2
+public=$3
+layout=$4
+repo=$5
 
 # A repository and nothing else: no tag, no digest, no option.
 [[ $repo =~ ^[a-z0-9]+([._-][a-z0-9]+)*(\.[a-z0-9]+([._-][a-z0-9]+)*)*(/[a-z0-9]+([._-][a-z0-9]+)*)+$ ]] ||
@@ -123,8 +133,12 @@ push_to() {
   echo "push-image.sh: $1 is the signed $signed" >&2
 }
 
-# 3, 4 and 5.
+# 3, then, for the tags step only, 4 and 5.
 push_to "$repo@$signed"
+if [ "$step" = digest ]; then
+  echo "$repo@$signed"
+  exit 0
+fi
 push_to "$repo:$tag"
 if [ "$move_latest" = yes ]; then
   push_to "$repo:latest"

@@ -20,13 +20,10 @@
 #      release index (scripts/release/sign-index.sh, namespace oska-index):
 #      the serial after the one https://oskalang.dev publishes, naming the
 #      newest stable release, expiring in 90 days;
-#   4. pushes the image assemble built to ghcr.io/aparsons/oskac
-#      (scripts/release/push-image.sh: it verifies the signed release,
-#      refuses a layout that is not the signed digest, pushes by digest and
-#      reads it back, then tags it vX.Y.Z, and latest when the signed
-#      release index names this release, each read back too; any mismatch
-#      fails the release). Only this job has `packages: write`, and it uses
-#      the workflow's own token;
+#   4. pushes the image assemble built to ghcr.io/aparsons/oskac by digest
+#      only (scripts/release/push-image.sh digest: it verifies the signed
+#      release, refuses a layout that is not the signed digest, pushes by
+#      digest and reads it back; any mismatch fails the release);
 #   5. stores the files, and the index beside them, in a GitHub Release.
 #      Users install from oskalang.dev, whose installers verify the
 #      signatures; the GitHub Release is the source the Pages workflow
@@ -34,7 +31,12 @@
 #   6. starts the Pages workflow on main, which fetches every release,
 #      verifies it again and publishes it at
 #      https://oskalang.dev/releases/vX.Y.Z/ with /latest.json, and
-#      publishes the highest-serial index as /release-index.json.
+#      publishes the highest-serial index as /release-index.json;
+#   7. only then, in the tag-image job, tags the image vX.Y.Z, and latest
+#      when the signed release index names this release
+#      (push-image.sh tags), each read back, so no public tag names a
+#      release that was not published. Only publish and tag-image have
+#      `packages: write`, and they use the workflow's own token.
 #
 # A pull request is a dry run: the same builds and the same image smoke
 # test, signed with a throwaway key, verified and staged into a scratch
@@ -45,7 +47,7 @@
 #   - the secret RELEASE_SIGNING_KEY, an OpenSSH private key with no
 #     passphrase, whose public half is committed as site/oska-release.pub;
 #   - so that only a maintainer's tag can sign: the jobs that read the key or
-#     publish (`sign`, `publish`) run in the environment `release`.
+#     publish (`sign`, `publish`, `tag-image`) run in the environment `release`.
 #     Configure it in the repository settings:
 #       * Environments > `release` > Deployment branches and tags: "Selected
 #         branches and tags", with the tag rule `v*` and the branch rule
@@ -362,34 +364,36 @@ jobs:
         with:
           name: release-${{ needs.sign.outputs.tag }}
           path: release
-      # Before the GitHub Release, so a failed push publishes nothing.
-      # push-image.sh verifies the signed release, checks that the layout is
-      # the signed digest, pushes it by digest and reads it back before any
-      # tag names it, and moves latest only as the signed index does.
       # The OCI bytes assemble wrote; push-image.sh pushes them only if
       # they are the signed digest.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: image-layout
           path: image
-      # The runner's own skopeo, never one installed here: this job holds
-      # write tokens. push-image.sh fails if there is none.
-      - name: Push the signed image
+      # Before the GitHub Release, by digest only: push-image.sh verifies
+      # the signed release, checks that the layout is the signed digest,
+      # pushes it by digest and reads it back. No public tag names it yet,
+      # so a release that fails from here on leaves no tag behind; the
+      # tag-image job tags it once the GitHub Release exists. The runner's
+      # own skopeo, never one installed here: this job holds write tokens.
+      # push-image.sh fails if there is none.
+      - name: Push the signed image by digest
         run: |
           export REGISTRY_AUTH_FILE="$RUNNER_TEMP/registry-auth.json"
           trap 'rm -f "$REGISTRY_AUTH_FILE"' EXIT
           printf '%s' "$GH_TOKEN" |
             skopeo login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          scripts/release/push-image.sh "release/$TAG" site/oska-release.pub image ghcr.io/aparsons/oskac
+          scripts/release/push-image.sh digest "release/$TAG" site/oska-release.pub image ghcr.io/aparsons/oskac
       - name: Store the files in a GitHub Release
         run: |
           prerelease=()
           case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
-          # The install guide's "Upgrading to vX.Y.Z" section, by the site's
-          # anchor for that heading (lower case, dots dropped).
+          # The install guide page, not one of its sections: the
+          # "Upgrading to vX.Y.Z" section is written after the release
+          # (runbook step 5), and a pre-release never gets one.
           notes="Download from https://oskalang.dev/releases/$TAG/
 
-          What changed, and what to do when you upgrade: https://oskalang.dev/guide/install.html#upgrading-to-${TAG//./}"
+          What changed, and what to do when you upgrade: https://oskalang.dev/guide/install.html"
           gh release create "$TAG" --verify-tag "${prerelease[@]}" \
             --title "oskac $TAG" \
             --notes "$notes" \
@@ -397,3 +401,43 @@ jobs:
       # Events caused by GITHUB_TOKEN start no workflows, except a dispatch.
       - name: Publish to oskalang.dev
         run: gh workflow run pages.yml --ref main
+
+  # The image's public tags, vX.Y.Z and (when the signed index names this
+  # release) latest, only once publish has created the GitHub Release, so
+  # no tag ever names a release that was not published. Its own job, so
+  # "Re-run failed jobs" retries the tags alone if they fail.
+  tag-image:
+    needs: [sign, publish]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      # Check out the scripts.
+      contents: read
+      # Tag the image in ghcr.io/aparsons/oskac. Only publish has it too.
+      packages: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.sign.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-${{ needs.sign.outputs.tag }}
+          path: release
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: image-layout
+          path: image
+      # push-image.sh checks everything again, pushes the same bytes by
+      # digest and reads them back before any tag names them.
+      - name: Tag the signed image
+        run: |
+          export REGISTRY_AUTH_FILE="$RUNNER_TEMP/registry-auth.json"
+          trap 'rm -f "$REGISTRY_AUTH_FILE"' EXIT
+          printf '%s' "$GH_TOKEN" |
+            skopeo login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          scripts/release/push-image.sh tags "release/$TAG" site/oska-release.pub image ghcr.io/aparsons/oskac
