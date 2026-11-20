@@ -132,10 +132,15 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-/// Two outputs alike: exit code, stdout and stderr.
+/// Two outputs alike: exit code, stdout and stderr. A test's `duration_ms` is
+/// masked: it is the time the test took, which no cache keeps.
 fn assert_same(fresh: &Output, cached: &Output) {
     assert_eq!(fresh.status.code(), cached.status.code(), "exit code");
-    assert_eq!(text(&fresh.stdout), text(&cached.stdout), "stdout");
+    assert_eq!(
+        common::golden::mask_durations(&text(&fresh.stdout)),
+        common::golden::mask_durations(&text(&cached.stdout)),
+        "stdout"
+    );
     assert_eq!(text(&fresh.stderr), text(&cached.stderr), "stderr");
 }
 
