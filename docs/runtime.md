@@ -140,6 +140,7 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0011` | `t.assert_eq(actual, expected)` was given two values that differ through `Eq`. The message shows both, as `dbg` would. Spans the call. |
 | `P0012` | `t.assert_ne(actual, other)` was given two equal values. Spans the call. |
 | `P0013` | `t.fail(message)` was called. The message is `message`. Spans the call. |
+| `P0014` | `t.assert_snapshot(value)` found no stored snapshot for the value, or one that differs from it. The test runner reports it after the test has run (see [Snapshots](#snapshots)): the message names the snapshot's file and `oskac test --update`, then shows the difference, a line each, `- ` for the stored snapshot and `+ ` for the value. It is also given when a snapshot cannot be read or written, as when its path goes through a symlink. Spans the call. |
 | `P0020` | `Env.secret` asked for a variable the environment does not set. Its signature has no room for a missing secret, and running on with a stand-in such as an empty one could let an empty password through. Spans the call. |
 | `P0021` | Calls nest too deep: runaway recursion. The interpreter runs on a thread of its own with a 256 MiB stack, and a call panics instead of starting when calls already nest 50,000 deep, or when so little of that stack is left that the next call could overflow it. The process never crashes on deep recursion: `oskac run` exits with 101, and under `oskac test` only the test that recursed fails. Spans the call that would have gone too deep. |
 | `P0035` | `String.slice` was given indices out of bounds: a start or end below 0 or past the text's length in characters, or a start past the end. Spans the call. Indices count characters (Unicode code points), not bytes. |
@@ -324,6 +325,48 @@ test "not written yet" {
 test "written" {
     t.assert(true)
 }
+```
+
+#### `P0014`
+
+```oska error=P0014 package tests
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/lib.osk <==
+pub fn evens(n: Int) -> List<Int> {
+    var out: List<Int> = []
+    for i in 0..n {
+        out.push(i * 2)
+    }
+    out
+}
+
+test "shows evens" {
+    t.assert_snapshot(evens(3))
+}
+```
+
+```oska fixed=P0014 package tests
+==> oska.toml <==
+[package]
+name = "demo"
+version = "0.1.0"
+==> src/lib.osk <==
+pub fn evens(n: Int) -> List<Int> {
+    var out: List<Int> = []
+    for i in 0..n {
+        out.push(i * 2)
+    }
+    out
+}
+
+test "shows evens" {
+    t.assert_snapshot(evens(3))
+}
+==> snapshots/lib/shows evens.snap <==
+[0, 2, 4]
 ```
 
 #### `P0020`
@@ -581,8 +624,18 @@ fn main(io: Stdout) {
   - `t.random` starts from the same fixed seed in every test.
   - `t.stdout` records what it prints. `t.printed()` returns every line printed so far in the test, one per `println`, without its line break.
 - **Assertions.** `t.assert`, `t.assert_eq`, `t.assert_ne`, and `t.fail` fail the test by panicking, with `P0010` to `P0013` and the span of the call. A failed assertion is a panic like any other: it stops the test, and its diagnostic is the test's failure. A panic from a bug, such as `P0004`, fails the test the same way.
+- **Snapshots.** `t.assert_snapshot(value)` compares `value`, rendered as `dbg` renders it, with its snapshot: see [Snapshots](#snapshots).
 - **Isolation.** A panic stops only the test it happened in, runaway recursion (`P0021`) included. Each test runs in a new interpreter, on a new host, on a thread of its own.
 - **Integration tests.** A test marked `#[integration]` is skipped unless `--integration` is given. Then it runs on the real OS: `t.fs` is an `Fs` over the real filesystem (attenuate it like any `Fs`), `t.clock` the real time, and `t.random` seeded from the clock. Its `t.stdout` is still recorded, not written to the terminal, so `t.printed()` works and the report is the only thing on stdout.
+
+### Snapshots
+
+`t.assert_snapshot(value)` renders `value` as `dbg` renders it (so a secret is `<redacted>`) and compares it with one file per assertion, `snapshots/<test-file>/<test-name>.snap`. In a package, `snapshots/` is in the package's directory, and `<test-file>` is the test's file under `src/` without `.osk`, such as `lib` or `util/text`; for a single file, `snapshots/` is beside it, and `<test-file>` is its name without `.osk`. A file holds the rendered value and a line break, and a stored `\r\n` reads as `\n`.
+
+- **Names.** A test that runs one snapshot assertion has `<test-name>.snap`. A test that runs more numbers them in the order they run: `<test-name>-1.snap`, `<test-name>-2.snap`, and so on. That is source order for straight-line code; an assertion in a function the test calls, or in a loop, counts each time it runs. A test runs on stand-ins, so the order is the same on every run and on both backends. Each character a file name cannot hold on some platform (`/ \ : * ? " < > |` and control characters) becomes `_`, and so does a `.` or space at either end of the name, so every snapshot stays in its directory; a name Windows keeps for a device (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to `LPT9`, in any case and with any extension) gets a `_` before it.
+- **Symlinks.** The test runner follows no symlink beneath the package's directory or the file's: when `snapshots/`, a directory in it, or a snapshot file is a symlink, it neither reads nor writes through it, and the test fails with `P0014`.
+- **Comparing.** The test does not read or write a snapshot: it has only its stand-in capabilities. Each backend records what each assertion was given; after the test, the test runner compares it with the file. A missing or different snapshot fails the test with `P0014`, which shows the difference and names `oskac test --update`. Since the comparison comes after the test, the test runs on past the assertion. A test that panics fails with its panic, whatever its snapshots: they are neither compared nor written, since the test did not run to its end.
+- **Updating.** `oskac test --update` writes each missing or different snapshot instead of failing, and lists what it wrote, each `new` or `changed`: under `snapshots written:` before the summary, which ends `, n snapshots written`, or in the JSON report's `"snapshots"`. It never deletes a snapshot, so one a renamed or removed test left behind stays until you delete it. Review the written snapshots as a diff before committing them.
 
 ### Report and exit codes
 
@@ -603,7 +656,7 @@ Each failure is named by its test. In a package, a test is named after its modul
 
 **Output.** What a test writes to stderr, `dbg` included, goes to the real stderr as it happens, each line prefixed with the test's name in brackets, such as `[divides] [dbg] 4`. What it prints to `t.stdout` is recorded for `t.printed()`, for integration tests too, so the report is the only thing on stdout.
 
-With `--format=json`, one JSON object on stdout. Each test has its name, in a package its `module` (such as `"module":"util.text"`, right after `name`), its status (`passed`, `failed`, or `skipped`), its `duration_ms`, an integer, the whole milliseconds the test took (on the interpreter its run on a fresh interpreter; natively its process from start to exit, process start included; 0 for a skipped test), and its failure, a diagnostic object or `null`, whose `path` is relative to the package. With `--filter`, `"filtered"` after `skipped` counts the tests the filter left out, which are neither run nor listed. A refused file has no tests and its diagnostics in `diagnostics`:
+With `--format=json`, one JSON object on stdout. Each test has its name, in a package its `module` (such as `"module":"util.text"`, right after `name`), its status (`passed`, `failed`, or `skipped`), its `duration_ms`, an integer, the whole milliseconds the test took (on the interpreter its run on a fresh interpreter; natively its process from start to exit, process start included; 0 for a skipped test), and its failure, a diagnostic object or `null`, whose `path` is relative to the package. With `--filter`, `"filtered"` after `skipped` counts the tests the filter left out, which are neither run nor listed. With `--update`, `"snapshots"` after those lists the snapshots it wrote, each `{"path":"snapshots/lib/shows evens.snap","status":"new"}`, its path from the package or the file's directory, and its status `new` or `changed`. A refused file has no tests and its diagnostics in `diagnostics`:
 
 ```json
 {"tests":[{"name":"adds","status":"passed","duration_ms":0,"failure":null},{"name":"divides","status":"failed","duration_ms":3,"failure":{"code":"P0011","message":"...","path":"math.osk","span":{"start":120,"end":141},"line":12,"column":5,"end_line":12,"end_column":26,"severity":"error","url":"https://oskalang.dev/codes/P0011","related":[],"suggestions":[],"frames":[{"function":"test \"divides\"","path":"math.osk","span":{"start":120,"end":141},"line":12,"column":5}],"frames_omitted":0}}],"passed":1,"failed":1,"skipped":0,"diagnostics":[]}

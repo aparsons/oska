@@ -73,12 +73,13 @@ USAGE:
                                            and with P0040 once its values
                                            take more than --max-memory bytes
     oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
-               [--filter <substring>]
+               [--filter <substring>] [--update]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
                                            as `run` does; with --filter, only
                                            those whose names contain the
-                                           substring
+                                           substring; with --update, write
+                                           new and changed snapshots
     oskac build [path] [-o out] [--target <platform>|all] [--format=json] [--no-cache]
                                            Check a source file or package and,
                                            if it has no diagnostics, compile it
@@ -155,6 +156,9 @@ struct Flags {
     /// `--no-agent-files`: `oskac new` leaves out `AGENTS.md` and
     /// `CLAUDE.md`.
     no_agent_files: bool,
+    /// `--update`: `oskac test` writes new and changed snapshots
+    /// (`oska_run::snapshots`) instead of failing on them.
+    update: bool,
 }
 
 /// A command line, parsed: the command and its operands, the flags, the
@@ -264,6 +268,7 @@ impl CommandLine {
                 "--no-cache" => line.flags.no_cache = true,
                 "--lib" => line.flags.lib = true,
                 "--no-agent-files" => line.flags.no_agent_files = true,
+                "--update" => line.flags.update = true,
                 event if event.starts_with("--event=") => {
                     line.event = Some(event["--event=".len()..].to_string());
                 }
@@ -389,8 +394,8 @@ fn main() -> ExitCode {
         eprintln!("error: {error}");
         return ExitCode::from(2);
     }
-    // Only `test` takes a filter.
-    if line.filter.is_some() && positional.first() != Some(&"test") {
+    // Only `test` takes a filter or writes snapshots.
+    if (line.filter.is_some() || flags.update) && positional.first() != Some(&"test") {
         eprint!("{USAGE}");
         return ExitCode::from(2);
     }
@@ -966,7 +971,10 @@ fn test_file(
             .filter(|_| checked.diagnostics.is_empty())
         {
             match native_test::test_program(program, target, options, json, &cached) {
-                native_test::Tested::Report(report) => return finish_test(report, json, &places),
+                native_test::Tested::Report(mut report) => {
+                    settle_snapshots(&mut report, path, &places, flags);
+                    return finish_test(report, json, &places);
+                }
                 native_test::Tested::Ended(code) => return code,
                 native_test::Tested::Refused(refusal) => {
                     if let Some(refusal) =
@@ -978,8 +986,74 @@ fn test_file(
             }
         }
     }
-    let report = oska_run::test(&src, &mut oska_run::RealHost::new(), options);
+    let mut report = oska_run::test(&src, &mut oska_run::RealHost::new(), options);
+    settle_snapshots(&mut report, path, &places, flags);
     finish_test(report, json, &places)
+}
+
+/// Compare the snapshots the tests of `report` recorded with their files,
+/// or with `--update` write the new and changed ones
+/// (`oska_run::snapshots::settle`). `target` is the single file or the
+/// package directory as given. The human report names each snapshot
+/// written from the current directory.
+fn settle_snapshots(
+    report: &mut oska_run::TestReport,
+    target: &str,
+    places: &Places,
+    flags: Flags,
+) {
+    let dir = match places {
+        Places::Package { locator, .. } => {
+            let file_of = |span| package_test_file(locator, span);
+            settle_in(report, target, &file_of, flags.update);
+            target.to_string()
+        }
+        _ => {
+            let (dir, stem) = file_snapshots(target);
+            settle_in(report, &dir, &|_| Some(stem.clone()), flags.update);
+            dir
+        }
+    };
+    if !flags.json {
+        for written in report.snapshots.iter_mut().flatten() {
+            written.path = package::from_here(&dir, &written.path);
+        }
+    }
+}
+
+/// [`oska_run::snapshots::settle`] under the directory `dir`, the current
+/// one when it is empty.
+pub(crate) fn settle_in(
+    report: &mut oska_run::TestReport,
+    dir: &str,
+    file_of: &dyn Fn(Span) -> Option<String>,
+    update: bool,
+) {
+    let dir = if dir.is_empty() { "." } else { dir };
+    oska_run::snapshots::settle(report, std::path::Path::new(dir), file_of, update);
+}
+
+/// Where the snapshots of the single file `path` go: its directory, as
+/// `path` names it, and its `<test-file>`, its name without `.osk`.
+pub(crate) fn file_snapshots(path: &str) -> (String, String) {
+    let path = std::path::Path::new(path);
+    let dir = path
+        .parent()
+        .map_or_else(String::new, |dir| dir.to_string_lossy().into_owned());
+    let stem = path
+        .file_stem()
+        .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned());
+    (dir, stem)
+}
+
+/// The `<test-file>` of a package's snapshots for the test at `span`: its
+/// file under `src/` without `.osk`, such as `lib` or `util/text`, or
+/// `None` when the span is in no file of the package under `src/`.
+pub(crate) fn package_test_file(locator: &oska_check::Locator, span: Span) -> Option<String> {
+    let located = locator.locate(Diagnostic::new(oska_run::codes::SNAPSHOT_FAILED, "", span));
+    let path = located.location?.path;
+    let module = path.strip_prefix("src/")?.strip_suffix(".osk")?;
+    (!module.is_empty()).then(|| module.to_string())
 }
 
 /// What the parity gate stopped: a run or the tests.
@@ -1003,6 +1077,7 @@ fn refuse_unsupported(gated: Gated, refusal: Diagnostic, json: bool) -> ExitCode
                 tests: Vec::new(),
                 diagnostics: vec![refusal],
                 filtered: None,
+                snapshots: None,
             };
             let _ = finish_test(report, json, &Places::Located);
             ExitCode::from(u8::try_from(code).unwrap_or(2))
@@ -1234,7 +1309,10 @@ fn on_package(
         };
         if let Some(target) = native::native_target(flags) {
             match native_test::test_program(program, target, options, json, &cached) {
-                native_test::Tested::Report(tests) => return finish_test(tests, json, &places),
+                native_test::Tested::Report(mut tests) => {
+                    settle_snapshots(&mut tests, dir, &places, flags);
+                    return finish_test(tests, json, &places);
+                }
                 native_test::Tested::Ended(code) => return code,
                 native_test::Tested::Refused(refusal) => {
                     if let Some(refusal) =
@@ -1245,7 +1323,8 @@ fn on_package(
                 }
             }
         }
-        let tests = oska_run::test_program(program, &mut host, options);
+        let mut tests = oska_run::test_program(program, &mut host, options);
+        settle_snapshots(&mut tests, dir, &places, flags);
         finish_test(tests, json, &places)
     }
 }
@@ -1284,6 +1363,7 @@ fn refuse(command: Command, diagnostics: Vec<Diagnostic>, json: bool, dir: &str)
                 tests: Vec::new(),
                 diagnostics,
                 filtered: None,
+                snapshots: None,
             };
             finish_test(report, json, &places)
         }
@@ -1382,6 +1462,7 @@ mod tests {
                 no_cache: true,
                 lib: false,
                 no_agent_files: false,
+                update: false,
             }
         );
         assert!(line.program_args.is_empty());

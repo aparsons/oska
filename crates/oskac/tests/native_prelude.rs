@@ -329,6 +329,13 @@ const CALLS: &[(&str, Run, &str)] = &[
 }"#,
     ),
     (
+        "TestContext.assert_snapshot",
+        Run::Tests,
+        r#"test "assert_snapshot" {
+    t.assert_snapshot([1, 2])
+}"#,
+    ),
+    (
         "TestContext.printed",
         Run::Tests,
         r#"test "printed" {

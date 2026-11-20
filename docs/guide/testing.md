@@ -35,6 +35,7 @@ The assertions are methods of `t`:
 | `t.assert_eq(actual, expected)` | `P0011` when the values differ through `Eq` |
 | `t.assert_ne(actual, other)` | `P0012` when the values are equal |
 | `t.fail(message)` | `P0013`, always |
+| `t.assert_snapshot(value)` | `P0014` when the value's stored snapshot is missing or differs (see [Snapshots](#snapshots)) |
 
 A failed assertion is a **panic**. It stops that test only, and the other tests still run. A panic from a bug, such as division by zero (`P0004`), fails its test the same way.
 
@@ -160,6 +161,52 @@ error: no test name contains `Adds`; 3 tests filtered out
 ```sh
 oskac test app.osk --filter "gets it"
 ```
+
+## Snapshots
+
+`t.assert_snapshot(value)` checks a value that is easier to review than to spell out in `assert_eq`. It renders the value as `dbg` does and compares it with a stored snapshot, one file per assertion:
+
+```oska
+pub fn evens(n: Int) -> List<Int> {
+    var out: List<Int> = []
+    for i in 0..n {
+        out.push(i * 2)
+    }
+    out
+}
+
+test "shows evens" {
+    t.assert_snapshot(evens(3))
+}
+```
+
+The file is `snapshots/<test-file>/<test-name>.snap`: in a package, under the package's directory, with `<test-file>` the test's file under `src/` without `.osk` (`snapshots/lib/shows evens.snap` for a test in `src/lib.osk`); for a single file, beside it (`snapshots/app/shows evens.snap` for `app.osk`). A test that runs more than one snapshot assertion numbers them in the order they run, `shows evens-1.snap`, `shows evens-2.snap`: source order for straight-line code, and an assertion in a helper or a loop counts each time it runs. A character a file name cannot hold, such as `/` or `:`, becomes `_`, and a name Windows keeps for a device, such as `CON`, gets a `_` before it.
+
+The first run has no snapshot, so the test fails with `P0014`, which names the file and `oskac test --update`, and shows the value as the lines to add:
+
+```text
+test lib: shows evens ... FAILED
+
+failures:
+test lib: shows evens: src/lib.osk:10:5: error[P0014]: no snapshot `snapshots/lib/shows evens.snap` yet; run `oskac test --update` to write it (bytes 150..177)
+    at test "shows evens" (src/lib.osk:10:5)
+    + [0, 2, 4]
+```
+
+`oskac test --update` writes each missing or changed snapshot instead of failing, lists what it wrote, and never deletes one:
+
+```text
+test lib: shows evens ... ok
+
+snapshots written:
+new snapshots/lib/shows evens.snap
+
+1 tests: 1 passed, 0 failed, 0 skipped, 1 snapshot written
+```
+
+With `--format=json` the report lists them after `skipped`, as `"snapshots":[{"path":"snapshots/lib/shows evens.snap","status":"new"}]`, each `new` or `changed`. Commit the snapshots with the tests. When the value changes, the test fails with the difference, `- ` for the stored line and `+ ` for the new one; if the change is intended, run `oskac test --update` and review the snapshot's diff.
+
+The test runner, not the test, reads and writes the snapshots: a test keeps only its stand-in capabilities, so `t.fs` cannot see them. A test that panics fails with its panic, and its snapshots are neither compared nor written. The runner follows no symlink under `snapshots/`: a symlinked directory or snapshot fails the test with `P0014`. Snapshots behave the same natively and with `--interpret`.
 
 ## Integration tests
 

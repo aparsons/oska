@@ -36,12 +36,13 @@ USAGE:
                                            and with P0040 once its values
                                            take more than --max-memory bytes
     oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
-               [--filter <substring>]
+               [--filter <substring>] [--update]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
                                            as `run` does; with --filter, only
                                            those whose names contain the
-                                           substring
+                                           substring; with --update, write
+                                           new and changed snapshots
     oskac build [path] [-o out] [--target <platform>|all] [--format=json] [--no-cache]
                                            Check a source file or package and,
                                            if it has no diagnostics, compile it
@@ -129,12 +130,13 @@ USAGE:
                                            and with P0040 once its values
                                            take more than --max-memory bytes
     oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
-               [--filter <substring>]
+               [--filter <substring>] [--update]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
                                            as `run` does; with --filter, only
                                            those whose names contain the
-                                           substring
+                                           substring; with --update, write
+                                           new and changed snapshots
     oskac build [path] [-o out] [--target <platform>|all] [--format=json] [--no-cache]
                                            Check a source file or package and,
                                            if it has no diagnostics, compile it
@@ -222,12 +224,13 @@ USAGE:
                                            and with P0040 once its values
                                            take more than --max-memory bytes
     oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
-               [--filter <substring>]
+               [--filter <substring>] [--update]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
                                            as `run` does; with --filter, only
                                            those whose names contain the
-                                           substring
+                                           substring; with --update, write
+                                           new and changed snapshots
     oskac build [path] [-o out] [--target <platform>|all] [--format=json] [--no-cache]
                                            Check a source file or package and,
                                            if it has no diagnostics, compile it
@@ -315,12 +318,13 @@ USAGE:
                                            and with P0040 once its values
                                            take more than --max-memory bytes
     oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
-               [--filter <substring>]
+               [--filter <substring>] [--update]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
                                            as `run` does; with --filter, only
                                            those whose names contain the
-                                           substring
+                                           substring; with --update, write
+                                           new and changed snapshots
     oskac build [path] [-o out] [--target <platform>|all] [--format=json] [--no-cache]
                                            Check a source file or package and,
                                            if it has no diagnostics, compile it

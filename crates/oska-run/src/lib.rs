@@ -20,7 +20,8 @@
 //!   `std.html` module.
 //! - `tasks.rs` runs `scope` blocks and their spawned tasks.
 //! - `testing.rs` runs `test` blocks for [`test`] (`oskac test`), and
-//!   implements `TestContext`'s methods.
+//!   implements `TestContext`'s methods; `snapshots.rs` numbers, compares
+//!   and writes what snapshot assertions record.
 //! - `panics.rs` defines panics and every runtime code.
 //! - `value.rs` defines runtime values.
 //! - `host.rs` defines the hosts.
@@ -50,6 +51,7 @@ mod memory;
 mod ops;
 mod panics;
 mod prng;
+pub mod snapshots;
 mod support;
 mod tasks;
 mod testing;
@@ -61,8 +63,8 @@ pub use interp::MAX_CALL_DEPTH;
 pub use oska_check::limits::Limits;
 pub use panics::codes;
 pub use testing::{
-    escape_control, test, test_duration_ms, test_program, test_refusal, Filtered, TestOptions,
-    TestReport, TestResult, TestStatus,
+    escape_control, test, test_duration_ms, test_program, test_refusal, test_result, Filtered,
+    TestOptions, TestReport, TestResult, TestStatus,
 };
 
 use interp::{Interpreter, Stream};

@@ -8,7 +8,12 @@
 //! no symlink. The check is `oskac check --release`; the tests are
 //! `oskac test` without `--integration`, run on the interpreter, in this
 //! process, each on stand-in capabilities and a fresh in-memory world: the
-//! gate touches no file, starts no program and reaches no real resource.
+//! gate writes no file, starts no program and reaches no real resource.
+//! The only files it reads besides the source are the snapshots the tests'
+//! snapshot assertions compare with, as `oskac test` does without
+//! `--update` (`oska_run::snapshots`), and it reaches none of them through
+//! a symlink: a symlinked `snapshots/`, directory in it, or snapshot fails
+//! the test.
 //!
 //! Any diagnostic or failed test blocks, on every attempt, and so does a
 //! target or directory that cannot be read: the gate never lets the agent
@@ -192,6 +197,8 @@ fn run(shown: &Shown) -> Result<Outcome, String> {
         Checked::File { source, .. } => {
             let locate = |d| target::locate(&shown.name, &source, d);
             let mut report = oska_run::test(&source, &mut host, tests);
+            let (dir, stem) = crate::file_snapshots(path_of(shown));
+            crate::settle_in(&mut report, &dir, &|_| Some(stem.clone()), false);
             for test in &mut report.tests {
                 test.failure = test.failure.take().map(locate);
             }
@@ -206,6 +213,8 @@ fn run(shown: &Shown) -> Result<Outcome, String> {
             let locator = Locator::new(&package);
             let locate = |d| crate::from_here(&shown.name, locator.locate(d));
             let mut report = oska_run::test_program(&program, &mut host, tests);
+            let file_of = |span| crate::package_test_file(&locator, span);
+            crate::settle_in(&mut report, path_of(shown), &file_of, false);
             for test in &mut report.tests {
                 test.module = locator.module_of(test.span).map(str::to_string);
                 test.failure = test.failure.take().map(locate);
@@ -213,6 +222,14 @@ fn run(shown: &Shown) -> Result<Outcome, String> {
             report.diagnostics = report.diagnostics.into_iter().map(locate).collect();
             Ok(Outcome::tested(report))
         }
+    }
+}
+
+/// The path of `shown`'s file or package directory, which its snapshots
+/// are found from (`oska_run::snapshots`).
+fn path_of(shown: &Shown) -> &str {
+    match &shown.target {
+        Target::File(path) | Target::Dir(path) => path,
     }
 }
 
