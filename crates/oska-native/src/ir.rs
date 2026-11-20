@@ -314,6 +314,12 @@ pub enum Inst {
     },
     /// Count one call nesting less.
     Leave,
+    /// How many more calls may nest, as [`Inst::Enter`] counts them: the
+    /// index of the innermost running call's slot in the call stack
+    /// (`std.rt`'s `rt_mem_depth`).
+    Depth {
+        dst: Temp,
+    },
     /// Switch to the stack whose top is the address `stack`, allow calls
     /// to nest `depth` deep from here, and call `callee`, which never
     /// returns. Only the entry point uses it.
@@ -387,6 +393,7 @@ impl Inst {
             | Inst::LibCall { dst, .. }
             | Inst::Arith { dst, .. }
             | Inst::Second { dst }
+            | Inst::Depth { dst }
             | Inst::EntrySp { dst } => Some(*dst),
             _ => None,
         }
@@ -399,6 +406,7 @@ impl Inst {
             Inst::Const { dst, .. }
             | Inst::Addr { dst, .. }
             | Inst::Second { dst }
+            | Inst::Depth { dst }
             | Inst::EntrySp { dst } => each(dst),
             Inst::Copy { dst, src } => {
                 each(dst);
@@ -479,6 +487,7 @@ impl Inst {
             Inst::Const { .. }
             | Inst::Second { .. }
             | Inst::EntrySp { .. }
+            | Inst::Depth { .. }
             | Inst::Addr { .. }
             | Inst::Label(_)
             | Inst::Jump(_)

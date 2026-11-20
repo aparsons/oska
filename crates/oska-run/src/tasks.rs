@@ -20,10 +20,11 @@
 //!   has a hole.
 
 use std::collections::VecDeque;
+use std::rc::Rc;
 
 use oska_syntax::Span;
 
-use crate::interp::Interpreter;
+use crate::interp::{FrameName, Interpreter};
 use crate::intrinsics::Intrinsic::HigherOrder;
 use crate::intrinsics::Table;
 use crate::panics::{codes, Panic};
@@ -62,6 +63,8 @@ struct TaskState {
     span: Span,
     /// The closure's result, once it has run.
     result: Option<Value>,
+    /// The frame that spawned it, which its call is made from.
+    spawned_in: Rc<str>,
 }
 
 impl Tasks {
@@ -81,7 +84,13 @@ impl Tasks {
 
     /// Queue `code`, spawned by the call at `span`, on `scope`, or `None`
     /// when the scope is closed.
-    fn spawn(&mut self, scope: usize, code: Value, span: Span) -> Option<usize> {
+    fn spawn(
+        &mut self,
+        scope: usize,
+        code: Value,
+        span: Span,
+        spawned_in: Rc<str>,
+    ) -> Option<usize> {
         if !self.scopes[scope].open {
             return None;
         }
@@ -90,6 +99,7 @@ impl Tasks {
             code,
             span,
             result: None,
+            spawned_in,
         });
         let task = self.tasks.len() - 1;
         self.scopes[scope].pending.push_back(task);
@@ -115,7 +125,12 @@ impl Interpreter<'_, '_> {
     fn run_task(&mut self, task: usize) -> Result<(), Panic> {
         let code = std::mem::replace(&mut self.tasks.tasks[task].code, Value::Unit);
         let span = self.tasks.tasks[task].span;
-        let result = self.call_value(&code, Vec::new(), span)?;
+        let spawned_in = Rc::clone(&self.tasks.tasks[task].spawned_in);
+        self.call_from(FrameName::Made(spawned_in));
+        let result = self.call_value(&code, Vec::new(), span);
+        // A task of a prelude function makes no call to take it.
+        self.clear_caller();
+        let result = result?;
         self.tasks.tasks[task].result = Some(result);
         Ok(())
     }
@@ -147,7 +162,8 @@ fn scope_spawn(
     let Value::Scope(scope) = args[0] else {
         unreachable!("the checker guarantees a scope handle, found {:?}", args[0]);
     };
-    match interp.tasks.spawn(scope, args[1].clone(), span) {
+    let spawned_in = Rc::from(interp.current().as_str());
+    match interp.tasks.spawn(scope, args[1].clone(), span, spawned_in) {
         Some(task) => Ok(Value::Task(task)),
         None => Err(Panic::new(
             codes::SPAWN_ON_FINISHED_SCOPE,
@@ -277,12 +293,22 @@ mod tests {
         let mut tasks = Tasks::default();
         let scope = tasks.open();
         assert_eq!(
-            tasks.spawn(scope, Value::Unit, Span { start: 0, end: 0 }),
+            tasks.spawn(
+                scope,
+                Value::Unit,
+                Span { start: 0, end: 0 },
+                Rc::from("main")
+            ),
             Some(0)
         );
         tasks.close(scope);
         assert_eq!(
-            tasks.spawn(scope, Value::Unit, Span { start: 0, end: 0 }),
+            tasks.spawn(
+                scope,
+                Value::Unit,
+                Span { start: 0, end: 0 },
+                Rc::from("main")
+            ),
             None
         );
     }

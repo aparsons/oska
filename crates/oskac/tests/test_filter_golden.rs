@@ -50,7 +50,7 @@ fn transcript(args: &[&str], shown: &[&str]) -> String {
             .status
             .code()
             .map_or("signal".to_string(), |c| c.to_string()),
-        String::from_utf8_lossy(&output.stdout),
+        common::golden::mask_durations(&String::from_utf8_lossy(&output.stdout)),
         String::from_utf8_lossy(&output.stderr),
     )
 }

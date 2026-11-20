@@ -9,7 +9,7 @@
 //! checks that module, so every rule holds across the whole package.
 
 use oska_syntax::ast::ItemKind;
-use oska_syntax::{Diagnostic, LineIndex, Location, Span};
+use oska_syntax::{Diagnostic, Frame, LineIndex, Location, Span};
 
 use crate::manifest::is_snake_case;
 use crate::{
@@ -225,7 +225,27 @@ impl<'p> Joined<'p> {
             related.span = span;
             related.location = Some(self.spanning(index, span));
         }
+        if let Some(frames) = &mut d.frames {
+            for frame in &mut frames.frames {
+                self.locate_frame(frame);
+            }
+        }
         (index, d)
+    }
+
+    /// `frame`, whose span is an offset into the joined text, located in
+    /// the file of its module, its span an offset into that file.
+    fn locate_frame(&self, frame: &mut Frame) {
+        let (_, span, index) = self.local(frame.span);
+        frame.span = span;
+        frame.location = Some(self.spanning(index, span));
+    }
+
+    /// `frame`, not yet located, with its function named as code in its
+    /// own module names it.
+    fn display_frame_keys(&self, keys: &link::Keys, frame: &mut Frame) {
+        let (module, _, _) = self.local(frame.span);
+        frame.function = keys.display(&frame.function, &module.module);
     }
 
     /// `diagnostic`, a message about the joined module, with every key in
@@ -234,6 +254,11 @@ impl<'p> Joined<'p> {
     fn display_keys(&self, keys: &link::Keys, mut d: Diagnostic) -> Diagnostic {
         let (module, _, _) = self.local(d.span);
         d.message = keys.display(&d.message, &module.module);
+        if let Some(frames) = &mut d.frames {
+            for frame in &mut frames.frames {
+                self.display_frame_keys(keys, frame);
+            }
+        }
         if let Some(fix) = &mut d.fix {
             fix.message = keys.display(&fix.message, &module.module);
         }
@@ -383,6 +408,17 @@ impl<'p> Locator<'p> {
         };
         let diagnostic = joined.display_keys(&self.keys, diagnostic);
         joined.locate(diagnostic).1
+    }
+
+    /// `frame` of a panic's call stack, whose span is an offset into the
+    /// program, about the file it is in, as [`Locator::locate`] places a
+    /// diagnostic's frames.
+    pub fn locate_frame(&self, mut frame: Frame) -> Frame {
+        if let Some(joined) = &self.joined {
+            joined.display_frame_keys(&self.keys, &mut frame);
+            joined.locate_frame(&mut frame);
+        }
+        frame
     }
 
     /// The module path of the code at `span` of the program, such as

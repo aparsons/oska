@@ -1,5 +1,5 @@
 $ oskac test crates/oskac/tests/fixtures/test_filter.osk --filter=adds --format=json
 exit: 0
 --- stdout
-{"tests":[{"name":"adds","status":"passed","failure":null},{"name":"adds twice","status":"passed","failure":null}],"passed":2,"failed":0,"skipped":0,"filtered":1,"diagnostics":[]}
+{"tests":[{"name":"adds","status":"passed","duration_ms":<ms>,"failure":null},{"name":"adds twice","status":"passed","duration_ms":<ms>,"failure":null}],"passed":2,"failed":0,"skipped":0,"filtered":1,"diagnostics":[]}
 --- stderr

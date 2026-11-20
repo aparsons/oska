@@ -23,6 +23,7 @@
 
 use std::io;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use oska_check::builtins;
 use oska_check::program::{Program, Test};
@@ -110,6 +111,11 @@ pub struct TestResult {
     /// The test item's span in the program.
     pub span: Span,
     pub status: TestStatus,
+    /// How long the test took, in whole milliseconds, rounded down: on the
+    /// interpreter its run in an interpreter of its own, natively its
+    /// process from start to exit. 0 for a skipped test, which does not
+    /// run. See [`test_duration_ms`].
+    pub duration_ms: u64,
     /// Why a failed test failed: the panic that stopped it, shaped like a
     /// diagnostic, with a `P`-code and the span where it happened.
     pub failure: Option<Diagnostic>,
@@ -195,6 +201,13 @@ impl TestReport {
                 let line = format!("test {name}: {place}: {failure}");
                 out.push_str(&escape_control(&line));
                 out.push('\n');
+                // The call stack, a line a frame, each escaped.
+                if let Some(frames) = &failure.frames {
+                    for line in frames.human().lines() {
+                        out.push_str(&escape_control(line));
+                        out.push('\n');
+                    }
+                }
             }
         }
         out.push_str(&format!(
@@ -212,8 +225,9 @@ impl TestReport {
     }
 
     /// The report as one JSON object:
-    /// `{"tests":[{"name":...,"module":...,"status":...,"failure":...}],
-    /// "passed":n,"failed":n,"skipped":n,"diagnostics":[...]}`. A test's
+    /// `{"tests":[{"name":...,"module":...,"status":...,"duration_ms":n,
+    /// "failure":...}],"passed":n,"failed":n,"skipped":n,"diagnostics":[...]}`.
+    /// A test's `duration_ms` is an integer, the milliseconds it took; its
     /// `failure` is a diagnostic object, or `null` when it did not fail;
     /// `module` is there only for a test in a package. With `--filter`,
     /// `"filtered":n` after `skipped` counts the tests it left out.
@@ -226,9 +240,10 @@ impl TestReport {
                     format!(",\"module\":\"{}\"", json_escape(m))
                 });
                 format!(
-                    "{{\"name\":\"{}\"{module},\"status\":\"{}\",\"failure\":{}}}",
+                    "{{\"name\":\"{}\"{module},\"status\":\"{}\",\"duration_ms\":{},\"failure\":{}}}",
                     json_escape(&t.name),
                     t.status.as_str(),
+                    t.duration_ms,
                     t.failure
                         .as_ref()
                         .map_or_else(|| "null".to_string(), Diagnostic::to_json)
@@ -304,6 +319,7 @@ pub fn test_program(program: &Program, host: &mut dyn Host, options: TestOptions
         .iter()
         .filter(|test| options.selects(&test.name))
         .map(|test| {
+            let started = Instant::now();
             let outcome = match (test.integration, options.integration) {
                 (false, _) => Some(on_interpreter_stack(|| {
                     let world = Some(FakeHost::new());
@@ -319,11 +335,13 @@ pub fn test_program(program: &Program, host: &mut dyn Host, options: TestOptions
                 Some(Ok(())) => (TestStatus::Passed, None),
                 Some(Err(panic)) => (TestStatus::Failed, Some(panic.into_diagnostic())),
             };
+            let duration_ms = test_duration_ms(status, started);
             TestResult {
                 name: test.name.clone(),
                 module: None,
                 span: test.span,
                 status,
+                duration_ms,
                 failure,
             }
         })
@@ -335,9 +353,27 @@ pub fn test_program(program: &Program, host: &mut dyn Host, options: TestOptions
     }
 }
 
+/// The `duration_ms` of a test that ended with `status` and was started
+/// at `started`: the whole milliseconds since then, rounded down, or 0
+/// for a skipped test, which did not run. Each backend calls it as its
+/// test ends.
+pub fn test_duration_ms(status: TestStatus, started: Instant) -> u64 {
+    match status {
+        TestStatus::Skipped => 0,
+        TestStatus::Passed | TestStatus::Failed => whole_millis(started.elapsed()),
+    }
+}
+
+/// `took` in whole milliseconds, rounded down.
+fn whole_millis(took: Duration) -> u64 {
+    u64::try_from(took.as_millis()).unwrap_or(u64::MAX)
+}
+
 /// Run one test on `host`, in an interpreter of its own.
 fn run_one(program: &Program, test: &Test, host: &mut dyn Host) -> Result<(), Panic> {
-    Interpreter::new(program, host).run_test(&test.body, test_context())
+    Interpreter::new(program, host)
+        .with_root(&oska_syntax::Frame::test(&test.name))
+        .run_test(&test.body, test_context())
 }
 
 /// `t`: a `TestContext`, holding the capabilities the prelude declares

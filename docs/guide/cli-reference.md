@@ -437,6 +437,7 @@ Every message about a program has one shape, whichever command produced it:
 - `applicability` says how safe a fix is to apply without reading it: `machine` when it is certainly right, `maybe` when it is probably what was meant but a guess, such as the closest name to an unknown one, and `placeholders` when the program checks afterwards but code is left to write, such as `match` arms whose body is `todo()`. Each code's fix has one applicability, which `oskac explain` and the code's page give. The human output marks the uncertain ones as `fix (maybe):` and `fix (placeholders):`.
 - `related` lists other places the diagnostic is about, each with a `message`, `path`, `span`, `line` and `column`, such as a name's first definition, the trait's declaration of a method, or the module an import looked in. It is filled only where the checker knows the place, and is often empty.
 - `suggestions` is where repairs that are plausible but uncertain go, in the shape of a `fix` with the applicability `maybe`. No tool applies them automatically. It is empty for every code today.
+- `frames` and `frames_omitted` come last, on a panic (`P` codes) only. `frames` is the call stack at the panic, innermost first: each frame is `{function, path, span, line, column}`, the function that was running and where it was, which for the first frame is the panic's own `span` and for each other the call it made. A function is named as code in its module names it; a closure as `<closure in f>`, after the function it is written in; the body of a test as `test "name"`. A frame that cannot be placed in a file has `path`, `line` and `column` `null`. At most 20 frames are listed, and `frames_omitted` counts the rest, so the report of runaway recursion (`P0021`) stays short. Native code and the interpreter report the same frames, except that an interpreter whose own stack runs out before 50,000 calls nest (`P0021`) counts fewer left out. The human output lists them under the panic's line, one `    at function (path:line:column)` each, then `    ... n more frames` when some were left out.
 
 The format only grows. No field is renamed, retyped or given a new meaning, a diagnostic that has no `fix` never gains one, and a new uncertain repair goes into `suggestions`, never into `fix`. A consumer must accept values of `severity` and `applicability` that are not listed here, and fields it does not know.
 
@@ -471,10 +472,10 @@ A parse error is reported alone, with empty `functions`, `audit` and `attenuatio
 ### `test --format=json`
 
 ```json
-{"tests":[{"name":"adds","status":"passed","failure":null}],"passed":1,"failed":0,"skipped":0,"diagnostics":[]}
+{"tests":[{"name":"adds","status":"passed","duration_ms":2,"failure":null}],"passed":1,"failed":0,"skipped":0,"diagnostics":[]}
 ```
 
-`status` is `passed`, `failed`, or `skipped`. `failure` is a diagnostic object or `null`. With `--filter`, `"filtered":n` follows `skipped`: the number of tests the filter left out.
+`status` is `passed`, `failed`, or `skipped`. `duration_ms` is an integer, how long the test took in whole milliseconds, rounded down: natively, the test's process from start to exit, process start included; with `--interpret`, the test's run on a fresh interpreter, in-process. A skipped test has 0. It varies from run to run. `failure` is a diagnostic object or `null`. With `--filter`, `"filtered":n` follows `skipped`: the number of tests the filter left out.
 
 ### `run --format=json`
 

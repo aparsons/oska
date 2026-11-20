@@ -111,9 +111,9 @@ pub fn run(
     let timeout = limits.timeout.take();
     let built = cached.native("run", target, json, &crate::limits::flags(&limits), || {
         if json {
-            oska_native::build_limited(program, target, &|d| d, limits)
+            oska_native::build_limited(program, target, &oska_native::Unplaced, limits)
         } else {
-            oska_native::build_limited(program, target, &|d| places.locate(d), limits)
+            oska_native::build_limited(program, target, places, limits)
         }
     });
     let bytes = match built {

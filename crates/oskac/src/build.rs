@@ -184,7 +184,7 @@ fn compile(
     let mut executables = Vec::with_capacity(builds.len());
     for (target, path) in builds {
         match cached.native("build", target, json, &[], || {
-            oska_native::build(program, target, &|d| places.locate(d))
+            oska_native::build(program, target, places)
         }) {
             Ok(bytes) => executables.push((path, bytes)),
             Err(refusal) => return refuse(&[places.locate(refusal)], json, ExitCode::from(2)),

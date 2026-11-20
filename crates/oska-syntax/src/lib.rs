@@ -291,7 +291,143 @@ pub struct Diagnostic {
     /// Other places the diagnostic is about, such as the first definition
     /// of a name defined twice: only where the checker already knows them.
     pub related: Vec<Related>,
+    /// A panic's call stack ([`Frames`]); `None` for every other
+    /// diagnostic. Boxed, as `fix` and `location` are.
+    pub frames: Option<Box<Frames>>,
 }
+
+/// The call stack at a panic: the calls that led to it, innermost first,
+/// at most [`MAX_FRAMES`] of them, and how many more were left out.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Frames {
+    pub frames: Vec<Frame>,
+    /// The frames past the first [`MAX_FRAMES`], left out.
+    pub omitted: usize,
+}
+
+/// The most frames a panic reports: runaway recursion (`P0021`) nests
+/// 50,000 calls deep, and the innermost few say what repeats.
+pub const MAX_FRAMES: usize = 20;
+
+/// One call on the stack at a panic: the function it runs, and where in
+/// it the program was, the panic's own span for the innermost frame and
+/// the call it made for each other. Located as the diagnostic is, and
+/// possibly in another file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Frame {
+    /// The function as the program names it: `half`, `Point.norm`,
+    /// `<closure in main>`, or for the body of a test, `test "name"`.
+    pub function: String,
+    pub span: Span,
+    pub location: Option<Location>,
+}
+
+impl Frame {
+    pub fn new(function: impl Into<String>, span: Span) -> Self {
+        Frame {
+            function: function.into(),
+            span,
+            location: None,
+        }
+    }
+
+    /// The name of the frame of a closure written in the function, or
+    /// closure, whose frame is named `enclosing`: `<closure in f>`. A
+    /// closure written in a closure is named as that closure is.
+    pub fn closure_in(enclosing: &str) -> String {
+        if enclosing.starts_with(CLOSURE_IN) {
+            enclosing.to_string()
+        } else {
+            format!("{CLOSURE_IN}{enclosing}>")
+        }
+    }
+
+    /// The frame placed in `src`, the text of the file at `path`, as
+    /// [`Diagnostic::locate`] places a diagnostic's frames.
+    pub fn locate(mut self, path: &str, src: &str) -> Self {
+        if self.location.is_none() {
+            self.location = Some(Location::spanning(path, src, self.span));
+        }
+        self
+    }
+
+    /// The name of the frame of the body of the test `name`.
+    pub fn test(name: &str) -> String {
+        format!("test \"{name}\"")
+    }
+
+    /// The frame's line in the human output, under the panic's line:
+    /// `    at f (path:line:col)`.
+    pub fn human(&self) -> String {
+        match &self.location {
+            Some(location) => format!("{FRAME_BEFORE}{} ({location})\n", self.function),
+            None => format!(
+                "{FRAME_BEFORE}{} (bytes {}..{})\n",
+                self.function, self.span.start, self.span.end
+            ),
+        }
+    }
+
+    /// `{function, path, span, line, column}`, with `path`, `line` and
+    /// `column` `null` when it is not located.
+    fn to_json(&self) -> String {
+        let (path, line, column) = match &self.location {
+            Some(location) => (
+                format!("\"{}\"", json_escape(&location.path)),
+                location.line.to_string(),
+                location.column.to_string(),
+            ),
+            None => ("null".to_string(), "null".to_string(), "null".to_string()),
+        };
+        format!(
+            "{{\"function\":\"{}\",\"path\":{path},\"span\":{},\"line\":{line},\"column\":{column}}}",
+            json_escape(&self.function),
+            span_json(self.span)
+        )
+    }
+}
+
+const CLOSURE_IN: &str = "<closure in ";
+
+impl Frames {
+    /// The line under the frames, in the human output, that says how
+    /// many were left out: [`OMITTED_BEFORE`], the count, then
+    /// [`OMITTED_AFTER`].
+    pub fn omitted_human(omitted: usize) -> String {
+        format!("{OMITTED_BEFORE}{omitted}{OMITTED_AFTER}")
+    }
+
+    /// The count of frames left out that `line`, of the human output,
+    /// gives, when it is [`Frames::omitted_human`]'s line.
+    pub fn omitted_in(line: &str) -> Option<usize> {
+        line.strip_prefix(OMITTED_BEFORE)?
+            .strip_suffix(OMITTED_AFTER.trim_end_matches('\n'))?
+            .parse()
+            .ok()
+    }
+
+    /// Whether `line`, of the human output, is one of the lines that
+    /// [`Frames::human`] lists under a panic's line.
+    pub fn is_human_line(line: &str) -> bool {
+        line.starts_with(FRAME_BEFORE) || Frames::omitted_in(line).is_some()
+    }
+
+    /// The frames as the human output lists them under the panic's line.
+    pub fn human(&self) -> String {
+        let mut out: String = self.frames.iter().map(Frame::human).collect();
+        if self.omitted > 0 {
+            out.push_str(&Frames::omitted_human(self.omitted));
+        }
+        out
+    }
+}
+
+/// The human output's line for a frame, before its function.
+pub const FRAME_BEFORE: &str = "    at ";
+/// The human output's line for frames left out, before the count.
+pub const OMITTED_BEFORE: &str = "    ... ";
+/// The human output's line for frames left out, after the count.
+pub const OMITTED_AFTER: &str = " more frames\n";
 
 /// How serious a diagnostic is. Consumers of the JSON must accept values
 /// that are not listed here yet.
@@ -511,6 +647,7 @@ impl Diagnostic {
             location: None,
             severity: Severity::Error,
             related: Vec::new(),
+            frames: None,
         }
     }
 
@@ -529,6 +666,19 @@ impl Diagnostic {
                 related.location = Some(lines.spanning(path, related.span));
             }
         }
+        if let Some(frames) = &mut self.frames {
+            for frame in &mut frames.frames {
+                if frame.location.is_none() {
+                    frame.location = Some(lines.spanning(path, frame.span));
+                }
+            }
+        }
+        self
+    }
+
+    /// Attach a panic's call stack.
+    pub fn with_frames(mut self, frames: Frames) -> Self {
+        self.frames = Some(Box::new(frames));
         self
     }
 
@@ -570,7 +720,10 @@ impl Diagnostic {
     /// field follows, and is omitted when there is no fix; it has a `path`
     /// after its `message` when its edits are in another file than the
     /// diagnostic. `related` and `suggestions`, lists that may be empty,
-    /// come last.
+    /// come next. A panic ends with `frames`, its call stack innermost
+    /// first, each `{function, path, span, line, column}`, and
+    /// `frames_omitted`, how many frames past [`MAX_FRAMES`] were left
+    /// out; no other diagnostic has them.
     ///
     /// Fields are only ever added: none is renamed, retyped or given a
     /// new meaning, and a diagnostic that had no `fix` never gains one.
@@ -621,9 +774,18 @@ impl Diagnostic {
         // Uncertain repairs will go in `suggestions`, never in `fix`; the
         // checker offers none yet.
         out.push_str(&format!(
-            ",\"related\":[{}],\"suggestions\":[]}}",
+            ",\"related\":[{}],\"suggestions\":[]",
             related.join(",")
         ));
+        if let Some(frames) = &self.frames {
+            let list: Vec<String> = frames.frames.iter().map(Frame::to_json).collect();
+            out.push_str(&format!(
+                ",\"frames\":[{}],\"frames_omitted\":{}",
+                list.join(","),
+                frames.omitted
+            ));
+        }
+        out.push('}');
         out
     }
 }
@@ -1112,6 +1274,27 @@ mod tests {
         assert_eq!(
             err.locate("app.osk", "let x = $").to_json(),
             "{\"code\":\"E0001\",\"message\":\"unexpected character '$'\",\"path\":\"app.osk\",\"span\":{\"start\":8,\"end\":9},\"line\":1,\"column\":9,\"end_line\":1,\"end_column\":10,\"severity\":\"error\",\"url\":\"https://oskalang.dev/codes/E0001\",\"related\":[],\"suggestions\":[]}"
+        );
+    }
+
+    #[test]
+    fn a_frame_not_yet_located_has_every_field_with_null_for_its_place() {
+        let panic = Diagnostic::new("P0004", "division by zero", Span { start: 4, end: 9 })
+            .with_frames(Frames {
+                frames: vec![Frame::new("half", Span { start: 4, end: 9 })],
+                omitted: 0,
+            });
+        assert!(
+            panic.to_json().ends_with(
+                "\"frames\":[{\"function\":\"half\",\"path\":null,\"span\":{\"start\":4,\"end\":9},\"line\":null,\"column\":null}],\"frames_omitted\":0}"
+            ),
+            "{}",
+            panic.to_json()
+        );
+        assert!(
+            panic.locate("app.osk", "let half = 1").to_json().ends_with(
+                "\"frames\":[{\"function\":\"half\",\"path\":\"app.osk\",\"span\":{\"start\":4,\"end\":9},\"line\":1,\"column\":5}],\"frames_omitted\":0}"
+            )
         );
     }
 

@@ -308,8 +308,8 @@ fn every_panic_a_program_can_reach_reports_the_interpreters_code_and_location() 
         ("P0020", "", "    let key = env.secret(\"OSKA_NOT_SET\")"),
         (
             "P0021",
-            "fn down(n: Int) -> Int {\n    1 + down(n + 1)\n}",
-            "    let d = down(0)",
+            "fn down(n: Int) -> Int {\n    if n == 0 { 0 } else { 1 + down(n - 1) }\n}",
+            "    let d = down(1000000)",
         ),
         ("P0035", "", "    let s = \"héllo\".slice(2, 9)"),
         ("P0036", "", "    let s = \"ab\".repeat(-1)"),
@@ -320,13 +320,24 @@ fn every_panic_a_program_can_reach_reports_the_interpreters_code_and_location() 
             "{items}\n\nfn main(io: Stdout, env: Env) {{\n    \
              let _ = io.println(\"before\")\n{body}\n}}\n"
         );
-        let outcome = assert_same(&Case::file(&format!("panic_{code}"), &src));
+        let case = Case::file(&format!("panic_{code}"), &src);
+        let outcome = if code == "P0021" {
+            // `down(n)` nests `n + 1` calls under `main`.
+            let deepest = src.replace("down(1000000)", "down(49999)");
+            differential::assert_same_at_depth_limit(&case, &Case::file("panic_deepest", &deepest))
+                .1
+        } else {
+            assert_same(&case)
+        };
         assert_eq!(outcome.stdout, "before\n", "{code}: {outcome:#?}");
         assert!(
             outcome.stderr.starts_with("main.osk:")
                 && outcome.stderr.contains(&format!(": error[{code}]: "))
-                && outcome.stderr.ends_with(")\n")
-                && outcome.stderr.lines().count() == 1,
+                && differential::without_frames(&outcome.stderr).ends_with(")\n")
+                && differential::without_frames(&outcome.stderr)
+                    .lines()
+                    .count()
+                    == 1,
             "{code}: {outcome:#?}"
         );
         assert_eq!(outcome.exit_code, Some(101), "{code}: {outcome:#?}");

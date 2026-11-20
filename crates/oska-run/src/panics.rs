@@ -9,7 +9,7 @@
 //! To add a code: add a constant to [`codes`], list it in [`codes::ALL`],
 //! and add its row to `docs/runtime.md`.
 
-use oska_syntax::{Diagnostic, Span};
+use oska_syntax::{Diagnostic, Frames, Span};
 
 /// The stable codes the runtime reports: refusals (`E038x`) and panics
 /// (`P0001` upwards).
@@ -107,6 +107,9 @@ pub struct Panic {
     pub code: &'static str,
     pub message: String,
     pub span: Span,
+    /// The call stack where it happened: filled in by the interpreter as the panic
+    /// leaves the call it happened in (`Interpreter::stamped`).
+    pub frames: Option<Frames>,
 }
 
 impl Panic {
@@ -115,12 +118,17 @@ impl Panic {
             code,
             message: message.into(),
             span,
+            frames: None,
         }
     }
 
     /// The panic in the shape of a diagnostic, as `--format=json` prints
-    /// it.
+    /// it, with its call stack.
     pub fn into_diagnostic(self) -> Diagnostic {
-        Diagnostic::new(self.code, self.message, self.span)
+        let diagnostic = Diagnostic::new(self.code, self.message, self.span);
+        match self.frames {
+            Some(frames) => diagnostic.with_frames(frames),
+            None => diagnostic,
+        }
     }
 }

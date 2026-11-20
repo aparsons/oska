@@ -4,7 +4,7 @@
 mod common;
 
 use common::{test_fake, test_with};
-use oska_run::{codes, FakeHost, Host, TestOptions, TestStatus};
+use oska_run::{codes, FakeHost, Host, TestOptions, TestReport, TestStatus};
 
 #[test]
 fn reports_each_test_as_passed_or_failed_in_source_order() {
@@ -250,8 +250,16 @@ fn running_the_same_file_twice_gives_identical_reports() {
                test \"panics\" {\n    let _ = div(1, 0)\n}\n\
                test \"prints\" {\n    let _ = t.stdout.println(\"x\")\n    \
                t.assert_eq(t.printed(), [\"y\"])\n}\n";
-    let first = test_fake(src);
-    let second = test_fake(src);
+    // Everything but the durations, which are the wall-clock time each
+    // test took.
+    let timeless = |mut report: TestReport| {
+        for test in &mut report.tests {
+            test.duration_ms = 0;
+        }
+        report
+    };
+    let first = timeless(test_fake(src));
+    let second = timeless(test_fake(src));
     assert_eq!(first, second);
     assert_eq!(first.to_json(), second.to_json());
 }
@@ -281,13 +289,20 @@ fn a_test_using_something_the_interpreter_cannot_run_refuses_the_file() {
 #[test]
 fn the_json_report_lists_each_test_with_its_status_and_failure() {
     let src = "test \"ok\" {\n    t.assert(true)\n}\ntest \"bad\" {\n    t.fail(\"no\")\n}\n";
+    let mut report = test_fake(src);
+    // Durations vary from run to run; the report prints whatever they are.
+    report.tests[0].duration_ms = 3;
+    report.tests[1].duration_ms = 0;
     assert_eq!(
-        test_fake(src).to_json(),
-        "{\"tests\":[{\"name\":\"ok\",\"status\":\"passed\",\"failure\":null},\
-         {\"name\":\"bad\",\"status\":\"failed\",\"failure\":\
+        report.to_json(),
+        "{\"tests\":[{\"name\":\"ok\",\"status\":\"passed\",\"duration_ms\":3,\"failure\":null},\
+         {\"name\":\"bad\",\"status\":\"failed\",\"duration_ms\":0,\"failure\":\
          {\"code\":\"P0013\",\"message\":\"no\",\"span\":{\"start\":50,\"end\":62},\
          \"severity\":\"error\",\"url\":\"https://oskalang.dev/codes/P0013\",\
-         \"related\":[],\"suggestions\":[]}}],\
+         \"related\":[],\"suggestions\":[],\
+         \"frames\":[{\"function\":\"test \\\"bad\\\"\",\"path\":null,\
+         \"span\":{\"start\":50,\"end\":62},\"line\":null,\"column\":null}],\
+         \"frames_omitted\":0}}],\
          \"passed\":1,\"failed\":1,\"skipped\":0,\"diagnostics\":[]}"
     );
 }
@@ -304,6 +319,7 @@ fn the_human_report_names_the_test_of_each_failure() {
          \n\
          failures:\n\
          test divides: math.osk: error[P0013]: boom (bytes 56..70)\n\
+         \x20   at test \"divides\" (bytes 56..70)\n\
          \n\
          2 tests: 1 passed, 1 failed, 0 skipped\n"
     );

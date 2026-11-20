@@ -19,3 +19,26 @@ pub fn assert_golden_file(golden: &Path, actual: &str) {
         golden.display()
     );
 }
+
+/// `text` with the number of each `"duration_ms":` replaced by `<ms>`, so
+/// a golden file of an `oskac test --format=json` report stays the same
+/// from run to run. It panics when a `"duration_ms":` is not followed by
+/// a non-negative integer, so masking never hides a malformed duration.
+pub fn mask_durations(text: &str) -> String {
+    const KEY: &str = "\"duration_ms\":";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(KEY) {
+        let (before, after) = rest.split_at(at + KEY.len());
+        out.push_str(before);
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        assert!(
+            digits > 0,
+            "`duration_ms` should be a non-negative integer in\n{text}"
+        );
+        out.push_str("<ms>");
+        rest = &after[digits..];
+    }
+    out.push_str(rest);
+    out
+}

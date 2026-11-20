@@ -12,14 +12,18 @@
 //! report (`oska_native::test_failure`). An `#[integration]` test runs
 //! only when asked, and is skipped otherwise without starting a process.
 //! A test `--filter` leaves out starts no process and is not reported.
+//! A test's duration is the time its process took, from start to exit,
+//! process start included (`oska_run::test_duration_ms`); the
+//! interpreter times a test's run in-process.
 //! The result is the report the interpreter's runner gives
 //! (`oska_run::TestReport`), printed by the same code.
 
 use std::path::Path;
 use std::process::{Command, ExitCode, Stdio};
+use std::time::Instant;
 
 use oska_check::program::Program;
-use oska_run::{TestOptions, TestReport, TestResult, TestStatus};
+use oska_run::{test_duration_ms, TestOptions, TestReport, TestResult, TestStatus};
 use oska_syntax::{Diagnostic, Span};
 
 use crate::cache::Cached;
@@ -66,6 +70,7 @@ pub fn test_program(
         .enumerate()
         .filter(|(_, test)| options.selects(&test.name))
         .map(|(index, test)| {
+            let started = Instant::now();
             let (status, failure) = if test.integration && !options.integration {
                 (TestStatus::Skipped, None)
             } else {
@@ -74,11 +79,13 @@ pub fn test_program(
                     Some(failure) => (TestStatus::Failed, Some(failure)),
                 }
             };
+            let duration_ms = test_duration_ms(status, started);
             TestResult {
                 name: test.name.clone(),
                 module: None,
                 span: test.span,
                 status,
+                duration_ms,
                 failure,
             }
         })
