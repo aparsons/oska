@@ -7,8 +7,12 @@
 mod common;
 
 use common::assert_ok;
-use oska_check::{check_module_with, check_package, CheckOptions, ModuleSource, Package};
+use oska_check::{
+    check_file, check_module_with, check_package, CheckOptions, ModuleSource, Package,
+};
 use oska_syntax::Applicability;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// `(code, spanned text)` for every diagnostic of the release check.
 fn release_errors(src: &str) -> Vec<(&'static str, &str)> {
@@ -99,6 +103,41 @@ fn a_field_discarded_with_a_wildcard_is_not_read() {
 }
 
 #[test]
+fn discarding_a_field_with_let_underscore_is_not_a_read() {
+    assert_eq!(
+        release_errors(&handed_on(
+            "fn work(tools: Tools) {\n    let _ = tools.out.println(\"hi\")\n    \
+             let _ = tools.clock\n}",
+        )),
+        [("E0297", "clock: Clock")]
+    );
+}
+
+#[test]
+fn a_pattern_binding_that_is_never_used_is_not_a_read() {
+    assert_eq!(
+        release_errors(&handed_on(
+            "fn work(tools: Tools) {\n    match tools {\n        \
+             Tools(out: o, clock: _c) => {\n            let _ = o.println(\"hi\")\n        \
+             }\n    }\n}",
+        )),
+        [("E0297", "clock: Clock")]
+    );
+}
+
+#[test]
+fn a_leading_underscore_does_not_silence_an_unread_field() {
+    assert_eq!(
+        release_errors(
+            "cap struct Tools {\n    out: Stdout,\n    _clock: Clock,\n}\n\n\
+             fn main(out: Stdout, clock: Clock) {\n    let tools = Tools(out: out, _clock: clock)\n    \
+             let _ = tools.out.println(\"hi\")\n}"
+        ),
+        [("E0297", "_clock: Clock")]
+    );
+}
+
+#[test]
 fn a_read_in_a_method_through_self_counts() {
     assert_release_ok(&handed_on(
         "impl Tools {\n    fn stamp(self) -> Int {\n        self.clock.now_millis()\n    }\n}\n\n\
@@ -158,6 +197,19 @@ fn a_field_typed_by_the_structs_type_parameter_is_not_judged() {
 }
 
 #[test]
+fn an_unread_field_typed_by_a_bounded_type_parameter_is_unused_authority() {
+    assert_eq!(
+        release_errors(
+            "trait Tick {\n    fn tick(self) -> Int\n}\n\n\
+             cap struct Holder<T: Tick> {\n    out: Stdout,\n    value: T,\n}\n\n\
+             fn say<T: Tick>(h: Holder<T>) {\n    let _ = h.out.println(\"hi\")\n}\n\n\
+             fn main() {}"
+        ),
+        [("E0297", "value: T")]
+    );
+}
+
+#[test]
 fn an_unread_field_holding_a_cap_struct_is_unused_authority() {
     assert_eq!(
         release_errors(&handed_on(
@@ -193,6 +245,41 @@ fn a_program_with_another_error_is_not_judged_for_unread_fields() {
     .map(|(code, _)| code)
     .collect();
     assert!(!codes.is_empty() && !codes.contains(&"E0297"), "{codes:?}");
+}
+
+#[test]
+fn an_error_found_after_the_bodies_also_holds_back_unread_fields() {
+    // A constant cycle (`E0236`) is found after every body is checked.
+    let codes: Vec<&str> = release_errors(&program(
+        "const A: Int = B\n\nconst B: Int = A\n\n\
+         fn main(out: Stdout, clock: Clock) {\n    let tools = Tools(out: out, clock: clock)\n    \
+         let _ = tools.out.println(\"hi\")\n}",
+    ))
+    .into_iter()
+    .map(|(code, _)| code)
+    .collect();
+    assert!(!codes.is_empty() && !codes.contains(&"E0297"), "{codes:?}");
+}
+
+#[test]
+fn the_release_codes_are_the_ones_the_catalog_marks_release_only() {
+    let catalog = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/checker.md"),
+    )
+    .expect("should read docs/checker.md");
+    let mut marked: Vec<&str> = catalog
+        .lines()
+        .filter(|line| line.contains("when checking with `--release`"))
+        .filter_map(|line| {
+            line.strip_prefix("| `")?
+                .split_once('`')
+                .map(|(code, _)| code)
+        })
+        .collect();
+    marked.sort_unstable();
+    let mut codes = oska_check::RELEASE_CODES.to_vec();
+    codes.sort_unstable();
+    assert_eq!(codes, marked);
 }
 
 // ---- The fix ------------------------------------------------------------------------
@@ -239,4 +326,89 @@ fn the_fix_removes_a_first_field_with_its_comma() {
         src.starts_with("cap struct Tools {\n    clock: Clock,\n}\n"),
         "{src}"
     );
+}
+
+// ---- The repository's own programs --------------------------------------------------
+
+/// The repository root.
+fn repo() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+/// The tracked files under `dirs`, relative to the repository root.
+fn tracked(dirs: &[&str]) -> Vec<String> {
+    let output = Command::new("git")
+        .arg("ls-files")
+        .args(dirs)
+        .current_dir(repo())
+        .output()
+        .expect("git should run");
+    assert!(output.status.success(), "git ls-files failed");
+    String::from_utf8(output.stdout)
+        .expect("paths should be UTF-8")
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+fn read(path: &str) -> String {
+    std::fs::read_to_string(repo().join(path)).unwrap_or_else(|e| panic!("should read {path}: {e}"))
+}
+
+/// Every finished Oska program the repository ships passes the release
+/// check, so none holds unused authority: the site's generator and link
+/// checker, and the examples, each package checked as a package. The eval
+/// tasks' solutions are release-checked by `scripts/eval-tasks`, and the
+/// test fixtures fail on purpose.
+#[test]
+fn every_program_the_repository_ships_passes_the_release_check() {
+    let files = tracked(&["site", "examples"]);
+    let packages: Vec<&str> = files
+        .iter()
+        .filter_map(|f| f.strip_suffix("/oska.toml"))
+        .collect();
+    let release = CheckOptions { release: true };
+    let mut failures = Vec::new();
+    for dir in &packages {
+        let prefix = format!("{dir}/src/");
+        let modules = files
+            .iter()
+            .filter_map(|f| {
+                f.strip_prefix(&prefix)?
+                    .strip_suffix(".osk")
+                    .map(|m| (f, m))
+            })
+            .map(|(file, module)| ModuleSource::in_package(&module.replace('/', "."), &read(file)))
+            .collect();
+        let package = Package {
+            manifest: Some(read(&format!("{dir}/oska.toml"))),
+            modules,
+        };
+        let report = check_package(&package, release);
+        failures.extend(
+            report
+                .diagnostics
+                .iter()
+                .map(|d| format!("{dir}: {}", d.message)),
+        );
+    }
+    let mut checked = packages.len();
+    for file in files.iter().filter(|f| f.ends_with(".osk")) {
+        if packages
+            .iter()
+            .any(|dir| file.starts_with(&format!("{dir}/")))
+        {
+            continue;
+        }
+        checked += 1;
+        let report = check_file(file, &read(file), release);
+        failures.extend(
+            report
+                .diagnostics
+                .iter()
+                .map(|d| format!("{file}: {}", d.message)),
+        );
+    }
+    assert!(checked >= 5, "only {checked} programs found");
+    assert!(failures.is_empty(), "{failures:#?}");
 }

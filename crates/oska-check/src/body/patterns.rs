@@ -302,26 +302,44 @@ impl Body<'_, '_, '_> {
         if let Some(construct) = &callable.construct {
             self.record(span, Resolution::Construct(construct.clone()));
         }
-        if is_struct {
-            // Destructuring a struct reads each field it does not discard.
-            for (index, arg) in args.iter().enumerate() {
-                if !matches!(arg.pattern.kind, PatternKind::Wildcard) {
-                    self.out.field_reads.insert((key.clone(), index));
-                }
-            }
-        }
-        self.check_args(&callable, args, key)
+        let fields_of = is_struct.then(|| key.clone());
+        self.check_args(&callable, args, fields_of, key)
     }
 
-    /// Check a constructor pattern's arguments against its fields.
-    fn check_args(&mut self, callable: &Callable, args: &[PatternArg], key: String) -> Option<Pat> {
+    /// Check a constructor pattern's arguments against its fields. For a
+    /// struct (`fields_of` is its key), a field the pattern binds to a
+    /// name is read when that name is read, and one it matches against a
+    /// nested pattern is read here; `_` discards it.
+    fn check_args(
+        &mut self,
+        callable: &Callable,
+        args: &[PatternArg],
+        fields_of: Option<String>,
+        key: String,
+    ) -> Option<Pat> {
         let mut fields = Vec::new();
         let mut ok = true;
-        for (arg, (name, ty)) in args.iter().zip(&callable.params) {
+        for (index, (arg, (name, ty))) in args.iter().zip(&callable.params).enumerate() {
             self.pattern_label(arg, name.as_deref(), callable.labels);
+            let height = self.locals.len();
             match self.pattern(&arg.pattern, ty) {
                 Some(pat) => fields.push(pat),
                 None => ok = false,
+            }
+            let Some(struct_key) = &fields_of else {
+                continue;
+            };
+            let field = (struct_key.clone(), index);
+            match &arg.pattern.kind {
+                PatternKind::Wildcard => {}
+                PatternKind::Binding(ident) if !starts_uppercase(&ident.name) => {
+                    if let Some(local) = self.locals.get_mut(height) {
+                        local.field = Some(field);
+                    }
+                }
+                _ => {
+                    self.out.field_reads.insert(field);
+                }
             }
         }
         ok.then_some(Pat::Ctor(key, fields))

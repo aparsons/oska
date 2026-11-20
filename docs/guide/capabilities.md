@@ -90,7 +90,7 @@ main.osk:1:22: error[E0296]: unused authority: `greet` never uses its parameter 
 
 `main` passes `net` on, so it uses it; `greet` never does. Remove the parameter, and then `main`'s `net` is unused too. On `main` the fix is `machine`, since nothing calls `main`, and `oskac fix --release` applies it; on any other function it is `maybe`, because its callers change too. A method whose signature a trait fixes is exempt. Naming a parameter `_net` does not silence it: a capability a function does not use is removed, not hidden ([ADR 0016](../adr/0016-unused-authority-is-a-release-check-error.md)).
 
-A `cap struct` can hold unused authority too. A capability-bearing field that no code in the program reads is rejected by the release check with `E0297`. Any read counts, anywhere in the program: a field access, which covers calling a method on the field and passing it on, or a `match` pattern that binds the field rather than discarding it with `_`.
+A `cap struct` can hold unused authority too. A capability-bearing field that no code in the program reads is rejected by the release check with `E0297`. Any read counts, anywhere in the program: a field access, which covers calling a method on the field and passing it on, or a `match` pattern that binds the field to a name that is then read. Discarding it, with `let _ = tools.net` or with `_` in a pattern, is not a read.
 
 ```oska
 cap struct Tools {

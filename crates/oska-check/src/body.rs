@@ -103,8 +103,9 @@ pub struct Findings {
     /// The module of the item being checked.
     pub module: String,
     /// Every struct field some code reads, as `(struct key, field
-    /// index)`: by a field access, or by a constructor pattern that does
-    /// not discard it with `_`. Unused authority in `cap struct` fields
+    /// index)`: by a field access other than `let _ = value.field`, or
+    /// through a `match` pattern, by reading the name the pattern binds
+    /// it to or by matching it against a nested pattern. Unused authority in `cap struct` fields
     /// (`unused_authority.rs`) is a field missing here.
     pub field_reads: std::collections::HashSet<(String, usize)>,
 }
@@ -260,6 +261,9 @@ struct Local {
     name: String,
     ty: Ty,
     binding: Binding,
+    /// The struct field a `match` pattern bound this local to, as
+    /// `(struct key, field index)`: reading the local reads the field.
+    field: Option<(String, usize)>,
 }
 
 /// The method's receiver, `self` or `var self`.
@@ -364,6 +368,9 @@ pub struct Body<'c, 'd, 'a> {
     /// Checking a contract clause, where only pure functions may be
     /// called.
     in_contract: bool,
+    /// The name of the field that `let _ = value.field` discards while
+    /// its value is checked: discarding a field is not reading it.
+    discarded_field: Option<Span>,
     /// Resolutions that depend on a type inference may not have solved
     /// yet, recorded by [`Body::finish`] once the whole body is checked.
     deferred: Vec<(Span, Ty, Deferred)>,
@@ -451,6 +458,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
             scope_blocks: Vec::new(),
             mentions: Vec::new(),
             in_contract: false,
+            discarded_field: None,
             deferred: Vec::new(),
             typed: Vec::new(),
             typed_args: Vec::new(),
@@ -672,6 +680,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 name: name.to_string(),
                 ty,
                 binding,
+                field: None,
             });
         }
     }
@@ -954,6 +963,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                     name: handle.name.clone(),
                     ty: Ty::named(ty::SCOPE),
                     binding: Binding::Pattern,
+                    field: None,
                 });
                 let ty = self.block(body, expected, true);
                 self.locals.pop();
@@ -1083,6 +1093,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
         let name = ident.name.as_str();
         if let Some(index) = self.locals.iter().rposition(|l| l.name == name) {
             self.record(ident.span, Resolution::Local(index));
+            if let Some(field) = &self.locals[index].field {
+                self.out.field_reads.insert(field.clone());
+            }
             for mentioned in &mut self.mentions {
                 mentioned.push(index);
             }
@@ -1227,7 +1240,9 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                             self.out
                                 .resolutions
                                 .insert(name.span, Resolution::Field(index));
-                            self.out.field_reads.insert((type_name.clone(), index));
+                            if self.discarded_field != Some(name.span) {
+                                self.out.field_reads.insert((type_name.clone(), index));
+                            }
                             if !self.field_visible(type_name, index, &name.name, name.span) {
                                 return Ty::Error;
                             }
@@ -1934,6 +1949,11 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 value,
             } => {
                 self.require_lowercase(name);
+                // `let _ = value.field` only discards the field.
+                self.discarded_field = match &value.kind {
+                    ExprKind::Field { name: field, .. } if name.name == "_" => Some(field.span),
+                    _ => None,
+                };
                 let ty = match ty {
                     Some(written) => {
                         self.check_written(written);
@@ -1949,6 +1969,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                         ty
                     }
                 };
+                self.discarded_field = None;
                 let binding = if *mutable {
                     Binding::Var
                 } else {

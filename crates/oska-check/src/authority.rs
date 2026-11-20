@@ -255,6 +255,15 @@ pub(crate) fn bearing_params<'f>(f: &'f FnDecl, lower: Lower) -> Vec<&'f Param> 
         .collect()
 }
 
+/// Whether the field type `ty`, written in a declaration whose generics
+/// `lower` has in scope, is capability-bearing: as
+/// [`capability_bearing`], except that a type parameter with a bound is,
+/// as ADR 0002 says.
+pub(crate) fn bearing_field(ty: &Type, lower: &Lower) -> bool {
+    let bounded: Vec<String> = lower.bounds.iter().map(|b| b.param.clone()).collect();
+    reach(&lower.ty(ty), lower.decls(), &bounded, &mut Vec::new()).bearing
+}
+
 /// The last segment of a type's path, such as `Logger` for
 /// `Logger<T>`.
 pub(crate) fn type_name(ty: &Type) -> String {

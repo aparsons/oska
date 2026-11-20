@@ -77,6 +77,9 @@ pub use package::{
     check_file, check_package, not_a_package, run_of_library, symlink_refused, Locator,
     ModuleSource, Package, ENTRY_MODULE, MANIFEST_PATH,
 };
+/// Every diagnostic code that only the release check
+/// (`CheckOptions { release: true }`) reports.
+pub use release::CODES as RELEASE_CODES;
 pub use toolchain::{
     debug_escapes, declared_intrinsics as std_rt_intrinsics, is_intrinsic,
     RT_SOURCE as STD_RT_SOURCE,
@@ -736,18 +739,13 @@ fn check_source(
         field_reads,
         ..
     } = findings;
-    // Fields are judged only on an otherwise clean program: a body that
-    // failed to check may read a field the checker could not resolve.
-    let release_only = [
-        codes::DBG_IN_RELEASE,
-        codes::TODO_IN_RELEASE,
-        codes::UNUSED_AUTHORITY,
-    ];
-    if options.release && diagnostics.iter().all(|d| release_only.contains(&d.code)) {
-        unused_authority::fields(src, module, &decls, &field_reads, &mut diagnostics);
-    }
     instantiation::module(module, &decls, &items, assumed, instances, &mut diagnostics);
     const_cycles::module(module, &resolutions, &mut diagnostics);
+    // Fields are judged only on an otherwise clean program: a body that
+    // failed to check may read a field the checker could not resolve.
+    if options.release && diagnostics.iter().all(|d| release::CODES.contains(&d.code)) {
+        unused_authority::fields(src, module, &decls, &field_reads, &mut diagnostics);
+    }
     let program = diagnostics
         .is_empty()
         .then(|| program::lower::module(src, module, &items, &resolutions, &typing));

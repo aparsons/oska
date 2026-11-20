@@ -27,8 +27,9 @@
 //! covers passing it on and calling a method on it, or by a constructor
 //! pattern that does not discard it with `_`; the body checker records
 //! each read (`Findings::field_reads` in `body.rs`). A field is
-//! capability-bearing as `cap` requires it ([`authority::capability_bearing`]):
-//! a field typed by the struct's own type parameter is not judged. Field
+//! capability-bearing as ADR 0002 says ([`authority::bearing_field`]): a
+//! field typed by one of the struct's own type parameters is judged only
+//! when that parameter has a bound. Field
 //! reads are known only once every body has checked, so the field rule
 //! runs only on a program with no other error: a body that failed to check
 //! may read a field the checker could not resolve.
@@ -200,7 +201,7 @@ pub fn fields(
         let spans: Vec<Span> = list.iter().map(|f| f.span).collect();
         for (index, field) in list.iter().enumerate() {
             if reads.contains(&(s.name.name.clone(), index))
-                || !authority::capability_bearing(&lower.ty(&field.ty), decls)
+                || !authority::bearing_field(&field.ty, &lower)
             {
                 continue;
             }
