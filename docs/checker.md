@@ -120,7 +120,7 @@ The lexer and the parser report these. A syntax error is the only diagnostic of 
 | `E0005` | A `;`: Oska has no semicolons, because a line break ends a statement. | Remove the `;` when it ends a line. | machine |
 | `E0100` | The parser expected an expression, a type, or a pattern and found something else. | None. | — |
 | `E0101` | The parser expected a specific token, such as a `)`, and found another. The message names it. Items must also be separated by a line break, so two items on one line give this code. | None. | — |
-| `E0102` | A `{...}` hole in a string that holds more than a name or a field path, such as `{n + 1}`. Compute the value with `let` first. | None. | — |
+| `E0102` | A `{...}` hole in a string that holds more than a name or a field path, such as `{n + 1}`. Compute the value with `let` first. | Hoist the expression into `let value = ...` on its own line before the statement (`value2` and so on when the module already has the word), and put the name in the hole. The fix is `maybe` when the expression may reach a capability, or when hoisting changes when it runs: in a `while` condition, on the right side of `&&`, `\|\|` or `implies`, or in an `else if` condition. None for a hole in a closure or `match` arm whose body is not a block, or in a guard. | machine when the expression calls only pure functions, maybe otherwise |
 | `E0103` | A bare `{ ... }` block used as a statement. | None. | — |
 | `E0104` | A `let` or `var` without an initializer. | None. | — |
 | `E0105` | A chained comparison such as `a < b < c`. Comparison operators do not chain. | None. | — |
@@ -266,8 +266,8 @@ fn main() {
 ```oska fixed=E0102
 fn main() {
     let n = 1
-    let next = n + 1
-    let text = "next is {next}"
+    let value = n + 1
+    let text = "next is {value}"
 }
 ```
 
@@ -697,7 +697,7 @@ test "setup" {
 
 ## Diagnostic codes
 
-A code's fix has an applicability, as a diagnostic's `fix` says: `machine` when it is certainly right, `maybe` when it is a guess, such as the closest name to an unknown one, and `placeholders` when it leaves code to write, such as `todo()`. The syntax codes' fixes are `machine`. A fix that could widen authority is never `machine`, however certain: adding a bound to a type parameter (`E0260`, `E0265`) gives the function what its type argument can do, and qualifying an export (`E0340`) can name a capability such as `sql.Db`. They are `maybe`, so `oskac fix` leaves them to be read and applied by hand. A fix that only narrows authority can be `machine`: removing an unused parameter of `main` (`E0296`), which nothing calls. A code whose applicability depends on where the fix is offered gives the rule in its row, as `machine on main, maybe elsewhere`; a diagnostic's `fix` always says which one it is.
+A code's fix has an applicability, as a diagnostic's `fix` says: `machine` when it is certainly right, `maybe` when it is a guess, such as the closest name to an unknown one, and `placeholders` when it leaves code to write, such as `todo()`. The syntax codes' fixes are `machine`, except `E0102`'s, which is `maybe` when hoisting the expression out of its hole could change what the program does. A fix that could widen authority is never `machine`, however certain: adding a bound to a type parameter (`E0260`, `E0265`) gives the function what its type argument can do, and qualifying an export (`E0340`) can name a capability such as `sql.Db`. They are `maybe`, so `oskac fix` leaves them to be read and applied by hand. A fix that only narrows authority can be `machine`: removing an unused parameter of `main` (`E0296`), which nothing calls. A code whose applicability depends on where the fix is offered gives the rule in its row, as `machine on main, maybe elsewhere`; a diagnostic's `fix` always says which one it is.
 
 | Code | Meaning | Fix | Applicability |
 | --- | --- | --- | --- |

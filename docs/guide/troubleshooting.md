@@ -57,7 +57,7 @@ fn main(io: Stdout) -> Result<(), IoError> {
 }
 ```
 
-`E0102`, a string interpolation that holds more than a name or a field path. Compute it with `let` first.
+`E0102`, a string interpolation that holds more than a name or a field path. Compute it with `let` first. The fix does it: it puts `let value = 1 + 2` on its own line before the statement and writes `{value}` in the hole. `oskac fix` applies it when the expression calls only pure functions; when it may reach a capability, or sits in a `while` condition or on the right of `&&` or `||`, where moving it changes when it runs, the fix is `maybe`, so read it and apply it by hand.
 
 ```oska error=E0102
 fn main(io: Stdout) -> Result<(), IoError> {
