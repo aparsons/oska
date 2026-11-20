@@ -22,6 +22,8 @@
 #   OSKA_HOME      install into $OSKA_HOME/bin (default: ~/.oska)
 #   OSKA_SITE_URL  where to download from (default: https://oskalang.dev);
 #                  only https:// and file:// URLs are accepted
+#   OSKA_LIBC      on Linux, glibc or musl: install that build rather than
+#                  the one chosen for this system (see choose_linux_build)
 #
 # Before installing anything it checks that SHA256SUMS carries a valid SSH
 # signature by the release key pinned below, that its signed first line
@@ -65,7 +67,8 @@ INDEX_NAMESPACE=oska-index
 # removes only a line it can tell is the installer's own.
 PROFILE_MARK='# added by the Oska installer'
 DEFAULT_SITE_URL=https://oskalang.dev
-# The glibc of the Linux build runners (.github/workflows/release.yml).
+# The glibc of the Linux build runners (.github/workflows/release.yml): the
+# glibc build needs it or newer.
 MIN_GLIBC=2.35
 
 json=0
@@ -161,7 +164,8 @@ usage: curl -fsSL https://oskalang.dev/install.sh | sh -s -- [options]
   --json             print one JSON object on stdout, and nothing else
   --help             print this help
 
-Environment: OSKA_HOME (default ~/.oska), OSKA_SITE_URL (https:// only).
+Environment: OSKA_HOME (default ~/.oska), OSKA_SITE_URL (https:// only),
+OSKA_LIBC (Linux: glibc or musl, to choose the build rather than detect it).
 EOF
 }
 
@@ -215,36 +219,75 @@ detect_platform() {
   fi
   platform=$os-$arch
   if [ "$os" = linux ]; then
-    check_glibc
+    choose_linux_build
   fi
 }
 
-# The Linux builds link against glibc $MIN_GLIBC (they are built on Ubuntu
-# 22.04) and do not run on an older glibc or on musl. Refuse those up front
-# rather than install a binary that cannot start.
-check_glibc() {
-  libc=$(getconf GNU_LIBC_VERSION 2>/dev/null) || libc=
-  case $libc in
-    glibc\ *) libc=${libc#glibc } ;;
+# check_libc_choice: OSKA_LIBC, if set and not empty, is glibc or musl.
+# Anything else is refused before anything is downloaded, on every platform,
+# so a typo never installs a build nobody asked for.
+check_libc_choice() {
+  case ${OSKA_LIBC:-} in
+    '' | glibc | musl) ;;
+    *) fail usage "OSKA_LIBC must be glibc or musl (or unset, to choose for this system)" ;;
+  esac
+}
+
+# glibc_found: succeeds only when this system's C library is shown to be
+# glibc $MIN_GLIBC or newer. Anything it cannot read for certain (no
+# getconf, an ldd that is not glibc's, a version that is not plain
+# <major>.<minor>) fails, which chooses the musl build: that one runs on
+# any Linux, so not knowing is safe.
+glibc_found() {
+  glibc=$(getconf GNU_LIBC_VERSION 2>/dev/null) || glibc=
+  case $glibc in
+    glibc\ *) glibc=${glibc#glibc } ;;
     *)
-      # No getconf: glibc's ldd names itself on its first line.
-      libc=$(ldd --version 2>&1 | head -n 1) || libc=
-      case $libc in
-        *GLIBC* | *"GNU libc"*) libc=${libc##* } ;;
-        *musl*) fail unsupported_libc "oskac for Linux needs glibc $MIN_GLIBC or newer; this system uses musl (Alpine, for example), so build oskac from source" ;;
-        *) fail unsupported_libc "oskac for Linux needs glibc $MIN_GLIBC or newer, and this system's C library is not glibc; build oskac from source" ;;
+      # No getconf: glibc's ldd names itself on its first line, and ends
+      # it with the version.
+      glibc=$(ldd --version 2>&1 | head -n 1) || glibc=
+      case $glibc in
+        *GLIBC* | *"GNU libc"*) glibc=${glibc##* } ;;
+        *) return 1 ;;
       esac ;;
   esac
-  major=${libc%%.*}
-  minor=${libc#*.}
-  minor=${minor%%[!0-9]*}
-  case $major$minor in
-    '' | *[!0-9]*) fail unsupported_libc "cannot tell which glibc this is ('$libc'); oskac for Linux needs glibc $MIN_GLIBC or newer" ;;
+  glibc_major=${glibc%%.*}
+  glibc_minor=${glibc#*.}
+  # Each part is 1 to 4 digits, so the comparisons below cannot overflow.
+  case $glibc_major in
+    '' | *[!0-9]* | ?????*) return 1 ;;
   esac
-  if [ "$major" -lt "${MIN_GLIBC%%.*}" ] ||
-    { [ "$major" -eq "${MIN_GLIBC%%.*}" ] && [ "$minor" -lt "${MIN_GLIBC#*.}" ]; }; then
-    fail unsupported_libc "oskac for Linux needs glibc $MIN_GLIBC or newer; this system has glibc $libc, so build oskac from source"
-  fi
+  case $glibc_minor in
+    '' | *[!0-9]* | ?????*) return 1 ;;
+  esac
+  [ "$glibc_major" -gt "${MIN_GLIBC%%.*}" ] ||
+    { [ "$glibc_major" -eq "${MIN_GLIBC%%.*}" ] && [ "$glibc_minor" -ge "${MIN_GLIBC#*.}" ]; }
+}
+
+# choose_linux_build: sets $linux_build to gnu or musl, the release asset's
+# suffix (ADR 0022), and $libc_forced to whether OSKA_LIBC chose it. The
+# glibc build is linked against glibc $MIN_GLIBC (built on Ubuntu 22.04),
+# so it is chosen only where glibc_found; the static musl build runs on any
+# Linux, so it is chosen everywhere else. A forced glibc build where it
+# cannot run is refused rather than installed.
+choose_linux_build() {
+  libc_forced=false
+  case ${OSKA_LIBC:-} in
+    musl)
+      linux_build=musl
+      libc_forced=true ;;
+    glibc)
+      glibc_found ||
+        fail unsupported_libc "OSKA_LIBC=glibc asks for the glibc build, which needs glibc $MIN_GLIBC or newer, and this system does not have it; unset OSKA_LIBC, or set OSKA_LIBC=musl, for the musl build, which runs on any Linux"
+      linux_build=gnu
+      libc_forced=true ;;
+    *)
+      if glibc_found; then
+        linux_build=gnu
+      else
+        linux_build=musl
+      fi ;;
+  esac
 }
 
 # The install receipt: what this run installed, as JSON in the Oska home.
@@ -266,6 +309,10 @@ prepare_records() {
     printf '  "version": %s,\n' "$(json_str "$version")"
     printf '  "tag": %s,\n' "$(json_str "$tag")"
     printf '  "platform": %s,\n' "$(json_str "$platform")"
+    if [ "$os" = linux ]; then
+      printf '  "linux_build": %s,\n' "$(json_str "$linux_build")"
+      printf '  "libc_forced": %s,\n' "$libc_forced"
+    fi
     printf '  "installed_at": %s,\n' "$(json_str "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
     printf '  "site": %s,\n' "$(json_str "$site")"
     printf '  "key_fingerprint": %s,\n' "$(json_str "$fingerprint")"
@@ -1182,6 +1229,9 @@ main() {
   fi
   [ "$allow_downgrade" = 0 ] || [ -n "$requested" ] ||
     fail usage "--allow-downgrade needs --version naming the release to go back to"
+  if [ "$mode" != --check ]; then
+    check_libc_choice
+  fi
 
   case $RELEASE_KEY in
     ssh-ed25519\ *) ;;
@@ -1275,14 +1325,15 @@ main() {
   fi
 
   # On Linux a release has a glibc build (-gnu) and a musl build (-musl)
-  # (ADR 0022). check_glibc has found glibc $MIN_GLIBC or newer, so the
-  # glibc build runs here.
+  # (ADR 0022); choose_linux_build has picked one.
   asset=oskac-$platform
+  build_note=
   if [ "$os" = linux ]; then
-    asset=$asset-gnu
+    asset=$asset-$linux_build
+    build_note=" ($linux_build build)"
   fi
   release=$site/releases/$tag
-  say "Downloading oskac $version for $platform from $release/" >&2
+  say "Downloading oskac $version for $platform$build_note from $release/" >&2
   for f in SHA256SUMS SHA256SUMS.sig "$asset"; do
     fetch "$release/$f" "$tmp/$f" ||
       fail download_failed "cannot download $release/$f (is $version a release?)"
