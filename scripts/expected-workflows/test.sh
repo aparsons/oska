@@ -45,6 +45,15 @@ case "$real" in
   *) bad "the repo's workflows parse: got [$real]" ;;
 esac
 
+# The musl job (ticket #462) lives in CI, so a change to what it tests
+# (oska-sys, oska-run, oskac) or to ci.yml itself expects CI to report.
+real=$(printf '%s\n' crates/oska-sys/src/lib.rs .github/workflows/ci.yml | python3 -I scripts/expected-workflows/expected.py --base main)
+if printf '%s\n' "$real" | grep -qxF CI && grep -qx '  musl:' .github/workflows/ci.yml; then
+  ok "a change the musl job covers expects CI, which has the musl job"
+else
+  bad "the musl job: CI not expected or ci.yml has no musl job: got [$real]"
+fi
+
 # check.sh against a stub gh, reading the repo's real workflows.
 mkdir -p "$work/bin"
 # shellcheck disable=SC2016 # the stub gh expands its variables when it runs

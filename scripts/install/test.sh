@@ -22,6 +22,9 @@ trap 'rm -rf "$scratch"' EXIT
 failures=0
 passes=0
 
+# The installer's own settings come from each test, never from the caller.
+unset OSKA_LIBC OSKA_HOME OSKA_SITE_URL
+
 fail() {
   echo "    $*" >&2
   return 1
@@ -52,7 +55,7 @@ run_test() {
   fi
 }
 
-ASSETS="oskac-linux-aarch64 oskac-linux-x86_64 oskac-macos-aarch64 oskac-macos-x86_64 oskac-windows-x86_64.exe"
+ASSETS="oskac-linux-aarch64-gnu oskac-linux-aarch64-musl oskac-linux-x86_64-gnu oskac-linux-x86_64-musl oskac-macos-aarch64 oskac-macos-x86_64 oskac-windows-x86_64.exe"
 
 sha256() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -81,6 +84,17 @@ host_platform() {
   echo "$os-$arch"
 }
 
+# The release asset the installer should download on this machine: on
+# Linux the glibc build, the one the installer takes on glibc 2.35 or newer.
+host_asset() {
+  local platform
+  platform=$(host_platform)
+  case $platform in
+    linux-*) echo "oskac-$platform-gnu" ;;
+    *) echo "oskac-$platform" ;;
+  esac
+}
+
 # Writes the throwaway release key ./key and ./key.pub, once.
 release_key() {
   [ -f key ] || ssh-keygen -q -t ed25519 -N '' -C oska-release-test -f key
@@ -89,13 +103,14 @@ release_key() {
 # Publishes release <version> in ./site/releases/v<version>/, as
 # scripts/release/assemble.sh and sign.sh lay it out: SHA256SUMS starts
 # with the signed tag line. Each fake binary is a script that prints
-# "oskac <reports>" (default: <version>), like the real `oskac --version`.
+# "oskac <reports>" (default: <version>), like the real `oskac --version`,
+# and names its asset in a comment, so each one differs.
 release() {
   local version=$1 reports=${2:-$1} dir="site/releases/v$1" asset
   release_key
   mkdir -p "$dir"
   for asset in $ASSETS; do
-    printf '#!/bin/sh\necho "oskac %s"\n' "$reports" >"$dir/$asset"
+    printf '#!/bin/sh\n# %s\necho "oskac %s"\n' "$asset" "$reports" >"$dir/$asset"
   done
   {
     printf '# oska-release v%s\n' "$version"
@@ -131,7 +146,8 @@ latest() {
     "ps1": "https://oskalang.dev/install.ps1"
   },
   "binaries": {
-    "linux-x86_64": "$url/oskac-linux-x86_64"
+    "linux-x86_64-gnu": "$url/oskac-linux-x86_64-gnu",
+    "linux-x86_64-musl": "$url/oskac-linux-x86_64-musl"
   }
 }
 JSON
@@ -249,7 +265,7 @@ test_the_receipt_wins_over_the_version_file() {
 test_a_tampered_receipt_cannot_vouch_for_a_tampered_binary() {
   with_good_install
   local asset evil
-  asset=site/releases/v1.3.0/oskac-$(host_platform)
+  asset=site/releases/v1.3.0/$(host_asset)
   printf 'evil\n' >>"$asset"
   evil=$(sha256 "$asset")
   jq --arg h "$evil" '.version = "1.3.0" | .tag = "v1.3.0" | .sha256 = $h | .files[0].sha256 = $h' \
@@ -444,14 +460,14 @@ with_good_install() {
 
 test_refuses_a_tampered_binary() {
   with_good_install
-  printf 'evil\n' >>"site/releases/v1.3.0/oskac-$(host_platform)"
+  printf 'evil\n' >>"site/releases/v1.3.0/$(host_asset)"
   assert_refused checksum_mismatch
 }
 
 test_refuses_checksums_rewritten_to_match_a_tampered_binary() {
   with_good_install
   local dir=site/releases/v1.3.0 asset
-  asset=oskac-$(host_platform)
+  asset=$(host_asset)
   printf '#!/bin/sh\necho evil\n' >"$dir/$asset"
   awk -v f="$asset" -v h="$(sha256 "$dir/$asset")" '$2 == f {$1 = h; print h "  " f; next} {print}' \
     "$dir/SHA256SUMS" >sums
@@ -483,7 +499,7 @@ test_refuses_a_release_without_a_signature() {
 test_refuses_a_binary_the_checksums_do_not_list() {
   with_good_install
   local dir=site/releases/v1.3.0
-  grep -v "oskac-$(host_platform)\$" "$dir/SHA256SUMS" >sums
+  grep -v "$(host_asset)\$" "$dir/SHA256SUMS" >sums
   mv sums "$dir/SHA256SUMS"
   sign "$dir"
   assert_refused checksum_mismatch
@@ -607,7 +623,7 @@ test_never_writes_through_a_symlink_planted_in_the_bin_directory() {
 test_an_interrupted_install_leaves_nothing_behind() {
   with_good_install
   local dir=site/releases/v1.3.0 asset sig pid status waited
-  asset=oskac-$(host_platform)
+  asset=$(host_asset)
   printf '#!/bin/sh\n: >"%s/started"\nsleep 2\necho "oskac 1.3.0"\n' "$PWD" >"$dir/$asset"
   awk -v f="$asset" -v h="$(sha256 "$dir/$asset")" '$2 == f {print h "  " f; next} {print}' \
     "$dir/SHA256SUMS" >sums
@@ -695,11 +711,14 @@ test_a_receipt_left_behind_by_a_killed_install_is_not_believed() {
 }
 
 # Makes the installer see Linux x86_64 with the C library <libc>: "glibc
-# X.Y", or "musl" (as on Alpine, where `getconf GNU_LIBC_VERSION` fails and
-# `ldd --version` names musl). Fakes uname, getconf and ldd in ./fakebin,
-# so it works on a macOS test host too.
+# X.Y", "musl" (as on Alpine, where `getconf GNU_LIBC_VERSION` fails and
+# `ldd --version` names musl), "none" (no getconf, and an ldd that names no
+# C library), or "garbled <text>" (getconf and ldd both print <text> as
+# the version). Fakes uname, getconf and ldd in ./fakebin, so it works on
+# a macOS test host too.
 # shellcheck disable=SC2016 # the fakes expand $1 when they run
 fake_linux() {
+  rm -rf fakebin
   mkdir -p fakebin
   printf '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo x86_64 ;; *) echo Linux ;; esac\n' >fakebin/uname
   case $1 in
@@ -711,40 +730,218 @@ fake_linux() {
       printf '#!/bin/sh\necho "getconf: GNU_LIBC_VERSION: unknown variable" >&2\nexit 1\n' >fakebin/getconf
       printf '#!/bin/sh\necho "musl libc (x86_64)" >&2\necho "Version 1.2.5" >&2\nexit 1\n' >fakebin/ldd
       ;;
+    none)
+      printf '#!/bin/sh\nexit 127\n' >fakebin/getconf
+      printf '#!/bin/sh\necho "ldd: unrecognized option" >&2\nexit 1\n' >fakebin/ldd
+      ;;
+    garbled\ *)
+      printf '#!/bin/sh\n[ "$1" = GNU_LIBC_VERSION ] && echo "glibc %s"\n' "${1#garbled }" >fakebin/getconf
+      printf '#!/bin/sh\necho "ldd (GNU libc) %s"\n' "${1#garbled }" >fakebin/ldd
+      ;;
   esac
   chmod +x fakebin/*
 }
 
+# install_on <libc> [args]: installs on the fake Linux of fake_linux, with
+# OSKA_LIBC as the caller set it.
+install_on() {
+  local libc=$1
+  shift
+  fake_linux "$libc"
+  PATH="$PWD/fakebin:$PATH" install "$@"
+}
+
+# assert_build <libc> <build> <forced>: installing on <libc> put the
+# <build> (gnu or musl) asset in place, and the receipt records it.
+assert_build() {
+  local receipt=home/.oska/receipt.json
+  install_on "$1" --json >out.json || fail "refused on $1: $(cat out.json)"
+  [ "$(jq -r .platform out.json)" = linux-x86_64 ] || fail "platform is not linux-x86_64"
+  cmp site/releases/v1.2.3/oskac-linux-x86_64-"$2" "$(installed)" ||
+    fail "on $1 it did not install oskac-linux-x86_64-$2"
+  [ "$(jq -r .platform "$receipt")" = linux-x86_64 ] || fail "the receipt's platform is $(jq -r .platform "$receipt")"
+  [ "$(jq -c .linux_build "$receipt")" = "\"$2\"" ] || fail "on $1 linux_build is $(jq -c .linux_build "$receipt"), not $2"
+  [ "$(jq -c .libc_forced "$receipt")" = "$3" ] || fail "on $1 libc_forced is $(jq -c .libc_forced "$receipt"), not $3"
+}
+
 assert_refused_libc() {
-  PATH="$PWD/fakebin:$PATH" install --json >out.json && fail "installed on $1"
+  install_on "$1" --json >out.json && fail "installed on $1"
   [ "$(jq -r .error out.json)" = unsupported_libc ] || fail "error is $(jq -r .error out.json), not unsupported_libc"
   [ ! -e home/.oska ] || fail "created ~/.oska"
 }
 
-test_refuses_a_linux_without_glibc() {
+test_installs_the_musl_build_on_a_linux_without_glibc() {
   release 1.2.3
   latest 1.2.3
-  fake_linux musl
-  assert_refused_libc musl
-  jq -r .message out.json | grep -q musl || fail "message does not mention musl"
+  assert_build musl musl false
 }
 
-test_refuses_a_glibc_older_than_the_one_releases_are_built_against() {
+test_installs_the_musl_build_on_a_glibc_older_than_2_35() {
   release 1.2.3
   latest 1.2.3
-  fake_linux 'glibc 2.31'
-  assert_refused_libc 'glibc 2.31'
-  jq -r .message out.json | grep -q '2\.35' || fail "message does not name glibc 2.35"
+  assert_build 'glibc 2.31' musl false
+  assert_build 'glibc 2.34' musl false
+  assert_build 'glibc 1.99' musl false
+  assert_build 'glibc 2.34.9' musl false
 }
 
-test_installs_on_glibc_2_35_and_newer() {
+test_installs_the_glibc_build_on_glibc_2_35_and_newer() {
   release 1.2.3
   latest 1.2.3
   local libc
-  for libc in 'glibc 2.35' 'glibc 2.41' 'glibc 3.0'; do
-    fake_linux "$libc"
-    PATH="$PWD/fakebin:$PATH" install --json >out.json || fail "refused $libc: $(cat out.json)"
-    [ "$(jq -r .platform out.json)" = linux-x86_64 ] || fail "platform is not linux-x86_64"
+  for libc in 'glibc 2.35' 'glibc 2.41' 'glibc 3.0' 'glibc 2.35.1' 'glibc 2.40.0'; do
+    assert_build "$libc" gnu false
+  done
+}
+
+# A C library it cannot identify, or a version it cannot read for certain,
+# gets the musl build, which runs on any Linux: never the glibc build.
+test_installs_the_musl_build_when_it_cannot_tell_the_c_library() {
+  release 1.2.3
+  latest 1.2.3
+  assert_build none musl false
+  local text
+  for text in '' 2 '2.' '.35' 'x.y' '2.35x' '2.35.' '2.35.1.2' '2.35.x' '2.35.1x' '2..35' '-2.35' '2 .35' '99999999999999999999.1' \
+    '2.99999999999999999999' '2.35;3.0'; do
+    assert_build "garbled $text" musl false
+  done
+}
+
+test_oska_libc_musl_forces_the_musl_build_on_glibc() {
+  release 1.2.3
+  latest 1.2.3
+  OSKA_LIBC=musl assert_build 'glibc 2.41' musl true
+}
+
+test_oska_libc_glibc_forces_the_glibc_build_where_it_runs() {
+  release 1.2.3
+  latest 1.2.3
+  OSKA_LIBC=glibc assert_build 'glibc 2.35' gnu true
+}
+
+# A forced glibc build is installed only where glibc 2.35 or newer is found:
+# never on musl, an older glibc, or a C library it cannot tell.
+test_oska_libc_glibc_without_glibc_2_35_is_unsupported_libc() {
+  release 1.2.3
+  latest 1.2.3
+  local libc
+  for libc in musl 'glibc 2.31' none 'garbled 2.35x'; do
+    OSKA_LIBC=glibc assert_refused_libc "$libc"
+    jq -r .message out.json | grep -q 'glibc 2\.35' || fail "on $libc the message does not name glibc 2.35"
+    jq -r .message out.json | grep -q 'OSKA_LIBC=musl' || fail "on $libc the message does not point at OSKA_LIBC=musl"
+  done
+}
+
+# Any OSKA_LIBC other than glibc or musl is a usage error, refused before
+# anything is downloaded, on every platform: a fake curl records a call.
+test_refuses_an_unknown_oska_libc_before_any_download() {
+  refuses_an_unknown_oska_libc
+}
+
+# --check and --uninstall refuse it too, so OSKA_LIBC accepts only glibc
+# and musl wherever it is set.
+test_refuses_an_unknown_oska_libc_in_check_and_uninstall() {
+  refuses_an_unknown_oska_libc --check
+  refuses_an_unknown_oska_libc --uninstall
+}
+
+# refuses_an_unknown_oska_libc [args]
+# shellcheck disable=SC2016 # the fake expands $PWD when it runs
+refuses_an_unknown_oska_libc() {
+  release 1.2.3
+  latest 1.2.3
+  local value os
+  for os in Linux Darwin; do
+    for value in bogus gnu GLIBC Musl 'musl ' ' glibc' 'glibc;musl' 'musl
+' '$(touch pwned)' '-musl' auto; do
+      fake_linux 'glibc 2.41'
+      printf '#!/bin/sh\ncase "$1" in -s) echo %s ;; -m) echo arm64 ;; esac\n' "$os" >fakebin/uname
+      printf '#!/bin/sh\necho called >>"%s/curl-called"\nexit 1\n' "$PWD" >fakebin/curl
+      chmod +x fakebin/*
+      if OSKA_LIBC=$value PATH="$PWD/fakebin:$PATH" install --json "$@" >out.json; then
+        fail "on $os installed with OSKA_LIBC='$value'"
+      else
+        [ $? = 2 ] || fail "on $os OSKA_LIBC='$value' did not exit 2"
+      fi
+      [ "$(jq -r .error out.json)" = usage ] || fail "on $os OSKA_LIBC='$value': error is $(jq -r .error out.json)"
+      jq -r .message out.json | grep -q 'glibc' || fail "the message does not name glibc"
+      jq -r .message out.json | grep -q 'musl' || fail "the message does not name musl"
+      [ ! -e curl-called ] || fail "on $os OSKA_LIBC='$value' downloaded before refusing"
+      [ ! -e pwned ] || fail "OSKA_LIBC was run as a command"
+      [ ! -e home/.oska ] || fail "created ~/.oska"
+    done
+  done
+}
+
+# An empty OSKA_LIBC is the same as none.
+test_an_empty_oska_libc_chooses_as_if_unset() {
+  release 1.2.3
+  latest 1.2.3
+  OSKA_LIBC='' assert_build musl musl false
+}
+
+# A release from before the two Linux builds (v0.5.0 and earlier) has one
+# Linux file per processor, the glibc build, under the old name.
+OLD_ASSETS="oskac-linux-aarch64 oskac-linux-x86_64 oskac-macos-aarch64 oskac-macos-x86_64 oskac-windows-x86_64.exe"
+
+test_installs_the_glibc_build_of_a_release_from_before_the_musl_build() {
+  ASSETS=$OLD_ASSETS release 0.5.0
+  latest 0.5.0
+  local receipt=home/.oska/receipt.json forced
+  for forced in false true; do
+    if [ "$forced" = true ]; then
+      OSKA_LIBC=glibc install_on 'glibc 2.41' --json >out.json || fail "refused: $(cat out.json)"
+    else
+      install_on 'glibc 2.41' --json >out.json || fail "refused: $(cat out.json)"
+    fi
+    cmp site/releases/v0.5.0/oskac-linux-x86_64 "$(installed)" ||
+      fail "did not install oskac-linux-x86_64"
+    [ "$(jq -c .linux_build "$receipt")" = '"gnu"' ] || fail "linux_build is $(jq -c .linux_build "$receipt")"
+    [ "$(jq -c .libc_forced "$receipt")" = "$forced" ] || fail "libc_forced is $(jq -c .libc_forced "$receipt")"
+  done
+}
+
+# Where only the musl build would run, a release with no musl build is
+# refused, as such releases always were, and nothing is installed.
+test_refuses_a_release_from_before_the_musl_build_where_it_cannot_run() {
+  ASSETS=$OLD_ASSETS release 0.5.0
+  latest 0.5.0
+  local libc
+  for libc in musl 'glibc 2.31' none; do
+    assert_refused_libc "$libc"
+    jq -r .message out.json | grep -q 'only the glibc build' || fail "on $libc the message is $(jq -r .message out.json)"
+  done
+  OSKA_LIBC=musl assert_refused_libc 'glibc 2.41'
+  jq -r .message out.json | grep -q 'OSKA_LIBC=musl' || fail "the message does not name OSKA_LIBC=musl"
+}
+
+# A release that lists the new names never falls back to the old one, even
+# if it also lists it.
+test_a_release_with_both_builds_never_takes_the_old_name() {
+  ASSETS="$ASSETS oskac-linux-x86_64" release 1.2.3
+  latest 1.2.3
+  assert_build 'glibc 2.41' gnu false
+  rm -rf home
+  assert_build musl musl false
+}
+
+# --check and --uninstall read a receipt with the new fields, and one
+# written before them.
+test_check_and_uninstall_with_and_without_the_linux_build_fields() {
+  release 1.2.3
+  latest 1.2.3
+  local receipt=home/.oska/receipt.json old
+  for old in no yes; do
+    OSKA_LIBC=musl assert_build 'glibc 2.41' musl true
+    if [ "$old" = yes ]; then
+      jq 'del(.linux_build, .libc_forced)' "$receipt" >r.json
+      mv r.json "$receipt"
+    fi
+    PATH="$PWD/fakebin:$PATH" install --json --check >out.json || fail "--check failed: $(cat out.json)"
+    [ "$(jq -r .installed out.json)" = 1.2.3 ] || fail "--check reports $(jq -r .installed out.json) installed"
+    PATH="$PWD/fakebin:$PATH" install --json --uninstall >out.json || fail "--uninstall failed: $(cat out.json)"
+    [ "$(jq -r .kept out.json)" = '[]' ] || fail "kept $(jq -c .kept out.json)"
+    [ ! -e home/.oska ] || fail "the Oska home is still there"
   done
 }
 

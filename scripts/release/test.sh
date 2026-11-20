@@ -16,6 +16,10 @@ trap 'rm -rf "$scratch"' EXIT
 failures=0
 passes=0
 
+# assemble.sh builds the container image, whose bytes hold this time
+# (2026-11-20T00:00:00Z); the release takes it from the tag's commit.
+export SOURCE_DATE_EPOCH=1795132800
+
 fail() {
   echo "    $*" >&2
   return 1
@@ -46,11 +50,22 @@ run_test() {
   fi
 }
 
+# The files a release ships beside SHA256SUMS, as assemble.sh lists them:
+# for Linux a glibc build (-gnu) and a musl build (-musl) per processor.
+RELEASE_ASSETS=(
+  oskac-linux-x86_64-gnu
+  oskac-linux-x86_64-musl
+  oskac-linux-aarch64-gnu
+  oskac-linux-aarch64-musl
+  oskac-macos-x86_64
+  oskac-macos-aarch64
+  oskac-windows-x86_64.exe
+)
+
 # Writes one fake binary per release target into ./builds.
 fake_builds() {
   mkdir -p builds
-  for asset in oskac-linux-x86_64 oskac-linux-aarch64 oskac-macos-x86_64 \
-    oskac-macos-aarch64 oskac-windows-x86_64.exe; do
+  for asset in "${RELEASE_ASSETS[@]}"; do
     printf 'binary for %s\n' "$asset" >"builds/$asset"
   done
 }
@@ -61,18 +76,80 @@ test_assemble_writes_every_binary_and_their_checksums() {
   (cd out/v1.2.3 && LC_ALL=C ls) >listing
   cat >expected <<'LIST'
 SHA256SUMS
-oskac-linux-aarch64
-oskac-linux-x86_64
+oskac-image-digest
+oskac-linux-aarch64-gnu
+oskac-linux-aarch64-musl
+oskac-linux-x86_64-gnu
+oskac-linux-x86_64-musl
 oskac-macos-aarch64
 oskac-macos-x86_64
 oskac-windows-x86_64.exe
 LIST
   diff expected listing || fail "unexpected files"
-  # The SHA-256 of "binary for oskac-linux-x86_64\n".
-  grep -qx '3d729e2e60bed0f14d643cfecf4af7efea56f4bf88745a804071904108af8548  oskac-linux-x86_64' \
-    out/v1.2.3/SHA256SUMS || fail "SHA256SUMS lacks the linux-x86_64 line"
+  # The SHA-256 of "binary for oskac-linux-x86_64-musl\n".
+  grep -qx '26fe901d847eb45e0bff67045b6bae18e50b428918b48e48158900f29a2bd4fc  oskac-linux-x86_64-musl' \
+    out/v1.2.3/SHA256SUMS || fail "SHA256SUMS lacks the linux-x86_64-musl line"
+  [ "$(grep -c '^[0-9a-f]\{64\}  oskac-' out/v1.2.3/SHA256SUMS)" = 8 ] ||
+    fail "SHA256SUMS does not list exactly the 7 binaries and the image digest"
   (cd out/v1.2.3 && sha256sum --check --strict SHA256SUMS) || fail "sums do not check"
-  [ -x out/v1.2.3/oskac-linux-x86_64 ] || fail "binary not executable"
+  [ -x out/v1.2.3/oskac-linux-x86_64-musl ] || fail "binary not executable"
+}
+
+# The image digest is signed with the binaries, so the release signature
+# covers the image: it is the digest image.sh prints for the release's own
+# two musl builds.
+test_assemble_signs_the_digest_of_the_image_built_from_its_musl_builds() {
+  fake_builds
+  "$here/assemble.sh" v1.2.3 builds out
+  local digest
+  digest=$("$here/image.sh" builds/oskac-linux-x86_64-musl builds/oskac-linux-aarch64-musl layout)
+  [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] || fail "image.sh printed '$digest'"
+  [ "$(cat out/v1.2.3/oskac-image-digest)" = "$digest" ] ||
+    fail "the digest file holds '$(cat out/v1.2.3/oskac-image-digest)', not $digest"
+  [ "$(wc -l <out/v1.2.3/oskac-image-digest)" = 1 ] || fail "the digest file is not one line"
+  grep -qE '^[0-9a-f]{64}  oskac-image-digest$' out/v1.2.3/SHA256SUMS ||
+    fail "SHA256SUMS does not list the digest file"
+  # Other musl builds give another image, and so another signed digest.
+  printf 'another musl build\n' >builds/oskac-linux-aarch64-musl
+  "$here/assemble.sh" v1.2.4 builds out
+  [ "$(cat out/v1.2.4/oskac-image-digest)" != "$digest" ] || fail "the digest ignores the aarch64 musl build"
+}
+
+# assemble.sh signs what image.sh prints, so anything but one digest (a tag,
+# an empty line, two digests, a digest with text after it) is refused, and
+# no release is written.
+test_assemble_refuses_an_image_builder_that_prints_no_digest() {
+  fake_builds
+  mkdir scripts
+  cp "$here/assemble.sh" scripts/
+  local printed hex=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  for printed in latest '' "sha256:$hex"$'\n'"sha256:$hex" "sha256:$hex x" "sha256:${hex}0" "sha512:$hex"; do
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" %q\n' "$printed" >scripts/image.sh
+    chmod +x scripts/image.sh
+    if scripts/assemble.sh v1.2.3 builds out 2>err; then
+      fail "assembled with image.sh printing '$printed'"
+    fi
+    grep -q 'not a digest' err || fail "error does not say why: $(cat err)"
+    [ ! -e out/v1.2.3 ] || fail "left a release directory behind"
+  done
+  # The fake itself works: with a digest it assembles.
+  printf '#!/usr/bin/env bash\necho sha256:%s\n' "$hex" >scripts/image.sh
+  scripts/assemble.sh v1.2.3 builds out
+  [ "$(cat out/v1.2.3/oskac-image-digest)" = "sha256:$hex" ] || fail "the fake image.sh is not used"
+}
+
+test_assemble_refuses_to_build_the_image_without_a_source_date() {
+  fake_builds
+  if SOURCE_DATE_EPOCH='' "$here/assemble.sh" v1.2.3 builds out 2>err; then
+    fail "assembled with no SOURCE_DATE_EPOCH"
+  fi
+  [ ! -e out/v1.2.3 ] || fail "left a release directory behind"
+}
+
+test_assemble_lists_the_assets_it_ships() {
+  "$here/assemble.sh" --list >listing
+  printf '%s\n' "${RELEASE_ASSETS[@]}" >expected
+  diff expected listing || fail "assemble.sh --list differs"
 }
 
 test_assemble_refuses_a_release_missing_a_target() {
@@ -181,9 +258,72 @@ test_stage_site_refuses_an_old_release_republished_under_a_newer_tag() {
   [ ! -e site/latest.json ] || fail "wrote a latest.json"
 }
 
+# Re-signs ./out/<tag>/SHA256SUMS with ./key after the files changed: what
+# a release looks like when the signing run itself was handed bad files.
+resign_release() {
+  local dir=out/$1
+  {
+    head -n 1 "$dir/SHA256SUMS"
+    (cd "$dir" && find . -mindepth 1 -maxdepth 1 ! -name 'SHA256SUMS*' -printf '%P\n' |
+      LC_ALL=C sort | xargs sha256sum --)
+  } >"$dir/SHA256SUMS.new"
+  mv "$dir/SHA256SUMS.new" "$dir/SHA256SUMS"
+  rm -f "$dir/SHA256SUMS.sig"
+  ssh-keygen -q -Y sign -f key -n oska-release "$dir/SHA256SUMS"
+}
+
+# The signed digest is what a user pulls by and what the push checks, so a
+# digest file that is not exactly one digest is refused even when signed:
+# a tag, two digests, another algorithm, or a short digest.
+test_verify_refuses_a_signed_image_digest_that_is_not_one_sha256_digest() {
+  signed_release v1.2.3
+  resign_release v1.2.3
+  "$here/verify.sh" out/v1.2.3 key.pub || fail "the re-signed release does not verify"
+  local good bad
+  good=$(cat out/v1.2.3/oskac-image-digest)
+  for bad in latest "sha256:${good#sha256:}x" "sha512:${good#sha256:}" "${good%?}" \
+    "$good"$'\n'"$good" "$good " "ghcr.io/aparsons/oskac@$good" ''; do
+    printf '%s\n' "$bad" >out/v1.2.3/oskac-image-digest
+    resign_release v1.2.3
+    if "$here/verify.sh" out/v1.2.3 key.pub 2>err; then
+      fail "verified the image digest '$bad'"
+    fi
+    grep -q oskac-image-digest err || fail "error does not name the digest file: $(cat err)"
+  done
+  # With no trailing newline it is still not the one line assemble.sh writes.
+  printf '%s' "$good" >out/v1.2.3/oskac-image-digest
+  resign_release v1.2.3
+  if "$here/verify.sh" out/v1.2.3 key.pub 2>/dev/null; then
+    fail "verified a digest file with no newline"
+  fi
+}
+
+# A symlink in place of the digest file would let what it points at, outside
+# what was signed, change after verifying: refused even when it resolves to
+# the signed bytes.
+test_verify_refuses_an_image_digest_that_is_a_symlink() {
+  signed_release v1.2.3
+  mv out/v1.2.3/oskac-image-digest real-digest
+  ln -s "$PWD/real-digest" out/v1.2.3/oskac-image-digest
+  (cd out/v1.2.3 && sha256sum --check --strict --quiet SHA256SUMS) || fail "the link does not match SHA256SUMS"
+  if "$here/verify.sh" out/v1.2.3 key.pub 2>err; then
+    fail "verified a digest file that is a symlink"
+  fi
+  grep -q 'not a regular file' err || fail "error does not say why: $(cat err)"
+}
+
+# Releases before the image (v0.5.0 and older) have no digest file and
+# still verify, so the Pages build keeps publishing them.
+test_verify_accepts_an_older_release_without_an_image_digest() {
+  signed_release v1.2.3
+  rm out/v1.2.3/oskac-image-digest
+  resign_release v1.2.3
+  "$here/verify.sh" out/v1.2.3 key.pub
+}
+
 test_verify_refuses_a_tampered_binary() {
   signed_release
-  printf 'evil\n' >>out/v1.2.3/oskac-linux-aarch64
+  printf 'evil\n' >>out/v1.2.3/oskac-linux-aarch64-musl
   if "$here/verify.sh" out/v1.2.3 key.pub; then
     fail "verified a tampered binary"
   fi
@@ -253,8 +393,10 @@ test_stage_site_publishes_releases_and_points_latest_at_the_newest() {
     "ps1": "https://example.test/install.ps1"
   },
   "binaries": {
-    "linux-aarch64": "https://example.test/releases/v1.10.0/oskac-linux-aarch64",
-    "linux-x86_64": "https://example.test/releases/v1.10.0/oskac-linux-x86_64",
+    "linux-aarch64-gnu": "https://example.test/releases/v1.10.0/oskac-linux-aarch64-gnu",
+    "linux-aarch64-musl": "https://example.test/releases/v1.10.0/oskac-linux-aarch64-musl",
+    "linux-x86_64-gnu": "https://example.test/releases/v1.10.0/oskac-linux-x86_64-gnu",
+    "linux-x86_64-musl": "https://example.test/releases/v1.10.0/oskac-linux-x86_64-musl",
     "macos-aarch64": "https://example.test/releases/v1.10.0/oskac-macos-aarch64",
     "macos-x86_64": "https://example.test/releases/v1.10.0/oskac-macos-x86_64",
     "windows-x86_64": "https://example.test/releases/v1.10.0/oskac-windows-x86_64.exe"
@@ -270,7 +412,7 @@ JSON
   page=site/releases/v1.10.0/index.html
   [ -f "$page" ] || fail "no page at the release's URL"
   grep -qF '<title>oskac 1.10.0</title>' "$page" || fail "page names the wrong release"
-  grep -qF 'href="oskac-linux-x86_64"' "$page" || fail "page does not link a binary"
+  grep -qF 'href="oskac-linux-x86_64-musl"' "$page" || fail "page does not link a binary"
   grep -qF "$(sed -n 2p site/releases/v1.10.0/SHA256SUMS | awk '{print $1}')" "$page" ||
     fail "page does not show a checksum"
   grep -qF 'https://example.test/oska-release.pub' "$page" || fail "page does not link the key"
@@ -283,8 +425,8 @@ test_stage_site_keeps_what_the_generator_wrote_in_latest_json() {
   "$here/stage-site.sh" out site key.pub
   [ "$(jq -r .docs site/latest.json)" = main ] || fail "lost the generator's field"
   [ "$(jq -r .version site/latest.json)" = 1.2.3 ] || fail "release version did not win"
-  [ "$(jq -r '.binaries["linux-x86_64"]' site/latest.json)" = \
-    https://oskalang.dev/releases/v1.2.3/oskac-linux-x86_64 ] || fail "wrong default site URL"
+  [ "$(jq -r '.binaries["linux-x86_64-gnu"]' site/latest.json)" = \
+    https://oskalang.dev/releases/v1.2.3/oskac-linux-x86_64-gnu ] || fail "wrong default site URL"
 }
 
 test_stage_site_publishes_installers_pinned_to_the_key_that_installs_from_it() {
@@ -298,8 +440,8 @@ test_stage_site_publishes_installers_pinned_to_the_key_that_installs_from_it() {
   HOME="$PWD/home" OSKA_SITE_URL="file://$PWD/site" sh site/install.sh --json >out.json
   [ "$(jq -r .version out.json)" = 1.2.3 ] || fail "did not install 1.2.3"
   case "$(uname -m)" in
-    aarch64 | arm64) asset=oskac-linux-aarch64 ;;
-    *) asset=oskac-linux-x86_64 ;;
+    aarch64 | arm64) asset=oskac-linux-aarch64-gnu ;;
+    *) asset=oskac-linux-x86_64-gnu ;;
   esac
   cmp "out/v1.2.3/$asset" home/.oska/bin/oskac || fail "installed the wrong binary"
 }
@@ -333,8 +475,7 @@ test_stage_site_refuses_releases_without_a_key_to_check_them() {
 working_builds() {
   local version=$1
   mkdir -p builds
-  for asset in oskac-linux-x86_64 oskac-linux-aarch64 oskac-macos-x86_64 \
-    oskac-macos-aarch64 oskac-windows-x86_64.exe; do
+  for asset in "${RELEASE_ASSETS[@]}"; do
     cat >"builds/$asset" <<BIN
 #!/bin/sh
 case "\$*" in
@@ -785,6 +926,43 @@ workflow_jobs() {
   ' "$1"
 }
 
+# The build matrix in release.yml, one line per row:
+# "<asset> <linux build or -> <target or ->".
+release_matrix() {
+  awk '
+    /^ *- asset: / { if (asset != "") print asset, linux, target
+                     asset = $3; linux = "-"; target = "-"; next }
+    asset != "" && /^ *linux: / { linux = $2; next }
+    asset != "" && /^ *target: / { target = $2; next }
+    asset != "" && /^ *runs-on:/ { print asset, linux, target; asset = "" }
+  ' "$here/../../.github/workflows/release.yml"
+}
+
+test_the_release_workflow_builds_and_checks_every_asset_a_release_ships() {
+  # One row per asset assemble.sh ships, no more: a -gnu or -musl asset
+  # with its Linux build, and a musl one with the musl target of its
+  # processor.
+  local asset arch
+  "$here/assemble.sh" --list | while read -r asset; do
+    case $asset in
+      oskac-linux-*-gnu) echo "$asset gnu -" ;;
+      oskac-linux-*-musl)
+        arch=${asset#oskac-linux-}
+        echo "$asset musl ${arch%-musl}-unknown-linux-musl"
+        ;;
+      oskac-linux-*) fail "assemble.sh ships $asset, which names no Linux build" ;;
+      *) echo "$asset - -" ;;
+    esac
+  done | LC_ALL=C sort >expected
+  [ "$(wc -l <expected)" -ge 7 ] || fail "assemble.sh --list lists $(wc -l <expected) assets"
+  release_matrix | LC_ALL=C sort >matrix
+  diff expected matrix || fail "release.yml does not build exactly the assets assemble.sh ships"
+  # Every row's binary is checked by its Linux build's rules.
+  # shellcheck disable=SC2016 # the workflow's shell variables, written out
+  grep -qF 'scripts/release/check-linux-build.sh "$LINUX_BUILD" "dist/$ASSET"' \
+    "$here/../../.github/workflows/release.yml" || fail "release.yml does not check the Linux builds"
+}
+
 test_only_jobs_in_the_release_environment_read_the_signing_key() {
   local workflows=$here/../../.github/workflows file job env key readers=0
   for file in "$workflows"/*.yml; do
@@ -796,6 +974,135 @@ test_only_jobs_in_the_release_environment_read_the_signing_key() {
   done
   # release.yml's sign job and resign-index.yml's.
   [ "$readers" = 2 ] || fail "$readers jobs read the key, not 2"
+}
+
+# Prints the name of each job in workflow $1 that has a line matching the
+# extended regular expression $2, reading indentation as workflow_jobs does.
+jobs_matching() {
+  awk -v pattern="$2" '
+    /^[[:space:]]*(#.*)?$/ { next }
+    { ind = $0; sub(/[^ ].*$/, "", ind); ind = length(ind) }
+    ind == 0 { in_jobs = ($0 ~ /^jobs:/); job = ""; next }
+    !in_jobs { next }
+    job_indent == "" { job_indent = ind }
+    ind == job_indent { job = $0; sub(/^[[:space:]]*/, "", job); sub(/:.*$/, "", job); next }
+    job != "" && $0 ~ pattern { print job }
+  ' "$1" | LC_ALL=C sort -u
+}
+
+# Prints the lines of job $2 in workflow $1, from its name to the next job.
+job_text() {
+  awk -v want="$2" '
+    /^[[:space:]]*(#.*)?$/ { if (job == want) print; next }
+    { ind = $0; sub(/[^ ].*$/, "", ind); ind = length(ind) }
+    ind == 0 { in_jobs = ($0 ~ /^jobs:/); job = ""; next }
+    !in_jobs { next }
+    job_indent == "" { job_indent = ind }
+    ind == job_indent { job = $0; sub(/^[[:space:]]*/, "", job); sub(/:.*$/, "", job) }
+    job == want { print }
+  ' "$1"
+}
+
+# Only the two jobs that push the image may write packages, in every
+# workflow, and a workflow-wide permission would give it to every job.
+test_only_the_image_push_jobs_can_write_packages() {
+  local workflows=$here/../../.github/workflows file found=
+  for file in "$workflows"/*.yml; do
+    if grep -Eq '^permissions:.*(packages|write-all)' "$file" ||
+      [ -n "$(awk '/^permissions:/ {p = 1; next} /^[^ ]/ {p = 0} p && /packages/' "$file")" ]; then
+      fail "$(basename "$file") gives packages access to every job"
+    fi
+    while read -r job; do
+      [ -n "$job" ] || continue
+      found="$found $(basename "$file"):$job"
+    done < <(jobs_matching "$file" 'packages:|write-all')
+  done
+  [ "$found" = " release.yml:publish release.yml:tag-image" ] || fail "jobs with packages access:$found"
+}
+
+# The image is pushed by digest in the publish job, after the sign job,
+# from the signed release, before the GitHub Release exists. Its public
+# tags (vX.Y.Z, latest) come only in tag-image, which needs publish, so
+# only once the GitHub Release exists: a release that fails to publish
+# leaves no tag naming it. Only push-image.sh pushes, which refuses a
+# digest the signature does not cover.
+test_the_image_is_pushed_by_digest_before_publishing_and_tagged_after() {
+  local wf=$here/../../.github/workflows/release.yml publish tagjob
+  publish=$(job_text "$wf" publish)
+  tagjob=$(job_text "$wf" tag-image)
+  [ -n "$tagjob" ] || fail "release.yml has no tag-image job"
+  grep -q '^    needs: sign$' <<<"$publish" || fail "publish does not need sign"
+  grep -q '^    needs: \[sign, publish\]$' <<<"$tagjob" || fail "tag-image does not need publish"
+  local job text
+  for job in publish tag-image; do
+    text=$(job_text "$wf" "$job")
+    grep -q '^    if: github.event_name == '"'push'"'$' <<<"$text" || fail "$job runs on a pull request"
+    grep -q '^          name: image-layout$' <<<"$text" || fail "$job does not push the layout assemble wrote"
+    # No package is installed in a job that holds write tokens.
+    if grep -Eq 'apt-get|apt install|pip install|npm install|curl' <<<"$text"; then
+      fail "$job installs software"
+    fi
+  done
+  # shellcheck disable=SC2016 # the workflow's own text, not expanded here
+  grep -qF 'scripts/release/push-image.sh digest "release/$TAG" site/oska-release.pub image ghcr.io/aparsons/oskac' <<<"$publish" ||
+    fail "publish does not push by digest with push-image.sh from the signed release"
+  # shellcheck disable=SC2016 # the workflow's own text, not expanded here
+  grep -qF 'scripts/release/push-image.sh tags "release/$TAG" site/oska-release.pub image ghcr.io/aparsons/oskac' <<<"$tagjob" ||
+    fail "tag-image does not tag with push-image.sh from the signed release"
+  if grep -q 'push-image.sh tags' <<<"$publish"; then
+    fail "publish tags the image, which may be before the GitHub Release exists"
+  fi
+  if grep -Eq 'push-image.sh digest|gh release create' <<<"$tagjob"; then
+    fail "tag-image does more than tag"
+  fi
+  local push create
+  push=$(grep -n 'push-image.sh digest' <<<"$publish" | head -n 1 | cut -d: -f1)
+  create=$(grep -n 'gh release create' <<<"$publish" | head -n 1 | cut -d: -f1)
+  [ -n "$push" ] && [ -n "$create" ] && [ "$push" -lt "$create" ] ||
+    fail "the image is not pushed by digest before the GitHub Release is created"
+  # No other job, in any workflow, runs skopeo copy or docker push.
+  local file
+  for file in "$here"/../../.github/workflows/*.yml; do
+    while read -r job; do
+      [ -n "$job" ] || continue
+      case "$(basename "$file"):$job" in
+        release.yml:publish | release.yml:tag-image) ;;
+        *) fail "$(basename "$file"):$job may push an image" ;;
+      esac
+    done < <(jobs_matching "$file" 'push-image\.sh|skopeo (copy|login)[^#]*docker://|docker push|skopeo login')
+  done
+}
+
+# CI's musl job checks that the build is static with the same tested
+# script as the release, not a copy of its own that could drift.
+test_ci_checks_the_musl_build_with_the_release_check() {
+  local musl
+  musl=$(job_text "$here/../../.github/workflows/ci.yml" musl)
+  [ -n "$musl" ] || fail "ci.yml has no musl job"
+  # shellcheck disable=SC2016 # the workflow's own text, not expanded here
+  grep -qF 'scripts/release/check-linux-build.sh musl "target/$TARGET/release/oskac"' <<<"$musl" ||
+    fail "the musl job does not run check-linux-build.sh musl"
+  if grep -Eq 'readelf|objdump' <<<"$musl"; then
+    fail "the musl job has its own static check"
+  fi
+}
+
+# The dry run, and the release, smoke-test both musl builds in alpine and
+# in the image, on each processor, before anything is signed.
+test_the_release_smoke_tests_the_musl_builds_on_both_processors() {
+  local wf=$here/../../.github/workflows/release.yml smoke
+  smoke=$(job_text "$wf" smoke-image)
+  [ -n "$smoke" ] || fail "release.yml has no smoke-image job"
+  grep -qE '^    if:' <<<"$smoke" && fail "the smoke-image job does not always run"
+  grep -q 'runner: ubuntu-24.04$' <<<"$smoke" || fail "no x86_64 row"
+  grep -q 'runner: ubuntu-24.04-arm$' <<<"$smoke" || fail "no aarch64 row"
+  grep -q 'binary: oskac-linux-x86_64-musl$' <<<"$smoke" || fail "no x86_64 musl build"
+  grep -q 'binary: oskac-linux-aarch64-musl$' <<<"$smoke" || fail "no aarch64 musl build"
+  grep -q 'scripts/release/smoke-image.sh ' <<<"$smoke" || fail "does not run smoke-image.sh"
+  # shellcheck disable=SC2016 # the workflow's own text, not expanded here
+  grep -q 'test "$(uname -m)" = "$MACHINE"' <<<"$smoke" || fail "does not check the processor"
+  grep -q '^    needs: \[assemble, smoke-image\]$' <<<"$(job_text "$wf" sign)" ||
+    fail "sign does not wait for the smoke test"
 }
 
 test_the_index_is_resigned_monthly_and_on_demand_from_main_only() {

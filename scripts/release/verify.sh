@@ -11,7 +11,11 @@
 #      tag's directory is refused, and every other line is a SHA-256 digest
 #      and a file name;
 #   3. every file SHA256SUMS lists is present with that digest;
-#   4. the directory holds nothing else.
+#   4. the directory holds nothing else;
+#   5. oskac-image-digest, if the release has one (releases before the
+#      container image do not), is exactly one line `sha256:<64 hex>`: the
+#      digest of the image index users pull by, and the one the release
+#      run checks the pushed image against.
 # Exits non-zero, naming the problem, if any check fails.
 
 set -euo pipefail
@@ -54,3 +58,14 @@ present=$(find "$dir" -mindepth 1 -maxdepth 1 ! -name SHA256SUMS ! -name SHA256S
   -printf '%P\n' | LC_ALL=C sort)
 [ "$listed" = "$present" ] ||
   die "$dir holds files that SHA256SUMS does not list"
+
+digest_file=$dir/oskac-image-digest
+if [ -e "$digest_file" ] || [ -L "$digest_file" ]; then
+  [ -f "$digest_file" ] && [ ! -L "$digest_file" ] ||
+    die "$digest_file is not a regular file"
+  # Compare the whole file, so a second line or a missing newline counts.
+  digest=$(head -c 72 "$digest_file")
+  [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] && [ "$(wc -c <"$digest_file")" -eq 72 ] &&
+    [ "$(tail -c 1 "$digest_file" | od -An -c | tr -d ' ')" = '\n' ] ||
+    die "$digest_file is not one line 'sha256:<64 hex digits>'"
+fi

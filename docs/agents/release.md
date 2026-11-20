@@ -6,12 +6,22 @@ The maintainer runbook for cutting a release, checking it, and keeping the signi
 
 ```text
 git tag vX.Y.Z on main ─▶ release.yml
-  build      5 native targets (Linux on ubuntu-22.04 / -arm: glibc ≤ 2.35 enforced)
-  assemble   SHA256SUMS: line 1 "# oska-release vX.Y.Z", then "<sha256>  <file>" per binary
+  build      7 native builds: Linux gnu and musl on ubuntu-22.04 / -arm, macOS, Windows
+             (check-linux-build.sh: gnu needs glibc ≤ 2.35, musl is static)
+  assemble   image.sh: the image from the two musl builds, its index digest in
+             oskac-image-digest; SHA256SUMS: line 1 "# oska-release vX.Y.Z",
+             then "<sha256>  <file>" per binary and for oskac-image-digest
+  smoke-image  on ubuntu-24.04 / -arm: each musl build in alpine and in the image
+             (smoke-image.sh: --version, oskac run and oskac build of hello.osk,
+             oskac test of a one-test file)
   sign       env "release": ssh-keygen -Y sign -n oska-release with RELEASE_SIGNING_KEY,
              then sign-index.sh: the next release index, -n oska-index, same key
-  publish    env "release": GitHub Release vX.Y.Z with the index beside the files
-             (the source pages.yml fetches), then dispatch pages.yml on main
+  publish    env "release": push-image.sh digest pushes the signed image to
+             ghcr.io/aparsons/oskac by digest only, then GitHub Release
+             vX.Y.Z with the index beside the files (the source pages.yml
+             fetches), then dispatch pages.yml on main
+  tag-image  env "release", after publish: push-image.sh tags tags the image
+             :vX.Y.Z (and :latest), so no tag names an unpublished release
 pages.yml ─▶ downloads every release, verify.sh each against site/oska-release.pub,
              stages /releases/vX.Y.Z/ and latest.json, publishes the highest-serial
              index as /release-index.json, pins install.sh/.ps1 to the key and,
@@ -25,7 +35,62 @@ monthly (1st, 05:17 UTC) or by hand on main ─▶ resign-index.yml
              dispatches pages.yml on main
 ```
 
-On a pull request, `release.yml` does a dry run: the same builds, signed with a throwaway key (the index too, as if none were published), and nothing published.
+On a pull request, `release.yml` does a dry run: the same builds and image smoke test, signed with a throwaway key (the index too, as if none were published), and nothing published or pushed.
+
+## The release assets
+
+`scripts/release/assemble.sh` lists them, and a release ships exactly these, each under its own key in `latest.json`'s `binaries` (the name without `oskac-` and `.exe`):
+
+| Asset | Build | Checked in the build job |
+|---|---|---|
+| `oskac-linux-x86_64-gnu`, `oskac-linux-aarch64-gnu` | the glibc build, on `ubuntu-22.04` / `-arm` | no glibc symbol newer than `GLIBC_2.35` |
+| `oskac-linux-x86_64-musl`, `oskac-linux-aarch64-musl` | the musl build, `--target <arch>-unknown-linux-musl` on the same runners | no `PT_INTERP` and no `DT_NEEDED`: static, so it runs on any Linux |
+| `oskac-macos-x86_64`, `oskac-macos-aarch64` | on `macos-15-intel` / `macos-latest` | |
+| `oskac-windows-x86_64.exe` | on `windows-latest` | |
+
+Every row also checks that `uname -m` is the processor its name says, and that the binary prints its version. `scripts/release/check-linux-build.sh gnu|musl <binary>` does the two Linux checks; run it by hand on a downloaded Linux asset to check it again. `SHA256SUMS` lists all seven, and `oskac-image-digest` (see [The container image](#the-container-image)), so the signature covers each. ADR 0022 records why Linux has two builds. `scripts/release/check-linux-build-test.sh` tests both checks.
+
+**A breaking rename.** Releases before the two builds shipped `oskac-linux-x86_64` and `oskac-linux-aarch64`. From the first release with them, those files are gone, and `latest.json`'s `binaries` has no `linux-x86_64` or `linux-aarch64` key: it has `linux-x86_64-gnu`, `linux-x86_64-musl`, `linux-aarch64-gnu` and `linux-aarch64-musl` in their place (the macOS and Windows keys are unchanged). Anything that reads the old keys or downloads the old names breaks, an installer saved from before the rename included (`download_failed`); that release's notes, "Upgrading to v0.6.0" in `docs/guide/install.md`, say so.
+
+## The container image
+
+Each release publishes `ghcr.io/aparsons/oskac:vX.Y.Z`, and for a stable release `:latest`: an OCI image index with one image per Linux processor, each holding only the musl build at `/oskac` and an empty `/tmp`, run as user 65532 (ADR 0022).
+
+- **Built from the release's own musl builds.** `assemble.sh` runs `scripts/release/image.sh` on `oskac-linux-x86_64-musl` and `oskac-linux-aarch64-musl`, with `SOURCE_DATE_EPOCH` set to the commit time of the tag, and writes the digest of the image index, one line `sha256:<hex>`, to `oskac-image-digest`. `SHA256SUMS` lists that file, so the `oska-release` signature covers the image. `verify.sh` refuses a digest file that is not exactly that one line. It is not a binary: `latest.json`'s `binaries` does not list it, and the installers never download it.
+- **Smoke-tested before signing.** The `smoke-image` job, on `ubuntu-24.04` and `ubuntu-24.04-arm` (22.04's skopeo cannot load into Docker), runs `scripts/release/smoke-image.sh`: each musl build in `alpine` (pinned by digest) and in the image as Docker picks it for that processor, `oskac --version`, `oskac run` and `oskac build` of `examples/hello.osk`, the executable it built, and `oskac test` of a one-test file. `sign` waits for it.
+- **Pushed only after signing, and only the signed bytes; tagged only once published.** `scripts/release/push-image.sh` verifies the signed release against `site/oska-release.pub`, and refuses the OCI layout `assemble` wrote unless its index is the signed digest and every blob matches its digest. It pushes those exact bytes with `skopeo copy --all --preserve-digests` and the workflow's own `GITHUB_TOKEN`, by digest, and reads that back: if the registry does not serve the signed digest, it fails before any tag names it. It runs twice. In `publish`, before the GitHub Release is created, `push-image.sh digest` pushes by digest only, with no tag. In `tag-image`, which needs `publish` and so runs only once the GitHub Release exists, `push-image.sh tags` does the same checks and push again, then tags `vX.Y.Z`, and `latest` only when the signed release index beside the release names this release, so `latest` never moves back, as the index never does (see [The release index](#the-release-index)); each tag is read back too. So a release that fails to publish leaves at most an untagged image, and no public tag ever names a release that was not published. Only `publish` and `tag-image` have `packages: write`; `scripts/release/test.sh` fails if another job gets it, or if a tag is pushed before `gh release create`. They use the runner's own `skopeo` and install nothing.
+- **If a push fails.** In `publish`, before the GitHub Release exists, nothing is published: fix it and run the failed jobs again (a re-run pushes the same bytes), or, if the fix changes the release, delete the git tag and tag again (see [Cutting a release](#cutting-a-release)). In `tag-image`, the release is already published and its image can be pulled by digest; only the tags are missing. Run the failed jobs again: that re-runs `tag-image` alone, with the same signed bytes. Never delete the git tag of a published release to tag it again: that would move `:vX.Y.Z` to other bytes. Fix forward with a new patch release instead.
+- **The package's visibility.** The first push creates the package private. Once, in the package's settings on GitHub, make it public, and check that it is linked to this repository with "Actions" access for it. Nothing in the repo can check this.
+
+### Verify an image by its digest
+
+Users pull by digest, never by tag, and a tag can move. To check that a digest is the one a release signed:
+
+```
+v=vX.Y.Z
+curl -fsSO "https://oskalang.dev/releases/$v/SHA256SUMS" -O "https://oskalang.dev/releases/$v/SHA256SUMS.sig" \
+  -O "https://oskalang.dev/releases/$v/oskac-image-digest"
+curl -fsS https://oskalang.dev/oska-release.pub -o oska-release.pub
+ssh-keygen -l -E sha256 -f oska-release.pub    # must print the fingerprint below
+printf 'oska-release %s\n' "$(cat oska-release.pub)" > allowed
+ssh-keygen -Y verify -f allowed -I oska-release -n oska-release -s SHA256SUMS.sig < SHA256SUMS
+head -n 1 SHA256SUMS                          # must be: # oska-release vX.Y.Z
+sha256sum --ignore-missing -c SHA256SUMS      # oskac-image-digest: OK
+digest=$(cat oskac-image-digest)
+docker run --rm -v "$PWD:/w" -w /w "ghcr.io/aparsons/oskac@$digest" --version
+```
+
+`ssh-keygen -l` must print `SHA256:PjwTDycs560g1ktWC/gdznamSkzm4xH+OAdfntNaW4o`, the key's fingerprint (see [Repository configuration](#repository-configuration-it-depends-on)): the site serves the key, so a site that serves another key and signs with it would otherwise pass. Or use `site/oska-release.pub` from a clone. Pulling `ghcr.io/aparsons/oskac@<digest>` makes Docker check every byte against that digest. To see that a tag points at it: `skopeo inspect --raw docker://ghcr.io/aparsons/oskac:$v | sha256sum` prints the same hex.
+
+To check that the image holds exactly the signed binaries, rebuild it from them: download `oskac-linux-x86_64-musl` and `oskac-linux-aarch64-musl` into the same directory, then, in a clone of the repo checked out at the tag, so `image.sh` is the one that built the release (a later one may write other bytes),
+
+```
+git checkout "$v"
+SOURCE_DATE_EPOCH=$(git log -1 --format=%ct "$v") \
+  scripts/release/image.sh oskac-linux-x86_64-musl oskac-linux-aarch64-musl "$(mktemp -d)/image"
+```
+
+It must print the digest in `oskac-image-digest`.
 
 ## The release index
 
@@ -89,6 +154,7 @@ Nothing in the repo can check these settings, so verify them before a release.
 - **Secret `RELEASE_SIGNING_KEY`:** an ed25519 OpenSSH private key with no passphrase. Its public half is `site/oska-release.pub`, fingerprint `SHA256:PjwTDycs560g1ktWC/gdznamSkzm4xH+OAdfntNaW4o`. It should live in the `release` environment, not at repository level.
 - **Environment `release`:** deployment limited to tags matching `v*` and the branch `main`. No required reviewers (decided 2026-11-10). `main` is admitted only so that `resign-index.yml` can re-sign the index unattended ([#202](https://github.com/aparsons/oska/issues/202)); GitHub cannot admit one workflow, only refs, so every workflow on `main` could now name the environment. That is bounded by `main` changing only through reviewed pull requests, and by `scripts/release/test.sh`, which allows the key in exactly two jobs: `release.yml`'s `sign` and `resign-index.yml`'s `sign`.
 - **Ruleset "Release tags":** on `refs/tags/v*`, it restricts creation, update and deletion, and only repository admins may bypass it.
+- **Package `ghcr.io/aparsons/oskac`:** public, linked to this repository, with "Actions" access for it, so the release's `GITHUB_TOKEN` can push to it (see [The container image](#the-container-image)). It does not exist until the first release that pushes the image.
 - **Environment `github-pages`:** deployment from `main` only. Pages uses `build_type=workflow`, the custom domain `oskalang.dev`, and enforced HTTPS.
 - **Runners:** `ubuntu-22.04-arm` and `macos-15-intel` must stay available to this repo. It is public, so GitHub-hosted runners, macOS included, cost nothing. The PR dry run shows they are.
 
@@ -101,17 +167,18 @@ Nothing in the repo can check these settings, so verify them before a release.
    git tag -a vX.Y.Z -m "oska vX.Y.Z" && git push origin vX.Y.Z
    ```
    The push reports "Bypassed rule violations". That is the admin bypass of the tag ruleset working as intended.
-3. **Watch the tag's Release run** until build, assemble, sign and publish are all green. Nothing is published before `publish`. If an earlier job fails, delete the tag, fix the problem, and tag again. Every release job is bounded by `timeout-minutes` (build 20, the others 10), so a stuck one turns red by itself. A cancelled run is not a failed release: a superseded dry run on a pull request is cancelled on purpose, and a tag's run is never cancelled by a later push.
+3. **Watch the tag's Release run** until build, assemble, smoke-image, sign, publish and tag-image are all green. Nothing is published before `publish` creates the GitHub Release; before that, `publish` has at most pushed the image by digest, with no tag. If a job fails before the GitHub Release exists, delete the tag, fix the problem, and tag again. Once it exists, never delete the tag: if only `tag-image` failed, run the failed jobs again; for anything else, fix forward with a new patch release (see [If a push fails](#the-container-image)). Every release job is bounded by `timeout-minutes` (build 20, smoke-image 15, the others 10), so a stuck one turns red by itself. A cancelled run is not a failed release: a superseded dry run on a pull request is cancelled on purpose, and a tag's run is never cancelled by a later push.
 4. **Watch the Pages run that `publish` dispatches.** Its smoke job must end with `ok: https://oskalang.dev installs oskac X.Y.Z, and it runs`. Once an index is published, the line before it must read `the install verified release index serial N, which names X.Y.Z`. Its build job logs `published release index serial N`. A `::warning::` that the index expires within 30 days means the monthly re-sign has not run: see [The monthly re-sign](#the-monthly-re-sign).
    - The warning `no release is published` means the deploy ran before GitHub listed the new release ([#89](https://github.com/aparsons/oska/issues/89)).
    - Run `gh workflow run pages.yml --ref main` and check again.
    - A `::warning::` that the index has expired, with the smoke job failing on `stale_index`, means the monthly re-sign has not run: run it now (see [The monthly re-sign](#the-monthly-re-sign)).
-5. **Name the new release in the docs** in a normal PR: "The latest release is **vX.Y.Z**" in `docs/guide/install.md` and `docs/guide/index.md`, which `crates/oskac/tests/front_door.rs` holds to the same version, with an "Upgrading to vX.Y.Z" section in the install guide.
+5. **Name the new release in the docs** in a normal PR: "The latest release is **vX.Y.Z**" in `docs/guide/install.md` and `docs/guide/index.md`, which `crates/oskac/tests/front_door.rs` holds to the same version, with an "Upgrading to vX.Y.Z" section in the install guide. For the first release with the two Linux builds, that section already exists ("Upgrading to v0.6.0"; rename it if the release is not v0.6.0), and "Verify a release by hand" must download `oskac-linux-x86_64-gnu` in place of `oskac-linux-x86_64` once it names that release.
 
 ## Checking a published release
 
 - `curl -fsS https://oskalang.dev/latest.json` reports `"version": "X.Y.Z"`, `"tag": "vX.Y.Z"` and the key's `"signing_key_fingerprint"`.
-- `/releases/vX.Y.Z/` serves `SHA256SUMS`, `SHA256SUMS.sig` and the 5 binaries.
+- `/releases/vX.Y.Z/` serves `SHA256SUMS`, `SHA256SUMS.sig`, the 7 binaries (see [The release assets](#the-release-assets)) and `oskac-image-digest`.
+- `ghcr.io/aparsons/oskac:vX.Y.Z` is the signed digest (see [Verify an image by its digest](#verify-an-image-by-its-digest)), and so is `:latest` for a stable release.
 - Verify the signature against the committed key:
   ```
   printf 'oska-release %s\n' "$(cat site/oska-release.pub)" > allowed
