@@ -20,12 +20,13 @@
 #      release index (scripts/release/sign-index.sh, namespace oska-index):
 #      the serial after the one https://oskalang.dev publishes, naming the
 #      newest stable release, expiring in 90 days;
-#   4. pushes the image to ghcr.io/aparsons/oskac as vX.Y.Z and, for a
-#      stable release, latest (scripts/release/push-image.sh: it verifies
-#      the signed release, rebuilds the image from its musl builds, refuses
-#      unless that is the signed digest, and fails the release unless the
-#      registry then serves the signed digest). Only this job has
-#      `packages: write`, and it uses the workflow's own token;
+#   4. pushes the image assemble built to ghcr.io/aparsons/oskac
+#      (scripts/release/push-image.sh: it verifies the signed release,
+#      refuses a layout that is not the signed digest, pushes by digest and
+#      reads it back, then tags it vX.Y.Z, and latest when the signed
+#      release index names this release, each read back too; any mismatch
+#      fails the release). Only this job has `packages: write`, and it uses
+#      the workflow's own token;
 #   5. stores the files, and the index beside them, in a GitHub Release.
 #      Users install from oskalang.dev, whose installers verify the
 #      signatures; the GitHub Release is the source the Pages workflow
@@ -203,8 +204,8 @@ jobs:
         env:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          # The time stamped into the image: the tag's commit time, which
-          # publish takes again to rebuild the image.
+          # The time stamped into the image: the tag's commit time, so a
+          # reviewer can rebuild it (docs/agents/release.md).
           SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)
           export SOURCE_DATE_EPOCH
           scripts/release/assemble.sh "$TAG" builds release "$RUNNER_TEMP/image"
@@ -278,13 +279,8 @@ jobs:
         with:
           name: image-layout
           path: image
-      - name: Install skopeo if the runner lacks it
-        run: |
-          if ! command -v skopeo >/dev/null 2>&1; then
-            sudo apt-get update -q
-            sudo apt-get install -y -q skopeo
-          fi
-          skopeo --version
+      # The runner's own skopeo; smoke-image.sh fails if there is none.
+      - run: skopeo --version
       - name: Run oskac in alpine and in the image
         env:
           BINARY: ${{ matrix.binary }}
@@ -364,22 +360,24 @@ jobs:
           name: release-${{ needs.sign.outputs.tag }}
           path: release
       # Before the GitHub Release, so a failed push publishes nothing.
-      # push-image.sh verifies the signed release, rebuilds the image from
-      # its musl builds, pushes only the signed digest, and fails unless the
-      # registry serves it back.
+      # push-image.sh verifies the signed release, checks that the layout is
+      # the signed digest, pushes it by digest and reads it back before any
+      # tag names it, and moves latest only as the signed index does.
+      # The OCI bytes assemble wrote; push-image.sh pushes them only if
+      # they are the signed digest.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: image-layout
+          path: image
+      # The runner's own skopeo, never one installed here: this job holds
+      # write tokens. push-image.sh fails if there is none.
       - name: Push the signed image
         run: |
-          if ! command -v skopeo >/dev/null 2>&1; then
-            sudo apt-get update -q
-            sudo apt-get install -y -q skopeo
-          fi
-          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)
-          export SOURCE_DATE_EPOCH
           export REGISTRY_AUTH_FILE="$RUNNER_TEMP/registry-auth.json"
           trap 'rm -f "$REGISTRY_AUTH_FILE"' EXIT
           printf '%s' "$GH_TOKEN" |
             skopeo login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          scripts/release/push-image.sh "release/$TAG" site/oska-release.pub ghcr.io/aparsons/oskac
+          scripts/release/push-image.sh "release/$TAG" site/oska-release.pub image ghcr.io/aparsons/oskac
       - name: Store the files in a GitHub Release
         run: |
           prerelease=()

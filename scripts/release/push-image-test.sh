@@ -5,10 +5,10 @@
 #   scripts/release/push-image-test.sh
 #
 # Each test works in its own scratch directory: it assembles and signs a
-# release of fake binaries, as release.yml does, and runs push-image.sh with
-# a fake skopeo on PATH. The fake keeps a registry in ./registry: a copy
-# stores the image index the layout names under its tag, and `inspect --raw`
-# serves it back, so a test can make the registry serve other bytes.
+# release of fake binaries, as release.yml does, and runs push-image.sh on
+# it and the image layout assemble.sh wrote, with a fake skopeo on PATH.
+# The fake keeps a registry in ./registry, so a test can make the registry
+# serve other bytes than were pushed.
 
 set -euo pipefail
 
@@ -49,14 +49,16 @@ run_test() {
   fi
 }
 
-# 2026-11-20T00:00:00Z: the tag's commit time, in the release run.
+# assemble.sh needs it to build the image: 2026-11-20T00:00:00Z.
 export SOURCE_DATE_EPOCH=1795132800
 
 REPO=ghcr.io/example/oskac
 
 # Assembles and signs ./release/<tag> (default v1.2.3) from fake binaries
 # with the throwaway key ./key, as the release run's assemble and sign jobs
-# do, the signed release index beside it included.
+# do, the signed release index beside it included. The image layout
+# assemble.sh wrote is ./layout-<tag>. A live site in ./site, if there is
+# one, is where sign-index.sh reads the published index from.
 signed_release() {
   local tag=${1:-v1.2.3} asset
   mkdir -p builds
@@ -64,14 +66,17 @@ signed_release() {
     printf 'binary for %s\n' "$asset" >"builds/$asset"
   done < <("$here/assemble.sh" --list)
   [ -f key ] || ssh-keygen -q -t ed25519 -N '' -C push-image-test -f key
-  "$here/assemble.sh" "$tag" builds release >/dev/null
+  "$here/assemble.sh" "$tag" builds release "layout-$tag" >/dev/null
   "$here/sign.sh" "release/$tag" key key.pub
-  "$here/sign-index.sh" --tag "$tag" key key.pub "file://$PWD/no-site" "release/$tag" >/dev/null
+  "$here/sign-index.sh" --tag "$tag" key key.pub "file://$PWD/site" "release/$tag" >/dev/null
 }
 
-# A fake skopeo in ./fakebin. FAKE_SKOPEO picks how it misbehaves:
-#   serve_other  the registry serves other bytes than were pushed
-#   fail_copy    every copy fails
+# A fake skopeo in ./fakebin. A copy stores the image index the layout
+# names under the destination's tag or digest; `inspect --raw` serves it.
+# FAKE_SKOPEO picks how it misbehaves:
+#   serve_other   the registry serves other bytes than were pushed
+#   fail_copy     every copy fails
+#   fail_inspect  every inspect fails
 fake_skopeo() {
   mkdir -p fakebin registry
   cat >fakebin/skopeo <<'FAKE'
@@ -79,6 +84,14 @@ fake_skopeo() {
 set -euo pipefail
 reg=$FAKE_REGISTRY
 printf '%s\n' "$*" >>"$reg/calls"
+# The key a reference is stored under: @sha256:<hex> or :<tag>.
+key() {
+  local ref=${1#docker://}
+  case $ref in
+    *@*) echo "@${ref##*@}" ;;
+    *) echo ":${ref##*:}" ;;
+  esac
+}
 case $1 in
   copy)
     [ "${FAKE_SKOPEO:-}" != fail_copy ] || { echo "fake skopeo: copy failed" >&2; exit 1; }
@@ -86,16 +99,16 @@ case $1 in
     for arg in "$@"; do
       case $arg in
         oci:*) src=${arg#oci:} ;;
-        docker://*) dst=${arg#docker://} ;;
+        docker://*) dst=$arg ;;
       esac
     done
     digest=$(jq -r '.manifests[0].digest' "$src/index.json")
-    cp "$src/blobs/sha256/${digest#sha256:}" "$reg/${dst##*:}"
+    cp "$src/blobs/sha256/${digest#sha256:}" "$reg/$(key "$dst")"
+    echo "$(key "$dst")" >>"$reg/pushed"
     ;;
   inspect)
-    ref=${*: -1}
-    ref=${ref#docker://}
-    cat "$reg/${ref##*:}"
+    [ "${FAKE_SKOPEO:-}" != fail_inspect ] || { echo "fake skopeo: inspect failed" >&2; exit 1; }
+    cat "$reg/$(key "${*: -1}")"
     [ "${FAKE_SKOPEO:-}" != serve_other ] || printf ' '
     ;;
   *) echo "fake skopeo: unexpected $*" >&2; exit 2 ;;
@@ -104,35 +117,41 @@ FAKE
   chmod +x fakebin/skopeo
 }
 
-# Runs push-image.sh with the fake skopeo on release ./release/<tag>.
+# Runs push-image.sh with the fake skopeo on release ./release/<tag> and
+# layout ./layout-<tag>.
 push() {
   local tag=${1:-v1.2.3}
   PATH="$PWD/fakebin:$PATH" FAKE_REGISTRY="$PWD/registry" \
-    "$here/push-image.sh" "release/$tag" key.pub "$REPO"
+    "$here/push-image.sh" "release/$tag" key.pub "layout-$tag" "$REPO"
 }
 
-# The skopeo commands that pushed, one per line: "<tag>".
-pushed_tags() {
-  if [ -f registry/calls ]; then
-    sed -n "s|^copy .* docker://$REPO:\([^ ]*\)\$|\1|p" registry/calls
+# What was pushed, in order, on one line: @sha256:<hex> or :<tag> each.
+pushed() {
+  if [ -f registry/pushed ]; then
+    tr '\n' ' ' <registry/pushed | sed 's/ $//'
   fi
 }
 
-test_pushes_the_signed_digest_as_the_tag_and_latest() {
+# The signed digest of ./release/<tag>.
+signed_digest() {
+  cat "release/${1:-v1.2.3}/oskac-image-digest"
+}
+
+test_pushes_the_signed_digest_then_tags_it_and_latest() {
   signed_release v1.2.3
   fake_skopeo
   push v1.2.3 >out
-  [ "$(pushed_tags | tr '\n' ' ')" = "v1.2.3 latest " ] ||
-    fail "pushed $(pushed_tags | tr '\n' ' ')"
   local signed
-  signed=$(cat release/v1.2.3/oskac-image-digest)
-  for tag in v1.2.3 latest; do
-    [ "sha256:$(sha256sum <"registry/$tag" | cut -c1-64)" = "$signed" ] ||
-      fail "$tag does not hold the signed image index"
+  signed=$(signed_digest)
+  [ "$(pushed)" = "@$signed :v1.2.3 :latest" ] || fail "pushed $(pushed)"
+  for ref in "@$signed" :v1.2.3 :latest; do
+    [ "sha256:$(sha256sum <"registry/$ref" | cut -c1-64)" = "$signed" ] ||
+      fail "$ref does not hold the signed image index"
   done
-  # Every image of the index, both processors, with the bytes unchanged.
-  grep -q -- '^copy .*--all .*--preserve-digests ' registry/calls ||
-    fail "did not copy every image with its digests kept: $(cat registry/calls)"
+  # Every image of the index, both processors, with the bytes unchanged,
+  # from the layout assemble.sh wrote.
+  [ "$(grep -c -- "^copy --all --preserve-digests oci:layout-v1.2.3 docker://$REPO" registry/calls)" = 3 ] ||
+    fail "did not copy the layout with every image and its digests kept: $(cat registry/calls)"
   grep -qF "$REPO@$signed" out || fail "does not print the pullable reference: $(cat out)"
 }
 
@@ -140,12 +159,37 @@ test_a_pre_release_does_not_move_latest() {
   signed_release v1.3.0-rc.1
   fake_skopeo
   push v1.3.0-rc.1 >/dev/null
-  [ "$(pushed_tags | tr '\n' ' ')" = "v1.3.0-rc.1 " ] ||
-    fail "pushed $(pushed_tags | tr '\n' ' ')"
+  [ "$(pushed)" = "@$(signed_digest v1.3.0-rc.1) :v1.3.0-rc.1" ] || fail "pushed $(pushed)"
 }
 
-# The registry ends up serving bytes the signature does not cover: the
-# release fails, and latest never moves to them.
+# A patch for an older line (v1.2.3 after v2.0.0): the signed release index
+# still names v2.0.0, so latest stays where it is, as the index does.
+test_an_older_release_does_not_move_latest_back() {
+  ssh-keygen -q -t ed25519 -N '' -C push-image-test -f key
+  mkdir site
+  "$here/sign-index.sh" --tag v2.0.0 key key.pub "file://$PWD/no-site" site >/dev/null
+  signed_release v1.2.3
+  [ "$(jq -r .latest.tag release/v1.2.3/release-index.json)" = v2.0.0 ] || fail "the index moved back"
+  fake_skopeo
+  push v1.2.3 >/dev/null
+  [ "$(pushed)" = "@$(signed_digest) :v1.2.3" ] || fail "pushed $(pushed)"
+}
+
+# The index decides latest, so one that does not verify stops the push.
+test_refuses_a_release_index_that_does_not_verify() {
+  signed_release v1.2.3
+  fake_skopeo
+  ssh-keygen -q -t ed25519 -N '' -C attacker -f attacker
+  rm release/v1.2.3/release-index.json.sig
+  ssh-keygen -q -Y sign -f attacker -n oska-index release/v1.2.3/release-index.json
+  if push v1.2.3 2>err; then
+    fail "pushed with an index by another key"
+  fi
+  [ -z "$(pushed)" ] || fail "pushed $(pushed)"
+}
+
+# The registry serves other bytes for the digest just pushed: the release
+# fails before any public tag names them.
 test_refuses_when_the_pushed_digest_differs_from_the_signed_one() {
   signed_release v1.2.3
   fake_skopeo
@@ -153,49 +197,63 @@ test_refuses_when_the_pushed_digest_differs_from_the_signed_one() {
     fail "passed with a pushed digest the signature does not cover"
   fi
   grep -q 'not the signed' err || fail "error does not say why: $(cat err)"
-  [ "$(pushed_tags | tr '\n' ' ')" = "v1.2.3 " ] ||
-    fail "went on after the mismatch: pushed $(pushed_tags | tr '\n' ' ')"
+  [ "$(pushed)" = "@$(signed_digest)" ] || fail "went on to tag it: pushed $(pushed)"
 }
 
-# The signed digest names another image than the signed musl builds make,
-# for example one built from other binaries: nothing is pushed.
-test_refuses_an_image_the_signed_musl_builds_do_not_rebuild_to() {
+test_refuses_when_the_registry_cannot_be_read_back() {
   signed_release v1.2.3
   fake_skopeo
-  local other
-  other=$(SOURCE_DATE_EPOCH=1 "$here/image.sh" builds/oskac-linux-x86_64-musl \
-    builds/oskac-linux-aarch64-musl other-layout)
-  printf '%s\n' "$other" >release/v1.2.3/oskac-image-digest
-  rm release/v1.2.3/SHA256SUMS.sig
-  {
-    head -n 1 release/v1.2.3/SHA256SUMS
-    (cd release/v1.2.3 && find . -maxdepth 1 -name 'oskac-*' -printf '%P\n' |
-      LC_ALL=C sort | xargs sha256sum --)
-  } >sums
-  mv sums release/v1.2.3/SHA256SUMS
-  ssh-keygen -q -Y sign -f key -n oska-release release/v1.2.3/SHA256SUMS
+  if FAKE_SKOPEO=fail_inspect push v1.2.3 2>err; then
+    fail "passed without reading the push back"
+  fi
+  grep -q 'cannot read' err || fail "error does not say why: $(cat err)"
+  [ "$(pushed)" = "@$(signed_digest)" ] || fail "went on to tag it: pushed $(pushed)"
+}
+
+# A layout that is not the signed image (built from other inputs, here
+# another SOURCE_DATE_EPOCH): nothing is pushed.
+test_refuses_a_layout_that_is_not_the_signed_image() {
+  signed_release v1.2.3
+  fake_skopeo
+  rm -r layout-v1.2.3
+  SOURCE_DATE_EPOCH=1 "$here/image.sh" builds/oskac-linux-x86_64-musl \
+    builds/oskac-linux-aarch64-musl layout-v1.2.3 >/dev/null
   if push v1.2.3 2>err; then
-    fail "pushed an image the musl builds do not rebuild to"
+    fail "pushed a layout that is not the signed image"
   fi
-  grep -q 'rebuild' err || fail "error does not say why: $(cat err)"
-  [ -z "$(pushed_tags)" ] || fail "pushed $(pushed_tags)"
+  grep -q 'not the signed' err || fail "error does not say why: $(cat err)"
+  [ -z "$(pushed)" ] || fail "pushed $(pushed)"
 }
 
-# The same image, rebuilt with another SOURCE_DATE_EPOCH (not the tag's
-# commit time), is another digest: refused, nothing pushed.
-test_refuses_when_the_source_date_is_not_the_one_the_release_used() {
-  signed_release v1.2.3
-  fake_skopeo
-  if SOURCE_DATE_EPOCH=1795132801 push v1.2.3 2>err; then
-    fail "pushed with another SOURCE_DATE_EPOCH"
-  fi
-  [ -z "$(pushed_tags)" ] || fail "pushed $(pushed_tags)"
+# The signed index, but a blob under it changed (another binary in a
+# layer), or a second entry in index.json: nothing is pushed.
+test_refuses_a_layout_with_a_changed_blob_or_a_second_image() {
+  local case blob
+  for case in changed_blob second_entry; do
+    rm -rf release registry builds layout-v1.2.3
+    signed_release v1.2.3
+    fake_skopeo
+    case $case in
+      changed_blob)
+        blob=$(find layout-v1.2.3/blobs/sha256 -type f -size +1k | head -n 1)
+        printf 'evil' >>"$blob"
+        ;;
+      second_entry)
+        jq '.manifests += [.manifests[0]]' layout-v1.2.3/index.json >index.json
+        mv index.json layout-v1.2.3/index.json
+        ;;
+    esac
+    if push v1.2.3 2>err; then
+      fail "$case: pushed"
+    fi
+    [ -z "$(pushed)" ] || fail "$case: pushed $(pushed)"
+  done
 }
 
 test_refuses_a_release_that_does_not_verify() {
   local case
   for case in tampered_binary other_key unsigned_file no_signature; do
-    rm -rf release registry builds key key.pub other other.pub
+    rm -rf release registry builds layout-v1.2.3 key key.pub other other.pub
     signed_release v1.2.3
     fake_skopeo
     case $case in
@@ -211,8 +269,30 @@ test_refuses_a_release_that_does_not_verify() {
     if push v1.2.3 2>err; then
       fail "$case: pushed from a release that does not verify"
     fi
-    [ -z "$(pushed_tags)" ] || fail "$case: pushed $(pushed_tags)"
+    [ -z "$(pushed)" ] || fail "$case: pushed $(pushed)"
   done
+}
+
+# A release signed for a name that is no release tag, such as latest, would
+# push over that tag: refused even though its signature is good.
+test_refuses_a_release_not_named_for_a_release_tag() {
+  signed_release v1.2.3
+  fake_skopeo
+  local name
+  for name in latest v1.2 1.2.3 v1.2.3-; do
+    rm -rf "release/$name" "layout-$name"
+    cp -R release/v1.2.3 "release/$name"
+    cp -R layout-v1.2.3 "layout-$name"
+    rm "release/$name/release-index.json" "release/$name/release-index.json.sig" "release/$name/SHA256SUMS.sig"
+    sed -i "1s/.*/# oska-release $name/" "release/$name/SHA256SUMS"
+    ssh-keygen -q -Y sign -f key -n oska-release "release/$name/SHA256SUMS"
+    "$here/verify.sh" "release/$name" key.pub || fail "$name: the re-signed release does not verify"
+    if push "$name" 2>err; then
+      fail "pushed from release/$name"
+    fi
+    grep -q 'not named for a release tag' err || fail "$name: error does not say why: $(cat err)"
+  done
+  [ -z "$(pushed)" ] || fail "pushed $(pushed)"
 }
 
 test_refuses_a_release_with_no_image_digest() {
@@ -230,7 +310,7 @@ test_refuses_a_release_with_no_image_digest() {
     fail "pushed with no signed digest"
   fi
   grep -q oskac-image-digest err || fail "error does not name the digest file: $(cat err)"
-  [ -z "$(pushed_tags)" ] || fail "pushed $(pushed_tags)"
+  [ -z "$(pushed)" ] || fail "pushed $(pushed)"
 }
 
 test_a_failed_copy_fails_the_push() {
@@ -239,7 +319,7 @@ test_a_failed_copy_fails_the_push() {
   if FAKE_SKOPEO=fail_copy push v1.2.3 2>err; then
     fail "passed with a failed copy"
   fi
-  [ -z "$(sed -n '/^copy .*:latest$/p' registry/calls)" ] || fail "went on to latest"
+  [ "$(grep -c '^copy ' registry/calls)" = 1 ] || fail "went on after the failed copy: $(cat registry/calls)"
 }
 
 test_refuses_a_bad_repository_or_missing_skopeo() {
@@ -248,22 +328,22 @@ test_refuses_a_bad_repository_or_missing_skopeo() {
   local bad
   for bad in '' 'ghcr.io/x/y:tag' 'ghcr.io/x/y@sha256:00' 'ghcr.io/X/y' '-ghcr.io/x' 'ghcr.io/x y'; do
     if PATH="$PWD/fakebin:$PATH" FAKE_REGISTRY="$PWD/registry" \
-      "$here/push-image.sh" release/v1.2.3 key.pub "$bad" 2>/dev/null; then
+      "$here/push-image.sh" release/v1.2.3 key.pub layout-v1.2.3 "$bad" 2>/dev/null; then
       fail "accepted the repository '$bad'"
     fi
   done
-  [ -z "$(pushed_tags)" ] || fail "pushed $(pushed_tags)"
+  [ -z "$(pushed)" ] || fail "pushed $(pushed)"
   # No skopeo at all: refused, not skipped. PATH keeps only what the
   # script needs besides skopeo.
   mkdir nobin
   local tool
   for tool in bash env jq sha256sum ssh-keygen head tail wc od tr cut awk sort find cp mv \
-    rm mkdir mktemp basename dirname cat grep ls printf xargs; do
+    rm mkdir mktemp basename dirname cat grep ls printf xargs date sed; do
     if command -v "$tool" >/dev/null 2>&1 && [ -x "$(command -v "$tool")" ]; then
       ln -sf "$(command -v "$tool")" "nobin/$tool"
     fi
   done
-  if PATH="$PWD/nobin" "$here/push-image.sh" release/v1.2.3 key.pub "$REPO" 2>err; then
+  if PATH="$PWD/nobin" "$here/push-image.sh" release/v1.2.3 key.pub layout-v1.2.3 "$REPO" 2>err; then
     fail "passed with no skopeo"
   fi
   grep -q skopeo err || fail "error does not name skopeo: $(cat err)"

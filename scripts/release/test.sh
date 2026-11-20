@@ -115,6 +115,29 @@ test_assemble_signs_the_digest_of_the_image_built_from_its_musl_builds() {
   [ "$(cat out/v1.2.4/oskac-image-digest)" != "$digest" ] || fail "the digest ignores the aarch64 musl build"
 }
 
+# assemble.sh signs what image.sh prints, so anything but one digest (a tag,
+# an empty line, two digests, a digest with text after it) is refused, and
+# no release is written.
+test_assemble_refuses_an_image_builder_that_prints_no_digest() {
+  fake_builds
+  mkdir scripts
+  cp "$here/assemble.sh" scripts/
+  local printed hex=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  for printed in latest '' "sha256:$hex"$'\n'"sha256:$hex" "sha256:$hex x" "sha256:${hex}0" "sha512:$hex"; do
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" %q\n' "$printed" >scripts/image.sh
+    chmod +x scripts/image.sh
+    if scripts/assemble.sh v1.2.3 builds out 2>err; then
+      fail "assembled with image.sh printing '$printed'"
+    fi
+    grep -q 'not a digest' err || fail "error does not say why: $(cat err)"
+    [ ! -e out/v1.2.3 ] || fail "left a release directory behind"
+  done
+  # The fake itself works: with a digest it assembles.
+  printf '#!/usr/bin/env bash\necho sha256:%s\n' "$hex" >scripts/image.sh
+  scripts/assemble.sh v1.2.3 builds out
+  [ "$(cat out/v1.2.3/oskac-image-digest)" = "sha256:$hex" ] || fail "the fake image.sh is not used"
+}
+
 test_assemble_refuses_to_build_the_image_without_a_source_date() {
   fake_builds
   if SOURCE_DATE_EPOCH='' "$here/assemble.sh" v1.2.3 builds out 2>err; then
@@ -273,6 +296,20 @@ test_verify_refuses_a_signed_image_digest_that_is_not_one_sha256_digest() {
   if "$here/verify.sh" out/v1.2.3 key.pub 2>/dev/null; then
     fail "verified a digest file with no newline"
   fi
+}
+
+# A symlink in place of the digest file would let what it points at, outside
+# what was signed, change after verifying: refused even when it resolves to
+# the signed bytes.
+test_verify_refuses_an_image_digest_that_is_a_symlink() {
+  signed_release v1.2.3
+  mv out/v1.2.3/oskac-image-digest real-digest
+  ln -s "$PWD/real-digest" out/v1.2.3/oskac-image-digest
+  (cd out/v1.2.3 && sha256sum --check --strict --quiet SHA256SUMS) || fail "the link does not match SHA256SUMS"
+  if "$here/verify.sh" out/v1.2.3 key.pub 2>err; then
+    fail "verified a digest file that is a symlink"
+  fi
+  grep -q 'not a regular file' err || fail "error does not say why: $(cat err)"
 }
 
 # Releases before the image (v0.5.0 and older) have no digest file and
@@ -972,7 +1009,7 @@ test_only_the_publish_job_can_write_packages() {
   local workflows=$here/../../.github/workflows file found=
   for file in "$workflows"/*.yml; do
     if grep -Eq '^permissions:.*(packages|write-all)' "$file" ||
-      awk '/^permissions:/ {p = 1; next} /^[^ ]/ {p = 0} p && /packages/' "$file" | grep -q .; then
+      [ -n "$(awk '/^permissions:/ {p = 1; next} /^[^ ]/ {p = 0} p && /packages/' "$file")" ]; then
       fail "$(basename "$file") gives packages access to every job"
     fi
     while read -r job; do
@@ -992,8 +1029,13 @@ test_the_image_is_pushed_only_after_signing_and_before_publishing() {
   grep -q '^    needs: sign$' <<<"$publish" || fail "publish does not need sign"
   grep -q '^    if: github.event_name == '"'push'"'$' <<<"$publish" || fail "publish runs on a pull request"
   # shellcheck disable=SC2016 # the workflow's own text, not expanded here
-  grep -qF 'scripts/release/push-image.sh "release/$TAG" site/oska-release.pub ghcr.io/aparsons/oskac' <<<"$publish" ||
+  grep -qF 'scripts/release/push-image.sh "release/$TAG" site/oska-release.pub image ghcr.io/aparsons/oskac' <<<"$publish" ||
     fail "publish does not push with push-image.sh from the signed release"
+  grep -q '^          name: image-layout$' <<<"$publish" || fail "publish does not push the layout assemble wrote"
+  # No package is installed in a job that holds write tokens.
+  if grep -Eq 'apt-get|apt install|pip install|npm install|curl' <<<"$publish"; then
+    fail "publish installs software"
+  fi
   local push create
   push=$(grep -n 'push-image.sh' <<<"$publish" | head -n 1 | cut -d: -f1)
   create=$(grep -n 'gh release create' <<<"$publish" | head -n 1 | cut -d: -f1)
