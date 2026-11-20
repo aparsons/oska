@@ -5239,6 +5239,16 @@ pub fn test_printed(t: TestContext) -> List<String> {
     word_list(35)
 }
 
+// `TestContext.assert_snapshot`: the value's `dbg` text, `value`, goes to
+// stdout for `oskac` to compare with its snapshot, after `head` (`\x0e`
+// and the assertion's span, `start..end `), its length in bytes and a
+// line break.
+pub fn test_snapshot(head: String, value: String) {
+    let length = int_text(text_length(rt_mem_text(value)), false)
+    let _ = write_text(1, "{head}{length}\n")
+    let _ = write_text(1, value)
+}
+
 // Write the `count` bytes at `data` to stderr, each line after the
 // test's prefix: 0, or the negative `errno` of the write that failed.
 fn test_stderr(data: Int, count: Int) -> Int {

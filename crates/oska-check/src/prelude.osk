@@ -260,6 +260,12 @@ impl TestContext {
     pub fn assert_eq<T: Eq>(self, actual: T, expected: T)
     pub fn assert_ne<T: Eq>(self, actual: T, other: T)
     pub fn fail(self, message: String)
+    // Compare `value`, rendered as `dbg` renders it, with its stored
+    // snapshot, `snapshots/<test-file>/<test-name>.snap`. The test runner
+    // reads and writes the file, after the test has run: a missing or
+    // different snapshot fails the test, and `oskac test --update`
+    // writes it instead.
+    pub fn assert_snapshot<T>(self, value: T)
     // Every line printed to `stdout` so far in this test, one per
     // `println`, without its line break.
     pub fn printed(self) -> List<Untrusted<String>>

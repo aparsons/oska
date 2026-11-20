@@ -8,8 +8,9 @@
 //! runs once per test, in source order, given the test's number: one
 //! process per test, so each starts on a fresh test host and a panic stops
 //! only its own test. A process inherits stderr, where the test's `dbg`
-//! lines go, prefixed with its name; its stdout carries only its panic's
-//! report (`oska_native::test_failure`). An `#[integration]` test runs
+//! lines go, prefixed with its name; its stdout carries only what its
+//! snapshot assertions were given (`oska_native::snapshot_records`) and
+//! then its panic's report (`oska_native::test_failure`). An `#[integration]` test runs
 //! only when asked, and is skipped otherwise without starting a process.
 //! A test `--filter` leaves out starts no process and is not reported.
 //! A test's duration is the time its process took, from start to exit,
@@ -23,7 +24,7 @@ use std::process::{Command, ExitCode, Stdio};
 use std::time::Instant;
 
 use oska_check::program::Program;
-use oska_run::{test_duration_ms, TestOptions, TestReport, TestResult, TestStatus};
+use oska_run::{test_duration_ms, test_result, TestOptions, TestReport, TestStatus};
 use oska_syntax::{Diagnostic, Span};
 
 use crate::cache::Cached;
@@ -71,35 +72,31 @@ pub fn test_program(
         .filter(|(_, test)| options.selects(&test.name))
         .map(|(index, test)| {
             let started = Instant::now();
-            let (status, failure) = if test.integration && !options.integration {
-                (TestStatus::Skipped, None)
+            let (outcome, recorded) = if test.integration && !options.integration {
+                (None, Vec::new())
             } else {
-                match run_one(exe.path(), index) {
-                    None => (TestStatus::Passed, None),
-                    Some(failure) => (TestStatus::Failed, Some(failure)),
-                }
+                let (failure, recorded) = run_one(exe.path(), index);
+                (Some(failure.map_or(Ok(()), Err)), recorded)
+            };
+            let status = match outcome {
+                None => TestStatus::Skipped,
+                Some(_) => TestStatus::Passed,
             };
             let duration_ms = test_duration_ms(status, started);
-            TestResult {
-                name: test.name.clone(),
-                module: None,
-                span: test.span,
-                status,
-                duration_ms,
-                failure,
-            }
+            test_result(test, outcome, recorded, duration_ms)
         })
         .collect();
     Tested::Report(TestReport {
         tests,
         diagnostics: Vec::new(),
         filtered: options.filtered(program),
+        snapshots: None,
     })
 }
 
 /// Run test `index` of the test executable at `exe`: why it failed, or
-/// `None` when it passed.
-fn run_one(exe: &Path, index: usize) -> Option<Diagnostic> {
+/// `None` when it passed, and what its snapshot assertions recorded.
+fn run_one(exe: &Path, index: usize) -> (Option<Diagnostic>, Vec<(Span, String)>) {
     let output = Command::new(exe)
         .arg(index.to_string())
         .stdin(Stdio::null())
@@ -108,21 +105,39 @@ fn run_one(exe: &Path, index: usize) -> Option<Diagnostic> {
         .output();
     let output = match output {
         Ok(output) => output,
-        Err(err) => return Some(abnormal(&format!("could not start: {err}"))),
+        Err(err) => {
+            return (
+                Some(abnormal(&format!("could not start: {err}"))),
+                Vec::new(),
+            )
+        }
     };
-    match output.status.code() {
-        Some(0) if output.stdout.is_empty() => None,
-        Some(101) => oska_native::test_failure(&output.stdout).or_else(|| {
+    let Some((recorded, report)) = oska_native::snapshot_records(&output.stdout) else {
+        let what = format!(
+            "wrote a snapshot record that is not one: {:?}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        return (Some(abnormal(&what)), Vec::new());
+    };
+    (failure(output.status, report), recorded)
+}
+
+/// Why a test process that ended with `status` failed, from `report`, what
+/// it wrote to stdout after its snapshot records, or `None` when it passed.
+fn failure(status: std::process::ExitStatus, report: &[u8]) -> Option<Diagnostic> {
+    match status.code() {
+        Some(0) if report.is_empty() => None,
+        Some(101) => oska_native::test_failure(report).or_else(|| {
             Some(abnormal(&format!(
                 "panicked with a report that is not one: {:?}",
-                String::from_utf8_lossy(&output.stdout)
+                String::from_utf8_lossy(report)
             )))
         }),
         Some(0) => Some(abnormal(&format!(
             "passed but printed {:?}",
-            String::from_utf8_lossy(&output.stdout)
+            String::from_utf8_lossy(report)
         ))),
-        _ => Some(abnormal(&ending(output.status))),
+        _ => Some(abnormal(&ending(status))),
     }
 }
 
@@ -180,7 +195,7 @@ mod tests {
         std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).expect("the script");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
             .expect("making the script executable");
-        let failure = run_one(&path, 0);
+        let (failure, _) = run_one(&path, 0);
         let _ = std::fs::remove_file(&path);
         failure
     }

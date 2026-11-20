@@ -48,6 +48,10 @@ pub mod codes {
     pub const ASSERT_NE_FAILED: &str = "P0012";
     /// `t.fail(message)` was called.
     pub const TEST_FAILED: &str = "P0013";
+    /// `t.assert_snapshot(value)` found no stored snapshot, or one that
+    /// differs from the value, or ran other than once, directly in its
+    /// test's body. The test runner reports it, after the test has run.
+    pub const SNAPSHOT_FAILED: &str = "P0014";
     /// `Env.secret` asked for a variable the environment does not set.
     pub const MISSING_SECRET: &str = "P0020";
     /// Calls nested deeper than the interpreter allows: runaway recursion.
@@ -89,6 +93,7 @@ pub mod codes {
         ASSERT_EQ_FAILED,
         ASSERT_NE_FAILED,
         TEST_FAILED,
+        SNAPSHOT_FAILED,
         MISSING_SECRET,
         CALL_DEPTH_EXCEEDED,
         SLICE_OUT_OF_BOUNDS,

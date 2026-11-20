@@ -34,6 +34,7 @@ use crate::interp::Interpreter;
 use crate::intrinsics::Intrinsic::{HigherOrder, Plain};
 use crate::intrinsics::{debug, Table};
 use crate::panics::{codes, Panic};
+use crate::snapshots::{numbered, Snapshot, Written, ASSERT_SNAPSHOT};
 use crate::value::{Capability, Value};
 use crate::{on_interpreter_stack, support, unimplemented_module, UNSUPPORTED_EXIT_CODE};
 
@@ -119,6 +120,10 @@ pub struct TestResult {
     /// Why a failed test failed: the panic that stopped it, shaped like a
     /// diagnostic, with a `P`-code and the span where it happened.
     pub failure: Option<Diagnostic>,
+    /// What its snapshot assertions were given, in the order they ran,
+    /// for the test runner to compare with their files
+    /// ([`crate::snapshots::settle`]).
+    pub snapshots: Vec<Snapshot>,
 }
 
 impl TestResult {
@@ -143,6 +148,8 @@ pub struct TestReport {
     /// The `--filter` and how many tests it left out, or `None` without
     /// a filter.
     pub filtered: Option<Filtered>,
+    /// The snapshots `--update` wrote, or `None` without `--update`.
+    pub snapshots: Option<Vec<Written>>,
 }
 
 impl TestReport {
@@ -198,7 +205,19 @@ impl TestReport {
                     .location
                     .as_ref()
                     .map_or_else(|| path.to_string(), |l| l.to_string());
-                let line = format!("test {name}: {place}: {failure}");
+                // A snapshot's difference follows its message's first
+                // line: it is printed a line each, after the call stack.
+                let (head, difference) = match failure.message.split_once('\n') {
+                    Some((head, difference)) if failure.code == codes::SNAPSHOT_FAILED => {
+                        (head, Some(difference))
+                    }
+                    _ => (failure.message.as_str(), None),
+                };
+                let shown = Diagnostic {
+                    message: head.to_string(),
+                    ..failure.clone()
+                };
+                let line = format!("test {name}: {place}: {shown}");
                 out.push_str(&escape_control(&line));
                 out.push('\n');
                 // The call stack, a line a frame, each escaped.
@@ -208,6 +227,21 @@ impl TestReport {
                         out.push('\n');
                     }
                 }
+                for line in difference.iter().flat_map(|d| d.split('\n')) {
+                    out.push_str("    ");
+                    out.push_str(&escape_control(line));
+                    out.push('\n');
+                }
+            }
+        }
+        if let Some(written) = self.snapshots.as_ref().filter(|w| !w.is_empty()) {
+            out.push_str("\nsnapshots written:\n");
+            for snapshot in written {
+                out.push_str(&format!(
+                    "{} {}\n",
+                    snapshot.status(),
+                    escape_control(&snapshot.path)
+                ));
             }
         }
         out.push_str(&format!(
@@ -220,6 +254,10 @@ impl TestReport {
         if let Some(filtered) = &self.filtered {
             out.push_str(&format!(", {} filtered out", filtered.left_out));
         }
+        if let Some(written) = &self.snapshots {
+            let plural = if written.len() == 1 { "" } else { "s" };
+            out.push_str(&format!(", {} snapshot{plural} written", written.len()));
+        }
         out.push('\n');
         out
     }
@@ -230,7 +268,9 @@ impl TestReport {
     /// A test's `duration_ms` is an integer, the milliseconds it took; its
     /// `failure` is a diagnostic object, or `null` when it did not fail;
     /// `module` is there only for a test in a package. With `--filter`,
-    /// `"filtered":n` after `skipped` counts the tests it left out.
+    /// `"filtered":n` after `skipped` counts the tests it left out. With
+    /// `--update`, `"snapshots":[{"path":...,"status":...}]` after those
+    /// lists the snapshots it wrote, each `new` or `changed`.
     pub fn to_json(&self) -> String {
         let tests: Vec<String> = self
             .tests
@@ -255,8 +295,21 @@ impl TestReport {
             .filtered
             .as_ref()
             .map_or_else(String::new, |f| format!(",\"filtered\":{}", f.left_out));
+        let snapshots = self.snapshots.as_ref().map_or_else(String::new, |written| {
+            let written: Vec<String> = written
+                .iter()
+                .map(|w| {
+                    format!(
+                        "{{\"path\":\"{}\",\"status\":\"{}\"}}",
+                        json_escape(&w.path),
+                        w.status()
+                    )
+                })
+                .collect();
+            format!(",\"snapshots\":[{}]", written.join(","))
+        });
         format!(
-            "{{\"tests\":[{}],\"passed\":{},\"failed\":{},\"skipped\":{}{filtered},\"diagnostics\":[{}]}}",
+            "{{\"tests\":[{}],\"passed\":{},\"failed\":{},\"skipped\":{}{filtered}{snapshots},\"diagnostics\":[{}]}}",
             tests.join(","),
             self.count(TestStatus::Passed),
             self.count(TestStatus::Failed),
@@ -292,6 +345,7 @@ pub fn test(src: &str, host: &mut dyn Host, options: TestOptions) -> TestReport 
             tests: Vec::new(),
             diagnostics: report.diagnostics,
             filtered: None,
+            snapshots: None,
         };
     };
     test_program(&program, host, options)
@@ -312,6 +366,7 @@ pub fn test_program(program: &Program, host: &mut dyn Host, options: TestOptions
             tests: Vec::new(),
             diagnostics: vec![refusal],
             filtered: None,
+            snapshots: None,
         };
     }
     let tests = program
@@ -323,33 +378,68 @@ pub fn test_program(program: &Program, host: &mut dyn Host, options: TestOptions
             let outcome = match (test.integration, options.integration) {
                 (false, _) => Some(on_interpreter_stack(|| {
                     let world = Some(FakeHost::new());
-                    run_one(program, test, &mut TestHost::new(world, &mut *host, test))
+                    let mut host = TestHost::new(world, &mut *host, test);
+                    let outcome = run_one(program, test, &mut host);
+                    (outcome, host.snapshots)
                 })),
                 (true, true) => Some(on_interpreter_stack(|| {
-                    run_one(program, test, &mut TestHost::new(None, &mut *host, test))
+                    let mut host = TestHost::new(None, &mut *host, test);
+                    let outcome = run_one(program, test, &mut host);
+                    (outcome, host.snapshots)
                 })),
                 (true, false) => None,
             };
-            let (status, failure) = match outcome {
-                None => (TestStatus::Skipped, None),
-                Some(Ok(())) => (TestStatus::Passed, None),
-                Some(Err(panic)) => (TestStatus::Failed, Some(panic.into_diagnostic())),
+            let (outcome, recorded) = match outcome {
+                None => (None, Vec::new()),
+                Some((outcome, recorded)) => {
+                    (Some(outcome.map_err(Panic::into_diagnostic)), recorded)
+                }
             };
-            let duration_ms = test_duration_ms(status, started);
-            TestResult {
-                name: test.name.clone(),
-                module: None,
-                span: test.span,
-                status,
-                duration_ms,
-                failure,
-            }
+            let duration_ms = test_duration_ms(
+                if outcome.is_some() {
+                    TestStatus::Passed
+                } else {
+                    TestStatus::Skipped
+                },
+                started,
+            );
+            test_result(test, outcome, recorded, duration_ms)
         })
         .collect();
     TestReport {
         tests,
         diagnostics: Vec::new(),
         filtered: options.filtered(program),
+        snapshots: None,
+    }
+}
+
+/// The result of `test`, which ran for `duration_ms` and ended with
+/// `outcome`, `Err` with its panic, or was skipped (`None`), recording
+/// the snapshots `recorded` (each assertion's span and value, in the
+/// order they ran). A snapshot assertion that is not numbered by its
+/// place fails the test ([`crate::snapshots::numbered`]), before a panic
+/// that came after it. Each backend calls it as its test ends.
+pub fn test_result(
+    test: &Test,
+    outcome: Option<Result<(), Diagnostic>>,
+    recorded: Vec<(Span, String)>,
+    duration_ms: u64,
+) -> TestResult {
+    let (status, failure, snapshots) = match (outcome, numbered(test, recorded)) {
+        (None, _) => (TestStatus::Skipped, None, Vec::new()),
+        (Some(_), Err(misplaced)) => (TestStatus::Failed, Some(misplaced), Vec::new()),
+        (Some(Ok(())), Ok(snapshots)) => (TestStatus::Passed, None, snapshots),
+        (Some(Err(failure)), Ok(snapshots)) => (TestStatus::Failed, Some(failure), snapshots),
+    };
+    TestResult {
+        name: test.name.clone(),
+        module: None,
+        span: test.span,
+        status,
+        duration_ms,
+        failure,
+        snapshots,
     }
 }
 
@@ -405,6 +495,8 @@ struct TestHost<'h> {
     /// `[name] `, the name escaped.
     prefix: String,
     printed: Vec<String>,
+    /// What each snapshot assertion was given, with its span, in order.
+    snapshots: Vec<(Span, String)>,
     /// Whether the next stderr text starts a line.
     line_start: bool,
 }
@@ -416,6 +508,7 @@ impl<'h> TestHost<'h> {
             given,
             prefix: format!("[{}] ", escape_control(&test.name)),
             printed: Vec::new(),
+            snapshots: Vec::new(),
             line_start: true,
         }
     }
@@ -437,6 +530,10 @@ impl Host for TestHost<'_> {
 
     fn printed(&self) -> Vec<String> {
         self.printed.clone()
+    }
+
+    fn record_snapshot(&mut self, span: Span, value: String) {
+        self.snapshots.push((span, value));
     }
 
     fn write_stderr(&mut self, text: &str) -> io::Result<()> {
@@ -517,6 +614,7 @@ pub const INTRINSICS: Table = &[
     ("TestContext.assert", Plain(assert)),
     ("TestContext.fail", Plain(fail)),
     ("TestContext.printed", Plain(printed)),
+    (ASSERT_SNAPSHOT, Plain(assert_snapshot)),
     ("TestContext.assert_eq", HigherOrder(assert_eq)),
     ("TestContext.assert_ne", HigherOrder(assert_ne)),
 ];
@@ -543,6 +641,13 @@ fn fail(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> 
 fn printed(host: &mut dyn Host, _: Vec<Value>, _: Span) -> Result<Value, Panic> {
     let lines = host.printed().iter().map(|l| Value::str(l)).collect();
     Ok(Value::List(std::rc::Rc::new(lines)))
+}
+
+/// `t.assert_snapshot(value)`: records `value`, as `dbg` renders it, for
+/// the test runner to compare with its snapshot after the test.
+fn assert_snapshot(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    host.record_snapshot(span, shown(&args[1]));
+    Ok(Value::Unit)
 }
 
 /// `t.assert_eq(actual, expected)`: fails the test when they differ.

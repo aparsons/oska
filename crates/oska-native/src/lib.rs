@@ -83,8 +83,9 @@ pub mod codes {
 
     /// The `P`-codes native code panics with: the interpreter's.
     /// `P0039` is never the program's own: `oskac` stops a native program
-    /// at its `--timeout` and reports it.
-    pub const PANICS: [&str; 20] = [
+    /// at its `--timeout` and reports it, and `P0014` is the test
+    /// runner's, after a test has run (`oska_run::snapshots`).
+    pub const PANICS: [&str; 21] = [
         "P0001",
         "P0002",
         "P0003",
@@ -96,6 +97,7 @@ pub mod codes {
         "P0011",
         "P0012",
         "P0013",
+        "P0014",
         "P0020",
         "P0021",
         "P0035",
@@ -201,7 +203,9 @@ pub fn build_limited(
 /// has it. Which host a test runs on is fixed when the executable is
 /// built, and a program's executable ([`build`]) has no test host at all.
 ///
-/// A test that passes exits with 0 and writes nothing to stdout. A test
+/// A test's snapshot assertions each write a record of what they were
+/// given to stdout as they run, which [`snapshot_records`] reads back.
+/// Then a test that passes exits with 0 and writes nothing more to stdout. A test
 /// that panics, an assertion included, exits with 101 after writing its
 /// panic's report to stdout, unlocated: `error[P....]: message (bytes
 /// a..b)` and a newline, the span in the program, which
@@ -215,6 +219,41 @@ pub fn build_tests(program: &Program, target: Target) -> Result<Vec<u8>, Diagnos
         lower::Entry::Tests,
         Limits::NONE,
     )
+}
+
+/// What starts each snapshot record a test executable writes to stdout.
+pub const SNAPSHOT_MARK: char = '\x0e';
+
+/// What one snapshot assertion of a test executable recorded: its span
+/// and the value's `dbg` text.
+pub type SnapshotRecord = (Span, String);
+
+/// The snapshot records at the start of a test executable's `stdout`
+/// ([`build_tests`]), each the span of its assertion and the value's
+/// `dbg` text, in the order they were written, and the rest of `stdout`:
+/// `None` when a record is cut short or malformed.
+///
+/// A record is [`SNAPSHOT_MARK`], the span, `start..end`, a space, the
+/// text's length in bytes, a newline, and then the text.
+pub fn snapshot_records(stdout: &[u8]) -> Option<(Vec<SnapshotRecord>, &[u8])> {
+    let mut records = Vec::new();
+    let mut rest = stdout;
+    while let Some(record) = rest.strip_prefix(&[SNAPSHOT_MARK as u8]) {
+        let line_end = record.iter().position(|&b| b == b'\n')?;
+        let head = std::str::from_utf8(&record[..line_end]).ok()?;
+        let (span, length) = head.split_once(' ')?;
+        let (start, end) = span.split_once("..")?;
+        let span = Span {
+            start: start.parse().ok()?,
+            end: end.parse().ok()?,
+        };
+        let length: usize = length.parse().ok()?;
+        let text = record.get(line_end + 1..)?;
+        let value = std::str::from_utf8(text.get(..length)?).ok()?;
+        records.push((span, value.to_string()));
+        rest = &text[length..];
+    }
+    Some((records, rest))
 }
 
 /// The panic a test executable's test reported on stdout ([`build_tests`]),
