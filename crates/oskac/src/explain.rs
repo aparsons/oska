@@ -268,12 +268,13 @@ fn indented(text: &str) -> String {
 /// holds for the code.
 pub fn to_json(entry: &Entry) -> String {
     format!(
-        "{{\"code\":{},\"message\":{},\"machine_fix\":{},\"machine_fix_description\":{},\"fix_applicability\":{},\"example\":{},\"fix\":{}}}",
+        "{{\"code\":{},\"message\":{},\"machine_fix\":{},\"machine_fix_description\":{},\"fix_applicability\":{},\"fix_applicability_note\":{},\"example\":{},\"fix\":{}}}",
         quote(&entry.code),
         quote(&entry.message),
         entry.machine_fix.is_some(),
         quote_option(entry.machine_fix.as_deref()),
         quote_option(entry.fix_applicability.as_deref()),
+        quote_option(entry.fix_applicability_note.as_deref()),
         quote_option(entry.example.as_deref()),
         quote_option(entry.fixed.as_deref()),
     )

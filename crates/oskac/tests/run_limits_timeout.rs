@@ -22,7 +22,8 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use common::run_limits::{assert_golden, oskac_in, program, report_lines, transcript, HELLO};
+use common::frames::without_frames;
+use common::run_limits::{assert_golden, oskac_in, program, transcript, HELLO};
 
 /// How long after its deadline a program may stop, as `docs/runtime.md`
 /// documents it.
@@ -60,7 +61,7 @@ fn a_program_that_loops_without_end_stops_at_the_deadline_with_p0039() {
             "{backend:?}: {stderr}"
         );
         assert_eq!(
-            report_lines(&stderr),
+            without_frames(&stderr).lines().count(),
             1,
             "{backend:?}: one report, {stderr}"
         );
@@ -171,7 +172,7 @@ fn a_program_that_waits_for_input_stops_at_the_deadline_with_p0039() {
             "{backend:?}: {stderr}"
         );
         assert_eq!(
-            report_lines(&stderr),
+            without_frames(&stderr).lines().count(),
             1,
             "{backend:?}: one report, {stderr}"
         );

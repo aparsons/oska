@@ -225,12 +225,15 @@ pub fn build_tests(program: &Program, target: Target) -> Result<Vec<u8>, Diagnos
 pub const SNAPSHOT_MARK: char = '\x0e';
 
 /// The snapshot records at the start of a test executable's `stdout`
-/// ([`build_tests`]), each the span of its assertion and the value's
-/// `dbg` text, in the order they were written, and the rest of `stdout`:
-/// `None` when a record is cut short or malformed.
+/// ([`build_tests`]), each the span of its assertion, the value's `dbg`
+/// text and the call stack there, in the order they were written, and
+/// the rest of `stdout`: `None` when a record is cut short or malformed.
 ///
 /// A record is [`SNAPSHOT_MARK`], the span, `start..end`, a space, the
-/// text's length in bytes, a newline, and then the text.
+/// text's length in bytes, a newline, the text, and then the call stack
+/// as a panic's report ends with it ([`test_failure`]): each frame
+/// [`encode_frame`]d, innermost first, `\x1f+n` when frames were left
+/// out, and a newline.
 pub fn snapshot_records(stdout: &[u8]) -> Option<(Vec<SnapshotRecord>, &[u8])> {
     let mut records = Vec::new();
     let mut rest = stdout;
@@ -246,11 +249,18 @@ pub fn snapshot_records(stdout: &[u8]) -> Option<(Vec<SnapshotRecord>, &[u8])> {
         let length: usize = length.parse().ok()?;
         let text = record.get(line_end + 1..)?;
         let value = std::str::from_utf8(text.get(..length)?).ok()?;
+        let after = &text[length..];
+        let stack_end = after.iter().position(|&b| b == b'\n')?;
+        let stack = std::str::from_utf8(&after[..stack_end]).ok()?;
+        let ("", Some(frames)) = split_frames(stack) else {
+            return None;
+        };
         records.push(SnapshotRecord {
             span,
             value: value.to_string(),
+            frames,
         });
-        rest = &text[length..];
+        rest = &after[stack_end + 1..];
     }
     Some((records, rest))
 }

@@ -12,6 +12,7 @@
     all(windows, target_arch = "x86_64")
 ))]
 
+mod common;
 mod differential;
 
 use differential::{assert_same, in_parallel, Case};
@@ -39,7 +40,7 @@ fn assert_panics(name: &str, src: &str, stdout: &str, stderr: &str) {
     let outcome = assert_same(&Case::file(name, src));
     assert_eq!(outcome.stdout, stdout, "case `{name}`: {outcome:#?}");
     assert_eq!(
-        differential::without_frames(&outcome.stderr),
+        common::frames::without_frames(&outcome.stderr),
         stderr,
         "case `{name}`: {outcome:#?}"
     );

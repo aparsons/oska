@@ -20,8 +20,8 @@
 //! What is capability-bearing is [`authority::bearing_params`], the
 //! authority report's own definition. A method whose signature a trait
 //! fixes is exempt: an `impl Trait for Type` method, and a trait's default
-//! method. There is no `_name` escape hatch. The receiver is not a
-//! parameter that can be removed, so it is not judged.
+//! method. Naming a parameter `_name` does not silence the check. The
+//! receiver is not a parameter that can be removed, so it is not judged.
 //!
 //! A field is read anywhere in the program by a field access, which also
 //! covers passing it on and calling a method on it, or by a constructor

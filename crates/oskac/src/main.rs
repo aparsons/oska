@@ -391,7 +391,14 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
     if let Some(error) = line.filter_error {
-        eprintln!("error: {error}");
+        if flags.json {
+            outln!(
+                "{{\"ok\":false,\"error\":\"usage\",\"message\":\"{}\"}}",
+                oska_syntax::json_escape(error)
+            );
+        } else {
+            eprintln!("error: {error}");
+        }
         return ExitCode::from(2);
     }
     // Only `test` takes a filter or writes snapshots.
@@ -1131,26 +1138,26 @@ fn no_test_matches(filtered: &oska_run::Filtered, json: bool) -> ExitCode {
         substring,
         left_out,
     } = filtered;
-    let error = if *left_out == 0 {
-        "the program has no tests"
+    let shown = oska_run::escape_control(substring);
+    let (code, message) = if *left_out == 0 {
+        (
+            "no_tests",
+            format!("the program has no tests, so the filter `{shown}` matches none"),
+        )
     } else {
-        "no test matches the filter"
+        (
+            "no_test_matches",
+            format!("no test name contains `{shown}`; {left_out} tests filtered out"),
+        )
     };
     if json {
         outln!(
-            "{{\"error\":\"{error}\",\"filter\":\"{}\",\"filtered\":{left_out}}}",
+            "{{\"ok\":false,\"error\":\"{code}\",\"message\":\"{}\",\"filter\":\"{}\",\"filtered\":{left_out}}}",
+            oska_syntax::json_escape(&message),
             oska_syntax::json_escape(substring)
         );
-    } else if *left_out == 0 {
-        eprintln!(
-            "error: {error}, so the filter `{}` matches none",
-            oska_run::escape_control(substring)
-        );
     } else {
-        eprintln!(
-            "error: no test name contains `{}`; {left_out} tests filtered out",
-            oska_run::escape_control(substring)
-        );
+        eprintln!("error: {message}");
     }
     ExitCode::FAILURE
 }

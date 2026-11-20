@@ -143,7 +143,9 @@ impl Body<'_, '_> {
                     span.start,
                     span.end
                 ));
-                self.call_runtime("test_snapshot", vec![head, text], NOWHERE)?;
+                let site = self.frame_text(span);
+                let site = self.text(&site);
+                self.call_runtime("test_snapshot", vec![head, text, site], NOWHERE)?;
                 self.release(text, &Type::String)?;
             }
             ("TestContext.assert_eq" | "TestContext.assert_ne", &[_, actual, other]) => {

@@ -16,6 +16,7 @@
     all(windows, target_arch = "x86_64")
 ))]
 
+mod common;
 mod differential;
 
 use differential::{assert_same, Case};
@@ -333,8 +334,8 @@ fn every_panic_a_program_can_reach_reports_the_interpreters_code_and_location() 
         assert!(
             outcome.stderr.starts_with("main.osk:")
                 && outcome.stderr.contains(&format!(": error[{code}]: "))
-                && differential::without_frames(&outcome.stderr).ends_with(")\n")
-                && differential::without_frames(&outcome.stderr)
+                && common::frames::without_frames(&outcome.stderr).ends_with(")\n")
+                && common::frames::without_frames(&outcome.stderr)
                     .lines()
                     .count()
                     == 1,

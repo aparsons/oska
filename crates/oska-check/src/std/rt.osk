@@ -2087,29 +2087,35 @@ fn frames_word(index: Int) -> Int {
 fn panic_end() {
     if rt_mem_load64(global(50)) != 0 {
         let fd = report_fd()
-        let most = rt_mem_load64(frames_word(3))
-        var at = rt_mem_depth()
-        var listed = 0
-        var left = 0
-        var record = rt_mem_load64(frames_word(at + 7))
-        while record != 0 {
-            if listed < most {
-                let _ = write_text(fd, rt_mem_as_text(record))
-                listed = listed + 1
-            } else {
-                left = left + 1
-            }
-            at = at + 1
-            record = rt_mem_load64(frames_word(at + 7))
-        }
-        if left > 0 {
-            let _ = write_text(fd, rt_mem_as_text(rt_mem_load64(frames_word(1))))
-            let _ = write_count(fd, left)
-            let _ = write_text(fd, rt_mem_as_text(rt_mem_load64(frames_word(2))))
-        }
+        write_frames(fd)
         let _ = write_text(fd, rt_mem_as_text(rt_mem_load64(frames_word(0))))
     }
     exit(101)
+}
+
+// Write the frames of the running calls to `fd`, as many as a report
+// lists, then a count of the rest; the call stack is mapped.
+fn write_frames(fd: Int) {
+    let most = rt_mem_load64(frames_word(3))
+    var at = rt_mem_depth()
+    var listed = 0
+    var left = 0
+    var record = rt_mem_load64(frames_word(at + 7))
+    while record != 0 {
+        if listed < most {
+            let _ = write_text(fd, rt_mem_as_text(record))
+            listed = listed + 1
+        } else {
+            left = left + 1
+        }
+        at = at + 1
+        record = rt_mem_load64(frames_word(at + 7))
+    }
+    if left > 0 {
+        let _ = write_text(fd, rt_mem_as_text(rt_mem_load64(frames_word(1))))
+        let _ = write_count(fd, left)
+        let _ = write_text(fd, rt_mem_as_text(rt_mem_load64(frames_word(2))))
+    }
 }
 
 // End a report whose static text names its one frame, and exit with 101:
@@ -5242,11 +5248,18 @@ pub fn test_printed(t: TestContext) -> List<String> {
 // `TestContext.assert_snapshot`: the value's `dbg` text, `value`, goes to
 // stdout for `oskac` to compare with its snapshot, after `head` (`\x0e`
 // and the assertion's span, `start..end `), its length in bytes and a
-// line break.
-pub fn test_snapshot(head: String, value: String) {
+// line break. Then the call stack, as a panic at the assertion would
+// report it: `site`, the frame running now, the running calls, and a line
+// break.
+pub fn test_snapshot(head: String, value: String, site: String) {
     let length = int_text(text_length(rt_mem_text(value)), false)
     let _ = write_text(1, "{head}{length}\n")
     let _ = write_text(1, value)
+    let _ = write_text(1, site)
+    if rt_mem_load64(global(50)) != 0 {
+        write_frames(1)
+    }
+    let _ = write_text(1, "\n")
 }
 
 // Write the `count` bytes at `data` to stderr, each line after the

@@ -423,9 +423,17 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         if panic.frames.is_some() {
             return panic;
         }
+        panic.frames = Some(self.frames_skipping(panic.span, skip));
+        panic
+    }
+
+    /// The call stack at `span` in the frame running now, as a panic there
+    /// would have it ([`Interpreter::stamped_skipping`]), `skip` innermost
+    /// calls left out.
+    fn frames_skipping(&self, span: Span, skip: usize) -> Frames {
         let calls = &self.calls[..self.calls.len().saturating_sub(skip)];
         let current = self.innermost(calls);
-        let mut frames = vec![StackFrame::new(current.as_str(), panic.span)];
+        let mut frames = vec![StackFrame::new(current.as_str(), span)];
         frames.extend(
             calls
                 .iter()
@@ -434,8 +442,13 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 .map(|call| StackFrame::new(call.caller.as_str(), call.span)),
         );
         let omitted = calls.len() + 1 - frames.len();
-        panic.frames = Some(Frames { frames, omitted });
-        panic
+        Frames { frames, omitted }
+    }
+
+    /// The call stack at `span` in the frame running now, as a panic there
+    /// would report it: a snapshot assertion's (`crate::snapshots`).
+    pub(crate) fn frames_at(&self, span: Span) -> Frames {
+        self.frames_skipping(span, 0)
     }
 
     /// [`Interpreter::stamped_skipping`] with nothing skipped: where a

@@ -42,3 +42,34 @@ pub fn mask_durations(text: &str) -> String {
     out.push_str(rest);
     out
 }
+
+/// Run `oskac args` in `dir`, then assert that the run, as a transcript
+/// of the command line, the exit code, stdout, stderr and the text of
+/// `file` in `dir` afterwards, is the golden file at `golden`. Returns
+/// the run's output.
+pub fn assert_run_and_file(
+    golden: &Path,
+    dir: &Path,
+    args: &[&str],
+    file: &str,
+) -> std::process::Output {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_oskac"))
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("oskac should run");
+    let text = |bytes: &[u8]| String::from_utf8(bytes.to_vec()).expect("output should be UTF-8");
+    let actual = format!(
+        "$ oskac {}\nexit: {}\n--- stdout\n{}--- stderr\n{}--- file {file}\n{}",
+        args.join(" "),
+        output
+            .status
+            .code()
+            .map_or("signal".to_string(), |c| c.to_string()),
+        text(&output.stdout),
+        text(&output.stderr),
+        std::fs::read_to_string(dir.join(file)).expect("should read the file"),
+    );
+    assert_golden_file(golden, &actual);
+    output
+}

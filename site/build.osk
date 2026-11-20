@@ -2436,10 +2436,11 @@ fn code_json(code: Code) -> Untrusted<String> {
     let machine = if code.fix == "" { "false" } else { "true" }
     let described = json_or_null(code.fix)
     let applicability = json_or_null(code.applicability)
+    let note = json_or_null(code.applicability_note)
     let example = json_or_null(code.example)
     let fixed = json_or_null(code.fixed)
     let page = catalog_json_string(canonical("codes/{code.code}.html"))
-    "\{\"code\":{name},\"message\":{message},\"machine_fix\":{machine},\"machine_fix_description\":{described},\"fix_applicability\":{applicability},\"example\":{example},\"fix\":{fixed},\"url\":{page}\}"
+    "\{\"code\":{name},\"message\":{message},\"machine_fix\":{machine},\"machine_fix_description\":{described},\"fix_applicability\":{applicability},\"fix_applicability_note\":{note},\"example\":{example},\"fix\":{fixed},\"url\":{page}\}"
 }
 
 fn json_or_null(text: Untrusted<String>) -> Untrusted<String> {

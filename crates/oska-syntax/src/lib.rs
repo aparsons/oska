@@ -298,13 +298,16 @@ pub struct Diagnostic {
 }
 
 /// What one snapshot assertion of a test, `t.assert_snapshot(value)`,
-/// recorded as it ran: the span of its call and the value as `dbg`
-/// renders it. Both backends record it, and the test runner compares it
-/// with its snapshot file after the test (`oska_run::snapshots`).
+/// recorded as it ran: the span of its call, the value as `dbg` renders
+/// it, and the call stack there, as a panic at the call would report it
+/// (its failure's, `P0014`). Both backends record it, and the test runner
+/// compares it with its snapshot file after the test
+/// (`oska_run::snapshots`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotRecord {
     pub span: Span,
     pub value: String,
+    pub frames: Frames,
 }
 
 /// The call stack at a panic: the calls that led to it, innermost first,

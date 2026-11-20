@@ -26,7 +26,8 @@
 //! directory, a directory in it, or a snapshot file that is a symlink
 //! fails the test instead, so no read or write leaves the root.
 
-use std::io;
+use std::collections::HashMap;
+use std::io::{self, Write as _};
 use std::path::Path;
 
 use oska_syntax::{Diagnostic, Frame, Frames, SnapshotRecord, Span};
@@ -202,18 +203,37 @@ fn stored_value(text: &str) -> String {
 /// each test with a missing or different snapshot, or with `update`,
 /// write those instead and list them in the report. A test that
 /// panicked keeps its panic as its failure.
+///
+/// Two tests whose snapshots would share a file, such as `a/b` and `a_b`,
+/// or `x-1` and the first of two in `x`, both fail instead, naming each
+/// other, and neither's snapshots are compared or written: fail closed,
+/// rather than let one test's snapshot stand for another's.
 pub fn settle(
     report: &mut TestReport,
     root: &Path,
     file_of: &dyn Fn(Span) -> Option<String>,
     update: bool,
 ) {
+    let paths: Vec<Option<Vec<String>>> = report
+        .tests
+        .iter()
+        .map(|test| snapshot_paths(test, file_of))
+        .collect();
+    let shared = shared_files(&report.tests, &paths);
     let mut written = Vec::new();
-    for test in &mut report.tests {
+    for ((test, paths), shared) in report.tests.iter_mut().zip(&paths).zip(shared) {
         if test.failure.is_some() || test.snapshots.is_empty() {
             continue;
         }
-        if let Some(failure) = settle_test(test, root, file_of, update, &mut written) {
+        let failure = match (paths, shared) {
+            (None, _) => {
+                let why = "cannot name the test's file, which its snapshots are under";
+                Some(failure(test, &test.snapshots[0], why.to_string()))
+            }
+            (_, Some((at, why))) => Some(failure(test, &test.snapshots[at], why)),
+            (Some(paths), None) => settle_test(test, paths, root, update, &mut written),
+        };
+        if let Some(failure) = failure {
             test.status = TestStatus::Failed;
             test.failure = Some(failure);
         }
@@ -223,29 +243,77 @@ pub fn settle(
     }
 }
 
-/// [`settle`] for one `test`, which ran to its end: its first failure,
-/// if any. What `--update` writes is added to `written`.
+/// The path from the root of each snapshot `test` recorded, in order,
+/// or `None` when `file_of` cannot name its file.
+fn snapshot_paths(
+    test: &TestResult,
+    file_of: &dyn Fn(Span) -> Option<String>,
+) -> Option<Vec<String>> {
+    if test.snapshots.is_empty() {
+        return Some(Vec::new());
+    }
+    let file = file_of(test.span)?;
+    let count = test.snapshots.len();
+    Some(
+        (1..=count)
+            .map(|number| format!("snapshots/{file}/{}", file_name(&test.name, number, count)))
+            .collect(),
+    )
+}
+
+/// For each of `tests`, whose snapshot paths are `paths`, the first of
+/// its snapshots whose file another test's snapshot shares, and the
+/// failure's message, which names that test; `None` when it shares none.
+fn shared_files(
+    tests: &[TestResult],
+    paths: &[Option<Vec<String>>],
+) -> Vec<Option<(usize, String)>> {
+    let mut owners: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (index, test_paths) in paths.iter().enumerate() {
+        for path in test_paths.iter().flatten() {
+            let owners = owners.entry(path.as_str()).or_default();
+            if !owners.contains(&index) {
+                owners.push(index);
+            }
+        }
+    }
+    paths
+        .iter()
+        .enumerate()
+        .map(|(index, test_paths)| {
+            test_paths
+                .iter()
+                .flatten()
+                .enumerate()
+                .find_map(|(at, path)| {
+                    let other = owners[path.as_str()].iter().find(|&&o| o != index)?;
+                    let why = format!(
+                        "snapshot `{path}` is also the snapshot of test \"{}\"; \
+                     rename one of the two tests so that each has its own snapshot file",
+                        tests[*other].name
+                    );
+                    Some((at, why))
+                })
+        })
+        .collect()
+}
+
+/// [`settle`] for one `test`, which ran to its end, whose snapshots are
+/// at `paths`: its first failure, if any. What `--update` writes is
+/// added to `written`.
 fn settle_test(
     test: &TestResult,
+    paths: &[String],
     root: &Path,
-    file_of: &dyn Fn(Span) -> Option<String>,
     update: bool,
     written: &mut Vec<Written>,
 ) -> Option<Diagnostic> {
-    let count = test.snapshots.len();
     let mut first: Option<Diagnostic> = None;
     let mut fail = |record: &SnapshotRecord, message: String| {
         first.get_or_insert_with(|| failure(test, record, message));
     };
-    let Some(file) = file_of(test.span) else {
-        let why = "cannot name the test's file, which its snapshots are under";
-        return Some(failure(test, &test.snapshots[0], why.to_string()));
-    };
-    for (index, record) in test.snapshots.iter().enumerate() {
-        let path = format!(
-            "snapshots/{file}/{}",
-            file_name(&test.name, index + 1, count)
-        );
+    for (record, path) in test.snapshots.iter().zip(paths) {
+        let path = path.clone();
         let stored = match read(root, &path) {
             Ok(stored) => stored.map(|text| stored_value(&text)),
             Err(err) => {
@@ -269,7 +337,7 @@ fn settle_test(
         let why = match &stored {
             None => format!("no snapshot `{path}` yet; run `{UPDATE}` to write it"),
             Some(_) => {
-                format!("the value differs from snapshot `{path}`; run `{UPDATE}` to accept it")
+                format!("the value differs from snapshot `{path}`; run `{UPDATE}` to update it")
             }
         };
         let difference = diff(stored.as_deref(), &record.value);
@@ -280,10 +348,16 @@ fn settle_test(
 }
 
 /// The `P0014` failure of `test` at `record`, with `message`.
+/// Its call stack is the one the assertion recorded; a backend that
+/// recorded none gives the test's own frame.
 fn failure(test: &TestResult, record: &SnapshotRecord, message: String) -> Diagnostic {
-    let frames = Frames {
-        frames: vec![Frame::new(Frame::test(&test.name), record.span)],
-        omitted: 0,
+    let frames = if record.frames.frames.is_empty() {
+        Frames {
+            frames: vec![Frame::new(Frame::test(&test.name), record.span)],
+            omitted: 0,
+        }
+    } else {
+        record.frames.clone()
     };
     Diagnostic::new(codes::SNAPSHOT_FAILED, message, record.span).with_frames(frames)
 }
@@ -327,7 +401,10 @@ fn read(root: &Path, path: &str) -> io::Result<Option<String>> {
 
 /// Write `value` and a line break to the snapshot at the `/`-separated
 /// `path` beneath `root`, making its directories one at a time. No
-/// component of it may be a symlink.
+/// component of it may be a symlink. The text goes to a fresh file in the
+/// same directory, made with `create_new`, which is then renamed over
+/// the snapshot: a rename replaces a symlink planted there instead of
+/// following it, so nothing is written outside the root.
 fn write(root: &Path, path: &str, value: &str) -> io::Result<()> {
     let names: Vec<&str> = path.split('/').collect();
     let (file, dirs) = names.split_last().expect("a path has a file name");
@@ -338,9 +415,40 @@ fn write(root: &Path, path: &str, value: &str) -> io::Result<()> {
             std::fs::create_dir(&at)?;
         }
     }
+    let dir = at.clone();
     at.push(file);
     exists_not_linked(root, &at)?;
-    std::fs::write(&at, format!("{value}\n"))
+    let (fresh, mut out) = fresh_file(&dir)?;
+    let wrote = out
+        .write_all(format!("{value}\n").as_bytes())
+        .and_then(|()| out.sync_all());
+    drop(out);
+    match wrote.and_then(|()| std::fs::rename(&fresh, &at)) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let _ = std::fs::remove_file(&fresh);
+            Err(err)
+        }
+    }
+}
+
+/// A new, empty file in `dir`, made with `create_new` so that it never
+/// opens a file or symlink already there: its path and the file.
+fn fresh_file(dir: &Path) -> io::Result<(std::path::PathBuf, std::fs::File)> {
+    let pid = std::process::id();
+    for attempt in 0u32.. {
+        let path = dir.join(format!(".snap-{pid}-{attempt}.tmp"));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => return Ok((path, file)),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists && attempt < 1000 => {}
+            Err(err) => return Err(err),
+        }
+    }
+    unreachable!("the attempts end in a return")
 }
 
 #[cfg(test)]

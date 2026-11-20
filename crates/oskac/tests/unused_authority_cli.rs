@@ -13,7 +13,7 @@
 
 mod common;
 
-use common::golden::assert_golden_file;
+use common::golden::assert_run_and_file;
 use common::portable::Scratch;
 use std::path::Path;
 use std::process::{Command, Output};
@@ -63,27 +63,10 @@ fn text(bytes: &[u8]) -> String {
 /// Run `oskac args` in `dir` and compare the exit code, stdout, stderr
 /// and the program afterwards with the golden file `name`.
 fn assert_golden(name: &str, dir: &Path, args: &[&str]) -> Output {
-    let output = Command::new(env!("CARGO_BIN_EXE_oskac"))
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("oskac should run");
-    let actual = format!(
-        "$ oskac {}\nexit: {}\n--- stdout\n{}--- stderr\n{}--- file app.osk\n{}",
-        args.join(" "),
-        output
-            .status
-            .code()
-            .map_or("signal".to_string(), |c| c.to_string()),
-        text(&output.stdout),
-        text(&output.stderr),
-        std::fs::read_to_string(dir.join("app.osk")).expect("should read the program"),
-    );
     let golden = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/golden/unused_authority")
         .join(format!("{name}.txt"));
-    assert_golden_file(&golden, &actual);
-    output
+    assert_run_and_file(&golden, dir, args, "app.osk")
 }
 
 #[test]

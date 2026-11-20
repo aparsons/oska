@@ -523,8 +523,8 @@ impl Host for TestHost<'_> {
         self.printed.clone()
     }
 
-    fn record_snapshot(&mut self, span: Span, value: String) {
-        self.snapshots.push(SnapshotRecord { span, value });
+    fn record_snapshot(&mut self, record: SnapshotRecord) {
+        self.snapshots.push(record);
     }
 
     fn write_stderr(&mut self, text: &str) -> io::Result<()> {
@@ -605,7 +605,7 @@ pub const INTRINSICS: Table = &[
     ("TestContext.assert", Plain(assert)),
     ("TestContext.fail", Plain(fail)),
     ("TestContext.printed", Plain(printed)),
-    (ASSERT_SNAPSHOT, Plain(assert_snapshot)),
+    (ASSERT_SNAPSHOT, HigherOrder(assert_snapshot)),
     ("TestContext.assert_eq", HigherOrder(assert_eq)),
     ("TestContext.assert_ne", HigherOrder(assert_ne)),
 ];
@@ -635,9 +635,19 @@ fn printed(host: &mut dyn Host, _: Vec<Value>, _: Span) -> Result<Value, Panic> 
 }
 
 /// `t.assert_snapshot(value)`: records `value`, as `dbg` renders it, for
-/// the test runner to compare with its snapshot after the test.
-fn assert_snapshot(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
-    host.record_snapshot(span, shown(&args[1]));
+/// the test runner to compare with its snapshot after the test, with the
+/// call stack a failure of it reports.
+fn assert_snapshot(
+    interp: &mut Interpreter<'_, '_>,
+    args: Vec<Value>,
+    span: Span,
+) -> Result<Value, Panic> {
+    let record = SnapshotRecord {
+        span,
+        value: shown(&args[1]),
+        frames: interp.frames_at(span),
+    };
+    interp.host().record_snapshot(record);
     Ok(Value::Unit)
 }
 

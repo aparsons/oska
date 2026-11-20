@@ -59,17 +59,7 @@ fn assert_golden(name: &str, actual: &str) {
     let golden = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/golden/test_filter")
         .join(format!("{name}.txt"));
-    if std::env::var_os("UPDATE_GOLDEN").is_some() {
-        std::fs::create_dir_all(golden.parent().expect("a parent")).expect("a golden directory");
-        std::fs::write(&golden, actual).expect("should write the golden file");
-    }
-    let expected = std::fs::read_to_string(&golden)
-        .unwrap_or_else(|e| panic!("{} should exist: {e}\n{actual}", golden.display()));
-    assert!(
-        actual == expected,
-        "{} differs; rerun with UPDATE_GOLDEN=1 if the change is intended\n--- actual\n{actual}\n--- expected\n{expected}",
-        golden.display()
-    );
+    common::golden::assert_golden_file(&golden, actual);
 }
 
 /// `oskac <args>` meets the golden file `name`, by default and with
@@ -166,4 +156,12 @@ fn an_empty_or_repeated_filter_is_a_usage_error_that_says_which() {
     assert_golden("empty", &transcript(&empty, &empty));
     let repeated = ["test", FILE, "--filter=adds", "--filter", "twice"];
     assert_golden("repeated", &transcript(&repeated, &repeated));
+}
+
+/// Under `--format=json` a usage error of `--filter` is the JSON error
+/// `oskac new` and `oskac self` give, on stdout, still with exit code 2.
+#[test]
+fn a_filter_usage_error_under_json_is_a_json_error() {
+    let empty = ["test", FILE, "--filter=", "--format=json"];
+    assert_golden("empty_json", &transcript(&empty, &empty));
 }

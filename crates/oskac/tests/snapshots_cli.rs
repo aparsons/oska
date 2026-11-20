@@ -496,3 +496,103 @@ fn update_on_any_other_command_is_a_usage_error() {
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(snapshot_files(&scratch), []);
 }
+
+/// Each frame of a JSON failure, as `function@line:column`.
+fn frames_of(failure: &Json) -> Vec<String> {
+    let Some(Json::Arr(frames)) = failure.get("frames") else {
+        panic!("no `frames` in {failure:?}");
+    };
+    frames
+        .iter()
+        .map(|frame| {
+            let field = |key: &str| frame.get(key).unwrap_or_else(|| panic!("no `{key}`"));
+            let (Json::Str(function), Json::Num(line), Json::Num(column)) =
+                (field("function"), field("line"), field("column"))
+            else {
+                panic!("a frame of the wrong shape: {frame:?}");
+            };
+            format!("{function}@{line}:{column}")
+        })
+        .collect()
+}
+
+#[test]
+fn a_snapshot_failure_in_a_helper_lists_the_call_stack() {
+    let scratch = Scratch::new("snapshots", "helper_frames");
+    package(
+        &scratch,
+        "fn helper(t: TestContext, n: Int) {
+    t.assert_snapshot(n)
+}
+
+test \"in a helper\" {
+    helper(t, 7)
+}
+",
+    );
+    let (code, report) = test_on_both(&scratch, &["--format=json"]);
+    assert_eq!(code, Some(1), "{report}");
+    let failure = only_failure(&report);
+    assert_eq!(text(failure.get("code")), "P0014");
+    assert_eq!(
+        frames_of(&failure),
+        ["helper@2:5", "test \"in a helper\"@6:5"],
+        "{report}"
+    );
+}
+
+#[test]
+fn two_tests_that_name_one_snapshot_file_both_fail_and_nothing_is_written() {
+    let scratch = Scratch::new("snapshots", "collide");
+    package(
+        &scratch,
+        "test \"a/b\" {
+    t.assert_snapshot(1)
+}
+
+test \"a_b\" {
+    t.assert_snapshot(2)
+}
+
+test \"x-1\" {
+    t.assert_snapshot(3)
+}
+
+test \"x\" {
+    t.assert_snapshot(4)
+    t.assert_snapshot(5)
+}
+
+test \"alone\" {
+    t.assert_snapshot(6)
+}
+",
+    );
+    let (code, report) = test_on_both(&scratch, &["--format=json", "--update"]);
+    assert_eq!(code, Some(1), "{report}");
+    let report = Json::parse(report.trim());
+    let Some(Json::Arr(tests)) = report.get("tests") else {
+        panic!("no tests in {report:?}");
+    };
+    let failed: Vec<(String, String)> = tests
+        .iter()
+        .filter_map(|test| {
+            let failure = test.get("failure").filter(|f| **f != Json::Null)?;
+            Some((text(test.get("name")), text(failure.get("message"))))
+        })
+        .collect();
+    let names: Vec<&str> = failed.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["a/b", "a_b", "x-1", "x"], "{report:?}");
+    for (name, message) in &failed {
+        assert!(
+            message.contains("snapshots/lib/") && message.contains("also"),
+            "{name}: {message}"
+        );
+    }
+    assert!(failed[0].1.contains("\"a_b\""), "{}", failed[0].1);
+    assert!(failed[2].1.contains("\"x\""), "{}", failed[2].1);
+    assert_eq!(
+        snapshot_files(&scratch),
+        files(&[("snapshots/lib/alone.snap", "6\n")])
+    );
+}
