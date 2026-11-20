@@ -803,6 +803,54 @@ fn main(io: Stdout, read: FsRead) -> Result<(), IoError> {
 }"#,
     ),
     (
+        "U8.rotl",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U8 = 129
+    io.println(shown(x.rotl(1) == 3))
+}"#,
+    ),
+    (
+        "U8.rotr",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U8 = 129
+    io.println(shown(x.rotr(1) == 192))
+}"#,
+    ),
+    (
+        "U32.rotl",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U32 = 2147483649
+    io.println(shown(x.rotl(1) == 3))
+}"#,
+    ),
+    (
+        "U32.rotr",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U32 = 2147483649
+    io.println(shown(x.rotr(1) == 3221225472))
+}"#,
+    ),
+    (
+        "U64.rotl",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U64 = 9223372036854775809
+    io.println(shown(x.rotl(1) == 3))
+}"#,
+    ),
+    (
+        "U64.rotr",
+        Run::Main,
+        r#"fn main(io: Stdout) -> Result<(), IoError> {
+    let x: U64 = 9223372036854775809
+    io.println(shown(x.rotr(1) == 13835058055282163712))
+}"#,
+    ),
+    (
         "Int.to_string",
         Run::Main,
         r#"fn main(io: Stdout) -> Result<(), IoError> {
