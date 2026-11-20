@@ -38,9 +38,12 @@ USAGE:
                                            and with P0040 once its values
                                            take more than --max-memory bytes
     oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
+               [--filter <substring>]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
-                                           as `run` does
+                                           as `run` does; with --filter, only
+                                           those whose names contain the
+                                           substring
     oskac build [path] [-o out] [--target <platform>|all] [--format=json] [--no-cache]
                                            Check a source file or package and,
                                            if it has no diagnostics, compile it
@@ -110,6 +113,7 @@ USAGE:
 | `--update-baseline=<file>` | `check` | Write the program's [authority baseline](#authority-baseline) to `<file>`, only when there are no diagnostics. Not with `--baseline`; any other command refuses it as a usage error. |
 | `--grant=<file>` | `check`, `run` | Compare the program's authority with the [authority grant](#authority-grant) in `<file>`, and exit with 3 when it goes past it; `run` then runs nothing. Not with `--baseline` or `--update-baseline`; a repeated flag, an empty file name, or the flag on any other command is a usage error (exit code 2). |
 | `--integration` | `test` | Also run the tests marked `#[integration]`, on the real operating system. |
+| `--filter=<substring>` | `test` | Run only the tests whose names contain `<substring>`, case-sensitive. Also written `--filter <substring>`, unless the substring starts with `--`. The others are neither run nor reported as tests, and the report says how many were filtered out. A filter that matches no test is an error (exit code 1). A missing or empty substring or a repeated flag is a usage error that says which, `error: --filter ...` on standard error; the flag on any other command prints the usage text. Either exits with 2. |
 | `--event=post-edit`, `--event=stop` | `hook` | The event the hook handles. It is required. |
 | `--interpret` | `run`, `test` | Run on the interpreter, on Linux and macOS too, where the program is otherwise compiled and run natively. See [platform support](#platform-support). The other commands accept the flag and ignore it. |
 | `--target=<platform>` | `build` | Build for this platform, named as release assets name `oskac` builds (`linux-aarch64`, ...), or with `all` for every platform with a backend. Also written `--target <platform>`. Any other command given it is a usage error (exit code 2). See [`oskac build`](#oskac-build). |
@@ -255,10 +259,12 @@ A bare `-` as the path makes `check` and `run` read one module from standard inp
 
 `oskac test <file.osk> [--format=json] [--integration] [--interpret]` checks the file and runs its `test` blocks in source order: natively on Linux and macOS, one process per test, or on the interpreter, as `run` chooses. The report is the same either way. The report goes to standard output: one line per test, the failures, and a summary, or one JSON object with `--format=json`. A refused file's diagnostics go to standard error, or into the JSON report's `diagnostics`. See [testing](testing.md).
 
+`--filter <substring>` (or `--filter=<substring>`) runs only the tests whose names contain the substring, case-sensitive, on either backend. Only the name is matched, not a package test's module. The tests it leaves out are not run and not listed; the summary ends with `, N filtered out`, and the JSON report has `"filtered":N` after `skipped`. A filter that matches no test runs nothing and exits with 1, so a typo is never a passing run: it prints ``error: no test name contains `<substring>`; N tests filtered out`` to standard error, or with `--format=json` one object on standard output, `{"error":"no test matches the filter","filter":"<substring>","filtered":N}`. A program with no tests at all says so instead: ``error: the program has no tests, so the filter `<substring>` matches none``, or `{"error":"the program has no tests","filter":"<substring>","filtered":0}`.
+
 | Exit code | Meaning |
 | --- | --- |
 | `0` | No test failed. Skipped tests do not count. |
-| `1` | A test failed, or the checker refused the file. |
+| `1` | A test failed, the checker refused the file, or `--filter` matched no test. |
 | `2` | The file uses something the interpreter cannot run yet. No test ran. |
 
 ## `oskac build`
@@ -269,7 +275,7 @@ A bare `-` as the path makes `check` and `run` read one module from standard inp
 - `--target all` writes one executable for each platform with a backend, named `<name>-<platform>` (such as `hello-linux-aarch64`), into the directory `-o` names, or the current one.
 - Success prints nothing, or `{"output":"<path>","diagnostics":[]}` with `--format=json` (`{"outputs":["<path>",...],"diagnostics":[]}` with `--target all`).
 - A refused program's diagnostics go to standard error as `check` prints them, or to standard output as `{"output":null,"diagnostics":[...]}` with `--format=json`.
-- The native backend compiles only part of the language so far. Anything else is refused with `E0390` before a file is written, never compiled wrongly; `oskac run` still runs the program, on the interpreter.
+- The native backend compiles only part of the language so far. Anything else is refused with `E0390` before a file is written, never compiled wrongly; `oskac run` and `oskac test` refuse it the same way, and `--interpret` runs it on the interpreter.
 - The executable needs nothing else to run: no `oskac`, and on Linux no C library (a macOS executable uses only `libSystem`, which every Mac has). Run directly, it reports a panic as `oskac run` does (human-readable only), and `args.get(0)` is the path it was run as, such as `./hello`, where `oskac run` reports the source file's path.
 
 | Exit code | Meaning |
@@ -355,12 +361,13 @@ The published settings, `https://oskalang.dev/agent-setup/claude-settings.json`,
 | x86_64 Linux | Native: compiled, then run | x86_64 Linux executable |
 | Apple silicon macOS | Native: compiled, then run | aarch64 macOS executable |
 | Intel macOS | Native: compiled, then run | x86_64 macOS executable |
-| Any other (Windows) | Interpreter | aarch64 Linux executable |
+| x86_64 Windows | Native: compiled, then run | x86_64 Windows executable (`.exe`) |
+| Any other | Interpreter | aarch64 Linux executable |
 
-On Linux and macOS, `run` and `test` compile the program as `build` does, for the host, and run the executable, which is 40 to 120 times faster on program logic, such as loops, lists and calls (see the [benchmark](../design.md#native-backend-benchmark)). `--interpret` runs the interpreter instead, to compare the backends when a native result looks wrong. Windows keeps the interpreter until it has a backend of its own. Either way the output, the reports and the exit codes are the same: the two backends are held to it by the differential suite.
+On every supported platform, `run` and `test` compile the program as `build` does, for the host, and run the executable, which is 40 to 120 times faster on program logic, such as loops, lists and calls (see the [benchmark](../design.md#native-backend-benchmark)). `--interpret` runs the interpreter instead, to compare the backends when a native result looks wrong. A program the native backend cannot compile yet is an error, not an interpreter run (the parity gate). Either way the output, the reports and the exit codes are the same: the two backends are held to it by the differential suite.
 
 - The executable is written to a new private directory under the temporary directory (`TMPDIR`, else `/tmp`): a random name, created with mode `0700`, never reused, so no other user can replace or read it. It is removed as soon as the program has started, or for `test` once every test has run.
-- A program the native backend cannot compile yet (`E0390`) runs on the interpreter, after one line on stderr that says so and why, such as `app.osk:3:13: note: running on the interpreter: ... (E0390)` (with `--format=json`, one JSON object with `"severity":"note"`). It is a checked program that the interpreter runs, so the output is the same, only slower. `--interpret` prints no note. A program the interpreter cannot run either, such as one that imports a module with no runtime (`E0371`), gets no note: both refuse it, and the interpreter's refusal is reported.
+- The parity gate: a program the native backend cannot compile yet is refused with `E0390`, as `build` refuses it, with the same diagnostic and exit code 2, and nothing runs. With `--format=json`, `run` prints it as one JSON object on stderr, and `test` in its report on stdout, `{"tests":[],"diagnostics":[...]}`. For `test`, the diagnostic is at the construct in the test that the backend refuses, since `build` compiles no tests. `--interpret` still runs it on the interpreter. A program the interpreter cannot run either, such as one that imports a module with no runtime (`E0371`), gets the interpreter's refusal.
 - If the executable cannot be written or started, for example because the temporary directory is mounted `noexec`, the command fails with `E0391`. Set `TMPDIR` to another directory or use `--interpret`.
 - A macOS executable is ad-hoc signed by `oskac`: it runs on a Mac, but Gatekeeper refuses it after a download. To distribute one, sign it with your Developer ID and notarize it: see [Signing and notarizing for macOS](macos-signing.md).
 
@@ -467,7 +474,7 @@ A parse error is reported alone, with empty `functions`, `audit` and `attenuatio
 {"tests":[{"name":"adds","status":"passed","failure":null}],"passed":1,"failed":0,"skipped":0,"diagnostics":[]}
 ```
 
-`status` is `passed`, `failed`, or `skipped`. `failure` is a diagnostic object or `null`.
+`status` is `passed`, `failed`, or `skipped`. `failure` is a diagnostic object or `null`. With `--filter`, `"filtered":n` follows `skipped`: the number of tests the filter left out.
 
 ### `run --format=json`
 

@@ -73,9 +73,12 @@ USAGE:
                                            and with P0040 once its values
                                            take more than --max-memory bytes
     oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
+               [--filter <substring>]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
-                                           as `run` does
+                                           as `run` does; with --filter, only
+                                           those whose names contain the
+                                           substring
     oskac build [path] [-o out] [--target <platform>|all] [--format=json] [--no-cache]
                                            Check a source file or package and,
                                            if it has no diagnostics, compile it
@@ -177,6 +180,12 @@ struct CommandLine {
     version: Option<String>,
     /// `--key <file>`: the SSH signing key, for `oskac release`.
     key: Option<String>,
+    /// `--filter <substring>`: `oskac test` runs only the tests whose
+    /// names contain it.
+    filter: Option<String>,
+    /// Why `--filter` is missing its substring, empty or repeated: a
+    /// usage error.
+    filter_error: Option<&'static str>,
     /// The run limits (`--max-steps=<n>`, `--timeout=<ms>`,
     /// `--max-output=<bytes>`, `--max-memory=<bytes>`), which only `oskac
     /// run` takes.
@@ -202,7 +211,7 @@ impl CommandLine {
             program_args,
             ..CommandLine::default()
         };
-        let mut args = args.into_iter();
+        let mut args = args.into_iter().peekable();
         while let Some(arg) = args.next() {
             if let Some(taken) = limits::take_flag(&mut line.limits, &arg) {
                 if let Err(error) = taken {
@@ -235,6 +244,14 @@ impl CommandLine {
                 },
                 key if key.starts_with("--key=") => {
                     line.key = Some(key["--key=".len()..].to_string());
+                }
+                // A flag after `--filter` is not its substring.
+                "--filter" => match args.next_if(|next| !next.starts_with("--")) {
+                    Some(filter) => line.take_filter(filter),
+                    None => line.refuse_filter("--filter needs a substring after it"),
+                },
+                filter if filter.starts_with("--filter=") => {
+                    line.take_filter(filter["--filter=".len()..].to_string());
                 }
                 target if target.starts_with("--target=") => {
                     line.target = target.strip_prefix("--target=").map(str::to_string);
@@ -272,6 +289,25 @@ impl CommandLine {
             }
         }
         line
+    }
+}
+
+impl CommandLine {
+    /// Record `filter`, the substring `--filter` gives, unless it is
+    /// empty or a filter was given before.
+    fn take_filter(&mut self, filter: String) {
+        if self.filter.is_some() {
+            self.refuse_filter("--filter is given more than once");
+        } else if filter.is_empty() {
+            self.refuse_filter("--filter takes a substring that is not empty");
+        } else {
+            self.filter = Some(filter);
+        }
+    }
+
+    /// Record why `--filter` is a usage error, if it is not one already.
+    fn refuse_filter(&mut self, error: &'static str) {
+        self.filter_error.get_or_insert(error);
     }
 }
 
@@ -349,6 +385,16 @@ fn main() -> ExitCode {
         eprint!("{USAGE}");
         return ExitCode::from(2);
     }
+    if let Some(error) = line.filter_error {
+        eprintln!("error: {error}");
+        return ExitCode::from(2);
+    }
+    // Only `test` takes a filter.
+    if line.filter.is_some() && positional.first() != Some(&"test") {
+        eprint!("{USAGE}");
+        return ExitCode::from(2);
+    }
+    let filter = line.filter.as_deref();
     match positional.as_slice() {
         ["--version" | "-V"] => {
             if flags.json {
@@ -409,9 +455,12 @@ fn main() -> ExitCode {
         ["run", rest @ ..] if rest.len() <= 1 => {
             on_target(Command::Run(run), rest.first(), flags, &line.program_args)
         }
-        ["test", rest @ ..] if rest.len() <= 1 => {
-            on_target(Command::Test, rest.first(), flags, &line.program_args)
-        }
+        ["test", rest @ ..] if rest.len() <= 1 => on_target(
+            Command::Test(filter),
+            rest.first(),
+            flags,
+            &line.program_args,
+        ),
         ["build", rest @ ..] if rest.len() <= 1 && line.program_args.is_empty() => {
             let target = match build::TargetChoice::named(line.target.as_deref()) {
                 Ok(target) => target,
@@ -524,7 +573,8 @@ enum Command<'a> {
     Check(Option<Gate<'a>>),
     /// `oskac run`, under its limits and within its grant.
     Run(RunOptions<'a>),
-    Test,
+    /// `oskac test`, with its `--filter`, if any.
+    Test(Option<&'a str>),
     /// `oskac build`, with the output path `-o` gives and its target platforms.
     Build(build::Options<'a>),
     /// `oskac release`, with its output directory, version and key.
@@ -536,7 +586,7 @@ impl Command<'_> {
         match self {
             Command::Check(_) => "check",
             Command::Run(..) => "run",
-            Command::Test => "test",
+            Command::Test(_) => "test",
             Command::Build(_) => "build",
             Command::Release(_) => "release",
         }
@@ -798,7 +848,9 @@ fn run_source(
         ) {
             native::Run::Ran(code) => return code,
             native::Run::Refused(refusal) => {
-                native::note_fallback(refusal, oska_run::refusal(program), &places, json)
+                if let Some(refusal) = native::gate(refusal, oska_run::refusal(program), &places) {
+                    return refuse_unsupported(Gated::Run, refusal, json);
+                }
             }
         }
     }
@@ -839,7 +891,12 @@ fn finish_run(outcome: oska_run::RunOutcome, json: bool, places: &Places) -> Exi
 /// object with `--format=json`. A refused file's diagnostics go to stderr
 /// as `oskac check` prints them, or into the JSON report. The exit code
 /// is 1 when a test failed (see `docs/runtime.md`).
-fn test_file(path: &str, flags: Flags, store: Option<&cache::Store>) -> ExitCode {
+fn test_file(
+    path: &str,
+    flags: Flags,
+    filter: Option<&str>,
+    store: Option<&cache::Store>,
+) -> ExitCode {
     let Flags {
         json, integration, ..
     } = flags;
@@ -847,7 +904,10 @@ fn test_file(path: &str, flags: Flags, store: Option<&cache::Store>) -> ExitCode
         return ExitCode::FAILURE;
     };
     let cached = cache::Cached::new(store, cache::file_sources(path, &src));
-    let options = oska_run::TestOptions { integration };
+    let options = oska_run::TestOptions {
+        integration,
+        filter,
+    };
     let places = Places::File { path, src: &src };
     if let Some(target) = native::native_target(flags) {
         let checked = oska_check::check_module(&src);
@@ -860,7 +920,11 @@ fn test_file(path: &str, flags: Flags, store: Option<&cache::Store>) -> ExitCode
                 native_test::Tested::Report(report) => return finish_test(report, json, &places),
                 native_test::Tested::Ended(code) => return code,
                 native_test::Tested::Refused(refusal) => {
-                    native::note_fallback(refusal, oska_run::test_refusal(program), &places, json)
+                    if let Some(refusal) =
+                        native::gate(refusal, oska_run::test_refusal(program), &places)
+                    {
+                        return refuse_unsupported(Gated::Test, refusal, json);
+                    }
                 }
             }
         }
@@ -869,10 +933,53 @@ fn test_file(path: &str, flags: Flags, store: Option<&cache::Store>) -> ExitCode
     finish_test(report, json, &places)
 }
 
+/// What the parity gate stopped: a run or the tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Gated {
+    Run,
+    Test,
+}
+
+/// The parity gate's refusal (#181): `oskac run` or `oskac test` of a
+/// program the native backend cannot compile yet (`refusal`, `E0390`,
+/// already located) reports it as `oskac build` does, as an error with
+/// exit code 2, and runs nothing. `--interpret` still runs it.
+fn refuse_unsupported(gated: Gated, refusal: Diagnostic, json: bool) -> ExitCode {
+    let code = oska_run::UNSUPPORTED_EXIT_CODE;
+    match gated {
+        // A test report's own exit code is 2 only for the interpreter's
+        // codes, so the gate's is given here.
+        Gated::Test => {
+            let report = oska_run::TestReport {
+                tests: Vec::new(),
+                diagnostics: vec![refusal],
+                filtered: None,
+            };
+            let _ = finish_test(report, json, &Places::Located);
+            ExitCode::from(u8::try_from(code).unwrap_or(2))
+        }
+        Gated::Run => finish_run(
+            oska_run::RunOutcome {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: code,
+                panic: None,
+                diagnostics: vec![refusal],
+            },
+            json,
+            &Places::Located,
+        ),
+    }
+}
+
 /// Print a test report and return its exit code. `places` names the file
 /// of each failure and refusal, as for [`finish_run`], and each test's
-/// module in a package.
+/// module in a package. A `--filter` that left out every test is an
+/// error, so a typo is never a passing run.
 fn finish_test(mut report: oska_run::TestReport, json: bool, places: &Places) -> ExitCode {
+    if let (Some(filtered), true) = (&report.filtered, report.tests.is_empty()) {
+        return no_test_matches(filtered, json);
+    }
     for test in &mut report.tests {
         test.module = places.module_of(test.span);
         test.failure = test.failure.take().map(|d| places.locate(d));
@@ -892,6 +999,38 @@ fn finish_test(mut report: oska_run::TestReport, json: bool, places: &Places) ->
     ExitCode::from(u8::try_from(report.exit_code()).unwrap_or(u8::MAX))
 }
 
+/// The error of a `--filter` that matched none of the program's tests,
+/// as text on stderr or as JSON on stdout. A program with no tests at
+/// all is told apart, so the filter is not blamed for it.
+fn no_test_matches(filtered: &oska_run::Filtered, json: bool) -> ExitCode {
+    let oska_run::Filtered {
+        substring,
+        left_out,
+    } = filtered;
+    let error = if *left_out == 0 {
+        "the program has no tests"
+    } else {
+        "no test matches the filter"
+    };
+    if json {
+        outln!(
+            "{{\"error\":\"{error}\",\"filter\":\"{}\",\"filtered\":{left_out}}}",
+            oska_syntax::json_escape(substring)
+        );
+    } else if *left_out == 0 {
+        eprintln!(
+            "error: {error}, so the filter `{}` matches none",
+            oska_run::escape_control(substring)
+        );
+    } else {
+        eprintln!(
+            "error: no test name contains `{}`; {left_out} tests filtered out",
+            oska_run::escape_control(substring)
+        );
+    }
+    ExitCode::FAILURE
+}
+
 // ---- Packages ------------------------------------------------------------------
 
 /// `oskac check`, `run` or `test` on `path`: a package directory (the
@@ -905,7 +1044,7 @@ fn on_target(command: Command, path: Option<&&str>, flags: Flags, args: &[String
             let code = match command {
                 Command::Check(gate) => check_file(&file, flags, gate, store),
                 Command::Run(run) => run_file(&file, flags, run, args, store),
-                Command::Test => test_file(&file, flags, store),
+                Command::Test(filter) => test_file(&file, flags, filter, store),
                 Command::Build(options) => {
                     build::file(&file, flags, build::Goal::Build(options), store)
                 }
@@ -1023,7 +1162,11 @@ fn on_package(
             ) {
                 native::Run::Ran(code) => return code,
                 native::Run::Refused(refusal) => {
-                    native::note_fallback(refusal, oska_run::refusal(program), &places, json)
+                    if let Some(refusal) =
+                        native::gate(refusal, oska_run::refusal(program), &places)
+                    {
+                        return refuse_unsupported(Gated::Run, refusal, json);
+                    }
                 }
             }
         }
@@ -1032,15 +1175,24 @@ fn on_package(
         let outcome = oska_run::run_program_with_limits(program, &mut host, &argv, limits);
         finish_run(outcome, json, &places)
     } else {
+        let filter = match command {
+            Command::Test(filter) => filter,
+            _ => None,
+        };
         let options = oska_run::TestOptions {
             integration: flags.integration,
+            filter,
         };
         if let Some(target) = native::native_target(flags) {
             match native_test::test_program(program, target, options, json, &cached) {
                 native_test::Tested::Report(tests) => return finish_test(tests, json, &places),
                 native_test::Tested::Ended(code) => return code,
                 native_test::Tested::Refused(refusal) => {
-                    native::note_fallback(refusal, oska_run::test_refusal(program), &places, json)
+                    if let Some(refusal) =
+                        native::gate(refusal, oska_run::test_refusal(program), &places)
+                    {
+                        return refuse_unsupported(Gated::Test, refusal, json);
+                    }
                 }
             }
         }
@@ -1078,10 +1230,11 @@ fn refuse(command: Command, diagnostics: Vec<Diagnostic>, json: bool, dir: &str)
             };
             finish_run(outcome, json, &places)
         }
-        Command::Test => {
+        Command::Test(_) => {
             let report = oska_run::TestReport {
                 tests: Vec::new(),
                 diagnostics,
+                filtered: None,
             };
             finish_test(report, json, &places)
         }

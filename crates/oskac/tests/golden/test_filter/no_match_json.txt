@@ -1,0 +1,5 @@
+$ oskac test crates/oskac/tests/fixtures/test_filter.osk --filter=nope --format=json
+exit: 1
+--- stdout
+{"error":"no test matches the filter","filter":"nope","filtered":3}
+--- stderr

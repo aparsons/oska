@@ -369,8 +369,8 @@ fn withdraw(acct: Account, amount: Int) -> Result<Account, Error>
 
 A program runs on one of two backends, which must agree byte for byte:
 
-- **The native backend** (`oska-native`): `oskac build` compiles a checked program to an aarch64 or x86_64 executable for Linux or macOS on any host, with no assembler or linker ([ADR 0011](adr/0011-oska-generates-native-code-itself.md)). A Linux executable is static; a macOS one calls the system through `libSystem` and is ad-hoc signed. Its runtime is the Oska module `std.rt`, the only place system calls are allowed ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)). On Linux and macOS, `oskac run` and `oskac test` compile with it for the host and run the executable.
-- **The interpreter** (`oska-run`): `oskac run` and `oskac test` on Windows, and with `--interpret` on Linux and macOS. A program the native backend cannot compile yet (`E0390`) runs here too.
+- **The native backend** (`oska-native`): `oskac build` compiles a checked program to an aarch64 or x86_64 executable for Linux or macOS, or an x86_64 one for Windows, on any host, with no assembler or linker ([ADR 0011](adr/0011-oska-generates-native-code-itself.md)). A Linux executable is static; a macOS one calls the system through `libSystem` and is ad-hoc signed; a Windows one imports from `kernel32.dll` and `ntdll.dll` ([ADR 0020](adr/0020-windows-intrinsics-are-kernel32-and-ntdll-calls.md)). Its runtime is the Oska module `std.rt`, the only place system calls are allowed ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)). On every supported platform, `oskac run` and `oskac test` compile with it for the host and run the executable.
+- **The interpreter** (`oska-run`): `oskac run --interpret` and `oskac test --interpret`, and the reference the differential suite holds the native backend to. A program the native backend cannot compile yet (`E0390`) is an error, not a run here (the parity gate).
 
 The **differential suite** runs every program of the corpus (the interpreter's runtime tests, the examples, the guide's programs, the CLI fixtures and the site generator) on both and fails on any difference in stdout, stderr, exit code, panic or the files left behind. See the [CLI reference](guide/cli-reference.md#platform-support) for which host uses which.
 
@@ -381,7 +381,7 @@ The **differential suite** runs every program of the corpus (the interpreter's r
 
 ### Native backend benchmark
 
-`scripts/bench-native.sh` is run by the maintainer, on a Raspberry Pi 5 (aarch64 Linux), and for x86_64 Linux on demand in CI (`.github/workflows/bench.yml`); it is never a required check. Each workload runs as `oskac run --interpret` and as the executable `oskac build` wrote, after both are checked to print the same. Times are the best CPU time (user plus system) of 5 runs, which other work on the Pi does not stretch as it does the wall clock; the interpreter's includes checking the program, as `oskac run` does.
+`scripts/bench-native.sh` is run by the maintainer, on a Raspberry Pi 5 (aarch64 Linux), and for x86_64 Linux, macOS and Windows on demand in CI (`.github/workflows/bench.yml`); it is never a required check. Each workload runs as `oskac run --interpret` and as the executable `oskac build` wrote, after both are checked to print the same. Times are the best CPU time (user plus system) of 5 runs, which other work on the Pi does not stretch as it does the wall clock; the interpreter's includes checking the program, as `oskac run` does.
 
 Recorded on 2026-11-12, `oskac` 0.2.0, before and after the profiling-driven tuning round that followed the milestone's review ("before" is a run of the build without it, in the same session):
 
@@ -433,6 +433,23 @@ Recorded on 2026-11-19, `oskac` 0.4.0, by `bench.yml` on GitHub's macOS runners 
 - **Program logic** is native's on macOS as on Linux: 36 to 135 times faster than the interpreter on both Macs.
 - **Bulk text on the Intel Mac** is the one workload where native is slower than the interpreter, 44 ms against 30. The interpreter does `replace` and `trim` in Rust, so it is already as fast as the machine allows, and the native runtime's byte loops are slower than Rust's on this older processor. It is the workload already expected to be about 1x.
 - **The Intel runner is slow overall.** Its interpreter takes two to three times as long as on the Linux x86_64 runner, so compare the speedups, not the times, between machines. The macOS figures include each call into `libSystem`, where Linux makes the system call directly. The site, which writes many files, still lands at 23x and 25x, beside the Linux runners' 18x to 24x.
+
+#### Windows
+
+Recorded on 2026-11-20, `oskac` 0.5.0 with the Windows backend (#179), by `bench.yml` on GitHub's `windows-latest` runner, an AMD EPYC (family 25, model 1) with 4 vCPUs ([Windows run](https://github.com/aparsons/oska/actions/runs/44687864528/job/136126393427)), with the `ubuntu-latest` run of the same commit beside it, an AMD EPYC 7763 with 4 ([Linux run](https://github.com/aparsons/oska/actions/runs/44687864528/job/136126393305)). Git Bash's `time` does not see a native Windows process's CPU time, so the Windows figures are the best **wall-clock** time of 5 runs, and the Linux ones CPU time as above:
+
+| Workload | Windows interpreter | Windows native | Windows speedup | Linux interpreter | Linux native | Linux speedup |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| loop | 1099 ms | 34 ms | 32x | 956 ms | 11 ms | 87x |
+| text | 227 ms | 29 ms | 7.8x | 141 ms | 7 ms | 20x |
+| bulk text | 56 ms | 48 ms | 1.2x | 38 ms | 34 ms | 1.1x |
+| lists | 812 ms | 32 ms | 25x | 660 ms | 13 ms | 51x |
+| recursion | 890 ms | 28 ms | 32x | 649 ms | 6 ms | 108x |
+| site | 8026 ms | 345 ms | 23x | 6115 ms | 270 ms | 23x |
+
+- **Every short native run costs about 25 ms on Windows** before the program does anything: creating a process, loading `kernel32.dll` and `ntdll.dll`, and the wall clock counting it all. Wall time also counts the interpreter's start, but that is small beside its run. So the speedups for the short workloads (loop, text, lists, recursion) are lower than on Linux, and say more about process start than about the code.
+- **The site, the one long workload, is where the backends compare:** 23x on Windows and 23x on Linux, on the same kind of processor. Native Windows takes 345 ms against Linux's 270, and the interpreter is slower by about the same part, so the gap is the platform (wall time, process start, and writing files through `NtCreateFile` and `WriteFile`), not the Windows backend's code.
+- **Bulk text** is about 1x, as on every platform.
 
 ### Values
 
@@ -499,14 +516,15 @@ Once escape hatches exist, the following policy applies:
 
 ## Toolchain
 
-- **Execution:** a tree-walking interpreter came first. Oska now generates native code itself for aarch64 and x86_64 Linux and macOS, with no external toolchain ([ADR 0011](adr/0011-oska-generates-native-code-itself.md)), and runs natively by default there. The runtime is Oska code, and raw system calls are allowed only in `std.rt` ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)). The interpreter stays: on hosts with no backend yet, with `--interpret`, and as the oracle the differential suite holds the native backend to.
+- **Execution:** a tree-walking interpreter came first. Oska now generates native code itself for every supported platform, aarch64 and x86_64 Linux and macOS and x86_64 Windows, with no external toolchain ([ADR 0011](adr/0011-oska-generates-native-code-itself.md)), and runs natively by default on each. The runtime is Oska code, and raw system calls are allowed only in `std.rt` ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)). The interpreter stays, with `--interpret` and as the oracle the differential suite holds the native backend to, but not as a fallback: a program the native backend cannot compile is an error (`E0390`).
+- **The language is unfrozen, behind the parity gate.** New language features were frozen until every supported platform was native ([ADR 0014](adr/0014-every-supported-platform-builds-and-runs-natively.md)). With Windows native in v0.6.0 the gate is on and the freeze is over: a feature is done only when it works natively, with the same output and security guarantees, on all five platforms. The `Bytes` milestone is next in the queue, under the gate.
 - **Milestones.** Each is its own spec and release:
   1. Multi-file packages: `pkg.` paths, `pub(pkg)`, and an `oska.toml` with no dependencies yet (#88).
   2. The aarch64 Linux native backend and the `std.rt` runtime (#125): `oskac build`, and native `run` and `test` on aarch64 Linux.
-  3. `Bytes`, the bitwise and wrapping operations, and secret integers.
+  3. `Bytes`, the bitwise and wrapping operations, and secret integers: queued behind the parity gate, and the first language work after it.
   4. The `NetConnect` runtime, the crypto primitives, and a TLS 1.3 client, all in Oska ([ADR 0012](adr/0012-tls-git-and-crypto-are-written-in-oska.md)).
   5. git fetch, minimal version selection, the lockfile, and authority approval (#12).
-  6. Native backends for x86_64 Linux, macOS and Windows.
+  6. Native backends for x86_64 Linux, macOS and Windows (v0.4.0 to v0.6.0), which turn the parity gate on.
 - **Agent-facing output:** structured diagnostics, plus a stable, documented AST/JSON export (see [`ast.md`](ast.md)).
 - **Formatting:** deterministic, with a single canonical style.
 

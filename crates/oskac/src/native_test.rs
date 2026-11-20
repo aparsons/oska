@@ -11,6 +11,7 @@
 //! lines go, prefixed with its name; its stdout carries only its panic's
 //! report (`oska_native::test_failure`). An `#[integration]` test runs
 //! only when asked, and is skipped otherwise without starting a process.
+//! A test `--filter` leaves out starts no process and is not reported.
 //! The result is the report the interpreter's runner gives
 //! (`oska_run::TestReport`), printed by the same code.
 
@@ -31,8 +32,8 @@ pub enum Tested {
     /// The test executable could not be written (`E0391`), reported as
     /// `oskac run` reports it: the exit code to end with.
     Ended(ExitCode),
-    /// The backend refused the program, with this diagnostic: run its
-    /// tests on the interpreter, after `native::note_fallback`.
+    /// The backend refused the program, with this diagnostic, which the
+    /// parity gate (`native::gate`) reports.
     Refused(Diagnostic),
 }
 
@@ -63,6 +64,7 @@ pub fn test_program(
         .tests
         .iter()
         .enumerate()
+        .filter(|(_, test)| options.selects(&test.name))
         .map(|(index, test)| {
             let (status, failure) = if test.integration && !options.integration {
                 (TestStatus::Skipped, None)
@@ -84,6 +86,7 @@ pub fn test_program(
     Tested::Report(TestReport {
         tests,
         diagnostics: Vec::new(),
+        filtered: options.filtered(program),
     })
 }
 

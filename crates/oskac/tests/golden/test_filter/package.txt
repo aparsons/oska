@@ -1,0 +1,8 @@
+$ oskac test crates/oskac/tests/fixtures/packages/multi --filter=d
+exit: 0
+--- stdout
+test main: main adds up ... ok
+test math: double ... ok
+
+2 tests: 2 passed, 0 failed, 0 skipped, 1 filtered out
+--- stderr

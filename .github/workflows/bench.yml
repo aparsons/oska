@@ -1,8 +1,8 @@
 name: Native benchmark
 
-# scripts/bench-native.sh on GitHub's runners, on demand: the x86_64 Linux
-# and macOS figures in docs/design.md ("Native backend benchmark") come from
-# here, as the maintainer's Pi has no such machine beside it. It also runs
+# scripts/bench-native.sh on GitHub's runners, on demand: the x86_64 Linux,
+# macOS and Windows figures in docs/design.md ("Native backend benchmark")
+# come from here, as the maintainer's Pi has no such machine beside it. It also runs
 # on a pull request that changes the script or this file, so a change to
 # either shows its figures before it merges. Never a required check: runner timings vary.
 
@@ -21,13 +21,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest]
     runs-on: ${{ matrix.os }}
     # A release build and six workloads, five runs each on both backends: a
     # few minutes.
     timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
     steps:
+      - run: git config --global core.autocrlf false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - run: lscpu | grep -E '^(Model name|CPU\(s\)):' || sysctl -n machdep.cpu.brand_string hw.ncpu || true
+      - run: lscpu | grep -E '^(Model name|CPU\(s\)):' || sysctl -n machdep.cpu.brand_string hw.ncpu || echo "$PROCESSOR_IDENTIFIER, $NUMBER_OF_PROCESSORS CPUs" || true
       - run: scripts/bench-native.sh | tee -a "$GITHUB_STEP_SUMMARY"
