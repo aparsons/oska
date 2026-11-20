@@ -53,11 +53,12 @@ USAGE:
                                            every platform into one directory
                                            (by default <name>-v<X.Y.Z>), with
                                            a SHA256SUMS signed by the SSH key
-    oskac fix [path] [--dry-run] [--placeholders] [--format=json]
+    oskac fix [path] [--dry-run] [--placeholders] [--release] [--format=json]
                                            Apply the machine fixes to a source
                                            file or package, checking again
-                                           after each, and write each changed
-                                           file once
+                                           after each (as the release check
+                                           does, with --release), and write
+                                           each changed file once
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
     oskac hook claude --event=post-edit [--format=json]
                                            Check what Claude Code just edited,
@@ -136,11 +137,12 @@ USAGE:
                                            every platform into one directory
                                            (by default <name>-v<X.Y.Z>), with
                                            a SHA256SUMS signed by the SSH key
-    oskac fix [path] [--dry-run] [--placeholders] [--format=json]
+    oskac fix [path] [--dry-run] [--placeholders] [--release] [--format=json]
                                            Apply the machine fixes to a source
                                            file or package, checking again
-                                           after each, and write each changed
-                                           file once
+                                           after each (as the release check
+                                           does, with --release), and write
+                                           each changed file once
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
     oskac hook claude --event=post-edit [--format=json]
                                            Check what Claude Code just edited,
@@ -219,11 +221,12 @@ USAGE:
                                            every platform into one directory
                                            (by default <name>-v<X.Y.Z>), with
                                            a SHA256SUMS signed by the SSH key
-    oskac fix [path] [--dry-run] [--placeholders] [--format=json]
+    oskac fix [path] [--dry-run] [--placeholders] [--release] [--format=json]
                                            Apply the machine fixes to a source
                                            file or package, checking again
-                                           after each, and write each changed
-                                           file once
+                                           after each (as the release check
+                                           does, with --release), and write
+                                           each changed file once
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
     oskac hook claude --event=post-edit [--format=json]
                                            Check what Claude Code just edited,
@@ -302,11 +305,12 @@ USAGE:
                                            every platform into one directory
                                            (by default <name>-v<X.Y.Z>), with
                                            a SHA256SUMS signed by the SSH key
-    oskac fix [path] [--dry-run] [--placeholders] [--format=json]
+    oskac fix [path] [--dry-run] [--placeholders] [--release] [--format=json]
                                            Apply the machine fixes to a source
                                            file or package, checking again
-                                           after each, and write each changed
-                                           file once
+                                           after each (as the release check
+                                           does, with --release), and write
+                                           each changed file once
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
     oskac hook claude --event=post-edit [--format=json]
                                            Check what Claude Code just edited,
