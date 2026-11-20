@@ -577,6 +577,13 @@ if step "release image tests" --fast-when 'scripts/release/*'; then
   bash scripts/release/image-test.sh
 fi
 
+if step "release image push tests" --fast-when 'scripts/release/*'; then
+  # scripts/release/push-image.sh, with a fake skopeo: it pushes only the
+  # image the signed release rebuilds to, and fails when the registry
+  # serves another digest than the signed one.
+  bash scripts/release/push-image-test.sh
+fi
+
 if step "Linux build check tests" --fast-when 'scripts/release/*'; then
   # They run GNU readelf, as the release runners have it.
   if grep -q 'GNU readelf' <<<"$(readelf --version 2>/dev/null || true)"; then
