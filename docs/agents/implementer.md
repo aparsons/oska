@@ -92,7 +92,7 @@ The loop orchestrator reviews each ticket PR on two axes (Standards and Spec) wh
 - Fix review findings on the same branch (`ticket/<number>-<slug>`) and push. Do not open a second PR.
 - A ticket PR merges only when CI is green and every finding is fixed or deferred to a filed issue that links the PR.
 - The orchestrator files the issue for a deferred finding (you do, when told to). The issue links the PR.
-- Before merging a ticket PR, run `scripts/expected-workflows/check.sh <pr>` (from the PR's branch if it changes a workflow, once CI has had time to start). It lists every workflow with a `pull_request` trigger whose `branches`, `paths` and `paths-ignore` match the PR, and confirms each reported checks in `gh pr checks`. A missing workflow is a failure, not a pass: GitHub creates no jobs for a workflow file it cannot parse (PR #329). `scripts/check.sh` also runs actionlint on the workflow files to catch that locally.
+- Before merging a ticket PR, run `scripts/expected-workflows/check.sh <pr>` (from the PR's branch if it changes a workflow, once CI has had time to start). It lists every workflow with a `pull_request` trigger whose `branches`, `paths` and `paths-ignore` match the PR, and confirms that each, and each of its jobs, reported checks in `gh pr checks` (a matrix job as `job (values)`, a job skipped by its `if:` as skipped). A missing workflow or job is a failure, not a pass: GitHub creates no jobs for a workflow file it cannot parse (PR #329). `scripts/check.sh` also runs actionlint on the workflow files to catch that locally.
 
 ## Reading CI failures
 
