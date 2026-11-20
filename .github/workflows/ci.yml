@@ -107,13 +107,15 @@ jobs:
           install -m 0755 "target/$TARGET/release/oskac" "$root/oskac"
           install -m 0644 examples/hello.osk "$root/hello.osk"
           mkdir -m 1777 "$root/tmp"
+          # chroot(2) needs root (CAP_SYS_CHROOT); --userspec then drops to 65532.
           in_root() { sudo chroot --userspec=65532:65532 "$root" "$@"; }
           in_root /oskac --version
           test "$(in_root /oskac run /hello.osk)" = "Hello from Oska!"
           in_root /oskac build /hello.osk -o /tmp/hello
           test "$(in_root /tmp/hello)" = "Hello from Oska!"
-          test ! -e "$root/proc"
-          find "$root" | sort
+          # Afterwards the root holds only these: no library, no /proc, and
+          # nothing that `oskac run` left behind in /tmp.
+          test "$(cd "$root" && find . | sort | tr '\n' ' ')" = ". ./hello.osk ./oskac ./tmp ./tmp/hello "
 
   macos:
     # Spec #154: on a Mac `oskac run` and `oskac test` are native by

@@ -45,24 +45,16 @@ case "$real" in
   *) bad "the repo's workflows parse: got [$real]" ;;
 esac
 
-# Jobs: each job of an expected workflow must report a check too. A job is
-# named by its `name:`, else its id.
-printf '%s\n' 'name: Jobs' 'on:' '  pull_request:' 'jobs:' '  build:' '    strategy:' \
-  '      matrix:' '        os: [a, b]' '    runs-on: x' '  lint:' '    name: Lint all' '    runs-on: x' >"$wf/jobs.yml"
-jobs=$(printf 'x\n' | python3 -I scripts/expected-workflows/expected.py --jobs --base main --dir "$wf" | grep '^Jobs' | tr '\t\n' ': ')
-expect "--jobs lists each job of an expected workflow" "Jobs:build Jobs:Lint all " "$jobs"
-
-# The repo's CI expects its musl job (ticket #462).
-tab=$(printf '\t')
-real=$(printf 'crates/oskac/src/main.rs\n' | python3 -I scripts/expected-workflows/expected.py --jobs --base main)
-if printf '%s\n' "$real" | grep -qxF "CI${tab}musl"; then
-  ok "a crates change expects CI's musl job"
+# The musl job (ticket #462) lives in CI, so a change to what it tests
+# (oska-sys, oska-run, oskac) or to ci.yml itself expects CI to report.
+real=$(printf '%s\n' crates/oska-sys/src/lib.rs .github/workflows/ci.yml | python3 -I scripts/expected-workflows/expected.py --base main)
+if printf '%s\n' "$real" | grep -qxF CI && grep -qx '  musl:' .github/workflows/ci.yml; then
+  ok "a change the musl job covers expects CI, which has the musl job"
 else
-  bad "a crates change expects CI's musl job: got [$real]"
+  bad "the musl job: CI not expected or ci.yml has no musl job: got [$real]"
 fi
 
-# check.sh against a stub gh, reading the repo's real workflows. The stub's
-# `pr checks` prints REPORTED: one `WORKFLOW<TAB>CHECK NAME` row per check.
+# check.sh against a stub gh, reading the repo's real workflows.
 mkdir -p "$work/bin"
 # shellcheck disable=SC2016 # the stub gh expands its variables when it runs
 printf '%s\n' '#!/usr/bin/env bash' \
@@ -72,36 +64,18 @@ printf '%s\n' '#!/usr/bin/env bash' \
   '  "pr checks") printf "%s\n" "$REPORTED" ;;' \
   'esac' 'exit 0' >"$work/bin/gh"
 chmod +x "$work/bin/gh"
-# Every job reports, a matrix job as `NAME (VALUES)`, as GitHub names it.
-all=$(printf 'crates/a/x.rs\n' | python3 -I scripts/expected-workflows/expected.py --jobs --base main | sed 's/$/ (x)/')
+all=$(printf 'crates/a/x.rs\n' | python3 -I scripts/expected-workflows/expected.py --base main)
 rc=0
 out=$(PATH="$work/bin:$PATH" REPORTED="$all" bash scripts/expected-workflows/check.sh 1 2>&1) || rc=$?
-if [ "$rc" -eq 0 ]; then ok "check.sh passes when every expected workflow and job reported"; else bad "check.sh passes: $out"; fi
-
-first=$(printf '%s\n' "$all" | head -n 1 | cut -f 1)
+if [ "$rc" -eq 0 ]; then ok "check.sh passes when every expected workflow reported"; else bad "check.sh passes: $out"; fi
+first=$(printf '%s\n' "$all" | head -n 1)
+rest=$(printf '%s\n' "$all" | tail -n +2)
 rc=0
-out=$(PATH="$work/bin:$PATH" REPORTED="$(printf '%s\n' "$all" | grep -v "^$first$tab")" bash scripts/expected-workflows/check.sh 1 2>&1) || rc=$?
-if [ "$rc" -eq 1 ] && printf '%s\n' "$out" | grep -qF "MISSING  $first:"; then
+out=$(PATH="$work/bin:$PATH" REPORTED="$rest" bash scripts/expected-workflows/check.sh 1 2>&1) || rc=$?
+if [ "$rc" -eq 1 ] && printf '%s\n' "$out" | grep -qF "MISSING  $first"; then
   ok "check.sh fails and names a workflow with no checks"
 else
   bad "check.sh fails on a missing workflow (exit $rc): $out"
-fi
-
-rc=0
-out=$(PATH="$work/bin:$PATH" REPORTED="$(printf '%s\n' "$all" | grep -vxF "CI${tab}musl (x)")" bash scripts/expected-workflows/check.sh 1 2>&1) || rc=$?
-if [ "$rc" -eq 1 ] && printf '%s\n' "$out" | grep -qF "MISSING  CI / musl"; then
-  ok "check.sh fails and names a job with no checks"
-else
-  bad "check.sh fails on a missing job (exit $rc): $out"
-fi
-
-# A check whose name only starts with the job's name is another job.
-rc=0
-out=$(PATH="$work/bin:$PATH" REPORTED="$(printf '%s\n' "$all" | sed "s/^CI${tab}musl (x)\$/CI${tab}muslx/")" bash scripts/expected-workflows/check.sh 1 2>&1) || rc=$?
-if [ "$rc" -eq 1 ] && printf '%s\n' "$out" | grep -qF "MISSING  CI / musl"; then
-  ok "check.sh does not count another job with the same prefix"
-else
-  bad "check.sh counts a prefix as the job (exit $rc): $out"
 fi
 
 exit "$fail"

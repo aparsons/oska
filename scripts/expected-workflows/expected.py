@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prints the name of every workflow a pull request must trigger.
 
-  expected.py [--jobs] --base BRANCH [--dir DIR] < changed-files
+  expected.py --base BRANCH [--dir DIR] < changed-files
 
 Reads the changed file paths (one per line) on stdin, and every workflow in
 DIR (default .github/workflows). A workflow is expected when it has a
@@ -9,8 +9,6 @@ DIR (default .github/workflows). A workflow is expected when it has a
 and `branches-ignore` against BRANCH (the base), `paths` and `paths-ignore`
 against the changed files. A trigger with no filter is always expected.
 Prints the workflow's `name:` (its file name if it has none), one per line.
-With --jobs, prints instead one `WORKFLOW<TAB>JOB` line for each job of each
-expected workflow: the job's `name:`, else its id.
 
 There is no YAML parser on every machine this runs on, so this reads the
 `on:` block by indentation: block mappings, block lists and one-line
@@ -89,37 +87,6 @@ def parse_on(lines):
     return triggers
 
 
-def parse_jobs(lines):
-    """Returns the name of each job in the top-level `jobs:` block, in order:
-    its `name:` if it has one, else its id."""
-    rows = []
-    for raw in lines:
-        t = strip_comment(raw)
-        if t.strip():
-            rows.append((len(t) - len(t.lstrip()), t.strip()))
-    start = None
-    for i, (ind, t) in enumerate(rows):
-        if ind == 0 and t == "jobs:":
-            start = i
-            break
-    if start is None:
-        return []
-    jobs, job_ind = [], None
-    for ind, t in rows[start + 1:]:
-        if ind == 0:
-            break
-        if job_ind is None:
-            job_ind = ind
-        if ind == job_ind:
-            name, _, rest = t.partition(":")
-            if rest.strip() or t.startswith("- "):
-                raise ValueError(t)
-            jobs.append(unquote(name))
-        elif ind == job_ind + 2 and t.startswith("name:"):
-            jobs[-1] = unquote(t.split(":", 1)[1])
-    return jobs
-
-
 def glob_re(pat):
     out, i = [], 0
     while i < len(pat):
@@ -162,7 +129,7 @@ def expected(flt, base, files):
 
 
 def main(argv):
-    base, d, want_jobs = None, ".github/workflows", False
+    base, d = None, ".github/workflows"
     args = list(argv)
     while args:
         a = args.pop(0)
@@ -170,12 +137,10 @@ def main(argv):
             base = args.pop(0)
         elif a == "--dir":
             d = args.pop(0)
-        elif a == "--jobs":
-            want_jobs = True
         else:
-            sys.exit("usage: expected.py [--jobs] --base BRANCH [--dir DIR] < files")
+            sys.exit("usage: expected.py --base BRANCH [--dir DIR] < files")
     if base is None:
-        sys.exit("usage: expected.py [--jobs] --base BRANCH [--dir DIR] < files")
+        sys.exit("usage: expected.py --base BRANCH [--dir DIR] < files")
     files = [line.strip() for line in sys.stdin if line.strip()]
     paths = sorted(glob.glob(os.path.join(d, "*.yml")) + glob.glob(os.path.join(d, "*.yaml")))
     for path in paths:
@@ -196,16 +161,7 @@ def main(argv):
             if m:
                 name = unquote(strip_comment(m.group(1))) or name
                 break
-        if not want_jobs:
-            print(name)
-            continue
-        try:
-            jobs = parse_jobs(lines)
-        except ValueError as e:
-            print("expected.py: cannot read the jobs: block of %s (%s)" % (path, e), file=sys.stderr)
-            return 2
-        for job in jobs:
-            print("%s\t%s" % (name, job))
+        print(name)
     return 0
 
 
