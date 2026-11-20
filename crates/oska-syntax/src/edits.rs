@@ -1,10 +1,11 @@
 //! Fix application: a fix's edits applied to the text of one file, with
 //! the rules the agent guide states for tools that apply fixes
-//! themselves. Offsets count UTF-8 bytes in the text as it was checked;
+//! themselves. `oskac fix` applies fixes with it, and the checker builds
+//! the programs it checks a fix with by it (`oska-check`'s `hoist.rs`). Offsets count UTF-8 bytes in the text as it was checked;
 //! every edit is against that text, so the edits are applied from the end
 //! of the file to the start, and none may overlap another.
 
-use oska_syntax::Edit;
+use crate::Edit;
 
 /// Why a fix's edits cannot be applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,7 +70,7 @@ pub fn moved(offset: usize, edits: &[Edit]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{apply, moved, EditError};
-    use oska_syntax::{Edit, Span};
+    use crate::{Edit, Span};
 
     fn edit(start: usize, end: usize, replacement: &str) -> Edit {
         Edit {

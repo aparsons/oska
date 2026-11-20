@@ -8,6 +8,7 @@
 use std::fmt;
 
 pub mod ast;
+pub mod edits;
 mod export;
 mod json;
 mod parser;
@@ -579,9 +580,9 @@ pub struct Fix {
     /// The file the edits are in, when it is not the diagnostic's own,
     /// such as the declaration a package check's fix marks `pub(pkg)`.
     pub path: Option<String>,
-    /// How safe the fix is to apply without a person reading it. It is a
-    /// property of the code: the catalog in `docs/checker.md` records it
-    /// beside the fix's description.
+    /// How safe the fix is to apply without a person reading it. It is set
+    /// by the code and the situation the fix is offered in: the catalog in
+    /// `docs/checker.md` records the rule beside the fix's description.
     pub applicability: Applicability,
 }
 
@@ -726,7 +727,8 @@ impl Diagnostic {
     /// out; no other diagnostic has them.
     ///
     /// Fields are only ever added: none is renamed, retyped or given a
-    /// new meaning, and a diagnostic that had no `fix` never gains one.
+    /// new meaning, and a code whose diagnostics had no `fix` gains one
+    /// only by a recorded decision (a spec or an ADR).
     pub fn to_json(&self) -> String {
         let mut out = format!(
             "{{\"code\":\"{}\",\"message\":\"{}\"",
@@ -771,8 +773,9 @@ impl Diagnostic {
             ));
         }
         let related: Vec<String> = self.related.iter().map(Related::to_json).collect();
-        // Uncertain repairs will go in `suggestions`, never in `fix`; the
-        // checker offers none yet.
+        // Uncertain repairs will go in `suggestions`, never in `fix`, unless
+        // a recorded decision gives a code a `fix`; the checker offers none
+        // yet.
         out.push_str(&format!(
             ",\"related\":[{}],\"suggestions\":[]",
             related.join(",")
