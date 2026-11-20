@@ -105,7 +105,7 @@ pub fn command(name: &str, options: Options, json: bool) -> ExitCode {
             list.join(",")
         );
     } else {
-        outln!("created the package `{name}` in `{name}`:");
+        outln!("created the package `{name}`, in the directory `{name}`:");
         for path in &written {
             outln!("  {path}");
         }
