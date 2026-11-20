@@ -1,0 +1,26 @@
+// Steps: 6. A call in a `requires` or `ensures` clause is a step, as any
+// call: the clauses are evaluated, they are not a call themselves.
+//
+// - `halve(8)` and `halve(4)`: 2.
+// - each one's `requires is_even(n)`: 2.
+// - each one's `ensures |r| is_small(r)`: 2.
+fn is_even(n: Int) -> Bool {
+    n % 2 == 0
+}
+
+fn is_small(n: Int) -> Bool {
+    n < 100
+}
+
+fn halve(n: Int) -> Int
+    requires is_even(n)
+    ensures |r| is_small(r)
+{
+    n / 2
+}
+
+fn main(io: Stdout) {
+    let a = halve(8)
+    let b = halve(4)
+    let _ = io.println("{a} {b}")
+}

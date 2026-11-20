@@ -1,0 +1,54 @@
+$ oskac run main.osk --max-output=0
+--- stdout
+--- stderr
+error: --max-output takes a whole number of bytes above 0, not `0`
+--- exit Some(2)
+
+$ oskac run main.osk --max-output=-1
+--- stdout
+--- stderr
+error: --max-output takes a whole number of bytes above 0, not `-1`
+--- exit Some(2)
+
+$ oskac run main.osk --max-output=abc
+--- stdout
+--- stderr
+error: --max-output takes a whole number of bytes above 0, not `abc`
+--- exit Some(2)
+
+$ oskac run main.osk --max-output=
+--- stdout
+--- stderr
+error: --max-output takes a whole number of bytes above 0, not ``
+--- exit Some(2)
+
+$ oskac run main.osk --max-output=1.5
+--- stdout
+--- stderr
+error: --max-output takes a whole number of bytes above 0, not `1.5`
+--- exit Some(2)
+
+$ oskac run main.osk --max-output=+5
+--- stdout
+--- stderr
+error: --max-output takes a whole number of bytes above 0, not `+5`
+--- exit Some(2)
+
+$ oskac run main.osk --max-output= 5
+--- stdout
+--- stderr
+error: --max-output takes a whole number of bytes above 0, not ` 5`
+--- exit Some(2)
+
+$ oskac run main.osk --max-output=1e3
+--- stdout
+--- stderr
+error: --max-output takes a whole number of bytes above 0, not `1e3`
+--- exit Some(2)
+
+$ oskac run main.osk --max-output=99999999999999999999
+--- stdout
+--- stderr
+error: --max-output takes a whole number of bytes above 0, not `99999999999999999999`
+--- exit Some(2)
+

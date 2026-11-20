@@ -24,7 +24,8 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode, Stdio};
+use std::process::{Child, Command, ExitCode, Stdio};
+use std::time::{Duration, Instant};
 
 use oska_check::program::Program;
 use oska_native::Target;
@@ -89,6 +90,11 @@ pub struct Invocation<'a> {
     pub args: &'a [String],
     /// Whether reports are JSON (`--format=json`).
     pub json: bool,
+    /// The run limits, which the executable is built with: none builds
+    /// the same executable as `oskac build`.
+    pub limits: oska_check::limits::Limits,
+    /// Whether the program's standard input is closed (`oskac run -`).
+    pub stdin_closed: bool,
 }
 
 /// `oskac run`, natively: compile `program` for `target`, the host's, run
@@ -103,15 +109,24 @@ pub fn run(
     invocation: Invocation,
     cached: &Cached,
 ) -> Run {
-    let Invocation { argv0, args, json } = invocation;
+    let Invocation {
+        argv0,
+        args,
+        json,
+        mut limits,
+        stdin_closed,
+    } = invocation;
     // A human report is placed in the source by the executable itself; a
     // JSON one is read back unplaced and placed here, as the
     // interpreter's panic is.
-    let built = cached.native("run", target, json, || {
+    // The timeout is `oskac`'s to enforce, not built in: the executable,
+    // and its build cache entry, are the ones without it.
+    let timeout = limits.timeout.take();
+    let built = cached.native("run", target, json, &crate::limits::flags(&limits), || {
         if json {
-            oska_native::build(program, target, &|d| d)
+            oska_native::build_limited(program, target, &|d| d, limits)
         } else {
-            oska_native::build(program, target, &|d| places.locate(d))
+            oska_native::build_limited(program, target, &|d| places.locate(d), limits)
         }
     });
     let bytes = match built {
@@ -134,6 +149,10 @@ pub fn run(
     if json {
         command.stderr(Stdio::piped());
     }
+    if stdin_closed {
+        command.stdin(Stdio::null());
+    }
+    let started = Instant::now();
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(err) => return Run::Ran(fail(&cannot("run", &err), json)),
@@ -143,6 +162,15 @@ pub fn run(
     let mut exe = Some(exe);
     if cfg!(unix) {
         exe = None;
+    }
+    // A deadline past what the clock can count is never reached.
+    let deadline =
+        timeout.and_then(|ms| Some((started.checked_add(Duration::from_millis(ms))?, ms)));
+    if let Some((deadline, ms)) = deadline {
+        // It returns once the program has ended or been stopped.
+        let code = wait_until_deadline(child, deadline, ms, places, json);
+        drop(exe);
+        return Run::Ran(code);
     }
     let panic = match child.stderr.take() {
         Some(stderr) => forward_stderr(stderr),
@@ -154,17 +182,79 @@ pub fn run(
     };
     drop(exe);
     if let Some(report) = panic {
-        match oska_native::test_failure(&report).filter(|_| status.code() == Some(101)) {
-            Some(panic) => {
-                let _ = writeln!(std::io::stderr(), "{}", places.locate(panic).to_json());
-            }
-            None => {
-                let _ = std::io::stderr().write_all(&report);
-            }
-        }
+        held_back(&report, status, places);
     }
     Run::Ran(ended(status, json))
 }
+
+/// Wait for `child`, the native program `oskac run` started, until
+/// `deadline` (`--timeout=<ms>`). A program that ends by then ends as
+/// without the limit. One that does not is stopped, it alone (its own
+/// process, by the handle `oskac` started it with, never by name), and
+/// `oskac` reports `P0039` itself and ends with 101, never with the
+/// signal's `128 + n`. Whatever the stopped program held back as a
+/// possible panic report is dropped, never reported as its own.
+fn wait_until_deadline(
+    mut child: Child,
+    deadline: Instant,
+    ms: u64,
+    places: &Places,
+    json: bool,
+) -> ExitCode {
+    // With JSON reports, stderr is a pipe: it is read on a thread of its
+    // own while this one watches the clock.
+    let reader = child
+        .stderr
+        .take()
+        .map(|stderr| std::thread::spawn(move || forward_stderr(stderr)));
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {}
+            Err(err) => return fail(&cannot("run", &err), json),
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            // `kill` fails only when the program has just ended: its
+            // status is then the one `wait` gives, and it stops all the
+            // same.
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep((deadline - now).min(DEADLINE_POLL));
+    };
+    let panic = reader.and_then(|reader| reader.join().ok().flatten());
+    let Some(status) = status else {
+        let limit = oska_check::limits::Limit::Time;
+        let stopped = Diagnostic::new(limit.code(), limit.message(ms), Span { start: 0, end: 0 });
+        report(&stopped, json);
+        return ExitCode::from(101);
+    };
+    if let Some(report) = panic {
+        held_back(&report, status, places);
+    }
+    ended(status, json)
+}
+
+/// Print `report`, the last line the program wrote to stderr that may be
+/// a panic report and that [`forward_stderr`] held back: placed in the
+/// source as JSON when the program panicked with it (exit code 101), else
+/// as the program wrote it.
+fn held_back(report: &[u8], status: std::process::ExitStatus, places: &Places) {
+    match oska_native::test_failure(report).filter(|_| status.code() == Some(101)) {
+        Some(panic) => {
+            let _ = writeln!(std::io::stderr(), "{}", places.locate(panic).to_json());
+        }
+        None => {
+            let _ = std::io::stderr().write_all(report);
+        }
+    }
+}
+
+/// How often [`wait_until_deadline`] looks whether the program has ended:
+/// a program that ends before its deadline ends this much late at most.
+const DEADLINE_POLL: Duration = Duration::from_millis(5);
 
 /// Copy the program's stderr to oskac's, line by line, as it comes, but
 /// hold back each line that may be a panic report until the next line

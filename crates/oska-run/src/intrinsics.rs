@@ -11,20 +11,22 @@ use std::path::Path;
 use std::rc::Rc;
 
 use oska_check::builtins;
+use oska_check::limits;
 use oska_syntax::Span;
 
 use crate::confine::{self, Intent};
 use crate::data;
 use crate::host::{Host, RootHandle};
 use crate::html;
-use crate::interp::Interpreter;
+use crate::interp::{Interpreter, Stream};
+use crate::memory;
 use crate::panics::{codes, Panic};
 use crate::tasks;
 use crate::testing;
 use crate::traits;
 use crate::value::{Access, Capability, FsCap, Root, Value};
 
-use Intrinsic::Plain;
+use Intrinsic::{HigherOrder, Plain};
 
 /// A body-less prelude function's runtime implementation. Each gets the
 /// arguments, the receiver first for a method, and the call's span, for
@@ -61,7 +63,7 @@ pub const INTRINSICS: Table = &[
     ("DirWrite.restrict_to_file", Plain(dir_restrict_to_file)),
     ("DirWrite.write", Plain(fs_write)),
     ("Env.get", Plain(env_get)),
-    ("Env.secret", Plain(env_secret)),
+    ("Env.secret", HigherOrder(env_secret)),
     ("FileRead.read_to_string", Plain(file_read_to_string)),
     ("FileWrite.write", Plain(file_write)),
     ("Fs.read_only", Plain(fs_read_only)),
@@ -86,12 +88,12 @@ pub const INTRINSICS: Table = &[
         Plain(secret_constant_time_eq_secret),
     ),
     ("Secret.expose", Plain(secret_expose)),
-    ("Stderr.println", Plain(stderr_println)),
-    ("Stdin.read_line", Plain(stdin_read_line)),
-    ("Stdout.println", Plain(stdout_println)),
+    ("Stderr.println", HigherOrder(stderr_println)),
+    ("Stdin.read_line", HigherOrder(stdin_read_line)),
+    ("Stdout.println", HigherOrder(stdout_println)),
     ("String.assume_trusted", Plain(string_assume_trusted)),
     ("String.to_string", Plain(string_to_string)),
-    ("dbg", Plain(dbg)),
+    ("dbg", HigherOrder(dbg)),
     ("todo", Plain(todo)),
 ];
 
@@ -131,45 +133,86 @@ fn text(args: &[Value], index: usize) -> &str {
     }
 }
 
-/// An I/O result as an Oska `Result<T, IoError>`.
-fn io_result<T>(result: io::Result<T>, ok: impl FnOnce(T) -> Value) -> Value {
+/// `Ok(())` for a write or other operation that succeeded, else
+/// `Err(IoError)` with Oska's wording of the failure, made at `span`
+/// (counted under `--max-memory`).
+fn io_unit(result: io::Result<()>, span: Span) -> Result<Value, Panic> {
     match result {
-        Ok(value) => Value::ok(ok(value)),
-        Err(err) => Value::err(Value::io_error(&oska_sys::io_error_message(&err))),
+        Ok(()) => Ok(Value::ok(Value::Unit)),
+        Err(err) => io_failure(&err, span),
+    }
+}
+
+/// `Err(IoError)` with Oska's wording of `err`, made at `span`.
+fn io_failure(err: &io::Error, span: Span) -> Result<Value, Panic> {
+    Ok(Value::err(memory::io_error(
+        &oska_sys::io_error_message(err),
+        span,
+    )?))
+}
+
+/// The text read from outside, or the failure, counted under
+/// `--max-memory` once read, at `span`.
+fn io_text(result: io::Result<String>, span: Span) -> Result<Value, Panic> {
+    match result {
+        Ok(text) => Ok(Value::ok(memory::text(&text, span)?)),
+        Err(err) => io_failure(&err, span),
     }
 }
 
 // ---- Standard streams --------------------------------------------------
 
+// The program's writes to stdout and stderr go through the interpreter,
+// which counts them against `--max-output` (`Interpreter::write_output`).
+
 /// `Stdout.println(self, line)`: the line and a newline.
-fn stdout_println(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn stdout_println(
+    interp: &mut Interpreter<'_, '_>,
+    args: Vec<Value>,
+    span: Span,
+) -> Result<Value, Panic> {
     let line = format!("{}\n", text(&args, 1));
-    Ok(io_result(host.write_stdout(&line), |()| Value::Unit))
+    let written = interp.write_output(Stream::Stdout, &line, span)?;
+    io_unit(written, span)
 }
 
 /// `Stderr.println(self, line)`: the line and a newline.
-fn stderr_println(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn stderr_println(
+    interp: &mut Interpreter<'_, '_>,
+    args: Vec<Value>,
+    span: Span,
+) -> Result<Value, Panic> {
     let line = format!("{}\n", text(&args, 1));
-    Ok(io_result(host.write_stderr(&line), |()| Value::Unit))
+    let written = interp.write_output(Stream::Stderr, &line, span)?;
+    io_unit(written, span)
 }
 
 /// `Stdin.read_line(self)`: the next line, or `None` at end of input.
-fn stdin_read_line(host: &mut dyn Host, _: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(io_result(host.read_line(), |line| {
-        Value::option(line.map(|l| Value::str(&l)))
-    }))
+/// Under `--timeout` the wait ends at the deadline (`P0039`).
+fn stdin_read_line(
+    interp: &mut Interpreter<'_, '_>,
+    _: Vec<Value>,
+    span: Span,
+) -> Result<Value, Panic> {
+    match interp.read_line(span)? {
+        Ok(line) => {
+            let line = line.map(|l| memory::text(&l, span)).transpose()?;
+            Ok(Value::ok(Value::option(line)))
+        }
+        Err(err) => io_failure(&err, span),
+    }
 }
 
 /// `dbg(value)`: print `value` to stderr for debugging, and return it. A
 /// `Secret` prints as `<redacted>`, wherever it is.
-fn dbg(host: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn dbg(interp: &mut Interpreter<'_, '_>, mut args: Vec<Value>, span: Span) -> Result<Value, Panic> {
     let value = args.swap_remove(0);
     let mut line = String::from("[dbg] ");
     debug(&value, &mut line);
     line.push('\n');
     // `dbg` is for debugging: a stderr that cannot be written loses the
     // line, not the program.
-    let _ = host.write_stderr(&line);
+    let _ = interp.write_output(Stream::Stderr, &line, span)?;
     Ok(value)
 }
 
@@ -278,24 +321,38 @@ fn args_get(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic>
 }
 
 /// `Env.get(self, name)`: the variable, or `None` when it is not set.
-fn env_get(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn env_get(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
     let value = host.env_var(text(&args, 1));
-    Ok(Value::option(value.map(|v| Value::str(&v))))
+    let value = value.map(|v| memory::text(&v, span)).transpose()?;
+    Ok(Value::option(value))
 }
 
 /// `Env.secret(self, name)`: the variable, as a `Secret`. The signature
 /// has no room for a missing secret, and running on with a stand-in, say
 /// an empty one, could let an empty password through, so a missing one
 /// panics.
-fn env_secret(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+///
+/// The report quotes the name, which the program made: under
+/// `--max-output` it quotes no more of it than the limit has left.
+fn env_secret(
+    interp: &mut Interpreter<'_, '_>,
+    args: Vec<Value>,
+    span: Span,
+) -> Result<Value, Panic> {
     let name = text(&args, 1);
-    match host.env_var(name) {
-        Some(value) => Ok(Value::secret(Value::str(&value))),
-        None => Err(Panic::new(
-            codes::MISSING_SECRET,
-            format!("the secret `{name}` is not set in the environment"),
-            span,
-        )),
+    match interp.host().env_var(name) {
+        Some(value) => memory::wrap(builtins::SECRET, memory::text(&value, span)?, span),
+        None => {
+            let name = match interp.output_left() {
+                Some(left) => limits::cut_quoted(name, left),
+                None => name.into(),
+            };
+            Err(Panic::new(
+                codes::MISSING_SECRET,
+                format!("the secret `{name}` is not set in the environment"),
+                span,
+            ))
+        }
     }
 }
 
@@ -359,8 +416,8 @@ fn fs_cap(value: &Value) -> &FsCap {
 }
 
 /// `Path.new(raw)` and `Path.from(raw)`.
-fn path_new(_: &mut dyn Host, mut args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(Value::path(args.swap_remove(0)))
+fn path_new(_: &mut dyn Host, mut args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    memory::wrap(builtins::PATH, args.swap_remove(0), span)
 }
 
 /// `restrict_to(self, dir)` on `Fs`, `FsRead`, and `FsWrite`: the
@@ -520,7 +577,7 @@ fn root_for(fs: &FsCap, intent: Intent) -> io::Result<&RootHandle> {
 
 /// `DirRead.read_to_string(self, path)`: the path is walked beneath the
 /// root's handle (`confine.rs`).
-fn fs_read_to_string(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn fs_read_to_string(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
     let raw = args[1].fields()[0].as_str();
     let result = root_for(fs_cap(&args[0]), Intent::Read).and_then(|root| {
         let names = confine::names(raw)?;
@@ -532,59 +589,66 @@ fn fs_read_to_string(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<V
         }
         host.read_file_beneath(root, &names)
     });
-    Ok(io_result(result, |text| Value::str(&text)))
+    io_text(result, span)
 }
 
 /// `DirRead.list_dir(self, path)`: the names of the entries of the
 /// directory, sorted. The path is walked beneath the root's handle, and
 /// `.` lists the root.
-fn fs_list_dir(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn fs_list_dir(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
     let raw = args[1].fields()[0].as_str();
     let result = root_for(fs_cap(&args[0]), Intent::Read).and_then(|root| {
         let names = confine::names(raw)?;
         host.list_dir_beneath(root, &names)
     });
-    Ok(io_result(result, |names| {
-        Value::List(Rc::new(names.iter().map(|n| Value::str(n)).collect()))
-    }))
+    match result {
+        Ok(names) => {
+            let names = names
+                .iter()
+                .map(|n| memory::text(n, span))
+                .collect::<Result<Vec<Value>, Panic>>()?;
+            Ok(Value::ok(memory::list(names, span)?))
+        }
+        Err(err) => io_failure(&err, span),
+    }
 }
 
 /// `DirWrite.write(self, path, contents)`: `path` ends in a plain name,
 /// and is walked beneath the root's handle.
-fn fs_write(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn fs_write(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
     let contents = text(&args, 2);
     let raw = args[1].fields()[0].as_str();
     let result = root_for(fs_cap(&args[0]), Intent::Write).and_then(|root| {
         let names = confine::names_to_create(raw)?;
         host.write_file_beneath(root, &names, contents)
     });
-    Ok(io_result(result, |()| Value::Unit))
+    io_unit(result, span)
 }
 
 /// `DirWrite.create_dir(self, path)`: confined like a write, so `path`
 /// ends in a plain name, and is walked beneath the root's handle.
-fn fs_create_dir(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn fs_create_dir(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
     let raw = args[1].fields()[0].as_str();
     let result = root_for(fs_cap(&args[0]), Intent::Write).and_then(|root| {
         let names = confine::names_to_create(raw)?;
         host.create_dir_beneath(root, &names)
     });
-    Ok(io_result(result, |()| Value::Unit))
+    io_unit(result, span)
 }
 
 /// `FileRead.read_to_string(self)`: the file's text, opened by its name
 /// beneath the parent directory's handle (`confine.rs`).
-fn file_read_to_string(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn file_read_to_string(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
     let result = file_root(&args[0]).and_then(|root| host.read_file_beneath(root, &[]));
-    Ok(io_result(result, |text| Value::str(&text)))
+    io_text(result, span)
 }
 
 /// `FileWrite.write(self, contents)`: creates the file, or replaces what
 /// it holds, opened by its name beneath the parent directory's handle.
-fn file_write(host: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
+fn file_write(host: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
     let result =
         file_root(&args[0]).and_then(|root| host.write_file_beneath(root, &[], text(&args, 1)));
-    Ok(io_result(result, |()| Value::Unit))
+    io_unit(result, span)
 }
 
 /// The root of the file capability the checker guarantees `value` is, or
@@ -658,8 +722,8 @@ fn todo(_: &mut dyn Host, _: Vec<Value>, span: Span) -> Result<Value, Panic> {
 }
 
 /// `Int.to_string(self)`: the integer in decimal.
-fn int_to_string(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(Value::str(&args[0].as_int().to_string()))
+fn int_to_string(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    memory::text(&args[0].as_int().to_string(), span)
 }
 
 /// `Untrusted<String>.assume_trusted(self)`: the text itself. Trust is a

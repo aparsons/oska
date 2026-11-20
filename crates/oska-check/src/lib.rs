@@ -54,6 +54,7 @@ mod decl_rules;
 mod infer;
 mod instantiation;
 mod items;
+pub mod limits;
 mod link;
 mod manifest;
 mod package;
@@ -475,15 +476,17 @@ impl CheckReport {
     /// audit site, or attenuation per line. Every array is present, even
     /// when empty.
     pub fn to_json(&self) -> String {
-        self.to_json_with(None)
+        self.to_json_with(&[])
     }
 
-    /// [`CheckReport::to_json`], with `extra`, a key and its JSON value,
-    /// as the last key: `oskac check --baseline` adds `authority_diff`.
-    pub fn to_json_with(&self, extra: Option<(&str, &str)>) -> String {
-        let extra = extra.map_or_else(String::new, |(key, value)| {
-            format!(",\n  \"{}\": {value}", json_escape(key))
-        });
+    /// [`CheckReport::to_json`], with `extra`, keys and their JSON values,
+    /// in order, after the report's own keys: `oskac check` adds
+    /// `verdict`, and `--baseline` puts `authority_diff` before it.
+    pub fn to_json_with(&self, extra: &[(&str, &str)]) -> String {
+        let extra: String = extra
+            .iter()
+            .map(|(key, value)| format!(",\n  \"{}\": {value}", json_escape(key)))
+            .collect();
         let diagnostics: Vec<String> = self.diagnostics.iter().map(Diagnostic::to_json).collect();
         let functions: Vec<String> = self
             .functions

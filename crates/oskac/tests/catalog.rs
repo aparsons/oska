@@ -24,15 +24,23 @@
 //! per-code pages. They also run every example against the real
 //! toolchain.
 //!
-//! A block may add the word `release` (checked as `oskac check --release`)
-//! or `tests` (run as `oskac test`, for the `P001x` codes that only a
-//! `test` block reaches).
+//! A block may add the word `release` (checked as `oskac check --release`),
+//! `tests` (run as `oskac test`, for the `P001x` codes that only a
+//! `test` block reaches), or a run limit such as `max-output=16`,
+//! `max-steps=1000`, `timeout=50` or `max-memory=1048576` (run as `oskac
+//! run` with that flag, for the limits' panics).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use oska_check::limits::Limit;
 use oska_run::{FakeHost, TestOptions, TestStatus};
+
+#[path = "../src/fence.rs"]
+mod fence;
+
+use fence::{FenceLine, Fences};
 
 /// Codes no program can reach, so they have no example: `E0170` is for the
 /// prelude only (user code gets `E0132` instead), `E0360` needs a `std`
@@ -153,43 +161,37 @@ fn rows_of(doc: &str) -> Vec<Row> {
 fn examples_of(doc: &str, file: &str) -> Vec<Example> {
     let mut out = Vec::new();
     let mut open: Option<Example> = None;
+    let mut fences = Fences::default();
     for (index, line) in doc.lines().enumerate() {
-        match (&mut open, line.strip_prefix("```")) {
-            (None, Some(info)) => {
+        match fences.line(line) {
+            FenceLine::Opens(info) => {
                 let words: Vec<String> = info.split_whitespace().map(str::to_string).collect();
                 let tagged = words.iter().skip(1).find_map(|w| {
                     let (kind, code) = w.split_once('=')?;
                     (["error", "fixed"].contains(&kind) && is_code(code))
                         .then(|| (kind.to_string(), code.to_string()))
                 });
-                open = Some(match tagged {
-                    Some((kind, code)) => Example {
-                        code,
-                        kind,
-                        words,
-                        body: String::new(),
-                        at: format!("{file}:{}", index + 1),
-                    },
-                    // Some other block: read it, then drop it.
-                    None => Example {
-                        code: String::new(),
-                        kind: String::new(),
-                        words,
-                        body: String::new(),
-                        at: format!("{file}:{}", index + 1),
-                    },
+                let (kind, code) = tagged.unwrap_or_default();
+                // A block with no tag is read, then dropped.
+                open = Some(Example {
+                    code,
+                    kind,
+                    words,
+                    body: String::new(),
+                    at: format!("{file}:{}", index + 1),
                 });
             }
-            (Some(_), Some(rest)) if rest.trim().is_empty() => {
+            FenceLine::Closes => {
                 if let Some(done) = open.take().filter(|e| !e.code.is_empty()) {
                     out.push(done);
                 }
             }
-            (Some(block), _) => {
-                block.body.push_str(line);
-                block.body.push('\n');
+            FenceLine::Other => {
+                if let Some(block) = &mut open {
+                    block.body.push_str(line);
+                    block.body.push('\n');
+                }
             }
-            (None, None) => {}
         }
     }
     assert!(open.is_none(), "{file}: a code block is never closed");
@@ -260,7 +262,23 @@ fn codes_of(code: &str, example: &Example) -> BTreeSet<String> {
             }
         }
     } else if code.starts_with('P') || ["E0370", "E0371", "E0380"].contains(&code) {
-        let outcome = oska_run::run(src, &mut FakeHost::new(), &["main.osk".to_string()]);
+        // A word such as `max-output=16` runs the example under that run
+        // limit, as `oskac run --max-output=16` does: each limit's flag
+        // without its `--`.
+        let mut limits = oska_run::Limits::NONE;
+        for word in &example.words {
+            for limit in Limit::ALL {
+                let name = limit.flag().trim_start_matches('-');
+                let Some(value) = word.strip_prefix(name).and_then(|w| w.strip_prefix('=')) else {
+                    continue;
+                };
+                let value = value.parse().ok().filter(|&v: &u64| v > 0);
+                *limits.get_mut(limit) =
+                    Some(value.unwrap_or_else(|| panic!("{}: a bad limit `{word}`", example.at)));
+            }
+        }
+        let args = ["main.osk".to_string()];
+        let outcome = oska_run::run_with_limits(src, &mut FakeHost::new(), &args, limits);
         found.extend(outcome.diagnostics.iter().map(|d| d.code.to_string()));
         found.extend(outcome.panic.iter().map(|d| d.code.to_string()));
     } else {

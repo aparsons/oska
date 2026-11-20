@@ -1,0 +1,4 @@
+exit: 1
+--- stdout
+--- stderr
+crates/oskac/tests/fixtures/authority_grant/diagnostics/program.osk:5:16: error[E0221]: unknown name `missing` (bytes 170..177)

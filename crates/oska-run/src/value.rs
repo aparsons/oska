@@ -318,23 +318,6 @@ impl Value {
         value.map_or_else(Value::none, Value::some)
     }
 
-    /// A `Secret` wrapping `value`. It stays a wrapper at runtime, so
-    /// `dbg` can redact it.
-    pub fn secret(value: Value) -> Value {
-        Value::Struct {
-            ty: Rc::from(builtins::SECRET),
-            fields: Rc::new(vec![value]),
-        }
-    }
-
-    /// A `Path` holding `raw`.
-    pub fn path(raw: Value) -> Value {
-        Value::Struct {
-            ty: Rc::from(builtins::PATH),
-            fields: Rc::new(vec![raw]),
-        }
-    }
-
     /// The fields of the struct or variant the checker guarantees this is.
     pub fn fields(&self) -> &[Value] {
         match self {
@@ -354,14 +337,6 @@ impl Value {
 
     pub fn err(value: Value) -> Value {
         Value::variant(builtins::RESULT, builtins::ERR, vec![value])
-    }
-
-    /// An `IoError` with `message`.
-    pub fn io_error(message: &str) -> Value {
-        Value::Struct {
-            ty: Rc::from(builtins::IO_ERROR),
-            fields: Rc::new(vec![Value::str(message)]),
-        }
     }
 
     /// The `Bool` the checker guarantees this is.

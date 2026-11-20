@@ -1,0 +1,30 @@
+exit: 3
+--- stdout
+{
+  "diagnostics": [],
+  "functions": [
+    {"name":"report","authority":["Stdout"],"via":[{"param":"io","capabilities":["Stdout"]},{"param":"then","capabilities":[]}],"pure":false},
+    {"name":"main","authority":["Stdout"],"via":[{"param":"io","capabilities":["Stdout"]}],"pure":false}
+  ],
+  "audit": [],
+  "attenuations": [],
+  "authority_diff": {
+    "grant": "<grant>",
+    "grant_oskac": "<version>",
+    "widened": [
+      {"function":"report","gained":["cap fn"]}
+    ],
+    "narrowed": [],
+    "became_impure": [],
+    "added": [],
+    "removed": [],
+    "new_audit_sites": [],
+    "removed_audit_sites": [],
+    "new_attenuations": [],
+    "removed_attenuations": [],
+    "fails": true
+  },
+  "verdict": "widened"
+}
+--- stderr
+error: authority goes past the grant <grant>: a function gained authority or became impure, an audit site was added, or the program reaches a new kind; a grant is set by whoever runs the code, and oskac never updates it

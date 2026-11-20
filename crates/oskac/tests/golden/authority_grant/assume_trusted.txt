@@ -1,0 +1,10 @@
+exit: 3
+--- stdout
+fn vouch: pure
+fn main: Stdout (io)
+crates/oskac/tests/fixtures/authority_grant/assume_trusted/program.osk:7:5: audit: assume_trusted (bytes 297..318)
+grant: <grant>
+  new audit site fn vouch: assume_trusted +1
+  added fn vouch: pure
+--- stderr
+error: authority goes past the grant <grant>: a function gained authority or became impure, an audit site was added, or the program reaches a new kind; a grant is set by whoever runs the code, and oskac never updates it

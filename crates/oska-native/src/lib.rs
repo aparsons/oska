@@ -21,6 +21,7 @@
 //! no `unsafe`, and its output depends on the program and the target
 //! alone, never on the host.
 
+use oska_check::limits::Limits;
 use oska_check::program::Program;
 use oska_syntax::{Diagnostic, Span};
 
@@ -81,9 +82,29 @@ pub mod codes {
     ];
 
     /// The `P`-codes native code panics with: the interpreter's.
-    pub const PANICS: [&str; 16] = [
-        "P0001", "P0002", "P0003", "P0004", "P0005", "P0006", "P0007", "P0010", "P0011", "P0012",
-        "P0013", "P0020", "P0021", "P0035", "P0036", "P0037",
+    /// `P0039` is never the program's own: `oskac` stops a native program
+    /// at its `--timeout` and reports it.
+    pub const PANICS: [&str; 20] = [
+        "P0001",
+        "P0002",
+        "P0003",
+        "P0004",
+        "P0005",
+        "P0006",
+        "P0007",
+        "P0010",
+        "P0011",
+        "P0012",
+        "P0013",
+        "P0020",
+        "P0021",
+        "P0035",
+        "P0036",
+        "P0037",
+        oska_check::limits::codes::STEP_LIMIT,
+        oska_check::limits::codes::TIME_LIMIT,
+        oska_check::limits::codes::MEMORY_LIMIT,
+        oska_check::limits::codes::OUTPUT_LIMIT,
     ];
 }
 
@@ -111,7 +132,23 @@ pub const MAX_CALL_DEPTH: u32 = lower::MAX_CALL_DEPTH;
 /// source. A program the backend cannot compile yet is refused with the
 /// diagnostic that says why.
 pub fn build(program: &Program, target: Target, locate: Locate) -> Result<Vec<u8>, Diagnostic> {
-    compile(program, target, locate, lower::Entry::Main)
+    build_limited(program, target, locate, Limits::NONE)
+}
+
+/// [`build`], for `oskac run` under the run `limits` (spec #446): the
+/// executable stops with a limit's panic (`P0038` for `--max-steps`,
+/// `P0041` for `--max-output`, `P0040` for `--max-memory`) when the
+/// program reaches it, at the same step or write as the interpreter.
+/// The checks are in the generated code and `std.rt`, behind the
+/// intrinsics that exist (ADR 0013); with no limit the executable is
+/// [`build`]'s, byte for byte.
+pub fn build_limited(
+    program: &Program,
+    target: Target,
+    locate: Locate,
+    limits: Limits,
+) -> Result<Vec<u8>, Diagnostic> {
+    compile(program, target, locate, lower::Entry::Main, limits)
 }
 
 /// Compile the `test` blocks of `program`, which checked with no
@@ -136,7 +173,7 @@ pub fn build(program: &Program, target: Target, locate: Locate) -> Result<Vec<u8
 /// [`test_failure`] reads back. The caller places it in the source, as it
 /// places the interpreter's.
 pub fn build_tests(program: &Program, target: Target) -> Result<Vec<u8>, Diagnostic> {
-    compile(program, target, &|d| d, lower::Entry::Tests)
+    compile(program, target, &|d| d, lower::Entry::Tests, Limits::NONE)
 }
 
 /// The panic a test executable's test reported on stdout ([`build_tests`]):
@@ -161,6 +198,7 @@ fn compile(
     target: Target,
     locate: Locate,
     entry: lower::Entry,
+    limits: Limits,
 ) -> Result<Vec<u8>, Diagnostic> {
     if let Some(refusal) = unimplemented_module(program) {
         return Err(refusal);
@@ -173,7 +211,7 @@ fn compile(
             NOWHERE,
         ));
     };
-    let module = lower::program(program, &rt, locate, entry, target)?;
+    let module = lower::program(program, &rt, locate, entry, target, limits)?;
     let text = target.emit(&module).map_err(|why| {
         Diagnostic::new(
             codes::UNSUPPORTED,

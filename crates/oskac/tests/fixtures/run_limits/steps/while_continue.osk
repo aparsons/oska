@@ -1,0 +1,16 @@
+// Steps: 6. A `continue` in a `while` loop goes back to the condition: a
+// back-edge, as the end of the body is.
+//
+// - `while i < 6`: 6 iterations, 3 of them ending in `continue`: 6.
+fn main(io: Stdout) {
+    var i = 0
+    var odd = 0
+    while i < 6 {
+        i = i + 1
+        if i % 2 == 0 {
+            continue
+        }
+        odd = odd + i
+    }
+    let _ = io.println("{odd}")
+}

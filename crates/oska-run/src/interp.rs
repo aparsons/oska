@@ -24,6 +24,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use oska_check::builtins::{self, TraitMethod};
+use oska_check::limits::{Limit, Limits};
 use oska_check::program::{
     self, Arm, Callee, Clause, Expr, ExprKind, Function, Part, Pattern, Place, Program, Stmt,
 };
@@ -32,6 +33,7 @@ use oska_syntax::Span;
 
 use crate::host::Host;
 use crate::intrinsics::{self, Intrinsic};
+use crate::memory;
 use crate::ops;
 use crate::panics::{codes, Panic};
 use crate::tasks::Tasks;
@@ -116,6 +118,43 @@ pub struct Interpreter<'p, 'h> {
     pub(crate) tasks: Tasks,
     /// How many calls of functions and closures are running.
     depth: usize,
+    /// The run limits (spec #446), none by default.
+    limits: Limits,
+    /// The bytes the program has written to stdout and stderr so far,
+    /// counted against `--max-output`.
+    output_written: u64,
+    /// The steps the program may take before [`Interpreter::step`] takes
+    /// its slow path: under `--max-steps`, the steps left, counted down
+    /// from the limit; without it, `u64::MAX`, refilled if ever spent. One
+    /// decrement and compare per step, with or without a limit.
+    fuel: u64,
+    /// Under `--timeout`, its deadline. Boxed, so that a run without it
+    /// keeps the interpreter as small as it was.
+    deadline: Option<Box<Deadline>>,
+}
+
+/// A run's `--timeout`, as the interpreter keeps it.
+struct Deadline {
+    /// The instant the program must stop by.
+    at: std::time::Instant,
+    /// Under `--max-steps` too, the steps left beyond
+    /// [`Interpreter::fuel`], which is then given out [`DEADLINE_EVERY`]
+    /// steps at a time, so the slow path can look at the clock. Otherwise
+    /// 0.
+    steps_held: u64,
+}
+
+/// Under `--timeout`, how many steps the interpreter takes between two
+/// looks at the clock: few enough that a step-bound loop stops within
+/// well under a millisecond of its deadline, many enough that the look
+/// costs nothing measurable.
+const DEADLINE_EVERY: u64 = 1024;
+
+/// A standard stream the program writes to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stream {
+    Stdout,
+    Stderr,
 }
 
 impl<'p, 'h> Interpreter<'p, 'h> {
@@ -125,13 +164,171 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             host,
             tasks: Tasks::default(),
             depth: 0,
+            limits: Limits::NONE,
+            output_written: 0,
+            fuel: u64::MAX,
+            deadline: None,
         }
     }
 
-    /// Enter a call of a function or closure, made at `span`: a panic
-    /// with `P0021` when calls already nest [`MAX_CALL_DEPTH`] deep. Each
+    /// This interpreter, under the run `limits`.
+    pub fn with_limits(mut self, limits: Limits) -> Self {
+        self.limits = limits;
+        self.fuel = limits.max_steps.unwrap_or(u64::MAX);
+        // A deadline past what the clock can count (on some hosts, a few
+        // hundred years) is never reached: no deadline.
+        let deadline = limits.timeout.and_then(|ms| {
+            std::time::Instant::now().checked_add(std::time::Duration::from_millis(ms))
+        });
+        if let Some(at) = deadline {
+            let steps = self.fuel;
+            self.fuel = steps.min(DEADLINE_EVERY);
+            let steps_held = match limits.max_steps {
+                Some(_) => steps - self.fuel,
+                None => 0,
+            };
+            self.deadline = Some(Box::new(Deadline { at, steps_held }));
+        }
+        self
+    }
+
+    /// Take one **step** (ADR 0021), at `span`: a call of a function,
+    /// method or closure written in Oska, or a loop's back-edge. Every
+    /// step of the program passes through here, so this is the hook for
+    /// whatever a run checks as it goes: under `--max-steps`, the step
+    /// past the limit panics with `P0038` instead of being taken; under
+    /// `--timeout`, a step past the deadline panics with `P0039`.
+    ///
+    /// The fast path only spends fuel; everything else is in
+    /// [`Interpreter::out_of_fuel`]. Under `--timeout` the fuel is given
+    /// out [`DEADLINE_EVERY`] steps at a time, so the deadline is checked
+    /// there, and a run without it pays nothing for it.
+    #[inline(always)]
+    fn step(&mut self, span: Span) -> Result<(), Panic> {
+        match self.fuel.checked_sub(1) {
+            Some(fuel) => {
+                self.fuel = fuel;
+                Ok(())
+            }
+            None => self.out_of_fuel(span),
+        }
+    }
+
+    /// The step at `span` when [`Interpreter::step`] has no fuel left:
+    /// under `--timeout`, a look at the clock, past the deadline a `P0039`
+    /// panic, else [`DEADLINE_EVERY`] steps more; under `--max-steps`,
+    /// with no steps held back, the step past the limit, a `P0038` panic;
+    /// without either, after `u64::MAX` steps, a refill.
+    #[cold]
+    #[inline(never)]
+    fn out_of_fuel(&mut self, span: Span) -> Result<(), Panic> {
+        self.check_deadline(span)?;
+        if let Some(deadline) = &mut self.deadline {
+            let more = match self.limits.max_steps {
+                Some(_) => {
+                    let more = deadline.steps_held.min(DEADLINE_EVERY);
+                    deadline.steps_held -= more;
+                    more
+                }
+                None => DEADLINE_EVERY,
+            };
+            if more > 0 {
+                // This step spends one of them.
+                self.fuel = more - 1;
+                return Ok(());
+            }
+        }
+        match self.limits.max_steps {
+            Some(limit) => Err(Panic::new(
+                Limit::Steps.code(),
+                Limit::Steps.message(limit),
+                span,
+            )),
+            None => {
+                self.fuel = u64::MAX - 1;
+                Ok(())
+            }
+        }
+    }
+
+    /// Under `--timeout`, a `P0039` panic at `span` once the deadline has
+    /// passed.
+    fn check_deadline(&self, span: Span) -> Result<(), Panic> {
+        match &self.deadline {
+            Some(deadline) if std::time::Instant::now() >= deadline.at => {
+                Err(self.time_limit(span))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// The `P0039` panic at `span`: the program has run past `--timeout`.
+    fn time_limit(&self, span: Span) -> Panic {
+        let ms = self.limits.timeout.unwrap_or_default();
+        Panic::new(Limit::Time.code(), Limit::Time.message(ms), span)
+    }
+
+    /// Read a line from standard input for the call at `span`. Under
+    /// `--timeout` the wait ends at the deadline, with a `P0039` panic.
+    pub(crate) fn read_line(
+        &mut self,
+        span: Span,
+    ) -> Result<std::io::Result<Option<String>>, Panic> {
+        let Some(deadline) = self.deadline.as_ref().map(|d| d.at) else {
+            return Ok(self.host.read_line());
+        };
+        self.check_deadline(span)?;
+        // `None`: the deadline passed while the program waited.
+        self.host
+            .read_line_before(deadline)
+            .ok_or_else(|| self.time_limit(span))
+    }
+
+    /// The host the program runs on.
+    pub(crate) fn host(&mut self) -> &mut dyn Host {
+        self.host
+    }
+
+    /// Under `--max-output`, the bytes the program may still write.
+    pub(crate) fn output_left(&self) -> Option<u64> {
+        let limit = self.limits.max_output?;
+        Some(limit - self.output_written)
+    }
+
+    /// Write `text`, which the program writes, to `stream`. Under
+    /// `--max-output`, a write that would take stdout and stderr together
+    /// past the limit writes nothing and panics with `P0041` at `span`.
+    pub(crate) fn write_output(
+        &mut self,
+        stream: Stream,
+        text: &str,
+        span: Span,
+    ) -> Result<std::io::Result<()>, Panic> {
+        if let Some(limit) = self.limits.max_output {
+            let bytes = u64::try_from(text.len()).unwrap_or(u64::MAX);
+            if bytes > limit - self.output_written {
+                return Err(Panic::new(
+                    Limit::Output.code(),
+                    Limit::Output.message(limit),
+                    span,
+                ));
+            }
+            self.output_written += bytes;
+        }
+        Ok(match stream {
+            Stream::Stdout => self.host.write_stdout(text),
+            Stream::Stderr => self.host.write_stderr(text),
+        })
+    }
+
+    /// Enter a call of a function or closure, made at `span`: a step
+    /// ([`Interpreter::step`]), then a panic with `P0021` when calls
+    /// already nest [`MAX_CALL_DEPTH`] deep. Every call of a function,
+    /// method or closure written in Oska enters here, and nothing else
+    /// does (`main` is not called by the program, so it is no step). Each
     /// successful entry is paired with [`Interpreter::leave`].
     fn enter(&mut self, span: Span) -> Result<(), Panic> {
+        self.step(span)?;
         if self.depth >= MAX_CALL_DEPTH || stack_exhausted() {
             return Err(Panic::new(
                 codes::CALL_DEPTH_EXCEEDED,
@@ -337,8 +534,8 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     #[inline(never)]
     fn eval_other(&mut self, expr: &Expr, frame: &mut Frame) -> Result<Value, Unwind> {
         match &expr.kind {
-            ExprKind::Str(text) => Ok(Value::str(text)),
-            ExprKind::Interpolated(parts) => self.interpolated(parts, frame),
+            ExprKind::Str(text) => Ok(memory::text(text, expr.span)?),
+            ExprKind::Interpolated(parts) => self.interpolated(parts, expr.span, frame),
             ExprKind::SelfValue => Ok(frame
                 .receiver
                 .clone()
@@ -350,15 +547,19 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             ExprKind::Not(operand) => Ok(Value::Bool(!self.eval(operand, frame)?.as_bool())),
             ExprKind::Range { start, end } => {
                 let start = self.eval(start, frame)?;
-                Ok(Value::range(start, self.eval(end, frame)?))
+                let end = self.eval(end, frame)?;
+                Ok(memory::range(start, end, expr.span)?)
             }
-            ExprKind::List(items) => Ok(Value::List(Rc::new(self.eval_all(items, frame)?))),
+            ExprKind::List(items) => {
+                let items = self.eval_all(items, frame)?;
+                Ok(memory::list(items, expr.span)?)
+            }
             ExprKind::Construct { ctor, fields } => {
                 let fields = self.eval_all(fields, frame)?;
-                Ok(Value::construct(ctor, fields))
+                Ok(memory::construct(ctor, fields, expr.span)?)
             }
             ExprKind::Field { base, index } => Ok(self.eval(base, frame)?.field(*index)),
-            ExprKind::Closure(code) => Ok(self.closure(code, frame)),
+            ExprKind::Closure(code) => Ok(self.closure(code, expr.span, frame)?),
             ExprKind::CallValue { callee, args } => {
                 self.call_value_expr(callee, args, expr.span, frame)
             }
@@ -431,13 +632,18 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     /// A closure value: `code`, with what it captures from `frame`: only
     /// the slots and receiver its body reads.
     #[inline(never)]
-    fn closure(&mut self, code: &Arc<program::Closure>, frame: &Frame) -> Value {
+    fn closure(
+        &mut self,
+        code: &Arc<program::Closure>,
+        span: Span,
+        frame: &Frame,
+    ) -> Result<Value, Panic> {
         debug_assert_eq!(
             frame.slots.len(),
             code.height,
             "the frame's slots match the checker's locals"
         );
-        Value::Closure(Rc::new(ClosureValue {
+        let closure = ClosureValue {
             code: Arc::clone(code),
             captured: code
                 .captures
@@ -445,7 +651,8 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 .map(|&slot| frame.slots[slot].clone())
                 .collect(),
             receiver: frame.receiver.clone().filter(|_| code.captures_self),
-        }))
+        };
+        memory::closure(closure, span)
     }
 
     /// A call of a function value, made at `span`.
@@ -489,9 +696,13 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         frame: &mut Frame,
     ) -> Result<Value, Unwind> {
         let args = self.eval_all(args, frame)?;
+        let before = metered_place(receiver).then(|| field_path(receiver, frame));
         let mut taken = std::mem::replace(place_mut(receiver, frame), Value::Unit);
         let value = self.call_mutating(callee, &mut taken, args, span);
         *place_mut(receiver, frame) = taken;
+        if let Some(before) = before {
+            relocate_path(receiver, frame, &before);
+        }
         Ok(value?)
     }
 
@@ -667,7 +878,11 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 let value = self.eval(value, frame)?;
                 // The old value is dropped: a copy elsewhere keeps its own
                 // reference to it.
-                *place_mut(place, frame) = value;
+                if metered_place(place) {
+                    assign_metered(place, value, frame);
+                } else {
+                    *place_mut(place, frame) = value;
+                }
             }
             Stmt::Return { value, span } => {
                 let value = match value {
@@ -678,32 +893,45 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             }
             Stmt::Break(_) => return Err(Unwind::Break),
             Stmt::Continue(_) => return Err(Unwind::Continue),
-            Stmt::While { cond, body, .. } => self.while_loop(cond, body, frame)?,
+            Stmt::While { cond, body, span } => self.while_loop(cond, body, *span, frame)?,
             Stmt::For {
-                binds, iter, body, ..
-            } => self.for_loop(*binds, iter, body, frame)?,
+                binds,
+                iter,
+                body,
+                span,
+                ..
+            } => self.for_loop(*binds, iter, body, *span, frame)?,
         }
         Ok(())
     }
 
+    /// `while`, the statement at `span`.
     #[inline(never)]
-    fn while_loop(&mut self, cond: &Expr, body: &Expr, frame: &mut Frame) -> Result<(), Unwind> {
+    fn while_loop(
+        &mut self,
+        cond: &Expr,
+        body: &Expr,
+        span: Span,
+        frame: &mut Frame,
+    ) -> Result<(), Unwind> {
         while self.eval(cond, frame)?.as_bool() {
-            if !self.loop_body(body, frame)? {
+            if !self.loop_body(body, span, frame)? {
                 break;
             }
         }
         Ok(())
     }
 
-    /// `for` over a range or a list. Iterating a list holds a reference
-    /// to it, so the body writing the `var` it came from changes a copy.
+    /// `for` over a range or a list, the statement at `span`. Iterating a
+    /// list holds a reference to it, so the body writing the `var` it
+    /// came from changes a copy.
     #[inline(never)]
     fn for_loop(
         &mut self,
         binds: bool,
         iter: &Expr,
         body: &Expr,
+        span: Span,
         frame: &mut Frame,
     ) -> Result<(), Unwind> {
         let iterated = match &iter.kind {
@@ -732,7 +960,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             if binds {
                 frame.slots.push(item);
             }
-            let go_on = self.loop_body(body, frame);
+            let go_on = self.loop_body(body, span, frame);
             frame.slots.truncate(height);
             if !go_on? {
                 break;
@@ -741,11 +969,17 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         Ok(())
     }
 
-    /// Run one iteration of a loop's body. Returns whether the loop goes
-    /// on: `false` after a `break`.
-    fn loop_body(&mut self, body: &Expr, frame: &mut Frame) -> Result<bool, Unwind> {
+    /// Run one iteration of the body of the loop at `span`. Returns
+    /// whether the loop goes on: `false` after a `break`. Going on, back
+    /// to the condition or the next item, is the loop's back-edge, a
+    /// step ([`Interpreter::step`]) spanning the loop: one for each
+    /// iteration that ends without `break`, the last one included.
+    fn loop_body(&mut self, body: &Expr, span: Span, frame: &mut Frame) -> Result<bool, Unwind> {
         match self.eval(body, frame) {
-            Ok(_) | Err(Unwind::Continue) => Ok(true),
+            Ok(_) | Err(Unwind::Continue) => {
+                self.step(span)?;
+                Ok(true)
+            }
             Err(Unwind::Break) => Ok(false),
             Err(other) => Err(other),
         }
@@ -900,7 +1134,15 @@ impl<'p, 'h> Interpreter<'p, 'h> {
 
     /// An interpolated string: each hole displayed through the
     /// implementation the checker chose.
-    fn interpolated(&mut self, parts: &[Part], frame: &mut Frame) -> Result<Value, Unwind> {
+    fn interpolated(
+        &mut self,
+        parts: &[Part],
+        span: Span,
+        frame: &mut Frame,
+    ) -> Result<Value, Unwind> {
+        if memory::metered() {
+            return self.interpolated_metered(parts, span, frame);
+        }
         let mut text = String::new();
         for part in parts {
             match part {
@@ -914,6 +1156,48 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             }
         }
         Ok(Value::str(&text))
+    }
+
+    /// [`Interpreter::interpolated`] under `--max-memory`: each hole is
+    /// displayed first, and the whole text charged before it is built.
+    #[cold]
+    #[inline(never)]
+    fn interpolated_metered(
+        &mut self,
+        parts: &[Part],
+        span: Span,
+        frame: &mut Frame,
+    ) -> Result<Value, Unwind> {
+        let mut shown = Vec::with_capacity(parts.len());
+        for part in parts {
+            if let Part::Hole { value, display, .. } = part {
+                let at = value.span;
+                let value = self.eval(value, frame)?;
+                shown.push(self.call_callee(display, vec![value], at)?);
+            }
+        }
+        let len = parts
+            .iter()
+            .map(|part| match part {
+                Part::Text(t) => t.len(),
+                Part::Hole { .. } => 0,
+            })
+            .sum::<usize>()
+            + shown.iter().map(|s| s.as_str().len()).sum::<usize>();
+        let text = memory::text_of_len(len, span, || {
+            let mut text = String::with_capacity(len);
+            let mut holes = shown.iter();
+            for part in parts {
+                match part {
+                    Part::Text(t) => text.push_str(t),
+                    Part::Hole { .. } => {
+                        text.push_str(holes.next().map_or("", Value::as_str));
+                    }
+                }
+            }
+            text
+        })?;
+        Ok(text)
     }
 }
 
@@ -929,6 +1213,74 @@ fn place_mut<'f>(place: &Place, frame: &'f mut Frame) -> &'f mut Value {
             .expect("the checker allows `self` only in a method"),
         Place::Field { base, index } => match place_mut(base, frame) {
             Value::Struct { fields, .. } => &mut Rc::make_mut(fields)[*index],
+            other => unreachable!("the checker guarantees a struct, found {other:?}"),
+        },
+    }
+}
+
+/// Whether a write at `place` is one the meter follows: to a field, under
+/// `--max-memory`. A write to a local never is, with or without it.
+#[inline]
+fn metered_place(place: &Place) -> bool {
+    matches!(place, Place::Field { .. }) && memory::metered()
+}
+
+/// Each struct's fields a write at `place` goes through, outermost first,
+/// with whether they are shared: what [`relocate_path`] needs after the
+/// write.
+#[cold]
+#[inline(never)]
+fn field_path(place: &Place, frame: &Frame) -> Vec<(usize, bool)> {
+    let mut lists = Vec::new();
+    field_lists(place, frame, &mut lists);
+    lists
+        .iter()
+        .map(|fields| (Rc::as_ptr(fields) as usize, Rc::strong_count(fields) > 1))
+        .collect()
+}
+
+/// `*place = value` for a write the meter follows ([`metered_place`]).
+#[cold]
+#[inline(never)]
+fn assign_metered(place: &Place, value: Value, frame: &mut Frame) {
+    let before = field_path(place, frame);
+    *place_mut(place, frame) = value;
+    relocate_path(place, frame, &before);
+}
+
+/// After a write at `place`, which went through the fields `before` named
+/// ([`field_path`]): the meter follows each that was copied or moved.
+#[cold]
+#[inline(never)]
+fn relocate_path(place: &Place, frame: &Frame, before: &[(usize, bool)]) {
+    let mut lists = Vec::new();
+    field_lists(place, frame, &mut lists);
+    for (&(at, shared), fields) in before.iter().zip(lists) {
+        memory::relocated(at, shared, fields);
+    }
+}
+
+/// The fields of each struct a write at `place` goes through, outermost
+/// first.
+fn field_lists<'f>(place: &Place, frame: &'f Frame, out: &mut Vec<&'f Rc<Vec<Value>>>) {
+    if let Place::Field { base, .. } = place {
+        field_lists(base, frame, out);
+        if let Value::Struct { fields, .. } = place_ref(base, frame) {
+            out.push(fields);
+        }
+    }
+}
+
+/// The value at `place`, to read.
+fn place_ref<'f>(place: &Place, frame: &'f Frame) -> &'f Value {
+    match place {
+        Place::Local(slot) => &frame.slots[*slot],
+        Place::SelfValue => frame
+            .receiver
+            .as_ref()
+            .expect("the checker allows `self` only in a method"),
+        Place::Field { base, index } => match place_ref(base, frame) {
+            Value::Struct { fields, .. } => &fields[*index],
             other => unreachable!("the checker guarantees a struct, found {other:?}"),
         },
     }

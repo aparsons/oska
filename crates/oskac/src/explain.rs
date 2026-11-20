@@ -9,6 +9,7 @@
 //! tests in `tests/catalog.rs` keep them in step with the codes the
 //! source defines.
 
+use crate::fence::{FenceLine, Fences};
 use crate::json::{quote, quote_option};
 use std::fmt::Write;
 
@@ -101,15 +102,16 @@ fn read_doc(doc: &str, entries: &mut Vec<Entry>) {
     let mut open: Option<Block> = None;
     let mut examples: Vec<(bool, String, String)> = Vec::new();
     let first_of_doc = entries.len();
+    let mut fences = Fences::default();
     for line in doc.lines() {
-        match (&mut open, line.strip_prefix("```")) {
-            (None, Some(info)) => {
+        match fences.line(line) {
+            FenceLine::Opens(info) => {
                 open = Some(Block {
                     tag: tag_of(info),
                     body: String::new(),
                 });
             }
-            (Some(_), Some(rest)) if rest.trim().is_empty() => {
+            FenceLine::Closes => {
                 if let Some(Block {
                     tag: Some((is_error, code)),
                     body,
@@ -117,13 +119,14 @@ fn read_doc(doc: &str, entries: &mut Vec<Entry>) {
                 {
                     examples.push((is_error, code, body));
                 }
-                open = None;
             }
-            (Some(block), _) => {
-                block.body.push_str(line);
-                block.body.push('\n');
-            }
-            (None, None) => entries.extend(row_of(line)),
+            FenceLine::Other => match &mut open {
+                Some(block) => {
+                    block.body.push_str(line);
+                    block.body.push('\n');
+                }
+                None => entries.extend(row_of(line)),
+            },
         }
     }
     for (is_error, code, body) in examples {
