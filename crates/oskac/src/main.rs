@@ -89,11 +89,12 @@ USAGE:
                                            every platform into one directory
                                            (by default <name>-v<X.Y.Z>), with
                                            a SHA256SUMS signed by the SSH key
-    oskac fix [path] [--dry-run] [--placeholders] [--format=json]
+    oskac fix [path] [--dry-run] [--placeholders] [--release] [--format=json]
                                            Apply the machine fixes to a source
                                            file or package, checking again
-                                           after each, and write each changed
-                                           file once
+                                           after each (as the release check
+                                           does, with --release), and write
+                                           each changed file once
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
     oskac hook claude --event=post-edit [--format=json]
                                            Check what Claude Code just edited,
@@ -123,7 +124,8 @@ struct Flags {
     /// `--format=json`: machine-readable output. Any other `--format=`
     /// means the default, human-readable output.
     json: bool,
-    /// `--release`: `oskac check` rejects `dbg` and `todo`.
+    /// `--release`: `oskac check` runs the release check, rejecting `dbg`,
+    /// `todo` and unused authority, and `oskac fix` checks as it does.
     release: bool,
     /// `--integration`: `oskac test` runs `#[integration]` tests too.
     integration: bool,

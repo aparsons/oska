@@ -6,7 +6,7 @@
 //! the `cap` rule on declarations, function purity, closure capture, and
 //! contract purity all use it.
 
-use oska_syntax::ast::{FnDecl, ImplDecl, Item, ItemKind, Module, Type, TypeKind};
+use oska_syntax::ast::{FnDecl, ImplDecl, Item, ItemKind, Module, Param, Type, TypeKind};
 
 use crate::collect::{DeclKind, Decls};
 use crate::items::{Bound, ImplInfo, Items, Lower};
@@ -240,6 +240,19 @@ fn function(name: String, item: &Item, f: &FnDecl, lower: Lower) -> FunctionAuth
         via,
         pure: !total.bearing,
     }
+}
+
+/// The parameters of `f` (not its receiver) that are capability-bearing,
+/// as the authority report lists them in `via`. `lower` has the
+/// enclosing impl's generics and `Self` in scope.
+pub(crate) fn bearing_params<'f>(f: &'f FnDecl, lower: Lower) -> Vec<&'f Param> {
+    let decls = lower.decls();
+    let lower = lower.with_generics(&f.generics);
+    let bounded: Vec<String> = lower.bounds.iter().map(|b| b.param.clone()).collect();
+    f.params
+        .iter()
+        .filter(|param| reach(&lower.ty(&param.ty), decls, &bounded, &mut Vec::new()).bearing)
+        .collect()
 }
 
 /// The last segment of a type's path, such as `Logger` for

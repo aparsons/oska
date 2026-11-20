@@ -69,6 +69,27 @@ Reading the report: `word_count` can only read beneath one directory, `double` c
 
 For a larger example, this site is built by an Oska program, `site/build.osk`. Its [authority report](https://oskalang.dev/authority.html) is printed by `oskac check` on every build and published as it was printed.
 
+### Unused authority
+
+A report is only worth reviewing if it is honest, so a function must use every capability it takes. A capability-bearing parameter that the function never uses is **unused authority**, and the release check, `oskac check --release`, rejects it with `E0296`. Any use counts: calling a method on it, passing it on, attenuating it, storing it, returning it, or capturing it in a closure. An ordinary `oskac check` says nothing, so a function you are still writing can take a capability before its body uses it.
+
+```oska
+fn greet(io: Stdout, net: Net) -> Result<(), IoError> {
+    io.println("hello")
+}
+
+fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    greet(io, net)
+}
+```
+
+```console cmd=check release stream=stderr
+main.osk:1:22: error[E0296]: unused authority: `greet` never uses its parameter `net`, so it declares authority it does not exercise; remove the parameter (bytes 21..29)
+    fix (maybe): remove the parameter `net`
+```
+
+`main` passes `net` on, so it uses it; `greet` never does. Remove the parameter, and then `main`'s `net` is unused too. On `main` the fix is `machine`, since nothing calls `main`, and `oskac fix --release` applies it; on any other function it is `maybe`, because its callers change too. A method whose signature a trait fixes is exempt. Naming a parameter `_net` does not silence it: a capability a function does not use is removed, not hidden ([ADR 0016](../adr/0016-unused-authority-is-a-release-check-error.md)).
+
 ## Attenuation
 
 You cannot forge a capability. You get one by being passed it, or by **attenuation**: producing a narrower capability from one you hold. Attenuation never widens authority, and there is no way back from a narrow capability to a wider one.
@@ -267,11 +288,12 @@ A program that declares `Net`, `NetConnect`, `NetListen`, `Spawn`, or `Sched` in
 
 ```oska
 fn main(net: Net) {
+    let _ = net
 }
 ```
 
 ```console cmd=run stream=stderr
-main.osk:1:19: error[E0370]: `oskac run` cannot grant `Net` yet: the capability has no runtime (bytes 18..21)
+main.osk:1:19: error[E0370]: `oskac run` cannot grant `Net` yet: the capability has no runtime (bytes 18..37)
 ```
 
 ## Two exceptions

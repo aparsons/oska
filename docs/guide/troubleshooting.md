@@ -278,7 +278,7 @@ fn query() {
 
 ### Release builds: `E0216` and `E0293`
 
-`oskac check --release` rejects `dbg(...)` and `todo()`:
+`oskac check --release`, the release check, rejects `dbg(...)` and `todo()`, and unused authority: a capability-bearing parameter that its function never uses (`E0296`, see [capabilities](capabilities.md)):
 
 ```oska
 fn main(io: Stdout) -> Result<(), IoError> {

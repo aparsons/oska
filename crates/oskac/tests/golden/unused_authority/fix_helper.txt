@@ -1,0 +1,15 @@
+$ oskac fix app.osk --release
+exit: 1
+--- stdout
+--- stderr
+app.osk:1:10: error[E0296]: unused authority: `count` never uses its parameter `clock`, so it declares authority it does not exercise; remove the parameter (bytes 9..21)
+    fix (maybe): remove the parameter `clock`
+--- file app.osk
+fn count(clock: Clock, n: Int) -> Int {
+    n + 1
+}
+
+fn main(out: Stdout, clock: Clock) -> Result<(), IoError> {
+    let n = count(clock, 1)
+    out.println("{n}")
+}

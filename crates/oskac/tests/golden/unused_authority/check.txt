@@ -1,0 +1,15 @@
+$ oskac check app.osk
+exit: 0
+--- stdout
+fn count: Clock (clock)
+fn main: Stdout (out), Net (net), Clock (clock)
+--- stderr
+--- file app.osk
+fn count(clock: Clock, n: Int) -> Int {
+    n + 1
+}
+
+fn main(out: Stdout, net: Net, clock: Clock) -> Result<(), IoError> {
+    let n = count(clock, 1)
+    out.println("{n}")
+}

@@ -1,0 +1,9 @@
+$ oskac fix app.osk --release
+exit: 0
+--- stdout
+app.osk:1:22: fixed E0296: remove the parameter `net`
+--- stderr
+--- file app.osk
+fn main(out: Stdout) -> Result<(), IoError> {
+    out.println("hi")
+}
