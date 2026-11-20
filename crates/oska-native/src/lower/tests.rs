@@ -129,6 +129,25 @@ impl Body<'_, '_> {
                     self.panic_text(panics::TEST_FAILED, "panic_message", &[message], span)?;
                 self.push(Inst::Jump(failed));
             }
+            // The value's `dbg` text goes to `oskac`, which compares it
+            // with its snapshot (`crate::snapshot_records`).
+            ("TestContext.assert_snapshot", &[_, value]) => {
+                let Some(ty) = type_args.first() else {
+                    return Err(self.refuse(span, &format!("`{name}`")));
+                };
+                let ty = self.ty(ty);
+                let text = self.debug_text(&ty, value, span)?;
+                let head = self.text(&format!(
+                    "{}{}..{} ",
+                    crate::SNAPSHOT_MARK,
+                    span.start,
+                    span.end
+                ));
+                let site = self.frame_text(span);
+                let site = self.text(&site);
+                self.call_runtime("test_snapshot", vec![head, text, site], NOWHERE)?;
+                self.release(text, &Type::String)?;
+            }
             ("TestContext.assert_eq" | "TestContext.assert_ne", &[_, actual, other]) => {
                 let Some(ty) = type_args.first() else {
                     return Err(self.refuse(span, &format!("`{name}`")));

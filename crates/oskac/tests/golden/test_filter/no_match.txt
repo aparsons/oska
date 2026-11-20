@@ -1,0 +1,5 @@
+$ oskac test crates/oskac/tests/fixtures/test_filter.osk --filter=nope
+exit: 1
+--- stdout
+--- stderr
+error: no test name contains `nope`; 3 tests filtered out

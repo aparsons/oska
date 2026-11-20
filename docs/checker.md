@@ -16,7 +16,7 @@ A method called qualified by its type is listed the same way: `FsRead.restrict_t
 
 A reviewer reads a program's filesystem reach straight from these lines: `FsRead -> DirRead: restrict_to "docs"` and `FsWrite -> DirWrite: restrict_to "_site"` mean the program reads `docs` and writes `_site`. Whole-filesystem access shows as `restrict_to "/"`.
 
-Type and trait names in signatures and declarations are resolved, declarations are checked (`cap`, `main`, capitalization, recursive types, and where a `Scope` may appear), functions, methods, and impls are checked for duplicates, and under `--release` every body is scanned for `dbg(...)` and `todo()`. A `use` must name a `std.*` module that exists (`E0294`, `E0295`); see [`std` modules](#std-modules) for which do. In a package, `use pkg.a.b` imports the module `src/a/b.osk` and binds `b`, and `use pkg.a.b.{X, y}` imports its items by name; only items marked `pub(pkg)` or `pub` can be used from another module (`E0203`–`E0208`). The modules are checked as one program, so every other rule holds across the whole package; a message names an item as code in the message's module writes it: plainly in its own module, and by its module path elsewhere, as `util.text.shout`. The authority report names every function absolutely, starting with `pkg.`, as `pkg.util.text.shout`. Function, method, constant, and test bodies are type-checked with local, bidirectional inference: `let` types come from initializers, the expected type flows into literals, generic constructors, and closures, and an expression that fails gets an error type so it causes only one diagnostic.
+Type and trait names in signatures and declarations are resolved, declarations are checked (`cap`, `main`, capitalization, recursive types, and where a `Scope` may appear), functions, methods, and impls are checked for duplicates, and under `--release` every body is scanned for `dbg(...)` and `todo()`, every capability-bearing parameter must be used, and every capability-bearing field of a `cap struct` must be read somewhere in the program (unused authority, `E0296` and `E0297`). A `use` must name a `std.*` module that exists (`E0294`, `E0295`); see [`std` modules](#std-modules) for which do. In a package, `use pkg.a.b` imports the module `src/a/b.osk` and binds `b`, and `use pkg.a.b.{X, y}` imports its items by name; only items marked `pub(pkg)` or `pub` can be used from another module (`E0203`–`E0208`). The modules are checked as one program, so every other rule holds across the whole package; a message names an item as code in the message's module writes it: plainly in its own module, and by its module path elsewhere, as `util.text.shout`. The authority report names every function absolutely, starting with `pkg.`, as `pkg.util.text.shout`. Function, method, constant, and test bodies are type-checked with local, bidirectional inference: `let` types come from initializers, the expected type flows into literals, generic constructors, and closures, and an expression that fails gets an error type so it causes only one diagnostic.
 
 Text carries a trust flag (ADR 0006). `Untrusted<String>` is untrusted text; plain `String` is trusted. Text from outside the program is untrusted: `DirRead.read_to_string`, `FileRead.read_to_string`, `Stdin.read_line`, `Env.get`, and `Args.get` return it. Trusted text may be used wherever untrusted text is accepted, so a data position such as `Stdout.println` or `Path.from` takes both; untrusted text is never accepted where trusted `String` is required (`E0300`). A validator vouches for text it has checked with `.assume_trusted()`, which returns trusted `String`; each call is a trust assertion, listed in the report's `audit` array. `Untrusted<...>` marks text only (`E0320`).
 
@@ -34,7 +34,7 @@ Inside a generic body a type parameter is never capability-bearing and never hol
 
 A trait's `Self` is a type parameter too, so a trait whose contract uses `self`, or whose default method keeps `self` in a plain `fn`, cannot be implemented for a capability-bearing type. The assumption is checked at a call of a generic function or method (for its own generics and its impl's), where a bound is satisfied through a generic impl, and at an impl of the trait. A generic that instantiates another with its own parameter passes the assumption on, so `fn outer<U: Speak>(x: U) -> Int { check(x) }` cannot be called with a `Stdout` either when `check`'s contract calls `x.ok()`.
 
-A `test` body sees one built-in value, `t`, of the prelude type `TestContext`. Its fields are stand-in capabilities: `t.fs` (an in-memory `Fs`), `t.clock` (a fixed `Clock`), `t.random` (a seeded `Random`), and `t.stdout` (a recording `Stdout`). Its methods are the assertions `t.assert(cond)`, `t.assert_eq(actual, expected)`, `t.assert_ne(actual, other)`, and `t.fail(message)`, and `t.printed()` returns the lines printed to `t.stdout`. An `#[integration]` test gets the same `t`; the runtime decides which capabilities are real. A test produces no value, so its last expression is a statement like the others.
+A `test` body sees one built-in value, `t`, of the prelude type `TestContext`. Its fields are stand-in capabilities: `t.fs` (an in-memory `Fs`), `t.clock` (a fixed `Clock`), `t.random` (a seeded `Random`), and `t.stdout` (a recording `Stdout`). Its methods are the assertions `t.assert(cond)`, `t.assert_eq(actual, expected)`, `t.assert_ne(actual, other)`, `t.fail(message)`, and `t.assert_snapshot(value)`, which compares the value with a stored snapshot (`docs/runtime.md`, Snapshots), and `t.printed()` returns the lines printed to `t.stdout`. An `#[integration]` test gets the same `t`; the runtime decides which capabilities are real. A test produces no value, so its last expression is a statement like the others.
 
 ## Report
 
@@ -120,7 +120,7 @@ The lexer and the parser report these. A syntax error is the only diagnostic of 
 | `E0005` | A `;`: Oska has no semicolons, because a line break ends a statement. | Remove the `;` when it ends a line. | machine |
 | `E0100` | The parser expected an expression, a type, or a pattern and found something else. | None. | — |
 | `E0101` | The parser expected a specific token, such as a `)`, and found another. The message names it. Items must also be separated by a line break, so two items on one line give this code. | None. | — |
-| `E0102` | A `{...}` hole in a string that holds more than a name or a field path, such as `{n + 1}`. Compute the value with `let` first. | None. | — |
+| `E0102` | A `{...}` hole in a string that holds more than a name or a field path, such as `{n + 1}`. Compute the value with `let` first. | Hoist the expression into `let value = ...` on its own line before the statement (`value2` and so on when the module already has the word, or for a later hole of the same statement), and put the name in the hole. The fix is `maybe` when the expression may reach a capability or holds `?`, `return`, `break` or `continue`, when hoisting changes when it runs (in a `while` condition, on the right side of `&&`, `\|\|` or `implies`, or in an `else if` condition), or when something that runs before the hole in its statement could have an effect, leave early or change what the hole reads (a call, `?`, arithmetic, a comparison, or an earlier expression hole). None for a hole in a closure or `match` arm whose body is not a block, or in a guard. | machine when the expression calls only pure functions and none of the maybe cases holds, maybe otherwise |
 | `E0103` | A bare `{ ... }` block used as a statement. | None. | — |
 | `E0104` | A `let` or `var` without an initializer. | None. | — |
 | `E0105` | A chained comparison such as `a < b < c`. Comparison operators do not chain. | None. | — |
@@ -266,8 +266,8 @@ fn main() {
 ```oska fixed=E0102
 fn main() {
     let n = 1
-    let next = n + 1
-    let text = "next is {next}"
+    let value = n + 1
+    let text = "next is {value}"
 }
 ```
 
@@ -697,7 +697,7 @@ test "setup" {
 
 ## Diagnostic codes
 
-A code's fix has an applicability, as a diagnostic's `fix` says: `machine` when it is certainly right, `maybe` when it is a guess, such as the closest name to an unknown one, and `placeholders` when it leaves code to write, such as `todo()`. The syntax codes' fixes are `machine`. A fix that could change authority is never `machine`, however certain: adding a bound to a type parameter (`E0260`, `E0265`) gives the function what its type argument can do, and qualifying an export (`E0340`) can name a capability such as `sql.Db`. They are `maybe`, so `oskac fix` leaves them to be read and applied by hand.
+A code's fix has an applicability, as a diagnostic's `fix` says: `machine` when it is certainly right, `maybe` when it is a guess, such as the closest name to an unknown one, and `placeholders` when it leaves code to write, such as `todo()`. The syntax codes' fixes are `machine`, except `E0102`'s, which is `maybe` when hoisting the expression out of its hole could change what the program does. A fix that could widen authority is never `machine`, however certain: adding a bound to a type parameter (`E0260`, `E0265`) gives the function what its type argument can do, and qualifying an export (`E0340`) can name a capability such as `sql.Db`. They are `maybe`, so `oskac fix` leaves them to be read and applied by hand. A fix that only narrows authority can be `machine`: removing an unused parameter of `main` (`E0296`), which nothing calls. A code whose applicability depends on where the fix is offered gives the rule in its row, as `machine on main, maybe elsewhere`; a diagnostic's `fix` always says which one it is.
 
 | Code | Meaning | Fix | Applicability |
 | --- | --- | --- | --- |
@@ -767,6 +767,8 @@ A code's fix has an applicability, as a diagnostic's `fix` says: `machine` when 
 | `E0293` | A call to `todo()` when checking with `--release`. Spans the call. | None. | — |
 | `E0294` | A `use` whose path starts with neither `std.` nor `pkg.`: only the standard library and the package's own modules can be imported. Spans the path. | None. | — |
 | `E0295` | A `use std.*` of a module that does not exist. Spans the module path. | Replace the path with the single closest module, when one is close enough. | maybe |
+| `E0296` | **Unused authority**, when checking with `--release`: a capability-bearing parameter (one the authority report lists under `via`: a capability, a `cap` type, a `cap fn`, a type that carries a capability through a type argument such as `List<Stdout>`, or a parameter of a bounded type parameter) that its function or inherent method never uses. Any read of the parameter counts as a use: a method call on it, passing it on, attenuating it, storing it, returning it, capturing it in a closure, or reading it in a contract. A read of a `let`, `for`, closure parameter, match binding or `scope` handle that shadows it is not a read of it, and neither is `let _ = name`, which only discards it. A method whose signature a trait fixes, in an `impl Trait for Type` or as a trait's default method, is exempt; a receiver is not judged. A leading `_` does not silence it (ADR 0016). Spans the parameter. | Remove the parameter. `machine` on `main`, which nothing calls; `maybe` on any other function, whose callers must change too. | machine on main, maybe elsewhere |
+| `E0297` | **Unused authority** in a `cap struct`, when checking with `--release`: a capability-bearing field (one whose type is a capability, a `cap` type, a `cap fn`, or a type that carries a capability through a type argument) that no code in the program reads. Any read counts, in any function, method or module: a field access, which covers calling a method on the field and passing it on, or a `match` pattern that matches the field against a nested pattern, or binds it to a name that is then read. `let _ = value.field` is not a read, and neither is a pattern that discards the field with `_` or binds it to a name nothing reads. A field typed by one of the struct's own type parameters is judged only when that parameter has a bound, as ADR 0002 says. Reported only when the program has no other error but the release check's own (`E0216`, `E0293`, `E0296`), since a body that failed to check may read a field. A leading `_` does not silence it (ADR 0016). Spans the field. | Remove the field. `maybe`: every construction and pattern of the struct changes too. | maybe |
 | `E0300` | Untrusted text in a structural position: an `Untrusted<String>` used where trusted `String` is required, such as a `String` parameter, field, or return type. Reported instead of `E0220` when trust is the only difference. Like `E0270`, the rule is part of type compatibility, so it holds on every route, including inside type arguments such as `Option<Untrusted<String>>`. Trusted `String` may always be used as `Untrusted<String>`. The message suggests a validator or `.assume_trusted()`. Spans the expression. | None. | — |
 | `E0310` | A sink literal, such as `sql"..."`, whose module is not imported. Spans the tag. | Insert `use std.<module>` at the start of the file. | machine |
 | `E0311` | A sink literal whose tag no `std.*` module provides, such as `sqll"..."`. Spans the tag. | Replace the tag with the single closest known tag, when one is close enough. | maybe |
@@ -815,7 +817,9 @@ fn show(x: Display) {}
 ```
 
 ```oska fixed=E0201
-fn show<T: Display>(x: T) {}
+fn show<T: Display>(x: T) -> Untrusted<String> {
+    x.to_string()
+}
 ```
 
 #### `E0202`
@@ -1057,7 +1061,9 @@ fn main(count: Int) {}
 ```
 
 ```oska fixed=E0211
-fn main(io: Stdout) {}
+fn main(io: Stdout) {
+    let _ = io.println("hi")
+}
 ```
 
 #### `E0212`
@@ -1896,7 +1902,9 @@ fn main() {
 ```
 
 ```oska fixed=E0271
-fn main(out: Stdout) {}
+fn main(out: Stdout) {
+    let _ = out.println("hi")
+}
 ```
 
 #### `E0272`
@@ -1969,7 +1977,7 @@ fn check<T: Speak>(x: T) -> Int
     1
 }
 
-fn main(out: Stdout) {
+fn main() {
     let n = check(5)
 }
 ```
@@ -2072,15 +2080,15 @@ impl<T> Display for Box<T> {
 
 ```oska error=E0291
 impl FsRead {
-    fn size(self) -> Int {
-        1
+    fn docs(self) -> DirRead {
+        self.restrict_to("docs")
     }
 }
 ```
 
 ```oska fixed=E0291
-fn size(fs: FsRead) -> Int {
-    1
+fn docs(fs: FsRead) -> DirRead {
+    fs.restrict_to("docs")
 }
 ```
 
@@ -2143,6 +2151,45 @@ fn main() {}
 use std.html
 
 fn main() {}
+```
+
+#### `E0296`
+
+```oska error=E0296 release
+fn main(out: Stdout, net: Net) {
+    let _ = out.println("hi")
+}
+```
+
+```oska fixed=E0296 release
+fn main(out: Stdout) {
+    let _ = out.println("hi")
+}
+```
+
+#### `E0297`
+
+```oska error=E0297 release
+cap struct Tools {
+    out: Stdout,
+    net: Net,
+}
+
+fn main(out: Stdout, net: Net) {
+    let tools = Tools(out: out, net: net)
+    let _ = tools.out.println("hi")
+}
+```
+
+```oska fixed=E0297 release
+cap struct Tools {
+    out: Stdout,
+}
+
+fn main(out: Stdout) {
+    let tools = Tools(out: out)
+    let _ = tools.out.println("hi")
+}
 ```
 
 #### `E0300`

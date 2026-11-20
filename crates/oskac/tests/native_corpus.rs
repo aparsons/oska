@@ -407,8 +407,12 @@ fn building_the_site_generator_uses_little_cpu_time() {
     let program = report.program.expect("the generator checks");
     // The build runs on this thread, so its CPU time is this thread's.
     let started = thread_cpu_time();
-    let bytes = oska_native::build(&program, differential::host_target(), &|d| d)
-        .expect("the generator builds");
+    let bytes = oska_native::build(
+        &program,
+        differential::host_target(),
+        &oska_native::Unplaced,
+    )
+    .expect("the generator builds");
     let used = thread_cpu_time() - started;
     assert!(!bytes.is_empty());
     // A release build of `oskac` takes about 0.1 s of CPU on a Raspberry

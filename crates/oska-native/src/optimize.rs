@@ -598,8 +598,19 @@ fn rename_def(inst: &mut Inst, to: Temp) {
         | Inst::LibCall { dst, .. }
         | Inst::Arith { dst, .. }
         | Inst::Second { dst }
+        | Inst::Depth { dst }
         | Inst::EntrySp { dst } => *dst = to,
-        _ => {}
+        Inst::Store { .. }
+        | Inst::Label(_)
+        | Inst::Jump(_)
+        | Inst::JumpIfZero { .. }
+        | Inst::Branch { .. }
+        | Inst::BranchImm { .. }
+        | Inst::Enter { .. }
+        | Inst::Leave
+        | Inst::CallOnStack { .. }
+        | Inst::Return(_)
+        | Inst::ReturnPair { .. } => {}
     }
 }
 
@@ -645,6 +656,7 @@ fn rename_uses(inst: &mut Inst, from: Temp, to: Temp) {
         Inst::Const { .. }
         | Inst::Second { .. }
         | Inst::EntrySp { .. }
+        | Inst::Depth { .. }
         | Inst::Addr { .. }
         | Inst::Label(_)
         | Inst::Jump(_)

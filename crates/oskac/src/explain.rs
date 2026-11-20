@@ -34,8 +34,12 @@ pub struct Entry {
     /// What the machine-applicable fix does, when the checker offers one.
     pub machine_fix: Option<String>,
     /// How safe that fix is to apply, as a diagnostic's `fix` gives it:
-    /// `machine`, `maybe` or `placeholders`.
+    /// `machine`, `maybe` or `placeholders`. For a fix whose applicability
+    /// depends on where it is offered, the one the catalog's example gets.
     pub fix_applicability: Option<String>,
+    /// When the applicability depends on where the fix is offered, the
+    /// rest of the rule, after the name: `on main, maybe elsewhere`.
+    pub fix_applicability_note: Option<String>,
     /// A program that fails with this code, when one can.
     pub example: Option<String>,
     /// The same program fixed.
@@ -77,7 +81,10 @@ fn tag_of(info: &str) -> Option<(bool, String)> {
 
 /// A table row `` | `E0300` | meaning | fix | applicability | ``, as an
 /// entry without examples. The runtime tables have no fix column and no
-/// applicability. A `|` inside a cell is written `\|`.
+/// applicability. A `|` inside a cell is written `\|`. The applicability
+/// cell is a name, such as `machine`, then optionally a note when it
+/// depends on where the fix is offered: `machine on main, maybe
+/// elsewhere`.
 fn row_of(line: &str) -> Option<Entry> {
     let inner = line.strip_prefix("| `")?.strip_suffix(" |")?;
     let (code, cells) = inner.split_once("` | ")?;
@@ -87,12 +94,20 @@ fn row_of(line: &str) -> Option<Entry> {
     let mut cells = cells.split(" | ").map(|cell| cell.replace("\\|", "|"));
     let message = cells.next()?;
     let machine_fix = cells.next().filter(|fix| !fix.starts_with("None"));
-    let fix_applicability = cells.next().filter(|_| machine_fix.is_some());
+    let applicability = cells.next().filter(|_| machine_fix.is_some());
+    let (fix_applicability, fix_applicability_note) = match applicability {
+        Some(cell) => match cell.split_once(' ') {
+            Some((name, note)) => (Some(name.to_string()), Some(note.to_string())),
+            None => (Some(cell), None),
+        },
+        None => (None, None),
+    };
     Some(Entry {
         code: code.to_string(),
         message,
         machine_fix,
         fix_applicability,
+        fix_applicability_note,
         example: None,
         fixed: None,
     })
@@ -198,7 +213,14 @@ pub fn to_human(entry: &Entry) -> String {
         Some(fix) => {
             let _ = writeln!(out, "{}: {fix}", fix_label(entry));
             if let Some(applicability) = &entry.fix_applicability {
-                let _ = writeln!(out, "Fix applicability: {applicability}.");
+                match &entry.fix_applicability_note {
+                    Some(note) => {
+                        let _ = writeln!(out, "Fix applicability: {applicability} {note}.");
+                    }
+                    None => {
+                        let _ = writeln!(out, "Fix applicability: {applicability}.");
+                    }
+                }
             }
         }
         None => out.push_str("Machine-applicable fix: none.\n"),
@@ -217,8 +239,12 @@ pub fn to_human(entry: &Entry) -> String {
 
 /// The label of an entry's fix, as the site's code pages print it. Only a
 /// `machine` fix is certainly right (the glossary's Fix applicability); a
-/// `maybe` or `placeholders` fix is not machine-applicable.
+/// `maybe` or `placeholders` fix is not machine-applicable, and neither is
+/// one that is `machine` only in some places.
 fn fix_label(entry: &Entry) -> &'static str {
+    if entry.fix_applicability_note.is_some() {
+        return "Fix";
+    }
     match entry.fix_applicability.as_deref() {
         Some("maybe" | "placeholders") => "Fix",
         _ => "Machine-applicable fix",
@@ -242,12 +268,13 @@ fn indented(text: &str) -> String {
 /// holds for the code.
 pub fn to_json(entry: &Entry) -> String {
     format!(
-        "{{\"code\":{},\"message\":{},\"machine_fix\":{},\"machine_fix_description\":{},\"fix_applicability\":{},\"example\":{},\"fix\":{}}}",
+        "{{\"code\":{},\"message\":{},\"machine_fix\":{},\"machine_fix_description\":{},\"fix_applicability\":{},\"fix_applicability_note\":{},\"example\":{},\"fix\":{}}}",
         quote(&entry.code),
         quote(&entry.message),
         entry.machine_fix.is_some(),
         quote_option(entry.machine_fix.as_deref()),
         quote_option(entry.fix_applicability.as_deref()),
+        quote_option(entry.fix_applicability_note.as_deref()),
         quote_option(entry.example.as_deref()),
         quote_option(entry.fixed.as_deref()),
     )

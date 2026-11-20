@@ -586,6 +586,28 @@ fn explain_gives_the_applicability_of_a_codes_fix_and_null_without_one() {
     );
 }
 
+#[test]
+fn explain_gives_the_whole_applicability_rule_when_it_depends_on_where_the_fix_is() {
+    let e0296 = explained("E0296");
+    assert_eq!(e0296.get("fix_applicability"), Some(&string("machine")));
+    assert_eq!(
+        e0296.get("fix_applicability_note"),
+        Some(&string("on main, maybe elsewhere"))
+    );
+    let e0102 = explained("E0102");
+    assert_eq!(e0102.get("fix_applicability"), Some(&string("machine")));
+    assert_eq!(
+        e0102.get("fix_applicability_note"),
+        Some(&string(
+            "when the expression calls only pure functions and none of the maybe cases holds, maybe otherwise"
+        ))
+    );
+    assert_eq!(
+        explained("E0200").get("fix_applicability_note"),
+        Some(&Json::Null)
+    );
+}
+
 /// Codes with a fix whose example cannot show it: `E0170` has no
 /// example, since no program can reach it.
 const FIX_NOT_SHOWN: [&str; 1] = ["E0170"];

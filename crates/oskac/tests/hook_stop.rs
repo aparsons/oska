@@ -81,6 +81,19 @@ test \"nothing\" {
 }
 ";
 
+/// A program that passes `oskac check` and its tests, and fails
+/// `oskac check --release` with unused authority (`E0296`): `greet` is
+/// given `out` and never uses it.
+const UNUSED_AUTHORITY: &str = "\
+fn greet(out: Stdout, name: String) -> String {
+    \"hello {name}\"
+}
+
+test \"greets\" {
+    t.assert_eq(greet(t.stdout, \"a\"), \"hello a\")
+}
+";
+
 /// A program that does not check.
 const BROKEN: &str = "fn main() { let x: Int = \"a\" }\n";
 
@@ -147,6 +160,33 @@ fn the_stop_gate_runs_the_release_check_and_blocks_on_a_todo() {
             .stderr
             .lines()
             .any(|l| l.starts_with("app.osk:2:") && l.contains("todo()")),
+        "{}",
+        hooked.stderr
+    );
+}
+
+#[test]
+fn the_stop_gate_blocks_on_unused_authority() {
+    let dir = scratch("stop-unused-authority");
+    write_all(&dir, &[("app.osk", UNUSED_AUTHORITY)]);
+    let plain = Command::new(env!("CARGO_BIN_EXE_oskac"))
+        .args(["test", "app.osk"])
+        .current_dir(&dir)
+        .output()
+        .expect("oskac should run");
+    assert_eq!(
+        plain.status.code(),
+        Some(0),
+        "the plain check and the tests pass: {}",
+        String::from_utf8_lossy(&plain.stdout)
+    );
+    let hooked = stop(&[], &dir);
+    assert_eq!(hooked.code, Some(2), "{}", hooked.stderr);
+    assert!(
+        hooked
+            .stderr
+            .lines()
+            .any(|l| l.starts_with("app.osk:1:") && l.contains("error[E0296]")),
         "{}",
         hooked.stderr
     );

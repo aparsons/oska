@@ -1,0 +1,5 @@
+$ oskac test crates/oskac/tests/fixtures/test_filter.osk --filter=adds --filter twice
+exit: 2
+--- stdout
+--- stderr
+error: --filter is given more than once

@@ -38,9 +38,13 @@ USAGE:
                                            and with P0040 once its values
                                            take more than --max-memory bytes
     oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
+               [--filter <substring>] [--update]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
-                                           as `run` does
+                                           as `run` does; with --filter, only
+                                           those whose names contain the
+                                           substring; with --update, write
+                                           new and changed snapshots
     oskac build [path] [-o out] [--target <platform>|all] [--format=json] [--no-cache]
                                            Check a source file or package and,
                                            if it has no diagnostics, compile it
@@ -55,12 +59,19 @@ USAGE:
                                            every platform into one directory
                                            (by default <name>-v<X.Y.Z>), with
                                            a SHA256SUMS signed by the SSH key
-    oskac fix [path] [--dry-run] [--placeholders] [--format=json]
+    oskac fix [path] [--dry-run] [--placeholders] [--release] [--format=json]
                                            Apply the machine fixes to a source
                                            file or package, checking again
-                                           after each, and write each changed
-                                           file once
+                                           after each (as the release check
+                                           does, with --release), and write
+                                           each changed file once
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
+    oskac new <name> [--lib] [--no-agent-files] [--format=json]
+                                           Lay out a new package in the
+                                           directory <name>: oska.toml,
+                                           src/main.osk (src/lib.osk with
+                                           --lib), and the agent-setup
+                                           AGENTS.md and CLAUDE.md
     oskac hook claude --event=post-edit [--format=json]
                                            Check what Claude Code just edited,
                                            reading its hook input on standard
@@ -98,11 +109,13 @@ USAGE:
 | Flag | Used by | Effect |
 | --- | --- | --- |
 | `--format=json` | every command | Machine-readable output. See [output formats](#output-formats). |
-| `--release` | `check` | Reject `dbg(...)` (`E0216`) and `todo()` (`E0293`). The other commands accept the flag and ignore it. |
+| `--release` | `check`, `fix` | Run the release check: reject `dbg(...)` (`E0216`), `todo()` (`E0293`) and unused authority, a capability-bearing parameter its function never uses (`E0296`) or a capability-bearing `cap struct` field no code reads (`E0297`). `oskac fix --release` checks the same way, so it applies the release check's `machine` fixes too, such as removing an unused parameter of `main`. The other commands accept the flag and ignore it. |
 | `--baseline=<file>` | `check` | Compare the program's authority with the [authority baseline](#authority-baseline) in `<file>`, and exit with 3 when it widened. Any other command refuses it as a usage error. |
 | `--update-baseline=<file>` | `check` | Write the program's [authority baseline](#authority-baseline) to `<file>`, only when there are no diagnostics. Not with `--baseline`; any other command refuses it as a usage error. |
 | `--grant=<file>` | `check`, `run` | Compare the program's authority with the [authority grant](#authority-grant) in `<file>`, and exit with 3 when it goes past it; `run` then runs nothing. Not with `--baseline` or `--update-baseline`; a repeated flag, an empty file name, or the flag on any other command is a usage error (exit code 2). |
 | `--integration` | `test` | Also run the tests marked `#[integration]`, on the real operating system. |
+| `--filter=<substring>` | `test` | Run only the tests whose names contain `<substring>`, case-sensitive. Also written `--filter <substring>`, unless the substring starts with `--`. The others are neither run nor reported as tests, and the report says how many were filtered out. A filter that matches no test is an error (exit code 1). A missing or empty substring or a repeated flag is a usage error that says which, `error: --filter ...` on standard error (with `--format=json`, `{"ok":false,"error":"usage","message":"--filter ..."}` on standard output); the flag on any other command prints the usage text. Either exits with 2. |
+| `--update` | `test` | Write each snapshot that `t.assert_snapshot` finds missing or different, instead of failing the test, and list what was written. It never deletes a snapshot. Any other command given it is a usage error (exit code 2). See [snapshots](testing.md#snapshots). |
 | `--event=post-edit`, `--event=stop` | `hook` | The event the hook handles. It is required. |
 | `--interpret` | `run`, `test` | Run on the interpreter, on Linux and macOS too, where the program is otherwise compiled and run natively. See [platform support](#platform-support). The other commands accept the flag and ignore it. |
 | `--target=<platform>` | `build` | Build for this platform, named as release assets name `oskac` builds (`linux-aarch64`, ...), or with `all` for every platform with a backend. Also written `--target <platform>`. Any other command given it is a usage error (exit code 2). See [`oskac build`](#oskac-build). |
@@ -114,6 +127,8 @@ USAGE:
 | `--timeout=<ms>` | `run` | Stop the program with `P0039` (exit code 101) after `<ms>` milliseconds of wall-clock time, also while it waits for input, within a tolerance of 100 ms. Natively, `oskac` stops its own child process, only that one, and prints the report itself, with exit code 101, never `128 + n`. The value is a whole number above 0; anything else, a repeated flag, or the flag on any other command is a usage error (exit code 2). See [run limits](../runtime.md#run-limits). |
 | `--max-output=<bytes>` | `run` | Stop the program with `P0041` (exit code 101) before it writes more than `<bytes>` bytes to standard output and standard error together. The value is a whole number above 0; anything else, a repeated flag, or the flag on any other command is a usage error (exit code 2). See [run limits](../runtime.md#run-limits). |
 | `--max-memory=<bytes>` | `run` | Stop the program with `P0040` (exit code 101) before its values (texts, lists, structs, enum values, closures) take more than `<bytes>` bytes, net of those it let go of. The backends may stop at different points. The value is a whole number above 0; anything else, a repeated flag, or the flag on any other command is a usage error (exit code 2). See [run limits](../runtime.md#run-limits). |
+| `--lib` | `new` | Lay out a library: `src/lib.osk` and no `main`. Any other command given it is a usage error (exit code 2). |
+| `--no-agent-files` | `new` | Leave out `AGENTS.md` and `CLAUDE.md`. Any other command given it is a usage error (exit code 2). |
 | `--no-cache` | `check`, `run`, `test`, `build`, `release` | Neither read nor write the [build cache](#oskac-cache). Any other command refuses it as a usage error (exit code 2). |
 
 ## `oskac lex`
@@ -244,13 +259,17 @@ A bare `-` as the path makes `check` and `run` read one module from standard inp
 
 ## `oskac test`
 
-`oskac test <file.osk> [--format=json] [--integration] [--interpret]` checks the file and runs its `test` blocks in source order: natively on Linux and macOS, one process per test, or on the interpreter, as `run` chooses. The report is the same either way. The report goes to standard output: one line per test, the failures, and a summary, or one JSON object with `--format=json`. A refused file's diagnostics go to standard error, or into the JSON report's `diagnostics`. See [testing](testing.md).
+`oskac test <file.osk> [--format=json] [--integration] [--interpret] [--filter <substring>] [--update]` checks the file and runs its `test` blocks in source order: natively on Linux and macOS, one process per test, or on the interpreter, as `run` chooses. The report is the same either way. The report goes to standard output: one line per test, the failures, and a summary, or one JSON object with `--format=json`. A refused file's diagnostics go to standard error, or into the JSON report's `diagnostics`. See [testing](testing.md).
+
+`--filter <substring>` (or `--filter=<substring>`) runs only the tests whose names contain the substring, case-sensitive, on either backend. Only the name is matched, not a package test's module. The tests it leaves out are not run and not listed; the summary ends with `, N filtered out`, and the JSON report has `"filtered":N` after `skipped`. A filter that matches no test runs nothing and exits with 1, so a typo is never a passing run: it prints ``error: no test name contains `<substring>`; N tests filtered out`` to standard error, or with `--format=json` one object on standard output, in the shape of the other commands' JSON errors: `{"ok":false,"error":"no_test_matches","message":"no test name contains `<substring>`; N tests filtered out","filter":"<substring>","filtered":N}`. A program with no tests at all says so instead: ``error: the program has no tests, so the filter `<substring>` matches none``, or `{"ok":false,"error":"no_tests","message":"the program has no tests, so the filter `<substring>` matches none","filter":"<substring>","filtered":0}`. A missing or empty substring or a repeated `--filter` is a usage error, exit code 2: `error: --filter ...` on standard error, or with `--format=json` `{"ok":false,"error":"usage","message":"--filter ..."}` on standard output.
+
+`--update` writes the snapshots of `t.assert_snapshot(value)`: each one missing or different from the value is written to `snapshots/<test-file>/<test-name>.snap`, under the package's directory or beside a single file, instead of failing its test with `P0014`. It never deletes a snapshot. The human report lists each written under `snapshots written:`, as `new <path>` or `changed <path>` from the current directory, and the summary ends with `, N snapshots written`; the JSON report has `"snapshots"` (below). Without `--update`, a missing or different snapshot fails its test with `P0014`, whose message shows the difference and names `oskac test --update`. See [snapshots](testing.md#snapshots).
 
 | Exit code | Meaning |
 | --- | --- |
 | `0` | No test failed. Skipped tests do not count. |
-| `1` | A test failed, or the checker refused the file. |
-| `2` | The file uses something the interpreter cannot run yet. No test ran. |
+| `1` | A test failed, the checker refused the file, or `--filter` matched no test. |
+| `2` | A usage error, such as a `--filter` with no substring, or the file uses something the interpreter cannot run yet. No test ran. |
 
 ## `oskac build`
 
@@ -292,7 +311,7 @@ The first line puts the name and the version under the signature, so a signed re
 
 ## `oskac fix`
 
-`oskac fix [path] [--dry-run] [--placeholders] [--format=json]` applies the fixes that are safe to apply automatically to a file or package, as `check` takes them. It checks the program, applies the fix of the first diagnostic, in the order `check` reports them, whose applicability is `machine`, checks again, and repeats until no such fix is left. With `--placeholders` it applies `placeholders` fixes too, such as `match` arms whose body is `todo()`, which compile but are left to fill in. It never applies a `maybe` fix or a suggestion. It stops early when a fix leaves its own diagnostic in place, which it then undoes, or after 100 rounds.
+`oskac fix [path] [--dry-run] [--placeholders] [--release] [--format=json]` applies the fixes that are safe to apply automatically to a file or package, as `check` takes them. With `--release` each check is the release check, so the release check's `machine` fixes are applied too, such as removing `dbg` (`E0216`) and an unused parameter of `main` (`E0296`). It checks the program, applies the fix of the first diagnostic, in the order `check` reports them, whose applicability is `machine`, checks again, and repeats until no such fix is left. With `--placeholders` it applies `placeholders` fixes too, such as `match` arms whose body is `todo()`, which compile but are left to fill in. It never applies a `maybe` fix or a suggestion. It stops early when a fix leaves its own diagnostic in place, which it then undoes, or after 100 rounds.
 
 The fixes are made in memory. At the end, each changed file is written once, replacing the old file in one step. Nothing is written, and the command says which rule refused it in an `error:` line on standard error, when:
 
@@ -357,6 +376,20 @@ On every supported platform, `run` and `test` compile the program as `build` doe
 - On Linux, the glibc build and the musl build of `oskac` (see [the two Linux builds](install.md#the-two-linux-builds)) behave the same in every row of the table, and build the same bytes. The musl build compiles, and runs the interpreter, more slowly; the executables it builds run at the same speed.
 - A macOS executable is ad-hoc signed by `oskac`: it runs on a Mac, but Gatekeeper refuses it after a download. To distribute one, sign it with your Developer ID and notarize it: see [Signing and notarizing for macOS](macos-signing.md).
 
+## `oskac new`
+
+`oskac new <name>` lays out a new package in the directory `<name>`, under the current directory, so that nobody writes the layout from memory:
+
+- `oska.toml`, with `name = "<name>"` and `version = "0.1.0"`;
+- `src/main.osk`, a `main` that prints a greeting, with two tests; or, with `--lib`, `src/lib.osk`, a `pub` function and its test, and no `main`;
+- `AGENTS.md` and `CLAUDE.md`, the [agent-setup](agent-guide.md#files-for-agents) templates the site publishes, byte for byte. They are built into `oskac`, so `oskac new` works offline. `--no-agent-files` leaves both out.
+
+The package passes `oskac check --release` and `oskac test` as written, and a program's `main` uses the one capability it takes, `Stdout`, so it starts with no unused authority. In the package, `oskac run` prints `Hello, world!`.
+
+`<name>` must be a valid package name, as the manifest's `name` is: snake_case, lowercase letters and digits in words joined by single underscores, starting with a letter. The directory may not exist yet, or be empty; anything else is refused. A refusal writes nothing and exits with 1, printing `oskac new: <reason>` to standard error, or `{"ok":false,"error":"<code>","message":"..."}` with `--format=json`, where the code is `invalid_name`, `not_empty` (a directory with something in it), `exists` (a file, or a symlink, in the way) or `io` (the file system refused). Each file is created new, never written over one that is there, and an empty directory is looked at again just before the first file is written. If the file system refuses a write partway through, `oskac new` removes the files and directories it made in that run, and never anything that was there before, then refuses with `io`.
+
+On success it prints the files it wrote and exits with 0. With `--format=json` it prints `{"ok":true,"directory":"demo","files":["oska.toml","src/main.osk","AGENTS.md","CLAUDE.md"]}`, the files in the order they were written, relative to the directory. No name, or more than one, is a usage error (exit code 2): it prints the usage text to standard error, or `{"ok":false,"error":"usage","message":"..."}` with `--format=json`.
+
 ## `oskac self`
 
 `oskac self info [--format=json]` and `oskac self uninstall [--format=json]` ask `oskac` about its own installation and remove it, without the installer. They read the [install receipt](install.md#the-install-receipt) in the Oska home (`~/.oska`, or `OSKA_HOME`), and `oskac` makes no network connection to do it. Any other `self` command or flag is a usage error (exit code 2); with `--format=json` it prints `{"ok":false,"error":"usage","message":"..."}`.
@@ -406,11 +439,12 @@ Every message about a program has one shape, whichever command produced it:
 - `severity` is `error`, or `note` for a message that refuses nothing, such as the native backend handing a program to the interpreter.
 - `url` is the code's page on the documentation site.
 - `fix` is present when the checker offers a repair. Each edit replaces the bytes of `span` with `replacement`, in the diagnostic's file, or in the file the fix's own `path` names when it has one. Apply the edits of one fix from the end of the file to the start, so earlier offsets stay valid. A fix can be absent, and when it is, the repair needs judgment.
-- `applicability` says how safe a fix is to apply without reading it: `machine` when it is certainly right, `maybe` when it is probably what was meant but a guess, such as the closest name to an unknown one, and `placeholders` when the program checks afterwards but code is left to write, such as `match` arms whose body is `todo()`. Each code's fix has one applicability, which `oskac explain` and the code's page give. The human output marks the uncertain ones as `fix (maybe):` and `fix (placeholders):`.
+- `applicability` says how safe a fix is to apply without reading it: `machine` when it is certainly right, `maybe` when it is probably what was meant but a guess, such as the closest name to an unknown one, and `placeholders` when the program checks afterwards but code is left to write, such as `match` arms whose body is `todo()`. Each code's fix has one applicability, or a rule that picks it by the situation the fix is offered in, which `oskac explain` and the code's page give; a diagnostic's `fix` always says which it is. The human output marks the uncertain ones as `fix (maybe):` and `fix (placeholders):`.
 - `related` lists other places the diagnostic is about, each with a `message`, `path`, `span`, `line` and `column`, such as a name's first definition, the trait's declaration of a method, or the module an import looked in. It is filled only where the checker knows the place, and is often empty.
 - `suggestions` is where repairs that are plausible but uncertain go, in the shape of a `fix` with the applicability `maybe`. No tool applies them automatically. It is empty for every code today.
+- `frames` and `frames_omitted` come last, on a panic (`P` codes) only. `frames` is the call stack at the panic, innermost first: each frame is `{function, path, span, line, column}`, the function that was running and where it was, which for the first frame is the panic's own `span` and for each other the call it made. A function is named as code in its module names it; a closure as `<closure in f>`, after the function it is written in; the body of a test as `test "name"`. A frame that cannot be placed in a file has `path`, `line` and `column` `null`. At most 20 frames are listed, and `frames_omitted` counts the rest, so the report of runaway recursion (`P0021`) stays short. Native code and the interpreter report the same frames. The one exception is `P0021` when the interpreter's own host stack runs out before calls nest 50,000 deep, which can happen in a debug build of `oskac`: then its `frames_omitted` counts fewer frames left out. The human output lists them under the panic's line, one `    at function (path:line:column)` each, then `    ... n more frames` when some were left out.
 
-The format only grows. No field is renamed, retyped or given a new meaning, a diagnostic that has no `fix` never gains one, and a new uncertain repair goes into `suggestions`, never into `fix`. A consumer must accept values of `severity` and `applicability` that are not listed here, and fields it does not know.
+The format only grows. No field is renamed, retyped or given a new meaning, a code whose diagnostics have no `fix` gains one only by a recorded decision (a spec or an ADR), and any other new uncertain repair goes into `suggestions`, never into `fix`. A consumer must accept values of `severity` and `applicability` that are not listed here, and fields it does not know.
 
 ### `check --format=json`
 
@@ -443,10 +477,10 @@ A parse error is reported alone, with empty `functions`, `audit` and `attenuatio
 ### `test --format=json`
 
 ```json
-{"tests":[{"name":"adds","status":"passed","failure":null}],"passed":1,"failed":0,"skipped":0,"diagnostics":[]}
+{"tests":[{"name":"adds","status":"passed","duration_ms":2,"failure":null}],"passed":1,"failed":0,"skipped":0,"diagnostics":[]}
 ```
 
-`status` is `passed`, `failed`, or `skipped`. `failure` is a diagnostic object or `null`.
+`status` is `passed`, `failed`, or `skipped`. `duration_ms` is an integer, how long the test took in whole milliseconds, rounded down: natively, the test's process from start to exit, process start included; with `--interpret`, the test's run on a fresh interpreter, in-process. A skipped test has 0. It varies from run to run. `failure` is a diagnostic object or `null`. With `--filter`, `"filtered":n` follows `skipped`: the number of tests the filter left out. With `--update`, `"snapshots"` follows those: the snapshots written, each `{"path":"snapshots/lib/shows evens.snap","status":"new"}`, its `/`-separated path from the package's directory or the file's, and its `status` `new` or `changed`.
 
 ### `run --format=json`
 
@@ -498,7 +532,8 @@ With `--format=json` it prints one JSON object on one line, the same object that
 | `message` | What the code means, as Markdown. |
 | `machine_fix` | `true` when a diagnostic with this code can carry a machine-applicable fix. |
 | `machine_fix_description` | What that fix does, or `null`. |
-| `fix_applicability` | How safe that fix is to apply, as a diagnostic's `fix` gives it: `"machine"`, `"maybe"` or `"placeholders"`, or `null`. |
+| `fix_applicability` | How safe that fix is to apply, as a diagnostic's `fix` gives it: `"machine"`, `"maybe"` or `"placeholders"`, or `null`. When it depends on where the fix is offered, this is the name the rule starts with, and `fix_applicability_note` holds the rest. |
+| `fix_applicability_note` | The rest of the applicability rule when it depends on where the fix is offered, such as `"on main, maybe elsewhere"` for `E0296` (whose whole rule is `machine on main, maybe elsewhere`); otherwise `null`. A diagnostic's `fix` always says which one applies. |
 | `example` | A program that fails with exactly this code, or `null`. |
 | `fix` | The same program fixed, or `null`. |
 

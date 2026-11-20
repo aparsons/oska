@@ -13,6 +13,7 @@
     all(windows, target_arch = "x86_64")
 ))]
 
+mod common;
 mod differential;
 
 use differential::{assert_same, Case};
@@ -288,7 +289,7 @@ fn a_prelude_function_value_panics_at_the_call_of_the_value() {
         let case = Case::file(&name, PANICKING_VALUES).with_args(&[which]);
         let outcome = assert_same(&case);
         assert_eq!(
-            outcome.stderr,
+            common::frames::without_frames(&outcome.stderr),
             format!("{ok}{report}"),
             "{name}: {outcome:#?}"
         );
@@ -415,11 +416,18 @@ fn assert_boundary(name: &str, program: &str, deepest: u32, (at, bytes): (&str, 
     assert_eq!(ok.exit_code, Some(0), "{ok:#?}");
     let over = at_depth(&format!("{name}_over"), program, deepest + 1);
     assert_eq!(
-        over.stderr,
+        common::frames::without_frames(&over.stderr),
         format!(
             "main.osk:{at}: error[P0021]: calls nest too deep: is this recursion missing \
              its base case? (bytes {bytes})\n"
         ),
+        "{over:#?}"
+    );
+    // The frames: as many as a report lists, then the count of the rest,
+    // 50,000 calls and `main` in all.
+    assert_eq!(over.stderr.lines().count(), 1 + 20 + 1, "{over:#?}");
+    assert!(
+        over.stderr.ends_with("    ... 49981 more frames\n"),
         "{over:#?}"
     );
     assert_eq!(over.exit_code, Some(101), "{over:#?}");

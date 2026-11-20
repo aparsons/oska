@@ -20,7 +20,8 @@
 //!   `std.html` module.
 //! - `tasks.rs` runs `scope` blocks and their spawned tasks.
 //! - `testing.rs` runs `test` blocks for [`test`] (`oskac test`), and
-//!   implements `TestContext`'s methods.
+//!   implements `TestContext`'s methods; `snapshots.rs` numbers, compares
+//!   and writes what snapshot assertions record.
 //! - `panics.rs` defines panics and every runtime code.
 //! - `value.rs` defines runtime values.
 //! - `host.rs` defines the hosts.
@@ -50,6 +51,7 @@ mod memory;
 mod ops;
 mod panics;
 mod prng;
+pub mod snapshots;
 mod support;
 mod tasks;
 mod testing;
@@ -61,7 +63,8 @@ pub use interp::MAX_CALL_DEPTH;
 pub use oska_check::limits::Limits;
 pub use panics::codes;
 pub use testing::{
-    test, test_program, test_refusal, TestOptions, TestReport, TestResult, TestStatus,
+    escape_control, test, test_duration_ms, test_program, test_refusal, test_result, Filtered,
+    TestOptions, TestReport, TestResult, TestStatus,
 };
 
 use interp::{Interpreter, Stream};
@@ -328,18 +331,24 @@ fn run_main(
     let _metering = limits.max_memory.map(memory::Metering::start);
     let mut interpreter = Interpreter::new(program, host).with_limits(limits);
     // Nothing in the program calls `main`: its body stands for the call.
-    let value = interpreter.call(main, values, main.body.span)?;
+    let value = interpreter
+        .call(main, values, main.body.span)
+        .map_err(|panic| interpreter.stamped(panic))?;
     if !(value.type_tag() == builtins::RESULT && value.is_variant(builtins::ERR)) {
         return Ok(());
     }
     // The checker requires `main`'s error type to implement `Display`.
     let error = value.fields()[0].clone();
     let span = main.body.span;
-    let text = interpreter.call_trait(builtins::DISPLAY_TO_STRING, error, Vec::new(), span)?;
+    let text = interpreter
+        .call_trait(builtins::DISPLAY_TO_STRING, error, Vec::new(), span)
+        .map_err(|panic| interpreter.stamped(panic))?;
     // The program has failed either way: a stderr that cannot be written
     // loses the message, not the exit code. The message is the program's
     // own text, so it counts toward `--max-output`.
     let line = format!("{}\n", text.as_str());
-    let _ = interpreter.write_output(Stream::Stderr, &line, span)?;
+    let _ = interpreter
+        .write_output(Stream::Stderr, &line, span)
+        .map_err(|panic| interpreter.stamped(panic))?;
     Err(Stop::Failed)
 }

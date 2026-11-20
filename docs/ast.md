@@ -64,6 +64,8 @@ Diagnostics that carry a fix:
 | `E0151`, `E0162`, `E0163`, `E0164` | remove `pub` |
 | `E0170` | remove the `#[capability]` attribute (prelude mode only) |
 
+`oskac check` also gives `E0102` a fix, which `oskac parse` cannot: hoisting the hole's expression into a `let` needs the checker to say whether the expression is pure (see [`checker.md`](checker.md)).
+
 ## Node schema
 
 Conventions:

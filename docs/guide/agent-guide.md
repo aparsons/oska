@@ -10,7 +10,7 @@ How an AI coding agent, or any script, should drive `oskac`. Oska is built for t
 4. **Run.** `oskac run file.osk --format=json -- args...`. The exit code and standard error say how it ended. The program runs natively on every platform, Linux, macOS and Windows, with the same output; a program the native backend cannot compile yet is refused with `E0390`, which `--interpret` works around; if a native result looks wrong, run it again with `--interpret` and report any difference.
 5. **Test.** `oskac test file.osk --format=json`. Write a test for every behavior you add.
 6. **Compare the authority.** `oskac check file.osk --baseline=authority.json` compares the program with the project's saved authority and exits with 3 when it widened. A change that widens authority, or adds an audit site, is not finished until you can say why.
-7. **Release check.** `oskac check file.osk --release` must pass: no `dbg(...)` and no `todo()` left.
+7. **Release check.** `oskac check file.osk --release` must pass: no `dbg(...)`, no `todo()` and no unused authority left. Unused authority is a capability-bearing parameter that its function never uses (`E0296`), or a capability-bearing field of a `cap struct` that no code reads (`E0297`); remove it. `oskac fix file.osk --release` removes an unused parameter from `main`, which nothing calls; for any other function, and for a field, the fix is `maybe`, because callers or constructors change too.
 
 You are done when the check, the tests, and the release check all exit with 0, and the authority report is no wider than the task needs.
 
@@ -159,7 +159,9 @@ The settings call `oskac` by name, with no script and no shell syntax, so `oskac
 
 ## Telling an agent about the project
 
-Put the loop in the project's instructions file, such as `AGENTS.md`:
+To start a new project, run `oskac new <name>` (`--lib` for a library): it writes the package layout and the agent-setup `AGENTS.md` and `CLAUDE.md`, and what it writes passes `oskac check --release` and `oskac test`. `oskac new <name> --format=json` lists the files it wrote, or says why it refused. See [`oskac new`](cli-reference.md#oskac-new).
+
+In an existing project, put the loop in the project's instructions file, such as `AGENTS.md`:
 
 ```markdown
 ## Working with Oska

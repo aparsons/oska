@@ -31,6 +31,9 @@ fn a_broken_postcondition_under_release_is_a_json_panic_exiting_101() {
         .expect("oskac should run");
     let start = SRC.find("ensures").expect("the clause");
     let end = start + "ensures |r| r >= 0".len();
+    // The call of `absolute` in `main`, the frame below the panic's.
+    let call = SRC.find("absolute(-1)").expect("the call");
+    let call_end = call + "absolute(-1)".len();
     assert_eq!(output.status.code(), Some(101));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "");
     assert_eq!(
@@ -40,8 +43,14 @@ fn a_broken_postcondition_under_release_is_a_json_panic_exiting_101() {
              `r >= 0`, broken by the return at line 4, column 5\",\
              \"path\":\"{}\",\"span\":{{\"start\":{start},\"end\":{end}}},\
              \"line\":2,\"column\":5,\"end_line\":2,\"end_column\":23,\"severity\":\"error\",\
-             \"url\":\"https://oskalang.dev/codes/P0007\",\"related\":[],\"suggestions\":[]}}\n",
-            json_escape(&path.to_string_lossy())
+             \"url\":\"https://oskalang.dev/codes/P0007\",\"related\":[],\"suggestions\":[],\
+             \"frames\":[{{\"function\":\"absolute\",\"path\":\"{path}\",\
+             \"span\":{{\"start\":{start},\"end\":{end}}},\"line\":2,\"column\":5}},\
+             {{\"function\":\"main\",\"path\":\"{path}\",\
+             \"span\":{{\"start\":{call},\"end\":{call_end}}},\"line\":8,\"column\":13}}],\
+             \"frames_omitted\":0}}\n",
+            json_escape(&path.to_string_lossy()),
+            path = json_escape(&path.to_string_lossy()),
         )
     );
 }

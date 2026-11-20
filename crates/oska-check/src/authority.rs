@@ -6,7 +6,7 @@
 //! the `cap` rule on declarations, function purity, closure capture, and
 //! contract purity all use it.
 
-use oska_syntax::ast::{FnDecl, ImplDecl, Item, ItemKind, Module, Type, TypeKind};
+use oska_syntax::ast::{FnDecl, ImplDecl, Item, ItemKind, Module, Param, Type, TypeKind};
 
 use crate::collect::{DeclKind, Decls};
 use crate::items::{Bound, ImplInfo, Items, Lower};
@@ -240,6 +240,28 @@ fn function(name: String, item: &Item, f: &FnDecl, lower: Lower) -> FunctionAuth
         via,
         pure: !total.bearing,
     }
+}
+
+/// The parameters of `f` (not its receiver) that are capability-bearing,
+/// as the authority report lists them in `via`. `lower` has the
+/// enclosing impl's generics and `Self` in scope.
+pub(crate) fn bearing_params<'f>(f: &'f FnDecl, lower: Lower) -> Vec<&'f Param> {
+    let decls = lower.decls();
+    let lower = lower.with_generics(&f.generics);
+    let bounded: Vec<String> = lower.bounds.iter().map(|b| b.param.clone()).collect();
+    f.params
+        .iter()
+        .filter(|param| reach(&lower.ty(&param.ty), decls, &bounded, &mut Vec::new()).bearing)
+        .collect()
+}
+
+/// Whether the field type `ty`, written in a declaration whose generics
+/// `lower` has in scope, is capability-bearing: as
+/// [`capability_bearing`], except that a type parameter with a bound is,
+/// as ADR 0002 says.
+pub(crate) fn bearing_field(ty: &Type, lower: &Lower) -> bool {
+    let bounded: Vec<String> = lower.bounds.iter().map(|b| b.param.clone()).collect();
+    reach(&lower.ty(ty), lower.decls(), &bounded, &mut Vec::new()).bearing
 }
 
 /// The last segment of a type's path, such as `Logger` for
