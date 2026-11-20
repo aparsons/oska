@@ -524,7 +524,7 @@ fn spawning_on_a_finished_scope_panics_with_p0005_at_the_call() {
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
         "error[P0005]: `spawn` was called on a scope whose block has already ended \
-         (bytes 40..52)\n"
+         (bytes 40..52)\u{1f}main\u{1e}40..52\n"
     );
 }
 

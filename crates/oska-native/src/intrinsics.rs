@@ -181,6 +181,8 @@ pub enum Runtime {
     Identity,
     /// The address of the runtime's writable data.
     Globals,
+    /// How many more calls may nest (`Inst::Depth`).
+    Depth,
     /// Which host the process runs on: always 0, the real OS, in a
     /// program's executable; in a test executable, what its entry set
     /// (`lower/tests.rs`).
@@ -1089,6 +1091,7 @@ pub const RUNTIME: &[(&str, Runtime)] = &[
     ("rt_mem_as_list", Runtime::Identity),
     ("rt_mem_as_root", Runtime::Identity),
     ("rt_mem_globals", Runtime::Globals),
+    ("rt_mem_depth", Runtime::Depth),
     ("rt_mem_test_host", Runtime::TestHost),
     ("rt_mem_platform", Runtime::PlatformTable),
 ];

@@ -23,7 +23,7 @@
 
 use oska_check::limits::Limits;
 use oska_check::program::Program;
-use oska_syntax::{Diagnostic, Span};
+use oska_syntax::{Diagnostic, Frame, Span};
 
 pub use target::Target;
 
@@ -176,21 +176,81 @@ pub fn build_tests(program: &Program, target: Target) -> Result<Vec<u8>, Diagnos
     compile(program, target, &|d| d, lower::Entry::Tests, Limits::NONE)
 }
 
-/// The panic a test executable's test reported on stdout ([`build_tests`]):
-/// the diagnostic the interpreter's test runner gives for it, not yet
-/// placed in the source. `None` for anything else.
+/// The panic a test executable's test reported on stdout ([`build_tests`]),
+/// or a program built for `oskac run --format=json` on stderr: the
+/// diagnostic the interpreter gives for it, not yet placed in the source.
+/// `None` for anything else.
+///
+/// A report is `error[P....]: message (bytes a..b)`, then its call stack:
+/// each frame [`encode_frame`]d, innermost first, then, when frames were
+/// left out, `\x1f+n`, and a newline.
 pub fn test_failure(stdout: &[u8]) -> Option<Diagnostic> {
-    let report = std::str::from_utf8(stdout).ok()?;
-    let rest = report.strip_prefix("error[")?.strip_suffix(")\n")?;
+    let report = std::str::from_utf8(stdout).ok()?.strip_suffix('\n')?;
+    let (head, frames) = split_frames(report);
+    let rest = head.strip_prefix("error[")?.strip_suffix(')')?;
     let (code, rest) = rest.split_once("]: ")?;
     let (message, span) = rest.rsplit_once(" (bytes ")?;
-    let (start, end) = span.split_once("..")?;
+    let span = parse_span(span)?;
     let code = codes::PANICS.iter().find(|c| **c == code)?;
-    let span = Span {
+    let diagnostic = Diagnostic::new(code, message, span);
+    Some(match frames {
+        Some((frames, omitted)) => diagnostic.with_frames(frames, omitted),
+        None => diagnostic,
+    })
+}
+
+/// A frame of a panic's call stack as a report for `oskac` to read back
+/// gives it: `\x1f`, the function, `\x1e`, then `start..end`.
+pub fn encode_frame(frame: &Frame) -> String {
+    format!(
+        "\x1f{}\x1e{}..{}",
+        frame.function, frame.span.start, frame.span.end
+    )
+}
+
+/// `report` split into the report before its call stack, and its frames
+/// with the count left out, if it has any. The frames are the longest run
+/// of `\x1f`-led pieces at its end that read as frames, so a message
+/// holding a `\x1f` stays whole.
+fn split_frames(report: &str) -> (&str, Option<(Vec<Frame>, usize)>) {
+    let mut end = report.len();
+    let mut frames = Vec::new();
+    let mut omitted = 0;
+    while let Some(at) = report[..end].rfind('\x1f') {
+        let piece = &report[at + 1..end];
+        if let Some(count) = piece.strip_prefix('+').filter(|_| frames.is_empty()) {
+            if omitted != 0 {
+                break;
+            }
+            let Ok(count) = count.parse() else {
+                break;
+            };
+            omitted = count;
+        } else {
+            let Some((function, span)) = piece.split_once('\x1e') else {
+                break;
+            };
+            let Some(span) = parse_span(span) else {
+                break;
+            };
+            frames.push(Frame::new(function, span));
+        }
+        end = at;
+    }
+    if frames.is_empty() {
+        return (report, None);
+    }
+    frames.reverse();
+    (&report[..end], Some((frames, omitted)))
+}
+
+/// `start..end`.
+fn parse_span(text: &str) -> Option<Span> {
+    let (start, end) = text.split_once("..")?;
+    Some(Span {
         start: start.parse().ok()?,
         end: end.parse().ok()?,
-    };
-    Some(Diagnostic::new(code, message, span))
+    })
 }
 
 fn compile(

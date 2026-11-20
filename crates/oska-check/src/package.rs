@@ -217,6 +217,13 @@ impl<'p> Joined<'p> {
             related.span = span;
             related.location = Some(self.spanning(index, span));
         }
+        if let Some(frames) = &mut d.frames {
+            for frame in &mut frames.frames {
+                let (_, span, index) = self.local(frame.span);
+                frame.span = span;
+                frame.location = Some(self.spanning(index, span));
+            }
+        }
         (index, d)
     }
 
@@ -226,6 +233,13 @@ impl<'p> Joined<'p> {
     fn display_keys(&self, keys: &link::Keys, mut d: Diagnostic) -> Diagnostic {
         let (module, _, _) = self.local(d.span);
         d.message = keys.display(&d.message, &module.module);
+        // A frame's function is named as code in its own module names it.
+        if let Some(frames) = &mut d.frames {
+            for frame in &mut frames.frames {
+                let (module, _, _) = self.local(frame.span);
+                frame.function = keys.display(&frame.function, &module.module);
+            }
+        }
         if let Some(fix) = &mut d.fix {
             fix.message = keys.display(&fix.message, &module.module);
         }

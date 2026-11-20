@@ -75,6 +75,9 @@ pub struct ClosureValue {
     pub code: Arc<Closure>,
     pub captured: Vec<Value>,
     pub receiver: Option<Value>,
+    /// The name of its frame in a panic's call stack: `<closure in f>`
+    /// for one written in `f` (`oska_syntax::Frame::closure_in`).
+    pub frame: Rc<str>,
 }
 
 /// A built-in capability. Its type in the program (`Fs`, `FsRead`, ...)
@@ -400,6 +403,7 @@ mod tests {
             code,
             captured: Vec::new(),
             receiver: None,
+            frame: Rc::from("<closure in main>"),
         }));
         let function = Value::Function(Rc::new(Callee::Function("f".to_string())));
         assert_eq!(closure.type_tag(), "closure");

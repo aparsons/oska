@@ -29,7 +29,7 @@ use oska_check::program::{
     self, Arm, Callee, Clause, Expr, ExprKind, Function, Part, Pattern, Place, Program, Stmt,
 };
 use oska_syntax::ast::BinaryOp;
-use oska_syntax::Span;
+use oska_syntax::{Frame as StackFrame, Span, MAX_FRAMES};
 
 use crate::host::Host;
 use crate::intrinsics::{self, Intrinsic};
@@ -116,8 +116,14 @@ pub struct Interpreter<'p, 'h> {
     host: &'h mut dyn Host,
     /// The scopes and tasks of the run (`tasks.rs`).
     pub(crate) tasks: Tasks,
-    /// How many calls of functions and closures are running.
-    depth: usize,
+    /// The calls of functions and closures running, outermost first:
+    /// their depth, and a panic's call stack ([`Interpreter::stamped`]).
+    calls: Vec<Call<'p>>,
+    /// The name of the frame the run starts in: `main`, or a test's body.
+    root: FrameName<'p>,
+    /// The caller the next call is made from, when it is not the running
+    /// function: a task's call is made from the function that spawned it.
+    caller_override: Option<FrameName<'p>>,
     /// The run limits (spec #446), none by default.
     limits: Limits,
     /// The bytes the program has written to stdout and stderr so far,
@@ -131,6 +137,31 @@ pub struct Interpreter<'p, 'h> {
     /// Under `--timeout`, its deadline. Boxed, so that a run without it
     /// keeps the interpreter as small as it was.
     deadline: Option<Box<Deadline>>,
+}
+
+/// The name of a frame of a panic's call stack: a function's, borrowed
+/// from the program, or one made at run time (a closure's, a test's).
+#[derive(Debug, Clone)]
+pub(crate) enum FrameName<'p> {
+    Program(&'p str),
+    Made(Rc<str>),
+}
+
+impl FrameName<'_> {
+    pub(crate) fn as_str(&self) -> &str {
+        match self {
+            FrameName::Program(name) => name,
+            FrameName::Made(name) => name,
+        }
+    }
+}
+
+/// A call that is running: the function it was made from, the one it
+/// runs, and its span.
+struct Call<'p> {
+    caller: FrameName<'p>,
+    callee: FrameName<'p>,
+    span: Span,
 }
 
 /// A run's `--timeout`, as the interpreter keeps it.
@@ -163,7 +194,9 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             program,
             host,
             tasks: Tasks::default(),
-            depth: 0,
+            calls: Vec::new(),
+            root: FrameName::Program("main"),
+            caller_override: None,
             limits: Limits::NONE,
             output_written: 0,
             fuel: u64::MAX,
@@ -327,21 +360,84 @@ impl<'p, 'h> Interpreter<'p, 'h> {
     /// method or closure written in Oska enters here, and nothing else
     /// does (`main` is not called by the program, so it is no step). Each
     /// successful entry is paired with [`Interpreter::leave`].
-    fn enter(&mut self, span: Span) -> Result<(), Panic> {
+    fn enter(&mut self, callee: FrameName<'p>, span: Span) -> Result<(), Panic> {
+        let caller = self.caller_override.take();
         self.step(span)?;
-        if self.depth >= MAX_CALL_DEPTH || stack_exhausted() {
+        if self.calls.len() >= MAX_CALL_DEPTH || stack_exhausted() {
             return Err(Panic::new(
                 codes::CALL_DEPTH_EXCEEDED,
                 "calls nest too deep: is this recursion missing its base case?",
                 span,
             ));
         }
-        self.depth += 1;
+        let caller = caller.unwrap_or_else(|| self.current());
+        self.calls.push(Call {
+            caller,
+            callee,
+            span,
+        });
         Ok(())
     }
 
     fn leave(&mut self) {
-        self.depth -= 1;
+        self.calls.pop();
+    }
+
+    /// The name of the frame running now: the innermost call's function,
+    /// or the root's.
+    pub(crate) fn current(&self) -> FrameName<'p> {
+        self.calls
+            .last()
+            .map_or_else(|| self.root.clone(), |call| call.callee.clone())
+    }
+
+    /// Run a test's body as the root frame, named `name`.
+    pub(crate) fn with_root(mut self, name: &str) -> Self {
+        self.root = FrameName::Made(Rc::from(name));
+        self
+    }
+
+    /// Make the next call from `caller` instead of the running function.
+    pub(crate) fn call_from(&mut self, caller: FrameName<'p>) {
+        self.caller_override = Some(caller);
+    }
+
+    /// Forget a caller [`Interpreter::call_from`] set that no call took.
+    pub(crate) fn clear_caller(&mut self) {
+        self.caller_override = None;
+    }
+
+    /// `panic` with its call stack, unless it has one already: the frame
+    /// running now at the panic's span, then each running call, innermost
+    /// first, as the function it was made from at its span. At most
+    /// [`MAX_FRAMES`], with a count of the rest. `skip` innermost calls
+    /// are left out: a broken `requires` clause (`P0006`) is the caller's.
+    pub(crate) fn stamped_skipping(&self, mut panic: Panic, skip: usize) -> Panic {
+        if panic.frames.is_some() {
+            return panic;
+        }
+        let calls = &self.calls[..self.calls.len().saturating_sub(skip)];
+        let current = calls
+            .last()
+            .map_or_else(|| self.root.clone(), |call| call.callee.clone());
+        let mut frames = vec![StackFrame::new(current.as_str(), panic.span)];
+        frames.extend(
+            calls
+                .iter()
+                .rev()
+                .take(MAX_FRAMES - 1)
+                .map(|call| StackFrame::new(call.caller.as_str(), call.span)),
+        );
+        let omitted = calls.len() + 1 - frames.len();
+        panic.frames = Some((frames, omitted));
+        panic
+    }
+
+    /// [`Interpreter::stamped_skipping`] with nothing skipped: where a
+    /// panic leaves a call, or the root, while the stack is as it was
+    /// when the panic happened.
+    pub(crate) fn stamped(&self, panic: Panic) -> Panic {
+        self.stamped_skipping(panic, 0)
     }
 
     /// Call `function` with `args`: the receiver first, for a method, then
@@ -368,7 +464,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         };
         match self.eval(body, &mut frame) {
             Ok(_) | Err(Unwind::Return(..)) => Ok(()),
-            Err(Unwind::Panic(panic)) => Err(panic),
+            Err(Unwind::Panic(panic)) => Err(self.stamped(panic)),
             Err(Unwind::Break | Unwind::Continue) => {
                 unreachable!("the checker keeps `break` and `continue` inside loops")
             }
@@ -439,14 +535,16 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         let height = frame.slots.len();
         for clause in &contracts.requires {
             if !self.holds(clause, &mut frame)? {
-                return Err(Panic::new(
+                let panic = Panic::new(
                     codes::PRECONDITION_VIOLATED,
                     format!(
                         "precondition violated: `{}` requires `{}`",
                         function.name, clause.text
                     ),
                     span,
-                ));
+                );
+                // The caller broke it: the call is not on the stack yet.
+                return Err(self.stamped_skipping(panic, 1));
             }
         }
         Ok(frame.slots[..height].to_vec())
@@ -651,6 +749,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 .map(|&slot| frame.slots[slot].clone())
                 .collect(),
             receiver: frame.receiver.clone().filter(|_| code.captures_self),
+            frame: Rc::from(StackFrame::closure_in(self.current().as_str())),
         };
         memory::closure(closure, span)
     }
@@ -1004,8 +1103,9 @@ impl<'p, 'h> Interpreter<'p, 'h> {
         match callee {
             Callee::Function(name) => {
                 let function = self.function(name);
-                self.enter(span)?;
+                self.enter(FrameName::Program(&function.name), span)?;
                 let result = self.call(function, args, span);
+                let result = result.map_err(|panic| self.stamped(panic));
                 self.leave();
                 result
             }
@@ -1087,8 +1187,12 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             slots,
             receiver: closure.receiver.clone(),
         };
-        self.enter(span)?;
+        self.enter(FrameName::Made(Rc::clone(&closure.frame)), span)?;
         let result = self.eval(&closure.code.body, &mut frame);
+        let result = match result {
+            Err(Unwind::Panic(panic)) => Err(Unwind::Panic(self.stamped(panic))),
+            other => other,
+        };
         self.leave();
         match result {
             Ok(value) | Err(Unwind::Return(value, _)) => Ok(value),
@@ -1111,8 +1215,9 @@ impl<'p, 'h> Interpreter<'p, 'h> {
             Callee::Function(name) => {
                 let function = self.function(name);
                 let taken = std::mem::replace(receiver, Value::Unit);
-                self.enter(span)?;
+                self.enter(FrameName::Program(&function.name), span)?;
                 let result = self.call_with(function, Some(taken), args, span);
+                let result = result.map_err(|panic| self.stamped(panic));
                 self.leave();
                 let (value, after) = result?;
                 *receiver = after.expect("a method keeps its receiver");

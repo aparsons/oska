@@ -291,7 +291,117 @@ pub struct Diagnostic {
     /// Other places the diagnostic is about, such as the first definition
     /// of a name defined twice: only where the checker already knows them.
     pub related: Vec<Related>,
+    /// A panic's call stack ([`Frames`]); `None` for every other
+    /// diagnostic. Boxed, as `fix` and `location` are.
+    pub frames: Option<Box<Frames>>,
 }
+
+/// The call stack at a panic: the calls that led to it, innermost first,
+/// at most [`MAX_FRAMES`] of them, and how many more were left out.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Frames {
+    pub frames: Vec<Frame>,
+    /// The frames past the first [`MAX_FRAMES`], left out.
+    pub omitted: usize,
+}
+
+/// The most frames a panic reports: runaway recursion (`P0021`) nests
+/// 50,000 calls deep, and the innermost few say what repeats.
+pub const MAX_FRAMES: usize = 20;
+
+/// One call on the stack at a panic: the function it runs, and where in
+/// it the program was, the panic's own span for the innermost frame and
+/// the call it made for each other. Located as the diagnostic is, and
+/// possibly in another file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Frame {
+    /// The function as the program names it: `half`, `Point.norm`,
+    /// `<closure in main>`, or for the body of a test, `test "name"`.
+    pub function: String,
+    pub span: Span,
+    pub location: Option<Location>,
+}
+
+impl Frame {
+    pub fn new(function: impl Into<String>, span: Span) -> Self {
+        Frame {
+            function: function.into(),
+            span,
+            location: None,
+        }
+    }
+
+    /// The name of the frame of a closure written in the function, or
+    /// closure, whose frame is named `enclosing`: `<closure in f>`. A
+    /// closure written in a closure is named as that closure is.
+    pub fn closure_in(enclosing: &str) -> String {
+        if enclosing.starts_with(CLOSURE_IN) {
+            enclosing.to_string()
+        } else {
+            format!("{CLOSURE_IN}{enclosing}>")
+        }
+    }
+
+    /// The name of the frame of the body of the test `name`.
+    pub fn test(name: &str) -> String {
+        format!("test \"{name}\"")
+    }
+
+    /// The frame's line in the human output, under the panic's line:
+    /// `    at f (path:line:col)`.
+    pub fn human(&self) -> String {
+        match &self.location {
+            Some(location) => format!("    at {} ({location})\n", self.function),
+            None => format!(
+                "    at {} (bytes {}..{})\n",
+                self.function, self.span.start, self.span.end
+            ),
+        }
+    }
+
+    /// `{function, path, span, line, column}`, without `path`, `line`
+    /// and `column` when it is not located.
+    fn to_json(&self) -> String {
+        let mut out = format!("{{\"function\":\"{}\"", json_escape(&self.function));
+        if let Some(location) = &self.location {
+            out.push_str(&format!(",\"path\":\"{}\"", json_escape(&location.path)));
+        }
+        out.push_str(&format!(",\"span\":{}", span_json(self.span)));
+        if let Some(location) = &self.location {
+            out.push_str(&format!(
+                ",\"line\":{},\"column\":{}",
+                location.line, location.column
+            ));
+        }
+        out.push('}');
+        out
+    }
+}
+
+const CLOSURE_IN: &str = "<closure in ";
+
+impl Frames {
+    /// The line under the frames, in the human output, that says how
+    /// many were left out: [`OMITTED_BEFORE`], the count, then
+    /// [`OMITTED_AFTER`].
+    pub fn omitted_human(omitted: usize) -> String {
+        format!("{OMITTED_BEFORE}{omitted}{OMITTED_AFTER}")
+    }
+
+    /// The frames as the human output lists them under the panic's line.
+    pub fn human(&self) -> String {
+        let mut out: String = self.frames.iter().map(Frame::human).collect();
+        if self.omitted > 0 {
+            out.push_str(&Frames::omitted_human(self.omitted));
+        }
+        out
+    }
+}
+
+/// The human output's line for frames left out, before the count.
+pub const OMITTED_BEFORE: &str = "    ... ";
+/// The human output's line for frames left out, after the count.
+pub const OMITTED_AFTER: &str = " more frames\n";
 
 /// How serious a diagnostic is. Consumers of the JSON must accept values
 /// that are not listed here yet.
@@ -511,6 +621,7 @@ impl Diagnostic {
             location: None,
             severity: Severity::Error,
             related: Vec::new(),
+            frames: None,
         }
     }
 
@@ -529,6 +640,20 @@ impl Diagnostic {
                 related.location = Some(lines.spanning(path, related.span));
             }
         }
+        if let Some(frames) = &mut self.frames {
+            for frame in &mut frames.frames {
+                if frame.location.is_none() {
+                    frame.location = Some(lines.spanning(path, frame.span));
+                }
+            }
+        }
+        self
+    }
+
+    /// Attach a panic's call stack: `frames`, innermost first, and how
+    /// many more were left out.
+    pub fn with_frames(mut self, frames: Vec<Frame>, omitted: usize) -> Self {
+        self.frames = Some(Box::new(Frames { frames, omitted }));
         self
     }
 
@@ -570,7 +695,10 @@ impl Diagnostic {
     /// field follows, and is omitted when there is no fix; it has a `path`
     /// after its `message` when its edits are in another file than the
     /// diagnostic. `related` and `suggestions`, lists that may be empty,
-    /// come last.
+    /// come next. A panic ends with `frames`, its call stack innermost
+    /// first, each `{function, path, span, line, column}`, and
+    /// `frames_omitted`, how many frames past [`MAX_FRAMES`] were left
+    /// out; no other diagnostic has them.
     ///
     /// Fields are only ever added: none is renamed, retyped or given a
     /// new meaning, and a diagnostic that had no `fix` never gains one.
@@ -621,9 +749,18 @@ impl Diagnostic {
         // Uncertain repairs will go in `suggestions`, never in `fix`; the
         // checker offers none yet.
         out.push_str(&format!(
-            ",\"related\":[{}],\"suggestions\":[]}}",
+            ",\"related\":[{}],\"suggestions\":[]",
             related.join(",")
         ));
+        if let Some(frames) = &self.frames {
+            let list: Vec<String> = frames.frames.iter().map(Frame::to_json).collect();
+            out.push_str(&format!(
+                ",\"frames\":[{}],\"frames_omitted\":{}",
+                list.join(","),
+                frames.omitted
+            ));
+        }
+        out.push('}');
         out
     }
 }

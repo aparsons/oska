@@ -627,6 +627,7 @@ impl Emitter {
                 self.put(sub_imm(DEPTH, DEPTH, 1, false));
             }
             Inst::Leave => self.put(add_imm(DEPTH, DEPTH, 1, false)),
+            Inst::Depth { dst } => self.write(*dst, DEPTH),
             Inst::CallOnStack {
                 stack,
                 depth,

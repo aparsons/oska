@@ -159,6 +159,13 @@ impl TestReport {
                 let line = format!("test {name}: {place}: {failure}");
                 out.push_str(&escape_control(&line));
                 out.push('\n');
+                // The call stack, a line a frame, each escaped.
+                if let Some(frames) = &failure.frames {
+                    for line in frames.human().lines() {
+                        out.push_str(&escape_control(line));
+                        out.push('\n');
+                    }
+                }
             }
         }
         out.push_str(&format!(
@@ -288,7 +295,9 @@ pub fn test_program(program: &Program, host: &mut dyn Host, options: TestOptions
 
 /// Run one test on `host`, in an interpreter of its own.
 fn run_one(program: &Program, test: &Test, host: &mut dyn Host) -> Result<(), Panic> {
-    Interpreter::new(program, host).run_test(&test.body, test_context())
+    Interpreter::new(program, host)
+        .with_root(&oska_syntax::Frame::test(&test.name))
+        .run_test(&test.body, test_context())
 }
 
 /// `t`: a `TestContext`, holding the capabilities the prelude declares

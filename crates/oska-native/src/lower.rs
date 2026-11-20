@@ -88,7 +88,7 @@ use oska_check::program::{
     trait_method, Callee, Construct, Expr, ExprKind, Function, IntType, Part, Program, Stmt, Type,
 };
 use oska_syntax::ast::BinaryOp;
-use oska_syntax::{Diagnostic, Span};
+use oska_syntax::{Diagnostic, Frame, Span, MAX_FRAMES};
 
 use crate::intrinsics::{self, Check, ErrorRead, Fails, Import, OsCall, Prelude, Runtime, Start};
 use crate::ir::{self, Arith, BinOp, Cond, FnId, Inst, Label, Symbol, Temp, Width};
@@ -115,7 +115,16 @@ const COUNTED_MEMORY: [(&str, &str); 3] = [
 ];
 
 /// The words of the runtime's writable data, at `rt_mem_globals()`.
-pub const GLOBALS: u32 = 50;
+pub const GLOBALS: u32 = 51;
+
+/// The runtime's writable word that holds the address of the call stack
+/// (`std.rt`'s "The call stack"), where each counted call stores the
+/// record of its frame ([`Body::record_call`]).
+const FRAMES_WORD: u32 = 50;
+
+/// Where the records start in the call stack: after its texts, its most
+/// and its room for digits.
+const FRAMES_RECORDS: u32 = 7 * layout::WORD;
 
 /// Under `--max-steps`, the word after the runtime's globals holds the
 /// steps the program may still take ([`Body::step`]); without the flag
@@ -125,7 +134,7 @@ const STEPS_WORD: u32 = GLOBALS;
 /// Under `--max-memory`, the word after the step counter's holds the
 /// report of the panic (`P0040`) that `std.rt`'s memory limit stops the
 /// program with; without the flag the word is not there. It is a fixed
-/// word, 51, so that `std.rt` can name it whether or not the step counter
+/// word, 52, so that `std.rt` can name it whether or not the step counter
 /// is there too.
 const MEMORY_REPORT_WORD: u32 = GLOBALS + 1;
 
@@ -263,6 +272,8 @@ pub fn program(
         target,
         limits,
         uncounted: false,
+        human: locate(Diagnostic::new("", "", NOWHERE)).location.is_some(),
+        frame: "main".to_string(),
         ids: HashMap::new(),
         functions: Vec::new(),
         queue: Vec::new(),
@@ -274,7 +285,8 @@ pub fn program(
         callback: None,
     };
     let entry = lowering.entry()?;
-    while let Some((instance, id, origin)) = lowering.queue.pop() {
+    while let Some((instance, id, origin, requester)) = lowering.queue.pop() {
+        lowering.frame = lowering.frame_of(&instance, requester);
         lowering.uncounted = matches!(
             &instance,
             Instance::Function { source: Source::Runtime, name, .. }
@@ -359,14 +371,21 @@ struct Lowering<'p> {
     /// allocator functions ([`COUNTED_MEMORY`]), whose own calls of the
     /// allocator are not redirected.
     uncounted: bool,
+    /// Whether panic reports are for a person, placed in the source by
+    /// `locate`, or for `oskac` to read back (`crate::test_failure`).
+    human: bool,
+    /// The name of the frame of the function being lowered, as a panic's
+    /// call stack names it ([`Body::frame_text`]).
+    frame: String,
     /// Every function requested so far.
     ids: HashMap<Instance, FnId>,
     /// The lowered functions, by id; a requested one is a placeholder
     /// until it is lowered.
     functions: Vec<ir::Function>,
     /// Functions requested and not lowered yet, with the span of the user
-    /// code that first reached them.
-    queue: Vec<(Instance, FnId, Span)>,
+    /// code that first reached them, and the frame of the function that
+    /// did.
+    queue: Vec<(Instance, FnId, Span, String)>,
     rodata: Rodata,
     /// The program's own functions (not `std.rt`'s): their frames are
     /// those recursion can stack up.
@@ -399,8 +418,28 @@ impl<'p> Lowering<'p> {
         }
         let id = self.reserve(qualified(&instance));
         self.ids.insert(instance.clone(), id);
-        self.queue.push((instance, id, origin));
+        self.queue.push((instance, id, origin, self.frame.clone()));
         id
+    }
+
+    /// The name of the frame of `instance`'s code, which the function
+    /// whose frame is `requester` reached first: a function's own name
+    /// (a `requires` check and a thunk run as the function they check or
+    /// call), a closure's `<closure in f>`, a test body's `test "name"`;
+    /// generated code runs in the frame that reached it.
+    fn frame_of(&self, instance: &Instance, requester: String) -> String {
+        match instance {
+            Instance::Function {
+                source: Source::User,
+                name,
+                ..
+            }
+            | Instance::Requires { name, .. }
+            | Instance::Thunk { name, .. } => name.clone(),
+            Instance::Closure(_) => Frame::closure_in(&requester),
+            Instance::Test(index) => Frame::test(&self.user.tests[*index].name),
+            _ => requester,
+        }
     }
 
     /// `instance`, or under `--max-memory` for one of `std.rt`'s allocator
@@ -548,6 +587,28 @@ impl<'p> Lowering<'p> {
             }
         };
         body.call_runtime("process_init", vec![argc, argv, handler], NOWHERE)?;
+        // The call stack, and how a report's frames end.
+        let human = body.lowering.human;
+        let depth = body.constant(i64::from(MAX_CALL_DEPTH));
+        let (end, before, after) = if human {
+            let before = oska_syntax::OMITTED_BEFORE;
+            (
+                "",
+                before.to_string(),
+                oska_syntax::OMITTED_AFTER.to_string(),
+            )
+        } else {
+            ("\n", "\x1f+".to_string(), String::new())
+        };
+        let end = body.text(end);
+        let before = body.text(&before);
+        let after = body.text(&after);
+        let most = body.constant(MAX_FRAMES as i64 - 1);
+        body.call_runtime(
+            "frames_init",
+            vec![depth, end, before, after, most],
+            NOWHERE,
+        )?;
         // On Windows the program runs on the thread's own stack, which
         // the executable's header reserves.
         let stack = if start_kind == Start::Windows {
@@ -925,6 +986,10 @@ struct Body<'l, 'p> {
     /// the call of the value. Each panic returns its report's middle,
     /// `error[P....]: message`, as the status (`closures.rs`).
     deferred: bool,
+    /// In [`Body::deferred`] code, the label an [`Inst::Enter`] that
+    /// counts the caller's call again goes to, which it never does: the
+    /// count it takes back was the caller's (`closures.rs`).
+    recount: Option<Label>,
     /// Whether it is a drop function, which puts the drops of the objects
     /// it lets go of on std.rt's pending list instead of calling them, so
     /// that dropping a deep structure takes a bounded stack
@@ -953,6 +1018,7 @@ impl<'l, 'p> Body<'l, 'p> {
             ret: Type::Unit,
             status: false,
             deferred: false,
+            recount: None,
             dropping: false,
         }
     }
@@ -1369,6 +1435,9 @@ impl<'l, 'p> Body<'l, 'p> {
                     span,
                 );
                 let report = body.text(&format!("{before}{message}{after}"));
+                // The caller broke it: the call is not counted yet, as the
+                // interpreter's report has it.
+                body.push(Inst::Leave);
                 let unit = body.call_runtime("panic", vec![report], NOWHERE)?;
                 body.push(Inst::Return(unit));
                 body.push(Inst::Label(next));
@@ -1422,8 +1491,55 @@ impl<'l, 'p> Body<'l, 'p> {
             Some(location) => format!("{location}: "),
             None => String::new(),
         };
-        let after = format!(" (bytes {}..{})\n", located.span.start, located.span.end);
+        let newline = if self.lowering.human { "\n" } else { "" };
+        let after = format!(
+            " (bytes {}..{}){newline}{}",
+            located.span.start,
+            located.span.end,
+            self.frame_text(span)
+        );
         (before, after)
+    }
+
+    /// The frame of the function being lowered at `span`, as a panic's
+    /// report lists it: a line, `    at f (path:line:col)`, for a person;
+    /// `\x1ff\x1estart..end`, unplaced, for `oskac` to read back.
+    fn frame_text(&self, span: Span) -> String {
+        let frame = Frame::new(self.lowering.frame.clone(), span);
+        let frame = match self.source {
+            Source::User => (self.lowering.locate)(
+                Diagnostic::new("", "", span).with_frames(vec![frame.clone()], 0),
+            )
+            .frames
+            .and_then(|frames| frames.frames.into_iter().next())
+            .unwrap_or(frame),
+            Source::Runtime => frame,
+        };
+        if self.lowering.human {
+            frame.human()
+        } else {
+            crate::encode_frame(&frame)
+        }
+    }
+
+    /// Record the call just counted, made at `span` from the function
+    /// being lowered: its frame's text, in the call stack's slot for its
+    /// depth (`std.rt`'s "The call stack").
+    fn record_call(&mut self, span: Span) {
+        let text = self.frame_text(span);
+        let site = self.text(&text);
+        let globals = self.temp();
+        self.push(Inst::Addr {
+            dst: globals,
+            symbol: Symbol::Data(0),
+        });
+        let stack = self.load(globals, FRAMES_WORD * layout::WORD);
+        let depth = self.temp();
+        self.push(Inst::Depth { dst: depth });
+        let three = self.constant(3);
+        let offset = self.binary_op(BinOp::Shl, depth, three);
+        let slot = self.binary_op(BinOp::Add, stack, offset);
+        self.store(slot, FRAMES_RECORDS, site);
     }
 
     /// `message`, a panic's at `span`, as the caller's locator words it:
@@ -1445,6 +1561,12 @@ impl<'l, 'p> Body<'l, 'p> {
     ) -> Result<Label, Diagnostic> {
         self.cold_block(|body| {
             let text = status(body)?;
+            // Give the caller back the count it took, as the code's
+            // normal end does, so its own uncounting leaves the call
+            // stack as it was.
+            if let Some(never) = body.recount {
+                body.push(Inst::Enter { exhausted: never });
+            }
             let nothing = body.constant(0);
             body.push(Inst::ReturnPair {
                 value: nothing,
@@ -1699,6 +1821,7 @@ impl<'l, 'p> Body<'l, 'p> {
         self.step(span)?;
         let exhausted = self.panic_static(panics::CALL_DEPTH_EXCEEDED, panics::TOO_DEEP, span)?;
         self.push(Inst::Enter { exhausted });
+        self.record_call(span);
         self.check_requires(name, &type_args, &args, span)?;
         let result = self.call_function(Source::User, name, type_args, args, span)?;
         self.push(Inst::Leave);
@@ -2166,6 +2289,11 @@ impl<'l, 'p> Body<'l, 'p> {
                     dst,
                     symbol: Symbol::Data(0),
                 });
+                dst
+            }
+            Runtime::Depth => {
+                let dst = self.temp();
+                self.push(Inst::Depth { dst });
                 dst
             }
             Runtime::TestHost => self.test_host(),
@@ -3228,11 +3356,11 @@ fn main(io: Stdout) {
     };
 
     /// Under `--max-memory` the writable data holds the memory limit's
-    /// report in word 51, past the step counter's word, whether or not the
+    /// report in word 52, past the step counter's word, whether or not the
     /// step counter is there; the call area is unchanged.
     #[test]
     fn max_memory_adds_its_report_word_after_the_step_counter() {
-        assert_eq!(super::MEMORY_REPORT_WORD, 51, "std.rt names word 51");
+        assert_eq!(super::MEMORY_REPORT_WORD, 52, "std.rt names word 52");
         for target in Target::ALL {
             let plain = lower(target, Limits::NONE);
             for max_steps in [None, Some(1000)] {

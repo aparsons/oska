@@ -33,10 +33,16 @@ fn assert_prints(name: &str, src: &str, stdout: &str) {
 
 /// Run `src` on both backends, require the same outcome, and that it
 /// printed `stdout`, then panicked with the report `stderr`, exit 101.
+/// The report's frames, which the backends report alike, are not part
+/// of `stderr`.
 fn assert_panics(name: &str, src: &str, stdout: &str, stderr: &str) {
     let outcome = assert_same(&Case::file(name, src));
     assert_eq!(outcome.stdout, stdout, "case `{name}`: {outcome:#?}");
-    assert_eq!(outcome.stderr, stderr, "case `{name}`: {outcome:#?}");
+    assert_eq!(
+        differential::without_frames(&outcome.stderr),
+        stderr,
+        "case `{name}`: {outcome:#?}"
+    );
     assert_eq!(outcome.exit_code, Some(101), "case `{name}`: {outcome:#?}");
 }
 

@@ -242,12 +242,22 @@ fn needs_filesystem(program: &Program) -> bool {
 }
 
 /// A panic's report, as a native executable built with no locator
-/// writes it to stderr.
+/// writes it to stderr: its call stack too, for `oskac` to read back.
 fn report(panic: &Diagnostic) -> String {
-    format!(
-        "error[{}]: {} (bytes {}..{})\n",
+    let mut out = format!(
+        "error[{}]: {} (bytes {}..{})",
         panic.code, panic.message, panic.span.start, panic.span.end
-    )
+    );
+    if let Some(frames) = &panic.frames {
+        for frame in &frames.frames {
+            out.push_str(&oska_native::encode_frame(frame));
+        }
+        if frames.omitted > 0 {
+            out.push_str(&format!("\x1f+{}", frames.omitted));
+        }
+    }
+    out.push('\n');
+    out
 }
 
 /// What the fake host's stdin held, as the text a real stdin gives.

@@ -62,9 +62,13 @@ fn main(io: Stdout) -> Result<(), IoError> {
 
 ```console cmd=run stream=stderr
 main.osk:2:5: error[P0004]: division by zero: `10 / 0` (bytes 46..59)
+    at ratio (main.osk:2:5)
+    at main (main.osk:7:13)
 ```
 
 Output written before the panic stays written, so `computing` was printed. A panic has a stable `P`-code, a message, and the byte span of the expression that panicked. The process exits with code 101.
+
+Under the panic's line come its **frames**, the call stack that led to it, innermost first: the function that panicked, at the panic's place, then each function that called it, at the call. Here `ratio` panicked, and `main` called it on line 7, so a `P0004` deep in a helper shows which caller passed the bad value. A closure's frame is named `<closure in f>`, after the function it is written in, and a test's body `test "name"`. At most 20 frames are listed, then `    ... n more frames`, so runaway recursion (`P0021`) stays readable. `oskac test` lists the frames of a failed test too, back to the test's own line. Native code and the interpreter report the same frames.
 
 | Code | Panic |
 | --- | --- |
@@ -96,10 +100,10 @@ When `main` returns `Err(e)`, the runtime prints `e.to_string()` to standard err
 
 Every command takes `--format=json`. Diagnostics then carry the same shape everywhere: a stable `code`, a `message`, a `span` of byte offsets, and a `fix` when the repair is unambiguous. Tools should match on `code`, never on `message`.
 
-For a panic, `oskac run --format=json` prints one diagnostic object per line to standard error:
+For a panic, `oskac run --format=json` prints one diagnostic object per line to standard error, with the frames in `frames`, each `{function, path, span, line, column}`, and how many were left out in `frames_omitted`:
 
 ```console cmd=run stream=stderr json
-{"code":"P0004","message":"division by zero: `10 / 0`","path":"main.osk","span":{"start":46,"end":59},"line":2,"column":5,"end_line":2,"end_column":18,"severity":"error","url":"https://oskalang.dev/codes/P0004","related":[],"suggestions":[]}
+{"code":"P0004","message":"division by zero: `10 / 0`","path":"main.osk","span":{"start":46,"end":59},"line":2,"column":5,"end_line":2,"end_column":18,"severity":"error","url":"https://oskalang.dev/codes/P0004","related":[],"suggestions":[],"frames":[{"function":"ratio","path":"main.osk","span":{"start":46,"end":59},"line":2,"column":5},{"function":"main","path":"main.osk","span":{"start":149,"end":161},"line":7,"column":13}],"frames_omitted":0}
 ```
 
 `oskac check --format=json` prints a single object with `diagnostics`, `functions`, and `audit` to standard output; see the [CLI reference](cli-reference.md#output-formats). The `span` offsets count UTF-8 bytes from the start of the file, not characters or lines. To show the source a diagnostic points at, slice the file's bytes from `start` up to, but excluding, `end`.
@@ -111,7 +115,7 @@ A parse error is reported alone, because the rest of the file cannot be trusted.
 ## A debugging routine
 
 1. Run `oskac check file.osk --format=json` and read the `diagnostics`. Fix the first one: later ones often follow from it.
-2. If it checks, run it. For a panic, take the `span` and look at that expression.
+2. If it checks, run it. For a panic, take the `span` and look at that expression, then walk up its `frames` to the caller that passed the bad value.
 3. Wrap suspicious expressions in `dbg(...)`.
 4. Write a `test` that reproduces the bug, so it stays fixed. See [testing](testing.md).
 5. Remove the `dbg` calls. `oskac check --release` confirms none are left.

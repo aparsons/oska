@@ -166,6 +166,17 @@ pub struct Outcome {
     pub tree: BTreeMap<String, Option<String>>,
 }
 
+/// `stderr` without a panic's frames, the lines under its report
+/// (`    at f (place)`, `    ... n more frames`): for a test about the
+/// report itself. [`assert_same`] holds the frames equal all the same.
+pub fn without_frames(stderr: &str) -> String {
+    stderr
+        .lines()
+        .filter(|line| !line.starts_with("    at ") && !line.starts_with("    ... "))
+        .map(|line| format!("{line}\n"))
+        .collect()
+}
+
 /// The target platform this host builds and runs native executables
 /// for: its own.
 pub fn host_target() -> oska_native::Target {

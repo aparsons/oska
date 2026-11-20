@@ -277,7 +277,9 @@ fn the_json_report_lists_each_test_with_its_status_and_failure() {
          {\"name\":\"bad\",\"status\":\"failed\",\"failure\":\
          {\"code\":\"P0013\",\"message\":\"no\",\"span\":{\"start\":50,\"end\":62},\
          \"severity\":\"error\",\"url\":\"https://oskalang.dev/codes/P0013\",\
-         \"related\":[],\"suggestions\":[]}}],\
+         \"related\":[],\"suggestions\":[],\
+         \"frames\":[{\"function\":\"test \\\"bad\\\"\",\"span\":{\"start\":50,\"end\":62}}],\
+         \"frames_omitted\":0}}],\
          \"passed\":1,\"failed\":1,\"skipped\":0,\"diagnostics\":[]}"
     );
 }
@@ -294,6 +296,7 @@ fn the_human_report_names_the_test_of_each_failure() {
          \n\
          failures:\n\
          test divides: math.osk: error[P0013]: boom (bytes 56..70)\n\
+         \x20   at test \"divides\" (bytes 56..70)\n\
          \n\
          2 tests: 1 passed, 1 failed, 0 skipped\n"
     );

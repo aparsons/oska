@@ -325,8 +325,11 @@ fn every_panic_a_program_can_reach_reports_the_interpreters_code_and_location() 
         assert!(
             outcome.stderr.starts_with("main.osk:")
                 && outcome.stderr.contains(&format!(": error[{code}]: "))
-                && outcome.stderr.ends_with(")\n")
-                && outcome.stderr.lines().count() == 1,
+                && differential::without_frames(&outcome.stderr).ends_with(")\n")
+                && differential::without_frames(&outcome.stderr)
+                    .lines()
+                    .count()
+                    == 1,
             "{code}: {outcome:#?}"
         );
         assert_eq!(outcome.exit_code, Some(101), "{code}: {outcome:#?}");

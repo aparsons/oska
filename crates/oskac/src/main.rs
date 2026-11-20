@@ -568,6 +568,13 @@ fn from_here(dir: &str, mut diagnostic: Diagnostic) -> Diagnostic {
     if let Some(location) = &mut diagnostic.location {
         location.path = package::from_here(dir, &location.path);
     }
+    if let Some(frames) = &mut diagnostic.frames {
+        for frame in &mut frames.frames {
+            if let Some(location) = &mut frame.location {
+                location.path = package::from_here(dir, &location.path);
+            }
+        }
+    }
     diagnostic
 }
 
@@ -696,6 +703,10 @@ fn diagnostics_text(diagnostics: &[Diagnostic]) -> String {
                 Applicability::Machine => writeln!(text, "    fix: {}", fix.message),
                 other => writeln!(text, "    fix ({}): {}", other.name(), fix.message),
             };
+        }
+        // A panic's call stack, under its line.
+        if let Some(frames) = &diagnostic.frames {
+            text.push_str(&frames.human());
         }
     }
     text
