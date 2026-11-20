@@ -46,11 +46,22 @@ run_test() {
   fi
 }
 
+# The files a release ships beside SHA256SUMS, as assemble.sh lists them:
+# for Linux a glibc build (-gnu) and a musl build (-musl) per processor.
+RELEASE_ASSETS=(
+  oskac-linux-x86_64-gnu
+  oskac-linux-x86_64-musl
+  oskac-linux-aarch64-gnu
+  oskac-linux-aarch64-musl
+  oskac-macos-x86_64
+  oskac-macos-aarch64
+  oskac-windows-x86_64.exe
+)
+
 # Writes one fake binary per release target into ./builds.
 fake_builds() {
   mkdir -p builds
-  for asset in oskac-linux-x86_64 oskac-linux-aarch64 oskac-macos-x86_64 \
-    oskac-macos-aarch64 oskac-windows-x86_64.exe; do
+  for asset in "${RELEASE_ASSETS[@]}"; do
     printf 'binary for %s\n' "$asset" >"builds/$asset"
   done
 }
@@ -61,18 +72,28 @@ test_assemble_writes_every_binary_and_their_checksums() {
   (cd out/v1.2.3 && LC_ALL=C ls) >listing
   cat >expected <<'LIST'
 SHA256SUMS
-oskac-linux-aarch64
-oskac-linux-x86_64
+oskac-linux-aarch64-gnu
+oskac-linux-aarch64-musl
+oskac-linux-x86_64-gnu
+oskac-linux-x86_64-musl
 oskac-macos-aarch64
 oskac-macos-x86_64
 oskac-windows-x86_64.exe
 LIST
   diff expected listing || fail "unexpected files"
-  # The SHA-256 of "binary for oskac-linux-x86_64\n".
-  grep -qx '3d729e2e60bed0f14d643cfecf4af7efea56f4bf88745a804071904108af8548  oskac-linux-x86_64' \
-    out/v1.2.3/SHA256SUMS || fail "SHA256SUMS lacks the linux-x86_64 line"
+  # The SHA-256 of "binary for oskac-linux-x86_64-musl\n".
+  grep -qx '26fe901d847eb45e0bff67045b6bae18e50b428918b48e48158900f29a2bd4fc  oskac-linux-x86_64-musl' \
+    out/v1.2.3/SHA256SUMS || fail "SHA256SUMS lacks the linux-x86_64-musl line"
+  [ "$(grep -c '^[0-9a-f]\{64\}  oskac-' out/v1.2.3/SHA256SUMS)" = 7 ] ||
+    fail "SHA256SUMS does not list exactly the 7 binaries"
   (cd out/v1.2.3 && sha256sum --check --strict SHA256SUMS) || fail "sums do not check"
-  [ -x out/v1.2.3/oskac-linux-x86_64 ] || fail "binary not executable"
+  [ -x out/v1.2.3/oskac-linux-x86_64-musl ] || fail "binary not executable"
+}
+
+test_assemble_lists_the_assets_it_ships() {
+  "$here/assemble.sh" --list >listing
+  printf '%s\n' "${RELEASE_ASSETS[@]}" >expected
+  diff expected listing || fail "assemble.sh --list differs"
 }
 
 test_assemble_refuses_a_release_missing_a_target() {
@@ -183,7 +204,7 @@ test_stage_site_refuses_an_old_release_republished_under_a_newer_tag() {
 
 test_verify_refuses_a_tampered_binary() {
   signed_release
-  printf 'evil\n' >>out/v1.2.3/oskac-linux-aarch64
+  printf 'evil\n' >>out/v1.2.3/oskac-linux-aarch64-musl
   if "$here/verify.sh" out/v1.2.3 key.pub; then
     fail "verified a tampered binary"
   fi
@@ -253,8 +274,10 @@ test_stage_site_publishes_releases_and_points_latest_at_the_newest() {
     "ps1": "https://example.test/install.ps1"
   },
   "binaries": {
-    "linux-aarch64": "https://example.test/releases/v1.10.0/oskac-linux-aarch64",
-    "linux-x86_64": "https://example.test/releases/v1.10.0/oskac-linux-x86_64",
+    "linux-aarch64-gnu": "https://example.test/releases/v1.10.0/oskac-linux-aarch64-gnu",
+    "linux-aarch64-musl": "https://example.test/releases/v1.10.0/oskac-linux-aarch64-musl",
+    "linux-x86_64-gnu": "https://example.test/releases/v1.10.0/oskac-linux-x86_64-gnu",
+    "linux-x86_64-musl": "https://example.test/releases/v1.10.0/oskac-linux-x86_64-musl",
     "macos-aarch64": "https://example.test/releases/v1.10.0/oskac-macos-aarch64",
     "macos-x86_64": "https://example.test/releases/v1.10.0/oskac-macos-x86_64",
     "windows-x86_64": "https://example.test/releases/v1.10.0/oskac-windows-x86_64.exe"
@@ -270,7 +293,7 @@ JSON
   page=site/releases/v1.10.0/index.html
   [ -f "$page" ] || fail "no page at the release's URL"
   grep -qF '<title>oskac 1.10.0</title>' "$page" || fail "page names the wrong release"
-  grep -qF 'href="oskac-linux-x86_64"' "$page" || fail "page does not link a binary"
+  grep -qF 'href="oskac-linux-x86_64-musl"' "$page" || fail "page does not link a binary"
   grep -qF "$(sed -n 2p site/releases/v1.10.0/SHA256SUMS | awk '{print $1}')" "$page" ||
     fail "page does not show a checksum"
   grep -qF 'https://example.test/oska-release.pub' "$page" || fail "page does not link the key"
@@ -283,8 +306,8 @@ test_stage_site_keeps_what_the_generator_wrote_in_latest_json() {
   "$here/stage-site.sh" out site key.pub
   [ "$(jq -r .docs site/latest.json)" = main ] || fail "lost the generator's field"
   [ "$(jq -r .version site/latest.json)" = 1.2.3 ] || fail "release version did not win"
-  [ "$(jq -r '.binaries["linux-x86_64"]' site/latest.json)" = \
-    https://oskalang.dev/releases/v1.2.3/oskac-linux-x86_64 ] || fail "wrong default site URL"
+  [ "$(jq -r '.binaries["linux-x86_64-gnu"]' site/latest.json)" = \
+    https://oskalang.dev/releases/v1.2.3/oskac-linux-x86_64-gnu ] || fail "wrong default site URL"
 }
 
 test_stage_site_publishes_installers_pinned_to_the_key_that_installs_from_it() {
@@ -298,8 +321,8 @@ test_stage_site_publishes_installers_pinned_to_the_key_that_installs_from_it() {
   HOME="$PWD/home" OSKA_SITE_URL="file://$PWD/site" sh site/install.sh --json >out.json
   [ "$(jq -r .version out.json)" = 1.2.3 ] || fail "did not install 1.2.3"
   case "$(uname -m)" in
-    aarch64 | arm64) asset=oskac-linux-aarch64 ;;
-    *) asset=oskac-linux-x86_64 ;;
+    aarch64 | arm64) asset=oskac-linux-aarch64-gnu ;;
+    *) asset=oskac-linux-x86_64-gnu ;;
   esac
   cmp "out/v1.2.3/$asset" home/.oska/bin/oskac || fail "installed the wrong binary"
 }
@@ -333,8 +356,7 @@ test_stage_site_refuses_releases_without_a_key_to_check_them() {
 working_builds() {
   local version=$1
   mkdir -p builds
-  for asset in oskac-linux-x86_64 oskac-linux-aarch64 oskac-macos-x86_64 \
-    oskac-macos-aarch64 oskac-windows-x86_64.exe; do
+  for asset in "${RELEASE_ASSETS[@]}"; do
     cat >"builds/$asset" <<BIN
 #!/bin/sh
 case "\$*" in
@@ -783,6 +805,43 @@ workflow_jobs() {
     }
     END { finish() }
   ' "$1"
+}
+
+# The build matrix in release.yml, one line per row:
+# "<asset> <linux build or -> <target or ->".
+release_matrix() {
+  awk '
+    /^ *- asset: / { if (asset != "") print asset, linux, target
+                     asset = $3; linux = "-"; target = "-"; next }
+    asset != "" && /^ *linux: / { linux = $2; next }
+    asset != "" && /^ *target: / { target = $2; next }
+    asset != "" && /^ *runs-on:/ { print asset, linux, target; asset = "" }
+  ' "$here/../../.github/workflows/release.yml"
+}
+
+test_the_release_workflow_builds_and_checks_every_asset_a_release_ships() {
+  # One row per asset assemble.sh ships, no more: a -gnu or -musl asset
+  # with its Linux build, and a musl one with the musl target of its
+  # processor.
+  local asset arch
+  "$here/assemble.sh" --list | while read -r asset; do
+    case $asset in
+      oskac-linux-*-gnu) echo "$asset gnu -" ;;
+      oskac-linux-*-musl)
+        arch=${asset#oskac-linux-}
+        echo "$asset musl ${arch%-musl}-unknown-linux-musl"
+        ;;
+      oskac-linux-*) fail "assemble.sh ships $asset, which names no Linux build" ;;
+      *) echo "$asset - -" ;;
+    esac
+  done | LC_ALL=C sort >expected
+  [ "$(wc -l <expected)" -ge 7 ] || fail "assemble.sh --list lists $(wc -l <expected) assets"
+  release_matrix | LC_ALL=C sort >matrix
+  diff expected matrix || fail "release.yml does not build exactly the assets assemble.sh ships"
+  # Every row's binary is checked by its Linux build's rules.
+  # shellcheck disable=SC2016 # the workflow's shell variables, written out
+  grep -qF 'scripts/release/check-linux-build.sh "$LINUX_BUILD" "dist/$ASSET"' \
+    "$here/../../.github/workflows/release.yml" || fail "release.yml does not check the Linux builds"
 }
 
 test_only_jobs_in_the_release_environment_read_the_signing_key() {

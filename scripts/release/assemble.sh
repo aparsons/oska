@@ -2,6 +2,11 @@
 # Assemble a release directory from the binaries CI built.
 #
 #   scripts/release/assemble.sh <tag> <builds-dir> <out-dir>
+#   scripts/release/assemble.sh --list
+#
+# --list prints the assets a release ships, one per line, and does
+# nothing else (scripts/release/test.sh holds release.yml's build matrix
+# to it).
 #
 # <builds-dir> holds one binary per release target, already named for its
 # target (see ASSETS). This writes <out-dir>/<tag>/ with those binaries and
@@ -18,10 +23,14 @@
 
 set -euo pipefail
 
-# Every release ships exactly these files: oskac-<os>-<arch>[.exe].
+# Every release ships exactly these files: oskac-<os>-<arch>[.exe], and on
+# Linux two builds per processor (ADR 0022): oskac-linux-<arch>-gnu, the
+# glibc build, and oskac-linux-<arch>-musl, the static musl build.
 ASSETS=(
-  oskac-linux-x86_64
-  oskac-linux-aarch64
+  oskac-linux-x86_64-gnu
+  oskac-linux-x86_64-musl
+  oskac-linux-aarch64-gnu
+  oskac-linux-aarch64-musl
   oskac-macos-x86_64
   oskac-macos-aarch64
   oskac-windows-x86_64.exe
@@ -32,7 +41,12 @@ die() {
   exit 1
 }
 
-[ $# -eq 3 ] || die "usage: assemble.sh <tag> <builds-dir> <out-dir>"
+if [ $# -eq 1 ] && [ "$1" = --list ]; then
+  printf '%s\n' "${ASSETS[@]}"
+  exit 0
+fi
+
+[ $# -eq 3 ] || die "usage: assemble.sh <tag> <builds-dir> <out-dir>, or assemble.sh --list"
 tag=$1
 builds=$2
 out=$3
