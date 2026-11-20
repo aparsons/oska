@@ -70,6 +70,7 @@
 //! method used as a value is none. Nothing in `std.rt` is a step. Without the flag none of this is generated, so the
 //! executable is byte for byte the one `oskac build` writes.
 
+mod bits;
 mod closures;
 mod data;
 mod debug;
@@ -167,6 +168,7 @@ mod panics {
     pub const NOT_WRITTEN: &str = "reached `todo()`: this code is not written yet";
     pub const PRECONDITION_VIOLATED: &str = "P0006";
     pub const POSTCONDITION_VIOLATED: &str = "P0007";
+    pub const SHIFT_OUT_OF_RANGE: &str = "P0008";
     pub const ASSERT_FAILED: &str = "P0010";
     pub const ASSERT_EQ_FAILED: &str = "P0011";
     pub const ASSERT_NE_FAILED: &str = "P0012";
@@ -2462,6 +2464,7 @@ impl<'l, 'p> Body<'l, 'p> {
                 Ok(self.binary_op(BinOp::Xor, value, one))
             }
             ExprKind::Neg { operand, int } => self.negate(operand, *int, span),
+            ExprKind::BitNot { operand, int } => self.bit_not(operand, *int),
             ExprKind::Binary { op, lhs, rhs, int } => self.binary(*op, lhs, rhs, *int, span),
             ExprKind::Interpolated(parts) => self.interpolated(parts),
             ExprKind::Construct { ctor, fields } => self.construct(expr, ctor, fields),
@@ -2498,6 +2501,9 @@ impl<'l, 'p> Body<'l, 'p> {
                         return Ok(value);
                     }
                     if let Some(value) = self.eq_intrinsic(name, args, &values, span)? {
+                        return Ok(value);
+                    }
+                    if let Some(value) = self.rotation_intrinsic(name, args, &values, span)? {
                         return Ok(value);
                     }
                     if let Some(value) = self.list_intrinsic(name, args, &values, expr)? {
@@ -2646,6 +2652,14 @@ impl<'l, 'p> Body<'l, 'p> {
                 BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem,
                 Some(int),
             ) => self.arithmetic(op, lhs, rhs, int, span),
+            (
+                BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr,
+                Some(int),
+            ) => self.bitwise(op, lhs, rhs, int, span),
             (
                 BinaryOp::Eq
                 | BinaryOp::Ne

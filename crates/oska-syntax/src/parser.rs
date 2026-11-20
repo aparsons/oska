@@ -10,10 +10,24 @@
 //! | 3 | `\|\|` | left |
 //! | 4 | `&&` | left |
 //! | 5 | `==` `!=` `<` `<=` `>` `>=` | none (chaining is error E0105) |
-//! | 6 | `+` `-` | left |
-//! | 7 | `*` `/` `%` | left |
-//! | 8 | prefix `-` `!` | prefix |
-//! | 9 | call `f(..)`, field `.name`, `?` | postfix |
+//! | 6 | `\|` | left |
+//! | 7 | `^` | left |
+//! | 8 | `&` | left |
+//! | 9 | `<<` `>>` | left |
+//! | 10 | `+` `-` | left |
+//! | 11 | `*` `/` `%` | left |
+//! | 12 | prefix `-` `!` `~` | prefix |
+//! | 13 | call `f(..)`, field `.name`, `?` | postfix |
+//!
+//! The bitwise and shift levels (6 to 9) follow Rust's order, but a
+//! bitwise or shift operator whose operand, or whose parent, is a
+//! different binary operator (or a range) without parentheses is error
+//! `E0108`, so the order never decides what such code means. A chain of
+//! one operator, such as `a ^ b ^ c`, needs none. `<<` and `>>` are two
+//! adjacent `<` or `>` tokens in expression position: the lexer emits
+//! them singly, so `List<List<U8>>` still closes both arguments. `|` in
+//! prefix position starts a closure, and in infix position is bitwise
+//! or.
 //!
 //! Diagnostic codes:
 //!
@@ -26,6 +40,8 @@
 //! - `E0105`: chained comparison such as `a < b < c`
 //! - `E0106`: invalid assignment target
 //! - `E0107`: a statement at module level, where only items are allowed
+//! - `E0108`: a bitwise or shift operator mixed with a different binary
+//!   operator without parentheses, such as `x & mask == 0`
 //! - `E0110`: `ensures` without a `|r|` binding for the return value
 //! - `E0111`: a `self` or `var self` receiver that is not the first parameter
 //! - `E0112`: `var` on a parameter other than the `self` receiver
@@ -53,7 +69,7 @@
 //! - `E0170`: `#[capability]` on an item other than `struct`, in the
 //!   prelude ([`parse_prelude`]); in user code the attribute is `E0132`
 //!
-//! Diagnostics `E0005`, `E0112`, `E0120`, `E0143`, `E0151`,
+//! Diagnostics `E0005`, `E0108`, `E0112`, `E0120`, `E0143`, `E0151`,
 //! `E0162`–`E0164`, and `E0170` can carry a machine-applicable
 //! [`Fix`](crate::Fix). `E0102`'s fix is the checker's, which can tell
 //! whether the hole's expression is pure (`oska-check`'s `hoist.rs`).
@@ -1326,7 +1342,7 @@ impl<'a> Parser<'a> {
         if self.at_kw(Keyword::Implies) {
             self.bump();
             let rhs = self.implies()?;
-            return Ok(Self::binary(BinaryOp::Implies, lhs, rhs));
+            return self.checked_binary(BinaryOp::Implies, lhs, rhs);
         }
         Ok(lhs)
     }
@@ -1335,6 +1351,7 @@ impl<'a> Parser<'a> {
         let start = self.or()?;
         if self.eat_punct(Punct::DotDot) {
             let end = self.or()?;
+            self.unmixed("..", false, &start, &end)?;
             return Ok(Expr {
                 span: join(start.span, end.span),
                 kind: ExprKind::Range {
@@ -1350,7 +1367,7 @@ impl<'a> Parser<'a> {
         let mut lhs = self.and()?;
         while self.eat_punct(Punct::OrOr) {
             let rhs = self.and()?;
-            lhs = Self::binary(BinaryOp::Or, lhs, rhs);
+            lhs = self.checked_binary(BinaryOp::Or, lhs, rhs)?;
         }
         Ok(lhs)
     }
@@ -1359,18 +1376,18 @@ impl<'a> Parser<'a> {
         let mut lhs = self.comparison()?;
         while self.eat_punct(Punct::AndAnd) {
             let rhs = self.comparison()?;
-            lhs = Self::binary(BinaryOp::And, lhs, rhs);
+            lhs = self.checked_binary(BinaryOp::And, lhs, rhs)?;
         }
         Ok(lhs)
     }
 
     fn comparison(&mut self) -> Result<Expr, Diagnostic> {
-        let lhs = self.additive()?;
+        let lhs = self.bit_or()?;
         let Some(op) = comparison_op(self.peek()) else {
             return Ok(lhs);
         };
         self.bump();
-        let rhs = self.additive()?;
+        let rhs = self.bit_or()?;
         if comparison_op(self.peek()).is_some() {
             return Err(error(
                 "E0105",
@@ -1379,7 +1396,119 @@ impl<'a> Parser<'a> {
                 join(lhs.span, self.peek_span()),
             ));
         }
+        self.checked_binary(op, lhs, rhs)
+    }
+
+    /// `|` in infix position: bitwise or.
+    fn bit_or(&mut self) -> Result<Expr, Diagnostic> {
+        let mut lhs = self.bit_xor()?;
+        while self.eat_punct(Punct::Pipe) {
+            let rhs = self.bit_xor()?;
+            lhs = self.checked_binary(BinaryOp::BitOr, lhs, rhs)?;
+        }
+        Ok(lhs)
+    }
+
+    fn bit_xor(&mut self) -> Result<Expr, Diagnostic> {
+        let mut lhs = self.bit_and()?;
+        while self.eat_punct(Punct::Caret) {
+            let rhs = self.bit_and()?;
+            lhs = self.checked_binary(BinaryOp::BitXor, lhs, rhs)?;
+        }
+        Ok(lhs)
+    }
+
+    fn bit_and(&mut self) -> Result<Expr, Diagnostic> {
+        let mut lhs = self.shift()?;
+        while self.eat_punct(Punct::Amp) {
+            let rhs = self.shift()?;
+            lhs = self.checked_binary(BinaryOp::BitAnd, lhs, rhs)?;
+        }
+        Ok(lhs)
+    }
+
+    fn shift(&mut self) -> Result<Expr, Diagnostic> {
+        let mut lhs = self.additive()?;
+        while let Some(op) = self.at_shift() {
+            self.bump();
+            self.bump();
+            let rhs = self.additive()?;
+            lhs = self.checked_binary(op, lhs, rhs)?;
+        }
+        Ok(lhs)
+    }
+
+    /// `<<` or `>>` when the next two tokens are `<` `<` or `>` `>` with
+    /// nothing between them. The lexer emits each singly, so that nested
+    /// generic arguments close.
+    fn at_shift(&self) -> Option<BinaryOp> {
+        let (first, second) = (self.tokens.get(self.pos)?, self.tokens.get(self.pos + 1)?);
+        if first.span.end != second.span.start {
+            return None;
+        }
+        match (&first.kind, &second.kind) {
+            (TokenKind::Punct(Punct::Lt), TokenKind::Punct(Punct::Lt)) => Some(BinaryOp::Shl),
+            (TokenKind::Punct(Punct::Gt), TokenKind::Punct(Punct::Gt)) => Some(BinaryOp::Shr),
+            _ => None,
+        }
+    }
+
+    /// `lhs op rhs`, unless a bitwise or shift operator meets a different
+    /// binary operator there without parentheses (`E0108`).
+    fn checked_binary(&self, op: BinaryOp, lhs: Expr, rhs: Expr) -> Result<Expr, Diagnostic> {
+        self.unmixed(op.text(), op.is_bitwise(), &lhs, &rhs)?;
         Ok(Self::binary(op, lhs, rhs))
+    }
+
+    /// `E0108` when `lhs` or `rhs`, the operands of `op` (bitwise or a
+    /// shift when `bitwise`), is a binary operation without parentheses
+    /// that mixes a bitwise or shift operator with a different one. Its
+    /// fix puts parentheses around each such operand, which keeps the
+    /// meaning the parser gave it: Rust's precedence.
+    fn unmixed(&self, op: &str, bitwise: bool, lhs: &Expr, rhs: &Expr) -> Result<(), Diagnostic> {
+        let mixed: Vec<(&Expr, BinaryOp)> = [lhs, rhs]
+            .into_iter()
+            .filter_map(|operand| match &operand.kind {
+                ExprKind::Binary {
+                    op: inner,
+                    lhs: a,
+                    rhs: b,
+                } if operand.span == join(a.span, b.span)
+                    && inner.text() != op
+                    && (bitwise || inner.is_bitwise()) =>
+                {
+                    Some((operand, *inner))
+                }
+                _ => None,
+            })
+            .collect();
+        let Some(&(_, inner)) = mixed.first() else {
+            return Ok(());
+        };
+        let span = join(lhs.span, rhs.span);
+        let mut fixed = String::new();
+        let mut at = span.start;
+        let mut edits = Vec::new();
+        for (operand, _) in &mixed {
+            fixed.push_str(&self.src[at..operand.span.start]);
+            fixed.push('(');
+            fixed.push_str(&self.src[operand.span.start..operand.span.end]);
+            fixed.push(')');
+            at = operand.span.end;
+            edits.push(Edit::insert(operand.span.start, "("));
+            edits.push(Edit::insert(operand.span.end, ")"));
+        }
+        fixed.push_str(&self.src[at..span.end]);
+        let (bit, other) = if bitwise {
+            (op, inner.text())
+        } else {
+            (inner.text(), op)
+        };
+        let mut message = format!("`{bit}` cannot be mixed with `{other}` without parentheses");
+        if !fixed.contains('\n') {
+            message.push_str(&format!("; write `{fixed}` to say which applies first"));
+        }
+        Err(error("E0108", message, span).with_fix("add parentheses", edits))
     }
 
     fn additive(&mut self) -> Result<Expr, Diagnostic> {
@@ -1415,6 +1544,7 @@ impl<'a> Parser<'a> {
         let op = match self.peek() {
             Some(TokenKind::Punct(Punct::Minus)) => UnaryOp::Neg,
             Some(TokenKind::Punct(Punct::Bang)) => UnaryOp::Not,
+            Some(TokenKind::Punct(Punct::Tilde)) => UnaryOp::BitNot,
             _ => return self.postfix(),
         };
         let start = self.peek_span();
@@ -2056,11 +2186,7 @@ mod tests {
                 out + ")"
             }
             ExprKind::Unary { op, operand } => {
-                let o = match op {
-                    UnaryOp::Neg => "-",
-                    UnaryOp::Not => "!",
-                };
-                format!("({o} {})", sexp(operand))
+                format!("({} {})", op.text(), sexp(operand))
             }
             ExprKind::Binary { op, lhs, rhs } => {
                 format!("({} {} {})", op.text(), sexp(lhs), sexp(rhs))

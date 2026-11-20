@@ -669,6 +669,13 @@ impl Lowering<'_> {
                     },
                     _ => self.unsupported(expr.span, "`-` on this type"),
                 },
+                (UnaryOp::BitNot, _) => match self.resolutions.get(&expr.span) {
+                    Some(Resolution::Int(int)) => ExprKind::BitNot {
+                        operand: self.boxed(operand),
+                        int: *int,
+                    },
+                    _ => self.unsupported(expr.span, "`~` on this type"),
+                },
             },
             ast::ExprKind::Binary { op, lhs, rhs } => self.binary(expr.span, *op, lhs, rhs),
             ast::ExprKind::Closure { params, body } => match self.resolutions.get(&expr.span) {
@@ -917,12 +924,19 @@ impl Lowering<'_> {
             }));
         }
         let int = match op {
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
-                match resolved {
-                    Some(Resolution::Int(int)) => Some(*int),
-                    _ => return self.unsupported(span, &format!("`{}` on this type", op.text())),
-                }
-            }
+            BinaryOp::Add
+            | BinaryOp::Sub
+            | BinaryOp::Mul
+            | BinaryOp::Div
+            | BinaryOp::Rem
+            | BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr => match resolved {
+                Some(Resolution::Int(int)) => Some(*int),
+                _ => return self.unsupported(span, &format!("`{}` on this type", op.text())),
+            },
             BinaryOp::Eq | BinaryOp::Ne if resolved != Some(&Resolution::Equality) => {
                 return self.unsupported(span, &format!("`{}` on this type", op.text()));
             }

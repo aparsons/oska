@@ -855,6 +855,9 @@ impl Core<'_> {
                 return refuse(format!("the integer type `{}`", int.name()), span)
             }
             ExprKind::Neg { operand, .. } => node("Neg", vec![("operand", self.expr(operand)?)]),
+            ExprKind::BitNot { int, .. } => {
+                return refuse(format!("the integer type `{}`", int.name()), span)
+            }
             ExprKind::Not(operand) => node("Not", vec![("operand", self.expr(operand)?)]),
             ExprKind::Binary { op, lhs, .. }
                 if !matches!(lhs.ty, Type::Unit | Type::Bool | Type::Int(IntType::Int)) =>

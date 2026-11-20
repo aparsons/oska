@@ -1411,6 +1411,15 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
     fn unary(&mut self, expr: &Expr, op: UnaryOp, operand: &Expr, expected: Option<&Ty>) -> Ty {
         match op {
             UnaryOp::Not => self.check(operand, &Ty::bool()),
+            UnaryOp::BitNot => {
+                let expected = expected.filter(|e| self.infer.shallow(e).is_integer());
+                let ty = self.expr(operand, expected);
+                if !self.require_bits("~", &ty, expr.span) {
+                    return Ty::Error;
+                }
+                self.defer(expr.span, &ty, Deferred::Int);
+                ty
+            }
             UnaryOp::Neg => {
                 if let ExprKind::Int(text) = &operand.kind {
                     let ty = self.literal_type(expected);
@@ -1472,7 +1481,51 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                 self.defer(expr.span, &ty, Deferred::Int);
                 ty
             }
+            // A shift's amount has its left operand's type, as the other
+            // bitwise operators' right operand does.
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr => {
+                let expected = expected.filter(|e| self.infer.shallow(e).is_integer());
+                let (first, second) = literal_last(lhs, rhs);
+                let ty = self.expr(first, expected);
+                if !self.require_bits(op.text(), &ty, expr.span) {
+                    self.infer(second);
+                    return Ty::Error;
+                }
+                self.check(second, &ty);
+                self.defer(expr.span, &ty, Deferred::Int);
+                ty
+            }
         }
+    }
+
+    /// Report the bitwise or shift operator `op` on a type other than
+    /// `U8`, `U32` and `U64`. Returns whether `ty` is acceptable.
+    fn require_bits(&mut self, op: &str, ty: &Ty, span: Span) -> bool {
+        let ty = self.infer.resolve(ty);
+        if ty.is_error() || ty == Ty::Never || ty.has_bitwise_operators() {
+            return true;
+        }
+        if let Ty::Var(_) = ty {
+            self.error(
+                codes::CANNOT_INFER,
+                format!("the operands' type must be known to use `{op}`"),
+                span,
+            );
+            return false;
+        }
+        self.error(
+            codes::BAD_OPERAND,
+            format!(
+                "`{op}` is not defined for `{ty}`; the bitwise and shift operators \
+                 are defined for `U8`, `U32` and `U64` only"
+            ),
+            span,
+        );
+        false
     }
 
     /// The operands of an arithmetic or comparison operator: numbers of

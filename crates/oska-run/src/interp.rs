@@ -661,6 +661,7 @@ impl<'p, 'h> Interpreter<'p, 'h> {
                 Ok(ops::neg(operand, *int, expr.span)?)
             }
             ExprKind::Not(operand) => Ok(Value::Bool(!self.eval(operand, frame)?.as_bool())),
+            ExprKind::BitNot { operand, int } => Ok(ops::bit_not(self.eval(operand, frame)?, *int)),
             ExprKind::Range { start, end } => {
                 let start = self.eval(start, frame)?;
                 let end = self.eval(end, frame)?;

@@ -280,6 +280,15 @@ impl Ty {
         self.integer_range().is_some()
     }
 
+    /// `U8`, `U32` or `U64`: an integer type with the bitwise and shift
+    /// operators and the rotations.
+    pub fn has_bitwise_operators(&self) -> bool {
+        matches!(
+            self.integer_type(),
+            Some(IntType::U8 | IntType::U32 | IntType::U64)
+        )
+    }
+
     /// An integer type that can hold negative values.
     pub fn is_signed_integer(&self) -> bool {
         self.integer_range().is_some_and(|(min, _)| min < 0)
