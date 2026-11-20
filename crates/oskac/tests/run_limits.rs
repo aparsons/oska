@@ -13,6 +13,7 @@ mod common;
 
 use std::path::Path;
 
+use common::frames::without_frames;
 use common::portable::Scratch;
 use common::run_limits::{assert_golden, oskac_in, oskac_with_stdin, program, transcript, HELLO};
 
@@ -216,7 +217,11 @@ fn attack_every_write(name: &str, backend: &[&str]) {
         if limit < 139 {
             assert_eq!(output.status.code(), Some(101), "limit {limit}: {stderr}");
             assert!(report.contains("error[P0041]"), "limit {limit}: {stderr}");
-            assert_eq!(report.lines().count(), 1, "limit {limit}: {stderr}");
+            assert_eq!(
+                without_frames(report).lines().count(),
+                1,
+                "limit {limit}: {stderr}"
+            );
         } else {
             assert_eq!(output.status.code(), Some(1), "limit {limit}: {stderr}");
             assert_eq!(total, 139, "limit {limit}");

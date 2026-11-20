@@ -643,6 +643,7 @@ impl Emitter {
                 self.asm.alu_imm(Alu::Sub, DEPTH, 1);
             }
             Inst::Leave => self.asm.alu_imm(Alu::Add, DEPTH, 1),
+            Inst::Depth { dst } => self.write(*dst, DEPTH),
             Inst::CallOnStack {
                 stack,
                 depth,

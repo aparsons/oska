@@ -1,0 +1,5 @@
+$ oskac test crates/oskac/tests/fixtures/test_filter.osk --filter= --format=json
+exit: 2
+--- stdout
+{"ok":false,"error":"usage","message":"--filter takes a substring that is not empty"}
+--- stderr

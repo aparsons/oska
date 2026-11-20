@@ -14,6 +14,7 @@ mod common;
 
 use std::path::Path;
 
+use common::frames::without_frames;
 use common::run_limits::{assert_golden, oskac_in, oskac_with_stdin, program};
 use common::Json;
 
@@ -185,7 +186,11 @@ fn a_list_that_grows_without_end_stops_with_p0040() {
                 stderr.starts_with("main.osk:") && stderr.contains(REPORT_64_MIB),
                 "{name} {backend:?}: {stderr}"
             );
-            assert_eq!(stderr.lines().count(), 1, "{name} {backend:?}: {stderr}");
+            assert_eq!(
+                without_frames(&stderr).lines().count(),
+                1,
+                "{name} {backend:?}: {stderr}"
+            );
         }
     }
 }
@@ -422,7 +427,10 @@ mod both_backends {
                     && outcome
                         .stderr
                         .contains("error[P0040]: memory limit reached")
-                    && outcome.stderr.lines().count() == 1,
+                    && crate::common::frames::without_frames(&outcome.stderr)
+                        .lines()
+                        .count()
+                        == 1,
                 "{backend}: {outcome:#?}"
             );
         }

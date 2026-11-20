@@ -6,7 +6,16 @@ This page describes milestone 1 of packages. There are no dependencies yet; see 
 
 ## Starting a package
 
-A package is this layout, which is also [`examples/shopping`](https://github.com/aparsons/oska/tree/main/examples/shopping):
+`oskac new` lays a package out for you:
+
+```sh
+oskac new demo
+oskac new shapes --lib
+```
+
+`oskac new demo` writes `demo/oska.toml`, `demo/src/main.osk`, which prints `Hello, world!` and has two tests, and the agent-setup `AGENTS.md` and `CLAUDE.md` (`--no-agent-files` leaves those out). With `--lib` it writes a library, `src/lib.osk`, with no `main`. The result passes `oskac check --release` and `oskac test` as written. `oskac new` refuses a name that is not snake_case and a directory that is not empty, and then writes nothing. See [`oskac new`](cli-reference.md#oskac-new).
+
+A bigger package has this layout, which is also [`examples/shopping`](https://github.com/aparsons/oska/tree/main/examples/shopping):
 
 ```text
 shopping/

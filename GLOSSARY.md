@@ -202,7 +202,7 @@ _Avoid_: updater daemon, auto-updater
 _Avoid_: lint, warning (Oska has neither)
 
 **Fix applicability**:
-How safe a diagnostic's fix is to apply without a person reading it: `machine` when it is certainly right, `maybe` when it is a guess at what was meant, such as the closest name to an unknown one, and `placeholders` when the program checks afterwards but code is left to write, such as `todo()` arms. Each code's fix has one, recorded in the code catalog.
+How safe a diagnostic's fix is to apply without a person reading it: `machine` when it is certainly right, `maybe` when it is a guess at what was meant, such as the closest name to an unknown one, and `placeholders` when the program checks afterwards but code is left to write, such as `todo()` arms. It is set by the code and the situation the fix is offered in, and the code catalog records the rule.
 _Avoid_: confidence, safety level
 
 ## Tooling
@@ -210,6 +210,14 @@ _Avoid_: confidence, safety level
 **Language server**:
 The long-running `oskac lsp` process that editors and agents ask about Oska code over the editor protocol: errors, where a name is defined and used, and a value's type and authority.
 _Avoid_: LSP (the protocol, not the server), Claude LSP server (the server is the same for every editor; Claude Code reaches it through the plugin)
+
+**Snapshot**:
+The stored rendering of a value that a test's `t.assert_snapshot(value)` compares the value with: one file per assertion, `snapshots/<test-file>/<test-name>.snap`, committed with the tests. The test runner, never the test, reads and writes it, and `oskac test --update` writes the new and changed ones. Only this sense: a value captured with `old(...)` is a pre-state value, and a saved authority report is an authority baseline.
+_Avoid_: golden file, fixture (for this concept)
+
+**Snapshot update**:
+`oskac test --update`: writing each snapshot that is missing or differs from its value instead of failing the test, and listing what was written. It never deletes a snapshot, and its result is reviewed as a diff like any other change.
+_Avoid_: accepting, blessing
 
 ## Compliance
 

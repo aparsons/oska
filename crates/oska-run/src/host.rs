@@ -23,6 +23,7 @@ use std::sync::mpsc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::prng::SplitMix64;
+use oska_syntax::SnapshotRecord;
 
 /// What a program wrote to its standard streams, as a host recorded it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -123,6 +124,12 @@ pub trait Host: Send {
     /// per `println`, as `t.printed()` returns them. A host that writes
     /// straight to the real stream records none.
     fn printed(&self) -> Vec<String>;
+
+    /// Record what a snapshot assertion was given ([`SnapshotRecord`]),
+    /// for the test runner to compare with its file after the test
+    /// (`crate::snapshots`). Only a test's host records it; any other
+    /// drops it, as no other code can call it.
+    fn record_snapshot(&mut self, _record: SnapshotRecord) {}
 
     /// Hand over what the host has recorded of the program's output since
     /// the last call. A host that writes straight to the real streams

@@ -12,6 +12,7 @@
     all(windows, target_arch = "x86_64")
 ))]
 
+mod common;
 mod differential;
 
 use differential::{assert_same, in_parallel, Case};
@@ -33,10 +34,16 @@ fn assert_prints(name: &str, src: &str, stdout: &str) {
 
 /// Run `src` on both backends, require the same outcome, and that it
 /// printed `stdout`, then panicked with the report `stderr`, exit 101.
+/// The report's frames, which the backends report alike, are not part
+/// of `stderr`.
 fn assert_panics(name: &str, src: &str, stdout: &str, stderr: &str) {
     let outcome = assert_same(&Case::file(name, src));
     assert_eq!(outcome.stdout, stdout, "case `{name}`: {outcome:#?}");
-    assert_eq!(outcome.stderr, stderr, "case `{name}`: {outcome:#?}");
+    assert_eq!(
+        common::frames::without_frames(&outcome.stderr),
+        stderr,
+        "case `{name}`: {outcome:#?}"
+    );
     assert_eq!(outcome.exit_code, Some(101), "case `{name}`: {outcome:#?}");
 }
 
@@ -296,13 +303,27 @@ fn deep_but_bounded_recursion_runs() {
 
 #[test]
 fn runaway_recursion_panics_with_p0021_instead_of_crashing() {
-    assert_panics(
-        "runaway_recursion",
-        &recursing(1_000_000),
-        "",
-        "main.osk:2:32: error[P0021]: calls nest too deep: is this recursion missing its \
-         base case? (bytes 56..67)\n",
+    // `down(n)` nests `n + 1` calls under `main`.
+    let deepest = Case::file(
+        "runaway_deepest",
+        &recursing(oska_native::MAX_CALL_DEPTH - 1),
     );
+    let (_, native) = differential::assert_same_at_depth_limit(
+        &Case::file("runaway_recursion", &recursing(1_000_000)),
+        &deepest,
+    );
+    assert_eq!(native.stdout, "", "{native:#?}");
+    let frame = "    at down (main.osk:2:32)\n";
+    assert_eq!(
+        native.stderr,
+        format!(
+            "main.osk:2:32: error[P0021]: calls nest too deep: is this recursion missing its \
+             base case? (bytes 56..67)\n{}    ... 49981 more frames\n",
+            frame.repeat(20)
+        ),
+        "{native:#?}"
+    );
+    assert_eq!(native.exit_code, Some(101), "{native:#?}");
 }
 
 /// The interpreter's limit is `oska_run`'s `MAX_CALL_DEPTH`, but a debug

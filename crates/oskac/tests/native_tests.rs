@@ -2,7 +2,7 @@
 //! backends: `oskac test --interpret` and `oskac test`, native by default
 //! on aarch64 Linux (#141) and x86_64 Linux (#165), must print the same
 //! report, text and JSON, with and without `--integration`, the same
-//! stderr, and exit with the same code.
+//! stderr, and exit with the same code. A test's `duration_ms` is masked.
 //!
 //! Each case runs in two identical temporary directories, so an
 //! integration test that writes files leaves the same tree on both sides.
@@ -21,6 +21,7 @@
     all(windows, target_arch = "x86_64")
 ))]
 
+mod common;
 mod executable;
 
 use std::collections::BTreeMap;
@@ -107,7 +108,9 @@ fn oskac_test(dir: &Path, target: &str, flags: &[&str]) -> Outcome {
     let mut tree = BTreeMap::new();
     read_tree(dir, "", &mut tree);
     Outcome {
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        // A test's duration is its own on each backend; that it is there,
+        // an integer, is still compared.
+        stdout: common::golden::mask_durations(&String::from_utf8_lossy(&output.stdout)),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         exit_code: output.status.code(),
         tree,

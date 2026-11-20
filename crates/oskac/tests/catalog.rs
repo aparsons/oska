@@ -127,6 +127,8 @@ struct Row {
     code: String,
     meaning: String,
     fix: Option<String>,
+    /// The applicability cell: a name, then any note on where it holds.
+    applicability: Option<String>,
 }
 
 /// An example block under a code.
@@ -153,6 +155,7 @@ fn rows_of(doc: &str) -> Vec<Row> {
                 code: code.to_string(),
                 meaning: unescape(cells[0]),
                 fix: cells.get(1).map(|c| unescape(c)),
+                applicability: cells.get(2).map(|c| unescape(c)),
             })
         })
         .collect()
@@ -255,9 +258,11 @@ fn codes_of(code: &str, example: &Example) -> BTreeSet<String> {
         let report = oska_check::check_module(src);
         found.extend(report.diagnostics.iter().map(|d| d.code.to_string()));
         if let Some(program) = &report.program {
-            if let Err(refusal) =
-                oska_native::build(program, oska_native::Target::LinuxAarch64, &|d| d)
-            {
+            if let Err(refusal) = oska_native::build(
+                program,
+                oska_native::Target::LinuxAarch64,
+                &oska_native::Unplaced,
+            ) {
                 found.insert(refusal.code.to_string());
             }
         }
@@ -638,10 +643,17 @@ fn the_site_has_a_page_per_code_and_codes_json_matches_explain() {
             .and_then(|(_, rest)| rest.split_once('"'))
             .map(|(name, _)| name);
         let shown = "<strong>Fix applicability:</strong>";
+        // A note after the name, such as `on main, maybe elsewhere`, is
+        // shown after it.
+        let note = row
+            .applicability
+            .as_deref()
+            .and_then(|cell| cell.split_once(' '))
+            .map_or(String::new(), |(_, note)| format!(" {note}"));
         match applicability {
             Some(name) => assert!(
-                page.contains(&format!("{shown} <code>{name}</code>.")),
-                "{}: the page should show the applicability {name}",
+                page.contains(&format!("{shown} <code>{name}</code>{note}.")),
+                "{}: the page should show the applicability {name}{note}",
                 row.code
             ),
             None => assert!(

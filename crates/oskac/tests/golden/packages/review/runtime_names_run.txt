@@ -3,3 +3,4 @@ exit: 101
 --- stdout
 --- stderr
 crates/oskac/tests/fixtures/packages/runtime_names/src/main.osk:4:13: error[P0006]: precondition violated: `a.b.c.half` requires `n > 0` (bytes 73..82)
+    at main (crates/oskac/tests/fixtures/packages/runtime_names/src/main.osk:4:13)

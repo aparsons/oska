@@ -1,0 +1,5 @@
+$ oskac test crates/oskac/tests/fixtures/test_filter_none.osk --filter=adds
+exit: 1
+--- stdout
+--- stderr
+error: the program has no tests, so the filter `adds` matches none

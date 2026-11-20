@@ -1,7 +1,8 @@
-//! `oskac fix [path] [--dry-run] [--placeholders] [--format=json]`: apply
-//! the fixes that are safe to apply automatically to a source file or a
-//! package, one at a time with a check after each (`fix/rounds.rs`), then
-//! write each changed file once, replacing it in one step.
+//! `oskac fix [path] [--dry-run] [--placeholders] [--release]
+//! [--format=json]`: apply the fixes that are safe to apply automatically
+//! to a source file or a package, one at a time with a check after each
+//! (`fix/rounds.rs`; the release check with `--release`), then write each
+//! changed file once, replacing it in one step.
 //!
 //! Nothing is written unless every rule holds: every fix edits one of the
 //! checked program's own files with edits that apply, the fixed program
@@ -11,8 +12,9 @@
 //! file's) directory without following a symlink (`package::Files`).
 
 mod diff;
-mod edits;
 mod rounds;
+
+use oska_syntax::edits;
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -148,7 +150,13 @@ fn fix_target(read: Read, flags: Flags) -> ExitCode {
         Read::Failed => return ExitCode::FAILURE,
     };
     let check = |program: &Package| -> CheckReport {
-        package::check(program, &target.refused, CheckOptions::default())
+        package::check(
+            program,
+            &target.refused,
+            CheckOptions {
+                release: flags.release,
+            },
+        )
     };
     let options = rounds::Options {
         placeholders: flags.placeholders,

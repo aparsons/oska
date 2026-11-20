@@ -252,6 +252,7 @@ impl Body<'_, '_> {
         self.step_into(function, span)?;
         let exhausted = self.panic_static(panics::CALL_DEPTH_EXCEEDED, panics::TOO_DEEP, span)?;
         self.push(Inst::Enter { exhausted });
+        self.record_call(span);
         let target = self.load(function, layout::FN_CODE);
         let dst = self.temp();
         let mut all = vec![function];
@@ -562,13 +563,14 @@ impl Body<'_, '_> {
         };
         // A panic names the call of the value, which only the caller
         // knows: the status carries the report's middle back to it.
+        // Count it again, at the end and before each panic's status, for
+        // the caller to uncount. It was counted, so it can be again.
+        let never = self.panic_static(panics::CALL_DEPTH_EXCEEDED, panics::TOO_DEEP, NOWHERE)?;
+        self.recount = Some(never);
         self.deferred = true;
         // The caller counted the call: this one is not.
         self.push(Inst::Leave);
         let value = self.expr(&call)?;
-        // Count it again for the caller to uncount. It was counted, so
-        // it can be again.
-        let never = self.panic_static(panics::CALL_DEPTH_EXCEEDED, panics::TOO_DEEP, NOWHERE)?;
         self.push(Inst::Enter { exhausted: never });
         self.leave_function(value)
     }
