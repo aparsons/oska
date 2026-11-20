@@ -297,6 +297,16 @@ pub struct Diagnostic {
     pub frames: Option<Box<Frames>>,
 }
 
+/// What one snapshot assertion of a test, `t.assert_snapshot(value)`,
+/// recorded as it ran: the span of its call and the value as `dbg`
+/// renders it. Both backends record it, and the test runner compares it
+/// with its snapshot file after the test (`oska_run::snapshots`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotRecord {
+    pub span: Span,
+    pub value: String,
+}
+
 /// The call stack at a panic: the calls that led to it, innermost first,
 /// at most [`MAX_FRAMES`] of them, and how many more were left out.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

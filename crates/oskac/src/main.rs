@@ -1010,7 +1010,7 @@ fn settle_snapshots(
         }
         _ => {
             let (dir, stem) = file_snapshots(target);
-            settle_in(report, &dir, &|_| stem.clone(), flags.update);
+            settle_in(report, &dir, &|_| Some(stem.clone()), flags.update);
             dir
         }
     };
@@ -1026,7 +1026,7 @@ fn settle_snapshots(
 pub(crate) fn settle_in(
     report: &mut oska_run::TestReport,
     dir: &str,
-    file_of: &dyn Fn(Span) -> String,
+    file_of: &dyn Fn(Span) -> Option<String>,
     update: bool,
 ) {
     let dir = if dir.is_empty() { "." } else { dir };
@@ -1047,12 +1047,13 @@ pub(crate) fn file_snapshots(path: &str) -> (String, String) {
 }
 
 /// The `<test-file>` of a package's snapshots for the test at `span`: its
-/// file under `src/` without `.osk`, such as `lib` or `util/text`.
-pub(crate) fn package_test_file(locator: &oska_check::Locator, span: Span) -> String {
+/// file under `src/` without `.osk`, such as `lib` or `util/text`, or
+/// `None` when the span is in no file of the package under `src/`.
+pub(crate) fn package_test_file(locator: &oska_check::Locator, span: Span) -> Option<String> {
     let located = locator.locate(Diagnostic::new(oska_run::codes::SNAPSHOT_FAILED, "", span));
-    let path = located.location.map_or_else(String::new, |l| l.path);
-    let path = path.strip_prefix("src/").unwrap_or(&path);
-    path.strip_suffix(".osk").unwrap_or(path).to_string()
+    let path = located.location?.path;
+    let module = path.strip_prefix("src/")?.strip_suffix(".osk")?;
+    (!module.is_empty()).then(|| module.to_string())
 }
 
 /// What the parity gate stopped: a run or the tests.

@@ -8,9 +8,12 @@
 //! no symlink. The check is `oskac check --release`; the tests are
 //! `oskac test` without `--integration`, run on the interpreter, in this
 //! process, each on stand-in capabilities and a fresh in-memory world: the
-//! gate writes no file, starts no program and reaches no real resource. It
-//! reads only the snapshots the tests' snapshot assertions compare with,
-//! as `oskac test` does without `--update` (`oska_run::snapshots`).
+//! gate writes no file, starts no program and reaches no real resource.
+//! The only files it reads besides the source are the snapshots the tests'
+//! snapshot assertions compare with, as `oskac test` does without
+//! `--update` (`oska_run::snapshots`), and it reaches none of them through
+//! a symlink: a symlinked `snapshots/`, directory in it, or snapshot fails
+//! the test.
 //!
 //! Any diagnostic or failed test blocks, on every attempt, and so does a
 //! target or directory that cannot be read: the gate never lets the agent
@@ -195,7 +198,7 @@ fn run(shown: &Shown) -> Result<Outcome, String> {
             let locate = |d| target::locate(&shown.name, &source, d);
             let mut report = oska_run::test(&source, &mut host, tests);
             let (dir, stem) = crate::file_snapshots(path_of(shown));
-            crate::settle_in(&mut report, &dir, &|_| stem.clone(), false);
+            crate::settle_in(&mut report, &dir, &|_| Some(stem.clone()), false);
             for test in &mut report.tests {
                 test.failure = test.failure.take().map(locate);
             }

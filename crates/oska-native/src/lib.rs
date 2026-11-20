@@ -23,7 +23,7 @@
 
 use oska_check::limits::Limits;
 use oska_check::program::Program;
-use oska_syntax::{Diagnostic, Frame, Frames, Span};
+use oska_syntax::{Diagnostic, Frame, Frames, SnapshotRecord, Span};
 
 pub use target::Target;
 
@@ -224,10 +224,6 @@ pub fn build_tests(program: &Program, target: Target) -> Result<Vec<u8>, Diagnos
 /// What starts each snapshot record a test executable writes to stdout.
 pub const SNAPSHOT_MARK: char = '\x0e';
 
-/// What one snapshot assertion of a test executable recorded: its span
-/// and the value's `dbg` text.
-pub type SnapshotRecord = (Span, String);
-
 /// The snapshot records at the start of a test executable's `stdout`
 /// ([`build_tests`]), each the span of its assertion and the value's
 /// `dbg` text, in the order they were written, and the rest of `stdout`:
@@ -250,7 +246,10 @@ pub fn snapshot_records(stdout: &[u8]) -> Option<(Vec<SnapshotRecord>, &[u8])> {
         let length: usize = length.parse().ok()?;
         let text = record.get(line_end + 1..)?;
         let value = std::str::from_utf8(text.get(..length)?).ok()?;
-        records.push((span, value.to_string()));
+        records.push(SnapshotRecord {
+            span,
+            value: value.to_string(),
+        });
         rest = &text[length..];
     }
     Some((records, rest))

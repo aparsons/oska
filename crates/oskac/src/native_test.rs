@@ -24,8 +24,8 @@ use std::process::{Command, ExitCode, Stdio};
 use std::time::Instant;
 
 use oska_check::program::Program;
-use oska_run::{test_duration_ms, test_result, TestOptions, TestReport, TestStatus};
-use oska_syntax::{Diagnostic, Span};
+use oska_run::{test_result, TestOptions, TestReport};
+use oska_syntax::{Diagnostic, SnapshotRecord, Span};
 
 use crate::cache::Cached;
 use crate::native::{self, Executable};
@@ -78,12 +78,7 @@ pub fn test_program(
                 let (failure, recorded) = run_one(exe.path(), index);
                 (Some(failure.map_or(Ok(()), Err)), recorded)
             };
-            let status = match outcome {
-                None => TestStatus::Skipped,
-                Some(_) => TestStatus::Passed,
-            };
-            let duration_ms = test_duration_ms(status, started);
-            test_result(test, outcome, recorded, duration_ms)
+            test_result(test, outcome, recorded, started)
         })
         .collect();
     Tested::Report(TestReport {
@@ -96,7 +91,7 @@ pub fn test_program(
 
 /// Run test `index` of the test executable at `exe`: why it failed, or
 /// `None` when it passed, and what its snapshot assertions recorded.
-fn run_one(exe: &Path, index: usize) -> (Option<Diagnostic>, Vec<(Span, String)>) {
+fn run_one(exe: &Path, index: usize) -> (Option<Diagnostic>, Vec<SnapshotRecord>) {
     let output = Command::new(exe)
         .arg(index.to_string())
         .stdin(Stdio::null())

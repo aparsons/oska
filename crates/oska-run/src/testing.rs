@@ -27,14 +27,14 @@ use std::time::{Duration, Instant};
 
 use oska_check::builtins;
 use oska_check::program::{Program, Test};
-use oska_syntax::{json_escape, Diagnostic, Span};
+use oska_syntax::{json_escape, Diagnostic, SnapshotRecord, Span};
 
 use crate::host::{FakeHost, Host, Output, RootHandle};
 use crate::interp::Interpreter;
 use crate::intrinsics::Intrinsic::{HigherOrder, Plain};
 use crate::intrinsics::{debug, Table};
 use crate::panics::{codes, Panic};
-use crate::snapshots::{numbered, Snapshot, Written, ASSERT_SNAPSHOT};
+use crate::snapshots::{Written, ASSERT_SNAPSHOT};
 use crate::value::{Capability, Value};
 use crate::{on_interpreter_stack, support, unimplemented_module, UNSUPPORTED_EXIT_CODE};
 
@@ -123,7 +123,7 @@ pub struct TestResult {
     /// What its snapshot assertions were given, in the order they ran,
     /// for the test runner to compare with their files
     /// ([`crate::snapshots::settle`]).
-    pub snapshots: Vec<Snapshot>,
+    pub snapshots: Vec<SnapshotRecord>,
 }
 
 impl TestResult {
@@ -395,15 +395,7 @@ pub fn test_program(program: &Program, host: &mut dyn Host, options: TestOptions
                     (Some(outcome.map_err(Panic::into_diagnostic)), recorded)
                 }
             };
-            let duration_ms = test_duration_ms(
-                if outcome.is_some() {
-                    TestStatus::Passed
-                } else {
-                    TestStatus::Skipped
-                },
-                started,
-            );
-            test_result(test, outcome, recorded, duration_ms)
+            test_result(test, outcome, recorded, started)
         })
         .collect();
     TestReport {
@@ -414,24 +406,23 @@ pub fn test_program(program: &Program, host: &mut dyn Host, options: TestOptions
     }
 }
 
-/// The result of `test`, which ran for `duration_ms` and ended with
-/// `outcome`, `Err` with its panic, or was skipped (`None`), recording
-/// the snapshots `recorded` (each assertion's span and value, in the
-/// order they ran). A snapshot assertion that is not numbered by its
-/// place fails the test ([`crate::snapshots::numbered`]), before a panic
-/// that came after it. Each backend calls it as its test ends.
+/// The result of `test`, started at `started`, as it ends: with
+/// `outcome`, `Err` with its failure, or skipped (`None`), having
+/// recorded `snapshots`, in the order its snapshot assertions ran. Each
+/// backend calls it as its test ends, which times it
+/// ([`test_duration_ms`]).
 pub fn test_result(
     test: &Test,
     outcome: Option<Result<(), Diagnostic>>,
-    recorded: Vec<(Span, String)>,
-    duration_ms: u64,
+    snapshots: Vec<SnapshotRecord>,
+    started: Instant,
 ) -> TestResult {
-    let (status, failure, snapshots) = match (outcome, numbered(test, recorded)) {
-        (None, _) => (TestStatus::Skipped, None, Vec::new()),
-        (Some(_), Err(misplaced)) => (TestStatus::Failed, Some(misplaced), Vec::new()),
-        (Some(Ok(())), Ok(snapshots)) => (TestStatus::Passed, None, snapshots),
-        (Some(Err(failure)), Ok(snapshots)) => (TestStatus::Failed, Some(failure), snapshots),
+    let (status, failure) = match outcome {
+        None => (TestStatus::Skipped, None),
+        Some(Ok(())) => (TestStatus::Passed, None),
+        Some(Err(failure)) => (TestStatus::Failed, Some(failure)),
     };
+    let duration_ms = test_duration_ms(status, started);
     TestResult {
         name: test.name.clone(),
         module: None,
@@ -496,7 +487,7 @@ struct TestHost<'h> {
     prefix: String,
     printed: Vec<String>,
     /// What each snapshot assertion was given, with its span, in order.
-    snapshots: Vec<(Span, String)>,
+    snapshots: Vec<SnapshotRecord>,
     /// Whether the next stderr text starts a line.
     line_start: bool,
 }
@@ -533,7 +524,7 @@ impl Host for TestHost<'_> {
     }
 
     fn record_snapshot(&mut self, span: Span, value: String) {
-        self.snapshots.push((span, value));
+        self.snapshots.push(SnapshotRecord { span, value });
     }
 
     fn write_stderr(&mut self, text: &str) -> io::Result<()> {

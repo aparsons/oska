@@ -7,7 +7,7 @@
 
 mod common;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use common::golden::mask_durations;
@@ -38,7 +38,7 @@ fn package(dir: &Path, lib: &str) {
     )
     .expect("write the manifest");
     std::fs::create_dir_all(dir.join("src")).expect("make src");
-    std::fs::write(dir.join("src/lib.osk"), lib).expect("write the library");
+    std::fs::write(under(dir, "src/lib.osk"), lib).expect("write the library");
 }
 
 /// `oskac test` with `args` in `dir` on each backend: the exit code and
@@ -46,9 +46,14 @@ fn package(dir: &Path, lib: &str) {
 /// backend starts from the snapshots `dir` holds before the call.
 fn test_on_both(dir: &Path, args: &[&str]) -> (Option<i32>, String) {
     let before = snapshot_files(dir);
+    run_on_both(dir, args, || restore(dir, &before))
+}
+
+/// [`test_on_both`], calling `reset` before each backend runs.
+fn run_on_both(dir: &Path, args: &[&str], reset: impl Fn()) -> (Option<i32>, String) {
     let mut results = Vec::new();
     for backend in BACKENDS {
-        restore(dir, &before);
+        reset();
         let mut all = vec!["test"];
         all.extend_from_slice(args);
         all.extend_from_slice(backend);
@@ -96,10 +101,16 @@ fn snapshot_files(dir: &Path) -> Vec<(String, String)> {
 fn restore(dir: &Path, files: &[(String, String)]) {
     let _ = std::fs::remove_dir_all(dir.join("snapshots"));
     for (path, text) in files {
-        let file = dir.join(path);
+        let file = under(dir, path);
         std::fs::create_dir_all(file.parent().expect("a parent")).expect("make the directory");
         std::fs::write(file, text).expect("write the snapshot");
     }
+}
+
+/// `dir` joined with each part of the `/`-separated `path`, one at a time.
+fn under(dir: &Path, path: &str) -> PathBuf {
+    path.split('/')
+        .fold(dir.to_path_buf(), |at, part| at.join(part))
 }
 
 fn files(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -238,7 +249,7 @@ fn update_writes_only_what_is_new_or_changed_and_deletes_nothing() {
 }
 
 #[test]
-fn a_test_with_more_than_one_snapshot_numbers_them_in_source_order() {
+fn a_test_with_more_than_one_snapshot_numbers_them_in_the_order_they_run() {
     let scratch = Scratch::new("snapshots", "numbered");
     package(
         &scratch,
@@ -270,15 +281,15 @@ test \"one value\" {
 fn a_single_file_keeps_its_snapshots_beside_it() {
     let scratch = Scratch::new("snapshots", "file");
     std::fs::create_dir_all(scratch.join("work")).expect("make work");
-    std::fs::write(scratch.join("work/shapes.osk"), SHOWS_A_LIST).expect("write the file");
+    std::fs::write(under(&scratch, "work/shapes.osk"), SHOWS_A_LIST).expect("write the file");
     for backend in BACKENDS {
-        let _ = std::fs::remove_dir_all(scratch.join("work/snapshots"));
+        let _ = std::fs::remove_dir_all(under(&scratch, "work/snapshots"));
         let mut args = vec!["test", "work/shapes.osk", "--update"];
         args.extend_from_slice(backend);
         let output = oskac_in(&scratch, &args);
         assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
         let written =
-            std::fs::read_to_string(scratch.join("work/snapshots/shapes/shows evens.snap"))
+            std::fs::read_to_string(under(&scratch, "work/snapshots/shapes/shows evens.snap"))
                 .expect("the snapshot");
         assert_eq!(written, "[0, 2, 4]\n");
     }
@@ -316,45 +327,120 @@ fn a_test_name_cannot_put_a_snapshot_outside_its_directory() {
 }
 
 #[test]
-fn a_snapshot_assertion_outside_the_test_body_or_run_twice_fails() {
-    let scratch = Scratch::new("snapshots", "misuse");
+fn snapshot_assertions_in_a_helper_or_a_loop_are_numbered_as_they_run() {
+    let scratch = Scratch::new("snapshots", "run_order");
     package(
         &scratch,
-        "fn helper(t: TestContext) {
-    t.assert_snapshot(1)
+        "fn helper(t: TestContext, n: Int) {
+    t.assert_snapshot(n)
 }
 
 test \"in a helper\" {
-    helper(t)
+    helper(t, 7)
 }
-",
-    );
-    let (code, report) = test_on_both(&scratch, &["--format=json", "--update"]);
-    assert_eq!(code, Some(1), "{report}");
-    let failure = only_failure(&report);
-    assert_eq!(text(failure.get("code")), "P0014");
-    assert!(
-        text(failure.get("message")).contains("directly in the test's body"),
-        "{report}"
-    );
-    package(
-        &scratch,
-        "test \"in a loop\" {
+
+test \"in a loop\" {
+    t.assert_snapshot(\"before\")
     for i in 0..2 {
-        t.assert_snapshot(i)
+        helper(t, i)
     }
 }
 ",
     );
-    let (code, report) = test_on_both(&scratch, &["--format=json", "--update"]);
+    let (code, report) = test_on_both(&scratch, &["--update"]);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(
+        snapshot_files(&scratch),
+        files(&[
+            ("snapshots/lib/in a helper.snap", "7\n"),
+            ("snapshots/lib/in a loop-1.snap", "\"before\"\n"),
+            ("snapshots/lib/in a loop-2.snap", "0\n"),
+            ("snapshots/lib/in a loop-3.snap", "1\n"),
+        ])
+    );
+    let (code, report) = test_on_both(&scratch, &[]);
+    assert_eq!(code, Some(0), "{report}");
+}
+
+#[test]
+fn a_panic_after_a_snapshot_assertion_is_the_failure_and_nothing_is_written() {
+    let scratch = Scratch::new("snapshots", "panic_wins");
+    package(
+        &scratch,
+        "fn half(n: Int, by: Int) -> Int {
+    n / by
+}
+
+test \"divides\" {
+    t.assert_snapshot(1)
+    t.assert_eq(half(4, 0), 2)
+}
+",
+    );
+    for args in [&["--format=json"][..], &["--format=json", "--update"]] {
+        let (code, report) = test_on_both(&scratch, args);
+        assert_eq!(code, Some(1), "{report}");
+        let failure = only_failure(&report);
+        assert_eq!(text(failure.get("code")), "P0004", "{report}");
+    }
+    assert_eq!(snapshot_files(&scratch), []);
+}
+
+/// Make `link` a symlink to the directory `target`: `false` where this
+/// platform or account cannot make one (Windows without the privilege).
+fn symlink_dir(target: &Path, link: &Path) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_dir(target, link);
+    match made {
+        Ok(()) => true,
+        Err(err) => {
+            eprintln!("skipped: cannot make a symlink here: {err}");
+            false
+        }
+    }
+}
+
+#[test]
+fn update_follows_no_symlink_out_of_the_package() {
+    let scratch = Scratch::new("snapshots", "symlink");
+    let outside = scratch.join("outside");
+    let pkg = scratch.join("pkg");
+    std::fs::create_dir_all(&outside).expect("make outside");
+    std::fs::create_dir_all(&pkg).expect("make pkg");
+    package(&pkg, SHOWS_A_LIST);
+    if !symlink_dir(&outside, &pkg.join("snapshots")) {
+        return;
+    }
+    let (code, report) = run_on_both(&pkg, &["--format=json", "--update"], || {});
     assert_eq!(code, Some(1), "{report}");
     let failure = only_failure(&report);
     assert_eq!(text(failure.get("code")), "P0014");
     assert!(
-        text(failure.get("message")).contains("more than once"),
+        text(failure.get("message")).contains("`snapshots` is a symlink"),
         "{report}"
     );
-    assert_eq!(snapshot_files(&scratch), []);
+    assert_eq!(
+        std::fs::read_dir(&outside).expect("outside").count(),
+        0,
+        "a snapshot was written through the symlink"
+    );
+
+    // A symlinked directory inside `snapshots/` is refused too, for
+    // reading as well as writing.
+    std::fs::remove_file(pkg.join("snapshots"))
+        .or_else(|_| std::fs::remove_dir(pkg.join("snapshots")))
+        .expect("remove the link");
+    std::fs::create_dir_all(pkg.join("snapshots")).expect("make snapshots");
+    std::fs::write(outside.join("shows evens.snap"), "[0, 2, 4]\n").expect("plant");
+    assert!(symlink_dir(&outside, &under(&pkg, "snapshots/lib")));
+    let (code, report) = run_on_both(&pkg, &["--format=json"], || {});
+    assert_eq!(code, Some(1), "{report}");
+    assert!(
+        text(only_failure(&report).get("message")).contains("`snapshots/lib` is a symlink"),
+        "{report}"
+    );
 }
 
 #[test]

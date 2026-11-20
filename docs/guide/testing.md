@@ -180,7 +180,7 @@ test "shows evens" {
 }
 ```
 
-The file is `snapshots/<test-file>/<test-name>.snap`: in a package, under the package's directory, with `<test-file>` the test's file under `src/` without `.osk` (`snapshots/lib/shows evens.snap` for a test in `src/lib.osk`); for a single file, beside it (`snapshots/app/shows evens.snap` for `app.osk`). A test with more than one snapshot assertion numbers them in source order, `shows evens-1.snap`, `shows evens-2.snap`. A character a file name cannot hold, such as `/` or `:`, becomes `_`.
+The file is `snapshots/<test-file>/<test-name>.snap`: in a package, under the package's directory, with `<test-file>` the test's file under `src/` without `.osk` (`snapshots/lib/shows evens.snap` for a test in `src/lib.osk`); for a single file, beside it (`snapshots/app/shows evens.snap` for `app.osk`). A test that runs more than one snapshot assertion numbers them in the order they run, `shows evens-1.snap`, `shows evens-2.snap`: source order for straight-line code, and an assertion in a helper or a loop counts each time it runs. A character a file name cannot hold, such as `/` or `:`, becomes `_`, and a name Windows keeps for a device, such as `CON`, gets a `_` before it.
 
 The first run has no snapshot, so the test fails with `P0014`, which names the file and `oskac test --update`, and shows the value as the lines to add:
 
@@ -206,7 +206,7 @@ new snapshots/lib/shows evens.snap
 
 With `--format=json` the report lists them after `skipped`, as `"snapshots":[{"path":"snapshots/lib/shows evens.snap","status":"new"}]`, each `new` or `changed`. Commit the snapshots with the tests. When the value changes, the test fails with the difference, `- ` for the stored line and `+ ` for the new one; if the change is intended, run `oskac test --update` and review the snapshot's diff.
 
-The test runner, not the test, reads and writes the snapshots: a test keeps only its stand-in capabilities, so `t.fs` cannot see them. Each snapshot assertion must be written directly in its test's body and run once, because its place numbers its file; one in a helper function or a loop fails with `P0014`. Snapshots behave the same natively and with `--interpret`.
+The test runner, not the test, reads and writes the snapshots: a test keeps only its stand-in capabilities, so `t.fs` cannot see them. A test that panics fails with its panic, and its snapshots are neither compared nor written. The runner follows no symlink under `snapshots/`: a symlinked directory or snapshot fails the test with `P0014`. Snapshots behave the same natively and with `--interpret`.
 
 ## Integration tests
 
