@@ -33,6 +33,11 @@ jobs:
     # (scripts/cargo-cache/mtimes.sh); CI builds each changed crate once.
     env:
       CARGO_INCREMENTAL: 0
+      # oskac's build cache (spec #279) inside target, so it is cached with
+      # the build: a test that compiles a program oskac has compiled before,
+      # with the same oskac, reuses the executable. Its key holds the oskac
+      # executable's hash and every input, so a compiler change misses.
+      OSKA_CACHE_DIR: ${{ github.workspace }}/target/oska-cache
     # Normally 3 to 5 minutes; a hung test (once a 64 KiB pipe deadlock on
     # arm64) must turn red long before GitHub's six-hour default.
     timeout-minutes: 30
@@ -111,6 +116,11 @@ jobs:
     # (scripts/cargo-cache/mtimes.sh); CI builds each changed crate once.
     env:
       CARGO_INCREMENTAL: 0
+      # oskac's build cache (spec #279) inside target, so it is cached with
+      # the build: a test that compiles a program oskac has compiled before,
+      # with the same oskac, reuses the executable. Its key holds the oskac
+      # executable's hash and every input, so a compiler change misses.
+      OSKA_CACHE_DIR: ${{ github.workspace }}/target/oska-cache
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
