@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use super::golden::assert_golden_file;
 use super::portable::{output_with_input, Scratch};
 
 /// What `oskac <args>` does, run in `dir`.
@@ -26,18 +27,7 @@ pub fn golden_path(name: &str) -> PathBuf {
 
 /// Assert that `actual` is the content of the golden file `name`.
 pub fn assert_golden(name: &str, actual: &str) {
-    let golden = golden_path(name);
-    if std::env::var_os("UPDATE_GOLDEN").is_some() {
-        std::fs::create_dir_all(golden.parent().expect("a parent")).expect("the golden directory");
-        std::fs::write(&golden, actual).expect("should write the golden file");
-    }
-    let expected = std::fs::read_to_string(&golden)
-        .unwrap_or_else(|e| panic!("golden file {} should exist: {e}", golden.display()));
-    assert!(
-        actual == expected,
-        "output differs from {}; rerun with UPDATE_GOLDEN=1 if the change is intended\n{actual}",
-        golden.display()
-    );
+    assert_golden_file(&golden_path(name), actual);
 }
 
 /// What `oskac <args>` printed and its exit code, as one text: the

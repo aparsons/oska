@@ -30,7 +30,8 @@
 //! contract bodies (`body.rs`, with local bidirectional inference), then
 //! compute authority. A test body sees `t: TestContext` from the prelude.
 //! Under `--release`, bodies are also scanned for `dbg(...)` and
-//! `todo()`.
+//! `todo()`, and every capability-bearing parameter must be used
+//! (**unused authority**, `unused_authority.rs`).
 //!
 //! # Diagnostic codes
 //!
@@ -67,6 +68,7 @@ mod suggest;
 mod toolchain;
 mod traits;
 mod ty;
+mod unused_authority;
 mod usefulness;
 
 pub use manifest::{compare_semver, decode_manifest, parse_manifest, parse_manifest_for, Manifest};
@@ -157,6 +159,7 @@ pub(crate) mod codes {
     pub const TODO_IN_RELEASE: &str = "E0293";
     pub const USE_OUTSIDE_STD: &str = "E0294";
     pub const UNKNOWN_MODULE: &str = "E0295";
+    pub const UNUSED_AUTHORITY: &str = "E0296";
     pub const UNTRUSTED_TEXT: &str = "E0300";
     pub const SINK_NOT_IMPORTED: &str = "E0310";
     pub const UNKNOWN_SINK_TAG: &str = "E0311";
@@ -710,6 +713,9 @@ fn check_source(
     }
     let items = items::Items::collect(module, &decls);
     traits::module(src, module, &decls, &items, &mut diagnostics);
+    if options.release {
+        unused_authority::module(src, module, &decls, &mut diagnostics);
+    }
     let mut findings = body::Findings {
         diagnostics,
         modules,

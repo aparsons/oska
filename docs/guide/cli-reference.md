@@ -55,12 +55,19 @@ USAGE:
                                            every platform into one directory
                                            (by default <name>-v<X.Y.Z>), with
                                            a SHA256SUMS signed by the SSH key
-    oskac fix [path] [--dry-run] [--placeholders] [--format=json]
+    oskac fix [path] [--dry-run] [--placeholders] [--release] [--format=json]
                                            Apply the machine fixes to a source
                                            file or package, checking again
-                                           after each, and write each changed
-                                           file once
+                                           after each (as the release check
+                                           does, with --release), and write
+                                           each changed file once
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
+    oskac new <name> [--lib] [--no-agent-files] [--format=json]
+                                           Lay out a new package in the
+                                           directory <name>: oska.toml,
+                                           src/main.osk (src/lib.osk with
+                                           --lib), and the agent-setup
+                                           AGENTS.md and CLAUDE.md
     oskac hook claude --event=post-edit [--format=json]
                                            Check what Claude Code just edited,
                                            reading its hook input on standard
@@ -98,7 +105,7 @@ USAGE:
 | Flag | Used by | Effect |
 | --- | --- | --- |
 | `--format=json` | every command | Machine-readable output. See [output formats](#output-formats). |
-| `--release` | `check` | Reject `dbg(...)` (`E0216`) and `todo()` (`E0293`). The other commands accept the flag and ignore it. |
+| `--release` | `check`, `fix` | Run the release check: reject `dbg(...)` (`E0216`), `todo()` (`E0293`) and unused authority, a capability-bearing parameter its function never uses (`E0296`). `oskac fix --release` checks the same way, so it applies the release check's `machine` fixes too, such as removing an unused parameter of `main`. The other commands accept the flag and ignore it. |
 | `--baseline=<file>` | `check` | Compare the program's authority with the [authority baseline](#authority-baseline) in `<file>`, and exit with 3 when it widened. Any other command refuses it as a usage error. |
 | `--update-baseline=<file>` | `check` | Write the program's [authority baseline](#authority-baseline) to `<file>`, only when there are no diagnostics. Not with `--baseline`; any other command refuses it as a usage error. |
 | `--grant=<file>` | `check`, `run` | Compare the program's authority with the [authority grant](#authority-grant) in `<file>`, and exit with 3 when it goes past it; `run` then runs nothing. Not with `--baseline` or `--update-baseline`; a repeated flag, an empty file name, or the flag on any other command is a usage error (exit code 2). |
@@ -114,6 +121,8 @@ USAGE:
 | `--timeout=<ms>` | `run` | Stop the program with `P0039` (exit code 101) after `<ms>` milliseconds of wall-clock time, also while it waits for input, within a tolerance of 100 ms. Natively, `oskac` stops its own child process, only that one, and prints the report itself, with exit code 101, never `128 + n`. The value is a whole number above 0; anything else, a repeated flag, or the flag on any other command is a usage error (exit code 2). See [run limits](../runtime.md#run-limits). |
 | `--max-output=<bytes>` | `run` | Stop the program with `P0041` (exit code 101) before it writes more than `<bytes>` bytes to standard output and standard error together. The value is a whole number above 0; anything else, a repeated flag, or the flag on any other command is a usage error (exit code 2). See [run limits](../runtime.md#run-limits). |
 | `--max-memory=<bytes>` | `run` | Stop the program with `P0040` (exit code 101) before its values (texts, lists, structs, enum values, closures) take more than `<bytes>` bytes, net of those it let go of. The backends may stop at different points. The value is a whole number above 0; anything else, a repeated flag, or the flag on any other command is a usage error (exit code 2). See [run limits](../runtime.md#run-limits). |
+| `--lib` | `new` | Lay out a library: `src/lib.osk` and no `main`. Any other command given it is a usage error (exit code 2). |
+| `--no-agent-files` | `new` | Leave out `AGENTS.md` and `CLAUDE.md`. Any other command given it is a usage error (exit code 2). |
 | `--no-cache` | `check`, `run`, `test`, `build`, `release` | Neither read nor write the [build cache](#oskac-cache). Any other command refuses it as a usage error (exit code 2). |
 
 ## `oskac lex`
@@ -292,7 +301,7 @@ The first line puts the name and the version under the signature, so a signed re
 
 ## `oskac fix`
 
-`oskac fix [path] [--dry-run] [--placeholders] [--format=json]` applies the fixes that are safe to apply automatically to a file or package, as `check` takes them. It checks the program, applies the fix of the first diagnostic, in the order `check` reports them, whose applicability is `machine`, checks again, and repeats until no such fix is left. With `--placeholders` it applies `placeholders` fixes too, such as `match` arms whose body is `todo()`, which compile but are left to fill in. It never applies a `maybe` fix or a suggestion. It stops early when a fix leaves its own diagnostic in place, which it then undoes, or after 100 rounds.
+`oskac fix [path] [--dry-run] [--placeholders] [--release] [--format=json]` applies the fixes that are safe to apply automatically to a file or package, as `check` takes them. With `--release` each check is the release check, so the release check's `machine` fixes are applied too, such as removing `dbg` (`E0216`) and an unused parameter of `main` (`E0296`). It checks the program, applies the fix of the first diagnostic, in the order `check` reports them, whose applicability is `machine`, checks again, and repeats until no such fix is left. With `--placeholders` it applies `placeholders` fixes too, such as `match` arms whose body is `todo()`, which compile but are left to fill in. It never applies a `maybe` fix or a suggestion. It stops early when a fix leaves its own diagnostic in place, which it then undoes, or after 100 rounds.
 
 The fixes are made in memory. At the end, each changed file is written once, replacing the old file in one step. Nothing is written, and the command says which rule refused it in an `error:` line on standard error, when:
 
@@ -354,6 +363,20 @@ On Linux and macOS, `run` and `test` compile the program as `build` does, for th
 - A program the native backend cannot compile yet (`E0390`) runs on the interpreter, after one line on stderr that says so and why, such as `app.osk:3:13: note: running on the interpreter: ... (E0390)` (with `--format=json`, one JSON object with `"severity":"note"`). It is a checked program that the interpreter runs, so the output is the same, only slower. `--interpret` prints no note. A program the interpreter cannot run either, such as one that imports a module with no runtime (`E0371`), gets no note: both refuse it, and the interpreter's refusal is reported.
 - If the executable cannot be written or started, for example because the temporary directory is mounted `noexec`, the command fails with `E0391`. Set `TMPDIR` to another directory or use `--interpret`.
 - A macOS executable is ad-hoc signed by `oskac`: it runs on a Mac, but Gatekeeper refuses it after a download. To distribute one, sign it with your Developer ID and notarize it: see [Signing and notarizing for macOS](macos-signing.md).
+
+## `oskac new`
+
+`oskac new <name>` lays out a new package in the directory `<name>`, under the current directory, so that nobody writes the layout from memory:
+
+- `oska.toml`, with `name = "<name>"` and `version = "0.1.0"`;
+- `src/main.osk`, a `main` that prints a greeting, with two tests; or, with `--lib`, `src/lib.osk`, a `pub` function and its test, and no `main`;
+- `AGENTS.md` and `CLAUDE.md`, the [agent-setup](agent-guide.md#files-for-agents) templates the site publishes, byte for byte. They are built into `oskac`, so `oskac new` works offline. `--no-agent-files` leaves both out.
+
+The package passes `oskac check --release` and `oskac test` as written, and a program's `main` uses the one capability it takes, `Stdout`, so it starts with no unused authority. In the package, `oskac run` prints `Hello, world!`.
+
+`<name>` must be a valid package name, as the manifest's `name` is: snake_case, lowercase letters and digits in words joined by single underscores, starting with a letter. The directory may not exist yet, or be empty; anything else is refused. A refusal writes nothing and exits with 1, printing `oskac new: <reason>` to standard error, or `{"ok":false,"error":"<code>","message":"..."}` with `--format=json`, where the code is `invalid_name`, `not_empty` (a directory with something in it), `exists` (a file, or a symlink, in the way) or `io` (the file system refused). Each file is created new, never written over one that is there, and an empty directory is looked at again just before the first file is written. If the file system refuses a write partway through, `oskac new` removes the files and directories it made in that run, and never anything that was there before, then refuses with `io`.
+
+On success it prints the files it wrote and exits with 0. With `--format=json` it prints `{"ok":true,"directory":"demo","files":["oska.toml","src/main.osk","AGENTS.md","CLAUDE.md"]}`, the files in the order they were written, relative to the directory. No name, or more than one, is a usage error (exit code 2): it prints the usage text to standard error, or `{"ok":false,"error":"usage","message":"..."}` with `--format=json`.
 
 ## `oskac self`
 
