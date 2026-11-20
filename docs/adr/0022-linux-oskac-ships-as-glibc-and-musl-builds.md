@@ -13,7 +13,7 @@ Both names replace today's `oskac-linux-<arch>`.
 
 The two builds are variants of one supported platform, not two platforms. The `--target` names do not change, and an executable that `oskac` builds is the same bytes from either build.
 
-The installer installs the glibc build when it finds glibc 2.35 or newer, else the musl build. `OSKA_LIBC=glibc` or `OSKA_LIBC=musl` overrides that choice, and the install receipt records the override. The update checker makes the same choice again at each update, but only by reading a few fixed files (the dynamic loader paths and the version banner in `libc.so.6`), so it needs no authority to start processes. A recorded override wins.
+The installer installs the glibc build when it finds glibc 2.35 or newer, else the musl build. `OSKA_LIBC=glibc` or `OSKA_LIBC=musl` overrides that choice, and the install receipt records the override (`libc_forced`). The installer itself does not read that record: each run chooses again, from `OSKA_LIBC` when it is set and from the system when it is not. The update checker (#468, not built yet) makes the same choice again at each update, but only by reading a few fixed files (the dynamic loader paths and the version banner in `libc.so.6`), so it needs no authority to start processes. For the update checker, a recorded override wins.
 
 Each release also publishes `ghcr.io/aparsons/oskac`: an image that holds only the musl build at `/oskac` and an empty `/tmp`, runs as user 65532, and has one entry for each Linux processor. A script in the repo builds it as reproducible OCI bytes. Its index digest goes into a release file that `SHA256SUMS` covers, so the existing release signature covers the image. The release pushes those exact bytes after it signs the release.
 
@@ -32,7 +32,7 @@ The musl build runs with no C library. On x86_64 it passed the confinement tests
 
 ## Consequences
 
-- The release workflow builds six Linux assets in place of two, gives the musl rows a `--target`, and checks that a musl build has no `PT_INTERP` and no `DT_NEEDED`. The glibc check (no symbol newer than `GLIBC_2.35`) remains for the glibc build. The release smoke-tests the musl build on both processors, in `alpine` and in the image.
+- The release workflow builds four Linux assets in place of two, gives the musl rows a `--target`, and checks that a musl build has no `PT_INTERP` and no `DT_NEEDED`. The glibc check (no symbol newer than `GLIBC_2.35`) remains for the glibc build. The release smoke-tests the musl build on both processors, in `alpine` and in the image.
 - Every pull request builds the musl build on x86_64 and runs the `oska-sys` and `oska-run` tests and an empty-root smoke test with it.
-- The signed index has one entry for each build. The installer stops with `unsupported_libc` only when `OSKA_LIBC=glibc` forces the glibc build on a system without glibc 2.35 or newer; otherwise it installs the musl build where the glibc build cannot run.
-- The release job gets `packages: write` to push the image.
+- The signed index has one entry for each build. The installer stops with `unsupported_libc` in two cases only: when `OSKA_LIBC=glibc` forces the glibc build on a system without glibc 2.35 or newer, and when a release from before the musl build (v0.5.0 and earlier, which has only the glibc build) is asked for where only the musl build would run, or with `OSKA_LIBC=musl`. Otherwise it installs the musl build where the glibc build cannot run.
+- The release's `publish` job gets `packages: write` to push the image by digest, and its `tag-image` job to tag it once the GitHub Release exists.
