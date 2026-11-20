@@ -242,3 +242,64 @@ fn off_main_the_fix_is_maybe_because_callers_change_too() {
         )
     );
 }
+
+// ---- Reads that are not a use -------------------------------------------------------
+
+#[test]
+fn a_read_of_a_let_that_shadows_the_parameter_is_not_a_use() {
+    assert_eq!(
+        release_errors(
+            "fn work(net: Net, n: Int) -> Int {\n    let net = n\n    net + 1\n}\n\nfn main() {}"
+        ),
+        [("E0296", "net: Net")]
+    );
+}
+
+#[test]
+fn a_read_of_a_closure_parameter_that_shadows_the_parameter_is_not_a_use() {
+    assert_eq!(
+        release_errors(
+            "fn work(net: Net, n: Int) -> Int {\n    let f = |net: Int| net + 1\n    f(n)\n}\n\n\
+             fn main() {}"
+        ),
+        [("E0296", "net: Net")]
+    );
+}
+
+#[test]
+fn a_read_before_a_shadowing_let_is_a_use() {
+    assert_release_ok(
+        "fn work(out: Stdout, n: Int) -> Int {\n    let _ = out.println(\"hi\")\n    let out = n\n    out\n}\n\n\
+         fn main() {}",
+    );
+}
+
+#[test]
+fn a_shadowing_let_inside_a_block_ends_with_the_block() {
+    assert_release_ok(
+        "fn work(out: Stdout, n: Int) -> Int {\n    if n > 0 {\n        let out = n\n    }\n    \
+         let _ = out.println(\"hi\")\n    n\n}\n\nfn main() {}",
+    );
+}
+
+#[test]
+fn discarding_the_parameter_with_let_underscore_is_not_a_use() {
+    assert_eq!(
+        release_errors("fn main(net: Net) {\n    let _ = net\n}"),
+        [("E0296", "net: Net")]
+    );
+}
+
+#[test]
+fn a_read_in_a_contract_is_a_use() {
+    // A contract may read a parameter of a bounded type parameter: `E0274`
+    // keeps its type argument pure there. Removing the parameter would
+    // break the contract, so the read is a use. (Reading a capability in a
+    // contract is `E0280` anyway.)
+    assert_release_ok(
+        "trait Speak {\n    fn ok(self) -> Bool\n}\n\n\
+         impl Speak for Int {\n    fn ok(self) -> Bool {\n        self > 0\n    }\n}\n\n\
+         fn check<T: Speak>(x: T) -> Int\n    requires x.ok()\n{\n    1\n}\n\n\
+         fn main() {\n    let n = check(5)\n}",
+    );
+}

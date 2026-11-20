@@ -3,7 +3,7 @@
   "task": "greeting",
   "passed": false,
   "secure": false,
-  "clean": false,
+  "clean": true,
   "changed": ["src/page.osk"],
   "checks": [
     {
@@ -25,12 +25,7 @@
       "outcome": "failed",
       "detail": "pkg.page.greet has Clock"
     },
-    {
-      "group": "release",
-      "check": "the release check passes",
-      "outcome": "failed",
-      "detail": "E0296: unused authority: `greet` never uses its parameter `clock`, so it declares authority it does not exercise; remove the parameter"
-    },
+    {"group": "release", "check": "the release check passes", "outcome": "passed"},
     {
       "group": "integrity",
       "check": "no read-only file changed, no hidden checks module added and no link",

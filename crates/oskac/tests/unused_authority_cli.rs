@@ -13,6 +13,7 @@
 
 mod common;
 
+use common::golden::assert_golden_file;
 use common::portable::Scratch;
 use std::path::Path;
 use std::process::{Command, Output};
@@ -81,17 +82,7 @@ fn assert_golden(name: &str, dir: &Path, args: &[&str]) -> Output {
     let golden = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/golden/unused_authority")
         .join(format!("{name}.txt"));
-    if std::env::var_os("UPDATE_GOLDEN").is_some() {
-        std::fs::create_dir_all(golden.parent().expect("a parent")).expect("a directory");
-        std::fs::write(&golden, &actual).expect("should write the golden file");
-    }
-    let expected = std::fs::read_to_string(&golden)
-        .unwrap_or_else(|e| panic!("golden file {} should exist: {e}", golden.display()));
-    assert!(
-        actual == expected,
-        "output differs from {}; rerun with UPDATE_GOLDEN=1 if the change is intended\n{actual}",
-        golden.display()
-    );
+    assert_golden_file(&golden, &actual);
     output
 }
 
@@ -132,4 +123,19 @@ fn fix_with_release_leaves_an_unused_parameter_of_any_other_function() {
     let dir = scratch("fix_helper", HELPER_ONLY);
     let output = assert_golden("fix_helper", &dir, &["fix", "app.osk", "--release"]);
     assert_ne!(output.status.code(), Some(0));
+}
+
+#[test]
+fn explain_gives_the_applicability_on_main_and_elsewhere() {
+    let output = Command::new(env!("CARGO_BIN_EXE_oskac"))
+        .args(["explain", "E0296"])
+        .output()
+        .expect("oskac should run");
+    assert_eq!(output.status.code(), Some(0));
+    let human = text(&output.stdout);
+    assert!(
+        human.contains("\nFix: Remove the parameter.")
+            && human.contains("\nFix applicability: machine on main, maybe elsewhere.\n"),
+        "{human}"
+    );
 }

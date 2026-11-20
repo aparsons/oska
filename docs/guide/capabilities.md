@@ -71,7 +71,7 @@ For a larger example, this site is built by an Oska program, `site/build.osk`. I
 
 ### Unused authority
 
-A report is only worth reviewing if it is honest, so a function must use every capability it takes. A capability-bearing parameter that the function never uses is **unused authority**, and the release check, `oskac check --release`, rejects it with `E0296`. Any use counts: calling a method on it, passing it on, attenuating it, storing it, returning it, or capturing it in a closure. An ordinary `oskac check` says nothing, so a function you are still writing can take a capability before its body uses it.
+A report is only worth reviewing if it is honest, so a function must use every capability it takes. A capability-bearing parameter that the function never uses is **unused authority**, and the release check, `oskac check --release`, rejects it with `E0296`. Any use counts: calling a method on it, passing it on, attenuating it, storing it, returning it, or capturing it in a closure. Discarding it with `let _ = net` is not a use, and neither is reading a local that shadows it. An ordinary `oskac check` says nothing, so a function you are still writing can take a capability before its body uses it.
 
 ```oska
 fn greet(io: Stdout, net: Net) -> Result<(), IoError> {
@@ -287,13 +287,14 @@ fn main() {
 A program that declares `Net`, `NetConnect`, `NetListen`, `Spawn`, or `Sched` in `main` passes `oskac check` but is refused by `oskac run` with `E0370` and exit code 2, before anything runs.
 
 ```oska
-fn main(net: Net) {
-    let _ = net
+fn main(net: Net) -> Result<(), IoError> {
+    let connection = net.connect_only().connect("example.com", 443)?
+    connection.send("hello")
 }
 ```
 
 ```console cmd=run stream=stderr
-main.osk:1:19: error[E0370]: `oskac run` cannot grant `Net` yet: the capability has no runtime (bytes 18..37)
+main.osk:1:42: error[E0370]: `oskac run` cannot grant `Net` yet: the capability has no runtime (bytes 41..142)
 ```
 
 ## Two exceptions

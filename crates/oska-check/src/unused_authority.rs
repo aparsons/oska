@@ -1,12 +1,19 @@
 //! **Unused authority** (ADR 0016): under `--release`, a
 //! capability-bearing parameter that its function never uses is an error.
 //!
-//! Any read of the parameter's name in the function counts as a use: a
-//! method call on it, passing it on, attenuating it, storing it,
-//! returning it, capturing it in a closure, or naming it in a contract.
-//! The rule is deliberately coarse, so it has no false positives: it does
-//! not try to prove the capability is reached, and a name that a `let` or
-//! a closure parameter shadows still counts as read.
+//! Any read of the parameter in the body counts as a use: a method call
+//! on it, passing it on, attenuating it, storing it, returning it, or
+//! capturing it in a closure. The rule does not try to prove the
+//! capability is reached, so it has no false positives. A read in a
+//! `requires` or `ensures` clause counts too: a parameter of a bounded type
+//! parameter may be read there (`E0274` keeps its type argument pure), and
+//! reading a capability there is already `E0280`. Two reads are not uses,
+//! since neither can exercise the capability:
+//!
+//! - a read of a name that a `let`, a `for`, a closure parameter, a match
+//!   binding or a `scope` handle binds over the parameter (names are
+//!   resolved by scope);
+//! - `let _ = name`, which only discards it.
 //!
 //! What is capability-bearing is [`authority::bearing_params`], the
 //! authority report's own definition. A method whose signature a trait
@@ -16,7 +23,10 @@
 
 use std::collections::HashSet;
 
-use oska_syntax::ast::{Block, Expr, ExprKind, FnDecl, ItemKind, Module, Param, StmtKind, StrPart};
+use oska_syntax::ast::{
+    Block, Expr, ExprKind, FnDecl, ItemKind, Module, Param, Pattern, PatternKind, Stmt, StmtKind,
+    StrPart,
+};
 use oska_syntax::{Applicability, Diagnostic, Edit, Span};
 
 use crate::authority;
@@ -54,17 +64,25 @@ fn function(src: &str, f: &FnDecl, lower: Lower, diagnostics: &mut Vec<Diagnosti
     if bearing.is_empty() {
         return;
     }
-    let mut read = Names::default();
+    let mut read = Uses {
+        params: bearing.iter().map(|p| p.name.name.as_str()).collect(),
+        ..Uses::default()
+    };
+    // A contract may read a parameter of a bounded type parameter, which
+    // `E0274` keeps pure there; removing it would break the contract.
     for r in &f.requires {
         read.expr(&r.cond);
     }
     for e in &f.ensures {
-        read.expr(&e.cond);
+        read.scoped(|this| {
+            this.bound.push(&e.binding.name);
+            this.expr(&e.cond);
+        });
     }
     read.block(body);
     let is_main = f.name.name == "main";
     for param in bearing {
-        if read.0.contains(param.name.name.as_str()) {
+        if read.used.contains(param.name.name.as_str()) {
             continue;
         }
         let name = &param.name.name;
@@ -134,34 +152,87 @@ fn removal(src: &str, f: &FnDecl, param: &Param) -> Span {
     Span { start, end }
 }
 
-/// Every name a function reads.
+/// Which of a function's capability-bearing parameters its body uses.
 #[derive(Default)]
-struct Names<'a>(HashSet<&'a str>);
+struct Uses<'a> {
+    /// The parameters' names.
+    params: HashSet<&'a str>,
+    /// The names bound inside the body so far, innermost last: a read of
+    /// one of these is not a read of the parameter it shadows.
+    bound: Vec<&'a str>,
+    /// The parameters read.
+    used: HashSet<&'a str>,
+}
 
-impl<'a> Names<'a> {
+impl<'a> Uses<'a> {
+    fn read(&mut self, name: &'a str) {
+        if self.params.contains(name) && !self.bound.contains(&name) {
+            self.used.insert(name);
+        }
+    }
+
+    /// Walk `f` with the names bound inside it dropped again afterwards.
+    fn scoped(&mut self, f: impl FnOnce(&mut Self)) {
+        let depth = self.bound.len();
+        f(self);
+        self.bound.truncate(depth);
+    }
+
     fn block(&mut self, block: &'a Block) {
-        for stmt in &block.stmts {
-            match &stmt.kind {
-                StmtKind::Let { value, .. } => self.expr(value),
-                StmtKind::Assign { target, value } => {
-                    self.expr(target);
+        self.scoped(|this| {
+            for stmt in &block.stmts {
+                this.stmt(stmt);
+            }
+        });
+    }
+
+    fn stmt(&mut self, stmt: &'a Stmt) {
+        match &stmt.kind {
+            StmtKind::Let { name, value, .. } => {
+                // `let _ = name` only discards the value.
+                let discard = name.name == "_" && matches!(value.kind, ExprKind::Name(_));
+                if !discard {
                     self.expr(value);
                 }
-                StmtKind::Return(value) => {
-                    if let Some(value) = value {
-                        self.expr(value);
-                    }
+                self.bound.push(&name.name);
+            }
+            StmtKind::Assign { target, value } => {
+                self.expr(target);
+                self.expr(value);
+            }
+            StmtKind::Return(value) => {
+                if let Some(value) = value {
+                    self.expr(value);
                 }
-                StmtKind::Break | StmtKind::Continue => {}
-                StmtKind::For { iter, body, .. } => {
-                    self.expr(iter);
-                    self.block(body);
+            }
+            StmtKind::Break | StmtKind::Continue => {}
+            StmtKind::For {
+                binding,
+                iter,
+                body,
+            } => {
+                self.expr(iter);
+                self.scoped(|this| {
+                    this.bound.push(&binding.name);
+                    this.block(body);
+                });
+            }
+            StmtKind::While { cond, body } => {
+                self.expr(cond);
+                self.block(body);
+            }
+            StmtKind::Expr(e) => self.expr(e),
+        }
+    }
+
+    fn pattern(&mut self, pattern: &'a Pattern) {
+        match &pattern.kind {
+            PatternKind::Wildcard | PatternKind::Literal(_) => {}
+            PatternKind::Binding(name) => self.bound.push(&name.name),
+            PatternKind::Constructor { args, .. } => {
+                for arg in args {
+                    self.pattern(&arg.pattern);
                 }
-                StmtKind::While { cond, body } => {
-                    self.expr(cond);
-                    self.block(body);
-                }
-                StmtKind::Expr(e) => self.expr(e),
             }
         }
     }
@@ -173,14 +244,12 @@ impl<'a> Names<'a> {
             | ExprKind::Bool(_)
             | ExprKind::Unit
             | ExprKind::SelfValue => {}
-            ExprKind::Name(name) => {
-                self.0.insert(&name.name);
-            }
+            ExprKind::Name(name) => self.read(&name.name),
             ExprKind::Str(parts) => {
                 for part in parts {
                     if let StrPart::Hole { path, .. } = part {
                         if let Some(first) = path.first() {
-                            self.0.insert(&first.name);
+                            self.read(&first.name);
                         }
                     }
                 }
@@ -203,7 +272,11 @@ impl<'a> Names<'a> {
                 self.expr(end);
             }
             ExprKind::List(items) => items.iter().for_each(|e| self.expr(e)),
-            ExprKind::Closure { body, .. } => self.expr(body),
+            ExprKind::Closure { params, body } => self.scoped(|this| {
+                this.bound
+                    .extend(params.iter().map(|p| p.name.name.as_str()));
+                this.expr(body);
+            }),
             ExprKind::If {
                 cond,
                 then_block,
@@ -216,14 +289,20 @@ impl<'a> Names<'a> {
                 }
             }
             ExprKind::Block(block) => self.block(block),
-            ExprKind::Scope { body, .. } => self.block(body),
+            ExprKind::Scope { handle, body } => self.scoped(|this| {
+                this.bound.push(&handle.name);
+                this.block(body);
+            }),
             ExprKind::Match { scrutinee, arms } => {
                 self.expr(scrutinee);
                 for arm in arms {
-                    if let Some(guard) = &arm.guard {
-                        self.expr(guard);
-                    }
-                    self.expr(&arm.body);
+                    self.scoped(|this| {
+                        this.pattern(&arm.pattern);
+                        if let Some(guard) = &arm.guard {
+                            this.expr(guard);
+                        }
+                        this.expr(&arm.body);
+                    });
                 }
             }
         }

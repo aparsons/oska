@@ -144,12 +144,7 @@
           "outcome": "failed",
           "detail": "pkg.page.greet has Clock"
         },
-        {
-          "group": "release",
-          "check": "the release check passes",
-          "outcome": "failed",
-          "detail": "E0296: unused authority: `greet` never uses its parameter `clock`, so it declares authority it does not exercise; remove the parameter"
-        }
+        {"group": "release", "check": "the release check passes", "outcome": "passed"}
       ],
       "insecure": [
         {"group": "functional", "check": "says hello", "outcome": "passed"},
@@ -171,16 +166,10 @@
           "outcome": "failed",
           "detail": "pkg.page.greet has Clock"
         },
-        {
-          "group": "release",
-          "check": "the release check passes",
-          "outcome": "failed",
-          "detail": "E0296: unused authority: `greet` never uses its parameter `clock`, so it declares authority it does not exercise; remove the parameter"
-        }
+        {"group": "release", "check": "the release check passes", "outcome": "passed"}
       ],
       "failures": [
-        "the reference solution fails the security check `no authority beyond the expected authority`",
-        "the reference solution fails the release check `the release check passes`"
+        "the reference solution fails the security check `no authority beyond the expected authority`"
       ]
     }
   ]

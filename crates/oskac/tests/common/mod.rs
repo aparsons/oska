@@ -2,6 +2,7 @@
 
 #![allow(dead_code)]
 
+pub mod golden;
 pub mod hook;
 pub mod portable;
 pub mod procfs;
