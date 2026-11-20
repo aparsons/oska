@@ -1,0 +1,8 @@
+$ oskac test crates/oskac/tests/fixtures/test_filter.osk --filter adds
+exit: 0
+--- stdout
+test adds ... ok
+test adds twice ... ok
+
+2 tests: 2 passed, 0 failed, 0 skipped, 1 filtered out
+--- stderr

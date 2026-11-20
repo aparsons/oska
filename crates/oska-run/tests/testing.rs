@@ -206,7 +206,14 @@ fn integration_tests_are_skipped_unless_asked_for() {
 #[test]
 fn integration_tests_run_on_the_given_host_when_asked_for() {
     let mut host = FakeHost::new().with_file("config.txt", "real");
-    let report = oska_run::test(INTEGRATION, &mut host, TestOptions { integration: true });
+    let report = oska_run::test(
+        INTEGRATION,
+        &mut host,
+        TestOptions {
+            integration: true,
+            ..TestOptions::default()
+        },
+    );
     let statuses: Vec<TestStatus> = report.tests.iter().map(|t| t.status).collect();
     assert_eq!(
         statuses,
@@ -227,7 +234,10 @@ fn plain_tests_never_see_the_given_host() {
     let report = test_with(
         FakeHost::new().with_file("config.txt", "real"),
         src,
-        TestOptions { integration: true },
+        TestOptions {
+            integration: true,
+            ..TestOptions::default()
+        },
     );
     assert_eq!(report.tests[0].status, TestStatus::Passed, "{report:#?}");
 }
@@ -340,7 +350,14 @@ fn dbg_and_stderr_in_a_test_reach_the_given_hosts_stderr_named_by_test() {
                test \"second\" {\n    let _ = dbg(\"two\\nlines\")\n}\n\
                #[integration]\ntest \"real\" {\n    let _ = dbg(true)\n}\n";
     let mut host = FakeHost::new();
-    let report = oska_run::test(src, &mut host, TestOptions { integration: true });
+    let report = oska_run::test(
+        src,
+        &mut host,
+        TestOptions {
+            integration: true,
+            ..TestOptions::default()
+        },
+    );
     assert_eq!(report.count(TestStatus::Passed), 3, "{report:#?}");
     let output = host.take_output();
     assert_eq!(
