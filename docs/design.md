@@ -381,7 +381,7 @@ The **differential suite** runs every program of the corpus (the interpreter's r
 
 ### Native backend benchmark
 
-`scripts/bench-native.sh` is run by the maintainer, on a Raspberry Pi 5 (aarch64 Linux), and for x86_64 Linux on demand in CI (`.github/workflows/bench.yml`); it is never a required check. Each workload runs as `oskac run --interpret` and as the executable `oskac build` wrote, after both are checked to print the same. Times are the best CPU time (user plus system) of 5 runs, which other work on the Pi does not stretch as it does the wall clock; the interpreter's includes checking the program, as `oskac run` does.
+`scripts/bench-native.sh` is run by the maintainer, on a Raspberry Pi 5 (aarch64 Linux), and for x86_64 Linux, macOS and Windows on demand in CI (`.github/workflows/bench.yml`); it is never a required check. Each workload runs as `oskac run --interpret` and as the executable `oskac build` wrote, after both are checked to print the same. Times are the best CPU time (user plus system) of 5 runs, which other work on the Pi does not stretch as it does the wall clock; the interpreter's includes checking the program, as `oskac run` does.
 
 Recorded on 2026-11-12, `oskac` 0.2.0, before and after the profiling-driven tuning round that followed the milestone's review ("before" is a run of the build without it, in the same session):
 
@@ -433,6 +433,23 @@ Recorded on 2026-11-19, `oskac` 0.4.0, by `bench.yml` on GitHub's macOS runners 
 - **Program logic** is native's on macOS as on Linux: 36 to 135 times faster than the interpreter on both Macs.
 - **Bulk text on the Intel Mac** is the one workload where native is slower than the interpreter, 44 ms against 30. The interpreter does `replace` and `trim` in Rust, so it is already as fast as the machine allows, and the native runtime's byte loops are slower than Rust's on this older processor. It is the workload already expected to be about 1x.
 - **The Intel runner is slow overall.** Its interpreter takes two to three times as long as on the Linux x86_64 runner, so compare the speedups, not the times, between machines. The macOS figures include each call into `libSystem`, where Linux makes the system call directly. The site, which writes many files, still lands at 23x and 25x, beside the Linux runners' 18x to 24x.
+
+#### Windows
+
+Recorded on 2026-11-20, `oskac` 0.5.0 with the Windows backend (#179), by `bench.yml` on GitHub's `windows-latest` runner, an AMD EPYC (family 25, model 1) with 4 vCPUs ([Windows run](https://github.com/aparsons/oska/actions/runs/44687864528/job/136126393427)), with the `ubuntu-latest` run of the same commit beside it, an AMD EPYC 7763 with 4 ([Linux run](https://github.com/aparsons/oska/actions/runs/44687864528/job/136126393305)). Git Bash's `time` does not see a native Windows process's CPU time, so the Windows figures are the best **wall-clock** time of 5 runs, and the Linux ones CPU time as above:
+
+| Workload | Windows interpreter | Windows native | Windows speedup | Linux interpreter | Linux native | Linux speedup |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| loop | 1099 ms | 34 ms | 32x | 956 ms | 11 ms | 87x |
+| text | 227 ms | 29 ms | 7.8x | 141 ms | 7 ms | 20x |
+| bulk text | 56 ms | 48 ms | 1.2x | 38 ms | 34 ms | 1.1x |
+| lists | 812 ms | 32 ms | 25x | 660 ms | 13 ms | 51x |
+| recursion | 890 ms | 28 ms | 32x | 649 ms | 6 ms | 108x |
+| site | 8026 ms | 345 ms | 23x | 6115 ms | 270 ms | 23x |
+
+- **Every short native run costs about 25 ms on Windows** before the program does anything: creating a process, loading `kernel32.dll` and `ntdll.dll`, and the wall clock counting it all. Wall time also counts the interpreter's start, but that is small beside its run. So the speedups for the short workloads (loop, text, lists, recursion) are lower than on Linux, and say more about process start than about the code.
+- **The site, the one long workload, is where the backends compare:** 23x on Windows and 23x on Linux, on the same kind of processor. Native Windows takes 345 ms against Linux's 270, and the interpreter is slower by about the same part, so the gap is the platform (wall time, process start, and writing files through `NtCreateFile` and `WriteFile`), not the Windows backend's code.
+- **Bulk text** is about 1x, as on every platform.
 
 ### Values
 
