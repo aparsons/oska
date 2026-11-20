@@ -28,7 +28,7 @@ A directory capability refuses an absolute path, an empty path, a path that clim
 
 ### The checker says `Fs`, `FsRead` or `FsWrite` cannot read or write (`E0273`)
 
-Since v0.2.0 these three capabilities only attenuate: `read_to_string`, `list_dir`, `write`, and `create_dir` are gone from them. Narrow to a directory first, and call the method on the result: `fs.restrict_to("<root>").read_to_string(path)`. For one file, use `restrict_to_file("<file>")` and call `read_to_string()` or `write(text)` with no path. Code that must reach anywhere writes `restrict_to("/")`. See [attenuation](capabilities.md#attenuation) and [upgrading to v0.2.0](install.md#upgrading-to-v020).
+Since v0.2.0 these three capabilities only attenuate: `read_to_string`, `list_dir`, `write`, and `create_dir` are gone from them. Narrow to a directory first, and call the method on the result: `fs.restrict_to("<root>").read_to_string(path)`. For one file, use `restrict_to_file("<file>")` and call `read_to_string()` or `write(text)` with no path. Code that must reach anywhere writes `restrict_to("/")`. See [attenuation](capabilities.md#attenuation) and [the notes for v0.2.0](../../CHANGELOG.md#v020).
 
 ### `env.secret` panics with `P0020`
 
