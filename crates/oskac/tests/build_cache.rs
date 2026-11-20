@@ -132,15 +132,10 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-/// Two outputs alike: exit code, stdout and stderr. A test's `duration_ms` is
-/// masked: it is the time the test took, which no cache keeps.
+/// Two outputs alike: exit code, stdout and stderr.
 fn assert_same(fresh: &Output, cached: &Output) {
     assert_eq!(fresh.status.code(), cached.status.code(), "exit code");
-    assert_eq!(
-        common::golden::mask_durations(&text(&fresh.stdout)),
-        common::golden::mask_durations(&text(&cached.stdout)),
-        "stdout"
-    );
+    assert_eq!(text(&fresh.stdout), text(&cached.stdout), "stdout");
     assert_eq!(text(&fresh.stderr), text(&cached.stderr), "stderr");
 }
 
@@ -237,7 +232,18 @@ fn run_and_test_reuse_their_native_executables() {
             hit, NATIVE_HOST,
             "{args:?}: a hit only where it runs natively"
         );
-        assert_same(&fresh, &cached);
+        if args.ends_with(&["--format=json"]) && args[0] == "test" {
+            // A test's `duration_ms` is the time it took, which no cache
+            // keeps: compare the reports with it masked.
+            let masked = |o: &Output| Output {
+                status: o.status,
+                stdout: common::golden::mask_durations(&text(&o.stdout)).into_bytes(),
+                stderr: o.stderr.clone(),
+            };
+            assert_same(&masked(&fresh), &masked(&cached));
+        } else {
+            assert_same(&fresh, &cached);
+        }
     }
     let tested = case.oskac(&["test", "tested.osk"]);
     assert_eq!(tested.status.code(), Some(1), "a failing test still fails");

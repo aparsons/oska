@@ -118,7 +118,7 @@ test gets it wrong: main.osk:10:5: error[P0011]: assertion failed: `actual == ex
 
 Each failure is named by its test and carries a stable code and the byte span of the failing call. Control characters in test names and messages are escaped, so a message cannot forge a line of the report.
 
-With `--format=json` the report is one JSON object on stdout. `status` is `passed`, `failed`, or `skipped`; `duration_ms` is how long the test took, in whole milliseconds, timed the same way natively and with `--interpret` (0 for a skipped test), so the slow test is easy to find; and `failure` is a diagnostic object or `null`. Durations vary from run to run:
+With `--format=json` the report is one JSON object on stdout. `status` is `passed`, `failed`, or `skipped`, and `failure` is a diagnostic object or `null`. `duration_ms` is how long the test took, in whole milliseconds, so the slow test is easy to find. Natively it is the test's process from start to exit, process start included; with `--interpret` it is the test's run on a fresh interpreter. A skipped test has 0. Durations vary from run to run:
 
 ```console cmd=test json
 {"tests":[{"name":"adds up","status":"passed","duration_ms":0,"failure":null},{"name":"gets it wrong","status":"failed","duration_ms":1,"failure":{"code":"P0011","message":"assertion failed: `actual == expected`: actual 4, expected 5","path":"main.osk","span":{"start":117,"end":142},"line":10,"column":5,"end_line":10,"end_column":30,"severity":"error","url":"https://oskalang.dev/codes/P0011","related":[],"suggestions":[]}},{"name":"reads the real clock","status":"skipped","duration_ms":0,"failure":null}],"passed":1,"failed":1,"skipped":1,"diagnostics":[]}

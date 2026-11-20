@@ -61,7 +61,7 @@ pub use interp::MAX_CALL_DEPTH;
 pub use oska_check::limits::Limits;
 pub use panics::codes;
 pub use testing::{
-    duration_ms, escape_control, test, test_program, test_refusal, Filtered, TestOptions,
+    escape_control, test, test_duration_ms, test_program, test_refusal, Filtered, TestOptions,
     TestReport, TestResult, TestStatus,
 };
 

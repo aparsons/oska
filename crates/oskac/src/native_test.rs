@@ -13,7 +13,8 @@
 //! only when asked, and is skipped otherwise without starting a process.
 //! A test `--filter` leaves out starts no process and is not reported.
 //! A test's duration is the time its process took, from start to exit,
-//! timed as the interpreter times a test (`oska_run::duration_ms`).
+//! process start included (`oska_run::test_duration_ms`); the
+//! interpreter times a test's run in-process.
 //! The result is the report the interpreter's runner gives
 //! (`oska_run::TestReport`), printed by the same code.
 
@@ -22,7 +23,7 @@ use std::process::{Command, ExitCode, Stdio};
 use std::time::Instant;
 
 use oska_check::program::Program;
-use oska_run::{duration_ms, TestOptions, TestReport, TestResult, TestStatus};
+use oska_run::{test_duration_ms, TestOptions, TestReport, TestResult, TestStatus};
 use oska_syntax::{Diagnostic, Span};
 
 use crate::cache::Cached;
@@ -78,10 +79,7 @@ pub fn test_program(
                     Some(failure) => (TestStatus::Failed, Some(failure)),
                 }
             };
-            let duration_ms = match status {
-                TestStatus::Skipped => 0,
-                _ => duration_ms(started.elapsed()),
-            };
+            let duration_ms = test_duration_ms(status, started);
             TestResult {
                 name: test.name.clone(),
                 module: None,

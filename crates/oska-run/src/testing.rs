@@ -111,9 +111,10 @@ pub struct TestResult {
     /// The test item's span in the program.
     pub span: Span,
     pub status: TestStatus,
-    /// How long the test took to run, in whole milliseconds, from just
-    /// before it starts to just after it ends ([`duration_ms`]); 0 for a
-    /// skipped test, which does not run.
+    /// How long the test took, in whole milliseconds, rounded down: on the
+    /// interpreter its run in an interpreter of its own, natively its
+    /// process from start to exit. 0 for a skipped test, which does not
+    /// run. See [`test_duration_ms`].
     pub duration_ms: u64,
     /// Why a failed test failed: the panic that stopped it, shaped like a
     /// diagnostic, with a `P`-code and the span where it happened.
@@ -322,15 +323,12 @@ pub fn test_program(program: &Program, host: &mut dyn Host, options: TestOptions
                 })),
                 (true, false) => None,
             };
-            let duration_ms = match outcome {
-                Some(_) => duration_ms(started.elapsed()),
-                None => 0,
-            };
             let (status, failure) = match outcome {
                 None => (TestStatus::Skipped, None),
                 Some(Ok(())) => (TestStatus::Passed, None),
                 Some(Err(panic)) => (TestStatus::Failed, Some(panic.into_diagnostic())),
             };
+            let duration_ms = test_duration_ms(status, started);
             TestResult {
                 name: test.name.clone(),
                 module: None,
@@ -348,10 +346,19 @@ pub fn test_program(program: &Program, host: &mut dyn Host, options: TestOptions
     }
 }
 
-/// A test's duration as the report gives it, in whole milliseconds,
-/// rounded down: the same on every backend, which each time the test from
-/// just before it starts to just after it ends.
-pub fn duration_ms(took: Duration) -> u64 {
+/// The `duration_ms` of a test that ended with `status` and was started
+/// at `started`: the whole milliseconds since then, rounded down, or 0
+/// for a skipped test, which did not run. Each backend calls it as its
+/// test ends.
+pub fn test_duration_ms(status: TestStatus, started: Instant) -> u64 {
+    match status {
+        TestStatus::Skipped => 0,
+        TestStatus::Passed | TestStatus::Failed => whole_millis(started.elapsed()),
+    }
+}
+
+/// `took` in whole milliseconds, rounded down.
+fn whole_millis(took: Duration) -> u64 {
     u64::try_from(took.as_millis()).unwrap_or(u64::MAX)
 }
 
