@@ -151,6 +151,14 @@ _Avoid_: codegen, JIT
 An operating system and processor that `oskac` is released for: Linux on aarch64 and x86_64, macOS on aarch64 and x86_64, and Windows on x86_64. Every feature works the same on each, natively, with the same security guarantees.
 _Avoid_: OS
 
+**glibc build**:
+The Linux `oskac` that links glibc dynamically, so it runs only where glibc 2.35 or newer is installed. It is one of two builds of `oskac` for the Linux supported platform, and the faster one, so the installer picks it wherever it can run (ADR 0022).
+_Avoid_: gnu build, dynamic build, the Linux binary
+
+**musl build**:
+The Linux `oskac` that is a static executable with musl inside it, with no dynamic loader and no shared library, so it runs on any Linux, an empty container included. It is a variant of the Linux supported platform, not a platform of its own: it takes the same target platforms and builds the same bytes as the glibc build, only more slowly (ADR 0022).
+_Avoid_: static build, Alpine build, musl platform, musl target (for `oskac`'s own build)
+
 **Parity gate**:
 The rule that a feature is done only when it works natively, with the same output and the same security guarantees, on every supported platform. Where operating systems differ, Oska defines the result: its own error wording, `/` in paths, no newline translation and its own exit codes.
 
