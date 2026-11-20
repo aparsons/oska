@@ -1059,8 +1059,8 @@ test_the_release_smoke_tests_the_musl_builds_on_both_processors() {
   smoke=$(job_text "$wf" smoke-image)
   [ -n "$smoke" ] || fail "release.yml has no smoke-image job"
   grep -qE '^    if:' <<<"$smoke" && fail "the smoke-image job does not always run"
-  grep -q 'runner: ubuntu-22.04$' <<<"$smoke" || fail "no x86_64 row"
-  grep -q 'runner: ubuntu-22.04-arm$' <<<"$smoke" || fail "no aarch64 row"
+  grep -q 'runner: ubuntu-24.04$' <<<"$smoke" || fail "no x86_64 row"
+  grep -q 'runner: ubuntu-24.04-arm$' <<<"$smoke" || fail "no aarch64 row"
   grep -q 'binary: oskac-linux-x86_64-musl$' <<<"$smoke" || fail "no x86_64 musl build"
   grep -q 'binary: oskac-linux-aarch64-musl$' <<<"$smoke" || fail "no aarch64 musl build"
   grep -q 'scripts/release/smoke-image.sh ' <<<"$smoke" || fail "does not run smoke-image.sh"

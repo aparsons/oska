@@ -252,7 +252,10 @@ jobs:
           retention-days: 7
 
   # Both musl builds on an empty root, before anything is signed: in alpine
-  # (musl, no glibc) and in the image itself, on each processor.
+  # (musl, no glibc) and in the image itself, on each processor. Ubuntu
+  # 24.04, not 22.04: 22.04's skopeo (1.4) cannot load an image into the
+  # runner's Docker ("read/write on closed pipe"). This job builds nothing,
+  # so the glibc floor of the build rows does not apply.
   smoke-image:
     needs: assemble
     strategy:
@@ -260,10 +263,10 @@ jobs:
       matrix:
         include:
           - binary: oskac-linux-x86_64-musl
-            runner: ubuntu-22.04
+            runner: ubuntu-24.04
             machine: x86_64
           - binary: oskac-linux-aarch64-musl
-            runner: ubuntu-22.04-arm
+            runner: ubuntu-24.04-arm
             machine: aarch64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
