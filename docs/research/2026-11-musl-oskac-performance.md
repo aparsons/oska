@@ -206,7 +206,7 @@ Not recommended:
 - **A third-party allocator crate.** The workspace has no external crates (the check step "no external crates").
 - **Replacing `memcpy`.** It needs `unsafe` code. Fixes 1 and 2 remove most of the calls instead.
 
-Follow-up tickets: to be filed.
+Follow-up tickets: #500 (string literals), #501 (`String.chars`), #502 (intrinsic lookup), #503 (`Infer::flow`), #504 (`Ty` names), #505 (call `Vec`s), #506 (aarch64 measurement), #507 (allocator decision, last).
 
 ## Open questions
 

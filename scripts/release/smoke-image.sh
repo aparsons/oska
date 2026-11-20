@@ -34,7 +34,8 @@ example=$3
 # alpine 3.22, pinned by the digest of its multi-processor index.
 ALPINE=alpine@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
 EXPECTED="Hello from Oska!"
-# `oskac test --format=json smoke_test.osk`, one line.
+# `oskac test --format=json smoke_test.osk`, one line, with the test's
+# `duration_ms` (which varies from run to run) taken out by expect_test.
 EXPECTED_TEST='{"tests":[{"name":"oskac test runs here","status":"passed","failure":null}],"passed":1,"failed":0,"skipped":0,"diagnostics":[]}'
 
 command -v docker >/dev/null 2>&1 || die "docker is not installed"
@@ -76,6 +77,16 @@ expect() {
   echo "ok: $* printed '$got'"
 }
 
+# Checks that `oskac test --format=json` ("$@") reports exactly
+# $EXPECTED_TEST once its one `"duration_ms":<n>,` is taken out.
+expect_test() {
+  local got masked
+  got=$("$@") || die "failed: $*"
+  masked=$(sed -E 's/"duration_ms":[0-9]+,//' <<<"$got")
+  [ "$masked" = "$EXPECTED_TEST" ] || die "$* printed '$got', not '$EXPECTED_TEST' (with a duration_ms)"
+  echo "ok: $* printed '$got'"
+}
+
 # In alpine: musl, no glibc, the binary mounted at /b/oskac.
 in_alpine=(docker run --rm --network none -v "$work/bin:/b:ro" -v "$work/w:/w" -w /w "$ALPINE")
 expect "$version" "${in_alpine[@]}" /b/oskac --version
@@ -83,7 +94,7 @@ expect "$EXPECTED" "${in_alpine[@]}" /b/oskac run --no-cache example.osk
 "${in_alpine[@]}" /b/oskac build --no-cache example.osk -o /w/built-in-alpine ||
   die "oskac build failed in alpine"
 expect "$EXPECTED" "${in_alpine[@]}" /w/built-in-alpine
-expect "$EXPECTED_TEST" "${in_alpine[@]}" /b/oskac test --no-cache --format=json smoke_test.osk
+expect_test "${in_alpine[@]}" /b/oskac test --no-cache --format=json smoke_test.osk
 
 # In the image: this processor's entry of the index, as `docker pull` of
 # the published tag would choose it.
@@ -97,6 +108,6 @@ expect "$EXPECTED" "${in_image[@]}" "$image" run --no-cache example.osk
 "${in_image[@]}" "$image" build --no-cache example.osk -o /w/built-in-image ||
   die "oskac build failed in the image"
 expect "$EXPECTED" "${in_image[@]}" --entrypoint /w/built-in-image "$image"
-expect "$EXPECTED_TEST" "${in_image[@]}" "$image" test --no-cache --format=json smoke_test.osk
+expect_test "${in_image[@]}" "$image" test --no-cache --format=json smoke_test.osk
 
 echo "ok: $version runs, builds and runs $example, and runs a test, in alpine and in the image on linux/$arch"
