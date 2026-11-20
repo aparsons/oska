@@ -16,7 +16,7 @@ $here = $PSScriptRoot
 $scratch = Join-Path ([IO.Path]::GetTempPath()) ('oska-install-test-' + [Guid]::NewGuid().ToString('N'))
 [void](New-Item -ItemType Directory -Path $scratch)
 
-$Assets = @('oskac-linux-aarch64', 'oskac-linux-x86_64', 'oskac-macos-aarch64', 'oskac-macos-x86_64', 'oskac-windows-x86_64.exe')
+$Assets = @('oskac-linux-aarch64-gnu', 'oskac-linux-aarch64-musl', 'oskac-linux-x86_64-gnu', 'oskac-linux-x86_64-musl', 'oskac-macos-aarch64', 'oskac-macos-x86_64', 'oskac-windows-x86_64.exe')
 $Utf8 = New-Object System.Text.UTF8Encoding $false
 # The certificate Start-RedirectServer makes, once.
 $script:certificate = $null

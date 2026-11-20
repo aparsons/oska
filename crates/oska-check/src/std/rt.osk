@@ -4201,7 +4201,7 @@ fn open_following(path: String) -> Result<Int, IoError> {
 }
 
 // The canonical path of the trusted `path` as the interpreter names a root
-// by it: Rust's `fs::canonicalize`, which is glibc's `realpath`
+// by it: Rust's `fs::canonicalize`, which is the C library's `realpath`
 // (`real_path`), shown as Rust's `Path::display` shows it, with each
 // ill-formed UTF-8 sequence replaced by U+FFFD (`utf8_lossy`).
 fn canonical(path: String) -> Result<String, IoError> {
@@ -4255,7 +4255,7 @@ fn working_directory() -> Result<String, Int> {
         return Err(0 - got)
     }
     // A path that does not start with `/` names a directory outside this
-    // process's root: glibc's `getcwd` fails with `ENOENT` for it.
+    // process's root: the C library's `getcwd` fails with `ENOENT` for it.
     if rt_mem_load8(data) != 47 {
         free(buffer)
         return Err(2)
@@ -4287,7 +4287,7 @@ fn link_target(path: String) -> Result<String, Int> {
 }
 
 // The trusted `path` made absolute, with every symlink on the way replaced
-// by its target and `.` and `..` resolved, as glibc's `realpath` does it:
+// by its target and `.` and `..` resolved, as the C library's `realpath` does:
 // component by component from the working directory (or `/`), each
 // appended and read as a link; a link's target is spliced in front of what
 // is left (from `/` again when it is absolute), at most 40 times
