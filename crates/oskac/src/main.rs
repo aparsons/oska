@@ -29,6 +29,7 @@ mod json;
 mod limits;
 mod native;
 mod native_test;
+mod new;
 mod package;
 mod release;
 mod self_cmd;
@@ -95,6 +96,12 @@ USAGE:
                                            after each, and write each changed
                                            file once
     oskac explain <code> [--format=json]   Explain a diagnostic code, offline
+    oskac new <name> [--lib] [--no-agent-files] [--format=json]
+                                           Lay out a new package in the
+                                           directory <name>: oska.toml,
+                                           src/main.osk (src/lib.osk with
+                                           --lib), and the agent-setup
+                                           AGENTS.md and CLAUDE.md
     oskac hook claude --event=post-edit [--format=json]
                                            Check what Claude Code just edited,
                                            reading its hook input on standard
@@ -138,6 +145,11 @@ struct Flags {
     /// `--no-cache`: `oskac check`, `run`, `test` and `build` neither
     /// read nor write the build cache (`cache.rs`).
     no_cache: bool,
+    /// `--lib`: `oskac new` writes a library, `src/lib.osk` and no `main`.
+    lib: bool,
+    /// `--no-agent-files`: `oskac new` leaves out `AGENTS.md` and
+    /// `CLAUDE.md`.
+    no_agent_files: bool,
 }
 
 /// A command line, parsed: the command and its operands, the flags, the
@@ -231,6 +243,8 @@ impl CommandLine {
                 "--dry-run" => line.flags.dry_run = true,
                 "--placeholders" => line.flags.placeholders = true,
                 "--no-cache" => line.flags.no_cache = true,
+                "--lib" => line.flags.lib = true,
+                "--no-agent-files" => line.flags.no_agent_files = true,
                 event if event.starts_with("--event=") => {
                     line.event = Some(event["--event=".len()..].to_string());
                 }
@@ -320,6 +334,11 @@ fn main() -> ExitCode {
             Some(&("check" | "run" | "test" | "build" | "release"))
         )
     {
+        eprint!("{USAGE}");
+        return ExitCode::from(2);
+    }
+    // Only `new` lays out a library or leaves out the agent files.
+    if (flags.lib || flags.no_agent_files) && positional.first() != Some(&"new") {
         eprint!("{USAGE}");
         return ExitCode::from(2);
     }
@@ -417,6 +436,13 @@ fn main() -> ExitCode {
             fix::command(rest.first().copied(), flags)
         }
         ["explain", code] => explain_code(code, flags),
+        ["new", name] if line.output.is_none() && line.program_args.is_empty() => {
+            let options = new::Options {
+                lib: flags.lib,
+                no_agent_files: flags.no_agent_files,
+            };
+            new::command(name, options, flags.json)
+        }
         ["hook", "claude", targets @ ..] if line.program_args.is_empty() => {
             hook::run(line.event.as_deref(), targets, flags.json)
         }
@@ -1149,6 +1175,8 @@ mod tests {
                 dry_run: false,
                 placeholders: false,
                 no_cache: true,
+                lib: false,
+                no_agent_files: false,
             }
         );
         assert!(line.program_args.is_empty());

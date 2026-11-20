@@ -159,7 +159,9 @@ The settings call `oskac` by name, with no script and no shell syntax, so `oskac
 
 ## Telling an agent about the project
 
-Put the loop in the project's instructions file, such as `AGENTS.md`:
+To start a new project, run `oskac new <name>` (`--lib` for a library): it writes the package layout and the agent-setup `AGENTS.md` and `CLAUDE.md`, and what it writes passes `oskac check --release` and `oskac test`. `oskac new <name> --format=json` lists the files it wrote, or says why it refused. See [`oskac new`](cli-reference.md#oskac-new).
+
+In an existing project, put the loop in the project's instructions file, such as `AGENTS.md`:
 
 ```markdown
 ## Working with Oska
