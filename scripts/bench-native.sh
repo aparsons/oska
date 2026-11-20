@@ -7,6 +7,12 @@
 #
 #   scripts/bench-native.sh [runs]
 #
+# OSKA_BENCH_TARGET=<Rust target triple> benchmarks the oskac built for that
+# target instead of the host's, for example the musl build
+# (x86_64-unknown-linux-musl or aarch64-unknown-linux-musl, after `rustup
+# target add`); it must run on this machine. docs/research/
+# 2026-11-musl-oskac-performance.md compares the two Linux builds this way.
+#
 # Builds a release oskac, then for each workload runs `oskac run
 # --interpret` and the executable `oskac build` wrote, `runs` times each
 # (default 5), and prints the best CPU time of each and the speedup. The interpreter's time includes checking the program, as
@@ -39,11 +45,16 @@ fi
 
 runs="${1:-5}"
 root="$(pwd)"
-oskac="$root/target/release/oskac"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-cargo build --release --quiet -p oskac
+if [ -n "${OSKA_BENCH_TARGET:-}" ]; then
+  cargo build --release --quiet -p oskac --target "$OSKA_BENCH_TARGET"
+  oskac="$root/target/$OSKA_BENCH_TARGET/release/oskac"
+else
+  cargo build --release --quiet -p oskac
+  oskac="$root/target/release/oskac"
+fi
 
 cat >"$work/loop.osk" <<'EOF'
 fn main(io: Stdout) -> Result<(), IoError> {
@@ -144,7 +155,7 @@ bench() {
     'BEGIN { printf "| %-10s | %7d ms | %6d ms | %6.1fx |\n", n, i, e, i / (e > 0 ? e : 1) }'
 }
 
-echo "oskac $("$oskac" --version | cut -d' ' -f2), best of $runs runs, $(uname -m)"
+echo "oskac $("$oskac" --version | cut -d' ' -f2)${OSKA_BENCH_TARGET:+ ($OSKA_BENCH_TARGET)}, best of $runs runs, $(uname -m)"
 echo
 echo "| Workload   | Interpreter | Native |  Speedup |"
 echo "| ---------- | ----------: | -----: | -------: |"
