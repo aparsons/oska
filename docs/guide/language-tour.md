@@ -40,6 +40,7 @@ Things to notice:
 - `"best is {best}"` interpolates. A `{...}` hole holds only a name or a field path such as `{user.name}`. Compute anything else with `let` first.
 - Arguments can be labeled, as in `add(a: 3, b: 4)`. Labels are optional, and the checker verifies them against the parameter names.
 - `Int` is a 64-bit signed integer. Overflow is a **panic**, never a silent wrap.
+- `U8`, `U32` and `U64` have the bitwise operators `&`, `|`, `^` and `~`, the shifts `<<` and `>>`, and the rotations `x.rotl(n)` and `x.rotr(n)`. A shift or rotation amount below 0 or not below the type's width panics (`P0008`). Where a bitwise or shift operator meets a different operator, parentheses are required (`E0108`): write `(x & mask) == 0`.
 - A module-level `const NAME: T = expr` is in scope in every function, method, and test of the module, with the type it declares. A wrong-typed initializer is a type error, as for `let`.
 
 ## Structs, methods, and mutation

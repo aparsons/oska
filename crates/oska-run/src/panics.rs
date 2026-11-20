@@ -40,6 +40,9 @@ pub mod codes {
     /// An `ensures` clause of the function that returned was false: the
     /// function broke its promise.
     pub const POSTCONDITION_VIOLATED: &str = "P0007";
+    /// A shift or rotation amount was below 0, or not below the width of
+    /// the integer type shifted.
+    pub const SHIFT_OUT_OF_RANGE: &str = "P0008";
     /// `t.assert(cond)` was given `false`: the test fails.
     pub const ASSERT_FAILED: &str = "P0010";
     /// `t.assert_eq(actual, expected)` was given two values that differ.
@@ -89,6 +92,7 @@ pub mod codes {
         SPAWN_ON_FINISHED_SCOPE,
         PRECONDITION_VIOLATED,
         POSTCONDITION_VIOLATED,
+        SHIFT_OUT_OF_RANGE,
         ASSERT_FAILED,
         ASSERT_EQ_FAILED,
         ASSERT_NE_FAILED,

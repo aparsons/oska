@@ -392,6 +392,27 @@ impl Display for IoError {
     fn to_string(self) -> String
 }
 
+// ---- Fixed-width integers -----------------------------------------------
+
+// `U8`, `U32` and `U64` have the bitwise and shift operators
+// (`& | ^ ~ << >>`) and the rotations. A rotation moves the bits shifted
+// out at one end back in at the other. An amount below 0, or not below
+// the type's width, is a bug: it panics (`P0008`), as a shift's does.
+impl U8 {
+    pub fn rotl(self, n: Int) -> U8
+    pub fn rotr(self, n: Int) -> U8
+}
+
+impl U32 {
+    pub fn rotl(self, n: Int) -> U32
+    pub fn rotr(self, n: Int) -> U32
+}
+
+impl U64 {
+    pub fn rotl(self, n: Int) -> U64
+    pub fn rotr(self, n: Int) -> U64
+}
+
 // ---- Structured concurrency ---------------------------------------------
 
 // The handle `scope |s| { ... }` binds. A scope does not exit until all of

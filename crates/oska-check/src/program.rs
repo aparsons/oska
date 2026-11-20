@@ -310,6 +310,8 @@ pub enum ExprKind {
     Bool(bool),
     /// A binary operator. `int` is the operands' integer type for
     /// arithmetic (`+ - * / %`), whose result is checked against it, and
+    /// for the bitwise and shift operators (`& | ^ << >>`, on `U8`, `U32`
+    /// and `U64`, whose shift amount must be below the type's width), and
     /// `None` otherwise. `&&`, `||`, and `implies` evaluate `rhs` only
     /// when they need it. `==` and `!=` compare values of built-in types.
     Binary {
@@ -325,6 +327,12 @@ pub enum ExprKind {
     },
     /// `!`.
     Not(Box<Expr>),
+    /// `~`, bitwise not, on an integer of type `int`: `U8`, `U32` or
+    /// `U64`.
+    BitNot {
+        operand: Box<Expr>,
+        int: IntType,
+    },
     /// A local, by slot. Slots are numbered from 0 in each function's
     /// frame, in the order locals are bound: the binding parameters first.
     Local(usize),
@@ -837,6 +845,16 @@ impl IntType {
         self != IntType::Int
     }
 
+    /// The number of bits in a value of the type.
+    pub fn bits(self) -> u32 {
+        match self {
+            IntType::I8 | IntType::U8 => 8,
+            IntType::I16 | IntType::U16 => 16,
+            IntType::I32 | IntType::U32 => 32,
+            IntType::Int | IntType::I64 | IntType::U64 => 64,
+        }
+    }
+
     /// The smallest value of the type.
     pub fn min(self) -> i128 {
         match self {
@@ -932,6 +950,7 @@ pub fn walk<'p, B>(
             walk(rhs, visit)
         }
         ExprKind::Neg { operand, .. }
+        | ExprKind::BitNot { operand, .. }
         | ExprKind::Not(operand)
         | ExprKind::Scope(operand)
         | ExprKind::Field { base: operand, .. } => walk(operand, visit),

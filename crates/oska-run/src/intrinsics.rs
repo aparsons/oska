@@ -20,6 +20,7 @@ use crate::host::{Host, RootHandle};
 use crate::html;
 use crate::interp::{Interpreter, Stream};
 use crate::memory;
+use crate::ops;
 use crate::panics::{codes, Panic};
 use crate::tasks;
 use crate::testing;
@@ -93,6 +94,12 @@ pub const INTRINSICS: Table = &[
     ("Stdout.println", HigherOrder(stdout_println)),
     ("String.assume_trusted", Plain(string_assume_trusted)),
     ("String.to_string", Plain(string_to_string)),
+    ("U32.rotl", Plain(rotl)),
+    ("U32.rotr", Plain(rotr)),
+    ("U64.rotl", Plain(rotl)),
+    ("U64.rotr", Plain(rotr)),
+    ("U8.rotl", Plain(rotl)),
+    ("U8.rotr", Plain(rotr)),
     ("dbg", HigherOrder(dbg)),
     ("todo", Plain(todo)),
 ];
@@ -719,6 +726,23 @@ fn todo(_: &mut dyn Host, _: Vec<Value>, span: Span) -> Result<Value, Panic> {
         "reached `todo()`: this code is not written yet",
         span,
     ))
+}
+
+/// `U8.rotl(self, n)`, and `U32`'s and `U64`'s: `P0008` for an amount
+/// out of range (`ops::rotate`).
+fn rotl(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    rotate(args, true, span)
+}
+
+/// `U8.rotr(self, n)`, and `U32`'s and `U64`'s.
+fn rotr(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    rotate(args, false, span)
+}
+
+/// A rotation's receiver and amount, `args`, rotated left or not.
+fn rotate(args: Vec<Value>, left: bool, span: Span) -> Result<Value, Panic> {
+    let [x, n]: [Value; 2] = args.try_into().expect("a rotation's receiver and amount");
+    ops::rotate(x, n, left, span)
 }
 
 /// `Int.to_string(self)`: the integer in decimal.
