@@ -77,6 +77,10 @@ Outside CI, the cargo steps skip when nothing that cargo reads differs from the 
 
 A ticket that changes how a construct of Oska Core is typed or run updates the Lean model in the same pull request, with no `sorry`. A ticket for parallel tasks, `Sched` channels or `select` needs its TLA+ model first. How, and how to run the `formal` step: `docs/agents/formal.md`.
 
+## The parity gate
+
+Since v0.6.0 every supported platform is native, and a ticket that adds or changes what a program does lands on all five at once: the native backend compiles it for every target, `std.rt` has it on Linux, macOS and Windows, and the differential suite is green on each CI runner (`ci.yml`, `macos.yml`, `windows.yml`). `oskac run`, `test` and `build` refuse a program the backend cannot compile (`E0390`), so a feature the interpreter runs but the backend refuses is not done. See `CODING_STANDARDS.md` (Language and runtime) and ADR 0014.
+
 ## Portable tests
 
 Any test that builds paths, puts a path in JSON, or sets a home uses `crates/oskac/tests/common/portable.rs` (`Scratch`, `json_str`, `json_path`, `set_home`, `literal_path`), so it passes on Windows the first time. See `CODING_STANDARDS.md` (Tests).

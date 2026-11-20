@@ -499,14 +499,15 @@ Once escape hatches exist, the following policy applies:
 
 ## Toolchain
 
-- **Execution:** a tree-walking interpreter came first. Oska now generates native code itself for aarch64 and x86_64 Linux and macOS, with no external toolchain ([ADR 0011](adr/0011-oska-generates-native-code-itself.md)), and runs natively by default there. The runtime is Oska code, and raw system calls are allowed only in `std.rt` ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)). The interpreter stays: on hosts with no backend yet, with `--interpret`, and as the oracle the differential suite holds the native backend to.
+- **Execution:** a tree-walking interpreter came first. Oska now generates native code itself for every supported platform, aarch64 and x86_64 Linux and macOS and x86_64 Windows, with no external toolchain ([ADR 0011](adr/0011-oska-generates-native-code-itself.md)), and runs natively by default on each. The runtime is Oska code, and raw system calls are allowed only in `std.rt` ([ADR 0013](adr/0013-system-calls-only-in-std-rt.md)). The interpreter stays, with `--interpret` and as the oracle the differential suite holds the native backend to, but not as a fallback: a program the native backend cannot compile is an error (`E0390`).
+- **The language is unfrozen, behind the parity gate.** New language features were frozen until every supported platform was native ([ADR 0014](adr/0014-every-supported-platform-builds-and-runs-natively.md)). With Windows native in v0.6.0 the gate is on and the freeze is over: a feature is done only when it works natively, with the same output and security guarantees, on all five platforms. The `Bytes` milestone is next in the queue, under the gate.
 - **Milestones.** Each is its own spec and release:
   1. Multi-file packages: `pkg.` paths, `pub(pkg)`, and an `oska.toml` with no dependencies yet (#88).
   2. The aarch64 Linux native backend and the `std.rt` runtime (#125): `oskac build`, and native `run` and `test` on aarch64 Linux.
-  3. `Bytes`, the bitwise and wrapping operations, and secret integers.
+  3. `Bytes`, the bitwise and wrapping operations, and secret integers: queued behind the parity gate, and the first language work after it.
   4. The `NetConnect` runtime, the crypto primitives, and a TLS 1.3 client, all in Oska ([ADR 0012](adr/0012-tls-git-and-crypto-are-written-in-oska.md)).
   5. git fetch, minimal version selection, the lockfile, and authority approval (#12).
-  6. Native backends for x86_64 Linux, macOS and Windows.
+  6. Native backends for x86_64 Linux, macOS and Windows (v0.4.0 to v0.6.0), which turn the parity gate on.
 - **Agent-facing output:** structured diagnostics, plus a stable, documented AST/JSON export (see [`ast.md`](ast.md)).
 - **Formatting:** deterministic, with a single canonical style.
 

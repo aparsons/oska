@@ -31,6 +31,6 @@ A **No** names the code `oskac` refuses the program with, before any of it runs.
 
 `std.sql`, `std.proc` and `Net` check but do not run. Their signatures are complete, so `oskac check` enforces their rules today: untrusted text cannot reach a query, a command or a host. A program that uses them is refused by `oskac run`, `oskac test` and `oskac build`. Plan around them: keep that code behind a function you can test without it, or wait for a release that runs it.
 
-Within a feature that runs, a few constructs do not yet: the interpreter refuses them with `E0380`, and the native backend falls back to the interpreter with a note (`E0390`). The [runtime notes](../runtime.md#native-builds) list what the native backend compiles, and [troubleshooting](troubleshooting.md) lists the known gaps.
+Within a feature that runs, a few constructs do not yet: the interpreter refuses them with `E0380`, and the native backend refuses them with `E0390`, an error on every platform, which `--interpret` works around. The [runtime notes](../runtime.md#native-builds) list what the native backend compiles, and [troubleshooting](troubleshooting.md) lists the known gaps.
 
 `cargo test` holds this table to the toolchain: a small program for each row must check, run and build exactly as the row says.
