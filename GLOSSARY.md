@@ -153,7 +153,7 @@ _Avoid_: OS
 
 **glibc build**:
 The Linux `oskac` that links glibc dynamically, so it runs only where glibc 2.35 or newer is installed. It is one of two builds of `oskac` for the Linux supported platform, and the faster one, so the installer picks it wherever it can run (ADR 0022).
-_Avoid_: gnu build, dynamic build, the Linux binary
+_Avoid_: dynamic build, the Linux binary
 
 **musl build**:
 The Linux `oskac` that is a static executable with musl inside it, with no dynamic loader and no shared library, so it runs on any Linux, an empty container included. It is a variant of the Linux supported platform, not a platform of its own: it takes the same target platforms and builds the same bytes as the glibc build, only more slowly (ADR 0022).

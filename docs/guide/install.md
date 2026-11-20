@@ -186,18 +186,37 @@ v0.5.0 and earlier have one Linux file for each processor, `oskac-linux-x86_64` 
 
 ### Run oskac in a container
 
-From v0.6.0, each release also publishes the container image `ghcr.io/aparsons/oskac`, tagged `vX.Y.Z`, and `latest` for a stable release. One name serves both Linux processors: Docker picks the x86_64 or the aarch64 image for the host. Each image holds only the musl build at `/oskac` and an empty `/tmp`, with no shell and no package manager. It runs as user 65532, not root, and `/oskac` is its entrypoint, so the arguments are `oskac`'s:
+From v0.6.0, each release also publishes the container image `ghcr.io/aparsons/oskac`, tagged `vX.Y.Z`. `latest` names the newest stable release: it moves only to a release that the signed release index names as the latest, so it never moves back to an older one. One name serves both Linux processors: Docker picks the x86_64 or the aarch64 image for the host. Each image holds only the musl build at `/oskac` and an empty `/tmp`, with no shell and no package manager. It runs as user 65532, not root, and `/oskac` is its entrypoint, so the arguments are `oskac`'s:
 
 ```sh
 docker run --rm -e OSKA_CACHE=off -v "$PWD:/w" -w /w ghcr.io/aparsons/oskac@sha256:<digest> check main.osk
 ```
 
 - **Pull by digest, not by tag.** A tag can move; a digest names exact bytes, and Docker checks every byte it pulls against it. The digest of each release's image is in its `oskac-image-digest` file, one line `sha256:<hex>`.
-- **Verify the digest** as you verify a binary: `SHA256SUMS` lists `oskac-image-digest`, so the release signature covers it. Download `SHA256SUMS`, `SHA256SUMS.sig` and `oskac-image-digest` from the release, run the checks in [Verify a release by hand](#verify-a-release-by-hand), and check that `sha256sum --ignore-missing -c SHA256SUMS` prints `oskac-image-digest: OK`. Then use `ghcr.io/aparsons/oskac@$(cat oskac-image-digest)`.
-- **Rebuild it to check its contents.** The image is built from the release's two musl builds by `scripts/release/image.sh` in the repository, as reproducible bytes: rebuilt from the same files, it has the same digest. Download `oskac-linux-x86_64-musl` and `oskac-linux-aarch64-musl` of the release into one directory, and there, with a clone of the repository at `<clone>` and the release's tag in `v`, run `SOURCE_DATE_EPOCH=$(git -C <clone> log -1 --format=%ct "$v") <clone>/scripts/release/image.sh oskac-linux-x86_64-musl oskac-linux-aarch64-musl "$(mktemp -d)/image"`. It must print the digest in `oskac-image-digest`.
+- **Verify the digest** with the release key, as you verify a binary: see [Verify an image](#verify-an-image).
+- **Rebuild it to check its contents.** The image is built from the release's two musl builds by `scripts/release/image.sh` in the repository, as reproducible bytes: rebuilt from the same files, it has the same digest. The script needs bash 4.4 or newer, coreutils (`sha256sum` among them) and `jq`, and no Docker; it writes the tar itself. The bash that macOS ships is 3.2, too old: use Linux, or a newer bash. Download `oskac-linux-x86_64-musl` and `oskac-linux-aarch64-musl` of the release into one directory, and there, with a clone of the repository at `<clone>` and the release's tag in `v`, run `SOURCE_DATE_EPOCH=$(git -C <clone> log -1 --format=%ct "$v") <clone>/scripts/release/image.sh oskac-linux-x86_64-musl oskac-linux-aarch64-musl "$(mktemp -d)/image"`. It must print the digest in `oskac-image-digest`.
 - **`oskac run` and `oskac test` work in the image.** They build the native executable in `/tmp`, the image's one writable directory.
 - **Writing into the mounted folder.** User 65532 must be able to write there for `oskac build` to write its executable. Run as yourself with `--user "$(id -u):$(id -g)"`, or make the folder writable.
 - **The build cache.** A `--rm` container keeps nothing between runs, so turn the build cache off with `-e OSKA_CACHE=off` (see [`oskac cache`](cli-reference.md#oskac-cache)).
+
+#### Verify an image
+
+`SHA256SUMS` lists the release's `oskac-image-digest` file, so the release signature covers it. For the release in `v`, such as `v0.6.0`:
+
+```sh
+v=v0.6.0
+base=https://oskalang.dev/releases/$v
+curl -fsSL --remote-name-all "$base/SHA256SUMS" "$base/SHA256SUMS.sig" "$base/oskac-image-digest"
+curl -fsSL https://oskalang.dev/oska-release.pub -o oska-release.pub
+ssh-keygen -l -E sha256 -f oska-release.pub
+printf 'oska-release %s\n' "$(cat oska-release.pub)" > allowed
+ssh-keygen -Y verify -f allowed -I oska-release -n oska-release -s SHA256SUMS.sig < SHA256SUMS
+head -n 1 SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS
+docker run --rm "ghcr.io/aparsons/oskac@$(cat oskac-image-digest)" --version
+```
+
+`ssh-keygen -l` must print the fingerprint in [Verify a release by hand](#verify-a-release-by-hand), and `ssh-keygen -Y verify` `Good "oska-release" signature`. The first line of `SHA256SUMS` must be `# oska-release v0.6.0`, the release you asked for, and `sha256sum` must print `oskac-image-digest: OK`. `oskac-image-digest` is one line, `sha256:<hex>`; the last command pulls the image by it and prints `oskac 0.6.0`.
 
 ### Verify the installation
 
@@ -287,7 +306,7 @@ An older `oskac` refuses the package with `E0407`, from `check`, `run`, `test` a
 v0.6.0 ships two Linux builds of `oskac`, so it runs on any Linux, and publishes a container image ([ADR 0022](../adr/0022-linux-oskac-ships-as-glibc-and-musl-builds.md)). Programs keep their meaning; these are the changes you can see:
 
 - **The Linux release files are renamed.** `oskac-linux-x86_64` and `oskac-linux-aarch64` are gone. In their place each release has the glibc build, `oskac-linux-x86_64-gnu` and `oskac-linux-aarch64-gnu`, and the musl build, `oskac-linux-x86_64-musl` and `oskac-linux-aarch64-musl`. `latest.json` lists them under `linux-x86_64-gnu`, `linux-x86_64-musl`, `linux-aarch64-gnu` and `linux-aarch64-musl`, with no `linux-x86_64` or `linux-aarch64` key. The macOS and Windows files keep their names. A script that downloads a Linux file by name, or reads those keys, must change.
-- **Fetch the installer again.** A copy of `install.sh` saved before v0.6.0 asks for the old names, so it fails with `download_failed` on v0.6.0 and later. The one-line installer always fetches the current one. The installer from v0.6.0 on asks for the new names, so on Linux it cannot install v0.5.0 or earlier with `--version`.
+- **Fetch the installer again.** A copy of `install.sh` saved before v0.6.0 asks for the old names, so it fails with `download_failed` on v0.6.0 and later. The one-line installer always fetches the current one. The installer from v0.6.0 on still installs v0.5.0 and earlier with `--version`, but on Linux only as the glibc build, the one build those releases have: where it does not find glibc 2.35 or newer, or with `OSKA_LIBC=musl`, it refuses them.
 - **The installer no longer refuses a Linux system for its C library.** It installs the glibc build where it finds glibc 2.35 or newer, and the musl build everywhere else, such as Alpine or an older glibc, where it used to stop with `unsupported_libc`. `OSKA_LIBC` chooses the build yourself, and `unsupported_libc` now means only that `OSKA_LIBC=glibc` was set where the glibc build cannot run. See [the two Linux builds](#the-two-linux-builds).
 - **The receipt and `oskac self info` name the Linux build.** The receipt gains `linux_build` and `libc_forced`, and `oskac self info` gains `linux_build`.
 - **The image `ghcr.io/aparsons/oskac`** holds only `oskac`, runs as a non-root user, and is covered by the release signature. See [Run oskac in a container](#run-oskac-in-a-container).
