@@ -382,6 +382,7 @@ fn main_narrows_reading_to_docs_and_the_files_it_names() {
     for narrowing in [
         "read.restrict_to(\"docs\")",
         "read.restrict_to_file(\"GLOSSARY.md\")",
+        "read.restrict_to_file(\"CHANGELOG.md\")",
         "read.restrict_to_file(\"site/style.css\")",
         "read.restrict_to_file(\"site/search.js\")",
         "read.restrict_to_file(\"site/favicon.svg\")",
@@ -459,6 +460,7 @@ fn the_generator_s_report_lists_what_main_reads_and_writes() {
     for line in [
         "  FsRead -> DirRead: restrict_to \"docs\" (bytes ",
         "  FsRead -> FileRead: restrict_to_file \"GLOSSARY.md\" (bytes ",
+        "  FsRead -> FileRead: restrict_to_file \"CHANGELOG.md\" (bytes ",
         "  FsRead -> FileRead: restrict_to_file \"site/favicon.svg\" (bytes ",
         "  FsRead -> DirRead: restrict_to \"site/agent-setup\" (bytes ",
         "  FsWrite -> DirWrite: restrict_to \".\" (bytes ",
@@ -1998,6 +2000,7 @@ fn the_real_navigation_and_reference_page_reach_every_section() {
             "Agent setup",
             "Codes",
             "Security",
+            "Changelog",
             "Reference"
         ]
     );
@@ -2020,6 +2023,39 @@ fn the_real_navigation_and_reference_page_reach_every_section() {
     ] {
         assert!(reference.iter().any(|h| h == href), "{href}: {reference:?}");
     }
+}
+
+/// Every released version has its notes at a stable anchor on
+/// `/changelog.html`, the anchor each release page links (#514).
+#[test]
+fn the_real_changelog_page_has_an_anchor_for_every_released_version() {
+    let site = real_site();
+    let page = &site["changelog.html"];
+    for anchor in ["v010", "v020", "v030", "v040", "v050", "v060"] {
+        assert!(
+            page.contains(&format!("<h2 id=\"{anchor}\">")),
+            "changelog.html has no #{anchor}"
+        );
+    }
+    let changelog = std::fs::read_to_string(common::site::repository_root().join("CHANGELOG.md"))
+        .expect("CHANGELOG.md should be readable");
+    let versions: Vec<&str> = changelog
+        .lines()
+        .filter_map(|line| line.strip_prefix("## v"))
+        .collect();
+    assert!(versions.len() >= 6, "{versions:?}");
+    for version in versions {
+        let anchor = format!("v{}", version.replace('.', ""));
+        assert!(
+            page.contains(&format!("<h2 id=\"{anchor}\">v{version}</h2>")),
+            "changelog.html has no #{anchor} for v{version}"
+        );
+    }
+    assert!(
+        site["llms.txt"].contains("- [Changelog](https://oskalang.dev/changelog.md): "),
+        "{}",
+        site["llms.txt"]
+    );
 }
 
 #[test]

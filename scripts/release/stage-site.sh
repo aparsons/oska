@@ -8,7 +8,8 @@
 #   - verifies every release against <public-key> with verify.sh, and stops
 #     if any fails (verify.sh also requires the tag signed inside each
 #     release's SHA256SUMS to be the name of its directory);
-#   - copies each to <site-dir>/releases/<tag>/;
+#   - copies each to <site-dir>/releases/<tag>/, with a page that links
+#     its version's notes on changelog.html;
 #   - publishes <public-key> as <site-dir>/oska-release.pub;
 #   - publishes the signed release index (see below);
 #   - publishes the installers as <site-dir>/install.sh and install.ps1,
@@ -67,11 +68,15 @@ any='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'
 [ -d "$site" ] || die "no site directory $site"
 
 # The page at releases/<tag>/, which release notes and latest.json's
-# release_url link to: each file with its SHA-256, and how to check the
-# signature. Tags and file names are checked or come from the signed
+# release_url link to: each file with its SHA-256, how to check the
+# signature, and a link to the version's notes on the changelog page,
+# changelog.html#vXYZ for vX.Y.Z (a pre-release links its base version, whose
+# notes it shares). The Pages link check fails the deploy when that anchor
+# is missing. Tags and file names are checked or come from the signed
 # SHA256SUMS, so they need no escaping.
 release_page() {
   local tag=$1 version=${1#v} sum file
+  local notes=${version%%-*}
   cat <<HTML
 <!DOCTYPE html>
 <html lang="en">
@@ -83,6 +88,7 @@ release_page() {
 <body>
 <h1>oskac $version</h1>
 <p>Install or update with the <a href="$base/guide/install.html">installer</a>, which checks the signature and the checksum for you.</p>
+<p><a href="$base/changelog.html#v${notes//./}">What changed in $notes</a></p>
 <ul>
 HTML
   while read -r sum file; do
