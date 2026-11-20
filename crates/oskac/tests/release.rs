@@ -134,11 +134,14 @@ fn verify(dir: &Path, release: &Path, namespace: &str) -> Output {
     let allowed = dir.join("allowed");
     std::fs::write(&allowed, format!("{namespace} {public}")).expect("allowed signers");
     let sums = std::fs::File::open(release.join("SHA256SUMS")).expect("SHA256SUMS");
+    // Paths relative to the release, as a user gives them: Windows'
+    // OpenSSH cannot open a `\\?\` path, which `Scratch` paths are there.
+    let allowed = Path::new("..").join(allowed.file_name().expect("a file name"));
     Command::new("ssh-keygen")
         .args(["-Y", "verify", "-f"])
         .arg(&allowed)
-        .args(["-I", namespace, "-n", namespace, "-s"])
-        .arg(release.join("SHA256SUMS.sig"))
+        .args(["-I", namespace, "-n", namespace, "-s", "SHA256SUMS.sig"])
+        .current_dir(release)
         .stdin(sums)
         .output()
         .expect("ssh-keygen should run")
