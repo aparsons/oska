@@ -1,0 +1,15 @@
+fn add(a: Int, b: Int) -> Int {
+    a + b
+}
+
+test "adds" {
+    t.assert_eq(add(1, 2), 3)
+}
+
+test "adds twice" {
+    t.assert_eq(add(add(1, 2), 3), 6)
+}
+
+test "subtracts wrongly" {
+    t.assert_eq(add(1, 1), 3)
+}

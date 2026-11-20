@@ -72,9 +72,12 @@ USAGE:
                                            and with P0040 once its values
                                            take more than --max-memory bytes
     oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
+               [--filter <substring>]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
-                                           as `run` does
+                                           as `run` does; with --filter, only
+                                           those whose names contain the
+                                           substring
     oskac build [path] [-o out] [--target <platform>|all] [--format=json] [--no-cache]
                                            Check a source file or package and,
                                            if it has no diagnostics, compile it
@@ -163,6 +166,10 @@ struct CommandLine {
     version: Option<String>,
     /// `--key <file>`: the SSH signing key, for `oskac release`.
     key: Option<String>,
+    /// `--filter <substring>`: `oskac test` runs only the tests whose
+    /// names contain it. Given twice, it is recorded empty, which `main`
+    /// refuses as a usage error.
+    filter: Option<String>,
     /// The run limits (`--max-steps=<n>`, `--timeout=<ms>`,
     /// `--max-output=<bytes>`, `--max-memory=<bytes>`), which only `oskac
     /// run` takes.
@@ -221,6 +228,13 @@ impl CommandLine {
                 },
                 key if key.starts_with("--key=") => {
                     line.key = Some(key["--key=".len()..].to_string());
+                }
+                "--filter" => match args.next() {
+                    Some(filter) => line.filter = value_unless_repeated(&line.filter, &filter),
+                    None => line.positional.push(arg),
+                },
+                filter if filter.starts_with("--filter=") => {
+                    line.filter = value_unless_repeated(&line.filter, &filter["--filter=".len()..]);
                 }
                 target if target.starts_with("--target=") => {
                     line.target = target.strip_prefix("--target=").map(str::to_string);
@@ -328,6 +342,16 @@ fn main() -> ExitCode {
         eprint!("{USAGE}");
         return ExitCode::from(2);
     }
+    // Only `test` takes a filter, and a filter is never empty.
+    if line
+        .filter
+        .as_ref()
+        .is_some_and(|f| f.is_empty() || positional.first() != Some(&"test"))
+    {
+        eprint!("{USAGE}");
+        return ExitCode::from(2);
+    }
+    let filter = line.filter.as_deref();
     match positional.as_slice() {
         ["--version" | "-V"] => {
             if flags.json {
@@ -388,9 +412,12 @@ fn main() -> ExitCode {
         ["run", rest @ ..] if rest.len() <= 1 => {
             on_target(Command::Run(run), rest.first(), flags, &line.program_args)
         }
-        ["test", rest @ ..] if rest.len() <= 1 => {
-            on_target(Command::Test, rest.first(), flags, &line.program_args)
-        }
+        ["test", rest @ ..] if rest.len() <= 1 => on_target(
+            Command::Test(filter),
+            rest.first(),
+            flags,
+            &line.program_args,
+        ),
         ["build", rest @ ..] if rest.len() <= 1 && line.program_args.is_empty() => {
             let target = match build::TargetChoice::named(line.target.as_deref()) {
                 Ok(target) => target,
@@ -495,7 +522,8 @@ enum Command<'a> {
     Check(Option<Gate<'a>>),
     /// `oskac run`, under its limits and within its grant.
     Run(RunOptions<'a>),
-    Test,
+    /// `oskac test`, with its `--filter`, if any.
+    Test(Option<&'a str>),
     /// `oskac build`, with the output path `-o` gives and its target platforms.
     Build(build::Options<'a>),
     /// `oskac release`, with its output directory, version and key.
@@ -507,7 +535,7 @@ impl Command<'_> {
         match self {
             Command::Check(_) => "check",
             Command::Run(..) => "run",
-            Command::Test => "test",
+            Command::Test(_) => "test",
             Command::Build(_) => "build",
             Command::Release(_) => "release",
         }
@@ -810,7 +838,12 @@ fn finish_run(outcome: oska_run::RunOutcome, json: bool, places: &Places) -> Exi
 /// object with `--format=json`. A refused file's diagnostics go to stderr
 /// as `oskac check` prints them, or into the JSON report. The exit code
 /// is 1 when a test failed (see `docs/runtime.md`).
-fn test_file(path: &str, flags: Flags, store: Option<&cache::Store>) -> ExitCode {
+fn test_file(
+    path: &str,
+    flags: Flags,
+    filter: Option<&str>,
+    store: Option<&cache::Store>,
+) -> ExitCode {
     let Flags {
         json, integration, ..
     } = flags;
@@ -818,7 +851,10 @@ fn test_file(path: &str, flags: Flags, store: Option<&cache::Store>) -> ExitCode
         return ExitCode::FAILURE;
     };
     let cached = cache::Cached::new(store, cache::file_sources(path, &src));
-    let options = oska_run::TestOptions { integration };
+    let options = oska_run::TestOptions {
+        integration,
+        filter,
+    };
     let places = Places::File { path, src: &src };
     if let Some(target) = native::native_target(flags) {
         let checked = oska_check::check_module(&src);
@@ -828,7 +864,9 @@ fn test_file(path: &str, flags: Flags, store: Option<&cache::Store>) -> ExitCode
             .filter(|_| checked.diagnostics.is_empty())
         {
             match native_test::test_program(program, target, options, json, &cached) {
-                native_test::Tested::Report(report) => return finish_test(report, json, &places),
+                native_test::Tested::Report(report) => {
+                    return finish_test(report, json, filter, &places)
+                }
                 native_test::Tested::Ended(code) => return code,
                 native_test::Tested::Refused(refusal) => {
                     native::note_fallback(refusal, oska_run::test_refusal(program), &places, json)
@@ -837,13 +875,23 @@ fn test_file(path: &str, flags: Flags, store: Option<&cache::Store>) -> ExitCode
         }
     }
     let report = oska_run::test(&src, &mut oska_run::RealHost::new(), options);
-    finish_test(report, json, &places)
+    finish_test(report, json, filter, &places)
 }
 
 /// Print a test report and return its exit code. `places` names the file
 /// of each failure and refusal, as for [`finish_run`], and each test's
-/// module in a package.
-fn finish_test(mut report: oska_run::TestReport, json: bool, places: &Places) -> ExitCode {
+/// module in a package. A `--filter` that left out every test is an
+/// error, so a typo is never a passing run.
+fn finish_test(
+    mut report: oska_run::TestReport,
+    json: bool,
+    filter: Option<&str>,
+    places: &Places,
+) -> ExitCode {
+    if let (Some(filter), Some(filtered), true) = (filter, report.filtered, report.tests.is_empty())
+    {
+        return no_test_matches(filter, filtered, json);
+    }
     for test in &mut report.tests {
         test.module = places.module_of(test.span);
         test.failure = test.failure.take().map(|d| places.locate(d));
@@ -863,6 +911,23 @@ fn finish_test(mut report: oska_run::TestReport, json: bool, places: &Places) ->
     ExitCode::from(u8::try_from(report.exit_code()).unwrap_or(u8::MAX))
 }
 
+/// The error of a `--filter` that matched none of the program's tests,
+/// `filtered` of them, as text on stderr or as JSON on stdout.
+fn no_test_matches(filter: &str, filtered: usize, json: bool) -> ExitCode {
+    if json {
+        outln!(
+            "{{\"error\":\"no test matches the filter\",\"filter\":\"{}\",\"filtered\":{filtered}}}",
+            oska_syntax::json_escape(filter)
+        );
+    } else {
+        eprintln!(
+            "error: no test name contains `{}`; {filtered} tests filtered out",
+            oska_run::escape_control(filter)
+        );
+    }
+    ExitCode::FAILURE
+}
+
 // ---- Packages ------------------------------------------------------------------
 
 /// `oskac check`, `run` or `test` on `path`: a package directory (the
@@ -876,7 +941,7 @@ fn on_target(command: Command, path: Option<&&str>, flags: Flags, args: &[String
             let code = match command {
                 Command::Check(gate) => check_file(&file, flags, gate, store),
                 Command::Run(run) => run_file(&file, flags, run, args, store),
-                Command::Test => test_file(&file, flags, store),
+                Command::Test(filter) => test_file(&file, flags, filter, store),
                 Command::Build(options) => {
                     build::file(&file, flags, build::Goal::Build(options), store)
                 }
@@ -1003,12 +1068,19 @@ fn on_package(
         let outcome = oska_run::run_program_with_limits(program, &mut host, &argv, limits);
         finish_run(outcome, json, &places)
     } else {
+        let filter = match command {
+            Command::Test(filter) => filter,
+            _ => None,
+        };
         let options = oska_run::TestOptions {
             integration: flags.integration,
+            filter,
         };
         if let Some(target) = native::native_target(flags) {
             match native_test::test_program(program, target, options, json, &cached) {
-                native_test::Tested::Report(tests) => return finish_test(tests, json, &places),
+                native_test::Tested::Report(tests) => {
+                    return finish_test(tests, json, filter, &places)
+                }
                 native_test::Tested::Ended(code) => return code,
                 native_test::Tested::Refused(refusal) => {
                     native::note_fallback(refusal, oska_run::test_refusal(program), &places, json)
@@ -1016,7 +1088,7 @@ fn on_package(
             }
         }
         let tests = oska_run::test_program(program, &mut host, options);
-        finish_test(tests, json, &places)
+        finish_test(tests, json, filter, &places)
     }
 }
 
@@ -1049,12 +1121,13 @@ fn refuse(command: Command, diagnostics: Vec<Diagnostic>, json: bool, dir: &str)
             };
             finish_run(outcome, json, &places)
         }
-        Command::Test => {
+        Command::Test(_) => {
             let report = oska_run::TestReport {
                 tests: Vec::new(),
                 diagnostics,
+                filtered: None,
             };
-            finish_test(report, json, &places)
+            finish_test(report, json, None, &places)
         }
         Command::Build(_) => build::refuse(&diagnostics, json, ExitCode::FAILURE),
         Command::Release(_) => release::refuse(&diagnostics, json, ExitCode::FAILURE),

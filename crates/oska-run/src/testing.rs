@@ -38,9 +38,35 @@ use crate::{on_interpreter_stack, support, unimplemented_module, UNSUPPORTED_EXI
 
 /// What `oskac test` was asked to run.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TestOptions {
+pub struct TestOptions<'a> {
     /// Also run the `#[integration]` tests, on the given host.
     pub integration: bool,
+    /// `--filter`: run only the tests whose names contain this text,
+    /// case-sensitive. The others are neither run nor reported as tests.
+    pub filter: Option<&'a str>,
+}
+
+impl TestOptions<'_> {
+    /// Whether the test named `name` is run: the filter, if any, is in it.
+    pub fn selects(&self, name: &str) -> bool {
+        match self.filter {
+            Some(filter) => name.contains(filter),
+            None => true,
+        }
+    }
+
+    /// How many of `program`'s tests the filter leaves out, or `None`
+    /// with no filter.
+    pub fn filtered(&self, program: &Program) -> Option<usize> {
+        self.filter?;
+        Some(
+            program
+                .tests
+                .iter()
+                .filter(|t| !self.selects(&t.name))
+                .count(),
+        )
+    }
 }
 
 /// How one test ended.
@@ -101,6 +127,8 @@ pub struct TestReport {
     /// The diagnostics that refused the file before any test ran: the
     /// checker's, or the runtime's (`E0371`, `E0380`).
     pub diagnostics: Vec<Diagnostic>,
+    /// How many tests `--filter` left out, or `None` without a filter.
+    pub filtered: Option<usize>,
 }
 
 impl TestReport {
@@ -162,12 +190,16 @@ impl TestReport {
             }
         }
         out.push_str(&format!(
-            "\n{} tests: {} passed, {} failed, {} skipped\n",
+            "\n{} tests: {} passed, {} failed, {} skipped",
             self.tests.len(),
             self.count(TestStatus::Passed),
             self.count(TestStatus::Failed),
             self.count(TestStatus::Skipped)
         ));
+        if let Some(filtered) = self.filtered {
+            out.push_str(&format!(", {filtered} filtered out"));
+        }
+        out.push('\n');
         out
     }
 
@@ -175,7 +207,8 @@ impl TestReport {
     /// `{"tests":[{"name":...,"module":...,"status":...,"failure":...}],
     /// "passed":n,"failed":n,"skipped":n,"diagnostics":[...]}`. A test's
     /// `failure` is a diagnostic object, or `null` when it did not fail;
-    /// `module` is there only for a test in a package.
+    /// `module` is there only for a test in a package. With `--filter`,
+    /// `"filtered":n` after `skipped` counts the tests it left out.
     pub fn to_json(&self) -> String {
         let tests: Vec<String> = self
             .tests
@@ -195,8 +228,11 @@ impl TestReport {
             })
             .collect();
         let diagnostics: Vec<String> = self.diagnostics.iter().map(Diagnostic::to_json).collect();
+        let filtered = self
+            .filtered
+            .map_or_else(String::new, |n| format!(",\"filtered\":{n}"));
         format!(
-            "{{\"tests\":[{}],\"passed\":{},\"failed\":{},\"skipped\":{},\"diagnostics\":[{}]}}",
+            "{{\"tests\":[{}],\"passed\":{},\"failed\":{},\"skipped\":{}{filtered},\"diagnostics\":[{}]}}",
             tests.join(","),
             self.count(TestStatus::Passed),
             self.count(TestStatus::Failed),
@@ -231,6 +267,7 @@ pub fn test(src: &str, host: &mut dyn Host, options: TestOptions) -> TestReport 
         return TestReport {
             tests: Vec::new(),
             diagnostics: report.diagnostics,
+            filtered: None,
         };
     };
     test_program(&program, host, options)
@@ -250,11 +287,13 @@ pub fn test_program(program: &Program, host: &mut dyn Host, options: TestOptions
         return TestReport {
             tests: Vec::new(),
             diagnostics: vec![refusal],
+            filtered: None,
         };
     }
     let tests = program
         .tests
         .iter()
+        .filter(|test| options.selects(&test.name))
         .map(|test| {
             let outcome = match (test.integration, options.integration) {
                 (false, _) => Some(on_interpreter_stack(|| {
@@ -283,6 +322,7 @@ pub fn test_program(program: &Program, host: &mut dyn Host, options: TestOptions
     TestReport {
         tests,
         diagnostics: Vec::new(),
+        filtered: options.filtered(program),
     }
 }
 

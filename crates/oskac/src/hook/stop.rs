@@ -177,7 +177,10 @@ impl Outcome {
 /// Check the target for release and, when that is clean, run its tests.
 /// An error says what could not be read.
 fn run(shown: &Shown) -> Result<Outcome, String> {
-    let tests = TestOptions { integration: false };
+    let tests = TestOptions {
+        integration: false,
+        filter: None,
+    };
     // Stand-ins only: the host given to a test run is used for an
     // `#[integration]` test, which does not run, and for nothing else.
     let mut host = FakeHost::new();

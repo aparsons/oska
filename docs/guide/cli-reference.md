@@ -38,9 +38,12 @@ USAGE:
                                            and with P0040 once its values
                                            take more than --max-memory bytes
     oskac test [path] [--format=json] [--integration] [--interpret] [--no-cache]
+               [--filter <substring>]
                                            Run the test blocks in a source file
                                            or package, natively or interpreted
-                                           as `run` does
+                                           as `run` does; with --filter, only
+                                           those whose names contain the
+                                           substring
     oskac build [path] [-o out] [--target <platform>|all] [--format=json] [--no-cache]
                                            Check a source file or package and,
                                            if it has no diagnostics, compile it
@@ -103,6 +106,7 @@ USAGE:
 | `--update-baseline=<file>` | `check` | Write the program's [authority baseline](#authority-baseline) to `<file>`, only when there are no diagnostics. Not with `--baseline`; any other command refuses it as a usage error. |
 | `--grant=<file>` | `check`, `run` | Compare the program's authority with the [authority grant](#authority-grant) in `<file>`, and exit with 3 when it goes past it; `run` then runs nothing. Not with `--baseline` or `--update-baseline`; a repeated flag, an empty file name, or the flag on any other command is a usage error (exit code 2). |
 | `--integration` | `test` | Also run the tests marked `#[integration]`, on the real operating system. |
+| `--filter=<substring>` | `test` | Run only the tests whose names contain `<substring>`, case-sensitive. Also written `--filter <substring>`. The others are neither run nor reported as tests, and the report says how many were filtered out. A filter that matches no test is an error (exit code 1). An empty substring, a repeated flag, or the flag on any other command is a usage error (exit code 2). |
 | `--event=post-edit`, `--event=stop` | `hook` | The event the hook handles. It is required. |
 | `--interpret` | `run`, `test` | Run on the interpreter, on Linux and macOS too, where the program is otherwise compiled and run natively. See [platform support](#platform-support). The other commands accept the flag and ignore it. |
 | `--target=<platform>` | `build` | Build for this platform, named as release assets name `oskac` builds (`linux-aarch64`, ...), or with `all` for every platform with a backend. Also written `--target <platform>`. Any other command given it is a usage error (exit code 2). See [`oskac build`](#oskac-build). |
@@ -246,10 +250,12 @@ A bare `-` as the path makes `check` and `run` read one module from standard inp
 
 `oskac test <file.osk> [--format=json] [--integration] [--interpret]` checks the file and runs its `test` blocks in source order: natively on Linux and macOS, one process per test, or on the interpreter, as `run` chooses. The report is the same either way. The report goes to standard output: one line per test, the failures, and a summary, or one JSON object with `--format=json`. A refused file's diagnostics go to standard error, or into the JSON report's `diagnostics`. See [testing](testing.md).
 
+`--filter <substring>` (or `--filter=<substring>`) runs only the tests whose names contain the substring, case-sensitive, on either backend. Only the name is matched, not a package test's module. The tests it leaves out are not run and not listed; the summary ends with `, N filtered out`, and the JSON report has `"filtered":N` after `skipped`. A filter that matches no test runs nothing and exits with 1, so a typo is never a passing run: it prints ``error: no test name contains `<substring>`; N tests filtered out`` to standard error, or with `--format=json` one object on standard output, `{"error":"no test matches the filter","filter":"<substring>","filtered":N}`.
+
 | Exit code | Meaning |
 | --- | --- |
 | `0` | No test failed. Skipped tests do not count. |
-| `1` | A test failed, or the checker refused the file. |
+| `1` | A test failed, the checker refused the file, or `--filter` matched no test. |
 | `2` | The file uses something the interpreter cannot run yet. No test ran. |
 
 ## `oskac build`
@@ -444,7 +450,7 @@ A parse error is reported alone, with empty `functions`, `audit` and `attenuatio
 {"tests":[{"name":"adds","status":"passed","failure":null}],"passed":1,"failed":0,"skipped":0,"diagnostics":[]}
 ```
 
-`status` is `passed`, `failed`, or `skipped`. `failure` is a diagnostic object or `null`.
+`status` is `passed`, `failed`, or `skipped`. `failure` is a diagnostic object or `null`. With `--filter`, `"filtered":n` follows `skipped`: the number of tests the filter left out.
 
 ### `run --format=json`
 
