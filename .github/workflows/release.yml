@@ -385,9 +385,14 @@ jobs:
         run: |
           prerelease=()
           case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
+          # The install guide's "Upgrading to vX.Y.Z" section, by the site's
+          # anchor for that heading (lower case, dots dropped).
+          notes="Download from https://oskalang.dev/releases/$TAG/
+
+          What changed, and what to do when you upgrade: https://oskalang.dev/guide/install.html#upgrading-to-${TAG//./}"
           gh release create "$TAG" --verify-tag "${prerelease[@]}" \
             --title "oskac $TAG" \
-            --notes "Download from https://oskalang.dev/releases/$TAG/" \
+            --notes "$notes" \
             release/"$TAG"/*
       # Events caused by GITHUB_TOKEN start no workflows, except a dispatch.
       - name: Publish to oskalang.dev
