@@ -859,7 +859,9 @@ fn run_source(
         ) {
             native::Run::Ran(code) => return code,
             native::Run::Refused(refusal) => {
-                native::note_fallback(refusal, oska_run::refusal(program), &places, json)
+                if let Some(refusal) = native::gate(refusal, oska_run::refusal(program), &places) {
+                    return refuse_unsupported(Gated::Run, refusal, json);
+                }
             }
         }
     }
@@ -929,13 +931,56 @@ fn test_file(
                 native_test::Tested::Report(report) => return finish_test(report, json, &places),
                 native_test::Tested::Ended(code) => return code,
                 native_test::Tested::Refused(refusal) => {
-                    native::note_fallback(refusal, oska_run::test_refusal(program), &places, json)
+                    if let Some(refusal) =
+                        native::gate(refusal, oska_run::test_refusal(program), &places)
+                    {
+                        return refuse_unsupported(Gated::Test, refusal, json);
+                    }
                 }
             }
         }
     }
     let report = oska_run::test(&src, &mut oska_run::RealHost::new(), options);
     finish_test(report, json, &places)
+}
+
+/// What the parity gate stopped: a run or the tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Gated {
+    Run,
+    Test,
+}
+
+/// The parity gate's refusal (#181): `oskac run` or `oskac test` of a
+/// program the native backend cannot compile yet (`refusal`, `E0390`,
+/// already located) reports it as `oskac build` does, as an error with
+/// exit code 2, and runs nothing. `--interpret` still runs it.
+fn refuse_unsupported(gated: Gated, refusal: Diagnostic, json: bool) -> ExitCode {
+    let code = oska_run::UNSUPPORTED_EXIT_CODE;
+    match gated {
+        // A test report's own exit code is 2 only for the interpreter's
+        // codes, so the gate's is given here.
+        Gated::Test => {
+            let report = oska_run::TestReport {
+                tests: Vec::new(),
+                diagnostics: vec![refusal],
+                filtered: None,
+            };
+            let _ = finish_test(report, json, &Places::Located);
+            ExitCode::from(u8::try_from(code).unwrap_or(2))
+        }
+        Gated::Run => finish_run(
+            oska_run::RunOutcome {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: code,
+                panic: None,
+                diagnostics: vec![refusal],
+            },
+            json,
+            &Places::Located,
+        ),
+    }
 }
 
 /// Print a test report and return its exit code. `places` names the file
@@ -1128,7 +1173,11 @@ fn on_package(
             ) {
                 native::Run::Ran(code) => return code,
                 native::Run::Refused(refusal) => {
-                    native::note_fallback(refusal, oska_run::refusal(program), &places, json)
+                    if let Some(refusal) =
+                        native::gate(refusal, oska_run::refusal(program), &places)
+                    {
+                        return refuse_unsupported(Gated::Run, refusal, json);
+                    }
                 }
             }
         }
@@ -1150,7 +1199,11 @@ fn on_package(
                 native_test::Tested::Report(tests) => return finish_test(tests, json, &places),
                 native_test::Tested::Ended(code) => return code,
                 native_test::Tested::Refused(refusal) => {
-                    native::note_fallback(refusal, oska_run::test_refusal(program), &places, json)
+                    if let Some(refusal) =
+                        native::gate(refusal, oska_run::test_refusal(program), &places)
+                    {
+                        return refuse_unsupported(Gated::Test, refusal, json);
+                    }
                 }
             }
         }
