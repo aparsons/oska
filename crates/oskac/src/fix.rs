@@ -12,8 +12,9 @@
 //! file's) directory without following a symlink (`package::Files`).
 
 mod diff;
-mod edits;
 mod rounds;
+
+use oska_syntax::edits;
 
 use std::path::Path;
 use std::process::ExitCode;

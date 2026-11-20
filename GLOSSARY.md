@@ -202,7 +202,7 @@ _Avoid_: updater daemon, auto-updater
 _Avoid_: lint, warning (Oska has neither)
 
 **Fix applicability**:
-How safe a diagnostic's fix is to apply without a person reading it: `machine` when it is certainly right, `maybe` when it is a guess at what was meant, such as the closest name to an unknown one, and `placeholders` when the program checks afterwards but code is left to write, such as `todo()` arms. Each code's fix has one, recorded in the code catalog.
+How safe a diagnostic's fix is to apply without a person reading it: `machine` when it is certainly right, `maybe` when it is a guess at what was meant, such as the closest name to an unknown one, and `placeholders` when the program checks afterwards but code is left to write, such as `todo()` arms. It is set by the code and the situation the fix is offered in, and the code catalog records the rule.
 _Avoid_: confidence, safety level
 
 ## Tooling

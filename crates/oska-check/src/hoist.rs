@@ -17,7 +17,11 @@
 //! or `continue`. Otherwise it is `maybe`, and so is a hole whose
 //! expression runs only sometimes or more than once where it is: in a
 //! `while` condition, on the right side of `&&`, `||` or `implies`, or in
-//! an `else if` condition. A hole in a closure or `match` arm whose body is
+//! an `else if` condition. A hole is `maybe` too when anything that runs
+//! before it in its statement is not inert (a call, `?`, arithmetic, a
+//! comparison, another expression hole): hoisting would move the hole's
+//! expression ahead of an effect, an early exit, or a change to what it
+//! reads. A hole in a closure or `match` arm whose body is
 //! not a block, or in a guard, has no fix: its names may be bound there.
 //!
 //! The name is `value`, or `value2` and so on when the module's text
@@ -65,7 +69,13 @@ fn fix(package: &Package, index: usize, hole: Span) -> Option<Fix> {
     let expr = oska_syntax::parse_expr(expr_text).ok()?;
     let (others, module) = parse_with_placeholders(src, hole)?;
     let site = statement_of(&module, hole)?;
-    let name = fresh(&[src.as_str()], "value");
+    // Each expression hole of a statement gets its own name, in order, so
+    // fixes of two holes of one statement never both write `let value`.
+    let earlier = others
+        .iter()
+        .filter(|h| site.start <= h.start && h.start < hole.start && h.end <= site.end)
+        .count();
+    let name = fresh_nth(&[src.as_str()], "value", earlier);
     let indent = indent_before(src, site.start);
     let edits = vec![
         Edit {
@@ -80,8 +90,11 @@ fn fix(package: &Package, index: usize, hole: Span) -> Option<Fix> {
     // The fixed module must parse, the other holes aside.
     let mut checked = edits.clone();
     checked.extend(others.iter().map(|h| placeholder(*h)));
-    oska_syntax::parse_module(&apply(src, &checked).0).ok()?;
-    let certain = !site.later
+    oska_syntax::parse_module(&apply(src, &checked)?).ok()?;
+    // Another expression hole earlier in the statement runs before this
+    // one, and its expression may have an effect.
+    let certain = !site.reorders
+        && earlier == 0
         && !leaves(&expr)
         && pure(package, index, site.start, hole, &others, &name, expr_text);
     Some(Fix {
@@ -104,7 +117,7 @@ fn parse_with_placeholders(src: &str, hole: Span) -> Option<(Vec<Span>, Module)>
     // Each round replaces one more hole; a module has only so many.
     for _ in 0..256 {
         let edits: Vec<Edit> = holes.iter().map(|h| placeholder(*h)).collect();
-        match oska_syntax::parse_module(&apply(src, &edits).0) {
+        match oska_syntax::parse_module(&apply(src, &edits)?) {
             Ok(module) => return Some((holes.split_off(1), module)),
             Err(err) if err.code == HOLE && is_expression_hole(src, err.span) => {
                 if holes.contains(&err.span) {
@@ -132,36 +145,22 @@ fn placeholder(hole: Span) -> Edit {
     }
 }
 
-/// `src` with `edits` applied, which do not overlap, and the span each
-/// edit's replacement has in the result, in the order of `edits`.
-fn apply(src: &str, edits: &[Edit]) -> (String, Vec<Span>) {
-    let mut order: Vec<usize> = (0..edits.len()).collect();
-    order.sort_by_key(|&i| (edits[i].span.start, edits[i].span.end));
-    let mut out = String::with_capacity(src.len());
-    let mut spans = vec![Span::at(0); edits.len()];
-    let mut at = 0;
-    for i in order {
-        let edit = &edits[i];
-        out.push_str(&src[at..edit.span.start]);
-        let start = out.len();
-        out.push_str(&edit.replacement);
-        spans[i] = Span {
-            start,
-            end: out.len(),
-        };
-        at = edit.span.end;
-    }
-    out.push_str(&src[at..]);
-    (out, spans)
+/// `src` with `edits` applied, or `None` when they cannot be.
+fn apply(src: &str, edits: &[Edit]) -> Option<String> {
+    oska_syntax::edits::apply(src, edits).ok()
 }
 
 /// The statement a hoisted `let` goes before.
 struct Site {
     /// Where the statement starts.
     start: usize,
-    /// Hoisting changes when the expression runs: it runs only sometimes,
-    /// or more than once, where it is.
-    later: bool,
+    /// Where the statement ends.
+    end: usize,
+    /// Hoisting may change what the program does: the expression runs only
+    /// sometimes, or more than once, where it is, or something that runs
+    /// before it in the statement may have an effect, leave early, or
+    /// change what it reads.
+    reorders: bool,
 }
 
 /// What a walk found of the hole.
@@ -169,8 +168,8 @@ enum Walk {
     /// It is not in this code.
     Missing,
     /// It is in this code, in no block of it: the statement around it is
-    /// where to hoist. `later` as in [`Site`].
-    Here { later: bool },
+    /// where to hoist. `reorders` as in [`Site`].
+    Here { reorders: bool },
     /// The innermost statement around it, or `None` when it has no fix.
     Found(Option<Site>),
 }
@@ -216,9 +215,10 @@ fn block(b: &Block, hole: Span) -> Walk {
             continue;
         }
         return match stmt(s, hole) {
-            Walk::Here { later } => Walk::Found(Some(Site {
+            Walk::Here { reorders } => Walk::Found(Some(Site {
                 start: s.span.start,
-                later,
+                end: s.span.end,
+                reorders,
             })),
             found => found,
         };
@@ -229,7 +229,11 @@ fn block(b: &Block, hole: Span) -> Walk {
 fn stmt(s: &Stmt, hole: Span) -> Walk {
     match &s.kind {
         StmtKind::Let { value, .. } => expr(value, hole, false),
-        StmtKind::Assign { target, value } => first(&[(target, false), (value, false)], hole),
+        // Either side may run first, so each is before the other.
+        StmtKind::Assign { target, value } => match expr(target, hole, !inert(value)) {
+            Walk::Missing => expr(value, hole, !inert(target)),
+            walked => walked,
+        },
         StmtKind::Return(Some(value)) => expr(value, hole, false),
         StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue => Walk::Missing,
         StmtKind::For { iter, body, .. } => match expr(iter, hole, false) {
@@ -244,38 +248,70 @@ fn stmt(s: &Stmt, hole: Span) -> Walk {
     }
 }
 
-/// The first of `exprs`, each with its `later`, that the hole is in.
+/// The first of `exprs`, which run in this order, each with its
+/// `reorders`, that the hole is in. One that runs after an expression that
+/// is not [`inert`] reorders.
 fn first(exprs: &[(&Expr, bool)], hole: Span) -> Walk {
-    for (e, later) in exprs {
-        match expr(e, hole, *later) {
-            Walk::Missing => {}
+    let mut before = false;
+    for (e, reorders) in exprs {
+        match expr(e, hole, *reorders || before) {
+            Walk::Missing => before = before || !inert(e),
             walked => return walked,
         }
     }
     Walk::Missing
 }
 
-fn expr(e: &Expr, hole: Span, later: bool) -> Walk {
+/// Whether running `e` can have no effect, cannot leave early or stop the
+/// program, and changes nothing: literals, names, fields and lists of
+/// them, and `!`, `&&`, `||` and `implies` of them. A call, `?`, a
+/// comparison (it may call an `Eq` implementation) and arithmetic (it may
+/// overflow or divide by zero) are not.
+fn inert(e: &Expr) -> bool {
+    use oska_syntax::ast::BinaryOp::{And, Implies, Or};
+    use oska_syntax::ast::UnaryOp::Not;
+    match &e.kind {
+        ExprKind::Int(_)
+        | ExprKind::Str(_)
+        | ExprKind::SinkStr { .. }
+        | ExprKind::Bool(_)
+        | ExprKind::Unit
+        | ExprKind::Name(_)
+        | ExprKind::SelfValue => true,
+        ExprKind::Field { base, .. } => inert(base),
+        ExprKind::Unary { op: Not, operand } => inert(operand),
+        ExprKind::Binary {
+            op: And | Or | Implies,
+            lhs,
+            rhs,
+        } => inert(lhs) && inert(rhs),
+        ExprKind::Range { start, end } => inert(start) && inert(end),
+        ExprKind::List(items) => items.iter().all(inert),
+        _ => false,
+    }
+}
+
+fn expr(e: &Expr, hole: Span, reorders: bool) -> Walk {
     if !contains(e.span, hole) {
         return Walk::Missing;
     }
     match &e.kind {
-        ExprKind::Str(_) => Walk::Here { later },
-        ExprKind::Field { base, .. } => expr(base, hole, later),
+        ExprKind::Str(_) => Walk::Here { reorders },
+        ExprKind::Field { base, .. } => expr(base, hole, reorders),
         ExprKind::Call { callee, args } => {
-            let mut all = vec![(callee.as_ref(), later)];
-            all.extend(args.iter().map(|a| (&a.value, later)));
+            let mut all = vec![(callee.as_ref(), reorders)];
+            all.extend(args.iter().map(|a| (&a.value, reorders)));
             first(&all, hole)
         }
-        ExprKind::Unary { operand, .. } | ExprKind::Try(operand) => expr(operand, hole, later),
+        ExprKind::Unary { operand, .. } | ExprKind::Try(operand) => expr(operand, hole, reorders),
         ExprKind::Binary { op, lhs, rhs } => {
             use oska_syntax::ast::BinaryOp::{And, Implies, Or};
             let short = matches!(op, And | Or | Implies);
-            first(&[(lhs, later), (rhs, later || short)], hole)
+            first(&[(lhs, reorders), (rhs, reorders || short)], hole)
         }
-        ExprKind::Range { start, end } => first(&[(start, later), (end, later)], hole),
+        ExprKind::Range { start, end } => first(&[(start, reorders), (end, reorders)], hole),
         ExprKind::List(items) => {
-            let all: Vec<(&Expr, bool)> = items.iter().map(|i| (i, later)).collect();
+            let all: Vec<(&Expr, bool)> = items.iter().map(|i| (i, reorders)).collect();
             first(&all, hole)
         }
         ExprKind::Closure { body, .. } => match &body.kind {
@@ -286,7 +322,7 @@ fn expr(e: &Expr, hole: Span, later: bool) -> Walk {
             cond,
             then_block,
             else_branch,
-        } => match expr(cond, hole, later) {
+        } => match expr(cond, hole, reorders) {
             Walk::Missing if contains(then_block.span, hole) => block(then_block, hole),
             // An `else if` condition runs only when `cond` is false.
             Walk::Missing => else_branch
@@ -295,7 +331,7 @@ fn expr(e: &Expr, hole: Span, later: bool) -> Walk {
             walked => walked,
         },
         ExprKind::Block(b) | ExprKind::Scope { body: b, .. } => block(b, hole),
-        ExprKind::Match { scrutinee, arms } => match expr(scrutinee, hole, later) {
+        ExprKind::Match { scrutinee, arms } => match expr(scrutinee, hole, reorders) {
             Walk::Missing => match arms.iter().find(|a| contains(a.span, hole)) {
                 Some(arm) => match &arm.body.kind {
                     ExprKind::Block(b) if contains(b.span, hole) => block(b, hole),
@@ -392,8 +428,20 @@ fn pure(
         },
     ];
     edits.extend(others.iter().map(|h| placeholder(*h)));
-    let (text, spans) = apply(src, &edits);
-    let placeholders = &spans[3..];
+    let Some(text) = apply(src, &edits) else {
+        return false;
+    };
+    // A placeholder keeps its hole's length, so only where it starts moves.
+    let placeholders: Vec<Span> = others
+        .iter()
+        .map(|h| {
+            let start = oska_syntax::edits::moved(h.start, &edits);
+            Span {
+                start,
+                end: start + (h.end - h.start),
+            }
+        })
+        .collect();
     let mut program = package.clone();
     program.modules[index].source = text;
     let path = &program.modules[index].path;
@@ -410,18 +458,22 @@ fn pure(
 /// `base`, or `base` with the first number from 2 that makes it, a word
 /// that none of `texts` has.
 fn fresh(texts: &[&str], base: &str) -> String {
+    fresh_nth(texts, base, 0)
+}
+
+/// The name after `skip` others of [`fresh`]'s names: of `base`, `base2`,
+/// `base3` and so on, the ones that are words none of `texts` has.
+fn fresh_nth(texts: &[&str], base: &str, skip: usize) -> String {
     let taken = |name: &str| {
         texts.iter().any(|text| {
             text.split(|c: char| !(c.is_alphanumeric() || c == '_'))
                 .any(|word| word == name)
         })
     };
-    if !taken(base) {
-        return base.to_string();
-    }
-    (2..)
-        .map(|n| format!("{base}{n}"))
-        .find(|name| !taken(name))
+    std::iter::once(base.to_string())
+        .chain((2..).map(|n| format!("{base}{n}")))
+        .filter(|name| !taken(name))
+        .nth(skip)
         .unwrap_or_else(|| base.to_string())
 }
 
@@ -432,4 +484,39 @@ fn indent_before(src: &str, start: usize) -> String {
         .chars()
         .take_while(|c| *c == ' ' || *c == '\t')
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::add_fixes;
+    use crate::package::Package;
+    use oska_syntax::{Applicability, Diagnostic, Span};
+
+    const PROGRAM: &str = "fn main() {\n    let n = 1\n    let s = \"{n + 1} and {n * 3}\"\n}\n";
+
+    /// The fix of the hole holding `hole_text` in [`PROGRAM`], given a
+    /// diagnostic at it as a parser that went on would report.
+    fn fix_of(hole_text: &str) -> oska_syntax::Fix {
+        let start = PROGRAM.find(hole_text).expect("hole");
+        let span = Span {
+            start,
+            end: start + hole_text.len(),
+        };
+        let package = Package::single_file("app.osk", PROGRAM);
+        let mut diagnostics = vec![Diagnostic::new("E0102", "hole", span)];
+        add_fixes(&package, &mut diagnostics);
+        *diagnostics.remove(0).fix.expect("a fix")
+    }
+
+    #[test]
+    fn two_holes_of_one_statement_get_different_names() {
+        let first = fix_of("{n + 1}");
+        let second = fix_of("{n * 3}");
+        assert_eq!(first.edits[1].replacement, "{value}");
+        assert_eq!(second.edits[1].replacement, "{value2}");
+        assert_eq!(second.edits[0].replacement, "let value2 = n * 3\n    ");
+        // The second runs after the first's expression, so it is `maybe`.
+        assert_eq!(first.applicability, Applicability::Machine);
+        assert_eq!(second.applicability, Applicability::Maybe);
+    }
 }

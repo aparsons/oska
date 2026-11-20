@@ -240,3 +240,40 @@ fn fix_hoists_in_a_module_of_a_package() {
         "pub(pkg) fn label(n: Int) -> String {\n    let value = n + 1\n    \"next {value}\"\n}\n"
     );
 }
+
+/// Hoisting moves the hole's expression ahead of everything that runs
+/// before it in the statement: there an effect, a `?` or a mutation of
+/// what the hole reads could change what the program does, so the fix is
+/// `maybe` even though the expression itself is pure.
+#[test]
+fn a_hole_after_an_effect_or_early_exit_in_its_statement_gets_a_maybe_fix() {
+    let dir = scratch(
+        "after_try",
+        "fn pair(a: (), b: String) -> String {\n    b\n}\n\nfn main(out: Stdout) -> Result<(), IoError> {\n    let n = 6\n    let d = 2\n    let s = pair(out.println(\"a\")?, \"{n / d}\")\n    out.println(s)\n}\n",
+    );
+    assert_eq!(applicability(&dir).as_deref(), Some("maybe"));
+}
+
+#[test]
+fn a_hole_after_a_mutation_of_what_it_reads_gets_a_maybe_fix() {
+    let dir = scratch(
+        "after_mutation",
+        "fn pair(a: (), b: String) -> String {\n    b\n}\n\nfn main(out: Stdout) -> Result<(), IoError> {\n    var xs = [1, 2]\n    let s = pair(xs.push(3), \"{xs.len()}\")\n    out.println(s)\n}\n",
+    );
+    assert_eq!(applicability(&dir).as_deref(), Some("maybe"));
+}
+
+/// What runs before the hole in its statement is only names and
+/// literals, so nothing can be reordered: the fix stays `machine`.
+#[test]
+fn a_hole_after_plain_values_in_its_statement_is_hoisted_by_fix() {
+    let (ok, after) = fixed(
+        "after_values",
+        "fn pair(a: Int, b: String) -> String {\n    b\n}\n\nfn main(out: Stdout) -> Result<(), IoError> {\n    let n = 6\n    let s = pair(n, \"{n / 2}\")\n    out.println(s)\n}\n",
+    );
+    assert!(ok, "{after}");
+    assert_eq!(
+        after,
+        "fn pair(a: Int, b: String) -> String {\n    b\n}\n\nfn main(out: Stdout) -> Result<(), IoError> {\n    let n = 6\n    let value = n / 2\n    let s = pair(n, \"{value}\")\n    out.println(s)\n}\n"
+    );
+}
