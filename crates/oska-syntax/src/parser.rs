@@ -55,7 +55,8 @@
 //!
 //! Diagnostics `E0005`, `E0112`, `E0120`, `E0143`, `E0151`,
 //! `E0162`–`E0164`, and `E0170` can carry a machine-applicable
-//! [`Fix`](crate::Fix).
+//! [`Fix`](crate::Fix). `E0102`'s fix is the checker's, which can tell
+//! whether the hole's expression is pure (`oska-check`'s `hoist.rs`).
 
 use crate::ast::{
     Arg, Attribute, BinaryOp, Block, ClosureParam, ConstDecl, Ensures, EnumDecl, Expr, ExprKind,

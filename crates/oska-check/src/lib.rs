@@ -53,6 +53,7 @@ mod collect;
 mod const_cycles;
 pub mod core_ir;
 mod decl_rules;
+mod hoist;
 mod infer;
 mod instantiation;
 mod items;

@@ -13,7 +13,7 @@ use oska_syntax::{Diagnostic, Frame, LineIndex, Location, Span};
 
 use crate::manifest::is_snake_case;
 use crate::{
-    check_module_with, check_parsed, codes, link, parse_manifest, Attenuation, AuditSite,
+    check_module_with, check_parsed, codes, hoist, link, parse_manifest, Attenuation, AuditSite,
     CheckOptions, CheckReport,
 };
 
@@ -100,6 +100,14 @@ pub fn check_file(path: &str, source: &str, options: CheckOptions) -> CheckRepor
 /// exactly as [`check_module_with`] checks it, where `use pkg.…` is an
 /// error.
 pub fn check_package(package: &Package, options: CheckOptions) -> CheckReport {
+    let mut report = check_package_unfixed(package, options);
+    hoist::add_fixes(package, &mut report.diagnostics);
+    report
+}
+
+/// [`check_package`], without the fixes that need the program checked
+/// again (`hoist.rs`), which is how those fixes check it.
+pub(crate) fn check_package_unfixed(package: &Package, options: CheckOptions) -> CheckReport {
     let manifest_errors = package
         .manifest
         .as_deref()
