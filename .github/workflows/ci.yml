@@ -60,6 +60,63 @@ jobs:
       # pre-push hook runs), so local and CI checks cannot drift apart.
       - run: scripts/check.sh
 
+  musl:
+    # Ticket #462 of spec #461 (ADR 0022): the musl build of `oskac`, a
+    # static executable with no C library at run time, must behave as the
+    # glibc build does, so a change that breaks it fails here. The target is
+    # added in this job, not in rust-toolchain.toml (every clone would
+    # download it), and to the pinned toolchain: a Rust upgrade that breaks
+    # the musl build fails this job.
+    runs-on: ubuntu-latest
+    # A release build, then the oska-run tests, whose interpreter runs
+    # about 1.5 times slower on musl: some 15 to 25 minutes.
+    timeout-minutes: 50
+    env:
+      TARGET: x86_64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - run: test "$(uname -m)" = x86_64
+      - run: rustup target add "$TARGET"
+      - run: cargo build --release --locked -p oskac --target "$TARGET"
+      # Static: no dynamic loader (`PT_INTERP`) and no shared library
+      # (`DT_NEEDED`), so it runs on any Linux and in an empty root.
+      - name: The musl build is static
+        run: |
+          bin="target/$TARGET/release/oskac"
+          readelf -lW "$bin" > program-headers.txt
+          readelf -dW "$bin" > dynamic-section.txt
+          if grep -w INTERP program-headers.txt; then
+            echo "::error::$bin has a PT_INTERP entry (a dynamic loader)"
+            exit 1
+          fi
+          if grep -w NEEDED dynamic-section.txt; then
+            echo "::error::$bin has a DT_NEEDED entry (a shared library)"
+            exit 1
+          fi
+      # The confinement escape tests and the interpreter, then the native
+      # backend's parity with the interpreter, all run by the musl build.
+      - run: cargo test --locked --target "$TARGET" -p oska-sys -p oska-run
+      - run: cargo test --locked --target "$TARGET" -p oskac --test native_files --test native_parity --test native_default
+      # An empty root: the binary, an empty /tmp and the example's source,
+      # with no libraries and no /proc, run as a user with no other rights.
+      - name: Smoke test in an empty root
+        run: |
+          root=$(mktemp -d)
+          chmod 0755 "$root"
+          install -m 0755 "target/$TARGET/release/oskac" "$root/oskac"
+          install -m 0644 examples/hello.osk "$root/hello.osk"
+          mkdir -m 1777 "$root/tmp"
+          # chroot(2) needs root (CAP_SYS_CHROOT); --userspec then drops to 65532.
+          in_root() { sudo chroot --userspec=65532:65532 "$root" "$@"; }
+          in_root /oskac --version
+          test "$(in_root /oskac run /hello.osk)" = "Hello from Oska!"
+          in_root /oskac build /hello.osk -o /tmp/hello
+          test "$(in_root /tmp/hello)" = "Hello from Oska!"
+          # Afterwards the root holds only these: no library, no /proc, and
+          # nothing that `oskac run` left behind in /tmp.
+          test "$(cd "$root" && find . | sort | tr '\n' ' ')" = ". ./hello.osk ./oskac ./tmp ./tmp/hello "
+
   macos:
     # Spec #154: on a Mac `oskac run` and `oskac test` are native by
     # default (tickets #172 and #173), so the whole of `oskac`'s tests run
