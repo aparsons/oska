@@ -64,11 +64,11 @@ A failed run prints `{"ok": false, "error": "<code>", "message": "..."}` and exi
 
 | `error` | Meaning |
 | --- | --- |
-| `usage` | An unknown option, a `--version` that is not a version, `--allow-downgrade` without `--version`, or options that cannot be used together, such as `--uninstall` with `--version`. |
+| `usage` | An unknown option, an `OSKA_LIBC` other than `glibc` or `musl`, a `--version` that is not a version, `--allow-downgrade` without `--version`, or options that cannot be used together, such as `--uninstall` with `--version`. |
 | `no_signing_key` | The installer was not pinned when the site was built: it has no release key built in, or no valid setting for whether the release index is required. Download it again from oskalang.dev. |
 | `insecure_url` | `OSKA_SITE_URL` is not an `https://` URL, or a download was redirected to one that is not. |
 | `unsupported_platform` | There is no build for this OS or CPU, or `--hook` was used with `install.ps1`, which does not have it (the hook works on Windows: merge its settings as the agent-setup prompt does). |
-| `unsupported_libc` | Linux only: the C library is not glibc 2.35 or newer (for example musl, as on Alpine). |
+| `unsupported_libc` | Linux only: `OSKA_LIBC=glibc` asks for the glibc build, and the installer did not find glibc 2.35 or newer. |
 | `missing_tool` | `curl`, `ssh-keygen`, or a SHA-256 tool is missing. |
 | `download_failed` | A file could not be downloaded, for example because that version does not exist. |
 | `bad_signature` | `SHA256SUMS` is not signed by the release key. |
@@ -82,7 +82,7 @@ A failed run prints `{"ok": false, "error": "<code>", "message": "..."}` and exi
 | `not_installed` | `--uninstall` found no install receipt in the Oska home, or there is no Oska home because neither `OSKA_HOME` nor a home directory is set. Nothing was removed. |
 | `unsafe_path` | `--uninstall` found a receipt entry outside the places the installer writes, in a `.config/oska` directory, reached through a symlink anywhere in its path, or containing `..`, or a receipt it cannot read. Nothing was removed. |
 
-The binaries are published on oskalang.dev, together with `SHA256SUMS` and its signature, for Linux x86_64 and aarch64, macOS x86_64 and aarch64, and Windows x86_64. The Linux binaries are built on Ubuntu 22.04 and need glibc 2.35 or newer. They do not run on an older glibc or on musl systems such as Alpine; there the installer stops with `unsupported_libc`, and you can build from source instead.
+The binaries are published on oskalang.dev, together with `SHA256SUMS` and its signature, for Linux x86_64 and aarch64, macOS x86_64 and aarch64, and Windows x86_64. Linux has two builds of each release: the glibc build (`oskac-linux-<arch>-gnu`), built on Ubuntu 22.04, which needs glibc 2.35 or newer, and the musl build (`oskac-linux-<arch>-musl`), which is static and runs on any Linux. `install.sh` installs the glibc build when it finds glibc 2.35 or newer, and the musl build otherwise: on musl systems such as Alpine, on an older glibc, or when it cannot tell which C library the system has. Set `OSKA_LIBC=glibc` or `OSKA_LIBC=musl` to choose the build yourself; a forced glibc build where glibc 2.35 or newer is not found stops with `unsupported_libc`, and any other value is a usage error, before anything is downloaded.
 
 ### The install receipt
 
@@ -94,6 +94,8 @@ Each install writes `receipt.json` into the Oska home (`~/.oska`, or `OSKA_HOME`
   "version": "0.5.0",
   "tag": "v0.5.0",
   "platform": "linux-x86_64",
+  "linux_build": "gnu",
+  "libc_forced": false,
   "installed_at": "2026-11-12T09:30:00Z",
   "site": "https://oskalang.dev",
   "key_fingerprint": "SHA256:PjwTDycs560g1ktWC/gdznamSkzm4xH+OAdfntNaW4o",
@@ -111,6 +113,7 @@ Each install writes `receipt.json` into the Oska home (`~/.oska`, or `OSKA_HOME`
 With `--add-to-path` or `--hook`, `files` also lists what they wrote outside the Oska home: a `profile_line` (the profile and the exact line), a `user_path_entry` (the exact `PATH` entry), a `hook_settings` (with its SHA-256, if the installer created it, and the `project` directory). A receipt from an earlier installer may also list a `hook_script`, the old shell hook, which `--uninstall` still removes if unchanged. A re-run without those options keeps the entries an earlier run recorded. [The install receipt](install-receipt.md) defines every kind of entry, where each may be, and what each uninstaller does with it.
 
 - `key_fingerprint` is the fingerprint of the release key that vouched for the binary, and `sha256` is the binary's SHA-256, so you can tell whether it has changed since.
+- `linux_build` (Linux only) is the build installed, `gnu` or `musl`, and `libc_forced` is `true` when `OSKA_LIBC` chose it. A receipt from an earlier installer has neither.
 - `installer` is `sh` or `ps1`.
 - `files` lists every file the installer wrote, with its SHA-256 where the content is the installer's own.
 - The installer also still writes the one-line `version` file, for one more release, so that tools that read it keep working.

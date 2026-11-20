@@ -53,6 +53,19 @@ fn platform() -> String {
     format!("{os}-{arch}")
 }
 
+/// Which Linux build this `oskac` is, from the target it was compiled for:
+/// the glibc build (`gnu`) or the musl build (`musl`), the suffix of its
+/// release asset (ADR 0022). `None` off Linux, where there is one build.
+fn linux_build() -> Option<&'static str> {
+    if cfg!(all(target_os = "linux", target_env = "musl")) {
+        Some("musl")
+    } else if cfg!(all(target_os = "linux", target_env = "gnu")) {
+        Some("gnu")
+    } else {
+        None
+    }
+}
+
 pub(crate) fn env_path(name: &str) -> Option<PathBuf> {
     std::env::var_os(name)
         .filter(|v| !v.is_empty())
@@ -301,9 +314,10 @@ pub(crate) fn info(json: bool) -> ExitCode {
             receipt.write(&mut receipt_json);
         }
         outln!(
-            "{{\"version\":{},\"platform\":{},\"executable\":{},\"oska_home\":{},\"receipt\":{},\"receipt_error\":{},\"receipt_matches\":{},\"digest_checked\":false}}",
+            "{{\"version\":{},\"platform\":{},\"linux_build\":{},\"executable\":{},\"oska_home\":{},\"receipt\":{},\"receipt_error\":{},\"receipt_matches\":{},\"digest_checked\":false}}",
             quote(VERSION),
             quote(&platform()),
+            quote_option(linux_build()),
             quote_option(exe.as_deref().map(display).as_deref()),
             quote_option(home.as_deref().map(display).as_deref()),
             receipt_json,
@@ -312,7 +326,10 @@ pub(crate) fn info(json: bool) -> ExitCode {
         );
         return ExitCode::SUCCESS;
     }
-    outln!("oskac {VERSION} ({})", platform());
+    match linux_build() {
+        Some(build) => outln!("oskac {VERSION} ({}, {build} build)", platform()),
+        None => outln!("oskac {VERSION} ({})", platform()),
+    }
     outln!(
         "executable: {}",
         exe.as_deref()
