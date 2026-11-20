@@ -570,6 +570,13 @@ if step "release script tests" --fast-when 'scripts/release/*'; then
   bash scripts/release/test.sh
 fi
 
+if step "release image tests" --fast-when 'scripts/release/*'; then
+  # The oskac container image builder (scripts/release/image.sh): the same
+  # fake binaries give the same OCI bytes, and the layout holds only /oskac
+  # and /tmp, run as user 65532.
+  bash scripts/release/image-test.sh
+fi
+
 if step "unsafe guard tests" --fast-when 'scripts/unsafe-guard/*'; then
   bash scripts/unsafe-guard/test.sh
 fi
