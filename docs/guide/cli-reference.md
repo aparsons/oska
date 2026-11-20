@@ -49,6 +49,12 @@ USAGE:
                                            backend, else linux-aarch64), or for
                                            every platform with a backend into
                                            the -o directory
+    oskac release [path] --version <X.Y.Z> --key <ssh-key>
+                  [-o dir] [--format=json] [--no-cache]
+                                           Build a source file or package for
+                                           every platform into one directory
+                                           (by default <name>-v<X.Y.Z>), with
+                                           a SHA256SUMS signed by the SSH key
     oskac fix [path] [--dry-run] [--placeholders] [--format=json]
                                            Apply the machine fixes to a source
                                            file or package, checking again
@@ -77,11 +83,12 @@ USAGE:
     oskac --help                           Print this help
 ```
 
-`lex` and `parse` take exactly one source file, and `explain` a code. `check`, `run`, `test`, `build` and `fix` take a source file, a package directory, or nothing, which means the package in the current directory. A package is a directory with an `oska.toml` (`[package]` with a `name` and a `version`) and its modules under `src/`; every `.osk` file there is a module, `main` is allowed only in `src/main.osk`, and a package without that file is a library, which `run` and `build` refuse. A directory without `oska.toml` is an error (`E0413`). A file inside a package is handled alone, with a hint to run the command on the package. A command line is parsed like this:
+`lex` and `parse` take exactly one source file, and `explain` a code. `check`, `run`, `test`, `build`, `release` and `fix` take a source file, a package directory, or nothing, which means the package in the current directory. A package is a directory with an `oska.toml` (`[package]` with a `name` and a `version`) and its modules under `src/`; every `.osk` file there is a module, `main` is allowed only in `src/main.osk`, and a package without that file is a library, which `run`, `build` and `release` refuse. A directory without `oska.toml` is an error (`E0413`). A file inside a package is handled alone, with a hint to run the command on the package. A command line is parsed like this:
 
 - A flag may come anywhere before `--`. Anything else is a positional argument.
 - Everything after `--` belongs to the program being run, and only `oskac run` uses it.
 - `--target <platform>`, or `--target=<platform>`, is for `oskac build` only: any other command given it prints the usage text to standard error and exits with 2.
+- `--version <X.Y.Z>` and `--key <file>` (or `--version=<X.Y.Z>` and `--key=<file>`) are for `oskac release` only: any other command given `--key` or `--version=` prints the usage text to standard error and exits with 2. `--version` alone, with no command, prints `oskac`'s own version.
 - Any `--format=` value other than `json` means the default, human-readable output.
 - An unknown flag is treated as a positional argument, so the command is not recognized. `oskac` then prints the usage text to standard error and exits with 2. Running `oskac` with no arguments does the same.
 - A file that cannot be read prints `error: cannot read <path>: <reason>` to standard error and exits with 1, even with `--format=json`.
@@ -99,13 +106,15 @@ USAGE:
 | `--event=post-edit`, `--event=stop` | `hook` | The event the hook handles. It is required. |
 | `--interpret` | `run`, `test` | Run on the interpreter, on Linux and macOS too, where the program is otherwise compiled and run natively. See [platform support](#platform-support). The other commands accept the flag and ignore it. |
 | `--target=<platform>` | `build` | Build for this platform, named as release assets name `oskac` builds (`linux-aarch64`, ...), or with `all` for every platform with a backend. Also written `--target <platform>`. Any other command given it is a usage error (exit code 2). See [`oskac build`](#oskac-build). |
+| `--version=<X.Y.Z>` | `release` | The release's version: `X.Y.Z`, or `X.Y.Z-<pre>` such as `1.2.0-rc.1`. Also written `--version <X.Y.Z>`. See [`oskac release`](#oskac-release). |
+| `--key=<file>` | `release` | The SSH private key that signs the release's `SHA256SUMS`. Also written `--key <file>`. Any other command given it is a usage error (exit code 2). |
 | `--dry-run` | `fix` | Print the diff the fixes would make, and write nothing. The other commands accept the flag and ignore it. |
 | `--placeholders` | `fix` | Also apply fixes whose applicability is `placeholders`, such as `E0253`'s `todo()` arms. The other commands accept the flag and ignore it. |
 | `--max-steps=<n>` | `run` | Stop the program with `P0038` (exit code 101) after `<n>` steps: calls of functions, methods and closures written in Oska, and loop back-edges ([ADR 0021](../adr/0021-a-step-limit-stops-at-the-same-step-on-every-backend.md)). Natively and on the interpreter alike, at the same step. The value is a whole number above 0; anything else, a repeated flag, or the flag on any other command is a usage error (exit code 2). See [run limits](../runtime.md#run-limits). |
 | `--timeout=<ms>` | `run` | Stop the program with `P0039` (exit code 101) after `<ms>` milliseconds of wall-clock time, also while it waits for input, within a tolerance of 100 ms. Natively, `oskac` stops its own child process, only that one, and prints the report itself, with exit code 101, never `128 + n`. The value is a whole number above 0; anything else, a repeated flag, or the flag on any other command is a usage error (exit code 2). See [run limits](../runtime.md#run-limits). |
 | `--max-output=<bytes>` | `run` | Stop the program with `P0041` (exit code 101) before it writes more than `<bytes>` bytes to standard output and standard error together. The value is a whole number above 0; anything else, a repeated flag, or the flag on any other command is a usage error (exit code 2). See [run limits](../runtime.md#run-limits). |
 | `--max-memory=<bytes>` | `run` | Stop the program with `P0040` (exit code 101) before its values (texts, lists, structs, enum values, closures) take more than `<bytes>` bytes, net of those it let go of. The backends may stop at different points. The value is a whole number above 0; anything else, a repeated flag, or the flag on any other command is a usage error (exit code 2). See [run limits](../runtime.md#run-limits). |
-| `--no-cache` | `check`, `run`, `test`, `build` | Neither read nor write the [build cache](#oskac-cache). Any other command refuses it as a usage error (exit code 2). |
+| `--no-cache` | `check`, `run`, `test`, `build`, `release` | Neither read nor write the [build cache](#oskac-cache). Any other command refuses it as a usage error (exit code 2). |
 
 ## `oskac lex`
 
@@ -261,6 +270,25 @@ A bare `-` as the path makes `check` and `run` read one module from standard inp
 | `2` | The program uses something the native backend cannot compile yet (`E0371`, `E0390`), or `--target` names a platform it cannot build for (`E0393`, `E0394`). |
 
 See the [runtime notes](../runtime.md#native-builds) for the codes.
+
+## `oskac release`
+
+`oskac release [path] --version <X.Y.Z> --key <ssh-key> [-o dir] [--format=json]` builds a file or package for every platform into one directory and signs the result, in the format `oskac`'s own releases use. The directory, `<name>-v<X.Y.Z>` in the current directory unless `-o` names it, must not exist yet. It holds:
+
+- one executable per platform, named as `oskac build --target all` names them: `<name>-linux-aarch64`, `<name>-linux-x86_64`, `<name>-macos-aarch64`, `<name>-macos-x86_64` and `<name>-windows-x86_64.exe`;
+- `SHA256SUMS`, whose first line names the release, `# <name>-release v<X.Y.Z>`, followed by one `sha256sum` line, `<sha256>  <file>`, per executable, sorted by file name;
+- `SHA256SUMS.sig`, the signature `ssh-keygen -Y sign` writes with your key, in the namespace `<name>-release`.
+
+The first line puts the name and the version under the signature, so a signed release cannot be passed off as another one. `oskac` builds and hashes the release itself and runs your `ssh-keygen` to sign it, so a key with a passphrase asks for it as `ssh-keygen` does. The name (the file's stem or the package directory's name) must be ASCII letters, digits, `.`, `-` and `_`, starting with a letter or digit. The version, the key and the name are checked before anything is built, and every platform is built before anything is written; the signature is checked with `ssh-keygen -Y check-novalidate` once written; if writing, signing or that check fails, the directory is removed, so a failed release never leaves an unsigned one behind. How your users check a release, and how to add Authenticode or Apple notarization, is in [Releasing an application](releasing.md).
+
+- Success prints nothing, or with `--format=json` one object: `{"directory":"<dir>","name":"<name>","version":"<X.Y.Z>","files":[{"path":"<dir>/<file>","sha256":"<hex>"},...],"checksums":"<dir>/SHA256SUMS","signature":"<dir>/SHA256SUMS.sig","namespace":"<name>-release","diagnostics":[]}`.
+- A refusal prints its diagnostics as `check` does, or `{"directory":null,"diagnostics":[...]}` with `--format=json`.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | The release was written and signed. |
+| `1` | The checker refused the program, the directory could not be written or already exists (`E0391`), the key is missing, is not an SSH signing key, or could not sign (`E0396`), or the program's name cannot name a release (`E0397`). |
+| `2` | The version is missing or is not `X.Y.Z` (`E0395`), or the program uses something the native backend cannot compile yet (`E0371`, `E0390`). |
 
 ## `oskac fix`
 

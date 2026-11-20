@@ -47,6 +47,12 @@ USAGE:
                                            backend, else linux-aarch64), or for
                                            every platform with a backend into
                                            the -o directory
+    oskac release [path] --version <X.Y.Z> --key <ssh-key>
+                  [-o dir] [--format=json] [--no-cache]
+                                           Build a source file or package for
+                                           every platform into one directory
+                                           (by default <name>-v<X.Y.Z>), with
+                                           a SHA256SUMS signed by the SSH key
     oskac fix [path] [--dry-run] [--placeholders] [--format=json]
                                            Apply the machine fixes to a source
                                            file or package, checking again
@@ -124,6 +130,12 @@ USAGE:
                                            backend, else linux-aarch64), or for
                                            every platform with a backend into
                                            the -o directory
+    oskac release [path] --version <X.Y.Z> --key <ssh-key>
+                  [-o dir] [--format=json] [--no-cache]
+                                           Build a source file or package for
+                                           every platform into one directory
+                                           (by default <name>-v<X.Y.Z>), with
+                                           a SHA256SUMS signed by the SSH key
     oskac fix [path] [--dry-run] [--placeholders] [--format=json]
                                            Apply the machine fixes to a source
                                            file or package, checking again
@@ -201,6 +213,12 @@ USAGE:
                                            backend, else linux-aarch64), or for
                                            every platform with a backend into
                                            the -o directory
+    oskac release [path] --version <X.Y.Z> --key <ssh-key>
+                  [-o dir] [--format=json] [--no-cache]
+                                           Build a source file or package for
+                                           every platform into one directory
+                                           (by default <name>-v<X.Y.Z>), with
+                                           a SHA256SUMS signed by the SSH key
     oskac fix [path] [--dry-run] [--placeholders] [--format=json]
                                            Apply the machine fixes to a source
                                            file or package, checking again
@@ -278,6 +296,12 @@ USAGE:
                                            backend, else linux-aarch64), or for
                                            every platform with a backend into
                                            the -o directory
+    oskac release [path] --version <X.Y.Z> --key <ssh-key>
+                  [-o dir] [--format=json] [--no-cache]
+                                           Build a source file or package for
+                                           every platform into one directory
+                                           (by default <name>-v<X.Y.Z>), with
+                                           a SHA256SUMS signed by the SSH key
     oskac fix [path] [--dry-run] [--placeholders] [--format=json]
                                            Apply the machine fixes to a source
                                            file or package, checking again

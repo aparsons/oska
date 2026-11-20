@@ -60,15 +60,25 @@ pub mod codes {
     pub const UNKNOWN_PLATFORM: &str = "E0393";
     /// `--target` names a supported platform with no native backend yet.
     pub const NO_BACKEND: &str = "E0394";
+    /// `oskac release` has no `--version`, or one that is not `X.Y.Z`.
+    pub const BAD_VERSION: &str = "E0395";
+    /// `oskac release` has no `--key`, or one that is not an SSH signing
+    /// key, or `ssh-keygen` could not sign with it.
+    pub const NOT_A_SIGNING_KEY: &str = "E0396";
+    /// `oskac release` on a program whose name cannot name a release.
+    pub const BAD_RELEASE_NAME: &str = "E0397";
 
     /// The backend's own codes, in the order `docs/runtime.md` lists
     /// them. `E0371` is the interpreter's, shared.
-    pub const ALL: [&str; 5] = [
+    pub const ALL: [&str; 8] = [
         UNSUPPORTED,
         UNWRITABLE_OUTPUT,
         PROCESS_FAULT,
         UNKNOWN_PLATFORM,
         NO_BACKEND,
+        BAD_VERSION,
+        NOT_A_SIGNING_KEY,
+        BAD_RELEASE_NAME,
     ];
 
     /// The `P`-codes native code panics with: the interpreter's.
