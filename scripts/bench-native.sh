@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Benchmark the native backend against the interpreter, on the machine it
-# runs on, aarch64 or x86_64 Linux or macOS: maintainer-run on the
+# runs on, aarch64 or x86_64 Linux or macOS, or x86_64 Windows (Git Bash): maintainer-run on the
 # Raspberry Pi 5 (aarch64), and on demand in CI (.github/workflows/bench.yml),
 # which is where the x86_64 and macOS figures come from. Not part of scripts/check.sh. The
 # results are recorded in docs/design.md ("Native backend benchmark").
@@ -27,9 +27,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 case "$(uname -sm)" in
-"Linux aarch64" | "Linux x86_64" | "Darwin arm64" | "Darwin x86_64") ;;
+"Linux aarch64" | "Linux x86_64" | "Darwin arm64" | "Darwin x86_64") exe="" ;;
+"MINGW64_NT"*" x86_64" | "MSYS_NT"*" x86_64") exe=".exe" ;;
 *)
-  echo "bench-native.sh: native executables run only on aarch64 and x86_64 Linux and macOS" >&2
+  echo "bench-native.sh: native executables run only on aarch64 and x86_64 Linux and macOS, and x86_64 Windows" >&2
   exit 1
   ;;
 esac
@@ -39,7 +40,7 @@ fi
 
 runs="${1:-5}"
 root="$(pwd)"
-oskac="$root/target/release/oskac"
+oskac="$root/target/release/oskac$exe"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
