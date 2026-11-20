@@ -9,9 +9,9 @@
 use std::ops::ControlFlow;
 use std::path::PathBuf;
 
-use oska_check::core_ir::{self, Refusal, CORE_IR_VERSION};
+use oska_check::core_ir::{self, Refusal, BUILTINS, CORE_IR_VERSION};
 use oska_check::program::{
-    walk, DeclarationKind, Expr, ExprKind, IntType, Pattern, Program, Stmt, Visit,
+    walk, DeclarationKind, Expr, ExprKind, IntType, Pattern, Program, Stmt, Type, Visit,
 };
 use oska_syntax::Span;
 
@@ -151,13 +151,13 @@ fn structs_enums_and_match_export_to_the_golden_form() {
 
 #[test]
 fn the_export_carries_its_version_and_is_json() {
-    assert_eq!(CORE_IR_VERSION, 2);
+    assert_eq!(CORE_IR_VERSION, 7);
     let json = core_ir::export(&program("fn one() -> Int { 1 }\n"))
         .unwrap_or_else(|refusal| panic!("should export, refused: {refusal}"));
     let value = oska_syntax::parse_json(&json).unwrap_or_else(|e| panic!("{e}: {json}"));
     assert_eq!(
         value.get("core_ir_version").and_then(|v| v.as_u64()),
-        Some(2)
+        Some(7)
     );
     assert_eq!(
         value
@@ -178,10 +178,10 @@ fn the_export_carries_its_version_and_is_json() {
 #[test]
 fn a_struct_or_enum_outside_the_core_is_refused_at_its_declaration() {
     assert_refused(
-        "struct Named { name: String }\n\
+        "struct Named { name: U8 }\n\
          fn f() -> Int { 1 }\n",
-        "the type `String`",
-        "struct Named { name: String }",
+        "the type `U8`",
+        "struct Named { name: U8 }",
     );
     assert_refused(
         "fn f() -> Int { 1 }\n\
@@ -252,7 +252,7 @@ fn a_string_literal_pattern_is_refused() {
     literal.kind = ExprKind::Str("1".to_string());
     assert_eq!(
         refusal_of(src, &program),
-        ("a string".to_string(), "1".to_string())
+        ("this literal pattern".to_string(), "1".to_string())
     );
 }
 
@@ -288,24 +288,91 @@ fn a_generic_function_is_refused_at_its_name() {
 }
 
 #[test]
-fn a_capability_is_refused_naming_its_type() {
+fn a_main_the_runtime_would_not_run_as_written_is_refused() {
+    // `main` returning a `Result` prints its error, which Oska Core does
+    // not model.
     assert_refused(
         "fn main(stdout: Stdout) -> Result<(), IoError> {\n\
          \x20   stdout.println(\"hi\")\n\
          }\n",
-        "the type `Stdout`",
-        "Stdout",
+        "a `main` that returns `Result<(), IoError>`",
+        "Result<(), IoError>",
+    );
+    // Only attenuation makes a directory capability: the runtime never
+    // grants one to `main`. The checker refuses such a `main` (`E0217`);
+    // this is what one that slipped past it would look like.
+    let src = "fn main(io: Stdout) {\n\
+               \x20   let _ = io.println(\"hi\")\n\
+               }\n";
+    let mut program = program(src);
+    program
+        .functions
+        .get_mut("main")
+        .unwrap_or_else(|| panic!("no `main`"))
+        .params[0]
+        .ty = Type::Named {
+        name: "DirWrite".to_string(),
+        args: Vec::new(),
+    };
+    assert_eq!(
+        refusal_of(src, &program),
+        (
+            "a `main` that takes `DirWrite`".to_string(),
+            "Stdout".to_string()
+        )
     );
 }
 
 #[test]
-fn a_return_type_outside_the_core_is_refused_at_the_type() {
+fn a_capability_outside_the_core_is_refused_naming_its_type() {
     assert_refused(
-        "fn f() -> String {\n\
-         \x20   \"hi\"\n\
+        "fn main(stdin: Stdin) {\n\
+         \x20   let _ = stdin.read_line()\n\
          }\n",
-        "the type `String`",
-        "String",
+        "the type `Stdin`",
+        "Stdin",
+    );
+}
+
+#[test]
+fn a_capability_field_is_refused_at_its_declaration() {
+    assert_refused(
+        "cap struct Logger { out: Stdout }\n\
+         fn f() -> Int { 1 }\n",
+        "the capability field type `Stdout`",
+        "cap struct Logger { out: Stdout }",
+    );
+}
+
+#[test]
+fn equality_on_text_is_refused() {
+    assert_refused(
+        "fn same(a: String, b: String) -> Bool {\n\
+         \x20   a == b\n\
+         }\n",
+        "the operator `==` on `String`",
+        "a == b",
+    );
+}
+
+#[test]
+fn capabilities_and_their_effects_export_to_the_golden_form() {
+    assert_golden(
+        "capabilities",
+        "fn say(io: Stdout, line: Untrusted<String>) {\n\
+         \x20   let _ = io.println(line)\n\
+         }\n\
+         \n\
+         fn main(io: Stdout, fs: Fs) {\n\
+         \x20   let root = fs.restrict_to(\".\")\n\
+         \x20   let made = root.write_only().create_dir(Path.from(\"box\"))\n\
+         \x20   let boxed = root.restrict_to(Path.new(\"box\"))\n\
+         \x20   let wrote = boxed.write_only().write(Path.from(\"a.txt\"), \"hi\")\n\
+         \x20   let text = boxed.read_only().read_to_string(Path.from(\"a.txt\")).unwrap_or(\"none\")\n\
+         \x20   if made.is_ok() && wrote.is_ok() {\n\
+         \x20       say(io, text)\n\
+         \x20   }\n\
+         }\n",
     );
 }
 
@@ -322,25 +389,32 @@ fn a_built_in_call_is_refused_at_the_call() {
 }
 
 #[test]
-fn an_impl_block_is_refused_with_its_type() {
+fn a_trait_impl_is_refused_with_its_type() {
     let src = "struct Counter { n: Int }\n\
-               impl Counter {\n\
-               \x20   fn get(self) -> Int { 0 }\n\
+               impl Named for Counter {\n\
+               \x20   fn name(self) -> Int { 0 }\n\
+               }\n\
+               trait Named {\n\
+               \x20   fn name(self) -> Int\n\
                }\n";
-    // The struct is in Oska Core; its impl is not.
+    // The struct is in Oska Core; an `impl` of a trait for it is not,
+    // where an inherent `impl` is.
     assert_refused(
         src,
         "the `impl` of `Counter`",
-        "impl Counter {\n    fn get(self) -> Int { 0 }\n}",
+        "impl Named for Counter {\n    fn name(self) -> Int { 0 }\n}",
     );
-    // Without the impl's declaration, its method is the first refusal.
+    // Without the declarations, its method is the first refusal.
     let mut program = program(src);
     program
         .declarations
-        .retain(|d| d.kind != DeclarationKind::Impl);
+        .retain(|d| !matches!(d.kind, DeclarationKind::Impl | DeclarationKind::Trait));
     assert_eq!(
         refusal_of(src, &program),
-        ("the method `Counter.get`".to_string(), "get".to_string())
+        (
+            "the method `<Counter as Named>.name`".to_string(),
+            "name".to_string()
+        )
     );
 }
 
@@ -358,14 +432,14 @@ fn a_contract_is_refused_at_its_clause() {
 }
 
 #[test]
-fn a_string_is_refused() {
+fn an_interpolated_string_is_refused() {
     assert_refused(
-        "fn f() -> Int {\n\
-         \x20   let s = \"hi\"\n\
+        "fn f(n: Int) -> Int {\n\
+         \x20   let s = \"n is {n}\"\n\
          \x20   1\n\
          }\n",
-        "a string",
-        "\"hi\"",
+        "an interpolated string",
+        "\"n is {n}\"",
     );
 }
 
@@ -382,11 +456,11 @@ fn a_let_annotation_outside_the_core_is_refused_at_the_annotation() {
     // The annotation comes before the value in the source.
     assert_refused(
         "fn f() -> Int {\n\
-         \x20   let s: String = \"hi\"\n\
+         \x20   let s: Option<Int> = None\n\
          \x20   1\n\
          }\n",
-        "the type `String`",
-        "String",
+        "the type `Option<Int>`",
+        "Option<Int>",
     );
 }
 
@@ -448,24 +522,7 @@ fn an_unsolved_type_is_refused() {
 }
 
 #[test]
-fn var_and_loops_are_refused_at_their_statement() {
-    assert_refused(
-        "fn f() -> Int {\n\
-         \x20   var n = 0\n\
-         \x20   n = 1\n\
-         \x20   n\n\
-         }\n",
-        "a `var` binding",
-        "var n = 0",
-    );
-    assert_refused(
-        "fn f() -> Int {\n\
-         \x20   var n = 0\n\
-         \x20   n\n\
-         }\n",
-        "a `var` binding",
-        "var n = 0",
-    );
+fn loops_are_refused_at_their_statement() {
     assert_refused(
         "fn f(go: Bool) -> Int {\n\
          \x20   while go {\n\
@@ -518,7 +575,7 @@ fn break_and_continue_carry_their_keyword_span() {
 }
 
 #[test]
-fn return_and_closures_are_refused() {
+fn return_is_refused() {
     assert_refused(
         "fn f() -> Int {\n\
          \x20   return 1\n\
@@ -526,13 +583,366 @@ fn return_and_closures_are_refused() {
         "`return`",
         "return 1",
     );
+}
+
+#[test]
+fn closures_and_calls_of_function_values_export_to_the_golden_form() {
+    assert_golden(
+        "closures",
+        "fn twice(f: fn(Int) -> Int, x: Int) -> Int {\n\
+         \x20   f(f(x))\n\
+         }\n\
+         fn adder(n: Int) -> fn(Int) -> Int {\n\
+         \x20   |x: Int| x + n\n\
+         }\n\
+         fn run(_: Bool) -> Int {\n\
+         \x20   let step = 3\n\
+         \x20   let add = |x: Int| x + step\n\
+         \x20   let nested = |a: Int, _: Bool| {\n\
+         \x20       let inner = |b: Int| a + b + step\n\
+         \x20       inner(a)\n\
+         \x20   }\n\
+         \x20   let add_ten = adder(10)\n\
+         \x20   twice(add, 1) + add_ten(2) + nested(4, true) + twice(|x| x * 2, 5)\n\
+         }\n",
+    );
+}
+
+#[test]
+fn scopes_spawn_and_join_export_to_the_golden_form() {
+    assert_golden(
+        "scopes",
+        "fn main(io: Stdout) {\n\
+         \x20   let base = 10\n\
+         \x20   let total = scope |s| {\n\
+         \x20       let a = s.spawn(|| base + 1)\n\
+         \x20       let b: Task<Int> = s.spawn(|| {\n\
+         \x20           let _ = io.println(\"b\")\n\
+         \x20           base + 2\n\
+         \x20       })\n\
+         \x20       let alias = s\n\
+         \x20       let _ = alias.spawn(|| io.println(\"c\"))\n\
+         \x20       b.join() + a.join()\n\
+         \x20   }\n\
+         \x20   let _ = total\n\
+         }\n",
+    );
+}
+
+/// What the export refuses of `scope`, `spawn` and `join`: a handle
+/// anywhere but a `let` in its scope's block, a closure that captures
+/// one, a `scope` whose value is a task, and a `scope` in another's
+/// block. The checker accepts each.
+#[test]
+fn a_handle_outside_a_let_of_its_scope_is_refused() {
+    let cases = [
+        (
+            "fn f() -> Int {\n    let t = scope |s| {\n        s.spawn(|| 1)\n    }\n    t.join()\n}\n",
+            "a `scope` whose value, of type `Task<Int>`, outlives it",
+            "scope |s| {\n        s.spawn(|| 1)\n    }",
+        ),
+        (
+            "fn f() {\n    scope |s| {\n        var h = s\n    }\n}\n",
+            "the type `Scope` outside a `let`",
+            "s",
+        ),
+        (
+            "fn f() {\n    scope |s| {\n        let t = s.spawn(|| 1)\n        var u = t\n    }\n}\n",
+            "the type `Task<Int>` outside a `let`",
+            "t",
+        ),
+        (
+            "fn f() {\n    scope |s| {\n        let g = || {\n            let _ = s.spawn(|| 1)\n        }\n    }\n}\n",
+            "a closure that captures a scope's or a task's handle",
+            "|| {\n            let _ = s.spawn(|| 1)\n        }",
+        ),
+        (
+            "fn f(s: Scope) -> Int {\n    s.spawn(|| 1).join()\n}\n",
+            "the type `Scope` outside a `let`",
+            "Scope",
+        ),
+        (
+            "fn f(t: Task<Int>) -> Int {\n    t.join()\n}\n",
+            "the type `Task<Int>` outside a `let`",
+            "Task<Int>",
+        ),
+        (
+            "fn f() -> Int {\n    scope |s| {\n        scope |u| {\n            1\n        }\n    }\n}\n",
+            "a `scope` in the block of another `scope`",
+            "scope |u| {\n            1\n        }",
+        ),
+    ];
+    for (src, construct, text) in cases {
+        assert!(checks(src), "the checker should accept {src:?}");
+        assert_refused(src, construct, text);
+    }
+}
+
+/// The programs `formal/lean/OskaFormal/Core/Examples.lean` shows the Lean
+/// typing of Oska Core rejects for scopes, where the checker rejects them
+/// too (`E0292`): a scope whose value is its handle, and so a `spawn` on
+/// a handle outside its scope. Each is beside a variant the checker
+/// accepts and the export exports. The export refuses the others
+/// (`a_handle_outside_a_let_of_its_scope_is_refused`).
+#[test]
+fn the_scopes_the_lean_typing_rejects_the_checker_rejects() {
+    let pairs = [
+        (
+            "fn f() {\n    let h = scope |s| {\n        s\n    }\n}\n",
+            "fn f() {\n    let h = scope |s| {\n        1\n    }\n}\n",
+        ),
+        (
+            "fn f() -> Int {\n    let h = scope |s| {\n        s\n    }\n    h.spawn(|| 1).join()\n}\n",
+            "fn f() -> Int {\n    scope |s| {\n        s.spawn(|| 1).join()\n    }\n}\n",
+        ),
+    ];
+    for (rejected, accepted) in pairs {
+        assert!(
+            codes(rejected).contains(&"E0292"),
+            "the checker should reject {rejected:?} with E0292: {:?}",
+            codes(rejected)
+        );
+        assert!(checks(accepted), "the checker should accept {accepted:?}");
+        core_ir::export(&program(accepted))
+            .unwrap_or_else(|refusal| panic!("{accepted:?} should export, refused: {refusal}"));
+    }
+}
+
+/// The program of the `results` golden: `Result`, `Ok`, `Err` and their
+/// patterns, `?` with and without a `From` conversion, in a function and
+/// in a closure, and `is_ok` and `unwrap_or` on a `Result` of the module's
+/// own types.
+const RESULTS: &str = "struct AppError { code: Int }\n\
+     \n\
+     impl From<Int> for AppError {\n\
+     \x20   fn from(code: Int) -> AppError { AppError(code: code) }\n\
+     }\n\
+     \n\
+     fn half(n: Int) -> Result<Int, Int> {\n\
+     \x20   if n % 2 == 0 { Ok(n / 2) } else { Err(n) }\n\
+     }\n\
+     \n\
+     fn quarter(n: Int) -> Result<Int, AppError> {\n\
+     \x20   let h = half(n)?\n\
+     \x20   Ok(half(h)?)\n\
+     }\n\
+     \n\
+     fn code(r: Result<Int, AppError>) -> Int {\n\
+     \x20   match r {\n\
+     \x20       Ok(n) => n\n\
+     \x20       Err(AppError(code: c)) => 0 - c\n\
+     \x20   }\n\
+     }\n\
+     \n\
+     fn run() -> Int {\n\
+     \x20   let eighth = |n: Int| {\n\
+     \x20       let q = half(half(n)?)?\n\
+     \x20       half(q)\n\
+     \x20   }\n\
+     \x20   let nested: Result<Result<Int, Int>, Bool> = Ok(eighth(8))\n\
+     \x20   let inner = match nested {\n\
+     \x20       Ok(Ok(n)) => n\n\
+     \x20       Ok(Err(_)) => -1\n\
+     \x20       Err(_) => -2\n\
+     \x20   }\n\
+     \x20   let fine = if quarter(12).is_ok() { 1 } else { 0 }\n\
+     \x20   code(quarter(12)) + code(quarter(6)) + inner + eighth(4).unwrap_or(fine)\n\
+     }\n";
+
+#[test]
+fn results_and_the_question_mark_export_to_the_golden_form() {
+    assert_golden("results", RESULTS);
+}
+
+#[test]
+fn a_question_mark_on_an_option_is_refused() {
+    // From source, the `Option` result type such a `?` needs is refused
+    // first.
     assert_refused(
-        "fn f() -> Int {\n\
-         \x20   let g = |x: Int| x\n\
+        "fn first(o: Option<Int>) -> Option<Int> {\n\
+         \x20   let n = o?\n\
+         \x20   Some(n)\n\
+         }\n",
+        "the type `Option<Int>`",
+        "Option<Int>",
+    );
+    // The export's own guard, reached by a `?` whose operand is an
+    // `Option` in a function that returns a `Result`, which the checker
+    // never builds.
+    let src = "fn g() -> Result<Int, Int> { Ok(1) }\n\
+               fn f() -> Result<Int, Int> {\n\
+               \x20   Ok(g()?)\n\
+               }\n";
+    let mut program = program(src);
+    let body = &mut program
+        .functions
+        .get_mut("f")
+        .unwrap_or_else(|| panic!("no `f`"))
+        .body;
+    let ExprKind::Block {
+        value: Some(value), ..
+    } = &mut body.kind
+    else {
+        panic!("{body:?}")
+    };
+    let ExprKind::Construct { fields, .. } = &mut value.kind else {
+        panic!("{value:?}")
+    };
+    let ExprKind::Try { operand, .. } = &mut fields[0].kind else {
+        panic!("{:?}", fields[0])
+    };
+    operand.ty = Type::Named {
+        name: "Option".to_string(),
+        args: vec![Type::Int(IntType::Int)],
+    };
+    assert_eq!(
+        refusal_of(src, &program),
+        ("`?` on `Option<Int>`".to_string(), "g()?".to_string())
+    );
+}
+
+#[test]
+fn a_result_that_holds_a_capability_or_function_is_refused() {
+    assert_refused(
+        "fn f(io: Stdout) -> Int {\n\
+         \x20   let r: Result<Stdout, Int> = Ok(io)\n\
          \x20   1\n\
          }\n",
-        "a closure",
-        "|x: Int| x",
+        "the type `Result<Stdout, Int>`, a `Result` that holds a capability or a function",
+        "Result<Stdout, Int>",
+    );
+    assert_refused(
+        "fn f() -> Int {\n\
+         \x20   let r: Result<Int, Result<Int, fn() -> Int>> = Ok(1)\n\
+         \x20   1\n\
+         }\n",
+        "the type `Result<Int, fn() -> Int>`, a `Result` that holds a capability or a function",
+        "Result<Int, Result<Int, fn() -> Int>>",
+    );
+}
+
+#[test]
+fn a_field_of_an_io_error_is_refused() {
+    assert_refused(
+        "fn f(io: Stdout) -> Int {\n\
+         \x20   match io.println(\"hi\") {\n\
+         \x20       Ok(_) => 0\n\
+         \x20       Err(e) => {\n\
+         \x20           let m = e.message\n\
+         \x20           1\n\
+         \x20       }\n\
+         \x20   }\n\
+         }\n",
+        "a field of `IoError`",
+        "e.message",
+    );
+}
+
+#[test]
+fn an_impl_of_another_trait_than_from_is_refused() {
+    let src = "struct AppError { code: Int }\n\
+               impl Display for AppError {\n\
+               \x20   fn to_string(self) -> String { \"app\" }\n\
+               }\n";
+    assert_refused(
+        src,
+        "the `impl` of `AppError`",
+        "impl Display for AppError {\n    fn to_string(self) -> String { \"app\" }\n}",
+    );
+}
+
+#[test]
+fn a_function_used_as_a_value_is_refused() {
+    assert_refused(
+        "fn double(x: Int) -> Int { x * 2 }\n\
+         fn f() -> Int {\n\
+         \x20   let g = double\n\
+         \x20   g(1)\n\
+         }\n",
+        "a function used as a value",
+        "double",
+    );
+}
+
+#[test]
+fn a_function_field_is_refused_at_its_declaration() {
+    assert_refused(
+        "struct Holder { f: fn() -> Int }\n\
+         fn f() -> Int { 1 }\n",
+        "the function field type `fn() -> Int`",
+        "struct Holder { f: fn() -> Int }",
+    );
+}
+
+/// `checks` is whether `src` checks with no error.
+fn checks(src: &str) -> bool {
+    oska_check::check_module(src).program.is_some()
+}
+
+/// The programs `formal/lean/OskaFormal/Core/Examples.lean` shows the Lean
+/// typing of Oska Core rejects, one per example, are ones the checker
+/// rejects: a closure called with the wrong arity or argument type, a
+/// call of a value that is not a function, and a closure that escapes at
+/// a type it does not have. Each is beside a variant the checker accepts,
+/// so the rejection is for the reason named.
+#[test]
+fn the_closures_the_lean_typing_rejects_the_checker_rejects() {
+    let pairs = [
+        (
+            "fn f() -> Int {\n    let g = |x: Int| x + 1\n    g(1, 2)\n}\n",
+            "fn f() -> Int {\n    let g = |x: Int| x + 1\n    g(1)\n}\n",
+        ),
+        (
+            "fn f() -> Int {\n    let g = |x: Int| x + 1\n    g(true)\n}\n",
+            "fn f() -> Int {\n    let g = |x: Int| x + 1\n    g(2)\n}\n",
+        ),
+        (
+            "fn f() -> Int {\n    let n = 1\n    n(2)\n}\n",
+            "fn f() -> Int {\n    let n = |x: Int| x\n    n(2)\n}\n",
+        ),
+        (
+            "fn make() -> fn(Int) -> Bool {\n    |x: Int| x + 1\n}\n",
+            "fn make() -> fn(Int) -> Int {\n    |x: Int| x + 1\n}\n",
+        ),
+    ];
+    for (rejected, accepted) in pairs {
+        assert!(!checks(rejected), "the checker should reject {rejected:?}");
+        assert!(checks(accepted), "the checker should accept {accepted:?}");
+        core_ir::export(&program(accepted))
+            .unwrap_or_else(|refusal| panic!("{accepted:?} should export, refused: {refusal}"));
+    }
+}
+
+/// The programs `formal/lean/OskaFormal/Core/Examples.lean` shows the Lean
+/// typing of Oska Core rejects for `?`: one in a function whose result
+/// type is not a `Result` (`E0243`), and one whose error type is not the
+/// function's, with no `From` conversion between them (`E0242`). With the
+/// conversion the checker accepts the second, and the export names the
+/// `from` it chose, as the Lean example does.
+#[test]
+fn the_question_marks_the_lean_typing_rejects_the_checker_rejects() {
+    let g = "fn g() -> Result<Int, Int> { Err(1) }\n";
+    let not_result = format!("{g}fn f() -> Int {{\n    g()?\n}}\n");
+    let result = format!("{g}fn f() -> Result<Int, Int> {{\n    Ok(g()?)\n}}\n");
+    let app = "struct AppError { code: Int }\n";
+    let from = "impl From<Int> for AppError {\n\
+                \x20   fn from(value: Int) -> AppError { AppError(code: value) }\n\
+                }\n";
+    let f = "fn f() -> Result<Int, AppError> {\n    let x = g()?\n    Ok(x)\n}\n";
+    let unconverted = format!("{g}{app}{f}");
+    let converted = format!("{g}{app}{from}{f}");
+    for (rejected, accepted) in [(&not_result, &result), (&unconverted, &converted)] {
+        assert!(!checks(rejected), "the checker should reject {rejected:?}");
+        assert!(checks(accepted), "the checker should accept {accepted:?}");
+        core_ir::export(&program(accepted))
+            .unwrap_or_else(|refusal| panic!("{accepted:?} should export, refused: {refusal}"));
+    }
+    let json = core_ir::export(&program(&converted))
+        .unwrap_or_else(|refusal| panic!("should export, refused: {refusal}"));
+    assert!(
+        json.contains("\"convert\": \"<AppError as From<Int>>.from\"")
+            && json.contains("\"name\": \"<AppError as From<Int>>.from\""),
+        "the export should name and define the conversion:\n{json}"
     );
 }
 
@@ -558,15 +968,201 @@ fn imports_and_tests_are_refused() {
 fn the_first_construct_in_source_order_is_named() {
     // `b` sorts after `a` by name but comes first in the source.
     assert_refused(
-        "fn b() -> Int {\n\
-         \x20   let s = \"first\"\n\
+        "fn b(n: Int) -> Int {\n\
+         \x20   let s = \"first {n}\"\n\
          \x20   1\n\
          }\n\
-         fn a() -> Int {\n\
-         \x20   let s = \"second\"\n\
+         fn a(n: Int) -> Int {\n\
+         \x20   let s = \"second {n}\"\n\
          \x20   2\n\
          }\n",
-        "a string",
-        "\"first\"",
+        "an interpolated string",
+        "\"first {n}\"",
+    );
+}
+
+/// The names the Lean reader's `builtin` table in
+/// `formal/lean/OskaFormal/Core/CoreIR.lean` reads: each `| "NAME" =>`
+/// arm between `def builtin` and its catch-all.
+fn lean_builtins() -> Vec<String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../formal/lean/OskaFormal/Core/CoreIR.lean");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let start = text
+        .find("\ndef builtin :")
+        .unwrap_or_else(|| panic!("{} has no `def builtin`", path.display()));
+    let mut names = Vec::new();
+    for line in text[start + 1..].lines().skip(1) {
+        let line = line.trim();
+        if line.starts_with("| _ =>") {
+            return names;
+        }
+        let name = line
+            .strip_prefix("| \"")
+            .and_then(|rest| rest.split_once('"'))
+            .map(|(name, _)| name.to_string())
+            .unwrap_or_else(|| panic!("unexpected line in the Lean `builtin` table: {line:?}"));
+        names.push(name);
+    }
+    panic!(
+        "the Lean `builtin` table in {} has no catch-all",
+        path.display()
+    )
+}
+
+#[test]
+fn every_built_in_the_export_writes_is_one_the_lean_reader_reads() {
+    let lean = lean_builtins();
+    let missing: Vec<&str> = BUILTINS
+        .iter()
+        .copied()
+        .filter(|name| !lean.iter().any(|l| l == name))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the Lean reader does not read these built-ins of `BUILTINS`: {missing:?}"
+    );
+    let extra: Vec<&String> = lean
+        .iter()
+        .filter(|name| !BUILTINS.contains(&name.as_str()))
+        .collect();
+    assert!(
+        extra.is_empty(),
+        "the Lean reader reads these built-ins that `BUILTINS` lacks: {extra:?}"
+    );
+}
+
+/// The program of the `methods` golden: an inherent `impl` with an
+/// associated function, a method and mutating methods, one calling
+/// another on `self`; `var`s, assignment to a var and to a field within
+/// one, a mutating call on a var and on a field of one, a `let` copy of a
+/// var, a closure reading that copy, a mutating method called on a
+/// temporary, `var _`, and a `match` binding after the vars.
+const METHODS: &str = "struct Counter { n: Int }\n\
+     \n\
+     struct Pair { left: Counter, right: Counter }\n\
+     \n\
+     impl Counter {\n\
+     \x20   fn new(n: Int) -> Counter { Counter(n: n) }\n\
+     \x20   fn get(self) -> Int { self.n }\n\
+     \x20   fn bump(var self, by: Int) {\n\
+     \x20       self.n = self.n + by\n\
+     \x20   }\n\
+     \x20   fn bump_twice(var self) -> Int {\n\
+     \x20       var step = 1\n\
+     \x20       self.bump(step)\n\
+     \x20       step = step + 1\n\
+     \x20       self.bump(step)\n\
+     \x20       self.n\n\
+     \x20   }\n\
+     }\n\
+     \n\
+     fn run(_: Bool) -> Int {\n\
+     \x20   var a = Counter.new(0)\n\
+     \x20   let b = a\n\
+     \x20   a.bump(2)\n\
+     \x20   var p = Pair(left: a, right: b)\n\
+     \x20   let twice = p.left.bump_twice()\n\
+     \x20   p.right.n = 7\n\
+     \x20   let add = |x: Int| x + b.n\n\
+     \x20   Counter(n: 5).bump(1)\n\
+     \x20   var _ = 3\n\
+     \x20   let c = match a.n {\n\
+     \x20       0 => 0\n\
+     \x20       k => k + b.n\n\
+     \x20   }\n\
+     \x20   a.get() + b.get() + p.left.n + p.right.n + add(1) + twice + c\n\
+     }\n";
+
+#[test]
+fn methods_vars_and_assignment_export_to_the_golden_form() {
+    assert_golden("methods", METHODS);
+}
+
+#[test]
+fn an_inherent_impl_of_a_type_outside_the_core_is_refused_with_its_type() {
+    // The `impl` comes first in the source, so it is the first refusal,
+    // before the generic struct's own.
+    let src = "impl<T> Wrap<T> {\n\
+               \x20   fn get(self) -> T { self.v }\n\
+               }\n\
+               struct Wrap<T> { v: T }\n";
+    assert_refused(
+        src,
+        "the `impl` of `Wrap<T>`",
+        "impl<T> Wrap<T> {\n    fn get(self) -> T { self.v }\n}",
+    );
+}
+
+#[test]
+fn a_closure_that_reads_a_var_or_self_is_refused() {
+    assert_refused(
+        "fn f() -> Int {\n\
+         \x20   var n = 0\n\
+         \x20   let g = |x: Int| x + n\n\
+         \x20   n = 1\n\
+         \x20   g(n)\n\
+         }\n",
+        "a closure that captures a `var`",
+        "|x: Int| x + n",
+    );
+    assert_refused(
+        "struct Counter { n: Int }\n\
+         impl Counter {\n\
+         \x20   fn adder(self) -> fn(Int) -> Int {\n\
+         \x20       |x: Int| x + self.n\n\
+         \x20   }\n\
+         }\n",
+        "a closure that reads `self`",
+        "|x: Int| x + self.n",
+    );
+}
+
+/// The diagnostic codes the checker reports for `src`.
+fn codes(src: &str) -> Vec<&'static str> {
+    oska_check::check_module(src)
+        .diagnostics
+        .iter()
+        .map(|d| d.code)
+        .collect()
+}
+
+/// The programs `formal/lean/OskaFormal/Core/Examples.lean` shows the Lean
+/// typing of Oska Core rejects for vars: a mutating call on a `let`
+/// (`E0230`) and an assignment to a field of one (`E0229`), where only a
+/// var is a place. Each is beside the same on a `var`, which the checker
+/// accepts and the Lean typing types.
+#[test]
+fn the_places_the_lean_typing_rejects_the_checker_rejects() {
+    let counter = "struct Counter { n: Int }\n\
+                   impl Counter {\n\
+                   \x20   fn bump(var self) { self.n = self.n + 1 }\n\
+                   }\n";
+    let main = |binding: &str, stmt: &str| {
+        format!("{counter}fn main() {{\n    {binding} a = Counter(n: 0)\n    {stmt}\n}}\n")
+    };
+    for (stmt, code) in [("a.bump()", "E0230"), ("a.n = 1", "E0229")] {
+        let rejected = main("let", stmt);
+        let accepted = main("var", stmt);
+        assert_eq!(
+            codes(&rejected),
+            [code],
+            "the checker should reject {rejected:?}"
+        );
+        assert!(checks(&accepted), "the checker should accept {accepted:?}");
+        core_ir::export(&program(&accepted))
+            .unwrap_or_else(|refusal| panic!("{accepted:?} should export, refused: {refusal}"));
+    }
+    // The `Call` form passes the receiver as a copy, so it needs no
+    // `var`: the checker accepts it on a `let`, and the Lean typing
+    // types it (`Typed.call` against `Function.argTypes`).
+    let copy = main("let", "Counter.bump(a)");
+    assert!(checks(&copy), "the checker should accept {copy:?}");
+    let json = core_ir::export(&program(&copy))
+        .unwrap_or_else(|refusal| panic!("{copy:?} should export, refused: {refusal}"));
+    assert!(
+        json.contains("\"kind\": \"Call\"") && !json.contains("MutatingCall"),
+        "the export should be a plain call:\n{json}"
     );
 }

@@ -157,7 +157,7 @@ fn check_type(ty: &Type, generics: &[String], what: &str, problems: &mut Vec<Str
                 check_type(arg, generics, what, problems);
             }
         }
-        Type::Fn { params, ret } => {
+        Type::Fn { params, ret, .. } => {
             for param in params {
                 check_type(param, generics, what, problems);
             }

@@ -1,27 +1,36 @@
-import OskaFormal.Core.Semantics
+import OskaFormal.Core.Host
 
 /-!
 # Oska Core: the executable semantics
 
 The Lean reference runs a program of Oska Core with `step`, a computable
 function defined from the same pieces as the `Step` relation of
-`Semantics.lean` (`Expr.subst`, `instantiate`, `evalBinary`, `intResult`),
-and `run`, which repeats it for at most a given number of steps (its
+`Semantics.lean` (`Expr.subst`, `instantiate`, `evalBinary`, `intResult`;
+a call of a closure goes into its body with `instantiate`, as a call of a
+function does), and `run`, which repeats it for at most a given number of steps (its
 fuel). There is no second copy of the semantics to drift: `step_sound`
 proves that every step `step` takes is a `Step`, and `step_complete` that
 `step` takes every `Step` there is, so `step P e = some o` exactly when
 `Step P e o`. `run_sound` lifts that to whole runs: a value `run` returns
-is one `Step`s reach, and so is a panic.
+is one `Step`s reach, and so is a panic, and a return. A read or write
+of a var no `cell` or running mutating call holds ends the run as
+`unbound`, which `preservation` rules out for a closed, typed expression.
 -/
 
 namespace OskaFormal.Core
 
 mutual
-  /-- Whether an expression is a value: `()`, an integer, a boolean, or a
-  struct or variant whose fields are values. -/
+  /-- Whether an expression is a value: `()`, an integer, a boolean, text,
+  a path, a capability, an `IoError`, an `Ok` or `Err` of a value, a
+  struct or variant whose fields are values, a closure of height 0, or a
+  scope's or a task's handle. -/
   def Expr.isValue : Expr → Bool
     | .unit | .int _ | .bool _ => true
+    | .str _ | .path _ | .cap _ _ | .ioError => true
+    | .scopeHandle | .taskHandle _ => true
+    | .result _ v => Expr.isValue v
     | .construct _ _ fs => Expr.allValues fs
+    | .closure _ 0 _ _ _ _ => true
     | _ => false
 
   /-- Whether every expression of a list is a value. -/
@@ -30,30 +39,41 @@ mutual
     | e :: es => e.isValue && Expr.allValues es
 end
 
-theorem Expr.isValue_sound : ∀ {e : Expr}, e.isValue = true → IsValue e := by
-  intro e
-  induction e using Expr.isValue.induct
-    (motive_2 := fun es => Expr.allValues es = true → AllValues es) with
-  | case1 => intro _; exact IsValue.unit
-  | case2 => intro _; exact IsValue.int _
-  | case3 => intro _; exact IsValue.bool _
-  | case4 _ _ fs ih =>
-    intro h
-    simp only [Expr.isValue] at h
-    exact IsValue.construct (ih h).forall
-  | case5 e h1 h2 h3 h4 =>
-    intro h
-    cases e <;> simp_all [Expr.isValue]
-  | case6 => exact AllValues.nil
-  | case7 e es ih₁ ih₂ h =>
-    simp only [Expr.allValues, Bool.and_eq_true] at h
-    exact AllValues.cons (ih₁ h.1) (ih₂ h.2)
+mutual
+  theorem Expr.isValue_sound : ∀ {e : Expr}, e.isValue = true → IsValue e
+    | .unit, _ => IsValue.unit
+    | .int _, _ => IsValue.int _
+    | .bool _, _ => IsValue.bool _
+    | .str _, _ => IsValue.str _
+    | .path _, _ => IsValue.path _
+    | .cap _ _, _ => IsValue.cap _ _
+    | .ioError, _ => IsValue.ioError
+    | .scopeHandle, _ => IsValue.scopeHandle
+    | .taskHandle _, _ => IsValue.taskHandle _
+    | .result _ v, h => IsValue.result _ (Expr.isValue_sound (e := v) (by simpa [Expr.isValue] using h))
+    | .construct _ _ fs, h =>
+      IsValue.construct (Expr.allValues_sound (es := fs) (by simpa [Expr.isValue] using h)).forall
+    | .closure _ 0 _ _ _ _, _ => IsValue.closure _ _ _ _ _
+    | .closure _ (_ + 1) _ _ _ _, h => by simp [Expr.isValue] at h
+    | .local_ _, h | .neg _, h | .not _, h | .binary _ _ _, h | .call _ _, h | .if_ _ _ _, h
+    | .block _ _, h | .field _ _, h | .match_ _ _, h | .builtin _ _, h | .callValue _ _, h
+    | .try_ _ _, h | .frame _, h | .var_ _, h | .mutCall _ _ _, h | .cell _ _, h
+    | .method _ _ _, h | .scope _, h | .scopeRun _ _, h => by simp [Expr.isValue] at h
+
+  theorem Expr.allValues_sound : ∀ {es : List Expr}, Expr.allValues es = true → AllValues es
+    | [], _ => AllValues.nil
+    | e :: es, h => by
+      simp only [Expr.allValues, Bool.and_eq_true] at h
+      exact AllValues.cons (Expr.isValue_sound (e := e) h.1) (Expr.allValues_sound (es := es) h.2)
+end
 
 theorem Expr.isValue_complete {e : Expr} (h : IsValue e) : e.isValue = true := by
   induction h with
   | unit => rfl
   | int _ => rfl
-  | bool _ => rfl
+  | bool _ | str _ | path _ | cap _ _ | ioError | closure _ _ _ _ _ => rfl
+  | scopeHandle | taskHandle _ => rfl
+  | result _ _ ih => simpa [Expr.isValue] using ih
   | @construct _ _ fs hfs ih =>
     simp only [Expr.isValue]
     clear hfs
@@ -93,8 +113,55 @@ def stepLogical : BinOp → Expr → Expr → Option Outcome
 body of the function it names, with the arguments put for its slots. -/
 def stepCall (P : Program) (name : String) (vs : List Expr) : Option Outcome :=
   match P.find? name with
-  | some f => (instantiate f.params vs f.body).map .next
+  | some f => (f.enter vs).map fun e => .next (.frame e)
   | none => none
+
+/-- The step a mutating call takes once its arguments `vs` are values:
+read the receiver at `pl`, then run the method's body with it. -/
+def stepMutCall (P : Program) (name : String) (pl : Place) (vs : List Expr) : Option Outcome :=
+  match P.find? name with
+  | some f =>
+    match f.receiver with
+    | some _ =>
+      (instantiate f.params vs f.body).map fun body => .read pl.var pl.fields fun r => .method pl r body
+    | none => none
+  | none => none
+
+/-- The step of `spawn` or `join` once its arguments `vs` are values: ask
+the nearest scope to queue a call of the closure, or for the result of
+the task. -/
+def stepTask : Builtin → List Expr → Option Outcome
+  | .spawn, [.scopeHandle, c] => some (.spawn c fun x => x)
+  | .join, [.taskHandle i] => some (.join i fun x => x)
+  | _, _ => none
+
+/-- The step a built-in call takes once its arguments `vs` are values: a
+spawn or a join, an effect on a capability of its receiver's kind, or a
+pure call's value. -/
+def stepBuiltin (op : Builtin) (vs : List Expr) : Option Outcome :=
+  (stepTask op vs).or <|
+  match op.receiver, vs with
+  | some k, .cap k' r :: rest =>
+    if k' = k then some (.perform ⟨op, k, r, rest⟩ fun x => x) else none
+  | some _, _ => none
+  | none, vs => (evalPure op vs).map .next
+
+/-- The step a call of a function value takes once the callee `c` and the
+arguments `vs` are values: into the closure's body, with the arguments put
+for its parameters' slots, as `Step.callValue` (and a call of a function,
+`stepCall`) puts them, with `instantiate`. -/
+def stepCallValue : Expr → List Expr → Option Outcome
+  | .closure ps 0 _ _ _ body, vs => (instantiate ps vs body).map fun e => .next (.frame e)
+  | _, _ => none
+
+/-- The step of `e?` once `e` is a value: the value inside an `Ok`; the
+return of an `Err`; or, with a conversion `f`, an `Err` of `f` applied to
+the error, which then returns. -/
+def stepTry : Expr → Option String → Option Outcome
+  | .result true v, _ => some (.next v)
+  | .result false v, none => some (.ret (.result false v))
+  | .result false v, some f => some (.next (.try_ (.result false (.call f [v])) none))
+  | _, _ => none
 
 /-- The step of a field access once its base is the value `b`: to the
 field, when `b` is a struct. -/
@@ -114,12 +181,37 @@ def stepMatch (v : Expr) : List Arm → Option Outcome
     | some bs, some g =>
       some (.next (.if_ (Expr.substAll bs g) (Expr.substAll bs body) (some (.match_ v rest))))
 
+/-- The step of a running scope with the tasks `ts` and the block `body`,
+given the block's step `ob` and the step `ots` of its oldest unfinished
+task: the block's own step, which the scope passes on, or answers when it
+spawns or joins; the block's value or return once every task has
+finished; and otherwise, while the block has its value, returns, or joins
+a task that has not finished, a step of the oldest unfinished task. -/
+def stepScope (ts : List Expr) (body : Expr) (ob : Option Outcome)
+    (ots : Option (List Expr × Outcome × List Expr)) : Option Outcome :=
+  let task : Option Outcome :=
+    ots.map fun (vs, o, rest) => o.inTask fun e' => .scopeRun (vs ++ e' :: rest) body
+  if body.isValue then
+    if Expr.allValues ts then some (.next body) else task
+  else
+    match ob with
+    | some (.spawn c k) =>
+      some (.next (.scopeRun (ts ++ [.callValue c []]) (k (.taskHandle ts.length))))
+    | some (.join i k) =>
+      if Expr.allValues (ts.take (i + 1)) then some (.next (.scopeRun ts (k (ts.getD i .unit))))
+      else task
+    | some (.ret v) => if Expr.allValues ts then some (.ret v) else task
+    | some o => some (o.map (.scopeRun ts))
+    | none => none
+
 mutual
   /-- One step of a closed expression in program `P`, as a function: the
   outcome `Step P e` relates `e` to, or `none` when `e` takes no step (a
   value, or a stuck expression). -/
   def step (P : Program) : Expr → Option Outcome
     | .unit | .int _ | .bool _ | .local_ _ => none
+    | .str _ | .path _ | .cap _ _ | .ioError => none
+    | .closure _ _ _ _ _ _ => none
     | .neg e =>
       match e with
       | .int n => some (intResult (-n))
@@ -156,6 +248,37 @@ mutual
     | .match_ sc arms =>
       if sc.isValue then stepMatch sc arms
       else (step P sc).map (·.map fun sc' => .match_ sc' arms)
+    | .builtin op args =>
+      match stepArgs P args with
+      | some (vs, o, rest) => some (o.map fun e' => .builtin op (vs ++ e' :: rest))
+      | none => if Expr.allValues args then stepBuiltin op args else none
+    | .callValue c args =>
+      if c.isValue then
+        match stepArgs P args with
+        | some (vs, o, rest) => some (o.map fun e' => .callValue c (vs ++ e' :: rest))
+        | none => if Expr.allValues args then stepCallValue c args else none
+      else (step P c).map (·.map fun c' => .callValue c' args)
+    | .result b e => (step P e).map (·.map (.result b))
+    | .try_ e c =>
+      if e.isValue then stepTry e c
+      else (step P e).map (·.map fun e' => .try_ e' c)
+    | .frame e =>
+      if e.isValue then some (.next e)
+      else (step P e).map Outcome.inFrame
+    | .var_ i => some (.read i [] fun x => x)
+    | .mutCall name pl args =>
+      match stepArgs P args with
+      | some (vs, o, rest) => some (o.map fun e' => .mutCall name pl (vs ++ e' :: rest))
+      | none => if Expr.allValues args then stepMutCall P name pl args else none
+    | .cell v e =>
+      if e.isValue then some (.next e)
+      else (step P e).map (Outcome.inCell v)
+    | .method pl v e =>
+      if e.isValue then some (.write pl.var pl.fields v e)
+      else (step P e).map (Outcome.inMethod pl v)
+    | .scope body => some (.next (.scopeRun [] (Expr.subst .scopeHandle body)))
+    | .scopeHandle | .taskHandle _ => none
+    | .scopeRun ts body => stepScope ts body (step P body) (stepArgs P ts)
 
   /-- The step of the first argument of a list that is not a value: the
   values before it, its outcome, and the arguments after it. `none` when
@@ -178,6 +301,12 @@ mutual
         if b then some (.next (.block (Expr.substStmts e ss) (Expr.substOpt e val)))
         else some (.next (.block ss val))
       else (step P e).map (·.map fun e' => .block (.let_ b t e' :: ss) val)
+    | .var_ t e :: ss, val =>
+      if e.isValue then some (.next (.cell e (.block ss val)))
+      else (step P e).map (·.map fun e' => .block (.var_ t e' :: ss) val)
+    | .assign pl e :: ss, val =>
+      if e.isValue then some (.write pl.var pl.fields e (.block ss val))
+      else (step P e).map (·.map fun e' => .block (.assign pl e' :: ss) val)
 end
 
 theorem stepLogical_sound {P : Program} {op : BinOp} {l r : Expr} {o : Outcome}
@@ -218,6 +347,119 @@ theorem stepMatch_sound {P : Program} {v : Expr} {arms : List Arm} {o : Outcome}
     · next hm => exact Step.matchArm hv hm
     · next hm => exact Step.matchGuard hv hm
 
+theorem stepTask_sound {P : Program} {op : Builtin} {vs : List Expr} {o : Outcome}
+    (hvs : AllValues vs) (h : stepTask op vs = some o) : Step P (.builtin op vs) o := by
+  unfold stepTask at h
+  split at h <;> cases h
+  · cases hvs with | cons _ hvs => cases hvs with | cons hc _ => exact Step.spawn hc
+  · exact Step.join
+
+theorem stepBuiltin_sound {P : Program} {op : Builtin} {vs : List Expr} {o : Outcome}
+    (hvs : AllValues vs) (h : stepBuiltin op vs = some o) : Step P (.builtin op vs) o := by
+  unfold stepBuiltin at h
+  cases ht : stepTask op vs with
+  | some o' =>
+    rw [ht] at h
+    cases h
+    exact stepTask_sound hvs ht
+  | none =>
+  rw [ht, Option.none_or] at h
+  split at h
+  · next k k' r rest hk =>
+    split at h
+    · next heq =>
+      subst heq
+      cases h
+      cases hvs with
+      | cons _ hrest => exact Step.builtinEffect hk hrest
+    · cases h
+  · cases h
+  · obtain ⟨v, hv, rfl⟩ := map_eq_some_inv h
+    exact Step.builtinPure hvs hv
+
+theorem stepTry_sound {P : Program} {e : Expr} {c : Option String} {o : Outcome} (he : IsValue e)
+    (h : stepTry e c = some o) : Step P (.try_ e c) o := by
+  unfold stepTry at h
+  split at h <;> cases h
+  · cases he with | result _ hv => exact Step.tryOk hv
+  · cases he with | result _ hv => exact Step.tryErr hv
+  · cases he with | result _ hv => exact Step.tryConvert hv
+
+theorem stepCallValue_sound {P : Program} {c : Expr} {vs : List Expr} {o : Outcome}
+    (hvs : AllValues vs) (h : stepCallValue c vs = some o) : Step P (.callValue c vs) o := by
+  unfold stepCallValue at h
+  split at h
+  · obtain ⟨e, hi, rfl⟩ := map_eq_some_inv h
+    exact Step.callValue hvs hi
+  · cases h
+
+theorem stepMutCall_sound {P : Program} {name : String} {pl : Place} {vs : List Expr}
+    {o : Outcome} (hvs : AllValues vs) (h : stepMutCall P name pl vs = some o) :
+    Step P (.mutCall name pl vs) o := by
+  unfold stepMutCall at h
+  split at h
+  · next f hf =>
+    split at h
+    · next u hu =>
+      obtain ⟨body, hi, rfl⟩ := map_eq_some_inv h
+      exact Step.mutCall hf hu hvs hi
+    · cases h
+  · cases h
+
+theorem stepScope_task {P : Program} {ts : List Expr} {body : Expr} {o : Outcome}
+    {ots : Option (List Expr × Outcome × List Expr)}
+    (hts : ∀ vs o rest, ots = some (vs, o, rest) → ∃ e, ts = vs ++ e :: rest ∧ AllValues vs ∧ Step P e o)
+    (h : (ots.map fun (vs, o, rest) => o.inTask fun e' => Expr.scopeRun (vs ++ e' :: rest) body) = some o) :
+    ∃ vs e rest o', ts = vs ++ e :: rest ∧ AllValues vs ∧ Step P e o' ∧
+      o = o'.inTask fun e' => .scopeRun (vs ++ e' :: rest) body := by
+  obtain ⟨⟨vs, o', rest⟩, hs, rfl⟩ := map_eq_some_inv h
+  obtain ⟨e, rfl, hvs, he⟩ := hts _ _ _ hs
+  exact ⟨vs, e, rest, o', rfl, hvs, he, rfl⟩
+
+theorem stepScope_sound {P : Program} {ts : List Expr} {body : Expr} {o : Outcome}
+    {ob : Option Outcome} {ots : Option (List Expr × Outcome × List Expr)}
+    (hb : ∀ o, ob = some o → Step P body o)
+    (hts : ∀ vs o rest, ots = some (vs, o, rest) → ∃ e, ts = vs ++ e :: rest ∧ AllValues vs ∧ Step P e o)
+    (h : stepScope ts body ob ots = some o) : Step P (.scopeRun ts body) o := by
+  unfold stepScope at h
+  by_cases hv : body.isValue = true
+  · simp only [hv, ite_true] at h
+    by_cases hall : Expr.allValues ts = true
+    · simp only [hall, ite_true, Option.some.injEq] at h
+      subst h
+      exact Step.scopeValue (Expr.isValue_iff.mp hv) (Expr.allValues_iff.mp hall)
+    · simp only [hall, Bool.false_eq_true, ite_false] at h
+      obtain ⟨vs, e, rest, o', rfl, hvs, he, rfl⟩ := stepScope_task hts h
+      exact Step.scopeTaskValue (Expr.isValue_iff.mp hv) hvs he
+  · simp only [hv, Bool.false_eq_true, ite_false] at h
+    cases hob : ob with
+    | none => rw [hob] at h; cases h
+    | some ob' =>
+      rw [hob] at h
+      have hs := hb _ hob
+      cases ob' with
+      | spawn c k => cases h; exact Step.scopeSpawn hs
+      | join i k =>
+        simp only at h
+        by_cases hj : Expr.allValues (ts.take (i + 1)) = true
+        · simp only [hj, ite_true, Option.some.injEq] at h
+          subst h
+          exact Step.scopeJoin hs (Expr.allValues_iff.mp hj)
+        · simp only [hj, Bool.false_eq_true, ite_false] at h
+          obtain ⟨vs, e, rest, o', rfl, hvs, he, rfl⟩ := stepScope_task hts h
+          exact Step.scopeTaskJoin hs (fun h' => hj (Expr.allValues_iff.mpr h')) hvs he
+      | ret v =>
+        simp only at h
+        by_cases hall : Expr.allValues ts = true
+        · simp only [hall, ite_true, Option.some.injEq] at h
+          subst h
+          exact Step.scopeRet hs (Expr.allValues_iff.mp hall)
+        · simp only [hall, Bool.false_eq_true, ite_false] at h
+          obtain ⟨vs, e, rest, o', rfl, hvs, he, rfl⟩ := stepScope_task hts h
+          exact Step.scopeTaskRet hs hvs he
+      | next _ | panic _ | perform _ _ | read _ _ _ | write _ _ _ _ =>
+        cases h; exact Step.scopeBody hs rfl
+
 /-- **Soundness of `step`.** Every step `step` takes is a step of the
 semantics. -/
 theorem step_sound {P : Program} : ∀ {e : Expr} {o : Outcome}, step P e = some o → Step P e o := by
@@ -226,6 +468,11 @@ theorem step_sound {P : Program} : ∀ {e : Expr} {o : Outcome}, step P e = some
     (motive_2 := fun ss val => ∀ o, stepBlock P ss val = some o → Step P (.block ss val) o)
     (motive_3 := fun es => ∀ vs o rest, stepArgs P es = some (vs, o, rest) →
       ∃ e, es = vs ++ e :: rest ∧ AllValues vs ∧ Step P e o)
+  next => intro o h; simp [step] at h
+  next => intro o h; simp [step] at h
+  next => intro o h; simp [step] at h
+  next => intro o h; simp [step] at h
+  next => intro o h; simp [step] at h
   next => intro o h; simp [step] at h
   next => intro o h; simp [step] at h
   next => intro o h; simp [step] at h
@@ -320,6 +567,102 @@ theorem step_sound {P : Program} : ∀ {e : Expr} {o : Outcome}, step P e = some
     simp only [step, hsc, ite_false, Bool.false_eq_true] at h
     obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
     exact Step.matchScrutinee (ih hs)
+  next op args vs o' rest hargs ih =>
+    intro o h
+    simp only [step, hargs, Option.some.injEq] at h
+    subst h
+    obtain ⟨e, rfl, hvs, hs⟩ := ih _ _ _ hargs
+    exact Step.builtinArg hvs hs
+  next op args hnone hall _ =>
+    intro o h
+    simp only [step, hnone, hall, ite_true] at h
+    exact stepBuiltin_sound (Expr.allValues_iff.mp hall) h
+  next op args hnone hall _ =>
+    intro o h
+    simp [step, hnone, hall] at h
+  next c args hc vs o' rest hargs ih =>
+    intro o h
+    simp only [step, hc, ite_true, hargs, Option.some.injEq] at h
+    subst h
+    obtain ⟨e, rfl, hvs, hs⟩ := ih _ _ _ hargs
+    exact Step.callValueArg (Expr.isValue_iff.mp hc) hvs hs
+  next c args hc hnone hall _ =>
+    intro o h
+    simp only [step, hc, ite_true, hnone, hall] at h
+    exact stepCallValue_sound (Expr.allValues_iff.mp hall) h
+  next c args hc hnone hall _ =>
+    intro o h
+    simp [step, hc, hnone, hall] at h
+  next c args hc ih =>
+    intro o h
+    simp only [step, hc, ite_false, Bool.false_eq_true] at h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
+    exact Step.callValueCallee (ih hs)
+  next b e ih =>
+    intro o h
+    simp only [step] at h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
+    exact Step.resultArg (ih hs)
+  next e c he =>
+    intro o h
+    simp only [step, he, ite_true] at h
+    exact stepTry_sound (Expr.isValue_iff.mp he) h
+  next e c he ih =>
+    intro o h
+    simp only [step, he, ite_false, Bool.false_eq_true] at h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
+    exact Step.tryArg (ih hs)
+  next e he =>
+    intro o h
+    simp only [step, he, ite_true, Option.some.injEq] at h
+    subst h
+    exact Step.frameValue (Expr.isValue_iff.mp he)
+  next e he ih =>
+    intro o h
+    simp only [step, he, ite_false, Bool.false_eq_true] at h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
+    exact Step.frame (ih hs)
+  next i => intro o h; simp [step] at h; subst h; exact Step.var
+  next name pl args vs o' rest hargs ih =>
+    intro o h
+    simp only [step, hargs, Option.some.injEq] at h
+    subst h
+    obtain ⟨e, rfl, hvs, hs⟩ := ih _ _ _ hargs
+    exact Step.mutCallArg hvs hs
+  next name pl args hnone hall _ =>
+    intro o h
+    simp only [step, hnone, hall, ite_true] at h
+    exact stepMutCall_sound (Expr.allValues_iff.mp hall) h
+  next name pl args hnone hall _ =>
+    intro o h
+    simp [step, hnone, hall] at h
+  next v e he =>
+    intro o h
+    simp only [step, he, ite_true, Option.some.injEq] at h
+    subst h
+    exact Step.cellValue (Expr.isValue_iff.mp he)
+  next v e he ih =>
+    intro o h
+    simp only [step, he, ite_false, Bool.false_eq_true] at h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
+    exact Step.cellBody (ih hs)
+  next pl v e he =>
+    intro o h
+    simp only [step, he, ite_true, Option.some.injEq] at h
+    subst h
+    exact Step.methodValue (Expr.isValue_iff.mp he)
+  next pl v e he ih =>
+    intro o h
+    simp only [step, he, ite_false, Bool.false_eq_true] at h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
+    exact Step.methodBody (ih hs)
+  next body => intro o h; simp [step] at h; subst h; exact Step.scope
+  next => intro o h; simp [step] at h
+  next => intro o h; simp [step] at h
+  next ts body ihb ihts =>
+    intro o h
+    simp only [step] at h
+    exact stepScope_sound (fun _ h => ihb h) ihts h
   next vs o rest h => simp [stepArgs] at h
   next e es he ih vs o rest h =>
     simp only [stepArgs, he, ite_true] at h
@@ -358,6 +701,22 @@ theorem step_sound {P : Program} : ∀ {e : Expr} {o : Outcome}, step P e = some
     simp only [stepBlock, he, ite_false, Bool.false_eq_true] at h
     obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
     exact Step.blockLetArg (ih hs)
+  next t e ss val he o h =>
+    simp only [stepBlock, he, ite_true, Option.some.injEq] at h
+    subst h
+    exact Step.blockVar (Expr.isValue_iff.mp he)
+  next t e ss val he ih o h =>
+    simp only [stepBlock, he, ite_false, Bool.false_eq_true] at h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
+    exact Step.blockVarArg (ih hs)
+  next pl e ss val he o h =>
+    simp only [stepBlock, he, ite_true, Option.some.injEq] at h
+    subst h
+    exact Step.blockAssign (Expr.isValue_iff.mp he)
+  next pl e ss val he ih o h =>
+    simp only [stepBlock, he, ite_false, Bool.false_eq_true] at h
+    obtain ⟨o', hs, rfl⟩ := map_eq_some_inv h
+    exact Step.blockAssignArg (ih hs)
 
 /-- An expression that steps is not a value. -/
 theorem Step.not_value {P : Program} {e : Expr} {o : Outcome} (h : Step P e o) :
@@ -381,6 +740,19 @@ theorem stepArgs_mid {P : Program} {vs rest : List Expr} {e : Expr} {o : Outcome
   induction hvs with
   | nil => simp [stepArgs, he, hs]
   | cons hv _ ih => simp [stepArgs, Expr.isValue_iff.mpr hv, ih]
+
+theorem allValues_mid_false {vs rest : List Expr} {e : Expr} (he : e.isValue = false) :
+    Expr.allValues (vs ++ e :: rest) = false := by
+  cases h : Expr.allValues (vs ++ e :: rest)
+  · rfl
+  · have := Expr.isValue_iff.mpr (AllValues.mid (Expr.allValues_iff.mp h))
+    rw [he] at this
+    cases this
+
+/-- A pure built-in call is no effect: it has no receiver. -/
+theorem evalPure_receiver {op : Builtin} {vs : List Expr} {v : Expr}
+    (h : evalPure op vs = some v) : op.receiver = none := by
+  cases op <;> first | rfl | (unfold evalPure at h; split at h <;> simp_all)
 
 /-- **Completeness of `step`.** `step` takes every step of the semantics,
 so with `step_sound`, `step P e = some o` exactly when `Step P e o`: the
@@ -437,6 +809,74 @@ theorem step_complete {P : Program} {e : Expr} {o : Outcome} (h : Step P e o) :
   | matchSkip hv hm => simp [step, Expr.isValue_iff.mpr hv, stepMatch, hm]
   | matchArm hv hm => simp [step, Expr.isValue_iff.mpr hv, stepMatch, hm]
   | matchGuard hv hm => simp [step, Expr.isValue_iff.mpr hv, stepMatch, hm]
+  | builtinArg hvs hs ih => simp [step, stepArgs_mid hvs hs.not_value ih]
+  | @builtinPure op vs v hvs he =>
+    have ht : stepTask op vs = none := by
+      unfold stepTask; split <;> simp_all [evalPure]
+    simp [step, stepArgs_values hvs, Expr.allValues_iff.mpr hvs, stepBuiltin, ht,
+      evalPure_receiver he, he]
+  | @builtinEffect op k r vs hk hvs =>
+    have hall := AllValues.cons (IsValue.cap k r) hvs
+    have ht : stepTask op (.cap k r :: vs) = none := by
+      unfold stepTask; split <;> simp_all [Builtin.receiver]
+    simp [step, stepArgs_values hall, Expr.allValues_iff.mpr hall, stepBuiltin, ht, hk]
+  | callValueCallee hs ih => simp [step, hs.not_value, ih]
+  | callValueArg hc hvs hs ih =>
+    simp [step, Expr.isValue_iff.mpr hc, stepArgs_mid hvs hs.not_value ih]
+  | callValue hvs hi =>
+    simp [step, Expr.isValue, stepArgs_values hvs, Expr.allValues_iff.mpr hvs, stepCallValue, hi]
+  | resultArg _ ih => simp [step, ih]
+  | tryArg hs ih => simp [step, hs.not_value, ih]
+  | tryOk hv | tryErr hv | tryConvert hv =>
+    simp [step, stepTry, Expr.isValue, Expr.isValue_iff.mpr hv]
+  | frame hs ih => simp [step, hs.not_value, ih]
+  | frameValue hv => simp [step, Expr.isValue_iff.mpr hv]
+  | var => rfl
+  | blockVarArg hs ih => simp [step, stepBlock, hs.not_value, ih]
+  | blockVar hv => simp [step, stepBlock, Expr.isValue_iff.mpr hv]
+  | blockAssignArg hs ih => simp [step, stepBlock, hs.not_value, ih]
+  | blockAssign hv => simp [step, stepBlock, Expr.isValue_iff.mpr hv]
+  | cellBody hs ih => simp [step, hs.not_value, ih]
+  | cellValue hv => simp [step, Expr.isValue_iff.mpr hv]
+  | mutCallArg hvs hs ih => simp [step, stepArgs_mid hvs hs.not_value ih]
+  | mutCall hf hr hvs hi =>
+    simp [step, stepArgs_values hvs, Expr.allValues_iff.mpr hvs, stepMutCall, hf, hr, hi]
+  | methodBody hs ih => simp [step, hs.not_value, ih]
+  | methodValue hv => simp [step, Expr.isValue_iff.mpr hv]
+  | scope => rfl
+  | spawn hc =>
+    have hall := AllValues.cons IsValue.scopeHandle (AllValues.cons hc AllValues.nil)
+    simp [step, stepArgs_values hall, Expr.allValues_iff.mpr hall, stepBuiltin, stepTask]
+  | @join i =>
+    have hall := AllValues.cons (IsValue.taskHandle i) AllValues.nil
+    simp [step, stepArgs_values hall, Expr.allValues_iff.mpr hall, stepBuiltin, stepTask]
+  | @scopeBody _ _ o hs hp ih =>
+    cases o <;> simp [Outcome.passes] at hp <;> simp [step, stepScope, hs.not_value, ih]
+  | scopeSpawn hs ih => simp [step, stepScope, hs.not_value, ih]
+  | scopeJoin hs hj ih => simp [step, stepScope, hs.not_value, ih, Expr.allValues_iff.mpr hj]
+  | scopeRet hs hall ih => simp [step, stepScope, hs.not_value, ih, Expr.allValues_iff.mpr hall]
+  | scopeValue hv hall =>
+    simp [step, stepScope, Expr.isValue_iff.mpr hv, Expr.allValues_iff.mpr hall]
+  | scopeTaskValue hv hvs hs ih =>
+    simp [step, stepScope, Expr.isValue_iff.mpr hv, allValues_mid_false hs.not_value,
+      stepArgs_mid hvs hs.not_value ih]
+  | scopeTaskRet hb hvs hs ihb ih =>
+    simp [step, stepScope, hb.not_value, ihb, allValues_mid_false hs.not_value,
+      stepArgs_mid hvs hs.not_value ih]
+  | @scopeTaskJoin vs rest e body i k o hb hn hvs hs ihb ih =>
+    have hj : Expr.allValues ((vs ++ e :: rest).take (i + 1)) = false := by
+      cases h : Expr.allValues _
+      · rfl
+      · exact absurd (Expr.allValues_iff.mp h) hn
+    simp [step, stepScope, hb.not_value, ihb, hj, stepArgs_mid hvs hs.not_value ih]
+
+/-- The capabilities `main` receives: for each parameter, the capability
+its type names, rooted anywhere, as the runtime grants them
+(`Capability::granted`). -/
+def grants (ps : List Param) : List Expr :=
+  ps.map fun p => match p.type with
+    | .cap k => .cap k .anywhere
+    | _ => .unit
 
 /-- How a run of the Lean reference ends. -/
 inductive RunResult where
@@ -444,68 +884,173 @@ inductive RunResult where
   | value (v : Expr)
   /-- A step panicked. -/
   | panic (kind : PanicKind)
+  /-- A step returned `v` from outside any function (`?` on an `Err`
+  where no call is running). A run from a call never ends so: the call
+  runs its body in a `frame`, which takes the return. -/
+  | returned (v : Expr)
   /-- The expression reached is not a value and takes no step. In a
   well-typed program progress rules this out. -/
   | stuck (e : Expr)
+  /-- A step read or wrote a var that no cell holds: a `var` read
+  outside its block; or spawned or joined in no scope. In a well-typed
+  program, which starts with no var in scope and in no scope,
+  preservation rules this out. -/
+  | unbound (e : Expr)
   /-- The fuel ran out before the run ended. -/
   | outOfFuel
 
-/-- Run `e` in program `P` with `step`, for at most `fuel` steps. -/
-def run (P : Program) : Nat → Expr → RunResult
-  | 0, e => if e.isValue then .value e else .outOfFuel
-  | fuel + 1, e =>
-    if e.isValue then .value e
+/-- Run `e` in program `P` on the fake host `h` with `step`, for at most
+`fuel` steps: each effect is answered by `Host.perform`. How the run
+ended, and the host after it. -/
+def run (P : Program) : Nat → Host → Expr → RunResult × Host
+  | 0, h, e => (if e.isValue then .value e else .outOfFuel, h)
+  | fuel + 1, h, e =>
+    if e.isValue then (.value e, h)
     else
       match step P e with
-      | some (.next e') => run P fuel e'
-      | some (.panic k) => .panic k
-      | none => .stuck e
+      | some (.next e') => run P fuel h e'
+      | some (.panic k) => (.panic k, h)
+      | some (.perform req k) => run P fuel (h.perform req).2 (k (h.perform req).1)
+      | some (.ret v) => (.returned v, h)
+      | some (.read _ _ _) | some (.write _ _ _ _) => (.unbound e, h)
+      | some (.spawn _ _) | some (.join _ _) => (.unbound e, h)
+      | none => (.stuck e, h)
+
+/-- Every effect a step performs is on a capability of its receiver's
+kind. -/
+def Outcome.WellFormed : Outcome → Prop
+  | .perform req _ => req.op.receiver = some req.kind
+  | _ => True
+
+theorem intResult_wellFormed (n : Int) : (intResult n).WellFormed := by
+  unfold intResult; split <;> trivial
+
+theorem evalBinary_wellFormed {op : BinOp} {l r : Expr} {o : Outcome}
+    (h : evalBinary op l r = some o) : o.WellFormed := by
+  unfold evalBinary at h
+  split at h <;> simp only [Option.some.injEq, reduceCtorEq] at h <;> subst h <;>
+    first | trivial | exact intResult_wellFormed _ | (split <;> first | trivial | exact intResult_wellFormed _)
+
+theorem Step.wellFormed {P : Program} {e : Expr} {o : Outcome} (h : Step P e o) :
+    o.WellFormed := by
+  have map : ∀ {o : Outcome} {f : Expr → Expr}, o.WellFormed → (o.map f).WellFormed := by
+    intro o f h; cases o <;> simp_all [Outcome.map, Outcome.WellFormed]
+  have inFrame : ∀ {o : Outcome}, o.WellFormed → o.inFrame.WellFormed := by
+    intro o h; cases o <;> simp_all [Outcome.inFrame, Outcome.map, Outcome.WellFormed]
+  have inTask : ∀ {o : Outcome} {f : Expr → Expr}, o.WellFormed → (o.inTask f).WellFormed := by
+    intro o f h; cases o <;> simp_all [Outcome.inTask, Outcome.map, Outcome.WellFormed]
+  have under : ∀ {o : Outcome} {v : Expr} {wrap : Expr → Expr → Expr} {onRet : Expr → Outcome},
+      (∀ r, (onRet r).WellFormed) → o.WellFormed → (o.under v wrap onRet).WellFormed := by
+    intro o v wrap onRet hr h
+    cases o with
+    | ret r => exact hr r
+    | perform req k => exact h
+    | read i _ _ => cases i <;> trivial
+    | write i _ _ _ => cases i <;> trivial
+    | _ => trivial
+  have inCell : ∀ {o : Outcome} {v : Expr}, o.WellFormed → (o.inCell v).WellFormed :=
+    fun h => under (fun _ => trivial) h
+  have inMethod : ∀ {o : Outcome} {pl : Place} {v : Expr}, o.WellFormed →
+      (o.inMethod pl v).WellFormed :=
+    fun h => under (fun _ => trivial) h
+  induction h with
+  | scopeTaskValue _ _ _ ih => exact inTask ih
+  | scopeTaskRet _ _ _ _ ih => exact inTask ih
+  | scopeTaskJoin _ _ _ _ _ ih => exact inTask ih
+  | scopeBody _ _ ih => exact map ih
+  | scope | spawn _ | join | scopeSpawn _ _ | scopeJoin _ _ _ | scopeRet _ _ _ | scopeValue _ _ =>
+    trivial
+  | _ => first | trivial | (exact map ‹_›) | (exact inFrame ‹_›) | assumption |
+    exact intResult_wellFormed _ | exact evalBinary_wellFormed ‹_› | (exact inCell ‹_›) |
+    (exact inMethod ‹_›)
 
 /-- **Soundness of `run`.** A value the Lean reference reaches is one the
-semantics reaches, a panic it reports is a step of the semantics from an
-expression the semantics reaches, and an expression it reports stuck is
-one the semantics reaches and that takes no step of the semantics. -/
-theorem run_sound {P : Program} : ∀ {fuel : Nat} {e : Expr},
-    (∀ {v}, run P fuel e = .value v → Steps P e v ∧ IsValue v) ∧
-    (∀ {k}, run P fuel e = .panic k → ∃ e', Steps P e e' ∧ Step P e' (.panic k)) ∧
-    (∀ {e'}, run P fuel e = .stuck e' →
-      Steps P e e' ∧ ¬ IsValue e' ∧ ∀ o, ¬ Step P e' o) := by
+semantics reaches, with the trace of the effects the fake host answered;
+a panic it reports is a step of the semantics from an expression the
+semantics reaches, and so is a return; and an expression it reports
+stuck is one the semantics reaches and that takes no step of the
+semantics. -/
+theorem run_sound {P : Program} : ∀ {fuel : Nat} {h : Host} {e : Expr},
+    (∀ {v h'}, run P fuel h e = (.value v, h') → ∃ tr, Steps P e tr v ∧ IsValue v) ∧
+    (∀ {k h'}, run P fuel h e = (.panic k, h') →
+      ∃ tr e', Steps P e tr e' ∧ Step P e' (.panic k)) ∧
+    (∀ {e' h'}, run P fuel h e = (.stuck e', h') →
+      ∃ tr, Steps P e tr e' ∧ ¬ IsValue e' ∧ ∀ o, ¬ Step P e' o) ∧
+    (∀ {v h'}, run P fuel h e = (.returned v, h') →
+      ∃ tr e', Steps P e tr e' ∧ Step P e' (.ret v)) := by
   intro fuel
   induction fuel with
   | zero =>
-    intro e
-    refine ⟨fun h => ?_, fun h => ?_, fun h => ?_⟩ <;> simp only [run] at h <;> split at h <;>
-      cases h
-    exact ⟨Steps.refl _, Expr.isValue_iff.mp ‹_›⟩
+    intro h e
+    refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;> simp only [run] at hr <;>
+      split at hr <;> simp at hr
+    obtain ⟨rfl, -⟩ := hr
+    exact ⟨[], Steps.refl _, Expr.isValue_iff.mp ‹_›⟩
   | succ fuel ih =>
-    intro e
+    intro h e
     by_cases hv : e.isValue = true
-    · refine ⟨fun h => ?_, fun h => ?_, fun h => ?_⟩ <;> simp only [run, hv, ite_true] at h <;>
-        cases h
-      exact ⟨Steps.refl _, Expr.isValue_iff.mp hv⟩
+    · refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;>
+        simp only [run, hv, ite_true] at hr <;> simp at hr
+      obtain ⟨rfl, -⟩ := hr
+      exact ⟨[], Steps.refl _, Expr.isValue_iff.mp hv⟩
     · have hn : e.isValue = false := by simpa using hv
       cases hs : step P e with
       | none =>
-        refine ⟨fun h => ?_, fun h => ?_, fun h => ?_⟩ <;>
-          simp only [run, hn, Bool.false_eq_true, ite_false, hs] at h <;> cases h
-        refine ⟨Steps.refl _, fun h => by simp [Expr.isValue_iff.mpr h] at hn, fun o ho => ?_⟩
+        refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;>
+          simp only [run, hn, Bool.false_eq_true, ite_false, hs] at hr <;> simp at hr
+        obtain ⟨rfl, -⟩ := hr
+        refine ⟨[], Steps.refl _, fun h => by simp [Expr.isValue_iff.mpr h] at hn, fun o ho => ?_⟩
         simp [step_complete ho] at hs
       | some o =>
         cases o with
         | next e' =>
           have h1 := step_sound hs
-          obtain ⟨iv, ip, is⟩ := ih (e := e')
+          obtain ⟨iv, ip, is, ir⟩ := ih (h := h) (e := e')
           simp only [run, hn, Bool.false_eq_true, ite_false, hs]
-          refine ⟨fun h => ?_, fun h => ?_, fun h => ?_⟩
-          · obtain ⟨h2, h3⟩ := iv h
-            exact ⟨Steps.next h1 h2, h3⟩
-          · obtain ⟨x, h2, h3⟩ := ip h
-            exact ⟨x, Steps.next h1 h2, h3⟩
-          · obtain ⟨h2, h3⟩ := is h
-            exact ⟨Steps.next h1 h2, h3⟩
+          refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩
+          · obtain ⟨tr, h2, h3⟩ := iv hr
+            exact ⟨tr, Steps.next h1 h2, h3⟩
+          · obtain ⟨tr, x, h2, h3⟩ := ip hr
+            exact ⟨tr, x, Steps.next h1 h2, h3⟩
+          · obtain ⟨tr, h2, h3⟩ := is hr
+            exact ⟨tr, Steps.next h1 h2, h3⟩
+          · obtain ⟨tr, x, h2, h3⟩ := ir hr
+            exact ⟨tr, x, Steps.next h1 h2, h3⟩
         | panic k =>
-          refine ⟨fun h => ?_, fun h => ?_, fun h => ?_⟩ <;>
-            simp only [run, hn, Bool.false_eq_true, ite_false, hs] at h <;> cases h
-          exact ⟨e, Steps.refl _, step_sound hs⟩
+          refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;>
+            simp only [run, hn, Bool.false_eq_true, ite_false, hs] at hr <;> simp at hr
+          obtain ⟨rfl, -⟩ := hr
+          exact ⟨[], e, Steps.refl _, step_sound hs⟩
+        | ret v =>
+          refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;>
+            simp only [run, hn, Bool.false_eq_true, ite_false, hs] at hr <;> simp at hr
+          obtain ⟨rfl, -⟩ := hr
+          exact ⟨[], e, Steps.refl _, step_sound hs⟩
+        | read i is k =>
+          refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;>
+            simp only [run, hn, Bool.false_eq_true, ite_false, hs] at hr <;> simp at hr
+        | write i is w n =>
+          refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;>
+            simp only [run, hn, Bool.false_eq_true, ite_false, hs] at hr <;> simp at hr
+        | spawn c k =>
+          refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;>
+            simp only [run, hn, Bool.false_eq_true, ite_false, hs] at hr <;> simp at hr
+        | join i k =>
+          refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩ <;>
+            simp only [run, hn, Bool.false_eq_true, ite_false, hs] at hr <;> simp at hr
+        | perform req k =>
+          have h1 := step_sound hs
+          have hal := Host.perform_allows h h1.wellFormed
+          obtain ⟨iv, ip, is, ir⟩ := ih (h := (h.perform req).2) (e := k (h.perform req).1)
+          simp only [run, hn, Bool.false_eq_true, ite_false, hs]
+          refine ⟨fun hr => ?_, fun hr => ?_, fun hr => ?_, fun hr => ?_⟩
+          · obtain ⟨tr, h2, h3⟩ := iv hr
+            exact ⟨_, Steps.perform h1 hal h2, h3⟩
+          · obtain ⟨tr, x, h2, h3⟩ := ip hr
+            exact ⟨_, x, Steps.perform h1 hal h2, h3⟩
+          · obtain ⟨tr, h2, h3⟩ := is hr
+            exact ⟨_, Steps.perform h1 hal h2, h3⟩
+          · obtain ⟨tr, x, h2, h3⟩ := ir hr
+            exact ⟨_, x, Steps.perform h1 hal h2, h3⟩
 
 end OskaFormal.Core

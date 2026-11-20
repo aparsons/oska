@@ -164,6 +164,7 @@ fn calls_into_prelude_generics_record_their_type_arguments() {
     assert_eq!(
         type_of(src, &program, "f", "|x| x > 1"),
         Type::Fn {
+            cap: false,
             params: vec![int()],
             ret: Box::new(Type::Bool)
         }

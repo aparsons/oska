@@ -1,0 +1,162 @@
+{
+  "core_ir_version": 7,
+  "types": [],
+  "functions": [
+    {
+      "name": "main",
+      "params": [{"type": "Stdout", "binds": true}],
+      "ret": "()",
+      "body": {
+        "kind": "Block",
+        "stmts": [
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": "Int",
+            "value": {"kind": "Int", "value": 10}
+          },
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": "Int",
+            "value": {
+              "kind": "Scope",
+              "body": {
+                "kind": "Block",
+                "stmts": [
+                  {
+                    "kind": "Let",
+                    "binds": true,
+                    "type": {"kind": "Task", "result": "Int"},
+                    "value": {
+                      "kind": "Builtin",
+                      "name": "Scope.spawn",
+                      "args": [
+                        {"kind": "Local", "slot": 2},
+                        {
+                          "kind": "Closure",
+                          "params": [],
+                          "captures": [1],
+                          "height": 3,
+                          "cap": false,
+                          "ret": "Int",
+                          "body": {
+                            "kind": "Binary",
+                            "op": "+",
+                            "lhs": {"kind": "Local", "slot": 1},
+                            "rhs": {"kind": "Int", "value": 1}
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "kind": "Let",
+                    "binds": true,
+                    "type": {"kind": "Task", "result": "Int"},
+                    "value": {
+                      "kind": "Builtin",
+                      "name": "Scope.spawn",
+                      "args": [
+                        {"kind": "Local", "slot": 2},
+                        {
+                          "kind": "Closure",
+                          "params": [],
+                          "captures": [0, 1],
+                          "height": 4,
+                          "cap": true,
+                          "ret": "Int",
+                          "body": {
+                            "kind": "Block",
+                            "stmts": [
+                              {
+                                "kind": "Let",
+                                "binds": false,
+                                "type": {"kind": "Result", "ok": "()", "err": "IoError"},
+                                "value": {
+                                  "kind": "Builtin",
+                                  "name": "Stdout.println",
+                                  "args": [
+                                    {"kind": "Local", "slot": 0},
+                                    {"kind": "Str", "value": "b"}
+                                  ]
+                                }
+                              }
+                            ],
+                            "value": {
+                              "kind": "Binary",
+                              "op": "+",
+                              "lhs": {"kind": "Local", "slot": 1},
+                              "rhs": {"kind": "Int", "value": 2}
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "kind": "Let",
+                    "binds": true,
+                    "type": "Scope",
+                    "value": {"kind": "Local", "slot": 2}
+                  },
+                  {
+                    "kind": "Let",
+                    "binds": false,
+                    "type": {
+                      "kind": "Task",
+                      "result": {"kind": "Result", "ok": "()", "err": "IoError"}
+                    },
+                    "value": {
+                      "kind": "Builtin",
+                      "name": "Scope.spawn",
+                      "args": [
+                        {"kind": "Local", "slot": 5},
+                        {
+                          "kind": "Closure",
+                          "params": [],
+                          "captures": [0],
+                          "height": 6,
+                          "cap": true,
+                          "ret": {"kind": "Result", "ok": "()", "err": "IoError"},
+                          "body": {
+                            "kind": "Builtin",
+                            "name": "Stdout.println",
+                            "args": [
+                              {"kind": "Local", "slot": 0},
+                              {"kind": "Str", "value": "c"}
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "value": {
+                  "kind": "Binary",
+                  "op": "+",
+                  "lhs": {
+                    "kind": "Builtin",
+                    "name": "Task.join",
+                    "args": [{"kind": "Local", "slot": 4}]
+                  },
+                  "rhs": {
+                    "kind": "Builtin",
+                    "name": "Task.join",
+                    "args": [{"kind": "Local", "slot": 3}]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "kind": "Let",
+            "binds": false,
+            "type": "Int",
+            "value": {"kind": "Local", "slot": 2}
+          }
+        ]
+      }
+    }
+  ]
+}

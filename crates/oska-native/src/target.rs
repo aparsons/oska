@@ -101,14 +101,13 @@ impl Target {
     }
 
     /// The targets `oskac run` and `oskac test` compile for on a host of
-    /// the same platform. Windows joins when every program runs natively
-    /// there (#179); until then a Windows host runs programs on the
-    /// interpreter, and `oskac build --target windows-x86_64` builds.
-    pub const HOSTS: [Target; 4] = [
+    /// the same platform: every target (#179).
+    pub const HOSTS: [Target; 5] = [
         Target::LinuxAarch64,
         Target::LinuxX86_64,
         Target::MacosAarch64,
         Target::MacosX86_64,
+        Target::WindowsX86_64,
     ];
 
     /// The platform's name, as release assets name `oskac` builds.

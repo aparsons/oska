@@ -1,5 +1,7 @@
 import OskaFormal.Core.Typing
 import OskaFormal.Core.Semantics
+import OskaFormal.Core.Eval
+import OskaFormal.Core.Soundness
 
 /-!
 # Oska Core: the panics, checked on examples
@@ -7,6 +9,23 @@ import OskaFormal.Core.Semantics
 `Int` arithmetic in Oska Core panics where the interpreter does
 (`crates/oska-run/src/ops.rs`): on a result outside `-2^63 ..= 2^63 - 1`,
 and on a divisor of 0, which is checked before overflow.
+
+The closure examples type programs the checker rejects, and show the
+typing rejects them too: a closure called with the wrong number of
+arguments or an argument of the wrong type, a value called that is not a
+function, and a closure that escapes its function at a type it does not
+have. So do the `Result` examples at the end: `?` in a function that does
+not return a `Result` (`E0243`), and `?` on an error of another type with
+no conversion (`E0242`), beside the same `?` through the conversion the
+checker chose, which types and runs. So do the var examples: a mutating
+call on a `let` (`E0230`) and an assignment to one (`E0229`), each beside
+the same on a `var`, which types; and `let b = a; a.bump()` runs to a
+changed `a` and an unchanged `b`. So do the scope examples: a scope whose
+value is its handle or one of its tasks, a `var` that holds the handle, a
+closure that captures it, and a `spawn` or `join` outside any scope, beside
+a scope that spawns and joins, which types and runs, in the order the
+interpreter runs its tasks. `crates/oska-check/tests/core_ir.rs` checks
+that the checker, or the export, rejects the same programs.
 -/
 
 namespace OskaFormal.Core
@@ -35,8 +54,8 @@ def oneParam : Function :=
 /-- A program of `oneParam` alone. -/
 def oneParamProgram : Program := { types := [], functions := [oneParam] }
 
-/-- A call with the right arity steps into the body. -/
-example : Step oneParamProgram (.call "f" [.int 1]) (.next (.int 1)) :=
+/-- A call with the right arity steps into the body, in a frame. -/
+example : Step oneParamProgram (.call "f" [.int 1]) (.next (.frame (.int 1))) :=
   Step.call rfl (AllValues.cons (IsValue.int 1) AllValues.nil) rfl
 
 /-- A call of `f` with no argument, or with two, takes no step. -/
@@ -90,7 +109,7 @@ theorem covers_int_literal (P : Program) : ∀ fuel, covers P fuel [[.int 3]] [.
 
 /-- `match 3 { 3 => 1 }` is not source typed in any program: its one arm
 does not cover every `Int`, though it covers the scrutinee. -/
-example (P : Program) : ¬ SourceTyped P [] (.match_ (.int 3) [.mk (.int 3) none (.int 1)]) .int := by
+example (P : Program) : ¬ SourceTyped P Ty.int [] [] (.match_ (.int 3) [.mk (.int 3) none (.int 1)]) .int := by
   intro ⟨_, h⟩
   simp [Expr.staticMatches, exhaustiveArms, unguarded, Pattern.headType, covers_int_literal] at h
 
@@ -110,6 +129,444 @@ example : exhaustiveArms shapes
     [.mk (.construct "Shape" (some "Dot") []) none .unit,
      .mk (.construct "Shape" (some "Square") [.int 0]) none .unit,
      .mk (.construct "Shape" (some "Square") [.bind .int]) none .unit] = true := by
+  decide
+
+/-! ## Closures -/
+
+/-- `|x: Int| x + 1`, a plain `fn`, written where `h` slots are in scope. -/
+def addOne (h : Nat) : Expr :=
+  .closure [{ type := .int, binds := true }] h [] false .int (.binary .add (.local_ h) (.int 1))
+
+/-- `let g = |x: Int| x + 1` in an empty function, then `g(41)`: the
+closure has height 0, so it is a value, and the call steps into its body
+with `41` for its parameter. -/
+example (P : Program) (R : Frame) :
+    Typed P R [] [] (.expr (.callValue (addOne 0) [.int 41]) .int) :=
+  Typed.callValue (Typed.closure (Nat.le_refl _) (fun _ i _ hi => absurd hi (Nat.not_lt_zero i))
+      (fun _ => rfl) (fun i _ hi => absurd hi (Nat.not_lt_zero i)) rfl (Typed.binary BinOpTyped.add (Typed.local_ rfl) (Typed.int rfl)) rfl)
+    (Typed.argsCons (Typed.int rfl) Typed.argsNil)
+
+example (P : Program) :
+    Step P (.callValue (addOne 0) [.int 41]) (.next (.frame (.binary .add (.int 41) (.int 1)))) :=
+  Step.callValue (.cons (.int 41) .nil) rfl
+
+/-- `fn add(n: Int) -> fn(Int) -> Int { |x: Int| x + n }`: a closure
+escapes the function that made it, at its own type, a plain `fn`, with
+`n` (slot 0, an `Int`) captured; its parameter is slot 1. -/
+def addN : Function where
+  name := "add"
+  params := [{ type := .int, binds := true }]
+  ret := .fn false [.int] .int
+  body := .closure [{ type := .int, binds := true }] 1 [0] false .int
+    (.binary .add (.local_ 1) (.local_ 0))
+
+example (P : Program) : Typed P addN.ret (bindingTypes addN.params) [] (.expr addN.body addN.ret) := by
+  refine Typed.closure (by decide) (fun _ i t hi _ hl => ?_) (fun _ => rfl)
+    (fun i t hi _ hl => ?_) rfl (Typed.binary BinOpTyped.add (Typed.local_ rfl) (Typed.local_ rfl)) rfl
+  all_goals
+    cases i with
+    | zero => simp [bindingTypes, addN, lookup] at hl; subst hl; rfl
+    | succ i => omega
+
+/-- A call of `add(2)` puts `2` in the closure's body, which is then a
+value: what it captured travels with it. -/
+example : Step { types := [], functions := [addN] } (.call "add" [.int 2])
+    (.next (.frame (.closure [{ type := .int, binds := true }] 0 [] false .int
+      (.binary .add (.local_ 0) (.int 2))))) :=
+  Step.call rfl (.cons (.int 2) .nil) rfl
+
+/-- `g(1, 2)` with `g = |x: Int| x + 1`: the checker rejects a call of
+the wrong arity, and so does the typing. -/
+example (P : Program) (R : Frame) (Γ : List Ty) (h : Nat) (t : Ty) :
+    ¬ Typed P R Γ [] (.expr (.callValue (addOne h) [.int 1, .int 2]) t) := by
+  intro ht
+  cases ht with
+  | callValue hc hargs =>
+    cases hc with
+    | closure _ _ _ _ _ _ =>
+      cases hargs with
+      | argsCons _ hr => cases hr
+
+/-- `g(true)`: an argument of the wrong type. -/
+example (P : Program) (R : Frame) (Γ : List Ty) (h : Nat) (t : Ty) :
+    ¬ Typed P R Γ [] (.expr (.callValue (addOne h) [.bool true]) t) := by
+  intro ht
+  cases ht with
+  | callValue hc hargs =>
+    cases hc with
+    | closure _ _ _ _ _ _ =>
+      cases hargs with
+      | argsCons hb _ => cases hb
+
+/-- `let n = 1` then `n(2)`: a value that is not a function is not
+called. -/
+example (P : Program) (R : Frame) (Γ : List Ty) (t : Ty) :
+    ¬ Typed P R Γ [] (.expr (.callValue (.int 1) [.int 2]) t) := by
+  intro ht
+  cases ht with
+  | callValue hc _ => cases hc
+
+/-- `fn make() -> fn(Int) -> Bool { |x: Int| x + 1 }`: the closure would
+escape at a type it does not have, whatever result type its node names. -/
+def makeWrong (ret : Ty) : Function where
+  name := "make"
+  params := []
+  ret := .fn false [.int] .bool
+  body := .closure [{ type := .int, binds := true }] 0 [] false ret
+    (.binary .add (.local_ 0) (.int 1))
+
+example (P : Program) (ret : Ty) :
+    ¬ Typed P (makeWrong ret).ret (bindingTypes (makeWrong ret).params) []
+      (.expr (makeWrong ret).body (makeWrong ret).ret) := by
+  intro ht
+  cases ht with
+  | closure _ _ _ _ _ hb =>
+    cases hb with
+    | binary hop _ _ => cases hop
+
+/-- So no program with `make` in it is well typed. -/
+example (ret : Ty) : ¬ ProgramTyped { types := [], functions := [makeWrong ret] } := by
+  intro hP
+  have ht := hP "make" (makeWrong ret) rfl
+  cases ht with
+  | closure _ _ _ _ _ hb =>
+    cases hb with
+    | binary hop _ _ => cases hop
+
+/-- `fn run(io: Stdout) -> fn() -> Result<(), IoError> { || io.println("hi") }`:
+a closure that captures `Stdout` does not escape as a plain `fn`, which
+the checker rejects (`E0270`); `Authority.lean`'s
+`capturing_closure_not_plain` shows the same where it is written. -/
+example (P : Program) (R : Frame) :
+    ¬ Typed P R [.cap .stdout] [] (.expr (.closure [] 1 [0] false (.result .unit .ioError)
+      (.builtin .println [.local_ 0, .str "hi"])) (.fn false [] (.result .unit .ioError))) := by
+  intro h
+  cases h with
+  | closure _ hpure _ _ _ _ =>
+    have := hpure rfl 0 (.cap .stdout) (by decide) (by decide) rfl
+    simp [Program.pureTy] at this
+
+/-! ## `Result` and `?` -/
+
+/-- A call has the result type of the function it calls. -/
+theorem call_typed_ret {P : Program} {R : Frame} {Γ : List Ty} {name : String} {args : List Expr}
+    {t : Ty} (h : Typed P R Γ [] (.expr (.call name args) t)) : ∃ f, P.find? name = some f ∧ t = f.ret := by
+  cases h with
+  | call hf _ _ => exact ⟨_, hf, rfl⟩
+
+/-- The name the checker gives `From`'s `from` for `AppError`, from `Int`. -/
+def appErrorFrom : String := "<AppError as From<Int>>.from"
+
+/-- `fn g() -> Result<Int, Int> { Err(1) }`. -/
+def gErr : Function :=
+  { name := "g", params := [], ret := .result .int .int, body := .result false (.int 1) }
+
+/-- `struct AppError { code: Int }`, `gErr`, and
+`impl From<Int> for AppError { fn from(value: Int) -> AppError { AppError { code: value } } }`,
+whose `from` the export names `appErrorFrom`. -/
+def appError : Program :=
+  { types := [.struct_ "AppError" [.int]],
+    functions := [gErr,
+      { name := appErrorFrom, params := [{ type := .int, binds := true }], ret := .named "AppError",
+        body := .construct "AppError" none [.local_ 0] }] }
+
+/-- `fn f() -> Int { g()? }`: `?` where the function does not return a
+`Result` (`E0243`). No `?` types in a function or closure whose result
+type is not a `Result`, whatever it is on and however it converts. -/
+example (P : Program) (R : Frame) (hR : ∀ t u, R.ret ≠ .result t u) (Γ : List Ty) (e : Expr)
+    (c : Option String) (t : Ty) : ¬ Typed P R Γ [] (.expr (.try_ e c) t) := by
+  intro h
+  cases h
+  exact hR _ _ rfl
+
+/-- `fn f() -> Result<Int, AppError> { let x = g()?; Ok(x) }` with no
+`From` conversion: `g`'s error, an `Int`, is not an `AppError`
+(`E0242`). -/
+example (Γ : List Ty) (t : Ty) :
+    ¬ Typed appError (Ty.result .int (.named "AppError")) Γ [] (.expr (.try_ (.call "g" []) none) t) := by
+  intro h
+  cases h with
+  | try_ _ he hc =>
+    cases hc
+    obtain ⟨f, hf, ht⟩ := call_typed_ret he
+    simp [appError, Program.find?, findFunction, gErr] at hf
+    subst hf
+    simp at ht
+
+/-- Nor does a conversion of another type stand in for it: `g()?` through
+a function that gives an `Int`, not an `AppError`. -/
+example (Γ : List Ty) (t : Ty) :
+    ¬ Typed appError (Ty.result .int (.named "AppError")) Γ [] (.expr (.try_ (.call "g" []) (some "g")) t) := by
+  intro h
+  cases h with
+  | try_ _ _ hc =>
+    cases hc with
+    | some hf hps _ _ =>
+      simp [appError, Program.find?, findFunction, gErr] at hf
+      subst hf
+      simp [Function.argTypes_eq] at hps
+
+/-- With the conversion the checker chose, the same `?` types... -/
+example (Γ : List Ty) :
+    Typed appError (Ty.result .int (.named "AppError")) Γ []
+      (.expr (.try_ (.call "g" []) (some appErrorFrom)) .int) :=
+  Typed.try_ rfl (Typed.call (f := gErr) rfl rfl Typed.argsNil) (ConvTyped.some rfl rfl rfl rfl)
+
+/-- `fn f() -> Result<Int, AppError> { let x = g()?; Ok(x + 1) }`, with
+the conversion. -/
+def fTry : Function :=
+  { name := "f", params := [], ret := .result .int (.named "AppError"),
+    body := .block [.let_ true .int (.try_ (.call "g" []) (some appErrorFrom))]
+      (some (.result true (.binary .add (.local_ 0) (.int 1)))) }
+
+/-- ...and runs: `f` returns `g`'s error through it, without reaching
+`Ok(x + 1)`. -/
+example :
+    (match (run { appError with functions := appError.functions ++ [fTry] } 50 {}
+        (.call "f" [])).1 with
+      | .value (.result false (.construct "AppError" none [.int 1])) => true
+      | _ => false) = true := by
+  decide
+
+/-! ## Vars and mutating methods -/
+
+/-- `impl Counter { fn bump(var self) { self.n = self.n + 1 } }`. -/
+def bump : Function :=
+  { name := "Counter.bump", receiver := some (.named "Counter"), params := [], ret := .unit,
+    body := .block [.assign ⟨0, [0]⟩ (.binary .add (.field (.var_ 0) 0) (.int 1))] none }
+
+/-- `struct Counter { n: Int }`, with `bump`. -/
+def counter : Program :=
+  { types := [.struct_ "Counter" [.int]], functions := [bump] }
+
+/-- `var a = Counter(n: 0); let b = a; a.bump(); read`: `a` is var 0 and
+`b` slot 0. -/
+def aliasing (read : Expr) : Expr :=
+  .block [.var_ (.named "Counter") (.construct "Counter" none [.int 0]),
+    .let_ true (.named "Counter") (.var_ 0),
+    .expr (.mutCall "Counter.bump" ⟨0, []⟩ [])] (some read)
+
+/-- `a.bump()` changes `a`... -/
+example : (match (run counter 200 {} (aliasing (.field (.var_ 0) 0))).1 with
+    | .value (.int 1) => true
+    | _ => false) = true := by
+  decide
+
+/-- ...and not `b`, the copy `let b = a` took before the call. -/
+example : (match (run counter 200 {} (aliasing (.field (.local_ 0) 0))).1 with
+    | .value (.int 0) => true
+    | _ => false) = true := by
+  decide
+
+/-- A mutating call types on a `var`... -/
+example (R : Frame) :
+    Typed counter R [] [] (.block [.var_ (.named "Counter") (.construct "Counter" none [.int 0]),
+      .expr (.mutCall "Counter.bump" ⟨0, []⟩ [])] none .unit) :=
+  .blockVar rfl (.construct rfl (.argsCons (.int (by decide)) .argsNil))
+    (.blockExpr (.mutCall (f := bump) rfl rfl rfl rfl rfl .argsNil) .blockNone)
+
+/-- ...but not on a `let`, which is a slot and no var: `let a =
+Counter(n: 0); a.bump()`, which the checker rejects (`E0230`). -/
+example (P : Program) (R : Frame) (t : Ty) :
+    ¬ Typed P R [] [] (.block [.let_ true (.named "Counter") (.construct "Counter" none [.int 0]),
+      .expr (.mutCall "Counter.bump" ⟨0, []⟩ [])] none t) := by
+  intro h
+  cases h with
+  | blockLetBind _ h =>
+    cases h with
+    | blockExpr h _ =>
+      cases h with
+      | mutCall _ _ hpl _ _ _ => simp [Program.placeTy, lookup] at hpl
+
+/-- An assignment types on a `var`... -/
+example (R : Frame) :
+    Typed counter R [] [] (.block [.var_ (.named "Counter") (.construct "Counter" none [.int 0]),
+      .assign ⟨0, [0]⟩ (.int 1)] none .unit) :=
+  .blockVar rfl (.construct rfl (.argsCons (.int (by decide)) .argsNil))
+    (.blockAssign rfl rfl (.int (by decide)) .blockNone)
+
+/-- ...but not on a `let`: `let a = Counter(n: 0); a.n = 1`, which the
+checker rejects (`E0229`). -/
+example (P : Program) (R : Frame) (t : Ty) :
+    ¬ Typed P R [] [] (.block [.let_ true (.named "Counter") (.construct "Counter" none [.int 0]),
+      .assign ⟨0, [0]⟩ (.int 1)] none t) := by
+  intro h
+  cases h with
+  | blockLetBind _ h =>
+    cases h with
+    | blockAssign hpl _ _ _ => simp [Program.placeTy, lookup] at hpl
+
+/-! ## Scopes -/
+
+/-- `s.spawn(c)`, with the scope's handle in slot `i`. -/
+def spawnOn (i : Nat) (c : Expr) : Expr := .builtin .spawn [.local_ i, c]
+
+/-- `t.join()`, with the task's handle in slot `i`. -/
+def joinOn (i : Nat) : Expr := .builtin .join [.local_ i]
+
+/-- `|| body`, a task that captures nothing, written where `h` slots are
+in scope. -/
+def taskOf (h : Nat) (t : Ty) (body : Expr) : Expr := .closure [] h [] false t body
+
+/-- `scope |s| { let t = s.spawn(|| 1); t.join() }`. -/
+def spawnJoin : Expr :=
+  .scope (.block [.let_ true (.task .int) (spawnOn 0 (taskOf 1 .int (.int 1)))] (some (joinOn 1)))
+
+/-- A scope that spawns a task and joins it types at the task's result
+type... -/
+example (P : Program) (M : List Ty) : Typed P Ty.int [] M (.expr spawnJoin .int) :=
+  Typed.scope rfl rfl (fun i _ hi => absurd hi (Nat.not_lt_zero i))
+    (Typed.block (Typed.blockLetBind
+      (Typed.spawn rfl rfl (Typed.argsCons (Typed.local_ rfl) (Typed.argsCons
+        (Typed.closure (by decide) (fun _ _ _ _ hr _ => by simp [Expr.reads] at hr) (fun _ => rfl)
+          (fun _ _ _ hr _ => by simp [Expr.reads] at hr) rfl (Typed.int (by decide)) rfl)
+        Typed.argsNil)))
+      (Typed.blockSome (Typed.join rfl (Typed.argsCons (Typed.local_ rfl) Typed.argsNil)))))
+
+/-- ...and runs to the task's result. -/
+example : (match (run { types := [], functions := [] } 100 {} spawnJoin).1 with
+    | .value (.int 1) => true
+    | _ => false) = true := by
+  decide
+
+/-- `scope |s| { s }`: the scope's handle is not its value. -/
+example (P : Program) (R : Frame) (M : List Ty) (t : Ty) :
+    ¬ Typed P R [] M (.expr (.scope (.local_ 0)) t) := by
+  obtain ⟨_, _⟩ := R
+  intro h
+  cases h with
+  | scope ht _ _ hb =>
+    cases hb with
+    | local_ hl =>
+      simp [lookup] at hl
+      subst hl
+      simp [Program.handleFree] at ht
+
+/-- `scope |s| { s.spawn(|| 1) }`: nor is one of its tasks. -/
+example (P : Program) (R : Frame) (M : List Ty) (t : Ty) :
+    ¬ Typed P R [] M (.expr (.scope (spawnOn 0 (taskOf 1 .int (.int 1)))) t) := by
+  obtain ⟨_, _⟩ := R
+  intro h
+  cases h with
+  | scope ht _ _ hb =>
+    cases hb with
+    | builtin hb _ => cases hb
+    | spawn _ _ _ => simp [Program.handleFree] at ht
+
+/-- `scope |s| { var h = s; () }`: no `var` holds the handle. -/
+example (P : Program) (R : Frame) (M : List Ty) (u t : Ty) :
+    ¬ Typed P R [] M (.expr (.scope (.block [.var_ u (.local_ 0)] none)) t) := by
+  obtain ⟨_, _⟩ := R
+  intro h
+  cases h with
+  | scope _ _ _ hb =>
+    cases hb with
+    | block hb =>
+      cases hb with
+      | blockVar hu he _ =>
+        cases he with
+        | local_ hl =>
+          simp [lookup] at hl
+          subst hl
+          simp [Program.handleFree] at hu
+
+/-- `scope |s| { let _ = || s.spawn(|| 1); () }`: no closure captures
+the handle, so none takes it out of the block. -/
+example (P : Program) (R : Frame) (M : List Ty) (u t : Ty) :
+    ¬ Typed P R [] M (.expr (.scope (.block [.let_ false u
+      (.closure [] 1 [0] false (.task .int) (spawnOn 0 (taskOf 1 .int (.int 1))))] none)) t) := by
+  obtain ⟨_, _⟩ := R
+  intro h
+  cases h with
+  | scope _ _ _ hb =>
+    cases hb with
+    | block hb =>
+      cases hb with
+      | blockLetDrop he _ =>
+        cases he with
+        | closure _ _ _ hh _ _ =>
+          have := hh 0 .scope (by decide) rfl rfl
+          simp [Program.handleFree] at this
+
+/-- `scope |s| { let _ = || { let _ = s; 1 }; () }`: the closure only
+reads the handle, and gives an `Int`, so the capture alone is what the
+typing refuses. -/
+example (P : Program) (R : Frame) (M : List Ty) (u t : Ty) :
+    ¬ Typed P R [] M (.expr (.scope (.block [.let_ false u
+      (.closure [] 1 [0] false .int (.block [.let_ false .scope (.local_ 0)] (some (.int 1))))]
+      none)) t) := by
+  obtain ⟨_, _⟩ := R
+  intro h
+  cases h with
+  | scope _ _ _ hb =>
+    cases hb with
+    | block hb =>
+      cases hb with
+      | blockLetDrop he _ =>
+        cases he with
+        | closure _ _ _ hh _ _ =>
+          have := hh 0 .scope (by decide) rfl rfl
+          simp [Program.handleFree] at this
+
+/-- `s.spawn(c)` and `t.join()` type only in the block of a scope
+(`spawn_needs_scope`, `join_needs_scope`): in a function's body, outside
+any scope, neither does, whatever it is called on. -/
+example (P : Program) (ret : Ty) (Γ M : List Ty) (args : List Expr) (t : Ty) :
+    ¬ Typed P ret Γ M (.expr (.builtin .spawn args) t) :=
+  fun h => by simpa using spawn_needs_scope h
+
+example (P : Program) (ret : Ty) (Γ M : List Ty) (args : List Expr) (t : Ty) :
+    ¬ Typed P ret Γ M (.expr (.builtin .join args) t) :=
+  fun h => by simpa using join_needs_scope h
+
+/-- `io.println(text)`, on a `Stdout` capability. -/
+def printLine (text : String) : Expr := .builtin .println [.cap .stdout .anywhere, .str text]
+
+/-- The type of `println`'s result. -/
+abbrev printTy : Ty := .result .unit .ioError
+
+/-- `scope |s| { let a = s.spawn(|| io.println("a")); let b =
+s.spawn(|| io.println("b")); let _ = b.join(); let _ = io.println("c") }`. -/
+def spawnOrder : Expr :=
+  .scope (.block
+    [.let_ true (.task printTy) (spawnOn 0 (taskOf 1 printTy (printLine "a"))),
+     .let_ true (.task printTy) (spawnOn 0 (taskOf 1 printTy (printLine "b"))),
+     .let_ false printTy (joinOn 2),
+     .let_ false printTy (printLine "c")] none)
+
+/-- A join runs the scope's tasks oldest first, up to the one it joins:
+`a`'s task runs before `b`'s, and both before the block goes on. -/
+example : (match run { types := [], functions := [] } 200 {} spawnOrder with
+    | (.value .unit, h) => h.stdout == "a\nb\nc\n"
+    | _ => false) = true := by
+  decide
+
+/-- `scope |s| { let _ = s.spawn(|| io.println("task")); let _ =
+io.println("block") }`: a task no join reaches runs when the block ends,
+after the block's own effects. -/
+example : (match run { types := [], functions := [] } 200 {}
+      (.scope (.block [.let_ false (.task printTy) (spawnOn 0 (taskOf 1 printTy (printLine "task"))),
+        .let_ false printTy (printLine "block")] none)) with
+    | (.value .unit, h) => h.stdout == "block\ntask\n"
+    | _ => false) = true := by
+  decide
+
+/-- `scope |s| { let t = s.spawn(|| 1 / 0); t.join() }`: a task's panic
+is the scope's. -/
+example : (match (run { types := [], functions := [] } 100 {}
+      (.scope (.block [.let_ true (.task .int)
+        (spawnOn 0 (taskOf 1 .int (.binary .div (.int 1) (.int 0))))] (some (joinOn 1))))).1 with
+    | .panic .divisionByZero => true
+    | _ => false) = true := by
+  decide
+
+/-- `scope |s| { let _ = s.spawn(|| io.println("task")); 1 / 0 }`: a
+panic in the block ends the run, and the task never runs. -/
+example : (match run { types := [], functions := [] } 100 {}
+      (.scope (.block [.let_ false (.task printTy) (spawnOn 0 (taskOf 1 printTy (printLine "task")))]
+        (some (.binary .div (.int 1) (.int 0))))) with
+    | (.panic .divisionByZero, h) => h.stdout == ""
+    | _ => false) = true := by
   decide
 
 end OskaFormal.Core

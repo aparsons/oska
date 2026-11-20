@@ -1,5 +1,5 @@
 {
-  "core_ir_version": 2,
+  "core_ir_version": 7,
   "types": [
     {"kind": "Struct", "name": "Point", "fields": ["Int", "Int"]},
     {

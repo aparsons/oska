@@ -1,24 +1,39 @@
 import Lean.Data.Json
 import OskaFormal.Core.Eval
+import OskaFormal.Core.Typing
 
 /-!
 # Oska Core: reading core IR
 
-The Lean reference reads a program of Oska Core as core IR version 2, the
+The Lean reference reads a program of Oska Core as core IR version 7, the
 JSON form `crates/oska-check/src/core_ir.rs` exports, into the syntax of
 `Syntax.lean`, and runs its `main` with `run` (`Eval.lean`).
 
-The reader refuses anything that is not core IR version 2, naming what is
-wrong and where: a version other than 2 (version 1 included: it has no
-`types`), an unknown `kind`, operator or type, a field missing, unknown
+The reader refuses anything that is not core IR version 7, naming what is
+wrong and where: a version other than 7 (versions 1 to 6 included), an
+unknown `kind`, operator, type or built-in, a field missing, unknown
 or of the wrong JSON type, an `Int` literal outside `-2^63 ..= 2^63 - 1`,
 two functions or two types of one name, a type named `Int`, `Bool` or
-`()`, two variants of one name in an enum, a call of a function the
-program does not have, or with a different number of arguments than that
-function has parameters, and a constructor (built or matched) of a struct or variant the program does
+`()` or of a built-in type (`String`, `Path`, `IoError`, `Result`, a
+capability, `Scope`, `Task`), a field of a struct or variant that is a
+capability, a function or a scope's or task's handle (`Scope`,
+`Task<T>`), a `Result` type that holds any of them, an `Ok` or `Err` pattern
+whose type is not a `Result`, a `?` whose conversion is not a function
+of the program with one parameter, a closure whose
+`captures` are not, in strictly ascending order, exactly the slots below
+its height that its body reads (a closure inside it included: what the
+interpreter captures, so the two runs cannot drift), two variants of one name in an
+enum, a call of a function the program does not have or of a built-in,
+with a different number of arguments than it has parameters (a mutating
+method's receiver counted, for a `Call`), a mutating call of a function
+the program does not have, that takes no `var self`, or with a different
+number of arguments than it has parameters, a receiver whose type is not
+a struct or enum the program declares, and a
+constructor (built or matched) of a struct or variant the program does
 not declare, or with a different number of fields. `entry` then refuses a
-program whose `main` is missing, takes parameters or does not return
-`()`. The reader does not type the program: the checker typed it before
+program whose `main` is missing, takes a parameter that is not a
+capability the runtime grants (`Stdout`, `Fs`, `FsRead`, `FsWrite`), or
+does not return `()`. The reader does not type the program: the checker typed it before
 the export, and a run that gets stuck says so. The checks at the end of
 this file run the reader on good and bad core IR.
 
@@ -73,14 +88,92 @@ def nat (path : String) (j : Json) : Read Nat := do
   let n ← int path j
   if n < 0 then .error s!"{path}: expected a slot, 0 or more" else .ok n.toNat
 
-/-- A type: `Int`, `Bool`, `()`, or one of the struct and enum names
-`types`. -/
-def ty (types : List String) (path : String) (j : Json) : Read Ty := do
+/-- A capability kind, by the name of its type. -/
+def capKind : String → Option CapKind
+  | "Stdout" => some .stdout
+  | "Fs" => some .fs | "FsRead" => some .fsRead | "FsWrite" => some .fsWrite
+  | "Dir" => some .dir | "DirRead" => some .dirRead | "DirWrite" => some .dirWrite
+  | _ => none
+
+/-- The names of the built-in types, which no declared type may take. -/
+def builtinTypes : List String :=
+  ["Int", "Bool", "()", "String", "Path", "IoError", "Result", "Stdout", "Fs", "FsRead", "FsWrite",
+    "Dir", "DirRead", "DirWrite", "Scope", "Task"]
+
+/-- Whether a type is or holds a scope's or a task's handle. -/
+partial def holdsHandle : Ty → Bool
+  | .scope | .task _ => true
+  | .result ok err => holdsHandle ok || holdsHandle err
+  | .fn _ ps ret => ps.any holdsHandle || holdsHandle ret
+  | _ => false
+
+/-- A type: `Int`, `Bool`, `()`, `String`, `Path`, `IoError`, a
+capability, `Scope`, one of the struct and enum names `types`, a function
+type, `{"kind": "Fn", "cap": BOOL, "params": [type...], "ret": type}`, a
+task, `{"kind": "Task", "result": type}`, or a `Result` that holds no
+capability, function or handle,
+`{"kind": "Result", "ok": type, "err": type}`. -/
+partial def ty (types : List String) (path : String) (j : Json) : Read Ty := do
+  if let .obj _ := j then
+    let kind ← str s!"{path}.kind" (← field path j "kind")
+    match kind with
+    | "Fn" =>
+      let _ ← fields path j ["kind", "cap", "params", "ret"]
+      let cap ← bool s!"{path}.cap" (← field path j "cap")
+      let items ← arr s!"{path}.params" (← field path j "params")
+      let ps ← (items.zip (List.range items.length)).mapM fun (p, i) =>
+        ty types s!"{path}.params[{i}]" p
+      return .fn cap ps (← ty types s!"{path}.ret" (← field path j "ret"))
+    | "Task" =>
+      let _ ← fields path j ["kind", "result"]
+      return .task (← ty types s!"{path}.result" (← field path j "result"))
+    | "Result" =>
+      let _ ← fields path j ["kind", "ok", "err"]
+      let t := Ty.result (← ty types s!"{path}.ok" (← field path j "ok"))
+        (← ty types s!"{path}.err" (← field path j "err"))
+      if holdsHandle t then
+        throw s!"{path}: a `Result` that holds a scope's or a task's handle; Oska Core has none"
+      if !t.fieldCapFree then
+        throw s!"{path}: a `Result` that holds a capability or a function; Oska Core has none"
+      return t
+    | k => throw s!"{path}: unknown type kind `{k}`"
   match ← str path j with
   | "Int" => .ok .int
   | "Bool" => .ok .bool
   | "()" => .ok .unit
-  | t => if types.contains t then .ok (.named t) else .error s!"{path}: unknown type `{t}`"
+  | "String" => .ok .string
+  | "Path" => .ok .path
+  | "IoError" => .ok .ioError
+  | "Scope" => .ok .scope
+  | t =>
+    match capKind t with
+    | some k => .ok (.cap k)
+    | none => if types.contains t then .ok (.named t) else .error s!"{path}: unknown type `{t}`"
+
+/-- A built-in call, by its core IR name, and how many arguments it takes,
+its receiver included. -/
+def builtin : String → Option (Builtin × Nat)
+  | "Stdout.println" => some (.println, 2)
+  | "Fs.restrict_to" => some (.restrictTo .fs, 2)
+  | "FsRead.restrict_to" => some (.restrictTo .fsRead, 2)
+  | "FsWrite.restrict_to" => some (.restrictTo .fsWrite, 2)
+  | "Dir.restrict_to" => some (.restrictTo .dir, 2)
+  | "DirRead.restrict_to" => some (.restrictTo .dirRead, 2)
+  | "DirWrite.restrict_to" => some (.restrictTo .dirWrite, 2)
+  | "Fs.read_only" => some (.readOnly .fs, 1)
+  | "Fs.write_only" => some (.writeOnly .fs, 1)
+  | "Dir.read_only" => some (.readOnly .dir, 1)
+  | "Dir.write_only" => some (.writeOnly .dir, 1)
+  | "DirRead.read_to_string" => some (.readToString, 2)
+  | "DirWrite.write" => some (.write, 3)
+  | "DirWrite.create_dir" => some (.createDir, 2)
+  | "Path.from" => some (.pathFrom, 1)
+  | "Path.new" => some (.pathNew, 1)
+  | "Result.is_ok" => some (.isOk, 1)
+  | "Result.unwrap_or" => some (.unwrapOr, 2)
+  | "Scope.spawn" => some (.spawn, 2)
+  | "Task.join" => some (.join, 1)
+  | _ => none
 
 def binOp (path : String) : String → Read BinOp
   | "+" => .ok .add | "-" => .ok .sub | "*" => .ok .mul | "/" => .ok .div | "%" => .ok .rem
@@ -90,10 +183,12 @@ def binOp (path : String) : String → Read BinOp
   | op => .error s!"{path}: unknown operator `{op}`"
 
 /-- What reading a function's body checks names against: the number of
-parameters of each function, by name, for each call's arity, and the
-struct and enum declarations, for each constructor. -/
+arguments a `Call` of each function passes (its receiver's included, for
+a mutating method), by name, for each call's arity; whether each takes
+`var self`; and the struct and enum declarations, for each constructor. -/
 structure Ctx where
   arities : List (String × Nat)
+  mutating : List (String × Bool)
   types : List TypeDecl
 
 /-- Read the list `items` at `path` with `read`, each at `path[i]`. -/
@@ -151,7 +246,27 @@ partial def pattern (ctx : Ctx) (path : String) (j : Json) : Read Pattern := do
       (pattern ctx)
     ctor ctx path type v ps.length
     .ok (.construct type v ps)
+  | "Ok" | "Err" =>
+    let _ ← fields path j ["kind", "type", "value"]
+    let t ← ty (ctx.types.map TypeDecl.name) s!"{path}.type" (← field path j "type")
+    let .result ok err := t
+      | .error s!"{path}.type: an `{kind}` pattern on a type that is not a `Result`"
+    let p ← pattern ctx s!"{path}.value" (← field path j "value")
+    .ok (.result (kind == "Ok") ok err p)
   | k => .error s!"{path}: unknown pattern kind `{k}`"
+
+/-- A place: a var and the path of struct fields in it. -/
+def place (path : String) (j : Json) : Read Place := do
+  let _ ← fields path j ["var", "fields"]
+  let var ← nat s!"{path}.var" (← field path j "var")
+  let items ← arr s!"{path}.fields" (← field path j "fields")
+  .ok { var, fields := ← list s!"{path}.fields" items nat }
+
+/-- A parameter of a function or closure. -/
+def param (types : List String) (path : String) (j : Json) : Read Param := do
+  let _ ← fields path j ["type", "binds"]
+  .ok { type := ← ty types s!"{path}.type" (← field path j "type"),
+        binds := ← bool s!"{path}.binds" (← field path j "binds") }
 
 mutual
   /-- An expression of core IR. -/
@@ -171,6 +286,18 @@ mutual
     | "Bool" =>
       let _ ← fields path j ["kind", "value"]
       .ok (.bool (← bool (at_ "value") (← field path j "value")))
+    | "Str" =>
+      let _ ← fields path j ["kind", "value"]
+      .ok (.str (← str (at_ "value") (← field path j "value")))
+    | "Builtin" =>
+      let _ ← fields path j ["kind", "name", "args"]
+      let name ← str (at_ "name") (← field path j "name")
+      let args ← list (at_ "args") (← arr (at_ "args") (← field path j "args")) (expr ctx)
+      match builtin name with
+      | none => .error s!"{path}: unknown built-in `{name}`"
+      | some (op, n) =>
+        if args.length = n then .ok (.builtin op args)
+        else .error s!"{path}: a call of the built-in `{name}` with {args.length} argument(s), but it has {n} parameter(s)"
     | "Local" =>
       let _ ← fields path j ["kind", "slot"]
       .ok (.local_ (← nat (at_ "slot") (← field path j "slot")))
@@ -218,6 +345,64 @@ mutual
       let sc ← sub "scrutinee"
       let arms ← list (at_ "arms") (← arr (at_ "arms") (← field path j "arms")) (arm ctx)
       .ok (.match_ sc arms)
+    | "Closure" =>
+      let _ ← fields path j ["kind", "params", "captures", "height", "cap", "ret", "body"]
+      let types := ctx.types.map TypeDecl.name
+      let ps ← list (at_ "params") (← arr (at_ "params") (← field path j "params")) (param types)
+      let height ← nat (at_ "height") (← field path j "height")
+      let cs ← list (at_ "captures") (← arr (at_ "captures") (← field path j "captures")) nat
+      if let some c := cs.find? (· ≥ height) then
+        throw s!"{at_ "captures"}: slot {c} is not below the closure's height {height}"
+      if !(cs.zip cs.tail).all (fun (a, b) => a < b) then
+        throw s!"{at_ "captures"}: {cs} is not in strictly ascending order"
+      let cap ← bool (at_ "cap") (← field path j "cap")
+      let ret ← ty types (at_ "ret") (← field path j "ret")
+      let body ← sub "body"
+      let reads := (List.range height).filter (body.reads ·)
+      if let some i := reads.find? (!cs.contains ·) then
+        throw s!"{at_ "captures"}: the body reads slot {i}, which the closure does not capture"
+      if let some c := cs.find? (!reads.contains ·) then
+        throw s!"{at_ "captures"}: slot {c} is captured, but the body does not read it"
+      .ok (.closure ps height cs cap ret body)
+    | "Var" =>
+      let _ ← fields path j ["kind", "var"]
+      .ok (.var_ (← nat (at_ "var") (← field path j "var")))
+    | "MutatingCall" =>
+      let _ ← fields path j ["kind", "function", "receiver", "args"]
+      let name ← str (at_ "function") (← field path j "function")
+      let pl ← place (at_ "receiver") (← field path j "receiver")
+      let args ← list (at_ "args") (← arr (at_ "args") (← field path j "args")) (expr ctx)
+      match ctx.arities.lookup name, ctx.mutating.lookup name with
+      | some n, some true =>
+        if args.length + 1 = n then .ok (.mutCall name pl args)
+        else .error s!"{path}: a mutating call of `{name}` with {args.length} argument(s), but it has {n - 1} parameter(s)"
+      | some _, _ => .error s!"{path}: a mutating call of `{name}`, which takes no `var self`"
+      | none, _ =>
+        .error s!"{path}: a mutating call of `{name}`, which the program does not define"
+    | "CallValue" =>
+      let _ ← fields path j ["kind", "callee", "args"]
+      let callee ← sub "callee"
+      let args ← list (at_ "args") (← arr (at_ "args") (← field path j "args")) (expr ctx)
+      .ok (.callValue callee args)
+    | "Ok" | "Err" =>
+      let _ ← fields path j ["kind", "value"]
+      .ok (.result (kind == "Ok") (← sub "value"))
+    | "Try" =>
+      let keys ← fields path j ["kind", "operand", "convert"]
+      let operand ← sub "operand"
+      let conv ← if keys.contains "convert" then do
+          let name ← str (at_ "convert") (← field path j "convert")
+          match ctx.arities.lookup name with
+          | none =>
+            throw s!"{at_ "convert"}: `?` converts with `{name}`, which the program does not define"
+          | some 1 => pure (some name)
+          | some n =>
+            throw s!"{at_ "convert"}: `?` converts with `{name}`, which takes {n} parameter(s), not 1"
+        else pure none
+      .ok (.try_ operand conv)
+    | "Scope" =>
+      let _ ← fields path j ["kind", "body"]
+      .ok (.scope (← sub "body"))
     | k => .error s!"{path}: unknown expression kind `{k}`"
 
   /-- A statement of core IR. -/
@@ -232,6 +417,14 @@ mutual
     | "Expr" =>
       let _ ← fields path j ["kind", "value"]
       .ok (.expr (← expr ctx s!"{path}.value" (← field path j "value")))
+    | "Var" =>
+      let _ ← fields path j ["kind", "type", "value"]
+      let t ← ty (ctx.types.map TypeDecl.name) s!"{path}.type" (← field path j "type")
+      .ok (.var_ t (← expr ctx s!"{path}.value" (← field path j "value")))
+    | "Assign" =>
+      let _ ← fields path j ["kind", "place", "value"]
+      let pl ← place s!"{path}.place" (← field path j "place")
+      .ok (.assign pl (← expr ctx s!"{path}.value" (← field path j "value")))
     | k => .error s!"{path}: unknown statement kind `{k}`"
 
   /-- A `match` arm of core IR. -/
@@ -244,11 +437,6 @@ mutual
     .ok (.mk p g (← expr ctx s!"{path}.body" (← field path j "body")))
 end
 
-def param (types : List String) (path : String) (j : Json) : Read Param := do
-  let _ ← fields path j ["type", "binds"]
-  .ok { type := ← ty types s!"{path}.type" (← field path j "type"),
-        binds := ← bool s!"{path}.binds" (← field path j "binds") }
-
 /-- The first name that `names` holds twice, if any. -/
 def duplicate (names : List String) : Option String :=
   names.find? (fun n => (names.filter (· == n)).length > 1)
@@ -258,7 +446,14 @@ any of `types`. -/
 def typeDecl (types : List String) (path : String) (j : Json) : Read TypeDecl := do
   let kind ← str s!"{path}.kind" (← field path j "kind")
   let tys (path : String) (j : Json) : Read (List Ty) := do
-    list path (← arr path j) (ty types)
+    let ts ← list path (← arr path j) (ty types)
+    if ts.any (·.capKind?.isSome) then
+      throw s!"{path}: a field is a capability; no struct or enum of Oska Core holds one"
+    if ts.any (·.isFn) then
+      throw s!"{path}: a field is a function; no struct or enum of Oska Core holds one"
+    if ts.any holdsHandle then
+      throw s!"{path}: a field is a scope's or a task's handle; no struct or enum of Oska Core holds one"
+    pure ts
   match kind with
   | "Struct" =>
     let _ ← fields path j ["kind", "name", "fields"]
@@ -278,7 +473,7 @@ def typeDecl (types : List String) (path : String) (j : Json) : Read TypeDecl :=
   | k => .error s!"{path}: unknown type declaration kind `{k}`"
 
 /-- The version of core IR this reader reads. -/
-def version : Int := 2
+def version : Int := 7
 
 /-- A program of Oska Core, read from the text of its core IR. -/
 def program (text : String) : Read Program := do
@@ -294,37 +489,49 @@ def program (text : String) : Read Program := do
   let typeNames ← list "types" ts fun path t => do str s!"{path}.name" (← field path t "name")
   if let some dup := duplicate typeNames then
     throw s!"types: two types are named `{dup}`"
-  if let some builtin := typeNames.find? (["Int", "Bool", "()"].contains ·) then
+  if let some builtin := typeNames.find? (builtinTypes.contains ·) then
     throw s!"types: a type is named `{builtin}`, the name of a built-in type"
   let types ← list "types" ts (typeDecl typeNames)
   let fs ← arr "functions" (← field "program" j "functions")
   -- The names and arities first, so a call may reach a later function.
   let heads ← list "functions" fs fun path f => do
-    let _ ← fields path f ["name", "params", "ret", "body"]
+    let keys ← fields path f ["name", "receiver", "params", "ret", "body"]
     let name ← str s!"{path}.name" (← field path f "name")
+    let receiver ← if keys.contains "receiver" then do
+        let t ← ty typeNames s!"{path}.receiver" (← field path f "receiver")
+        let .named _ := t
+          | throw s!"{path}.receiver: the receiver of `{name}` is not a struct or enum the program declares"
+        pure (some t)
+      else pure none
     let params ← list s!"{path}.params" (← arr s!"{path}.params" (← field path f "params"))
       (param typeNames)
-    pure (name, params)
+    pure (name, receiver, params)
   if let some dup := duplicate (heads.map (·.1)) then
     throw s!"functions: two functions are named `{dup}`"
-  let ctx : Ctx := { arities := heads.map fun (n, ps) => (n, ps.length), types }
-  let functions ← (fs.zip heads).zip (List.range fs.length) |>.mapM fun ((f, (name, params)), i) => do
-    let path := s!"functions[{i}]"
-    pure { name, params,
-           ret := ← ty typeNames s!"{path}.ret" (← field path f "ret"),
-           body := ← expr ctx s!"{path}.body" (← field path f "body") }
+  let ctx : Ctx :=
+    { arities := heads.map fun (n, r, ps) => (n, r.toList.length + ps.length),
+      mutating := heads.map fun (n, r, _) => (n, r.isSome), types }
+  let functions ← (fs.zip heads).zip (List.range fs.length) |>.mapM
+    fun ((f, (name, receiver, params)), i) => do
+      let path := s!"functions[{i}]"
+      pure { name, receiver, params,
+             ret := ← ty typeNames s!"{path}.ret" (← field path f "ret"),
+             body := ← expr ctx s!"{path}.body" (← field path f "body") }
   pure { types, functions }
 
 /-- The expression a run of program `P` starts from: a call of its `main`,
-which takes no parameters and returns `()`, as an Oska `main` in Oska
-Core does. -/
+which returns `()`, with the capability each parameter's type names,
+rooted anywhere, as the runtime grants them (`grants`): the root of
+authority. -/
 def entry (P : Program) : Read Expr :=
   match P.find? "main" with
   | none => .error "the program has no function `main`"
   | some f =>
-    if !f.params.isEmpty then .error "`main` takes parameters; in Oska Core it takes none"
+    if f.receiver.isSome then .error "`main` is a mutating method"
+    else if f.params.any (fun p => !(p.type.capKind?.map CapKind.granted).getD false) then
+      .error "`main` takes a parameter that is not a capability the runtime grants"
     else if f.ret ≠ .unit then .error "`main` does not return `()`"
-    else .ok (.call "main" [])
+    else .ok (.call "main" (grants f.params))
 
 /-- Whether reading `text` fails with a message that contains `part`. -/
 def refuses (text part : String) : Bool :=
@@ -336,13 +543,19 @@ def refuses (text part : String) : Bool :=
 runs to `outcome`, within 1000 steps. -/
 def runsTo (text : String) (outcome : RunResult → Bool) : Bool :=
   match program text >>= fun P => (entry P).map (P, ·) with
-  | .ok (P, e) => outcome (run P 1000 e)
+  | .ok (P, e) => outcome (run P 1000 {} e).1
   | .error _ => false
 
-/-- Core IR version 2 with these `types` and a `main` with this body. -/
+/-- Core IR version 7 with these `types` and a `main` with this body. -/
 def withMain (types body : String) : String :=
-  "{\"core_ir_version\": 2, \"types\": [" ++ types ++ "], \"functions\": [{\"name\": \"main\", " ++
+  "{\"core_ir_version\": 7, \"types\": [" ++ types ++ "], \"functions\": [{\"name\": \"main\", " ++
     "\"params\": [], \"ret\": \"()\", \"body\": " ++ body ++ "}]}"
+
+/-- Core IR version 7 with these `types`, these other functions, and a
+`main` with this body. -/
+def withFunctions (types functions body : String) : String :=
+  "{\"core_ir_version\": 7, \"types\": [" ++ types ++ "], \"functions\": [" ++ functions ++
+    ", {\"name\": \"main\", \"params\": [], \"ret\": \"()\", \"body\": " ++ body ++ "}]}"
 
 /-- `enum Shape { Dot, Square(Int) }` and `struct Pair { a: Int, b: Bool }`. -/
 def shapeTypes : String :=
@@ -350,12 +563,48 @@ def shapeTypes : String :=
     "{\"name\": \"Square\", \"fields\": [\"Int\"]}]}, " ++
     "{\"kind\": \"Struct\", \"name\": \"Pair\", \"fields\": [\"Int\", \"Bool\"]}"
 
-#guard refuses "{\"core_ir_version\": 3, \"types\": [], \"functions\": []}" "core_ir_version 3"
--- Version 1, which has no `types`, is refused by its version.
+/-- `struct Counter { n: Int }`. -/
+def counterTypes : String :=
+  "{\"kind\": \"Struct\", \"name\": \"Counter\", \"fields\": [\"Int\"]}"
+
+/-- `impl Counter { fn bump(var self) { self.n = self.n + 1 } }`. -/
+def counterBump : String :=
+  "{\"name\": \"Counter.bump\", \"receiver\": \"Counter\", \"params\": [], \"ret\": \"()\", " ++
+    "\"body\": {\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Assign\", \"place\": " ++
+    "{\"var\": 0, \"fields\": [0]}, \"value\": {\"kind\": \"Binary\", \"op\": \"+\", " ++
+    "\"lhs\": {\"kind\": \"Field\", \"base\": {\"kind\": \"Var\", \"var\": 0}, \"index\": 0}, " ++
+    "\"rhs\": {\"kind\": \"Int\", \"value\": 1}}}]}}"
+
+/-- `var a = Counter(n: 0); let b = a; a.bump(); a.n = a.n + 10;
+let _ = 1 / (a.n - b.n - 10)`. -/
+def counterMain : String :=
+  "{\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Var\", \"type\": \"Counter\", \"value\": " ++
+    "{\"kind\": \"Construct\", \"type\": \"Counter\", \"fields\": [{\"kind\": \"Int\", " ++
+    "\"value\": 0}]}}, {\"kind\": \"Let\", \"binds\": true, \"type\": \"Counter\", " ++
+    "\"value\": {\"kind\": \"Var\", \"var\": 0}}, {\"kind\": \"Expr\", \"value\": " ++
+    "{\"kind\": \"MutatingCall\", \"function\": \"Counter.bump\", \"receiver\": " ++
+    "{\"var\": 0, \"fields\": []}, \"args\": []}}, {\"kind\": \"Assign\", \"place\": " ++
+    "{\"var\": 0, \"fields\": [0]}, \"value\": {\"kind\": \"Binary\", \"op\": \"+\", " ++
+    "\"lhs\": {\"kind\": \"Field\", \"base\": {\"kind\": \"Var\", \"var\": 0}, " ++
+    "\"index\": 0}, \"rhs\": {\"kind\": \"Int\", \"value\": 10}}}, {\"kind\": \"Let\", " ++
+    "\"binds\": false, \"type\": \"Int\", \"value\": {\"kind\": \"Binary\", \"op\": \"/\", " ++
+    "\"lhs\": {\"kind\": \"Int\", \"value\": 1}, \"rhs\": {\"kind\": \"Binary\", " ++
+    "\"op\": \"-\", \"lhs\": {\"kind\": \"Binary\", \"op\": \"-\", \"lhs\": " ++
+    "{\"kind\": \"Field\", \"base\": {\"kind\": \"Var\", \"var\": 0}, \"index\": 0}, " ++
+    "\"rhs\": {\"kind\": \"Field\", \"base\": {\"kind\": \"Local\", \"slot\": 0}, " ++
+    "\"index\": 0}}, \"rhs\": {\"kind\": \"Int\", \"value\": 10}}}}]}"
+
+#guard refuses "{\"core_ir_version\": 8, \"types\": [], \"functions\": []}" "core_ir_version 8"
+-- Versions 1 to 6 are refused by their version.
 #guard refuses "{\"core_ir_version\": 1, \"functions\": []}" "core_ir_version 1"
-#guard refuses "{\"core_ir_version\": 2, \"functions\": []}" "missing field `types`"
-#guard refuses "{\"core_ir_version\": 2, \"types\": [], \"functions\": []} junk" "not JSON"
-#guard refuses "{\"core_ir_version\": 2, \"types\": [], \"functions\": [], \"x\": 1}"
+#guard refuses "{\"core_ir_version\": 2, \"types\": [], \"functions\": []}" "core_ir_version 2"
+#guard refuses "{\"core_ir_version\": 3, \"types\": [], \"functions\": []}" "core_ir_version 3"
+#guard refuses "{\"core_ir_version\": 4, \"types\": [], \"functions\": []}" "core_ir_version 4"
+#guard refuses "{\"core_ir_version\": 5, \"types\": [], \"functions\": []}" "core_ir_version 5"
+#guard refuses "{\"core_ir_version\": 6, \"types\": [], \"functions\": []}" "core_ir_version 6"
+#guard refuses "{\"core_ir_version\": 7, \"functions\": []}" "missing field `types`"
+#guard refuses "{\"core_ir_version\": 7, \"types\": [], \"functions\": []} junk" "not JSON"
+#guard refuses "{\"core_ir_version\": 7, \"types\": [], \"functions\": [], \"x\": 1}"
   "unknown field `x`"
 #guard refuses (withMain "" "{\"kind\": \"Loop\"}") "unknown expression kind `Loop`"
 #guard refuses (withMain "" "{\"kind\": \"Int\", \"value\": 9223372036854775808}") "outside Int"
@@ -383,9 +632,9 @@ def shapeTypes : String :=
 #guard refuses (withMain shapeTypes ("{\"kind\": \"Match\", \"scrutinee\": {\"kind\": \"Unit\"}, " ++
     "\"arms\": [{\"pattern\": {\"kind\": \"Range\"}, \"body\": {\"kind\": \"Unit\"}}]}"))
   "unknown pattern kind `Range`"
-#guard refuses (withMain "{\"kind\": \"Struct\", \"name\": \"A\", \"fields\": [\"String\"]}"
+#guard refuses (withMain "{\"kind\": \"Struct\", \"name\": \"A\", \"fields\": [\"U8\"]}"
     "{\"kind\": \"Unit\"}")
-  "unknown type `String`"
+  "unknown type `U8`"
 #guard refuses (withMain ("{\"kind\": \"Struct\", \"name\": \"A\", \"fields\": []}, " ++
     "{\"kind\": \"Struct\", \"name\": \"A\", \"fields\": []}") "{\"kind\": \"Unit\"}")
   "two types are named `A`"
@@ -395,6 +644,114 @@ def shapeTypes : String :=
 #guard refuses (withMain "{\"kind\": \"Enum\", \"name\": \"()\", \"variants\": []}"
     "{\"kind\": \"Unit\"}")
   "a type is named `()`"
+#guard refuses (withMain "{\"kind\": \"Struct\", \"name\": \"Path\", \"fields\": []}"
+    "{\"kind\": \"Unit\"}")
+  "a type is named `Path`"
+#guard refuses (withMain "{\"kind\": \"Struct\", \"name\": \"Holder\", \"fields\": [\"Stdout\"]}"
+    "{\"kind\": \"Unit\"}")
+  "a field is a capability"
+#guard refuses (withMain ("{\"kind\": \"Struct\", \"name\": \"Holder\", \"fields\": [" ++
+    "{\"kind\": \"Fn\", \"cap\": false, \"params\": [], \"ret\": \"()\"}]}") "{\"kind\": \"Unit\"}")
+  "a field is a function"
+#guard refuses (withMain "" ("{\"kind\": \"Closure\", \"params\": [], \"captures\": [0], " ++
+    "\"height\": 0, \"cap\": false, \"ret\": \"()\", \"body\": {\"kind\": \"Unit\"}}"))
+  "slot 0 is not below the closure's height 0"
+#guard refuses (withMain "" ("{\"kind\": \"Closure\", \"params\": [], \"captures\": [], " ++
+    "\"height\": 0, \"cap\": false, \"ret\": {\"kind\": \"Tuple\"}, \"body\": {\"kind\": \"Unit\"}}"))
+  "unknown type kind `Tuple`"
+-- `let a = 1; let b = 2` then a closure at height 2 that reads both slots.
+#guard refuses (withMain "" ("{\"kind\": \"Block\", \"stmts\": [], \"value\": " ++
+    "{\"kind\": \"Closure\", \"params\": [], \"captures\": [1, 0], \"height\": 2, " ++
+    "\"cap\": false, \"ret\": \"Int\", \"body\": {\"kind\": \"Binary\", \"op\": \"+\", " ++
+    "\"lhs\": {\"kind\": \"Local\", \"slot\": 0}, \"rhs\": {\"kind\": \"Local\", \"slot\": 1}}}}"))
+  "is not in strictly ascending order"
+#guard refuses (withMain "" ("{\"kind\": \"Closure\", \"params\": [], \"captures\": [0, 0], " ++
+    "\"height\": 2, \"cap\": false, \"ret\": \"Int\", \"body\": {\"kind\": \"Local\", \"slot\": 0}}"))
+  "is not in strictly ascending order"
+#guard refuses (withMain "" ("{\"kind\": \"Closure\", \"params\": [], \"captures\": [0], " ++
+    "\"height\": 2, \"cap\": false, \"ret\": \"Int\", \"body\": {\"kind\": \"Binary\", " ++
+    "\"op\": \"+\", \"lhs\": {\"kind\": \"Local\", \"slot\": 0}, \"rhs\": " ++
+    "{\"kind\": \"Local\", \"slot\": 1}}}"))
+  "the body reads slot 1, which the closure does not capture"
+-- A read inside a closure nested in the body counts; the nested closure's own slot does not.
+#guard refuses (withMain "" ("{\"kind\": \"Closure\", \"params\": [], \"captures\": [], " ++
+    "\"height\": 1, \"cap\": false, \"ret\": {\"kind\": \"Fn\", \"cap\": false, " ++
+    "\"params\": [\"Int\"], \"ret\": \"Int\"}, \"body\": {\"kind\": \"Closure\", " ++
+    "\"params\": [{\"type\": \"Int\", \"binds\": true}], \"captures\": [0], \"height\": 1, " ++
+    "\"cap\": false, \"ret\": \"Int\", \"body\": {\"kind\": \"Binary\", \"op\": \"+\", " ++
+    "\"lhs\": {\"kind\": \"Local\", \"slot\": 0}, \"rhs\": {\"kind\": \"Local\", \"slot\": 1}}}}"))
+  "the body reads slot 0, which the closure does not capture"
+#guard refuses (withMain "" ("{\"kind\": \"Closure\", \"params\": [], \"captures\": [0, 1], " ++
+    "\"height\": 2, \"cap\": false, \"ret\": \"Int\", \"body\": {\"kind\": \"Local\", \"slot\": 1}}"))
+  "slot 0 is captured, but the body does not read it"
+#guard refuses (withMain "" ("{\"kind\": \"Closure\", \"params\": [], \"captures\": [], " ++
+    "\"height\": 0, \"ret\": \"()\", \"body\": {\"kind\": \"Unit\"}}"))
+  "missing field `cap`"
+#guard refuses (withMain "" "{\"kind\": \"Builtin\", \"name\": \"Stdin.read_line\", \"args\": []}")
+  "unknown built-in `Stdin.read_line`"
+#guard refuses (withMain "" ("{\"kind\": \"Builtin\", \"name\": \"Path.from\", \"args\": [" ++
+    "{\"kind\": \"Str\", \"value\": \"a\"}, {\"kind\": \"Str\", \"value\": \"b\"}]}"))
+  "with 2 argument(s), but it has 1 parameter(s)"
+-- `Result` types, `Ok` and `Err` patterns and `?`.
+#guard refuses (withMain "{\"kind\": \"Struct\", \"name\": \"IoError\", \"fields\": []}"
+    "{\"kind\": \"Unit\"}")
+  "a type is named `IoError`"
+#guard refuses (withMain "" ("{\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Let\", " ++
+    "\"binds\": false, \"type\": {\"kind\": \"Result\", \"ok\": \"Stdout\", \"err\": \"()\"}, " ++
+    "\"value\": {\"kind\": \"Unit\"}}]}"))
+  "a `Result` that holds a capability or a function"
+#guard refuses (withMain "" ("{\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Let\", " ++
+    "\"binds\": false, \"type\": {\"kind\": \"Result\", \"ok\": \"Int\"}, " ++
+    "\"value\": {\"kind\": \"Unit\"}}]}"))
+  "missing field `err`"
+#guard refuses (withMain "" ("{\"kind\": \"Match\", \"scrutinee\": {\"kind\": \"Unit\"}, " ++
+    "\"arms\": [{\"pattern\": {\"kind\": \"Ok\", \"type\": \"Int\", " ++
+    "\"value\": {\"kind\": \"Wildcard\"}}, \"body\": {\"kind\": \"Unit\"}}]}"))
+  "an `Ok` pattern on a type that is not a `Result`"
+#guard refuses (withMain "" ("{\"kind\": \"Try\", \"operand\": {\"kind\": \"Unit\"}, " ++
+    "\"convert\": \"absent\"}"))
+  "`?` converts with `absent`, which the program does not define"
+#guard refuses (withFunctions "" ("{\"name\": \"two\", \"params\": [{\"type\": \"Int\", " ++
+    "\"binds\": true}, {\"type\": \"Int\", \"binds\": true}], \"ret\": \"Int\", " ++
+    "\"body\": {\"kind\": \"Local\", \"slot\": 0}}")
+    "{\"kind\": \"Try\", \"operand\": {\"kind\": \"Unit\"}, \"convert\": \"two\"}")
+  "`?` converts with `two`, which takes 2 parameter(s), not 1"
+-- `var` bindings, assignment and mutating methods.
+#guard refuses (withFunctions "" ("{\"name\": \"f\", \"params\": [], \"ret\": \"()\", " ++
+    "\"body\": {\"kind\": \"Unit\"}}")
+    ("{\"kind\": \"MutatingCall\", \"function\": \"f\", \"receiver\": {\"var\": 0, " ++
+    "\"fields\": []}, \"args\": []}"))
+  "a mutating call of `f`, which takes no `var self`"
+#guard refuses (withMain "" ("{\"kind\": \"MutatingCall\", \"function\": \"absent\", " ++
+    "\"receiver\": {\"var\": 0, \"fields\": []}, \"args\": []}"))
+  "a mutating call of `absent`, which the program does not define"
+#guard refuses (withFunctions counterTypes counterBump
+    ("{\"kind\": \"MutatingCall\", \"function\": \"Counter.bump\", \"receiver\": " ++
+    "{\"var\": 0, \"fields\": []}, \"args\": [{\"kind\": \"Unit\"}]}"))
+  "a mutating call of `Counter.bump` with 1 argument(s), but it has 0 parameter(s)"
+-- A `Call` of a mutating method passes its receiver too.
+#guard refuses (withFunctions counterTypes counterBump
+    "{\"kind\": \"Call\", \"function\": \"Counter.bump\", \"args\": []}")
+  "a call of `Counter.bump` with 0 argument(s), but it has 1 parameter(s)"
+#guard refuses (withFunctions "" ("{\"name\": \"f\", \"receiver\": \"Int\", \"params\": [], " ++
+    "\"ret\": \"()\", \"body\": {\"kind\": \"Unit\"}}") "{\"kind\": \"Unit\"}")
+  "the receiver of `f` is not a struct or enum the program declares"
+#guard refuses (withMain "" ("{\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Assign\", " ++
+    "\"place\": {\"var\": 0}, \"value\": {\"kind\": \"Unit\"}}]}"))
+  "missing field `fields`"
+#guard (match program ("{\"core_ir_version\": 7, \"types\": [" ++ counterTypes ++
+    "], \"functions\": [{\"name\": \"main\", \"receiver\": \"Counter\", \"params\": [], " ++
+    "\"ret\": \"()\", \"body\": {\"kind\": \"Unit\"}}]}") >>= entry with
+  | .error e => e == "`main` is a mutating method"
+  | .ok _ => false)
+-- `var a = Counter(n: 0); let b = a; a.bump(); a.n = a.n + 10; let _ = 1 / (a.n - b.n - 10)`:
+-- `b` keeps the value `a` had, so the divisor is 1, not 0.
+#guard runsTo (withFunctions counterTypes counterBump counterMain)
+  fun | .value .unit => true | _ => false
+-- With `- 11` in place of `- 10` the divisor is 0 exactly when `b.n` is still 0.
+#guard runsTo (withFunctions counterTypes counterBump (counterMain.replace
+    "\"value\": 10}}}}]}" "\"value\": 11}}}}]}"))
+  fun | .panic .divisionByZero => true | _ => false
 #guard runsTo (withMain "" "{\"kind\": \"Block\", \"stmts\": []}")
   fun | .value .unit => true | _ => false
 #guard runsTo
@@ -419,5 +776,86 @@ def shapeTypes : String :=
     "\"lhs\": {\"kind\": \"Local\", \"slot\": 0}, \"rhs\": {\"kind\": \"Int\", \"value\": 0}}}]}}, " ++
     "{\"pattern\": {\"kind\": \"Wildcard\"}, \"body\": {\"kind\": \"Unit\"}}]}"))
   fun | .panic .divisionByZero => true | _ => false
+-- `let n = 7; let f = |x: Int| x / (x - n); let _ = f(7)`: the closure captures `n`, slot 0,
+-- and the call divides by zero.
+#guard runsTo
+  (withMain "" ("{\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Let\", \"binds\": true, " ++
+    "\"type\": \"Int\", \"value\": {\"kind\": \"Int\", \"value\": 7}}, {\"kind\": \"Let\", " ++
+    "\"binds\": true, \"type\": {\"kind\": \"Fn\", \"cap\": false, \"params\": [\"Int\"], \"ret\": \"Int\"}, " ++
+    "\"value\": {\"kind\": \"Closure\", \"params\": [{\"type\": \"Int\", \"binds\": true}], " ++
+    "\"captures\": [0], \"height\": 1, \"cap\": false, \"ret\": \"Int\", \"body\": {\"kind\": \"Binary\", " ++
+    "\"op\": \"/\", \"lhs\": {\"kind\": \"Local\", \"slot\": 1}, \"rhs\": {\"kind\": " ++
+    "\"Binary\", \"op\": \"-\", \"lhs\": {\"kind\": \"Local\", \"slot\": 1}, \"rhs\": " ++
+    "{\"kind\": \"Local\", \"slot\": 0}}}}}, {\"kind\": \"Let\", \"binds\": false, " ++
+    "\"type\": \"Int\", \"value\": {\"kind\": \"CallValue\", \"callee\": {\"kind\": " ++
+    "\"Local\", \"slot\": 1}, \"args\": [{\"kind\": \"Int\", \"value\": 7}]}}]}"))
+  fun | .panic .divisionByZero => true | _ => false
+-- `struct Wrapped { code: Int }`, `fn half(n: Int) -> Result<Int, Int> { if n % 2 == 0 {
+-- Ok(n / 2) } else { Err(n) } }`, `impl From<Int> for Wrapped { fn from(code: Int) -> Wrapped {
+-- Wrapped(code: code / 0) } }`, exported as the function `<Wrapped as From<Int>>.from`, and
+-- `fn f() -> Result<Int, Wrapped> { let x = half(3)?; Ok(x) }`: the `?` converts `3` before it
+-- returns, and the conversion divides by zero. The reader checks only that a conversion is a
+-- function of the program with one parameter; the checker typed it, as `ConvTyped` states.
+#guard runsTo
+  (withFunctions "{\"kind\": \"Struct\", \"name\": \"Wrapped\", \"fields\": [\"Int\"]}" ("{\"name\": \"half\", \"params\": [{\"type\": \"Int\", \"binds\": true}], " ++
+    "\"ret\": {\"kind\": \"Result\", \"ok\": \"Int\", \"err\": \"Int\"}, \"body\": " ++
+    "{\"kind\": \"If\", \"cond\": {\"kind\": \"Binary\", \"op\": \"==\", \"lhs\": " ++
+    "{\"kind\": \"Binary\", \"op\": \"%\", \"lhs\": {\"kind\": \"Local\", \"slot\": 0}, " ++
+    "\"rhs\": {\"kind\": \"Int\", \"value\": 2}}, \"rhs\": {\"kind\": \"Int\", \"value\": 0}}, " ++
+    "\"then\": {\"kind\": \"Ok\", \"value\": {\"kind\": \"Binary\", \"op\": \"/\", " ++
+    "\"lhs\": {\"kind\": \"Local\", \"slot\": 0}, \"rhs\": {\"kind\": \"Int\", \"value\": 2}}}, " ++
+    "\"else\": {\"kind\": \"Err\", \"value\": {\"kind\": \"Local\", \"slot\": 0}}}}, " ++
+    "{\"name\": \"<Wrapped as From<Int>>.from\", \"params\": [{\"type\": \"Int\", " ++
+    "\"binds\": true}], \"ret\": \"Wrapped\", \"body\": {\"kind\": \"Construct\", " ++
+    "\"type\": \"Wrapped\", \"fields\": [{\"kind\": \"Binary\", \"op\": \"/\", " ++
+    "\"lhs\": {\"kind\": \"Local\", \"slot\": 0}, \"rhs\": {\"kind\": \"Int\", \"value\": 0}}]}}, " ++
+    "{\"name\": \"f\", \"params\": [], \"ret\": {\"kind\": \"Result\", \"ok\": \"Int\", " ++
+    "\"err\": \"Wrapped\"}, \"body\": {\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Let\", " ++
+    "\"binds\": true, \"type\": \"Int\", \"value\": {\"kind\": \"Try\", \"operand\": " ++
+    "{\"kind\": \"Call\", \"function\": \"half\", \"args\": [{\"kind\": \"Int\", \"value\": 3}]}, " ++
+    "\"convert\": \"<Wrapped as From<Int>>.from\"}}], \"value\": {\"kind\": \"Ok\", \"value\": {\"kind\": \"Local\", " ++
+    "\"slot\": 0}}}}")
+    ("{\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Let\", \"binds\": false, \"type\": " ++
+    "{\"kind\": \"Result\", \"ok\": \"Int\", \"err\": \"Wrapped\"}, \"value\": {\"kind\": \"Call\", " ++
+    "\"function\": \"f\", \"args\": []}}]}"))
+  fun | .panic .divisionByZero => true | _ => false
+
+/-- `let _: Int = scope |s| { let t = s.spawn(|| task); t.join() }`. -/
+def scopeMain (task : String) : String :=
+  "{\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Let\", \"binds\": false, \"type\": \"Int\", " ++
+    "\"value\": {\"kind\": \"Scope\", \"body\": {\"kind\": \"Block\", \"stmts\": [{\"kind\": " ++
+    "\"Let\", \"binds\": true, \"type\": {\"kind\": \"Task\", \"result\": \"Int\"}, \"value\": " ++
+    "{\"kind\": \"Builtin\", \"name\": \"Scope.spawn\", \"args\": [{\"kind\": \"Local\", " ++
+    "\"slot\": 0}, {\"kind\": \"Closure\", \"params\": [], \"captures\": [], \"height\": 1, " ++
+    "\"cap\": false, \"ret\": \"Int\", \"body\": " ++ task ++ "}]}}], \"value\": {\"kind\": " ++
+    "\"Builtin\", \"name\": \"Task.join\", \"args\": [{\"kind\": \"Local\", \"slot\": 1}]}}}}]}"
+
+-- A scope that spawns a task and joins it runs; a task's panic is the scope's.
+#guard runsTo (withMain "" (scopeMain "{\"kind\": \"Int\", \"value\": 1}"))
+  fun | .value .unit => true | _ => false
+#guard runsTo (withMain "" (scopeMain ("{\"kind\": \"Binary\", \"op\": \"/\", " ++
+    "\"lhs\": {\"kind\": \"Int\", \"value\": 1}, \"rhs\": {\"kind\": \"Int\", \"value\": 0}}")))
+  fun | .panic .divisionByZero => true | _ => false
+#guard refuses (withMain "" (scopeMain "{\"kind\": \"Int\", \"value\": 1}" |>.replace
+    "{\"kind\": \"Task\", \"result\": \"Int\"}" "{\"kind\": \"Task\"}"))
+  "missing field `result`"
+#guard refuses (withMain "" "{\"kind\": \"Scope\", \"body\": {\"kind\": \"Unit\"}, \"handle\": 0}")
+  "unknown field `handle`"
+#guard refuses (withMain "" "{\"kind\": \"Scope\"}") "missing field `body`"
+#guard refuses (withMain "{\"kind\": \"Struct\", \"name\": \"Holder\", \"fields\": [\"Scope\"]}"
+    "{\"kind\": \"Unit\"}")
+  "a field is a scope's or a task's handle"
+#guard refuses (withMain ("{\"kind\": \"Enum\", \"name\": \"Holder\", \"variants\": [{\"name\": " ++
+    "\"A\", \"fields\": [{\"kind\": \"Task\", \"result\": \"Int\"}]}]}") "{\"kind\": \"Unit\"}")
+  "a field is a scope's or a task's handle"
+#guard refuses (withMain "" ("{\"kind\": \"Block\", \"stmts\": [{\"kind\": \"Let\", " ++
+    "\"binds\": false, \"type\": {\"kind\": \"Result\", \"ok\": {\"kind\": \"Task\", " ++
+    "\"result\": \"Int\"}, \"err\": \"()\"}, \"value\": {\"kind\": \"Unit\"}}]}"))
+  "a `Result` that holds a scope's or a task's handle"
+#guard refuses (withMain "{\"kind\": \"Struct\", \"name\": \"Task\", \"fields\": []}"
+    "{\"kind\": \"Unit\"}")
+  "the name of a built-in type"
+#guard refuses (withMain "" "{\"kind\": \"Builtin\", \"name\": \"Task.join\", \"args\": []}")
+  "a call of the built-in `Task.join` with 0 argument(s), but it has 1 parameter(s)"
 
 end OskaFormal.Core.CoreIR

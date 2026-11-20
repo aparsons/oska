@@ -136,9 +136,8 @@ const EM_AARCH64: u64 = 183;
 const EM_X86_64: u64 = 62;
 
 /// The host's supported platform, named as release assets name it, when
-/// `oskac` builds for it by default. Windows is not one until every
-/// program runs natively there (#179): `oskac build` on Windows still
-/// writes `linux-aarch64`.
+/// `oskac` builds for it by default: every host with a backend, Windows
+/// included (#179).
 fn host_platform() -> Option<&'static str> {
     if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
         Some("linux-aarch64")
@@ -148,6 +147,8 @@ fn host_platform() -> Option<&'static str> {
         Some("macos-aarch64")
     } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
         Some("macos-x86_64")
+    } else if cfg!(all(windows, target_arch = "x86_64")) {
+        Some("windows-x86_64")
     } else {
         None
     }
@@ -235,6 +236,9 @@ fn without_a_target_the_host_platform_is_built_for_when_it_has_a_backend() {
     }
     if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
         assert_eq!(expected, "macos-x86_64");
+    }
+    if cfg!(all(windows, target_arch = "x86_64")) {
+        assert_eq!(expected, "windows-x86_64");
     }
 }
 

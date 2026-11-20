@@ -96,3 +96,45 @@ fn environment_names_ignore_case_on_windows_as_in_the_interpreter() {
     assert_eq!(String::from_utf8_lossy(&native.stdout), "set: yes\n");
     assert_eq!(native.stdout, interpreted.stdout);
 }
+
+/// `oskac run` and `oskac test` are native on Windows (#179): the
+/// executable each writes to a private directory under `TEMP` is gone once
+/// they end, though Windows keeps a running program's file, and a program
+/// that ends with an exception is the backend's fault, `E0392`, with
+/// `oskac run` ending with the program's own code.
+#[cfg(all(windows, target_arch = "x86_64"))]
+#[test]
+fn run_and_test_are_native_and_leave_no_executable_behind() {
+    let src = "fn main(io: Stdout) -> Result<(), IoError> {\n    io.println(\"native\")?\n    \
+               Ok(())\n}\n\ntest \"passes\" {\n    t.assert(true)\n}\n";
+    let dir = workspace("native_run", src);
+    let temp = dir.path().join("temp");
+    std::fs::create_dir(&temp).expect("should make the temporary directory");
+    let with_temp = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_oskac"))
+            .args(args)
+            .env("TEMP", &temp)
+            .env("TMP", &temp)
+            .current_dir(dir.path())
+            .output()
+            .expect("oskac should run")
+    };
+    let ran = with_temp(&["run", "main.osk"]);
+    assert_eq!(String::from_utf8_lossy(&ran.stdout), "native\n", "{ran:?}");
+    assert!(ran.status.success(), "{ran:?}");
+    let tested = with_temp(&["test", "main.osk"]);
+    assert!(tested.status.success(), "{tested:?}");
+    let left: Vec<_> = std::fs::read_dir(&temp)
+        .expect("should list the temporary directory")
+        .collect();
+    assert!(left.is_empty(), "left behind: {left:?}");
+    std::fs::write(dir.path().join("overflow.osk"), OVERFLOW).expect("should write");
+    let faulted = with_temp(&["run", "overflow.osk"]);
+    assert_eq!(
+        String::from_utf8_lossy(&faulted.stderr),
+        "error: the native program faulted with exception 0xC00000FD\n\
+         error[E0392]: the native program faulted with exception 0xC00000FD: a fault in the \
+         native backend, not in the program; run it with `--interpret`\n"
+    );
+    assert_eq!(faulted.status.code(), Some(0xC000_00FD_u32 as i32));
+}

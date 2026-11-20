@@ -145,7 +145,10 @@ fn ending(status: std::process::ExitStatus) -> String {
         }
     }
     match status.code() {
-        Some(code) => format!("exited with code {code}"),
+        Some(code) => match native::windows_exception(code) {
+            Some(exception) => format!("faulted with exception {exception:#010X}"),
+            None => format!("exited with code {code}"),
+        },
         None => format!("ended with {status}"),
     }
 }

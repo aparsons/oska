@@ -3,8 +3,8 @@ import OskaFormal.Core.Syntax
 /-!
 # Oska Core: small-step semantics
 
-A small-step semantics of Oska Core, version 2, matching the interpreter
-(`crates/oska-run`) and the rules core IR version 2 states:
+A small-step semantics of Oska Core, version 7, matching the interpreter
+(`crates/oska-run`) and the rules core IR version 7 states:
 
 - Evaluation is left to right: an operator's `lhs` before its `rhs`, a
   call's arguments in order before the call, a block's statements in
@@ -20,12 +20,79 @@ A small-step semantics of Oska Core, version 2, matching the interpreter
   its parameters' slots, and a binding `let` puts its value for its slot
   in the rest of its block. Slots count from the first in scope, so
   putting a value for slot 0 renumbers slot `i + 1` as slot `i`.
+- A closure captures by value: putting a value for a slot of the
+  enclosing function puts it in each closure written below it too, which
+  then has one slot fewer below its parameters (`height`). A closure is a
+  value once its height is 0, with each slot it captured put in its body
+  as the slot was bound. Values never change in Oska Core, so this is the
+  interpreter's capture when the closure is made (`ClosureValue`). A call
+  of a function value evaluates the callee, then its arguments left to
+  right, then puts the arguments for the closure's parameters' slots in
+  its body, as a call of a function does (`instantiate`).
+- A call, of a function or of a function value, runs the body in a
+  `frame`, which gives the body's value once it has one.
+- `Ok(e)` and `Err(e)` evaluate `e`. `e?` evaluates `e`: on `Ok(v)` it
+  gives `v`, and on `Err(v)` the step **returns** `Err(v)` (the outcome
+  `ret`), which every enclosing expression passes on as it does a panic,
+  until the nearest `frame`, which steps to it: the function or closure
+  `e?` is in returns it. When the checker chose a `From` conversion `f`,
+  `Err(v)?` first steps to `Err(f(v))?`, so the conversion runs (and may
+  panic) before the return, as in the interpreter (`try_expr`).
 - A `match` evaluates its scrutinee, then tries its arms in order. An arm
   whose pattern does not match the value is skipped. One whose pattern
   matches puts the values it binds for their slots in its guard and body;
   without a guard it steps to its body, and with one to
   `if guard { body } else { the match of the rest }`, so a false guard
   goes on to the next arm, as in the interpreter.
+- A `var` binding evaluates its value, then runs the rest of its block in
+  a `cell` holding it: the var. Reading var `i` (`var_ i`) steps to the
+  outcome `read`, and an assignment, once its value is a value, to the
+  outcome `write`; each enclosing expression passes them on as it does
+  an effect, until the cell of var `i` answers: a read with the value
+  the cell holds (the field its path names), a write by putting the new
+  value at its path in the cell's own value and nowhere else. Every
+  other value is left as it is: a `let`, an argument or a field holds a
+  value, which never changes, so a change through a `var` is never seen
+  through another binding (ADR 0001's value semantics, which the
+  interpreter keeps by copying a shared value before it writes it).
+- A mutating call `mutCall f place args` evaluates its arguments, then
+  reads the receiver at `place` and runs `f`'s body with them in a
+  `method` node, where the receiver is var 0, the body's own. When the
+  body has its value (or returns with `?`), the node writes the
+  receiver's final value back to `place` and gives the body's value: the
+  interpreter's `mutating_call_expr`, which takes the receiver out of its
+  place and puts it back. A body sees no var of its caller, so the call
+  changes its receiver and nothing else. A `Call` of a mutating method
+  (on a temporary) runs its body with the receiver in a cell, whose final
+  value is dropped.
+
+- A built-in call evaluates its arguments left to right. A pure one
+  (`Path`, `Result`, `read_only`, `write_only`) then steps to its value.
+  An **effect**, a call on a capability that asks the host for something
+  (`println`, `restrict_to`, `read_to_string`, `write`, `create_dir`),
+  steps to `perform req k`: the request `req`, labelled with the kind of
+  its receiver, and the expression `k r` the run goes on with once the
+  host answers `r`. The semantics does not fix the host: it allows any
+  answer `req.Allows`, so its theorems hold on every host that answers
+  so, and `Eval.lean`'s fake host is one. A run's **trace** is the list
+  of its requests (`Steps`).
+
+- A `scope` block puts its handle for its next slot and runs in a
+  `scopeRun`, which holds its tasks, in spawn order, as the interpreter's
+  `crates/oska-run/src/tasks.rs` does: tasks run one at a time, in the
+  order they were spawned, and each runs to its end before the next
+  starts. `spawn`, once its arguments are values, steps to the outcome
+  `spawn`, which every enclosing expression passes on until the nearest
+  `scopeRun`: that scope queues the call of the closure as its next task
+  and answers with the task's handle. Nothing of the task runs yet.
+  `join` steps to the outcome `join`, which the scope answers with the
+  task's result once the task and every task before it have finished;
+  until then the scope runs its oldest unfinished task, a step at a
+  time, and the block waits. The block also waits, and the scope runs
+  its tasks, when the block has its value or returns with `?`: a scope
+  does not end before its tasks have. A panic, in the block or in a task,
+  ends the run at once, so the tasks still queued never run. A task runs
+  as a body of its own, as a `frame` would: its `?` returns from it.
 
 The interpreter's limit on call depth, which stops runaway recursion with
 a panic, is a resource limit and is not part of the semantics.
@@ -33,13 +100,26 @@ a panic, is a resource limit and is not part of the semantics.
 
 namespace OskaFormal.Core
 
+/-- What a closure captures once a value is put for slot 0: slot 0 no
+longer (its value is in the body), and slot `i + 1` as `i`. -/
+def shiftCaptures (cs : List Nat) : List Nat :=
+  cs.filterMap fun c => if c = 0 then none else some (c - 1)
+
 mutual
   /-- `e` with the closed value `v` put for slot 0, and each slot `i + 1`
-  renumbered as `i`. -/
+  renumbered as `i`. A closure of height 0 has no slot of the enclosing
+  function in scope, so it is left as it is. -/
   def Expr.subst (v : Expr) : Expr → Expr
     | .unit => .unit
     | .int n => .int n
     | .bool b => .bool b
+    | .str s => .str s
+    | .path s => .path s
+    | .cap k r => .cap k r
+    | .ioError => .ioError
+    | .result b e => .result b (Expr.subst v e)
+    | .try_ e c => .try_ (Expr.subst v e) c
+    | .frame e => .frame (Expr.subst v e)
     | .local_ 0 => v
     | .local_ (i + 1) => .local_ i
     | .neg e => .neg (Expr.subst v e)
@@ -51,6 +131,19 @@ mutual
     | .construct t var fs => .construct t var (Expr.substList v fs)
     | .field b i => .field (Expr.subst v b) i
     | .match_ s arms => .match_ (Expr.subst v s) (Expr.substArms v arms)
+    | .builtin op args => .builtin op (Expr.substList v args)
+    | .closure ps 0 cs cf ret body => .closure ps 0 cs cf ret body
+    | .closure ps (h + 1) cs cf ret body =>
+      .closure ps h (shiftCaptures cs) cf ret (Expr.subst v body)
+    | .callValue c args => .callValue (Expr.subst v c) (Expr.substList v args)
+    | .var_ i => .var_ i
+    | .mutCall f pl args => .mutCall f pl (Expr.substList v args)
+    | .cell w body => .cell (Expr.subst v w) (Expr.subst v body)
+    | .method pl w body => .method pl (Expr.subst v w) (Expr.subst v body)
+    | .scope body => .scope (Expr.subst v body)
+    | .scopeHandle => .scopeHandle
+    | .taskHandle i => .taskHandle i
+    | .scopeRun ts body => .scopeRun (Expr.substList v ts) (Expr.subst v body)
 
   /-- `Expr.subst` on each expression of a list. -/
   def Expr.substList (v : Expr) : List Expr → List Expr
@@ -67,6 +160,8 @@ mutual
     | [] => []
     | .let_ b t e :: ss => .let_ b t (Expr.subst v e) :: Expr.substStmts v ss
     | .expr e :: ss => .expr (Expr.subst v e) :: Expr.substStmts v ss
+    | .var_ t e :: ss => .var_ t (Expr.subst v e) :: Expr.substStmts v ss
+    | .assign pl e :: ss => .assign pl (Expr.subst v e) :: Expr.substStmts v ss
 
   /-- `Expr.subst` on each arm's guard and body. A pattern holds no
   expression. -/
@@ -81,15 +176,42 @@ def Expr.substAll : List Expr → Expr → Expr
   | [], e => e
   | v :: vs, e => Expr.substAll vs (Expr.subst v e)
 
-/-- A function's body with its arguments' values put for the slots its
-parameters bind; the value of a parameter that binds no slot is dropped.
-`none` when the number of arguments is not the number of parameters, so a
-call of the wrong arity takes no step. -/
+/-- A function's or closure's body with its arguments' values put for the
+slots its parameters bind; the value of a parameter that binds no slot is
+dropped. `none` when the number of arguments is not the number of
+parameters, so a call of the wrong arity takes no step. -/
 def instantiate : List Param → List Expr → Expr → Option Expr
   | [], [], body => some body
   | p :: ps, v :: vs, body =>
     if p.binds then instantiate ps vs (Expr.subst v body) else instantiate ps vs body
   | _, _, _ => none
+
+/-- The body a call of `f` with the arguments `vs` runs: `instantiate`d,
+and for a mutating method (called on a temporary) in a cell holding the
+receiver, its first argument, whose final value is dropped. `none` for
+the wrong number of arguments. -/
+def Function.enter (f : Function) (vs : List Expr) : Option Expr :=
+  match f.receiver, vs with
+  | none, vs => instantiate f.params vs f.body
+  | some _, r :: vs => (instantiate f.params vs f.body).map (.cell r)
+  | some _, [] => none
+
+/-- The field at `path` in the value `v`, outermost first: `v` for the
+empty path. `()` where `v` has no such field, which a typed place never
+asks for. -/
+def Expr.getAt : Expr → List Nat → Expr
+  | v, [] => v
+  | .construct _ none fs, i :: is => Expr.getAt (fs[i]?.getD .unit) is
+  | _, _ :: _ => .unit
+
+/-- The value `v` with `w` put at `path`, outermost first, and nothing
+else changed: `w` for the empty path. `v` as it is where it has no such
+field, which a typed place never asks for. -/
+def Expr.setAt : Expr → List Nat → Expr → Expr
+  | _, [], w => w
+  | .construct t none fs, i :: is, w =>
+    .construct t none (fs.set i (Expr.setAt (fs[i]?.getD .unit) is w))
+  | v, _ :: _, _ => v
 
 /-- Why a running program panics. -/
 inductive PanicKind where
@@ -100,15 +222,121 @@ inductive PanicKind where
   | divisionByZero
   deriving DecidableEq, Repr
 
-/-- What one step leads to: the next expression, or a panic. -/
+/-- An **effect**: what a built-in call on a capability asks the host
+for. `kind` is the kind of its receiver, the capability it uses, whose
+root is `root`; `args` are its other arguments' values. A run's trace is
+the list of its effects. -/
+structure Request where
+  op : Builtin
+  kind : CapKind
+  root : CapRoot
+  args : List Expr
+
+/-- The answers the semantics allows the host to give a request: `Ok(())`
+or an `Err` for a write to stdout, a write or a new directory; the text
+read or an `Err` for a read; and for `restrict_to`, a capability of the
+kind it gives whose root reaches no path the receiver's does not, so
+attenuation never widens. -/
+def Request.Allows (req : Request) (r : Expr) : Prop :=
+  match req.op with
+  | .println | .write | .createDir => r = .okUnit ∨ r = .ioErr
+  | .readToString => r = .ioErr ∨ ∃ s, r = .okStr s
+  | .restrictTo _ =>
+    ∃ a k' root', req.kind.restrictTo = some (a, k') ∧ r = .cap k' root' ∧ root'.Within req.root
+  | _ => False
+
+/-- What one step leads to: the next expression, a panic, an effect
+`req`, after which the run goes on with `k r` for the host's answer `r`,
+a return of the value `v` from the function or closure the step is in
+(`?` on an `Err`), a read of the field at `path` of var `var`, after
+which the run goes on with `k` of it, a write of `value` there, after
+which it goes on with `next`, a spawn of the closure `task` on the
+nearest scope, after which the run goes on with `k` of the task's
+handle, or a join of that scope's task `task`, after which it goes on
+with `k` of the task's result. -/
 inductive Outcome where
   | next (e : Expr)
   | panic (kind : PanicKind)
+  | perform (req : Request) (k : Expr → Expr)
+  | ret (v : Expr)
+  | read (var : Nat) (path : List Nat) (k : Expr → Expr)
+  | write (var : Nat) (path : List Nat) (value : Expr) (next : Expr)
+  | spawn (task : Expr) (k : Expr → Expr)
+  | join (task : Nat) (k : Expr → Expr)
 
-/-- `f` applied to the next expression, a panic left as it is. -/
+/-- `f` applied to the next expression, or to what follows an effect, a
+read, a write, a spawn or a join; a panic or a return left as it is. -/
 def Outcome.map (f : Expr → Expr) : Outcome → Outcome
   | .next e => .next (f e)
   | .panic k => .panic k
+  | .perform req k => .perform req fun r => f (k r)
+  | .ret v => .ret v
+  | .read i is k => .read i is fun r => f (k r)
+  | .write i is w e => .write i is w (f e)
+  | .spawn c k => .spawn c fun r => f (k r)
+  | .join i k => .join i fun r => f (k r)
+
+/-- A step of a body in a `frame`: a return gives its value, and any other
+outcome stays in the frame. -/
+def Outcome.inFrame : Outcome → Outcome
+  | .ret v => .next v
+  | o => o.map .frame
+
+/-- A step of a body that holds var 0, whose value is `v`, wrapped back
+with `wrap`: the binder answers a read of var 0 with the field of `v` it
+asks for, and takes a write of var 0 into its own value; it passes a
+read or write of var `i + 1` on as one of var `i`, and a return to
+`onRet`. -/
+def Outcome.under (v : Expr) (wrap : Expr → Expr → Expr) (onRet : Expr → Outcome) :
+    Outcome → Outcome
+  | .next e => .next (wrap v e)
+  | .panic k => .panic k
+  | .perform req k => .perform req fun r => wrap v (k r)
+  | .ret r => onRet r
+  | .read 0 is k => .next (wrap v (k (v.getAt is)))
+  | .read (i + 1) is k => .read i is fun r => wrap v (k r)
+  | .write 0 is w e => .next (wrap (v.setAt is w) e)
+  | .write (i + 1) is w e => .write i is w (wrap v e)
+  | .spawn c k => .spawn c fun r => wrap v (k r)
+  | .join i k => .join i fun r => wrap v (k r)
+
+/-- A step of the rest of a block in the `cell` of its `var`, which holds
+`v`: a return leaves the cell. -/
+def Outcome.inCell (v : Expr) : Outcome → Outcome :=
+  Outcome.under v .cell .ret
+
+/-- A step of a mutating method's body, whose receiver holds `v`: a
+return ends the body with its value, as a `frame` does, and the receiver
+is still written back. -/
+def Outcome.inMethod (pl : Place) (v : Expr) : Outcome → Outcome :=
+  Outcome.under v (.method pl) fun r => .next (.method pl v r)
+
+/-- Whether a running scope passes its block's outcome on as it is: all
+but a return, which waits for the scope's tasks, and a spawn or a join,
+which the scope answers. -/
+def Outcome.passes : Outcome → Bool
+  | .ret _ | .spawn _ _ | .join _ _ => false
+  | _ => true
+
+/-- A step of a scope's task, run as a body of its own, put back with
+`f`: its return gives its result, as a `frame`'s does. -/
+def Outcome.inTask (f : Expr → Expr) : Outcome → Outcome
+  | .ret v => .next (f v)
+  | o => o.map f
+
+/-- A pure built-in call applied to its arguments' values: `Path.from`
+and `Path.new` make a path, `is_ok` and `unwrap_or` read a `Result`, and
+`read_only` and `write_only` attenuate a capability to a narrower kind
+with the same root. `none` for an effect, or for arguments of the wrong
+kind. -/
+def evalPure : Builtin → List Expr → Option Expr
+  | .pathFrom, [.str s] | .pathNew, [.str s] => some (.path s)
+  | .isOk, [.result b _] => some (.bool b)
+  | .unwrapOr, [.result true v, _] => some v
+  | .unwrapOr, [.result false _, d] => some d
+  | .readOnly k, [.cap k' r] => if k' = k then k.readOnly.map (.cap · r) else none
+  | .writeOnly k, [.cap k' r] => if k' = k then k.writeOnly.map (.cap · r) else none
+  | _, _ => none
 
 /-- The integer `n` as a result: an overflow when it is not an `Int`. -/
 def intResult (n : Int) : Outcome :=
@@ -169,8 +397,8 @@ inductive Step (P : Program) : Expr → Outcome → Prop where
       AllValues vs → Step P e o →
       Step P (.call name (vs ++ e :: rest)) (o.map fun e' => .call name (vs ++ e' :: rest))
   | call {name : String} {f : Function} {vs : List Expr} {body : Expr} :
-      P.find? name = some f → AllValues vs → instantiate f.params vs f.body = some body →
-      Step P (.call name vs) (.next body)
+      P.find? name = some f → AllValues vs → f.enter vs = some body →
+      Step P (.call name vs) (.next (.frame body))
   | ifCond {c th : Expr} {el : Option Expr} {o : Outcome} :
       Step P c o → Step P (.if_ c th el) (o.map fun c' => .if_ c' th el)
   | ifTrue {th el : Expr} : Step P (.if_ (.bool true) th (some el)) (.next th)
@@ -202,6 +430,16 @@ inductive Step (P : Program) : Expr → Outcome → Prop where
       Step P b o → Step P (.field b i) (o.map fun b' => .field b' i)
   | field {type : String} {fs : List Expr} {i : Nat} {v : Expr} :
       AllValues fs → fs[i]? = some v → Step P (.field (.construct type none fs) i) (.next v)
+  | builtinArg {op : Builtin} {vs rest : List Expr} {e : Expr} {o : Outcome} :
+      AllValues vs → Step P e o →
+      Step P (.builtin op (vs ++ e :: rest)) (o.map fun e' => .builtin op (vs ++ e' :: rest))
+  | builtinPure {op : Builtin} {vs : List Expr} {v : Expr} :
+      AllValues vs → evalPure op vs = some v → Step P (.builtin op vs) (.next v)
+  /-- An effect: a built-in call on a capability of its receiver's kind
+  asks the host, and the call's value is the answer. -/
+  | builtinEffect {op : Builtin} {k : CapKind} {r : CapRoot} {vs : List Expr} :
+      op.receiver = some k → AllValues vs →
+      Step P (.builtin op (.cap k r :: vs)) (.perform ⟨op, k, r, vs⟩ fun x => x)
   | matchScrutinee {s : Expr} {arms : List Arm} {o : Outcome} :
       Step P s o → Step P (.match_ s arms) (o.map fun s' => .match_ s' arms)
   | matchSkip {v : Expr} {p : Pattern} {g : Option Expr} {body : Expr} {rest : List Arm} :
@@ -214,6 +452,112 @@ inductive Step (P : Program) : Expr → Outcome → Prop where
       IsValue v → matchPat p v = some bs →
       Step P (.match_ v (.mk p (some g) body :: rest))
         (.next (.if_ (Expr.substAll bs g) (Expr.substAll bs body) (some (.match_ v rest))))
+  | callValueCallee {c : Expr} {args : List Expr} {o : Outcome} :
+      Step P c o → Step P (.callValue c args) (o.map fun c' => .callValue c' args)
+  | callValueArg {c : Expr} {vs rest : List Expr} {e : Expr} {o : Outcome} :
+      IsValue c → AllValues vs → Step P e o →
+      Step P (.callValue c (vs ++ e :: rest)) (o.map fun e' => .callValue c (vs ++ e' :: rest))
+  /-- A call of a closure the run has closed steps into its body, with the
+  arguments put for its parameters' slots. -/
+  | callValue {ps : List Param} {cs : List Nat} {cap : Bool} {ret : Ty} {body : Expr}
+      {vs : List Expr} {e : Expr} :
+      AllValues vs → instantiate ps vs body = some e →
+      Step P (.callValue (.closure ps 0 cs cap ret body) vs) (.next (.frame e))
+  | resultArg {b : Bool} {e : Expr} {o : Outcome} :
+      Step P e o → Step P (.result b e) (o.map (.result b))
+  | tryArg {e : Expr} {c : Option String} {o : Outcome} :
+      Step P e o → Step P (.try_ e c) (o.map fun e' => .try_ e' c)
+  | tryOk {v : Expr} {c : Option String} :
+      IsValue v → Step P (.try_ (.result true v) c) (.next v)
+  /-- `Err(v)?` returns `Err(v)` from the function or closure it is in. -/
+  | tryErr {v : Expr} :
+      IsValue v → Step P (.try_ (.result false v) none) (.ret (.result false v))
+  /-- With a conversion, the error goes through it first. -/
+  | tryConvert {v : Expr} {f : String} :
+      IsValue v → Step P (.try_ (.result false v) (some f))
+        (.next (.try_ (.result false (.call f [v])) none))
+  | frame {e : Expr} {o : Outcome} :
+      Step P e o → Step P (.frame e) o.inFrame
+  | frameValue {v : Expr} :
+      IsValue v → Step P (.frame v) (.next v)
+  /-- Reading a var asks the cell that holds it. -/
+  | var {i : Nat} : Step P (.var_ i) (.read i [] fun x => x)
+  | blockVarArg {t : Ty} {e : Expr} {ss : List Stmt} {val : Option Expr} {o : Outcome} :
+      Step P e o →
+      Step P (.block (.var_ t e :: ss) val) (o.map fun e' => .block (.var_ t e' :: ss) val)
+  /-- A `var` binding runs the rest of its block in a cell holding its
+  value. -/
+  | blockVar {t : Ty} {v : Expr} {ss : List Stmt} {val : Option Expr} :
+      IsValue v → Step P (.block (.var_ t v :: ss) val) (.next (.cell v (.block ss val)))
+  | blockAssignArg {pl : Place} {e : Expr} {ss : List Stmt} {val : Option Expr} {o : Outcome} :
+      Step P e o →
+      Step P (.block (.assign pl e :: ss) val) (o.map fun e' => .block (.assign pl e' :: ss) val)
+  /-- An assignment writes its value at its place. -/
+  | blockAssign {pl : Place} {v : Expr} {ss : List Stmt} {val : Option Expr} :
+      IsValue v →
+      Step P (.block (.assign pl v :: ss) val) (.write pl.var pl.fields v (.block ss val))
+  | cellBody {v e : Expr} {o : Outcome} :
+      Step P e o → Step P (.cell v e) (o.inCell v)
+  /-- The block ends, and its var with it. -/
+  | cellValue {v w : Expr} :
+      IsValue w → Step P (.cell v w) (.next w)
+  | mutCallArg {name : String} {pl : Place} {vs rest : List Expr} {e : Expr} {o : Outcome} :
+      AllValues vs → Step P e o →
+      Step P (.mutCall name pl (vs ++ e :: rest))
+        (o.map fun e' => .mutCall name pl (vs ++ e' :: rest))
+  /-- Once its arguments are values, a mutating call reads its receiver
+  and runs the method's body with it. -/
+  | mutCall {name : String} {pl : Place} {f : Function} {u : Ty} {vs : List Expr} {body : Expr} :
+      P.find? name = some f → f.receiver = some u → AllValues vs →
+      instantiate f.params vs f.body = some body →
+      Step P (.mutCall name pl vs) (.read pl.var pl.fields fun r => .method pl r body)
+  | methodBody {pl : Place} {v e : Expr} {o : Outcome} :
+      Step P e o → Step P (.method pl v e) (o.inMethod pl v)
+  /-- The body ends: the receiver is written back to its place, and the
+  call gives the body's value. -/
+  | methodValue {pl : Place} {v w : Expr} :
+      IsValue w → Step P (.method pl v w) (.write pl.var pl.fields v w)
+  /-- A `scope` block starts with its handle for its slot and no task. -/
+  | scope {body : Expr} : Step P (.scope body) (.next (.scopeRun [] (Expr.subst .scopeHandle body)))
+  /-- `spawn` asks the nearest scope to queue a call of the closure. -/
+  | spawn {c : Expr} : IsValue c → Step P (.builtin .spawn [.scopeHandle, c]) (.spawn c fun x => x)
+  /-- `join` asks the nearest scope for the result of its task `i`. -/
+  | join {i : Nat} : Step P (.builtin .join [.taskHandle i]) (.join i fun x => x)
+  /-- A step of the block that the scope passes on. -/
+  | scopeBody {ts : List Expr} {body : Expr} {o : Outcome} :
+      Step P body o → o.passes = true → Step P (.scopeRun ts body) (o.map (.scopeRun ts))
+  /-- A spawn queues a call of the closure as the scope's last task, which
+  has not started, and the block goes on with its handle. -/
+  | scopeSpawn {ts : List Expr} {body c : Expr} {k : Expr → Expr} :
+      Step P body (.spawn c k) →
+      Step P (.scopeRun ts body)
+        (.next (.scopeRun (ts ++ [.callValue c []]) (k (.taskHandle ts.length))))
+  /-- A join of task `i`, once it and every task before it have finished,
+  gives its result. -/
+  | scopeJoin {ts : List Expr} {body : Expr} {i : Nat} {k : Expr → Expr} :
+      Step P body (.join i k) → AllValues (ts.take (i + 1)) →
+      Step P (.scopeRun ts body) (.next (.scopeRun ts (k (ts.getD i .unit))))
+  /-- A return leaves the scope once every task has finished. -/
+  | scopeRet {ts : List Expr} {body v : Expr} :
+      Step P body (.ret v) → AllValues ts → Step P (.scopeRun ts body) (.ret v)
+  /-- The scope ends with its block's value once every task has
+  finished. -/
+  | scopeValue {ts : List Expr} {v : Expr} :
+      IsValue v → AllValues ts → Step P (.scopeRun ts v) (.next v)
+  /-- While the block has its value, its oldest unfinished task runs. -/
+  | scopeTaskValue {vs rest : List Expr} {e body : Expr} {o : Outcome} :
+      IsValue body → AllValues vs → Step P e o →
+      Step P (.scopeRun (vs ++ e :: rest) body) (o.inTask fun e' => .scopeRun (vs ++ e' :: rest) body)
+  /-- While the block returns, its oldest unfinished task runs. -/
+  | scopeTaskRet {vs rest : List Expr} {e body v : Expr} {o : Outcome} :
+      Step P body (.ret v) → AllValues vs → Step P e o →
+      Step P (.scopeRun (vs ++ e :: rest) body) (o.inTask fun e' => .scopeRun (vs ++ e' :: rest) body)
+  /-- While the block joins a task that has not finished, or one before
+  it has not, the oldest unfinished task runs. -/
+  | scopeTaskJoin {vs rest : List Expr} {e body : Expr} {i : Nat} {k : Expr → Expr} {o : Outcome} :
+      Step P body (.join i k) → ¬ AllValues ((vs ++ e :: rest).take (i + 1)) → AllValues vs →
+      Step P e o →
+      Step P (.scopeRun (vs ++ e :: rest) body) (o.inTask fun e' => .scopeRun (vs ++ e' :: rest) body)
 
 /-- A value takes no step. -/
 theorem value_no_step {P : Program} {v : Expr} {o : Outcome} (hv : IsValue v) :
@@ -222,10 +566,15 @@ theorem value_no_step {P : Program} {v : Expr} {o : Outcome} (hv : IsValue v) :
   | unit => intro h; cases h
   | int => intro h; cases h
   | bool => intro h; cases h
+  | result _ _ ih =>
+    intro h
+    cases h with
+    | resultArg hs => exact ih hs
   | construct _ ih =>
     intro h
     cases h with
     | constructArg _ hs => exact ih _ (List.mem_append_right _ List.mem_cons_self) hs
+  | _ => intro h; cases h
 
 theorem AllValues.mid {vs rest : List Expr} {e : Expr} :
     AllValues (vs ++ e :: rest) → IsValue e := by
@@ -237,15 +586,22 @@ theorem AllValues.mid {vs rest : List Expr} {e : Expr} :
 function's body, so a call of the wrong arity takes no step. -/
 theorem call_step {P : Program} {name : String} {vs : List Expr} {o : Outcome}
     (hvs : AllValues vs) (h : Step P (.call name vs) o) :
-    ∃ f e, P.find? name = some f ∧ instantiate f.params vs f.body = some e ∧ o = .next e := by
+    ∃ f e, P.find? name = some f ∧ f.enter vs = some e ∧
+      o = .next (.frame e) := by
   cases h with
   | callArg _ hs => exact absurd hs (value_no_step (AllValues.mid hvs))
   | call hf _ hi => exact ⟨_, _, hf, hi, rfl⟩
 
-/-- Zero or more steps of the semantics that each lead to a next
-expression. -/
-inductive Steps (P : Program) : Expr → Expr → Prop where
-  | refl (e : Expr) : Steps P e e
-  | next {e e' e'' : Expr} : Step P e (.next e') → Steps P e' e'' → Steps P e e''
+/-- Zero or more steps of the semantics, none of them a panic, a
+return, a read or a write, and the
+**trace** of their effects, in order: `Steps P e tr e'` when `e` runs to
+`e'` performing the effects `tr`, each with an answer the semantics
+allows. -/
+inductive Steps (P : Program) : Expr → List Request → Expr → Prop where
+  | refl (e : Expr) : Steps P e [] e
+  | next {e e' e'' : Expr} {tr : List Request} :
+      Step P e (.next e') → Steps P e' tr e'' → Steps P e tr e''
+  | perform {e e'' r : Expr} {req : Request} {k : Expr → Expr} {tr : List Request} :
+      Step P e (.perform req k) → req.Allows r → Steps P (k r) tr e'' → Steps P e (req :: tr) e''
 
 end OskaFormal.Core

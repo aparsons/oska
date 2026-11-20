@@ -10,11 +10,15 @@
 //! Every target must compile each case's tests (#164): a refusal fails on
 //! every host, and each host builds them for the other targets too, as it
 //! cannot run their code. The test executables below are built for the
-//! host and run on it, one process per test, on aarch64 and x86_64 Linux.
+//! host and run on it, one process per test, on aarch64 and x86_64 Linux
+//! and macOS, and on x86_64 Windows (#179).
 
-#![cfg(all(
-    any(target_os = "linux", target_os = "macos"),
-    any(target_arch = "aarch64", target_arch = "x86_64")
+#![cfg(any(
+    all(
+        any(target_os = "linux", target_os = "macos"),
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(windows, target_arch = "x86_64")
 ))]
 
 mod executable;
@@ -809,6 +813,7 @@ fn test_executable(name: &str, src: &str) -> PathBuf {
 
 /// Other threads fork all the time, as parallel tests do, while this one
 /// writes executables and runs them: none may fail with `ETXTBSY` (#270).
+#[cfg(unix)]
 #[test]
 fn an_executable_written_while_other_threads_fork_still_runs() {
     use std::sync::atomic::{AtomicBool, Ordering};

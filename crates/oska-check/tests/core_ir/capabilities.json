@@ -1,0 +1,160 @@
+{
+  "core_ir_version": 7,
+  "types": [],
+  "functions": [
+    {
+      "name": "say",
+      "params": [{"type": "Stdout", "binds": true}, {"type": "String", "binds": true}],
+      "ret": "()",
+      "body": {
+        "kind": "Block",
+        "stmts": [
+          {
+            "kind": "Let",
+            "binds": false,
+            "type": {"kind": "Result", "ok": "()", "err": "IoError"},
+            "value": {
+              "kind": "Builtin",
+              "name": "Stdout.println",
+              "args": [{"kind": "Local", "slot": 0}, {"kind": "Local", "slot": 1}]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "main",
+      "params": [{"type": "Stdout", "binds": true}, {"type": "Fs", "binds": true}],
+      "ret": "()",
+      "body": {
+        "kind": "Block",
+        "stmts": [
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": "Dir",
+            "value": {
+              "kind": "Builtin",
+              "name": "Fs.restrict_to",
+              "args": [{"kind": "Local", "slot": 1}, {"kind": "Str", "value": "."}]
+            }
+          },
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": {"kind": "Result", "ok": "()", "err": "IoError"},
+            "value": {
+              "kind": "Builtin",
+              "name": "DirWrite.create_dir",
+              "args": [
+                {
+                  "kind": "Builtin",
+                  "name": "Dir.write_only",
+                  "args": [{"kind": "Local", "slot": 2}]
+                },
+                {
+                  "kind": "Builtin",
+                  "name": "Path.from",
+                  "args": [{"kind": "Str", "value": "box"}]
+                }
+              ]
+            }
+          },
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": "Dir",
+            "value": {
+              "kind": "Builtin",
+              "name": "Dir.restrict_to",
+              "args": [
+                {"kind": "Local", "slot": 2},
+                {
+                  "kind": "Builtin",
+                  "name": "Path.new",
+                  "args": [{"kind": "Str", "value": "box"}]
+                }
+              ]
+            }
+          },
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": {"kind": "Result", "ok": "()", "err": "IoError"},
+            "value": {
+              "kind": "Builtin",
+              "name": "DirWrite.write",
+              "args": [
+                {
+                  "kind": "Builtin",
+                  "name": "Dir.write_only",
+                  "args": [{"kind": "Local", "slot": 4}]
+                },
+                {
+                  "kind": "Builtin",
+                  "name": "Path.from",
+                  "args": [{"kind": "Str", "value": "a.txt"}]
+                },
+                {"kind": "Str", "value": "hi"}
+              ]
+            }
+          },
+          {
+            "kind": "Let",
+            "binds": true,
+            "type": "String",
+            "value": {
+              "kind": "Builtin",
+              "name": "Result.unwrap_or",
+              "args": [
+                {
+                  "kind": "Builtin",
+                  "name": "DirRead.read_to_string",
+                  "args": [
+                    {
+                      "kind": "Builtin",
+                      "name": "Dir.read_only",
+                      "args": [{"kind": "Local", "slot": 4}]
+                    },
+                    {
+                      "kind": "Builtin",
+                      "name": "Path.from",
+                      "args": [{"kind": "Str", "value": "a.txt"}]
+                    }
+                  ]
+                },
+                {"kind": "Str", "value": "none"}
+              ]
+            }
+          }
+        ],
+        "value": {
+          "kind": "If",
+          "cond": {
+            "kind": "Binary",
+            "op": "&&",
+            "lhs": {
+              "kind": "Builtin",
+              "name": "Result.is_ok",
+              "args": [{"kind": "Local", "slot": 3}]
+            },
+            "rhs": {
+              "kind": "Builtin",
+              "name": "Result.is_ok",
+              "args": [{"kind": "Local", "slot": 5}]
+            }
+          },
+          "then": {
+            "kind": "Block",
+            "stmts": [],
+            "value": {
+              "kind": "Call",
+              "function": "say",
+              "args": [{"kind": "Local", "slot": 0}, {"kind": "Local", "slot": 6}]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,9 +1,11 @@
 //! The Lean reference (ADR 0018, #425): every runtime test program that is
 //! in Oska Core runs on the interpreter and on the Lean reference, which
 //! runs its core IR with Oska Core's executable semantics
-//! (`formal/lean/OskaFormal/Core/Eval.lean`), and the two must agree on
-//! how it ends: its output, its panic's code and its exit code. A
-//! difference fails the test, as a bug in one of the two.
+//! (`formal/lean/OskaFormal/Core/Eval.lean`) on its model of the fake host
+//! (`Host.lean`), and the two must agree on what it wrote and how it ends:
+//! its stdout, the files and directories it left on a [`FakeHost`] that
+//! started empty, its panic's code and its exit code. A difference fails
+//! the test, as a bug in one of the two.
 //!
 //! The runtime test programs are the string literals of this crate's
 //! integration tests (`tests/**/*.rs`) that are whole programs: each
@@ -23,14 +25,14 @@ mod common;
 
 use std::collections::BTreeSet;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use common::process::{run_bounded, Finished};
 use oska_check::core_ir;
-use oska_run::{FakeHost, RunOutcome};
+use oska_run::{FakeHost, FakeWorld, RunOutcome};
 
 /// How long `lake build oska_core` may take: a first build compiles and
 /// links the Lean reference, well under this.
@@ -43,23 +45,75 @@ const RUN_TIMEOUT: Duration = Duration::from_secs(120);
 /// The fewest runtime test programs the comparison must cover, as many as
 /// it covered when it was written. Raise it as Oska Core grows, so that a
 /// regression that makes the export refuse nearly everything fails.
-const MIN_COVERED: usize = 18;
+const MIN_COVERED: usize = 45;
 
 /// The program path a run gets as `args[0]`.
 const PROGRAM_PATH: &str = "prog.osk";
 
 // ---- The comparison ----------------------------------------------------
 
-/// How a run of a program in Oska Core ends, in the form the Lean
-/// reference prints it: `result ()` and `exit 0` when `main` returns, or
-/// `panic CODE` and `exit 101`. Anything the program printed comes first,
-/// though a program in Oska Core cannot print.
-fn interpreted(outcome: &RunOutcome) -> String {
-    let mut shown = String::new();
-    for (stream, text) in [("stdout", &outcome.stdout), ("stderr", &outcome.stderr)] {
-        if !text.is_empty() {
-            shown.push_str(&format!("{stream} {text:?}\n"));
+/// `text` quoted as the Lean reference quotes it (`quote` in
+/// `formal/lean/OskaReference.lean`): `\\`, `"`, a line break, a tab and a
+/// carriage return escaped, any other control character as `\u{HEX}`.
+fn quoted(text: &str) -> String {
+    let mut out = String::from('"');
+    for c in text.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                out.push_str(&format!("\\u{{{:x}}}", c as u32))
+            }
+            c => out.push(c),
         }
+    }
+    out.push('"');
+    out
+}
+
+/// A path of the fake host as the Lean reference shows it: `/` and its
+/// components between `/`s, on every OS.
+fn shown_path(path: &Path) -> String {
+    let names: Vec<String> = path
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(name) => Some(name.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+    format!("/{}", names.join("/"))
+}
+
+/// What a run of a program in Oska Core wrote and how it ends, in the
+/// form the Lean reference prints it: its stdout, each file and each
+/// directory the [`FakeHost`] holds after it (the host started empty), each
+/// sorted by path; then `result ()` and `exit 0` when `main` returns, or
+/// `panic CODE` and `exit 101`. A program in Oska Core cannot write to
+/// stderr, so anything there is shown too, and differs.
+fn interpreted(outcome: &RunOutcome, world: &FakeWorld) -> String {
+    let mut shown = String::new();
+    if !outcome.stdout.is_empty() {
+        shown.push_str(&format!("stdout {}\n", quoted(&outcome.stdout)));
+    }
+    if !outcome.stderr.is_empty() {
+        shown.push_str(&format!("stderr {}\n", quoted(&outcome.stderr)));
+    }
+    let mut files: Vec<(String, &String)> = world
+        .files
+        .iter()
+        .map(|(path, text)| (shown_path(path), text))
+        .collect();
+    files.sort();
+    for (path, text) in files {
+        shown.push_str(&format!("file {} {}\n", quoted(&path), quoted(text)));
+    }
+    let mut dirs: Vec<String> = world.dirs.iter().map(|d| shown_path(d)).collect();
+    dirs.sort();
+    for dir in dirs {
+        shown.push_str(&format!("dir {}\n", quoted(&dir)));
     }
     match &outcome.panic {
         Some(panic) => shown.push_str(&format!("panic {}\n", panic.code)),
@@ -101,10 +155,10 @@ fn verdict(
         Ok(ir) => ir,
         Err(_) => return Verdict::Refused,
     };
-    let mut outcome =
-        oska_run::run_program(&program, &mut FakeHost::new(), &[PROGRAM_PATH.to_string()]);
+    let mut host = FakeHost::new();
+    let mut outcome = oska_run::run_program(&program, &mut host, &[PROGRAM_PATH.to_string()]);
     tamper(&mut outcome);
-    let interpreter = interpreted(&outcome);
+    let interpreter = interpreted(&outcome, &host.world());
     match lean(&ir) {
         Ok(reference) if reference == interpreter => Verdict::Agreed,
         Ok(reference) => Verdict::Differs(format!(
@@ -463,6 +517,63 @@ fn every_runtime_test_program_in_oska_core_agrees_with_the_lean_reference() {
     );
 }
 
+/// Runtime test programs that must be in Oska Core and agree with the
+/// Lean reference, each found by a line only it holds: the security
+/// cases, and the aliasing case of value semantics (`let b = a;
+/// a.bump()` leaves `b` as it was), which a count of covered programs
+/// could lose without notice.
+const MUST_AGREE: [(&str, &str); 4] = [
+    (
+        "a_confined_capability_refuses_a_path_outside_its_root",
+        "boxed.write(Path.from(\"sub/../../escape.txt\"), \"leaked\")",
+    ),
+    (
+        "a_narrowed_read_capability_reads_only_beneath_its_root",
+        "notes.read_to_string(Path.from(\"../secret.txt\"))",
+    ),
+    (
+        "files_written_before_a_panic_are_kept",
+        "out.write(Path.from(\"before.txt\"), \"written\")",
+    ),
+    (
+        "a_mutating_method_changes_its_receiver_and_no_copy_of_it",
+        "check(a.get() == 1 && b.get() == 0)",
+    ),
+];
+
+/// The one runtime test program that holds `line`.
+fn program_holding(line: &str) -> String {
+    let found: Vec<String> = runtime_test_programs()
+        .into_iter()
+        .map(|(_, src)| src)
+        .filter(|src| src.contains(line))
+        .collect();
+    assert_eq!(
+        found.len(),
+        1,
+        "exactly one runtime test program should hold {line:?}: {found:#?}"
+    );
+    found.into_iter().next().unwrap_or_default()
+}
+
+#[test]
+fn the_confinement_and_aliasing_programs_agree_with_the_lean_reference() {
+    let test = "lean_reference must-agree";
+    let Some(exe) = reference_or_skip(test) else {
+        return;
+    };
+    let lean = |ir: &str| run_reference(exe, ir);
+    for (name, line) in MUST_AGREE {
+        let src = program_holding(line);
+        let verdict = verdict(&src, &lean, &|_| {});
+        assert!(
+            matches!(verdict, Verdict::Agreed),
+            "the program of {name} should be in Oska Core and agree with the Lean reference: \
+             {verdict:?}"
+        );
+    }
+}
+
 /// A program in Oska Core that panics: `10 / zero`.
 const DIVIDES_BY_ZERO: &str = "fn half(n: Int) -> Int {\n    n / 2\n}\n\nfn main() {\n    let zero = half(1)\n    let n = 10 / zero\n}\n";
 
@@ -529,16 +640,52 @@ fn a_difference_or_a_refused_core_ir_fails_with_a_stubbed_reference() {
             "{what}: should differ, got {verdict:?}"
         );
     }
-    let refuses = |_: &str| Err("exit status: 2 with error: not core IR version 2".to_string());
+    let refuses = |_: &str| Err("exit status: 2 with error: not core IR version 7".to_string());
     assert!(matches!(
         verdict(DIVIDES_BY_ZERO, &refuses, &|_| {}),
         Verdict::Differs(_)
     ));
 }
 
+/// A program in Oska Core that prints and writes a file.
+const WRITES: &str = "fn main(io: Stdout, fs: FsWrite) {\n    let _ = fs.restrict_to(\".\").write(Path.from(\"a.txt\"), \"x\")\n    let _ = io.println(\"hi\")\n}\n";
+
+#[test]
+fn a_difference_in_stdout_or_files_fails_with_a_stubbed_reference() {
+    let right =
+        |_: &str| Ok("stdout \"hi\\n\"\nfile \"/a.txt\" \"x\"\nresult ()\nexit 0\n".to_string());
+    assert!(matches!(verdict(WRITES, &right, &|_| {}), Verdict::Agreed));
+    let no_file = |_: &str| Ok("stdout \"hi\\n\"\nresult ()\nexit 0\n".to_string());
+    assert!(matches!(
+        verdict(WRITES, &no_file, &|_| {}),
+        Verdict::Differs(_)
+    ));
+    let other_text =
+        |_: &str| Ok("stdout \"hi\\n\"\nfile \"/a.txt\" \"y\"\nresult ()\nexit 0\n".to_string());
+    assert!(matches!(
+        verdict(WRITES, &other_text, &|_| {}),
+        Verdict::Differs(_)
+    ));
+    let other_stdout =
+        |_: &str| Ok("stdout \"ho\\n\"\nfile \"/a.txt\" \"x\"\nresult ()\nexit 0\n".to_string());
+    assert!(matches!(
+        verdict(WRITES, &other_stdout, &|_| {}),
+        Verdict::Differs(_)
+    ));
+}
+
+#[test]
+fn text_is_quoted_as_the_lean_reference_quotes_it() {
+    assert_eq!(
+        quoted("a\"b\\c\nd\te\rf\u{1}g\u{7f}h\u{e9}"),
+        "\"a\\\"b\\\\c\\nd\\te\\rf\\u{1}g\\u{7f}h\u{e9}\""
+    );
+}
+
 #[test]
 fn a_program_outside_oska_core_is_refused_and_one_that_does_not_check_never_runs() {
     let never = |_: &str| -> Result<String, String> { panic!("the reference should not run") };
+    // `main` returning a `Result` is outside Oska Core.
     let prints = "fn main(io: Stdout) -> Result<(), IoError> {\n    io.println(\"hi\")\n}\n";
     assert!(matches!(verdict(prints, &never, &|_| {}), Verdict::Refused));
     assert!(matches!(
@@ -570,12 +717,37 @@ fn the_corpus_reads_every_kind_of_string_literal() {
     );
 }
 
-/// Core IR that is not version 2, each with what the refusal must name.
-const MALFORMED: [(&str, &str, &str); 9] = [
+/// Core IR that is not version 7, each with what the refusal must name.
+const MALFORMED: [(&str, &str, &str); 41] = [
     (
         "a wrong version",
+        r#"{"core_ir_version": 8, "types": [], "functions": []}"#,
+        "core_ir_version 8",
+    ),
+    (
+        "version 6",
+        r#"{"core_ir_version": 6, "types": [], "functions": []}"#,
+        "core_ir_version 6",
+    ),
+    (
+        "version 5",
+        r#"{"core_ir_version": 5, "types": [], "functions": []}"#,
+        "core_ir_version 5",
+    ),
+    (
+        "version 4",
+        r#"{"core_ir_version": 4, "types": [], "functions": []}"#,
+        "core_ir_version 4",
+    ),
+    (
+        "version 3",
         r#"{"core_ir_version": 3, "types": [], "functions": []}"#,
         "core_ir_version 3",
+    ),
+    (
+        "version 2",
+        r#"{"core_ir_version": 2, "types": [], "functions": []}"#,
+        "core_ir_version 2",
     ),
     (
         "version 1",
@@ -584,38 +756,173 @@ const MALFORMED: [(&str, &str, &str); 9] = [
     ),
     (
         "an unknown node",
-        r#"{"core_ir_version": 2, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Loop"}}]}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Loop"}}]}"#,
         "unknown expression kind `Loop`",
     ),
     (
         "an Int out of range",
-        r#"{"core_ir_version": 2, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Let", "binds": false, "type": "Int", "value": {"kind": "Int", "value": 9223372036854775808}}]}}]}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Let", "binds": false, "type": "Int", "value": {"kind": "Int", "value": 9223372036854775808}}]}}]}"#,
         "outside Int",
     ),
     (
         "an arity mismatch",
-        r#"{"core_ir_version": 2, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Call", "function": "main", "args": [{"kind": "Unit"}]}}]}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Call", "function": "main", "args": [{"kind": "Unit"}]}}]}"#,
         "with 1 argument(s), but it has 0 parameter(s)",
     ),
     (
         "trailing junk",
-        r#"{"core_ir_version": 2, "types": [], "functions": []} junk"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": []} junk"#,
         "not JSON",
     ),
     (
         "an unknown field",
-        r#"{"core_ir_version": 2, "types": [], "functions": [], "extra": 1}"#,
+        r#"{"core_ir_version": 7, "types": [], "functions": [], "extra": 1}"#,
         "unknown field `extra`",
     ),
     (
         "an undeclared variant",
-        r#"{"core_ir_version": 2, "types": [{"kind": "Enum", "name": "Light", "variants": [{"name": "Red", "fields": []}]}], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Expr", "value": {"kind": "Construct", "type": "Light", "variant": "Blue", "fields": []}}]}}]}"#,
+        r#"{"core_ir_version": 7, "types": [{"kind": "Enum", "name": "Light", "variants": [{"name": "Red", "fields": []}]}], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Expr", "value": {"kind": "Construct", "type": "Light", "variant": "Blue", "fields": []}}]}}]}"#,
         "the enum `Light` has no variant `Blue`",
     ),
     (
         "a pattern with too many fields",
-        r#"{"core_ir_version": 2, "types": [{"kind": "Struct", "name": "P", "fields": ["Int"]}], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Match", "scrutinee": {"kind": "Unit"}, "arms": [{"pattern": {"kind": "Construct", "type": "P", "fields": [{"kind": "Wildcard"}, {"kind": "Wildcard"}]}, "body": {"kind": "Unit"}}]}}]}"#,
+        r#"{"core_ir_version": 7, "types": [{"kind": "Struct", "name": "P", "fields": ["Int"]}], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Match", "scrutinee": {"kind": "Unit"}, "arms": [{"pattern": {"kind": "Construct", "type": "P", "fields": [{"kind": "Wildcard"}, {"kind": "Wildcard"}]}, "body": {"kind": "Unit"}}]}}]}"#,
         "a constructor of `P` with 2 field(s), but it has 1",
+    ),
+    (
+        "an unknown built-in",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Builtin", "name": "Stdin.read_line", "args": []}}]}"#,
+        "unknown built-in `Stdin.read_line`",
+    ),
+    (
+        "a capability field",
+        r#"{"core_ir_version": 7, "types": [{"kind": "Struct", "name": "Logger", "fields": ["Stdout"]}], "functions": []}"#,
+        "a field is a capability",
+    ),
+    (
+        "a function field",
+        r#"{"core_ir_version": 7, "types": [{"kind": "Struct", "name": "Hook", "fields": [{"kind": "Fn", "cap": false, "params": [], "ret": "()"}]}], "functions": []}"#,
+        "a field is a function",
+    ),
+    (
+        "a capture at the closure's height",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Expr", "value": {"kind": "Closure", "params": [], "captures": [0], "height": 0, "cap": false, "ret": "()", "body": {"kind": "Unit"}}}]}}]}"#,
+        "slot 0 is not below the closure's height 0",
+    ),
+    (
+        "captures out of order",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [{"type": "Int", "binds": true}, {"type": "Int", "binds": true}], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Expr", "value": {"kind": "Closure", "params": [], "captures": [1, 0], "height": 2, "cap": false, "ret": "Int", "body": {"kind": "Binary", "op": "+", "lhs": {"kind": "Local", "slot": 0}, "rhs": {"kind": "Local", "slot": 1}}}}]}}]}"#,
+        "is not in strictly ascending order",
+    ),
+    (
+        "a read slot left out of the captures",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [{"type": "Int", "binds": true}], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Expr", "value": {"kind": "Closure", "params": [], "captures": [], "height": 1, "cap": false, "ret": "Int", "body": {"kind": "Local", "slot": 0}}}]}}]}"#,
+        "the body reads slot 0, which the closure does not capture",
+    ),
+    (
+        "a type named IoError",
+        r#"{"core_ir_version": 7, "types": [{"kind": "Struct", "name": "IoError", "fields": []}], "functions": []}"#,
+        "a type is named `IoError`",
+    ),
+    (
+        "an unknown type kind",
+        r#"{"core_ir_version": 7, "types": [{"kind": "Struct", "name": "P", "fields": [{"kind": "Option", "some": "Int"}]}], "functions": []}"#,
+        "unknown type kind `Option`",
+    ),
+    (
+        "a Result that holds a capability",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Let", "binds": false, "type": {"kind": "Result", "ok": "Int", "err": "Stdout"}, "value": {"kind": "Unit"}}]}}]}"#,
+        "a `Result` that holds a capability or a function",
+    ),
+    (
+        "a Result that holds a function, inside another",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Let", "binds": false, "type": {"kind": "Result", "ok": {"kind": "Result", "ok": {"kind": "Fn", "cap": false, "params": [], "ret": "()"}, "err": "Int"}, "err": "Int"}, "value": {"kind": "Unit"}}]}}]}"#,
+        "a `Result` that holds a capability or a function",
+    ),
+    (
+        "an Err pattern on a type that is not a Result",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Match", "scrutinee": {"kind": "Int", "value": 1}, "arms": [{"pattern": {"kind": "Err", "type": "Int", "value": {"kind": "Wildcard"}}, "body": {"kind": "Unit"}}]}}]}"#,
+        "an `Err` pattern on a type that is not a `Result`",
+    ),
+    (
+        "a ? that converts with an undefined function",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Try", "operand": {"kind": "Ok", "value": {"kind": "Unit"}}, "convert": "<AppError as From<Int>>.from"}}]}"#,
+        "`?` converts with `<AppError as From<Int>>.from`, which the program does not define",
+    ),
+    (
+        "a ? that converts with a function of two parameters",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "two", "params": [{"type": "Int", "binds": true}, {"type": "Int", "binds": true}], "ret": "Int", "body": {"kind": "Local", "slot": 0}}, {"name": "main", "params": [], "ret": "()", "body": {"kind": "Try", "operand": {"kind": "Ok", "value": {"kind": "Unit"}}, "convert": "two"}}]}"#,
+        "`?` converts with `two`, which takes 2 parameter(s), not 1",
+    ),
+    (
+        "a mutating call of a function with no receiver",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "MutatingCall", "function": "main", "receiver": {"var": 0, "fields": []}, "args": []}}]}"#,
+        "a mutating call of `main`, which takes no `var self`",
+    ),
+    (
+        "a mutating call of a function the program does not define",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "MutatingCall", "function": "absent", "receiver": {"var": 0, "fields": []}, "args": []}}]}"#,
+        "a mutating call of `absent`, which the program does not define",
+    ),
+    (
+        "a mutating call with an argument too many",
+        r#"{"core_ir_version": 7, "types": [{"kind": "Struct", "name": "Counter", "fields": ["Int"]}], "functions": [{"name": "Counter.bump", "receiver": "Counter", "params": [], "ret": "()", "body": {"kind": "Unit"}}, {"name": "main", "params": [], "ret": "()", "body": {"kind": "MutatingCall", "function": "Counter.bump", "receiver": {"var": 0, "fields": []}, "args": [{"kind": "Unit"}]}}]}"#,
+        "a mutating call of `Counter.bump` with 1 argument(s), but it has 0 parameter(s)",
+    ),
+    (
+        "a call of a mutating method without its receiver",
+        r#"{"core_ir_version": 7, "types": [{"kind": "Struct", "name": "Counter", "fields": ["Int"]}], "functions": [{"name": "Counter.bump", "receiver": "Counter", "params": [], "ret": "()", "body": {"kind": "Unit"}}, {"name": "main", "params": [], "ret": "()", "body": {"kind": "Call", "function": "Counter.bump", "args": []}}]}"#,
+        "a call of `Counter.bump` with 0 argument(s), but it has 1 parameter(s)",
+    ),
+    (
+        "a receiver that is not a declared struct or enum",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "f", "receiver": "Int", "params": [], "ret": "()", "body": {"kind": "Unit"}}]}"#,
+        "the receiver of `f` is not a struct or enum the program declares",
+    ),
+    (
+        "a place with no fields",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Assign", "place": {"var": 0}, "value": {"kind": "Unit"}}]}}]}"#,
+        "missing field `fields`",
+    ),
+    (
+        "a var that is negative",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Var", "var": -1}}]}"#,
+        "expected a slot, 0 or more",
+    ),
+    (
+        "a task type without its result",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Let", "binds": false, "type": {"kind": "Task"}, "value": {"kind": "Unit"}}]}}]}"#,
+        "missing field `result`",
+    ),
+    (
+        "a scope with a field it does not have",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Scope", "body": {"kind": "Unit"}, "handle": 0}}]}"#,
+        "unknown field `handle`",
+    ),
+    (
+        "a scope without its block",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Scope"}}]}"#,
+        "missing field `body`",
+    ),
+    (
+        "a struct with a scope's handle as a field",
+        r#"{"core_ir_version": 7, "types": [{"kind": "Struct", "name": "Holder", "fields": ["Scope"]}], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Unit"}}]}"#,
+        "a field is a scope's or a task's handle",
+    ),
+    (
+        "a Result that holds a task",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Let", "binds": false, "type": {"kind": "Result", "ok": {"kind": "Task", "result": "Int"}, "err": "()"}, "value": {"kind": "Unit"}}]}}]}"#,
+        "a `Result` that holds a scope's or a task's handle",
+    ),
+    (
+        "a type named Task",
+        r#"{"core_ir_version": 7, "types": [{"kind": "Struct", "name": "Task", "fields": []}], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Unit"}}]}"#,
+        "the name of a built-in type",
+    ),
+    (
+        "a join of no task",
+        r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Builtin", "name": "Task.join", "args": []}}]}"#,
+        "a call of the built-in `Task.join` with 0 argument(s)",
     ),
 ];
 
@@ -629,10 +936,36 @@ fn the_lean_reference_refuses_malformed_core_ir_with_exit_2() {
         assert_eq!(run.code, Some(2), "{what}: the exit code, with {run:?}");
         assert_eq!(run.stdout, "", "{what}: nothing on stdout");
         assert!(
-            run.stderr.starts_with("error: not core IR version 2: ")
+            run.stderr.starts_with("error: not core IR version 7: ")
                 && run.stderr.contains(message),
             "{what}: stderr should name {message:?}: {:?}",
             run.stderr
         );
     }
+}
+
+/// A `main` that is a mutating method is core IR with no program to run
+/// (exit 2), and a var that no `Var` binds is read nowhere the run can
+/// answer, which leaves it stuck (exit 3): the export writes neither.
+#[test]
+fn the_lean_reference_refuses_a_mutating_main_and_an_unbound_var() {
+    let Some(exe) = reference_or_skip("lean_reference (vars)") else {
+        return;
+    };
+    let mutating_main = r#"{"core_ir_version": 7, "types": [{"kind": "Struct", "name": "Counter", "fields": ["Int"]}], "functions": [{"name": "main", "receiver": "Counter", "params": [], "ret": "()", "body": {"kind": "Unit"}}]}"#;
+    let run = run_exe(exe, mutating_main).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(run.code, Some(2), "{run:?}");
+    assert_eq!(
+        run.stderr,
+        "error: no program to run: `main` is a mutating method\n"
+    );
+    let unbound = r#"{"core_ir_version": 7, "types": [], "functions": [{"name": "main", "params": [], "ret": "()", "body": {"kind": "Block", "stmts": [{"kind": "Assign", "place": {"var": 0, "fields": []}, "value": {"kind": "Unit"}}]}}]}"#;
+    let run = run_exe(exe, unbound).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(run.code, Some(3), "{run:?}");
+    assert_eq!(run.stdout, "");
+    assert!(
+        run.stderr
+            .contains("a `var` is read or written outside any binding of it"),
+        "{run:?}"
+    );
 }

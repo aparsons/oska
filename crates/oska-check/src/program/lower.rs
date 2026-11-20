@@ -122,8 +122,10 @@ pub struct Signature {
     pub ret: Ty,
 }
 
-/// The checked program's type for the checker's `ty`, without trust or
-/// capability flags, or `None` while it holds an unsolved variable.
+/// The checked program's type for the checker's `ty`, without trust
+/// flags, or `None` while it holds an unsolved variable. A function type
+/// keeps whether it is a `cap fn`: a capability variable no `cap fn`
+/// reached reads as a plain `fn`, as the checker reads it.
 pub fn program_type(ty: &Ty) -> Option<Type> {
     Some(match ty {
         Ty::Named(name, args, _) => match (name.as_str(), IntType::named(name)) {
@@ -136,7 +138,10 @@ pub fn program_type(ty: &Ty) -> Option<Type> {
             },
         },
         Ty::Unit => Type::Unit,
-        Ty::Fn { params, ret, .. } => Type::Fn {
+        Ty::Fn {
+            cap, params, ret, ..
+        } => Type::Fn {
+            cap: *cap == ty::Cap::Bearing,
             params: params.iter().map(program_type).collect::<Option<_>>()?,
             ret: Box::new(program_type(ret)?),
         },
@@ -342,6 +347,7 @@ pub fn module(
                     generics: Vec::new(),
                     self_ty: None,
                     receiver: false,
+                    mutating: false,
                     params: Vec::new(),
                     ret: lowering.convert(items.const_types.get(&name), c.name.span),
                     ret_annotation: Some(c.ty.span),
@@ -496,6 +502,7 @@ impl Lowering<'_> {
                 .and_then(|s| s.self_ty.as_ref())
                 .map(|ty| self.convert(Some(ty), f.name.span)),
             receiver: f.receiver.is_some(),
+            mutating: f.receiver.as_ref().is_some_and(|r| r.mutable),
             params,
             ret: self.convert(sig.map(|s| &s.ret), f.name.span),
             ret_annotation: f.return_type.as_ref().map(|ty| ty.span),
