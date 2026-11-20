@@ -156,7 +156,14 @@ pub const FN_DROP: u32 = 2 * WORD;
 
 /// The offset of a function value's kind: 1 for a closure, 0 for a
 /// named function used as a value (`dbg` shows `<closure>` or `<fn>`).
+/// Under `--max-steps`, [`FN_NO_STEP`] is added for one whose call is no
+/// step.
 pub const FN_KIND: u32 = 3 * WORD;
+
+/// Under `--max-steps`, the bit of [`FN_KIND`] that says a call of the
+/// function value is no step (ADR 0021): a prelude method used as a
+/// value, or a closure of `std.rt`. Never set without the flag.
+pub const FN_NO_STEP: i64 = 2;
 
 /// The offset of the first value a function value captured.
 pub const FN_CAPTURES: u32 = 4 * WORD;

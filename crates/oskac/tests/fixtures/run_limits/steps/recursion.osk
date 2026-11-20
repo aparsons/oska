@@ -1,0 +1,14 @@
+// Steps: 10. `count_down(9)` calls itself down to `count_down(0)`: 10
+// calls of a function written in Oska. `main` is not a step.
+fn count_down(n: Int) -> Int {
+    if n == 0 {
+        0
+    } else {
+        1 + count_down(n - 1)
+    }
+}
+
+fn main(io: Stdout) {
+    let n = count_down(9)
+    let _ = io.println("{n}")
+}

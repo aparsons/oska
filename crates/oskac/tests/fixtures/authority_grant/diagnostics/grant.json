@@ -1,0 +1,8 @@
+{
+  "format": 1,
+  "functions": [
+    {"name":"main","authority":["Stdout"],"pure":false}
+  ],
+  "audit": [],
+  "attenuations": []
+}

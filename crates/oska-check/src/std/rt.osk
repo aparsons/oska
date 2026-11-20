@@ -472,41 +472,47 @@ fn broken_pipe(result: Int) -> Bool {
 //
 // The runtime's writable words, by index:
 //
-//   0 to 7  the allocator's free lists of size classes 0 to 7 (8 to 12
-//           are words 40 to 44; see `free_list`): a block of class c is
-//           16 << c bytes, header included;
+//   0 to 7  the free lists of size classes 0 to 7 (8 to 12 are words
+//           40 to 44; see `free_list`): a block of class c is 16 << c
+//           bytes, header included;
 //   8       the next free byte of the chunk blocks are carved from;
 //   9       the end of that chunk;
-//   10      argc, 11 argv (the address of the pointer array), 12 envp, all
-//           as the process started (`process_init`);
-//   13      the standard output buffer (65536 bytes, mapped on first use),
-//           14 the bytes in it, 15 how it is flushed (0 not decided yet, 1
-//           when full, 2 after every line, for a terminal);
-//   16      the standard input buffer, 17 where the unread bytes start,
-//           18 where they end, 19 its capacity;
+//   10      argc, 11 argv (the address of the pointer array), 12 envp, as
+//           the process started (`process_init`);
+//   13      the stdout buffer (64 KiB, mapped on first use), 14 the bytes
+//           in it, 15 how it is flushed (0 undecided, 1 if full, 2 after
+//           every line, for a terminal);
+//   16      the stdin buffer, 17 where the unread bytes start, 18 where
+//           they end, 19 its capacity;
 //   20      the state of `Random`'s generator, 21 whether it is seeded;
-//   22      a large object's mapping kept for reuse when it was freed, or 0;
+//   22      a freed large object's mapping kept for reuse, or 0;
 //   23      that mapping's length;
-//   24      the pending drops (see "Deferred drops"), 25 how many, 26 room
-//           for how many, 27 whether the outermost drop is running them;
-//   28      the one-byte texts of ASCII (see `text_of`), made on first use;
+//   24      the pending drops ("Deferred drops"), 25 how many, 26 room for
+//           how many, 27 whether the outermost drop runs them;
+//   28      the one-byte ASCII texts (`text_of`), made on first use;
 //   29      the digits of a fault report's signal number (`on_fault`);
-//   30      the `struct sigaction` of the default action, which `on_fault`
-//           restores (`handle_faults`);
-//   31      free;
-//   32-38   the test host (see "The test host"): 32 which host a test runs
-//           on, 33 its stderr prefix, 34 whether stderr is at the start
-//           of a line, 35 the lines printed, 36 the fake files' paths, 37
-//           their contents, 38 the fake directories;
+//   30      the default action's `struct sigaction`, which `on_fault` restores;
+//   31      the bytes written to stdout and stderr, under `--max-output`
+//           (`output_allows`);
+//   32-38   the test host ("The test host"): 32 which host a test runs on,
+//           33 its stderr prefix, 34 whether stderr is at a line's start,
+//           35 the lines printed, 36 and 37 the fake files' paths and
+//           contents, 38 the fake directories;
+//   39      the bytes left under `--max-memory` ("Memory limit");
 //   40-44   the free lists of size classes 8 to 12;
 //   45-47   on Windows, the handles of standard input, output and error;
 //   48      on Windows, the word a call puts its count in (`win_write`);
-//   49      on Windows, the console area, or 0 (see "The Windows console").
+//   49      on Windows, the console area, or 0 (see "The Windows console");
+//   50      under `--max-steps` only, the steps left (`oska-native`'s
+//           `STEPS_WORD`);
+//   51      under `--max-memory` only, the report of its panic
+//           ("Memory limit").
 //
 // Every object the allocator gives out is preceded by a header word: its
 // block's size class, or for an object too large for any class, minus
-// the length of its own mapping. Its first word is its reference count,
-// which the generated code keeps; `free` is called when it drops to zero.
+// the length of its own mapping (plus 256 for a block `--max-memory`
+// counted). Its first word is its reference count, which the generated
+// code keeps; `free` is called when it drops to zero.
 
 // The address of the runtime's writable word `index`.
 fn global(index: Int) -> Int {
@@ -2414,6 +2420,45 @@ fn stdout_put_line(object: Int) -> Int {
     0
 }
 
+// ---- Run limits ------------------------------------------------------------
+//
+// `oskac run --max-output=<limit>` builds the program so that each write
+// it makes to stdout or stderr (`println`, `dbg`, `main`'s error) first
+// asks `output_allows`. A program built without the flag never calls it.
+
+// Whether the program may write `text` and `extra` bytes more without
+// taking its output past `limit` bytes: if so they are counted, and if
+// not nothing is, for the generated code to panic (`P0041`) before the
+// write.
+pub fn output_allows(text: String, extra: Int, limit: Int) -> Bool {
+    let wanted = text_length(rt_mem_text(text)) + extra
+    let written = rt_mem_load64(global(31))
+    if wanted > limit - written {
+        return false
+    }
+    rt_mem_store64(global(31), written + wanted)
+    true
+}
+
+// `text`, program-made text a panic report quotes, cut to the bytes
+// `--max-output=limit` has left: all of it when it fits, else as many of
+// its first bytes as fit, ending where a character ends, then `...`. The
+// interpreter cuts alike (`oska_check::limits::cut_quoted`).
+fn cut_quoted(text: String, limit: Int) -> String {
+    let left = limit - rt_mem_load64(global(31))
+    let object = rt_mem_text(text)
+    if text_length(object) <= left {
+        return text
+    }
+    var end = left
+    // A continuation byte (10xxxxxx) is inside a character.
+    while end > 0 && rt_mem_and(rt_mem_load8(rt_mem_add(text_data(object), end)), 192) == 128 {
+        end = end - 1
+    }
+    let cut = text_part(text, object, 0, end)
+    "{cut}..."
+}
+
 // `Stdout.println`.
 pub fn stdout_println(io: Stdout, line: String) -> Result<(), IoError> {
     if testing() {
@@ -3118,6 +3163,17 @@ pub fn panic_missing_secret(start: String, end: String, env: Env, name: String) 
 
 pub fn missing_secret_message(head: String, env: Env, name: String) -> String {
     "{head}the secret `{name}` is not set in the environment"
+}
+
+// Panic (`P0020`) under `--max-output=limit`: the name cut to what the
+// limit has left (`cut_quoted`).
+pub fn panic_missing_secret_cut(start: String, end: String, env: Env, name: String, limit: Int) {
+    panic_message(start, end, missing_secret_cut_message("", env, name, limit))
+}
+
+pub fn missing_secret_cut_message(head: String, env: Env, name: String, limit: Int) -> String {
+    let shown = cut_quoted(name, limit)
+    "{head}the secret `{shown}` is not set in the environment"
 }
 
 // `Secret.constant_time_eq`.
@@ -6183,4 +6239,131 @@ pub fn on_exception(pointers: Int) -> Int {
     let _ = write_text(2, "\n")
     let _ = rt_sys_exit_process(code)
     0
+}
+
+// ---- Memory limit ----------------------------------------------------------
+//
+// `oskac run --max-memory=<limit>` builds the program so that each call of
+// `alloc`, `try_alloc` and `free`, in the generated code and in `std.rt`
+// alike, calls `counted_alloc`, `counted_try_alloc` or `counted_free` in
+// its place; theirs alone are not redirected. Word 39 holds the bytes the
+// program may still allocate, and word 51 the report of the panic
+// (`P0040`), or 0 before `memory_limit_start`. Once counting has
+// started, each block is counted, header included, before it is
+// allocated, and marked as counted (256 added to its header word, which
+// no size class or mapping length uses); a block allocated before is
+// neither. Freeing a marked block gives its bytes back, and freeing an
+// unmarked one gives nothing, so the bytes left never pass
+// the limit and adding them back never overflows. A program built without
+// the flag never calls these.
+
+// The header bit of a block `--max-memory` counted.
+fn counted_mark() -> Int {
+    256
+}
+
+// The bytes left once the limit is reached, so that the panic's own
+// report is not stopped in turn: 2^62, far past any memory, and far
+// enough below the largest `Int` that adding freed bytes cannot overflow.
+fn limit_reached() -> Int {
+    4611686018427387904
+}
+
+// Start counting: `limit` bytes are left, and `report` is the panic's
+// (`P0040`). Before this, nothing is checked.
+pub fn memory_limit_start(limit: Int, report: String) {
+    rt_mem_store64(global(39), limit)
+    rt_mem_store64(global(51), rt_mem_text(report))
+}
+
+// The bytes of the block `alloc` gives an object of `size` bytes, header
+// included: its size class's, or the mapping's (a kept mapping it reuses
+// may be longer; see `counted_alloc`).
+fn block_for(size: Int) -> Int {
+    let block = rt_mem_add(size, 8)
+    if block > largest_block() {
+        return rt_mem_and(rt_mem_add(block, 65535), -65536)
+    }
+    var bytes = 16
+    while bytes < block {
+        bytes = rt_mem_shl(bytes, 1)
+    }
+    bytes
+}
+
+// The bytes of the block of the object at `object`, header included,
+// with or without the counted mark.
+fn block_bytes(object: Int) -> Int {
+    let header = rt_mem_and(rt_mem_load64(rt_mem_sub(object, 8)), rt_mem_xor(counted_mark(), -1))
+    if header < 0 {
+        return rt_mem_sub(0, header)
+    }
+    rt_mem_shl(16, header)
+}
+
+// Count `bytes` more against the limit, once counting has started: past
+// it, panic with its report.
+fn spend_memory(bytes: Int) {
+    let left = rt_mem_sub(rt_mem_load64(global(39)), bytes)
+    if left < 0 {
+        rt_mem_store64(global(39), limit_reached())
+        panic(rt_mem_as_text(rt_mem_load64(global(51))))
+    }
+    rt_mem_store64(global(39), left)
+}
+
+// Mark the block of the object at `object` as counted.
+fn mark_counted(object: Int) {
+    let at = rt_mem_sub(object, 8)
+    rt_mem_store64(at, rt_mem_or(rt_mem_load64(at), counted_mark()))
+}
+
+// Whether counting has started (`memory_limit_start`): until then a
+// block is neither counted nor marked.
+fn counting() -> Bool {
+    rt_mem_load64(global(51)) != 0
+}
+
+pub fn counted_alloc(size: Int) -> Int {
+    if !counting() {
+        return alloc(size)
+    }
+    let expected = block_for(size)
+    spend_memory(expected)
+    let object = alloc(size)
+    // A kept mapping it reused may be longer: count the rest too.
+    spend_memory(rt_mem_sub(block_bytes(object), expected))
+    mark_counted(object)
+    object
+}
+
+// `try_alloc` gives a block of a size class from `alloc`, or maps its
+// own; the bytes are counted first, and given back when no memory holds
+// them.
+pub fn counted_try_alloc(size: Int) -> Int {
+    if !counting() || size < 0 || size > 140737488355328 {
+        return try_alloc(size)
+    }
+    if rt_mem_add(size, 8) <= largest_block() {
+        return counted_alloc(size)
+    }
+    let expected = block_for(size)
+    spend_memory(expected)
+    let object = try_alloc(size)
+    if object == 0 {
+        rt_mem_store64(global(39), rt_mem_add(rt_mem_load64(global(39)), expected))
+        return 0
+    }
+    mark_counted(object)
+    object
+}
+
+pub fn counted_free(object: Int) {
+    let at = rt_mem_sub(object, 8)
+    let header = rt_mem_load64(at)
+    if rt_mem_and(header, counted_mark()) != 0 {
+        rt_mem_store64(global(39), rt_mem_add(rt_mem_load64(global(39)), block_bytes(object)))
+        rt_mem_store64(at, rt_mem_and(header, rt_mem_xor(counted_mark(), -1)))
+    }
+    free(object)
 }

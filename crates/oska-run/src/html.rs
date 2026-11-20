@@ -5,13 +5,12 @@
 //! takes text the checker has proved trusted, and `Html.raw` passes it on
 //! unescaped. Rendering hands back the markup as it is.
 
-use std::rc::Rc;
-
 use oska_syntax::Span;
 
 use crate::host::Host;
 use crate::intrinsics::Intrinsic::Plain;
 use crate::intrinsics::Table;
+use crate::memory;
 use crate::panics::Panic;
 use crate::value::Value;
 
@@ -48,12 +47,25 @@ pub fn escape(text: &str) -> String {
     out
 }
 
-/// A struct of type `ty` holding `markup`.
-fn markup(ty: &str, markup: &str) -> Value {
-    Value::Struct {
-        ty: Rc::from(ty),
-        fields: Rc::new(vec![Value::str(markup)]),
-    }
+/// A struct of type `ty` holding the markup `make` builds, `len` bytes of
+/// it, made at `span`. Under `--max-memory` it is charged before it is
+/// built.
+fn markup(ty: &str, len: usize, span: Span, make: impl FnOnce() -> String) -> Result<Value, Panic> {
+    let markup = memory::text_of_len(len, span, make)?;
+    memory::structure(ty, vec![markup], span)
+}
+
+/// The length of `text` escaped ([`escape`]).
+fn escaped_len(text: &str) -> usize {
+    text.chars()
+        .map(|c| match c {
+            '&' => 5,
+            '<' | '>' => 4,
+            '"' => 6,
+            '\'' => 5,
+            c => c.len_utf8(),
+        })
+        .sum()
 }
 
 /// The markup an `Html` or `TrustedHtml` holds.
@@ -62,24 +74,34 @@ fn markup_of(value: &Value) -> &str {
 }
 
 /// `text(text)`: the text, escaped.
-fn text(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(markup(HTML, &escape(args[0].as_str())))
+fn text(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    let text = args[0].as_str();
+    let len = if memory::metered() {
+        escaped_len(text)
+    } else {
+        0
+    };
+    markup(HTML, len, span, || escape(text))
 }
 
 /// `TrustedHtml.new(markup)`: the markup, vouched for by its author.
-fn trusted_html_new(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(markup(TRUSTED_HTML, args[0].as_str()))
+fn trusted_html_new(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    let text = args[0].as_str();
+    markup(TRUSTED_HTML, text.len(), span, || text.to_string())
 }
 
 /// `Html.raw(markup)`: trusted markup, unescaped.
-fn html_raw(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    Ok(markup(HTML, markup_of(&args[0])))
+fn html_raw(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    let text = markup_of(&args[0]);
+    markup(HTML, text.len(), span, || text.to_string())
 }
 
 /// `Html.concat(self, other)`: `self`'s markup, then `other`'s.
-fn html_concat(_: &mut dyn Host, args: Vec<Value>, _: Span) -> Result<Value, Panic> {
-    let joined = format!("{}{}", markup_of(&args[0]), markup_of(&args[1]));
-    Ok(markup(HTML, &joined))
+fn html_concat(_: &mut dyn Host, args: Vec<Value>, span: Span) -> Result<Value, Panic> {
+    let (first, second) = (markup_of(&args[0]), markup_of(&args[1]));
+    markup(HTML, first.len() + second.len(), span, || {
+        format!("{first}{second}")
+    })
 }
 
 /// `Html.render(self)`: the markup, ready to send.

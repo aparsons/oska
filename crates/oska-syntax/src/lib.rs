@@ -796,6 +796,42 @@ enum StrKind {
     Sink,
 }
 
+/// The edits that remove a Markdown fence around the whole of `src`: an
+/// opening line of three or more backticks, with or without an info
+/// string, and, as its last line that is not blank, a closing line of at
+/// least as many backticks and nothing else. `None` when `src` is not one
+/// such fence, including when a line inside it would already close it.
+fn fence_edits(src: &str) -> Option<Vec<Edit>> {
+    let opening_end = src.find('\n')? + 1;
+    let opening = src[..opening_end].trim_end();
+    let ticks = opening.len() - opening.trim_start_matches('`').len();
+    if ticks < 3 || opening[ticks..].contains('`') {
+        return None;
+    }
+    let closes = |line: &str| {
+        let line = line.trim_end();
+        line.len() >= ticks && line.bytes().all(|b| b == b'`')
+    };
+    let body_end = src.trim_end().len();
+    let closing_start = src[..body_end].rfind('\n')? + 1;
+    if closing_start < opening_end || !closes(&src[closing_start..body_end]) {
+        return None;
+    }
+    if src[opening_end..closing_start].lines().any(closes) {
+        return None;
+    }
+    Some(vec![
+        Edit::delete(Span {
+            start: 0,
+            end: opening_end,
+        }),
+        Edit::delete(Span {
+            start: closing_start,
+            end: src.len(),
+        }),
+    ])
+}
+
 struct Lexer<'a> {
     src: &'a str,
     pos: usize,
@@ -1002,7 +1038,11 @@ impl Lexer<'_> {
             ('#', _) => (Punct::Hash, false),
             ('@', _) => (Punct::At, false),
             _ => {
-                return Err(self.error("E0001", format!("unexpected character {c:?}"), start));
+                let err = self.error("E0001", format!("unexpected character {c:?}"), start);
+                return Err(match fence_edits(self.src) {
+                    Some(edits) if start == 0 => err.with_fix("remove the Markdown fence", edits),
+                    _ => err,
+                });
             }
         };
         if two_chars {

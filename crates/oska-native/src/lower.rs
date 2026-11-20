@@ -57,6 +57,18 @@
 //! with a guard region below it. Every call of a program's function
 //! counts its depth ([`Inst::Enter`]) and panics with `P0021` at the
 //! interpreter's limit, so recursion never reaches the guard.
+//!
+//! # Steps
+//!
+//! Under `oskac run --max-steps` (ADR 0021), each call of a function,
+//! method or closure of the program, and each loop back-edge in it, is a
+//! step ([`Body::step`]): a counter after the runtime's globals counts
+//! down from the limit, and the step with none left panics with `P0038`
+//! at the interpreter's span, before the call's depth is counted, as the
+//! interpreter's `enter` takes it. A call of a function value reads from
+//! the value whether it is a step (`layout::FN_NO_STEP`), since a prelude
+//! method used as a value is none. Nothing in `std.rt` is a step. Without the flag none of this is generated, so the
+//! executable is byte for byte the one `oskac build` writes.
 
 mod closures;
 mod data;
@@ -71,6 +83,7 @@ mod traits;
 use std::collections::{BTreeMap, HashMap};
 
 use oska_check::builtins;
+use oska_check::limits::{Limit, Limits};
 use oska_check::program::{
     trait_method, Callee, Construct, Expr, ExprKind, Function, IntType, Part, Program, Stmt, Type,
 };
@@ -92,8 +105,29 @@ pub const MAX_CALL_DEPTH: u32 = 50_000;
 /// below the deepest frame, and for the entry point's.
 const STACK_RESERVE: u64 = 8 << 20;
 
+/// `std.rt`'s allocator functions, each with the one that calls it and
+/// counts the bytes against `--max-memory` (`P0040`): under the limit,
+/// every request of the first is one of the second.
+const COUNTED_MEMORY: [(&str, &str); 3] = [
+    ("alloc", "counted_alloc"),
+    ("try_alloc", "counted_try_alloc"),
+    ("free", "counted_free"),
+];
+
 /// The words of the runtime's writable data, at `rt_mem_globals()`.
 pub const GLOBALS: u32 = 50;
+
+/// Under `--max-steps`, the word after the runtime's globals holds the
+/// steps the program may still take ([`Body::step`]); without the flag
+/// the word is not there, so the writable data is what it always was.
+const STEPS_WORD: u32 = GLOBALS;
+
+/// Under `--max-memory`, the word after the step counter's holds the
+/// report of the panic (`P0040`) that `std.rt`'s memory limit stops the
+/// program with; without the flag the word is not there. It is a fixed
+/// word, 51, so that `std.rt` can name it whether or not the step counter
+/// is there too.
+const MEMORY_REPORT_WORD: u32 = GLOBALS + 1;
 
 /// What an executable runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,12 +195,15 @@ enum Instance {
     /// 1, holding a reference of its own to each field.
     Unshare(Source, Type),
     /// Whether two lists of items of this type are equal (`List.eq`).
-    ListEq(Source, Type),
+    /// Under `--max-steps`, one for each `==` that compares them, at the
+    /// span its calls of a user `Eq` are steps at ([`Body::step_site`]).
+    ListEq(Source, Type, Option<Span>),
     /// The text `dbg` shows a value of this struct or enum type as.
     Debug(Source, Type),
     /// Whether two values of this `Option` or `Result` type are equal,
-    /// through `Eq` for each field's type (`traits.rs`).
-    Equal(Source, Type),
+    /// through `Eq` for each field's type (`traits.rs`). Under
+    /// `--max-steps`, one for each `==`, as [`Instance::ListEq`].
+    Equal(Source, Type, Option<Span>),
     /// The check of a function's `requires` clauses, a function of the
     /// same parameters as it: gives 0 when they all hold, else the number
     /// (from 1) of the first that is false. The caller panics with it,
@@ -216,6 +253,7 @@ pub fn program(
     locate: Locate,
     kind: Entry,
     target: Target,
+    limits: Limits,
 ) -> Result<ir::Module, Diagnostic> {
     let mut lowering = Lowering {
         user,
@@ -223,6 +261,8 @@ pub fn program(
         locate,
         kind,
         target,
+        limits,
+        uncounted: false,
         ids: HashMap::new(),
         functions: Vec::new(),
         queue: Vec::new(),
@@ -235,6 +275,11 @@ pub fn program(
     };
     let entry = lowering.entry()?;
     while let Some((instance, id, origin)) = lowering.queue.pop() {
+        lowering.uncounted = matches!(
+            &instance,
+            Instance::Function { source: Source::Runtime, name, .. }
+                if COUNTED_MEMORY.iter().any(|(_, counted)| counted == name)
+        );
         lowering.functions[id] = lowering.function(&instance, origin)?;
         if matches!(
             instance,
@@ -260,6 +305,14 @@ pub fn program(
     }
     optimize::module(&mut lowering.functions);
     let stack = lowering.size_stack(entry);
+    // The globals, then the step counter under `--max-steps`, then the
+    // memory limit's report under `--max-memory` (which keeps the counter's
+    // word, unused without `--max-steps`, so that its own word is fixed).
+    let globals = if limits.max_memory.is_some() {
+        MEMORY_REPORT_WORD + 1
+    } else {
+        GLOBALS + u32::from(limits.max_steps.is_some())
+    };
     // The most arguments any call passes, or any function takes, past
     // those the target passes in registers: they share one area after
     // the globals.
@@ -280,8 +333,8 @@ pub fn program(
         functions: lowering.functions,
         entry,
         rodata: lowering.rodata.into_bytes(),
-        data_size: (GLOBALS + extra_args) * layout::WORD,
-        extra_args: GLOBALS * layout::WORD,
+        data_size: (globals + extra_args) * layout::WORD,
+        extra_args: globals * layout::WORD,
         callback: lowering.callback,
         stack,
     })
@@ -299,6 +352,13 @@ struct Lowering<'p> {
     /// The target platform: its system-call numbers and `std.rt` table,
     /// and how many arguments its calls pass in registers.
     target: Target,
+    /// The run limits the program is built under (`oskac run`): none for
+    /// `oskac build` and test executables.
+    limits: Limits,
+    /// Whether the function being lowered is one of `std.rt`'s counting
+    /// allocator functions ([`COUNTED_MEMORY`]), whose own calls of the
+    /// allocator are not redirected.
+    uncounted: bool,
     /// Every function requested so far.
     ids: HashMap<Instance, FnId>,
     /// The lowered functions, by id; a requested one is a placeholder
@@ -333,6 +393,7 @@ impl<'p> Lowering<'p> {
     /// The id of `instance`, lowered later if it is new. `origin` is the
     /// user code that reached it.
     fn request(&mut self, instance: Instance, origin: Span) -> FnId {
+        let instance = self.counted(instance);
         if let Some(&id) = self.ids.get(&instance) {
             return id;
         }
@@ -340,6 +401,35 @@ impl<'p> Lowering<'p> {
         self.ids.insert(instance.clone(), id);
         self.queue.push((instance, id, origin));
         id
+    }
+
+    /// `instance`, or under `--max-memory` for one of `std.rt`'s allocator
+    /// functions, its counting one ([`COUNTED_MEMORY`]): every call of the
+    /// allocator, in the generated code and in `std.rt` alike, and every
+    /// function value's drop by `free`, counts. Without the limit nothing
+    /// changes.
+    fn counted(&self, instance: Instance) -> Instance {
+        if self.limits.max_memory.is_none() || self.uncounted {
+            return instance;
+        }
+        match instance {
+            Instance::Function {
+                source: Source::Runtime,
+                name,
+                type_args,
+            } => {
+                let name = match COUNTED_MEMORY.iter().find(|(raw, _)| *raw == name) {
+                    Some((_, counted)) => counted.to_string(),
+                    None => name,
+                };
+                Instance::Function {
+                    source: Source::Runtime,
+                    name,
+                    type_args,
+                }
+            }
+            other => other,
+        }
     }
 
     /// The index of `code` in [`Lowering::closures`], added if it is new.
@@ -383,6 +473,7 @@ impl<'p> Lowering<'p> {
         let mut body = Body::new(self, Source::User, None);
         match kind {
             Entry::Main => {
+                body.start_steps();
                 if let Some(main) = user.functions.get("main") {
                     body.call_main(main)?;
                 }
@@ -527,15 +618,15 @@ impl<'p> Lowering<'p> {
                 body.unshare_function(ty)?;
                 return body.finish(&qualified(instance), 1, NOWHERE);
             }
-            Instance::ListEq(source, ty) => {
+            Instance::ListEq(source, ty, at) => {
                 let mut body = Body::new(self, *source, Some(origin));
-                body.list_eq_function(ty)?;
+                body.list_eq_function(ty, at.unwrap_or(NOWHERE))?;
                 return body.finish(&qualified(instance), 2, NOWHERE);
             }
-            Instance::Equal(source, ty) => {
+            Instance::Equal(source, ty, at) => {
                 let runtime_origin = (*source == Source::Runtime).then_some(origin);
                 let mut body = Body::new(self, *source, runtime_origin);
-                body.equal_function(ty, origin)?;
+                body.equal_function(ty, at.unwrap_or(origin))?;
                 return body.finish(&qualified(instance), 2, NOWHERE);
             }
             Instance::Closure(index) => {
@@ -682,9 +773,9 @@ fn qualified(instance: &Instance) -> String {
         }
         Instance::Drop(_, ty) => format!("drop<{ty}>"),
         Instance::Unshare(_, ty) => format!("unshare<{ty}>"),
-        Instance::ListEq(_, ty) => format!("list_eq<{ty}>"),
+        Instance::ListEq(_, ty, _) => format!("list_eq<{ty}>"),
         Instance::Debug(_, ty) => format!("debug<{ty}>"),
-        Instance::Equal(_, ty) => format!("eq<{ty}>"),
+        Instance::Equal(_, ty, _) => format!("eq<{ty}>"),
         Instance::Requires {
             source,
             name,
@@ -927,6 +1018,11 @@ impl<'l, 'p> Body<'l, 'p> {
         let dst = self.temp();
         self.push(Inst::Const { dst, value });
         dst
+    }
+
+    /// A run limit as a constant. `Limits` holds at most `i64::MAX`.
+    fn limit_constant(&mut self, limit: u64) -> Temp {
+        self.constant(i64::try_from(limit).unwrap_or(i64::MAX))
     }
 
     fn copy(&mut self, src: Temp) -> Temp {
@@ -1600,6 +1696,7 @@ impl<'l, 'p> Body<'l, 'p> {
         if self.source == Source::Runtime {
             return self.call_function(Source::Runtime, name, type_args, args, span);
         }
+        self.step(span)?;
         let exhausted = self.panic_static(panics::CALL_DEPTH_EXCEEDED, panics::TOO_DEEP, span)?;
         self.push(Inst::Enter { exhausted });
         self.check_requires(name, &type_args, &args, span)?;
@@ -1663,12 +1760,22 @@ impl<'l, 'p> Body<'l, 'p> {
                 };
                 let ty = self.ty(ty);
                 let text = self.debug_text(&ty, value, span)?;
+                // `[dbg] `, the text and a newline.
+                self.spend_output(text, 7, span)?;
                 self.call_runtime("dbg_write", vec![text], span)?;
                 self.release(text, &Type::String)?;
                 return Ok(value);
             }
             Callee::Intrinsic(name) => match intrinsics::prelude(name) {
                 Some(Prelude::Runtime(function)) => {
+                    self.call_runtime(function, args.clone(), span)?
+                }
+                Some(Prelude::WriteLine(function)) => {
+                    let Some(&line) = args.get(1) else {
+                        return Err(self.refuse(span, &format!("`{name}`")));
+                    };
+                    // The line and a newline.
+                    self.spend_output(line, 1, span)?;
                     self.call_runtime(function, args.clone(), span)?
                 }
                 // The argument is the result: its reference passes on.
@@ -1724,6 +1831,97 @@ impl<'l, 'p> Body<'l, 'p> {
         Some(function.self_ty.as_ref()?.substitute(&subst))
     }
 
+    /// Under `--max-output`, count the bytes of the text `text` and
+    /// `extra` more, which the program is about to write to stdout or
+    /// stderr, against the limit (`std.rt`'s `output_allows`): a write
+    /// that would pass it panics with `P0041` at `span` instead. Without
+    /// the limit nothing is generated.
+    fn spend_output(&mut self, text: Temp, extra: i64, span: Span) -> Result<(), Diagnostic> {
+        let Some(limit) = self.lowering.limits.max_output else {
+            return Ok(());
+        };
+        let over = self.panic_static(Limit::Output.code(), &Limit::Output.message(limit), span)?;
+        let extra = self.constant(extra);
+        let limit = self.limit_constant(limit);
+        let allowed = self.call_runtime("output_allows", vec![text, extra, limit], span)?;
+        self.push(Inst::JumpIfZero {
+            cond: allowed,
+            target: over,
+        });
+        Ok(())
+    }
+
+    /// Under `--max-steps`, give the program its steps: the limit, in the
+    /// step counter, before `main` runs. Without the flag nothing is
+    /// generated.
+    fn start_steps(&mut self) {
+        let Some(limit) = self.lowering.limits.max_steps else {
+            return;
+        };
+        let counter = self.steps_counter();
+        let limit = self.limit_constant(limit);
+        self.store(counter, 0, limit);
+    }
+
+    /// The address of the step counter.
+    fn steps_counter(&mut self) -> Temp {
+        let dst = self.temp();
+        self.push(Inst::Addr {
+            dst,
+            symbol: Symbol::Data(STEPS_WORD * layout::WORD),
+        });
+        dst
+    }
+
+    /// Under `--max-steps`, take one **step** (ADR 0021) at `span`: a call
+    /// of a function, method or closure written in Oska, or a loop's
+    /// back-edge, as the interpreter's `Interpreter::step` counts them.
+    /// With no step left it panics with `P0038` at `span` instead. The
+    /// counter is a word in the writable data that only counts down, read
+    /// and written with the backend's plain loads and stores before
+    /// register allocation, so every target counts alike, with no system
+    /// call (ADR 0013). Without the flag nothing is generated, and
+    /// nothing in `std.rt` is a step.
+    fn step(&mut self, span: Span) -> Result<(), Diagnostic> {
+        let Some(limit) = self.step_limit() else {
+            return Ok(());
+        };
+        let over = self.panic_static(Limit::Steps.code(), &Limit::Steps.message(limit), span)?;
+        self.spend_step(over);
+        Ok(())
+    }
+
+    /// The `--max-steps` limit this code counts steps under: none
+    /// without the flag, and none in `std.rt`, where nothing is a step.
+    pub(super) fn step_limit(&self) -> Option<u64> {
+        self.lowering
+            .limits
+            .max_steps
+            .filter(|_| self.source == Source::User)
+    }
+
+    /// Under `--max-steps`, `span`: where a function the backend generates
+    /// and shares between callers, such as the comparison of two lists,
+    /// takes the steps it calls the program's code for, so that each
+    /// caller gets its own copy that reports them at its own span, as the
+    /// interpreter does. `None` without the flag: one copy for all.
+    fn step_site(&self, span: Span) -> Option<Span> {
+        self.lowering.limits.max_steps.map(|_| span)
+    }
+
+    /// Count one step down, or jump to `over` when none is left.
+    fn spend_step(&mut self, over: Label) {
+        let counter = self.steps_counter();
+        let left = self.load(counter, 0);
+        self.push(Inst::JumpIfZero {
+            cond: left,
+            target: over,
+        });
+        let one = self.constant(1);
+        let left = self.binary_op(BinOp::Sub, left, one);
+        self.store(counter, 0, left);
+    }
+
     /// Panic after a [`Prelude::Checked`] call of `args` that gave `result`:
     /// the word 0 (and, for `Repeat`, -1) says the call was a bug.
     fn check(
@@ -1743,8 +1941,24 @@ impl<'l, 'p> Body<'l, 'p> {
                 });
             }
             Check::Secret => {
-                let label =
-                    self.panic_text(panics::MISSING_SECRET, "panic_missing_secret", args, span)?;
+                // The report quotes the name, which the program made:
+                // under `--max-output`, no more of it than the limit has
+                // left (`std.rt`'s `cut_quoted`).
+                let label = match self.lowering.limits.max_output {
+                    None => {
+                        self.panic_text(panics::MISSING_SECRET, "panic_missing_secret", args, span)?
+                    }
+                    Some(limit) => {
+                        let mut with_limit = args.to_vec();
+                        with_limit.push(self.limit_constant(limit));
+                        self.panic_text(
+                            panics::MISSING_SECRET,
+                            "panic_missing_secret_cut",
+                            &with_limit,
+                            span,
+                        )?
+                    }
+                };
                 self.push(Inst::JumpIfZero {
                     cond: result,
                     target: label,
@@ -1968,6 +2182,14 @@ impl<'l, 'p> Body<'l, 'p> {
     /// the interpreter, the call of `main` is not counted.
     fn call_main(&mut self, main: &Function) -> Result<(), Diagnostic> {
         let span = main.body.span;
+        // Under `--max-memory`, the limit and its report, which spans
+        // `main`'s body: the runtime cannot tell which code allocated.
+        if let Some(limit) = self.lowering.limits.max_memory {
+            let (before, after) = self.report(Limit::Memory.code(), span);
+            let report = self.text(&format!("{before}{}{after}", Limit::Memory.message(limit)));
+            let limit = self.limit_constant(limit);
+            self.call_runtime("memory_limit_start", vec![limit, report], NOWHERE)?;
+        }
         let mut args = Vec::new();
         for param in &main.params {
             if !is_stateless_input(&param.ty) {
@@ -1991,6 +2213,8 @@ impl<'l, 'p> Body<'l, 'p> {
                 });
                 let error = self.load(result, layout::enum_field(0));
                 let text = self.display(&args[1], error, span)?;
+                // The text and a newline, which the program wrote.
+                self.spend_output(text, 1, span)?;
                 // `main_failed` exits, so the text is never released.
                 self.call_runtime("main_failed", vec![text], span)?;
                 self.push(Inst::Label(ok));
@@ -2712,12 +2936,21 @@ impl<'l, 'p> Body<'l, 'p> {
                 };
                 self.push(Inst::Jump(target));
             }
-            Stmt::While { cond, body, .. } => {
-                let (next, exit) = (self.label(), self.label());
-                self.push(Inst::Label(next));
+            Stmt::While { cond, body, span } => {
+                let head = self.label();
+                // Under `--max-steps`, the body and a `continue` go on
+                // to the back-edge's step; without it, to the condition.
+                let counted = self.step_limit().is_some();
+                let next = if counted { self.label() } else { head };
+                let exit = self.label();
+                self.push(Inst::Label(head));
                 self.branch_unless(cond, exit)?;
                 self.loop_body(next, exit, body)?;
-                self.push(Inst::Jump(next));
+                if counted {
+                    self.push(Inst::Label(next));
+                    self.step(*span)?;
+                }
+                self.push(Inst::Jump(head));
                 self.push(Inst::Label(exit));
             }
             Stmt::For {
@@ -2725,14 +2958,14 @@ impl<'l, 'p> Body<'l, 'p> {
                 ty,
                 iter,
                 body,
-                ..
+                span,
             } => {
                 if let Some(text) = self.chars_of(iter) {
-                    self.for_chars(*binds, ty, text, body)?;
+                    self.for_chars(*binds, ty, text, body, *span)?;
                 } else if layout::list_item(&self.ty(&iter.ty)).is_some() {
-                    self.for_list(*binds, ty, iter, body)?;
+                    self.for_list(*binds, ty, iter, body, *span)?;
                 } else {
-                    self.for_range(*binds, ty, iter, body)?;
+                    self.for_range(*binds, ty, iter, body, *span)?;
                 }
             }
         }
@@ -2753,15 +2986,17 @@ impl<'l, 'p> Body<'l, 'p> {
         Ok(())
     }
 
-    /// `for x in r { body }` over a range: each integer from its start
-    /// up to but excluding its end, both read once. A range written in
-    /// place, `start..end`, is never built: `start` is evaluated first.
+    /// `for x in r { body }`, the statement at `span`, over a range: each
+    /// integer from its start up to but excluding its end, both read
+    /// once. A range written in place, `start..end`, is never built:
+    /// `start` is evaluated first.
     fn for_range(
         &mut self,
         binds: bool,
         ty: &Type,
         iter: &Expr,
         body: &Expr,
+        span: Span,
     ) -> Result<(), Diagnostic> {
         let (first, end) = match &iter.kind {
             ExprKind::Range { start, end } => {
@@ -2800,6 +3035,7 @@ impl<'l, 'p> Body<'l, 'p> {
             self.slots.pop();
         }
         self.push(Inst::Label(next));
+        self.step(span)?;
         // `at` is below `end`, so one more never overflows.
         let one = self.constant(1);
         self.push(Inst::Binary {
@@ -2895,5 +3131,173 @@ fn describe(kind: &ExprKind) -> String {
         ExprKind::Match { .. } => "`match`".to_string(),
         ExprKind::Unsupported(what) => what.clone(),
         _ => "this expression".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod step_tests {
+    use oska_check::limits::Limits;
+
+    use crate::ir::{Inst, Module, Symbol};
+    use crate::{layout, Target};
+
+    /// Every kind of step: calls of functions, methods, closures, named
+    /// functions as values, a user `Eq` through lists and `Option`, a
+    /// `requires` clause, a task, and each kind of loop.
+    const STEPS: &str = r#"struct P { x: Int }
+
+impl Eq for P {
+    fn eq(self, other: P) -> Bool {
+        self.x == other.x
+    }
+}
+
+fn half(n: Int) -> Int
+    requires n % 2 == 0
+{
+    n / 2
+}
+
+fn main(io: Stdout) {
+    var i = 0
+    while i < 3 {
+        i = i + 1
+    }
+    for n in 0..2 {
+        i = i + half(n * 2)
+    }
+    for s in ["a", "b"] {
+        i = i + s.len()
+    }
+    for c in "xy".chars() {
+        i = i + c.len()
+    }
+    let same = [P(x: 1)] == [P(x: 1)] && Some(P(x: 2)) == Some(P(x: 2))
+    let doubled = [1, 2].map(|n: Int| n * 2).map(half)
+    let lens = ["a"].map(String.len)
+    let t = scope |s| {
+        let a = s.spawn(|| half(4))
+        a.join()
+    }
+    let d = doubled.len() + lens.len()
+    if same {
+        let _ = io.println("{i} {d} {t}")
+    }
+}
+"#;
+
+    fn lower(target: Target, limits: Limits) -> Module {
+        let report = oska_check::check_module(STEPS);
+        assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+        let program = report.program.expect("the program should check");
+        let rt = oska_check::check_toolchain_rt()
+            .program
+            .expect("std.rt should check");
+        super::program(&program, &rt, &|d| d, super::Entry::Main, target, limits)
+            .expect("the program should lower")
+    }
+
+    /// The instructions that reach the operating system: system calls,
+    /// with their numbers, and library calls, with their imports.
+    fn os_calls(module: &Module) -> std::collections::BTreeSet<(bool, u16)> {
+        module
+            .functions
+            .iter()
+            .flat_map(|f| &f.insts)
+            .filter_map(|inst| match inst {
+                Inst::Syscall { number, .. } => Some((true, *number)),
+                Inst::LibCall { import, .. } => Some((false, *import)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn counter_uses(module: &Module) -> usize {
+        let at = super::STEPS_WORD * layout::WORD;
+        module
+            .functions
+            .iter()
+            .flat_map(|f| &f.insts)
+            .filter(|inst| matches!(inst, Inst::Addr { symbol: Symbol::Data(d), .. } if *d == at))
+            .count()
+    }
+
+    const STEPS_ONLY: Limits = Limits {
+        max_steps: Some(1000),
+        ..Limits::NONE
+    };
+
+    /// Under `--max-memory` the writable data holds the memory limit's
+    /// report in word 51, past the step counter's word, whether or not the
+    /// step counter is there; the call area is unchanged.
+    #[test]
+    fn max_memory_adds_its_report_word_after_the_step_counter() {
+        assert_eq!(super::MEMORY_REPORT_WORD, 51, "std.rt names word 51");
+        for target in Target::ALL {
+            let plain = lower(target, Limits::NONE);
+            for max_steps in [None, Some(1000)] {
+                let limits = Limits {
+                    max_steps,
+                    max_memory: Some(1 << 20),
+                    ..Limits::NONE
+                };
+                let counted = lower(target, limits);
+                assert_eq!(
+                    counted.extra_args,
+                    (super::GLOBALS + 2) * layout::WORD,
+                    "{target:?}"
+                );
+                assert_eq!(
+                    counted.data_size - counted.extra_args,
+                    plain.data_size - plain.extra_args,
+                    "{target:?}: the same call area"
+                );
+            }
+        }
+    }
+
+    /// Without `--max-steps` nothing counts steps: no code reads the
+    /// counter, and the writable data is the globals and the call area as
+    /// it always was. With it, the counter is the word after the globals.
+    #[test]
+    fn without_max_steps_nothing_counts_steps() {
+        for target in Target::ALL {
+            let plain = lower(target, Limits::NONE);
+            assert_eq!(counter_uses(&plain), 0, "{target:?}");
+            assert_eq!(plain.extra_args, super::GLOBALS * layout::WORD);
+            let counted = lower(target, STEPS_ONLY);
+            assert!(counter_uses(&counted) > 0, "{target:?}");
+            assert_eq!(counted.extra_args, (super::GLOBALS + 1) * layout::WORD);
+            assert_eq!(
+                counted.data_size - counted.extra_args,
+                plain.data_size - plain.extra_args,
+                "{target:?}: the same call area"
+            );
+        }
+    }
+
+    /// The counter makes no system call and no library call of its own
+    /// (ADR 0013): the program under the limit reaches the operating
+    /// system exactly as without it.
+    #[test]
+    fn the_step_counter_reaches_the_operating_system_no_more() {
+        for target in Target::ALL {
+            assert_eq!(
+                os_calls(&lower(target, STEPS_ONLY)),
+                os_calls(&lower(target, Limits::NONE)),
+                "{target:?}"
+            );
+        }
+    }
+
+    /// Every target with a backend compiles the counter.
+    #[test]
+    fn every_target_builds_a_program_under_the_step_limit() {
+        let report = oska_check::check_module(STEPS);
+        let program = report.program.expect("the program should check");
+        for target in Target::ALL {
+            crate::build_limited(&program, target, &|d| d, STEPS_ONLY)
+                .unwrap_or_else(|d| panic!("{target:?}: {d:?}"));
+        }
     }
 }

@@ -1,0 +1,20 @@
+P0039: Time limit reached: the program was run with `oskac run --timeout=<ms>`, and has run for that many milliseconds of wall-clock time, counted from when it starts (after the check and the build). Waiting counts: a program that waits for a line of standard input stops at the deadline too. It stops within 100 ms of the deadline (the **tolerance**) on a machine that is not overloaded. On the interpreter the program panics at the step it has reached (it looks at the clock every 1024 steps, and while it waits), spanning that call or loop, or the read it waits in. Natively, `oskac` stops its own child process, that process only, and prints the report itself, with no place in the source (`error[P0039]: ...`, or a JSON object with no `path`), and exits with 101, never with the signal's `128 + n`; a line the stopped program was writing is not reported as its panic, and what it had printed to standard output but not yet written out (native standard output is buffered when it is not a terminal) is lost. A timeout is not deterministic: where the program stops differs from run to run. The message names the limit and its value. Without the flag a program has no time limit. See [Run limits](#run-limits).
+
+Machine-applicable fix: none.
+
+Example, which fails with P0039:
+
+    fn main() {
+        while true {}
+    }
+
+Fixed:
+
+    fn main() {
+        var i = 0
+        while i < 100 {
+            i = i + 1
+        }
+    }
+
+https://oskalang.dev/codes/P0039

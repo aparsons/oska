@@ -1,0 +1,23 @@
+P0041: Output limit reached: the program was run with `oskac run --max-output=<bytes>`, and this write would take what it wrote to standard output and standard error together past that many bytes. The write that would pass the limit writes nothing, so no byte past it reaches either stream. The message names the limit and its value. Every write the program makes counts: `println` on `Stdout` and `Stderr`, `dbg`'s line, and the text of the error `main` returns. The panic report itself does not, but a report that quotes text the program made, as `P0020` quotes the secret's name, quotes no more of it than the limit has left, cut where a character ends and followed by `...`. Spans the call that writes, or `main`'s body for its error. Without the flag a program has no output limit. See [Run limits](#run-limits).
+
+Machine-applicable fix: none.
+
+Example, which fails with P0041:
+
+    fn main(io: Stdout) {
+        while true {
+            let _ = io.println("again")
+        }
+    }
+
+Fixed:
+
+    fn main(io: Stdout) {
+        var i = 0
+        while i < 2 {
+            let _ = io.println("again")
+            i = i + 1
+        }
+    }
+
+https://oskalang.dev/codes/P0041

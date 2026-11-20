@@ -1,0 +1,23 @@
+P0038: Step limit reached: the program was run with `oskac run --max-steps=<n>`, and has taken `n` steps. A **step** is one call of a function, method or closure written in Oska (a trait method, one the runtime calls such as a `Display` implementation in an interpolation, and a closure that `List.map` calls included), or one loop back-edge: a `while` or `for` loop going back for its next iteration, once for each iteration that ends without `break` ([ADR 0021](adr/0021-a-step-limit-stops-at-the-same-step-on-every-backend.md)). `main` is not called by the program, so it is no step, and neither is a call into the runtime, such as `println`, `List.map` itself or a `std` function the runtime implements. Every such call counts, whoever makes it: an `==` through a type's own `Eq`, a `?` that converts its error with `From`, a call in a `requires` or `ensures` clause, a spawned task, and the `Display` of the error `main` returns, which the runtime calls after `main` has returned (so the limit can stop the program there, before the error is printed, spanning `main`'s body). A `scope` block is no call. The step past the limit is not taken: the program panics instead. The message names the limit and its value. Spans the call, or the whole loop for a back-edge. Without the flag a program has no step limit. Native code counts the same steps as the interpreter, so it stops at the same step. See [Run limits](#run-limits).
+
+Machine-applicable fix: none.
+
+Example, which fails with P0038:
+
+    fn main() {
+        var i = 0
+        while i >= 0 {
+            i = i + 1
+        }
+    }
+
+Fixed:
+
+    fn main() {
+        var i = 0
+        while i < 100 {
+            i = i + 1
+        }
+    }
+
+https://oskalang.dev/codes/P0038

@@ -51,7 +51,12 @@ impl Body<'_, '_> {
             }
             Type::Fn { .. } => {
                 // The interpreter tells closures from named functions.
-                let kind = self.load(value, layout::FN_KIND);
+                let mut kind = self.load(value, layout::FN_KIND);
+                if self.lowering.limits.max_steps.is_some() {
+                    // Without its `FN_NO_STEP` bit.
+                    let closure = self.constant(1);
+                    kind = self.binary_op(BinOp::And, kind, closure);
+                }
                 let named = self.text("<fn>");
                 let text = self.copy(named);
                 let done = self.label();

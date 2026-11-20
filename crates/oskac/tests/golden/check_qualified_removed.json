@@ -11,5 +11,6 @@
   "attenuations": [
     {"function":"main","method":"read_only","path":"crates/oskac/tests/fixtures/qualified_removed.osk","span":{"start":222,"end":236},"source":"Fs","result":"FsRead","root":null},
     {"function":"main","method":"write_only","path":"crates/oskac/tests/fixtures/qualified_removed.osk","span":{"start":253,"end":268},"source":"Fs","result":"FsWrite","root":null}
-  ]
+  ],
+  "verdict": "diagnostics"
 }

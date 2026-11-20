@@ -1,0 +1,11 @@
+exit: 0
+--- stdout
+{
+  "diagnostics": [],
+  "functions": [
+    {"name":"main","authority":["Stdout"],"via":[{"param":"io","capabilities":["Stdout"]}],"pure":false}
+  ],
+  "audit": [],
+  "attenuations": [],
+  "verdict": "ok"
+}
