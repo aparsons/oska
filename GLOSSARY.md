@@ -33,7 +33,7 @@ A type that is a capability or that contains one, directly or transitively. This
 For a function, the set of capabilities it can reach through its capability-bearing parameters. For a package, the union of the authority of its public functions, counted in built-in capability kinds. Which directory or file a capability is confined to is the caller's choice and is not part of a package's authority.
 
 **Authority safety**:
-The property that running a function performs only effects of capability kinds in its authority. It is one of the three theorems stated for Oska Core, with progress and preservation (ADR 0018).
+The property that running a function performs only effects of capability kinds in its authority, or of kinds that the closures passed to its `cap fn` parameters captured. It is one of the three theorems stated for Oska Core, with progress and preservation (ADR 0018).
 _Avoid_: capability safety, effect soundness
 
 **Widening**:
@@ -170,7 +170,7 @@ The tests that run every program of a corpus on both the interpreter and the nat
 _Avoid_: parity tests, golden tests (for this suite)
 
 **Oska Core**:
-The formal calculus that defines the typing and running of the subset of Oska without generics or traits. Its semantics is executable, and it is the reference that the interpreter is judged by for programs in that subset (ADR 0018).
+The formal calculus that defines the typing and running of a subset of Oska. It has no generics or traits and grows one construct at a time; the core IR export refuses any program outside it. Its semantics is executable, and it is the reference that the interpreter is judged by for programs in that subset (ADR 0018).
 _Avoid_: core language, kernel, mini-Oska
 
 **Core IR**:
