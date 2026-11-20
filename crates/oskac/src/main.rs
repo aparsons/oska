@@ -167,9 +167,11 @@ struct CommandLine {
     /// `--key <file>`: the SSH signing key, for `oskac release`.
     key: Option<String>,
     /// `--filter <substring>`: `oskac test` runs only the tests whose
-    /// names contain it. Given twice, it is recorded empty, which `main`
-    /// refuses as a usage error.
+    /// names contain it.
     filter: Option<String>,
+    /// Why `--filter` is missing its substring, empty or repeated: a
+    /// usage error.
+    filter_error: Option<&'static str>,
     /// The run limits (`--max-steps=<n>`, `--timeout=<ms>`,
     /// `--max-output=<bytes>`, `--max-memory=<bytes>`), which only `oskac
     /// run` takes.
@@ -195,7 +197,7 @@ impl CommandLine {
             program_args,
             ..CommandLine::default()
         };
-        let mut args = args.into_iter();
+        let mut args = args.into_iter().peekable();
         while let Some(arg) = args.next() {
             if let Some(taken) = limits::take_flag(&mut line.limits, &arg) {
                 if let Err(error) = taken {
@@ -229,12 +231,13 @@ impl CommandLine {
                 key if key.starts_with("--key=") => {
                     line.key = Some(key["--key=".len()..].to_string());
                 }
-                "--filter" => match args.next() {
-                    Some(filter) => line.filter = value_unless_repeated(&line.filter, &filter),
-                    None => line.positional.push(arg),
+                // A flag after `--filter` is not its substring.
+                "--filter" => match args.next_if(|next| !next.starts_with("--")) {
+                    Some(filter) => line.take_filter(filter),
+                    None => line.refuse_filter("--filter needs a substring after it"),
                 },
                 filter if filter.starts_with("--filter=") => {
-                    line.filter = value_unless_repeated(&line.filter, &filter["--filter=".len()..]);
+                    line.take_filter(filter["--filter=".len()..].to_string());
                 }
                 target if target.starts_with("--target=") => {
                     line.target = target.strip_prefix("--target=").map(str::to_string);
@@ -270,6 +273,25 @@ impl CommandLine {
             }
         }
         line
+    }
+}
+
+impl CommandLine {
+    /// Record `filter`, the substring `--filter` gives, unless it is
+    /// empty or a filter was given before.
+    fn take_filter(&mut self, filter: String) {
+        if self.filter.is_some() {
+            self.refuse_filter("--filter is given more than once");
+        } else if filter.is_empty() {
+            self.refuse_filter("--filter takes a substring that is not empty");
+        } else {
+            self.filter = Some(filter);
+        }
+    }
+
+    /// Record why `--filter` is a usage error, if it is not one already.
+    fn refuse_filter(&mut self, error: &'static str) {
+        self.filter_error.get_or_insert(error);
     }
 }
 
@@ -342,12 +364,12 @@ fn main() -> ExitCode {
         eprint!("{USAGE}");
         return ExitCode::from(2);
     }
-    // Only `test` takes a filter, and a filter is never empty.
-    if line
-        .filter
-        .as_ref()
-        .is_some_and(|f| f.is_empty() || positional.first() != Some(&"test"))
-    {
+    if let Some(error) = line.filter_error {
+        eprintln!("error: {error}");
+        return ExitCode::from(2);
+    }
+    // Only `test` takes a filter.
+    if line.filter.is_some() && positional.first() != Some(&"test") {
         eprint!("{USAGE}");
         return ExitCode::from(2);
     }
@@ -864,9 +886,7 @@ fn test_file(
             .filter(|_| checked.diagnostics.is_empty())
         {
             match native_test::test_program(program, target, options, json, &cached) {
-                native_test::Tested::Report(report) => {
-                    return finish_test(report, json, filter, &places)
-                }
+                native_test::Tested::Report(report) => return finish_test(report, json, &places),
                 native_test::Tested::Ended(code) => return code,
                 native_test::Tested::Refused(refusal) => {
                     native::note_fallback(refusal, oska_run::test_refusal(program), &places, json)
@@ -875,22 +895,16 @@ fn test_file(
         }
     }
     let report = oska_run::test(&src, &mut oska_run::RealHost::new(), options);
-    finish_test(report, json, filter, &places)
+    finish_test(report, json, &places)
 }
 
 /// Print a test report and return its exit code. `places` names the file
 /// of each failure and refusal, as for [`finish_run`], and each test's
 /// module in a package. A `--filter` that left out every test is an
 /// error, so a typo is never a passing run.
-fn finish_test(
-    mut report: oska_run::TestReport,
-    json: bool,
-    filter: Option<&str>,
-    places: &Places,
-) -> ExitCode {
-    if let (Some(filter), Some(filtered), true) = (filter, report.filtered, report.tests.is_empty())
-    {
-        return no_test_matches(filter, filtered, json);
+fn finish_test(mut report: oska_run::TestReport, json: bool, places: &Places) -> ExitCode {
+    if let (Some(filtered), true) = (&report.filtered, report.tests.is_empty()) {
+        return no_test_matches(filtered, json);
     }
     for test in &mut report.tests {
         test.module = places.module_of(test.span);
@@ -912,17 +926,32 @@ fn finish_test(
 }
 
 /// The error of a `--filter` that matched none of the program's tests,
-/// `filtered` of them, as text on stderr or as JSON on stdout.
-fn no_test_matches(filter: &str, filtered: usize, json: bool) -> ExitCode {
+/// as text on stderr or as JSON on stdout. A program with no tests at
+/// all is told apart, so the filter is not blamed for it.
+fn no_test_matches(filtered: &oska_run::Filtered, json: bool) -> ExitCode {
+    let oska_run::Filtered {
+        substring,
+        left_out,
+    } = filtered;
+    let error = if *left_out == 0 {
+        "the program has no tests"
+    } else {
+        "no test matches the filter"
+    };
     if json {
         outln!(
-            "{{\"error\":\"no test matches the filter\",\"filter\":\"{}\",\"filtered\":{filtered}}}",
-            oska_syntax::json_escape(filter)
+            "{{\"error\":\"{error}\",\"filter\":\"{}\",\"filtered\":{left_out}}}",
+            oska_syntax::json_escape(substring)
+        );
+    } else if *left_out == 0 {
+        eprintln!(
+            "error: {error}, so the filter `{}` matches none",
+            oska_run::escape_control(substring)
         );
     } else {
         eprintln!(
-            "error: no test name contains `{}`; {filtered} tests filtered out",
-            oska_run::escape_control(filter)
+            "error: no test name contains `{}`; {left_out} tests filtered out",
+            oska_run::escape_control(substring)
         );
     }
     ExitCode::FAILURE
@@ -1078,9 +1107,7 @@ fn on_package(
         };
         if let Some(target) = native::native_target(flags) {
             match native_test::test_program(program, target, options, json, &cached) {
-                native_test::Tested::Report(tests) => {
-                    return finish_test(tests, json, filter, &places)
-                }
+                native_test::Tested::Report(tests) => return finish_test(tests, json, &places),
                 native_test::Tested::Ended(code) => return code,
                 native_test::Tested::Refused(refusal) => {
                     native::note_fallback(refusal, oska_run::test_refusal(program), &places, json)
@@ -1088,7 +1115,7 @@ fn on_package(
             }
         }
         let tests = oska_run::test_program(program, &mut host, options);
-        finish_test(tests, json, filter, &places)
+        finish_test(tests, json, &places)
     }
 }
 
@@ -1127,7 +1154,7 @@ fn refuse(command: Command, diagnostics: Vec<Diagnostic>, json: bool, dir: &str)
                 diagnostics,
                 filtered: None,
             };
-            finish_test(report, json, None, &places)
+            finish_test(report, json, &places)
         }
         Command::Build(_) => build::refuse(&diagnostics, json, ExitCode::FAILURE),
         Command::Release(_) => release::refuse(&diagnostics, json, ExitCode::FAILURE),

@@ -11,24 +11,38 @@
 //! `UPDATE_GOLDEN=1 cargo test -p oskac --test test_filter_golden` and
 //! review the diff.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use common::portable::{literal_path, output_of};
+
 /// Three tests: `adds` and `adds twice` pass, `subtracts wrongly` fails.
 const FILE: &str = "crates/oskac/tests/fixtures/test_filter.osk";
+/// A file with no tests at all.
+const NO_TESTS: &str = "crates/oskac/tests/fixtures/test_filter_none.osk";
 /// A package whose tests are in three modules.
 const PACKAGE: &str = "crates/oskac/tests/fixtures/packages/multi";
 
 fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    literal_path(Path::new(env!("CARGO_MANIFEST_DIR")), &["..", ".."])
 }
 
-fn output_of(args: &[&str], shown: &[&str]) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_oskac"))
-        .args(args)
-        .current_dir(repo_root())
-        .output()
-        .expect("oskac should run");
+/// What `oskac <args>`, run from the repository root, ended with and
+/// printed.
+fn oskac(args: &[&str]) -> std::process::Output {
+    output_of(
+        Command::new(env!("CARGO_BIN_EXE_oskac"))
+            .args(args)
+            .current_dir(repo_root()),
+    )
+}
+
+/// The run of `oskac <args>` as a golden file shows it, headed by the
+/// command line `shown`.
+fn transcript(args: &[&str], shown: &[&str]) -> String {
+    let output = oskac(args);
     format!(
         "$ oskac {}\nexit: {}\n--- stdout\n{}--- stderr\n{}",
         shown.join(" "),
@@ -61,10 +75,10 @@ fn assert_golden(name: &str, actual: &str) {
 /// `oskac <args>` meets the golden file `name`, by default and with
 /// `--interpret`.
 fn assert_both_backends(name: &str, args: &[&str]) {
-    assert_golden(name, &output_of(args, args));
+    assert_golden(name, &transcript(args, args));
     let mut interpreted = args.to_vec();
     interpreted.push("--interpret");
-    assert_golden(name, &output_of(&interpreted, args));
+    assert_golden(name, &transcript(&interpreted, args));
 }
 
 #[test]
@@ -105,20 +119,22 @@ fn a_filter_is_case_sensitive() {
 }
 
 #[test]
-fn a_filter_for_another_command_or_without_a_substring_is_a_usage_error() {
+fn a_filter_on_a_program_with_no_tests_says_there_are_none() {
+    assert_both_backends("no_tests", &["test", NO_TESTS, "--filter=adds"]);
+    assert_both_backends(
+        "no_tests_json",
+        &["test", NO_TESTS, "--filter=adds", "--format=json"],
+    );
+}
+
+#[test]
+fn a_filter_for_another_command_is_a_usage_error() {
     for args in [
         &["check", FILE, "--filter=adds"][..],
         &["run", FILE, "--filter=adds"],
         &["build", FILE, "--filter=adds"],
-        &["test", FILE, "--filter="],
-        &["test", FILE, "--filter=adds", "--filter=twice"],
-        &["test", FILE, "--filter"],
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_oskac"))
-            .args(args)
-            .current_dir(repo_root())
-            .output()
-            .expect("oskac should run");
+        let output = oskac(args);
         assert_eq!(output.status.code(), Some(2), "oskac {args:?}");
         assert!(output.stdout.is_empty(), "oskac {args:?}");
         assert!(
@@ -126,4 +142,28 @@ fn a_filter_for_another_command_or_without_a_substring_is_a_usage_error() {
             "oskac {args:?}"
         );
     }
+}
+
+/// `--filter` with no substring after it, at the end of the command line
+/// or before another flag, never reads a file named `--filter` or takes
+/// the flag as the substring.
+#[test]
+fn a_filter_without_a_substring_is_a_usage_error() {
+    assert_golden(
+        "missing",
+        &transcript(&["test", "--filter"], &["test", "--filter"]),
+    );
+    let before_a_flag = ["test", FILE, "--filter", "--format=json"];
+    assert_golden(
+        "missing_before_a_flag",
+        &transcript(&before_a_flag, &before_a_flag),
+    );
+}
+
+#[test]
+fn an_empty_or_repeated_filter_is_a_usage_error_that_says_which() {
+    let empty = ["test", FILE, "--filter="];
+    assert_golden("empty", &transcript(&empty, &empty));
+    let repeated = ["test", FILE, "--filter=adds", "--filter", "twice"];
+    assert_golden("repeated", &transcript(&repeated, &repeated));
 }

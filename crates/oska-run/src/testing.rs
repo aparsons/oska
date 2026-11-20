@@ -55,18 +55,25 @@ impl TestOptions<'_> {
         }
     }
 
-    /// How many of `program`'s tests the filter leaves out, or `None`
-    /// with no filter.
-    pub fn filtered(&self, program: &Program) -> Option<usize> {
-        self.filter?;
-        Some(
-            program
+    /// The filter, if any, and how many of `program`'s tests it leaves out.
+    pub fn filtered(&self, program: &Program) -> Option<Filtered> {
+        Some(Filtered {
+            substring: self.filter?.to_string(),
+            left_out: program
                 .tests
                 .iter()
                 .filter(|t| !self.selects(&t.name))
                 .count(),
-        )
+        })
     }
+}
+
+/// What `--filter` did to a run: its substring, and how many tests it
+/// left out, neither run nor reported.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Filtered {
+    pub substring: String,
+    pub left_out: usize,
 }
 
 /// How one test ended.
@@ -127,8 +134,9 @@ pub struct TestReport {
     /// The diagnostics that refused the file before any test ran: the
     /// checker's, or the runtime's (`E0371`, `E0380`).
     pub diagnostics: Vec<Diagnostic>,
-    /// How many tests `--filter` left out, or `None` without a filter.
-    pub filtered: Option<usize>,
+    /// The `--filter` and how many tests it left out, or `None` without
+    /// a filter.
+    pub filtered: Option<Filtered>,
 }
 
 impl TestReport {
@@ -196,8 +204,8 @@ impl TestReport {
             self.count(TestStatus::Failed),
             self.count(TestStatus::Skipped)
         ));
-        if let Some(filtered) = self.filtered {
-            out.push_str(&format!(", {filtered} filtered out"));
+        if let Some(filtered) = &self.filtered {
+            out.push_str(&format!(", {} filtered out", filtered.left_out));
         }
         out.push('\n');
         out
@@ -230,7 +238,8 @@ impl TestReport {
         let diagnostics: Vec<String> = self.diagnostics.iter().map(Diagnostic::to_json).collect();
         let filtered = self
             .filtered
-            .map_or_else(String::new, |n| format!(",\"filtered\":{n}"));
+            .as_ref()
+            .map_or_else(String::new, |f| format!(",\"filtered\":{}", f.left_out));
         format!(
             "{{\"tests\":[{}],\"passed\":{},\"failed\":{},\"skipped\":{}{filtered},\"diagnostics\":[{}]}}",
             tests.join(","),

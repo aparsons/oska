@@ -61,8 +61,8 @@ pub use interp::MAX_CALL_DEPTH;
 pub use oska_check::limits::Limits;
 pub use panics::codes;
 pub use testing::{
-    escape_control, test, test_program, test_refusal, TestOptions, TestReport, TestResult,
-    TestStatus,
+    escape_control, test, test_program, test_refusal, Filtered, TestOptions, TestReport,
+    TestResult, TestStatus,
 };
 
 use interp::{Interpreter, Stream};
