@@ -2,6 +2,11 @@
 # Assemble a release directory from the binaries CI built.
 #
 #   scripts/release/assemble.sh <tag> <builds-dir> <out-dir>
+#   scripts/release/assemble.sh --list
+#
+# --list prints the assets a release ships, one per line, and does
+# nothing else (scripts/release/test.sh holds release.yml's build matrix
+# to it).
 #
 # <builds-dir> holds one binary per release target, already named for its
 # target (see ASSETS). This writes <out-dir>/<tag>/ with those binaries and
@@ -36,7 +41,12 @@ die() {
   exit 1
 }
 
-[ $# -eq 3 ] || die "usage: assemble.sh <tag> <builds-dir> <out-dir>"
+if [ $# -eq 1 ] && [ "$1" = --list ]; then
+  printf '%s\n' "${ASSETS[@]}"
+  exit 0
+fi
+
+[ $# -eq 3 ] || die "usage: assemble.sh <tag> <builds-dir> <out-dir>, or assemble.sh --list"
 tag=$1
 builds=$2
 out=$3

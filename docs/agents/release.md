@@ -39,7 +39,9 @@ On a pull request, `release.yml` does a dry run: the same builds, signed with a 
 | `oskac-macos-x86_64`, `oskac-macos-aarch64` | on `macos-15-intel` / `macos-latest` | |
 | `oskac-windows-x86_64.exe` | on `windows-latest` | |
 
-Every row also checks that `uname -m` is the processor its name says, and that the binary prints its version. `scripts/release/check-linux-build.sh gnu|musl <binary>` does the two Linux checks; run it by hand on a downloaded Linux asset to check it again. `SHA256SUMS` lists all seven, so the signature covers each. ADR 0022 records why Linux has two builds. Releases before the two builds shipped `oskac-linux-x86_64` and `oskac-linux-aarch64`, and an installer saved from before then cannot install a release after it (`download_failed`).
+Every row also checks that `uname -m` is the processor its name says, and that the binary prints its version. `scripts/release/check-linux-build.sh gnu|musl <binary>` does the two Linux checks; run it by hand on a downloaded Linux asset to check it again. `SHA256SUMS` lists all seven, so the signature covers each. ADR 0022 records why Linux has two builds. `scripts/release/check-linux-build-test.sh` tests both checks.
+
+**A breaking rename.** Releases before the two builds shipped `oskac-linux-x86_64` and `oskac-linux-aarch64`. From the first release with them, those files are gone, and `latest.json`'s `binaries` has no `linux-x86_64` or `linux-aarch64` key: it has `linux-x86_64-gnu`, `linux-x86_64-musl`, `linux-aarch64-gnu` and `linux-aarch64-musl` in their place (the macOS and Windows keys are unchanged). Anything that reads the old keys or downloads the old names breaks, an installer saved from before the rename included (`download_failed`); say so in that release's notes.
 
 ## The release index
 

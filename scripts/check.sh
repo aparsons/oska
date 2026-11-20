@@ -570,6 +570,19 @@ if step "release script tests" --fast-when 'scripts/release/*'; then
   bash scripts/release/test.sh
 fi
 
+if step "Linux build check tests" --fast-when 'scripts/release/*'; then
+  # They run GNU readelf, as the release runners have it.
+  if grep -q 'GNU readelf' <<<"$(readelf --version 2>/dev/null || true)"; then
+    bash scripts/release/check-linux-build-test.sh
+  else
+    if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+      echo "check.sh: GNU readelf is not installed, and CI must run the Linux build check tests" >&2
+      exit 1
+    fi
+    skip_step "GNU readelf not installed; skipped (CI runs it)"
+  fi
+fi
+
 if step "unsafe guard tests" --fast-when 'scripts/unsafe-guard/*'; then
   bash scripts/unsafe-guard/test.sh
 fi

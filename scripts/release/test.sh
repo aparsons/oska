@@ -90,6 +90,12 @@ LIST
   [ -x out/v1.2.3/oskac-linux-x86_64-musl ] || fail "binary not executable"
 }
 
+test_assemble_lists_the_assets_it_ships() {
+  "$here/assemble.sh" --list >listing
+  printf '%s\n' "${RELEASE_ASSETS[@]}" >expected
+  diff expected listing || fail "assemble.sh --list differs"
+}
+
 test_assemble_refuses_a_release_missing_a_target() {
   fake_builds
   rm builds/oskac-macos-x86_64
@@ -801,161 +807,6 @@ workflow_jobs() {
   ' "$1"
 }
 
-# ---- check-linux-build.sh ------------------------------------------------
-
-# Writes <count> bytes of the little-endian <value>.
-le() {
-  local value=$1 count=$2 i escapes=
-  for ((i = 0; i < count; i++)); do
-    escapes+=$(printf '\\x%02x' $(((value >> (8 * i)) & 255)))
-  done
-  # shellcheck disable=SC2059 # the format is the \xHH escapes
-  printf "$escapes"
-}
-
-# One ELF64 program header: type, flags, offset (also its address), size.
-program_header() {
-  le "$1" 4
-  le "$2" 4
-  le "$3" 8
-  le "$3" 8
-  le "$3" 8
-  le "$4" 8
-  le "$4" 8
-  le 8 8
-}
-
-# Writes to ./<name> a minimal x86_64 ELF executable, as a static build
-# is: one PT_LOAD and nothing else. With `interp` it also asks for a
-# dynamic loader (PT_INTERP); with `needed` it also has a dynamic section
-# that names a shared library (DT_NEEDED libc.so.6).
-tiny_elf() {
-  local name=$1 interp=0 needed=0 count=1 flag data interp_at strtab_at dynamic_at size
-  shift
-  for flag in "$@"; do
-    case $flag in
-      interp) interp=1 ;;
-      needed) needed=1 ;;
-    esac
-  done
-  count=$((1 + interp + needed))
-  data=$((64 + 56 * count))
-  interp_at=$data           # "/lib/ld-linux.so.2\0", 24 bytes with padding
-  strtab_at=$((data + 24))  # "\0libc.so.6\0", 16 bytes with padding
-  dynamic_at=$((data + 40)) # NEEDED, STRTAB, STRSZ, NULL: 64 bytes
-  size=$((data + 104))
-  {
-    printf '\177ELF\002\001\001\000\000\000\000\000\000\000\000\000'
-    le 2 2       # ET_EXEC
-    le 62 2      # EM_X86_64
-    le 1 4       # EV_CURRENT
-    le "$data" 8 # entry
-    le 64 8      # program headers
-    le 0 8       # no section headers
-    le 0 4
-    le 64 2
-    le 56 2
-    le "$count" 2
-    le 64 2
-    le 0 2
-    le 0 2
-    program_header 1 5 0 "$size"
-    if [ "$interp" = 1 ]; then
-      program_header 3 4 "$interp_at" 19
-    fi
-    if [ "$needed" = 1 ]; then
-      program_header 2 6 "$dynamic_at" 64
-    fi
-    printf '/lib/ld-linux.so.2\000\000\000\000\000\000'
-    printf '\000libc.so.6\000\000\000\000\000\000'
-    le 1 8
-    le 1 8
-    le 5 8
-    le "$strtab_at" 8
-    le 10 8
-    le 11 8
-    le 0 8
-    le 0 8
-  } >"$name"
-  chmod +x "$name"
-}
-
-test_check_linux_build_accepts_a_static_musl_build() {
-  tiny_elf oskac
-  "$here/check-linux-build.sh" musl oskac || fail "refused a static executable"
-}
-
-test_check_linux_build_refuses_a_musl_build_that_asks_for_a_dynamic_loader() {
-  tiny_elf oskac interp
-  if "$here/check-linux-build.sh" musl oskac 2>err; then
-    fail "accepted an executable with a PT_INTERP"
-  fi
-  grep -q PT_INTERP err || fail "the error does not name PT_INTERP: $(cat err)"
-}
-
-test_check_linux_build_refuses_a_musl_build_that_needs_a_shared_library() {
-  tiny_elf oskac needed
-  if "$here/check-linux-build.sh" musl oskac 2>err; then
-    fail "accepted an executable with a DT_NEEDED"
-  fi
-  grep -q DT_NEEDED err || fail "the error does not name DT_NEEDED: $(cat err)"
-  grep -q libc.so.6 err || fail "the error does not name the library: $(cat err)"
-}
-
-test_check_linux_build_refuses_what_it_cannot_read_as_elf() {
-  printf '#!/bin/sh\necho oskac\n' >oskac
-  if "$here/check-linux-build.sh" musl oskac 2>err; then
-    fail "accepted a shell script as a static executable"
-  fi
-  if "$here/check-linux-build.sh" musl missing 2>err; then
-    fail "accepted a file that is not there"
-  fi
-  if "$here/check-linux-build.sh" static oskac 2>err; then
-    fail "accepted a build that is neither gnu nor musl"
-  fi
-}
-
-# Puts in ./fakebin an objdump whose `-T` prints a dynamic symbol table, in
-# GNU objdump's format, that needs each glibc symbol version given.
-fake_objdump() {
-  mkdir -p fakebin
-  {
-    printf '#!/bin/sh\n'
-    # shellcheck disable=SC2016 # $2 is the fake objdump's, expanded when it runs
-    printf 'printf "\\n%%s:     file format elf64-x86-64\\n\\nDYNAMIC SYMBOL TABLE:\\n" "$2"\n'
-    for version in "$@"; do
-      printf 'printf "0000000000000000      DF *UND*\\t0000000000000000 (%s) f\\n"\n' "$version"
-    done
-  } >fakebin/objdump
-  chmod +x fakebin/objdump
-}
-
-test_check_linux_build_accepts_a_glibc_build_that_needs_at_most_glibc_2_35() {
-  tiny_elf oskac interp needed
-  # 2.4 sorts after 2.35 as text, but is older.
-  fake_objdump GLIBC_2.2.5 GLIBC_2.4 GLIBC_2.35 GLIBC_PRIVATE
-  PATH="$PWD/fakebin:$PATH" "$here/check-linux-build.sh" gnu oskac >out ||
-    fail "refused a build that needs glibc 2.35"
-  grep -q 'GLIBC_2\.35' out || fail "does not say which glibc it needs: $(cat out)"
-}
-
-test_check_linux_build_refuses_a_glibc_build_that_needs_a_newer_glibc() {
-  tiny_elf oskac interp needed
-  fake_objdump GLIBC_2.2.5 GLIBC_2.36 GLIBC_2.4
-  if PATH="$PWD/fakebin:$PATH" "$here/check-linux-build.sh" gnu oskac 2>err; then
-    fail "accepted a build that needs glibc 2.36"
-  fi
-  grep -q 'GLIBC_2\.36' err || fail "the error does not name GLIBC_2.36: $(cat err)"
-}
-
-test_check_linux_build_refuses_a_glibc_build_with_no_glibc_symbol_versions() {
-  tiny_elf oskac
-  fake_objdump
-  if PATH="$PWD/fakebin:$PATH" "$here/check-linux-build.sh" gnu oskac 2>err; then
-    fail "accepted a glibc build that names no glibc version"
-  fi
-}
-
 # The build matrix in release.yml, one line per row:
 # "<asset> <linux build or -> <target or ->".
 release_matrix() {
@@ -969,17 +820,24 @@ release_matrix() {
 }
 
 test_the_release_workflow_builds_and_checks_every_asset_a_release_ships() {
+  # One row per asset assemble.sh ships, no more: a -gnu or -musl asset
+  # with its Linux build, and a musl one with the musl target of its
+  # processor.
+  local asset arch
+  "$here/assemble.sh" --list | while read -r asset; do
+    case $asset in
+      oskac-linux-*-gnu) echo "$asset gnu -" ;;
+      oskac-linux-*-musl)
+        arch=${asset#oskac-linux-}
+        echo "$asset musl ${arch%-musl}-unknown-linux-musl"
+        ;;
+      oskac-linux-*) fail "assemble.sh ships $asset, which names no Linux build" ;;
+      *) echo "$asset - -" ;;
+    esac
+  done | LC_ALL=C sort >expected
+  [ "$(wc -l <expected)" -ge 7 ] || fail "assemble.sh --list lists $(wc -l <expected) assets"
   release_matrix | LC_ALL=C sort >matrix
-  cat >expected <<'ROWS'
-oskac-linux-aarch64-gnu gnu -
-oskac-linux-aarch64-musl musl aarch64-unknown-linux-musl
-oskac-linux-x86_64-gnu gnu -
-oskac-linux-x86_64-musl musl x86_64-unknown-linux-musl
-oskac-macos-aarch64 - -
-oskac-macos-x86_64 - -
-oskac-windows-x86_64.exe - -
-ROWS
-  diff expected matrix || fail "release.yml does not build exactly the release's assets"
+  diff expected matrix || fail "release.yml does not build exactly the assets assemble.sh ships"
   # Every row's binary is checked by its Linux build's rules.
   # shellcheck disable=SC2016 # the workflow's shell variables, written out
   grep -qF 'scripts/release/check-linux-build.sh "$LINUX_BUILD" "dist/$ASSET"' \

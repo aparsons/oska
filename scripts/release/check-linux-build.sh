@@ -35,22 +35,24 @@ bin=$2
 case $build in
   gnu)
     symbols=$(objdump -T "$bin") || die "objdump cannot read the dynamic symbols of $bin"
-    needs=$(printf '%s\n' "$symbols" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -uV | tail -n 1) ||
-      true
+    # Here-strings, not `printf | grep`: under pipefail a grep that stops
+    # reading early fails the printf, and the check with it.
+    versions=$(grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' <<<"$symbols" || true)
+    needs=$(sort -uV <<<"$versions" | tail -n 1)
     [ -n "$needs" ] || die "$bin needs no glibc symbol version; it is not a glibc build"
     echo "$bin needs $needs"
-    if ! printf '%s\n' "$needs" "GLIBC_$MAX_GLIBC" | sort -V -C; then
+    if ! sort -V -C <<<"$needs"$'\n'"GLIBC_$MAX_GLIBC"; then
       die "$bin needs $needs, newer than the documented glibc $MAX_GLIBC"
     fi
     ;;
   musl)
     readelf -hW "$bin" >/dev/null 2>&1 || die "$bin is not an ELF file readelf can read"
     headers=$(readelf -lW "$bin") || die "readelf cannot read the program headers of $bin"
-    if printf '%s\n' "$headers" | grep -qE '^[[:space:]]+INTERP[[:space:]]'; then
+    if grep -qE '^[[:space:]]+INTERP[[:space:]]' <<<"$headers"; then
       die "$bin has a PT_INTERP: it asks for a dynamic loader, so it is not static"
     fi
     dynamic=$(readelf -dW "$bin") || die "readelf cannot read the dynamic section of $bin"
-    needed=$(printf '%s\n' "$dynamic" | grep -F '(NEEDED)' || true)
+    needed=$(grep -F '(NEEDED)' <<<"$dynamic" || true)
     if [ -n "$needed" ]; then
       die "$bin has a DT_NEEDED: it needs a shared library, so it is not static: $needed"
     fi
