@@ -221,7 +221,12 @@ fn failed_test_frames(name: &str, src: &str) -> (Vec<String>, u64) {
     };
     let interpreted = run(&["--interpret"]);
     let native = run(&[]);
-    assert_eq!(interpreted, native, "the backends differ");
+    // A test's `duration_ms` differs from run to run, so it is masked.
+    assert_eq!(
+        common::golden::mask_durations(&interpreted),
+        common::golden::mask_durations(&native),
+        "the backends differ"
+    );
     let report = Json::parse(interpreted.trim());
     let Some(Json::Arr(tests)) = report.get("tests") else {
         panic!("no tests in {interpreted}");

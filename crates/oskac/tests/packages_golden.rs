@@ -8,6 +8,8 @@
 //! `UPDATE_GOLDEN=1 cargo test -p oskac --test packages_golden` and review
 //! the diff.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -50,7 +52,7 @@ fn output_of(case: &Case) -> String {
             .status
             .code()
             .map_or("signal".to_string(), |c| c.to_string()),
-        String::from_utf8_lossy(&output.stdout),
+        common::golden::mask_durations(&String::from_utf8_lossy(&output.stdout)),
         String::from_utf8_lossy(&output.stderr),
     )
 }

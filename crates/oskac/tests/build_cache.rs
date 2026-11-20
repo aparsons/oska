@@ -232,7 +232,18 @@ fn run_and_test_reuse_their_native_executables() {
             hit, NATIVE_HOST,
             "{args:?}: a hit only where it runs natively"
         );
-        assert_same(&fresh, &cached);
+        if args.ends_with(&["--format=json"]) && args[0] == "test" {
+            // A test's `duration_ms` is the time it took, which no cache
+            // keeps: compare the reports with it masked.
+            let masked = |o: &Output| Output {
+                status: o.status,
+                stdout: common::golden::mask_durations(&text(&o.stdout)).into_bytes(),
+                stderr: o.stderr.clone(),
+            };
+            assert_same(&masked(&fresh), &masked(&cached));
+        } else {
+            assert_same(&fresh, &cached);
+        }
     }
     let tested = case.oskac(&["test", "tested.osk"]);
     assert_eq!(tested.status.code(), Some(1), "a failing test still fails");
