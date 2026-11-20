@@ -17,7 +17,9 @@
 //!   stderr, `json` adds `--format=json`, `release` adds `--release`,
 //!   `integration` adds `--integration`, `filter=<text>` adds `--filter=<text>`,
 //!   and `-- a b` passes arguments to the program. The
-//!   exit code is not asserted.
+//!   exit code is not asserted. A test's `"duration_ms"` varies from run
+//!   to run, so its number is masked on both sides: the block may show
+//!   any integer there.
 //! - ```` ```help ```` is the exact stdout of `oskac --help`.
 //! - ```` ```sh ```` blocks may use only `oskac` commands and flags that
 //!   `oskac --help` lists. A block that documents something not built yet
@@ -26,6 +28,8 @@
 //!
 //! An `oska` block may add `file=name.osk`; the program is saved under that
 //! name (default `main.osk`), because it appears in the toolchain's output.
+
+mod common;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -333,8 +337,8 @@ fn every_console_and_help_block_shows_exactly_what_the_toolchain_prints() {
             };
             checked += 1;
             assert_eq!(
-                block.body.trim_end(),
-                actual.trim_end(),
+                common::golden::mask_durations(block.body.trim_end()),
+                common::golden::mask_durations(actual.trim_end()),
                 "{at}: the block should show exactly what the toolchain prints"
             );
         }

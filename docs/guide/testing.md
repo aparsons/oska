@@ -118,10 +118,10 @@ test gets it wrong: main.osk:10:5: error[P0011]: assertion failed: `actual == ex
 
 Each failure is named by its test and carries a stable code and the byte span of the failing call. Control characters in test names and messages are escaped, so a message cannot forge a line of the report.
 
-With `--format=json` the report is one JSON object on stdout. `status` is `passed`, `failed`, or `skipped`, and `failure` is a diagnostic object or `null`:
+With `--format=json` the report is one JSON object on stdout. `status` is `passed`, `failed`, or `skipped`; `duration_ms` is how long the test took, in whole milliseconds, timed the same way natively and with `--interpret` (0 for a skipped test), so the slow test is easy to find; and `failure` is a diagnostic object or `null`. Durations vary from run to run:
 
 ```console cmd=test json
-{"tests":[{"name":"adds up","status":"passed","failure":null},{"name":"gets it wrong","status":"failed","failure":{"code":"P0011","message":"assertion failed: `actual == expected`: actual 4, expected 5","path":"main.osk","span":{"start":117,"end":142},"line":10,"column":5,"end_line":10,"end_column":30,"severity":"error","url":"https://oskalang.dev/codes/P0011","related":[],"suggestions":[]}},{"name":"reads the real clock","status":"skipped","failure":null}],"passed":1,"failed":1,"skipped":1,"diagnostics":[]}
+{"tests":[{"name":"adds up","status":"passed","duration_ms":0,"failure":null},{"name":"gets it wrong","status":"failed","duration_ms":1,"failure":{"code":"P0011","message":"assertion failed: `actual == expected`: actual 4, expected 5","path":"main.osk","span":{"start":117,"end":142},"line":10,"column":5,"end_line":10,"end_column":30,"severity":"error","url":"https://oskalang.dev/codes/P0011","related":[],"suggestions":[]}},{"name":"reads the real clock","status":"skipped","duration_ms":0,"failure":null}],"passed":1,"failed":1,"skipped":1,"diagnostics":[]}
 ```
 
 If the file does not check, no test runs and the report has no tests and the checker's diagnostics in `diagnostics`.
@@ -147,7 +147,7 @@ test adds up ... ok
 With `--format=json` the report has `"filtered"`, the number of tests left out, after `skipped`:
 
 ```console cmd=test json filter=adds
-{"tests":[{"name":"adds up","status":"passed","failure":null}],"passed":1,"failed":0,"skipped":0,"filtered":2,"diagnostics":[]}
+{"tests":[{"name":"adds up","status":"passed","duration_ms":0,"failure":null}],"passed":1,"failed":0,"skipped":0,"filtered":2,"diagnostics":[]}
 ```
 
 A filter that matches no test is an error, with exit code 1, so a typo is never mistaken for a passing run:

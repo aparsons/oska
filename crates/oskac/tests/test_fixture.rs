@@ -1,6 +1,8 @@
 //! End-to-end test of `oskac test` on a fixture file: the per-test lines,
 //! the summary, the JSON report, and the exit code.
 
+mod common;
+
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -72,9 +74,11 @@ fn json_reports_one_object_with_each_test() {
     let (output, stdout) = oskac_test(&[FIXTURE, "--format=json"]);
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     assert_eq!(stdout.lines().count(), 1, "{stdout}");
+    let masked = common::golden::mask_durations(&stdout);
     assert!(
-        stdout.starts_with(
-            "{\"tests\":[{\"name\":\"double doubles\",\"status\":\"passed\",\"failure\":null},"
+        masked.starts_with(
+            "{\"tests\":[{\"name\":\"double doubles\",\"status\":\"passed\",\
+             \"duration_ms\":<ms>,\"failure\":null},"
         ),
         "{stdout}"
     );

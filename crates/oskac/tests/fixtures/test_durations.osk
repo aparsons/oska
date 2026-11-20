@@ -1,0 +1,25 @@
+// Three tests for `duration_ms`: one that does almost nothing, one that
+// loops long enough to take at least a millisecond on either backend, and
+// an `#[integration]` test, skipped without `--integration`.
+fn sum_to(n: Int) -> Int {
+    var total = 0
+    var i = 0
+    while i < n {
+        total = (total + i * 7 + 3) % 1000003
+        i = i + 1
+    }
+    total
+}
+
+test "quick" {
+    t.assert_eq(1 + 1, 2)
+}
+
+test "slow" {
+    t.assert(sum_to(3000000) >= 0)
+}
+
+#[integration]
+test "skipped" {
+    t.assert(true)
+}

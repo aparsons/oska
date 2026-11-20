@@ -20,6 +20,8 @@
 //! its executable into the temporary directory, which the interpreter
 //! never touches.
 
+mod common;
+
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -136,7 +138,10 @@ fn assert_golden(case: &str, files: &[(&str, &str)], args: &[&str]) {
             .status
             .code()
             .map_or("signal".to_string(), |c| c.to_string()),
-        windows_argv0(&String::from_utf8_lossy(&output.stdout), args),
+        common::golden::mask_durations(&windows_argv0(
+            &String::from_utf8_lossy(&output.stdout),
+            args
+        )),
         without_handles(&String::from_utf8_lossy(&output.stderr)),
         written.iter().map(|w| format!("{w}\n")).collect::<String>(),
     );

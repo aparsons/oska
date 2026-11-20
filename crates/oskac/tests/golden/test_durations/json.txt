@@ -1,0 +1,1 @@
+{"tests":[{"name":"quick","status":"passed","duration_ms":<ms>,"failure":null}],"passed":1,"failed":0,"skipped":0,"filtered":2,"diagnostics":[]}

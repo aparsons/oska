@@ -471,10 +471,10 @@ A parse error is reported alone, with empty `functions`, `audit` and `attenuatio
 ### `test --format=json`
 
 ```json
-{"tests":[{"name":"adds","status":"passed","failure":null}],"passed":1,"failed":0,"skipped":0,"diagnostics":[]}
+{"tests":[{"name":"adds","status":"passed","duration_ms":2,"failure":null}],"passed":1,"failed":0,"skipped":0,"diagnostics":[]}
 ```
 
-`status` is `passed`, `failed`, or `skipped`. `failure` is a diagnostic object or `null`. With `--filter`, `"filtered":n` follows `skipped`: the number of tests the filter left out.
+`status` is `passed`, `failed`, or `skipped`. `duration_ms` is an integer, how long the test took in whole milliseconds (rounded down), timed from just before the test starts to just after it ends, the same way natively (its process) and with `--interpret`; a skipped test has 0. It varies from run to run. `failure` is a diagnostic object or `null`. With `--filter`, `"filtered":n` follows `skipped`: the number of tests the filter left out.
 
 ### `run --format=json`
 
