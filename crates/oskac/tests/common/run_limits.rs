@@ -50,6 +50,15 @@ pub fn program(name: &str, src: &str) -> Scratch {
     dir
 }
 
+/// The lines of `stderr` but a panic's frames, which follow its report:
+/// what the program wrote, and the report's own line.
+pub fn report_lines(stderr: &str) -> usize {
+    stderr
+        .lines()
+        .filter(|line| !oska_syntax::Frames::is_human_line(line))
+        .count()
+}
+
 pub const HELLO: &str = "fn main(io: Stdout) {\n    let _ = io.println(\"hello\")\n}\n";
 
 /// What `oskac <args>` does, run in `dir` with `src` on its standard

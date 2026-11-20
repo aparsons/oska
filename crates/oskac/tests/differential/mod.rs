@@ -37,6 +37,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use oska_syntax::Frames;
+
 /// One program and everything it starts with.
 pub struct Case {
     /// The name of the case, unique among the tests: the temporary
@@ -166,6 +168,17 @@ pub struct Outcome {
     pub tree: BTreeMap<String, Option<String>>,
 }
 
+/// `stderr` without a panic's frames, the lines under its report
+/// (`oska_syntax::Frames::human`): for a test about the report itself.
+/// [`assert_same`] holds the frames equal all the same.
+pub fn without_frames(stderr: &str) -> String {
+    stderr
+        .lines()
+        .filter(|line| !Frames::is_human_line(line))
+        .map(|line| format!("{line}\n"))
+        .collect()
+}
+
 /// The target platform this host builds and runs native executables
 /// for: its own.
 pub fn host_target() -> oska_native::Target {
@@ -221,6 +234,99 @@ pub fn assert_same(case: &Case) -> Outcome {
     );
     cross_build(case, &root);
     native
+}
+
+/// [`assert_same`] for runaway recursion (`P0021`), given `deepest`: the
+/// same recursion, nesting exactly as many calls as the limit allows
+/// (`oska_run::MAX_CALL_DEPTH`). Native code always reaches the limit,
+/// and the interpreter reaches it when `deepest` runs on it: then the
+/// two outcomes are the same, byte for byte. A debug build's interpreter
+/// may run out of its own stack first, on some hosts and for some calls
+/// (`docs/runtime.md`, `P0021`), which `deepest` panicking on it shows:
+/// then its outcome is the same but for the count of frames left out,
+/// which is at least one and at most native code's. Returns both
+/// outcomes, the interpreter's first.
+pub fn assert_same_at_depth_limit(case: &Case, deepest: &Case) -> (Outcome, Outcome) {
+    let root = case_root(deepest);
+    let deepest_native = native(deepest, &root);
+    assert_eq!(
+        deepest_native.exit_code,
+        Some(0),
+        "case `{}` nests calls past the limit: {deepest_native:#?}",
+        deepest.name
+    );
+    let deepest_interpreted = interpret(deepest, &root);
+    let (interpreted, native) = run(case);
+    let differ = format!(
+        "case `{}`: the backends differ\n--- interpreter\n{interpreted:#?}\n--- native\n{native:#?}",
+        case.name
+    );
+    if deepest_interpreted.exit_code == Some(0) {
+        assert!(interpreted == native, "{differ}");
+        return (interpreted, native);
+    }
+    // The interpreter ran out of its own stack before the limit.
+    assert!(
+        deepest_interpreted.exit_code == Some(101)
+            && deepest_interpreted.stderr.contains("error[P0021]"),
+        "case `{}` fails on the interpreter: {deepest_interpreted:#?}",
+        deepest.name
+    );
+    assert!(
+        without_omitted_counts(&interpreted) == without_omitted_counts(&native),
+        "{differ}"
+    );
+    let (fewer, all) = (
+        omitted_counts(&interpreted.stderr),
+        omitted_counts(&native.stderr),
+    );
+    assert!(
+        fewer.len() == all.len() && fewer.iter().zip(&all).all(|(i, n)| 0 < *i && i <= n),
+        "{differ}"
+    );
+    (interpreted, native)
+}
+
+/// The counts of frames left out in `stderr`: the human report's
+/// (`    ... n more frames`) and the JSON's (`frames_omitted`).
+fn omitted_counts(stderr: &str) -> Vec<usize> {
+    stderr
+        .lines()
+        .filter_map(|line| {
+            Frames::omitted_in(line).or_else(|| {
+                let (_, tail) = line.split_once(FRAMES_OMITTED)?;
+                let digits =
+                    tail.len() - tail.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+                tail[..digits].parse().ok()
+            })
+        })
+        .collect()
+}
+
+/// The JSON's key for the count of frames left out, and its colon.
+const FRAMES_OMITTED: &str = "\"frames_omitted\":";
+
+/// `outcome` with each count of frames left out in its stderr
+/// ([`omitted_counts`]) masked as `N`.
+fn without_omitted_counts(outcome: &Outcome) -> Outcome {
+    let mut masked = outcome.clone();
+    masked.stderr = outcome
+        .stderr
+        .lines()
+        .map(|line| {
+            if Frames::omitted_in(line).is_some() {
+                return "    ... N more frames\n".to_string();
+            }
+            match line.split_once(FRAMES_OMITTED) {
+                Some((head, tail)) => {
+                    let rest = tail.trim_start_matches(|c: char| c.is_ascii_digit());
+                    format!("{head}{FRAMES_OMITTED}N{rest}\n")
+                }
+                None => format!("{line}\n"),
+            }
+        })
+        .collect();
+    masked
 }
 
 /// Build `case` in `root` with `--target` for every target with a

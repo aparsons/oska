@@ -1,1 +1,2 @@
 main.osk:2:16: error[P0040]: memory limit reached: the program's values take more than 67108864 bytes (`--max-memory=67108864`) (bytes 37..58)
+    at main (main.osk:2:16)

@@ -39,8 +39,12 @@ fn a_broken_precondition_under_release_is_a_json_panic_exiting_101() {
             "{{\"code\":\"P0006\",\"message\":\"precondition violated: `double` requires `x > 0`\",\
              \"path\":\"{}\",\"span\":{{\"start\":{start},\"end\":{end}}},\
              \"line\":8,\"column\":13,\"end_line\":8,\"end_column\":23,\"severity\":\"error\",\
-             \"url\":\"https://oskalang.dev/codes/P0006\",\"related\":[],\"suggestions\":[]}}\n",
-            json_escape(&path.to_string_lossy())
+             \"url\":\"https://oskalang.dev/codes/P0006\",\"related\":[],\"suggestions\":[],\
+             \"frames\":[{{\"function\":\"main\",\"path\":\"{path}\",\
+             \"span\":{{\"start\":{start},\"end\":{end}}},\"line\":8,\"column\":13}}],\
+             \"frames_omitted\":0}}\n",
+            json_escape(&path.to_string_lossy()),
+            path = json_escape(&path.to_string_lossy()),
         )
     );
 }

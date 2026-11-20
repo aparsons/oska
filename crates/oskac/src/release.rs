@@ -182,7 +182,7 @@ pub fn release(
     let mut executables = Vec::with_capacity(Target::ALL.len());
     for target in Target::ALL {
         match cached.native("build", target, json, &[], || {
-            oska_native::build(program, target, &|d| places.locate(d))
+            oska_native::build(program, target, places)
         }) {
             Ok(bytes) => {
                 let file = format!("{name}-{}{}", target.name(), target.suffix());

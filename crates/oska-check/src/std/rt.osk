@@ -185,6 +185,11 @@ pub fn rt_mem_as_root(object: Int) -> Root
 // The address of the runtime's writable words, zero when the program
 // starts: see `global`.
 pub fn rt_mem_globals() -> Int
+// How many more calls of the program may nest: the generated code counts
+// it down at each call (`oska-native`'s `Inst::Enter`), from the most it
+// allows, and up again as each returns. Indexes the call stack ("The call
+// stack").
+pub fn rt_mem_depth() -> Int
 // Which host the process runs on: 0 the real OS, 1 the test host, 2 the
 // real OS under an `#[integration]` test. Always 0 in a program's
 // executable; in a test executable, word 32, which `test_begin` sets.
@@ -503,9 +508,10 @@ fn broken_pipe(result: Int) -> Bool {
 //   45-47   on Windows, the handles of standard input, output and error;
 //   48      on Windows, the word a call puts its count in (`win_write`);
 //   49      on Windows, the console area, or 0 (see "The Windows console");
-//   50      under `--max-steps` only, the steps left (`oska-native`'s
+//   50      the call stack ("The call stack");
+//   51      under `--max-steps` only, the steps left (`oska-native`'s
 //           `STEPS_WORD`);
-//   51      under `--max-memory` only, the report of its panic
+//   52      under `--max-memory` only, the report of its panic
 //           ("Memory limit").
 //
 // Every object the allocator gives out is preceded by a header word: its
@@ -2035,7 +2041,104 @@ fn report_fd() -> Int {
 // Panic with the whole report `report`.
 pub fn panic(report: String) {
     let _ = write_text(report_fd(), report)
+    panic_end()
+}
+
+// ---- The call stack --------------------------------------------------------
+//
+// A panic's report lists the calls that led to it. The generated code
+// gives each call of the program's functions a record, the static text of
+// its frame (the function it is made from and its span, as the report
+// shows it), stored at the call stack's slot for its depth as the call
+// starts (`rt_mem_depth`, after it is counted). Every slot from the
+// current depth up to the one the program started at is a running call,
+// innermost first; the one above it is never written, so it is 0. The
+// innermost frame, the one the panic happened in, is the end of the
+// report's static text.
+//
+// Word 50 holds the call stack's address. Its words, by index:
+//
+//   0       the text that ends a report, after the frames;
+//   1, 2    the texts before and after the count of the frames left out;
+//   3       the most records a report lists;
+//   4 to 6  room for the digits of that count, so nothing is allocated;
+//   7 on    the records, by depth.
+
+// Map the call stack for calls that nest up to `depth` deep, with the
+// texts a report's frames end with (`end`, `more_before`, `more_after`)
+// and the most records it lists, `most`.
+pub fn frames_init(depth: Int, end: String, more_before: String, more_after: String, most: Int) {
+    let flags = rt_mem_or(private_anonymous(), no_reserve())
+    let stack = map(0, rt_mem_shl(depth + 8, 3), 3, flags)
+    rt_mem_store64(stack, rt_mem_text(end))
+    rt_mem_store64(rt_mem_add(stack, 8), rt_mem_text(more_before))
+    rt_mem_store64(rt_mem_add(stack, 16), rt_mem_text(more_after))
+    rt_mem_store64(rt_mem_add(stack, 24), most)
+    rt_mem_store64(global(50), stack)
+}
+
+// The address of word `index` of the call stack.
+fn frames_word(index: Int) -> Int {
+    rt_mem_add(rt_mem_load64(global(50)), rt_mem_shl(index, 3))
+}
+
+// End a panic's report: the frames of the running calls, as many as it
+// lists and a count of the rest, then the end; and exit with 101.
+fn panic_end() {
+    if rt_mem_load64(global(50)) != 0 {
+        let fd = report_fd()
+        let most = rt_mem_load64(frames_word(3))
+        var at = rt_mem_depth()
+        var listed = 0
+        var left = 0
+        var record = rt_mem_load64(frames_word(at + 7))
+        while record != 0 {
+            if listed < most {
+                let _ = write_text(fd, rt_mem_as_text(record))
+                listed = listed + 1
+            } else {
+                left = left + 1
+            }
+            at = at + 1
+            record = rt_mem_load64(frames_word(at + 7))
+        }
+        if left > 0 {
+            let _ = write_text(fd, rt_mem_as_text(rt_mem_load64(frames_word(1))))
+            let _ = write_count(fd, left)
+            let _ = write_text(fd, rt_mem_as_text(rt_mem_load64(frames_word(2))))
+        }
+        let _ = write_text(fd, rt_mem_as_text(rt_mem_load64(frames_word(0))))
+    }
     exit(101)
+}
+
+// End a report whose static text names its one frame, and exit with 101:
+// the memory limit's, which no call can be blamed for.
+fn panic_end_alone() {
+    if rt_mem_load64(global(50)) != 0 {
+        let _ = write_text(report_fd(), rt_mem_as_text(rt_mem_load64(frames_word(0))))
+    }
+    exit(101)
+}
+
+// Write `n`, positive, in decimal to `fd`, through the call stack's room
+// for digits, so that nothing is allocated.
+fn write_count(fd: Int, n: Int) -> Int {
+    let room = frames_word(4)
+    var digits = 0
+    var m = n
+    while m > 0 {
+        digits = digits + 1
+        m = m / 10
+    }
+    var i = digits
+    m = n
+    while i > 0 {
+        i = i - 1
+        rt_mem_store8(rt_mem_add(room, i), 48 + m - (m / 10) * 10)
+        m = m / 10
+    }
+    write_all(fd, room, digits)
 }
 
 // Panic with the report `start`, the integer `a`, then `end`. An integer
@@ -2068,7 +2171,7 @@ pub fn panic_message(start: String, end: String, message: String) {
     let _ = write_text(report_fd(), start)
     let _ = write_text(report_fd(), message)
     let _ = write_text(report_fd(), end)
-    exit(101)
+    panic_end()
 }
 
 pub fn message_message(head: String, message: String) -> String {
@@ -5175,7 +5278,7 @@ pub fn panic_assert_eq(start: String, end: String, actual: String, expected: Str
     let _ = write_text(report_fd(), ", expected ")
     let _ = write_text(report_fd(), expected)
     let _ = write_text(report_fd(), end)
-    exit(101)
+    panic_end()
 }
 
 // Panic (`P0012`): `start` and `end` are the report around the message.
@@ -5184,7 +5287,7 @@ pub fn panic_assert_ne(start: String, end: String, both: String) {
     let _ = write_text(report_fd(), "assertion failed: `actual != other`: both are ")
     let _ = write_text(report_fd(), both)
     let _ = write_text(report_fd(), end)
-    exit(101)
+    panic_end()
 }
 
 // ---- The test host's filesystem ----------------------------------------------
@@ -6247,7 +6350,7 @@ pub fn on_exception(pointers: Int) -> Int {
 // `alloc`, `try_alloc` and `free`, in the generated code and in `std.rt`
 // alike, calls `counted_alloc`, `counted_try_alloc` or `counted_free` in
 // its place; theirs alone are not redirected. Word 39 holds the bytes the
-// program may still allocate, and word 51 the report of the panic
+// program may still allocate, and word 52 the report of the panic
 // (`P0040`), or 0 before `memory_limit_start`. Once counting has
 // started, each block is counted, header included, before it is
 // allocated, and marked as counted (256 added to its header word, which
@@ -6273,7 +6376,7 @@ fn limit_reached() -> Int {
 // (`P0040`). Before this, nothing is checked.
 pub fn memory_limit_start(limit: Int, report: String) {
     rt_mem_store64(global(39), limit)
-    rt_mem_store64(global(51), rt_mem_text(report))
+    rt_mem_store64(global(52), rt_mem_text(report))
 }
 
 // The bytes of the block `alloc` gives an object of `size` bytes, header
@@ -6307,7 +6410,8 @@ fn spend_memory(bytes: Int) {
     let left = rt_mem_sub(rt_mem_load64(global(39)), bytes)
     if left < 0 {
         rt_mem_store64(global(39), limit_reached())
-        panic(rt_mem_as_text(rt_mem_load64(global(51))))
+        let _ = write_text(report_fd(), rt_mem_as_text(rt_mem_load64(global(52))))
+        panic_end_alone()
     }
     rt_mem_store64(global(39), left)
 }
@@ -6321,7 +6425,7 @@ fn mark_counted(object: Int) {
 // Whether counting has started (`memory_limit_start`): until then a
 // block is neither counted nor marked.
 fn counting() -> Bool {
-    rt_mem_load64(global(51)) != 0
+    rt_mem_load64(global(52)) != 0
 }
 
 pub fn counted_alloc(size: Int) -> Int {

@@ -78,11 +78,13 @@ pub fn compare_program(
     if !outcome.diagnostics.is_empty() || skipped() {
         return;
     }
-    let bytes = match oska_native::build(program, host_target(), &|d| d) {
+    let bytes = match oska_native::build(program, host_target(), &oska_native::Unplaced) {
         Ok(bytes) => bytes,
         Err(refusal) => fail(src, &format!("the native backend refused it: {refusal:#?}")),
     };
-    cross_build(src, |target| oska_native::build(program, target, &|d| d));
+    cross_build(src, |target| {
+        oska_native::build(program, target, &oska_native::Unplaced)
+    });
     let mut texts: Vec<&str> = args.iter().map(String::as_str).collect();
     texts.push(src);
     let Some(sandbox) = Sandbox::new(before, needs_filesystem(program), &texts) else {
@@ -242,12 +244,22 @@ fn needs_filesystem(program: &Program) -> bool {
 }
 
 /// A panic's report, as a native executable built with no locator
-/// writes it to stderr.
+/// writes it to stderr: its call stack too, for `oskac` to read back.
 fn report(panic: &Diagnostic) -> String {
-    format!(
-        "error[{}]: {} (bytes {}..{})\n",
+    let mut out = format!(
+        "error[{}]: {} (bytes {}..{})",
         panic.code, panic.message, panic.span.start, panic.span.end
-    )
+    );
+    if let Some(frames) = &panic.frames {
+        for frame in &frames.frames {
+            out.push_str(&oska_native::encode_frame(frame));
+        }
+        if frames.omitted > 0 {
+            out.push_str(&format!("\x1f+{}", frames.omitted));
+        }
+    }
+    out.push('\n');
+    out
 }
 
 /// What the fake host's stdin held, as the text a real stdin gives.

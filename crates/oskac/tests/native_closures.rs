@@ -354,12 +354,24 @@ fn runaway_recursion_through_a_function_value_panics_with_p0021() {
     let outcome = assert_same(&Case::file("value_recursion", &deep));
     assert_eq!(outcome.stdout, "2000\n", "{outcome:#?}");
     let runaway = program(items, "    num(io, down(1000000))");
-    assert_panics(
-        "value_runaway",
-        &runaway,
-        "",
-        "main.osk:11:32: error[P0021]: calls nest too deep: is this recursion missing its \
-         base case? (bytes 203..211)\n",
+    // `down(n)` nests `n + 1` calls under `main`.
+    let deepest = program(items, "    num(io, down(49999))");
+    let (interpreted, native) = differential::assert_same_at_depth_limit(
+        &Case::file("value_runaway", &runaway),
+        &Case::file("value_deepest", &deepest),
+    );
+    for outcome in [&interpreted, &native] {
+        assert_eq!(outcome.exit_code, Some(101), "{outcome:#?}");
+    }
+    // Natively, `down` nests 50,000 calls deep, and `main` made the first.
+    assert_eq!(
+        native.stderr,
+        format!(
+            "main.osk:11:32: error[P0021]: calls nest too deep: is this recursion missing its \
+             base case? (bytes 203..211)\n{}    ... 49981 more frames\n",
+            "    at down (main.osk:11:32)\n".repeat(20)
+        ),
+        "{native:#?}"
     );
 }
 
@@ -371,7 +383,9 @@ fn a_panic_inside_a_closure_names_the_closures_code() {
         &program("", body),
         "",
         "main.osk:13:30: error[P0002]: index 2 is out of bounds for a list of length 2 \
-         (bytes 203..211)\n",
+         (bytes 203..211)\n    \
+         at <closure in main> (main.osk:13:30)\n    \
+         at main (main.osk:13:14)\n",
     );
 }
 

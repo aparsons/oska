@@ -329,18 +329,24 @@ fn run_main(
     let _metering = limits.max_memory.map(memory::Metering::start);
     let mut interpreter = Interpreter::new(program, host).with_limits(limits);
     // Nothing in the program calls `main`: its body stands for the call.
-    let value = interpreter.call(main, values, main.body.span)?;
+    let value = interpreter
+        .call(main, values, main.body.span)
+        .map_err(|panic| interpreter.stamped(panic))?;
     if !(value.type_tag() == builtins::RESULT && value.is_variant(builtins::ERR)) {
         return Ok(());
     }
     // The checker requires `main`'s error type to implement `Display`.
     let error = value.fields()[0].clone();
     let span = main.body.span;
-    let text = interpreter.call_trait(builtins::DISPLAY_TO_STRING, error, Vec::new(), span)?;
+    let text = interpreter
+        .call_trait(builtins::DISPLAY_TO_STRING, error, Vec::new(), span)
+        .map_err(|panic| interpreter.stamped(panic))?;
     // The program has failed either way: a stderr that cannot be written
     // loses the message, not the exit code. The message is the program's
     // own text, so it counts toward `--max-output`.
     let line = format!("{}\n", text.as_str());
-    let _ = interpreter.write_output(Stream::Stderr, &line, span)?;
+    let _ = interpreter
+        .write_output(Stream::Stderr, &line, span)
+        .map_err(|panic| interpreter.stamped(panic))?;
     Err(Stop::Failed)
 }

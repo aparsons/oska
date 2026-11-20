@@ -1,1 +1,2 @@
 main.osk:2:5: error[P0038]: step limit reached: the program would take more than 1000000 steps, its calls and loop back-edges (`--max-steps=1000000`) (bytes 16..29)
+    at main (main.osk:2:5)

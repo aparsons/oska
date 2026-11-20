@@ -1,7 +1,7 @@
 //! `oskac`: the Oska compiler command-line interface.
 
 use authority_gate::Gate;
-use oska_syntax::{Applicability, Diagnostic, Span};
+use oska_syntax::{Applicability, Diagnostic, Frame, Span};
 use std::process::ExitCode;
 
 /// `print!` to stdout through [`write_stdout`].
@@ -632,6 +632,22 @@ impl Places<'_> {
         }
     }
 
+    /// `frame` of a panic's call stack, whose span is an offset into the
+    /// program, placed as [`Places::locate`] places a diagnostic's frames.
+    fn locate_frame(&self, frame: Frame) -> Frame {
+        match self {
+            Places::Located => frame,
+            Places::File { path, src } => frame.locate(path, src),
+            Places::Package { locator, dir, json } => {
+                let mut located = locator.locate_frame(frame);
+                if !*json {
+                    frame_from_here(dir, &mut located);
+                }
+                located
+            }
+        }
+    }
+
     /// The module of the test whose item is at `span` in the program.
     fn module_of(&self, span: Span) -> Option<String> {
         match self {
@@ -647,7 +663,36 @@ fn from_here(dir: &str, mut diagnostic: Diagnostic) -> Diagnostic {
     if let Some(location) = &mut diagnostic.location {
         location.path = package::from_here(dir, &location.path);
     }
+    if let Some(frames) = &mut diagnostic.frames {
+        for frame in &mut frames.frames {
+            frame_from_here(dir, frame);
+        }
+    }
     diagnostic
+}
+
+/// `frame`, located in a package in `dir`, with its path written from
+/// the current directory.
+fn frame_from_here(dir: &str, frame: &mut Frame) {
+    if let Some(location) = &mut frame.location {
+        location.path = package::from_here(dir, &location.path);
+    }
+}
+
+/// A native executable's panic reports name places as `oskac` reports
+/// them: placed by [`Places`].
+impl oska_native::Locate for Places<'_> {
+    fn locate(&self, diagnostic: Diagnostic) -> Diagnostic {
+        Places::locate(self, diagnostic)
+    }
+
+    fn locate_frame(&self, frame: Frame) -> Frame {
+        Places::locate_frame(self, frame)
+    }
+
+    fn places(&self) -> bool {
+        !matches!(self, Places::Located)
+    }
 }
 
 /// `report`, of the package in `dir`, with every path written from the
@@ -775,6 +820,10 @@ fn diagnostics_text(diagnostics: &[Diagnostic]) -> String {
                 Applicability::Machine => writeln!(text, "    fix: {}", fix.message),
                 other => writeln!(text, "    fix ({}): {}", other.name(), fix.message),
             };
+        }
+        // A panic's call stack, under its line.
+        if let Some(frames) = &diagnostic.frames {
+            text.push_str(&frames.human());
         }
     }
     text
