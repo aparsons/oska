@@ -8,25 +8,38 @@
 #      the <arch>-unknown-linux-musl target, static, so it runs on any
 #      Linux. scripts/release/check-linux-build.sh checks each;
 #   2. assembles the binaries and SHA256SUMS, whose first line names the
-#      tag (`# oska-release vX.Y.Z`);
+#      tag (`# oska-release vX.Y.Z`). It also builds the container image
+#      from the two musl builds (scripts/release/image.sh, reproducible OCI
+#      bytes, SOURCE_DATE_EPOCH the commit's time) and lists the digest of
+#      its image index, oskac-image-digest, in SHA256SUMS, so the release
+#      signature covers the image. smoke-image then runs both musl builds
+#      in alpine and in that image, on x86_64 and aarch64;
 #   3. signs SHA256SUMS with the RELEASE_SIGNING_KEY secret
 #      (`ssh-keygen -Y sign -n oska-release`) and verifies the result against
 #      site/oska-release.pub; then, with the same key, signs the next
 #      release index (scripts/release/sign-index.sh, namespace oska-index):
 #      the serial after the one https://oskalang.dev publishes, naming the
 #      newest stable release, expiring in 90 days;
-#   4. stores the files, and the index beside them, in a GitHub Release.
+#   4. pushes the image assemble built to ghcr.io/aparsons/oskac
+#      (scripts/release/push-image.sh: it verifies the signed release,
+#      refuses a layout that is not the signed digest, pushes by digest and
+#      reads it back, then tags it vX.Y.Z, and latest when the signed
+#      release index names this release, each read back too; any mismatch
+#      fails the release). Only this job has `packages: write`, and it uses
+#      the workflow's own token;
+#   5. stores the files, and the index beside them, in a GitHub Release.
 #      Users install from oskalang.dev, whose installers verify the
 #      signatures; the GitHub Release is the source the Pages workflow
 #      fetches from;
-#   5. starts the Pages workflow on main, which fetches every release,
+#   6. starts the Pages workflow on main, which fetches every release,
 #      verifies it again and publishes it at
 #      https://oskalang.dev/releases/vX.Y.Z/ with /latest.json, and
 #      publishes the highest-serial index as /release-index.json.
 #
-# A pull request is a dry run: the same builds, signed with a throwaway key,
-# verified and staged into a scratch site. Nothing is published, and it
-# never enters the `release` environment.
+# A pull request is a dry run: the same builds and the same image smoke
+# test, signed with a throwaway key, verified and staged into a scratch
+# site. Nothing is published or pushed, and it never enters the `release`
+# environment.
 #
 # Needs, once:
 #   - the secret RELEASE_SIGNING_KEY, an OpenSSH private key with no
@@ -45,6 +58,8 @@
 #       * optionally, required reviewers on the environment.
 #     Until then the workflow still works: GitHub creates the environment
 #     unprotected on first use, and repository secrets reach it.
+#   - the first push creates the package ghcr.io/aparsons/oskac, private;
+#     make it public once in its package settings (docs/agents/release.md).
 #
 # The release scripts are in scripts/release/ and are tested by
 # scripts/release/test.sh.
@@ -185,10 +200,22 @@ jobs:
             tag="v${built#oskac }"
           fi
           echo "tag=$tag" >>"$GITHUB_OUTPUT"
-      - name: Assemble
+      - name: Assemble, with the image built from the musl builds
         env:
           TAG: ${{ steps.tag.outputs.tag }}
-        run: scripts/release/assemble.sh "$TAG" builds release
+        run: |
+          # The time stamped into the image: the tag's commit time, so a
+          # reviewer can rebuild it (docs/agents/release.md).
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)
+          export SOURCE_DATE_EPOCH
+          scripts/release/assemble.sh "$TAG" builds release "$RUNNER_TEMP/image"
+          echo "image index: $(cat "release/$TAG/oskac-image-digest")"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-layout
+          path: ${{ runner.temp }}/image/
+          if-no-files-found: error
+          retention-days: 7
       - name: Sign and verify with a throwaway key (dry run)
         if: github.event_name == 'pull_request'
         env:
@@ -224,10 +251,48 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # Both musl builds on an empty root, before anything is signed: in alpine
+  # (musl, no glibc) and in the image itself, on each processor.
+  smoke-image:
+    needs: assemble
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - binary: oskac-linux-x86_64-musl
+            runner: ubuntu-22.04
+            machine: x86_64
+          - binary: oskac-linux-aarch64-musl
+            runner: ubuntu-22.04-arm
+            machine: aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ matrix.binary }}
+          path: musl
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: image-layout
+          path: image
+      # The runner's own skopeo; smoke-image.sh fails if there is none.
+      - run: skopeo --version
+      - name: Run oskac in alpine and in the image
+        env:
+          BINARY: ${{ matrix.binary }}
+          MACHINE: ${{ matrix.machine }}
+        run: |
+          test "$(uname -m)" = "$MACHINE"
+          scripts/release/smoke-image.sh "musl/$BINARY" image examples/hello.osk
+
   # The only job that reads the signing key. The `release` environment
   # limits it to v* tags once configured (see the top of this file).
   sign:
-    needs: assemble
+    needs: [assemble, smoke-image]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -280,15 +345,39 @@ jobs:
       contents: write
       # Start the Pages workflow.
       actions: write
+      # Push the image to ghcr.io/aparsons/oskac. No other job has it.
+      packages: write
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       TAG: ${{ needs.sign.outputs.tag }}
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-${{ needs.sign.outputs.tag }}
           path: release
+      # Before the GitHub Release, so a failed push publishes nothing.
+      # push-image.sh verifies the signed release, checks that the layout is
+      # the signed digest, pushes it by digest and reads it back before any
+      # tag names it, and moves latest only as the signed index does.
+      # The OCI bytes assemble wrote; push-image.sh pushes them only if
+      # they are the signed digest.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: image-layout
+          path: image
+      # The runner's own skopeo, never one installed here: this job holds
+      # write tokens. push-image.sh fails if there is none.
+      - name: Push the signed image
+        run: |
+          export REGISTRY_AUTH_FILE="$RUNNER_TEMP/registry-auth.json"
+          trap 'rm -f "$REGISTRY_AUTH_FILE"' EXIT
+          printf '%s' "$GH_TOKEN" |
+            skopeo login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          scripts/release/push-image.sh "release/$TAG" site/oska-release.pub image ghcr.io/aparsons/oskac
       - name: Store the files in a GitHub Release
         run: |
           prerelease=()
