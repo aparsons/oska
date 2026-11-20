@@ -126,6 +126,7 @@ The lexer and the parser report these. A syntax error is the only diagnostic of 
 | `E0105` | A chained comparison such as `a < b < c`. Comparison operators do not chain. | None. | — |
 | `E0106` | An assignment whose left side is not a name or a field path, such as `x + 1 = 2`. | None. | — |
 | `E0107` | A statement at module level, where only items are allowed. | None. | — |
+| `E0108` | A bitwise or shift operator (`&`, `\|`, `^`, `<<`, `>>`) mixed with a different binary operator, or a range, without parentheses, such as `x & mask == 0` or `a + b << 3`. Oska does not let operator precedence decide what such code means. A chain of one operator, such as `a ^ b ^ c`, needs none. The message shows the expression with the parentheses added. | Put parentheses around each operand that is itself a mixed operation, grouping as Rust's precedence does: `(x & mask) == 0`, `(a + b) << 3`. A nested mix is reported innermost first, so a second fix may follow. | machine |
 | `E0110` | An `ensures` clause without a `\|r\|` binding for the return value. | None. | — |
 | `E0111` | A `self` or `var self` receiver that is not the first parameter. | None. | — |
 | `E0112` | `var` on a parameter other than the `self` receiver. A parameter is always an immutable binding. | Remove `var`. | machine |
@@ -314,6 +315,24 @@ fn main() {
 fn main() {
     let a = 1
     let ok = 0 < a && a < 3
+}
+```
+
+#### `E0108`
+
+```oska error=E0108
+fn main() {
+    let x: U8 = 12
+    let mask: U8 = 4
+    let clear = x & mask == 0
+}
+```
+
+```oska fixed=E0108
+fn main() {
+    let x: U8 = 12
+    let mask: U8 = 4
+    let clear = (x & mask) == 0
 }
 ```
 
@@ -724,7 +743,7 @@ A code's fix has an applicability, as a diagnostic's `fix` says: `machine` when 
 | `E0220` | Type mismatch: an expression's type differs from the type expected there. There are no implicit conversions. | None. | — |
 | `E0221` | Unknown value name, or `self` outside a method with a receiver. | Replace the name with the single closest local, function, or prelude variant, when one is close enough. | maybe |
 | `E0222` | Integer literal out of range for its type, such as `300` as a `U8`. | None. | — |
-| `E0223` | Operator not defined for its operand's type: arithmetic and ordering need numbers (`+` is not for strings), unary `-` needs a signed number, `..` needs integers. | None. | — |
+| `E0223` | Operator not defined for its operand's type: arithmetic and ordering need numbers (`+` is not for strings), unary `-` needs a signed number, `..` needs integers, and the bitwise and shift operators (`&`, `\|`, `^`, `~`, `<<`, `>>`) need `U8`, `U32` or `U64`, which the message names. | None. | — |
 | `E0224` | Wrong number of arguments in a call or construction. | None. | — |
 | `E0225` | Argument label that does not match its parameter or field, or a label on a positional field. | Replace the label with the parameter's name, or remove it. | maybe |
 | `E0226` | Named field constructed without its label. | Insert the field's label. | machine |

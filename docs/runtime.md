@@ -136,6 +136,7 @@ Integers of every type, `Int` and the sized `I8` to `U64`, are checked: arithmet
 | `P0005` | `spawn` on a finished scope: the handle's `scope` block has ended, and work never runs outside a scope. Spans the call. This is a second line of defence behind the checker (`E0292`), which already stops a handle from outliving its block: no checked program can reach this code, so it has no example. |
 | `P0006` | Precondition violated: a `requires` clause of the function called is false, so the caller broke the contract. The message names the function and quotes the clause's condition. Spans the call. Every call evaluates the function's `requires` clauses, in every build, in the order written: after the arguments are evaluated and before the body runs. A clause sees the parameters and `self`. A panic while a clause is evaluated, such as an overflow, is reported as it is, not as `P0006`. |
 | `P0007` | Postcondition violated: an `ensures` clause of the function that returned is false, so the function broke its promise. The message names the function, quotes the clause's condition, and names the line and column of the return that broke it, counting columns in characters from 1. Spans the `ensures` clause. Every return evaluates the function's `ensures` clauses, in every build, in the order written, with `r` bound to the value being returned. That covers falling off the end of the body (the return is its last expression, or its closing brace), an early `return`, and an early exit through `?`, where `r` is the `Err` or `None` being returned. A clause sees the parameters and `self`; a method that changes `var self` shows its clauses the receiver it ends with. A contract that calls a function with contracts checks those too, and a panic while a clause is evaluated, such as an overflow, is reported as it is, not as `P0007`. |
+| `P0008` | Shift or rotation amount out of range: the amount of `<<` or `>>`, or of `rotl` or `rotr`, is below 0 or not below the width of the integer type shifted (8 for `U8`, 32 for `U32`, 64 for `U64`). The amount is never taken modulo the width, so the hardware's differing shift masking never shows: both backends check it first, on every target. The message names the operator, the amount and the range. Spans the operation or call. |
 | `P0010` | `t.assert(cond)` was given `false`. Fails the test (see [Tests](#tests)). Spans the call. |
 | `P0011` | `t.assert_eq(actual, expected)` was given two values that differ through `Eq`. The message shows both, as `dbg` would. Spans the call. |
 | `P0012` | `t.assert_ne(actual, other)` was given two equal values. Spans the call. |
@@ -268,6 +269,24 @@ fn absolute(x: Int) -> Int
 
 fn main() {
     let y = absolute(-1)
+}
+```
+
+#### `P0008`
+
+```oska error=P0008
+fn main() {
+    let x: U32 = 1
+    let n: U32 = 32
+    let y = x << n
+}
+```
+
+```oska fixed=P0008
+fn main() {
+    let x: U32 = 1
+    let n: U32 = 31
+    let y = x << n
 }
 ```
 
