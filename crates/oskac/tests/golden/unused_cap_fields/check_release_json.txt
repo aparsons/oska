@@ -1,0 +1,34 @@
+$ oskac check app.osk --release --format=json
+exit: 1
+--- stdout
+{
+  "diagnostics": [
+    {"code":"E0297","message":"unused authority: no code reads the field `net` of `Tools`, so it holds authority the program does not exercise; remove the field","path":"app.osk","span":{"start":58,"end":66},"line":4,"column":5,"end_line":4,"end_column":13,"severity":"error","url":"https://oskalang.dev/codes/E0297","fix":{"message":"remove the field `net`","edits":[{"span":{"start":52,"end":66},"replacement":""}],"applicability":"maybe"},"related":[],"suggestions":[]}
+  ],
+  "functions": [
+    {"name":"stamp","authority":["Stdout","Clock","Net"],"via":[{"param":"tools","capabilities":["Stdout","Clock","Net"]}],"pure":false},
+    {"name":"main","authority":["Stdout","Clock","Net"],"via":[{"param":"out","capabilities":["Stdout"]},{"param":"clock","capabilities":["Clock"]},{"param":"net","capabilities":["Net"]}],"pure":false}
+  ],
+  "audit": [],
+  "attenuations": [],
+  "verdict": "diagnostics"
+}
+--- stderr
+--- file app.osk
+cap struct Tools {
+    out: Stdout,
+    clock: Clock,
+    net: Net,
+}
+
+fn stamp(tools: Tools) -> Int {
+    match tools {
+        Tools(out: _, clock: c, net: _) => c.now_millis()
+    }
+}
+
+fn main(out: Stdout, clock: Clock, net: Net) -> Result<(), IoError> {
+    let tools = Tools(out: out, clock: clock, net: net)
+    let n = stamp(tools)
+    tools.out.println("{n}")
+}

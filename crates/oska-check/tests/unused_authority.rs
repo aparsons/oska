@@ -88,6 +88,7 @@ fn attenuating_a_capability_is_a_use() {
 fn storing_a_capability_in_a_value_is_a_use() {
     assert_release_ok(
         "cap struct Logger { out: Stdout }\n\n\
+         fn say(l: Logger) {\n    let _ = l.out.println(\"hi\")\n}\n\n\
          fn logger(out: Stdout) -> Logger {\n    let l = Logger(out: out)\n    l\n}\n\n\
          fn main() {}",
     );
@@ -113,6 +114,7 @@ fn an_unused_cap_struct_parameter_is_unused_authority() {
     assert_eq!(
         release_errors(
             "cap struct Logger { out: Stdout }\n\n\
+             fn say(l: Logger) {\n    let _ = l.out.println(\"hi\")\n}\n\n\
              fn work(log: Logger, n: Int) -> Int {\n    n\n}\n\nfn main() {}"
         ),
         [("E0296", "log: Logger")]

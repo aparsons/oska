@@ -90,6 +90,27 @@ main.osk:1:22: error[E0296]: unused authority: `greet` never uses its parameter 
 
 `main` passes `net` on, so it uses it; `greet` never does. Remove the parameter, and then `main`'s `net` is unused too. On `main` the fix is `machine`, since nothing calls `main`, and `oskac fix --release` applies it; on any other function it is `maybe`, because its callers change too. A method whose signature a trait fixes is exempt. Naming a parameter `_net` does not silence it: a capability a function does not use is removed, not hidden ([ADR 0016](../adr/0016-unused-authority-is-a-release-check-error.md)).
 
+A `cap struct` can hold unused authority too. A capability-bearing field that no code in the program reads is rejected by the release check with `E0297`. Any read counts, anywhere in the program: a field access, which covers calling a method on the field and passing it on, or a `match` pattern that binds the field to a name that is then read. Discarding it, with `let _ = tools.net` or with `_` in a pattern, is not a read.
+
+```oska
+cap struct Tools {
+    io: Stdout,
+    net: Net,
+}
+
+fn main(io: Stdout, net: Net) -> Result<(), IoError> {
+    let tools = Tools(io: io, net: net)
+    tools.io.println("hello")
+}
+```
+
+```console cmd=check release stream=stderr
+main.osk:3:5: error[E0297]: unused authority: no code reads the field `net` of `Tools`, so it holds authority the program does not exercise; remove the field (bytes 39..47)
+    fix (maybe): remove the field `net`
+```
+
+The fix is `maybe`, because every construction of `Tools` changes too. Remove the field, and then `main`'s `net` is unused.
+
 ## Attenuation
 
 You cannot forge a capability. You get one by being passed it, or by **attenuation**: producing a narrower capability from one you hold. Attenuation never widens authority, and there is no way back from a narrow capability to a wider one.

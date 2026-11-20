@@ -1,5 +1,6 @@
 //! Release-only rules: `dbg(...)` and `todo()` are errors under
-//! `--release`.
+//! `--release`, and [`CODES`] lists every code the release check alone
+//! reports, unused authority's (`unused_authority.rs`) included.
 //!
 //! This is a syntactic walk over every body, separate from body
 //! checking: any call whose callee is the bare name `dbg` or `todo` is
@@ -10,6 +11,17 @@ use oska_syntax::{Diagnostic, Edit, Span};
 
 use crate::codes;
 use crate::prelude;
+
+/// Every code that only the release check reports, the one list of them:
+/// the catalog marks each one "when checking with `--release`". Unused
+/// authority in a field (`E0297`) is judged only when no code but these
+/// is reported.
+pub const CODES: [&str; 4] = [
+    codes::DBG_IN_RELEASE,
+    codes::TODO_IN_RELEASE,
+    codes::UNUSED_AUTHORITY,
+    codes::UNUSED_FIELD_AUTHORITY,
+];
 
 /// Report every `dbg(...)` and `todo()` call in `module`.
 pub fn module(module: &Module, diagnostics: &mut Vec<Diagnostic>) {
