@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Benchmark the native backend against the interpreter, on the machine it
-# runs on, aarch64 or x86_64 Linux or macOS: maintainer-run on the
+# runs on, aarch64 or x86_64 Linux or macOS, or x86_64 Windows (Git Bash): maintainer-run on the
 # Raspberry Pi 5 (aarch64), and on demand in CI (.github/workflows/bench.yml),
 # which is where the x86_64 and macOS figures come from. Not part of scripts/check.sh. The
 # results are recorded in docs/design.md ("Native backend benchmark").
@@ -27,9 +27,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 case "$(uname -sm)" in
-"Linux aarch64" | "Linux x86_64" | "Darwin arm64" | "Darwin x86_64") ;;
+"Linux aarch64" | "Linux x86_64" | "Darwin arm64" | "Darwin x86_64") exe="" clock='%3U %3S' ;;
+# Git Bash's `time` does not see the CPU time of a native Windows process
+# (it reports 0 or one 15 ms tick), so on Windows the clock is wall time.
+"MINGW64_NT"*" x86_64" | "MSYS_NT"*" x86_64") exe=".exe" clock='%3R 0' ;;
 *)
-  echo "bench-native.sh: native executables run only on aarch64 and x86_64 Linux and macOS" >&2
+  echo "bench-native.sh: native executables run only on aarch64 and x86_64 Linux and macOS, and x86_64 Windows" >&2
   exit 1
   ;;
 esac
@@ -39,7 +42,7 @@ fi
 
 runs="${1:-5}"
 root="$(pwd)"
-oskac="$root/target/release/oskac"
+oskac="$root/target/release/oskac$exe"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -117,9 +120,10 @@ EOF
 # The best CPU time (user plus system), in milliseconds, of `runs` runs of
 # the command, in the current directory, with its output discarded. CPU
 # time, not wall-clock time: a Pi doing other work, or writing to its SD
-# card, stretches the wall clock of a short run several times over.
+# card, stretches the wall clock of a short run several times over. On
+# Windows it is the best wall-clock time (see `clock` above).
 best() {
-  local best_ms="" ms TIMEFORMAT='%3U %3S'
+  local best_ms="" ms TIMEFORMAT="$clock"
   for _ in $(seq "$runs"); do
     ms=$({ time "$@" >/dev/null 2>&1; } 2>&1 | awk '{ printf "%d", ($1 + $2) * 1000 }')
     if [ -z "$best_ms" ] || [ "$ms" -lt "$best_ms" ]; then
@@ -144,7 +148,9 @@ bench() {
     'BEGIN { printf "| %-10s | %7d ms | %6d ms | %6.1fx |\n", n, i, e, i / (e > 0 ? e : 1) }'
 }
 
-echo "oskac $("$oskac" --version | cut -d' ' -f2), best of $runs runs, $(uname -m)"
+measure="CPU time"
+[ "$exe" = ".exe" ] && measure="wall-clock time"
+echo "oskac $("$oskac" --version | cut -d' ' -f2), best $measure of $runs runs, $(uname -m)"
 echo
 echo "| Workload   | Interpreter | Native |  Speedup |"
 echo "| ---------- | ----------: | -----: | -------: |"

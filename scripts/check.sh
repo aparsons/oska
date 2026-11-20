@@ -480,9 +480,11 @@ if step "std.rt intrinsics only in std.rt" --no-slot; then
 fi
 
 if step "only official actions and rust-toolchain, pinned to a commit" --no-slot; then
+  # An official action may be one in a subdirectory of its repository, as
+  # actions/cache/restore: the same repository, at the same pinned commit.
   sha_pin='@[0-9a-f]{40}'
   bad_uses=$(grep -rnE --include='*.yml' --include='*.yaml' '^[[:space:]]*-?[[:space:]]*uses:' .github/workflows |
-    grep -vE "uses:[[:space:]]*(actions/[A-Za-z0-9_.-]+|dtolnay/rust-toolchain)$sha_pin([[:space:]]|$)" || true)
+    grep -vE "uses:[[:space:]]*(actions/[A-Za-z0-9_.-]+(/[A-Za-z0-9_-]+)?|dtolnay/rust-toolchain)$sha_pin([[:space:]]|$)" || true)
   if [ -n "$bad_uses" ]; then
     printf '%s\n' "$bad_uses" >&2
     fail "workflows may use only actions/* and dtolnay/rust-toolchain, each pinned to a full commit SHA"
@@ -605,6 +607,10 @@ fi
 
 if step "cross-build manifest tests" --fast-when 'scripts/cross-build/*'; then
   bash scripts/cross-build/test.sh
+fi
+
+if step "cargo cache tests" --fast-when 'scripts/cargo-cache/*'; then
+  bash scripts/cargo-cache/test.sh
 fi
 
 if step "build slot tests" --fast-when 'scripts/build-slots/*'; then

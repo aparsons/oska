@@ -32,8 +32,8 @@ pub enum Tested {
     /// The test executable could not be written (`E0391`), reported as
     /// `oskac run` reports it: the exit code to end with.
     Ended(ExitCode),
-    /// The backend refused the program, with this diagnostic: run its
-    /// tests on the interpreter, after `native::note_fallback`.
+    /// The backend refused the program, with this diagnostic, which the
+    /// parity gate (`native::gate`) reports.
     Refused(Diagnostic),
 }
 
