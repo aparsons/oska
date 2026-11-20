@@ -278,22 +278,23 @@ fn claim(cell: &str, at: &str) -> Option<Vec<String>> {
 
 /// The platforms `oskac build` writes executables for, by the name `--target`
 /// takes. A native cell holds only if the probe builds for every one.
-const TARGETS: [&str; 4] = [
+const TARGETS: [&str; 5] = [
     "linux-aarch64",
     "linux-x86_64",
     "macos-aarch64",
     "macos-x86_64",
+    "windows-x86_64",
 ];
 
 /// What the Platforms cell says, from the backends that run the feature:
 /// whether the interpreter runs it, and for which of [`TARGETS`] the probe
 /// built. A cell names a platform only if the probe built for it.
-fn platforms(interpreter: bool, built: [bool; 4]) -> String {
+fn platforms(interpreter: bool, built: [bool; 5]) -> String {
     if !interpreter {
         return "None yet: checks only".to_string();
     }
     if built.iter().all(|b| *b) {
-        return "Every host; native on Linux and macOS".to_string();
+        return "Every host; native on Linux, macOS and Windows".to_string();
     }
     let native: Vec<&str> = TARGETS
         .iter()
@@ -364,12 +365,15 @@ fn bears_out(output: &Output, claim: &Option<Vec<String>>) -> Result<(), String>
     }
 }
 
-/// Whether this host runs `oskac run` and `oskac test` natively: Linux on
-/// aarch64 or x86_64, and macOS on either.
+/// Whether this host runs `oskac run` and `oskac test` natively: Linux and
+/// macOS on aarch64 or x86_64, and Windows on x86_64.
 fn native_host() -> bool {
-    cfg!(all(
-        any(target_os = "linux", target_os = "macos"),
-        any(target_arch = "aarch64", target_arch = "x86_64")
+    cfg!(any(
+        all(
+            any(target_os = "linux", target_os = "macos"),
+            any(target_arch = "aarch64", target_arch = "x86_64")
+        ),
+        all(windows, target_arch = "x86_64")
     ))
 }
 
@@ -406,7 +410,7 @@ fn every_row_of_what_works_today_holds_on_the_toolchain() {
         // the hosts that run natively, where a fallback to the interpreter
         // says so with `E0390`; it cannot be built, so its native cell
         // stands for both targets.
-        let mut built = [native.is_none(); 4];
+        let mut built = [native.is_none(); 5];
         match probe {
             Probe::Tests(_) if native_host() => {
                 let output = oskac(&dir, &["test", &target]);
