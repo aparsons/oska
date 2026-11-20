@@ -4,21 +4,21 @@ version = 3
 
 [[package]]
 name = "oska-check"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "oska-syntax",
 ]
 
 [[package]]
 name = "oska-eval"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "oska-syntax",
 ]
 
 [[package]]
 name = "oska-native"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "oska-check",
  "oska-syntax",
@@ -26,7 +26,7 @@ dependencies = [
 
 [[package]]
 name = "oska-run"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "oska-check",
  "oska-native",
@@ -36,15 +36,15 @@ dependencies = [
 
 [[package]]
 name = "oska-syntax"
-version = "0.5.0"
+version = "0.6.0"
 
 [[package]]
 name = "oska-sys"
-version = "0.5.0"
+version = "0.6.0"
 
 [[package]]
 name = "oskac"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "oska-check",
  "oska-native",
