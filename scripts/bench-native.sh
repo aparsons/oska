@@ -7,6 +7,13 @@
 #
 #   scripts/bench-native.sh [runs]
 #
+# OSKA_BENCH_TARGET=<Rust target triple> benchmarks the oskac built for that
+# target instead of the host's, for example the musl build
+# (x86_64-unknown-linux-musl or aarch64-unknown-linux-musl, after `rustup
+# target add`). It must be a plain triple for this machine's processor;
+# anything else is refused. docs/research/
+# 2026-11-musl-oskac-performance.md compares the two Linux builds this way.
+#
 # Builds a release oskac, then for each workload runs `oskac run
 # --interpret` and the executable `oskac build` wrote, `runs` times each
 # (default 5), and prints the best CPU time of each and the speedup. The interpreter's time includes checking the program, as
@@ -39,11 +46,29 @@ fi
 
 runs="${1:-5}"
 root="$(pwd)"
-oskac="$root/target/release/oskac"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-cargo build --release --quiet -p oskac
+if [ -n "${OSKA_BENCH_TARGET:-}" ]; then
+  # A plain target triple only: no path, no `.json` target spec, nothing
+  # that could leave target/.
+  if ! [[ "$OSKA_BENCH_TARGET" =~ ^[a-z0-9_]+(-[a-z0-9_]+){2,3}$ ]]; then
+    echo "bench-native.sh: OSKA_BENCH_TARGET must be a Rust target triple such as x86_64-unknown-linux-musl, not '$OSKA_BENCH_TARGET'" >&2
+    exit 1
+  fi
+  # The build must run here, so its processor must be this machine's.
+  host_arch="$(uname -m)"
+  [ "$host_arch" = arm64 ] && host_arch=aarch64
+  if [ "${OSKA_BENCH_TARGET%%-*}" != "$host_arch" ]; then
+    echo "bench-native.sh: OSKA_BENCH_TARGET=$OSKA_BENCH_TARGET is for ${OSKA_BENCH_TARGET%%-*}, but this machine is $host_arch: its oskac cannot run here" >&2
+    exit 1
+  fi
+  cargo build --release --quiet -p oskac --target "$OSKA_BENCH_TARGET"
+  oskac="$root/target/$OSKA_BENCH_TARGET/release/oskac"
+else
+  cargo build --release --quiet -p oskac
+  oskac="$root/target/release/oskac"
+fi
 
 cat >"$work/loop.osk" <<'EOF'
 fn main(io: Stdout) -> Result<(), IoError> {
@@ -144,7 +169,10 @@ bench() {
     'BEGIN { printf "| %-10s | %7d ms | %6d ms | %6.1fx |\n", n, i, e, i / (e > 0 ? e : 1) }'
 }
 
-echo "oskac $("$oskac" --version | cut -d' ' -f2), best of $runs runs, $(uname -m)"
+# Stop if the oskac under test cannot even print its version.
+version="$("$oskac" --version)"
+version="$(echo "$version" | cut -d' ' -f2)"
+echo "oskac $version${OSKA_BENCH_TARGET:+ ($OSKA_BENCH_TARGET)}, best of $runs runs, $(uname -m)"
 echo
 echo "| Workload   | Interpreter | Native |  Speedup |"
 echo "| ---------- | ----------: | -----: | -------: |"
