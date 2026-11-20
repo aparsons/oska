@@ -291,9 +291,9 @@ impl Body<'_, '_, '_> {
                 );
                 return None;
             }
-            Some((callable, key))
+            Some((callable, key, matches!(target, Target::Struct(_))))
         });
-        let Some((callable, key)) = checked else {
+        let Some((callable, key, is_struct)) = checked else {
             for arg in args {
                 self.bind_unchecked(&arg.pattern);
             }
@@ -301,6 +301,14 @@ impl Body<'_, '_, '_> {
         };
         if let Some(construct) = &callable.construct {
             self.record(span, Resolution::Construct(construct.clone()));
+        }
+        if is_struct {
+            // Destructuring a struct reads each field it does not discard.
+            for (index, arg) in args.iter().enumerate() {
+                if !matches!(arg.pattern.kind, PatternKind::Wildcard) {
+                    self.out.field_reads.insert((key.clone(), index));
+                }
+            }
         }
         self.check_args(&callable, args, key)
     }

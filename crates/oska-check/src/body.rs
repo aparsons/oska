@@ -102,6 +102,11 @@ pub struct Findings {
     pub modules: crate::link::Modules,
     /// The module of the item being checked.
     pub module: String,
+    /// Every struct field some code reads, as `(struct key, field
+    /// index)`: by a field access, or by a constructor pattern that does
+    /// not discard it with `_`. Unused authority in `cap struct` fields
+    /// (`unused_authority.rs`) is a field missing here.
+    pub field_reads: std::collections::HashSet<(String, usize)>,
 }
 
 /// Check every function, method, constant, and test body in `module`. A
@@ -1222,6 +1227,7 @@ impl<'c, 'd, 'a> Body<'c, 'd, 'a> {
                             self.out
                                 .resolutions
                                 .insert(name.span, Resolution::Field(index));
+                            self.out.field_reads.insert((type_name.clone(), index));
                             if !self.field_visible(type_name, index, &name.name, name.span) {
                                 return Ty::Error;
                             }

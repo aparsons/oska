@@ -30,8 +30,9 @@
 //! contract bodies (`body.rs`, with local bidirectional inference), then
 //! compute authority. A test body sees `t: TestContext` from the prelude.
 //! Under `--release`, bodies are also scanned for `dbg(...)` and
-//! `todo()`, and every capability-bearing parameter must be used
-//! (**unused authority**, `unused_authority.rs`).
+//! `todo()`, every capability-bearing parameter must be used, and every
+//! capability-bearing field of a `cap struct` must be read (**unused
+//! authority**, `unused_authority.rs`).
 //!
 //! # Diagnostic codes
 //!
@@ -160,6 +161,7 @@ pub(crate) mod codes {
     pub const USE_OUTSIDE_STD: &str = "E0294";
     pub const UNKNOWN_MODULE: &str = "E0295";
     pub const UNUSED_AUTHORITY: &str = "E0296";
+    pub const UNUSED_FIELD_AUTHORITY: &str = "E0297";
     pub const UNTRUSTED_TEXT: &str = "E0300";
     pub const SINK_NOT_IMPORTED: &str = "E0310";
     pub const UNKNOWN_SINK_TAG: &str = "E0311";
@@ -731,8 +733,19 @@ fn check_source(
         assumed,
         instances,
         modules,
+        field_reads,
         ..
     } = findings;
+    // Fields are judged only on an otherwise clean program: a body that
+    // failed to check may read a field the checker could not resolve.
+    let release_only = [
+        codes::DBG_IN_RELEASE,
+        codes::TODO_IN_RELEASE,
+        codes::UNUSED_AUTHORITY,
+    ];
+    if options.release && diagnostics.iter().all(|d| release_only.contains(&d.code)) {
+        unused_authority::fields(src, module, &decls, &field_reads, &mut diagnostics);
+    }
     instantiation::module(module, &decls, &items, assumed, instances, &mut diagnostics);
     const_cycles::module(module, &resolutions, &mut diagnostics);
     let program = diagnostics

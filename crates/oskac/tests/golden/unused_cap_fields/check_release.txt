@@ -1,0 +1,26 @@
+$ oskac check app.osk --release
+exit: 1
+--- stdout
+fn stamp: Stdout, Clock, Net (tools)
+fn main: Stdout (out), Clock (clock), Net (net)
+--- stderr
+app.osk:4:5: error[E0297]: unused authority: no code reads the field `net` of `Tools`, so it holds authority the program does not exercise; remove the field (bytes 58..66)
+    fix (maybe): remove the field `net`
+--- file app.osk
+cap struct Tools {
+    out: Stdout,
+    clock: Clock,
+    net: Net,
+}
+
+fn stamp(tools: Tools) -> Int {
+    match tools {
+        Tools(out: _, clock: c, net: _) => c.now_millis()
+    }
+}
+
+fn main(out: Stdout, clock: Clock, net: Net) -> Result<(), IoError> {
+    let tools = Tools(out: out, clock: clock, net: net)
+    let n = stamp(tools)
+    tools.out.println("{n}")
+}

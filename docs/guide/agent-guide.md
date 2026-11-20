@@ -10,7 +10,7 @@ How an AI coding agent, or any script, should drive `oskac`. Oska is built for t
 4. **Run.** `oskac run file.osk --format=json -- args...`. The exit code and standard error say how it ended. On Linux and macOS the program runs natively, on Windows on the interpreter, with the same output; if a native result looks wrong, run it again with `--interpret` and report any difference.
 5. **Test.** `oskac test file.osk --format=json`. Write a test for every behavior you add.
 6. **Compare the authority.** `oskac check file.osk --baseline=authority.json` compares the program with the project's saved authority and exits with 3 when it widened. A change that widens authority, or adds an audit site, is not finished until you can say why.
-7. **Release check.** `oskac check file.osk --release` must pass: no `dbg(...)`, no `todo()` and no unused authority left. Unused authority is a capability-bearing parameter that its function never uses (`E0296`); remove it. `oskac fix file.osk --release` removes one from `main`, which nothing calls; elsewhere the fix is `maybe`, because callers change too.
+7. **Release check.** `oskac check file.osk --release` must pass: no `dbg(...)`, no `todo()` and no unused authority left. Unused authority is a capability-bearing parameter that its function never uses (`E0296`), or a capability-bearing field of a `cap struct` that no code reads (`E0297`); remove it. `oskac fix file.osk --release` removes one from `main`, which nothing calls; elsewhere the fix is `maybe`, because callers change too.
 
 You are done when the check, the tests, and the release check all exit with 0, and the authority report is no wider than the task needs.
 

@@ -1,5 +1,7 @@
 //! **Unused authority** (ADR 0016): under `--release`, a
-//! capability-bearing parameter that its function never uses is an error.
+//! capability-bearing parameter that its function never uses (`E0296`),
+//! or a capability-bearing field of a `cap struct` that no code in the
+//! program reads (`E0297`), is an error.
 //!
 //! Any read of the parameter in the body counts as a use: a method call
 //! on it, passing it on, attenuating it, storing it, returning it, or
@@ -20,12 +22,22 @@
 //! fixes is exempt: an `impl Trait for Type` method, and a trait's default
 //! method. There is no `_name` escape hatch. The receiver is not a
 //! parameter that can be removed, so it is not judged.
+//!
+//! A field is read anywhere in the program by a field access, which also
+//! covers passing it on and calling a method on it, or by a constructor
+//! pattern that does not discard it with `_`; the body checker records
+//! each read (`Findings::field_reads` in `body.rs`). A field is
+//! capability-bearing as `cap` requires it ([`authority::capability_bearing`]):
+//! a field typed by the struct's own type parameter is not judged. Field
+//! reads are known only once every body has checked, so the field rule
+//! runs only on a program with no other error: a body that failed to check
+//! may read a field the checker could not resolve.
 
 use std::collections::HashSet;
 
 use oska_syntax::ast::{
-    Block, Expr, ExprKind, FnDecl, ItemKind, Module, Param, Pattern, PatternKind, Stmt, StmtKind,
-    StrPart,
+    Block, Expr, ExprKind, Fields, FnDecl, ItemKind, Module, Param, Pattern, PatternKind, Stmt,
+    StmtKind, StrPart,
 };
 use oska_syntax::{Applicability, Diagnostic, Edit, Span};
 
@@ -117,29 +129,40 @@ fn removal(src: &str, f: &FnDecl, param: &Param) -> Span {
         .iter()
         .position(|p| std::ptr::eq(p, param))
         .expect("a parameter of the function");
-    if let Some(next) = f.params.get(index + 1) {
+    let spans: Vec<Span> = f.params.iter().map(|p| p.span).collect();
+    let receiver = f.receiver.as_ref().map(|r| r.span.end);
+    list_removal(src, &spans, index, receiver)
+}
+
+/// The text to delete to remove item `index` of a comma-separated list
+/// whose items span `spans`, with the comma that separates it from its
+/// neighbour. `before` is the end of an item ahead of the list's first
+/// one, such as a method's receiver.
+fn list_removal(src: &str, spans: &[Span], index: usize, before: Option<usize>) -> Span {
+    let span = spans[index];
+    if let Some(next) = spans.get(index + 1) {
         return Span {
-            start: param.span.start,
-            end: next.span.start,
+            start: span.start,
+            end: next.start,
         };
     }
     let previous = match index {
-        0 => f.receiver.as_ref().map(|r| r.span.end),
-        _ => Some(f.params[index - 1].span.end),
+        0 => before,
+        _ => Some(spans[index - 1].end),
     };
     if let Some(end) = previous {
         return Span {
             start: end,
-            end: param.span.end,
+            end: span.end,
         };
     }
-    // The only parameter: empty the parentheses, trailing comma and all.
+    // The only item: empty the brackets, trailing comma and all.
     let bytes = src.as_bytes();
-    let mut start = param.span.start;
+    let mut start = span.start;
     while start > 0 && bytes[start - 1].is_ascii_whitespace() {
         start -= 1;
     }
-    let mut end = param.span.end;
+    let mut end = span.end;
     while end < bytes.len() && bytes[end].is_ascii_whitespace() {
         end += 1;
     }
@@ -150,6 +173,57 @@ fn removal(src: &str, f: &FnDecl, param: &Param) -> Span {
         }
     }
     Span { start, end }
+}
+
+/// Report every capability-bearing field of a `cap struct` in `module`
+/// that is not in `reads`, the `(struct key, field index)` of every field
+/// some code reads.
+pub fn fields(
+    src: &str,
+    module: &Module,
+    decls: &Decls,
+    reads: &HashSet<(String, usize)>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for item in &module.items {
+        let ItemKind::Struct(s) = &item.kind else {
+            continue;
+        };
+        if !s.cap {
+            continue;
+        }
+        let list = match &s.fields {
+            Fields::Named(list) | Fields::Positional(list) => list,
+            Fields::Unit => continue,
+        };
+        let lower = Lower::new(decls).with_generics(&s.generics);
+        let spans: Vec<Span> = list.iter().map(|f| f.span).collect();
+        for (index, field) in list.iter().enumerate() {
+            if reads.contains(&(s.name.name.clone(), index))
+                || !authority::capability_bearing(&lower.ty(&field.ty), decls)
+            {
+                continue;
+            }
+            let what = match &field.name {
+                Some(name) => format!("field `{}`", name.name),
+                None => format!("field {index}"),
+            };
+            let message = format!(
+                "unused authority: no code reads the {what} of `{}`, so it holds authority \
+                 the program does not exercise; remove the field",
+                s.name.name
+            );
+            diagnostics.push(
+                Diagnostic::new(codes::UNUSED_FIELD_AUTHORITY, message, field.span)
+                    .with_fix(
+                        format!("remove the {what}"),
+                        vec![Edit::delete(list_removal(src, &spans, index, None))],
+                    )
+                    // Every constructor and pattern of the struct changes too.
+                    .applicable(Applicability::Maybe),
+            );
+        }
+    }
 }
 
 /// Which of a function's capability-bearing parameters its body uses.
