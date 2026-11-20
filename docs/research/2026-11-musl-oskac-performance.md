@@ -4,17 +4,17 @@
 - **Scope:** Ticket #469 of spec #461 ([ADR 0022](../adr/0022-linux-oskac-ships-as-glibc-and-musl-builds.md)). On 2026-11-19 the musl build took 0.32 s to `oskac build` the site generator against 0.20 s for the glibc build, and its interpreter took 5.8 s against 3.8 s. Find where the time goes, on x86_64 and aarch64, and rank the fixes. No allocator and no `unsafe` code in this ticket.
 - **Status:** x86_64 measured here. **aarch64 is pending**: this machine is x86_64 only, and no aarch64 number below is measured. Section 5 gives the exact commands for an aarch64 runner.
 - **Method:** Built both release binaries of `oskac` at `36167da` with the pinned Rust 1.100.0: `cargo build --release -p oskac` and the same with `--target x86_64-unknown-linux-musl`. Ran `scripts/bench-native.sh` once with each. Timed the site generator with `perf stat`. Profiled with `perf record` (CPU-clock sampling, as this VM has no hardware counters), `strace -c`, and `valgrind --tool=callgrind`, which counts instructions and calls exactly. Disassembled the C library routines in the binaries. Wrote a small Rust program that times `memcpy` and allocation on each C library.
-- **Machine:** Intel Xeon @ 2.10GHz, 4 CPUs, a Linux 6.18 VM shared with one other agent. CPU times (user plus system) are used, as other work stretches the wall clock but not CPU time much. Each figure is the best of 3 to 5 runs. The ratios held in every run; the absolute times move by about 5%.
+- **Machine:** Intel Xeon @ 2.10GHz, 4 CPUs, a Linux 6.18 VM shared with one other agent. CPU times (user plus system) are used, as other work stretches the wall clock but not CPU time much. Each figure is the best of 3 to 5 runs. The musl build was slower in every run, but absolute times differ between runs and tools: the musl interpreter's site build took 8,333 ms in the bench script and 8,879 ms under `perf stat`, 6.5% apart.
 - **Sources:** what this note measured, plus the musl release notes. The musl source site and its GitHub mirror were not reachable from this session, so each claim about how musl works is either read from the disassembly of the shipped `libc.a` or marked **Inference**.
 
 ## Short answer
 
 The musl build is slower because of musl's C library routines, not because of Oska's code. Its instruction count is only 9% higher (63.3 billion against 58.0 billion for the interpreted site build), but it takes 70% more CPU time. On x86_64 the gap has four causes:
 
-1. **musl's allocator (mallocng): about 44% of the interpreter's gap.** It runs 46% more instructions per allocation. It also takes a lock on every `malloc` and `free` once a second thread exists, and the interpreter always runs on a second thread (for its 256 MiB stack). The lock alone is 26% of the gap.
+1. **musl's allocator (mallocng): about 44% of the interpreter's gap.** Its allocator code runs 46% more instructions for the same allocations (18.03 billion against 12.35 billion). Its lock functions, `__lock` and `__unlock`, take 26% of the gap, and only in the interpreter, which always runs on a second thread (for its 256 MiB stack). **Inference:** musl locks its allocator once a second thread exists.
 2. **musl giving memory back to the kernel and taking it again: about 20% of the interpreter's gap and 35% of the compile's.** The interpreted site build makes 81,309 `mmap` and 81,264 `munmap` calls and takes 345,726 page faults. The glibc build makes 17 and 6 calls and takes 4,129 faults.
 3. **musl's x86_64 `memcpy`: about 28% of the interpreter's gap and 37% of the compile's.** It is a `rep movsq` with byte loops before and after it. Each call costs about 13 ns, even for 16 bytes, where glibc's costs 2 ns. The interpreter calls it 39 million times.
-4. **The rest, about 16%,** is Oska's own Rust code running slower on the same instructions. **Inference:** fresh pages and a different heap layout cost cache and TLB misses. This VM cannot count them. musl's `memcmp` is faster here, which takes back about 8%.
+4. **The rest, about 16% of the gap,** is Oska's own Rust code running slower on the same instructions. **Inference:** fresh pages and a different heap layout cost cache and TLB misses. This VM cannot count them. musl's `memcmp` is faster here, which takes back about 8%.
 
 The causes are the C library's, but the cheapest fix is in Oska: allocate and copy less. Three interpreter sites make 88% of its 52 million allocations, and two checker sites make 87% of the compile's 689,000. Each fix helps the glibc build too. Only if the musl build is still too slow after those fixes should a custom allocator in `oska-sys` be considered (ADR 0009).
 
@@ -44,7 +44,7 @@ The workload that allocates nothing (`loop`) runs at the same speed. The ones th
 | `oskac build site/build.osk` | 51 ms | 103 ms | 2.0x | 2,984 | 7,496 |
 | `oskac run --interpret site/build.osk` | 5,242 ms | 8,879 ms | 1.7x | 4,129 | 345,726 |
 
-The ratios match the 2026-11-19 figures (1.6x and 1.5x) closely enough; this machine and its load differ.
+The 2026-11-19 figures were 1.6x for the compile and 1.5x for the interpreter. Here the compile gap is larger, 2.0x, and the interpreter gap 1.7x. This machine and its load differ from that day's, and this note does not explain the difference.
 
 ## 2. Where the time goes (x86_64)
 
@@ -76,7 +76,7 @@ The compile runs on one thread, so musl takes no allocator lock there (11 sample
 
 ### Instruction counts
 
-`valgrind --tool=callgrind` counts each instruction and call. Both builds run the same Rust code, so they make the same calls.
+`valgrind --tool=callgrind` counts each instruction and call. Both builds run the same Rust code, so they make the same allocations. They make almost the same `memcpy` calls: the musl build makes about 100,000 more (0.3%), from calls inside the C libraries, not from Oska's code. For example, musl's `realloc` calls `memcpy` 1.3 million times.
 
 | | glibc | musl |
 | --- | ---: | ---: |
@@ -94,7 +94,7 @@ So the musl build does the same work with 9% more instructions, and takes 70% mo
 
 ### Cause 1: mallocng costs more per call, and locks once a thread exists
 
-- In the interpreter, musl's `__libc_malloc_impl` and `__libc_free` take 7.07 and 6.93 billion instructions. All of glibc's allocator takes 12.35 billion. That is 46% more instructions for the same 52 million allocations.
+- In the interpreter, musl's allocator takes 18.03 billion instructions: `__libc_malloc_impl` 7.07, `__libc_free` 6.93, `alloc_slot` 1.25, `__lock` and `__unlock` 1.27, `nontrivial_free` 0.48, `__libc_realloc` 0.19, and Rust's allocation wrappers and musl's `malloc` and `free` entry points 0.83. glibc's allocator, counted the same way, takes 12.35 billion. That is 46% more instructions for the same 52 million allocations.
 - `__lock` and `__unlock` take 944 ms of the musl run (10% of it) and nothing in the compile. The interpreter runs the program on a thread of its own with a 256 MiB stack (`on_interpreter_stack` in [crates/oska-run/src/lib.rs](../../crates/oska-run/src/lib.rs)). **Inference:** musl skips its allocator lock while a process has one thread and takes it once there are two, which is what the profiles show.
 - The small timing program agrees. Allocating and freeing a 64-byte `Vec` in a loop costs 11 ns with glibc and 23 ns with musl after a thread has started.
 
@@ -114,7 +114,7 @@ So the musl build does the same work with 9% more instructions, and takes 70% mo
 
 ### Cause 4: the rest
 
-Oska's own code takes 592 ms (15%) longer under musl for the same instructions. **Inference:** freshly mapped pages and a different heap layout cost cache and TLB misses. This VM reports hardware counters as not supported, so this cannot be proven here.
+Oska's own code takes 592 ms longer under musl (4,528 ms against 3,936 ms, a 15% rise, and 16% of the gap) for the same instructions. **Inference:** freshly mapped pages and a different heap layout cost cache and TLB misses. This VM reports hardware counters as not supported, so this cannot be proven here.
 
 ### Not a cause: `memcmp`
 
@@ -205,6 +205,8 @@ Not recommended:
 - **Running the interpreter on the main thread** to avoid musl's lock. The main thread's stack is limited (8 MiB by default), and deep Oska recursion needs the 256 MiB thread stack. It would remove only the lock (26% of the interpreter's gap).
 - **A third-party allocator crate.** The workspace has no external crates (the check step "no external crates").
 - **Replacing `memcpy`.** It needs `unsafe` code. Fixes 1 and 2 remove most of the calls instead.
+
+Follow-up tickets: to be filed.
 
 ## Open questions
 
