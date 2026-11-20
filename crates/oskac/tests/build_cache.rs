@@ -21,9 +21,12 @@ const TESTED: &str = "fn double(n: Int) -> Int {\n    n * 2\n}\n\ntest \"double 
 
 /// Whether `oskac run` and `oskac test` compile natively on this host,
 /// and so use native entries; elsewhere they interpret.
-const NATIVE_HOST: bool = cfg!(all(
-    any(target_os = "linux", target_os = "macos"),
-    any(target_arch = "aarch64", target_arch = "x86_64")
+const NATIVE_HOST: bool = cfg!(any(
+    all(
+        any(target_os = "linux", target_os = "macos"),
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    ),
+    all(windows, target_arch = "x86_64")
 ));
 
 /// A case: a fresh folder holding `files`, and its own cache folder.

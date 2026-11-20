@@ -70,9 +70,7 @@ fn assert_golden_in(case: &str, files: &[(&str, &str)], cwd: &str, args: &[&str]
         String::from_utf8_lossy(&output.stderr),
         written.iter().map(|w| format!("{w}\n")).collect::<String>(),
     );
-    let golden = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/golden/build")
-        .join(format!("{case}.txt"));
+    let golden = golden_file(case);
     if std::env::var_os("UPDATE_GOLDEN").is_some() {
         std::fs::create_dir_all(golden.parent().expect("a parent")).expect("a golden directory");
         std::fs::write(&golden, &actual).expect("should write the golden file");
@@ -85,6 +83,18 @@ fn assert_golden_in(case: &str, files: &[(&str, &str)], cwd: &str, args: &[&str]
         golden.display()
     );
     dir
+}
+
+/// The golden file of `case`: on Windows, `<case>.windows.txt` where it
+/// exists, as an executable there is named with `.exe` (#179).
+fn golden_file(case: &str) -> PathBuf {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/build");
+    let windows = dir.join(format!("{case}.windows.txt"));
+    if cfg!(windows) && windows.exists() {
+        windows
+    } else {
+        dir.join(format!("{case}.txt"))
+    }
 }
 
 fn assert_golden(case: &str, files: &[(&str, &str)], args: &[&str]) -> PathBuf {
@@ -140,6 +150,8 @@ fn a_package_builds_to_its_directory_name() {
     assert_golden("package_by_path", &files, &["build", "pkgs/greeter"]);
 }
 
+/// On Windows the executable is `greeter.exe`, beside the directory, so
+/// there the build succeeds.
 #[test]
 fn a_package_named_from_its_parent_cannot_overwrite_its_own_directory() {
     let files = package(HELLO);
