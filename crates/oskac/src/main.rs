@@ -443,6 +443,7 @@ fn main() -> ExitCode {
             };
             new::command(name, options, flags.json)
         }
+        ["new", ..] => new::usage(flags.json),
         ["hook", "claude", targets @ ..] if line.program_args.is_empty() => {
             hook::run(line.event.as_deref(), targets, flags.json)
         }

@@ -13,7 +13,7 @@
 //! capability it takes, so it has no unused authority.
 
 use crate::json::quote;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 /// The agent-setup templates, as the site publishes them.
@@ -67,13 +67,15 @@ pub struct Options {
     pub no_agent_files: bool,
 }
 
+/// The manifest of the package `name`.
+fn manifest(name: &str) -> String {
+    format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n")
+}
+
 /// The files of the package `name`, as (path in the package, contents),
 /// in the order they are written.
 fn files(name: &str, options: Options) -> Vec<(&'static str, String)> {
-    let mut files = vec![(
-        "oska.toml",
-        format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n"),
-    )];
+    let mut files = vec![("oska.toml", manifest(name))];
     if options.lib {
         files.push(("src/lib.osk", LIB_SOURCE.to_string()));
     } else {
@@ -86,15 +88,39 @@ fn files(name: &str, options: Options) -> Vec<(&'static str, String)> {
     files
 }
 
+/// Why `oskac new` writes nothing: the error code `--format=json` gives,
+/// and the message.
+#[derive(Debug, PartialEq, Eq)]
+struct Refusal {
+    code: &'static str,
+    message: String,
+}
+
+impl Refusal {
+    fn new(code: &'static str, message: String) -> Refusal {
+        Refusal { code, message }
+    }
+
+    /// The directory `name` is there and holds something.
+    fn not_empty(name: &str) -> Refusal {
+        Refusal::new(
+            "not_empty",
+            format!(
+                "the directory `{name}` is not empty; `oskac new` writes only into a new or \
+                 empty directory, so nothing was written"
+            ),
+        )
+    }
+}
+
 /// `oskac new <name>`: write the package, or refuse with nothing written.
 pub fn command(name: &str, options: Options, json: bool) -> ExitCode {
-    if let Err(refusal) = refusal(name) {
-        return fail(json, refusal.0, &refusal.1);
+    if let Err(refusal) = check(name) {
+        return fail(json, &refusal);
     }
     let files = files(name, options);
-    let dir = Path::new(name);
-    if let Err(err) = write(dir, &files) {
-        return fail(json, "io", &format!("cannot write `{name}`: {err}"));
+    if let Err(refusal) = write(name, &files) {
+        return fail(json, &refusal);
     }
     let written: Vec<&str> = files.iter().map(|(path, _)| *path).collect();
     if json {
@@ -113,14 +139,12 @@ pub fn command(name: &str, options: Options, json: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Why `oskac new` must not write the package `name`, as the error code
-/// `--format=json` gives and the message, or nothing. The name is checked
-/// as the manifest's `name` is (snake_case), so it is also a plain
-/// directory name, with no separator and no `..`.
-fn refusal(name: &str) -> Result<(), (&'static str, String)> {
-    let manifest = format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n");
-    if oska_check::parse_manifest("oska.toml", &manifest).is_err() {
-        return Err((
+/// Why `oskac new` must not write the package `name`, if it must not. The
+/// name is checked as the manifest's `name` is (snake_case), so it is also
+/// a plain directory name, with no separator and no `..`.
+fn check(name: &str) -> Result<(), Refusal> {
+    if oska_check::parse_manifest("oska.toml", &manifest(name)).is_err() {
+        return Err(Refusal::new(
             "invalid_name",
             format!(
                 "`{name}` is not a valid package name: a name is snake_case, lowercase \
@@ -131,56 +155,159 @@ fn refusal(name: &str) -> Result<(), (&'static str, String)> {
     }
     match std::fs::symlink_metadata(name) {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Ok(meta) if meta.is_dir() => match std::fs::read_dir(name).map(|mut e| e.next()) {
-            Ok(None) => Ok(()),
-            Ok(Some(_)) => Err((
-                "not_empty",
-                format!(
-                    "the directory `{name}` is not empty; `oskac new` writes only into a new \
-                     or empty directory, so nothing was written"
-                ),
-            )),
-            Err(err) => Err(("io", format!("cannot read the directory `{name}`: {err}"))),
-        },
-        Ok(_) => Err((
+        Ok(meta) if meta.is_dir() => {
+            if is_empty(Path::new(name)).map_err(|err| io(name, &err))? {
+                Ok(())
+            } else {
+                Err(Refusal::not_empty(name))
+            }
+        }
+        Ok(_) => Err(Refusal::new(
             "exists",
             format!(
                 "`{name}` already exists and is not a directory; `oskac new` writes only into \
                  a new or empty directory, so nothing was written"
             ),
         )),
-        Err(err) => Err(("io", format!("cannot look at `{name}`: {err}"))),
+        Err(err) => Err(io(name, &err)),
     }
 }
 
-/// Create `dir` and the `files` in it, each one new.
-fn write(dir: &Path, files: &[(&str, String)]) -> std::io::Result<()> {
-    use std::io::Write;
-    std::fs::create_dir_all(dir)?;
-    for (path, contents) in files {
-        let path = dir.join(path);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+fn is_empty(dir: &Path) -> std::io::Result<bool> {
+    Ok(std::fs::read_dir(dir)?.next().is_none())
+}
+
+/// A refusal by the file system, about `name`.
+fn io(name: &str, err: &std::io::Error) -> Refusal {
+    Refusal::new("io", format!("cannot write `{name}`: {err}"))
+}
+
+/// Write the `files` into the directory `name`: made here when it is not
+/// there, else looked at again, just before the first file, to be still an
+/// empty directory and not a symlink. On any failure, what this run made is
+/// removed again, and nothing that was there before is touched.
+fn write(name: &str, files: &[(&str, String)]) -> Result<(), Refusal> {
+    let dir = Path::new(name);
+    let mut created = Vec::new();
+    match std::fs::create_dir(dir) {
+        Ok(()) => created.push(dir.to_path_buf()),
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            let meta = std::fs::symlink_metadata(dir).map_err(|err| io(name, &err))?;
+            if !meta.is_dir() || !is_empty(dir).map_err(|err| io(name, &err))? {
+                return Err(Refusal::not_empty(name));
+            }
         }
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)?
-            .write_all(contents.as_bytes())?;
+        Err(err) => return Err(io(name, &err)),
+    }
+    let filled = fill(dir, files, &mut created);
+    if let Err(err) = filled {
+        undo(&created);
+        return Err(io(name, &err));
     }
     Ok(())
 }
 
-/// A refusal: the error code under `--format=json`, and why. Exit code 1.
-fn fail(json: bool, code: &str, message: &str) -> ExitCode {
+/// Write each of `files` new into `dir`, making the directories they need,
+/// and add each path it makes to `created`, in the order made.
+fn fill(dir: &Path, files: &[(&str, String)], created: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    use std::io::Write;
+    for (path, contents) in files {
+        let path = dir.join(path);
+        if let Some(parent) = path.parent().filter(|p| !p.exists()) {
+            std::fs::create_dir(parent)?;
+            created.push(parent.to_path_buf());
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        created.push(path);
+        file.write_all(contents.as_bytes())?;
+    }
+    Ok(())
+}
+
+/// Remove the paths in `created`, the newest first: files, and directories
+/// only when empty, so nothing another process put there is lost.
+fn undo(created: &[PathBuf]) {
+    for path in created.iter().rev() {
+        if path.is_dir() {
+            let _ = std::fs::remove_dir(path);
+        } else {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+/// A refusal: printed, as JSON under `--format=json`. Exit code 1.
+fn fail(json: bool, refusal: &Refusal) -> ExitCode {
     if json {
         outln!(
             "{{\"ok\":false,\"error\":{},\"message\":{}}}",
-            quote(code),
-            quote(message)
+            quote(refusal.code),
+            quote(&refusal.message)
         );
     } else {
-        eprintln!("oskac new: {message}");
+        eprintln!("oskac new: {}", refusal.message);
     }
     ExitCode::FAILURE
+}
+
+/// `oskac new` with no name, or more than one, or a flag it does not take:
+/// a usage error, exit code 2, as JSON under `--format=json`.
+pub fn usage(json: bool) -> ExitCode {
+    if json {
+        outln!(
+            "{{\"ok\":false,\"error\":\"usage\",\"message\":{}}}",
+            quote("give one package name: `oskac new <name> [--lib] [--no-agent-files] [--format=json]`")
+        );
+    } else {
+        eprint!("{}", crate::USAGE);
+    }
+    ExitCode::from(2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fill, undo};
+    use std::path::PathBuf;
+
+    /// A failure partway through leaves only what was there before: the
+    /// file in the way of the third file stops the run, and undoing it
+    /// removes the files and the directory it made, and keeps that file.
+    #[test]
+    fn a_failure_partway_removes_what_the_run_made_and_keeps_what_was_there() {
+        let dir = std::env::temp_dir().join(format!("oskac-new-undo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).expect("mkdir");
+        std::fs::write(dir.join("AGENTS.md"), "mine\n").expect("write");
+        let files = [
+            ("oska.toml", "manifest\n".to_string()),
+            ("src/main.osk", "main\n".to_string()),
+            ("AGENTS.md", "template\n".to_string()),
+            ("CLAUDE.md", "template\n".to_string()),
+        ];
+        let mut created: Vec<PathBuf> = Vec::new();
+        assert!(fill(&dir, &files, &mut created).is_err());
+        assert_eq!(
+            created,
+            [
+                dir.join("oska.toml"),
+                dir.join("src"),
+                dir.join("src/main.osk")
+            ]
+        );
+        undo(&created);
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .expect("read")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["AGENTS.md"]);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("AGENTS.md")).expect("read"),
+            "mine\n"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

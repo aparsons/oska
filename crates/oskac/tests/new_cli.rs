@@ -8,7 +8,7 @@ mod common;
 use std::path::Path;
 use std::process::{Command, Output};
 
-use common::portable::{output_of, Scratch};
+use common::portable::{literal_path, output_of, Scratch};
 use common::Json;
 
 fn oskac_in(dir: &Path, args: &[&str]) -> Output {
@@ -218,7 +218,10 @@ fn format_json_lists_the_files_written() {
 fn the_agent_files_are_the_published_agent_setup_templates_byte_for_byte() {
     let scratch = Scratch::new("oskac-new", "templates");
     assert_eq!(oskac_in(&scratch, &["new", "demo"]).status.code(), Some(0));
-    let published = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../site/agent-setup");
+    let published = literal_path(
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        &["..", "..", "site", "agent-setup"],
+    );
     for (written, template) in [
         ("AGENTS.md", "AGENTS.template.md"),
         ("CLAUDE.md", "CLAUDE.template.md"),
@@ -244,4 +247,58 @@ fn the_new_flags_belong_to_new_alone() {
         assert_eq!(refused.status.code(), Some(2), "{args:?}");
     }
     assert_eq!(files_under(&scratch), Vec::<String>::new());
+}
+
+#[test]
+fn a_new_with_no_name_or_two_names_is_a_usage_error_as_json_under_format_json() {
+    let scratch = Scratch::new("oskac-new", "usage-json");
+    for args in [
+        &["new", "--format=json"][..],
+        &["new", "a", "b", "--format=json"],
+    ] {
+        let refused = oskac_in(&scratch, args);
+        assert_eq!(refused.status.code(), Some(2), "{args:?}");
+        let report = Json::parse(&stdout(&refused));
+        assert_eq!(report.get("ok"), Some(&Json::Bool(false)), "{args:?}");
+        assert_eq!(
+            report.get("error"),
+            Some(&Json::Str("usage".to_string())),
+            "{args:?}"
+        );
+    }
+    assert_eq!(files_under(&scratch), Vec::<String>::new());
+}
+
+/// A symlink at `at` to the directory `target`, or `false` where this OS
+/// or user may not make one: Windows without the privilege or developer
+/// mode.
+fn symlink_dir(target: &Path, at: &Path) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, at);
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_dir(target, at);
+    #[cfg(not(any(unix, windows)))]
+    let made: std::io::Result<()> = Err(std::io::ErrorKind::Unsupported.into());
+    match made {
+        Ok(()) => true,
+        Err(err) => {
+            eprintln!("skipped: cannot make a symlink here: {err}");
+            false
+        }
+    }
+}
+
+#[test]
+fn a_symlink_in_the_way_is_refused_and_nothing_is_written_through_it() {
+    let scratch = Scratch::new("oskac-new", "symlink");
+    let elsewhere = scratch.join("elsewhere");
+    std::fs::create_dir(&elsewhere).expect("mkdir");
+    if !symlink_dir(&elsewhere, &scratch.join("demo")) {
+        return;
+    }
+    let refused = oskac_in(&scratch, &["new", "demo", "--format=json"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stdout(&refused));
+    let report = Json::parse(&stdout(&refused));
+    assert_eq!(report.get("error"), Some(&Json::Str("exists".to_string())));
+    assert_eq!(files_under(&elsewhere), Vec::<String>::new());
 }
