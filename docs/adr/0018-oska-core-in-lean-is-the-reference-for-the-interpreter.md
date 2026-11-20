@@ -2,7 +2,7 @@
 
 ## Decision
 
-A subset of Oska without generics or traits is formalized as **Oska Core**, a calculus written in Lean. Lean proves three theorems about it: progress, preservation and **authority safety** (running a function performs only effects of capability kinds in its authority). Proofs of trust rules come later, on the same calculus.
+A subset of Oska is formalized as **Oska Core**, a calculus written in Lean. It has no generics or traits, and it grows one construct at a time; the core IR export says which programs are in it. Lean proves three theorems about it: progress, preservation and **authority safety** (running a function performs only effects of capability kinds in its authority, or of kinds that its `cap fn` arguments captured; a function with no `cap fn` parameter, such as `main`, is bounded by its own authority alone). Proofs of trust rules come later, on the same calculus.
 
 Oska Core has an executable semantics. The checker exports each checked program that is in Oska Core as **core IR**, a versioned JSON form, and the Lean reference runs it. The interpreter must agree with the Lean reference on every runtime test whose program is in Oska Core, just as the native backend must agree with the interpreter (the differential suite). The export refuses a program outside Oska Core, and the test prints how many runtime tests it covered.
 
