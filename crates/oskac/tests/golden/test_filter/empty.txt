@@ -1,0 +1,5 @@
+$ oskac test crates/oskac/tests/fixtures/test_filter.osk --filter=
+exit: 2
+--- stdout
+--- stderr
+error: --filter takes a substring that is not empty

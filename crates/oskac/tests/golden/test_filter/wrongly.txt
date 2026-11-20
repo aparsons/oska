@@ -1,0 +1,10 @@
+$ oskac test crates/oskac/tests/fixtures/test_filter.osk --filter=wrongly
+exit: 1
+--- stdout
+test subtracts wrongly ... FAILED
+
+failures:
+test subtracts wrongly: crates/oskac/tests/fixtures/test_filter.osk:14:5: error[P0011]: assertion failed: `actual == expected`: actual 2, expected 3 (bytes 184..209)
+
+1 tests: 0 passed, 1 failed, 0 skipped, 2 filtered out
+--- stderr

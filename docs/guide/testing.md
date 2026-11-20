@@ -131,8 +131,34 @@ If the file does not check, no test runs and the report has no tests and the che
 | Code | Meaning |
 | --- | --- |
 | `0` | No test failed. Skipped tests do not count. |
-| `1` | A test failed, or the checker refused the file. |
+| `1` | A test failed, the checker refused the file, or `--filter` matched no test. |
 | `2` | The file uses something the interpreter cannot run yet (`E0371`, `E0380`). No test ran. |
+
+## Running some of the tests
+
+`--filter <substring>` runs only the tests whose names contain the substring, case-sensitive, so checking one fix costs one test. The tests it leaves out are neither run nor listed, and the summary says how many were filtered out. On the program above:
+
+```console cmd=test filter=adds
+test adds up ... ok
+
+1 tests: 1 passed, 0 failed, 0 skipped, 2 filtered out
+```
+
+With `--format=json` the report has `"filtered"`, the number of tests left out, after `skipped`:
+
+```console cmd=test json filter=adds
+{"tests":[{"name":"adds up","status":"passed","failure":null}],"passed":1,"failed":0,"skipped":0,"filtered":2,"diagnostics":[]}
+```
+
+A filter that matches no test is an error, with exit code 1, so a typo is never mistaken for a passing run:
+
+```console cmd=test filter=Adds stream=stderr
+error: no test name contains `Adds`; 3 tests filtered out
+```
+
+```sh
+oskac test app.osk --filter "gets it"
+```
 
 ## Integration tests
 

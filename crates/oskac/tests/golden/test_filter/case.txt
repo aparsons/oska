@@ -1,0 +1,5 @@
+$ oskac test crates/oskac/tests/fixtures/test_filter.osk --filter=Adds
+exit: 1
+--- stdout
+--- stderr
+error: no test name contains `Adds`; 3 tests filtered out

@@ -15,7 +15,8 @@
 //!   stdout of `oskac run` on it. `cmd=check` and `cmd=test` run those
 //!   commands instead. Extra words change the run: `stream=stderr` shows
 //!   stderr, `json` adds `--format=json`, `release` adds `--release`,
-//!   `integration` adds `--integration`, and `-- a b` passes arguments to the program. The
+//!   `integration` adds `--integration`, `filter=<text>` adds `--filter=<text>`,
+//!   and `-- a b` passes arguments to the program. The
 //!   exit code is not asserted.
 //! - ```` ```help ```` is the exact stdout of `oskac --help`.
 //! - ```` ```sh ```` blocks may use only `oskac` commands and flags that
@@ -316,6 +317,10 @@ fn every_console_and_help_block_shows_exactly_what_the_toolchain_prints() {
                     }
                     if block.has("integration") {
                         args.push("--integration");
+                    }
+                    let filter = block.option("filter").map(|f| format!("--filter={f}"));
+                    if let Some(filter) = &filter {
+                        args.push(filter);
                     }
                     let output = oskac_on(program, &program.body, &args, &block.program_args());
                     match block.option("stream") {

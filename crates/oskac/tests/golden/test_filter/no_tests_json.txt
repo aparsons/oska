@@ -1,0 +1,5 @@
+$ oskac test crates/oskac/tests/fixtures/test_filter_none.osk --filter=adds --format=json
+exit: 1
+--- stdout
+{"error":"the program has no tests","filter":"adds","filtered":0}
+--- stderr
