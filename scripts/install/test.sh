@@ -782,13 +782,14 @@ test_installs_the_musl_build_on_a_glibc_older_than_2_35() {
   assert_build 'glibc 2.31' musl false
   assert_build 'glibc 2.34' musl false
   assert_build 'glibc 1.99' musl false
+  assert_build 'glibc 2.34.9' musl false
 }
 
 test_installs_the_glibc_build_on_glibc_2_35_and_newer() {
   release 1.2.3
   latest 1.2.3
   local libc
-  for libc in 'glibc 2.35' 'glibc 2.41' 'glibc 3.0'; do
+  for libc in 'glibc 2.35' 'glibc 2.41' 'glibc 3.0' 'glibc 2.35.1' 'glibc 2.40.0'; do
     assert_build "$libc" gnu false
   done
 }
@@ -800,7 +801,7 @@ test_installs_the_musl_build_when_it_cannot_tell_the_c_library() {
   latest 1.2.3
   assert_build none musl false
   local text
-  for text in '' 2 '2.' '.35' 'x.y' '2.35x' '2.35.1' '-2.35' '2 .35' '99999999999999999999.1' \
+  for text in '' 2 '2.' '.35' 'x.y' '2.35x' '2.35.' '2.35.1.2' '2.35.x' '2.35.1x' '2..35' '-2.35' '2 .35' '99999999999999999999.1' \
     '2.99999999999999999999' '2.35;3.0'; do
     assert_build "garbled $text" musl false
   done
@@ -833,8 +834,20 @@ test_oska_libc_glibc_without_glibc_2_35_is_unsupported_libc() {
 
 # Any OSKA_LIBC other than glibc or musl is a usage error, refused before
 # anything is downloaded, on every platform: a fake curl records a call.
-# shellcheck disable=SC2016 # the fake expands $PWD when it runs
 test_refuses_an_unknown_oska_libc_before_any_download() {
+  refuses_an_unknown_oska_libc
+}
+
+# --check and --uninstall refuse it too, so OSKA_LIBC accepts only glibc
+# and musl wherever it is set.
+test_refuses_an_unknown_oska_libc_in_check_and_uninstall() {
+  refuses_an_unknown_oska_libc --check
+  refuses_an_unknown_oska_libc --uninstall
+}
+
+# refuses_an_unknown_oska_libc [args]
+# shellcheck disable=SC2016 # the fake expands $PWD when it runs
+refuses_an_unknown_oska_libc() {
   release 1.2.3
   latest 1.2.3
   local value os
@@ -845,7 +858,7 @@ test_refuses_an_unknown_oska_libc_before_any_download() {
       printf '#!/bin/sh\ncase "$1" in -s) echo %s ;; -m) echo arm64 ;; esac\n' "$os" >fakebin/uname
       printf '#!/bin/sh\necho called >>"%s/curl-called"\nexit 1\n' "$PWD" >fakebin/curl
       chmod +x fakebin/*
-      if OSKA_LIBC=$value PATH="$PWD/fakebin:$PATH" install --json >out.json; then
+      if OSKA_LIBC=$value PATH="$PWD/fakebin:$PATH" install --json "$@" >out.json; then
         fail "on $os installed with OSKA_LIBC='$value'"
       else
         [ $? = 2 ] || fail "on $os OSKA_LIBC='$value' did not exit 2"
@@ -864,7 +877,7 @@ test_refuses_an_unknown_oska_libc_before_any_download() {
 test_an_empty_oska_libc_chooses_as_if_unset() {
   release 1.2.3
   latest 1.2.3
-  OSKA_LIBC= assert_build musl musl false
+  OSKA_LIBC='' assert_build musl musl false
 }
 
 # --check and --uninstall read a receipt with the new fields, and one

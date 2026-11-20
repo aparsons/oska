@@ -224,8 +224,9 @@ detect_platform() {
 }
 
 # check_libc_choice: OSKA_LIBC, if set and not empty, is glibc or musl.
-# Anything else is refused before anything is downloaded, on every platform,
-# so a typo never installs a build nobody asked for.
+# Anything else is refused before anything is downloaded or removed, in
+# every mode and on every platform, so a typo never installs a build nobody
+# asked for.
 check_libc_choice() {
   case ${OSKA_LIBC:-} in
     '' | glibc | musl) ;;
@@ -235,8 +236,8 @@ check_libc_choice() {
 
 # glibc_found: succeeds only when this system's C library is shown to be
 # glibc $MIN_GLIBC or newer. Anything it cannot read for certain (no
-# getconf, an ldd that is not glibc's, a version that is not plain
-# <major>.<minor>) fails, which chooses the musl build: that one runs on
+# getconf, an ldd that is not glibc's, a version that is not
+# <major>.<minor> or <major>.<minor>.<patch>) fails, which chooses the musl build: that one runs on
 # any Linux, so not knowing is safe.
 glibc_found() {
   glibc=$(getconf GNU_LIBC_VERSION 2>/dev/null) || glibc=
@@ -253,6 +254,16 @@ glibc_found() {
   esac
   glibc_major=${glibc%%.*}
   glibc_minor=${glibc#*.}
+  # A patch part, if any, is checked and then set aside: the build needs
+  # only the major and minor version.
+  case $glibc_minor in
+    *.*)
+      glibc_patch=${glibc_minor#*.}
+      glibc_minor=${glibc_minor%%.*}
+      case $glibc_patch in
+        '' | *[!0-9]* | ?????*) return 1 ;;
+      esac ;;
+  esac
   # Each part is 1 to 4 digits, so the comparisons below cannot overflow.
   case $glibc_major in
     '' | *[!0-9]* | ?????*) return 1 ;;
@@ -1215,6 +1226,8 @@ main() {
     esac
     shift
   done
+  # In every mode, so a bad value is refused wherever it is set.
+  check_libc_choice
   # Install is the default mode; --check and --uninstall are the others.
   # --version and --allow-downgrade belong to install alone.
   if [ -n "$mode" ]; then
@@ -1229,9 +1242,6 @@ main() {
   fi
   [ "$allow_downgrade" = 0 ] || [ -n "$requested" ] ||
     fail usage "--allow-downgrade needs --version naming the release to go back to"
-  if [ "$mode" != --check ]; then
-    check_libc_choice
-  fi
 
   case $RELEASE_KEY in
     ssh-ed25519\ *) ;;

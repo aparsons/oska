@@ -34,5 +34,5 @@ The musl build runs with no C library. On x86_64 it passed the confinement tests
 
 - The release workflow builds six Linux assets in place of two, gives the musl rows a `--target`, and checks that a musl build has no `PT_INTERP` and no `DT_NEEDED`. The glibc check (no symbol newer than `GLIBC_2.35`) remains for the glibc build. The release smoke-tests the musl build on both processors, in `alpine` and in the image.
 - Every pull request builds the musl build on x86_64 and runs the `oska-sys` and `oska-run` tests and an empty-root smoke test with it.
-- The signed index has one entry for each build. The installer no longer stops with `unsupported_libc`.
+- The signed index has one entry for each build. The installer stops with `unsupported_libc` only when `OSKA_LIBC=glibc` forces the glibc build on a system without glibc 2.35 or newer; otherwise it installs the musl build where the glibc build cannot run.
 - The release job gets `packages: write` to push the image.
