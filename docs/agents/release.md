@@ -50,7 +50,7 @@ On a pull request, `release.yml` does a dry run: the same builds and image smoke
 
 Every row also checks that `uname -m` is the processor its name says, and that the binary prints its version. `scripts/release/check-linux-build.sh gnu|musl <binary>` does the two Linux checks; run it by hand on a downloaded Linux asset to check it again. `SHA256SUMS` lists all seven, and `oskac-image-digest` (see [The container image](#the-container-image)), so the signature covers each. ADR 0022 records why Linux has two builds. `scripts/release/check-linux-build-test.sh` tests both checks.
 
-**A breaking rename.** Releases before the two builds shipped `oskac-linux-x86_64` and `oskac-linux-aarch64`. From the first release with them, those files are gone, and `latest.json`'s `binaries` has no `linux-x86_64` or `linux-aarch64` key: it has `linux-x86_64-gnu`, `linux-x86_64-musl`, `linux-aarch64-gnu` and `linux-aarch64-musl` in their place (the macOS and Windows keys are unchanged). Anything that reads the old keys or downloads the old names breaks, an installer saved from before the rename included (`download_failed`); that release's notes, "Upgrading to v0.6.0" in `docs/guide/install.md`, say so.
+**A breaking rename.** Releases before the two builds shipped `oskac-linux-x86_64` and `oskac-linux-aarch64`. From the first release with them, those files are gone, and `latest.json`'s `binaries` has no `linux-x86_64` or `linux-aarch64` key: it has `linux-x86_64-gnu`, `linux-x86_64-musl`, `linux-aarch64-gnu` and `linux-aarch64-musl` in their place (the macOS and Windows keys are unchanged). Anything that reads the old keys or downloads the old names breaks, an installer saved from before the rename included (`download_failed`); that release's notes, "Upgrading to v0.7.0" in `docs/guide/install.md`, say so.
 
 ## The container image
 
@@ -172,7 +172,7 @@ Nothing in the repo can check these settings, so verify them before a release.
    - The warning `no release is published` means the deploy ran before GitHub listed the new release ([#89](https://github.com/aparsons/oska/issues/89)).
    - Run `gh workflow run pages.yml --ref main` and check again.
    - A `::warning::` that the index has expired, with the smoke job failing on `stale_index`, means the monthly re-sign has not run: run it now (see [The monthly re-sign](#the-monthly-re-sign)).
-5. **Name the new release in the docs** in a normal PR: "The latest release is **vX.Y.Z**" in `docs/guide/install.md` and `docs/guide/index.md`, which `crates/oskac/tests/front_door.rs` holds to the same version, with an "Upgrading to vX.Y.Z" section in the install guide. For the first release with the two Linux builds, that section already exists ("Upgrading to v0.6.0"; rename it if the release is not v0.6.0), and "Verify a release by hand" must download `oskac-linux-x86_64-gnu` in place of `oskac-linux-x86_64` once it names that release.
+5. **Name the new release in the docs** in a normal PR: "The latest release is **vX.Y.Z**" in `docs/guide/install.md` and `docs/guide/index.md`, which `crates/oskac/tests/front_door.rs` holds to the same version, with an "Upgrading to vX.Y.Z" section in the install guide. For the first release with the two Linux builds, that section already exists ("Upgrading to v0.7.0"; rename it if the release is not v0.7.0), and "Verify a release by hand" must download `oskac-linux-x86_64-gnu` in place of `oskac-linux-x86_64` once it names that release.
 
 ## Checking a published release
 
