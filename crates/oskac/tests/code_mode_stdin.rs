@@ -186,9 +186,20 @@ fn run_dash_runs_the_snippet_with_stdin_as_its_path_and_its_own_stdin_empty() {
         args.extend_from_slice(extra);
         args.extend_from_slice(&["--", "x", "y"]);
         let output = case.piped(&args, ECHO.as_bytes());
+        let mut shown = shown(&output);
+        // On Windows a native run's `args.get(0)` is its temporary
+        // executable, as Rust cannot set it there (#475).
+        if cfg!(windows) && extra.is_empty() {
+            if let Some(start) = shown.find("--- stdout\n") {
+                let line = start + "--- stdout\n".len();
+                if let Some(end) = shown[line..].find("\\program.exe ") {
+                    let end = line + end + "\\program.exe".len();
+                    shown.replace_range(line..end, "<stdin>");
+                }
+            }
+        }
         assert_eq!(
-            shown(&output),
-            "exit: 0\n--- stdout\n<stdin> x end of file\n--- stderr\n",
+            shown, "exit: 0\n--- stdout\n<stdin> x end of file\n--- stderr\n",
             "{args:?}"
         );
     }
