@@ -1274,7 +1274,13 @@ main() {
     fi
   fi
 
+  # On Linux a release has a glibc build (-gnu) and a musl build (-musl)
+  # (ADR 0022). check_glibc has found glibc $MIN_GLIBC or newer, so the
+  # glibc build runs here.
   asset=oskac-$platform
+  if [ "$os" = linux ]; then
+    asset=$asset-gnu
+  fi
   release=$site/releases/$tag
   say "Downloading oskac $version for $platform from $release/" >&2
   for f in SHA256SUMS SHA256SUMS.sig "$asset"; do

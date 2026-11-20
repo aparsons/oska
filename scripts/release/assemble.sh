@@ -18,10 +18,14 @@
 
 set -euo pipefail
 
-# Every release ships exactly these files: oskac-<os>-<arch>[.exe].
+# Every release ships exactly these files: oskac-<os>-<arch>[.exe], and on
+# Linux two builds per processor (ADR 0022): oskac-linux-<arch>-gnu, the
+# glibc build, and oskac-linux-<arch>-musl, the static musl build.
 ASSETS=(
-  oskac-linux-x86_64
-  oskac-linux-aarch64
+  oskac-linux-x86_64-gnu
+  oskac-linux-x86_64-musl
+  oskac-linux-aarch64-gnu
+  oskac-linux-aarch64-musl
   oskac-macos-x86_64
   oskac-macos-aarch64
   oskac-windows-x86_64.exe

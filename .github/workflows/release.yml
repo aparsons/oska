@@ -1,9 +1,12 @@
 # Build, sign and publish oskac releases.
 #
 # Pushing a tag vX.Y.Z (the version oskac reports, from Cargo.toml):
-#   1. builds oskac natively for Linux (on Ubuntu 22.04, so the binaries
-#      need glibc 2.35 or newer), macOS (x86_64, aarch64) and Windows
-#      (x86_64);
+#   1. builds oskac natively for Linux, macOS (x86_64, aarch64) and Windows
+#      (x86_64). Linux has two builds per processor (ADR 0022): the glibc
+#      build, oskac-linux-<arch>-gnu, on Ubuntu 22.04, so it needs glibc
+#      2.35 or newer; and the musl build, oskac-linux-<arch>-musl, from
+#      the <arch>-unknown-linux-musl target, static, so it runs on any
+#      Linux. scripts/release/check-linux-build.sh checks each;
 #   2. assembles the binaries and SHA256SUMS, whose first line names the
 #      tag (`# oska-release vX.Y.Z`);
 #   3. signs SHA256SUMS with the RELEASE_SIGNING_KEY secret
@@ -72,14 +75,29 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux builds run on the oldest supported Ubuntu, so the binaries
-          # need only its glibc (2.35); install.sh refuses anything older.
-          - asset: oskac-linux-x86_64
+          # The glibc builds run on the oldest supported Ubuntu, so they
+          # need only its glibc (2.35); install.sh takes them only there.
+          - asset: oskac-linux-x86_64-gnu
             runner: ubuntu-22.04
             machine: x86_64
-          - asset: oskac-linux-aarch64
+            linux: gnu
+          - asset: oskac-linux-aarch64-gnu
             runner: ubuntu-22.04-arm
             machine: aarch64
+            linux: gnu
+          # The musl builds are static: no dynamic loader, no shared
+          # library, so they run on any Linux. Built natively too, with
+          # the musl target of the pinned Rust.
+          - asset: oskac-linux-x86_64-musl
+            runner: ubuntu-22.04
+            machine: x86_64
+            linux: musl
+            target: x86_64-unknown-linux-musl
+          - asset: oskac-linux-aarch64-musl
+            runner: ubuntu-22.04-arm
+            machine: aarch64
+            linux: musl
+            target: aarch64-unknown-linux-musl
           - asset: oskac-macos-x86_64
             runner: macos-15-intel
             machine: x86_64
@@ -94,18 +112,32 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - run: cargo build --release --locked -p oskac
+      # Per job, not in rust-toolchain.toml, so clones do not download it.
+      - name: Add the musl target
+        if: matrix.target != ''
+        env:
+          TARGET: ${{ matrix.target }}
+        run: rustup target add "$TARGET"
+      - name: Build
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo build --release --locked -p oskac ${TARGET:+--target "$TARGET"}
       - name: Name the binary for its target
         shell: bash
         env:
           ASSET: ${{ matrix.asset }}
           MACHINE: ${{ matrix.machine }}
+          LINUX_BUILD: ${{ matrix.linux }}
+          TARGET: ${{ matrix.target }}
         run: |
           # A runner label that moves to other hardware must fail the build,
           # not ship a binary under the wrong name.
           test "$(uname -m)" = "$MACHINE"
           if [ "$RUNNER_OS" = Windows ]; then
             bin=target/release/oskac.exe
+          elif [ -n "$TARGET" ]; then
+            bin=target/$TARGET/release/oskac
           else
             bin=target/release/oskac
           fi
@@ -113,14 +145,10 @@ jobs:
           cp "$bin" "dist/$ASSET"
           "dist/$ASSET" --version
           if [ "$RUNNER_OS" = Linux ]; then
-            # The newest glibc symbol version the binary needs must not be
-            # newer than the 2.35 the install guide and install.sh promise.
-            needs=$(objdump -T "dist/$ASSET" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1)
-            echo "dist/$ASSET needs $needs"
-            if ! printf '%s\n' "$needs" GLIBC_2.35 | sort -V -C; then
-              echo "::error::dist/$ASSET needs $needs, newer than the documented glibc 2.35"
-              exit 1
-            fi
+            # gnu: no glibc symbol newer than the 2.35 the install guide
+            # and install.sh promise. musl: no PT_INTERP and no DT_NEEDED,
+            # so it runs with no C library.
+            scripts/release/check-linux-build.sh "$LINUX_BUILD" "dist/$ASSET"
           fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -145,8 +173,8 @@ jobs:
       - name: Name the release
         id: tag
         run: |
-          chmod +x builds/oskac-linux-x86_64
-          built=$(builds/oskac-linux-x86_64 --version)
+          chmod +x builds/oskac-linux-x86_64-gnu
+          built=$(builds/oskac-linux-x86_64-gnu --version)
           if [ "$GITHUB_EVENT_NAME" = push ]; then
             tag=$GITHUB_REF_NAME
             if [ "$built" != "oskac ${tag#v}" ]; then

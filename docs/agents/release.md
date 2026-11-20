@@ -6,7 +6,8 @@ The maintainer runbook for cutting a release, checking it, and keeping the signi
 
 ```text
 git tag vX.Y.Z on main ─▶ release.yml
-  build      5 native targets (Linux on ubuntu-22.04 / -arm: glibc ≤ 2.35 enforced)
+  build      7 native builds: Linux gnu and musl on ubuntu-22.04 / -arm, macOS, Windows
+             (check-linux-build.sh: gnu needs glibc ≤ 2.35, musl is static)
   assemble   SHA256SUMS: line 1 "# oska-release vX.Y.Z", then "<sha256>  <file>" per binary
   sign       env "release": ssh-keygen -Y sign -n oska-release with RELEASE_SIGNING_KEY,
              then sign-index.sh: the next release index, -n oska-index, same key
@@ -26,6 +27,19 @@ monthly (1st, 05:17 UTC) or by hand on main ─▶ resign-index.yml
 ```
 
 On a pull request, `release.yml` does a dry run: the same builds, signed with a throwaway key (the index too, as if none were published), and nothing published.
+
+## The release assets
+
+`scripts/release/assemble.sh` lists them, and a release ships exactly these, each under its own key in `latest.json`'s `binaries` (the name without `oskac-` and `.exe`):
+
+| Asset | Build | Checked in the build job |
+|---|---|---|
+| `oskac-linux-x86_64-gnu`, `oskac-linux-aarch64-gnu` | the glibc build, on `ubuntu-22.04` / `-arm` | no glibc symbol newer than `GLIBC_2.35` |
+| `oskac-linux-x86_64-musl`, `oskac-linux-aarch64-musl` | the musl build, `--target <arch>-unknown-linux-musl` on the same runners | no `PT_INTERP` and no `DT_NEEDED`: static, so it runs on any Linux |
+| `oskac-macos-x86_64`, `oskac-macos-aarch64` | on `macos-15-intel` / `macos-latest` | |
+| `oskac-windows-x86_64.exe` | on `windows-latest` | |
+
+Every row also checks that `uname -m` is the processor its name says, and that the binary prints its version. `scripts/release/check-linux-build.sh gnu|musl <binary>` does the two Linux checks; run it by hand on a downloaded Linux asset to check it again. `SHA256SUMS` lists all seven, so the signature covers each. ADR 0022 records why Linux has two builds. Releases before the two builds shipped `oskac-linux-x86_64` and `oskac-linux-aarch64`, and an installer saved from before then cannot install a release after it (`download_failed`).
 
 ## The release index
 
@@ -111,7 +125,7 @@ Nothing in the repo can check these settings, so verify them before a release.
 ## Checking a published release
 
 - `curl -fsS https://oskalang.dev/latest.json` reports `"version": "X.Y.Z"`, `"tag": "vX.Y.Z"` and the key's `"signing_key_fingerprint"`.
-- `/releases/vX.Y.Z/` serves `SHA256SUMS`, `SHA256SUMS.sig` and the 5 binaries.
+- `/releases/vX.Y.Z/` serves `SHA256SUMS`, `SHA256SUMS.sig` and the 7 binaries (see [The release assets](#the-release-assets)).
 - Verify the signature against the committed key:
   ```
   printf 'oska-release %s\n' "$(cat site/oska-release.pub)" > allowed

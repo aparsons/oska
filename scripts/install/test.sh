@@ -52,7 +52,7 @@ run_test() {
   fi
 }
 
-ASSETS="oskac-linux-aarch64 oskac-linux-x86_64 oskac-macos-aarch64 oskac-macos-x86_64 oskac-windows-x86_64.exe"
+ASSETS="oskac-linux-aarch64-gnu oskac-linux-aarch64-musl oskac-linux-x86_64-gnu oskac-linux-x86_64-musl oskac-macos-aarch64 oskac-macos-x86_64 oskac-windows-x86_64.exe"
 
 sha256() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -81,6 +81,17 @@ host_platform() {
   echo "$os-$arch"
 }
 
+# The release asset the installer should download on this machine: on
+# Linux the glibc build, the one the installer takes on glibc 2.35 or newer.
+host_asset() {
+  local platform
+  platform=$(host_platform)
+  case $platform in
+    linux-*) echo "oskac-$platform-gnu" ;;
+    *) echo "oskac-$platform" ;;
+  esac
+}
+
 # Writes the throwaway release key ./key and ./key.pub, once.
 release_key() {
   [ -f key ] || ssh-keygen -q -t ed25519 -N '' -C oska-release-test -f key
@@ -89,13 +100,14 @@ release_key() {
 # Publishes release <version> in ./site/releases/v<version>/, as
 # scripts/release/assemble.sh and sign.sh lay it out: SHA256SUMS starts
 # with the signed tag line. Each fake binary is a script that prints
-# "oskac <reports>" (default: <version>), like the real `oskac --version`.
+# "oskac <reports>" (default: <version>), like the real `oskac --version`,
+# and names its asset in a comment, so each one differs.
 release() {
   local version=$1 reports=${2:-$1} dir="site/releases/v$1" asset
   release_key
   mkdir -p "$dir"
   for asset in $ASSETS; do
-    printf '#!/bin/sh\necho "oskac %s"\n' "$reports" >"$dir/$asset"
+    printf '#!/bin/sh\n# %s\necho "oskac %s"\n' "$asset" "$reports" >"$dir/$asset"
   done
   {
     printf '# oska-release v%s\n' "$version"
@@ -131,7 +143,8 @@ latest() {
     "ps1": "https://oskalang.dev/install.ps1"
   },
   "binaries": {
-    "linux-x86_64": "$url/oskac-linux-x86_64"
+    "linux-x86_64-gnu": "$url/oskac-linux-x86_64-gnu",
+    "linux-x86_64-musl": "$url/oskac-linux-x86_64-musl"
   }
 }
 JSON
@@ -249,7 +262,7 @@ test_the_receipt_wins_over_the_version_file() {
 test_a_tampered_receipt_cannot_vouch_for_a_tampered_binary() {
   with_good_install
   local asset evil
-  asset=site/releases/v1.3.0/oskac-$(host_platform)
+  asset=site/releases/v1.3.0/$(host_asset)
   printf 'evil\n' >>"$asset"
   evil=$(sha256 "$asset")
   jq --arg h "$evil" '.version = "1.3.0" | .tag = "v1.3.0" | .sha256 = $h | .files[0].sha256 = $h' \
@@ -444,14 +457,14 @@ with_good_install() {
 
 test_refuses_a_tampered_binary() {
   with_good_install
-  printf 'evil\n' >>"site/releases/v1.3.0/oskac-$(host_platform)"
+  printf 'evil\n' >>"site/releases/v1.3.0/$(host_asset)"
   assert_refused checksum_mismatch
 }
 
 test_refuses_checksums_rewritten_to_match_a_tampered_binary() {
   with_good_install
   local dir=site/releases/v1.3.0 asset
-  asset=oskac-$(host_platform)
+  asset=$(host_asset)
   printf '#!/bin/sh\necho evil\n' >"$dir/$asset"
   awk -v f="$asset" -v h="$(sha256 "$dir/$asset")" '$2 == f {$1 = h; print h "  " f; next} {print}' \
     "$dir/SHA256SUMS" >sums
@@ -483,7 +496,7 @@ test_refuses_a_release_without_a_signature() {
 test_refuses_a_binary_the_checksums_do_not_list() {
   with_good_install
   local dir=site/releases/v1.3.0
-  grep -v "oskac-$(host_platform)\$" "$dir/SHA256SUMS" >sums
+  grep -v "$(host_asset)\$" "$dir/SHA256SUMS" >sums
   mv sums "$dir/SHA256SUMS"
   sign "$dir"
   assert_refused checksum_mismatch
@@ -607,7 +620,7 @@ test_never_writes_through_a_symlink_planted_in_the_bin_directory() {
 test_an_interrupted_install_leaves_nothing_behind() {
   with_good_install
   local dir=site/releases/v1.3.0 asset sig pid status waited
-  asset=oskac-$(host_platform)
+  asset=$(host_asset)
   printf '#!/bin/sh\n: >"%s/started"\nsleep 2\necho "oskac 1.3.0"\n' "$PWD" >"$dir/$asset"
   awk -v f="$asset" -v h="$(sha256 "$dir/$asset")" '$2 == f {print h "  " f; next} {print}' \
     "$dir/SHA256SUMS" >sums
@@ -745,6 +758,8 @@ test_installs_on_glibc_2_35_and_newer() {
     fake_linux "$libc"
     PATH="$PWD/fakebin:$PATH" install --json >out.json || fail "refused $libc: $(cat out.json)"
     [ "$(jq -r .platform out.json)" = linux-x86_64 ] || fail "platform is not linux-x86_64"
+    cmp site/releases/v1.2.3/oskac-linux-x86_64-gnu "$(installed)" ||
+      fail "on $libc it did not install the glibc build, oskac-linux-x86_64-gnu"
   done
 }
 
