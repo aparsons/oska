@@ -234,6 +234,47 @@ pub fn assert_same(case: &Case) -> Outcome {
     native
 }
 
+/// [`assert_same`] for runaway recursion (`P0021`): the same outcome
+/// but for the count of frames left out. A debug build's interpreter
+/// may run out of its own stack before 50,000 calls nest, so how deep
+/// its calls were when it panicked depends on the host and on how much
+/// stack each call takes (`docs/runtime.md`, `P0021`). Every other byte,
+/// the frames listed included, is the same. Returns both outcomes,
+/// interpreter's first.
+pub fn assert_same_but_depth(case: &Case) -> (Outcome, Outcome) {
+    let (interpreted, native) = run(case);
+    assert!(
+        without_depth(&interpreted) == without_depth(&native),
+        "case `{}`: the backends differ\n--- interpreter\n{interpreted:#?}\n--- native\n{native:#?}",
+        case.name
+    );
+    (interpreted, native)
+}
+
+/// `outcome` with the count of frames left out masked as `N`, in the
+/// human report (`    ... n more frames`) and in JSON (`frames_omitted`).
+fn without_depth(outcome: &Outcome) -> Outcome {
+    let mut masked = outcome.clone();
+    masked.stderr = outcome
+        .stderr
+        .lines()
+        .map(|line| {
+            let line = match line.strip_prefix("    ... ") {
+                Some(rest) if rest.ends_with(" more frames") => "    ... N more frames".to_string(),
+                _ => line.to_string(),
+            };
+            match line.split_once("\"frames_omitted\":") {
+                Some((head, tail)) => {
+                    let rest = tail.trim_start_matches(|c: char| c.is_ascii_digit());
+                    format!("{head}\"frames_omitted\":N{rest}\n")
+                }
+                None => format!("{line}\n"),
+            }
+        })
+        .collect();
+    masked
+}
+
 /// Build `case` in `root` with `--target` for every target with a
 /// backend but the host's, and fail on a refusal: what a host that cannot
 /// run another target's code can check of it.

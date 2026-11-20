@@ -19,7 +19,7 @@ use std::process::Command;
 
 use common::portable::Scratch;
 use common::Json;
-use differential::{assert_same, Case};
+use differential::{assert_same, assert_same_but_depth, Case};
 
 /// A division by zero two calls below `main`.
 const TWO_DEEP: &str = "fn half(n: Int) -> Int {
@@ -164,14 +164,20 @@ fn a_panic_three_calls_deep_names_the_closure_on_its_way() {
 
 #[test]
 fn a_deep_recursion_panic_reports_a_bounded_list_and_the_count_left_out() {
+    // A debug build's interpreter may run out of its own stack before
+    // 50,000 calls nest, so only the count left out may differ between
+    // the backends; native code's is exact.
     let case = Case::file("frames_runaway_json", RUNAWAY).with_run_flags(&["--format=json"]);
-    let outcome = assert_same(&case);
-    let (shown, omitted) = frames(&outcome.stderr);
-    assert_eq!(shown.len(), 20, "{outcome:#?}");
-    assert!(shown.iter().all(|f| f == "down@2:5"), "{shown:?}");
+    let (interpreted, native) = assert_same_but_depth(&case);
+    for outcome in [&interpreted, &native] {
+        let (shown, omitted) = frames(&outcome.stderr);
+        assert_eq!(shown.len(), 20, "{outcome:#?}");
+        assert!(shown.iter().all(|f| f == "down@2:5"), "{shown:?}");
+        assert!(omitted > 0, "{outcome:#?}");
+    }
     // 50,000 calls of `down` nest, and `main` called the first: 50,001.
-    assert_eq!(omitted, 50_001 - 20, "{outcome:#?}");
-    let human = assert_same(&Case::file("frames_runaway", RUNAWAY));
+    assert_eq!(frames(&native.stderr).1, 50_001 - 20, "{native:#?}");
+    let (_, human) = assert_same_but_depth(&Case::file("frames_runaway", RUNAWAY));
     assert!(
         human
             .stderr

@@ -302,13 +302,22 @@ fn deep_but_bounded_recursion_runs() {
 
 #[test]
 fn runaway_recursion_panics_with_p0021_instead_of_crashing() {
-    assert_panics(
+    // A debug build's interpreter may run out of its own stack before
+    // 50,000 calls nest, so only the count of frames left out may differ.
+    let (interpreted, native) = differential::assert_same_but_depth(&Case::file(
         "runaway_recursion",
         &recursing(1_000_000),
-        "",
-        "main.osk:2:32: error[P0021]: calls nest too deep: is this recursion missing its \
-         base case? (bytes 56..67)\n",
-    );
+    ));
+    for outcome in [&interpreted, &native] {
+        assert_eq!(outcome.stdout, "", "{outcome:#?}");
+        assert_eq!(
+            differential::without_frames(&outcome.stderr),
+            "main.osk:2:32: error[P0021]: calls nest too deep: is this recursion missing its \
+             base case? (bytes 56..67)\n",
+            "{outcome:#?}"
+        );
+        assert_eq!(outcome.exit_code, Some(101), "{outcome:#?}");
+    }
 }
 
 /// The interpreter's limit is `oska_run`'s `MAX_CALL_DEPTH`, but a debug

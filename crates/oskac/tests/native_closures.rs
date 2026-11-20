@@ -358,35 +358,19 @@ fn runaway_recursion_through_a_function_value_panics_with_p0021() {
     // native code's: a debug build's interpreter runs out of it before
     // 50,000 calls nest (`docs/runtime.md`, `P0021`), so the count of
     // frames left out may differ. Every other byte is the same.
-    let (interpreted, native) = differential::run(&Case::file("value_runaway", &runaway));
-    let without_count = |outcome: &differential::Outcome| {
-        let mut outcome = outcome.clone();
-        outcome.stderr = outcome
-            .stderr
-            .lines()
-            .filter(|line| !line.ends_with(" more frames"))
-            .map(|line| format!("{line}\n"))
-            .collect();
-        outcome
-    };
-    assert_eq!(without_count(&interpreted), without_count(&native));
-    let frame = "    at down (main.osk:11:32)\n";
-    assert_eq!(
-        without_count(&native).stderr,
-        format!(
-            "main.osk:11:32: error[P0021]: calls nest too deep: is this recursion missing its \
-             base case? (bytes 203..211)\n{}",
-            frame.repeat(20)
-        ),
-        "{native:#?}"
-    );
+    let (interpreted, native) =
+        differential::assert_same_but_depth(&Case::file("value_runaway", &runaway));
     for outcome in [&interpreted, &native] {
         assert_eq!(outcome.exit_code, Some(101), "{outcome:#?}");
-        assert!(outcome.stderr.ends_with(" more frames\n"), "{outcome:#?}");
     }
     // Natively, `down` nests 50,000 calls deep, and `main` made the first.
-    assert!(
-        native.stderr.ends_with("    ... 49981 more frames\n"),
+    assert_eq!(
+        native.stderr,
+        format!(
+            "main.osk:11:32: error[P0021]: calls nest too deep: is this recursion missing its \
+             base case? (bytes 203..211)\n{}    ... 49981 more frames\n",
+            "    at down (main.osk:11:32)\n".repeat(20)
+        ),
         "{native:#?}"
     );
 }

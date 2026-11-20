@@ -320,7 +320,14 @@ fn every_panic_a_program_can_reach_reports_the_interpreters_code_and_location() 
             "{items}\n\nfn main(io: Stdout, env: Env) {{\n    \
              let _ = io.println(\"before\")\n{body}\n}}\n"
         );
-        let outcome = assert_same(&Case::file(&format!("panic_{code}"), &src));
+        let case = Case::file(&format!("panic_{code}"), &src);
+        // A debug build's interpreter may run out of its own stack before
+        // `P0021`'s 50,000 calls nest: the count of frames left out may differ.
+        let outcome = if code == "P0021" {
+            differential::assert_same_but_depth(&case).1
+        } else {
+            assert_same(&case)
+        };
         assert_eq!(outcome.stdout, "before\n", "{code}: {outcome:#?}");
         assert!(
             outcome.stderr.starts_with("main.osk:")
