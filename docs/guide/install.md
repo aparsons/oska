@@ -1,6 +1,6 @@
 # Install
 
-Oska is pre-alpha. The latest release is **v0.5.0**. You can install `oskac`, the compiler and runner, from a signed binary with a one-line installer, or [build it from source](#build-from-source).
+Oska is pre-alpha. The latest release is **v0.6.0**. You can install `oskac`, the compiler and runner, from a signed binary with a one-line installer, or [build it from source](#build-from-source).
 
 ## One-line installers
 
@@ -20,7 +20,7 @@ What the installers do:
 
 - **They never prompt.** They are safe to run from a script, a CI job, or an AI agent.
 - **They install to `~/.oska/bin`.** Set `OSKA_HOME` to install into `$OSKA_HOME/bin` instead. They don't change your `PATH`; if `~/.oska/bin` is not on it, they print the line to add.
-- **They verify before they install.** The installer checks the SSH signature on `SHA256SUMS` (`ssh-keygen -Y verify`, so it needs OpenSSH 8.1 or newer) against the release key built into the installer. The signed file's first line, `# oska-release v0.5.0`, names the release, and it must be the one the installer asked for, so an old release cannot be served as a newer one. Then the installer checks the download's SHA-256 checksum against `SHA256SUMS`, and checks that the binary reports the expected version. If any check fails, nothing is installed and the installer exits with a non-zero status.
+- **They verify before they install.** The installer checks the SSH signature on `SHA256SUMS` (`ssh-keygen -Y verify`, so it needs OpenSSH 8.1 or newer) against the release key built into the installer. The signed file's first line, `# oska-release v0.6.0`, names the release, and it must be the one the installer asked for, so an old release cannot be served as a newer one. Then the installer checks the download's SHA-256 checksum against `SHA256SUMS`, and checks that the binary reports the expected version. If any check fails, nothing is installed and the installer exits with a non-zero status.
 - **They take the latest release from a signed index.** Without `--version`, the installer reads `release-index.json`, which names the latest release and is signed by the release key in its own namespace, `oska-index`. It refuses an index that is not signed by that key (`bad_index`), one that has expired (`stale_index`), and one older than the last index this install accepted (`rollback_refused`). It warns when the index expires within 30 days. `--version` does not read the index. Until the site publishes its first index, the installer reads the unsigned `latest.json` instead and reports `index_verified: false`.
 - **They download over HTTPS only.** They refuse a redirect to a plain `http://` URL.
 - **They never downgrade by accident.** If the release they would install is older than the installed `oskac`, they stop with `downgrade_refused` and install nothing. To go back to an older release, name it with `--version` and add `--allow-downgrade`.
@@ -31,19 +31,19 @@ What the installers do:
 To pass options through the pipe:
 
 ```sh
-curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.5.0 --json
+curl -fsSL https://oskalang.dev/install.sh | sh -s -- --version 0.6.0 --json
 ```
 
 `iex` cannot pass options, so in PowerShell run the script as a script block:
 
 ```powershell
-& ([scriptblock]::Create((irm https://oskalang.dev/install.ps1))) --version 0.5.0 --json
+& ([scriptblock]::Create((irm https://oskalang.dev/install.ps1))) --version 0.6.0 --json
 ```
 
 A successful `--json` run prints:
 
 ```json
-{"ok": true, "action": "installed", "version": "0.5.0", "tag": "v0.5.0", "previous_version": null, "platform": "linux-x86_64", "path": "/home/you/.oska/bin/oskac", "bin_dir": "/home/you/.oska/bin", "on_path": false, "checksum_verified": true, "signature_verified": true, "receipt": "/home/you/.oska/receipt.json", "index_verified": true, "index_serial": 5}
+{"ok": true, "action": "installed", "version": "0.6.0", "tag": "v0.6.0", "previous_version": null, "platform": "linux-x86_64", "path": "/home/you/.oska/bin/oskac", "bin_dir": "/home/you/.oska/bin", "on_path": false, "checksum_verified": true, "signature_verified": true, "receipt": "/home/you/.oska/receipt.json", "index_verified": true, "index_serial": 2}
 ```
 
 - `action` is one of:
@@ -68,7 +68,7 @@ A failed run prints `{"ok": false, "error": "<code>", "message": "..."}` and exi
 | `no_signing_key` | The installer was not pinned when the site was built: it has no release key built in, or no valid setting for whether the release index is required. Download it again from oskalang.dev. |
 | `insecure_url` | `OSKA_SITE_URL` is not an `https://` URL, or a download was redirected to one that is not. |
 | `unsupported_platform` | There is no build for this OS or CPU, or `--hook` was used with `install.ps1`, which does not have it (the hook works on Windows: merge its settings as the agent-setup prompt does). |
-| `unsupported_libc` | Linux only: `OSKA_LIBC=glibc` asks for the glibc build, and the installer did not find glibc 2.35 or newer; or the release has no musl build (v0.5.0 and earlier), and the system needs it or `OSKA_LIBC=musl` asks for it. |
+| `unsupported_libc` | Linux only: `OSKA_LIBC=glibc` asks for the glibc build, and the installer did not find glibc 2.35 or newer; or the release has no musl build (v0.6.0 and earlier), and the system needs it or `OSKA_LIBC=musl` asks for it. |
 | `missing_tool` | `curl`, `ssh-keygen`, or a SHA-256 tool is missing. |
 | `download_failed` | A file could not be downloaded, for example because that version does not exist. |
 | `bad_signature` | `SHA256SUMS` is not signed by the release key. |
@@ -86,7 +86,7 @@ The binaries are published on oskalang.dev, together with `SHA256SUMS` and its s
 
 ### The two Linux builds
 
-From v0.6.0, each release has two `oskac` builds for each Linux processor ([ADR 0022](../adr/0022-linux-oskac-ships-as-glibc-and-musl-builds.md)). They replace the one `oskac-linux-<arch>` file of earlier releases (see [Upgrading to v0.6.0](#upgrading-to-v060)).
+From v0.7.0, each release has two `oskac` builds for each Linux processor ([ADR 0022](../adr/0022-linux-oskac-ships-as-glibc-and-musl-builds.md)). They replace the one `oskac-linux-<arch>` file of earlier releases (see [Upgrading to v0.6.0](#upgrading-to-v060)).
 
 | Build | Release files | Runs on |
 | --- | --- | --- |
@@ -95,7 +95,7 @@ From v0.6.0, each release has two `oskac` builds for each Linux processor ([ADR 
 
 The two builds are the same `oskac` for the same Linux platform: the same commands, diagnostics, filesystem confinement and `--target` names, and an executable that `oskac build` writes is the same bytes from either. They differ in speed only. The musl build compiles about 1.6 times slower (0.32 s against 0.20 s for the site generator) and runs a program on the interpreter about 1.5 times slower, because musl's memory allocator is slower. An executable it builds runs at the same speed as one from the glibc build.
 
-**Which one the installer picks.** `install.sh` installs the glibc build when it finds glibc 2.35 or newer, because it is the faster one where it runs. It installs the musl build otherwise, because that one runs everywhere: on musl systems such as Alpine, on an older glibc, and when it cannot tell which C library the system has. It never stops because of the C library unless you force the glibc build. Releases up to v0.5.0 have only the glibc build, as `oskac-linux-<arch>`: the installer installs it where it would choose the glibc build, and stops with `unsupported_libc` where it would choose the musl build.
+**Which one the installer picks.** `install.sh` installs the glibc build when it finds glibc 2.35 or newer, because it is the faster one where it runs. It installs the musl build otherwise, because that one runs everywhere: on musl systems such as Alpine, on an older glibc, and when it cannot tell which C library the system has. It never stops because of the C library unless you force the glibc build. Releases up to v0.6.0 have only the glibc build, as `oskac-linux-<arch>`: the installer installs it where it would choose the glibc build, and stops with `unsupported_libc` where it would choose the musl build.
 
 **`OSKA_LIBC`.** Set `OSKA_LIBC=glibc` or `OSKA_LIBC=musl` to choose the build yourself. Set it for `sh`, not for `curl`:
 
@@ -106,7 +106,7 @@ curl -fsSL https://oskalang.dev/install.sh | OSKA_LIBC=musl sh
 - `OSKA_LIBC=musl` installs the musl build on any Linux. Use it in CI for one `oskac` that behaves the same in every container.
 - `OSKA_LIBC=glibc` installs the glibc build, and stops with `unsupported_libc` when the installer does not find glibc 2.35 or newer, so a forced choice never fails silently.
 - Any other value is a `usage` error. That error, and `unsupported_libc` for `OSKA_LIBC=glibc`, come before anything is downloaded.
-- A release up to v0.5.0 has no musl build. Where the installer would choose the musl build, or with `OSKA_LIBC=musl`, it stops with `unsupported_libc` once it has downloaded and verified that release's signed `SHA256SUMS`, which lists its builds, and before it downloads `oskac`.
+- A release up to v0.6.0 has no musl build. Where the installer would choose the musl build, or with `OSKA_LIBC=musl`, it stops with `unsupported_libc` once it has downloaded and verified that release's signed `SHA256SUMS`, which lists its builds, and before it downloads `oskac`.
 - The installer does not remember `OSKA_LIBC`. Each run chooses the build again, an update included: from `OSKA_LIBC` when it is set, and from the system when it is not. Set `OSKA_LIBC` on each run to keep a build.
 
 The [install receipt](#the-install-receipt) records the build installed in `linux_build` and whether `OSKA_LIBC` chose it in `libc_forced`; no run of the installer reads them back. `oskac self info` names the build of the running `oskac` (see [`oskac self`](cli-reference.md#oskac-self)).
@@ -118,8 +118,8 @@ Each install writes `receipt.json` into the Oska home (`~/.oska`, or `OSKA_HOME`
 ```json
 {
   "schema": 1,
-  "version": "0.5.0",
-  "tag": "v0.5.0",
+  "version": "0.6.0",
+  "tag": "v0.6.0",
   "platform": "linux-x86_64",
   "linux_build": "gnu",
   "libc_forced": false,
@@ -164,10 +164,10 @@ The installers check every download for you. To check a release without them, co
 SHA256:PjwTDycs560g1ktWC/gdznamSkzm4xH+OAdfntNaW4o
 ```
 
-The same fingerprint is on the [security page](../../SECURITY.md#verifying-a-release). On Linux, for v0.5.0:
+The same fingerprint is on the [security page](../../SECURITY.md#verifying-a-release). On Linux, for v0.6.0:
 
 ```sh
-base=https://oskalang.dev/releases/v0.5.0
+base=https://oskalang.dev/releases/v0.6.0
 asset=oskac-linux-x86_64
 curl -fsSL --remote-name-all "$base/SHA256SUMS" "$base/SHA256SUMS.sig" "$base/$asset"
 curl -fsSL https://oskalang.dev/oska-release.pub -o oska-release.pub
@@ -180,14 +180,14 @@ sha256sum --ignore-missing -c SHA256SUMS
 
 1. `ssh-keygen -l` must print the fingerprint above. If it prints another, stop: the key is not the release key.
 2. `ssh-keygen -Y verify` must print `Good "oska-release" signature`.
-3. The first line of `SHA256SUMS` must be `# oska-release v0.5.0`, the release you asked for.
+3. The first line of `SHA256SUMS` must be `# oska-release v0.6.0`, the release you asked for.
 4. `sha256sum` must print `OK` for the binary you downloaded. On macOS, use `shasum -a 256 --ignore-missing -c SHA256SUMS`.
 
-v0.5.0 and earlier have one Linux file for each processor, `oskac-linux-x86_64` or `oskac-linux-aarch64`. From v0.6.0, set `asset` to the build you want instead: `oskac-linux-x86_64-gnu` or `oskac-linux-x86_64-musl` (see [the two Linux builds](#the-two-linux-builds)).
+v0.6.0 and earlier have one Linux file for each processor, `oskac-linux-x86_64` or `oskac-linux-aarch64`. From v0.7.0, set `asset` to the build you want instead: `oskac-linux-x86_64-gnu` or `oskac-linux-x86_64-musl` (see [the two Linux builds](#the-two-linux-builds)).
 
 ### Run oskac in a container
 
-From v0.6.0, each release also publishes the container image `ghcr.io/aparsons/oskac`, tagged `vX.Y.Z`. `latest` names the newest stable release: it moves only to a release that the signed release index names as the latest, so it never moves back to an older one. One name serves both Linux processors: Docker picks the x86_64 or the aarch64 image for the host. Each image holds only the musl build at `/oskac` and an empty `/tmp`, with no shell and no package manager. It runs as user 65532, not root, and `/oskac` is its entrypoint, so the arguments are `oskac`'s:
+From v0.7.0, each release also publishes the container image `ghcr.io/aparsons/oskac`, tagged `vX.Y.Z`. `latest` names the newest stable release: it moves only to a release that the signed release index names as the latest, so it never moves back to an older one. One name serves both Linux processors: Docker picks the x86_64 or the aarch64 image for the host. Each image holds only the musl build at `/oskac` and an empty `/tmp`, with no shell and no package manager. It runs as user 65532, not root, and `/oskac` is its entrypoint, so the arguments are `oskac`'s:
 
 ```sh
 docker run --rm -e OSKA_CACHE=off -v "$PWD:/w" -w /w ghcr.io/aparsons/oskac@sha256:<digest> check main.osk
@@ -202,7 +202,7 @@ docker run --rm -e OSKA_CACHE=off -v "$PWD:/w" -w /w ghcr.io/aparsons/oskac@sha2
 
 #### Verify an image
 
-`SHA256SUMS` lists the release's `oskac-image-digest` file, so the release signature covers it. For the release in `v`, such as `v0.6.0`:
+`SHA256SUMS` lists the release's `oskac-image-digest` file, so the release signature covers it. For the release in `v`, such as `v0.7.0`:
 
 ```sh
 v=v0.6.0
@@ -246,7 +246,7 @@ curl -fsSL https://oskalang.dev/install.sh | sh -s -- --check --json
 ```
 
 ```json
-{"ok": true, "action": "checked", "installed": "0.4.0", "latest": "0.5.0", "tag": "v0.5.0", "update_available": true, "index_verified": true, "index_serial": 5, "index_expires": "2027-02-11T10:00:00Z"}
+{"ok": true, "action": "checked", "installed": "0.5.0", "latest": "0.6.0", "tag": "v0.6.0", "update_available": true, "index_verified": true, "index_serial": 2, "index_expires": "2027-02-18T14:38:45Z"}
 ```
 
 - `installed` is `null` when no `oskac` is installed.
@@ -302,20 +302,25 @@ oska = "0.4.0"
 
 An older `oskac` refuses the package with `E0407`, from `check`, `run`, `test` and `build`. The message names both versions and says to install a newer one: run the installer again (see [Update](#update)). The key is a minimum, never an exact pin, so a newer `oskac` always accepts it. See [packages and modules](packages.md#starting-a-package) for the key and [`E0407`](../checker.md#e0407).
 
+## Upgrading to v0.7.0
+
+v0.7.0 is not released yet; `main` has these changes. It ships two Linux builds of `oskac`, so it runs on any Linux, and publishes a container image ([ADR 0022](../adr/0022-linux-oskac-ships-as-glibc-and-musl-builds.md)). These are the changes you can see:
+
+- **The Linux release files are renamed.** `oskac-linux-x86_64` and `oskac-linux-aarch64` are gone. In their place each release has the glibc build, `oskac-linux-x86_64-gnu` and `oskac-linux-aarch64-gnu`, and the musl build, `oskac-linux-x86_64-musl` and `oskac-linux-aarch64-musl`. `latest.json` lists them under `linux-x86_64-gnu`, `linux-x86_64-musl`, `linux-aarch64-gnu` and `linux-aarch64-musl`, with no `linux-x86_64` or `linux-aarch64` key. The macOS and Windows files keep their names. A script that downloads a Linux file by name, or reads those keys, must change.
+- **Fetch the installer again.** A copy of `install.sh` saved before v0.7.0 asks for the old names, so it fails with `download_failed` on v0.7.0 and later. The one-line installer always fetches the current one. The installer from v0.7.0 on still installs v0.6.0 and earlier with `--version`, but on Linux only as the glibc build, the one build those releases have: where it does not find glibc 2.35 or newer, or with `OSKA_LIBC=musl`, it refuses them.
+- **The installer no longer refuses a Linux system for its C library.** It installs the glibc build where it finds glibc 2.35 or newer, and the musl build everywhere else, such as Alpine or an older glibc, where it used to stop with `unsupported_libc`. `OSKA_LIBC` chooses the build yourself. `unsupported_libc` now means only that `OSKA_LIBC=glibc` was set where the glibc build cannot run, or that a release up to v0.6.0, which has only the glibc build, was asked for where only the musl build would run or with `OSKA_LIBC=musl`. See [the two Linux builds](#the-two-linux-builds).
+- **The receipt and `oskac self info` name the Linux build.** The receipt gains `linux_build` and `libc_forced`, and `oskac self info` gains `linux_build`.
+- **The image `ghcr.io/aparsons/oskac`** holds only `oskac`, runs as a non-root user, and is covered by the release signature. See [Run oskac in a container](#run-oskac-in-a-container).
+
 ## Upgrading to v0.6.0
 
-v0.6.0 adds the native backend for Windows, so all five supported platforms are native. It also turns the parity gate on and adds `oskac release`. It ships two Linux builds of `oskac`, so it runs on any Linux, and publishes a container image ([ADR 0022](../adr/0022-linux-oskac-ships-as-glibc-and-musl-builds.md)). These are the changes you can see:
+v0.6.0 adds the native backend for Windows, so all five supported platforms are native. It also turns the parity gate on and adds `oskac release`. These are the changes you can see:
 
 - **`run`, `test` and `build` are native on x86_64 Windows**, as on Linux and macOS. Before, `run` and `test` used the interpreter there, tens of times slower on program logic. `--interpret` still selects the interpreter. See [platform support](cli-reference.md#platform-support).
 - **`oskac build` on Windows writes a Windows executable, `<name>.exe`**, where v0.5.0 wrote an aarch64 Linux one. To get the old output, build with `--target linux-aarch64`. `--target windows-x86_64` builds a Windows executable from any host, and `--target all` writes five executables. The same program gives the same bytes on every host.
 - **The parity gate: a program the native backend cannot compile yet is an error.** `oskac run` and `oskac test` refuse it with `E0390`, the same diagnostic `oskac build` prints, and exit code 2. Before, they ran it on the interpreter after a one-line note. If a program stops running after the upgrade, run it with `--interpret` and report the construct the message names. From this release on, a language change lands on all five platforms at once.
 - **Windows file access is confined race-free.** On both backends, each path is opened one component at a time beneath the capability's open root handle. A symlink, a junction or any other reparse point, a hard-linked file, or a reserved device name such as `CON` is refused, as on Linux and macOS. Before, Windows checked a path and then opened it, so a junction swapped in between could escape the root.
 - **`oskac release` builds an application for all five platforms** into one directory. It writes a `SHA256SUMS` that names the release and signs it with your SSH key, in the format `oskac`'s own releases use. The version, key and name refusals are `E0395`, `E0396` and `E0397`. See [Releasing an application](releasing.md).
-- **The Linux release files are renamed.** `oskac-linux-x86_64` and `oskac-linux-aarch64` are gone. In their place each release has the glibc build, `oskac-linux-x86_64-gnu` and `oskac-linux-aarch64-gnu`, and the musl build, `oskac-linux-x86_64-musl` and `oskac-linux-aarch64-musl`. `latest.json` lists them under `linux-x86_64-gnu`, `linux-x86_64-musl`, `linux-aarch64-gnu` and `linux-aarch64-musl`, with no `linux-x86_64` or `linux-aarch64` key. The macOS and Windows files keep their names. A script that downloads a Linux file by name, or reads those keys, must change.
-- **Fetch the installer again.** A copy of `install.sh` saved before v0.6.0 asks for the old names, so it fails with `download_failed` on v0.6.0 and later. The one-line installer always fetches the current one. The installer from v0.6.0 on still installs v0.5.0 and earlier with `--version`, but on Linux only as the glibc build, the one build those releases have: where it does not find glibc 2.35 or newer, or with `OSKA_LIBC=musl`, it refuses them.
-- **The installer no longer refuses a Linux system for its C library.** It installs the glibc build where it finds glibc 2.35 or newer, and the musl build everywhere else, such as Alpine or an older glibc, where it used to stop with `unsupported_libc`. `OSKA_LIBC` chooses the build yourself. `unsupported_libc` now means only that `OSKA_LIBC=glibc` was set where the glibc build cannot run, or that a release up to v0.5.0, which has only the glibc build, was asked for where only the musl build would run or with `OSKA_LIBC=musl`. See [the two Linux builds](#the-two-linux-builds).
-- **The receipt and `oskac self info` name the Linux build.** The receipt gains `linux_build` and `libc_forced`, and `oskac self info` gains `linux_build`.
-- **The image `ghcr.io/aparsons/oskac`** holds only `oskac`, runs as a non-root user, and is covered by the release signature. See [Run oskac in a container](#run-oskac-in-a-container).
 
 ## Upgrading to v0.5.0
 
@@ -427,4 +432,4 @@ Confirm that it works:
 oskac --version
 ```
 
-It prints `oskac` and the version on one line. A build from this checkout prints `oskac 0.5.0`. Then continue with the [quickstart](quickstart.md).
+It prints `oskac` and the version on one line. A build from this checkout prints `oskac 0.6.0`. Then continue with the [quickstart](quickstart.md).
