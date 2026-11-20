@@ -95,10 +95,18 @@ fn now_millis() -> u64 {
     u64::try_from(since.as_millis()).expect("in range")
 }
 
+/// When `oskac` was started and when it had ended, in milliseconds since
+/// the Unix epoch, as the test saw them.
+struct Span {
+    spawned: u64,
+    ended: u64,
+}
+
 /// Run `oskac <args>` in `dir` with a standard input that stays open and
 /// sends nothing, and return its exit code, stdout and stderr, and when
-/// (in milliseconds since the epoch) it had ended.
-fn run_with_open_stdin(dir: &Path, args: &[&str]) -> (Option<i32>, String, String, u64) {
+/// it was started and had ended.
+fn run_with_open_stdin(dir: &Path, args: &[&str]) -> (Option<i32>, String, String, Span) {
+    let spawned = now_millis();
     let mut child = Command::new(env!("CARGO_BIN_EXE_oskac"))
         .args(args)
         .current_dir(dir)
@@ -122,29 +130,37 @@ fn run_with_open_stdin(dir: &Path, args: &[&str]) -> (Option<i32>, String, Strin
     let status = child.wait().expect("oskac should end");
     let ended = now_millis();
     drop(stdin);
-    (status.code(), out, errors.join().expect("stderr"), ended)
+    let span = Span { spawned, ended };
+    (status.code(), out, errors.join().expect("stderr"), span)
 }
 
-/// Assert that a program that printed the time it started on the first
-/// line of `printed`, and that `oskac` ended at `ended`, ran no less than
-/// the timeout `ms` and stopped within the tolerance after it.
-fn assert_stopped_in_time(what: &str, printed: &str, ended: u64, ms: u64) {
+/// Assert that `oskac`, run over `span`, with a program that printed the
+/// time it started on the first line of `printed`, ran no less than the
+/// timeout `ms` and stopped within the tolerance after it.
+fn assert_stopped_in_time(what: &str, printed: &str, span: &Span, ms: u64) {
+    // The deadline starts after the test starts `oskac`, so `oskac` can
+    // never end sooner than `ms` after that, however slowly the program
+    // starts. (The program's own start time is no lower bound: a loaded
+    // machine can take more than 50 ms between `oskac` starting the
+    // deadline and the program reading the clock.) 1 ms covers the two
+    // clock readings each rounding down.
+    let lived = span.ended.saturating_sub(span.spawned);
+    assert!(
+        lived + 1 >= ms,
+        "{what}: oskac ended {lived} ms after it started, before the deadline of {ms} ms"
+    );
+    // The program starts after the deadline does, so the time since it
+    // started is at most the time since the deadline started.
     let started: u64 = printed
         .lines()
         .next()
         .and_then(|l| l.parse().ok())
         .unwrap_or_else(|| panic!("{what}: no start time in {printed:?}"));
-    let ran = ended.saturating_sub(started);
-    // The deadline starts as the program starts, a little before it reads
-    // the clock: up to 50 ms on a loaded machine.
-    assert!(
-        ran + 50 >= ms,
-        "{what}: stopped after {ran} ms, before its deadline of {ms} ms"
-    );
+    let ran = span.ended.saturating_sub(started);
     assert!(
         ran <= ms + TOLERANCE_MS + LOADED_MACHINE_MS,
-        "{what}: stopped after {ran} ms, {} ms past its deadline",
-        ran - ms
+        "{what}: stopped {ran} ms after the program started, {} ms past its deadline",
+        ran.saturating_sub(ms)
     );
 }
 
@@ -153,10 +169,10 @@ fn a_looping_program_stops_within_the_tolerance_of_its_deadline() {
     let dir = program("timeout_in_time", PRINTS_START_THEN_LOOPS);
     for backend in BACKENDS {
         let args = run_args(backend, &["--timeout=500", "main.osk"]);
-        let (code, _, stderr, ended) = run_with_open_stdin(&dir, &args);
+        let (code, _, stderr, span) = run_with_open_stdin(&dir, &args);
         assert_eq!(code, Some(101), "{backend:?}: {stderr}");
         assert!(stderr.contains("error[P0039]"), "{backend:?}: {stderr}");
-        assert_stopped_in_time(&format!("{backend:?}"), &stderr, ended, 500);
+        assert_stopped_in_time(&format!("{backend:?}"), &stderr, &span, 500);
     }
 }
 
@@ -165,7 +181,7 @@ fn a_program_that_waits_for_input_stops_at_the_deadline_with_p0039() {
     let dir = program("timeout_waits", PRINTS_START_THEN_WAITS);
     for backend in BACKENDS {
         let args = run_args(backend, &["--timeout=500", "main.osk"]);
-        let (code, stdout, stderr, ended) = run_with_open_stdin(&dir, &args);
+        let (code, stdout, stderr, span) = run_with_open_stdin(&dir, &args);
         assert_eq!(code, Some(101), "{backend:?}: {stderr}");
         assert!(
             stderr.contains("error[P0039]: time limit reached"),
@@ -176,7 +192,7 @@ fn a_program_that_waits_for_input_stops_at_the_deadline_with_p0039() {
             1,
             "{backend:?}: one report, {stderr}"
         );
-        assert_stopped_in_time(&format!("{backend:?}"), &stdout, ended, 500);
+        assert_stopped_in_time(&format!("{backend:?}"), &stdout, &span, 500);
     }
 }
 
