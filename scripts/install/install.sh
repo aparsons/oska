@@ -301,6 +301,12 @@ choose_linux_build() {
   esac
 }
 
+# sums_list <file>: succeeds if the downloaded SHA256SUMS, whose signature
+# has been verified, has a line for <file>.
+sums_list() {
+  awk -v f="$1" 'NF == 2 && $2 == f {found = 1} END {exit !found}' "$tmp/SHA256SUMS"
+}
+
 # The install receipt: what this run installed, as JSON in the Oska home.
 # It is advisory. Verification never reads it; it only records what counts
 # as installed, what an uninstall may remove and the highest index serial
@@ -1334,17 +1340,8 @@ main() {
     fi
   fi
 
-  # On Linux a release has a glibc build (-gnu) and a musl build (-musl)
-  # (ADR 0022); choose_linux_build has picked one.
-  asset=oskac-$platform
-  build_note=
-  if [ "$os" = linux ]; then
-    asset=$asset-$linux_build
-    build_note=" ($linux_build build)"
-  fi
   release=$site/releases/$tag
-  say "Downloading oskac $version for $platform$build_note from $release/" >&2
-  for f in SHA256SUMS SHA256SUMS.sig "$asset"; do
+  for f in SHA256SUMS SHA256SUMS.sig; do
     fetch "$release/$f" "$tmp/$f" ||
       fail download_failed "cannot download $release/$f (is $version a release?)"
   done
@@ -1364,6 +1361,29 @@ main() {
     *)
       fail version_mismatch "SHA256SUMS at $release/ does not name the release it is for; nothing was installed" ;;
   esac
+
+  # Which file to download, from the signed SHA256SUMS. On Linux a release
+  # has a glibc build (-gnu) and a musl build (-musl) (ADR 0022), and
+  # choose_linux_build has picked one. A release from before them (v0.5.0
+  # and earlier) has one Linux file, oskac-<platform>, the glibc build: it
+  # is installed only where the glibc build was chosen, and refused, as
+  # those releases always were, where only the musl build would run.
+  asset=oskac-$platform
+  build_note=
+  if [ "$os" = linux ]; then
+    if sums_list "$asset-gnu" || sums_list "$asset-musl"; then
+      asset=$asset-$linux_build
+    elif [ "$linux_build" != gnu ]; then
+      if [ "$libc_forced" = true ]; then
+        fail unsupported_libc "OSKA_LIBC=musl asks for the musl build, and oskac $version has no musl build (releases before the musl build have only the glibc build, which needs glibc $MIN_GLIBC or newer); install a later release, or build oskac from source"
+      fi
+      fail unsupported_libc "oskac $version has only the glibc build, which needs glibc $MIN_GLIBC or newer, and this system does not have it; install a later release, which has a musl build, or build oskac from source"
+    fi
+    build_note=" ($linux_build build)"
+  fi
+  say "Downloading oskac $version for $platform$build_note from $release/" >&2
+  fetch "$release/$asset" "$tmp/$asset" ||
+    fail download_failed "cannot download $release/$asset (is $version a release?)"
 
   expected=$(awk -v f="$asset" 'NF == 2 && $2 == f {print $1}' "$tmp/SHA256SUMS")
   printf '%s\n' "$expected" | grep -Eqx '[0-9a-f]{64}' ||

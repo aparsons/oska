@@ -880,6 +880,51 @@ test_an_empty_oska_libc_chooses_as_if_unset() {
   OSKA_LIBC='' assert_build musl musl false
 }
 
+# A release from before the two Linux builds (v0.5.0 and earlier) has one
+# Linux file per processor, the glibc build, under the old name.
+OLD_ASSETS="oskac-linux-aarch64 oskac-linux-x86_64 oskac-macos-aarch64 oskac-macos-x86_64 oskac-windows-x86_64.exe"
+
+test_installs_the_glibc_build_of_a_release_from_before_the_musl_build() {
+  ASSETS=$OLD_ASSETS release 0.5.0
+  latest 0.5.0
+  local receipt=home/.oska/receipt.json forced
+  for forced in false true; do
+    if [ "$forced" = true ]; then
+      OSKA_LIBC=glibc install_on 'glibc 2.41' --json >out.json || fail "refused: $(cat out.json)"
+    else
+      install_on 'glibc 2.41' --json >out.json || fail "refused: $(cat out.json)"
+    fi
+    cmp site/releases/v0.5.0/oskac-linux-x86_64 "$(installed)" ||
+      fail "did not install oskac-linux-x86_64"
+    [ "$(jq -c .linux_build "$receipt")" = '"gnu"' ] || fail "linux_build is $(jq -c .linux_build "$receipt")"
+    [ "$(jq -c .libc_forced "$receipt")" = "$forced" ] || fail "libc_forced is $(jq -c .libc_forced "$receipt")"
+  done
+}
+
+# Where only the musl build would run, a release with no musl build is
+# refused, as such releases always were, and nothing is installed.
+test_refuses_a_release_from_before_the_musl_build_where_it_cannot_run() {
+  ASSETS=$OLD_ASSETS release 0.5.0
+  latest 0.5.0
+  local libc
+  for libc in musl 'glibc 2.31' none; do
+    assert_refused_libc "$libc"
+    jq -r .message out.json | grep -q 'only the glibc build' || fail "on $libc the message is $(jq -r .message out.json)"
+  done
+  OSKA_LIBC=musl assert_refused_libc 'glibc 2.41'
+  jq -r .message out.json | grep -q 'OSKA_LIBC=musl' || fail "the message does not name OSKA_LIBC=musl"
+}
+
+# A release that lists the new names never falls back to the old one, even
+# if it also lists it.
+test_a_release_with_both_builds_never_takes_the_old_name() {
+  ASSETS="$ASSETS oskac-linux-x86_64" release 1.2.3
+  latest 1.2.3
+  assert_build 'glibc 2.41' gnu false
+  rm -rf home
+  assert_build musl musl false
+}
+
 # --check and --uninstall read a receipt with the new fields, and one
 # written before them.
 test_check_and_uninstall_with_and_without_the_linux_build_fields() {
