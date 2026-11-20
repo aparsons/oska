@@ -29,6 +29,15 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
+    # Incremental data about doubles the size of `target`, which is cached
+    # (scripts/cargo-cache/mtimes.sh); CI builds each changed crate once.
+    env:
+      CARGO_INCREMENTAL: 0
+      # oskac's build cache (spec #279) inside target, so it is cached with
+      # the build: a test that compiles a program oskac has compiled before,
+      # with the same oskac, reuses the executable. Its key holds the oskac
+      # executable's hash and every input, so a compiler change misses.
+      OSKA_CACHE_DIR: ${{ github.workspace }}/target/oska-cache
     # Normally 3 to 5 minutes; a hung test (once a 64 KiB pipe deadlock on
     # arm64) must turn red long before GitHub's six-hour default.
     timeout-minutes: 30
@@ -37,6 +46,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt, clippy
+      # The `target` of this job's last run on main, if any, so cargo
+      # builds only what changed since. mtimes.sh gives each unchanged file
+      # an old time and leaves every changed one newer than the cached
+      # build, so cargo never reuses a stale one. Only main saves: a pull
+      # request reads main's cache and adds none of its own, which keeps
+      # the repository under GitHub's 10 GB cache limit.
+      - id: cargo-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target
+          key: cargo-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-${{ github.sha }}
+          restore-keys: cargo-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-
+      - run: scripts/cargo-cache/mtimes.sh
       # check.sh type-checks oskac for Windows (#323); only this job needs the
       # target, so it is not in rust-toolchain.toml (every job would download it).
       - run: rustup target add x86_64-pc-windows-gnu
@@ -59,6 +81,19 @@ jobs:
       # The same script contributors and agents run locally (and the
       # pre-push hook runs), so local and CI checks cannot drift apart.
       - run: scripts/check.sh
+      # The saved list stands for the build only if no tracked file changed
+      # meanwhile and every cargo step ran on the tree as checked out (CI
+      # always runs them all). target/tmp holds the tests' scratch files,
+      # sparse files of terabytes among them: tar would read them in full.
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          scripts/cargo-cache/mtimes.sh verify
+          rm -rf target/tmp
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   macos:
     # Spec #154: on a Mac `oskac run` and `oskac test` are native by
@@ -77,6 +112,15 @@ jobs:
           - os: macos-15-intel
             arch: x86_64
     runs-on: ${{ matrix.os }}
+    # Incremental data about doubles the size of `target`, which is cached
+    # (scripts/cargo-cache/mtimes.sh); CI builds each changed crate once.
+    env:
+      CARGO_INCREMENTAL: 0
+      # oskac's build cache (spec #279) inside target, so it is cached with
+      # the build: a test that compiles a program oskac has compiled before,
+      # with the same oskac, reuses the executable. Its key holds the oskac
+      # executable's hash and every input, so a compiler change misses.
+      OSKA_CACHE_DIR: ${{ github.workspace }}/target/oska-cache
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -84,7 +128,33 @@ jobs:
       # Each runner runs its own processor's executables: a label that
       # moves to the other processor must fail, not run the wrong ones.
       - run: test "$(uname -m)" = "${{ matrix.arch }}"
+      # The `target` of this job's last run on main, if any, so cargo
+      # builds only what changed since. mtimes.sh gives each unchanged file
+      # an old time and leaves every changed one newer than the cached
+      # build, so cargo never reuses a stale one. Only main saves: a pull
+      # request reads main's cache and adds none of its own, which keeps
+      # the repository under GitHub's 10 GB cache limit.
+      - id: cargo-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target
+          key: cargo-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-${{ github.sha }}
+          restore-keys: cargo-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-
+      - run: scripts/cargo-cache/mtimes.sh
       - run: cargo test -p oskac --no-fail-fast
+      # The saved list stands for the build only if no tracked file changed
+      # meanwhile and every cargo step ran on the tree as checked out (CI
+      # always runs them all). target/tmp holds the tests' scratch files,
+      # sparse files of terabytes among them: tar would read them in full.
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          scripts/cargo-cache/mtimes.sh verify
+          rm -rf target/tmp
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   cross-build:
     # Seam 3 of spec #153: every corpus program built for every target on
