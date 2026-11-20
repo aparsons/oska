@@ -50,9 +50,7 @@ jobs:
       - id: cargo-cache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: |
-            target
-            !target/tmp
+          path: target
           key: cargo-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-${{ github.sha }}
           restore-keys: cargo-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-
       - run: scripts/cargo-cache/mtimes.sh
@@ -80,15 +78,16 @@ jobs:
       - run: scripts/check.sh
       # The saved list stands for the build only if no tracked file changed
       # meanwhile and every cargo step ran on the tree as checked out (CI
-      # always runs them all).
+      # always runs them all). target/tmp holds the tests' scratch files,
+      # sparse files of terabytes among them: tar would read them in full.
       - if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.head_ref == 'claude/project-thread-tp7oh0' # TEMPORARY: measure a cache hit on this PR
-        run: scripts/cargo-cache/mtimes.sh verify
+        run: |
+          scripts/cargo-cache/mtimes.sh verify
+          rm -rf target/tmp
       - if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.head_ref == 'claude/project-thread-tp7oh0' # TEMPORARY: measure a cache hit on this PR
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: |
-            target
-            !target/tmp
+          path: target
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   macos:
@@ -128,24 +127,23 @@ jobs:
       - id: cargo-cache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: |
-            target
-            !target/tmp
+          path: target
           key: cargo-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-${{ github.sha }}
           restore-keys: cargo-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-
       - run: scripts/cargo-cache/mtimes.sh
       - run: cargo test -p oskac --no-fail-fast
       # The saved list stands for the build only if no tracked file changed
       # meanwhile and every cargo step ran on the tree as checked out (CI
-      # always runs them all).
+      # always runs them all). target/tmp holds the tests' scratch files,
+      # sparse files of terabytes among them: tar would read them in full.
       - if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.head_ref == 'claude/project-thread-tp7oh0' # TEMPORARY: measure a cache hit on this PR
-        run: scripts/cargo-cache/mtimes.sh verify
+        run: |
+          scripts/cargo-cache/mtimes.sh verify
+          rm -rf target/tmp
       - if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.head_ref == 'claude/project-thread-tp7oh0' # TEMPORARY: measure a cache hit on this PR
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: |
-            target
-            !target/tmp
+          path: target
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   cross-build:
