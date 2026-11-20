@@ -18,6 +18,12 @@ command -v jq >/dev/null 2>&1 || {
   echo "image-test.sh: jq is not installed" >&2
   exit 1
 }
+# The layer checks read the listing of GNU tar (--numeric-owner --full-time).
+# Another tar fails here with this message, never as a confusing layer check.
+tar --version 2>/dev/null | grep -q 'GNU tar' || {
+  echo "image-test.sh: GNU tar is not installed (tar is not GNU tar)" >&2
+  exit 1
+}
 
 failures=0
 passes=0
@@ -87,7 +93,7 @@ test_same_inputs_in_two_directories_give_the_same_digest() {
   cp -p bin/* a/
   cp -p bin/* b/
   chmod 600 b/*
-  touch -d '2001-01-01' b/*
+  touch -t 200101010000 b/*
   first=$(cd a && "$here/image.sh" oskac-linux-x86_64-musl oskac-linux-aarch64-musl out)
   second=$(cd b && "$here/image.sh" oskac-linux-x86_64-musl oskac-linux-aarch64-musl out)
   [[ $first =~ ^sha256:[0-9a-f]{64}$ ]] || fail "printed '$first', not a digest"
@@ -202,10 +208,36 @@ test_every_blob_matches_its_digest_and_descriptor_size() {
 refuses() {
   local want=$1
   shift
-  if out=$("$@" 2>&1); then
+  local message
+  if message=$("$@" 2>&1); then
     fail "accepted: $*"
   fi
-  [[ $out == *"$want"* ]] || fail "message '$out' does not say '$want'"
+  [[ $message == *"$want"* ]] || fail "message '$message' does not say '$want'"
+}
+
+# A sha256sum on PATH that fails on its first call (the first layer's digest)
+# and runs the real one after that.
+sha256sum_that_fails_once() {
+  local real
+  real=$(command -v sha256sum)
+  mkdir -p fakebin
+  # shellcheck disable=SC2016 # the stub's own code, expanded when it runs
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'calls=$(($(cat "$CALLS" 2>/dev/null || echo 0) + 1))' \
+    'echo "$calls" >"$CALLS"' \
+    '[ "$calls" -ne 1 ] || exit 1' \
+    "exec '$real' \"\$@\"" >fakebin/sha256sum
+  chmod +x fakebin/sha256sum
+}
+
+test_a_step_that_fails_mid_build_fails_the_build_and_prints_no_digest() {
+  fake_binaries
+  sha256sum_that_fails_once
+  status=0
+  printed=$(PATH="$PWD/fakebin:$PATH" CALLS="$PWD/calls" build out) || status=$?
+  [ "$(cat calls)" -ge 1 ] || fail "the stub was never called"
+  [ "$status" -ne 0 ] || fail "the build exited 0"
+  [ -z "$printed" ] || fail "the build printed '$printed'"
 }
 
 test_refuses_a_missing_or_malformed_source_date_epoch() {
@@ -249,6 +281,7 @@ run_test test_a_changed_binary_gives_a_different_digest
 run_test test_a_changed_source_date_epoch_gives_a_different_digest
 run_test test_the_digest_of_fixed_inputs_never_drifts
 run_test test_every_blob_matches_its_digest_and_descriptor_size
+run_test test_a_step_that_fails_mid_build_fails_the_build_and_prints_no_digest
 run_test test_refuses_a_missing_or_malformed_source_date_epoch
 run_test test_refuses_a_missing_empty_or_symlinked_binary
 run_test test_refuses_an_output_directory_that_is_not_empty

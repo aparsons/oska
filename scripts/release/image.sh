@@ -26,9 +26,14 @@
 # changes every digest, so an older release no longer rebuilds to its signed
 # digest: image-test.sh pins one.
 #
-# Needs bash, coreutils (sha256sum, head, wc, mkdir, mv) and jq. No Docker.
+# Needs bash 4.4 or newer (for inherit_errexit) with its printf builtin,
+# coreutils (sha256sum, head, wc, ls, mkdir, mv) and jq. No Docker.
 
 set -euo pipefail
+# Most steps run inside `$(...)`. Without this, a failure there is ignored
+# and the build could print a digest of a broken layout. Bash too old to
+# know it stops here, which also fails closed.
+shopt -s inherit_errexit
 
 die() {
   echo "image.sh: $*" >&2
@@ -118,7 +123,7 @@ tar_header() {
   field "" 8  # devmajor
   field "" 8  # devminor
   field "" 155 # prefix
-  field "" 12
+  field "" 12  # padding to 512 bytes
 }
 
 # Writes the layer tar for binary $1 to file $2.
